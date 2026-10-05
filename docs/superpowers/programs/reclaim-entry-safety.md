@@ -1,0 +1,262 @@
+# Program: reclaim-entry-safety
+
+Plan: `docs/superpowers/plans/2026-09-30-reclaim-entry-safety.md` (the worker commits the coordinator's exact plan artifact beside the fix)
+Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-mesa`   Workspace: a fresh child
+A one-wave safety prerequisite to `child-reclamation` (CCR-15), sequenced after `reclaim-row-placement-safety`; wave 4 cannot proceed until both programmes merge.
+
+**What this program is.** Child-reclamation wave 4's adversarial resolver rounds measured a process-wide
+precondition that its call-site repair cannot establish: direct reclaim can inherit Bash functions and startup
+state that shadow decision-critical commands. An imported `find` can make both registry ownership measurements
+succeed with an empty answer, changing R31's verdict from `containment-unproven` to `reclaimable` and allowing
+unattended removal of a live child. The prerequisite establishes a trustworthy Bash entry boundary for the two
+direct reclaim argv shapes before automatic reclamation can ship.
+
+## Waves
+
+| # | scope | deploy class | PRs | state |
+|---|---|---|---|---|
+| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 | **done** — accepted by review run 222 on `a217af78`; merged as `cf9e4cc8` 2026-10-02 14:59; release v0.0.60 |
+
+**Deviation block: eight numbers, the first of them 3696** (allocated once at run 199 open, 2026-09-30; floor
+now 3704). The finalized plan defines the first as `ccd-imported-functions-hijack-reclaim-reads`. No other issued
+number is rendered as a `D-` token unless a measured departure is defined in that plan; unused headroom remains
+unrendered.
+
+## Decisions & deviations
+
+- **2026-09-30 — split from child-reclamation wave 4 by operator ruling.** The existing wave 4 child has opened
+  PR #215 and is spent. This repair therefore receives its own run, fresh child, deviation block and PR. It merges
+  before #215 may proceed. It is not wave 5 and owns none of wave 5's product scope.
+- **The boundary is selective, not a whole-ccd compatibility claim.** In scope are ordinary direct installed-path
+  invocations of `ws-reclaim` and the exact `ws-audit --session <value> --reclaim [--defer-expired]` token skeleton
+  from the agent, local server, systemd and launchd. The boundary must execute before any Bash body or `BASH_ENV`,
+  strip Bash startup/function/option variables from the protected probe and payload environment, select and validate
+  a PATH-resolved Bash >=4.4 on Linux and macOS, enter privileged mode, and have the Bash body remeasure both direct
+  mode and actual privileged state without trusting an inherited marker.
+- **Source mode remains structurally supported.** Fixture calls that intentionally `source ccd/ccd` do not pass
+  through the direct-entry boundary. Explicit `bash ccd/ccd ...` exists in tests and in the wider product, but it
+  bypasses this pre-Bash launcher and receives no security guarantee from this prerequisite. Detached swap
+  self-reexec is outside this narrow claim because its ordinary outer `bash -c` has already started.
+- **The plan handoff follows the stronger same-repository `ws-slug-collision` commit-blob precedent.** A fresh
+  child starts from `origin/main` and cannot see coordinator-only files. Before run-open the coordinator commits
+  and pushes this number-free programme skeleton and the parent-ledger update. After allocation it writes the
+  finalized tracked plan with the first issued definition and run/block metadata, then commits and pushes one
+  exact handoff SHA. Dispatch names that full SHA and plan path. The worker uses read-only `git show` to copy that
+  exact blob byte-for-byte into its checkout, verifies equality, and commits it as its first branch commit before
+  code. It does not cherry-pick coordinator ancestry, and this prerequisite does not wait for a separate docs merge.
+- **2026-10-01 — adversarial plan review tightened, never relaxed, the dispatched boundary.** `bash -p` suppresses
+  startup processing in that Bash but leaves hostile startup variables available to an ordinary child Bash, so the
+  protected probe and payload now share a sanitized environment. The same review made two fail-shut publication
+  claims executable: the staged launcher crosses its kernel shebang before publication, and exact destination
+  entries are inspected without following symlinks and then atomically replaced or refused by type. The audit
+  classifier's claim is narrowed to its exact token skeleton; the body remains the session-id grammar authority.
+- **2026-10-01 — row-placement safety now lands first.** Wave 4's held-out Fix Round 3 rereview found a separate
+  pre-existing failure: a competing registry row whose workdir survives only as an absent-suffix namespace projection
+  can falsely prove non-containment. That resolver-evidence repair owns `ccd/ccd` in its own child and PR. Run 199
+  preserves its present WIP and immutable four-item ledger, but does not finalize item 4, push a handoff or open its
+  PR until `reclaim-row-placement-safety` merges. It then merges current `origin/main` without rebasing, integrates
+  that prerequisite through item 4, re-stamps `ccd/ccd`, and reruns every affected gate before handoff.
+- **2026-10-01 — FACT TWO remains a stop gate, not a census to weaken.** Run 199 measured its 29-line direct-entry
+  guard making `ccd/ccd:13020` pass only on the short token `ccd`; adding one guard line restores FACT TWO while
+  preserving the guard's behavior. The coordinator selected that line-positive repair over trimming two lines or
+  leaving the real selector red. The answer raced the ask's operator move (`ask-moved`), so this ledger records the
+  ruling before any later handoff; the worker must still report all citation debt-map, `**Files:**` and `|`-row
+  remeasurements rather than carrying pre-edit counts.
+- **2026-10-01 — wave-done arrived before the hold did; the premature review is withdrawn.** Mail 2909 reported
+  all four items done and PR #222 open at `e91fbca89ed39a414065e97bb0f6d10fc2951f6a`; holds 2871/2889 were
+  delivered only afterwards. The coordinator nonetheless advanced run 199 to `awaiting-review`, settled its four
+  item rows `done`, and opened review run 210 against the strict landing order. Run 210 never dispatched (the
+  rolling daily cap was full) and the operator abandoned it unread; run 199 is back at `working`. Two residues are
+  recorded, not repaired: the item rows are terminal, so the board reads `4/4` while item 4 is still owed after
+  row-placement safety merges; and run 210's open overwrote the programme title, which the next run open restores
+  to `Child reclaim entry safety prerequisite`.
+- **2026-10-01 — the interpreter departure is the operator's ruling: keep the PATH spelling.** Issued number 3698,
+  slug `canonical-python-shebang-strands-on-upgrade`, defined in the worker's plan copy. The installed launcher's
+  shebang names the first `python3` on PATH, spelled as PATH spells it, when it resolves to the interpreter the
+  install probe measured, and the canonical path otherwise. The coordinator's earlier ask answer (canonical) bounced
+  `ask-moved` and never landed, so the worker's "ruled by the coordinator" attribution was unsupported; the operator
+  ruled in the coordinator's session. Every `ccd` start crosses this launcher, so a version-specific canonical path
+  would strand the whole CLI on an interpreter upgrade; the shebang stays a fixed absolute path, never a runtime
+  PATH lookup.
+- **2026-10-01 — fix round before integration.** PR #222's Linux server shard 3/5 fails
+  `server/test/caps-refresh.test.ts` (two cases, `expected [ 'start' ] to deeply equal [ 'start', 'ws-rename' ]`)
+  because its fixture installs only the launcher while the agent's capability cache now keys on the launcher and
+  body pair. The worker repairs that fixture and the interpreter departure's attribution on its own branch, touching no `ccd/ccd`
+  and merging no `main`; the integration hold is unchanged.
+- **2026-10-02 — the hold is lifted; item 4 is redone.** The two-file fix round landed at `aba90d40` and a test-only
+  macOS fixture repair at `a806a558`; Linux CI is green there. With `reclaim-row-placement-safety` merged as
+  `0db98707`, the worker merges current `origin/main` (one `ccd/ccd` conflict in a dry merge), keeps both the
+  direct-entry guard and the row-placement code byte-for-byte, re-stamps, re-measures every citation its guard
+  shifts, reruns the entry, reclaim, install and whole-server gates, and proves a protected direct `ws-reclaim`
+  still reaches the row-placement code through the launcher. Departures take the block's remaining numbers from
+  3701. The next review run opens under the canonical title `Child reclaim entry safety prerequisite`.
+- **2026-10-02 — integration accepted for review.** Mail 3070 claimed `b9791151ac6c979f65896fe3dd67bba33202a00b`: merge
+  commit `65c503593` over `origin/main` `0db98707` (never rebased; the one conflict was `ccd/ccd`'s marker line) and
+  one test commit proving a protected direct entry reaches the row-placement proof (a complete outside row does not
+  block, a removed alias answers `unmeasured` at the direct audit and the direct verb, and a mutation that accepts
+  `absent-suffix` reds both and deletes the child's tree in the verb case). Re-measured: remote, worktree and PR #222
+  heads equal it, the tree is clean, `origin/main` is its ancestor, `ccd/ccd` passes the marker check and `bash -n`,
+  the four row-placement functions are byte-identical to `main`'s, issued numbers 3696-3700 alone are rendered, and
+  the worker holds claim 872. Its whole-suite run's one red is tmp-sweep's FAILS CLOSED case, red on `main` too. The
+  server accepted the fingerprint; the four item rows were already settled, so the board's 4/4 is now also true.
+  - **Routing.** The worker reported `failure: shallow` for its own misses across the fix rounds. The routing door
+    answered `ceiling` (the next effort rung needs a second shallow failure on this session), so routing is unchanged.
+  - **Review run 216** opened under the canonical title, restoring the programme title run 210 had overwritten. Its
+    first dispatch was refused `oversize` (brief plus prefix over 8192 bytes) with nothing touched; the resent brief
+    cites the ledger's carried constraints instead of repeating them.
+- **2026-10-02 — review run 216's verdict and the rulings on it.** `ccrc-pwa-bright-summit` read `b9791151` with the
+  literal panel plus the SAFETY lens (73 agents, none failed or empty; every lens returned a `checked` record):
+  correctness 5 raised, 4 confirmed; spec 4, all confirmed; reproduce 4, all confirmed; SAFETY 10, 3 confirmed and
+  7 refuted. Fifteen confirmations reduce to 13 distinct findings. SAFETY: through the installed launcher's protected
+  path no surviving finding shows a way to delete a live child; the classifier, Bash selection, publication, the
+  row-placement hand-off (byte-for-byte), mutations and the agent cache hold. 23 of 24 mutation rows red; the
+  unencodable-shebang guard's row stays green, a carried-constraint miss. The Darwin Bash-selection row passed on the
+  real macOS runner, but the protected attack matrix is Linux-only. Rulings:
+  - **Locale coercion, operator:** accepted as a defined departure with its measured scope. A caller whose LC_CTYPE
+    resolves to C or POSIX gains `LC_CTYPE=C.UTF-8` in every launched start; the fleet box's agent and systemd user
+    manager run `LANG=en_US.UTF-8`, so no production start changes. Pinned, not undone.
+  - **The body guard's overclaim, coordinator:** `printf`, `exit` and `declare` in the body guard can be shadowed by
+    a startup-defined function off the launcher path, which the plan already leaves outside the guarantee. The
+    comment and the imported-function departure are corrected to say so; no hardening.
+  - **GLOBIGNORE, coordinator:** no ruling on it exists anywhere; its stripping is recorded by measurement inside the
+    stripped-variable departure instead of being cited as a ruling.
+  - **Fixed in the round:** the missing mutation pin; ordinary probes run startup-free so a printing `BASH_ENV` no
+    longer blocks ordinary verbs; the pair publisher refuses before repairing any mode and never converges without
+    its self-test; the shebang renders the path it compared; malformed audit shapes are pinned to die in
+    `cmd_ws_audit`; census anchors, a deleted history block, unwrapped launcher spawns, two overbroad sentences, a
+    stale header and the stale PR body.
+  - **The pre-existing Darwin `eval` of `USER`, operator:** fixed in child-reclamation wave 4, before the sweep runs
+    unattended on any macOS box.
+  - Departures take the block's last three numbers, 3701 first; a fourth stops for a ruling.
+- **2026-10-02 — fix round accepted for review; routing kept by hand; a convergence rule.** Mail 3132 claimed
+  `46194d6b69a0949b64932c0b3ad3bec816c21307`, five commits over `b9791151` (`origin/main` unchanged). Re-measured:
+  remote, worktree and PR #222 heads equal it, the tree is clean, all eight changed paths lie inside claims 873 and
+  874, `ccd/ccd` passes the marker check and `bash -n`, the row-placement functions remain byte-identical to `main`'s,
+  and issued numbers 3701 and 3702 are newly rendered while 3703 stays unrendered. The server accepted the fingerprint.
+  - **Routing.** The worker reported `failure: shallow` a second time. The routing door again answered `ceiling`
+    with "this is the first": a refused rung records no event, so on a session already at `xhigh` the same-kind count
+    never reaches two and `max` is unreachable through the kind ladder. Decided by hand: effort stays `xhigh`, because
+    the misses were caught by the held-out panel, which is the designed gate, and the rule below bounds further work.
+    The door's behavior is an observation for the routing design, not changed here.
+  - **Convergence rule** (as row-placement's): review run 217 accepts the wave when its SAFETY lens holds, no
+    confirmed critical or important finding stands, and the fix round introduces no defect; a newly found minor that
+    predates the round is carried to child-reclamation wave 4 rather than opening another round.
+- **2026-10-02 — review run 217's verdict and fix round 2.** `ccrc-pwa-quiet-summit` read `46194d6b` (40 agents, none
+  errored or empty; every lens returned a `checked` record): correctness 2 raised, 2 confirmed; spec 3, 3; reproduce
+  4, 4; SAFETY 3, 3; none refuted; seven distinct findings plus one whole-branch finding. SAFETY: for every exact
+  protected spelling through the installed launcher, no inherited state or entry path deletes a live child. Every
+  review-216 item is resolved or carried. Under the convergence rule, the fix round introduced an important defect,
+  so a second round is required:
+  - **Introduced by fix round 1, fixed now:** the new unencodable-shebang row's platform-naming title trips the D-2765
+    guard and turns the required `test (server)` check red on PR #222; the installer's exit-status prose and the PR
+    body overclaim that a pre-self-test refusal changed nothing (directories are created first); the "creates" half
+    of refusal-first ordering has no red mutation; and on Darwin every launcher start gains `__CF_USER_TEXT_ENCODING`,
+    which the locale departure and its pin do not name.
+  - **Predating, ruled:** the launcher header gains the locale departure's qualifier. Plan line 112 misstates
+    `ws-audit --session --reclaim`, a well-formed plain audit of a session named `--reclaim` that is never protected
+    and never reaches reclaim; it is corrected under the block's last number, 3703.
+  - **Case-variant argv, coordinator ruling.** Under an inherited `nocasematch` plus an imported `exit`, a case-variant
+    protected verb starts ordinary at the launcher, and the SAFETY lens measured a fixture deletion through the real
+    launcher. No caller emits a case variant: the server builds exact skeletons and the agent execs without a shell.
+    The premise "the launcher path is unaffected" therefore holds for exact spellings; the prose is corrected now,
+    and classifying protected tokens case-insensitively in the launcher is carried to child-reclamation wave 4.
+  - **The stamp gate is hollow (repo-wide).** `node shared/mark.mjs --check` has no CLI behind it and exits 0 for any
+    file, so every "passes the marker check" in these ledgers through 2026-10-02 measured nothing. Re-measured with
+    `verifyMarker`: `main` (with #226) and `46194d6b` both answer `ccrc-unmodified`. The gate is now
+    `ownership.test.ts` / `verifyMarker`; the hollow command is carried for an owner.
+- **2026-10-02 14:18 — fix round 2 re-measured; convergence review run 222 dispatched.** Wave-done 3161 claimed
+  `a217af78`. Re-measured: PR #222's head is that sha, open and not draft; `origin/main` `6ca3d163` is an ancestor
+  (merged, not rebased); `verifyMarker` answers `ccrc-unmodified` with one marker line, and an edited control
+  answers `ccrc-edited`; `bash -n` passes on `ccd/ccd`, `ccd/ccrc` and `deploy/deploy.sh`, each checked alone; both
+  Python files parse, with ASTs identical to `46194d6b`'s; `ccd/ccd` differs from `46194d6b` only on comment lines
+  and from `main` only on the stamp line and the guard block, so #226's code is main's byte for byte; the deviation
+  numbers new against `main` are exactly the issued block, 3696, 3697, 3698, 3699, 3700, 3701, 3702 and 3703, the last
+  now defined; the edited paths lie inside claims 873 and 881;
+  required Linux CI on the tip is green (run 37014939506; macOS advisory). The worker's mail says `suite: red`: three
+  `ccrc-update` cases timed out at load average 100 with no failed assertion and passed together at load 49, in a
+  round that changed no executed code. It also reports `failure: shallow` a third time; the route door has twice
+  answered `ceiling` and the run already sits at the top class, so no route call was made. Run 199 advanced to
+  `awaiting-review`. Review run 222 opened under the canonical title and dispatched with the standard panel, the
+  SAFETY lens and the convergence rule, with `ownership.test.ts` named as the stamp gate.
+- **2026-10-02 15:03 — review run 222 accepts the wave; PR #222 merged.** `ccrc-pwa-calm-cove` read `a217af78`
+  (25 agents, none dead or empty; `unverifiedLenses` and `unexamined` none): correctness 2 raised, 2 confirmed; spec
+  1, 1; reproduce 1, 0 (refuted 3/3); SAFETY 3, 2 (one refuted 3/3). Five confirmations reduce to three distinct
+  findings, all minor, and all fifteen refuter votes on them say they predate fix round 2. SAFETY: for every exact
+  protected spelling through the installed launcher, no inherited state or entry path deletes a live child, measured
+  with the real installer in fixture HOMEs; items (e) and (g) are partial only through R1. Every review-217 item is
+  resolved, except F6 and F7, which are carried as ruled with truthful prose; W1 passes on the real macOS runner, and
+  the macOS legs show no tip-only red against main's daily run.
+  - **The convergence rule holds:** the SAFETY lens holds, no confirmed critical or important finding stands, and
+    fix round 2 introduced no defect. Accepted.
+  - **Carried to child-reclamation wave 4 (minor, predating):** R1, the destination-type half of "every refusal
+    comes before anything is created" has no red mutation (moving `makedirs` between the layout refusal and the
+    destination loop stays green); a fresh-HOME row with `~/.local/bin/ccd` a directory and no `libexec` pins it.
+    R3, the exit-2 sentence ("the body moved and the launcher did not … refuses every start by digest") is false
+    for the launcher-postcondition arm, which exits 2 after both halves moved; it is repeated in
+    `ccd/ccd-entry-install.py`'s header and stderr, `ccd/ccrc` and `deploy/deploy.sh`.
+  - **Carried until `ccd/ccrc` is free (minor, predating):** R2, two `ccd/ccrc` comments still say the shebang names
+    the box's canonical python3, which 3698 made false; and R3's `ccd/ccrc` sentence. `ccd/ccrc` is under another
+    programme's live claim, so wave 4 does not edit it.
+  - **Merge.** Review run 222 advanced to `working` and closed `done` on its own fingerprint. `origin/main` was still
+    `6ca3d163`, so the merge tree is the one CI tested (run 37014939506, required checks green). Run 199 advanced to
+    `merging`; `gh pr merge 222 --squash --admin --match-head-commit a217af78…` landed `cf9e4cc8` at 14:59:55;
+    run 199 closed `done` with `final:true` and `prPhase` `merged`, answering `childReclaim: queued`, and
+    `still-harbor` is gone from `ccd ls` minutes later. `release-main.yml` published prerelease v0.0.60 at 15:00;
+    both boxes follow `dev` on their own.
+- **2026-10-02 15:47 — v0.0.60 converged on both boxes, by the updater alone.** Measured read-only:
+  - `ccrc version` reads v0.0.60, `cf9e4cc8`, with `install: complete`.
+  - `ccrc update --check` reads `state=current`.
+  - `ccrc rollout --to v0.0.60 --check` reads fleet and server both `[current]`.
+
+  The pair is live on the fleet box, both files written at 15:12:
+  - `~/.local/bin/ccd` is the launcher (`#!/usr/bin/python3 -IS`, mode 0755).
+  - `~/.local/libexec/ccrc/ccd` is the body (mode 0644); its stamp line equals `cf9e4cc8`'s.
+  - `ccd caps` still lists `ws-reclaim` and `reclaim-v1`.
+
+  No session rolled out by hand. This programme's one wave is done.
+- **Routing escalation.** This is a destructive-path security boundary reached after repeated wave 4 resolver
+  rounds exposed the process-level class. The main loop runs Opus at `xhigh`; implementation subagents run Sonnet
+  at `high`; workflows are off; compact threshold is 40. The held-out review remains outside that routing and adds
+  an Opus `xhigh` destructive SAFETY lens to the standard panel.
+- **Rollout is automatic-updater-only.** After merge, observe the release and ccrc's own convergence read-only.
+  No session manually rolls out this programme.
+
+## Carried constraints
+
+- Fixture HOMEs only. Never run `ws-reclaim`, `ws-reap`, `ws-rm`, `ws-gc --prune`, `ws-archive`, `ws-restore` or
+  any other destructive ccd verb against the live HOME.
+- Protect inherited Bash startup, function and option state across supported installed direct reclaim entry:
+  `BASH_FUNC_*`, `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS` and `CDPATH` are absent from the protected probe and
+  payload environment, so a trusted child Bash cannot re-consume them. Runtime PATH and the executables it selects
+  are trusted prerequisites; privileged Bash does not authenticate them. A failed or unmeasured decision-critical
+  command still fails shut.
+- The rendered Python launcher is executable evidence, not only text: install and fallback deploy reject an
+  unencodable or overlong absolute interpreter shebang and execute the staged launcher through the destination
+  kernel before publishing either active file. Runtime body metadata does not follow symlinks, and both publication
+  lanes replace or refuse each wrong destination type without moving a staged file through a symlinked directory.
+- Preserve supported production entry on Linux and macOS. macOS uses a PATH-selected Homebrew Bash because
+  `/bin/bash` 3.2 is unsupported. The standing operator ruling makes macOS CI legs non-gating, but portability
+  evidence and fixture probes remain required and must be reported honestly.
+- `ccd/ccd` is generated: re-stamp every edit. Every insertion above a frozen citation anchor pays S6-R11 with
+  the real selector `-t 'every line citation is anchored'`; locate code by content, not historical line numbers.
+- Every new guard ships with a deletion or bypass mutation that turns a green control red, then is restored.
+- Commit on the child's own workspace branch, never a separate feature branch. One child opens one PR.
+- The prerequisite's official acceptance comes only from a distinct review run reading one server-accepted exact
+  tip in its own worktree: three Opus `high` lenses, three Sonnet `high` refuters per finding, plus the mandatory
+  Opus `xhigh` destructive SAFETY lens. A dead or empty lens is unverified, never approval.
+
+## Next-wave brief
+
+One wave, four machine-readable units mirrored exactly in the dispatch body (the strings omit terminal
+punctuation):
+
+1. `Install the argv-selective privileged Bash boundary for direct reclaim entry`
+2. `Pin hostile inherited environments across every supported reclaim entry path`
+3. `Prove fail-shut reclaim behavior with second-command and authorization mutations`
+4. `Merge current main, run the required gates, and open the prerequisite PR`
+
+The brief names `superpowers:executing-plans`, the finalized absolute plan artifact, the exact eight-number block,
+and the routing above. It explicitly excludes wave 5's reclaim chip, R25/R36 orphan temp-root collection, wave 5
+attention-list questions, unrelated wave 4 fixes, detached swap self-reexec, deployment and live fleet mutation.
+After this PR merges, wave 4's `swift-hollow` child merges `origin/main` (never rebases), regenerates and re-stamps
+`ccd/ccd`, produces a fresh exact handoff, and only then becomes eligible for official review.
