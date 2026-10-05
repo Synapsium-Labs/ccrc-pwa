@@ -91,12 +91,18 @@ const killLog = (box: Box): string[] => {
 };
 
 /** Collect, then reap, THEN let the caller assert (T-1): 0.5 s after the spawn returned. */
-function collect(box: Box): { found: number[]; left: string[] } {
+function collect(box: Box): { found: number[]; jobs: number[]; left: string[] } {
   pause(500);
   const found = survivors(box);
+  // `jobs`: the survivors that are not a bare `sleep`. A lone `sleep 20` whose job shell is already dead is the job's
+  // OWN start-up race (a TERM landing between its fork of the sleep and its group), measured once in 36 runs, and not
+  // the launcher's; a leaked job is a `bash` shell, which stays in `jobs`.
+  const jobs = found.filter((pid) => {
+    try { return !readFileSync(`/proc/${pid}/cmdline`, 'latin1').startsWith('sleep'); } catch { return false; }
+  });
   const left = readdirSync(join(box.home, 'tmp'));
   reapSurvivors(box);
-  return { found, left };
+  return { found, jobs, left };
 }
 
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
@@ -598,22 +604,27 @@ function spawnGroup(box: Box, o: Parameters<typeof sweepSpawn>[1]): {
 }
 const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/** A caller whose own INT trap does not exit (the update's caller may set one): the sweep must still abort. */
+const CALLER_TRAP = "trap 'echo caller-int-trap' INT";
+type Ended = { code: number | null; signal: NodeJS.Signals | null; stdout: string };
+
 describe('W21: a signal to the sweep\'s process group during a concurrent batch (D-3988; D-141: an operator\'s Ctrl-C must abort)', () => {
   const killShadow = 'kill() { case "$1" in -TERM) printf \'%s\\n\' "$*" >> "$HOME/kill-log" ;; esac; builtin kill "$@"; }';
   // `group` is a terminal's Ctrl-C (every process of the sweep's group); `shell` is a `kill -INT <pid>` of the sweep's
-  // own shell alone, which the launcher subshell (its foreground child) never sees.
+  // own shell alone, which the launcher subshell never sees.
   itLinux.each([
-    ['SIGINT', 'group', 130], ['SIGINT', 'shell', 130], ['SIGTERM', 'group', 143], ['SIGTERM', 'shell', 143],
+    ['SIGINT', 'group', '', 130, ''], ['SIGINT', 'shell', '', 130, ''], ['SIGTERM', 'group', '', 143, ''], ['SIGTERM', 'shell', '', 143, ''],
+    ['SIGINT', 'shell', ' (with a caller INT trap that does not exit)', 130, CALLER_TRAP],
   ] as const)(
-    'W21: %s to the sweep\'s %s mid-batch ends the run by that signal, stops both jobs once each, leaves nothing', async (sig, target, status) => {
+    'W21: %s to the sweep\'s %s mid-batch%s ends the run by that signal, stops both jobs once each, leaves nothing', async (sig, target, _label, status, callerTrap) => {
       const script = fixtureScript('v21.sh', [
         'printf \'%s\\n\' "$1" >> "$HOME/fixture-calls"',
         'sleep 20',
         'echo "verified: $1"',
       ].join('\n'));
       const box = makeBox({ units: [stable(A, 0), stable(B, 1)], verifySrc: script });
-      const g = spawnGroup(box, { pre: killShadow });
-      let ended: { code: number | null; signal: NodeJS.Signals | null; stdout: string } | null = null;
+      const g = spawnGroup(box, { pre: [killShadow, callerTrap].filter((x) => x !== '').join('\n') });
+      let ended: Ended | null = null;
       let elapsed = -1;
       try {
         for (let i = 0; i < 150 && fixtureCalls(box).length < 2; i++) await sleepMs(100);
@@ -629,23 +640,21 @@ describe('W21: a signal to the sweep\'s process group during a concurrent batch 
         try { process.kill(-g.pid, 'SIGKILL'); } catch { /* gone */ }
         var after = collect(box);
       }
-      const { found, left } = after;
+      const { found, jobs, left } = after;
       expect(ended, 'the sweep ended on its own, within 15 s').not.toBeNull();
       expect(ended!.signal === sig || ended!.code === status,
         `ended by ${sig}: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
       expect(elapsed, 'within about a second of the signal').toBeLessThan(5_000);
       expect(ended!.stdout).not.toContain(SWEEP_OK);
       expect(left.filter((n) => n.startsWith('ccrc-sweep.')), `left in tmp: ${left.join(' ')}`).toEqual([]);
-      expect(found, `survivors: ${found.join(' ')}`).toEqual([]);
-      // The jobs' groups are TERMed through `_upd_sweep_kill`, each once; the INT handler's own TERM of the launcher
-      // (a plain pid, no group) is the only other line there may be.
+      expect(jobs, `survivors: ${found.join(' ')}`).toEqual([]);
+      // The jobs' groups are TERMed through `_upd_sweep_kill`, each once; `_upd_sweep_stop` (the exit chain's first
+      // entry) stops the launcher once, by pid: it is past its loop.
       const log = killLog(box);
       const groups = log.filter((l) => l.startsWith('-TERM -- -'));
       expect(groups.length, `kill-log: ${log.join(' | ')}`).toBe(2);
       expect(new Set(groups).size, 'each job group is signalled once').toBe(2);
       for (const l of groups) expect(l).toMatch(/^-TERM -- -\d+$/);
-      // Whichever signal ended the run, `_upd_sweep_stop` (the INT handler's, or the exit chain's) stops the launcher
-      // once: it is past its loop, so a TERM by pid.
       const byPid = log.filter((x) => !x.startsWith('-TERM -- -'));
       expect(byPid.length, `the launcher is stopped once: ${byPid.join(' | ')}`).toBe(1);
       for (const l of byPid) expect(l, 'the launcher, by pid').toMatch(/^-TERM \d+$/);
@@ -654,21 +663,29 @@ describe('W21: a signal to the sweep\'s process group during a concurrent batch 
 
   // THE LAUNCH LOOP: the signal lands while the launcher is still forking jobs (120 units; sent once 10 `.pid` files
   // exist). A job forked but not yet recorded would be in a group of its own that nothing could find (D-3988).
-  // `TERM` to the GROUP is the one shape with a residue: the launcher itself is TERMed by the outside signal, at a
-  // random point of its loop, and a job forked in the instant before its `.pid` write is lost (measured 4 runs in 24,
-  // against 8 in 24 on the foreground launcher); that case does not assert survivors, it reaps them.
+  // THE BOUND: the loop reads `stop` at the top of each iteration, so once the signal lands only the forks already in
+  // flight finish. `_upd_sweep_kill` TERMs the group of every recorded job once, so the kill-log's group lines count
+  // the jobs started: at most 10 + START_SLACK. Measured at 120 units on a loaded box (25 runs over five shapes): 10 to 33 started, i.e. a slack
+  // of 23; 50 leaves a margin. With the check dropped the launcher forks all 120 (15 runs, every shape).
+  // `TERM` to the GROUP is the one shape with a residue (R17): the launcher itself is TERMed by the outside signal, at
+  // a random point of its loop, and a job forked in the instant before its `.pid` write is lost. That is PARITY with the
+  // foreground launcher (interleaved 6 runs in 24 on base against 7 in 24 on this file; pooled 39 in 108 against 28 in 72). That case asserts neither
+  // survivors (it reaps them) nor the scratch dir (a leaked job writes its capture files while `rm -rf` runs), nor the bound.
+  const START_SLACK = 50;
   itLinux.each([
-    ['SIGINT', 'group', 130, true], ['SIGINT', 'shell', 130, true], ['SIGTERM', 'group', 143, false], ['SIGTERM', 'shell', 143, true],
+    ['SIGINT', 'group', 'full', 130, ''], ['SIGINT', 'shell', 'full', 130, ''], ['SIGTERM', 'group', 'residue: no survivors, dir or bound asserted', 143, ''],
+    ['SIGTERM', 'shell', 'full', 143, ''],
+    ['SIGINT', 'shell', 'full, with a caller INT trap that does not exit', 130, CALLER_TRAP],
   ] as const)(
-    'W21: launch loop: %s to the sweep\'s %s while jobs are still being forked leaves no job and no scratch dir', async (sig, target, status, zero) => {
+    'W21: launch loop: %s to the sweep\'s %s while jobs are still being forked (%s) leaves no job and no scratch dir', async (sig, target, mode, status, callerTrap) => {
       const script = fixtureScript('v21l.sh', 'sleep 20');
       const units = Array.from({ length: 120 }, (_, i) => stable(`claude-session@demo-u${i}.service`, i));
       const box = makeBox({ units, verifySrc: script });
-      const g = spawnGroup(box, {});
+      const g = spawnGroup(box, { pre: [killShadow, callerTrap].filter((x) => x !== '').join('\n') });
       const tmp = join(box.home, 'tmp');
-      let ended: { code: number | null; signal: NodeJS.Signals | null; stdout: string } | null = null;
+      let ended: Ended | null = null;
       let pids = 0;
-      let after: { found: number[]; left: string[] };
+      let after: { found: number[]; jobs: number[]; left: string[] };
       try {
         for (let i = 0; i < 10_000 && pids < 10; i++) {
           try {
@@ -683,21 +700,60 @@ describe('W21: a signal to the sweep\'s process group during a concurrent batch 
         try { process.kill(-g.pid, 'SIGKILL'); } catch { /* gone */ }
         after = collect(box);
       }
+      const started = killLog(box).filter((l) => l.startsWith('-TERM -- -')).length;
       expect(pids, 'the signal was sent mid-loop').toBeGreaterThanOrEqual(10);
       expect(ended, 'the sweep ended on its own, within 20 s').not.toBeNull();
       expect(ended!.signal === sig || ended!.code === status, `ended by ${sig}: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
       expect(ended!.stdout).not.toContain(SWEEP_OK);
-      expect(after.left.filter((n) => n.startsWith('ccrc-sweep.')), `left in tmp: ${after.left.join(' ')}`).toEqual([]);
-      if (zero) expect(after.found, `survivors: ${after.found.join(' ')}`).toEqual([]);
+      if (mode.startsWith('full')) {
+        expect(after.left.filter((n) => n.startsWith('ccrc-sweep.')), `left in tmp: ${after.left.join(' ')}`).toEqual([]);
+        expect(after.jobs, `survivors: ${after.found.join(' ')}`).toEqual([]);
+        expect(started, `jobs started: the loop-top stop check bounds it to 10 + ${START_SLACK}`).toBeLessThanOrEqual(10 + START_SLACK);
+      }
       noPoison(box);
     }, 60_000);
+
+  // A SECOND BATCH: `looped` is written when EVERY batch's loop ends, so the one left by batch 1 must not be believed
+  // while batch 2 is still forking (the sweep removes it per batch; without that, `_upd_sweep_stop` TERMs a launcher
+  // that is mid-loop and a job is lost: measured 12 runs in 16, against 0 in 16 with the removal).
+  itLinux('W21: second batch: SIGINT to the sweep\'s shell while the second batch is still being forked leaves no job and no scratch dir', async () => {
+    const script = fixtureScript('v21b.sh', 'sleep 1');
+    const units = Array.from({ length: 120 }, (_, i) => stable(`claude-session@demo-u${i}.service`, i));
+    const box = makeBox({ units, verifySrc: script });
+    const g = spawnGroup(box, { env: { CCRC_SWEEP_VERIFY_JOBS: '60' } });
+    const tmp = join(box.home, 'tmp');
+    let ended: Ended | null = null;
+    let second = 0;
+    let after: { found: number[]; jobs: number[]; left: string[] };
+    try {
+      for (let i = 0; i < 20_000 && second < 10; i++) {
+        try {
+          const d = readdirSync(tmp).find((n) => n.startsWith('ccrc-sweep.'));
+          if (d !== undefined) second = readdirSync(join(tmp, d)).filter((n) => n.endsWith('.pid') && Number(n.split('.')[0]) >= 60).length;
+        } catch { /* the dir is not there yet */ }
+        if (second < 10) await sleepMs(1);
+      }
+      try { process.kill(g.pid, 'SIGINT'); } catch { /* gone: the assertions say so */ }
+      ended = await Promise.race([g.done, sleepMs(20_000).then(() => null)]);
+    } finally {
+      try { process.kill(-g.pid, 'SIGKILL'); } catch { /* gone */ }
+      after = collect(box);
+    }
+    expect(second, 'the signal was sent while the second batch was forking').toBeGreaterThanOrEqual(10);
+    expect(ended, 'the sweep ended on its own, within 20 s').not.toBeNull();
+    expect(ended!.signal === 'SIGINT' || ended!.code === 130, `ended by SIGINT: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
+    expect(ended!.stdout).not.toContain(SWEEP_OK);
+    expect(after.left.filter((n) => n.startsWith('ccrc-sweep.')), `left in tmp: ${after.left.join(' ')}`).toEqual([]);
+    expect(after.jobs, `survivors: ${after.found.join(' ')}`).toEqual([]);
+    noPoison(box);
+  }, 60_000);
 });
 
 itLinux('W22: the caller\'s own INT trap is put back after the concurrent batch (D-3988)', () => {
   const box = makeBox({ units: [stable(A, 0), stable(B, 1)] });
-  const r = runSweep(box, { pre: "trap 'echo caller-int-trap' INT", tail: 'trap -p INT > "$HOME/int-trap"' });
+  const r = runSweep(box, { pre: CALLER_TRAP, tail: 'trap -p INT > "$HOME/int-trap"' });
   expect(r.code, ctx(r)).toBe(0);
-  expect(readFileSync(join(box.home, 'int-trap'), 'utf8')).toContain("echo caller-int-trap");
+  expect(readFileSync(join(box.home, 'int-trap'), 'utf8')).toContain('echo caller-int-trap');
   noPoison(box);
 }, 60_000);
 

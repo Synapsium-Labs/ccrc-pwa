@@ -21172,9 +21172,11 @@ _upd_sweep() {
         # interrupts at once. The handler stops the launcher AND WAITS for it (bounded: `_upd_sweep_stop`), so that every
         # job it forked has a pid on file, then RE-RAISES on this shell (`exit 130` would not read as an INT death to our
         # caller): the exit chain TERMs each unrecorded job, once, and removes the scratch dir. The caller's own INT trap
-        # is saved and put back; `lpid` is reset per batch, so a handler never signals a previous batch's launcher.
+        # is saved and put back (one of the caller's that does not exit would otherwise swallow the INT: measured).
+        # `lpid` is reset per batch, so a handler never signals a previous batch's launcher; the handler writes it to
+        # `launcher.proc` itself, so an INT between the launch and the sweep's own write still stops the launcher.
         lrc=0; lpid=""; ltrap="$(trap -p INT)"; rm -f "$vdir/looped" "$vdir/stop"
-        trap 'trap - INT; if [ -n "$lpid" ]; then _upd_sweep_stop "$vdir"; : >"$vdir/launcher.proc"; fi; kill -INT "$BASHPID"' INT
+        trap 'trap - INT; if [ -n "$lpid" ]; then echo "$lpid" >"$vdir/launcher.proc"; _upd_sweep_stop "$vdir"; : >"$vdir/launcher.proc"; fi; kill -INT "$BASHPID"' INT
         ( _upd_sweep_launch "$vdir" "$verify" "$i" "$j" ) 2>"$vdir/launch.err" &
         lpid=$!; printf '%s\n' "$lpid" >"$vdir/launcher.proc"
         wait "$lpid" || lrc=$?
