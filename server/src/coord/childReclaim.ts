@@ -9,8 +9,9 @@ import { readSessionRecord } from '../registry.js';
 import { refusalSentence } from '../wsaudit.js';
 import { CHILD_BIRTH_SKEW_MS, type ChildSpentVerdict } from './childSpent.js';
 import {
-  CHILD_RECLAIM_SKIP, childReclaimCoordinated, childReclaimFailingPastCeiling, childReclaimFailingSentence, childReclaimFailureLine,
-  childReclaimJournalRow, type ChildReclaimKeptAttention, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
+  CHILD_RECLAIM_PRE_LOCK_TOKEN, CHILD_RECLAIM_SKIP, childReclaimCoordinated, childReclaimFailingPastCeiling,
+  childReclaimFailingSentence, childReclaimFailureLine, childReclaimJournalRow, type ChildReclaimFeedQuiet,
+  type ChildReclaimKeptAttention, type ChildReclaimPreLockToken, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
 } from '../childReclaimSweep.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
@@ -278,12 +279,18 @@ export type ChildReclaimOutcome =
   | { readonly kind: 'refused'; readonly sessionId: string; readonly runId: number; readonly token: ChildReclaimToken; readonly sentence: string; readonly detail: string }
   | { readonly kind: 'gone'; readonly sessionId: string }
   | { readonly kind: 'failed'; readonly sessionId: string; readonly runId: number;
-      readonly resume: ChildReclaimResume; readonly detail: string };
+      readonly resume: ChildReclaimResume; readonly detail: string; readonly token: string | null };
 
 /** `runId` is the MINTING run — the one the child's `.child` marker names and
  *  the value composed as `--child-of`. On the close path it is read off the
  *  marker, never assumed to be the run being closed: a child that handed over
  *  across waves was minted by wave 1 and is closed by wave N.
+ *
+ *  `feedQuiet`: what the feed already says for this child (spec §5.9): the
+ *  non-presence deferral episode it is in, and the failure word the
+ *  attention list shows for it. The executor decides nothing on it but
+ *  whether its own feed row repeats them (`childReclaimFeedSkips`). Close
+ *  sends `CHILD_RECLAIM_FEED_QUIET_NONE`.
  *
  *  `deferredSinceMs`: epoch ms of the FIRST deferral the sweep
  *  saw for this child, or `null` — close's value, always a first attempt. It
@@ -295,7 +302,11 @@ export interface ChildReclaimRequest {
   readonly sessionId: string; readonly runId: number;
   readonly trigger: 'close' | 'sweep'; readonly deferExpired: boolean;
   readonly deferredSinceMs: number | null;
+  readonly feedQuiet: ChildReclaimFeedQuiet;
 }
+
+/** Nothing the feed already says (spec §5.9): close's value, and any first attempt's. */
+export const CHILD_RECLAIM_FEED_QUIET_NONE: ChildReclaimFeedQuiet = { deferWhy: null, failureToken: null };
 
 /** The executor's ports (L2, declared by this consumer). `presence` is
  *  narrowed to the one question asked of it; `notifyLog` is optional exactly
@@ -585,14 +596,19 @@ export function parseChildReclaimAudit(sessionId: string, stdout: string): Child
  *  `.test` against a substring: an EXTENDED die — ccd rewords a message and
  *  APPENDS to it — must not match (review 170 fr-I I2), only an exact
  *  rewording reds the pin `child-reclaim.test.ts` reads straight off ccd's
- *  own text. */
-const CHILD_RECLAIM_PRE_LOCK_DIE_PATTERNS: readonly RegExp[] = [
-  /^usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> \[--defer-expired\] \[--surface <word>\] \[--actor <text>\] \[--reason <text>\]$/,
-  /^bad token$/,
-  /^bad run id$/,
-  /^bad session id$/,
-  /^python3 unavailable — cannot quote the reclaim record safely$/,
-  /^flock \(util-linux\) is unavailable — refusing to run the destructive verb unserialised$/,
+ *  own text.
+ *
+ *  `token` is the refusal word ccd journals for the same die (`_lc_refuse`),
+ *  which the attention list shows as the failure's word (spec §5.9), or null
+ *  for a die ccd journals nothing for. */
+const CHILD_RECLAIM_PRE_LOCK_DIE_PATTERNS: readonly { readonly re: RegExp; readonly token: ChildReclaimPreLockToken | null }[] = [
+  { re: /^usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> \[--defer-expired\] \[--surface <word>\] \[--actor <text>\] \[--reason <text>\]$/, token: null },
+  { re: /^bad token$/, token: null },
+  { re: /^bad run id$/, token: null },
+  { re: /^bad session id$/, token: null },
+  { re: /^python3 unavailable — cannot quote the reclaim record safely$/, token: null },
+  { re: /^flock \(util-linux\) is unavailable — refusing to run the destructive verb unserialised$/,
+    token: CHILD_RECLAIM_PRE_LOCK_TOKEN.flock },
 ];
 
 /** The lock-unopenable die's REAL shape, MEASURED (review 170 fr-I I1) by
@@ -622,14 +638,19 @@ function matchChildReclaimLockUnopenableDie(err: string): string | null {
 
 /** The one recogniser `parseChildReclaimResult`'s fallback calls: the SEVEN
  *  pre-lock dies, whichever shape each one takes. Returns ccd's own message
- *  (never `null`) on a match, so the caller never re-derives it. */
-function matchChildReclaimPreLockDie(stderr: string): string | null {
+ *  (never `null`) on a match, so the caller never re-derives it, with the
+ *  word ccd journals for that die (`token`; null for a die it journals none
+ *  for). */
+function matchChildReclaimPreLockDie(
+  stderr: string,
+): { readonly msg: string; readonly token: ChildReclaimPreLockToken | null } | null {
   const err = stderr.trim();
   if (err === '') return null;
   const lock = matchChildReclaimLockUnopenableDie(err);
-  if (lock !== null) return lock;
+  if (lock !== null) return { msg: lock, token: CHILD_RECLAIM_PRE_LOCK_TOKEN.lock };
   const msg = err.startsWith('ccd: ') ? err.slice('ccd: '.length) : err;
-  return CHILD_RECLAIM_PRE_LOCK_DIE_PATTERNS.some((p) => p.test(msg)) ? msg : null;
+  const hit = CHILD_RECLAIM_PRE_LOCK_DIE_PATTERNS.find((p) => p.re.test(msg));
+  return hit === undefined ? null : { msg, token: hit.token };
 }
 
 /** `ccd ws-reclaim …`'s answer. Three documents (spec §5.6): `reclaimed` and
@@ -648,8 +669,13 @@ export type ChildReclaimVerbRead =
   | { readonly kind: 'refused'; readonly token: ChildReclaimToken; readonly detail: string }
   /** `resume` (review 170 F20; three-way since fr-I m1 — see
    *  `ChildReclaimResume`'s own docstring). `matchChildReclaimPreLockDie`,
-   *  above, is what decides `pre-lock-die` here. */
-  | { readonly kind: 'failed'; readonly resume: ChildReclaimResume; readonly detail: string };
+   *  above, is what decides `pre-lock-die` here. `token` (spec §5.9) is
+   *  ccd's own failure word: the mirror line's `refusal` for the same
+   *  attempt, since ccd writes both from one word. Null where ccd named none
+   *  — a call cut short, a die it journals nothing for, a read this build
+   *  made a failure of its own. */
+  | { readonly kind: 'failed'; readonly resume: ChildReclaimResume; readonly detail: string;
+      readonly token: string | null };
 
 export function parseChildReclaimResult(sessionId: string, stdout: string, stderr: string): ChildReclaimVerbRead {
   let v: unknown = null;
@@ -657,7 +683,7 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
   if (isRecord(v)) {
     if (typeof v.reclaimed === 'string') {
       if (v.reclaimed !== sessionId) {
-        return { kind: 'failed', resume: 'not-resumable',
+        return { kind: 'failed', resume: 'not-resumable', token: null,
           detail: `ws-reclaim reported reclaiming ${v.reclaimed}, not ${sessionId}` };
       }
       const wip: ChildReclaimWip = v.wip === null ? { kind: 'none' }
@@ -671,7 +697,7 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
       const detail = typeof v.detail === 'string' ? v.detail : '';
       return isChildReclaimToken(v.refused)
         ? { kind: 'refused', token: v.refused, detail }
-        : { kind: 'failed', resume: 'not-resumable',
+        : { kind: 'failed', resume: 'not-resumable', token: null,
             detail: `ws-reclaim refused with a word this build does not know: ${v.refused}` };
     }
     if (typeof v.failed === 'string') {
@@ -685,13 +711,13 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
       // starts completely afresh, exactly as `not-resumable` already reads
       // (`childReclaimFeedBody`'s tail text: "It is retried from the start.").
       const resume: ChildReclaimResume = v.failed === CHILD_RECLAIM_PROBE_UNMEASURED ? 'not-resumable' : 'resumable';
-      return { kind: 'failed', resume, detail: detail === '' ? v.failed : `${v.failed}: ${detail}` };
+      return { kind: 'failed', resume, detail: detail === '' ? v.failed : `${v.failed}: ${detail}`, token: v.failed };
     }
   }
   const err = stderr.trim();
-  const dieMsg = matchChildReclaimPreLockDie(err);
-  if (dieMsg !== null) return { kind: 'failed', resume: 'pre-lock-die', detail: dieMsg };
-  return { kind: 'failed', resume: 'resumable',
+  const die = matchChildReclaimPreLockDie(err);
+  if (die !== null) return { kind: 'failed', resume: 'pre-lock-die', detail: die.msg, token: die.token };
+  return { kind: 'failed', resume: 'resumable', token: null,
     detail: err === '' ? 'ws-reclaim answered nothing — it may have been cut short; the next attempt resumes it' : err };
 }
 
@@ -705,9 +731,11 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
  * `reclaimed` — and on a row step 1 measures ABSENT, whose earlier attempt's
  * box half finished without its cancel — it cancels every outstanding
  * delivery addressed to the child.
- * Every outcome but `gone` writes exactly ONE feed row, HERE — this function
- * is the single exit every outcome takes, so a new condition added to
- * `childReclaimOutcome` inherits its row rather than having to remember one.
+ * Every outcome but `gone` writes one feed row, unless it repeats the deferral
+ * episode or the listed failure the request names (`childReclaimFeedSkips`),
+ * HERE — this function is the single exit every outcome takes, so a new
+ * condition added to `childReclaimOutcome` inherits its row rather than
+ * having to remember one.
  *
  * NEVER THROWS for a condition it can name: a failed read is a deferral or a
  * failure with a detail. What it cannot name (a bug) rejects, and the close
@@ -715,7 +743,7 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
  */
 export async function reclaimChild(deps: ChildReclaimDeps, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {
   const outcome = await childReclaimOutcome(deps, req);
-  if (outcome.kind !== 'gone') recordChildReclaimFeed(deps, outcome, req);
+  if (outcome.kind !== 'gone' && !childReclaimFeedSkips(outcome, req)) recordChildReclaimFeed(deps, outcome, req);
   return outcome;
 }
 
@@ -839,7 +867,7 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   // 5 — the token, minted by the ladder on the box.
   const audit = await childReclaimAudit(deps, req);
   if (audit.kind === 'unreadable') {
-    return { kind: 'failed', sessionId, runId, resume: 'not-resumable', detail: audit.detail };
+    return { kind: 'failed', sessionId, runId, resume: 'not-resumable', detail: audit.detail, token: null };
   }
   if (audit.kind === 'refused') return childReclaimRefusal(req, audit.token, audit.detail);
   if (audit.childOf !== runId) {
@@ -849,7 +877,7 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   const act = await childReclaimAct(deps, req, audit.token);
   if (act === 'unsupported') return deferred('unsupported', `the fleet host does not advertise ${RECLAIM_CAP}`);
   if (act.kind === 'failed') {
-    return { kind: 'failed', sessionId, runId, resume: act.resume, detail: act.detail };
+    return { kind: 'failed', sessionId, runId, resume: act.resume, detail: act.detail, token: act.token };
   }
   if (act.kind === 'refused') return childReclaimRefusal(req, act.token, act.detail);
   // 7 — the child is gone: nothing may still be waiting to be typed into it,
@@ -930,7 +958,7 @@ function childReclaimRefusal(req: ChildReclaimRequest, token: ChildReclaimToken,
     // answered as a failure, never cast into a reason it is not.
     case 'retry': return isChildReclaimDeferWhy(token)
       ? { kind: 'deferred', sessionId, runId, why: token, detail }
-      : { kind: 'failed', sessionId, runId, resume: 'not-resumable',
+      : { kind: 'failed', sessionId, runId, resume: 'not-resumable', token: null,
           detail: `${token} is marked retry but is no defer reason` };
     case 'terminal': return { kind: 'refused', sessionId, runId, token, sentence: refusalSentence(token), detail };
   }
@@ -1252,6 +1280,15 @@ function childReclaimFeedBody(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>,
       return `${who}: reclaim failed — ${childReclaimSentence(o.detail)} ${tail}${wait}`;
     }
   }
+}
+
+/** Does this outcome repeat what the feed already says (spec §5.9)? A ceiling-expired attempt
+ *  always writes: its row states the wait it ended. */
+export function childReclaimFeedSkips(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>, req: ChildReclaimRequest): boolean {
+  if (req.deferExpired) return false;
+  if (o.kind === 'deferred') return req.feedQuiet.deferWhy === o.why;
+  if (o.kind === 'failed') return o.token !== null && req.feedQuiet.failureToken === o.token;
+  return false;
 }
 
 /**

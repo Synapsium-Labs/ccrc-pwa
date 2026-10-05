@@ -21,8 +21,9 @@ import { readSessionRecord } from '../registry.js';
 import { childBirthOf, childSpent, childSpentLive, childSpentLiveFrom } from './childSpent.js';
 import type { CcdPrLine } from '../prstate.js';
 import {
-  childReclaimDecision, childReclaimHasCoordinated, childReclaimRowListing, type ChildReclaimDecision,
-  type ChildReclaimMinting, type ChildReclaimNotWhy, type ChildReclaimRequest, type ChildReclaimReviewed,
+  CHILD_RECLAIM_FEED_QUIET_NONE, childReclaimDecision, childReclaimHasCoordinated, childReclaimRowListing,
+  type ChildReclaimDecision, type ChildReclaimMinting, type ChildReclaimNotWhy, type ChildReclaimRequest,
+  type ChildReclaimReviewed,
 } from './childReclaim.js';
 import {
   transitionsFor, type ChildMark, type DoneRejectCode, type RunRefuseCode, type RunState,
@@ -745,12 +746,14 @@ async function childGateAtClose(
   }
   return {
     decision,
-    // `deferredSinceMs: null`: close is always a first attempt (spec §5.7).
+    // `deferredSinceMs: null`: close is always a first attempt (spec §5.7), and
+    // so the feed says nothing about it yet (`feedQuiet`, spec §5.9).
     // `mark.runId` is the MINTING run — never `run.id`, the run being closed,
     // which differ exactly when the child handed over across waves or was
     // minted by a review run this close is not.
     request: decision.reclaim && mark.kind === 'child'
-      ? { sessionId, runId: mark.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null } : null,
+      ? { sessionId, runId: mark.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+          feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE } : null,
   };
 }
 

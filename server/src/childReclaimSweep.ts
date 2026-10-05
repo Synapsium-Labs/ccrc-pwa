@@ -165,6 +165,9 @@ export interface ChildReclaimSweepEntry {
    *  (`childReclaimSameGeneration`). A different birth is a different
    *  workspace under a recycled slug, which starts from a first sighting. */
   readonly bornAt: number | null;
+  /** The `why` of the latest outcome when it was a deferral, or null after any other outcome:
+   *  the deferral EPISODE a feed row is written once for (spec §5.9). No pacing reads it. */
+  readonly lastDeferWhy: string | null;
 }
 
 /** A child seen eligible for the first time, in the workspace generation born
@@ -173,7 +176,7 @@ export interface ChildReclaimSweepEntry {
 export const childReclaimFirstSighting = (monoMs: number, bornAt: number | null): ChildReclaimSweepEntry => ({
   firstEligibleAt: monoMs, firstDeferredAt: null, firstPresenceDeferredAt: null, lastPresenceDeferredAt: null,
   lastPresenceWallAt: null, presenceHeldSince: null,
-  consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null, bornAt,
+  consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null, bornAt, lastDeferWhy: null,
 });
 
 /** Does this entry describe the workspace generation born at `bornAt` (spec §5.6: slugs recycle)? A null birth never matches. */
@@ -629,6 +632,12 @@ const childReclaimPresenceWithin = (entry: ChildReclaimSweepEntry, now: ChildRec
  *  as the lease's holder whose answer does not extend the episode clears it:
  *  the holder forfeits. A licensed one clears it. `firstDeferredAt` is stamped
  *  once, from `ask.at.wallMs`. Every other stamp is `ask.at.monoMs`.
+ *
+ *  `lastDeferWhy` is the deferral's own word after a deferral and null after
+ *  every other outcome, a rejection (written as `failed`) among them: the
+ *  episode the executor's feed row is written once for (spec §5.9). Nothing
+ *  that paces or orders an ask reads it.
+ *
  *  `passIntervalMs` is the lane's pass interval — an argument, as
  *  `childReclaimDue`'s is, because this L1 file imports no L4 constant. */
 export function childReclaimNextEntry(
@@ -641,13 +650,13 @@ export function childReclaimNextEntry(
       return {
         ...entry, consecutiveFailures: entry.consecutiveFailures + 1, lastFailedAt: ask.at.monoMs,
         firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null,
-        refusedAt: null, lastAskedAt: ask.at.monoMs,
+        refusedAt: null, lastAskedAt: ask.at.monoMs, lastDeferWhy: null,
       };
     case 'refused':
       return {
         ...entry, consecutiveFailures: 0, lastFailedAt: null,
         firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null,
-        refusedAt: ask.at.monoMs, lastAskedAt: ask.at.monoMs,
+        refusedAt: ask.at.monoMs, lastAskedAt: ask.at.monoMs, lastDeferWhy: null,
       };
     case 'deferred': {
       const presence = (CHILD_RECLAIM_PRESENCE_DEFERS as readonly string[]).includes(outcome.why);
@@ -665,6 +674,7 @@ export function childReclaimNextEntry(
         lastPresenceWallAt: presence ? ask.at.wallMs : null,
         presenceHeldSince: inLine ? (entry.presenceHeldSince ?? answered.monoMs) : null,
         refusedAt: null, consecutiveFailures: 0, lastFailedAt: null, lastAskedAt: ask.at.monoMs,
+        lastDeferWhy: outcome.why,                                                                              // the episode a feed row is written once for
       };
     }
   }
@@ -1040,4 +1050,29 @@ export function childReclaimAttentionWithKept(
     ...mirrorArms.filter((a) => !(a.kind === 'failing' && (keptIds.has(a.sessionId) || heldIds.has(a.sessionId)))),
     ...childReclaimKeptList(kept),
   ];
+}
+
+/** What the feed already says for one child (spec §5.9), as the lane tells the executor on each request. */
+export interface ChildReclaimFeedQuiet {
+  /** The non-presence deferral episode this child is in, or null. */
+  readonly deferWhy: string | null;
+  /** The token of this child's `failing` attention item, or null when the failing arm does not list
+   *  it, or lists it with no token. */
+  readonly failureToken: string | null;
+}
+
+/** What the feed already says for this child (spec §5.9), derived from the entry the lane keeps and the
+ *  attention list it has just published. `deferWhy` is the entry's latest deferral word unless that word is
+ *  one of the presence defers, which keep their one-row-per-pass shape (the ceiling's own row states the wait
+ *  each one ends). `failureToken` is the word of this child's `failing` item, when it has one and the item
+ *  carries a word: a `terminal` item, another child's item and an item with no token say nothing. Pure: the
+ *  executor decides nothing on it but whether its own feed row would repeat it. */
+export function childReclaimFeedQuiet(
+  entry: ChildReclaimSweepEntry, listed: readonly ChildReclaimAttention[], sessionId: string,
+): ChildReclaimFeedQuiet {
+  const why = entry.lastDeferWhy;
+  const deferWhy = why !== null && !(CHILD_RECLAIM_PRESENCE_DEFERS as readonly string[]).includes(why) ? why : null;
+  const failing = listed.find((a) => a.kind === 'failing' && a.sessionId === sessionId);
+  const failureToken = failing !== undefined && failing.kind === 'failing' && failing.token !== '' ? failing.token : null;
+  return { deferWhy, failureToken };
 }

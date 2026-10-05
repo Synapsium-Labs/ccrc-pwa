@@ -25,7 +25,9 @@
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { childReclaimPauseRead, reclaimChild, type ChildReclaimDeps } from '../src/coord/childReclaim.js';
+import {
+  CHILD_RECLAIM_FEED_QUIET_NONE, childReclaimPauseRead, reclaimChild, type ChildReclaimDeps,
+} from '../src/coord/childReclaim.js';
 import { CoordStore } from '../src/coord/store.js';
 import { parseJournalLine } from '../src/coord/journalparse.js';
 import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
@@ -95,7 +97,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     // `deferredSinceMs: null` — close never deferred before (spec §5.7: close
     // is a first attempt; the sweep carries the wait).
     const out = await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', sessionId: 'demo-a', runId: f.runId, why: 'paused-at-server' });
     expect(f.ccdCalls()).toEqual([]);
@@ -110,7 +112,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     // deferral it saw, a full ceiling ago.
     const out = await reclaimChild(f.deps, {
       sessionId: 'demo-a', runId: f.runId, trigger: 'sweep', deferExpired: true,
-      deferredSinceMs: Date.now() - 15 * 60_000,
+      deferredSinceMs: Date.now() - 15 * 60_000, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
     expect(f.ccdCalls()).toEqual([]);
@@ -121,7 +123,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     const f = await fixture({ visible: true });
     f.raise();
     const out = await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
   });
@@ -133,7 +135,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     if (!('id' in next)) throw new Error(`openRun refused: ${JSON.stringify(next)}`);
     f.coord.setSession(next.id, 'demo-a');
     const out = await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     // The detail pins WHICH branch answered: the sibling re-read's own
     // wording, never 2a's `"<id> has coordinated run(s)"` — the two branches
@@ -161,7 +163,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     if (!('id' in next)) throw new Error(`openRun refused: ${JSON.stringify(next)}`);
     f.coord.setSession(next.id, 'demo-a');
     const out = await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'siblings-open',
       detail: `open run(s) #${next.id} still name this workspace` });
@@ -171,7 +173,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     const f = await fixture();
     f.raise();
     await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(f.feed()).toEqual(['child reclaim deferred']);
     expect(f.bodies()[0]).toContain('paused-at-server');
@@ -183,7 +185,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     // the audit's own gate refuses).
     const f = await fixture();
     await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(f.ccdCalls()).toContainEqual([...CCD_ARGV.wsReclaimAudit('demo-a', false)]);
   });
@@ -208,7 +210,7 @@ describe('reclaimChild — the coordinating re-read, before the pause', () => {
       handoffCommit: null, program: 'w4-paused-coord', viaClosing: false }).ok).toBe(true);
     f.raise(); // the switch is ALSO up — the more specific answer must still win
     const out = await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'siblings-open', detail: 'demo-a has coordinated run(s)' });
     expect(f.ccdCalls()).toEqual([]);
@@ -244,7 +246,7 @@ describe('reclaimChild — the coordinating re-read, before the pause', () => {
     mirrorCreate(f.coord, 'demo-a', born);
     f.raise();
     const out = await reclaimChild({ ...f.deps, now: () => born + 1_000 }, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
     expect(f.ccdCalls()).toEqual([]);
@@ -258,7 +260,7 @@ describe('reclaimChild — the coordinating re-read, before the pause', () => {
     expect(closedAt).toBeGreaterThanOrEqual(born);
     f.raise();
     const out = await reclaimChild({ ...f.deps, now: () => closedAt + 1_000 }, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'siblings-open', detail: 'demo-a has coordinated run(s)' });
     expect(f.ccdCalls()).toEqual([]);
@@ -271,7 +273,7 @@ describe('reclaimChild — the coordinating re-read, before the pause', () => {
     try {
       f.raise();
       const out = await reclaimChild(f.deps, {
-        sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+        sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
       });
       expect(out).toMatchObject({ kind: 'deferred', why: 'siblings-unreadable' });
     } finally {
@@ -528,7 +530,7 @@ describe('CoordStore.childReclaimCoordinatorClaims — the displaced side', () =
       handoffCommit: null, program: 'w4-displaced-exec', viaClosing: false }).ok).toBe(true);
     expect(f.coord.reclaimProgram(coordinated.id, 'heir-y', Date.now(), null)).toMatchObject({ ok: true });
     const out = await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'siblings-open', detail: 'demo-a has coordinated run(s)' });
     expect(f.ccdCalls()).toEqual([]);
@@ -557,7 +559,7 @@ describe('reclaimChild — a rejecting readdir still defers, with a feed row', (
     };
     const deps: ChildReclaimDeps = { ...f.deps, io: rejectingIo };
     const out = await reclaimChild(deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
     expect(f.ccdCalls()).toEqual([]);
@@ -588,7 +590,7 @@ describe('reclaimChild — a registry that does not list at the pause read defer
     };
     const deps: ChildReclaimDeps = { ...f.deps, io: unlistedIo };
     const out = await reclaimChild(deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(readdirCalls, 'step 1 listed, then step 2b asked once').toBe(2);
     expect(out).toMatchObject({ kind: 'deferred', sessionId: 'demo-a', runId: f.runId, why: 'paused-at-server' });

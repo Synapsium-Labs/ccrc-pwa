@@ -88,7 +88,7 @@ import {
 } from './coord/childReclaim.js';
 import {
   childReclaimAskOrder, childReclaimAttention, childReclaimAttentionWithKept, childReclaimDeferExpired, childReclaimDue,
-  childReclaimFirstSighting, childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptItems,
+  childReclaimFeedQuiet, childReclaimFirstSighting, childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptItems,
   childReclaimNextEntry, childReclaimSameGeneration,
   childReclaimSweepVerdict, childReclaimTerminalRefusal, type ChildReclaimAsk, type ChildReclaimCoordinatorClaim,
   childReclaimKeptVerdicts, type ChildReclaimHoldCandidate,
@@ -3502,6 +3502,11 @@ export class FleetWatcher {
         // In memory, so a restart restarts it: a later `deferredSinceMs`,
         // never an earlier one.
         deferredSinceMs: entry.firstDeferredAt,
+        // WHAT THE FEED ALREADY SAYS (spec §5.9): the child's non-presence deferral
+        // episode, from this entry, and the failure word of its item on the list
+        // this pass has just published. The executor only declines to repeat them
+        // in its own feed row; it decides nothing on it, and neither does the lane.
+        feedQuiet: childReclaimFeedQuiet(entry, this.childReclaimAttentionList, r.id),
       };
       this.childReclaimInFlight.add(r.id);
       this.childReclaimInFlightSince.set(r.id, mono);

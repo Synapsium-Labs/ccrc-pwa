@@ -19,12 +19,13 @@ import {
   CHILD_RECLAIM_PRESENCE_DEFERS, CHILD_RECLAIM_SKIP,
   childReclaimAskOrder, childReclaimAttention, childReclaimAttentionWithKept,
   childReclaimBackoffMs, childReclaimCoordinated, childReclaimDeferExpired, childReclaimDue,
-  childReclaimFailingPastCeiling, childReclaimFailingSentence, childReclaimFailureLine, childReclaimFirstSighting,
+  childReclaimFailingPastCeiling, childReclaimFailingSentence, childReclaimFailureLine, childReclaimFeedQuiet,
+  childReclaimFirstSighting,
   childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptItems, childReclaimKeptList,
   childReclaimKeptManySentence, childReclaimKeptVerdicts,
   childReclaimNextEntry, childReclaimSameGeneration, childReclaimSweepVerdict, childReclaimTerminalRefusal,
   isChildReclaimPreLockToken,
-  type ChildReclaimAsk, type ChildReclaimCoordinatorClaim, type ChildReclaimHoldCandidate,
+  type ChildReclaimAsk, type ChildReclaimCoordinatorClaim, type ChildReclaimFeedQuiet, type ChildReclaimHoldCandidate,
   type ChildReclaimJournalAttention, type ChildReclaimJournalRow, type ChildReclaimKeptAttention,
   type ChildReclaimLaneNow, type ChildReclaimSweepEntry, type ChildReclaimSweepInput, type ChildReclaimSweepOutcome,
   type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict, type ChildReclaimTokenKind,
@@ -36,7 +37,8 @@ import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
 import { childReclaimTokenKind } from '../src/coord/childReclaim.js';
 import {
   CHILD_RECLAIM_KEPT_WORDS, LC_REFUSAL_WORD, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isLcRefusalToken,
-  type ChildReclaimKeptWord, type LifecycleAct, type LifecycleOutcome, type MirroredLifecycleEvent,
+  type ChildReclaimAttention, type ChildReclaimKeptWord, type LifecycleAct, type LifecycleOutcome,
+  type MirroredLifecycleEvent,
 } from '../../shared/api.js';
 
 const NOW = 1_790_000_000_000;
@@ -440,7 +442,7 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
   it('a first sighting starts no clock, counts no failure, and was never asked', () => {
     expect(entry).toEqual({ firstEligibleAt: NOW - 60_000, firstDeferredAt: null, firstPresenceDeferredAt: null,
       lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null, bornAt: BORN,
-      consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null });
+      lastDeferWhy: null, consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null });
   });
 
   it('forgets a child whose reclaim ended outright — reclaimed, or already gone', () => {
@@ -485,7 +487,7 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
     for (const why of CHILD_RECLAIM_PRESENCE_DEFERS) {
       const first = childReclaimNextEntry(entry, { kind: 'deferred', why }, ask(NOW, false), at(NOW), PASS);
       expect(first, why).toEqual({ ...entry, firstDeferredAt: NOW, firstPresenceDeferredAt: NOW,
-        lastPresenceDeferredAt: NOW, lastPresenceWallAt: NOW, presenceHeldSince: NOW, lastAskedAt: NOW });
+        lastPresenceDeferredAt: NOW, lastPresenceWallAt: NOW, presenceHeldSince: NOW, lastDeferWhy: why, lastAskedAt: NOW });
       expect(childReclaimNextEntry(first!, { kind: 'deferred', why }, ask(NOW + 60_000, false), at(NOW + 60_000), PASS), why)
         .toEqual({
           ...first!, lastPresenceDeferredAt: NOW + 60_000, lastPresenceWallAt: NOW + 60_000, lastAskedAt: NOW + 60_000,
@@ -498,7 +500,7 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
       lastPresenceDeferredAt: NOW - PASS, lastPresenceWallAt: NOW - PASS };
     const restarted = childReclaimNextEntry(running, { kind: 'deferred', why: 'presence' }, ask(NOW, true), at(NOW), PASS);
     expect(restarted).toEqual({ ...running, firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW,
-      lastPresenceWallAt: NOW, presenceHeldSince: null, lastAskedAt: NOW });
+      lastPresenceWallAt: NOW, presenceHeldSince: null, lastDeferWhy: 'presence', lastAskedAt: NOW });
     expect(childReclaimDeferExpired(running, at(NOW), PASS)).toBe(true);
     expect(childReclaimDeferExpired(restarted!, at(NOW), PASS)).toBe(false);
   });
@@ -520,7 +522,7 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
         lastPresenceDeferredAt: NOW - 1000, lastPresenceWallAt: NOW - 1000 };
       expect(childReclaimNextEntry(withPresence, { kind: 'deferred', why }, ask(NOW, false), at(NOW), PASS), why)
         .toEqual({ ...withPresence, firstDeferredAt: NOW, firstPresenceDeferredAt: null, lastPresenceDeferredAt: null,
-          lastPresenceWallAt: null, refusedAt: null, lastAskedAt: NOW });
+          lastPresenceWallAt: null, lastDeferWhy: why, refusedAt: null, lastAskedAt: NOW });
     }
   });
 
@@ -529,7 +531,7 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
     expect(childReclaimNextEntry(other, { kind: 'deferred', why: 'attached' }, ask(NOW + 60_000, false), at(NOW + 60_000), PASS))
       .toEqual({ ...entry, firstDeferredAt: NOW, firstPresenceDeferredAt: NOW + 60_000,
         lastPresenceDeferredAt: NOW + 60_000, lastPresenceWallAt: NOW + 60_000, presenceHeldSince: NOW + 60_000,
-        lastAskedAt: NOW + 60_000 });
+        lastDeferWhy: 'attached', lastAskedAt: NOW + 60_000 });
   });
 
   it('names exactly the three presence defers — rungs 5 and 6 and the server\'s visibility claim', () => {
@@ -1569,5 +1571,67 @@ describe('the attention list\'s kept arm (spec §5.9)', () => {
   it('(xiii) with no verdicts at all the mirror arms stand exactly as wave 4 shipped them', () => {
     const arms = [failingFor('a'), terminalFor('b')];
     expect(childReclaimAttentionWithKept(arms, [], new Map())).toEqual(arms);
+  });
+});
+
+// What the feed already says for a child (spec §5.9): the deferral EPISODE a feed row is written once
+// for, and the failure word the attention list shows for it. The entry remembers the first; the list
+// carries the second. Nothing here paces, decides or dispatches.
+describe('feed rows de-duplicated (spec §5.9) — lastDeferWhy and childReclaimFeedQuiet', () => {
+  const fresh: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN);
+
+  it('(a) a deferral sets lastDeferWhy to its word, any later non-deferral clears it, and a first sighting reads null', () => {
+    expect(fresh.lastDeferWhy).toBeNull();
+    const deferred = childReclaimNextEntry(fresh, { kind: 'deferred', why: 'state-changed' }, ask(NOW, false), at(NOW), PASS)!;
+    expect(deferred.lastDeferWhy).toBe('state-changed');
+    // A different deferral replaces the word; the same word again keeps it.
+    expect(childReclaimNextEntry(deferred, { kind: 'deferred', why: 'held' }, ask(NOW + PASS, false), at(NOW + PASS), PASS)!
+      .lastDeferWhy).toBe('held');
+    expect(childReclaimNextEntry(deferred, { kind: 'deferred', why: 'state-changed' }, ask(NOW + PASS, false), at(NOW + PASS), PASS)!
+      .lastDeferWhy).toBe('state-changed');
+    const failed = childReclaimNextEntry(deferred, { kind: 'failed' }, ask(NOW + PASS, false), at(NOW + PASS), PASS)!;
+    expect(failed.lastDeferWhy, 'a failed attempt ends the episode — a rejection is written through this arm').toBeNull();
+    expect(childReclaimNextEntry(deferred, { kind: 'refused', token: 'tree-unreadable' }, ask(NOW + PASS, false), at(NOW + PASS), PASS)!
+      .lastDeferWhy, 'a refusal ends it too').toBeNull();
+  });
+
+  it('(a) lastDeferWhy changes no pacing: due, the ceiling and the order read the same entry without it', () => {
+    const deferred = childReclaimNextEntry(fresh, { kind: 'deferred', why: 'state-changed' }, ask(NOW, false), at(NOW), PASS)!;
+    const without: ChildReclaimSweepEntry = { ...deferred, lastDeferWhy: null };
+    expect(childReclaimDue(deferred, NOW + 1, PASS)).toBe(childReclaimDue(without, NOW + 1, PASS));
+    expect(childReclaimDeferExpired(deferred, at(NOW + C), PASS)).toBe(childReclaimDeferExpired(without, at(NOW + C), PASS));
+  });
+
+  const failing = (sessionId: string, token: string): ChildReclaimAttention =>
+    ({ kind: 'failing', sessionId, runId: 7, token, sentence: `sentence for ${token}`, at: NOW });
+  const terminal = (sessionId: string, token: string): ChildReclaimAttention =>
+    ({ kind: 'terminal', sessionId, runId: 7, token, sentence: `sentence for ${token}`, at: NOW });
+  const deferredWith = (why: string | null): ChildReclaimSweepEntry => ({ ...fresh, lastDeferWhy: why });
+
+  it.each<readonly [string, string | null, readonly ChildReclaimAttention[], ChildReclaimFeedQuiet]>([
+    ['a non-presence deferral is the episode', 'state-changed', [], { deferWhy: 'state-changed', failureToken: null }],
+    ['presence keeps today\'s shape', 'presence', [], { deferWhy: null, failureToken: null }],
+    ['attached keeps today\'s shape', 'attached', [], { deferWhy: null, failureToken: null }],
+    ['tree-busy keeps today\'s shape', 'tree-busy', [], { deferWhy: null, failureToken: null }],
+    ['no deferral at all', null, [], { deferWhy: null, failureToken: null }],
+    ['a failing item for this session names its token', null, [failing('demo-a', 'pin-failed')],
+      { deferWhy: null, failureToken: 'pin-failed' }],
+    ['a failing item with no token says nothing', null, [failing('demo-a', '')], { deferWhy: null, failureToken: null }],
+    ['a terminal item is not a failure the feed repeats', null, [terminal('demo-a', 'tree-unreadable')],
+      { deferWhy: null, failureToken: null }],
+    ['a failing item for another session is not this child\'s', null, [failing('demo-b', 'pin-failed')],
+      { deferWhy: null, failureToken: null }],
+    ['both at once', 'held', [failing('demo-a', 'unit-still-active')], { deferWhy: 'held', failureToken: 'unit-still-active' }],
+    ['the failing item among others is found by kind and session', null,
+      [terminal('demo-a', 'tree-unreadable'), failing('demo-b', 'pin-failed'), failing('demo-a', 'unit-still-active')],
+      { deferWhy: null, failureToken: 'unit-still-active' }],
+  ])('%s', (_name, why, listed, expected) => {
+    expect(childReclaimFeedQuiet(deferredWith(why), listed, 'demo-a')).toEqual(expected);
+  });
+
+  it('every presence defer is excluded, whichever the table names', () => {
+    for (const why of CHILD_RECLAIM_PRESENCE_DEFERS) {
+      expect(childReclaimFeedQuiet(deferredWith(why), [], 'demo-a').deferWhy, why).toBeNull();
+    }
   });
 });

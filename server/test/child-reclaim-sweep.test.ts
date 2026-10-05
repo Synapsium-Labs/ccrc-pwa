@@ -40,7 +40,7 @@ import {
   childReclaimJournalRow, childReclaimKeptManySentence,
 } from '../src/childReclaimSweep.js';
 import {
-  CHILD_RECLAIM_TOKEN_KIND, childReclaimGeneration, childReclaimHasCoordinated, childReclaimLatest,
+  CHILD_RECLAIM_FEED_QUIET_NONE, CHILD_RECLAIM_TOKEN_KIND, childReclaimGeneration, childReclaimHasCoordinated, childReclaimLatest,
   childReclaimTokenKind, type ChildReclaimOutcome, type ChildReclaimRequest,
 } from '../src/coord/childReclaim.js';
 import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
@@ -274,7 +274,7 @@ const attentionLabels = (f: ReturnType<typeof fixture>): string[] =>
   (f.watcher.currentCoord()?.childReclaimAttention ?? [])
     .map((a) => (a.kind === 'kept-many' ? `kept-many:${a.word}` : `${a.kind}:${a.sessionId}`));
 
-const deferredAs = (why: 'presence' | 'state-changed', req: ChildReclaimRequest): ChildReclaimOutcome =>
+const deferredAs = (why: 'presence' | 'state-changed' | 'held', req: ChildReclaimRequest): ChildReclaimOutcome =>
   ({ kind: 'deferred', sessionId: req.sessionId, runId: req.runId, why, detail: `deferred: ${why}` });
 
 /** A child whose retired hold the lane has RELEASED: two hold-retired passes, the second running the release job,
@@ -299,7 +299,8 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests).toEqual([]);
     f.next();
     await f.pass();
-    expect(f.requests).toEqual([{ sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+    expect(f.requests).toEqual([{ sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
   });
 
   it('keeps its own clock: a second call inside CHILD_RECLAIM_SWEEP_MS is not a second pass', async () => {
@@ -392,7 +393,8 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests).toEqual([]);
     f.next(); await f.pass();
     expect(f.requests).toEqual([
-      { sessionId: 'demo-r', runId: review.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+      { sessionId: 'demo-r', runId: review.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
   });
 
   it('leaves a held child, a child with an unreadable marker, and a row with no marker', async () => {
@@ -474,7 +476,8 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests).toEqual([]);
     f.next(); await f.pass();                                 // …and its second — only now
     expect(f.requests).toEqual([
-      { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+      { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
   });
 
   it('a release answered after the NEXT pass began still needs two FRESH unheld passes — the in-flight guard covers the release job too', async () => {
@@ -509,7 +512,8 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests).toEqual([]);
     f.next(); await f.pass();                                  // …and its second — only now
     expect(f.requests).toEqual([
-      { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+      { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
   });
 
   it('a SECOND interleaving: ccd unlinks the hold before it answers — the eligible sighting made while the release is in flight dies with the answer, and the reclaim still needs two fresh passes after it', async () => {
@@ -547,7 +551,8 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests, 'never reclaimed on a sighting made before the answer').toEqual([]);
     f.next(); await f.pass();                                   // its second — only now
     expect(f.requests).toEqual([
-      { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+      { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
   });
 
   it('a pass whose listing was read BEFORE the release answered seeds nothing after the answer — the reclaim still needs two fresh unheld passes', async () => {
@@ -575,7 +580,8 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests, 'never reclaimed on the strength of a listing older than the answer').toEqual([]);
     f.next(); await f.pass();                                  // the SECOND fresh pass — only now
     expect(f.requests).toEqual([
-      { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+      { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
   });
 
   it('a release that FAILS after being in flight across TWO passes is not retried the very next pass, only the one after — and never double-queues while in flight', async () => {
@@ -721,7 +727,8 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests).toEqual([]);
     f.next(); await f.pass();                                  // the SECOND — the request
     expect(f.requests, 'the mark outlived the fail-shut').toEqual([
-      { sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+      { sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
   });
 
   it('the release answer\'s mark is cleared when reclaim-paused is raised then lowered — two fresh passes, not three', async () => {
@@ -734,7 +741,8 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests).toEqual([]);
     f.next(); await f.pass();                                  // the SECOND — the request
     expect(f.requests, 'the mark outlived the pause').toEqual([
-      { sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+      { sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
   });
 
   it('the release answer\'s mark leaves with its row: listed again, the child needs two fresh passes, not three', async () => {
@@ -747,7 +755,8 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests).toEqual([]);
     f.next(); await f.pass();                                  // the SECOND — the request
     expect(f.requests, 'the mark outlived its row').toEqual([
-      { sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+      { sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
   });
 
   it('a box that does not advertise ws-release never releases the hold — gated exactly as the close route gates it', async () => {
@@ -1025,7 +1034,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     // directly without a second, uncontrolled hang.
     let calls = 0;
     const answer = (req: ChildReclaimRequest): ChildReclaimOutcome =>
-      ({ kind: 'failed', sessionId: req.sessionId, runId: req.runId, resume: 'resumable', detail: 'ccd exited 1' });
+      ({ kind: 'failed', sessionId: req.sessionId, runId: req.runId, resume: 'resumable', detail: 'ccd exited 1', token: null });
     const f = fixture({ outcome: (req) => {
       calls += 1;
       if (calls > 1) return answer(req);
@@ -1048,7 +1057,8 @@ describe('sweepChildReclaim — what reaches the executor', () => {
   });
 
   it('backs off a child whose reclaim keeps failing: min(ceiling, pass interval × 2^k) after the k-th failure', async () => {
-    const f = fixture({ outcome: (req) => ({ kind: 'failed', sessionId: req.sessionId, runId: req.runId, resume: 'resumable', detail: 'ccd exited 1' }) });
+    const f = fixture({ outcome: (req) => ({ kind: 'failed', sessionId: req.sessionId, runId: req.runId, resume: 'resumable',
+      detail: 'ccd exited 1', token: null }) });
     finishedChild(f);
     await f.pass(); f.next(); await f.pass();                 // request 1 → failed: k = 1, wait 2 intervals
     expect(f.requests).toHaveLength(1);
@@ -1103,7 +1113,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
 
   it('an executor `failed` with no mirror line is retried with backoff and never listed', async () => {
     const f = fixture({ outcome: (req) => ({ kind: 'failed', sessionId: req.sessionId, runId: req.runId,
-      resume: 'not-resumable', detail: 'ws-audit --reclaim answered nothing readable' }) });
+      resume: 'not-resumable', detail: 'ws-audit --reclaim answered nothing readable', token: null }) });
     finishedChild(f);
     await f.pass(); f.next(); await f.pass();
     expect(f.requests).toHaveLength(1);
@@ -1262,7 +1272,8 @@ describe('fail-shut on the pass-level reads — a throw stops the WHOLE pass, no
     f.next(); await f.pass();                                 // a first sighting again, not a second
     expect(f.requests).toEqual([]);
     f.next(); await f.pass();
-    expect(f.requests).toEqual([{ sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+    expect(f.requests).toEqual([{ sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
   });
 });
 
@@ -1393,7 +1404,8 @@ describe('the attention list — derived from the mirror, carried on the coord f
   // reads that same die as a failure the sweep retries (spec §5.9): so the report lists the run of them
   // as failing, never as a settled refusal — and the lane keeps asking, as it does for any failure.
   const lockDieFixture = () => fixture({ outcome: (req) => ({ kind: 'failed', sessionId: req.sessionId, runId: req.runId,
-    resume: 'pre-lock-die', detail: 'flock (util-linux) is unavailable — refusing to run the destructive verb unserialised' }) });
+    resume: 'pre-lock-die', detail: 'flock (util-linux) is unavailable — refusing to run the destructive verb unserialised',
+    token: 'flock-unavailable' }) });
 
   it('a child whose lock die is journaled as a pre-lock refusal is listed FAILING past the ceiling, with the failure\'s sentence', async () => {
     const f = lockDieFixture();
@@ -2519,5 +2531,97 @@ describe('the attention list\'s kept arm — the sweep\'s kept verdicts, listed 
     expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-b')).toEqual({ eligible: false, why: 'minting-run-open' });
     expect(attentionLabels(f)).toEqual([]);
     expect(keptRows(f)).toEqual([]);
+  });
+});
+
+// Feed rows de-duplicated (spec §5.9): what each request tells the executor the feed already says for the
+// child — the non-presence deferral episode it is in, and the failure word the attention list shows for
+// it. The executor stub records the requests, so these cases read `feedQuiet` and nothing else; the feed
+// row itself is the executor's, pinned in `child-reclaim.test.ts`. The memory is the lane's own, in
+// process: a restart clears it, and a row is then written once more.
+describe('sweepChildReclaim — what each request says the feed already carries (spec §5.9)', () => {
+  it('a non-presence deferral episode rides every request after its first', async () => {
+    const f = fixture({ outcome: (req) => deferredAs('state-changed', req) });
+    finishedChild(f);
+    await f.pass();                                           // a first sighting
+    for (let i = 0; i < 5; i += 1) { f.next(); await f.pass(); }   // a deferral clears the failure pacing: asked every pass
+    expect(f.requests).toHaveLength(5);
+    expect(f.requests[0]!.feedQuiet.deferWhy, 'the first ask of an episode has nothing in the feed yet').toBeNull();
+    for (const q of f.requests.slice(1)) expect(q.feedQuiet.deferWhy).toBe('state-changed');
+    expect(f.requests.every((q) => q.feedQuiet.failureToken === null)).toBe(true);
+  });
+
+  it('a presence deferral keeps today\'s shape: no request carries an episode, so every answer writes its row', async () => {
+    const f = fixture({ outcome: (req) => deferredAs('presence', req) });
+    finishedChild(f);
+    await f.pass();
+    for (let i = 0; i < 4; i += 1) { f.next(); await f.pass(); }
+    expect(f.requests.length).toBeGreaterThanOrEqual(4);
+    expect(f.requests.map((q) => q.feedQuiet.deferWhy)).toEqual(f.requests.map(() => null));
+  });
+
+  it('a changed word is a new episode: the request carries the PREVIOUS word, so the executor sees it differ', async () => {
+    const words = ['state-changed', 'state-changed', 'held', 'held'] as const;
+    let n = 0;
+    const f = fixture({ outcome: (req) => deferredAs(words[n++]!, req) });
+    finishedChild(f);
+    await f.pass();
+    for (let i = 0; i < words.length; i += 1) { f.next(); await f.pass(); }
+    expect(f.requests.map((q) => q.feedQuiet.deferWhy)).toEqual([null, 'state-changed', 'state-changed', 'held']);
+  });
+
+  it('a failure ends the episode: the ask after it carries none, and the deferral after THAT starts a new one', async () => {
+    const answers: ('deferred' | 'failed')[] = ['deferred', 'deferred', 'failed', 'deferred', 'deferred'];
+    let n = 0;
+    const f = fixture({ outcome: (req) => (answers[n++] === 'failed'
+      ? { kind: 'failed', sessionId: req.sessionId, runId: req.runId, resume: 'resumable', detail: 'ccd exited 1', token: null }
+      : deferredAs('state-changed', req)) });
+    finishedChild(f);
+    await f.pass();
+    for (let i = 0; i < 12 && f.requests.length < answers.length; i += 1) { f.next(); await f.pass(); }   // a failure backs off
+    expect(f.requests).toHaveLength(answers.length);
+    expect(f.requests.map((q) => q.feedQuiet.deferWhy)).toEqual([null, 'state-changed', 'state-changed', null, 'state-changed']);
+  });
+
+  it('a failure the attention list shows rides the request as its word; an unlisted child\'s request carries none', async () => {
+    const stub = (req: ChildReclaimRequest): ChildReclaimOutcome =>
+      ({ kind: 'failed', sessionId: req.sessionId, runId: req.runId, resume: 'resumable', detail: 'branch gone',
+         token: 'pin-failed' });
+    // The mirror carries `failed pin-failed` lines spanning the ceiling: the child is listed failing.
+    const listed = fixture({ outcome: stub });
+    finishedChild(listed);
+    listed.journal('demo-a', 'failed', 'pin-failed');
+    await listed.pass();                                      // a first sighting; failing for 0 ms
+    listed.advance(CHILD_RECLAIM_DEFER_CEILING_MS);
+    listed.journal('demo-a', 'intent', null);
+    listed.journal('demo-a', 'failed', 'pin-failed');         // still failing, a ceiling later
+    await listed.pass();                                      // listed by this very pass — and asked
+    await listed.watcher.tick();
+    expect(attentionLabels(listed)).toEqual(['failing:demo-a']);
+    expect(listed.requests).toHaveLength(1);
+    expect(listed.requests[0]!.feedQuiet).toEqual({ deferWhy: null, failureToken: 'pin-failed' });
+    // The same stub for a child no failing item names: nothing is quiet.
+    const unlisted = fixture({ outcome: stub });
+    finishedChild(unlisted);
+    await unlisted.pass(); unlisted.next(); await unlisted.pass();
+    expect(unlisted.requests).toHaveLength(1);
+    expect(unlisted.requests[0]!.feedQuiet).toEqual({ deferWhy: null, failureToken: null });
+    expect(attentionLabels(unlisted)).toEqual([]);
+  });
+
+  it('a failing item with no token in the list names no word', async () => {
+    const f = fixture({ outcome: (req) => ({ kind: 'failed', sessionId: req.sessionId, runId: req.runId, resume: 'resumable',
+      detail: 'ccd recorded no reason', token: null }) });
+    finishedChild(f);
+    f.journal('demo-a', 'failed', null);
+    await f.pass();
+    f.advance(CHILD_RECLAIM_DEFER_CEILING_MS);
+    f.journal('demo-a', 'intent', null);
+    f.journal('demo-a', 'failed', null);
+    await f.pass();
+    await f.watcher.tick();
+    expect(attentionLabels(f)).toEqual(['failing:demo-a']);
+    expect(f.requests).toHaveLength(1);
+    expect(f.requests[0]!.feedQuiet.failureToken, 'a token-less failure item says nothing the executor could match').toBeNull();
   });
 });
