@@ -3961,7 +3961,7 @@ held by the very kill-switch the operator just raised.
 **The reclaim sweep, and how to stop it.** Besides the close path, the server
 runs an automatic sweep (once a minute) that reclaims CHILD workspaces through
 `ccd ws-reclaim` — only a child whose minting run is terminal, or has bound a
-different session, with no other open run, no hold and no coordination history,
+different session, with no other open run, no hold and no coordination since its workspace was created,
 asked on two consecutive passes and at most one at a time (**A child is not a
 reap**, above). Its switch is `$REG/reclaim-paused`: tap the reclaim row on
 `/runs` (`POST /api/coord/reclaim-pause`, session-gated, no box token), or run

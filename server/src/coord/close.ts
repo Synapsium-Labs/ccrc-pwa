@@ -21,8 +21,8 @@ import { readSessionRecord } from '../registry.js';
 import { childBirthOf, childSpent, childSpentLive, childSpentLiveFrom } from './childSpent.js';
 import type { CcdPrLine } from '../prstate.js';
 import {
-  childReclaimDecision, childReclaimRowListing, type ChildReclaimDecision, type ChildReclaimMinting,
-  type ChildReclaimNotWhy, type ChildReclaimRequest, type ChildReclaimReviewed,
+  childReclaimDecision, childReclaimHasCoordinated, childReclaimRowListing, type ChildReclaimDecision,
+  type ChildReclaimMinting, type ChildReclaimNotWhy, type ChildReclaimRequest, type ChildReclaimReviewed,
 } from './childReclaim.js';
 import {
   transitionsFor, type ChildMark, type DoneRejectCode, type RunRefuseCode, type RunState,
@@ -678,9 +678,12 @@ async function childGateAtClose(
   }
   const minting: ChildReclaimMinting = mark.kind === 'child' ? mintingRowOf(deps.coord, mark.runId) : { kind: 'absent' };
   const reviewed = reviewedRowOf(deps.coord, minting);
-  // Whether this session has EVER coordinated a run (spec §1 rule 4): read
-  // beside the sibling list, the same store call the executor makes for the
-  // same question (`childReclaim.ts`'s own step 2a). An unreadable read is
+  // Whether this session has coordinated in its own generation
+  // (`childReclaimHasCoordinated`; spec §1 rule 4, spec §5.6: slugs recycle):
+  // read beside the sibling list, through the same fence the executor reads
+  // for the same question (`childReclaim.ts`'s own step 2a). `Date.now()` is
+  // the generation pick's clock: `CloseRunDeps` carries none, and `closeRun`
+  // stamps `closedAt` from it too. An unreadable read is
   // not "never coordinated" — but it is also NOT folded into
   // `siblings-unreadable` HERE: doing so ahead of calling the decision would
   // outrank `not-a-child` and `marker-unreadable` for every close, coordinated
@@ -691,9 +694,9 @@ async function childGateAtClose(
   // after the mark/minting checks, never ahead of them.
   let hasCoordinated: boolean | 'unreadable';
   try {
-    hasCoordinated = deps.coord.childReclaimCoordinatorIds().has(sessionId);
+    hasCoordinated = childReclaimHasCoordinated(deps.coord, sessionId, Date.now());
   } catch (err) {
-    console.warn(`ccrc-server: childReclaimCoordinatorIds() failed at close `
+    console.warn(`ccrc-server: the coordination fence (childReclaimHasCoordinated) failed at close `
       + `(${err instanceof Error ? err.message : String(err)}) — ${sessionId}'s coordination history unreadable`);
     hasCoordinated = 'unreadable';
   }

@@ -3,12 +3,14 @@
 // of the route's queue, so each case can say exactly when the hand-off
 // happened relative to the commit, with what request, and what the close
 // answered — none of which a route-level test can isolate.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { parseJournalLine } from '../src/coord/journalparse.js';
+import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
 import { closeRun, type CloseRunDeps } from '../src/coord/close.js';
 import type { ChildReclaimRequest } from '../src/coord/childReclaim.js';
 import type { Runner } from '../src/exec.js';
@@ -221,19 +223,46 @@ describe('two authorities, equal — anything else is not a child here', () => {
 // The close-side wiring of `hasCoordinated` (the
 // store read, and its throw-fold) had no test that reds when either is
 // removed — the pure decision was pinned, but nothing proved the CALLER
-// actually reads and carries the value. These three cases pin the wiring
-// end to end through the real close path.
+// actually reads and carries the value. These cases pin the wiring end to
+// end through the real close path, and the coordination fence it decides
+// through (spec §1 rule 4; spec §5.6: slugs recycle, so "has coordinated"
+// means THIS incarnation of the workspace, `childReclaimHasCoordinated`).
+// `Date.now` is driven by hand where an instant matters: it stamps the
+// claim's `closedAt`, the mirrored `create`, and the close's generation pick.
 describe('the close reads coordination history itself — has-coordinated, and an unreadable read never outranks identity', () => {
-  it('a child whose session has EVER coordinated a (terminal) run answers has-coordinated, closed final — no reclaim request', async () => {
-    const b = build();
-    // A run this session coordinated, brought to a TERMINAL state — a
-    // different workspace/session dispatched into it, `claimedBy` is ID.
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  /** A hand-driven wall clock: `Date.now` answers `t()`, and `advance` moves it. */
+  const clock = (t0 = 1_790_000_000_000) => {
+    let t = t0;
+    vi.spyOn(Date, 'now').mockImplementation(() => t);
+    return { t: () => t, advance: (ms: number) => { t += ms; } };
+  };
+  let createN = 0;
+  /** ws-add's `create done` line for `session` at `at`, mirrored — the sweep suite's idiom. */
+  const mirrorCreate = (coord: CoordStore, session: string, at: number): void => {
+    createN += 1;
+    const line = JSON.stringify({ uid: `k5.1.${createN}`, at, act: 'create', outcome: 'done', verb: 'ws-add', id: session });
+    coord.ingestJournal({ gen: '1790000000000000000', rows: [parseJournalLine(line)], cursor: createN * 200,
+      size: createN * 200, at });
+  };
+  /** A run `ID` coordinated — `claimedBy` is ID, another session worked it — closed `done` now. */
+  const coordinatedRun = (b: ReturnType<typeof build>): void => {
     const heir = b.coord.openRun({ program: 'q', title: 'heir', project: 'demo', wave: 1, waveOf: 1, claimedBy: ID });
     if (!('id' in heir)) throw new Error('openRun refused');
     b.coord.markDispatched(heir.id, 'demo-heir-worker', 'demo-heir-worker', 'ws/demo-heir-worker', false);
     expect(b.coord.advance(heir.id, 'dispatched', 'test').ok).toBe(true);
     expect(b.coord.closeRun({ runId: heir.id, finalState: 'done', causedBy: 'test', handoffCommit: null,
       program: 'q', viaClosing: true }).ok).toBe(true);
+  };
+
+  it('K5b: a child whose CURRENT generation coordinated a (terminal) run answers has-coordinated — no reclaim request', async () => {
+    const b = build();
+    const c = clock();
+    // This generation's `create` comes first; the run it coordinated closes after.
+    mirrorCreate(b.coord, ID, c.t());
+    c.advance(1_000);
+    coordinatedRun(b);
     const id = b.dispatched(ID);
     b.seed(ID, String(id));
     const out = await closeRun(b.deps, id, { intent: 'abandon' }, 'operator');
@@ -241,11 +270,45 @@ describe('the close reads coordination history itself — has-coordinated, and a
     expect(b.handed).toEqual([]);
   });
 
-  it('childReclaimCoordinatorIds throwing at close answers siblings-unreadable, never a guessed false', async () => {
+  it('K5a: a recycled slug whose claim closed before this generation was born is not has-coordinated — the close queues it', async () => {
+    const b = build();
+    const c = clock();
+    coordinatedRun(b);                                          // an EARLIER workspace under the same id
+    c.advance(CHILD_BIRTH_SKEW_MS + 1);
+    mirrorCreate(b.coord, ID, c.t());                           // the CURRENT generation's birth
+    const id = b.dispatched(ID);
+    b.seed(ID, String(id));
+    const out = await closeRun(b.deps, id, { intent: 'abandon' }, 'operator');
+    expect(out).toMatchObject({ ok: true, childReclaim: 'queued' });
+    expect(b.handed.map((h) => h.req.sessionId)).toEqual([ID]);
+  });
+
+  it('K5c: a birth the mirror cannot place keeps an old claim counting — has-coordinated', async () => {
+    const b = build();
+    const c = clock();
+    coordinatedRun(b);
+    c.advance(30 * 24 * 3_600_000);                             // a month on, and no `create` mirrored at all
+    const id = b.dispatched(ID);
+    b.seed(ID, String(id));
+    const out = await closeRun(b.deps, id, { intent: 'abandon' }, 'operator');
+    expect(out).toMatchObject({ ok: true, childReclaim: 'not-queued', childReclaimWhy: 'has-coordinated' });
+    expect(b.handed).toEqual([]);
+  });
+
+  it('K5d: a session that never coordinated never reads the mirror for this question — a throwing create read still queues', async () => {
     const b = build();
     const id = b.dispatched(ID);
     b.seed(ID, String(id));
-    b.coord.childReclaimCoordinatorIds = () => { throw new Error('coordination history unreadable'); };
+    b.coord.lifecycleCreatesFor = () => { throw new Error('the mirror is unreadable'); };
+    const out = await closeRun(b.deps, id, { intent: 'abandon' }, 'operator');
+    expect(out).toMatchObject({ ok: true, childReclaim: 'queued' });
+  });
+
+  it('childReclaimCoordinatorClaims throwing at close answers siblings-unreadable, never a guessed false', async () => {
+    const b = build();
+    const id = b.dispatched(ID);
+    b.seed(ID, String(id));
+    b.coord.childReclaimCoordinatorClaims = () => { throw new Error('coordination history unreadable'); };
     const out = await closeRun(b.deps, id, { intent: 'abandon' }, 'operator');
     expect(out).toMatchObject({ ok: true, childReclaim: 'not-queued', childReclaimWhy: 'siblings-unreadable' });
     expect(b.handed).toEqual([]);
@@ -255,7 +318,7 @@ describe('the close reads coordination history itself — has-coordinated, and a
     const b = build();
     const id = b.dispatched(ID);
     b.seed(ID, null);   // no `.child` marker at all: an ordinary non-child close
-    b.coord.childReclaimCoordinatorIds = () => { throw new Error('coordination history unreadable'); };
+    b.coord.childReclaimCoordinatorClaims = () => { throw new Error('coordination history unreadable'); };
     const out = await closeRun(b.deps, id, { intent: 'abandon' }, 'operator');
     expect(out).toMatchObject({ ok: true, childReclaim: 'not-queued', childReclaimWhy: 'not-a-child' });
     expect(b.handed).toEqual([]);

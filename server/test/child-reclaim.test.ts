@@ -11,6 +11,8 @@ import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, MAIL_CHILD_RECLAIMED_ERROR, type OpenSiblingsResult } from '../src/coord/store.js';
+import { parseJournalLine } from '../src/coord/journalparse.js';
+import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
 import {
   CHILD_RECLAIM_TOKEN_KIND, childReclaimDecision, childReclaimRowListing, isChildReclaimDeferWhy,
   childReclaimReleaseActor, parseChildReclaimAudit, parseChildReclaimResult, reclaimChild, releaseRetiredChildHold,
@@ -925,8 +927,9 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
   const RID = 'demo-quiet-basin';
 
   /** A minimal registry row plus a real `CoordStore` — no journal, no mirror:
-   *  the job never reads either. `row` defaults to a live one; pass `false`
-   *  to omit it (the "the row is gone" case). */
+   *  the job reads the mirror only to place the birth of a session that has
+   *  coordinated. `row` defaults to a live one; pass `false` to omit it (the
+   *  "the row is gone" case). */
   const rrig = async (over: {
     fleetState?: FleetState;
     script?: (id: string) => { code: number; stdout: string; stderr?: string };
@@ -1129,7 +1132,31 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
   });
 
-  it('a child that has ever coordinated a run — the coordinator read — no release', async () => {
+  // K7 — step 5 is the coordination fence too (spec §1 rule 4; spec §5.6:
+  // slugs recycle): a claim that ended before this generation's `create`,
+  // less the skew, belongs to an earlier workspace under the same id, so a
+  // retired programme's hold on this child is still released.
+  it('K7: a claim that ended before this generation was born does not stop the release — released', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    const claim = f.coord.openRun({ program: 'demo-earlier', title: 't', project: 'demo', wave: 1, waveOf: null,
+      claimedBy: RID });
+    if (!('id' in claim)) throw new Error(`openRun claim refused: ${JSON.stringify(claim)}`);
+    expect(f.coord.closeRun({ runId: claim.id, finalState: 'failed', causedBy: 'test', handoffCommit: null,
+      program: 'demo-earlier', viaClosing: false }).ok).toBe(true);
+    const read = f.coord.run(claim.id);
+    if (!read.ok || read.run === null || read.run.closedAt === null) throw new Error('the claim has no closedAt');
+    const born = read.run.closedAt + CHILD_BIRTH_SKEW_MS + 1;
+    const line = JSON.stringify({ uid: 'k7.1.1', at: born, act: 'create', outcome: 'done', verb: 'ws-add', id: RID });
+    f.coord.ingestJournal({ gen: '1790000000000000000', rows: [parseJournalLine(line)], cursor: 200, size: 200, at: born });
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold({ ...f.deps, now: () => born + 1_000 }, req)).toBe('released');
+    expect(f.calls.map((c) => c[0])).toEqual(['ws-release']);
+  });
+
+  it('a child with an open coordinator claim — the coordinator read — no release', async () => {
     const f = await rrig();
     const runId = terminalRun(f.coord, 'demo');
     const reason = holdReason('demo', 2, null, null);
@@ -1163,8 +1190,8 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     // Every read before step 6 succeeds; the listing fails only once the
     // coordinator read (step 5, the last one before it) has run.
     let pastStep5 = false;
-    const original = f.coord.childReclaimCoordinatorIds.bind(f.coord);
-    vi.spyOn(f.coord, 'childReclaimCoordinatorIds').mockImplementation(() => { pastStep5 = true; return original(); });
+    const original = f.coord.childReclaimCoordinatorClaims.bind(f.coord);
+    vi.spyOn(f.coord, 'childReclaimCoordinatorClaims').mockImplementation(() => { pastStep5 = true; return original(); });
     const deps: ChildReclaimDeps = { ...f.deps, io: { ...f.deps.io,
       readdir: async (dir: string, timeoutMs?: number, signal?: AbortSignal) =>
         (pastStep5 ? null : f.deps.io.readdir(dir, timeoutMs, signal)) } };

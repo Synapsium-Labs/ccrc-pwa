@@ -298,6 +298,19 @@ export function childReclaimHoldRead(
   return { kind: 'held', reason };
 }
 
+/** One session id's coordinator claims, folded to what the generation fence reads. */
+export type ChildReclaimCoordinatorClaim = number | 'open' | 'unplaced';
+/** Has THIS incarnation of the workspace coordinated? (spec §1 rule 4; spec §5.6: slugs recycle.) */
+export const childReclaimCoordinated = (
+  claim: ChildReclaimCoordinatorClaim | undefined, bornAt: () => number | null, skewMs: number,
+): boolean => {
+  if (claim === undefined) return false;
+  if (claim === 'open' || claim === 'unplaced') return true;
+  const born = bornAt();
+  // Written so that a NaN on either side keeps the child: doubt keeps.
+  return born === null || !(claim < born - skewMs);
+};
+
 export interface ChildReclaimSweepInput {
   /** The registry row's id — the child's session id. */
   readonly sessionId: string;
@@ -315,11 +328,11 @@ export interface ChildReclaimSweepInput {
   /** Read only when the minting run is a review run; `not-a-review` otherwise. */
   readonly reviewedRun: ChildReclaimReviewedRunRead;
   readonly siblings: ChildReclaimSiblingsRead;
-  /** Has this session EVER been `claimedBy` of a run, or the `from` side of a
-   *  chair displacement (spec §1 rule 4: manual cleanup is reserved for a
-   *  coordinator's own workspace)? Read once by the caller from the SAME
-   *  store method the close path uses, so the two can never disagree. */
-  readonly coordinating: boolean;
+  /** This session's coordinator claims, folded (`CoordStore.childReclaimCoordinatorClaims`), or `undefined` when
+   *  it never held a chair. The verdict fences them to this workspace's own generation (`childReclaimCoordinated`,
+   *  with `childBornAt`), through the SAME function the close, the executor and the hold-release job use, so none
+   *  can disagree. */
+  readonly coordinatorClaim: ChildReclaimCoordinatorClaim | undefined;
   /** The child's own birth — the earliest `create` row of its CURRENT
    *  generation on ccd's clock — or `null` when this read could not place
    *  one. Run ids restart after a coordination-database loss, so a minting
@@ -438,10 +451,15 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
   }
   if (!i.siblings.ok) return { eligible: false, why: 'siblings-unreadable' };
   if (i.siblings.open > 0) return { eligible: false, why: 'siblings-open' };
-  // A child that has EVER coordinated a run (spec §1 rule 4): manual cleanup
-  // is reserved for a coordinator's own workspace, never a sub-workspace an
-  // automatic sweep may act on.
-  if (i.coordinating) return { eligible: false, why: 'coordinating' };
+  // A child whose CURRENT incarnation has coordinated a run (spec §1 rule 4:
+  // manual cleanup is reserved for a coordinator's own workspace) is never
+  // reclaimed automatically. That covers an open or unplaceable claim, and one
+  // that ended at or after this generation's birth less the skew. A claim that
+  // ended before this workspace existed belongs to an earlier workspace under
+  // the same slug (spec §5.6), destroyed before ws-add could create this one.
+  if (childReclaimCoordinated(i.coordinatorClaim, () => i.childBornAt, i.skewMs)) {
+    return { eligible: false, why: 'coordinating' };
+  }
   if (i.held.kind === 'program') {
     return { eligible: false, why: 'hold-retired', runId: i.child.runId,
       release: { reason: i.held.reason, program: i.held.program, accountedRunId: i.held.accountedRunId } };

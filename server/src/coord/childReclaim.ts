@@ -7,7 +7,8 @@ import type { NotifyLog } from '../notifylog.js';
 import { CCD_ARGV, RECLAIM_CAP, capSupported, sweepDec, verbSupported } from '../ccdargv.js';
 import { readSessionRecord } from '../registry.js';
 import { refusalSentence } from '../wsaudit.js';
-import type { ChildSpentVerdict } from './childSpent.js';
+import { CHILD_BIRTH_SKEW_MS, type ChildSpentVerdict } from './childSpent.js';
+import { childReclaimCoordinated } from '../childReclaimSweep.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import {
@@ -167,6 +168,22 @@ export function childReclaimLatest(events: readonly MirroredLifecycleEvent[]): M
     if (events[k]!.act === RECLAIM_ACT) return events[k]!;
   }
   return null;
+}
+
+/** The birth fence's birth (spec §5.1): the opening `create` of the session's CURRENT generation, on ccd's
+ *  clock; null when unplaceable. The one placement the birth fence and the coordination fence share. */
+export function childReclaimBornAt(
+  coord: Pick<CoordStore, 'lifecycleCreatesFor'>, sessionId: string, nowMs: number,
+): number | null {
+  return childReclaimGeneration(coord.lifecycleCreatesFor(sessionId), nowMs)[0]?.at ?? null;
+}
+/** THE reader for one session (spec §1 rule 4). Throws when a store read throws; each caller keeps its own
+ *  unreadable answer. */
+export function childReclaimHasCoordinated(
+  coord: Pick<CoordStore, 'childReclaimCoordinatorClaims' | 'lifecycleCreatesFor'>, sessionId: string, nowMs: number,
+): boolean {
+  return childReclaimCoordinated(coord.childReclaimCoordinatorClaims().get(sessionId),
+    () => childReclaimBornAt(coord, sessionId, nowMs), CHILD_BIRTH_SKEW_MS);
 }
 
 /** Why a reclaim did not happen YET. The server's own reasons first, then the
@@ -385,18 +402,21 @@ export interface ChildReclaimDecisionInput {
    *  re-dates to `unspent` can still say WHY it is not finished —
    *  `not-finished-merge-commit` — rather than the ordinary unspent hand-over. */
   readonly spentFastPath: boolean;
-  /** Whether this session has EVER been named `claimedBy` of a run, or was the
-   *  session a reclaim DISPLACED from a programme's chair (`CoordStore.
-   *  childReclaimCoordinatorIds`'s own union — the heir side is already
-   *  covered by being `claimedBy` itself; the set's one EXTRA member is the
-   *  `from` side of a `reclaim:` displacement) (spec §1 rule 4): a
-   *  coordinator's own workspace, cleaned up by a human, never reclaimed
-   *  automatically. `'unreadable'` when the caller's store read itself
-   *  failed — decided at the SAME place the sibling check ranks (right after
-   *  it, never ahead of `not-a-child`/`marker-unreadable`), so a throw folds
-   *  into the existing `siblings-unreadable` only where an unreadable
-   *  sibling list already would, never on every close. No overloaded
-   *  boolean: `true`/`false`/`'unreadable'` are three answers, never two. */
+  /** Whether this session has coordinated in its own generation
+   *  (`childReclaimHasCoordinated`): named `claimedBy` of a run, or the session
+   *  a reclaim DISPLACED from a programme's chair (`CoordStore.
+   *  childReclaimCoordinatorClaims` — the heir side is dated by its
+   *  displacement, because its claim on already-terminal runs began after
+   *  their `closedAt`; the `from` side of a `reclaim:` displacement is dated
+   *  there too), at or after this workspace's birth less the skew (spec §1
+   *  rule 4; spec §5.6: slugs recycle): a coordinator's own workspace, cleaned
+   *  up by a human, never reclaimed automatically. `'unreadable'` when the
+   *  caller's store read itself failed — decided at the SAME place the
+   *  sibling check ranks (right after it, never ahead of
+   *  `not-a-child`/`marker-unreadable`), so a throw folds into the existing
+   *  `siblings-unreadable` only where an unreadable sibling list already
+   *  would, never on every close. No overloaded boolean:
+   *  `true`/`false`/`'unreadable'` are three answers, never two. */
   readonly hasCoordinated: boolean | 'unreadable';
   /** No OTHER open run of this run's program: `CoordStore.programOpenRunCount`
    *  with this run excluded — D-51's predicate, not a second spelling. */
@@ -405,7 +425,7 @@ export interface ChildReclaimDecisionInput {
 
 /**
  * Has the coordinator FINISHED with this child? (spec §5.7). Eligible iff
- * child ∧ no open sibling ∧ never coordinated ∧ (final ∨
+ * child ∧ no open sibling ∧ not coordinated in its own generation ∧ (final ∨
  * spent-and-proven-this-incarnation ∨ an abandon ∨ this close retires the
  * program). "No open sibling" ALONE is also true on the ordinary non-final
  * close, which is claiming the child for wave N+1 — reclaiming on it would be
@@ -437,8 +457,9 @@ export interface ChildReclaimDecisionInput {
  * or `not-finished-merge-commit` (the fast path's own answer was re-dated
  * `unspent`) — otherwise plain `not-finished`, the ordinary unspent hand-over.
  *
- * A child that has EVER coordinated a run (spec §1 rule 4) is never
- * reclaimed automatically, whatever else this close would otherwise decide:
+ * A child that has coordinated in its own generation
+ * (`childReclaimHasCoordinated`; spec §1 rule 4) is never reclaimed
+ * automatically, whatever else this close would otherwise decide:
  * checked right after the sibling read, the same place that read's own
  * unreadable answer ranks — so a `hasCoordinated: 'unreadable'` input folds
  * into `siblings-unreadable` only there, never ahead of `not-a-child` or
@@ -753,24 +774,25 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   }
   // 2a — COORDINATING, ANY STATE (spec §1, rule 4: manual cleanup is
   // reserved for a coordinator's OWN workspace, never a sub-workspace a sweep
-  // may act on). A child that has EVER been named `claimedBy` of a run — the
-  // session a reclaim made an heir, the session the SAME reclaim displaced, or
-  // any nested coordinator — is never reclaimed automatically, whatever state
-  // that run reaches later (`childReclaimCoordinatorIds`'s own docstring
-  // states what "ever" covers and its one residual). Read after the sibling
-  // re-read (which answers a narrower, LIVE question) and before the pause: an
-  // unreadable coordination table is `siblings-unreadable`, the same word
-  // this function already uses for an unreadable `openRunsForSession` — never
-  // silently treated as "never coordinated".
-  let coordinated: ReadonlySet<string>;
+  // may act on). A child that has coordinated in its own generation
+  // (`childReclaimHasCoordinated`) — named `claimedBy` of a run, the session a
+  // reclaim made an heir, the session the SAME reclaim displaced, or any
+  // nested coordinator, at or after this workspace's birth less the skew
+  // (spec §5.6: slugs recycle) — is never reclaimed automatically, whatever
+  // state that run reaches later (`CoordStore.childReclaimCoordinatorClaims`'s
+  // own docstring states what a claim covers and its one residual). Read
+  // after the sibling re-read (which answers a narrower, LIVE question) and
+  // before the pause: an unreadable coordination table or mirror is
+  // `siblings-unreadable`, the same word this function already uses for an
+  // unreadable `openRunsForSession` — never silently treated as "never
+  // coordinated".
   try {
-    coordinated = deps.coord.childReclaimCoordinatorIds();
+    if (childReclaimHasCoordinated(deps.coord, sessionId, (deps.now ?? Date.now)())) {
+      return deferred('siblings-open', `${sessionId} has coordinated run(s)`);
+    }
   } catch (err) {
     return deferred('siblings-unreadable', `whether ${sessionId} has coordinated a run could not be read `
       + `(${err instanceof Error ? err.message : String(err)})`);
-  }
-  if (coordinated.has(sessionId)) {
-    return deferred('siblings-open', `${sessionId} has coordinated run(s)`);
   }
   // 2b — THE SWITCH, READ BY THE SERVER (spec §5.8: "the close path skips").
   // After the marker and sibling re-reads and BEFORE presence, the capability
@@ -998,7 +1020,9 @@ export function childReclaimReleaseActor(runId: number, program: string): string
  *      immutable (see the check's own comment below);
  *   3. that run's programme — still zero open runs;
  *   4. the child's own open runs — still none;
- *   5. the coordinator read — this child has still never coordinated a run;
+ *   5. the coordinator read — this child has still not coordinated in its own
+ *      generation (`childReclaimHasCoordinated`, the fence the close and the
+ *      executor's step 2a decide through);
  *   6. the reclaim switch (`childReclaimPauseRead`, the read the executor's
  *      own step 2b makes) — still down. A release queued behind the child's
  *      `KeyedQueue` before an operator raised `reclaim-paused` must not
@@ -1097,16 +1121,18 @@ export async function releaseRetiredChildHold(
   if (!sib.ok) return 'failed';
   if (sib.siblings.length > 0) return 'changed';
 
-  // 5 — the coordinator read: this child has still never coordinated a run.
-  let coordinating: ReadonlySet<string>;
+  // 5 — the coordinator read: this child has still not coordinated in its own
+  // generation (`childReclaimHasCoordinated`; spec §1 rule 4, spec §5.6). The
+  // same fence the sweep's verdict reads, so a child the sweep calls
+  // `hold-retired` is never `changed` here on a claim an earlier workspace
+  // under the same slug made.
   try {
-    coordinating = deps.coord.childReclaimCoordinatorIds();
+    if (childReclaimHasCoordinated(deps.coord, sessionId, (deps.now ?? Date.now)())) return 'changed';
   } catch (err) {
     console.warn(`ccrc-server: releaseRetiredChildHold: re-reading ${sessionId}'s coordination history failed `
       + `(${err instanceof Error ? err.message : String(err)})`);
     return 'failed';
   }
-  if (coordinating.has(sessionId)) return 'changed';
 
   // 6 — the reclaim switch: still down. Read last, nearest the argv, like
   // the executor's own step 2b.

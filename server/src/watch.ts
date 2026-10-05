@@ -82,14 +82,15 @@ import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
-  childReclaimGeneration, childReclaimLatest, childReclaimTokenKind, reclaimChild, releaseRetiredChildHold,
-  type ChildReclaimOutcome, type ChildReclaimReleaseOutcome, type ChildReclaimReleaseRequest,
-  type ChildReclaimRequest,
+  childReclaimBornAt, childReclaimGeneration, childReclaimLatest, childReclaimTokenKind, reclaimChild,
+  releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
+  type ChildReclaimReleaseRequest, type ChildReclaimRequest,
 } from './coord/childReclaim.js';
 import {
   childReclaimAskOrder, childReclaimAttention, childReclaimDeferExpired, childReclaimDue, childReclaimFirstSighting,
   childReclaimHoldRead, childReclaimJournalRow, childReclaimNextEntry, childReclaimSameGeneration,
-  childReclaimSweepVerdict, childReclaimTerminalRefusal, type ChildReclaimAsk, type ChildReclaimHoldCandidate,
+  childReclaimSweepVerdict, childReclaimTerminalRefusal, type ChildReclaimAsk, type ChildReclaimCoordinatorClaim,
+  type ChildReclaimHoldCandidate,
   type ChildReclaimHoldCandidatesRead, type ChildReclaimHoldOpenRead, type ChildReclaimHoldRead,
   type ChildReclaimJournalRow, type ChildReclaimLaneNow, type ChildReclaimMintingRunRead,
   type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead, type ChildReclaimSweepEntry,
@@ -3119,21 +3120,24 @@ export class FleetWatcher {
     // attempt in flight, or one that died mid-way, lists nothing), as the L1
     // input row.
     //
-    // ONE STORE READ of every `claimedBy` per pass too — the sessions that
-    // have ever coordinated a run (spec §1 rule 4: manual cleanup is reserved
-    // for a coordinator's OWN workspace) — in the SAME try as the mirror
-    // read: a throw here proves as little about who has coordinated as a
-    // failed mirror read proves about who is terminal, so BOTH READS TOGETHER
-    // fail the WHOLE pass shut: an exception from either one is caught below,
-    // this pass makes NO reclaim decision for ANY child (the whole per-child
-    // loop is downstream of this try succeeding), and the twice-observed
-    // memory is dropped so nothing is asked on the strength of a partial
-    // measurement.
+    // ONE STORE READ of every coordinator claim per pass too — each session's
+    // claims folded to their latest instant, which the verdict fences to the
+    // child's own generation, so a child counts as coordinating only when it
+    // has coordinated in its own generation (`childReclaimHasCoordinated`'s
+    // fence, `childReclaimCoordinated`; spec §1 rule 4: manual cleanup is
+    // reserved for a coordinator's OWN workspace; spec §5.6: slugs recycle) —
+    // in the SAME try as the mirror read: a throw here proves as little about
+    // who has coordinated as a failed mirror read proves about who is
+    // terminal, so BOTH READS TOGETHER fail the WHOLE pass shut: an exception
+    // from either one is caught below, this pass makes NO reclaim decision
+    // for ANY child (the whole per-child loop is downstream of this try
+    // succeeding), and the twice-observed memory is dropped so nothing is
+    // asked on the strength of a partial measurement.
     let latest: ChildReclaimJournalRow[];
-    let coordinating: ReadonlySet<string>;
+    let claims: ReadonlyMap<string, ChildReclaimCoordinatorClaim>;
     try {
       const withReclaim = coord.childReclaimSessionIds();
-      coordinating = coord.childReclaimCoordinatorIds();
+      claims = coord.childReclaimCoordinatorClaims();
       latest = [];
       for (const r of records) {
         if (!withReclaim.has(r.id)) continue;
@@ -3143,10 +3147,10 @@ export class FleetWatcher {
       }
     } catch (err) {
       // FAIL SHUT, and keep the last list: a failed read proves nothing about
-      // which children are terminal or which have coordinated, so this pass
-      // neither reports differently nor decides anything — and the
-      // twice-observed memory is dropped, so no child acts on the strength of
-      // a pass that measured nothing.
+      // which children are terminal or which have coordinated in their own
+      // generation, so this pass neither reports differently nor decides
+      // anything — and the twice-observed memory is dropped, so no child acts
+      // on the strength of a pass that measured nothing.
       console.warn(`ccrc-server: sweepChildReclaim could not read the lifecycle mirror or the coordination history (${err instanceof Error ? err.message : String(err)}) — no reclaim decisions this pass`);
       this.childReclaimSweepState.clear();
       this.childReclaimHoldRetiredSeen.clear();
@@ -3287,8 +3291,10 @@ export class FleetWatcher {
           // that opening row — a generation is a contiguous slice of ONE
           // array, so its first element, when the slice is non-empty, is
           // always index 0, whatever the fence would otherwise have sliced
-          // around it.
-          childBornAt = childReclaimGeneration(coord.lifecycleCreatesFor(r.id), now)[0]?.at ?? null;
+          // around it. Placed through `childReclaimBornAt`, the ONE placement
+          // this fence, the coordination fence and the entry's own `bornAt`
+          // all read.
+          childBornAt = childReclaimBornAt(coord, r.id, now);
         } catch (err) {
           // `node:sqlite` throws synchronously; an unread run is not an
           // absent one. Every read this try attempted is discarded together —
@@ -3301,7 +3307,7 @@ export class FleetWatcher {
       const v = childReclaimSweepVerdict({
         sessionId: r.id, child: r.child, identityMeasured: r.unmeasured.length === 0, workspace: r.workspace,
         held, terminal: terminal.has(r.id), mintingRun, reviewedRun, siblings,
-        coordinating: coordinating.has(r.id), childBornAt, skewMs: CHILD_BIRTH_SKEW_MS, nowMs: now,
+        coordinatorClaim: claims.get(r.id), childBornAt, skewMs: CHILD_BIRTH_SKEW_MS, nowMs: now,
       });
       if (!v.eligible) {
         this.childReclaimSweepState.delete(r.id);

@@ -12,6 +12,10 @@ import type { LastRun } from './released.js';
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
 import type { StallDeliveryRow, StallMailRow, StallReadFailure, StallRunRow, StallWriteMiss } from './stall.js';
+// The coordination fence's claim shape is declared by its CONSUMER, the L1
+// sweep file's `childReclaimCoordinated` (the same port rule as above); the
+// read below implements it.
+import type { ChildReclaimCoordinatorClaim } from '../childReclaimSweep.js';
 // Type-only: ties `AUTO_CONTINUE_ARMED_LAST_ERROR` below to the send adapter's
 // own refusal word, so a rename there is a compile error here, not a silent miss.
 import type { SendResult } from '../inject/send.js';
@@ -1425,7 +1429,7 @@ class IntentJournalFault extends Error {
  *  workspace be reclaimed. A well-shaped row (`demo-a -> heir-x`) has one
  *  occurrence and yields exactly its `from`.
  *
- *  `null` — which the one reader, `childReclaimCoordinatorIds`, below, turns
+ *  `null` — which the one reader, `childReclaimCoordinatorClaims`, below, turns
  *  into a THROW rather than a silent drop — only for text that does not
  *  start with `reclaim:` or holds no ` -> ` at all: the writer always emits
  *  the prefix and one separator, so such a row is hand-written or a future
@@ -1461,6 +1465,31 @@ function childReclaimDisplacedCandidates(detail: string): string[] | null {
   const out: string[] = [];
   for (let i = first; i !== -1 && i <= CHILD_RECLAIM_MAX_SESSION_ID_CHARS; i = body.indexOf(' -> ', i + 1)) {
     out.push(body.slice(0, i));
+  }
+  return out;
+}
+
+/** Every id that may be the `to` of one `reclaimProgram` row — the HEIR the
+ *  row's chair moved to — or `null` exactly when `childReclaimDisplacedCandidates`
+ *  answers `null` (text that does not start with `reclaim:`, or holds no ` -> `).
+ *  The mirror of that parser, for its reason: neither side can be split on, so
+ *  this returns the suffix after EVERY occurrence of ` -> `, overlapping ones
+ *  included, and the writer's own separator is always one of them. It searches
+ *  from the END (`lastIndexOf`, resuming one character before each hit), so the
+ *  suffixes come shortest first, and it stops at the first one longer than
+ *  `CHILD_RECLAIM_MAX_SESSION_ID_CHARS` — every later one is longer still, and
+ *  no session id can be (that bound's own docstring, above). The extra readings
+ *  over-protect, which is the fail-shut direction. */
+function childReclaimDisplacedHeirCandidates(detail: string): string[] | null {
+  const prefix = 'reclaim:';
+  if (!detail.startsWith(prefix)) return null;
+  const body = detail.slice(prefix.length);
+  const last = body.lastIndexOf(' -> ');
+  if (last === -1) return null;
+  const out: string[] = [];
+  for (let i = last; i !== -1 && body.length - (i + 4) <= CHILD_RECLAIM_MAX_SESSION_ID_CHARS;
+    i = i === 0 ? -1 : body.lastIndexOf(' -> ', i - 1)) {
+    out.push(body.slice(i + 4));
   }
   return out;
 }
@@ -3218,105 +3247,86 @@ export class CoordStore {
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
   }
 
-  /** Every session EVER named `claimedBy` of any run, in ANY state — the
-   *  past-tense counterpart of `openCoordinatorIds` one method up (which
-   *  answers only LIVE coordination, `state NOT IN` the terminal set, and so
-   *  drops a claim that has since reached a terminal run). Child-workspace
-   *  reclamation (spec 2026-09-22 §1, rules 3–4: manual cleanup is reserved
-   *  for a coordinator's OWN workspace, never a sub-workspace a sweep may
-   *  act on) needs the historical question, not the live one: a child made a
-   *  programme's HEIR — the reclaim door rewrites `claimedBy` onto it — became
-   *  that programme's coordinator the moment the rewrite landed, whatever
-   *  state the run later reaches, so nothing here is excluded by state the
-   *  way `openCoordinatorIds` excludes it. A row `reclaimProgram` rewrote onto
-   *  an already-terminal run still counts: the workspace coordinated it once,
-   *  and a later close does not retroactively make that false.
+  /** Per session id, the LATEST instant it held a coordinator's chair. This is
+   *  what the coordination fence reads (spec §1 rule 4, with spec §5.6's
+   *  recycled slugs: "ever coordinated" means this incarnation of the
+   *  workspace).
+   *  - `'open'` while any run naming it `claimedBy` is not terminal. This is
+   *    `programOpenRunCount`'s predicate, copied, so `'unknown'` counts as open.
+   *  - `'unplaced'` when none is open but a claim carries no readable instant:
+   *    a terminal run with no `closedAt`, as a reconstructed or legacy row has,
+   *    or a `closedAt` or displacement `at` that does not read as a positive
+   *    safe integer (CAST and proven, `lastRunBySession`'s idiom, because the
+   *    schema is not STRICT).
+   *  - Otherwise, the greatest of: each terminal run's `closedAt` that names it
+   *    today; and the `at` of every `reclaim:` displacement row naming it on
+   *    EITHER side. The `from` side (`childReclaimDisplacedCandidates`) is a
+   *    claim that ended at that instant, which no run names any more. The `to`
+   *    side (`childReclaimDisplacedHeirCandidates`) is a claim on
+   *    already-terminal runs that began then, after their `closedAt`.
    *
-   *  UNIONED WITH THE DISPLACED SIDE too (fix, measured): a bare `SELECT
-   *  DISTINCT claimedBy` alone answers "who coordinates each programme NOW",
-   *  not "who ever has" — `reclaimProgram`'s own `UPDATE runs SET claimedBy = ?,
-   *  coordProject = ? WHERE program = ? AND claimedBy IS NOT NULL` (above)
-   *  OVERWRITES `claimedBy` on every run of a programme, terminal runs included, so
-   *  the OUTGOING coordinator's own runs no longer name it anywhere in this table
-   *  once an heir takes the chair. The only surviving trace is the `run_events` row
-   *  that move writes once per displaced run: `causedBy:'operator',
-   *  detail:'reclaim:<from> -> <to>'`. That `causedBy`+prefix pair is unique to
-   *  this writer — grepped across `server/src`: every other `recordRunEvent`/
-   *  `advanceInner` call site either uses `causedBy:'coordinator'` or passes no
-   *  `reclaim:`-shaped detail (an ordinary transition's `detail` defaults to
-   *  `null`, which no `LIKE 'reclaim:%'` ever matches) — so the WHERE clause
-   *  below reads exactly `reclaimProgram`'s own rows and nothing another
-   *  writer has ever produced.
-   *
-   *  PARSED, not compared: unlike a hold's grammar (`holdReasonVerdict`,
-   *  compared against the server's own rendering, never parsed back), nothing
-   *  else ever reads this string, so there is no server-rendered form to
-   *  compare it against — it must be parsed, by
-   *  `childReclaimDisplacedCandidates` (above the class), which returns every
-   *  reading of the row that could be its `from` — all of them join the set,
-   *  and that function states what the over-protection costs. A
-   *  `reclaim:`-prefixed row it cannot read at all (no ` -> ` in it) THROWS
-   *  rather than being silently dropped — a row this build cannot attribute
-   *  to a `from` id is a row this build cannot prove is NOT evidence of past
-   *  coordination, and excluding it silently would be the exact fail-open
-   *  this fix exists to close. The executor's own try/catch around this call turns the throw into
-   *  a `siblings-unreadable` deferral (fail shut), the same word it already
-   *  uses for an unreadable `openRunsForSession`.
-   *
-   *  WHAT "EVER" NOW COVERS: every session currently named `claimedBy` of any
-   *  run (any state), UNION every session `reclaimProgram` has ever displaced
-   *  from a programme's chair — closing the gap where a nested coordinator
-   *  dies and an heir takes over (the reclaim door requires the outgoing
-   *  claimant to measure dead or registry-absent first) and the outgoing
-   *  session's own workspace would otherwise fall back into the reclaimable
-   *  population.
-   *  RESIDUAL: a lost or rebuilt `coord.db` loses this history along with
-   *  everything else the database holds — a rebuilt `runs`/`run_events` pair
-   *  starts from nothing, so a pre-loss displacement is unrecoverable here.
-   *  That is the same class of loss every other read in this file accepts as
-   *  fail-closed rather than reconstructible; closing it is not this method's
-   *  job.
-   *
-   *  Returns the whole set, not a per-session boolean, because the reclaim
-   *  sweep reads it ONCE per pass and checks many children against it — a
-   *  per-child query issued once per child would repeat the same table scan
-   *  every pass. The close-path executor and the close decision call it once
-   *  per session and check membership the same way, so the three
-   *  `childReclaim*` consumers share ONE read instead of three spellings of
-   *  the same SELECT.
+   *  The parsers' extra readings over-protect, which is the fail-shut
+   *  direction. An unparseable row THROWS. An id absent from the map has never
+   *  held a chair. The residual is unchanged: a lost or rebuilt `coord.db`
+   *  loses this history, and every minting run with it.
    *
    *  Synchronous, like every other read on this store — see
    *  `openRunsForSession`'s own docstring for why that is not an oversight to
    *  be wrapped. */
-  childReclaimCoordinatorIds(): ReadonlySet<string> {
-    const ids = new Set((this.db.prepare(
-      'SELECT DISTINCT claimedBy FROM runs WHERE claimedBy IS NOT NULL',
-    ).all() as { claimedBy: string }[]).map((r) => r.claimedBy));
-    // `substr(...) = 'reclaim:'`, never `LIKE 'reclaim:%'` (child-reclamation
-    // wave 4): SQLite's `LIKE` is case-insensitive for ASCII
-    // by default, so an unrelated OPERATOR note that merely starts
-    // `RECLAIM:…` would have matched the old pattern and then reached
-    // `childReclaimDisplacedCandidates`, whose own `startsWith('reclaim:')`
-    // is case-SENSITIVE — a mismatch it reads as "not this writer's row" and
-    // therefore throws on (a row this build cannot attribute to a `from`).
+  childReclaimCoordinatorClaims(): ReadonlyMap<string, ChildReclaimCoordinatorClaim> {
+    const claims = new Map<string, ChildReclaimCoordinatorClaim>();
+    // THE FOLD, per id: `'open'` over everything, then `'unplaced'` over any
+    // number, then the greatest number.
+    const note = (id: string, c: ChildReclaimCoordinatorClaim): void => {
+      const had = claims.get(id);
+      if (had === 'open' || had === c) return;
+      if (had === undefined || c === 'open' || c === 'unplaced') { claims.set(id, c); return; }
+      if (had !== 'unplaced' && c > had) claims.set(id, c);
+    };
+    // The runs read. `closedAt` rides CAST to TEXT and is proven by
+    // `persistedInt` (`lastRunBySession`'s measured idiom): the schema is not
+    // STRICT, and SQLite ranks TEXT above INTEGER, so a raw read could hand
+    // this fold a string or a fraction.
+    const runs = this.db.prepare(
+      `SELECT claimedBy, CASE WHEN state NOT IN ${TERMINAL_RUN_STATES_SQL} THEN 1 ELSE 0 END AS open, ` +
+      'CAST(closedAt AS TEXT) AS closedAtText FROM runs WHERE claimedBy IS NOT NULL',
+    ).all() as { claimedBy: string; open: number; closedAtText: string | null }[];
+    for (const r of runs) {
+      if (r.open === 1) { note(r.claimedBy, 'open'); continue; }
+      const closed = r.closedAtText === null ? null : persistedInt(r.closedAtText, 'closedAt');
+      note(r.claimedBy, closed !== null && closed.ok ? closed.value : 'unplaced');
+    }
+    // The displacement read. `substr(...) = 'reclaim:'`, never `LIKE
+    // 'reclaim:%'` (child-reclamation wave 4): SQLite's `LIKE` is
+    // case-insensitive for ASCII by default, so an unrelated OPERATOR note that
+    // merely starts `RECLAIM:…` would have matched and then reached the
+    // parsers, whose own `startsWith('reclaim:')` is case-SENSITIVE — a
+    // mismatch they read as "not this writer's row", which this read throws on.
     // One hand-written note in the wrong case would have broken automatic
     // reclamation fleet-wide. `substr` selects only what the writer's own
     // `reclaim:${…}` template can produce.
-    // `DISTINCT`: `reclaimProgram` writes one identical row per run of the
-    // programme it moves, so N runs would otherwise parse the same text N
-    // times; the candidate length bound is `childReclaimDisplacedCandidates`'s
-    // own (its docstring states why dropping a longer one is safe).
+    // `DISTINCT`: `reclaimProgram` writes one identical row (one `at` for the
+    // act) per run of the programme it moves, so N runs would otherwise parse
+    // the same text N times; the candidate length bound is the parsers' own
+    // (`CHILD_RECLAIM_MAX_SESSION_ID_CHARS`, whose docstring states why dropping
+    // a longer one is safe). There is no SQL `MAX`: each row's instant is
+    // proven before the fold compares it.
     const displacements = this.db.prepare(
-      "SELECT DISTINCT detail FROM run_events WHERE causedBy = 'operator' AND substr(detail, 1, 8) = 'reclaim:'",
-    ).all() as { detail: string }[];
+      'SELECT DISTINCT detail, CAST(at AS TEXT) AS atText FROM run_events ' +
+      "WHERE causedBy = 'operator' AND substr(detail, 1, 8) = 'reclaim:'",
+    ).all() as { detail: string; atText: string | null }[];
     for (const row of displacements) {
       const froms = childReclaimDisplacedCandidates(row.detail);
-      if (froms === null) {
+      const heirs = childReclaimDisplacedHeirCandidates(row.detail);
+      if (froms === null || heirs === null) {
         throw new Error(`run_events carries an unparseable reclaim-displacement row: ${JSON.stringify(row.detail)}`);
       }
-      for (const from of froms) ids.add(from);
+      const at = row.atText === null ? null : persistedInt(row.atText, 'run_events at');
+      const instant: ChildReclaimCoordinatorClaim = at !== null && at.ok ? at.value : 'unplaced';
+      for (const id of froms) note(id, instant);
+      for (const id of heirs) note(id, instant);
     }
-    return ids;
+    return claims;
   }
 
   /**

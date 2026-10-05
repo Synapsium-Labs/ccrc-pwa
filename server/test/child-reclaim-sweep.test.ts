@@ -39,8 +39,8 @@ import {
   CHILD_RECLAIM_DEFER_CEILING_MS, childReclaimBackoffMs, childReclaimFailingSentence, childReclaimJournalRow,
 } from '../src/childReclaimSweep.js';
 import {
-  CHILD_RECLAIM_TOKEN_KIND, childReclaimGeneration, childReclaimLatest, childReclaimTokenKind,
-  type ChildReclaimOutcome, type ChildReclaimRequest,
+  CHILD_RECLAIM_TOKEN_KIND, childReclaimGeneration, childReclaimHasCoordinated, childReclaimLatest,
+  childReclaimTokenKind, type ChildReclaimOutcome, type ChildReclaimRequest,
 } from '../src/coord/childReclaim.js';
 import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
 import { SPAWN_STALL_MS, holdReason, lcRefusalWord } from '../../shared/api.js';
@@ -659,7 +659,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     const reason = holdReason(r1.program, 2, null, null);
     f.plant('demo-a', { child: String(r1.id), hold: reason });
     await f.pass();                                            // 1st hold-retired sighting
-    const spy = vi.spyOn(f.coord, 'childReclaimCoordinatorIds')
+    const spy = vi.spyOn(f.coord, 'childReclaimCoordinatorClaims')
       .mockImplementation(() => { throw new Error('coordination history unreadable'); });
     f.next(); await f.pass();                                  // the whole pass fails shut
     spy.mockRestore();
@@ -692,7 +692,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
   it('the release answer\'s mark is cleared by the mirror/coordinator-read pass-level fail-shut — two fresh passes, not three', async () => {
     const f = fixture();
     const runId = await releasedChild(f);                     // a mark stands
-    const spy = vi.spyOn(f.coord, 'childReclaimCoordinatorIds')
+    const spy = vi.spyOn(f.coord, 'childReclaimCoordinatorClaims')
       .mockImplementation(() => { throw new Error('coordination history unreadable'); });
     f.next(); await f.pass();                                  // the whole pass fails shut
     spy.mockRestore();
@@ -828,7 +828,9 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.calls.filter((c) => c[0] === 'ws-release')).toHaveLength(1);
   });
 
-  it('a child that has EVER coordinated a run is never reclaimed automatically', async () => {
+  it('a child whose CURRENT generation has coordinated a run is never reclaimed automatically', async () => {
+    // Its claim closes at its own `create`'s instant (the fixture clock does
+    // not move), inside the coordination fence's skew: this generation's own.
     const f = fixture();
     const r1 = f.openRun();
     f.abandon(r1);
@@ -1182,12 +1184,12 @@ describe('sweepChildReclaim — what reaches the executor', () => {
 });
 
 describe('fail-shut on the pass-level reads — a throw stops the WHOLE pass, not just one child', () => {
-  it('a throwing childReclaimCoordinatorIds read: no request to anyone, the entry is cleared, and a clean read needs two FRESH passes', async () => {
+  it('a throwing childReclaimCoordinatorClaims read: no request to anyone, the entry is cleared, and a clean read needs two FRESH passes', async () => {
     const f = fixture();
     finishedChild(f);
     await f.pass(); f.next();
     // Sighted once already — the next ordinary pass would dispatch.
-    const spy = vi.spyOn(f.coord, 'childReclaimCoordinatorIds')
+    const spy = vi.spyOn(f.coord, 'childReclaimCoordinatorClaims')
       .mockImplementation(() => { throw new Error('coordination history unreadable'); });
     await f.pass();
     expect(f.requests).toEqual([]);
@@ -1869,6 +1871,106 @@ describe('one entry describes one workspace generation (spec §5.6, §5.7)', () 
     f.next(); await f.pass();
     expect(f.requests).toHaveLength(16);
     expect(f.requests[15]).toMatchObject({ runId: r2.id, deferExpired: false });
+  });
+});
+
+// K4 — the coordination fence at the lane (spec §1 rule 4: manual cleanup is
+// reserved for a coordinator's own workspace; spec §5.6: slugs recycle, so
+// "has coordinated" means THIS incarnation of the workspace). The fixture
+// mirrors a `create` on every `plant`, at the fixture clock, and
+// `journal(id, 'done', null, 'create')` mirrors an EARLIER generation's. A
+// claim that ended before the current generation's birth less
+// `CHILD_BIRTH_SKEW_MS` belongs to an earlier workspace under the same slug.
+describe('the coordination fence at the lane — a claim counts only in the child\'s current generation (spec §1 rule 4, §5.6)', () => {
+  let k4N = 0;
+  /** A run `by` claims, in a programme of its own, opened at the fixture clock and abandoned there unless `open`. */
+  const coordinatedBy = (f: ReturnType<typeof fixture>, by: string, open = false): { id: number; program: string } => {
+    const program = `k4-coord-${++k4N}`;
+    const r = f.coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy: by });
+    if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
+    if (!open) f.abandon({ id: r.id, program });
+    return { id: r.id, program };
+  };
+  /** A recycled slug: demo-a's minting run opens, a run demo-a coordinated is abandoned and an EARLIER
+   *  generation's `create` is mirrored, all at T0; `gap` later the minting run is abandoned and the CURRENT
+   *  generation is planted (its `create` mirrored at T0 + gap). */
+  const recycled = (f: ReturnType<typeof fixture>, gap: number): number => {
+    const r1 = f.openRun();
+    coordinatedBy(f, 'demo-a');
+    f.journal('demo-a', 'done', null, 'create');
+    f.advance(gap);
+    f.abandon(r1);
+    f.plant('demo-a', { child: String(r1.id) });
+    return r1.id;
+  };
+  const passes = async (f: ReturnType<typeof fixture>, n: number): Promise<void> => {
+    await f.pass();
+    for (let k = 1; k < n; k += 1) { f.next(); await f.pass(); }
+  };
+  /** The fence's own answer for demo-a now — what the verdict's `coordinating` is decided from. */
+  const fenced = (f: ReturnType<typeof fixture>): boolean => childReclaimHasCoordinated(f.coord, 'demo-a', f.now());
+
+  it('K4a: a recycled slug whose last claim ended before this generation was born is reclaimed — two passes, one request', async () => {
+    const f = fixture();
+    const runId = recycled(f, CHILD_BIRTH_SKEW_MS + 1);
+    await passes(f, 2);
+    expect(f.requests).toHaveLength(1);
+    expect(f.requests[0]).toMatchObject({ sessionId: 'demo-a', runId, trigger: 'sweep' });
+  });
+
+  it('K4b: a recycled slug whose CURRENT generation coordinated is never reclaimed — the verdict is coordinating', async () => {
+    const f = fixture();
+    recycled(f, CHILD_BIRTH_SKEW_MS + 1);
+    coordinatedBy(f, 'demo-a');                                // opened and abandoned AFTER the plant
+    await passes(f, 3);
+    expect(f.requests).toEqual([]);
+    expect(fenced(f)).toBe(true);
+  });
+
+  it('K4c: an open claim keeps the child, whatever generation it began in', async () => {
+    const f = fixture();
+    recycled(f, CHILD_BIRTH_SKEW_MS + 1);
+    coordinatedBy(f, 'demo-a', true);                          // left open
+    await passes(f, 3);
+    expect(f.requests).toEqual([]);
+    expect(fenced(f)).toBe(true);
+  });
+
+  it('K4d: the skew boundary, both sides — a claim exactly the skew before the birth keeps; one ms more does not', async () => {
+    const edge = fixture();
+    recycled(edge, CHILD_BIRTH_SKEW_MS);
+    await passes(edge, 3);
+    expect(edge.requests, 'the claim ended exactly CHILD_BIRTH_SKEW_MS before the birth: kept').toEqual([]);
+    const past = fixture();
+    recycled(past, CHILD_BIRTH_SKEW_MS + 1);
+    await passes(past, 2);
+    expect(past.requests, 'one ms further: reclaimed').toHaveLength(1);
+  });
+
+  it('K4e: an heir that took a finished programme\'s chair after its own birth has coordinated in this generation', async () => {
+    const f = fixture();
+    const r1 = f.openRun();
+    const prog = coordinatedBy(f, 'demo-old');                // the programme's only run, closed at T0
+    f.advance(CHILD_BIRTH_SKEW_MS + 1);
+    f.abandon(r1);
+    f.plant('demo-a', { child: String(r1.id) });
+    expect(f.coord.reclaimProgram(prog.id, 'demo-a', f.now(), null)).toMatchObject({ ok: true });
+    await passes(f, 3);
+    expect(f.requests).toEqual([]);
+    expect(fenced(f)).toBe(true);
+  });
+
+  it('K4f: a coordinator displaced from its chair before this generation was born is reclaimed — two passes, one request', async () => {
+    const f = fixture();
+    const r1 = f.openRun();
+    const prog = coordinatedBy(f, 'demo-a');
+    expect(f.coord.reclaimProgram(prog.id, 'demo-heir', f.now(), null)).toMatchObject({ ok: true });
+    f.advance(CHILD_BIRTH_SKEW_MS + 1);
+    f.abandon(r1);
+    f.plant('demo-a', { child: String(r1.id) });
+    await passes(f, 2);
+    expect(f.requests).toHaveLength(1);
+    expect(f.requests[0]).toMatchObject({ sessionId: 'demo-a', runId: r1.id });
   });
 });
 

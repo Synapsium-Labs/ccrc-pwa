@@ -13,15 +13,17 @@
 import { describe, it, expect } from 'vitest';
 import {
   CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_PRESENCE_DEFERS, childReclaimAskOrder, childReclaimAttention,
-  childReclaimBackoffMs, childReclaimDeferExpired, childReclaimDue, childReclaimFailingSentence,
-  childReclaimFirstSighting, childReclaimHoldRead, childReclaimJournalRow, childReclaimNextEntry,
-  childReclaimSameGeneration, childReclaimSweepVerdict,
-  type ChildReclaimAsk, type ChildReclaimHoldCandidate, type ChildReclaimJournalRow, type ChildReclaimLaneNow,
+  childReclaimBackoffMs, childReclaimCoordinated, childReclaimDeferExpired, childReclaimDue,
+  childReclaimFailingSentence, childReclaimFirstSighting, childReclaimHoldRead, childReclaimJournalRow,
+  childReclaimNextEntry, childReclaimSameGeneration, childReclaimSweepVerdict,
+  type ChildReclaimAsk, type ChildReclaimCoordinatorClaim, type ChildReclaimHoldCandidate,
+  type ChildReclaimJournalRow, type ChildReclaimLaneNow,
   type ChildReclaimSweepEntry, type ChildReclaimSweepInput, type ChildReclaimSweepOutcome, type ChildReclaimTokenKind,
 } from '../src/childReclaimSweep.js';
 import {
   HOLD_NO_REASON, HOLD_UNREADABLE,
 } from '../src/registry.js';
+import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
 import {
   LC_REFUSAL_WORD, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason,
   type LifecycleAct, type LifecycleOutcome, type MirroredLifecycleEvent,
@@ -34,6 +36,9 @@ const PASS = 60_000;
 const C = CHILD_RECLAIM_DEFER_CEILING_MS;
 /** The caller's `CHILD_BIRTH_SKEW_MS` — also an argument. */
 const SKEW = 120_000;
+/** The same allowance, read from its one definition: the coordination fence's
+ *  rows (`childReclaimCoordinated`) are pinned at the value the lane passes. */
+const SKEW_MS = CHILD_BIRTH_SKEW_MS;
 /** The wall clock's origin where a row gives the lane's two clocks DISTINCT
  *  origins: the monotonic clock reads small numbers from a process-relative
  *  origin, the wall clock reads epoch ms. */
@@ -73,7 +78,7 @@ const base = (over: Partial<ChildReclaimSweepInput> = {}): ChildReclaimSweepInpu
   // A WORK run's child: its minting run reviews nothing (spec §5.7).
   reviewedRun: { kind: 'not-a-review' },
   siblings: { ok: true, open: 0 },
-  coordinating: false,
+  coordinatorClaim: undefined,
   childBornAt: NOW - 3_600_000,
   skewMs: SKEW,
   nowMs: NOW,
@@ -198,8 +203,17 @@ describe('childReclaimSweepVerdict', () => {
     expect(skip({ siblings: { ok: true, open: 1 } })).toEqual({ eligible: false, why: 'siblings-open' });
   });
 
-  it('a child that has ever coordinated a run is never reclaimed automatically', () => {
-    expect(skip({ coordinating: true })).toEqual({ eligible: false, why: 'coordinating' });
+  it('a child that is coordinating a run (an open claim) is never reclaimed automatically', () => {
+    expect(skip({ coordinatorClaim: 'open' })).toEqual({ eligible: false, why: 'coordinating' });
+  });
+
+  // K2 — the verdict reads the claim through the ONE fence (spec §1 rule 4;
+  // spec §5.6: slugs recycle), fenced to `childBornAt` (BORN here) less the
+  // skew the caller passes (`skewMs`, SKEW here).
+  it('K2: the verdict fences a claim to this generation — open keeps, the skew boundary keeps, one ms before it is eligible', () => {
+    expect(skip({ coordinatorClaim: 'open' })).toEqual({ eligible: false, why: 'coordinating' });
+    expect(skip({ coordinatorClaim: BORN - SKEW })).toEqual({ eligible: false, why: 'coordinating' });
+    expect(skip({ coordinatorClaim: BORN - SKEW - 1 })).toEqual({ eligible: true, runId: 7 });
   });
 
   // SPEC §5.7 — a REVIEW child lives until the run it reviewed is
@@ -273,7 +287,7 @@ describe('childReclaimSweepVerdict', () => {
     });
 
     it('retired, but this child has coordinated — the coordinating conjunct still rules', () => {
-      expect(skip({ held: { ...accounted, open: { ok: true, count: 0 } }, coordinating: true }))
+      expect(skip({ held: { ...accounted, open: { ok: true, count: 0 } }, coordinatorClaim: 'open' }))
         .toEqual({ eligible: false, why: 'coordinating' });
     });
 
@@ -287,6 +301,45 @@ describe('childReclaimSweepVerdict', () => {
           openedAt: NOW - 3_600_000 + SKEW + 1 } },
       })).toEqual({ eligible: false, why: 'minting-run-postdates-child' });
     });
+  });
+});
+
+// K1 — THE coordination fence, pure (spec §1 rule 4: manual cleanup is
+// reserved for a coordinator's own workspace; spec §5.6: slugs recycle, so
+// "has coordinated" means THIS incarnation of the workspace). One function
+// every consumer decides through: the sweep's verdict, the close, the
+// executor's step 2a and the hold-release job's step 5. B is a measured
+// current-generation birth on ccd's clock; every doubt keeps the child.
+describe('childReclaimCoordinated — the coordination fence, fenced to the current generation', () => {
+  const B = 1_790_413_776_948;
+  const born = (v: number | null) => (): number | null => v;
+  const ROWS: readonly (readonly [string, ChildReclaimCoordinatorClaim | undefined, number | null, boolean])[] = [
+    ['K1.1 never claimed: not coordinated', undefined, B, false],
+    ['K1.2 an open claim, birth placed: coordinated', 'open', B, true],
+    ['K1.3 an open claim, birth unplaceable: coordinated', 'open', null, true],
+    ['K1.4 an unplaced claim: coordinated', 'unplaced', B, true],
+    ['K1.5 the recycled slug — a claim that closed three weeks before this generation was born: not coordinated',
+      1_788_533_627_803, B, false],
+    ['K1.6 one ms outside the skew: not coordinated', B - SKEW_MS - 1, B, false],
+    ['K1.7 the boundary, inclusive: coordinated', B - SKEW_MS, B, true],
+    ['K1.8 inside the skew: coordinated', B - 100_000, B, true],
+    ['K1.9 this generation: coordinated', B + 1, B, true],
+    ['K1.10 an unplaceable birth keeps the child, however old the claim', B - 10 * SKEW_MS, null, true],
+  ];
+  it.each(ROWS)('%s', (_name, claim, bornAt, want) => {
+    expect(childReclaimCoordinated(claim, born(bornAt), SKEW_MS)).toBe(want);
+  });
+
+  it('K1.11 the birth is read lazily — never for no claim, an open claim or an unplaced one', () => {
+    const unread = (): number | null => { throw new Error('the birth was read'); };
+    expect(childReclaimCoordinated(undefined, unread, SKEW_MS)).toBe(false);
+    expect(childReclaimCoordinated('open', unread, SKEW_MS)).toBe(true);
+    expect(childReclaimCoordinated('unplaced', unread, SKEW_MS)).toBe(true);
+  });
+
+  it('K1.12 a non-number on either side of the comparison keeps the child', () => {
+    expect(childReclaimCoordinated(Number.NaN, born(B), SKEW_MS)).toBe(true);
+    expect(childReclaimCoordinated(B - 10 * SKEW_MS, born(Number.NaN), SKEW_MS)).toBe(true);
   });
 });
 
