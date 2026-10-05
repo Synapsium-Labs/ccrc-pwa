@@ -1307,3 +1307,129 @@ rdVitest.describe('docs discovery through run(): the line a verb that discovers 
     rdVitest.expect(String(o!['stderrHead'])).not.toContain('tok@');
   });
 });
+
+// ---- Task 8 fix round 1 (review finding F1, CV1; ruling G8): one case per guard Task 8 added ----
+// Each case swaps `H.SYS` for a subclass (the R15 canned case's way), or puts a PATH git stub first, so a branch
+// no real fixture reaches is reached on purpose. Each is measured red with its guard deleted, in a scratch copy;
+// Task 19's table carries the rows as R8-1..R8-8.
+rdVitest.describe('docs discovery and runner: the fail-closed guards no fixture reaches (R8-1..R8-8)', () => {
+  let h: rdWs.CcdHarness;
+  let demo = '';
+  rdVitest.beforeAll(() => {
+    h = rdWs.makeCcdHarness('ccd-docs-');
+    demo = rdDocs.docsRepo(h, 'demo');
+    h.git(demo, 'worktree', 'add', '-q', '-b', 'ws/a', rdPath.join(h.home, 'projects', 'wt'));
+  });
+  rdVitest.afterAll(() => h.cleanup());
+
+  rdVitest.it('R8-1: find_owner\'s listdir failing is repo-unreadable naming listdir, never "no owner"', () => {
+    const got = rdPy.unitJson<RdShape>(h.home, `${rdCtx(h.home)}\n${rdUnit(String.raw`
+      import errno
+      class NoList(H.Sys):
+          def listdir(self, path):
+              raise OSError(errno.EACCES, 'Permission denied')
+      H.SYS = NoList()
+      out(shape('wt'))
+    `)}`);
+    rdVitest.expect(got.word).toBe('repo-unreadable');
+    rdVitest.expect(String(got.ctx!['stderrHead'])).toContain('listdir');
+  });
+
+  rdVitest.it('R8-2 and R8-3: discover\'s lstat of P, and of P/.git, failing past ENOENT/ENOTDIR is repo-unreadable', () => {
+    const got = rdPy.unitJson<RdShape[]>(h.home, `${rdCtx(h.home)}\n${rdUnit(String.raw`
+      import errno
+      rows = []
+      for bad in [ctx.root + '/demo', ctx.root + '/demo/.git']:
+          class NoLstat(H.Sys):
+              def lstat(self, path, dir_fd=None, bad=bad):
+                  if path == bad:
+                      raise OSError(errno.EACCES, 'Permission denied')
+                  return H.Sys.lstat(self, path, dir_fd)
+          H.SYS = NoLstat()
+          rows.append(shape('demo'))
+      out(rows)
+    `)}`);
+    for (const s of got) {
+      rdVitest.expect(s.word).toBe('repo-unreadable');
+      rdVitest.expect(String(s.ctx!['stderrHead'])).toContain('lstat');
+    }
+  });
+
+  rdVitest.it('R8-4: rev-parse at rc 0 with the wrong shape is git-failed {step: rev-parse, rc: 0}', () => {
+    const got = rdPy.unitJson<RdShape>(h.home, `${rdCtx(h.home)}\n${rdUnit(String.raw`
+      class Short(H.Sys):
+          def spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin=None):
+              if 'rev-parse' in argv:
+                  return H.Spawned(0, b'/a/.git\n/a/.git\nfalse\nfalse\nsha1\n', b'', False, False)
+              return H.Sys.spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin)
+      H.SYS = Short()
+      out(shape('demo'))
+    `)}`);
+    rdVitest.expect(got.word).toBe('git-failed');
+    rdVitest.expect(got.ctx).toMatchObject({ step: 'rev-parse', rc: 0 });
+  });
+
+  rdVitest.it('R8-5: the partial-clone probe at rc 3 (not 0, not 1) is repo-unreadable', () => {
+    const got = rdPy.unitJson<RdShape>(h.home, `${rdCtx(h.home)}\n${rdUnit(String.raw`
+      class Probe3(H.Sys):
+          def spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin=None):
+              if '--get-regexp' in argv:
+                  return H.Spawned(3, b'', b'error: cannot read config', False, False)
+              return H.Sys.spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin)
+      H.SYS = Probe3()
+      out(shape('demo'))
+    `)}`);
+    rdVitest.expect(got.word).toBe('repo-unreadable');
+    rdVitest.expect(String(got.ctx!['stderrHead'])).toContain('cannot read config');
+  });
+
+  rdVitest.it('R8-6: a linked worktree whose symbolic-ref prints a non-UTF-8 branch answers branch null', () => {
+    const got = rdPy.unitJson<RdShape[]>(h.home, `${rdCtx(h.home)}\n${rdUnit(String.raw`
+      rows = [shape('wt')]
+      class BadRef(H.Sys):
+          def spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin=None):
+              if 'symbolic-ref' in argv:
+                  return H.Spawned(0, b'refs/heads/\xff\n', b'', False, False)
+              return H.Sys.spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin)
+      H.SYS = BadRef()
+      rows.append(shape('wt'))
+      out(rows)
+    `)}`);
+    // CONTROL: the real symbolic-ref names the branch, so the null below is the guard's doing.
+    rdVitest.expect(got[0]).toEqual({ word: 'linked-worktree', ctx: { owner: 'demo', branch: 'ws/a' } });
+    rdVitest.expect(got[1]).toEqual({ word: 'linked-worktree', ctx: { owner: 'demo', branch: null } });
+  });
+
+  rdVitest.it('R8-7: origin_url at rc 3 (not 0, not 1) is git-failed {step: config}', () => {
+    const got = rdPy.unitJson<RdShape>(h.home, `${rdCtx(h.home)}\n${rdUnit(String.raw`
+      repo = H.discover(ctx, 'demo', dl)
+      class Cfg3(H.Sys):
+          def spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin=None):
+              if '--get' in argv:
+                  return H.Spawned(3, b'', b'error: bad config', False, False)
+              return H.Sys.spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin)
+      H.SYS = Cfg3()
+      try:
+          H.origin_url(repo, dl)
+          out({'word': None})
+      except H.Fail as e:
+          out({'word': e.word, 'ctx': e.ctx})
+    `)}`);
+    rdVitest.expect(got.word).toBe('git-failed');
+    rdVitest.expect(got.ctx).toMatchObject({ step: 'config', rc: 3 });
+  });
+
+  rdVitest.it('R8-8 (CV1): a hard fetch expiry is fetch-timeout with no step; the same call, soft, returns timed out', () => {
+    const fake = rdFakeGit(h.home, 'hangfetch', 'exec sleep 30\n');
+    const got = rdPy.unitJson<{ hard: RdShape; soft: unknown[] }>(h.home, rdUnit(String.raw`
+      import os
+      os.environ['PATH'] = ${rdQ(fake)} + ':' + os.environ['PATH']
+      r = H.docs_git(${rdQ(demo)}, ['fetch', '--quiet'], call_s=1, dl=H.Deadline(12),
+                     ceiling=H.ceiling_of(${rdQ(demo)}), fetch=True, soft=True)
+    `) + rdHard(`H.docs_git(${rdQ(demo)}, ['fetch', '--quiet'], call_s=1, dl=H.Deadline(12), `
+      + `ceiling=H.ceiling_of(${rdQ(demo)}), fetch=True)`) + "out({'soft': [r.timed_out], 'hard': hard})\n",
+      { timeoutMs: 60_000 });
+    rdVitest.expect(got.soft).toEqual([true]);
+    rdVitest.expect(got.hard).toEqual({ word: 'fetch-timeout', ctx: {} });
+  }, 60_000);
+});
