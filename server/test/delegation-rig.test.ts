@@ -337,3 +337,153 @@ describe('rig.sh setup (fixture HOME and repo)', () => {
     }
   }, 120_000);
 });
+
+const SANITIZE = path.join(RIG, 'sanitize.mjs');
+/** A raw bundle as rig.sh's `collect` leaves it, for a run root that is only a STRING here. */
+function rawBundle(raw: string, root: string, version: string, scenario: string, caps: Array<[string, number, object]>, versionsDir = '/opt/fake-claude/versions'): string {
+  const d = path.join(raw, version, scenario);
+  fs.mkdirSync(path.join(d, 'caps'), { recursive: true });
+  fs.writeFileSync(path.join(d, 'root'), `${root}\n${root}\n`);
+  fs.writeFileSync(path.join(d, 'version'), `${version}\n`);
+  fs.writeFileSync(path.join(d, 'versions-dir'), `${versionsDir}\n`);
+  fs.writeFileSync(path.join(d, 'scenario'), `${scenario}\n`);
+  for (const [event, ms, payload] of caps) fs.writeFileSync(path.join(d, 'caps', `${event}-${ms}-100.cap`), `{"envSid":"u-1"}\n${JSON.stringify(payload)}\n`);
+  const adm = path.join(d, 'admin', 'agent-abc');
+  fs.mkdirSync(adm, { recursive: true });
+  fs.writeFileSync(path.join(adm, 'files'), 'CLAUDE_BASE\nHEAD\ngitdir\nlogs\n');
+  fs.writeFileSync(path.join(adm, 'gitdir'), `${root}/repo/.claude/worktrees/agent-abc/.git\n`);
+  fs.writeFileSync(path.join(adm, 'HEAD'), 'aaaa\n');
+  fs.writeFileSync(path.join(adm, 'CLAUDE_BASE'), 'bbbb');
+  fs.writeFileSync(path.join(adm, 'first-log-sha'), 'bbbb\n');
+  const munged = root.replace(/[^A-Za-z0-9]/g, '-');
+  const meta = path.join(d, 'meta', 'cfg', `${munged}-repo`, 'uuid-1', 'subagents');
+  fs.mkdirSync(meta, { recursive: true });
+  fs.writeFileSync(path.join(meta, 'agent-abc.meta.json'), JSON.stringify({ worktreePath: `${root}/repo/.claude/worktrees/agent-abc`, toolUseId: 't' }));
+  const snap = path.join(d, 'snapshots', 'before-kill');
+  fs.mkdirSync(snap, { recursive: true });
+  fs.writeFileSync(path.join(snap, 'admin-records'), 'agent-abc\n');
+  fs.writeFileSync(path.join(snap, 'worktrees'), 'agent-abc\n');
+  fs.writeFileSync(path.join(d, 'worktrees-left'), 'agent-abc\n');
+  fs.writeFileSync(path.join(d, 'worktree-list'), `worktree ${root}/repo\nHEAD bbbb\nbranch refs/heads/main\n`);
+  fs.writeFileSync(path.join(d, 'branches'), 'main\nworktree-agent-abc\n');
+  fs.writeFileSync(path.join(d, 'labels'), '["main-call"]\n');
+  fs.writeFileSync(path.join(d, 'notes'), '');
+  return d;
+}
+const sanitize = (raw: string, out: string): { status: number | null; stdout: string; stderr: string } => {
+  const r = spawnSync(process.execPath, [SANITIZE, raw, out], { encoding: 'utf8' });
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+};
+
+describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => {
+  const ROOT = '/tmp/ccrc-dlg-rig.Ab12Cd';
+  const MUNGED = ROOT.replace(/[^A-Za-z0-9]/g, '-');
+  const leakRun = (payload: object): { status: number | null; stderr: string; written: string[] } => {
+    const raw = mkTmp('ccrc-dlg-raw.');
+    const out = mkTmp('ccrc-dlg-fix-');
+    rawBundle(raw, ROOT, '2.1.999', 'leak', [['Stop', 1, { hook_event_name: 'Stop', ...payload }]]);
+    const r = sanitize(raw, out);
+    return { status: r.status, stderr: r.stderr, written: fs.readdirSync(out) };
+  };
+
+  it('replaces the run root, its munged form and the binaries directory; orders events; keeps shas and snapshots', () => {
+    const raw = mkTmp('ccrc-dlg-raw.');
+    const out = mkTmp('ccrc-dlg-fix-');
+    rawBundle(raw, ROOT, '2.1.999', 'agent-plain', [
+      ['SubagentStart', 20, { hook_event_name: 'SubagentStart', agent_id: 'abc', cwd: `${ROOT}/repo` }],
+      ['SessionStart', 10, { hook_event_name: 'SessionStart', session_id: 's', cwd: `${ROOT}/repo`,
+        transcript_path: `${ROOT}/fixhome/cfg/projects/${MUNGED}-repo/s.jsonl`, sink: '/dev/null', git: '/usr/bin/git',
+        bin: '/opt/fake-claude/versions/2.1.999' }],
+    ]);
+    const r = sanitize(raw, out);
+    expect(r.status, r.stderr).toBe(0);
+    const text = fs.readFileSync(path.join(out, '2.1.999', 'agent-plain.json'), 'utf8');
+    for (const bad of ['ccrc-dlg-rig', '/tmp/', '/opt/']) expect(text.includes(bad), bad).toBe(false);
+    const f = JSON.parse(text);
+    expect(f).toMatchObject({ v: 1, version: '2.1.999', scenario: 'agent-plain', labels: ['main-call'], notes: [] });
+    expect(f.events.map((e: { event: string; seq: number; dtMs: number }) => [e.event, e.seq, e.dtMs])).toEqual([['SessionStart', 1, 0], ['SubagentStart', 2, 10]]);
+    expect(f.events[0].payload).toMatchObject({ transcript_path: '/rig/fixhome/cfg/projects/-rig-repo/s.jsonl', sink: '/dev/null', git: '/usr/bin/git', bin: '/rig/versions/2.1.999' });
+    expect(f.events[1].payload.cwd).toBe('/rig/repo');
+    expect(f.disk.admin['agent-abc']).toEqual({ files: ['CLAUDE_BASE', 'HEAD', 'gitdir', 'logs'], gitdir: '/rig/repo/.claude/worktrees/agent-abc/.git',
+      head: 'aaaa', claudeBase: 'bbbb', locked: false, firstLogSha: 'bbbb' });
+    expect(Object.keys(f.disk.metas)).toEqual(['cfg/-rig-repo/uuid-1/subagents/agent-abc.meta.json']);
+    expect(f.disk.snapshots).toEqual({ 'before-kill': { adminRecords: ['agent-abc'], worktrees: ['agent-abc'] } });
+    expect(f.disk.worktreesLeft).toEqual(['agent-abc']);
+  });
+
+  it('fails closed on residue: exit 1, the finding named by place not value, and NOTHING written', () => {
+    const raw = mkTmp('ccrc-dlg-raw.');
+    const out = mkTmp('ccrc-dlg-fix-');
+    rawBundle(raw, ROOT, '2.1.999', 'clean', [['Stop', 1, { hook_event_name: 'Stop' }]]);
+    rawBundle(raw, ROOT, '2.1.999', 'dirty', [['Stop', 1, { hook_event_name: 'Stop', cwd: '/home/someone-else/x' }]]);
+    const r = sanitize(raw, out);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('2.1.999/dirty /events/0/payload/cwd');
+    expect(r.stderr).not.toContain('someone-else');
+    expect(fs.readdirSync(out)).toEqual([]);
+  });
+
+  it('treats any absolute path outside /rig, /usr, /bin and /dev/null as residue, and a key-shaped string too', () => {
+    for (const leak of ['/mnt/vol-0000/acme', '/srv/box/x', '/dev/shm/x', '/devnull', 'sk-ant-xyz']) {
+      const r = leakRun({ note: leak });
+      expect(r.status, leak).toBe(1);
+      expect(r.stderr, leak).toContain('2.1.999/leak /events/0/payload/note');
+      expect(r.stderr, leak).not.toContain(leak);
+      expect(r.written, leak).toEqual([]);
+    }
+  });
+
+  it('names a leaking KEY by its index, never its text', () => {
+    // Each leaking key carries residue in its VALUE too: the value's own pointer runs THROUGH the key's
+    // segment, so a pointer that printed the key's text would show it there. The second key is a
+    // plain-NAME-shaped secret (it passes the segment pattern; only the residue test keeps it out).
+    const r = leakRun({ tool_response: { '/home/someone-else/acme-client': '/srv/x', 'sk-ant-leakkey': '/srv/y' } });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('2.1.999/leak /events/0/payload/tool_response/#0 (key)');
+    expect(r.stderr).toContain('2.1.999/leak /events/0/payload/tool_response/#1 (key)');
+    expect(r.stderr).toContain('2.1.999/leak /events/0/payload/tool_response/#0\n');
+    expect(r.stderr).toContain('2.1.999/leak /events/0/payload/tool_response/#1\n');
+    expect(r.stderr).not.toContain('someone-else');
+    expect(r.stderr).not.toContain('leakkey');
+    expect(r.written).toEqual([]);
+  });
+
+  it('treats a path joined after a colon as residue (a PATH-like value), and writes nothing', () => {
+    for (const leak of ['/usr/bin:/home/someone-else/.local/bin', '/usr/bin:/bin:/mnt/vol-0000/tools', 'PATH=/usr/bin:/srv/box/bin', '/usr/bin::/srv/box/bin']) {
+      const r = leakRun({ env_path: leak });
+      expect(r.status, leak).toBe(1);
+      expect(r.stderr, leak).toContain('2.1.999/leak /events/0/payload/env_path');
+      expect(r.stderr, leak).not.toContain('someone-else');
+      expect(r.written, leak).toEqual([]);
+    }
+    // the allowed spellings still pass when colon-joined
+    const ok = leakRun({ env_path: '/usr/bin:/bin:/rig/versions' });
+    expect(ok.status, ok.stderr).toBe(0);
+  });
+
+  it('munges BOTH spellings of the run root (the root file holds the run root and its physical path)', () => {
+    const PHYS = '/mnt/vol-0000/tmp/ccrc-dlg-rig.Ab12Cd';
+    const PHYS_MUNGED = PHYS.replace(/[^A-Za-z0-9]/g, '-');
+    const raw = mkTmp('ccrc-dlg-raw.');
+    const out = mkTmp('ccrc-dlg-fix-');
+    const d = rawBundle(raw, ROOT, '2.1.999', 'two-spellings', [['Stop', 1, {
+      hook_event_name: 'Stop', cwd: `${PHYS}/repo`, transcript_path: `${PHYS}/fixhome/cfg/projects/${PHYS_MUNGED}-repo/s.jsonl`, other: `${ROOT}/repo`,
+    }]]);
+    fs.writeFileSync(path.join(d, 'root'), `${ROOT}\n${PHYS}\n`);
+    const r = sanitize(raw, out);
+    expect(r.status, r.stderr).toBe(0);
+    const f = JSON.parse(fs.readFileSync(path.join(out, '2.1.999', 'two-spellings.json'), 'utf8'));
+    expect(f.events[0].payload).toEqual({ hook_event_name: 'Stop', cwd: '/rig/repo', transcript_path: '/rig/fixhome/cfg/projects/-rig-repo/s.jsonl', other: '/rig/repo' });
+  });
+
+  it.skipIf(os.userInfo().username.length < 4)('fails closed on the running user\'s name as a whole word', () => {
+    const r = leakRun({ note: `x-${os.userInfo().username}-y` });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('2.1.999/leak /events/0/payload/note');
+    expect(r.written).toEqual([]);
+  });
+
+  it('refuses missing arguments with exit 2', () => {
+    expect(spawnSync(process.execPath, [SANITIZE], { encoding: 'utf8' }).status).toBe(2);
+  });
+});
