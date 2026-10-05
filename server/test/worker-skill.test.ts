@@ -719,19 +719,24 @@ describe('the stop clause names only wakes that wake (stall watch spec §6.2)', 
   // review 262 F3; the rows are D-3806's). Closed: a comma; a semicolon; an `or`
   // or `and` before a determiner (a, an, any, the, your, one, another, other,
   // some, every, each, its); an `or` or `and` before a bare plural ("or
-  // background jobs you started"); and any coordination after a background
-  // member's kinds, which the tail anchor on the `bg` shape refuses (no `or`,
-  // `and` or `background` after the kinds and the `you`, `that` or `which`
-  // word). So a wake joined in any of those ordinary ways must match a member
-  // shape on its own. The list splits on every comma, so kinds inside one
-  // background member are joined by `or` or `and` only, with no determiner: "a
-  // background agent, workflow or teammate" leaves a bare "a background agent"
-  // that matches no member shape, and reds on purpose. Not closed, known
-  // evasions, and the stated line (the coordinator rules no further chasing): a
-  // modifier clause after "asks" inside the mail member; a coordination before
-  // "asks" ("a mail or reminder you set that asks for an answer"); a `. ` inside
-  // a member, or a new sentence after the list, because wakeMembers and the S3
-  // row both stop at the first `. `.
+  // background jobs you started"); and an `or`, `and` or `background` after a
+  // background member's kinds, which the tail anchor on the `bg` shape refuses
+  // (none of the three may follow the `you`, `that` or `which` word). So a wake
+  // joined in any of those ordinary ways must match a member shape on its own.
+  // The anchor fails closed: a legitimate `and`, `or` or `background` in that
+  // tail reds too, so a rewording of that member must avoid those three words.
+  // The list splits on every comma, so kinds inside one background member are
+  // joined by `or` or `and` only, with no determiner: "a background agent,
+  // workflow or teammate" leaves a bare "a background agent" that matches no
+  // member shape, and reds on purpose. Not closed, known evasions, and the
+  // stated line (the coordinator rules no further chasing): any text after
+  // "asks" in the mail member that the split does not cut, such as "or all
+  // background jobs", "or until a timer fires", or a capitalised determiner
+  // (the split is case-sensitive); a coordination before "asks" ("a mail or
+  // reminder you set that asks for an answer"); other joins after a background
+  // member's kinds, such as "plus" or "as well as"; a `. ` inside a member, or
+  // a new sentence after the list, because wakeMembers and the S3 row both stop
+  // at the first `. `.
   const wakeMembers = (line: string): string[] => {
     const colon = line.indexOf(': ');
     const list = line.slice(colon + 2, line.indexOf('. ', colon));
