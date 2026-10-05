@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=61f92d23118b1e2d750221a8fd2bc5affea9caaeb76751c72f0f576bf67a0f77
+# ccrc:generated 1 sha256=f61809679a4484f6ae24ad52f5eb43376f008f9c82cce9b795009e31efecedc3
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1772,7 +1772,7 @@ _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
 
 _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: touch/rm $REG/<w>-disabled
 # The auth-dead verdict, in `swapblocked`'s `"<epoch> <reason>"` format. WRITTEN BY
-# `ccd-account-health` on a 401 (ccd itself makes no outbound call) and by a rescue off
+# `ccd-account-health` on a 401 (ccd's own outbound calls: git fetch/push, gh) and by a rescue off
 # this process's own 401 (D-3522); CLEARED by that probe on a 403 and by an operator `rm`;
 # EXPIRED here once the account's credential file changes (`_authdead_cred_changed`,
 # D-3524), and at `_spawn_settle` rc 0 on that rule, or outright where ccd names none.
@@ -5593,7 +5593,7 @@ except Exception:
     sys.exit(1)'
 }
 
-_pr_py() {   # mode [args…]; stdin = the gh rows JSON. The ONE embedded helper.
+_pr_py() {   # mode [args…]; stdin = the gh rows JSON. One of ccd's embedded helpers; _docs_py is another.
   # Embedded rather than a sibling file on purpose: ~/.local/bin/ccd is a COPY,
   # so a second file is a second deployment step and a new failure mode in
   # which `ccd caps` advertises a verb whose helper is missing.
@@ -8624,6 +8624,11 @@ EOF
   echo child-argv-v1
   # child reclamation (wave 3): see "RECLAIM-V1" in the RECLAIM region
   echo reclaim-v1
+  echo docs-tree
+  echo docs-show
+  echo docs-fetch
+  echo docs-index
+  echo docs-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -28316,6 +28321,348 @@ for raw in sys.stdin.read().split('\n'):
 PY
 }
 
+# ── DOCS: the four docs verbs (spec 2026-10-01 §2) ──────────────────────────
+# `docs-index`, `docs-tree` and `docs-show` are read-only views of a project's
+# four docs sections; `docs-fetch` moves ONE remote-tracking ref. Each verb is a
+# bash front over one embedded python helper, `_docs_py`, and the front does
+# three things, in this order and nothing else (spec §2 (a) Shape):
+#   1. the exact arity and flag-order check, the `--max-bytes` grammar included.
+#      A bad shape is `die "usage: ccd docs-..."`: rc 1 and an EMPTY stdout, the
+#      server-bug class, because only the server's own builders write these argvs;
+#   2. the python floor probe (`_docs_front`). When python3 cannot run it, the
+#      front prints the one fixed `helper-unavailable` line and answers rc 0;
+#   3. `_docs_py`, with ccd's three roots in front of the verb's own tokens.
+# The helper validates every VALUE, by fixed index from the shape checked here,
+# so `--project -h` is a project named `-h`, which its grammar then refuses.
+
+_docs_max_bytes_ok() {   # N -> 0 iff [1-9][0-9]{0,7} (local LC_ALL=C)
+  local LC_ALL=C
+  [[ "${1-}" =~ ^[1-9][0-9]{0,7}$ ]]
+}
+
+_docs_front() {   # verb -> 0 when python3 >= 3.8 answers; else prints the one fixed line, returns 1
+  # The python floor's ONE definition (spec §7.2). The probe's own exit 3 means
+  # "older than 3.8"; any other non-zero (127 for command-not-found, a broken
+  # interpreter, a signal) means python3 cannot run this line, so it cannot run
+  # the helper either. The line written on failure needs no quoting, so writing
+  # it needs no python: one fixed format, filled with the verb (a literal at each
+  # call site) and one of two detail words.
+  local rc=0
+  python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 3)' </dev/null >/dev/null 2>&1 || rc=$?
+  (( rc == 0 )) && return 0
+  local why=python-missing
+  (( rc == 3 )) && why=python-too-old
+  printf '{"v":1,"verb":"%s","ok":false,"elapsedMs":0,"failure":"helper-unavailable","detail":"%s"}\n' "$1" "$why"
+  return 1
+}
+
+cmd_docs_index() {   # --all; every project under ccd's projects root, as one JSON line
+  [[ $# -eq 1 && "${1-}" == --all ]] || die "usage: ccd docs-index --all"
+  _docs_front docs-index || return 0
+  _docs_py docs-index "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
+}
+
+cmd_docs_tree() {   # --project P [--ref R]; one project's four sections at one ref, with its drafts
+  [[ "${1-}" == --project && ( $# -eq 2 || ( $# -eq 4 && "${3-}" == --ref ) ) ]] \
+    || die "usage: ccd docs-tree --project P [--ref R]"
+  _docs_front docs-tree || return 0
+  _docs_py docs-tree "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
+}
+
+cmd_docs_show() {   # --project P (--commit C --ref R | --draft-branch B --head H) --section S --path X [--fingerprint F] --max-bytes N
+  # The third token picks the mode, and each mode has exactly one shape: 12
+  # tokens for a committed pin, 14 for a draft pin. N is the class cap the
+  # server chose; the helper enforces min(N, its own ceiling).
+  local shape=bad
+  if [[ $# -eq 12 && "${1-}" == --project && "${3-}" == --commit && "${5-}" == --ref \
+        && "${7-}" == --section && "${9-}" == --path && "${11-}" == --max-bytes ]]; then
+    shape=committed
+  elif [[ $# -eq 14 && "${1-}" == --project && "${3-}" == --draft-branch && "${5-}" == --head \
+          && "${7-}" == --section && "${9-}" == --path && "${11-}" == --fingerprint \
+          && "${13-}" == --max-bytes ]]; then
+    shape=draft
+  fi
+  [[ "$shape" != bad ]] && _docs_max_bytes_ok "${@: -1}" \
+    || die "usage: ccd docs-show --project P (--commit C --ref R | --draft-branch B --head H) --section S --path X [--fingerprint F] --max-bytes N"
+  _docs_front docs-show || return 0
+  _docs_py docs-show "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
+}
+
+cmd_docs_fetch() {   # --project P [--branch B]; fetch ONE branch from origin into refs/remotes/origin/<b>
+  [[ "${1-}" == --project && ( $# -eq 2 || ( $# -eq 4 && "${3-}" == --branch ) ) ]] \
+    || die "usage: ccd docs-fetch --project P [--branch B]"
+  _docs_front docs-fetch || return 0
+  _docs_py docs-fetch "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
+}
+
+_docs_py() {   # verb projects_root worktrees_root reg [verb argv...]; the Docs helper (spec 2026-10-01 §2)
+  # Embedded for `_pr_py`'s reason: ~/.local/bin/ccd is a COPY, so a sibling
+  # file would be a second deployment step, and a way for `ccd caps` to
+  # advertise `docs-v1` while its helper is missing. The program is on fd 3, so
+  # stdin stays the caller's (always /dev/null here). The roots arrive from
+  # ccd's own constants; the helper never reads HOME. The opener and the
+  # terminator below are each one whole line, and unique in this file:
+  # `server/test/docsHelperPy.ts` extracts the program between them.
+  python3 /dev/fd/3 "$@" 3<<'DOCS_PY'
+# ===== docs: header =====
+# The Docs helper (spec 2026-10-01, section 2): one python process per docs
+# verb call. ccd's bash front checked the argv's SHAPE; this program validates
+# every VALUE by fixed index, runs every git call, and writes the verb's one
+# JSON line once, at the end. Python 3.8 syntax, the standard library only,
+# ASCII only. Importing this file runs nothing and reads nothing (no I/O, no
+# environment, no argv) until main(), under the guard at the bottom. Each
+# section starts at its marker line; a later section's code goes right after
+# its own marker, before the next one.
+import json
+import os
+import re
+import sys
+import time
+import traceback
+
+# A failure's `detail` is at most 2 KiB on the wire, and helper-failed's at
+# most 512 B (spec section 2 (b)). Both are redacted BEFORE they are cut, so a
+# cut can never split a secret the redactor would otherwise have matched.
+DETAIL_MAX_BYTES = 2048
+HELPER_FAILED_DETAIL_MAX_BYTES = 512
+
+# The parity block: one single-line NAME= literal per value shared/docs.ts also
+# declares, each compared with its TS twin by docs-parity.test.ts, in both
+# directions. Nothing but those literals and comments goes between the markers.
+# docs-parity: begin
+# FAILURES is DOCS_CCD_FAILURES: every word a ccd docs answer may carry.
+FAILURES=frozenset({'bad-project','bad-ref','bad-commit','bad-section','bad-path','bad-fingerprint','unknown-project','not-a-git-repo','linked-worktree','shared-repo','partial-clone','repo-unreadable','no-default-branch','unresolved-ref','ref-not-commit','unknown-commit','not-a-commit','object-missing','absent-path','not-a-file','symlink-in-path','too-large','too-many-entries','unreadable-path','worktree-gone','ambiguous-worktree','untrusted-worktree','worktree-moved','draft-changed','remote-absent','remote-branch-absent','fetch-auth-failed','fetch-rejected-objects','fetch-transport','ref-locked','fetch-too-soon','fetch-timeout','fetch-failed','git-failed','git-timeout','helper-unavailable','helper-failed'})
+# REDACT_RULES is DOCS_REDACT_RULES: (pattern, suffix), applied in order and
+# globally; a match becomes its group 1 (when the pattern has one), then suffix.
+REDACT_RULES=((r'(://)[^/@\t\n\v\f\r ]+@','***@'),(r'([?&](?:access_token|token)=)[^&\t\n\v\f\r ]+','***'),(r'(gh[opsu]_)[A-Za-z0-9]{20,}','***'),(r'[^\n]*Authorization:[^\n]*','Authorization: ***'))
+# docs-parity: end
+
+# ===== docs: core =====
+class Sys(object):
+    """Every clock read goes through the module-global SYS, and from the
+    runner on every syscall and spawn does too, so a unit swaps H.SYS for a
+    subclass that overrides one method instead of reaching for a test flag."""
+
+    def monotonic(self):
+        """Seconds on the monotonic clock: deadlines and elapsedMs."""
+        return time.monotonic()
+
+    def now_ms(self):
+        """Wall-clock epoch milliseconds: stamp ages."""
+        return int(time.time() * 1000)
+
+
+SYS = Sys()
+
+# The keys run() writes itself, in this order, on every answer. A Fail may not
+# carry one in its context, and a verb body's copy of one is ignored.
+RESERVED_KEYS = ('v', 'verb', 'ok', 'elapsedMs', 'failure')
+
+
+class Fail(Exception):
+    """A classified failure: `word` is one of FAILURES, and `ctx` holds the
+    word's context fields, which run() writes after `failure`, in order."""
+
+    def __init__(self, word, ctx=None):
+        if word not in FAILURES:
+            raise ValueError('not a ccd docs failure word: %r' % (word,))
+        ctx = dict(ctx or {})
+        owned = sorted(k for k in ctx if k in RESERVED_KEYS)
+        if owned:
+            raise ValueError('a failure context may not set %s' % ', '.join(owned))
+        Exception.__init__(self, word)
+        self.word = word
+        self.ctx = ctx
+
+
+def fail(word, **ctx):
+    """Raise the Fail for `word`, with `ctx` as its context fields. Call sites
+    write `raise fail(...)`, which reads as what happens; this raises first."""
+    raise Fail(word, ctx)
+
+
+REDACTORS = tuple((re.compile(pattern), suffix) for pattern, suffix in REDACT_RULES)
+
+
+def redact(s):
+    """`s` with every REDACT_RULES match replaced: each rule in order, every
+    match, by its group 1 (when the pattern has one) followed by the suffix.
+    Idempotent. It runs over every string taken from stderr or a traceback;
+    shared/docs.ts's redactDocsText is its twin, run again by the server."""
+    for rx, suffix in REDACTORS:
+        if rx.groups:
+            s = rx.sub(lambda m, x=suffix: m.group(1) + x, s)
+        else:
+            s = rx.sub(lambda m, x=suffix: x, s)
+    return s
+
+
+def clip_utf8(s, limit):
+    """At most `limit` UTF-8 bytes of `s`, cut on a code point boundary. A
+    code point UTF-8 cannot carry (a lone surrogate from a decoded stderr)
+    becomes '?' first, because the wire is strict UTF-8."""
+    return s.encode('utf-8', 'replace')[:limit].decode('utf-8', 'ignore')
+
+
+def line_of(obj):
+    """The answer's one line, without its newline: compact JSON, written with
+    ensure_ascii=False, as strict UTF-8 bytes."""
+    return json.dumps(obj, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
+
+
+def framed_len(line):
+    """The line's length in bytes once the agent JSON-encodes it as one
+    string inside its frame (spec section 2 (b)): the measure the listing and
+    show guards apply, never the raw length."""
+    if isinstance(line, bytes):
+        line = line.decode('utf-8')
+    return len(json.dumps(line, ensure_ascii=False).encode('utf-8'))
+
+# ===== docs: grammar =====
+
+# ===== docs: runner =====
+
+# ===== docs: discovery =====
+
+# ===== docs: refs =====
+
+# ===== docs: listing =====
+
+# ===== docs: stamps =====
+
+# ===== docs: index =====
+def verb_index(ctx, a):
+    raise NotImplementedError('docs-index')
+
+# ===== docs: holders =====
+
+# ===== docs: drafts =====
+
+# ===== docs: tree =====
+def verb_tree(ctx, a):
+    raise NotImplementedError('docs-tree')
+
+# ===== docs: show =====
+def verb_show(ctx, a):
+    raise NotImplementedError('docs-show')
+
+# ===== docs: fetch =====
+def verb_fetch(ctx, a):
+    raise NotImplementedError('docs-fetch')
+
+# ===== docs: entry =====
+# The verbs, by the name ccd's front passes first. A unit swaps one entry to
+# make run() reach a stand-in body.
+VERBS = {'docs-index': verb_index, 'docs-tree': verb_tree, 'docs-show': verb_show, 'docs-fetch': verb_fetch}
+
+# The verbs whose ok answer is a listing, bounded by guard_listing.
+LISTING_VERBS = ('docs-index', 'docs-tree')
+
+
+def elapsed_ms(t0):
+    """Whole milliseconds since t0 (a SYS.monotonic() reading), or 0 when
+    there is no reading or the clock cannot be read again: an answer never
+    fails for want of a duration."""
+    if t0 is None:
+        return 0
+    try:
+        return max(0, int((SYS.monotonic() - t0) * 1000))
+    except Exception:
+        return 0
+
+
+def envelope(verb, t0, ok):
+    """{v, verb, ok, elapsedMs}, in that order: every answer's first keys."""
+    return {'v': 1, 'verb': verb, 'ok': ok, 'elapsedMs': elapsed_ms(t0)}
+
+
+def failure_line(verb, t0, f):
+    """A classified failure's line: the envelope, `failure`, then f's context
+    in its own order. `detail` is redacted and then cut to 2 KiB, and
+    `stderrHead` is redacted, whoever built them; a detail of None is left out."""
+    obj = envelope(verb, t0, False)
+    obj['failure'] = f.word
+    for k, v in f.ctx.items():
+        if k == 'detail':
+            if v is None:
+                continue
+            v = clip_utf8(redact(str(v)), DETAIL_MAX_BYTES)
+        elif k == 'stderrHead' and isinstance(v, str):
+            v = redact(v)
+        obj[k] = v
+    return line_of(obj)
+
+
+def helper_failed_line(verb, t0, exc):
+    """helper-failed (spec section 2 (b)): the exception's last traceback line,
+    redacted, then cut to 512 B. Built from strings alone, so it cannot fail."""
+    try:
+        last = traceback.format_exception_only(type(exc), exc)[-1].rstrip('\n')
+    except Exception:
+        last = type(exc).__name__
+    obj = envelope(verb, t0, False)
+    obj['failure'] = 'helper-failed'
+    obj['detail'] = clip_utf8(redact(last), HELPER_FAILED_DETAIL_MAX_BYTES)
+    return line_of(obj)
+
+
+def run(argv):
+    """The whole answer for argv = [verb, projects_root, worktrees_root, reg,
+    then the verb's own tokens] (main() passes sys.argv[1:]), as the bytes
+    main() writes: one line WITH its newline. It never raises: a Fail is its
+    own failure line and anything else is helper-failed. An argv naming no
+    docs verb gets b'', which main() turns into rc 2 with nothing written; the
+    bash front never sends one.
+
+    Ctx and read_args (the grammar section) build the context and the verb's
+    arguments; guard_listing(obj, line) bounds every ok docs-tree and
+    docs-index answer, and guard_show(line) every ok docs-show answer. Each is
+    looked up by name when run() reaches it, and each guard takes the line
+    WITHOUT its newline and returns the line to write, also without it."""
+    verb = argv[0] if len(argv) > 0 else None
+    if not isinstance(verb, str) or verb not in VERBS:
+        return b''
+    t0 = None
+    try:
+        t0 = SYS.monotonic()
+        if len(argv) < 4:
+            raise RuntimeError('docs argv contract: the three roots are missing')
+        ctx = Ctx(verb, argv[1], argv[2], argv[3], t0)
+        a = read_args(verb, argv[4:])
+        body = VERBS[verb](ctx, a)
+        obj = envelope(verb, t0, True)
+        for k in body:
+            if k not in RESERVED_KEYS:
+                obj[k] = body[k]
+        line = line_of(obj)
+        if verb in LISTING_VERBS:
+            line = guard_listing(obj, line)
+        elif verb == 'docs-show':
+            line = guard_show(line)
+        return line + b'\n'
+    except Fail as f:
+        try:
+            return failure_line(verb, t0, f) + b'\n'
+        except Exception as e:
+            return helper_failed_line(verb, t0, e) + b'\n'
+    except BaseException as e:
+        return helper_failed_line(verb, t0, e) + b'\n'
+
+
+def main():
+    """The one write to stdout: rc 0 with exactly one line, or rc 2 with
+    nothing when argv names no docs verb."""
+    out = run(sys.argv[1:])
+    if not out:
+        sys.exit(2)
+    sys.stdout.buffer.write(out)
+
+
+if __name__ == '__main__':
+    main()
+DOCS_PY
+}
+
 # Guard so the script can be `source`d by tests without running a command.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 case "${1:-}" in
@@ -28352,7 +28699,11 @@ case "${1:-}" in
   route)     shift; cmd_route "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
+  docs-index) shift; cmd_docs_index "$@" ;;
+  docs-tree)  shift; cmd_docs_tree "$@" ;;
+  docs-show)  shift; cmd_docs_show "$@" ;;
+  docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-hold|ws-release|coord-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-hold|ws-release|coord-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

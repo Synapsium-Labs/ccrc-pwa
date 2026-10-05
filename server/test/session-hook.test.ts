@@ -8269,6 +8269,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // RE-MEASURED against the tree, never adjusted to keep a number green;
       // no rule changed, so no D-number (S6-R11).
       // 148 at the composition onto `0ffa07f3` (M 147, C 149): the note above the map names the movers.
+      // DOCS W1a (Task 6) leaves this at 147, and the COMPOSITION is empty:
+      // nothing enters and nothing leaves (measured by `cite-remeasure.py`
+      // against the pre-task tree, `ENTERED []`, `LEFT []`). The five
+      // `echo docs-*` caps lines at `:8627` slid every `ccd/ccd` line below
+      // them down five, and the whole-corpus census did not notice: only the
+      // `|`-row pass moved (argued beside its array). The docs block, the four
+      // arms and the usage edit sit below every corpus anchor, and the two
+      // comment edits above them keep their line counts. Both corpus
+      // documents are byte-identical to `origin/main`, so nothing is
+      // re-pointed. S6-R11, no D-number.
       'ccd/ccd': 147,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
@@ -8560,6 +8570,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // (`ccd/ccd`); the note above the map names every mover and its one cause.
     // -> 196 at the composition onto `a742eb6a` (S6-R11): N's 195 + 1 (`ccd/ccd`, C's platform helpers), equal to
     // C's 196, because N's one mover (`ccd/ccrc:5217`) already fails in C; the note above the map names them.
+    // 197 -> 197 at docs W1a (Task 6), by the census's own arithmetic: no key
+    // moved (argued beside the map, above the `'ccd/ccd'` entry).
     expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(197);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
@@ -9280,6 +9292,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // `:5819-5823`) and FOUR LEAVE (`:13650-13652`, `:4046`, `:8609`,
         // `:4642-4653`). None is re-pointed: the rows live in the two frozen
         // documents. S6-R11 covers the re-measurement, so no D-number.
+        // RE-MEASURED at docs W1a (Task 6), 52 -> 54, FROM THE SAME RUN as the
+        // site-level set below, which does not move (35 -> 35). Two ENTER
+        // (`ccd/ccd:11669` and `ccd/ccd:13650-13652`) and none leave: the five
+        // `echo docs-*` caps lines at `:8627` moved the bytes under both
+        // anchors, and nothing else above the corpus's anchors changed length.
+        // The whole-corpus map above is unmoved by the same shift (its
+        // composition is empty), which is visibility moving between passes,
+        // not debt appearing. Nothing was re-pointed (both corpus documents
+        // are byte-identical to `origin/main`). S6-R11 covers the
+        // re-measurement, so no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9288,6 +9310,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:5797',
         'ccd/ccd:7568',
         'ccd/ccd:11025',
+        'ccd/ccd:11665-11670',
+        'ccd/ccd:11669',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
         'ccd/ccd:13567',
@@ -9299,6 +9323,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:19131',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
+        'ccd/ccd:13650-13652',
         'ccd/ccd:12032-12034',
         'ccd/ccd:5810-5811',
         'ccd/ccd:12032-12034',
@@ -9319,7 +9344,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
         'ccd/ccd:13573-13575',
-        'ccd/ccd:11665-11670',
         'ccd/ccd:13601-13666',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
@@ -9456,6 +9480,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // Twin: 40 -> 35. Entered: `spec:2125 ccd/ccd:13673`. Left: `spec:2124 ccd/ccd:3037-3089`, `spec:2124
       // ccd/ccd:3038`, `spec:2220 ccd/ccd:3070` x3, `spec:2222 ccd/ccd:5385-5388`. Measured by diffing the dumped
       // failure sets of the two trees, never retyped. No D-number.
+      // RE-MEASURED at docs W1a (Task 6), 35 -> 35, FROM THE SAME RUN as the
+      // row-pass set above. Nothing enters and nothing leaves: the two moves
+      // there (`ccd/ccd:11669`, `ccd/ccd:13650-13652`) have no mirror here,
+      // because no other pass reaches those sites, which is what this list
+      // measures. The cause there is the five `echo docs-*` caps lines at
+      // `:8627`; nothing re-pointed. S6-R11 covers it, so no D-number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',

@@ -69,3 +69,190 @@ describe('M7.3 (TS half): one DOCS_PAGE_PREFIX across the four TS roots', () => 
       .toMatch(/^export const DOCS_PAGE_PREFIX = '\/docs';$/m);
   });
 });
+
+// ---- Task 6: the helper's FAILURES and REDACT_RULES (row 48), one redactor in two languages (row 62, helper
+// half), and the helper source's hygiene (spec 2026-10-01 section 2 (a) Shape, (b) exit contract and One redactor,
+// section 7.2) ----
+// The python side is the SHIPPED helper, extracted out of ccd/ccd's heredoc and imported as a module (`unitJson`).
+// Aliased imports: this block sits below the file's own imports, so it binds no local name those may already bind.
+// It reuses the module scope's `readFileSync` and `path`; ccd/ccd's own path is `CCD`, never spelled here
+// (`single-definition.test.ts`, "one path to the ccd script").
+import { afterAll as afterAllT6 } from 'vitest';
+import { spawnSync as spawnSyncT6 } from 'node:child_process';
+import { writeFileSync as writeFileT6 } from 'node:fs';
+import {
+  DOCS_CCD_FAILURES as ccdFailuresT6, DOCS_REDACT_RULES as redactRulesT6, redactDocsText as redactTextT6,
+} from '../../shared/docs.js';
+import { CCD as ccdScriptT6, makeCcdHarness as harnessT6 } from './ccdWsHelpers.js';
+import { REAL_PYTHON3 as realPythonT6 } from './ccdDocsHelpers.js';
+import {
+  DOCS_PY_CLOSE as pyCloseT6, DOCS_PY_OPEN as pyOpenT6, docsHelperSource as helperSourceT6, pyLiteral as pyLiteralT6,
+  unitJson as unitJsonT6,
+} from './docsHelperPy.js';
+
+describe('the helper FAILURES and REDACT_RULES equal shared/docs.ts (row 48)', () => {
+  const h = harnessT6('ccd-docs-');
+  afterAllT6(() => h.cleanup());
+  /** Read when a case runs, never at collection: a missing helper reds these cases, not the file's others. */
+  const src = (): string => helperSourceT6();
+
+  it('FAILURES is exactly DOCS_CCD_FAILURES, as a set, in both directions', () => {
+    const py = unitJsonT6<string[]>(h.home, 'out(sorted(H.FAILURES))');
+    const ts: readonly string[] = ccdFailuresT6;
+    expect(new Set(ts).size, 'DOCS_CCD_FAILURES holds no word twice').toBe(ts.length);
+    expect(py.filter((w) => !ts.includes(w)), 'in the helper only').toEqual([]);
+    expect(ts.filter((w) => !py.includes(w)), 'in shared/docs.ts only').toEqual([]);
+    expect(py).toHaveLength(ts.length);
+  });
+
+  it('REDACT_RULES equals DOCS_REDACT_RULES, row by row and in order', () => {
+    const py = unitJsonT6<string[][]>(h.home, 'out([list(rule) for rule in H.REDACT_RULES])');
+    expect(py).toEqual(redactRulesT6.map(([pattern, suffix]) => [pattern, suffix]));
+  });
+
+  it('each is ONE single-line NAME= literal, between the docs-parity markers', () => {
+    expect(pyLiteralT6(src(), 'FAILURES')).toMatch(/^frozenset\(\{'[a-z-]+'(?:,'[a-z-]+')*\}\)$/);
+    expect(pyLiteralT6(src(), 'REDACT_RULES')).toMatch(/^\(\(r'.*'\)\)$/);
+    const lines = src().split('\n');
+    const begin = lines.indexOf('# docs-parity: begin');
+    const end = lines.indexOf('# docs-parity: end');
+    for (const name of ['FAILURES', 'REDACT_RULES']) {
+      const at = lines.findIndex((l) => l.startsWith(`${name}=`));
+      expect(at > begin && at < end, `${name} sits inside the block`).toBe(true);
+    }
+  });
+
+  it('CONTROL: pyLiteral counts a second binding in any spelling, and refuses one that is not canonical', () => {
+    expect(pyLiteralT6('A=1\nAB=2\nif A == 1:\n    B = A\n', 'A')).toBe('1');
+    expect(() => pyLiteralT6('A=1\n    A = 2\n', 'A')).toThrow(/bound 2 times/);
+    expect(() => pyLiteralT6('A=1\nA: int = 2\n', 'A')).toThrow(/bound 2 times/);
+    expect(() => pyLiteralT6('A=1\nA += 2\n', 'A')).toThrow(/bound 2 times/);
+    expect(() => pyLiteralT6('A=1\ndef A():\n    pass\n', 'A')).toThrow(/bound 2 times/);
+    expect(() => pyLiteralT6('A = 1\n', 'A')).toThrow(/not the single-line/);
+    expect(() => pyLiteralT6('B=1\n', 'A')).toThrow(/bound 0 times/);
+  });
+});
+
+describe('one redactor: the helper and shared/docs.ts agree over one corpus (row 62, helper half)', () => {
+  const h = harnessT6('ccd-docs-');
+  afterAllT6(() => h.cleanup());
+  // Token bodies are built at run time, so this public file never carries a contiguous token-shaped literal.
+  const BODY24 = 'A1b2'.repeat(6);
+  const CORPUS: readonly string[] = [
+    '',
+    'fatal: could not read from remote repository.',
+    'https://u:tok@example.invalid/x',
+    'fatal: unable to access https://u:tok@example.invalid/x.git/: 403',
+    'https://a:b@h1/ https://c:d@h2/',
+    'https://example.invalid/a/b@c',
+    'GET /x?access_token=abc&x=1',
+    'GET /x?a=1&token=z',
+    'GET /x?my_token=abc',
+    `remote: gho_${BODY24} rejected`,
+    `ghs_${BODY24} ghu_${BODY24} (ghp_${BODY24})`,
+    `ghp_${'a'.repeat(19)}`,
+    `ghx_${BODY24}`,
+    'Authorization: Basic xyz',
+    'before\n> Authorization: Bearer y\nafter',
+    'line1\r\nAuthorization: x\r\nline3',
+    'a https://u:p@h/x?token=t&access_token=q\nAuthorization: Bearer y\nz',
+    'https://u\u{001c}tok@h/x',
+    'https://u\u{00a0}tok@h/x',
+    'https://u\u{feff}tok@h/x',
+    'https://u\u{d800}tok@h/x',
+    'https://u tok@h/x',
+    'https://u\ttok@h/x',
+    'caf\u{00e9} https://\u{00e9}:\u{6587}@example.invalid/',
+  ];
+
+  it('H.redact and redactDocsText give every corpus string the same result', () => {
+    const file = path.join(h.home, 'redact-corpus.json');
+    writeFileT6(file, JSON.stringify(CORPUS));
+    const py = unitJsonT6<string[]>(h.home, [
+      'import json',
+      `C = json.load(open(${JSON.stringify(file)}, encoding='utf-8'))`,
+      'out([H.redact(s) for s in C])',
+    ].join('\n'));
+    const ts = CORPUS.map(redactTextT6);
+    expect(py).toHaveLength(CORPUS.length);
+    expect(CORPUS.filter((_s, i) => py[i] !== ts[i])).toEqual([]);
+    // Vacuity: the corpus exercises both outcomes, so agreement is not agreement to do nothing.
+    expect(CORPUS.filter((s, i) => ts[i] !== s).length).toBeGreaterThanOrEqual(12);
+    expect(CORPUS.filter((s, i) => ts[i] === s).length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('the helper\'s redactor is idempotent over the same corpus', () => {
+    const file = path.join(h.home, 'redact-idem.json');
+    writeFileT6(file, JSON.stringify(CORPUS));
+    const py = unitJsonT6<boolean[]>(h.home, [
+      'import json',
+      `C = json.load(open(${JSON.stringify(file)}, encoding='utf-8'))`,
+      'out([H.redact(H.redact(s)) == H.redact(s) for s in C])',
+    ].join('\n'));
+    expect(py).toEqual(CORPUS.map(() => true));
+  });
+});
+
+describe('the helper source: one write, python 3.8, ASCII, and its section markers (spec section 2 (a), (b), 7.2)', () => {
+  const h = harnessT6('ccd-docs-');
+  afterAllT6(() => h.cleanup());
+  /** Read when a case runs, never at collection: a missing helper reds these cases, not the file's others. */
+  const src = (): string => helperSourceT6();
+  /** The skeleton every later W1 task inserts its code after (one section each), in file order. */
+  const MARKERS = [
+    '# ===== docs: header =====', '# docs-parity: begin', '# docs-parity: end', '# ===== docs: core =====',
+    '# ===== docs: grammar =====', '# ===== docs: runner =====', '# ===== docs: discovery =====',
+    '# ===== docs: refs =====', '# ===== docs: listing =====', '# ===== docs: stamps =====',
+    '# ===== docs: index =====', '# ===== docs: holders =====', '# ===== docs: drafts =====',
+    '# ===== docs: tree =====', '# ===== docs: show =====', '# ===== docs: fetch =====', '# ===== docs: entry =====',
+  ];
+  const parse38 = (code: string) => spawnSyncT6(realPythonT6,
+    ['-c', 'import ast, sys; ast.parse(sys.stdin.read(), feature_version=(3, 8))'], { input: code, encoding: 'utf8' });
+
+  it('writes stdout in exactly one place, and never through print', () => {
+    expect(src().match(/\bsys\.stdout\b/g) ?? []).toHaveLength(1);
+    expect(src()).toMatch(/^ {4}sys\.stdout\.buffer\.write\(out\)$/m);
+    // Word-bounded: `valid_fingerprint(` (Task 7) ends in the same five letters and is not a call to print.
+    expect(src().match(/\bprint\(/g) ?? []).toEqual([]);
+  });
+
+  it('reads its argv by fixed index: no option-parsing library', () => {
+    expect(src()).not.toMatch(/\bargparse\b|\bgetopt\b|\ballow_abbrev\b/);
+  });
+
+  it('parses as python 3.8 (and CONTROL: the same check refuses a 3.10 match statement)', () => {
+    const r = parse38(src());
+    expect(r.status, r.stderr).toBe(0);
+    expect(parse38('match x:\n    case 1:\n        pass\n').status).not.toBe(0);
+    expect(src()).not.toMatch(/\.remove(?:prefix|suffix)\(|\bfunctools\.cache\b|\bzoneinfo\b/);
+  });
+
+  it('is pure ASCII', () => {
+    expect(src().split('\n').flatMap((l, i) => (/[^\x00-\x7f]/.test(l) ? [`${i + 1}: ${l}`] : []))).toEqual([]);
+  });
+
+  it('holds every section marker exactly once, in the skeleton\'s order', () => {
+    const lines = src().split('\n');
+    const at = MARKERS.map((m) => lines.flatMap((l, i) => (l === m ? [i] : [])));
+    expect(at.map((hits) => hits.length)).toEqual(MARKERS.map(() => 1));
+    const order = at.map((hits) => hits[0]!);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it('the opener and the terminator are each one whole line of ccd/ccd; the extractor refuses anything else', () => {
+    const ccd = readFileSync(ccdScriptT6, 'utf8').split('\n');
+    expect(ccd.filter((l) => l === pyOpenT6)).toHaveLength(1);
+    expect(ccd.filter((l) => l === pyCloseT6)).toHaveLength(1);
+    // CONTROL: planted texts.
+    expect(helperSourceT6(['x', pyOpenT6, 'import json', pyCloseT6, 'y'].join('\n'))).toBe('import json\n');
+    expect(() => helperSourceT6(['x', pyOpenT6, 'a', pyCloseT6, pyOpenT6, 'b'].join('\n'))).toThrow(/opener/);
+    expect(() => helperSourceT6(['x', pyOpenT6, 'a'].join('\n'))).toThrow(/terminator/);
+    expect(() => helperSourceT6(['x', pyOpenT6, '', pyCloseT6].join('\n'))).toThrow(/no program/);
+    expect(() => helperSourceT6(['x', pyCloseT6, 'a', pyOpenT6].join('\n'))).toThrow(/no program/);
+  });
+
+  it('importing the helper runs nothing, and VERBS names exactly the four verbs', () => {
+    expect(unitJsonT6<string[]>(h.home, 'out(sorted(H.VERBS))'))
+      .toEqual(['docs-fetch', 'docs-index', 'docs-show', 'docs-tree']);
+  });
+});
