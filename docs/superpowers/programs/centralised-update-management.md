@@ -1060,6 +1060,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       6G).** Neither box has moved 13 min in, which is within the 30-min catalogue poll. Watched to its end.
       - STATUS: fleet and server v0.0.84, newest v0.0.85, backups fleet 98M/server 510M, disk free fleet 107G/work
         volume 235G/server 33G, no anomalies.
+    - **2026-10-05 14:44 UTC — auto converged both boxes on v0.0.85 with no human act, the first unattended move since
+      the halt.** v0.0.85 was published at 14:14.
+      - **Fleet box:** it started about 14:36, within the catalogue poll, with `installing` at 14:36:28 and
+        `restarting` at 14:37:29. It was `done` at 14:42:32. The sweep (v0.0.84's `_upd_sweep` with v0.0.85's
+        script) verified 36 supervisors, all ordinary passes: no "stopped on purpose" and no "did not stay up". The
+        fleet runs 36 active supervisors now, against 71 at 12:23.
+      - **Server box:** `checking` at 14:43:33 and `done` at 14:44:03. `/health` answers v0.0.85.
+      - **The inventory settled at 14:44:52:** both rows read `idle`, `complete`, `verified`, "done: v0.0.85". As at
+        12:35, a read just after the server's restart caught its row `pending`/`incomplete` for one measurement.
+      - **Publish to converged:** 30 min.
+      - STATUS: fleet and server v0.0.85, newest v0.0.85, backups fleet 108M/server 513M, disk free fleet 105G/work
+        volume 235G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
