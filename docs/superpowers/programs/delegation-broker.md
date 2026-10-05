@@ -3,7 +3,7 @@
 Spec: `docs/superpowers/specs/2026-10-04-delegation-broker-design.md` (approved 2026-10-05, revisions R1–R9 included)
 Plans: `docs/superpowers/plans/2026-10-05-delegation-broker-wave1-measurement.md` (wave 1); waves 2–6 are planned one at
 a time from wave 1's measured fields, before each wave's run opens
-Home project: `ccrc-pwa`   Coordinator: named at wave 1's run-open (proposed: the session that wrote the spec)
+Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-soft-basin` (the session that wrote the spec; claimant of run 271)
 Workspace: **a fresh child per wave**
 
 **What this program is.** A coordinator that delegates through generic `Agent` / `Workflow` calls or a raw
@@ -18,7 +18,7 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | — | **planned** — plan written 2026-10-05 |
+| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | — | **run 271 open** (`planned`) since 2026-10-05 15:20 UTC; dispatches once this ledger's PR merges |
 | 2 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | wave 1's matrix and its real-lane cross-check | — | to plan once wave 1's measurement section is complete |
 | 3 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 2 | — | to plan |
 | 4 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 3 | — | to plan |
@@ -46,12 +46,17 @@ its own heading. Until both are here, nothing in waves 2–6 may depend on a hoo
 - **2026-10-05 — planning shape.** Wave 1 is planned in full now. Waves 2–6 are planned one at a time, each from the
   fields wave 1 measured, because the spec forbids a contract on an unmeasured field (§8.1). Each wave's plan is
   written and reviewed before its run opens.
+- **2026-10-05 — operator decision: the programme runs through ccrc** — wave 1 is dispatched as run 271 to a fresh
+  child worker executing subagent-driven, not run in the spec-writing session (§10). The operator approved merging
+  this ledger's docs PR once its checks are green.
 - **2026-10-05 — the parent incarnation field is already in the tree** (spec §5.1, §8.1 item 10): `$REG/<id>.generation`
   (D-2605) is minted once at row creation and never rewritten. The hook also sees it as `CCRC_SESSION_GENERATION`, but
   ccd does not set that on every spawn path, so later waves read the file. Wave 1 records this from source.
 
-Deviation numbers: none allocated yet. Each wave's block is minted at its run-open and recorded here in prose; no
-number is spelled as a `D-` token in this file until a plan defines it.
+Deviation numbers: each wave's block is minted at its run-open and recorded here in prose; no number is spelled as
+a `D-` token in this file until a plan defines it. **Wave 1 (run 271):** twenty numbers, 3992 through 4011, minted
+2026-10-05 15:20 UTC. The plan's ten slugs take the first ten in the order the plan lists them; the rest are for
+departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used stay unused; nothing re-issues them.
 
 ## Carried constraints
 
