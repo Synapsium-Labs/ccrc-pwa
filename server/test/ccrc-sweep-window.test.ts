@@ -644,15 +644,62 @@ describe('W21: a signal to the sweep\'s process group during a concurrent batch 
       expect(groups.length, `kill-log: ${log.join(' | ')}`).toBe(2);
       expect(new Set(groups).size, 'each job group is signalled once').toBe(2);
       for (const l of groups) expect(l).toMatch(/^-TERM -- -\d+$/);
-      // An INT is handled by the sweep's own trap, which stops the launcher (one TERM, by pid); a TERM has no handler.
+      // Whichever signal ended the run, `_upd_sweep_stop` (the INT handler's, or the exit chain's) stops the launcher
+      // once: it is past its loop, so a TERM by pid.
       const byPid = log.filter((x) => !x.startsWith('-TERM -- -'));
-      expect(byPid.length, `the INT handler stops the launcher once, a TERM does not: ${byPid.join(' | ')}`)
-        .toBe(sig === 'SIGINT' ? 1 : 0);
+      expect(byPid.length, `the launcher is stopped once: ${byPid.join(' | ')}`).toBe(1);
       for (const l of byPid) expect(l, 'the launcher, by pid').toMatch(/^-TERM \d+$/);
+      noPoison(box);
+    }, 60_000);
+
+  // THE LAUNCH LOOP: the signal lands while the launcher is still forking jobs (120 units; sent once 10 `.pid` files
+  // exist). A job forked but not yet recorded would be in a group of its own that nothing could find (D-3988).
+  // `TERM` to the GROUP is the one shape with a residue: the launcher itself is TERMed by the outside signal, at a
+  // random point of its loop, and a job forked in the instant before its `.pid` write is lost (measured 4 runs in 24,
+  // against 8 in 24 on the foreground launcher); that case does not assert survivors, it reaps them.
+  itLinux.each([
+    ['SIGINT', 'group', 130, true], ['SIGINT', 'shell', 130, true], ['SIGTERM', 'group', 143, false], ['SIGTERM', 'shell', 143, true],
+  ] as const)(
+    'W21: launch loop: %s to the sweep\'s %s while jobs are still being forked leaves no job and no scratch dir', async (sig, target, status, zero) => {
+      const script = fixtureScript('v21l.sh', 'sleep 20');
+      const units = Array.from({ length: 120 }, (_, i) => stable(`claude-session@demo-u${i}.service`, i));
+      const box = makeBox({ units, verifySrc: script });
+      const g = spawnGroup(box, {});
+      const tmp = join(box.home, 'tmp');
+      let ended: { code: number | null; signal: NodeJS.Signals | null; stdout: string } | null = null;
+      let pids = 0;
+      let after: { found: number[]; left: string[] };
+      try {
+        for (let i = 0; i < 10_000 && pids < 10; i++) {
+          try {
+            const d = readdirSync(tmp).find((n) => n.startsWith('ccrc-sweep.'));
+            if (d !== undefined) pids = readdirSync(join(tmp, d)).filter((n) => n.endsWith('.pid')).length;
+          } catch { /* the dir is not there yet */ }
+          if (pids < 10) await sleepMs(1);
+        }
+        try { process.kill(target === 'group' ? -g.pid : g.pid, sig); } catch { /* gone: the assertions say so */ }
+        ended = await Promise.race([g.done, sleepMs(20_000).then(() => null)]);
+      } finally {
+        try { process.kill(-g.pid, 'SIGKILL'); } catch { /* gone */ }
+        after = collect(box);
+      }
+      expect(pids, 'the signal was sent mid-loop').toBeGreaterThanOrEqual(10);
+      expect(ended, 'the sweep ended on its own, within 20 s').not.toBeNull();
+      expect(ended!.signal === sig || ended!.code === status, `ended by ${sig}: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
+      expect(ended!.stdout).not.toContain(SWEEP_OK);
+      expect(after.left.filter((n) => n.startsWith('ccrc-sweep.')), `left in tmp: ${after.left.join(' ')}`).toEqual([]);
+      if (zero) expect(after.found, `survivors: ${after.found.join(' ')}`).toEqual([]);
       noPoison(box);
     }, 60_000);
 });
 
+itLinux('W22: the caller\'s own INT trap is put back after the concurrent batch (D-3988)', () => {
+  const box = makeBox({ units: [stable(A, 0), stable(B, 1)] });
+  const r = runSweep(box, { pre: "trap 'echo caller-int-trap' INT", tail: 'trap -p INT > "$HOME/int-trap"' });
+  expect(r.code, ctx(r)).toBe(0);
+  expect(readFileSync(join(box.home, 'int-trap'), 'utf8')).toContain("echo caller-int-trap");
+  noPoison(box);
+}, 60_000);
 
 describe('_upd_sweep, Linux arm, with the FROZEN wave-10 script S0 (a rollback pairs this sweep with an older script)', () => {
   const s0 = (): string => readFileSync(FROZEN_VERIFY_S0, 'utf8');
