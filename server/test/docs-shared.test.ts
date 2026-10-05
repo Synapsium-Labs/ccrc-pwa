@@ -320,6 +320,12 @@ describe('docs redactor: redactDocsText and DOCS_REDACT_RULES (row 62, the patte
     ['a ghp_ token', `(ghp_${BODY24})`, '(ghp_***)'],
     ['an Authorization line, whole', 'Authorization: Basic xyz', 'Authorization: ***'],
     ['an Authorization line inside other text', 'before\n> Authorization: Basic xyz\nafter', 'before\nAuthorization: ***\nafter'],
+    // Only \n bounds a line: \r, U+2028 and U+2029 are inside it, so the whole run is the match (the rule is anchored to
+    // a line start by a lookbehind that names \n alone, and it must give the unanchored rule's results).
+    ['an Authorization run bounded by \\r only', 'a\rAuthorization: x\rb', 'Authorization: ***'],
+    ['an Authorization run bounded by U+2028 and U+2029', 'a\u2028Authorization: x\u2029b', 'Authorization: ***'],
+    ['two Authorization lines', 'Authorization: a\nx\nAuthorization: b', 'Authorization: ***\nx\nAuthorization: ***'],
+    ['an Authorization at the end after a newline', 'x\nAuthorization:', 'x\nAuthorization: ***'],
   ])('redacts %s', (_label, input, expected) => {
     expect(redactDocsText(input)).toBe(expected);
   });
@@ -333,6 +339,18 @@ describe('docs redactor: redactDocsText and DOCS_REDACT_RULES (row 62, the patte
     ['the empty string', ''],
   ])('leaves %s unchanged', (_label, input) => {
     expect(redactDocsText(input)).toBe(input);
+  });
+
+  // The fourth rule's work is linear in the input: it runs over unbounded stderr before the helper's cut, on the
+  // server's event loop. A rule that rescans a line from every start position is quadratic (a 1 MiB line took
+  // minutes). The line holds no 'Authorization', so nothing matches and every start position is tried.
+  it('redacts one 1 MiB line with no newline and no Authorization in under 2000 ms', () => {
+    const line = 'x'.repeat(1024 * 1024);
+    const t0 = performance.now();
+    const out = redactDocsText(line);
+    const ms = performance.now() - t0;
+    expect(out).toBe(line);
+    expect(ms).toBeLessThan(2000);
   });
 
   it('is idempotent', () => {

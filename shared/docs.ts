@@ -474,7 +474,7 @@ export const DOCS_REDACT_RULES: readonly (readonly [pattern: string, suffix: str
   [String.raw`(://)[^/@\t\n\v\f\r ]+@`, '***@'],
   [String.raw`([?&](?:access_token|token)=)[^&\t\n\v\f\r ]+`, '***'],
   [String.raw`(gh[opsu]_)[A-Za-z0-9]{20,}`, '***'],
-  [String.raw`[^\n]*Authorization:[^\n]*`, 'Authorization: ***'],
+  [String.raw`(?<![^\n])[^\n]*Authorization:[^\n]*`, 'Authorization: ***'],
 ];
 
 const DOCS_REDACTORS: readonly (readonly [RegExp, string])[] =

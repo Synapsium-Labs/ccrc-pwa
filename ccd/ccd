@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f61809679a4484f6ae24ad52f5eb43376f008f9c82cce9b795009e31efecedc3
+# ccrc:generated 1 sha256=b8a229fe0e1fdb5a08bdfba57b2f5d64d37a245d5a0f38db26fb3aaa7687163d
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28434,7 +28434,7 @@ HELPER_FAILED_DETAIL_MAX_BYTES = 512
 FAILURES=frozenset({'bad-project','bad-ref','bad-commit','bad-section','bad-path','bad-fingerprint','unknown-project','not-a-git-repo','linked-worktree','shared-repo','partial-clone','repo-unreadable','no-default-branch','unresolved-ref','ref-not-commit','unknown-commit','not-a-commit','object-missing','absent-path','not-a-file','symlink-in-path','too-large','too-many-entries','unreadable-path','worktree-gone','ambiguous-worktree','untrusted-worktree','worktree-moved','draft-changed','remote-absent','remote-branch-absent','fetch-auth-failed','fetch-rejected-objects','fetch-transport','ref-locked','fetch-too-soon','fetch-timeout','fetch-failed','git-failed','git-timeout','helper-unavailable','helper-failed'})
 # REDACT_RULES is DOCS_REDACT_RULES: (pattern, suffix), applied in order and
 # globally; a match becomes its group 1 (when the pattern has one), then suffix.
-REDACT_RULES=((r'(://)[^/@\t\n\v\f\r ]+@','***@'),(r'([?&](?:access_token|token)=)[^&\t\n\v\f\r ]+','***'),(r'(gh[opsu]_)[A-Za-z0-9]{20,}','***'),(r'[^\n]*Authorization:[^\n]*','Authorization: ***'))
+REDACT_RULES=((r'(://)[^/@\t\n\v\f\r ]+@','***@'),(r'([?&](?:access_token|token)=)[^&\t\n\v\f\r ]+','***'),(r'(gh[opsu]_)[A-Za-z0-9]{20,}','***'),(r'(?<![^\n])[^\n]*Authorization:[^\n]*','Authorization: ***'))
 # docs-parity: end
 
 # ===== docs: core =====

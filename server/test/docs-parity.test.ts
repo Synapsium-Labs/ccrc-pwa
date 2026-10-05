@@ -155,6 +155,10 @@ describe('one redactor: the helper and shared/docs.ts agree over one corpus (row
     'Authorization: Basic xyz',
     'before\n> Authorization: Bearer y\nafter',
     'line1\r\nAuthorization: x\r\nline3',
+    'a\rAuthorization: x\rb',
+    'a\u{2028}Authorization: x\u{2029}b',
+    'Authorization: a\nx\nAuthorization: b',
+    'x\nAuthorization:',
     'a https://u:p@h/x?token=t&access_token=q\nAuthorization: Bearer y\nz',
     'https://u\u{001c}tok@h/x',
     'https://u\u{00a0}tok@h/x',
@@ -180,6 +184,20 @@ describe('one redactor: the helper and shared/docs.ts agree over one corpus (row
     expect(CORPUS.filter((s, i) => ts[i] !== s).length).toBeGreaterThanOrEqual(12);
     expect(CORPUS.filter((s, i) => ts[i] === s).length).toBeGreaterThanOrEqual(6);
   });
+
+  // The fourth rule runs over unbounded text before the helper's cut: its work is linear in the line, in both
+  // languages. One 1 MiB line with no newline and no Authorization matches nothing, so every start is tried.
+  it('H.redact redacts one 1 MiB line with no newline and no Authorization in under 2000 ms', () => {
+    const r = unitJsonT6<{ ms: number; same: boolean }>(h.home, [
+      'import time',
+      "line = 'x' * (1024 * 1024)",
+      't0 = time.monotonic()',
+      'got = H.redact(line)',
+      "out({'ms': (time.monotonic() - t0) * 1000, 'same': got == line})",
+    ].join('\n'), { timeoutMs: 600_000 });
+    expect(r.same).toBe(true);
+    expect(r.ms).toBeLessThan(2000);
+  }, 600_000);
 
   it('the helper\'s redactor is idempotent over the same corpus', () => {
     const file = path.join(h.home, 'redact-idem.json');
