@@ -540,7 +540,7 @@ describe('docs ref resolution: the counterpart (§2 (c) 4-5, R11)', () => {
 });
 
 // Guards this task adds that the table above leaves open (controller ruling G8): each case below goes red when its
-// guard is deleted or mutated (measured in a scratch copy; the rows are R9-1..R9-11 in the plan's Task 19 table).
+// guard is deleted or mutated (measured in a scratch copy; the rows are R9-1..R9-16 in the plan's Task 19 table).
 describe('docs ref resolution: the guards the table leaves open', () => {
   /** A `Sys` whose `spawn` answers the `nth` (1-based) git call carrying `subcommand` with `spawned` (a python
    *  `H.Spawned(...)` expression) and runs every other call for real. */
@@ -580,6 +580,48 @@ describe('docs ref resolution: the guards the table leaves open', () => {
     expect(served(resolveIn('demo', 'feat'))).toMatchObject({ relation: 'local-ahead' });
     expect(served(resolveIn('demo', 'feat', nthAnswers('merge-base', 2, spawned(128, "b''"))))).toMatchObject({
       served: 'refs/heads/feat', relation: 'unmeasured' });
+  });
+
+  it('a SECOND merge-base that runs out of its bound is unmeasured, never git-timeout (it is a soft call)', () => {
+    const main = h.makeRepo('demo');
+    shapeBranch(h, main, 'feat', 'local-ahead');
+    // CONTROL: unswapped, the same fixture measures local-ahead, so `unmeasured` below is the swap's doing.
+    expect(served(resolveIn('demo', 'feat'))).toMatchObject({ relation: 'local-ahead' });
+    const out = "H.Spawned(rc=-15, out=b'', err=b'', timed_out=True, overflow=False)";
+    expect(served(resolveIn('demo', 'feat', nthAnswers('merge-base', 2, out)))).toMatchObject({
+      served: 'refs/heads/feat', relation: 'unmeasured' });
+  });
+
+  /** Every git call's (subcommand, timeout_s) as the helper hands it to the one door, over one `resolve`: a `Sys`
+   *  that records and then runs the call for real. The subcommand is the word after `-C <path>`. */
+  const bounds = (ref: string | null): [string, number][] => {
+    const pre = [
+      'REC = []',
+      'class Records(H.Sys):',
+      '    def spawn(self, argv, env, cwd, timeout_s, *a, **k):',
+      "        REC.append([argv[argv.index('-C') + 2], timeout_s])",
+      '        return H.Sys.spawn(self, argv, env, cwd, timeout_s, *a, **k)',
+      'H.SYS = Records()',
+    ];
+    const a = unitJson<{ ok: true; value: [string, number][] } | Failed>(h.home,
+      unitBody('demo', `(H.resolve(repo, ${pyStr(ref)}, dl), REC)[1]`, pre));
+    expect(a, JSON.stringify(a)).toMatchObject({ ok: true });
+    return (a as { ok: true; value: [string, number][] }).value;
+  };
+  const of = (calls: [string, number][], sub: string): number[] => calls.filter(([s]) => s === sub).map(([, t]) => t);
+
+  it('the ref calls run under the 5 s ref class and the relation and count calls under the 2 s count class', () => {
+    const main = h.makeRepo('demo');
+    shapeBranch(h, main, 'feat', 'diverged');
+    const calls = bounds('feat');
+    // CONTROLS: the diverged shape reaches both merge-bases and the rev-list, so the lists below are not vacuous.
+    expect(of(calls, 'merge-base')).toHaveLength(2);
+    expect(of(calls, 'rev-list')).toHaveLength(1);
+    expect(of(calls, 'for-each-ref')).toEqual([5]);
+    expect(of(calls, 'merge-base')).toEqual([2, 2]);
+    expect(of(calls, 'rev-list')).toEqual([2]);
+    // The default path reads origin/HEAD with symbolic-ref, under the ref class.
+    expect(of(bounds(null), 'symbolic-ref')).toEqual([5]);
   });
 
   it('a rev-list that answers rc 0 with output that is not two counts is git-failed {step:rev-list}', () => {
