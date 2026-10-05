@@ -1704,6 +1704,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       does not count.
 
     The promotion itself, a fast-forward push to `stable`, is the operator's to call.
+  - **2026-10-05 17:51 UTC, run 270's question (mail 3557), ruled A (answer mail 3558).** Task 2's per-task review
+    found that `HISTCMD` and `OPTIND` stop the launchd job outside POSIX mode. Both are integer variables with no
+    assign function, so a value that is an arithmetic error (`1/0`, `09`, `1+`) ends the job's bash with rc 1 before
+    `exec`, on bash 3.2.57, 4.4 and 5.2.21, while doctor reads ARMED. That is D-3980's own class.
+    - Ruled: add the two names to the refused set, spending reserve number 3987 (bare until the worker defines it).
+      Refusing by name stays order-free and file-free. Refusing only non-decimal values would put a second parser in
+      the plain test, and leaving it would leave a measured false ARMED in place.
   - **Noise, not this programme's:** `map-build` on `main` went red at `00f8a193` and `4100ae1c`, with five files
     "newly failing under trace". Every test leg was green. At `be93d159` only `boot.test.ts` still failed under trace,
     and at `1eda8630` none did. This belongs to the CI test-selection tooling.
