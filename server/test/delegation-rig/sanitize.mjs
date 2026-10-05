@@ -113,7 +113,8 @@ const HOME_MUNGED = (() => { const m = munge(os.homedir()); return m.length >= 4
 // Munged FOREIGN paths: `-mnt-<vol>-projects-…`, `-home-<user>-…`, `-Users-…`. Only `-rig` survives the replacer.
 const MUNGED_FOREIGN = /(^|[^A-Za-z0-9])-(home|mnt|tmp|srv|opt|var|root|Users|private|proc)-/;
 // `:` is a BOUNDARY, not a continuation: a PATH-like `/usr/bin:/home/<user>/.bin` carries a second absolute path.
-const ABS = /(?<![A-Za-z0-9._~/-])\/([A-Za-z0-9._-]+)/g;
+// `<` is a boundary too: `</result>` is a closing tag (Claude Code's <task-notification> prompt), not the path `/result`.
+const ABS = /(?<![A-Za-z0-9._~/<-])\/([A-Za-z0-9._-]+)/g;
 // A `//`-led name: `file:///srv/x`, `//fileserver/share`, `http://internal-host.corp/p`. Only an allowed top, or
 // the placeholder loopback address, may follow; a `//` INSIDE a path (`/rig//x`) is a join artefact, not a host.
 const DOUBLE = /(?<![A-Za-z0-9._~-])\/\/([A-Za-z0-9._-]+)/g;

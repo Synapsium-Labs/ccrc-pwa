@@ -452,6 +452,17 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     return { status: r.status, stderr: r.stderr, written: fs.readdirSync(out) };
   };
 
+  it('reads a closing tag as a tag, not a path: a task-notification prompt passes with an allowed output file and fails closed on a foreign one', () => {
+    const note = (file: string): object => ({ prompt: `<task-notification><status>completed</status><output-file>${file}</output-file></task-notification>` });
+    const foreign = leakRun(note('/srv/x/out'));
+    expect(foreign.status, 'a real foreign path inside the tags').toBe(1);
+    expect(foreign.written).toEqual([]);
+    for (const file of ['/rig/tmp/x.output', `${ROOT}/tmp/x.output`]) {
+      const ok = leakRun(note(file));
+      expect(ok.status, `${file}: ${ok.stderr}`).toBe(0);
+    }
+  }, 60_000);
+
   it('replaces the run root, its munged form and the binaries directory; orders events; keeps shas and snapshots', () => {
     const raw = mkTmp('ccrc-dlg-raw.');
     const out = mkTmp('ccrc-dlg-fix-');
