@@ -585,6 +585,8 @@ export interface DocsFetchOk {
 
 export interface DocsIndexOk {
   v: 1; verb: 'docs-index'; ok: true; elapsedMs: number; unlisted: number;
+  /** Projects the walk did not reach before the helper deadline; absent when 0. */
+  unwalked?: number;
   /** Every repoKey held by two or more rows. */
   duplicates: { repoKey: string; projects: string[] }[];
   projects: {

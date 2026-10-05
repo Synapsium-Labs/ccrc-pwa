@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ac277e1cb5d58a53a099b1e9a2c46dc4f456c0d74aaac87352acb94586053116
+# ccrc:generated 1 sha256=0acde2ce31474c61d48c1746e2fe1d21f11d37a6ae819525f36758e5fb0a2e36
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29813,6 +29813,17 @@ def stamp_for(reg, repo_key, branch):
 # of the answer. It runs no worktree enumeration and no status: discovery,
 # the origin url, the default chain, one ls-tree --name-only and the stamp.
 INDEX_ROW_STATES = frozenset({'not-a-git-repo', 'linked-worktree', 'shared-repo', 'partial-clone', 'no-default-branch', 'repo-unreadable'})
+# What index_row answers for a project the helper deadline ended on: it is not
+# a row, not an unlisted entry, and not a repo-unreadable one. Its own value,
+# so verb_index counts it in `unwalked` and never folds it into either.
+INDEX_UNWALKED = object()
+
+
+def index_budget_spent(f, dl):
+    """True when Fail f is a git-timeout and the whole-helper deadline is
+    spent: the walk ran out of budget, which says nothing about the repo. A
+    git-timeout with budget left is one hung call, that project's own state."""
+    return f.word == 'git-timeout' and dl.left() <= 0
 
 
 def index_name(raw):
@@ -29889,13 +29900,16 @@ def index_failed_row(ctx, row, f):
 
 
 def index_row(ctx, name, dl, now):
-    """One project's row (DocsIndexOk's projects[]), or None: see
-    index_failed_row. Only a Fail is caught here; anything else is a defect
-    and still answers the whole verb helper-failed."""
+    """One project's row (DocsIndexOk's projects[]), None (see
+    index_failed_row), or INDEX_UNWALKED when the helper deadline ended on this
+    project. Only a Fail is caught here; anything else is a defect and still
+    answers the whole verb helper-failed."""
     row = {'project': name, 'state': 'ready', 'github': {'state': 'none'}}
     try:
         repo = discover(ctx, name, dl)
     except Fail as f:
+        if index_budget_spent(f, dl):
+            return INDEX_UNWALKED
         return index_failed_row(ctx, row, f)
     row['repoKey'] = repo.key
     try:
@@ -29906,7 +29920,9 @@ def index_row(ctx, name, dl, now):
             return row
         branch = ref_side(served)[0]
         sections = index_section_counts(repo, commit, dl)
-    except Fail:
+    except Fail as f:
+        if index_budget_spent(f, dl):
+            return INDEX_UNWALKED
         row['state'] = 'repo-unreadable'
         return row
     row['default'] = {'name': branch, 'via': via, 'commit': commit}
@@ -29933,7 +29949,9 @@ def verb_index(ctx, a):
     """docs-index --all: DocsIndexOk's body; run adds the envelope and sends
     the line through guard_listing. An absent projects root, or one that is
     not a directory, is an empty index, which is what a fresh box has. A root
-    that exists but cannot be listed raises, which run answers helper-failed."""
+    that exists but cannot be listed raises, which run answers helper-failed.
+    The walk stops when the helper deadline is spent: the projects it did not
+    reach are counted in `unwalked` (only when above 0), never listed."""
     dl = Deadline(HELPER_DEADLINE_S['docs-index'])
     body = {'unlisted': 0, 'duplicates': [], 'projects': []}
     try:
@@ -29944,16 +29962,27 @@ def verb_index(ctx, a):
         return body
     names = sorted(SYS.listdir(os.fsencode(ctx.root)))
     now = SYS.now_ms()
+    unwalked = 0
     for raw in names:
         if raw.startswith(b'.'):
             continue
         name = index_name(raw)
-        row = None if name is None else index_row(ctx, name, dl, now)
-        if row is None:
+        if name is None:
+            body['unlisted'] += 1
+            continue
+        # Once the whole-helper deadline is spent the walk stops: no git call
+        # is made, and a project it did not reach is counted, never listed as
+        # a row and never labelled repo-unreadable for want of a measurement.
+        row = INDEX_UNWALKED if dl.left() <= 0 else index_row(ctx, name, dl, now)
+        if row is INDEX_UNWALKED:
+            unwalked += 1
+        elif row is None:
             body['unlisted'] += 1
         else:
             body['projects'].append(row)
     body['duplicates'] = index_duplicates(body['projects'])
+    if unwalked > 0:
+        body['unwalked'] = unwalked
     return body
 
 # ===== docs: holders =====

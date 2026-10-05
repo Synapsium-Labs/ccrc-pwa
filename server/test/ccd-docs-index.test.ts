@@ -1651,12 +1651,29 @@ t11v.describe('T11: docs stamps - stamp_path, read_stamp, stamp_ages (spec §2 (
     const none = { ...GOOD, okMs: null, okCommit: null, lastOutcome: 'fetch-timeout' };
     const py = (o: unknown): string => `json.loads(${JSON.stringify(JSON.stringify(o))})`;
     t11v.expect(t11py.unitJson<unknown>(h.home,
-      `import json\nout([H.stamp_ages(${py(GOOD)}, 10000), H.stamp_ages(${py(none)}, 10000), H.stamp_ages(${py(GOOD)}, 2000)])`))
+      `import json\nout([H.stamp_ages(${py(GOOD)}, 10000), H.stamp_ages(${py(none)}, 10000), H.stamp_ages(${py(GOOD)}, 2000), H.stamp_ages(${py(GOOD)}, 500)])`))
       .toEqual([
         { okAgeMs: 9000, attemptAgeMs: 6000, lastOutcome: 'ok', okCommit: SHA },
         { okAgeMs: null, attemptAgeMs: 6000, lastOutcome: 'fetch-timeout', okCommit: null },
         { okAgeMs: 1000, attemptAgeMs: 0, lastOutcome: 'ok', okCommit: SHA },
+        // The clock stepped back past okMs too: okAgeMs is the only age docs-index puts on the wire (R11-3).
+        { okAgeMs: 0, attemptAgeMs: 0, lastOutcome: 'ok', okCommit: SHA },
       ]);
+  });
+
+  // F3 (b): an I/O error on a stamp that is well-formed on disk is "no stamp", never a raise that ends the whole
+  // index (R11-4). CONTROL: the same stamp through the unswapped Sys reads back.
+  t11v.it.each(['read', 'fstat'] as const)('an OSError(EIO) from %s on a well-formed stamp answers None, never a raise', (call) => {
+    const p = plant(`eio-${call}.json`, JSON.stringify(GOOD));
+    t11v.expect(read(p)).toEqual(GOOD);
+    t11v.expect(t11py.unitJson<unknown>(h.home, [
+      'import errno',
+      'class Eio(type(H.SYS)):',
+      `    def ${call}(self, *a):`,
+      "        raise OSError(errno.EIO, 'Input/output error')",
+      'H.SYS = Eio()',
+      `out(H.read_stamp(${JSON.stringify(p)}))`,
+    ].join('\n'))).toBeNull();
   });
 
   t11v.it("STAMP_OUTCOMES is 'ok' plus exactly the DocsFetchFailure words, each one a ccd failure word", () => {
@@ -2062,6 +2079,15 @@ t11v.describe('T11: docs-index, the projects root itself (decided: absent or not
     t11v.expect(t11fx.normaliseDocsIndex(t11index(h))).toEqual(EMPTY);
   });
 
+  // F3 (c): stat answers ENOTDIR for a symlink whose target runs through a file; that is "no root" too (R11-5).
+  t11v.it('a root that is a symlink through a regular file answers the same empty index, not helper-failed', () => {
+    const file = t11path.join(h.home, 'afile');
+    t11fs.writeFileSync(file, 'not a directory\n');
+    t11fs.rmSync(t11path.join(h.home, 'projects'), { recursive: true, force: true });
+    t11fs.symlinkSync(t11path.join(file, 'x'), t11path.join(h.home, 'projects'));
+    t11v.expect(t11fx.normaliseDocsIndex(t11index(h))).toEqual(EMPTY);
+  });
+
   t11v.it.skipIf(process.getuid?.() === 0)('a root that exists but cannot be listed is helper-failed, never an empty index', () => {
     const root = t11path.join(h.home, 'projects');
     h.makeRepo('demo');
@@ -2074,5 +2100,117 @@ t11v.describe('T11: docs-index, the projects root itself (decided: absent or not
     } finally {
       t11fs.chmodSync(root, 0o755);
     }
+  });
+});
+
+// Fix round 1, F2: decision 3's second half. A linked worktree whose main checkout lives OUTSIDE the root has
+// no owner in the root, so its row carries owner null and no repoKey (R11-1).
+t11v.describe('T11: docs-index, a linked worktree whose main checkout is outside the root (decision 3)', () => {
+  let h: t11ws.CcdHarness;
+  t11v.beforeEach(() => { h = t11ws.makeCcdHarness('ccd-docs-'); });
+  t11v.afterEach(() => h.cleanup());
+
+  t11v.it('is linked-worktree with owner null, its branch, no repoKey, in an ok answer', () => {
+    h.makeRepo('demo');   // CONTROL: an ordinary project beside it
+    const outside = t11path.join(h.home, 'elsewhere', 'x');
+    t11fs.mkdirSync(outside, { recursive: true });
+    h.git(outside, 'init', '-q', '-b', 'main');
+    t11fs.writeFileSync(t11path.join(outside, 'README.md'), 'hi\n');
+    h.git(outside, 'add', 'README.md');
+    h.git(outside, 'commit', '-q', '-m', 'init');
+    h.git(outside, 'worktree', 'add', '-q', '-b', 'ws/b', t11path.join(h.home, 'projects', 'wt2'));
+    const o = t11index(h);
+    t11v.expect(o['ok']).toBe(true);
+    const row = t11row(o, 'wt2');
+    t11v.expect(row.state).toBe('linked-worktree');
+    t11v.expect(row['owner']).toBeNull();
+    t11v.expect(row['branch']).toBe('ws/b');
+    t11v.expect(row).not.toHaveProperty('repoKey');
+    t11v.expect(t11discover(h, 'wt2')).toEqual({ word: 'linked-worktree', owner: null, branch: 'ws/b' });
+    t11v.expect(t11row(o, 'demo').state).toBe('ready');
+  });
+});
+
+// Fix round 1, F1: a spent helper deadline ends the walk. What the walk did not reach is counted in `unwalked`;
+// it is never a row and never repo-unreadable, which would say a healthy repository is corrupt (R11-2).
+t11v.describe('T11: docs-index, the 12 s helper deadline (F1)', () => {
+  let h: t11ws.CcdHarness;
+  t11v.beforeEach(() => {
+    h = t11ws.makeCcdHarness('ccd-docs-');
+    for (const n of ['a', 'b', 'c']) t11dh.docsRepo(h, n);
+  });
+  t11v.afterEach(() => h.cleanup());
+  const run = [
+    "a = json.loads(H.run(['docs-index', ctx.root, ctx.worktrees, ctx.reg, '--all']).decode('utf-8'))",
+  ];
+  const COUNTS = [
+    'spawns = []',
+    'class Counts(type(H.SYS)):',
+    '    def spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin=None):',
+    "        spawns.append(argv[argv.index('-C') + 2])",
+    '        return super().spawn(argv, env, cwd, timeout_s, stdout_cap, stdin)',
+    'H.SYS = Counts()',
+  ];
+
+  t11v.it('a deadline already spent answers ok, lists no row, counts the three repositories unwalked, and spawns no git', () => {
+    const got = t11py.unitJson<{ a: Record<string, unknown>; spawns: string[] }>(h.home, [
+      ...T11_CTX, 'import json', "H.HELPER_DEADLINE_S['docs-index'] = 0", ...COUNTS, ...run,
+      "out({'a': a, 'spawns': spawns})",
+    ].join('\n'));
+    t11v.expect(got.a).toMatchObject({ ok: true, unlisted: 0, duplicates: [], projects: [], unwalked: 3 });
+    t11v.expect(got.spawns).toEqual([]);
+  });
+
+  t11v.it('a directory that is not a repository is unwalked too once the deadline is spent: no git call decides it, yet it is no row', () => {
+    t11fs.mkdirSync(t11path.join(h.home, 'projects', 'plain'));
+    const got = t11py.unitJson<{ a: Record<string, unknown>; spawns: string[] }>(h.home, [
+      ...T11_CTX, 'import json', "H.HELPER_DEADLINE_S['docs-index'] = 0", ...COUNTS, ...run,
+      "out({'a': a, 'spawns': spawns})",
+    ].join('\n'));
+    t11v.expect(got.a).toMatchObject({ ok: true, projects: [], unwalked: 4 });
+    // CONTROL: under the real deadline the same directory is a not-a-git-repo row.
+    t11v.expect(t11row(t11index(h), 'plain').state).toBe('not-a-git-repo');
+  });
+
+  t11v.it('CONTROL: the same three repositories under the real deadline are three ready rows and carry no unwalked key', () => {
+    const got = t11py.unitJson<{ a: Record<string, unknown>; spawns: string[] }>(h.home, [
+      ...T11_CTX, 'import json', ...COUNTS, ...run, "out({'a': a, 'spawns': spawns})",
+    ].join('\n'));
+    t11v.expect(got.a['ok']).toBe(true);
+    t11v.expect(t11rows(got.a).map((r) => [r.project, r.state])).toEqual([['a', 'ready'], ['b', 'ready'], ['c', 'ready']]);
+    t11v.expect(got.a).not.toHaveProperty('unwalked');
+    t11v.expect(got.spawns.length).toBeGreaterThan(0);
+  });
+
+  // The deadline runs out INSIDE a project's own git call (the clock jumps past it as that call times out): that
+  // project and everything after it are unwalked. `trip` is the first subcommand whose spawn times out; with
+  // `jump` false the same timeout leaves the deadline unspent, so it is that one project's own state.
+  const timeoutAt = (trip: string, jump: boolean): Record<string, unknown> => t11py.unitJson<Record<string, unknown>>(h.home, [
+    ...T11_CTX, 'import json',
+    'state = {"tripped": False, "skew": 0.0}',
+    'class Hangs(type(H.SYS)):',
+    '    def monotonic(self):',
+    "        return super().monotonic() + state['skew']",
+    '    def spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin=None):',
+    "        if not state['tripped'] and argv[argv.index('-C') + 2] == " + JSON.stringify(trip) + ':',
+    "            state['tripped'] = True",
+    `            state['skew'] = ${jump ? '1000.0' : '0.0'}`,
+    '            return H.Spawned(None, b"", b"", True, False)',
+    '        return super().spawn(argv, env, cwd, timeout_s, stdout_cap, stdin)',
+    'H.SYS = Hangs()',
+    ...run,
+    'out(a)',
+  ].join('\n'));
+
+  t11v.it.each(['rev-parse', 'ls-tree'])('a deadline spent during the first project\'s %s call counts it and the rest unwalked', (trip) => {
+    const o = timeoutAt(trip, true);
+    t11v.expect(o).toMatchObject({ ok: true, projects: [], unwalked: 3 });
+  });
+
+  t11v.it.each(['rev-parse', 'ls-tree'])('CONTROL: one hung %s call with the deadline unspent is that project\'s repo-unreadable, the rest ready', (trip) => {
+    const o = timeoutAt(trip, false);
+    t11v.expect(o['ok']).toBe(true);
+    t11v.expect(t11rows(o).map((r) => [r.project, r.state])).toEqual([['a', 'repo-unreadable'], ['b', 'ready'], ['c', 'ready']]);
+    t11v.expect(o).not.toHaveProperty('unwalked');
   });
 });
