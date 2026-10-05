@@ -370,7 +370,7 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     - 3925 (`/clear`) is DEFERRED to wave 4, carrying the review's `_sync_uuid` design note as advice.
     - F10 (c)(d)(e), F11 and F12 are text.
   - **Numbers:** 3966–3971 issued (3970–3971 spares).
-- **2026-10-05 15:35 — fix round 1 done** (wave-done 3528, PR #250 at `f6faff4c`).
+- **2026-10-05 15:34 — fix round 1 done** (wave-done 3528, PR #250 at `f6faff4c`).
   - **The fixes, one commit each:**
     - F1 `6db10976` (3966): the keep at `_spawn_start`'s choke point;
     - F6 `2aed328c` (3969): stop keeps gated on `choicekept`, a failed kill unmarks, an absent tmux server proves the
