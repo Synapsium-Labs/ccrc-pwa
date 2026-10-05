@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
@@ -86,12 +87,13 @@ import {
   type ChildReclaimRequest,
 } from './coord/childReclaim.js';
 import {
-  childReclaimAttention, childReclaimDeferExpired, childReclaimDue, childReclaimFirstSighting,
-  childReclaimHoldRead, childReclaimJournalRow, childReclaimNextEntry, childReclaimSweepVerdict,
-  childReclaimTerminalRefusal, type ChildReclaimHoldCandidate, type ChildReclaimHoldCandidatesRead,
-  type ChildReclaimHoldOpenRead, type ChildReclaimHoldRead, type ChildReclaimJournalRow,
-  type ChildReclaimMintingRunRead, type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead,
-  type ChildReclaimSweepEntry, type ChildReclaimSweepSkip,
+  childReclaimAskOrder, childReclaimAttention, childReclaimDeferExpired, childReclaimDue, childReclaimFirstSighting,
+  childReclaimHoldRead, childReclaimJournalRow, childReclaimNextEntry, childReclaimSameGeneration,
+  childReclaimSweepVerdict, childReclaimTerminalRefusal, type ChildReclaimAsk, type ChildReclaimHoldCandidate,
+  type ChildReclaimHoldCandidatesRead, type ChildReclaimHoldOpenRead, type ChildReclaimHoldRead,
+  type ChildReclaimJournalRow, type ChildReclaimLaneNow, type ChildReclaimMintingRunRead,
+  type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead, type ChildReclaimSweepEntry,
+  type ChildReclaimSweepOutcome, type ChildReclaimSweepSkip,
 } from './childReclaimSweep.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import { localIO } from './io.js';
@@ -750,8 +752,13 @@ export class FleetWatcher {
    *  a HEALTHY fleet is a frame rather than a silence. */
   private lastDivergenceSweep = 0;
   private lastDivergenceJson: string | null = null;
-  /** The child-reclaim lane's clock (child-reclamation wave 4). */
-  private lastChildReclaimSweep = 0;
+  /** The child-reclaim lane's clock (child-reclamation wave 4): the MONOTONIC
+   *  time of the last pass, `null` before the first. Not the other lanes' `0`
+   *  never-run idiom, because a monotonic source may start at 0, which would
+   *  make `0` a real stamp. Monotonic so that a backward wall step cannot
+   *  freeze the lane, and a forward one cannot run a pass early: the
+   *  twice-observed rule's interval is real time. */
+  private lastChildReclaimSweep: number | null = null;
   /** Per marked child: the twice-observed sighting, the two deferral clocks
    *  (the first deferral of any kind, which each request carries; the first
    *  PRESENCE deferral, which alone the ceiling reads), the run of failed
@@ -759,7 +766,11 @@ export class FleetWatcher {
    *  (`lastAskedAt`) — `ChildReclaimSweepEntry`. IN MEMORY ONLY, deliberately:
    *  a restart loses it, and losing it can only DELAY a reclaim (two passes
    *  rebuild eligibility, the ceiling clock restarts) or retry a failing one
-   *  sooner, which ccd's re-proof on the box makes safe — never cause one. */
+   *  sooner, which ccd's re-proof on the box makes safe — never cause one.
+   *  Its decision clocks are this process's monotonic clock; only
+   *  `firstDeferredAt` is an epoch (`ChildReclaimSweepEntry`). An entry
+   *  describes one workspace generation, and a new birth replaces it with a
+   *  first sighting. */
   private childReclaimSweepState = new Map<string, ChildReclaimSweepEntry>();
   /** Children whose reclaim this lane has asked for and not heard back on. A
    *  pass never asks a child already in this set twice: the executor can hold
@@ -770,7 +781,8 @@ export class FleetWatcher {
   private childReclaimInFlight = new Set<string>();
   /** When each in-flight dispatch was sent — `CHILD_RECLAIM_STALL_MS`'s own
    *  clock, and the reason a request that never settles stops holding the
-   *  lane's one slot forever. */
+   *  lane's one slot forever. MONOTONIC: a forward wall-clock step must never
+   *  free the one slot while a reclaim is still running. */
   private childReclaimInFlightSince = new Map<string, number>();
   /** Session ids whose stall past `CHILD_RECLAIM_STALL_MS` this process has
    *  already logged once — never once a pass, for the reason
@@ -1517,7 +1529,10 @@ export class FleetWatcher {
 
   /** The sweep's in-memory state, read-only (child-reclamation wave 4) — what
    *  wave 5's run chip reads to tell `deferred` from `pending`. Empty after a
-   *  restart, by design: see `childReclaimSweepState`'s own docstring. */
+   *  restart, by design: see `childReclaimSweepState`'s own docstring. Its
+   *  `firstDeferredAt` is wall-clock epoch ms, the one field a reader outside
+   *  the lane may read as a time. Every other clock in the entry is this
+   *  process's monotonic clock and means nothing outside it. */
   currentChildReclaimDefers(): ReadonlyMap<string, ChildReclaimSweepEntry> {
     return this.childReclaimSweepState;
   }
@@ -3075,9 +3090,17 @@ export class FleetWatcher {
   async sweepChildReclaim(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     const coord = this.deps.coord;
     if (!coord) return;
-    const now = Date.now();
-    if (this.lastChildReclaimSweep !== 0 && now - this.lastChildReclaimSweep < CHILD_RECLAIM_SWEEP_MS) return;
-    this.lastChildReclaimSweep = now;
+    // The lane's two clocks, read ONCE for the pass (spec §5.7). `mono` is
+    // every decision clock: the throttle, the in-flight stall clock and the
+    // entry's own instants. `now`, the wall clock, is only what is compared
+    // with another process's stamps (the generation fences, the attention
+    // list, the verdict's spawn-stall window) and the displayed
+    // `firstDeferredAt`, which L1 stamps from `ask.at.wallMs`.
+    const asked = this.childReclaimLaneNow();
+    const now = asked.wallMs;
+    const mono = asked.monoMs;
+    if (this.lastChildReclaimSweep !== null && mono - this.lastChildReclaimSweep < CHILD_RECLAIM_SWEEP_MS) return;
+    this.lastChildReclaimSweep = mono;
 
     // ONE — the attention list, and the pass's coordination-history read,
     // from the mirror ALONE (spec §5.9: "derived from the lifecycle mirror so
@@ -3175,7 +3198,7 @@ export class FleetWatcher {
     const terminal = new Set(latest
       .filter((row) => childReclaimTerminalRefusal(row, childReclaimTokenKind)).map((row) => row.sessionId));
     const seen = new Set<string>();
-    const due: { r: SessionRecord; entry: ChildReclaimSweepEntry; runId: number }[] = [];
+    const due: { r: SessionRecord; entry: ChildReclaimSweepEntry; runId: number; id: string }[] = [];
     // Declared here, not at section FOUR below, so the hold-release job (a
     // SEPARATE dispatch from the ordinary reclaim gathered into `due`) can be
     // pushed onto it from inside this same per-child loop, the instant its
@@ -3348,16 +3371,19 @@ export class FleetWatcher {
       // listing may predate the answer (`childReclaimReleaseAnswered`).
       if (this.childReclaimReleaseAnswered.delete(r.id)) continue;
       const entry = this.childReclaimSweepState.get(r.id);
-      if (entry === undefined) {
-        this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(now));
+      // A birth this entry does not describe is a recycled slug's NEW
+      // workspace (spec §5.6): it starts from a first sighting, never from
+      // the old workspace's sighting or presence.
+      if (entry === undefined || !childReclaimSameGeneration(entry, childBornAt)) {
+        this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(mono, childBornAt));
         continue;
       }
       if (this.childReclaimInFlight.has(r.id)) continue;
       // THE ONE "MAY I ASK AGAIN" QUESTION (`childReclaimDue`, L1): folds the
       // failure backoff (spec §5.9: "retries back off in between") AND the
       // terminal-refusal pacing — L4 decides no pacing of its own.
-      if (!childReclaimDue(entry, now, CHILD_RECLAIM_SWEEP_MS)) continue;
-      due.push({ r, entry, runId: v.runId });
+      if (!childReclaimDue(entry, mono, CHILD_RECLAIM_SWEEP_MS)) continue;
+      due.push({ r, entry, runId: v.runId, id: r.id });
     }
 
     // FOUR — the bound: at most `CHILD_RECLAIM_MAX_IN_FLIGHT` destructive
@@ -3366,15 +3392,16 @@ export class FleetWatcher {
     // to ask the box for ten deletions before the first one has even
     // answered). A dispatch that has not settled after `CHILD_RECLAIM_STALL_MS`
     // stops counting against the bound (it stays in flight; nothing here
-    // cancels it) and is logged once. Due children are sorted `lastAskedAt`
-    // (never-asked first), then `firstEligibleAt`, then id, so a child that
-    // defers every pass cannot hog the one slot forever — the never-asked and
-    // the longest-waiting go first, and among children tied on `lastAskedAt`
-    // (both never asked, or asked at the identical instant) the one sighted
-    // EARLIER still goes first rather than falling through to id order.
+    // cancels it) and is logged once. Due children are asked in
+    // `childReclaimAskOrder`'s order (L1). The presence lease's holder comes
+    // first: the senior presence-held child, asked on every pass it is due,
+    // so its ceiling is reachable however many children are due (spec §5.7).
+    // Then never-asked, `lastAskedAt`, `firstEligibleAt`, id, so a child that
+    // defers every pass cannot hog the one slot outside a lease, and a holder
+    // that forfeits goes to the back.
     let activeInFlight = 0;
     for (const [id, since] of this.childReclaimInFlightSince) {
-      if (now - since < CHILD_RECLAIM_STALL_MS) { activeInFlight += 1; continue; }
+      if (mono - since < CHILD_RECLAIM_STALL_MS) { activeInFlight += 1; continue; }
       if (!this.childReclaimStalledLogged.has(id)) {
         this.childReclaimStalledLogged.add(id);
         console.warn(`ccrc-server: sweepChildReclaim: the reclaim of ${id} has not settled after `
@@ -3383,30 +3410,19 @@ export class FleetWatcher {
       }
     }
     const freeSlots = Math.max(0, CHILD_RECLAIM_MAX_IN_FLIGHT - activeInFlight);
-    due.sort((a, b) => {
-      const la = a.entry.lastAskedAt;
-      const lb = b.entry.lastAskedAt;
-      // `lastAskedAt` first, null (never asked) sorting before any instant —
-      // but ONLY when the two differ: two children tied on this key (both
-      // null, or asked at the identical instant) fall through to
-      // `firstEligibleAt` rather than straight to id, so a never-asked child
-      // sighted earlier is still asked before one sighted later.
-      if (la !== lb) {
-        if (la === null) return -1;
-        if (lb === null) return 1;
-        return la - lb;
-      }
-      if (a.entry.firstEligibleAt !== b.entry.firstEligibleAt) return a.entry.firstEligibleAt - b.entry.firstEligibleAt;
-      return a.r.id < b.r.id ? -1 : a.r.id > b.r.id ? 1 : 0;
-    });
-    for (const { r, entry, runId } of due.slice(0, freeSlots)) {
+    const { order, holderId } = childReclaimAskOrder(due);
+    for (const { r, entry, runId, id } of order.slice(0, freeSlots)) {
+      const ask: ChildReclaimAsk = {
+        at: asked, licensed: childReclaimDeferExpired(entry, asked, CHILD_RECLAIM_SWEEP_MS), asHolder: id === holderId,
+      };
       const req: ChildReclaimRequest = {
         sessionId: r.id, runId, trigger: 'sweep',
         // THE CEILING READS THE PRESENCE CLOCK ALONE (spec §5.7, "Presence,
         // and its bound": the ceiling bounds presence and nothing else), and
-        // licenses only a CONTINUOUS episode whose latest presence answer is
-        // recent, measured in this lane's own pass intervals.
-        deferExpired: childReclaimDeferExpired(entry, now, CHILD_RECLAIM_SWEEP_MS),
+        // licenses only a CONTINUOUS episode whose latest answer's request is
+        // recent, measured in this lane's own pass intervals on the larger of
+        // its two clocks, its span on the monotonic clock.
+        deferExpired: ask.licensed,
         // THE ELAPSED DEFER RIDES THE REQUEST. Spec §5.7: past the ceiling
         // "the feed row says how long it waited and why"; §5.9: a deferral is
         // shown "with its elapsed time". So it is the FIRST deferral of ANY
@@ -3417,30 +3433,38 @@ export class FleetWatcher {
         deferredSinceMs: entry.firstDeferredAt,
       };
       this.childReclaimInFlight.add(r.id);
-      this.childReclaimInFlightSince.set(r.id, now);
+      this.childReclaimInFlightSince.set(r.id, mono);
       acts.push(this.execChildReclaim(coord, req).then(
         (outcome) => {
+          const answered = this.childReclaimLaneNow();
+          // `answered` is read FIRST, at the answer's arrival, never the
+          // pass's `asked`. The episode starts at its first answer's arrival,
+          // and continuity runs from this arrival back to the previous
+          // request (spec §5.7, "continuous deferral").
+          //
           // A terminal refusal, or a failure, needs no memory here beyond the
           // entry, and gets none: ccd journalled it, and the mirror is where
           // the attention list and the terminal exclusion read it (spec
-          // §5.9 — an executor answer never feeds `CoordStatus`). The entry:
-          // write back ONLY when it is still the live one. A pass that ran
-          // while this was in flight may have cleared the memory (switch
-          // raised, capability lost, mirror unread, row unlisted, child
-          // ineligible); re-seeding it from a stale entry would let the child
-          // be asked for on the FIRST pass after, and "two FRESH passes"
-          // would be false.
-          if (this.childReclaimSweepState.get(r.id) !== entry) return;
-          // `licensed` — this REQUEST's own `deferExpired`: whether this
-          // attempt was sent past the previous presence ceiling, which is
-          // what lets a presence-class answer RESTART the episode rather than
-          // silently keep skipping ccd's presence rungs forever (spec §5.7).
-          const nextEntry = childReclaimNextEntry(entry, outcome, now, req.deferExpired, CHILD_RECLAIM_SWEEP_MS);
-          if (nextEntry === null) this.childReclaimSweepState.delete(r.id);
-          else this.childReclaimSweepState.set(r.id, nextEntry);
+          // §5.9 — an executor answer never feeds `CoordStatus`). `ask`
+          // carries this REQUEST's own `deferExpired` (`licensed`): whether
+          // this attempt was sent past the previous presence ceiling, which
+          // is what lets a presence-class answer RESTART the episode rather
+          // than silently keep skipping ccd's presence rungs forever (spec
+          // §5.7), and whether it went to the lease's holder.
+          this.childReclaimWriteBack(r.id, entry, outcome, ask, answered);
         },
         (err: unknown) => {
-          console.warn(`ccrc-server: sweepChildReclaim: the reclaim of ${r.id} threw (${err instanceof Error ? err.message : String(err)}) — left for the next pass`);
+          const answered = this.childReclaimLaneNow();
+          // A rejection is a defect the executor could not name
+          // (`reclaimChild` never throws for a condition it can name). It is
+          // written as a FAILED attempt. That ends the presence episode, so a
+          // licensed request that rejects is never followed by a second
+          // licence on the same episode. It forfeits a holder's lease. And it
+          // backs off, so a child whose every attempt rejects cannot hog the
+          // one slot. It is written only while the entry is still the live
+          // one, like the answer.
+          console.warn(`ccrc-server: sweepChildReclaim: the reclaim of ${r.id} threw (${err instanceof Error ? err.message : String(err)}) — recorded as a failed attempt; the sweep retries after its backoff`);
+          this.childReclaimWriteBack(r.id, entry, { kind: 'failed' }, ask, answered);
         },
       ).finally(() => {
         this.childReclaimInFlight.delete(r.id);
@@ -3459,6 +3483,32 @@ export class FleetWatcher {
       if (!seen.has(id)) this.childReclaimReleaseAnswered.delete(id);
     }
     await Promise.all(acts);
+  }
+
+  /** The child-reclaim lane's two clocks, read together
+   *  (`ChildReclaimLaneNow`): this process's monotonic clock
+   *  (`Deps.monotonicMs`, or `performance.now()` in production) and the wall
+   *  clock. Synchronous, so the pass that reads it awaits nothing. */
+  private childReclaimLaneNow(): ChildReclaimLaneNow {
+    return { monoMs: this.deps.monotonicMs?.() ?? performance.now(), wallMs: Date.now() };
+  }
+
+  /** Writes one settled request back into the lane's memory (spec §5.7): the
+   *  answer's and the rejection's ONE path. Only while the entry is still the
+   *  live one. A pass that ran while this was in flight may have cleared the
+   *  memory (switch raised, capability lost, mirror unread, row unlisted,
+   *  child ineligible) or replaced the entry (a recycled slug's new
+   *  workspace); re-seeding it from a stale entry would let the child be
+   *  asked for on the FIRST pass after, and "two FRESH passes" would be
+   *  false. `null` forgets the child. */
+  private childReclaimWriteBack(
+    id: string, entry: ChildReclaimSweepEntry, outcome: ChildReclaimSweepOutcome, ask: ChildReclaimAsk,
+    answered: ChildReclaimLaneNow,
+  ): void {
+    if (this.childReclaimSweepState.get(id) !== entry) return;
+    const next = childReclaimNextEntry(entry, outcome, ask, answered, CHILD_RECLAIM_SWEEP_MS);
+    if (next === null) this.childReclaimSweepState.delete(id);
+    else this.childReclaimSweepState.set(id, next);
   }
 
   /** `ChildReclaimHoldCandidatesRead` for one child (spec §5.7's "no hold"

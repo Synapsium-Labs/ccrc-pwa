@@ -12,11 +12,12 @@
 // re-examined, and never through the orphan branch.
 import { describe, it, expect } from 'vitest';
 import {
-  CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_PRESENCE_DEFERS, childReclaimAttention, childReclaimBackoffMs,
-  childReclaimDeferExpired, childReclaimDue, childReclaimFailingSentence, childReclaimFirstSighting,
-  childReclaimHoldRead, childReclaimJournalRow, childReclaimNextEntry, childReclaimSweepVerdict,
-  type ChildReclaimHoldCandidate, type ChildReclaimJournalRow, type ChildReclaimSweepEntry,
-  type ChildReclaimSweepInput, type ChildReclaimSweepOutcome, type ChildReclaimTokenKind,
+  CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_PRESENCE_DEFERS, childReclaimAskOrder, childReclaimAttention,
+  childReclaimBackoffMs, childReclaimDeferExpired, childReclaimDue, childReclaimFailingSentence,
+  childReclaimFirstSighting, childReclaimHoldRead, childReclaimJournalRow, childReclaimNextEntry,
+  childReclaimSameGeneration, childReclaimSweepVerdict,
+  type ChildReclaimAsk, type ChildReclaimHoldCandidate, type ChildReclaimJournalRow, type ChildReclaimLaneNow,
+  type ChildReclaimSweepEntry, type ChildReclaimSweepInput, type ChildReclaimSweepOutcome, type ChildReclaimTokenKind,
 } from '../src/childReclaimSweep.js';
 import {
   HOLD_NO_REASON, HOLD_UNREADABLE,
@@ -33,6 +34,29 @@ const PASS = 60_000;
 const C = CHILD_RECLAIM_DEFER_CEILING_MS;
 /** The caller's `CHILD_BIRTH_SKEW_MS` — also an argument. */
 const SKEW = 120_000;
+/** The wall clock's origin where a row gives the lane's two clocks DISTINCT
+ *  origins: the monotonic clock reads small numbers from a process-relative
+ *  origin, the wall clock reads epoch ms. */
+const T0 = NOW;
+/** The birth of the workspace generation an entry describes (ccd's clock). */
+const BORN = NOW - 3_600_000;
+/** One reading of the lane's two clocks; the wall defaults to the monotonic
+ *  reading, so a row that is not about the clocks reads one number. */
+const at = (mono: number, wall: number = mono): ChildReclaimLaneNow => ({ monoMs: mono, wallMs: wall });
+/** What the lane knew when it sent one request. */
+const ask = (mono: number, licensed: boolean, asHolder = false, wall: number = mono): ChildReclaimAsk =>
+  ({ at: at(mono, wall), licensed, asHolder });
+/** A small seeded PRNG (mulberry32), so a seeded row replays exactly. */
+const mulberry32 = (seed: number): (() => number) => {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+};
 
 /** A child that is eligible on every count: minted by run 7, which is
  *  terminal, with nothing open on it, born at the same instant its minting
@@ -348,75 +372,81 @@ describe('childReclaimHoldRead — accounting a hold\'s text against this child\
 });
 
 describe('the twice-observed memory, its two clocks, the presence episode, and the failure backoff', () => {
-  const entry: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000);
+  const entry: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN);
 
   it('a first sighting starts no clock, counts no failure, and was never asked', () => {
     expect(entry).toEqual({ firstEligibleAt: NOW - 60_000, firstDeferredAt: null, firstPresenceDeferredAt: null,
-      lastPresenceDeferredAt: null, consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null });
+      lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null, bornAt: BORN,
+      consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null });
   });
 
   it('forgets a child whose reclaim ended outright — reclaimed, or already gone', () => {
-    expect(childReclaimNextEntry(entry, { kind: 'reclaimed' }, NOW, false, PASS)).toBeNull();
-    expect(childReclaimNextEntry(entry, { kind: 'gone' }, NOW, false, PASS)).toBeNull();
+    expect(childReclaimNextEntry(entry, { kind: 'reclaimed' }, ask(NOW, false), at(NOW), PASS)).toBeNull();
+    expect(childReclaimNextEntry(entry, { kind: 'gone' }, ask(NOW, false), at(NOW), PASS)).toBeNull();
   });
 
   it('a TERMINAL refusal keeps its entry — the lifecycle mirror holds the refusal, this memory only paces the re-ask', () => {
-    const refused = childReclaimNextEntry(entry, { kind: 'refused', token: 'tree-unreadable' }, NOW, false, PASS);
+    const refused = childReclaimNextEntry(entry, { kind: 'refused', token: 'tree-unreadable' }, ask(NOW, false), at(NOW), PASS);
     expect(refused).toEqual({ ...entry, consecutiveFailures: 0, lastFailedAt: null,
       firstPresenceDeferredAt: null, refusedAt: NOW, lastAskedAt: NOW });
   });
 
   it('a refusal ends a run of failures and the presence episode alike', () => {
     const failing: ChildReclaimSweepEntry = { ...entry, consecutiveFailures: 3, lastFailedAt: NOW - 1,
-      firstPresenceDeferredAt: NOW - 10 * C, lastPresenceDeferredAt: NOW - PASS };
-    expect(childReclaimNextEntry(failing, { kind: 'refused', token: 'tree-unreadable' }, NOW, false, PASS))
+      firstPresenceDeferredAt: NOW - 10 * C, lastPresenceDeferredAt: NOW - PASS, lastPresenceWallAt: NOW - PASS };
+    expect(childReclaimNextEntry(failing, { kind: 'refused', token: 'tree-unreadable' }, ask(NOW, false), at(NOW), PASS))
       .toMatchObject({ consecutiveFailures: 0, lastFailedAt: null, firstPresenceDeferredAt: null,
         lastPresenceDeferredAt: null, refusedAt: NOW });
   });
 
   it('counts a failed attempt and stamps when it was asked — the any-kind clock untouched, the presence episode ended', () => {
     const withPresence: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 1000,
-      lastPresenceDeferredAt: NOW - 1000 };
-    const once = childReclaimNextEntry(withPresence, { kind: 'failed' }, NOW, false, PASS);
+      lastPresenceDeferredAt: NOW - 1000, lastPresenceWallAt: NOW - 1000 };
+    const once = childReclaimNextEntry(withPresence, { kind: 'failed' }, ask(NOW, false), at(NOW), PASS);
     expect(once).toEqual({ ...withPresence, consecutiveFailures: 1, lastFailedAt: NOW,
-      firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, refusedAt: null, lastAskedAt: NOW });
-    expect(childReclaimNextEntry(once!, { kind: 'failed' }, NOW + 120_000, false, PASS))
+      firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, lastPresenceWallAt: null, refusedAt: null,
+      lastAskedAt: NOW });
+    expect(childReclaimNextEntry(once!, { kind: 'failed' }, ask(NOW + 120_000, false), at(NOW + 120_000), PASS))
       .toEqual({ ...withPresence, consecutiveFailures: 2, lastFailedAt: NOW + 120_000,
-        firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, refusedAt: null, lastAskedAt: NOW + 120_000 });
+        firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, lastPresenceWallAt: null, refusedAt: null,
+        lastAskedAt: NOW + 120_000 });
   });
 
   it('any deferral ends a run of failures — a defer is not a failure', () => {
     const failing: ChildReclaimSweepEntry = { ...entry, consecutiveFailures: 3, lastFailedAt: NOW - 1 };
-    expect(childReclaimNextEntry(failing, { kind: 'deferred', why: 'held' }, NOW, false, PASS))
+    expect(childReclaimNextEntry(failing, { kind: 'deferred', why: 'held' }, ask(NOW, false), at(NOW), PASS))
       .toMatchObject({ consecutiveFailures: 0, lastFailedAt: null });
   });
 
   it('an UNLICENSED PRESENCE defer starts BOTH clocks, once; the next one a pass later restarts neither, and only moves the latest answer', () => {
     for (const why of CHILD_RECLAIM_PRESENCE_DEFERS) {
-      const first = childReclaimNextEntry(entry, { kind: 'deferred', why }, NOW, false, PASS);
+      const first = childReclaimNextEntry(entry, { kind: 'deferred', why }, ask(NOW, false), at(NOW), PASS);
       expect(first, why).toEqual({ ...entry, firstDeferredAt: NOW, firstPresenceDeferredAt: NOW,
-        lastPresenceDeferredAt: NOW, lastAskedAt: NOW });
-      expect(childReclaimNextEntry(first!, { kind: 'deferred', why }, NOW + 60_000, false, PASS), why).toEqual({
-        ...first!, lastPresenceDeferredAt: NOW + 60_000, lastAskedAt: NOW + 60_000,
-      });
+        lastPresenceDeferredAt: NOW, lastPresenceWallAt: NOW, presenceHeldSince: NOW, lastAskedAt: NOW });
+      expect(childReclaimNextEntry(first!, { kind: 'deferred', why }, ask(NOW + 60_000, false), at(NOW + 60_000), PASS), why)
+        .toEqual({
+          ...first!, lastPresenceDeferredAt: NOW + 60_000, lastPresenceWallAt: NOW + 60_000, lastAskedAt: NOW + 60_000,
+        });
     }
   });
 
   it('a LICENSED presence defer RESTARTS the episode even while one is already running', () => {
     const running: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 10 * C, firstPresenceDeferredAt: NOW - 10 * C,
-      lastPresenceDeferredAt: NOW - PASS };
-    const restarted = childReclaimNextEntry(running, { kind: 'deferred', why: 'presence' }, NOW, true, PASS);
-    expect(restarted).toEqual({ ...running, firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW, lastAskedAt: NOW });
-    expect(childReclaimDeferExpired(running, NOW, PASS)).toBe(true);
-    expect(childReclaimDeferExpired(restarted!, NOW, PASS)).toBe(false);
+      lastPresenceDeferredAt: NOW - PASS, lastPresenceWallAt: NOW - PASS };
+    const restarted = childReclaimNextEntry(running, { kind: 'deferred', why: 'presence' }, ask(NOW, true), at(NOW), PASS);
+    expect(restarted).toEqual({ ...running, firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW,
+      lastPresenceWallAt: NOW, presenceHeldSince: null, lastAskedAt: NOW });
+    expect(childReclaimDeferExpired(running, at(NOW), PASS)).toBe(true);
+    expect(childReclaimDeferExpired(restarted!, at(NOW), PASS)).toBe(false);
   });
 
   it('`licensed` is read only on a presence-class defer — it changes nothing for failed, refused, or any other why', () => {
-    const stale: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 10 * C, lastPresenceDeferredAt: NOW - PASS };
+    const stale: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 10 * C, lastPresenceDeferredAt: NOW - PASS,
+      lastPresenceWallAt: NOW - PASS };
     for (const outcome of [{ kind: 'failed' as const }, { kind: 'refused' as const, token: 'tree-unreadable' },
       { kind: 'deferred' as const, why: 'held' }]) {
-      expect(childReclaimNextEntry(stale, outcome, NOW, true, PASS), outcome.kind)
-        .toEqual(childReclaimNextEntry(stale, outcome, NOW, false, PASS));
+      expect(childReclaimNextEntry(stale, outcome, ask(NOW, true), at(NOW), PASS), outcome.kind)
+        .toEqual(childReclaimNextEntry(stale, outcome, ask(NOW, false), at(NOW), PASS));
     }
   });
 
@@ -424,18 +454,19 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
     for (const why of ['state-changed', 'paused', 'held', 'in-progress', 'reap-in-progress', 'siblings-open',
       'unsupported', 'paused-at-server']) {
       const withPresence: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 1000,
-        lastPresenceDeferredAt: NOW - 1000 };
-      expect(childReclaimNextEntry(withPresence, { kind: 'deferred', why }, NOW, false, PASS), why)
+        lastPresenceDeferredAt: NOW - 1000, lastPresenceWallAt: NOW - 1000 };
+      expect(childReclaimNextEntry(withPresence, { kind: 'deferred', why }, ask(NOW, false), at(NOW), PASS), why)
         .toEqual({ ...withPresence, firstDeferredAt: NOW, firstPresenceDeferredAt: null, lastPresenceDeferredAt: null,
-          refusedAt: null, lastAskedAt: NOW });
+          lastPresenceWallAt: null, refusedAt: null, lastAskedAt: NOW });
     }
   });
 
   it('a presence defer AFTER another kind keeps the earlier any-kind clock and starts its own', () => {
-    const other = childReclaimNextEntry(entry, { kind: 'deferred', why: 'state-changed' }, NOW, false, PASS)!;
-    expect(childReclaimNextEntry(other, { kind: 'deferred', why: 'attached' }, NOW + 60_000, false, PASS))
+    const other = childReclaimNextEntry(entry, { kind: 'deferred', why: 'state-changed' }, ask(NOW, false), at(NOW), PASS)!;
+    expect(childReclaimNextEntry(other, { kind: 'deferred', why: 'attached' }, ask(NOW + 60_000, false), at(NOW + 60_000), PASS))
       .toEqual({ ...entry, firstDeferredAt: NOW, firstPresenceDeferredAt: NOW + 60_000,
-        lastPresenceDeferredAt: NOW + 60_000, lastAskedAt: NOW + 60_000 });
+        lastPresenceDeferredAt: NOW + 60_000, lastPresenceWallAt: NOW + 60_000, presenceHeldSince: NOW + 60_000,
+        lastAskedAt: NOW + 60_000 });
   });
 
   it('names exactly the three presence defers — rungs 5 and 6 and the server\'s visibility claim', () => {
@@ -448,12 +479,12 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
     // Its latest presence answer one pass before the ceiling, so freshness
     // holds at both rows below and only the ceiling's own edge decides them.
     const presence: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 10 * C, firstPresenceDeferredAt: NOW,
-      lastPresenceDeferredAt: NOW + C - PASS };
-    expect(childReclaimDeferExpired(entry, NOW + 10 * C, PASS)).toBe(false);
+      lastPresenceDeferredAt: NOW + C - PASS, lastPresenceWallAt: NOW + C - PASS };
+    expect(childReclaimDeferExpired(entry, at(NOW + 10 * C), PASS)).toBe(false);
     // An any-kind deferral ten ceilings old expires nothing: only presence is bounded.
-    expect(childReclaimDeferExpired({ ...entry, firstDeferredAt: NOW - 10 * C }, NOW, PASS)).toBe(false);
-    expect(childReclaimDeferExpired(presence, NOW + C - 1, PASS)).toBe(false);
-    expect(childReclaimDeferExpired(presence, NOW + C, PASS)).toBe(true);
+    expect(childReclaimDeferExpired({ ...entry, firstDeferredAt: NOW - 10 * C }, at(NOW), PASS)).toBe(false);
+    expect(childReclaimDeferExpired(presence, at(NOW + C - 1), PASS)).toBe(false);
+    expect(childReclaimDeferExpired(presence, at(NOW + C), PASS)).toBe(true);
   });
 
   it('backs off min(ceiling, pass interval × 2^k) after k failures in a row — and not at all with none', () => {
@@ -470,19 +501,21 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
 
   it('every arm except `refused` clears `refusedAt` — a stale one from an earlier refusal does not survive a later failure or deferral', () => {
     const stale: ChildReclaimSweepEntry = { ...entry, refusedAt: NOW - 1 };
-    expect(childReclaimNextEntry(stale, { kind: 'failed' }, NOW, false, PASS)).toMatchObject({ refusedAt: null });
-    expect(childReclaimNextEntry(stale, { kind: 'deferred', why: 'held' }, NOW, false, PASS)).toMatchObject({ refusedAt: null });
+    expect(childReclaimNextEntry(stale, { kind: 'failed' }, ask(NOW, false), at(NOW), PASS)).toMatchObject({ refusedAt: null });
+    expect(childReclaimNextEntry(stale, { kind: 'deferred', why: 'held' }, ask(NOW, false), at(NOW), PASS))
+      .toMatchObject({ refusedAt: null });
   });
 
   it("starting past the ceiling, ENDING the episode makes childReclaimDeferExpired false — for failed, refused, and every non-presence why, asked of the function itself", () => {
-    const stale: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 10 * C, lastPresenceDeferredAt: NOW - PASS };
-    expect(childReclaimDeferExpired(stale, NOW, PASS), 'the control: past the ceiling, its latest answer recent').toBe(true);
+    const stale: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 10 * C, lastPresenceDeferredAt: NOW - PASS,
+      lastPresenceWallAt: NOW - PASS };
+    expect(childReclaimDeferExpired(stale, at(NOW), PASS), 'the control: past the ceiling, its latest answer recent').toBe(true);
     const outcomes: ChildReclaimSweepOutcome[] = [
       { kind: 'failed' }, { kind: 'refused', token: 'tree-unreadable' }, { kind: 'deferred', why: 'held' },
     ];
     for (const outcome of outcomes) {
-      const next = childReclaimNextEntry(stale, outcome, NOW, false, PASS)!;
-      expect(childReclaimDeferExpired(next, NOW, PASS), outcome.kind).toBe(false);
+      const next = childReclaimNextEntry(stale, outcome, ask(NOW, false), at(NOW), PASS)!;
+      expect(childReclaimDeferExpired(next, at(NOW), PASS), outcome.kind).toBe(false);
     }
   });
 
@@ -492,43 +525,44 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
     const GAP = 2.5 * PASS;
 
     it('a presence answer more than two and a half intervals after the last one starts a NEW episode — although the first answer is past the ceiling', () => {
-      const first = childReclaimNextEntry(entry, presence, NOW - C - 10 * PASS, false, PASS)!;
+      const first = childReclaimNextEntry(entry, presence, ask(NOW - C - 10 * PASS, false), at(NOW - C - 10 * PASS), PASS)!;
       expect(first).toMatchObject({ firstPresenceDeferredAt: NOW - C - 10 * PASS, lastPresenceDeferredAt: NOW - C - 10 * PASS });
-      const second = childReclaimNextEntry(first, presence, NOW - PASS, false, PASS)!;
+      const second = childReclaimNextEntry(first, presence, ask(NOW - PASS, false), at(NOW - PASS), PASS)!;
       expect(second, 'the episode restarts at the second answer').toMatchObject({
         firstDeferredAt: NOW - C - 10 * PASS, firstPresenceDeferredAt: NOW - PASS, lastPresenceDeferredAt: NOW - PASS });
-      expect(childReclaimDeferExpired(second, NOW, PASS), 'shortly after the second answer nothing is licensed').toBe(false);
+      expect(childReclaimDeferExpired(second, at(NOW), PASS), 'shortly after the second answer nothing is licensed').toBe(false);
     });
 
     it('…at EXACTLY two and a half intervals the episode continues, one ms more and it restarts — measured in the interval it is handed', () => {
-      const first = childReclaimNextEntry(entry, presence, NOW, false, PASS)!;
-      expect(childReclaimNextEntry(first, presence, NOW + GAP, false, PASS))
+      const first = childReclaimNextEntry(entry, presence, ask(NOW, false), at(NOW), PASS)!;
+      expect(childReclaimNextEntry(first, presence, ask(NOW + GAP, false), at(NOW + GAP), PASS))
         .toMatchObject({ firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW + GAP });
-      expect(childReclaimNextEntry(first, presence, NOW + GAP + 1, false, PASS))
+      expect(childReclaimNextEntry(first, presence, ask(NOW + GAP + 1, false), at(NOW + GAP + 1), PASS))
         .toMatchObject({ firstPresenceDeferredAt: NOW + GAP + 1, lastPresenceDeferredAt: NOW + GAP + 1 });
       // The same gap under a longer interval is continuous: the bound is the
       // argument's, never a constant of its own.
-      expect(childReclaimNextEntry(first, presence, NOW + GAP + 1, false, 10 * PASS))
+      expect(childReclaimNextEntry(first, presence, ask(NOW + GAP + 1, false), at(NOW + GAP + 1), 10 * PASS))
         .toMatchObject({ firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW + GAP + 1 });
     });
 
     it('an episode past the ceiling licenses nothing once its latest presence answer is older than two and a half intervals — at exactly that it still does', () => {
       const ep: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 2 * C, firstPresenceDeferredAt: NOW - 2 * C,
-        lastPresenceDeferredAt: NOW - GAP - 1 };
-      expect(childReclaimDeferExpired(ep, NOW, PASS), 'one sample, then time nobody measured').toBe(false);
-      expect(childReclaimDeferExpired({ ...ep, lastPresenceDeferredAt: NOW - GAP }, NOW, PASS), 'the inclusive boundary')
-        .toBe(true);
-      expect(childReclaimDeferExpired({ ...ep, lastPresenceDeferredAt: null }, NOW, PASS), 'no presence answer on record')
+        lastPresenceDeferredAt: NOW - GAP - 1, lastPresenceWallAt: NOW - GAP - 1 };
+      expect(childReclaimDeferExpired(ep, at(NOW), PASS), 'one sample, then time nobody measured').toBe(false);
+      expect(childReclaimDeferExpired({ ...ep, lastPresenceDeferredAt: NOW - GAP, lastPresenceWallAt: NOW - GAP }, at(NOW), PASS),
+        'the inclusive boundary').toBe(true);
+      expect(childReclaimDeferExpired({ ...ep, lastPresenceDeferredAt: null }, at(NOW), PASS), 'no presence answer on record')
         .toBe(false);
-      expect(childReclaimDeferExpired(ep, NOW, 10 * PASS), 'measured in the interval it is handed').toBe(true);
+      expect(childReclaimDeferExpired(ep, at(NOW), 10 * PASS), 'measured in the interval it is handed').toBe(true);
     });
 
     it('an entry off the invariant — a recent latest answer but no episode running — STARTS an episode, never extends a null one', () => {
       // `lastPresenceDeferredAt` is null exactly when `firstPresenceDeferredAt`
       // is, on every entry the lane can reach. This literal breaks that on
       // purpose: a recent latest answer alone must not count as an episode.
-      const offInvariant: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: null, lastPresenceDeferredAt: NOW - PASS };
-      expect(childReclaimNextEntry(offInvariant, presence, NOW, false, PASS))
+      const offInvariant: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: null, lastPresenceDeferredAt: NOW - PASS,
+        lastPresenceWallAt: NOW - PASS };
+      expect(childReclaimNextEntry(offInvariant, presence, ask(NOW, false), at(NOW), PASS))
         .toMatchObject({ firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW });
     });
   });
@@ -555,10 +589,398 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
 
     it('a later non-refusal outcome clears refusedAt, so the child is due on the ordinary backoff alone again', () => {
       const refused: ChildReclaimSweepEntry = { ...entry, refusedAt: NOW - 1 };
-      const next = childReclaimNextEntry(refused, { kind: 'deferred', why: 'held' }, NOW, false, PASS)!;
+      const next = childReclaimNextEntry(refused, { kind: 'deferred', why: 'held' }, ask(NOW, false), at(NOW), PASS)!;
       expect(next.refusedAt).toBeNull();
       expect(childReclaimDue(next, NOW, PASS)).toBe(true);
     });
+  });
+});
+
+// SPEC §5.7 — the lane's two clocks, the bracketed answer and the presence
+// lease. Every instant an entry keeps is the lane's MONOTONIC clock, except
+// `firstDeferredAt` (wall-clock epoch ms, displayed), `lastPresenceWallAt`
+// (the gap's wall operand) and `bornAt` (ccd's clock, compared for equality).
+// The rows below read monotonic values from a small origin, as a process's
+// monotonic clock does.
+describe('the lane\'s two clocks, the bracketed answer, and the presence lease (spec §5.7)', () => {
+  const presence: ChildReclaimSweepOutcome = { kind: 'deferred', why: 'presence' };
+  /** The gap bound, as the policy derives it from the interval it is handed. */
+  const G = 2.5 * PASS;
+  /** A first sighting at monotonic 0. */
+  const fresh: ChildReclaimSweepEntry = childReclaimFirstSighting(0, BORN);
+  /** One due item, the shape `childReclaimAskOrder` takes. */
+  const item = (id: string, over: Partial<ChildReclaimSweepEntry> = {}): { id: string; entry: ChildReclaimSweepEntry } =>
+    ({ id, entry: { ...fresh, ...over } });
+  const ids = (xs: readonly { id: string }[]): string[] => xs.map((x) => x.id);
+
+  it('P0: childReclaimAskOrder returns a PERMUTATION of the due list — the same items by reference, and the same length', () => {
+    for (let seed = 1; seed <= 300; seed += 1) {
+      const rnd = mulberry32(seed);
+      const n = Math.floor(rnd() * 9);                        // 0–8 due items
+      const due = Array.from({ length: n }, (_, k) => item(`demo-${k}`, {
+        firstEligibleAt: Math.floor(rnd() * 3) * 1_000,
+        lastAskedAt: rnd() < 0.3 ? null : Math.floor(rnd() * 4) * 1_000,
+        presenceHeldSince: rnd() < 0.4 ? Math.floor(rnd() * 3) * 1_000 : null,
+      }));
+      const { order, holderId } = childReclaimAskOrder(due);
+      expect(order, `seed ${seed}: the same length`).toHaveLength(due.length);
+      for (const d of due) expect(order.filter((o) => o === d), `seed ${seed}: ${d.id} once, by reference`).toHaveLength(1);
+      expect(holderId === null ? true : order[0]?.id === holderId, `seed ${seed}: the holder is asked first`).toBe(true);
+    }
+  });
+
+  it('P1: one presence-held child among never-asked children goes FIRST, although it was asked most recently — and holderId names it', () => {
+    const held = item('demo-z', { lastAskedAt: 500_000, presenceHeldSince: 400_000 });
+    const { order, holderId } = childReclaimAskOrder([item('demo-a'), item('demo-b'), held, item('demo-c')]);
+    expect(ids(order)).toEqual(['demo-z', 'demo-a', 'demo-b', 'demo-c']);
+    expect(holderId).toBe('demo-z');
+  });
+
+  it('P2: seniority is presenceHeldSince, never the episode start', () => {
+    const S = item('demo-s', { presenceHeldSince: 0, firstPresenceDeferredAt: 500_000, lastAskedAt: 600_000 });
+    const J = item('demo-j', { presenceHeldSince: 100_000, firstPresenceDeferredAt: 100_000, lastAskedAt: 600_000 });
+    const { order, holderId } = childReclaimAskOrder([J, S]);
+    expect(holderId).toBe('demo-s');
+    expect(ids(order)).toEqual(['demo-s', 'demo-j']);
+  });
+
+  it('P3: seniority is not the any-kind clock either', () => {
+    const J = item('demo-j', { firstDeferredAt: T0, presenceHeldSince: 100_000, lastAskedAt: 600_000 });
+    const S = item('demo-s', { firstDeferredAt: T0 + 500_000, presenceHeldSince: 0, lastAskedAt: 600_000 });
+    expect(childReclaimAskOrder([J, S]).holderId).toBe('demo-s');
+  });
+
+  it('P4: a presenceHeldSince tie falls to firstEligibleAt, then id; with no holder, the order is the fairness order alone', () => {
+    // The holder arm: B was sighted before A although A sorts first by id.
+    const A = item('demo-a', { presenceHeldSince: 100, firstEligibleAt: 2_000, lastAskedAt: 50 });
+    const B = item('demo-b', { presenceHeldSince: 100, firstEligibleAt: 1_000, lastAskedAt: 60 });
+    const Cc = item('demo-c', { presenceHeldSince: 100, firstEligibleAt: 1_000, lastAskedAt: 70 });
+    expect(childReclaimAskOrder([A, Cc, B]).holderId, 'firstEligibleAt, then id').toBe('demo-b');
+    expect(ids(childReclaimAskOrder([A, Cc, B]).order)).toEqual(['demo-b', 'demo-a', 'demo-c']);
+    // The fairness arm: never asked first; among those, sighted earlier first
+    // (not id); then lastAskedAt ascending; a lastAskedAt tie falls to
+    // firstEligibleAt, then id — the three shapes the lane rows pin.
+    const due = [
+      item('demo-p', { lastAskedAt: 2_000 }),
+      item('demo-u', { lastAskedAt: 3_000, firstEligibleAt: 9_000 }),
+      item('demo-x', { lastAskedAt: null, firstEligibleAt: 5_000 }),
+      item('demo-r', { lastAskedAt: 1_000 }),
+      item('demo-v', { lastAskedAt: 3_000, firstEligibleAt: 8_000 }),
+      item('demo-y', { lastAskedAt: null, firstEligibleAt: 3_000 }),
+      item('demo-q', { lastAskedAt: 1_000 }),
+    ];
+    const fair = childReclaimAskOrder(due);
+    expect(fair.holderId).toBeNull();
+    expect(ids(fair.order)).toEqual(['demo-y', 'demo-x', 'demo-q', 'demo-r', 'demo-p', 'demo-v', 'demo-u']);
+  });
+
+  it('P5: presenceHeldSince — joined at an unlicensed ARRIVAL, kept while the episode continues, forfeited by a holder that cannot continue it', () => {
+    // A non-holder's first unlicensed presence answer: asked at 10 000, it ARRIVES at 14 000.
+    const joined = childReclaimNextEntry(fresh, presence, ask(10_000, false), at(14_000), PASS)!;
+    expect(joined.presenceHeldSince, 'a non-holder joins the line at its arrival').toBe(14_000);
+    // The holder's unlicensed answer that continues keeps it.
+    const kept = childReclaimNextEntry(joined, presence, ask(70_000, false, true), at(75_000), PASS)!;
+    expect(kept).toMatchObject({ firstPresenceDeferredAt: 14_000, presenceHeldSince: 14_000 });
+    // Arriving 160 001 after the previous request: a gap, so the episode restarts.
+    const forfeit = childReclaimNextEntry(kept, presence, ask(200_000, false, true), at(230_001), PASS)!;
+    expect(forfeit.firstPresenceDeferredAt).toBe(230_001);
+    expect(forfeit.presenceHeldSince, 'the HOLDER forfeits the lease').toBeNull();
+    const waited = childReclaimNextEntry(kept, presence, ask(200_000, false, false), at(230_001), PASS)!;
+    expect(waited.firstPresenceDeferredAt).toBe(230_001);
+    expect(waited.presenceHeldSince, 'a waiting member, asked as a non-holder, keeps its place').toBe(14_000);
+    // A licensed presence answer clears it; the next unlicensed non-holder answer joins afresh, at the back.
+    const licensed = childReclaimNextEntry(kept, presence, ask(130_000, true, true), at(131_000), PASS)!;
+    expect(licensed.presenceHeldSince, 'a licensed presence answer leaves the line').toBeNull();
+    const rejoined = childReclaimNextEntry(licensed, presence, ask(500_000, false), at(502_000), PASS)!;
+    expect(rejoined.presenceHeldSince, 're-joins at its own arrival, at the back').toBe(502_000);
+    // Every other outcome clears it — a holder's or not.
+    const others: ChildReclaimSweepOutcome[] = [
+      { kind: 'failed' }, { kind: 'refused', token: 'tree-unreadable' },
+      ...['state-changed', 'paused', 'held', 'in-progress'].map((why): ChildReclaimSweepOutcome => ({ kind: 'deferred', why })),
+    ];
+    for (const outcome of others) {
+      for (const asHolder of [true, false]) {
+        expect(childReclaimNextEntry(kept, outcome, ask(130_000, false, asHolder), at(131_000), PASS)?.presenceHeldSince,
+          `${JSON.stringify(outcome)}, asHolder ${asHolder}`).toBeNull();
+      }
+    }
+  });
+
+  it('P6: presenceHeldSince never reaches the licence — the lease decides who is asked, never what is licensed', () => {
+    const now = 2_000_000;
+    const e: ChildReclaimSweepEntry = { ...fresh, presenceHeldSince: now - 2 * C, firstPresenceDeferredAt: now,
+      lastPresenceDeferredAt: now - 5_000, lastPresenceWallAt: now - 5_000 };
+    expect(childReclaimDeferExpired(e, at(now), PASS)).toBe(false);
+  });
+
+  it('P7: continuity runs from the new answer\'s ARRIVAL back to the previous answer\'s REQUEST — inclusive at the gap', () => {
+    const first = childReclaimNextEntry(fresh, presence, ask(0, false), at(10_000), PASS)!;   // its request at 0
+    expect(childReclaimNextEntry(first, presence, ask(120_000, false), at(G), PASS), 'arriving at exactly the gap: continues')
+      .toMatchObject({ firstPresenceDeferredAt: 10_000, lastPresenceDeferredAt: 120_000 });
+    expect(childReclaimNextEntry(first, presence, ask(120_000, false), at(G + 1), PASS), 'one ms later: a NEW episode, at the arrival')
+      .toMatchObject({ firstPresenceDeferredAt: G + 1, lastPresenceDeferredAt: 120_000 });
+  });
+
+  it('P8: the episode starts at its first answer\'s ARRIVAL, so the ceiling is never reached early by a slow first answer', () => {
+    let e = childReclaimNextEntry(fresh, presence, ask(0, false), at(30_000), PASS)!;          // asked at 0, arrives 30 s later
+    for (let q = PASS; q <= 840_000; q += PASS) e = childReclaimNextEntry(e, presence, ask(q, false, true), at(q), PASS)!;
+    expect(childReclaimDeferExpired(e, at(900_000), PASS), 'a ceiling after the REQUEST').toBe(false);
+    expect(childReclaimDeferExpired(e, at(929_999), PASS)).toBe(false);
+    expect(childReclaimDeferExpired(e, at(930_000), PASS), 'a ceiling after the ARRIVAL').toBe(true);
+    expect(e.firstPresenceDeferredAt).toBe(30_000);
+  });
+
+  it('P9: freshness at the ask reads the latest answer\'s REQUEST, never its arrival', () => {
+    const X = 3 * C;
+    const before: ChildReclaimSweepEntry = { ...fresh, firstPresenceDeferredAt: X - 2 * C, lastPresenceDeferredAt: X - PASS,
+      lastPresenceWallAt: X - PASS, presenceHeldSince: X - 2 * C };
+    const e = childReclaimNextEntry(before, presence, ask(X, false, true), at(X + 40_000), PASS)!;
+    expect(e.firstPresenceDeferredAt, 'the episode continued: two ceilings old').toBe(X - 2 * C);
+    expect(childReclaimDeferExpired(e, at(X + G + 1), PASS)).toBe(false);
+    expect(childReclaimDeferExpired(e, at(X + G), PASS)).toBe(true);
+  });
+
+  it('P10: a backward wall step cannot hide a hole — the gap is the LARGER of the two clocks\' differences', () => {
+    const m0 = 5 * C;
+    const w0 = T0 + 5 * C;
+    const running: ChildReclaimSweepEntry = { ...fresh, firstPresenceDeferredAt: m0 - 2 * C, lastPresenceDeferredAt: m0,
+      lastPresenceWallAt: w0, presenceHeldSince: m0 - 2 * C };
+    const reading = at(m0 + 200_000, w0 + 50_000);            // 200 s monotonic; the wall, stepped back, reads 50 s
+    expect(childReclaimDeferExpired(running, reading, PASS), 'not fresh at the ask').toBe(false);
+    const next = childReclaimNextEntry(running, presence, { at: reading, licensed: false, asHolder: true }, reading, PASS)!;
+    expect(next.firstPresenceDeferredAt, 'the hole restarts the episode').toBe(m0 + 200_000);
+    expect(childReclaimDeferExpired(next, reading, PASS)).toBe(false);
+  });
+
+  it('P11: a suspend cannot hide a hole — the monotonic clock stopped, the wall clock did not', () => {
+    const m0 = 5 * C;
+    const w0 = T0 + 5 * C;
+    const running: ChildReclaimSweepEntry = { ...fresh, firstPresenceDeferredAt: m0 - 2 * C, lastPresenceDeferredAt: m0,
+      lastPresenceWallAt: w0, presenceHeldSince: m0 - 2 * C };
+    const reading = at(m0 + 60_000, w0 + 400_000);             // 60 s monotonic; 400 s on the wall
+    expect(childReclaimDeferExpired(running, reading, PASS), 'not fresh at the ask').toBe(false);
+    const next = childReclaimNextEntry(running, presence, { at: reading, licensed: false, asHolder: true }, reading, PASS)!;
+    expect(next.firstPresenceDeferredAt, 'the hole restarts the episode').toBe(m0 + 60_000);
+  });
+
+  it('P12: the ceiling\'s span is the MONOTONIC clock alone — never a mix of the two clocks', () => {
+    const start = 100_000;
+    const wallOf = (m: number): ChildReclaimLaneNow => at(m, m + T0);    // distinct origins
+    const e: ChildReclaimSweepEntry = { ...fresh, firstPresenceDeferredAt: start, lastPresenceDeferredAt: start + C - PASS,
+      lastPresenceWallAt: start + C - PASS + T0 };
+    expect(childReclaimDeferExpired(e, wallOf(start + C - 1), PASS)).toBe(false);
+    expect(childReclaimDeferExpired(e, wallOf(start + C), PASS)).toBe(true);
+    expect(childReclaimDeferExpired(e, at(start + C, start + C + T0 - 600_000), PASS), 'the wall stepped back 600 s')
+      .toBe(true);
+  });
+
+  it('P13: firstDeferredAt is the WALL clock — the one entry field that is displayed — and every other stamp the monotonic one', () => {
+    for (const why of [...CHILD_RECLAIM_PRESENCE_DEFERS, 'state-changed', 'held']) {
+      const e = childReclaimNextEntry(fresh, { kind: 'deferred', why }, ask(5_000, false, false, T0 + 5_000),
+        at(5_000, T0 + 5_000), PASS)!;
+      expect(e, why).toMatchObject({ firstDeferredAt: T0 + 5_000, lastAskedAt: 5_000 });
+    }
+    expect(childReclaimNextEntry(fresh, presence, ask(5_000, false, false, T0 + 5_000), at(5_000, T0 + 5_000), PASS))
+      .toMatchObject({ firstPresenceDeferredAt: 5_000, lastPresenceDeferredAt: 5_000, lastPresenceWallAt: T0 + 5_000,
+        presenceHeldSince: 5_000 });
+  });
+
+  it('P14: one entry describes one workspace generation — a null birth never matches', () => {
+    const e = childReclaimFirstSighting(5_000, BORN);
+    expect(e.bornAt).toBe(BORN);
+    expect(childReclaimSameGeneration(e, BORN)).toBe(true);
+    expect(childReclaimSameGeneration(e, BORN + 1)).toBe(false);
+    expect(childReclaimSameGeneration(e, null)).toBe(false);
+    expect(childReclaimSameGeneration(childReclaimFirstSighting(5_000, null), null)).toBe(false);
+  });
+});
+
+// S1 — the seeded policy harness (spec §5.7). The exported L1 functions,
+// composed with a model of the lane: one slot, `watch.ts`'s
+// `CHILD_RECLAIM_STALL_MS`, the in-flight rule, the entry-identity write-back
+// guard and a rejection written as `failed` — over THREE clocks: true time,
+// the monotonic clock (origin 5 000, frozen during a suspend) and the wall
+// clock (origin T0). Every check below is in TRUE time. The model is a copy
+// of the lane's loop, so it can drift from `watch.ts`; the lane suite's rows
+// cross-check through the real watcher.
+describe('S1: seeded interleavings of the lane model — every licence rests on presence observed continuously, and the lease bounds the wait', () => {
+  const G = 2.5 * PASS;
+  /** `watch.ts`'s `CHILD_RECLAIM_STALL_MS` and `CHILD_RECLAIM_MAX_IN_FLIGHT`, copied: this suite imports no L4 file. */
+  const STALL = 480_000;
+  const SLOTS = 1;
+  const HOURS6 = 6 * 3_600_000;
+  const MODES = ['none', 'back', 'back-hole', 'fwd-small', 'fwd-large', 'suspend', 'slow-tick', 'slow-answer',
+    'breach', 'slow-persistent', 'reject'] as const;
+  type Mode = typeof MODES[number];
+  type Kind = 'presence' | 'state-changed' | 'reclaimed' | 'rejected';
+  interface Req { readonly id: string; readonly pass: number; readonly q: number; readonly licensed: boolean }
+  interface Ans { readonly id: string; readonly q: number; readonly a: number; readonly kind: Kind;
+    readonly heldAfter: number | null | undefined }
+  interface Run { readonly reqs: Req[]; readonly answers: Ans[]; readonly t2: number;
+    readonly reclaimedAt: Map<string, number>; readonly ps: string[] }
+
+  const simulate = (seed: number, n: number, mode: Mode): Run => {
+    const rnd = mulberry32(seed * 7_919 + n * 131 + MODES.indexOf(mode));
+    const uni = (lo: number, hi: number): number => lo + Math.floor(rnd() * (hi - lo + 1));
+    const ps = Array.from({ length: n }, (_, k) => `p${k + 1}`);
+    const listed = new Set<string>([...ps, 'r', 'x']);       // ids sort every p before r before x
+    const k = uni(3, 3 + 16 * n);                            // the disturbance's pass
+    let trueT = 0;
+    let monoAdj = 0;
+    let wallAdj = 0;
+    const now = (): ChildReclaimLaneNow => ({ monoMs: 5_000 + trueT + monoAdj, wallMs: T0 + trueT + wallAdj });
+    const entries = new Map<string, ChildReclaimSweepEntry>();
+    const inFlight = new Map<string, number>();             // id → the request's monotonic instant
+    const pending: { a: number; id: string; entry: ChildReclaimSweepEntry; ask: ChildReclaimAsk; q: number; kind: Kind }[] = [];
+    const reqs: Req[] = [];
+    const answers: Ans[] = [];
+    const reclaimedAt = new Map<string, number>();
+    let passN = 0;
+    let t2 = 0;
+    let p1Rejected = false;
+    const settle = (upTo: number): void => {
+      pending.sort((x, y) => x.a - y.a);
+      while (pending.length > 0 && pending[0]!.a <= upTo) {
+        const ev = pending.shift()!;
+        trueT = ev.a;
+        const answered = now();
+        inFlight.delete(ev.id);
+        if (ev.kind === 'reclaimed') { listed.delete(ev.id); reclaimedAt.set(ev.id, ev.a); }
+        const outcome: ChildReclaimSweepOutcome = ev.kind === 'rejected' ? { kind: 'failed' }
+          : ev.kind === 'reclaimed' ? { kind: 'reclaimed' } : { kind: 'deferred', why: ev.kind };
+        // The lane's identity guard: write back only while the entry is the live one.
+        if (entries.get(ev.id) === ev.entry) {
+          const next = childReclaimNextEntry(ev.entry, outcome, ev.ask, answered, PASS);
+          if (next === null) entries.delete(ev.id);
+          else entries.set(ev.id, next);
+        }
+        answers.push({ id: ev.id, q: ev.q, a: ev.a, kind: ev.kind, heldAfter: entries.get(ev.id)?.presenceHeldSince });
+      }
+    };
+    const pass = (): void => {
+      passN += 1;
+      if (passN === 2) t2 = trueT;
+      const asked = now();
+      for (const id of [...entries.keys()]) if (!listed.has(id)) entries.delete(id);
+      const due: { id: string; entry: ChildReclaimSweepEntry }[] = [];
+      for (const id of [...listed].sort()) {
+        const entry = entries.get(id);
+        if (entry === undefined || !childReclaimSameGeneration(entry, BORN)) {
+          entries.set(id, childReclaimFirstSighting(asked.monoMs, BORN));
+          continue;
+        }
+        if (inFlight.has(id)) continue;
+        if (!childReclaimDue(entry, asked.monoMs, PASS)) continue;
+        due.push({ id, entry });
+      }
+      let active = 0;
+      for (const since of inFlight.values()) if (asked.monoMs - since < STALL) active += 1;
+      const { order, holderId } = childReclaimAskOrder(due);
+      for (const { id, entry } of order.slice(0, Math.max(0, SLOTS - active))) {
+        const a: ChildReclaimAsk = { at: asked, licensed: childReclaimDeferExpired(entry, asked, PASS), asHolder: id === holderId };
+        reqs.push({ id, pass: passN, q: trueT, licensed: a.licensed });
+        inFlight.set(id, asked.monoMs);
+        let kind: Kind;
+        let latency: number;
+        if (id === 'r') { kind = 'reclaimed'; latency = uni(5_000, 45_000); }
+        else if (id === 'x') { kind = 'state-changed'; latency = uni(0, 10_000); }
+        else if (!a.licensed || mode === 'breach') { kind = 'presence'; latency = uni(0, 10_000); }
+        else if (mode === 'reject' && id === 'p1' && !p1Rejected) { p1Rejected = true; kind = 'rejected'; latency = uni(0, 10_000); }
+        else { kind = 'reclaimed'; latency = uni(5_000, 45_000); }
+        if (mode === 'slow-answer' && passN === k) latency += 120_000;
+        pending.push({ a: trueT + latency, id, entry, ask: a, q: trueT, kind });
+      }
+    };
+    const done = (): boolean => mode !== 'breach' && ps.every((p) => reclaimedAt.has(p)) && reclaimedAt.has('r');
+    pass();                                                   // pass 1, at true time 0: every child sighted
+    while (trueT < HOURS6) {
+      const i = passN + 1;
+      let spacing = mode === 'slow-persistent' ? 160_000 : uni(60_000, 80_000);
+      if ((mode === 'back-hole' || mode === 'slow-tick') && i === k) spacing = 200_000;
+      if (mode === 'suspend' && i === k) spacing += 300_000;  // true time runs on; the monotonic clock is frozen for 300 s
+      const tNext = trueT + spacing;
+      settle(tNext);
+      if (done()) break;
+      trueT = tNext;
+      if (i === k) {
+        if (mode === 'back' || mode === 'back-hole') wallAdj -= 600_000;
+        if (mode === 'fwd-small') wallAdj += 60_000;
+        if (mode === 'fwd-large') wallAdj += 600_000;
+        if (mode === 'suspend') monoAdj -= 300_000;
+      }
+      pass();
+    }
+    return { reqs, answers, t2, reclaimedAt, ps };
+  };
+
+  /** (i): the licensed request at T rests on a suffix s_1…s_m of the child's
+   *  consecutive presence answers ending at its latest answer before T, with
+   *  T − a(s_1) ≥ C, a(s_{i+1}) − q(s_i) ≤ G and T − q(s_m) ≤ G. */
+  const chainBroken = (run: Run, id: string, T: number): boolean => {
+    const mine = run.answers.filter((x) => x.id === id && x.a <= T);
+    const m = mine.length - 1;
+    if (m < 0 || mine[m]!.kind !== 'presence' || T - mine[m]!.q > G) return true;
+    let s = m;
+    while (s > 0 && mine[s - 1]!.kind === 'presence' && mine[s]!.a - mine[s - 1]!.q <= G) s -= 1;
+    return T - mine[s]!.a < C;
+  };
+
+  const check = (seed: number, n: number, mode: Mode): string[] => {
+    const run = simulate(seed, n, mode);
+    const out: string[] = [];
+    const tag = `seed ${seed}, N ${n}, ${mode}`;
+    const lic = run.reqs.filter((q) => q.licensed && q.id.startsWith('p'));
+    // (i) every mode, the breaches included.
+    for (const q of lic) if (chainBroken(run, q.id, q.q)) out.push(`${tag}: (i) ${q.id}'s licence at ${q.q} rests on a broken chain`);
+    // (ii) every mode: two licences of one child at least a ceiling apart.
+    for (const p of run.ps) {
+      const ts = lic.filter((q) => q.id === p).map((q) => q.q);
+      for (let j = 1; j < ts.length; j += 1) {
+        if (ts[j]! - ts[j - 1]! < C) out.push(`${tag}: (ii) ${p} licensed twice ${ts[j]! - ts[j - 1]!} ms apart`);
+      }
+    }
+    const firstLicence = (p: string): number | undefined => lic.find((q) => q.id === p)?.q;
+    const lastLicence = (p: string): number | undefined => lic.filter((q) => q.id === p).at(-1)?.q;
+    const rAt = run.reclaimedAt.get('r');
+    if (mode === 'none' || mode === 'back') {
+      // (iii) licences in id order, the k-th by t_2 + k × (C + L_p + 2S).
+      const firsts = run.ps.map(firstLicence);
+      run.ps.forEach((p, j) => {
+        const t = firsts[j];
+        if (t === undefined) { out.push(`${tag}: (iii) ${p} never licensed`); return; }
+        if (t > run.t2 + (j + 1) * 1_070_000) out.push(`${tag}: (iii) ${p} licensed at t2+${t - run.t2}`);
+        if (j > 0 && firsts[j - 1] !== undefined && t <= firsts[j - 1]!) out.push(`${tag}: (iii) ${p} licensed out of id order`);
+      });
+      if (rAt === undefined || rAt > run.t2 + n * 1_070_000 + 45_000) out.push(`${tag}: (iii) r reclaimed at ${String(rAt)}`);
+    } else if (mode === 'breach') {
+      // (v) the reclaimable child is reached within six hours.
+      if (rAt === undefined || rAt > HOURS6) out.push(`${tag}: (v) r not reclaimed within 6 h`);
+    } else if (mode === 'slow-persistent') {
+      // (vi) no p licensed; r asked at pass 2N + 2 and reclaimed; each p joins at its first ask, forfeits at its second.
+      if (lic.length > 0) out.push(`${tag}: (vi) a presence-held child was licensed`);
+      const rFirst = run.reqs.find((q) => q.id === 'r');
+      if (rFirst?.pass !== 2 * n + 2 || rAt === undefined) out.push(`${tag}: (vi) r first asked at pass ${String(rFirst?.pass)}`);
+      for (const p of run.ps) {
+        const mine = run.answers.filter((x) => x.id === p);
+        if ((mine[0]?.heldAfter ?? null) === null) out.push(`${tag}: (vi) ${p} did not join at its first ask`);
+        if (mine[1]?.heldAfter !== null) out.push(`${tag}: (vi) ${p} did not forfeit at its second ask`);
+      }
+    } else {
+      // (iv) every p licensed and r reclaimed by t_2 + (N + 1) × (C + 2G + STALL) + 550 000.
+      const bound = run.t2 + (n + 1) * 1_680_000 + 550_000;
+      for (const p of run.ps) {
+        const t = lastLicence(p);
+        if (t === undefined || !run.reclaimedAt.has(p) || t > bound) out.push(`${tag}: (iv) ${p} licensed at ${String(t)}`);
+      }
+      if (rAt === undefined || rAt > bound) out.push(`${tag}: (iv) r reclaimed at ${String(rAt)}`);
+    }
+    return out;
+  };
+
+  it.each(MODES)('S1 %s: seeds 1–50 × N = 1–6', (mode) => {
+    const violations: string[] = [];
+    for (let n = 1; n <= 6; n += 1) for (let seed = 1; seed <= 50; seed += 1) violations.push(...check(seed, n, mode));
+    expect(violations).toEqual([]);
   });
 });
 
