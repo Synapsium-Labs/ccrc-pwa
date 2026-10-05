@@ -447,7 +447,7 @@ These are departures from the ledger's rulings, or from what shipped text at `00
   - **The grammar** is ccd's `^[A-Za-z0-9._-]+$` (`ccd/ccd:8751`), spelled with its alphabets written out, as `_svc_real_home` spells its own (`ccd/ccrc:796`). A range is collation-dependent: `[[ démo =~ ^[A-Za-z0-9._-]+$ ]]` matches under glibc's `en_US.UTF-8` (measured), and the script runs in its caller's locale.
   - All 126 live registry ids and 56 active unit ids pass it (attack P1's measurement, read-only), so S11 refuses no live purged id by name.
   - `LoadState=loaded` is measured on the live user manager for 35 real purged ids (Risk notes).
-- **D-3977** — *R13(a), wider than ruled: a leading `.` is refused.* `claude-session@..service` (id `.`) passes both ruled guards: the grammar admits `.`, and systemd reads it `loaded` (measured, system and user manager). ccd ids are `<account>-<project>`, and `_ws_project_valid` refuses a leading dot at creation (`ccd/ccd:6429`). So `ccd_id_ok` refuses one. It only narrows a pass, and closes the last of review 263 F2's named-unit inputs.
+- **D-3977** — *R13(a), wider than ruled: a leading `.` is refused.* `claude-session@..service` (id `.`) passes both ruled guards: the grammar admits `.`, and systemd reads it `loaded` (measured, system and user manager). no id ccd mints starts with a dot: `_ws_project_valid` refuses a dot-leading project at both minting sites (session ids are `<wrapper>-<project>`, workspace ids `<project>-<slug>`), and roster ids start with a letter (`shared/roster.ts` `ID_RE`). So `ccd_id_ok` refuses one. It only narrows a pass, and closes the last of review 263 F2's named-unit inputs.
 - **D-3978** — *R13(a), wider than ruled: a symlinked `<id>.uuid` is not a purged row.*
   - The purged test was `[ ! -e "$reg/$id.uuid" ]`. `-e` follows a link, so a dangling symlink read as purged (review 263 F2, measured).
   - It becomes `[ ! -e … ] && [ ! -L … ]`. Something sits at the name, so the row is not gone.
@@ -514,7 +514,7 @@ These are departures from the ledger's rulings, or from what shipped text at `00
     - **The per-batch removal of `stop` and `looped` stays.** `looped` is written when EVERY batch's loop ends, so batch 1's file would be believed during batch 2: without the removal, an INT while batch 2 forks lost a job in 12 runs of 16, with it in 0 of 16. A W21 case pins it.
     - **The loop-top stop check is pinned by its bound:** 10 to 33 jobs started once the signal lands (10 are on file when it is sent), against all 120 without the check; W21 asserts at most 10 + 50.
   - **What it does not change:** no verdict moves without a signal, so every W and R case is unchanged.
-  - **Residue R17 (recorded by the coordinator):** a TERM sent to the sweep's process GROUP still TERMs the launcher itself at a random point of its loop; a job forked in the instant before its `.pid` write can be lost, and a leaked job can leave its scratch dir. PARITY with the foreground launcher, not closed: interleaved, 6 runs in 24 on the foreground launcher against 7 in 24 on the final file (mail 3593; pooled over every run, 28 in 72 against 39 in 108). A lone `sleep` that outlives its TERMed job shell (once in 36 TERM-to-shell runs) is the job's own start-up race and is not counted by W21.
+  - **Residue R17 (recorded by the coordinator):** a TERM sent to the sweep's process GROUP still TERMs the launcher itself at a random point of its loop; a job forked in the instant before its `.pid` write can be lost, and a leaked job can leave its scratch dir. PARITY with the foreground launcher, not closed: interleaved, 6 runs in 24 on the foreground launcher against 7 in 24 on the final file (mail 3593; pooled over every run, 28 in 72 against 39 in 108). A lone `sleep` that outlives its TERMed job shell (once in 36 TERM-to-shell runs) is the job's own start-up race and is not counted by W21. The same fork-window race can also leave a `bash verify-service.sh <unit>` (not only a lone `sleep`) running out its window after a Ctrl-C lands just as a job starts; it is bounded, read-only and moves no verdict, so "0 survivors" holds for the launcher's recording, not for that kernel/bash race (W21 counts a survivor only when its process group was never TERMed).
 
 ## File structure
 
@@ -878,8 +878,8 @@ After X2, X3, X3b and X4, no `*-poison` file exists.
 ```bash
 # ccd's session-id grammar, `^[A-Za-z0-9._-]+$` (ccd/ccd's "bad session id" checks), with its alphabets written out
 # rather than as ranges — as ccd/ccrc's `_svc_real_home` writes its own — because a range is collation-dependent
-# under some UTF-8 locales and this script runs in its caller's. A leading `.` is refused too (D-3977): ccd ids are
-# `<account>-<project>`, and `claude-session@..service` passes the grammar and reads `loaded`.
+# under some UTF-8 locales and this script runs in its caller's. A leading `.` is refused too (D-3977): no id ccd mints
+# starts with one (`_ws_project_valid`, roster `ID_RE`), yet `claude-session@..service` passes the grammar and reads `loaded`.
 ccd_id_ok() {   # <id> -> 0 iff ccd could have minted it
   local az=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ d=0123456789
   case "$1" in ''|.*|*[!${az}${d}._-]*) return 1 ;; esac

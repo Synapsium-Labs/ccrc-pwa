@@ -120,8 +120,8 @@ STOP_INTERVAL="${CCRC_VERIFY_STOP_INTERVAL:-1}"
 
 # ccd's session-id grammar, `^[A-Za-z0-9._-]+$` (ccd/ccd's "bad session id" checks), with its alphabets written out
 # rather than as ranges — as ccd/ccrc's `_svc_real_home` writes its own — because a range is collation-dependent
-# under some UTF-8 locales and this script runs in its caller's. A leading `.` is refused too (D-3977): ccd ids are
-# `<account>-<project>`, and `claude-session@..service` passes the grammar and reads `loaded`.
+# under some UTF-8 locales and this script runs in its caller's. A leading `.` is refused too (D-3977): no id ccd mints
+# starts with one (`_ws_project_valid`, roster `ID_RE`), yet `claude-session@..service` passes the grammar and reads `loaded`.
 ccd_id_ok() {   # <id> -> 0 iff ccd could have minted it
   local az=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ d=0123456789
   case "$1" in ''|.*|*[!${az}${d}._-]*) return 1 ;; esac

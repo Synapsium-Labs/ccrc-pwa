@@ -2836,7 +2836,7 @@ _box_env_value() {   # <file> <key> [unit|shell]
 # `. file` stops at the first NUL, so the job sets what comes before it and nothing after, while `read` below drops the
 # NUL and would pass the file — so it is found first, by `_box_env_has_nul`, never by `read`). rc 1 otherwise: BEP_LINE
 # is the first failing line's NUMBER (0 for a NUL: the cause is the file's, so no line is named) and BEP_CAUSE is `nul`,
-# `cr`, `shape` or `name` (an assignment to one of the thirteen names /bin/bash reserves, which stops the job's shell
+# `cr`, `shape` or `name` (an assignment to one of the fifteen names /bin/bash reserves, which stops the job's shell
 # before its `exec`, D-3980). It never records the line's bytes — ccrc.env holds tokens. Called directly, never in
 # `$(…)`, so the out-params reach the caller.
 _box_env_shell_plain() {   # <file>
