@@ -71,7 +71,7 @@ describe('GET /api/sessions/:id/pane/history', () => {
     // it the phone wraps text that tmux already wrapped, and a word breaks
     // twice.
     expect(calls.filter((c) => c[1] === 'capture-pane')).toEqual([
-      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-J', '-S', '-1953'],
+      ['tmux', 'capture-pane', '-t', `=cc-${ID}:`, '-p', '-e', '-J', '-S', '-1953'],
     ]);
     await app.close();
   });
@@ -114,6 +114,23 @@ describe('GET /api/sessions/:id/pane/history', () => {
     await down.app.close();
   });
 
+  it('the EXACT target\'s missing-session message is death too — a dead pane still 404s (D-3525)', async () => {
+    // The capture now targets `=cc-<id>:`, and for a missing session tmux
+    // answers `can't find session: cc-nope` — not `can't find pane` (measured,
+    // tmux 3.4, both verbs). Without this arm a dead session would read as
+    // "we could not look" (502) and the drawer would offer a re-read of a pane
+    // that is gone, instead of its loss overlay. The probe answers the same
+    // message, so both reads say gone together.
+    const gone = await makeApp(
+      { code: 1, stdout: '', stderr: "can't find session: cc-nope\n" },
+      { code: 1, stdout: '', stderr: "can't find session: cc-nope\n" },
+    );
+    const res = await gone.app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ ok: false, error: 'gone' });
+    await gone.app.close();
+  });
+
   it('a failure with nothing to say still says something', async () => {
     const { app } = await makeApp({ code: 3, stdout: '', stderr: '' });
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
@@ -151,7 +168,7 @@ describe('GET /api/sessions/:id/pane/history', () => {
     // `list-panes`, not a new verb: the whitelist entry `panePid` already uses,
     // so this widens nothing in the exec surface.
     expect(calls).toContainEqual(
-      ['tmux', 'list-panes', '-t', `cc-${ID}`, '-F', PANE_PROBE_FORMAT]);
+      ['tmux', 'list-panes', '-t', `=cc-${ID}:`, '-F', PANE_PROBE_FORMAT]);
   });
 
   it('reports the alternate screen as CONTEXT, beside the count that decides', async () => {
@@ -425,7 +442,7 @@ describe('the probe is taken FIRST and sizes the capture (§5.2)', () => {
     expect(calls.map((c) => c[1]), 'the capture ran before the measurement that sizes it')
       .toEqual(['list-panes', 'capture-pane']);
     expect(calls.filter((c) => c[1] === 'capture-pane')).toEqual([
-      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-J', '-S', '-47'],
+      ['tmux', 'capture-pane', '-t', `=cc-${ID}:`, '-p', '-e', '-J', '-S', '-47'],
     ]);
     await app.close();
   });
@@ -438,7 +455,7 @@ describe('the probe is taken FIRST and sizes the capture (§5.2)', () => {
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
     expect(calls.filter((c) => c[1] === 'capture-pane')).toEqual([
-      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-J', '-S', '-2000'],
+      ['tmux', 'capture-pane', '-t', `=cc-${ID}:`, '-p', '-e', '-J', '-S', '-2000'],
     ]);
     // ABSENT, NOT ZERO: an unmeasurable probe omits all three fields, and a
     // reader that finds them absent behaves exactly as it did before they
@@ -485,7 +502,7 @@ describe('the probe is taken FIRST and sizes the capture (§5.2)', () => {
     );
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
     expect(calls.filter((c) => c[1] === 'capture-pane')).toEqual([
-      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-J', '-S', '-2000'],
+      ['tmux', 'capture-pane', '-t', `=cc-${ID}:`, '-p', '-e', '-J', '-S', '-2000'],
     ]);
     expect(res.json()).toMatchObject({ scrollback: 0, alternate: true, width: 220 });
     await app.close();

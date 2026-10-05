@@ -20,7 +20,7 @@ const seed = (): void => { h.sh('_reg_set myid wrapper claude; _reg_set myid uui
 describe('_inject_spawn_effort reads the routing record (routing spec 2026-09-14 §5.2)', () => {
   it('no record: SPAWN_EFFORT, as today', () => {
     seed(); settle();
-    expect(typed()).toEqual(['tmux send-keys -t cc-myid -l /effort ultracode']);
+    expect(typed()).toEqual(['tmux send-keys -t =cc-myid: -l /effort ultracode']);
   });
   it('a record with effort high: types nothing — the argv already carried it (controller ruling S1-R8, Lever B)', () => {
     seed(); h.sh('_reg_set myid class opus; _reg_set myid effort high'); settle();
@@ -34,19 +34,27 @@ describe('_inject_spawn_effort reads the routing record (routing spec 2026-09-14
     seed(); h.sh('_reg_set myid effort auto'); settle();
     expect(typed()).toEqual([]);
   });
+  it('a DOTTED id\'s effort record is read by its id, not by its sanitised name (wave 9 M8)', () => {
+    // `_tmux w-my.site` is `cc-w-my_site`, so stripping `cc-` gives `w-my_site`,
+    // which is not the registry id: the settle takes the id as its second argument.
+    h.sh('_reg_set w-my.site wrapper claude; _reg_set w-my.site uuid deadbeef-0000-4000-8000-000000000000; '
+      + '_reg_set w-my.site class opus; _reg_set w-my.site effort high');
+    h.sh(`${STUBS} _inject_spawn_effort cc-w-my_site w-my.site`, { PANE_TEXT: READY });
+    expect(typed()).toEqual([]);
+  });
   it('a record with no effort field at all (only class): SPAWN_EFFORT, as today (controller ruling S1-R11)', () => {
     // THE EFFORT FIELD IS THE TEST, not `_route_any`. A record that names a
     // class and no effort chose nothing about effort, so the box default is
     // still what applies — and a `class` field must not switch it off.
     seed(); h.sh('_reg_set myid class sonnet'); settle();
-    expect(typed()).toEqual(['tmux send-keys -t cc-myid -l /effort ultracode']);
+    expect(typed()).toEqual(['tmux send-keys -t =cc-myid: -l /effort ultracode']);
   });
   it('a ccd-WRITTEN field alone never switches off the default: `degraded` is not a record of anybody\'s effort', () => {
     // Slice 3 stamps `degraded` itself, on a session whose operator chose
     // nothing. Under `_route_any` that stamp silently cancelled `SPAWN_EFFORT`
     // — a behaviour change with no writer and no channel (S1-R11).
     seed(); h.sh('_reg_set myid degraded opus'); settle();
-    expect(typed()).toEqual(['tmux send-keys -t cc-myid -l /effort ultracode']);
+    expect(typed()).toEqual(['tmux send-keys -t =cc-myid: -l /effort ultracode']);
   });
   it('an EMPTY effort file still counts as present: a field somebody wrote is a field somebody meant', () => {
     seed(); h.sh('_reg_set myid effort ""'); settle();
@@ -137,7 +145,7 @@ describe('_inject_spawn_effort confirms ONLY a real switch dialog', () => {
           send-keys) [[ "\${*: -1}" == Enter && -f "$HOME/after.txt" ]] && mv "$HOME/after.txt" "$HOME/pane.txt" ;;
         esac; return 0; };
       _inject_spawn_effort cc-myid`);
-    return h.calls().filter((l) => /send-keys -t cc-myid Enter$/.test(l)).length;
+    return h.calls().filter((l) => /send-keys -t =cc-myid: Enter$/.test(l)).length;
   };
   it('a quoted dialog above the idle box gets no confirming Enter', () => {
     expect(run(QUOTED)).toBe(1);

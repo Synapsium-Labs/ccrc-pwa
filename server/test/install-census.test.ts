@@ -15,6 +15,38 @@
 // lists: `gen-wrappers.test.ts`'s D-93 case compares `_inst_bins`' placements
 // against `TOOLCHAIN_EXECUTABLES`. It is the first over the UNINSTALL censuses.
 //
+// AND THE ID-SHAPED NAMES (spec §5 Pin 4). A name `_inst_bins` places that
+// matches `WRAPPER_ID_RE` is a file the wrapper machinery could mistake for an
+// account launcher, so it needs two declarations a dotted name does not:
+// `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` (the orphan scan skips
+// it) and `_uninst_wrappers`' exclusion `case` (the wrapper arm skips it, so
+// `_uninst_tree_bins` owns it). `gen-wrappers.test.ts`' D-93 case derives one
+// edge of that, placed ⊆ Set; D-3173 measured the Set carrying two names
+// nothing placed while every case stayed green. The id-shaped describe below
+// reads all three lists and requires them EQUAL. Its predicate is
+// `WRAPPER_ID_RE`, read out of `ccd/ccrc-wrapper-shape` — the test
+// `_uninst_wrappers` applies right after its `case`, which is what makes a
+// name need the entry. That is NOT the dotted-name filter refused below: that
+// filter would drop names from a census; this one selects the names a third
+// list must carry. Two more lists ride the same describe. The roster reserves
+// the GPT lane's command names as account ids in `GPT_TOOLCHAIN_ACCOUNT_IDS`,
+// kept twice (`shared/roster.ts`, `shared/roster-json.mjs`): the two must be
+// one set, and it must reserve every id-shaped name `_inst_bins` places behind
+// its `!= server` gate. (`gen-accounts.test.ts`' mirror parity case also
+// compares the two, as ordered lists of the text between commas. This reader
+// compares them as sets of string literals, and it THROWS on a member that is
+// not one.) And the name `shared/wrapper.mjs` makes every Codex
+// launcher exec must be one of those. `ccgpt` is reserved there and placed
+// nowhere, deliberately: on a live fleet box it is another repository's
+// launcher (D-3478).
+//
+// AND THE RELEASE (spec §11). Every `$tree/<path>` source the four bodies
+// below read must lie under `deploy/build-release.sh`'s `PATHSPEC`.
+// `ccrc update` installs from the release tarball, and a file present in a
+// checkout but absent from the tarball is an install that dies on every
+// updated box (v0.0.2, D-3105). Tracked is necessary and not sufficient: the
+// tarball is `git archive HEAD -- <PATHSPEC>`, not the index.
+//
 // AND AGAINST `deploy/deploy.sh`, THE FALLBACK. `ccrc rollout` is the deploy
 // path and `deploy.sh` the fallback, and it keeps a THIRD hand-kept placement
 // census: `install_atomic … .local/bin/<name>` for binaries, and a
@@ -23,9 +55,10 @@
 // the box's `~/ccrc` tree, was never PLACED, and the fallback deploy exited 0
 // — the four GPT-lane names, until Plan 2b-1 Task 7. The last describe below
 // compares ONE WAY, install ⊆ deploy, and that is a decision, not an
-// oversight: `deploy.sh` also places `ccrc-api` and `ccrc-models-probe`, which
-// `ccrc install` places nowhere — a PRE-EXISTING divergence between the two
-// installers, known and outside this guard, which the reverse would red on.
+// oversight: `deploy.sh` also places `ccrc-api` (and placed `ccrc-models-probe`
+// until Plan 3a, ruling R-C11), which `ccrc install` places nowhere — a
+// PRE-EXISTING divergence between the two installers, known and outside this
+// guard, which the reverse would red on.
 //
 // THE RULE IS NO SILENT DROPS. Every word this file reads that lands in a census
 // directory either resolves to a name or FAILS THE SUITE, naming the word and the
@@ -90,8 +123,10 @@
 // name some, to explain. The code types two, `ccd` and `ccrc`, as anti-vacuity
 // anchors — the tool and its launcher, which the install places on every
 // platform and every role — and reads the `BOX_UNIT_NAMES` anchors out of the
-// array `ccd/ccrc` declares. A third hand-kept copy of the census is the defect
-// this guard exists to delete.
+// array `ccd/ccrc` declares. The id-shaped describe feeds the real emitter one
+// fixture account (`codex-a`, upstream `claude`), which is an input, not a
+// census name. A third hand-kept copy of the census is the defect this guard
+// exists to delete.
 //
 // AND THE SOURCES. The last describe reads the other argument of the same
 // calls: every file `_inst_bins`, `_inst_units`, `_inst_files` and
@@ -143,9 +178,12 @@
 //     and so is the literal target `_uninst_tree_bins` checks the graphify link
 //     against before removing it.
 //   - The disable census reads literal `systemctl --user … disable --now` calls
-//     only. `ccd/ccrc`'s `_svc_disable_now` helper and a separate stop-then-
-//     disable are not read, and a system-manager `systemctl disable` (no
-//     `--user`) is not a user-unit disable, so it does not count.
+//     only. `ccd/ccrc`'s `_svc_disable_now` helper, a separate stop-then-
+//     disable, and `_uninst_codex_usage`'s per-INSTANCE disable of ccrc's
+//     usage template (an instance name is built from an id at run time;
+//     `ccrc-uninstall.test.ts` measures it) are not read, and a
+//     system-manager `systemctl disable` (no `--user`) is not a user-unit
+//     disable, so it does not count.
 //   - Paths are normalised (`/./` and repeated `/` collapse, on both sides, so
 //     `$bin/./x` is `x`), but `~/…` and a destination whose variable is bound
 //     to the empty string are not read as names.
@@ -176,6 +214,20 @@
 //     so a call written in such a comment is read as made (a phantom `rm -f`
 //     there would mask an orphan). Measured when written: none of the four
 //     occurs in `ccd/ccrc` or `deploy/deploy.sh`.
+//   - The id-shaped names. `TOOLCHAIN_EXECUTABLES` and both
+//     `GPT_TOOLCHAIN_ACCOUNT_IDS` are read as the string literals between the
+//     brackets of their ONE `const … = new Set([…]);`, comments cut; anything
+//     else there (a spread, an identifier) THROWS. `_uninst_wrappers`' `case`
+//     is read from its ONE `case "$name" in …) continue ;; esac` line, split
+//     on `|`; a glob, quote or variable there THROWS. The GPT-lane gate is the
+//     ONE `if [ "$INST_ROLE" != server ]; then` line in `_inst_bins` up to the
+//     first `fi`, and a nested block inside it THROWS. `_inst_graphify_engine`'s
+//     link is not on the Pin 4 side: that pin names `_inst_bins`.
+//   - The release. `PATHSPEC` is read from its ONE `PATHSPEC=(…)` assignment,
+//     as bare words. The conditional `PATHSPEC+=("$pkg/scripts")` arm is NOT
+//     read, so a source under a package's `scripts/` reds here by design —
+//     none does, measured when written. Build artifacts `_inst_tree` checks for
+//     (`server/dist`, …) are not `$tree/` sources of these bodies.
 //
 // READING `deploy/deploy.sh`. The same machinery — `scanLine`, `calls`,
 // `argAt`, `census` and its normalisation — and where that file's shape makes
@@ -281,6 +333,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { generateWrapperBody } from '../../shared/wrapper.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -639,6 +692,64 @@ function rmFOperands(body: string): string[] {
 
 // ── the censuses ──────────────────────────────────────────────────────────
 
+// ── ccd's direct-entry PAIR (D-3696) ────────────────────────────────────
+// `_inst_bins` no longer places `ccd` with `_inst_atomic`, and deploy.sh no
+// longer with `install_atomic`: both call ONE program, `ccd/ccd-entry-install.py`
+// (`_inst_ccd_pair` in ccrc, `install_ccd_pair` in deploy.sh), which renders the
+// launcher onto PATH and publishes the Bash body under ~/.local/libexec/ccrc.
+// That program declares its two sources and two destinations ONCE, as four
+// constant lines, and these readers derive the pair from those lines — never a
+// list typed here. The launcher's destination joins the `.local/bin` censuses
+// as an ordinary name, so every direction below checks it like any other; the
+// body's destination is OUTSIDE `.local/bin`, so it gets a describe of its own
+// (placement, removal, backup) rather than a silent drop.
+const PAIR_HELPER_REL = 'ccd/ccd-entry-install.py';
+const PAIR_HELPER = readFileSync(path.resolve(here, '..', '..', PAIR_HELPER_REL), 'utf8');
+
+/** The four paths the pair publisher declares, read from its own text. */
+function pairDecl(): { bodySource: string; templateSource: string; entryDest: string; bodyDest: string } {
+  const one = (name: string): string => {
+    const all = [...PAIR_HELPER.matchAll(new RegExp(`^${name} = '([^'\\n]+)'$`, 'gm'))];
+    if (all.length !== 1) {
+      throw new Error(`install-census.test.ts: expected exactly one \`${name} = '…'\` line in ${PAIR_HELPER_REL}, `
+        + `found ${all.length}. This reader has gone stale — re-point it; do NOT retype the pair here.`);
+    }
+    return all[0]![1]!;
+  };
+  return { bodySource: one('BODY_SOURCE'), templateSource: one('TEMPLATE_SOURCE'), entryDest: one('ENTRY_DEST'), bodyDest: one('BODY_DEST') };
+}
+
+/** The `.local/bin` name the pair publisher places, when `body` calls `publisher`
+ *  — exactly once, or a THROW: a second call is a second publication nobody ordered. */
+function pairBin(body: string, publisher: string, where: string): Set<string> {
+  const n = calls(body, publisher).length;
+  if (n === 0) return new Set();
+  if (n !== 1) throw new Error(`install-census.test.ts: ${where} calls ${publisher} ${n} times, not once`);
+  const { entryDest } = pairDecl();
+  const m = /^\.local\/bin\/([^/]+)$/.exec(entryDest);
+  if (m === null) {
+    throw new Error(`install-census.test.ts: ${PAIR_HELPER_REL}'s ENTRY_DEST "${entryDest}" is not one name under .local/bin — teach this reader`);
+  }
+  return new Set([m[1]!]);
+}
+
+/** The helper path a pair call site runs it from, read out of `text`'s
+ *  `<root>ccd/…py` words, which must all be the one tracked helper. */
+function pairHelperFrom(text: string, root: string, where: string): string {
+  const found = new Set([...text.matchAll(/(?:"\$tree\/|~\/ccrc\/)([A-Za-z0-9_./-]+\.py)/g)].map((m) => m[1]!));
+  if (found.size !== 1) {
+    throw new Error(`install-census.test.ts: ${where} names ${found.size} helper path(s) under ${root} (${[...found].join(', ')}), not one`);
+  }
+  return [...found][0]!;
+}
+
+/** The body of deploy.sh's pair publisher. */
+function deployPairBody(): string {
+  const m = /\ninstall_ccd_pair\(\) \{([\s\S]*?)\n\}/.exec(deployText());
+  if (m === null) throw new Error('install-census.test.ts: deploy/deploy.sh has no `install_ccd_pair() {` — extractor stale');
+  return m[1]!;
+}
+
 /** Every name the destination argument of an `_inst_atomic` call in
  *  `_inst_bins` places in `$HOME/.local/bin`. */
 function placedBins(): Set<string> {
@@ -646,7 +757,17 @@ function placedBins(): Set<string> {
   const body = fnBody(fn);
   const local = assignments(body);
   bindsExactlyOnce(fn, local, 'bin', BIN_DIR);
-  return census(fn, 'placement', argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 1), [BIN_DIR], local);
+  const placed = census(fn, 'placement', argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 1), [BIN_DIR], local);
+  for (const n of pairBin(body, '_inst_ccd_pair', fn)) placed.add(n);
+  return placed;
+}
+
+/** deploy.sh's `.local/bin` placements: its `install_atomic` destinations, and
+ *  the launcher its pair publisher places. */
+function deployPlacedBins(): Set<string> {
+  const placed = deployPlaced('install_atomic', DEPLOY_BIN_DIRS);
+  for (const n of pairBin(deployCode(), 'install_ccd_pair', DEPLOY_WHERE)) placed.add(n);
+  return placed;
 }
 
 /**
@@ -1010,6 +1131,20 @@ function ccrcTreeSources(): Set<string> {
       }
     }
   }
+  // ccd's pair: `_inst_bins` hands `"$tree"` (bound to `$BOX_TREE_DIR` above)
+  // to `_inst_ccd_pair`, which runs the helper from that tree, and the helper
+  // reads its two declared sources out of it.
+  const bins = fnBody('_inst_bins');
+  if (calls(bins, '_inst_ccd_pair').length > 0) {
+    const args = calls(bins, '_inst_ccd_pair')[0]!;
+    if (args.length !== 1 || args[0] !== '$tree') {
+      throw new Error(`install-census.test.ts: _inst_bins calls _inst_ccd_pair with ${JSON.stringify(args)}, not the one "$tree" this reader resolves`);
+    }
+    const { bodySource, templateSource } = pairDecl();
+    out.add(pairHelperFrom(fnBody('_inst_ccd_pair'), '$tree/', '_inst_ccd_pair'));
+    out.add(bodySource);
+    out.add(templateSource);
+  }
   return out;
 }
 
@@ -1047,6 +1182,13 @@ function deployTreeSources(): Set<string> {
       out.add(p.slice(root.length));
     }
   }
+  // ccd's pair, run ON THE BOX out of the rsynced ~/ccrc tree.
+  if (calls(code, 'install_ccd_pair').length > 0) {
+    const { bodySource, templateSource } = pairDecl();
+    out.add(pairHelperFrom(deployPairBody(), '~/ccrc/', 'install_ccd_pair'));
+    out.add(bodySource);
+    out.add(templateSource);
+  }
   return out;
 }
 
@@ -1061,6 +1203,182 @@ function trackedFiles(): Set<string> {
     );
   }
   return new Set(r.stdout.split('\0').filter(Boolean));
+}
+
+// ── the id-shaped names, and the release (header: AND THE ID-SHAPED NAMES,
+//    AND THE RELEASE) ─────────────────────────────────────────────────────
+
+const SHAPE_PATH = path.resolve(here, '..', '..', 'ccd', 'ccrc-wrapper-shape');
+const RELEASE_PATH = path.resolve(here, '..', '..', 'deploy', 'build-release.sh');
+
+/** `WRAPPER_ID_RE`, read out of its one declaration in the shape contract. It
+ *  is the test `_uninst_wrappers` applies right after its exclusion `case`, so
+ *  it is what makes a placed name need an entry there. */
+function wrapperIdRe(): RegExp {
+  const all = [...readFileSync(SHAPE_PATH, 'utf8').matchAll(/^WRAPPER_ID_RE='([^']+)'$/gm)];
+  if (all.length !== 1) {
+    throw new Error(
+      `install-census.test.ts: expected exactly one \`WRAPPER_ID_RE='…'\` in ${SHAPE_PATH}, found ${all.length} — `
+      + 'this reader has gone stale. Re-point it; do NOT retype the regex here.',
+    );
+  }
+  return new RegExp(all[0]![1]!);
+}
+
+/** The id-shaped members of `names`, sorted. */
+function idShaped(names: Iterable<string>): string[] {
+  const re = wrapperIdRe();
+  return [...names].filter((n) => re.test(n)).sort();
+}
+
+/** `a − b`, sorted. */
+function minus(a: Iterable<string>, b: Set<string>): string[] {
+  return [...a].filter((n) => !b.has(n)).sort();
+}
+
+/**
+ * The members of the ONE `const <name> … = new Set([…]);` in `rel`
+ * (repository-relative), read as the string literals between the brackets with
+ * comments cut. Anything else between them — a spread, an identifier, a
+ * template — THROWS: a member this reader cannot see would vanish from one side
+ * of a comparison, the silent drop this file refuses everywhere.
+ */
+function setLiteral(rel: string, name: string): Set<string> {
+  const src = readFileSync(path.resolve(REPO, rel), 'utf8');
+  const all = [...src.matchAll(new RegExp(`\\bconst ${name}\\b[^=\\n]*= new Set\\(\\[([\\s\\S]*?)\\]\\);`, 'g'))];
+  if (all.length !== 1) {
+    throw new Error(
+      `install-census.test.ts: expected exactly one \`const ${name} … = new Set([…]);\` in ${rel}, found `
+      + `${all.length} — re-point this reader at wherever it now lives; do NOT retype its members here.`,
+    );
+  }
+  const inner = all[0]![1]!.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const members = [...inner.matchAll(/'([^'\\\n]*)'|"([^"\\\n]*)"/g)].map((m) => (m[1] ?? m[2])!);
+  const rest = inner.replace(/'[^'\\\n]*'|"[^"\\\n]*"/g, '').replace(/[\s,]/g, '');
+  if (rest !== '') {
+    throw new Error(
+      `install-census.test.ts: ${name} in ${rel} carries something that is not a string literal `
+      + `(${JSON.stringify(rest)}) — this reader will not evaluate it. Spell the members as literals, or teach it.`,
+    );
+  }
+  return new Set(members);
+}
+
+/** The names `_uninst_wrappers`' exclusion `case` skips: its ONE
+ *  `case "$name" in a|b|…) continue ;; esac` line, split on `|`. A glob, quote
+ *  or variable in an alternative THROWS — it is a pattern, and this reader does
+ *  not evaluate patterns. */
+function uninstWrappersCase(): Set<string> {
+  const fn = '_uninst_wrappers';
+  const arms = [...fnBody(fn).matchAll(/^\s*case "\$name" in ([^)\n]*)\) continue ;; esac\s*$/gm)];
+  if (arms.length !== 1) {
+    throw new Error(
+      `install-census.test.ts: expected exactly one \`case "$name" in …) continue ;; esac\` line in ${fn}, `
+      + `found ${arms.length} — this reader has gone stale.`,
+    );
+  }
+  const alts = arms[0]![1]!.split('|');
+  const odd = alts.filter((a) => !/^[A-Za-z0-9._-]+$/.test(a));
+  if (odd.length > 0) {
+    throw new Error(
+      `install-census.test.ts: ${fn}'s exclusion case carries pattern(s) ${JSON.stringify(odd)} — spell each `
+      + 'name literally, or teach this reader.',
+    );
+  }
+  return new Set(alts);
+}
+
+/** The body of the ONE `if [ "$INST_ROLE" != server ]; then … fi` block in
+ *  `_inst_bins`, comments cut — the GPT lane's gate, which that function's own
+ *  comment calls the only `!= server` gate in it. Nothing may nest inside it,
+ *  so the first `fi` after it is its own. */
+function gptGateBlock(): string {
+  const fn = '_inst_bins';
+  const lines = fnBody(fn).split('\n');
+  const opens = lines.flatMap((l, i) => (/^\s*if \[ "\$INST_ROLE" != server \]; then\s*$/.test(l) ? [i] : []));
+  if (opens.length !== 1) {
+    throw new Error(
+      `install-census.test.ts: expected exactly one \`if [ "$INST_ROLE" != server ]; then\` line in ${fn}, found `
+      + `${opens.length} — this reader has gone stale, or the GPT lane's gate moved.`,
+    );
+  }
+  const start = opens[0]!;
+  const end = lines.findIndex((l, i) => i > start && /^\s*fi\s*$/.test(l));
+  if (end < 0) throw new Error(`install-census.test.ts: the GPT-lane gate in ${fn} has no closing \`fi\` this reader can see`);
+  const block = lines.slice(start + 1, end);
+  const nested = block.filter((l) => /^\s*(?:if|case|for|while|until)\b/.test(l));
+  if (nested.length > 0) {
+    throw new Error(
+      `install-census.test.ts: the GPT-lane gate in ${fn} nests ${JSON.stringify(nested)}, so its first \`fi\` `
+      + 'may not be its own — teach this reader before trusting the id-shaped describe.',
+    );
+  }
+  return block.join('\n');
+}
+
+/** Every name the GPT-lane gate's `_inst_atomic` calls place in `$HOME/.local/bin`. */
+function gatedBins(): Set<string> {
+  const fn = '_inst_bins';
+  const local = assignments(fnBody(fn));
+  bindsExactlyOnce(fn, local, 'bin', BIN_DIR);
+  return census(fn, 'placement', argAt(fn, '_inst_atomic', calls(gptGateBlock(), '_inst_atomic'), 1), [BIN_DIR], local);
+}
+
+/** Every repository path the GPT-lane gate's `_inst_atomic` calls read out of the placed tree. */
+function gatedSources(): Set<string> {
+  const fn = '_inst_bins';
+  const local = assignments(fnBody(fn));
+  bindsExactlyOnce(fn, local, 'tree', TREE_DIR);
+  const out = new Set<string>();
+  for (const word of argAt(fn, '_inst_atomic', calls(gptGateBlock(), '_inst_atomic'), 0)) {
+    for (const raw of resolveWord(word, local)) {
+      const p = path.posix.normalize(raw);
+      const rel = p.startsWith(`${TREE_DIR}/`) ? p.slice(TREE_DIR.length + 1) : '';
+      if (rel === '' || rel.includes('$') || rel.startsWith('../')) {
+        throw new Error(
+          `install-census.test.ts: the GPT-lane gate's source "${word}" resolves to "${p}", which is not a path in `
+          + 'the placed tree — spell it literally, or teach this reader.',
+        );
+      }
+      out.add(rel);
+    }
+  }
+  return out;
+}
+
+/** The name `shared/wrapper.mjs` makes every generated Codex launcher exec,
+ *  read out of the real emitter's own output — the one exec line the shape
+ *  reader parses — never typed here. */
+function codexLauncherTarget(): string {
+  const body = generateWrapperBody({ id: 'codex-a', configDirSuffix: '.codex-a', execKind: 'codex' }, 'claude');
+  const m = /^exec "\$HOME\/\.local\/bin\/([^"]+)" "\$@"$/m.exec(body);
+  if (m === null) {
+    throw new Error(`install-census.test.ts: the emitter's Codex launcher has no \`exec "$HOME/.local/bin/<target>" "$@"\` line:\n${body}`);
+  }
+  return m[1]!;
+}
+
+/** `deploy/build-release.sh`'s `PATHSPEC`, read out of its ONE `PATHSPEC=(…)`
+ *  assignment (comments cut) as bare words. A quoted, variable or glob entry
+ *  THROWS. The conditional `PATHSPEC+=` arm is not read (header). */
+function releasePathspec(): string[] {
+  const code = readFileSync(RELEASE_PATH, 'utf8').split('\n').map((l) => scanLine(l).code).join('\n');
+  const all = [...code.matchAll(/^PATHSPEC=\(([^)]*)\)/gm)];
+  if (all.length !== 1) {
+    throw new Error(
+      `install-census.test.ts: expected exactly one \`PATHSPEC=(…)\` in ${RELEASE_PATH}, found ${all.length} — `
+      + 'this reader has gone stale.',
+    );
+  }
+  const words = all[0]![1]!.trim().split(/\s+/);
+  const odd = words.filter((w) => !/^[A-Za-z0-9._/-]+$/.test(w));
+  if (odd.length > 0) {
+    throw new Error(
+      `install-census.test.ts: PATHSPEC carries ${JSON.stringify(odd)}, which this reader will not evaluate — `
+      + 'spell each entry as a bare path, or teach it.',
+    );
+  }
+  return words;
 }
 
 // ── the floors ────────────────────────────────────────────────────────────
@@ -1234,9 +1552,30 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
   // each case: it filters the PLACED set, so an empty one would pass on its
   // own however deploy.sh reads, and an empty deploy side would red every name
   // for a reason that is this file's, not deploy.sh's.
-  it('every binary _inst_bins places, deploy.sh places too', () => {
+  //
+  // DEPLOY_SH_WITHHOLDS (D-3287, spec §19 of
+  // docs/superpowers/specs/2026-09-20-centralised-update-management-design.md).
+  // deploy.sh is deliberately NOT taught the update-sync/watchdog names: the
+  // projection reader (`_upd_intent_state` in ccd/ccrc) treats an absent
+  // `ccd-update-sync.timer` unit file as "not configured → follow stable", and
+  // a deploy.sh fleet box must keep reading that way. Placing the timer's unit
+  // file via deploy.sh would flip that box to "configured, never synced →
+  // refuse" and break every no-`--to` update there. This is a declared,
+  // EXACT, two-sided exemption, not the one-way kind the graphify-link comment
+  // above warns against (`_inst_graphify_engine`'s "WHY A SECOND PLACEMENT
+  // SOURCE RATHER THAN AN EXEMPTION": "An exemption would protect one
+  // direction only"): here BOTH directions are asserted below — each withheld
+  // name must be placed by `ccrc install` (a stale entry reds direction 1) and
+  // must NOT be placed by deploy.sh (direction 2 reds the day someone teaches
+  // deploy.sh to place one, telling them to remove it from this list).
+  const DEPLOY_SH_WITHHOLDS = {
+    bins: ['ccd-update-sync'],
+    units: ['ccd-update-sync.service', 'ccd-update-sync.timer', 'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer'],
+  } as const;
+
+  it('every binary _inst_bins places, deploy.sh places too (except DEPLOY_SH_WITHHOLDS.bins)', () => {
     const placed = placedBins();
-    const deployed = deployPlaced('install_atomic', DEPLOY_BIN_DIRS);
+    const deployed = deployPlacedBins();
     expect(placed.size,
       'the _inst_bins extractor found too few placed binaries — it has gone stale, unless the function it reads really lost most of them')
       .toBeGreaterThan(BIN_FLOOR);
@@ -1244,15 +1583,28 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
       'the deploy.sh `install_atomic` extractor found too few binaries under .local/bin — it has gone stale, unless deploy.sh really lost most of them')
       .toBeGreaterThan(BIN_FLOOR);
 
-    expect([...placed].filter((n) => !deployed.has(n)).sort(),
+    expect([...placed].filter((n) => !deployed.has(n) && !(DEPLOY_SH_WITHHOLDS.bins as readonly string[]).includes(n)).sort(),
       `these are placed into ${BIN_DIR} by _inst_bins' \`_inst_atomic\` destinations and no \`install_atomic\` `
       + `destination in ${DEPLOY_WHERE} places them under .local/bin, so a fallback deploy ships them into ~/ccrc `
       + 'and never onto PATH. Add `install_atomic ccd/<name> .local/bin/<name> 755` to its agent lane. '
       + '(_inst_graphify_engine\'s link is not compared — header: READING deploy.sh.)')
       .toEqual([]);
+
+    // Direction 1: every withheld bin name really is placed by `ccrc install`
+    // — a stale entry (renamed or dropped from _inst_bins) reds here.
+    expect([...DEPLOY_SH_WITHHOLDS.bins].filter((n) => !placed.has(n)).sort(),
+      'these DEPLOY_SH_WITHHOLDS.bins names are not in placedBins() (ccrc install no longer places them) — '
+      + 'the exemption is stale, remove the name from DEPLOY_SH_WITHHOLDS.bins')
+      .toEqual([]);
+    // Direction 2: deploy.sh really does NOT place any withheld bin name — if
+    // it starts to, the exemption must be removed (D-3287's whole argument).
+    expect([...DEPLOY_SH_WITHHOLDS.bins].filter((n) => deployed.has(n)).sort(),
+      'these DEPLOY_SH_WITHHOLDS.bins names ARE placed by deploy.sh now — the exemption no longer holds, '
+      + 'remove them from DEPLOY_SH_WITHHOLDS.bins so this case checks them like any other name')
+      .toEqual([]);
   });
 
-  it('every systemd unit file _inst_units places, deploy.sh places too', () => {
+  it('every systemd unit file _inst_units places, deploy.sh places too (except DEPLOY_SH_WITHHOLDS.units)', () => {
     const placed = placedUnits();
     const deployed = deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS);
     expect(placed.size,
@@ -1262,11 +1614,25 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
       'the deploy.sh `_unit_atomic` extractor found too few unit files — it has gone stale, unless deploy.sh really lost most of them')
       .toBeGreaterThan(UNIT_FLOOR);
 
-    expect([...placed].filter((u) => !deployed.has(u)).sort(),
+    expect([...placed].filter((u) => !deployed.has(u) && !(DEPLOY_SH_WITHHOLDS.units as readonly string[]).includes(u)).sort(),
       'these are `_inst_atomic` destinations in _inst_units\' systemd arm and no `_unit_atomic` destination in '
       + `${DEPLOY_WHERE} places them, in either lane's remote build command, so a fallback deploy ships them into `
       + '~/ccrc and systemd never sees them. Add `_unit_atomic ~/ccrc/deploy/systemd/<unit> '
       + '~/.config/systemd/user/<unit>` to the chain of the lane that runs the unit.')
+      .toEqual([]);
+
+    // Direction 1: every withheld unit name really is placed by `ccrc install`
+    // — a stale entry reds here.
+    expect([...DEPLOY_SH_WITHHOLDS.units].filter((u) => !placed.has(u)).sort(),
+      'these DEPLOY_SH_WITHHOLDS.units names are not in placedUnits() (ccrc install no longer places them) — '
+      + 'the exemption is stale, remove the name from DEPLOY_SH_WITHHOLDS.units')
+      .toEqual([]);
+    // Direction 2: deploy.sh really does NOT place any withheld unit name —
+    // spec §19 keeps deploy.sh untouched on purpose (D-3287); if that changes,
+    // this reds and the exemption must be removed.
+    expect([...DEPLOY_SH_WITHHOLDS.units].filter((u) => deployed.has(u)).sort(),
+      'these DEPLOY_SH_WITHHOLDS.units names ARE placed by deploy.sh now — the exemption no longer holds, '
+      + 'remove them from DEPLOY_SH_WITHHOLDS.units so this case checks them like any other name')
       .toEqual([]);
   });
 
@@ -1276,28 +1642,132 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
     // lane (Plan 3). `ccrc install`'s `_inst_enable` arms neither. The families
     // are DERIVED from the templates the two installers place and the
     // repository ships, not typed, so this binds `claude-session@` and
-    // `ccgpt-usage@` alike, and any template added later.
+    // `ccrc-codex-usage@` alike, and any template added later — plus one family named below.
     const enabled = deployEnabled();
     expect(enabled.size,
       'the `systemctl … enable` extractor over deploy.sh found too few units — it has gone stale, unless deploy.sh really stopped enabling most of them')
       .toBeGreaterThan(ENABLE_FLOOR);
     // ...and every template unit file this repository SHIPS, placed or not
-    // (`git ls-files`, by basename): `ccgpt-usage@` ships in `deploy/systemd/`
-    // and no installer places it (F-1), because a live fleet box holds another
-    // repository's template at that name, and a deploy that armed one of its
-    // instances would arm THAT one.
+    // (`git ls-files`, by basename). PLUS ONE family no file here names any
+    // more: `ccgpt-usage@`, another repository's template on a live fleet box
+    // (FOREIGN_LIVE_BOX_UNIT_PREFIX, below). Until Plan 3a this repository
+    // shipped a pair under that name, so the derivation caught it. The rename
+    // to `ccrc-codex-usage@` (D-3717)
+    // would have dropped it silently, and a deploy that armed one of ITS
+    // instances would arm another tool's publisher.
     const shipped = [...trackedFiles()].map((f) => path.posix.basename(f)).filter(isTemplate);
     const templates = [...placedUnits(), ...deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS), ...shipped].filter(isTemplate);
     expect(templates.length,
       'neither installer places a template unit and the repository ships none, so the instance half of this case would check nothing — an extractor has gone stale')
       .toBeGreaterThan(0);
-    const families = [...new Set(templates.map((t) => t.slice(0, t.indexOf('@') + 1)))];
+    const families = [...new Set([...templates.map((t) => t.slice(0, t.indexOf('@') + 1)), FOREIGN_LIVE_BOX_UNIT_PREFIX])];
 
     expect([...enabled].filter((u) => isTemplate(u) || families.some((f) => u.startsWith(f))).sort(),
       `these \`systemctl … enable\` operands in ${DEPLOY_WHERE} are a template unit (\`name@.suffix\`) or an `
       + `instance of one an installer places or the repository ships (${families.join(', ')}). Remove them from the enable chain: a template `
       + 'is placed and never enabled, and its instances are armed per session or per lane, not by a deploy.')
       .toEqual([]);
+  });
+});
+
+// Review fix round 1 (mut-1, important, refuter-confirmed): the describe above
+// checks ONE direction only (install ⊆ deploy) and never asks whether a
+// destination — on EITHER installer — is a name another repository already
+// owns on the live fleet box. `_inst_atomic`, `install_atomic` and
+// `_unit_atomic` all REPLACE whatever already sits at their destination, with
+// no ownership check, so a one-word slip there cuts a live lane over, or
+// overwrites an enabled foreign unit, silently. Declared ONCE, so every
+// reader below checks the same set: `ccgpt` is the other repository's
+// launcher, `ccgpt-proxy` its shim and `ccgpt-usage` its usage-window
+// publisher — none of them ours, ever (D-3478). `ccgpt-usage@` is the PREFIX
+// of its unit template and of every instance of it (an enabled
+// `ccgpt-usage@<id>.timer` already exists there), so a destination that only
+// STARTS WITH it is refused too, not only an exact match (D-3172).
+const FOREIGN_LIVE_BOX_NAMES = new Set(['ccgpt', 'ccgpt-proxy', 'ccgpt-usage']);
+const FOREIGN_LIVE_BOX_UNIT_PREFIX = 'ccgpt-usage@';
+
+describe('neither installer ever writes a name another repository owns on the live fleet box (D-3478, D-3172)', () => {
+  it('no _inst_bins/_inst_units placement, and no deploy.sh install_atomic/_unit_atomic destination, is a foreign name', () => {
+    const sources: [string, Set<string>][] = [
+      ['_inst_bins', placedBins()],
+      ['_inst_units', placedUnits()],
+      [`${DEPLOY_WHERE}'s install_atomic`, deployPlacedBins()],
+      [`${DEPLOY_WHERE}'s _unit_atomic`, deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS)],
+    ];
+    // Vacuity, before anything else: an empty destination set would pass
+    // every assertion below for free, and say nothing about the live box.
+    for (const [label, set] of sources) {
+      expect(set.size, `${label}'s destination reader found nothing — it has gone stale, so this pin would check nothing`)
+        .toBeGreaterThan(0);
+    }
+    for (const [label, set] of sources) {
+      const foreign = [...set]
+        .filter((n) => FOREIGN_LIVE_BOX_NAMES.has(n) || n.startsWith(FOREIGN_LIVE_BOX_UNIT_PREFIX))
+        .sort();
+      expect(foreign,
+        `${label} writes ${JSON.stringify(foreign)}: on the live fleet box another repository already owns that `
+        + 'name — ccgpt is its launcher, ccgpt-proxy its shim, ccgpt-usage its publisher (D-3478), and '
+        + 'ccgpt-usage@ is its unit template and every instance of it, with an instance already enabled there '
+        + '(D-3172). `_inst_atomic`, `install_atomic` and `_unit_atomic` all replace whatever already sits at '
+        + 'their destination, so a name here would cut the live lane over, or replace an enabled foreign unit, '
+        + 'silently. Rename the destination.')
+        .toEqual([]);
+    }
+  });
+
+  it('ccrc\'s usage pair is placed under its OWN name, and nothing else of a usage family is (Plan 3a Task 6)', () => {
+    // The rename is what keeps the guard above green. A usage template placed
+    // under any other spelling, or a second one, is a decision to record here.
+    const usage = [...placedUnits()].filter((u) => isTemplate(u) && /usage@/.test(u)).sort();
+    expect(usage, 'the usage template _inst_units places is not ccrc\'s own pair')
+      .toEqual(['ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']);
+    expect(usage.filter((u) => u.startsWith(FOREIGN_LIVE_BOX_UNIT_PREFIX))).toEqual([]);
+  });
+});
+
+describe('ccd\'s pair (D-3696): the body under ~/.local/libexec is placed, removed and backed up as one pair with its launcher', () => {
+  it('both installers run the ONE tracked publisher, and it declares one launcher under .local/bin and one body under .local/libexec/ccrc', () => {
+    const { entryDest, bodyDest, bodySource, templateSource } = pairDecl();
+    expect(entryDest).toMatch(/^\.local\/bin\/[^/]+$/);
+    expect(bodyDest, 'the body lives in ccrc\'s own libexec directory').toMatch(/^\.local\/libexec\/ccrc\/[^/]+$/);
+    expect([bodySource, templateSource]).toEqual(['ccd/ccd', 'ccd/ccd-entry.py']);
+    expect(pairBin(fnBody('_inst_bins'), '_inst_ccd_pair', '_inst_bins').size, '_inst_bins publishes the pair').toBe(1);
+    expect(pairBin(deployCode(), 'install_ccd_pair', DEPLOY_WHERE).size, 'deploy.sh publishes the pair').toBe(1);
+    expect(pairHelperFrom(fnBody('_inst_ccd_pair'), '$tree/', '_inst_ccd_pair')).toBe(PAIR_HELPER_REL);
+    expect(pairHelperFrom(deployPairBody(), '~/ccrc/', 'install_ccd_pair')).toBe(PAIR_HELPER_REL);
+  });
+
+  it('the launcher derives its body from the SAME two paths the publisher declares (D-3699: the publisher re-asks the launcher\'s question)', () => {
+    const { entryDest, bodyDest } = pairDecl();
+    const launcher = readFileSync(path.resolve(here, '..', '..', 'ccd', 'ccd-entry.py'), 'utf8');
+    const one = (name: string): string => {
+      const all = [...launcher.matchAll(new RegExp(`^${name} = '([^'\\n]+)'$`, 'gm'))];
+      expect(all, `ccd/ccd-entry.py declares ${name} once`).toHaveLength(1);
+      return all[0]![1]!;
+    };
+    expect(one('ENTRY_SUFFIX')).toBe(`/${entryDest}`);
+    expect(one('BODY_SUFFIX')).toBe(`/${bodyDest}`);
+  });
+
+  it('the uninstall census removes the body by name, and its directory only with rmdir — never rm -r', () => {
+    const { bodyDest } = pairDecl();
+    const body = fnBody('_uninst_tree_bins');
+    expect(rmFOperands(body), `_uninst_tree_bins does not rm -f the body at $HOME/${bodyDest}`).toContain(`$HOME/${bodyDest}`);
+    const dir = `$HOME/${path.posix.dirname(bodyDest)}`;
+    expect(calls(body, 'rmdir').map(operands), `_uninst_tree_bins does not rmdir ${dir} (only-if-empty)`).toContainEqual([dir]);
+    const recursive = calls(body, 'rm').filter((a) => /^-[A-Za-z]*[rR]/.test(a[0] ?? '')).flatMap(operands)
+      .filter((o) => o === dir || o.startsWith('$HOME/.local/libexec'));
+    expect(recursive, 'a recursive rm reaches into ~/.local/libexec, where an operator\'s files may live').toEqual([]);
+  });
+
+  it('the update backup takes the body and then the launcher — arm 3 restores in that order', () => {
+    const { bodyDest, entryDest } = pairDecl();
+    const sources = calls(fnBody('_upd_backup_set'), '_upd_backup_copy').map((a) => a[0]!);
+    const b = sources.indexOf(`$HOME/${bodyDest}`);
+    const e = sources.indexOf(`$HOME/${entryDest}`);
+    expect(b, `_upd_backup_set does not back up the body at $HOME/${bodyDest}`).toBeGreaterThan(-1);
+    expect(e, `_upd_backup_set does not back up the launcher at $HOME/${entryDest}`).toBeGreaterThan(-1);
+    expect(b, 'the body must be backed up (and so restored) BEFORE the launcher that names its digest').toBeLessThan(e);
   });
 });
 
@@ -1351,5 +1821,125 @@ describe('every file either installer copies out of the tree is tracked in this 
 
     expect(sources, 'the deploy.sh source census does not contain `ccd/ccd`: this reader no longer reads its placement')
       .toContain('ccd/ccd');
+  });
+});
+
+describe('the id-shaped executables: TOOLCHAIN_EXECUTABLES, _inst_bins and _uninst_wrappers\' case are one list (spec §5 Pin 4)', () => {
+  it('every id-shaped name _inst_bins places is in TOOLCHAIN_EXECUTABLES, and the Set names nothing _inst_bins does not place', () => {
+    const placed = new Set(idShaped(placedBins()));
+    const toolchain = setLiteral('deploy/gen-wrappers.mjs', 'TOOLCHAIN_EXECUTABLES');
+    expect(placed.size,
+      'the _inst_bins extractor found too few id-shaped placements — it has gone stale, unless the function really lost most of them')
+      .toBeGreaterThan(BIN_FLOOR);
+    expect(toolchain.size,
+      'the TOOLCHAIN_EXECUTABLES reader found too few members — it has gone stale, unless the Set really lost most of them')
+      .toBeGreaterThan(BIN_FLOOR);
+
+    expect(minus(placed, toolchain),
+      `these are id-shaped names _inst_bins places into ${BIN_DIR}, and deploy/gen-wrappers.mjs's TOOLCHAIN_EXECUTABLES `
+      + 'does not name them: the orphan scan walks that directory, and the day one gains a marker every install reports '
+      + 'ccrc\'s own executable as an account wrapper nobody claims (D-93). Add them to the Set.')
+      .toEqual([]);
+    expect(minus(toolchain, placed),
+      'these are in TOOLCHAIN_EXECUTABLES and no `_inst_atomic` in _inst_bins places them (D-3173\'s shape): the Set '
+      + 'reserves a file ccrc does not ship, and so hides a real orphan at that path. Remove them from the Set, or '
+      + 'place the file in the same commit.')
+      .toEqual([]);
+
+    for (const anchor of ['ccd', 'ccrc']) {
+      expect(toolchain, `TOOLCHAIN_EXECUTABLES does not name \`${anchor}\`: this reader no longer reads the Set whole`)
+        .toContain(anchor);
+    }
+  });
+
+  it('_uninst_wrappers\' exclusion case names exactly the id-shaped names _inst_bins places', () => {
+    const placed = new Set(idShaped(placedBins()));
+    const skip = uninstWrappersCase();
+    expect(skip.size,
+      'the _uninst_wrappers case reader found too few names — it has gone stale, unless the case really lost most of them')
+      .toBeGreaterThan(BIN_FLOOR);
+    expect(minus(skip, new Set(idShaped(skip))),
+      'these are in _uninst_wrappers\' case and WRAPPER_ID_RE never matches them, so the test after the case skips them '
+      + 'anyway — a dead entry')
+      .toEqual([]);
+
+    expect(minus(placed, skip),
+      `these are id-shaped names _inst_bins places into ${BIN_DIR} and _uninst_wrappers' case does not skip: a copy that `
+      + 'carries a marker would be removed and reported as a WRAPPER before _uninst_tree_bins — which owns the name — '
+      + 'gets a say. Add them to the case.')
+      .toEqual([]);
+    expect(minus(skip, placed),
+      'these are in _uninst_wrappers\' case and _inst_bins places no file of that name, so a ccrc-marked wrapper of that '
+      + 'name would be kept on the box for ever. Remove them from the case, or place the file.')
+      .toEqual([]);
+  });
+
+  it('the name every generated Codex launcher execs is placed by _inst_bins behind its `!= server` gate', () => {
+    const target = codexLauncherTarget();
+    const gated = gatedBins();
+    expect(gated.size, 'the GPT-lane gate in _inst_bins places nothing this reader can see — it has gone stale')
+      .toBeGreaterThanOrEqual(1);
+    expect(minus(gated, placedBins()),
+      'the gate reader saw placements the whole-body census did not — one of the two readers is wrong')
+      .toEqual([]);
+    expect([...gated],
+      `shared/wrapper.mjs makes every Codex launcher exec $HOME/.local/bin/${target}, and _inst_bins' GPT-lane gate does `
+      + 'not place a file of that name, so every Codex lane on an installed box would exec nothing. Place it behind the '
+      + 'gate, or point the emitter at what the gate places.')
+      .toContain(target);
+  });
+
+  it('both GPT_TOOLCHAIN_ACCOUNT_IDS mirrors are one set, and it reserves every id-shaped name the GPT-lane gate places', () => {
+    const ts = setLiteral('shared/roster.ts', 'GPT_TOOLCHAIN_ACCOUNT_IDS');
+    const mjs = setLiteral('shared/roster-json.mjs', 'GPT_TOOLCHAIN_ACCOUNT_IDS');
+    expect([...ts].sort(),
+      'shared/roster.ts and shared/roster-json.mjs reserve different account ids — a roster one parser refuses, the other accepts')
+      .toEqual([...mjs].sort());
+    const gated = idShaped(gatedBins());
+    expect(gated.length,
+      'the GPT-lane gate places no id-shaped name this reader can see — so the reservation below would check nothing')
+      .toBeGreaterThanOrEqual(1);
+    expect(minus(gated, ts),
+      'these are id-shaped GPT-lane executables _inst_bins places, and neither roster mirror refuses them as an account '
+      + 'id: an account of that name passes the roster and is refused only later, by cmd_wrappers\' locks, without '
+      + 'saying why (spec §5.3). Add them to both GPT_TOOLCHAIN_ACCOUNT_IDS.')
+      .toEqual([]);
+  });
+});
+
+describe('every file `ccrc install` copies out of the tree rides the release tarball (spec §11)', () => {
+  it('every `$tree/<path>` source _inst_bins, _inst_units, _inst_files and _inst_units_darwin read lies under deploy/build-release.sh\'s PATHSPEC', () => {
+    const spec = releasePathspec();
+    expect(spec.length, 'the PATHSPEC reader found too few entries — it has gone stale').toBeGreaterThanOrEqual(4);
+    const sources = ccrcTreeSources();
+    expect(sources.size,
+      `the source extractor over ${SOURCE_FNS.join(', ')} found too few tree sources — it has gone stale, unless those functions really stopped placing most of them`)
+      .toBeGreaterThan(SOURCE_FLOOR);
+    const rides = (p: string): boolean => spec.some((e) => p === e || p.startsWith(`${e}/`));
+
+    expect([...sources].filter((p) => !rides(p)).sort(),
+      `these are \`_inst_atomic\` sources in ${SOURCE_FNS.join(', ')}, and deploy/build-release.sh's PATHSPEC `
+      + `(${spec.join(' ')}) does not carry them: \`ccrc update\` installs from the release tarball, and \`_inst_atomic\` `
+      + 'dies on a missing source after `_inst_tree` has already replaced the box\'s tree — v0.0.2\'s shape (D-3105). '
+      + 'Move the file under a PATHSPEC entry, or add its directory to PATHSPEC.')
+      .toEqual([]);
+
+    // Anchors, after the comparison. Spec §11's "a release assertion names them
+    // anyway" is met by DERIVATION from the gate that places the GPT lane's
+    // files, not by a list typed here: every source that gate reads must be
+    // one the census above read.
+    const gated = gatedSources();
+    expect(gated.size, 'the GPT-lane gate reads no source this reader can see — it has gone stale').toBeGreaterThanOrEqual(1);
+    for (const src of gated) {
+      expect(sources, `${src} is placed behind _inst_bins' GPT-lane gate and the source census does not read it`)
+        .toContain(src);
+    }
+    // Plan 3a Task 6: every TEMPLATE `_inst_units` places is copied out of a
+    // source this census read, so the tarball carries it. Derived from the
+    // placement, never typed: ccrc's usage pair today.
+    for (const t of [...placedUnits()].filter(isTemplate)) {
+      expect([...sources].some((s) => path.posix.basename(s) === t),
+        `${t} is placed by _inst_units and no tree source the release census read is that file`).toBe(true);
+    }
   });
 });

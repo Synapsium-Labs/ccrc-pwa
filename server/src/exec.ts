@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import type { PaneProbe } from '../../shared/api.js';
+import { tmuxTarget } from '../../shared/tmux-target.js';
 
 /**
  * THE VOCABULARY FOR "WE DID NOT MEASURE THIS", stated once here and used
@@ -71,8 +72,6 @@ export const realRunner: Runner = (cmd, args) =>
     });
   });
 
-const target = (id: string) => `cc-${id}`;
-
 /** D-309 (was D-B8-13): the server twin of ccd's `_session_verdict` (D-308 (was D-B8-12)). `tmux
  *  has-session` answers three different questions with one exit status —
  *  session gone, server unreachable, client cut short — and only the first is
@@ -132,7 +131,7 @@ const PANE_PROBE_ROW = /^([01]) (\d+) (\d+) (\d+) (\d+) ([01])$/;
 export class Tmux {
   constructor(private run: Runner) {}
   async sessionVerdict(id: string): Promise<SessionVerdict> {
-    return classifyHasSession(await this.run('tmux', ['has-session', '-t', target(id)]));
+    return classifyHasSession(await this.run('tmux', ['has-session', '-t', tmuxTarget(id)]));
   }
   /** Derived, exactly like bash `_alive`: true only for `live`. A caller that
    *  handles `gone` differently from `unknown` must use `sessionVerdict`
@@ -142,19 +141,19 @@ export class Tmux {
     return (await this.sessionVerdict(id)).verdict === 'live';
   }
   async panePid(id: string): Promise<number | null> {
-    const r = await this.run('tmux', ['list-panes', '-t', target(id), '-F', '#{pane_pid}']);
+    const r = await this.run('tmux', ['list-panes', '-t', tmuxTarget(id), '-F', '#{pane_pid}']);
     if (r.code !== 0) return null;
     const pid = parseInt(r.stdout.trim().split('\n')[0] ?? '', 10);
     return Number.isFinite(pid) ? pid : null;
   }
   async capture(id: string): Promise<string | null> {
-    const r = await this.run('tmux', ['capture-pane', '-t', target(id), '-p']);
+    const r = await this.run('tmux', ['capture-pane', '-t', tmuxTarget(id), '-p']);
     return r.code === 0 ? r.stdout : null;
   }
   /** Capture WITH escape sequences (`-e`) — needed to tell Claude Code's dim
    *  ghost-suggestion placeholder (`\e[2m…\e[0m`) apart from a real typed draft. */
   async captureAnsi(id: string): Promise<string | null> {
-    const r = await this.run('tmux', ['capture-pane', '-t', target(id), '-p', '-e']);
+    const r = await this.run('tmux', ['capture-pane', '-t', tmuxTarget(id), '-p', '-e']);
     return r.code === 0 ? r.stdout : null;
   }
   /**
@@ -169,14 +168,18 @@ export class Tmux {
    * `1 5 2000 220 24 1`, and the capture returned pane 1. This is the exact
    * defect PR #96 shipped.
    *
-   * THE `gone` LITERAL IS `list-panes`' OWN, and it is NOT `capture-pane`'s.
-   * Measured, tmux 3.4: `list-panes -t cc-nope` answers `can't find window:
-   * cc-nope` where `capture-pane` answers `can't find pane: cc-nope`. Matching
-   * on the wrong one would make a dead session read as `unreadable` forever.
-   * The polarity is `classifyHasSession`'s (D-308/D-309): recognise the ONE
-   * message that means gone and call everything else unknown, so an
-   * unrecognised future tmux error reads as "we could not look" rather than as
-   * death.
+   * THE `gone` LITERAL IS THE EXACT TARGET'S (D-3525). Against `=cc-nope:` —
+   * what `tmuxTarget` builds — a missing session answers `can't find session:
+   * cc-nope` for `list-panes` and `capture-pane` alike (measured, tmux 3.4,
+   * private socket). The per-verb words measured with a BARE target —
+   * `list-panes` said `can't find window: cc-nope`, `capture-pane` said
+   * `can't find pane: cc-nope` — stay recognised, each on its own verb; they
+   * are the only other message either arm reads as death. Missing the session
+   * message made a dead session read as `unreadable` (measured against the real
+   * adapter before this arm). The polarity is `classifyHasSession`'s
+   * (D-308/D-309): recognise the messages that mean gone and call everything
+   * else unknown, so an unrecognised future tmux error reads as "we could not
+   * look" rather than as death.
    *
    * AND `unparseable` IS ITS OWN ARM, not a flavour of `unreadable`. tmux
    * answering rc 0 with no active row is a different fact from tmux refusing:
@@ -185,9 +188,11 @@ export class Tmux {
    * be an adapter narrowing a distinction it received.
    */
   async paneProbe(id: string): Promise<PaneProbe> {
-    const r = await this.run('tmux', ['list-panes', '-t', target(id), '-F', PANE_PROBE_FORMAT]);
+    const r = await this.run('tmux', ['list-panes', '-t', tmuxTarget(id), '-F', PANE_PROBE_FORMAT]);
     if (r.code !== 0) {
-      if (r.stderr.includes("can't find window")) return { ok: false, reason: 'gone' };
+      if (r.stderr.includes("can't find session") || r.stderr.includes("can't find window")) {
+        return { ok: false, reason: 'gone' };
+      }
       const msg = r.stderr.trim();
       return {
         ok: false,
@@ -236,9 +241,11 @@ export class Tmux {
    * them and the drawer reports a dead session for a tmux server that was busy.
    * The polarity is `classifyHasSession`'s (D-308/D-309): recognise the ONE
    * message that means gone, call everything else unknown, so an unrecognised
-   * future tmux error reads as "unmeasured" rather than as death. The message
-   * is `capture-pane`'s own and differs from `has-session`'s — measured
-   * against tmux 3.4: `can't find pane: cc-nope`.
+   * future tmux error reads as "unmeasured" rather than as death. Against the
+   * exact target the message is `can't find session: cc-nope` — the same words
+   * `has-session` uses (D-3525, measured, tmux 3.4); `can't find pane:
+   * cc-nope` is what a bare target drew, and stays recognised. See
+   * `paneProbe`'s note.
    */
   async captureHistory(id: string, lines: number): Promise<CaptureHistory> {
     // `-J` JOINS WHAT TMUX ALREADY WRAPPED, and it is here because the reader
@@ -279,9 +286,11 @@ export class Tmux {
     // what is left is content, not padding. It would also be this adapter
     // narrowing a distinction tmux handed it.
     const r = await this.run('tmux',
-      ['capture-pane', '-t', target(id), '-p', '-e', '-J', '-S', `-${lines}`]);
+      ['capture-pane', '-t', tmuxTarget(id), '-p', '-e', '-J', '-S', `-${lines}`]);
     if (r.code === 0) return { ok: true, text: r.stdout };
-    if (r.stderr.includes("can't find pane")) return { ok: false, reason: 'gone' };
+    if (r.stderr.includes("can't find session") || r.stderr.includes("can't find pane")) {
+      return { ok: false, reason: 'gone' };
+    }
     const msg = r.stderr.trim();
     return {
       ok: false,
@@ -290,16 +299,16 @@ export class Tmux {
     };
   }
   async sendLiteral(id: string, text: string): Promise<boolean> {
-    return (await this.run('tmux', ['send-keys', '-t', target(id), '-l', text])).code === 0;
+    return (await this.run('tmux', ['send-keys', '-t', tmuxTarget(id), '-l', text])).code === 0;
   }
   async sendKey(id: string, key: string): Promise<boolean> {
-    return (await this.run('tmux', ['send-keys', '-t', target(id), key])).code === 0;
+    return (await this.run('tmux', ['send-keys', '-t', tmuxTarget(id), key])).code === 0;
   }
   /** Restore the canonical size ccd spawned with. Lived inline at
    *  server.ts:227 as a `void deps.run(...)` — so a `forbidden` there was
    *  swallowed in silence, which is the exact failure the argv enumeration
    *  exists to prevent. */
   async resizeWindow(id: string, cols: number, rows: number): Promise<boolean> {
-    return (await this.run('tmux', ['resize-window', '-t', target(id), '-x', String(cols), '-y', String(rows)])).code === 0;
+    return (await this.run('tmux', ['resize-window', '-t', tmuxTarget(id), '-x', String(cols), '-y', String(rows)])).code === 0;
   }
 }

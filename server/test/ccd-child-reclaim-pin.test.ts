@@ -281,7 +281,8 @@ describe('the only commit ccd writes', () => {
       fn = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(l)?.[1] ?? fn;
       if (!/^\s*#/.test(l) && /_ws_reclaim_commit_tree "/.test(l)) callers.push(fn);
     }
-    expect(callers, 'the commit writer’s callers, by enclosing function').toEqual(['_ws_wip_commit', '_ws_reclaim_keep_reflogs']);
+    // The WIP commit calls it twice — its index commit, then the WIP itself.
+    expect(callers, 'the commit writer’s call sites, by enclosing function').toEqual(['_ws_wip_commit', '_ws_wip_commit', '_ws_reclaim_keep_reflogs']);
     const pinBody = src.slice(src.indexOf('_ws_reclaim_pin() {'), src.indexOf('_ws_reclaim_secrets_json() {'));
     const calls = (s: string): number => [...s.matchAll(/^[^#\n]*_ws_wip_commit "/gm)].length;
     expect(calls(src)).toBe(2);
@@ -641,7 +642,11 @@ describe('nested checkouts, re-proven and pinned on every call', () => {
     expect(h.git(c.wt, 'reflog', 'show', '--all', '--format=%H'), 'the CONTROL: in no reflog').not.toContain(mergeSide);
     fs.writeFileSync(h.git(inner, 'rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD'), `${mergeSide}\n`);
     fs.writeFileSync(path.join(inner, 'dirty.txt'), 'dirty');
-    const p = pinOf(c);
+    // A merge in progress in a nested checkout DEFERS the ladder (`tree-busy`,
+    // rung 6's question asked of it), so the pin reaches it only once the
+    // deferral ceiling has run out — `--defer-expired`, as for the child's own.
+    expect(pinOf(c).rc, 'the CONTROL: without the ceiling the ladder defers, and nothing is pinned').not.toBe('0');
+    const p = pinOf(c, { defer: 1 });
     expect(p.rc, p.why).toBe('0');
     expect(fs.existsSync(h.git(inner, 'rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD')),
       'the nested WIP commit concluded the merge — it moves no ref and no state of the tree').toBe(true);

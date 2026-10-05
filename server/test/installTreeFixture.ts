@@ -8,16 +8,22 @@
 // helpers would register that whole suite a second time. That reasoning
 // still holds — it just argues for a THIRD file with no `describe` in it,
 // not for two copies. This file is that third file: it imports nothing from
-// vitest and registers no tests, so both suites can import it directly.
+// vitest and registers no tests, so both suites can import it directly. Its one
+// non-`node:` import is `containedTools.ts` (itself `node:*` only), for
+// `keepDigestEnv`; it never imports `ccrcContainment.ts`, which reaches vitest.
 //
 // The cost of the two-copy shape was real: an edit to one `TREE_FILES` that
 // missed the other broke 34 tests in the file nobody touched. This module
 // makes that a structural impossibility rather than a discipline.
 import {
-  copyFileSync, cpSync, mkdirSync, statSync, chmodSync, writeFileSync,
+  copyFileSync, cpSync, mkdirSync, statSync, chmodSync, writeFileSync, symlinkSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The ONE non-`node:` import, and it imports only `node:*` itself — which is what keeps this file vitest-free
+// (wave 9 R9-F8). It may never import `ccrcContainment.ts`, which reaches vitest through `ccdWsHelpers.ts`.
+import { CONTAINED_TOOLS, plantPoison } from './containedTools.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -43,16 +49,20 @@ export const TREE_FILES = [
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
   'ccd/ccrc-adopt',
-  // Plan 2b-1 Task 1: the two GPT-lane executables that ship today (Plan
-  // 2a), copied from the repository. `_inst_bins` places both, so a tree
-  // missing either makes a placement assertion fail for a fixture reason
-  // rather than a real one. `ccgpt` and `ccgpt-runtime` are NOT here, and
-  // not stubbed either: they are not in the repository until Plan 2b-2, so
-  // nothing may place them (D-3165), and a stub would hide a placement that
-  // dies on a real tree — the class `install-census.test.ts`'s tracked-source
-  // case now reds on.
+  // The GPT lane's four common executables, COPIED from the repository: the
+  // two `.py` files (Plan 2a, placed since Plan 2b-1), and the runtime builder
+  // and launcher. Plan 2b-2 wrote each of those two unplaced, then added both
+  // here in the commit that made `_inst_bins` place them: an entry joins this
+  // list NO EARLIER than the commit that writes its source. `_inst_bins`
+  // places all four, so a tree missing any one fails an install for a fixture
+  // reason rather than a real one. NEVER stubbed: a stub once hid a placement
+  // that dies on a real tree (D-3165), the class `install-census.test.ts`'s
+  // tracked-source case reds on. The launcher is `ccrc-codex`, not `ccgpt`
+  // (D-3478).
   'ccd/ccgpt-proxy.py',
   'ccd/ccgpt-usage.py',
+  'ccd/ccgpt-runtime',
+  'ccd/ccrc-codex',
   // The generators, reached as `$CCRC_HERE/../deploy/<name>.mjs` — the same
   // "one directory up from this script" resolution `cmd_wrappers` uses, true
   // in a checkout and at `~/ccrc/deploy` on a deployed box.
@@ -67,6 +77,17 @@ export const TREE_FILES = [
   // rather than of an installed box. Its two imports, `shared/roster-json.mjs`
   // and `shared/base-url.mjs`, are both in this list too.
   'deploy/account-op.mjs',
+  // Plan 3a Task 10: the model-registry op, the two modules it imports at
+  // load, the probe it runs and the template `ccrc models litellm` renders,
+  // so the PLACED launcher can run `ccrc models refresh --all` the way
+  // `ccrc-models.service` runs it (`ExecStart=%h/.local/bin/ccrc models
+  // refresh --all`). Without the two imports every models verb dies with
+  // ERR_MODULE_NOT_FOUND. Copied, never stubbed, for the GPT lane's reason above.
+  'ccd/ccrc-models-probe',
+  'deploy/models-op.mjs',
+  'deploy/litellm-config.template.yaml',
+  'shared/modelenv.mjs',
+  'shared/litellm.mjs',
   // The roster SEED `_inst_roster` places on a box that has none. The
   // realistic "the operator already has a roster" fixture is no repo file any
   // more — the shipped five-account migration roster left the tree with the
@@ -111,6 +132,12 @@ export const TREE_FILES = [
   // wrong file, all of which a real payload catches and a 12-byte one does
   // not.
   'ccd/ccd',
+  // ccd's direct-entry PAIR (D-3696): the launcher TEMPLATE `_inst_bins`
+  // renders onto PATH and the program that renders, self-tests and publishes
+  // the pair. COPIED, never stubbed — an install test must render the real
+  // template through the real publisher.
+  'ccd/ccd-entry.py',
+  'ccd/ccd-entry-install.py',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
@@ -140,6 +167,11 @@ export const TREE_FILES = [
   // source the tree does not carry and EVERY Linux describe in the install
   // suite goes red for a fixture reason (measured: 72 of them).
   'ccd/ccd-pool-sync',
+  // programme wave 4 (design 2026-09-20 §9): the update-intent puller,
+  // shipped by `_inst_bins` on the same non-Darwin, every-ROLE arm. Without
+  // this row `_inst_atomic` dies naming a source the tree does not carry, and
+  // every Linux describe in the install suite goes red for a fixture reason.
+  'ccd/ccd-update-sync',
   // The account-connection helper `ccd account-pane` execs. `_inst_bins`
   // places it on BOTH platform arms — it is neither cgroup- nor timer-bound —
   // so unlike the four above it, a Darwin install expects it on PATH too.
@@ -238,4 +270,86 @@ export function installFixtureTree(home: string, sub = 'checkout'): string {
     writeFileSync(dest, body);
   }
   return root;
+}
+
+/** keepDigest's env (wave 9 R9-F8, D-3820): the real `ccd/ccrc` is sourced here, so nothing real may resolve. Its
+ *  poisons live in `<home>/.keep-digest-poison-bin` — INSIDE the fixture HOME, so `assertNoRealTool` (which passes only
+ *  a realpath under home) passes and the dir goes when the mkTmp home goes; OUTSIDE `~/.local/bin`, so
+ *  `adoptPlantedSystemd` and the exact listings of that dir never read it. Create-if-absent, on every call. PATH keeps
+ *  the parent's PATH after it, so `bash`, `sha256sum`/`shasum` and `find` resolve as they do today (a narrowed PATH
+ *  would hand macOS's /bin/bash 3.2 — M1's lesson). No process-exit cleanup: the agent suite measured
+ *  `process.on('exit')` as insufficient under vitest's forks pool (agent/test/contain-path.setup.ts). */
+export function keepDigestEnv(home: string): NodeJS.ProcessEnv {
+  const bin = join(home, '.keep-digest-poison-bin');
+  mkdirSync(bin, { recursive: true });
+  for (const n of CONTAINED_TOOLS) plantPoison(bin, n);
+  return {
+    HOME: home, PATH: `${bin}:${process.env['PATH'] ?? '/usr/bin:/bin'}`,
+    XDG_RUNTIME_DIR: join(home, 'no-runtime-dir'), DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(home, 'no-bus')}`,
+  };
+}
+
+/** Record `root`'s digest the way the SHIPPED code does (D-3465): source the
+ *  checkout's `ccd/ccrc` (its dispatch is guarded by `BASH_SOURCE[0] == $0`, so
+ *  sourcing runs nothing) in a fixture-HOME shell and call its own
+ *  `_ver_digest_write` — never a second implementation of the recipe in TS.
+ *  A test that changes a kept version's tree AFTER planting it calls this
+ *  again, so the change is part of what "kept" describes; a test that wants a
+ *  write-through leaves it out. Throws when the shipped helper refuses. */
+export function keepDigest(root: string, home: string): void {
+  const r = spawnSync('bash', ['-c', '. "$1"; _ver_digest_write "$2" || { echo "$VER_WHY" >&2; exit 1; }',
+    'keep-digest', join(REPO, 'ccd', 'ccrc'), root],
+  { env: keepDigestEnv(home), encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`keepDigest(${root}) failed: ${r.stderr}`);
+}
+
+/** A W6 box's version directory (W6 Task 2): the fixture tree placed at
+ *  `<home>/ccrc-versions/<name>`, the shape `_inst_tree` leaves behind.
+ *
+ *  `complete` (default true) writes the two files a version keeps at its root
+ *  once an install completed from it — `.ccrc-stamp.json`, a stamp
+ *  `_box_build_fields` accepts (`sha` default forty `a`s, `ref` main, a fixed
+ *  `builtAt`, `dirty: false`, and `version` only when given), and
+ *  `.ccrc-installed`, one line naming that sha. Without them the version is
+ *  incomplete, which is what a placement that died leaves.
+ *
+ *  `digest` (default true, and only when `complete`) also records the tree's
+ *  digest through the shipped helper (`keepDigest`) — a version "kept" before
+ *  digests existed is `digest: false`. It is written AFTER the tree is
+ *  planted and BEFORE `link`, so a caller that edits the tree afterwards must
+ *  call `keepDigest` again.
+ *
+ *  `link` (default true) points `<home>/ccrc` at it with an ABSOLUTE target,
+ *  the value `_plat_ln_swap` writes and `_ver_layout` reads back.
+ *
+ *  Returns the version root. The one helper later W6 tasks plant a
+ *  versioned box with. */
+export function installVersionedTree(
+  home: string, name: string,
+  opts: { link?: boolean; complete?: boolean; digest?: boolean; stamp?: { sha: string; version?: string } } = {},
+): string {
+  const root = installFixtureTree(home, join('ccrc-versions', name));
+  if (opts.complete ?? true) {
+    const sha = opts.stamp?.sha ?? 'a'.repeat(40);
+    const version = opts.stamp?.version;
+    const stamp = {
+      sha, ref: 'main', builtAt: '2026-09-23T00:00:00Z', dirty: false,
+      ...(version === undefined ? {} : { version }),
+    };
+    writeFileSync(join(root, '.ccrc-stamp.json'), `${JSON.stringify(stamp)}\n`);
+    if (opts.digest ?? true) keepDigest(root, home);
+    writeFileSync(join(root, '.ccrc-installed'), `${sha}\n`);
+  }
+  if (opts.link ?? true) symlinkSync(root, join(home, 'ccrc'));
+  return root;
+}
+
+/** THE rsync recorder (wave 9 M6, D-3811): logs the argv of every call ccrc MAKES, then execs the real binary. A call
+ *  whose first argument is `--server` is the rsync implementation's OWN re-exec — openrsync, macOS's /usr/bin/rsync,
+ *  forks `rsync --server …` by PATH lookup for a local copy and so reaches this file a second time; samba rsync on
+ *  Linux copies in-process and never does — so it is handed straight on and not logged. One spelling, imported by
+ *  ccrc-install, ccrc-update and ccrc-install-graphify. */
+export function rsyncRecorder(realRsync: string): string {
+  return `#!/bin/sh\ncase "$1" in --server) exec ${realRsync} "$@" ;; esac\n`
+    + `printf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${realRsync} "$@"\n`;
 }

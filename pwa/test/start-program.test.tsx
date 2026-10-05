@@ -60,7 +60,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   // An alive row: `lifecycle` answers "why is this row NOT alive", so null is
   // the correct value here, not merely the one that compiles.
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' },
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false, ...over,
 });
 
@@ -936,7 +936,7 @@ describe('StartProgramSheet', () => {
   it('warns, and does NOT block, when coord.pause is set', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
-    act(() => { store.setState({ coord: { pause: 'set', mail: 'clear' }, coordFrameSeen: true }); });
+    act(() => { store.setState({ coord: { pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] }, coordFrameSeen: true }); });
     render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -959,7 +959,7 @@ describe('StartProgramSheet', () => {
   it('warns for an UNMEASURABLE registry too — the one state dispatch is guaranteed to refuse (I1)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
-    act(() => { store.setState({ coord: { pause: 'unmeasurable', mail: 'clear' }, coordFrameSeen: true }); });
+    act(() => { store.setState({ coord: { pause: 'unmeasurable', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] }, coordFrameSeen: true }); });
     render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 

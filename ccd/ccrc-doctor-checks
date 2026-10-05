@@ -182,6 +182,7 @@ CCRC_DOCTOR_CHECKS=(
   auth
   rc
   exposure
+  update-exposure
   caddy
   caddyfile
   cert
@@ -193,13 +194,15 @@ CCRC_DOCTOR_CHECKS=(
   credentials
   pools
   pool-sync
+  update-sync
   graphify
   graphify-path
   build
+  provenance
   fleet
   memory
   routing
-  models
+  models codex   # two entries on one line: every line below is cited by number elsewhere
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -268,9 +271,9 @@ _dr_need_bin() {
 # ── node: the floor is READ, never re-typed ───────────────────────────────
 # WHICH package.json IS CANONICAL DEPENDS ON THE BOX, and that is why this
 # looks in two places rather than one:
-#   - a fleet host has `~/ccrc/{agent,shared,deploy,ccd}` (deploy.sh:343), so
+#   - a fleet host has `~/ccrc/{agent,shared,deploy,ccd}` (deploy.sh's agent-arm rsync, `agent shared deploy ccd "$BOX":ccrc/`), so
 #     the shipped declaration there is `~/ccrc/agent/package.json`;
-#   - a server host has `~/ccrc/{server,shared,deploy,ccd}` (deploy.sh:613), so
+#   - a server host has `~/ccrc/{server,shared,deploy,ccd}` (deploy.sh's server-arm rsync, `server shared deploy ccd "$BOX":ccrc/`), so
 #     it is `~/ccrc/server/package.json`. `ccd` is in BOTH lanes as of Task 8 —
 #     the server box gets the directory so `ccrc` and its three siblings have a
 #     home there, and it installs nothing else out of it (no ccd binary, no
@@ -735,7 +738,7 @@ _check_path() {
 # this asks about the units whose FILE is present and skips a box that has none
 # rather than demanding units a dev checkout was never meant to have. A server
 # box has `ccrc.service`, a fleet host has `ccrc-agent.service` and the
-# cap-scopes timer, and `deploy.sh` (:417, :464) is what puts each there.
+# cap-scopes timer, and `deploy.sh` puts each there (`_unit_atomic ~/ccrc/deploy/ccrc.service`, `_unit_atomic ~/ccrc/deploy/ccrc-agent.service`, `_unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer`).
 #
 # ── TWO CLASSES, BECAUSE THEY ARE TWO DIFFERENT MORNINGS ─────────────────
 # A stopped `ccrc.service`/`ccrc-agent.service` is a FAIL: the box is configured
@@ -835,7 +838,7 @@ _check_services() {
   # Not a glob over the directory: `claude-session@*.service` lives there too
   # (every ccd session is one, CLAUDE.md) and those are long-lived by design and
   # none of doctor's business.
-  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer ccd-telemetry-keepalive.timer ccrc-models.timer ccd-pool-sync.timer ccd-tmp-sweep.timer)
+  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer ccd-telemetry-keepalive.timer ccrc-models.timer ccrc-update-watchdog.timer ccd-pool-sync.timer ccd-update-sync.timer ccd-tmp-sweep.timer)
   # ON DISK BY THE PLATFORM'S NAME, reported by systemd's. `_dr_unit_file` is
   # the one translation; keeping `installed` in unit vocabulary is what lets
   # every message below read the same on both platforms. ccd-cap-scopes has no
@@ -911,9 +914,18 @@ _check_services() {
           # That silence is the ruling (task-4-brief.md) for putting this
           # timer in `known` at all.
           ccd-pool-sync.timer) why="the node stops refreshing its pool projection, and nothing surfaces until the lease expires and placement starts refusing with no error anywhere" ;;
+          # programme wave 4 (design 2026-09-20 §9): the update-intent puller,
+          # silent on `ccd-pool-sync.timer`'s exact terms — the projection ages
+          # in place until its lease ends, and only `ccrc update --to` still
+          # works after that.
+          ccd-update-sync.timer) why="the node stops refreshing its update projection, and every 'ccrc update' without --to refuses as stale once its lease ends" ;;
           # The temp-dir reaper: silent when stopped, loud only when `/` fills —
           # /tmp/claude-1000 reached 138G on the fleet host before it existed.
           ccd-tmp-sweep.timer) why="nothing reaps Claude Code's per-uid temp dir, which grows by gigabytes a day until / fills" ;;
+          # W4a Task 9: the server box's update watchdog. Silent when stopped —
+          # it acts only on the day a self-update dies mid-install, and on that
+          # day nothing else is left on the box to measure the update.
+          ccrc-update-watchdog.timer) why="a server self-update that dies mid-install is never measured or reverted — ccrc.service restart-loops a half-replaced tree into the start limit" ;;
           *) why="the job it fires is not running" ;;
         esac
         # Unreachable on macOS today (`_inst_units` installs none of these
@@ -1137,7 +1149,7 @@ _check_config() {
     # THE FLEET HOST HAS NO ccrc.env AND IS NOT MISSING ONE. It carries
     # `~/.ccrc/agent.env` (which configures the agent) and has no reason to know
     # where the server is — `_check_fleet` states exactly this, and SKIPS for it.
-    # `ccrc` ships to that box too (deploy.sh:401), so until this branch existed
+    # `ccrc` ships to that box too (deploy.sh's agent-arm rsync, `agent shared deploy ccd "$BOX":ccrc/`), so until this branch existed
     # every doctor run there printed "the server's defaults apply" about a server
     # that does not run there, and told the operator to run `ccrc install` — the
     # single-box SERVER-role installer. Wrong sentence and wrong instruction, on
@@ -1229,13 +1241,18 @@ _check_config() {
 #   file present, no build -> WARN. Nothing measured it; that is neither a
 #                             PASS nor a known fault.
 #
-# ── THE FLAG IS READ FROM ccrc.env, NEVER FROM THIS SHELL ─────────────────
-# The server gets its environment from `ccrc.service`'s `EnvironmentFile=`,
-# i.e. from `~/.ccrc/ccrc.env` — so that file is what decides whether the gate
-# is armed, and an exported `CCRC_AUTH` in the operator's own shell decides
-# nothing at all. Reading `${CCRC_AUTH:-}` here would report a box that does
-# not exist. Same reader and same path as `_check_config` (D-85): `ccrc`'s
-# `_box_env_value` and `BOX_ENV_FILE`, never a private copy.
+# ── THE FLAG IS READ AS ccrc.service GETS IT, NEVER FROM THIS SHELL ───────
+# The unit carries TWO `EnvironmentFile=` lines — `~/.ccrc/ccrc.env`, then
+# $CCRC_EXPOSURE_FILE — and the LATER one wins by PRESENCE, even when its
+# value is empty (wave 8 item D (decision D)): `ccrc expose` writes CCRC_AUTH=on
+# into the exposure file and never into ccrc.env, so a check that read
+# ccrc.env alone called every correctly exposed box unarmed. An exported
+# `CCRC_AUTH` in the operator's own shell decides nothing at all, either way.
+# Same reader `_check_update-exposure` and install's gate line now share:
+# `ccrc`'s `_box_unit_env`, never a private copy. An exposure file that is
+# THERE AND UNREADABLE cannot say what the service manager received — its
+# verdict is UNMEASURED, not a guess at either answer (D-3596; `_box_unit_env`'s
+# own header argues the same rc).
 #
 # ── THE FILE IS MEASURED BY THE SERVER'S OWN PARSER, THROUGH NODE ─────────
 # `_check_wrappers` already reads a JSON file with `node -e` rather than
@@ -1260,12 +1277,13 @@ _check_auth() {
   # reason, that `_check_config` opens with. A table sourced by something that
   # is not `ccrc` has neither, and must say so rather than measure a default it
   # invented.
-  if [ -z "${BOX_AUTH_FILE:-}" ] || [ -z "${BOX_ENV_FILE:-}" ] \
+  if [ -z "${BOX_AUTH_FILE:-}" ] || [ -z "${BOX_ENV_FILE:-}" ] || [ -z "${CCRC_EXPOSURE_FILE:-}" ] \
      || ! declare -F _box_env_value >/dev/null 2>&1 \
+     || ! declare -F _box_unit_env >/dev/null 2>&1 \
      || ! declare -F _box_auth_path >/dev/null 2>&1 \
      || ! declare -F _box_sessions_path >/dev/null 2>&1; then
     _dr_fail auth "ccrc's own config reader is not loaded, so neither this box's CCRC_AUTH flag nor its passphrase file was measured" \
-      "this is a bug in ccrc, not a fact about your box — _check_auth reads BOX_ENV_FILE through _box_env_value and resolves the secret's and the session store's paths through _box_auth_path and _box_sessions_path, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+      "this is a bug in ccrc, not a fact about your box — _check_auth reads CCRC_AUTH through _box_unit_env (BOX_ENV_FILE and CCRC_EXPOSURE_FILE) and resolves the secret's and the session store's paths through _box_auth_path and _box_sessions_path, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
     return 1
   fi
 
@@ -1289,10 +1307,27 @@ _check_auth() {
   # and has three arms for it — but the flag's PROVENANCE is named in every
   # verdict below, so a reader can tell "the file says off" from "there is no
   # file" without this check having to duplicate that check's arms.
-  local flag="" where="$BOX_ENV_FILE"
-  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
-    flag="$(_box_env_value "$BOX_ENV_FILE" CCRC_AUTH)"
-  else
+  local flag="" where="$BOX_ENV_FILE" unmeasured=0 expnamed=0 authwhy="" authfix="" unwhy="" unfix=""
+  _box_unit_env CCRC_AUTH || unmeasured=$?
+  authwhy="$BUE_WHY"; authfix="$BUE_FIX"
+  flag="$BUE_VAL"
+  # Wave 9 R10e (D-3823): the unmeasured state has TWO causes, and its words are
+  # the cause's own. rc 2 is the exposure file there and unreadable (D-3596's
+  # sentences, byte-identical); rc 3 is a readable file whose line this reader
+  # cannot decide, worded from the reader's own `BUE_WHY`/`BUE_FIX`; any other
+  # non-zero is a reader that answered something it was never meant to.
+  case "$unmeasured" in
+    0) ;;
+    2) unwhy="$CCRC_EXPOSURE_FILE is there and cannot be read"
+       unfix="look at what is really there (ls -ld $CCRC_EXPOSURE_FILE) — then re-run: ccrc expose duckdns (or: ccrc expose byo); it rewrites the file 0600" ;;
+    3) unwhy="$authwhy"
+       unfix="$authfix — then re-run ccrc doctor" ;;
+    *) unwhy="its env-file reader answered rc $unmeasured"
+       unfix="re-run ccrc doctor; if this repeats it is a bug in ccrc — see _box_unit_env in $CCRC_HERE/ccrc" ;;
+  esac
+  if [ "$BUE_SRC" = "$CCRC_EXPOSURE_FILE" ]; then
+    where="$CCRC_EXPOSURE_FILE (it overrides $BOX_ENV_FILE)"; expnamed=1
+  elif [ "$BUE_ENV" != ok ]; then
     where="no readable $BOX_ENV_FILE"
   fi
 
@@ -1358,6 +1393,15 @@ _check_auth() {
           "this is a bug in ccrc, not a fact about your box — see _check_auth in $CCRC_HERE/ccrc-doctor-checks and --check in $helper"
         return 1
       fi
+      # Wave 8 item D, D-3596: a passphrase this box CAN use, but whether the
+      # gate is armed was not measured — the exposure file is there, unreadable,
+      # and what the service manager does with it was not measured either.
+      # Neither PASS arm below is honest here.
+      if [ "$unmeasured" -ne 0 ]; then
+        _dr_warn auth "$secret$via holds a usable passphrase ($detail), but $unwhy, so whether logins are gated was not measured" \
+          "$unfix"
+        return 2
+      fi
       if [ "$armed" -eq 1 ]; then
         _dr_pass auth "$gate, and $secret$via holds a usable passphrase ($detail) — logins are gated"
         return 0
@@ -1369,6 +1413,16 @@ _check_auth() {
       _dr_pass auth "$secret$via holds a usable passphrase ($detail), but $gate, so no request is gated yet"
       return 0 ;;
     3)
+      # Wave 8 item D, D-3596: same reasoning as rc 0's — with no passphrase
+      # file EITHER, whether the gate is armed (and failing shut) is the one
+      # fact this box needs and the one this check cannot give it.
+      if [ "$unmeasured" -ne 0 ]; then
+        # This arm's own rc-2 remedy (D-3596), byte-identical; every other cause keeps `unfix`.
+        [ "$unmeasured" -ne 2 ] || unfix="look at what is really there (ls -ld $CCRC_EXPOSURE_FILE) and re-run ccrc expose; if the gate is meant to be armed, run: ccrc passwd"
+        _dr_warn auth "there is no passphrase file at $secret$via, and $unwhy, so whether the gate is armed (and failing shut) was not measured" \
+          "$unfix"
+        return 2
+      fi
       if [ "$armed" -eq 1 ]; then
         _dr_fail auth "$gate and there is NO passphrase file at $secret$via — the gate is armed and failing SHUT: every route answers 401 and no login can succeed" \
           "run: ccrc passwd (no restart needed — the gate re-reads the file per request)"
@@ -1389,7 +1443,13 @@ _check_auth() {
       # rule reached by a different road: the state is a fact about how the box
       # is configured, and the line's job is to say so plainly enough that
       # nobody reads it as "we are protected".
-      _dr_pass auth "no passphrase file at $secret$via, and $gate — the shipped default, so nothing is gated and anyone who can reach this box can drive it; to arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE and restart ccrc.service"
+      # The arming words name the file that would actually decide it (wave 8
+      # item D): a box whose exposure file already overrides ccrc.env is told
+      # to set the flag THERE, not in the file the unit no longer reads it
+      # from.
+      local arming="set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE and restart ccrc.service"
+      [ "$expnamed" -eq 0 ] || arming="set CCRC_AUTH=on in $CCRC_EXPOSURE_FILE, which overrides $BOX_ENV_FILE, together with CCRC_RP_ID and CCRC_ORIGIN (ccrc expose writes all three), and restart ccrc.service"
+      _dr_pass auth "no passphrase file at $secret$via, and $gate — the shipped default, so nothing is gated and anyone who can reach this box can drive it; to arm the gate: ccrc passwd, then $arming"
       return 0 ;;
     4)
       # BOTH ARMS ARE A FAIL, and the difference between them is tense, not
@@ -1406,7 +1466,14 @@ _check_auth() {
       # expiring them. Printing `ccrc passwd` alone here would send an operator
       # to a command that is about to refuse.
       local when="the moment CCRC_AUTH=on is set, the server will refuse to boot on it"
-      [ "$armed" -eq 0 ] || when="with $gate the server REFUSES TO BOOT on it — readAuthSecret is called uncaught at startup"
+      if [ "$unmeasured" -eq 2 ]; then
+        when="if CCRC_AUTH is on (whether it is was not measured: $CCRC_EXPOSURE_FILE cannot be read), the server refuses to boot on it"
+      elif [ "$unmeasured" -ne 0 ]; then
+        # rc 3, or a reader answer this check never expected: its own cause, never an empty one.
+        when="if CCRC_AUTH is on (whether it is was not measured: $unwhy), the server refuses to boot on it"
+      elif [ "$armed" -eq 1 ]; then
+        when="with $gate the server REFUSES TO BOOT on it — readAuthSecret is called uncaught at startup"
+      fi
       # ── AND THE SESSION FILE IS RESOLVED, NOT ASSUMED (D-148) ────────────
       # This clause used to be a hard-coded `rm -f ~/.ccrc/sessions.json`,
       # printed in the same breath as a `$secret` that WAS resolved through
@@ -1682,6 +1749,178 @@ _check_exposure() {
   else
     _dr_pass exposure "configured — CCRC_ORIGIN=$origin (rp id: $rpid)$modesaid"
   fi
+}
+
+# ── update-exposure: can anyone who reaches this box move it? ─────────────
+# (design 2026-09-20 §12, "the unarmed-exposure doctor check"). With CCRC_AUTH
+# off every route is open to whoever reaches the port — auth/gate.ts says so in
+# its own words ("there is no credential to forge with") — and the update
+# routes are routes like any other. The sentences below say "the update
+# routes" rather than naming one (fix round 1 item 25 / review 155 Q7): this
+# check's ORIGINAL text named `POST /api/updates/apply`, wave 5's route to
+# move this box, before that wave landed — measured at the time (batch E
+# review fix round 1, M2: cited by symbol, never by an exhaustive list that
+# a later wave would make stale), the W2 update routes registered in
+# `server/src/update/routes.ts` were read-and-write ones (`GET /api/updates`,
+# `POST /api/updates/intent`, `/refresh`, `/ack`) but NONE of them moves this
+# box, so a box read with THIS wave's ccrc would have been told to worry
+# about a route that could not be reached because it did not exist. The
+# generic phrase stays true across every wave that adds a write route here,
+# which naming one by name cannot.
+# So this check is two measurements, and the obvious reading of each is wrong:
+#
+#   ARMED — CCRC_AUTH=on, read with the SERVER UNIT's precedence: ccrc.service
+#     carries two EnvironmentFile lines, ccrc.env then $CCRC_EXPOSURE_FILE, and
+#     for a key in both the LATER file wins, EVEN WHEN its value is empty —
+#     that is what a second `EnvironmentFile=` does, not merely what a
+#     non-empty override does. `ccrc expose` writes CCRC_AUTH=on into the
+#     exposure file and never into ccrc.env (`_exp_env_write`, D-162), so a
+#     ccrc.env-only read would call every correctly exposed box unarmed.
+#     `_check_exposure`'s CCRC_HOST read above is the precedent this copies,
+#     and (wave 8 item D (decision D)) it is now the ONE shared reader, `ccrc`'s
+#     `_box_unit_env` — the same function `_check_auth` and install's gate
+#     line read the flag through, so all three cannot disagree. PRESENCE, not
+#     a non-empty value, wins (fix round 1 item 7 / review 155 C13):
+#     `_box_env_value`'s own return code, which `_box_unit_env` carries
+#     forward, says whether the exposure file named the key AT ALL, told
+#     apart from the key printing empty because the file never mentioned it.
+#     A hand-written bare `CCRC_AUTH=` line now reads here exactly as systemd
+#     reads it: OFF, overriding ccrc.env=on, not "not set, fall back". `ccrc
+#     expose` itself never writes that bare line — this is the hand-edited
+#     case, and a doctor that folded it into "unset" was a false PASS over a
+#     gate that is actually off. An exposure file that is there and cannot be
+#     read is UNMEASURED, never folded into either answer — see below.
+#   REACHABLE — not the bind alone, and CCRC_HOST is read through the SAME
+#     `_box_unit_env` (its one other caller, D-3597's exception is
+#     `_check_exposure`'s own CCRC_HOST read above, left as it was): a correctly
+#     exposed box keeps CCRC_HOST at
+#     its loopback default (config.ts) because Caddy on 443 proxies
+#     127.0.0.1. So reachable is a non-loopback CCRC_HOST (same precedence) OR
+#     any exposure artifact present — $CCRC_EXPOSURE_FILE, $CCRC_CADDYFILE, or
+#     the $CCRC_DDNS_UNIT unit (.service or .timer) installed. "expose ran,
+#     then the exposure file was deleted" leaves the Caddyfile: still
+#     reachable, now unarmed — the case this check exists for. A HOSTNAME bind
+#     counts as reachable: judging it loopback would need a resolver, and the
+#     wrong answer in that direction is a false PASS.
+#
+# FAIL iff reachable and not armed. A fleet-role box runs no server and serves
+# no update route: SKIP, on either piece of evidence the other role-aware
+# checks use — ccrc.env's recorded CCRC_ROLE=fleet (D-3111's read, `-f` before
+# `-r`, D-3025), or `_check_auth`'s two unit files (D-86: "no ccrc.service"
+# alone is also a dev checkout, and a dev checkout DOES run a server).
+#
+# NOT ONE PATH OR UNIT NAME IS SPELLED HERE (D-85's rule): single-definition's
+# holder scans pin `.ccrc/exposure.env`, `.ccrc/Caddyfile` and the ddns unit
+# name to ccd/ccrc's declarations alone, and a message that spelled one would
+# be a second holder. Every one below is a variable.
+_check_update-exposure() {
+  if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || [ -z "${CCRC_CADDYFILE:-}" ] || [ -z "${CCRC_DDNS_UNIT:-}" ] \
+     || [ -z "${BOX_ENV_FILE:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1 \
+     || ! declare -F _box_unit_env >/dev/null 2>&1; then
+    _dr_fail update-exposure "ccrc's own config and exposure constants are not loaded, so whether this box's update routes are gated was never measured" \
+      "this is a bug in ccrc, not a fact about your box — _check_update-exposure reads this box's recorded CCRC_ROLE through _box_env_value, and the CCRC_AUTH flag and the CCRC_HOST bind through _box_unit_env, and looks for CCRC_CADDYFILE and the CCRC_DDNS_UNIT unit, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+  local envok=0 role=""
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    envok=1
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  if [ "$role" = fleet ]; then
+    _dr_skip update-exposure "this box runs no ccrc server ($BOX_ENV_FILE records CCRC_ROLE=fleet), so no update route is served here"
+    return 3
+  fi
+  if [ ! -f "$CCRC_UNIT_DIR/$(_dr_unit_file ccrc.service)" ] && [ -f "$CCRC_UNIT_DIR/$(_dr_unit_file ccrc-agent.service)" ]; then
+    _dr_skip update-exposure "this box runs no ccrc server ($CCRC_UNIT_DIR has ccrc-agent.service and no ccrc.service), so no update route is served here"
+    return 3
+  fi
+
+  # The exposure file in three states, never two: absent, readable, or THERE
+  # AND UNREADABLE — the last is unmeasured, because what the service manager
+  # does with it was not measured.
+  local expok=0 expunread=0
+  if [ -e "$CCRC_EXPOSURE_FILE" ]; then
+    if [ -f "$CCRC_EXPOSURE_FILE" ] && [ -r "$CCRC_EXPOSURE_FILE" ]; then expok=1; else expunread=1; fi
+  fi
+
+  # ── ARMED ────────────────────────────────────────────────────────────────
+  # Wave 8 item D (decision D): through the ONE shared reader now, `_box_unit_env`
+  # — the three-state expok/expunread above is unchanged (the WARN it drives,
+  # D-3596, still fires below), and so is envok, which only the role read
+  # above still uses. No printed-source rule is kept here: a source is
+  # printed only where its value is `on`, and there BUE_SRC is the file that
+  # named it — exactly what the old `[ -z "$auth" ] || authsrc=…` line was
+  # working around by hand.
+  # Wave 9 R10e (D-3823): the reader's rc is kept now, and the WHY and FIX of an
+  # rc 3 are captured right here — each read resets both out-params, so the
+  # CCRC_HOST read below would otherwise erase this one's cause.
+  local auth="" authsrc="" authrc=0 authwhy="" authfix=""
+  _box_unit_env CCRC_AUTH || authrc=$?
+  authwhy="$BUE_WHY"; authfix="$BUE_FIX"
+  auth="$BUE_VAL"; authsrc="$BUE_SRC"
+
+  # ── REACHABLE ────────────────────────────────────────────────────────────
+  # The identical sibling read, same reader: a bare `CCRC_HOST=` in the
+  # exposure file is systemd's own way of reasserting the loopback default
+  # over whatever ccrc.env named, not "no opinion, keep reading ccrc.env's
+  # bind" — `_box_unit_env`'s presence rule gives that for free.
+  local bindhost="" bindsrc="" hostrc=0 hostwhy="" hostfix=""
+  _box_unit_env CCRC_HOST || hostrc=$?
+  hostwhy="$BUE_WHY"; hostfix="$BUE_FIX"
+  bindhost="$BUE_VAL"; bindsrc="$BUE_SRC"
+  local -a reach=()
+  case "$bindhost" in
+    # Empty is config.ts's default (127.0.0.1); every 127/8 address and both
+    # spellings of ::1 are loopback. Everything else — a wildcard, a routable
+    # address, a hostname — answers someone other than this box.
+    ''|localhost|::1|'[::1]'|127.*) ;;
+    *) reach+=("CCRC_HOST=$bindhost in $bindsrc") ;;
+  esac
+  [ ! -e "$CCRC_EXPOSURE_FILE" ] || reach+=("$CCRC_EXPOSURE_FILE exists")
+  [ ! -e "$CCRC_CADDYFILE" ] || reach+=("$CCRC_CADDYFILE exists")
+  # The ddns unit, in this platform's spelling. On Linux it is a PAIR, and
+  # either half on its own is the evidence. On macOS `_exp_ddns_units`' Darwin
+  # arm writes ONE launchd job for the pair, `app.ccrc.<unit>.plist`, and it is
+  # reached through the `.service` name ONLY: `_svc_label` strips `.service`
+  # and nothing else, so `_dr_unit_file` maps the `.timer` name to
+  # `app.ccrc.<unit>.timer.plist`, a file nothing writes — looking it up would
+  # be a second, vacuous lookup that could never find anything.
+  local -a ddns=("$CCRC_DDNS_UNIT.service")
+  [ "${CCD_OS:-linux}" = darwin ] || ddns+=("$CCRC_DDNS_UNIT.timer")
+  local u f
+  for u in "${ddns[@]}"; do
+    f="$(_dr_unit_file "$u")"
+    [ ! -f "$CCRC_UNIT_DIR/$f" ] || reach+=("$f is installed in $CCRC_UNIT_DIR")
+  done
+
+  if [ "$expunread" -eq 1 ]; then
+    _dr_warn update-exposure "$CCRC_EXPOSURE_FILE is there and cannot be read, so whether CCRC_AUTH is on — and so whether the update routes are gated — was not measured" \
+      "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE; the exposure check above says what it found), then re-run ccrc expose — it rewrites the file 0600"
+    return 2
+  fi
+  # An undecidable CCRC_AUTH WARNs only where its answer could matter: a box PROVABLY loopback-only (CCRC_HOST
+  # measured, and no exposure file, Caddyfile or ddns unit) gets the loopback PASS below whatever the flag is, because
+  # neither non-FAIL exit of this tail depends on it.
+  if [ "$authrc" -eq 3 ] && { [ "${#reach[@]}" -gt 0 ] || [ "$hostrc" -eq 3 ]; }; then
+    _dr_warn update-exposure "$authwhy, so whether CCRC_AUTH is on — and so whether the update routes are gated — was not measured" \
+      "$authfix — then re-run ccrc doctor"
+    return 2
+  fi
+  if [ "$auth" = on ]; then
+    _dr_pass update-exposure "CCRC_AUTH=on (read from $authsrc) — the update routes sit behind the session gate"
+    return 0
+  fi
+  if [ "$hostrc" -eq 3 ] && [ "${#reach[@]}" -eq 0 ]; then
+    _dr_warn update-exposure "$hostwhy, so whether this box is reachable — and so whether its ungated update routes answer anyone — was not measured" \
+      "$hostfix — then re-run ccrc doctor"
+    return 2
+  fi
+  if [ "${#reach[@]}" -gt 0 ]; then
+    _dr_fail update-exposure "this box is reachable ($(_dr_join "${reach[@]}")) and CCRC_AUTH is not on in $BOX_ENV_FILE or $CCRC_EXPOSURE_FILE — the update routes, and every other write route, answer anyone who can reach it" \
+      "arm the gate: ccrc expose (writes CCRC_AUTH=on with CCRC_RP_ID and CCRC_ORIGIN into $CCRC_EXPOSURE_FILE), or set all three in $BOX_ENV_FILE, then restart: $(_dr_restart_hint ccrc.service)"
+    return 1
+  fi
+  _dr_pass update-exposure "loopback only — no exposure artifact and CCRC_HOST=${bindhost:-127.0.0.1 (the default)}"
 }
 
 # ── caddy: the SYSTEM unit the D2 ceremony was supposed to arm ────────────
@@ -1997,7 +2236,7 @@ _check_name() {
 # Spec §5's "disk headroom (including the backup dir)". THREE things this
 # project writes land on one filesystem and all three fail unhelpfully when it
 # is full: a ccd workspace is a full clone per session, every deploy leaves
-# another `~/ccrc-backups/<ts>/` (deploy.sh:33-34), and `~/.ccrc/coord.db` is a
+# another `~/ccrc-backups/<ts>/` (each deploy.sh arm's `mkdir -p ~/ccrc-backups/$TS`), and `~/.ccrc/coord.db` is a
 # WAL database that `server/src/coord/db.ts:144-145` says outright has NO backup
 # to fall back on — a truncated write there is not recoverable from that
 # directory.
@@ -2645,8 +2884,8 @@ _check_wrappers() {
           wr_hard+=("$id sources $wsecrets but the roster declares ${wr_secrets[$id]}")
         fi
         if [ "${wr_kind[$id]}" = codex ]; then
-          if [ "$target" != ccgpt ]; then
-            wr_hard+=("$id's wrapper execs \$HOME/.local/bin/$target, not ccgpt — a Codex lane's launcher hands off to the common GPT-lane launcher")
+          if [ "$target" != ccrc-codex ]; then
+            wr_hard+=("$id's wrapper execs \$HOME/.local/bin/$target, not ccrc-codex — a Codex lane's launcher hands off to ccrc's own Codex launcher")
           fi
         elif [ -n "$upstream_id" ] && [ "$target" != "$upstream_id" ]; then
           wr_hard+=("$id's wrapper execs \$HOME/.local/bin/$target, not the roster's upstream account $upstream_id")
@@ -2718,6 +2957,44 @@ _check_wrappers() {
     return "$rc"
   fi
   _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external, $n_codex Codex)"
+}
+
+# ── _fix_wrappers — the cure `ccrc doctor --fix` runs for `wrappers` ──────
+# Spec §12 lets `--fix` "regenerate a marker-verified launcher" and forbids
+# it to "overwrite an unverified launcher". A launcher is THIS check's
+# measurement — `_check_codex` does not measure one, and a second verdict
+# line for it would count one finding twice (`_check_accounts`'
+# `launcher-absent` note) — so its cure rides this check, for a generated
+# and a Codex account alike (D-3730,
+# Plan 3a Task 8).
+#
+# THE CURE IS THE SHIPPED TREE'S OWN `ccrc wrappers`, WITH NO FLAG
+# (`_fix_skills`' rule: re-run the shipped installer, never a copy of it).
+# With no flag that verb overwrites exactly one class of file — a launcher
+# carrying ccrc's marker whose hash still verifies (`ccrc-unmodified`), and
+# it backs that one up first — writes where nothing is, and REFUSES every
+# other file with its own remedy: a marked file edited since, a foreign
+# file (equivalent or not), one it cannot read, one over 1 MiB, an id
+# another launcher execs. So "never an unverified launcher" is the verb's
+# own table, not a second rule here, and this fixer never passes `--force`
+# or `--adopt`: those are the operator's.
+#
+# A CHILD PROCESS, never `cmd_wrappers` called in this shell: that verb
+# `_ccrc_die`s on a manifest it will not trust and arms an EXIT trap for its
+# staging directory, and cmd_doctor calls a fixer in ITS OWN shell. Its
+# output is relayed line by line under this fixer's prefix, so its own
+# `summary:` line can never be read as doctor's.
+_fix_wrappers() {
+  local ccrc="$BOX_TREE_DIR/ccd/ccrc" said rc=0 l
+  if [ ! -f "$ccrc" ]; then
+    echo "FIX wrappers: refused — the shipped tree has no \$HOME/ccrc/ccd/ccrc, so its 'ccrc wrappers' cannot be run; run 'ccrc update' (or 'ccrc install' from a checkout)"
+    return 1
+  fi
+  said="$("${BASH:-bash}" "$ccrc" wrappers 2>&1)" || rc=$?
+  while IFS= read -r l; do
+    [ -z "$l" ] || printf 'FIX wrappers: %s\n' "$l"
+  done <<< "$said"
+  echo "FIX wrappers: ran the shipped tree's 'ccrc wrappers' with no flag (exit $rc) — it overwrites only a launcher whose ccrc marker still verifies, writes only where nothing is, and refuses every other file; the re-measurement below is the verdict"
 }
 
 # ── skills — every rostered home carries the SHIPPED skills ────────────────
@@ -2975,23 +3252,19 @@ _check_accounts() {
 }
 
 # ── credentials: does every account this box will PROBE have a token file? ──
-# `ccd-account-health` derives each token's path by CONVENTION —
-# `$HOME/.cc-secrets/<id>-oauth.env` for every `telemetry: "anthropic"` account
-# — because `shared/roster.ts` permits `exec.secretsFile` only on
-# `kind: "generated"`, so the mandatory upstream account structurally cannot
-# declare where its credential lives. A roster-driven probe would have covered
-# the generated accounts and SILENTLY SKIPPED the primary one: precisely the
-# class of defect the health work exists to remove.
-#
-# A convention with no measurement is that silent skip waiting to happen. The
-# probe REFUSES an account whose token file is absent or empty — the fourth
-# outcome, and the correct one — but a refusal that only reaches a journal is
-# indistinguishable from a fleet where nothing went wrong. THIS is where absence
-# becomes loud.
+# `ccd-account-health` measures declared Anthropic setup-token credentials, not
+# every `telemetry: "anthropic"` account. Telemetry controls usage publishing;
+# it says nothing about a lane's authentication shape. An upstream declaration
+# wins, otherwise only the upstream retains the legacy `<id>-oauth.env` path. A
+# generated Anthropic lane needs a declared setup-token path. API-key, login,
+# external and Codex lanes are not usage-endpoint subjects: a stale guessed OAuth
+# file must not bless or condemn them.
 #
 # READ BY NODE, NOT JQ, for `_check_wrappers`' stated reason: this check must not
 # fail for a reason that belongs to another one, and a box with no jq already
-# gets exactly one FAIL, from the jq check.
+# gets exactly one FAIL, from the jq check. The raw roster has not passed
+# `parseRoster`, so the selector accepts only a safe relative path before Bash
+# joins it to `$HOME`; an invalid declaration is a named FAIL, not a path lookup.
 #
 # NOT ONE BYTE OF ANY FILE IS READ. `[ -s ]` answers existence and non-emptiness
 # together, which is the whole question — and this file's standing rule (see
@@ -3014,58 +3287,94 @@ _check_credentials() {
       "install Node first — see the 'node' check above"
     return 1
   fi
-  local ids rc
-  ids="$(CCRC_DOCTOR_ROSTER="$roster" node -e '
+  local subjects rc
+  subjects="$(CCRC_DOCTOR_ROSTER="$roster" node -e '
     const fs = require("fs");
     let j;
     try { j = JSON.parse(fs.readFileSync(process.env.CCRC_DOCTOR_ROSTER, "utf8")); }
     catch (e) { process.exit(3); }
     if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
-    // Only ids that match the shared grammar reach stdout: an id outside it can
-    // name no file, and it must never be printed at a terminal that acts on
-    // control bytes (see `_check_wrappers`, which escapes for the same reason).
-    const ok = /^[a-z][a-z0-9-]{0,31}$/;
-    process.stdout.write(j.accounts
-      .filter((a) => a && typeof a === "object" && a.telemetry === "anthropic" && ok.test(a.id))
-      .map((a) => a.id).join("\n"));
+    const idOk = (v) => typeof v === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(v);
+    const pathOk = (v) => typeof v === "string" && v !== "" && !v.startsWith("/")
+      && !v.endsWith("/") && !v.includes("..") && /^[A-Za-z0-9._/-]+$/.test(v);
+    for (const a of j.accounts) {
+      if (!a || typeof a !== "object" || a.telemetry !== "anthropic" || !idOk(a.id)) continue;
+      const e = a.exec;
+      let state = "unsupported", rel = "";
+      if (e && typeof e === "object" && e.kind === "upstream") {
+        rel = Object.hasOwn(e, "secretsFile") ? e.secretsFile : `.cc-secrets/${a.id}-oauth.env`;
+        state = pathOk(rel) ? "eligible" : "invalid";
+      } else if (e && typeof e === "object" && e.kind === "generated") {
+        const provider = Object.hasOwn(e, "provider") ? e.provider : "anthropic";
+        if (provider === "anthropic") {
+          if (Object.hasOwn(e, "secretsFile")) {
+            rel = e.secretsFile;
+            state = pathOk(rel) ? "eligible" : "invalid";
+          } else state = "login";
+        } else if (typeof provider === "string") state = "api-key";
+      }
+      process.stdout.write(`${a.id}\t${state}\t${state === "eligible" ? rel : ""}\n`);
+    }
   ' 2>/dev/null)"; rc=$?
   if [ "$rc" -ne 0 ]; then
     _dr_skip credentials "\$HOME/.ccrc/accounts.json could not be read as a roster — the 'wrappers' check above owns that"
     return 3
   fi
-  if [ -z "$ids" ]; then
-    _dr_skip credentials "no account on this box declares telemetry \"anthropic\", so there is no Anthropic credential to look for"
+  if [ -z "$subjects" ]; then
+    _dr_skip credentials "no account on this box declares an OAuth setup-token credential, so there is nothing for the OAuth usage probe to measure"
     return 3
   fi
-  # SKIP, NOT FAIL, WHEN THE DIRECTORY ITSELF IS ABSENT: a box with a roster
-  # but no $HOME/.cc-secrets at all has not been PROVISIONED with credentials
-  # yet — a state the operator is legitimately in, most concretely right
-  # before the first `ccrc install` on a fresh box, or in an install fixture
-  # HOME that never creates the directory. `ccrc install` runs `cmd_doctor`
-  # and aborts on any FAIL, so failing this check here would block the very
-  # install that has to happen BEFORE provisioning can — an unmeasurable
-  # "not provisioned yet" is not the same finding as a measured "provisioned,
-  # and THIS account's file is missing", which stays a FAIL below.
-  if [ ! -d "$HOME/.cc-secrets" ]; then
-    _dr_skip credentials "no \$HOME/.cc-secrets directory — this box has not been provisioned with credentials yet; run again once \$HOME/.cc-secrets/<id>-oauth.env exists for each account declaring telemetry \"anthropic\""
+  local id state rel n=0 miss=0 invalid=0 all_under_secrets=1
+  local -a eligible=() bad=()
+  while IFS=$'\t' read -r id state rel <&8; do
+    case "$state" in
+      eligible)
+        n=$((n + 1))
+        eligible+=("$id:$rel")
+        [[ "$rel" == .cc-secrets/* ]] || all_under_secrets=0
+        ;;
+      invalid)
+        invalid=$((invalid + 1))
+        bad+=("$id has an invalid declared setup-token credential path")
+        ;;
+      api-key|login|unsupported) ;;
+      *)
+        invalid=$((invalid + 1))
+        bad+=("$id has an unrecognised credential subject")
+        ;;
+    esac
+  done 8<<< "$subjects"
+  if [ "$invalid" -gt 0 ]; then
+    _dr_fail credentials "$(_dr_join "${bad[@]}")" \
+      "fix each declared setup-token credential path to be a safe relative path under \$HOME; the account-health probe refuses malformed declarations"
+    return 1
+  fi
+  if [ "$n" -eq 0 ]; then
+    _dr_skip credentials "no account on this box declares an OAuth setup-token credential, so there is nothing for the OAuth usage probe to measure"
     return 3
   fi
-  local id n=0 miss=0
-  local -a bad=()
-  for id in $ids; do
-    n=$((n + 1))
-    # THE CONVENTION, SPELLED ONCE IN THIS FILE — the second and last holder;
-    # `single-definition.test.ts` pins the pair and compares their shape.
-    [ -s "$HOME/.cc-secrets/$id-oauth.env" ] && continue
+  # A fresh, legacy-shaped box has no credentials directory until provisioning,
+  # so it SKIPs instead of blocking the install that must happen first. A
+  # declared path elsewhere is already a specific claim and remains a FAIL below.
+  if [ "$all_under_secrets" -eq 1 ] && [ ! -d "$HOME/.cc-secrets" ]; then
+    _dr_skip credentials "no \$HOME/.cc-secrets directory — this box has not been provisioned with setup-token credentials yet; run again once each declared credential file exists"
+    return 3
+  fi
+  local item f
+  for item in "${eligible[@]}"; do
+    id="${item%%:*}"
+    rel="${item#*:}"
+    f="$HOME/$rel"
+    [ -s "$f" ] && continue
     miss=$((miss + 1))
-    bad+=("$id has no readable token at \$HOME/.cc-secrets/$id-oauth.env")
+    bad+=("$id has no readable token at \$HOME/$rel")
   done
   if [ "$miss" -gt 0 ]; then
     _dr_fail credentials "$(_dr_join "${bad[@]}")" \
-      "the account-health probe refuses an account with no token, so its liveness is never measured — put the account's CLAUDE_CODE_OAUTH_TOKEN in that file (0600), or set telemetry to \"none\" for an account this box does not authenticate to Anthropic"
+      "the account-health probe refuses an account with no setup token, so its liveness is never measured — put the account's CLAUDE_CODE_OAUTH_TOKEN in its declared file (0600)"
     return 1
   fi
-  _dr_pass credentials "$n account(s) declaring telemetry \"anthropic\", each with a token file under \$HOME/.cc-secrets"
+  _dr_pass credentials "$n account(s) declaring an OAuth setup-token credential, each with a readable token file"
 }
 
 # ── the project pool tags (account pools, spec §5.4.6) ────────────────────
@@ -3534,10 +3843,10 @@ _check_pool-sync() {
     # also short-circuits to a bare `chmod` when the bytes already match
     # (`cmp -s`), so an idempotent re-run of an unchanged unit does NOT reset
     # this mtime either — it only moves on a real (re)install. That `cmp -s`
-    # short-circuit is `ccd/ccrc`'s own, though: `deploy/deploy.sh:785`'s
+    # short-circuit is `ccd/ccrc`'s own, though: deploy.sh's agent-arm (`AGENT_BUILD_CMD='_unit_atomic() {`)
     # `_unit_atomic` — CLAUDE.md's AGENT-FIRST rule makes it the COMMON path
     # for this unit, not `ccd/ccrc`'s — carries no `cmp -s` at all and
-    # re-copies `ccd-pool-sync.timer` unconditionally (`deploy/deploy.sh:798`)
+    # re-copies `ccd-pool-sync.timer` unconditionally (its `_unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.timer` line)
     # on every `deploy.sh agent <host>`, so on that path this mtime resets on
     # every deploy, not only a real (re)install.
     #
@@ -3607,6 +3916,98 @@ _check_pool-sync() {
   fi
 
   _dr_pass pool-sync "this box's account-pool projection ($f) is present and within its lease — the control plane is reaching it"
+}
+
+# ── update-sync: the EFFECT the puller's own ACTIVE state cannot prove ────
+# Fix round 1 item 6 / review 155 C3, same class as `_check_pool-sync` right
+# above (and the same gap `_inst_units`'s OWN COMMENT, at its `ccd-pool-sync`
+# placement arm, names for this exact sibling): `_check_services`' `known`
+# array measures `ccd-update-sync.timer`'s ACTIVATION state, which stays
+# `active` while its oneshot fails every run — a missing or rotated
+# `~/.cc-secrets/ccrc-mail.token` and a non-200 from the control plane both
+# print PASS there. Nothing else here reported `~/.ccrc/update-intent` at
+# all, so a fleet node whose puller has never once succeeded stayed green
+# while every `ccrc update` without --to refuses `unreadable (never
+# synced)`.
+#
+# Unlike pool-sync, this does NOT re-read the file and re-derive its own
+# verdict: `_upd_intent_state` (ccd/ccrc) is the ONE reader of this exact
+# grammar, already role-aware and already carrying the puller's own
+# re-checked value bounds (C23, fix round 1 item 15). A second parser here
+# would be the drift this file's own header warns against, for a document a
+# node's own `ccrc update`/`ccrc channel` already parse authoritatively.
+# This check calls it and reports its words, never its own — including its
+# REMEDY (batch E review fix round 1, M3): `_upd_intent_say` already picks
+# the remedy by `UPD_INTENT_ROLE` (the puller's own oneshot on a fleet node,
+# or restarting `ccrc.service` on server/both, whose own process is the
+# writer there) — this check calls it rather than hard-coding the puller's
+# remedy, which would be the WRONG one on the one box where this arm is
+# actually reachable: a server/both box carrying a LEFTOVER timer file (a
+# role changed after install — `CCRC_ROLE` is seed-once, `_inst_env`).
+#
+# INSTALLED, not merely present, gates whether ABSENCE is even a finding —
+# same test `_check_pool-sync` uses (`CCRC_UNIT_DIR`/`_dr_unit_file`). A box
+# with no `ccd-update-sync.timer` file has no puller BY CONFIGURATION: only
+# a `--role fleet` install ever places this pair (`_inst_units`'s own
+# `ccd-update-sync` placement, gated identically to `ccd-pool-sync`'s right
+# beside it) — a server/both box's own process writes `~/.ccrc/update-intent`
+# itself, and macOS ships neither unit (timers are systemd-only).
+# `_upd_intent_state`'s own macOS arm is consequently unreachable from here.
+# Its `not-configured` arm (role fleet/"", timer file ABSENT) is ALSO
+# unreachable past this check's own SKIP, which already requires that exact
+# file to exist — but handled explicitly anyway (M3), rather than falling
+# into the FAIL arm's "every update without --to refuses" claim, which is
+# false for `not-configured` (a box in that state follows stable).
+_check_update-sync() {
+  # M4: the loaded-guard every sibling check that calls a function declared
+  # in `ccrc` carries (`_check_pool-sync` needs none of its own — it calls
+  # nothing outside this file — so `_check_update-exposure`'s own guard is
+  # the shape to match).
+  if ! declare -F _upd_intent_state >/dev/null 2>&1; then
+    _dr_fail update-sync "ccrc's own update-intent reader is not loaded, so this box's projection freshness was never measured" \
+      "this is a bug in ccrc, not a fact about your box — _check_update-sync calls _upd_intent_state, declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+  local unit_path="$CCRC_UNIT_DIR/$(_dr_unit_file ccd-update-sync.timer)"
+  if [ ! -f "$unit_path" ]; then
+    _dr_skip update-sync "ccd-update-sync.timer is not installed on this box — no puller here (only a --role fleet install places it; a server/both box's own process writes ~/.ccrc/update-intent itself, and macOS ships no systemd timer)"
+    return 3
+  fi
+
+  _upd_intent_state
+  case "$UPD_INTENT_STATE" in
+    ok|none)
+      _dr_pass update-sync "this box's update-intent projection is present and within its lease — the control plane is reaching it"
+      return 0 ;;
+    not-configured)
+      _dr_skip update-sync "~/.ccrc/update-intent reads not-configured (${UPD_INTENT_WHY:-no reason given}) though ccd-update-sync.timer is installed here — unreachable on a consistently configured box; this box follows stable, which is not a fault to FAIL on"
+      return 3 ;;
+  esac
+
+  # GRACE, mirroring pool-sync's own (same constant, same reasoning: one
+  # tick for OnBootSec=45s/AccuracySec=10s slack plus one more so a doctor
+  # run landing mid-cycle is not itself the reason this goes red) — but ONLY
+  # for the "never synced" shape (`_upd_intent_state`'s own WHY for a fresh
+  # box: the timer file exists, the document does not). A file that exists
+  # and fails to parse, or has gone stale, had its chance; the grace is for
+  # a box that has not had one tick yet, never for a fixture the puller
+  # itself already wrote and got wrong.
+  if [ "$UPD_INTENT_WHY" = "never synced" ]; then
+    local update_sync_grace=$((2 * 60)) unit_mtime unit_age
+    unit_mtime="$(_plat_mtime "$unit_path" 2>/dev/null)"
+    if [[ "$unit_mtime" =~ ^[0-9]+$ ]]; then
+      unit_age=$(($(date +%s) - unit_mtime))
+      if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$update_sync_grace" ]; then
+        _dr_warn update-sync "update-sync-not-yet-synced: ccd-update-sync.timer was installed ${unit_age}s ago and ~/.ccrc/update-intent has not been written yet — the timer fires every 60s (OnUnitActiveSec) and converges on its own; expected right after an install, not a fault" \
+          "wait for the timer to fire (up to ~60s) and re-run ccrc doctor — still absent past that window is the real fault: read the oneshot's own log ($(_dr_log_hint ccd-update-sync.service))"
+        return 2
+      fi
+    fi
+  fi
+
+  _dr_fail update-sync "update-sync-${UPD_INTENT_STATE}: ~/.ccrc/update-intent is ${UPD_INTENT_STATE} (${UPD_INTENT_WHY}) — every 'ccrc update' without --to on this box refuses" \
+    "$(_upd_intent_say)"
+  return 1
 }
 
 # ── graphify: the AST-graph sweep's engine, skills, excludes, census, and
@@ -4219,6 +4620,71 @@ _check_build() {
   _dr_fail build "the running server at $addr reports a DIFFERENT sha than $BOX_STAMP_FILE (${stamped:0:12} is installed) — the process is still on the build it booted with" \
     "restart it onto the installed build: $(_dr_restart_hint ccrc.service)"
   return 1
+}
+
+# ── provenance: did `ccrc update` verify the tree this box runs? ──────────
+# (design 2026-09-20 §11; plan D-3247). Line 2 of the
+# completed-install record reads `unsigned` for EVERY install `cmd_update` did
+# not verify: `_inst_installed` writes it unless the updater put
+# CCRC_UPDATE_VERIFIED=1 in the staged spine's environment, which it does only
+# after verify-provenance.mjs accepted the release's bundle (D-3117). So the
+# mark means "nobody verified this tree" — a checkout `ccrc install`,
+# `install.sh --release` (trust on first use), an update driven by a pre-W1
+# ccrc, and `--allow-unsigned` alike; the spec's sentence named only the last.
+#
+# NEVER A FAIL, BY CONSTRUCTION — this function contains no `_dr_fail` at all,
+# and ccrc-doctor.test.ts scans its body for one. An unverified install is a
+# fact about consent, not a fault: the box it describes is running, and the
+# remedy (the next verified `ccrc update`) is the operator's to choose. That is
+# why the constants guard is a WARN here, unlike every other check's guard:
+# "this table was sourced by something that is not ccrc" is not a finding this
+# check may raise to FAIL either.
+#
+# UNSIGNED IS A PASS, NOT A WARN — coordinator ruling 2026-09-23, over this
+# plan's own text: operator ruling D-139 ("a fresh install ends green") stands,
+# and every first install of a box is unsigned by construction (a checkout
+# `ccrc install`, `install.sh --release`), so a WARN here would make a real
+# fresh install's doctor tail close yellow until the box's first verified
+# `ccrc update` — exactly the state D-139 was written to forbid. The sentence
+# still names the fact; only the verdict and the exit code move.
+#
+# FOUR ANSWERS, never folded: no record -> SKIP (no spine completed here, so
+# there is no install to describe — a deploy.sh box, or a spine that died);
+# a record that is not a readable regular file -> WARN, unmeasured; `unsigned`
+# -> PASS (see above); anything else -> PASS. Line 1 is `ccrc version`'s
+# subject (complete/incomplete against the stamp) and is not judged here.
+_check_provenance() {
+  if [ -z "${BOX_INSTALLED_FILE:-}" ]; then
+    _dr_warn provenance "ccrc's own completed-install path is not loaded, so how this install was made was not measured" \
+      "this is a bug in ccrc, not a fact about your box — _check_provenance reads BOX_INSTALLED_FILE, declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 2
+  fi
+  if [ ! -e "$BOX_INSTALLED_FILE" ]; then
+    _dr_skip provenance "no completed-install record ($BOX_INSTALLED_FILE) — nothing to say about how this install was made"
+    return 3
+  fi
+  # `-f` BEFORE `-r`, and both before any read (D-3025): a directory at this
+  # path would make the read below fail in a way that prints no verdict.
+  if [ ! -f "$BOX_INSTALLED_FILE" ] || [ ! -r "$BOX_INSTALLED_FILE" ]; then
+    _dr_warn provenance "$BOX_INSTALLED_FILE cannot be read, so how this install was made was not measured" \
+      "ls -l $BOX_INSTALLED_FILE"
+    return 2
+  fi
+  local rec="" prov=""
+  # `|| :`, not `|| prov=""`: a last line with no newline still lands in the
+  # variable, and clearing it on read's EOF status would lose it.
+  { IFS= read -r rec || :; IFS= read -r prov || :; } < "$BOX_INSTALLED_FILE"
+  if [ "$prov" = unsigned ]; then
+    # D-3286 (final review, B5): "the next ccrc update verifies" is false on
+    # a box already at its target — that run no-ops at `_upd_converged`
+    # before the staged spine ever runs, so the mark and this PASS survive
+    # unchanged until a newer release ships or the operator types --force.
+    # Reworded to match README's own fix for the same sentence; the verdict
+    # (PASS, D-139) is unchanged.
+    _dr_pass provenance "unsigned — this install was not verified by ccrc update (a checkout install, install.sh's trust-on-first-use, or --allow-unsigned); the next ccrc update that installs a release (a newer one, or --force on this one) verifies it and clears the mark"
+    return 0
+  fi
+  _dr_pass provenance "the completed-install record carries no unsigned mark"
 }
 
 # ── the two boxes' matched set ────────────────────────────────────────────
@@ -4941,7 +5407,7 @@ _check_routing() {
 # generated by `ccd/ccrc-models-probe`, and it is the ONLY place those three
 # fields live. The POPULATION this check measures is `[ -f
 # "$dir/$id.classes.json" ]` — bare file presence, not `hasRegistry` itself
-# (`deploy/models-op.mjs:573`) called directly. The two answer the same thing
+# (`deploy/models-op.mjs`'s `lanes` op) called directly. The two answer the same thing
 # for an ordinary registry (ENOENT is the only outcome `hasRegistry` treats as
 # false, matching a bare `[ -f ]`), but they are NOT the same predicate and the
 # loop below documents the two cases where they diverge (a directory at that
@@ -4951,7 +5417,7 @@ _check_routing() {
 #
 # THE PREDICATE, verbatim from the contract: fresh := stale == false AND
 # (now - fetchedAt) <= 3*3600. `fetchedAt` is UNIX SECONDS
-# (`ccd/ccrc-models-probe:397`, `int(time.time())`) — never the millisecond
+# (`ccd/ccrc-models-probe`'s `_normalise`, `int(time.time())`) — never the millisecond
 # stamps the server side uses elsewhere. Three hours because the timer
 # (`deploy/systemd/ccrc-models.{timer,service}`) carries `OnUnitActiveSec=
 # 60min`, `TimeoutStartSec=300` (5 min) AND `AccuracySec=5min` (systemd may
@@ -4964,7 +5430,7 @@ _check_routing() {
 # reaching this lane" for those few minutes, a cause claim that is false in
 # that narrow window.
 #
-# `_mark_stale` (`ccd/ccrc-models-probe:409`) deliberately KEEPS the old
+# `_mark_stale` (`ccd/ccrc-models-probe`) deliberately KEEPS the old
 # `fetchedAt` when it sets `stale:true` on a failed probe (D-2224) — an
 # mtime-based check would call a lane fresh for as long as the timer kept
 # failing at it. So the two unhealthy arms below are NOT mutually exclusive
@@ -5036,7 +5502,7 @@ _check_models() {
     # design) — not this check's business. An id in no roster row never
     # reaches this loop at all — that is C2's orphan, silently out of scope.
     #
-    # This bare `[ -f ]` is NOT `hasRegistry` (`deploy/models-op.mjs:573`), and
+    # This bare `[ -f ]` is NOT `hasRegistry` (`deploy/models-op.mjs`'s `lanes` op), and
     # it diverges from it in both directions, on purpose per the brief's own
     # C2 (file presence stays the population), but the divergence needs
     # naming rather than a false claim of parity:
@@ -5046,7 +5512,7 @@ _check_models() {
     #     still attempt.
     #   - a lane `canCarryRegistry` structurally refuses — no `exec` object at
     #     all, `exec.kind === 'upstream'`, or `telemetry === 'anthropic'` (all
-    #     three conjuncts of the shipped predicate, `deploy/models-op.mjs:185`)
+    #     three conjuncts of the shipped predicate, `deploy/models-op.mjs`'s `canCarryRegistry`)
     #     — never reaches `hasRegistry` at all, but a stray `<id>.classes.json`
     #     left on disk
     #     for one still satisfies `[ -f ]` here, entering the population and
@@ -5296,4 +5762,835 @@ _check_models() {
   local n="${#ok[@]}" plural=lane
   [ "$n" -eq 1 ] || plural=lanes
   _dr_pass models "$n $plural, $(_dr_join "${ok[@]}")"
+}
+
+# ── `_check_codex`'s usage rows (Plan 3a Task 6; spec §12; rulings R2, R6) ──
+# THREE findings, each its own sentence with its own remedy. Each is RECORDED
+# through `_check_codex`'s `_dr_cx_warn` (Task 4) and printed by its
+# `_dr_cx_report`, never here. They are two of §12's three usage rows, plus
+# the second writer R6 adds. §12's third, a probe model absent from the
+# catalogue, is Task 4's `_dr_cx_lane` row, said once:
+#   - ccrc's usage pair not installed, or a lane's instance not enabled: WARN,
+#     remedy `ccrc install`, the converge that enables it
+#     (D-3721: `cmd_doctor` runs a fixer on a
+#     FAIL only, D-3113's one contract, and a stopped poller is a WARN);
+#   - another repository's usage timer enabled for this lane: WARN, remedy the
+#     operator's own disable — ccrc never disables another tool's unit, and the
+#     converge withholds ccrc's own instance while it stands. The FLAT, id-less
+#     one names no lane, so it is reported once, as unattributable;
+#   - the lane's usage row stale, never published, or unreadable: WARN.
+# "Enabled" is ccrc's own reading of the manager's links (`_codex_usage_enabled`
+# in ccrc, D-3726), the one the
+# converge acts on. No systemctl call: nothing here needs the user bus.
+# NOT APPLICABLE ON macOS, and said so, never a WARN: ccrc places no launchd job
+# for the poller (decision 17), so a WARN there would stand on every macOS codex
+# lane for ever — the noise `_inst_linger_darwin`'s doctrine refuses
+# (D-3720).
+# The usage row is read only after a regular-file test (a FIFO at that path
+# blocks a read — F2's class, `_check_models`), and nothing here opens an OAuth
+# file.
+# THREE of the timer's 15-minute cycles: one missed poll is not a finding.
+# `ccrc-doctor.test.ts` ties this to the shipped timer's `OnUnitActiveSec=`.
+_DR_CODEX_USAGE_STALE_S=2700
+
+_dr_codex_usage_box() {   # -> WARN findings, recorded; rc 2 if any, else 0; sets DR_CODEX_USAGE_PAIR and DR_CODEX_USAGE_BOX_NOTE
+  local u rc=0
+  local -a missing=()
+  DR_CODEX_USAGE_PAIR=present; DR_CODEX_USAGE_BOX_NOTE=''
+  if ! declare -F _codex_usage_enabled >/dev/null 2>&1; then
+    _dr_fail codex "ccrc's own usage-timer reader is not loaded, so no codex lane's usage timer was measured" \
+      "this is a bug in ccrc, not a fact about your box — _check_codex calls _codex_usage_enabled, declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    DR_CODEX_USAGE_BOX_NOTE="usage publishing not applicable on macOS — ccrc places no launchd job for it (decision 17)"
+    return 0
+  fi
+  for u in ccrc-codex-usage@.service ccrc-codex-usage@.timer; do
+    [ -f "$CCRC_UNIT_DIR/$u" ] || missing+=("$u")
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    DR_CODEX_USAGE_PAIR=missing
+    _dr_cx_warn "ccrc's usage unit pair is not installed (${missing[*]} absent from $CCRC_UNIT_DIR), so no codex lane on this box publishes its ~/.cc-limits row" \
+      "ccrc install — it places the pair and enables one usage timer per codex lane"
+    rc=2
+  fi
+  if _codex_usage_flat_foreign; then
+    _dr_cx_warn "another repository's ccgpt-usage.timer is enabled on this box; it names no lane, so ccrc cannot tell whether it is a second publisher of a codex lane's ~/.cc-limits row" \
+      "if it publishes for a codex lane, disable it yourself: systemctl --user disable --now ccgpt-usage.timer — ccrc never disables another tool's unit"
+    rc=2
+  fi
+  return "$rc"
+}
+
+_dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if any, else 0; sets DR_CODEX_USAGE_NOTE
+  local id="$1" rc=0 t f row now en ts age
+  local -a note=()
+  DR_CODEX_USAGE_NOTE=''
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    DR_CODEX_USAGE_NOTE="usage timer not applicable on macOS"
+    return 0
+  fi
+  t="$(_codex_usage_timer "$id")"; f="$(_codex_usage_foreign "$id")"
+  # (1) WHO publishes this lane's row.
+  if _codex_usage_enabled "$f"; then
+    _dr_cx_warn "$id: another repository's $f is enabled, so two publishers would race this lane's ~/.cc-limits row and two token refreshes its OAuth directory — ccrc withholds its own $t while it stands" \
+      "once this lane's cutover no longer needs it, disable it yourself: systemctl --user disable --now $f, then run: ccrc install — ccrc never disables another tool's unit"
+    rc=2
+  elif _codex_usage_enabled "$t"; then
+    note+=("$t enabled")
+  elif [ "${DR_CODEX_USAGE_PAIR:-present}" = present ]; then
+    _dr_cx_warn "$id: $t is not enabled, so this lane's ~/.cc-limits usage row is never refreshed" \
+      "ccrc install — its converge enables one usage timer per codex lane"
+    rc=2
+  fi
+  # (2) THE ROW, judged only when ccrc's timer is its writer.
+  if _codex_usage_enabled "$t" && ! _codex_usage_enabled "$f"; then
+    row="$HOME/.cc-limits/$id.json"
+    if ! now="$(date +%s 2>/dev/null)" || ! [[ "$now" =~ ^[0-9]+$ ]]; then
+      _dr_cx_warn "$id: this box's \`date\` cannot answer +%s, so the age of this lane's usage row cannot be measured" \
+        "install a working GNU/BSD date — every age-based check in this file needs it"
+      rc=2
+    elif [ ! -e "$row" ] && [ ! -L "$row" ]; then
+      en="$(_plat_mtime "$(_codex_usage_wants)/$t" 2>/dev/null)" || en=''
+      if [[ "$en" =~ ^[0-9]+$ ]] && [ $((now - en)) -le "$_DR_CODEX_USAGE_STALE_S" ]; then
+        note+=("no usage row yet (enabled $((now - en))s ago; the first poll runs five minutes after enable)")
+      else
+        _dr_cx_warn "$id: $t has been enabled for longer than $((_DR_CODEX_USAGE_STALE_S / 60)) min and this lane has never published a usage row ($row)" \
+          "read what the publisher says: $(_dr_log_hint "ccrc-codex-usage@$id.service")"
+        rc=2
+      fi
+    elif [ ! -f "$row" ]; then
+      _dr_cx_warn "$id: $row is not a regular file, so this lane's usage row cannot be read" \
+        "move it aside; the next poll writes a regular file there"
+      rc=2
+    else
+      ts="$(jq -r 'if type == "object" and (.ts | type) == "number" then (.ts | floor | tostring) else empty end' "$row" 2>/dev/null)" || ts=''
+      if ! [[ "$ts" =~ ^[0-9]+$ ]]; then
+        _dr_cx_warn "$id: $row carries no numeric ts, so its age cannot be measured" \
+          "move it aside; the next poll rewrites it — and read what the publisher says: $(_dr_log_hint "ccrc-codex-usage@$id.service")"
+        rc=2
+      else
+        age=$((now - ts))
+        if [ "$age" -gt "$_DR_CODEX_USAGE_STALE_S" ]; then
+          _dr_cx_warn "$id: its usage row was last written $((age / 60)) min ago — more than three of $t's polls" \
+            "read what the publisher says: $(_dr_log_hint "ccrc-codex-usage@$id.service")"
+          rc=2
+        else
+          note+=("usage row ${age}s old")
+        fi
+      fi
+    fi
+  fi
+  # (3) THE PROBE MODEL is not measured here. Task 4's `_dr_cx_lane` owns
+  # both of its rows (haiku unassigned, haiku retired from the catalogue)
+  # through models-op's `show`, and a second copy would print each twice.
+  DR_CODEX_USAGE_NOTE="$(_dr_join ${note[@]+"${note[@]}"})"
+  return "$rc"
+}
+
+# ── codex: the ccrc-owned Codex lanes on this box, measured end to end ────
+# Spec §12 (Plan 3a Tasks 4 and 5). ONE check, every Codex lane, and every
+# finding on its OWN line with its OWN remedy — FAIL lines first, then WARN
+# lines, the return code the worst of them ("ONE CHECK MAY ANSWER IN TWO
+# CLASSES", this file's header) — because a lane with no authDir and a lane
+# with a stale shim are two operator actions, never one bucket.
+#
+# THE POPULATION is the roster's `exec.kind == "codex"` rows, read by the lane
+# library's ONE reader of that question (`_codex_lanes`, ccd/ccrc) — never
+# accounts.sh's telemetry-keyed CCRC_CODEX_BACKEND, which names the EXTERNAL
+# lanes another repository runs — plus any lane directory left under
+# `_codex_lane_dir` for an id the roster no longer calls codex: a flip back to
+# another launcher keeps that state on purpose, and it is WARNed, never
+# silently skipped (D-3713).
+#   - role `server`: SKIP, a server box converges nothing per account
+#     (D-3111). CCRC_ROLE unset or unreadable reads as NOT server, as
+#     `cmd_update` reads it.
+#   - no roster FILE at all: SKIP. ABSENT is a positive answer, and a missing
+#     roster is the `wrappers` check's FAIL (D-3723).
+#   - `_codex_lanes` rc 1 (the roster cannot be read) or rc 2 (no jq): FAIL,
+#     never SKIP (ruling R-C6, D-3710).
+#     An unreadable roster is not an empty one, and
+#     a SKIP there would read "no Codex lane" on a box that has some — the
+#     overloaded null this codebase bans by name.
+#   - no Codex lane and no left lane state: SKIP, never a PASS naming no lane
+#     (a scan over an empty set passes everything: `_check_models`' C5).
+#
+# READ-ONLY, THE WHOLE WAY DOWN. Registry and catalogue facts come ONLY
+# through `deploy/models-op.mjs`'s check-only answers — `show`, `materialise
+# --check true` and `litellm` without `--commit` — so this file never names
+# the class registry's file (single-definition.test.ts pins that count at the
+# lines `_check_models` has), and no row here writes, renders, mkdirs,
+# starts or stops anything. `exec.authDir` is asked for existence and mode
+# ONLY: nothing under it is ever opened (spec §9).
+#
+# THE RUNTIME ROW TRUSTS THE STAMP (ruling R-C5,
+# D-3711). `ccgpt-runtime check` compares the
+# current generation's stamp with this build's LiteLLM requirement, its
+# behaviour probe's hash and the installed LiteLLM version; it never re-runs
+# the probe, which may take CCRC_RUNTIME_PROBE_S (300 s), and doctor closes
+# every install and update. `ccgpt-runtime build` is what re-probes.
+_check_codex() {
+  local role=""
+  # `${BOX_ENV_FILE:-}`, `-f` before `-r`: `_check_accounts`' own reading.
+  # The `declare -F` is this read's OWN guard: it runs before the loaded-guard
+  # below, so a table sourced without ccrc reaches that guard's FAIL rather
+  # than dying here on a function that is not there.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && declare -F _box_env_value >/dev/null 2>&1 \
+    && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$role" = server ]; then
+    _dr_skip codex "this box records CCRC_ROLE=server, so it runs no Codex lane — a server box converges nothing per account"
+    return 3
+  fi
+  # The loaded-guard `_check_update-sync` carries: every function below is
+  # ccrc's own, and a table sourced by something else must say so, not die.
+  # The usage rows' readers (Plan 3a Task 6) are checked HERE, before anything
+  # is recorded, so a missing one can never discard a finding `_dr_cx_bins` or
+  # `_dr_cx_runtime` already recorded; `_dr_codex_usage_box` keeps its own
+  # guard for a caller that sources this table without ccrc.
+  local fn
+  for fn in _box_env_value _codex_lanes _codex_row _codex_lane_json_state _codex_lane_dir \
+            _codex_litellm_yaml _codex_runtime_cli _models_node _models_roster_path _models_litellm_template \
+            _codex_tier_ours _codex_tier_stale _codex_foreign_what _codex_tier_is_our_handle \
+            _svc_is_active _svc_status_hint \
+            _codex_usage_enabled _codex_usage_timer _codex_usage_foreign _codex_usage_wants _codex_usage_flat_foreign \
+            _plat_mtime; do
+    if ! declare -F "$fn" >/dev/null 2>&1 || [ -z "${BOX_TREE_DIR:-}" ] || [ -z "${CODEX_TIERS:-}" ]; then
+      _dr_fail codex "ccrc's own Codex lane library is not loaded ($fn, BOX_TREE_DIR or CODEX_TIERS is missing), so no lane on this box was measured" \
+        "this is a bug in ccrc, not a fact about your box — _check_codex calls the _codex_* library declared in ccrc itself, and this check table was sourced by something that is not ccrc"
+      return 1
+    fi
+  done
+  local roster root out rc=0 id d n
+  roster="$(_models_roster_path)"
+  root="$(_codex_lane_dir '')"; root="${root%/}"
+  local -a lanes=() left=()
+  if [ -e "$roster" ] || [ -L "$roster" ]; then
+    out="$(_codex_lanes 2>/dev/null)"; rc=$?
+    case "$rc" in
+      0) [ -z "$out" ] || mapfile -t lanes <<< "$out" ;;
+      2)
+        _dr_fail codex "jq is not on PATH, so which roster accounts are Codex lanes cannot be told — a box that has some would read as having none" \
+          "install jq (the 'jq' check above names what is missing), then re-run doctor"
+        return 1 ;;
+      *)
+        _dr_fail codex "\$HOME/.ccrc/accounts.json could not be read as a roster, so its Codex lanes are unknown — an unreadable roster is not an empty one" \
+          "run: ccrc wrappers — it prints the roster validator's own sentence; fix what it names, then re-run doctor"
+        return 1 ;;
+    esac
+  fi
+  for d in "$root"/*/; do
+    [ -d "$d" ] || continue
+    n="${d%/}"; n="${n##*/}"
+    _dr_cx_member "$n" ${lanes[@]+"${lanes[@]}"} || left+=("$n")
+  done
+  if [ "${#lanes[@]}" -eq 0 ] && [ "${#left[@]}" -eq 0 ]; then
+    if [ -e "$roster" ] || [ -L "$roster" ]; then
+      _dr_skip codex "no account in \$HOME/.ccrc/accounts.json is exec.kind \"codex\", and no lane state is left under $root, so there is no Codex lane to measure"
+    else
+      _dr_skip codex "no account roster at \$HOME/.ccrc/accounts.json and no lane state under $root, so this box has no Codex lane — the 'wrappers' check above owns a missing roster"
+    fi
+    return 3
+  fi
+
+  local -a DRX_CLASS=() DRX_WHAT=() DRX_FIX=() DRX_OK=() bad=()
+  local -A owner=()
+  local DRX_RUNTIME='' DRX_LANE_WORDS='' DRX_TIER_WORDS='' models=1 p
+  local DRX_LIVE=0 DRX_UNASKED=0 DRX_UNASKED_SID=''
+  local DR_CODEX_USAGE_PAIR=present DR_CODEX_USAGE_BOX_NOTE='' DR_CODEX_USAGE_NOTE=''
+  if [ "${#lanes[@]}" -gt 0 ]; then
+    _dr_cx_bins
+    _dr_cx_runtime
+    # Plan 3a Task 6: the box-level usage rows, once. A reader that is not
+    # loaded is its own FAIL, already printed: stop there.
+    _dr_codex_usage_box; [ "$?" -ne 1 ] || return 1
+    if ! command -v node >/dev/null 2>&1; then
+      models=0
+      _dr_cx_fail "node is not on PATH, so no Codex lane's class registry, lane.json or LiteLLM config could be measured against its catalogue" \
+        "install Node (the 'node' check above names what is missing), then re-run doctor"
+    fi
+    # EVERY ROW FIRST, then every lane. A hand-edited row, or two lanes on one
+    # port, makes the whole roster one `deploy/models-op.mjs` refuses to read,
+    # so no lane's model state can be measured until it is fixed — known
+    # before any lane is asked, and said once, on the row's own line.
+    for id in "${lanes[@]}"; do
+      if ! _codex_row "$id" 2>/dev/null; then
+        out="$(_codex_row "$id" 2>&1 >/dev/null)"; out="${out#"${PROG:-ccrc} codex: "}"
+        _dr_cx_fail "$id's codex row cannot be used ($out), and until it is fixed no Codex lane's model state can be read — the roster does not validate" \
+          "fix the row in \$HOME/.ccrc/accounts.json by hand ('ccrc wrappers' prints the roster validator's own sentence for it); ccrc never chooses a lane's ports or paths for you"
+        bad+=("$id"); models=0; continue
+      fi
+      # Belt and braces behind `parseRoster`'s own refusal (spec §12): both
+      # ports of every lane share ONE map, `shared/roster.ts`'s rule, because
+      # a shim port that is another lane's LiteLLM port is as wrong as two
+      # shim ports.
+      for p in "$CX_PROXY" "$CX_LITELLM"; do
+        if [ -n "${owner[$p]:-}" ] && [ "${owner[$p]}" != "$id" ]; then
+          _dr_cx_fail "${owner[$p]} and $id both use port $p, so one lane's requests would reach the other lane's OAuth — and until it is fixed no Codex lane's model state can be read (the roster does not validate)" \
+            "give each Codex lane its own two ports in \$HOME/.ccrc/accounts.json by hand; ccrc never chooses a port"
+          bad+=("$id" "${owner[$p]}"); models=0
+        else
+          owner[$p]="$id"
+        fi
+      done
+    done
+    for id in "${lanes[@]}"; do
+      _dr_cx_member "$id" ${bad[@]+"${bad[@]}"} && continue
+      _dr_cx_lane "$id" "$models" "$roster"
+      _dr_cx_tiers "$id"
+      _dr_codex_usage "$id"
+      DRX_OK+=("$id ($DRX_LANE_WORDS; $DRX_TIER_WORDS${DR_CODEX_USAGE_NOTE:+; $DR_CODEX_USAGE_NOTE})")
+    done
+  fi
+  for n in ${left[@]+"${left[@]}"}; do
+    _dr_cx_warn "lane state is left under $root/$n, and '$n' is not a Codex lane in \$HOME/.ccrc/accounts.json — a flip back to another launcher keeps it on purpose, and nothing of ccrc's reads it while '$n' is not a Codex lane" \
+      "if the flip back is final and ccrc runs nothing for '$n' any more (its tiers were stopped with 'ccrc codex stop $n' before the flip), remove $root/$n by hand; ccrc never deletes a lane's state on a flip"
+  done
+  _dr_cx_report "${#lanes[@]} Codex lane(s): $(_dr_cx_join ', ' ${DRX_OK[@]+"${DRX_OK[@]}"}); runtime ${DRX_RUNTIME:-unmeasured}; the four GPT-lane executables match the shipped tree${DR_CODEX_USAGE_BOX_NOTE:+; $DR_CODEX_USAGE_BOX_NOTE}"
+}
+
+# ── _fix_codex — the cure `ccrc doctor --fix` runs for `codex` ────────────
+# Spec §12's `--fix` list, as Plan 3a Task 8 lands it. cmd_doctor calls a
+# fixer ONLY when its check FAILED (its `"$rc" -eq 1` guard) and then
+# measures AGAIN; the verdict is that second measurement, never this
+# function's word (`_fix_skills`' rule). Two rows of §12's list
+# therefore live elsewhere: a missing or disabled usage timer is a WARN,
+# which never reaches a fixer, so its remedy names `ccrc install`, whose
+# converge is that unit's one enabler (D-3721);
+# and the launcher is `_check_wrappers`' measurement, so its cure is
+# `_fix_wrappers` (D-3730).
+#
+# WHAT IT DOES, each through the shipped tree's own installer step or the
+# lane library's own writer — never a copy of either:
+#   1. a GPT-lane executable (`CODEX_LANE_BINS`, the list `_check_codex`
+#      compares) that is missing, not executable, or not byte-identical to
+#      $BOX_TREE_DIR/ccd/<name> is placed again by `_inst_atomic`, the
+#      primitive `_inst_bins` places it with. With no `cmp` on PATH nothing
+#      can say whether a present file's bytes differ (`_dr_cx_bins`' own
+#      reading), so only a missing or non-executable file is placed, and
+#      every other is named "not compared";
+#   2. a runtime `ccgpt-runtime check` refuses is rebuilt and re-probed by
+#      `ccgpt-runtime build` — the stamp is trusted until then
+#      (D-3711, Task 4);
+#   3. per lane, under its lane lock: lane.json is re-rendered by its ONE
+#      writer, models-op's `materialise` (no `--check`), when it is stale
+#      against the roster (`_codex_lane_json_state`) or against the class
+#      registry (`materialise --check true`, R7); and litellm.yaml is
+#      re-rendered through the codex arm's own body,
+#      `_models_litellm_lane_held`, whose compare makes a converged file a
+#      no-op and whose gate stops and starts only a tier it proves this
+#      lane's (the identity gate every stop path shares);
+#   4. only when step 1 replaced the BYTES (measured by `cmp`, never a
+#      mode-only fix or a compare that could not run) of one of the two
+#      files a running tier's identity is computed from — the shim
+#      (`_codex_shim_file`) or the runtime CLI (`_codex_runtime_cli`), per
+#      `_codex_started_json` — or step 2 rebuilt the runtime:
+#      `_inst_codex_tiers`, the install step `ccrc install` and `ccrc update`
+#      run. ccgpt-usage.py and ccrc-codex are code no tier runs, so they
+#      never ask it. That step restarts a tier only when it is ccrc's own,
+#      running and measures stale, and it asks EVERY codex lane: so once it
+#      runs, a ccrc-owned tier on any lane that measures stale for any other
+#      reason is restarted too — exactly what `ccrc update` would do (the
+#      residue D-3721's entry names; ruled, not cured).
+# WHAT IT NEVER DOES: edit the roster or choose a port (a row that does not
+# validate is named and left); run OAuth (`ccrc codex login <id>` is the
+# remedy the check prints); open anything under an authDir; signal a process
+# it cannot prove is a lane's (every stop is behind `_codex_tier_ours`,
+# inside steps 3 and 4); enable or disable any unit; overwrite a launcher;
+# delete anything.
+#
+# THE WHOLE CURE RUNS IN A SUBSHELL. cmd_doctor runs each CHECK in a
+# subshell but calls the FIXER in its own shell, and the library this calls
+# can end the shell it runs in: `_ccrc_die` and `_models_refuse` exit, and an
+# unbound variable is fatal under `set -u`. Called bare, any of those would
+# end the doctor run before the re-measurement it exists for. Each lane's
+# work is a nested subshell as well, so its lane lock is released as that
+# lane ends — through `_codex_unlock`, the lock's only release, or by the
+# subshell's own exit if the lane's work dies first — and no descriptor
+# reaches the next lane or the re-measurement.
+_fix_codex() {
+  (
+    local role="" lanes lrc=0 n src dst rt id replaced=0 cmp_ok=1 bytes
+    local -a ids=() missing=()
+    for n in _codex_lanes _codex_row _codex_lane_json_state _codex_lock _codex_unlock \
+             _codex_shim_file _codex_runtime_cli _models_node _models_roster_path _models_litellm_lane_held \
+             _inst_atomic _inst_codex_tiers _box_env_value; do
+      declare -F "$n" >/dev/null 2>&1 || missing+=("$n")
+    done
+    declare -p CODEX_LANE_BINS >/dev/null 2>&1 || missing+=(CODEX_LANE_BINS)
+    if [ "${#missing[@]}" -gt 0 ]; then
+      echo "FIX codex: refused — ccrc's own $(_dr_join "${missing[@]}") is not loaded, so nothing was cured; this is a bug in ccrc, not a fact about your box (the check table was sourced by something that is not ccrc)"
+      exit 1
+    fi
+    # -f BEFORE -r, as `_check_skills` reads it. `_check_codex`
+    # SKIPs a server box, so cmd_doctor never calls this there; the refusal
+    # is for any other caller, because `_inst_bins` places no GPT-lane
+    # executable on a server box and step 1 must not either.
+    [ -f "${BOX_ENV_FILE:-}" ] && [ -r "$BOX_ENV_FILE" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+    if [ "$role" = server ]; then
+      echo "FIX codex: refused — this box records CCRC_ROLE=server, which converges nothing per account, so nothing was cured"
+      exit 1
+    fi
+    # An unreadable roster (rc 1) and a missing jq (rc 2) are not "no codex
+    # lane": each is the check's own FAIL, and nothing here can cure either.
+    lanes="$(_codex_lanes)" || lrc=$?
+    if [ "$lrc" -ne 0 ]; then
+      echo "FIX codex: refused — which roster lanes are codex lanes could not be read (the ccrc codex: line above says why), so nothing was cured"
+      exit 1
+    fi
+    [ -z "$lanes" ] || mapfile -t ids <<<"$lanes"
+    if [ "${#ids[@]}" -eq 0 ]; then
+      echo "FIX codex: nothing to cure — no codex lane in the roster"
+      exit 0
+    fi
+
+    # 1. The executables, from the shipped tree, by the installer's own primitive.
+    # `bytes` is what `cmp` measured BEFORE the placement: 1 the bytes differ
+    # (or the file is absent or unreadable), 0 the same bytes with the wrong
+    # mode (`_inst_atomic` then only chmods), `unmeasured` with no `cmp`.
+    # Only a measured 1 on a file a tier runs asks step 4 (`replaced`).
+    command -v cmp >/dev/null 2>&1 || cmp_ok=0
+    for n in ${CODEX_LANE_BINS[*]}; do
+      src="$BOX_TREE_DIR/ccd/$n"; dst="$HOME/.local/bin/$n"
+      if [ ! -f "$src" ]; then
+        echo "FIX codex: $n: not restored — the shipped tree has no \$HOME/ccrc/ccd/$n; run 'ccrc update' (or 'ccrc install' from a checkout) to place it"
+        continue
+      fi
+      if [ "$cmp_ok" -eq 1 ]; then
+        if cmp -s "$src" "$dst" 2>/dev/null; then
+          [ -x "$dst" ] && continue
+          bytes=0
+        else
+          bytes=1
+        fi
+      elif [ -f "$dst" ] && [ -x "$dst" ]; then
+        echo "FIX codex: $n: not compared — cmp is not on PATH, so \$HOME/.local/bin/$n was left as it is; install diffutils (it ships cmp), then re-run 'ccrc doctor --fix'"
+        continue
+      else
+        bytes=unmeasured
+      fi
+      if ( mkdir -p "${dst%/*}" && _inst_atomic "$src" "$dst" 755 ); then
+        case "$bytes" in
+          1)
+            echo "FIX codex: restored \$HOME/.local/bin/$n from the shipped tree"
+            # The two files a running tier's identity is computed from
+            # (`_codex_started_json`): the shim a shim tier runs, and the
+            # runtime CLI that names every tier's generation.
+            if [ "$dst" = "$(_codex_shim_file)" ] || [ "$dst" = "$(_codex_runtime_cli)" ]; then
+              replaced=1
+            fi ;;
+          0)
+            echo "FIX codex: made \$HOME/.local/bin/$n executable (0755) — its bytes already were the shipped tree's" ;;
+          *)
+            echo "FIX codex: placed \$HOME/.local/bin/$n from the shipped tree — it was missing or not executable, and with no cmp on PATH whether its bytes changed was not measured, so no tier is restarted for it" ;;
+        esac
+      else
+        echo "FIX codex: $n: not restored — the install step refused (its line above says why)"
+      fi
+    done
+
+    # 2. The runtime: rebuilt only when its own check refuses.
+    rt="$(_codex_runtime_cli)"
+    if [ ! -x "$rt" ]; then
+      echo "FIX codex: runtime: not rebuilt — \$HOME/.local/bin/ccgpt-runtime is not on this box (the lines above say why)"
+    elif ! "$rt" check >/dev/null 2>&1; then
+      echo "FIX codex: runtime: rebuilding with 'ccgpt-runtime build' — pip may take minutes"
+      if "$rt" build >/dev/null && "$rt" check >/dev/null 2>&1; then
+        echo "FIX codex: runtime: rebuilt, probed and current"
+        replaced=1
+      else
+        echo "FIX codex: runtime: NOT rebuilt — 'ccgpt-runtime build' did not leave a current runtime (its reason is the ccgpt-runtime line on stderr), so the previous one, if any, stays current"
+      fi
+    fi
+
+    # 3. Each lane's files, under its lane lock.
+    for id in "${ids[@]}"; do
+      [ -n "$id" ] || continue
+      (
+        local st chk ans rc err detail body roster
+        roster="$(_models_roster_path)"
+        if ! _codex_row "$id" >/dev/null; then
+          echo "FIX codex: $id: nothing cured — its roster row does not validate (the ccrc codex: line above says why), and --fix never edits the roster or chooses a port"
+          exit 0
+        fi
+        if ! _codex_lock "$id"; then
+          echo "FIX codex: $id: nothing cured — its lane lock could not be taken (the line above says why); re-run 'ccrc doctor --fix' once it is free"
+          exit 0
+        fi
+        st="$(_codex_lane_json_state "$id")" || st=unmeasured
+        chk="$(_models_node materialise --file "$roster" --id "$id" --check true 2>/dev/null)" || chk=""
+        if [ "$st" != current ] \
+           || ! printf '%s' "$chk" | jq -e '.ok == true and .check == true and .changed.lane == false' >/dev/null 2>&1; then
+          ans="$(_models_node materialise --file "$roster" --id "$id" 2>/dev/null)"; rc=$?
+          if [ "$rc" -eq 0 ] && printf '%s' "$ans" | jq -e '.ok == true and (.wrote.lane | type) == "string"' >/dev/null 2>&1; then
+            echo "FIX codex: $id: lane.json re-rendered from the roster and this lane's class registry"
+          elif [ "$rc" -eq 0 ] && printf '%s' "$ans" | jq -e '.ok == true and .wrote == null' >/dev/null 2>&1; then
+            echo "FIX codex: $id: lane.json NOT rendered — this lane has no class registry, and lane.json is rendered from it; run: ccrc models $id init codex"
+          else
+            err="$(printf '%s' "$ans" | jq -r '.error // empty' 2>/dev/null)"
+            detail="$(printf '%s' "$ans" | jq -r '.detail // empty' 2>/dev/null)"
+            echo "FIX codex: $id: lane.json NOT rendered — deploy/models-op.mjs answered ${err:-exit $rc}${detail:+: $detail}"
+          fi
+        fi
+        # Its own subshell: the codex arm's body ends a refusal with
+        # `_models_refuse`, which exits. The lock this lane holds is its
+        # precondition, and a subshell inherits it.
+        body="$( _models_litellm_lane_held "$id" 2>/dev/null )"; rc=$?
+        body="${body##*$'\n'}"
+        if [ "$rc" -ne 0 ]; then
+          err="$(printf '%s' "$body" | jq -r '.error // empty' 2>/dev/null)"
+          detail="$(printf '%s' "$body" | jq -r '.detail // empty' 2>/dev/null)"
+          echo "FIX codex: $id: litellm.yaml NOT rendered — ${err:-the render exited $rc}${detail:+: $detail}"
+        elif printf '%s' "$body" | jq -e '.changed == true and .restarted == true' >/dev/null 2>&1; then
+          echo "FIX codex: $id: litellm.yaml re-rendered, and this lane's own LiteLLM tier restarted onto it"
+        elif printf '%s' "$body" | jq -e '.changed == true' >/dev/null 2>&1; then
+          echo "FIX codex: $id: litellm.yaml re-rendered"
+        fi
+        _codex_unlock
+      )
+    done
+
+    # 4. The tiers — only when this run replaced the bytes of the shim or the
+    # runtime CLI, or rebuilt the runtime (step 1's `replaced`, step 2's).
+    if [ "$replaced" -eq 1 ]; then
+      if ( INST_ROLE="${role:-both}"; INST_DEGRADED=(); _inst_codex_tiers; [ "${#INST_DEGRADED[@]}" -eq 0 ] ); then
+        echo "FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, which restarts every running ccrc-owned tier that measures stale, on any lane (its lines above)"
+      else
+        echo "FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, and that step could not restart every stale tier (its lines above say which)"
+      fi
+    fi
+    echo "FIX codex: done for ${#ids[@]} codex lane(s) — no port, roster row, OAuth, credential, unidentified listener or unit enablement was touched; the re-measurement below is the verdict"
+    exit 0
+  )
+}
+
+# `_check_codex`'s findings, recorded into the caller's DRX_CLASS/DRX_WHAT/
+# DRX_FIX (bash's dynamic scope: they are `local` to `_check_codex`) and
+# printed by `_dr_cx_report`, so each is one sentence plus its own remedy.
+_dr_cx_find()   { DRX_CLASS+=("$1"); DRX_WHAT+=("$2"); DRX_FIX+=("$3"); }
+_dr_cx_fail()   { _dr_cx_find FAIL "$1" "$2"; }
+_dr_cx_warn()   { _dr_cx_find WARN "$1" "$2"; }
+_dr_cx_member() { local x="$1" y; shift; for y in "$@"; do [ "$y" = "$x" ] && return 0; done; return 1; }
+_dr_cx_join()   { local sep="$1" out="" x; shift; for x in "$@"; do out+="${out:+$sep}$x"; done; printf '%s' "$out"; }
+
+# Every FAIL line, then every WARN line, each with its own remedy; the return
+# code is the worst class printed (cmd_doctor cross-checks the two, and a
+# disagreement is its own FAIL). PASS only when nothing was found at all.
+_dr_cx_report() {   # <PASS detail>
+  local i worst=0
+  if [ "${#DRX_CLASS[@]}" -eq 0 ]; then
+    _dr_pass codex "$1"
+    return 0
+  fi
+  for i in "${!DRX_CLASS[@]}"; do
+    [ "${DRX_CLASS[$i]}" = FAIL ] || continue
+    _dr_fail codex "${DRX_WHAT[$i]}" "${DRX_FIX[$i]}"; worst=1
+  done
+  for i in "${!DRX_CLASS[@]}"; do
+    [ "${DRX_CLASS[$i]}" = WARN ] || continue
+    _dr_warn codex "${DRX_WHAT[$i]}" "${DRX_FIX[$i]}"; [ "$worst" -eq 1 ] || worst=2
+  done
+  return "$worst"
+}
+
+# The four GPT-lane executables against the SHIPPED TREE, byte for byte —
+# `_check_skills`' rule (the tree the stamp names, `$BOX_TREE_DIR/ccd`), with
+# `cmp` where that check uses `diff`. `CODEX_LANE_BINS` is `_inst_bins`'
+# GPT-lane gate, in its order, declared ONCE at file level so `_fix_codex`
+# (Task 8) restores exactly what this compares. ccrc-doctor.test.ts pins this
+# one line to `GPT_LANE_BINS`, which ccrc-install.test.ts pins to the gate
+# itself, so a fifth executable or a rename reds there before this list can drift.
+CODEX_LANE_BINS=(ccgpt-proxy.py ccgpt-usage.py ccgpt-runtime ccrc-codex)
+_dr_cx_bins() {
+  local tree="$BOX_TREE_DIR/ccd" bin="$HOME/.local/bin" name
+  local -a notree=() missing=() drift=()
+  if ! command -v cmp >/dev/null 2>&1; then
+    _dr_cx_warn "cmp is not on PATH, so the GPT-lane executables in \$HOME/.local/bin could not be compared with the shipped tree — unmeasured, not current" \
+      "install diffutils (it ships cmp), then re-run doctor"
+    return 0
+  fi
+  for name in "${CODEX_LANE_BINS[@]}"; do
+    if [ ! -f "$tree/$name" ]; then notree+=("$name"); continue; fi
+    if [ ! -f "$bin/$name" ] || [ ! -x "$bin/$name" ]; then missing+=("$name"); continue; fi
+    cmp -s "$tree/$name" "$bin/$name" || drift+=("$name")
+  done
+  [ "${#notree[@]}" -eq 0 ] || _dr_cx_fail "the shipped tree ($tree) has no $(_dr_cx_join ', ' "${notree[@]}"), so nothing on this box says what the GPT-lane executables should be" \
+    "run 'ccrc update' (or 'ccrc install' from a checkout) to place the shipped tree"
+  [ "${#missing[@]}" -eq 0 ] || _dr_cx_fail "$(_dr_cx_join ', ' "${missing[@]}") missing from \$HOME/.local/bin, or not executable — every Codex lane needs all four" \
+    "run 'ccrc update' (or 'ccrc install' from a checkout): it places them from the shipped tree on every role but server"
+  [ "${#drift[@]}" -eq 0 ] || _dr_cx_fail "$(_dr_cx_join ', ' "${drift[@]}") in \$HOME/.local/bin differ from the shipped tree's copies in $tree, so a lane would run bytes this build did not ship" \
+    "run 'ccrc update' (or 'ccrc install' from a checkout): it re-places them from the shipped tree"
+  return 0
+}
+
+# The isolated runtime, by `ccgpt-runtime check` — one word per failure, each
+# its own sentence and remedy. A `ccgpt-runtime` that is not there is the
+# executables row's finding, said there once.
+_dr_cx_runtime() {
+  local cli ans rc
+  cli="$(_codex_runtime_cli)"
+  [ -x "$cli" ] || return 0
+  ans="$("$cli" check 2>&1)"; rc=$?
+  case "$rc:$ans" in
+    "0:ccgpt-runtime: current "*) DRX_RUNTIME="${ans#ccgpt-runtime: current }" ;;
+    "1:ccgpt-runtime: absent")
+      _dr_cx_fail "no isolated LiteLLM runtime is current on this box (ccgpt-runtime check: absent), so no Codex lane can start its tiers" \
+        "build it: ccgpt-runtime build (ccrc install and ccrc update run the same build)" ;;
+    "1:ccgpt-runtime: requirement-moved")
+      _dr_cx_fail "the current runtime generation was built for another LiteLLM requirement than this ccrc declares (ccgpt-runtime check: requirement-moved), so it is out of the range this build was probed against" \
+        "rebuild it: ccgpt-runtime build — it builds, probes and swaps in a generation for the declared range, and the old one stays current until the new one passes" ;;
+    "1:ccgpt-runtime: probe-moved")
+      _dr_cx_fail "the current runtime generation passed an older behaviour probe than the one this ccrc ships (ccgpt-runtime check: probe-moved), so what it was proven to do is not what this build checks" \
+        "rebuild it: ccgpt-runtime build — it re-runs the shipped probe against a fresh generation" ;;
+    "1:ccgpt-runtime: mutated")
+      _dr_cx_fail "the current runtime generation no longer matches its stamp (ccgpt-runtime check: mutated): its interpreter, its stamp or its installed LiteLLM changed after the build" \
+        "rebuild it: ccgpt-runtime build — a mutated generation is never repaired in place" ;;
+    *)
+      _dr_cx_fail "ccgpt-runtime check answered something this doctor does not know (exit $rc: $(_dr_first_line "$ans")), so the runtime's state is unmeasured" \
+        "ccrc and ccgpt-runtime ship together and must be one build: run 'ccrc update', then re-run doctor" ;;
+  esac
+  return 0
+}
+
+# One lane's static rows. Its row already read in `_check_codex`'s row pass;
+# it is read again HERE so this shell's CX_* are this lane's.
+_dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> — sets DRX_LANE_WORDS
+  local id="$1" models="$2" roster="$3" auth st ans lc yaml
+  local -a f=()
+  DRX_LANE_WORDS=''
+  _codex_row "$id" 2>/dev/null || return 0
+  DRX_LANE_WORDS="ports $CX_PROXY/$CX_LITELLM"
+  # authDir: EXISTENCE AND MODE ONLY (spec §9, §12). `[ -f ]` needs search
+  # permission on the directory and nothing on the file, so a 0000 auth.json
+  # passes: its contents are never this check's business.
+  auth="$HOME/$CX_AUTH"
+  if [ ! -e "$auth" ] && [ ! -L "$auth" ]; then
+    _dr_cx_fail "$id's authDir ~/$CX_AUTH does not exist, so the lane has nothing to sign in to" \
+      "sign the lane in: ccrc codex login $id (the runtime's own login creates it, owner-only) — ccrc never performs OAuth for you"
+  elif [ ! -d "$auth" ] || [ ! -r "$auth" ] || [ ! -x "$auth" ]; then
+    _dr_cx_fail "$id's authDir ~/$CX_AUTH is not a directory this user can list and search, so whether the lane is signed in cannot be told" \
+      "make it a directory you own and can search (chmod u+rx ~/$CX_AUTH); ccrc never reads what is inside it"
+  elif [ ! -f "$auth/auth.json" ]; then
+    _dr_cx_fail "$id has no OAuth login: ~/$CX_AUTH holds no auth.json (existence is all ccrc checks; it never reads one), so 'ccrc codex start $id' refuses" \
+      "sign the lane in: ccrc codex login $id"
+  else
+    DRX_LANE_WORDS+=", signed in"
+  fi
+  # lane.json against the ROSTER row: id, configDir, authDir, both ports, unit names present.
+  st="$(_codex_lane_json_state "$id" 2>/dev/null)" || st=''
+  case "$st" in
+    current) ;;
+    absent)
+      _dr_cx_fail "$id has no lane.json ($(_codex_lane_dir "$id")/lane.json), which the launcher, the shim and the usage publisher all read" \
+        "render it: ccrc codex start $id renders lane.json from the roster before it starts the lane (every session launch runs the same start)" ;;
+    stale)
+      _dr_cx_fail "$id's lane.json disagrees with its roster row (its id, configDir, authDir, a port or its unit names), so the shim and the usage publisher read the lane's old shape" \
+        "re-render it: ccrc codex start $id renders lane.json from the roster before it starts the lane" ;;
+    *)
+      _dr_cx_fail "whether $id's lane.json matches its roster row could not be measured" \
+        "run: ccrc codex status $id — it reads the same file and says what it could see" ;;
+  esac
+  if [ "$models" -ne 1 ]; then DRX_LANE_WORDS+=", model state unread"; return 0; fi
+  # The lane's model state, ONLY through models-op's `show`.
+  ans="$(_models_node show --file "$roster" --id "$id" 2>/dev/null)"
+  mapfile -t f < <(printf '%s' "$ans" | jq -r '
+      if .ok != true then error("refused") else . end
+      | (.registry | if type == "object" then . else null end) as $r
+      | (if $r == null then null else $r.classes.haiku end) as $h
+      | (if $r == null then "none" else ($r.probe // "" | tostring) end),
+        ($h // "" | tostring),
+        (if $r == null then "" else ($r.subagent // "" | tostring) end),
+        (if ($h | type) == "string" and ((.derived.retired // []) | any(. == $h)) then "retired" else "live" end),
+        (.renderRefusal // "" | tostring | gsub("[\n\t]"; " ")),
+        "END"' 2>/dev/null)
+  if [ "${#f[@]}" -ne 6 ] || [ "${f[5]}" != END ]; then
+    if printf '%s' "$ans" | jq -e '.ok == false' >/dev/null 2>&1; then
+      _dr_cx_fail "$id: 'ccrc models' refused to read the lane's model state — $(printf '%s' "$ans" | jq -r '"\(.error // "?"): \(.detail // "" | gsub("[\n\t]"; " "))"' 2>/dev/null)" \
+        "fix what that sentence names, then re-run doctor"
+    else
+      _dr_cx_fail "$id: 'ccrc models' printed no answer about the lane (deploy/models-op.mjs), so its class registry and catalogue are unmeasured" \
+        "ccrc and deploy/models-op.mjs ship together and must be one build: run 'ccrc update', then re-run doctor"
+    fi
+    return 0
+  fi
+  local probe="${f[0]}" haiku="${f[1]}" sub="${f[2]}" ret="${f[3]}" refusal="${f[4]}"
+  if [ "$probe" = none ]; then
+    _dr_cx_fail "$id is a Codex lane with no class registry, so nothing says which model any class routes to, and its probe model and LiteLLM config have nothing to be rendered from" \
+      "create it: ccrc models $id init codex, then ccrc models refresh $id"
+    return 0
+  fi
+  if [ "$probe" != codex ]; then
+    _dr_cx_fail "$id is a Codex lane whose class registry declares probe \"$probe\": that is another provider's catalogue, and a LiteLLM config rendered from it would name models the ChatGPT backend has never heard of" \
+      "remove that registry deliberately (ccrc models $id rm) and create the lane's own: ccrc models $id init codex — ccrc never changes a registry's probe kind for you"
+    return 0
+  fi
+  [ -z "$refusal" ] || _dr_cx_fail "$id's model files cannot be rendered: $refusal" \
+    "fix the class that sentence names (ccrc models $id show prints the registry), then re-run doctor"
+  if [ -z "$haiku" ]; then
+    _dr_cx_warn "$id routes haiku to nothing, so its lane.json carries no probe model and its usage publisher refuses to publish" \
+      "assign one: ccrc models $id set-class haiku <modelId>"
+  elif [ "$ret" = retired ]; then
+    _dr_cx_warn "$id's usage probe model, $haiku (its haiku class), is absent from the lane's current catalogue, so the usage publisher probes a model the backend no longer lists" \
+      "reassign it: ccrc models $id set-class haiku <modelId> (ccrc models $id show lists the catalogue)"
+  fi
+  # lane.json against the REGISTRY (ruling R7): the check-only materialise.
+  # Asked only over a lane.json the roster row agrees with — a stale or absent
+  # one is already its own FAIL above, with its own remedy.
+  if [ "$st" = current ]; then
+    lc="$(_models_node materialise --file "$roster" --id "$id" --check true 2>/dev/null \
+          | jq -r 'if .ok == true and .check == true then (.changed.lane | tostring) else "error:\(.error // "no answer")" end' 2>/dev/null)"
+    case "$lc" in
+      false) DRX_LANE_WORDS+=", lane.json current" ;;
+      true)
+        _dr_cx_fail "$id's lane.json is stale against its class registry: the registry has moved (its haiku class, which is the lane's probe model, or another field lane.json carries) since the file was written" \
+          "re-render it: ccrc models $id set-subagent ${sub:-sonnet} (any models mutation re-renders the lane's files, lane.json among them)" ;;
+      *)
+        _dr_cx_fail "whether $id's lane.json matches its class registry could not be measured ('ccrc models' answered ${lc:-nothing})" \
+          "ccrc and deploy/models-op.mjs ship together and must be one build: run 'ccrc update', then re-run doctor" ;;
+    esac
+  fi
+  # The rendered LiteLLM config against the CATALOGUE: models-op's `litellm`
+  # without `--commit` is check-only — it answers `changed` and writes nothing.
+  yaml="$(_codex_litellm_yaml "$id")"
+  lc="$(_models_node litellm --file "$roster" --id "$id" --template "$(_models_litellm_template)" --out "$yaml" 2>/dev/null \
+        | jq -r 'if .ok == true then "changed:\(.changed)" else "refused:\(.error // ""):\(.detail // "" | gsub("[\n\t]"; " "))" end' 2>/dev/null)"
+  case "$lc" in
+    changed:false) DRX_LANE_WORDS+=", LiteLLM config current" ;;
+    changed:true)
+      if [ -e "$yaml" ] || [ -L "$yaml" ]; then
+        _dr_cx_fail "$id's LiteLLM config ($yaml) is stale against the lane's catalogue: a render now would write different bytes, so the lane's LiteLLM routes a model list the catalogue has moved past" \
+          "re-render it: ccrc models litellm $id (it stops the lane's own LiteLLM tier around the write when that tier is running, and starts it again)"
+      else
+        _dr_cx_fail "$id has no rendered LiteLLM config ($yaml), so the lane's LiteLLM tier has nothing to start on" \
+          "render it: ccrc models litellm $id (ccrc codex start $id renders it too when it is absent)"
+      fi ;;
+    refused:never-probed:*)
+      _dr_cx_fail "$id has never been probed, so there is no catalogue for its LiteLLM config to be rendered from" \
+        "probe it: ccrc models refresh $id" ;;
+    refused:*)
+      _dr_cx_fail "$id: 'ccrc models' refused to render the lane's LiteLLM config — ${lc#refused:}" \
+        "fix what that sentence names, then re-run doctor" ;;
+    *)
+      _dr_cx_fail "whether $id's LiteLLM config is current could not be measured ('ccrc models' printed no answer)" \
+        "ccrc and deploy/models-op.mjs ship together and must be one build: run 'ccrc update', then re-run doctor" ;;
+  esac
+  return 0
+}
+
+# ── _check_codex, part 2: the tier rows (spec §12; Plan 3a Task 5) ────────
+# THE QUESTION IS THE LIBRARY'S. `_codex_tier_ours` (ccd/ccrc) answers each
+# tier — 0 ours running, 1 not running, 2 foreign (CX_TIER_WHY), 3 cannot ask,
+# 4 ours starting — through the SAME probes `ccrc codex status` asks:
+# `_codex_port_listening` and `_codex_lane_answer`, each a loopback connect
+# under `_plat_timeout "$(_codex_probe_secs)"` (CCRC_CODEX_PROBE_S, default
+# 2 s). So a listener that accepts and never answers costs this check its
+# bound, never a hang (ruling R-C4: doctor MAY connect to a lane's loopback
+# ports, bounded). Every 2 is worded by `_codex_foreign_what`, the one helper
+# every rc-2 consumer names through, and NOTHING here signals, stops or
+# starts anything: a foreign listener is named and left running.
+#   - a 2 whose CX_TIER_WHY is `unit-unproven` is a WARN with that helper's
+#     retry wording, never a FAIL: this lane's own tier reads exactly so
+#     inside its RestartSec window (D-3714);
+#   - a 2 that `_codex_tier_is_our_handle` reads as this lane's own process
+#     (`listener-other-process`) is a FAIL in the helper's words alone: that
+#     sentence names the pid it proved, so it never says "cannot identify";
+#   - a 3 is a WARN, unmeasured — never read as running or as stopped
+#     (D-3715);
+#   - a lane is LAZY, so both tiers down is a PASS; one up and one down is
+#     the FAIL §12 names;
+#   - `_codex_tier_stale` answers 0 stale, 1 current, 2 cannot tell, and a 2
+#     is its own WARN — never current, never stale;
+#   - a LiteLLM tier down under a live session is a WARN (2b-2's hazard: a
+#     tier that died after a start that wrote stays down until the next
+#     start, D-3716).
+_dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
+  local id="$1" tier q word own lq=3 sq=3
+  local -a words=()
+  for tier in $CODEX_TIERS; do
+    CX_LISTEN_WHY=''
+    _codex_tier_ours "$id" "$tier" 2>/dev/null; q=$?
+    case "$q" in
+      0|4)
+        word="$tier running"; [ "$q" -eq 4 ] && word="$tier starting"
+        # CX_TIER_* read NOW: the next question overwrites them.
+        words+=("$word${CX_TIER_VIA:+ ($CX_TIER_VIA${CX_TIER_PID:+, pid $CX_TIER_PID})}")
+        _codex_tier_stale "$id" "$tier"
+        case $? in
+          1) ;;
+          # `_codex_tier_stale`'s 0 is "the record differs from what a start
+          # would write now", and an absent, unreadable or unparseable record
+          # differs too, so the sentence names every cause it cannot tell apart.
+          0) _dr_cx_warn "$id's $tier tier is running, and is not proven to run the installed bytes: its start record ($(_codex_lane_dir "$id")/$tier.started) is absent, unreadable or unparseable, or it names another runtime generation, or another placed shim, than a start would use now" \
+               "restart it onto the installed bytes: 'ccrc update' restarts a running, proven, stale ccrc tier; by hand, 'ccrc codex stop $id' then 'ccrc codex start $id'" ;;
+          *) _dr_cx_warn "$id's $tier tier is running, and whether it runs the installed bytes cannot be told (no current runtime generation, or the tier's code file cannot be hashed) — unmeasured, not current" \
+               "make the runtime current (the runtime finding, if any, names how), then re-run doctor" ;;
+        esac ;;
+      1) words+=("$tier not running") ;;
+      2)
+        # Asked FIRST, directly after `_codex_tier_ours`, as its contract says.
+        own=1; _codex_tier_is_our_handle "$q" && own=0
+        words+=("$tier foreign")
+        _codex_foreign_what "$id" "$tier"
+        if [ "${CX_TIER_WHY:-}" = unit-unproven ]; then
+          _dr_cx_warn "$id: $CX_FOREIGN_WHAT" "$CX_FOREIGN_FIX"
+        elif [ "$own" -eq 0 ]; then
+          _dr_cx_fail "$id: $CX_FOREIGN_WHAT" "$CX_FOREIGN_FIX"
+        else
+          _dr_cx_fail "$id: $CX_FOREIGN_WHAT — ccrc neither adopts nor stops what it cannot identify" "$CX_FOREIGN_FIX"
+        fi ;;
+      *)
+        words+=("$tier unmeasured")
+        _dr_cx_warn "$id's $tier tier could not be measured${CX_LISTEN_WHY:+ ($CX_LISTEN_WHY)} — unmeasured, never read as running or as stopped" \
+          "run: ccrc codex status $id — it asks the same question and says what it could see" ;;
+    esac
+    if [ "$tier" = litellm ]; then lq="$q"; else sq="$q"; fi
+  done
+  case "$lq:$sq" in
+    [04]:1)
+      _dr_cx_fail "$id is half up: its LiteLLM tier is running and its shim is not, so every request a session sends this lane fails before it reaches LiteLLM" \
+        "start the tier that is down: ccrc codex start $id (idempotent: it starts only what is not running)" ;;
+    1:[04])
+      _dr_cx_fail "$id is half up: its shim is running and its LiteLLM tier is not, so every request the shim forwards fails" \
+        "start the tier that is down: ccrc codex start $id (idempotent: it starts only what is not running)" ;;
+  esac
+  if [ "$lq" = 1 ]; then
+    _dr_cx_sessions "$id"
+    if [ "$DRX_LIVE" -gt 0 ]; then
+      _dr_cx_warn "$id's LiteLLM tier is not running while $DRX_LIVE live session(s) run on this lane, so every turn they send fails at the gateway — a tier that died after its start stays down until the next start" \
+        "start it: ccrc codex start $id (every session launch runs the same start)"
+    elif [ "$DRX_UNASKED" -gt 0 ]; then
+      _dr_cx_warn "$id's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked ($DRX_UNASKED unanswered) — unmeasured, not idle" \
+        "ask by hand${DRX_UNASKED_SID:+ ($(_svc_status_hint "claude-session@$DRX_UNASKED_SID.service"))}; if one is live, start the lane: ccrc codex start $id"
+    fi
+  fi
+  if [ "$lq:$sq" = 1:1 ]; then
+    DRX_TIER_WORDS="tiers: none running (a lane is lazy)"
+  else
+    DRX_TIER_WORDS="tiers: $(_dr_cx_join ', ' "${words[@]}")"
+  fi
+}
+
+# The lane's LIVE sessions: `~/.cc-sessions/<sid>.wrapper` names the account a
+# session runs on (ccd's registry field, read here as a file and never
+# written), and `_svc_is_active claude-session@<sid>.service` whether it runs
+# — three answers, as `_check_routing`'s census has: live, measured not-live,
+# and NOT ASKED (the manager printed no word), which is never folded into
+# not-live. `[ -f ]` first, so a FIFO planted at a `.wrapper` path is never
+# opened (D-2380's class).
+_dr_cx_sessions() {   # <id> — sets DRX_LIVE, DRX_UNASKED, DRX_UNASKED_SID
+  local id="$1" reg="$HOME/.cc-sessions" wf w sid
+  DRX_LIVE=0; DRX_UNASKED=0; DRX_UNASKED_SID=''
+  [ -d "$reg" ] || return 0
+  if [ ! -r "$reg" ] || [ ! -x "$reg" ]; then DRX_UNASKED=1; return 0; fi
+  for wf in "$reg"/*.wrapper; do
+    [ -f "$wf" ] || continue
+    w=''; { IFS= read -r w < "$wf"; } 2>/dev/null
+    [ "$w" = "$id" ] || continue
+    sid="${wf##*/}"; sid="${sid%.wrapper}"
+    case "$(_svc_is_active "claude-session@$sid.service")" in
+      active|activating|reloading|refreshing|deactivating) DRX_LIVE=$((DRX_LIVE + 1)) ;;
+      '') DRX_UNASKED=$((DRX_UNASKED + 1)); [ -n "$DRX_UNASKED_SID" ] || DRX_UNASKED_SID="$sid" ;;
+    esac
+  done
+  return 0
 }

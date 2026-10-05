@@ -36,7 +36,7 @@
 // that as a second net.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bodyDigest, markGenerated } from '../../shared/mark.mjs';
@@ -46,6 +46,13 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const deployDir = path.resolve(here, '..', '..', 'deploy');
 const VERIFY = path.join(deployDir, 'verify-service.sh');
 
+/** One unit's answers, consumed one per call and the last one repeated — the
+ *  sequence `stubs()` has always built, hoisted so `sweepStubs` shares it. */
+const seqArm = (counter: string, values: string[]): string =>
+  `c="$D/${counter}.n"; n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c";\n`
+  + values.map((v, i) => `  [ "$n" = "${i + 1}" ] && { printf '%s\\n' ${JSON.stringify(v)}; }\n`).join('')
+  + `  [ "$n" -gt ${values.length} ] && { printf '%s\\n' ${JSON.stringify(values[values.length - 1] ?? '')}; }\n`;
+
 /** Build a stub `systemctl`/`journalctl` pair whose answers are scripted.
  *
  *  `isActive` and `mainPid` are lists consumed one per call, so a crash loop is
@@ -53,15 +60,15 @@ const VERIFY = path.join(deployDir, 'verify-service.sh');
  *  differently on either side of the observation window. */
 function stubs(opts: { isActive: string[]; mainPid: string[] }): string {
   const dir = mkTmp('ccrc-agent-deployverify-');
-  const seq = (name: string, values: string[]): string =>
-    `c="$D/${name}.n"; n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c";\n`
-    + values.map((v, i) => `  [ "$n" = "${i + 1}" ] && { printf '%s\\n' ${JSON.stringify(v)}; }\n`).join('')
-    + `  [ "$n" -gt ${values.length} ] && { printf '%s\\n' ${JSON.stringify(values[values.length - 1] ?? '')}; }\n`;
+  const seq = seqArm;
 
   writeFileSync(path.join(dir, 'systemctl'),
     '#!/bin/sh\n'
     + `D=${JSON.stringify(dir)}\n`
     + 'echo "systemctl $*" >> "$D/calls"\n'
+    // The HOME this stub saw, so `runVerify` can PROVE the script ran under the
+    // fixture's (wave 10, critic I7): the script now reads $HOME/.cc-sessions.
+    + 'printf \'%s\\n\' "$HOME" > "$D/home-seen"\n'
     // `status` is only ever called on the failure path; it must not be counted
     // as one of the scripted queries, and it must never be a real invocation.
     + 'case " $* " in *" status "*) echo "[stub status]"; exit 0;; esac\n'
@@ -83,29 +90,107 @@ function stubs(opts: { isActive: string[]; mainPid: string[] }): string {
   return dir;
 }
 
-function runVerify(dir: string, unit = 'ccrc-agent.service'): {
-  code: number; stdout: string; stderr: string; calls: string;
-} {
+function runVerify(dir: string, unit = 'ccrc-agent.service',
+  opts: { home?: string; env?: Record<string, string>; timeout?: number } = {},
+): { code: number; stdout: string; stderr: string; calls: string; home: string } {
+  // A FIXTURE HOME, always (wave 10, critic I7): the script reads
+  // $HOME/.cc-sessions for a session unit, and spreading `process.env` used to
+  // hand it the real one.
+  const home = opts.home ?? mkTmp('ccrc-agent-verifyhome-');
   const PATH = `${dir}${path.delimiter}${process.env.PATH ?? ''}`;
-  // PROVE the stub is what will be resolved, before executing anything. A test
+  // The spawn's env, built ONCE: the proof below runs under exactly this object.
+  const env: NodeJS.ProcessEnv = {
+    ...process.env, PATH, HOME: home,
+    CCRC_VERIFY_SETTLE: '0', CCRC_VERIFY_WINDOW: '0', CCRC_VERIFY_LOG_LINES: '5',
+    CCRC_VERIFY_STOP_INTERVAL: '0', ...opts.env,
+  };
+  // PROVE the stubs are what will be resolved, before executing anything. A test
   // whose safety depends on the thing it is testing is the loaded gun this
-  // package has already fired four times.
-  const resolved = spawnSync('sh', ['-c', 'command -v systemctl'], {
-    encoding: 'utf8', env: { ...process.env, PATH },
-  }).stdout.trim();
-  expect(resolved.startsWith(`${dir}${path.sep}`),
-    `systemctl must resolve inside the stub dir; got "${resolved}" — REFUSING to run the verifier`).toBe(true);
+  // package has already fired four times. Both `systemctl` and `journalctl`.
+  assertStubsResolve(env, dir);
 
-  const r = spawnSync('bash', [VERIFY, unit], {
-    encoding: 'utf8',
-    env: {
-      ...process.env, PATH,
-      CCRC_VERIFY_SETTLE: '0', CCRC_VERIFY_WINDOW: '0', CCRC_VERIFY_LOG_LINES: '5',
-    },
-  });
+  const r = spawnSync('bash', [VERIFY, unit], { encoding: 'utf8', timeout: opts.timeout ?? 15_000, env });
   let calls = '';
   try { calls = readFileSync(path.join(dir, 'calls'), 'utf8'); } catch { calls = ''; }
-  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', calls };
+  // FIXTURE HOME, PROVEN (wave 10, critic I7): the script now reads $HOME/.cc-sessions for a session unit,
+  // so the HOME it ran under is asserted, never assumed.
+  const seen = existsSync(path.join(dir, 'home-seen')) ? readFileSync(path.join(dir, 'home-seen'), 'utf8').trim() : '';
+  expect(seen, 'verify-service.sh ran under a HOME that is not the fixture\'s').toBe(home);
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', calls, home };
+}
+
+/** `<home>/.cc-sessions/<name>` = content, for each entry. An empty map makes the dir and nothing in it. */
+function plantReg(home: string, files: Record<string, string>): void {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  for (const [name, content] of Object.entries(files)) writeFileSync(path.join(reg, name), content);
+}
+
+/** [name, entry] for every entry under <home>/.cc-sessions, sorted — the before/after of V12. Each entry is
+ *  `lstatSync`'d FIRST and read ONLY when `isFile()`: a FIFO is recorded as '<fifo>', a symlink as '<symlink>',
+ *  anything else as '<other>', never opened. A sync read of V11's FIFO would block the vitest worker in
+ *  `open()` for ever, beyond the reach of any `it` timeout — the hazard the script's own guard exists for. */
+function regSnapshot(home: string): Array<[string, string]> {
+  const reg = path.join(home, '.cc-sessions');
+  if (!existsSync(reg)) return [];
+  return readdirSync(reg).sort().map((name): [string, string] => {
+    const st = lstatSync(path.join(reg, name));
+    if (st.isFile()) return [name, readFileSync(path.join(reg, name), 'utf8')];
+    if (st.isFIFO()) return [name, '<fifo>'];
+    if (st.isSymbolicLink()) return [name, '<symlink>'];
+    return [name, '<other>'];
+  });
+}
+
+/** Before a spawn that runs the REAL script: `command -v systemctl` and `command -v journalctl`, run through
+ *  `sh -c` under exactly the env the spawn will use, must each resolve inside `bin`; REFUSES otherwise.
+ *  `journalctl` is not in the package-wide net (`contain-path.setup.ts` covers tmux, gh and systemctl only). */
+function assertStubsResolve(env: NodeJS.ProcessEnv, bin: string): void {
+  for (const name of ['systemctl', 'journalctl']) {
+    const resolved = spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8', env }).stdout.trim();
+    expect(resolved.startsWith(`${bin}${path.sep}`),
+      `${name} must resolve inside the stub dir; got "${resolved}" — REFUSING to run the real script`).toBe(true);
+  }
+}
+
+/** deploy.sh's SWEEP_CMD over several units with the REAL script, planted in `<home>/stubbin` (the existing
+ *  sweep cases' bin): SHOW_KILLMODE first, then list-units (unfiltered and --state=active list every unit;
+ *  --state=failed lists none), try-restart exit 0, `status` recorded, and `is-active` / `show -p MainPID --value`
+ *  answered PER UNIT (the unit is the last argv word) from `seqArm` counters keyed by the unit's index. A stub
+ *  `journalctl` records its argv. Anything else: "stub systemctl: unexpected argv", exit 64. Returns the bin. */
+function sweepStubs(home: string, units: Array<{ unit: string; isActive: string[]; mainPid: string[] }>): string {
+  const bin = path.join(home, 'stubbin');
+  mkdirSync(bin, { recursive: true });
+  const calls = path.join(home, 'calls');
+  const perUnit = (query: 'isactive' | 'mainpid'): string =>
+    '    u=""; for a in "$@"; do u="$a"; done;\n'
+    + '    case "$u" in\n'
+    + units.map((u, i) =>
+      `      ${JSON.stringify(u.unit)})\n        ${seqArm(`${query}-${i}`, query === 'isactive' ? u.isActive : u.mainPid)}        exit 0;;\n`).join('')
+    + '    esac\n    echo "stub systemctl: unexpected unit: $u" >&2; exit 64;;\n';
+  writeFileSync(path.join(bin, 'systemctl'),
+    '#!/bin/sh\n'
+    + `D=${JSON.stringify(bin)}\n`
+    + `echo "systemctl $*" >> ${JSON.stringify(calls)}\n`
+    + SHOW_KILLMODE
+    + 'case "$*" in\n'
+    + '  *list-units*)\n'
+    + '    case "$*" in\n'
+    + '      *--state=failed*) ;;\n'
+    + `      *) ${units.map((u) => `echo "${u.unit} loaded active running x"`).join('; ')} ;;\n`
+    + '    esac\n    exit 0;;\n'
+    + 'esac\n'
+    + 'case " $* " in\n'
+    + '  *" try-restart "*) exit 0;;\n'
+    + '  *" status "*) echo "[stub status]"; exit 0;;\n'
+    + '  *" is-active "*)\n' + perUnit('isactive')
+    + '  *" MainPID "*)\n' + perUnit('mainpid')
+    + 'esac\n'
+    + 'echo "stub systemctl: unexpected argv: $*" >&2\nexit 64\n', { mode: 0o755 });
+  writeFileSync(path.join(bin, 'journalctl'),
+    `#!/bin/sh\necho "journalctl $*" >> ${JSON.stringify(calls)}\n`
+    + 'echo "[stub journal] sweep"\n', { mode: 0o755 });
+  return bin;
 }
 
 describe('deploy.sh agent verifies the restart it just performed', () => {
@@ -113,7 +198,7 @@ describe('deploy.sh agent verifies the restart it just performed', () => {
     const r = runVerify(stubs({ isActive: ['active', 'active'], mainPid: ['4242', '4242'] }));
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
     expect(r.stdout).toContain('MainPID 4242 stable');
-  });
+  }, 30_000);
 
   it('FAILS on the crash loop the whitelist throw produces — active twice, different PID', () => {
     // The whole finding in one case. `systemctl restart` succeeded, `is-active`
@@ -129,35 +214,37 @@ describe('deploy.sh agent verifies the restart it just performed', () => {
     expect(r.stderr).toContain('DEPLOY FAILED');
     expect(r.calls, 'the failure path did not dump the journal').toContain('journalctl');
     expect(r.stderr).toContain('refuseToBoot');
-  });
+  }, 30_000);
 
   it('FAILS when the unit never reached active — the auto-restart window', () => {
     const r = runVerify(stubs({ isActive: ['activating', 'activating'], mainPid: ['0', '0'] }));
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("unit is 'activating', not 'active'");
     expect(r.calls).toContain('journalctl');
-  });
+  }, 30_000);
 
   it('FAILS when the unit dies during the observation window', () => {
     const r = runVerify(stubs({ isActive: ['active', 'failed'], mainPid: ['4242', '0'] }));
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("became 'failed'");
-  });
+  }, 30_000);
 
   it('FAILS when systemd reports active with no MainPID', () => {
     const r = runVerify(stubs({ isActive: ['active', 'active'], mainPid: ['0', '0'] }));
     expect(r.code).toBe(1);
     expect(r.stderr).toContain('no MainPID');
-  });
+  }, 30_000);
 
   it('refuses to run without a unit name rather than verifying something else', () => {
     const dir = stubs({ isActive: ['active'], mainPid: ['1'] });
-    const r = spawnSync('bash', [VERIFY], {
-      encoding: 'utf8', env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}` },
-    });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env, HOME: mkTmp('ccrc-agent-verifyhome-'), PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}`,
+    };
+    assertStubsResolve(env, dir);
+    const r = spawnSync('bash', [VERIFY], { encoding: 'utf8', timeout: 15_000, env });
     expect(r.status).toBe(2);
     expect(r.stderr).toContain('usage:');
-  });
+  }, 30_000);
 });
 
 /** A unit file's named section, anchored on a section header at the START OF A
@@ -512,8 +599,13 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // second copy means two lanes install the same artifact and the one bash
     // runs is the LAST, which no reader of a `toContain` would know.
     const codeLines = deploySh.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+    // ccd ITSELF is the exception (D-3696): a launcher/body PAIR rendered and
+    // published ON THE BOX by `install_ccd_pair`, never scp'd at all — so the
+    // call it replaced must be gone, and the pair call present exactly once.
+    expect(codeLines.filter((l) => l.includes('install_atomic ccd/ccd .local/bin/ccd')),
+      'ccd is scp\'d again — the pair publisher was bypassed').toEqual([]);
+    expect(codeLines.filter((l) => l === 'install_ccd_pair'), 'the pair publisher is not called exactly once').toHaveLength(1);
     for (const call of [
-      'install_atomic ccd/ccd .local/bin/ccd',
       'install_atomic deploy/notify.sh .cc-sessions/notify.sh',
       'install_atomic ccd/compact-card.mjs .cc-sessions/compact-card.mjs',
       'install_atomic ccd/session-hook.sh .cc-sessions/session-hook.sh',
@@ -701,7 +793,13 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(deploySh).toContain('install_atomic ccd/ccd-graph-sweep .local/bin/ccd-graph-sweep 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-account-health .local/bin/ccd-account-health 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-telemetry-keepalive .local/bin/ccd-telemetry-keepalive 755');
-    expect(deploySh).toContain('install_atomic ccd/ccrc-models-probe .local/bin/ccrc-models-probe 755');
+    // Plan 3a Task 7 (ruling R-C11): NO ~/.local/bin copy of the model probe.
+    // ccrc runs its own tree's copy, which the rsync of `ccd/` lands; `ccrc
+    // update` never refreshes a PATH copy, and a stale one reads lane one's
+    // OAuth directory for a codex lane too. Code lines only, so the note that
+    // replaced the call may say why.
+    expect(deploySh.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))
+      .filter((l) => l.includes('ccrc-models-probe')), 'deploy.sh places a PATH copy of the model probe again').toEqual([]);
     expect(deploySh).toContain('install_atomic ccd/ccd-account-auth .local/bin/ccd-account-auth 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-pool-sync .local/bin/ccd-pool-sync 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-tmp-sweep .local/bin/ccd-tmp-sweep 755');
@@ -882,17 +980,34 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // Every artifact the by-name list above claims, present on disk with the
     // source's bytes — including the escaped slice directory, which is the one
     // destination no by-name scan of the source can prove.
-    const landed: Array<[string, string]> = [
-      ['ccrc-agent.service', join(src, 'deploy', 'ccrc-agent.service')],
-      ['claude-session@.service', join(src, 'ccd', 'claude-session@.service')],
-      ['claude-session@.service.d/limits.conf', join(src, 'deploy', 'systemd', 'claude-session@.service.d', 'limits.conf')],
-      ['app-claude\\x2dsession.slice.d/limits.conf', join(src, 'deploy', 'systemd', 'app-claude-session.slice.d', 'limits.conf')],
-      ['app-claude\\x2dsession.slice.d/zz-no-memoryhigh.conf', join(src, 'deploy', 'systemd', 'app-claude-session.slice.d', 'zz-no-memoryhigh.conf')],
-      ['ccrc-agent.service.d/protect.conf', join(src, 'deploy', 'systemd', 'ccrc-agent.service.d', 'protect.conf')],
-      ...['ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep']
-        .flatMap((n) => ['service', 'timer'].map((ext) =>
-          [`${n}.${ext}`, join(src, 'deploy', 'systemd', `${n}.${ext}`)] as [string, string])),
-    ];
+    // Every artifact the chain places, DERIVED FROM THE CHAIN THIS CASE JUST
+    // RAN (Plan 3a Task 7; 2b-1 item 20), never typed: a unit `_unit_atomic`
+    // gains is measured landing the day it is added. The hand list this
+    // replaces named sixteen and had missed the pool-sync, models and
+    // usage-sweep pairs while every case stayed green. From the chain and not
+    // from `_inst_units` (D-3729):
+    // install-census.test.ts already holds every `_inst_units` unit to one of
+    // deploy.sh's lanes, and this lane places units `_inst_units` does not.
+    const unitRoot = /^(?:~|\$HOME)\/\.config\/systemd\/user\//;
+    const landed: Array<[string, string]> = [...script.matchAll(/(?:^|&&)\s*_unit_atomic\s+(\S+)\s+(\S+)/gm)]
+      .map((m) => {
+        const from = m[1]!.replace(/^"|"$/g, '');
+        const to = m[2]!.replace(/^"|"$/g, '');
+        if (!from.startsWith('~/ccrc/') || !unitRoot.test(to)) {
+          throw new Error(`deploy-verify: a _unit_atomic call this reader cannot place: ${m[0]} — spell its source under ~/ccrc/ and its destination under ~/.config/systemd/user/, or teach this reader`);
+        }
+        return [to.replace(unitRoot, ''), join(src, from.slice('~/ccrc/'.length))] as [string, string];
+      });
+    expect(landed.length, 'the unit chain read as fewer calls than the hand list it replaced — this reader has gone stale')
+      .toBeGreaterThanOrEqual(16);
+    // THE ANCHOR, derived from the tree: every TEMPLATE unit file under
+    // deploy/systemd lands on this lane — ccrc's usage pair today (Plan 3a) —
+    // because a codex lane runs on the fleet host.
+    const templates = readdirSync(join(deployDir, 'systemd')).filter((n) => /@\.[A-Za-z]+$/.test(n));
+    expect(templates.length, 'deploy/systemd ships no template unit — this anchor would check nothing').toBeGreaterThanOrEqual(1);
+    for (const t of templates) {
+      expect(landed.map(([d]) => d), `${t} ships in deploy/systemd and the agent lane never places it`).toContain(t);
+    }
     for (const [dest, from] of landed) {
       expect(existsSync(join(unitDir, dest)), `${dest} never reached the unit directory`).toBe(true);
       expect(readFileSync(join(unitDir, dest), 'utf8'), `${dest} did not land byte-for-byte`)
@@ -1551,6 +1666,74 @@ describe('the verification is actually wired into the deploy, and can observe a 
       .toBeLessThan(serverRestartAt);
   });
 
+  it('ccd lands as a PAIR rendered on the box: body then launcher, the box\'s own isolated python3, digest agreement, no leftovers (D-3696)', () => {
+    // The body of `install_ccd_pair`, run with `ssh` replaced by a stub that
+    // executes the remote command in a fixture HOME — the real helper, the
+    // real template, the real body, against a box that is this test's own.
+    const fn = /install_ccd_pair\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
+    expect(fn, 'deploy.sh has no install_ccd_pair() helper').toBeTruthy();
+    const body = fn![1]!;
+    expect(body, 'the pair is rendered by the shipped tree\'s helper, on the box').toContain('~/ccrc/ccd/ccd-entry-install.py install ~/ccrc');
+    expect(body, 'the box\'s own python3, isolated').toContain('python3 -IS');
+    expect(body, 'no scp: neither active inode is overwritten in place').not.toContain('SCP');
+    // BOTH halves are backed up before the rsync --delete and the publication.
+    const rsyncAt = deploySh.indexOf('agent shared deploy ccd "$BOX":ccrc/');
+    for (const backup of ['cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd;', 'cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body;']) {
+      expect(deploySh.indexOf(backup), `not backed up: ${backup}`).toBeGreaterThan(-1);
+      expect(deploySh.indexOf(backup), `backed up only after the rsync: ${backup}`).toBeLessThan(rsyncAt);
+    }
+    const repoCcd = path.resolve(deployDir, '..', 'ccd');
+    const run = (home: string): ReturnType<typeof spawnSync> => {
+      const stub = path.join(home, 'stubbin');
+      mkdirSync(stub, { recursive: true });
+      writeFileSync(path.join(stub, 'fake-ssh'), '#!/bin/sh\nshift\nexec bash -c "$1"\n', { mode: 0o755 });
+      return spawnSync('bash', ['-c', `SSH=(fake-ssh); BOX=box; ${body}`], {
+        encoding: 'utf8', cwd: home,
+        env: { ...process.env, HOME: home, PATH: `${stub}${path.delimiter}${process.env.PATH ?? ''}` },
+      });
+    };
+    const box = (): string => {
+      const home = mkTmp('ccrc-agent-ccdpair-');
+      mkdirSync(path.join(home, 'ccrc', 'ccd'), { recursive: true });
+      for (const f of ['ccd', 'ccd-entry.py', 'ccd-entry-install.py']) cpSync(path.join(repoCcd, f), path.join(home, 'ccrc', 'ccd', f));
+      return home;
+    };
+
+    const home = box();
+    try {
+      const r = run(home);
+      expect(r.status, String(r.stderr)).toBe(0);
+      const out = String(r.stdout);
+      expect(out.indexOf('body published'), 'the body is published').toBeGreaterThan(-1);
+      expect(out.indexOf('body published'), 'body FIRST, launcher LAST').toBeLessThan(out.indexOf('launcher published'));
+      const entry = path.join(home, '.local', 'bin', 'ccd');
+      const bodyPath = path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
+      const shebang = readFileSync(entry, 'utf8').split('\n')[0]!;
+      expect(shebang, 'an absolute isolated-python shebang').toMatch(/^#!\/\S+ -IS$/);
+      expect([entry, bodyPath].map((p) => (statSync(p).mode & 0o777).toString(8)), 'launcher 0755, body 0644').toEqual(['755', '644']);
+      expect(readFileSync(bodyPath).equals(readFileSync(path.join(repoCcd, 'ccd'))), 'the body is the tree\'s ccd').toBe(true);
+      const digest = /^BODY_SHA256 = '([0-9a-f]{64})'$/m.exec(readFileSync(entry, 'utf8'))?.[1];
+      const want = spawnSync('python3', ['-IS', '-c', `import hashlib;print(hashlib.sha256(open(${JSON.stringify(bodyPath)},'rb').read()).hexdigest())`],
+        { encoding: 'utf8' }).stdout.trim();
+      expect(digest, 'the launcher names the published body\'s digest').toBe(want);
+      const left = spawnSync('find', [path.join(home, '.local'), '-name', '.ccd*', '-o', '-name', '*.incoming-*', '-o', '-name', '__pycache__'],
+        { encoding: 'utf8' }).stdout.trim();
+      expect(left, 'staging, self-test or incoming leftovers').toBe('');
+      expect(String(run(home).stdout), 'a second deploy of the same tree rewrites nothing').toContain('converged');
+      // A destination that is a directory refuses BEFORE anything moves: the
+      // launcher's path a directory, the body untouched (still the old bytes).
+      writeFileSync(path.join(home, 'ccrc', 'ccd', 'ccd'), `${readFileSync(path.join(repoCcd, 'ccd'), 'utf8')}\n# changed\n`);
+      rmSync(entry);
+      mkdirSync(entry);
+      const refused = run(home);
+      expect(refused.status, 'a directory at the launcher\'s path aborts the deploy').not.toBe(0);
+      expect(String(refused.stderr)).toContain('is a directory');
+      expect(readFileSync(bodyPath).equals(readFileSync(path.join(repoCcd, 'ccd'))), 'nothing moved').toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   it('~/.ccrc/accounts.sh lands BEFORE ccd — every ccd invocation in the gap would die', () => {
     // Stage 2a, Task 10. `ccd` no longer carries the account roster: it
     // SOURCES `~/.ccrc/accounts.sh` and `|| die`s when that file is absent
@@ -1569,7 +1752,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     const agentBranch = deploySh.slice(
       deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
     const shIdx = agentBranch.indexOf('install_atomic "$ACCOUNTS_SH" .ccrc/accounts.sh 644');
-    const ccdIdx = agentBranch.indexOf('install_atomic ccd/ccd .local/bin/ccd 755');
+    const ccdIdx = agentBranch.indexOf('\n  install_ccd_pair\n');
     expect(shIdx, 'deploy.sh never installs ~/.ccrc/accounts.sh').toBeGreaterThan(-1);
     expect(ccdIdx, 'the agent branch no longer installs ccd').toBeGreaterThan(-1);
     expect(shIdx, 'accounts.sh must be installed before ccd').toBeLessThan(ccdIdx);
@@ -1675,7 +1858,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
 
     const seedIdx = agentBranch.indexOf(seed!);
     const shIdx = agentBranch.indexOf('install_atomic "$ACCOUNTS_SH" .ccrc/accounts.sh 644');
-    const ccdIdx = agentBranch.indexOf('install_atomic ccd/ccd .local/bin/ccd 755');
+    const ccdIdx = agentBranch.indexOf('\n  install_ccd_pair\n');
     expect(shIdx, 'deploy.sh never installs ~/.ccrc/accounts.sh').toBeGreaterThan(-1);
     expect(ccdIdx, 'the agent branch no longer installs ccd').toBeGreaterThan(-1);
     expect(seedIdx, 'the flag must be seeded before the accounts.sh install — and so before every install below it')
@@ -2120,4 +2303,304 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // And the shim points at that tree, not at a copy of its own.
     expect(shimBody()).toContain('$HOME/ccrc/ccd/ccrc');
   });
+});
+
+// WAVE 10 (R12): `verify-service.sh` tells a deliberate supervisor stop from a
+// crash. Every case below runs the REAL script on a FIXTURE HOME with a stub
+// `systemctl`; none touches a real registry, unit or tmux.
+describe('verify-service.sh tells a deliberate supervisor stop from a crash (wave 10, R12)', () => {
+  const U = 'claude-session@demo-gone.service';
+  const ccdSrcPath = path.resolve(here, '..', '..', 'ccd', 'ccd');
+
+  /** The number of `is-active` queries a run made. */
+  const nIsActive = (calls: string): number => calls.split('\n').filter((l) => l.includes(' is-active ')).length;
+
+  it('V13: a non-session unit makes exactly today\'s query sequence (the classifier asks nothing)', () => {
+    // Lands FIRST and is green on main's script: it pins the sequence the new
+    // block must leave byte-identical for `ccrc.service` and `ccrc-agent.service`.
+    const r = runVerify(stubs({ isActive: ['active', 'inactive'], mainPid: ['4242'] }), 'ccrc-agent.service');
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(1);
+    expect(r.calls.trim().split('\n')).toEqual([
+      'systemctl --user is-active ccrc-agent.service',
+      'systemctl --user show -p MainPID --value ccrc-agent.service',
+      'systemctl --user is-active ccrc-agent.service',
+      'systemctl --user status --no-pager --lines=0 ccrc-agent.service',
+      'journalctl --user -u ccrc-agent.service -n 5 --no-pager',
+    ]);
+  }, 30_000);
+
+  it('V15: the lines other files cite by number have not moved', () => {
+    // Four sites cite this script by line number, and wave 10 may not edit any
+    // of them: `ccd/ccrc:25` (`verify-service.sh:50-54`), `ccd/ccrc:1693` and
+    // `ccd/ccrc-doctor-checks:153` (`:56-62`), and `server/test/ccrc-cli.test.ts:124`
+    // (`verify-service.sh (:50-54)`). The header rewrite is line-neutral and
+    // every new line sits below :62, so these lines hold where they are cited.
+    const lines = readFileSync(VERIFY, 'utf8').split('\n');
+    expect(lines[49]).toBe('UNIT="${1:-}"');
+    expect(lines[52]).toBe('  exit 2');
+    expect(lines[53]).toBe('fi');
+    expect(lines[55]!.startsWith('# Overridable so the test does not have to wait 8 seconds per case.')).toBe(true);
+    expect(lines[59]).toBe('SETTLE="${CCRC_VERIFY_SETTLE:-3}"');
+    expect(lines[60]).toBe('WINDOW="${CCRC_VERIFY_WINDOW:-5}"');
+    expect(lines[61]).toBe('LOG_LINES="${CCRC_VERIFY_LOG_LINES:-60}"');
+  }, 30_000);
+
+  const STAMPED_LINE = `stopped on purpose: ${U} settled 'inactive', and ccd's stop stamp ~/.cc-sessions/demo-gone.stopped is present (reads '1791151850 ccd') — a deliberate stop, not a crash`;
+  const PURGED_LINE = `stopped on purpose: ${U} settled 'inactive', and its registry row is purged (no ~/.cc-sessions/demo-gone.uuid) — a deliberate stop, not a crash`;
+  const FIFO_LINE = `stopped on purpose: ${U} settled 'inactive', and ccd's stop stamp ~/.cc-sessions/demo-gone.stopped is present (not read: not a plain file) — a deliberate stop, not a crash`;
+  const MUTATING = / (start|stop|restart|try-restart|reset-failed|enable|disable|kill|daemon-reload) /;
+
+  /** The live content of ccd's stamp, measured at 22:10:50, beside the row's uuid. */
+  const stamp = (home: string): void =>
+    plantReg(home, { 'demo-gone.uuid': 'u', 'demo-gone.stopped': '1791151850 ccd' });
+  const fixtureHome = (): string => mkTmp('ccrc-agent-verifyhome-');
+
+  it('V1: stopped on purpose, stamped (the window path) passes with its own line', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(STAMPED_LINE);
+    expect(r.stderr).not.toContain('DEPLOY FAILED');
+    expect(r.calls.trim().split('\n')).toEqual([
+      `systemctl --user is-active ${U}`,
+      `systemctl --user show -p MainPID --value ${U}`,
+      `systemctl --user is-active ${U}`,
+      `systemctl --user is-active ${U}`,
+    ]);
+  }, 30_000);
+
+  it('V2: a purged row passes (the purge keeps `generation`, D-2605)', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.generation': '7' });
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(PURGED_LINE);
+  }, 30_000);
+
+  it('V3: a unit caught `deactivating` is re-polled until it settles', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({
+      isActive: ['active', 'deactivating', 'deactivating', 'deactivating', 'inactive'], mainPid: ['4242'],
+    }), U, { home });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(STAMPED_LINE);
+    expect(nIsActive(r.calls)).toBe(5);
+  }, 30_000);
+
+  it('V4: the re-poll is bounded — a unit that never settles still fails', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['active', 'deactivating'], mainPid: ['4242'] }), U,
+      { home, env: { CCRC_VERIFY_STOP_POLLS: '3' }, timeout: 5_000 });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(1);
+    expect(r.stderr).toContain("became 'deactivating'");
+    // settle, window, the first re-read, then 3 polls.
+    expect(nIsActive(r.calls)).toBe(6);
+  }, 30_000);
+
+  it('V5: unstamped with the row kept fails as before (a hand stop, a swap mid-carry)', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u' });
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("became 'inactive'");
+    expect(r.stderr).toContain('DEPLOY FAILED');
+    expect(r.calls).toContain('journalctl');
+  }, 30_000);
+
+  it.each(['failed', 'activating'])('V6: `%s` seen in the window is never classified, stamp or no stamp', (x) => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['active', x, 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`became '${x}'`);
+    expect(nIsActive(r.calls)).toBe(2);
+  }, 30_000);
+
+  it('V6b: `activating` at the settle read is never classified', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['activating', 'inactive'], mainPid: ['0'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("unit is 'activating', not 'active'");
+    expect(nIsActive(r.calls)).toBe(1);
+  }, 30_000);
+
+  it.each(['active', 'failed', 'activating'])('V6c: `%s` as the classifier\'s re-read is not a settled stop', (x) => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', x], mainPid: ['4242'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("became 'inactive'");
+    expect(nIsActive(r.calls)).toBe(3);
+  }, 30_000);
+
+  it('V7: MainPID churn with a stamp is a crash loop (ruling 6)', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['active', 'active', 'active'], mainPid: ['111', '222'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('CRASH-LOOPING');
+    expect(nIsActive(r.calls)).toBe(2);
+  }, 30_000);
+
+  it('V7b: MainPID churn, then a stamped stop before any re-read, is still a crash loop (ruling 6)', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['active', 'active', 'inactive'], mainPid: ['111', '222'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('CRASH-LOOPING');
+    expect(nIsActive(r.calls)).toBe(2);
+  }, 30_000);
+
+  it('V8: scope — ccrc-agent.service never reaches the registry (critic I5)', () => {
+    // Without the scope check the id would strip to `ccrc-agent` and match both arms.
+    const home = fixtureHome(); plantReg(home, { 'ccrc-agent.stopped': '1 ccd' });
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }),
+      'ccrc-agent.service', { home });
+    expect(r.code).toBe(1);
+    expect(nIsActive(r.calls)).toBe(2);
+  }, 30_000);
+
+  it('V9: another session\'s stamp is not this session\'s', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u', 'demo-other.stopped': '1 ccd' });
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code).toBe(1);
+  }, 30_000);
+
+  it('V10: an absent registry is "not measured", not "purged"', () => {
+    const home = fixtureHome();
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(nIsActive(r.calls)).toBe(2);
+  }, 30_000);
+
+  it('V11: a FIFO stamp is classified without being read', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u' });
+    expect(spawnSync('mkfifo', [path.join(home, '.cc-sessions', 'demo-gone.stopped')]).status).toBe(0);
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U,
+      { home, timeout: 5_000 });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(FIFO_LINE);
+  }, 30_000);
+
+  it('V12: read-only — the registry is byte-identical after, and no state-changing verb was issued', () => {
+    const shapes: Array<[string, (home: string) => void]> = [
+      ['stamped', (home) => stamp(home)],
+      ['purged', (home) => plantReg(home, { 'demo-gone.generation': '7' })],
+      ['fifo', (home) => {
+        plantReg(home, { 'demo-gone.uuid': 'u' });
+        expect(spawnSync('mkfifo', [path.join(home, '.cc-sessions', 'demo-gone.stopped')]).status).toBe(0);
+      }],
+    ];
+    for (const [label, plant] of shapes) {
+      const home = fixtureHome(); plant(home);
+      const before = regSnapshot(home);
+      if (label === 'fifo') expect(before).toContainEqual(['demo-gone.stopped', '<fifo>']);
+      const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U,
+        { home, timeout: 5_000 });
+      // The run COMPLETED — a spawn timeout is `code` -1 (a read that blocked on the FIFO). This case is
+      // about what the script WRITES, so it takes no position on pass or fail: V1, V2 and V11 own that.
+      expect(r.code, `${label}: the run did not complete (spawn timeout) — stderr:\n${r.stderr}`).not.toBe(-1);
+      expect(regSnapshot(home), `${label}: the script changed the registry`).toEqual(before);
+      for (const l of r.calls.split('\n')) expect(l, `${label}: a state-changing systemctl verb`).not.toMatch(MUTATING);
+    }
+  }, 30_000);
+
+  it('V14: the registry root is derived from HOME exactly as ccd/ccd derives REG (D-3948)', () => {
+    expect(readFileSync(ccdSrcPath, 'utf8')).toMatch(/^REG="\$HOME\/\.cc-sessions"$/m);
+    expect(readFileSync(VERIFY, 'utf8').split('\n')).toContain('  reg="$HOME/.cc-sessions"');
+  }, 30_000);
+
+  /** deploy.sh's SWEEP_CMD, extracted and RUN, over the REAL verify-service.sh. */
+  const runSweepWithRealScript = (home: string): { code: number; stdout: string; stderr: string } => {
+    const deploySh = readFileSync(path.join(deployDir, 'deploy.sh'), 'utf8');
+    const sweep = /SWEEP_CMD='([\s\S]*?)'\n/.exec(deploySh);
+    expect(sweep, 'the supervisor sweep is no longer a single quoted block').toBeTruthy();
+    plantUnit(home, true);
+    mkdirSync(path.join(home, 'ccrc', 'deploy'), { recursive: true });
+    copyFileSync(VERIFY, path.join(home, 'ccrc', 'deploy', 'verify-service.sh'));
+    const bin = sweepStubs(home, [
+      { unit: 'claude-session@demo-good.service', isActive: ['active', 'active'], mainPid: ['4242', '4242'] },
+      { unit: U, isActive: ['active', 'inactive', 'inactive'], mainPid: ['5151'] },
+    ]);
+    const env = {
+      ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+      CCRC_VERIFY_SETTLE: '0', CCRC_VERIFY_WINDOW: '0', CCRC_VERIFY_LOG_LINES: '5', CCRC_VERIFY_STOP_INTERVAL: '0',
+    };
+    assertStubsResolve(env, bin);
+    const r = spawnSync('bash', ['-c', sweep![1]!], { encoding: 'utf8', timeout: 15_000, env });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+
+  it('V16(a): deploy.sh\'s sweep, with the REAL script, passes a session stopped mid-sweep', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runSweepWithRealScript(home);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout).toContain('verified: claude-session@demo-good.service active, MainPID 4242 stable across 0s');
+    expect(r.stdout).toContain(STAMPED_LINE);
+  }, 30_000);
+
+  it('V16(b): the same sweep still dies on an unstamped stop', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u' });
+    const r = runSweepWithRealScript(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('DEPLOY FAILED — claude-session@demo-gone.service');
+  }, 30_000);
+
+  it('V17: inactive at the settle read — a reclaimed unit the loop reaches late — passes', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.generation': '7' });
+    const r = runVerify(stubs({ isActive: ['inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(PURGED_LINE);
+    expect(r.calls.trim().split('\n')).toEqual([
+      `systemctl --user is-active ${U}`,
+      `systemctl --user is-active ${U}`,
+    ]);
+  }, 30_000);
+
+  it('V18: no MainPID — a stop that finished between the settle read and the MainPID read — passes', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['active', 'inactive'], mainPid: ['0'] }), U, { home });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(STAMPED_LINE);
+    expect(r.calls.trim().split('\n')).toEqual([
+      `systemctl --user is-active ${U}`,
+      `systemctl --user show -p MainPID --value ${U}`,
+      `systemctl --user is-active ${U}`,
+    ]);
+  }, 30_000);
+
+  it('V19: an id containing a slash is refused, whatever sits beside the registry', () => {
+    const home = fixtureHome(); plantReg(home, {});
+    writeFileSync(path.join(home, 'outside.stopped'), '1 ccd');
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }),
+      'claude-session@../outside.service', { home });
+    expect(r.code).toBe(1);
+    expect(nIsActive(r.calls)).toBe(2);
+  }, 30_000);
+
+  it('V20: with HOME unset nothing was measured, so the unit fails — and does not die on `unbound variable`', () => {
+    const dir = stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] });
+    const { HOME: _unset, ...rest } = process.env;
+    const env: NodeJS.ProcessEnv = {
+      ...rest, PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}`,
+      CCRC_VERIFY_SETTLE: '0', CCRC_VERIFY_WINDOW: '0', CCRC_VERIFY_LOG_LINES: '5', CCRC_VERIFY_STOP_INTERVAL: '0',
+    };
+    expect(env.HOME, 'the case must run with HOME unset').toBeUndefined();
+    assertStubsResolve(env, dir);
+    const r = spawnSync('bash', [VERIFY, U], { encoding: 'utf8', timeout: 15_000, env });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('DEPLOY FAILED');
+    expect(r.stderr).not.toContain('unbound variable');
+    // The safety premise, asserted: bash does not default an unset HOME, so the stub saw none.
+    expect(existsSync(path.join(dir, 'home-seen')), 'the stub never ran').toBe(true);
+    expect(readFileSync(path.join(dir, 'home-seen'), 'utf8').trim(), 'bash defaulted HOME for the script').toBe('');
+  }, 30_000);
+
+  it('V21: the evidence read is capped at 64 characters', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u', 'demo-gone.stopped': 'x'.repeat(100) });
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout).toContain(`(reads '${'x'.repeat(64)}')`);
+    expect(r.stdout).not.toContain('x'.repeat(65));
+  }, 30_000);
+
+  it('V22: the default bound is what the risk note says — 10 re-reads, 1 s apart (a "10 × 1 s" ceiling)', () => {
+    const lines = readFileSync(VERIFY, 'utf8').split('\n');
+    expect(lines).toContain('STOP_POLLS="${CCRC_VERIFY_STOP_POLLS:-10}"');
+    expect(lines).toContain('STOP_INTERVAL="${CCRC_VERIFY_STOP_INTERVAL:-1}"');
+  }, 30_000);
 });

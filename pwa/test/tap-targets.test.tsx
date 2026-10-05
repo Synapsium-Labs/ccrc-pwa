@@ -62,7 +62,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   branch: 'ws/quiet-basin', ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
 });
 
 const prState = (over: Partial<PrState> = {}): PrState => ({
@@ -106,7 +106,8 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
             coordKickoffPendingSince: null }, ...over,
 });
 
-const coordStatus = (over: Partial<CoordStatus> = {}): CoordStatus => ({ pause: 'clear', mail: 'clear', ...over });
+const coordStatus = (over: Partial<CoordStatus> = {}): CoordStatus =>
+  ({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], ...over });
 
 const mailItem = (over: Partial<MailSummary> = {}): MailSummary => ({
   id: 1, deliveryId: 1, at: Date.now() - 30_000, fromId: 'coordinator', toId: 'ccrc-pwa-clear-cove',
@@ -239,6 +240,19 @@ describe('the two rules that were already scraped still reach a real element', (
     expect(screen.getByRole('button', { name: /archived \(1\)/i })).toHaveClass('proj-archived-toggle');
   });
 
+  it('.proj-released-toggle and .proj-released-archive are on the rendered Released (n) sub-fold', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    const releasedFrom = { runId: 1, program: 'lifecycle', programTitle: null, claimedBy: 'coord', closedAt: 1, child: false };
+    act(() => {
+      store.setState({ conn: 'open', sessions: [sess({ id: 'r', project: 'alpha', workspace: 'done-one', releasedFrom })] });
+    });
+    const toggle = screen.getByRole('button', { name: /released \(1\)/i });
+    expect(toggle).toHaveClass('proj-released-toggle');
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'Archive all 1 released workspace in alpha' })).toHaveClass('proj-released-archive');
+  });
+
   it('keeps every floored rule on the token, never a bare 44px literal', () => {
     // The title no longer states a COUNT. It said "eighteen" while the list
     // below held twenty-one — a hand-kept number beside a list that grows,
@@ -264,10 +278,12 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-row .run-open'),
       ruleIn(chatCss, '.mail-strip .mail-strip-head'),
       ruleIn(fleetCss, '.coord-banner'), ruleIn(fleetCss, '.coord-toggle'),
+      ruleIn(fleetCss, '.child-reclaim-banner'), ruleIn(fleetCss, '.child-reclaim-toggle'),
       ruleIn(fleetCss, '.run-row .run-abandon'),
       ruleIn(fleetCss, '.program-start-door'), ruleIn(fleetCss, '.program-start-go'),
       ruleIn(fleetCss, '.caps-control'), ruleIn(fleetCss, '.caps-save'),
       ruleIn(fleetCss, '.caps-input'), ruleIn(fleetCss, '.mail-chip'),
+      ruleIn(fleetCss, '.proj-released-toggle'), ruleIn(fleetCss, '.proj-released-archive'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.

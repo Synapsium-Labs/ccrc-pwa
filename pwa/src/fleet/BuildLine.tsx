@@ -47,8 +47,9 @@ export function BuildLine({ health, nodes }: { health: FleetHealth | null; nodes
   // when the update plane is unreadable; a dash claims no version (§18).
   const { fleet, server } = Array.isArray(nodes) ? remoteSides(nodes) : { fleet: null, server: null };
   // Fix round 1 (F14, D-3316), widened fix round 2 (item 5): a side occupied
-  // by a row that fails `statedOf` (unmeasured this run, its stamp unread, or
-  // — D-3316 — `reachable !== true`) still occupies it (so the OTHER side
+  // by a row that fails `statedOf` (never measured — W5 review 161, F-I:
+  // `measuredAt` is a persisting stamp, not "unmeasured THIS run" — its
+  // stamp unread, or — D-3316 — `reachable !== true`) still occupies it (so the OTHER side
   // never falls back into it — `remoteSides`'s own point), but its cached
   // `current`/version is not a fact this line speaks for — `markUnreachable`
   // keeps the last measurement, and rendering it calmly here is the exact

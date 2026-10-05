@@ -54,7 +54,7 @@
 // Bare `node` — no build step, no `tsx`, no compiled `dist/` — which is why
 // every import below is a `.mjs`.
 
-import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 import {
@@ -112,8 +112,8 @@ const HOME = process.env['HOME'] ?? '';
 const modelsDir = () => path.join(HOME, '.ccrc', 'models');
 const cataloguePath = (id) => path.join(modelsDir(), `${id}.json`);
 const registryPath = (id) => path.join(modelsDir(), `${id}.classes.json`);
-// `rm` names these two directly — `materialise` builds the same two paths off
-// an `account`, which an ORPHAN id has none of.
+// `rm` and `materialise` both name these two by id (`materialFiles`): an ORPHAN
+// id has no `account` to build a path off, so neither builds one off it.
 const classesTsvPath = (id) => path.join(modelsDir(), `${id}.classes.tsv`);
 const effortPath = (id) => path.join(modelsDir(), `${id}.effort.json`);
 /** Spec §4.3's "lane manifest" row, and §5.4's first line. */
@@ -150,6 +150,22 @@ function refuseRegistry(e, id) {
   const extra = FIELD_REMEDY[e.field] ?? '';
   const remedy = extra === '' ? '' : ` ${extra.replace('<id>', id)}`;
   return refuse(1, 'registry-invalid', `${e.message}${remedy}`, e.field);
+}
+
+/** A LANE FILE's read, type-tested first (Plan 3a final fix wave, F2 —
+ *  D-2380's class). `readFileSync` opens BY NAME with no regard for TYPE: a
+ *  FIFO with no writer at one of these paths blocks INSIDE the open, so no
+ *  `catch` below ever runs, and `ccrc doctor`'s `_check_codex` and `--fix`'s
+ *  `_fix_codex`, which call this op with no deadline, hang whole. So the
+ *  type is asked first, as `_check_models` asks it. `statSync` FOLLOWS links,
+ *  as bash `-f` does, so a symlink to a real file still reads as before, and
+ *  an absent path or a dangling link still throws ENOENT exactly as the bare
+ *  read did. Anything that is not a regular file throws `ENOTREG`, which each
+ *  caller's existing non-ENOENT arm answers: that read's own unreadable
+ *  answer, never a block. */
+function readRegular(p) {
+  if (!statSync(p).isFile()) throw Object.assign(new Error('not a regular file'), { code: 'ENOTREG' });
+  return readFileSync(p, 'utf8');
 }
 
 /** THE ONE ROSTER READ, and it is READ-ONLY. Absent and unreadable are two
@@ -206,7 +222,7 @@ const canCarryRegistry = (account) =>
 function readCatalogue(id) {
   let raw;
   try {
-    raw = readFileSync(cataloguePath(id), 'utf8');
+    raw = readRegular(cataloguePath(id));
   } catch (e) {
     if (e.code === 'ENOENT') return { catalogue: null };
     return { err: ['catalogue-unreadable', `${cataloguePath(id)} could not be read: ${e.message}.`] };
@@ -227,7 +243,7 @@ function readCatalogue(id) {
 function readRegistry(id, catalogue) {
   let raw;
   try {
-    raw = readFileSync(registryPath(id), 'utf8');
+    raw = readRegular(registryPath(id));
   } catch (e) {
     if (e.code === 'ENOENT') return { registry: null };
     return { err: ['registry-unreadable', `${registryPath(id)} could not be read: ${e.message}.`] };
@@ -338,8 +354,8 @@ const HAIKU_UNASSIGNED_REMEDY = (id) =>
 function materialise(account, registry, catalogue) {
   if (registry === null) return { wrote: null };
   const settings = path.join(HOME, account.configDirSuffix, 'settings.json');
-  const classes = path.join(modelsDir(), `${account.id}.classes.tsv`);
-  const effort = path.join(modelsDir(), `${account.id}.effort.json`);
+  const classes = classesTsvPath(account.id);
+  const effort = effortPath(account.id);
   const manifest = laneManifest(account, registry);
   const lane = manifest === null ? null : laneJsonPath(account.id);
   let block = null;
@@ -400,10 +416,10 @@ function materialise(account, registry, catalogue) {
     // half-written one is a live wrong answer rather than a transient.
     // `lane.json` is 2-space JSON with a trailing newline — the hand-readable
     // shape `writeRegistry` gives the registry — and 0600 like its siblings.
-    const files = [[classes, classesTsv(registry, catalogue)],
-      [effort, `${JSON.stringify(effortFile(registry, catalogue))}\n`]];
-    if (lane !== null) files.push([lane, `${JSON.stringify(manifest, null, 2)}\n`]);
-    for (const [p, text] of files) {
+    // ONE list of what is rendered whole, shared with `materialiseCheck`
+    // (Plan 3a Task 4), so "what materialise writes" cannot mean two things.
+    const files = materialFiles(account, registry, catalogue);
+    for (const [, p, text] of files) {
       const tmp = `${p}.${process.pid}.tmp`;
       tmps.push(tmp);
       writeFileSync(tmp, text, { mode: 0o600 });
@@ -454,7 +470,7 @@ function settingsDrift(account, registry, catalogue) {
   }
   let env = {};
   try {
-    const j = JSON.parse(readFileSync(path.join(HOME, account.configDirSuffix, 'settings.json'), 'utf8'));
+    const j = JSON.parse(readRegular(path.join(HOME, account.configDirSuffix, 'settings.json')));
     if (isObj(j) && isObj(j.env)) env = j.env;
   } catch {
     // An absent settings file means every key is missing, which the filter
@@ -575,7 +591,10 @@ const OPS = {
   'set-subagent': { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'] },
   'set-effort': { keys: ['file', 'id', 'class', 'level'], required: ['file', 'id', 'class', 'level'] },
   discovery: { keys: ['file', 'id', 'action', 'model', 'endpoints'], required: ['file', 'id', 'action'] },
-  materialise: { keys: ['file', 'id'], required: ['file', 'id'] },
+  // `check` is OPTIONAL (Plan 3a Task 4): `--check true` is the check-only
+  // form, which writes nothing and answers `changed`; omitted, the op writes,
+  // as every caller before it expects. Any other value is refused.
+  materialise: { keys: ['file', 'id', 'check'], required: ['file', 'id'] },
   rm: { keys: ['file', 'id'], required: ['file', 'id'] },
   // `commit` is OPTIONAL and defaults to check-only (fix round 1): omitted or
   // any value other than the literal string "true" renders and reports
@@ -583,6 +602,59 @@ const OPS = {
   // `litellm` arm's own comment for why the write is a second, explicit call.
   litellm: { keys: ['file', 'id', 'template', 'out', 'commit'], required: ['file', 'id', 'template', 'out'] },
 };
+
+/** The files `materialise` renders WHOLE, as `[key, path, text]` in write
+ *  order: the TSV, the effort file and — on a codex-kind lane only — spec
+ *  §5.4's `lane.json`. ONE list for the writer (`materialise`) and the checker
+ *  (`materialiseCheck`, Plan 3a Task 4), so "what materialise would write"
+ *  cannot mean two things. `settings.json` is not here: it is MERGED into a
+ *  file the operator owns, never rendered whole, and `show`'s `settingsDrift`
+ *  is its measurement. Throws what `classesTsv` and `effortFile` throw; both
+ *  callers catch it. */
+function materialFiles(account, registry, catalogue) {
+  const manifest = laneManifest(account, registry);
+  const files = [
+    ['classes', classesTsvPath(account.id), classesTsv(registry, catalogue)],
+    ['effort', effortPath(account.id), `${JSON.stringify(effortFile(registry, catalogue))}\n`],
+  ];
+  if (manifest !== null) files.push(['lane', laneJsonPath(account.id), `${JSON.stringify(manifest, null, 2)}\n`]);
+  return files;
+}
+
+/** `materialise --check true` (Plan 3a Task 4, ruling R7, D-3712):
+ *  renders exactly what `materialise` would write whole and compares it with the bytes on
+ *  disk, WRITING NOTHING — no tmp, no directory, no settings merge. `ccrc
+ *  doctor`'s `_check_codex` asks it whether a lane's `lane.json` has gone
+ *  stale against the class registry (a haiku reassigned by hand, a write
+ *  interrupted between two files), which the roster-only compare in
+ *  `ccd/ccrc`'s `_codex_lane_json_state` cannot see. `changed` maps each of
+ *  `materialFiles`' keys to true when the file is absent or its bytes differ;
+ *  `lane` is null on a lane that is not `exec.kind: "codex"`, the writer's own
+ *  "legitimately not written". `changed` is null when there is no registry:
+ *  nothing would be rendered at all. A file that EXISTS and cannot be read is
+ *  a refusal, never "changed": the two remedies differ. */
+function materialiseCheck(account, registry, catalogue) {
+  if (registry === null) return { changed: null };
+  let files;
+  try {
+    files = materialFiles(account, registry, catalogue);
+  } catch (e) {
+    if (e instanceof ModelEnvInvalid) return { err: ['settings-unwritable', e.message] };
+    return { err: ['materialise-failed', `${e.message}`] };
+  }
+  const changed = { lane: null };
+  for (const [key, p, text] of files) {
+    let onDisk;
+    try {
+      onDisk = readRegular(p);
+    } catch (e) {
+      if (e.code === 'ENOENT') { changed[key] = true; continue; }
+      return { err: ['materialise-unreadable', `${p} exists and could not be read: ${e.message}. Nothing was written.`] };
+    }
+    changed[key] = onDisk !== text;
+  }
+  return { changed };
+}
 
 /** `--key value` pairs, refused rather than ignored, with a strict `i += 2`
  *  walk: a value that itself starts with `--` is refused, because accepting it
@@ -789,7 +861,7 @@ function main(argv) {
       return refuse(1, 'template-unreadable', `${a.template} could not be read: ${e.message}`);
     }
     let previous = null;
-    try { previous = readFileSync(a.out, 'utf8'); } catch { previous = null; }
+    try { previous = readRegular(a.out); } catch { previous = null; }
     const changed = previous !== text;
     if (!changed) {
       out({ ok: true, op: 'litellm', id: a.id, path: a.out, changed: false });
@@ -828,6 +900,19 @@ function main(argv) {
   }
 
   if (opName === 'materialise') {
+    // Plan 3a Task 4: `--check true` answers what a write WOULD change and
+    // writes nothing. Any other value is refused before anything is written,
+    // because a typo must never fall through to the write.
+    if (a.check !== undefined) {
+      if (a.check !== 'true') {
+        return refuse(2, 'bad-argv',
+          `--check takes only the value "true" (got ${JSON.stringify(a.check)}); leave it out to write.`);
+      }
+      const chk = materialiseCheck(account, registry, catalogue);
+      if (chk.err !== undefined) return refuse(1, chk.err[0], chk.err[1]);
+      out({ ok: true, op: 'materialise', id: a.id, check: true, changed: chk.changed });
+      return 0;
+    }
     const mat = materialise(account, registry, catalogue);
     if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
     out({ ok: true, op: 'materialise', id: a.id, wrote: mat.wrote });
@@ -851,6 +936,28 @@ function main(argv) {
       }
       out({ ok: true, op: 'init', created: false, ...describe(account, registry, catalogue) });
       return 0;
+    }
+    // A CODEX REGISTRY IS CREATED ON A CODEX-KIND LANE ONLY (Plan 3a Task 2,
+    // operator ruling Z3, D-3706). The model probe reads a codex-kind lane's
+    // own `exec.authDir`. Every other row declares none, and an `external`
+    // row's probe keeps the token-directory default until that lane's flip
+    // (ruling Z1): a directory that belongs to one particular lane. So a codex
+    // registry created here would put the hourly refresh one run away from
+    // probing this lane with another lane's OAuth. This branch is the ONE
+    // place a registry is created (`writeRegistry`'s other caller rewrites one
+    // that already exists), so the refusal covers `ccrc models <id> init
+    // codex` and every other caller of this op alike. A registry that ALREADY
+    // exists is untouched: the arm above answers it first, and the mutating
+    // ops below still rewrite it, so a lane that gained one before this build
+    // keeps it and keeps being refreshed. Every other probe kind is created on
+    // any row, as before.
+    if (a.probe === 'codex' && !(isObj(account.exec) && account.exec.kind === 'codex')) {
+      const kind = isObj(account.exec) && typeof account.exec.kind === 'string' ? account.exec.kind : null;
+      return refuse(1, 'codex-registry-needs-codex-lane',
+        `account "${a.id}" is not a codex-kind lane (its exec.kind is ${JSON.stringify(kind)}), and only `
+        + 'a codex-kind lane declares the authDir its probe must read, so a codex class registry here '
+        + 'would be probed through a token directory that is not this lane\'s. Flip the lane to "codex" '
+        + `first (Plan 3b), then re-run 'ccrc models ${a.id} init codex'. Nothing was written.`);
     }
     const seed = JSON.parse(JSON.stringify(SEEDS[a.probe]));
     if (a['base-url'] !== undefined) seed.baseUrl = a['base-url'];

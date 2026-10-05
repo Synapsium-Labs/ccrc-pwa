@@ -109,6 +109,13 @@ if [ "$RELEASE_MODE" = true ]; then
   # every `ccrc update` from here verifies provenance before extracting.
   echo "install.sh: first install trusts the release's transport checksum only; every update from here verifies provenance"
   trap - EXIT
+  # M6 (W1 minor): CCRC_UPDATE_VERIFIED is `cmd_update`'s word to the spine
+  # that it VERIFIED this tree's provenance — `_inst_installed` reads it and
+  # nothing else to decide the marker's line 2. This bootstrap verified
+  # nothing (trust on first use, said above), so an export left in the
+  # caller's shell must never reach the verb. A builtin, not `env -u`: this
+  # script runs on a bare box and names no tool it does not need.
+  unset CCRC_UPDATE_VERIFIED
   exec bash "$STAGING/tree/ccd/ccrc" install "$@"
 fi
 
@@ -171,4 +178,7 @@ echo "install.sh: building (server deps, PWA bundle, server dist)…"
 # NOT building it cost a live fleet its agent.
 ( cd "$ROOT/agent" && npm ci --no-audit --no-fund && npm run build )
 
+# M6: a checkout install verified nothing either — the release arm's rule,
+# said there.
+unset CCRC_UPDATE_VERIFIED
 exec bash "$ROOT/ccd/ccrc" install

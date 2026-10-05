@@ -9,19 +9,26 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — see SECRETS below
 # ships several curl-using scripts, each with its own argued failure contract.
 #
 # THE ORACLE, and why an endpoint that cannot answer is still useful. The usage
-# endpoint AUTHENTICATES BEFORE it checks scope, so a setup token — which is what
-# every account on this fleet uses — gets 403 `oauth_scope_insufficient` while an
-# invalid or malformed bearer gets 401. That pair is the whole measurement:
-# 401 = dead, 403-scope = live. THE TRAP: an EMPTY bearer answers 429, not an
-# auth error, so "not 403" can never mean dead — which is why a missing or empty
-# token file REFUSES here, before anything goes on the wire.
+# endpoint AUTHENTICATES BEFORE it checks scope, so a declared Anthropic setup
+# token gets 403 `oauth_scope_insufficient` while an invalid or malformed bearer
+# gets 401. That pair is the whole measurement: 401 = dead, 403-scope = live.
+# API-key, login, external and Codex lanes are not subjects: a stale guessed
+# OAuth file is not their credential and must never write or clear their marker.
+# THE TRAP: an EMPTY bearer answers 429, not an auth error, so "not 403" can
+# never mean dead — which is why a missing, empty or unsupported credential
+# REFUSES here, before anything goes on the wire.
 #
-# FOUR OUTCOMES:
+# FOUR OUTCOMES FOR AN ELIGIBLE SETUP-TOKEN LANE:
 #   401 ...................................... dead      -> write the marker
 #   403 naming oauth_scope_insufficient ...... live      -> clear the marker
 #   429 / any other status / network / timeout unmeasured -> write NOTHING,
 #                                                            CLEAR NOTHING
 #   token file missing or empty ............... refuse    -> report, no request
+#
+# Unsupported subjects REFUSE with a named reason. A malformed roster refuses
+# the WHOLE pass before any credential is sourced or marker changes: one id must
+# map to exactly one account and the upstream identity must be unique. Validation
+# and subject derivation consume one immutable snapshot, never two pathname reads.
 #
 # The third row's second half is the one to protect: a standing verdict survives
 # a pass that could not measure. A probe that cleared on every non-401 would
@@ -60,10 +67,11 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — see SECRETS below
 set -uo pipefail
 
 REG="$HOME/.cc-sessions"
-SECRETS_DIR="$HOME/.cc-secrets"
 ROSTER="$HOME/.ccrc/accounts.json"
+ROSTER_CHECK="$HOME/ccrc/deploy/gen-accounts.mjs"
 PAUSE="$HOME/.ccrc/account-health-paused"
 LOCK="$HOME/.ccrc/account-health.lock"
+ROSTER_SNAPSHOT=""
 : "${CCRC_HEALTH_URL:=https://api.anthropic.com/api/oauth/usage}"
 : "${CCRC_HEALTH_TIMEOUT:=20}"
 # The account-id grammar. A THIRD spelling of `shared/roster.ts`'s ID_RE, after
@@ -75,16 +83,58 @@ LOCK="$HOME/.ccrc/account-health.lock"
 # under ~/.cc-secrets, and it is printed at an operator on a terminal that acts
 # on control bytes.
 AH_ID_RE='^[a-z][a-z0-9-]{0,31}$'
+# The raw roster is not parseRoster output. Do not join a value to $HOME until
+# it has passed this same conservative grammar: relative, nonempty, no `..`,
+# no trailing slash, and no shell-active bytes.
+AH_SECRET_PATH_RE='^[A-Za-z0-9._/-]+$'
 
 _ah_say() { printf 'account-health: %s\n' "$1" >&2; }
 
-# THE CONVENTION, SPELLED ONCE IN THIS FILE. The roster structurally cannot
-# declare where an `upstream` account's credential lives — `exec.secretsFile` is
-# permitted only on `kind: 'generated'` (shared/roster.ts) — so a roster-driven
-# path would cover the generated accounts and SILENTLY SKIP the primary one. The
-# convention covers all of them; `ccrc doctor`'s `credentials` check is what
-# makes an absent file loud rather than invisible.
-_ah_token_file() { printf '%s/%s-oauth.env' "$SECRETS_DIR" "$1"; }
+# The endpoint recognizes only an Anthropic setup token. Selection is therefore
+# by credential semantics, not telemetry membership: telemetry says who publishes
+# usage, not which credential authenticates a launcher. The legacy upstream
+# convention remains only when it has no declared `exec.secretsFile`; a generated
+# Anthropic lane must declare its setup-token path. Every other lane is returned
+# as a named refusal before a file can be sourced or curl can be invoked.
+#
+# This is deliberately jq rather than a guessed file name. `ccd-account-health`
+# is installed alone, and jq is already its required raw-roster reader. The bash
+# loop repeats the path gate before it touches the filesystem, because JSON here
+# is untrusted operator input rather than the parsed roster used by the server.
+_ah_subjects() {   # stdout: id<TAB>eligible|api-key|login|unsupported<TAB>relative-path
+  jq -r '
+    def string_or_empty: if type == "string" then . else "" end;
+    .accounts[]?
+    | select(.telemetry == "anthropic")
+    | . as $account
+    | ($account.id | string_or_empty) as $id
+    | if ($account.exec | type) != "object" then
+        [$id, "unsupported", ""]
+      elif $account.exec.kind == "upstream" then
+        if ($account.exec | has("secretsFile")) then
+          [$id, "eligible", ($account.exec.secretsFile | string_or_empty)]
+        else
+          [$id, "eligible", ".cc-secrets/\($id)-oauth.env"]
+        end
+      elif $account.exec.kind == "generated" then
+        (if ($account.exec | has("provider")) then $account.exec.provider else "anthropic" end) as $provider
+        | if $provider == "anthropic" then
+            if ($account.exec | has("secretsFile")) then
+              [$id, "eligible", ($account.exec.secretsFile | string_or_empty)]
+            else
+              [$id, "login", ""]
+            end
+          elif ($provider | type) == "string" then
+            [$id, "api-key", ""]
+          else
+            [$id, "unsupported", ""]
+          end
+      else
+        [$id, "unsupported", ""]
+      end
+    | @tsv
+  ' "$ROSTER_SNAPSHOT"
+}
 
 # The token, read in a SUBSHELL (command substitution) so the file's own
 # `export` dies with it and this process never carries the value in its
@@ -137,6 +187,8 @@ command -v curl >/dev/null 2>&1 \
   || { _ah_say "curl is not on PATH — nothing was measured"; exit 1; }
 command -v jq >/dev/null 2>&1 \
   || { _ah_say "jq is not on PATH — nothing was measured"; exit 1; }
+command -v node >/dev/null 2>&1 \
+  || { _ah_say "node is not on PATH — the account roster cannot be validated; nothing was measured"; exit 1; }
 command -v flock >/dev/null 2>&1 \
   || { _ah_say "flock is not on PATH — nothing was measured"; exit 1; }
 
@@ -152,47 +204,71 @@ exec 9>"$LOCK" \
   || { _ah_say 'cannot open the lock at $HOME/.ccrc/account-health.lock — nothing was measured'; exit 1; }
 flock -n 9 || exit 0
 [ -e "$PAUSE" ] && exit 0
-rm -f -- "$REG"/*-authdead.tmp.* 2>/dev/null
 
 [ -r "$ROSTER" ] \
   || { _ah_say 'no roster at $HOME/.ccrc/accounts.json — nothing says which accounts exist'; exit 1; }
+[ -r "$ROSTER_CHECK" ] \
+  || { _ah_say 'the shipped roster validator at $HOME/ccrc/deploy/gen-accounts.mjs is missing — nothing was measured'; exit 1; }
+ROSTER_SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/ccrc-account-health.XXXXXX")" \
+  || { _ah_say 'cannot stage an immutable roster snapshot — nothing was measured'; exit 1; }
+trap 'rm -f -- "$ROSTER_SNAPSHOT"' EXIT
+cat -- "$ROSTER" > "$ROSTER_SNAPSHOT" \
+  || { _ah_say 'the roster at $HOME/.ccrc/accounts.json could not be snapshotted — nothing was measured'; exit 1; }
+ROSTER_WHY="$(node "$ROSTER_CHECK" "$ROSTER_SNAPSHOT" 2>&1 >/dev/null)"; rc=$?
+if [ "$rc" -ne 0 ]; then
+  ROSTER_WHY="${ROSTER_WHY#gen-accounts: "$ROSTER_SNAPSHOT": }"
+  ROSTER_WHY="${ROSTER_WHY%%$'\n'*}"
+  _ah_say "the roster at \$HOME/.ccrc/accounts.json is invalid — $ROSTER_WHY nothing was measured"
+  exit 1
+fi
+rm -f -- "$REG"/*-authdead.tmp.* 2>/dev/null
 
-IDS="$(jq -r '.accounts[]? | select(.telemetry == "anthropic") | .id // empty' "$ROSTER" 2>/dev/null)" \
-  || { _ah_say 'the roster at $HOME/.ccrc/accounts.json does not parse — nothing was measured'; exit 1; }
+SUBJECTS="$(_ah_subjects 2>/dev/null)" \
+  || { _ah_say 'the validated roster snapshot does not parse — nothing was measured'; exit 1; }
 
-# ONE LINE IS ONE ID, and the loop is built so that nothing can make it two.
-# `for id in $IDS` needed the word to be unquoted to split jq's lines at all, and
-# an unquoted expansion does TWO things: pathname expansion (a roster id spelled
-# `*` becomes the contents of the cwd) and IFS splitting (an id spelled
-# `good-one evil` becomes two ids — and BOTH halves pass the grammar gate, so the
-# probe writes markers for accounts that do not exist). `set -f` closed only the
-# first half. `read -r` with an emptied IFS closes both: it takes a whole line
-# verbatim, so an id carrying a space arrives INTACT and is refused as the one
-# illegal id it is. The gate could never have saved either case — it runs after
-# the splitting, and the splitting is what must not happen.
+# ONE LINE IS ONE classified subject, and the loop is built so that nothing can
+# make it two. An unquoted expansion would split an id carrying a space into two
+# legal-looking ids; `read -r` keeps it intact and the grammar gate rejects it.
+# The path gets the same treatment and is revalidated before `$HOME` joins it.
 #
 # The `-n` guard is not decoration: `<<<` on an empty string still feeds ONE empty
-# line, so an eligible set of zero would otherwise enter the loop once and report
-# a phantom illegal id on a perfectly healthy box.
+# line, so a telemetry set of zero would otherwise report a phantom illegal id.
 #
 # FD 8, NOT STDIN, AND THAT IS LOAD-BEARING. A here-string on `done` becomes the
-# stdin of every command in the body, so ONE stdin-reading command inside the loop
-# eats the rest of the id list and the pass silently probes a single account —
-# measured, while reverting the pipeline below to a `-H` form: the fake curl's
-# `cat` swallowed the remaining ids and the pass made 1 request instead of 2. The
-# curl below is shielded today only because its stdin is the `printf` pipe, which
-# makes the safety an accident of the current body rather than a property of the
-# loop. Reading from a private fd makes it the loop's own: the body keeps the
-# script's real stdin, and nothing a later edit adds here can consume the roster.
-[ -n "$IDS" ] || exit 0
-while IFS= read -r id <&8; do
+# stdin of every command in the body, so a future stdin reader could eat the rest
+# of the list. Reading from a private fd makes the loop own its input.
+[ -n "$SUBJECTS" ] || exit 0
+while IFS=$'\t' read -r id subject rel <&8; do
   if [[ ! "$id" =~ $AH_ID_RE ]]; then
     # Refused BY NAME rather than looked for on disk: an id outside the grammar
     # could name a file this probe has no business writing.
     _ah_say "an account id in the roster is not a legal account id ($AH_ID_RE) — skipped"
     continue
   fi
-  f="$(_ah_token_file "$id")"
+  case "$subject" in
+    api-key)
+      _ah_say "$id: refused — OAuth usage probe does not measure an API-key lane"
+      continue
+      ;;
+    login)
+      _ah_say "$id: refused — OAuth usage probe has no declared setup-token credential"
+      continue
+      ;;
+    unsupported)
+      _ah_say "$id: refused — OAuth usage probe does not measure this launcher shape"
+      continue
+      ;;
+    eligible) ;;
+    *)
+      _ah_say "$id: refused — OAuth usage probe received an unrecognised roster subject"
+      continue
+      ;;
+  esac
+  if [[ -z "$rel" || "$rel" == /* || "$rel" == */ || "$rel" == *..* || ! "$rel" =~ $AH_SECRET_PATH_RE ]]; then
+    _ah_say "$id: refused — invalid declared setup-token credential path"
+    continue
+  fi
+  f="$HOME/$rel"
   tok=""
   # `-s` IS A SHORT-CIRCUIT, NOT A GUARD, and saying so is the honest version:
   # `_ah_token` already prints nothing for a file it cannot source, so deleting
@@ -204,7 +280,7 @@ while IFS= read -r id <&8; do
     # THE FOURTH OUTCOME. Not a verdict about the account — a verdict about this
     # box's own configuration, and the reason `ccrc doctor` carries a
     # `credentials` check: absence must be loud, never a silent skip.
-    _ah_say "$id: refused — no readable token at \$HOME/.cc-secrets/$id-oauth.env"
+    _ah_say "$id: refused — no readable token at \$HOME/$rel"
     continue
   fi
   # Body and status in ONE capture, so there is no response file on disk at all.
@@ -227,5 +303,5 @@ while IFS= read -r id <&8; do
     # scope refusal, which is proof of nothing. Write nothing; CLEAR NOTHING.
     _ah_say "$id: unmeasured — HTTP $status"
   fi
-done 8<<< "$IDS"
+done 8<<< "$SUBJECTS"
 exit 0

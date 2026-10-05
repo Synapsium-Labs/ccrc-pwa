@@ -24,6 +24,7 @@ import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/updateintentlog.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import type { FleetState } from '../src/fleetstate.js';
+import { STALL_CHECK_PREFIX, STALL_FAILED_PREFIX, STALL_ORPHANED_PREFIX, STALL_REPLY_PREFIX, STALL_REPORT_PREFIX, stallFailedSubject, stallOrphanESubject } from '../src/coord/stall.js';
 
 /** Item 3, fix round 1 (F3/F4): a remote-mode fleetState double — a minimal `FleetState`, same shape as
  *  `update-inventory.test.ts`'s own local factory (that file's is not exported; L0/L1 boundaries keep this
@@ -79,7 +80,7 @@ function runnerFor(info: Map<string, Seeded>, pane = 'ready\n❯ \n'): Runner {
     if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
     if (args[0] === 'list-panes') {
       const target = args[2] ?? '';
-      const id = target.startsWith('cc-') ? target.slice('cc-'.length) : '';
+      const id = /^=cc-(.*):$/.exec(target)?.[1] ?? '';   // the exact target `=cc-<id>:` (D-3525)
       const pid = info.get(id)?.pid;
       return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
     }
@@ -1146,7 +1147,9 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     const w = watcher({ push, coord: true, sessions: [] });
     expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
     expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', 'v0.0.7')).ok).toBe(true);
-    // The fleet row WAS measured this sweep, but its stamp did not read — the
+    // The fleet row HAS been measured (`measuredAt` is set — W5 review 161, F-I:
+    // `statedOf` asks "ever measured", never "measured this sweep"), but its stamp
+    // did not read — the
     // same shape a local-mode box's EACCES leaves. `measured()` fixes
     // stampRead 'ok', so this overrides it to the unread arm directly.
     expect(w.coord!.upsertNodeMeasurement({ ...measured(FLEET_LABEL, 'fleet', null), stampRead: 'unreadable' }).ok).toBe(true);
@@ -1442,6 +1445,30 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     warn.mockRestore();
   });
 
+  // W5 review 161 (F-G): `sweptEnoughToDecide`'s `wasMeasured` counts only a
+  // `'measured'`/`'node-id-collision'` outcome. A `'refused'` row — the
+  // store's own upsert REFUSING the write (e.g. `superseded`), never a
+  // throw — is a third shape, previously unpinned: nothing wrote this
+  // sweep's row either way, so it must not open the gate, exactly like the
+  // throw case right above.
+  it("a sweep whose own upsert is REFUSED (not thrown) also leaves inventorySwept closed (F-G)", async () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });   // local mode: one `both` row
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    // The previous process's row — already behind the candidate.
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'both', 'v0.0.7')).ok).toBe(true);
+    vi.spyOn(w.coord!, 'upsertNodeMeasurement')
+      .mockImplementationOnce(() => ({ ok: false, why: 'superseded', supersededBy: 'some-other-node-id' }));
+    await w.w.inventoryNow();   // sweepOwn's own write is REFUSED, caught as a 'refused' outcome, never a throw
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+    expect(w.w.pushReleaseAfterPoll(T + 1)).toEqual({ did: 'skipped', why: 'not-yet-swept' });
+
+    // The mock was `mockImplementationOnce` — the next sweep's write succeeds for real, and opens the gate.
+    await w.w.inventoryNow();
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toEqual(expect.any(Number));
+  });
+
   // Fix round 1 (F1, D-3313 via remoteSides, moved to L0): on a REMOTE fleet, deciding sides from a
   // pre-filtered row set is what let a `both` server row's own version stand in for a fleet nobody measured.
   // The reviewer's exact rows: a server row recorded `both`, and a separate fleet row whose stamp did not read.
@@ -1453,6 +1480,27 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     expect(w.coord!.upsertNodeMeasurement({ ...measured(FLEET_LABEL, 'fleet', null), stampRead: 'unreadable' }).ok).toBe(true);
     expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
     expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.7. Tap to see what\'s new.');
+  });
+
+  // W5 review 161 (F-D): every case above uses at most ONE row per role, so a
+  // caller that pre-filtered before mapping to a `SummaryRow` and one that
+  // did not would happen to agree. This proves the rule actually bites: two
+  // LIVE rows both carry role 'fleet' (distinct node ids — `versionSides`'
+  // `.find` is generic over the array, not keyed to FLEET_LABEL specifically)
+  // — the first unstated (its stamp never read), the second fully stated and
+  // current. `versionSides` still picks the FIRST live 'fleet' row it finds,
+  // so the summary reads a dash for the fleet side; a pre-filter that dropped
+  // the unstated row BEFORE picking sides would let the second, stated row
+  // stand in instead, and the summary would name its version.
+  it('sides are picked from EVERY row, never a pre-filtered subset — two rows share one role, and a pre-filter would change the answer (F-D)', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote' } });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', 'v0.0.9')).ok).toBe(true);
+    expect(w.coord!.upsertNodeMeasurement({ ...measured(FLEET_LABEL, 'fleet', null), stampRead: 'unreadable' }).ok).toBe(true);
+    expect(w.coord!.upsertNodeMeasurement(measured('second-fleet-node', 'fleet', 'v0.0.9')).ok).toBe(true);
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.9. Tap to see what\'s new.');
   });
 
   // The narrower D-3313 case: no separate fleet row exists AT ALL, so `versionSides`' own `both`-row fallback
@@ -1468,16 +1516,170 @@ describe('the release push — once per tag, across restarts, sessionless (desig
   });
 
   // Fix round 1 (F14, D-3316): "unreachable is not current" binds the push body too. An unreachable fleet
-  // row carrying an old version does not state its version in the push body, and does not count as current
-  // in the decision — it is not the fact that suppresses the push.
-  it('an unreachable fleet row carrying an old version does not state its version, and is not treated as current (F14, D-3316)', () => {
+  // row carrying an old version does not state its version in the push body.
+  //
+  // W5 review 161 (F-J): this case's title used to also claim it pins the DECISION half ("is not treated as
+  // current" — i.e. that `!reachable` is what keeps the push from being suppressed). It does not: the fleet
+  // row here also carries an OLDER version (v0.0.7 against the v0.0.9 candidate), so `isNewerTag` alone
+  // already makes `releaseToNotify`'s push decision true regardless of `reachable` — dropping the
+  // `!n.reachable ||` clause from `notify.ts`'s push test would NOT red this case. The decision half is
+  // pinned properly in `update-notify.test.ts`'s "an unreachable node never counts as already on the
+  // candidate, even one whose cached version reads current" (a node on the SAME tag as the candidate, so
+  // only `!reachable` can be why it still pushes) and "a sole unreachable node still pushes". This case pins
+  // the TEXT half only: the push BODY's summary clause reads the unreachable side as a dash, never its stale
+  // `v0.0.7`.
+  it('an unreachable fleet row carrying an old version does not state its version in the push body (F14, D-3316)', () => {
     const { sent, push } = recorder();
     const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote' } });
     expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
     expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', 'v0.0.9')).ok).toBe(true);
     expect(w.coord!.upsertNodeMeasurement(measured(FLEET_LABEL, 'fleet', 'v0.0.7')).ok).toBe(true);
     expect(w.coord!.markUnreachable(FLEET_LABEL, 'fleet', T + 1).ok).toBe(true);   // the connection then drops
-    expect(w.w.pushRelease(T + 1)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });   // never suppressed
+    // Pushed because the cached v0.0.7 is older than the candidate — a control, not this case's own claim.
+    expect(w.w.pushRelease(T + 1)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
     expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.9. Tap to see what\'s new.');
+  });
+});
+
+// The stall watch on the phone (spec 2026-09-29 §4.2, "Push shape"):
+// - a stall-check and a BOUND reply are recorded, never pushed;
+// - the watch's report is pushed under its own title;
+// - any other mail wearing those prefixes is pushed as ordinary mail, so no box-token holder can use a prefix
+//   to keep a mail off the phone.
+describe('the stall watch on the phone — pushNewMail\'s stall classes', () => {
+  /** A run whose worker is cc-a (workspace cc-a-ws) and whose coordinator session is cc-b. */
+  const stallRig = async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const w = watcher({ push, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a', 'ccrc-pwa/cc-b'] });
+    await w.tick();                  // priming: seeds the mail watermark
+    const run = w.coord!.openRun({
+      program: 'stall-push', title: 'Stall push', project: 'ccrc-pwa', wave: 1, waveOf: 2, claimedBy: 'cc-b',
+    }) as { id: number };
+    w.coord!.markDispatched(run.id, 'cc-a', 'cc-a-ws', 'ws/cc-a', false);
+    /** One mail on the run, delivered to `deliverTo` (the resolved session behind `toId`). */
+    const mail = (fromId: string, toId: string, deliverTo: string, subject: string): number => {
+      const m = w.coord!.insertMail({ fromId, fromUuid: fromId, toId, runId: run.id, kind: 'status', subject, body: 'b', artifacts: [] });
+      w.coord!.queueDelivery(m.id, deliverTo, 'envelope');
+      return m.id;
+    };
+    const check = (): number => mail('operator', 'cc-a', 'cc-a', `${STALL_CHECK_PREFIX} run ${run.id} — quiet 2h 0m, owed: first report`);
+    return { sent, log, w, run, mail, check };
+  };
+
+  it('a stall-check from operator is recorded, never pushed', async () => {
+    const { sent, log, w, check } = await stallRig();
+    check();
+    await w.tick();
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(1);
+  });
+
+  it('a BOUND reply (the run\'s worker, after the first check on that run) is recorded, never pushed', async () => {
+    const { sent, log, w, mail, check } = await stallRig();
+    check();
+    mail('cc-a', 'coordinator', 'cc-b', `${STALL_REPLY_PREFIX} working — task 3 of 7, next report 14:00Z`);
+    await w.tick();
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(2);
+  });
+
+  it('a re stall-check: from another sender is pushed as ordinary mail', async () => {
+    const { sent, w, mail, check } = await stallRig();
+    check();
+    const subject = `${STALL_REPLY_PREFIX} waiting — nothing to see`;
+    mail('cc-c', 'coordinator', 'cc-b', subject);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title: '✉ status › cc-a-ws', body: subject });
+  });
+
+  it('a re stall-check: from the worker with NO check on its run is pushed as ordinary mail', async () => {
+    const { sent, w, mail } = await stallRig();
+    mail('cc-a', 'coordinator', 'cc-b', `${STALL_REPLY_PREFIX} working — unprompted`);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.title).toBe('✉ status › cc-a-ws');
+  });
+
+  it('a re stall-check: OLDER than the first check on its run is pushed as ordinary mail', async () => {
+    const { sent, log, w, mail, check } = await stallRig();
+    const early = `${STALL_REPLY_PREFIX} working — before any check`;
+    mail('cc-a', 'coordinator', 'cc-b', early);
+    check();
+    await w.tick();
+    expect(sent.map((p) => p.body)).toEqual([early]);   // the check is recorded, not pushed
+    expect(log.seq).toBe(2);
+  });
+
+  it('the watch\'s stall: report to the coordinator is pushed as ⚠ stall › <run workspace>', async () => {
+    const { sent, w, mail, run } = await stallRig();
+    const subject = `${STALL_REPORT_PREFIX} run ${run.id} — worker quiet 3h 0m, check unanswered`;
+    const id = mail('operator', 'cc-b', 'cc-b', subject);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title: '⚠ stall › cc-a-ws', body: subject, tag: `mail-cc-b-${id}` });
+  });
+
+  it('a stall-check: prefix from a session (not operator) is pushed as ordinary mail', async () => {
+    const { sent, w, mail, run } = await stallRig();
+    mail('cc-b', 'cc-a', 'cc-a', `${STALL_CHECK_PREFIX} run ${run.id} — spoofed`);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.title).toBe('✉ status › cc-a-ws');
+  });
+
+  // Wave 2 (spec 2026-09-29 §5.2): the watch's self-wakes are its own notices, so the phone records them and
+  // never buzzes. Its reports are titled by the kind their subject names. Every watch subject below is the watch's
+  // own: a self-wake comes from Task 10's builders, and a report tail is Task 13's golden form (`stallW2ReportMail`'s
+  // `stall: run <id> — <kind>: <rest>`, whose builder is private), so a fixture can never drift from what ships.
+  const W2_STOP = Date.parse('2026-09-29T10:00:00Z');
+  const W2_ORPHANED_E = stallOrphanESubject({ bgKinds: ['subagent'], stopAt: W2_STOP });
+  const W2_FAILED = stallFailedSubject('server_error', W2_STOP);
+
+  it('an orphaned: self-wake from operator to the run\'s worker is recorded, never pushed', async () => {
+    const { sent, log, w, mail } = await stallRig();
+    mail('operator', 'cc-a', 'cc-a', W2_ORPHANED_E);
+    await w.tick();
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(1);
+  });
+
+  it('a failed: self-wake from operator to a RUN-LESS session (a coordinator) is recorded, never pushed', async () => {
+    const { sent, log, w } = await stallRig();
+    const m = w.coord!.insertMail({ fromId: 'operator', fromUuid: 'operator', toId: 'cc-b', runId: null, kind: 'status',
+      subject: W2_FAILED, body: 'b', artifacts: [] });
+    w.coord!.queueDelivery(m.id, 'cc-b', 'envelope');
+    await w.tick();
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(1);
+  });
+
+  it.each([
+    [STALL_ORPHANED_PREFIX, W2_ORPHANED_E],
+    [STALL_FAILED_PREFIX, W2_FAILED],
+  ] as const)('a %s subject from a session (not operator) is pushed as ordinary mail', async (prefix, subject) => {
+    const { sent, w, mail } = await stallRig();
+    expect(subject.startsWith(prefix)).toBe(true);
+    mail('cc-b', 'cc-a', 'cc-a', subject);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title: '✉ status › cc-a-ws', body: subject });
+  });
+
+  it.each([
+    ['stall', 'worker silent 3h 0m, stall-check unanswered', '⚠ stall › cc-a-ws'],
+    ['frozen', 'frozen: no hook event for 1h 1m', '⚠ frozen › cc-a-ws'],
+    ['dead', 'dead: orphan for 0h 12m', '⚠ dead › cc-a-ws'],
+    ['failed', 'failed: server_error twice at 2026-09-29T10:00Z', '⚠ failed › cc-a-ws'],
+  ] as const)('a %s report to the coordinator is pushed under its own title', async (_kind, tail, title) => {
+    const { sent, w, mail, run } = await stallRig();
+    const subject = `${STALL_REPORT_PREFIX} run ${run.id} — ${tail}`;
+    const id = mail('operator', 'cc-b', 'cc-b', subject);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title, body: subject, tag: `mail-cc-b-${id}` });
   });
 });

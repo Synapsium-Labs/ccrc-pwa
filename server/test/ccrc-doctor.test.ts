@@ -35,11 +35,11 @@
 // The only real binaries any fixture reaches are `bash` (spawned by absolute
 // path), the real `node` behind the version stub, and `timeout` (symlinked in
 // where a test wants the timeout path exercised).
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
   writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync, existsSync, cpSync,
-  openSync, writeSync, ftruncateSync, closeSync, copyFileSync, utimesSync, appendFileSync,
+  openSync, writeSync, ftruncateSync, closeSync, copyFileSync, utimesSync, appendFileSync, readdirSync, lstatSync, readlinkSync, statSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -779,6 +779,12 @@ function writeExposureEnv(home: string, o: ExposureOpts = {}): void {
   } else {
     put('CCRC_ORIGIN', o.origin ?? `https://${EXPOSED_HOST}`);
     put('CCRC_RP_ID', o.rpid ?? EXPOSED_HOST);
+    // EVERY arm, as `_exp_env_write` writes it (`printf '%s\n' "CCRC_AUTH=on"`
+    // precedes its ip branch, D-162). This branch omitted it until W4's
+    // `update-exposure` check became the first reader of the key in this
+    // file — the parity case in that describe runs the real writer and reds
+    // on the drift. `omit: ['CCRC_AUTH']` is how a test makes an unarmed one.
+    put('CCRC_AUTH', 'on');
     if (o.duckdns ?? true) {
       put('CCRC_DDNS_PROVIDER', 'duckdns');
       put('CCRC_DDNS_DOMAIN', o.domain ?? EXPOSED_HOST);
@@ -991,13 +997,13 @@ const DOCTOR_DEADLINE_BIN: string | null = (() => {
 
 /** `ccrc doctor`, bounded by the process GROUP. A hang becomes a readable
  *  failure — never a hung suite. */
-function runDoctorBounded(home: string, ms = 10000): Result {
+function runDoctorBounded(home: string, ms = 10000, extraEnv: NodeJS.ProcessEnv = {}): Result {
   if (DOCTOR_DEADLINE_BIN === null) {
     throw new Error('runDoctorBounded: no usable `timeout`/`gtimeout` — cannot bound this call safely');
   }
   const r = spawnSync(DOCTOR_DEADLINE_BIN,
     ['-k', '1', String(ms / 1000), BASH, ccrcIn(home), 'doctor'],
-    { env: doctorEnv(home), encoding: 'utf8' });
+    { env: { ...doctorEnv(home), ...extraEnv }, encoding: 'utf8' });
   if (r.status === 124) {
     throw new Error(
       `runDoctorBounded did not return within ${ms}ms — either a catalogue guard regressed `
@@ -1011,6 +1017,10 @@ function runDoctor(home: string, args: string[] = ['doctor'], extraEnv: NodeJS.P
     { env: { ...doctorEnv(home), ...extraEnv }, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
+
+/** The three shipped skill trees and the name each installs under in a home —
+ *  `_check_skills`' subject. One list for `healthy()` and `healthyCodexBox()`. */
+const SHIPPED_SKILLS = [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer']] as const;
 
 /** A box where every check passes. Each per-check test starts here and breaks
  *  exactly ONE thing, so a red line is attributable to that one removal. */
@@ -1058,7 +1068,7 @@ function healthy(prefix: string): string {
   // `skills` is a check, and healthy()'s contract is that every check
   // PASSES. Copies, not symlinks: diff -r follows symlinks either way, but a
   // copy is what the installer actually leaves.
-  for (const [tree, name] of [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer']] as const) {
+  for (const [tree, name] of SHIPPED_SKILLS) {
     cpSync(join(REPO, 'ccd', tree), join(home, '.claude', 'skills', name), { recursive: true });
   }
   // `_check_skills` compares them with `diff -r`, which this file's contained
@@ -1096,6 +1106,11 @@ function healthy(prefix: string): string {
   // is that every check PASSES (several tests assert summary counts on it).
   writeStamp(home);
   stubBuildHealth(home, healthBodyFor(HEALTHY_SHA));
+  // …and it COMPLETED an install that `ccrc update` verified: the one-line
+  // completed-install record (design 2026-09-20 §5 — a line 2 reading
+  // `unsigned` marks a tree nobody verified). `provenance` is a check, and
+  // healthy()'s contract is that every check PASSES.
+  writeFileSync(join(home, '.ccrc', 'installed'), `${HEALTHY_SHA}\n`);
   // …and its PWA has a passphrase set. A box with none is a real and common
   // state — it is what `ccrc install` leaves behind, deliberately — but it is a
   // WARN (`auth`), and `healthy()`'s contract is that every check PASSES, which
@@ -1191,20 +1206,178 @@ function healthy(prefix: string): string {
   return home;
 }
 
-/** A healthy box plus the ccrc-owned Codex launcher contract. The topology
- *  values are the public fixture pair, and the relative auth directory is
- *  syntactically safe; doctor wrappers neither opens nor validates OAuth. */
-function healthyCodexBox(prefix: string): string {
+// ── Plan 3a Task 4: the Codex lane fixtures `_check_codex` needs ──────────
+// Imported HERE rather than at the top of the file: an `import` declaration
+// may sit anywhere at a module's top level (ES modules hoist it), and the two
+// citations into this file that are accurate today — `:66` and `:70`, from
+// ccrc-install.test.ts and pool-name-parity.test.ts — must not move.
+import {
+  authDirOf, codexRoster, fakeUnit, freeLanes, GPT_LANE_BINS, killLaneProcesses, laneUnits, plantFakeRuntime,
+  plantCodexUsage, plantForeignUsage, plantLaneAuth, plantSystemd, portAccepts, spawnListener, systemdRunCalls,
+  ccrcFunction, ccrcLine, lockStub, isolationManagerStubs, assertIsolationWallFirst, strayManagerCalls, codexAuthDir,
+  type LanePorts, type Listener, type ListenerAnswer,
+} from './codexLaneFixture.js';
+import { pythonOrSkip } from './ccgptHarness.js';
+import { generateWrapperBody } from '../../shared/wrapper.mjs';
+import { markGenerated } from '../../shared/mark.mjs';
+import { createServer, type Socket } from 'node:net';
+
+/** python3, or null. `plantFakeRuntime`'s interpreter hands `ccgpt-runtime
+ *  check`'s stamp read and probe hash to a real python3, so without one every
+ *  Codex fixture's runtime reads `mutated` and a healthy lane cannot PASS. */
+const PY = pythonOrSkip();
+const describeCodex = describe.skipIf(PY === null);
+const itCodex = it.skipIf(PY === null);
+
+/** Every home `healthyCodexBox` built, so what a case spawns into it is ended
+ *  after the case, pass or fail — `killLaneProcesses` ends current-run
+ *  children through their own handles, never by name or pattern. */
+const codexHomes: string[] = [];
+afterEach(async () => { for (const h of codexHomes.splice(0)) await killLaneProcesses(h); });
+
+/** The binaries `_check_codex` and the lane library it calls need on this
+ *  file's PATH-contained harness, which carries no system directory (2b-2's
+ *  hazard 9): `bash` (every `#!/usr/bin/env bash` — the placed `ccgpt-runtime`
+ *  and the fake runtime interpreter), `readlink` and `cat` (`ccgpt-runtime
+ *  check`), `cmp` (the executables row), `ps`, `awk`, `od` and `tr` (the tier
+ *  identity, Task 5), and this platform's sha256 tool (`_plat_sha256`, which
+ *  `_codex_started_json` hashes a tier's code with). */
+const CODEX_TOOLS = ['bash', 'readlink', 'cat', 'cmp', 'ps', 'awk', 'od', 'tr',
+  process.platform === 'darwin' ? 'shasum' : 'sha256sum'];
+
+/** `deploy/models-op.mjs`' import closure and the LiteLLM template it renders
+ *  against — what `_check_codex` runs through `_models_node`
+ *  (`$CCRC_HERE/../deploy/models-op.mjs`). COPIED, not symlinked, for
+ *  `plantAuthHelper`'s reason: node resolves a module's imports from its REAL
+ *  path. A file missing here is not a degraded fixture: every Codex PASS case
+ *  reds on the check's "printed no answer" FAIL. */
+const MODELS_OP_CLOSURE = ['deploy/models-op.mjs', 'deploy/litellm-config.template.yaml',
+  'shared/roster-json.mjs', 'shared/base-url.mjs', 'shared/models.mjs', 'shared/modelenv.mjs', 'shared/litellm.mjs'];
+
+function installModelsOp(home: string): void {
+  for (const rel of MODELS_OP_CLOSURE) {
+    mkdirSync(path.dirname(join(home, 'ccrc', rel)), { recursive: true });
+    copyFileSync(join(REPO, rel), join(home, 'ccrc', rel));
+  }
+}
+
+/** The four GPT-lane executables, `GPT_LANE_BINS` — the constant
+ *  ccrc-install.test.ts pins to `_inst_bins`' gate: SYMLINKED into the
+ *  fixture's shipped tree (`<home>/ccrc/ccd`, `$BOX_TREE_DIR/ccd`, what the
+ *  check compares against) and COPIED into `<home>/.local/bin`, as
+ *  `_inst_atomic` places them — so a case can edit the placed copy and never
+ *  the repository's. */
+function placeLaneBins(home: string): void {
+  for (const n of GPT_LANE_BINS) {
+    symlinkSync(join(REPO, 'ccd', n), join(home, 'ccrc', 'ccd', n));
+    copyFileSync(join(REPO, 'ccd', n), join(binDir(home), n));
+    chmodSync(join(binDir(home), n), 0o755);
+  }
+}
+
+/** A Codex lane's class registry and catalogue, in the public fixture model
+ *  vocabulary (`probe-model` is the haiku class, the lane's usage probe
+ *  model). Written as the operator's file and the probe's file are; every
+ *  RENDERED file comes from the real writer (`renderLane`), never by hand. */
+function writeLaneModels(home: string, id: string, o: {
+  probe?: string; classes?: Record<string, string | null>; discovery?: unknown; models?: readonly string[];
+} = {}): void {
+  const dir = join(home, '.ccrc', 'models');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${id}.classes.json`), `${JSON.stringify({
+    probe: o.probe ?? 'codex',
+    classes: o.classes ?? { haiku: 'probe-model', sonnet: 'gpt-x', opus: null, fable: null },
+    subagent: 'sonnet',
+    discovery: o.discovery ?? 'catalogue',
+  }, null, 2)}\n`);
+  writeFileSync(join(dir, `${id}.json`), JSON.stringify({
+    probe: 'codex', fetchedAt: Math.floor(Date.now() / 1000), stale: false,
+    models: (o.models ?? ['gpt-x', 'gpt-x-mini', 'probe-model']).map((m) => ({ id: m })),
+  }));
+}
+
+/** lane.json, the TSV, the effort file, the settings env block and the
+ *  lane's LiteLLM config, by the REAL writers — the fixture tree's own
+ *  `models-op.mjs` `materialise`, then `litellm --commit true` — so a case
+ *  that re-renders after editing a registry is measuring what the product
+ *  writes. */
+function renderLane(home: string, id: string): void {
+  const roster = join(home, '.ccrc', 'accounts.json');
+  const op = (...args: string[]): void => {
+    const r = spawnSync(process.execPath, [join(home, 'ccrc', 'deploy', 'models-op.mjs'), ...args],
+      { env: { PATH: process.env['PATH'] ?? '', HOME: home }, encoding: 'utf8' });
+    if (r.status !== 0 || !(r.stdout ?? '').startsWith('{"ok":true')) {
+      throw new Error(`renderLane: models-op ${args[0]} ${id} exited ${r.status}: ${r.stdout}${r.stderr}`);
+    }
+  };
+  op('materialise', '--file', roster, '--id', id);
+  op('litellm', '--file', roster, '--id', id,
+    '--template', join(home, 'ccrc', 'deploy', 'litellm-config.template.yaml'),
+    '--out', join(home, '.ccrc', 'codex', id, 'litellm.yaml'), '--commit', 'true');
+}
+
+/** `_codex_started_json <tier>` as the lane library computes it NOW in this
+ *  fixture HOME — the one spelling of the record a start writes (ccd/ccrc) —
+ *  under the same contained PATH doctor runs with (Plan 3a Task 5). */
+function startedJson(home: string, tier: 'litellm' | 'shim'): string {
+  const r = spawnSync(BASH, ['-c', `. ${shq(ccrcIn(home))}; _codex_started_json ${tier}`],
+    { env: doctorEnv(home), encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`_codex_started_json ${tier}: ${r.stderr}`);
+  return (r.stdout ?? '').trim();
+}
+
+/** A lane's two ports, read back from the roster `healthyCodexBox` wrote. */
+function lanePorts(home: string, id: string): { proxyPort: number; litellmPort: number } {
+  const r = JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')) as
+    { accounts: Array<{ id: string; exec?: { proxyPort?: number; litellmPort?: number } }> };
+  const x = r.accounts.find((a) => a.id === id)?.exec;
+  if (x?.proxyPort === undefined || x.litellmPort === undefined) throw new Error(`lanePorts: no ports for ${id}`);
+  return { proxyPort: x.proxyPort, litellmPort: x.litellmPort };
+}
+
+/** Rewrites one roster row in place, as an operator's hand edit does — the
+ *  JSON is written back RAW, so a shape `parseRoster` would refuse reaches
+ *  the check exactly as it would on a box. */
+function editRosterRow(home: string, id: string, edit: (row: Record<string, any>) => void): void {
+  const p = join(home, '.ccrc', 'accounts.json');
+  const r = JSON.parse(readFileSync(p, 'utf8')) as { accounts: Array<Record<string, any>> };
+  const row = r.accounts.find((a) => a['id'] === id);
+  if (row === undefined) throw new Error(`editRosterRow: no row ${id}`);
+  edit(row);
+  writeRawRoster(home, `${JSON.stringify(r, null, 2)}\n`);
+}
+
+/** A healthy box whose roster also carries Codex lanes (`ids`), each one a
+ *  lane ccrc runs end to end: its launcher, a signed-in authDir, its model
+ *  registry and a fresh catalogue, and the files rendered from them; the
+ *  four GPT-lane executables placed from the shipped tree; a current
+ *  runtime. Every check still PASSes — healthy()'s contract — so a Codex
+ *  case breaks exactly one thing. The ports are FREE ones (`freeLanes`),
+ *  never the fixed pure-parse pair: from Task 5 on the check connects to
+ *  them. No `accounts.sh` (`codexRoster`'s `accountsSh: false`), for
+ *  healthy()'s own reason. */
+async function healthyCodexBox(prefix: string, ids: readonly string[] = ['codex-a']): Promise<string> {
   const home = healthy(prefix);
-  writeRoster(home, [{
-    id: 'codex-a', configDirSuffix: '.claude-codex-a',
-    exec: {
-      kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011,
-      authDir: '.local/share/ccrc/codex/codex-a',
-    },
-    telemetry: 'codex',
-  }]);
-  writeWrapper(home, 'codex-a', { cfgDir: '.claude-codex-a', target: 'ccgpt' });
+  codexHomes.push(home);
+  const lanes: LanePorts[] = await freeLanes(ids);
+  codexRoster(home, lanes, [], { accountsSh: false });
+  for (const b of CODEX_TOOLS) linkReal(home, b);
+  installModelsOp(home);
+  placeLaneBins(home);
+  plantFakeRuntime(home);
+  for (const { id } of lanes) {
+    writeWrapper(home, id, { cfgDir: `.claude-${id}`, target: 'ccrc-codex' });
+    plantLaneAuth(home, id);
+    writeLaneModels(home, id);
+    renderLane(home, id);
+    plantCodexUsage(home, id);
+    // materialise wrote `<cfgDir>/settings.json`, so the home now EXISTS, and
+    // `skills` measures every existing rostered home: it carries the shipped
+    // skills, as `ccrc install` leaves it.
+    for (const [tree, name] of SHIPPED_SKILLS) {
+      cpSync(join(REPO, 'ccd', tree), join(home, `.claude-${id}`, 'skills', name), { recursive: true });
+    }
+  }
   return home;
 }
 
@@ -1247,7 +1420,7 @@ const lineFor = (out: string, name: string): string | undefined =>
 const anyVerdictFor = (out: string, name: string): string | undefined =>
   out.split('\n').find((l) => new RegExp(`^(PASS|WARN|FAIL|SKIP) ${name}: `).test(l));
 
-/** How many checks a HEALTHY fixture skips. TWO on Linux, THREE on macOS —
+/** How many checks a HEALTHY fixture skips. THREE on Linux, FOUR on macOS —
  *  `models` SKIPs on every platform (`healthy()` plants only the upstream
  *  Anthropic account, which never has a model registry by design, so the
  *  population is empty everywhere), macOS adds a second, `scopes`: cgroup
@@ -1267,8 +1440,22 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  `(N skipped)` summary pin, both `expect(skipped).toBe(HEALTHY_SKIPS)`
  *  assertions and `expect(verdicts).toBe(total - HEALTHY_SKIPS)` — the run's
  *  rc stays 0 and no line says a check failed, because SKIP prints no
- *  verdict at all; only the counts move. */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 1 : 0) + 2;
+ *  verdict at all; only the counts move.
+ *
+ *  RAISED BY ONE AGAIN (fix round 1 item 6 / review 155 C3): `update-sync`
+ *  SKIPs the same way, for the same reason — `healthy()` never installs
+ *  `ccd-update-sync.timer` either (only `--role fleet` places it), so this
+ *  "healthy" box has no puller by configuration too. Measured the identical
+ *  way: deleting this `+ 1` reds every summary/count pin above again.
+ *
+ *  RAISED BY ONE AGAIN (Plan 3a Task 4): `codex` SKIPs on every platform —
+ *  `healthy()` rosters only the upstream Anthropic account, so its Codex
+ *  population is empty everywhere, and a scan over no lane must never PASS
+ *  (`_check_codex`'s empty-set SKIP). `healthyCodexBox()` is the fixture
+ *  where it answers. Measured the same way: deleting this `+ 1` reds the
+ *  summary and count pins that read this constant (Plan 3a Task 4's
+ *  mutation row). */
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 1 : 0) + 4;
 
 // ── the table itself ──────────────────────────────────────────────────────
 
@@ -2226,6 +2413,85 @@ describe('ccrc doctor: services knows about the pool-sync timer', () => {
   });
 });
 
+describe('ccrc doctor: services knows about the update-watchdog timer', () => {
+  // W4a Task 9 (design §11): `ccrc-update-watchdog.timer` joins `known` — the
+  // DIRECT design — because a stopped watchdog is SILENT: it acts only on the
+  // day a server self-update dies mid-install, and on that day nothing else
+  // is left on the box to measure the update.
+  itLinux('warns — with its OWN consequence — when the watchdog timer is installed and stopped', () => {
+    const home = healthy('ccrc-doctor-services-update-watchdog-');
+    writeUnitFile(home, 'ccrc-update-watchdog.timer');
+    writeFileSync(join(home, 'fixture-unit-ccrc-update-watchdog.timer'), 'inactive\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccrc-update-watchdog.timer is installed but inactive');
+    expect(lines[i]).toContain('never measured or reverted');
+    expect(lines[i]).not.toContain('the job it fires is not running');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccrc-update-watchdog\.timer$/);
+    // The verdict line and the rc agree (cmd_doctor cross-checks them).
+    expect(r.stdout).not.toMatch(/the check exited/);
+    // A stopped watchdog is not a failed box: WARN, and rc stays 0.
+    expect(r.code).toBe(0);
+  });
+
+  itLinux('names it in the PASS line when it is installed and running', () => {
+    const home = healthy('ccrc-doctor-services-update-watchdog-ok-');
+    writeUnitFile(home, 'ccrc-update-watchdog.timer');
+    writeFileSync(join(home, 'fixture-unit-ccrc-update-watchdog.timer'), 'active\n');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).toContain('ccrc-update-watchdog.timer is active');
+  });
+
+  it('a box without the unit is never asked about it — no count moves', () => {
+    const home = healthy('ccrc-doctor-services-update-watchdog-absent-');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).not.toContain('ccrc-update-watchdog');
+  });
+});
+
+describe('ccrc doctor: services knows about the update-sync timer', () => {
+  // programme wave 4 (design 2026-09-20 §9): `ccd-update-sync.timer` joins
+  // `known` on `ccd-pool-sync.timer`'s own ruling — a stopped puller is
+  // SILENT: the projection ages in place, nothing looks wrong, and then its
+  // lease ends and every `ccrc update` without --to refuses as stale.
+  itLinux('warns — with its OWN consequence — when the update-sync timer is installed and stopped', () => {
+    const home = healthy('ccrc-doctor-services-update-sync-timer-');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccd-update-sync.timer is installed but inactive');
+    expect(lines[i]).toContain('stops refreshing its update projection');
+    expect(lines[i]).toContain('without --to refuses as stale');
+    expect(lines[i]).not.toContain('pool projection');
+    expect(lines[i]).not.toContain('memory cap');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccd-update-sync\.timer$/);
+    // A stopped refresh is not a failed box: WARN, and rc stays 0.
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  itLinux('names it in the PASS line when it is installed and running', () => {
+    const home = healthy('ccrc-doctor-services-update-sync-timer-ok-');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'active\n');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).toContain('ccd-update-sync.timer is active');
+  });
+
+  it('a box without the unit is never asked about it — no count moves', () => {
+    const home = healthy('ccrc-doctor-services-update-sync-timer-absent-');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).not.toContain('ccd-update-sync');
+  });
+});
+
 // ── pool-sync: the EFFECT check, item 4 (I2, wave-1 fix round A) ──────────
 // `services` (above) measures the TIMER's own activation state, which stays
 // `active` while its oneshot fails every run — this describe block is the
@@ -2332,6 +2598,165 @@ describe('ccrc doctor: pool-sync', () => {
   });
 });
 
+/** `~/.ccrc/update-intent`, in `_upd_intent_state`'s own nine-line grammar
+ *  (`updateIntentFixtures.ts`'s `readIntent` reads the same shape back;
+ *  `update-intent-cross-side.test.ts` plants an identical document by hand
+ *  for the same reason: a fixture writer belongs beside the check it feeds,
+ *  not behind an import that would register a second file's tests here). */
+function plantUpdateIntent(home: string, overrides: Partial<{
+  epoch: number; issued: number; lease: number; channel: string;
+  desired: string; desiredStable: string; desiredDev: string; auto: string;
+}> = {}): void {
+  const now = Math.floor(Date.now() / 1000);
+  const o = {
+    epoch: 1, issued: now, lease: now + 900, channel: 'stable',
+    desired: 'v0.0.11', desiredStable: 'v0.0.11', desiredDev: 'v0.0.12', auto: 'off',
+    ...overrides,
+  };
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'update-intent'), [
+    `epoch ${o.epoch}`, `issued ${o.issued}`, `lease ${o.lease}`, `channel ${o.channel}`,
+    `desired ${o.desired}`, `desired-stable ${o.desiredStable}`, `desired-dev ${o.desiredDev}`,
+    `auto ${o.auto}`, 'end', '',
+  ].join('\n'), { mode: 0o600 });
+}
+
+// ── update-sync: the EFFECT check, fix round 1 item 6 / review 155 C3 ─────
+// `services` (above) measures the TIMER's own activation state, which stays
+// `active` while its oneshot fails every run — this describe block is the
+// ARTIFACT check that catches that, the identical shape `pool-sync` (above)
+// is for its own sibling timer: `_upd_intent_state`'s own verdict on
+// `~/.ccrc/update-intent`, never the timer's reported state. `healthy()`
+// installs no `ccd-update-sync.timer` at all (see `HEALTHY_SKIPS`'s own
+// docstring), so every test below plants the unit itself where the scenario
+// needs a FLEET box, and the "no puller by configuration" SKIP is the one
+// `healthy()` already proves on its own.
+describe('ccrc doctor: update-sync', () => {
+  it('SKIPs — no puller by configuration — on a box with no ccd-update-sync.timer installed at all', () => {
+    const home = healthy('ccrc-doctor-update-sync-no-unit-');
+    const line = lineFor(runDoctor(home).stdout, 'update-sync');
+    expect(line).toBeUndefined();   // lineFor is PASS/WARN/FAIL only
+    const any = anyVerdictFor(runDoctor(home).stdout, 'update-sync') ?? '';
+    expect(any).toMatch(/^SKIP update-sync: /);
+    expect(any).toContain('no puller here');
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  itLinux('WARNs — not yet synced — when the timer was installed within its grace window and ~/.ccrc/update-intent has not been written yet', () => {
+    const home = healthy('ccrc-doctor-update-sync-not-yet-synced-');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'active\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN update-sync: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('update-sync-not-yet-synced');
+    expect(lines[i]).toContain('has not been written yet');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+    expect(r.code).toBe(0);
+  });
+
+  itLinux('FAILs — never synced — when the timer was installed past its grace window and ~/.ccrc/update-intent has never been written', () => {
+    const home = healthy('ccrc-doctor-update-sync-never-synced-');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'active\n');
+    // Past the check's 120s grace window (two of the timer's own 60s
+    // periods) — the "had its chance and still never synced" case, not the
+    // fresh-install case above.
+    const past = new Date(Date.now() - 10 * 60 * 1000);
+    utimesSync(join(unitDirOf(home), unitFileOf('ccd-update-sync.timer')), past, past);
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL update-sync: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('update-sync-unreadable');
+    expect(lines[i]).toContain('never synced');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+    expect(r.code).toBe(1);
+  });
+
+  itLinux('FAILs — stale — when the projection is past its lease, even though services still reports the timer active', () => {
+    const home = healthy('ccrc-doctor-update-sync-stale-');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'active\n');
+    plantUpdateIntent(home, { issued: 1, lease: 1 });   // 1970 — long past its lease
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL update-sync: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('update-sync-stale');
+    // `_upd_intent_state`'s own words (item 6's own instruction to reuse
+    // them), not pool-sync's "past its lease" phrasing — this check never
+    // re-derives its own verdict text.
+    expect(lines[i]).toContain('its lease ended');
+    // `services` still says the timer is fine — the exact false-PASS gap
+    // this check exists to close, on the SAME box, in the SAME run.
+    expect(lineFor(r.stdout, 'services')).toMatch(/^PASS services: /);
+    expect(r.code).toBe(1);
+  });
+
+  itLinux('FAILs — malformed — when the timer is installed but the projection does not parse (never a WARN: this is the "every update refuses" class, not pool-sync\'s self-healing one)', () => {
+    const home = healthy('ccrc-doctor-update-sync-malformed-');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'active\n');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'update-intent'), 'not a projection at all\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL update-sync: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('update-sync-malformed');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+    expect(r.code).toBe(1);
+  });
+
+  itLinux('PASSes when the timer is installed and the projection is fresh', () => {
+    const home = healthy('ccrc-doctor-update-sync-fresh-');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'active\n');
+    plantUpdateIntent(home);
+    const line = lineFor(runDoctor(home).stdout, 'update-sync') ?? '';
+    expect(line).toMatch(/^PASS update-sync: /);
+    expect(line).toContain('within its lease');
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  // Batch E review fix round 1, M3: the remedy is `_upd_intent_say`'s own,
+  // role-aware — never a hard-coded puller remedy. The one box where the
+  // hard-coded remedy was wrong: a server/both box carrying a LEFTOVER
+  // `ccd-update-sync.timer` file (a role changed after install — `CCRC_ROLE`
+  // is seed-once). There `_upd_intent_state` answers `unreadable (absent)`,
+  // never `never synced` (that WHY is the fleet/no-role arm's own), so this
+  // check's grace window never applies and falls straight to FAIL with the
+  // SERVER remedy, not the puller's.
+  itLinux('a leftover ccd-update-sync.timer on a server/both box gets the SERVER remedy from _upd_intent_say, never the puller one (M3)', () => {
+    const home = healthy('ccrc-doctor-update-sync-leftover-timer-');
+    writeCcrcEnv(home, 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_ROLE=server\n');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'active\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL update-sync: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('update-sync-unreadable');
+    expect(lines[i]).toContain('absent');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: ~\/\.ccrc\/update-intent is unreadable \(absent\) — restart ccrc\.service/);
+    expect(lines[i + 1]).not.toContain('ccd-update-sync.service');
+  });
+
+  // Batch E review fix round 1, M4: the loaded-guard every sibling check
+  // that calls a function declared in `ccrc` carries. Sourced bare (this
+  // file alone, never `ccrc`), `_upd_intent_state` is undefined.
+  it('says so, rather than guessing, when ccrc\'s own update-intent reader is not loaded', () => {
+    const nowhere = join(REPO, 'no-such-home-for-check-update-sync');
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(CHECKS_SRC)}; _check_update-sync`],
+      { encoding: 'utf8', env: { HOME: nowhere, PATH: nowhere, LC_ALL: 'C' } });
+    expect(r.stdout).toMatch(/^FAIL update-sync: ccrc's own update-intent reader is not loaded/m);
+    expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
+    expect(r.status).toBe(1);
+  });
+});
+
 // ── the box's own config file ─────────────────────────────────────────────
 // Stage 2d, Task 2, and the one check whose FAIL is a REPRODUCTION: a
 // `CCRC_FLEET=remote` with no agent URL or token makes the server print one
@@ -2400,13 +2825,16 @@ describe('ccrc doctor: config', () => {
     expect(r.stdout).not.toMatch(/ccrc install/);
     // `fleet` skips on the same box for its own reason (no server address),
     // `auth` for a third (the session gate is the server's, and nothing on a
-    // fleet host reads `~/.ccrc/auth.scrypt`), and `build` for a fourth
+    // fleet host reads `~/.ccrc/auth.scrypt`), `build` for a fourth
     // (Stage 4, Task 9: no address means no server of its own to compare
-    // against) — so the summary proves the runner accepted ALL FOUR skips.
+    // against) — and `update-exposure` for a fifth (W4, design 2026-09-20
+    // §12: a box with no server serves no update route to gate), so the
+    // summary proves the runner accepted ALL FIVE skips.
     expect(r.stdout).toMatch(/^SKIP auth: .*ccrc-agent\.service/m);
     expect(r.stdout).toMatch(/^SKIP build: /m);
+    expect(r.stdout).toMatch(/^SKIP update-exposure: .*ccrc-agent\.service/m);
     expect(r.stdout).toMatch(
-      new RegExp(`^summary: \\d+ checks \\(${4 + HEALTHY_SKIPS} skipped\\)`, 'm'));
+      new RegExp(`^summary: \\d+ checks \\(${5 + HEALTHY_SKIPS} skipped\\)`, 'm'));
     expect(r.code).toBe(0);
   });
 
@@ -2564,6 +2992,70 @@ describe('ccrc doctor: config', () => {
 // UNCAUGHT at boot, so a line a bash approximation would wave through is a
 // server that does not start. Doctor is the one place an operator can see that
 // coming before a restart does.
+/** Wave 9 R10e (D-3823): what a NOT-MEASURED verdict about one file says, on either platform — the file by path,
+ *  "was not measured", never D-3596's "cannot be read" (that sentence is for an exposure file there and
+ *  unreadable) — and the platform's own clause: Linux says the reader does not decide the shape, macOS (round-2
+ *  ruling R-A) names the file and the LINE NUMBER that is not plain. */
+const expectUndecided = (detail: string, file: string): void => {
+  expect(detail).toContain(file);
+  expect(detail).toContain('was not measured');
+  expect(detail).not.toContain('cannot be read');
+  if (IS_DARWIN) expect(detail).toContain(`${file} line `);
+  else expect(detail).toContain('in a shape this reader does not decide');
+};
+
+/** One row of `_box_unit_env`'s answer, read back from a sourced `ccd/ccrc`: the rc and its four out-params. */
+interface UnitEnvRow { label: string; env: string | null; exp: string | 'UNREADABLE' | null; key: string }
+interface UnitEnvAnswer { rc: number; val: string; src: string; why: string; fix: string; envPath: string; expPath: string }
+
+/** The UTF-8 locale this host's bash really runs under (D-3833's pins): the first candidate under which bash counts the
+ *  two-byte `é` as ONE character. A locale that is not installed falls back to C silently, which would make a UTF-8
+ *  row hollow — so the probe measures the effect, and a host with none THROWS (the case fails, never skips). Linux
+ *  runners carry `C.UTF-8`; macOS ships `en_US.UTF-8`, tried second. */
+function utf8Locale(): string {
+  for (const loc of ['C.UTF-8', 'en_US.UTF-8']) {
+    const r = spawnSync(BASH, ['-c', `x=$'\\xc3\\xa9'; printf '%s' "\${#x}"`], { encoding: 'utf8', env: { LC_ALL: loc } });
+    if (r.status === 0 && r.stdout === '1') return loc;
+  }
+  throw new Error('no UTF-8 locale takes effect in bash on this host (C.UTF-8, en_US.UTF-8): the UTF-8 rows cannot run');
+}
+
+/** `_box_unit_env <key>` over each row's fixture files, with `CCD_OS` set AFTER sourcing (so the Darwin arm runs on
+ *  every platform). One bash for all rows; every result goes through a file, so no `$(…)` eats a byte. The files are
+ *  written byte for byte (latin1: every row below `\u0100`). `locale` replaces the harness's `LC_ALL=C` (D-3833), and
+ *  the run first proves it took effect — bash counts `é` as one character — or exits 7, which fails the case. */
+function unitEnvAnswers(rows: UnitEnvRow[], os: 'linux' | 'darwin', locale = 'C'): UnitEnvAnswer[] {
+  const dir = mkTmp('ccrc-doctor-unitenv-');
+  rows.forEach((row, i) => {
+    const d = join(dir, `r${i}`);
+    mkdirSync(d, { recursive: true });
+    if (row.env !== null) writeFileSync(join(d, 'ccrc.env'), row.env, 'latin1');
+    if (row.exp === 'UNREADABLE') mkdirSync(join(d, 'exposure.env'));
+    else if (row.exp !== null) writeFileSync(join(d, 'exposure.env'), row.exp, 'latin1');
+    writeFileSync(join(d, 'key'), row.key);
+  });
+  const proof = locale === 'C' ? [] : [
+    `x=$'\\xc3\\xa9'; [ "\${#x}" -eq 1 ] || { echo "LC_ALL=${locale} did not take effect: \${#x} characters in a 2-byte é" >&2; exit 7; }`,
+  ];
+  const script = [
+    'set -uo pipefail', ...proof, `. ${shq(CCRC_SRC)}`, `CCD_OS=${os}`,
+    `for ((i=0;i<${rows.length};i++)); do d=${shq(dir)}/r$i`,
+    '  BOX_ENV_FILE=$d/ccrc.env; CCRC_EXPOSURE_FILE=$d/exposure.env; read -r key < "$d/key"',
+    '  _box_unit_env "$key"; rc=$?',
+    '  printf "%s" "$rc" > "$d/rc"; printf "%s" "$BUE_VAL" > "$d/val"; printf "%s" "$BUE_SRC" > "$d/src"',
+    '  printf "%s" "$BUE_WHY" > "$d/why"; printf "%s" "$BUE_FIX" > "$d/fix"',
+    'done',
+  ].join('\n');
+  const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: { HOME: dir, PATH: join(dir, 'no-bin'), LC_ALL: locale } });
+  expect(r.status, r.stderr).toBe(0);
+  return rows.map((_, i) => {
+    const d = join(dir, `r${i}`);
+    const g = (n: string): string => readFileSync(join(d, n), 'utf8');
+    return { rc: Number(g('rc')), val: g('val'), src: g('src'), why: g('why'), fix: g('fix'),
+      envPath: join(d, 'ccrc.env'), expPath: join(d, 'exposure.env') };
+  });
+}
+
 describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   /** `CCRC_AUTH=<value>` appended to the fixture's own `ccrc.env` — the file
    *  the SERVER reads its environment from. Appended rather than rewritten so
@@ -2574,6 +3066,23 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   };
   const authLine = (out: string): string => lineFor(out, 'auth') ?? '';
 
+  // Wave 8 item D (decision D) correction: `healthy()`'s exposure file carries
+  // CCRC_AUTH=on (`writeExposureEnv`, :769-790) — under the fix, `_check_auth`
+  // reads the flag through `_box_unit_env`, which honours that file, so every
+  // case below that expected the gate OFF while building on `healthy()` alone
+  // was passing at main only on the live defect: the exposure file's
+  // CCRC_AUTH=on did not arm the gate. `unexposedBox` is `unexposed()`'s own
+  // recipe (the update-exposure describe below, :7145) copied here so a
+  // "gate OFF" case is built on a box that really is unexposed.
+  const unexposedBox = (prefix: string, env = 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n'): string => {
+    const home = healthy(prefix);
+    rmSync(join(home, '.ccrc', 'exposure.env'), { force: true });
+    rmSync(join(home, '.ccrc', 'Caddyfile'), { force: true });
+    rmSync(sysCaddyfile(home), { force: true });
+    writeCcrcEnv(home, env);
+    return home;
+  };
+
   it('PASSES a box with no passphrase and the gate off — a fresh install ends GREEN', () => {
     // ── OPERATOR RULING (Task 9 review), amending the plan's own text ─────
     // This shipped as a WARN, faithfully to the plan. The operator overruled
@@ -2583,7 +3092,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // warnings that matter. The state is a fact about a box configured the way
     // the project ships it (`rc`'s rule), and the arming instructions ride the
     // DETAIL as next-steps text instead of a remedy.
-    const home = healthy('ccrc-doctor-auth-none-');
+    const home = unexposedBox('ccrc-doctor-auth-none-');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
     const r = runDoctor(home);
     expect(authLine(r.stdout)).toMatch(/^PASS auth: no passphrase file at .*\/\.ccrc\/auth\.scrypt/);
@@ -2603,7 +3112,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // it at boot, because behind `tailscale serve` it never learns the
     // hostname it is reached under. An operator who arms the flag from this
     // line alone would find out one tap at a time.
-    const home = healthy('ccrc-doctor-auth-rpid-');
+    const home = unexposedBox('ccrc-doctor-auth-rpid-');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
     const line = authLine(runDoctor(home).stdout);
     expect(line).toContain('CCRC_AUTH=on');
@@ -2642,7 +3151,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // legitimate state (`rc`'s rule — a doctor that WARNed here would be
     // asserting a preference). The detail is what stops the line reading as
     // "we are protected".
-    const home = healthy('ccrc-doctor-auth-unarmed-ok-');
+    const home = unexposedBox('ccrc-doctor-auth-unarmed-ok-');
     const r = runDoctor(home);
     expect(authLine(r.stdout)).toMatch(/^PASS auth: .*holds a usable passphrase/);
     expect(authLine(r.stdout)).toMatch(/the gate is OFF \(CCRC_AUTH is not "on"/);
@@ -2650,13 +3159,13 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     expect(r.code).toBe(0);
   });
 
-  it('reads the flag from ccrc.env and NOT from the shell it was run in', () => {
-    // The server's environment comes from `ccrc.service`'s `EnvironmentFile=`,
-    // i.e. from `~/.ccrc/ccrc.env`. An exported `CCRC_AUTH` in the operator's
-    // own shell arms nothing, and a check that believed it would report a box
-    // that does not exist — here, a FAIL about a fail-shut gate on a box whose
-    // gate is off.
-    const home = healthy('ccrc-doctor-auth-env-shell-');
+  it('reads the flag from the unit\'s env files and NOT from the shell it was run in', () => {
+    // The server's environment comes from `ccrc.service`'s `EnvironmentFile=`
+    // lines, i.e. from `~/.ccrc/ccrc.env` then the exposure file. An exported
+    // `CCRC_AUTH` in the operator's own shell arms nothing, and a check that
+    // believed it would report a box that does not exist — here, a FAIL about
+    // a fail-shut gate on a box whose gate is off.
+    const home = unexposedBox('ccrc-doctor-auth-env-shell-');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
     const r = runDoctor(home, ['doctor'], { CCRC_AUTH: 'on' });
     expect(authLine(r.stdout)).toMatch(/^PASS auth: no passphrase file/);
@@ -2667,9 +3176,12 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // `config.ts:331` is `env.CCRC_AUTH === 'on'` and nothing else. A check
     // laxer OR stricter than the reader it describes reports a box nobody is
     // running — `_check_config` pins the same rule for CCRC_FLEET.
-    const home = healthy('ccrc-doctor-auth-flagcase-');
+    const home = unexposedBox('ccrc-doctor-auth-flagcase-');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
-    for (const v of ['ON', 'true', 'yes', 'on ', '"on"x']) {
+    // D-3824: `'on '` and `'"on"x'` LEFT this list. `'on '` was pinned OFF on a wrong premise — systemd hands `on` to the
+    // server for `CCRC_AUTH=on ` (A1 below, which expects ARMED) — and `'"on"x'` is now case E8: this reader does not
+    // model what either parser does after a closing quote, so it answers "not measured", never a value.
+    for (const v of ['ON', 'true', 'yes']) {
       armGate(home, v);
       expect(authLine(runDoctor(home).stdout), v).toMatch(/^PASS auth: no passphrase file/);
       writeCcrcEnv(home, readFileSync(join(home, '.ccrc', 'ccrc.env'), 'utf8')
@@ -2747,7 +3259,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   it('FAILS on the same file with the gate OFF too — a boot refusal waiting to happen', () => {
     // Same class, different tense, and the tense is in the detail: the box
     // works today, and the one command that arms it takes the server down.
-    const home = healthy('ccrc-doctor-auth-garbled-off-');
+    const home = unexposedBox('ccrc-doctor-auth-garbled-off-');
     writeAuthSecret(home, 'not a secret line at all\n');
     const r = runDoctor(home);
     expect(authLine(r.stdout)).toMatch(/^FAIL auth: /);
@@ -2918,12 +3430,735 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // The other side of that branch, exactly as `config` draws it: "no
     // ccrc.service" alone is also a box that has installed nothing, and a dev
     // checkout DOES run a server.
-    const home = healthy('ccrc-doctor-auth-nounits-');
+    const home = unexposedBox('ccrc-doctor-auth-nounits-');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
     rmSync(unitDirOf(home), { recursive: true, force: true });
     const r = runDoctor(home);
     expect(authLine(r.stdout)).toMatch(/^PASS auth: no passphrase file/);
     expect(r.stdout).not.toMatch(/^SKIP auth: /m);
+  });
+
+  // ── wave 8 item D (decision D): the flag as ccrc.service actually gets it ─
+  // The unit carries TWO EnvironmentFile lines, ccrc.env then the
+  // exposure file, and the later one wins by PRESENCE — `_box_unit_env`,
+  // shared with `_check_update-exposure` and install's gate line. D4–D6
+  // below are D-3596's unreadable-exposure-file cases.
+
+  it('D1: the exposure file OVERRIDES ccrc.env — CCRC_AUTH=off there does not disarm a box `ccrc expose` armed (the live defect this wave fixes)', () => {
+    const home = healthy('ccrc-doctor-auth-exposure-wins-');
+    writeCcrcEnv(home, `${readFileSync(join(home, '.ccrc', 'ccrc.env'), 'utf8')}CCRC_AUTH=off\n`);
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^PASS auth: CCRC_AUTH=on/);
+    expect(authLine(r.stdout)).toContain(join(home, '.ccrc', 'exposure.env'));
+    expect(authLine(r.stdout)).toMatch(/logins are gated/);
+    expect(r.code).toBe(0);
+  });
+
+  it('D2: a present-but-empty CCRC_AUTH= in the exposure file wins over ccrc.env=on — gate OFF, and the arming words name the file that decides it', () => {
+    const home = unexposedBox('ccrc-doctor-auth-bare-exp-',
+      'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_AUTH=on\n');
+    rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+    writeFileSync(join(home, '.ccrc', 'exposure.env'), '# fixture — a hand-edited bare line\nCCRC_AUTH=\n');
+    const r = runDoctor(home);
+    const exp = join(home, '.ccrc', 'exposure.env');
+    expect(authLine(r.stdout)).toMatch(/^PASS auth: /);
+    expect(authLine(r.stdout)).toMatch(/the gate is OFF/);
+    expect(authLine(r.stdout)).toContain(exp);
+    expect(authLine(r.stdout)).toContain(`set CCRC_AUTH=on in ${exp}, which overrides`);
+    expect(remedyFor(r.stdout, 'auth')).toBe('');
+  });
+
+  it('D3: an unexposed box with CCRC_AUTH=on in ccrc.env and no passphrase — the fail-shut FAIL, unaffected by item D', () => {
+    const home = unexposedBox('ccrc-doctor-auth-d3-',
+      'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_AUTH=on\n');
+    rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toBe(
+      `FAIL auth: CCRC_AUTH=on in ${join(home, '.ccrc', 'ccrc.env')} and there is NO passphrase file at `
+      + `${join(home, '.ccrc', 'auth.scrypt')} — the gate is armed and failing SHUT: every route answers `
+      + '401 and no login can succeed');
+    expect(r.code).toBe(1);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    // Controller fix round 1: "one WARN auth, rc 2" is a COUNT, not just a
+    // shape — a mutation that fired the block twice (once per flag-dependent
+    // arm it guards) would still match `/^WARN auth: /` on the FIRST line
+    // `lineFor` returns. `rc 2` itself is `_dr_warn`'s own return, pinned
+    // generically elsewhere (the header's own "`_dr_warn` exists and returns
+    // rc 2" measurement); the class this check answers with is WARN, and
+    // that class is observable only through the verdict word on the line —
+    // there is no separate "rc 2" annotation doctor prints per check.
+    'D4: an exposure file that is there and cannot be read is UNMEASURED — one WARN, naming the file, with a usable passphrase', () => {
+      const home = healthy('ccrc-doctor-auth-exp-unread-');
+      chmodSync(join(home, '.ccrc', 'exposure.env'), 0o000);
+      const r = runDoctor(home);
+      const warnLines = r.stdout.split('\n').filter((l) => l.startsWith('WARN auth: '));
+      expect(warnLines.length, r.stdout).toBe(1);
+      expect(warnLines[0]).toContain(join(home, '.ccrc', 'exposure.env'));
+      expect(warnLines[0]).toMatch(/was not measured/);
+      expect(authLine(r.stdout)).toMatch(/^WARN auth: /);
+      // Fix round 1 item 3 / review 196 F4: the verdict no longer claims which
+      // file would have won — what the service manager does with an
+      // unreadable exposure file was not measured, on either platform.
+      expect(warnLines[0]).not.toContain('would win');
+      expect(warnLines[0]).not.toContain('would have won');
+      // …and the remedy no longer states the macOS-stops-the-job premise that
+      // was wrong; it still points the operator at the file itself.
+      expect(remedyFor(r.stdout, 'auth')).not.toContain('stops the server job');
+      expect(remedyFor(r.stdout, 'auth')).toContain('ls -ld');
+    });
+
+  it.skipIf(process.getuid?.() === 0)(
+    // Controller fix round 1: item D's rc-3 unmeasured block is UNPINNED by
+    // D4/D5/D6 alone — all three keep an auth.scrypt, so deleting the rc-3
+    // block (as opposed to the rc-0 one D4 already pins) never reds any of
+    // them. This is the rc-3 twin: no passphrase file EITHER, same unreadable
+    // exposure file — the false verdict item D exists to stop is exactly
+    // "PASS auth: … the gate is OFF …" on a box whose real armed state
+    // nothing here measured. Root reads through a chmod 000, so this case
+    // cannot run as uid 0 — skipped there, not weakened.
+    'D4b: the SAME unreadable exposure file with NO passphrase file either is still UNMEASURED — one WARN, never the false "gate is OFF" PASS', () => {
+      const home = healthy('ccrc-doctor-auth-exp-unread-nofile-');
+      chmodSync(join(home, '.ccrc', 'exposure.env'), 0o000);
+      rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+      const r = runDoctor(home);
+      const warnLines = r.stdout.split('\n').filter((l) => l.startsWith('WARN auth: '));
+      expect(warnLines.length, r.stdout).toBe(1);
+      expect(warnLines[0]).toContain(join(home, '.ccrc', 'exposure.env'));
+      expect(warnLines[0]).toMatch(/was not measured/);
+      expect(r.stdout).not.toMatch(/^PASS auth: /m);
+    });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'D5: the same unreadable exposure file with a GARBLED auth.scrypt is still a FAIL (rc 4 is flag-independent) — no WARN auth: line', () => {
+      const home = healthy('ccrc-doctor-auth-exp-unread-garbled-');
+      chmodSync(join(home, '.ccrc', 'exposure.env'), 0o000);
+      writeAuthSecret(home, 'not a secret line at all\n');
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^FAIL auth: /);
+      // rc 4's third tense (unmeasured=1): the armed-vs-unarmed wording
+      // never applies here — neither ccrc.env nor the exposure file's
+      // CCRC_AUTH is knowable, so the sentence hedges on the condition
+      // itself rather than asserting either state.
+      expect(authLine(r.stdout)).toContain('if CCRC_AUTH is on (');
+      expect(r.stdout).not.toMatch(/^WARN auth: /m);
+      // Fix round 1 item 3 / review 196 F4: the hedge no longer names the
+      // exposure file as the one "which decides it" — which file would win
+      // was never measured either.
+      expect(authLine(r.stdout)).not.toContain('which decides it');
+    });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'D6: the same unreadable exposure file with the helper MISSING is still the helper FAIL — no WARN auth: line', () => {
+      const home = healthy('ccrc-doctor-auth-exp-unread-nohelper-');
+      chmodSync(join(home, '.ccrc', 'exposure.env'), 0o000);
+      rmSync(join(home, 'ccrc', 'deploy', 'gen-auth-hash.mjs'), { force: true });
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^FAIL auth: the passphrase helper is missing/);
+      expect(r.stdout).not.toMatch(/^WARN auth: /m);
+    });
+
+  it('D7: an unexposed box whose ccrc.env says CCRC_AUTH=off stays OFF even with CCRC_AUTH=on exported in doctor\'s own shell', () => {
+    const home = unexposedBox('ccrc-doctor-auth-d7-',
+      'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_AUTH=off\n');
+    const r = runDoctor(home, ['doctor'], { CCRC_AUTH: 'on' });
+    expect(authLine(r.stdout)).toMatch(/gate is OFF/);
+    expect(authLine(r.stdout)).not.toMatch(/^FAIL auth: /);
+  });
+
+  // D8's model: `ccrc-doctor.test.ts`'s own update-sync case above
+  // ("says so, rather than guessing, when ccrc's own update-intent reader is
+  // not loaded") sources the check table WITHOUT ccrc's constants. This case
+  // sources ccrc TOO (so `_box_unit_env`, `_box_auth_path` and
+  // `_box_sessions_path` ARE declared), but strips the one thing the new
+  // preflight also requires: `CCRC_EXPOSURE_FILE`.
+  it('D8: sourced with ccrc\'s own functions loaded but no CCRC_EXPOSURE_FILE — "the config reader is not loaded" FAIL', () => {
+    const nowhere = join(REPO, 'no-such-home-for-check-auth');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(CCRC_SRC)}; . ${shq(CHECKS_SRC)}; unset CCRC_EXPOSURE_FILE; _check_auth`],
+      { encoding: 'utf8', env: { HOME: nowhere, PATH: nowhere, LC_ALL: 'C' } });
+    expect(r.stdout).toMatch(/^FAIL auth: ccrc's own config reader is not loaded/m);
+    expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
+    expect(r.status).toBe(1);
+  });
+
+  // Fix round 1 item 4 / review 196 F5: `_check_auth`'s guard tests
+  // `_box_unit_env` too (`:1282`). Unlike D8, this sources BOTH files intact
+  // and removes only the FUNCTION, so every constant the guard also checks
+  // stays present — a dropped `_box_unit_env` term is the only thing that can
+  // red this pin. `BUE_VAL=on` is preset AFTER sourcing ccrc (a shell
+  // assignment, never an env entry — `ccd/ccrc:2939` resets it at file scope
+  // on load) in case some path through the ungoverned body reads it, but in
+  // THIS harness (`PATH` pointing nowhere) it never gets the chance.
+  // MEASURED (wave 9, R11-F2), with the guard's `|| ! declare -F _box_unit_env`
+  // term dropped from a scratch copy of the checks file: the read
+  // `_box_unit_env CCRC_AUTH || unmeasured=$?` runs the missing function
+  // (bash prints `_box_unit_env: command not found` on stderr, rc 127 lands in
+  // `unmeasured`), nothing between that read and the node check prints the
+  // unmeasured state, and `_check_auth` prints `FAIL auth: node is not on PATH,
+  // so the passphrase file could not be read` (the node check, `command -v node`
+  // under `PATH` pointing nowhere) and returns 1 — never the not-measured WARN.
+  // So it is the SPECIFIC regex below, not a stale-ARMED read, that makes this
+  // pin red.
+  it('the not-loaded guard also requires _box_unit_env — without that term the read\'s `command not found` (rc 127) is swallowed by `|| unmeasured=$?` and the node check FAILs instead, not this check’s own text', () => {
+    const nowhere = join(REPO, 'no-such-home-for-check-auth-bue');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(CCRC_SRC)}; . ${shq(CHECKS_SRC)}; unset -f _box_unit_env; BUE_VAL=on; _check_auth`],
+      { encoding: 'utf8', env: { HOME: nowhere, PATH: nowhere, LC_ALL: 'C' } });
+    expect(r.stdout).toMatch(/^FAIL auth: ccrc's own config reader is not loaded/m);
+    expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
+    expect(r.status).toBe(1);
+  });
+
+  // ── wave 9 R10a/R10e (D-3822, D-3823, D-3824) ───────────────────────────
+  // The flag as the unit's FEEDER hands it. Linux: systemd's `EnvironmentFile=`, which discards whitespace around an
+  // unquoted value — modelled — and whose other quirks are not modelled but REPORTED as not measured. macOS: the
+  // launchd job's `set -a; . file` under bash, where a file that is not plain assignments throughout (round-2 ruling
+  // R-A) makes every key not measured. Cases marked `d` are the macOS twins of the Linux case before them and run on
+  // macOS only (`itDarwin`); the Linux ones cannot run there for the platform's own reason.
+  describe('wave 9 R10a/R10e — the flag as the unit\'s feeder hands it, and not measured where that cannot be decided', () => {
+    const envPath = (home: string): string => join(home, '.ccrc', 'ccrc.env');
+    const expPath = (home: string): string => join(home, '.ccrc', 'exposure.env');
+    const readEnv = (home: string): string => readFileSync(envPath(home), 'utf8');
+    /** The 1-based number of the LAST line of a file that ends in a newline. */
+    const lastLineNo = (p: string): number => readFileSync(p, 'utf8').split('\n').length - 1;
+    const editExposure = (home: string, f: (s: string) => string): void =>
+      writeFileSync(expPath(home), f(readFileSync(expPath(home), 'utf8')));
+    /** `unexposedBox`, no passphrase, then `CCRC_AUTH=<value>` appended — A1/E4/E6/E7/E8/E11/E12's box. */
+    const noPassBox = (prefix: string, appended: string): string => {
+      const home = unexposedBox(prefix);
+      rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+      writeCcrcEnv(home, `${readEnv(home)}${appended}`);
+      return home;
+    };
+    /** Exactly one `WARN auth` line, not measured, about `file` — and never a PASS or FAIL auth line. */
+    const expectOneUndecidedWarn = (out: string, file: string): void => {
+      const warns = out.split('\n').filter((l) => l.startsWith('WARN auth: '));
+      expect(warns.length, out).toBe(1);
+      expectUndecided(warns[0] ?? '', file);
+      expect(out).not.toMatch(/^(PASS|FAIL) auth: /m);
+    };
+
+    // D-3824: `reads a value systemd would not set as OFF` once pinned `'on '` as OFF. systemd hands `on` to the
+    // server for `CCRC_AUTH=on ` (it discards the whitespace), so that premise was wrong.
+    itLinux('A1: whitespace around an UNQUOTED value is discarded, as systemd discards it — `on `, `on<tab>`, ` on` and `<tab>on ` all arm the gate', () => {
+      const home = noPassBox('ccrc-doctor-auth-a1-', '');
+      const base = readEnv(home);
+      for (const v of ['on ', 'on\t', ' on', '\ton ']) {
+        writeCcrcEnv(home, `${base}CCRC_AUTH=${v}\n`);
+        const r = runDoctor(home);
+        expect(authLine(r.stdout), JSON.stringify(v)).toMatch(/^FAIL auth: CCRC_AUTH=on in .*NO passphrase file/);
+        expect(authLine(r.stdout), JSON.stringify(v)).toMatch(/failing SHUT/);
+        expect(r.code, JSON.stringify(v)).toBe(1);
+      }
+    });
+
+    // PLATFORM-ONLY: this is the macOS reader — the launchd job sources the file with `set -a; . file`, so bash's
+    // rules decide the line, where on Linux systemd's EnvironmentFile= does (A1). Its Linux twin is A1.
+    itDarwin('A1d: the same box on macOS — a trailing space or tab is dropped by bash (ARMED); a leading one makes the line a command, so not measured', () => {
+      const home = noPassBox('ccrc-doctor-auth-a1d-', '');
+      const base = readEnv(home);
+      for (const v of ['on ', 'on\t']) {
+        writeCcrcEnv(home, `${base}CCRC_AUTH=${v}\n`);
+        const r = runDoctor(home);
+        expect(authLine(r.stdout), JSON.stringify(v)).toMatch(/^FAIL auth: CCRC_AUTH=on in .*NO passphrase file/);
+        expect(r.code, JSON.stringify(v)).toBe(1);
+      }
+      for (const v of [' on', '\ton ']) {
+        writeCcrcEnv(home, `${base}CCRC_AUTH=${v}\n`);
+        expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+        expect(authLine(runDoctor(home).stdout)).toContain(`${envPath(home)} line ${lastLineNo(envPath(home))} `);
+      }
+    });
+
+    it('A2: the control — a QUOTED inner space stays, so `"on "` is not `on` and the gate is OFF (green at main, on both platforms)', () => {
+      const home = noPassBox('ccrc-doctor-auth-a2-', 'CCRC_AUTH="on "\n');
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^PASS auth: no passphrase file/);
+      expect(authLine(r.stdout)).toMatch(/the gate is OFF/);
+      expect(r.code).toBe(0);
+    });
+
+    it('E1: the exposure file names the flag with spaces around `=` — one WARN, not measured, naming that file (main: a false ARMED PASS)', () => {
+      const home = healthy('ccrc-doctor-auth-e1-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=on\n`);
+      editExposure(home, (s) => s.replace('CCRC_AUTH=on\n', 'CCRC_AUTH = off\n'));
+      const r = runDoctor(home);
+      expectOneUndecidedWarn(r.stdout, expPath(home));
+    });
+
+    it('E2: a physical line ending in a backslash above the key line in the exposure file — not measured (main: a false ARMED PASS)', () => {
+      const home = healthy('ccrc-doctor-auth-e2-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=off\n`);
+      // ASCII-only comment: with the fixture's em-dash comment AND a line ending in a backslash the file is not measured
+      // as a whole instead (D-3831, fix round 2 — E18); this case is about the per-key continuation.
+      editExposure(home, (s) => s.replace('\u2014', '-').replace('CCRC_AUTH=on\n', 'FOO=bar \\\nCCRC_AUTH=on\n'));
+      expectOneUndecidedWarn(runDoctor(home).stdout, expPath(home));
+    });
+
+    itLinux('E3: a key line after a comment ending in \\ is not measured — systemd before v254 continued it, v254+ does not, and the reader does not know which runs', () => {
+      const home = healthy('ccrc-doctor-auth-e3-');
+      editExposure(home, (s) => s.replace('CCRC_AUTH=on\n', '# a comment ending in a backslash \\\nCCRC_AUTH=on\n'));
+      expectOneUndecidedWarn(runDoctor(home).stdout, expPath(home));
+    });
+
+    // PLATFORM-ONLY: bash ends a comment at the newline; systemd's EnvironmentFile= (E3) may continue it
+    // after a backslash. The two readers disagree, so each has its own case. Its Linux twin is E3.
+    itDarwin('E3d: the same files read gated on macOS — bash ends a comment at the newline, backslash or not (measured, bash 5.2)', () => {
+      const home = healthy('ccrc-doctor-auth-e3d-');
+      editExposure(home, (s) => s.replace('CCRC_AUTH=on\n', '# a comment ending in a backslash \\\nCCRC_AUTH=on\n'));
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^PASS auth: CCRC_AUTH=on in .*logins are gated/);
+    });
+
+    it('E4: `CCRC_AUTH = on` in ccrc.env, no passphrase — one WARN, not measured, naming ccrc.env (main: a false OFF PASS)', () => {
+      const home = noPassBox('ccrc-doctor-auth-e4-', 'CCRC_AUTH = on\n');
+      expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+    });
+
+    itLinux('E5: the control for precedence by presence — an undecidable ccrc.env LOSES to an exposure file that decides the key, as the second EnvironmentFile= does (green at main by accident)', () => {
+      const home = healthy('ccrc-doctor-auth-e5-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH = on\n`);
+      editExposure(home, (s) => s.replace('CCRC_AUTH=on\n', 'CCRC_AUTH=off\n'));
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^PASS auth: .*but the gate is OFF/);
+      expect(authLine(r.stdout)).toContain(expPath(home));
+      expect(r.stdout).not.toMatch(/^WARN auth: /m);
+    });
+
+    // PLATFORM-ONLY: the macOS reader is bash's `. file`, whose whole-file rule has no precedence over a
+    // failing file; on Linux the second EnvironmentFile= wins by presence (E5). Its Linux twin is E5.
+    itDarwin('E5d: the same files on macOS — the WHOLE-FILE rule has no precedence over a failing file: not measured, naming ccrc.env', () => {
+      const home = healthy('ccrc-doctor-auth-e5d-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH = on\n`);
+      editExposure(home, (s) => s.replace('CCRC_AUTH=on\n', 'CCRC_AUTH=off\n'));
+      expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+    });
+
+    itLinux('E6: `export CCRC_AUTH=on` in ccrc.env, no exposure file — not measured (systemd does not take `export`)', () => {
+      const home = noPassBox('ccrc-doctor-auth-e6-', 'export CCRC_AUTH=on\n');
+      expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+    });
+
+    // PLATFORM-ONLY: bash accepts `export NAME=value` as a plain assignment; systemd's EnvironmentFile=
+    // does not take `export` (E6). The platforms differ by reader. Its Linux twin is E6.
+    itDarwin('E6d: the same line on macOS — bash\'s `export NAME=value` is a plain assignment, so ARMED, and with no passphrase the gate FAILs shut', () => {
+      const home = noPassBox('ccrc-doctor-auth-e6d-', 'export CCRC_AUTH=on\n');
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^FAIL auth: CCRC_AUTH=on in .*NO passphrase file/);
+      expect(r.code).toBe(1);
+    });
+
+    it('E6b: the export arm\'s control — `export CCRC_AUTH_SECRET_PATH=…` is another key, so `CCRC_AUTH=off` after it is MEASURED (OFF), on both platforms', () => {
+      const missing = join(mkTmp('ccrc-doctor-auth-e6b-secret-'), 'no-such-secret');
+      const home = unexposedBox('ccrc-doctor-auth-e6b-');
+      writeCcrcEnv(home, `${readEnv(home)}export CCRC_AUTH_SECRET_PATH=${missing}\nCCRC_AUTH=off\n`);
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^PASS auth: /);
+      expect(authLine(r.stdout)).toMatch(/the gate is OFF/);
+      expect(authLine(r.stdout)).not.toContain('was not measured');
+    });
+
+    it('E7: `CCRC_AUTH="o\\"n"` — an escaped quote inside the value — is not measured', () => {
+      const home = noPassBox('ccrc-doctor-auth-e7-', 'CCRC_AUTH="o\\"n"\n');
+      expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+    });
+
+    it('E8: `CCRC_AUTH="on"x` — text after a closing quote, the value that left the `reads a value systemd would not set as OFF` list — is not measured (main: PASS OFF)', () => {
+      const home = noPassBox('ccrc-doctor-auth-e8-', 'CCRC_AUTH="on"x\n');
+      expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+    });
+
+    it('E9: an unclosed double quote that may swallow the key line — not measured, naming the exposure file (main: a false ARMED)', () => {
+      const home = healthy('ccrc-doctor-auth-e9-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=off\n`);
+      writeFileSync(expPath(home), 'CCRC_ORIGIN="https://x\nCCRC_AUTH=on\nCCRC_RP_ID=x\n');
+      expectOneUndecidedWarn(runDoctor(home).stdout, expPath(home));
+    });
+
+    it('E10: a single-quoted value spanning lines may swallow the key line — not measured (main: a false ARMED)', () => {
+      const home = healthy('ccrc-doctor-auth-e10-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=off\n`);
+      writeFileSync(expPath(home), "FOO='a\nCCRC_AUTH=on\n'\n");
+      expectOneUndecidedWarn(runDoctor(home).stdout, expPath(home));
+    });
+
+    it('E11: an unquoted escape — `CCRC_AUTH=o\\n` (systemd reads `on`) — is not measured (main: PASS OFF)', () => {
+      const home = noPassBox('ccrc-doctor-auth-e11-', 'CCRC_AUTH=o\\n\n');
+      expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+    });
+
+    it('E12: a trailing unpaired quote — `CCRC_AUTH=on"` — is not measured', () => {
+      const home = noPassBox('ccrc-doctor-auth-e12-', 'CCRC_AUTH=on"\n');
+      expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+    });
+
+    itDarwin('E13: the round-2 attack\'s readonly shape — `readonly CCRC_AUTH` in ccrc.env keeps `off` against the exposure file\'s `on` — is not measured, naming ccrc.env line 2 of the failing shape, never the exposure file\'s PASS', () => {
+      const home = healthy('ccrc-doctor-auth-e13-');
+      const base = readEnv(home);
+      writeCcrcEnv(home, `${base}CCRC_AUTH=off\nreadonly CCRC_AUTH\n`);
+      const r = runDoctor(home);
+      expectOneUndecidedWarn(r.stdout, envPath(home));
+      expect(authLine(r.stdout)).toContain(`${envPath(home)} line ${base.split('\n').length + 1} `);
+    });
+
+    itLinux('E13l: the control — the same files read gated on Linux (systemd ignores a line with no `=`, and the exposure file wins by presence)', () => {
+      const home = healthy('ccrc-doctor-auth-e13l-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=off\nreadonly CCRC_AUTH\n`);
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^PASS auth: CCRC_AUTH=on in .*logins are gated/);
+      expect(authLine(r.stdout)).toContain(expPath(home));
+    });
+
+    // PLATFORM-ONLY: this is systemd's EnvironmentFile= reading — it discards a CR. The macOS reader is
+    // bash's `. file`, which keeps it, so that platform's answer differs. Its macOS twin is E14d.
+    itLinux('E14: a CR in the OTHER file is discarded by systemd — `CCRC_AUTH=on` in ccrc.env still arms, and with no passphrase the gate FAILs shut, as at main', () => {
+      const home = healthy('ccrc-doctor-auth-e14-');
+      rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=on\n`);
+      writeFileSync(expPath(home), 'CCRC_RP_ID=x\r\n');
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^FAIL auth: CCRC_AUTH=on in .*NO passphrase file/);
+      expect(r.code).toBe(1);
+    });
+
+    // PLATFORM-ONLY: bash's `. file` keeps a CR in the value; systemd's EnvironmentFile= discards it
+    // (E14). The platforms differ by reader. Its Linux twin is E14.
+    itDarwin('E14d: the same files on macOS — bash keeps a CR in the exposure file\'s value, so not measured, naming the exposure file line 1', () => {
+      const home = healthy('ccrc-doctor-auth-e14d-');
+      rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=on\n`);
+      writeFileSync(expPath(home), 'CCRC_RP_ID=x\r\n');
+      const r = runDoctor(home);
+      expectOneUndecidedWarn(r.stdout, expPath(home));
+      expect(authLine(r.stdout)).toContain(`${expPath(home)} line 1 `);
+    });
+
+    // ── wave 9 R10a (D-3831): a FILE systemd would split or skip whole ──────────────
+    // Review found three shapes the Linux reader DECIDED (rc 0, `on`) while systemd hands the server something else: a
+    // carriage return inside a line (systemd's NEWLINE is "\n\r", so a bare CR ends a line), a NUL byte (the file is
+    // unreadable to systemd, and both EnvironmentFile= lines are `-`-prefixed, so it is skipped whole), and a byte that
+    // is not valid UTF-8 in a key or value (the file fails). Each is written byte for byte (latin1).
+    /** `[label, the lines that follow `CCRC_AUTH=…`'s own decider, the phrase BUE_WHY must carry]`. */
+    const WHOLE_FILE: Array<[string, (decider: string) => string, string]> = [
+      ['a CR inside a line', (d) => `# c\rX=1\r${d}\r\n`, 'carriage return inside a line'],
+      ['a NUL byte', (d) => `CCRC_RP_ID=x\0y\n${d}\n`, 'NUL byte'],
+      ['a byte that is not valid UTF-8 in a value', (d) => `CCRC_RP_ID=x\xff\n${d}\n`, 'non-ASCII byte in a NAME=value line'],
+    ];
+    const expectWholeFileWarn = (out: string, file: string, phrase: string, label: string): void => {
+      const warns = out.split('\n').filter((l) => l.startsWith('WARN auth: '));
+      expect(warns.length, `${label}\n${out}`).toBe(1);
+      expect(warns[0], label).toContain(file);
+      expect(warns[0], label).toContain(phrase);
+      expect(warns[0], label).toContain('was not measured');
+      expect(warns[0], label).not.toContain('cannot be read');
+      expect(out, label).not.toMatch(/^(PASS|FAIL) auth: /m);
+    };
+
+    // PLATFORM-ONLY: splitting or skipping a file whole on a CR, NUL or non-UTF-8 byte is systemd's
+    // EnvironmentFile= behaviour. bash's `. file` splits on none of them and checks no UTF-8. A NUL it neither splits on
+    // nor skips: the launchd job's /bin/bash 3.2 stops reading the file at its first NUL (bash 5.2 strips each NUL
+    // instead — measured, and why an earlier comment here said "neither"). The macOS whole-file cases are E5d, E14d and
+    // E19d (a NUL, D-3832).
+    itLinux('E15: the EXPOSURE file is split or skipped whole by systemd — ccrc.env says `on`, the exposure file `off` (or a key the reader would have decided) — not measured, never a false ARMED (main: `on`)', () => {
+      for (const [label, shape, phrase] of WHOLE_FILE) {
+        const home = healthy('ccrc-doctor-auth-e15-');
+        writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=on\n`);
+        writeFileSync(expPath(home), shape('CCRC_AUTH=off'), 'latin1');
+        expectWholeFileWarn(runDoctor(home).stdout, expPath(home), phrase, label);
+      }
+    });
+
+    // PLATFORM-ONLY: splitting or skipping a file whole on a CR, NUL or non-UTF-8 byte is systemd's
+    // EnvironmentFile= behaviour; bash's `. file` does neither (a NUL truncates the file under /bin/bash 3.2 — E15's
+    // comment). Its pair is E15; the macOS whole-file cases are E5d, E14d and E19d.
+    itLinux('E16: ccrc.env is split or skipped whole by systemd — with the flag on in it and no exposure file, not measured, never a false OFF or ARMED (main: a false OFF for a CR, a false ARMED for NUL and non-UTF-8)', () => {
+      for (const [label, shape, phrase] of WHOLE_FILE) {
+        const home = noPassBox('ccrc-doctor-auth-e16-', '');
+        writeFileSync(envPath(home), `${readEnv(home)}${shape('CCRC_AUTH=on')}`, 'latin1');
+        expectWholeFileWarn(runDoctor(home).stdout, envPath(home), phrase, label);
+      }
+    });
+
+    itLinux('E18: a comment-looking line inside a value that may span lines is part of that VALUE, and systemd UTF-8-checks it — the exemption is off for the whole file, so a decided key is not answered (main and round 1: a false ARMED, and a false OFF)', () => {
+      // false ARMED: ccrc.env carries no key; the exposure file `decides` `on` before a quote that may span lines.
+      const armed = healthy('ccrc-doctor-auth-e18a-');
+      writeFileSync(expPath(armed), 'CCRC_AUTH=on\r\n"\nFOO=\'a\n # \xff\n', 'latin1');
+      expectWholeFileWarn(runDoctor(armed).stdout, expPath(armed), 'non-ASCII byte in a NAME=value line', 'false ARMED');
+      // false OFF: ccrc.env says `on`; the exposure file `decides` off, and systemd skips it whole.
+      const off = healthy('ccrc-doctor-auth-e18b-');
+      writeCcrcEnv(off, `${readEnv(off)}CCRC_AUTH=on\n`);
+      writeFileSync(expPath(off), 'CCRC_AUTH=off\nFOO="a\n\r\n # \xff\n', 'latin1');
+      expectWholeFileWarn(runDoctor(off).stdout, expPath(off), 'non-ASCII byte in a NAME=value line', 'false OFF');
+    });
+
+    // PLATFORM-ONLY: the launchd job's /bin/bash 3.2 stops reading a file at its first NUL byte (`_evalfile` hands it to
+    // the parser as a C string), so the job never sets what follows it. Its Linux pair is E15's NUL row (systemd skips the
+    // file whole); the reader table U4 runs both readers on every platform.
+    itDarwin('E19d: a NUL byte anywhere in the exposure file on macOS — above the key, inside its value, or in a comment above it — is not measured, naming the file and the NUL, never a PASS ARMED (D-3832; f74f5e90: PASS, the gate off)', () => {
+      const shapes: Array<[string, string]> = [
+        ['a NUL at the end of a line above the key', 'X=1\0\nCCRC_AUTH=on\n'],
+        ['a NUL inside the value', 'CCRC_AUTH=o\0n\n'],
+        ['a NUL in a comment above the key', '# c\0\nCCRC_AUTH=on\n'],
+      ];
+      for (const [label, bytes] of shapes) {
+        const home = healthy('ccrc-doctor-auth-e19d-');
+        writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=off\n`);
+        writeFileSync(expPath(home), bytes, 'latin1');
+        const r = runDoctor(home);
+        expectWholeFileWarn(r.stdout, expPath(home), 'NUL byte', label);
+        expect(r.stdout, label).not.toMatch(/^PASS update-exposure: .*CCRC_AUTH=on/m);
+      }
+    });
+
+    itLinux('E17: the control — a valid UTF-8 em dash in a COMMENT of the exposure file reads ARMED as before (the real writer\'s own first line carries one)', () => {
+      const home = healthy('ccrc-doctor-auth-e17-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=off\n`);
+      writeFileSync(expPath(home), '# a comment with an em dash \xe2\x80\x94 in it\nCCRC_AUTH=on\n', 'latin1');
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^PASS auth: CCRC_AUTH=on in .*logins are gated/);
+      expect(r.stdout).not.toMatch(/^WARN auth: /m);
+    });
+
+    // ── the reader itself, as tables ─────────────────────────────────────
+    // [label, file bytes, [stdout, rc] at MAIN (two-argument, `_box_env_value f CCRC_AUTH`), [stdout, rc] in `unit` mode]
+    // The `main` column was CAPTURED from a copy of `ccd/ccrc` at the merge base, in a scratch tree, before the
+    // function was touched: it is what 45 callers must keep reading, byte for byte.
+    const SHAPES: Array<[string, string, [string, number], [string, number]]> = [
+      ['A1 trailing space', 'CCRC_AUTH=on \n', ['on ', 0], ['on', 0]],
+      ['A1 trailing tab', 'CCRC_AUTH=on\t\n', ['on\t', 0], ['on', 0]],
+      ['A1 leading space in value', 'CCRC_AUTH= on\n', [' on', 0], ['on', 0]],
+      ['A1 leading tab and trailing space', '\tCCRC_AUTH=on \n', ['on ', 0], ['on', 0]],
+      ['A1 indented key and tab', ' CCRC_AUTH=\ton\n', ['\ton', 0], ['on', 0]],
+      ['A2 quoted inner space', 'CCRC_AUTH="on "\n', ['on ', 0], ['on ', 0]],
+      ['E1 spaced key', 'CCRC_AUTH = off\n', ['', 1], ['', 2]],
+      ['E2 continuation above', 'FOO=bar \\\nCCRC_AUTH=on\n', ['on', 0], ['', 2]],
+      ['E3 comment continuation above', '# c \\\nCCRC_AUTH=on\n', ['on', 0], ['', 2]],
+      ['E6 export', 'export CCRC_AUTH=on\n', ['', 1], ['', 2]],
+      ['E6b export of another key', 'export CCRC_AUTH_SECRET_PATH=/x/y\nCCRC_AUTH=off\n', ['off', 0], ['off', 0]],
+      ['E7 escaped quote', 'CCRC_AUTH="o\\"n"\n', ['o\\"n', 0], ['', 2]],
+      ['E8 text after a closing quote', 'CCRC_AUTH="on"x\n', ['"on"x', 0], ['', 2]],
+      ['E9 open double quote above', 'CCRC_ORIGIN="https://x\nCCRC_AUTH=on\nCCRC_RP_ID=x\n', ['on', 0], ['', 2]],
+      ['E10 open single quote above', 'FOO=\'a\nCCRC_AUTH=on\n\'\n', ['on', 0], ['', 2]],
+      ['E11 unquoted escape', 'CCRC_AUTH=o\\n\n', ['o\\n', 0], ['', 2]],
+      ['E12 trailing unpaired quote', 'CCRC_AUTH=on"\n', ['on"', 0], ['', 2]],
+      ['E13 readonly line', 'CCRC_AUTH=off\nreadonly CCRC_AUTH\n', ['off', 0], ['off', 0]],
+      ['E14 CR on another line', 'CCRC_AUTH=on\nCCRC_RP_ID=x\r\n', ['on', 0], ['on', 0]],
+      ['CR after value', 'CCRC_AUTH=on\r\n', ['on', 0], ['on', 0]],
+      // D-3831: after ONE trailing CR is stripped a CR still inside the line makes the file undecidable (`unit` mode).
+      ['two CRs after value', 'CCRC_AUTH=v\r\r\n', ['v\r', 0], ['', 2]],
+      ['one CR after value', 'CCRC_AUTH=v\r\n', ['v', 0], ['v', 0]],
+      ['no trailing newline', 'CCRC_AUTH=on', ['on', 0], ['on', 0]],
+      ['bare key', 'CCRC_AUTH=\n', ['', 0], ['', 0]],
+      ['single-quoted', 'CCRC_AUTH=\'on\'\n', ['on', 0], ['on', 0]],
+      ['double-quoted inner space', 'CCRC_AUTH="o n"\n', ['o n', 0], ['o n', 0]],
+      ['longer key', 'CCRC_AUTHX=on\n', ['', 1], ['', 1]],
+      ['last wins', 'CCRC_AUTH=off\nCCRC_AUTH=on\n', ['on', 0], ['on', 0]],
+      ['one-char quote value', 'CCRC_AUTH="\n', ['"', 0], ['', 2]],
+      ['empty quote pair', 'CCRC_AUTH=""\n', ['', 0], ['', 0]],
+      ['absent key', 'FOO=1\n', ['', 1], ['', 1]],
+      // Wave 9 R10a (D-3831): a file systemd would split or skip whole. `main` is again captured from the merge-base
+      // copy (two-argument reads are untouched); the `unit` column is rc 2 for a carriage return inside a line, a NUL
+      // byte anywhere, and a byte >= 0x80 in a non-comment line — and the two controls, whose only non-ASCII is a COMMENT,
+      // read as before. Every row is written byte for byte (latin1), so `\xff` is one invalid-UTF-8 byte.
+      ['W CR mid-line, key after it', 'X=1\rCCRC_AUTH=off\r\n', ['', 1], ['', 2]],
+      ['W CR mid-line in a comment', '# c\rCCRC_AUTH=off\r\n', ['', 1], ['', 2]],
+      ['W NUL in another line', 'CCRC_RP_ID=x\0y\nCCRC_AUTH=on\n', ['on', 0], ['', 2]],
+      ['W invalid UTF-8 in another value', 'CCRC_RP_ID=x\xff\nCCRC_AUTH=on\n', ['on', 0], ['', 2]],
+      ['W invalid UTF-8 in the key line', 'CCRC_AUTH=\xff\n', ['\xff', 0], ['', 2]],
+      ['W valid UTF-8 in a value (a cost, never a false answer)', 'CCRC_RP_ID=\xc3\xa9\nCCRC_AUTH=on\n', ['on', 0], ['', 2]],
+      ['W control: a valid UTF-8 em dash in a comment', '# a \xe2\x80\x94 b\nCCRC_AUTH=on\n', ['on', 0], ['on', 0]],
+      ['W control: a non-ASCII comment after the key', 'CCRC_AUTH=on\n; \xe2\x80\x94\n', ['on', 0], ['on', 0]],
+      // D-3831, fix round 2: the comment exemption is OFF for a whole file in which a non-comment line ends in a
+      // backslash or carries a quote that is not one whole pair — systemd is then not in its key state on a later
+      // "comment", it is inside a VALUE, and UTF-8-checks it. A quote that IS one whole pair changes nothing.
+      ['W comment high byte inside a double-quoted value that spans lines', 'CCRC_AUTH=on\nX="a\n# \xff\n"\n', ['on', 0], ['', 2]],
+      ['W comment high byte inside a single-quoted value that spans lines', 'CCRC_AUTH=on\nX=\'a\n# \xff\n\'\n', ['on', 0], ['', 2]],
+      ['W comment high byte after an unquoted value ending in a backslash', 'CCRC_AUTH=on\nX=a\\\n# \xff\n', ['on', 0], ['', 2]],
+      ['W comment high byte BEFORE a value that may span lines (the whole file, conservatively)', '# \xff\nCCRC_AUTH=on\nX="a\n"\n', ['on', 0], ['', 2]],
+      ['W control: a quote that is one whole pair does not turn the exemption off', 'X="a"\n# \xff\nCCRC_AUTH=on\n', ['on', 0], ['on', 0]],
+    ];
+    /** `_box_env_value <file> CCRC_AUTH [mode]` over every shape: stdout and rc, read back through files. */
+    const readShapes = (mode: string): Array<[string, number]> => {
+      const dir = mkTmp('ccrc-doctor-shapes-');
+      SHAPES.forEach(([, content], i) => writeFileSync(join(dir, `f${i}`), content, 'latin1'));
+      const script = [
+        'set -uo pipefail', `. ${shq(CCRC_SRC)}`,
+        `for ((i=0;i<${SHAPES.length};i++)); do _box_env_value ${shq(dir)}/f$i CCRC_AUTH ${mode} > ${shq(dir)}/o$i; echo $? > ${shq(dir)}/c$i; done`,
+      ].join('\n');
+      const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: { HOME: dir, PATH: join(dir, 'no-bin'), LC_ALL: 'C' } });
+      expect(r.status, r.stderr).toBe(0);
+      return SHAPES.map((_, i): [string, number] =>
+        [readFileSync(join(dir, `o${i}`), 'latin1'), Number(readFileSync(join(dir, `c${i}`), 'utf8').trim())]);
+    };
+
+    it('U1: plain mode (two arguments) reads every shape exactly as main did — stdout and rc, byte for byte, CR handling included', () => {
+      const got = readShapes('');
+      SHAPES.forEach(([label, , plain], i) => expect(got[i], label).toEqual(plain));
+    });
+
+    it('U2: `unit` mode — whitespace around an unquoted value goes, a quoted inner space stays, and every shape the reader cannot decide is rc 2 with nothing on stdout', () => {
+      const got = readShapes('unit');
+      SHAPES.forEach(([label, , , unit], i) => expect(got[i], label).toEqual(unit));
+    });
+
+    /** `[label, ccrc.env, exposure file, key, macOS answer, Linux answer]`. */
+    type Dar = { rc: 3; file: 'env' | 'exp'; line: number; cause: 'cr' | 'shape' } | { rc: 0 | 2; val: string; src: '' | 'env' | 'exp' };
+    type Lin = [number, string, '' | 'env' | 'exp'];
+    const U3: Array<[string, string | null, string | null, string, Dar, Lin]> = [
+      ['a CR after the value', 'CCRC_AUTH=on\r\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'cr' }, [0, 'on', 'env']],
+      ['a second assignment on a later line', 'CCRC_AUTH=on\nFOO=1 CCRC_AUTH=off\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 2, cause: 'shape' }, [0, 'on', 'env']],
+      ['an unset behind an assignment', 'CCRC_AUTH=on\nFOO=a unset CCRC_AUTH\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 2, cause: 'shape' }, [0, 'on', 'env']],
+      ['a semicolon command behind an assignment', 'CCRC_AUTH=on\nFOO=1;unset CCRC_AUTH\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 2, cause: 'shape' }, [0, 'on', 'env']],
+      ['a command substitution on line 3', 'X=1\nCCRC_AUTH=on\nFOO=$(echo) CCRC_AUTH=off\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 3, cause: 'shape' }, [0, 'on', 'env']],
+      ['a space after the equals sign', 'CCRC_AUTH= on\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [0, 'on', 'env']],
+      ['a declare word', 'declare CCRC_AUTH=off\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [0, '', '']],
+      ['a semicolon comment', '; c\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [0, 'on', 'env']],
+      ['a trailing comment on the assignment', 'CCRC_AUTH=on # c\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [0, 'on # c', 'env']],
+      ['a plus-equals assignment', 'CCRC_AUTH+=x\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [0, '', '']],
+      ['an indented assignment', '  CCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [0, 'on', 'env']],
+      ['readonly in ccrc.env, the exposure file arms', 'CCRC_AUTH=off\nreadonly CCRC_AUTH\n', 'CCRC_AUTH=on\n', 'CCRC_AUTH', { rc: 3, file: 'env', line: 2, cause: 'shape' }, [0, 'on', 'exp']],
+      ['a CR in the exposure file only', 'CCRC_AUTH=on\n', 'X=1\r\n', 'CCRC_AUTH', { rc: 3, file: 'exp', line: 1, cause: 'cr' }, [0, 'on', 'env']],
+      ['a planted canary after the key line', 'CCRC_AUTH=on\nFOO=canary-9f2 x\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 2, cause: 'shape' }, [0, 'on', 'env']],
+      ['every key: the readonly files read through CCRC_HOST', 'CCRC_AUTH=off\nreadonly CCRC_AUTH\n', 'CCRC_AUTH=on\n', 'CCRC_HOST', { rc: 3, file: 'env', line: 2, cause: 'shape' }, [0, '', '']],
+      ['control: a trailing space', 'CCRC_AUTH=on \n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
+      ['control: a trailing tab', 'CCRC_AUTH=on\t\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
+      ['control: export', 'export CCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [3, '', '']],
+      ['control: export of another name', 'export FOO=1\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
+      // Fix round 1, F2: `unit` mode's export arm is `export<ws>+KEY<ws>*=` (D-3823's "never a longer key that begins with
+      // KEY") — an export of a LONGER key that ends in KEY, or of a value that spells `KEY=`, names another key.
+      ['export of a longer key ending in the key', 'export OLD_CCRC_HOST=203.0.113.7\nCCRC_HOST=127.0.0.1\n', null, 'CCRC_HOST', { rc: 0, val: '127.0.0.1', src: 'env' }, [0, '127.0.0.1', 'env']],
+      ['export of a value that spells the key', 'export NOTE=CCRC_AUTH=x\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
+      ['export of a longer key ending in the key, a space before =', 'export OLD_CCRC_HOST =203.0.113.7\nCCRC_HOST=127.0.0.1\n', null, 'CCRC_HOST', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [0, '127.0.0.1', 'env']],
+      ['control: export with a space before =', 'export CCRC_AUTH =on\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [3, '', '']],
+      ['control: export of the key, tabs around it', 'export\t\tCCRC_AUTH\t=on\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [3, '', '']],
+      ['control: a comment', '# comment\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
+      ['control: a comment ending in a backslash', '# x \\\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [3, '', '']],
+      ['control: single quotes', 'CCRC_AUTH=\'on\'\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
+      ['control: double quotes with an inner space', 'CCRC_AUTH="o n"\n', null, 'CCRC_AUTH', { rc: 0, val: 'o n', src: 'env' }, [0, 'o n', 'env']],
+      ['control: the exposure file wins by presence', 'CCRC_AUTH=off\n', 'CCRC_AUTH=on\n', 'CCRC_AUTH', { rc: 0, val: 'on', src: 'exp' }, [0, 'on', 'exp']],
+      ['control: a bare key in the exposure file wins', 'CCRC_AUTH=on\n', 'CCRC_AUTH=\n', 'CCRC_AUTH', { rc: 0, val: '', src: 'exp' }, [0, '', 'exp']],
+      ['control: an exposure file there and unreadable', 'CCRC_AUTH=on\n', 'UNREADABLE', 'CCRC_AUTH', { rc: 2, val: 'on', src: 'env' }, [2, 'on', 'env']],
+    ];
+    const u3Rows: UnitEnvRow[] = U3.map(([label, env, exp, key]) => ({ label, env, exp, key }));
+
+    it('U3: the Darwin table through `_box_unit_env` — either file not plain assignments (or any CR) is rc 3 for EVERY key, naming the file and the line NUMBER, never its bytes; plain files answer what bash would', () => {
+      const got = unitEnvAnswers(u3Rows, 'darwin');
+      U3.forEach(([label, , , , dar], i) => {
+        const a = got[i]!;
+        const path = (w: 'env' | 'exp' | ''): string => (w === 'env' ? a.envPath : w === 'exp' ? a.expPath : '');
+        expect(a.rc, label).toBe(dar.rc);
+        if (dar.rc === 3) {
+          expect([a.val, a.src], label).toEqual(['', '']);
+          expect(a.why.startsWith(`${path(dar.file)} line ${dar.line} `), `${label}: ${a.why}`).toBe(true);
+          expect(a.why, label).toContain(dar.cause === 'cr' ? 'carriage return' : 'is not a plain NAME=value line');
+          expect(a.fix, label).toContain(path(dar.file));
+          // The reason names a NUMBER, never a line: ccrc.env holds tokens.
+          expect(a.why + a.fix, label).not.toContain('canary-9f2');
+        } else {
+          expect([a.val, a.src], label).toEqual([dar.val, path(dar.src)]);
+          expect([a.why, a.fix], label).toEqual(['', '']);
+        }
+      });
+    });
+
+    // Fix round 1, F1 (D-3832): /bin/bash 3.2's `. file` stops at the first NUL byte in the FILE, so the launchd job sets
+    // what comes before it and nothing after; `read` drops the NUL, so the plain test passed such a file and decided the
+    // key (review 265: rc 0 `on`, a false ARMED). Every row here is rc 3 on BOTH feeders — on Linux by D-3831's whole-file
+    // rule — and on Darwin the reason names the file and the cause, with no line number.
+    /** `[label, ccrc.env, exposure file, key, the file the reason names]`. */
+    const U4: Array<[string, string, string | null, string, 'env' | 'exp']> = [
+      ['a NUL at the end of a line above the key', 'CCRC_AUTH=off\n', 'X=1\0\nCCRC_AUTH=on\n', 'CCRC_AUTH', 'exp'],
+      ['a NUL inside the value', 'CCRC_AUTH=off\n', 'CCRC_AUTH=o\0n\n', 'CCRC_AUTH', 'exp'],
+      ['a NUL in a comment above the key', 'CCRC_AUTH=off\n', '# c\0\nCCRC_AUTH=on\n', 'CCRC_AUTH', 'exp'],
+      ['a NUL in ccrc.env, no exposure file', 'X=1\0\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', 'env'],
+      ['every key: CCRC_HOST through a NUL exposure file', 'CCRC_HOST=127.0.0.1\n', 'X=1\0\nCCRC_AUTH=on\n', 'CCRC_HOST', 'exp'],
+    ];
+    const u4Rows: UnitEnvRow[] = U4.map(([label, env, exp, key]) => ({ label, env, exp, key }));
+
+    it('U4: a NUL byte anywhere in either file is rc 3 for every key on Darwin, naming the file and "a NUL byte", never a line or the bytes — and rc 3 on Linux too (D-3832; main and f74f5e90: Darwin rc 0 `on`)', () => {
+      for (const os of ['darwin', 'linux'] as const) {
+        const got = unitEnvAnswers(u4Rows, os);
+        U4.forEach(([label, , , , which], i) => {
+          const a = got[i]!;
+          const file = which === 'env' ? a.envPath : a.expPath;
+          expect([a.rc, a.val, a.src], `${os}: ${label}`).toEqual([3, '', '']);
+          expect(a.why.startsWith(`${file} holds a NUL byte`), `${os}: ${label}: ${a.why}`).toBe(true);
+          expect(a.fix, `${os}: ${label}`).toContain(`remove the NUL byte from ${file}`);
+          if (os === 'darwin') expect(a.why, label).toContain('/bin/bash, which stops reading a file at its first NUL byte');
+        });
+      }
+    });
+
+    // Fix round 2 (D-3833, review 266 F1/F2): every row above runs under the harness's LC_ALL=C. Under a UTF-8 locale bash
+    // `read`s CHARACTERS: an incomplete lead byte (0xC3) takes the NUL after it (the NUL is never seen) or the newline
+    // after it (two lines read as one). The Darwin arm now reads bytes whatever the caller's locale; these rows run it
+    // under a UTF-8 one, proved in effect first.
+    // The F2 row is DARWIN ONLY, deliberately: `unit` mode's own line loop (Linux) still reads in the caller's locale,
+    // so under UTF-8 it reads that file as ccrc.env's `on` where systemd hands the unit `off` — measured identical at
+    // b40f4145, f74f5e90 and 670d25fd. Round 2's bar forbids changing a Linux verdict, so it is reported, not fixed here.
+    /** `[label, ccrc.env, exposure file, the answer: rc 3 naming the exposure file's NUL, or the decided value, the feeders]`. */
+    const U4U: Array<[string, string, string, { rc: 3 } | { rc: 0; val: string }, Array<'darwin' | 'linux'>]> = [
+      ['F1: a lead byte right before the NUL', 'CCRC_AUTH=off\n', '# caf\xc3\0\nCCRC_AUTH=on\n', { rc: 3 }, ['darwin', 'linux']],
+      ['the NUL as the last byte, after a lead byte', 'CCRC_AUTH=off\n', 'CCRC_AUTH=on\n#\xc3\0', { rc: 3 }, ['darwin', 'linux']],
+      ['F2: a comment ending in a lone lead byte keeps its newline', 'CCRC_AUTH=on\n', '# caf\xc3\nCCRC_AUTH=off\n', { rc: 0, val: 'off' }, ['darwin']],
+    ];
+
+    it('U4u: under a UTF-8 locale, a lead byte before a NUL still reads rc 3, and a comment ending in a lead byte does not swallow the next line on Darwin (D-3833; 670d25fd under UTF-8: Darwin rc 0 `on`, twice)', () => {
+      const loc = utf8Locale();
+      const rows: UnitEnvRow[] = U4U.map(([label, env, exp]) => ({ label, env, exp, key: 'CCRC_AUTH' }));
+      for (const os of ['darwin', 'linux'] as const) {
+        const got = unitEnvAnswers(rows, os, loc);
+        U4U.forEach(([label, , , want, oses], i) => {
+          if (!oses.includes(os)) return;
+          const a = got[i]!;
+          const tag = `${os} under LC_ALL=${loc}: ${label}`;
+          if (want.rc === 3) {
+            expect([a.rc, a.val, a.src], tag).toEqual([3, '', '']);
+            expect(a.why.startsWith(`${a.expPath} holds a NUL byte`), `${tag}: ${a.why}`).toBe(true);
+          } else {
+            expect([a.rc, a.val, a.src], tag).toEqual([0, want.val, a.expPath]);
+          }
+        });
+      }
+    });
+
+    it('U4n: `_box_env_has_nul` alone, called with NO caller pinning a locale, under a UTF-8 one — it reads bytes itself, so neither arm\'s answer leans on its caller (D-3833)', () => {
+      const loc = utf8Locale();
+      const dir = mkTmp('ccrc-doctor-hasnul-');
+      /** `[label, bytes, rc]`: 0 = a NUL is there, 1 = none. */
+      const files: Array<[string, string, number]> = [
+        ['a lead byte right before the NUL', '# caf\xc3\0\nCCRC_AUTH=on\n', 0],
+        ['the NUL as the last byte, after a lead byte', 'CCRC_AUTH=on\n#\xc3\0', 0],
+        ['a three-byte lead pair before the NUL', '# \xe2\x80\0\n', 0],
+        ['control: high bytes and no NUL', '# caf\xc3\nX=\xe2\x80\x94\n', 1],
+      ];
+      files.forEach(([, bytes], i) => writeFileSync(join(dir, `f${i}`), bytes, 'latin1'));
+      const script = [
+        `x=$'\\xc3\\xa9'; [ "\${#x}" -eq 1 ] || { echo "LC_ALL=${loc} did not take effect" >&2; exit 7; }`,
+        `. ${shq(CCRC_SRC)}`,
+        `for ((i=0;i<${files.length};i++)); do _box_env_has_nul ${shq(dir)}/f$i; echo $?; done`,
+      ].join('\n');
+      const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: { HOME: dir, PATH: join(dir, 'no-bin'), LC_ALL: loc } });
+      expect(r.status, r.stderr).toBe(0);
+      const rcs = r.stdout.trim().split('\n').map(Number);
+      files.forEach(([label, , want], i) => expect(rcs[i], `LC_ALL=${loc}: ${label}`).toBe(want));
+    });
+
+    it('U3l: the same rows with CCD_OS=linux — `unit` mode\'s answers, the platform split stated as data: one set of bytes, two feeders', () => {
+      const got = unitEnvAnswers(u3Rows, 'linux');
+      U3.forEach(([label, , , , , lin], i) => {
+        const a = got[i]!;
+        const path = (w: '' | 'env' | 'exp'): string => (w === 'env' ? a.envPath : w === 'exp' ? a.expPath : '');
+        expect([a.rc, a.val, a.src], label).toEqual([lin[0], lin[1], path(lin[2])]);
+        if (lin[0] === 3) {
+          expect(a.why, label).toContain('in a shape this reader does not decide');
+          expect(a.why.startsWith(a.envPath), label).toBe(true);
+          expect(a.fix, label).toContain(a.envPath);
+        }
+      });
+    });
   });
 });
 
@@ -3593,8 +4828,8 @@ describe('ccrc doctor: wrappers', () => {
     expect(line).toContain('accounts.json');
   });
 
-  it('a correctly installed Codex lane passes the wrappers check and reports its one lane', () => {
-    const home = healthyCodexBox('ccrc-doctor-wrappers-codex-healthy-');
+  itCodex('a correctly installed Codex lane passes the wrappers check and reports its one lane', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-wrappers-codex-healthy-');
     const r = runDoctor(home);
     const line = lineFor(r.stdout, 'wrappers');
     expect(line, r.stdout).toMatch(/^PASS wrappers: /);
@@ -3602,17 +4837,42 @@ describe('ccrc doctor: wrappers', () => {
     expect(r.code).toBe(0);
   });
 
-  it('a Codex launcher execing the upstream account instead of ccgpt fails and names both', () => {
-    const home = healthyCodexBox('ccrc-doctor-wrappers-codex-target-');
+  itCodex('a Codex launcher execing the upstream account instead of ccrc-codex fails and names both', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-wrappers-codex-target-');
     writeWrapper(home, 'codex-a', { cfgDir: '.claude-codex-a', target: 'claude' });
     const r = runDoctor(home);
     expect(r.stdout).toMatch(
-      /FAIL wrappers: codex-a's wrapper execs \$HOME\/\.local\/bin\/claude, not ccgpt/);
+      /FAIL wrappers: codex-a's wrapper execs \$HOME\/\.local\/bin\/claude, not ccrc-codex/);
     expect(r.code).toBe(1);
   });
 
-  it('an absent Codex launcher fails in the absent bucket with the ccrc-wrappers remedy', () => {
-    const home = healthyCodexBox('ccrc-doctor-wrappers-codex-absent-');
+  itCodex('a Codex launcher execing ccgpt — another repository\'s launcher on the fleet box — fails and names ccrc-codex (D-3478)', async () => {
+    // The one wrong target that LOOKS right: Plan 1 shipped `ccgpt` as the
+    // expected value, and on the fleet box that name is another repository's
+    // live launcher, which picks its own first lane when none is named.
+    const home = await healthyCodexBox('ccrc-doctor-wrappers-codex-ccgpt-');
+    writeWrapper(home, 'codex-a', { cfgDir: '.claude-codex-a', target: 'ccgpt' });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(
+      /FAIL wrappers: codex-a's wrapper execs \$HOME\/\.local\/bin\/ccgpt, not ccrc-codex/);
+    expect(r.code).toBe(1);
+  });
+
+  itCodex('the launcher the writer generates for a Codex lane passes — writer and checker name one target', async () => {
+    // The literal cases above pin each side's spelling; this pins that the two
+    // sides AGREE, through the real writer, so renaming one side alone reds here.
+    const { generateWrapperBody } = await import('../../shared/wrapper.mjs');
+    const { markGenerated } = await import('../../shared/mark.mjs');
+    const home = await healthyCodexBox('ccrc-doctor-wrappers-codex-writer-');
+    writeFileSync(join(binDir(home), 'codex-a'), markGenerated(generateWrapperBody(
+      { id: 'codex-a', configDirSuffix: '.claude-codex-a', execKind: 'codex' }, 'claude')), { mode: 0o755 });
+    const r = runDoctor(home);
+    expect(lineFor(r.stdout, 'wrappers'), r.stdout).toMatch(/^PASS wrappers: /);
+    expect(r.code).toBe(0);
+  });
+
+  itCodex('an absent Codex launcher fails in the absent bucket with the ccrc-wrappers remedy', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-wrappers-codex-absent-');
     rmSync(join(binDir(home), 'codex-a'), { force: true });
     const r = runDoctor(home);
     const lines = r.stdout.split('\n');
@@ -4390,6 +5650,51 @@ describe('ccrc doctor: credentials', () => {
     const r = runDoctor(home);
     expect(r.stdout).not.toContain('SENTINEL');
     expect(r.stderr).not.toContain('SENTINEL');
+  });
+
+  it('uses a declared upstream setup-token path rather than the legacy filename', () => {
+    const home = healthy('ccrc-doctor-cred-upstream-declared-');
+    writeRoster(home, [{ id: 'claude', configDirSuffix: '.claude',
+      exec: { kind: 'upstream', secretsFile: '.private/claude-setup.env' }, telemetry: 'anthropic' }]);
+    mkdirSync(join(home, '.private'), { recursive: true });
+    writeFileSync(join(home, '.private', 'claude-setup.env'), 'TOKEN=x\n');
+    rmSync(join(home, '.cc-secrets', 'claude-oauth.env'));
+
+    expect(runDoctor(home).stdout).toMatch(/^PASS credentials: 1 account/m);
+  });
+
+  it('does not accept a stale legacy upstream file when its declaration is absent', () => {
+    const home = healthy('ccrc-doctor-cred-upstream-declared-missing-');
+    writeRoster(home, [{ id: 'claude', configDirSuffix: '.claude',
+      exec: { kind: 'upstream', secretsFile: '.private/claude-setup.env' }, telemetry: 'anthropic' }]);
+
+    const r = runDoctor(home);
+
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/^FAIL credentials: claude has no readable token at \$HOME\/\.private\/claude-setup\.env/m);
+  });
+
+  it('fails an invalid declared setup-token path rather than falling back to legacy OAuth', () => {
+    const home = healthy('ccrc-doctor-cred-invalid-declared-');
+    writeRoster(home, [{ id: 'claude', configDirSuffix: '.claude',
+      exec: { kind: 'upstream', secretsFile: '.cc-secrets/../outside.env' }, telemetry: 'anthropic' }]);
+
+    const r = runDoctor(home);
+
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/^FAIL credentials: claude has an invalid declared setup-token credential path/m);
+  });
+
+  it('checks a declared generated Anthropic setup token but ignores API-key and login lanes', () => {
+    const home = healthy('ccrc-doctor-cred-subjects-');
+    writeRoster(home, [UPSTREAM,
+      { id: 'setup', exec: { kind: 'generated', provider: 'anthropic', secretsFile: '.private/setup.env' }, telemetry: 'anthropic' },
+      { id: 'api', exec: { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/api-openrouter.env' }, telemetry: 'anthropic' },
+      { id: 'login', exec: { kind: 'generated', provider: 'anthropic' }, telemetry: 'anthropic' }]);
+    mkdirSync(join(home, '.private'), { recursive: true });
+    writeFileSync(join(home, '.private', 'setup.env'), 'TOKEN=x\n');
+
+    expect(runDoctor(home).stdout).toMatch(/^PASS credentials: 2 account/m);
   });
 
   it('ignores a telemetry:none account — it has no Anthropic credential to have', () => {
@@ -6750,6 +8055,436 @@ describe('ccrc doctor: exposure measures the server bind', () => {
   });
 });
 
+// ── W4 (design 2026-09-20 §11, §12): provenance, and the update routes' gate ──
+// Every case runs the FULL `ccrc doctor`, never the function alone, and every
+// case asserts the absence of cmd_doctor's own bug lines as well as its
+// verdict: a check whose return code disagrees with the line it printed (a
+// SKIP with a remedy, a WARN returning 1) is reported by the runner as an
+// EXTRA `FAIL <name>: the check …` line, which a test that only regexed for the
+// intended verdict would never see (the memory describe's "no synthetic bug
+// line" pins, above, are the precedent).
+const noRunnerBugLine = (out: string, name: string): void => {
+  expect(out).not.toMatch(new RegExp(`^FAIL ${name}: the check (exited|printed no verdict line)`, 'm'));
+};
+
+describe('ccrc doctor: provenance (design §11 — a fresh install ends green; D-139 stands over WARN)', () => {
+  const record = (home: string, text: string): void => {
+    writeFileSync(join(home, '.ccrc', 'installed'), text);
+  };
+
+  it('PASSes a verified install — a one-line completed-install record', () => {
+    // healthy() plants exactly this: the record `ccrc update` leaves after
+    // verify-provenance.mjs accepted the bundle (D-3117: line 2 absent).
+    const home = healthy('ccrc-doctor-prov-ok-');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS provenance: the completed-install record carries no unsigned mark$/m);
+    noRunnerBugLine(r.stdout, 'provenance');
+    expect(r.code).toBe(0);
+  });
+
+  it('PASSes — never WARNs or FAILs — when line 2 reads unsigned: coordinator ruling 2026-09-23 over operator ruling D-139 ("a fresh install ends green")', () => {
+    const home = healthy('ccrc-doctor-prov-unsigned-');
+    record(home, `${HEALTHY_SHA}\nunsigned\n`);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS provenance: unsigned — this install was not verified by ccrc update \(a checkout install, install\.sh's trust-on-first-use, or --allow-unsigned\); the next ccrc update that installs a release \(a newer one, or --force on this one\) verifies it and clears the mark$/m);
+    // A PASS prints no remedy line — `remedyFor` only matches a WARN/FAIL
+    // verdict line, so "no match" is its own honest signal of "none".
+    expect(remedyFor(r.stdout, 'provenance')).toBe('');
+    expect(r.stdout).not.toMatch(/^(WARN|FAIL) provenance: /m);
+    noRunnerBugLine(r.stdout, 'provenance');
+    // D-139: a fresh install — unsigned by construction — ends green.
+    expect(r.code).toBe(0);
+  });
+
+  it('a last line with no newline is still read — `unsigned` without its LF is the same mark, still a PASS', () => {
+    const home = healthy('ccrc-doctor-prov-nolf-');
+    record(home, `${HEALTHY_SHA}\nunsigned`);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS provenance: unsigned — this install was not verified by ccrc update/m);
+  });
+
+  it('SKIPs a box with no completed-install record — no remedy, counted as a skip', () => {
+    const home = healthy('ccrc-doctor-prov-none-');
+    rmSync(join(home, '.ccrc', 'installed'), { force: true });
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('SKIP provenance: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toBe(`SKIP provenance: no completed-install record (${join(home, '.ccrc', 'installed')}) — nothing to say about how this install was made`);
+    expect(lines[i + 1] ?? '').not.toMatch(/^ {2}remedy: /);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) provenance: /m);
+    noRunnerBugLine(r.stdout, 'provenance');
+    expect(r.stdout).toMatch(new RegExp(`^summary: \\d+ checks \\(${1 + HEALTHY_SKIPS} skipped\\)`, 'm'));
+  });
+
+  it('a record that is not a readable regular file WARNs as unmeasured — never a PASS, never a SKIP', () => {
+    // A DIRECTORY at the path: root-proof, unlike a chmod 000 file, and the
+    // shape D-3025's `-f`-before-`-r` rule exists for.
+    const home = healthy('ccrc-doctor-prov-dir-');
+    rmSync(join(home, '.ccrc', 'installed'), { force: true });
+    mkdirSync(join(home, '.ccrc', 'installed'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(new RegExp(`^WARN provenance: ${join(home, '.ccrc', 'installed').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} cannot be read, so how this install was made was not measured$`, 'm'));
+    noRunnerBugLine(r.stdout, 'provenance');
+    expect(r.code).toBe(0);
+  });
+
+  it('the check has no FAIL arm at all — every branch, reached or not, answers PASS, WARN or SKIP', () => {
+    // The mechanism behind "never FAILs", over the arms no fixture reaches
+    // (the constants guard): a `_dr_fail` added to ANY branch reds here.
+    const src = readFileSync(CHECKS_SRC, 'utf8');
+    const fn = /^_check_provenance\(\) \{[\s\S]*?\n\}/m.exec(src);
+    expect(fn, 'ccd/ccrc-doctor-checks has no _check_provenance').not.toBeNull();
+    expect(fn![0]).not.toMatch(/_dr_fail|return 1\b/);
+  });
+});
+
+describe('ccrc doctor: update-exposure (design §12 — armed and reachable, each read the way the server unit reads it)', () => {
+  /** A box `ccrc expose` never touched: no exposure file, no Caddyfile (and no
+   *  system copy of one), a loopback ccrc.env, no ddns unit. The four
+   *  exposure-quartet checks SKIP here by their own rule; every case below
+   *  adds back exactly the one input it is about. */
+  function unexposed(prefix: string, env = 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n'): string {
+    const home = healthy(prefix);
+    rmSync(join(home, '.ccrc', 'exposure.env'), { force: true });
+    rmSync(join(home, '.ccrc', 'Caddyfile'), { force: true });
+    rmSync(sysCaddyfile(home), { force: true });
+    writeCcrcEnv(home, env);
+    return home;
+  }
+  const line = (out: string): string =>
+    out.split('\n').find((l) => /^(PASS|WARN|FAIL|SKIP) update-exposure: /.test(l)) ?? '';
+
+  // ── the four quadrants of spec §12's Pins ──────────────────────────────
+  it('quadrant 1: armed via exposure.env + reachable → PASS, naming the file the flag was read from', () => {
+    // healthy() IS this box: `ccrc expose duckdns` ran, so exposure.env carries
+    // CCRC_AUTH=on (as `_exp_env_write` really writes it — the parity case
+    // below), and ccrc.env carries no CCRC_AUTH at all.
+    const home = healthy('ccrc-doctor-upx-armed-exposure-');
+    const r = runDoctor(home);
+    expect(line(r.stdout)).toBe(`PASS update-exposure: CCRC_AUTH=on (read from ${join(home, '.ccrc', 'exposure.env')}) — the update routes sit behind the session gate`);
+    noRunnerBugLine(r.stdout, 'update-exposure');
+    // …and exposure WINS over ccrc.env, both ways (the second EnvironmentFile):
+    // ccrc.env saying off is overruled by exposure.env saying on…
+    writeCcrcEnv(home, 'CCRC_FLEET=local\nCCRC_HOST=ccrc-fixture.invalid\nCCRC_PORT=7788\nCCRC_AUTH=off\n');
+    expect(line(runDoctor(home).stdout)).toMatch(/^PASS update-exposure: CCRC_AUTH=on \(read from .*exposure\.env\)/);
+    // …and ccrc.env saying on is overruled by exposure.env saying off.
+    writeCcrcEnv(home, 'CCRC_FLEET=local\nCCRC_HOST=ccrc-fixture.invalid\nCCRC_PORT=7788\nCCRC_AUTH=on\n');
+    writeExposureEnv(home, { omit: ['CCRC_AUTH'] });
+    appendFileSync(join(home, '.ccrc', 'exposure.env'), 'CCRC_AUTH=off\n');
+    const off = runDoctor(home);
+    expect(line(off.stdout)).toMatch(/^FAIL update-exposure: this box is reachable /);
+    noRunnerBugLine(off.stdout, 'update-exposure');
+  });
+
+  // Fix round 1 item 7 / review 155 C13 — the reviewer's own probe,
+  // reproduced verbatim: ccrc.env says CCRC_AUTH=on, exposure.env has a BARE
+  // `CCRC_AUTH=` line (present, empty — never what `ccrc expose` itself
+  // writes, only a hand edit), and the bind is reachable. Before the fix
+  // `_box_env_value` collapsed "the exposure file names the key, empty" into
+  // the same "" as "the exposure file never mentions it", so `[ -n "$v" ]`
+  // left ccrc.env's `on` standing and this PASSED while the server's own
+  // EnvironmentFile stacking runs with the gate OFF.
+  it('a PRESENT but EMPTY CCRC_AUTH= in exposure.env wins over ccrc.env=on, exactly as the second EnvironmentFile does — FAIL, not the false PASS C13 found', () => {
+    const home = unexposed('ccrc-doctor-upx-bare-auth-',
+      'CCRC_FLEET=local\nCCRC_HOST=ccrc-fixture.invalid\nCCRC_PORT=7788\nCCRC_AUTH=on\n');
+    writeExposureEnv(home, { omit: ['CCRC_AUTH'] });
+    appendFileSync(join(home, '.ccrc', 'exposure.env'), 'CCRC_AUTH=\n');
+    const r = runDoctor(home);
+    expect(line(r.stdout), r.stdout).toMatch(/^FAIL update-exposure: this box is reachable \(/);
+    noRunnerBugLine(r.stdout, 'update-exposure');
+    expect(r.code).toBe(1);
+  });
+
+  // Batch E review fix round 1, M1 (item 7 was only half-pinned): the OTHER
+  // half of "absent and empty are two conditions" — exposure.env PRESENT,
+  // but naming NO CCRC_AUTH line AT ALL, must still fall through to
+  // ccrc.env's own value, exactly as an ABSENT exposure.env does. Mutating
+  // `_box_env_value`'s trailing `[ "$found" -eq 1 ]` to `true` folds this
+  // case into "present and empty" (a FAIL) without this pin catching it.
+  it('exposure.env present but naming NO CCRC_AUTH line at all falls through to ccrc.env — PASS, the absent half of C13\'s "two conditions"', () => {
+    const home = unexposed('ccrc-doctor-upx-exp-no-auth-line-',
+      'CCRC_FLEET=local\nCCRC_HOST=ccrc-fixture.invalid\nCCRC_PORT=7788\nCCRC_AUTH=on\n');
+    writeExposureEnv(home, { omit: ['CCRC_AUTH'] });   // present, no CCRC_AUTH line
+    const r = runDoctor(home);
+    // This box's OWN verdict, not the run's overall rc — writeExposureEnv
+    // alone (with no matching Caddyfile ceremony) trips `caddyfile`'s own
+    // check, unrelated to what this pin is about.
+    expect(line(r.stdout), r.stdout).toMatch(/^PASS update-exposure: CCRC_AUTH=on \(read from .*ccrc\.env\)/);
+    noRunnerBugLine(r.stdout, 'update-exposure');
+  });
+
+  it('quadrant 2: ccrc.env armed + loopback → PASS', () => {
+    const home = unexposed('ccrc-doctor-upx-armed-env-',
+      'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_AUTH=on\n');
+    const r = runDoctor(home);
+    expect(line(r.stdout)).toBe(`PASS update-exposure: CCRC_AUTH=on (read from ${join(home, '.ccrc', 'ccrc.env')}) — the update routes sit behind the session gate`);
+    noRunnerBugLine(r.stdout, 'update-exposure');
+  });
+
+  it('quadrant 3: unarmed + CCRC_HOST=0.0.0.0 → FAIL naming the bind and "the update routes"', () => {
+    const home = unexposed('ccrc-doctor-upx-wildcard-',
+      'CCRC_FLEET=local\nCCRC_HOST=0.0.0.0\nCCRC_PORT=7788\n');
+    const r = runDoctor(home);
+    const l = line(r.stdout);
+    expect(l, r.stdout).toMatch(/^FAIL update-exposure: this box is reachable \(/);
+    expect(l).toContain(`CCRC_HOST=0.0.0.0 in ${join(home, '.ccrc', 'ccrc.env')}`);
+    // Fix round 1 item 25 / review 155 Q7: `/api/updates/apply` does not exist
+    // until wave 5 — this box's own ccrc must not send an operator to worry
+    // about a route it cannot even reach.
+    expect(l).toContain('the update routes');
+    expect(l).not.toContain('/api/updates/apply');
+    expect(remedyFor(r.stdout, 'update-exposure')).toMatch(/^ {2}remedy: arm the gate: ccrc expose /);
+    noRunnerBugLine(r.stdout, 'update-exposure');
+    expect(r.code).toBe(1);
+  });
+
+  it('quadrant 4: unarmed + loopback + a Caddyfile present ("expose ran, exposure.env deleted") → FAIL naming the route', () => {
+    // The mutation this quadrant exists for: a check that judged CCRC_HOST
+    // alone would PASS this box — loopback bind, and the public name still
+    // proxied straight to it by caddy.
+    const home = unexposed('ccrc-doctor-upx-caddyfile-');
+    writeFileSync(join(home, '.ccrc', 'Caddyfile'), 'fixture.duckdns.org {\n    reverse_proxy 127.0.0.1:7788\n}\n');
+    const r = runDoctor(home);
+    const l = line(r.stdout);
+    expect(l, r.stdout).toMatch(/^FAIL update-exposure: this box is reachable \(/);
+    expect(l).toContain(`${join(home, '.ccrc', 'Caddyfile')} exists`);
+    expect(l).not.toContain('CCRC_HOST=');
+    expect(l).toContain('the update routes');
+    expect(l).not.toContain('/api/updates/apply');
+    noRunnerBugLine(r.stdout, 'update-exposure');
+    expect(r.code).toBe(1);
+  });
+
+  // ── the other inputs, and the one this box never reads ─────────────────
+  it('the ddns unit counts as an exposure artifact — the .service or the .timer, on its own', () => {
+    // On macOS both iterations plant the SAME file — `unitFileOf` strips
+    // either suffix, as `_exp_ddns_units`' Darwin arm writes one job for the
+    // pair — while the check reaches it through the `.service` name alone
+    // (`_svc_label` strips only `.service`, so `_dr_unit_file` would map the
+    // `.timer` name to a plist nothing writes). There the `.timer` iteration
+    // is the `.service` one again, and the exactly-once pin is what it adds:
+    // a check that looked the one job up under both names would list it twice.
+    for (const unit of ['ccrc-ddns.service', 'ccrc-ddns.timer']) {
+      const home = unexposed(`ccrc-doctor-upx-ddns-${unit.split('.')[1]}-`);
+      writeUnitFile(home, unit);
+      const r = runDoctor(home);
+      const l = line(r.stdout);
+      expect(l, `${unit}\n${r.stdout}`).toMatch(/^FAIL update-exposure: this box is reachable \(/);
+      const needle = `${unitFileOf(unit)} is installed in ${unitDirOf(home)}`;
+      expect(l).toContain(needle);
+      expect(l.split(needle).length - 1, `${unit}: the unit file named more than once\n${l}`).toBe(1);
+      if (process.platform === 'darwin') {
+        expect(unitFileOf(unit)).toBe('app.ccrc.ccrc-ddns.plist');
+        expect(l.split('app.ccrc.ccrc-ddns.plist is installed in ').length - 1).toBe(1);
+      }
+      noRunnerBugLine(r.stdout, 'update-exposure');
+    }
+  });
+
+  it('an exposure.env with no CCRC_AUTH is reachable AND unarmed — the file alone is the evidence', () => {
+    const home = unexposed('ccrc-doctor-upx-exp-unarmed-');
+    writeExposureEnv(home, { omit: ['CCRC_AUTH'] });
+    const r = runDoctor(home);
+    expect(line(r.stdout)).toContain(`${join(home, '.ccrc', 'exposure.env')} exists`);
+    expect(line(r.stdout)).toMatch(/^FAIL update-exposure: /);
+  });
+
+  it('a hostname bind is reachable — judging it loopback would need a resolver', () => {
+    const home = unexposed('ccrc-doctor-upx-hostname-',
+      'CCRC_FLEET=local\nCCRC_HOST=ccrc-fixture.invalid\nCCRC_PORT=7788\n');
+    expect(line(runDoctor(home).stdout)).toContain('CCRC_HOST=ccrc-fixture.invalid in ');
+  });
+
+  it.each([['127.0.0.1'], ['127.0.0.2'], ['localhost'], ['::1'], ['']])(
+    'loopback (%s) with no artifact and the gate off → PASS, loopback only', (host) => {
+      const home = unexposed(`ccrc-doctor-upx-loop-${host.replace(/[^a-z0-9]/gi, '') || 'default'}-`,
+        `CCRC_FLEET=local\n${host ? `CCRC_HOST=${host}\n` : ''}CCRC_PORT=7788\n`);
+      const r = runDoctor(home);
+      expect(line(r.stdout)).toBe(`PASS update-exposure: loopback only — no exposure artifact and CCRC_HOST=${host || '127.0.0.1 (the default)'}`);
+      noRunnerBugLine(r.stdout, 'update-exposure');
+    });
+
+  it("an exported CCRC_AUTH in doctor's own shell decides nothing — the server reads its EnvironmentFiles", () => {
+    const home = unexposed('ccrc-doctor-upx-shellflag-',
+      'CCRC_FLEET=local\nCCRC_HOST=0.0.0.0\nCCRC_PORT=7788\n');
+    const r = runDoctor(home, ['doctor'], { CCRC_AUTH: 'on' });
+    expect(line(r.stdout)).toMatch(/^FAIL update-exposure: /);
+  });
+
+  it('an exposure.env that is there and cannot be read WARNs as unmeasured', () => {
+    const home = unexposed('ccrc-doctor-upx-exp-dir-');
+    mkdirSync(join(home, '.ccrc', 'exposure.env'));
+    const r = runDoctor(home);
+    expect(line(r.stdout)).toMatch(/^WARN update-exposure: .*exposure\.env is there and cannot be read, so whether CCRC_AUTH is on — and so whether the update routes are gated — was not measured$/);
+    expect(line(r.stdout)).not.toContain('/api/updates/apply');
+    noRunnerBugLine(r.stdout, 'update-exposure');
+  });
+
+  it('SKIPs a fleet-role box on either piece of evidence — the recorded role, or the two unit files', () => {
+    const byRole = healthy('ccrc-doctor-upx-fleet-role-');
+    writeCcrcEnv(byRole, 'CCRC_ROLE=fleet\nCCRC_HOST=0.0.0.0\n');
+    let r = runDoctor(byRole);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('SKIP update-exposure: '));
+    expect(lines[i], r.stdout).toBe(`SKIP update-exposure: this box runs no ccrc server (${join(byRole, '.ccrc', 'ccrc.env')} records CCRC_ROLE=fleet), so no update route is served here`);
+    expect(lines[i + 1] ?? '').not.toMatch(/^ {2}remedy: /);
+    noRunnerBugLine(r.stdout, 'update-exposure');
+    const byUnits = healthy('ccrc-doctor-upx-fleet-units-');
+    removeUnitFile(byUnits, 'ccrc.service');
+    writeUnitFile(byUnits, 'ccrc-agent.service');
+    writeFileSync(join(byUnits, 'fixture-unit-ccrc-agent.service'), 'active\n');
+    r = runDoctor(byUnits);
+    expect(line(r.stdout)).toMatch(/^SKIP update-exposure: this box runs no ccrc server \(.* has ccrc-agent\.service and no ccrc\.service\)/);
+    noRunnerBugLine(r.stdout, 'update-exposure');
+  });
+
+  it("the fixture's exposure.env carries CCRC_AUTH=on on every arm, because the real writer does (`_exp_env_write`)", () => {
+    // Before W4 this file's `writeExposureEnv` wrote CCRC_AUTH=on on the ip arm
+    // only, while `_exp_env_write` writes it on every arm — a drift nothing
+    // read until this check. So the writer is RUN (extracted, in a fixture
+    // HOME), and the fixture must agree with what it wrote.
+    const src = readFileSync(CCRC_SRC, 'utf8');
+    const fn = /^_exp_env_write\(\) \{[\s\S]*?\n\}/m.exec(src);
+    const prog = /^PROG=.*$/m.exec(src);
+    const die = /^_ccrc_die\(\) \{.*\}$/m.exec(src);
+    // Review fix round 1, N1: `_ccrc_die` now calls `_upd_redact` — this
+    // harness does not trigger a die on its green path, but a regression
+    // that DID would hit "_upd_redact: command not found" rather than the
+    // real refusal, so it is picked up here too.
+    const redact = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
+    expect(fn && prog && die && redact, 'ccd/ccrc lost _exp_env_write, PROG, _ccrc_die or _upd_redact').toBeTruthy();
+    for (const [arm, opts] of [
+      ['duckdns', {}], ['byo', { duckdns: false }], ['ip', { ip: '203.0.113.9' }],
+    ] as const) {
+      const home = mkTmp(`ccrc-doctor-expwriter-${arm}-`);
+      const real = join(home, '.ccrc', 'exposure.env');
+      const w = spawnSync(BASH, ['-c', [
+        'set -uo pipefail', prog![0], redact![0], die![0],
+        `CCRC_EXPOSURE_FILE=${shq(real)}`, `BOX_AUTH_FILE=${shq(join(home, '.ccrc', 'auth.scrypt'))}`,
+        fn![0],
+        `_exp_env_write ${arm} https://box.example.com ${arm === 'ip' ? "''" : 'box.example.com'} ${arm === 'ip' ? '203.0.113.9' : 'box.example.com'} fixture-token ''`,
+      ].join('\n')], { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+      expect(w.status, `${arm}: ${w.stderr}`).toBe(0);
+      const writerArms = readFileSync(real, 'utf8').split('\n').includes('CCRC_AUTH=on');
+      const fx = mkTmp(`ccrc-doctor-expfixture-${arm}-`);
+      writeExposureEnv(fx, opts);
+      const fixtureArms = readFileSync(join(fx, '.ccrc', 'exposure.env'), 'utf8').split('\n').includes('CCRC_AUTH=on');
+      expect(writerArms, `${arm}: the real writer stopped arming`).toBe(true);
+      expect(fixtureArms, `${arm}: writeExposureEnv drifted from _exp_env_write`).toBe(writerArms);
+    }
+  });
+
+  // Fix round 1 item 4 / review 196 F5: `_check_update-exposure` now calls
+  // `_box_unit_env` (armed/reachable), but its not-loaded guard tested only
+  // `_box_env_value`. The guard now names `_box_unit_env` too. This sources
+  // BOTH files intact and removes only the FUNCTION (never `unset
+  // CCRC_EXPOSURE_FILE`, which the guard tests first and would mask the
+  // mutation), with `BUE_VAL=on` preset AFTER sourcing ccrc as a shell
+  // assignment (an env entry is reset at ccrc's own file scope, `:2939`) — a
+  // guard missing this term reads that stale value as ARMED instead of
+  // failing shut.
+  it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, not a stale ARMED PASS', () => {
+    const nowhere = join(REPO, 'no-such-home-for-check-update-exposure-bue');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(CCRC_SRC)}; . ${shq(CHECKS_SRC)}; unset -f _box_unit_env; BUE_VAL=on; _check_update-exposure`],
+      { encoding: 'utf8', env: { HOME: nowhere, PATH: nowhere, LC_ALL: 'C' } });
+    expect(r.stdout).toMatch(/^FAIL update-exposure: ccrc's own config and exposure constants are not loaded/m);
+    expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
+    expect(r.status).toBe(1);
+  });
+
+  // ── wave 9 R10e (D-3823): an undecidable flag or bind is NOT MEASURED, never a verdict ────
+  // Each case below shares the auth describe's reader (`_box_unit_env`), so the shape that makes `_check_auth` say
+  // "not measured" makes this check say it too — worded for what THIS check decides (whether the update routes are
+  // gated, and whether the box is reachable). The describe's existing cases above run UNEDITED.
+  describe('wave 9 R10e — an undecidable CCRC_AUTH or CCRC_HOST is not measured', () => {
+    const envPath = (home: string): string => join(home, '.ccrc', 'ccrc.env');
+    const expPath = (home: string): string => join(home, '.ccrc', 'exposure.env');
+    const lineOf = (p: string, text: string): number => readFileSync(p, 'utf8').split('\n').indexOf(text) + 1;
+
+    it('X1: a reachable box whose exposure file carries `CCRC_AUTH = on` WARNs, not measured, naming the file, with a non-empty cause (main: FAIL "CCRC_AUTH is not on")', () => {
+      const home = unexposed('ccrc-doctor-upx-x1-',
+        'CCRC_FLEET=local\nCCRC_HOST=ccrc-fixture.invalid\nCCRC_PORT=7788\n');
+      writeExposureEnv(home, { omit: ['CCRC_AUTH'] });
+      appendFileSync(expPath(home), 'CCRC_AUTH = on\n');
+      const r = runDoctor(home);
+      const l = line(r.stdout);
+      expect(l, r.stdout).toMatch(/^WARN update-exposure: /);
+      expectUndecided(l, expPath(home));
+      // The cause is captured at the CCRC_AUTH read; the later CCRC_HOST read resets the out-params (M16).
+      expect(l).not.toMatch(/^WARN update-exposure: ,/);
+      expect(l).toContain('so whether CCRC_AUTH is on — and so whether the update routes are gated — was not measured');
+      noRunnerBugLine(r.stdout, 'update-exposure');
+    });
+
+    itLinux('X2: an exposure file that DECIDES `CCRC_AUTH=on` is gated whatever its bind says — `CCRC_HOST = 0.0.0.0` does not WARN a gated box', () => {
+      const home = unexposed('ccrc-doctor-upx-x2-');
+      writeExposureEnv(home);
+      appendFileSync(expPath(home), 'CCRC_HOST = 0.0.0.0\n');
+      const r = runDoctor(home);
+      expect(line(r.stdout), r.stdout).toBe(`PASS update-exposure: CCRC_AUTH=on (read from ${expPath(home)}) — the update routes sit behind the session gate`);
+      noRunnerBugLine(r.stdout, 'update-exposure');
+    });
+
+    // PLATFORM-ONLY: bash's `. file` fails the whole-file rule on a spaced assignment, where the Linux
+    // reader lets the exposure file decide (X2). The platforms differ by reader. Its Linux twin is X2.
+    itDarwin('X2d: the same files on macOS — the spaced line fails the whole-file rule, so not measured, naming the exposure file and that line\'s number', () => {
+      const home = unexposed('ccrc-doctor-upx-x2d-');
+      writeExposureEnv(home);
+      appendFileSync(expPath(home), 'CCRC_HOST = 0.0.0.0\n');
+      const l = line(runDoctor(home).stdout);
+      expect(l).toMatch(/^WARN update-exposure: /);
+      expectUndecided(l, expPath(home));
+      expect(l).toContain(`${expPath(home)} line ${lineOf(expPath(home), 'CCRC_HOST = 0.0.0.0')} `);
+    });
+
+    itLinux('X3: no exposure artifact, `CCRC_AUTH` absent and `CCRC_HOST = 0.0.0.0` in ccrc.env — whether the box is REACHABLE is not measured (main: the loopback PASS, a false PASS)', () => {
+      const home = unexposed('ccrc-doctor-upx-x3-',
+        'CCRC_FLEET=local\nCCRC_HOST = 0.0.0.0\nCCRC_PORT=7788\n');
+      const r = runDoctor(home);
+      const l = line(r.stdout);
+      expect(l, r.stdout).toMatch(/^WARN update-exposure: /);
+      expect(l).toContain('so whether this box is reachable — and so whether its ungated update routes answer anyone — was not measured');
+      expect(l).toContain(envPath(home));
+      expect(l).toContain('CCRC_HOST');
+      expect(l).not.toContain('cannot be read');
+      noRunnerBugLine(r.stdout, 'update-exposure');
+    });
+
+    // PLATFORM-ONLY: both reads are rc 3 under bash's whole-file rule, so arm 2 speaks about CCRC_AUTH;
+    // the Linux reader (X3) reports on the spaced CCRC_HOST line. The platforms differ by reader. Its Linux twin is X3.
+    itDarwin('X3d: the same box on macOS — both reads are rc 3 (the whole-file rule), so arm 2 speaks: whether CCRC_AUTH is on is not measured, naming ccrc.env line 2', () => {
+      const home = unexposed('ccrc-doctor-upx-x3d-',
+        'CCRC_FLEET=local\nCCRC_HOST = 0.0.0.0\nCCRC_PORT=7788\n');
+      const l = line(runDoctor(home).stdout);
+      expect(l).toMatch(/^WARN update-exposure: /);
+      expectUndecided(l, envPath(home));
+      expect(l).toContain(`${envPath(home)} line 2 `);
+      expect(l).toContain('so whether CCRC_AUTH is on');
+    });
+
+    itLinux('X4: the loopback control for arm 2\'s reach term — a box PROVABLY loopback-only is a PASS whatever an undecidable CCRC_AUTH says (green at main, which reads the spaced line as absent)', () => {
+      const home = unexposed('ccrc-doctor-upx-x4-',
+        'CCRC_FLEET=local\nCCRC_AUTH = on\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n');
+      const r = runDoctor(home);
+      expect(line(r.stdout), r.stdout).toBe('PASS update-exposure: loopback only — no exposure artifact and CCRC_HOST=127.0.0.1');
+      noRunnerBugLine(r.stdout, 'update-exposure');
+    });
+
+    // PLATFORM-ONLY: the whole-file rule makes CCRC_HOST rc 3 under bash's `. file`, so this WARNs; the Linux
+    // reader (X4) reads the spaced line as absent and PASSes. The platforms differ by reader. Its Linux twin is X4.
+    itDarwin('X4d: the same box on macOS — the whole-file rule makes CCRC_HOST rc 3 too, so arm 2 WARNs, naming ccrc.env line 2', () => {
+      const home = unexposed('ccrc-doctor-upx-x4d-',
+        'CCRC_FLEET=local\nCCRC_AUTH = on\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n');
+      const l = line(runDoctor(home).stdout);
+      expect(l).toMatch(/^WARN update-exposure: /);
+      expectUndecided(l, envPath(home));
+      expect(l).toContain(`${envPath(home)} line 2 `);
+    });
+  });
+});
+
 
 // ── scopes ────────────────────────────────────────────────────────────────
 //
@@ -7224,7 +8959,7 @@ function writeModelRegistry(home: string, id: string): void {
 
 /** `~/.ccrc/models/<id>.json` — the CATALOGUE, the only file `fetchedAt`,
  *  `stale` and `lastError` live in. `fetchedAt` defaults to now, in UNIX
- *  SECONDS (`ccd/ccrc-models-probe:397`'s `int(time.time())`) — never the
+ *  SECONDS (`ccd/ccrc-models-probe`'s `_normalise`, `int(time.time())`) — never the
  *  millisecond stamps the server side uses elsewhere. */
 function writeModelCatalogue(home: string, id: string, o: {
   fetchedAt?: number; stale?: boolean; lastError?: string;
@@ -7788,6 +9523,109 @@ describe('ccrc doctor: accounts', () => {
     expect(line).toContain('1 declared credential file');
   });
 
+  // ── a codex lane (Plan 3a Task 3, R-C7) ─────────────────────────────────
+  // `_check_accounts` ALONE, out of the fixture box's own tree: every case
+  // below has a codex row in its roster, and a whole `ccrc doctor` would run
+  // every other check against that row — including the codex check a later
+  // task of this plan adds, which connects to a lane's ports. This check
+  // opens no socket, so its cases run it on its own; 45010/45011/45020 are
+  // the pure-parse port vocabulary of `codexAccountsBox`, below. Never Task
+  // 4's `healthyCodexBox`, which becomes an async lane on FREE ports.
+  // Sourced from the fixture's own `ccd/`, so `CCRC_HERE` is the fixture
+  // tree and `account-op.mjs` is the copy `installCcrc` planted.
+  const accountsOnly = (home: string): Result => {
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(home, 'ccrc', 'ccd', 'ccrc-doctor-checks'))}; _check_accounts`],
+      { env: doctorEnv(home), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const CODEX_DIR = '.claude-codex-a';
+  /** A healthy box plus one codex lane on the pure-parse pair and its
+   *  launcher: the base tree's `healthyCodexBox` shape, kept here so Task 4's
+   *  rewrite of that fixture (async, free ports) cannot move these cases. */
+  const codexAccountsBox = (prefix: string): string => {
+    const home = healthy(prefix);
+    writeRoster(home, [{
+      id: 'codex-a', configDirSuffix: CODEX_DIR,
+      exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir: '.local/share/ccrc/codex/codex-a' },
+      telemetry: 'codex',
+    }]);
+    writeWrapper(home, 'codex-a', { cfgDir: CODEX_DIR, target: 'ccrc-codex' });
+    return home;
+  };
+
+  it('a codex lane whose env block has no ANTHROPIC_BASE_URL passes, and is counted — its launcher exports the endpoint', () => {
+    const home = codexAccountsBox('ccrc-doctor-accounts-codex-absent-');
+    writeSettingsEnv(home, CODEX_DIR, { ANTHROPIC_MODEL: 'gpt-x' });
+    const r = accountsOnly(home);
+    const line = lineFor(r.stdout, 'accounts');
+    expect(line, r.stdout).toMatch(/^PASS accounts: /);
+    expect(line).toContain('1 provider env block');
+    expect(r.code).toBe(0);
+  });
+
+  it('a codex lane whose settings.json has no env block at all passes too', () => {
+    const home = codexAccountsBox('ccrc-doctor-accounts-codex-noblock-');
+    mkdirSync(join(home, CODEX_DIR), { recursive: true });
+    writeFileSync(join(home, CODEX_DIR, 'settings.json'), '{}\n');
+    const r = accountsOnly(home);
+    expect(lineFor(r.stdout, 'accounts'), r.stdout).toMatch(/^PASS accounts: /);
+    expect(r.code).toBe(0);
+  });
+
+  it('a codex lane whose env names its own loopback shim passes', () => {
+    const home = codexAccountsBox('ccrc-doctor-accounts-codex-equal-');
+    writeSettingsEnv(home, CODEX_DIR, { ANTHROPIC_BASE_URL: 'http://127.0.0.1:45010' });
+    const r = accountsOnly(home);
+    const line = lineFor(r.stdout, 'accounts');
+    expect(line, r.stdout).toMatch(/^PASS accounts: /);
+    expect(line).toContain('1 provider env block');
+  });
+
+  it('a codex lane whose env names any other endpoint WARNS settings-env-drift, naming both and the hand remedy', () => {
+    const home = codexAccountsBox('ccrc-doctor-accounts-codex-drift-');
+    writeSettingsEnv(home, CODEX_DIR, { ANTHROPIC_BASE_URL: 'http://127.0.0.1:45020' });
+    const r = accountsOnly(home);
+    expect(r.code).toBe(2);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN accounts: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('settings-env-drift: codex-a');
+    expect(lines[i]).toContain('http://127.0.0.1:45020');
+    expect(lines[i]).toContain('loopback shim http://127.0.0.1:45010');
+    expect(lines[i]).toContain('delete it from the env block by hand');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+  });
+
+  it('a codex row with no usable proxyPort is not this check\'s to judge: no finding, and no endpoint invented', () => {
+    const home = healthy('ccrc-doctor-accounts-codex-noport-');
+    writeRoster(home, [{
+      id: 'codex-a', configDirSuffix: CODEX_DIR,
+      exec: { kind: 'codex', provider: 'openai', litellmPort: 45011, authDir: '.local/share/ccrc/codex/codex-a' },
+      telemetry: 'codex',
+    }]);
+    writeSettingsEnv(home, CODEX_DIR, { ANTHROPIC_BASE_URL: 'http://127.0.0.1:45020' });
+    const r = accountsOnly(home);
+    expect(lineFor(r.stdout, 'accounts'), r.stdout).toMatch(/^PASS accounts: /);
+    expect(r.stdout).not.toContain('undefined');
+  });
+
+  it('an external row in the live Codex lanes\' shape is judged exactly as before: the arm keys on exec.kind, never provider or telemetry', () => {
+    // `ext-a` is a fixture id in the live shape (external, provider openai,
+    // telemetry codex) — plus a hand-edited proxyPort the parser would refuse
+    // on this kind, so an arm keyed on anything but `exec.kind` WOULD build a
+    // loopback URL here and this case would see it.
+    const home = healthy('ccrc-doctor-accounts-codex-external-');
+    writeRoster(home, [{
+      id: 'ext-a', configDirSuffix: '.claude-ext-a',
+      exec: { kind: 'external', provider: 'openai', proxyPort: 45010 }, telemetry: 'codex',
+    }]);
+    writeSettingsEnv(home, '.claude-ext-a', { ANTHROPIC_BASE_URL: 'http://127.0.0.1:45020' });
+    const r = accountsOnly(home);
+    expect(lineFor(r.stdout, 'accounts'), r.stdout).toMatch(/^PASS accounts: /);
+    expect(lineFor(r.stdout, 'accounts')).toContain('0 provider env block');
+  });
+
   it('spells the vocabulary that shared/providers.ts defines, and no other code', () => {
     // The three codes are ONE definition — `ACCOUNT_FINDINGS` in
     // `shared/providers.ts` — and `deploy/account-op.mjs` is a bare-node module
@@ -8175,5 +10013,1677 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     expect(lines[unreachIdx + 1]).toMatch(/^ {2}remedy: .*install-session-hooks\.sh/);
     expect(r.stdout).not.toMatch(/the check exited/);
     expect(r.code).toBe(1);
+  });
+});
+
+// ── Plan 3a Task 4: `_check_codex`, part 1 (spec §12) ─────────────────────
+// Every case runs the FULL `ccrc doctor` and reads the codex lines, and every
+// case asserts no runner-bug line: a check whose return code disagrees with
+// the worst line it printed is reported by `cmd_doctor` as an EXTRA FAIL,
+// which a regex for the intended verdict alone would never see.
+const codexVerdicts = (out: string): string[] =>
+  out.split('\n').filter((l) => /^(PASS|WARN|FAIL|SKIP) codex: /.test(l));
+/** The line after the first line `re` matches — its remedy, by `_dr_line`'s contract. */
+const remedyAfter = (out: string, re: RegExp): string => {
+  const ls = out.split('\n');
+  const i = ls.findIndex((l) => re.test(l));
+  return i === -1 ? '' : (ls[i + 1] ?? '');
+};
+/** Every file under `roots`, by bytes AND mtime, and every directory by mtime:
+ *  a rewrite of identical bytes still moves an mtime, and a tmp created and
+ *  removed still moves its directory's. */
+function treeState(...roots: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (d: string): void => {
+    if (!existsSync(d)) return;
+    out[`${d}/`] = String(lstatSync(d).mtimeMs);
+    for (const n of readdirSync(d)) {
+      const p = join(d, n);
+      const st = lstatSync(p);
+      if (st.isDirectory()) walk(p);
+      else out[p] = `${st.mtimeMs}:${st.isFile() ? readFileSync(p, 'utf8') : 'not-a-file'}`;
+    }
+  };
+  for (const r of roots) walk(r);
+  return out;
+}
+const currentGen = (home: string): string => readlinkSync(join(home, '.ccrc', 'runtime', 'codex', 'current'));
+
+describe('ccrc-doctor-checks cites deploy.sh by anchor, never by line (Plan 3a Task 4, 2b-2 carry-forward 11)', () => {
+  // The seven citations this file carried by line number all pointed at
+  // unrelated code when measured (six in the `deploy.sh:<N>` shape, one as
+  // `deploy.sh` (:N, :M)). A quoted anchor cannot drift with the line it sits
+  // on, and this pins that each one still exists in deploy.sh — so a
+  // deploy.sh edit that removes one reds HERE, naming the citation to re-aim.
+  const checks = readFileSync(CHECKS_SRC, 'utf8');
+  const deploy = readFileSync(join(REPO, 'deploy', 'deploy.sh'), 'utf8');
+  const ANCHORS = [
+    'agent shared deploy ccd "$BOX":ccrc/',
+    'server shared deploy ccd "$BOX":ccrc/',
+    'mkdir -p ~/ccrc-backups/$TS',
+    "AGENT_BUILD_CMD='_unit_atomic() {",
+    '_unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.timer',
+    '_unit_atomic ~/ccrc/deploy/ccrc.service',
+    '_unit_atomic ~/ccrc/deploy/ccrc-agent.service',
+    '_unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer',
+  ];
+
+  it('no line cites deploy.sh by line number', () => {
+    expect(checks.split('\n').filter((l) => /deploy\.sh[`']*(?::|\s*\(:)\d/.test(l))).toEqual([]);
+  });
+
+  it.each(ANCHORS)('the anchor %s is quoted here and still exists in deploy.sh', (a) => {
+    expect(checks, 'ccrc-doctor-checks no longer quotes this anchor').toContain(a);
+    expect(deploy, 'deploy.sh no longer carries this anchor: re-aim the citation in ccrc-doctor-checks').toContain(a);
+  });
+});
+
+describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, authDir, ports and lane state (Plan 3a Task 4, spec §12)', () => {
+  it('is in the table directly after models', () => {
+    const names = tableNames();
+    expect(names).toContain('codex');
+    expect(names.indexOf('codex')).toBe(names.indexOf('models') + 1);
+  });
+
+  it("compares exactly GPT_LANE_BINS — the list ccrc-install.test.ts pins to _inst_bins' gate", () => {
+    const m = /^CODEX_LANE_BINS=\(([^)]*)\)$/m.exec(readFileSync(CHECKS_SRC, 'utf8'));
+    expect(m, 'ccrc-doctor-checks no longer declares CODEX_LANE_BINS on one line').toBeTruthy();
+    expect(m![1]!.split(' ')).toEqual([...GPT_LANE_BINS]);
+  });
+
+  // ── the population ──────────────────────────────────────────────────────
+  it('PASSes a healthy lane and names its ports, its state and the runtime — never the bare word ok', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-pass-');
+    const { proxyPort, litellmPort } = lanePorts(home, 'codex-a');
+    const r = runDoctor(home);
+    // Plan 3a Task 5 widened each lane's words with its tiers (a lane is
+    // lazy: none running is healthy).
+    // Plan 3a Task 6: each lane's words end with its usage rows. On Linux they
+    // are the timer enabled and the row's age, which moves, so this is a
+    // pattern; on macOS they are the two stated not-applicables.
+    const rx = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const usage = IS_DARWIN ? rx('; usage timer not applicable on macOS') : '; ccrc-codex-usage@codex-a\\.timer enabled; usage row \\d+s old';
+    const box = IS_DARWIN ? rx('; usage publishing not applicable on macOS — ccrc places no launchd job for it (decision 17)') : '';
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(new RegExp(
+      `^${rx(`PASS codex: 1 Codex lane(s): codex-a (ports ${proxyPort}/${litellmPort}, signed in, lane.json current, LiteLLM config current; tiers: none running (a lane is lazy)`)}`
+      + `${usage}${rx(`); runtime ${currentGen(home)} litellm=1.101.0; the four GPT-lane executables match the shipped tree`)}${box}$`))]);
+    noRunnerBugLine(r.stdout, 'codex');
+    expect(r.code, r.stdout).toBe(0);
+  });
+
+  it('names EVERY lane in the PASS — two lanes, two entries', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-pass-two-', ['codex-a', 'codex-b']);
+    const line = lineFor(runDoctor(home).stdout, 'codex');
+    expect(line).toMatch(/^PASS codex: 2 Codex lane\(s\): codex-a \(ports \d+\/\d+, .*\), codex-b \(ports \d+\/\d+, .*\); runtime /);
+  });
+
+  it('CCRC_ROLE unset is NOT server: the lane is measured, not skipped', async () => {
+    // healthy()'s ccrc.env records no CCRC_ROLE — the reading `cmd_update` has.
+    const home = await healthyCodexBox('ccrc-doctor-codex-role-unset-');
+    expect(readFileSync(join(home, '.ccrc', 'ccrc.env'), 'utf8')).not.toMatch(/CCRC_ROLE/);
+    expect(lineFor(runDoctor(home).stdout, 'codex')).toMatch(/^PASS codex: 1 Codex lane/);
+  });
+
+  it('SKIPs on a box that records CCRC_ROLE=server — exactly one SKIP line, no verdict, no runner-bug line', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-role-server-');
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\n');
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([
+      'SKIP codex: this box records CCRC_ROLE=server, so it runs no Codex lane — a server box converges nothing per account',
+    ]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('SKIPs a roster with no Codex lane — never a PASS naming no lane', () => {
+    const home = healthy('ccrc-doctor-codex-none-');
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout)).toEqual([expect.stringMatching(
+      /^SKIP codex: no account in \$HOME\/\.ccrc\/accounts\.json is exec\.kind "codex", and no lane state is left under /)]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('SKIPs a box with no roster file at all — absent is an answer; the wrappers check owns it', () => {
+    const home = healthy('ccrc-doctor-codex-noroster-');
+    rmSync(join(home, '.ccrc', 'accounts.json'), { force: true });
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout)).toEqual([expect.stringMatching(
+      /^SKIP codex: no account roster at \$HOME\/\.ccrc\/accounts\.json and no lane state under .* the 'wrappers' check above owns a missing roster$/)]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('FAILs — never SKIPs — a roster that cannot be read, naming ccrc wrappers (ruling R-C6)', () => {
+    const home = healthy('ccrc-doctor-codex-badroster-');
+    writeRawRoster(home, '{"version":1,"accounts":');
+    const r = runDoctor(home);
+    const re = /^FAIL codex: \$HOME\/\.ccrc\/accounts\.json could not be read as a roster, so its Codex lanes are unknown — an unreadable roster is not an empty one$/m;
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(re)]);
+    expect(remedyAfter(r.stdout, re)).toMatch(/^ {2}remedy: run: ccrc wrappers — /);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('FAILs — never SKIPs — a box with no jq, naming jq (ruling R-C6)', () => {
+    const home = healthy('ccrc-doctor-codex-nojq-');
+    unstub(home, 'jq');
+    const r = runDoctor(home);
+    const re = /^FAIL codex: jq is not on PATH, so which roster accounts are Codex lanes cannot be told/m;
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(re)]);
+    expect(remedyAfter(r.stdout, re)).toMatch(/^ {2}remedy: install jq /);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // ── the executables and the runtime ─────────────────────────────────────
+  it('FAILs a GPT-lane executable missing from ~/.local/bin, and one that drifted from the shipped tree', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-bins-');
+    rmSync(join(binDir(home), 'ccrc-codex'));
+    appendFileSync(join(binDir(home), 'ccgpt-usage.py'), '\n# edited on the box\n');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL codex: ccrc-codex missing from \$HOME\/\.local\/bin, or not executable — every Codex lane needs all four$/m);
+    expect(r.stdout).toMatch(/^FAIL codex: ccgpt-usage\.py in \$HOME\/\.local\/bin differ from the shipped tree's copies in /m);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('FAILs a shipped tree that lacks one of them — the compare has no source', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-notree-');
+    rmSync(join(home, 'ccrc', 'ccd', 'ccgpt-runtime'));
+    expect(runDoctor(home).stdout).toMatch(/^FAIL codex: the shipped tree \(.*\/ccrc\/ccd\) has no ccgpt-runtime, /m);
+  });
+
+  const restamp = (home: string, patch: Record<string, string>): void => {
+    const rt = plantFakeRuntime(home);
+    writeFileSync(rt.stamp, `${JSON.stringify({ ...JSON.parse(readFileSync(rt.stamp, 'utf8')), ...patch })}\n`);
+  };
+  it.each([
+    ['absent', (h: string) => rmSync(join(h, '.ccrc', 'runtime'), { recursive: true, force: true }),
+      /no isolated LiteLLM runtime is current on this box \(ccgpt-runtime check: absent\)/],
+    ['requirement-moved', (h: string) => restamp(h, { requirement: 'litellm[proxy]>=0.0.1,<0.0.2' }),
+      /built for another LiteLLM requirement than this ccrc declares \(ccgpt-runtime check: requirement-moved\)/],
+    ['probe-moved', (h: string) => restamp(h, { probeSha256: '0'.repeat(64) }),
+      /passed an older behaviour probe than the one this ccrc ships \(ccgpt-runtime check: probe-moved\)/],
+    ['mutated', (h: string) => { plantFakeRuntime(h, { stamp: false }); },
+      /no longer matches its stamp \(ccgpt-runtime check: mutated\)/],
+  ] as const)('FAILs a runtime that `ccgpt-runtime check` answers %s, in its own sentence, with a rebuild remedy', async (word, plant, said) => {
+    const home = await healthyCodexBox(`ccrc-doctor-codex-rt-${word}-`);
+    plant(home);
+    const r = runDoctor(home);
+    const re = new RegExp(`^FAIL codex: .*${said.source}`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toMatch(/ccgpt-runtime build/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // ── authDir: existence and mode only ────────────────────────────────────
+  it('FAILs an authDir that does not exist, and one that is not a directory', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-auth-absent-');
+    const dir = authDirOf(home, 'codex-a');
+    rmSync(dir, { recursive: true, force: true });
+    const gone = runDoctor(home);
+    const re = /^FAIL codex: codex-a's authDir ~\/\.local\/share\/ccrc\/codex\/codex-a does not exist/m;
+    expect(gone.stdout).toMatch(re);
+    expect(remedyAfter(gone.stdout, re)).toMatch(/ccrc codex login codex-a/);
+    writeFileSync(dir, 'not a directory\n');
+    expect(runDoctor(home).stdout).toMatch(/^FAIL codex: codex-a's authDir ~\/\S+ is not a directory this user can list and search/m);
+  });
+
+  it('FAILs an authDir with no auth.json in the words `ccrc codex start` refuses with', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-auth-nologin-');
+    rmSync(join(authDirOf(home, 'codex-a'), 'auth.json'));
+    const r = runDoctor(home);
+    const re = /^FAIL codex: codex-a has no OAuth login: ~\/\S+ holds no auth\.json \(existence is all ccrc checks; it never reads one\)/m;
+    expect(r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: sign the lane in: ccrc codex login codex-a');
+  });
+
+  // Root reads a 0000 file anyway, so the discriminator proves nothing there — a
+  // visible skip, not a false green.
+  it.skipIf(PY === null || (typeof process.getuid === 'function' && process.getuid() === 0))(
+    'PASSes a 0000-mode auth.json — existence and mode are all it asks; nothing under authDir is opened', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-auth-0000-');
+      chmodSync(join(authDirOf(home, 'codex-a'), 'auth.json'), 0o000);
+      expect(lineFor(runDoctor(home).stdout, 'codex')).toMatch(/^PASS codex: 1 Codex lane\(s\): codex-a \(ports \d+\/\d+, signed in, /);
+    });
+
+  it.skipIf(PY === null || (typeof process.getuid === 'function' && process.getuid() === 0))(
+    'FAILs an authDir this user cannot search', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-auth-000dir-');
+      const dir = authDirOf(home, 'codex-a');
+      chmodSync(dir, 0o000);
+      try {
+        expect(runDoctor(home).stdout).toMatch(/^FAIL codex: codex-a's authDir ~\/\S+ is not a directory this user can list and search/m);
+      } finally {
+        chmodSync(dir, 0o700);
+      }
+    });
+
+  // ── the roster row: ports ───────────────────────────────────────────────
+  it('FAILs a hand-edited row whose port is not a port, in the row reader\'s own words', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-port-bad-');
+    editRosterRow(home, 'codex-a', (row) => { row['exec'].proxyPort = 70000; });
+    const r = runDoctor(home);
+    const re = /^FAIL codex: codex-a's codex row cannot be used \(roster-invalid: .*exec\.proxyPort\/exec\.litellmPort.*\), and until it is fixed no Codex lane's model state can be read/m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toMatch(/ccrc never chooses a lane's ports or paths for you$/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('FAILs two lanes that share a port — belt and braces behind the roster refusal', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-port-collide-', ['codex-a', 'codex-b']);
+    const shared = lanePorts(home, 'codex-a').proxyPort;
+    editRosterRow(home, 'codex-b', (row) => { row['exec'].litellmPort = shared; });
+    const r = runDoctor(home);
+    const re = new RegExp(`^FAIL codex: codex-a and codex-b both use port ${shared}, `, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toMatch(/ccrc never chooses a port$/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // ── lane.json ───────────────────────────────────────────────────────────
+  it('FAILs an absent lane.json, and one the roster row has moved away from', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-lanejson-');
+    const lane = join(home, '.ccrc', 'codex', 'codex-a', 'lane.json');
+    const text = readFileSync(lane, 'utf8');
+    rmSync(lane);
+    expect(runDoctor(home).stdout).toMatch(/^FAIL codex: codex-a has no lane\.json \(/m);
+    writeFileSync(lane, text);
+    // The roster moves the lane's authDir; lane.json still names the old one.
+    editRosterRow(home, 'codex-a', (row) => { row['exec'].authDir = '.local/share/ccrc/codex/codex-a-moved'; });
+    plantLaneAuth(home, 'codex-a');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL codex: codex-a's lane\.json disagrees with its roster row /m);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('FAILs a lane.json gone stale against the REGISTRY (ruling R7) — and measuring it wrote nothing', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-lanejson-registry-');
+    // The operator's haiku moves by hand; nothing re-rendered lane.json.
+    writeLaneModels(home, 'codex-a', { classes: { haiku: 'gpt-x-mini', sonnet: 'gpt-x', opus: null, fable: null } });
+    const roots = [join(home, '.ccrc', 'codex'), join(home, '.ccrc', 'models'), join(home, '.claude-codex-a')];
+    const before = treeState(...roots);
+    const r = runDoctor(home);
+    const re = /^FAIL codex: codex-a's lane\.json is stale against its class registry: /m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toMatch(/re-render it: ccrc models codex-a set-subagent sonnet /);
+    expect(treeState(...roots)).toEqual(before);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // ── the class registry, through models-op ───────────────────────────────
+  it('FAILs a Codex lane with no class registry, and one whose registry is another probe\'s', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-registry-');
+    rmSync(join(home, '.ccrc', 'models', 'codex-a.classes.json'));
+    const none = runDoctor(home);
+    const re = /^FAIL codex: codex-a is a Codex lane with no class registry, /m;
+    expect(none.stdout).toMatch(re);
+    expect(remedyAfter(none.stdout, re)).toBe('  remedy: create it: ccrc models codex-a init codex, then ccrc models refresh codex-a');
+    writeLaneModels(home, 'codex-a', {
+      probe: 'openrouter', classes: { haiku: null, sonnet: null, opus: null, fable: null }, discovery: [],
+    });
+    expect(runDoctor(home).stdout).toMatch(/^FAIL codex: codex-a is a Codex lane whose class registry declares probe "openrouter": /m);
+  });
+
+  // Plan 3a final fix wave, MF-2 (F2, D-2380's class): `_dr_cx_lane` reads the
+  // lane's model state through models-op's `show`, which opened the catalogue
+  // BY NAME. A FIFO there blocked inside that read, and `cmd_doctor` wraps no
+  // deadline, so the whole doctor hung. Models-op now type-tests every lane
+  // file first, so the FIFO is the read's own `catalogue-unreadable` refusal.
+  // Bounded by the process group (`runDoctorBounded`, ruling F8), so a
+  // regression is a readable red and no blocked `node` outlives the run.
+  it.skipIf(DOCTOR_DEADLINE_BIN === null)(
+    'a FIFO at the lane\'s catalogue is a prompt FAIL naming catalogue-unreadable — never a hang', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-catalogue-fifo-');
+      const cat = join(home, '.ccrc', 'models', 'codex-a.json');
+      rmSync(cat);
+      execFileSync('mkfifo', [cat]);
+      const r = runDoctorBounded(home, 60_000);
+      expect(r.stdout, r.stdout).toMatch(/^FAIL codex: codex-a: 'ccrc models' refused to read the lane's model state — catalogue-unreadable: .*not a regular file/m);
+      noRunnerBugLine(r.stdout, 'codex');
+    }, 90_000);   // above runDoctorBounded's own 60 s deadline, so that deadline is what reds
+
+  it('WARNs a lane that routes haiku to nothing, and one whose probe model left the catalogue', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-haiku-', ['codex-a', 'codex-b']);
+    writeLaneModels(home, 'codex-a', { classes: { haiku: null, sonnet: 'gpt-x', opus: null, fable: null } });
+    renderLane(home, 'codex-a');
+    writeLaneModels(home, 'codex-b', { models: ['gpt-x', 'gpt-x-mini'] });
+    renderLane(home, 'codex-b');
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([
+      expect.stringMatching(/^WARN codex: codex-a routes haiku to nothing, so its lane\.json carries no probe model /),
+      expect.stringMatching(/^WARN codex: codex-b's usage probe model, probe-model \(its haiku class\), is absent from the lane's current catalogue/),
+    ]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // ── the rendered LiteLLM config ─────────────────────────────────────────
+  it('FAILs a stale LiteLLM config, an absent one, and a lane never probed — and measuring wrote nothing', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-litellm-');
+    const yaml = join(home, '.ccrc', 'codex', 'codex-a', 'litellm.yaml');
+    appendFileSync(yaml, '# edited on the box\n');
+    const edited = readFileSync(yaml, 'utf8');
+    const stale = runDoctor(home);
+    const re = /^FAIL codex: codex-a's LiteLLM config \(.*litellm\.yaml\) is stale against the lane's catalogue: /m;
+    expect(stale.stdout, stale.stdout).toMatch(re);
+    expect(remedyAfter(stale.stdout, re)).toMatch(/re-render it: ccrc models litellm codex-a /);
+    expect(readFileSync(yaml, 'utf8')).toBe(edited);
+    rmSync(yaml);
+    expect(runDoctor(home).stdout).toMatch(/^FAIL codex: codex-a has no rendered LiteLLM config \(/m);
+    expect(existsSync(yaml)).toBe(false);
+    rmSync(join(home, '.ccrc', 'models', 'codex-a.json'));
+    const never = runDoctor(home);
+    expect(never.stdout).toMatch(/^FAIL codex: codex-a has never been probed, /m);
+    expect(remedyAfter(never.stdout, /^FAIL codex: codex-a has never been probed/m)).toBe('  remedy: probe it: ccrc models refresh codex-a');
+  });
+
+  // ── lane state left behind ──────────────────────────────────────────────
+  it('WARNs lane state left for an id that is no longer a Codex lane — a flip back keeps it — and never deletes it', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-flipback-', ['codex-a', 'codex-b']);
+    const keep = lanePorts(home, 'codex-a');
+    codexRoster(home, [{ id: 'codex-a', ...keep }], [{
+      id: 'codex-b', label: 'codex-b', configDirSuffix: '.claude-codex-b',
+      exec: { kind: 'external' }, homeAble: false, telemetry: 'codex',
+    }], { accountsSh: false });
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(
+      /^WARN codex: lane state is left under \S+\/\.ccrc\/codex\/codex-b, and 'codex-b' is not a Codex lane in /)]);
+    expect(existsSync(join(home, '.ccrc', 'codex', 'codex-b', 'lane.json'))).toBe(true);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('left lane state is a subject even with no Codex lane at all — a WARN, never the empty-population SKIP', () => {
+    const home = healthy('ccrc-doctor-codex-leftonly-');
+    mkdirSync(join(home, '.ccrc', 'codex', 'ext-a'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'codex', 'ext-a', 'lane.json'), '{}\n');
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: lane state is left under \S+\/ext-a, /)]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // ── the worst class ─────────────────────────────────────────────────────
+  it('one lane FAILing and another WARNing: FAIL lines, then WARN lines, each with its own remedy, and the check returns the worst', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-worst-', ['codex-a', 'codex-b']);
+    rmSync(join(authDirOf(home, 'codex-a'), 'auth.json'));
+    writeLaneModels(home, 'codex-b', { classes: { haiku: null, sonnet: 'gpt-x', opus: null, fable: null } });
+    renderLane(home, 'codex-b');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const at = (re: RegExp): number => lines.findIndex((l) => re.test(l));
+    const f = at(/^FAIL codex: codex-a has no OAuth login/);
+    const w = at(/^WARN codex: codex-b routes haiku to nothing/);
+    expect(f, r.stdout).toBeGreaterThan(-1);
+    expect(w).toBeGreaterThan(f);
+    expect(lines[f + 1]).toMatch(/^ {2}remedy: \S/);
+    expect(lines[w + 1]).toMatch(/^ {2}remedy: \S/);
+    noRunnerBugLine(r.stdout, 'codex');
+    expect(r.code).toBe(1);
+  });
+});
+
+// ── Plan 3a Task 5: `_check_codex`, part 2 — the tier rows (spec §12) ─────
+// Listeners are PYTHON children (`spawnListener`), because `runDoctor` blocks
+// this process's event loop: an in-process server can never ANSWER — which is
+// exactly what the bounded-probe case below wants, and nothing else does.
+describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stale code and a down gateway (Plan 3a Task 5, spec §12)', () => {
+  const at = (home: string, tier: 'shim' | 'litellm', answer: ListenerAnswer, lane = 'codex-a', argv: readonly string[] = []): Promise<Listener> => {
+    const { proxyPort, litellmPort } = lanePorts(home, 'codex-a');
+    return spawnListener(home, { answer, lane, port: tier === 'shim' ? proxyPort : litellmPort, argv });
+  };
+  it('a listener on the shim port answering as ANOTHER lane FAILs in _codex_foreign_what\'s words, and is left running', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-other-lane-');
+    const port = lanePorts(home, 'codex-a').proxyPort;
+    await at(home, 'shim', 'json', 'codex-b');
+    const r = runDoctor(home);
+    const re = new RegExp(`^FAIL codex: codex-a: port ${port} \\(codex-a's shim tier\\) is held by a listener that is not this lane's: it answers as another lane — ccrc neither adopts nor stops what it cannot identify$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe(`  remedy: Stop whatever holds port ${port}, or give codex-a other ports in ~/.ccrc/accounts.json.`);
+    noRunnerBugLine(r.stdout, 'codex');
+    // Named, and left running: nothing in doctor signals anything. The PORT is
+    // the pin, never `alive()`: a killed child of this process stays a zombie
+    // that `kill -0` reads as alive, while its port refuses once it dies.
+    expect(await portAccepts(port)).toBe(true);
+  });
+
+  it('a listener answering with NO id — the other repository\'s shim shape, or anything on the LiteLLM port — FAILs as unidentified', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-no-id-');
+    const { proxyPort, litellmPort } = lanePorts(home, 'codex-a');
+    await at(home, 'shim', 'text');
+    await at(home, 'litellm', '404');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(new RegExp(`^FAIL codex: codex-a: port ${proxyPort} \\(codex-a's shim tier\\) is held by a listener that is not this lane's: its identity check failed`, 'm'));
+    expect(r.stdout).toMatch(new RegExp(`^FAIL codex: codex-a: port ${litellmPort} \\(codex-a's litellm tier\\) is held by a listener that is not this lane's: its identity check failed`, 'm'));
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // `listener-other-process` is the one foreign 2 that IS this lane's own
+  // process (`_codex_tier_is_our_handle`): its sentence names the pid it
+  // proved, so it never carries the "cannot identify" tail. LiteLLM's
+  // identity is /proc on Linux, as in the half-up case below.
+  itLinux('this lane\'s own LiteLLM while another process holds its port FAILs in _codex_foreign_what\'s words alone — never "cannot identify"', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-other-proc-');
+    const port = lanePorts(home, 'codex-a').litellmPort;
+    const yaml = join(home, '.ccrc', 'codex', 'codex-a', 'litellm.yaml');
+    // This lane's LiteLLM by its command line, on a kernel-chosen port…
+    const mine = await spawnListener(home, { answer: '404', argv: ['--config', yaml] });
+    writeFileSync(join(home, '.ccrc', 'codex', 'codex-a', 'litellm.pid'), `${mine.pid}\n`);
+    // …while another process holds litellmPort.
+    await at(home, 'litellm', '404');
+    const r = runDoctor(home);
+    const re = new RegExp(`^FAIL codex: codex-a: port ${port} \\(codex-a's litellm tier\\) is held by a process that is not this lane's LiteLLM: pid ${mine.pid} is this lane's by its command line, and another process holds the port's listening socket$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(r.stdout).not.toMatch(/cannot identify/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('one tier running and the other not is FAIL — the shim up, LiteLLM down', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-half-shim-');
+    await at(home, 'shim', 'json');
+    const r = runDoctor(home);
+    const re = /^FAIL codex: codex-a is half up: its shim is running and its LiteLLM tier is not, /m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: start the tier that is down: ccrc codex start codex-a (idempotent: it starts only what is not running)');
+    // No start record was ever written here: an ABSENT record is one of the
+    // causes the stale sentence names, never "it started from other bytes".
+    expect(r.stdout).toMatch(/^WARN codex: codex-a's shim tier is running, and is not proven to run the installed bytes: its start record \(.*\/shim\.started\) is absent, unreadable or unparseable, /m);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // LiteLLM's identity is a PID that ITSELF holds the port (`_codex_pid_listens`):
+  // /proc on Linux. The Darwin arm (lsof) is ccrc-codex.test.ts' to measure.
+  itLinux('one tier running and the other not is FAIL — LiteLLM up (its nohup pidfile proves it), the shim down', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-half-litellm-');
+    const yaml = join(home, '.ccrc', 'codex', 'codex-a', 'litellm.yaml');
+    const l = await at(home, 'litellm', '404', 'codex-a', ['--config', yaml]);
+    writeFileSync(join(home, '.ccrc', 'codex', 'codex-a', 'litellm.pid'), `${l.pid}\n`);
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^FAIL codex: codex-a is half up: its LiteLLM tier is running and its shim is not, /m);
+    expect(lineFor(r.stdout, 'codex')).not.toMatch(/^PASS/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // A 3 (cannot ask) is its own WARN, never read as running or as stopped
+  // (D-3715). The half-up case's LiteLLM, proven by its pidfile and command
+  // line and listening on its port, while `readlink` reads none of
+  // /proc/<pid>/fd: `_codex_pid_listens` cannot tell whether that pid holds
+  // the port. Read as running it would be half up; read as stopped, idle.
+  itLinux('a tier whose identity cannot be measured WARNs "unmeasured" — never half up, never read as running or as stopped', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-unmeasured-');
+    const yaml = join(home, '.ccrc', 'codex', 'codex-a', 'litellm.yaml');
+    const l = await at(home, 'litellm', '404', 'codex-a', ['--config', yaml]);
+    writeFileSync(join(home, '.ccrc', 'codex', 'codex-a', 'litellm.pid'), `${l.pid}\n`);
+    // `readlink` refuses every /proc/<pid>/fd/<n> and is the real one otherwise.
+    // The link is REMOVED first: writing through it would rewrite the real binary.
+    rmSync(join(stubBin(home), 'readlink'), { force: true });
+    stub(home, 'readlink', `case "$1" in /proc/*/fd/*) exit 1 ;; esac\nexec ${shq(realPath('readlink'))} "$@"`);
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).not.toMatch(/^FAIL codex: codex-a is half up/m);
+    const re = new RegExp(`^WARN codex: codex-a's litellm tier could not be measured \\(readlink read none of /proc/${l.pid}/fd's entries\\) — unmeasured, never read as running or as stopped$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: run: ccrc codex status codex-a — it asks the same question and says what it could see');
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  itLinux('a live unit of the shim\'s name whose MainPID is 0 — a restart window — WARNs with the retry wording, never as foreign, and doctor starts nothing', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-unproven-');
+    plantSystemd(home, { userManager: true });
+    const unit = laneUnits(home, 'codex-a').shim;
+    fakeUnit(home, unit, { state: 'active', pid: 0 });
+    const r = runDoctor(home);
+    const re = new RegExp(`^WARN codex: codex-a: the unit ${unit.replace(/[.@]/g, '\\$&')} is active, but its identity as codex-a's shim tier is unproven: `, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toMatch(/^ {2}remedy: Re-run in a few seconds: this lane's own tier reads this way between two of its restarts/);
+    expect(codexVerdicts(r.stdout).filter((l) => l.startsWith('FAIL codex: '))).toEqual([]);
+    expect(systemdRunCalls(home)).toEqual([]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('a running shim whose start record is not current WARNs "not proven to run the installed bytes", naming the record; the current record does not', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-stale-');
+    await at(home, 'shim', 'json');
+    const rec = join(home, '.ccrc', 'codex', 'codex-a', 'shim.started');
+    const now = startedJson(home, 'shim');
+    writeFileSync(rec, `${now}\n`);
+    expect(runDoctor(home).stdout).not.toMatch(/^WARN codex: codex-a's shim tier is running, and is not proven to run the installed bytes/m);
+    writeFileSync(rec, `${JSON.stringify({ ...JSON.parse(now) as Record<string, string>, code: '0'.repeat(64) })}\n`);
+    const r = runDoctor(home);
+    const recRe = rec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`^WARN codex: codex-a's shim tier is running, and is not proven to run the installed bytes: its start record \\(${recRe}\\) is absent, unreadable or unparseable, or it names another runtime generation, or another placed shim, than a start would use now$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toMatch(/'ccrc update' restarts a running, proven, stale ccrc tier/);
+    noRunnerBugLine(r.stdout, 'codex');
+  }, 90_000);   // two doctor runs: a bounded but load-slow box is not a red
+
+  it('a running shim whose bytes cannot be told right now WARNs "unmeasured, not current" — never current, never stale', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-stale-unknown-');
+    await at(home, 'shim', 'json');
+    rmSync(join(home, '.ccrc', 'runtime'), { recursive: true, force: true });
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^WARN codex: codex-a's shim tier is running, and whether it runs the installed bytes cannot be told .* — unmeasured, not current$/m);
+    expect(r.stdout).not.toMatch(/^WARN codex: codex-a's shim tier is running, and is not proven to run the installed bytes/m);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('a LiteLLM tier down under a LIVE session on the lane WARNs; a session on another lane, or a stopped one, does not', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-live-');
+    const reg = join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    writeFileSync(join(reg, 'proj-a.wrapper'), 'claude\n');
+    writeFileSync(join(home, 'fixture-unit-claude-session@proj-a.service'), 'active\n');
+    writeFileSync(join(reg, 'proj-b.wrapper'), 'codex-a\n');
+    expect(runDoctor(home).stdout).not.toMatch(/live session/);
+    writeFileSync(join(home, 'fixture-unit-claude-session@proj-b.service'), 'active\n');
+    const r = runDoctor(home);
+    const re = /^WARN codex: codex-a's LiteLLM tier is not running while 1 live session\(s\) run on this lane, /m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: start it: ccrc codex start codex-a (every session launch runs the same start)');
+    noRunnerBugLine(r.stdout, 'codex');
+  }, 90_000);   // two doctor runs: a bounded but load-slow box is not a red
+
+  // The THIRD answer, kept apart (`_check_routing`'s census): a manager that
+  // prints no word for a lane session's unit was NOT ASKED, which is never
+  // read as stopped (idle) nor as live. The doctor's systemctl stub echoes
+  // the fixture file's first line, so a lone newline is exactly that answer.
+  itLinux('a LiteLLM tier down while the manager gives no word for a lane session WARNs "unmeasured, not idle" — never idle, never live', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-unasked-');
+    const reg = join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    writeFileSync(join(reg, 'proj-b.wrapper'), 'codex-a\n');
+    writeFileSync(join(home, 'fixture-unit-claude-session@proj-b.service'), '\n');
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).not.toMatch(/live session\(s\) run on this lane/);
+    const re = /^WARN codex: codex-a's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked \(1 unanswered\) — unmeasured, not idle$/m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: ask by hand (systemctl --user status claude-session@proj-b.service); if one is live, start the lane: ccrc codex start codex-a');
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('a listener that accepts and never answers costs the check its probe bound — never a hang', async () => {
+    // IN-PROCESS, on purpose (the header above): while doctor runs, this
+    // process's event loop is blocked, so the kernel completes the connect
+    // and nothing ever reads or answers it — a wedged listener, exactly.
+    const home = await healthyCodexBox('ccrc-doctor-codex-hung-');
+    const port = lanePorts(home, 'codex-a').proxyPort;
+    const socks = new Set<Socket>();
+    const srv = createServer((s) => { socks.add(s); });
+    await new Promise<void>((res, rej) => { srv.once('error', rej); srv.listen(port, '127.0.0.1', () => res()); });
+    try {
+      const r = runDoctorBounded(home, 60_000, { CCRC_CODEX_PROBE_S: '1' });
+      expect(r.stdout, r.stdout).toMatch(new RegExp(`^FAIL codex: codex-a: port ${port} \\(codex-a's shim tier\\) is held by a listener that is not this lane's: its identity check failed`, 'm'));
+      noRunnerBugLine(r.stdout, 'codex');
+    } finally {
+      for (const s of socks) s.destroy();
+      await new Promise<void>((res) => { srv.close(() => res()); });
+    }
+  }, 90_000);   // above runDoctorBounded's own 60 s deadline, so that deadline is what reds
+});
+
+// ── Plan 3a Task 6: `_check_codex`'s usage rows, measured in isolation ────
+/** ccd/ccrc and this check file SOURCED into one shell. ccrc's dispatch is
+ *  guarded by `BASH_SOURCE[0] == $0`, so sourcing runs nothing. The shell
+ *  runs under this file's contained PATH, in a fixture HOME. `darwin` sets
+ *  OSTYPE, from which ccrc recomputes CCD_OS at source time. A recording
+ *  `systemctl` stub is planted, so a row that asked the manager anything is
+ *  caught: these rows read the manager's own links and must never ask it. */
+function usageRows(home: string, darwin = false, script?: string): Result & { asked: string[] } {
+  stub(home, 'systemctl', 'printf \'%s\\n\' "$*" >> "$HOME/usage-rows-systemctl"; exit 97');
+  // The rows RECORD through `_check_codex`'s `_dr_cx_warn` (Task 4). A bare
+  // shell gives them the three arrays, and `_dr_cx_report` prints what they recorded.
+  const body = script ?? [
+    'DRX_CLASS=(); DRX_WHAT=(); DRX_FIX=()',
+    '_dr_codex_usage_box; b=$?',
+    '_dr_codex_usage codex-a; l=$?',
+    'printf "rc=%s,%s\\npair=%s\\nbox-note=%s\\nnote=%s\\n" "$b" "$l" "${DR_CODEX_USAGE_PAIR:-}" "$DR_CODEX_USAGE_BOX_NOTE" "$DR_CODEX_USAGE_NOTE"',
+    '_dr_cx_report "usage rows measured"; :',
+  ].join('\n');
+  // BOUNDED BY THE PROCESS GROUP (Plan 3a ruling F8), as `runDoctorBounded`
+  // above is: `spawnSync`'s own `timeout` signals only `bash`, and a `jq`
+  // blocked on a FIFO inside a `$(…)` (Step 8's W6 mutation) would outlive the
+  // run. GNU `timeout -k` signals the whole group, so no reader survives the
+  // census. With no usable deadline binary only the FIFO case can block, and
+  // that case is skipped.
+  const src = `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\n${body}`;
+  const env = { ...doctorEnv(home), ...(darwin ? { OSTYPE: 'darwin23' } : {}) };
+  const r = DOCTOR_DEADLINE_BIN === null
+    ? spawnSync(BASH, ['-c', src], { env, encoding: 'utf8', timeout: 20_000 })
+    : spawnSync(DOCTOR_DEADLINE_BIN, ['-k', '1', '20', BASH, '-c', src], { env, encoding: 'utf8' });
+  const f = join(home, 'usage-rows-systemctl');
+  return {
+    code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '',
+    asked: existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(Boolean) : [],
+  };
+}
+
+/** A fixture HOME in the shape these rows read:
+ *  - the codex lane rostered, with pure-parse ports (nothing here opens a socket);
+ *  - the usage pair as `ccrc install` leaves it.
+ *  Each case breaks exactly one thing. */
+function usageBox(prefix: string, o: Parameters<typeof plantCodexUsage>[2] = {}): string {
+  const home = mkTmp(prefix);
+  containedPath(home);
+  stubNode(home, 'v22.20.0');
+  for (const b of ['jq', 'date', 'stat']) linkReal(home, b);
+  codexRoster(home, [{ id: 'codex-a', proxyPort: 45010, litellmPort: 45011 }]);
+  plantCodexUsage(home, 'codex-a', o);
+  return home;
+}
+
+// LINUX ONLY: on a macOS host bash's own OSTYPE is darwin*, so ccrc computes
+// CCD_OS=darwin at source time and every row below would answer
+// not-applicable. The forced-Darwin, unloaded and threshold cases need no
+// host, and sit in the describe after this one.
+describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Plan 3a Task 6)', () => {
+  const T = 'ccrc-codex-usage@codex-a.timer';
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const warns = (out: string): string[] => out.split('\n').filter((l) => l.startsWith('WARN codex: '));
+
+  it('placed, enabled and fresh: no WARN, a note naming what was measured, and the manager never asked', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-healthy-'));
+    expect(r.code, r.stderr).toBe(0);
+    expect(warns(r.stdout), r.stdout).toEqual([]);
+    expect(r.stdout).toMatch(/^rc=0,0$/m);
+    expect(r.stdout).toMatch(new RegExp(`^note=${esc(T)} enabled; usage row \\d+s old$`, 'm'));
+    expect(r.asked, 'a usage row asked the user manager').toEqual([]);
+  });
+
+  it('the pair not installed: ONE box-level WARN naming ccrc install, and no per-lane "not enabled" echo of it', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-nopair-', { pair: false, enabled: false }));
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: ccrc's usage unit pair is not installed \(ccrc-codex-usage@\.service ccrc-codex-usage@\.timer absent from .*\), so no codex lane on this box publishes its ~\/\.cc-limits row$/)]);
+    expect(r.stdout).toMatch(/^ {2}remedy: ccrc install — it places the pair and enables one usage timer per codex lane$/m);
+    expect(r.stdout).toMatch(/^rc=2,0$/m);
+    expect(r.stdout).toMatch(/^pair=missing$/m);
+  });
+
+  it('the lane\'s timer not enabled: WARN, remedy ccrc install (D-3721)', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-disabled-', { enabled: false }));
+    expect(warns(r.stdout)).toEqual([`WARN codex: codex-a: ${T} is not enabled, so this lane's ~/.cc-limits usage row is never refreshed`]);
+    expect(r.stdout).toMatch(/^ {2}remedy: ccrc install — its converge enables one usage timer per codex lane$/m);
+    expect(r.stdout).toMatch(/^rc=0,2$/m);
+  });
+
+  it('ANOTHER repository\'s timer enabled for the same lane: one WARN naming it, remedy the operator\'s own disable, and a stale row is not judged — ccrc is not its writer (R6)', () => {
+    const home = usageBox('ccrc-doctor-usage-second-writer-', { ageS: 99_999 });
+    plantForeignUsage(home, 'codex-a');
+    const r = usageRows(home);
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: another repository's ccgpt-usage@codex-a\.timer is enabled, so two publishers would race this lane's ~\/\.cc-limits row and two token refreshes its OAuth directory — ccrc withholds its own ccrc-codex-usage@codex-a\.timer while it stands$/)]);
+    expect(r.stdout).toMatch(/^ {2}remedy: once this lane's cutover no longer needs it, disable it yourself: systemctl --user disable --now ccgpt-usage@codex-a\.timer, then run: ccrc install — ccrc never disables another tool's unit$/m);
+    expect(r.asked).toEqual([]);
+  });
+
+  it('another repository\'s FLAT timer: a box-level WARN that it cannot be attributed, never a lane\'s', () => {
+    const home = usageBox('ccrc-doctor-usage-flat-');
+    plantForeignUsage(home, null);
+    const r = usageRows(home);
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: another repository's ccgpt-usage\.timer is enabled on this box; it names no lane, so ccrc cannot tell whether it is a second publisher of a codex lane's ~\/\.cc-limits row$/)]);
+    expect(r.stdout).toMatch(/^rc=2,0$/m);
+  });
+
+  it('a row older than three polls: WARN naming its age and the publisher\'s log', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-stale-', { ageS: 2701 }));
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: its usage row was last written 45 min ago — more than three of ccrc-codex-usage@codex-a\.timer's polls$/)]);
+    expect(r.stdout).toMatch(/^ {2}remedy: read what the publisher says: journalctl --user -u ccrc-codex-usage@codex-a\.service -n 50$/m);
+  });
+
+  it('no row yet, the timer enabled moments ago: no WARN, and the note says why', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-norow-fresh-', { row: false }));
+    expect(warns(r.stdout)).toEqual([]);
+    expect(r.stdout).toMatch(/^note=.*no usage row yet \(enabled \d+s ago; the first poll runs five minutes after enable\)/m);
+  });
+
+  it('no row, and the timer enabled longer than three polls ago: WARN — this lane has never published', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-norow-old-', { row: false, linkAgeS: 2701 }));
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: ccrc-codex-usage@codex-a\.timer has been enabled for longer than 45 min and this lane has never published a usage row \(.*\/\.cc-limits\/codex-a\.json\)$/)]);
+  });
+
+  // Under W6's mutation the row's `jq` blocks on this FIFO, and `usageRows`'
+  // process-group bound ends it, exit 124, with no reader left behind (F8).
+  it.skipIf(DOCTOR_DEADLINE_BIN === null)('a FIFO at the row\'s path is a WARN, never a hang', () => {
+    const home = usageBox('ccrc-doctor-usage-fifo-', { row: false });
+    mkdirSync(join(home, '.cc-limits'), { recursive: true });
+    expect(spawnSync('mkfifo', [join(home, '.cc-limits', 'codex-a.json')]).status).toBe(0);
+    const r = usageRows(home);
+    expect(r.code, 'the rows blocked on a FIFO (exit 124: ended at the 20 s process-group bound)').toBe(0);
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: .*\/\.cc-limits\/codex-a\.json is not a regular file, so this lane's usage row cannot be read$/)]);
+  }, 40_000);
+
+  it('a `date` that cannot answer +%s: WARN, the row\'s age unmeasured — never read as fresh (fix round 1)', () => {
+    const home = usageBox('ccrc-doctor-usage-nodate-');
+    // `usageBox` linked the REAL date into stub-bin: remove that link first,
+    // so the stub below is a new file and never a write through the link.
+    unstub(home, 'date');
+    stub(home, 'date', 'exit 1');
+    const r = usageRows(home);
+    expect(warns(r.stdout), r.stdout).toEqual(["WARN codex: codex-a: this box's `date` cannot answer +%s, so the age of this lane's usage row cannot be measured"]);
+    expect(r.stdout).toMatch(/^ {2}remedy: install a working GNU\/BSD date — every age-based check in this file needs it$/m);
+    expect(r.stdout).toMatch(/^rc=0,2$/m);
+  });
+
+  it('a row with no numeric ts: WARN, its age unmeasured', () => {
+    const home = usageBox('ccrc-doctor-usage-nots-', { row: false });
+    mkdirSync(join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(join(home, '.cc-limits', 'codex-a.json'), '{"five":null,"seven":12}');
+    const r = usageRows(home);
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: .*codex-a\.json carries no numeric ts, so its age cannot be measured$/)]);
+  });
+
+  itCodex('wired into _check_codex on a doctor-clean codex box: a second writer turns its PASS into a WARN on the check\'s own name', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-usage-e2e-');   // Task 4's fixture, extended by Step 3b
+    expect(lineFor(runDoctor(home).stdout, 'codex'), 'the doctor-clean codex box no longer PASSes codex')
+      .toMatch(/^PASS codex: .*ccrc-codex-usage@codex-a\.timer enabled/);
+    plantForeignUsage(home, 'codex-a');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN codex: codex-a: another repository's ccgpt-usage@codex-a\.timer is enabled/m);
+    expect(r.stdout).not.toMatch(/^PASS codex: /m);
+  });
+});
+
+// The rows that need no host: forced Darwin (OSTYPE is set, so ccrc computes
+// CCD_OS=darwin on any host), the unloaded reader, and the threshold pin.
+describe('ccrc doctor: codex — the usage rows, on any host (Plan 3a Task 6)', () => {
+  const warns = (out: string): string[] => out.split('\n').filter((l) => l.startsWith('WARN codex: '));
+
+  it('forced Darwin: every row not applicable — no WARN with nothing planted, and the notes say why (R2)', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-darwin-', { pair: false, enabled: false, row: false }), true);
+    expect(warns(r.stdout), r.stdout).toEqual([]);
+    expect(r.stdout).toMatch(/^rc=0,0$/m);
+    expect(r.stdout).toMatch(/^box-note=usage publishing not applicable on macOS — ccrc places no launchd job for it \(decision 17\)$/m);
+    expect(r.stdout).toMatch(/^note=usage timer not applicable on macOS$/m);
+  });
+
+  it('sourced without ccrc, the rows FAIL naming the bug, rather than reading a function that does not exist', () => {
+    const home = usageBox('ccrc-doctor-usage-unloaded-');
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail\n. ${shq(CHECKS_SRC)}\n_dr_codex_usage_box; echo "rc=$?"`],
+      { env: doctorEnv(home), encoding: 'utf8' });
+    expect(r.stdout).toMatch(/^FAIL codex: ccrc's own usage-timer reader is not loaded/m);
+    expect(r.stdout).toMatch(/^rc=1$/m);
+  });
+
+  // Fix round 1: every usage reader `_check_codex` calls is in its loaded
+  // guard, which runs BEFORE `_dr_cx_bins` and `_dr_cx_runtime` record
+  // anything. Before, a missing reader reached `_dr_codex_usage_box`'s own
+  // guard after those had recorded, and its `return 1` threw their findings
+  // away. This box has no lane executables and no runtime, so a check that got
+  // past the guard would record FAILs: one FAIL line, the guard's, is the
+  // proof that nothing recorded was lost.
+  it.each(['_codex_usage_enabled', '_codex_usage_timer', '_codex_usage_foreign', '_codex_usage_wants',
+    '_codex_usage_flat_foreign', '_plat_mtime'])('%s not loaded: _check_codex FAILs in its loaded guard, before any finding is recorded (fix round 1)', (fn) => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-guard-'), false, `unset -f ${fn}\n_check_codex; echo "rc=$?"`);
+    expect(r.stdout.split('\n').filter((l) => /^(PASS|WARN|FAIL|SKIP) codex: /.test(l)), r.stdout).toEqual([
+      `FAIL codex: ccrc's own Codex lane library is not loaded (${fn}, BOX_TREE_DIR or CODEX_TIERS is missing), so no lane on this box was measured`]);
+    expect(r.stdout).toMatch(/^rc=1$/m);
+  });
+
+  it('the staleness threshold covers three of the shipped timer\'s cycles', () => {
+    const r = spawnSync(BASH, ['-c', `. ${shq(CHECKS_SRC)}; printf '%s' "$_DR_CODEX_USAGE_STALE_S"`], { encoding: 'utf8' });
+    const m = /^OnUnitActiveSec=(\d+)min$/m.exec(readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-codex-usage@.timer'), 'utf8'));
+    expect(m, 'the usage timer\'s cadence is not spelled in minutes — this pin has gone stale').not.toBeNull();
+    expect(Number(r.stdout), 'a row one missed poll old would read as stale').toBeGreaterThanOrEqual(3 * Number(m![1]) * 60);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// Plan 3a Task 8 — `doctor --fix` for a codex lane, and for its launcher.
+// ════════════════════════════════════════════════════════════════════════
+
+/** Every `_fix_<name>` the shipped check table defines, by name. */
+function fixerNames(): string[] {
+  const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(CHECKS_SRC)}\ndeclare -F | sed -n "s/^declare -f _fix_//p"`],
+    { encoding: 'utf8', env: { ...process.env, PATH: process.env['PATH'] ?? '' } });
+  if (r.status !== 0) throw new Error(`could not list the fixers: ${r.stderr}`);
+  return (r.stdout ?? '').split('\n').filter(Boolean);
+}
+
+describe('ccrc doctor --fix: the contract every fixer runs under (Plan 3a Task 8)', () => {
+  it('a fixer runs on a FAIL only: a WARN keeps its verdict and its fixer never runs (R-C8)', () => {
+    const home = healthy('ccrc-doctor-fix-fail-only-');
+    writeChecks(home, [
+      'CCRC_DOCTOR_CHECKS=(warned failed)',
+      '_check_warned() { printf "WARN warned: a poller is missing\\n  remedy: run ccrc install\\n"; return 2; }',
+      '_fix_warned()   { : > "$HOME/fixer-ran-warned"; echo "FIX warned: enabled it"; }',
+      '_check_failed() {',
+      '  if [ -e "$HOME/fixer-ran-failed" ]; then printf "PASS failed: cured\\n"; return 0; fi',
+      '  printf "FAIL failed: broken\\n  remedy: run ccrc doctor --fix\\n"; return 1',
+      '}',
+      '_fix_failed()   { : > "$HOME/fixer-ran-failed"; echo "FIX failed: cured it"; }',
+      '',
+    ].join('\n'));
+    const r = runDoctor(home, ['doctor', '--fix']);
+    expect(existsSync(join(home, 'fixer-ran-warned')), 'a WARN reached its fixer').toBe(false);
+    expect(r.stdout).not.toMatch(/^FIX warned:/m);
+    expect(r.stdout).toMatch(/^WARN warned: a poller is missing$/m);
+    // The FAIL is printed as measured, the fixer says what it did, and the
+    // SECOND measurement is the one the summary counts.
+    expect(r.stdout).toMatch(/^FAIL failed: broken\n {2}remedy: run ccrc doctor --fix\nFIX failed: cured it\nPASS failed: cured$/m);
+    expect(r.stdout).toMatch(/^summary: 2 checks \(0 skipped\), 2 verdicts — 1 passed, 1 warned, 0 failed$/m);
+    expect(r.code, r.stdout).toBe(0);
+  });
+
+  it('every _fix_<name> names a check in the table — a fixer with no entry is never run', () => {
+    const names = tableNames();
+    const fixers = fixerNames();
+    // The CONTROL: the three this tree ships are seen, so an empty scan cannot pass.
+    expect(fixers).toEqual(expect.arrayContaining(['codex', 'skills', 'wrappers']));
+    for (const f of fixers) expect(names, `_fix_${f} is defined, and no table entry "${f}" will ever run it`).toContain(f);
+  });
+
+  it('a remedy that names `ccrc doctor --fix` is a FAIL of a check that has a fixer — never a WARN (R-C8)', () => {
+    const src = readFileSync(CHECKS_SRC, 'utf8');
+    const fixers = new Set(fixerNames());
+    // Every `_dr_warn <name>` / `_dr_fail <name>` call, through its `\`-continued lines.
+    const calls = [...src.matchAll(/_dr_(warn|fail) ([a-z][a-z0-9_-]*)((?:[^\n]*\\\n)*[^\n]*)/g)]
+      .map((m) => ({ cls: m[1]!, name: m[2]!, text: m[3]! }));
+    // `_check_codex` records its findings through `_dr_cx_warn` / `_dr_cx_fail`
+    // (Tasks 4-6) and prints them under its own name: the same rule binds them.
+    for (const m of src.matchAll(/_dr_cx_(warn|fail) ((?:[^\n]*\\\n)*[^\n]*)/g)) {
+      calls.push({ cls: m[1]!, name: 'codex', text: m[2]! });
+    }
+    expect(calls.length, 'the call-site scan found almost nothing — re-anchor it').toBeGreaterThan(100);
+    const naming = calls.filter((c) => /doctor --fix/.test(c.text));
+    // The CONTROL: skills' FAIL remedy names it, so the scan can see one.
+    expect(naming.some((c) => c.cls === 'fail' && c.name === 'skills')).toBe(true);
+    expect(naming.filter((c) => c.cls === 'warn' || !fixers.has(c.name)).map((c) => `${c.cls} ${c.name}`)).toEqual([]);
+  });
+});
+
+/** One function out of ccd/ccrc-doctor-checks, column-0 signature to column-0 `}`. */
+function checksFunction(name: string): string {
+  const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}`, 'm').exec(readFileSync(CHECKS_SRC, 'utf8'));
+  if (m === null) throw new Error(`ccd/ccrc-doctor-checks has no ${name}() { … } at column 0`);
+  return m[0];
+}
+/** Task 4's ONE declaration of the GPT-lane executables `_check_codex` compares,
+ *  as it stands in ccd/ccrc-doctor-checks: a one-line assignment or an array. */
+function checksDecl(name: string): string {
+  const m = new RegExp(`^${name}=(?:\\([^)]*\\)|[^\\n]*)$`, 'm').exec(readFileSync(CHECKS_SRC, 'utf8'));
+  if (m === null) throw new Error(`ccd/ccrc-doctor-checks declares no ${name}`);
+  return m[0];
+}
+
+type LaneBin = (typeof GPT_LANE_BINS)[number];
+interface FixCodexCase {
+  lanes?: string[]; lanesRc?: number;
+  /** CCRC_ROLE in `$HOME/.ccrc/ccrc.env`; unset writes no file */
+  role?: string;
+  /** ids whose `_codex_row` refuses, with its roster-invalid sentence */
+  badRows?: string[];
+  lockRefuse?: string[];
+  /** `_codex_lane_json_state` per id; default `current` */
+  laneState?: Record<string, 'current' | 'stale' | 'absent'>;
+  /** the check-only materialise per id: its `changed`, `refused`, or models-op's
+   *  `roster-invalid` refusal of a roster two lanes share a port in; default false */
+  registryChanged?: Record<string, boolean | 'refused' | 'roster-invalid'>;
+  /** the committing materialise per id; default `wrote` */
+  commit?: Record<string, 'wrote' | 'no-registry' | 'refused' | 'roster-invalid'>;
+  /** `_models_litellm_lane_held` per id; default `same` (changed:false) */
+  litellm?: Record<string, 'same' | 'rendered' | 'restarted' | 'foreign' | 'roster-invalid'>;
+  /** `ccgpt-runtime check` before a build, `build`, and `check` after one; default 0 */
+  runtime?: { check?: number; build?: number; afterBuild?: number };
+  /** each placed executable against the fixture's shipped tree; default `same` */
+  bins?: Partial<Record<LaneBin, 'same' | 'drift' | 'missing' | 'mode'>>;
+  /** executables the fixture's shipped tree LACKS */
+  treeLacks?: LaneBin[];
+  tiersDegraded?: boolean;
+  /** one ccrc seam left undefined, for the loaded-guard case */
+  unload?: string;
+  /** make `$HOME/.local/bin` read-only before the run */
+  binReadOnly?: boolean;
+  /** stamp every placed executable with {@link AGED} before the run */
+  ageBins?: boolean;
+  /** run under a PATH with NO `cmp`: the isolation wall, then a fixture
+   *  directory of only the tools the harness itself needs */
+  noCmp?: boolean;
+  /** plant each lane's lane.json, litellm.yaml and settings.json as
+   *  {@link laneFileText}, so a case can prove nothing rewrote them */
+  laneFiles?: boolean;
+}
+
+/** A past instant a converged executable must still carry after a run. */
+const AGED = new Date('2026-01-02T03:04:05Z');
+
+/** The rendered files `laneFiles` plants for one lane, by path under HOME. */
+const laneFileText = (id: string): Record<string, string> => ({
+  [join('.ccrc', 'codex', id, 'lane.json')]: `{"fixture":"${id}'s lane.json, as planted"}\n`,
+  [join('.ccrc', 'codex', id, 'litellm.yaml')]: `# ${id}'s litellm.yaml, as planted\n`,
+  [join(`.claude-${id}`, 'settings.json')]: `{"env":{"fixture":"${id}'s env block, as planted"}}\n`,
+});
+
+/** models-op's refusal of a roster in which two codex lanes share a port
+ *  (`shared/roster-json.mjs`' own sentence; a pure-parse port, no socket). */
+const SHARED_PORT_REFUSAL = '{"ok":false,"error":"roster-invalid","detail":"fixture: accounts \\"codex-a\\" and \\"codex-b\\" both use port 45011."}';
+
+const FIX_TRIPWIRES = ['_codex_login', '_codex_stop_tier', '_codex_start_tier', '_codex_stop_lane',
+  '_codex_cmd_start', '_codex_cmd_stop', '_codex_lane_json_ensure', '_codex_runtime_env_ensure', 'cmd_wrappers'];
+
+/** `_fix_codex` alone. Its ccrc seams are stubbed by table; its one real
+ *  primitive (`_inst_atomic`, with `_ccrc_die` and `PROG`) and `_box_env_value`
+ *  come out of ccd/ccrc, and `_dr_join` and Task 4's `CODEX_LANE_BINS` out of
+ *  ccd/ccrc-doctor-checks. The HOME holds a fixture SHIPPED TREE at
+ *  `$HOME/ccrc/ccd` — its `ccgpt-runtime` a recording fake, so a restore keeps
+ *  the fake — and the placed copies at `$HOME/.local/bin`. Every ccrc function
+ *  this fixer must never call is a tripwire that records and refuses, and
+ *  Task 10 of Plan 2b-2's isolation wall is FIRST on PATH, so a direct
+ *  `systemctl` or `systemd-run` is a thrown, named red. */
+function runFixCodex(c: FixCodexCase = {}): {
+  code: number; stdout: string; stderr: string; calls: string[]; tripwire: string[]; fix: string[];
+  home: string; after: string;
+  /** codex-b's 0000 `auth.json`, by lstat only (size, mtime, inode), taken
+   *  before the run: nothing here reads its bytes (Global Constraints, G8). */
+  credBefore: { size: number; mtimeMs: number; ino: number };
+} {
+  const home = mkTmp('ccrc-doctor-fix-codex-iso-');
+  const lanes = c.lanes ?? ['codex-a'];
+  const tree = join(home, 'ccrc', 'ccd');
+  const bin = join(home, '.local', 'bin');
+  mkdirSync(tree, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  const RUNTIME_FAKE = [
+    '#!/bin/sh',
+    'printf \'ccgpt-runtime %s\\n\' "$1" >> "$HOME/calls"',
+    'case "$1" in',
+    '  check) if [ -e "$HOME/rt-built" ]; then exit "$(cat "$HOME/rt-after-build")"; fi; exit "$(cat "$HOME/rt-check")" ;;',
+    '  build) rc="$(cat "$HOME/rt-build")"; [ "$rc" -eq 0 ] && : > "$HOME/rt-built"; exit "$rc" ;;',
+    'esac',
+    'exit 64',
+    '',
+  ].join('\n');
+  for (const n of GPT_LANE_BINS) {
+    const text = n === 'ccgpt-runtime' ? RUNTIME_FAKE : `#!/bin/sh\n# fixture shipped ${n}\n`;
+    if (!(c.treeLacks ?? []).includes(n)) writeFileSync(join(tree, n), text, { mode: 0o755 });
+    const state = c.bins?.[n] ?? 'same';
+    if (state === 'missing') continue;
+    writeFileSync(join(bin, n), state === 'drift' ? `#!/bin/sh\n# drifted ${n}\n` : text,
+      { mode: state === 'mode' ? 0o644 : 0o755 });
+    if (c.ageBins === true) utimesSync(join(bin, n), AGED, AGED);
+  }
+  writeFileSync(join(home, 'rt-check'), `${c.runtime?.check ?? 0}\n`);
+  writeFileSync(join(home, 'rt-build'), `${c.runtime?.build ?? 0}\n`);
+  writeFileSync(join(home, 'rt-after-build'), `${c.runtime?.afterBuild ?? 0}\n`);
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'accounts.json'), '{"fixture":"a roster --fix must never write"}\n');
+  if (c.role !== undefined) writeFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_ROLE=${c.role}\n`);
+  if (c.laneFiles === true) {
+    for (const id of lanes) {
+      for (const [rel, text] of Object.entries(laneFileText(id))) {
+        mkdirSync(path.dirname(join(home, rel)), { recursive: true });
+        writeFileSync(join(home, rel), text);
+      }
+    }
+  }
+  // A second lane's credential, 0000: nothing may open it, so a read would fail loudly.
+  const cred = join(home, codexAuthDir('codex-b'));
+  mkdirSync(cred, { recursive: true });
+  writeFileSync(join(cred, 'auth.json'), '{"fixture":"test-token-not-a-secret"}\n', { mode: 0o000 });
+  const credStat = lstatSync(join(cred, 'auth.json'));
+  const credBefore = { size: credStat.size, mtimeMs: credStat.mtimeMs, ino: credStat.ino };
+
+  const arms = (table: Record<string, string>, fmt: (id: string, v: string) => string): string[] =>
+    Object.entries(table).map(([id, v]) => fmt(id, v));
+  const MAT = (id: string, extra: string): string =>
+    `echo '{"ok":true,"op":"materialise","id":"${id}"${extra}}'`;
+  const defs: Record<string, string> = {
+    _codex_lanes: (c.lanesRc ?? 0) === 0
+      ? `_codex_lanes() { printf '%s\\n' _codex_lanes >> "$HOME/calls"; ${lanes.length === 0 ? ':' : `printf '%s\\n' ${lanes.join(' ')}`}; }`
+      : `_codex_lanes() { printf '%s\\n' _codex_lanes >> "$HOME/calls"; echo "ccrc codex: roster-invalid: fixture: the roster could not be read" >&2; return ${c.lanesRc}; }`,
+    _codex_row: [
+      '_codex_row() {',
+      `  case " ${(c.badRows ?? []).join(' ')} " in *" $1 "*) echo "ccrc codex: roster-invalid: account '$1''s codex row does not validate (exec.proxyPort/exec.litellmPort) — fixture" >&2; return 1 ;; esac`,
+      '  CX_ID="$1"; return 0',
+      '}',
+    ].join('\n'),
+    _codex_lane_json_state: [
+      '_codex_lane_json_state() {',
+      '  case "$1" in',
+      ...arms(c.laneState ?? {}, (id, v) => `    ${id}) echo ${v}; return 0 ;;`),
+      '  esac',
+      '  echo current',
+      '}',
+    ].join('\n'),
+    _codex_runtime_cli: '_codex_runtime_cli() { printf \'%s\' "$HOME/.local/bin/ccgpt-runtime"; }',
+    // The lane library's own one-liner: which placed file a shim tier runs.
+    _codex_shim_file: ccrcLine(/^_codex_shim_file\(\) .*$/m, '_codex_shim_file'),
+    _models_roster_path: '_models_roster_path() { printf \'%s\' "$HOME/.ccrc/accounts.json"; }',
+    _models_node: [
+      '_models_node() {',
+      '  printf \'_models_node %s\\n\' "$*" >> "$HOME/calls"',
+      '  local id="" check=0',
+      '  while [ $# -gt 0 ]; do case "$1" in --id) id="$2"; shift ;; --check) check=1; shift ;; esac; shift; done',
+      '  if [ "$check" -eq 1 ]; then',
+      '    case "$id" in',
+      ...arms(Object.fromEntries(Object.entries(c.registryChanged ?? {}).map(([k, v]) => [k, String(v)])),
+        (id, v) => (v === 'refused'
+          ? `      ${id}) echo '{"ok":false,"error":"no-answer","detail":"fixture"}'; return 1 ;;`
+          : v === 'roster-invalid'
+            ? `      ${id}) echo '${SHARED_PORT_REFUSAL}'; return 1 ;;`
+            : `      ${id}) ${MAT(id, `,"check":true,"changed":{"lane":${v},"classes":false,"effort":false}`)}; return 0 ;;`)),
+      '    esac',
+      '    echo "{\\"ok\\":true,\\"op\\":\\"materialise\\",\\"id\\":\\"$id\\",\\"check\\":true,\\"changed\\":{\\"lane\\":false,\\"classes\\":false,\\"effort\\":false}}"; return 0',
+      '  fi',
+      '  case "$id" in',
+      ...arms(c.commit ?? {}, (id, v) => (v === 'no-registry'
+        ? `    ${id}) ${MAT(id, ',"wrote":null')}; return 0 ;;`
+        : v === 'refused'
+          ? `    ${id}) echo '{"ok":false,"error":"settings-unwritable","detail":"fixture: the env block cannot be rendered"}'; return 1 ;;`
+          : v === 'roster-invalid'
+            ? `    ${id}) echo '${SHARED_PORT_REFUSAL}'; return 1 ;;`
+            : `    ${id}) ${MAT(id, `,"wrote":{"lane":"lane.json of ${id}"}`)}; return 0 ;;`)),
+      '  esac',
+      '  echo "{\\"ok\\":true,\\"op\\":\\"materialise\\",\\"id\\":\\"$id\\",\\"wrote\\":{\\"lane\\":\\"lane.json of $id\\"}}"',
+      '}',
+    ].join('\n'),
+    _models_litellm_lane_held: [
+      '_models_litellm_lane_held() {',
+      '  printf \'%s %s lock=%s\\n\' _models_litellm_lane_held "$1" "${CX_LOCK_ID:-}" >> "$HOME/calls"',
+      '  case "$1" in',
+      ...arms(c.litellm ?? {}, (id, v) => {
+        switch (v) {
+          case 'rendered': return `    ${id}) echo '{"ok":true,"op":"litellm","id":"${id}","changed":true,"restarted":false}'; return 0 ;;`;
+          case 'restarted': return `    ${id}) echo '{"ok":true,"op":"litellm","id":"${id}","changed":true,"restarted":true}'; return 0 ;;`;
+          // `_models_refuse`'s own shape: one JSON object, then EXIT.
+          case 'foreign': return `    ${id}) echo '{"ok":false,"error":"tier-foreign","detail":"lane ${id}\\u0027s LiteLLM tier is not provably this lane\\u0027s — fixture"}'; exit 1 ;;`;
+          // The codex arm's phase 1 hands models-op's own refusal back, rc 1.
+          case 'roster-invalid': return `    ${id}) echo '${SHARED_PORT_REFUSAL}'; return 1 ;;`;
+          default: return '';
+        }
+      }),
+      '  esac',
+      '  echo "{\\"ok\\":true,\\"op\\":\\"litellm\\",\\"id\\":\\"$1\\",\\"changed\\":false}"',
+      '}',
+    ].join('\n'),
+    _inst_codex_tiers: [
+      '_inst_codex_tiers() {',
+      '  printf \'_inst_codex_tiers role=%s\\n\' "${INST_ROLE:-unset}" >> "$HOME/calls"',
+      '  echo "install: codex tiers: fixture — measured"',
+      ...(c.tiersDegraded === true ? ['  INST_DEGRADED+=(codex-tiers)'] : []),
+      '}',
+    ].join('\n'),
+  };
+  if (c.unload !== undefined) delete defs[c.unload];
+  const harness = [
+    'set -uo pipefail',
+    ccrcLine(/^PROG=.*$/m, 'PROG='),
+    ccrcLine(/^_ccrc_die\(\) \{.*\}$/m, '_ccrc_die'),
+    ccrcFunction('_inst_atomic'),
+    ccrcFunction('_box_env_value'),
+    'BOX_TREE_DIR="$HOME/ccrc"',
+    'BOX_ENV_FILE="$HOME/.ccrc/ccrc.env"',
+    checksFunction('_dr_join'),
+    checksDecl('CODEX_LANE_BINS'),
+    ...Object.values(defs),
+    lockStub(c.lockRefuse ?? []),
+    ...FIX_TRIPWIRES.map((f) => `${f}() { printf '%s %s\\n' ${f} "$*" >> "$HOME/tripwire"; return 97; }`),
+    checksFunction('_fix_codex'),
+    '_fix_codex; rc=$?',
+    'printf \'after rc=%s lockfd=%s\\n\' "$rc" "${CX_LOCK_FD:-}"',
+    'exit "$rc"',
+  ].join('\n');
+  if (c.binReadOnly === true) chmodSync(bin, 0o555);
+  const wall = isolationManagerStubs(home);
+  let rest = process.env['PATH'] ?? '';
+  if (c.noCmp === true) {
+    // No system directory at all, so `cmp` cannot resolve: only what the
+    // harness and `_inst_atomic` run besides it.
+    rest = join(home, 'nocmp-bin');
+    mkdirSync(rest, { recursive: true });
+    for (const t of ['cp', 'chmod', 'mv', 'rm', 'mkdir', 'jq', 'cat']) symlinkSync(realPath(t), join(rest, t));
+  }
+  const env = { PATH: `${wall}:${rest}`, HOME: home, LC_ALL: 'C' };
+  assertIsolationWallFirst(env, home);
+  const p = spawnSync(BASH, ['-c', harness], { env, encoding: 'utf8' });
+  if (c.binReadOnly === true) chmodSync(bin, 0o755);
+  const stray = strayManagerCalls(home);
+  if (stray.length > 0) {
+    throw new Error(`_fix_codex reached the user manager directly:\n${stray.join('\n')}\n${p.stderr ?? ''}`);
+  }
+  const lines = (f: string): string[] =>
+    (existsSync(join(home, f)) ? readFileSync(join(home, f), 'utf8').split('\n').filter(Boolean) : []);
+  const out = p.stdout ?? '';
+  return {
+    code: p.status ?? -1, stdout: out, stderr: p.stderr ?? '', calls: lines('calls'), tripwire: lines('tripwire'),
+    fix: out.split('\n').filter((l) => l.startsWith('FIX codex:')), home,
+    after: out.split('\n').filter((l) => l.startsWith('after rc=')).join('\n'), credBefore,
+  };
+}
+
+describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a Task 8)', () => {
+  const DONE = (n: number): string =>
+    `FIX codex: done for ${n} codex lane(s) — no port, roster row, OAuth, credential, unidentified listener or unit enablement was touched; the re-measurement below is the verdict`;
+  const commit = (home: string, id: string): string => `_models_node materialise --file ${home}/.ccrc/accounts.json --id ${id}`;
+  const check = (home: string, id: string): string => `${commit(home, id)} --check true`;
+  const held = (id: string): string => `_models_litellm_lane_held ${id} lock=${id}`;
+  const TIERS_LINE = "FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, which restarts every running ccrc-owned tier that measures stale, on any lane (its lines above)";
+  const tiersAsked = (r: { calls: string[] }): string[] => r.calls.filter((l) => l.startsWith('_inst_codex_tiers'));
+
+  it('a converged lane: every measurement is asked, and nothing is placed, rebuilt, rendered or restarted', () => {
+    const r = runFixCodex();
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.calls).toEqual(['_codex_lanes', 'ccgpt-runtime check', '_codex_lock codex-a',
+      check(r.home, 'codex-a'), held('codex-a'), '_codex_unlock codex-a']);
+    expect(r.fix).toEqual([DONE(1)]);
+    expect(r.tripwire).toEqual([]);
+    expect(r.after).toBe('after rc=0 lockfd=');
+  });
+
+  it('refuses, asking nothing, when a ccrc function it calls is not loaded', () => {
+    const r = runFixCodex({ unload: '_models_node' });
+    expect(r.code).toBe(1);
+    expect(r.calls).toEqual([]);
+    expect(r.fix).toEqual(["FIX codex: refused — ccrc's own _models_node is not loaded, so nothing was cured; this is a bug in ccrc, not a fact about your box (the check table was sourced by something that is not ccrc)"]);
+  });
+
+  it('a server box is refused before the roster is read: it converges nothing per account', () => {
+    const r = runFixCodex({ role: 'server', bins: { 'ccgpt-usage.py': 'drift' } });
+    expect(r.code).toBe(1);
+    expect(r.calls).toEqual([]);
+    expect(r.fix).toEqual(['FIX codex: refused — this box records CCRC_ROLE=server, which converges nothing per account, so nothing was cured']);
+    expect(readFileSync(join(r.home, '.local', 'bin', 'ccgpt-usage.py'), 'utf8')).toBe('#!/bin/sh\n# drifted ccgpt-usage.py\n');
+  });
+
+  it('an unreadable roster or a missing jq is refused, never read as "no codex lane"', () => {
+    for (const lanesRc of [1, 2]) {
+      const r = runFixCodex({ lanesRc, bins: { 'ccgpt-usage.py': 'drift' } });
+      expect(r.code, `lanesRc ${lanesRc}`).toBe(1);
+      expect(r.calls).toEqual(['_codex_lanes']);
+      expect(r.fix).toEqual(['FIX codex: refused — which roster lanes are codex lanes could not be read (the ccrc codex: line above says why), so nothing was cured']);
+    }
+    // The CONTROL: an empty population says so in its own words.
+    const none = runFixCodex({ lanes: [] });
+    expect(none.code).toBe(0);
+    expect(none.fix).toEqual(['FIX codex: nothing to cure — no codex lane in the roster']);
+  });
+
+  it('a drifted, a missing and a mode-only executable are placed again from the shipped tree at 0755, each said as what was done', () => {
+    const r = runFixCodex({ role: 'fleet', bins: { 'ccgpt-proxy.py': 'mode', 'ccgpt-usage.py': 'drift', 'ccrc-codex': 'missing' } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.fix).toEqual([
+      "FIX codex: made $HOME/.local/bin/ccgpt-proxy.py executable (0755) — its bytes already were the shipped tree's",
+      'FIX codex: restored $HOME/.local/bin/ccgpt-usage.py from the shipped tree',
+      'FIX codex: restored $HOME/.local/bin/ccrc-codex from the shipped tree',
+      DONE(1),
+    ]);
+    for (const n of GPT_LANE_BINS) {
+      const placed = join(r.home, '.local', 'bin', n);
+      expect(readFileSync(placed).equals(readFileSync(join(r.home, 'ccrc', 'ccd', n))), `${n} is not the shipped bytes`).toBe(true);
+      expect(statSync(placed).mode & 0o777, n).toBe(0o755);
+    }
+    // None of these is a byte change to code a tier runs (fix round 1, D-3721).
+    expect(tiersAsked(r)).toEqual([]);
+  });
+
+  it('a drifted ccgpt-usage.py is placed again, and no tier is asked: no tier runs it (D-3721)', () => {
+    const r = runFixCodex({ bins: { 'ccgpt-usage.py': 'drift' } });
+    expect(r.fix).toEqual(['FIX codex: restored $HOME/.local/bin/ccgpt-usage.py from the shipped tree', DONE(1)]);
+    expect(tiersAsked(r)).toEqual([]);
+  });
+
+  it('a mode-only ccgpt-proxy.py is made executable, and no tier is asked: the bytes a shim tier runs did not change (D-3721)', () => {
+    const r = runFixCodex({ bins: { 'ccgpt-proxy.py': 'mode' } });
+    expect(r.fix).toEqual(["FIX codex: made $HOME/.local/bin/ccgpt-proxy.py executable (0755) — its bytes already were the shipped tree's", DONE(1)]);
+    expect(statSync(join(r.home, '.local', 'bin', 'ccgpt-proxy.py')).mode & 0o777).toBe(0o755);
+    expect(tiersAsked(r)).toEqual([]);
+  });
+
+  it('a byte-drifted shim or runtime CLI is placed again, and only then are the tiers asked: once, last, with the box\'s own role', () => {
+    for (const n of ['ccgpt-proxy.py', 'ccgpt-runtime'] as const) {
+      const r = runFixCodex({ role: 'fleet', bins: { [n]: 'drift' } });
+      expect(r.fix, n).toEqual([`FIX codex: restored $HOME/.local/bin/${n} from the shipped tree`, TIERS_LINE, DONE(1)]);
+      expect(r.calls[r.calls.length - 1], n).toBe('_inst_codex_tiers role=fleet');
+      expect(tiersAsked(r), n).toHaveLength(1);
+    }
+  });
+
+  it('with no cmp on PATH, only a missing or non-executable file is placed, every other is named "not compared", and no tier is asked', () => {
+    const r = runFixCodex({ noCmp: true, bins: { 'ccgpt-proxy.py': 'missing', 'ccgpt-usage.py': 'drift', 'ccrc-codex': 'mode' } });
+    expect(r.code, r.stderr).toBe(0);
+    const notCompared = (n: string): string =>
+      `FIX codex: ${n}: not compared — cmp is not on PATH, so $HOME/.local/bin/${n} was left as it is; install diffutils (it ships cmp), then re-run 'ccrc doctor --fix'`;
+    const placed = (n: string): string =>
+      `FIX codex: placed $HOME/.local/bin/${n} from the shipped tree — it was missing or not executable, and with no cmp on PATH whether its bytes changed was not measured, so no tier is restarted for it`;
+    expect(r.fix).toEqual([placed('ccgpt-proxy.py'), notCompared('ccgpt-usage.py'), notCompared('ccgpt-runtime'), placed('ccrc-codex'), DONE(1)]);
+    // The drifted file is NOT claimed restored: it is still exactly its bytes.
+    expect(readFileSync(join(r.home, '.local', 'bin', 'ccgpt-usage.py'), 'utf8')).toBe('#!/bin/sh\n# drifted ccgpt-usage.py\n');
+    for (const n of ['ccgpt-proxy.py', 'ccrc-codex']) {
+      expect(readFileSync(join(r.home, '.local', 'bin', n)).equals(readFileSync(join(r.home, 'ccrc', 'ccd', n))), n).toBe(true);
+      expect(statSync(join(r.home, '.local', 'bin', n)).mode & 0o777, n).toBe(0o755);
+    }
+    // The shim was placed, but nothing measured a byte change: no restart.
+    expect(tiersAsked(r)).toEqual([]);
+  });
+
+  it('a converged executable is never rewritten — measured on mtime, not on the message', () => {
+    const r = runFixCodex({ ageBins: true, bins: { 'ccgpt-usage.py': 'drift' } });
+    expect(r.fix.filter((l) => l.includes('restored'))).toEqual(['FIX codex: restored $HOME/.local/bin/ccgpt-usage.py from the shipped tree']);
+    for (const n of GPT_LANE_BINS) {
+      const t = statSync(join(r.home, '.local', 'bin', n)).mtimeMs;
+      if (n === 'ccgpt-usage.py') expect(t, n).not.toBe(AGED.getTime());
+      else expect(t, `${n} was rewritten though it was already the shipped bytes`).toBe(AGED.getTime());
+    }
+  });
+
+  it('a shipped tree that lacks an executable names it and places nothing at that path', () => {
+    const r = runFixCodex({ treeLacks: ['ccgpt-usage.py'], bins: { 'ccgpt-usage.py': 'missing' } });
+    expect(r.fix).toContain('FIX codex: ccgpt-usage.py: not restored — the shipped tree has no $HOME/ccrc/ccd/ccgpt-usage.py; run \'ccrc update\' (or \'ccrc install\' from a checkout) to place it');
+    expect(existsSync(join(r.home, '.local', 'bin', 'ccgpt-usage.py'))).toBe(false);
+    // Nothing was replaced, so no tier is asked to restart.
+    expect(r.calls.some((l) => l.startsWith('_inst_codex_tiers'))).toBe(false);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('an install step that dies is contained: the lanes and the caller still run', () => {
+    const r = runFixCodex({ bins: { 'ccgpt-proxy.py': 'drift' }, binReadOnly: true });
+    expect(r.fix).toContain('FIX codex: ccgpt-proxy.py: not restored — the install step refused (its line above says why)');
+    expect(r.stderr).toMatch(/^ccrc: could not install .*ccgpt-proxy\.py — nothing at that path was replaced$/m);
+    expect(r.calls).toContain('_codex_lock codex-a');
+    expect(r.after).toBe('after rc=0 lockfd=');
+  });
+
+  it('a runtime its own check refuses is rebuilt, re-checked, and then the tiers are asked', () => {
+    const r = runFixCodex({ runtime: { check: 1, build: 0, afterBuild: 0 } });
+    expect(r.calls.slice(0, 4)).toEqual(['_codex_lanes', 'ccgpt-runtime check', 'ccgpt-runtime build', 'ccgpt-runtime check']);
+    expect(r.fix).toEqual([
+      "FIX codex: runtime: rebuilding with 'ccgpt-runtime build' — pip may take minutes",
+      'FIX codex: runtime: rebuilt, probed and current',
+      TIERS_LINE,
+      DONE(1),
+    ]);
+    expect(r.calls[r.calls.length - 1]).toBe('_inst_codex_tiers role=both');
+  });
+
+  it('a runtime that is not on this box is said, and no build is attempted', () => {
+    const r = runFixCodex({ treeLacks: ['ccgpt-runtime'], bins: { 'ccgpt-runtime': 'missing' } });
+    expect(r.fix).toEqual([
+      "FIX codex: ccgpt-runtime: not restored — the shipped tree has no $HOME/ccrc/ccd/ccgpt-runtime; run 'ccrc update' (or 'ccrc install' from a checkout) to place it",
+      'FIX codex: runtime: not rebuilt — $HOME/.local/bin/ccgpt-runtime is not on this box (the lines above say why)',
+      DONE(1),
+    ]);
+    expect(r.fix.some((l) => /rebuilding/.test(l))).toBe(false);
+    expect(r.calls.some((l) => l.startsWith('ccgpt-runtime '))).toBe(false);
+    expect(tiersAsked(r)).toEqual([]);
+  });
+
+  it('a build that fails, or leaves no current runtime, is said — and no tier is restarted over it', () => {
+    for (const runtime of [{ check: 1, build: 2 }, { check: 1, build: 0, afterBuild: 1 }]) {
+      const r = runFixCodex({ runtime });
+      expect(r.fix).toContain("FIX codex: runtime: NOT rebuilt — 'ccgpt-runtime build' did not leave a current runtime (its reason is the ccgpt-runtime line on stderr), so the previous one, if any, stays current");
+      expect(r.calls.some((l) => l.startsWith('_inst_codex_tiers')), JSON.stringify(runtime)).toBe(false);
+    }
+  });
+
+  it('lane.json stale against the roster, or absent, is re-rendered by its one writer under the lane lock', () => {
+    for (const st of ['stale', 'absent'] as const) {
+      const r = runFixCodex({ laneState: { 'codex-a': st } });
+      expect(r.calls).toEqual(['_codex_lanes', 'ccgpt-runtime check', '_codex_lock codex-a',
+        check(r.home, 'codex-a'), commit(r.home, 'codex-a'), held('codex-a'), '_codex_unlock codex-a']);
+      expect(r.fix).toEqual(["FIX codex: codex-a: lane.json re-rendered from the roster and this lane's class registry", DONE(1)]);
+    }
+  });
+
+  it('lane.json current against the roster but stale against the registry (R7) is re-rendered too — and an answer it cannot read is stale, never current', () => {
+    for (const v of [true, 'refused'] as const) {
+      const r = runFixCodex({ registryChanged: { 'codex-a': v } });
+      expect(r.calls, String(v)).toContain(commit(r.home, 'codex-a'));
+      expect(r.fix).toContain("FIX codex: codex-a: lane.json re-rendered from the roster and this lane's class registry");
+    }
+  });
+
+  it('a lane with no class registry is named with the one act that renders it; a writer refusal with its own code', () => {
+    const none = runFixCodex({ laneState: { 'codex-a': 'absent' }, commit: { 'codex-a': 'no-registry' } });
+    expect(none.fix).toContain('FIX codex: codex-a: lane.json NOT rendered — this lane has no class registry, and lane.json is rendered from it; run: ccrc models codex-a init codex');
+    const refused = runFixCodex({ laneState: { 'codex-a': 'stale' }, commit: { 'codex-a': 'refused' } });
+    expect(refused.fix).toContain('FIX codex: codex-a: lane.json NOT rendered — deploy/models-op.mjs answered settings-unwritable: fixture: the env block cannot be rendered');
+  });
+
+  it('litellm.yaml goes through the codex arm\'s body, holding the lane lock, and what it did is said', () => {
+    const r = runFixCodex({ lanes: ['codex-a', 'codex-b'], litellm: { 'codex-a': 'rendered', 'codex-b': 'restarted' } });
+    expect(r.calls).toContain(held('codex-a'));
+    expect(r.calls).toContain(held('codex-b'));
+    expect(r.fix).toEqual([
+      'FIX codex: codex-a: litellm.yaml re-rendered',
+      "FIX codex: codex-b: litellm.yaml re-rendered, and this lane's own LiteLLM tier restarted onto it",
+      DONE(2),
+    ]);
+    // A render restarts its own tier; nothing else here does.
+    expect(r.calls.some((l) => l.startsWith('_inst_codex_tiers'))).toBe(false);
+  });
+
+  it('a render the codex arm refuses — a tier it cannot prove this lane\'s — is named and contained, and the next lane still runs', () => {
+    const r = runFixCodex({ lanes: ['codex-a', 'codex-b'], litellm: { 'codex-a': 'foreign', 'codex-b': 'rendered' } });
+    expect(r.fix).toEqual([
+      "FIX codex: codex-a: litellm.yaml NOT rendered — tier-foreign: lane codex-a's LiteLLM tier is not provably this lane's — fixture",
+      'FIX codex: codex-b: litellm.yaml re-rendered',
+      DONE(2),
+    ]);
+    expect(r.tripwire).toEqual([]);
+    expect(r.after).toBe('after rc=0 lockfd=');
+  });
+
+  it('a roster row that does not validate is left — no lock, no write, no render — and the roster is byte-identical', () => {
+    const r = runFixCodex({ lanes: ['codex-a', 'codex-b'], badRows: ['codex-a'], laneState: { 'codex-a': 'stale', 'codex-b': 'stale' } });
+    expect(r.fix).toEqual([
+      'FIX codex: codex-a: nothing cured — its roster row does not validate (the ccrc codex: line above says why), and --fix never edits the roster or chooses a port',
+      "FIX codex: codex-b: lane.json re-rendered from the roster and this lane's class registry",
+      DONE(2),
+    ]);
+    expect(r.stderr).toMatch(/^ccrc codex: roster-invalid: account 'codex-a''s codex row does not validate/m);
+    expect(r.calls.filter((l) => l.includes('codex-a') && !l.startsWith('_codex_lanes'))).toEqual([]);
+    expect(readFileSync(join(r.home, '.ccrc', 'accounts.json'), 'utf8')).toBe('{"fixture":"a roster --fix must never write"}\n');
+  });
+
+  it('a lane whose lock cannot be taken is left, and the next lane still runs; each lock is released before the next is taken', () => {
+    const refused = runFixCodex({ lanes: ['codex-a', 'codex-b'], lockRefuse: ['codex-a'], laneState: { 'codex-a': 'stale' } });
+    expect(refused.fix[0]).toBe("FIX codex: codex-a: nothing cured — its lane lock could not be taken (the line above says why); re-run 'ccrc doctor --fix' once it is free");
+    expect(refused.calls).not.toContain(commit(refused.home, 'codex-a'));
+    expect(refused.calls).toContain('_codex_lock codex-b');
+    const both = runFixCodex({ lanes: ['codex-a', 'codex-b'] });
+    expect(both.calls.filter((l) => /^(_codex_lock|_codex_unlock|LOCK-STILL-HELD) /.test(l)))
+      .toEqual(['_codex_lock codex-a', '_codex_unlock codex-a', '_codex_lock codex-b', '_codex_unlock codex-b']);
+    expect(both.after).toBe('after rc=0 lockfd=');
+  });
+
+  it('a tier restart that cannot finish is said', () => {
+    const r = runFixCodex({ bins: { 'ccgpt-proxy.py': 'drift' }, tiersDegraded: true });
+    expect(r.fix).toContain("FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, and that step could not restart every stale tier (its lines above say which)");
+  });
+
+  it('a roster two lanes share a port in is refused by both writers: each lane is named NOT rendered with models-op\'s own code, and nothing is written', () => {
+    const both = { 'codex-a': 'roster-invalid', 'codex-b': 'roster-invalid' } as const;
+    const r = runFixCodex({ lanes: ['codex-a', 'codex-b'], laneFiles: true, registryChanged: both, commit: both, litellm: both });
+    expect(r.code, r.stderr).toBe(0);
+    const why = 'fixture: accounts "codex-a" and "codex-b" both use port 45011.';
+    expect(r.fix).toEqual([
+      `FIX codex: codex-a: lane.json NOT rendered — deploy/models-op.mjs answered roster-invalid: ${why}`,
+      `FIX codex: codex-a: litellm.yaml NOT rendered — roster-invalid: ${why}`,
+      `FIX codex: codex-b: lane.json NOT rendered — deploy/models-op.mjs answered roster-invalid: ${why}`,
+      `FIX codex: codex-b: litellm.yaml NOT rendered — roster-invalid: ${why}`,
+      DONE(2),
+    ]);
+    for (const id of ['codex-a', 'codex-b']) {
+      for (const [rel, text] of Object.entries(laneFileText(id))) {
+        expect(readFileSync(join(r.home, rel), 'utf8'), rel).toBe(text);
+      }
+      // …and nothing new beside them: no tmp, no .prev, no second render.
+      expect(readdirSync(join(r.home, '.ccrc', 'codex', id)).sort(), id).toEqual(['lane.json', 'litellm.yaml']);
+    }
+    expect(readFileSync(join(r.home, '.ccrc', 'accounts.json'), 'utf8')).toBe('{"fixture":"a roster --fix must never write"}\n');
+  });
+
+  it('never OAuth, never a credential, never a unit: every arm at once touches none of them', () => {
+    const r = runFixCodex({
+      lanes: ['codex-a', 'codex-b'], bins: { 'ccgpt-usage.py': 'drift' }, runtime: { check: 1 },
+      laneState: { 'codex-a': 'absent' }, litellm: { 'codex-b': 'restarted' },
+    });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.tripwire).toEqual([]);
+    // codex-a has NO authDir on disk: none is created. codex-b's is 0000: it
+    // is still exactly what it was — compared by lstat (size, mtime, inode),
+    // never by reading its bytes (G8) — because nothing opened it.
+    expect(existsSync(join(r.home, codexAuthDir('codex-a')))).toBe(false);
+    const auth = lstatSync(join(r.home, codexAuthDir('codex-b'), 'auth.json'));
+    expect(auth.mode & 0o777).toBe(0o000);
+    expect({ size: auth.size, mtimeMs: auth.mtimeMs, ino: auth.ino }).toEqual(r.credBefore);
+    expect(readFileSync(join(r.home, '.ccrc', 'accounts.json'), 'utf8')).toBe('{"fixture":"a roster --fix must never write"}\n');
+  });
+});
+
+describe('ccrc doctor --fix: wrappers — a launcher is regenerated only when ccrc\'s marker still verifies (Plan 3a Task 8)', () => {
+  /** A FULL roster — label, homeAble and telemetry on every row, which `ccrc
+   *  wrappers`' own validator requires and `writeRoster`'s convenience rows do
+   *  not carry — with one GENERATED account and no codex row, so `_check_codex`
+   *  SKIPs and `_fix_codex` never runs on these boxes (the Codex case below is
+   *  the one exception, and says so). */
+  const UP = { id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, telemetry: 'anthropic' };
+  const GEN = { id: 'claude2', label: 'claude2', configDirSuffix: '.claude2', exec: { kind: 'generated' }, homeAble: true, telemetry: 'none' };
+  const marked = (id: string, suffix: string, execKind: 'generated' | 'codex'): string =>
+    markGenerated(generateWrapperBody({ id, configDirSuffix: suffix, execKind }, 'claude'));
+  function launcherBox(prefix: string, accounts: object[] = [UP, GEN]): string {
+    const home = healthy(prefix);
+    writeRawRoster(home, `${JSON.stringify({ version: 1, accounts }, null, 2)}\n`);
+    // `cmd_wrappers` resolves its generator one directory up from ITS OWN file:
+    // `$HOME/ccrc/deploy/gen-wrappers.mjs` here. A symlink, because node
+    // resolves the generator's own imports from its real path (this checkout's
+    // `shared/`), which is the pair a box ships together.
+    mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
+    symlinkSync(join(REPO, 'deploy', 'gen-wrappers.mjs'), join(home, 'ccrc', 'deploy', 'gen-wrappers.mjs'));
+    // The verb's own tools. The contained PATH carries none of them by design.
+    for (const t of ['mkdir', 'mktemp', 'date', 'stat', 'cp', 'chmod', 'mv', 'rm']) linkReal(home, t);
+    return home;
+  }
+  const bin = (home: string, id: string): string => join(home, '.local', 'bin', id);
+  /** Everything doctor printed AFTER the fixer's closing line: the re-measurement. */
+  const second = (out: string): string => {
+    const i = out.lastIndexOf("FIX wrappers: ran the shipped tree's 'ccrc wrappers'");
+    if (i < 0) throw new Error(`no _fix_wrappers closing line in:\n${out}`);
+    return out.slice(i);
+  };
+  const backups = (home: string, id: string): string[] =>
+    readdirSync(join(home, '.local', 'bin')).filter((n) => n.startsWith(`${id}.pre-ccrc-`));
+
+  it('a shipped tree with no ccd/ccrc is refused by _fix_wrappers, which then runs nothing (measured in isolation)', () => {
+    const home = mkTmp('ccrc-doctor-fix-wrappers-notree-');
+    mkdirSync(join(home, 'ccrc', 'ccd'), { recursive: true });
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    const wall = isolationManagerStubs(home);
+    const env = { PATH: `${wall}:${process.env['PATH'] ?? ''}`, HOME: home, LC_ALL: 'C' };
+    assertIsolationWallFirst(env, home);
+    const r = spawnSync(BASH, ['-c', ['set -uo pipefail', 'BOX_TREE_DIR="$HOME/ccrc"', checksFunction('_fix_wrappers'),
+      '_fix_wrappers; echo "rc=$?"'].join('\n')], { env, encoding: 'utf8' });
+    expect(strayManagerCalls(home)).toEqual([]);
+    expect((r.stdout ?? '').split('\n').filter(Boolean)).toEqual([
+      "FIX wrappers: refused — the shipped tree has no $HOME/ccrc/ccd/ccrc, so its 'ccrc wrappers' cannot be run; run 'ccrc update' (or 'ccrc install' from a checkout)",
+      'rc=1',
+    ]);
+    expect(readdirSync(join(home, '.local', 'bin'))).toEqual([]);
+  });
+
+  it('an absent launcher is written by --fix, and the re-measurement is a PASS', () => {
+    const home = launcherBox('ccrc-doctor-fix-wrappers-absent-');
+    const r0 = runDoctor(home);
+    expect(lineFor(r0.stdout, 'wrappers')).toMatch(/^FAIL wrappers: /);
+    expect(existsSync(bin(home, 'claude2')), 'doctor without --fix wrote a launcher').toBe(false);
+    const r = runDoctor(home, ['doctor', '--fix']);
+    expect(r.stdout).toMatch(/^FIX wrappers: WRITE claude2: /m);
+    expect(second(r.stdout)).toMatch(/^PASS wrappers: /m);
+    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(marked('claude2', '.claude2', 'generated'));
+    expect(statSync(bin(home, 'claude2')).mode & 0o777).toBe(0o755);
+  });
+
+  it('a launcher whose ccrc marker still verifies, written for an older roster, is regenerated, and the one it replaced is kept', () => {
+    const home = launcherBox('ccrc-doctor-fix-wrappers-stale-');
+    const old = marked('claude2', '.claude2-old', 'generated');
+    writeFileSync(bin(home, 'claude2'), old, { mode: 0o755 });
+    const r0 = runDoctor(home);
+    expect(lineFor(r0.stdout, 'wrappers')).toMatch(/^FAIL wrappers: /);
+    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(old);
+    const r = runDoctor(home, ['doctor', '--fix']);
+    expect(r.stdout).toMatch(/^FIX wrappers: REWRITE claude2: /m);
+    expect(second(r.stdout)).toMatch(/^PASS wrappers: /m);
+    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(marked('claude2', '.claude2', 'generated'));
+    const b = backups(home, 'claude2');
+    expect(b).toHaveLength(1);
+    expect(readFileSync(bin(home, b[0]!), 'utf8')).toBe(old);
+  });
+
+  it('a launcher ccrc did not write is never overwritten: its FAIL stands, byte for byte, with no backup', () => {
+    const home = launcherBox('ccrc-doctor-fix-wrappers-foreign-');
+    const foreign = ['#!/usr/bin/env bash', '# hand-written, and pointing somewhere else on purpose',
+      'export CLAUDE_CONFIG_DIR="$HOME/.claude2-elsewhere"', 'exec "$HOME/.local/bin/claude" "$@"', ''].join('\n');
+    writeFileSync(bin(home, 'claude2'), foreign, { mode: 0o755 });
+    const r = runDoctor(home, ['doctor', '--fix']);
+    expect(r.stdout).toMatch(/^FIX wrappers: REFUSE claude2: /m);
+    expect(second(r.stdout)).toMatch(/^FAIL wrappers: /m);
+    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(foreign);
+    expect(backups(home, 'claude2')).toEqual([]);
+  });
+
+  it('a launcher ccrc wrote and someone edited since is never overwritten either', () => {
+    const home = launcherBox('ccrc-doctor-fix-wrappers-edited-');
+    const edited = marked('claude2', '.claude2', 'generated').replace('/.claude2"', '/.claude2-hand"');
+    expect(edited, 'the edit changed nothing — re-anchor it on the export line').not.toBe(marked('claude2', '.claude2', 'generated'));
+    writeFileSync(bin(home, 'claude2'), edited, { mode: 0o755 });
+    const r = runDoctor(home, ['doctor', '--fix']);
+    expect(r.stdout).toMatch(/^FIX wrappers: REFUSE claude2: /m);
+    expect(second(r.stdout)).toMatch(/^FAIL wrappers: /m);
+    expect(readFileSync(bin(home, 'claude2'), 'utf8')).toBe(edited);
+    expect(backups(home, 'claude2')).toEqual([]);
+  });
+
+  it('a Codex lane\'s marker-verified launcher is regenerated the same way, to exec ccrc-codex', async () => {
+    // This box has a codex row, so `_check_codex` measures it and FAILs (none
+    // of its lane state exists), and `_fix_codex` runs too. It is contained
+    // here the way every doctor fixture is: a contained PATH, no user manager,
+    // healthy()'s `python3` stub (a runtime build this reached would fail at
+    // `venv` before any pip), and free ports (a tier question finds nothing).
+    // Only the `wrappers` lines are this case's subject.
+    const [lane] = await freeLanes(['codex-a']);
+    const home = launcherBox('ccrc-doctor-fix-wrappers-codex-', [UP, {
+      id: 'codex-a', label: 'codex-a', configDirSuffix: '.claude-codex-a', homeAble: true, telemetry: 'codex',
+      exec: { kind: 'codex', provider: 'openai', proxyPort: lane!.proxyPort, litellmPort: lane!.litellmPort,
+        authDir: codexAuthDir('codex-a') },
+    }]);
+    writeFileSync(bin(home, 'codex-a'), marked('codex-a', '.claude-codex-a-old', 'codex'), { mode: 0o755 });
+    const r = runDoctor(home, ['doctor', '--fix']);
+    expect(r.stdout).toMatch(/^FIX wrappers: REWRITE codex-a: /m);
+    expect(second(r.stdout)).toMatch(/^PASS wrappers: /m);
+    const text = readFileSync(bin(home, 'codex-a'), 'utf8');
+    expect(text).toBe(marked('codex-a', '.claude-codex-a', 'codex'));
+    expect(text).toContain('\nexec "$HOME/.local/bin/ccrc-codex" "$@"\n');
+  });
+});
+
+// `describeCodex`, as every other `healthyCodexBox` case in this file: that
+// fixture's runtime check hands its stamp read to a real python3, and without
+// one its runtime reads `mutated`, so `_fix_codex` would reach a build and
+// every case would red for the fixture's reason, not the fixer's.
+describeCodex('ccrc doctor --fix: codex, on a real doctor run (Plan 3a Task 8)', () => {
+  // Task 4's `healthyCodexBox`, as Tasks 4-6 leave it: `_check_codex` prints
+  // no FAIL on it. Each case breaks exactly ONE thing. `await` takes the
+  // fixture whether Tasks 4-5 left it synchronous or not.
+  //
+  // CONTAINED THE WAY EVERY DOCTOR FIXTURE IS: a PATH of fixture directories
+  // only (no `systemd-run`, a stub `systemctl`), and healthy()'s `python3`
+  // stub, so a runtime build reached by mistake fails at `venv` before any
+  // pip. Every case also asserts that no `runtime: rebuilding` line appears,
+  // so such a mistake is a red here, never a slow build. The runtime arm
+  // itself is measured in isolation above: a real one is pip.
+  const FIX_TOOLS = ['cmp', 'cp', 'chmod', 'mv', 'rm', 'mkdir'] as const;
+  /** Everything after the fixer's closing line: doctor's SECOND measurement. */
+  const afterFix = (out: string): string => {
+    const i = out.lastIndexOf('FIX codex: done for ');
+    if (i < 0) throw new Error(`_fix_codex never reached its closing line:\n${out}`);
+    return out.slice(i);
+  };
+  const noBuild = (out: string): void => {
+    expect(out, 'this case reached a runtime build').not.toMatch(/^FIX codex: runtime: rebuilding/m);
+  };
+  type Roster = { accounts: Array<{ id: string; exec: Record<string, unknown> }> };
+  const rosterFile = (home: string): string => join(home, '.ccrc', 'accounts.json');
+  const readRosterJson = (home: string): Roster => JSON.parse(readFileSync(rosterFile(home), 'utf8')) as Roster;
+  const codexRowOf = (j: Roster): { id: string; exec: Record<string, unknown> } => {
+    const row = j.accounts.find((a) => a.id === 'codex-a');
+    if (row === undefined) throw new Error('healthyCodexBox rosters no codex-a');
+    return row;
+  };
+  const laneJson = (home: string): string => join(home, '.ccrc', 'codex', 'codex-a', 'lane.json');
+
+  it('a drifted GPT-lane executable is placed again from the shipped tree, and the re-measurement — not the FIX line — is the verdict', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-fix-codex-bin-');
+    for (const t of FIX_TOOLS) linkReal(home, t);
+    const shipped = join(home, 'ccrc', 'ccd', 'ccgpt-usage.py');
+    const placed = join(home, '.local', 'bin', 'ccgpt-usage.py');
+    expect(existsSync(shipped), 'healthyCodexBox ships no ccgpt-usage.py in its tree (Task 4 owes it)').toBe(true);
+    const drifted = '#!/usr/bin/env python3\n# drifted by hand\n';
+    // Unlink first: a write through a link the fixture planted would edit its target.
+    rmSync(placed, { force: true });
+    writeFileSync(placed, drifted, { mode: 0o755 });
+    const r0 = runDoctor(home);
+    expect(r0.stdout).toMatch(/^FAIL codex: /m);
+    expect(r0.stdout, 'doctor without --fix ran a fixer').not.toMatch(/^FIX /m);
+    expect(readFileSync(placed, 'utf8')).toBe(drifted);
+    const r = runDoctor(home, ['doctor', '--fix']);
+    noBuild(r.stdout);
+    expect(r.stdout).toMatch(/^FIX codex: restored \$HOME\/\.local\/bin\/ccgpt-usage\.py from the shipped tree$/m);
+    // The re-measurement RAN, and PASSes: "no FAIL" alone is vacuous over a
+    // doctor run that ended inside the fixer (the whole-cure-subshell row).
+    expect(afterFix(r.stdout)).toMatch(/^PASS codex: /m);
+    expect(afterFix(r.stdout)).not.toMatch(/^FAIL codex: /m);
+    expect(readFileSync(placed).equals(readFileSync(shipped))).toBe(true);
+    expect(statSync(placed).mode & 0o777).toBe(0o755);
+  });
+
+  it('an absent lane.json is rendered by --fix: the remedy the usage publisher names works on this tree', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-fix-codex-lanejson-');
+    expect(existsSync(laneJson(home)), 'healthyCodexBox has no lane.json (Task 4 owes it)').toBe(true);
+    const want = JSON.parse(readFileSync(laneJson(home), 'utf8')) as unknown;
+    rmSync(laneJson(home));
+    const r0 = runDoctor(home);
+    expect(r0.stdout).toMatch(/^FAIL codex: /m);
+    expect(existsSync(laneJson(home)), 'doctor without --fix wrote a lane.json').toBe(false);
+    const r = runDoctor(home, ['doctor', '--fix']);
+    noBuild(r.stdout);
+    expect(r.stdout).toMatch(/^FIX codex: codex-a: lane\.json re-rendered from the roster and this lane's class registry$/m);
+    expect(afterFix(r.stdout)).toMatch(/^PASS codex: /m);
+    expect(afterFix(r.stdout)).not.toMatch(/^FAIL codex: /m);
+    expect(JSON.parse(readFileSync(laneJson(home), 'utf8'))).toEqual(want);
+  });
+
+  it('a hand-edited litellm.yaml is re-rendered through the codex arm, and no tier was running to restart', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-fix-codex-litellm-');
+    const yaml = join(home, '.ccrc', 'codex', 'codex-a', 'litellm.yaml');
+    expect(existsSync(yaml), 'healthyCodexBox has no litellm.yaml (Task 4 owes it)').toBe(true);
+    const want = readFileSync(yaml, 'utf8');
+    writeFileSync(yaml, `${want}# edited by hand\n`);
+    const r = runDoctor(home, ['doctor', '--fix']);
+    noBuild(r.stdout);
+    expect(r.stdout).toMatch(/^FIX codex: codex-a: litellm\.yaml re-rendered$/m);
+    expect(afterFix(r.stdout)).toMatch(/^PASS codex: /m);
+    expect(afterFix(r.stdout)).not.toMatch(/^FAIL codex: /m);
+    expect(readFileSync(yaml, 'utf8')).toBe(want);
+  });
+
+  it.skipIf(pythonOrSkip() === null)('a foreign listener on a lane port survives --fix and its FAIL stands, while what --fix may cure is cured', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-fix-codex-foreign-');
+    // Fresh ports — never a hard-coded one for a real listener — which also
+    // leaves lane.json stale against the roster: a FAIL this fix may cure.
+    const [ports] = await freeLanes(['codex-a']);
+    const j = readRosterJson(home);
+    const row = codexRowOf(j);
+    row.exec['proxyPort'] = ports!.proxyPort;
+    row.exec['litellmPort'] = ports!.litellmPort;
+    writeFileSync(rosterFile(home), `${JSON.stringify(j, null, 2)}\n`);
+    const foreign = await spawnListener(home, { answer: 'text', lane: 'codex-a', port: ports!.proxyPort });
+    try {
+      const r = runDoctor(home, ['doctor', '--fix']);
+      noBuild(r.stdout);
+      expect(r.stdout).toMatch(/^FIX codex: codex-a: lane\.json re-rendered from the roster and this lane's class registry$/m);
+      // Task 5's own sentence for a listener on codex-a's shim port that
+      // answers with no lane id: the FAIL that stands is THAT one.
+      expect(afterFix(r.stdout)).toMatch(new RegExp(`^FAIL codex: codex-a: port ${ports!.proxyPort} \\(codex-a's shim tier\\) is held by a listener that is not this lane's: its identity check failed`, 'm'));
+      // Its port still accepting is the survival pin, never `alive()`: a
+      // killed child of this process stays a zombie, alive to `kill -0`,
+      // until the event loop reaps it (Task 5's ruling, codexLaneFixture.ts).
+      expect(await portAccepts(ports!.proxyPort), 'the foreign listener was signalled').toBe(true);
+      expect((JSON.parse(readFileSync(laneJson(home), 'utf8')) as { proxyPort: number }).proxyPort).toBe(ports!.proxyPort);
+    } finally {
+      await killLaneProcesses(home);
+    }
+  }, 60_000);
+
+  it('a roster row whose two ports collide stays FAIL: --fix chooses no port and writes no roster', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-fix-codex-ports-');
+    const j = readRosterJson(home);
+    const row = codexRowOf(j);
+    row.exec['litellmPort'] = row.exec['proxyPort'];
+    writeFileSync(rosterFile(home), `${JSON.stringify(j, null, 2)}\n`);
+    const before = readFileSync(rosterFile(home));
+    const r = runDoctor(home, ['doctor', '--fix']);
+    noBuild(r.stdout);
+    expect(r.stdout).toMatch(/^FIX codex: codex-a: nothing cured — its roster row does not validate \(the ccrc codex: line above says why\), and --fix never edits the roster or chooses a port$/m);
+    expect(afterFix(r.stdout)).toMatch(/^FAIL codex: /m);
+    expect(readFileSync(rosterFile(home)).equals(before), '--fix wrote the roster').toBe(true);
+  });
+
+  it('an absent authDir stays FAIL with the login remedy: --fix runs no OAuth and creates nothing there', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-fix-codex-auth-');
+    const auth = authDirOf(home, 'codex-a');
+    rmSync(auth, { recursive: true, force: true });
+    const r = runDoctor(home, ['doctor', '--fix']);
+    noBuild(r.stdout);
+    const second = afterFix(r.stdout);
+    expect(second).toMatch(/^FAIL codex: /m);
+    expect(second).toMatch(/^ {2}remedy: .*ccrc codex login codex-a/m);
+    expect(existsSync(auth), '--fix created the authDir').toBe(false);
   });
 });

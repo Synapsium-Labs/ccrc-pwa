@@ -77,6 +77,9 @@ describe('openCoordDb', () => {
     // MAIL_SWEEP_MS lane) was maintaining a b-tree no query ever read.
     // This pins the FULL index set, not just the dead one's absence, so
     // a stray replacement index cannot slip back in unnoticed either.
+    // Since the stall-read entry the set is two: `mail_deliveries_by_mail` serves the stall
+    // read's delivery statement, and the plan rows in `stall-store.test.ts` pin that `dueDeliveries` still reads
+    // `mail_deliveries_due`.
     const home = mkTmp('ccrc-coord-');
     const p = dbPathIn(home);
     const db = openCoordDb(p);
@@ -84,7 +87,7 @@ describe('openCoordDb', () => {
       "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='mail_deliveries' " +
       "AND name NOT LIKE 'sqlite_%'",
     ).all() as { name: string }[]).map((r) => r.name).sort();
-    expect(indexNames).toEqual(['mail_deliveries_due']);
+    expect(indexNames).toEqual(['mail_deliveries_by_mail', 'mail_deliveries_due']);
     db.close();
   });
 
@@ -657,15 +660,18 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 14 — never hand-edited beside a growing array', () => {
-    // Bumped to 14 by four migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
+  it('COORD_SCHEMA_VERSION derives to 16 — never hand-edited beside a growing array', () => {
+    // Bumped to 16 by six migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
     // design 2026-09-14 §5.1), MIGRATIONS[11] (runs.coordProject, board
     // placement wave 1 Task 1), MIGRATIONS[12] (pool_edges/pool_epoch,
-    // account-pool membership wave 1 Task 6) and MIGRATIONS[13] (releases,
+    // account-pool membership wave 1 Task 6), MIGRATIONS[13] (releases,
     // node_release_refusals, nodes, update_intent, update_epoch — centralised
-    // update management W2 Task 3).
-    expect(COORD_SCHEMA_VERSION).toBe(14);
-    expect(MIGRATIONS.length).toBe(14);
+    // update management W2 Task 3), MIGRATIONS[14] (the stall mail read's
+    // indexes, worker stall watch wave 5) and MIGRATIONS[15]
+    // (runs.sessionBornAt / runs.sessionBornFor — child-reclamation spec §5.1,
+    // §5.3).
+    expect(COORD_SCHEMA_VERSION).toBe(16);
+    expect(MIGRATIONS.length).toBe(16);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -720,9 +726,10 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION);
-    // 14 since MIGRATIONS[13] (the update control plane, centralised update
-    // management W2 Task 3); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(14);
+    // 16 since MIGRATIONS[14] (the stall read's indexes) and MIGRATIONS[15]
+    // (runs.sessionBornAt/sessionBornFor, child-reclamation spec §5.1, §5.3);
+    // the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(16);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -1174,6 +1181,209 @@ describe('coord.db: migration 14 — the update control plane (design 2026-09-20
     expect(banners.length, 'one banner per MIGRATIONS entry').toBe(MIGRATIONS.length);
     banners.forEach(([n, from, to], i) => {
       expect([n, from, to], `banner ${i + 1}`).toEqual([i + 1, i, i + 1]);
+    });
+  });
+});
+
+describe('coord.db: the stall mail read\'s indexes (worker stall watch wave 5)', () => {
+  // `CoordStore.stallMailFor` runs once per stall candidate per sweep, synchronously on the server's one handle.
+  // Before this entry both of its statements, and `hasMailWithSubject`, planned `SCAN mail`, and both statements
+  // `SCAN mail_deliveries`; `stall-store.test.ts`'s plan rows pin what the read plans now.
+  const INDEXES = ['mail_by_at', 'mail_by_run', 'mail_deliveries_by_mail'];
+  /** This entry's slot, found by its DDL and never hard-coded: schema.ts's rule is that whichever of two branches
+   *  holding one slot merges second moves up, and that renumber must not have to edit a line here. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('mail_deliveries_by_mail')) + 1;
+  const indexNames = (db: DatabaseSync): string[] =>
+    (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'").all() as
+      { name: string }[]).map((r) => r.name);
+  /** A database at exactly the version before this entry, carrying one mail and its delivery. */
+  const plantedBefore = (prefix: string, extra = ''): string => {
+    const p = dbPathIn(mkTmp(prefix));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body) " +
+               "VALUES (5, 'demo-a', 'u', 'demo-b', NULL, 'status', 's', 'x')");
+      raw.exec("INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (1, 'demo-b', 'acked', 'e')");
+      if (extra !== '') raw.exec(extra);
+    });
+    raw.close();
+    return p;
+  };
+
+  it('is its own entry, after every entry main carried when it was written', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates mail_deliveries_by_mail').toBeGreaterThanOrEqual(15);
+    expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => INDEXES.some((n) => m.includes(n))),
+      'an index of this entry was amended into a frozen one').toBe(false);
+  });
+
+  it('reaches a database ALREADY at the version before it, keeps its rows, and adds exactly its three indexes', () => {
+    const p = plantedBefore('ccrc-mig-stallidx-');
+    const before = new DatabaseSync(p);
+    const had = indexNames(before);
+    before.close();
+    expect(had.filter((n) => INDEXES.includes(n)), 'the plant already has one').toEqual([]);
+    const db = openCoordDb(p);
+    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
+    expect(indexNames(db).filter((n) => !had.includes(n)).sort()).toEqual(INDEXES);
+    expect(db.prepare('SELECT count(*) AS c FROM mail').get()).toEqual({ c: 1 });
+    expect(db.prepare('SELECT count(*) AS c FROM mail_deliveries').get()).toEqual({ c: 1 });
+    db.close();
+  });
+
+  it('a FRESH database reaches the same three', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-mig-stallidx-fresh-')));
+    expect(indexNames(db)).toEqual(expect.arrayContaining(INDEXES));
+    db.close();
+  });
+
+  it('IF NOT EXISTS: an index already made under one of its names does not refuse the start', () => {
+    const p = plantedBefore('ccrc-mig-stallidx-pre-', 'CREATE INDEX mail_by_at ON mail(at)');
+    expect(() => openCoordDb(p).close()).not.toThrow();
+  });
+
+  it('indexes the columns the read filters on, and no other (mail_deliveries.toId is deliberately absent)', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-mig-stallidx-cols-')));
+    const cols = (name: string): string[] =>
+      (db.prepare(`PRAGMA index_info(${name})`).all() as { name: string }[]).map((r) => r.name);
+    expect(INDEXES.map((n) => [n, cols(n)])).toEqual([
+      ['mail_by_at', ['at']], ['mail_by_run', ['runId']], ['mail_deliveries_by_mail', ['mailId']],
+    ]);
+    db.close();
+  });
+});
+
+describe('coord.db: migration 16 — runs.sessionBornAt / runs.sessionBornFor (child-reclamation)', () => {
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
+  const columnOf = (db: DatabaseSync, table: string, name: string): ColumnInfo | undefined =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnInfo[])
+      .find((c) => c.name === name);
+
+  it('reaches a database ALREADY at user_version 15 — the version just before this one', () => {
+    const p = dbPathIn(mkTmp('ccrc-mig16-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 15; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 15');
+    });
+    raw.close();
+
+    const db = openCoordDb(p);                    // must migrate 15 -> current
+    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
+    expect(columnOf(db, 'runs', 'sessionBornAt')).toBeDefined();
+    expect(columnOf(db, 'runs', 'sessionBornFor')).toBeDefined();
+    db.close();
+  });
+
+  it('sessionBornAt is INTEGER, sessionBornFor is TEXT, both nullable with no default — an older row predates the stamp', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-mig16-null-')));
+    const at = columnOf(db, 'runs', 'sessionBornAt')!;
+    expect(at.type).toBe('INTEGER');
+    expect(at.notnull).toBe(0);
+    expect(at.dflt_value).toBeNull();
+    const forCol = columnOf(db, 'runs', 'sessionBornFor')!;
+    expect(forCol.type).toBe('TEXT');
+    expect(forCol.notnull).toBe(0);
+    expect(forCol.dflt_value).toBeNull();
+    db.close();
+  });
+
+  it('is ADDITIVE: every runs column earlier migrations wrote is still there', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-mig16-add-')));
+    const names = (db.prepare("SELECT name FROM pragma_table_info('runs')").all() as { name: string }[])
+      .map((r) => r.name);
+    expect(names).toEqual(expect.arrayContaining(
+      ['id', 'program', 'project', 'wave', 'state', 'claimedBy', 'sessionId', 'dispatchStartedAt', 'coordProject']));
+    db.close();
+  });
+
+  // The backfill: `sessionBornAt = dispatchStartedAt`, `sessionBornFor =
+  // sessionId` for every bound row EXCEPT one whose `run_events` trail
+  // carries a `spawn-adopted:` event — an adopted winner may be an earlier
+  // attempt's workspace, so a backfilled guess would date it wrong. An
+  // unbound row is left NULL by the `WHERE sessionId IS NOT NULL` clause
+  // alone. Edited IN PLACE onto this same slot: this migration has never
+  // shipped, so `sessionBornFor` joins it here rather than opening a slot 17.
+  describe('the backfill', () => {
+    /** A database at exactly user_version 15, carrying three `runs` rows and
+     *  one `run_events` row, built with RAW SQL — never `CoordStore` — so the
+     *  migration under test is the only thing that can move
+     *  `sessionBornAt`/`sessionBornFor`. */
+    const plantedAt15 = (prefix: string): string => {
+      const p = dbPathIn(mkTmp(prefix));
+      mkdirSync(path.dirname(p), { recursive: true });
+      const raw = new DatabaseSync(p);
+      tx(raw, () => {
+        for (let v = 0; v < 15; v++) raw.exec(MIGRATIONS[v]!);
+        raw.exec('PRAGMA user_version = 15');
+        raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+        const insertRun = raw.prepare(
+          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, sessionId, dispatchStartedAt) ' +
+          'VALUES (?, 1, 1, ?, ?, ?, 1, ?, ?)',
+        );
+        // 1: bound, no spawn-adopted event — backfills.
+        insertRun.run('p', 'demo', 'working', 'c', 'demo-bound', 1_000);
+        // 2: unbound — WHERE sessionId IS NOT NULL alone leaves it null.
+        insertRun.run('p', 'demo', 'planned', 'c', null, null);
+        // 3: bound, but its dispatch was an ADOPTION — a `spawn-adopted:`
+        // event on this run's trail excludes it from the backfill.
+        insertRun.run('p', 'demo', 'working', 'c', 'demo-adopted', 2_000);
+        const adoptedId = raw.prepare("SELECT id FROM runs WHERE sessionId = 'demo-adopted'").get() as { id: number };
+        raw.prepare(
+          'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
+        ).run(adoptedId.id, 1, 'working', 'working', 'coordinator', 'spawn-adopted:expired');
+      });
+      raw.close();
+      return p;
+    };
+
+    it('backfills a bound row (both columns), leaves an unbound row null, and leaves a spawn-adopted row null', () => {
+      const db = openCoordDb(plantedAt15('ccrc-mig16-backfill-'));
+      const rows = db.prepare(
+        'SELECT sessionId, dispatchStartedAt, sessionBornAt, sessionBornFor FROM runs ORDER BY id',
+      ).all() as { sessionId: string | null; dispatchStartedAt: number | null;
+                    sessionBornAt: number | null; sessionBornFor: string | null }[];
+      expect(rows).toEqual([
+        { sessionId: 'demo-bound', dispatchStartedAt: 1_000, sessionBornAt: 1_000, sessionBornFor: 'demo-bound' },
+        { sessionId: null, dispatchStartedAt: null, sessionBornAt: null, sessionBornFor: null },
+        { sessionId: 'demo-adopted', dispatchStartedAt: 2_000, sessionBornAt: null, sessionBornFor: null },
+      ]);
+      db.close();
+    });
+
+    it('a spawn-adopted event on ANOTHER run does not exclude this one — the exclusion is per-run', () => {
+      const p = dbPathIn(mkTmp('ccrc-mig16-cross-'));
+      mkdirSync(path.dirname(p), { recursive: true });
+      const raw = new DatabaseSync(p);
+      tx(raw, () => {
+        for (let v = 0; v < 15; v++) raw.exec(MIGRATIONS[v]!);
+        raw.exec('PRAGMA user_version = 15');
+        raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+        const insertRun = raw.prepare(
+          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, sessionId, dispatchStartedAt) ' +
+          "VALUES ('p', 1, 1, 'demo', 'working', 'c', 1, ?, ?)",
+        );
+        insertRun.run('demo-other', 3_000);
+        insertRun.run('demo-adopted-elsewhere', 4_000);
+        const otherId = raw.prepare("SELECT id FROM runs WHERE sessionId = 'demo-other'").get() as { id: number };
+        const adoptedId = raw.prepare("SELECT id FROM runs WHERE sessionId = 'demo-adopted-elsewhere'")
+          .get() as { id: number };
+        // The event names the OTHER run — a real row, but not `otherId`'s.
+        raw.prepare(
+          'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
+        ).run(adoptedId.id, 1, 'working', 'working', 'coordinator', 'spawn-adopted:expired');
+      });
+      raw.close();
+
+      const db = openCoordDb(p);
+      expect(db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE sessionId = ?').get('demo-other'))
+        .toEqual({ sessionBornAt: 3_000, sessionBornFor: 'demo-other' });
+      expect(db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE sessionId = ?')
+        .get('demo-adopted-elsewhere')).toEqual({ sessionBornAt: null, sessionBornFor: null });
+      db.close();
     });
   });
 });

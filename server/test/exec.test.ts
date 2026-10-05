@@ -4,6 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Tmux, classifyHasSession, realRunner, type Runner, type ExecResult } from '../src/exec.js';
 import { VERDICT_MESSAGE_ROWS } from './sessionVerdictFixture.js';
+import { isExecAllowed } from '../../agent/src/whitelist.js';
+import { tmuxTarget } from '../../shared/tmux-target.js';
 
 const fake = (responses: Record<string, ExecResult>): { run: Runner; calls: string[][] } => {
   const calls: string[][] = [];
@@ -25,10 +27,54 @@ describe('Tmux', () => {
     const t = new Tmux(fake({ 'list-panes': { code: 0, stdout: '40613\n', stderr: '' } }).run);
     expect(await t.panePid('x')).toBe(40613);
   });
-  it('targets cc-<id> and sends literals with -l', async () => {
+  it('targets EXACTLY =cc-<id>: and sends literals with -l', async () => {
     const f = fake({});
     await new Tmux(f.run).sendLiteral('myid', 'hello');
-    expect(f.calls[0]).toEqual(['tmux', 'send-keys', '-t', 'cc-myid', '-l', 'hello']);
+    expect(f.calls[0]).toEqual(['tmux', 'send-keys', '-t', '=cc-myid:', '-l', 'hello']);
+  });
+
+  // D-3525. A bare `cc-<id>` is a tmux SEARCH — exact name, then unique prefix,
+  // then fnmatch, and for a pane/window command first a window NAME in the
+  // most recent session — so every method below read, typed into, resized or
+  // reported live the WRONG session whenever `cc-<id>` was gone and a
+  // `cc-<id>-…` sibling was not (measured, tmux 3.4). EVERY method, because
+  // the adapter's nine argv are nine chances to spell it bare again.
+  it('EVERY method targets =cc-<id>: — and every one of those argv crosses the agent whitelist', async () => {
+    const f = fake({});
+    const t = new Tmux(f.run);
+    await t.sessionVerdict('myid');
+    await t.panePid('myid');
+    await t.capture('myid');
+    await t.captureAnsi('myid');
+    await t.paneProbe('myid');
+    await t.captureHistory('myid', 100);
+    await t.sendLiteral('myid', 'x');
+    await t.sendKey('myid', 'Enter');
+    await t.resizeWindow('myid', 220, 50);
+    expect(f.calls).toHaveLength(9);
+    for (const c of f.calls) {
+      const i = c.indexOf('-t');
+      expect(i, c.join(' ')).toBeGreaterThan(0);
+      expect(c[i + 1], c.join(' ')).toBe('=cc-myid:');
+      // Remote mode runs these through the agent: an anchored target the
+      // whitelist refused would turn every read into `forbidden`.
+      expect(isExecAllowed(c[0]!, c.slice(1)), c.join(' ')).toBe(true);
+    }
+  });
+
+  it('tmuxTarget applies tmux\'s own `.`/`:` -> `_` rewrite, so a dotted id still finds its session', async () => {
+    // `tmuxName` now creates the sanitised name and `tmuxTarget` anchors it, so
+    // the rewrite happens once, at creation; the unrewritten anchor would answer
+    // `can't find session` for a LIVE session — `gone`.
+    expect(tmuxTarget('w-my.site')).toBe('=cc-w-my_site:');
+    const f = fake({});
+    await new Tmux(f.run).sessionVerdict('w-my.site');
+    expect(f.calls[0]).toEqual(['tmux', 'has-session', '-t', '=cc-w-my_site:']);
+  });
+
+  it('tmuxTarget on a colon id and a plain id (wave 9 M8 controls)', () => {
+    expect(tmuxTarget('a:b')).toBe('=cc-a_b:');
+    expect(tmuxTarget('demo')).toBe('=cc-demo:');
   });
 });
 
@@ -82,7 +128,7 @@ describe('classifyHasSession — three answers, not one boolean (D-309)', () => 
     const wedged = fake({ 'has-session': { code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default\n' } });
     const t = new Tmux(wedged.run);
     expect((await t.sessionVerdict('myid')).verdict).toBe('unknown');
-    expect(wedged.calls[0]).toEqual(['tmux', 'has-session', '-t', 'cc-myid']);
+    expect(wedged.calls[0]).toEqual(['tmux', 'has-session', '-t', '=cc-myid:']);
     // Derived, exactly like bash `_alive`: unknown and gone BOTH read false to
     // the callers that kept the boolean — their deliberate collapses are
     // documented at each site, not here.

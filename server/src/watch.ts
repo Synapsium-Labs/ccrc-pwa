@@ -10,10 +10,14 @@ import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
-import { CCD_ARGV, verbSupported, sweepDec } from './ccdargv.js';
-import { isFullLine, parsePrLines, phaseFor, repoCellFor, type CcdPrFailure } from './prstate.js';
-import { liveSessionStatus, readLiveState } from './livestate.js';
-import { readHookState, type HookState } from './hookstate.js';
+import { CCD_ARGV, RECLAIM_CAP, RECLAIM_PAUSE_CAP, capSupported, verbSupported, sweepDec } from './ccdargv.js';
+import {
+  isFullLine, parsePrLines, phaseFor, queueFor, repoCellFor, type CcdPrFailure, type PrQueueRead,
+} from './prstate.js';
+import { readLiveState, readLiveStateMeasured } from './livestate.js';
+import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark } from './turnidle.js';
+import { readTurnMarkMeasured } from './turnmark.js';
+import { readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { sendPrompt } from './inject/send.js';
 import { askActions, askKey } from './askkey.js';
@@ -25,13 +29,14 @@ import { askActions, askKey } from './askkey.js';
 import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth, MailGate, NotifyEvent,
-  ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary, SessionStatus, SessionUsage, TaskProgress,
+  ChildReclaimAttention, CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth,
+  MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
+  SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -39,11 +44,25 @@ import { JournalMirror } from './coord/mirror.js';
 // a redeclaration (TS2451), and `rundefs.ts` explains on purpose why the two
 // literals exist. `single-definition.test.ts` pins both halves of that split.
 import {
-  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, askNudgeSubject, isAskNudgeMail, queueSystemMail,
+  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, askNudgeSubject, isAskNudgeMail,
+  queueStallNotice, queueSystemMail, survivorOf,
 } from './coord/rundefs.js';
+import { landingAsk, landingVerdict, type LandingFacts } from './coord/landing.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
+import { measureClaimant } from './coord/reclaim.js';
+import {
+  BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
+  stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
+  stallFailedVerdict, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
+  stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
+  stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
+  stallReactivation, stallVerdict, stallW2ReportMail,
+  type AskRowFact, type HookAskFact, type HookRawFact, type LiveWordRead, type StallArming,
+  type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
+  type StallVerdict, type StallWorker, type TurnMarkRead,
+} from './coord/stall.js';
 // `floorFromScan` owns the seed arithmetic (max + LEDGER_SEED_GAP) and the
 // evidence string alike — the sweep below only feeds it files and applies
 // its answer, so LEDGER_SEED_GAP itself is not imported here.
@@ -54,13 +73,33 @@ import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
-import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore, type AskRow, type MarkReleaseNotifiedResult } from './coord/store.js';
+import {
+  MAIL_REPLAY_CEILING_ERROR, toRunSummary, type AskRow, type CoordStore, type MarkReleaseNotifiedResult,
+  type OpenSibling, type RunRow,
+} from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
+import { refusalSentence } from './wsaudit.js';
+import {
+  childReclaimGeneration, childReclaimLatest, childReclaimTokenKind, reclaimChild, releaseRetiredChildHold,
+  type ChildReclaimOutcome, type ChildReclaimReleaseOutcome, type ChildReclaimReleaseRequest,
+  type ChildReclaimRequest,
+} from './coord/childReclaim.js';
+import {
+  childReclaimAttention, childReclaimDeferExpired, childReclaimDue, childReclaimFirstSighting,
+  childReclaimHoldRead, childReclaimJournalRow, childReclaimNextEntry, childReclaimSweepVerdict,
+  childReclaimTerminalRefusal, type ChildReclaimHoldCandidate, type ChildReclaimHoldCandidatesRead,
+  type ChildReclaimHoldOpenRead, type ChildReclaimHoldRead, type ChildReclaimJournalRow,
+  type ChildReclaimMintingRunRead, type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead,
+  type ChildReclaimSweepEntry, type ChildReclaimSweepSkip,
+} from './childReclaimSweep.js';
+import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
+import { runDispatch, type DispatchRunResult } from './update/converge.js';
+import type { MoveFeedRecord } from './update/dispatch.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
@@ -96,6 +135,35 @@ const NAME_SWEEP_MS = 10_000;
  *  the name sweep, deliberately: this one touches the filesystem per PROJECT,
  *  not per pane. */
 const DIVERGENCE_SWEEP_MS = 60_000;
+
+/** The child-reclaim lane (child-reclamation wave 4, spec §5.7). The
+ *  census's cadence, for the census's reason — a child's eligibility moves on
+ *  human timescales (a run closes, a re-dispatch binds) — and the
+ *  TWICE-OBSERVED rule is measured in these intervals: a child must read
+ *  eligible on two passes at least this far apart before anything is
+ *  composed. It is also the base of the failure backoff (spec §5.9: "retries
+ *  back off in between"). EXPORTED so its suite advances by the real
+ *  constant. */
+export const CHILD_RECLAIM_SWEEP_MS = 60_000;
+
+/** At most this many lane-asked reclaims outstanding at once. Close-path
+ *  reclaims are not counted, and neither is a hold-release job: the bound is
+ *  the LANE's own concurrency, not the fleet's — one destructive verb from
+ *  this automatic trigger (spec §5.7, "On the sweep": no human is in this
+ *  path) in flight at a time keeps a bad pass from asking the box for ten
+ *  deletions before the first one has even answered. */
+export const CHILD_RECLAIM_MAX_IN_FLIGHT = 1;
+
+/** A lane-asked reclaim that has not settled after this long stops counting
+ *  against `CHILD_RECLAIM_MAX_IN_FLIGHT` — twice `ws-reclaim`'s own remote
+ *  budget (`ws-reap`'s four minutes, the same budget wave 3's executor
+ *  composes its argv under), so a genuinely slow but live attempt gets a full
+ *  budget's grace before the lane treats it as stuck. It STAYS in flight —
+ *  nothing here cancels or forgets it — and is
+ *  logged once, not once a pass, so a fleet host that never answers does not
+ *  fill the log forever. */
+export const CHILD_RECLAIM_STALL_MS = 480_000;
+
 /** How long the FIRST fleet assembly after boot waits for the first HEAD
  *  sweep (`headBranches`) before shipping without it. Bounded because that
  *  sweep is serial agent round trips per project and a dropped one need not
@@ -119,6 +187,55 @@ export const LC_SWEEP_MS = 5_000;
  *  cadence. Renew and lapse each keep their own clock so neither starves the
  *  other's first run. */
 const CLAIM_SWEEP_MS = 60_000;
+
+/** The stall watch's lane (spec 2026-09-29 §4.2, §10). It runs at `CLAIM_SWEEP_MS`'s cadence, for that
+ *  constant's reason: a 2 h threshold does not need the 2 s tick. EXPORTED for its suite, as `LC_SWEEP_MS`
+ *  and `READINESS_SWEEP_MS` are. */
+export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;
+/** The gap rule's threshold (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)): between one missed sweep (~120 s, clocks survive) and two (~180 s, clocks drop). */
+const STALL_CLOCK_GAP_MS = STALL_SWEEP_MS * 5 / 2;
+
+/**
+ * What `tick()` already measured, handed to the stall lane so it reads neither again (worker stall watch wave 2, M6;
+ * slug `tick-hands-the-lane-pids-and-records` (D-3649)). `panePids` holds the pane pid `assembleFleet` read for every alive
+ * row: `null` when tmux answered none, and no entry for a pane that was not alive. `records` holds the registry rows
+ * this tick read. REQUIRED: the lane has no pid or uuid read of its own, so production and the tests run one path.
+ */
+export interface StallTick {
+  readonly panePids: ReadonlyMap<string, number | null>;
+  readonly records: readonly SessionRecord[];
+}
+
+/** The registry uuid the stall lane reads a marker and a hookstate against, off the tick's rows: `uuid: null` for no
+ *  row (unregistered), and `ok:false` for a row whose identity the tick could not measure. */
+type StallUuid = { readonly ok: true; readonly uuid: string | null } | { readonly ok: false };
+/** One live-file read: the raw word the verdict reads, and the live process's start the marker is judged by. */
+interface StallLive { readonly live: LiveWordRead; readonly startedAt: number | null }
+/** A session whose hookstate this lane does not read (a coordinator, a registry row): no session verdict takes an
+ *  ask, and `unmeasured` says it was not read, never "no ask". */
+const STALL_HOOK_ASK_UNREAD: HookAskFact = { kind: 'unmeasured' };
+/** An identity the tick could not measure: the hookstate cannot be compared with it, so it is not read. */
+const STALL_RAW_UNMEASURED: HookStateRawRead = { ok: false, reason: 'unmeasured' };
+
+/** The hookstate ask the run verdict's holds 2a and 2b read, projected from the ONE raw read
+ *  (`readHookStateRawMeasured`). A foreign or unregistered file carries no ask of this session's. `absent` and
+ *  `malformed` read as no ask, as wave 1's identity-gated read answered them, and `unmeasured` stays unmeasured. A
+ *  PermissionRequest `{approval}` envelope is carried as `approval` (M7b): L1 decides it is hold 2b, never 2a.
+ *  Named departure `hook-ask-projection-in-l4` (D-3691): this projection, the identity cut included, stays in L4 as wave 1's
+ *  shipped `stallHookAsk` kept it. It is not moved to `coord/stall.ts` in this wave. */
+function stallHookAskOf(raw: HookStateRawRead): HookAskFact {
+  if (!raw.ok) return raw.reason === 'unmeasured' ? { kind: 'unmeasured' } : { kind: 'none' };
+  if (raw.identity !== 'current' || raw.state.ask === null) return { kind: 'none' };
+  return 'questions' in raw.state.ask ? { kind: 'ask', at: raw.state.updatedAt } : { kind: 'approval', at: raw.state.updatedAt };
+}
+
+/** The raw hookstate as the frozen and delegates steps read it (`HookRawFact`): the identity and the event are
+ *  carried, and L1 judges them. */
+function stallHookFactOf(raw: HookStateRawRead): HookRawFact {
+  return raw.ok
+    ? { ok: true, updatedAt: raw.state.updatedAt, event: raw.state.event, sessionId: raw.sessionId, identity: raw.identity }
+    : { ok: false, reason: raw.reason };
+}
 
 /** D13's two ledger lanes. The floor scan reads every plan and spec of every
  *  registry-named project, so it runs HOURLY; reconcile reads only the plans
@@ -263,7 +380,10 @@ const MAIL_SWEEP_MS = 10_000;
  *  own `COMPACT_QUIET` (`ccd/ccd:142`), taken rather than re-derived: this is
  *  the same judgement about the same panes, and two numbers for one policy is
  *  two numbers to get out of step. Measured from `statusUpdatedAt`, which
- *  Claude Code ticks on every busy<->idle transition (`ccd/ccd:7047-7048`). */
+ *  Claude Code rewrites only when the live word changes: under `idle` or
+ *  `shell` the main loop has been idle at least that long (the worker stall
+ *  watch design's §3.1), which is all this quiet needs. `mailTurnIdle`
+ *  (`turnidle.ts`) applies it. */
 const MAIL_QUIET_MS = 60_000;
 
 /** The ask-release lane's own self-throttle (RULING F4, task-7-brief). Not how
@@ -301,11 +421,11 @@ const MAIL_COOLDOWN_MS = 120_000;
 const COORD_QUIET_MS = 15_000;
 const COORD_COOLDOWN_MS = 30_000;
 
-/** How long an UNACKED delivery waits before it is replayed. Dated from the
+/** WHAT `MAIL_REPLAY_MS` MEANS: how long
+ *  an UNACKED delivery waits before it is replayed. Dated from the
  *  `UserPromptSubmit` edge when there is one, from `deliveredAt` otherwise —
  *  the edge proves the turn started, so the recipient is thinking, not
- *  ignoring. */
-const MAIL_REPLAY_MS = 600_000;
+ *  ignoring. The VALUE is `shared/api.ts`'s (`stall.ts` reads it too). */
 
 /** WHAT `MAIL_MAX_ATTEMPTS` MEANS, kept beside the code that enforces it. The
  *  VALUE moved to `shared/api.ts` in Task 408 — `MailSummary.attempts` puts
@@ -351,6 +471,16 @@ const MAIL_BACKOFF_MAX_MS = PR_BACKOFF_MAX_MS;
  *  minutes against a reset that may be hours away: cheap re-reads, and the
  *  first sweep after the session resumes delivers. */
 const MAIL_ARMED_HOLD_MS = 300_000;
+
+/** Worker stall watch §4.1: how long a nudge is held when `sendPrompt` refused
+ *  it `turn-running`. The live word delivered it (`shell`), but the pane's last
+ *  8 rows showed `esc to interrupt`. Like `MAIL_ARMED_HOLD_MS`, this is not a
+ *  backoff step. The recipient is not failing, so the hold counts no attempt
+ *  and `MAIL_MAX_ATTEMPTS` cannot park it. Unlike that hold, the sender is not
+ *  told, because a running turn is not a blocked recipient. *Chosen*, 60 s: a
+ *  turn may end in seconds, while `MAIL_ARMED_HOLD_MS` is sized for a usage-limit
+ *  reset. */
+const MAIL_TURN_HOLD_MS = 60_000;
 
 /** The ceiling on successful, UNACKED replays (review finding 20) — see
  *  `MAIL_MAX_ATTEMPTS`'s own docstring for why that counter cannot serve
@@ -497,6 +627,23 @@ export class FleetWatcher {
    * persisting it would buy nothing back for that price.
    */
   private mergedNotified = new Set<string>();
+  /** The merge-queue word each session's last full pr-state line carried
+   *  (`queueFor`), kept beside `prStates` and written by the same arm of
+   *  `sweepPr`. Read by `sweepLanding` and nothing else. */
+  private prQueues = new Map<string, PrQueueRead>();
+  /** `sweepLanding`'s in-memory latch, per (workspace, PR, notice, removal
+   *  time) — the `mergedNotified` shape plus the notice and the removal's own
+   *  timestamp, because a PR can be dequeued, re-enqueued and dequeued AGAIN,
+   *  and each removal is a new fact the coordinator has to hear. Written only
+   *  AFTER the notice landed, after a durable read proved an earlier process
+   *  sent it, or once the lane has decided there is nobody to tell — never
+   *  before a read: a latch set ahead of a failed read or a thrown mail would
+   *  make that removal a landing that silently stops. It is NOT what stops a
+   *  restart re-announcing (a PR can sit dequeued through a whole fix round,
+   *  and every rollout restarts this process); that is `sweepLanding`'s
+   *  DURABLE read. This set spares a latched notice the coord.db reads on
+   *  every later sweep. */
+  private landingNotified = new Set<string>();
   /** Last-seen model/effort/ultracode/branch per live session (from the pane). */
   private statuslines = new Map<string, Statusline>();
   /** The branch each worktree's own HEAD names, keyed by the CCD ID measured
@@ -581,10 +728,19 @@ export class FleetWatcher {
   /** Plan W3 Task 3: the last reason a release-push decision failed, so a coord.db that cannot be read
    *  warns once per change of reason on the inventory lane's minute beat (`lastProjectionWhy`'s idiom). */
   private lastReleasePushFailure: string | null = null;
-  /** Plan W3 Task 3 (D-3314): true once THIS process has finished one
-   *  inventory run. Until then the `nodes` rows are the previous process's, so the catalogue side
-   *  (`pushReleaseAfterPoll`) decides nothing. Set by `sweepThenProject`; never cleared. */
+  /** Plan W3 Task 3 (D-3314): true once THIS process's sweep has actually REWRITTEN the rows the push decides
+   *  on — never merely "a sweep finished" (W5 review 161, F-H: a sweep can finish with the server row
+   *  unreachable, refused or errored, none of which rewrites it — `sweptEnoughToDecide` is the exact
+   *  predicate, `sweepThenProject`'s own comment above its call site). Until it opens, the `nodes` rows are
+   *  the previous process's, so the catalogue side (`pushReleaseAfterPoll`) decides nothing. Set by
+   *  `sweepThenProject`; never cleared. */
   private inventorySwept = false;
+  /** Wave 5 (design 2026-09-20 §10): the dispatcher's ONE run in flight, and whether a trigger arrived while
+   *  it ran. However many triggers arrive during a run, they ask for ONE follow-up after it — so a request
+   *  written mid-run is planned by a run that reads it, and no two runs ever hold the plan-then-acquire
+   *  stretch at once. */
+  private dispatchRun: Promise<DispatchRunResult> | null = null;
+  private dispatchAgain = false;
   /** The sixth lane's clock. */
   private lastNameSweep = 0;
   /** The census lane's clock, and its byte-equality guard. A git-ref read per
@@ -594,6 +750,68 @@ export class FleetWatcher {
    *  a HEALTHY fleet is a frame rather than a silence. */
   private lastDivergenceSweep = 0;
   private lastDivergenceJson: string | null = null;
+  /** The child-reclaim lane's clock (child-reclamation wave 4). */
+  private lastChildReclaimSweep = 0;
+  /** Per marked child: the twice-observed sighting, the two deferral clocks
+   *  (the first deferral of any kind, which each request carries; the first
+   *  PRESENCE deferral, which alone the ceiling reads), the run of failed
+   *  attempts the backoff reads, and the fairness ordering key
+   *  (`lastAskedAt`) — `ChildReclaimSweepEntry`. IN MEMORY ONLY, deliberately:
+   *  a restart loses it, and losing it can only DELAY a reclaim (two passes
+   *  rebuild eligibility, the ceiling clock restarts) or retry a failing one
+   *  sooner, which ccd's re-proof on the box makes safe — never cause one. */
+  private childReclaimSweepState = new Map<string, ChildReclaimSweepEntry>();
+  /** Children whose reclaim this lane has asked for and not heard back on. A
+   *  pass never asks a child already in this set twice: the executor can hold
+   *  a session's queue for minutes (`ws-reclaim`'s remote budget is
+   *  `ws-reap`'s). Bounded to `CHILD_RECLAIM_MAX_IN_FLIGHT`, except a
+   *  dispatch that has run past `CHILD_RECLAIM_STALL_MS` — `childReclaimInFlightSince`
+   *  is what tells the two apart. */
+  private childReclaimInFlight = new Set<string>();
+  /** When each in-flight dispatch was sent — `CHILD_RECLAIM_STALL_MS`'s own
+   *  clock, and the reason a request that never settles stops holding the
+   *  lane's one slot forever. */
+  private childReclaimInFlightSince = new Map<string, number>();
+  /** Session ids whose stall past `CHILD_RECLAIM_STALL_MS` this process has
+   *  already logged once — never once a pass, for the reason
+   *  `CHILD_RECLAIM_STALL_MS`'s own docstring gives. Cleared when the
+   *  dispatch finally settles, so a LATER stall of the same child (a second
+   *  reclaim, long after the first) is reported again. */
+  private childReclaimStalledLogged = new Set<string>();
+  /** One log line per absence per child per process, not one a minute — keyed
+   *  `<why> <id>`, because an absent minting run and an absent reviewed run
+   *  are two conditions with two sentences. */
+  private childReclaimAbsentLogged = new Set<string>();
+  /** Per marked child: has THIS lane already seen a `hold-retired` verdict for
+   *  it once, with no other verdict in between? A `hold-retired` verdict a
+   *  SECOND consecutive pass finds queues the release job; any other verdict
+   *  — eligible or any other ineligibility — clears the entry, so the two
+   *  sightings must be back to back. IN MEMORY ONLY, the `childReclaimSweepState`
+   *  idiom: a restart only delays a release by one more sighting, never causes
+   *  one — the job's own re-reads, and ccd's rung 4, prove everything again
+   *  before anything is written. A child already in `childReclaimInFlight`
+   *  (its release job dispatched, or its ordinary reclaim in flight) is never
+   *  touched here — the lane has no re-entrancy guard beyond that one set, and
+   *  an overlapping pass must not turn "two further passes" into one. */
+  private childReclaimHoldRetiredSeen = new Set<string>();
+  /** Per marked child: has its retired-hold release job ANSWERED since this
+   *  lane last saw it eligible? Set where the job settles, beside the delete
+   *  of its sweep entry; CONSUMED by the next eligible verdict, which seeds
+   *  nothing that pass. A pass's registry listing is read before the lanes
+   *  ahead of this one are awaited, so the job can answer between a listing
+   *  and the loop that reads it — and a sighting seeded from a listing older
+   *  than the answer must not count as one of the two fresh unheld passes the
+   *  answer requires (spec §5.7). The lane cannot tell such a listing from a
+   *  fresh one, so it skips one sighting either way: that fails closed and
+   *  costs one pass. CLEARED in three places only: the two pass-level resets
+   *  (the mirror or coordination-history fail-shut, and the switches and
+   *  capabilities return), and the vanished-row loop, so a mark never
+   *  outlives its child. An INELIGIBLE verdict deletes the entry but KEEPS
+   *  the mark, deliberately: the listing that matters most is the stale HELD
+   *  one, read before ccd unlinked the hold, and spending the mark there
+   *  would reopen the window it exists to close. Keeping it costs at most one
+   *  pass, once. IN MEMORY ONLY, the `childReclaimSweepState` idiom. */
+  private childReclaimReleaseAnswered = new Set<string>();
   /** The seventh lane's clock — the journal mirror. `sweepLifecycle` below
    *  carries the lane's own docstring; this is only the clock field, same
    *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
@@ -601,6 +819,32 @@ export class FleetWatcher {
   /** The claim lanes' clocks (build 9 wave 7, D12). */
   private lastClaimRenew = 0;
   private lastClaimLapse = 0;
+  /** The stall lane's own clock (`STALL_SWEEP_MS`), with the same `!== 0` never-run idiom. */
+  private lastStallSweep = 0;
+  /** True while a `sweepStalls` pass awaits its reads. A second pass started meanwhile returns at once. */
+  private stallSweepRunning = false;
+  /** Wave 2's in-memory clocks, keyed by session id, pruned every sweep (`pruneStallMemory`) and dropped whole after a
+   *  gap of more than STALL_CLOCK_GAP_MS between judged sweeps (`dropStallClocks`, `lastStallJudgedAt`). A server
+   *  restart re-times each one, which the spec accepts (slug `absent-worker-is-dead-after-grace` (D-3631)): when a run worker
+   *  was first seen with no fleet row; when it was first seen with an `orphan` or `never-started` lifecycle; when a
+   *  worker's or coordinator's turn marker was first READ `unmeasured` or `malformed` (`stallMarkClock`: an unmeasured
+   *  identity reads no marker, so it neither starts nor keeps that clock). */
+  private stallAbsentSince = new Map<string, number>();
+  private stallDeadSince = new Map<string, number>();
+  private stallMarkUnreadableSince = new Map<string, number>();
+  /** When the lane last FINISHED judging its candidates, or null before the first judged sweep: the gap rule's anchor
+   *  (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)). Stamped at the end of a sweep whose candidates read, never on an
+   *  early return, so a slow sweep's own duration is never counted as a gap. */
+  private lastStallJudgedAt: number | null = null;
+  /** The run-less operator pushes already sent: each push tag (`stallPushRoute`'s) with the session it names, which
+   *  the prune keys on. IN MEMORY (slug `run-less-push-latches-are-in-memory` (D-3751)): a restart re-pushes a run-less orphan D
+   *  rung 2, a mail-stuck, a marker-unreadable or a coordinator's failed rung 2 to the operator while it stands. A
+   *  coordinator's marker-unreadable push is keyed on its first-seen time, which a restart or a clock drop (an
+   *  unobserved gap, `dropStallClocks`) re-times, so one push can go out on each side of it. Pushes only, never mail. */
+  private stallLatch = new Map<string, string>();
+  /** Warn-once keys, `<sessionId>|<what>`: a run-less shadow rung, `failed-unknown`, and the defensive r2-with-no-r1
+   *  line (`applyStall`; no real input reaches it today). */
+  private stallWarned = new Set<string>();
   /** The ledger lanes' clocks (build 9 wave 7, D13). */
   private lastLedgerFloor = 0;
   private lastLedgerReconcile = 0;
@@ -750,6 +994,14 @@ export class FleetWatcher {
    *  was making it, and there is nothing left to guard once the process is
    *  gone. */
   private mailInFlight = new Set<string>();
+  /** Delivery ids whose `mail-gate-busy-shadow` "would deliver" line has been
+   *  logged (worker stall watch §5.1). Before `mail-gate-busy` is armed, the
+   *  operator checks each line against the session's transcript for 48 h, so
+   *  there is one line per delivery, not one per sweep. `sweepMail` prunes it
+   *  at its head to the deliveries still outstanding, due or not (a row backed
+   *  off past a sweep is kept). IN MEMORY BY DESIGN, as
+   *  `mailCooldown` is: a restart logs a still-held delivery once more. */
+  private busyShadowLogged = new Set<number>();
   /** `emitRuns`'s own byte-equality guard, the same idiom as `lastJson`
    *  above, over `RunSummary[]` instead of `FleetSession[]`. `null` (not
    *  `'[]'`) so the very first tick with a real `coord` always emits at
@@ -761,6 +1013,19 @@ export class FleetWatcher {
    *  tick measures — see `currentCoord()`. */
   private coord: CoordStatus | null = null;
   private lastCoordJson: string | null = null;
+  /** The reclaim attention list as `sweepChildReclaim` last derived it from
+   *  the lifecycle mirror (child-reclamation wave 4). `emitCoord` reads it on
+   *  every tick; the sweep's MIRROR DERIVATION is its ONLY writer, on its own
+   *  slower clock, so a frame never waits on a database read. A cache of that
+   *  derivation's result, never a memo of anything else: no executor answer
+   *  writes it (spec §5.9: "derived from the lifecycle mirror so a restart
+   *  does not lose it" — every terminal refusal reaches the mirror through
+   *  ccd's own journal line, `ws-reclaim`'s or the one `ws-audit --reclaim`
+   *  writes for a terminal verdict, and every failure through `ws-reclaim`'s
+   *  `_lc_fail`; the mirror is the ONLY source). `[]` until the first
+   *  sweep — which runs on the first tick after a restart, so the list is
+   *  rebuilt from the mirror within one tick rather than lost. */
+  private childReclaimAttentionList: readonly ChildReclaimAttention[] = [];
   /** `emitPools`'s byte-equality guard and last measured value — `lastCoordJson`
    *  and `coord`'s idiom, for their reasons. `null` until a tick has measured,
    *  and `currentPools()` sends NOTHING while it is: a fabricated empty map
@@ -901,6 +1166,69 @@ export class FleetWatcher {
     });
   }
 
+  /**
+   * The dispatcher's ONE run (design 2026-09-20 §10), single-flight. Called at the end of every inventory run
+   * (`sweepThenProject`) and by the update routes after every intent and request write. A call while a run is
+   * in flight JOINS it and asks for exactly one follow-up; otherwise it starts a run SYNCHRONOUSLY — the run's
+   * plan and lease acquire happen in the caller's own turn, so a route's reply already reads `pending`.
+   */
+  dispatchNow(): Promise<DispatchRunResult> {
+    if (this.dispatchRun !== null) {
+      this.dispatchAgain = true;
+      return this.dispatchRun;
+    }
+    // `.finally`, not `.then` — it must clear `dispatchRun` whether this run resolves OR rejects. A `.then`
+    // success-only callback would never run on a rejection, so a single thrown run would leave the single-flight
+    // field set forever and nothing would dispatch again until restart (review finding 1).
+    const run = this.dispatchOnce().finally(() => {
+      this.dispatchRun = null;
+      if (this.dispatchAgain) {
+        this.dispatchAgain = false;
+        this.triggerDispatch();
+      }
+    });
+    // D-3493 — the update lanes' rule at the tip: a rejection is warned, never swallowed. Attached ONCE, here, at
+    // the run's own creation — never inside `triggerDispatch`, which every caller that JOINS this same run also
+    // calls: a `.catch` there would fire once per joiner, logging one rejection N times (review finding 2).
+    void run.catch((err: unknown) => {
+      console.warn(`ccrc-server: a dispatch run rejected: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+    });
+    this.dispatchRun = run;
+    return run;
+  }
+
+  /** For a caller that must not wait: the inventory run's tail, a route's reply. Fire-and-forget only —
+   *  `dispatchNow` itself attaches the rejection log to the run it creates (see above), so this must not attach
+   *  a second one. */
+  triggerDispatch(): void {
+    void this.dispatchNow();
+  }
+
+  /** The act's deps, built from this process's Deps — the ONE place they are assembled. The server's own
+   *  update.json is read through `localIO` in both modes (`deps.io` is the FLEET box's io in remote mode). */
+  private async dispatchOnce(): Promise<DispatchRunResult> {
+    const coord = this.deps.coord;
+    if (coord === undefined) return { ran: false, why: 'no-coord' };
+    const { cfg, fleetState, sendUpdateOp, updateRunner } = this.deps;
+    return runDispatch({
+      store: coord, role: cfg.role, ccrcDir: cfg.ccrcDir, localIo: localIO, deadlineMs: cfg.updateDeadlineMs,
+      fleet: sendUpdateOp !== undefined && fleetState !== undefined ? { state: fleetState, send: sendUpdateOp } : null,
+      runLocal: updateRunner ?? null,
+      onAccepted: () => this.triggerInventory(),
+      recordMove: (r) => { this.recordMoveFeed(r); },
+    }, Date.now());
+  }
+
+  /** Wave 8 item A: a move's audit row, through pushOne's own record path (the ring, its flush, and the durable feed
+   *  archive behind its guarded `recordFeedEvent`). Never a push (`recordOnly`), never gated on presence
+   *  (`recordAlways`); about no session and no run. It decides nothing. */
+  private recordMoveFeed(r: MoveFeedRecord): void {
+    this.pushOne({
+      kind: 'update', sessionId: '', project: '', title: r.title, body: r.body, runId: null,
+      recordAlways: true, recordOnly: true,
+    }, this.activeProjects);
+  }
+
   /** C3 (final fix wave): D-3211 says a node-id collision "is named", but the
    *  sweep's `SweepOutcome[]` was discarded by both callers — nothing ever
    *  printed it. Warns each `node-id-collision`, each `refused` and each
@@ -1016,6 +1344,9 @@ export class FleetWatcher {
     // skipped too, rather than deciding on rows this process never wrote.
     if (this.sweptEnoughToDecide(inv, outcomes)) this.inventorySwept = true;
     if (this.inventorySwept) this.pushRelease(now);
+    // Wave 5 (design 2026-09-20 §10): the sweep is what settles a lease, so every inventory run ends in ONE
+    // dispatch run — the next node's turn starts on the beat that freed it.
+    this.triggerDispatch();
     return outcomes;
   }
 
@@ -1066,8 +1397,9 @@ export class FleetWatcher {
       marked = coord.markReleaseNotified(n.tag, now);
       // Fix round 1 (F1/F14, D-3313/D-3316): sides are picked from EVERY live row — filtering first is what
       // let a `both` server row's own version stand in for a fleet nobody measured (the reviewer's exact
-      // rows). `stated` carries the per-row "does this reading vouch for its version" fact — measured this
-      // sweep, its stamp read, and (D-3316) reachable — so an occupying row that fails it renders as a dash,
+      // rows). `stated` carries the per-row "does this reading vouch for its version" fact — EVER measured
+      // (W5 review 161, F-I: `measuredAt` is a persisting stamp, not "measured THIS sweep"), its stamp read,
+      // and (D-3316) reachable — so an occupying row that fails it renders as a dash,
       // never its stale value, but still blocks another row from falling back into its side. On a remote
       // fleet (D-3313) a `both` row is THIS box, never the fleet box; local mode's one `both` row genuinely
       // is both (D-3301).
@@ -1095,8 +1427,11 @@ export class FleetWatcher {
 
   /**
    * The catalogue side's entry (plan W3 Task 3): `tick()`'s catalogue gate and `POST /api/updates/refresh`
-   * call this, never `pushRelease` directly. It decides only once THIS process has finished one inventory run
-   * (D-3314). Both lanes fire unawaited on the first tick after a start, and
+   * call this, never `pushRelease` directly. It decides only once THIS process's own sweep has actually
+   * REWRITTEN the rows it decides on (D-3314) — not merely once an inventory run has finished (W5 review
+   * 161, F-H: a finished run whose write was refused, errored or left the row merely marked unreachable
+   * leaves `inventorySwept` closed too; `sweptEnoughToDecide` is the exact gate). Both lanes fire unawaited
+   * on the first tick after a start, and
    * until the first sweep rewrites them the `nodes` rows are the previous process's. After a server-box update
    * they still carry the version the update replaced, so a poll that resolves first would push "vX is out" to
    * a fleet already on vX. The inventory run's own `pushRelease` call makes that first decision instead.
@@ -1178,6 +1513,13 @@ export class FleetWatcher {
    *  came back unreadable. Same reasoning as currentPending(). */
   currentCoord(): CoordStatus | null {
     return this.coord;
+  }
+
+  /** The sweep's in-memory state, read-only (child-reclamation wave 4) — what
+   *  wave 5's run chip reads to tell `deferred` from `pending`. Empty after a
+   *  restart, by design: see `childReclaimSweepState`'s own docstring. */
+  currentChildReclaimDefers(): ReadonlyMap<string, ChildReclaimSweepEntry> {
+    return this.childReclaimSweepState;
   }
 
   /** The last measured project-pool sweep, or null if none has been taken yet
@@ -1365,6 +1707,16 @@ export class FleetWatcher {
       // records it is compared with. `sweepDivergences` states the race in full.
       void this.sweepDivergences(records)
         .catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, same reasoning as `sweepNames` above and then some: this
+      // lane joins the per-session KeyedQueue behind wave 3's `ws-reclaim`,
+      // whose remote budget is `ws-reap`'s four minutes. Own clock
+      // (`CHILD_RECLAIM_SWEEP_MS`). HANDED `registryRead.names`, unlike the
+      // census: the only fact it takes from the listing is the reclaim
+      // switches, and a listing a few awaited lanes old is safe for that one —
+      // ccd re-reads `$REG/reclaim-paused` inside `ws-reclaim`'s lock at the
+      // instant of deletion, which is the read that makes the switch real.
+      void this.sweepChildReclaim(records, registryRead.names)
+        .catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
       // is ~4.3 s of sleeps per message plus one round trip per line
@@ -1408,7 +1760,8 @@ export class FleetWatcher {
         ]);
         clearTimeout(timer);
       }
-      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches());
+      const panePids = new Map<string, number | null>();
+      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids);
       // Blocking review finding 4: `FleetSession.unmeasured` (Task 2) now
       // carries the SAME evidence `measuredIdentity(records[i]) === null`
       // would, one hop from `records[i]` in `sessions[i]` — so this reads it
@@ -1517,6 +1870,12 @@ export class FleetWatcher {
       } catch (err) {
         console.warn(`ccrc-server: claim sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
       }
+      // The stall watch (spec 2026-09-29 §4.2, §5) runs after the claim lanes, on THIS tick's `sessions`, its
+      // registry listing (the listing carries the markers) and what this tick already measured: the pane pids
+      // `assembleFleet` read and the registry rows (`StallTick`), so the lane reads neither again. It is never
+      // awaited: its reads are async, so it cannot sit in the claim pair's synchronous try-block. It gates itself
+      // on `primed`, which is set below, so the priming tick never judges.
+      void this.sweepStalls(sessions, registryRead.names, { panePids, records }).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepDivergences`: each is a
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
@@ -1683,12 +2042,17 @@ export class FleetWatcher {
    *  Byte-equality guarded exactly like `emitRuns` above. No `try`/`catch`:
    *  unlike `emitRuns` this touches no `node:sqlite` and no I/O — it is an
    *  array scan, a `JSON.stringify` and a `bus.emit`, and the bus's own
-   *  listeners are the two socket writers `emitRuns` already trusts. */
+   *  listeners are the two socket writers `emitRuns` already trusts. The
+   *  attention list is a cached field, not a read: this method still touches
+   *  no `node:sqlite` and no I/O. */
   private emitCoord(names: readonly string[] | null): void {
     const status: CoordStatus = names === null
-      ? { pause: 'unmeasurable', mail: 'unmeasurable' }
+      ? { pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable',
+          childReclaimAttention: this.childReclaimAttentionList }
       : { pause: names.includes(COORDINATOR_PAUSE_MARKER) ? 'set' : 'clear',
-          mail: names.includes(MAIL_DISABLED_MARKER) ? 'set' : 'clear' };
+          mail: names.includes(MAIL_DISABLED_MARKER) ? 'set' : 'clear',
+          reclaim: names.includes(RECLAIM_PAUSE_MARKER) ? 'set' : 'clear',
+          childReclaimAttention: this.childReclaimAttentionList };
     const json = JSON.stringify(status);
     if (json === this.lastCoordJson) return;
     this.lastCoordJson = json;
@@ -1800,20 +2164,45 @@ export class FleetWatcher {
    * question the hold exists to keep off it, defeating the deferral it was
    * built to implement — the watermark still advances for these rows
    * exactly like every other, so this is a push-only exemption, not a skip.
+   *
+   * The stall watch's own mail follows the same rule (spec 2026-09-29 §4.2, "Push shape"), classified
+   * by `stallMailClass`:
+   * - A `check` (the watch's r1 to a worker) is recorded, never pushed.
+   * - A `reply` is recorded, never pushed, and only when it is BOUND: from the run's own worker, on that run,
+   *   and newer than the first check on it. The bind is read from the store only for a `re stall-check:`
+   *   subject. Any other mail wearing that prefix is pushed as ordinary mail, so no box-token holder can use
+   *   the prefix to keep a mail off the phone.
+   * - A `self-wake` (wave 2: an `orphaned:` or `failed:` notice the watch mails a session about its own turn) is
+   *   recorded, never pushed. The session is the one to act on it, and orphan D's rung 2 pushes the operator from
+   *   the lane itself (`⚠ orphaned`) when that mail sits unacknowledged.
+   * - A `report` (the watch's mail to the coordinator: wave 1's r2, and wave 2's frozen, dead and failed rung) is
+   *   pushed under a title by its kind, read back from its own subject (`stallReportKind`, `stallReportTitle`):
+   *   `⚠ stall`, `⚠ frozen`, `⚠ dead` or `⚠ failed` › <run workspace>. The lane never pushes a report itself, so
+   *   this is its only push. Under `mail-disabled` the verdict holds every coordinator-bound rung, so no report is
+   *   queued and none reaches this push. The lane's operator rungs still push (ruling Q1: no reroute).
    */
   private pushNewMail(projects: Set<string>, sessionProjects: Map<string, string>): void {
     const coord = this.deps.coord;
     if (!coord) return;
     for (const m of coord.mailQueuedSince(this.lastMailNotifyId)) {
       const project = m.project ?? sessionProjects.get(m.toId) ?? '';
+      const bind = m.subject.startsWith(STALL_REPLY_PREFIX)
+        ? {
+          runSessionId: m.runSessionId,
+          runId: m.runId,
+          firstCheckId: m.runId === null ? null
+            : coord.firstMailIdWithPrefix(m.runId, 'operator', m.fromId, STALL_CHECK_PREFIX),
+        }
+        : undefined;
+      const stall = stallMailClass(m, bind);
       this.pushOne({
         kind: 'mail', sessionId: m.toId, project,
-        title: `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
+        title: stall === 'report' ? stallReportTitle(stallReportKind(m.subject), m.workspace ?? m.toId) : `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
         body: m.subject,
         runId: m.runId,
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
-        ...(isAskNudgeMail(m) ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -1905,12 +2294,13 @@ export class FleetWatcher {
   private pushOne(e: {
     kind: NotifyEvent['kind']; sessionId: string; project: string; title: string; body: string;
     /** WHICH RUN this push is about, when the lane raising it knows one
-     *  (`NotifyEvent.runId`). OPTIONAL here and REQUIRED on the wire: four of
-     *  this method's seven call sites are about a session and about no run at
-     *  all, and an omitted field and an explicit `null` are the SAME fact for
-     *  this one field — "about no run" — which is why folding them costs
-     *  nothing. The three lanes that know a run pass the one they already
-     *  have: the mail lane, the run lane, and the blocked-sender lane. */
+     *  (`NotifyEvent.runId`). OPTIONAL here and REQUIRED on the wire: most of
+     *  this method's call sites are about a session and about no run at all
+     *  (no count here — the last one went stale at "seven"), and an omitted
+     *  field and an explicit `null` are the SAME fact for this one field —
+     *  "about no run" — which is why folding them costs nothing. The lanes
+     *  that know a run pass the one they already have: the mail lane, the run
+     *  lane, the blocked-sender lane and the stall lane (`sweepStalls`). */
     runId?: number | null;
     actions?: PushPayload['actions'];
     /** Overrides the default `${kind}-${sessionId}` collapse key. Mail MUST
@@ -2633,6 +3023,598 @@ export class FleetWatcher {
   }
 
   /**
+   * THE CHILD-RECLAIM LANE (child-reclamation wave 4, spec §5.7 "On the
+   * sweep"). A SIBLING of `sweepDivergences`, never a branch of it: that lane
+   * "DECIDES nothing — no ccd verb runs here and nothing mutates", and this
+   * one asks for a deletion. It decides nothing either — every verdict is
+   * `childReclaimSweepVerdict`'s (L1) — but it APPLIES them, through wave 3's
+   * one executor, which both triggers share.
+   *
+   * THE SUBJECT IS THE MARKER. It walks the registry rows this tick already
+   * read and acts only on those whose `.child` marker names a minting run, so
+   * it reaches the children the close path cannot: dispatch's two arms that
+   * mint a child and fail to bind it. An absent minting run is never
+   * eligible.
+   *
+   * WHICH PASS, AND WHY IT DOES NOT RACE THE WRITE ROUTES. The 2 s tick's own
+   * registry read, throttled to `CHILD_RECLAIM_SWEEP_MS`. It cannot take the
+   * coordination mutex (not exported, and the watcher holds no handle on it),
+   * so it does not try: every coord.db read here is one synchronous
+   * `DatabaseSync` statement, atomic against the routes' writes; the executor
+   * re-reads the marker and the sibling list itself immediately before it
+   * composes the argv; the session's `KeyedQueue` serialises this lane against
+   * the close path's reclaim and the reap route for that session; and ccd
+   * recomputes the `--expect` fingerprint inside its lock, refusing
+   * `state-changed` on any drift. The server narrows the window; the re-proof
+   * on the box ends it.
+   *
+   * PRESENCE IS A DEFER, NOT AN INELIGIBILITY — the executor measures it (the
+   * server's visibility claim) and ccd measures it (rungs 5 and 6), and each
+   * answers `deferred`. That is what lets the ceiling bound it: a presence
+   * that reset eligibility would reset the clock with it, and the drawer's
+   * `tmux attach` on a locked phone would wedge a child forever.
+   *
+   * A `hold-retired` verdict — a hold this build proved was written by one of
+   * this child's own runs, whose accounting has since retired (spec §5.7's
+   * "no hold" conjunct) — never reaches the ordinary reclaim path directly:
+   * `ws-reclaim`'s own rung 4 refuses any hold. Instead, on the SECOND
+   * consecutive pass this pass answers it, the child's own `release` payload
+   * is queued as its own job (`releaseRetiredChildHold`, `coord/childReclaim.
+   * ts`) on the child's `KeyedQueue` key — which re-proves every fact it
+   * relies on before it ever composes `ws-release`, and whose own outcome
+   * (`released`/`not-held`/`changed`/`failed`) writes back nothing but the
+   * memory this lane already keeps. The now-unheld child is then judged
+   * afresh by the ordinary verdict, on the ordinary two-pass rule, through
+   * `reclaimChild` like any other. The RESIDUAL this accepts: a hold written
+   * between the job's own re-read and ccd's unlink is removed anyway — a
+   * narrow window the job's own docstring states in full.
+   *
+   * PUBLIC for `sweepDivergences`'s reason: `tick()` dispatches it with
+   * `void`.
+   */
+  async sweepChildReclaim(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    const now = Date.now();
+    if (this.lastChildReclaimSweep !== 0 && now - this.lastChildReclaimSweep < CHILD_RECLAIM_SWEEP_MS) return;
+    this.lastChildReclaimSweep = now;
+
+    // ONE — the attention list, and the pass's coordination-history read,
+    // from the mirror ALONE (spec §5.9: "derived from the lifecycle mirror so
+    // a restart does not lose it"), BEFORE either early return below: a
+    // paused fleet, or a fleet host without both `reclaim-v1` and
+    // `reclaim-pause-v1`, still has children standing under terminal
+    // refusals or failing past the ceiling, and the report must not go dark
+    // because the lane is idle. Per LISTED row whose id the mirror has a
+    // `reclaim` row for: that session's history — `lifecycleCreatesFor`
+    // MERGED with the windowed `lifecycleFor` read, so a long-refused
+    // child's own opening `create` never drops off this list just because its
+    // window has scrolled past it — cut to its CURRENT workspace generation
+    // by the one fence (`at` = now; spec §5.6 — a refusal of an earlier
+    // workspace under a recycled slug is not this child's), then the LATEST
+    // reclaim event of that generation, of ANY outcome, `intent` included (an
+    // attempt in flight, or one that died mid-way, lists nothing), as the L1
+    // input row.
+    //
+    // ONE STORE READ of every `claimedBy` per pass too — the sessions that
+    // have ever coordinated a run (spec §1 rule 4: manual cleanup is reserved
+    // for a coordinator's OWN workspace) — in the SAME try as the mirror
+    // read: a throw here proves as little about who has coordinated as a
+    // failed mirror read proves about who is terminal, so BOTH READS TOGETHER
+    // fail the WHOLE pass shut: an exception from either one is caught below,
+    // this pass makes NO reclaim decision for ANY child (the whole per-child
+    // loop is downstream of this try succeeding), and the twice-observed
+    // memory is dropped so nothing is asked on the strength of a partial
+    // measurement.
+    let latest: ChildReclaimJournalRow[];
+    let coordinating: ReadonlySet<string>;
+    try {
+      const withReclaim = coord.childReclaimSessionIds();
+      coordinating = coord.childReclaimCoordinatorIds();
+      latest = [];
+      for (const r of records) {
+        if (!withReclaim.has(r.id)) continue;
+        const gen = childReclaimGeneration(this.childReclaimAttentionGenerationRows(coord, r.id), now);
+        const row = childReclaimJournalRow(gen, childReclaimLatest(gen));
+        if (row !== null) latest.push(row);
+      }
+    } catch (err) {
+      // FAIL SHUT, and keep the last list: a failed read proves nothing about
+      // which children are terminal or which have coordinated, so this pass
+      // neither reports differently nor decides anything — and the
+      // twice-observed memory is dropped, so no child acts on the strength of
+      // a pass that measured nothing.
+      console.warn(`ccrc-server: sweepChildReclaim could not read the lifecycle mirror or the coordination history (${err instanceof Error ? err.message : String(err)}) — no reclaim decisions this pass`);
+      this.childReclaimSweepState.clear();
+      this.childReclaimHoldRetiredSeen.clear();
+      this.childReclaimReleaseAnswered.clear();
+      return;
+    }
+    const live = new Map<string, number | null>(
+      records.map((r): [string, number | null] => [r.id, r.child.kind === 'child' ? r.child.runId : null]));
+    // The ONLY write of the list: the mirror derivation's result. No executor
+    // answer ever writes it (spec §5.9 — see the `.then` below).
+    this.childReclaimAttentionList = childReclaimAttention({
+      latest, live, kindOf: childReclaimTokenKind, sentenceFor: refusalSentence, nowMs: now,
+    });
+
+    // TWO — the switches (spec §5.8, "the fourth [reader] is the one that
+    // matters" — the box itself, not merely the server): BOTH caps must be
+    // advertised, not just `reclaim-v1` — a box that cannot answer
+    // `reclaim-pause` cannot be told to stop from the phone, so an automatic
+    // reclaim must never run there at all. No `reclaim-v1` on the fleet host
+    // means the executor would answer `unsupported` for every child every
+    // minute, each with a feed row; a raised `reclaim-paused` means stop.
+    // Either way the memory is dropped: "the switches read clear" is itself an eligibility
+    // conjunct, so a child needs two FRESH passes once a switch is lowered
+    // (or the box gains the missing capability).
+    if (!capSupported(this.deps.fleetState, RECLAIM_CAP) || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)
+        || names.includes(RECLAIM_PAUSE_MARKER)) {
+      this.childReclaimSweepState.clear();
+      this.childReclaimHoldRetiredSeen.clear();
+      this.childReclaimReleaseAnswered.clear();
+      return;
+    }
+
+    // THREE — eligibility, per marked child, then GATHER the due ones, then
+    // dispatch at most `CHILD_RECLAIM_MAX_IN_FLIGHT`. The
+    // TERMINAL set is the mirror's terminal refusals ONLY — never the
+    // attention list, which also names children whose reclaim keeps FAILING
+    // past the ceiling, and a failure is retried (backing off) for as long as
+    // it fails. It comes from the mirror alone (bound to the current
+    // generation) and survives a restart, and it includes a terminal ladder
+    // refusal found at AUDIT time: wave 3's `cmd_ws_audit --reclaim` journals
+    // exactly the terminal verdicts (`verb ws-audit`), so the mirror holds
+    // them as it holds `ws-reclaim`'s. A retryable verdict found there is
+    // journaled nowhere and needs no exclusion — it is retried by design.
+    // Between the executor's `refused` answer and the mirror lane's ingest
+    // (`LC_SWEEP_MS`) the child's entry is KEPT, not forgotten:
+    // `childReclaimNextEntry` stamps its `refusedAt`, and `childReclaimDue`
+    // holds off any re-ask until a whole defer ceiling after that — long
+    // after the mirror has ingested the terminal line this set then reads.
+    const terminal = new Set(latest
+      .filter((row) => childReclaimTerminalRefusal(row, childReclaimTokenKind)).map((row) => row.sessionId));
+    const seen = new Set<string>();
+    const due: { r: SessionRecord; entry: ChildReclaimSweepEntry; runId: number }[] = [];
+    // Declared here, not at section FOUR below, so the hold-release job (a
+    // SEPARATE dispatch from the ordinary reclaim gathered into `due`) can be
+    // pushed onto it from inside this same per-child loop, the instant its
+    // second consecutive sighting fires — it does not wait for the bound or
+    // the fairness sort below, neither of which it is subject to.
+    const acts: Promise<void>[] = [];
+    for (const r of records) {
+      if (r.child.kind === 'none') continue;
+      seen.add(r.id);
+      // Every default below is the UNMEASURED shape, never an optimistic
+      // "absent"/"zero" one, matching the fail-shut rule this whole lane
+      // holds to (spec §5.7: a minting run absent from the database, or an
+      // unreadable sibling list, answers ineligible, never "go" — the same
+      // direction applies to a value this pass has simply not READ yet).
+      // `child.kind !== 'child'` short-circuits `childReclaimSweepVerdict`
+      // long before any of these would be consulted for such a row (its own
+      // `child.kind` check comes first), so these defaults exist only so a
+      // future change to that ordering fails SHUT rather than silently
+      // reading a stale, permissive answer. `reviewedRun` in particular is
+      // NOT defaulted to `'not-a-review'` — that is a MEASURED fact (this
+      // run's `reviews` column read `null`), set explicitly once the minting
+      // run's row is actually read below, never assumed. `held` is `'none'`
+      // only when the row's own `held` text is genuinely null (itself a
+      // measured fact, read before this loop) — non-null text defaults to
+      // `'unmeasured'` until the DB reads below either confirm a match or run
+      // out without one.
+      let mintingRun: ChildReclaimMintingRunRead = { ok: false, detail: 'not read: not a child marker' };
+      let mintingRunFull: RunRow | null = null;
+      let reviewedRun: ChildReclaimReviewedRunRead = { kind: 'unreadable', detail: 'not read' };
+      let reviewedId: number | null = null;
+      let siblings: ChildReclaimSiblingsRead = { ok: false, detail: 'not read: not a child marker' };
+      let held: ChildReclaimHoldRead = r.held === null
+        ? { kind: 'none' } : { kind: 'unmeasured', reason: r.held.trim(), detail: 'not read' };
+      let childBornAt: number | null = null;
+      if (r.child.kind === 'child') {
+        try {
+          const run = coord.run(r.child.runId);
+          mintingRunFull = run.ok ? run.run : null;
+          mintingRun = run.ok
+            ? { ok: true, run: run.run === null ? null : { state: run.run.state, sessionId: run.run.sessionId,
+                dispatchStartedAt: run.run.dispatchStartedAt, openedAt: run.run.openedAt } }
+            : { ok: false, detail: run.detail };
+          // THE HOLD READ (spec §5.7's "no hold" conjunct): built from the
+          // row's own trimmed `held` text, the candidate runs a match might be
+          // one of, and a lazy per-programme open-run count — each of the
+          // latter two in its OWN try (both private helpers below), so a
+          // failure reading candidates or counting a programme's open runs
+          // reads as `unmeasured` (which protects), never throws out to this
+          // per-child catch and discards the reads that already succeeded.
+          held = childReclaimHoldRead(r.held, r.id, r.child.runId,
+            this.childReclaimHoldCandidatesRead(coord, r.id, r.child.runId, mintingRunFull),
+            (program) => this.childReclaimOpenOf(coord, program));
+          // A REVIEW run's child waits on the run it reviewed (`runs.reviews`;
+          // spec §5.7, "A review child is finished later than its own run"):
+          // the reviewer's report lives in the child's clips while the
+          // coordinator still cites it. `reviewedRun` is set explicitly in
+          // EVERY branch below — never left at its unmeasured default — so
+          // "reviews nothing" is a MEASURED fact (`reviews === null`, read off
+          // this run's own row), the same as the three answers that are not it.
+          if (mintingRunFull !== null) {
+            if (mintingRunFull.reviews === null) {
+              reviewedRun = { kind: 'not-a-review' };
+            } else {
+              reviewedId = mintingRunFull.reviews;
+              const reviewed = coord.run(reviewedId);
+              reviewedRun = !reviewed.ok ? { kind: 'unreadable', detail: reviewed.detail }
+                : reviewed.run === null ? { kind: 'absent' }
+                : { kind: 'run', state: reviewed.run.state };
+            }
+          }
+          const sib = coord.openRunsForSession(r.id);
+          siblings = sib.ok ? { ok: true, open: sib.siblings.length } : { ok: false, detail: sib.detail };
+          // THE RUN-ID FENCE (spec §5.1: the marker's run id and the argv the
+          // server composed are the two authorities, and neither alone
+          // authorises anything): after a coordination-database loss,
+          // `reconstruct` mints fresh ids from 1, so a LOW id a marker names
+          // is not proof of that same correspondence — it could equally be a
+          // coincidence with a run this rebuilt database never actually
+          // minted this workspace with. The child's own birth is the OPENING
+          // `create` of its current generation — `lifecycleCreatesFor` is
+          // uncapped, so a failing child's `create` is findable for the life
+          // of the workspace, never just for as long as it fits a page (the
+          // birth fence's own reason `lifecycleCreatesFor` exists rather than
+          // reusing `lifecycleFor` here). `childReclaimGeneration` over a
+          // CREATE-ONLY list answers a single-row slice whose one element IS
+          // that opening row — a generation is a contiguous slice of ONE
+          // array, so its first element, when the slice is non-empty, is
+          // always index 0, whatever the fence would otherwise have sliced
+          // around it.
+          childBornAt = childReclaimGeneration(coord.lifecycleCreatesFor(r.id), now)[0]?.at ?? null;
+        } catch (err) {
+          // `node:sqlite` throws synchronously; an unread run is not an
+          // absent one. Every read this try attempted is discarded together —
+          // `mintingRun.ok === false` alone is enough to fail the verdict
+          // shut, whatever `held`/`siblings`/`childBornAt` happened to read
+          // before the throw.
+          mintingRun = { ok: false, detail: err instanceof Error ? err.message : String(err) };
+        }
+      }
+      const v = childReclaimSweepVerdict({
+        sessionId: r.id, child: r.child, identityMeasured: r.unmeasured.length === 0, workspace: r.workspace,
+        held, terminal: terminal.has(r.id), mintingRun, reviewedRun, siblings,
+        coordinating: coordinating.has(r.id), childBornAt, skewMs: CHILD_BIRTH_SKEW_MS, nowMs: now,
+      });
+      if (!v.eligible) {
+        this.childReclaimSweepState.delete(r.id);
+        // A hold this build proved belongs to one of this child's own runs,
+        // whose accounting has since retired (spec §5.7's "no hold"
+        // conjunct): `ws-reclaim`'s own rung 4 refuses any hold, so the
+        // ordinary path can never reach this child until the hold is
+        // released. Ahead of the generic ineligible fall-through below —
+        // it is not an ordinary skip, it is a fact this pass acts on. A
+        // child already busy (its release queued, or its ordinary reclaim
+        // in flight) is left untouched: the in-flight set is this lane's
+        // only re-entrancy guard, and touching the twice-observed set here
+        // too would let an overlapping pass turn two sightings into one.
+        if (v.why === 'hold-retired') {
+          if (!this.childReclaimInFlight.has(r.id)) {
+            if (this.childReclaimHoldRetiredSeen.has(r.id)) {
+              this.childReclaimHoldRetiredSeen.delete(r.id);
+              this.childReclaimInFlight.add(r.id);
+              const release = v.release;
+              acts.push(this.execChildReclaimRelease(coord, {
+                sessionId: r.id, runId: v.runId, reason: release.reason, program: release.program,
+                accountedRunId: release.accountedRunId,
+              }).then(
+                (outcome) => {
+                  // A `failed` answer composes no argv on the box and leaves
+                  // the hold standing — an operator watching only the feed
+                  // (the job writes no feed row of its own) would otherwise
+                  // never learn a box keeps refusing `ws-release`.
+                  if (outcome === 'failed') {
+                    console.warn(`ccrc-server: sweepChildReclaim: releasing ${r.id}'s retired hold answered failed `
+                      + '— the hold stays; retried after two fresh sightings');
+                  }
+                },
+                (err: unknown) => {
+                  console.warn(`ccrc-server: sweepChildReclaim: releasing ${r.id}'s retired hold threw `
+                    + `(${err instanceof Error ? err.message : String(err)}) — left for the next pass`);
+                },
+              ).finally(() => {
+                // THE ANSWER DELETES THE ENTRY, whatever it was — every
+                // answer word and a throw alike (spec §5.7, the twice-observed
+                // rule). ccd may unlink the hold before it answers, and a pass
+                // in that window records an eligible first sighting while the
+                // job is still in flight; keeping it would let the reclaim go
+                // out ONE pass after the answer. Deleted here, the child needs
+                // two fresh unheld passes after the answer, never fewer — and
+                // the mark makes the next eligible verdict seed nothing, in
+                // case that pass's listing was read before this answer.
+                this.childReclaimSweepState.delete(r.id);
+                this.childReclaimReleaseAnswered.add(r.id);
+                this.childReclaimInFlight.delete(r.id);
+              }));
+            } else {
+              this.childReclaimHoldRetiredSeen.add(r.id);
+            }
+          }
+          continue;
+        }
+        this.childReclaimHoldRetiredSeen.delete(r.id);
+        this.childReclaimLogAbsence(r, v.why, reviewedId);
+        if (v.why === 'minting-run-postdates-child' && mintingRunFull !== null && childBornAt !== null) {
+          this.childReclaimLogBirthSkip(r, mintingRunFull.openedAt, childBornAt);
+        }
+        continue;
+      }
+      this.childReclaimHoldRetiredSeen.delete(r.id);
+      // The first eligible verdict after a release ANSWERED seeds nothing: its
+      // listing may predate the answer (`childReclaimReleaseAnswered`).
+      if (this.childReclaimReleaseAnswered.delete(r.id)) continue;
+      const entry = this.childReclaimSweepState.get(r.id);
+      if (entry === undefined) {
+        this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(now));
+        continue;
+      }
+      if (this.childReclaimInFlight.has(r.id)) continue;
+      // THE ONE "MAY I ASK AGAIN" QUESTION (`childReclaimDue`, L1): folds the
+      // failure backoff (spec §5.9: "retries back off in between") AND the
+      // terminal-refusal pacing — L4 decides no pacing of its own.
+      if (!childReclaimDue(entry, now, CHILD_RECLAIM_SWEEP_MS)) continue;
+      due.push({ r, entry, runId: v.runId });
+    }
+
+    // FOUR — the bound: at most `CHILD_RECLAIM_MAX_IN_FLIGHT` destructive
+    // verbs in flight from this automatic trigger at once (spec §5.7, "On
+    // the sweep" — no human is in this path, so a bad pass must not be able
+    // to ask the box for ten deletions before the first one has even
+    // answered). A dispatch that has not settled after `CHILD_RECLAIM_STALL_MS`
+    // stops counting against the bound (it stays in flight; nothing here
+    // cancels it) and is logged once. Due children are sorted `lastAskedAt`
+    // (never-asked first), then `firstEligibleAt`, then id, so a child that
+    // defers every pass cannot hog the one slot forever — the never-asked and
+    // the longest-waiting go first, and among children tied on `lastAskedAt`
+    // (both never asked, or asked at the identical instant) the one sighted
+    // EARLIER still goes first rather than falling through to id order.
+    let activeInFlight = 0;
+    for (const [id, since] of this.childReclaimInFlightSince) {
+      if (now - since < CHILD_RECLAIM_STALL_MS) { activeInFlight += 1; continue; }
+      if (!this.childReclaimStalledLogged.has(id)) {
+        this.childReclaimStalledLogged.add(id);
+        console.warn(`ccrc-server: sweepChildReclaim: the reclaim of ${id} has not settled after `
+          + `${CHILD_RECLAIM_STALL_MS / 1000}s — it stays in flight, and stops counting against `
+          + `CHILD_RECLAIM_MAX_IN_FLIGHT`);
+      }
+    }
+    const freeSlots = Math.max(0, CHILD_RECLAIM_MAX_IN_FLIGHT - activeInFlight);
+    due.sort((a, b) => {
+      const la = a.entry.lastAskedAt;
+      const lb = b.entry.lastAskedAt;
+      // `lastAskedAt` first, null (never asked) sorting before any instant —
+      // but ONLY when the two differ: two children tied on this key (both
+      // null, or asked at the identical instant) fall through to
+      // `firstEligibleAt` rather than straight to id, so a never-asked child
+      // sighted earlier is still asked before one sighted later.
+      if (la !== lb) {
+        if (la === null) return -1;
+        if (lb === null) return 1;
+        return la - lb;
+      }
+      if (a.entry.firstEligibleAt !== b.entry.firstEligibleAt) return a.entry.firstEligibleAt - b.entry.firstEligibleAt;
+      return a.r.id < b.r.id ? -1 : a.r.id > b.r.id ? 1 : 0;
+    });
+    for (const { r, entry, runId } of due.slice(0, freeSlots)) {
+      const req: ChildReclaimRequest = {
+        sessionId: r.id, runId, trigger: 'sweep',
+        // THE CEILING READS THE PRESENCE CLOCK ALONE (spec §5.7, "Presence,
+        // and its bound": the ceiling bounds presence and nothing else), and
+        // licenses only a CONTINUOUS episode whose latest presence answer is
+        // recent, measured in this lane's own pass intervals.
+        deferExpired: childReclaimDeferExpired(entry, now, CHILD_RECLAIM_SWEEP_MS),
+        // THE ELAPSED DEFER RIDES THE REQUEST. Spec §5.7: past the ceiling
+        // "the feed row says how long it waited and why"; §5.9: a deferral is
+        // shown "with its elapsed time". So it is the FIRST deferral of ANY
+        // kind this sweep saw for the child — the other clock — and null
+        // before any; the executor's ONE feed row renders the wait from it.
+        // In memory, so a restart restarts it: a later `deferredSinceMs`,
+        // never an earlier one.
+        deferredSinceMs: entry.firstDeferredAt,
+      };
+      this.childReclaimInFlight.add(r.id);
+      this.childReclaimInFlightSince.set(r.id, now);
+      acts.push(this.execChildReclaim(coord, req).then(
+        (outcome) => {
+          // A terminal refusal, or a failure, needs no memory here beyond the
+          // entry, and gets none: ccd journalled it, and the mirror is where
+          // the attention list and the terminal exclusion read it (spec
+          // §5.9 — an executor answer never feeds `CoordStatus`). The entry:
+          // write back ONLY when it is still the live one. A pass that ran
+          // while this was in flight may have cleared the memory (switch
+          // raised, capability lost, mirror unread, row unlisted, child
+          // ineligible); re-seeding it from a stale entry would let the child
+          // be asked for on the FIRST pass after, and "two FRESH passes"
+          // would be false.
+          if (this.childReclaimSweepState.get(r.id) !== entry) return;
+          // `licensed` — this REQUEST's own `deferExpired`: whether this
+          // attempt was sent past the previous presence ceiling, which is
+          // what lets a presence-class answer RESTART the episode rather than
+          // silently keep skipping ccd's presence rungs forever (spec §5.7).
+          const nextEntry = childReclaimNextEntry(entry, outcome, now, req.deferExpired, CHILD_RECLAIM_SWEEP_MS);
+          if (nextEntry === null) this.childReclaimSweepState.delete(r.id);
+          else this.childReclaimSweepState.set(r.id, nextEntry);
+        },
+        (err: unknown) => {
+          console.warn(`ccrc-server: sweepChildReclaim: the reclaim of ${r.id} threw (${err instanceof Error ? err.message : String(err)}) — left for the next pass`);
+        },
+      ).finally(() => {
+        this.childReclaimInFlight.delete(r.id);
+        this.childReclaimInFlightSince.delete(r.id);
+        this.childReclaimStalledLogged.delete(r.id);
+      }));
+    }
+    // A child the registry no longer lists has no twice-observed entry to keep.
+    for (const id of [...this.childReclaimSweepState.keys()]) {
+      if (!seen.has(id)) this.childReclaimSweepState.delete(id);
+    }
+    for (const id of [...this.childReclaimHoldRetiredSeen]) {
+      if (!seen.has(id)) this.childReclaimHoldRetiredSeen.delete(id);
+    }
+    for (const id of [...this.childReclaimReleaseAnswered]) {
+      if (!seen.has(id)) this.childReclaimReleaseAnswered.delete(id);
+    }
+    await Promise.all(acts);
+  }
+
+  /** `ChildReclaimHoldCandidatesRead` for one child (spec §5.7's "no hold"
+   *  conjunct — a hold this build can PROVE was written by one of this
+   *  child's own runs protects only conditionally, everything else protects
+   *  unconditionally): every run naming this session, in ANY state
+   *  (`CoordStore.runsNamingSession`), plus the MINTING RUN itself even when
+   *  it names a DIFFERENT session — an orphan's own dispatch or non-final
+   *  close may have written the hold this child still carries, and
+   *  `runsNamingSession` alone cannot see that once the run has moved on to a
+   *  different session. `runsNamingSession`'s OWN try: a throw here is this
+   *  READ's failure alone, answered `unmeasured` by `childReclaimHoldRead` —
+   *  which PROTECTS — never a throw that discards the per-child reads
+   *  around it. */
+  private childReclaimHoldCandidatesRead(
+    coord: CoordStore, sessionId: string, mintingRunId: number, mintingRunFull: RunRow | null,
+  ): ChildReclaimHoldCandidatesRead {
+    let naming: ReturnType<CoordStore['runsNamingSession']>;
+    try {
+      naming = coord.runsNamingSession(sessionId);
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+    if (!naming.ok) return { ok: false, detail: naming.detail };
+    const candidates: ChildReclaimHoldCandidate[] = naming.runs.map((row) => (
+      { runId: row.id, sessionId: row.sessionId, state: row.state, program: row.program, wave: row.wave,
+        waveOf: row.waveOf }));
+    if (mintingRunFull !== null) {
+      candidates.push({ runId: mintingRunId, sessionId: mintingRunFull.sessionId, state: mintingRunFull.state,
+        program: mintingRunFull.program, wave: mintingRunFull.wave, waveOf: mintingRunFull.waveOf });
+    }
+    return { ok: true, candidates };
+  }
+
+  /** `ChildReclaimHoldOpenRead` for one programme (spec §5.7's "no hold"
+   *  conjunct, the count that decides whether a PROVEN programme hold still
+   *  protects): `CoordStore.programOpenRunCount` throws bare, so this is its
+   *  own try — called LAZILY by `childReclaimHoldRead`, only once a hold's
+   *  text has PROVEN to match one of this child's own runs, so a programme
+   *  whose hold does not match spends nothing here. */
+  private childReclaimOpenOf(coord: CoordStore, program: string): ChildReclaimHoldOpenRead {
+    try {
+      return { ok: true, count: coord.programOpenRunCount(program) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The generation input for the attention list and the terminal exclusion
+   *  ALONE (spec §5.9, "derived from the lifecycle mirror so a restart does
+   *  not lose it"): `lifecycleCreatesFor` (every `create` row,
+   *  uncapped) merged with `lifecycleFor`'s own windowed read, so a
+   *  long-refused child's own OPENING `create` stays findable however far it
+   *  has scrolled past `LIFECYCLE_PAGE_MAX`. `lifecycleFor` answers this
+   *  session's NEWEST rows; any `create` this adds that the window did not
+   *  already carry is — by that read's own ordering — older than every row
+   *  the window holds, so it is PREPENDED, never interleaved into the
+   *  window's own internal order (nothing here re-sorts either read).
+   *  Deduplicated by `uid`, the mirror's one stable per-row identity
+   *  (`lifecycle_uid`'s UNIQUE index); a `create` whose own line carried none
+   *  (rare — the mirror's own dedupe degrades to its raw bytes for exactly
+   *  that row) may appear twice, which costs `childReclaimGeneration`
+   *  nothing: a duplicate boundary answers the same boundary. The birth
+   *  fence (above, in the per-child loop) does NOT use this — it reads
+   *  `lifecycleCreatesFor` alone, where a single-row generation IS the
+   *  opening create, and merging in window rows would only cost a query. */
+  private childReclaimAttentionGenerationRows(coord: CoordStore, sessionId: string): MirroredLifecycleEvent[] {
+    const window = coord.lifecycleFor({ sessionId });
+    const creates = coord.lifecycleCreatesFor(sessionId);
+    if (creates.length === 0) return window;
+    const windowUids = new Set(window.map((e) => e.uid).filter((u): u is string => u !== null));
+    const extra = creates.filter((c) => c.uid === null || !windowUids.has(c.uid));
+    return extra.length === 0 ? window : [...extra, ...window];
+  }
+
+  /** Absence is logged and skipped (spec §5.7) — ONCE per child per condition
+   *  per process. Three conditions, three sentences: an absent MINTING run is
+   *  never eligible, because a lost or rebuilt database makes every child's
+   *  minting run absent at once; an absent REVIEWED run keeps a review child,
+   *  because a run the database does not hold is not proven terminal and the
+   *  report in the child's clips may still be cited; a child whose own birth
+   *  cannot be PLACED (no placed `create` row at all) cannot be proven to
+   *  match its marker's run id, so it is skipped rather than guessed at
+   *  (spec §5.1: the marker's run id and the argv the server composed are the
+   *  two authorities, and neither alone authorises anything). Every other
+   *  skip is an ordinary state of the world and says nothing
+   *  (`minting-run-postdates-child` has its OWN log, `childReclaimLogBirthSkip`,
+   *  below — a different sentence with different evidence to name). */
+  private childReclaimLogAbsence(r: SessionRecord, why: ChildReclaimSweepSkip, reviewedId: number | null): void {
+    if (why !== 'minting-run-absent' && why !== 'reviewed-run-absent' && why !== 'child-birth-unplaced') return;
+    const key = `${why} ${r.id}`;
+    if (this.childReclaimAbsentLogged.has(key)) return;
+    this.childReclaimAbsentLogged.add(key);
+    const runId = r.child.kind === 'child' ? String(r.child.runId) : '?';
+    if (why === 'minting-run-absent') {
+      console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, which coord.db does not hold — never eligible, because a lost or rebuilt database makes every child's minting run absent at once, the live ones included`);
+    } else if (why === 'reviewed-run-absent') {
+      console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is a review child of run ${runId}, which reviews run ${reviewedId ?? '?'}, which coord.db does not hold — kept, because an absent reviewed run is not a terminal one and its report may still be cited`);
+    } else {
+      console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, but the lifecycle mirror holds no placed 'create' row for it — its own birth cannot be placed, so the run-id fence cannot prove the marker's run minted this workspace; skipped until a placed create row appears (a workspace minted before the mirror existed, or whose create line carried no ccd clock)`);
+    }
+  }
+
+  /** Once per child per process, naming both instants — never re-logged for
+   *  the same skip while this process runs. A minting run opened AFTER this
+   *  child's own birth (past the clock-skew allowance) cannot be the run that
+   *  minted THIS incarnation — run ids restart after a coordination-database
+   *  loss — and the two possible causes are named so an operator does not
+   *  have to guess which one applies. */
+  private childReclaimLogBirthSkip(r: SessionRecord, openedAt: number, childBornAt: number): void {
+    const key = `minting-run-postdates-child ${r.id}`;
+    if (this.childReclaimAbsentLogged.has(key)) return;
+    this.childReclaimAbsentLogged.add(key);
+    console.warn(`ccrc-server: sweepChildReclaim: ${r.id}'s marker names a run opened ${openedAt - childBornAt}ms `
+      + `after this child's own birth (run openedAt=${openedAt}, child born=${childBornAt}, skew=${CHILD_BIRTH_SKEW_MS}ms) `
+      + '— skipped as minting-run-postdates-child: either a rebuilt coordination database (run ids restart at 1 after '
+      + 'a loss) or the fleet box\'s clock reading behind the server\'s');
+  }
+
+  /** The ONE executor, as both triggers reach it: `reclaimChild` on the
+   *  session's own `KeyedQueue`, with the deps the close route composes — so
+   *  presence, the ceiling and the feed row behave identically however a
+   *  reclaim was started (spec §5.7). Composes EXACTLY the close port's seven
+   *  members (`coord, io, cfg, runCcd, fleetState, presence, notifyLog`),
+   *  `now` unset — built HERE, inside the queue callback, as the close port
+   *  does. `Deps.childReclaimExec` replaces the whole call in a test, and
+   *  nowhere else. */
+  private execChildReclaim(coord: CoordStore, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {
+    const seam = this.deps.childReclaimExec;
+    if (seam) return seam(req);
+    // The close route's OWN shape (`coord/routes.ts`'s `childReclaimPort`):
+    // the literal is built INSIDE the queue callback, so its members are
+    // `deps`'s current answer WHEN THE JOB RUNS, never a snapshot taken when
+    // the sweep queued it.
+    return this.deps.queue.run(req.sessionId, () => reclaimChild({
+      coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
+      fleetState: this.deps.fleetState, presence: this.deps.presence, notifyLog: this.deps.notifyLog,
+    }, req));
+  }
+
+  /** The hold-release job's own executor: `releaseRetiredChildHold` on the
+   *  SAME session `KeyedQueue` key `execChildReclaim` uses, so a release and
+   *  a reclaim for the same child never run on the box at once. No test seam
+   *  of its own — nothing in this wave's tests needs to intercept it, since
+   *  the release job's own re-reads are exactly what a test wants to observe,
+   *  so a test runs it for real against a recording `runCcd` instead. */
+  private execChildReclaimRelease(
+    coord: CoordStore, req: ChildReclaimReleaseRequest,
+  ): Promise<ChildReclaimReleaseOutcome> {
+    return this.deps.queue.run(req.sessionId, () => releaseRetiredChildHold({
+      coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
+      fleetState: this.deps.fleetState, presence: this.deps.presence, notifyLog: this.deps.notifyLog,
+    }, req));
+  }
+
+  /**
    * Built as soon as a coordination database exists, not only on the first
    * SWEEP — `lifecycleHealth()` below needs one to ask before any sweep has
    * run, so the ONLY condition left absent is "no coordination database",
@@ -2750,6 +3732,473 @@ export class FleetWatcher {
       const d = claimExpiry(c, now, probe.liveness(c.heldBy));
       if (d.act === 'lapse') store.lapseClaimRow(c.id, d.endedBy, now);
     }
+  }
+
+  /**
+   * The stall watch's lane (spec 2026-09-29 §4.2 wave 1, §5 wave 2). The pure `coord/stall.ts` decides
+   * everything; this method READS the inputs and APPLIES the answers, as `renewClaims` applies `claimExpiry`'s.
+   * `tick()` dispatches it after the claim lanes and never awaits it. It has its own clock (`STALL_SWEEP_MS`) and
+   * its own in-flight flag, and it returns with no store.
+   *
+   * The clock is COMPARED before the in-flight flag and STAMPED after it, so a pass refused by the flag does not
+   * use up the next minute.
+   *
+   * Three kinds of subject, each in its own try/catch (`node:sqlite` throws synchronously, and one bad subject
+   * must not starve the next):
+   * - a run WORKER (`stallSubjects`): the run verdict, then its session verdicts (orphan E, failed, each mail
+   *   stuck, orphan D), every notice recorded on its primary run;
+   * - a run COORDINATOR (`stallCoordinatorSubjects`, minus the workers): orphan E, failed, each mail stuck, its
+   *   marker and orphan D (slug `coordinators-draw-orphan-d` (D-3749)), all RUN-LESS (slug `coordinator-notices-are-run-less` (D-3653)),
+   *   so none can stand in a worker's proof (b);
+   * - every other registry row: orphan D only, and only once its marker records a restart that lost tasks.
+   *
+   * Reads (slug `three-reads-per-candidate` (D-3642)): at most three agent reads per worker — the live file, the turn
+   * marker and the raw hookstate — and two per coordinator. The pane pid and the registry uuid are the tick's
+   * (`StallTick`, REQUIRED: slug `tick-hands-the-lane-pids-and-records` (D-3649)). It reads the RAW live word, never
+   * `FleetSession.status`, which folds `shell` and `waiting` into `busy`. It reads the hookstate RAW and unaged
+   * (`readHookStateRawMeasured`): hold 2a correlates its ask with the dialog by time, and a legit question
+   * outlives `HOOKSTATE_FRESH_MS`. One mail read per subject (`stallMailFor`, slug `one-mail-read-per-candidate` (D-3641)):
+   * the run verdict meets it through `stallRunMail`, run mail only as wave 1 read it (slug
+   * `run-mail-filtered-in-l1` (D-3650)); the session verdicts meet it whole.
+   *
+   * In memory, and pruned every sweep (`pruneStallMemory`): when a worker was first seen absent or dead-shaped,
+   * when a marker was first seen unreadable, the run-less push latch and the warn-once keys. A server restart
+   * re-times the clocks (slug `absent-worker-is-dead-after-grace` (D-3631)) and may repeat a run-less push, a coordinator's
+   * failed rung 2 among them (slug `run-less-push-latches-are-in-memory` (D-3751); `stallLatch` names which, and why a
+   * marker-unreadable push re-keys after a clock drop). More than STALL_CLOCK_GAP_MS from one judged sweep's end to the
+   * next one's start drops the clocks (`dropStallClocks`, slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)).
+   *
+   * Every mail is durable and deduped: on a run by its observation row (`queueStallNotice`,
+   * `recordStallObservation`), run-less by its subject (`hasMailWithSubject`), so a restart re-sends none.
+   * PUBLIC for `stall-sweep.test.ts`.
+   */
+  async sweepStalls(sessions: readonly FleetSession[], names: readonly string[], tick: StallTick): Promise<void> {
+    if (!this.primed) return;
+    const store = this.deps.coord;
+    if (!store) return;
+    const now = Date.now();
+    if (this.lastStallSweep !== 0 && now - this.lastStallSweep < STALL_SWEEP_MS) return;
+    if (this.stallSweepRunning) return;
+    this.lastStallSweep = now;
+    this.stallSweepRunning = true;
+    let judging = false;
+    try {
+      // `mail-disabled` reaches L1 as a fact, and `stallMailDisabledHold` decides what it holds (slug
+      // `lane-honours-mail-disabled` (D-3636)). The module-local literal, never rundefs' export: see the import note.
+      const arming: StallArming = { ...stallArmingOf(names), mailDisabled: names.includes(MAIL_DISABLED_MARKER), mailMode: mailTurnModeOf(names) };
+      if (arming.disabled) return;
+      const paused = names.includes(COORDINATOR_PAUSE_MARKER);
+      let candidates: ReturnType<CoordStore['stallCandidates']>;
+      try {
+        candidates = store.stallCandidates();
+      } catch (err) {
+        console.warn(`ccrc-server: stall-watch candidate read failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+        return;
+      }
+      if (!candidates.ok) {
+        console.warn(`ccrc-server: stall-watch candidates unreadable (${candidates.kind}: ${candidates.detail}) — nothing judged this sweep`);
+        return;
+      }
+      // `stall-clocks-drop-on-an-unobserved-gap` (D-3750): the one gap rule. A first-seen clock claims its condition held at
+      // every judged sweep since it was set. More than STALL_CLOCK_GAP_MS from the END of the last judged sweep to this
+      // start means nobody watched in between (a disabled window, unreadable or throwing candidate reads, ticks that
+      // never reached the lane), so every clock restarts here. The early returns above never stamp it: they are that
+      // unobserved time. A judged sweep's own duration is observed time, so `finally` stamps its end.
+      if (this.lastStallJudgedAt !== null && now - this.lastStallJudgedAt > STALL_CLOCK_GAP_MS) this.dropStallClocks();
+      judging = true;
+      const workers = stallSubjects(candidates.runs);
+      const workerIds = new Set(workers.map((x) => x.primary.sessionId));
+      const coordinators = stallCoordinatorSubjects(candidates.runs).filter((c) => !workerIds.has(c.sessionId));
+      const judged = new Set([...workerIds, ...coordinators.map((c) => c.sessionId)]);
+      this.pruneStallMemory(workerIds, judged, new Set([...judged, ...tick.records.map((r) => r.id)]));
+      for (const subject of workers) {
+        try {
+          await this.judgeStall(store, subject, sessions, tick, arming, paused, now);
+        } catch (err) {
+          console.warn(`ccrc-server: stall-watch run ${subject.primary.id} (${subject.primary.sessionId}) failed (${err instanceof Error ? err.message : String(err)}) — the next subject still runs`);
+        }
+      }
+      for (const c of coordinators) {
+        try {
+          await this.judgeStallCoordinator(store, c, sessions, tick, arming, paused, now);
+        } catch (err) {
+          console.warn(`ccrc-server: stall-watch coordinator ${c.sessionId} failed (${err instanceof Error ? err.message : String(err)}) — the next subject still runs`);
+        }
+      }
+      for (const r of tick.records) {
+        if (judged.has(r.id)) continue;
+        try {
+          await this.judgeStallOrphan(store, r, sessions, tick, arming, paused, now);
+        } catch (err) {
+          console.warn(`ccrc-server: stall-watch session ${r.id} failed (${err instanceof Error ? err.message : String(err)}) — the next subject still runs`);
+        }
+      }
+    } catch (err) {
+      // A throw outside the per-subject catches (`stallArmingOf`, `stallSubjects`) would reach the tick's silent
+      // `.catch`, and the lane would die every minute with no trace. One line per bad sweep instead.
+      console.warn(`ccrc-server: stall-watch sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+    } finally {
+      // A judged sweep is stamped when it ENDS, its error path included, so the next start measures only unobserved time.
+      if (judging) this.lastStallJudgedAt = Date.now();
+      this.stallSweepRunning = false;
+    }
+  }
+
+  /** One run worker: read, decide, apply — the run verdict first, then its session verdicts in the spec's order
+   *  (orphan E, failed, each mail stuck, orphan D). Its throws are the caller's to catch. */
+  private async judgeStall(
+    store: CoordStore, subject: StallSubject, sessions: readonly FleetSession[], tick: StallTick,
+    arming: StallArming, paused: boolean, now: number,
+  ): Promise<void> {
+    const primary = subject.primary;
+    const id = primary.sessionId;
+    const s = sessions.find((x) => x.id === id);
+    this.stallSince(this.stallAbsentSince, id, s === undefined, now);
+    this.stallSince(this.stallDeadSince, id, s !== undefined && stallDeadShaped(s.lifecycle), now);
+    const ident = this.stallUuid(tick, id);
+    const lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
+    const mark = await this.stallMarkRead(id, ident, lr);
+    this.stallMarkClock(id, ident, mark, now);
+    const raw = ident.ok
+      ? await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid)
+      : STALL_RAW_UNMEASURED;
+    const worker = this.stallWorkerFor(store, s, lr, stallHookAskOf(raw));
+    const runIds = subject.runs.map((r) => r.id);
+    const read = store.stallMailFor(id, runIds, now - BACKLOG_HORIZON_MS);
+    if (!read.ok) {
+      console.warn(`ccrc-server: stall-watch run ${primary.id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
+      return;
+    }
+    // ONE run_events read gives the notices and the re-activation (`quiet-restarts-on-reactivation` (D-3788)): a throw
+    // here is what it was before, this subject's warn and no verdict.
+    const events = store.runEvents(primary.id);
+    const notices = this.stallNoticesOf(events);
+    const markUnreadableSince = this.stallMarkUnreadableSince.get(id) ?? null;
+    let input: StallInput = {
+      subject, worker, mail: stallRunMail(read.mail, runIds), notices, arming, coordinationPaused: paused,
+      coordinator: null, activation: stallReactivation(events),
+      w2: {
+        mark, hook: stallHookFactOf(raw), deliveries: read.deliveries,
+        absentSince: this.stallAbsentSince.get(id) ?? null, deadSince: this.stallDeadSince.get(id) ?? null,
+        markUnreadableSince,
+      },
+    };
+    let v = stallVerdict(input, now);
+    if (v.act === 'measure-coordinator') {
+      // D-3570 `r2-measures-on-demand`: the reclaim door's own re-measurement, only when r2 falls due.
+      const measured = await measureClaimant(
+        { coord: store, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux }, v.coordinatorId, now);
+      input = { ...input, coordinator: measured.state };
+      v = stallVerdict(input, now);
+    }
+    if (v.act === 'notify') this.applyStall(store, input, v, now);
+    const si: StallSessionInput = {
+      sessionId: id, role: 'worker', run: primary, worker, mark, liveStartedAt: lr?.startedAt ?? null,
+      markUnreadableSince, mail: read.mail, deliveries: read.deliveries, notices, arming, coordinationPaused: paused,
+    };
+    for (const sv of [stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallOrphanDVerdict(si, now)]) {
+      this.applyStallSession(store, si, primary.project, sv, now);
+    }
+  }
+
+  /** One run coordinator, judged RUN-LESS (slug `coordinator-notices-are-run-less` (D-3653)): its notices are keyed on
+   *  their mail subjects and on in-memory latches, never on a claimed run's `run_events`, where its orphan E rows
+   *  would count toward that run's worker's proof (b). Its verdicts, in the spec's order: orphan E, failed, each mail
+   *  stuck, its marker, and orphan D last as for a worker (spec §5.2 "any session"; slug `coordinators-draw-orphan-d` (D-3749)).
+   *  The registry-row loop skips every judged id, so this is the only place a coordinator's orphan D is asked.
+   *  Reads: the live file and the marker. No session verdict takes a hookstate ask, so none is read, and
+   *  `unmeasured` says so. Its mail read carries no run ids: its claimed runs' mail is its worker's subject. */
+  private async judgeStallCoordinator(
+    store: CoordStore, c: { readonly sessionId: string; readonly runs: readonly StallRunRow[] },
+    sessions: readonly FleetSession[], tick: StallTick, arming: StallArming, paused: boolean, now: number,
+  ): Promise<void> {
+    const id = c.sessionId;
+    const s = sessions.find((x) => x.id === id);
+    const ident = this.stallUuid(tick, id);
+    const lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
+    const mark = await this.stallMarkRead(id, ident, lr);
+    this.stallMarkClock(id, ident, mark, now);
+    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD);
+    const read = store.stallMailFor(id, [], now - BACKLOG_HORIZON_MS);
+    if (!read.ok) {
+      console.warn(`ccrc-server: stall-watch coordinator ${id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
+      return;
+    }
+    const si: StallSessionInput = {
+      sessionId: id, role: 'coordinator', run: null, worker, mark, liveStartedAt: lr?.startedAt ?? null,
+      markUnreadableSince: this.stallMarkUnreadableSince.get(id) ?? null,
+      mail: read.mail, deliveries: read.deliveries, notices: [], arming, coordinationPaused: paused,
+    };
+    const project = s?.project ?? c.runs[0]?.project ?? '';
+    for (const sv of [stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
+      this.applyStallSession(store, si, project, sv, now);
+    }
+  }
+
+  /** A registry row that is no run's worker or coordinator: orphan D only (spec §5.2, "Candidates are the registry
+   *  rows whose marker reads done with lostBg > 0"). ONE read, the marker judged with no live file, and the live
+   *  file only for a marker that records a restart which lost background tasks. That gate is L1's
+   *  (`stallOrphanDCandidate`, the mark alone), spent here on the read budget; this method asks it and spells no
+   *  conjunct. `stallOrphanDVerdict` asks the same predicate again with the live facts, and re-judges the marker
+   *  against the live process's start. A row whose identity is unmeasured reads nothing: these rows are not
+   *  candidates for `marker-unreadable` (slug `coordinator-marker-unreadable` (D-3654)). Nor does a row with no live pane,
+   *  which orphan D can never wake: a read-budget skip. */
+  private async judgeStallOrphan(
+    store: CoordStore, r: SessionRecord, sessions: readonly FleetSession[], tick: StallTick,
+    arming: StallArming, paused: boolean, now: number,
+  ): Promise<void> {
+    const ident = measuredIdentity(r);
+    if (ident === null) return;
+    // A read-budget skip, like the line above: orphan D answers none without an idle live word, and a
+    // row with no live pane has none (`stallLiveRead` folds a missing entry and a null pid alike to `no-pane`). Most
+    // registry rows are long-dead sessions, so they cost no agent read.
+    if (!tick.panePids.get(r.id)) return;
+    const mark = await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, ident.uuid, null);
+    if (!mark.ok || !stallOrphanDCandidate(mark)) return;
+    const s = sessions.find((x) => x.id === r.id);
+    const lr = s === undefined ? null : await this.stallLiveRead(r.id, s.wrapper, tick);
+    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD);
+    const read = store.stallMailFor(r.id, [], now - BACKLOG_HORIZON_MS);
+    if (!read.ok) {
+      console.warn(`ccrc-server: stall-watch session ${r.id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
+      return;
+    }
+    const si: StallSessionInput = {
+      sessionId: r.id, role: 'other', run: null, worker, mark, liveStartedAt: lr?.startedAt ?? null,
+      markUnreadableSince: null, mail: read.mail, deliveries: read.deliveries, notices: [], arming,
+      coordinationPaused: paused,
+    };
+    this.applyStallSession(store, si, s?.project ?? r.project, stallOrphanDVerdict(si, now), now);
+  }
+
+  /** The registry uuid this sweep reads a marker and a hookstate against, off the tick's own rows. No row: `null`
+   *  (unregistered). A row whose identity the tick could not measure: `ok:false`, never folded into
+   *  "unregistered" (an adapter may not narrow a distinction it received). */
+  private stallUuid(tick: StallTick, id: string): StallUuid {
+    const rec = tick.records.find((r) => r.id === id);
+    if (rec === undefined) return { ok: true, uuid: null };
+    const ident = measuredIdentity(rec);
+    return ident === null ? { ok: false } : { ok: true, uuid: ident.uuid };
+  }
+
+  /** Read 1: the raw live word and the live process's start. The pid is the one `assembleFleet` read this tick; no
+   *  entry (a pane that was not alive) and a null (tmux answered none) are both `no-pane`, as wave 1's own
+   *  `panePid` folded them. An unrostered wrapper and the read's `no-state` and `unmeasured` are each a named hold. */
+  private async stallLiveRead(id: string, wrapper: string, tick: StallTick): Promise<StallLive> {
+    const pid = tick.panePids.get(id) ?? null;
+    if (!pid) return { live: { ok: false, reason: 'no-pane' }, startedAt: null };
+    const cfgDir = configDirFor(this.deps.cfg, wrapper);
+    if (!cfgDir) return { live: { ok: false, reason: 'no-config-dir' }, startedAt: null };
+    const read = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
+    return read.ok
+      ? { live: { ok: true, word: read.state.status, since: read.state.statusUpdatedAt }, startedAt: read.state.startedAt }
+      : { live: { ok: false, reason: read.reason }, startedAt: null };
+  }
+
+  /** Read 2: the turn marker. Judged for staleness against the live process when the live file was read; with no
+   *  live read, L1 re-judges it from `liveStartedAt`. An unmeasured identity cannot be compared, so it answers
+   *  `unmeasured` without reading, and `stallMarkClock` does not count that answer. */
+  private async stallMarkRead(id: string, ident: StallUuid, lr: StallLive | null): Promise<TurnMarkRead> {
+    if (!ident.ok) return { ok: false, reason: 'unmeasured' };
+    return readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid,
+      lr !== null && lr.live.ok ? { startedAt: lr.startedAt } : null);
+  }
+
+  /** The session's facts. They come from this tick's fleet row, the live read and the hookstate ask; the two store
+   *  reads are synchronous. A failed auto-continue read has no slot of its own: it is a failed store read, hold 1,
+   *  so it raises `unmeasured`. */
+  private stallWorkerFor(store: CoordStore, s: FleetSession | undefined, lr: StallLive | null, hookAsk: HookAskFact): StallWorker {
+    if (s === undefined || lr === null) return { present: false };
+    const ask = store.currentAskFor(s.id);
+    const askRow: AskRowFact = !ask.ok ? { kind: 'unmeasured' }
+      : ask.ask === null ? { kind: 'none' } : { kind: 'row', state: ask.ask.state, at: ask.ask.at };
+    const held = store.autoContinueHeldUntil(s.id);
+    return {
+      present: true,
+      unmeasured: s.unmeasured.length > 0 || s.statusUnmeasured || !held.ok,
+      lifecycle: s.lifecycle,
+      limits: s.limits,
+      dialogPending: s.dialogPending,
+      stranded: s.stranded !== null,
+      swapBlocked: s.swapBlocked !== null,
+      live: lr.live,
+      hookAsk,
+      askRow,
+      // `backOff` stores no time of its own, so the START of the hold is `nextAttemptAt − MAIL_ARMED_HOLD_MS`.
+      // It is computed here because that constant is private to this file (spec §4.2, hold 3).
+      autoContinueHeldAt: held.ok && held.until !== null ? held.until - MAIL_ARMED_HOLD_MS : null,
+    };
+  }
+
+  /** The stall rows among one run's events, parsed. A detail this build cannot name is skipped (`parseStallDetail`). */
+  private stallNoticesOf(events: ReturnType<CoordStore['runEvents']>): StallNotice[] {
+    const notices: StallNotice[] = [];
+    for (const e of events) {
+      const parsed = parseStallDetail(e.detail);
+      if (parsed !== null) notices.push({ ...parsed, at: e.at });
+    }
+    return notices;
+  }
+
+  /** Drops every first-seen clock (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)), the one clearing method. Its one
+   *  caller is the gap rule in `sweepStalls`: when more than STALL_CLOCK_GAP_MS passed since the last judged sweep ended,
+   *  each clock restarts from this sweep, never firing on a duration nobody watched. A single unlistable tick, one
+   *  refused pass or one missed sweep leaves no such gap. This is the lane's bookkeeping of its own observations, not
+   *  a stall rule, so it stays in L4. */
+  private dropStallClocks(): void {
+    this.stallAbsentSince.clear();
+    this.stallDeadSince.clear();
+    this.stallMarkUnreadableSince.clear();
+  }
+
+  /** Keeps a first-seen time while `holds`, and drops it the first sweep it does not. */
+  private stallSince(map: Map<string, number>, id: string, holds: boolean, now: number): void {
+    if (!holds) { map.delete(id); return; }
+    if (!map.has(id)) map.set(id, now);
+  }
+
+  /** The marker-unreadable first-seen clock. It counts only a marker READ that answered `unmeasured` or `malformed`.
+   *  A session whose registry uuid the tick could not measure reads no marker (its `unmeasured` is `stallMarkRead`'s
+   *  own answer, not the file's), so it neither starts the clock nor keeps one: a first-seen time from an earlier
+   *  read is dropped, never left to fire off a sweep that read nothing. */
+  private stallMarkClock(id: string, ident: StallUuid, mark: TurnMarkRead, now: number): void {
+    this.stallSince(this.stallMarkUnreadableSince, id, ident.ok && stallMarkUnreadable(mark), now);
+  }
+
+  /** One warn per key (`<sessionId>|<what>`) for as long as the session stays in the registry. */
+  private stallWarnOnce(sessionId: string, what: string, line: string): void {
+    const key = `${sessionId}|${what}`;
+    if (this.stallWarned.has(key)) return;
+    this.stallWarned.add(key);
+    console.warn(line);
+  }
+
+  /** The in-memory state's prune, every sweep. The absent and dead clocks live while their session is a run worker,
+   *  the marker's first-seen time while it is a worker or a coordinator, and the latch and warn-once keys while
+   *  their session is in the registry. A latch entry carries its session id, so the prune never parses a tag. */
+  private pruneStallMemory(workers: ReadonlySet<string>, judged: ReadonlySet<string>, known: ReadonlySet<string>): void {
+    for (const m of [this.stallAbsentSince, this.stallDeadSince]) for (const id of [...m.keys()]) if (!workers.has(id)) m.delete(id);
+    for (const id of [...this.stallMarkUnreadableSince.keys()]) if (!judged.has(id)) this.stallMarkUnreadableSince.delete(id);
+    for (const [tag, id] of [...this.stallLatch]) if (!known.has(id)) this.stallLatch.delete(tag);
+    for (const key of [...this.stallWarned]) if (!known.has(key.slice(0, key.indexOf('|')))) this.stallWarned.delete(key);
+  }
+
+  /** Applies a run verdict's notify, and decides nothing. `stallNotifyDelivery` picks shadow or send from the markers
+   *  (a wave-2 arm is shadow without `stall-watch-w2-live`).
+   *  - Shadow: record a `stall-shadow:` row and warn once.
+   *  - Send to the worker (r1) or the coordinator (r2, or a frozen or dead report): one `queueStallNotice`
+   *    transaction (the row, then the mail).
+   *  - Send to the operator: record the row first, then push, and only when the row is new.
+   *  A refused write (`duplicate`, or `run-gone`: absent or no longer active, D-3584) sends and warns nothing. */
+  private applyStall(store: CoordStore, input: StallInput, n: StallNotify, now: number): void {
+    const primary = input.subject.primary;
+    const worker = primary.sessionId;
+    if (stallNotifyDelivery(n.arm, n.to, input.arming) === 'shadow') {
+      const obs = store.recordStallObservation(primary.id, stallDetail('shadow', n.arm, n.rung, n.key), now);
+      if (obs.recorded) console.warn(`ccrc-server: stall-watch shadow ${n.arm} r${n.rung} run ${primary.id} ${worker}`);
+      return;
+    }
+    const detail = stallDetail('live', n.arm, n.rung, n.key);
+    const facts = stallFacts(input);
+    if (n.to === 'worker') {
+      const text = stallCheckMail(input, facts, now);
+      queueStallNotice(store, primary, { detail, at: now, toId: worker, kind: 'status', subject: text.subject, body: text.body });
+      return;
+    }
+    if (n.to === 'coordinator') {
+      if (n.arm !== 'quiet') {
+        const report = stallW2ReportMail(input, facts, n, now);
+        queueStallNotice(store, primary, { detail, at: now, toId: n.coordinatorId, kind: 'status', subject: report.subject, body: report.body });
+        return;
+      }
+      // r2's body cites r1: `stallCitedCheck` (L1, M7a) picks its earliest LIVE row when one exists, else its
+      // earliest row, because arming mid-episode leaves a shadow r1 before the live one (D-3572
+      // `shadow-rung-accounting`). Its mail is `stallLastCheck`'s, with that mail's NEWEST delivery row from the one
+      // mail read; a check with no delivery row hands null, never a row of nulls (D-3585). The null branch below is
+      // DEFENSIVE and unreachable from real inputs today: the verdict and the citation read the same notice rows, so
+      // an r2 that falls due always has an r1 to cite. It stays so that a later drift between the two warns once
+      // instead of sending an r2 that cites nothing.
+      const r1 = stallCitedCheck(input, n.key);
+      if (r1 === null) {
+        this.stallWarnOnce(worker, `no-r1-${primary.id}-${n.key}`, `ccrc-server: stall-watch run ${primary.id} r2 fell due with no r1 row — not sent`);
+        return;
+      }
+      const r1Mail = stallLastCheck(input);
+      const r1Row = r1Mail === null ? null : stallNewestDelivery(input.w2?.deliveries ?? [], r1Mail.id);
+      const r1Delivery = r1Mail === null || r1Row === null ? null
+        : { queuedAt: r1Mail.at, deliveredAt: r1Row.deliveredAt, ackedAt: r1Row.ackedAt };
+      const text = stallReportMail(input, facts, r1, r1Delivery, now);
+      queueStallNotice(store, primary, { detail, at: now, toId: n.coordinatorId, kind: 'status', subject: text.subject, body: text.body });
+      return;
+    }
+    const obs = store.recordStallObservation(primary.id, detail, now);
+    if (!obs.recorded) return;
+    const text = stallPushText(input, facts, n, now);
+    const route = stallPushRoute(n, worker, primary.id);
+    this.pushOne({
+      kind: route.kind, sessionId: worker, project: primary.project, title: text.title, body: text.body,
+      runId: primary.id, tag: route.tag, recordAlways: true,
+    }, this.activeProjects);
+  }
+
+  /** Applies one session verdict (orphan D and E, failed, mail stuck, a coordinator's marker), and decides nothing.
+   *  - A hold applies nothing, except `failed-unknown`, which warns once (spec §5.2: never guessed into a
+   *    self-wake).
+   *  - Shadow: a worker records a `stall-shadow:` row on its run; a run-less session warns once per key, the key in the line (`runless-shadow-line-carries-its-key` (D-3800)).
+   *  - To the session itself or to its coordinator: one `queueStallNotice`, on the worker's run, or run-less and
+   *    deduped by its subject.
+   *  - To the operator: a worker records the row first and pushes only when it is new; a run-less session latches in
+   *    memory (`stallLatch`, slug `run-less-push-latches-are-in-memory` (D-3751)), so a restart re-pushes it, a coordinator's
+   *    failed rung 2 included, and a marker-unreadable push re-keys on each side of a clock drop. L1's
+   *    `stallPushRoute` names the push's kind and tag, which is also the latch key. */
+  private applyStallSession(store: CoordStore, si: StallSessionInput, project: string, v: StallVerdict, now: number): void {
+    const id = si.sessionId;
+    if (v.act === 'hold' && v.why === 'failed-unknown') {
+      const stopAt = si.mark.ok ? si.mark.stopAt : null;
+      const err = si.mark.ok ? si.mark.err : null;
+      this.stallWarnOnce(id, `failed-unknown-${stopAt}`, `ccrc-server: stall-watch unknown StopFailure ${err} on ${id} — held, never guessed into a self-wake`);
+      return;
+    }
+    if (v.act !== 'notify') return;
+    const run = si.run;
+    if (stallNotifyDelivery(v.arm, v.to, si.arming) === 'shadow') {
+      if (run === null) {
+        this.stallWarnOnce(id, `shadow-${v.arm}-${v.rung}-${v.key}`, `ccrc-server: stall-watch shadow ${v.arm} r${v.rung} ${id} (run-less) key ${v.key}`);
+        return;
+      }
+      const obs = store.recordStallObservation(run.id, stallDetail('shadow', v.arm, v.rung, v.key), now);
+      if (obs.recorded) console.warn(`ccrc-server: stall-watch shadow ${v.arm} r${v.rung} run ${run.id} ${id}`);
+      return;
+    }
+    const detail = stallDetail('live', v.arm, v.rung, v.key);
+    if (v.to === 'worker') {
+      const text = stallSessionMail(si, v, now);
+      queueStallNotice(store, run, { detail, at: now, toId: id, kind: 'status', subject: text.subject, body: text.body });
+      return;
+    }
+    if (v.to === 'coordinator') {
+      const text = stallSessionMail(si, v, now);
+      queueStallNotice(store, run, { detail, at: now, toId: v.coordinatorId, kind: 'status', subject: text.subject, body: text.body });
+      return;
+    }
+    const route = stallPushRoute(v, id, run === null ? null : run.id);
+    if (run !== null) {
+      const obs = store.recordStallObservation(run.id, detail, now);
+      if (!obs.recorded) return;
+      const text = stallSessionPushText(si, v, now);
+      this.pushOne({
+        kind: route.kind, sessionId: id, project, title: text.title, body: text.body,
+        runId: run.id, tag: route.tag, recordAlways: true,
+      }, this.activeProjects);
+      return;
+    }
+    if (this.stallLatch.has(route.tag)) return;
+    this.stallLatch.set(route.tag, id);
+    const text = stallSessionPushText(si, v, now);
+    this.pushOne({
+      kind: route.kind, sessionId: id, project, title: text.title, body: text.body,
+      tag: route.tag, recordAlways: true,
+    }, this.activeProjects);
   }
 
   /**
@@ -2991,8 +4440,13 @@ export class FleetWatcher {
    *      `hookstate.ts:149-154`) is NON-BLOCKING here: idle authority moved
    *      wholly to conjunct 5 below, so a resumed long-idle worker, or one
    *      whose `/clear` emitted no registered hook, is still deliverable;
-   *   5. the live status file says AFFIRMATIVELY idle and `statusUpdatedAt` is
-   *      at least `MAIL_QUIET_MS` old — the SOLE idle authority. Affirmatively,
+   *   5. `mailTurnIdle` (`turnidle.ts`) reads the RAW live word as a finished
+   *      turn — `idle`, or `shell` (an idle main loop over a background shell)
+   *      unless `$REG/mail-gate-strict` is listed — and `statusUpdatedAt` is at
+   *      least `MAIL_QUIET_MS` old (`COORD_QUIET_MS` for a coordinator): the
+   *      SOLE turn-idle authority. A `shell` delivery also asks `sendPrompt`
+   *      to refuse a pane showing `esc to interrupt` (`turn-running`), a
+   *      tripwire only. It never asks `liveStatus`,
    *      because `liveStatus` answers `'idle'` for a missing pid, a missing
    *      config dir and an unreadable file (`fleet.ts:118-131`) —
    *      the deleted `archiveSafety`'s rule ("MUST NOT collapse `unknown` to
@@ -3085,9 +4539,25 @@ export class FleetWatcher {
     // Fail-shut: a registry we cannot list is a kill-switch we cannot read.
     const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
     if (listing === null || listing.includes(MAIL_DISABLED_MARKER)) return;
+    // The gate's mode comes from this SAME listing (worker stall watch §4.1,
+    // `turnidle.ts`). An unlistable registry has already returned above, so a
+    // mode is never read from a listing that failed: the strict marker fails
+    // shut at no extra cost.
+    const mode = mailTurnModeOf(listing);
 
     const unacked = store.deliveredUnacked();
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
+    // The busy-shadow log's memory keeps only deliveries still outstanding.
+    // It is pruned BEFORE the empty-queue return, so an idle box empties it.
+    // Due or delivered this sweep is outstanding; a row in neither is looked up,
+    // because a queued row another lane backed off past this sweep is still
+    // outstanding and must not be said a second time when it returns.
+    const outstandingIds = new Set([...unacked, ...dueBefore].map((r) => r.id));
+    for (const loggedId of this.busyShadowLogged) {
+      if (outstandingIds.has(loggedId)) continue;
+      const row = store.delivery(loggedId);
+      if (row === null || (TERMINAL_DELIVERY_STATES as readonly string[]).includes(row.state)) this.busyShadowLogged.delete(loggedId);
+    }
     if (unacked.length === 0 && dueBefore.length === 0) return;
     // Fix — blocking review findings 1/5: `readRegistry`'s OLD signature
     // collapses a whole-fleet `io.readdir` failure to `[]` — the SAME shape
@@ -3480,19 +4950,56 @@ export class FleetWatcher {
         const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
         if (!cfgDir) { gated(d, 'no-config-dir'); continue; }
         const live = await readLiveState(this.deps.io, cfgDir, pid);
-        if (!live || liveSessionStatus(live.status) !== 'idle') { gated(d, 'not-idle'); continue; }
-        // THE GATE TOKEN DOES NOT FORK, deliberately (D-1167). `MailGate`'s own
+        // ONE decision for both gates (worker stall watch §4.1, §5.1, `turnidle.ts`).
+        // `idle` delivers as before. So does `shell`, an idle main loop over
+        // background shell work, unless `$REG/mail-gate-strict` is listed. A
+        // null read is `not-idle`, as `!live` was.
+        //
+        // The turn marker (§5.1) is read here, once per due row that passed
+        // every gate above, and ONLY under the hand-armed `busy-shadow` and
+        // `busy` (shell-mode-ignores-the-marker (D-3674)). Which modes those are is
+        // `mailTurnReadsMark`'s decision (L1), the same rule `mailTurnIdle`
+        // uses to consult `mark`; this line asks it. Wave 2 ships dark: under the
+        // default `shell`, and under `strict`, no agent read is added and
+        // `mailTurnIdle` answers as wave 1 did, whatever the marker says. It is
+        // never read without a live file either: that row is `not-idle`
+        // already, and the reader needs the live `startedAt` to call a marker
+        // stale. `identity` is non-null here, because the registry rung above
+        // `continue`s on null. An `absent`, `foreign` or `stale` read takes
+        // wave 1's path inside `mailTurnIdle`.
+        const mark = mailTurnReadsMark(mode) && live !== null
+          ? await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, d.toId, identity.uuid, live)
+          : null;
+        const turn = mailTurnIdle(live, mark, now, isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS, mode);
+        // THE QUIET THRESHOLD DOES NOT FORK `not-quiet`, deliberately (D-1167). `MailGate`'s own
         // docstring sets the rule — one member per CONDITION, not per `continue`
         // — and `no-pane`/`no-config-dir` were split because an operator acts on
-        // them differently. Here the condition is the same one ("this session has
-        // not been quiet long enough") and so is the act (wait). The union is
+        // them differently. A coordinator's longer quiet time is the same condition ("this session
+        // has not been quiet long enough") and the same act (wait). The union is
         // also explicitly NOT a scheduling input: it exists so a human can tell
         // waiting from wedged, and both thresholds are waiting. A
         // `coord-not-quiet` member would cost a union entry, a total-map entry in
         // `shared/api.ts` and a phrase in `MailStrip.tsx` to record a distinction
-        // nobody acts on.
-        if (live.statusUpdatedAt === null ||
-            now - live.statusUpdatedAt < (isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS)) { gated(d, 'not-quiet'); continue; }
+        // nobody acts on. Three tokens follow: `turn-mark-unreadable`, then `not-idle` or `not-quiet`.
+        //
+        // Every token is spelled as a LITERAL at its call on purpose (`not-idle` and `not-quiet` in
+        // one ternary). The D-792 structure scan (`mail-sweep.test.ts`) counts a gate only where its
+        // name is written at the call, so `gated(d, turn.gate)` would leave them with
+        // no call site it can see.
+        if (!turn.deliver) {
+          // A THIRD token, and a different condition: the turn marker could not
+          // be read under `mail-gate-busy`. That is a fleet fault, not a busy
+          // session, so it gets its OWN literal call site. A nested ternary is
+          // invisible to the D-792 scan (`mail-sweep.test.ts`).
+          if (turn.gate === 'turn-mark-unreadable') { gated(d, 'turn-mark-unreadable'); continue; }
+          // `mail-gate-busy-shadow`: the row WOULD deliver on `busy`. It is held,
+          // and it is said once per delivery, for the operator's 48 h check.
+          if ('wouldDeliver' in turn && !this.busyShadowLogged.has(d.id)) {
+            this.busyShadowLogged.add(d.id);
+            console.warn(`ccrc-server: mail-gate busy-shadow would deliver delivery ${d.id} to ${d.toId} (quiet since ${new Date(turn.since).toISOString()})`);
+          }
+          const notIdle = turn.gate === 'not-idle'; gated(d, notIdle ? 'not-idle' : 'not-quiet'); continue;
+        }
 
         // `seen` is added only HERE, once every gate above has passed and the
         // send is actually about to be attempted — it means "one message per
@@ -3544,8 +5051,15 @@ export class FleetWatcher {
         // With no run event to read, nothing is passed and `sendPrompt`
         // refuses `draft-present` exactly as it does today.
         const ownStrandedClear = store.strandedClear(d.toId);
+        // `refuseIfTurnRunning` only when the live word that delivered is not
+        // `idle` (worker stall watch §4.1). It is a tripwire for a build where
+        // `shell` stopped meaning idle: the last 8 captured rows showing
+        // `esc to interrupt`. It is best-effort: blind below `READER_MIN_COLS`,
+        // where the line wraps, and on a `--remote-control` pane, which never
+        // renders it.
         const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, renderMailNudge(d.toId),
-          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true });
+          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
+            refuseIfTurnRunning: turn.via !== 'idle' });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
           store.markDelivered(d.id, now);
@@ -3585,12 +5099,15 @@ export class FleetWatcher {
          * plus `NOTIFY_KINDS`, and every older client renders `undefined`.
          *
          * AND A DURABLE FEED ROW, NOT A `run_events` ROW (operator-accepted
-         * deviation from §4.5). `advanceInner` is the only writer of
-         * `run_events` and its own docstring says so; every insert there is
-         * paired with a transition validated against `RUN_TRANSITIONS`, which
-         * has no self-transition for any state. A park is not a run
-         * transition, so writing one would either invent a second writer or
-         * lie about the run's state. `pushOne` mirrors into
+         * deviation from §4.5). `advanceInner` is the only TRANSITION writer
+         * of `run_events`: every insert there is paired with a transition
+         * validated against `RUN_TRANSITIONS`, which has no self-transition
+         * for any state. The other writers (`recordRunEvent`, the stall
+         * watch's `insertStallObservation`) write `fromState === toState`
+         * observation rows, which `pushNewRuns` skips, so they push nothing.
+         * A park is not a run transition, so a transition row would lie about
+         * the run's state and an observation row would never reach the
+         * sender. `pushOne` mirrors into
          * `CoordStore.recordFeedEvent` — the durable archive behind the feed —
          * at exactly this point, which is the durability that was wanted.
          */
@@ -3639,6 +5156,17 @@ export class FleetWatcher {
               `mail-blocked-${d.id}`);
           }
           store.backOff(d.id, res.error, now + MAIL_ARMED_HOLD_MS, false);
+          continue;
+        }
+
+        if (res.error === 'turn-running') {
+          // Worker stall watch §4.1. The pane guard saw `esc to interrupt` and
+          // refused before any keystroke. This arm sits before the attempts
+          // ceiling, as the hold above does, because a running turn is not a
+          // failed send. There is NO `tellSender`: a running turn is not a
+          // blocked recipient, and the first sweep after the hold reads the
+          // live word again.
+          store.backOff(d.id, res.error, now + MAIL_TURN_HOLD_MS, false);
           continue;
         }
 
@@ -3791,6 +5319,7 @@ export class FleetWatcher {
             continue;
           }
           this.prStates.set(line.id, phaseFor(line));
+          this.prQueues.set(line.id, queueFor(line));
           // RETAINED, not derived: `line.repo` is `_gh_repo_slug` of this
           // project's main checkout, already measured by this same sweep and
           // until now dropped here — `phaseFor` returns a `PrState`, which has
@@ -3808,6 +5337,7 @@ export class FleetWatcher {
         }
       }
       this.sweepMerged(records);
+      this.sweepLanding(records);
     } finally {
       // Only the CURRENT sweep may clear the stamp. An abandoned sweep that
       // finally returns half an hour later must not unlatch the one that
@@ -3999,6 +5529,140 @@ export class FleetWatcher {
   }
 
   /**
+   * The landing lane (landing-order wave 2, spec §5.2): the coordinator's two
+   * notices about a PR it is landing through the merge queue. It ANNOUNCES; it
+   * never enqueues, merges, re-runs or re-enqueues anything (R5).
+   *
+   *  - DEQUEUED (`queueFor` reads `dequeued`). GitHub does NOT re-enqueue a PR
+   *    its queue removed, so a removal nobody hears about is a landing that
+   *    silently stops. Once per (workspace, PR, removal): a `status` mail
+   *    (`dequeuedSubject`) to the coordinator of the open run that names the
+   *    workspace — who re-enqueues or sends a fix round — and a `queue` FEED
+   *    record, always (`recordAlways`: a removal is a fact about the
+   *    programme whether or not anyone is watching this pane). With no open
+   *    run there is nobody to tell without guessing (`resolveCoordinator(null)`
+   *    answers whichever programme is the single active one, `tellSender`'s
+   *    reason), so the record is the whole notice. A NEW kind rather than
+   *    `merged` or `mail`: a dequeue is the one PR outcome that is not a
+   *    merge; `MailScreen`'s two total maps name it, and an older client
+   *    degrades it to `unknown` through `reviveNotifyEvent`.
+   *  - MERGED (the phase `sweepPr` derived reads `merged`) while that run
+   *    waits at `merging`: a `status` mail (`mergedSubject`) to its
+   *    coordinator, once per (workspace, PR). `merging` is the coordinator's
+   *    own declaration that it is landing this PR; on a native-queue project
+   *    it enqueued and ended its turn (clause 15; `wave-lifecycle.md` §5), and
+   *    this mail is what wakes it to prove the merge and close the run — it
+   *    never polls (clause 7). The run's state is all this reads, not whether
+   *    the project has a queue: a synchronous merge elsewhere that a sweep
+   *    reads before the close is mailed too, and the skill says to prove and
+   *    close as usual. No feed record: `sweepMerged` writes the `merged` one.
+   *    A merged PR whose run is elsewhere — a hand merge, a close that came
+   *    first — asked for nothing, and the first sweep that reads the merge
+   *    decides so.
+   *
+   * WHY THE OPEN RUN IS THE KEY. Under "One PR per child" a producer that
+   * closed before its PR landed would be reclaimed (child-reclamation wave 3:
+   * registry row, worktree and pane gone), and a reclaimed workspace has no
+   * pr-state line to carry a queue word — nor a worker to take a fix round.
+   * On a native-queue project the coordinator therefore lands BEFORE it
+   * closes (clause 15): the run waits at `merging` holding the child, so the
+   * row, the line and the worker all outlive the queue. The run is the one
+   * `survivorOf` picks — the close's and dispatch's own rule.
+   *
+   * ONCE ACROSS RESTARTS TOO. Before telling, the lane asks coord.db whether
+   * this notice was ALREADY told: a mail through `hasMailWithSubject` — every
+   * delivery state, because `queueSystemMail`'s own dedupe sees OUTSTANDING
+   * rows only and an acked notice would otherwise be mailed again after every
+   * rollout — and the feed-only dequeue through `hasFeedEvent` on the exact
+   * body, which carries the removal time. A hit latches and says nothing.
+   *
+   * THREE OUTCOMES, KEPT APART. Run rows that cannot be read are NOT "no open
+   * run" (the overloaded null `sweepMerged` also refuses): the lane defers,
+   * says nothing and latches nothing, and the next sweep re-reads. A mail
+   * that throws (`node:sqlite`, synchronously) is caught with nothing recorded
+   * and nothing latched, so the next sweep tries again — the mail is queued
+   * BEFORE the feed record for exactly that reason, so a retry leaves one
+   * record. Only a notice that landed, one a durable read found, or a
+   * decision that there is nobody to tell, is latched.
+   *
+   * `unmeasured` and `absent` NEVER announce a dequeue, and neither do
+   * `queued`, `landed` or `none`: the lane fires on the one word that asks
+   * for an act. A PR the coordinator's enqueue only ARMED reads `none` too
+   * (gh 2.45 arms auto-merge, rather than queueing, a PR whose required
+   * checks have not passed, and prints the same line either way): the lane
+   * cannot tell that from "not enqueued yet", so the coordinator reads the
+   * queue entry back before it ends its turn (`wave-lifecycle.md` §5).
+   */
+  private sweepLanding(records: SessionRecord[]): void {
+    const coord = this.deps.coord;
+    if (coord === undefined) return;
+    for (const r of records) {
+      if (measuredIdentity(r) === null) continue;
+      if (r.workspace === null || r.archivedAt !== null) continue;
+      // EVERY DECISION is `coord/landing.ts`'s (D-3883, pure L1): `landingAsk` says what this line asks for and
+      // whether it is already latched, and `landingVerdict` says the next step given the facts read so far. This
+      // loop is the READS and the DELIVERIES, nothing else.
+      const ask = landingAsk({
+        sessionId: r.id, workspace: r.workspace, number: this.prStates.get(r.id)?.number ?? null,
+        phase: this.prStates.get(r.id)?.phase, queue: this.prQueues.get(r.id),
+      }, this.landingNotified);
+      if (ask === null) continue;
+      // ONE BAD ROW MAY NOT COST THE REST OF THE SWEEP: `node:sqlite` throws
+      // synchronously, and this runs inside the void-dispatched `sweepPr`.
+      try {
+        const facts: LandingFacts = {};
+        let run: OpenSibling | null = null;
+        // ENDS: every step that is not an end records one fact (`runs`, `coordinator`, `runState`, `told`) that
+        // `landingVerdict` then reads as made, and the facts have those four keys (`told` once: the mail proof or
+        // the feed proof, never both), so at most four reads precede an end. The switch is exhaustive: a new step
+        // kind is a compile error here, never a silent delivery.
+        steps: for (;;) {
+          const s = landingVerdict(ask, facts);
+          switch (s.step) {
+            case 'runs': {
+              const sib = coord.openRunsForSession(r.id);
+              run = sib.ok ? survivorOf(sib.siblings) : null;
+              facts.runs = sib.ok ? { ok: true, run } : { ok: false, detail: sib.detail };
+              break;
+            }
+            case 'coordinator':
+              facts.coordinator = coord.resolveCoordinator(s.runId);
+              break;
+            case 'runState': {
+              const read = coord.run(s.runId);
+              facts.runState = read.ok ? { ok: true, state: read.run?.state ?? null } : { ok: false, detail: read.detail };
+              break;
+            }
+            case 'toldMail':
+              facts.told = coord.hasMailWithSubject('operator', s.runId, s.toId, s.subject);
+              break;
+            case 'toldFeed':
+              facts.told = coord.hasFeedEvent('queue', r.id, s.body);
+              break;
+            case 'defer':
+              console.warn(`ccrc-server: landing notice for ${r.id} deferred (run rows unreadable: ${s.detail})`);
+              break steps;
+            case 'latch':
+              this.landingNotified.add(ask.key);
+              break steps;
+            case 'deliver':
+              if (s.mail !== null) queueSystemMail(coord, run, s.mail);
+              if (s.record !== null) this.pushOne({ kind: 'queue', sessionId: r.id, project: r.project, ...s.record }, this.activeProjects);
+              this.landingNotified.add(ask.key);
+              break steps;
+            default: {
+              const unhandled: never = s;
+              throw new Error(`landing: unhandled step ${JSON.stringify(unhandled)}`);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`ccrc-server: landing notice for ${r.id} failed (${err instanceof Error ? err.message : String(err)})`);
+      }
+    }
+  }
+
+  /**
    * Capture each registered session's pane (dead panes capture as null); a menu
    * pane parses to a dialog. Emit `dialog` when the id changed since last tick,
    * `dialog_cleared` when a previously-reported dialog vanished. Returns the
@@ -4067,7 +5731,11 @@ export class FleetWatcher {
       //     ctxPct: a stale high reading surviving a tick where the console
       //     could not even see the statusline is worse than showing no
       //     reading, so it is explicitly cleared while model/branch/effort
-      //     ride through untouched.
+      //     ride through untouched. On either retaining branch (3 or 4)
+      //     `boxCols` is never kept — THIS tick's reading or none — and
+      //     `workflowActive` is THIS tick's reading wherever the tick saw the
+      //     statusline row, the last one kept where it did not, as the notes
+      //     beside the code below say.
       if (pane === null) {
         this.statuslines.delete(r.id);
       } else {
@@ -4084,14 +5752,26 @@ export class FleetWatcher {
           this.statuslines.set(r.id, sl);
         } else if (sl.ctxPct !== undefined) {
           const prev = this.statuslines.get(r.id);
-          this.statuslines.set(r.id, prev ? { ...prev, ctxPct: sl.ctxPct, boxCols: sl.boxCols, retained: true } : sl);
+          // ctx is read off the statusline row, so this tick saw it and its
+          // `workflowActive` is defined: the `??` below never falls through
+          // here. Written as on branch 4 so the one rule reads the same on both.
+          this.statuslines.set(r.id, prev ? { ...prev, ctxPct: sl.ctxPct, boxCols: sl.boxCols, workflowActive: sl.workflowActive ?? prev.workflowActive, retained: true } : sl);
         } else {
           // `boxCols` rides with ctxPct, never with identity: it is THIS
           // tick's width or nothing. A kept width would read an overlay tick
           // on a pane just narrowed by an attach as still wide — the one
           // direction the fleet's `narrow` chip must not err in.
+          // `workflowActive` reads the rows BELOW the statusline row. A tick
+          // that saw that row measured them — a `👤`-only row lands on this
+          // branch with no identity and no ctx, and its reading is this
+          // tick's, `true` or `false`. A tick that did not (an overlay, a
+          // pane mid-render) gets `undefined` from `parseStatusline`, and the
+          // LAST measurement rides through, like identity: a stored `false`
+          // there dropped a running Workflow's card to idle, and fired
+          // "✓ Finished", for as long as the overlay stayed up, wherever
+          // fleet.ts reads the row (no live file, or a pre-2.1.277 build).
           const prev = this.statuslines.get(r.id);
-          if (prev) this.statuslines.set(r.id, { ...prev, ctxPct: undefined, boxCols: sl.boxCols, retained: true });
+          if (prev) this.statuslines.set(r.id, { ...prev, ctxPct: undefined, boxCols: sl.boxCols, workflowActive: sl.workflowActive ?? prev.workflowActive, retained: true });
         }
       }
       // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the

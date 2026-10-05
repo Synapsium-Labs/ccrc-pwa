@@ -61,7 +61,7 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
 
 /**
  * Verbs whose skew question is answered by a CAPABILITY token rather than by
- * `verbSupported` at all (fix round 1, finding #2). `route` is the first:
+ * `verbSupported` at all. `route` is one of them:
  * `routing spec 2026-09-14 §5.3`'s `POST /api/sessions/:id/route` handler
  * gates on `capSupported(deps.fleetState, ROUTE_APPLY_CAP)` alone, the same
  * pattern this file's sibling `ROUTE_ARGV_CAP`/`POOLS_CAP` call sites already
@@ -77,14 +77,22 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
  * that call site, so adding it would read as a second check while providing
  * none.
  *
- * Scoped to exactly this verb, not accepted blanket for every call site
+ * Scoped to exactly these verbs, not accepted blanket for every call site
  * (`'ignores a bare capSupported for a verb outside the set'` below pins the
  * boundary) — a verb whose skew is genuinely about ccd not knowing the VERB
  * AT ALL (this branch's own `NEW_GENERATION` list) still needs a real
  * `verbSupported` call, and widening this past named verbs would let a
  * missing one hide behind an unrelated `capSupported` in the same function.
+ *
+ * The other two members argue the same way. `ws-reclaim` (child-reclamation
+ * wave 3): the executor composes it only behind
+ * `capSupported(deps.fleetState, RECLAIM_CAP)` — no `reclaim-v1` token, no
+ * argv. `reclaim-pause` (wave 4): its route gates on
+ * `capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)` alone. For both, a box
+ * that echoes the token necessarily dispatches the verb, so `route`'s
+ * argument above holds for each of them unchanged.
  */
-const CAP_GATED_VERBS: ReadonlySet<string> = new Set(['route', 'ws-reclaim']);
+const CAP_GATED_VERBS: ReadonlySet<string> = new Set(['route', 'ws-reclaim', 'reclaim-pause']);
 
 /**
  * Args that make each `CCD_ARGV` entry build without throwing, keyed by

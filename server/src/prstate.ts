@@ -34,6 +34,14 @@ export interface CcdPrLine {
    *  fetched the rollup in-band, so a missing key really did mean "no checks".
    *  Read by `phaseFor` and nothing else. */
   checksUnmeasured?: boolean;
+  /** The merge-queue word ccd's THIRD `--project` call stamps (landing-order
+   *  wave 2, `_pr_queue_stamp`), and the ISO time of the last queue act beside
+   *  it. RAW on purpose — `unknown`, never the union: `parsePrLines` casts a
+   *  full line straight through, so the one place these become typed is
+   *  `queueFor` below, their ONE reader. Absent on a `--session` line and on
+   *  every line from an older ccd. */
+  queue?: unknown;
+  queueAt?: unknown;
   commits: { sha: string; subject: string; body: string }[];
   template: string | null; rows: CcdPrRow[];
   phase: PrState['phase']; number: number | null; checkedAt: number;
@@ -212,6 +220,43 @@ export function phaseFor(line: CcdPrLine): PrState {
   if (row.state === 'MERGED') return { ...common, phase: 'unknown', reason: 'merge-unproven' };
   if (row.state === 'CLOSED') return { ...common, phase: 'closed' };
   return { ...common, phase: row.isDraft === true ? 'draft' : 'open' };
+}
+
+/** The merge-queue vocabulary `ccd pr-state --project` answers in (spec §5.2),
+ *  ENUMERATED ONCE — the word list below is derived from it, never re-typed. */
+const PR_QUEUE_MAP = {
+  queued: 'the PR is open and in the merge queue now',
+  dequeued: 'the PR is open, out of the queue, and its last queue act was a removal',
+  landed: 'the PR merged and its last queue act was the add: the queue merged it',
+  none: 'measured, and none of the above',
+  unmeasured: 'the queue read did not answer, or the bound PR is outside its windows',
+} as const;
+export type PrQueue = keyof typeof PR_QUEUE_MAP;
+/** The words, DERIVED — exported so `ccd-pr-queue-words.test.ts` can compare them with the words ccd's
+ *  `_pr_queue_py` emits (D-3882): a word renamed on the ccd side alone reads here as `unmeasured`, and the
+ *  landing lane says nothing for `unmeasured`. */
+export const PR_QUEUE_WORDS: readonly string[] = Object.keys(PR_QUEUE_MAP);
+
+/** What `queueFor` read off one line. `absent` is its OWN answer and never
+ *  `unmeasured`: a line with no `queue` key comes from a ccd that predates the
+ *  read, or from `--session`, which never makes it — nothing was asked, where
+ *  `unmeasured` means ccd asked and GitHub did not answer. Both mean "no
+ *  evidence" to the landing lane; they are kept apart so no later reader has
+ *  to re-derive which one it was holding. */
+export interface PrQueueRead { state: PrQueue | 'absent'; at: string | null }
+
+const QUEUE_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+
+/** The ONE reader of `CcdPrLine.queue` and `CcdPrLine.queueAt`. A word this
+ *  build does not know reads as `unmeasured` — this is ccd's own output on this
+ *  box, so a stranger token means the two builds disagree, which is a failed
+ *  read, the same rule `asReason` applies above. */
+export function queueFor(line: CcdPrLine): PrQueueRead {
+  if (line.queue === undefined) return { state: 'absent', at: null };
+  const state = typeof line.queue === 'string' && PR_QUEUE_WORDS.includes(line.queue)
+    ? line.queue as PrQueue : 'unmeasured';
+  const at = typeof line.queueAt === 'string' && QUEUE_AT_RE.test(line.queueAt) ? line.queueAt : null;
+  return { state, at };
 }
 
 /** The repo cell for one project, from what the sweep measured about it.

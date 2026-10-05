@@ -30,14 +30,16 @@ process.exitCode = 1;
  * short-circuits BEFORE the typecheck check: a `none` selection (the daily
  * schedule's "already green" short-circuit, spec §3) skips typecheck too,
  * so checking it there would read a `skipped` as a failure. A pull request
- * can never answer `none` (it always runs server tests — ruling T2), so
- * `none` with `event === 'pull_request'` is red; the event comes from the
- * workflow's own context, not from select's outputs.
+ * can never answer `none` (it always runs server tests — ruling T2), and nor
+ * can a merge-queue run, which runs what a pull request runs (operator ruling
+ * 2026-09-28, landing-order wave 2), so `none` with `event === 'pull_request'`
+ * or `'merge_group'` is red; the event comes from the workflow's own context,
+ * not from select's outputs.
  *
  * Rules:
  *   1. `select` did not succeed -> fail.
  *   2. `tests === 'none'` -> ok (nothing was supposed to run) — except on a
- *      `pull_request`, which fails.
+ *      `pull_request` or a `merge_group`, which fails.
  *   3. `tests` is anything other than `selected` or `full` -> fail, reason
  *      `unrecognised tests: <JSON of the value>` (an unrecognised selection
  *      mode never earned a verdict — ruling F8-1).
@@ -64,8 +66,8 @@ export function serverVerdict({ select, typecheck, shards, tests, count, event }
     return { ok: false, reason: `select: ${select || '(did not run)'}` };
   }
   if (tests === 'none') {
-    return event === 'pull_request'
-      ? { ok: false, reason: 'tests: none on a pull_request — a pull request always runs server tests' }
+    return event === 'pull_request' || event === 'merge_group'
+      ? { ok: false, reason: `tests: none on a ${event} — a pull request or a merge-queue run always runs server tests` }
       : { ok: true, reason: 'tests: none — nothing was selected to run' };
   }
   if (tests !== 'selected' && tests !== 'full') {

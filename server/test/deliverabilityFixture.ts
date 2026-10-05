@@ -28,6 +28,11 @@ export interface DeliverabilityRow {
   /** true = every TRANSIENT gate open (idle, quiet, no ask, off cooldown);
    *  false = the live-state is affirmatively NOT quiet — busy, not gone. */
   readonly quiet: boolean;
+  /** The live word the sweep's live-state file carries; absent means `idle`.
+   *  `shell` is an idle main loop over background shell work (worker stall
+   *  watch §4.1), and it delivers like `idle`. `peerDeliverable` reads no live
+   *  word at all, so the two ladders must still agree on it. */
+  readonly liveStatus?: 'idle' | 'shell';
   readonly expect: PeerDeliverable;
 }
 
@@ -66,6 +71,10 @@ export const DELIVERABILITY_FIXTURE: readonly DeliverabilityRow[] = [
   { name: 'a BUSY peer is yes and gets nothing sent — transient lane state is not unreachability (R2)',
     registry: 'measured', tmux: 'live', panePid: true,
     supervisedAgoSec: 5, stoppedAgoSec: null, started: true, quiet: false, expect: 'yes' },
+
+  { name: 'a SHELL peer (an idle main loop over background shell work) is yes — and the sweep sends',
+    registry: 'measured', tmux: 'live', panePid: true,
+    supervisedAgoSec: 5, stoppedAgoSec: null, started: true, quiet: true, liveStatus: 'shell', expect: 'yes' },
 ];
 
 /** One fixture row -> the pure ladder's own input shape. `alive` for the

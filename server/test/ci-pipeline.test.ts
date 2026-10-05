@@ -312,10 +312,11 @@ describe('ci.yml: the map\'s inputs and outputs (design 2026-09-23 §5.3-§5.5)'
     expect(step(job('trace-shard'), 'Keep the records')).toMatch(/^ {8}if: always\(\)$/m);
   });
 
-  it('a trace shard hands trace-run exactly its matrix row\'s files — no --shard split of its own', () => {
-    const t = runScript(step(job('trace-shard'), 'Trace'));
-    expect(t).toBe('echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/trace.txt"\n'
-      + 'node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs 2 --timeout 1560\n');
+  it('a trace shard hands trace-run exactly its matrix row\'s files and worker count — no split of its own', () => {
+    const st = step(job('trace-shard'), 'Trace');
+    expect(st).toMatch(/^ {10}WORKERS: \$\{\{ matrix\.workers \}\}$/m);
+    expect(runScript(st)).toBe('echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/trace.txt"\n'
+      + 'node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs "$WORKERS" --timeout 1560\n');
   });
 
   it('map-build keeps the map it built as an artifact, so a replay can fetch it (gh run download -n testmap)', () => {
@@ -542,17 +543,22 @@ describe('ci.yml: a pull request that changes the pipeline runs everything, deci
     return dir;
   }
 
-  it('runs only on pull_request, and hands select --input-mode full when it answers changed=true', () => {
-    expect(pipelineStep()).toMatch(/^ {8}if: github\.event_name == 'pull_request'$/m);
+  it('runs on pull_request and on merge_group, and hands select --input-mode full when it answers changed=true', () => {
+    // A merge-queue run asks the same question (operator ruling 2026-09-28:
+    // it runs what a pull request runs), or a pull request that edits the
+    // selector would choose the tests of the queue run that gates its merge.
+    expect(pipelineStep()).toMatch(/^ {8}if: github\.event_name == 'pull_request' \|\| github\.event_name == 'merge_group'$/m);
+    // A queue run has no base_ref; its base is the sha the queue built on.
+    expect(pipelineStep()).toMatch(/^ {10}BASE: \$\{\{ github\.event_name == 'merge_group' && github\.event\.merge_group\.base_sha \|\| format\('origin\/\{0\}', github\.base_ref\) \}\}$/m);
     const sel = step(job('select'), 'Select');
     expect(sel).toMatch(/^ {10}PIPELINE_CHANGED: \$\{\{ steps\.pipeline\.outputs\.changed \}\}$/m);
     expect(runScript(sel)).toContain('elif [ "$PIPELINE_CHANGED" = true ]; then args+=(--input-mode full); fi');
   });
 
   it('a change under .github/ -> changed=true; anything else -> false; a base it cannot diff against -> true', () => {
-    expect(runStep(pipelineStep(), prRepo('.github/ci/select-tests.mjs'), { BASE_REF: 'main' })).toMatchObject({ status: 0, output: 'changed=true\n' });
-    expect(runStep(pipelineStep(), prRepo('server/y.ts'), { BASE_REF: 'main' })).toMatchObject({ status: 0, output: 'changed=false\n' });
-    expect(runStep(pipelineStep(), prRepo('server/y.ts'), { BASE_REF: 'nope' })).toMatchObject({ status: 0, output: 'changed=true\n' });
+    expect(runStep(pipelineStep(), prRepo('.github/ci/select-tests.mjs'), { BASE: 'origin/main' })).toMatchObject({ status: 0, output: 'changed=true\n' });
+    expect(runStep(pipelineStep(), prRepo('server/y.ts'), { BASE: 'origin/main' })).toMatchObject({ status: 0, output: 'changed=false\n' });
+    expect(runStep(pipelineStep(), prRepo('server/y.ts'), { BASE: 'origin/nope' })).toMatchObject({ status: 0, output: 'changed=true\n' });
   });
 
   it('diffs from the merge base, so a pipeline change main made since the branch point is not this pull request\'s', () => {
@@ -565,7 +571,17 @@ describe('ci.yml: a pull request that changes the pipeline runs everything, deci
     g('add', '-A'); g('commit', '-qm', 'main moves on');
     g('update-ref', 'refs/remotes/origin/main', 'HEAD');
     g('checkout', '-q', 'main');
-    expect(runStep(pipelineStep(), dir, { BASE_REF: 'main' })).toMatchObject({ status: 0, output: 'changed=false\n' });
+    expect(runStep(pipelineStep(), dir, { BASE: 'origin/main' })).toMatchObject({ status: 0, output: 'changed=false\n' });
+  });
+
+  it('a merge-queue run asks it too, against the base sha the queue built its group on', () => {
+    // `prRepo`'s origin/main is the base the entry sits on; a queue run names
+    // it by sha (`merge_group.base_sha`), never by a branch name it lacks.
+    const head = (dir: string): string => execFileSync('git', ['rev-parse', 'origin/main'], { cwd: dir, encoding: 'utf8' }).trim();
+    const pipe = prRepo('.github/ci/select-tests.mjs');
+    expect(runStep(pipelineStep(), pipe, { BASE: head(pipe) })).toMatchObject({ status: 0, output: 'changed=true\n' });
+    const other = prRepo('server/y.ts');
+    expect(runStep(pipelineStep(), other, { BASE: head(other) })).toMatchObject({ status: 0, output: 'changed=false\n' });
   });
 });
 
@@ -619,7 +635,10 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
   it('full-suite needs every leg — Linux shards, typecheck, agent, pwa, build, macOS — and asks verdict.mjs full', () => {
     const b = job('full-suite');
     expect(needs(b)).toEqual(['build-pwa', 'select', 'server', 'server-shard', 'server-typecheck', 'test', 'test-macos']);
-    expect(jobKey(b, 'if')).toBe("always() && needs.select.outputs.tests == 'full'");
+    // Never on a merge-queue run (landing-order stage 2): a queue run skips
+    // test-macos, and a queue run that fell back to `full` would read that skip
+    // as a red leg here (ci-merge-queue.test.ts derives the rule).
+    expect(jobKey(b, 'if')).toBe("always() && github.event_name != 'merge_group' && needs.select.outputs.tests == 'full'");
     // RESULTS carries exactly one `name=result` pair per need — never toJSON(needs), which carries every select
     // matrix and outgrows an environment string's 128 KB as the suite grows.
     expect(b).not.toContain('toJSON(needs)');
@@ -642,12 +661,13 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
     // with `|| true` appended, with the run replaced by a no-op and the old line kept as a comment, and with
     // `continue-on-error: true` on the step (all three measured).
     const list = 'echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/tests.txt"\n';
-    const run = 'CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD}';
+    const run = 'CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --maxWorkers="$WORKERS"';
     expect(runScript(step(job('server-shard'), 'Test'))).toBe(
       `${list}${run} --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/times.json"\n`);
     expect(runScript(step(job('test-macos'), 'Test'))).toBe(`${list}${run}\n`);
     for (const id of ['server-shard', 'test-macos']) {
       const st = step(job(id), 'Test');
+      expect(st, `${id}: matrix workers reach the Test command`).toMatch(/^ {10}WORKERS: \$\{\{ matrix\.workers \}\}$/m);
       expect(st, `${id}: the Test step runs in server/`).toMatch(/^ {8}working-directory: server$/m);
       // A failed shard must fail its job: no continue-on-error (on the step or the job), and the runner's own
       // `bash -e` — no shell override on the step, and no `defaults:` on the job or the workflow.

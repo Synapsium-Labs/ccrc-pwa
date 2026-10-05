@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ApiError, apiErrorText, clipUrl, createApi, kickoffErrorText, MOVE_DISABLED_TEXT, sendErrorText, submitErrorText, updateErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
-import { FLEET_SCOPE, type AckAnswer, type CatalogueState, type IntentWriteAnswer, type NodeWire, type UpdateIntentWire, type UpdateRouteError } from '../../shared/api';
+import { ApiError, apiErrorText, clipUrl, createApi, kickoffErrorText, moveSkipText, noBundleRollbackText, sendErrorText, submitErrorText, updateErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
+import { FLEET_SCOPE, type AckAnswer, type CatalogueState, type IntentWriteAnswer, type MoveRequestAnswer, type NodeWire, type UpdateIntentWire, type UpdateRouteError } from '../../shared/api';
 
 const jsonResponse = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), {
     status,
     headers: { 'content-type': 'application/json' },
   });
+
+import { ARCHIVE_REFUSAL_TEXT } from '../src/lib/api';
+import { ARCHIVE_REFUSAL_CODES } from '../../shared/api';
 
 const asError = (status: number, body: unknown): unknown => {
   try { throw new ApiError(status, body); } catch (e) { return e; }
@@ -214,6 +217,32 @@ describe('PR lifecycle (Task 13)', () => {
     expect(calls[0]![1]).toEqual({ method: 'POST' });
   });
 
+  // Workspace lifecycle §5.2: the two other consents, on `force`'s rule — sent only when given, each alone.
+  it.each([
+    [{ interrupt: true }, { interrupt: true }],
+    [{ programme: 'end' as const }, { programme: 'end' }],
+    [{ force: true, interrupt: true, programme: 'end' as const }, { force: true, interrupt: true, programme: 'end' }],
+  ])('archive(id, %j) posts exactly %j', async (opts, body) => {
+    const calls: [string, RequestInit | undefined][] = [];
+    const a = createApi(async (u, init) => { calls.push([String(u), init]); return new Response('', { status: 200 }); });
+    await a.archive('demo-x', opts);
+    expect(JSON.parse(calls[0]![1]!.body as string)).toEqual(body);
+  });
+
+  it('archive(id, {interrupt:false}) is the plain call — a consent that says no is no consent', async () => {
+    const calls: [string, RequestInit | undefined][] = [];
+    const a = createApi(async (u, init) => { calls.push([String(u), init]); return new Response('', { status: 200 }); });
+    await a.archive('demo-x', { force: false, interrupt: false });
+    expect(calls[0]![1]).toEqual({ method: 'POST' });
+  });
+
+  it('archive resolves to the door\'s answer, and to null when a 2xx carried nothing readable', async () => {
+    const answer = { ok: true, archived: false, stopped: true, ended: [], refusal: 'status-unknown', detail: 'ccd: status-unknown' };
+    expect(await createApi(vi.fn().mockResolvedValue(jsonResponse(200, answer)) as unknown as typeof fetch)
+      .archive('demo-x', { interrupt: true })).toEqual(answer);
+    expect(await createApi((async () => new Response('', { status: 200 })) as typeof fetch).archive('demo-x')).toBeNull();
+  });
+
   it('restore POSTs to /api/sessions/:id/restore with no body', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
@@ -348,6 +377,18 @@ describe('coordPause (Task 11, spec §4.2)', () => {
     );
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(501);
+  });
+
+  it('POSTs {state} as JSON to /api/coord/reclaim-pause — no box token', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, requested: 'on' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.childReclaimPause('on');
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/coord/reclaim-pause');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ state: 'on' });
+    expect(new Headers(init.headers).get('x-ccrc-mail-token')).toBeNull();
   });
 });
 
@@ -764,9 +805,16 @@ describe('apiErrorText and the code translators that compose with it', () => {
     expect(kickoffErrorText(sentence)).toBe(sentence);
   });
 
+  it('says every archive refusal in words — never a bare slug (workspace lifecycle §5.2)', () => {
+    for (const code of ARCHIVE_REFUSAL_CODES) {
+      expect(ARCHIVE_REFUSAL_TEXT[code], code).toMatch(/\w+ \w+/);
+      expect(apiErrorText(asError(409, { ok: false, error: code })), code).toBe(ARCHIVE_REFUSAL_TEXT[code]);
+    }
+  });
+
   it('does not shadow any code the SEND translator owns either', () => {
     for (const code of ['dialog-open', 'enter-ignored', 'verify-failed',
-      'draft-clear-failed', 'not-alive', 'auto-continue-armed']) {
+      'draft-clear-failed', 'not-alive', 'auto-continue-armed', 'turn-running']) {
       expect(apiErrorText(asError(409, { ok: false, error: code })), code).toBe(code);
       expect(sendErrorText(apiErrorText(asError(409, { ok: false, error: code }))), code)
         .not.toBe(code);
@@ -1047,8 +1095,8 @@ describe('account pools', () => {
 // and each one's helper is a DECISION (lib/api.ts says why at each call): the
 // two WRITES degrade an unparseable 2xx to `unreadable`, because the write may
 // have landed (D-1150); the refresh does not, because it writes nothing the
-// operator could be unconfirmed about. No method exists for the two move routes
-// W3 leaves disabled — pinned below by the route literals the file spells.
+// operator could be unconfirmed about. The two move routes' methods are
+// programme wave 5's (the last describe below); the census counts every literal.
 describe('the update plane client (W3 Task 5)', () => {
   const INTENT: UpdateIntentWire = {
     scope: FLEET_SCOPE, channel: 'dev', pinnedTag: null, auto: 'off', notify: 'channel', setAt: 5_000, setBy: 'operator',
@@ -1174,19 +1222,29 @@ describe('the update plane client (W3 Task 5)', () => {
     await expect(unreadable.ackUpdateNode(NODE.nodeId)).resolves.toBe('unreadable');
   });
 
-  it('spells exactly the four W2 update routes — no apply, no rollback (spec §18: the move controls are disabled in W3)', () => {
-    // The route LITERALS, not a method-name guess: a method named anything at
-    // all that reaches either move route has to spell its path, and this is the
-    // census of every quoted `/api/updates…` path the client holds.
+  it('spells exactly the six update routes — the four W2 routes plus apply and rollback (programme wave 5; W3 held it to four)', () => {
+    // The route LITERALS, not a method-name guess: every quoted `/api/updates…`
+    // path the client holds. Wave 5 adds the two move routes and nothing else.
     const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'lib', 'api.ts'), 'utf8');
     const routes = [...new Set(src.match(/'\/api\/updates[^']*'/g) ?? [])].sort();
-    expect(routes).toEqual(["'/api/updates'", "'/api/updates/ack'", "'/api/updates/intent'", "'/api/updates/refresh'"]);
-    expect(src).not.toContain('/api/updates/apply');
-    expect(src).not.toContain('/api/updates/rollback');
+    expect(routes).toEqual([
+      "'/api/updates'", "'/api/updates/ack'", "'/api/updates/apply'",
+      "'/api/updates/intent'", "'/api/updates/refresh'", "'/api/updates/rollback'",
+    ]);
   });
 
-  it('MOVE_DISABLED_TEXT is the one literal every disabled move control carries', () => {
-    expect(MOVE_DISABLED_TEXT).toBe('lands with the next release (W4)');
+  it('no file under pwa/src spells the retired disabled-control sentence or its constant — the move controls are live (programme wave 5)', () => {
+    const root = path.join(import.meta.dirname, '..', 'src');
+    const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((f) => /\.(tsx?|css)$/.test(f));
+    // The walk reached the tree: a scan over zero files would pass vacuously.
+    expect(files).toContain(path.join('lib', 'api.ts'));
+    expect(files).toContain(path.join('fleet', 'UpdateBanner.tsx'));
+    expect(files).toContain(path.join('screens', 'SettingsScreen.tsx'));
+    const hits = files.filter((f) => {
+      const text = readFileSync(path.join(root, f), 'utf8');
+      return text.includes('MOVE_DISABLED_TEXT') || text.includes('lands with the next release (W4)');
+    }).sort();
+    expect(hits).toEqual([]);
   });
 });
 
@@ -1210,20 +1268,42 @@ describe('updateErrorText — the update routes\' refusals, read code-first (W3 
     'unknown-scope': 'That node has no identity yet — it follows the fleet setting until an install gives it one.',
     'unknown-node': 'That node is no longer in the inventory.',
     superseded: 'That node was reinstalled under a new identity — reload to see it.',
-    busy: 'That node is mid-update — wait for it to settle, then acknowledge.',
+    busy: 'That node is in the middle of a move — wait for it to settle, then try again.',
     'auto-needs-rollback-gate': 'Auto-install needs the rollback gate on every node, and at least one does not carry it yet.',
     'rate-limited': 'GitHub was asked too recently — try again in a few minutes.',
     'no-channel': 'A stored channel is one this build cannot read — choose the channel again.',
     'journal-unreadable': 'The server cannot read its intent journal — nothing was changed.',
     'journal-unwritable': 'The server cannot write its intent journal — nothing was changed.',
+    'unknown-tag': 'That tag is not a release this node can move to — choose one from the release list.',
+    'not-newer': 'That release is not newer than what that node runs, or than its floor after a rollback — use Roll back to move it there.',
+    'refused-by-node': 'That node refused this release when it failed verification — acknowledge the node to clear the refusal first.',
+    'stamp-unread': 'That node’s build stamp could not be read, so nothing can say whether the release is newer — nothing was requested.',
+    'floor-unread': 'That node’s floor has not been measured yet, so nothing can say whether the release is above it — nothing was requested.',
+    'no-detach-cap': 'That node’s ccrc predates the one-tap — update it once from its own shell — or it is macOS, which cannot be moved from here.',
+    'no-rollback-cap': 'That node cannot roll back on request yet — update it once from its own shell.',
+    // Wave 8 item C: the sentence is `noBundleRollbackText(null)`, not a hand-typed copy — the same text
+    // `UPDATE_ERROR_TEXT['no-bundle']` is (lib/api.ts), so a divergence between the two spellings would show
+    // up as this describe's OWN sentence disagreeing with the composed one, never as a silent pass.
+    'no-bundle': noBundleRollbackText(null),
+    'agent-predates-update-op': 'That node’s agent predates the update op — update the node once by hand, then it can be moved from here.',
+    halted: 'An update failed or was reverted — acknowledge that node before moving any other.',
+    'no-previous': 'That node records no previous release to roll back to — pick a tag from the release list.',
+    'no-desired': 'That node has no resolved release to install — choose a tag, or check its channel and pin.',
   };
 
   it('has its sentence for every UpdateRouteError but unauthenticated', () => {
     const entries = Object.entries(SENTENCES);
-    expect(entries, 'guards the guard — an empty census passes everything').toHaveLength(12);
+    expect(entries, 'guards the guard — an empty census passes everything').toHaveLength(24);
     for (const [code, sentence] of entries) {
       expect(updateErrorText(asError(409, { ok: false, error: code })), code).toBe(sentence);
     }
+  });
+
+  it('no-bundle names no tag and no HTML (wave 8 item C)', () => {
+    const text = updateErrorText(asError(409, { ok: false, error: 'no-bundle' }));
+    expect(text).toBe(noBundleRollbackText(null));
+    expect(text).toContain('that release');
+    expect(text).not.toContain('<');
   });
 
   it('not-configured on an update route is the update sentence, not the kickoff one', () => {
@@ -1248,11 +1328,11 @@ describe('updateErrorText — the update routes\' refusals, read code-first (W3 
   });
 
   it('the five existing translators pass every update-only code through unchanged', () => {
-    // The ten words no other table owns. `not-configured` and `bad-request`
-    // are excluded because they HAVE other owners — which is exactly why the
+    // The twenty-two words no other table owns (wave 8 item C added `no-bundle`). `not-configured` and
+    // `bad-request` are excluded because they HAVE other owners — which is exactly why the
     // update table is read first rather than composed after apiErrorText.
     const updateOnly = Object.keys(SENTENCES).filter((c) => c !== 'not-configured' && c !== 'bad-request');
-    expect(updateOnly, 'guards the guard').toHaveLength(10);
+    expect(updateOnly, 'guards the guard').toHaveLength(22);
     for (const code of updateOnly) {
       expect(apiErrorText(asError(409, { ok: false, error: code })), code).toBe(code);
       expect(sendErrorText(code), code).toBe(code);
@@ -1260,5 +1340,90 @@ describe('updateErrorText — the update routes\' refusals, read code-first (W3 
       expect(uploadErrorText(code), code).toBe(code);
       expect(kickoffErrorText(code), code).toBe(code);
     }
+  });
+});
+
+// ── Centralised update management, programme wave 5 Task 8: the move client ─
+// The two move routes (wave 5 Task 6), session-gated only. Each is a WRITE
+// whose 2xx means a request row was written — so, like setUpdateIntent and
+// ackUpdateNode, both degrade a 2xx they cannot parse to `unreadable` (D-1150)
+// rather than reporting a failure that did not happen, and a refusal still
+// rejects with its ApiError, whose body updateErrorText reads.
+describe('the move client — applyUpdate / rollbackUpdate (programme wave 5 Task 8)', () => {
+  const NODE_ID = '0f0e0d0c-0b0a-4908-8706-050403020100';
+  const ANSWER: MoveRequestAnswer = { ok: true, requested: [NODE_ID], skipped: [] };
+  /** A fresh Response per call — a body can be read once. */
+  const answering = (status: number, body: unknown) => vi.fn().mockImplementation(async () => jsonResponse(status, body));
+  const headersOf = (init: RequestInit): Headers => new Headers(init.headers);
+
+  it('applyUpdate POSTs {nodeId, tag} or {all: true, tag} as JSON to /api/updates/apply and resolves the answer', async () => {
+    const fetchImpl = answering(202, ANSWER);
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await expect(api.applyUpdate({ nodeId: NODE_ID, tag: 'v0.0.10' })).resolves.toEqual(ANSWER);
+    await expect(api.applyUpdate({ all: true, tag: 'v0.0.10' })).resolves.toEqual(ANSWER);
+    const calls = fetchImpl.mock.calls as [string, RequestInit][];
+    expect(calls).toHaveLength(2);
+    for (const [url, init] of calls) {
+      expect(url).toBe('/api/updates/apply');
+      expect(init.method).toBe('POST');
+      expect(headersOf(init).get('content-type')).toBe('application/json');
+      expect(headersOf(init).get('accept')).toBe('application/json');
+      expect(headersOf(init).get('x-ccrc-mail-token')).toBeNull();   // session-gated only (decision 15)
+    }
+    expect(calls.map(([, init]) => JSON.parse(init.body as string))).toEqual([
+      { nodeId: NODE_ID, tag: 'v0.0.10' },
+      { all: true, tag: 'v0.0.10' },
+    ]);
+  });
+
+  it('rollbackUpdate POSTs {nodeId, to} as JSON to /api/updates/rollback and resolves the answer', async () => {
+    const fetchImpl = answering(202, ANSWER);
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await expect(api.rollbackUpdate({ nodeId: NODE_ID, to: 'v0.0.8' })).resolves.toEqual(ANSWER);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/updates/rollback');
+    expect(init.method).toBe('POST');
+    expect(headersOf(init).get('content-type')).toBe('application/json');
+    expect(headersOf(init).get('x-ccrc-mail-token')).toBeNull();
+    expect(JSON.parse(init.body as string)).toEqual({ nodeId: NODE_ID, to: 'v0.0.8' });
+  });
+
+  it('both resolve `unreadable` on a 2xx whose body cannot be read — the request may have been written (D-1150)', async () => {
+    const api = createApi(async () => new Response('{"ok":true,"requ', {
+      status: 202, headers: { 'content-type': 'application/json' },
+    }));
+    await expect(api.applyUpdate({ all: true, tag: 'v0.0.10' })).resolves.toBe('unreadable');
+    await expect(api.rollbackUpdate({ nodeId: NODE_ID, to: 'v0.0.8' })).resolves.toBe('unreadable');
+  });
+
+  it('a refusal rejects with its ApiError, status and body intact', async () => {
+    const api = createApi(answering(409, { ok: false, error: 'not-newer' }) as unknown as typeof fetch);
+    const err = await api.applyUpdate({ nodeId: NODE_ID, tag: 'v0.0.8' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(409);
+    expect((err as ApiError).body).toEqual({ ok: false, error: 'not-newer' });
+  });
+});
+
+// moveSkipText's OWN-key guard (review MINOR 2). Wire additive discipline means a cached OLDER PWA can face a
+// NEWER server that skips a node for a MoveSkipWhy word this build's union does not carry — `why` arrives as
+// plain JSON, not the narrowed literal type, so both words below are real inputs, not merely type-system
+// gymnastics.
+describe('moveSkipText — an unknown skip word (review MINOR 2)', () => {
+  it('renders every real MoveSkipWhy word as UPDATE_ERROR_TEXT\'s own sentence', () => {
+    expect(moveSkipText('halted')).toBe(updateErrorText(new ApiError(409, { ok: false, error: 'halted' })));
+    expect(moveSkipText('busy')).toBe(updateErrorText(new ApiError(409, { ok: false, error: 'busy' })));
+  });
+
+  it('a word no version of this table has ever owned is made printable, not "undefined"', () => {
+    const said = moveSkipText('quarantined');
+    expect(said).not.toMatch(/undefined/);
+    expect(said).toContain('quarantined');
+  });
+
+  it('an inherited Object.prototype key is refused too — never the prototype method itself', () => {
+    const said = moveSkipText('toString');
+    expect(said).not.toMatch(/function|native code/);
+    expect(said).toContain('toString');
   });
 });

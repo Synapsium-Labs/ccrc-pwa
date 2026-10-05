@@ -12,7 +12,8 @@
 /** One node, as the summary reads it: `version` is a release tag, or `null` = unversioned (no stamp, an
  *  unreadable one, or a stamp that carries no tag). `role` is `NodeRole`'s word, or `null` = unknown.
  *  `stated` — fix round 1 (F1/F14, D-3316); REQUIRED, fix round 2 — is false when this reading does not
- *  VOUCH for `version` at all: a row that is unmeasured this run, whose stamp did not read, or that is
+ *  VOUCH for `version` at all: a row that has never been measured (W5 review 161, F-I: not "unmeasured
+ *  this run" — `measuredAt` is a persisting stamp, not a per-run flag), whose stamp did not read, or that is
  *  `reachable: false` (the global constraint "unreachable is not current", widened by D-3316 from settings/
  *  banner/BuildLine to the push summary and the decision too). Such a row still OCCUPIES its `role` (so no
  *  other row falls back to standing in for it — the point of picking sides from every live row FIRST, below),
@@ -79,16 +80,12 @@ export function summaryFromSides(sides: { fleet: SummaryRow | null; server: Summ
   return `fleet ${sideVersion(fleet)} · server ${sideVersion(server)}`;
 }
 
-/** `summaryFromSides` over `versionSides` — D-3301's default, right for local mode's one `both` row. A remote
- *  fleet picks its sides through `remoteSides` first (D-3313) and calls `summaryFromSides` directly. */
-export function versionsSummary(rows: readonly SummaryRow[]): string {
-  return summaryFromSides(versionSides(rows));
-}
-
 /** Fix round 2 (review of d5aefc4a, item 5): the ONE predicate for "does this reading vouch for its
- *  version" — measured this poll (`measuredAt` a number, not `null`), its stamp READ (`stampRead ===
- *  'ok'`), and (D-3316) `reachable === true`, each checked exactly rather than merely truthy or
- *  not-falsy, so a malformed non-boolean `reachable` on the wire never vouches either. Structural over
+ *  version" — EVER measured (`measuredAt` a number, not `null` — W5 review 161, F-I: this is not "measured
+ *  THIS poll/run/sweep"; `measuredAt` is a stamp that persists across sweeps until something rewrites it,
+ *  not a per-call flag, so a row can satisfy this clause off a measurement several sweeps old), its stamp
+ *  READ (`stampRead === 'ok'`), and (D-3316) `reachable === true`, each checked exactly rather than merely
+ *  truthy or not-falsy, so a malformed non-boolean `reachable` on the wire never vouches either. Structural over
  *  any row shape carrying these three fields — the server's `NodeRow`, the wire's `NodeWire` — so
  *  neither type leaks into L0, the same discipline `versionSides`/`remoteSides` already keep on `role`.
  *  `server/src/watch.ts`'s `pushRelease`, `pwa/src/fleet/UpdateBanner.tsx`'s `updateBannerText`,

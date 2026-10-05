@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { liveSessionStatus, readLiveState, readLiveStateMeasured } from '../src/livestate.js';
+import { liveSessionStatus, liveStatusCoversDelegation, readLiveState, readLiveStateMeasured } from '../src/livestate.js';
 import { localIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
@@ -47,6 +47,30 @@ describe('liveSessionStatus', () => {
 
   it('treats an unrecognised future status as work, not rest', () => {
     expect(liveSessionStatus('reticulating')).toBe('busy');
+  });
+});
+
+// The 2.1.277 floor: from that build on (measured through 2.1.283) Claude
+// Code's own `busy` covers delegated work, a running Workflow included, so an
+// `idle` from its file has already ruled one out (fleet.ts gates the pane
+// row's promotion on this).
+describe('liveStatusCoversDelegation', () => {
+  it('is true from 2.1.277 on, across minor and major bumps', () => {
+    for (const v of ['2.1.277', '2.1.283', '2.1.1000', '2.2.0', '3.0.0', '10.0.0']) {
+      expect([v, liveStatusCoversDelegation(v)]).toEqual([v, true]);
+    }
+  });
+
+  it('is false below 2.1.277 — those builds are unmeasured, so the pane row keeps speaking', () => {
+    for (const v of ['2.1.276', '2.1.99', '2.0.999', '1.9.999', '0.0.0']) {
+      expect([v, liveStatusCoversDelegation(v)]).toEqual([v, false]);
+    }
+  });
+
+  it('is false, never a throw, for no version and for a string that is not X.Y.Z', () => {
+    for (const v of [null, '', 'v2.1.283', '2.1', 'latest', ' 2.1.283', '2.1.x']) {
+      expect([v, liveStatusCoversDelegation(v)]).toEqual([v, false]);
+    }
   });
 });
 
@@ -201,12 +225,12 @@ describe('readLiveStateMeasured — the distinction readLiveState folds', () => 
       .toEqual({ ok: false, reason: 'no-state' });
   });
 
-  it('readLiveState still folds all of them, so its four indifferent callers are untouched', async () => {
+  it('readLiveState still folds all of them, so its three indifferent callers are untouched', async () => {
     // The derivation, measured rather than assumed: the three fixtures the
     // cases above tell apart read back as one `null` through the legacy form.
     // This is the pin that keeps this task a WIDENING and not a change —
-    // `liveStatus`, `commands.ts`'s cwd lookup and both of `watch.ts`'s
-    // already-fail-shut gates go on seeing exactly what they saw before.
+    // `liveStatus`, `commands.ts`'s cwd lookup and `watch.ts`'s mail gate
+    // (through `mailTurnIdle`) go on seeing exactly what they saw before.
     const absent = seedLive(base);
     expect(await readLiveState(localIO, absent.configDir, 9999)).toBeNull();
 
@@ -216,5 +240,44 @@ describe('readLiveStateMeasured — the distinction readLiveState folds', () => 
     const degraded = seedLive(base);
     const io = degradedReadIO((p) => p.endsWith(path.join('sessions', `${degraded.pid}.json`)));
     expect(await readLiveState(io, degraded.configDir, degraded.pid)).toBeNull();
+  });
+});
+
+// Worker stall watch, wave 2 (spec §5.1): the live file's `startedAt`. It is the process start that the turn marker's
+// reader judges a marker older than as `stale`. Measured present, numeric, in epoch ms on 2.1.284 (sample below).
+describe('readLiveStateMeasured: startedAt, the process start the turn marker is judged against (stall watch wave 2, §5.1)', () => {
+  const startedAtOf = async (configDir: string, pid: number): Promise<number | null> => {
+    const r = await readLiveStateMeasured(localIO, configDir, pid);
+    if (!r.ok) throw new Error(`expected an ok read, got ${JSON.stringify(r)}`);
+    return r.state.startedAt;
+  };
+
+  it('a numeric startedAt is carried as measured (the 2.1.284 sample)', async () => {
+    const { configDir, pid } = seedLive({ ...base, startedAt: 1790624162602 });
+    expect(await startedAtOf(configDir, pid)).toBe(1790624162602);
+  });
+
+  it('an absent startedAt is null (a build that never wrote it), never 0', async () => {
+    const { configDir, pid } = seedLive(base);
+    expect(await startedAtOf(configDir, pid)).toBeNull();
+  });
+
+  it('a string startedAt is null: the live file writes a number, and a string is not one', async () => {
+    const { configDir, pid } = seedLive({ ...base, startedAt: '1790624162602' });
+    expect(await startedAtOf(configDir, pid)).toBeNull();
+  });
+
+  it('NaN and the other non-finite numbers are null: JSON carries NaN as null, and an overflowing literal parses to Infinity', async () => {
+    const nan = seedLive({ ...base, startedAt: NaN });
+    expect(await startedAtOf(nan.configDir, nan.pid)).toBeNull();
+    const configDir = path.join(mkTmp('ccrc-live-'), '.claude');
+    mkdirSync(path.join(configDir, 'sessions'), { recursive: true });
+    writeFileSync(path.join(configDir, 'sessions', '4242.json'), JSON.stringify(base).replace(/\}$/, ',"startedAt":1e400}'));
+    expect(await startedAtOf(configDir, 4242)).toBeNull();
+  });
+
+  it('the folded read carries it too', async () => {
+    const { configDir, pid } = seedLive({ ...base, startedAt: 1790624162602 });
+    expect((await readLiveState(localIO, configDir, pid))?.startedAt).toBe(1790624162602);
   });
 });

@@ -207,6 +207,19 @@ function idArray(ids) {
  * copies nobody can see. `hidden` is deliberately outside the digest and stays
  * there.
  *
+ * ── `_ccrc_secrets_file` ──
+ *
+ * The roster's `exec.secretsFile`, HOME-relative, for an account that declares
+ * one; nothing at rc 0 for one that does not and for an unknown id. Its one
+ * consumer is ccd's auth-dead marker (D-3524): the marker is a verdict about one
+ * credential and expires once that credential's FILE changes, so ccd must be
+ * able to name the file — and a guessed `<id>-oauth.env` would misname an
+ * api-key lane (`<id>-<provider>.env`). Emitted ALWAYS, like `_ccrc_pool`, so
+ * `declare -F _ccrc_secrets_file` is ccd's version probe: an accounts.sh from
+ * before this function means "ccd cannot name this credential", which keeps the
+ * old rule. Never read or opened by ccd — it stats the path, the file holds a
+ * secret.
+ *
  * @param {import('./roster.js').Roster} roster
  * @returns {string}
  */
@@ -280,6 +293,20 @@ export function generateAccountsSh(roster) {
     .map((a) => `    ${a.id}) echo ${a.pool} ;;`)
     .join('\n');
 
+  // One arm per account that DECLARES `exec.secretsFile`, the same filter shape
+  // as `poolArms` and for the same reason (an unvalidated non-string gets no
+  // arm). TWO PRODUCERS, TWO SHAPES: `parseRoster` nests the field under `exec`,
+  // `rosterFromJson` (the deploy CLI's roster) flattens it beside `execKind` —
+  // read either, or the CLI and the TypeScript emit different files and
+  // `gen-accounts.test.ts`'s byte agreement reds. `printf`, not `echo`, and
+  // `dqEscape`d: `SECRETS_SAFE_RE` admits a leading `-`, and this function must
+  // not trust that the value was ever parsed.
+  const secretsArms = roster.byIdLengthDesc
+    .map((a) => [a, a.exec ? a.exec.secretsFile : a.secretsFile])
+    .filter(([, sf]) => typeof sf === 'string')
+    .map(([a, sf]) => `    ${a.id}) printf '%s\\n' "${dqEscape(sf)}" ;;`)
+    .join('\n');
+
   // `CCRC_SUBAGENT_CLASSES` — the two classes a session's `subagent` routing
   // field may name (routing spec 2026-09-14 §5.1), PROJECTED from
   // `shared/models.mjs`'s `SUBAGENT_CLASSES` so ccd validates against the one
@@ -323,6 +350,11 @@ ${hueArms}
 _ccrc_pool() {
   case "$1" in
 ${poolArms}
+  esac
+}
+_ccrc_secrets_file() {
+  case "$1" in
+${secretsArms}
   esac
 }
 `;
