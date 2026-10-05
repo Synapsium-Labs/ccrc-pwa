@@ -478,6 +478,13 @@ carries it (spec §5.1, amended 2026-09-24).
   - 3915 is restated as history, superseded by 3917.
   - The newline-separated `gh`/`pr`/`merge`, which only the regex matched, is three commands to bash, so it is
     pinned as a pass.
+- **2026-10-05 12:08 — the split list narrowed** (the worker's question 3512, confirmed). Splitting on `( ) < >` cut a
+  flag VALUE away from the words. So `gh -R "$(git remote get-url origin)" pr merge 42`, an ordinary spelling that
+  main denies, passed over the cap.
+  - **The segment rule now splits only on `; & |` and newline,** and `merge`'s end class widens to `( ) < >`.
+  - A `;` inside a quoted flag value (`gh pr -R "a;b" merge`) is LISTED as deliberate.
+  - The worst over-cap shape costs about 600 ms through the hook at 100 KB, about 40% of the 1500 ms bound. It is
+    pinned, and stated as such.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
