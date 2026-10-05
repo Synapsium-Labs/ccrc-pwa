@@ -161,6 +161,7 @@ These refine the spec's wording where it was silent or could be built two ways. 
 - **(g) `?ref=` on the index page** is refused as `unknown-param` rather than dropped (Task 5).
 - **(h) The install/update suites' python3 stubs** answer the version probe and the canned `docs-index` line directly, keeping those suites hermetic (Task 12).
 - **(i) Only the five caps lines shift corpus anchors** (measured: no corpus anchor lies beyond `ccd/ccd:21428`), contrary to §2 (a) Placement's wording; the plan still re-measures at the end of W1a (Task 15) and W1b (Task 19).
+- **(j) `GithubTarget.uncommitted`** (refines spec 3.11 row 3, Task 4): a leaf's `uncommitted` is true when the entry has no committed side (`e.committed === null`), whether or not the draft opens. The spec's "opens a new draft with no committed entry" misses a NEW file whose draft is withheld (`opens: 'none'`, badge `withheld`), which GitHub does not hold either; `committed === null` is the complete rule, because an entry with neither side is not listed. **W5 carry-forward:** the leaf header and row actions derive `uncommitted` from `e.committed === null` only, and W5 carries a test on a withheld-new leaf that expects no View on GitHub link.
 
 ---
 
@@ -3296,9 +3297,9 @@ export function entryView(e: DocsEntry, d: DraftsFacts, mode: EntryMode): EntryV
   return view(committedKind !== null || isNew, committedSide, 'withheld', withheld);
 }
 
-/** What a "View on GitHub" action points at. A leaf's `uncommitted` is true when it opens a new draft with no
- *  committed entry (`entryView(...).opens === 'draft'` and `committed === null`): GitHub holds no copy of it. A
- *  directory's `path` is relative to its section, like a leaf's. */
+/** What a "View on GitHub" action points at. A leaf's `uncommitted` is true when the entry has no committed side
+ *  (`e.committed === null`): GitHub holds no copy of it, whether or not the draft opens (a withheld new file has
+ *  `opens: 'none'` and is still uncommitted). A directory's `path` is relative to its section, like a leaf's. */
 export type GithubTarget =
   | { kind: 'leaf'; section: DocSectionSlug; path: string; uncommitted: boolean }
   | { kind: 'section'; section: DocSectionSlug }
@@ -3315,7 +3316,8 @@ export type GithubLink =
  *   1. no GitHub-shaped origin was read: `no-github-origin`;
  *   2. a `local-only` relation, or a default resolved to a local branch (`default:local-main`,
  *      `default:local-master`): `not-on-origin`;
- *   3. a leaf that opens a new draft with no committed entry: `uncommitted`;
+ *   3. a leaf whose entry has no committed side (`uncommitted`, i.e. `e.committed === null`, whether or not the
+ *      draft opens): `uncommitted`;
  *   4. the origin side is served, or the local side equals origin: a link with no note;
  *   5. otherwise (the local side ahead, behind, diverged or unmeasured): a link with `may-differ`. A local side
  *      reading `origin-only` cannot arrive, because a local side means the local branch exists; if it did, it
