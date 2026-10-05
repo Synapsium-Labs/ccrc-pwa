@@ -100,7 +100,7 @@ versions unless it names one.
 - **SessionEnd:** clear-compact-resume captured two on every version, one for `/clear` (fired under the old id just
   before the new id's SessionStart) and one for the final `/exit`. The SIGKILL between them fired none. swap-resume
   captured two, one for each `/exit`. interrupt-exit and parent-kill captured **none**. In interrupt-exit the
-  Escape reached an idle prompt (the parent's Stop had already fired with one background task), and the matrix does
+  Escape appeared to reach an idle prompt (the parent's Stop had already fired with one background task), and the matrix does
   not say whether the `/exit` that followed completed. This confirms §5.11 and changes nothing: a missing SessionEnd
   is never terminal evidence.
 - **Q6 removal:** an unchanged isolated tree was removed natively for Agent and for Workflow. In wf-iso, the
