@@ -249,21 +249,25 @@ describe('the worker merge deny', () => {
   }, 60000);
 
   // THE PAYLOAD CAP (landing-order wave 3). Over MERGE_PARSE_CAP bytes nothing
-  // is parsed: the raw command is asked only whether its text spells a
-  // word-bounded `gh pr merge` (`MERGE_OVERCAP_RE`), and a held or child
-  // session's command that does is refused unread.
+  // is parsed: the raw command is asked only whether, in one segment of it
+  // (split on the eight separators, fixed-string), `gh`, `pr` and `merge` stand
+  // as words in that order (`ocwords`), and a held or child session's command
+  // that does is refused unread.
   describe('the payload cap', () => {
+    /** `c`, then a filler of `a`s that carries it past the cap and touches no
+     *  separator, so the segment holding `c` is the one the rule reads. */
+    const over = (c: string): string => `${c} ${'a'.repeat(CAP)}`;
     const MENTION = 'echo "then gh pr merge 42 later" ';
     it('parses a command of exactly the cap, and refuses one byte more unread — naming both numbers', () => {
       hold(WAVE_HOLD);
       expect(bash(sized(MENTION, 'x', CAP)).deny, 'at the cap the strip reads the quoted mention as text').toBeNull();
-      const over = bash(sized(MENTION, 'x', CAP + 1)).deny;
-      expect(over, 'one byte over the cap, a command spelling `gh pr merge` was let through').not.toBeNull();
-      expect(over).toContain(`this command is ${CAP + 1} bytes`);
-      expect(over).toContain(`${CAP}-byte parse cap`);
-      expect(over).toContain(WAVE_HOLD);
-      expect(over).toContain('the coordinator merges, workers never do');
-      expect(over).toContain('or rephrase it');
+      const refused = bash(sized(MENTION, 'x', CAP + 1)).deny;
+      expect(refused, 'one byte over the cap, a command spelling `gh pr merge` was let through').not.toBeNull();
+      expect(refused).toContain(`this command is ${CAP + 1} bytes`);
+      expect(refused).toContain(`${CAP}-byte parse cap`);
+      expect(refused).toContain(WAVE_HOLD);
+      expect(refused).toContain('the coordinator merges, workers never do');
+      expect(refused).toContain('or rephrase it');
       // A real merge at the cap is read, and refused for what it is.
       const real = bash(sized('gh pr merge 42 ', ' ', CAP)).deny;
       expect(real).not.toBeNull();
@@ -294,6 +298,70 @@ describe('the worker merge deny', () => {
       expect(bash(sized('echo xgh pr merge 42 ', ' ', CAP + 1)).deny, 'a `gh` that is the tail of another word').toBeNull();
       expect(bash(sized('echo gh pr merged it ', ' ', CAP + 1)).deny, 'a `merge` that is the head of another word').toBeNull();
     });
+
+    it.each([
+      'gh -R o/r pr merge 42',
+      'gh --repo o/r pr merge 42',
+      'gh --repo=o/r pr merge 42',
+      'gh pr -R o/r merge 42',
+    ])('refuses gh\'s own flags between the words over the cap, as main\'s full parse does — %s (review 267 F3)', (c) => {
+      hold(WAVE_HOLD);
+      const d = bash(over(c)).deny;
+      expect(d, `an over-cap ${c} was let through`).not.toBeNull();
+      expect(d).toContain('parse cap');
+      expect(d).toContain('or rephrase it');
+    });
+
+    it.each([
+      ['an operator after `merge`: `;`', 'gh pr merge;echo ok'],
+      ['an operator after `merge`: `)`', 'x=$(gh pr merge)'],
+      ['an operator after `merge`: `|`', 'gh pr merge|cat'],
+      ['a TAB between the words', 'gh\tpr\tmerge 42'],
+    ])('refuses %s over the cap (review 267 F4)', (_n, c) => {
+      hold(WAVE_HOLD);
+      const d = bash(over(c)).deny;
+      expect(d, `an over-cap ${JSON.stringify(c)} was let through`).not.toBeNull();
+      expect(d).toContain('parse cap');
+    });
+
+    it('refuses a bare backtick `gh pr merge` over the cap — a STRICTER over-cap reading, not a closure: under the cap it passes', () => {
+      hold(WAVE_HOLD);
+      expect(bash('echo `gh pr merge`').deny, 'under the cap a legacy backtick is the listed pass').toBeNull();
+      const d = bash(over('echo `gh pr merge`')).deny;
+      expect(d, 'the end class holds a backtick, so the over-cap rule reads it').not.toBeNull();
+      expect(d).toContain('parse cap');
+    });
+
+    it.each([
+      ['prose with `gh` and `merge` inside other words', 'though it merged high'],
+      ['`gh` but not a merge', 'gh pr view 3'],
+      ['a `gh` that is the tail of another word', 'sigh pr merge it'],
+      ['`gh`, `pr` and `merge` on three lines: bash reads three commands, none a merge', 'gh\npr\nmerge'],
+    ])('lets an over-cap command through that is not a merge — %s', (_n, c) => {
+      hold(WAVE_HOLD);
+      expect(bash(over(c)).deny, `an over-cap ${JSON.stringify(c)} was refused`).toBeNull();
+    });
+
+    // Each at 100 KB, through the whole hook, held: none is a merge, and each
+    // must clear the 1500 ms whole-hook bound the sync advisory is held to.
+    // `splits` over `;` or `gh;` took 43 to 52 s and 14 s here (jq 1.7); the
+    // fixed-string split and the prefilter cost 100 to 330 ms (review 267 F3).
+    it.each([
+      ['`;` only', ';'],
+      ['`gh;` repeated', 'gh;'],
+      ['`gh pr merged;` repeated', 'gh pr merged;'],
+      ['newlines only', '\n'],
+      ['one long line holding `gh` and `merge` as words, no separator', 'gh merge '],
+    ])('answers 100 KB of %s over the cap in bounded time, denying none of it', (_n, unit) => {
+      hold(WAVE_HOLD);
+      const c = sized(unit, '', 100000);
+      expect(Buffer.byteLength(c)).toBe(100000);
+      const t0 = Date.now();
+      const r = bash(c);
+      const ms = Date.now() - t0;
+      expect(r.deny, `a non-merge was denied: ${JSON.stringify(unit)}`).toBeNull();
+      expect(ms, `the hook took ${ms} ms on 100 KB of ${JSON.stringify(unit)}`).toBeLessThan(1500);
+    }, 60000);
 
     it('refuses only where the deny applies: a session with no wave hold and no marker is never asked', () => {
       expect(bash(sized('gh pr merge 42 ', ' ', CAP + 1)).deny).toBeNull();
@@ -619,11 +687,16 @@ describe('every jq `as $name` binding in the hook is parenthesised on its own (j
   const asBindings = (programs: Array<{ body: string }>): number =>
     programs.reduce((n, p) => n + (p.body.match(/\bas \$/g) ?? []).length, 0);
 
-  it('the checker flags what jq 1.7 and 1.8 read differently and accepts what they read alike', () => {
+  it('the checker flags what jq 1.7 and 1.8 read differently, flags two more conservatively, and accepts what they read alike', () => {
     for (const bad of [
-      '1 + (2) as $x | $x', 'true and ((.w) + ")") as $wp | $wp', '.a // (.b) as $x | $x', '.a, (.b) as $x | $x',
+      '1 + (2) as $x | $x', 'true and ((.w) + ")") as $wp | $wp',
       'if . then 1 else 2 + (3) as $x | $x end', '"\\(1 + (2) as $x | $x)"',
     ]) expect(jqAmbiguousAs(bad), `flagged: ${bad}`).not.toEqual([]);
+    // jq 1.7 and 1.8 read these two alike; the checker refuses them anyway, so a
+    // reader never has to know which operators bind loosely.
+    for (const conservative of ['.a // (.b) as $x | $x', '.a, (.b) as $x | $x']) {
+      expect(jqAmbiguousAs(conservative), `flagged conservatively: ${conservative}`).not.toEqual([]);
+    }
     expect(jqAmbiguousAs('true and ((.w) + ")") as $wp | $wp').map((f) => f.op)).toEqual(['and']);
     for (const ok of [
       '1 + ((2) as $x | $x)', '(.a + .b) as $x | $x', '.x as $v | $v', 'reduce (1, 2) as $s (0; . + $s)',
@@ -632,7 +705,7 @@ describe('every jq `as $name` binding in the hook is parenthesised on its own (j
     ]) expect(jqAmbiguousAs(ok), `accepted: ${ok}`).toEqual([]);
   });
 
-  it('the extractor reads a jq program in a quote, a variable or a continued line, and nothing in a comment or a double quote', () => {
+  it('the extractor reads a jq program in a quote, a variable, a multi-line quote or after a backslash-newline, and nothing in a comment or a double quote', () => {
     const sh = [
       '# a jq that isn\'t here: \'x as $a\'',
       "NAME='1 + (2) as $x | $x'",
@@ -640,9 +713,14 @@ describe('every jq `as $name` binding in the hook is parenthesised on its own (j
       "v=$(jq -r --arg n \"$n\" '.a as $b",
       "  | $b' <<<\"$p\")",
       "printf '%s' \"$x\" | jq -c \"$DEFS\"'.k as $k | $k'",
+      // The shape the hook's program near line 1908 relies on: the program
+      // opens on the line AFTER a backslash-newline that continues `jq -r`.
+      "w=$(jq -r \\",
+      "  '.c as $c | $c' <<<\"$p\")",
     ].join('\n');
     expect(jqPrograms(sh).map((p) => [p.name, p.body])).toEqual([
       ['NAME', '1 + (2) as $x | $x'], ['jq at line 4', '.a as $b\n  | $b'], ['jq at line 6', '.k as $k | $k'],
+      ['jq at line 8', '.c as $c | $c'],
     ]);
   });
 
@@ -652,10 +730,19 @@ describe('every jq `as $name` binding in the hook is parenthesised on its own (j
     expect(programs.map((p) => p.name), 'the merge strip is among them').toContain('MERGE_STRIP_JQ');
     // A FLOOR, so the scan can never go vacuous: a deleted jq call lowers these, and the
     // number is then re-measured here rather than silently accepted.
-    expect(programs.length, 'jq programs found').toBeGreaterThanOrEqual(53);
-    expect(asBindings(programs), '`as $` bindings found').toBeGreaterThanOrEqual(31);
+    expect(programs.length, 'jq programs found').toBeGreaterThanOrEqual(52);
+    expect(asBindings(programs), '`as $` bindings found').toBeGreaterThanOrEqual(33);
+    // Coverage by EQUALITY, not floors: every `as $` in a non-comment line of the hook
+    // sits inside a program the extractor read, so a binding it cannot reach reds here.
+    const bindingsInHook = hook.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').match(/\bas \$/g)!.length;
+    expect(asBindings(programs), 'every `as $` in the hook\'s non-comment lines is inside an extracted program').toBe(bindingsInHook);
     expect(hook.split('\n').filter((l) => /\bjq\b[^'\n#]*"[^"\n]*\bas \$/.test(l)),
       'a double-quoted jq program with a binding is outside the extractor').toEqual([]);
+    // The over-cap rule splits on FIXED strings: `splits` is a regex-global walk, measured
+    // superlinear on jq 1.7 (43 to 52 s at 100 KB of `;`), and a timeout fails the deny open.
+    expect(programs.filter((p) => p.body.includes('splits(')).map((p) => p.name),
+      'a jq program uses `splits(`: split on a fixed string with `split(` (review 267 F3)').toEqual([]);
+    expect(programs.find((p) => p.name === 'MERGE_STRIP_JQ')?.body, 'the over-cap rule splits on a fixed string').toContain('map(split($s))');
     const findings = programs.flatMap((p) => jqAmbiguousAs(p.body).map((f) => `${p.name}: \`${f.binding}\` follows \`${f.op}\``));
     expect(findings, 'an `as` after a binary operator reads differently on jq 1.7 and 1.8: parenthesise it on its own').toEqual([]);
   });
