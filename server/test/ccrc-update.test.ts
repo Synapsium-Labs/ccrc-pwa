@@ -12724,6 +12724,7 @@ describe('Plan 3a Task 10 — ccrc update onto this tree over today\'s live shap
     plantLiveShape(home, (argv) => {
       const env: NodeJS.ProcessEnv = { ...updateEnv(home), CCGPT_CONFIG: undefined };   // REHEARSAL_ENV's reason
       assertSpineFrontContained(env, home);
+      assertNoRealTool(env, home);   // wave 9 R10d: a spawn of the whole ccd/ccrc passes the checker on its final env
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), ...argv], { env, encoding: 'utf8' });
       return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
     });
