@@ -53,6 +53,12 @@ its own heading. Until both are here, nothing in waves 2–6 may depend on a hoo
   an Opus · high reviewer per task, Haiku scouts, workflows off, compact 40. Nine items, one per task. The brief
   routes Task 1 around a live peer claim on `ccd/session-hook.sh` (landing-order wave 3's fix round, hard cap 19:04 UTC):
   Tasks 2–5 first, and the peer protocol for the three disjoint lines Task 1 changes.
+- **2026-10-05 — overlap rule with child-reclamation wave 5 (run 260), agreed by both coordinators (mail 3563).** Both
+  waves edit `server/test/session-hook.test.ts` (ours: one in-place line, the unknown-event row; theirs: the
+  citation-debt census's `shared/api.ts` entry) and `README.md` (ours: the registered-events, capture and census
+  sentences; theirs: four `shared/api.ts` anchors re-pointed by content). Each edits only its own region; whichever
+  PR lands second absorbs main by `git merge` alone and re-runs `session-hook.test.ts` in full plus
+  `typecheck-tests`; neither waits. The worker was told (mail 3564).
 - **2026-10-05 — the parent incarnation field is already in the tree** (spec §5.1, §8.1 item 10): `$REG/<id>.generation`
   (D-2605) is minted once at row creation and never rewritten. The hook also sees it as `CCRC_SESSION_GENERATION`, but
   ccd does not set that on every spawn path, so later waves read the file. Wave 1 records this from source.
