@@ -1022,6 +1022,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - **Observation, for the residue list:** a tap on Update while the fleet is halted returns 202 and moves
         nothing. The remedy sits on a different button. Whether the answer should offer the ack in place is a
         product question for the operator; it is not a defect.
+      - **12:12, the operator's screenshot of the home screen, which promotes this to a defect (R15):** the home
+        screen shows two banners and neither names the halt.
+        - The amber one says the boxes run different builds and advises `ccrc rollout` from the deploying machine, or
+          `ccrc update` on the lagging box. That is the pre-central-management advice, and it contradicts auto.
+        - The green one says v0.0.84 is out, with **Update all** and **See what's new**. **Update all** is the apply
+          that the halt skips.
+        - The only door out of a halt, **Ack**, is in Settings, on the failed node's item.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
@@ -1677,6 +1684,13 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
 
 - **R13 (wave 10, review 263; for wave 11).** (a) F2: before the purged arm, require the id to match ccd's grammar and the unit to be `LoadState=loaded`. (b) F1: pin the re-poll's `sleep`. (c) F3: pin the `-L` half. (d) F4: pin `?*`. (e) F5: reword the plan's Task 1 summary to its Global Constraint. (f) Review 265's F9: three `ccd/ccrc` line citations in `server/test/ccrc-sweep-deliberate-stop.test.ts:7-12` go stale once wave 9 merges; re-point them by content.
 - **R14 (wave 9, review 265; for wave 11 or 12).** (a) F4: give `_bak_prune` and `_bak_gc` one spelling of the removal filter. (b) F5: a census scan for raw `ccd/ccrc` spawns (no `env`, `env: process.env`, `{...process.env, HOME: dir}`), which also covers the refuted no-env `spawnSync` in `ccrc-install.test.ts`. (c) The worker's six parked minors, in its wave-done evidence. (d) F8, if the round could not keep `ccd/ccd` line-neutral (it did: closed). (e) Review 266's F3: an optional line number in the Linux per-key `BUE_WHY`. (f) FIRST for wave 11: the Linux `unit`-mode line loop in `_box_env_value` reads in the caller's locale, so under UTF-8 a line ending in an incomplete UTF-8 sequence merges with the next and can read a false ARMED (pre-existing at `b40f4145`; reachable only through a hand-edited or corrupted file); pin `LC_ALL=C` on the Linux path, with a UTF-8 row that fails when the locale does not take effect. (g) Review 269's F1: pin `_box_env_shell_plain`'s own line loop under UTF-8, with a Darwin rc-3 row (ccrc.env `CCRC_AUTH=on`, exposure file `# caf\xc3\nunset CCRC_AUTH`), which reds both the pin's relocation and T4-M31. (h) F2: reword D-3833's fuzz bullet to the property ("no move from rc 3 to a decided value; every move ends at bash's byte-wise answer"), not a corpus count. (i) F3: record which UTF-8 locale the macOS runner took, and whether U4u and U4n can red there. (j) F4: the Darwin plain test passes `POSIXLY_CORRECT=1` plus a readonly name such as `UID=0`, which aborts the launchd job, so doctor's ARMED describes a job that cannot run (pre-existing; not an exposure); refuse readonly and special names.
+- **R15 (2026-10-05, the operator's screenshot; product, for a PWA wave).** The home screen hides a halt.
+  - (a) While any node halts the fleet, the home banner names the halted node, its target and its detail, and offers
+    that node's **Ack** in place, through the same route and the same `canAck`.
+  - (b) **Update all** does not answer a silent 202 on a halted fleet: the skip and its reason are shown, or the
+    button is disabled with the reason.
+  - (c) The "boxes run different builds" banner stops advising `ccrc rollout` or `ccrc update` while auto is on and
+    the console can move the nodes; it points at the console's own move or the halt.
 ## Next-wave brief
 
 **Wave 2 (run 128) — dispatched 2026-09-23.** The brief as sent is the plan's path and sha, tasks 1–15, execution
