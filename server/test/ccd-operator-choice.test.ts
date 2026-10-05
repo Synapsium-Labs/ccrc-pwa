@@ -509,20 +509,19 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
   it('a supervisor revival: cmd_ensure in the unit keeps the operator\'s /model before its spawn', () => {
     seed(); record({ class: 'fable' }); const t = now() - 600;
     writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
-    h.sh(`_alive() { return 1; }
-      _spawn_start() { echo "spawn $1 $2" >> "$HOME/ccd-calls"; return 0; }
-      _spawn_settle() { echo "settle $1" >> "$HOME/ccd-calls"; return 0; }
+    h.sh(`${ENSURE_STUBS}
       CCD_IN_UNIT=1 cmd_ensure ${ID}`);
     expect(h.reg(ID, 'class')).toBe('opus');
     expect(h.sh(`_route_wanted ${ID}`).split(' ')[0]).toBe('opus');
     expect(routeLines().some((l) => l.includes(`route ${ID}: class fable -> opus [actor=operator-session]`)), swapLog()).toBe(true);
-    expect(h.calls()).toContain(`spawn ${ID} resume`);
+    expect(h.calls().join('\n')).toMatch(new RegExp(`spawn new-session .*-s cc-${ID} .*--resume`));
   });
 
   // ── ONE READ PER RESTART: a stop's keep and the supervised spawn after it are one restart ──
 
+  // The REAL `_spawn_start` (the keep lives in it) over a tmux that logs the pane it is asked to create.
   const ENSURE_STUBS = `_alive() { return 1; }
-      _spawn_start() { echo "spawn $1 $2" >> "$HOME/ccd-calls"; return 0; }
+      tmux() { ${WIDE_PANE} [[ "\${1:-}" == new-session ]] && echo "spawn $*" >> "$HOME/ccd-calls"; return 0; }
       _spawn_settle() { echo "settle $1" >> "$HOME/ccd-calls"; return 0; }`;
   const oocLines = (): number => swapLog().split('\n').filter((l) => l.includes(`operator-choice ${ID}: /model gpt-5.6-sol is outside the class vocabulary`)).length;
 
@@ -533,7 +532,7 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
     expect(oocLines(), 'the stop\'s keep').toBe(1);
     expect(fs.existsSync(regFile(`${ID}.choicekept`)), 'the stop\'s keep left its marker').toBe(true);
     h.sh(`${ENSURE_STUBS}; CCD_IN_UNIT=1 cmd_ensure ${ID}`);
-    expect(h.calls()).toContain(`spawn ${ID} resume`);
+    expect(h.calls().join('\n')).toContain('spawn new-session');
     expect(oocLines(), 'the landing\'s spawn did not read again').toBe(1);
   });
 
@@ -559,6 +558,41 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
     expect(h.reg(WS, 'class')).toBe('opus');
   });
 
+  // ── EVERY SPAWN READS: `_spawn_start` is the one choke point (review 268, F1) ──
+
+  describe('the guarded keep sits in _spawn_start, so an unsupervised revival reads too', () => {
+    const SPAWN_STUBS = `tmux() { ${WIDE_PANE} :; }; _spawn_settle() { :; }; _reg_claim() { :; };`;
+    const FALLBACKS: Record<string, string> = {
+      'no systemctl or launchctl': '_have_systemctl() { return 1; };',
+      'the unit will not enable': '_have_systemctl() { return 0; }; _svc_reset_failed() { :; }; _svc_enable_now() { return 1; };',
+    };
+    for (const [why, stubs] of Object.entries(FALLBACKS)) {
+      it(`${why}: _supervised_start's fallback revival keeps the operator's /model opus`, () => {
+        seed(); record({ class: 'fable' }); const t = now() - 600;
+        writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+        h.sh(`${SPAWN_STUBS} ${stubs} _supervised_start ${ID}`);
+        expect(h.reg(ID, 'class'), swapLog()).toBe('opus');
+        expect(fs.existsSync(regFile(`${ID}.choicekept`)), 'the spawn ended the marker').toBe(false);
+      });
+    }
+
+    it('a spawn after a stop\'s keep does not read again (the marker gates the choke point)', () => {
+      seed(); record({ class: 'fable' }); const t = now() - 600;
+      writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+      h.sh(`_operator_choice_keep ${ID}; ${SPAWN_STUBS} _spawn_start ${ID} resume || :`);
+      expect(oocLines(), 'the keep read once; the spawn after it did not').toBe(1);
+    });
+
+    it('the keep runs BEFORE the spawn opens the journal: a session an older ccd spawned says unmeasured once', () => {
+      seed(ID, false); record({ class: 'fable' }); const t = now() - 600;
+      writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+      h.sh(`${SPAWN_STUBS} _spawn_start ${ID} resume || :`);
+      expect(h.reg(ID, 'class'), 'nothing is promoted off an unopened journal').toBe('fable');
+      expect(swapLog().split('\n').filter((l) => l.includes(`operator-choice ${ID}: unmeasured (its journal opened only now`))).toHaveLength(1);
+      expect(floorRow()).toMatch(/^\d{10} since$/);
+    });
+  });
+
   // THE CENSUS OF STOPS. Every function in ccd that stops a session — a
   // `tmux kill-session`, a `claude-session@` unit stopped or booted out, or a
   // `_ws_unsupervise` — is named here: either a stop a spawn follows, which
@@ -567,12 +601,15 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
   // stops a session is in neither list, and this reds until it is classified.
   it('every stop in ccd is classified: three keep the operator\'s choice first, the rest end the row', () => {
     const KEEPS = ['cmd_stop', 'cmd_swap', 'cmd_ws_archive'];
-    // A revival follows no ccd stop (cmd_supervise -> cmd_ensure, after Claude Code
-    // exited — most often a pane-scope OOM kill), so its keep sits before its own
-    // spawn rather than before a stop; it holds no stop line, so it is not a KEEP.
-    // It runs only when no keep has run since the last spawn (`choicekept`), so the
-    // spawn a stop's keep already read for does not read, or log, a second time.
-    const REVIVES = ['cmd_ensure'];
+    // EVERY SPAWN READS, at ONE choke point: `_spawn_start` calls the keep itself — a
+    // revival follows no ccd stop (Claude Code exited, most often a pane-scope OOM kill,
+    // and `_supervised_start`'s two unsupervised fallbacks and ws-restore are spawns
+    // too), so a keep per caller would miss whichever caller a later change forgot. It
+    // holds no stop line, so it is not a KEEP. It runs only when no keep has run since
+    // the last spawn (`choicekept`), so the spawn a stop's keep already read for does
+    // not read, or log, a second time. The spawn census below holds the other half:
+    // no spawn primitive outside it.
+    const CHOKE = ['_spawn_start'];
     const ENDS: Record<string, string> = {
       cmd_ws_rm: 'the workspace and its row are removed',
       cmd_forget: 'the row is forgotten',
@@ -591,16 +628,38 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
     const stoppers = new Set(src.flatMap((l, i) => (live(l) && STOP.test(l) ? [owner(i)] : [])));
     expect([...stoppers].sort(), 'a function that stops a session is in neither list').toEqual([...KEEPS, ...Object.keys(ENDS)].sort());
     const sites = src.flatMap((l, i) => (live(l) && l.includes('_operator_choice_keep "$id"') ? [i] : []));
-    expect(sites.map(owner).sort()).toEqual([...KEEPS, ...REVIVES].sort());
+    expect(sites.map(owner).sort()).toEqual([...KEEPS, ...CHOKE].sort());
     for (const i of sites) {
       const fn = owner(i);
       if (fn === 'cmd_swap') expect(src[i + 1]).toMatch(/^ {2}_svc_stop "claude-session@\$id"/);
       if (fn === 'cmd_stop') expect(src[i + 1]).toMatch(/^ {2}_ws_unsupervise "\$id" "\$surface" "\$declared"$/);
-      if (fn === 'cmd_ensure') {
+      if (fn === '_spawn_start') {   // BEFORE the journal's floor line, then the marker's removal
         expect(src[i]).toMatch(/^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id" /);
-        expect(src[i + 1]).toMatch(/^ {2}_spawn_start "\$id" "\$mode" \|\| return \$\?$/);
+        expect(src[i + 1]).toMatch(/^ {2}_typed_note "\$id" since /);
+        expect(src[i + 2]).toMatch(/^ {2}rm -f "\$REG\/\$id\.choicekept" /);
       }
       if (fn === 'cmd_ws_archive') expect(src[i]).toMatch(/^ {2}_operator_choice_keep "\$id"; _ws_unsupervise "\$id" /);
     }
+  });
+
+  // THE CENSUS OF SPAWNS. A session's pane is created by `tmux new-session` (through
+  // `_tmux_new_session`), and the keep that makes a spawn read sits in `_spawn_start`.
+  // So every live spawn primitive must sit in `_spawn_start` — or in a named exception
+  // with its reason. A new spawner outside it would revive a session that read nothing
+  // (review 268, F1), and this reds until it is routed through `_spawn_start` or named.
+  it('every spawn primitive in ccd sits in _spawn_start, or in a named exception', () => {
+    const SPAWNS = ['_spawn_start'];
+    const EXCEPTIONS: Record<string, string> = {
+      _tmux_new_session: 'the primitive itself: the wrapper that places the tmux server',
+      cmd_account_pane: 'an account\'s login pane, not a Claude Code session',
+    };
+    const src = fs.readFileSync(CCD, 'utf8').split('\n');
+    const owner = (i: number): string => {
+      for (let j = i; j >= 0; j--) { const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(src[j]!); if (m) return m[1]!; }
+      return '';
+    };
+    const SPAWN = /tmux new-session|_tmux_new_session |new-window|respawn-pane/;
+    const owners = new Set(src.flatMap((l, i) => (!/^\s*#/.test(l) && SPAWN.test(l) ? [owner(i)] : [])));
+    expect([...owners].sort(), 'a function creates a pane outside _spawn_start').toEqual([...SPAWNS, ...Object.keys(EXCEPTIONS)].sort());
   });
 });

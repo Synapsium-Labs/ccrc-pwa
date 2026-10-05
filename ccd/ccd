@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e4f980428b90d9db9401ad24780ee75c657d5d8eddfdac9fe1af25bb83fdb968
+# ccrc:generated 1 sha256=984101002b30bf952ded3e0843c492253f812b17e2bdf28cecb2dc13487e0daf
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19357,9 +19357,10 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 #
 # ONE READ PER RESTART. Every call leaves `$REG/<id>.choicekept`, and every
 # `_spawn_start` removes it, so the marker means "a keep ran since the last
-# spawn": `cmd_ensure`'s keep runs only without it, so a revival reads while the
-# spawn a stop's keep already read for (a swap's landing, `ccd start` after
-# `ccd stop`, a refusal's restart) does not read — and log — a second time.
+# spawn": `_spawn_start`'s keep — the one choke point of every spawn — runs only
+# without it, so a revival (an unsupervised one too) reads while the spawn a
+# stop's keep already read for (a swap's landing, `ccd start` after `ccd stop`,
+# a refusal's restart) does not read — and log — a second time.
 #
 # THE RECORD WINS WHEN IT IS NEWER. A field written after the keystroke — the
 # PWA's picker, a coordinator's route, this function's own last promotion — is
@@ -20494,6 +20495,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # keys, both composed below on the Anthropic arm. The settle's keystroke
   # (`_inject_spawn_effort`) is the NO-RECORD path only — a pre-slice-1
   # session with nothing composed here.
+  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # EVERY spawn reads, here at the one choke point: a revival (Claude Code exited — a pane-scope OOM kill, /exit — and `_supervised_start`'s two unsupervised fallbacks, ws-restore) reads; a spawn that a stop's keep already read for (swap landing, start after stop, refusal restart) does not read again (§5.7). BEFORE the floor line below, or an older ccd's session would open its journal first and the keep read nothing
   _typed_note "$id" since   # the operator-choice journal opens at this ccd's first spawn of the row: no older command is read as the operator's (session-continuity §5.7)
   rm -f "$REG/$id.choicekept"   # every spawn ends the marker: it means "a keep ran since the last spawn" (§5.7)
   local routeflags="" routeenv="" rclass rsub rwf reff inert="" rapplied
@@ -22084,7 +22086,6 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   # `CCD_SETTLE_BOUND`, because a third one here would be `cmd_ensure`'s second
   # argv word and this verb is whitelisted by prefix.
   local rc
-  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # a revival (Claude Code exited, most often a pane-scope OOM kill) reads; a spawn that a stop's keep already read for (swap landing, start after stop, refusal restart) does not read again (§5.7)
   _spawn_start "$id" "$mode" || return $?
   _reg_claim "$id"
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
