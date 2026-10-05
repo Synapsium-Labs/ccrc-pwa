@@ -52,7 +52,7 @@ export function childReclaimMarker(coord: unknown): MarkerState | null {
 // requiring them would under-report the moment a future server dropped the
 // grep-only `token` or a computed `at` for one member: a row worth showing
 // would silently vanish over a field this row never displays.
-type RenderedAttention = Pick<ChildReclaimAttention, 'sessionId' | 'runId' | 'sentence'>;
+type RenderedAttention = Pick<Extract<ChildReclaimAttention, { readonly sessionId: string }>, 'sessionId' | 'runId' | 'sentence'>;
 
 const isAttention = (a: unknown): a is RenderedAttention => {
   if (typeof a !== 'object' || a === null) return false;

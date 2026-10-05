@@ -3735,6 +3735,12 @@ export class CoordStore {
       // for the whole batch in four (D-1299). A REQUIRED parameter, so a caller
       // cannot forget it and quietly ship a zeroed health object.
       health,
+      // Child-reclamation wave 5: NOT composed here. See `RunSummary.childReclaim`:
+      // the answer needs the registry's child marker and the sweep's in-memory
+      // defer, and this class sees neither. `GET /api/runs` replaces this for
+      // every row it ships; every other emitter carries only non-terminal runs,
+      // for which the derivation answers null as well.
+      childReclaim: null,
       prLineage: row.prLineage ? (JSON.parse(row.prLineage) as PrLineageEntry[]) : [],
       // Read straight through, on `homeProject`'s idiom: a free-form project
       // name stamped once at open time (migration 12), never re-derived here.

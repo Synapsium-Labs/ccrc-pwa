@@ -320,9 +320,16 @@ describe('the reconstruction drill', () => {
       dispatchedAt: true,
       closedAt: true, handoffCommit: true, items: true, unreadMail: true,
       health: true,
+      childReclaim: true,
     };
     // Bumped 22 -> 24: `kind`/`reviews` (design 2026-09-14 §5.1, task 3).
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(24);
+    // Bumped 24 -> 25: `childReclaim` (child-reclamation wave 5). It is NOT in
+    // UNRECOVERABLE above, and deliberately so. Nothing stores it: GET /api/runs
+    // derives it on every read, and a reconstructed run carries
+    // `closedAt: null` (UNRECOVERABLE), which `withChildReclaim` looks no event
+    // up for. So a rebuilt board shows no chip on those rows. That is
+    // silence, not a wrong answer.
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(25);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {

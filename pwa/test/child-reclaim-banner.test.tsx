@@ -27,8 +27,9 @@ const makeStore = (): FleetStore => createFleetStore({
 const coord = (over: Partial<CoordStatus> = {}): CoordStatus =>
   ({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], ...over });
 
-const item = (over: Partial<ChildReclaimAttention> = {}): ChildReclaimAttention => ({
-  sessionId: 'ccrc-pwa-quiet-basin', runId: 41, token: 'tree-unreadable',
+const item = (over: Partial<Extract<ChildReclaimAttention, { kind: 'terminal' }>> = {}):
+  Extract<ChildReclaimAttention, { kind: 'terminal' }> => ({
+  kind: 'terminal', sessionId: 'ccrc-pwa-quiet-basin', runId: 41, token: 'tree-unreadable',
   sentence: 'ccrc could not read this worktree, so it cannot prove nothing here would be lost. Nothing was removed.',
   at: Date.now() - 60_000, ...over,
 });
@@ -342,5 +343,21 @@ describe('the two tolerant readers', () => {
   it('childReclaimAttentionOf accepts a member with no token or at — the renderer never reads either', () => {
     const bare = { sessionId: 'ccrc-pwa-bare-item', runId: null, sentence: 'a sentence with no token or at' };
     expect(childReclaimAttentionOf({ childReclaimAttention: [bare] })).toEqual([bare]);
+  });
+
+  // `kind` is ADDITIVE on the wire (spec §5.9): a server older than the arms
+  // sends items with none, and the one reader reads such an item as it always
+  // did. Deleting `kind` from a built item is the older server's frame.
+  it('an item from a server older than the arms (no `kind`) still renders its sentence', () => {
+    const { kind: _kind, ...older } = item();
+    expect(_kind).toBe('terminal');
+    expect(childReclaimAttentionOf({ childReclaimAttention: [older] })).toEqual([older]);
+    const store = makeStore();
+    seen(store, coord({ childReclaimAttention: [older as unknown as ChildReclaimAttention] }));
+    render(<ChildReclaimBanner store={store} />);
+    const rows = [...document.querySelectorAll('.child-reclaim-item')];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toContain(older.sentence);
+    expect(rows[0]!.textContent).toContain(older.sessionId);
   });
 });

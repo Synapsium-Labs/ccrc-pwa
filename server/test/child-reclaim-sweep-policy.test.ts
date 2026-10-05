@@ -1117,7 +1117,7 @@ describe('childReclaimAttention', () => {
 
   it('reports a terminal refusal of a child whose registry row still exists, with the SERVER\'s sentence', () => {
     expect(childReclaimAttention(input([row()], [['demo-a', 7]]))).toEqual([
-      { sessionId: 'demo-a', runId: 7, token: 'tree-unreadable', sentence: 'sentence for tree-unreadable', at: NOW },
+      { kind: 'terminal', sessionId: 'demo-a', runId: 7, token: 'tree-unreadable', sentence: 'sentence for tree-unreadable', at: NOW },
     ]);
   });
 
@@ -1143,7 +1143,7 @@ describe('childReclaimAttention', () => {
 
   it('carries a null run id when the marker no longer reads as a child', () => {
     expect(childReclaimAttention(input([row()], [['demo-a', null]]))).toEqual([
-      { sessionId: 'demo-a', runId: null, token: 'tree-unreadable', sentence: 'sentence for tree-unreadable', at: NOW },
+      { kind: 'terminal', sessionId: 'demo-a', runId: null, token: 'tree-unreadable', sentence: 'sentence for tree-unreadable', at: NOW },
     ]);
   });
 
@@ -1163,7 +1163,7 @@ describe('childReclaimAttention', () => {
   it('lists a child whose reclaim has kept FAILING for the whole ceiling, with the failure\'s sentence and since when', () => {
     const since = NOW - C;
     expect(childReclaimAttention(input([row({ outcome: 'failed', refusal: 'purge-refused', failingSince: since })],
-      [['demo-a', 7]]))).toEqual([{ sessionId: 'demo-a', runId: 7, token: 'purge-refused',
+      [['demo-a', 7]]))).toEqual([{ kind: 'failing', sessionId: 'demo-a', runId: 7, token: 'purge-refused',
       sentence: childReclaimFailingSentence(LC_REFUSAL_WORD['purge-refused']), at: since }]);
   });
 

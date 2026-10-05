@@ -800,6 +800,10 @@ export interface ChildReclaimAttentionInput {
   readonly nowMs: number;
 }
 
+/** The two arms of the attention list that the lifecycle mirror alone derives
+ *  (spec §5.9); `childReclaimAttention` answers these and no other. */
+export type ChildReclaimJournalAttention = Extract<ChildReclaimAttention, { readonly kind: 'terminal' | 'failing' }>;
+
 /** The fleet-level attention list (spec §5.9): each child whose latest reclaim
  *  event in its current generation is a refusal wave 3 classes TERMINAL, or a
  *  failure closing a run of failures that has lasted the ceiling, and whose
@@ -816,8 +820,8 @@ export interface ChildReclaimAttentionInput {
  *  places a line in time: a child whose latest line carried none cannot say
  *  since when, and is not listed — the mirror's ingest time is the server's
  *  clock and never an event time. */
-export function childReclaimAttention(i: ChildReclaimAttentionInput): ChildReclaimAttention[] {
-  const out: ChildReclaimAttention[] = [];
+export function childReclaimAttention(i: ChildReclaimAttentionInput): ChildReclaimJournalAttention[] {
+  const out: ChildReclaimJournalAttention[] = [];
   for (const row of i.latest) {
     if (!i.live.has(row.sessionId)) continue;
     // Unplaceable: no `at`, no item — whichever arm below it would reach.
@@ -825,14 +829,14 @@ export function childReclaimAttention(i: ChildReclaimAttentionInput): ChildRecla
     const runId = i.live.get(row.sessionId) ?? null;
     if (childReclaimTerminalRefusal(row, i.kindOf)) {
       out.push({
-        sessionId: row.sessionId, runId, token: row.refusal!, sentence: i.sentenceFor(row.refusal!),
+        kind: 'terminal', sessionId: row.sessionId, runId, token: row.refusal!, sentence: i.sentenceFor(row.refusal!),
         // Since when: the refusal's own line, on ccd's clock.
         at: row.at,
       });
     } else if (childReclaimFailingPastCeiling(row, i.nowMs)) {
       const word = row.refusal === null ? null : (lcRefusalWord(row.refusal) ?? i.sentenceFor(row.refusal));
       out.push({
-        sessionId: row.sessionId, runId, token: row.refusal ?? '', sentence: childReclaimFailingSentence(word),
+        kind: 'failing', sessionId: row.sessionId, runId, token: row.refusal ?? '', sentence: childReclaimFailingSentence(word),
         // Since when: the start of the run of failures, not its latest line.
         at: row.failingSince!,
       });

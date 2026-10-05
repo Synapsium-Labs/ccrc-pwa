@@ -888,7 +888,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
     expect(f.requests).toEqual([]);
     await f.watcher.tick();
-    expect(f.watcher.currentCoord()?.childReclaimAttention.map((a) => a.sessionId)).toEqual(['demo-b']);
+    expect(f.watcher.currentCoord()?.childReclaimAttention.flatMap((a) => ('sessionId' in a ? [a.sessionId] : []))).toEqual(['demo-b']);
   });
 
   it('does nothing on a box that advertises reclaim-v1 but not reclaim-pause-v1, and still REPORTS', async () => {
@@ -899,7 +899,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
     expect(f.requests).toEqual([]);
     await f.watcher.tick();
-    expect(f.watcher.currentCoord()?.childReclaimAttention.map((a) => a.sessionId)).toEqual(['demo-b']);
+    expect(f.watcher.currentCoord()?.childReclaimAttention.flatMap((a) => ('sessionId' in a ? [a.sessionId] : []))).toEqual(['demo-b']);
   });
 
   it('passes deferExpired only once a PRESENCE defer has lasted the ceiling — and hands the executor when deferral began', async () => {
@@ -1226,7 +1226,7 @@ describe('fail-shut on the pass-level reads — a throw stops the WHOLE pass, no
     await f.watcher.tick();
     const before = f.watcher.currentCoord()?.childReclaimAttention;
     expect(before).toEqual([{
-      sessionId: 'demo-term', runId: termRunId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at: T0,
+      kind: 'terminal', sessionId: 'demo-term', runId: termRunId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at: T0,
     }]);
     f.next();
     // Sighted once already — the next ordinary pass would dispatch.
@@ -1254,7 +1254,7 @@ describe('the attention list — derived from the mirror, carried on the coord f
     expect(f.requests).toEqual([]);
     await f.watcher.tick();
     expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([{
-      sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at: T0,
+      kind: 'terminal', sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at: T0,
     }]);
   });
 
@@ -1272,7 +1272,7 @@ describe('the attention list — derived from the mirror, carried on the coord f
     for (let i = 0; i < 4; i += 1) { f.next(); await f.pass(); }
     expect(f.requests, 'retried a terminal refusal').toHaveLength(1);
     await f.watcher.tick();
-    const item = { sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at: refusedAt };
+    const item = { kind: 'terminal', sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at: refusedAt };
     expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([item]);
     const g = fixture({ coord: f.coord, home: f.home });
     await g.pass(); g.next(); await g.pass(); g.next(); await g.pass();
@@ -1298,7 +1298,7 @@ describe('the attention list — derived from the mirror, carried on the coord f
     f.next(); await f.pass();
     await f.watcher.tick();
     expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([{
-      sessionId: 'demo-a', runId, token: 'containment-unproven', sentence: refusalSentence('containment-unproven'), at,
+      kind: 'terminal', sessionId: 'demo-a', runId, token: 'containment-unproven', sentence: refusalSentence('containment-unproven'), at,
     }]);
   });
 
@@ -1324,7 +1324,7 @@ describe('the attention list — derived from the mirror, carried on the coord f
     f.journal('demo-a', 'refused', 'containment-unproven');   // the attempt answered
     f.next(); await f.pass();
     await f.watcher.tick();
-    expect(f.watcher.currentCoord()?.childReclaimAttention.map((a) => a.token)).toEqual(['containment-unproven']);
+    expect(f.watcher.currentCoord()?.childReclaimAttention.map((a) => (a.kind === 'terminal' || a.kind === 'failing' ? a.token : null))).toEqual(['containment-unproven']);
   });
 
   it('drops the child once its registry row is gone', async () => {
@@ -1345,7 +1345,7 @@ describe('the attention list — derived from the mirror, carried on the coord f
     const g = fixture({ coord: f.coord, home: f.home });
     await g.pass();
     await g.watcher.tick();
-    expect(g.watcher.currentCoord()?.childReclaimAttention.map((a) => a.sessionId)).toEqual(['demo-a']);
+    expect(g.watcher.currentCoord()?.childReclaimAttention.flatMap((a) => ('sessionId' in a ? [a.sessionId] : []))).toEqual(['demo-a']);
   });
 
   it('lists a child whose reclaim has kept FAILING past the ceiling, with the failure\'s sentence — and keeps asking for it', async () => {
@@ -1362,7 +1362,7 @@ describe('the attention list — derived from the mirror, carried on the coord f
     await f.pass();                                           // listed — AND asked for: the second sighting
     await f.watcher.tick();
     expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([{
-      sessionId: 'demo-a', runId, token: 'pin-failed',
+      kind: 'failing', sessionId: 'demo-a', runId, token: 'pin-failed',
       sentence: childReclaimFailingSentence(lcRefusalWord('pin-failed') ?? refusalSentence('pin-failed')), at: since,
     }]);
     expect(f.requests.map((q) => q.sessionId), 'a failing child was excluded like a terminal refusal').toEqual(['demo-a']);
@@ -1385,7 +1385,7 @@ describe('the attention list — derived from the mirror, carried on the coord f
     f.next(); await f.pass();
     await f.watcher.tick();
     const listed = f.watcher.currentCoord()?.childReclaimAttention ?? [];
-    expect(listed.map((a) => a.sessionId)).toEqual(['demo-a']);
+    expect(listed.flatMap((a) => ('sessionId' in a ? [a.sessionId] : []))).toEqual(['demo-a']);
     expect(listed[0]!.sentence).not.toMatch(/keeps retrying/);
     expect(listed[0]!.sentence).toContain('While automatic reclamation is running, ccrc retries it');
     expect(f.requests, 'the paused lane asked for the child it lists').toEqual([]);
@@ -1435,7 +1435,7 @@ describe('the attention list — derived from the mirror, carried on the coord f
     await f.pass();
     await f.watcher.tick();
     expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([{
-      sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at,
+      kind: 'terminal', sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at,
     }]);
   });
 });
