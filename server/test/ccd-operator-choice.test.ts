@@ -15,6 +15,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { makeCcdHarness, type CcdHarness, WIDE_PANE, WS_ADD, CCD } from './ccdWsHelpers.js';
 import { familyClassOf, FAMILY_TOKENS } from '../../shared/models.mjs';
 
@@ -85,6 +87,12 @@ const writeTranscript = (lines: string[], id = ID): string => {
   return p;
 };
 const keep = (id = ID): string => h.sh(`_operator_choice_keep ${id}; echo "rc=$?"`);
+/** The one line a keep says when the newest /model or /effort has no acknowledgement this ccd recognises. */
+const driftLines = (id = ID): string[] => swapLog().split('\n').filter((l) => l.includes(`operator-choice ${id}: unmeasured (a /model or /effort command with no acknowledgement`));
+/** `--stage 7` over this fixture HOME's swap.log (TZ=UTC, as the instrument's own test runs it). */
+const stage7 = (): Record<string, number | string | Record<string, number>> => JSON.parse(execFileSync('python3',
+  [path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../deploy/measure-continuity.py'), '--home', h.home, '--stage', '7', '--json'],
+  { encoding: 'utf8', env: { ...process.env, TZ: 'UTC' } })).stage7.operator_choice;
 const regFile = (f: string): string => path.join(h.home, '.cc-sessions', f);
 const swapLog = (): string => (fs.existsSync(regFile('swap.log')) ? fs.readFileSync(regFile('swap.log'), 'utf8') : '');
 const routeLines = (): string[] => swapLog().split('\n').filter((l) => /^\S+ \S+ route \S+: /.test(l));
@@ -281,6 +289,59 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
       cmd(t + 60, 'model', 'opus'), ack(t + 60, "Model 'opus' is not available on this plan")]);
     keep();
     expect(h.reg(ID, 'class')).toBe('sonnet');
+    // The newest command has no acknowledgement this ccd recognises, so it is said once (review 268, F2b);
+    // the older acknowledged one is applied all the same.
+    expect(driftLines()).toHaveLength(1);
+  });
+
+  // ── ACKNOWLEDGEMENT-WORDING DRIFT IS UNMEASURED, NEVER ZERO (review 268, F2b) ──
+
+  it('an acknowledgement in a wording this ccd does not recognise logs unmeasured once, writes nothing, and --stage 7 counts it', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, 'Model switched to Opus 5.5')]);
+    expect(keep()).toContain('rc=0');
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(routeLines()).toEqual([]);
+    expect(driftLines()).toHaveLength(1);
+    expect(stage7().stops_that_could_not_read_the_transcript, '--stage 7 reports it as unmeasured, not as zero').toBe(1);
+    expect(stage7().restarts_that_reverted_an_operator_model, 'and not as a revert').toBe(0);
+  });
+
+  it('a /model and an /effort both unrecognised log ONE line for the keep', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, 'Model switched to Opus 5.5'), cmd(t + 1, 'effort', 'high'), ack(t + 1, 'Effort is now high')]);
+    keep();
+    expect(driftLines()).toHaveLength(1);
+  });
+
+  it('control: a recognised acknowledgement logs no drift line', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    keep();
+    expect(driftLines()).toEqual([]);
+  });
+
+  it('ccd\'s own journalled keystroke whose acknowledgement drifted is not the operator\'s loss: no line', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    fs.writeFileSync(regFile(`${ID}.typed`), `${now() - 2 * DAY} since\n${t} model opus\n`);
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, 'Model switched to Opus 5.5')]);
+    keep();
+    expect(driftLines()).toEqual([]);
+  });
+
+  it('an unrecognised acknowledgement older than the journal floor is not read: no line', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 3 * DAY;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, 'Model switched to Opus 5.5')]);
+    keep();
+    expect(driftLines()).toEqual([]);
+  });
+
+  it('an unrecognised acknowledgement older than a recognised one is not the newest: no line', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'sonnet'), ack(t, 'Model switched to Sonnet 5'), cmd(t + 60, 'model', 'opus'), ack(t + 60, MODEL_ACK('Opus 5.5'))]);
+    keep();
+    expect(driftLines()).toEqual([]);
+    expect(h.reg(ID, 'class')).toBe('opus');
   });
 
   it('the record wins when it is newer: a field written after the command is not overwritten', () => {
