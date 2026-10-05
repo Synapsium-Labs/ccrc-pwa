@@ -1714,7 +1714,7 @@ Expected: `26 passed (26)` (9 + 3 + 14); then `372 passed (372)` (`ccd-auto-swap
 | 2.2 | `ccd/ccd` | `_typed_note "$id" model "$cls"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 3 failed \| 34 passed (37): “route --apply journals the class it types and the effort, and nothing for auto”; “the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator's own”; “a route --apply /model is not promoted — not even a degraded class typed over the operator's fable, in either acknowledgement shape” |
 | 2.3 | `ccd/ccd` | `_typed_note "$id" effort "$eff"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “route --apply journals the class it types and the effort, and nothing for auto” |
 | 2.4 | `ccd/ccd` | `rows=$(printf '%s\n' "$rows" \| tail -n "$((TYPED_KEEP_ROWS - 1))")` → `rows=$(printf '%s\n' "$rows")` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token” |
-| 2.5 | `ccd/ccd` | `[[ "$kind" == since \|\| ( "$kind" =~ ^(model\|effort)$ && "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ) ]] \|\| return 0` → `[[ "$kind" == since \|\| "$kind" =~ ^(model\|effort)$ ]] \|\| return 0` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token” |
+| 2.5 | `ccd/ccd` | `[[ "$kind" == since \|\| "$kind" == moved \|\| ( "$kind" =~ ^(model\|effort)$ && "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ) ]] \|\| return 0` → `[[ "$kind" == since \|\| "$kind" == moved \|\| "$kind" =~ ^(model\|effort)$ ]] \|\| return 0` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token” |
 | 2.6 | `ccd/ccd` | `_route_word_in "${v,,}" "$ROUTE_CLASSES" && { printf '%s\n' "${v,,}"; return 0; }` → (nothing) | ccd-operator-choice.test.ts | 11 failed \| 26 passed (37): “the aliases — ROUTE_CLASSES, each also with [1m] — and an acknowledgement's display word”; “/model opus, acknowledged: the class is written through cmd_route, actor=operator-session”; “the picker takes no argument: its acknowledgement names the value, in either shape Claude Code writes it”; … and 8 more |
 | 2.7 | `ccd/ccd` | `local v="${1%\[1m\]}"` → `local v="$1"` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “the aliases — ROUTE_CLASSES, each also with [1m] — and an acknowledgement's display word” |
 | 2.8 | `ccd/ccd` | `MODEL_FAMILY_TOKENS="-fable-:fable -opus-:opus -sonnet-:sonnet -haiku-:haiku"` → `MODEL_FAMILY_TOKENS="-opus-:opus -fable-:fable -sonnet-:sonnet -haiku-:haiku"` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “_model_family_class agrees with familyClassOf on every id, and MODEL_FAMILY_TOKENS is FAMILY_TOKENS” |
@@ -2327,9 +2327,13 @@ raises in the reader, which logs `unmeasured` and promotes nothing, so the refus
 | 3.24 | `ccd/ccd` | `shown="$val"; [[ "$val" == "?" ]] && shown=` → `shown="?"; [[ "$val" == "?" ]] && shown=` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “an unmappable value does not abort a swap: logged, the record unchanged, and the swap lands” |
 | 3.25 | `ccd/ccd` | `shown="(${n//[^0-9]/} bytes, not one token)"` → `shown="(${#val} bytes, not one token)"` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “an argument that is not one token is logged with its real size as outside the vocabulary, never split into fields” |
 | 3.26 | `ccd/ccd` | `_route_apply_now() {   # id -> 0 everything wanted is applied` → `_bounce_session() { local id="$1"; _svc_stop "claude-session@$id" 2>/dev/null; _svc_start "claude-session@$id"; }; _route_apply_now() {   # id -> 0 everything wanted is applied` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “every stop in ccd is classified: three keep the operator's choice first, the rest end the row” |
-
 | 3.27 | `ccd/ccd` | `_is_anthropic_backend "$(_reg_get "$id" wrapper)" \|\| return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 38 passed (39): “a session on a non-Anthropic lane is skipped: its /model is never read, logged or written” |
-| 3.28 | `ccd/ccd` | `_operator_choice_keep "$id"   # a supervisor revival (Claude Code exited, most often a pane-scope OOM kill) respawns from the record: the operator's own /model and /effort reach it first (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 2 failed \| 37 passed (39): “a supervisor revival: cmd_ensure in the unit keeps the operator's /model before its spawn”; “every stop in ccd is classified: three keep the operator's choice first, the rest end the row” |
+| 3.28 | `ccd/ccd` | `[[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"   # a revival (Claude Code exited, most often a pane-scope OOM kill) reads; a spawn that a stop's keep already read for (swap landing, start after stop, refusal restart) does not read again (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 3 failed \| 42 passed (45): “a supervisor revival: cmd_ensure in the unit keeps the operator's /model before its spawn”; “after a stop's keep and a spawn the marker is gone, so a later revival reads again”; “every stop in ccd is classified: three keep the operator's choice first, the rest end the row” |
+| 3.29 | `ccd/ccd` | `[[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"` → `_operator_choice_keep "$id"` | ccd-operator-choice.test.ts | 2 failed \| 43 passed (45): “a swap logs an out-of-vocabulary /model once: the landing's cmd_ensure does not read again”; “every stop in ccd is classified: three keep the operator's choice first, the rest end the row” |
+| 3.30 | `ccd/ccd` | `rm -f "$REG/$id.choicekept"   # every spawn ends the marker: it means "a keep ran since the last spawn" (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 44 passed (45): “after a stop's keep and a spawn the marker is gone, so a later revival reads again” |
+| 3.31 | `ccd/ccd` | `(( _oc_from == _oc_to )) \|\| _typed_note "$id" moved   # a move between an Anthropic and a non-Anthropic lane: no command typed on the other lane is read by a later stop (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 44 passed (45): “a swap between a non-Anthropic and an Anthropic lane moves the journal floor to its landing: a later stop reads nothing typed before it” |
+| 3.32 | `ccd/ccd` | `_is_anthropic_backend "$(_reg_get "$id" wrapper)" \|\| return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7) / typed=$(_reg_get "$id" typed) / if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then / _typed_note "$id" since / why="its journal opened only now, so an older command may be an older ccd's own keystroke" / fi` → `typed=$(_reg_get "$id" typed) / if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then / _typed_note "$id" since / why="its journal opened only now, so an older command may be an older ccd's own keystroke" / fi / _is_anthropic_backend "$(_reg_get "$id" wrapper)" \|\| return 0` | ccd-operator-choice.test.ts | 1 failed \| 44 passed (45): “a session on a non-Anthropic lane is skipped: its /model is never read, logged or written” |
+| 3.33 | `ccd/ccd` | `(( n > 10#${floor%% *} )) && floor="$n since"` → `floor="$n since"` | ccd-operator-choice.test.ts | 1 failed \| 44 passed (45): “the floor only ever moves forward: a lane change never moves it back, and keeps the journal's rows” |
 
 ```bash
 git add ccd/ccd server/test/ccd-operator-choice.test.ts server/test/ccd-die-containment.test.ts
@@ -2906,7 +2910,8 @@ of ten (Open question 9):
   ccd stop before it, so without this line the operator's `/model` reverted at exactly the restart that is most
   frequent. The call is unconditional: a `mode=new` spawn has no transcript yet, so the keep returns silently. The stop
   census gains a `REVIVES` list beside `KEEPS` (a revival holds no stop line, so it is not a keeper of the first kind)
-  and pins that the call is the statement before the spawn. Rows 3.28.
+  and pins that the call is the statement before the spawn; a spawn that a stop's keep already read for does not read
+  again (the once-per-restart bullet below). Rows 3.28.
 - **D-3922** `journal-floor-follows-rotation` — found by Task 2's review, by simulation: `_typed_note` kept the last
   `TYPED_KEEP_ROWS` keystroke rows below a floor that never moved, so after the 17th keystroke ccd journalled the oldest
   ccd command in the transcript had no row, became "the newest command no row explains", and the next stop promoted it
@@ -2917,6 +2922,26 @@ of ten (Open question 9):
   row's own command. Cost: an operator command typed within `TYPED_MATCH_WINDOW` after a rotated-out ccd keystroke,
   and never kept at a stop since, falls under the moved floor and is not kept, silently (the same silence as any
   command older than the floor). It adds no `_reg_get`. Row 2.12.
+- **D-3923** `operator-choice-once-per-restart` — found by Task 3's review (I1): the revival keep ran before EVERY
+  supervised spawn, because `cmd_supervise` -> `cmd_ensure` is the unit's ExecStart for a swap's landing, `ccd start`,
+  a refusal's restart and Restart=always alike, so a swap or a stop/start logged each `outside the vocabulary`,
+  `refused` and `unmeasured` line twice (the stop's keep and the landing's), which would have double-counted stage 7's
+  revert row. Decided (the coordinator's ruling): every `_operator_choice_keep` call that finds a registry row leaves
+  `$REG/<id>.choicekept` (an rc-safe write, early returns included), `cmd_ensure` runs its keep only when the marker is
+  absent, and `_spawn_start` removes it on every spawn, so the marker means "a keep ran since the last spawn" and
+  `_reg_purge`'s inventory names it (line-neutral, so the citation census does not move). A revival, which no stop's
+  keep precedes, still reads. Cost: a spawn path that bypasses `_spawn_start` would leave the marker, and a later revival
+  would skip its keep. It adds no `_reg_get` (the marker is tested with `-e`). Rows 3.28–3.30.
+- **D-3924** `operator-choice-floor-at-a-lane-change` — found by Task 3's review (I2): ruling (c) skips on the CURRENT
+  lane, so after a gpt -> Anthropic home swap the gpt lane's `/model` rows (and a `route --apply` pick whose acknowledgement
+  does not name the journalled class) rode the carried transcript, were read on the Anthropic lane at the landing, and
+  were logged (or, for a custom model id that held a family token, could be promoted). Decided (the coordinator's ruling):
+  when `cmd_swap` lands a move whose source and target differ in `_is_anthropic_backend`, it calls `_typed_note <id> moved`
+  beside the landing's `swap <id>: … (uuid …)` line, which moves the journal floor FORWARD to the landing time (the larger
+  of the old floor and now, rows kept, never back; one more kind word on the one writer, rc 0 always). Cost: an
+  Anthropic-lane `/model` typed before a round trip through a gpt lane, and never through a stop, is not kept; every stop
+  before the move keeps it. Rows 3.31–3.33 (3.32 pins the ruling-(c) guard's place before the floor is opened, review
+  M3).
 
 ---
 

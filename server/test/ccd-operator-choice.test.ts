@@ -307,11 +307,43 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
   });
 
   it('a session on a non-Anthropic lane is skipped: its /model is never read, logged or written', () => {
-    seed(); record({ class: 'fable' }); h.sh(`_reg_set ${ID} wrapper gpt`); const t = now() - 600;
+    seed(ID, false); record({ class: 'fable' }); h.sh(`_reg_set ${ID} wrapper gpt`); const t = now() - 600;
     writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
     expect(keep()).toBe('rc=0');
     expect(h.reg(ID, 'class')).toBe('fable');
     expect(swapLog(), 'no operator-choice line, no route line').toBe('');
+    expect(h.reg(ID, 'typed'), 'a skipped session opens no journal floor either').toBeNull();
+  });
+
+  // ── a lane change moves the journal floor: what was typed on the other lane is never read ──
+
+  it('a swap between a non-Anthropic and an Anthropic lane moves the journal floor to its landing: a later stop reads nothing typed before it', () => {
+    seed(); record({ class: 'fable' }); h.sh(`_reg_set ${ID} wrapper gpt`); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+    const before = now();
+    h.sh(`${SWAP} CCD_SWAP_AUTO=1 cmd_swap ${ID} claude`, { TMUX: '' });
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(Number(floorRow()!.split(' ')[0]), 'the floor is at or after the landing').toBeGreaterThanOrEqual(before);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(swapLog(), 'no operator-choice line from the gpt lane\'s /model').not.toMatch(/operator-choice/);
+  });
+
+  it('control: the same /model typed on an Anthropic lane, swapped to another Anthropic lane, is still read (and logged)', () => {
+    seed(); record({ class: 'fable' }); h.sh(`_reg_set ${ID} wrapper claude-d`); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+    h.sh(`${SWAP} CCD_SWAP_AUTO=1 cmd_swap ${ID} claude`, { TMUX: '' });
+    keep();
+    expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: /model gpt-5\\.6-sol is outside the class vocabulary`));
+  });
+
+  it('the floor only ever moves forward: a lane change never moves it back, and keeps the journal\'s rows', () => {
+    seed(); journal(ID, -3600);
+    h.sh(`_typed_note ${ID} effort high`);
+    const floor = floorRow();
+    h.sh(`_typed_note ${ID} moved`);
+    expect(floorRow()).toBe(floor);
+    expect(typedRows()).toHaveLength(1);
   });
 
   it('a value the record already holds is not written again', () => {
@@ -484,6 +516,35 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
     expect(h.calls()).toContain(`spawn ${ID} resume`);
   });
 
+  // ── ONE READ PER RESTART: a stop's keep and the supervised spawn after it are one restart ──
+
+  const ENSURE_STUBS = `_alive() { return 1; }
+      _spawn_start() { echo "spawn $1 $2" >> "$HOME/ccd-calls"; return 0; }
+      _spawn_settle() { echo "settle $1" >> "$HOME/ccd-calls"; return 0; }`;
+  const oocLines = (): number => swapLog().split('\n').filter((l) => l.includes(`operator-choice ${ID}: /model gpt-5.6-sol is outside the class vocabulary`)).length;
+
+  it('a swap logs an out-of-vocabulary /model once: the landing\'s cmd_ensure does not read again', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+    h.sh(`${SWAP} cmd_swap ${ID} claude-d`, { TMUX: '' });
+    expect(oocLines(), 'the stop\'s keep').toBe(1);
+    expect(fs.existsSync(regFile(`${ID}.choicekept`)), 'the stop\'s keep left its marker').toBe(true);
+    h.sh(`${ENSURE_STUBS}; CCD_IN_UNIT=1 cmd_ensure ${ID}`);
+    expect(h.calls()).toContain(`spawn ${ID} resume`);
+    expect(oocLines(), 'the landing\'s spawn did not read again').toBe(1);
+  });
+
+  it('after a stop\'s keep and a spawn the marker is gone, so a later revival reads again', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+    h.sh(`_operator_choice_keep ${ID}`);
+    expect(fs.existsSync(regFile(`${ID}.choicekept`))).toBe(true);
+    h.sh(`tmux() { ${WIDE_PANE} :; }; _spawn_start ${ID} resume || :`);
+    expect(fs.existsSync(regFile(`${ID}.choicekept`)), 'every spawn ends the marker').toBe(false);
+    h.sh(`${ENSURE_STUBS}; CCD_IN_UNIT=1 cmd_ensure ${ID}`);
+    expect(oocLines(), 'the revival read').toBe(2);
+  });
+
   it('ccd ws-archive: ws-restore respawns from the record', () => {
     h.makeRepo('demo');
     h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
@@ -506,6 +567,8 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
     // A revival follows no ccd stop (cmd_supervise -> cmd_ensure, after Claude Code
     // exited — most often a pane-scope OOM kill), so its keep sits before its own
     // spawn rather than before a stop; it holds no stop line, so it is not a KEEP.
+    // It runs only when no keep has run since the last spawn (`choicekept`), so the
+    // spawn a stop's keep already read for does not read, or log, a second time.
     const REVIVES = ['cmd_ensure'];
     const ENDS: Record<string, string> = {
       cmd_ws_rm: 'the workspace and its row are removed',
@@ -530,7 +593,10 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       const fn = owner(i);
       if (fn === 'cmd_swap') expect(src[i + 1]).toMatch(/^ {2}_svc_stop "claude-session@\$id"/);
       if (fn === 'cmd_stop') expect(src[i + 1]).toMatch(/^ {2}_ws_unsupervise "\$id" "\$surface" "\$declared"$/);
-      if (fn === 'cmd_ensure') expect(src[i + 1]).toMatch(/^ {2}_spawn_start "\$id" "\$mode" \|\| return \$\?$/);
+      if (fn === 'cmd_ensure') {
+        expect(src[i]).toMatch(/^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id" /);
+        expect(src[i + 1]).toMatch(/^ {2}_spawn_start "\$id" "\$mode" \|\| return \$\?$/);
+      }
       if (fn === 'cmd_ws_archive') expect(src[i]).toMatch(/^ {2}_operator_choice_keep "\$id"; _ws_unsupervise "\$id" /);
     }
   });

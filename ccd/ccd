@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d040faaf58f03ab7c0570b75054e210351eb3cdbed4c278ddcc9755a62671d0c
+# ccrc:generated 1 sha256=e4f980428b90d9db9401ad24780ee75c657d5d8eddfdac9fe1af25bb83fdb968
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3886,14 +3886,14 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43 and `typed` 44 — by addition, NOT a fresh census of
+  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44 and `choicekept` 45 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 44: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
-  # `carriednote`, `child`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
+  # The 45: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # `carriednote`, `child`, `choicekept`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
@@ -19323,7 +19323,9 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # keystroke it journals, or the first stop that finds none — and moves only
 # forward: when the newest-but-16 row rotates out, the floor passes that row's
 # epoch by TYPED_MATCH_WINDOW + 1, so the command it explained stays unreadable
-# and is not promoted as the operator's. A command older than the floor is never read: an
+# and is not promoted as the operator's — and to the landing of a swap between an
+# Anthropic and a non-Anthropic lane (`_typed_note … moved`), so a command typed on
+# the other lane is never read by a later stop. A command older than the floor is never read: an
 # older ccd typed the settle's `/effort` and `route --apply`'s `/model` without
 # journalling them, so before the floor ccd's keystrokes and the operator's
 # cannot be told apart. A stop that finds no floor opens it and promotes
@@ -19353,6 +19355,12 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # read at all (no floor yet, a transcript that is not a readable regular file —
 # never `grep` on a FIFO — no python, a reader that failed).
 #
+# ONE READ PER RESTART. Every call leaves `$REG/<id>.choicekept`, and every
+# `_spawn_start` removes it, so the marker means "a keep ran since the last
+# spawn": `cmd_ensure`'s keep runs only without it, so a revival reads while the
+# spawn a stop's keep already read for (a swap's landing, `ccd start` after
+# `ccd stop`, a refusal's restart) does not read — and log — a second time.
+#
 # THE RECORD WINS WHEN IT IS NEWER. A field written after the keystroke — the
 # PWA's picker, a coordinator's route, this function's own last promotion — is
 # the later choice, so a command older than the field's file is not promoted;
@@ -19362,9 +19370,9 @@ TYPED_MATCH_WINDOW=60   # seconds between a journalled keystroke and the transcr
 TYPED_KEEP_ROWS=16      # `.typed` keystroke rows kept beside its floor: only a row near a command matters, and the settle and the applier type a handful per spawn
 MODEL_FAMILY_TOKENS="-fable-:fable -opus-:opus -sonnet-:sonnet -haiku-:haiku"   # `familyClassOf`'s FAMILY_TOKENS (shared/models.mjs), in its match order — the agreement test reds on any drift
 
-_typed_note() {   # id model|effort value — journal one keystroke ccd is about to type; id since — open the journal only (§5.7). Never fails its caller.
+_typed_note() {   # id model|effort value — journal one keystroke ccd is about to type; id since — open the journal only; id moved — move the floor forward to now (§5.7). Never fails its caller.
   local id="$1" kind="$2" v="${3:-}" rows floor n dropped fe
-  [[ "$kind" == since || ( "$kind" =~ ^(model|effort)$ && "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ) ]] || return 0
+  [[ "$kind" == since || "$kind" == moved || ( "$kind" =~ ^(model|effort)$ && "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ) ]] || return 0
   rows=$(_reg_get "$id" typed)
   floor="${rows%%$'\n'*}"
   if [[ "$floor" =~ ^[0-9]{1,12}\ since$ ]]; then
@@ -19373,6 +19381,11 @@ _typed_note() {   # id model|effort value — journal one keystroke ccd is about
     floor="$(date +%s) since"
   fi
   rows=$(grep -E '^[0-9]{1,12} (model|effort) ' <<<"$rows")
+  if [[ "$kind" == moved ]]; then   # a lane change landed: nothing typed on the other lane is read by a later stop — the floor moves to now, never back
+    n=$(date +%s); (( n > 10#${floor%% *} )) && floor="$n since"
+    _reg_set "$id" typed "$floor${rows:+$'\n'$rows}" 2>/dev/null || true
+    return 0
+  fi
   n=$(printf '%s' "$rows" | grep -c . || true)
   if (( n >= TYPED_KEEP_ROWS )); then   # a row rotates out: its command must stay unreadable, so the floor follows (never backward)
     dropped=$(printf '%s\n' "$rows" | sed -n "$((n - TYPED_KEEP_ROWS + 1))p")
@@ -19402,6 +19415,7 @@ _model_class_of() {   # /model value -> the record's class word | rc 1 outside t
 _operator_choice_keep() {   # id — before a stop that a spawn follows: the operator's own /model and /effort, written to the route record (§5.7). Always 0.
   local id="$1" f typed why="" out kind val at n field want fm shown
   [[ -f "$REG/$id.uuid" ]] || return 0
+  _reg_set "$id" choicekept "$(date +%s)" 2>/dev/null || true   # a keep ran since the last spawn: the supervised spawn that follows a stop's keep does not read again (cmd_ensure, §5.7)
   _is_anthropic_backend "$(_reg_get "$id" wrapper)" || return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7)
   typed=$(_reg_get "$id" typed)
   if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then
@@ -20481,6 +20495,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # (`_inject_spawn_effort`) is the NO-RECORD path only — a pre-slice-1
   # session with nothing composed here.
   _typed_note "$id" since   # the operator-choice journal opens at this ccd's first spawn of the row: no older command is read as the operator's (session-continuity §5.7)
+  rm -f "$REG/$id.choicekept"   # every spawn ends the marker: it means "a keep ran since the last spawn" (§5.7)
   local routeflags="" routeenv="" rclass rsub rwf reff inert="" rapplied
   if _route_any "$id"; then
     rclass=$(_route_get "$id" class)
@@ -22069,7 +22084,7 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   # `CCD_SETTLE_BOUND`, because a third one here would be `cmd_ensure`'s second
   # argv word and this verb is whitelisted by prefix.
   local rc
-  _operator_choice_keep "$id"   # a supervisor revival (Claude Code exited, most often a pane-scope OOM kill) respawns from the record: the operator's own /model and /effort reach it first (§5.7)
+  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # a revival (Claude Code exited, most often a pane-scope OOM kill) reads; a spawn that a stop's keep already read for (swap landing, start after stop, refusal restart) does not read again (§5.7)
   _spawn_start "$id" "$mode" || return $?
   _reg_claim "$id"
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
@@ -24648,6 +24663,8 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
     echo "$(date '+%F %T') cross-pool $id: $cur -> $target [project=$project pool=${pps#named } target-pool=${pstate#named }]" >> "$REG/swap.log"
   fi
   echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"
+  local _oc_from=0 _oc_to=0; _is_anthropic_backend "$cur" && _oc_from=1; _is_anthropic_backend "$target" && _oc_to=1
+  (( _oc_from == _oc_to )) || _typed_note "$id" moved   # a move between an Anthropic and a non-Anthropic lane: no command typed on the other lane is read by a later stop (§5.7)
   _reg_set "$id" supervised "$(date +%s)"   # the carry may have taken minutes
   _svc_start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
   # Optional user notification (swap kills any attached remote session — give them a ping).
