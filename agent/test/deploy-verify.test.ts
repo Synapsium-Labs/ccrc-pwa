@@ -2308,3 +2308,44 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(shimBody()).toContain('$HOME/ccrc/ccd/ccrc');
   });
 });
+
+// WAVE 10 (R12): `verify-service.sh` tells a deliberate supervisor stop from a
+// crash. Every case below runs the REAL script on a FIXTURE HOME with a stub
+// `systemctl`; none touches a real registry, unit or tmux.
+describe('verify-service.sh tells a deliberate supervisor stop from a crash (wave 10, R12)', () => {
+  const U = 'claude-session@demo-gone.service';
+  const ccdSrcPath = path.resolve(here, '..', '..', 'ccd', 'ccd');
+
+  /** The number of `is-active` queries a run made. */
+  const nIsActive = (calls: string): number => calls.split('\n').filter((l) => l.includes(' is-active ')).length;
+
+  it('V13: a non-session unit makes exactly today\'s query sequence (the classifier asks nothing)', () => {
+    // Lands FIRST and is green on main's script: it pins the sequence the new
+    // block must leave byte-identical for `ccrc.service` and `ccrc-agent.service`.
+    const r = runVerify(stubs({ isActive: ['active', 'inactive'], mainPid: ['4242'] }), 'ccrc-agent.service');
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(1);
+    expect(r.calls.trim().split('\n')).toEqual([
+      'systemctl --user is-active ccrc-agent.service',
+      'systemctl --user show -p MainPID --value ccrc-agent.service',
+      'systemctl --user is-active ccrc-agent.service',
+      'systemctl --user status --no-pager --lines=0 ccrc-agent.service',
+      'journalctl --user -u ccrc-agent.service -n 5 --no-pager',
+    ]);
+  }, 30_000);
+
+  it('V15: the lines other files cite by number have not moved', () => {
+    // Four sites cite this script by line number, and wave 10 may not edit any
+    // of them: `ccd/ccrc:25` (`verify-service.sh:50-54`), `ccd/ccrc:1693` and
+    // `ccd/ccrc-doctor-checks:153` (`:56-62`), and `server/test/ccrc-cli.test.ts:124`
+    // (`verify-service.sh (:50-54)`). The header rewrite is line-neutral and
+    // every new line sits below :62, so these lines hold where they are cited.
+    const lines = readFileSync(VERIFY, 'utf8').split('\n');
+    expect(lines[49]).toBe('UNIT="${1:-}"');
+    expect(lines[52]).toBe('  exit 2');
+    expect(lines[53]).toBe('fi');
+    expect(lines[55]!.startsWith('# Overridable so the test does not have to wait 8 seconds per case.')).toBe(true);
+    expect(lines[59]).toBe('SETTLE="${CCRC_VERIFY_SETTLE:-3}"');
+    expect(lines[60]).toBe('WINDOW="${CCRC_VERIFY_WINDOW:-5}"');
+    expect(lines[61]).toBe('LOG_LINES="${CCRC_VERIFY_LOG_LINES:-60}"');
+  }, 30_000);
+});
