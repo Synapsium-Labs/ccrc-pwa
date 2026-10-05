@@ -1368,6 +1368,45 @@ describe('the attention list — derived from the mirror, carried on the coord f
     expect(f.requests.map((q) => q.sessionId), 'a failing child was excluded like a terminal refusal').toEqual(['demo-a']);
   });
 
+  // ccd journals a pre-lock die as `refused <token>` (it has no `failed` line for it), and the executor
+  // reads that same die as a failure the sweep retries (spec §5.9): so the report lists the run of them
+  // as failing, never as a settled refusal — and the lane keeps asking, as it does for any failure.
+  const lockDieFixture = () => fixture({ outcome: (req) => ({ kind: 'failed', sessionId: req.sessionId, runId: req.runId,
+    resume: 'pre-lock-die', detail: 'flock (util-linux) is unavailable — refusing to run the destructive verb unserialised' }) });
+
+  it('a child whose lock die is journaled as a pre-lock refusal is listed FAILING past the ceiling, with the failure\'s sentence', async () => {
+    const f = lockDieFixture();
+    const runId = finishedChild(f);
+    f.journal('demo-a', 'refused', 'flock-unavailable');
+    const since = f.now();
+    await f.pass();                                           // a first sighting; failing for 0 ms
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention, 'listed before the ceiling').toEqual([]);
+    f.advance(CHILD_RECLAIM_DEFER_CEILING_MS);
+    f.journal('demo-a', 'refused', 'flock-unavailable');      // still dying at the lock, a ceiling later
+    await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([{
+      kind: 'failing', sessionId: 'demo-a', runId, token: 'flock-unavailable',
+      sentence: childReclaimFailingSentence(lcRefusalWord('flock-unavailable')), at: since,
+    }]);
+  });
+
+  it('…and a child whose lock die is journaled as a pre-lock refusal is still ASKED again after its backoff, never excluded as a terminal refusal', async () => {
+    const f = lockDieFixture();
+    finishedChild(f);
+    f.journal('demo-a', 'refused', 'flock-unavailable');
+    await f.pass();
+    f.advance(CHILD_RECLAIM_DEFER_CEILING_MS);
+    f.journal('demo-a', 'refused', 'flock-unavailable');
+    await f.pass();                                           // the second sighting: asked
+    expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a']);
+    f.next(); await f.pass();                                 // backing off after the failure
+    expect(f.requests, 'asked again inside the backoff').toHaveLength(1);
+    f.next(); await f.pass();                                 // …and asked again once it has elapsed
+    expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a', 'demo-a']);
+  });
+
   // The list is derived BEFORE the lane learns whether it may act, so a
   // failing child stays listed while `reclaim-paused` stands — and nothing
   // retries it then. Its sentence must be true in that state: no

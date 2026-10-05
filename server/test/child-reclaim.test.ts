@@ -23,7 +23,7 @@ import { readSessionRecord } from '../src/registry.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
 import { SENTENCES } from '../src/wsaudit.js';
-import { LC_REASON_MAX_BYTES, holdReason } from '../../shared/api.js';
+import { LC_REASON_MAX_BYTES, LC_REFUSAL_TOKENS, holdReason } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { CCD } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -164,6 +164,17 @@ describe('the fourteen words', () => {
     for (const [token, kind] of Object.entries(CHILD_RECLAIM_TOKEN_KIND)) {
       if (kind === 'terminal') expect(SENTENCES[token], token).toBeTypeOf('string');
     }
+  });
+
+  // A token is exactly one of: a ws-reclaim refusal the kind map classes, one of the two pre-lock
+  // failures (`childReclaimFailureLine`), or unknown. The journal-only vocabulary (`LC_REFUSAL_WORD`)
+  // is where the pre-lock failures live, so it must share no word with the kind map: a word in both
+  // would be classed twice, by two readers that need not agree (spec §5.9).
+  it('no ws-reclaim token is also a journal-only token — the two vocabularies are disjoint', () => {
+    expect(LC_REFUSAL_TOKENS.filter((t) => Object.keys(CHILD_RECLAIM_TOKEN_KIND).includes(t))).toEqual([]);
+    // Guards the guard: an empty side would make the intersection empty for the wrong reason.
+    expect(LC_REFUSAL_TOKENS.length).toBeGreaterThan(0);
+    expect(Object.keys(CHILD_RECLAIM_TOKEN_KIND).length).toBeGreaterThan(0);
   });
 });
 

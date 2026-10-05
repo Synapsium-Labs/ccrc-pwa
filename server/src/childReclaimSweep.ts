@@ -12,8 +12,8 @@
 // at the instant of deletion — this file narrows the window, it does not close it.
 import {
   SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, lcRefusalWord,
-  type ChildMark, type ChildReclaimAttention, type LifecycleAct, type LifecycleOutcome,
-  type MirroredLifecycleEvent, type RunState,
+  type ChildMark, type ChildReclaimAttention, type ChildReclaimKeptWord, type LcRefusalToken, type LifecycleAct,
+  type LifecycleOutcome, type MirroredLifecycleEvent, type RunState,
 } from '../../shared/api.js';
 
 /** How long a presence defer may continue before the reclaim proceeds past it
@@ -346,20 +346,104 @@ export interface ChildReclaimSweepInput {
   readonly nowMs: number;
 }
 
+/** Every reason the sweep leaves a marked child alone this pass. Twenty words: the six KEPT ones are
+ *  the L0 word type (`ChildReclaimKeptWord`, which the attention list's kept arm carries), and the
+ *  rest are the sweep's own. `CHILD_RECLAIM_SKIP` classes every one of them. */
 export type ChildReclaimSweepSkip =
-  | 'not-a-child' | 'marker-unreadable' | 'identity-unmeasured' | 'not-a-workspace'
-  | 'held' | 'hold-unmeasured' | 'hold-retired'
-  | 'terminal-refusal'
-  | 'minting-run-unreadable' | 'minting-run-absent' | 'minting-run-open' | 'dispatch-in-flight'
-  | 'child-birth-unplaced' | 'minting-run-postdates-child'
-  | 'review-report-live' | 'reviewed-run-absent' | 'reviewed-run-unreadable'
-  | 'siblings-unreadable' | 'siblings-open' | 'coordinating';
+  | ChildReclaimKeptWord
+  | 'not-a-child' | 'marker-unreadable' | 'identity-unmeasured'
+  | 'held' | 'hold-unmeasured' | 'hold-retired' | 'terminal-refusal'
+  | 'minting-run-unreadable' | 'minting-run-open' | 'dispatch-in-flight'
+  | 'review-report-live' | 'reviewed-run-unreadable' | 'siblings-unreadable' | 'siblings-open';
 
 export type ChildReclaimSweepVerdict =
   | { readonly eligible: true; readonly runId: number }
   | { readonly eligible: false; readonly why: 'hold-retired'; readonly runId: number;
       readonly release: ChildReclaimHoldRelease }
   | { readonly eligible: false; readonly why: Exclude<ChildReclaimSweepSkip, 'hold-retired'> };
+
+/** How one skip word reads on the surfaces (spec §5.9). `ordinary` carries no sentence: the chip's
+ *  own planned rows answer for it. The other three classes carry the sentence the server composes. */
+export type ChildReclaimSkipRow =
+  | { readonly class: 'ordinary' }
+  | { readonly class: 'held' | 'kept' | 'doubt'; readonly sentence: string };
+
+/** THE ONE TABLE, keyed by the sweep's skip words: each word is classed exactly once, here, and
+ *  every surface reads the class from this table (spec §5.9) — so the chip and the banner cannot
+ *  class a word two ways, and a word added to `ChildReclaimSweepSkip` is a compile error until it
+ *  is classed. `as const satisfies`: total over the union, and each key keeps its own row type, so
+ *  `CHILD_RECLAIM_SKIP.coordinating.sentence` and `CHILD_RECLAIM_SKIP[keptWord].sentence` compile
+ *  (a plain `Record<…, ChildReclaimSkipRow>` annotation would make both TS2339). The sentences
+ *  are the server's: the PWA renders what it is given and maps no word itself. Apostrophes are
+ *  curly, as in `LC_REFUSAL_WORD`'s copy.
+ *
+ *  - `kept`: a standing answer. Automatic reclamation never takes the child, and only a person's
+ *    act (or restoring the coordination database) ends it. The chip reads `refused`, which the
+ *    fleet-wide switch never replaces; the banner lists the child. Each sentence but
+ *    `not-a-workspace`'s ends with the same phrase, and the two minting-run words say, directly
+ *    before it, that a rebuilt database may have left workers running.
+ *  - `doubt`: a read that failed, so the sweep left the child alone and reads again next pass.
+ *    The chip reads `deferred`, which the switch turns to `paused`; it never reaches the banner.
+ *  - `held`: a hold stands. Read as `deferred` like a doubt; it never reaches the banner, and
+ *    while it stands the attention list's failing arm does not list the child.
+ *  - `ordinary`: the chip's planned rows already say it.
+ *    - `hold-retired`: the hold-release job is acting.
+ *    - `terminal-refusal`: the mirror's terminal row decides the chip, and the banner's terminal
+ *      arm lists the child.
+ *    - `review-report-live`: the chip's own review rows say it.
+ *    - `not-a-child`: the lane skips a row with no child marker before it judges one, so there is
+ *      no child for a chip to speak of.
+ *    - `minting-run-open`, `dispatch-in-flight` and `siblings-open`: they never reach a closed
+ *      run's row rule, because the hand-over conjunct answers first. */
+export const CHILD_RECLAIM_SKIP = {
+  // kept
+  coordinating: { class: 'kept', sentence:
+    'This workspace has held a coordinator’s chair since about when it was created, holds one now, or held one at a time that cannot be placed against its creation, so ccrc treats it as a coordinator’s workspace. '
+    + 'ccrc never reclaims it on its own; a person removes it once nothing still needs it.' },
+  'minting-run-absent': { class: 'kept', sentence:
+    'The run this workspace’s child marker names is not in the coordination database, so nothing proves the workspace is finished; after a lost or rebuilt database every child reads this way. '
+    + 'After a rebuild, workers may still be running in these. '
+    + 'ccrc never reclaims it on its own; a person removes it once nothing still needs it.' },
+  'minting-run-postdates-child': { class: 'kept', sentence:
+    'The run this workspace’s child marker names opened after the workspace was created, so it cannot be the run that made it: either the coordination database was rebuilt, and then every child of the old database reads this way, or the fleet box’s clock reads behind the server’s. '
+    + 'After a rebuild, workers may still be running in these. '
+    + 'ccrc never reclaims it on its own; a person removes it once nothing still needs it.' },
+  'child-birth-unplaced': { class: 'kept', sentence:
+    'The lifecycle journal holds no dated creation of this workspace, so nothing proves the run its child marker names made it. '
+    + 'ccrc never reclaims it on its own; a person removes it once nothing still needs it.' },
+  'reviewed-run-absent': { class: 'kept', sentence:
+    'This review’s workspace holds a report the coordinator may still cite, and the run it reviewed is not in the coordination database, so nothing proves that run closed. '
+    + 'ccrc never reclaims it on its own; a person removes it once nothing still needs it.' },
+  // The one kept sentence that does not end with the common phrase: that phrase would tell a person
+  // to remove a main checkout, so this one tells them to remove the marker, never the checkout.
+  'not-a-workspace': { class: 'kept', sentence:
+    'This is a project’s main checkout carrying a child marker, and automatic reclamation never takes a main checkout. '
+    + 'ccrc never reclaims it on its own; a person removes the marker, never the checkout.' },
+  // doubt
+  'marker-unreadable': { class: 'doubt', sentence:
+    'This workspace’s child marker could not be read, so whose child it is cannot be said. The sweep reads it again on its next pass.' },
+  'identity-unmeasured': { class: 'doubt', sentence:
+    'The registry could not read this workspace’s identity on the last pass, so the sweep left it alone. It reads it again on its next pass.' },
+  'hold-unmeasured': { class: 'doubt', sentence:
+    'Whether this workspace’s hold belongs to its own programme could not be read, so the hold is treated as standing. The sweep reads it again on its next pass.' },
+  'minting-run-unreadable': { class: 'doubt', sentence:
+    'The run this workspace’s child marker names could not be read from the coordination database. The sweep reads it again on its next pass.' },
+  'reviewed-run-unreadable': { class: 'doubt', sentence:
+    'The run this review’s workspace reviewed could not be read from the coordination database. The sweep reads it again on its next pass.' },
+  'siblings-unreadable': { class: 'doubt', sentence:
+    'Whether another run still uses this workspace could not be read. The sweep reads it again on its next pass.' },
+  // held
+  held: { class: 'held', sentence:
+    'This workspace carries a hold, so the sweep leaves it alone: a person’s hold stands until they release it, and a programme’s until that programme has no open run.' },
+  // ordinary
+  'not-a-child': { class: 'ordinary' },
+  'hold-retired': { class: 'ordinary' },
+  'terminal-refusal': { class: 'ordinary' },
+  'minting-run-open': { class: 'ordinary' },
+  'dispatch-in-flight': { class: 'ordinary' },
+  'review-report-live': { class: 'ordinary' },
+  'siblings-open': { class: 'ordinary' },
+} as const satisfies Readonly<Record<ChildReclaimSweepSkip, ChildReclaimSkipRow>>;
 
 /** Is this marked child eligible THIS pass? (The twice-observed rule is the
  *  caller's: this answers one pass.) The order is the order of trust — a row
@@ -707,8 +791,9 @@ export function childReclaimAskOrder<T extends { readonly id: string; readonly e
  *  share: the LATEST `reclaim` event of one session's CURRENT GENERATION, of
  *  any outcome — declared here, by its consumer. `outcome` is the mirror's
  *  outcome; `at` is ccd's clock, or null when the line carried none;
- *  `failingSince`, only when that event is `failed`, is when the unbroken run
- *  of failures ending at it began, on ccd's clock. NO `ingestedAt`: it is the
+ *  `failingSince`, only when that event is a failure line
+ *  (`childReclaimFailureLine`), is when the unbroken run of failures ending at
+ *  it began, on ccd's clock. NO `ingestedAt`: it is the
  *  server's clock and never an event time (`coord/schema.ts`), so this
  *  row does not carry it and nothing here can read it as one. */
 export interface ChildReclaimJournalRow {
@@ -730,6 +815,27 @@ const INTENT: LifecycleOutcome = 'intent';
 const REFUSED: LifecycleOutcome = 'refused';
 const FAILED: LifecycleOutcome = 'failed';
 
+/** The two `reclaim` refusals ccd journals for a PRE-LOCK die, keyed by the die. Spelled here, once:
+ *  `coord/` code reads them by property, never as a quoted literal. */
+export const CHILD_RECLAIM_PRE_LOCK_TOKEN = {
+  flock: 'flock-unavailable', lock: 'lock-unopenable',
+} as const satisfies Readonly<Record<'flock' | 'lock', LcRefusalToken>>;
+export type ChildReclaimPreLockToken = (typeof CHILD_RECLAIM_PRE_LOCK_TOKEN)[keyof typeof CHILD_RECLAIM_PRE_LOCK_TOKEN];
+const CHILD_RECLAIM_PRE_LOCK_TOKENS: readonly string[] = Object.values(CHILD_RECLAIM_PRE_LOCK_TOKEN);
+/** Use THIS, never `.includes(x as ChildReclaimPreLockToken)`: `isRunState`'s rule. */
+export function isChildReclaimPreLockToken(v: unknown): v is ChildReclaimPreLockToken {
+  return typeof v === 'string' && CHILD_RECLAIM_PRE_LOCK_TOKENS.includes(v);
+}
+/** A `reclaim` line that is part of a run of FAILURES (spec §5.9): `failed`, or `refused` with one
+ *  of the two pre-lock tokens. ccd journals its pre-lock lock dies through `_lc_refuse`; the
+ *  executor reads the same call as a `pre-lock-die` failure and the sweep retries it, so the
+ *  report reads it as the failure it is, never as a settled refusal. ONLY these two, by name: a
+ *  token ccd starts journaling under `reclaim` later is classified when it is added, in this
+ *  table or in `CHILD_RECLAIM_TOKEN_KIND`, and is never inherited. NOT read by
+ *  `childReclaimTerminalRefusal`: neither token is terminal. */
+export const childReclaimFailureLine = (e: { readonly outcome: string; readonly refusal: string | null }): boolean =>
+  e.outcome === FAILED || (e.outcome === REFUSED && isChildReclaimPreLockToken(e.refusal));
+
 /** ONE session's attention input row. `generation` is
  *  `childReclaimGeneration(events, at)`'s answer and `latest` is
  *  `childReclaimLatest(generation)`'s (`coord/childReclaim.ts`): where a
@@ -737,9 +843,10 @@ const FAILED: LifecycleOutcome = 'failed';
  *  decided there, once, and this file cannot import either, so the latest
  *  event is passed IN rather than picked again here. What this adds is the
  *  failure run: walking back from the end over `reclaim` events, `intent`s
- *  (the start of each attempt) and other acts are read past, each `failed`
- *  that ccd placed moves the start back, and any other outcome ends the walk.
- *  Time is ccd's clock ALONE: a `failed` line that carried no `at` is still
+ *  (the start of each attempt) and other acts are read past, each failure line
+ *  (`childReclaimFailureLine`: a `failed`, or a pre-lock refusal) that ccd
+ *  placed moves the start back, and any other outcome ends the walk.
+ *  Time is ccd's clock ALONE: a failure line that carried no `at` is still
  *  a failure — it does not end the run — but it cannot be placed, so it
  *  starts no clock. The mirror's `ingestedAt` is never read. */
 export function childReclaimJournalRow(
@@ -747,11 +854,11 @@ export function childReclaimJournalRow(
 ): ChildReclaimJournalRow | null {
   if (latest === null || latest.id === null) return null;
   let failingSince: number | null = null;
-  if (latest.outcome === FAILED) {
+  if (childReclaimFailureLine(latest)) {
     for (let k = generation.length - 1; k >= 0; k -= 1) {
       const e = generation[k]!;
       if (e.act !== RECLAIM_ACT || e.outcome === INTENT) continue;
-      if (e.outcome !== FAILED) break;
+      if (!childReclaimFailureLine(e)) break;
       if (e.at !== null) failingSince = e.at;
     }
   }
@@ -762,7 +869,8 @@ export function childReclaimJournalRow(
  *  reclaim event is a refusal whose token wave 3 classes terminal. Shared by
  *  the attention list and the lane's terminal exclusion, so the two can never
  *  disagree — and deliberately NOT "is on the attention list", which also
- *  names children whose reclaim keeps FAILING, and a failure is retried. */
+ *  names children whose reclaim keeps FAILING, and a failure is retried. A
+ *  pre-lock refusal is a failure line, never terminal (`childReclaimFailureLine`). */
 export const childReclaimTerminalRefusal = (
   row: ChildReclaimJournalRow, kindOf: (token: string) => ChildReclaimTokenKind | null,
 ): boolean => row.outcome === REFUSED && row.refusal !== null && kindOf(row.refusal) === 'terminal';
@@ -770,7 +878,7 @@ export const childReclaimTerminalRefusal = (
 /** Has this child's reclaim kept failing for the whole ceiling (spec §5.9)?
  *  At EXACTLY the ceiling, yes. A failure row with no run start says nothing. */
 export const childReclaimFailingPastCeiling = (row: ChildReclaimJournalRow, nowMs: number): boolean =>
-  row.outcome === FAILED && row.failingSince !== null && nowMs - row.failingSince >= CHILD_RECLAIM_DEFER_CEILING_MS;
+  childReclaimFailureLine(row) && row.failingSince !== null && nowMs - row.failingSince >= CHILD_RECLAIM_DEFER_CEILING_MS;
 
 /** The server's sentence for a child listed because its reclaim keeps failing
  *  — the last failure's own word inside it, or a plain statement that ccd
@@ -813,7 +921,8 @@ export type ChildReclaimJournalAttention = Extract<ChildReclaimAttention, { read
  *  audit-time terminal refusal is a mirror row like any other, because wave
  *  3's `cmd_ws_audit --reclaim` journals each terminal verdict it answers
  *  (`verb ws-audit`), and a failure is the `_lc_fail` line of an attempt that
- *  started. No executor answer and no in-memory memo is an input. A report:
+ *  started, or the `_lc_refuse` line of a pre-lock die
+ *  (`childReclaimFailureLine`). No executor answer and no in-memory memo is an input. A report:
  *  nothing waits on it. A failure's sentence is its journal word first
  *  (`lcRefusalWord`, the journal-only map) and the server's lookup second —
  *  the order `lcRefusalWord`'s own docstring prescribes. Only ccd's own `at`

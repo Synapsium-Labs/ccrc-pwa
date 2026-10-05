@@ -11,11 +11,17 @@
 // unconditionally (spec §5.7's "no hold"); only a proven one is ever
 // re-examined, and never through the orphan branch.
 import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
-  CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_PRESENCE_DEFERS, childReclaimAskOrder, childReclaimAttention,
+  CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_PRE_LOCK_TOKEN, CHILD_RECLAIM_PRESENCE_DEFERS, CHILD_RECLAIM_SKIP,
+  childReclaimAskOrder, childReclaimAttention,
   childReclaimBackoffMs, childReclaimCoordinated, childReclaimDeferExpired, childReclaimDue,
-  childReclaimFailingSentence, childReclaimFirstSighting, childReclaimHoldRead, childReclaimJournalRow,
-  childReclaimNextEntry, childReclaimSameGeneration, childReclaimSweepVerdict,
+  childReclaimFailingPastCeiling, childReclaimFailingSentence, childReclaimFailureLine, childReclaimFirstSighting,
+  childReclaimHoldRead, childReclaimJournalRow,
+  childReclaimNextEntry, childReclaimSameGeneration, childReclaimSweepVerdict, childReclaimTerminalRefusal,
+  isChildReclaimPreLockToken,
   type ChildReclaimAsk, type ChildReclaimCoordinatorClaim, type ChildReclaimHoldCandidate,
   type ChildReclaimJournalRow, type ChildReclaimLaneNow,
   type ChildReclaimSweepEntry, type ChildReclaimSweepInput, type ChildReclaimSweepOutcome, type ChildReclaimTokenKind,
@@ -24,9 +30,10 @@ import {
   HOLD_NO_REASON, HOLD_UNREADABLE,
 } from '../src/registry.js';
 import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
+import { childReclaimTokenKind } from '../src/coord/childReclaim.js';
 import {
-  LC_REFUSAL_WORD, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason,
-  type LifecycleAct, type LifecycleOutcome, type MirroredLifecycleEvent,
+  CHILD_RECLAIM_KEPT_WORDS, LC_REFUSAL_WORD, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isLcRefusalToken,
+  type ChildReclaimKeptWord, type LifecycleAct, type LifecycleOutcome, type MirroredLifecycleEvent,
 } from '../../shared/api.js';
 
 const NOW = 1_790_000_000_000;
@@ -1194,5 +1201,197 @@ describe('childReclaimAttention', () => {
       ['branch-moved', childReclaimFailingSentence('sentence for branch-moved')],
       ['', childReclaimFailingSentence(null)],
     ]);
+  });
+});
+
+// ONE table classes every word the sweep can skip a marked child with (spec §5.9: the chip
+// and the banner read the CLASS — a kept word is a standing answer, a doubt word a read that
+// failed, a held word a hold, and an ordinary word is one the chip's own planned rows say).
+describe('CHILD_RECLAIM_SKIP — every skip word classed exactly once, with its sentence', () => {
+  const classOf = (c: string): string[] =>
+    Object.entries(CHILD_RECLAIM_SKIP).filter(([, r]) => r.class === c).map(([w]) => w).sort();
+  const sentenceOf = (w: string): string => {
+    const row = (CHILD_RECLAIM_SKIP as Readonly<Record<string, { readonly class: string; readonly sentence?: string }>>)[w];
+    return row?.sentence ?? '';
+  };
+  const KEPT_ENDING = 'ccrc never reclaims it on its own; a person removes it once nothing still needs it.';
+  const MARKER_ENDING = 'ccrc never reclaims it on its own; a person removes the marker, never the checkout.';
+  const REBUILD = 'After a rebuild, workers may still be running in these.';
+  const DOUBT = ['hold-unmeasured', 'identity-unmeasured', 'marker-unreadable', 'minting-run-unreadable',
+    'reviewed-run-unreadable', 'siblings-unreadable'];
+  const ORDINARY = ['dispatch-in-flight', 'hold-retired', 'minting-run-open', 'not-a-child', 'review-report-live',
+    'siblings-open', 'terminal-refusal'];
+
+  it('each class is exactly its words', () => {
+    expect(classOf('kept')).toEqual([...CHILD_RECLAIM_KEPT_WORDS].sort());
+    expect(classOf('doubt')).toEqual(DOUBT);
+    expect(classOf('held')).toEqual(['held']);
+    expect(classOf('ordinary')).toEqual(ORDINARY);
+    // Guards the guard: a class no word has would equal an empty expectation.
+    expect(CHILD_RECLAIM_KEPT_WORDS.length).toBeGreaterThan(0);
+  });
+
+  // `.sentence` compiling over the L0 word type IS a check: a kept word whose row is `ordinary` is TS2339.
+  const keptSentenceOf = (w: ChildReclaimKeptWord): string => CHILD_RECLAIM_SKIP[w].sentence;
+
+  it('the kept sentences end as the spec has them, and the two minting-run words alone say a rebuild may have left workers running', () => {
+    for (const w of CHILD_RECLAIM_KEPT_WORDS) {
+      const s = keptSentenceOf(w);
+      expect(s, w).toBe(sentenceOf(w));
+      expect(s.endsWith(w === 'not-a-workspace' ? MARKER_ENDING : KEPT_ENDING), w).toBe(true);
+    }
+    const rebuild = Object.keys(CHILD_RECLAIM_SKIP).filter((w) => sentenceOf(w).includes(REBUILD)).sort();
+    expect(rebuild).toEqual(['minting-run-absent', 'minting-run-postdates-child']);
+    // The rebuild sentence comes directly BEFORE the ending, not after it.
+    for (const w of rebuild) expect(sentenceOf(w).endsWith(`${REBUILD} ${KEPT_ENDING}`), w).toBe(true);
+  });
+
+  it('every doubt sentence ends with the sweep reading again, and the held sentence is said', () => {
+    for (const w of DOUBT) expect(sentenceOf(w).endsWith('on its next pass.'), w).toBe(true);
+    expect(sentenceOf('held').length).toBeGreaterThan(0);
+  });
+
+  it('a classed word says its sentence, an ordinary word has none, and an apostrophe is the curly one', () => {
+    for (const [w, row] of Object.entries(CHILD_RECLAIM_SKIP)) {
+      if (row.class === 'ordinary') expect('sentence' in row, w).toBe(false);
+      else {
+        expect(sentenceOf(w).length, w).toBeGreaterThan(0);
+        expect(sentenceOf(w), w).not.toContain("'");
+      }
+    }
+  });
+
+  // `coordinating` names an open claim, an unplaceable claim, or a claim that ended at or after
+  // this generation's birth less the skew — never "has ever coordinated" — so its sentence must
+  // not say "ever" as a word.
+  it('the coordinating sentence does not say "ever" — the word is fenced to this workspace\'s generation', () => {
+    expect(sentenceOf('coordinating')).not.toMatch(/\bever\b/);
+  });
+
+  // Structural, as `single-definition.test.ts` is: a second table keyed by the skip words is a
+  // second place to class a word, and two tables disagree silently.
+  it('is the ONLY table keyed by the skip words — one `Record<…>` over them in server/src', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const src = path.resolve(here, '..', 'src');
+    // `__`-prefixed entries are transient mutants another suite writes (`single-definition.test.ts`).
+    const walk = (dir: string): string[] => readdirSync(dir).flatMap((e) => {
+      if (e.startsWith('__')) return [];
+      const p = path.join(dir, e);
+      return statSync(p).isDirectory() ? walk(p) : /\.tsx?$/.test(p) ? [p] : [];
+    });
+    const needle = 'Record<ChildReclaimSweepSkip';
+    const holders = walk(src).filter((f) => readFileSync(f, 'utf8').includes(needle))
+      .map((f) => path.relative(src, f).split(path.sep).join('/'));
+    expect(holders).toEqual(['childReclaimSweep.ts']);
+  });
+});
+
+describe('childReclaimFailureLine — the one reading of "a line of a run of failures" (spec §5.9)', () => {
+  const line = (outcome: string, refusal: string | null) => ({ outcome, refusal });
+
+  it.each([
+    ['failed', null, true],
+    ['failed', 'pin-failed', true],
+    ['refused', 'flock-unavailable', true],
+    ['refused', 'lock-unopenable', true],
+    ['refused', 'held', false],
+    ['refused', 'containment-unproven', false],
+    // A journal-only token outside the two is NOT a failure line: a token ccd journals under
+    // `reclaim` later is classified when it is added, never inherited.
+    ['refused', 'bad-session-id', false],
+    ['refused', 'from-a-newer-ccd', false],
+    ['refused', null, false],
+    ['done', null, false],
+    ['intent', null, false],
+  ] as const)('%s %s -> %s', (outcome, refusal, expected) => {
+    expect(childReclaimFailureLine(line(outcome, refusal))).toBe(expected);
+  });
+
+  it('the pre-lock tokens are exactly the two lock dies, each a word ccd journals', () => {
+    expect(Object.values(CHILD_RECLAIM_PRE_LOCK_TOKEN).sort()).toEqual(['flock-unavailable', 'lock-unopenable']);
+    for (const t of Object.values(CHILD_RECLAIM_PRE_LOCK_TOKEN)) {
+      expect(isLcRefusalToken(t), t).toBe(true);
+      expect(isChildReclaimPreLockToken(t), t).toBe(true);
+    }
+  });
+
+  it('isChildReclaimPreLockToken admits no other string and no non-string', () => {
+    for (const v of ['held', 'bad-session-id', '', 'flock', 'constructor', null, undefined, 7, {}]) {
+      expect(isChildReclaimPreLockToken(v), String(v)).toBe(false);
+    }
+  });
+});
+
+describe('a run of pre-lock refusals is a failure run, listed like any other (spec §5.9)', () => {
+  const C = CHILD_RECLAIM_DEFER_CEILING_MS;
+  const A = NOW;
+  const live = new Map<string, number | null>([['demo-a', 7]]);
+  const attentionOf = (gen: MirroredLifecycleEvent[], nowMs: number) => {
+    const latest = gen[gen.length - 1]!;
+    const row = childReclaimJournalRow(gen, latest);
+    expect(row).not.toBeNull();
+    return { row: row!, list: childReclaimAttention({
+      latest: [row!], live, kindOf: childReclaimTokenKind, sentenceFor: (t) => `sentence for ${t}`, nowMs }) };
+  };
+
+  it('two refusals a ceiling apart: the run started at the first, and the child is listed with that line', () => {
+    const gen = [
+      ev('create', 'done', { at: A - 1 }),
+      ev('reclaim', 'refused', { at: A, refusal: 'flock-unavailable' }),
+      ev('reclaim', 'refused', { at: A + C, refusal: 'flock-unavailable' }),
+    ];
+    const { row, list } = attentionOf(gen, A + C);
+    expect(row.failingSince).toBe(A);
+    expect(childReclaimFailingPastCeiling(row, A + C)).toBe(true);
+    expect(childReclaimFailingPastCeiling(row, A + C - 1)).toBe(false);
+    expect(list).toEqual([{ kind: 'failing', sessionId: 'demo-a', runId: 7, token: 'flock-unavailable',
+      sentence: childReclaimFailingSentence(LC_REFUSAL_WORD['flock-unavailable']), at: A }]);
+  });
+
+  it('a failure and a refusal of the lock die are ONE run: the walk reads past an `intent` and does not stop at the refusal', () => {
+    const gen = [
+      ev('create', 'done', { at: A - 1 }),
+      ev('reclaim', 'failed', { at: A, refusal: 'pin-failed' }),
+      ev('reclaim', 'intent', { at: A + 30_000 }),
+      ev('reclaim', 'refused', { at: A + 60_000, refusal: 'lock-unopenable' }),
+    ];
+    expect(attentionOf(gen, A + 60_000).row.failingSince).toBe(A);
+  });
+
+  it('a latest `refused held` lists nothing, and starts no run', () => {
+    const gen = [
+      ev('create', 'done', { at: A - 1 }),
+      ev('reclaim', 'refused', { at: A, refusal: 'flock-unavailable' }),
+      ev('reclaim', 'refused', { at: A + C, refusal: 'held' }),
+    ];
+    const { row, list } = attentionOf(gen, A + C);
+    expect(row.failingSince).toBeNull();
+    expect(list).toEqual([]);
+  });
+
+  it('a settled refusal between two lock dies ends the run', () => {
+    const gen = [
+      ev('create', 'done', { at: A - 1 }),
+      ev('reclaim', 'refused', { at: A, refusal: 'flock-unavailable' }),
+      ev('reclaim', 'refused', { at: A + 1, refusal: 'held' }),
+      ev('reclaim', 'refused', { at: A + C, refusal: 'flock-unavailable' }),
+    ];
+    const { row, list } = attentionOf(gen, A + C);
+    expect(row.failingSince).toBe(A + C);
+    expect(list).toEqual([]);
+  });
+});
+
+describe('a pre-lock refusal is a failure line, never a terminal refusal (spec §5.9)', () => {
+  const refusal = (token: string): ChildReclaimJournalRow =>
+    ({ sessionId: 'demo-a', outcome: 'refused', refusal: token, at: NOW, failingSince: null });
+
+  it('childReclaimTerminalRefusal is false for each lock token, under the real kind map and a test one', () => {
+    for (const t of Object.values(CHILD_RECLAIM_PRE_LOCK_TOKEN)) {
+      expect(childReclaimTerminalRefusal(refusal(t), childReclaimTokenKind), t).toBe(false);
+      expect(childReclaimTerminalRefusal(refusal(t), kindOf), t).toBe(false);
+    }
+    // Guards the guard: the predicate still answers true for a terminal token.
+    expect(childReclaimTerminalRefusal(refusal('tree-unreadable'), kindOf)).toBe(true);
   });
 });
