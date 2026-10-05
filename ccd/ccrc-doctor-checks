@@ -5933,7 +5933,7 @@ _dr_codex_usage_surplus_rows() {   # <_dr_codex_usage_surplus's rc> -> WARN find
   fi
   for id in ${DR_CODEX_USAGE_SURPLUS[@]+"${DR_CODEX_USAGE_SURPLUS[@]}"}; do
     t="$(_codex_usage_timer "$id")"
-    _dr_cx_warn "$t is still enabled, and '$id' is not a Codex lane in \$HOME/.ccrc/accounts.json, so ccrc's usage publisher still runs for '$id' every cycle: the writer of \$HOME/.cc-limits/$id.json, and of a token refresh in the authDir its lane.json names, for a lane ccrc no longer runs" \
+    _dr_cx_warn "$t is still enabled, and '$id' is not a Codex lane in \$HOME/.ccrc/accounts.json, so ccrc's usage publisher for '$id' runs whenever the manager starts that timer: the writer of \$HOME/.cc-limits/$id.json, and of a token refresh in the authDir its lane.json names, for a lane ccrc no longer runs" \
       "systemctl --user disable --now $t (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws a ccrc usage timer whose id is no longer a Codex lane and re-measures the link"
   done
   return 0
@@ -6102,10 +6102,16 @@ _check_codex() {
   local left_reads
   for n in ${left[@]+"${left[@]}"}; do
     # Plan 3b Task A2: the publisher reads this lane.json, so "nothing of ccrc's
-    # reads it" is said only when no ccrc usage timer is enabled for '$n'.
+    # reads it" is said only when the enabled set WAS listed and no ccrc usage
+    # timer is enabled for '$n'. A set that could not be listed (`surplus_rc` 1)
+    # is unmeasured, never none (fix round 1): the empty array it leaves is not
+    # the empty set, and the WARN on that set says why.
     left_reads="nothing of ccrc's reads it while '$n' is not a Codex lane"
-    _dr_cx_member "$n" ${DR_CODEX_USAGE_SURPLUS[@]+"${DR_CODEX_USAGE_SURPLUS[@]}"} \
-      && left_reads="ccrc's own $(_codex_usage_timer "$n") still reads it (the WARN naming that timer says how to withdraw it)"
+    if [ "$surplus_rc" -eq 1 ]; then
+      left_reads="whether ccrc's own usage timer still reads it is unmeasured (the WARN on ccrc's enabled usage timers says why)"
+    elif _dr_cx_member "$n" ${DR_CODEX_USAGE_SURPLUS[@]+"${DR_CODEX_USAGE_SURPLUS[@]}"}; then
+      left_reads="ccrc's own $(_codex_usage_timer "$n") still reads it (the WARN naming that timer says how to withdraw it)"
+    fi
     _dr_cx_warn "lane state is left under $root/$n, and '$n' is not a Codex lane in \$HOME/.ccrc/accounts.json — a flip back to another launcher keeps it on purpose, and $left_reads" \
       "if the flip back is final and ccrc runs nothing for '$n' any more (its tiers were stopped with 'ccrc codex stop $n' before the flip), remove $root/$n by hand; ccrc never deletes a lane's state on a flip"
   done

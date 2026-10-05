@@ -22470,6 +22470,7 @@ _uninst_codex_usage() {
   fi
   for id in $ids; do
     u="$(_codex_usage_timer "$id")"
+    # D-4047 (Plan 3b Task A2): counted stopped only when the re-read finds the link gone, as `_inst_codex_usage`'s two disables are.
     if systemctl --user disable --now "$u" && ! _codex_usage_enabled "$u"; then
       n=$((n + 1))
     else

@@ -10471,6 +10471,20 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     noRunnerBugLine(r.stdout, 'codex');
   });
 
+  itLinux('lane state left behind while the usage-timer set cannot be listed: the left-state WARN says whether ccrc\'s timer reads it is unmeasured — never "nothing of ccrc\'s reads it" (Plan 3b Task A2, fix round 1)', () => {
+    const home = healthy('ccrc-doctor-codex-leftstate-unlistable-');
+    mkdirSync(join(home, '.ccrc', 'codex', 'ext-a'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'codex', 'ext-a', 'lane.json'), '{}\n');
+    rmSync(join(home, 'ccrc', 'ccd', 'ccrc-wrapper-shape'), { force: true });
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([
+      expect.stringMatching(/^WARN codex: lane state is left under \S+\/ext-a, and 'ext-a' is not a Codex lane in \$HOME\/\.ccrc\/accounts\.json — a flip back to another launcher keeps it on purpose, and whether ccrc's own usage timer still reads it is unmeasured \(the WARN on ccrc's enabled usage timers says why\)$/),
+      UNLISTABLE_WARN,
+    ]);
+    expect(r.stdout, 'an unmeasured set was read as none').not.toMatch(/nothing of ccrc's reads it/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
   itLinux('a ccrc usage timer left enabled with no Codex lane and no lane state at all is a WARN — never the empty-population SKIP (Plan 3b Task A2)', () => {
     const home = healthy('ccrc-doctor-codex-surplus-only-');
     plantCodexUsage(home, 'ext-a', { pair: false, row: false });   // a dangling link still reads enabled (D-3726)
@@ -10772,7 +10786,7 @@ const SURPLUS_ROWS = [
   '_dr_codex_usage_surplus_rows "$s"',
   '_dr_cx_report "surplus measured"; :',
 ].join('\n');
-const SURPLUS_WARN = (id: string): string => `WARN codex: ccrc-codex-usage@${id}.timer is still enabled, and '${id}' is not a Codex lane in $HOME/.ccrc/accounts.json, so ccrc's usage publisher still runs for '${id}' every cycle: the writer of $HOME/.cc-limits/${id}.json, and of a token refresh in the authDir its lane.json names, for a lane ccrc no longer runs`;
+const SURPLUS_WARN = (id: string): string => `WARN codex: ccrc-codex-usage@${id}.timer is still enabled, and '${id}' is not a Codex lane in $HOME/.ccrc/accounts.json, so ccrc's usage publisher for '${id}' runs whenever the manager starts that timer: the writer of $HOME/.cc-limits/${id}.json, and of a token refresh in the authDir its lane.json names, for a lane ccrc no longer runs`;
 const SURPLUS_FIX = (id: string): string => `  remedy: systemctl --user disable --now ccrc-codex-usage@${id}.timer (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws a ccrc usage timer whose id is no longer a Codex lane and re-measures the link`;
 const UNLISTABLE_WARN = "WARN codex: ccrc's own enabled usage timers could not be listed (the wrapper shape contract could not be read), so a ccrc-codex-usage@<id>.timer left enabled for an id that is no longer a Codex lane cannot be seen — unmeasured, never none";
 const UNLISTABLE_FIX = '  remedy: ccrc install — the wrapper shape contract ships with ccrc, and the install places it again';
