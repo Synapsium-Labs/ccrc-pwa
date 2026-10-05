@@ -1792,6 +1792,20 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       handler stays as in `63f1cc15`, pinned by that case and by a row that checks the caller's trap is restored after
       a sweep with no signal. Each pin reds when its mechanism is dropped. Interleaved runs measured TERM to the group
       at parity, 6 of 24 on the base against 7 of 24 on the head, which supersedes 39% and 31%.
+  - **2026-10-05 21:50 UTC, run 270's README question (mail 3598), ruled A (answer mail 3599).**
+    - **The finding:** the whole-branch review found no Critical. Its one Important: #283 (`d12b5aba`, merged after
+      the branch's base) added a README sentence describing the update sweep's verify rule. After this wave merges,
+      that sentence describes the serial loop. It also leaves out the re-check, the verifying of crash-shaped units and
+      the report-ownership skip.
+    - **The plan was wrong here:** its "Not in this wave" said README states no such rule, which was true at
+      `00f8a193`.
+    - **The ruling:** README.md is this wave's one scope exception, for that sentence.
+      - The worker first merges `origin/main` locally and pushes. It never uses update-branch, which unbinds the PR.
+        `merge-tree` was clean, measured at tip `cc1b6f12`.
+      - It then edits the sentence in place, true of every arm that ships. The deliberate-stop pass stays Linux-only,
+        and deploy.sh's loop gets no re-check claim.
+      - It amends the plan's "Not in this wave" line, and runs the 15 README-pinning files.
+      - Task 9's gate runs on the merged tree.
   - **Noise, not this programme's:** `map-build` on `main` went red at `00f8a193` and `4100ae1c`, with five files
     "newly failing under trace". Every test leg was green. At `be93d159` only `boot.test.ts` still failed under trace,
     and at `1eda8630` none did. This belongs to the CI test-selection tooling.
