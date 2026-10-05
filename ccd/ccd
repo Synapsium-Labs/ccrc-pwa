@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ac758e3c25f1c099e9797c149b0fc3835a5b75e03a3087a573a6ef64423c1ec2
+# ccrc:generated 1 sha256=ac277e1cb5d58a53a099b1e9a2c46dc4f456c0d74aaac87352acb94586053116
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29692,10 +29692,269 @@ def guard_listing(obj, line):
                     'failure': 'too-many-entries', 'count': count, 'bytes': size})
 
 # ===== docs: stamps =====
+# A docs-fetch stamp (spec 2026-10-01 section 2 (g) steps 4 and 9): one small
+# JSON file per (repository, branch) under $REG/docs/fetch, written by
+# docs-fetch and read by docs-index, docs-tree and docs-fetch's own floor. It
+# is data another process wrote, so the reader trusts none of it: the leaf
+# must be a regular file by lstat AND by fstat of the descriptor it opened (a
+# FIFO or a symlink swapped in between is refused, never blocked on and never
+# followed), it is read to at most STAMP_MAX_BYTES, and every field is
+# shape-checked. Any doubt answers None, which every caller reads as "no stamp".
+# This section's own imports; a repeat of an earlier section's is a no-op.
+import hashlib
+import json
+import os
+import stat
+
+STAMP_MAX_BYTES = 4096
+# lastOutcome's vocabulary: 'ok' plus the seven words docs-fetch's classifier
+# records (DocsFetchFailure). remote-absent and fetch-too-soon are decided
+# before any attempt, so no stamp ever carries either.
+STAMP_OUTCOMES = frozenset({'ok', 'fetch-timeout', 'remote-branch-absent', 'fetch-rejected-objects', 'fetch-auth-failed', 'ref-locked', 'fetch-transport', 'fetch-failed'})
+
+
+def stamp_path(reg, repo_key, branch):
+    """$REG/docs/fetch/<repo key>/<sha256(branch)[:32]>.json. The branch is
+    hashed, so a name holding '/' is still one path component."""
+    leaf = hashlib.sha256(branch.encode('utf-8', 'surrogateescape')).hexdigest()[:32]
+    return os.path.join(reg, 'docs', 'fetch', repo_key, leaf + '.json')
+
+
+def stamp_ms(v):
+    """A fleet-clock millisecond value: a non-negative int, and never a bool
+    (True == 1 in python, so the type is checked, not the value)."""
+    return type(v) is int and v >= 0
+
+
+def stamp_shape_ok(obj):
+    """{v:1, branch, attemptMs, lastOutcome, okMs, okCommit}, as docs-fetch
+    writes it. okMs and okCommit are null until a fetch has succeeded."""
+    if not isinstance(obj, dict):
+        return False
+    if type(obj.get('v')) is not int or obj.get('v') != 1:
+        return False
+    if not isinstance(obj.get('branch'), str) or not stamp_ms(obj.get('attemptMs')):
+        return False
+    outcome = obj.get('lastOutcome')
+    if not isinstance(outcome, str) or outcome not in STAMP_OUTCOMES:
+        return False
+    if obj.get('okMs') is not None and not stamp_ms(obj.get('okMs')):
+        return False
+    commit = obj.get('okCommit')
+    if commit is not None and not (isinstance(commit, str) and valid_sha(commit)):
+        return False
+    return True
+
+
+def read_stamp(path):
+    """The stamp at path, or None for anything but a regular file of at most
+    STAMP_MAX_BYTES holding one well-shaped stamp object."""
+    try:
+        st = SYS.lstat(path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or st.st_size > STAMP_MAX_BYTES:
+        return None
+    try:
+        fd = SYS.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    data = b''
+    try:
+        if not stat.S_ISREG(SYS.fstat(fd).st_mode):
+            return None
+        while len(data) <= STAMP_MAX_BYTES:
+            chunk = SYS.read(fd, STAMP_MAX_BYTES + 1 - len(data))
+            if not chunk:
+                break
+            data += chunk
+    except OSError:
+        return None
+    finally:
+        SYS.close(fd)
+    if len(data) > STAMP_MAX_BYTES:
+        return None
+    # RecursionError too: before 3.12 the C decoder stops near depth 1000,
+    # which 4096 bytes of brackets exceed, and a planted stamp must never turn
+    # a whole answer into helper-failed.
+    try:
+        obj = json.loads(data.decode('utf-8'))
+    except (ValueError, RecursionError):
+        return None
+    return obj if stamp_shape_ok(obj) else None
+
+
+def stamp_ages(stamp, now_ms):
+    """A read stamp's ages on the fleet clock, so skew between the two boxes
+    never enters. A stamp written ahead of now (the clock stepped back) reads
+    as age 0, never as a negative age."""
+    ok_ms = stamp.get('okMs')
+    return {
+        'okAgeMs': None if ok_ms is None else max(0, now_ms - ok_ms),
+        'attemptAgeMs': max(0, now_ms - stamp['attemptMs']),
+        'lastOutcome': stamp['lastOutcome'],
+        'okCommit': stamp.get('okCommit'),
+    }
+
+
+def stamp_for(reg, repo_key, branch):
+    """This branch's stamp in this repository, or None. A stamp whose own
+    branch field names another branch is not this branch's stamp."""
+    st = read_stamp(stamp_path(reg, repo_key, branch))
+    if st is None or st['branch'] != branch:
+        return None
+    return st
+
 
 # ===== docs: index =====
+# docs-index (spec 2026-10-01 section 2 (h), "docs-index (Q3)"): one walk of
+# ccd's projects root, one row per entry whose name passes the project
+# grammar. A failure inside one project is that row's state, never a failure
+# of the answer. It runs no worktree enumeration and no status: discovery,
+# the origin url, the default chain, one ls-tree --name-only and the stamp.
+INDEX_ROW_STATES = frozenset({'not-a-git-repo', 'linked-worktree', 'shared-repo', 'partial-clone', 'no-default-branch', 'repo-unreadable'})
+
+
+def index_name(raw):
+    """A root entry's name (bytes) as a project name, or None. It must be
+    strict UTF-8 and pass the project grammar, so a dash-leading, an
+    over-long or a non-UTF-8 name is counted in unlisted and never listed."""
+    try:
+        name = raw.decode('utf-8')
+    except UnicodeDecodeError:
+        return None
+    return name if valid_project(name) else None
+
+
+def index_sections_on_disk(path):
+    """The sections a non-git directory holds as directories: four lstats, in
+    SECTIONS order. A section that cannot be lstat'd is not there."""
+    have = []
+    for slug, sec in SECTIONS.items():
+        try:
+            st = SYS.lstat(os.path.join(path, sec))
+        except OSError:
+            continue
+        if stat.S_ISDIR(st.st_mode):
+            have.append(slug)
+    return have
+
+
+def index_section_counts(repo, commit, dl):
+    """{slug: count or None} for the four sections at commit, from ONE
+    ls-tree --name-only, which never lazy-fetches. A count is what docs-tree
+    would list there: the names under the section that listing_admit admits,
+    so a section whose every name is refused counts 0. None means nothing is
+    under the section at commit: it is absent there, or it is itself a
+    symlink, a gitlink or a file (docs-tree's absent and not-a-directory).
+    An expiry, an overflow or a non-zero rc raises, which index_row reads as
+    repo-unreadable."""
+    argv = ['ls-tree', '-r', '-z', '--name-only', '--full-tree', '--end-of-options', commit, '--']
+    argv.extend(SECTIONS.values())
+    s = docs_git(repo.path, argv, call_s=CALL_S['index'], dl=dl, ceiling=ceiling_of(repo.path))
+    if s.rc != 0:
+        raise fail('git-failed', step='ls-tree', rc=s.rc, stderrHead=stderr_head(s.err))
+    counts = {}
+    for name in s.out.split(b'\0'):
+        for slug, sb in LS_SECTION_BYTES:
+            if name.startswith(sb + b'/'):
+                listed = listing_admit(name[len(sb) + 1:])[1] is None
+                counts[slug] = counts.get(slug, 0) + (1 if listed else 0)
+                break
+    return dict((slug, counts.get(slug)) for slug in SECTIONS)
+
+
+def index_failed_row(ctx, row, f):
+    """The row for a project whose discovery raised f, or None when the entry
+    is not a project at all. Discovery's unknown-project is an entry that is
+    not a directory by lstat (a file, a symlink, or one that vanished after
+    the walk listed it); docs-tree refuses that name the same way, so it is
+    counted in unlisted like a bad name."""
+    if f.word == 'unknown-project':
+        return None
+    state = f.word if f.word in INDEX_ROW_STATES else 'repo-unreadable'
+    row['state'] = state
+    if state == 'not-a-git-repo':
+        row['sectionsOnDisk'] = index_sections_on_disk(os.path.join(ctx.root, row['project']))
+    elif state in ('linked-worktree', 'shared-repo'):
+        owner = f.ctx.get('owner')
+        row['owner'] = owner
+        row['branch'] = f.ctx.get('branch')
+        # Discovery named the owner because realpath(<owner>/.git) IS this
+        # checkout's common dir, so the row holds the owner's repoKey and
+        # duplicates pairs the two.
+        if isinstance(owner, str) and valid_project(owner):
+            row['repoKey'] = repo_key(os.path.join(ctx.root, owner, '.git'))
+    return row
+
+
+def index_row(ctx, name, dl, now):
+    """One project's row (DocsIndexOk's projects[]), or None: see
+    index_failed_row. Only a Fail is caught here; anything else is a defect
+    and still answers the whole verb helper-failed."""
+    row = {'project': name, 'state': 'ready', 'github': {'state': 'none'}}
+    try:
+        repo = discover(ctx, name, dl)
+    except Fail as f:
+        return index_failed_row(ctx, row, f)
+    row['repoKey'] = repo.key
+    try:
+        row['github'] = github_of(origin_url(repo, dl))
+        served, commit, via, _tried, _rows, _queried = default_chain(repo, dl)
+        if served is None:
+            row['state'] = 'no-default-branch'
+            return row
+        branch = ref_side(served)[0]
+        sections = index_section_counts(repo, commit, dl)
+    except Fail:
+        row['state'] = 'repo-unreadable'
+        return row
+    row['default'] = {'name': branch, 'via': via, 'commit': commit}
+    row['sections'] = sections
+    st = stamp_for(ctx.reg, repo.key, branch)
+    if st is not None:
+        ages = stamp_ages(st, now)
+        row['fetch'] = {'okAgeMs': ages['okAgeMs'], 'lastOutcome': ages['lastOutcome']}
+    return row
+
+
+def index_duplicates(rows):
+    """Every repoKey that two or more rows hold, with the projects holding it.
+    rows arrive in name order, so each group's projects are in name order and
+    the groups are ordered by their first project, with no sort here."""
+    by_key = {}
+    for row in rows:
+        if 'repoKey' in row:
+            by_key.setdefault(row['repoKey'], []).append(row['project'])
+    return [{'repoKey': k, 'projects': v} for k, v in by_key.items() if len(v) >= 2]
+
+
 def verb_index(ctx, a):
-    raise NotImplementedError('docs-index')
+    """docs-index --all: DocsIndexOk's body; run adds the envelope and sends
+    the line through guard_listing. An absent projects root, or one that is
+    not a directory, is an empty index, which is what a fresh box has. A root
+    that exists but cannot be listed raises, which run answers helper-failed."""
+    dl = Deadline(HELPER_DEADLINE_S['docs-index'])
+    body = {'unlisted': 0, 'duplicates': [], 'projects': []}
+    try:
+        st = SYS.stat(ctx.root)
+    except (FileNotFoundError, NotADirectoryError):
+        return body
+    if not stat.S_ISDIR(st.st_mode):
+        return body
+    names = sorted(SYS.listdir(os.fsencode(ctx.root)))
+    now = SYS.now_ms()
+    for raw in names:
+        if raw.startswith(b'.'):
+            continue
+        name = index_name(raw)
+        row = None if name is None else index_row(ctx, name, dl, now)
+        if row is None:
+            body['unlisted'] += 1
+        else:
+            body['projects'].append(row)
+    body['duplicates'] = index_duplicates(body['projects'])
+    return body
 
 # ===== docs: holders =====
 

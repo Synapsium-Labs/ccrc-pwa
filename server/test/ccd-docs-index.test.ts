@@ -1433,3 +1433,646 @@ rdVitest.describe('docs discovery and runner: the fail-closed guards no fixture 
     rdVitest.expect(got.hard).toEqual({ word: 'fetch-timeout', ctx: {} });
   }, 60_000);
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Task 11: docs-index and its stamps (spec 2026-10-01 §2 (h) "docs-index (Q3)", §2 (g) step 4, §3.11, §7.2
+// "Fixtures"; §2 rows 16 (index), 43 (reader half), 57 (duplicates), 58 (unlisted); M6.8 (index)).
+//
+// Every import in this block is a NAMESPACE import (or an aliased type) with a `t11` prefix: the block is appended
+// below the blocks of earlier tasks, and a named import here could redeclare a binding one of them already
+// imports. Each describe builds its own fixture HOME in a hook, so a describe that `-t` filters out creates none.
+import * as t11v from 'vitest';
+import * as t11fs from 'node:fs';
+import * as t11path from 'node:path';
+import * as t11crypto from 'node:crypto';
+import * as t11cp from 'node:child_process';
+import * as t11ws from './ccdWsHelpers.js';
+import * as t11dh from './ccdDocsHelpers.js';
+import * as t11py from './docsHelperPy.js';
+import * as t11fx from './docsIndexFixtures.js';
+import type { DocsFetchFailure as T11FetchFailure } from '../../shared/docs.js';
+
+type T11Row = Record<string, unknown> & { project: string; state: string };
+
+/** The real verb, through the dispatcher, contained (`runCcdDocs`); rc 0 and exactly one line are asserted. */
+const t11index = (h: t11ws.CcdHarness): Record<string, unknown> => {
+  const r = t11dh.runCcdDocs(h, ['docs-index', '--all']);
+  t11v.expect(r.code, r.stderr).toBe(0);
+  return t11dh.parseOneLine(r);
+};
+const t11rows = (o: Record<string, unknown>): T11Row[] => {
+  t11v.expect(Array.isArray(o['projects']), `not an index answer: ${JSON.stringify(o)}`).toBe(true);
+  return o['projects'] as T11Row[];
+};
+const t11row = (o: Record<string, unknown>, project: string): T11Row => {
+  const hits = t11rows(o).filter((r) => r.project === project);
+  t11v.expect(hits, `exactly one row for ${project}`).toHaveLength(1);
+  return hits[0]!;
+};
+/** A POSIX single-quoted shell word. */
+const t11shq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+/** Python lines binding `ctx` to ccd's three roots in the unit's HOME, as `run` builds it for docs-index. */
+const T11_CTX = [
+  'import os',
+  "home = os.environ['HOME']",
+  "ctx = H.Ctx('docs-index', os.path.join(home, 'projects'), os.path.join(home, 'worktrees'), os.path.join(home, '.cc-sessions'), 0)",
+];
+/** What discovery itself answers for `projects/<p>`: its Fail's word, owner and branch, or word null for a Repo. */
+const t11discover = (h: t11ws.CcdHarness, p: string): { word: string | null; owner?: unknown; branch?: unknown } =>
+  t11py.unitJson(h.home, [
+    ...T11_CTX,
+    'try:',
+    `    H.discover(ctx, ${JSON.stringify(p)}, H.Deadline(12))`,
+    "    out({'word': None})",
+    'except H.Fail as f:',
+    "    out({'word': f.word, 'owner': f.ctx.get('owner'), 'branch': f.ctx.get('branch')})",
+  ].join('\n'));
+/** What docs-tree's own listing (`list_committed`, at the default chain's commit) counts per section: its count
+ *  where the section is present, and null where it is absent or not a directory. */
+const t11treeCounts = (h: t11ws.CcdHarness, p: string): Record<string, number | null> =>
+  t11py.unitJson(h.home, [
+    ...T11_CTX,
+    'dl = H.Deadline(12)',
+    `repo = H.discover(ctx, ${JSON.stringify(p)}, dl)`,
+    'commit = H.default_chain(repo, dl)[1]',
+    "out(dict((s['slug'], s['count'] if s['state'] == 'present' else None) for s in H.list_committed(repo, commit, dl)[0]))",
+  ].join('\n'));
+
+t11v.describe('T11: docs stamps - stamp_path, read_stamp, stamp_ages (spec §2 (g) step 4; row 43 reader half)', () => {
+  let h: t11ws.CcdHarness;
+  let dir = '';
+  t11v.beforeAll(() => {
+    h = t11ws.makeCcdHarness('ccd-docs-');
+    dir = t11path.join(h.home, 'stamps');
+    t11fs.mkdirSync(dir, { recursive: true });
+  });
+  t11v.afterAll(() => h.cleanup());
+  const SHA = 'a'.repeat(40);
+  const GOOD = { v: 1, branch: 'main', attemptMs: 4000, lastOutcome: 'ok', okMs: 1000, okCommit: SHA };
+  const plant = (name: string, body: string | Buffer): string => {
+    const p = t11path.join(dir, name);
+    t11fs.writeFileSync(p, body);
+    return p;
+  };
+  const read = (p: string): unknown => t11py.unitJson<unknown>(h.home, `out(H.read_stamp(${JSON.stringify(p)}))`);
+
+  t11v.it('stamp_path is $REG/docs/fetch/<repo key>/<sha256(branch)[:32]>.json', () => {
+    const key = '0123456789abcdef'.repeat(2);
+    const leaf = t11crypto.createHash('sha256').update('ws/a').digest('hex').slice(0, 32);
+    t11v.expect(t11py.unitJson<string>(h.home, `out(H.stamp_path('/r', '${key}', 'ws/a'))`))
+      .toBe(t11path.join('/r', 'docs', 'fetch', key, `${leaf}.json`));
+  });
+
+  t11v.it('reads a well-formed stamp back as the object it holds (CONTROL for every None below)', () => {
+    t11v.expect(read(plant('good.json', JSON.stringify(GOOD)))).toEqual(GOOD);
+  });
+
+  t11v.it.each([
+    ['v:2', JSON.stringify({ ...GOOD, v: 2 })],
+    ['v:true (a bool is not the integer 1)', JSON.stringify({ ...GOOD, v: true })],
+    ['a missing branch', JSON.stringify({ ...GOOD, branch: undefined })],
+    ['a string attemptMs', JSON.stringify({ ...GOOD, attemptMs: '4000' })],
+    ['a negative attemptMs', JSON.stringify({ ...GOOD, attemptMs: -1 })],
+    ['okMs:true', JSON.stringify({ ...GOOD, okMs: true })],
+    ['a word no fetch attempt records (fetch-too-soon)', JSON.stringify({ ...GOOD, lastOutcome: 'fetch-too-soon' })],
+    ['an unhashable lastOutcome, which must not raise', JSON.stringify({ ...GOOD, lastOutcome: [] })],
+    ['a short okCommit', JSON.stringify({ ...GOOD, okCommit: 'abc1234' })],
+    ['an array', JSON.stringify([GOOD])],
+    ['truncated JSON', '{"v":1'],
+    ['bytes that are not UTF-8', Buffer.from([0xff, 0xfe, 0x7b])],
+    ['nesting deep enough to exhaust an older python recursion limit', `${'['.repeat(2048)}${']'.repeat(2048)}`],
+    ['a path where nothing exists', null],
+  ] as const)('answers None for %s', (label, body) => {
+    const p = t11path.join(dir, `case-${label.replace(/[^A-Za-z0-9]+/g, '-')}.json`);
+    if (body !== null) t11fs.writeFileSync(p, body);
+    t11v.expect(read(p)).toBeNull();
+  });
+
+  /** read_stamp(p) under a Sys that records every open, after `setup` (python lines) has run. */
+  const readRecordingOpens = (p: string, setup: string[]): { stamp: unknown; opened: string[] } =>
+    t11py.unitJson<{ stamp: unknown; opened: string[] }>(h.home, [
+      'import os',
+      ...setup,
+      'opened = []',
+      'class RecordsOpens(type(H.SYS)):',
+      '    def open(self, path, flags, *args, **kwargs):',
+      '        opened.append(path)',
+      '        return super().open(path, flags, *args, **kwargs)',
+      'H.SYS = RecordsOpens()',
+      `out({'stamp': H.read_stamp(${JSON.stringify(p)}), 'opened': opened})`,
+    ].join('\n'), { timeoutMs: 5000 });
+
+  t11v.it('reads a stamp of exactly 4096 bytes and refuses one of 4097 by its lstat size, before any open', () => {
+    const body = JSON.stringify(GOOD);
+    const atCap = plant('at-cap.json', body.padEnd(4096, ' '));
+    const overCap = plant('over-cap.json', body.padEnd(4097, ' '));
+    t11v.expect(readRecordingOpens(atCap, [])).toEqual({ stamp: GOOD, opened: [atCap] });
+    t11v.expect(readRecordingOpens(overCap, [])).toEqual({ stamp: null, opened: [] });
+  });
+
+  t11v.it('a FIFO at the path is None, refused by lstat before any open', () => {
+    const p = t11path.join(dir, 'fifo.json');
+    t11v.expect(readRecordingOpens(p, [`os.mkfifo(${JSON.stringify(p)})`])).toEqual({ stamp: null, opened: [] });
+  });
+
+  t11v.it('a symlink to a well-formed stamp is None, refused by lstat before any open; the target reads (CONTROL)', () => {
+    const target = plant('target.json', JSON.stringify(GOOD));
+    const link = t11path.join(dir, 'link.json');
+    t11fs.symlinkSync(target, link);
+    t11v.expect(readRecordingOpens(link, [])).toEqual({ stamp: null, opened: [] });
+    t11v.expect(readRecordingOpens(target, [])).toEqual({ stamp: GOOD, opened: [target] });
+  });
+
+  // The swaps a fixture cannot time: a Sys whose lstat reports a small regular file for EVERY path, so the open
+  // and the descriptor's own fstat are the only guards left standing.
+  const liesRegular = (small: string): string[] => [
+    'class LiesRegular(type(H.SYS)):',
+    '    def lstat(self, path, *args, **kwargs):',
+    `        return os.stat(${JSON.stringify(small)})`,
+    'H.SYS = LiesRegular()',
+  ];
+
+  t11v.it('a FIFO swapped in after lstat is opened non-blocking and answers None without waiting for a writer', () => {
+    // Without O_NONBLOCK the open waits for a writer forever; the unit's own 5 s bound turns that into a red.
+    const small = plant('small.json', JSON.stringify(GOOD));
+    const p = t11path.join(dir, 'swapped-fifo.json');
+    t11v.expect(t11py.unitJson<unknown>(h.home, ['import os', `os.mkfifo(${JSON.stringify(p)})`, ...liesRegular(small),
+      `out(H.read_stamp(${JSON.stringify(p)}))`].join('\n'), { timeoutMs: 5000 })).toBeNull();
+  });
+
+  t11v.it('a stamp that grew past 4096 bytes after lstat is refused by the read bound, not truncated into a parse', () => {
+    // The first 4097 bytes of this file are a complete, well-formed stamp followed by blanks, so a reader that
+    // parsed whatever its bounded read returned, instead of refusing the 4097th byte, would answer the stamp.
+    const small = plant('small3.json', JSON.stringify(GOOD));
+    const p = plant('grown.json', JSON.stringify(GOOD).padEnd(5000, ' '));
+    t11v.expect(t11py.unitJson<unknown>(h.home, ['import os', ...liesRegular(small),
+      `out(H.read_stamp(${JSON.stringify(p)}))`].join('\n'), { timeoutMs: 5000 })).toBeNull();
+  });
+
+  t11v.it('a symlink swapped in after lstat is never followed (O_NOFOLLOW), though its target is a good stamp', () => {
+    const small = plant('small2.json', JSON.stringify(GOOD));
+    const target = plant('swap-target.json', JSON.stringify(GOOD));
+    const p = t11path.join(dir, 'swapped-link.json');
+    t11fs.symlinkSync(target, p);
+    t11v.expect(t11py.unitJson<unknown>(h.home, ['import os', ...liesRegular(small),
+      `out(H.read_stamp(${JSON.stringify(p)}))`].join('\n'), { timeoutMs: 5000 })).toBeNull();
+  });
+
+  t11v.it('a descriptor that fstat says is not a regular file is refused, though its bytes are a good stamp', () => {
+    // The open's own fstat is the last word on what was opened; a Sys whose fstat reports a FIFO for the
+    // descriptor stands in for any swap the lstat could not see.
+    const p = plant('fstat-fifo.json', JSON.stringify(GOOD));
+    t11v.expect(t11py.unitJson<unknown>(h.home, [
+      'import os, stat',
+      'class FstatSaysFifo(type(H.SYS)):',
+      '    def fstat(self, fd):',
+      '        st = os.fstat(fd)',
+      '        return os.stat_result((stat.S_IFIFO | 0o600,) + tuple(st)[1:])',
+      'H.SYS = FstatSaysFifo()',
+      `out(H.read_stamp(${JSON.stringify(p)}))`,
+    ].join('\n'), { timeoutMs: 5000 })).toBeNull();
+  });
+
+  t11v.it('a decoder that runs out of recursion answers None, never a raise that would end the whole answer', () => {
+    // Deterministic on every python: before 3.12 the C decoder raises this near depth 1000, which 4096 bytes
+    // of brackets reach; 3.12 does not, so the bracket case above alone cannot go red there.
+    const p = plant('recursion.json', JSON.stringify(GOOD));
+    t11v.expect(t11py.unitJson<unknown>(h.home, [
+      'class DeepDecoder(object):',
+      '    @staticmethod',
+      '    def loads(s):',
+      "        raise RecursionError('maximum recursion depth exceeded while decoding a JSON array')",
+      'H.json = DeepDecoder',
+      `out(H.read_stamp(${JSON.stringify(p)}))`,
+    ].join('\n'))).toBeNull();
+  });
+
+  t11v.it('stamp_ages: ages on the fleet clock, a null okAgeMs before any success, never a negative age', () => {
+    const none = { ...GOOD, okMs: null, okCommit: null, lastOutcome: 'fetch-timeout' };
+    const py = (o: unknown): string => `json.loads(${JSON.stringify(JSON.stringify(o))})`;
+    t11v.expect(t11py.unitJson<unknown>(h.home,
+      `import json\nout([H.stamp_ages(${py(GOOD)}, 10000), H.stamp_ages(${py(none)}, 10000), H.stamp_ages(${py(GOOD)}, 2000)])`))
+      .toEqual([
+        { okAgeMs: 9000, attemptAgeMs: 6000, lastOutcome: 'ok', okCommit: SHA },
+        { okAgeMs: null, attemptAgeMs: 6000, lastOutcome: 'fetch-timeout', okCommit: null },
+        { okAgeMs: 1000, attemptAgeMs: 0, lastOutcome: 'ok', okCommit: SHA },
+      ]);
+  });
+
+  t11v.it("STAMP_OUTCOMES is 'ok' plus exactly the DocsFetchFailure words, each one a ccd failure word", () => {
+    // A Record over the L0 type: a word added to or dropped from DocsFetchFailure is a compile error here
+    // until this list follows it, and the python set is then compared with the list.
+    const FETCH_WORDS: Record<T11FetchFailure, true> = {
+      'fetch-timeout': true, 'remote-branch-absent': true, 'fetch-rejected-objects': true, 'fetch-auth-failed': true,
+      'ref-locked': true, 'fetch-transport': true, 'fetch-failed': true,
+    };
+    const got = t11py.unitJson<{ outcomes: string[]; outside: string[] }>(h.home,
+      "out({'outcomes': sorted(H.STAMP_OUTCOMES), 'outside': sorted(w for w in H.STAMP_OUTCOMES if w != 'ok' and w not in H.FAILURES)})");
+    t11v.expect(got.outcomes).toEqual(['ok', ...Object.keys(FETCH_WORDS)].sort());
+    t11v.expect(got.outside).toEqual([]);
+  });
+});
+
+t11v.describe('T11: docs-index guard - M6.8, the listing bound is on FRAMED bytes', () => {
+  let h: t11ws.CcdHarness;
+  t11v.beforeAll(() => { h = t11ws.makeCcdHarness('ccd-docs-'); });
+  t11v.afterAll(() => h.cleanup());
+
+  t11v.it('an index whose raw line fits 1 MiB but whose framed line does not answers too-many-entries', () => {
+    const got = t11py.unitJson<{ raw: number; framed: number; guarded: Record<string, unknown>; smallPasses: boolean }>(h.home, [
+      'import json',
+      'def index_of(n):',
+      `    rows = [{'project': '"' * 1000, 'state': 'ready', 'github': {'state': 'none'}} for _ in range(n)]`,
+      "    return {'v': 1, 'verb': 'docs-index', 'ok': True, 'elapsedMs': 1, 'unlisted': 0, 'duplicates': [], 'projects': rows}",
+      'big = index_of(400)',
+      'line = H.line_of(big)',
+      'small = index_of(10)',
+      'sline = H.line_of(small)',
+      "out({'raw': len(line), 'framed': H.framed_len(line), 'guarded': json.loads(H.guard_listing(big, line).decode('utf-8')), 'smallPasses': H.guard_listing(small, sline) == sline})",
+    ].join('\n'));
+    // CONTROL: the raw line alone would have been admitted, and 400 rows are far from the entry cap.
+    t11v.expect(got.raw).toBeLessThan(1048576);
+    t11v.expect(got.framed).toBeGreaterThan(1048576);
+    t11v.expect(got.guarded).toMatchObject({ v: 1, verb: 'docs-index', ok: false, failure: 'too-many-entries', count: 400 });
+    t11v.expect(got.guarded['bytes']).toBeGreaterThan(1048576);
+    // CONTROL: the guard passes an index that fits, unchanged.
+    t11v.expect(got.smallPasses).toBe(true);
+  });
+});
+
+t11v.describe('T11: docs-index fixtures - the canned lines are what the real verb emits (spec §7.2)', () => {
+  let h: t11ws.CcdHarness;
+  t11v.beforeEach(() => { h = t11ws.makeCcdHarness('ccd-docs-'); });
+  t11v.afterEach(() => h.cleanup());
+
+  t11v.it.each(['ready', 'unreadable'] as const)('normalise(docs-index on plantIndexHome(h, %s)) deep-equals its canned object', (which) => {
+    t11fx.plantIndexHome(h, which);
+    t11v.expect(t11fx.normaliseDocsIndex(t11index(h)))
+      .toEqual(which === 'ready' ? t11fx.DOCS_INDEX_READY : t11fx.DOCS_INDEX_UNREADABLE);
+  });
+
+  t11v.it('DOCS_HELPER_UNAVAILABLE_MISSING_LINE is byte for byte what the real front prints with python3 missing', () => {
+    t11dh.plantPython3(h.home, 'missing');
+    const r = t11dh.runCcdDocs(h, ['docs-index', '--all']);
+    t11v.expect(r.code).toBe(0);
+    t11v.expect(r.stdout).toBe(`${t11fx.DOCS_HELPER_UNAVAILABLE_MISSING_LINE}\n`);
+  });
+
+  t11v.it("indexStampPath is the helper's own stamp_path over discovery's repoKey", () => {
+    h.makeRepo('demo');
+    t11v.expect(t11py.unitJson<string>(h.home, [
+      ...T11_CTX,
+      "repo = H.discover(ctx, 'demo', H.Deadline(12))",
+      "out(H.stamp_path(ctx.reg, repo.key, 'ws/a'))",
+    ].join('\n'))).toBe(t11fx.indexStampPath(h, 'demo', 'ws/a'));
+  });
+
+  t11v.it('normaliseDocsIndex zeroes exactly elapsedMs, repoKeys, 40- and 64-hex strings and numeric ages', () => {
+    const k = 'f'.repeat(32);
+    t11v.expect(t11fx.normaliseDocsIndex({
+      v: 1, elapsedMs: 7, unlisted: 3, duplicates: [{ repoKey: k, projects: ['a', 'b'] }],
+      projects: [
+        { project: 'demo', repoKey: k, default: { name: 'main', via: 'default:origin-head', commit: 'e'.repeat(64) },
+          fetch: { okAgeMs: 812, lastOutcome: 'ok' } },
+        { project: 'x', note: 'a'.repeat(39), fetch: { okAgeMs: null, lastOutcome: 'fetch-timeout' } },
+      ],
+    })).toEqual({
+      v: 1, elapsedMs: 0, unlisted: 3, duplicates: [{ repoKey: '0'.repeat(32), projects: ['a', 'b'] }],
+      projects: [
+        { project: 'demo', repoKey: '0'.repeat(32), default: { name: 'main', via: 'default:origin-head', commit: '0'.repeat(40) },
+          fetch: { okAgeMs: 0, lastOutcome: 'ok' } },
+        { project: 'x', note: 'a'.repeat(39), fetch: { okAgeMs: null, lastOutcome: 'fetch-timeout' } },
+      ],
+    });
+  });
+
+  t11v.it('docsIndexStubScript prints its line verbatim with shell builtins only, and refuses a line it cannot quote', () => {
+    const line = JSON.stringify(t11fx.DOCS_INDEX_READY);
+    const p = t11path.join(h.home, 'ccd-stub');
+    t11fs.writeFileSync(p, t11fx.docsIndexStubScript(line), { mode: 0o755 });
+    // An empty PATH: printf must be the shell's own builtin.
+    t11v.expect(t11cp.execFileSync('/bin/sh', [p, 'docs-index', '--all'], { encoding: 'utf8', env: { PATH: '' } }))
+      .toBe(`${line}\n`);
+    t11v.expect(() => t11fx.docsIndexStubScript("it's")).toThrow();
+    t11v.expect(() => t11fx.docsIndexStubScript('two\nlines')).toThrow();
+  });
+});
+
+t11v.describe('T11: docs-index, one HOME of every repository shape (spec §2 (h); rows 16 and 57)', () => {
+  let h: t11ws.CcdHarness;
+  let ans: Record<string, unknown> = {};
+  let indexCalls: t11dh.RecordedGitCall[] = [];
+  let demoCommit = '';
+  let aCommit = '';
+
+  t11v.beforeAll(() => {
+    h = t11ws.makeCcdHarness('ccd-docs-');
+    const at = (name: string): string => t11path.join(h.home, 'projects', name);
+    const demo = h.makeGhRepo('demo', 'example-org/example-repo');
+    demoCommit = t11dh.commitDocs(h, demo, { ...t11fx.INDEX_READY_DOCS });
+    h.git(demo, 'push', '-q', 'origin', 'main');
+    // a: specs holds ONLY a name the listing refuses (17 components deep), so it counts 0, not null; plans holds
+    // one listable name; and conventions is committed as a SYMLINK, so nothing is under it at the commit.
+    const a = h.makeRepo('a');
+    for (const rel of [`docs/superpowers/specs/${'d/'.repeat(16)}deep.md`, 'docs/superpowers/plans/ok.md']) {
+      t11fs.mkdirSync(t11path.dirname(t11path.join(a, rel)), { recursive: true });
+      t11fs.writeFileSync(t11path.join(a, rel), '# a\n');
+    }
+    t11fs.symlinkSync('../README.md', t11path.join(a, 'docs', 'conventions'));
+    h.git(a, 'add', '-A');
+    h.git(a, 'commit', '-q', '-m', 'docs');
+    h.git(a, 'push', '-q', 'origin', 'main');
+    aCommit = h.git(a, 'rev-parse', 'HEAD');
+    // b's .git is a symlink to a's: the shape discovery names shared-repo (spec MM9, row 57).
+    t11fs.mkdirSync(at('b'));
+    t11fs.symlinkSync(t11path.join(a, '.git'), t11path.join(at('b'), '.git'));
+    const broken = h.makeRepo('broken');
+    t11fs.writeFileSync(t11path.join(broken, '.git', 'HEAD'), 'not a ref\n');
+    h.git(demo, 'worktree', 'add', '-q', '-b', 'ws/a', at('wt'));
+    const origin = t11path.join(h.home, 'origins', 'demo.git');
+    h.git(origin, 'config', 'uploadpack.allowFilter', 'true');
+    h.git(h.home, 'clone', '-q', '--filter=blob:none', `file://${origin}`, at('pc'));
+    h.git(h.home, 'init', '-q', '-b', 'trunk', at('nodef'));
+    t11fs.writeFileSync(t11path.join(at('nodef'), 'README.md'), 'hi\n');
+    h.git(at('nodef'), 'add', 'README.md');
+    h.git(at('nodef'), 'commit', '-q', '-m', 'init');
+    t11fs.mkdirSync(t11path.join(at('nongit'), 'docs', 'superpowers', 'specs'), { recursive: true });
+    t11fs.mkdirSync(t11path.join(at('nongit'), 'docs', 'conventions'), { recursive: true });
+    t11fs.writeFileSync(t11path.join(at('nongit'), 'docs', 'product-design'), 'a file, not a section\n');
+    const rec = t11dh.plantGitRecorder(h.home);
+    rec.reset();
+    ans = t11index(h);
+    indexCalls = rec.calls();
+  });
+  t11v.afterAll(() => h.cleanup());
+
+  t11v.it('lists every directory, in name order, each with its own state', () => {
+    t11v.expect(t11rows(ans).map((r) => [r.project, r.state])).toEqual([
+      ['a', 'ready'], ['b', 'shared-repo'], ['broken', 'repo-unreadable'], ['demo', 'ready'],
+      ['nodef', 'no-default-branch'], ['nongit', 'not-a-git-repo'], ['pc', 'partial-clone'], ['wt', 'linked-worktree'],
+    ]);
+    t11v.expect(ans['unlisted']).toBe(0);
+  });
+
+  t11v.it('a ready row carries its default branch, commit and section counts, and no other row does', () => {
+    t11v.expect(t11row(ans, 'demo')['default']).toEqual({ name: 'main', via: 'default:origin-head', commit: demoCommit });
+    t11v.expect(t11row(ans, 'demo')['sections']).toEqual({ specs: 2, plans: 1, 'product-design': null, conventions: null });
+    t11v.expect(t11row(ans, 'a')['default']).toEqual({ name: 'main', via: 'default:origin-head', commit: aCommit });
+    t11v.expect(t11row(ans, 'a')['sections']).toEqual({ specs: 0, plans: 1, 'product-design': null, conventions: null });
+    for (const r of t11rows(ans).filter((x) => x.state !== 'ready')) {
+      t11v.expect(r, r.project).not.toHaveProperty('default');
+      t11v.expect(r, r.project).not.toHaveProperty('sections');
+    }
+    // No stamp exists anywhere in this HOME, so no row may claim a fetch.
+    for (const r of t11rows(ans)) t11v.expect(r, r.project).not.toHaveProperty('fetch');
+  });
+
+  t11v.it("each section count is the count docs-tree's own listing gives, null where the listing has no directory", () => {
+    for (const p of ['a', 'demo']) t11v.expect(t11row(ans, p)['sections'], p).toEqual(t11treeCounts(h, p));
+  });
+
+  t11v.it('github is named for the GitHub-shaped origin and none for every other row (spec §3.11)', () => {
+    for (const r of t11rows(ans)) {
+      t11v.expect(r['github'], r.project)
+        .toEqual(r.project === 'demo' ? { state: 'named', slug: 'example-org/example-repo' } : { state: 'none' });
+    }
+  });
+
+  t11v.it('a non-git directory reports the sections it holds as directories, and nothing else', () => {
+    const r = t11row(ans, 'nongit');
+    t11v.expect(r['sectionsOnDisk']).toEqual(['specs', 'conventions']);   // product-design is a FILE there
+    t11v.expect(r).not.toHaveProperty('repoKey');
+  });
+
+  t11v.it("a linked worktree and a shared repo carry exactly discovery's owner and branch, and the owner's repoKey", () => {
+    for (const [p, owner, branch] of [['wt', 'demo', 'ws/a'], ['b', 'a', 'main']] as const) {
+      const row = t11row(ans, p);
+      t11v.expect(t11discover(h, p), p).toEqual({ word: row.state, owner, branch });
+      t11v.expect(row['owner'], p).toBe(owner);
+      t11v.expect(row['branch'], p).toBe(branch);
+      t11v.expect(row['repoKey'], p).toBe(t11row(ans, owner)['repoKey']);
+    }
+  });
+
+  t11v.it('duplicates lists every repoKey two or more rows hold (row 57)', () => {
+    const key = (p: string): unknown => t11row(ans, p)['repoKey'];
+    t11v.expect(ans['duplicates']).toEqual([
+      { repoKey: key('a'), projects: ['a', 'b'] },
+      { repoKey: key('demo'), projects: ['demo', 'wt'] },
+    ]);
+    // CONTROL: the keys are real and distinct, so the pairing above is not two rows sharing a constant.
+    t11v.expect(key('a')).toMatch(/^[0-9a-f]{32}$/);
+    t11v.expect(new Set([key('a'), key('demo'), key('nodef')]).size).toBe(3);
+    for (const p of ['broken', 'nongit', 'pc']) t11v.expect(t11row(ans, p), p).not.toHaveProperty('repoKey');
+  });
+
+  t11v.it('row 16 (index): the walk never fetches, never mutates, never enumerates worktrees and never runs status', () => {
+    const sub = (argv: string[]): string[] => { const i = argv.indexOf('-C'); return i >= 0 ? argv.slice(i + 2) : argv; };
+    const subs = indexCalls.map((c) => sub(c.argv));
+    // CONTROL: the recorder saw the walk itself: discovery, the origin url, the default chain and the counts.
+    t11v.expect(subs.map((s) => s[0])).toEqual(
+      t11v.expect.arrayContaining(['rev-parse', 'config', 'symbolic-ref', 'for-each-ref', 'ls-tree']));
+    const FORBIDDEN = new Set(['fetch', 'remote', 'gc', 'maintenance', 'update-ref', 'checkout', 'show', 'diff', 'archive',
+      'worktree', 'status']);
+    t11v.expect(subs.filter((s) => FORBIDDEN.has(s[0] ?? ''))).toEqual([]);
+    t11v.expect(indexCalls.filter((c) => c.argv.some((x) => x === '--textconv' || x === '--filters'))).toEqual([]);
+    // Every call went through the hardened read runner, never a bare git.
+    for (const c of indexCalls) t11v.expect(c.env['GIT_NO_LAZY_FETCH'], c.argv.join(' ')).toBe('1');
+  });
+});
+
+t11v.describe('T11: docs-index, per-row failures and the per-call bound', () => {
+  let h: t11ws.CcdHarness;
+  t11v.beforeEach(() => { h = t11ws.makeCcdHarness('ccd-docs-'); });
+  t11v.afterEach(() => h.cleanup());
+
+  t11v.it('a git failure in one project makes that row repo-unreadable and leaves the others ready', () => {
+    t11dh.docsRepo(h, 'demo');
+    t11dh.docsRepo(h, 'zz');
+    // CONTROL: both rows are ready before the planted failure.
+    t11v.expect(t11rows(t11index(h)).map((r) => r.state)).toEqual(['ready', 'ready']);
+    t11dh.plantGitRecorder(h.home, { failWhen: ['/projects/zz ls-tree'] });
+    const o = t11index(h);
+    t11v.expect(o['ok']).toBe(true);
+    t11v.expect(t11row(o, 'demo').state).toBe('ready');
+    const zz = t11row(o, 'zz');
+    t11v.expect(zz.state).toBe('repo-unreadable');
+    t11v.expect(zz['repoKey']).toMatch(/^[0-9a-f]{32}$/);
+    t11v.expect(zz).not.toHaveProperty('sections');
+  });
+
+  t11v.it('every git call the walk makes is bounded by the 5 s index budget', () => {
+    t11dh.docsRepo(h, 'demo');
+    const got = t11py.unitJson<{ calls: [string, number][]; ok: boolean }>(h.home, [
+      ...T11_CTX,
+      'import json',
+      'calls = []',
+      'class RecordsBounds(type(H.SYS)):',
+      '    def spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin=None):',
+      "        calls.append([argv[argv.index('-C') + 2], timeout_s])",
+      '        return super().spawn(argv, env, cwd, timeout_s, stdout_cap, stdin)',
+      'H.SYS = RecordsBounds()',
+      "a = json.loads(H.run(['docs-index', ctx.root, ctx.worktrees, ctx.reg, '--all']).decode('utf-8'))",
+      "out({'calls': calls, 'ok': a['ok']})",
+    ].join('\n'));
+    t11v.expect(got.ok).toBe(true);
+    // CONTROL: the walk spawned git, the section count's ls-tree included.
+    t11v.expect(got.calls.map((c) => c[0])).toEqual(t11v.expect.arrayContaining(['rev-parse', 'for-each-ref', 'ls-tree']));
+    for (const [sub, bound] of got.calls) {
+      t11v.expect(bound, sub).toBeGreaterThan(0);
+      t11v.expect(bound, sub).toBeLessThanOrEqual(5);
+    }
+  });
+
+  t11v.it('only a classified Fail is a row: any other exception is the whole answer, helper-failed', () => {
+    const got = t11py.unitJson<Record<string, unknown>[]>(h.home, [
+      ...T11_CTX,
+      'import json',
+      "os.makedirs(os.path.join(home, 'projects', 'demo'))",
+      'def partial(ctx, project, dl):',
+      "    raise H.fail('partial-clone')",
+      'def boom(ctx, project, dl):',
+      "    raise RuntimeError('a defect, not a state')",
+      'answers = []',
+      'for d in (partial, boom):',
+      '    H.discover = d',
+      "    answers.append(json.loads(H.run(['docs-index', ctx.root, ctx.worktrees, ctx.reg, '--all']).decode('utf-8')))",
+      'out(answers)',
+    ].join('\n'));
+    // CONTROL: a Fail from discovery is that row's state, in an ok answer.
+    t11v.expect(got[0]).toMatchObject({ ok: true, projects: [{ project: 'demo', state: 'partial-clone' }] });
+    t11v.expect(got[1]).toMatchObject({ ok: false, failure: 'helper-failed' });
+    t11v.expect(String(got[1]!['detail'])).toMatch(/RuntimeError: a defect, not a state/);
+  });
+});
+
+t11v.describe('T11: docs-index, row 58 - what the walk never lists', () => {
+  let h: t11ws.CcdHarness;
+  t11v.beforeEach(() => {
+    h = t11ws.makeCcdHarness('ccd-docs-');
+    h.makeRepo('demo');
+  });
+  t11v.afterEach(() => h.cleanup());
+
+  t11v.it('a dash-leading and a 101-character directory are counted in unlisted and never listed; a dot entry is neither', () => {
+    for (const n of ['-dash', 'x'.repeat(101), '.hidden']) t11fs.mkdirSync(t11path.join(h.home, 'projects', n));
+    const o = t11index(h);
+    t11v.expect(t11rows(o).map((r) => r.project)).toEqual(['demo']);   // CONTROL: the walk lists a real project
+    t11v.expect(o['unlisted']).toBe(2);
+  });
+
+  t11v.it.skipIf(process.platform === 'darwin')('a non-UTF-8 directory name is counted and never listed (APFS refuses to create one)', () => {
+    h.sh(`mkdir -- "$HOME/projects/$(printf '\\377')"`);
+    const o = t11index(h);
+    t11v.expect(t11rows(o).map((r) => r.project)).toEqual(['demo']);
+    t11v.expect(o['unlisted']).toBe(1);
+  });
+
+  t11v.it('a regular file and a symlink to a project are not directories by lstat: counted, never listed', () => {
+    const root = t11path.join(h.home, 'projects');
+    t11fs.writeFileSync(t11path.join(root, 'notes.txt'), 'not a project\n');
+    t11fs.symlinkSync(t11path.join(root, 'demo'), t11path.join(root, 'link'));
+    const o = t11index(h);
+    t11v.expect(t11rows(o).map((r) => r.project)).toEqual(['demo']);
+    t11v.expect(o['unlisted']).toBe(2);
+  });
+});
+
+t11v.describe("T11: docs-index, row 43 reader half - only the default branch's own stamp is read", () => {
+  let h: t11ws.CcdHarness;
+  let stampAt = '';
+  let good = '';
+  t11v.beforeAll(() => {
+    h = t11ws.makeCcdHarness('ccd-docs-');
+    t11fx.plantIndexHome(h, 'ready');
+    stampAt = t11fx.indexStampPath(h, 'demo', 'main');
+    good = t11fs.readFileSync(stampAt, 'utf8');
+  });
+  t11v.afterAll(() => h.cleanup());
+  const demo = (): T11Row => t11row(t11index(h), 'demo');
+
+  t11v.it('CONTROL: the stamp plantIndexHome wrote is read, with its age on the fleet clock', () => {
+    const f = demo()['fetch'] as { okAgeMs: number; lastOutcome: string };
+    t11v.expect(f.lastOutcome).toBe('ok');
+    t11v.expect(f.okAgeMs).toBeGreaterThanOrEqual(5000);
+    t11v.expect(f.okAgeMs).toBeLessThan(120000);
+  });
+
+  t11v.it("after a failed attempt the row reports the failure's word and the last SUCCESS's age, not the attempt's", () => {
+    // What docs-fetch writes when an attempt fails: the attempt's own time and word, okMs and okCommit carried over.
+    const now = Date.now();
+    const failed = { ...(JSON.parse(good) as Record<string, unknown>), attemptMs: now - 5000, lastOutcome: 'fetch-timeout', okMs: now - 65000 };
+    t11fs.writeFileSync(stampAt, JSON.stringify(failed));
+    const f = demo()['fetch'] as { okAgeMs: number; lastOutcome: string };
+    t11v.expect(f.lastOutcome).toBe('fetch-timeout');
+    t11v.expect(f.okAgeMs).toBeGreaterThanOrEqual(65000);
+    t11v.expect(f.okAgeMs).toBeLessThan(180000);
+  });
+
+  t11v.it('a FIFO at the stamp path gives a ready row with no fetch field, answered within 5 s', () => {
+    t11fs.rmSync(stampAt);
+    h.sh(`mkfifo -- ${t11shq(stampAt)}`);
+    // runCcdDocsShell carries a 120 s spawn bound, so a reader that blocked on the FIFO is a red, not a hung suite.
+    const t0 = Date.now();
+    const r = t11dh.runCcdDocsShell(h, 'exec bash "$0" docs-index --all');
+    const took = Date.now() - t0;
+    const row = t11row(t11dh.parseOneLine(r), 'demo');
+    t11v.expect(took).toBeLessThan(5000);
+    t11v.expect(row.state).toBe('ready');
+    t11v.expect(row).not.toHaveProperty('fetch');
+  });
+
+  t11v.it('a symlink at the stamp path, to a well-formed stamp, gives no fetch field', () => {
+    t11fs.rmSync(stampAt, { force: true });
+    const target = `${stampAt}.target`;
+    t11fs.writeFileSync(target, good);
+    t11fs.symlinkSync(target, stampAt);
+    t11v.expect(demo()).not.toHaveProperty('fetch');
+  });
+
+  t11v.it("a stamp naming another branch, or one kept only for another branch, is not the default branch's", () => {
+    t11fs.rmSync(stampAt, { force: true });
+    const other = { ...(JSON.parse(good) as Record<string, unknown>), branch: 'ws/a' };
+    t11fs.writeFileSync(stampAt, JSON.stringify(other));
+    t11v.expect(demo()).not.toHaveProperty('fetch');
+    t11fs.rmSync(stampAt);
+    t11fx.writeIndexStamp(h, 'demo', 'ws/a', other);
+    t11v.expect(demo()).not.toHaveProperty('fetch');
+    // CONTROL: the good stamp back in place is read again.
+    t11fs.writeFileSync(stampAt, good);
+    t11v.expect(demo()).toHaveProperty('fetch');
+  });
+});
+
+t11v.describe('T11: docs-index, the projects root itself (decided: absent or not a directory is an empty index)', () => {
+  const EMPTY = { v: 1, verb: 'docs-index', ok: true, elapsedMs: 0, unlisted: 0, duplicates: [], projects: [] };
+  let h: t11ws.CcdHarness;
+  t11v.beforeEach(() => { h = t11ws.makeCcdHarness('ccd-docs-'); });
+  t11v.afterEach(() => h.cleanup());
+
+  t11v.it('an absent root answers ok with no projects, which is what a fresh box has', () => {
+    h.makeRepo('demo');
+    t11v.expect(t11rows(t11index(h)).map((r) => r.project)).toEqual(['demo']);   // CONTROL: the root is read
+    t11fs.rmSync(t11path.join(h.home, 'projects'), { recursive: true, force: true });
+    t11v.expect(t11fx.normaliseDocsIndex(t11index(h))).toEqual(EMPTY);
+  });
+
+  t11v.it('a regular file where the root should be answers the same empty index', () => {
+    t11fs.writeFileSync(t11path.join(h.home, 'projects'), 'not a directory\n');
+    t11v.expect(t11fx.normaliseDocsIndex(t11index(h))).toEqual(EMPTY);
+  });
+
+  t11v.it.skipIf(process.getuid?.() === 0)('a root that exists but cannot be listed is helper-failed, never an empty index', () => {
+    const root = t11path.join(h.home, 'projects');
+    h.makeRepo('demo');
+    t11fs.chmodSync(root, 0o000);
+    try {
+      const o = t11index(h);
+      t11v.expect(o['ok']).toBe(false);
+      t11v.expect(o['failure']).toBe('helper-failed');
+      t11v.expect(String(o['detail'])).toMatch(/PermissionError/);
+    } finally {
+      t11fs.chmodSync(root, 0o755);
+    }
+  });
+});
