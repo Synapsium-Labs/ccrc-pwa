@@ -20,7 +20,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
-| 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | — | planned (#252); run 245 open (planned), block 3886–3895 + 3958–3965; dispatches once #215 is deployed |
+| 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | — | planned (#252 merged `b5593725`); run 245 open (planned), block 3886–3895 + 3958–3965; dispatches once #215 is deployed |
 | 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed | — | to plan after wave 3 merges |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
@@ -415,6 +415,8 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **Dispatch waits** for #215's deploy. The fleet box still holds the failed v0.0.78 row unacknowledged, so the
     fleet has not moved since 2026-10-04 22:10. The operator was notified at 10:05. The brief and its dispatch body
     are ready.
+- **2026-10-05 10:31 — #252 merged** (`b5593725`), squash, at the verified head `93771c0b2`, with every required check
+  green. The fleet is still on v0.0.78 behind the unacknowledged failed row, so run 245 waits.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
