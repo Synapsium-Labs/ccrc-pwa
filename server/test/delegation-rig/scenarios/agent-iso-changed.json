@@ -2,7 +2,7 @@
   "scenario": "agent-iso-changed", "covers": ["Q3", "Q6"],
   "steps": [
     {"waitReady": 60}, {"type": "dlg agent-iso-changed"}, {"keys": ["Enter"]},
-    {"waitLabels": ["main-done"], "timeoutS": 120}
+    {"waitLabels": ["sub-done", "main-done"], "timeoutS": 120}
   ],
   "settleS": 10,
   "entries": [

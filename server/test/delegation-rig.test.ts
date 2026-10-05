@@ -144,8 +144,8 @@ describe('mockapi.mjs (the rig\'s mock Anthropic API)', () => {
 
 const RIGSH = path.join(RIG, 'rig.sh');
 const TREE = path.resolve(__dirname, '../..');
-const rigsh = (args: string[], env: NodeJS.ProcessEnv = {}): { status: number | null; stdout: string; stderr: string } => {
-  const r = spawnSync('bash', [RIGSH, ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 120_000 });
+const rigsh = (args: string[], env: NodeJS.ProcessEnv = {}, cwd?: string): { status: number | null; stdout: string; stderr: string } => {
+  const r = spawnSync('bash', [RIGSH, ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 120_000, ...(cwd ? { cwd } : {}) });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 };
 
@@ -158,19 +158,19 @@ describe('rig.sh guards (the rig never names the real HOME or the default tmux s
       expect(rigsh(['guard-root', bad], { HOME: home }).status, bad).not.toBe(0);
     }
     expect(rigsh(['guard-root', `${home}/ccrc-dlg-rig.x`], { HOME: `${home}/` }).status, 'a HOME with a trailing slash').not.toBe(0);
-  });
+  }, 60_000);
 
   it('guard-sock accepts only ^dlg[A-Za-z0-9_-]*$', () => {
     expect(rigsh(['guard-sock', 'dlg123']).status).toBe(0);
     for (const bad of ['default', '', 'dlg/x', 'xdlg', 'dlg x']) expect(rigsh(['guard-sock', bad]).status, bad).not.toBe(0);
-  });
+  }, 60_000);
 
   it('setup refuses a root the guard refuses, and creates nothing there', () => {
     const home = mkTmp('ccrc-dlg-home-');
     const r = rigsh(['setup', path.join(home, 'ccrc-dlg-rig.inside')], { HOME: home });
     expect(r.status).toBe(2);
     expect(fs.existsSync(path.join(home, 'ccrc-dlg-rig.inside'))).toBe(false);
-  });
+  }, 60_000);
 
   it('check-scenario refuses a non-integer wait, a tmux separator among keys, and an unknown verb', () => {
     const dir = mkTmp('ccrc-dlg-sc-');
@@ -180,10 +180,11 @@ describe('rig.sh guards (the rig never names the real HOME or the default tmux s
       return f;
     };
     expect(rigsh(['check-scenario', write('ok', [{ waitReady: 60 }, { keys: ['Enter'] }, { probeLabels: ['a-1'], timeoutS: 9 }, { snapshot: 'before-kill' }])]).status).toBe(0);
-    expect(rigsh(['check-scenario', write('arith', [{ waitReady: 'SECONDS[$(touch x)]' }])], { PWD: dir }).status).toBe(2);
+    expect(rigsh(['check-scenario', write('arith', [{ waitReady: 'SECONDS[$(touch x)]' }])], {}, dir).status).toBe(2);
+    expect(fs.existsSync(path.join(dir, 'x')), 'the arithmetic payload ran').toBe(false);
     expect(rigsh(['check-scenario', write('chain', [{ keys: ['Enter', ';', 'run-shell'] }])]).status).toBe(2);
     expect(rigsh(['check-scenario', write('verb', [{ bogus: 1 }])]).status).toBe(2);
-  });
+  }, 60_000);
 
   it('run-base picks /tmp when TMPDIR sits under HOME by its spelling or its physical path, and keeps one outside', () => {
     const real = fs.realpathSync(mkTmp('ccrc-dlg-home-'));
@@ -220,7 +221,67 @@ describe('rig.sh guards (the rig never names the real HOME or the default tmux s
     expect(r.status, r.stderr).toBe(0);
     expect(fs.existsSync(dead)).toBe(false);
     expect(fs.existsSync(live)).toBe(true);
-  });
+  }, 60_000);
+});
+
+describe('rig.sh reap, sockets and scenario text', () => {
+  it('reap removes only the private socket of a dead owner (never `default`, never a live owner\'s)', () => {
+    const tmuxTmp = fs.mkdtempSync('/tmp/dlgt-');   // short: a unix socket path is capped near 108 bytes
+    try {
+      const dir = path.join(tmuxTmp, `tmux-${os.userInfo().uid}`);
+      fs.mkdirSync(dir);
+      const deadPid = spawnSync('true').pid;
+      const stale = (name: string): void => {   // a socket file whose listener is gone: bind, then die without unlinking
+        const code = `require('node:net').createServer().listen(${JSON.stringify(path.join(dir, name))}, () => process.kill(process.pid, 'SIGKILL'))`;
+        spawnSync(process.execPath, ['-e', code], { timeout: 10_000 });
+      };
+      for (const n of [`dlg${deadPid}`, `dlg${process.pid}`, 'default']) stale(n);
+      for (const n of [`dlg${deadPid}`, `dlg${process.pid}`, 'default']) expect(fs.statSync(path.join(dir, n)).isSocket(), n).toBe(true);
+      const r = rigsh(['reap'], { TMUX_TMPDIR: tmuxTmp, TMPDIR: mkTmp('ccrc-dlg-tmp-'), HOME: mkTmp('ccrc-dlg-home-') });
+      expect(r.status, r.stderr).toBe(0);
+      expect(fs.readdirSync(dir).sort()).toEqual(['default', `dlg${process.pid}`].sort());
+    } finally { fs.rmSync(tmuxTmp, { recursive: true, force: true }); }
+  }, 60_000);
+
+  it('reap never follows a symlinked ccrc-dlg-rig.* entry', () => {
+    const tmp = mkTmp('ccrc-dlg-tmp-');
+    const target = mkTmp('ccrc-dlg-rig.');   // a name the guard would accept, so only the symlink skip protects it
+    fs.writeFileSync(path.join(target, '.owner'), `${spawnSync('true').pid}\n`);
+    fs.writeFileSync(path.join(target, 'keep'), 'x');
+    fs.symlinkSync(target, path.join(tmp, 'ccrc-dlg-rig.link'));
+    const r = rigsh(['reap'], { TMPDIR: tmp, TMUX_TMPDIR: mkTmp('ccrc-dlg-tmux-'), HOME: mkTmp('ccrc-dlg-home-') });
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.existsSync(path.join(target, 'keep'))).toBe(true);
+  }, 60_000);
+
+  it('setup refuses a root that resolves, through a symlink, to somewhere the guard refuses', () => {
+    const home = fs.realpathSync(mkTmp('ccrc-dlg-home-'));
+    const out = fs.realpathSync(mkTmp('ccrc-dlg-out-'));
+    fs.mkdirSync(path.join(home, 'inner'));
+    const link = path.join(out, 'ccrc-dlg-rig.viaparent');            // an existing entry that points into HOME
+    fs.symlinkSync(path.join(home, 'inner'), link);
+    const r1 = rigsh(['setup', link], { HOME: home });
+    expect(r1.status).toBe(2);
+    expect(fs.readdirSync(path.join(home, 'inner'))).toEqual([]);
+    const parentLink = path.join(out, 'parent-link');                  // a not-yet-existing root under a parent that is such a link
+    fs.symlinkSync(path.join(home, 'inner'), parentLink);
+    const r2 = rigsh(['setup', path.join(parentLink, 'ccrc-dlg-rig.new')], { HOME: home });
+    expect(r2.status).toBe(2);
+    expect(fs.readdirSync(path.join(home, 'inner'))).toEqual([]);
+  }, 60_000);
+
+  it('check-scenario refuses a type or answerDialog value that is not a single-line string', () => {
+    const dir = mkTmp('ccrc-dlg-sc-');
+    const write = (name: string, steps: object[]): string => {
+      const f = path.join(dir, `${name}.json`);
+      fs.writeFileSync(f, JSON.stringify({ steps, entries: [] }));
+      return f;
+    };
+    expect(rigsh(['check-scenario', write('ok', [{ type: 'dlg one' }, { answerDialog: 'Run a dynamic workflow' }])]).status).toBe(0);
+    for (const [n, st] of [['t-nl', { type: 'a\nb' }], ['t-cr', { type: 'a\rb' }], ['t-num', { type: 7 }], ['d-nl', { answerDialog: 'x\ny' }], ['d-obj', { answerDialog: ['x'] }]] as Array<[string, object]>) {
+      expect(rigsh(['check-scenario', write(n, [st])]).status, n).toBe(2);
+    }
+  }, 60_000);
 });
 
 describe('rig.sh setup (fixture HOME and repo)', () => {
@@ -237,6 +298,8 @@ describe('rig.sh setup (fixture HOME and repo)', () => {
     expect(s.hooks.WorktreeRemove).toBeUndefined();
     expect(s).toMatchObject({ enableWorkflows: true, worktree: { baseRef: 'head' } });
     expect(s.permissions.allow).toEqual(expect.arrayContaining(['Bash', 'Agent', 'Workflow']));
+    expect(s.permissions.defaultMode).toBe('default');
+    expect(JSON.stringify(s)).not.toMatch(/bypassPermissions/);
     expect(fs.readFileSync(path.join(root, 'fixhome/.cc-sessions/session-hook.sh')))
       .toEqual(fs.readFileSync(path.join(TREE, 'ccd/session-hook.sh')));
     expect(fs.readFileSync(path.join(root, 'fixhome/.cc-sessions/rig-hookcap.generation'), 'utf8'))
@@ -247,14 +310,14 @@ describe('rig.sh setup (fixture HOME and repo)', () => {
     const cj = JSON.parse(fs.readFileSync(path.join(root, 'fixhome/cfg/.claude.json'), 'utf8'));
     expect(cj.projects[path.join(root, 'repo')]).toMatchObject({ hasTrustDialogAccepted: true });
     expect(cj.lastReleaseNotesSeen).toBe('2.1.999');
-  });
+  }, 60_000);
 
   it('setup writes only under its root: the HOME it ran with is left empty', () => {
     const home = mkTmp('ccrc-dlg-home-');
     const root = mkTmp('ccrc-dlg-rig.');
     expect(rigsh(['setup', root], { HOME: home }).status).toBe(0);
     expect(fs.readdirSync(home)).toEqual([]);
-  });
+  }, 60_000);
 
   it('every scenario passes check-scenario, names itself, and its waits and probes name its labels', () => {
     const dir = path.join(RIG, 'scenarios');

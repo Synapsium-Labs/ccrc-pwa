@@ -2,7 +2,7 @@
   "scenario": "agent-plain", "covers": ["Q2", "Q4"],
   "steps": [
     {"waitReady": 60}, {"type": "dlg agent-plain"}, {"keys": ["Enter"]},
-    {"waitLabels": ["main-done"], "timeoutS": 120}
+    {"waitLabels": ["sub-done", "main-done"], "timeoutS": 120}
   ],
   "settleS": 8,
   "entries": [

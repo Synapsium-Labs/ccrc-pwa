@@ -95,6 +95,9 @@ check_scenario() {
     if [[ $verb == waitLabels || $verb == probeLabels ]]; then
       jq -e --arg v "$verb" '(.[$v] | type) == "array" and all(.[$v][]; type == "string" and test("^[a-z0-9-]{1,40}$"))' <<<"$step" >/dev/null || return 1
     fi
+    for n in type answerDialog; do   # typed into the pane / matched on it: a single-line string
+      jq -e --arg n "$n" 'if has($n) then (.[$n] | type == "string" and (test("[\n\r]") | not)) else true end' <<<"$step" >/dev/null || return 1
+    done
     if [[ $verb == snapshot ]]; then jq -e '.snapshot | type == "string" and test("^[a-z0-9-]{1,40}$")' <<<"$step" >/dev/null || return 1; fi
   done < <(jq -c '.steps[]' "$f")
   k=$(jq -r '.settleS // 8 | tostring' "$f"); [[ $k =~ ^[0-9]{1,5}$ ]] || return 1
@@ -103,8 +106,13 @@ check_scenario() {
 
 g() { local R=$1; shift; HOME=$R/fixhome GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c core.hooksPath=/dev/null -C "$R/repo" "$@"; }
 cmd_setup() {
-  local R=${1-} V=${2:-0.0.0} H
+  local R=${1-} V=${2:-0.0.0} H phys
   guard_root "$R" || die "refusing root '$R': it must be absolute, canonical, named ccrc-dlg-rig.*, and outside \$HOME"
+  # The spelling passed; the PHYSICAL path (the root, else its parent, resolved through any symlink) must too.
+  if [[ -e $R ]]; then phys=$(cd -P -- "$R" 2>/dev/null && pwd) || die "cannot resolve root '$R'"
+  elif [[ -d ${R%/*} ]]; then phys=$(cd -P -- "${R%/*}" 2>/dev/null && pwd)/${R##*/} || die "cannot resolve root '$R'"
+  else phys=$R; fi
+  guard_root "$phys" || die "refusing root '$R': it resolves to '$phys', which the guard refuses"
   H=$R/fixhome
   mkdir -p "$H/cfg" "$H/.cc-sessions" "$H/.ccrc" "$R/repo" "$R/tmp"
   if [[ ! -d $R/repo/.git ]]; then
@@ -300,6 +308,7 @@ cmd_reap() {
     kill -0 "$pid" 2>/dev/null || { T "$s" kill-server 2>/dev/null || true; rm -f -- "$base/$s"; printf 'rig: reaped private server %s\n' "$s" >&2; }
   done
   for d in "$(run_base)"/ccrc-dlg-rig.*; do
+    [[ -L $d || ! -O $d ]] && continue   # a symlink, or an entry some other user made, is never ours to follow
     [[ -d $d && -f $d/.owner ]] || continue
     pid=$(cat "$d/.owner")
     [[ $pid =~ ^[0-9]+$ ]] || continue
