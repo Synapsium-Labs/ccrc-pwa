@@ -6029,11 +6029,26 @@ _check_codex() {
         return 1 ;;
     esac
   fi
-  for d in "$root"/*/; do
-    [ -d "$d" ] || continue
-    n="${d%/}"; n="${n##*/}"
-    _dr_cx_member "$n" ${lanes[@]+"${lanes[@]}"} || left+=("$n")
-  done
+  # Plan 3b Task A5: a lane-state root that EXISTS (or is a link) and cannot
+  # be listed — a directory this user cannot read and search, or anything
+  # that is not a directory — is UNMEASURED. The glob below matches nothing
+  # either way (measured: a mode-000 directory, a regular file, a dangling
+  # link), so without this test such a root folded into the empty-population
+  # SKIP, indistinguishable from a box with no lane state (`_check_pools`'
+  # `pools-unlistable` class). A WARN by ruling A-5: nothing ccrc runs reads
+  # lane state for an id that is not a codex row, and a codex row's own rows
+  # below still measure its own files. An ABSENT root is an answer, not a
+  # finding: the existence conjunct is what keeps it the SKIP.
+  local root_unlistable=0
+  if { [ -e "$root" ] || [ -L "$root" ]; } && { [ ! -d "$root" ] || [ ! -r "$root" ] || [ ! -x "$root" ]; }; then
+    root_unlistable=1
+  else
+    for d in "$root"/*/; do
+      [ -d "$d" ] || continue
+      n="${d%/}"; n="${n##*/}"
+      _dr_cx_member "$n" ${lanes[@]+"${lanes[@]}"} || left+=("$n")
+    done
+  fi
   # Plan 3b Task A2: ccrc's own usage timers left enabled for an id that is not
   # a codex lane now, measured BEFORE the empty-population SKIP. Such a timer is
   # a subject on its own, and so is a set that cannot be listed
@@ -6041,7 +6056,7 @@ _check_codex() {
   local -a DR_CODEX_USAGE_SURPLUS=()
   local surplus_rc=0
   _dr_codex_usage_surplus ${lanes[@]+"${lanes[@]}"} || surplus_rc=$?
-  if [ "${#lanes[@]}" -eq 0 ] && [ "${#left[@]}" -eq 0 ] && [ "${#DR_CODEX_USAGE_SURPLUS[@]}" -eq 0 ] && [ "$surplus_rc" -ne 1 ]; then
+  if [ "${#lanes[@]}" -eq 0 ] && [ "${#left[@]}" -eq 0 ] && [ "${#DR_CODEX_USAGE_SURPLUS[@]}" -eq 0 ] && [ "$surplus_rc" -ne 1 ] && [ "$root_unlistable" -eq 0 ]; then
     if [ -e "$roster" ] || [ -L "$roster" ]; then
       _dr_skip codex "no account in \$HOME/.ccrc/accounts.json is exec.kind \"codex\", and no lane state is left under $root, so there is no Codex lane to measure"
     else
@@ -6115,6 +6130,10 @@ _check_codex() {
     _dr_cx_warn "lane state is left under $root/$n, and '$n' is not a Codex lane in \$HOME/.ccrc/accounts.json — a flip back to another launcher keeps it on purpose, and $left_reads" \
       "if the flip back is final and ccrc runs nothing for '$n' any more (its tiers were stopped with 'ccrc codex stop $n' before the flip), remove $root/$n by hand; ccrc never deletes a lane's state on a flip"
   done
+  if [ "$root_unlistable" -eq 1 ]; then
+    _dr_cx_warn "$root exists and cannot be listed (it is not a directory this user can read and search), so whether any Codex lane state is left under it was not measured — unmeasured, never read as no lane state" \
+      "make it a directory this user can list again (ccrc creates it with mode 0700: chmod 700 $root), or move aside by hand whatever sits there, then re-run doctor; ccrc never changes or removes it for you"
+  fi
   _dr_codex_usage_surplus_rows "$surplus_rc"
   _dr_cx_report "${#lanes[@]} Codex lane(s): $(_dr_cx_join ', ' ${DRX_OK[@]+"${DRX_OK[@]}"}); runtime ${DRX_RUNTIME:-unmeasured}; the four GPT-lane executables match the shipped tree${DR_CODEX_USAGE_BOX_NOTE:+; $DR_CODEX_USAGE_BOX_NOTE}"
 }
@@ -6372,16 +6391,19 @@ _dr_cx_report() {   # <PASS detail>
 # itself, so a fifth executable or a rename reds there before this list can drift.
 CODEX_LANE_BINS=(ccgpt-proxy.py ccgpt-usage.py ccgpt-runtime ccrc-codex)
 _dr_cx_bins() {
-  local tree="$BOX_TREE_DIR/ccd" bin="$HOME/.local/bin" name
-  local -a notree=() missing=() drift=()
-  if ! command -v cmp >/dev/null 2>&1; then
-    _dr_cx_warn "cmp is not on PATH, so the GPT-lane executables in \$HOME/.local/bin could not be compared with the shipped tree — unmeasured, not current" \
-      "install diffutils (it ships cmp), then re-run doctor"
-    return 0
-  fi
+  local tree="$BOX_TREE_DIR/ccd" bin="$HOME/.local/bin" name have_cmp=1
+  local -a notree=() missing=() drift=() uncompared=()
+  # Plan 3b Task A5: no `cmp` costs the BYTE compare only. A file missing
+  # from the shipped tree or from ~/.local/bin, or not executable, is a fact
+  # `cmp` plays no part in, and is FAILed by name whatever PATH holds; the
+  # early return this replaced swallowed it, and with it the only FAIL that
+  # lets `_fix_codex` (FAIL-only, R-C8) place the file. A file left
+  # uncompared is named in its own WARN, never claimed current.
+  command -v cmp >/dev/null 2>&1 || have_cmp=0
   for name in "${CODEX_LANE_BINS[@]}"; do
     if [ ! -f "$tree/$name" ]; then notree+=("$name"); continue; fi
     if [ ! -f "$bin/$name" ] || [ ! -x "$bin/$name" ]; then missing+=("$name"); continue; fi
+    if [ "$have_cmp" -eq 0 ]; then uncompared+=("$name"); continue; fi
     cmp -s "$tree/$name" "$bin/$name" || drift+=("$name")
   done
   [ "${#notree[@]}" -eq 0 ] || _dr_cx_fail "the shipped tree ($tree) has no $(_dr_cx_join ', ' "${notree[@]}"), so nothing on this box says what the GPT-lane executables should be" \
@@ -6390,6 +6412,8 @@ _dr_cx_bins() {
     "run 'ccrc update' (or 'ccrc install' from a checkout): it places them from the shipped tree on every role but server"
   [ "${#drift[@]}" -eq 0 ] || _dr_cx_fail "$(_dr_cx_join ', ' "${drift[@]}") in \$HOME/.local/bin differ from the shipped tree's copies in $tree, so a lane would run bytes this build did not ship" \
     "run 'ccrc update' (or 'ccrc install' from a checkout): it re-places them from the shipped tree"
+  [ "${#uncompared[@]}" -eq 0 ] || _dr_cx_warn "cmp is not on PATH, so $(_dr_cx_join ', ' "${uncompared[@]}") in \$HOME/.local/bin could not be compared with the shipped tree — unmeasured, not current" \
+    "install diffutils (it ships cmp), then re-run doctor"
   return 0
 }
 
@@ -6647,6 +6671,15 @@ _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
 # and NOT ASKED (the manager printed no word), which is never folded into
 # not-live. `[ -f ]` first, so a FIFO planted at a `.wrapper` path is never
 # opened (D-2380's class).
+# AN UNREADABLE `.wrapper` IS NOT ANOTHER LANE'S (Plan 3b Task A5): it is a
+# session that may be on this lane, counted into DRX_UNASKED (the "could not
+# tell" word), never into DRX_LIVE and never skipped. Whether it was READ is
+# the redirection's answer, not `read`'s: ccd writes the field with
+# `printf '%s'` (`_reg_set`), no trailing newline, so `read` returns 1 on
+# every real wrapper while still setting `w`. Spelled POSITIVE on purpose:
+# under bash 5.2 `if ! { …; } 2>/dev/null < f` takes the readable branch when
+# the open fails (measured), and `2>/dev/null` sits before the `<` so bash's
+# own "Permission denied" never reaches doctor's output.
 _dr_cx_sessions() {   # <id> — sets DRX_LIVE, DRX_UNASKED, DRX_UNASKED_SID
   local id="$1" reg="$HOME/.cc-sessions" wf w sid
   DRX_LIVE=0; DRX_UNASKED=0; DRX_UNASKED_SID=''
@@ -6654,9 +6687,14 @@ _dr_cx_sessions() {   # <id> — sets DRX_LIVE, DRX_UNASKED, DRX_UNASKED_SID
   if [ ! -r "$reg" ] || [ ! -x "$reg" ]; then DRX_UNASKED=1; return 0; fi
   for wf in "$reg"/*.wrapper; do
     [ -f "$wf" ] || continue
-    w=''; { IFS= read -r w < "$wf"; } 2>/dev/null
-    [ "$w" = "$id" ] || continue
     sid="${wf##*/}"; sid="${sid%.wrapper}"
+    w=''
+    if { IFS= read -r w || :; } 2>/dev/null < "$wf"; then
+      [ "$w" = "$id" ] || continue
+    else
+      DRX_UNASKED=$((DRX_UNASKED + 1)); [ -n "$DRX_UNASKED_SID" ] || DRX_UNASKED_SID="$sid"
+      continue
+    fi
     case "$(_svc_is_active "claude-session@$sid.service")" in
       active|activating|reloading|refreshing|deactivating) DRX_LIVE=$((DRX_LIVE + 1)) ;;
       '') DRX_UNASKED=$((DRX_UNASKED + 1)); [ -n "$DRX_UNASKED_SID" ] || DRX_UNASKED_SID="$sid" ;;

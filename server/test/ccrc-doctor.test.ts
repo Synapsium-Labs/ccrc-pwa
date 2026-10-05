@@ -10252,6 +10252,42 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     expect(runDoctor(home).stdout).toMatch(/^FAIL codex: the shipped tree \(.*\/ccrc\/ccd\) has no ccgpt-runtime, /m);
   });
 
+  // ── Plan 3b Task A5 (a): no cmp costs the byte compare, and nothing else ──
+  // A file missing from ~/.local/bin, not executable, or absent from the
+  // shipped tree is a fact cmp plays no part in. `_dr_cx_bins` used to return
+  // on the cmp-absent WARN before its loop ever ran, so those FAILs were
+  // swallowed and `_fix_codex`, which runs only on a FAIL, was unreachable.
+  it('with no cmp on PATH, a GPT-lane executable missing from ~/.local/bin still FAILs by name, and only the compare is unmeasured (Plan 3b A-5)', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-nocmp-missing-');
+    unstub(home, 'cmp');
+    rmSync(join(binDir(home), 'ccrc-codex'));
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^FAIL codex: ccrc-codex missing from \$HOME\/\.local\/bin, or not executable — every Codex lane needs all four$/m);
+    const re = /^WARN codex: cmp is not on PATH, so ccgpt-proxy\.py, ccgpt-usage\.py, ccgpt-runtime in \$HOME\/\.local\/bin could not be compared with the shipped tree — unmeasured, not current$/m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: install diffutils (it ships cmp), then re-run doctor');
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('with no cmp on PATH, a shipped tree that lacks one still FAILs by name (Plan 3b A-5)', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-nocmp-notree-');
+    unstub(home, 'cmp');
+    rmSync(join(home, 'ccrc', 'ccd', 'ccgpt-runtime'));
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^FAIL codex: the shipped tree \(.*\/ccrc\/ccd\) has no ccgpt-runtime, /m);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('with no cmp on PATH and all four placed, the one codex verdict is the WARN naming all four — never a PASS claiming they match (Plan 3b A-5)', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-nocmp-all-');
+    unstub(home, 'cmp');
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([
+      'WARN codex: cmp is not on PATH, so ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex in $HOME/.local/bin could not be compared with the shipped tree — unmeasured, not current',
+    ]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
   const restamp = (home: string, patch: Record<string, string>): void => {
     const rt = plantFakeRuntime(home);
     writeFileSync(rt.stamp, `${JSON.stringify({ ...JSON.parse(readFileSync(rt.stamp, 'utf8')), ...patch })}\n`);
@@ -10510,6 +10546,40 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     noRunnerBugLine(r.stdout, 'codex');
   });
 
+  // ── Plan 3b Task A5 (b): a lane-state root that cannot be listed ─────────
+  // `for d in "$root"/*/` matches nothing on a mode-000 directory, a regular
+  // file or a dangling link (measured), so each of them used to fold into the
+  // empty-population SKIP. `_check_pools`' `pools-unlistable` class, worded as
+  // a WARN by ruling A-5. An ABSENT root still SKIPs: the two SKIP cases above
+  // are this pair's control.
+  it.skipIf(process.getuid?.() === 0)(
+    'an unlistable ~/.ccrc/codex is unmeasured — a WARN, never the empty-population SKIP (Plan 3b A-5)', () => {
+      // Skipped as root: root lists any directory, so the fixture cannot be built.
+      const home = healthy('ccrc-doctor-codex-root-unlistable-');
+      const root = join(home, '.ccrc', 'codex');
+      mkdirSync(join(root, 'ext-a'), { recursive: true });
+      writeFileSync(join(root, 'ext-a', 'lane.json'), '{}\n');
+      chmodSync(root, 0o000);
+      try {
+        const r = runDoctor(home);
+        const re = /^WARN codex: \S+\/\.ccrc\/codex exists and cannot be listed \(it is not a directory this user can read and search\), so whether any Codex lane state is left under it was not measured — unmeasured, never read as no lane state$/m;
+        expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(re)]);
+        expect(remedyAfter(r.stdout, re)).toMatch(/^ {2}remedy: make it a directory this user can list again \(ccrc creates it with mode 0700: chmod 700 \S+\/\.ccrc\/codex\), /);
+        noRunnerBugLine(r.stdout, 'codex');
+      } finally {
+        chmodSync(root, 0o700);   // mkTmp's cleanup cannot empty a mode-000 directory
+      }
+    });
+
+  it('a regular file where ~/.ccrc/codex belongs is unmeasured too — a WARN, never the SKIP, at any uid (Plan 3b A-5)', () => {
+    const home = healthy('ccrc-doctor-codex-root-file-');
+    writeFileSync(join(home, '.ccrc', 'codex'), 'not a directory\n');
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(
+      /^WARN codex: \S+\/\.ccrc\/codex exists and cannot be listed \(it is not a directory this user can read and search\), /)]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
   // ── the worst class ─────────────────────────────────────────────────────
   it('one lane FAILing and another WARNing: FAIL lines, then WARN lines, each with its own remedy, and the check returns the worst', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-worst-', ['codex-a', 'codex-b']);
@@ -10704,6 +10774,43 @@ describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stal
     const re = /^WARN codex: codex-a's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked \(1 unanswered\) — unmeasured, not idle$/m;
     expect(r.stdout, r.stdout).toMatch(re);
     expect(remedyAfter(r.stdout, re)).toBe('  remedy: ask by hand (systemctl --user status claude-session@proj-b.service); if one is live, start the lane: ccrc codex start codex-a');
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // ── Plan 3b Task A5 (c): an unreadable .wrapper is not "another lane's" ──
+  // ccd writes every registry field with `printf '%s'` (`_reg_set`): no
+  // trailing newline, so `read`'s own status is 1 on EVERY real wrapper.
+  // Only a failed REDIRECTION says "could not be read". The second case is
+  // the control that pins ccd's own shape, so a fix keyed on read's status reds.
+  it.skipIf(IS_DARWIN || process.getuid?.() === 0)(
+    'a lane session whose .wrapper cannot be read is unanswered — never another lane\'s, never idle (Plan 3b A-5)', async () => {
+      // Skipped as root, who reads a 0000-mode file; and on macOS, for the
+      // remedy's systemctl spelling, as the "no word" case above is.
+      const home = await healthyCodexBox('ccrc-doctor-codex-wrapper-unreadable-');
+      const reg = join(home, '.cc-sessions');
+      mkdirSync(reg, { recursive: true });
+      writeFileSync(join(reg, 'proj-b.wrapper'), 'codex-a');
+      chmodSync(join(reg, 'proj-b.wrapper'), 0o000);
+      // Live, to show a live unit does not make an unreadable wrapper "this lane's".
+      writeFileSync(join(home, 'fixture-unit-claude-session@proj-b.service'), 'active\n');
+      const r = runDoctor(home);
+      expect(r.stdout, r.stdout).not.toMatch(/live session\(s\) run on this lane/);
+      const re = /^WARN codex: codex-a's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked \(1 unanswered\) — unmeasured, not idle$/m;
+      expect(r.stdout, r.stdout).toMatch(re);
+      expect(remedyAfter(r.stdout, re)).toBe('  remedy: ask by hand (systemctl --user status claude-session@proj-b.service); if one is live, start the lane: ccrc codex start codex-a');
+      expect(r.stdout).not.toMatch(/Permission denied/);
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+  it("a .wrapper in ccd's own shape — no trailing newline — still reads as this lane's: one live session (Plan 3b A-5)", async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-wrapper-nonl-');
+    const reg = join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    writeFileSync(join(reg, 'proj-b.wrapper'), 'codex-a');
+    writeFileSync(join(home, 'fixture-unit-claude-session@proj-b.service'), 'active\n');
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^WARN codex: codex-a's LiteLLM tier is not running while 1 live session\(s\) run on this lane, /m);
+    expect(r.stdout).not.toMatch(/could not be asked/);
     noRunnerBugLine(r.stdout, 'codex');
   });
 
