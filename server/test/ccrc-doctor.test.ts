@@ -10275,6 +10275,9 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     rmSync(join(home, 'ccrc', 'ccd', 'ccgpt-runtime'));
     const r = runDoctor(home);
     expect(r.stdout, r.stdout).toMatch(/^FAIL codex: the shipped tree \(.*\/ccrc\/ccd\) has no ccgpt-runtime, /m);
+    // The tree-absent file is FAILed, not counted as uncompared: the WARN names
+    // the other three only.
+    expect(r.stdout, r.stdout).toMatch(/^WARN codex: cmp is not on PATH, so ccgpt-proxy\.py, ccgpt-usage\.py, ccrc-codex in \$HOME\/\.local\/bin could not be compared with the shipped tree — unmeasured, not current$/m);
     noRunnerBugLine(r.stdout, 'codex');
   });
 
@@ -10580,6 +10583,53 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     noRunnerBugLine(r.stdout, 'codex');
   });
 
+  // One case per conjunct of `_check_codex`'s unlistable-root predicate
+  // (`-e || -L`, `! -d`, `! -r`, `! -x`): each fixture fails exactly ONE of
+  // them, so deleting that conjunct alone turns the WARN into the SKIP. The
+  // two cases above cannot bind them: a mode-000 directory fails `-r` AND `-x`,
+  // and a 0644 file fails `-d` AND `-x`.
+  const UNLISTABLE_ROOT_WARN = /^WARN codex: \S+\/\.ccrc\/codex exists and cannot be listed \(it is not a directory this user can read and search\), /;
+  it('a dangling symlink where ~/.ccrc/codex belongs is unmeasured — a WARN, never read as an absent root (Plan 3b A-5)', () => {
+    // `-e` follows the link and says no; only `-L` says it is there.
+    const home = healthy('ccrc-doctor-codex-root-dangling-');
+    symlinkSync(join(home, 'nowhere'), join(home, '.ccrc', 'codex'));
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(UNLISTABLE_ROOT_WARN)]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('a regular file with every mode bit a directory needs is still unmeasured — it fails `-d` alone (Plan 3b A-5)', () => {
+    const home = healthy('ccrc-doctor-codex-root-file755-');
+    const root = join(home, '.ccrc', 'codex');
+    writeFileSync(root, 'not a directory\n');
+    chmodSync(root, 0o755);
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(UNLISTABLE_ROOT_WARN)]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // Skipped as root, who reads and searches any directory: the fixture cannot be built.
+  const unlistableDirOfMode = (prefix: string, mode: number): void => {
+    const home = healthy(prefix);
+    const root = join(home, '.ccrc', 'codex');
+    mkdirSync(join(root, 'ext-a'), { recursive: true });
+    writeFileSync(join(root, 'ext-a', 'lane.json'), '{}\n');
+    chmodSync(root, mode);
+    try {
+      const r = runDoctor(home);
+      expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(UNLISTABLE_ROOT_WARN)]);
+      noRunnerBugLine(r.stdout, 'codex');
+    } finally {
+      chmodSync(root, 0o700);   // mkTmp's cleanup cannot empty a directory it cannot search
+    }
+  };
+  it.skipIf(process.getuid?.() === 0)(
+    'a ~/.ccrc/codex directory this user can search but not read (mode 0300) is unmeasured — it fails `-r` alone (Plan 3b A-5)',
+    () => unlistableDirOfMode('ccrc-doctor-codex-root-mode0300-', 0o300));
+  it.skipIf(process.getuid?.() === 0)(
+    'a ~/.ccrc/codex directory this user can read but not search (mode 0600) is unmeasured — it fails `-x` alone (Plan 3b A-5)',
+    () => unlistableDirOfMode('ccrc-doctor-codex-root-mode0600-', 0o600));
+
   // ── the worst class ─────────────────────────────────────────────────────
   it('one lane FAILing and another WARNing: FAIL lines, then WARN lines, each with its own remedy, and the check returns the worst', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-worst-', ['codex-a', 'codex-b']);
@@ -10798,7 +10848,10 @@ describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stal
       const re = /^WARN codex: codex-a's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked \(1 unanswered\) — unmeasured, not idle$/m;
       expect(r.stdout, r.stdout).toMatch(re);
       expect(remedyAfter(r.stdout, re)).toBe('  remedy: ask by hand (systemctl --user status claude-session@proj-b.service); if one is live, start the lane: ccrc codex start codex-a');
-      expect(r.stdout).not.toMatch(/Permission denied/);
+      // STDERR, not stdout: `cmd_doctor` captures only a check's stdout, so bash's
+      // own open-failure line (printed when `2>/dev/null` comes AFTER the `<`,
+      // measured) reaches the real stderr, which `runDoctor` returns apart.
+      expect(r.stderr).not.toMatch(/Permission denied/);
       noRunnerBugLine(r.stdout, 'codex');
     });
 
