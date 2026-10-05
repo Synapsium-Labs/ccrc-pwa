@@ -667,3 +667,111 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(spawnSync(process.execPath, [SANITIZE], { encoding: 'utf8' }).status).toBe(2);
   });
 });
+
+const BUILD = path.join(RIG, 'build-matrix.mjs');
+const FIX = path.resolve(__dirname, 'fixtures/delegation');
+const SCEN = path.join(RIG, 'scenarios');
+const build = (args: string[]): { status: number | null; stdout: string; stderr: string } => {
+  const r = spawnSync(process.execPath, [BUILD, ...args], { encoding: 'utf8' });
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+};
+const fixture = (over: Record<string, unknown>): Record<string, unknown> => ({
+  v: 1, version: '2.1.1', scenario: 's', labels: [], notes: [], events: [],
+  disk: { admin: {}, worktreesLeft: [], branches: [], worktreeList: '', metas: {}, snapshots: {} }, ...over,
+});
+const ev = (seq: number, event: string, payload: Record<string, unknown>) => ({ seq, dtMs: seq, event, envSid: 'u', payload });
+
+describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
+  function corpus(): { fix: string; scen: string } {
+    const fix = mkTmp('ccrc-dlg-mx-');
+    const scen = mkTmp('ccrc-dlg-sc-');
+    for (const s of ['measured', 'failed', 'missing', 'probe']) fs.writeFileSync(path.join(scen, `${s}.json`), '{}');
+    for (const v of ['2.1.9', '2.1.10']) {
+      fs.mkdirSync(path.join(fix, v), { recursive: true });
+      fs.writeFileSync(path.join(fix, v, 'measured.json'), JSON.stringify(fixture({
+        version: v, scenario: 'measured', labels: ['b', 'a'],
+        events: [
+          ev(1, 'SessionStart', { session_id: 'S', source: 'startup' }),
+          ev(2, 'PreToolUse', { session_id: 'S', tool_name: 'Agent', tool_input: { isolation: 'worktree' } }),
+          ev(3, 'SubagentStart', { session_id: 'S', agent_id: 'x1', agent_type: 'general-purpose' }),
+          ev(4, 'PreToolUse', { session_id: 'S', agent_id: 'x1', tool_name: 'Bash', tool_input: { command: 'echo DLG-ACK-1' }, cwd: '/rig/repo/.claude/worktrees/agent-x1' }),
+          ev(5, 'SessionStart', { session_id: 'T', source: 'clear' }),
+          // a subagent-side Bash event WITHOUT agent_id: found by its DLG-ACK- marker all the same
+          ev(6, 'PostToolUse', { session_id: 'S', tool_name: 'Bash', tool_input: { command: 'echo DLG-ACK-1' }, cwd: '/rig/repo/.claude/worktrees/agent-x1' }),
+        ],
+        disk: {
+          admin: {
+            'agent-x1': { files: [], gitdir: '/rig/repo/.claude/worktrees/agent-x1/.git', head: 'h', claudeBase: 'a'.repeat(40), locked: false, firstLogSha: 'a'.repeat(40) },
+            'raw-wt': { files: [], gitdir: '/rig/raw-wt/.git', head: 'h', claudeBase: null, locked: false, firstLogSha: 'c'.repeat(40) },
+          },
+          worktreesLeft: ['agent-x1'], branches: [], worktreeList: '',
+          metas: { m: { spawnedWithWorktree: true, worktreePath: '/rig/repo/.claude/worktrees/agent-x1' } },
+          snapshots: { 'before-kill': { adminRecords: ['agent-x1', 'raw-wt'], worktrees: ['agent-x1'] } },
+        },
+      })));
+      fs.writeFileSync(path.join(fix, v, 'failed.json'), JSON.stringify(fixture({
+        version: v, scenario: 'failed', notes: ['waitLabels ["x"]: timeout'], events: [ev(1, 'SessionStart', { session_id: 'S' })],
+      })));
+      fs.writeFileSync(path.join(fix, v, 'probe.json'), JSON.stringify(fixture({
+        version: v, scenario: 'probe', notes: ['probe ["r1-resumed"]: not reached'], events: [ev(1, 'SessionStart', { session_id: 'S' })],
+      })));
+    }
+    return { fix, scen };
+  }
+
+  it('a failed run is unmeasured with no question field; a measured zero is a zero; a missed probe is an outcome', () => {
+    const { fix, scen } = corpus();
+    const r = build([fix, scen]);
+    expect(r.status, r.stderr).toBe(0);
+    const m = JSON.parse(r.stdout);
+    expect(m.cells['2.1.9/failed']).toEqual({ status: 'unmeasured', reason: 'waitLabels ["x"]: timeout', eventsSeen: { SessionStart: 1 } });
+    expect(m.cells['2.1.9/missing']).toEqual({ status: 'unmeasured', reason: 'no fixture' });
+    expect(m.cells['2.1.9/probe']).toMatchObject({ status: 'measured', probesMissed: ['r1-resumed'], subagentStarts: 0 });
+  });
+
+  it('derives the per-question fields from payloads and disk', () => {
+    const { fix, scen } = corpus();
+    const c = JSON.parse(build([fix, scen]).stdout).cells['2.1.10/measured'];
+    expect(c).toMatchObject({
+      labels: ['a', 'b'], agentTool: 'Agent', agentIsolationInInput: true, subagentStarts: 1, subagentTypes: ['general-purpose'],
+      agentIdNamesWorktree: true, metaHasWorktreePath: 'all', recordsWithMeta: 'all', claudeBase: 'all', claudeBaseIsFirstLog: 'all',
+      delegatedRecordsLeft: 1, otherRecordsLeft: 1, otherClaudeBase: 'none', worktreesLeft: 1,
+      sessionEnd: { count: 0, reasons: [] }, sessionIds: 2, sessionStarts: [['startup', 's1'], ['clear', 's2']],
+      subagentBash: { count: 2, withAgentId: 1, firstSessionId: 'all', cwdInWorktree: 'all' },
+      snapshots: { 'before-kill': ['agent-x1'] },
+    });
+  });
+
+  it('sorts versions numerically and lists every scenario of the scenarios directory', () => {
+    const { fix, scen } = corpus();
+    const m = JSON.parse(build([fix, scen]).stdout);
+    expect(m.versions).toEqual(['2.1.9', '2.1.10']);
+    expect(m.scenarios).toEqual(['failed', 'measured', 'missing', 'probe']);
+    expect(Object.keys(m.cells)).toHaveLength(8);
+  });
+
+  it('refuses bad arguments with exit 2', () => {
+    expect(build([]).status).toBe(2);
+    expect(build(['a', 'b', '--bogus']).status).toBe(2);
+  });
+
+  it('the committed matrix.json is exactly what the builder derives from the committed corpus', () => {
+    const r = build([FIX, SCEN]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.readFileSync(path.join(FIX, 'matrix.json'), 'utf8')).toBe(r.stdout);
+  });
+
+  it('the committed corpus covers every scenario on at least one version, and carries no residue', () => {
+    const m = JSON.parse(fs.readFileSync(path.join(FIX, 'matrix.json'), 'utf8'));
+    expect(m.versions.length).toBeGreaterThan(0);
+    for (const s of m.scenarios) {
+      expect(m.versions.some((v: string) => m.cells[`${v}/${s}`].status === 'measured'), s).toBe(true);
+    }
+    for (const v of m.versions) for (const s of m.scenarios) {
+      const f = path.join(FIX, v, `${s}.json`);
+      if (!fs.existsSync(f)) continue;
+      const text = fs.readFileSync(f, 'utf8');
+      for (const bad of ['/tmp/', '/home/', '/Users/', '/var/folders/', '/mnt/', 'ccrc-dlg-rig', 'sk-ant-']) expect(text.includes(bad), `${v}/${s}: ${bad}`).toBe(false);
+    }
+  });
+});
