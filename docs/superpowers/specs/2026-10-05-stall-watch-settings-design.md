@@ -1,12 +1,12 @@
 # Stall watch settings: one arming ladder and one quiet time on the Settings page (design)
 
-**Status:** draft rev 3.2, 2026-10-05; rev 3.2 applies the final narrow re-check (7 important findings, workflow
-wf_be296fb4-28c); rev 3.1 folds the verification of rev 3 (28 findings, workflow wf_6b6351ad-f06); rev 3 folds the
-adversarial review (44 findings, workflow wf_02c96a48-da4); awaiting the operator's review. Rev 2 folded three review
-lenses (codebase fit, operator intent, safety). The shape was approved in dialogue (§2): one ladder, one
-timing, a small read-only part, and approach 1 (server-side storage). Nothing in this spec is planned yet. No D-number
-has been allocated. Each departure from the approved text is named by its slug (§16) and gets a number when the plan is
-written. The defaults the operator may still change are listed in §19.
+**Status:** APPROVED by the operator 2026-10-05 17:46 UTC ("Spec is good"; the §19 defaults stand as written).
+Rev 3.2, 2026-10-05. Rev 3.2 applies the final narrow re-check (7 important findings, workflow wf_be296fb4-28c).
+Rev 3.1 folds the verification of rev 3 (28 findings, workflow wf_6b6351ad-f06). Rev 3 folds the adversarial review
+(44 findings, workflow wf_02c96a48-da4). Rev 2 folded three review lenses (codebase fit, operator intent, safety). The
+shape was approved in dialogue (§2): one ladder, one timing, a small read-only part, and approach 1 (server-side
+storage). It is planned as the programme `stall-watch-settings` (§18), whose two wave plans give each departure (§16)
+its number. The defaults the operator accepted are listed in §19.
 - **Citations.** Mapped read-only at origin/main be93d159e, which carries stall-watch waves 1–7. Rev 3.1's new and
   changed citations are measured at origin/main beafb3fd8. Between the two only README, two `ccd` scripts,
   `coord/token.ts`, two doctor and install tests, and docs changed, so the older hints still land. Line numbers are
