@@ -1159,3 +1159,608 @@ out({'tree5001': ask('docs-tree', 5001, ['--project', 'demo']), 'tree5000': ask(
     vT10.expect(got['index5000']).toEqual({ ok: true, failure: null, count: null, rows: 5000 });
   });
 });
+
+// ── docs W1a Task 13: draft holders and holder trust (spec 2026-10-01 §2 (d)) ──
+// Rows 31, 32, 33 and the tree half of 55, and R15. Helper units over fixture worktrees in the file's
+// own per-test harness `h`; what a fixture HOME cannot create (another uid, a dev/ino swap, dubious
+// ownership) is a `Sys` subclass swapped in as `H.SYS`, never an env or argv hook. This block is
+// APPENDED below the file's own imports: it uses their `describe`/`it`/`expect`, `h`, `unitJson` and
+// `plantGitRecorder`, and imports what else it needs under a `t13` alias no earlier block binds.
+import * as t13fs from 'node:fs';
+import * as t13path from 'node:path';
+
+type T13Facts = Record<string, unknown>;
+
+/** A python body written indented in this file, moved to column 0 and newline-terminated. */
+const t13py = (s: string): string => {
+  const lines = s.split('\n');
+  while (lines.length > 0 && lines[0]!.trim() === '') lines.shift();
+  while (lines.length > 0 && lines[lines.length - 1]!.trim() === '') lines.pop();
+  const pad = Math.min(...lines.filter((l) => l.trim() !== '').map((l) => l.length - l.trimStart().length));
+  return `${lines.map((l) => l.slice(pad)).join('\n')}\n`;
+};
+const t13projects = (): string => t13path.join(h.home, 'projects');
+const t13worktrees = (): string => t13path.join(h.home, 'worktrees');
+const t13real = (p: string): string => t13fs.realpathSync(p);
+/** What git records for a path whose own directory may be gone: the real path of its parent, plus its name. */
+const t13recorded = (p: string): string => t13path.join(t13real(t13path.dirname(p)), t13path.basename(p));
+
+/** The helper's context over this fixture HOME's roots, a 12 s deadline, and `os`/`stat`/`time`. */
+const t13ctx = (): string => t13py(`
+  import os, stat, time
+  WT = ${JSON.stringify(t13worktrees())}
+  CTX = H.Ctx(verb='docs-tree', root=${JSON.stringify(t13projects())}, worktrees=WT,
+              reg=${JSON.stringify(t13path.join(h.home, '.cc-sessions'))}, t0=H.SYS.monotonic())
+  DL = H.Deadline(12)
+`);
+/** ...plus `demo` discovered as REPO, and `holders_of(bd)`, which closes any Trusted fd it is handed. */
+const t13repo = (): string => t13ctx() + t13py(`
+  REPO = H.discover(CTX, 'demo', DL)
+  def holders_of(bd, **kw):
+      e = H.enumerate_drafts_holder(CTX, REPO, bd, DL, **kw)
+      if e.trusted is not None:
+          os.close(e.trusted.fd)
+      return e
+`);
+/** The DraftsFacts `enumerate_drafts_holder` gives for `bd` in `demo`, after `pre` (a `Sys` swap). */
+const t13facts = (bd: string, pre = ''): T13Facts =>
+  unitJson<T13Facts>(h.home, `${t13repo()}${t13py(pre)}out(holders_of(${JSON.stringify(bd)}).facts)\n`);
+
+/** `demo` with a second branch `ws/a` at the same commit; returns M. */
+const t13demo = (): string => {
+  const m = h.makeRepo('demo');
+  h.git(m, 'branch', 'ws/a');
+  return m;
+};
+/** `demo` with `ws/a` held by one linked worktree under the worktrees root; returns W. */
+const t13heldA = (): string => {
+  const m = t13demo();
+  const w = t13path.join(t13worktrees(), 'demo', 'a');
+  h.git(m, 'worktree', 'add', w, 'ws/a');
+  return w;
+};
+/** A `Sys` subclass whose fstat answers with one stat field moved by +1 (1 = st_ino, 2 = st_dev, 4 = st_uid). */
+const t13fstatShift = (index: number): string => `
+  class Shifted(H.Sys):
+      def fstat(self, fd):
+          f = list(super().fstat(fd)[:10])
+          f[${index}] = f[${index}] + 1
+          return os.stat_result(f)
+  H.SYS = Shifted()
+`;
+
+describe('docs draft holders and holder trust (docs W1a Task 13)', () => {
+  describe('parse_worktrees and find_holders, on canned records', () => {
+    it('parse_worktrees reads each NUL record into path_bytes, head, branch, detached, prunable and bare', () => {
+      const r = unitJson<T13Facts[]>(h.home, t13ctx() + t13py(String.raw`
+        Z = b'\x00'
+        A = b'a' * 40
+        buf = (b'worktree /x/main' + Z + b'HEAD ' + A + Z + b'branch refs/heads/main' + Z + Z +
+               b'worktree /x/det' + Z + b'HEAD ' + A + Z + b'detached' + Z + Z +
+               b'worktree /x/gone wt' + Z + b'HEAD ' + A + Z + b'branch refs/heads/ws/a' + Z +
+               b'prunable gitdir file points to non-existent location' + Z + Z +
+               b'worktree /x/locked' + Z + b'HEAD ' + A + Z + b'branch refs/heads/ws/b' + Z + b'locked my reason' + Z + Z +
+               b'worktree /x/unborn' + Z + b'HEAD ' + b'0' * 40 + Z + b'branch refs/heads/orph' + Z + Z +
+               b'worktree /x/bare.git' + Z + b'bare' + Z + Z)
+        recs = H.parse_worktrees(buf)
+        for rec in recs:
+            rec['path_bytes'] = rec['path_bytes'].decode()
+        out(recs)
+      `));
+      const base = { head: 'a'.repeat(40), branch: null, detached: false, prunable: false, bare: false };
+      expect(r).toEqual([
+        { ...base, path_bytes: '/x/main', branch: 'refs/heads/main' },
+        { ...base, path_bytes: '/x/det', detached: true },
+        { ...base, path_bytes: '/x/gone wt', branch: 'refs/heads/ws/a', prunable: true },
+        { ...base, path_bytes: '/x/locked', branch: 'refs/heads/ws/b' },
+        { ...base, path_bytes: '/x/unborn', head: '0'.repeat(40), branch: 'refs/heads/orph' },
+        { ...base, path_bytes: '/x/bare.git', head: null, bare: true },
+      ]);
+    });
+
+    it('parse_worktrees refuses a list it cannot read whole, so a cut list never reads as fewer holders', () => {
+      const r = unitJson<T13Facts>(h.home, t13ctx() + t13py(String.raw`
+        Z = b'\x00'
+        A = b'a' * 40
+        def verdict(b):
+            try:
+                H.parse_worktrees(b)
+                return 'parsed'
+            except ValueError:
+                return 'ValueError'
+        out({
+            'no-worktree-line': verdict(b'HEAD ' + A + Z + Z),
+            'two-worktree-lines': verdict(b'worktree /a' + Z + b'worktree /b' + Z + b'HEAD ' + A + Z + Z),
+            'no-head': verdict(b'worktree /a' + Z + b'branch refs/heads/x' + Z + Z),
+            'bad-head': verdict(b'worktree /a' + Z + b'HEAD xyz' + Z + Z),
+            'empty-path': verdict(b'worktree ' + Z + b'HEAD ' + A + Z + Z),
+            'unterminated': verdict(b'worktree /a' + Z + b'HEAD ' + A + Z),
+            'no-final-nul': verdict(b'worktree /a' + Z + b'HEAD ' + A),
+            'well-formed': verdict(b'worktree /a' + Z + b'HEAD ' + A + Z + Z),
+            'empty': H.parse_worktrees(b''),
+        })
+      `));
+      expect(r).toEqual({
+        'no-worktree-line': 'ValueError', 'two-worktree-lines': 'ValueError', 'no-head': 'ValueError',
+        'bad-head': 'ValueError', 'empty-path': 'ValueError', unterminated: 'ValueError', 'no-final-nul': 'ValueError',
+        'well-formed': 'parsed', empty: [],
+      });
+    });
+
+    it('find_holders takes exactly refs/heads/<Bd> and skips prunable, unsafe-path and missing-dir records (row 31)', () => {
+      const r = unitJson<T13Facts>(h.home, t13ctx() + t13py(String.raw`
+        Z = b'\x00'
+        A = b'a' * 40
+        HOME_B = os.fsencode(${JSON.stringify(h.home)})
+        def rec(path, *attrs):
+            return b'worktree ' + path + Z + b'HEAD ' + A + Z + b''.join(a + Z for a in attrs) + Z
+        buf = (rec(b'/x/main', b'branch refs/heads/main') +
+               rec(b'/x/\xff-wt', b'branch refs/heads/ws/a') +
+               rec(b'rel/wt', b'branch refs/heads/ws/a') +
+               rec(b'/x/gone', b'branch refs/heads/ws/a', b'prunable gitdir file points to non-existent location') +
+               rec(HOME_B, b'branch refs/heads/ws/a') +
+               rec(b'/nowhere/at/all', b'branch refs/heads/ws/a') +
+               rec(b'/x/twin', b'branch refs/heads/ws/ab') +
+               rec(b'/x/det', b'detached') +
+               rec(b'/x/other-gone', b'branch refs/heads/ws/b', b'prunable gitdir file points to non-existent location'))
+        holders, skipped, main = H.find_holders(CTX, H.parse_worktrees(buf), 'ws/a')
+        out({'holders': [x['path'] for x in holders], 'skipped': skipped, 'main': main['path_bytes'].decode(),
+             'none': H.find_holders(CTX, [], 'ws/a')})
+      `));
+      expect(r).toEqual({
+        holders: [h.home],
+        skipped: [
+          { path: '/x/\\xff-wt', why: 'unsafe-path' },
+          { path: 'rel/wt', why: 'unsafe-path' },
+          { path: '/x/gone', why: 'prunable' },
+          { path: '/nowhere/at/all', why: 'missing-dir' },
+        ],
+        main: '/x/main',
+        none: [[], [], null],
+      });
+    });
+  });
+
+  describe('row 31: holder rules, on fixture worktrees', () => {
+    it('a holder whose directory was removed is skipped as prunable, and the branch has no holder', () => {
+      const w = t13heldA();
+      t13fs.rmSync(w, { recursive: true, force: true });
+      expect(t13facts('ws/a')).toEqual({ state: 'none', branch: 'ws/a', skipped: [{ path: t13recorded(w), why: 'prunable' }] });
+    });
+
+    it('a locked holder whose directory moved away is skipped as missing-dir (git does not call it prunable)', () => {
+      const w = t13heldA();
+      const m = t13path.join(t13projects(), 'demo');
+      h.git(m, 'worktree', 'lock', w);
+      t13fs.renameSync(w, t13path.join(h.home, 'moved-away'));
+      // CONTROL: git's own record says locked, not prunable, so only the directory probe can skip it.
+      const list = h.git(m, 'worktree', 'list', '--porcelain');
+      expect(list).toContain('locked');
+      expect(list).not.toContain('prunable');
+      expect(t13facts('ws/a')).toEqual({ state: 'none', branch: 'ws/a', skipped: [{ path: t13recorded(w), why: 'missing-dir' }] });
+    });
+
+    // APFS refuses a filename that is not UTF-8 (EILSEQ), so this fixture cannot exist on macOS. The canned
+    // find_holders case above pins the same rule on every platform; this one proves it on a real record.
+    it.skipIf(process.platform === 'darwin')('a holder whose path is not strict UTF-8 is skipped as unsafe-path, shown backslash-escaped', () => {
+      const m = t13demo();
+      const scratch = t13path.join(h.home, 'scratch');
+      t13fs.mkdirSync(scratch);
+      // A JS string cannot carry the byte 0xff in an argv, so python adds the worktree, with the host's real git.
+      const r = unitJson<T13Facts>(h.home, t13repo() + t13py(String.raw`
+        import subprocess
+        W = os.fsencode(${JSON.stringify(scratch)}) + b'/\xff-wt'
+        added = subprocess.run([b'git', b'-C', os.fsencode(${JSON.stringify(m)}), b'worktree', b'add', b'-q', W, b'ws/a'],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+        out({'added': added, 'isdir': os.path.isdir(W), 'facts': holders_of('ws/a').facts})
+      `));
+      expect(r).toEqual({
+        added: 0, isdir: true,
+        facts: { state: 'none', branch: 'ws/a', skipped: [{ path: `${t13real(scratch)}/\\xff-wt`, why: 'unsafe-path' }] },
+      });
+    });
+
+    it('a detached worktree at the branch tip is never a holder', () => {
+      const m = t13demo();
+      const w = t13path.join(t13worktrees(), 'demo', 'det');
+      h.git(m, 'worktree', 'add', '--detach', w, 'ws/a');
+      // CONTROL: it sits exactly at the tip; only its detached HEAD keeps it out.
+      expect(h.git(w, 'rev-parse', 'HEAD')).toBe(h.git(m, 'rev-parse', 'refs/heads/ws/a'));
+      expect(t13facts('ws/a')).toEqual({ state: 'none', branch: 'ws/a', skipped: [] });
+    });
+
+    it('two holders via `worktree add --force` are ambiguous with both candidates, and neither is picked', () => {
+      const w1 = t13heldA();
+      const w2 = t13path.join(h.home, 'scratch', 'b');
+      h.git(t13path.join(t13projects(), 'demo'), 'worktree', 'add', '--force', w2, 'ws/a');
+      const r = unitJson<T13Facts>(h.home, t13repo() + t13py(`
+        e = holders_of('ws/a')
+        out({'facts': e.facts, 'trusted': e.trusted is not None})
+      `));
+      const facts = r['facts'] as { state: string; branch: string; candidates: string[] };
+      expect({ ...facts, candidates: [...facts.candidates].sort() }).toEqual({
+        state: 'ambiguous', branch: 'ws/a', candidates: [t13real(w1), t13real(w2)].sort(),
+      });
+      expect(r['trusted']).toBe(false);
+    });
+
+    it('holders are found wherever git records them, and only their class says where: main, workspace, other', () => {
+      const m = t13demo();
+      const agent = t13path.join(m, '.claude', 'worktrees', 'agent-x');
+      const scratch = t13path.join(h.home, 'scratch', 'c');
+      const ws = t13path.join(t13worktrees(), 'demo', 'quiet-mesa');
+      h.git(m, 'worktree', 'add', '-b', 'ws/b', agent);
+      h.git(m, 'worktree', 'add', '-b', 'ws/c', scratch);
+      h.git(m, 'worktree', 'add', '-b', 'ws/quiet-mesa', ws);
+      const head = h.git(m, 'rev-parse', 'HEAD');
+      const r = unitJson<T13Facts>(h.home, t13repo() + t13py(`
+        got = dict((bd, holders_of(bd).facts) for bd in ('main', 'ws/b', 'ws/c', 'ws/quiet-mesa'))
+        got['root-itself'] = H.holder_class(CTX, REPO, WT)
+        got['prefix-twin'] = H.holder_class(CTX, REPO, WT + '-old/demo/x')
+        out(got)
+      `));
+      const holder = (branch: string, p: string, cls: string): T13Facts => ({
+        state: 'holder', branch, worktree: { path: t13real(p), head, class: cls },
+      });
+      expect(r).toEqual({
+        main: holder('main', m, 'main'),
+        'ws/b': holder('ws/b', agent, 'other'),
+        'ws/c': holder('ws/c', scratch, 'other'),
+        'ws/quiet-mesa': holder('ws/quiet-mesa', ws, 'workspace'),
+        'root-itself': 'other',
+        'prefix-twin': 'other',
+      });
+    });
+  });
+
+  describe('rows 32 and 55: holder trust, every check in order', () => {
+    it('one holder that passes every check is Trusted: its record HEAD, an O_DIRECTORY fd at stat(W), and W\'s own ceiling', () => {
+      const w = t13heldA();
+      const rec = plantGitRecorder(h.home);
+      const r = unitJson<T13Facts>(h.home, t13repo() + t13py(`
+        W = ${JSON.stringify(t13real(w))}
+        records, detail = H.worktree_records(REPO, DL)
+        holders, skipped, main = H.find_holders(CTX, records, 'ws/a')
+        t = H.trust_holder(REPO, holders[0], DL)
+        st = os.stat(W)
+        fd_is_dir = stat.S_ISDIR(os.fstat(t.fd).st_mode)
+        os.close(t.fd)
+        out({'detail': detail, 'holders': len(holders), 'skipped': skipped, 'trusted': isinstance(t, H.Trusted),
+             'path': t.path, 'head': t.head, 'sameAsStat': [t.dev, t.ino] == [st.st_dev, st.st_ino],
+             'fdIsDir': fd_is_dir, 'main': main['path_bytes'].decode()})
+      `));
+      expect(r).toEqual({
+        detail: null, holders: 1, skipped: [], trusted: true, path: t13real(w),
+        head: h.git(w, 'rev-parse', 'HEAD'), sameAsStat: true, fdIsDir: true,
+        main: t13real(t13path.join(t13projects(), 'demo')),
+      });
+      // The list runs in M under M's ceiling; the trust rev-parse runs in W with the ceiling at W's parent.
+      const list = rec.calls().filter((c) => c.argv.join(' ').includes('worktree list --porcelain -z'));
+      expect(list).toHaveLength(1);
+      expect(list[0]!.env['GIT_CEILING_DIRECTORIES']).toBe(t13real(t13projects()));
+      const trust = rec.calls().filter((c) => c.argv.join(' ').includes(`-C ${t13real(w)} rev-parse`));
+      expect(trust.map((c) => c.argv.slice(c.argv.indexOf('rev-parse')))).toEqual([
+        ['rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel'],
+      ]);
+      expect(trust[0]!.env['GIT_CEILING_DIRECTORIES']).toBe(t13real(t13path.dirname(w)));
+    });
+
+    it('a stray `git init` where a holder was is untrusted {why:common-dir} (row 32)', () => {
+      const w = t13heldA();
+      t13fs.rmSync(w, { recursive: true, force: true });
+      h.git(h.home, 'init', '-q', w);
+      // CONTROL: git still records W as a live holder of ws/a, and W now answers for a repository of its own.
+      expect(h.git(t13path.join(t13projects(), 'demo'), 'worktree', 'list', '--porcelain')).not.toContain('prunable');
+      expect(h.git(w, 'rev-parse', '--path-format=absolute', '--git-common-dir')).toBe(t13path.join(t13real(w), '.git'));
+      expect(t13facts('ws/a')).toEqual({ state: 'untrusted', branch: 'ws/a', worktree: t13real(w), why: 'common-dir' });
+    });
+
+    it('a per-worktree core.worktree pointing W elsewhere is untrusted {why:toplevel-mismatch} (row 55, MM9)', () => {
+      const w = t13heldA();
+      const other = t13path.join(h.home, 'elsewhere');
+      t13fs.mkdirSync(other);
+      t13fs.writeFileSync(t13path.join(other, 'README.md'), 'SENTINEL-OTHER-DIR\n');
+      h.git(w, 'config', 'extensions.worktreeConfig', 'true');
+      h.git(w, 'config', '--worktree', 'core.worktree', other);
+      // CONTROL: a plain status in W reads the OTHER directory. W's own README is untouched, so the
+      // modification git reports is the other directory's bytes.
+      expect(t13fs.readFileSync(t13path.join(w, 'README.md'), 'utf8')).toBe('hi\n');
+      expect(h.git(w, 'status', '--porcelain')).toContain('README.md');
+      expect(h.git(w, 'rev-parse', '--show-toplevel')).toBe(t13real(other));
+      const facts = t13facts('ws/a');
+      expect(facts).toEqual({ state: 'untrusted', branch: 'ws/a', worktree: t13real(w), why: 'toplevel-mismatch' });
+      expect(JSON.stringify(facts)).not.toContain('SENTINEL-OTHER-DIR');
+    });
+
+    it('`detected dubious ownership` on the trust rev-parse is untrusted {why:dubious-ownership} (row 32, R15: canned)', () => {
+      const w = t13heldA();
+      const r = unitJson<T13Facts>(h.home, t13repo() + t13py(`
+        W = ${JSON.stringify(t13real(w))}
+        plain = holders_of('ws/a').facts['state']
+        class Dubious(H.Sys):
+            def spawn(self, argv, *args, **kw):
+                if 'rev-parse' in argv and '--show-toplevel' in argv and W in argv:
+                    err = b"fatal: detected dubious ownership in repository at '" + os.fsencode(W) + b"'\\n"
+                    return H.Spawned(rc=128, out=b'', err=err, timed_out=False, overflow=False)
+                return super().spawn(argv, *args, **kw)
+        H.SYS = Dubious()
+        out({'plain': plain, 'canned': holders_of('ws/a').facts})
+      `));
+      expect(r).toEqual({
+        plain: 'holder',
+        canned: { state: 'untrusted', branch: 'ws/a', worktree: t13real(w), why: 'dubious-ownership' },
+      });
+    });
+
+    it('an fstat whose st_uid is not geteuid() is untrusted {why:foreign-owner} (row 55, R15: injected)', () => {
+      const w = t13heldA();
+      expect(t13facts('ws/a')['state']).toBe('holder');
+      expect(t13facts('ws/a', t13fstatShift(4)))
+        .toEqual({ state: 'untrusted', branch: 'ws/a', worktree: t13real(w), why: 'foreign-owner' });
+    });
+
+    it('an fd whose st_dev or st_ino is not stat(W)\'s is untrusted {why:identity-changed} (row 55, R15: injected)', () => {
+      const w = t13heldA();
+      const changed = { state: 'untrusted', branch: 'ws/a', worktree: t13real(w), why: 'identity-changed' };
+      expect(t13facts('ws/a')['state']).toBe('holder');
+      expect(t13facts('ws/a', t13fstatShift(1))).toEqual(changed);
+      expect(t13facts('ws/a', t13fstatShift(2))).toEqual(changed);
+    });
+
+    it('a trust rev-parse that fails without the dubious-ownership answer measured nothing: unreadable, never a verdict', () => {
+      const w = t13heldA();
+      t13fs.writeFileSync(t13path.join(w, '.git'), 'not a gitfile\n');
+      // CONTROL: git still lists W as a live holder; only W's own rev-parse refuses.
+      expect(h.git(t13path.join(t13projects(), 'demo'), 'worktree', 'list', '--porcelain')).not.toContain('prunable');
+      const facts = t13facts('ws/a');
+      expect(facts).toMatchObject({ state: 'unreadable', branch: 'ws/a', worktree: t13real(w), step: 'worktree-list' });
+      expect(String(facts['detail'])).toMatch(/^rev-parse rc 128: /);
+    });
+
+    it('trust_verdict is pure and checks in order: common-dir, toplevel-mismatch, dubious-ownership, foreign-owner, identity-changed (R15)', () => {
+      const r = unitJson<T13Facts>(h.home, t13ctx() + t13py(`
+        base = {'common_dir': '/r/.git', 'project_common_dir': '/r/.git', 'toplevel': '/w', 'realpath': '/w',
+                'dubious': False, 'uid': 1000, 'euid': 1000, 'stat_id': [1, 2], 'fd_id': [1, 2]}
+        def v(**kw):
+            d = dict(base)
+            d.update(kw)
+            return H.trust_verdict(d)
+        out({
+            'clean': v(),
+            'common-dir': v(common_dir='/elsewhere/.git'),
+            'toplevel-mismatch': v(toplevel='/other'),
+            'dubious-ownership': v(common_dir=None, toplevel=None, dubious=True, uid=None, fd_id=None),
+            'foreign-owner': v(uid=1001),
+            'identity-ino': v(fd_id=[1, 3]),
+            'identity-dev': v(fd_id=[9, 2]),
+            'no-fd': v(fd_id=None),
+            'common-dir-before-toplevel': v(common_dir='/x/.git', toplevel='/other'),
+            'toplevel-before-dubious': v(toplevel='/other', dubious=True),
+            'dubious-before-owner': v(common_dir=None, toplevel=None, dubious=True, uid=1001),
+            'owner-before-identity': v(uid=1001, fd_id=[1, 3]),
+            'unmeasured-common-dir': v(common_dir=None),
+            'unmeasured-toplevel': v(toplevel=None),
+        })
+      `));
+      expect(r).toEqual({
+        clean: null,
+        'common-dir': 'common-dir',
+        'toplevel-mismatch': 'toplevel-mismatch',
+        'dubious-ownership': 'dubious-ownership',
+        'foreign-owner': 'foreign-owner',
+        'identity-ino': 'identity-changed',
+        'identity-dev': 'identity-changed',
+        'no-fd': 'identity-changed',
+        'common-dir-before-toplevel': 'common-dir',
+        'toplevel-before-dubious': 'toplevel-mismatch',
+        'dubious-before-owner': 'dubious-ownership',
+        'owner-before-identity': 'foreign-owner',
+        'unmeasured-common-dir': 'common-dir',
+        'unmeasured-toplevel': 'toplevel-mismatch',
+      });
+    });
+  });
+
+  describe('row 33: an enumeration that failed is never "none"', () => {
+    it('a `worktree list` that fails is unreadable {step:worktree-list}, from exactly one list call', () => {
+      t13heldA();
+      const rec = plantGitRecorder(h.home, { failWhen: ['worktree list'] });
+      const r = unitJson<{ facts: T13Facts; main: unknown }>(h.home, t13repo() + t13py(`
+        e = holders_of('ws/a')
+        out({'facts': e.facts, 'main': e.main})
+      `));
+      expect(r.facts).toEqual({
+        state: 'unreadable', branch: 'ws/a', worktree: null, step: 'worktree-list',
+        detail: 'worktree list rc 128: git recorder: planted failure',
+      });
+      expect(r.main).toBeNull();
+      expect(rec.calls().filter((c) => c.argv.join(' ').includes('worktree list'))).toHaveLength(1);
+    });
+
+    it('a sleeping `worktree list` under a lowered call_s is unreadable {detail:timeout} within the bound', () => {
+      t13heldA();
+      plantGitRecorder(h.home, { sleepWhen: ['worktree list'], sleepS: 5 });
+      const r = unitJson<{ facts: T13Facts; elapsed: number }>(h.home, t13repo() + t13py(`
+        t0 = time.monotonic()
+        e = holders_of('ws/a', call_s=1)
+        out({'facts': e.facts, 'elapsed': time.monotonic() - t0})
+      `));
+      expect(r.facts).toEqual({ state: 'unreadable', branch: 'ws/a', worktree: null, step: 'worktree-list', detail: 'timeout' });
+      expect(r.elapsed).toBeLessThan(4);
+    });
+  });
+});
+
+// ── docs W1a Task 13, ruling G8: the failure arms the block above leaves to the type checker ──
+// Each case swaps `H.SYS` for a `Sys` subclass that answers one outcome the fixture HOME cannot make
+// (an overflowing or cut `worktree list`, a timed-out or malformed trust rev-parse, an OSError on W,
+// a raising fstat) and pins the word or the closed fd that outcome must produce.
+const t13holder = (): string => t13py(`
+  import errno
+  records, detail = H.worktree_records(REPO, DL)
+  holders, skipped, main = H.find_holders(CTX, records, 'ws/a')
+  REC = holders[0]
+  W = REC['path']
+  class Canned(H.Sys):
+      match = ()
+      result = None
+      def spawn(self, argv, *args, **kw):
+          if all(m in argv for m in self.match):
+              return self.result
+          return super().spawn(argv, *args, **kw)
+  def canned(match, **kw):
+      c = Canned()
+      c.match = match
+      c.result = H.Spawned(**dict({'rc': 0, 'out': b'', 'err': b'', 'timed_out': False, 'overflow': False}, **kw))
+      return c
+  opened = []
+  closed = []
+  class Track(H.Sys):
+      def open(self, path, flags, dir_fd=None):
+          fd = super().open(path, flags, dir_fd)
+          if path == W:
+              opened.append(fd)
+          return fd
+      def close(self, fd):
+          closed.append(fd)
+          return super().close(fd)
+  def leaked():
+      return [fd for fd in opened if fd not in closed]
+`);
+const t13trustUnit = (body: string): unknown =>
+  unitJson<unknown>(h.home, t13repo() + t13holder() + t13py(body));
+
+describe('docs draft holders and holder trust: failure arms (docs W1a Task 13, G8)', () => {
+  const listOutcome = (spawned: string): unknown => t13trustUnit(`
+    control = H.worktree_records(REPO, DL)[1]
+    H.SYS = canned(('worktree', 'list'), ${spawned})
+    e = H.enumerate_drafts_holder(CTX, REPO, 'ws/a', DL)
+    out({'control': control, 'got': H.worktree_records(REPO, DL), 'facts': e.facts})
+  `);
+  const unreadable = (detail: string): T13Facts => ({
+    state: 'unreadable', branch: 'ws/a', worktree: null, step: 'worktree-list', detail,
+  });
+
+  it('a `worktree list` that overflowed the stdout cap is unreadable {detail:overflow}, never none', () => {
+    t13heldA();
+    expect(listOutcome('overflow=True')).toEqual({ control: null, got: [null, 'overflow'], facts: unreadable('overflow') });
+  });
+
+  it('a `worktree list` cut before its last NUL is unreadable {detail:malformed}, never fewer holders', () => {
+    t13heldA();
+    expect(listOutcome("out=b'worktree /x' + b'\\x00' + b'HEAD ' + b'a' * 40 + b'\\x00'"))
+      .toEqual({ control: null, got: [null, 'malformed'], facts: unreadable('malformed') });
+  });
+
+  it('an empty `worktree list` is unreadable {detail:malformed}: git always prints the main checkout', () => {
+    t13heldA();
+    expect(listOutcome("out=b''")).toEqual({ control: null, got: [null, 'malformed'], facts: unreadable('malformed') });
+  });
+
+  it('a trust rev-parse that timed out is unreadable {detail:timeout}, never a verdict', () => {
+    t13heldA();
+    expect(t13trustUnit(`
+      H.SYS = canned(('rev-parse', '--show-toplevel'), rc=None, timed_out=True)
+      out(H.trust_holder(REPO, REC, DL))
+    `)).toEqual(['unreadable', 'worktree-list', 'timeout']);
+  });
+
+  it('a trust rev-parse that overflowed is unreadable {detail:overflow}, never a verdict', () => {
+    t13heldA();
+    expect(t13trustUnit(`
+      H.SYS = canned(('rev-parse', '--show-toplevel'), overflow=True)
+      out(H.trust_holder(REPO, REC, DL))
+    `)).toEqual(['unreadable', 'worktree-list', 'overflow']);
+  });
+
+  it('a stat(W) that fails is unreadable {detail:"stat: ..."}', () => {
+    t13heldA();
+    expect(t13trustUnit(`
+      class NoStat(H.Sys):
+          def stat(self, p):
+              if p == W:
+                  raise OSError(errno.EACCES, 'denied')
+              return super().stat(p)
+      H.SYS = NoStat()
+      out(H.trust_holder(REPO, REC, DL))
+    `)).toEqual(['unreadable', 'worktree-list', 'stat: denied']);
+  });
+
+  it('an open(W) that fails is unreadable {detail:"open: ..."}', () => {
+    t13heldA();
+    expect(t13trustUnit(`
+      class NoOpen(H.Sys):
+          def open(self, path, flags, dir_fd=None):
+              if path == W:
+                  raise OSError(errno.EACCES, 'denied')
+              return super().open(path, flags, dir_fd)
+      H.SYS = NoOpen()
+      out(H.trust_holder(REPO, REC, DL))
+    `)).toEqual(['unreadable', 'worktree-list', 'open: denied']);
+  });
+
+  it('a trust rev-parse answer that is not exactly two paths fails closed as untrusted {common-dir}', () => {
+    t13heldA();
+    expect(t13trustUnit(`
+      two = os.fsencode(REPO.common_dir) + b'\\n' + os.fsencode(W) + b'\\n'
+      def verdict(raw):
+          H.SYS = canned(('rev-parse', '--show-toplevel'), out=raw)
+          got = H.trust_holder(REPO, REC, DL)
+          if isinstance(got, H.Trusted):
+              os.close(got.fd)
+              return 'trusted'
+          return got
+      out({'exactly-two': verdict(two), 'one': verdict(b'/only-one-line\\n'), 'three': verdict(two + b'/extra-line\\n')})
+    `)).toEqual({ 'exactly-two': 'trusted', one: ['untrusted', 'common-dir'], three: ['untrusted', 'common-dir'] });
+  });
+
+  it('an untrusted verdict closes the fd it opened; the Trusted control keeps its fd open for the caller', () => {
+    t13heldA();
+    expect(t13trustUnit(`
+      class Foreign(Track):
+          def fstat(self, fd):
+              f = list(super().fstat(fd)[:10])
+              f[4] = f[4] + 1
+              return os.stat_result(f)
+      H.SYS = Track()
+      t = H.trust_holder(REPO, REC, DL)
+      control = [isinstance(t, H.Trusted), len(opened), len(leaked())]
+      os.close(t.fd)
+      del opened[:]
+      H.SYS = Foreign()
+      got = H.trust_holder(REPO, REC, DL)
+      out({'control': control, 'got': got, 'opened': len(opened), 'leaked': leaked()})
+    `)).toEqual({ control: [true, 1, 1], got: ['untrusted', 'foreign-owner'], opened: 1, leaked: [] });
+  });
+
+  it('an fstat that raises closes the fd it opened before the error propagates', () => {
+    t13heldA();
+    expect(t13trustUnit(`
+      class Boom(Track):
+          def fstat(self, fd):
+              raise RuntimeError('boom')
+      H.SYS = Boom()
+      try:
+          H.trust_holder(REPO, REC, DL)
+          raised = False
+      except RuntimeError:
+          raised = True
+      out({'raised': raised, 'opened': len(opened), 'leaked': leaked()})
+    `)).toEqual({ raised: true, opened: 1, leaked: [] });
+  });
+
+  it('a dubious-ownership answer opens no fd on W: the holder is never entered', () => {
+    t13heldA();
+    expect(t13trustUnit(`
+      err = b"fatal: detected dubious ownership in repository at '" + os.fsencode(W) + b"'\\n"
+      class DubiousTrack(Track):
+          def spawn(self, argv, *args, **kw):
+              if 'rev-parse' in argv and '--show-toplevel' in argv and W in argv:
+                  return H.Spawned(rc=128, out=b'', err=err, timed_out=False, overflow=False)
+              return super().spawn(argv, *args, **kw)
+      H.SYS = DubiousTrack()
+      got = H.trust_holder(REPO, REC, DL)
+      out({'got': got, 'opened': len(opened)})
+    `)).toEqual({ got: ['untrusted', 'dubious-ownership'], opened: 0 });
+  });
+});

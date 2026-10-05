@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0acde2ce31474c61d48c1746e2fe1d21f11d37a6ae819525f36758e5fb0a2e36
+# ccrc:generated 1 sha256=a0054e09cf5d09897b8ae3c01c54bc2f22eb6dbbf0b5164bccdd934f5fabacdc
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29986,6 +29986,286 @@ def verb_index(ctx, a):
     return body
 
 # ===== docs: holders =====
+# Draft holders and holder trust (spec 2026-10-01 s2 (d) "Draft branch and holder" and "Holder
+# trust"). One `worktree list --porcelain -z` in M, parsed as NUL records. A holder is a record that
+# says exactly `branch refs/heads/<Bd>`; a detached record never is one. Location never restricts
+# who is found -- ws-add workspaces, <project>/.claude/worktrees, scratch directories and the main
+# checkout all hold (MM7) -- and is reported only as a class. `_ws_branch_holders` is not reused (it
+# reads the porcelain without -z) and `%(worktreepath)` is not used (it hides duplicates and names
+# deleted worktrees). This section's own imports; a repeat of an earlier section's is a no-op.
+import collections
+import os
+
+# One trusted holder W. `fd` is an O_RDONLY|O_DIRECTORY fd of W whose (dev, ino) equal stat(W) as
+# taken before W's rev-parse ran; every later walk in W starts from it, and whoever receives the
+# Trusted closes the fd.
+Trusted = collections.namedtuple('Trusted', 'path head fd dev ino')
+
+# What enumerate_drafts_holder measured. `facts` is a DraftsFacts object: final for none, ambiguous,
+# untrusted and unreadable, with `trusted` None; for exactly one trusted holder it is the partial
+# {state:'holder', branch, worktree:{path, head, class}} the snapshot completes, and `trusted` is
+# set. `main` is the list's first record (the main checkout), or None when the list was unreadable.
+Enumerated = collections.namedtuple('Enumerated', 'facts trusted main')
+
+
+def _holder_close_record(cur):
+    """One parsed record, checked. A record that is not bare carries a HEAD in the sha grammar
+    (an unborn or unreadable HEAD prints as all zeros, which passes)."""
+    if cur['path_bytes'] == b'':
+        raise ValueError('worktree record with an empty path')
+    if not cur['bare'] and (cur['head'] is None or not valid_sha(cur['head'])):
+        raise ValueError('worktree record without a usable HEAD')
+    return cur
+
+
+def parse_worktrees(buf):
+    """`worktree list --porcelain -z` bytes -> records, in git's order (the main checkout first).
+
+    Every attribute ends at a NUL and every record at one more NUL. Keys: path_bytes (bytes,
+    exactly as git printed them), head (hex text, or None for a bare record), branch (the full
+    refname as text, `refs/heads/<b>`, or None), detached, prunable, bare. `locked` and any
+    attribute a newer git adds are not holder facts and are ignored. Raises ValueError for a record
+    that does not open with its `worktree` line, carries two, lacks a usable HEAD, or is not
+    terminated: a list that cannot be read whole is never read as fewer holders."""
+    toks = buf.split(b'\0')
+    if toks[-1] != b'':
+        raise ValueError('worktree list output does not end at a NUL')
+    records = []
+    cur = None
+    for tok in toks[:-1]:
+        if tok == b'':
+            if cur is not None:
+                records.append(_holder_close_record(cur))
+                cur = None
+            continue
+        if cur is None:
+            if not tok.startswith(b'worktree '):
+                raise ValueError('worktree record without its worktree line')
+            cur = {'path_bytes': tok[len(b'worktree '):], 'head': None, 'branch': None,
+                   'detached': False, 'prunable': False, 'bare': False}
+            continue
+        key, _sep, val = tok.partition(b' ')
+        if key == b'worktree':
+            raise ValueError('two worktree lines in one record')
+        if key == b'HEAD':
+            cur['head'] = val.decode('ascii', 'replace')
+        elif key == b'branch':
+            cur['branch'] = val.decode('utf-8', 'surrogateescape')
+        elif key == b'detached':
+            cur['detached'] = True
+        elif key == b'prunable':
+            cur['prunable'] = True
+        elif key == b'bare':
+            cur['bare'] = True
+    if cur is not None:
+        raise ValueError('worktree record without its terminator')
+    return records
+
+
+def _holder_opens_dir(path):
+    """True when path opens O_RDONLY|O_DIRECTORY; the fd is closed again at once."""
+    try:
+        fd = SYS.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return False
+    SYS.close(fd)
+    return True
+
+
+def find_holders(ctx, records, bd):
+    """-> (holders, skipped, main_record). Only records that say exactly `branch refs/heads/<bd>`
+    are considered, so `skipped` explains Bd alone. In this order such a record is skipped as
+    `prunable` (git's own word), `unsafe-path` (not strict UTF-8, or not absolute; shown
+    backslash-escaped, so no raw byte reaches the wire), or `missing-dir` (does not open as a
+    directory); every other one is a holder: a copy of its record plus `path` (text). Nothing is
+    picked: two holders are two holders. main_record is records[0], or None. `ctx` keeps the verb
+    call shape and is not read here: WHO holds Bd is a fact of the list alone, and WHERE a holder
+    sits is holder_class's question."""
+    want = 'refs/heads/' + bd
+    holders = []
+    skipped = []
+    for rec in records:
+        if rec['branch'] != want:
+            continue
+        raw = rec['path_bytes']
+        try:
+            path = raw.decode('utf-8')
+        except UnicodeDecodeError:
+            path = None
+        shown = path if path is not None else raw.decode('utf-8', 'backslashreplace')
+        if rec['prunable']:
+            skipped.append({'path': shown, 'why': 'prunable'})
+        elif path is None or not path.startswith('/'):
+            skipped.append({'path': shown, 'why': 'unsafe-path'})
+        elif not _holder_opens_dir(path):
+            skipped.append({'path': path, 'why': 'missing-dir'})
+        else:
+            holder = dict(rec)
+            holder['path'] = path
+            holders.append(holder)
+    return holders, skipped, (records[0] if records else None)
+
+
+def holder_class(ctx, repo, path):
+    """'main' | 'workspace' | 'other': where a holder sits, reported and never a filter.
+    main: the path is M's own checkout, realpath-equal to repo.toplevel, which is what git prints as
+    the first record for every repository discovery accepts (a --separate-git-dir checkout's first
+    record names its git dir instead, and that holder fails trust before it is ever classed).
+    workspace: strictly under realpath(ctx.worktrees). other: anywhere else."""
+    real = SYS.realpath(path)
+    if real == SYS.realpath(repo.toplevel):
+        return 'main'
+    root = SYS.realpath(ctx.worktrees).rstrip('/') + '/'
+    if real.startswith(root):
+        return 'workspace'
+    return 'other'
+
+
+def trust_verdict(facts):
+    """Pure. facts -> None (trusted) or the first failing `why`, checked in this order: common-dir,
+    toplevel-mismatch, dubious-ownership, foreign-owner, identity-changed.
+
+    Keys: common_dir and toplevel (W's rev-parse answers, realpath'd; None when it printed none),
+    project_common_dir (M's), realpath (realpath(W)), dubious (stderr said `detected dubious
+    ownership`), uid (fstat(fd).st_uid; None without an fd), euid, stat_id ([dev, ino] of stat(W)),
+    fd_id ([dev, ino] of fstat(fd); None without an fd). Fail-closed: a common dir or toplevel left
+    unmeasured without the dubious-ownership answer fails under its own check, never passes."""
+    common_dir = facts.get('common_dir')
+    toplevel = facts.get('toplevel')
+    if common_dir is not None and common_dir != facts['project_common_dir']:
+        return 'common-dir'
+    if toplevel is not None and toplevel != facts['realpath']:
+        return 'toplevel-mismatch'
+    if facts.get('dubious'):
+        return 'dubious-ownership'
+    if common_dir is None:
+        return 'common-dir'
+    if toplevel is None:
+        return 'toplevel-mismatch'
+    if facts.get('uid') != facts['euid']:
+        return 'foreign-owner'
+    fd_id = facts.get('fd_id')
+    if fd_id is None or list(fd_id) != list(facts['stat_id']):
+        return 'identity-changed'
+    return None
+
+
+def _holder_rc_detail(what, sp):
+    """'<what> rc N' plus ': <stderr head>' when git said anything (redacted, at most 512 B)."""
+    head = stderr_head(sp.err)
+    return '%s rc %d%s' % (what, sp.rc, (': ' + head) if head else '')
+
+
+def trust_holder(repo, rec, dl, call_s=None):
+    """Holder trust for one holder record from find_holders (spec s2 (d), every check, in order).
+    -> Trusted(path, head, fd, dev, ino) | ('untrusted', why) | ('unreadable', 'worktree-list', detail).
+
+    1. stat(W) records (st_dev, st_ino).
+    2. `rev-parse --path-format=absolute --git-common-dir --show-toplevel` runs in W with the
+       ceiling at W's parent, bounded by call_s (default CALL_S['ref']). A failure whose stderr is
+       not dubious ownership measured nothing, so it is unreadable, never a verdict. DraftsFacts
+       has no rev-parse step: this call establishes the holder the list named, so it reports
+       under 'worktree-list'.
+    3. W opens O_RDONLY|O_DIRECTORY, and fstat(fd) gives the owner and the identity pair.
+    4. trust_verdict decides. Every fd this opens is closed unless it is returned in the Trusted."""
+    path = rec['path']
+    bound = CALL_S['ref'] if call_s is None else call_s
+    try:
+        st = SYS.stat(path)
+    except OSError as e:
+        return ('unreadable', 'worktree-list', os_head('stat', e))
+    sp = docs_git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel'],
+                  call_s=bound, dl=dl, ceiling=ceiling_of(path), soft=True)
+    if sp.timed_out:
+        return ('unreadable', 'worktree-list', 'timeout')
+    if sp.overflow:
+        return ('unreadable', 'worktree-list', 'overflow')
+    dubious = b'detected dubious ownership' in sp.err
+    if sp.rc != 0 and not dubious:
+        return ('unreadable', 'worktree-list', _holder_rc_detail('rev-parse', sp))
+    common_dir = None
+    toplevel = None
+    if sp.rc == 0:
+        lines = os.fsdecode(sp.out).split('\n')
+        if len(lines) == 3 and lines[0] and lines[1] and lines[2] == '':
+            common_dir = SYS.realpath(lines[0])
+            toplevel = SYS.realpath(lines[1])
+    facts = {'common_dir': common_dir, 'project_common_dir': repo.common_dir,
+             'toplevel': toplevel, 'realpath': SYS.realpath(path), 'dubious': dubious,
+             'uid': None, 'euid': SYS.geteuid(), 'stat_id': [st.st_dev, st.st_ino], 'fd_id': None}
+    fd = None
+    if not dubious:
+        try:
+            fd = SYS.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        except OSError as e:
+            return ('unreadable', 'worktree-list', os_head('open', e))
+        try:
+            fst = SYS.fstat(fd)
+        except BaseException:
+            SYS.close(fd)
+            raise
+        facts['uid'] = fst.st_uid
+        facts['fd_id'] = [fst.st_dev, fst.st_ino]
+    why = trust_verdict(facts)
+    if why is not None:
+        if fd is not None:
+            SYS.close(fd)
+        return ('untrusted', why)
+    return Trusted(path, rec['head'], fd, facts['fd_id'][0], facts['fd_id'][1])
+
+
+def worktree_records(repo, dl, call_s=None):
+    """The one `worktree list --porcelain -z` in M, bounded by call_s (default CALL_S['list']).
+    -> (records, None), or (None, detail) when the list failed ('worktree list rc N[: stderr head]'),
+    ran out of time ('timeout'), overflowed the stdout cap ('overflow'), or could not be read whole
+    ('malformed'; an empty list is malformed too, since git always prints the main checkout).
+    A list that failed is never an empty one."""
+    bound = CALL_S['list'] if call_s is None else call_s
+    sp = docs_git(repo.path, ['worktree', 'list', '--porcelain', '-z'], call_s=bound, dl=dl,
+                  ceiling=ceiling_of(repo.path), soft=True)
+    if sp.timed_out:
+        return None, 'timeout'
+    if sp.overflow:
+        return None, 'overflow'
+    if sp.rc != 0:
+        return None, _holder_rc_detail('worktree list', sp)
+    try:
+        records = parse_worktrees(sp.out)
+    except ValueError:
+        return None, 'malformed'
+    if not records:
+        return None, 'malformed'
+    return records, None
+
+
+def enumerate_drafts_holder(ctx, repo, bd, dl, call_s=None):
+    """Bd's holder in M -> Enumerated(facts, trusted, main).
+
+    none, ambiguous, untrusted and an unreadable list are final states (trusted is None), and a
+    list that failed is unreadable {step:'worktree-list'}, never none. Exactly one holder that
+    passes trust_holder gives the partial holder facts and the open Trusted, whose fd the caller
+    closes. `call_s` bounds the list; trust's rev-parse keeps CALL_S['ref']."""
+    records, detail = worktree_records(repo, dl, call_s)
+    if records is None:
+        return Enumerated({'state': 'unreadable', 'branch': bd, 'worktree': None,
+                           'step': 'worktree-list', 'detail': detail}, None, None)
+    holders, skipped, main = find_holders(ctx, records, bd)
+    if not holders:
+        return Enumerated({'state': 'none', 'branch': bd, 'skipped': skipped}, None, main)
+    if len(holders) > 1:
+        return Enumerated({'state': 'ambiguous', 'branch': bd,
+                           'candidates': [x['path'] for x in holders]}, None, main)
+    rec = holders[0]
+    verdict = trust_holder(repo, rec, dl)
+    if not isinstance(verdict, Trusted):
+        if verdict[0] == 'untrusted':
+            return Enumerated({'state': 'untrusted', 'branch': bd, 'worktree': rec['path'],
+                               'why': verdict[1]}, None, main)
+        return Enumerated({'state': 'unreadable', 'branch': bd, 'worktree': rec['path'],
+                           'step': verdict[1], 'detail': verdict[2]}, None, main)
+    worktree = {'path': verdict.path, 'head': verdict.head, 'class': holder_class(ctx, repo, verdict.path)}
+    return Enumerated({'state': 'holder', 'branch': bd, 'worktree': worktree}, verdict, main)
+
 
 # ===== docs: drafts =====
 
