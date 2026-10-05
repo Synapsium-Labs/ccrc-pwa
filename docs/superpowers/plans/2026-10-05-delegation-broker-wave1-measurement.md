@@ -3090,30 +3090,30 @@ wave that ships each verb or route. `WorktreeCreate` / `WorktreeRemove` are neve
 Numbers are minted at run-open; the worker writes each issued number beside its slug, in this section, in its
 first commit (allocate and define in the same act), and cites only those. Each slug names what it departs from.
 
-- **`sessionend-registered-in-stage-1`** — spec §7's table ships hooks in stage 2. Measuring `SessionEnd` (§8.1 Q6)
+- **D-3992** — `sessionend-registered-in-stage-1` — spec §7's table ships hooks in stage 2. Measuring `SessionEnd` (§8.1 Q6)
   needs it registered, and its arm is inert outside a `-hookcap` session (Task 1's rows), so registering it now
   changes nothing a fleet session does.
-- **`rig-fixtures-are-sanitised-synthetic-payloads`** — the capture precedent commits only reduced output. That rule
+- **D-3993** — `rig-fixtures-are-sanitised-synthetic-payloads` — the capture precedent commits only reduced output. That rule
   protects REAL payloads; the rig's are synthetic (mock API, fixture HOME, fixture repo), and wave 2's parser tests
   need whole payloads. They are committed after a fail-closed, allowlist sanitiser, and `topology-clean` passes on
   them. Real-lane captures stay reduced-only.
-- **`mock-tool-name-alias`** — spec §8.1 Q2 asks whether the tool is `Agent` or `Task`; the mock answers with whichever
+- **D-3994** — `mock-tool-name-alias` — spec §8.1 Q2 asks whether the tool is `Agent` or `Task`; the mock answers with whichever
   name the request offers, so one scenario measures both versions. The fixtures record the name actually used.
-- **`real-lane-crosscheck-two-lanes`** — spec §8.1 asks for every version. The rig runs every installed binary; the
+- **D-3995** — `real-lane-crosscheck-two-lanes` — spec §8.1 asks for every version. The rig runs every installed binary; the
   real-lane cross-check runs only the lowest and highest lane, to bound token cost and operator acts.
-- **`incarnation-is-the-row-generation`** — spec §5.1 and §8.1 Q10 leave the parent's incarnation field to
+- **D-3996** — `incarnation-is-the-row-generation` — spec §5.1 and §8.1 Q10 leave the parent's incarnation field to
   measurement; `$REG/<id>.generation` (D-2605) already is one, so Task 9 records it from source.
-- **`wf-limit-pause-is-an-attempt`** — whether a mock 429 provokes Claude Code's five-hour pause is unknown; the
+- **D-3997** — `wf-limit-pause-is-an-attempt` — whether a mock 429 provokes Claude Code's five-hour pause is unknown; the
   scenario's last wait is a PROBE, so an unprovoked pause is recorded as "not re-run within the probe window", never
   as "cannot pause".
-- **`matrix-keyed-by-scenario`** — spec §8.1 frames the matrix as event × source × version rows. The derived matrix is
+- **D-3998** — `matrix-keyed-by-scenario` — spec §8.1 frames the matrix as event × source × version rows. The derived matrix is
   keyed version × scenario, each scenario standing for one source (or one situation of a source), with per-event
   fields inside; Task 9's table maps scenarios back to §8.1's five sources.
-- **`recapture-steps-in-rig-readme`** — spec §8.2 puts the capture steps "beside the fixtures"; they live in
+- **D-3999** — `recapture-steps-in-rig-readme` — spec §8.2 puts the capture steps "beside the fixtures"; they live in
   `server/test/delegation-rig/README.md` beside the rig that runs them, and the fixtures directory holds only data.
-- **`q8-spool-cost-is-a-micro-benchmark`** — the spool append's cost against the hook budget is measured as a bash
+- **D-4000** — `q8-spool-cost-is-a-micro-benchmark` — the spool append's cost against the hook budget is measured as a bash
   micro-benchmark of the same operations; the hook itself is wave 2's, and its own timing pin lands there.
-- **`q9-parent-class-is-a-proxy`** — §8.1 Q9 (the share of trees whose parent is not a ccd session) cannot be read
+- **D-4001** — `q9-parent-class-is-a-proxy` — §8.1 Q9 (the share of trees whose parent is not a ccd session) cannot be read
   from disk: a ccd main session's working directory is the main checkout too. Wave 1 reports the census's parent
   working-directory class as a proxy; wave 2's spool answers it exactly.
 
