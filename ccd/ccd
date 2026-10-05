@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=99096a682cc3ace7c293c5725c634a2aef61d39ee95b7349e65bc3d6fcb0ce69
+# ccrc:generated 1 sha256=1b38ba5ff6c295054c961e825a552dfcad6628322d12e015306145eac519c60b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3134,11 +3134,11 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 189
-# invocations across 159 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 192
+# invocations across 162 non-comment lines.
 #
-# THE LAST MOVE WAS the EXPIRE region's reads (workspace lifecycle wave 3); before it the rescue wait's, the +3; before that D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`);
-# then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
+# THE LAST MOVE WAS the EXPIRE region's reads (workspace lifecycle wave 3); before it the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
 # bookkeeping (`_route_apply_now`, `_route_note`, `_route_applied_set`,
@@ -3886,18 +3886,18 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43 — by addition, NOT a fresh census of
+  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44 and `choicekept` 45 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 43: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
-  # `carriednote`, `child`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
+  # The 45: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # `carriednote`, `child`, `choicekept`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
-  # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
+  # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `typed`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
   # of one word in one file, disclosed rather than renamed. That is a WIDER
   # set than `_reg_set`/`_reg_get`: the inventory
@@ -9858,8 +9858,8 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # changes in one commit.
   _reg_set "$id" archivemanifest "$manifest"$'\n'
 
-  _ws_unsupervise "$id"                                   # clears Restart=always
-  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
+  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"; _ws_unsupervise "$id"      # clears Restart=always; ws-restore respawns from the record (§5.7)
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"
 
   # Truthful in three values, not always "merged": a workspace can be archived
   # with a PR the gh-verified prphase machinery has confirmed merged, PR
@@ -17787,8 +17787,8 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # keeps its exact shape; `via=transcript` is unchanged; `via=banner` is the
     # new word, and an operator seeing it knows the pane said so in this year's
     # wording rather than the transcript having been scanned for it.
-    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")$(_rescue_line_extra)" >> "$REG/swap.log"; _rescuewait_close "$id" swap
-    _dispatch_swap "$id" "$target"
+    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")$(_rescue_line_extra)" >> "$REG/swap.log"
+    _dispatch_swap "$id" "$target"   # an open rescue wait ends `swap` at cmd_swap's landing, never here: the swap can still be refused
     return 0
   fi
   # WAVE 3 §3.3, AND THE PLACEMENT IS THE WHOLE RULING. Everything from here
@@ -19298,6 +19298,244 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
   _route_escape "$id"; return 1
 }
 
+# ── THE OPERATOR'S CHOICE SURVIVES A RESTART (session-continuity spec §5.7) ──
+# A `/model` or `/effort` typed in a session changes the running process only;
+# the next spawn rebuilds its command line from the route record — spec §1.4
+# measured an operator's switch to Opus come back as Fable at the next
+# auto-home. So before a stop that a spawn follows, ccd reads the session's
+# transcript for the newest `/model` and the newest `/effort` local command
+# that no journal row explains — one per kind, because they are two fields —
+# and writes that OPERATOR's choice to the record through `cmd_route`'s own
+# writer, `actor=operator-session`; that writer's swap.log `route` line
+# records it.
+#
+# CCD'S OWN KEYSTROKES ARE NOT THE OPERATOR'S. `_inject_spawn_effort` (the
+# settle's `/effort`) and `_route_apply_now` (`route --apply`, a degraded class
+# among them) journal each `/model` and `/effort` they are about to type in
+# `$REG/<id>.typed`, one row `<epoch> <model|effort> <value>`, and a command of
+# the same kind and value within TYPED_MATCH_WINDOW of a row is ccd's. The
+# `routeapplied` stamp cannot serve: the spawn writes it from the composed argv
+# before the settle `/effort` is typed, and `route --apply` rewrites it for
+# fields it never types.
+#
+# THE JOURNAL HAS A FLOOR. Its first row, `<epoch> since`, is written when the
+# journal opens — at the first spawn this ccd makes (`_spawn_start`), the first
+# keystroke it journals, or the first stop that finds none — and moves only
+# forward: when the newest-but-16 row rotates out, the floor passes that row's
+# epoch by TYPED_MATCH_WINDOW + 1, so the command it explained stays unreadable
+# and is not promoted as the operator's — and to the landing of a swap between an
+# Anthropic and a non-Anthropic lane (`_typed_note … moved`), so a command typed on
+# the other lane is never read by a later stop. A command older than the floor is never read: an
+# older ccd typed the settle's `/effort` and `route --apply`'s `/model` without
+# journalling them, so before the floor ccd's keystrokes and the operator's
+# cannot be told apart. A stop that finds no floor opens it and promotes
+# nothing, and says so (`unmeasured`).
+#
+# A COMMAND'S VALUE is its `<command-args>`, or — for the picker and the slider,
+# which take none — the value Claude Code's own acknowledgement names, with its
+# ANSI bold or backticks removed (`Set model to Opus 5.5 …`, `Set effort level to
+# high …`, `Ultracode on …`); a picker row Claude Code marks `(default)` is the
+# `default` class. A command with no
+# acknowledgement after it changed nothing and is never read, nor is a row a
+# subagent wrote, nor a user turn that carries anything besides the envelope (a
+# human quoting it). A `/model` value maps to the record's class vocabulary
+# through the alias table — `ROUTE_CLASSES` itself (`opus`, `sonnet`, `haiku`,
+# `fable`, `default`), each also with its `[1m]` suffix — then, for a full model
+# id, `_model_family_class`, the bash port of `familyClassOf`'s dash-token rule
+# (`shared/models.mjs`), pinned to it by an agreement test. A `/effort` value
+# maps through `ROUTE_EFFORTS`.
+#
+# NEVER A FAILURE IN THE STOP PATH; the silent cases are named below and listed in
+# README (the stage-7 subsection). Every path is rc 0 and the stop goes on exactly
+# as before. Silent where nothing was lost: no registry row, no transcript, no
+# command, a non-Anthropic lane (skipped), a value already held, a field newer than the keystroke. Logged as
+# `operator-choice <id>: …` where the operator's choice may be lost: a value
+# outside the vocabulary or one the record's own checks refuse (`cmd_route` runs
+# in a subshell, so its `die` ends only that) — the record unchanged — and
+# `unmeasured (…)` where ccd could not read at all (no floor yet, a transcript
+# that is not a readable regular file — never `grep` on a FIFO — no python, a
+# reader that failed) or could not recognise what it read (a /model or /effort
+# command with no acknowledgement in the wording this ccd knows). A choice IS
+# lost without a line in a few cases, each named in README: a command within
+# TYPED_MATCH_WINDOW after a rotated-out keystroke, a round trip through a
+# non-Anthropic lane, a /clear, an unrostered source account, a deploy-transition
+# /model whose journal a `route --apply` keystroke opened first, and a route field
+# whose mtime cannot be read.
+#
+# ONE READ PER RESTART. Every call leaves `$REG/<id>.choicekept`, and every
+# `_spawn_start` removes it, so the marker means "a keep ran since the last
+# spawn": `_spawn_start`'s keep — the one choke point of every spawn — runs only
+# without it, so a revival (an unsupervised one too) reads while the spawn a
+# stop's keep already read for (a swap's landing, `ccd start` after `ccd stop`,
+# a refusal's restart) does not read — and log — a second time.
+#
+# THE RECORD WINS WHEN IT IS NEWER. A field written after the keystroke — the
+# PWA's picker, a coordinator's route, this function's own last promotion — is
+# the later choice, so a command older than the field's file is not promoted;
+# a field whose time cannot be read is not overwritten either; and a value the
+# record already holds is not written again.
+TYPED_MATCH_WINDOW=60   # seconds between a journalled keystroke and the transcript command it explains: ccd's slowest typing (the effort slider: seven Lefts and up to four Rights, a second each) lands well inside it
+TYPED_KEEP_ROWS=16      # `.typed` keystroke rows kept beside its floor: only a row near a command matters, and the settle and the applier type a handful per spawn
+MODEL_FAMILY_TOKENS="-fable-:fable -opus-:opus -sonnet-:sonnet -haiku-:haiku"   # `familyClassOf`'s FAMILY_TOKENS (shared/models.mjs), in its match order — the agreement test reds on any drift
+
+_typed_note() {   # id model|effort value — journal one keystroke ccd is about to type; id since — open the journal only; id moved — move the floor forward to now (§5.7). Never fails its caller.
+  local id="$1" kind="$2" v="${3:-}" rows floor n dropped fe
+  [[ "$kind" == since || "$kind" == moved || ( "$kind" =~ ^(model|effort)$ && "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ) ]] || return 0
+  rows=$(_reg_get "$id" typed)
+  floor="${rows%%$'\n'*}"
+  if [[ "$floor" =~ ^[0-9]{1,12}\ since$ ]]; then
+    [[ "$kind" == since ]] && return 0   # already open: the floor stays where it was
+  else
+    floor="$(date +%s) since"
+  fi
+  rows=$(grep -E '^[0-9]{1,12} (model|effort) ' <<<"$rows")
+  if [[ "$kind" == moved ]]; then   # a lane change landed: nothing typed on the other lane is read by a later stop — the floor moves to now, never back
+    n=$(date +%s); (( n > 10#${floor%% *} )) && floor="$n since"
+    _reg_set "$id" typed "$floor${rows:+$'\n'$rows}" 2>/dev/null || true
+    return 0
+  fi
+  n=$(printf '%s' "$rows" | grep -c . || true)
+  if (( n >= TYPED_KEEP_ROWS )); then   # a row rotates out: its command must stay unreadable, so the floor follows (never backward)
+    dropped=$(printf '%s\n' "$rows" | sed -n "$((n - TYPED_KEEP_ROWS + 1))p")
+    fe=$(( 10#${dropped%% *} + TYPED_MATCH_WINDOW + 1 ))
+    (( fe > 10#${floor%% *} )) && floor="$fe since"
+  fi
+  rows=$(printf '%s\n' "$rows" | tail -n "$((TYPED_KEEP_ROWS - 1))")
+  [[ "$kind" == since ]] || rows="${rows:+$rows$'\n'}$(date +%s) $kind $v"
+  _reg_set "$id" typed "$floor${rows:+$'\n'$rows}" 2>/dev/null || true
+  return 0
+}
+
+_model_family_class() {   # model-id -> the class its first family token names | rc 1 none (`familyClassOf`, ported)
+  local t
+  for t in $MODEL_FAMILY_TOKENS; do
+    [[ "$1" == *"${t%%:*}"* ]] && { printf '%s\n' "${t##*:}"; return 0; }
+  done
+  return 1
+}
+
+_model_class_of() {   # /model value -> the record's class word | rc 1 outside the vocabulary
+  local v="${1%\[1m\]}"
+  _route_word_in "${v,,}" "$ROUTE_CLASSES" && { printf '%s\n' "${v,,}"; return 0; }
+  _model_family_class "$v"
+}
+
+_operator_choice_keep() {   # id — before a stop that a spawn follows: the operator's own /model and /effort, written to the route record (§5.7). Always 0.
+  local id="$1" f typed why="" out kind val at n field want fm shown
+  local -a sets=() kinds=()
+  [[ -f "$REG/$id.uuid" ]] || return 0
+  _reg_set "$id" choicekept "$(date +%s)" 2>/dev/null || true   # a keep ran since the last spawn: the supervised spawn that follows a stop's keep does not read again (cmd_ensure, §5.7)
+  _is_anthropic_backend "$(_reg_get "$id" wrapper)" || return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7)
+  typed=$(_reg_get "$id" typed)
+  if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then
+    _typed_note "$id" since
+    why="its journal opened only now, so an older command may be an older ccd's own keystroke"
+  fi
+  f=$(_transcript_path "$id") || return 0
+  [[ -e "$f" ]] || return 0
+  [[ -z "$why" ]] || { _operator_choice_say "$id" "unmeasured ($why)"; return 0; }
+  [[ -f "$f" && -r "$f" ]] || { _operator_choice_say "$id" "unmeasured (its transcript is not a readable regular file)"; return 0; }
+  command -v python3 >/dev/null 2>&1 || { _operator_choice_say "$id" "unmeasured (no python3)"; return 0; }
+  out=$({ grep -F -A1 -e '<command-name>/model</command-name>' -e '<command-name>/effort</command-name>' -- "$f" 2>/dev/null || (( $? == 1 )); } | python3 -c '
+import json, re, sys
+from datetime import datetime
+window = int(sys.argv[2])
+journal = sys.argv[1].splitlines()
+floor = int(journal[0].split()[0])
+rows = []
+for l in journal[1:]:
+    p = l.split()
+    if len(p) == 3 and p[0].isdigit() and p[1] in ("model", "effort"):
+        rows.append((int(p[0]), p[1], p[2].lower()))
+ENV = re.compile(r"<command-(name|message|args)>([^<]*)</command-\1>")
+ACK = {"model": re.compile(r"Set model to (.+?)(?: and saved| for this session|$)"),
+       "effort": re.compile(r"Set effort level to ([A-Za-z]+)|(Ultracode) on\b")}
+CLEAN = re.compile(r"\x1b\[[0-9;]*m|`")
+SAFE = re.compile(r"[A-Za-z0-9._\[\]-]{1,64}")
+def user(line):
+    try:
+        row = json.loads(line)
+    except ValueError:
+        return None, None
+    if not isinstance(row, dict) or row.get("type") != "user" or row.get("isSidechain") is True:
+        return None, None
+    msg = row.get("message")
+    text = msg.get("content") if isinstance(msg, dict) else None
+    return (text, row) if isinstance(text, str) else (None, None)
+lines = sys.stdin.read().split("\n")
+newest = {}
+unack = {}
+for i, line in enumerate(lines):
+    text, row = user(line)
+    if text is None or ENV.sub("", text).strip():
+        continue
+    tags = dict(ENV.findall(text))
+    kind = {"/model": "model", "/effort": "effort"}.get(tags.get("name", "").strip())
+    if kind is None:
+        continue
+    try:
+        at = int(datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")).timestamp())
+    except (KeyError, AttributeError, TypeError, ValueError):
+        continue
+    nxt = user(lines[i + 1])[0] if i + 1 < len(lines) else None
+    m = re.fullmatch(r"\s*<local-command-stdout>(.*)</local-command-stdout>\s*", nxt or "", re.S)
+    ack = ACK[kind].match(CLEAN.sub("", m.group(1)).strip() if m else "")
+    if at < floor:
+        continue
+    if not ack:
+        given = tags.get("args", "").strip().lower()
+        if not any(k == kind and (not given or v == given) and abs(t - at) <= window for t, k, v in rows):
+            unack[kind] = True
+        continue
+    named = (ack.group(1) or ack.group(2) or "").strip()
+    if kind == "model" and named.endswith("(default)"):
+        named = "default"
+    val = tags.get("args", "").strip() or (named.split() or ["?"])[0]
+    if any(k == kind and v == val.lower() and abs(t - at) <= window for t, k, v in rows):
+        continue
+    newest[kind] = (val, at)
+    unack[kind] = False
+for kind, (val, at) in sorted(newest.items()):
+    print(kind, val if SAFE.fullmatch(val) else "?", at, len(val.encode()))
+if any(unack.values()):
+    print("drift x 0 0")
+' "$typed" "$TYPED_MATCH_WINDOW" 2>/dev/null) || { _operator_choice_say "$id" "unmeasured (the transcript reader failed)"; return 0; }
+  while read -r kind val at n; do
+    [[ "$at" =~ ^[0-9]+$ ]] || continue
+    case "$kind" in
+      model)  field=class;  want=$(_model_class_of "$val") || want="" ;;
+      effort) field=effort; want="${val,,}"; _route_word_in "$want" "$ROUTE_EFFORTS" || want="" ;;
+      drift)  _operator_choice_say "$id" "unmeasured (a /model or /effort command with no acknowledgement this ccd recognises)"; continue ;;
+      *)      continue ;;
+    esac
+    if [[ -z "$want" ]]; then
+      shown="$val"; [[ "$val" == "?" ]] && shown="(${n//[^0-9]/} bytes, not one token)"
+      _operator_choice_say "$id" "/$kind $shown is outside the $field vocabulary — the record is unchanged"
+      continue
+    fi
+    [[ "$(_route_peek "$id" "$field")" == "$want" ]] && continue
+    if [[ -e "$REG/$id.$field" ]]; then
+      fm=$(_plat_mtime "$REG/$id.$field" 2>/dev/null) && [[ "$fm" =~ ^[0-9]+$ ]] || continue
+      (( 10#$fm >= 10#$at )) && continue
+    fi
+    sets+=(--set "$field=$want"); kinds+=("$kind:$want")   # collected: the pair is checked ONCE, in one call below
+  done <<<"$out"
+  if (( ${#kinds[@]} )); then   # ONE call for the pair: `cmd_route` checks class against effort on the merged sets, so a haiku record that takes /model opus AND /effort high keeps both (a call per field refused the effort first)
+    ( cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, kept across a restart" ) >/dev/null 2>&1 \
+      || for kind in "${kinds[@]}"; do _operator_choice_say "$id" "/${kind%%:*} ${kind#*:} refused by the route record's own checks — the record is unchanged"; done
+  fi
+  return 0
+}
+
+_operator_choice_unmark() {   # id — after a stop's pane kill FAILED: the marker means "Claude Code is not running here", so it stays only when the session is proven gone; a live or unmeasurable one is unmarked and its next revival reads. Always 0. (§5.7)
+  _session_probe "$1" 2>/dev/null; [[ "$PROBE_VERDICT" == gone || "$PROBE_SUBSTRATE" == absent ]] || rm -f "$REG/$1.choicekept" 2>/dev/null   # no tmux server means no pane: the session is dead whatever the verdict says
+  return 0
+}
+
+_operator_choice_say() {   # id text — one `operator-choice <id>: <text>` line in swap.log, where the operator's choice may be lost (§5.7)
+  echo "$(date '+%F %T') operator-choice $1: $2" >> "$REG/swap.log"
+}
+
 _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is still pending
   # CLASS FIRST, THEN EFFORT, and the order is a measurement: a session-only
   # effort SURVIVES a model change (D-2811 — `Sonnet 5 with medium effort` after
@@ -19326,6 +19564,7 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
   want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
   have=$(_route_applied_get "$id" class)
   if [[ -n "$cls" && "$cls" != "$have" ]]; then
+    _typed_note "$id" model "$cls"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)
     _route_type_model "$id" "$cls" "$w"; rc=$?
     case "$rc" in
       0) _route_applied_set "$id" class "$cls"; _route_note_clear "$id" ;;
@@ -19339,6 +19578,7 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
       _route_applied_set "$id" effort auto
       _route_note_clear "$id"
     else
+      _typed_note "$id" effort "$eff"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)
       _route_type_effort "$id" "$eff"; rc=$?
       case "$rc" in
         0) _route_applied_set "$id" effort "$eff"; _route_note_clear "$id" ;;
@@ -20285,6 +20525,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # keys, both composed below on the Anthropic arm. The settle's keystroke
   # (`_inject_spawn_effort`) is the NO-RECORD path only — a pre-slice-1
   # session with nothing composed here.
+  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # EVERY spawn reads, here at the one choke point: a revival (Claude Code exited — a pane-scope OOM kill, /exit — and `_supervised_start`'s two unsupervised fallbacks) reads; a spawn that a stop's keep already read for (swap landing, start after stop, ws-restore after ws-archive, refusal restart) does not read again (§5.7). BEFORE the floor line below, or an older ccd's session would open its journal first and the keep read nothing
+  _typed_note "$id" since   # the operator-choice journal opens at this ccd's first spawn of the row: no older command is read as the operator's (session-continuity §5.7)
+  rm -f "$REG/$id.choicekept"   # every spawn ends the marker: it means "a keep ran since the last spawn" (§5.7)
   local routeflags="" routeenv="" rclass rsub rwf reff inert="" rapplied
   if _route_any "$id"; then
     rclass=$(_route_get "$id" class)
@@ -20798,6 +21041,7 @@ _inject_spawn_effort() {   # tmuxname [id] — apply the settle-time effort, onc
     echo "ccd: input box not empty, skipped /effort $level" >&2; return 0
   fi
   sleep 1
+  _typed_note "$id" effort "$level"   # the settle's keystroke, never the operator's choice (session-continuity §5.7)
   tmux send-keys -t "$t" -l "/effort $level"; sleep 1; tmux send-keys -t "$t" Enter
   # Sessions with cached history confirm the switch ("full history gets re-read") — accept.
   sleep 2
@@ -23197,7 +23441,11 @@ _rescue_policy() {   # id wrapper pane hard-blocked -> 0 PROCEED as today | 1 HO
   # footer (`_rescue_armed`), never a draft or a line of prose saying the words.
   local id="$1" wrapper="$2" pane="$3" hb="$4" now rec state kind since rreset rend R
   if [[ -z "$hb" ]]; then
-    _rescuewait_close "$id" clear
+    # EVERY NOT-BLOCKED TICK OF EVERY SESSION reaches this line, and the close's
+    # two command substitutions fork whether or not a record exists (measured
+    # ~1.7 ms a tick a session). The `-e` test is `_strand_clear`'s, and it
+    # changes no answer: the close is a no-op with no open record.
+    [[ -e "$REG/$id.rescuewait" ]] && _rescuewait_close "$id" clear
     return 0
   fi
   now=$(date +%s); R="${HARD_BLOCK_RESET:-}"
@@ -23273,28 +23521,48 @@ _rescue_history() {   # id -> 0 measured (RESCUE_COUNT, RESCUE_SKIP_LEFT, RESCUE
   # policy and its measurement cannot disagree about what happened. Only its
   # tail (`RESCUE_LOG_TAIL_BYTES`), and only when a decision needs it: the chain
   # check of a blocked tick with no wait open, and the target choice of a
-  # rescue that has somewhere to go — not the ticks a strand waits through,
-  # which need neither.
+  # rescue that has somewhere to go — not the ticks a GENUINE no-room strand
+  # waits through, which need neither. A do-not-bounce strand (its only room
+  # is an account it just left) reads it on every tick, twice: once in
+  # `_rescue_target` and once to say so (`_rescue_strand_cause`, departure 3849).
   # Its times are `date '+%F %T'`, LOCAL time, so python converts with `mktime`.
-  #   RESCUE_COUNT       this session's `auto-rescue` lines in RESCUE_CHAIN_WINDOW;
+  #   RESCUE_COUNT       this session's rescues in RESCUE_CHAIN_WINDOW that LANDED;
   #   RESCUE_SKIP_LEFT   their SOURCE accounts ("an account the session just
   #                      left blocked"), except one whose logged `reset=` passed;
   #   RESCUE_SKIP_RECENT every session's rescue TARGET in RESCUE_SPREAD_WINDOW.
+  # A RESCUE LANDED when `cmd_swap`'s own `swap <id>: <from> -> <to> (uuid …)`
+  # line follows its `auto-rescue` line before this session's next one: a
+  # dispatch the swap refused never left its account, so it neither counts
+  # toward the chain wait nor marks that account left. The spread list keeps
+  # every dispatch, landed or in flight — a move still carrying is the herd.
   # UNMEASURABLE IS TODAY'S BEHAVIOUR: no chain wait, no skip. A log that does
   # not exist yet is a MEASURED empty history (rc 0), not an unreadable one, and
-  # so is a tail with no rescue in it (`grep` rc 1).
+  # so is a tail with no rescue in it (`grep` rc 1). A forged line cannot crash
+  # the read: `reset=` takes at most twelve digits, and each list is checked
+  # against a set beside it, so a long tail costs one pass.
   local id="$1" out
   RESCUE_COUNT=0; RESCUE_SKIP_LEFT=""; RESCUE_SKIP_RECENT=""
   [[ -e "$REG/swap.log" ]] || return 0
   [[ -f "$REG/swap.log" && -r "$REG/swap.log" ]] || return 2
   command -v python3 >/dev/null 2>&1 || return 2
-  out=$(tail -c "$RESCUE_LOG_TAIL_BYTES" "$REG/swap.log" 2>/dev/null | { grep -F ' auto-rescue ' || (( $? == 1 )); } | python3 -c '
+  out=$(tail -c "$RESCUE_LOG_TAIL_BYTES" "$REG/swap.log" 2>/dev/null | { grep -F -e ' auto-rescue ' -e ' swap ' || (( $? == 1 )); } | python3 -c '
 import re, sys, time
 sid, now, chain, spread = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 pat = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) auto-rescue (\S+): (\S+) \(blocked\) -> (\S+)(.*)$")
-count, left, recent = 0, [], []
+land = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d swap (\S+): (\S+) -> (\S+) \(uuid ")
+count, left, recent, in_left, in_recent, pending = 0, [], [], set(), set(), None
 for raw in sys.stdin.buffer:
-    m = pat.match(raw.decode("utf-8", "replace").rstrip("\n"))
+    line = raw.decode("utf-8", "replace").rstrip("\n")
+    m = land.match(line)
+    if m:
+        if pending is not None and m.group(1) == sid and (m.group(2), m.group(3)) == pending[:2]:
+            count += 1
+            r = re.search(r" reset=(\d{1,12})(?!\d)", pending[2])
+            if not (r and int(r.group(1)) <= now) and pending[0] not in in_left:
+                in_left.add(pending[0]); left.append(pending[0])
+            pending = None
+        continue
+    m = pat.match(line)
     if not m:
         continue
     try:
@@ -23304,13 +23572,10 @@ for raw in sys.stdin.buffer:
     age = now - at
     if age < 0:
         continue
-    if m.group(2) == sid and age < chain:
-        count += 1
-        r = re.search(r" reset=(\d+)", m.group(5))
-        if not (r and int(r.group(1)) <= now) and m.group(3) not in left:
-            left.append(m.group(3))
-    if age < spread and m.group(4) not in recent:
-        recent.append(m.group(4))
+    if m.group(2) == sid:
+        pending = (m.group(3), m.group(4), m.group(5)) if age < chain else None
+    if age < spread and m.group(4) not in in_recent:
+        in_recent.add(m.group(4)); recent.append(m.group(4))
 print(str(count) + "|" + " ".join(left) + "|" + " ".join(recent))
 ' "$id" "$(date +%s)" "$RESCUE_CHAIN_WINDOW" "$RESCUE_SPREAD_WINDOW" 2>/dev/null) || return 2
   IFS='|' read -r RESCUE_COUNT RESCUE_SKIP_LEFT RESCUE_SKIP_RECENT <<<"$out"
@@ -23321,8 +23586,9 @@ print(str(count) + "|" + " ".join(left) + "|" + " ".join(recent))
 _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout and rc, rule 3's skip lists applied to a RESCUE
   # NOT A RESCUE, NOWHERE TO GO, OR NOBODY CAN SAY IS `_swap_target` BYTE FOR
   # BYTE: the affinity path's choice is not this spec's; skipping can only
-  # remove a candidate, so a strand — asked every 5 s for hours — never pays
-  # the swap-log read; and the unskipped probe's undecidable answer (rc 2-5)
+  # remove a candidate, so a GENUINE no-room strand — asked every 5 s for
+  # hours — never pays the swap-log read (a do-not-bounce strand does: its
+  # unskipped probe names the account it left); and the unskipped probe's undecidable answer (rc 2-5)
   # goes back as it came — the spread pass's never does.
   # For a rescue with somewhere to go, SWAP_TARGET_SKIP names what the
   # candidate walk and the home-return branch pass over: first the accounts
@@ -23363,8 +23629,10 @@ _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout a
 _rescue_strand_cause() {   # id cur home hard-blocked hrc -> rc 0 prints a strand cause when rule 3's do-not-bounce alone left this rescue nowhere to go | rc 1 prints nothing
   # THE DO-NOT-BOUNCE STRAND SAYS SO (departure 3849). `_rescue_target`'s
   # just-left-only pass answers an empty name both when no account has room
-  # and when the only one with room is an account this session just left
-  # blocked; `_strand_mark`'s computed reason (`_strand_why`, which knows no
+  # and when every one with room is an account this session just left
+  # blocked — after two or three rescues inside RESCUE_CHAIN_WINDOW that can be
+  # several, so the cause names the unskipped probe's BEST one, never "the
+  # only" one; `_strand_mark`'s computed reason (`_strand_why`, which knows no
   # skip list) then tells the operator "no account in pool … can take it" in
   # both. Those ask for opposite acts — wait or add capacity, versus leave it
   # alone — and the false one invites the hand bounce rule 3 exists to stop,
@@ -23377,7 +23645,7 @@ _rescue_strand_cause() {   # id cur home hard-blocked hrc -> rc 0 prints a stran
   [[ -n "$out" && "$out" != "$2" ]] || return 1
   _rescue_history "$1" || return 1
   [[ " $RESCUE_SKIP_LEFT " == *" $out "* ]] || return 1
-  printf '%s\n' "its only account with room, $out, is one it left blocked inside RESCUE_CHAIN_WINDOW, and a rescue does not take it back (do not bounce)"
+  printf '%s\n' "its best account with room, $out, is one it left blocked inside RESCUE_CHAIN_WINDOW, and a rescue does not take it back (do not bounce)"
 }
 
 _rescue_line_extra() {   # -> the dated row's tokens for the `auto-rescue` line: ` reset=<epoch>`, ` type=<word>`, ` row=<epoch>`, each only when the verdict kept it
@@ -24264,8 +24532,9 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
     _swap_refuse "$id" "$cur" "$target" "no transcript found for $uuid under $cur" 0
     return 1
   fi
+  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # a stop the spawn below follows: the operator's own /model and /effort reach the record first; a session already stopped and read (a marker) is not read again (§5.7)
   _svc_stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
-  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
   sleep 1                                                  # let claude flush its final transcript entries
   # A SWAP IS NOT AN ABANDONMENT. Between the stop and the start this row is
   # not alive and, after 120 seconds, would also stop looking watched — and
@@ -24428,6 +24697,8 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
     echo "$(date '+%F %T') cross-pool $id: $cur -> $target [project=$project pool=${pps#named } target-pool=${pstate#named }]" >> "$REG/swap.log"
   fi
   echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"
+  local _oc_from=0 _oc_to=0; _is_anthropic_backend "$cur" && _oc_from=1; _is_anthropic_backend "$target" && _oc_to=1
+  (( _oc_from == _oc_to )) || _typed_note "$id" moved   # a move between an Anthropic and a non-Anthropic lane: no command typed on the other lane is read by a later stop (§5.7)
   _reg_set "$id" supervised "$(date +%s)"   # the carry may have taken minutes
   _svc_start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
   # Optional user notification (swap kills any attached remote session — give them a ping).
@@ -24612,8 +24883,9 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   # the stamp's word; `$declared` is empty unless a flag actually arrived, and
   # the journal keeps the two apart.
   _lc_done stop "$id" "" dec.surface "$(_lc_surface_norm "$declared")"
+  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first; a session already stopped and read is not read again (§5.7)
   _ws_unsupervise "$id" "$surface" "$declared"
-  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
   echo "stopped $id"
 }
 

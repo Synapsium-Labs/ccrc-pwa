@@ -668,7 +668,7 @@ function stubLaunchctl(home: string): void {
     + '  print)\n'
     + '    lbl="${2##*/}"\n'
     + '    unit="${lbl#app.ccrc.}"\n'
-    + '    case "$unit" in session.*) unit="claude-session@${unit#session.}" ;;'
+    + '    case "$unit" in session.*) unit="claude-session@${unit#session.}.service" ;;'
     + ' *) unit="$unit.service" ;; esac\n'
     + '    f="$HOME/fixture-unit-$unit"\n'
     + '    if [ -f "$f" ]; then IFS= read -r v < "$f";'
@@ -1606,6 +1606,70 @@ describe('ccrc doctor: the binaries a fleet box needs', () => {
   it('names the binary it found when it is there', () => {
     const home = healthy('ccrc-doctor-bin-ok-');
     expect(lineFor(runDoctor(home).stdout, 'tmux')).toContain(join(home, 'stub-bin', 'tmux'));
+  });
+});
+
+// ── timeout: the bound the session hook and the status line put on tmux ──
+// `ccd/session-hook.sh` and `ccd/statusline-command.sh` ask tmux one question
+// each, bounded by `timeout` or `gtimeout`, and with neither on PATH they SKIP
+// it rather than ask unbounded — so the hook exits before every arm (no
+// hookstate, no turn marker, no merge or search deny) and the status line
+// writes no usage sidecar, silently. macOS ships no `timeout` at all.
+// Each case removes the subject from the contained PATH: `healthy()` links
+// exactly one of the two names (the one the host has), and nothing else on
+// that PATH is a system directory.
+
+describe('ccrc doctor: timeout', () => {
+  const unstubDeadlines = (home: string): void => {
+    for (const b of ['timeout', 'gtimeout']) unstub(home, b);
+  };
+
+  it('FAILs when neither timeout nor gtimeout is on PATH, naming what goes silent and the coreutils remedy', () => {
+    const home = healthy('ccrc-doctor-timeout-none-');
+    unstubDeadlines(home);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL timeout: neither timeout nor gtimeout is on PATH — .*session hook.*status line/m);
+    expect(r.stdout).toMatch(/^FAIL timeout: .*the hook then does nothing at all .*worker-merge deny/m);
+    // Each platform gets its own package manager's line — `CCD_OS` comes from
+    // `$OSTYPE`, so each leg pins its own arm and swapping them reds both.
+    expect(r.stdout).toMatch(process.platform === 'darwin'
+      ? /^FAIL timeout: .*\n {2}remedy: install GNU coreutils: brew install coreutils \(it installs timeout as gtimeout\)$/m
+      : /^FAIL timeout: .*\n {2}remedy: install GNU coreutils: sudo apt install coreutils$/m);
+    expect(r.code).toBe(1);
+  });
+
+  it('with both on PATH, names `timeout` — the session hook and the status line try it first', () => {
+    const home = healthy('ccrc-doctor-timeout-both-');
+    unstubDeadlines(home);
+    const real = realPath(process.platform === 'darwin' ? 'gtimeout' : 'timeout');
+    for (const name of ['timeout', 'gtimeout']) symlinkSync(real, join(stubBin(home), name));
+    expect(lineFor(runDoctor(home).stdout, 'timeout'))
+      .toBe(`PASS timeout: timeout at ${join(home, 'stub-bin', 'timeout')}`);
+  });
+
+  it('PASSes on bare `timeout`, naming where it is', () => {
+    const home = healthy('ccrc-doctor-timeout-gnu-');
+    unstubDeadlines(home);
+    symlinkSync(realPath(process.platform === 'darwin' ? 'gtimeout' : 'timeout'), join(stubBin(home), 'timeout'));
+    expect(lineFor(runDoctor(home).stdout, 'timeout'))
+      .toBe(`PASS timeout: timeout at ${join(home, 'stub-bin', 'timeout')}`);
+  });
+
+  it('PASSes on `gtimeout` alone — Homebrew coreutils on macOS — and says which name it found', () => {
+    const home = healthy('ccrc-doctor-timeout-g-');
+    unstubDeadlines(home);
+    symlinkSync(realPath(process.platform === 'darwin' ? 'gtimeout' : 'timeout'), join(stubBin(home), 'gtimeout'));
+    expect(lineFor(runDoctor(home).stdout, 'timeout'))
+      .toBe(`PASS timeout: gtimeout at ${join(home, 'stub-bin', 'gtimeout')}`);
+  });
+
+  it('SKIPs on a server-role box — no session hook or status line runs there', () => {
+    const home = healthy('ccrc-doctor-timeout-server-');
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    unstubDeadlines(home);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP timeout: this box records CCRC_ROLE=server, so it hosts no sessions/m);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) timeout:/m);
   });
 });
 
@@ -10827,6 +10891,28 @@ function fixerNames(): string[] {
   if (r.status !== 0) throw new Error(`could not list the fixers: ${r.stderr}`);
   return (r.stdout ?? '').split('\n').filter(Boolean);
 }
+
+// `stubLaunchctl` answers a SESSION unit from the same
+// `fixture-unit-claude-session@<id>.service` file the systemctl stub reads, as
+// its own contract says. Forced Darwin, so it is measured on any host: the stub
+// once looked up `fixture-unit-claude-session@<id>` (no `.service`), and the
+// LIVE-session case in codex part 2 went red on macOS alone (PR #239's
+// test-macos 2/2) while every Linux run stayed green.
+describe('stubLaunchctl: a session unit reads the fixture file systemctl reads (forced Darwin)', () => {
+  it('_svc_is_active answers active, inactive and unasked for claude-session@<id> from fixture-unit-claude-session@<id>.service', () => {
+    const home = mkTmp('ccrc-doctor-launchctl-session-');
+    stubLaunchctl(home);
+    const ask = (): string => spawnSync(BASH, ['-c', `. ${shq(CCRC_SRC)}; printf '[%s]' "$(_svc_is_active claude-session@proj-b.service)"`],
+      { env: { ...doctorEnv(home), OSTYPE: 'darwin23' }, encoding: 'utf8' }).stdout;
+    const f = join(home, 'fixture-unit-claude-session@proj-b.service');
+    writeFileSync(f, 'active\n');
+    expect(ask()).toBe('[active]');
+    writeFileSync(f, 'inactive\n');
+    expect(ask()).toBe('[inactive]');
+    writeFileSync(f, '\n');
+    expect(ask()).toBe('[]');
+  });
+});
 
 describe('ccrc doctor --fix: the contract every fixer runs under (Plan 3a Task 8)', () => {
   it('a fixer runs on a FAIL only: a WARN keeps its verdict and its fixer never runs (R-C8)', () => {

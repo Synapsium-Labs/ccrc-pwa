@@ -8145,7 +8145,10 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  it is a measurement of this table that FAILs nothing.
  *
  *  MEASURED ON `1f9fa22d`, the plan's base and this branch's merge-base with
- *  `origin/main` (`$SCRATCH/t10-base`). It is a golden: nothing re-measures
+ *  `origin/main` (`$SCRATCH/t10-base`). RE-MEASURED when doctor gained its
+ *  `timeout` check, by Step 3's case on a disposable copy of that tree: the
+ *  three maps each gained `"timeout": "PASS"` and nothing else moved — every
+ *  other class, both codes and both refreshes equal. It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
  *  base, never hand-edited (it held on the final fix wave's merge of
@@ -8196,6 +8199,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "scopes": "SKIP",
         "services": "PASS",
         "skills": "PASS",
+        "timeout": "PASS",
         "tmux": "PASS",
         "tmux_skew": "PASS",
         "update-exposure": "SKIP",
@@ -8240,6 +8244,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "scopes": "SKIP",
         "services": "PASS",
         "skills": "PASS",
+        "timeout": "PASS",
         "tmux": "PASS",
         "tmux_skew": "PASS",
         "update-exposure": "SKIP",
@@ -8354,6 +8359,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "scopes": "SKIP",
       "services": "PASS",
       "skills": "PASS",
+      "timeout": "PASS",
       "tmux": "PASS",
       "tmux_skew": "PASS",
       "update-exposure": "SKIP",
