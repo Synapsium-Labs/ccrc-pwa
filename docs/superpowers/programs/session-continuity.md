@@ -22,8 +22,8 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | merged 2026-10-02 (`a934a59b`); run 219 closed; deploy AGENT-FIRST by the update mechanism |
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
-| 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
-| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | to plan |
+| 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | — | planning (workflow, 2026-10-05 17:05); run 274 open (planned), block 4012–4021 |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | to plan |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -408,6 +408,24 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - **Overlap notice** (mail 3553): landing's #248 must now absorb main (#281 in README and the doctor test; #250 on
     ccd/ccd's stamp) in its next round, not during review 273.
   - **Deploy:** AGENT-FIRST, through ccrc's own updater.
+- **2026-10-05 17:05 — wave 4's rulings, and its plan is drafting** (workflow wf_db90af4f-0dd, to branch
+  `docs/session-continuity-wave4-plan`).
+  - **(A)** The first commit is review 272's residue F1–F11, as ruled above.
+  - **(B)** Scope: stage 6 part one minus the spawn variable. That is the reap-class OOM count (its baseline week
+    starts at this wave's deploy), `ccd-scope-sweep` with its verdict record and doctor reader, and the
+    limit-banner harness leak.
+  - **(C) The stop ships SHADOWED.** The sweep records "would stop" and stops a scope only while
+    `$REG/scope-sweep-live` exists. Like `stall-watch-live`, nothing in the tree writes that file; the operator
+    arms it by hand.
+    - Why: it is a minute-cadence sweep that kills processes on the live fleet. The fleet's precedent
+      (`stall-watch-live`, `mail-gate-busy-shadow`) observes such a verdict before arming it. This is a named
+      departure from §5.6, and the operator may reverse it.
+  - **(D)** What it must never stop is pinned class by class: ccd's own server scope, non-pane scopes, an
+    unparseable Description, a live foreign server, a live pane, a reused pid.
+  - **(E)** 3925's `/clear` fix moves to wave 4b, beside the spawn variable. Both change what a session's next start
+    does.
+  - **(F)** The units are installed by the installer spine.
+  - **(G)** The overlap rule with #248, run 245 and run 271.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
