@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b55c524b8819aa091a36dbbec9a0e2b97e66b445ecad28f5e1208520c5bd8959
+# ccrc:generated 1 sha256=421b042041d63404d41875da8f6c787d58c9c755620844da791a1f78e1691796
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3134,10 +3134,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 179
-# invocations across 150 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 181
+# invocations across 152 non-comment lines.
 #
-# THE LAST MOVE WAS the rescue wait's reads (session-continuity wave 2), the +3; before it D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`);
+# THE LAST MOVE WAS the EXPIRE region's reads (workspace lifecycle wave 3); before it the rescue wait's, the +3; before that D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`);
 # then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -24972,6 +24972,22 @@ cmd_clip() {   # <png-path> [id] — file an image into a session and inject its
 # `CHILD_RECLAIM_TOKEN_KIND` by slicing THIS region, between its two markers.
 # A failure AFTER the act started is not a refusal: it prints `"failed"`, never
 # `"refused"`, and is journaled by `_lc_fail`.
+#
+# THE FLAVOUR (workspace lifecycle, spec 2026-09-24 §5.3). Rungs 3-10 of this
+# ladder (`_ws_reclaim_ladder`), its pin phase and its tail are SHARED with
+# `ws-expire` (the EXPIRE region below): an archived workspace, seven days after
+# its archive, is pinned and torn down by exactly this machinery. What differs
+# is read from `_WS_RCL_ACT` — the journal act and the verb's name, the
+# breadcrumb's flavour, the WIP subject, the tombstone's `mode` and binding
+# field, the done document. At one rung a question only TIGHTENS, and it is
+# keyed on the token's binding (`_WS_LADDER_BIND`, `mode=expire`), not on
+# this flavour: rung 5 asks the EXPIRE region whether a detached pane or a
+# live unit stands (`_ws_expire_presence`). No word of the fourteen moves, and
+# none is spelled here for the expiry. `cmd_ws_expire` sets the flavour as a
+# LOCAL, which every function below sees by bash's dynamic scope for that one
+# call; this global is assigned whenever ccd is read, so an environment that
+# exports `_WS_RCL_ACT=expire` cannot turn a reclaim into an expiry.
+_WS_RCL_ACT=reclaim
 
 _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the reclaim ladder's own
   _ws_reap_reset
@@ -24995,6 +25011,8 @@ _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the re
   RECLAIM_WIP_SHA=""        # `_ws_wip_commit`'s answer for the tree it was just handed
   RECLAIM_WIP_WHY=""; RECLAIM_PIN_WHY=""; _WS_RECLAIM_CLASSIFY_WHY=""
   RECLAIM_KEPT=()           # branches this reclaim KEEPS, never deletes, and records (`keptBranches`)
+  _WS_LADDER_BIND=()        # the token's LEADING inputs — the caller's rungs 1-2 set them (`_ws_reclaim_ladder`)
+  EXPIRE_ARCHIVED_AT=""     # ws-expire's archive epoch, as READ (the EXPIRE region); '' on every reclaim
 }
 
 _ws_reclaim_fingerprint() {   # key=value... -> the reclaim token. Every input is NAMED, so a
@@ -25810,9 +25828,7 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   # two-authority check there and a marker check here. It runs only where no
   # breadcrumb exists — a resumed reclaim is `_ws_reclaim_resume_eval`'s.
   _ws_reclaim_reset
-  local id="$1" defer="$2" childof="$3"
-  local ws mark project workdir regbranch branch wthead main mainreal common
-  local op clients elsewhere elsrc nested p pcommon ptop rc h hs clipsjson hp wdreal
+  local id="$1" defer="$2" childof="$3" ws mark
   RECLAIM_DEFER="$defer"
   # 1 — registry identity
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -25831,6 +25847,22 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   [[ -z "$childof" || "$mark" == "$childof" ]] \
     || { _reap_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
   RECLAIM_CHILDOF="$mark"
+  _WS_LADDER_BIND=("mode=reclaim" "id=$id" "childOf=$RECLAIM_CHILDOF" "deferExpired=$RECLAIM_DEFER")
+  _ws_reclaim_ladder "$id" "$defer"
+}
+
+_ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` and `_ws_expire_eval` (the
+  #                         EXPIRE region): each asks its own rungs 1-2 first and sets `_WS_LADDER_BIND`, the
+  #                         token's leading inputs. 0 with REAP_VERDICT=reclaimable and REAP_TOKEN; else
+  #                         REAP_VERDICT names the refusal. Its one flavour question is rung 5's (see THE FLAVOUR).
+  local id="$1" defer="$2"
+  local project workdir regbranch branch wthead main mainreal common
+  local op clients elsewhere elsrc nested p pcommon ptop rc h hs clipsjson hp wdreal
+  # NO BINDING, NO TOKEN: a ladder entered without its caller's rungs 1-2 would
+  # mint a token that names no verb and no population. A defect, measured as
+  # nothing — unmeasured, never a refusal word and never a token.
+  (( ${#_WS_LADDER_BIND[@]} )) \
+    || { _ws_reclaim_unmeasured "the ladder was entered without its caller's rungs 1-2 — no binding for its token"; return 1; }
   # 3 — the kill-switch, read HERE, at the instant of deletion (spec §5.8). -e,
   # not -f, and -L: a directory, an unreadable file or a DANGLING link pauses.
   [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
@@ -25882,6 +25914,12 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
           || { _reap_refuse attached "a terminal is attached to $(_tmux "$id"): ${clients//$'\n'/, }"; return 1; } ;;
       *) _ws_reclaim_unmeasured "whether $(_tmux "$id") is up could not be asked — tmux answered: ${PROBE_DETAIL:-nothing}"; return 1 ;;
     esac
+    # AN EXPIRY ASKS MORE OF THIS RUNG, AND ONLY MORE: a DETACHED pane and a live
+    # unit refuse it too (`_ws_expire_presence`, the EXPIRE region). Never a
+    # reclaim's question: a child's tail kills its pane by design (spec §5.6).
+    # Keyed on the BINDING the expiry's rungs 1-2 set, never on the flavour
+    # global: a caller of `_ws_expire_eval` that forgot the flavour still asks.
+    [[ "${_WS_LADDER_BIND[0]-}" != mode=expire ]] || _ws_expire_presence "$id" "$PROBE_VERDICT" || return 1
   fi
   # THE LEAF IS NEVER FOLLOWED (spec §5.5). A workdir that is itself a link
   # reaches a tree ccd cannot prove is this child's: the pin would commit that
@@ -26105,8 +26143,8 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   REAP_CHILDDIGEST=$(printf '%s%s' "$RECLAIM_NESTED" "$RECLAIM_FOREIGN" | _plat_sha256 | cut -d' ' -f1)
   # 10 is the VERB's: it recomputes this inside the reap lock and compares.
   RECLAIM_WORKTREE=present
-  REAP_TOKEN=$(_ws_reclaim_fingerprint "mode=reclaim" "id=$id" "childOf=$RECLAIM_CHILDOF" \
-    "deferExpired=$RECLAIM_DEFER" "worktree=present" "branch=$branch" "registryBranch=$regbranch" \
+  REAP_TOKEN=$(_ws_reclaim_fingerprint "${_WS_LADDER_BIND[@]}" \
+    "worktree=present" "branch=$branch" "registryBranch=$regbranch" \
     "worktreeHead=$wthead" "tip=$REAP_TIP" "head=$RECLAIM_HEAD" "statusDigest=$RECLAIM_STATUSDIGEST" \
     "ignoredDigest=$REAP_IGNDIGEST" "secretsDigest=$REAP_SENSDIGEST" "hiddenDigest=$RECLAIM_HIDDENDIGEST" \
     "stashes=${RECLAIM_STASHES//$'\n'/,}" "opHeads=${RECLAIM_OPHEADS//$'\n'/,}" \
@@ -26170,8 +26208,8 @@ _ws_reclaim_eval_absent() {   # id workdir main regbranch -> the ladder's answer
   # never be spent on its absence, nor one minted before git's record went
   # after it, or the other way round.
   RECLAIM_WORKTREE=absent
-  REAP_TOKEN=$(_ws_reclaim_fingerprint "mode=reclaim" "id=$id" "childOf=$RECLAIM_CHILDOF" \
-    "deferExpired=$RECLAIM_DEFER" "worktree=absent" "record=$rec" "branch=$branch" \
+  REAP_TOKEN=$(_ws_reclaim_fingerprint "${_WS_LADDER_BIND[@]}" \
+    "worktree=absent" "record=$rec" "branch=$branch" \
     "registryBranch=$regbranch" "worktreeHead=$wthead" "tip=$REAP_TIP" "head=$RECLAIM_HEAD" \
     "stashes=${RECLAIM_STASHES//$'\n'/,}" "clipsDigest=$REAP_CLIPDIGEST")
   REAP_VERDICT=reclaimable
@@ -28406,6 +28444,135 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 # by the `if` that guards this line.
 
 # ── end child reclamation ─────────────────────────────────────────────── RECLAIM-END ──
+
+# ── archived-workspace expiry: ws-expire (spec 2026-09-24 §5.3) ──────────── EXPIRE-BEGIN ──
+# An ARCHIVED workspace is pinned, then torn down, seven days after its
+# archive, by `ws-expire` — composed by the server and by nothing else
+# (CLAUDE.md SAFETY: forbidden to every session; `ws-reap` stays human-only).
+# A SIBLING of `ws-reclaim`, never a flag on it: rung 2 of that ladder (the
+# `.child` marker) has no override anywhere, and a flag that widened its
+# population would be one (spec §5.3). So this region holds only what is the
+# expiry's OWN — its rungs 1-2, its fork, its verb, its audit, its presence
+# question and its spawn gate — and borrows the rest from the RECLAIM region
+# above: rungs 3-10 (`_ws_reclaim_ladder`), the pin phase, the tail, the lock
+# `$REG/.reap-<id>.lock`. `_WS_RCL_ACT=expire`, set as a local here, is what
+# makes that machinery journal `expire`, write `expire:` breadcrumbs and a
+# tombstone whose `mode` is `expire` (see THE FLAVOUR there).
+#
+# THE VOCABULARY. Every word this verb can answer, by the kind wave 3b's lane
+# gives it: GONE — `no-such-session`, `not-archived` (the row left the
+# population: returned, or never archived); TERMINAL — `not-a-workspace`,
+# `branch-elsewhere`, `tree-unreadable`, `containment-unproven`,
+# `no-worktree-record`; RETRY — `not-expired`, `child`, `paused`, `held`,
+# `attached`, `live`, `tree-busy`, `state-changed`, `in-progress`,
+# `reap-in-progress`, `reclaim-in-progress`. Eighteen. The ones the RECLAIM
+# region spells stay spelled there; this region spells only its own
+# (`not-archived`, `not-expired`, `child`, `live`, and the two flavour
+# refusals). `unmeasured` is no word, exactly as there: a probe that could not
+# run is a `"failed"` document at exit 1 (`probe-unmeasured`), retried.
+# `--defer-expired` does not exist here: `attached`, `live` and `tree-busy` are
+# never skipped, because "presence defers WITHOUT a ceiling" (spec §5.3).
+
+WS_EXPIRE_AFTER_S=604800   # seven days, spec §5.3 (L3). The kill rule (§9) raises it; nothing lowers it.
+
+_ws_expire_now() { date +%s; }   # the clock rung 2′ reads — a function, so a test can name the instant
+
+_ws_expire_epoch_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[1-9][0-9]{0,11}$ ]]; }   # value -> 0 iff it is an archive epoch as ccd writes one
+
+_ws_expire_archived() {   # id -> 0 with EXPIRE_ARCHIVED_AT = the archive epoch, when the workspace is archived and
+  #                          that archive is at least WS_EXPIRE_AFTER_S old; else rc 1 with REAP_VERDICT set
+  # RUNG 2′, ITS FIRST HALF (spec §5.3). `.archived` is what every reader of
+  # the archive tests, so it is the population: absent — and a link or a
+  # directory standing there is not absent — refuses `not-archived`. A stamp
+  # that stands but is not an epoch ccd writes is unmeasured, never "old":
+  # an expiry decided on a guess is a deletion decided on one.
+  local id="$1" f="$REG/$1.archived" arch now
+  [[ -e "$f" || -L "$f" ]] \
+    || { _reap_refuse not-archived "$id is not archived — only a workspace archived $WS_EXPIRE_AFTER_S seconds ago or more is ever expired"; return 1; }
+  arch=$(_reg_get "$id" archived)
+  _ws_expire_epoch_ok "$arch" \
+    || { _ws_reclaim_unmeasured "the archive stamp at $f cannot be read as an epoch (it reads '$arch')"; return 1; }
+  now=$(_ws_expire_now) && _ws_expire_epoch_ok "$now" \
+    || { _ws_reclaim_unmeasured "the clock could not be read, so the archive's age was never measured"; return 1; }
+  (( now - arch >= WS_EXPIRE_AFTER_S )) \
+    || { _reap_refuse not-expired "$id was archived $(( now - arch )) seconds ago; it expires $WS_EXPIRE_AFTER_S seconds after its archive, at $(( arch + WS_EXPIRE_AFTER_S ))"; return 1; }
+  EXPIRE_ARCHIVED_AT="$arch"
+}
+
+_ws_expire_not_child() {   # id -> 0 when NO `.child` marker stands; else rc 1 refused `child`
+  # RUNG 2′, ITS SECOND HALF. A marker that reads as a child, or that stands and
+  # cannot be read, refuses `child` — retryable, and never this verb's: a child
+  # is the RECLAIM lane's (spec §5.3, CCR-15 R29's direction: an unreadable
+  # marker defers). Presence is the test (`-e`, and `-L` for a dangling link),
+  # never the grammar: a marker this box cannot parse is still not "none".
+  local id="$1"
+  [[ ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] \
+    || { _reap_refuse child "$id carries a child marker ($REG/$id.child) — a child is reclaimed by ws-reclaim when its run closes, never expired"; return 1; }
+}
+
+_ws_expire_presence() {   # id probe-verdict -> 0 when nothing runs for id; else rc 1 (`live`, or unmeasured)
+  # RUNG 5, ASKED MORE OF FOR AN EXPIRY (the RECLAIM region's ladder calls this
+  # after its own `attached` question, only when the binding leads with
+  # `mode=expire`; `_ws_expire_resume_eval` asks it at the `children` phase).
+  # An archived workspace has had no pane since its archive — that is half of
+  # why expiring it is safe (spec §3, item 2) — so a pane that is up, attached
+  # or not, or a unit that is running, means somebody is using it: `live`,
+  # retryable, and nothing touched. `ws-reclaim` never asks this: a finished
+  # child's tail kills its pane by design. The unit is asked the way the tail
+  # re-measures it: only a POSITIVE stopped answer passes — `inactive`, or
+  # `failed` (a failed unit is not restarted) — and an EMPTY answer is the
+  # manager not answering, unmeasured, never absence. ON DARWIN `failed` IS A
+  # STAMP (`$REG/<id>.svcfailed`, printed before launchd is asked, and never
+  # cleared by a re-enable or a swap's start), so launchd is asked as the tail
+  # asks it: `state = running`, or any loaded job (exit 0), is `live`; only
+  # exit 113 ("Could not find service") lets the stamp stand for stopped; any
+  # other status is a question never answered — unmeasured.
+  # WHAT IT DOES NOT SEE: a process with its cwd in the worktree that runs
+  # outside the `cc-<id>` pane and outside the unit (an operator's own shell).
+  local id="$1" verdict="$2" unit out lrc
+  [[ "$verdict" != live ]] \
+    || { _reap_refuse live "$(_tmux "$id") is up with no terminal attached — an archived workspace whose pane runs is in use, and is never expired"; return 1; }
+  unit=$(_svc_is_active "claude-session@$id")
+  if [[ "$CCD_OS" == darwin && "$unit" == failed ]]; then
+    out=$(_svc_launchctl print "$(_svc_domain)/$(_svc_label "claude-session@$id")" 2>/dev/null); lrc=$?
+    case "$out" in
+      *"state = running"*) unit=running ;;
+      *) case "$lrc" in
+           113) : ;;
+           0) unit=loaded ;;
+           *) _ws_reclaim_unmeasured "claude-session@$id answered 'failed' from its stamp, and launchd could not say whether the job is loaded (print exit $lrc)"; return 1 ;;
+         esac ;;
+    esac
+  fi
+  case "$unit" in
+    inactive|failed) return 0 ;;
+    '') _ws_reclaim_unmeasured "whether claude-session@$id is running could not be asked — the service manager answered nothing"; return 1 ;;
+    *) _reap_refuse live "claude-session@$id answered '$unit' — a supervised workspace respawns its pane, and is never expired"; return 1 ;;
+  esac
+}
+
+_ws_expire_eval() {   # id -> 0 when the expiry ladder passes (REAP_VERDICT=expirable, REAP_TOKEN set), else
+  #                     REAP_VERDICT names the refusal. Runs only where no breadcrumb exists.
+  # THE LADDER, in spec §5.3's order: rung 1 (`no-such-session`;
+  # `not-a-workspace` for a main checkout, which nothing ever archives as a
+  # workspace — a main checkout is never expired), rung 2′ (archived, and old
+  # enough; not a child), then the RECLAIM region's rungs 3-10 unchanged, with
+  # rung 5 asked more of. The archive EPOCH is a token input, so a workspace
+  # brought back and archived again can never be expired on its old token:
+  # `state-changed` (spec §5.3).
+  _ws_reclaim_reset
+  local id="$1" ws
+  [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
+  ws=$(_reg_get "$id" workspace)
+  [[ -n "$ws" ]] || { _reap_refuse not-a-workspace "$id is a main checkout — a main checkout is never expired"; return 1; }
+  _ws_expire_archived "$id" || return 1
+  _ws_expire_not_child "$id" || return 1
+  _WS_LADDER_BIND=("mode=expire" "id=$id" "archivedAt=$EXPIRE_ARCHIVED_AT")
+  _ws_reclaim_ladder "$id" 0 || return 1
+  REAP_VERDICT=expirable
+}
+
+# ── end archived-workspace expiry ───────────────────────────────────────────── EXPIRE-END ──
 
 # ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──
 _ws_reap_leaf_ok() { [[ ! -L "${1%"${1##*[!/]}"}" ]] || _reap_refuse containment-unproven "$1 is a symbolic link — ccd never follows a link to a tree it would delete, so it cannot prove the tree at that path is $2's own"; }   # workdir id -> 0, or rc 1 refused

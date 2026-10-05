@@ -214,11 +214,12 @@ describe('ccd reclaim-pause', () => {
     // path once outside the writer, so `outside` stays >= 1. Pin the reader
     // side separately: the exact expression both readers use,
     // `[[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]]` (a
-    // dangling link at that name pauses too), must appear inside EACH of wave 3's
-    // two eval functions — the fresh arm (`_ws_reclaim_eval`, its rung 3) and
-    // the resume arm (`_ws_reclaim_resume_eval`) — sliced by their own
-    // `name() {` … `^}`, so mistyping either reader's path reds this suite on
-    // its own function, independently of the other and of the writer.
+    // dangling link at that name pauses too), must appear inside EACH reader —
+    // the fresh arm's rung 3, which since workspace lifecycle wave 3 lives in the
+    // SHARED ladder (`_ws_reclaim_ladder`, run by `_ws_reclaim_eval` and by
+    // `_ws_expire_eval` alike), and each verb's resume arm — sliced by its own
+    // `name() {` … `^}`, so mistyping any reader's path reds this suite on its
+    // own function, independently of the others and of the writer.
     const READER = /\[\[ ! -e "\$REG\/reclaim-paused" && ! -L "\$REG\/reclaim-paused" \]\]/;
     const sliceFn = (name: string): string[] => {
       const fnStart = src.findIndex((l) => l.startsWith(`${name}() {`));
@@ -227,7 +228,7 @@ describe('ccd reclaim-pause', () => {
       expect(fnEnd, `${name} has no closing brace at column 0`).toBeGreaterThan(fnStart);
       return src.slice(fnStart, fnEnd + 1);
     };
-    for (const name of ['_ws_reclaim_eval', '_ws_reclaim_resume_eval']) {
+    for (const name of ['_ws_reclaim_ladder', '_ws_reclaim_resume_eval']) {
       expect(sliceFn(name).some((l) => READER.test(l)), `${name} does not read $REG/reclaim-paused`).toBe(true);
     }
   });

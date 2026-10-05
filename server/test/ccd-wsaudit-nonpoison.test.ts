@@ -100,11 +100,17 @@ describe('the lifecycle block cannot poison wsaudit.test.ts\'s scan', () => {
     // the region — so the pin above stays 55 and byte-identical. Measured the
     // same way: base 60 -> tree 62, ENTERED those two, LEFT none; the scan
     // outside both blocks answers 55 at both.
+    // 62 -> 65 (workspace lifecycle wave 3, Task 3 — `ws-expire`'s ladder, spec 2026-09-24
+    // §5.3): the expiry's own words stand in its own `EXPIRE-BEGIN`…`EXPIRE-END`
+    // region, which `src` cuts out exactly as it cuts the other two blocks — so
+    // the pin above stays 55 and byte-identical. Measured the same way: the full
+    // scan answers 65, ENTERED the expiry's new words, LEFT none; the scan
+    // outside the three blocks answers 55.
     const full = readFileSync(CCD, 'utf8');
-    expect.soft(scan(full)).toHaveLength(62);
+    expect.soft(scan(full)).toHaveLength(65);
     expect.soft(scan(full).filter((t) => !scan(src).includes(t)))
-      .toEqual(['attached', 'containment-unproven', 'not-a-child', 'paused', 'reap-in-progress', 'reclaim-in-progress',
-        'tree-busy']);
+      .toEqual(['attached', 'child', 'containment-unproven', 'live', 'not-a-child', 'not-expired', 'paused',
+        'reap-in-progress', 'reclaim-in-progress', 'tree-busy']);
     expect.soft(reclaimRegion(full).length, 'the region was found — an empty cut proves nothing').toBeGreaterThan(5000);
     expect.soft(markedBlock(full, 'MIRROR-BEGIN', 'MIRROR-END'), 'the mirror block was found, and holds ws-reap’s breadcrumb word')
       .toContain('"refused":"reclaim-in-progress"');
@@ -129,12 +135,13 @@ function markedBlock(text: string, begin: string, end: string): string {
 }
 
 /** `text` with that region — and ws-reap's mirror block below it, which holds
- *  ws-reap's refusal of a reclaim breadcrumb (child reclamation wave 3, Task 4)
+ *  ws-reap's refusal of a reclaim breadcrumb (child reclamation wave 3, Task 4),
+ *  and the EXPIRE region, `ws-expire`'s own words (workspace lifecycle wave 3)
  *  — cut out. A function DECLARATION, so it is hoisted and `src` can use it on
  *  its own line without moving the lines the corpus cites. */
 function withoutReclaim(text: string): string {
   let out = text;
-  for (const block of [reclaimRegion(text), markedBlock(text, 'MIRROR-BEGIN', 'MIRROR-END')]) {
+  for (const block of [reclaimRegion(text), markedBlock(text, 'MIRROR-BEGIN', 'MIRROR-END'), markedBlock(text, 'EXPIRE-BEGIN', 'EXPIRE-END')]) {
     if (block !== '') out = out.replace(block, '');
   }
   return out;
