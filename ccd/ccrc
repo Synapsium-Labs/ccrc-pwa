@@ -2744,7 +2744,7 @@ _box_server_addr() {
 # this is the one caller that needs told apart.
 #
 # THIRD ARGUMENT, `unit` OR `shell` (wave 9 R10a/R10e, D-3822/D-3823) — only
-# `_box_unit_env` passes one; the 43 other callers pass two and read exactly what
+# `_box_unit_env` passes one; the 45 other callers pass two and read exactly what
 # they always read, CR handling included.
 #   unit   systemd's `EnvironmentFile=` (Linux). Whitespace (space, tab, CR)
 #          around an UNQUOTED value is discarded (the run-182 ruling,
@@ -2985,7 +2985,7 @@ _box_unit_env() {   # <KEY>
       nul)  BUE_WHY="$f holds a NUL byte, which systemd does not accept in an EnvironmentFile= (the unit's lines are optional, so it carries on without the file), so what the unit receives from that file is not decided here"
             BUE_FIX="remove the NUL byte from $f (ccrc expose rewrites the exposure file)" ;;
       utf8) BUE_WHY="$f line $wline has a non-ASCII byte in a NAME=value line (or in a comment-looking line a multi-line value may swallow), and systemd skips a file whose keys or values are not valid UTF-8, which this reader does not check, so what the unit receives from that file is not decided here"
-            BUE_FIX="keep every NAME=value line of $f to ASCII (a non-ASCII host goes in as its punycode xn-- form; comments may stay as they are), then re-run (ccrc expose rewrites the exposure file)" ;;
+            BUE_FIX="keep every NAME=value line of $f to ASCII (a non-ASCII host goes in as its punycode xn-- form; comments may stay unless a value above them spans lines (a line ending in a backslash, or a quote left open) — then fix that value or make the comment ASCII), then re-run (ccrc expose rewrites the exposure file)" ;;
       *)    BUE_WHY="$f names $key in a shape this reader does not decide (a space around '=', an export prefix, a backslash, a quote that is not one whole pair, a quote left open on an earlier line, or a line after one ending in a backslash)"
             BUE_FIX="rewrite the line naming $key in $f, or the line above it when that one ends in a backslash, as KEY=value: no space before or after '=', no export, no backslash, no quote except one whole pair around the value, and no quote left open on an earlier line (ccrc expose rewrites the exposure file)" ;;
     esac
