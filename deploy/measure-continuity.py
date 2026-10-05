@@ -467,7 +467,63 @@ def stage4(ctx):
     }}
 
 
-STAGES = {1: stage1, 4: stage4}
+# ── stage 7 (wave 3): the operator's choice survives a restart ──────────────
+# §9's stage-7 row, "restarts that revert an operator's /model", read off
+# swap.log. Before a stop that a spawn follows, ccd writes an operator's own
+# `/model` or `/effort` to the route record (`route <id>: <field> <old> -> <new>
+# [actor=operator-session]`), or says why it could not: a value outside the
+# vocabulary, or one the record's own checks refused (`operator-choice <id>: …`).
+# Those two are the restarts ccd KNOWS reverted the operator's choice, so they
+# are the row; the writes are reported beside them, and so are the stops where
+# ccd could not read at all (`operator-choice <id>: unmeasured (…)`), which MAY
+# have reverted one — never folded into the row, never dropped. Named cost: a
+# supervisor revival reads the transcript before its spawn and logs like a stop,
+# but a session on a non-Anthropic lane is skipped and leaves no line, so its
+# `/model` is never counted.
+# Self-contained, as stage 4.
+S7_WRITE = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) route (\S+): (class|effort) .+? -> (\S+) \[actor=operator-session\]")
+S7_SKIP = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) operator-choice (\S+): /(model|effort) .*(outside the \S+ vocabulary|refused by the route record)")
+S7_UNMEASURED = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) operator-choice (\S+): unmeasured \(")
+
+
+def stage7(ctx):
+    since, until = ctx["since"], ctx["until"]
+    path = ctx["swap_log"] or os.path.join(ctx["home"], ".cc-sessions", "swap.log")
+    try:
+        with open(path, "rb") as fh:
+            lines = [raw.decode("utf-8", "replace").rstrip("\n") for raw in fh]
+    except FileNotFoundError:
+        return {"operator_choice": {"swap_log": "absent"}}
+    def inwin(stamp):
+        try:
+            t = int(time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")))
+        except (ValueError, OverflowError):
+            return False
+        return (since is None or t >= since) and (until is None or t < until)
+    written, outside, refused = collections.Counter(), collections.Counter(), collections.Counter()
+    unmeasured = 0
+    for line in lines:
+        m = S7_WRITE.match(line)
+        if m and inwin(m.group(1)):
+            written[m.group(3)] += 1
+            continue
+        m = S7_SKIP.match(line)
+        if m and inwin(m.group(1)):
+            (outside if m.group(4).startswith("outside") else refused)[m.group(3)] += 1
+            continue
+        m = S7_UNMEASURED.match(line)
+        if m and inwin(m.group(1)):
+            unmeasured += 1
+    return {"operator_choice": {
+        "restarts_that_reverted_an_operator_model": outside["model"] + refused["model"],
+        "operator_choices_written_by_field": dict(sorted(written.items())),
+        "operator_values_outside_the_vocabulary_by_kind": dict(sorted(outside.items())),
+        "operator_choices_refused_by_kind": dict(sorted(refused.items())),
+        "stops_that_could_not_read_the_transcript": unmeasured,
+    }}
+
+
+STAGES = {1: stage1, 4: stage4, 7: stage7}
 
 
 def when(s):

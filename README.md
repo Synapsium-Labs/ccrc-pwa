@@ -2276,6 +2276,45 @@ were rescued four times inside an hour (2026-09-08..09-23).
   alone for a carried row D-3526 kept a block). `python3 deploy/measure-continuity.py --stage 4` reads it all
   back, read-only.
 
+### The operator's own `/model` and `/effort` survive a restart (session-continuity stage 7)
+
+`docs/superpowers/specs/2026-09-23-session-continuity-design.md` §5.7. A `/model` or `/effort` typed in a session
+changes the running process only, and every spawn rebuilds its command line from the route record, so an
+operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable again after an auto-home).
+
+- **Before a stop that a spawn follows** — `cmd_swap` (every rescue, auto-home, manual, PWA or `swap-self` move),
+  `ccd stop` (a later `start`/`enable` respawns from the record) and `ccd ws-archive` (`ws-restore` does) —
+  `_operator_choice_keep` reads the transcript for the newest acknowledged `/model` and `/effort` that no journal
+  row explains and writes an operator's value through `cmd_route`'s own writer: `route <id>: class fable -> opus
+  [actor=operator-session]` in `swap.log`. A supervisor revival (`cmd_ensure` in the unit, most often after a
+  pane-scope OOM kill) follows no ccd stop, so it keeps the choice before its own spawn; each stop leaves a one-shot
+  `$REG/<id>.choicekept` marker that `cmd_ensure` honours and `_spawn_start` clears, so a restart reads once and logs
+  at most once.
+- **ccd's own keystrokes are not the operator's.** The settle's `/effort` and `route --apply` journal what they
+  type in `$REG/<id>.typed` (`<epoch> <model|effort> <value>`, the last `TYPED_KEEP_ROWS=16`, purged with the
+  row); a command with the same value within `TYPED_MATCH_WINDOW=60` seconds of a row is ccd's and is left alone.
+  The journal's first row is its floor (`<epoch> since`, written at this ccd's first spawn of the row): no command
+  older than it is read, since an older ccd typed without journalling, and a stop that finds no floor opens one and
+  promotes nothing that time.
+- **The value** is the command's argument, or — for the picker and the slider, which take none — the one Claude
+  Code's acknowledgement names (``Set model to `Opus 5.5` …``, ANSI bold on older builds; a `(default)` row is the
+  `default` class). A `/model` maps through the class vocabulary itself (`opus`, `sonnet`, `haiku`, `fable`,
+  `default`, each also with `[1m]`, which the record cannot hold), then a full model id through
+  `_model_family_class`, the bash port of `familyClassOf`'s dash-token rule, pinned to it.
+- **It never fails a stop, and never loses a choice silently.** A value outside the vocabulary, or one the record's
+  own checks refuse (`haiku` with an effort level), is logged as `operator-choice <id>: …` and leaves the record
+  unchanged; a stop that cannot read at all logs `operator-choice <id>: unmeasured (…)`. A field written after the
+  keystroke (the PWA picker, a coordinator's route, this step's last write) is the later choice and wins.
+  `python3 deploy/measure-continuity.py --stage 7` counts the writes, the restarts that reverted a `/model`, and
+  the unmeasured stops.
+- **Skipped, and the known costs.** A session on a non-Anthropic lane is skipped, silently (`_is_anthropic_backend`,
+  as the settle is), and a swap that crosses lanes moves the journal floor to the landing, so nothing typed on the
+  other lane is read. `/model opus[1m]` is kept as `opus` and loses its 1M context (the record has no context
+  field). The floor costs twice, once each: a `/model` typed in a session already running at the deploy, before its
+  first post-deploy stop or respawn, is not kept at that stop (logged `unmeasured` once); and after a rollback and
+  a roll-forward, keystrokes the older ccd typed after a floor was opened are unjournalled and newer than it, so
+  they could read as the operator's.
+
 ### A return visit merges the session's sidecar (session-continuity stage 1)
 
 A swap carries more than the transcript: beside it sits the session's sidecar directory — every subagent

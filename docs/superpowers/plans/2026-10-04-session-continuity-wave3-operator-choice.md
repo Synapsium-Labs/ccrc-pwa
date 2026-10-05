@@ -2893,10 +2893,10 @@ of ten (Open question 9):
 - **D-3903** `alias-table-is-route-classes` — the spec's alias table is derived from `ROUTE_CLASSES` (the same five words)
   rather than written again, case-folded so an acknowledgement's display word maps, and a `[1m]` variant maps to its
   base class because the record has no context dimension (Open question 2). Rows 2.6, 2.7.
-- **`stage-seven-counts-logged-reverts`** — §9's stage-7 row ("restarts that revert an operator's `/model`") is
+- **D-3904** `stage-seven-counts-logged-reverts` — §9's stage-7 row ("restarts that revert an operator's `/model`") is
   measured as the restarts whose `/model` ccd logged as outside the vocabulary or refused, with the stops that could
-  not read the transcript reported beside it, never folded in; a revert on a path with no stop (a supervisor revival)
-  leaves no line and is not counted. Spec §9's row amended to say so. Rows 4.1–4.5.
+  not read the transcript reported beside it, never folded in; a supervisor revival is read and logs like a stop (the
+  revival keep), and a session on a non-Anthropic lane leaves no line and is not counted. Spec §9's row amended to say so. Rows 4.1–4.5.
 - **D-3905** `operator-choice-skips-other-lanes` — the coordinator's ruling (c) on Open question 8: `_operator_choice_keep`
   does nothing for a session whose backend is not Anthropic, keyed on `_is_anthropic_backend` of the row's wrapper
   exactly as the settle is. A gpt-lane session's `/model` values (`gpt-5.6-sol`, …) are outside the class vocabulary
