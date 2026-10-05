@@ -21,7 +21,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 |---|---|---|---|---|---|---|
 | 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | merged 2026-10-02 (`a934a59b`); run 219 closed; deploy AGENT-FIRST by the update mechanism |
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
-| 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | — | dispatched 2026-10-04 22:22 as run 248 (`ccrc-pwa-still-harbor`); block 3896–3905 + 3921–3925 |
+| 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
 | 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | to plan |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
@@ -387,6 +387,27 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     after the push.
   - **Acceptance review 272** is dispatched to `ccrc-pwa-amber-harbor`. Its brief names the held-out panel (three
     fresh Opus lenses and three Sonnet refuters per finding) and asks it to classify R1.
+- **2026-10-05 17:03 — review 272 ACCEPTED wave 3; MERGED as #250 (`77f8d63a`)**, squash, at the reviewed head `f6faff4c`, every
+  required check green. Report: `~/.cc-clips/ccrc-pwa-amber-harbor/review-272-f6faff4c.md`.
+  - **The panel ran as written:** three Opus lenses and Sonnet refuters, 17 confirmed and 2 refuted, nothing
+    unexamined, no lens unverified.
+  - **The safety core holds:** all 28 rows red, spec §5.7's four among them; the census 182/153; S6-R11 unchanged;
+    the merge is the stamp only.
+  - **11 findings, all minor, carried to wave 4's FIRST commit as residue** (the precedent of landing's wave 1 and
+    workspace-lifecycle's wave 2):
+    - F1 (R1): narrow `_operator_choice_unmark`'s absent arm to tmux's "no server running", as ws-reclaim does, so a
+      deleted socket stops reading as gone.
+    - F2: recognise the `/effort` slider's own acknowledgement if a counts-only transcript census finds its
+      wording; otherwise ledger the noise in the 3967 entry.
+    - F3–F11: the plan's mutation cells that do not reproduce as written (3.30, 3.35); text-only pins on cmd_swap's
+      3969 lines; comment drift (R3 among it); the refused-command prose; the unpinned `not given` arm; the
+      ws-restore case; two red-first claims citing no commit; the `measure-continuity` key name.
+  - **The boundary:**
+    - wave 4's run 274 opened first (planned; block 4012–4021, written bare);
+    - run 248 closed `final` (`released:true`, `childReclaim:queued`).
+  - **Overlap notice** (mail 3553): landing's #248 must now absorb main (#281 in README and the doctor test; #250 on
+    ccd/ccd's stamp) in its next round, not during review 273.
+  - **Deploy:** AGENT-FIRST, through ccrc's own updater.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -441,6 +462,11 @@ alias table) is run 248, dispatched 2026-10-04 22:22 to `ccrc-pwa-still-harbor`,
 - **Its plan's FIRST commit is wave 2's residue**, the list above from review 246: F1, F2, F3, F5, the minors 3–5
   and F6's restated §9 target.
 
-Waves 4 and 4b (the reap-class OOM count, the scope sweep, then the pressure-reap disable) are AGENT-FIRST. Wave 4
-also owes 3925's `/clear` code fix (review 268's F4 design note: read the outgoing transcript at the uuid rotation).
+Wave 3 is merged (#250 `77f8d63a`). Wave 4 is run 274 (planned; deviation numbers 4012 to 4021, written bare), and
+it is to plan.
+- **Its FIRST commit is wave 3's residue,** review 272's F1–F11, ruled as above.
+- **Then the reap-class OOM count and the scope sweep.** Wave 4b, the pressure-reap disable, follows.
+- **It also owes** 3925's `/clear` code fix (review 268's F4 design note: read the outgoing transcript at the uuid
+  rotation).
+Both are AGENT-FIRST.
 2026-10-02's reaped runs argue for planning 4b early.
