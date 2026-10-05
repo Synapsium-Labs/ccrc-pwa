@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=94b66edc8e2c253ecdea49a3abb513a731add4fc74623df34c2efb9dcec27945
+# ccrc:generated 1 sha256=02e47ee6eba7cdf71381f4b0eb7a74d0a4feb5149c93d95338f168d112d140d3
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28704,8 +28704,500 @@ def read_args(verb, rest):
     raise RuntimeError('docs argv contract: no argument reader for ' + repr(verb))
 
 # ===== docs: runner =====
+# Spec 2026-10-01 section 2 (a), "Budgets" and "The hardened git runner".
+# Every git call the helper makes goes through docs_git below, and every
+# syscall and spawn through SYS, so a unit swaps H.SYS for a subclass of H.Sys
+# instead of reaching for a test flag. This section imports what it uses; the
+# header stays the core's.
+import collections
+import errno
+import hashlib
+import os
+import re
+import selectors
+import signal
+import stat
+import subprocess
+import time
+
+# Budgets. Each literal is ONE line, so W2's budget test can extract it. A verb
+# builds one Deadline from HELPER_DEADLINE_S at its start; each git call it
+# makes is bounded by min(CALL_S[its class], what is left of that deadline).
+HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45}
+CALL_S={'ref':5,'list':8,'count':2,'show':5,'onref':2,'fetch':40,'index':5}
+KILL_GRACE_S=2
+GIT_STDOUT_CAP=16777216
+STDERR_KEEP_BYTES = 65536
+STDERR_HEAD_BYTES = 512
+PIPE_CHUNK = 65536
+GROUP_POLL_S = 0.05
+
+# One finished (or abandoned) call. rc is None only when nothing was spawned,
+# because the helper's deadline was already spent.
+Spawned = collections.namedtuple('Spawned', 'rc out err timed_out overflow')
+
+
+class Sys(Sys):
+    """The core's clocks, plus every syscall and spawn the helper makes.
+
+    This extends the core's class under the SAME name, and SYS is rebound just
+    below, so H.Sys stays the one seam: a unit subclasses it, overrides one
+    method and inherits the rest. Nothing here reads env or argv."""
+
+    def stat(self, path, dir_fd=None):
+        return os.stat(path, dir_fd=dir_fd)
+
+    def lstat(self, path, dir_fd=None):
+        return os.lstat(path, dir_fd=dir_fd)
+
+    def fstat(self, fd):
+        return os.fstat(fd)
+
+    def open(self, path, flags, dir_fd=None):
+        return os.open(path, flags, dir_fd=dir_fd)
+
+    def close(self, fd):
+        os.close(fd)
+
+    def read(self, fd, n):
+        return os.read(fd, n)
+
+    def geteuid(self):
+        return os.geteuid()
+
+    def listdir(self, path):
+        return os.listdir(path)
+
+    def realpath(self, path):
+        return os.path.realpath(path)
+
+    def spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin=None):
+        """Run argv as the leader of a NEW SESSION, reading both pipes through
+        one selector; never a bare communicate().
+
+        stdout is held to stdout_cap bytes: one byte more sets overflow and
+        stops the call. stderr is held to STDERR_KEEP_BYTES. The whole call is
+        held to timeout_s seconds; on expiry or overflow the process GROUP is
+        stopped (_stop), which reaches the grandchildren git starts: remote
+        helpers, ssh, git-lfs."""
+        end = self.monotonic() + timeout_s
+        proc = subprocess.Popen(
+            argv, stdin=(subprocess.DEVNULL if stdin is None else subprocess.PIPE),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=cwd,
+            close_fds=True, start_new_session=True)
+        out, err = bytearray(), bytearray()
+        timed_out = overflow = False
+        todo = bytes(stdin) if stdin is not None else b''
+        sel = selectors.DefaultSelector()
+        try:
+            if proc.stdin is not None:
+                if todo:
+                    os.set_blocking(proc.stdin.fileno(), False)
+                    sel.register(proc.stdin, selectors.EVENT_WRITE)
+                else:
+                    proc.stdin.close()
+            sel.register(proc.stdout, selectors.EVENT_READ)
+            sel.register(proc.stderr, selectors.EVENT_READ)
+            while sel.get_map() and not overflow:
+                left = end - self.monotonic()
+                if left <= 0:
+                    timed_out = True
+                    break
+                for key, _mask in sel.select(left):
+                    f = key.fileobj
+                    if f is proc.stdin:
+                        try:
+                            n = os.write(f.fileno(), todo[:PIPE_CHUNK])
+                        except BlockingIOError:
+                            n = 0
+                        except BrokenPipeError:
+                            n = len(todo)
+                        todo = todo[n:]
+                        if not todo:
+                            sel.unregister(f)
+                            f.close()
+                        continue
+                    chunk = os.read(f.fileno(), PIPE_CHUNK)
+                    if not chunk:
+                        sel.unregister(f)
+                        f.close()
+                    elif f is proc.stdout:
+                        room = stdout_cap - len(out)
+                        out += chunk[:room]
+                        if len(chunk) > room:
+                            overflow = True
+                            break
+                    else:
+                        err += chunk[:max(0, STDERR_KEEP_BYTES - len(err))]
+            if not (timed_out or overflow):
+                try:
+                    proc.wait(timeout=max(0.0, end - self.monotonic()))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+            if timed_out or overflow:
+                self._stop(proc)
+        finally:
+            sel.close()
+            for f in (proc.stdin, proc.stdout, proc.stderr):
+                if f is not None and not f.closed:
+                    f.close()
+        return Spawned(proc.returncode, bytes(out), bytes(err), timed_out, overflow)
+
+    def _stop(self, proc):
+        """Stop the call's whole process GROUP, never only its pid:
+        start_new_session made git the leader of a group of its own. SIGTERM
+        goes to every member at once; any member still alive KILL_GRACE_S
+        later gets SIGKILL. The leader is reaped as it goes, so a group that
+        has emptied answers ESRCH, which ends the wait early."""
+        pgid = proc.pid
+        self._signal_group(pgid, signal.SIGTERM)
+        until = self.monotonic() + KILL_GRACE_S
+        while self.monotonic() < until:
+            if proc.poll() is not None and not self._group_alive(pgid):
+                break
+            time.sleep(GROUP_POLL_S)
+        else:
+            self._signal_group(pgid, signal.SIGKILL)
+        proc.wait()
+
+    def _signal_group(self, pgid, sig):
+        try:
+            os.killpg(pgid, sig)
+        except OSError as e:
+            if e.errno != errno.ESRCH:
+                raise
+
+    def _group_alive(self, pgid):
+        try:
+            os.killpg(pgid, 0)
+        except OSError as e:
+            return e.errno != errno.ESRCH
+        return True
+
+
+SYS = Sys()
+
+
+class Deadline(object):
+    """One verb's whole-helper budget. bound() is what one call may spend."""
+
+    def __init__(self, total_s):
+        self.end = SYS.monotonic() + total_s
+
+    def left(self):
+        return max(0.0, self.end - SYS.monotonic())
+
+    def bound(self, call_s):
+        return min(call_s, self.left())
+
+
+class GitRefused(ValueError):
+    """A git argv outside the allowlist: a contract break inside the helper,
+    which run() answers helper-failed. It is never a failure word."""
+
+
+# The subcommand allowlist of section 2 (a), verbatim: each row is a token
+# prefix the subcommand must start with. docs-fetch alone may also run fetch.
+READ_ALLOW = (
+    ('rev-parse',), ('symbolic-ref',), ('for-each-ref',), ('ls-tree',),
+    ('cat-file', '--batch-check'), ('cat-file', 'blob'),
+    ('worktree', 'list'), ('status',), ('ls-files',),
+    ('merge-base', '--is-ancestor'), ('rev-list', '--left-right', '--count'),
+    ('config', '--get'), ('config', '-z', '--get-regexp'),
+)
+FETCH_ALLOW = READ_ALLOW + (('fetch',),)
+# The spec's "never used" list, enforced rather than remembered: no filter or
+# textconv driver ever runs, and no <rev>:<path> object name reaches a command
+# that would read through it.
+NEVER_FLAGS = ('--textconv', '--filters')
+OBJECT_NAME_VERBS = ('cat-file', 'ls-tree', 'rev-parse', 'merge-base', 'rev-list')
+# The two settings the prefix pins. git lets a later -c win, so a caller's -c
+# may never set either again.
+PINNED_KEYS = ('core.fsmonitor', 'core.hookspath')
+READ_PREFIX = ('git', '--no-pager', '--no-optional-locks',
+               '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null')
+# The fetch line's own prefix, section 2 (g) step 6 as written: hooksPath first,
+# and no --no-optional-locks.
+FETCH_PREFIX = ('git', '--no-pager', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false')
+READ_DROP_PREFIX = 'GIT_'
+FETCH_KEEP = ('GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_ASKPASS', 'GIT_SSL_CAINFO', 'GIT_SSL_CAPATH')
+
+
+def split_cflags(args):
+    """(the caller's leading -c pairs, the subcommand and its arguments)."""
+    args = list(args)
+    i = 0
+    while i < len(args) and args[i] == '-c':
+        if i + 1 >= len(args):
+            raise GitRefused('a -c with no value')
+        key = args[i + 1].split('=', 1)[0]
+        if key.lower() in PINNED_KEYS:
+            raise GitRefused('-c may not set ' + key + ' again')
+        i += 2
+    return args[:i], args[i:]
+
+
+def git_step(args):
+    """The step a git-failed or git-timeout answer names: the subcommand, or
+    worktree-list for `worktree list`."""
+    sub = split_cflags(args)[1]
+    if sub[:1] == ['worktree'] and len(sub) > 1:
+        return 'worktree-' + sub[1]
+    return sub[0] if sub else 'git'
+
+
+def git_argv(cwd, args, fetch=False):
+    """The whole argv: the hardened prefix, the caller's -c pairs, -C <cwd>,
+    then the subcommand. Raises GitRefused for anything off the allowlist."""
+    cflags, sub = split_cflags(args)
+    allow = FETCH_ALLOW if fetch else READ_ALLOW
+    if not any(sub[:len(row)] == list(row) for row in allow):
+        raise GitRefused('subcommand not allowed: ' + ' '.join(sub[:3]))
+    for a in sub:
+        if a.startswith(NEVER_FLAGS):
+            raise GitRefused('a flag the runner never passes: ' + a.split('=', 1)[0])
+    if sub[0] in OBJECT_NAME_VERBS and any(':' in a for a in sub[1:]):
+        raise GitRefused('no <rev>:<path> object names: ' + sub[0])
+    prefix = FETCH_PREFIX if fetch else READ_PREFIX
+    return list(prefix) + cflags + ['-C', cwd] + sub
+
+
+def read_env(ceiling):
+    """os.environ with EVERY GIT_* key deleted (GIT_DIR, GIT_CONFIG_PARAMETERS,
+    GIT_CONFIG_COUNT/KEY_n/VALUE_n, GIT_EXEC_PATH and the rest), then the six
+    the read runner sets. Built at call time, never at import."""
+    env = dict((k, v) for k, v in os.environ.items() if not k.startswith(READ_DROP_PREFIX))
+    env['GIT_NO_LAZY_FETCH'] = '1'
+    env['GIT_NO_REPLACE_OBJECTS'] = '1'
+    env['GIT_CEILING_DIRECTORIES'] = ceiling
+    env['GIT_TERMINAL_PROMPT'] = '0'
+    env['GIT_PAGER'] = 'cat'
+    env['LC_ALL'] = 'C'
+    return env
+
+
+def fetch_env(ceiling):
+    """read_env, keeping the transport's own credential channel when present
+    (the R2 keep-list)."""
+    env = read_env(ceiling)
+    for k in FETCH_KEEP:
+        if k in os.environ:
+            env[k] = os.environ[k]
+    return env
+
+
+def ceiling_of(d):
+    """GIT_CEILING_DIRECTORIES for a call run in d: the real path of d's parent."""
+    return SYS.realpath(os.path.dirname(os.path.abspath(d)))
+
+
+def stderr_head(err):
+    """A git stderr for the wire: redacted FIRST, so a cut can never shorten a
+    token below a pattern's length floor, then held to STDERR_HEAD_BYTES."""
+    s = redact(err.decode('utf-8', 'replace')).strip()
+    return s.encode('utf-8')[:STDERR_HEAD_BYTES].decode('utf-8', 'ignore')
+
+
+def os_head(op, e):
+    """An OSError, in the shape stderr_head gives a git failure."""
+    return stderr_head(('%s: %s' % (op, e.strerror or e)).encode('utf-8', 'replace'))
+
+
+def docs_git(cwd, args, *, call_s, dl, ceiling, fetch=False, stdin=None, soft=False,
+             stdout_cap=GIT_STDOUT_CAP):
+    """THE door to git. The allowlist is checked before anything spawns.
+
+    The call is held to min(call_s, dl.left()); a deadline already spent
+    spawns nothing. soft=True hands every outcome back as a Spawned for the
+    caller to read. Otherwise an expiry raises git-timeout {step}
+    (fetch-timeout for the fetch) and an overflow raises too-many-entries
+    {bytes}; any rc is the caller's to read."""
+    argv = git_argv(cwd, args, fetch)
+    env = fetch_env(ceiling) if fetch else read_env(ceiling)
+    budget_s = dl.bound(call_s)
+    if budget_s <= 0:
+        r = Spawned(None, b'', b'', True, False)
+    else:
+        r = SYS.spawn(argv, env, '/', budget_s, stdout_cap, stdin)
+    if soft:
+        return r
+    step = git_step(args)
+    if r.timed_out:
+        if step == 'fetch':
+            raise fail('fetch-timeout')
+        raise fail('git-timeout', step=step)
+    if r.overflow:
+        raise fail('too-many-entries', bytes=len(r.out))
+    return r
+
 
 # ===== docs: discovery =====
+# Spec 2026-10-01 section 2 (h), run by every verb right after validation, and
+# section 3.11's GitHub slug.
+Repo = collections.namedtuple(
+    'Repo', 'project path git_dir common_dir toplevel bare shallow object_format key')
+
+# Section 2 (h) step 3's seven options. --show-toplevel is LAST, and that is
+# measured, not style: in a bare repository git 2.43 prints the five answers
+# before it and then exits 128 AT --show-toplevel, so a bare repository can be
+# told apart from a broken one only while is-bare is printed first.
+REV_PARSE_SHAPE = ('rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir',
+                   '--is-bare-repository', '--is-shallow-repository', '--show-object-format',
+                   '--show-toplevel')
+PARTIAL_RE = r'^(remote\..*\.promisor|extensions\.partialclone)$'
+ABSENT_ERRNOS = (errno.ENOENT, errno.ENOTDIR)
+GH_PREFIXES = ('git@github.com:', 'ssh://git@github.com/', 'https://github.com/')
+GH_SLUG_RE = r'[A-Za-z0-9._-]+/[A-Za-z0-9._-]+'
+
+
+def repo_key(common_dir):
+    """32 hex chars of sha256 over the common dir's real path: one key per
+    object store, however many checkouts share it."""
+    return hashlib.sha256(os.fsencode(SYS.realpath(common_dir))).hexdigest()[:32]
+
+
+def _is_real_dir(path):
+    try:
+        return stat.S_ISDIR(SYS.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def find_owner(ctx, target):
+    """The project Q under ctx.root whose Q/.git is a REAL directory with the
+    same real path as target, or None. Q itself must be a real directory, the
+    shape discovery's step 1 accepts, so an owner is always a project the
+    redirect can open. A root that cannot be listed answers repo-unreadable:
+    a search that saw nothing must not read as "no owner", which would accept
+    the very shape it exists to refuse."""
+    want = SYS.realpath(target)
+    try:
+        names = sorted(SYS.listdir(os.fsencode(ctx.root)))
+    except OSError as e:
+        raise fail('repo-unreadable', stderrHead=os_head('listdir', e))
+    for raw in names:
+        try:
+            name = raw.decode('utf-8')
+        except UnicodeDecodeError:
+            continue
+        if not valid_project(name):
+            continue
+        q = os.path.join(ctx.root, name)
+        g = os.path.join(q, '.git')
+        if _is_real_dir(q) and _is_real_dir(g) and SYS.realpath(g) == want:
+            return name
+    return None
+
+
+def head_branch(path, ceiling, dl):
+    """This checkout's branch, from symbolic-ref -q HEAD; None when HEAD is
+    detached (rc 1), unreadable, or names a branch that is not strict UTF-8.
+    Advisory: it never changes the word discovery answers."""
+    r = docs_git(path, ['symbolic-ref', '-q', 'HEAD'], call_s=CALL_S['ref'], dl=dl,
+                 ceiling=ceiling, soft=True)
+    if r.timed_out or r.overflow or r.rc != 0:
+        return None
+    try:
+        ref = r.out.decode('utf-8').rstrip('\n')
+    except UnicodeDecodeError:
+        return None
+    return ref[len('refs/heads/'):] if ref.startswith('refs/heads/') else None
+
+
+def discover(ctx, project, dl):
+    """Section 2 (h) steps 1-6. Returns a Repo, or raises unknown-project
+    {root}, not-a-git-repo {detail?}, linked-worktree {owner, branch},
+    shared-repo {owner, branch}, partial-clone or repo-unreadable
+    {stderrHead}."""
+    root = ctx.root
+    p = os.path.join(root, project)
+    # 1. P, by lstat: absent, or not a directory, is no project of this root.
+    try:
+        st = SYS.lstat(p)
+    except OSError as e:
+        if e.errno in ABSENT_ERRNOS:
+            raise fail('unknown-project', root=root)
+        raise fail('repo-unreadable', stderrHead=os_head('lstat', e))
+    if not stat.S_ISDIR(st.st_mode):
+        raise fail('unknown-project', root=root)
+    # 2. P/.git, by lstat: absent is not-a-git-repo, and no git runs at all.
+    try:
+        gst = SYS.lstat(os.path.join(p, '.git'))
+    except OSError as e:
+        if e.errno in ABSENT_ERRNOS:
+            raise fail('not-a-git-repo')
+        raise fail('repo-unreadable', stderrHead=os_head('lstat', e))
+    # 3. One rev-parse, under a ceiling at ccd's root, so git can never walk
+    #    up out of P into a repository that holds the root.
+    ceiling = SYS.realpath(root)
+    r = docs_git(p, list(REV_PARSE_SHAPE), call_s=CALL_S['ref'], dl=dl, ceiling=ceiling)
+    lines = os.fsdecode(r.out).split('\n')
+    if lines[-1:] == ['']:
+        lines.pop()
+    if len(lines) >= 5 and lines[2] == 'true':
+        raise fail('not-a-git-repo', detail='bare')
+    if r.rc != 0:
+        raise fail('repo-unreadable', stderrHead=stderr_head(r.err))
+    if (len(lines) != 6 or lines[2] != 'false' or lines[3] not in ('true', 'false')
+            or lines[4] not in ('sha1', 'sha256')):
+        raise fail('git-failed', step='rev-parse', rc=r.rc, stderrHead=stderr_head(r.err))
+    git_dir, common, _bare, shallow, fmt, top = lines
+    real_p = SYS.realpath(p)
+    if SYS.realpath(top) != real_p:
+        raise fail('not-a-git-repo', detail='toplevel-mismatch')
+    gd, cd = SYS.realpath(git_dir), SYS.realpath(common)
+    if gd != cd:
+        raise fail('linked-worktree', owner=find_owner(ctx, cd),
+                   branch=head_branch(p, ceiling, dl))
+    # 4. A .git that is a file or a symlink, naming a git dir that another
+    #    project under the root owns, is that project's repository.
+    if not stat.S_ISDIR(gst.st_mode):
+        owner = find_owner(ctx, gd)
+        if owner is not None:
+            raise fail('shared-repo', owner=owner, branch=head_branch(p, ceiling, dl))
+    # 5. A partial clone is refused; GIT_NO_LAZY_FETCH stays the backstop.
+    c = docs_git(p, ['config', '-z', '--get-regexp', PARTIAL_RE], call_s=CALL_S['ref'],
+                 dl=dl, ceiling=ceiling)
+    if c.rc == 0:
+        raise fail('partial-clone')
+    if c.rc != 1:
+        raise fail('repo-unreadable', stderrHead=stderr_head(c.err))
+    # 6. Shallow and sha256 repositories are served.
+    return Repo(project, p, gd, cd, real_p, False, shallow == 'true', fmt, repo_key(cd))
+
+
+def slug_from_url(url):
+    """_gh_repo_slug's rule, statement for statement; the bash function stays
+    the one definition and M3.12 binds this copy to it by verdict. An empty
+    url is None; one trailing .git is stripped; then each of the three GitHub
+    prefixes in turn, in that order, as bash's three expansions strip them;
+    then owner/name is required."""
+    if not url:
+        return None
+    u = url[:-len('.git')] if url.endswith('.git') else url
+    for pre in GH_PREFIXES:
+        if u.startswith(pre):
+            u = u[len(pre):]
+    return u if re.fullmatch(GH_SLUG_RE, u) else None
+
+
+def origin_url(repo, dl):
+    """remote.origin.url as config --get prints it, trailing newlines cut as
+    bash's command substitution cuts them; None when the key is unset (rc 1)."""
+    r = docs_git(repo.path, ['config', '--get', 'remote.origin.url'], call_s=CALL_S['ref'],
+                 dl=dl, ceiling=ceiling_of(repo.path))
+    if r.rc == 1:
+        return None
+    if r.rc != 0:
+        raise fail('git-failed', step='config', rc=r.rc, stderrHead=stderr_head(r.err))
+    return os.fsdecode(r.out).rstrip('\n')
+
+
+def github_of(url):
+    """The wire's DocsGithub: named only when a GitHub-shaped origin was read."""
+    slug = slug_from_url(url) if url is not None else None
+    return {'state': 'named', 'slug': slug} if slug is not None else {'state': 'none'}
+
 
 # ===== docs: refs =====
 

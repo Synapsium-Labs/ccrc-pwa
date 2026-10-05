@@ -372,3 +372,76 @@ out({'values': {n: getattr(H, n) for n in NAMES}, 'sections': [list(p) for p in 
     }
   });
 });
+
+// ---- Task 8: M3.12, the GitHub slug is one rule in two languages ----
+// `_gh_repo_slug` (ccd/ccd) stays the one definition for ccd's write paths; the docs helper's `slug_from_url` is
+// a copy (spec 2026-10-01 section 3.11), bound here by verdict over one corpus. Each URL is set on ONE fixture
+// repository and read by both sides: bash through `git config --get` inside `_gh_repo_slug`, python through the
+// hardened runner (`origin_url`), and python again on the literal string.
+//
+// This block imports under names of its own: an appended block cannot assume the file head's import list, and
+// binding one name twice is a SyntaxError.
+import * as slugVitest from 'vitest';
+import * as slugPath from 'node:path';
+import * as slugWs from './ccdWsHelpers.js';
+import * as slugPy from './docsHelperPy.js';
+
+/** A python string literal (the corpus is ASCII). */
+const slugQ = (v: string): string => JSON.stringify(v);
+
+slugVitest.describe('M3.12: slug_from_url gives _gh_repo_slug\'s verdict on every origin URL', () => {
+  let h: slugWs.CcdHarness;
+  let main = '';
+  slugVitest.beforeAll(() => {
+    h = slugWs.makeCcdHarness('ccd-docs-');
+    main = h.makeRepo('demo');
+  });
+  slugVitest.afterAll(() => h.cleanup());
+
+  /** [what the row is, the URL, the slug both sides must answer (null: none)]. */
+  const CORPUS: ReadonlyArray<readonly [string, string, string | null]> = [
+    ['https', 'https://github.com/o/r', 'o/r'],
+    ['https with .git', 'https://github.com/o/r.git', 'o/r'],
+    ['scp form', 'git@github.com:o/r.git', 'o/r'],
+    ['ssh form', 'ssh://git@github.com/o/r.git', 'o/r'],
+    ['a host that is not GitHub', 'https://example.invalid/o/r', null],
+    ['three segments', 'https://github.com/o/r/x', null],
+    ['a space in the name', 'https://github.com/o/r r', null],
+    ['the empty string', '', null],
+    ['an owner and no name', 'https://github.com/o', null],
+    ['http, not https', 'http://github.com/o/r', null],
+    ['userinfo before the host', 'https://u:tok' + '@github.com/o/r', null],
+    ['the three prefixes strip IN TURN, not one of three', 'git@github.com:https://github.com/o/r', 'o/r'],
+    ['only ONE trailing .git strips', 'https://github.com/o/r.git.git', 'o/r.git'],
+    ['a bare owner/name', 'example-org/example-repo', 'example-org/example-repo'],
+  ];
+
+  slugVitest.it('every row: bash, the runner read and the literal string agree, and match the table', () => {
+    const local = ['the fixture\'s own local origin', slugPath.join(h.home, 'origins', 'demo.git'), null] as const;
+    const rows = [...CORPUS, local];
+    const named = rows.filter(([, , want]) => want !== null).length;
+    // Not vacuous in either direction: an always-null or an always-named pair could not pass.
+    slugVitest.expect(named).toBeGreaterThanOrEqual(5);
+    slugVitest.expect(rows.length - named).toBeGreaterThanOrEqual(5);
+    for (const [label, url, want] of rows) {
+      h.git(main, 'config', 'remote.origin.url', url);
+      let bash: string | null;
+      try { bash = h.sh('_gh_repo_slug "$DOCS_SLUG_MAIN"', { DOCS_SLUG_MAIN: main }); } catch { bash = null; }
+      const py = slugPy.unitJson<{ read: string | null; viaRunner: string | null; direct: string | null; github: unknown }>(
+        h.home, [
+          `ctx = H.Ctx('docs-tree', ${slugQ(slugPath.join(h.home, 'projects'))}, ${slugQ(slugPath.join(h.home, 'worktrees'))},`,
+          `            ${slugQ(slugPath.join(h.home, '.cc-sessions'))}, H.SYS.monotonic())`,
+          `dl = H.Deadline(H.HELPER_DEADLINE_S['docs-tree'])`,
+          `url = H.origin_url(H.discover(ctx, 'demo', dl), dl)`,
+          `out({'read': url, 'viaRunner': None if url is None else H.slug_from_url(url),`,
+          `     'direct': H.slug_from_url(${slugQ(url)}), 'github': H.github_of(url)})`,
+          '',
+        ].join('\n'));
+      slugVitest.expect(bash, label).toBe(want);
+      slugVitest.expect(py.read, label).toBe(url);
+      slugVitest.expect(py.direct, label).toBe(bash);
+      slugVitest.expect(py.viaRunner, label).toBe(bash);
+      slugVitest.expect(py.github, label).toEqual(bash === null ? { state: 'none' } : { state: 'named', slug: bash });
+    }
+  }, 120_000);
+});

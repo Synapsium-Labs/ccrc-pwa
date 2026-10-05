@@ -692,3 +692,618 @@ out({n: list(getattr(H, n)._fields) for n in ['Ctx', 'IndexArgs', 'TreeArgs', 'S
     }
   });
 });
+
+// ---- Task 8: the hardened git runner and discovery (spec 2026-10-01 section 2 (a), (h)) ----
+// Budgets and the hardened runner; section 2 (h) steps 1-6; rows 7, 8, 9, 10, 11 (env half), 57 (discovery
+// half) and 62 (stderrHead); R15. Every case imports the SHIPPED helper out of ccd/ccd's heredoc (`unitJson`)
+// inside a fixture HOME, and every git it reaches is real unless a case swaps `H.SYS` on purpose. The four verb
+// bodies are later tasks' (each replaces its own stub), so the dispatcher half is pinned through `H.run` with
+// the docs-tree entry of `H.VERBS` swapped for "discover, then stop": the exact line a verb that calls
+// `discover` first answers for every shape discovery refuses.
+//
+// This block imports under names of its own: an appended block cannot assume the file head's import list, and
+// binding one name twice is a SyntaxError.
+import * as rdVitest from 'vitest';
+import * as rdFs from 'node:fs';
+import * as rdPath from 'node:path';
+import * as rdCp from 'node:child_process';
+import * as rdCrypto from 'node:crypto';
+import * as rdWs from './ccdWsHelpers.js';
+import * as rdDocs from './ccdDocsHelpers.js';
+import * as rdPy from './docsHelperPy.js';
+
+/** A python unit body, dedented so it can follow the unit PRELUDE at column 0. */
+const rdUnit = (src: string): string => {
+  const lines = src.split('\n');
+  while (lines.length > 0 && lines[0]!.trim() === '') lines.shift();
+  const pad = Math.min(...lines.filter((l) => l.trim() !== '').map((l) => l.length - l.trimStart().length));
+  return lines.map((l) => l.slice(pad)).join('\n');
+};
+/** A python string literal (ASCII paths and words only, which is all these units use). */
+const rdQ = (s: string): string => JSON.stringify(s);
+const rdReal = (p: string): string => rdFs.realpathSync(p);
+/** process.env with every GIT_* key removed, so a control's plain git is git's own default. */
+const rdPlainEnv = (home: string): NodeJS.ProcessEnv => ({
+  ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_'))), HOME: home,
+});
+const rdPlainGit = (home: string, args: string[], extra: NodeJS.ProcessEnv = {}) =>
+  rdCp.spawnSync('git', args, { encoding: 'utf8', env: { ...rdPlainEnv(home), ...extra } });
+const rdPacks = (repo: string): number =>
+  rdFs.readdirSync(rdPath.join(repo, '.git', 'objects', 'pack')).filter((f) => f.endsWith('.pack')).length;
+/** The six keys the read runner's env carries, and nothing else under GIT_* or LC_ALL. */
+const RD_SIX = ['GIT_CEILING_DIRECTORIES', 'GIT_NO_LAZY_FETCH', 'GIT_NO_REPLACE_OBJECTS', 'GIT_PAGER',
+  'GIT_TERMINAL_PROMPT', 'LC_ALL'];
+
+type RdShape = { repo?: Record<string, unknown>; word?: string | null; ctx?: Record<string, unknown> };
+/** The python every discovery unit opens with: the context a verb hands `discover`, one helper deadline, and
+ *  `shape(p)`, which turns either outcome into data: a Repo's fields, or the failure word with its context. */
+const rdCtx = (home: string): string => rdUnit(String.raw`
+  ctx = H.Ctx('docs-tree', ${rdQ(rdPath.join(home, 'projects'))}, ${rdQ(rdPath.join(home, 'worktrees'))},
+              ${rdQ(rdPath.join(home, '.cc-sessions'))}, H.SYS.monotonic())
+  dl = H.Deadline(H.HELPER_DEADLINE_S['docs-tree'])
+  def shape(p):
+      try:
+          return {'repo': dict(H.discover(ctx, p, dl)._asdict())}
+      except H.Fail as e:
+          return {'word': e.word, 'ctx': e.ctx}
+`);
+const rdShapes = (home: string, projects: readonly string[], env?: NodeJS.ProcessEnv): RdShape[] =>
+  rdPy.unitJson<RdShape[]>(home, `${rdCtx(home)}\nout([shape(p) for p in ${JSON.stringify(projects)}])\n`,
+    env === undefined ? undefined : { env });
+
+/** Alive means signalable and not a zombie awaiting its reaper. */
+const rdAlive = (pid: number): boolean => {
+  try { process.kill(pid, 0); } catch { return false; }
+  const st = rdCp.spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim();
+  return st !== '' && !st.startsWith('Z');
+};
+const rdSleepMs = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+/** Waits up to 4 s for `pid` to be gone, then reports whether it still is. */
+const rdGoneWithin4s = (pid: number): boolean => {
+  const until = Date.now() + 4000;
+  while (rdAlive(pid) && Date.now() < until) rdSleepMs(100);
+  return !rdAlive(pid);
+};
+/** A stand-in `git` in a directory of its own, which one unit puts first on its PATH. */
+const rdFakeGit = (home: string, name: string, script: string): string => {
+  const dir = rdPath.join(home, `fake-${name}`);
+  rdFs.mkdirSync(dir, { recursive: true });
+  rdFs.writeFileSync(rdPath.join(dir, 'git'), `#!/bin/sh\n${script}`, { mode: 0o755 });
+  return dir;
+};
+/** A python block that calls `call` (an expression), and binds `hard` to the failure it raised as data. */
+const rdHard = (call: string): string => rdUnit(String.raw`
+  try:
+      ${call}
+      hard = {'word': None}
+  except H.Fail as e:
+      hard = {'word': e.word, 'ctx': e.ctx}
+`);
+
+rdVitest.describe('docs runner: the hardened git runner (spec section 2 (a))', () => {
+  let h: rdWs.CcdHarness;
+  let rec: ReturnType<typeof rdDocs.plantGitRecorder>;
+  let demo = '';
+  rdVitest.beforeAll(() => {
+    h = rdWs.makeCcdHarness('ccd-docs-');
+    demo = rdDocs.docsRepo(h, 'demo');
+    rec = rdDocs.plantGitRecorder(h.home);
+  });
+  rdVitest.afterAll(() => h.cleanup());
+  /** `docs_git` in demo with a fresh 12 s deadline; `more` is extra keyword arguments. */
+  const call = (args: string, more = ''): string =>
+    `H.docs_git(${rdQ(demo)}, ${args}, call_s=5, dl=H.Deadline(12), ceiling=H.ceiling_of(${rdQ(demo)})${more})`;
+
+  rdVitest.it('pins the four budget literals, each on one line, where the budget test will read them', () => {
+    const src = rdPy.docsHelperSource();
+    rdVitest.expect(rdPy.pyLiteral(src, 'HELPER_DEADLINE_S'))
+      .toBe("{'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45}");
+    rdVitest.expect(rdPy.pyLiteral(src, 'CALL_S'))
+      .toBe("{'ref':5,'list':8,'count':2,'show':5,'onref':2,'fetch':40,'index':5}");
+    rdVitest.expect(rdPy.pyLiteral(src, 'KILL_GRACE_S')).toBe('2');
+    rdVitest.expect(rdPy.pyLiteral(src, 'GIT_STDOUT_CAP')).toBe('16777216');
+  });
+
+  rdVitest.it('read_env deletes every GIT_* key and sets exactly six; fetch_env keeps only the transport keys', () => {
+    const got = rdPy.unitJson<{ read: Record<string, string>; fetch: Record<string, string>; kept: unknown[] }>(
+      h.home, rdUnit(String.raw`
+        import os
+        os.environ.update({
+            'GIT_DIR': '/decoy/.git', 'GIT_WORK_TREE': '/decoy', 'GIT_CONFIG_PARAMETERS': "'core.worktree'='/decoy'",
+            'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'core.worktree', 'GIT_CONFIG_VALUE_0': '/decoy',
+            'GIT_EXEC_PATH': '/decoy', 'GIT_TEST_ASSUME_DIFFERENT_OWNER': '1', 'GIT_NO_LAZY_FETCH': '0',
+            'GIT_SSH_COMMAND': 'ssh -o BatchMode=yes', 'GIT_ASKPASS': '/bin/false', 'LC_ALL': 'C.UTF-8',
+            'DOCS_UNIT_KEEP': 'kept'})
+        pick = lambda e: dict((k, v) for k, v in e.items() if k.startswith('GIT_') or k == 'LC_ALL')
+        r, f = H.read_env('/x'), H.fetch_env('/x')
+        out({'read': pick(r), 'fetch': pick(f), 'kept': [r.get('DOCS_UNIT_KEEP'), f.get('DOCS_UNIT_KEEP')]})
+      `));
+    const six = {
+      GIT_NO_LAZY_FETCH: '1', GIT_NO_REPLACE_OBJECTS: '1', GIT_CEILING_DIRECTORIES: '/x',
+      GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', LC_ALL: 'C',
+    };
+    rdVitest.expect(got.read).toEqual(six);
+    rdVitest.expect(got.fetch).toEqual({ ...six, GIT_SSH_COMMAND: 'ssh -o BatchMode=yes', GIT_ASKPASS: '/bin/false' });
+    rdVitest.expect(got.kept).toEqual(['kept', 'kept']);
+  });
+
+  rdVitest.it('builds the exact argv prefix, read and fetch, with a caller\'s -c pairs between it and -C', () => {
+    const got = rdPy.unitJson<string[][]>(h.home, rdUnit(String.raw`
+      out([H.git_argv('/r', ['rev-parse', '--git-dir']),
+           H.git_argv('/r', ['-c', 'filter.probe.clean=', 'status']),
+           H.git_argv('/r', ['-c', 'gc.auto=0', 'fetch', '--quiet'], True)])
+    `));
+    const read = ['git', '--no-pager', '--no-optional-locks', '-c', 'core.fsmonitor=false',
+      '-c', 'core.hooksPath=/dev/null'];
+    rdVitest.expect(got).toEqual([
+      [...read, '-C', '/r', 'rev-parse', '--git-dir'],
+      [...read, '-c', 'filter.probe.clean=', '-C', '/r', 'status'],
+      // Section 2 (g) step 6's own order: hooksPath first, and no --no-optional-locks.
+      ['git', '--no-pager', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
+        '-c', 'gc.auto=0', '-C', '/r', 'fetch', '--quiet'],
+    ]);
+    // And that argv is what a real call puts on the wire, read off the PATH recorder.
+    rec.reset();
+    rdVitest.expect(rdPy.unitJson<number>(h.home, `out(${call("['rev-parse', '--git-dir']")}.rc)\n`)).toBe(0);
+    const calls = rec.calls();
+    rdVitest.expect(calls).toHaveLength(1);
+    rdVitest.expect(calls[0]!.argv.join(' ').endsWith(
+      `--no-pager --no-optional-locks -c core.fsmonitor=false -c core.hooksPath=/dev/null -C ${demo} rev-parse --git-dir`,
+    )).toBe(true);
+  });
+
+  rdVitest.it('refuses everything off the allowlist before anything spawns', () => {
+    rec.reset();
+    const got = rdPy.unitJson<[string, string][]>(h.home, rdUnit(String.raw`
+      cases = [['show', 'HEAD'], ['log'], ['diff'], ['archive', 'HEAD'], ['cat-file', '-p', 'HEAD'],
+               ['fetch', 'origin'], ['config', 'core.bare', 'true'], ['config', '--get-all', 'x'],
+               ['worktree', 'add', 'x'], ['cat-file', 'blob', 'HEAD:README.md'], ['ls-tree', 'HEAD:docs'],
+               ['cat-file', '--batch-check', '--textconv'], ['status', '--filters'],
+               ['-c', 'core.hooksPath=/tmp/h', 'status'], ['-c', 'CORE.FSMONITOR=x', 'status'],
+               ['-C', '/tmp', 'status'], [], ['rev-parse', '--git-dir']]
+      seen = []
+      for a in cases:
+          try:
+              H.docs_git(${rdQ(demo)}, a, call_s=5, dl=H.Deadline(12),
+                         ceiling=H.ceiling_of(${rdQ(demo)}), soft=True)
+              seen.append([' '.join(a), 'ran'])
+          except H.GitRefused:
+              seen.append([' '.join(a), 'refused'])
+      out(seen)
+    `));
+    // The last row is the CONTROL: an allowlisted call runs, so the refusals above are the allowlist's, not
+    // those of a runner that refuses everything.
+    rdVitest.expect(got).toHaveLength(18);
+    rdVitest.expect(got.filter(([, v]) => v === 'ran').map(([a]) => a)).toEqual(['rev-parse --git-dir']);
+    rdVitest.expect(rec.calls()).toHaveLength(1);
+  });
+
+  rdVitest.it('killpg: an expired call stops its whole process group, grandchild included', () => {
+    const fake = rdFakeGit(h.home, 'sleeper', 'sleep 30 &\necho $! > "$HOME/grandchild.pid"\nwait\n');
+    const got = rdPy.unitJson<{ timedOut: boolean; overflow: boolean; tookS: number }>(h.home, rdUnit(String.raw`
+      import os
+      os.environ['PATH'] = ${rdQ(fake)} + ':' + os.environ['PATH']
+      t = H.SYS.monotonic()
+      r = H.docs_git(${rdQ(demo)}, ['rev-parse', '--git-dir'], call_s=1, dl=H.Deadline(12),
+                     ceiling=H.ceiling_of(${rdQ(demo)}), soft=True)
+      out({'timedOut': r.timed_out, 'overflow': r.overflow, 'tookS': H.SYS.monotonic() - t})
+    `), { timeoutMs: 30_000 });
+    rdVitest.expect(got).toMatchObject({ timedOut: true, overflow: false });
+    rdVitest.expect(got.tookS).toBeLessThan(4);
+    const pid = Number(rdFs.readFileSync(rdPath.join(h.home, 'grandchild.pid'), 'utf8').trim());
+    rdVitest.expect(pid).toBeGreaterThan(1);
+    rdVitest.expect(rdGoneWithin4s(pid), `grandchild ${pid} outlived its group`).toBe(true);
+  }, 30_000);
+
+  rdVitest.it('a group that ignores SIGTERM gets SIGKILL once the 2 s grace has passed, and no sooner', () => {
+    // `trap '' TERM` is inherited by the background sleep, so SIGTERM stops neither; only the group SIGKILL
+    // KILL_GRACE_S later does. Without it the unit would wait out the whole sleep.
+    const fake = rdFakeGit(h.home, 'stubborn',
+      "trap '' TERM\nsleep 30 &\necho $! > \"$HOME/stubborn.pid\"\nwait\n");
+    const got = rdPy.unitJson<{ timedOut: boolean; tookS: number }>(h.home, rdUnit(String.raw`
+      import os
+      os.environ['PATH'] = ${rdQ(fake)} + ':' + os.environ['PATH']
+      t = H.SYS.monotonic()
+      r = H.docs_git(${rdQ(demo)}, ['rev-parse', '--git-dir'], call_s=1, dl=H.Deadline(12),
+                     ceiling=H.ceiling_of(${rdQ(demo)}), soft=True)
+      out({'timedOut': r.timed_out, 'tookS': H.SYS.monotonic() - t})
+    `), { timeoutMs: 30_000 });
+    rdVitest.expect(got.timedOut).toBe(true);
+    // 1 s of call, then the whole grace: SIGTERM first, SIGKILL 2 s later, never at once.
+    rdVitest.expect(got.tookS).toBeGreaterThanOrEqual(2.5);
+    rdVitest.expect(got.tookS).toBeLessThan(10);
+    const pid = Number(rdFs.readFileSync(rdPath.join(h.home, 'stubborn.pid'), 'utf8').trim());
+    rdVitest.expect(rdGoneWithin4s(pid), `grandchild ${pid} survived the group SIGKILL`).toBe(true);
+  }, 30_000);
+
+  rdVitest.it('a hard (non-soft) expiry answers git-timeout naming the step', () => {
+    const fake = rdFakeGit(h.home, 'hang', 'exec sleep 30\n');
+    const got = rdPy.unitJson<RdShape>(h.home, rdUnit(String.raw`
+      import os
+      os.environ['PATH'] = ${rdQ(fake)} + ':' + os.environ['PATH']
+    `) + rdHard(`H.docs_git(${rdQ(demo)}, ['rev-parse', '--git-dir'], call_s=1, dl=H.Deadline(12), `
+      + `ceiling=H.ceiling_of(${rdQ(demo)}))`) + 'out(hard)\n', { timeoutMs: 30_000 });
+    rdVitest.expect(got).toEqual({ word: 'git-timeout', ctx: { step: 'rev-parse' } });
+  }, 30_000);
+
+  rdVitest.it('a spent helper deadline spawns nothing: soft, it reads as timed out; hard, it is git-timeout', () => {
+    rec.reset();
+    const got = rdPy.unitJson<{ soft: unknown[]; hard: RdShape }>(h.home, rdUnit(String.raw`
+      r = H.docs_git(${rdQ(demo)}, ['rev-parse', '--git-dir'], call_s=5, dl=H.Deadline(0),
+                     ceiling=H.ceiling_of(${rdQ(demo)}), soft=True)
+    `) + rdHard(`H.docs_git(${rdQ(demo)}, ['rev-parse', '--git-dir'], call_s=5, dl=H.Deadline(0), `
+      + `ceiling=H.ceiling_of(${rdQ(demo)}))`) + "out({'soft': [r.rc, r.timed_out, r.overflow], 'hard': hard})\n");
+    rdVitest.expect(got).toEqual({ soft: [null, true, false], hard: { word: 'git-timeout', ctx: { step: 'rev-parse' } } });
+    rdVitest.expect(rec.calls()).toEqual([]);
+  });
+
+  rdVitest.it('stdout past stdout_cap is overflow; a hard call answers too-many-entries', () => {
+    const fake = rdFakeGit(h.home, 'flood', 'dd if=/dev/zero bs=8192 count=1 2>/dev/null\n');
+    const got = rdPy.unitJson<{ soft: unknown[]; hard: RdShape }>(h.home, rdUnit(String.raw`
+      import os
+      os.environ['PATH'] = ${rdQ(fake)} + ':' + os.environ['PATH']
+      r = ${call("['rev-parse']", ', soft=True, stdout_cap=1024')}
+    `) + rdHard(call("['rev-parse']", ', stdout_cap=1024'))
+      + "out({'soft': [r.overflow, r.timed_out, len(r.out)], 'hard': hard})\n");
+    rdVitest.expect(got).toEqual({ soft: [true, false, 1024], hard: { word: 'too-many-entries', ctx: { bytes: 1024 } } });
+  });
+
+  rdVitest.it('stdin reaches git: cat-file --batch-check answers the line it was fed', () => {
+    const head = h.git(demo, 'rev-parse', 'HEAD');
+    const got = rdPy.unitJson<[number, string]>(h.home,
+      `r = ${call("['cat-file', '--batch-check']", `, stdin=(${rdQ(head)} + '\\n').encode()`)}\n`
+      + 'out([r.rc, r.out.decode()])\n');
+    rdVitest.expect(got[0]).toBe(0);
+    rdVitest.expect(got[1]).toMatch(new RegExp(`^${head} commit [0-9]+\\n$`));
+  });
+});
+
+rdVitest.describe('docs discovery: every repository shape of spec section 2 (h), on real git', () => {
+  let h: rdWs.CcdHarness;
+  let rec: ReturnType<typeof rdDocs.plantGitRecorder>;
+  let P = '';
+  let demo = '';
+  let decoy = '';
+  let oldBlob = '';
+  rdVitest.beforeAll(() => {
+    h = rdWs.makeCcdHarness('ccd-docs-');
+    P = rdPath.join(h.home, 'projects');
+    demo = rdDocs.docsRepo(h, 'demo', { 'docs/superpowers/specs/a.md': '# A\n' });
+    rdDocs.commitDocs(h, demo, { 'docs/superpowers/specs/a.md': '# A, second\n' }, 'docs: second');
+    h.git(demo, 'push', '-q', 'origin', 'main');
+    // A blob no longer at HEAD: a blob:none clone holds every HEAD blob after its checkout, and none older.
+    oldBlob = h.git(demo, 'rev-parse', 'HEAD~1:docs/superpowers/specs/a.md');
+    rdFs.mkdirSync(rdPath.join(P, 'nongit'));
+    rdFs.writeFileSync(rdPath.join(P, 'afile'), 'not a directory\n');
+    h.git(h.home, 'init', '-q', '--bare', rdPath.join(P, 'bare', '.git'));
+    // A repository whose worktree git places somewhere else.
+    h.git(h.home, 'init', '-q', '-b', 'main', rdPath.join(P, 'tw'));
+    rdFs.mkdirSync(rdPath.join(h.home, 'elsewhere'));
+    h.git(rdPath.join(P, 'tw'), 'config', 'core.worktree', rdPath.join(h.home, 'elsewhere'));
+    h.git(demo, 'worktree', 'add', '-q', '-b', 'ws/a', rdPath.join(P, 'wt'));
+    h.git(demo, 'worktree', 'add', '-q', '--detach', rdPath.join(P, 'wd'));
+    h.makeRepo('a');
+    rdFs.mkdirSync(rdPath.join(P, 'b'));
+    rdFs.symlinkSync(rdPath.join(P, 'a', '.git'), rdPath.join(P, 'b', '.git'));
+    rdFs.mkdirSync(rdPath.join(P, 'c'));
+    rdFs.writeFileSync(rdPath.join(P, 'c', '.git'), `gitdir: ${rdPath.join(P, 'a', '.git')}\n`);
+    // A --separate-git-dir main checkout whose git dir no project under the root owns.
+    rdFs.mkdirSync(rdPath.join(h.home, 'seps'));
+    h.git(h.home, 'init', '-q', '-b', 'main', `--separate-git-dir=${rdPath.join(h.home, 'seps', 'sep.git')}`,
+      rdPath.join(P, 'sep'));
+    rdFs.writeFileSync(rdPath.join(P, 'sep', 'README.md'), 'hi\n');
+    h.git(rdPath.join(P, 'sep'), 'add', 'README.md');
+    h.git(rdPath.join(P, 'sep'), 'commit', '-q', '-m', 'init');
+    // A repository outside the root that a SYMLINKED entry (z) names: not an owner discovery could open.
+    const outside = rdPath.join(h.home, 'outside');
+    h.git(h.home, 'init', '-q', '-b', 'main', outside);
+    rdFs.writeFileSync(rdPath.join(outside, 'README.md'), 'hi\n');
+    h.git(outside, 'add', 'README.md');
+    h.git(outside, 'commit', '-q', '-m', 'init');
+    rdFs.symlinkSync(outside, rdPath.join(P, 'z'));
+    rdFs.mkdirSync(rdPath.join(P, 'y'));
+    rdFs.symlinkSync(rdPath.join(outside, '.git'), rdPath.join(P, 'y', '.git'));
+    const origin = rdPath.join(h.home, 'origins', 'demo.git');
+    h.git(origin, 'config', 'uploadpack.allowFilter', 'true');
+    h.git(h.home, 'clone', '-q', '--filter=blob:none', `file://${origin}`, rdPath.join(P, 'part'));
+    h.makeGhRepo('gh', 'example-org/example-repo');
+    decoy = rdPath.join(h.home, 'decoy');
+    h.git(h.home, 'init', '-q', '-b', 'main', decoy);
+    rec = rdDocs.plantGitRecorder(h.home);
+  }, 60_000);
+  rdVitest.afterAll(() => h.cleanup());
+
+  rdVitest.it('unknown-project names ccd\'s root: an absent name, a file, and a symlink to a repository', () => {
+    rdVitest.expect(rdShapes(h.home, ['nope', 'afile', 'z'])).toEqual([
+      { word: 'unknown-project', ctx: { root: P } },
+      { word: 'unknown-project', ctx: { root: P } },
+      { word: 'unknown-project', ctx: { root: P } },
+    ]);
+  });
+
+  rdVitest.it('a directory with no .git is not-a-git-repo, and no git runs at all', () => {
+    rec.reset();
+    rdVitest.expect(rdShapes(h.home, ['nongit'])).toEqual([{ word: 'not-a-git-repo', ctx: {} }]);
+    rdVitest.expect(rec.calls()).toEqual([]);
+  });
+
+  rdVitest.it('a bare repository is not-a-git-repo {detail:bare}, though rev-parse exits 128 at --show-toplevel', () => {
+    // CONTROL: the measured shape the option order exists for. git prints is-bare, then fails.
+    const plain = rdPlainGit(h.home, ['-C', rdPath.join(P, 'bare'), 'rev-parse', '--is-bare-repository', '--show-toplevel']);
+    rdVitest.expect([plain.status, plain.stdout]).toEqual([128, 'true\n']);
+    rdVitest.expect(rdShapes(h.home, ['bare'])).toEqual([{ word: 'not-a-git-repo', ctx: { detail: 'bare' } }]);
+  });
+
+  rdVitest.it('row 7, toplevel half: a worktree git places elsewhere is not-a-git-repo {detail:toplevel-mismatch}', () => {
+    // CONTROL: plain git would serve this project from the other directory.
+    const plain = rdPlainGit(h.home, ['-C', rdPath.join(P, 'tw'), 'rev-parse', '--show-toplevel']);
+    rdVitest.expect(plain.stdout.trim()).toBe(rdReal(rdPath.join(h.home, 'elsewhere')));
+    rdVitest.expect(rdShapes(h.home, ['tw'])).toEqual([{ word: 'not-a-git-repo', ctx: { detail: 'toplevel-mismatch' } }]);
+  });
+
+  rdVitest.it('row 8: a .git-file worktree under projects/ is linked-worktree {owner, branch}; detached is branch null', () => {
+    rdVitest.expect(rdShapes(h.home, ['wt', 'wd'])).toEqual([
+      { word: 'linked-worktree', ctx: { owner: 'demo', branch: 'ws/a' } },
+      { word: 'linked-worktree', ctx: { owner: 'demo', branch: null } },
+    ]);
+  });
+
+  rdVitest.it('row 57: b/.git as a symlink to a/.git, and c/.git as a gitdir: file, are shared-repo {owner:a}', () => {
+    // CONTROL: plain git reads a's object store under b's and c's names.
+    for (const p of ['b', 'c']) {
+      const plain = rdPlainGit(h.home, ['-C', rdPath.join(P, p), 'rev-parse', '--absolute-git-dir', '--show-toplevel']);
+      rdVitest.expect(plain.stdout.trim().split('\n')).toEqual([rdReal(rdPath.join(P, 'a', '.git')), rdReal(rdPath.join(P, p))]);
+    }
+    rdVitest.expect(rdShapes(h.home, ['b', 'c'])).toEqual([
+      { word: 'shared-repo', ctx: { owner: 'a', branch: 'main' } },
+      { word: 'shared-repo', ctx: { owner: 'a', branch: 'main' } },
+    ]);
+  });
+
+  rdVitest.it('row 57: a --separate-git-dir main checkout with no owner under the root is accepted', () => {
+    const [s] = rdShapes(h.home, ['sep']);
+    rdVitest.expect(s!.repo).toMatchObject({
+      project: 'sep', git_dir: rdReal(rdPath.join(h.home, 'seps', 'sep.git')),
+      common_dir: rdReal(rdPath.join(h.home, 'seps', 'sep.git')), toplevel: rdReal(rdPath.join(P, 'sep')), bare: false,
+    });
+  });
+
+  rdVitest.it('row 57: an owner is a project discovery could open, so a symlinked entry is never one', () => {
+    // CONTROL: by real path alone, z/.git IS y's git dir; only the "Q is a real directory" rule turns it away.
+    rdVitest.expect(rdReal(rdPath.join(P, 'z', '.git'))).toBe(rdReal(rdPath.join(P, 'y', '.git')));
+    const [s] = rdShapes(h.home, ['y']);
+    rdVitest.expect(s!.word).toBeUndefined();
+    rdVitest.expect(s!.repo).toMatchObject({ project: 'y', git_dir: rdReal(rdPath.join(h.home, 'outside', '.git')) });
+  });
+
+  rdVitest.it('a plain project discovers to the Repo every later read starts from', () => {
+    const common = rdReal(rdPath.join(demo, '.git'));
+    rdVitest.expect(rdShapes(h.home, ['demo'])).toEqual([{ repo: {
+      project: 'demo', path: rdPath.join(P, 'demo'), git_dir: common, common_dir: common, toplevel: rdReal(demo),
+      bare: false, shallow: false, object_format: 'sha1',
+      key: rdCrypto.createHash('sha256').update(common).digest('hex').slice(0, 32),
+    } }]);
+  });
+
+  rdVitest.it('row 9: a blob:none partial clone is partial-clone, and discovery fetches nothing', () => {
+    const part = rdPath.join(P, 'part');
+    const before = rdPacks(part);
+    rdVitest.expect(rdShapes(h.home, ['part'])).toEqual([{ word: 'partial-clone', ctx: {} }]);
+    rdVitest.expect(rdPacks(part)).toBe(before);
+  });
+
+  rdVitest.it('row 10: every call carries GIT_NO_LAZY_FETCH=1, and exactly the six read keys', () => {
+    rec.reset();
+    rdShapes(h.home, ['demo', 'tw', 'bare', 'wt', 'wd', 'b', 'c', 'sep', 'y', 'part', 'gh']);
+    const calls = rec.calls();
+    rdVitest.expect(calls.length).toBeGreaterThanOrEqual(11);
+    for (const c of calls) {
+      rdVitest.expect(Object.keys(c.env).sort(), c.argv.join(' ')).toEqual(RD_SIX);
+      rdVitest.expect(c.env['GIT_NO_LAZY_FETCH']).toBe('1');
+      rdVitest.expect(c.env['GIT_CEILING_DIRECTORIES']).toBe(rdReal(P));
+    }
+  });
+
+  rdVitest.it('row 11, env half: GIT_DIR and GIT_CONFIG_PARAMETERS in the helper\'s env change nothing', () => {
+    const hostile = { GIT_DIR: rdPath.join(decoy, '.git'), GIT_CONFIG_PARAMETERS: `'core.worktree'='${decoy}'` };
+    // CONTROL: the same env sends plain git to the decoy.
+    const plain = rdPlainGit(h.home, ['-C', demo, 'rev-parse', '--absolute-git-dir'], hostile);
+    rdVitest.expect(plain.stdout.trim()).toBe(rdReal(rdPath.join(decoy, '.git')));
+    rec.reset();
+    const [s] = rdShapes(h.home, ['demo'], hostile);
+    rdVitest.expect(s!.repo).toMatchObject({ git_dir: rdReal(rdPath.join(demo, '.git')), toplevel: rdReal(demo) });
+    const calls = rec.calls();
+    rdVitest.expect(calls.length).toBeGreaterThan(0);
+    for (const c of calls) {
+      rdVitest.expect(c.env).not.toHaveProperty('GIT_DIR');
+      rdVitest.expect(c.env).not.toHaveProperty('GIT_CONFIG_PARAMETERS');
+    }
+  });
+
+  rdVitest.it('R15 + row 62: dubious ownership (canned) is repo-unreadable, its stderrHead redacted', () => {
+    const got = rdPy.unitJson<RdShape>(h.home, `${rdCtx(h.home)}\n${rdUnit(String.raw`
+      CANNED = (b"fatal: detected dubious ownership in repository at 'https://u:tok@example.invalid/x'\n"
+                b"hint: ?access_token=sekrit-one&x=1\n"
+                b"hint: token gho_" + b"A" * 30 + b"\n"
+                b"Authorization: Bearer sekrit-two\n")
+      class Canned(H.Sys):
+          def spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin=None):
+              if 'rev-parse' in argv:
+                  return H.Spawned(128, b'', CANNED, False, False)
+              return H.Sys.spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin)
+      H.SYS = Canned()
+      out(shape('demo'))
+    `)}`);
+    rdVitest.expect(got.word).toBe('repo-unreadable');
+    const head = String(got.ctx!['stderrHead']);
+    rdVitest.expect(head).toContain('detected dubious ownership');
+    rdVitest.expect(head).toContain('://***@');
+    rdVitest.expect(head).not.toMatch(/tok@|sekrit|A{20}|Bearer/);
+  });
+
+  rdVitest.it('row 62: stderr_head redacts BEFORE it cuts to 512 bytes (a cut token would slip the pattern)', () => {
+    const got = rdPy.unitJson<{ head: string; long: number; cutFirst: string }>(h.home, rdUnit(String.raw`
+      raw = b'x' * 500 + b' gho_' + b'A' * 30
+      out({'head': H.stderr_head(raw), 'long': len(H.stderr_head(b'y' * 2000).encode()),
+           'cutFirst': H.redact(raw[:512].decode())})
+    `));
+    rdVitest.expect(got.head.startsWith(`${'x'.repeat(500)} gho_`)).toBe(true);
+    rdVitest.expect(got.head).not.toContain('A');
+    rdVitest.expect(got.long).toBe(512);
+    // CONTROL: the other order leaks the token's head, which is why the order is pinned.
+    rdVitest.expect(got.cutFirst).toContain('AAAAAAA');
+  });
+
+  rdVitest.it('origin_url reads remote.origin.url through the runner; github_of names only a GitHub origin', () => {
+    const got = rdPy.unitJson<unknown[]>(h.home, `${rdCtx(h.home)}\n${rdUnit(String.raw`
+      rows = []
+      for p in ['gh', 'demo', 'sep']:
+          u = H.origin_url(H.discover(ctx, p, dl), dl)
+          rows.append([p, u, H.github_of(u)])
+      out(rows)
+    `)}`);
+    rdVitest.expect(got).toEqual([
+      ['gh', 'https://github.com/example-org/example-repo', { state: 'named', slug: 'example-org/example-repo' }],
+      ['demo', rdPath.join(h.home, 'origins', 'demo.git'), { state: 'none' }],
+      ['sep', null, { state: 'none' }],
+    ]);
+  });
+
+  // LAST in this describe: its control lazily fetches the old blob into part/.
+  rdVitest.it('row 10: a missing object read through docs_git fetches nothing; plain git fetches it', () => {
+    const part = rdPath.join(P, 'part');
+    const before = rdPacks(part);
+    const got = rdPy.unitJson<[number | null, string]>(h.home, rdUnit(String.raw`
+      r = H.docs_git(${rdQ(part)}, ['cat-file', '--batch-check'], call_s=5, dl=H.Deadline(12),
+                     ceiling=H.ceiling_of(${rdQ(part)}), stdin=(${rdQ(oldBlob)} + '\n').encode(), soft=True)
+      out([r.rc, r.out.decode()])
+    `));
+    rdVitest.expect(got).toEqual([128, '']);
+    rdVitest.expect(rdPacks(part)).toBe(before);
+    // CONTROL: without GIT_NO_LAZY_FETCH the same read reaches origin and writes a pack.
+    const plain = rdCp.spawnSync('git', ['-C', part, 'cat-file', '--batch-check'],
+      { encoding: 'utf8', input: `${oldBlob}\n`, env: rdPlainEnv(h.home) });
+    rdVitest.expect(plain.stdout).toMatch(new RegExp(`^${oldBlob} blob [0-9]+\\n$`));
+    rdVitest.expect(rdPacks(part)).toBe(before + 1);
+  });
+});
+
+rdVitest.describe('docs discovery: row 7, a projects root that is itself a git repository', () => {
+  let h: rdWs.CcdHarness;
+  let rec: ReturnType<typeof rdDocs.plantGitRecorder>;
+  let P = '';
+  rdVitest.beforeAll(() => {
+    h = rdWs.makeCcdHarness('ccd-docs-');
+    P = rdPath.join(h.home, 'projects');
+    h.git(h.home, 'init', '-q', '-b', 'main', P);
+    rdFs.mkdirSync(rdPath.join(P, 'nongit'));
+    // A .git that is not a repository: git skips it and walks UP, unless the ceiling stops it.
+    rdFs.mkdirSync(rdPath.join(P, 'hollow', '.git'), { recursive: true });
+    rec = rdDocs.plantGitRecorder(h.home);
+  });
+  rdVitest.afterAll(() => h.cleanup());
+
+  rdVitest.it('projects/nongit is not-a-git-repo with zero git calls, where plain git answers the root', () => {
+    const plain = rdPlainGit(h.home, ['-C', rdPath.join(P, 'nongit'), 'rev-parse', '--show-toplevel']);
+    rdVitest.expect(plain.stdout.trim()).toBe(rdReal(P));
+    rec.reset();
+    rdVitest.expect(rdShapes(h.home, ['nongit'])).toEqual([{ word: 'not-a-git-repo', ctx: {} }]);
+    rdVitest.expect(rec.calls()).toEqual([]);
+  });
+
+  rdVitest.it('projects/hollow is repo-unreadable: the ceiling stops git walking up into the root', () => {
+    // CONTROL, both halves: plain git serves the ROOT's repository as hollow; the same call under the ceiling
+    // the runner sets finds nothing.
+    const plain = rdPlainGit(h.home, ['-C', rdPath.join(P, 'hollow'), 'rev-parse', '--show-toplevel']);
+    rdVitest.expect(plain.stdout.trim()).toBe(rdReal(P));
+    const ceiled = rdPlainGit(h.home, ['-C', rdPath.join(P, 'hollow'), 'rev-parse', '--show-toplevel'],
+      { GIT_CEILING_DIRECTORIES: rdReal(P) });
+    rdVitest.expect(ceiled.status).toBe(128);
+    const [s] = rdShapes(h.home, ['hollow']);
+    rdVitest.expect(s!.word).toBe('repo-unreadable');
+    rdVitest.expect(String(s!.ctx!['stderrHead'])).toContain('not a git repository');
+  });
+});
+
+rdVitest.describe('docs discovery through run(): the line a verb that discovers first answers', () => {
+  let h: rdWs.CcdHarness;
+  let rec: ReturnType<typeof rdDocs.plantGitRecorder>;
+  let P = '';
+  rdVitest.beforeAll(() => {
+    h = rdWs.makeCcdHarness('ccd-docs-');
+    P = rdPath.join(h.home, 'projects');
+    const demo = rdDocs.docsRepo(h, 'demo');
+    rdFs.mkdirSync(rdPath.join(P, 'nongit'));
+    h.git(h.home, 'init', '-q', '--bare', rdPath.join(P, 'bare', '.git'));
+    h.git(demo, 'worktree', 'add', '-q', '-b', 'ws/a', rdPath.join(P, 'wt'));
+    h.makeRepo('a');
+    rdFs.mkdirSync(rdPath.join(P, 'b'));
+    rdFs.symlinkSync(rdPath.join(P, 'a', '.git'), rdPath.join(P, 'b', '.git'));
+    const origin = rdPath.join(h.home, 'origins', 'demo.git');
+    h.git(origin, 'config', 'uploadpack.allowFilter', 'true');
+    h.git(h.home, 'clone', '-q', '--filter=blob:none', `file://${origin}`, rdPath.join(P, 'part'));
+    rec = rdDocs.plantGitRecorder(h.home);
+  }, 60_000);
+  rdVitest.afterAll(() => h.cleanup());
+
+  /** `H.run` over a docs-tree argv per project, as `main()` would answer it, with the docs-tree entry of
+   *  `H.VERBS` swapped for "discover, then stop". `setup` runs first (python, column 0). Each line comes back
+   *  parsed, its `elapsedMs` checked to be a number and then dropped. */
+  const lines = (projects: readonly string[], setup = ''): Record<string, unknown>[] => {
+    const got = rdPy.unitJson<Record<string, unknown>[]>(h.home, `${setup}\n${rdUnit(String.raw`
+      import json
+      def tree_after_discovery(ctx, a):
+          H.discover(ctx, a.project, H.Deadline(H.HELPER_DEADLINE_S[ctx.verb]))
+          raise NotImplementedError('discovery-passed')
+      H.VERBS['docs-tree'] = tree_after_discovery
+      rows = []
+      for p in ${JSON.stringify(projects)}:
+          line = H.run(['docs-tree', ${rdQ(P)}, ${rdQ(rdPath.join(h.home, 'worktrees'))},
+                        ${rdQ(rdPath.join(h.home, '.cc-sessions'))}, '--project', p])
+          rows.append(json.loads(line.decode('utf-8')))
+      out(rows)
+    `)}`);
+    return got.map((o) => {
+      rdVitest.expect(typeof o['elapsedMs']).toBe('number');
+      const { elapsedMs: _e, ...rest } = o;
+      return rest;
+    });
+  };
+  const head = { v: 1, verb: 'docs-tree', ok: false };
+
+  rdVitest.it('each refused shape is its own word on the wire, its context spread beside it', () => {
+    rdVitest.expect(lines(['nope', 'bare', 'wt', 'b', 'part'])).toEqual([
+      { ...head, failure: 'unknown-project', root: P },
+      { ...head, failure: 'not-a-git-repo', detail: 'bare' },
+      { ...head, failure: 'linked-worktree', owner: 'demo', branch: 'ws/a' },
+      { ...head, failure: 'shared-repo', owner: 'a', branch: 'main' },
+      { ...head, failure: 'partial-clone' },
+    ]);
+  });
+
+  rdVitest.it('a directory with no .git answers not-a-git-repo before any git call', () => {
+    rec.reset();
+    rdVitest.expect(lines(['nongit'])).toEqual([{ ...head, failure: 'not-a-git-repo' }]);
+    rdVitest.expect(rec.calls()).toEqual([]);
+  });
+
+  rdVitest.it('a project discovery accepts runs on to the verb body, here a stop that answers helper-failed', () => {
+    rec.reset();
+    const [o] = lines(['demo']);
+    rdVitest.expect(o).toMatchObject({ ...head, failure: 'helper-failed' });
+    rdVitest.expect(String(o!['detail'])).toContain('discovery-passed');
+    rdVitest.expect(rec.calls().length).toBeGreaterThanOrEqual(2);
+  });
+
+  rdVitest.it('row 62 on the wire: a canned dubious-ownership stderr reaches the line redacted', () => {
+    const [o] = lines(['demo'], rdUnit(String.raw`
+      class Canned(H.Sys):
+          def spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin=None):
+              return H.Spawned(128, b'', b"fatal: detected dubious ownership at 'https://u:tok@example.invalid/x'\n", False, False)
+      H.SYS = Canned()
+    `));
+    rdVitest.expect(o).toMatchObject({ ...head, failure: 'repo-unreadable' });
+    rdVitest.expect(String(o!['stderrHead'])).toContain('dubious ownership');
+    rdVitest.expect(String(o!['stderrHead'])).not.toContain('tok@');
+  });
+});

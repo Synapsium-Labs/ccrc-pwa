@@ -197,3 +197,39 @@ export function runCcdDocsShell(h: CcdHarness, script: string, cwd: string = h.h
   if (r.error) return { code: -1, stdout: r.stdout ?? '', stderr: `${r.stderr ?? ''}spawn error: ${String(r.error)}` };
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
+
+// ---- Docs fixture repositories (docs W1a, the runner and discovery task) ----
+// This block imports under names of its own: an appended block cannot assume the
+// file head's import list, and binding one name twice is a SyntaxError.
+import * as docsRepoFs from 'node:fs';
+import * as docsRepoPath from 'node:path';
+import type { CcdHarness as DocsRepoHarness } from './ccdWsHelpers.js';
+
+/** Writes each of `files` under `dir` (parents created; a Buffer as raw bytes),
+ *  commits exactly those paths, and returns the new commit's sha. */
+export function commitDocs(
+  h: DocsRepoHarness, dir: string, files: Record<string, string | Buffer>, msg = 'docs',
+): string {
+  const rels = Object.keys(files);
+  if (rels.length === 0) throw new Error('commitDocs: no files to commit');
+  for (const [rel, body] of Object.entries(files)) {
+    const p = docsRepoPath.join(dir, rel);
+    docsRepoFs.mkdirSync(docsRepoPath.dirname(p), { recursive: true });
+    docsRepoFs.writeFileSync(p, body);
+  }
+  h.git(dir, 'add', '--', ...rels);
+  h.git(dir, 'commit', '-q', '-m', msg);
+  return h.git(dir, 'rev-parse', 'HEAD');
+}
+
+/** `h.makeRepo(name)` plus one docs commit, pushed to its origin, so the main
+ *  checkout and `origin/main` agree. Returns the main checkout's path. */
+export function docsRepo(
+  h: DocsRepoHarness, name: string,
+  files: Record<string, string | Buffer> = { 'docs/superpowers/specs/a.md': '# A\n' },
+): string {
+  const main = h.makeRepo(name);
+  commitDocs(h, main, files);
+  h.git(main, 'push', '-q', 'origin', 'main');
+  return main;
+}
