@@ -39,12 +39,12 @@
 # detail of the systemd version on the box; a PID that did not change is a PID
 # that did not change on every version.
 #
-# Read-only throughout: `is-active`, `show`, `status`, `journalctl`. It never
-# starts, stops, restarts or resets anything.
-#
-# Pinned by agent/test/deploy-verify.test.ts, which runs this script against a
-# stubbed `systemctl` for the healthy, crash-looping, inactive and
-# never-started cases.
+# Read-only throughout: `is-active`, `show`, `status`, `journalctl` — and, for a
+# claude-session@<id> unit that fails a check, a read of ccd's registry (below;
+# ccd is its only writer). It never starts, stops, restarts or resets anything,
+# and writes nothing. Pinned by agent/test/deploy-verify.test.ts against a stubbed
+# `systemctl`: healthy, crash-looping, inactive, never-started, and the
+# deliberate-stop classifier's cases.
 set -uo pipefail
 
 UNIT="${1:-}"
@@ -61,7 +61,89 @@ SETTLE="${CCRC_VERIFY_SETTLE:-3}"
 WINDOW="${CCRC_VERIFY_WINDOW:-5}"
 LOG_LINES="${CCRC_VERIFY_LOG_LINES:-60}"
 
+# The deliberate-stop re-poll's bound (wave 10, R12): at most STOP_POLLS more
+# `is-active` reads, STOP_INTERVAL seconds apart, while a claude-session@ unit
+# reads `deactivating`. Overridable for the reason SETTLE and WINDOW are; the
+# DEFAULTS bound the extra wait at ~10s, and only a FAILING session unit pays it.
+STOP_POLLS="${CCRC_VERIFY_STOP_POLLS:-10}"
+STOP_INTERVAL="${CCRC_VERIFY_STOP_INTERVAL:-1}"
+
+# ── A DELIBERATE SUPERVISOR STOP IS NOT A CRASH (wave 10, R12) ─────────────
+# `ccrc update`'s sweep and deploy.sh's SWEEP_CMD list the active supervisors
+# ONCE, then run this script per unit, serially, ~8s each, and the first
+# non-zero exit fails the run. A session stopped on purpose while that loop is
+# still walking — an archive, `ccd stop`, ws-rm, forget, reap, a child reclaim —
+# read as a crash: R12, a hand archive inside v0.0.78's fleet sweep, which
+# failed a healthy update and halted every move until an operator acked it.
+#
+# Every one of those verbs goes through ccd's one stop function,
+# `_ws_unsupervise`, which stamps `<id>.stopped` BEFORE it runs `systemctl
+# --user disable --now`; ws-rm, forget, reap and reclaim then purge the row
+# (`_reg_purge` takes `.stopped` and `.uuid`). And under the unit's
+# Restart=always a crash never reads `inactive`: systemd restarts the unit
+# after every exit except an explicit stop, and a burst past StartLimitBurst
+# ends `failed` (systemd.service(5); measured on systemd 255). A crash
+# reads `activating`, then `failed` once the start limit is spent, or `active`
+# behind a new MainPID. So a session unit that SETTLES `inactive` with the stamp
+# present, or with its row gone, was stopped on purpose: it gets its own line
+# and exit 0 (D-3947: not only "stayed up"). Everything else fails exactly as before.
+#
+# ONLY A STOP-SHAPED FAILURE IS CLASSIFIED. `fail` is told the word its check
+# observed: `inactive`, `deactivating`, or `nopid` (active, then no MainPID — a
+# stop that finished between the two reads). A check that SAW a crash —
+# `activating`, `failed`, or a MainPID that changed — never reaches the
+# classifier, so one pane death that a check observes, followed by a stop, still fails.
+#
+# Deliberately NOT here (coordinator rulings, wave 10): an unstamped `inactive`
+# unit (a hand stop, a swap caught mid-carry — the swap writes no stamp) still
+# fails; no freshness test on the stamp (`inactive` under Restart=always is
+# always somebody's stop, so a stale stamp can only pass a deliberate stop;
+# ActiveEnterTimestamp is empty once a stopped unit is unloaded, systemd 255);
+# no cap on how many units may be stopped (this script asks whether the NEW
+# supervisor stays up); one pane death that a check observes still fails.
+#
+# REG is ccd's own root, derived from HOME with no env override exactly as
+# ccd/ccd's `REG=` is (D-3948; pinned by deploy-verify.test.ts). It is only READ,
+# and only here (D-3946). An ABSENT registry, or no HOME, is not a purged row —
+# nothing was measured — so it fails. The scope is the unit's NAME: ccrc.service
+# and ccrc-agent.service never reach the registry, and never cost a query.
+stopped_on_purpose() {   # -> 0, and one stdout line, iff $UNIT is a session stopped on purpose
+  local id reg st n=0 s evidence
+  case "$UNIT" in claude-session@?*.service) ;; *) return 1 ;; esac
+  id="${UNIT#claude-session@}"; id="${id%.service}"
+  case "$id" in */*) return 1 ;; esac
+  [ -n "${HOME:-}" ] || return 1
+  reg="$HOME/.cc-sessions"
+  [ -d "$reg" ] || return 1
+  st=$(systemctl --user is-active "$UNIT" 2>&1)
+  while [ "$st" = deactivating ] && [ "$n" -lt "$STOP_POLLS" ]; do
+    sleep "$STOP_INTERVAL"
+    n=$((n + 1))
+    st=$(systemctl --user is-active "$UNIT" 2>&1)
+  done
+  [ "$st" = inactive ] || return 1
+  if [ -e "$reg/$id.stopped" ]; then
+    # `-f` and not a symlink BEFORE the read, as ccd's `_reg_get` does: a FIFO
+    # here would block the read for ever. Present is enough; the read only
+    # names the evidence.
+    s="not read: not a plain file"
+    if [ -f "$reg/$id.stopped" ] && [ ! -L "$reg/$id.stopped" ]; then
+      s=""; IFS= read -r s < "$reg/$id.stopped" || :
+      s="reads '${s:0:64}'"
+    fi
+    evidence="ccd's stop stamp ~/.cc-sessions/$id.stopped is present ($s)"
+  elif [ ! -e "$reg/$id.uuid" ]; then
+    evidence="its registry row is purged (no ~/.cc-sessions/$id.uuid)"
+  else
+    return 1
+  fi
+  echo "stopped on purpose: $UNIT settled 'inactive', and $evidence — a deliberate stop, not a crash"
+}
+
 fail() {
+  # A deliberate supervisor stop is not a failure (wave 10, R12): see
+  # stopped_on_purpose above. Only a stop-shaped observation ($2) is classified.
+  case "${2:-}" in inactive|deactivating|nopid) stopped_on_purpose && exit 0 ;; esac
   echo "" >&2
   echo "################################################################" >&2
   echo "## DEPLOY FAILED — $UNIT did not come up clean after restart" >&2
@@ -89,16 +171,16 @@ main_pid() {
 sleep "$SETTLE"
 
 active_now=$(systemctl --user is-active "$UNIT" 2>&1)
-[ "$active_now" = "active" ] || fail "unit is '$active_now', not 'active', ${SETTLE}s after the restart"
+[ "$active_now" = "active" ] || fail "unit is '$active_now', not 'active', ${SETTLE}s after the restart" "$active_now"
 
 p1=$(main_pid)
-{ [ -n "$p1" ] && [ "$p1" != "0" ]; } || fail "unit reports no MainPID ${SETTLE}s after the restart — nothing is running"
+{ [ -n "$p1" ] && [ "$p1" != "0" ]; } || fail "unit reports no MainPID ${SETTLE}s after the restart — nothing is running" nopid
 
 sleep "$WINDOW"
 
 active_after=$(systemctl --user is-active "$UNIT" 2>&1)
 [ "$active_after" = "active" ] \
-  || fail "unit was 'active' then became '$active_after' during the ${WINDOW}s observation window"
+  || fail "unit was 'active' then became '$active_after' during the ${WINDOW}s observation window" "$active_after"
 
 p2=$(main_pid)
 [ "$p1" = "$p2" ] \

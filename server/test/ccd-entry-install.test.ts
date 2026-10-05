@@ -66,15 +66,31 @@ const HOOK = [
 
 /** A shipped-tree copy at `<home>/ccrc`: the body, the template and the helper.
  *  `template` rewrites the template's text (a hook, a broken self-test); `ccd`
- *  appends to the body. */
-function plantTree(o: { template?: (t: string) => string; ccd?: string } = {}): void {
+ *  appends to the body; `installer` rewrites the helper's text (a fixture
+ *  failure at a step no hook can reach). */
+function plantTree(o: { template?: (t: string) => string; ccd?: string; installer?: (t: string) => string } = {}): void {
   const dir = path.join(tree(), 'ccd');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'ccd'), fs.readFileSync(CCD, 'utf8') + (o.ccd ?? ''), { mode: 0o755 });
   const tpl = fs.readFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), 'utf8');
   fs.writeFileSync(path.join(dir, 'ccd-entry.py'), o.template ? o.template(tpl) : tpl);
-  fs.copyFileSync(path.join(REPO, 'ccd', 'ccd-entry-install.py'), path.join(dir, 'ccd-entry-install.py'));
+  const inst = fs.readFileSync(path.join(REPO, 'ccd', 'ccd-entry-install.py'), 'utf8');
+  fs.writeFileSync(path.join(dir, 'ccd-entry-install.py'), o.installer ? o.installer(inst) : inst);
 }
+/** The helper with the LAUNCHER's post-rename re-measurement failing — the one
+ *  exit-2 arm in which both halves moved. */
+const launcherPostFails = (t: string): string => {
+  const at = '    file — not a link — of the staged mode and bytes."""\n';
+  if (!t.includes(at)) throw new Error('the installer has no postcondition docstring to hook');
+  return t.replace(at, `${at}    if label == 'launcher':\n        raise Refused('fixture: the launcher did not re-measure')\n`);
+};
+/** The helper with the LAUNCHER's report failing as a closed stdout fails it —
+ *  AFTER its post-rename re-measurement passed. */
+const launcherReportFails = (t: string): string => {
+  const at = 'def say(msg):\n';
+  if (!t.includes(at)) throw new Error('the installer has no say() to hook');
+  return t.replace(at, `${at}    if msg.startswith('launcher published'):\n        raise BrokenPipeError(32, 'fixture: stdout closed')\n`);
+};
 const withHook = (t: string): string => {
   const at = "    if argv == [SELFTEST_ARGV]:\n";
   if (!t.includes(at)) throw new Error('the template has no self-test branch for the hook');
@@ -91,6 +107,29 @@ const env = (pathPrefix = ''): NodeJS.ProcessEnv =>
 const helper = (args: readonly string[], python = PYTHON): Ran =>
   ran(spawnSync(python, ['-IS', path.join(tree(), 'ccd', 'ccd-entry-install.py'), ...args],
     { encoding: 'utf8', cwd: home, env: env() }));
+
+/** A command whose stdout is a pipe with its READER GONE: the read end is
+ *  closed before the command starts, which is where `ccrc install | head`
+ *  leaves it once `head` exits. Neither of the other shapes can show what a
+ *  real one does: spawnSync's own pipe is read to the end, and a fixture that
+ *  raises from `say` leaves nothing buffered for Python's shutdown flush to
+ *  fail on again — the flush that turns a run's status into 120. The driver
+ *  relays the command's stderr and prints its status on its own stdout. */
+const CLOSED_STDOUT_DRIVER = [
+  'import os, subprocess, sys',
+  'r, w = os.pipe()',
+  'os.close(r)',
+  'p = subprocess.run(sys.argv[1:], stdin=subprocess.DEVNULL, stdout=w, stderr=subprocess.PIPE)',
+  'os.close(w)',
+  'sys.stderr.buffer.write(p.stderr)',
+  'sys.stdout.write(str(p.returncode))',
+].join('\n');
+const closedStdout = (argv: readonly string[], e: NodeJS.ProcessEnv = env()): Ran => {
+  const r = spawnSync(PYTHON, ['-IS', '-c', CLOSED_STDOUT_DRIVER, ...argv], { encoding: 'utf8', cwd: home, env: e });
+  if (r.status !== 0 || !/^-?\d+$/.test(String(r.stdout))) throw new Error(`the closed-stdout driver failed: ${String(r.stdout)}${String(r.stderr)}`);
+  return { code: Number(r.stdout), stdout: '', stderr: String(r.stderr ?? '') };
+};
+const helperArgv = (): string[] => [PYTHON, '-IS', path.join(tree(), 'ccd', 'ccd-entry-install.py'), 'install', tree(), home];
 
 /** THE TWO LANES, each through its own shipped call site. */
 const LANES: Record<string, (pathPrefix?: string) => Ran> = {
@@ -253,6 +292,33 @@ describe('destinations are inspected without following them — in both lanes, f
   }
 });
 
+describe('every refusal comes before anything is created — a destination refusal on a fresh box', () => {
+  // The destination-type half of "asks every refusal ... BEFORE it creates,
+  // repairs or stages anything": on a FRESH box (no pair yet, no
+  // ~/.local/libexec) whose ~/.local/bin/ccd is a directory, the refusal must
+  // land before the installer creates the body's directory. Every other
+  // destination case above starts from a converged pair, where that directory
+  // already exists, so moving the `makedirs` ahead of the destination checks
+  // left them green.
+  for (const [lane, run] of [['helper', () => helper(['install', tree(), home])], ...Object.entries(LANES)] as const) {
+    it(`${lane}: ~/.local/bin/ccd is a DIRECTORY and ~/.local/libexec is absent → refused, and ~/.local/libexec/ccrc is never created`, () => {
+      plantTree();
+      fs.mkdirSync(entry(), { recursive: true });
+      fs.writeFileSync(path.join(entry(), 'kept'), 'k\n');
+      const libexec = path.join(home, '.local', 'libexec');
+      expect(fs.existsSync(libexec), 'the CONTROL: a fresh box has no ~/.local/libexec').toBe(false);
+      const r = run();
+      if (lane === 'helper') expect(r.code, `${r.stdout}${r.stderr}`).toBe(1);
+      else expect(r.code, `${r.stdout}${r.stderr}`).not.toBe(0);
+      expect(r.stderr).toMatch(/is a directory/);
+      expect(fs.existsSync(path.join(libexec, 'ccrc')), '~/.local/libexec/ccrc was created before the refusal').toBe(false);
+      expect(fs.existsSync(libexec), '~/.local/libexec was created before the refusal').toBe(false);
+      expect(fs.readdirSync(entry()), 'something was moved into the directory').toEqual(['kept']);
+      assertNoLeftovers();
+    }, 60_000);
+  }
+});
+
 describe('the pre-publication kernel self-test, and the order of publication, proved by an executable hook', () => {
   it('the self-test runs before EITHER live file moves: the hook sees the old pair', () => {
     plantTree();
@@ -279,7 +345,7 @@ describe('the pre-publication kernel self-test, and the order of publication, pr
     assertNoLeftovers();
   }, 60_000);
 
-  it('a launcher that cannot be published after its body did is exit 2 — a pair that refuses by digest — and a re-run converges', () => {
+  it('a launcher that cannot be published after its body did is exit 2 — it says the launcher did not move, never that the pair stands — and a re-run converges', () => {
     plantTree();
     expect(helper(['install', tree(), home]).code).toBe(0);
     plantTree({ template: withHook, ccd: '\n# v2\n' });
@@ -288,6 +354,10 @@ describe('the pre-publication kernel self-test, and the order of publication, pr
     expect(r.code, r.stderr).toBe(2);
     expect(r.stdout).toContain('body published');
     expect(r.stderr).toContain('refused after the body moved');
+    expect(r.stderr, 'the launcher did not move, so the entry in front of the new body is not the one self-tested').toContain(
+      `the launcher did not move, so what stands at ${entry()} is not proved to be the launcher this run self-tested beside this body`);
+    expect(r.stderr, 'what stands there is a directory, so no start refuses by digest').not.toContain('every ccd start refuses by digest');
+    expect(r.stderr).not.toContain('the pair stands as staged');
     expect(fs.readFileSync(body()).equals(fs.readFileSync(path.join(tree(), 'ccd/ccd'))), 'the body is the new one').toBe(true);
     expect(fs.lstatSync(entry()).isDirectory(), 'the obstruction stands').toBe(true);
     // Both lanes say the same thing about it.
@@ -300,6 +370,59 @@ describe('the pre-publication kernel self-test, and the order of publication, pr
     expect(again.stdout).not.toContain('body published');
     assertPair();
     assertNoLeftovers();
+  }, 60_000);
+
+  it('a launcher that moved and then failed its re-measurement is exit 2 too — whether the body moved with it or was already current, it says the launcher is unverified, never that starts refuse by digest', () => {
+    const runners: ReadonlyArray<readonly [string, () => Ran]> = [['helper', () => helper(['install', tree(), home])], ...Object.entries(LANES)];
+    for (const [what, change, moved] of [
+      ['a body and launcher change', { ccd: '\n# v2\n' }, 'the body and the launcher'],
+      ['a launcher-only change', { template: (t: string) => `${t}\n# a launcher-only change\n` }, 'the launcher'],
+    ] as const) {
+      for (const [lane, run] of runners) {
+        plantTree();
+        expect(helper(['install', tree(), home]).code).toBe(0);
+        plantTree({ ...change, installer: launcherPostFails });
+        const r = run();
+        if (lane === 'helper') expect(r.code, `${what}: ${r.stderr}`).toBe(2);
+        else expect(r.code, `${lane}, ${what}: ${r.stderr}`).not.toBe(0);
+        expect(r.stderr, `${lane}, ${what}`).toContain(`refused after ${moved} moved: fixture: the launcher did not re-measure`);
+        expect(r.stderr, `${lane}, ${what}`).toContain(`so what stands at ${entry()} is unverified until a re-run converges the pair`);
+        expect(r.stderr, `${lane}, ${what}: the both-moved arm claims a digest refusal`).not.toContain('refuses by digest');
+        if (lane === 'ccrc install/update') expect(r.stderr).toContain('run an unverified launcher');
+        // A re-run with the shipped helper converges.
+        plantTree(change);
+        const again = helper(['install', tree(), home]);
+        expect(again.code, again.stderr).toBe(0);
+        assertPair();
+        assertNoLeftovers();
+      }
+    }
+  }, 120_000);
+
+  it('a launcher that re-measured and whose report then failed is exit 2 — it says the launcher stands as self-tested, never that it did not re-measure, and the pair is in place', () => {
+    for (const [what, change, moved] of [
+      ['a body and launcher change', { ccd: '\n# v2\n' }, 'the body and the launcher'],
+      ['a launcher-only change', { template: (t: string) => `${t}\n# a launcher-only change\n` }, 'the launcher'],
+    ] as const) {
+      plantTree();
+      expect(helper(['install', tree(), home]).code).toBe(0);
+      plantTree({ ...change, installer: launcherReportFails });
+      const r = helper(['install', tree(), home]);
+      expect(r.code, `${what}: ${r.stderr}`).toBe(2);
+      expect(r.stderr, what).toContain(`refused after ${moved} moved: [Errno 32] fixture: stdout closed`);
+      expect(r.stderr, what).toContain(
+        `re-measured as the file just staged, so what stands at ${entry()} is the launcher this run self-tested`);
+      expect(r.stderr, `${what}: the re-measurement passed`).not.toContain('did not re-measure');
+      expect(r.stderr, what).not.toContain('refuses by digest');
+      assertPair();
+      // A re-run with the shipped helper finds the pair converged and moves nothing.
+      plantTree(change);
+      const again = helper(['install', tree(), home]);
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout).toContain('converged');
+      assertPair();
+      assertNoLeftovers();
+    }
   }, 60_000);
 
   it('a staged launcher whose kernel self-test fails publishes nothing and leaves nothing behind', () => {
@@ -316,6 +439,109 @@ describe('the pre-publication kernel self-test, and the order of publication, pr
       expect([fs.readFileSync(entry()), fs.readFileSync(body())].every((b, i) => b.equals(before[i]!)), `${lane}: a file moved`).toBe(true);
       assertNoLeftovers();
     }
+  }, 60_000);
+});
+
+describe('a REALLY closed stdout — a pipe whose reader is gone — leaves the status the run chose, never Python\'s shutdown-flush 120', () => {
+  const ccrcLane = (): string[] => ['bash', '-c', '. "$1"; _inst_ccd_pair "$2"', 'lane', path.join(REPO, 'ccd', 'ccrc'), tree()];
+  const ccrcEnv = (): NodeJS.ProcessEnv => ghContainedEnv(home, env(), { systemd: true, tmux: true });
+  const startThrough = (): Ran => ran(spawnSync(entry(), ['--ccrc-entry-self-test'], { encoding: 'utf8', env: ccrcEnv() }));
+
+  it('the CONTROL: under this driver a report Python still holds at exit fails its shutdown flush, and the status becomes 120', () => {
+    const r = closedStdout([PYTHON, '-IS', '-c', 'print("a report")']);
+    expect(r.code, r.stderr).toBe(120);
+    expect(r.stderr).toContain('BrokenPipeError');
+  }, 60_000);
+
+  it('a launcher-only change whose report meets a closed stdout is exit 2 with the pair standing as staged — in the helper, and in the ccrc lane, which never says neither half moved', () => {
+    const change = { template: (t: string) => `${t}\n# a launcher-only change\n` };
+    for (const [lane, argv, e] of [['helper', helperArgv, env], ['ccrc install/update', ccrcLane, ccrcEnv]] as const) {
+      plantTree();
+      expect(helper(['install', tree(), home]).code).toBe(0);
+      plantTree(change);
+      const r = closedStdout(argv(), e());
+      if (lane === 'helper') expect(r.code, r.stderr).toBe(2);
+      else expect(r.code, r.stderr).not.toBe(0);
+      expect(r.stderr, lane).toContain('refused after the launcher moved: [Errno 32] Broken pipe');
+      expect(r.stderr, lane).toContain(
+        `re-measured as the file just staged, so what stands at ${entry()} is the launcher this run self-tested and the pair stands as staged`);
+      expect(r.stderr, `${lane}: the shutdown flush failed again`).not.toContain('Exception ignored');
+      if (lane === 'ccrc install/update') {
+        expect(r.stderr).toContain('unless it says the pair stands as staged');
+        expect(r.stderr, 'the ccrc lane read a status it did not know').not.toContain('unexpected status');
+        expect(r.stderr, 'the ccrc lane said nothing moved').not.toMatch(/neither \S+ nor \S+ moved/);
+      }
+      // The pair state: what was self-tested, in place.
+      assertPair();
+      const again = helper(['install', tree(), home]);
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout).toContain('converged');
+      assertNoLeftovers();
+    }
+  }, 120_000);
+
+  it('a body-and-launcher change whose body report meets a closed stdout is exit 2 — the launcher did not move, and the old one refuses the new body by digest — and a re-run converges', () => {
+    plantTree();
+    expect(helper(['install', tree(), home]).code).toBe(0);
+    const oldLauncher = fs.readFileSync(entry());
+    plantTree({ ccd: '\n# v2\n' });
+    const r = closedStdout(helperArgv());
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toContain('refused after the body moved: [Errno 32] Broken pipe');
+    expect(r.stderr).toContain(
+      `the launcher did not move, so what stands at ${entry()} is not proved to be the launcher this run self-tested beside this body`);
+    expect(r.stderr, 'the body arm claimed a pair that stands').not.toContain('the pair stands as staged');
+    expect(r.stderr, 'the shutdown flush failed again').not.toContain('Exception ignored');
+    // The pair state: the new body behind the old launcher, which refuses it.
+    expect(fs.readFileSync(body()).equals(fs.readFileSync(path.join(tree(), 'ccd/ccd'))), 'the body is the new one').toBe(true);
+    expect(fs.readFileSync(entry()).equals(oldLauncher), 'the launcher moved').toBe(true);
+    const st = startThrough();
+    expect(st.code, st.stderr).toBe(125);
+    expect(st.stderr).toContain('ccd: refused (entry-body-digest):');
+    const again = helper(['install', tree(), home]);
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.stdout).not.toContain('body published');
+    assertPair();
+    assertNoLeftovers();
+  }, 60_000);
+
+  it('a body that moved behind a launcher ALREADY rendered for it, whose report then meets a closed stdout, is exit 2 with the pair standing as staged — never a digest refusal', () => {
+    // A v2 pair, then the v1 body put back (what a rollback that moved its
+    // body and failed before its launcher leaves): the next v2 run finds the
+    // body different and the launcher already current.
+    plantTree();
+    expect(helper(['install', tree(), home]).code).toBe(0);
+    const v1Body = fs.readFileSync(body());
+    plantTree({ ccd: '\n# v2\n' });
+    expect(helper(['install', tree(), home]).code).toBe(0);
+    fs.writeFileSync(body(), v1Body);
+    const launcherBefore = ident(entry());
+    expect(startThrough().code, 'the CONTROL: the v2 launcher refuses the v1 body').toBe(125);
+    const r = closedStdout(helperArgv());
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toContain('refused after the body moved: [Errno 32] Broken pipe');
+    expect(r.stderr).toContain(
+      `the body was renamed into place and re-measured as the file just staged, and the launcher at ${entry()} carries the bytes and mode this run self-tested beside it, so the pair stands as staged`);
+    expect(r.stderr, 'the pair stands, so no start refuses by digest').not.toContain('refuses by digest');
+    expect(r.stderr).not.toContain('did not move');
+    expect(r.stderr, 'the shutdown flush failed again').not.toContain('Exception ignored');
+    expect(ident(entry()), 'the launcher moved').toBe(launcherBefore);
+    assertPair();
+    const again = helper(['install', tree(), home]);
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.stdout).toContain('converged');
+  }, 60_000);
+
+  it('a converged pair whose report meets a closed stdout is exit 1 — nothing moved — never 120', () => {
+    plantTree();
+    expect(helper(['install', tree(), home]).code).toBe(0);
+    const before = [ident(entry()), ident(body())];
+    const r = closedStdout(helperArgv());
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toContain('install: ccd: refused: [Errno 32] Broken pipe');
+    expect(r.stderr, 'the shutdown flush failed again').not.toContain('Exception ignored');
+    expect([ident(entry()), ident(body())], 'a file moved').toEqual(before);
+    assertPair();
   }, 60_000);
 });
 
@@ -437,6 +663,12 @@ describe('the fix pass of the final review: layouts, mode repair, postcondition,
       expect(r.code, `${which}: ${r.stdout}${r.stderr}`).toBe(2);
       expect(r.stderr).toContain(`after publishing the ${which},`);
       expect(r.stderr).toContain('is not the regular file of mode');
+      // The state it left: the half that landed wrong is unverified, and a
+      // body that landed wrong never had a launcher published after it.
+      expect(r.stderr, which).toContain(which === 'body'
+        ? `so what stands at ${body()} is unverified until a re-run converges the pair; the launcher did not move`
+        : `so what stands at ${entry()} is unverified until a re-run converges the pair`);
+      expect(r.stderr, which).not.toContain('the pair stands as staged');
     }
   }, 60_000);
 

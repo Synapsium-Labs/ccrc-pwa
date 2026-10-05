@@ -218,6 +218,50 @@ describe('two authorities, equal — anything else is not a child here', () => {
   });
 });
 
+// The close-side wiring of `hasCoordinated` (the
+// store read, and its throw-fold) had no test that reds when either is
+// removed — the pure decision was pinned, but nothing proved the CALLER
+// actually reads and carries the value. These three cases pin the wiring
+// end to end through the real close path.
+describe('the close reads coordination history itself — has-coordinated, and an unreadable read never outranks identity', () => {
+  it('a child whose session has EVER coordinated a (terminal) run answers has-coordinated, closed final — no reclaim request', async () => {
+    const b = build();
+    // A run this session coordinated, brought to a TERMINAL state — a
+    // different workspace/session dispatched into it, `claimedBy` is ID.
+    const heir = b.coord.openRun({ program: 'q', title: 'heir', project: 'demo', wave: 1, waveOf: 1, claimedBy: ID });
+    if (!('id' in heir)) throw new Error('openRun refused');
+    b.coord.markDispatched(heir.id, 'demo-heir-worker', 'demo-heir-worker', 'ws/demo-heir-worker', false);
+    expect(b.coord.advance(heir.id, 'dispatched', 'test').ok).toBe(true);
+    expect(b.coord.closeRun({ runId: heir.id, finalState: 'done', causedBy: 'test', handoffCommit: null,
+      program: 'q', viaClosing: true }).ok).toBe(true);
+    const id = b.dispatched(ID);
+    b.seed(ID, String(id));
+    const out = await closeRun(b.deps, id, { intent: 'abandon' }, 'operator');
+    expect(out).toMatchObject({ ok: true, childReclaim: 'not-queued', childReclaimWhy: 'has-coordinated' });
+    expect(b.handed).toEqual([]);
+  });
+
+  it('childReclaimCoordinatorIds throwing at close answers siblings-unreadable, never a guessed false', async () => {
+    const b = build();
+    const id = b.dispatched(ID);
+    b.seed(ID, String(id));
+    b.coord.childReclaimCoordinatorIds = () => { throw new Error('coordination history unreadable'); };
+    const out = await closeRun(b.deps, id, { intent: 'abandon' }, 'operator');
+    expect(out).toMatchObject({ ok: true, childReclaim: 'not-queued', childReclaimWhy: 'siblings-unreadable' });
+    expect(b.handed).toEqual([]);
+  });
+
+  it('a throwing coordination-history read never outranks not-a-child on an ordinary non-child close', async () => {
+    const b = build();
+    const id = b.dispatched(ID);
+    b.seed(ID, null);   // no `.child` marker at all: an ordinary non-child close
+    b.coord.childReclaimCoordinatorIds = () => { throw new Error('coordination history unreadable'); };
+    const out = await closeRun(b.deps, id, { intent: 'abandon' }, 'operator');
+    expect(out).toMatchObject({ ok: true, childReclaim: 'not-queued', childReclaimWhy: 'not-a-child' });
+    expect(b.handed).toEqual([]);
+  });
+});
+
 describe('the fleet act for a finished child is a RELEASE — never a hold, never an archive', () => {
   it('an ordinary non-final failed close of a child releases it; of a non-child, it re-holds as ever', async () => {
     const child = build();
@@ -359,40 +403,57 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const b = build({ prState: { code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
+    // `markDispatchStarted` BEFORE `setSession`, on `dispatch.ts`'s own
+    // fresh-arm order: `childBirthOf` also requires `sessionBornAt` to equal
+    // `dispatchStartedAt`, so a fixture birth must be a genuinely paired one,
+    // exactly as a real dispatch stamps it.
     b.deps.coord.markDispatchStarted(id, BIRTH_MS);
+    b.deps.coord.setSession(id, ID, BIRTH_MS);
     b.seed(ID, String(id));
     b.dispatched('demo-next-wave', 2);   // keeps the programme open
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'open' }, final: false }, 'coordinator');
     expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished' });
     expect(fleetActs(b.acts())).toEqual(['ws-hold']);
+    // Spec §5.7: a FAST-PATH MISS (no `.prnumber`, no `.prhistory`) reaches
+    // `childSpent`'s own rung 3 with `verifyDone`'s line already in hand, so it
+    // never asks `pr-state` a second time — ONE call total, not two.
+    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);
   });
 
-  it('(ii) that row has no createdAt — spent/unplaced, never proven this incarnation — HOLD, ws-hold only', async () => {
+  it('(ii) that row has no createdAt — spent/unplaced, never proven this incarnation — HOLD, ws-hold only, not-finished-undated', async () => {
     const row = prRow();   // no createdAt at all — an older ccd's shape
     const b = build({ prState: { code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
     b.deps.coord.markDispatchStarted(id, BIRTH_MS);
+    b.deps.coord.setSession(id, ID, BIRTH_MS);
     b.seed(ID, String(id));
     b.dispatched('demo-next-wave', 2);
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'open' }, final: false }, 'coordinator');
-    expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished' });
+    expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished-undated' });
     expect(fleetActs(b.acts())).toEqual(['ws-hold']);
+    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);   // spec §5.7: a fast-path miss, ONE call
   });
 
-  it('(iii) the registry .prnumber names an old merged PR whose live row predates birth (the merge-commit path) — HOLD', async () => {
+  it('(iii) the registry .prnumber names an old merged PR whose live row predates birth (the merge-commit path) — HOLD, not-finished-merge-commit', async () => {
     const merged = prRow({ state: 'MERGED', createdAt: iso(BIRTH_MS - HOUR),
       mergedAt: '2020-01-01T00:00:00Z', mergeCommit: { oid: 'f'.repeat(40) } });
     const b = build({ prState: { code: 0, stdout: `${prLine([merged])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
     b.deps.coord.markDispatchStarted(id, BIRTH_MS);
+    b.deps.coord.setSession(id, ID, BIRTH_MS);
     b.seed(ID, String(id));
     writeFileSync(path.join(b.reg, `${ID}.prnumber`), '42');   // the fast path: rung 1
     b.dispatched('demo-next-wave', 2);
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'merged' }, final: false }, 'coordinator');
-    expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished' });
+    expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished-merge-commit' });
     expect(fleetActs(b.acts())).toEqual(['ws-hold']);
+    // Spec §5.7: a RE-DATED FAST-PATH close (rung 1's `.prnumber` answers
+    // spent/unplaced, then redated through the live rung) reuses `verifyDone`'s
+    // own line for that redate instead of fetching a second time — ONE
+    // `pr-state` call total, not two.
+    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);
   });
 
   // The positive mirror of (iii): the redate step does not just refuse a
@@ -408,12 +469,45 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
     b.deps.coord.markDispatchStarted(id, BIRTH_MS);
+    b.deps.coord.setSession(id, ID, BIRTH_MS);
     b.seed(ID, String(id));
     writeFileSync(path.join(b.reg, `${ID}.prnumber`), '42');   // the fast path: rung 1, always 'unplaced'
     b.dispatched('demo-next-wave', 2);                         // keeps the programme open — the spent verdict decides
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'open' }, final: false }, 'coordinator');
     expect(out).toMatchObject({ ok: true, released: true, childReclaim: 'queued' });
     expect(fleetActs(b.acts())).toEqual(['ws-release']);
+    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);   // spec §5.7: a re-dated fast-path close, ONE call
+  });
+
+  // The id check itself (`close.ts`'s `childGateAtClose`): `verifyDone`'s own
+  // `.find(isFullLine)` is NOT filtered by session id, so a line answered for
+  // a DIFFERENT session must never be reused for this one's spent verdict —
+  // reusing it blindly would let a foreign, favourably-dated row release and
+  // queue the reclaim of a child that is not actually finished.
+  it('(v) verifyDone measured a line for a DIFFERENT session — never reused, fetches fresh, HOLDS', async () => {
+    // Same branch name and a row dated to THIS incarnation — if the id check
+    // in `close.ts`'s `childGateAtClose` were dropped (its
+    // `verifiedLine.id === sessionId` conjunct removed, so any measured line
+    // is reused regardless of whose session it belongs to), this line would
+    // be reused as-is and would RELEASE. Its `id` is a stranger's, which is
+    // the one fact the check exists to notice.
+    const foreignRow = prRow({ createdAt: iso(BIRTH_MS + HOUR) });
+    const foreignLine = JSON.stringify({ id: 'demo-other', rows: [foreignRow], baseShort: 'main',
+      branch: `ws/${ID}`, ahead: 1, tip: TIP, checkedAt: 1 });
+    const b = build({ prState: { code: 0, stdout: `${foreignLine}\n`, stderr: '' } });
+    gitBranch(b.home, TIP);
+    const id = b.dispatched(ID, 1);
+    b.deps.coord.markDispatchStarted(id, BIRTH_MS);
+    b.deps.coord.setSession(id, ID, BIRTH_MS);
+    b.seed(ID, String(id));
+    b.dispatched('demo-next-wave', 2);   // keeps the programme open
+    const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'open' }, final: false }, 'coordinator');
+    expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued',
+      childReclaimWhy: 'not-finished-unmeasured' });
+    expect(fleetActs(b.acts())).toEqual(['ws-hold']);
+    // The id mismatch refused the reuse, so the redate fetched fresh — TWO
+    // `pr-state` calls (`verifyDone`'s own, then the fresh fetch), never one.
+    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(2);
   });
 });
 

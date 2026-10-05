@@ -174,8 +174,8 @@ describe('the worker skill: its contract', () => {
   // Child reclamation, wave 3 (spec 2026-09-22 §6): NOT a clause — clause 8 is
   // unchanged and the count was fifteen then, unmoved by this wave — but a sentence in the reporting
   // section, because it is the fact a worker needs at the moment it reports.
-  it('says, in its reporting section, that this workspace ends when its run closes', () => {
-    const at = skill.indexOf('**This workspace ends when its run closes.**');
+  it('says, in its reporting section, that this workspace ends when the coordinator is finished with it', () => {
+    const at = skill.indexOf('**This workspace ends when the coordinator is finished with it — usually when\nits run closes.**');
     expect(at, 'the sentence is gone').toBeGreaterThanOrEqual(0);
     expect(at, 'it moved out of the reporting section').toBeGreaterThan(skill.indexOf('## Reporting a wave-done'));
     expect(at).toBeLessThan(skill.indexOf('## When something is wrong'));
@@ -669,6 +669,16 @@ describe('the worker skill: the routing clauses (routing slice 2)', () => {
     expect(skill, 'the worked mail-send JSON no longer carries the exact wave-done subject')
       .toContain(`"subject":"${WAVE_DONE_SUBJECT}"`);
   });
+
+  // The reclaim switch is the operator's alone (child-reclamation spec §5.8).
+  // ccd has no caller auth, so `ccd reclaim-pause --state on` from a session's
+  // own shell is a door the route's session gate cannot close — and the
+  // session most motivated to walk through it is the one whose workspace is
+  // about to be reclaimed. The skill names neither the verb nor the marker it
+  // writes (`reclaim-paused` contains the same token).
+  it('never names the reclaim switch — neither the route nor the bare ccd verb', () => {
+    expect(skill).not.toContain('reclaim-pause');
+  });
 });
 
 // ── Worker stall watch, wave 3 (spec 2026-09-29 §6.2) ────────────────────────
@@ -705,5 +715,75 @@ describe('the stop clause names only wakes that wake (stall watch spec §6.2)', 
     expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
     expect(line).toContain(
       'an agent whose completion says it may resume on its own has reported, and is not that wake either');
+  });
+
+  // Stall watch wave 7 (`stop-clause-wake-list-allowlist` (D-3806)): ledger R21
+  // F1 and R17 F2. The S3 row above scans for three words, so a rewording that
+  // names a background task, job or command, or says `shells`, passes it; the
+  // S4 row pins one sentence and never reads the list. These two read the wake
+  // list itself. The first is an allowlist: every member must be a mail that
+  // asks, a structured ask, or a background kind whose words map, one for one,
+  // to `stall.ts`'s STALL_RESUMING_KINDS. The second scans the list for any
+  // form of resume, the word S4's interim completion used.
+  // Where the stopping line sits (`wake-list-split-closes-and-joins` (D-3807),
+  // review 262 F3; the rows are D-3806's). Closed: a comma; a semicolon; an `or`
+  // or `and` before a determiner (a, an, any, the, your, one, another, other,
+  // some, every, each, its); an `or` or `and` before a bare plural ("or
+  // background jobs you started"); and an `or`, `and` or `background` after a
+  // background member's kinds, which the tail anchor on the `bg` shape refuses
+  // (none of the three may follow the `you`, `that` or `which` word). So a wake
+  // joined in any of those ordinary ways must match a member shape on its own.
+  // The anchor fails closed: a legitimate `and`, `or` or `background` in that
+  // tail reds too, so a rewording of that member must avoid those three words.
+  // The list splits on every comma, so kinds inside one background member are
+  // joined by `or` or `and` only, with no determiner: "a background agent,
+  // workflow or teammate" leaves a bare "a background agent" that matches no
+  // member shape, and reds on purpose. Not closed, known evasions, and the
+  // stated line (the coordinator rules no further chasing): any text after
+  // "asks" in the mail member that the split does not cut, such as "or all
+  // background jobs", "or until a timer fires", or a capitalised determiner
+  // (the split is case-sensitive); a coordination before "asks" ("a mail or
+  // reminder you set that asks for an answer"); other joins after a background
+  // member's kinds, such as "plus" or "as well as"; a `. ` inside a member, or
+  // a new sentence after the list, because wakeMembers and the S3 row both stop
+  // at the first `. `.
+  const wakeMembers = (line: string): string[] => {
+    const colon = line.indexOf(': ');
+    const list = line.slice(colon + 2, line.indexOf('. ', colon));
+    return list.split(
+      /;\s+|,\s+(?:(?:or|and)\s+)?|\s+(?:or|and)\s+(?=(?:an?|any|the|your|one|another|other|some|every|each|its)\s)|\s+(?:or|and)\s+(?=(?:background\s+)?[a-z]+s\s+(?:you|that|which)\b)/);
+  };
+  /** The word the clause uses for each kind `stall.ts` says resumes the session on its own. */
+  const RESUMING_WORD: Record<string, string> = { subagent: 'agent', workflow: 'workflow' };
+
+  it('admits only a mail that asks, a structured ask, or a kind stall.ts says resumes the session (S3, allowlist)', () => {
+    const line = stopClause();
+    expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
+    expect(Object.keys(RESUMING_WORD).sort(),
+      'stall.ts changed the kinds that resume a session: name the word the clause uses for each, or drop it')
+      .toEqual([...STALL_RESUMING_KINDS].sort());
+    const allowed = new Set(Object.values(RESUMING_WORD));
+    const members = wakeMembers(line!);
+    expect(members.length, 'the wake list split into nothing').toBeGreaterThan(1);
+    for (const m of members) {
+      const mail = /^an? mail\b.*\basks?\b/i.test(m);
+      const ask = /^an? structured ask$/i.test(m);
+      const bg = /^an? background ((?:[a-z]+(?: or | and ))*[a-z]+) (?:you|that|which)\b(?:(?!\b(?:or|and|background)\b).)*$/i.exec(m);
+      expect([mail, ask, bg !== null].filter(Boolean).length,
+        `the wake list member "${m}" is not a mail that asks, a structured ask, or a background kind`).toBe(1);
+      for (const k of bg ? bg[1]!.split(/ or | and /) : []) {
+        expect(allowed.has(k.toLowerCase()),
+          `the wake list counts a background ${k}, which is not the clause's word for any kind stall.ts reads as resuming the session (see RESUMING_WORD)`).toBe(true);
+      }
+    }
+  });
+
+  it('names nothing that may resume on its own among its wakes (S4, scan)', () => {
+    const line = stopClause();
+    expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
+    const wakes = wakeMembers(line!).join(', ');
+    const said = /\bresum\w*/i.exec(wakes)?.[0];
+    expect(said, `the wake list says ${said}: an agent that may resume on its own has reported, and is no wake`)
+      .toBeUndefined();
   });
 });

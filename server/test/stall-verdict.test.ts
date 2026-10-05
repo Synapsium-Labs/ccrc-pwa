@@ -1852,6 +1852,7 @@ describe('coord-deaf is timed from the delivery the coordinator could hear (gate
       expect(cvd([q70], [twice], FIRST + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));
     });
 
+    // Unreachable by serial replays (five replays need 50 min or more after the first delivery); a valid L1 input that pins the defensive floor.
     it('the estimate never precedes the queue: a row whose estimate falls before it is timed from the queue', () => {
       const q20 = { ...Q, at: NOW - 20 * MIN };
       const many: StallDeliveryRow = { ...QD, deliveredAt: NOW - MIN, replayCount: 5 };   // estimate NOW − 51 min, before the queue

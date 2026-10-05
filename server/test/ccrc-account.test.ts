@@ -5271,6 +5271,13 @@ function plantLockProbe(home: string, id: string): string {
   return dir;
 }
 
+/** C12-C15 read and remove a systemd `timers.target.wants` link. On macOS
+ *  ccrc's unit directory is ~/Library/LaunchAgents and no usage timer exists
+ *  (the doctor says "usage timer not applicable on macOS"), so
+ *  `_acct_remove_usage` finds no link there and asks the manager nothing —
+ *  correct on that platform, and not what these cases measure. */
+const itSystemd = it.skipIf(process.platform === 'darwin');
+
 /** Plan 3a Task 7: a marked `systemctl` stand-in, FIRST on PATH through
  *  `run()`'s extraEnv. It answers `--user disable --now ccrc-codex-usage@*.timer`
  *  by removing that timer's wants link, and records it. It records any argv
@@ -6028,7 +6035,7 @@ describe('ccrc account remove', () => {
     for (const f of state.laneOnly) expect(existsSync(f), `${f} was reaped past an unproven tier`).toBe(true);
   });
 
-  it('C12: removing a codex account disables ccrc\'s own usage timer for it, reports the link removed, keeps its OAuth and logs, and never names another repository\'s (Plan 3a Task 7)', async () => {
+  itSystemd('C12: removing a codex account disables ccrc\'s own usage timer for it, reports the link removed, keeps its OAuth and logs, and never names another repository\'s (Plan 3a Task 7)', async () => {
     const home = box('ccrc-account-remove-codex-usage-');
     const lane = await codexLaneOnFreePorts();
     seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
@@ -6058,7 +6065,7 @@ describe('ccrc account remove', () => {
     for (const [f, bytes] of Object.entries(state.logs)) expect(readFileSync(f, 'utf8'), f).toBe(bytes);
   });
 
-  it('C13: a usage timer the manager will not disable is an operator step, and the removal still completes', async () => {
+  itSystemd('C13: a usage timer the manager will not disable is an operator step, and the removal still completes', async () => {
     const home = box('ccrc-account-remove-codex-usage-refused-');
     const lane = await codexLaneOnFreePorts();
     seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
@@ -6076,7 +6083,7 @@ describe('ccrc account remove', () => {
     expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).not.toContain(`"${lane.id}"`);
   });
 
-  it('C14: an EXTERNAL account still carrying the ccrc usage timer its codex days enabled has it disabled too — and asks the manager nothing else (C4 stands)', () => {
+  itSystemd('C14: an EXTERNAL account still carrying the ccrc usage timer its codex days enabled has it disabled too — and asks the manager nothing else (C4 stands)', () => {
     const home = box('ccrc-account-remove-external-usage-');
     seedRosterJson(home, [UPSTREAM,
       { id: 'ext-a', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-ext-a', homeAble: false,
@@ -6098,7 +6105,7 @@ describe('ccrc account remove', () => {
   // re-read finds it gone, never on the manager's exit code alone. Without
   // this case `_acct_remove_usage`'s `! _codex_usage_enabled` re-measure can be
   // deleted with every case green (measured: mutation row A4g).
-  it('C15: a disable the manager answers 0 while the link stays is NOT reported removed — it is an operator step, measured and not assumed (Plan 3a Task 7)', () => {
+  itSystemd('C15: a disable the manager answers 0 while the link stays is NOT reported removed — it is an operator step, measured and not assumed (Plan 3a Task 7)', () => {
     const home = box('ccrc-account-remove-usage-unmeasured-');
     seedRosterJson(home, [UPSTREAM,
       { id: 'ext-a', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-ext-a', homeAble: false,

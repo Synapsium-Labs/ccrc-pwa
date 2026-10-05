@@ -123,6 +123,21 @@ describe('refusalSentence', () => {
     expect(s).toMatch(/nothing was removed/i);
   });
 
+  it('child-dirty names every cause ccd refuses it for — ignored files included — and the read that shows them all', () => {
+    // `ReapSheet` renders the sentence, never `detail`, and ccd's one
+    // `child-dirty` rung has two details: `N uncommitted file(s)` (tracked
+    // changes and untracked files) and `N ignored file(s)`. An ignored file is
+    // invisible to a plain `git status`, so a sentence that says only
+    // "uncommitted" points the operator at a read that shows nothing.
+    const s = refusalSentence('child-dirty');
+    expect(s).toMatch(/ignored files/);
+    expect(s).toContain('git -C <child path> status --ignored --untracked-files=all');
+    expect(s).toMatch(/changed tracked files/);
+    expect(s).toMatch(/untracked files/);
+    expect(s).toMatch(/commit, move or delete them in that checkout, then reap again/);
+    expect(s, 'the remedy is the operator’s own act, not another verb').not.toMatch(/reclaim/i);
+  });
+
   it('maps reaping-phase-unknown — the Task 7 token this task was holding open for', () => {
     // Deviation 35: fires when a `reaping` breadcrumb names a phase ccd never
     // wrote. The run refuses and destroys nothing — the sentence must say so,
