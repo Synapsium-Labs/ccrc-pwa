@@ -92,7 +92,7 @@ STOP_INTERVAL="${CCRC_VERIFY_STOP_INTERVAL:-1}"
 # observed: `inactive`, `deactivating`, or `nopid` (active, then no MainPID — a
 # stop that finished between the two reads). A check that SAW a crash —
 # `activating`, `failed`, or a MainPID that changed — never reaches the
-# classifier, so one pane death followed by a stop still fails.
+# classifier, so one pane death that a check observes, followed by a stop, still fails.
 #
 # Deliberately NOT here (coordinator rulings, wave 10): an unstamped `inactive`
 # unit (a hand stop, a swap caught mid-carry — the swap writes no stamp) still
