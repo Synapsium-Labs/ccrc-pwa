@@ -22,12 +22,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderEnvelope, type EnvelopeInput } from '../src/coord/envelope.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
-import { STALL_REPORT_PREFIX, STALL_WAIT_PREFIX } from '../src/coord/stall.js';
+import { STALL_REPLY_WAITING_PREFIX, STALL_REPORT_PREFIX, STALL_WAIT_PREFIX } from '../src/coord/stall.js';
 import { dequeuedSubject, mergedSubject } from '../src/coord/rundefs.js';
 import type { DoneClaim } from '../src/coord/fingerprint.js';
 import {
   ASK_REFUSE_CODES, MAIL_BODY_MAX_BYTES, MAIL_REJECT_CODES, RUN_REFUSE_CODES,
-  isPrPhase, isRunRefuseCode, SUITE_WORDS, FAILURE_KINDS, SPAWN_VERDICTS,
+  isPrPhase, isRunRefuseCode, SUITE_WORDS, FAILURE_KINDS, SPAWN_VERDICTS, ACTIVE_RUN_STATES, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT,
 } from '../../shared/api.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -123,9 +123,9 @@ const CONTRACT = [
   // Landing-order wave 1 (spec 2026-09-23 §5.1). Written with no apostrophe at
   // all, so neither the straight nor the curly spelling can drift.
   'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`.',
-  // Worker stall watch, wave 3 (spec 2026-09-29 §6.1). Typographic apostrophes
+  // Worker stall watch, wave 3 (spec 2026-09-29 §6.1), amended by wave 7 (D-3805). Typographic apostrophes
   // and quotes, as clauses 3–12 are typed; no straight apostrophe at all.
-  'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for, which the watch reads as the run waiting on you until your next mail; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker.',
+  'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.',
 ];
 
 describe('the coordinator skill: its contract', () => {
@@ -2606,5 +2606,55 @@ describe('the stall clause quotes what the stall watch sends and reads (stall wa
     expect(named, 'the clause no longer names the section it defers to').toBeDefined();
     expect(skill, `the clause defers to ‘${named}’, and SKILL.md has no such section`)
       .toContain(`\n## ${named}\n`);
+  });
+
+  // Stall watch wave 7, the operator's 2026-10-04 amendment
+  // (`coordinator-wait-widened-ball-truthful` (D-3805)). The clause now sends
+  // `wait:` past a stall mail, and states the ball as `stallFacts` reads it: a
+  // `wait:` holds the run only until the next mail to or from the worker,
+  // unless that mail passes the ball again. The verbatim pin holds the bytes;
+  // these three rows hold what a co-edit of SKILL.md and CONTRACT could lose.
+  //
+  // `unknown` is an active state, but the watch never judges it — `stallVerdictInner` holds it
+  // `run-unnamed` — so the clause may not tell the coordinator to send `wait:` to such a worker
+  // (review 262 F2).
+  const JUDGED_STATES: readonly string[] = ACTIVE_RUN_STATES.filter((s) => s !== 'unknown');
+  it('sends wait: past a stall mail too, for a worker in a state the watch reads', () => {
+    const line = stallClause();
+    expect(line, 'no contract clause opens "A mail from `…` whose subject begins `…`"').toBeDefined();
+    const tail = line!.slice(line!.indexOf('A stall mail never licenses re-dispatching a live worker.'));
+    expect(tail, 'the clause lost its last-but-two sentence').toMatch(/^A stall mail never licenses/);
+    expect(/ `([^`]+)` mail unasked/.exec(tail)?.[1],
+      'the clause sends wait: only in answer to a stall mail (ledger R2, approved 2026-10-04)').toBe(STALL_WAIT_PREFIX);
+    const state = /tell an? `([^`]+)` worker to wait/.exec(tail)?.[1];
+    expect(JUDGED_STATES.includes(state ?? ''),
+      `the clause names a worker in run state ${state}, which the watch never judges (only an active state other than unknown)`).toBe(true);
+  });
+
+  it('states the ball as stall.ts reads it: only until the next mail, past the hand-backs it exempts', () => {
+    const line = stallClause();
+    expect(line, 'no contract clause opens "A mail from `…` whose subject begins `…`"').toBeDefined();
+    expect(line, 'the clause says a wait: holds the run until your next mail; the worker’s next ordinary mail hands it back too')
+      .not.toMatch(/until your next mail/);
+    expect(line).toContain('only until the next mail to or from the worker');
+    expect(/a reply beginning `([^`]+)`/.exec(line!)?.[1],
+      'the clause names a waiting reply the stall watch does not read').toBe(STALL_REPLY_WAITING_PREFIX);
+    expect(/an exact `([^`]+)` or `([^`]+)` claim/.exec(line!)?.slice(1),
+      'the clause names done claims the stall watch does not read').toEqual([WAVE_DONE_SUBJECT, REVIEW_DONE_SUBJECT]);
+  });
+
+  it('quotes only the constants the clause relies on', () => {
+    const line = stallClause();
+    expect(line, 'no contract clause opens "A mail from `…` whose subject begins `…`"').toBeDefined();
+    const src = readFileSync(path.join(root, 'server/src/coord/stall.ts'), 'utf8');
+    const sender = /^(?:export )?const STALL_SENDER = '([^']+)';$/m.exec(src)?.[1];
+    const reliedOn = new Set<string>([sender ?? '', STALL_REPORT_PREFIX, STALL_WAIT_PREFIX, STALL_REPLY_WAITING_PREFIX,
+      WAVE_DONE_SUBJECT, REVIEW_DONE_SUBJECT, ...JUDGED_STATES]);
+    const quoted = [...new Set([...line!.matchAll(/`([^`]+)`/g)].map((m) => m[1]!))];
+    expect(quoted.length, 'the scan read no quoted token').toBeGreaterThan(0);
+    for (const q of quoted) {
+      expect(reliedOn.has(q),
+        `the clause quotes \`${q}\`, which is outside the constants it relies on: add the constant here, or unquote it`).toBe(true);
+    }
   });
 });

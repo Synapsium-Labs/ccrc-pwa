@@ -60,7 +60,7 @@ const STALL_ARM_MAP = {
   frozen: 'the marker reads working under a busy word and no hook event arrived for FROZEN_NO_EVENT_MS: the coordinator, or the operator',
   dead: 'the worker read orphan or never-started, or was absent from the registry, for DEAD_GRACE_MS: the coordinator, or the operator',
   'coord-deaf': 'the worker passed the ball to its coordinator and that mail sat unacked COORD_DEAF_MS from its first delivery, or DELEGATE_CAP_MS + COORD_DEAF_MS from its queue while it stays queued behind the gate: one operator push',
-  'mail-stuck': 'a delivery to the session stayed queued MAIL_STUCK_MS after its main loop went idle as the mail gate in force reads it (the `busy` mode delivers on a live busy only while the strict mode is absent), or behind a registry gate: one operator push per delivery',
+  'mail-stuck': 'a delivery to the session stayed queued MAIL_STUCK_MS after its main loop went idle (a live idle or shell word in every mode, the strict mode included, an accepted residual; or a finished turn under a live busy, which the `busy` mode delivers on only while the strict mode is absent), or behind a registry gate: one operator push per delivery',
   'marker-unreadable': 'the turn marker read unmeasured or malformed for MARKER_UNREADABLE_MS: one operator push per episode',
 } as const;
 export type StallArm = keyof typeof STALL_ARM_MAP;
@@ -867,10 +867,12 @@ export function stallNewestDelivery(rows: readonly StallDeliveryRow[], mailId: n
  *  - a replayed one: its first delivery, ESTIMATED as `deliveredAt − replayCount × MAIL_REPLAY_MS`, and never before the
  *    queue (`replayed-deaf-from-first-delivery-estimate` (D-3803)). Every replay re-stamps `deliveredAt`, every MAIL_REPLAY_MS
  *    while the row stays unacked, so that column alone would hold the clock back until the replay ceiling parks the row, and
- *    the queue time alone would read a mail the gate held for 50 min or more as deaf at its first replay. The estimate is
+ *    the queue time alone would read a mail the gate held for 50 min or more as deaf at its first replay. Under serial replays the estimate is
  *    never early: each replay lands at least MAIL_REPLAY_MS after the previous stamp (the `dueDeliveries` predicate), so
- *    `deliveredAt − n × MAIL_REPLAY_MS` is at or after the first delivery. Its error is lateness only, bounded by the
- *    replay ceiling;
+ *    `deliveredAt − n × MAIL_REPLAY_MS` is at or after the first delivery. Its error there is lateness only, bounded by the
+ *    replay ceiling; it assumes one send per row per replay interval, so the mail lane's overlapping-sweep double send
+ *    (two sends at least 30 s apart) can make it early by up to MAIL_REPLAY_MS less 30 s per double send, never before the queue,
+ *    a residual of that race, which the estimate does not cause;
  *  - a mail still QUEUED behind the gate, undelivered: its queue time plus DELEGATE_CAP_MS. A coordinator in a RUNNING turn (marker
  *    `working` under a live `busy`: a hung foreground call, a blocking wait) has no other arm. Its own mail-stuck needs
  *    a finished turn, and no frozen arm watches a coordinator. So the hold is bounded like mail-stuck's busy hold, and
@@ -889,6 +891,8 @@ function stallDeafMail(input: StallInput, deliveries: readonly StallDeliveryRow[
   if (d === null || d.ackedAt !== null) return null;
   // Only a row the gate can still deliver is bounded; a parked or unnamed state is timed from its queue.
   if (d.deliveredAt === null) return { mail: passed, deafSince: d.state === 'queued' ? passed.at + DELEGATE_CAP_MS : passed.at };
+  // The queue floor is defensive: no serial replay puts the estimate before the queue; it binds only on the overlapping-sweep
+  // double send or a backward clock step.
   return { mail: passed, deafSince: d.replayCount === 0 ? d.deliveredAt : Math.max(passed.at, d.deliveredAt - d.replayCount * MAIL_REPLAY_MS) };
 }
 
@@ -1716,8 +1720,9 @@ export function stallFailedVerdict(input: StallSessionInput, now: number): Stall
   return stallMailDisabledHold(stallFailedInner(input, now), input.arming);
 }
 
-/** When the recipient's main loop went idle, as the mail gate in force can deliver to it (§5.2;
- *  `gate-held-mail-is-not-stuck` (D-3798)): the live stamp under idle or shell; else the CURRENT marker's stop when it
+/** When the recipient's main loop went idle (§5.2;
+ *  `gate-held-mail-is-not-stuck` (D-3798)): the live stamp under idle or shell, in every mode (the strict mode's refusal of a
+ *  live shell is an accepted residual, R19); else the CURRENT marker's stop when it
  *  reads done or failed. A live `busy` over that finished turn is a main loop idling over background work. The gate
  *  delivers on it only in the `busy` mode (`turnidle.ts`'s `mailTurnIdle`, armed by its marker) and only while the strict mode is
  *  absent (strict wins over `busy`), and under every other mode it holds that mail by design. So under those modes the clock starts DELEGATE_CAP_MS after the stop: that is the cap on
