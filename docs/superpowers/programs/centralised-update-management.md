@@ -1009,6 +1009,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       with wave 10's script.
       - STATUS: fleet v0.0.78 (update `failed`), server v0.0.76, newest v0.0.84, backups fleet 123M/server 506M,
         disk free fleet 62G/work volume 10.5G/server 33G.
+    - **2026-10-05 12:01 UTC — the operator's tap reached the server as an apply, not an ack, so the halt still
+      holds.** The operator reported "acknowledged" at 11:58.
+      - The server box's access log shows `POST /api/updates/apply` at 11:57:14, answered 202, and no `POST
+        /api/updates/ack` at any time.
+      - The fleet row still reads `failed` with v0.0.78's own detail and `updateStartedAt`. An ack would have set
+        `idle` and "acknowledged by the operator" (`ackNode`), and no writer turns a settled row back to `failed`
+        (`releaseLease` acts on a busy row only).
+      - So the apply was skipped as `halted`, by design: a halted fleet row holds every move until it is acked.
+      - The ack is the row's third button, **Ack**, on the fleet node's item in Settings, after **Update** and
+        **Roll back**.
+      - **Observation, for the residue list:** a tap on Update while the fleet is halted returns 202 and moves
+        nothing. The remedy sits on a different button. Whether the answer should offer the ack in place is a
+        product question for the operator; it is not a defect.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
