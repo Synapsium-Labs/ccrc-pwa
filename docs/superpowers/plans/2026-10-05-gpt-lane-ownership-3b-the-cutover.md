@@ -242,7 +242,7 @@ Measured on `be93d159`. Line numbers are examples to re-derive by name.
 | The refresh loop's LiteLLM block defaults `lit="skipped"` (`:10587`) and derives a failure only from a parsed body's `.detail`, with no exit-code fallback and no `// empty` | A4 |
 | `_dr_cx_bins` returns early when `cmp` is absent (`ccd/ccrc-doctor-checks:6310`). `_check_codex`'s left-state glob reads an unlistable `~/.ccrc/codex` as empty. `_dr_cx_sessions` (`:6587`) folds an unreadable `.wrapper` into "another lane's" | A5 |
 | `readRegular` is private to `deploy/models-op.mjs` (`:166`). `readRoster` (`:176`), `mergeSettingsEnv` (`shared/modelenv.mjs:251`) and `clearSettingsEnv` (`:328`) open by name with no type test | A6 |
-| Spec §21, and same-line pointers on `:497`, `:982`, `:993`, `:1007`, `:1024`, `:1039` and `:1042` | A7 |
+| Spec §21, and same-line pointers on `:497`, `:982`, `:993`, `:1007`, `:1024`, `:1035`, `:1039` and `:1042` | A7 |
 
 **If a task below appears to ask for something in the first table, stop and report.** This table has gone stale, and the controller re-measures before anything is written.
 
@@ -283,7 +283,7 @@ Part B (the controller, the operator present)
 ```
 
 - **Execution order:** A1, A2, A3, A4, A5, A6, A7. One worker per task, one branch, reviewed per task, then the whole branch. The graph says which moves are forbidden, not what may run in parallel.
-- **A7 runs last.** It appends spec §21 and its seven same-line pointers (A1, A2, A3, A5, A6 and the two wording minors), re-runs every guard suite (`single-definition`, `modelenv-single-writer`, `deviation-refs` after `git fetch origin main`, `dtbd`, `topology-clean`, `ownership`, `macos-platform`, `session-hook`), runs all twelve server shards and the agent and pwa suites census-wrapped, and opens the PR. The PR body links documents by `blob/main` URL only.
+- **A7 runs last.** It appends spec §21 and its eight same-line pointers (A1, A2's two, A3, A5, A6 and the two wording minors), re-runs every guard suite (`single-definition`, `modelenv-single-writer`, `deviation-refs` after `git fetch origin main`, `dtbd`, `topology-clean`, `ownership`, `macos-platform`, `session-hook`), runs all twelve server shards and the agent and pwa suites census-wrapped, and opens the PR. The PR body links documents by `blob/main` URL only.
 - **The gate between the parts is read-only, and Part B waits on it.** B1 proves it:
   - the PR is squash-merged;
   - the fleet box's `ccrc update --check` first line reads `state=current`, and its `sha=` has Part A's squash commit as an ancestor (`git merge-base --is-ancestor <part-a-squash> <that sha>` in this tree);
@@ -806,7 +806,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
 >   - the second-writer WARN's "ccrc withholds its own", over a box where ccrc's own timer is enabled too.
 >
 >   Each now says what was measured.
-> - **A-7, handed on.** This task edits no spec line. It states the pointer and the §21 item text, and Task A7 applies them.
+> - **A-7, handed on.** This task edits no spec line. It states the two pointers (`:1039`, and `:1035` by controller ruling NC-1) and the §21 item text, and Task A7 applies them.
 > - **S1.** The change is inert on the live shape: no `ccrc-codex-usage@<id>.timer` instance exists there (census), so the surplus set is empty and doctor's codex check still SKIPs. With no codex lane and no instance, the converge still prints `none`.
 > - **F2 / F4.** Census-wrapped commands. Slugs: `⟦D:usage-withdrawal-is-re-measured⟧` and `⟦D:surplus-ccrc-usage-timer-warns⟧`.
 
@@ -840,6 +840,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
   - `_dr_codex_usage`, when both `ccgpt-usage@<id>.timer` and `ccrc-codex-usage@<id>.timer` are enabled, WARNs `<id>: another repository's <f> is enabled, and ccrc's own <t> is enabled too, so two publishers race this lane's ~/.cc-limits row and two token refreshes its OAuth directory`. Its remedy names ccrc's withdrawal first. The withheld-only case keeps today's sentence.
   - **Handed to Task A7** (A7 applies it, and its `## 21` assigns `<m>`):
     - **The pointer.** On spec `:1039` (`grep -n "A withdrawal systemd refuses leaves" docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`), `naming every lane whose timer is still enabled.` becomes `naming every lane whose timer is still enabled. (amended: §21.2, ⟦D:usage-withdrawal-is-re-measured⟧, ⟦D:surplus-ccrc-usage-timer-warns⟧)`, as Task A7's table writes it. It is a same-line edit, and no line moves.
+    - **The second pointer** (controller ruling NC-1). On spec `:1035` (`grep -n 'Beside a foreign instance' docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`), the §20.4 bullet `- **Beside a foreign instance.** …` gets ` (amended: §21.2, ⟦D:surplus-ccrc-usage-timer-warns⟧)` directly after `WARNs with the operator's own disable as the remedy`, before its full stop, as Task A7's table writes it. This task's both-enabled WARN names ccrc's withdrawal first, so that sentence's remedy is now the withheld case's only. It is a same-line edit, and no line moves.
     - **The §21 item**, appended under `### 21.<m> A withdrawal is re-measured, and doctor names a ccrc usage timer no lane owns (§20.3, §20.4)`:
       - A withdrawal counts only when a re-read of `timers.target.wants/` finds the link gone, at both of `_inst_codex_usage`'s disables, and at `_uninst_codex_usage`'s. A disable the manager answers 0 while the link stays gets the refused withdrawal's own stderr line and `NOT CONVERGED` step: it is the same fact, ccrc's timer still enabled, and the same remedy. This is the reading account removal already has (§20.4's last bullet).
       - `_check_codex` WARNs, one line per id, on every enabled `ccrc-codex-usage@<id>.timer` whose id is not a codex lane now. The set is read by `_codex_usage_enabled_ids` (no roster) minus the codex lanes. The remedy is `systemctl --user disable --now ccrc-codex-usage@<id>.timer`, ccrc's own unit, with the next update's converge as the automatic cure.
@@ -3236,7 +3237,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`.
   - Append `## 21. Amendments (Plan 3b)` after line 1111, the file's last line at `be93d159`.
-  - Make seven same-line pointer edits above it, and nothing else above it (ruling A-7; Plan 3a's R9; reconcile ruling R4). Those edits are on lines 497, 982, 993, 1007, 1024, 1039 and 1042 at `be93d159`, re-derived by locator in Step 2.
+  - Make eight same-line pointer edits above it, and nothing else above it (ruling A-7; Plan 3a's R9; reconcile ruling R4; controller ruling NC-1). Those edits are on lines 497, 982, 993, 1007, 1024, 1035, 1039 and 1042 at `be93d159`, re-derived by locator in Step 2.
 - Modify: nothing else that is tracked. `ccd/`, `shared/`, `deploy/`, `server/`, `agent/` and `pwa/` are A1–A6's; this task only reads them.
 - Test (read-only): the doc guards (`deviation-refs.test.ts`, `dtbd.test.ts`, `topology-clean.test.ts`, `single-definition.test.ts`) and the Part A merged-tree gate:
   - 12 server shards;
@@ -3260,16 +3261,17 @@ The operator rules each at plan review. B1 records each ruling with the census i
   - the controller's substitution of every `⟦D:…⟧` in this plan, made before this task starts.
 - **Produces:**
   - spec §21.1–§21.12. The numbering is fixed here, and any task or comment that cites "§21.N" means these;
-  - the seven pointers;
+  - the eight pointers;
   - one docs commit;
   - the gate's evidence under `$EVID/a7-*`;
   - the Part A PR.
 
 **Why:**
-- **Part B argues from the spec.** Five of its sentences stop being true once A1–A6 land:
+- **Part B argues from the spec.** Six of its sentences stop being true once A1–A6 land:
   - §20.1 says an undecidable row falls to "every other row";
   - §20.3 says the codex check SKIPs on an empty codex population, which a surplus ccrc usage timer or an unlistable lane-state root no longer is;
   - §20.4's withdrawal is counted on an exit code;
+  - §20.4 says `_check_codex` WARNs beside a foreign instance with the operator's own disable as the remedy, which is the withheld case's remedy only, once both publishers can be armed;
   - §20.4 says account removal "still completes";
   - §20.3 calls the writer path's FIFO a carried follow-up.
 
@@ -3431,7 +3433,7 @@ grep -c '^### 21\.' "$SPEC"                         # expected: 12
 
 Expected: `ENDS-WITH-NEWLINE`, then `1`, then `12`. The heredoc's first line is blank, so §21 starts after one blank line, exactly as §20 does. The heredoc is quoted (`<<'EOF'`), so no `$` or backtick inside it expands. The `‹A1›`…`‹A6›` cells of §21.12 are filled in Step 3.
 
-- [ ] **Step 2: The seven same-line pointers.** Each is appended inside the one line its locator matches, and the line is otherwise unchanged. The line numbers below were measured at `be93d159`; the script re-derives every one by locator and refuses, writing nothing, unless each locator matches exactly one line and each anchor occurs once in it.
+- [ ] **Step 2: The eight same-line pointers.** Each is appended inside the one line its locator matches, and the line is otherwise unchanged. The line numbers below were measured at `be93d159`; the script re-derives every one by locator and refuses, writing nothing, unless each locator matches exactly one line and each anchor occurs once in it.
 
 | Line at `be93d159` | Old text (exact) | New text |
 |---|---|---|
@@ -3440,18 +3442,19 @@ Expected: `ENDS-WITH-NEWLINE`, then `1`, then `12`. The heredoc's first line is 
 | 993 | ``- **No device flow outside `ccrc codex login`.**`` | the same, then ` (amended: §21.8)` |
 | 1007 | the §20.3 bullet `- **Placement and skips.** …`, ending ``because the `wrappers` check already FAILs it (D-3723).`` | the same, then ` (amended: §21.5, ⟦D:codex-doctor-unmeasured-is-not-skip⟧)` |
 | 1024 | the §20.3 bullet ``- **Every lane file `deploy/models-op.mjs` reads is type-tested first**, …``, ending `that is a carried follow-up, not a claim of this bullet.` | the same, then ` (amended: §21.6)` |
+| 1035 | the §20.4 bullet `- **Beside a foreign instance.** …`, whose first sentence ends ``and `_check_codex` WARNs with the operator's own disable as the remedy.`` | the same, with ` (amended: §21.2, ⟦D:surplus-ccrc-usage-timer-warns⟧)` inserted directly after `WARNs with the operator's own disable as the remedy`, before its full stop |
 | 1039 | ``  - A withdrawal systemd refuses leaves ccrc's timer enabled. It gets its own stderr line with the command, and the run ends with a `NOT CONVERGED` line naming every lane whose timer is still enabled.`` | the same, then ` (amended: §21.2, ⟦D:usage-withdrawal-is-re-measured⟧, ⟦D:surplus-ccrc-usage-timer-warns⟧)` |
 | 1042 | the §20.4 bullet `- **Uninstall and account removal.** …`, whose fourth sentence is `It reports the link removed only when a re-read finds it gone; a disable the manager refuses, or answers while the link stays, is reported as an operator step, and the removal still completes.` | the same, with ` (amended: §21.3, ⟦D:account-removal-waits-for-usage-refresh⟧, ⟦D:usage-quiesce-before-the-roster-drop⟧)` inserted directly after `and the removal still completes`, before its full stop |
 
-Lines 982 and 1024 are quoted by their first and last clauses because each is a single line over 600 characters. The locators below match each one whole.
+Lines 982 and 1024 are quoted by their first and last clauses, and line 1035 by its lead and the clause its pointer follows, because each is a single line over 600 characters. The locators below match each one whole.
 
-Ruling A-7 names four of these lines: `:497`, `:993`, §20.1's no-default bullet and §20.4's withdrawal line. The other three, `:1007`, `:1024` and `:1042`, are sentences that §21.5, §21.6 and §21.3 make incomplete or false (reconcile ruling R4). §20's own rule is that a sentence the tree contradicts carries a pointer, so they get one too.
+Ruling A-7 names four of these lines: `:497`, `:993`, §20.1's no-default bullet and §20.4's withdrawal line. The other three, `:1007`, `:1024` and `:1042`, are sentences that §21.5, §21.6 and §21.3 make incomplete or false (reconcile ruling R4). §20's own rule is that a sentence the tree contradicts carries a pointer, so they get one too. The eighth, `:1035`, is §20.4's foreign-instance bullet (controller ruling NC-1): once §21.2's both-enabled WARN names ccrc's withdrawal first, its "`_check_codex` WARNs with the operator's own disable as the remedy" is the withheld case's remedy only, so it points at §21.2 under A2's doctor slug.
 
 ```bash
 . "<abs scratch>/plan3b-exec/plan3b-env.sh"
 SPEC=docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md
 cat > "$SCRATCH/a7-pointers.cjs" <<'EOF'
-// a7-pointers.cjs <spec-file>: the seven same-line pointers above §21. Each edit names
+// a7-pointers.cjs <spec-file>: the eight same-line pointers above §21. Each edit names
 // the ONE line its locator matches and the ONE place in that line its pointer follows.
 // It refuses, writing nothing, unless every locator matches exactly one line and every
 // anchor occurs exactly once in it. A line that already carries its pointer matches
@@ -3470,6 +3473,8 @@ const EDITS = [
     'already FAILs it (D-3723).', ' (amended: §21.5, ⟦D:codex-doctor-unmeasured-is-not-skip⟧)'],
   [/^- \*\*Every lane file `deploy\/models-op\.mjs` reads is type-tested first\*\*.*that is a carried follow-up, not a claim of this bullet\.$/,
     'not a claim of this bullet.', ' (amended: §21.6)'],
+  [/^- \*\*Beside a foreign instance\.\*\* .*`_check_codex` WARNs with the operator's own disable as the remedy\. Two publishers /,
+    "WARNs with the operator's own disable as the remedy", ' (amended: §21.2, ⟦D:surplus-ccrc-usage-timer-warns⟧)'],
   [/^  - A withdrawal systemd refuses leaves ccrc's timer enabled\. .*naming every lane whose timer is still enabled\.$/,
     'whose timer is still enabled.', ' (amended: §21.2, ⟦D:usage-withdrawal-is-re-measured⟧, ⟦D:surplus-ccrc-usage-timer-warns⟧)'],
   [/^- \*\*Uninstall and account removal\.\*\* .*and the removal still completes\. §19\.8's .*no longer holds\.$/,
@@ -3493,15 +3498,15 @@ writeFileSync(file, lines.join('\n'));
 EOF
 node "$SCRATCH/a7-pointers.cjs" "$SPEC"; echo "rc=$?"
 node "$SCRATCH/a7-pointers.cjs" "$SPEC" 2>&1 | head -1; echo "rc=$?"
-grep -c '(amended: §21\.' "$SPEC"   # expected: 8, the seven pointers and §21's own preamble line, which spells the pointer's form
+grep -c '(amended: §21\.' "$SPEC"   # expected: 9, the eight pointers and §21's own preamble line, which spells the pointer's form
 ```
 
 Expected, in order:
-1. Seven lines, `line 497: '(amended: §21.7)' after 'an OAuth file.'` through `line 1042: '(amended: §21.3, D-…)' after 'and the removal still completes'`, then `rc=0`.
+1. Eight lines, `line 497: '(amended: §21.7)' after 'an OAuth file.'` through `line 1042: '(amended: §21.3, D-…)' after 'and the removal still completes'`, then `rc=0`.
 2. `pointers REFUSED, nothing written:`, then `rc=0`. That `rc` is `head`'s; the refusal itself exited 1. The second run is the script's own idempotence control: an edited line matches no locator.
-3. `8`: the seven pointers, plus §21's preamble line that spells `(amended: §21.N, D-NNNN)`.
+3. `9`: the eight pointers, plus §21's preamble line that spells `(amended: §21.N, D-NNNN)`.
 
-This was measured on a scratch copy of the spec at `be93d159` with the slugs stood in by numbers: six lines and rc 0 the first time, and six `0 lines match its locator` refusals and rc 1 the second. The seventh edit (`:1007`) was added at review and re-measured the same way: seven lines and rc 0, and the proof's `7 pointer-only edits`.
+This was measured on a scratch copy of the spec at `be93d159` with the slugs stood in by numbers: six lines and rc 0 the first time, and six `0 lines match its locator` refusals and rc 1 the second. The seventh edit (`:1007`) was added at review and re-measured the same way: seven lines and rc 0, and the proof's `7 pointer-only edits`. The eighth (`:1035`) was added by controller ruling NC-1 and re-measured the same way: eight lines and rc 0, eight `0 lines match its locator` refusals and rc 1 the second time, `9` from the count, and the proof's `8 pointer-only edits; 91 lines appended`.
 
 - [ ] **Step 3: Conform §21.1–§21.6 to the code that landed, and fill §21.12.** §21 states what A1–A6 commit, so each claim is re-read against the tip before anything is proved or committed. §21 sits below the old last line, so correcting it moves nothing the proof guards. A sentence the tip contradicts is corrected in §21, never by editing the code.
 
@@ -3586,7 +3591,7 @@ SPEC=docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md
 node "$SCRATCH/a7-r9.cjs" "$(cat "$SCRATCH/a7-base")" "$SPEC" "$SCRATCH"; echo "rc=$?"
 ```
 
-Expected: `R9: 1111 lines above §21 unmoved; 7 pointer-only edits; 91 lines appended`, then `rc=0`. 91 is the appended block's measured length, the leading blank line plus §21's 90 lines, re-measured at review on a scratch copy of the spec at `be93d159` with numbers standing in for the slugs (the drafted text was 87, before review added bullets to §21.2, §21.3 and §21.9). Step 3's fills are in-line, so they change no count. A different count from a Step 3 correction is fine, provided it is the block's own `wc -l`.
+Expected: `R9: 1111 lines above §21 unmoved; 8 pointer-only edits; 91 lines appended`, then `rc=0`. 91 is the appended block's measured length, the leading blank line plus §21's 90 lines, re-measured at review on a scratch copy of the spec at `be93d159` with numbers standing in for the slugs (the drafted text was 87, before review added bullets to §21.2, §21.3 and §21.9). Step 3's fills are in-line, so they change no count. A different count from a Step 3 correction is fine, provided it is the block's own `wc -l`.
 
 **Mutations of the proof.** Each runs on a scratch copy, so the worktree's spec is never edited and there is nothing to restore. None of them can block, so none needs a `timeout`.
 
@@ -3611,7 +3616,7 @@ rm -f -- "$SCRATCH/a7-m1.md" "$SCRATCH/a7-m2.md" "$SCRATCH/a7-m3.md" "$SCRATCH/a
 | M3 | the §21.1 pointer's number replaced by a slug | `R9 FAILS:` / `line 982: not a pointer-only edit`, `rc=1` | the same |
 | M4 | the base spec itself | `R9 FAILS: nothing appended — §21 is not in the diff`, `rc=1` | the same |
 
-All four answers, and the control's counts, were measured while drafting. The script was run against `be93d159` on a scratch copy carrying this section's §21 text and the six pointers, with numbers standing in for the slugs.
+All four answers, and the control's counts, were measured while drafting. The script was run against `be93d159` on a scratch copy carrying this section's §21 text and the six pointers, with numbers standing in for the slugs, and re-measured after ruling NC-1 with all eight pointers: the same four answers.
 
 - [ ] **Step 5: The append carries no real value.**
   - `topology-clean` (Step 6) holds the GPT-lane labels, added by Plan 3a Task 11.
@@ -3659,7 +3664,7 @@ Expected: each green, then `census: clean — no unit or link change, 0 fixture 
 . "<abs scratch>/plan3b-exec/plan3b-env.sh"
 git add docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md
 git commit -F - <<'EOF'
-docs(gpt-lane): Plan 3b Task A7 — spec §21, Amendments (Plan 3b), and seven same-line pointers
+docs(gpt-lane): Plan 3b Task A7 — spec §21, Amendments (Plan 3b), and eight same-line pointers
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -3810,7 +3815,7 @@ cat > "$SCRATCH/a7-pr-body.md" <<'EOF'
 - A4: changes only a row whose LiteLLM render failed with no answer.
 - A5: doctor's codex check is still one SKIP on a box with no codex lane and no lane-state root.
 - A6: a regular file reads the same bytes. Only a non-regular file at the roster or at a lane's `settings.json` answers differently, with that read's existing unreadable refusal instead of a block.
-- A7: spec §21 and seven same-line pointers. No line above §21 moved; the PR's proof diffs the base blob hunk by hunk.
+- A7: spec §21 and eight same-line pointers. No line above §21 moved; the PR's proof diffs the base blob hunk by hunk.
 
 No roster is edited, and no file, unit, timer or launcher of another repository is written, moved, started, stopped, enabled or disabled. The live cutover is Part B, run by the controller with the operator present, one authorisation per lane, after this build is running on the fleet box. This merge authorises none of it.
 
@@ -4049,7 +4054,7 @@ for f in ccgpt-proxy.py ccgpt-usage.py ccgpt-runtime ccrc-codex; do cmp -s "$B/$
 - **Rollback:** none.
 - **Authorisation:** read-only.
 
-- [ ] **Step 2: The values file.** Read-only on the box. Writes `$PB/values.sh` at 0600. `<controller-session-id>` and `<part-a-merge-sha>` are typed here. Re-running this step re-measures every key it owns and keeps every key a later step added (`PARK_TARGET`, `FLIP_ORDER`, `FLIPPED`, `RUNTIME_*`, `PRIOR_*`, `CENSUS_UTC`, `PART_A_RELEASE`, `L<n>_FLIP_EPOCH`).
+- [ ] **Step 2: The values file.** Read-only on the box. Writes `$PB/values.sh` at 0600. `<controller-session-id>` and `<part-a-merge-sha>` are typed here. Re-running this step re-measures every key it owns and keeps every key a later step added (`PARK_TARGET`, `FLIP_ORDER`, `FLIPPED`, `RUNTIME_*`, `PRIOR_*`, `CENSUS_UTC`, `PART_A_RELEASE`, `L<n>_FLIP_EPOCH`). **It is never re-run once a lane is flipped** (`FLIPPED` non-empty, from B3 Step 20 on): its lane identification and its entry-file and registry reads assume the pre-flip shape, which a flip changes. A session count that changes after a flip is cured by Step 3's re-record of the still-unflipped lane alone.
 
 ```bash
 . "<abs scratch>/plan3b-exec/plan3b-env.sh"
@@ -4244,7 +4249,9 @@ for n in 1 2; do
   [ -f "$lr" ] && note "lane $n: usage row $(( ( $(date +%s) - $(jq -r '.ts // 0' "$lr") ) / 60 )) min old (the other repository's writer)" || note "lane $n: no usage row"
   cnt=0; for f in "$REG"/*.wrapper; do [ -f "$f" ] && [ "$(head -n1 -- "$f")" = "$LANE_ID" ] && cnt=$((cnt + 1)); done
   set -- $LANE_SESSIONS
-  [ "$cnt" = "$#" ] && ok "lane $n: $cnt session row(s), as recorded" || miss "lane $n: $cnt session row(s) now, $# recorded; re-run Step 2"
+  if [ -n "${FLIPPED-}" ]; then fix="a lane is flipped, so B1 Step 2 is never re-run: re-record lane $n alone, vset L${n}_SESSIONS and vset L${n}_SESSION_COUNT from the exact-line .wrapper read (B1 Step 3's Stop), then re-run this census"
+  else fix="re-run B1 Step 2"; fi
+  [ "$cnt" = "$#" ] && ok "lane $n: $cnt session row(s), as recorded" || miss "lane $n: $cnt session row(s) now, $# recorded; $fix"
   for sid in $LANE_SESSIONS; do
     st="$(systemctl --user is-active "claude-session@$sid.service" 2>/dev/null)"
     [ "$st" = active ] && ok "lane $n: claude-session@$sid active" || miss "lane $n: claude-session@$sid is ${st:-unknown}; it cannot be parked"
@@ -4313,7 +4320,17 @@ chmod 700 "$PB/b1-census.sh"
   - `node` on the user manager's PATH. That PATH is what a supervised pane inherits, and `ccrc-codex` refuses `no-node` without it;
   - the `note` lines record lane 1's catalogue age and `stale` flag, each `auth.json` age, and the usage-row ages (the carry-forward's dead-refresh-token reads). A catalogue stale for more than a day, or an `auth.json` older than about a week, is said to the operator, because B3's refresh-before-session proof is where a dead token stops the window.
 - **Stop:** any `MISMATCH` line, and nothing is done (the carry-forward's step 1, ruling B-9). The line names the fact.
-  - A changed session count is cured by re-running Step 2, never by editing the census.
+  - A changed session count is cured by re-recording, never by editing the census. While `FLIPPED` is empty, re-run Step 2. Once a lane is flipped, Step 2 is never re-run (its rule above): re-record only the still-unflipped lane `<n>` the MISMATCH line names, both keys from the census's own exact-line `.wrapper` read, then re-run the census. The MISMATCH line names this cure:
+
+    ```bash
+    ( . "<abs scratch>/plan3b-exec/plan3b-env.sh" && lane <n> \
+      && { case " ${FLIPPED-} " in *" <n> "*) echo "lane <n> is flipped: not re-recorded"; exit 1 ;; esac; } \
+      && s="$(for f in "$REG"/*.wrapper; do [ -f "$f" ] && [ "$(head -n1 -- "$f")" = "$LANE_ID" ] && { b="${f##*/}"; echo "${b%.wrapper}"; }; done | paste -sd ' ' -)" \
+      && vset "L<n>_SESSIONS" "$s" && set -- $s && vset "L<n>_SESSION_COUNT" "$#" && echo "lane <n>: $# session row(s) re-recorded" \
+      && "$PB/b1-census.sh" "$SCRATCH/plan3b-env.sh" | tail -n 1 )
+    ```
+
+    Expected: `lane <n>: <count> session row(s) re-recorded`, then `census: MATCH`. It writes those two keys only, in the values file, and nothing on the box. A refusal, or a census still MISMATCH, stops the window.
   - A session whose unit is not `active` is ruling B-2's "a failed unit": that lane's window cannot open until the operator rules on it.
   - Any other mismatch goes to the operator with the redacted line.
 - **Rollback:** none.
@@ -4994,7 +5011,7 @@ Every bash block below begins with `export PATH="$HOME/.local/bin:$PATH"`, becau
     - an `execKeys` with more than `kind` and `provider`. A secrets file or ports on the row are a shape this procedure was not written for;
     - a symlinked `settings.json`. ccrc's settings writer replaces it with a 0600 regular file;
     - the controller on this lane, which would park itself;
-    - a `census: MISMATCH`, whose line names the fact, or a `0` for the generation (re-run B2 under the runtime-build authorisation first);
+    - a `census: MISMATCH`, whose line names the fact, or a `0` for the generation (re-run B2 under the runtime-build authorisation first). A session-count MISMATCH names its own cure: B1 Step 2 while `FLIPPED` is empty; on the second flip, only B1 Step 3's re-record of this lane's `L<n>_SESSIONS` and `L<n>_SESSION_COUNT`, never B1 Step 2. Then re-run this step;
     - a timer fire inside the window. Wait until it has fired and its row has been read, then re-run this step.
 
     Nothing has been done yet.
@@ -5989,9 +6006,10 @@ A row's own failure stops the rollback and goes to the operator; it is never for
   | `~/.ccrc/runtime/codex/current`, `~/.ccrc/codex/<first-lane-id>/` | absent | present; `ccgpt-runtime check` current |
   | the box's version | Task B1's | possibly newer: Task B4's landing |
   | the second lane: row, entry file shape and marker, tiers, foreign usage timer, models files | as recorded | unchanged |
-  | sessions on the second lane | Task B1's count | re-counted here; this window parks every one |
+  | sessions on the second lane | Task B1's count | re-counted here. A changed count is re-recorded by Task B1 Step 3's re-record of this lane alone, never by re-running B1 Step 2, and the census re-run; this window parks every one |
 
   Also re-read, per session on the second lane, its project's pool tag and its `<park-target-wrapper>`'s pool, as Task B3's census does (ruling B-2).
+  A census `MISMATCH lane <n>: … session row(s) now, … recorded` is cured as the table's last row says, then the census is re-run into `$PB/b5-census`; Task B1 Step 2 is never re-run here, because the first lane is flipped. Any other census MISMATCH stops.
   **Stop:** any delta the table does not name, a pool mismatch or undecidable pool for a session to park, under 2 GiB free, a `ccgpt-runtime check` that is not current (the runtime build was its own pre-lane authorisation, and a second build is not this window's: report it), or `ccgpt`'s hash changed. Nothing is done.
   **Rollback:** none. **Authorisation:** read-only.
 
@@ -6535,7 +6553,7 @@ Every bullet of Plan 3a's carry-forward Plan-3b part, and every "Final-review fo
 |---|---|
 | DONE: lane 1's stale "idle" facts | **Done** in Plan 3a. B1 re-measures (lane 1 now carries 6 sessions) |
 | `_models_probe_codex_env` and `_models_litellm_codex` fold an undecidable roster into "not codex" | **A1**, with `_models_litellm`'s dispatcher, and §20.1's "has no default" pointer in A7 |
-| Usage-converge flip-back gaps | **A2**, and §20.4's pointer in A7 |
+| Usage-converge flip-back gaps | **A2**, and §20.4's two pointers in A7 (`:1039`, and `:1035` by ruling NC-1) |
 | Account removal can race an in-flight `ccrc-codex-usage@<id>.service` | **A3**: wait, never stop |
 | Doctor robustness minors (`cmp`, unlistable `~/.ccrc/codex`, unreadable `.wrapper`) | **A5**, absorbed from its ticket |
 | `_fix_codex`'s "NOT rendered" over a written file | **Follow-up ticket** |
