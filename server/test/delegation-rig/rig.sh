@@ -15,7 +15,8 @@
 #   rig.sh all <raw-root>            reap, then every installed version x every scenario -> <raw-root>/<v>/<s>/,
 #                                    then <raw-root>/.done
 #   rig.sh reap                      remove what killed runs left: dlg<pid> tmux servers and
-#                                    ccrc-dlg-rig.* roots whose owning rig.sh pid is gone
+#                                    ccrc-dlg-rig.* roots whose owning rig.sh pid is gone, or that have
+#                                    no .owner, nothing modified for 10 minutes and no process under them
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TREE=$(cd "$HERE/../../.." && pwd)
@@ -262,13 +263,59 @@ collect() {
   curl -fsS "http://127.0.0.1:$PORT/__rig/state" 2>/dev/null | jq -c '.consumedLabels' > "$O/labels" || printf '[]\n' > "$O/labels"
   if [[ -f $RUN_R/notes ]]; then cp "$RUN_R/notes" "$O/notes"; else : > "$O/notes"; fi
 }
+# Pids (never this shell's own) whose working directory is at or under <root>, by /proc (Linux, as
+# claude_pid already is). A process whose cwd was removed under it reads "<path> (deleted)" and still
+# matches. Every caller passes a root that guard_root accepted, so this never names a foreign process.
+procs_under() {
+  local root=${1%/} l p c
+  [[ -n $root ]] || return 0
+  while IFS= read -r l; do
+    p=${l%% *}; c=${l#* }; p=${p#/proc/}
+    [[ $p == "$$" || $p == "$BASHPID" ]] && continue
+    [[ $c == "$root" || $c == "$root"/* ]] && printf '%s\n' "$p"
+  done < <(find /proc -mindepth 2 -maxdepth 2 -name cwd -printf '%h %l\n' 2>/dev/null)
+  return 0
+}
+# <pid> and all its descendants, one per line.
+pid_tree() {
+  local c
+  printf '%s\n' "$1"
+  for c in $(pgrep -P "$1" 2>/dev/null); do pid_tree "$c"; done
+}
+pid_live() { kill -0 "$1" 2>/dev/null && ! grep -q '^State:[[:space:]]*Z' "/proc/$1/status" 2>/dev/null; }
+# Wait (bounded) until nothing tied to this run is left to write under its root: the pane's pid tree
+# captured before the server died, and any process whose cwd is under the root. A late flush from a
+# dying Claude Code recreated the removed root once (measured, 98-run capture), and reap, which keys on
+# .owner, then skipped it for good. A straggler past the bound is SIGKILLed by its cwd alone.
+wait_run_quiet() {
+  local root=$1 tree=$2 end=$(( SECONDS + 10 )) p alive stage=0
+  while :; do
+    alive=0
+    for p in $tree; do pid_live "$p" && alive=1; done
+    [[ -n $(procs_under "$root") ]] && alive=1
+    (( alive )) || return 0
+    if (( SECONDS >= end )); then
+      (( stage )) && { printf 'rig: processes still hold run root %s\n' "${root##*/}" >&2; return 0; }
+      for p in $(procs_under "$root"); do kill -9 "$p" 2>/dev/null || true; done
+      stage=1; end=$(( SECONDS + 3 ))
+    fi
+    sleep 0.2
+  done
+}
 cleanup_run() {
+  local tree="" pp _
   if [[ $COLLECTED == 0 && -n $OUT_DIR && -n $RUN_R && -d $RUN_R ]]; then note "run aborted"; collect "$OUT_DIR" || true; fi
-  if [[ -n $SOCK ]]; then T "$SOCK" kill-server 2>/dev/null || true; rm -f -- "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$SOCK"; fi
+  if [[ -n $SOCK ]]; then
+    pp=$(T "$SOCK" display-message -p -t "$SESSION" '#{pane_pid}' 2>/dev/null) || pp=""
+    [[ $pp =~ ^[0-9]+$ ]] && tree=$(pid_tree "$pp")
+    T "$SOCK" kill-server 2>/dev/null || true; rm -f -- "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$SOCK"
+  fi
   [[ -n $MOCK_PID ]] && kill "$MOCK_PID" 2>/dev/null || true
   if [[ -n $RUN_R ]] && guard_root "$RUN_R"; then
-    # the pane's processes may still be dying and writing under the root: retry the removal
+    wait_run_quiet "$RUN_R" "$tree"
     for _ in 1 2 3 4 5 6; do rm -rf -- "$RUN_R" 2>/dev/null && break; sleep 2; done
+    # a writer that slipped past the wait recreates the tree: a short grace, removing it again
+    for _ in 1 2 3 4 5 6 7 8 9 10; do sleep 0.2; [[ -e $RUN_R ]] && rm -rf -- "$RUN_R" 2>/dev/null; done
     [[ ! -e $RUN_R ]] || printf 'rig: could not remove run root %s\n' "${RUN_R##*/}" >&2
   fi
 }
@@ -309,11 +356,20 @@ cmd_reap() {
   done
   for d in "$(run_base)"/ccrc-dlg-rig.*; do
     [[ -L $d || ! -O $d ]] && continue   # a symlink, or an entry some other user made, is never ours to follow
-    [[ -d $d && -f $d/.owner ]] || continue
-    pid=$(cat "$d/.owner")
-    [[ $pid =~ ^[0-9]+$ ]] || continue
-    kill -0 "$pid" 2>/dev/null && continue
-    d=$(cd -P -- "$d" && pwd) || continue
+    [[ -d $d ]] || continue
+    if [[ -f $d/.owner ]]; then
+      pid=$(cat "$d/.owner")
+      [[ $pid =~ ^[0-9]+$ ]] || continue
+      kill -0 "$pid" 2>/dev/null && continue
+      d=$(cd -P -- "$d" && pwd) || continue
+    else
+      # No .owner: a late writer (a dying Claude Code's transcript flush) recreated a removed root, or run
+      # is between mktemp and writing .owner. Only an AGED root with no process under it is ours to clear.
+      d=$(cd -P -- "$d" && pwd) || continue
+      guard_root "$d" || continue
+      [[ -z $(find "$d" -mmin -10 -print -quit 2>/dev/null) ]] || continue
+      [[ -z $(procs_under "$d") ]] || continue
+    fi
     guard_root "$d" && { rm -rf -- "$d"; printf 'rig: reaped run root %s\n' "${d##*/}" >&2; }
   done
   return 0

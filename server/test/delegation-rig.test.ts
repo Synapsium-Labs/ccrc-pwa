@@ -224,6 +224,72 @@ describe('rig.sh guards (the rig never names the real HOME or the default tmux s
   }, 60_000);
 });
 
+/** Set every mtime under `root` (files, symlinks, then directories, children first) to `when`. */
+function ageTree(root: string, when: Date): void {
+  for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+    const f = path.join(root, e.name);
+    if (e.isDirectory()) ageTree(f, when);
+    else if (!e.isSymbolicLink()) fs.utimesSync(f, when, when);
+  }
+  fs.utimesSync(root, when, when);
+}
+
+describe('rig.sh reap, an ownerless run root (a late writer recreated it after cleanup_run removed it)', () => {
+  const reapIn = (tmp: string) => rigsh(['reap'], { TMPDIR: tmp, TMUX_TMPDIR: mkTmp('ccrc-dlg-tmux-'), HOME: mkTmp('ccrc-dlg-home-') });
+  /** A root shaped like the measured leftover: only a transcript under fixhome/cfg/projects, no .owner. */
+  const ownerless = (tmp: string): string => {
+    const root = fs.mkdtempSync(path.join(tmp, 'ccrc-dlg-rig.'));
+    const dir = path.join(root, 'fixhome', 'cfg', 'projects', '-rig-repo');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '00000000-0000-4000-8000-000000000000.jsonl'), '{}\n');
+    return root;
+  };
+  const old = new Date(Date.now() - 30 * 60_000);
+
+  it('removes one whose newest mtime is older than 10 minutes', () => {
+    const tmp = mkTmp('ccrc-dlg-tmp-');
+    const root = ownerless(tmp);
+    ageTree(root, old);
+    const r = reapIn(tmp);
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.existsSync(root)).toBe(false);
+  }, 60_000);
+
+  it('keeps a fresh one (run may be between mktemp and writing .owner), and one with a single fresh file inside an aged tree', () => {
+    const tmp = mkTmp('ccrc-dlg-tmp-');
+    const fresh = ownerless(tmp);
+    const mixed = ownerless(tmp);
+    ageTree(mixed, old);
+    fs.writeFileSync(path.join(mixed, 'fixhome', 'late.txt'), 'x');   // one recent write anywhere keeps it
+    const r = reapIn(tmp);
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.existsSync(fresh)).toBe(true);
+    expect(fs.existsSync(mixed)).toBe(true);
+  }, 60_000);
+
+  it('skips a symlinked one, and what it points at', () => {
+    const tmp = mkTmp('ccrc-dlg-tmp-');
+    const target = ownerless(mkTmp('ccrc-dlg-target-'));
+    ageTree(target, old);
+    fs.symlinkSync(target, path.join(tmp, 'ccrc-dlg-rig.link'));
+    const r = reapIn(tmp);
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.existsSync(path.join(target, 'fixhome'))).toBe(true);
+    expect(fs.lstatSync(path.join(tmp, 'ccrc-dlg-rig.link')).isSymbolicLink()).toBe(true);
+  }, 60_000);
+
+  it('keeps an aged one while a process has its working directory under it', () => {
+    const tmp = mkTmp('ccrc-dlg-tmp-');
+    const root = ownerless(tmp);
+    ageTree(root, old);
+    const holder = spawn('sleep', ['60'], { cwd: path.join(root, 'fixhome'), stdio: 'ignore' });
+    children.push(holder);
+    const r = reapIn(tmp);
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.existsSync(root)).toBe(true);
+  }, 60_000);
+});
+
 describe('rig.sh reap, sockets and scenario text', () => {
   it('reap removes only the private socket of a dead owner (never `default`, never a live owner\'s)', () => {
     const tmuxTmp = fs.mkdtempSync('/tmp/dlgt-');   // short: a unix socket path is capped near 108 bytes
