@@ -572,7 +572,7 @@ Output: `w2-shadow-review.json` in the coordinator notes.
   - **Review run 262** is dispatched to a fresh reviewer, with the held-out panel and a contract-text lens. The lens
     covers clause 16's truth against `main`'s ball rule after #241, the wake-list split's stopping line, and Task 4's
     scoped docstrings. The reviewer also runs the quiet ccrc-install and PWA suites, and the tree merged with #215.
-- **R35 (coordinator, 2026-10-05 00:31): review 262 rules wave 7 clean but for four minors, and one small fix round
+- **R35 (coordinator, 2026-10-05 00:30): review 262 rules wave 7 clean but for four minors, and one small fix round
   goes back.** Review run 262 (`ccrc-pwa-bright-prairie`) read `35fe57070`: 37 panel agents, no errors, 5 confirmed,
   6 refuted.
   - **What it measured.** Every suite is green at the tip. ccrc-install and the PWA are cited from CI run 37245048187
