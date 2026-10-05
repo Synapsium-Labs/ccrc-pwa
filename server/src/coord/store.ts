@@ -5673,6 +5673,66 @@ export class CoordStore {
     return new Set(rows.map((r) => r.sessionId));
   }
 
+  /** The acts the reclaim chip's read returns (child-reclamation wave 5):
+   *  `reclaim`, the act itself, and `create`, which fences one workspace
+   *  generation from the next when ws-add hands a recycled slug out again
+   *  (wave 4's `childReclaimGeneration`). Typed, so a rename in `LifecycleAct` is a
+   *  compile error here rather than a silently empty read. */
+  private static readonly CHILD_RECLAIM_EVENT_ACTS: readonly LifecycleAct[] = ['reclaim', 'create'];
+
+  /** THE ONE SPELLING of `childReclaimEvents`' statement. Public so the plan pin
+   *  (`child-reclaim-events-store.test.ts`) runs EXPLAIN over the text this
+   *  method runs, not over a copy that could keep a hint the source dropped.
+   *
+   *  `INDEXED BY lifecycle_by_session`, `recentProvenance`'s idiom: the table
+   *  is NEVER PRUNED, so this read's cost must be bounded by the requested
+   *  sessions' own histories, never by the table's. Today's planner picks the
+   *  index unhinted. The hint keeps that independent of `ANALYZE` statistics. */
+  static childReclaimEventsSql(sessions: number): string {
+    return `SELECT ${CoordStore.LC_COLS} FROM lifecycle_events INDEXED BY lifecycle_by_session ` +
+      `WHERE sessionId IN (${placeholders(sessions)}) ` +
+      `AND act IN (${placeholders(CoordStore.CHILD_RECLAIM_EVENT_ACTS.length)}) ` +
+      'ORDER BY sessionId, id';
+  }
+
+  /**
+   * Every `reclaim` and `create` row of each requested session, oldest-first by
+   * this table's own `id` (never `at`, which is ccd's nullable clock), for the
+   * reclaim chip on `GET /api/runs` (child-reclamation wave 5, spec §5.9).
+   *
+   * ONE STATEMENT, WHATEVER THE ROW COUNT. The board read already spends
+   * several statements per row (`runHealth`'s docstring prices a per-row read
+   * at ~3,000 for one load), and a per-session loop here would add hundreds
+   * more. Measured at planning: one `IN` statement was the cheapest of three
+   * shapes at 100k and 500k rows.
+   *
+   * EVERY requested id gets an entry, `[]` included. A caller forced to supply
+   * a default for a missing key is where an overloaded null is born
+   * (`runHealth`'s rule). Duplicate ids are asked once.
+   *
+   * The GENERATION is not decided here. Which of these rows belong to a given
+   * run's workspace is wave 4's `childReclaimGeneration`, the ONE fence
+   * (spec §5.6: slugs recycle), a pure function with its own pin, because a
+   * SQL fence costs three index walks per run where this read costs one per
+   * session. Which of them decides is wave 4's `childReclaimLatest`, likewise.
+   *
+   * Rows revive through `reviveLifecycleRow`, the one mapper `lifecycleFor`
+   * and `lifecycleCreatesFor` already share.
+   */
+  childReclaimEvents(sessionIds: readonly string[]): Map<string, MirroredLifecycleEvent[]> {
+    const ids = [...new Set(sessionIds)];
+    const out = new Map<string, MirroredLifecycleEvent[]>(ids.map((id) => [id, []]));
+    // `placeholders(0)` is an empty `IN ()`, a SQLite syntax error, and the
+    // guard is this method's own.
+    if (ids.length === 0) return out;
+    const rows = this.db.prepare(CoordStore.childReclaimEventsSql(ids.length))
+      .all(...ids, ...CoordStore.CHILD_RECLAIM_EVENT_ACTS) as unknown as Parameters<typeof CoordStore.reviveLifecycleRow>[0][];
+    for (const r of rows) {
+      if (r.sessionId !== null) out.get(r.sessionId)?.push(CoordStore.reviveLifecycleRow(r));
+    }
+    return out;
+  }
+
   /** The holes, newest-first — a timeline with a hole in it says so. */
   lifecycleGaps(limit = 100): LifecycleGap[] {
     const n = Number.isFinite(limit) && limit > 0
