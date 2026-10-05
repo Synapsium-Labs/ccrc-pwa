@@ -43,6 +43,22 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-05 13:06 — the fleet converged past v0.0.79 and the sweep is live.** Measured read-only.
+  - **Convergence:** the halt cleared overnight. The updater sent the fleet box v0.0.84 at 12:22 (from v0.0.78)
+    and the server box v0.0.84 at 12:34 (from v0.0.76). The fleet box's `update.json` reads `done` for v0.0.84, and
+    `ccd caps` lists `reclaim-v1`, `reclaim-pause-v1` and `lifecycle-v1`.
+  - **First passes:** the first sweep reclaim landed at 12:36 (`amber-basin`, run 230). By 13:03, 24 children had
+    gone, one in flight at a time, about one every 70 s, in id order through `clear-summit`. Every feed row reads
+    "Nothing uncommitted was left". The feed has no `child reclaim failed` row since the sweep went live.
+  - **What remains (13:03):** 81 child markers. Of those, 75 are children whose runs have all finished: 25 running
+    panes in the Released fold and 50 stopped rows that were already archived. The other 6 belong to open
+    runs. Two children earlier in id order were passed over. `bright-hollow` reviewed landing-order run 250, which
+    is still `working`, so it is kept as ruled. `brisk-meadow` (review 171 of run 148, both done, no `.hold`) has
+    no reason measured yet. It is checked again once the backlog drains.
+  - **Not this programme's:** 21 unmarked workspaces are archived with finished runs or none. The sweep never takes
+    them (rule 4). Their 7-day expiry is workspace-lifecycle wave 3: the plan was merged as #252, the `ws-expire`
+    verb ships inert, and the lane that calls it is wave 3b.
+
 - **2026-10-04 23:41 — still halted; no further checks scheduled.** Re-measured read-only at 23:41. The fleet box's
   `~/.ccrc/update.json` still reads `phase: failed` for v0.0.78, written at 22:10 and not changed since. `ccrc
   rollout --to v0.0.79 --check` still reports the fleet box on v0.0.78 and the server box on v0.0.76, both behind.
