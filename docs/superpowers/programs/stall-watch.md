@@ -22,7 +22,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | #237 | **merged** `7e858c8bf` (2026-10-04 12:40, R26) |
 | 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **merged** `698f679da` (2026-10-04 21:21, R33); live at the next auto-update |
-| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`); Task 4 server comments | #246 | **fix round** — review 262 clean but for four minors (R35); F2–F4 fixed now, F1 to the operator |
+| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`); Task 4 server comments | #246 | **in review** — fix round done at `376d1ffb1` (2026-10-05), re-measured; review run 264 (R36) |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -603,6 +603,20 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     which was false for the double send, rather than only scoping it. The allowlist message's wording, named in
     `35fe57070`'s subject, is recorded here too.
   - Run 259 goes back to `working` for the fix round. A fresh review run reads it.
+- **R36 (coordinator, 2026-10-05 03:19): wave 7's fix round is verified, and its re-review is dispatched.**
+  - **The claim.** Mail 3459 reports four commits on `35fe57070`, test files and one comment only:
+    - F2: the rows take `JUDGED_STATES`, which is `ACTIVE_RUN_STATES` without `unknown`; the new row C11 reds both;
+    - F3: the ordinary joins are closed, and W15–W21 are red;
+    - F4: the comment says "about 10 min old".
+  - **Every count** is unchanged from `35fe57070`: coordinator-skill 159, worker-skill 50, the citation instrument
+    7 passed.
+  - **Beyond the ruling,** the worker added W22 (the tail anchor's own row), W22c (its control, which passes) and W23
+    (scan-only), for mutation-table discipline. They are accepted. Its evasion list now says what stays open.
+  - **Re-measured.** Tip, PR head and handoff all read `376d1ffb1`, and the probe against `b40f4145e` is clean. Run 259
+    advanced to `awaiting-review` with its four items still `done`.
+  - **Review run 264** is dispatched to a fresh reviewer, with the held-out panel and a fix-round lens. Its brief rules
+    the stopping line: it reports a wording that the comment claims is closed but that passes, never a new shape of
+    evasion.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
