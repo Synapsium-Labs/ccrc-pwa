@@ -9,6 +9,11 @@
 // marker (`meta.malformed`, `totals.metaMalformed`, `totals.homesUnreadable`) so they never read as
 // "no metadata" or "nothing there". A meta that parses but names no worktreePath is the ORDINARY shape
 // (an agent spawned without a worktree), not corruption: it is `meta.pathless` / `totals.metaPathless`.
+// `movedFromBase` compares a record's HEAD tip with its CLAUDE_BASE: `null` means ONLY "no valid CLAUDE_BASE to
+// compare against" (not applicable); a boolean is the comparison; `'unmeasured'` is a HEAD the census could not
+// resolve to a commit (unreadable or malformed HEAD, or a `ref:` HEAD whose ref is absent, symbolic, not a sha or
+// not shaped like a ref name). A `ref:` HEAD is resolved READ-ONLY in the common dir (`<repo>/.git`): the loose ref
+// file, else the `packed-refs` line — never by running git.
 // Usage: node deploy/delegation-census.mjs --repo <main checkout> [--ccd-root <dir>] --home <dir> [--home <dir>]...
 import fs from 'node:fs';
 import path from 'node:path';
@@ -48,6 +53,23 @@ const json = (f) => {
   try { const v = JSON.parse(fs.readFileSync(f, 'utf8')); return v !== null && typeof v === 'object' && !Array.isArray(v) ? v : MALFORMED; } catch { return MALFORMED; }
 };
 const exists = (f) => { try { fs.statSync(f); return true; } catch { return false; } };
+// A `ref: <name>` HEAD's tip, read-only in the common dir: the loose ref file's first line, else the `packed-refs`
+// line `<sha> <name>` (the `#` header and a `^` peeled line match no such line, so they are skipped by shape).
+// Returns a sha, or null for "unresolved" — the caller says 'unmeasured', since for movedFromBase null is spoken
+// for. A name that is not `refs/<safe chars>`, or has a `..` segment, is never joined onto a path.
+const REF_NAME = /^refs\/[A-Za-z0-9._/-]+$/;
+const PACKED_LINE = /^([0-9a-f]{40}) (refs\/\S+)$/;
+const refTip = (name) => {
+  if (!REF_NAME.test(name) || name.split('/').includes('..')) return null;
+  const common = path.join(repo, '.git');
+  const loose = text(path.join(common, name));
+  if (loose !== null) { const sha = loose.split('\n')[0].trim(); return SHA.test(sha) ? sha : null; }
+  for (const line of (text(path.join(common, 'packed-refs')) ?? '').split('\n')) {
+    const m = PACKED_LINE.exec(line.trim());
+    if (m !== null && m[2] === name) return m[1];
+  }
+  return null;
+};
 
 const admin = path.join(repo, '.git', 'worktrees');
 let adminRead = 'ok';
@@ -119,6 +141,13 @@ const ageBucket = (dir) => {
   return h < 1 ? '<1h' : h < 24 ? '<1d' : h < 168 ? '<7d' : '>=7d';
 };
 
+// null = no valid base (nothing to compare); 'unmeasured' = a HEAD with no resolvable tip; else moved or not.
+const movedFromBase = (base, head, headTxt) => {
+  if (base === null) return null;
+  const tip = head === 'detached' ? headTxt.trim() : head === 'ref' ? refTip(headTxt.split('\n')[0].slice('ref: '.length).trim()) : null;
+  return tip === null ? 'unmeasured' : tip !== base;
+};
+
 const records = [];
 for (const n of names) {
   const a = path.join(admin, n);
@@ -136,7 +165,7 @@ for (const n of names) {
     kind, head,
     claudeBase: baseTxt === null ? 'absent' : base === null ? 'malformed' : 'ok',
     baseAgreesFirstLog: base !== null && firstLog !== null && SHA.test(firstLog) ? base === firstLog : null,
-    movedFromBase: base !== null && head === 'detached' ? headTxt.trim() !== base : null,
+    movedFromBase: movedFromBase(base, head, headTxt),
     locked: exists(path.join(a, 'locked')),
     worktreeDir: wt === null ? 'unmeasured' : exists(wt) ? 'present' : 'absent',
     ageBucket: ageBucket(a),
