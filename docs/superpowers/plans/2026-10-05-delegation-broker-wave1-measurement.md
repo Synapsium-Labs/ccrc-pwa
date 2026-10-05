@@ -3167,6 +3167,14 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   `transcriptNamesAgent` judges every `SubagentStop` (a stop missing its fields was `null`, "none observed"). The
   plan's untested guards — no events, the 200-event cap, the main-loop filter on `agentTool`, the `Task` spelling —
   gained rows and measured mutations.
+- **D-4010** — `capture-run-fixes` (Task 6, from the 98-run capture itself): two of 98 runs left a run root behind —
+  a dying Claude Code flushed its transcript after `cleanup_run` removed the root, and `reap` keys on `.owner` — so
+  `cleanup_run` now waits (bounded) for the pane tree and every process whose cwd is under the root, re-reads each
+  straggler's cwd before it kills, and `reap` also clears an ownerless root quiet for ten minutes with no process in
+  it; the sanitiser failed the whole corpus closed on Claude Code's `<task-notification>` XML, whose closing tags
+  (`</result>`) read as absolute paths, so a COMPLETE closing tag of a plain name is exempt and nothing else (an
+  exemption of every `<` let a shell redirect such as `wc -l</etc/hosts` through, and a row now pins that);
+  and Task 7's residue row matched `/rig/tmp/`, the sanitised TMPDIR, so it skips `/tmp/` led by `/rig`.
 
 ## Self-review (record)
 
