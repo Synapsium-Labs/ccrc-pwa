@@ -5680,9 +5680,13 @@ export class CoordStore {
    *  compile error here rather than a silently empty read. */
   private static readonly CHILD_RECLAIM_EVENT_ACTS: readonly LifecycleAct[] = ['reclaim', 'create'];
 
-  /** THE ONE SPELLING of `childReclaimEvents`' statement. Public so the plan pin
-   *  (`child-reclaim-events-store.test.ts`) runs EXPLAIN over the text this
-   *  method runs, not over a copy that could keep a hint the source dropped.
+  /** THE ONE SPELLING of `childReclaimEvents`' statement. Public so the test
+   *  (`child-reclaim-events-store.test.ts`) reads the text this method runs, not
+   *  a copy that could keep a hint the source dropped. It pins two things over
+   *  that one text: the hint is PRESENT (a string assertion, because today's
+   *  planner picks the index unhinted, so EXPLAIN alone cannot see the hint
+   *  go), and the plan SEEKS rather than scans (EXPLAIN, which `NOT INDEXED`
+   *  would turn into a scan).
    *
    *  `INDEXED BY lifecycle_by_session`, `recentProvenance`'s idiom: the table
    *  is NEVER PRUNED, so this read's cost must be bounded by the requested
@@ -5722,8 +5726,7 @@ export class CoordStore {
   childReclaimEvents(sessionIds: readonly string[]): Map<string, MirroredLifecycleEvent[]> {
     const ids = [...new Set(sessionIds)];
     const out = new Map<string, MirroredLifecycleEvent[]>(ids.map((id) => [id, []]));
-    // `placeholders(0)` is an empty `IN ()`, a SQLite syntax error, and the
-    // guard is this method's own.
+    // An empty request answers without a statement: nothing to ask the mirror.
     if (ids.length === 0) return out;
     const rows = this.db.prepare(CoordStore.childReclaimEventsSql(ids.length))
       .all(...ids, ...CoordStore.CHILD_RECLAIM_EVENT_ACTS) as unknown as Parameters<typeof CoordStore.reviveLifecycleRow>[0][];

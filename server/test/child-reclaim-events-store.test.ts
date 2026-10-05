@@ -6,6 +6,7 @@
 // scan.
 import { describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
+import { StatementSync } from 'node:sqlite';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { parseJournalLine, type JournalRow } from '../src/coord/journalparse.js';
@@ -67,24 +68,43 @@ describe('CoordStore.childReclaimEvents (wave 5)', () => {
   it('reads nothing for an empty request', () => {
     const s = store();
     const prepare = vi.spyOn(s.db, 'prepare');
-    expect(s.childReclaimEvents([])).toEqual(new Map());
-    expect(prepare).not.toHaveBeenCalled();
+    const all = vi.spyOn(StatementSync.prototype, 'all');
+    try {
+      expect(s.childReclaimEvents([])).toEqual(new Map());
+      expect(prepare).not.toHaveBeenCalled();
+      expect(all).not.toHaveBeenCalled();
+    } finally {
+      all.mockRestore();
+    }
   });
 
-  it('spends ONE statement whatever the session count', () => {
+  it('spends ONE statement, run ONCE, whatever the session count', () => {
     const s = store();
     seedMirror(s);
     const prepare = vi.spyOn(s.db, 'prepare');
-    s.childReclaimEvents([A, B, 'ccrc-pwa-calm-reef', 'ccrc-pwa-keen-dune', A]);
-    expect(prepare).toHaveBeenCalledTimes(1);
+    // Preparing once and running per id is the per-run loop shape the one-IN
+    // read replaces, so the executions are counted too, not only the prepares.
+    const all = vi.spyOn(StatementSync.prototype, 'all');
+    try {
+      s.childReclaimEvents([A, B, 'ccrc-pwa-calm-reef', 'ccrc-pwa-keen-dune', A]);
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(all).toHaveBeenCalledTimes(1);
+    } finally {
+      all.mockRestore();
+    }
   });
 
   it('seeks through lifecycle_by_session and never scans the never-pruned table', () => {
-    // The SAME text the method runs (`childReclaimEventsSql`), not a copy, so
-    // dropping the hint from the source reds here.
+    // The SAME text the method runs (`childReclaimEventsSql`), not a copy.
+    // Two pins over it. The hint is asserted as text because today's planner
+    // picks the index without it, so EXPLAIN cannot see the hint go; the plan
+    // is asserted too, because `NOT INDEXED` (or a rewrite that drops the
+    // index's column) turns the SEARCH into a SCAN.
     const s = store();
-    const plan = (s.db.prepare(`EXPLAIN QUERY PLAN ${CoordStore.childReclaimEventsSql(2)}`)
-      .all(A, B, 'reclaim', 'create') as { detail: string }[]).map((r) => r.detail).join(' | ');
+    const sql = CoordStore.childReclaimEventsSql(2);
+    expect(sql).toContain('INDEXED BY lifecycle_by_session');
+    const plan = (s.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[])
+      .map((r) => r.detail).join(' | ');
     expect(plan).toContain('lifecycle_by_session');
     expect(plan).not.toContain('SCAN lifecycle_events');
   });
