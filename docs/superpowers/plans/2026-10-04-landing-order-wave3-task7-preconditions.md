@@ -30,9 +30,10 @@
 
 **Goal:** Land the two CODE preconditions the merged wave-2 plan's Task 7 Step 1 names, so the operator can arm the
 merge queue, and pay wave 2's residue. (1) THE PAYLOAD CAP: the merge deny parses no command longer than
-`MERGE_PARSE_CAP` = 2048 bytes. Over the cap it asks the raw command two fixed-string questions (does it hold `gh`, does
-it hold `merge`) and, in a held or child session, refuses a command holding both, naming the length and the cap; every
-other over-cap command passes unparsed. No input can make the strip time the hook out any more, and a timeout was the
+`MERGE_PARSE_CAP` = 2048 bytes. Over the cap it applies one fixed-string segment rule to the raw command (split on `;` `&` `|`
+and the newline, a `contains` prefilter, then `gh`, `pr` and `merge` as words in that order in one segment) and, in a
+held or child session, refuses a command that matches unread, naming the length and the cap; every other over-cap
+command passes unparsed. No input can make the strip time the hook out any more, and a timeout was the
 way the deny failed open. (2) THE QUOTE-DENSE TIMING PIN: `session-hook-sync-advisory.test.ts` times five quote-dense
 shapes at exactly the cap against its 1500 ms whole-hook bound, and `session-hook-merge-deny.test.ts` gets review 249
 F1's terminated heredoc and a live row H40; the same five shapes at 36 KB time the landing advisory's own regex on quote
@@ -45,7 +46,8 @@ check, which FAILs on a box whose jq cannot match a lookbehind, and a CLOSED-unm
 their tests. No server source, no PWA, no wire field. The cap sits INSIDE the deny's one jq program, so it costs no
 fork: a new `capped(f)` wraps the program's last line, measures `utf8bytelength` before the strip runs, and answers
 with a one-character tag the bash arm reads (`=` and the stripped command; `!` and the byte count; nothing). jq
-evaluates `f` only on the under-cap branch, so over the cap the strip never runs. The arm adds one branch (an over-cap
+evaluates `f` only on the under-cap branch, so over the cap the strip never runs; there the tag is `!` when the segment
+rule (`ocwords`) matches the raw command, and nothing otherwise. The arm adds one branch (an over-cap
 answer is a merge it could not read) and one reason, and keeps every other line, so all 61 rows of wave 2's deny table
 still find their text. The doctor check is one table entry and one function beside `_check_jq`, in the table's own
 contract (`_dr_pass`/`_dr_fail`/`_dr_skip`); it adds one class to every doctor map, so Plan 3a's `BASE_LIVE_SHAPE`
@@ -155,14 +157,21 @@ Eleven inputs or failure modes this wave's design implies and nothing on `main` 
 task, and each test has a mutation row that reds it.
 
 1. **The cap must never let a held session's long merge through.** Over the cap the strip never runs, so a command
-   holding both `gh` and `merge` is refused UNREAD in a held or child session; the arm treats the over-cap answer as a
+   whose raw text matches the segment rule is refused UNREAD in a held or child session; the arm treats the over-cap answer as a
    match before it reads the hold. → Task 1, "parses a command of exactly the cap, and refuses one byte more unread";
    rows P1, P4.
 2. **The boundary is exact, in bytes.** Exactly `CAP` bytes is parsed (a quoted mention passes, a real merge is refused
    for what it is); `CAP + 1` is not. A multi-byte command is measured in bytes. → the boundary and the bytes cases;
    rows P3, P5.
-3. **Both words, each one.** An over-cap command missing either word passes unparsed. → "lets an over-cap command
-   through unparsed when it lacks either word"; rows P2, P7, P8.
+3. **The segment rule, over the cap.** The raw command is split on `;` `&` `|` and the newline (fixed-string `split`,
+   never `splits`); a `contains("gh") and contains("merge")` prefilter runs; and in one segment `gh` (not after a word
+   character), `pr` and `merge` (ended by a blank, the segment's end, a backtick, `(`, `)`, `<` or `>`) are searched in
+   that order. A held or child session's command that matches is refused unread, gh's own flags and a flag value
+   holding a substitution or a redirection included; any other over-cap command passes. → "lets an over-cap command
+   through unparsed unless its raw text spells a word-bounded `gh pr merge`", "refuses gh's own flags between the words
+   over the cap, as main's full parse does", "refuses %s over the cap (review 267 F4)", "refuses a flag value that holds
+   a substitution or a redirection over the cap", "lets an over-cap command through that is not a merge", and the six
+   100 KB timing pins; rows P2, P7, P8, P11, and fix round 1's S0–S10 and SP.
 4. **Only where the deny applies.** No hold and no marker: never refused, over the cap or under it; a marked child is
    refused over the cap too, with the child's reason. → "refuses only where the deny applies"; rows P6 (the child's
    half) and P10 (the unheld half: a refusal with no hold, through the case's own `toBeNull`). P9 reds the same case
@@ -225,7 +234,7 @@ tests plus the full agent and PWA legs.
    The hook's own floor is ~60–75 ms. The costliest shape is a run of short quoted substitutions that are not
    "plain" (a quote, `<`, `\`…), because each one is a nested strip that compiles the whole `DEFS` regex again: about
    0.17 ms of CPU per byte, against bare `"`'s 0.045. 25 % of the 1500 ms bound is 375 ms, so the largest round size
-   is **2048** (`"$(<)"` 317–380 ms); 4096 is ~44 %. (That quarter is the PARSE's cost. The over-cap scan that replaces it has its own worst case, at 100 KB: about 40 % of the bound, `gh merge` with `a;` repeated, ~600 ms through the hook on a loaded box and ~300 ms idle; see `overcap-segment-rule`.) Of the three shapes the brief names, bare `"` is the worst and
+   is **2048** (`"$(<)"` 317–380 ms); 4096 is ~44 %. (That quarter is the PARSE's cost. The over-cap scan that replaces it costs about 20 % of the bound idle at 100 KB, ~250–380 ms through the hook, measured; the costliest shape measured, `gh merge;` repeated, reached 343–384 ms at load ~15, and a review measured ~600 ms (~40 %) once. It is linear in the length, so it crosses the bound at ~450–500 KB at the idle slope; see `overcap-segment-rule`.) Of the three shapes the brief names, bare `"` is the worst and
    would allow 8192 (372–413 ms) — see Open question 1. Other shapes tried at 8192 and cheaper than bare `"`: `$'`,
    ` #\n`, `<<a\na\n`, `$$`, `${x}`, `\a`, `"$(a)"`, `$((1))`, `"${x}"`, `` `a` ``, `"$("` (nested and unclosed),
    `"'$(` mixed.
@@ -312,7 +321,8 @@ and asserts byte equality. After the run, `git status --short` lists exactly the
 `replay.py` is the planning instrument, kept here for the reviewer: it applies this document's `<!-- replay: OP FILE
 -->` blocks for a range of tasks to the working tree, refusing any anchor that does not occur exactly once both in the
 tree and on `origin/main`. Replaying Tasks 1–4 at once onto `main` gives a tree identical to the task-by-task
-replay this plan was measured on.
+replay this plan was measured on. A block fenced with four backticks (Task 4's, which holds a three-backtick block
+of its own) ends at the next line of four.
 
 ```python
 #!/usr/bin/env python3
@@ -330,9 +340,10 @@ task, i, ops = 0, 0, []
 def block(k):
     while not lines[k].startswith(FENCE):
         k += 1
+    close = re.match(r'`+', lines[k]).group(0)  # a four-backtick block may hold a three-backtick one
     s = k + 1
     e = s
-    while lines[e] != FENCE:
+    while lines[e] != close:
         e += 1
     return '\n'.join(lines[s:e]), e + 1
 while i < len(lines):
@@ -491,8 +502,11 @@ and insert, directly above it, the cap's own describe:
 
 ```ts
   // THE PAYLOAD CAP (landing-order wave 3). Over MERGE_PARSE_CAP bytes nothing
-  // is parsed: the raw command is asked only whether it holds both `gh` and
-  // `merge`, and a held or child session's command that does is refused unread.
+  // is parsed: the raw command is asked only whether, in one segment of it
+  // (split on the four command separators `;` `&` `|` and the newline,
+  // fixed-string), `gh`, `pr` and `merge` stand as words in that order
+  // (`ocwords`), and a held or child session's command that does is refused
+  // unread.
   describe('the payload cap', () => {
     const MENTION = 'echo "gh pr merge" ';
     it('parses a command of exactly the cap, and refuses one byte more unread — naming both numbers', () => {
@@ -521,13 +535,18 @@ and insert, directly above it, the cap's own describe:
       expect(d).toContain(`this command is ${Buffer.byteLength(c)} bytes`);
     });
 
-    it('lets an over-cap command through unparsed when it lacks either word', () => {
+    it('lets an over-cap command through unparsed unless its raw text spells a word-bounded `gh pr merge`', () => {
       hold(WAVE_HOLD);
       // The fixture's cwd carries `merge`, so the arm's substring prefilter
       // passes whatever the command says, and the jq program is reached.
       expect(home).toContain('merge');
+      // Prose holding both substrings: the rule the coordinator replaced
+      // would have refused this (landing-order wave 3's amendment).
+      expect(bash(sized('though the branch merged, the high road held; ', ' ', CAP + 1)).deny, 'prose holding `gh` and `merge` as substrings').toBeNull();
       expect(bash(sized('echo merge ', ' ', CAP + 1)).deny, 'no `gh` in it').toBeNull();
-      expect(bash(sized('gh pr view 42 ', ' ', CAP + 1)).deny, 'no `merge` in it').toBeNull();
+      expect(bash(sized('gh pr view 42; echo merge ', ' ', CAP + 1)).deny, 'gh and merge, but not `gh pr merge`').toBeNull();
+      expect(bash(sized('echo xgh pr merge 42 ', ' ', CAP + 1)).deny, 'a `gh` that is the tail of another word').toBeNull();
+      expect(bash(sized('echo gh pr merged it ', ' ', CAP + 1)).deny, 'a `merge` that is the head of another word').toBeNull();
     });
 
     it('refuses only where the deny applies: a session with no wave hold and no marker is never asked', () => {
@@ -588,13 +607,39 @@ and insert, directly below it (above `GH_MERGE_RE=`):
 # parsed: neither the strip nor GH_MERGE_RE reads it. The strip's cost grows
 # with the quoted spans and substitutions it reads, and a hook that times out
 # or a jq killed for memory fails this deny OPEN (above), so an unbounded
-# command was a way past it. Over the cap the program asks the RAW command two
-# fixed-string questions, each one scan with no regex: does it contain `gh`,
-# and does it contain `merge`? Both: the arm reads it as a merge it could not
+# command was a way past it. Over the cap the program asks the RAW command one
+# question, with a fixed-string segment rule (`ocwords`): split the command on
+# each of `;` `&` `|` and the newline, the separators between COMMANDS, and in
+# any one segment find `gh` (not preceded by a letter, digit or `_`), then `pr`
+# as a word, then `merge` as a word that a blank, the end of the segment, a
+# backtick, `(`, `)`, `<` or `>` ends, each searched for after the one before
+# (one leftmost match each, so linear). The redirections and parentheses do
+# not split: a gh flag's value may hold them (`gh -R $(echo o/r) pr merge`,
+# `gh -R o/r<x pr merge`), and a merge is still a merge there.
+# gh's own flags may stand between the words (`gh -R o/r pr merge`, `gh pr -R
+# o/r merge`), which main's full parse refuses (landing-order wave 3's fix
+# round, review 267 F3). Yes: the arm reads it as a merge it could not
 # parse, and a held or child session is DENIED with a reason that names the
-# length and the cap and tells it to split the command (a long PR body or mail
-# goes in a file the Write tool writes, passed by path); a landing is the
-# operator's, from their own shell. Either one missing: it passes unparsed.
+# length and the cap and tells it to split the command or rephrase it (a long
+# PR body or mail goes in a file the Write tool writes, passed by path); a
+# landing is the operator's, from their own shell. No: it passes unparsed.
+# The split is `split` on a FIXED string, never `splits`: `splits` is a
+# regex-global walk, measured superlinear on jq 1.7 (43-52 s at 100 KB of
+# `;`, 14 s at 100 KB of `gh;`), and a hook that times out fails this deny
+# OPEN. A `contains("gh") and contains("merge")` prefilter, whole and per
+# segment, keeps the word tests off nearly every segment. Measured through
+# the whole hook at 100 KB, on jq 1.7 and 1.8.2: 90 to 320 ms on `;`, `gh;`,
+# `gh pr merged;`, newlines and `gh merge `; the costliest measured, `gh
+# merge;` and `merge gh pr;` repeated (many segments that pass the prefilter),
+# reached 343 to 384 ms at load ~15. That is about 20% of the sync-advisory
+# 1500 ms bound idle (~250 to 380 ms at 100 KB, measured), not the parse's
+# quarter above; a review measured ~600 ms (~40%) once. The cost is linear in
+# the length, so the bound is crossed at ~450 to 500 KB at the idle slope. The
+# word rule, not two bare substrings, because `gh` is inside "though" and
+# "high" and `merge` inside "merged": the two substrings matched 1,340 of
+# 4,478 over-cap fleet commands in one two-day window, mostly prose. The
+# in-order search slices by `match` offsets, which jq 1.7 and 1.8 count in
+# codepoints (measured correct after é and an emoji); jq 1.6 is unverified.
 # Only where the deny already applies: a session with no wave hold and no
 # child marker is never refused, under the cap or over it. THE VALUE IS
 # MEASURED: the largest round size at which the worst quote-dense shape
@@ -602,13 +647,43 @@ and insert, directly below it (above `GH_MERGE_RE=`):
 # 1500 ms whole-hook bound. That shape is a run of quoted substitutions that
 # each hold a quote or a `<` (`"$(<)"` repeated), one nested strip per span:
 # ~350 ms of CPU at 2048 bytes and ~650 ms at 4096 (bare `"`: ~125 and
-# ~190 ms), measured on the fleet box at load ~18. The over-cap scan's own
-# worst case at 100 KB is about 40% of that bound, not a quarter: ~600 ms.
-# THE COST, said: a held session's long command that merely holds both words
-# (a PR body, a mail, a heredoc that says "github" and "merge") is refused
-# until it is split. The cap also BOUNDS every superlinear walk above: the
-# strip and GH_MERGE_RE never read more than MERGE_PARSE_CAP bytes, so the
-# 36-200 KB timings above are what the cap prevents, not what a command costs.
+# ~190 ms), measured on the fleet box at load ~18.
+# THE COST, said: a held session's long command whose raw text reads as a
+# `gh pr merge` — a PR body or a mail that QUOTES it — is refused until it is
+# split or rephrased. The coordinator accepted it: of 3,537 over-cap fleet
+# commands in another two-day window, the segment rule refuses at most 12
+# more than a word-bounded three-word match would (that count measured the
+# three word tests unordered; the in-order search is stricter). The backtick
+# is a STRICTER OVER-CAP READING, NOT A CLOSURE: a bare `` `gh pr merge` `` is
+# refused over the cap because the end class holds a backtick, while legacy
+# backticks still pass under the cap (listed above). WHAT PASSES OVER THE
+# CAP, said, each measured through this hook, held, padded past the cap:
+# `bash -c "gh pr merge"` and `eval "gh pr merge"` (the closing quote is not
+# in the end class; `bash -c "gh pr merge 42"` is refused), `gh pr \<newline>
+# merge` (a continuation), quoting inside a word (`g"h" pr merge`, `gh p""r
+# merge`), a variable (`x=gh; $x pr merge`), an alias, a separator inside a
+# quoted flag value or inside a substitution that holds `;` `&` `|` or a
+# newline (`gh pr -R "a;b" merge 42`), and a NUL next to a word (`gh pr
+# merge\0 42`, which passes over the cap and is denied under it; bash strips
+# NUL from command text and Node refuses it in spawn arguments).
+# `gh<newline>pr<newline>merge` passes too, rightly: bash reads three
+# commands. Two classes pass under the cap too, so they are not regressions
+# of it: a redirection glued between the command words (`gh pr>x merge 42`,
+# `gh>x pr merge 42`; GH_MERGE_RE needs a blank before `pr` and `merge`), and
+# a backslash-newline straight after `merge` (`gh pr merge\<newline> 42`).
+# Classified, not closed (the stopping line, ruled 2026-10-03).
+# The cap also BOUNDS every superlinear walk above: the strip and GH_MERGE_RE
+# never read more than MERGE_PARSE_CAP bytes, so the 36-200 KB timings above
+# are what the cap prevents, not what a command costs.
+# The cap needs jq 1.6 or later (utf8bytelength): on an older jq the whole
+# program fails to compile, and the deny fails OPEN at every length, as with
+# no Oniguruma (above).
+# The deny's jq floor is 1.6, and it is tested on jq 1.7 and 1.8. jq 1.8 binds
+# `E as $x` to the whole binary chain left of it where 1.7 binds the nearest
+# term, so every `as` in these programs that follows a binary operator is
+# parenthesised on its own, and the merge-deny suite pins that structurally;
+# before that, a jq 1.8 box failed this deny open on every command holding a
+# heredoc.
 MERGE_PARSE_CAP=2048
 ```
 
@@ -625,15 +700,24 @@ if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" en
 with
 
 ```bash
+def ocsegs: reduce (";", "&", "|", "\n") as $s ([.]; map(split($s)) | add);
+def ocafter($re): . as $s | [match($re)] | if length == 0 then empty else $s[.[0].offset + .[0].length:] end;
+def ocmerge: ocafter("(^|[^A-Za-z0-9_])gh(?=\\s)") | ocafter("\\spr(?=\\s|$)") | ocafter("\\smerge($|[\\s`()<>])");
+def ocwords: contains("gh") and contains("merge")
+  and any(ocsegs[] | select(contains("gh") and contains("merge")) | ocmerge; true);
 def capped(f): (.tool_input.command // "") as $c
   | if ($c | type) == "string" and ($c | utf8bytelength) > $cap
-    then (if ($c | contains("gh")) and ($c | contains("merge")) then "!\($c | utf8bytelength)" else "" end)
+    then (if ($c | ocwords) then "!\($c | utf8bytelength)" else "" end)
     else "=" + f end;
 capped(if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end)'
 ```
 
-jq binds a function's filter argument as a closure, so `f` (the strip) runs only on the `else` branch. `contains` on
-strings is a substring scan, no regex. A command that is not a string keeps the old behaviour: `utf8bytelength` is
+jq binds a function's filter argument as a closure, so `f` (the strip) runs only on the `else` branch. The over-cap
+answer is `ocwords`, the segment rule alone, with no regex constant: a `contains` prefilter (a substring scan), a
+FIXED-STRING `split` on `;` `&` `|` and the newline (`ocsegs`; never `splits`, which is regex-global and superlinear on
+jq 1.7), and in each surviving segment three word searches in order (`ocmerge`), each after the one before, one
+leftmost `match` each, so linear. `ocsegs[]` must stream: iterating the array itself errors in jq, and a jq runtime
+error fails the deny open. A command that is not a string keeps the old behaviour: `utf8bytelength` is
 never asked, `f` errors as `qs` did, the hook reads nothing and passes.
 
 - [ ] **Step 5: The arm reads the tag**
@@ -667,13 +751,13 @@ Then find the reason block (≈3562–3564):
       mreason+=" Report wave-done to your coordinator; it lands the PR."
 ```
 
-with — the over-cap reason names the length, the cap, both words and the way out; the original reason is kept for a
+with — the over-cap reason names the length, the cap, that the text reads as a `gh … pr … merge` command, and the way out; the original reason is kept for a
 parsed merge, and the existing `pre_json=…` line now follows a guard of its own:
 
 ```bash
     if [[ -n "$mwhy" && -n "$mover" ]]; then
-      mreason="ccrc: this command is $mover bytes, over the merge deny's $MERGE_PARSE_CAP-byte parse cap, and it holds the strings \`gh\` and \`merge\`, so the deny cannot read it for a \`gh pr merge\`; $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
-      mreason+=" Split it into commands of at most $MERGE_PARSE_CAP bytes: write a long PR body or mail to a file with the Write tool and pass the path (\`gh pr create --body-file <file>\`, \`ccrc-api ... --json <file>\`). A landing is the operator's, from their own shell."
+      mreason="ccrc: this command is $mover bytes, over the merge deny's $MERGE_PARSE_CAP-byte parse cap, and its raw text reads as a \`gh … pr … merge\` command, so the deny cannot read whether it runs one; $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
+      mreason+=" Split it into commands of at most $MERGE_PARSE_CAP bytes, or rephrase it so its text does not read as a \`gh … pr … merge\` command (a mail or PR body that quotes it): write a long body to a file with the Write tool and pass the path (\`gh pr create --body-file <file>\`, \`ccrc-api ... --json <file>\`). A landing is the operator's, from their own shell."
     elif [[ -n "$mwhy" ]]; then
       mreason="ccrc: $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
       mreason+=" Report wave-done to your coordinator; it lands the PR."
@@ -1681,9 +1765,24 @@ In `docs/superpowers/plans/2026-09-24-landing-order-wave2-native-queue.md`, find
 
 with
 
-```markdown
-**Two CODE preconditions, carried here from the deny's review (review 247 F6) and LANDED by landing-order wave 3 (`docs/superpowers/plans/2026-10-04-landing-order-wave3-task7-preconditions.md`). Both must be in a build both boxes run before the operator arms the queue ruleset or sets approvals to 0, and this step stops until they are:** (a) THE PAYLOAD CAP, `MERGE_PARSE_CAP` (2048 bytes) in `ccd/session-hook.sh`: a command longer than the cap is never parsed, and one that holds both `gh` and `merge` is refused unread in a held or child session, so quote-dense input can no longer exhaust the hook's time or memory and fail the deny open (bare `"` once took 1584 ms at 36 KB and 6885 ms, 0.56 GB, at 100 KB); the cost is that such a session's long command that merely holds both words is refused until it is split; (b) THE QUOTE-DENSE TIMING PIN, `session-hook-sync-advisory.test.ts`'s five quote-dense shapes at exactly the cap, each inside its 1500 ms whole-hook bound (a cap raised to 16384 reds two of them), with `session-hook-merge-deny.test.ts`'s bounded-time case carrying a terminated heredoc and the fail-closed case that keeps row H40 live (review 249 F1). Read both on the fleet box, read-only: `grep -c '^MERGE_PARSE_CAP=' "$HOME/.cc-sessions/session-hook.sh"` answers `1`, and `ccrc doctor 2>&1 | grep '^PASS jq_regex:'` prints one line (wave 3's check: the deny's regex engine is there, so the deny is not failing open for want of it). Even with both landed the deny is a contract the fleet honours, not what stands between a worker and a merge. It also still passes every class the header above `GH_MERGE_RE` in `ccd/session-hook.sh` lists under WHAT PASSES UNPARSED (quoting inside the `pr` or `merge` word, a leading redirection, a `case` arm or function body, a variable command word or argument, a gh alias, a named wrapper spelled with a path, a ` #` or `(#` inside an unquoted `${…}`, a form feed or vertical tab before `#`, a top-level "…" span holding `$${`, and the strip's own mis-reads): read that list before arming, and close what the operator will not accept first.
+````markdown
+**Two CODE preconditions, carried here from the deny's review (review 247 F6) and LANDED by landing-order wave 3 (`docs/superpowers/plans/2026-10-04-landing-order-wave3-task7-preconditions.md`). Both must be in a build both boxes run before the operator arms the queue ruleset or sets approvals to 0, and this step stops until they are:** (a) THE PAYLOAD CAP, `MERGE_PARSE_CAP` (2048 bytes) in `ccd/session-hook.sh`: a command longer than the cap is never parsed, and one whose raw text the over-cap segment rule reads as a `gh pr merge` (a fixed-string split on `;` `&` `|` and the newline, a `contains` prefilter, then `gh`, `pr` and `merge` as words in that order in one segment, so gh's own flags between the words are refused too: `overcap-segment-rule`) is refused unread in a held or child session, so quote-dense input can no longer exhaust the hook's time or memory and fail the deny open (bare `"` once took 1584 ms at 36 KB and 6885 ms, 0.56 GB, at 100 KB); the cost is that such a session's long command that merely quotes `gh pr merge` (a PR body, a mail) is refused until it is split or rephrased; (b) THE QUOTE-DENSE TIMING PIN, `session-hook-sync-advisory.test.ts`'s five quote-dense shapes at exactly the cap, each inside its 1500 ms whole-hook bound (a cap raised to 16384 reds two of them), with `session-hook-merge-deny.test.ts`'s bounded-time case carrying a terminated heredoc and the fail-closed case that keeps row H40 live (review 249 F1). Read both on the fleet box, read-only: `grep -c '^MERGE_PARSE_CAP=2048$' "$HOME/.cc-sessions/session-hook.sh"` answers `1`, and `ccrc doctor 2>&1 | grep '^PASS jq_regex:'` prints one line, which proves only that jq's regex engine (Oniguruma, lookbehind) is there, not that the deny works. The deny's jq floor is 1.6 (`utf8bytelength`), and on jq 1.8 the heredoc arm bound `as` to the whole `and` chain, so the deny failed open on every heredoc command until landing-order wave 3's fix round (`jq18-binds-as-to-the-chain`); it is tested on jq 1.7 and 1.8. THE CANARY below is the read that proves the deny works on the box's jq: run it on the fleet box after its update, read-only; it must print `deny`. Even with both landed the deny is a contract the fleet honours, not what stands between a worker and a merge. It also still passes every class the header above `GH_MERGE_RE` in `ccd/session-hook.sh` lists under WHAT PASSES UNPARSED (quoting inside the `pr` or `merge` word, a leading redirection, a `case` arm or function body, a variable command word or argument, a gh alias, a named wrapper spelled with a path, a ` #` or `(#` inside an unquoted `${…}`, a form feed or vertical tab before `#`, a top-level "…" span holding `$${`, and the strip's own mis-reads): read that list before arming, and close what the operator will not accept first.
+
+THE CANARY (read-only: it runs the installed hook on a heredoc command followed by `gh pr merge 42`, in a throwaway fixture HOME that holds a wave hold, with a stub `tmux` first on `PATH`, so it writes nothing under the real HOME and never reaches the real registry or `tmux`; it prints `deny` where the deny works on the box's jq and `FAILS OPEN` where it does not):
+
+```bash
+hook="$HOME/.cc-sessions/session-hook.sh"   # captured before HOME changes; only READ, never run as the real HOME
+d=$(mktemp -d -t mergecanary.XXXXXX); id=demo-quiet-basin; gen=0189abcd-1234-5678-9abc-0123456789ab
+mkdir -p "$d/.cc-sessions" "$d/bin"; printf '%s' "$gen" > "$d/.cc-sessions/$id.generation"
+printf '%s' 'program:landing-order wave:2/5 run:17' > "$d/.cc-sessions/$id.hold"
+printf '#!/bin/sh\necho "cc-%s"\n' "$id" > "$d/bin/tmux"; chmod +x "$d/bin/tmux"
+out=$(jq -cn --arg d "$d" '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:"cat <<EOF\nhi\nEOF\ngh pr merge 42"},cwd:$d}' \
+  | HOME="$d" PATH="$d/bin:$PATH" TMUX_PANE=%1 CLAUDE_CODE_SESSION_ID=uuid-1 CLAUDE_PID=4242 \
+    CCRC_SESSION_GENERATION="$gen" bash "$hook" 2>/dev/null)
+case $out in *'"permissionDecision":"deny"'*) echo deny ;; *) echo FAILS OPEN ;; esac
+rm -rf "$d"
 ```
+````
 
 - [ ] **Step 2: Check and commit**
 
@@ -1704,8 +1803,8 @@ Expected: `1` (the paragraph is one line; it names the constant for the cap and 
 and `55 passed`; the guard loop `272`, `7`, `23`, `11`, `12`, `79`, `14`, `31`.
 
 The paragraph does three things beyond naming the cap and the pin, each a departure from the brief's "name them as
-landed" and listed for the coordinator to rule on: it adds two read-only reads to the arming gate
-(the `jq_regex` read makes the doctor check a de facto third precondition), it brings the
+landed" and listed for the coordinator to rule on: it adds three read-only reads to the arming gate
+(the constant, the `jq_regex` read, which makes the doctor check a de facto third precondition, and THE CANARY, a fenced block that proves the deny on the box's jq), it brings the
 WHAT PASSES UNPARSED parenthetical level with the hook header's list (vertical tab, `$${`), which review 249 called "a
 small omission, not a finding", and it says what the cap costs; all three are `runbook-says-more-than-landed`. Cutting the
 paragraph back to the naming alone is a text edit, and changes no count above.
@@ -1797,12 +1896,12 @@ git push -u origin "$(git rev-parse --abbrev-ref HEAD)"
 gh pr create --base main --title "Landing order wave 3: the merge deny's payload cap and quote-dense pin (Task 7's preconditions), and wave 2's residue" --body-file - <<'EOF'
 Wave 3 of the landing-order programme: the two CODE preconditions the wave-2 plan's Task 7 Step 1 names, and wave 2's residue. Plan: `docs/superpowers/plans/2026-10-04-landing-order-wave3-task7-preconditions.md`. Changes NO repository setting; nothing here changes how a PR lands.
 
-1. **The payload cap** (`ccd/session-hook.sh`) — the merge deny parses no command longer than `MERGE_PARSE_CAP` = 2048 bytes. Over the cap its jq program never runs the quote strip; it applies one fixed-string segment rule to the raw command (no regex constant): split on `;` `&` `|` and the newline, prefilter on `gh` and `merge`, then find a word-bounded `gh`, then `pr`, then `merge` in order in one segment. A held or child session's command that matches is refused unread, the reason naming the length and the cap and telling the session to split or rephrase. gh's own flags between the words (`gh -R o/r pr merge`, `gh pr --repo=$(…) merge`) are refused too, as the full parse refuses them. No input can time the hook out into a fail-open any more (100 KB of every adversarial shape measured under 320 ms). Costs: such a session's long command that quotes `gh pr merge` (a PR body, a mail) is refused and must be split or rephrased; and the remaining listed passes over the cap are `bash -c "gh pr merge"`, a continuation, quoting inside a word, a variable, an alias, a separator inside a quoted flag value or a substitution (`gh pr -R "a;b" merge`), and a NUL beside a word, classified in the hook's header.
+1. **The payload cap** (`ccd/session-hook.sh`) — the merge deny parses no command longer than `MERGE_PARSE_CAP` = 2048 bytes. Over the cap its jq program never runs the quote strip; it applies one fixed-string segment rule to the raw command (no regex constant): split on `;` `&` `|` and the newline, prefilter on `gh` and `merge`, then find a word-bounded `gh`, then `pr`, then `merge` in order in one segment. A held or child session's command that matches is refused unread, the reason naming the length and the cap and telling the session to split or rephrase. gh's own flags between the words (`gh -R o/r pr merge`, `gh pr --repo=$(…) merge`) are refused too, as the full parse refuses them. No input can time the hook out into a fail-open any more (100 KB of every adversarial shape measured 90 to 384 ms through the whole hook, about 20 % of the 1500 ms bound idle). Costs: such a session's long command that quotes `gh pr merge` (a PR body, a mail) is refused and must be split or rephrased; and the remaining listed passes over the cap are `bash -c "gh pr merge"`, a continuation, quoting inside a word, a variable, an alias, a separator inside a quoted flag value or a substitution (`gh pr -R "a;b" merge`), and a NUL beside a word, classified in the hook's header.
 2. **The quote-dense timing pin** — `session-hook-sync-advisory` times five quote-dense shapes at exactly the cap against its 1500 ms bound, and the same five at 36 KB, where the clock times the landing advisory's own regex; `session-hook-merge-deny`'s heredoc case carries review 249 F1's terminator, and H40 is a live row again.
 3. **Residue** — review 249 F2 (every merge-word terminator), F3 (the four-answers count), F4 (the wave-2 plan's counts); review 241's doctor `jq_regex` check (FAIL on a jq without lookaround; Plan 3a's `BASE_LIVE_SHAPE` golden re-measured for it) and a closed-unmerged PR reading `none`.
 4. **Task 7's runbook** names (1) and (2) as landed.
 
-Deploy: AGENT-FIRST through ccrc's updater — the fleet node first, from the console; nobody moves boxes by hand. Read after: `grep -c '^MERGE_PARSE_CAP=2048$' ~/.cc-sessions/session-hook.sh` → 1 and `ccrc doctor | grep '^PASS jq_regex:'` on the fleet box.
+Deploy: AGENT-FIRST through ccrc's updater — the fleet node first, from the console; nobody moves boxes by hand. Read after, on the fleet box: `grep -c '^MERGE_PARSE_CAP=2048$' ~/.cc-sessions/session-hook.sh` → 1, `ccrc doctor | grep '^PASS jq_regex:'` (which proves only the regex engine), and the canary in the wave-2 plan's Task 7 Step 1, which must print `deny`.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
@@ -1825,7 +1924,28 @@ STOPS at the PR: report wave-done to the coordinator with the measured fingerpri
   refuses in a held or child session, and it only ever skips the strip elsewhere.
 - **Read-only proofs on the fleet box, after its update:** `grep -c '^MERGE_PARSE_CAP=2048$'
   "$HOME/.cc-sessions/session-hook.sh"` → `1`; `ccrc doctor 2>&1 | grep -E '^(PASS|FAIL|SKIP) jq_regex:'` → one
-  `PASS` line; `grep -c "if line.get('phase') == 'closed':" "$HOME/.local/bin/ccd"` → `1`.
+  `PASS` line, which proves only that jq's regex engine (Oniguruma, lookbehind) is there, not that the deny works;
+  `grep -c "if line.get('phase') == 'closed':" "$HOME/.local/bin/ccd"` → `1`; and THE CANARY, the read that proves
+  the deny works on that box's jq (it must print `deny`; the block is the one in the wave-2 plan's Task 7 Step 1, and
+  runs the installed hook read-only in a throwaway fixture HOME with a stub `tmux`):
+
+  ```bash
+  hook="$HOME/.cc-sessions/session-hook.sh"   # captured before HOME changes; only READ, never run as the real HOME
+  d=$(mktemp -d -t mergecanary.XXXXXX); id=demo-quiet-basin; gen=0189abcd-1234-5678-9abc-0123456789ab
+  mkdir -p "$d/.cc-sessions" "$d/bin"; printf '%s' "$gen" > "$d/.cc-sessions/$id.generation"
+  printf '%s' 'program:landing-order wave:2/5 run:17' > "$d/.cc-sessions/$id.hold"
+  printf '#!/bin/sh\necho "cc-%s"\n' "$id" > "$d/bin/tmux"; chmod +x "$d/bin/tmux"
+  out=$(jq -cn --arg d "$d" '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:"cat <<EOF\nhi\nEOF\ngh pr merge 42"},cwd:$d}' \
+    | HOME="$d" PATH="$d/bin:$PATH" TMUX_PANE=%1 CLAUDE_CODE_SESSION_ID=uuid-1 CLAUDE_PID=4242 \
+      CCRC_SESSION_GENERATION="$gen" bash "$hook" 2>/dev/null)
+  case $out in *'"permissionDecision":"deny"'*) echo deny ;; *) echo FAILS OPEN ;; esac
+  rm -rf "$d"
+  ```
+
+- **The jq floor.** The deny needs jq 1.6 or later (`utf8bytelength`), and on jq 1.8 the heredoc arm bound `as` to the
+  whole `and` chain, so the deny failed open on every heredoc command until this wave's fix round
+  (`jq18-binds-as-to-the-chain`); it is tested on jq 1.7 and 1.8. A box whose jq cannot match a lookbehind fails the
+  doctor's `jq_regex`; a box whose jq mis-reads the program fails only the canary.
 - **Then Task 7** (the operator's): its Step 1 now reads the two preconditions as landed and adds the two reads above.
 
 ---
@@ -1863,10 +1983,10 @@ Departures from the spec, the brief or the merged wave-2 plan. Numbered from run
 - **D-3911 — `jq-regex-skips-and-moves-the-golden`.** doctor's check SKIPs (never PASSes) on a server-role box and with no jq on PATH, presence staying the `jq` check's FAIL; and, since a new doctor class moves Plan 3a's `BASE_LIVE_SHAPE` in `ccrc-install.test.ts`, a file the brief did not name, Task 3 Step 7 re-measures that golden by its own procedure and pastes three lines.
 - **D-3912 — `preconditions-wave-before-land-probe`.** the ledger's wave-3 row carries stage 3's `ccd-land-probe`; this wave is the small preconditions-and-residue wave the Next-wave brief allows, and stage 3 is planned after it. The Next-wave brief also listed review 241's `--squash`-span carry in wave 3's first commit; the coordinator's task list for this plan does not, so it stays carried (Open question 3).
 - **D-3913 — `advisory-quote-runs-pinned-at-36kb`.** the brief made an advisory CAP conditional on a superlinear parse; the advisory measured linear and gets no cap, but this wave adds a 36 KB quote-dense pin (row Q2) so that measurement is a mechanism, not a comment.
-- **D-3914 — `runbook-says-more-than-landed`.** Task 4's paragraph does more than name the cap and the pin as landed: it adds two read-only reads to the arming gate (the hook's constant, and `PASS jq_regex` from doctor, which makes doctor's check a de facto third precondition), says what the cap costs, and brings its WHAT PASSES UNPARSED list level with the hook header's (a vertical tab before `#`, a top-level "…" span holding `$${`: an omission review 249 ruled "not a finding"). Cutting it back to the naming alone is a text edit. Under the word rule (`overcap-word-bounded-match`) the paragraph states that rule and its two costs, a quoted mention refused and gh's flags passing over the cap.
+- **D-3914 — `runbook-says-more-than-landed`.** Task 4's paragraph does more than name the cap and the pin as landed: it adds read-only reads to the arming gate (the hook's constant, `PASS jq_regex` from doctor, which makes doctor's check a de facto third precondition, and, after fix round 1, the canary below), says what the cap costs, and brings its WHAT PASSES UNPARSED list level with the hook header's (a vertical tab before `#`, a top-level "…" span holding `$${`: an omission review 249 ruled "not a finding"). Cutting it back to the naming alone is a text edit. After fix round 1 (review 267 F5) it also carries THE CANARY, a read-only block that runs the installed hook on a heredoc command followed by `gh pr merge 42` in a fixture HOME and prints `deny` or `FAILS OPEN` (verified: deny on this branch's hook under jq 1.7 and 1.8.2, FAILS OPEN on the pre-fix hook under jq 1.8.2, deny on it under jq 1.7), names the deny's jq floor and the jq 1.8 break (`jq18-binds-as-to-the-chain`), and says `PASS jq_regex` proves only the regex engine. It states the shipped rule (`overcap-segment-rule`) and its one cost, a quoted mention refused; gh's own flags between the words are refused over the cap, and the paragraph says no more than that.
 - **D-3915 — `overcap-word-bounded-match`.** Shipped history: the word-bounded raw regex, superseded by `overcap-segment-rule` (the segment rule) in fix round 1; this is what it said. The coordinator's amendment to Task 1, which wins over this plan's text: over the cap the deny does NOT ask the two fixed substrings `gh` and `merge`; it matches a word-bounded `gh pr merge` against the RAW command, with one linear regex and no nested quantifier, `MERGE_OVERCAP_RE='(^|[^A-Za-z0-9_])gh\s+pr\s+merge($|[[:space:];&|()<>])'`, passed to the jq program with `--arg`. Why: of 4,478 fleet Bash commands longer than 2 KB over two days, the two substrings matched 1,340, mostly prose ("through", "high", "merged"), so a worker's long wave-done mail would be refused; the word rule matched 131. Three choices inside it: the START is any ASCII non-word character (a literal word boundary), wider than the amendment's example `(^|[;&|(\s])`, so a markdown-quoted mention, a path-spelled `gh` and a backtick substitution with arguments are refused too (a bare `` `gh pr merge` `` passes over the cap, as legacy backticks pass under it); the END is `GH_MERGE_RE`'s end class with its alternation reordered, the same set, so row R1's anchor on `GH_MERGE_RE`'s tail stays unique; and gh's own flags between the words (`gh -R o/r pr merge`) pass over the cap where `main`'s full parse refuses them, because catching them needs the nested quantifier the amendment excludes — classified in the hook's header, not closed (the stopping line). Tests: an over-cap `gh pr merge 42` is denied; over-cap prose holding "though … merged … high" passes; an over-cap body QUOTING `gh pr merge` is denied (the accepted cost) and the refusal says to split or rephrase. Rows: P2 (the over-cap match removed) and P7 (the two-substring rule restored: the prose case reds) replace the plan's P2/P7/P8, with P8 and P11 for the start and end boundary. The cap value, 2048, and the 25 % timing argument stand. Where this plan's Goal, Architecture, Review Focus 3, Pre-flight 3, Task 4's paragraph and Task 5's PR body say "two fixed-string questions" or "holds both `gh` and `merge`", this entry supersedes them; Task 4's paragraph and the PR body are written to it.
 - **D-3916 — `jq18-binds-as-to-the-chain`.** Review 267 F1 (pre-existing since wave 2): jq 1.8 binds `E as $x` to the whole binary chain left of it, so the heredoc arm's `… and ((.w // .w2) + ")") as $wp | …` bound `$wp` to a boolean, `startswith` errored, and the deny failed OPEN on every heredoc under jq 1.8 (merge-deny 22 failed of 82 under jq 1.8.2). One pair of parentheses scopes the binding to the `and`'s right operand, as jq 1.7 read it. A structural case scans every jq program in the hook and refuses an `as` that follows a binary operator at depth 0 (row B1 reds it under jq 1.7, and B1 reds the heredoc cases too under jq 1.8.2). The hook header states the jq floor (1.6) and that the deny is tested on jq 1.7 and 1.8. Measured: before the fix merge-deny read 22 failed | 60 passed (82) under jq 1.8.2, and the new pin 1 failed under jq 1.7; after it, merge-deny is 85 passed (85) under both jq 1.7 and jq 1.8.2 (82 plus three cases: the checker's self-check, the extractor's, and the hook scan over 53 jq programs and 31 `as $` bindings) and sync-advisory 78 passed (78) under both; B1 reds 1 of 85 under jq 1.7 and 23 of 85 under jq 1.8.2 (the pin and the 22 heredoc cases); B2 reds the self-check; row H58's anchor moved with the new parenthesis and was adapted in the merged wave-2 plan; the same checker finds 0 in `ccd/ccd`, `ccd/ccrc-doctor-checks` and `ccd/ccrc`.
-- **D-3917 — `overcap-segment-rule`.** Review 267 F3 (with F4's cases) and the task review's I1, ruled by the coordinator: over the cap the deny's first cut, one regex over three adjacent words, let four shapes pass that `main`'s full parse refuses, a regression against `main`: `gh -R o/r pr merge 42`, `gh --repo o/r pr merge 42`, `gh --repo=o/r pr merge 42` and `gh pr -R o/r merge 42`. The closure AS SHIPPED is the segment rule ALONE, and the regex (the hook's `MERGE_OVERCAP_RE`, its `--arg` and its `test`) is RETIRED: the raw command is split with FIXED-STRING `split` on the four command separators `;` `&` `|` and the newline only (the redirections and parentheses do not split, because a flag's value may hold them: `gh -R $(echo o/r) pr merge`, `gh -R o/r<x pr merge`); a `contains("gh") and contains("merge")` prefilter runs on the whole command and on each segment; and in a surviving segment three word searches run IN ORDER, each after the one before (one leftmost match each, so linear): `gh` with a word-bounded start `(^|[^A-Za-z0-9_])`, then `\spr(\s|$)`, then `\smerge($|[\s`()<>])`, so `echo merge gh pr view 42` and `gh pr view 3 (merge)` are not merges. Never `splits(`: it is regex-global and measured superlinear on jq 1.7 (43 to 52 s at 100 KB of `;`, 14 s at 100 KB of `gh;`), so a hook that timed out would fail the deny open; a structural case scans every jq program in the hook for it (row SP). Measured through the whole hook at 100 KB, held, on jq 1.7 and 1.8.2: 90 to 320 ms on `;`, `gh;`, `gh pr merged;`, newlines, `gh merge ` and, the worst, `gh merge;` repeated (linear; about 300 ms per 100 KB on an idle box and ~600 ms on a loaded one, so the scan's worst case at 100 KB is about 40% of the 1500 ms bound, not the parse's 25%; the six shapes are pins under the bound). The accepted false-deny cost: of 3,537 over-cap fleet commands in one two-day window (the 4,478 above is another), the rule refuses at most 12 more than a word-bounded three-word match would, that count having measured the three tests unordered. A bare `` `gh pr merge` `` is refused over the cap because the end class holds a backtick, a stricter over-cap reading and not a closure (legacy backticks still pass under the cap and stay listed); `gh<newline>pr<newline>merge` passes, as bash reads three commands. WHAT PASSES OVER THE CAP is re-listed, each spelling measured through the real hook, held: `bash -c "gh pr merge"`, `eval "gh pr merge"`, a backslash-newline continuation, quoting inside a word, a variable, an alias, a separator inside a quoted flag value or a substitution holding `;` `&` `|` or a newline (`gh pr -R "a;b" merge 42`, pinned as a LISTED pass), and a NUL beside a word (denied under the cap). The in-order search slices by `match` offsets, codepoints on jq 1.7 and 1.8 (measured after é and an emoji; jq 1.6 unverified). The over-cap reason says the text reads as a `gh … pr … merge` command. A jq runtime error in the program fails the deny open (a first draft iterated an array wrongly and passed every over-cap command; the suite caught it), which is why each shape has its own over-cap case. Retired with the regex: rows X1 and X2 and every compound row; the retired start and end boundary rows P8 and P11 are re-pointed at the rule's own boundaries. Rows (`mut-fr1-c2.json`, each ONE mutation, measured red under jq 1.7 of 120 cases): S0 (the rule removed) 27 failed; S1 (`";", ` dropped from the split list) 3 failed, `gh pr merge;echo ok`, the `gh pr view 42; echo merge` control and the quoted-`;` listed pass; S2 (`\s` → a literal space in the word tests) 1, the TAB case; S3 (the start boundary dropped) 2, `xgh` and `sigh pr merge it`; S4 (`(` dropped from the end class) 1, `merge(x)`; S5 (`<`) 1, `merge<in`; S6 (`>`) 1, `merge>out`; S7 (`)`) 3, `x=$(gh pr merge)`, a bare `gh pr merge)` and `(gh pr merge)`; S8 (`&` not a separator) 1, `merge&&echo ok`; S9 (`|`) 1, `merge|cat`; S10 (newline) 1, the `gh<newline>pr<newline>merge` control; SP (`map(split($s))` → `map([splits($s)])`) 31 failed, 1 alone (the structural case); XC (the extractor's backslash-skip removed) 2; XE (an `as $` the extractor cannot reach) 1, the equality case alone. Merge-deny reads 120 passed (120) under jq 1.7 and under jq 1.8.2, sync-advisory 78 passed (78) under both; the hook scan covers 52 jq programs and 33 `as $` bindings. The `overcap-word-bounded-match` entry's line stays as history, and this entry supersedes it where they differ.
+- **D-3917 — `overcap-segment-rule`.** Review 267 F3 (with F4's cases) and the task review's I1, ruled by the coordinator: over the cap the deny's first cut, one regex over three adjacent words, let four shapes pass that `main`'s full parse refuses, a regression against `main`: `gh -R o/r pr merge 42`, `gh --repo o/r pr merge 42`, `gh --repo=o/r pr merge 42` and `gh pr -R o/r merge 42`. The closure AS SHIPPED is the segment rule ALONE, and the regex (the hook's `MERGE_OVERCAP_RE`, its `--arg` and its `test`) is RETIRED: the raw command is split with FIXED-STRING `split` on the four command separators `;` `&` `|` and the newline only (the redirections and parentheses do not split, because a flag's value may hold them: `gh -R $(echo o/r) pr merge`, `gh -R o/r<x pr merge`); a `contains("gh") and contains("merge")` prefilter runs on the whole command and on each segment; and in a surviving segment three word searches run IN ORDER, each after the one before (one leftmost match each, so linear): `gh` with a word-bounded start `(^|[^A-Za-z0-9_])`, then `\spr(\s|$)`, then `\smerge($|[\s`()<>])`, so `echo merge gh pr view 42` and `gh pr view 3 (merge)` are not merges. Never `splits(`: it is regex-global and measured superlinear on jq 1.7 (43 to 52 s at 100 KB of `;`, 14 s at 100 KB of `gh;`), so a hook that timed out would fail the deny open; a structural case scans every jq program in the hook for it (row SP). Measured through the whole hook at 100 KB, held, on jq 1.7 and 1.8.2: 90 to 320 ms on `;`, `gh;`, `gh pr merged;`, newlines and `gh merge `; the costliest measured, `gh merge;` and `merge gh pr;` repeated, reached 343 to 384 ms at load ~15 (linear: about 20% of the 1500 ms bound idle, ~250 to 380 ms at 100 KB, not the parse's 25%; a review measured ~600 ms, ~40%, once; the bound is crossed at ~450 to 500 KB at the idle slope; the six shapes are pins under the bound). The accepted false-deny cost: of 3,537 over-cap fleet commands in one two-day window (the 4,478 above is another), the rule refuses at most 12 more than a word-bounded three-word match would, that count having measured the three tests unordered. A bare `` `gh pr merge` `` is refused over the cap because the end class holds a backtick, a stricter over-cap reading and not a closure (legacy backticks still pass under the cap and stay listed); `gh<newline>pr<newline>merge` passes, as bash reads three commands. WHAT PASSES OVER THE CAP is re-listed, each spelling measured through the real hook, held: `bash -c "gh pr merge"`, `eval "gh pr merge"`, a backslash-newline continuation, quoting inside a word, a variable, an alias, a separator inside a quoted flag value or a substitution holding `;` `&` `|` or a newline (`gh pr -R "a;b" merge 42`, pinned as a LISTED pass), and a NUL beside a word (denied under the cap). The in-order search slices by `match` offsets, codepoints on jq 1.7 and 1.8 (measured after é and an emoji; jq 1.6 unverified). The over-cap reason says the text reads as a `gh … pr … merge` command. A jq runtime error in the program fails the deny open (a first draft iterated an array wrongly and passed every over-cap command; the suite caught it), which is why each shape has its own over-cap case. Retired with the regex: rows X1 and X2 and every compound row; the retired start and end boundary rows P8 and P11 are re-pointed at the rule's own boundaries. Rows (`mut-fr1-c2.json`, each ONE mutation, measured red under jq 1.7 of 120 cases): S0 (the rule removed) 27 failed; S1 (`";", ` dropped from the split list) 3 failed, `gh pr merge;echo ok`, the `gh pr view 42; echo merge` control and the quoted-`;` listed pass; S2 (`\s` → a literal space in the word tests) 1, the TAB case; S3 (the start boundary dropped) 2, `xgh` and `sigh pr merge it`; S4 (`(` dropped from the end class) 1, `merge(x)`; S5 (`<`) 1, `merge<in`; S6 (`>`) 1, `merge>out`; S7 (`)`) 3, `x=$(gh pr merge)`, a bare `gh pr merge)` and `(gh pr merge)`; S8 (`&` not a separator) 1, `merge&&echo ok`; S9 (`|`) 1, `merge|cat`; S10 (newline) 1, the `gh<newline>pr<newline>merge` control; SP (`map(split($s))` → `map([splits($s)])`) 31 failed, 1 alone (the structural case); XC (the extractor's backslash-skip removed) 2; XE (an `as $` the extractor cannot reach) 1, the equality case alone. Merge-deny reads 120 passed (120) under jq 1.7 and under jq 1.8.2, sync-advisory 78 passed (78) under both; the hook scan covers 52 jq programs and 33 `as $` bindings. The `overcap-word-bounded-match` entry's line stays as history, and this entry supersedes it where they differ.
 
 ---
 

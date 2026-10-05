@@ -560,12 +560,13 @@ under "Attention, notifications and answering" below.
 `SKIP` when there is nothing to measure — every WARN and FAIL followed by its `remedy:`, then one
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account state — `wrappers`,
-`skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111).
+`skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111), and `jq_regex`, since no session hook runs there.
 
 | checks | what they measure |
 |---|---|
 | `node`, `tmux`, `git`, `gh`, `jq`, `python3`, `flock` | on `PATH`; `node` also against the `engines.node` floor |
 | `tmux_skew` | the tmux client on disk against the running tmux server (a WARN: restart that server at a quiet moment) |
+| `jq_regex` | jq's regex engine can match a lookbehind, which the session hook's merge deny needs to read a command (a jq without Oniguruma leaves the deny failing open); a SKIP with no jq on `PATH`, which `jq`'s own row owns |
 | `gh_auth`, `git_email` | `gh` logged in with the `repo` scope; a commit identity |
 | `linger`, `path`, `disk` | linger enabled; `~/.local/bin` on `PATH`; free space on `$HOME`'s filesystem |
 | `services`, `scopes` | ccrc's installed services and timers active (the graph sweep is judged by its census instead, under `graphify`; the Codex usage timers under `codex`; the usage sweep by neither); no pane scope throttled at its memory cap |

@@ -223,8 +223,9 @@ describe('session-hook: the landing-order advisory on a sync of main', () => {
     expect(ms, `the whole hook took ${ms} ms`).toBeLessThan(1500);
   });
   // The same shapes at 36 KB, far over the cap and holding no `gh`: the deny
-  // passes them unparsed after one linear regex scan (`MERGE_OVERCAP_RE`:
-  // they spell no `gh pr merge`), so what this clock times is the landing
+  // passes them unparsed after one fixed-string scan (the over-cap segment
+  // rule: they hold no `gh`, so its prefilter ends it), so what this clock
+  // times is the landing
   // advisory's own regex on quote runs. It is linear there (measured above);
   // a regex that walked from every quote would not be.
   it.each(QUOTE_DENSE)('answers a 36 KB quote-dense command (%s): the deny passes it unparsed, the advisory reads it inside the bound', (_name, unit) => {

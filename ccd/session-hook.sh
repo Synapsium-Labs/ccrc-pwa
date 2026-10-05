@@ -3530,11 +3530,12 @@ fi
 # OPEN. A `contains("gh") and contains("merge")` prefilter, whole and per
 # segment, keeps the word tests off nearly every segment. Measured through
 # the whole hook at 100 KB, on jq 1.7 and 1.8.2: 90 to 320 ms on `;`, `gh;`,
-# `gh pr merged;`, newlines, `gh merge ` and, the worst, `gh merge;` repeated
-# (many segments that pass the prefilter). The scan's worst case at 100 KB is
-# about 40% of the sync-advisory 1500 ms bound (~600 ms through the hook on a
-# loaded box, ~300 ms idle), not the parse's quarter above. The cost is
-# linear in the length, so that shape would cross the bound near 250 KB. The
+# `gh pr merged;`, newlines and `gh merge `; the costliest measured, `gh
+# merge;` and `merge gh pr;` repeated (many segments that pass the prefilter),
+# reached 343 to 384 ms at load ~15. That is about 20% of the sync-advisory
+# 1500 ms bound idle (~250 to 380 ms at 100 KB, measured), not the parse's
+# quarter above; a review measured ~600 ms (~40%) once. The cost is linear in
+# the length, so the bound is crossed at ~450 to 500 KB at the idle slope. The
 # word rule, not two bare substrings, because `gh` is inside "though" and
 # "high" and `merge` inside "merged": the two substrings matched 1,340 of
 # 4,478 over-cap fleet commands in one two-day window, mostly prose. The
@@ -3567,7 +3568,11 @@ fi
 # merge\0 42`, which passes over the cap and is denied under it; bash strips
 # NUL from command text and Node refuses it in spawn arguments).
 # `gh<newline>pr<newline>merge` passes too, rightly: bash reads three
-# commands. Classified, not closed (the stopping line, ruled 2026-10-03).
+# commands. Two classes pass under the cap too, so they are not regressions
+# of it: a redirection glued between the command words (`gh pr>x merge 42`,
+# `gh>x pr merge 42`; GH_MERGE_RE needs a blank before `pr` and `merge`), and
+# a backslash-newline straight after `merge` (`gh pr merge\<newline> 42`).
+# Classified, not closed (the stopping line, ruled 2026-10-03).
 # The cap also BOUNDS every superlinear walk above: the strip and GH_MERGE_RE
 # never read more than MERGE_PARSE_CAP bytes, so the 36-200 KB timings above
 # are what the cap prevents, not what a command costs.

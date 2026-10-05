@@ -251,9 +251,10 @@ describe('the worker merge deny', () => {
 
   // THE PAYLOAD CAP (landing-order wave 3). Over MERGE_PARSE_CAP bytes nothing
   // is parsed: the raw command is asked only whether, in one segment of it
-  // (split on the eight separators, fixed-string), `gh`, `pr` and `merge` stand
-  // as words in that order (`ocwords`), and a held or child session's command
-  // that does is refused unread.
+  // (split on the four command separators `;` `&` `|` and the newline,
+  // fixed-string), `gh`, `pr` and `merge` stand as words in that order
+  // (`ocwords`), and a held or child session's command that does is refused
+  // unread.
   describe('the payload cap', () => {
     /** `c`, then a filler of `a`s that carries it past the cap and touches no
      *  separator, so the segment holding `c` is the one the rule reads. */
@@ -391,14 +392,14 @@ describe('the worker merge deny', () => {
     // must clear the 1500 ms whole-hook bound the sync advisory is held to.
     // `splits` over `;` or `gh;` took 43 to 52 s and 14 s here (jq 1.7); the
     // fixed-string split and the prefilter cost 90 to 320 ms (review 267 F3).
-    // The last shape is the worst measured: many segments that pass the prefilter.
+    // The last shape is the costliest measured: many segments that pass the prefilter.
     it.each([
       ['`;` only', ';'],
       ['`gh;` repeated', 'gh;'],
       ['`gh pr merged;` repeated', 'gh pr merged;'],
       ['newlines only', '\n'],
       ['one long line holding `gh` and `merge` as words, no separator', 'gh merge '],
-      ['`gh merge;` repeated: many segments that pass the prefilter (the worst shape measured)', 'gh merge;'],
+      ['`gh merge;` repeated: many segments that pass the prefilter (the costliest shape measured)', 'gh merge;'],
     ])('answers 100 KB of %s over the cap in bounded time, denying none of it', (_n, unit) => {
       hold(WAVE_HOLD);
       const c = sized(unit, '', 100000);
