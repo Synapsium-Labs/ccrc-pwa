@@ -90,11 +90,11 @@ import {
   childReclaimAskOrder, childReclaimAttention, childReclaimDeferExpired, childReclaimDue, childReclaimFirstSighting,
   childReclaimHoldRead, childReclaimJournalRow, childReclaimNextEntry, childReclaimSameGeneration,
   childReclaimSweepVerdict, childReclaimTerminalRefusal, type ChildReclaimAsk, type ChildReclaimCoordinatorClaim,
-  type ChildReclaimHoldCandidate,
+  childReclaimKeptVerdicts, type ChildReclaimHoldCandidate,
   type ChildReclaimHoldCandidatesRead, type ChildReclaimHoldOpenRead, type ChildReclaimHoldRead,
   type ChildReclaimJournalRow, type ChildReclaimLaneNow, type ChildReclaimMintingRunRead,
   type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead, type ChildReclaimSweepEntry,
-  type ChildReclaimSweepOutcome, type ChildReclaimSweepSkip,
+  type ChildReclaimSweepOutcome, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
 } from './childReclaimSweep.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import { localIO } from './io.js';
@@ -825,6 +825,14 @@ export class FleetWatcher {
    *  would reopen the window it exists to close. Keeping it costs at most one
    *  pass, once. IN MEMORY ONLY, the `childReclaimSweepState` idiom. */
   private childReclaimReleaseAnswered = new Set<string>();
+  /** The sweep's verdicts (spec §5.9): one per marked row the last JUDGING pass listed, L1's own
+   *  `ChildReclaimSweepVerdict`, recorded and never re-decided here. A pass that judged nothing
+   *  (`reclaim-paused` raised, a reclaim capability missing, the mirror or coordination read
+   *  failed) — the same places the sweep state is cleared — reduces it to its KEPT verdicts
+   *  (`childReclaimKeptVerdicts`, L1): the attention list keeps listing those, so the chip keeps
+   *  saying them. `null` until this process's first judging pass. IN MEMORY ONLY. Replaced
+   *  whole, never mutated. */
+  private childReclaimJudged: ReadonlyMap<string, ChildReclaimSweepVerdict> | null = null;
   /** The seventh lane's clock — the journal mirror. `sweepLifecycle` below
    *  carries the lane's own docstring; this is only the clock field, same
    *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
@@ -1550,6 +1558,17 @@ export class FleetWatcher {
    *  process's monotonic clock and means nothing outside it. */
   currentChildReclaimDefers(): ReadonlyMap<string, ChildReclaimSweepEntry> {
     return this.childReclaimSweepState;
+  }
+
+  /** The sweep's last verdict per marked child, for `GET /api/runs`' chip (spec §5.9). TWO answers
+   *  that are never folded:
+   *  - `null` is "no verdict yet" for every child: no judging pass since this process started.
+   *  - A map is the last judging pass's verdicts, or — after a pass that judged nothing (the
+   *    switch, a missing capability, a failed read) — that pass's KEPT verdicts alone. An id absent
+   *    from it has no verdict yet.
+   *  Neither is "eligible". Read-only; replaced whole. */
+  currentChildReclaimVerdicts(): ReadonlyMap<string, ChildReclaimSweepVerdict> | null {
+    return this.childReclaimJudged;
   }
 
   /** The last measured project-pool sweep, or null if none has been taken yet
@@ -3168,6 +3187,7 @@ export class FleetWatcher {
       // generation, so this pass neither reports differently nor decides
       // anything — and the twice-observed memory is dropped, so no child acts
       // on the strength of a pass that measured nothing.
+      if (this.childReclaimJudged !== null) this.childReclaimJudged = childReclaimKeptVerdicts(this.childReclaimJudged);
       console.warn(`ccrc-server: sweepChildReclaim could not read the lifecycle mirror or the coordination history (${err instanceof Error ? err.message : String(err)}) — no reclaim decisions this pass`);
       this.childReclaimSweepState.clear();
       this.childReclaimHoldRetiredSeen.clear();
@@ -3194,6 +3214,7 @@ export class FleetWatcher {
     // (or the box gains the missing capability).
     if (!capSupported(this.deps.fleetState, RECLAIM_CAP) || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)
         || names.includes(RECLAIM_PAUSE_MARKER)) {
+      if (this.childReclaimJudged !== null) this.childReclaimJudged = childReclaimKeptVerdicts(this.childReclaimJudged);
       this.childReclaimSweepState.clear();
       this.childReclaimHoldRetiredSeen.clear();
       this.childReclaimReleaseAnswered.clear();
@@ -3219,6 +3240,7 @@ export class FleetWatcher {
     const terminal = new Set(latest
       .filter((row) => childReclaimTerminalRefusal(row, childReclaimTokenKind)).map((row) => row.sessionId));
     const seen = new Set<string>();
+    const judged = new Map<string, ChildReclaimSweepVerdict>();
     const due: { r: SessionRecord; entry: ChildReclaimSweepEntry; runId: number; id: string }[] = [];
     // Declared here, not at section FOUR below, so the hold-release job (a
     // SEPARATE dispatch from the ordinary reclaim gathered into `due`) can be
@@ -3326,6 +3348,7 @@ export class FleetWatcher {
         held, terminal: terminal.has(r.id), mintingRun, reviewedRun, siblings,
         coordinatorClaim: claims.get(r.id), childBornAt, skewMs: CHILD_BIRTH_SKEW_MS, nowMs: now,
       });
+      judged.set(r.id, v);
       if (!v.eligible) {
         this.childReclaimSweepState.delete(r.id);
         // A hold this build proved belongs to one of this child's own runs,
@@ -3408,6 +3431,7 @@ export class FleetWatcher {
       if (!childReclaimDue(entry, mono, CHILD_RECLAIM_SWEEP_MS)) continue;
       due.push({ r, entry, runId: v.runId, id: r.id });
     }
+    this.childReclaimJudged = judged;
 
     // FOUR — the bound: at most `CHILD_RECLAIM_MAX_IN_FLIGHT` destructive
     // verbs in flight from this automatic trigger at once (spec §5.7, "On
@@ -3616,12 +3640,17 @@ export class FleetWatcher {
    *  cannot be PLACED (no placed `create` row at all) cannot be proven to
    *  match its marker's run id, so it is skipped rather than guessed at
    *  (spec §5.1: the marker's run id and the argv the server composed are the
-   *  two authorities, and neither alone authorises anything). Every other
-   *  skip is an ordinary state of the world and says nothing
+   *  two authorities, and neither alone authorises anything). A FOURTH, not an
+   *  absence but logged the same way: a child that has coordinated in its
+   *  current generation (`coordinating`, spec §1 rule 4: manual cleanup is
+   *  reserved for a coordinator's own workspace) is never reclaimed
+   *  automatically, and says so once (spec §5.9). Every other skip says
+   *  nothing here: the run chip and the attention list carry it
    *  (`minting-run-postdates-child` has its OWN log, `childReclaimLogBirthSkip`,
    *  below — a different sentence with different evidence to name). */
   private childReclaimLogAbsence(r: SessionRecord, why: ChildReclaimSweepSkip, reviewedId: number | null): void {
-    if (why !== 'minting-run-absent' && why !== 'reviewed-run-absent' && why !== 'child-birth-unplaced') return;
+    if (why !== 'minting-run-absent' && why !== 'reviewed-run-absent' && why !== 'child-birth-unplaced'
+        && why !== 'coordinating') return;
     const key = `${why} ${r.id}`;
     if (this.childReclaimAbsentLogged.has(key)) return;
     this.childReclaimAbsentLogged.add(key);
@@ -3630,6 +3659,8 @@ export class FleetWatcher {
       console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, which coord.db does not hold — never eligible, because a lost or rebuilt database makes every child's minting run absent at once, the live ones included`);
     } else if (why === 'reviewed-run-absent') {
       console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is a review child of run ${runId}, which reviews run ${reviewedId ?? '?'}, which coord.db does not hold — kept, because an absent reviewed run is not a terminal one and its report may still be cited`);
+    } else if (why === 'coordinating') {
+      console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, but it has held a coordinator's chair since about when it was created, holds one now, or held one at a time that cannot be placed — never reclaimed automatically; a person removes it once nothing still needs it`);
     } else {
       console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, but the lifecycle mirror holds no placed 'create' row for it — its own birth cannot be placed, so the run-id fence cannot prove the marker's run minted this workspace; skipped until a placed create row appears (a workspace minted before the mirror existed, or whose create line carried no ccd clock)`);
     }

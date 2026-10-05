@@ -19,12 +19,13 @@ import {
   childReclaimAskOrder, childReclaimAttention,
   childReclaimBackoffMs, childReclaimCoordinated, childReclaimDeferExpired, childReclaimDue,
   childReclaimFailingPastCeiling, childReclaimFailingSentence, childReclaimFailureLine, childReclaimFirstSighting,
-  childReclaimHoldRead, childReclaimJournalRow,
+  childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptVerdicts,
   childReclaimNextEntry, childReclaimSameGeneration, childReclaimSweepVerdict, childReclaimTerminalRefusal,
   isChildReclaimPreLockToken,
   type ChildReclaimAsk, type ChildReclaimCoordinatorClaim, type ChildReclaimHoldCandidate,
   type ChildReclaimJournalRow, type ChildReclaimLaneNow,
-  type ChildReclaimSweepEntry, type ChildReclaimSweepInput, type ChildReclaimSweepOutcome, type ChildReclaimTokenKind,
+  type ChildReclaimSweepEntry, type ChildReclaimSweepInput, type ChildReclaimSweepOutcome,
+  type ChildReclaimSweepVerdict, type ChildReclaimTokenKind,
 } from '../src/childReclaimSweep.js';
 import {
   HOLD_NO_REASON, HOLD_UNREADABLE,
@@ -1283,6 +1284,28 @@ describe('CHILD_RECLAIM_SKIP — every skip word classed exactly once, with its 
     const holders = walk(src).filter((f) => readFileSync(f, 'utf8').includes(needle))
       .map((f) => path.relative(src, f).split(path.sep).join('/'));
     expect(holders).toEqual(['childReclaimSweep.ts']);
+  });
+});
+
+// What a pass that judged nothing keeps of the sweep's last verdicts (spec §5.9): the KEPT words
+// alone, because each ends only by a person's act or a restored coordination database, so a raised
+// switch, a missing capability or a failed read does not make it untrue. Every other verdict is
+// dropped, and after such a pass reads "no verdict yet", never eligible.
+describe('childReclaimKeptVerdicts — what a pass that judged nothing keeps (spec §5.9)', () => {
+  it('(p1) keeps exactly the kept words, with their verdicts', () => {
+    const release = { reason: 'program:demo wave:2/3 run:7', program: 'demo', accountedRunId: 7 };
+    const a: ChildReclaimSweepVerdict = { eligible: false, why: 'coordinating' };
+    const e: ChildReclaimSweepVerdict = { eligible: false, why: 'minting-run-absent' };
+    const verdicts = new Map<string, ChildReclaimSweepVerdict>([
+      ['a', a],
+      ['b', { eligible: true, runId: 7 }],
+      ['c', { eligible: false, why: 'held' }],
+      ['d', { eligible: false, why: 'hold-unmeasured' }],
+      ['e', e],
+      ['f', { eligible: false, why: 'hold-retired', runId: 7, release }],
+    ]);
+    expect(childReclaimKeptVerdicts(verdicts)).toEqual(new Map([['a', a], ['e', e]]));
+    expect([...childReclaimKeptVerdicts(verdicts).keys()]).toEqual(['a', 'e']);
   });
 });
 

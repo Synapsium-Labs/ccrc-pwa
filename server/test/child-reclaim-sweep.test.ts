@@ -2128,3 +2128,128 @@ describe('S2: seeded rows at the lane — every licence rests on a continuous ep
     expect(out).toEqual([]);
   });
 });
+
+// The sweep's verdicts, visible (spec §5.9). L4 records each marked child's verdict exactly where
+// the per-child loop reaches it, and L1's `childReclaimKeptVerdicts` decides what a pass that judged
+// nothing (a raised switch, a missing capability, a failed read) keeps of them: the kept words alone.
+// "No verdict yet" is its own value, `null` for every child or an id absent from the map, and never
+// reads as eligible.
+describe('currentChildReclaimVerdicts — the sweep\'s verdicts, visible (wave 5)', () => {
+  /** The coordinating case: demo-a's own claim is opened and abandoned at its create's instant
+   *  (the fixture clock does not move), inside the coordination fence's skew, so it is this
+   *  generation's own and the verdict is `coordinating`. */
+  const coordinatingChild = (f: ReturnType<typeof fixture>): void => {
+    const r1 = f.openRun();
+    f.abandon(r1);
+    f.plant('demo-a', { child: String(r1.id) });
+    const coordRun = f.coord.openRun({ program: 'other-prog', title: 'other-prog', project: 'demo', wave: 1,
+      waveOf: null, claimedBy: 'demo-a' });
+    if (!('id' in coordRun)) throw new Error(`coordRun refused: ${JSON.stringify(coordRun)}`);
+    f.abandon({ id: coordRun.id, program: 'other-prog' });
+  };
+  /** The three children: demo-a coordinating, demo-b finished (eligible), demo-c under a person's hold.
+   *  Returns demo-b's minting run id. */
+  const three = (f: ReturnType<typeof fixture>): number => {
+    coordinatingChild(f);
+    const runId = finishedChild(f, 'demo-b');
+    const r = f.openRun();
+    f.abandon(r);
+    f.plant('demo-c', { child: String(r.id), hold: 'kept by hand' });
+    return runId;
+  };
+  const verdicts = (f: ReturnType<typeof fixture>) => f.watcher.currentChildReclaimVerdicts();
+  const COORDINATING = { eligible: false, why: 'coordinating' };
+  const HELD = { eligible: false, why: 'held' };
+
+  it('(i) is null before any pass — no verdict yet, for every child', () => {
+    const f = fixture();
+    three(f);
+    expect(verdicts(f)).toBeNull();
+  });
+
+  it('(ii) after one pass, each marked child carries the verdict the loop reached', async () => {
+    const f = fixture();
+    const runId = three(f);
+    await f.pass();
+    const v = verdicts(f);
+    expect(v?.get('demo-b')).toEqual({ eligible: true, runId });
+    expect(v?.get('demo-a')).toEqual(COORDINATING);
+    expect(v?.get('demo-c')).toEqual(HELD);
+  });
+
+  it('(iii) a pause keeps the kept verdicts, and only them; a box without the capability never judged', async () => {
+    const f = fixture();
+    const runId = three(f);
+    await f.pass();
+    expect(verdicts(f)?.get('demo-b'), 'judged once').toEqual({ eligible: true, runId });
+    writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
+    f.next(); await f.pass();
+    const paused = verdicts(f);
+    expect(paused).toBeInstanceOf(Map);
+    expect(paused?.get('demo-a')).toEqual(COORDINATING);
+    expect(paused?.get('demo-b')).toBeUndefined();
+    expect(paused?.get('demo-c')).toBeUndefined();
+    rmSync(path.join(f.reg, 'reclaim-paused'));
+    f.next(); await f.pass();
+    expect(verdicts(f)?.get('demo-b')).toEqual({ eligible: true, runId });
+    expect(verdicts(f)?.get('demo-c')).toEqual(HELD);
+    expect(verdicts(f)?.get('demo-a')).toEqual(COORDINATING);
+
+    const g = fixture({ cap: false });
+    three(g);
+    await g.pass(); g.next(); await g.pass(); g.next(); await g.pass();
+    expect(verdicts(g), 'no pass on a box without reclaim-v1 ever judged').toBeNull();
+  });
+
+  it('(iv) a failed read reduces the same way: the kept verdict stays, the others go', async () => {
+    const f = fixture();
+    const runId = three(f);
+    await f.pass();
+    expect(verdicts(f)?.get('demo-b'), 'judged once').toEqual({ eligible: true, runId });
+    f.next();
+    const spy = vi.spyOn(f.coord, 'childReclaimSessionIds')
+      .mockImplementation(() => { throw new Error('mirror unreadable'); });
+    await f.pass();
+    spy.mockRestore();
+    expect(verdicts(f)?.get('demo-a')).toEqual(COORDINATING);
+    expect(verdicts(f)?.get('demo-b')).toBeUndefined();
+    expect(verdicts(f)?.get('demo-c')).toBeUndefined();
+  });
+
+  it('(v) a row the registry stops listing is absent from the next judging pass\'s map', async () => {
+    const f = fixture();
+    finishedChild(f, 'demo-a');
+    finishedChild(f, 'demo-b');
+    await f.pass();
+    expect([...(verdicts(f)?.keys() ?? [])].sort()).toEqual(['demo-a', 'demo-b']);
+    for (const n of readdirSync(f.reg)) if (n.startsWith('demo-a.')) rmSync(path.join(f.reg, n));
+    f.next(); await f.pass();
+    expect([...(verdicts(f)?.keys() ?? [])]).toEqual(['demo-b']);
+  });
+
+  it('(vi) a non-final close\'s re-hold reads held while its programme has an open run, then hold-retired', async () => {
+    const f = fixture();
+    const r = f.openRun(); f.abandon(r);
+    f.plant('demo-a', { child: String(r.id), hold: holdReason(r.program, 2, null, null) });
+    const r2 = f.coord.openRun({ program: r.program, title: r.program, project: 'demo', wave: 2, waveOf: null,
+      claimedBy: 'demo-coord' });
+    if (!('id' in r2)) throw new Error(`openRun r2 refused: ${JSON.stringify(r2)}`);
+    await f.pass();
+    expect(verdicts(f)?.get('demo-a')).toEqual(HELD);
+    f.abandon({ id: r2.id, program: r.program });
+    f.next(); await f.pass();
+    expect(verdicts(f)?.get('demo-a')).toMatchObject({ eligible: false, why: 'hold-retired' });
+  });
+
+  it('(vii) the coordinating child is logged once, and the line never says "ever"', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = fixture();
+    coordinatingChild(f);
+    await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    const lines = warn.mock.calls.map((c) => String(c[0]))
+      .filter((l) => l.includes('demo-a') && l.includes('never reclaimed automatically'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toMatch(/\bever\b/);
+  });
+});

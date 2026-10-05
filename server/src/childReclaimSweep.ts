@@ -11,7 +11,7 @@
 // follows (wave 3's `reclaimChild`) re-reads, and ccd re-proves inside its lock
 // at the instant of deletion — this file narrows the window, it does not close it.
 import {
-  SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, lcRefusalWord,
+  SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isChildReclaimKeptWord, lcRefusalWord,
   type ChildMark, type ChildReclaimAttention, type ChildReclaimKeptWord, type LcRefusalToken, type LifecycleAct,
   type LifecycleOutcome, type MirroredLifecycleEvent, type RunState,
 } from '../../shared/api.js';
@@ -549,6 +549,16 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
       release: { reason: i.held.reason, program: i.held.program, accountedRunId: i.held.accountedRunId } };
   }
   return { eligible: true, runId: i.child.runId };
+}
+
+/** The verdicts a pass that judged nothing keeps (spec §5.9): the KEPT words only. Each ends only by
+ *  a person's act or a restored coordination database, so a raised switch, a missing capability or a
+ *  failed read does not make it untrue, and the attention list keeps listing it. Every other verdict
+ *  is dropped: after such a pass it reads "no verdict yet", never eligible. */
+export function childReclaimKeptVerdicts(
+  verdicts: ReadonlyMap<string, ChildReclaimSweepVerdict>,
+): ReadonlyMap<string, ChildReclaimSweepVerdict> {
+  return new Map([...verdicts].filter(([, v]) => !v.eligible && isChildReclaimKeptWord(v.why)));
 }
 
 /** The executor's outcome, as far as this memory needs it. STRUCTURAL:
