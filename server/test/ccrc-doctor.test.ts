@@ -4262,19 +4262,30 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // Wave 11 R14(j) (D-3980): the launchd job sources both env files with /bin/bash under `set -a`. Assigning one of the
     // names /bin/bash reserves ends that shell before its `exec` when POSIXLY_CORRECT has turned POSIX mode on (bash's
     // six read-only variables; in 3.2 also BASH_ARGC, BASH_ARGV, BASH_LINENO, BASH_SOURCE, FUNCNAME and GROUPS), so the
-    // job never starts, whatever CCRC_AUTH says. The plain test refuses the thirteen as a NAME, in either file and in any
+    // job never starts, whatever CCRC_AUTH says. The plain test refuses the fifteen as a NAME, in either file and in any
     // order, under its own cause: the reason names the line, never the variable (A1) and calls none of them read-only (A5).
+    // D-3987 widens it to fifteen: HISTCMD and OPTIND are integer variables with no assign function, so a value that is an
+    // arithmetic error ends the job's bash before its `exec` in every bash, with no POSIX mode (review of Task 2, F1).
     const U5_NAMES = ['POSIXLY_CORRECT', 'BASHOPTS', 'BASH_VERSINFO', 'EUID', 'PPID', 'SHELLOPTS', 'UID',
-      'BASH_ARGC', 'BASH_ARGV', 'BASH_LINENO', 'BASH_SOURCE', 'FUNCNAME', 'GROUPS'];
-    /** Names that merely look like one of the thirteen (or are other reserved-looking names bash lets a file set). */
-    const U5_CONTROLS = ['PATH=/usr/bin', 'HOME=/x', 'LC_ALL=C.UTF-8', 'BASH_COMPAT=0', 'BASH_XTRACEFD=0', 'MY_UID=0', 'UIDX=0', 'uid=0', 'POSIXLY_CORRECTX=1'];
+      'BASH_ARGC', 'BASH_ARGV', 'BASH_LINENO', 'BASH_SOURCE', 'FUNCNAME', 'GROUPS', 'HISTCMD', 'OPTIND'];
+    /** Names that merely look like one of the fifteen (or are other reserved-looking names bash lets a file set). */
+    const U5_CONTROLS = ['PATH=/usr/bin', 'HOME=/x', 'LC_ALL=C.UTF-8', 'BASH_COMPAT=0', 'BASH_XTRACEFD=0', 'MY_UID=0', 'MY_OPTIND=0', 'UIDX=0', 'uid=0', 'POSIXLY_CORRECTX=1'];
+    const U5_ARITH: UnitEnvRow[] = [
+      { label: 'OPTIND=1/0', env: 'OPTIND=1/0\nCCRC_AUTH=on\n', exp: null, key: 'CCRC_AUTH' },
+      { label: 'HISTCMD=1/0', env: 'HISTCMD=1/0\nCCRC_AUTH=on\n', exp: null, key: 'CCRC_AUTH' },
+      { label: 'OPTIND=09', env: 'OPTIND=09\nCCRC_AUTH=on\n', exp: null, key: 'CCRC_AUTH' },
+      { label: 'export OPTIND="1/0"', env: 'export OPTIND="1/0"\nCCRC_AUTH=on\n', exp: null, key: 'CCRC_AUTH' },
+      { label: 'exposure HISTCMD=1+', env: 'CCRC_AUTH=on\n', exp: 'CCRC_RP_ID=x\nHISTCMD=1+\n', key: 'CCRC_AUTH' },
+    ];
     const U5_REVIEW: UnitEnvRow = { label: 'the review\'s input', env: 'POSIXLY_CORRECT=1\n', exp: 'UID=0\nCCRC_AUTH=on\n', key: 'CCRC_AUTH' };
 
-    it('U5: on Darwin, each of the thirteen names /bin/bash reserves is rc 3 for the gate, naming the file and the line and never the variable; names that only look like one read as before (D-3980)', () => {
+    it('U5: on Darwin, each of the fifteen names /bin/bash reserves is rc 3 for the gate, naming the file and the line and never the variable; names that only look like one read as before (D-3980)', () => {
       const rows: UnitEnvRow[] = [
         ...U5_NAMES.map((n) => ({ label: n, env: `${n}=0\nCCRC_AUTH=on\n`, exp: null, key: 'CCRC_AUTH' })),
         U5_REVIEW,
         { label: 'order-free: the name below the key, in the exposure file', env: 'CCRC_AUTH=on\n', exp: 'CCRC_RP_ID=x\nGROUPS=0\n', key: 'CCRC_AUTH' },
+        // The review's measured arithmetic-error inputs: every value here passes the plain test's value rule, so only the NAME refuses it.
+        ...U5_ARITH,
         ...U5_CONTROLS.map((c) => ({ label: `control: ${c}`, env: `${c}\nCCRC_AUTH=on\n`, exp: null, key: 'CCRC_AUTH' })),
       ];
       const got = unitEnvAnswers(rows, 'darwin');
@@ -4296,8 +4307,16 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       expect.soft([ord.rc, ord.val, ord.src], 'order-free').toEqual([3, '', '']);
       expect.soft(ord.why.startsWith(`${ord.expPath} line 2 ${prefix}`), ord.why).toBe(true);
       expect.soft(ord.why + ord.fix, 'order-free').not.toContain('GROUPS');
-      U5_CONTROLS.forEach((c, i) => {
+      const arithLines = [1, 1, 1, 1, 2];
+      U5_ARITH.forEach((row, i) => {
         const a = got[n + 2 + i]!;
+        const file = row.exp === null ? a.envPath : a.expPath;
+        expect.soft([a.rc, a.val, a.src], row.label).toEqual([3, '', '']);
+        expect.soft(a.why.startsWith(`${file} line ${arithLines[i]} ${prefix}`), `${row.label}: ${a.why}`).toBe(true);
+        expect.soft(a.why + a.fix, row.label).not.toMatch(/HISTCMD|OPTIND/);
+      });
+      U5_CONTROLS.forEach((c, i) => {
+        const a = got[n + 2 + U5_ARITH.length + i]!;
         expect.soft([a.rc, a.val, a.src, a.why, a.fix], `control: ${c}`).toEqual([0, 'on', a.envPath, '', '']);
       });
     });
@@ -4315,6 +4334,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       const r = runDoctor(home);
       expectOneUndecidedWarn(r.stdout, envPath(home));
       expect(authLine(r.stdout)).toContain(`${envPath(home)} line 1 `);
+      // A1 at the doctor surface: the line is named by number, never the variable.
+      expect(authLine(r.stdout)).not.toContain('POSIXLY_CORRECT');
       expect(r.stdout).not.toMatch(/^PASS auth: .*gated/m);
     });
   });

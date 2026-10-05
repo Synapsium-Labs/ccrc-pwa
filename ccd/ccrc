@@ -2853,12 +2853,15 @@ _box_env_shell_plain() {   # <file>
     case "$rest" in *=*) ;; *) BEP_LINE=$n; BEP_CAUSE=shape; return 1 ;; esac
     name="${rest%%=*}"
     case "$name" in ''|[0-9]*|*[!A-Za-z0-9_]*) BEP_LINE=$n; BEP_CAUSE=shape; return 1 ;; esac
-    # Wave 11 R14(j) (D-3980): names /bin/bash reserves. Under the job's `set -a; . file`, POSIXLY_CORRECT turns POSIX
-    # mode on, and in POSIX mode assigning one of bash's six read-only variables — or, in bash 3.2, BASH_ARGC, BASH_ARGV,
-    # BASH_LINENO, BASH_SOURCE, FUNCNAME or GROUPS — ends the shell before its `exec` (measured: bash 3.2.57, 5.2.21), so
-    # the job never starts, whatever CCRC_AUTH says. Refused as a NAME, in either file and in any order.
+    # Wave 11 R14(j) (D-3980, widened by D-3987): names /bin/bash reserves. Two ways the job's `set -a; . file` ends its
+    # shell before the `exec`, so the job never starts, whatever CCRC_AUTH says. (1) Inside POSIX mode, which
+    # POSIXLY_CORRECT turns on: assigning one of bash's read-only variables (five of this set in bash 3.2 — BASHOPTS
+    # arrived in 4.1 — six in 5.2) or, in bash 3.2, BASH_ARGC, BASH_ARGV, BASH_LINENO, BASH_SOURCE, FUNCNAME or GROUPS.
+    # (2) In every bash, with no POSIX mode: HISTCMD and OPTIND are integer variables with no assign function, so a value
+    # that is an arithmetic error (`1/0`, `09`, `1+`) ends the shell (measured: bash 3.2.57, 4.4, 5.2.21). Refused as a
+    # NAME whatever the value, in either file and in any order.
     case "$name" in
-      POSIXLY_CORRECT|BASHOPTS|BASH_VERSINFO|EUID|PPID|SHELLOPTS|UID|BASH_ARGC|BASH_ARGV|BASH_LINENO|BASH_SOURCE|FUNCNAME|GROUPS)
+      POSIXLY_CORRECT|BASHOPTS|BASH_VERSINFO|EUID|PPID|SHELLOPTS|UID|BASH_ARGC|BASH_ARGV|BASH_LINENO|BASH_SOURCE|FUNCNAME|GROUPS|HISTCMD|OPTIND)
         BEP_LINE=$n; BEP_CAUSE=name; return 1 ;;
     esac
     val="${rest#*=}"; val="${val%"${val##*[!$' \t']}"}"
@@ -3075,7 +3078,7 @@ _box_unit_env_shell() {   # <KEY>
     cr) BUE_WHY="$bad line $BEP_LINE carries a carriage return, which bash keeps in the value — on macOS the launchd job sources both env files with bash"
         BUE_FIX="save $bad without carriage returns (ccrc expose rewrites the exposure file)" ;;
     # D-3980: the cause and the line, never the variable (A1), and none of them called read-only (A5).
-    name) BUE_WHY="$bad line $BEP_LINE assigns a variable /bin/bash reserves, and on macOS the launchd job sources both env files with /bin/bash, which can stop at such an assignment before the server starts (in POSIX mode, which one of those variables turns on)"
+    name) BUE_WHY="$bad line $BEP_LINE assigns a variable /bin/bash reserves, and on macOS the launchd job sources both env files with /bin/bash, which can stop at such an assignment before the server starts (in POSIX mode, which one of them turns on, or, for two of them, a value that is not a number)"
           BUE_FIX="delete line $BEP_LINE of $bad, or rename the variable it sets (ccrc expose rewrites the exposure file)" ;;
     *)  BUE_WHY="$bad line $BEP_LINE is not a plain NAME=value line, and on macOS the launchd job sources both env files with bash, so that line can change what they set"
         BUE_FIX="rewrite line $BEP_LINE of $bad as NAME=value, with a value of letters, digits and _./:@%+,=- only, or one whole '…' pair, or one whole \"…\" pair with no \$, backtick, backslash or \" inside — or delete it (ccrc expose rewrites the exposure file)" ;;
