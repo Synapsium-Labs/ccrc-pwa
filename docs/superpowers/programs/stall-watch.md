@@ -21,8 +21,8 @@ file in the fleet registry. No marker has a writer in the tree.
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 | **merged** `3255571a1` (2026-10-03 23:09, R22); live at the next auto-update |
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | #237 | **merged** `7e858c8bf` (2026-10-04 12:40, R26) |
-| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **accepted** at `b29aba143` (review 257, R32); run 255 at `merging`, awaiting the operator's merge after #243 |
-| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`) | — | **planned** — plan reviewed (R31); split with claim 956 agreed (calm-mesa, mail 3401); dispatch after #243 (the plan) and #241 merge |
+| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **merged** `698f679da` (2026-10-04 21:21, R33); live at the next auto-update |
+| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`); Task 4 server comments | #246 | **accepted** at `376d1ffb1` (review 264, R37); run 259 at `merging`, awaiting the operator's merge after the last ledger PR |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -539,6 +539,107 @@ Output: `w2-shadow-review.json` in the coordinator notes.
   - **Wave 7's overlap is agreed.** Run 174's coordinator said yes in mail 3401: both PRs land, the second merges
     `main` and keeps both sides, and wave 7 stays inside clause 16, `CONTRACT[15]` and its own rows. Wave 7 gains a
     precondition that #241 is merged, since Task 4 edits wave 6's text.
+- **R33 (coordinator, 2026-10-04 21:23): the operator said "yes merge all". Wave 6 is on `main`, and wave 7 is
+  dispatched.**
+  - **#243 (ledger R26–R32 and the plans) merged first**, squashed at `b620da428` (21:21:29) and pinned to its head
+    `3e04dd23c`. Its required checks were green; the macOS legs gate nothing.
+  - **#241 (wave 6) merged second**, squashed at `698f679da` (21:21:52) and pinned to its head. The PR's head
+    `b29aba143` equals the handoff commit, which is the merge proof. The probe against the new `main` was clean
+    beforehand, and its required checks were green at that head.
+  - **The runs.** Wave 7's run 259 was opened first. Run 255 then closed `final:true`: `done`, `released:true`, child
+    reclaim queued.
+  - **Wave 7 was dispatched** to a fresh child. Before dispatch: claims re-read (claim 956 had lapsed, and only run 174's
+    claim 959 stands, with no overlap), 8 of 24 dispatches in the window, and the plan's preconditions measured. The
+    brief reads the plan at `b620da428` and carries the split agreed with run 174.
+  - **Still open with the operator:** the worker-clause sentence (R31's Important finding), and the Settings section's
+    scope (R30).
+- **R34 (coordinator, 2026-10-04 23:51): wave 7's wave-done is verified, and its review is dispatched.**
+  - **The claim.** Mail 3429 reports PR #246 from `ws/amber-meadow`: seven commits on `698f679da`, all four tasks done,
+    and the whole-branch review clean. The counts: coordinator-skill 156 → 159, worker-skill 48 → 50, the citation
+    instrument unchanged. Mutation rows C1–C10 and W1–W14 are red. The suite line reads `red`/`unclear`: the first
+    full run was concurrent and loaded, and every red file but two went green alone. Those two, ccrc-install and the
+    PWA, were left unmeasured when the reaper killed their quiet re-runs; CI's selection is their arbiter.
+  - **Re-measured.** The branch tip, the PR head and the handoff all read `35fe57070`. The probe against `main`
+    (`b40f4145e`, which now carries #215) is clean, so nothing licensed an absorb. Run 259 advanced `working`, then
+    `awaiting-review`. All four items settled `done`.
+  - **Three departures.**
+    - **D-3807 `wake-list-split-closes-and-joins`**, the block's last number. The extended wake-list split changes
+      the guard's logic and adds four mutation rows, so it is a departure in substance. It is defined in wave 7's plan.
+    - `closed-row-message-backticks-escaped` and `stall-deaf-docstrings-scoped-to-serial-replays` take no number. One
+      fixes a row message that did not parse, with the same text; the other is comments only.
+  - **The block is exhausted.** A later departure needs a fresh allocation from `POST /api/ledger/deviations`, made
+    by this session at the time. That includes the worker-clause sentence, if the operator says yes.
+  - **Review run 262** is dispatched to a fresh reviewer, with the held-out panel and a contract-text lens. The lens
+    covers clause 16's truth against `main`'s ball rule after #241, the wake-list split's stopping line, and Task 4's
+    scoped docstrings. The reviewer also runs the quiet ccrc-install and PWA suites, and the tree merged with #215.
+- **R35 (coordinator, 2026-10-05 00:30): review 262 rules wave 7 clean but for four minors, and one small fix round
+  goes back.** Review run 262 (`ccrc-pwa-bright-prairie`) read `35fe57070`: 37 panel agents, no errors, 5 confirmed,
+  6 refuted.
+  - **What it measured.** Every suite is green at the tip. ccrc-install and the PWA are cited from CI run 37245048187
+    at the same sha, because box load kept them from running quietly. C1–C10 and W1–W14 are red exactly as tabled. The
+    tree merged with `b40f4145e` is clean: coordinator-skill 160, worker-skill 51, the citation instrument 7 passed.
+    Clause 16 and `CONTRACT[15]` are byte-equal to the plan, the count words are unchanged, README is 13 lines for 13,
+    and Task 4's scoped docstrings are true.
+  - **Run 262** closed `done` on its own fingerprint.
+
+  Rulings:
+  - **F1 goes to the operator, with the worker-clause question (R31).** The ball sentence says "the next mail to or
+    from the worker". The server reads only mail on the subject's runs (`stallRunMail`, D-3650), as spec §4.2 says.
+    Both skills carry `runId` on every such mail, so the sentence is true in practice. Making it "the next mail on the
+    run to or from the worker" changes operator-approved bytes, so it waits for the operator. If the operator approves
+    the worker-clause sentence too, both ride one fix round under a fresh allocation, since the block is exhausted.
+    Otherwise the wording stands and this residue is recorded here.
+  - **F2, fix now, under D-3805's slug.** The widen and closed-world rows accept `unknown`, which the watch never judges
+    (`stallVerdictInner` holds it as `run-unnamed`). Both rows take `ACTIVE_RUN_STATES` less `unknown`, with a comment
+    citing that hold, and a mutation row naming `unknown` goes red. It refines D-3805's own rows, so no new number.
+  - **F3, fix now, under D-3807's slug, then stop.** Close the ordinary wordings the review measured:
+    `another`/`other`/`some`/`every`/`each`/`its` join the determiner set; a bare plural after `or`/`and` splits; the
+    background member's tail is anchored. List the rest (a coordination before "asks", a new sentence after the list)
+    as known evasions in the row's comment, and cite `wake-list-split-closes-and-joins (D-3807)` there. That is the
+    stopping line. The next review checks it holds, and evasion hunting beyond it is not a finding.
+  - **F4, fix now, comment only.** `stall-sweep`'s "at most 10 min old" becomes true of `sweepMail`: about 10 min old,
+    a replay interval plus a sweep, longer while gated.
+  - **The unnumbered departures stand.** `stall-deaf-docstrings-scoped-to-serial-replays` CORRECTED the plan's text,
+    which was false for the double send, rather than only scoping it. The allowlist message's wording, named in
+    `35fe57070`'s subject, is recorded here too.
+  - Run 259 goes back to `working` for the fix round. A fresh review run reads it.
+- **R36 (coordinator, 2026-10-05 03:17): wave 7's fix round is verified, and its re-review is dispatched.**
+  - **The claim.** Mail 3459 reports four commits on `35fe57070`, test files and one comment only:
+    - F2: the rows take `JUDGED_STATES`, which is `ACTIVE_RUN_STATES` without `unknown`; the new row C11 reds both;
+    - F3: the ordinary joins are closed, and W15–W21 are red;
+    - F4: the comment says "about 10 min old".
+  - **Every count** is unchanged from `35fe57070`: coordinator-skill 159, worker-skill 50, the citation instrument
+    7 passed.
+  - **Beyond the ruling,** the worker added W22 (the tail anchor's own row), W22c (its control, which passes) and W23
+    (scan-only), for mutation-table discipline. They are accepted. Its evasion list now says what stays open.
+  - **Re-measured.** Tip, PR head and handoff all read `376d1ffb1`, and the probe against `b40f4145e` is clean. Run 259
+    advanced to `awaiting-review` with its four items still `done`.
+  - **Review run 264** is dispatched to a fresh reviewer, with the held-out panel and a fix-round lens. Its brief rules
+    the stopping line: it reports a wording that the comment claims is closed but that passes, never a new shape of
+    evasion.
+- **R37 (coordinator, 2026-10-05 03:33): wave 7 is accepted.** Review run 264 (`ccrc-pwa-clear-canyon`) read the
+  fix round at `376d1ffb1`: 31 panel agents, no errors, 6 confirmed (folded into 3), 3 refuted.
+  - **What it measured.** Every suite is green, and C1–C11, W1–W23 and W22c are identical to the worker's evidence. The
+    reviewer's own controls show C11's red is the fix and W5's second red is the anchor. The tree merged with
+    `a6daa9cf4` is green: coordinator-skill 160, worker-skill 51, the citation instrument 7 passed. Run 264 closed
+    `done` on its own fingerprint.
+  - **Rulings:**
+    - **F1, the ledger's act, done here.** D-3807 is cited at the tip but defined only on this branch, and its entry
+      described the split before the fix round. The entry now describes the extended split and the evasions left
+      open. The plan's "This plan alone defines D-3805 and D-3806" and "exactly two" now name D-3807 as well. The
+      last ledger PR carries them and merges BEFORE #246, the same order R32 set for wave 6.
+    - **F2, accepted as residue.** `JUDGED_STATES` mirrors `stallVerdictInner`'s `unknown` hold as a literal, as R35
+      prescribed, and the set is exact today. A new active state reds `run-states.test.ts`; a new hold on an existing
+      active state would not.
+    - **F3, accepted.** The comment says the split cuts "before a bare plural"; the lookahead cuts an s-ending plural
+      followed by `you`/`that`/`which`. No wake gets through, because the wordings that pass fall under the comment's
+      own catch-all. D-3807's entry now states the lookahead precisely. A fix round for one comment would cost a review
+      cycle for nothing that changes.
+  - Run 259 advances to `merging`. The operator's merge decides the order: the last ledger PR first, then #246.
+  - **Still with the operator:** review 262's F1 (clause 16's "the next mail to or from the worker" against the
+    server's on-the-run read) and R31's worker-clause sentence. If both are declined or left open, #246 merges as it
+    is and both stay recorded residue. If either is approved, it becomes a fix round on #246, or a follow-up PR if
+    #246 has merged, under a fresh allocation.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
