@@ -14,16 +14,28 @@ const MOCK = path.join(RIG, 'mockapi.mjs');
 const children: ChildProcess[] = [];
 afterEach(() => { for (const c of children.splice(0)) c.kill('SIGKILL'); });
 
-/** Start the mock on an ephemeral port with `script` as its MOCK_SCRIPT; resolves to its base URL. */
-async function startMock(script: object): Promise<string> {
+/** The env a mock spawns with: the outer shell's MOCK_LOG / MOCK_REQDIR / MOCK_MAIN_MARKER removed. */
+function mockEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
+  delete env.MOCK_LOG; delete env.MOCK_REQDIR; delete env.MOCK_MAIN_MARKER;
+  return env;
+}
+
+/** Start the mock on an ephemeral port with `script` as its MOCK_SCRIPT; resolves to its base URL.
+ *  `cwd` (optional) is the mock's working directory. A mock that exits before binding rejects at once
+ *  with its exit code and stderr. */
+async function startMock(script: object, cwd?: string): Promise<string> {
   const dir = mkTmp('ccrc-dlg-mock-');
   const file = path.join(dir, 'script.json');
   fs.writeFileSync(file, JSON.stringify(script));
-  const child = spawn(process.execPath, [MOCK], { env: { ...process.env, MOCK_PORT: '0', MOCK_SCRIPT: file }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [MOCK], { env: mockEnv({ MOCK_PORT: '0', MOCK_SCRIPT: file }), stdio: ['ignore', 'pipe', 'pipe'], ...(cwd ? { cwd } : {}) });
   children.push(child);
   const port = await new Promise<string>((resolve, reject) => {
     let out = '';
-    const t = setTimeout(() => reject(new Error(`mock did not start: ${out}`)), 10_000);
+    let err = '';
+    const t = setTimeout(() => reject(new Error(`mock did not start: ${out}${err}`)), 10_000);
+    child.stderr!.on('data', (b: Buffer) => { err += b.toString(); });
+    child.on('exit', (code, signal) => { clearTimeout(t); reject(new Error(`mock exited before binding (code ${code}, signal ${signal}): ${err}`)); });
     child.stdout!.on('data', (b: Buffer) => {
       out += b.toString();
       const m = /^mock listening 127\.0\.0\.1:(\d+)$/m.exec(out);
@@ -34,7 +46,8 @@ async function startMock(script: object): Promise<string> {
 }
 
 const MAIN_SYSTEM = [{ type: 'text', text: 'You are an interactive agent that helps users.' }];
-const SUB_SYSTEM = [{ type: 'text', text: 'x-anthropic-billing-header: cc_is_subagent=true;' }];
+// Carries the MAIN marker too, so only classify()'s cc_is_subagent arm can make this request a sub.
+const SUB_SYSTEM = [{ type: 'text', text: 'You are an interactive agent that helps users. x-anthropic-billing-header: cc_is_subagent=true;' }];
 const messages = (base: string, body: object): Promise<Response> =>
   fetch(`${base}/v1/messages?beta=true`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 /** The SSE stream as its parsed `data:` objects, in order. */
@@ -113,9 +126,18 @@ describe('mockapi.mjs (the rig\'s mock Anthropic API)', () => {
     expect(reset).toBeLessThanOrEqual(before + 62);
   });
 
-  it('refuses to start without MOCK_SCRIPT, and writes no file when MOCK_LOG and MOCK_REQDIR are unset', () => {
-    const r = spawnSync(process.execPath, [MOCK], { env: { ...process.env, MOCK_SCRIPT: '', MOCK_PORT: '0' }, encoding: 'utf8', timeout: 10_000 });
+  it('refuses to start without MOCK_SCRIPT', () => {
+    const r = spawnSync(process.execPath, [MOCK], { env: mockEnv({ MOCK_SCRIPT: '', MOCK_PORT: '0' }), encoding: 'utf8', timeout: 10_000 });
     expect(r.status).toBe(2);
+  });
+
+  it('a running mock with MOCK_LOG and MOCK_REQDIR unset writes no file', async () => {
+    const cwd = mkTmp('ccrc-dlg-mockcwd-');
+    const base = await startMock({ entries: [{ match: { kind: 'tools' }, text: 'ok' }] }, cwd);
+    const r = await messages(base, { model: 'm', stream: false, system: MAIN_SYSTEM, tools: [{ name: 'Bash' }], messages: [{ role: 'user', content: 'x' }] });
+    expect(r.status).toBe(200);
+    await r.text();
+    expect(fs.readdirSync(cwd)).toEqual([]);
     expect(fs.readdirSync(RIG).filter((n) => /\.log$|^reqs/.test(n))).toEqual([]);
   });
 });
