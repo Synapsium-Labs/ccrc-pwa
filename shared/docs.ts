@@ -977,3 +977,229 @@ export function githubBlobUrl(github: DocsGithub, ref: DocsTreeOk['ref'], target
     + segments(ref.name) + '/' + segments(repoPath);
   return { ok: true, url, note: ref.side === 'origin' || ref.relation === 'equal' ? null : 'may-differ' };
 }
+
+// ===========================================================================
+// (I) Page URLs, the pin and the one docs API URL builder (spec 3.1, 3.2, 3.8, 3.12)
+// ===========================================================================
+
+/** The PWA's Docs pages live under this prefix. The server never registers it (spec 3.1); W4's service-worker
+ *  refusal imports it, and docs-parity.test.ts holds it to one declaration (M7.3). */
+export const DOCS_PAGE_PREFIX = '/docs';
+/** The four docs API routes live under this prefix (spec 3.4). */
+export const DOCS_API_PREFIX = '/api/docs';
+/** The marker header every PWA docs fetch carries (spec 3.8, clause 3). An img, iframe, script, link or
+ *  navigation cannot attach it, and a cross-origin fetch can only after a preflight the server never answers. */
+export const DOCS_REQUEST_HEADER = 'x-ccrc-docs';
+export const DOCS_REQUEST_HEADER_VALUE = '1';
+/** The page query keys, in the order docsPageUrl writes them. */
+export const DOCS_PAGE_KEYS = ['ref', 'view', 'frame'] as const;
+/** Pin keys. On a page they are refused as commit-in-page, never canonicalised: a page URL never carries a
+ *  commit, and a durable pointer to one exact commit is a GitHub URL (spec 3.1, 3.11). */
+export const DOCS_PIN_KEYS = ['commit', 'servedRef', 'branch', 'head', 'fp'] as const;
+
+export type DocsPageLocation =
+  | { kind: 'index' }
+  | { kind: 'project'; project: string; ref: DocsRefSpec | null }
+  | { kind: 'section'; project: string; section: DocSectionSlug; ref: DocsRefSpec | null }
+  | { kind: 'path'; project: string; section: DocSectionSlug; path: string; dirSlash: boolean;
+      ref: DocsRefSpec | null; view: 'effective' | 'committed'; frame: 'inline' | 'full' };
+export type DocsPageParseFailure = 'not-docs' | 'bad-project' | 'bad-section' | 'bad-path' | 'bad-ref'
+  | 'bad-view' | 'bad-frame' | 'bad-escape' | 'encoded-slash' | 'commit-in-page' | 'unknown-param'
+  | 'repeated-param' | 'reserved-node';
+export type DocsPageParse =
+  | { ok: true; loc: DocsPageLocation; canonical: string }
+  | { ok: false; why: DocsPageParseFailure };
+
+type DocsPageKey = (typeof DOCS_PAGE_KEYS)[number];
+type DocsPathLocation = Extract<DocsPageLocation, { kind: 'path' }>;
+
+/** The keys each page kind carries. A key outside its page's set is unknown-param, never dropped: spec 3.1 says
+ *  `ref` applies to every page but the index, and the W1 plan refuses it there rather than dropping it; `view`
+ *  and `frame` are leaf keys, refused the same way on the index, a project and a section root. */
+const PAGE_KEYS_BY_KIND: Readonly<Record<DocsPageLocation['kind'], readonly DocsPageKey[]>> = {
+  index: [],
+  project: ['ref'],
+  section: ['ref'],
+  path: DOCS_PAGE_KEYS,
+};
+
+/** `view=committed` survives canonicalisation only together with `ref`, and only on a leaf: without `ref` the
+ *  default view never overlays drafts, so the key is redundant (spec 3.1). A trailing slash marks a directory,
+ *  and a directory is not a leaf. */
+function pageKeepsView(l: DocsPathLocation): boolean {
+  return l.view === 'committed' && l.ref !== null && !l.dirSlash;
+}
+
+/** `frame=full` survives only on a leaf whose class is html (spec 3.1, 5.6.7). */
+function pageKeepsFrame(l: DocsPathLocation): boolean {
+  return l.frame === 'full' && !l.dirSlash && contentClass(l.path) === 'html';
+}
+
+/** Strict percent-decoding. decodeURIComponent throws URIError on a malformed escape and on escapes that do not
+ *  spell UTF-8; both answer null. A `+` stays a literal plus: there is no form decoding anywhere here. */
+function pageDecode(s: string): string | null {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return null;
+  }
+}
+
+type PageQuery = { ok: true; raw: ReadonlyMap<DocsPageKey, string> } | { ok: false; why: DocsPageParseFailure };
+
+/** Split `search` (leading `?` optional) on `&`. A piece without `=` has an empty value; an empty piece has an
+ *  empty key, which no page carries. Order (plan, decided): keys decode (bad-escape), then pin keys, then
+ *  repeated keys, then keys this page kind does not carry. Values stay raw here; parseDocsPage decodes them. */
+function pageQuery(search: string, allowed: readonly DocsPageKey[]): PageQuery {
+  const text = search.startsWith('?') ? search.slice(1) : search;
+  if (text === '') return { ok: true, raw: new Map() };
+  const pairs: (readonly [string, string])[] = [];
+  for (const piece of text.split('&')) {
+    const eq = piece.indexOf('=');
+    const key = pageDecode(eq < 0 ? piece : piece.slice(0, eq));
+    if (key === null) return { ok: false, why: 'bad-escape' };
+    pairs.push([key, eq < 0 ? '' : piece.slice(eq + 1)]);
+  }
+  const pinKeys: readonly string[] = DOCS_PIN_KEYS;
+  if (pairs.some(([k]) => pinKeys.includes(k))) return { ok: false, why: 'commit-in-page' };
+  const seen = new Set<string>();
+  for (const [k] of pairs) {
+    if (seen.has(k)) return { ok: false, why: 'repeated-param' };
+    seen.add(k);
+  }
+  const raw = new Map<DocsPageKey, string>();
+  for (const [k, v] of pairs) {
+    const known = allowed.find((a) => a === k);
+    if (known === undefined) return { ok: false, why: 'unknown-param' };
+    raw.set(known, v);
+  }
+  return { ok: true, raw };
+}
+
+/** Parse a Docs page location (spec 3.1). The check order is fixed, so one URL has one answer:
+ *  1. the prefix (not-docs);
+ *  2. every path segment decodes (bad-escape), then no decoded segment holds a `/` (encoded-slash);
+ *  3. a first segment starting with `@` (reserved-node, spec 3.12);
+ *  4. the project, then the section, then the path grammar;
+ *  5. the query: pin keys, repeated keys, unknown keys, then values in DOCS_PAGE_KEYS order.
+ *  `/docs/`, `/docs/<p>/` and `/docs/<p>/<s>/` answer their slash-less location; a trailing slash on a path page
+ *  sets dirSlash. Whether a path IS a directory is the tree answer's call, never the URL's. The returned `loc` is
+ *  already canonical, and `canonical === docsPageUrl(loc)`; a caller whose URL differs replace-navigates. */
+export function parseDocsPage(pathname: string, search: string): DocsPageParse {
+  let tail: string;
+  if (pathname === DOCS_PAGE_PREFIX) tail = '';
+  else if (pathname.startsWith(DOCS_PAGE_PREFIX + '/')) tail = pathname.slice(DOCS_PAGE_PREFIX.length + 1);
+  else return { ok: false, why: 'not-docs' };
+  const dirSlash = tail.endsWith('/');
+  const segs: string[] = [];
+  if (tail !== '') {
+    for (const raw of (dirSlash ? tail.slice(0, -1) : tail).split('/')) {
+      const seg = pageDecode(raw);
+      if (seg === null) return { ok: false, why: 'bad-escape' };
+      segs.push(seg);
+    }
+  }
+  if (segs.some((s) => s.includes('/'))) return { ok: false, why: 'encoded-slash' };
+  const [project, sectionText] = segs;
+  if (project !== undefined && project.startsWith('@')) return { ok: false, why: 'reserved-node' };
+  if (project !== undefined && !isDocsProject(project)) return { ok: false, why: 'bad-project' };
+  let section: DocSectionSlug | undefined;
+  if (sectionText !== undefined) {
+    if (!isDocsSection(sectionText)) return { ok: false, why: 'bad-section' };
+    section = sectionText;
+  }
+  const path = segs.slice(2).join('/');
+  if (segs.length > 2 && !isDocsRelPath(path)) return { ok: false, why: 'bad-path' };
+  const kind: DocsPageLocation['kind'] =
+    project === undefined ? 'index' : section === undefined ? 'project' : segs.length === 2 ? 'section' : 'path';
+  const q = pageQuery(search, PAGE_KEYS_BY_KIND[kind]);
+  if (!q.ok) return q;
+  let ref: DocsRefSpec | null = null;
+  let view: DocsPathLocation['view'] = 'effective';
+  let frame: DocsPathLocation['frame'] = 'inline';
+  for (const key of DOCS_PAGE_KEYS) {
+    const raw = q.raw.get(key);
+    if (raw === undefined) continue;
+    const value = pageDecode(raw);
+    if (value === null) return { ok: false, why: 'bad-escape' };
+    if (key === 'ref') {
+      ref = parseDocsRef(value);
+      if (ref === null) return { ok: false, why: 'bad-ref' };
+    } else if (key === 'view') {
+      if (value !== 'committed') return { ok: false, why: 'bad-view' };
+      view = 'committed';
+    } else {
+      if (value !== 'full') return { ok: false, why: 'bad-frame' };
+      frame = 'full';
+    }
+  }
+  let loc: DocsPageLocation;
+  if (project === undefined) loc = { kind: 'index' };
+  else if (section === undefined) loc = { kind: 'project', project, ref };
+  else if (segs.length === 2) loc = { kind: 'section', project, section, ref };
+  else {
+    const asked: DocsPathLocation = { kind: 'path', project, section, path, dirSlash, ref, view, frame };
+    loc = {
+      ...asked,
+      view: pageKeepsView(asked) ? 'committed' : 'effective',
+      frame: pageKeepsFrame(asked) ? 'full' : 'inline',
+    };
+  }
+  return { ok: true, loc, canonical: docsPageUrl(loc) };
+}
+
+/** The canonical page URL. Each path segment goes through encodeURIComponent; `ref` is written verbatim, because
+ *  its grammar's charset (A-Z a-z 0-9 . _ / -) is query-safe; keys follow DOCS_PAGE_KEYS order, and a redundant
+ *  `view` or `frame` is never written. `loc` must hold values in their grammars, as every parseDocsPage answer
+ *  does; encodeURIComponent throws URIError on a lone surrogate, which isDocsRelPath refuses.
+ *  parseDocsPage(docsPageUrl(l)) returns l for every canonical l. */
+export function docsPageUrl(loc: DocsPageLocation): string {
+  if (loc.kind === 'index') return DOCS_PAGE_PREFIX;
+  let url = DOCS_PAGE_PREFIX + '/' + encodeURIComponent(loc.project);
+  if (loc.kind !== 'project') url += '/' + loc.section;
+  if (loc.kind === 'path') {
+    url += '/' + loc.path.split('/').map((s) => encodeURIComponent(s)).join('/') + (loc.dirSlash ? '/' : '');
+  }
+  const value: Record<DocsPageKey, string | null> = {
+    ref: loc.ref === null ? null : docsRefText(loc.ref),
+    view: loc.kind === 'path' && pageKeepsView(loc) ? 'committed' : null,
+    frame: loc.kind === 'path' && pageKeepsFrame(loc) ? 'full' : null,
+  };
+  const pairs: string[] = [];
+  for (const key of DOCS_PAGE_KEYS) {
+    const v = value[key];
+    if (v !== null) pairs.push(key + '=' + v);
+  }
+  return pairs.length === 0 ? url : url + '?' + pairs.join('&');
+}
+
+/** What a file request names (spec 3.2, 3.4). A committed pin is the tree answer's commit and `ref.served`; a
+ *  draft pin is the draft branch, the holder's HEAD and the draft's fingerprint. Neither is ever a page URL. */
+export type DocPin =
+  | { kind: 'committed'; commit: string; servedRef: string; section: DocSectionSlug; path: string }
+  | { kind: 'draft'; branch: string; head: string; section: DocSectionSlug; path: string; fp: string };
+
+/** `/api/docs/<project>`: the project segment through encodeURIComponent. */
+function apiProjectPath(project: string): string {
+  return DOCS_API_PREFIX + '/' + encodeURIComponent(project);
+}
+
+/** A query in the order given, each value through encodeURIComponent: a path's `/` becomes `%2F` and its `+`
+ *  becomes `%2B`, so a form-style decoder on the server cannot read a plus as a space. */
+function apiQuery(pairs: readonly (readonly [string, string])[]): string {
+  return '?' + pairs.map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
+}
+
+/** The ONE docs API URL builder (spec 3.2). Keys are written in one fixed order whatever order the pin's fields
+ *  were spelled in: committed commit, servedRef, section, path; draft branch, head, section, path, fp. It
+ *  validates nothing; the server's L1 query parser does, with the same predicates. */
+export const docsApi = {
+  projects: (): string => DOCS_API_PREFIX + '/projects',
+  tree: (project: string, ref: DocsRefSpec | null): string =>
+    apiProjectPath(project) + '/tree' + (ref === null ? '' : apiQuery([['ref', docsRefText(ref)]])),
+  file: (project: string, pin: DocPin): string =>
+    apiProjectPath(project) + '/file' + apiQuery(pin.kind === 'committed'
+      ? [['commit', pin.commit], ['servedRef', pin.servedRef], ['section', pin.section], ['path', pin.path]]
+      : [['branch', pin.branch], ['head', pin.head], ['section', pin.section], ['path', pin.path], ['fp', pin.fp]]),
+  refresh: (project: string): string => apiProjectPath(project) + '/refresh',
+};

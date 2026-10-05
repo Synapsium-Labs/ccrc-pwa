@@ -4573,3 +4573,61 @@ describe('docs section H is declared once, in shared/docs.ts (docs W1a)', () => 
     });
   }
 });
+
+// Docs W1a, Task 5 (spec 2026-10-01 3.1, 3.2, 3.8): the page grammar, the pin and the one docs API URL builder
+// are declared once, in shared/docs.ts. The server's L1 query parser (W2) and the PWA's router and loaders (W5)
+// import them; a second parser or builder is a second grammar nothing forces to agree. The marker header word
+// is quoted once for the same reason: the server's provenance hook and the PWA's funnel must read the one
+// constant, so a rename cannot leave one side sending a header the other no longer checks. DOCS_PAGE_PREFIX's
+// own pin is M7.3, in docs-parity.test.ts. APPENDED after the file's last line: `session-hook.test.ts`'s
+// citation audit cites this file by line.
+describe('docs page URLs and the API URL builder are declared once, in shared/docs.ts (docs W1a)', () => {
+  const TYPE_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  const VALUE_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`, 'm');
+  const FUNCTION_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?function\\s+${name}\\b`, 'm');
+  const TYPES = ['DocsPageLocation', 'DocsPageParseFailure', 'DocsPageParse', 'DocPin'] as const;
+  const VALUES = [
+    'DOCS_PAGE_PREFIX', 'DOCS_API_PREFIX', 'DOCS_REQUEST_HEADER', 'DOCS_REQUEST_HEADER_VALUE', 'DOCS_PAGE_KEYS',
+    'DOCS_PIN_KEYS', 'docsApi',
+  ] as const;
+  const FUNCTIONS = ['parseDocsPage', 'docsPageUrl'] as const;
+
+  it('CONTROL: each pattern sees a declaration, local or exported, and not an import, a re-export or a use', () => {
+    expect(TYPE_DEF('DocPin').test('type DocPin = { kind: string };'), 'un-exported local type').toBe(true);
+    expect(TYPE_DEF('DocPin').test("import {\n  type DocPin,\n} from '../../../shared/docs.js';"), 'import specifier').toBe(false);
+    expect(VALUE_DEF('docsApi').test('const docsApi = {};'), 'un-exported local const').toBe(true);
+    expect(VALUE_DEF('docsApi').test("export { docsApi } from '../../shared/docs.js';"), 're-export').toBe(false);
+    expect(VALUE_DEF('docsApi').test('const url = docsApi.tree(p, null);'), 'a use').toBe(false);
+    expect(FUNCTION_DEF('parseDocsPage').test('function parseDocsPage(p: string) {}'), 'local function').toBe(true);
+    expect(FUNCTION_DEF('parseDocsPage').test('const r = parseDocsPage(path, search);'), 'a call').toBe(false);
+  });
+
+  for (const name of TYPES) {
+    it(`declares the type ${name} exactly once, in shared/docs.ts`, () => {
+      expect(ALL.filter((f) => TYPE_DEF(name).test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
+    });
+  }
+
+  it('declares every constant and builder exactly once, in shared/docs.ts', () => {
+    for (const name of VALUES) {
+      expect(ALL.filter((f) => VALUE_DEF(name).test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/docs.ts']);
+    }
+    for (const name of FUNCTIONS) {
+      expect(ALL.filter((f) => FUNCTION_DEF(name).test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/docs.ts']);
+    }
+  });
+
+  const HEADER_LITERAL = /(['"])x-ccrc-docs\1/;
+
+  it('CONTROL: the header literal scan sees a quoted copy, and not prose or a longer word', () => {
+    expect(HEADER_LITERAL.test("headers['x-ccrc-docs']")).toBe(true);
+    expect(HEADER_LITERAL.test('headers: { "x-ccrc-docs": "1" }')).toBe(true);
+    expect(HEADER_LITERAL.test('the `x-ccrc-docs` marker'), 'a backticked prose mention').toBe(false);
+    expect(HEADER_LITERAL.test("'x-ccrc-docs-v2'"), 'another word').toBe(false);
+  });
+
+  it('quotes the marker header word in shared/docs.ts and nowhere else across the four roots', () => {
+    expect(ALL.filter((f) => HEADER_LITERAL.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
+  });
+});
