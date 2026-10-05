@@ -90,12 +90,12 @@ export class MailTokenPlaceholderUnedited extends Error {}
 /**
  * The box token, off this box's own disk.
  *
- * WHY A FILE AND NOT AN ENV VAR (plan deviation D-4). `deploy/ccrc.service` has
- * no `EnvironmentFile=` line and `deploy.sh:103` copies it over the installed
- * unit on every server deploy, so an env-var token would either be inert or
- * would require editing a unit whose live environment this repo cannot see —
- * and `ccrc.env.example` ships `CCRC_FLEET=local`, which is not what the live
- * server is running. A file needs no unit change at all.
+ * WHY A FILE AND NOT AN ENV VAR (plan deviation D-4). When D-4 was taken,
+ * `deploy/ccrc.service` had no `EnvironmentFile=` line (it has since gained two
+ * optional ones, `ccrc.env` then `exposure.env`) and `deploy.sh` copied it over
+ * the installed unit on every server deploy, so an env-var token would have been
+ * inert or needed a unit edit this repo could not see — and `ccrc.env.example`
+ * ships `CCRC_FLEET=local`. The token stayed a file: it needs no unit change.
  *
  * `readFileSync`, at the composition root, deliberately: this is local-box
  * housekeeping and never crosses `FleetIO` — the same stance `fleetstate.ts`

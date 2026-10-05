@@ -235,8 +235,9 @@ brew install bash tmux flock gh jq coreutils
   portable implementation and takes the flags ccd passes.
 - **GNU coreutils** (`gtimeout`). macOS ships no `timeout`, and the session hook and the status
   line bound their one `tmux` call with `timeout` or `gtimeout`: with neither on `PATH` the hook
-  writes nothing and the per-session usage sidecar is never written — no error, and no doctor
-  check measures it, so the board falls back to reading the pane.
+  does nothing at all — no session state, no turn marker, no search-gate or worker-merge deny —
+  and the per-session usage sidecar is never written, with no error anywhere; the board falls back
+  to reading the pane. Doctor's `timeout` check FAILs on exactly this.
 - **Only if you BUILD a release** (`deploy/build-release.sh`, a maintainer's job — not
   something a box needs to install or update): `brew install gnu-tar`. The artifact is made
   reproducible with `--sort/--mtime/--owner/--group`, BSD tar has none of them, and the
@@ -559,12 +560,14 @@ under "Attention, notifications and answering" below.
 **What `ccrc doctor` measures.** Each check prints a verdict line — `PASS`, `WARN`, `FAIL`, or
 `SKIP` when there is nothing to measure — every WARN and FAIL followed by its `remedy:`, then one
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
-ends with. A `server`-role box SKIPs the checks that measure per-account state — `wrappers`,
-`skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111).
+ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
+`skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111),
+and `timeout`.
 
 | checks | what they measure |
 |---|---|
 | `node`, `tmux`, `git`, `gh`, `jq`, `python3`, `flock` | on `PATH`; `node` also against the `engines.node` floor |
+| `timeout` | `timeout` or `gtimeout` on `PATH`: the session hook and the status line bound their one `tmux` call with it and skip the call without it — the hook then does nothing at all, and the status line writes no usage sidecar |
 | `tmux_skew` | the tmux client on disk against the running tmux server (a WARN: restart that server at a quiet moment) |
 | `gh_auth`, `git_email` | `gh` logged in with the `repo` scope; a commit identity |
 | `linger`, `path`, `disk` | linger enabled; `~/.local/bin` on `PATH`; free space on `$HOME`'s filesystem |
