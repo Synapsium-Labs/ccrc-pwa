@@ -332,7 +332,10 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
   it('control: the same /model typed on an Anthropic lane, swapped to another Anthropic lane, is still read (and logged)', () => {
     seed(); record({ class: 'fable' }); h.sh(`_reg_set ${ID} wrapper claude-d`); const t = now() - 600;
     writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+    const floor = floorRow();
     h.sh(`${SWAP} CCD_SWAP_AUTO=1 cmd_swap ${ID} claude`, { TMUX: '' });
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(floorRow(), 'an Anthropic to Anthropic landing leaves the journal floor where it was').toBe(floor);
     keep();
     expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: /model gpt-5\\.6-sol is outside the class vocabulary`));
   });

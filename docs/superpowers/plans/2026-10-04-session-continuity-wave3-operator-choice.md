@@ -2334,6 +2334,7 @@ raises in the reader, which logs `unmeasured` and promotes nothing, so the refus
 | 3.31 | `ccd/ccd` | `(( _oc_from == _oc_to )) \|\| _typed_note "$id" moved   # a move between an Anthropic and a non-Anthropic lane: no command typed on the other lane is read by a later stop (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 44 passed (45): “a swap between a non-Anthropic and an Anthropic lane moves the journal floor to its landing: a later stop reads nothing typed before it” |
 | 3.32 | `ccd/ccd` | `_is_anthropic_backend "$(_reg_get "$id" wrapper)" \|\| return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7) / typed=$(_reg_get "$id" typed) / if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then / _typed_note "$id" since / why="its journal opened only now, so an older command may be an older ccd's own keystroke" / fi` → `typed=$(_reg_get "$id" typed) / if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then / _typed_note "$id" since / why="its journal opened only now, so an older command may be an older ccd's own keystroke" / fi / _is_anthropic_backend "$(_reg_get "$id" wrapper)" \|\| return 0` | ccd-operator-choice.test.ts | 1 failed \| 44 passed (45): “a session on a non-Anthropic lane is skipped: its /model is never read, logged or written” |
 | 3.33 | `ccd/ccd` | `(( n > 10#${floor%% *} )) && floor="$n since"` → `floor="$n since"` | ccd-operator-choice.test.ts | 1 failed \| 44 passed (45): “the floor only ever moves forward: a lane change never moves it back, and keeps the journal's rows” |
+| 3.34 | `ccd/ccd` | `(( _oc_from == _oc_to )) \|\| _typed_note "$id" moved   # a move between an Anthropic and a non-Anthropic lane: no command typed on the other lane is read by a later stop (§5.7)` → `_typed_note "$id" moved   # a move between an Anthropic and a non-Anthropic lane: no command typed on the other lane is read by a later stop (§5.7)` | ccd-operator-choice.test.ts | 1 failed \| 44 passed (45): “control: the same /model typed on an Anthropic lane, swapped to another Anthropic lane, is still read (and logged)” |
 
 ```bash
 git add ccd/ccd server/test/ccd-operator-choice.test.ts server/test/ccd-die-containment.test.ts
@@ -2942,6 +2943,13 @@ of ten (Open question 9):
   Anthropic-lane `/model` typed before a round trip through a gpt lane, and never through a stop, is not kept; every stop
   before the move keeps it. Rows 3.31–3.33 (3.32 pins the ruling-(c) guard's place before the floor is opened, review
   M3).
+- **D-3925** `operator-choice-not-across-a-clear` — found by the final whole-branch review (I1): the keep reads only the
+  transcript of the session's CURRENT uuid, and `/clear` mints a new uuid and a fresh transcript file (in 41 recent
+  transcripts a `/clear` sat on rows 4-8 of a fresh file; compaction keeps the same file, so it is not affected). Spec
+  §5.7's "survives a restart" therefore does not reach a `/model` or `/effort` typed before a `/clear`: the next restart
+  reads a transcript with no command in it and the record's old class is composed, with no line logged. Listed as a
+  known silent cost in the README and the spec; the code fix (reading the transcript the `/clear` left) is deferred to
+  a later wave and put to the coordinator.
 
 ---
 

@@ -579,7 +579,7 @@ manual, PWA and `swap-self` move), `ccd stop`'s (a later `start` or `enable` res
 `ccd ws-archive`'s (`ws-restore` does); the stops that end the row (`ws-rm`, `forget`, the reap and reclaim
 tails) are not, `_swap_refuse`'s restart follows `cmd_swap`'s own stop, and a supervisor revival,
 which follows no ccd stop, keeps the choice before its own spawn (`cmd_ensure`), a one-shot marker making a restart
-read once. The short window is `TYPED_MATCH_WINDOW` (60 s), and `.typed` keeps its last 16 rows below a floor row.
+read once (and log at most once per kind). The short window is `TYPED_MATCH_WINDOW` (60 s), and `.typed` keeps its last 16 rows below a floor row.
 The readings the text above leaves open are fixed: "the newest command" is one per kind (`/model` and `/effort`
 are two fields), chosen among the commands no row matches; a command's value is its argument or, for the picker and
 the slider, which take none, the value Claude Code's acknowledgement names (ANSI bold or backticks removed; a row
@@ -590,11 +590,19 @@ none) — and no command older than it is read, because an older ccd typed its k
 outside the vocabulary is logged by name when it is one token, by size otherwise; and a stop that cannot read at
 all (no floor yet, a transcript that is not a readable regular file, no python, a failed reader) logs
 `unmeasured`. §9's stage-7 row counts the restarts whose `/model` ccd logged as outside the vocabulary or refused,
-with the unmeasured stops reported beside it. A session on a non-Anthropic lane is skipped, and a swap that crosses
+with the unmeasured stops reported beside it; it counts RESTARTS, not distinct choices, because a `/model` ccd
+cannot keep is logged again at every later restart until a newer command replaces it. A session on a non-Anthropic lane is skipped, and a swap that crosses
 lanes moves the journal floor to the landing. The known costs: `/model opus[1m]` is kept as `opus` and loses its 1M
 context, the record having no context field; a `/model` typed in a session already running at the deploy, before its
-first post-deploy stop or respawn, is not kept at that stop; and after a rollback and a roll-forward, keystrokes the
-older ccd typed after a floor was opened could read as the operator's.
+first post-deploy stop or respawn, is not kept at that stop (the first such stop logs `unmeasured` once when the
+transcript exists, but if a `route --apply` keystroke opened the journal first, the earlier command is dropped with
+no line); and after a rollback and a roll-forward, keystrokes the older ccd typed after a floor was opened could
+read as the operator's. Known silent costs, each with no line: a `/model` or `/effort` typed before a `/clear`
+(`/clear` starts a new transcript and the keep reads only the current one; deferred to a later wave); an operator
+command typed within `TYPED_MATCH_WINDOW` after a ccd keystroke that rotated out of the journal, and never through
+a stop since; an Anthropic-lane command typed before a round trip through a non-Anthropic lane, and never through
+a stop since; and a session whose Anthropic source account has just left the roster, which reads as non-Anthropic
+so its swap keeps nothing (deferred).
 
 ## 6. Invariants kept
 

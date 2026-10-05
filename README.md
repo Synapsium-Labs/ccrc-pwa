@@ -2289,7 +2289,7 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   [actor=operator-session]` in `swap.log`. A supervisor revival (`cmd_ensure` in the unit, most often after a
   pane-scope OOM kill) follows no ccd stop, so it keeps the choice before its own spawn; each stop leaves a one-shot
   `$REG/<id>.choicekept` marker that `cmd_ensure` honours and `_spawn_start` clears, so a restart reads once and logs
-  at most once.
+  at most once per kind (one `/model` line, one `/effort` line).
 - **ccd's own keystrokes are not the operator's.** The settle's `/effort` and `route --apply` journal what they
   type in `$REG/<id>.typed` (`<epoch> <model|effort> <value>`, the last `TYPED_KEEP_ROWS=16`, purged with the
   row); a command with the same value within `TYPED_MATCH_WINDOW=60` seconds of a row is ccd's and is left alone.
@@ -2301,19 +2301,31 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   `default` class). A `/model` maps through the class vocabulary itself (`opus`, `sonnet`, `haiku`, `fable`,
   `default`, each also with `[1m]`, which the record cannot hold), then a full model id through
   `_model_family_class`, the bash port of `familyClassOf`'s dash-token rule, pinned to it.
-- **It never fails a stop, and never loses a choice silently.** A value outside the vocabulary, or one the record's
-  own checks refuse (`haiku` with an effort level), is logged as `operator-choice <id>: …` and leaves the record
-  unchanged; a stop that cannot read at all logs `operator-choice <id>: unmeasured (…)`. A field written after the
-  keystroke (the PWA picker, a coordinator's route, this step's last write) is the later choice and wins.
-  `python3 deploy/measure-continuity.py --stage 7` counts the writes, the restarts that reverted a `/model`, and
-  the unmeasured stops.
+- **It never fails a stop, and loses a choice silently only in the cases listed below.** A value outside the
+  vocabulary, or one the record's own checks refuse (`haiku` with an effort level), is logged as
+  `operator-choice <id>: …` and leaves the record unchanged; a stop that cannot read at all logs
+  `operator-choice <id>: unmeasured (…)`. A field written after the keystroke (the PWA picker, a coordinator's
+  route, this step's last write) is the later choice and wins. `python3 deploy/measure-continuity.py --stage 7`
+  counts the writes, the restarts that logged a `/model` ccd could not keep, and the unmeasured stops. The row
+  counts RESTARTS, not distinct choices: a `/model` the record cannot hold is logged again at every later restart
+  until a newer command replaces it, since it reverts again at each.
 - **Skipped, and the known costs.** A session on a non-Anthropic lane is skipped, silently (`_is_anthropic_backend`,
   as the settle is), and a swap that crosses lanes moves the journal floor to the landing, so nothing typed on the
   other lane is read. `/model opus[1m]` is kept as `opus` and loses its 1M context (the record has no context
   field). The floor costs twice, once each: a `/model` typed in a session already running at the deploy, before its
-  first post-deploy stop or respawn, is not kept at that stop (logged `unmeasured` once); and after a rollback and
-  a roll-forward, keystrokes the older ccd typed after a floor was opened are unjournalled and newer than it, so
-  they could read as the operator's.
+  first post-deploy stop or respawn, is not kept at that stop (the first such stop logs `unmeasured` once when the
+  transcript exists; but if a `route --apply` keystroke opened the journal first, an earlier operator `/model` is
+  dropped with no line); and after a rollback and a roll-forward, keystrokes the older ccd typed after a floor was
+  opened are unjournalled and newer than it, so they could read as the operator's.
+- **Known silent costs**, each a choice lost with no line:
+  - a `/model` or `/effort` typed before a `/clear`: `/clear` starts a new transcript and the keep reads only the
+    current one (deferred to a later wave);
+  - an operator command typed within `TYPED_MATCH_WINDOW` after a ccd keystroke that rotated out of the journal,
+    and never through a stop since;
+  - an Anthropic-lane command typed before a round trip through a non-Anthropic lane, and never through a stop
+    since;
+  - a session whose Anthropic source account has just left the roster reads as non-Anthropic, so its swap keeps
+    nothing (deferred).
 
 ### A return visit merges the session's sidecar (session-continuity stage 1)
 
