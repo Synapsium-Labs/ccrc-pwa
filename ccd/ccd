@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9aef4e4c84fb798af589e2435216435b3cd50fae4f24e9ca25e7f746ccb6685d
+# ccrc:generated 1 sha256=c90255d7a5f4c67e5cdb37529811044e5d6db8a844391df1fa535735892c2cda
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -30866,6 +30866,11 @@ def snapshot(repo, trusted, holder, served_commit, blobs, dl, call_s=None, stdou
     except DraftTooMany as e:
         return DraftPhase({'state': 'too-many', 'branch': bd, 'worktree': w, 'count': e.count,
                            'bytes': e.nbytes}, {}, {}, None)
+    except OSError as x:
+        # A spawn that fails (EMFILE, EAGAIN, ENOMEM) is a fact about the drafts, not a failure of
+        # the tree. `status` is the closest step of the closed vocabulary.
+        return DraftPhase({'state': 'unreadable', 'branch': bd, 'worktree': w, 'step': 'status',
+                           'detail': os_head('spawn', x)}, {}, {}, None)
 
 
 def draft_phase(ctx, repo, bd, ref, blobs, dl, call_s=None, stdout_cap=GIT_STDOUT_CAP,
@@ -30876,8 +30881,15 @@ def draft_phase(ctx, repo, bd, ref, blobs, dl, call_s=None, stdout_cap=GIT_STDOU
     ambiguous, untrusted and an unreadable list, each final, with rows empty;
     exactly one trusted holder is snapshotted, and its fd is closed here
     whatever happens. `main` is always the enumeration's. It NEVER raises a
-    failure word: every outcome is a DraftsFacts."""
-    e = enumerate_drafts_holder(ctx, repo, bd, dl, call_s)
+    failure word or an OSError: every outcome is a DraftsFacts, and a git spawn
+    that fails is unreadable (worktree-list before a holder is known, status
+    after)."""
+    try:
+        e = enumerate_drafts_holder(ctx, repo, bd, dl, call_s)
+    except OSError as x:
+        # A spawn that fails before a holder is known: the committed listing is already whole.
+        return DraftPhase({'state': 'unreadable', 'branch': bd, 'worktree': None, 'step': 'worktree-list',
+                           'detail': os_head('spawn', x)}, {}, {}, None)
     if e.trusted is None:
         return DraftPhase(e.facts, {}, {}, e.main)
     try:

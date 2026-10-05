@@ -2662,4 +2662,99 @@ describe('docs draft snapshot guards (docs W1a Task 14, G8)', () => {
     ].join('\n'));
     expect(got).toEqual([['special', null], ['unreadable', 'EIO'], ['absent', null]]);
   });
+
+  it('lie modes: a doc staged, THEN tagged, then edited again is one status row {trust:status}, never hashed a second time', () => {
+    const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n', [`${T14_S}b.md`]: 'bbbb\n' });
+    // Staged bytes first, so status prints `1 M.` for the path; the tag then hides only the worktree side.
+    t14fs.writeFileSync(t14path.join(wt, T14_S, 'a.md'), 'staged\n');
+    t14fs.writeFileSync(t14path.join(wt, T14_S, 'b.md'), 'staged too\n');
+    h.git(wt, 'add', `${T14_S}a.md`, `${T14_S}b.md`);
+    h.git(wt, 'update-index', '--assume-unchanged', `${T14_S}a.md`);
+    h.git(wt, 'update-index', '--skip-worktree', `${T14_S}b.md`);
+    t14fs.writeFileSync(t14path.join(wt, T14_S, 'a.md'), 'edited again\n');
+    t14fs.writeFileSync(t14path.join(wt, T14_S, 'b.md'), 'edited again, too\n');
+    // CONTROL: status does print both paths, and ls-files -v shows both tags.
+    expect(h.git(wt, 'status', '--porcelain', '--', 'docs').split('\n').sort()).toEqual([`M  ${T14_S}a.md`, `M  ${T14_S}b.md`]);
+    expect(h.git(wt, 'ls-files', '-v', '--', `${T14_S}a.md`, `${T14_S}b.md`).split('\n').map((l) => l[0]).sort()).toEqual(['S', 'h']);
+    const o = t14phase({ served: head });
+    expect(o.rows).toEqual({
+      'specs:a.md': t14row('modified', t14file('edited again\n')),
+      'specs:b.md': t14row('modified', t14file('edited again, too\n')),
+    });
+    expect(Object.values(o.rows).filter((r) => r['trust'] === 'hash')).toEqual([]);
+    expect(o.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged', 'skip-worktree'] });
+  }, 60000);
+
+  it('opaque: a nested repo AT a section path is opaque as that section path (Decided item 13)', () => {
+    const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+    const plans = t14path.join(wt, 'docs', 'superpowers', 'plans');
+    t14fs.mkdirSync(plans, { recursive: true });
+    h.git(wt, 'init', '-q', plans);
+    t14fs.writeFileSync(t14path.join(plans, 'x.md'), 'x\n');
+    expect(h.git(wt, 'status', '--porcelain', '--', 'docs')).toBe('?? docs/superpowers/plans/');
+    const o = t14phase({ served: head });
+    expect(o.rows).toEqual({});
+    expect(o.facts).toMatchObject({ state: 'holder', opaque: ['docs/superpowers/plans'] });
+  }, 60000);
+
+  it('revert race: a regular file whose bytes equal a committed SYMLINK\'s target is a typechange, never dropped as reverted', () => {
+    const { wt } = t14holder({ [`${T14_S}t.md`]: 't\n' });
+    t14fs.symlinkSync('t.md', t14path.join(wt, T14_S, 'l.md'));
+    h.git(wt, 'add', `${T14_S}l.md`);
+    h.git(wt, 'commit', '-m', 'a link');
+    const head = h.git(wt, 'rev-parse', 'HEAD');
+    t14fs.unlinkSync(t14path.join(wt, T14_S, 'l.md'));
+    t14fs.writeFileSync(t14path.join(wt, T14_S, 'l.md'), 't.md');
+    // CONTROL: git calls it a typechange, and the regular file hashes to the symlink's own blob.
+    expect(h.git(wt, 'status', '--porcelain', '--', 'docs')).toBe(`T ${T14_S}l.md`); // h.git trims the leading space of ` T`
+    expect(h.git(wt, 'hash-object', `${T14_S}l.md`)).toBe(h.git(wt, 'rev-parse', `HEAD:${T14_S}l.md`));
+    const o = t14phase({ served: head });
+    expect(o.facts).toMatchObject({ state: 'holder', baseEqual: true });
+    expect(o.rows).toEqual({ 'specs:l.md': t14row('typechange', t14file('t.md')) });
+  }, 60000);
+
+  it('a git spawn that fails (EMFILE, any of the phase\'s six calls) degrades the phase to unreadable and never raises', () => {
+    const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+    const body = [
+      ...t14prelude(),
+      `HEAD_SHA = ${t14q(head)}`,
+      'listed = H.list_committed(repo, HEAD_SHA, dl)',
+      'import errno',
+      'class Fails(H.Sys):',
+      '    def __init__(self, nth):',
+      '        self.nth, self.n, self.opened, self.closed = nth, 0, 0, 0',
+      '    def spawn(self, argv, *a, **k):',
+      '        self.n += 1',
+      '        if self.n == self.nth:',
+      "            raise OSError(errno.EMFILE, 'Too many open files')",
+      '        return H.Sys.spawn(self, argv, *a, **k)',
+      '    def open(self, path, flags, dir_fd=None):',
+      '        fd = H.Sys.open(self, path, flags, dir_fd=dir_fd)',
+      '        self.opened += 1',
+      '        return fd',
+      '    def close(self, fd):',
+      '        self.closed += 1',
+      '        H.Sys.close(self, fd)',
+      'got = []',
+      'for nth in (1, 2, 3, 4, 5, 6, 7):',
+      '    H.SYS = Fails(nth)',
+      "    ph = H.draft_phase(ctx, repo, 'ws/a', {'name': 'ws/a', 'commit': HEAD_SHA}, listed[3], dl)",
+      "    got.append([nth, ph.facts, len(ph.rows), ph.main is None, H.SYS.opened == H.SYS.closed])",
+      'out(got)',
+    ].join('\n');
+    const got = t14unitJson<[number, Record<string, unknown>, number, boolean, boolean][]>(h.home, body);
+    const head1 = 'spawn: Too many open files';
+    const early = { state: 'unreadable', branch: 'ws/a', worktree: null, step: 'worktree-list', detail: head1 };
+    const late = { state: 'unreadable', branch: 'ws/a', worktree: wt, step: 'status', detail: head1 };
+    expect(got.map(([n, f, rows, mainNone, closed]) => [n, f, rows, mainNone, closed])).toEqual([
+      [1, early, 0, true, true],
+      [2, early, 0, true, true],
+      [3, late, 0, false, true],
+      [4, late, 0, false, true],
+      [5, late, 0, false, true],
+      [6, late, 0, false, true],
+      // CONTROL: the phase makes six spawns, so a fault on the seventh never fires.
+      [7, expect.objectContaining({ state: 'holder' }), 0, false, true],
+    ]);
+  }, 120000);
 });
