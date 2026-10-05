@@ -23,15 +23,20 @@ import {
  * CHILD-WORKSPACE RECLAMATION, the server half (spec 2026-09-22 §5.5–§5.7).
  *
  * `close.ts`'s kind of file: an L1 decision reached through declared ports.
- * Three things live here and nowhere else —
+ * Five things live here and nowhere else —
  *   - the fourteen words `ccd ws-reclaim` and `ccd ws-audit --reclaim` answer
  *     with, and what each one MEANS to the server (gone / terminal / retry);
+ *   - `childReclaimGeneration` and `childReclaimLatest`, the one fence and the
+ *     one latest-event pick every read of the lifecycle mirror goes through
+ *     (spec §5.6: slugs recycle);
  *   - `childReclaimDecision`, the pure "has the coordinator finished with this
  *     child" predicate `closeRun` asks inside the coordination mutex;
  *   - `reclaimChild`, THE ONE EXECUTOR. The close path hands it a request on
  *     the session's own queue; wave 4's sweep hands it the same request. So
  *     presence, the capability gate and the feed row behave identically
- *     however a reclaim was started.
+ *     however a reclaim was started;
+ *   - `childReclaimStatus` and `withChildReclaim`, THE ONE DERIVATION of a
+ *     closed run's chip (spec §5.9), in the wave-5 section at the end.
  *
  * NAMING: every identifier here says `childReclaim`, never a bare `reclaim` —
  * `coord/reclaim.ts` already means handing a dead coordinator's claim to an
@@ -1396,6 +1401,7 @@ export interface ChildReclaimStatusInput {
    *  (`firstDeferredAt`), or null when it holds no defer. Never the
    *  presence-only clock that drives the ceiling. */
   readonly deferredSince: number | null;
+  /** The sweep's last recorded verdict for this child, or `unjudged` when the watcher holds none (spec §5.9). */
   readonly verdict: ChildReclaimChipVerdict;
   /** The sweep's in-memory entry is in a run of failed attempts (`consecutiveFailures > 0`). */
   readonly sweepFailing: boolean;

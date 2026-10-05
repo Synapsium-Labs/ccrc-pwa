@@ -116,6 +116,12 @@ const ROWS: readonly { readonly name: string; readonly input: ChildReclaimStatus
   { name: 'fleet paused, a terminal refusal → still refused',
     input: base({ fleetPaused: true, event: ev('refused', 'containment-unproven') }),
     want: { word: 'refused', sentence: refusalSentence('containment-unproven'), at: EV_AT } },
+  { name: 'fleet paused, a refusal with no token → still refused, ccd recorded no reason (spec §5.8)',
+    input: base({ fleetPaused: true, event: ev('refused', null) }),
+    want: { word: 'refused', sentence: S.refusedNoReason, at: EV_AT } },
+  { name: 'fleet paused, a token this build cannot classify → still refused, refusalSentence’s fallback (spec §5.8)',
+    input: base({ fleetPaused: true, event: ev('refused', 'from-a-newer-ccd') }),
+    want: { word: 'refused', sentence: 'ccrc declined: from-a-newer-ccd.', at: EV_AT } },
   { name: 'fleet paused, the on-box paused token → its own sentence and time',
     input: base({ fleetPaused: true, event: ev('refused', 'paused') }),
     want: { word: 'paused', sentence: refusalSentence('paused'), at: EV_AT } },
@@ -505,6 +511,18 @@ describe('withChildReclaim — the composer GET /api/runs calls', () => {
     it('inside the ceiling → the latest failure’s own word, at its own time', () => {
       expect(withChildReclaim([run({})], src({ events, nowMs: AT + 2_000 }))[0]!.childReclaim)
         .toEqual({ word: 'deferred', sentence: lcRefusalWord('pin-failed'), at: AT + 1_000 + CHILD_RECLAIM_DEFER_CEILING_MS });
+    });
+
+    it('reads the failure run inside THIS run’s generation: an older workspace’s failure under the recycled id does not date it (spec §5.6)', () => {
+      // The older workspace's failure is a million milliseconds before the run closed; the run's own workspace
+      // has failed once, a second ago. A run read across the fence would start at the older failure and read as
+      // past the ceiling, in the failing sentence, dated by a workspace that no longer exists.
+      const recycled = new Map([[SID, [
+        mirrored('create', 'done', AT - 1_100_000), mirrored('reclaim', 'failed', AT - 1_000_000, 'pin-failed'),
+        mirrored('create', 'done', AT - 50_000), mirrored('reclaim', 'failed', AT + 1_000, 'pin-failed'),
+      ]]]);
+      expect(withChildReclaim([run({})], src({ events: recycled, nowMs: AT + 60_000 }))[0]!.childReclaim)
+        .toEqual({ word: 'deferred', sentence: lcRefusalWord('pin-failed'), at: AT + 1_000 });
     });
 
     it('a held verdict outranks the failure run, past the ceiling too', () => {
