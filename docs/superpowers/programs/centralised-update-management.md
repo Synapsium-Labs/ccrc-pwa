@@ -1072,6 +1072,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - **Publish to converged:** 30 min.
       - STATUS: fleet and server v0.0.85, newest v0.0.85, backups fleet 108M/server 513M, disk free fleet 105G/work
         volume 235G/server 33G, no anomalies.
+    - **2026-10-05 15:27 UTC — v0.0.86 (#240, the GPT lane's macOS reds) published at 14:49 and auto-converged
+      unattended.** The fleet box ran 15:14:33–15:20:45, its sweep verifying 37 supervisors, all ordinary passes; the
+      server box followed. For `stable`, the GPT lane's macOS reds are now addressed on `main`. The next daily full run,
+      or a stable gate, measures it.
+      - STATUS: fleet and server v0.0.86, newest v0.0.86, backups fleet 121M/server 516M, disk free fleet 106G/work
+        volume 143G/server 33G, no anomalies.
+      - **The work volume fell from 235G to 124G free between 14:27 and about 15:35.** The writer is a root `rsync`,
+        running since about 15:02, that copies the session temp tree and the worker temp tree from the root disk onto
+        the volume. That is an operator migration, not a ccrc process. It was reported to the operator with the rate
+        (about 100G/h), because if the sources outsize what is left, every worktree on the volume runs out of space.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
@@ -1785,6 +1795,11 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
     **Ack** on another item, so the operator could not find the remedy from the refusal.
   - (c) The "boxes run different builds" banner stops advising `ccrc rollout` or `ccrc update` while auto is on and
     the console can move the nodes; it points at the console's own move or the halt.
+- **R16 (2026-10-05, security; seen while monitoring, owner to rule).** The `ccrc-api` client passes the box token to
+  `curl` as an `-H` header on its argv. So the token is readable in every process listing on the box
+  (`/proc/<pid>/cmdline`) for the life of each call. It appeared in a coordinator's read-only `ps` during this
+  monitoring. The fix shape is a header read from a 0600 file or from stdin (`curl -H @file`, or `-K -`), with a test
+  that scans the argv the client builds. Rotating the token is the operator's.
 ## Next-wave brief
 
 **Wave 2 (run 128) — dispatched 2026-09-23.** The brief as sent is the plan's path and sha, tasks 1–15, execution
