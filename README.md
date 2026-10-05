@@ -5503,9 +5503,14 @@ line naming the pane's session id, then the payload as sent). Raw captures
 carry prompts, paths and tool arguments and never leave the box:
 `node deploy/hook-capture-reduce.mjs <dir>` reduces a directory to key paths,
 types and validated tokens, and only that is fit to commit. `SessionEnd` is
-registered for the delegation broker's measurement (spec 2026-10-04 §5.3): it is captured
-in a `-hookcap` session and otherwise writes nothing. The reducer's `delegation` block (`--root <label>=<path>` classifies `cwd`) reports tool names from a fixed set, Agent/Workflow key names, isolation as a token and ordinals in place of ids — still no value, id or path. Every other
-session pays one string test for the arm.
+registered for the delegation broker's measurement (spec 2026-10-04 §5.3): it is
+captured in a `-hookcap` session and otherwise writes nothing. The reducer's
+`delegation` block (`--root <label>=<path>` classifies `cwd`) reports tool names
+from a fixed set, Agent/Workflow key names, isolation as a token and ordinals in
+place of ids — still no value, id or path. Every other session pays one string
+test for the arm. `deploy/delegation-census.mjs` is a read-only, path-free
+census of one repository's leftover Agent/Workflow worktrees and their subagent
+metadata (delegation broker wave 1).
 
 Known real-format subtleties already encoded:
 

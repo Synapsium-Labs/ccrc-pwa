@@ -3022,7 +3022,7 @@ if [[ -z "$paid" && -e "$REG/$id.generation" ]]; then
 fi
 # StopFailure (§5.1) leaves hookstate.json alone and prints nothing: its arm raised
 # the flag and read `err` for the marker above (stopfailure-sets-a-flag (D-3611)), and nothing
-# below may run for it.
+# below may run for it. SessionEnd is a termination hint, captured above in a -hookcap session and otherwise inert.
 [[ -n "$stopfail$sessend" ]] && exit 0
 
 f="$REG/$id.hookstate.json"
