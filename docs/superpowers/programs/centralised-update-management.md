@@ -1249,6 +1249,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - Numbers 3946 to 3957 were issued to run 261. The plan defines D-3946..D-3949, the brief's reserve is numbers
     3950 to 3954, and 3955 to 3957 are kept for fix rounds. Each is written bare until it is defined.
 
+- **2026-10-05 01:13 UTC: ask 16 from run 261's worker answered "Rerun foreground".** Claude Code's memory-pressure
+  reaper killed the Task 3 server gate during `ccrc-install`. The box had 2 GiB free, with 6 of 7 GiB of swap in
+  use. Tasks 1–2 had passed review, the agent suite was 452/452, and the new case 6/6.
+  - Ruled from the plan: suites run "in the foreground, one command per call", and the brief puts the full gate
+    "before the push". So letting CI stand in for the gate is out, and the reaper takes idle background shells,
+    not a foreground run.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
