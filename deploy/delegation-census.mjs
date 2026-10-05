@@ -53,16 +53,26 @@ const json = (f) => {
   try { const v = JSON.parse(fs.readFileSync(f, 'utf8')); return v !== null && typeof v === 'object' && !Array.isArray(v) ? v : MALFORMED; } catch { return MALFORMED; }
 };
 const exists = (f) => { try { fs.statSync(f); return true; } catch { return false; } };
+// A loose ref file's text, with the failure kept apart (never folded to null like `text`): null = nothing at that
+// path (ENOENT), or a directory there (EISDIR; git falls through a directory to packed-refs too); UNREADABLE = a
+// file that exists but cannot be read (EACCES, ELOOP, EIO, ...), whose stale packed-refs line must not stand in for it.
+const UNREADABLE = Symbol('unreadable');
+const looseText = (f) => {
+  try { return fs.readFileSync(f, 'utf8'); } catch (e) { return e.code === 'ENOENT' || e.code === 'EISDIR' ? null : UNREADABLE; }
+};
 // A `ref: <name>` HEAD's tip, read-only in the common dir: the loose ref file's first line, else the `packed-refs`
 // line `<sha> <name>` (the `#` header and a `^` peeled line match no such line, so they are skipped by shape).
 // Returns a sha, or null for "unresolved" — the caller says 'unmeasured', since for movedFromBase null is spoken
-// for. A name that is not `refs/<safe chars>`, or has a `..` segment, is never joined onto a path.
+// for. A name that is not `refs/<safe chars>`, or has a `..` segment, is never joined onto a path. Only an ABSENT
+// loose file (or a directory there) goes on to packed-refs; one that exists and is not a sha, or cannot be read,
+// is unresolved — a stale packed line behind it would be a silently wrong answer.
 const REF_NAME = /^refs\/[A-Za-z0-9._/-]+$/;
 const PACKED_LINE = /^([0-9a-f]{40}) (refs\/\S+)$/;
 const refTip = (name) => {
   if (!REF_NAME.test(name) || name.split('/').includes('..')) return null;
   const common = path.join(repo, '.git');
-  const loose = text(path.join(common, name));
+  const loose = looseText(path.join(common, name));
+  if (loose === UNREADABLE) return null;
   if (loose !== null) { const sha = loose.split('\n')[0].trim(); return SHA.test(sha) ? sha : null; }
   for (const line of (text(path.join(common, 'packed-refs')) ?? '').split('\n')) {
     const m = PACKED_LINE.exec(line.trim());

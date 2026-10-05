@@ -252,6 +252,9 @@ describe('delegation-census (read-only, path-free)', () => {
         { name: 'r-packed-eq', files: { HEAD: 'ref: refs/heads/worktree-pk\n', ...base }, wt: 'wt-3' },
         { name: 'r-packed-ne', files: { HEAD: 'ref: refs/heads/worktree-pk-other\n', ...base }, wt: 'wt-4' },
         { name: 'r-packed-junk', files: { HEAD: 'ref: refs/heads/worktree-pk-junk\n', ...base }, wt: 'wt-14' },
+        { name: 'r-packed-xsha', files: { HEAD: 'ref: refs/heads/wt-x\n', ...base }, wt: 'wt-15' },
+        { name: 'r-packed-trail', files: { HEAD: 'ref: refs/heads/wt-y\n', ...base }, wt: 'wt-16' },
+        { name: 'r-dir-packed', files: { HEAD: 'ref: refs/heads/worktree-dir\n', ...base }, wt: 'wt-17' },
         { name: 'r-absent', files: { HEAD: 'ref: refs/heads/worktree-nowhere\n', ...base }, wt: 'wt-5' },
         { name: 'r-symbolic', files: { HEAD: 'ref: refs/heads/worktree-sym\n', ...base }, wt: 'wt-6' },
         { name: 'r-junk', files: { HEAD: 'ref: refs/heads/worktree-junk\n', ...base }, wt: 'wt-7' },
@@ -269,6 +272,7 @@ describe('delegation-census (read-only, path-free)', () => {
       put('refs/heads/worktree-two', `${SHA_B}\n`);
       put('refs/heads/worktree-sym', 'ref: refs/heads/worktree-two\n');
       put('refs/heads/worktree-junk', 'not a sha at all\n');
+      fs.mkdirSync(path.join(git, 'refs', 'heads', 'worktree-dir'), { recursive: true });   // a leftover EMPTY directory at the loose path
       put('packed-refs', [
         '# pack-refs with: peeled fully-peeled sorted',
         `${SHA_B} refs/heads/worktree-pk-zz`,
@@ -278,6 +282,9 @@ describe('delegation-census (read-only, path-free)', () => {
         `${'z'.repeat(40)} refs/heads/worktree-pk-junk`,   // a packed line whose first field is not a sha
         `${SHA_B} refs/heads/worktree-sym`,   // a stale packed line behind a loose ref that is not a sha: the loose file wins
         `${SHA_B} refs/heads/worktree-junk`,
+        `x${SHA_B} refs/heads/wt-x`,   // a sha with a stray prefix: the line is anchored at its start
+        `${SHA_B} refs/heads/wt-y junk`,   // a name with trailing text: the line is anchored at its end
+        `${SHA_B} refs/heads/worktree-dir`,   // git falls through a directory at the loose path to packed-refs
         '',
       ].join('\n'));
       const r = census(['--repo', w.repo, '--home', w.h1]);
@@ -297,6 +304,7 @@ describe('delegation-census (read-only, path-free)', () => {
       const { at } = refWorld();
       expect(at('r-packed-eq')).toBe(false);
       expect(at('r-packed-ne')).toBe(true);
+      expect(at('r-dir-packed')).toBe(true);   // a directory at the loose path is not a loose ref: packed-refs answers (as git does)
     });
 
     it("reports 'unmeasured', never null, for a ref that does not resolve and for an unreadable or malformed HEAD", () => {
@@ -305,6 +313,8 @@ describe('delegation-census (read-only, path-free)', () => {
       expect(at('r-symbolic')).toBe('unmeasured');   // a symbolic loose ref is not followed, and a stale packed line does not stand in for it
       expect(at('r-junk')).toBe('unmeasured');   // a loose file that is not a sha does not fall through to packed-refs
       expect(at('r-packed-junk')).toBe('unmeasured');   // a packed-refs line that is not <sha> <name>
+      expect(at('r-packed-xsha')).toBe('unmeasured');   // `x<sha> <name>`: not a line that STARTS with a sha
+      expect(at('r-packed-trail')).toBe('unmeasured');   // `<sha> <name> junk`: not a line that ENDS at the name
       expect(at('h-malformed')).toBe('unmeasured');
       expect(at('h-unreadable')).toBe('unmeasured');
     });
@@ -319,10 +329,25 @@ describe('delegation-census (read-only, path-free)', () => {
 
     it('prints no ref name, sha or path while resolving refs', () => {
       const { w, out, stdout } = refWorld();
-      expect(out.totals.records).toBe(14);   // the scan below ran over a real document
+      expect(out.totals.records).toBe(17);   // the scan below ran over a real document
       for (const bad of [w.repo, w.h1, LOOSE_NAME, 'SENTINEL', 'refs/', 'heads', 'packed', SHA_A, SHA_B, 'worktree-pk', 'r-loose']) {
         expect(stdout.includes(bad), bad).toBe(false);
       }
+    });
+
+    it("reports 'unmeasured' for a loose ref that exists but cannot be read, never the stale packed-refs line behind it", () => {
+      if (process.getuid?.() === 0) return;   // root reads through mode 000
+      const w = mini([{ name: 'r-eacces', files: { HEAD: 'ref: refs/heads/wt-eacces\n', CLAUDE_BASE: SHA_A }, wt: 'wt-g' }]);
+      const git = path.join(w.repo, '.git');
+      const loose = path.join(git, 'refs', 'heads', 'wt-eacces');
+      fs.mkdirSync(path.dirname(loose), { recursive: true });
+      fs.writeFileSync(loose, `${SHA_A}\n`);   // the real tip: equal to CLAUDE_BASE
+      fs.writeFileSync(path.join(git, 'packed-refs'), `${SHA_B} refs/heads/wt-eacces\n`);   // stale: would read `true`
+      fs.chmodSync(loose, 0o000);
+      try {
+        const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
+        expect(out.records[0].movedFromBase).toBe('unmeasured');
+      } finally { fs.chmodSync(loose, 0o600); }
     });
 
     it("refuses a ref name that is not shaped refs/<safe chars> or has a .. segment: 'unmeasured', never joined onto a path", () => {
@@ -331,6 +356,7 @@ describe('delegation-census (read-only, path-free)', () => {
         { name: 'x-dotdot2', files: { HEAD: 'ref: refs/heads/../../../planted2\n', CLAUDE_BASE: SHA_A }, wt: 'wt-b' },
         { name: 'x-noprefix', files: { HEAD: 'ref: planted3\n', CLAUDE_BASE: SHA_A }, wt: 'wt-c' },
         { name: 'x-badchar', files: { HEAD: 'ref: refs/heads/wt space\n', CLAUDE_BASE: SHA_A }, wt: 'wt-d' },
+        { name: 'x-anchor', files: { HEAD: 'ref: x/refs/planted4\n', CLAUDE_BASE: SHA_A }, wt: 'wt-f' },
         { name: 'x-control', files: { HEAD: 'ref: refs/heads/ok\n', CLAUDE_BASE: SHA_A }, wt: 'wt-e' },
       ]);
       const git = path.join(w.repo, '.git');
@@ -338,16 +364,19 @@ describe('delegation-census (read-only, path-free)', () => {
       fs.writeFileSync(path.join(w.repo, 'planted'), `${SHA_B}\n`);                // <repo>/.git/refs/../../planted
       fs.writeFileSync(path.join(w.repo, 'planted2'), `${SHA_B}\n`);               // <repo>/.git/refs/heads/../../../planted2
       fs.writeFileSync(path.join(git, 'planted3'), `${SHA_B}\n`);                  // <repo>/.git/planted3
+      fs.mkdirSync(path.join(git, 'x', 'refs'), { recursive: true });
+      fs.writeFileSync(path.join(git, 'x', 'refs', 'planted4'), `${SHA_B}\n`);     // <repo>/.git/x/refs/planted4: contains refs/, does not START with it
       fs.mkdirSync(path.join(git, 'refs', 'heads'), { recursive: true });
       fs.writeFileSync(path.join(git, 'refs', 'heads', 'wt space'), `${SHA_B}\n`);
       fs.writeFileSync(path.join(git, 'refs', 'heads', 'ok'), `${SHA_B}\n`);
       const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
-      const order = ['x-dotdot', 'x-dotdot2', 'x-noprefix', 'x-badchar', 'x-control'].sort();
+      const order = ['x-dotdot', 'x-dotdot2', 'x-noprefix', 'x-badchar', 'x-anchor', 'x-control'].sort();
       const at = (n: string): unknown => out.records[order.indexOf(n)].movedFromBase;
       expect(at('x-dotdot')).toBe('unmeasured');
       expect(at('x-dotdot2')).toBe('unmeasured');
       expect(at('x-noprefix')).toBe('unmeasured');
       expect(at('x-badchar')).toBe('unmeasured');
+      expect(at('x-anchor')).toBe('unmeasured');   // `refs/` somewhere inside the name is not the shape: the match is anchored at its start
       expect(at('x-control')).toBe(true);   // the same planting, under a well-shaped name, does resolve
     });
   });
