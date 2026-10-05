@@ -1029,6 +1029,28 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         - The green one says v0.0.84 is out, with **Update all** and **See what's new**. **Update all** is the apply
           that the halt skips.
         - The only door out of a halt, **Ack**, is in Settings, on the failed node's item.
+    - **2026-10-05 12:36 UTC — the operator acked at 12:21:44 (200), and auto converged both boxes on v0.0.84.**
+      - **The ack** reached the server at 12:21:44, after two more applies (12:18:59, 12:19:15) that were skipped as
+        halted. The fleet row read `idle`, "acknowledged by the operator".
+      - **The fleet box** started at 12:22:31, 47 s after the ack, as `from: pwa`, and went v0.0.78 → v0.0.84.
+        - Phases: `backing-up`, then `installing` 12:22:51, `checking` 12:23:36 (the gate passed), `restarting`
+          12:23:51, and `done` 12:34:26.
+        - The sweep ran v0.0.78's `_upd_sweep` with v0.0.84's `verify-service.sh`. It verified 71 supervisors one by
+          one ("active, MainPID … stable across 5s"), about 8.9 s each, 10.5 min in all, and ended with "every live
+          claude-session@ supervisor now runs the ccd this update installed".
+        - No unit stopped inside the window: there was no "stopped on purpose" line. So wave 10's classifier was not
+          exercised, and the move passed on ordinary verifies.
+      - **The server box** started at 12:34:27, as the fleet box finished, and was `done` at 12:34:49. `/health`
+        answers v0.0.84.
+      - **The inventory settled at 12:36:** both rows read `idle`, install `complete`, provenance `verified`, "done:
+        v0.0.84". A 12:35 read caught the server row still `pending`/`incomplete` from before its restart. That was
+        transient: the next one-minute measurement settled it.
+      - **Time from ack to convergence:** 13 min.
+      - **Side observation, not this mechanism:** the fleet box's `ccd-graph-sweep.service` was OOM-killed at 12:33,
+        during the sweep (peak 1.7G). It was killed 13 times in the last 24 h, with the box at 30G total and about 2G
+        available.
+      - STATUS: fleet and server v0.0.84, newest v0.0.84, backups fleet 98M/server 510M, disk free fleet 61G/work
+        volume 11G/server 33G; no anomaly but the work volume.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
