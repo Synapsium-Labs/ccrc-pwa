@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=15f8fe4f007c659eace511cfed3ceed590bcbacdb54d1025e96bd05534b5c88e
+# ccrc:generated 1 sha256=99096a682cc3ace7c293c5725c634a2aef61d39ee95b7349e65bc3d6fcb0ce69
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28559,7 +28559,9 @@ _ws_expire_presence() {   # id probe-verdict workdir [detached] -> 0 when nothin
   # AND A PROCESS WITH ITS WORKING DIRECTORY IN THE WORKTREE, whatever it is
   # (an operator's own shell, outside the pane and the unit): `in-use`,
   # retryable, asked last (`_ws_expire_cwd_users`, 3962). WHAT IT DOES NOT SEE:
-  # a process of ANOTHER UNIX user — its cwd link cannot be read from here.
+  # a process of ANOTHER UNIX user, or a SAME-user NON-DUMPABLE one (an
+  # ssh-agent, anything that cleared its dumpable flag, a setuid or setgid
+  # exec) — its cwd link cannot be read from here.
   local id="$1" verdict="$2" workdir="$3" how="${4-}" unit out lrc
   [[ "$verdict" != live ]] \
     || { _reap_refuse live "$(_tmux "$id") is up$([[ "$how" == detached ]] && printf ' with no terminal attached') — an archived workspace whose pane runs is in use, and is never expired"; return 1; }
@@ -28618,7 +28620,10 @@ _ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working dir
   # a PATH may omit it; an lsof found nowhere is unmeasured).
   # A PROCESS IS SKIPPED ONLY ON PROOF IT VANISHED, or on the one ruled
   # exception. Vanished: its cwd link or its stat file answers ENOENT/ESRCH
-  # (Linux), or `ps` exits non-zero with NO output for it (Darwin). The
+  # (Linux), or, on Darwin, `ps` could not name its parent AND the kernel
+  # answers no such process (`kill(pid, 0)` is ESRCH; ps's own exit status and
+  # silence prove nothing: a failing ps, or one killed by a signal, is an error).
+  # A process that exists, or whose existence cannot be told, is unmeasured. The
   # exception is a cwd link that answers EACCES: the fleet is single-user, and
   # refusing on every unreadable link (a root daemon's is routine) would
   # refuse every expiry for ever. THE LIMIT, stated: what that skips is NOT
@@ -28675,13 +28680,17 @@ def ppid_of(pid):
         return f[1]
     r = subprocess.run(["ps", "-o", "ppid=", "-p", pid], capture_output=True, text=True)
     out = r.stdout.strip()
-    if r.returncode != 0:
-        if out == "":
-            return None
-        sys.exit(3)
-    if not out.isdigit():
-        sys.exit(3)
-    return out
+    if r.returncode == 0 and out.isdigit():
+        return out
+    # ps could not say. Its exit status and its silence are NOT proof of
+    # anything (a failing ps, one killed by a signal, an empty answer all look
+    # alike): only the KERNEL may say the process is gone, and a process that
+    # exists, or whose existence cannot be told, is unmeasured.
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return None
+    sys.exit(3)
 def scan():
     cwds = []
     if mode == "proc":

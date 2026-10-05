@@ -323,8 +323,8 @@ describe('rung 5, a process whose working directory is the worktree — `in-use`
 
   // The fake root: `$HOME/fp/<pid>/cwd` (a link) and `stat` (the kernel's one line, whose fourth field is the parent).
   const FAKE = (wt: string): string => [
-    'mkdir -p "$HOME/fp/$$"; ln -s "$HOME" "$HOME/fp/$$/cwd";',
-    '_fp() { mkdir -p "$HOME/fp/$1"; ln -s "$2" "$HOME/fp/$1/cwd"; printf "%s (a b) S %s 1 1 0\\n" "$1" "$3" > "$HOME/fp/$1/stat"; };',
+    'mkdir -p "$HOME/fp/$$"; ln -sfn "$HOME" "$HOME/fp/$$/cwd";',
+    '_fp() { mkdir -p "$HOME/fp/$1"; ln -sfn "$2" "$HOME/fp/$1/cwd"; printf "%s (a b) S %s 1 1 0\\n" "$1" "$3" > "$HOME/fp/$1/stat"; };',
     `_fp 4242 "${real(wt)}/sub" 1;`,
     '_ws_expire_proc_root() { printf %s "$HOME/fp"; };',
   ].join(' ');
@@ -341,7 +341,7 @@ describe('rung 5, a process whose working directory is the worktree — `in-use`
       '_fp 4300 "' + real(wt) + '" $$;',
       'mkdir -p "$HOME/fp/4301";',
       '_fp 4303 "' + real(wt) + '" 1; rm -f "$HOME/fp/4303/stat";',
-      root ? ':' : '_fp 4304 "' + real(wt) + '" 1; chmod 000 "$HOME/fp/4304";',
+      root ? ':' : '[[ -e "$HOME/fp/4304" ]] || { _fp 4304 "' + real(wt) + '" 1; chmod 000 "$HOME/fp/4304"; };',
     ].join(' ');
     const eacces = path.join(h.home, 'fp', '4304');
     try {
@@ -450,18 +450,41 @@ describe('rung 5 on Darwin — a cwd under the worktree, asked of lsof', () => {
     } finally { s.stop(); }
   }, 60_000);
 
-  it('`ps` failing with OUTPUT is unmeasured; `ps` exiting non-zero with NO output is the proof of a vanished pid — skipped', () => {
+  // A SKIP NEEDS THE KERNEL'S WORD. `ps` that fails, is killed by a signal or says nothing is an ERROR, whatever its
+  // status: with the process alive (a real `sleep` in the worktree) every one of them is UNMEASURED. Only a pid the
+  // kernel no longer has (`kill(pid, 0)` answers ESRCH) is skipped. Review measured the previous rule — "ps exits
+  // non-zero with no output means gone" — answering nobody for four of the first five.
+  const psCase = (name: string, ps: string): { verdict: string; detail: string } => {
     const { wt } = makeArchived(h);
     const s = holdCwd(wt);
     try {
-      const pre = (dir: string): string => lsof(listing(s.pid, fs.realpathSync(wt))) + withPs(dir);
-      const boom = expireEvalOf(h, { pre: pre(binDir('ps-boom', 'echo "ps: kernel said no"; exit 2')) });
-      expect(boom.verdict, boom.detail).toBe('unmeasured');
-      const garbage = expireEvalOf(h, { pre: pre(binDir('ps-garbage', 'echo not-a-pid')) });
-      expect(garbage.verdict, garbage.detail).toBe('unmeasured');
-      const gone = expireEvalOf(h, { pre: pre(binDir('ps-gone', 'exit 1')) });
-      expect(gone.verdict, 'the CONTROL: exit 1, nothing printed — the pid is not there').toBe('expirable');
+      return expireEvalOf(h, { pre: lsof(listing(s.pid, fs.realpathSync(wt))) + withPs(binDir(name, ps)) });
     } finally { s.stop(); }
+  };
+
+  it.each([
+    ['(a) exits 1 with only stderr', 'echo "ps: something broke" >&2; exit 1'],
+    ['(a2) exits 2 with output', 'echo "ps: kernel said no"; exit 2'],
+    ['(a3) a silent exit 127', 'exit 127'],
+    ['(b) is killed by SIGKILL', 'kill -9 $$'],
+    ['(b2) is killed by SIGSEGV', 'kill -SEGV $$'],
+    ['(d) exits 0 with an empty answer', 'exit 0'],
+    ['(d2) exits 0 with an answer that is no pid', 'echo not-a-pid'],
+  ] as const)('a live process in the worktree and a `ps` that %s is UNMEASURED — never a skip', (what, ps) => {
+    const r = psCase(`ps-${what.slice(1, 3)}`, ps);
+    expect(r.verdict, `${what}: ${r.detail}`).toBe('unmeasured');
+  }, 60_000);
+
+  it('(c) a pid the KERNEL no longer has is skipped — whether ps answers an error or says nothing', () => {
+    const { wt } = makeArchived(h);
+    // A real pid, finished AND REAPED before the listing names it (bash waits for it), so `kill(pid, 0)` is ESRCH.
+    const gone = Number(execFileSync('bash', ['-c', 'sleep 0 & echo $!; wait'], { encoding: 'utf8' }).trim());
+    const pre = (extra: string): string => lsof(listing(gone, fs.realpathSync(wt))) + extra;
+    expect(expireEvalOf(h, { pre: pre('') }).verdict, 'the real ps: no such process').toBe('expirable');
+    for (const ps of ['exit 1', 'echo "ps: it broke" >&2; exit 2', 'kill -9 $$']) {
+      const r = expireEvalOf(h, { pre: pre(withPs(binDir(`ps-c${ps.length}`, ps))) });
+      expect(r.verdict, `${ps}: ${r.detail}`).toBe('expirable');
+    }
   }, 90_000);
 
   it('lsof not on PATH is found at the fallback (/usr/sbin on macOS); found nowhere it is unmeasured', () => {
