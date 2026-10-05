@@ -2957,7 +2957,7 @@ BEW_CAUSE=""   # _box_env_unit_whole: cr | nul | utf8
 # was not measured), never absent;
 # BUE_VAL/BUE_SRC then carry what ccrc.env alone says, for a caller that must word that. rc 0 measured.
 # Wave 9 R10a/R10e (D-3822, D-3823): the two files reach the server by DIFFERENT FEEDERS, and each is modelled as its own.
-#   Linux  systemd's `EnvironmentFile=` — `_box_env_value`'s `unit` mode. A shape it cannot decide is rc 3.
+#   Linux  systemd's `EnvironmentFile=` — `_box_env_value`'s `unit` mode, read byte-wise (D-3979). A shape it cannot decide is rc 3.
 #   Darwin the launchd job's `set -a; . file` under /bin/bash (`_svc_install`'s `set -a; [ -f '$env1' ] …` line) —
 #          `_box_unit_env_shell`, by round-2 ruling R-A.
 # rc 3 UNMEASURED, the SECOND unmeasured state (rc 2 is the unreadable exposure file, checked first on both platforms):
@@ -2969,6 +2969,12 @@ _box_unit_env() {   # <KEY>
   local key="$1" v rc envund=0 expund=0 f envwhole="" envline=0 expwhole="" expline=0 whole wline
   BUE_VAL=""; BUE_SRC=""; BUE_NAMED=0; BUE_ENV=absent; BUE_EXP=absent; BUE_WHY=""; BUE_FIX=""
   if [ "${CCD_OS:-linux}" = darwin ]; then _box_unit_env_shell "$key"; return; fi
+  # Wave 11 R14(f) (D-3979): the Linux arm reads BYTES, as systemd's EnvironmentFile= parser does. In the caller's
+  # UTF-8 locale `unit` mode's `read` took a line ending in an incomplete UTF-8 sequence and the newline after it as one
+  # character, so a comment swallowed the key line below it — a false ARMED or a false OFF. Declared HERE, after the
+  # Darwin dispatch and never above it, in no spelling: a pin above it would cover `_box_unit_env_shell` too, and that
+  # arm's own `LC_ALL=C` (D-3833) would stop being load-bearing — T4-M31 would no longer red (measured). U4p pins it.
+  local LC_ALL=C
   if [ -e "$BOX_ENV_FILE" ]; then
     if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
       BUE_ENV=ok

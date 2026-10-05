@@ -4157,35 +4157,70 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
 
     // Fix round 2 (D-3833, review 266 F1/F2): every row above runs under the harness's LC_ALL=C. Under a UTF-8 locale bash
     // `read`s CHARACTERS: an incomplete lead byte (0xC3) takes the NUL after it (the NUL is never seen) or the newline
-    // after it (two lines read as one). The Darwin arm now reads bytes whatever the caller's locale; these rows run it
-    // under a UTF-8 one, proved in effect first.
-    // The F2 row is DARWIN ONLY, deliberately: `unit` mode's own line loop (Linux) still reads in the caller's locale,
-    // so under UTF-8 it reads that file as ccrc.env's `on` where systemd hands the unit `off` — measured identical at
-    // b40f4145, f74f5e90 and 670d25fd. Round 2's bar forbids changing a Linux verdict, so it is reported, not fixed here.
-    /** `[label, ccrc.env, exposure file, the answer: rc 3 naming the exposure file's NUL, or the decided value, the feeders]`. */
-    const U4U: Array<[string, string, string, { rc: 3 } | { rc: 0; val: string }, Array<'darwin' | 'linux'>]> = [
-      ['F1: a lead byte right before the NUL', 'CCRC_AUTH=off\n', '# caf\xc3\0\nCCRC_AUTH=on\n', { rc: 3 }, ['darwin', 'linux']],
-      ['the NUL as the last byte, after a lead byte', 'CCRC_AUTH=off\n', 'CCRC_AUTH=on\n#\xc3\0', { rc: 3 }, ['darwin', 'linux']],
-      ['F2: a comment ending in a lone lead byte keeps its newline', 'CCRC_AUTH=on\n', '# caf\xc3\nCCRC_AUTH=off\n', { rc: 0, val: 'off' }, ['darwin']],
+    // after it (two lines read as one). The Darwin arm reads bytes whatever the caller's locale (D-3833); these rows run
+    // both feeders under a UTF-8 one, proved in effect first.
+    // Wave 11 (D-3979), three things. The F2 row is no longer Darwin-only: `unit` mode reads bytes too, since the Linux
+    // arm of `_box_unit_env` pins `LC_ALL=C` below its Darwin dispatch, so a comment ending in a lone lead byte keeps
+    // its newline on both feeders (it read ccrc.env's `on` where systemd hands the unit `off`, measured identical at
+    // b40f4145, f74f5e90, 670d25fd and main), and L1 is the same merge inside ccrc.env, a false OFF. And G1 is the input
+    // review 269 measured giving a false ARMED under the "relocated pin" mutant: the plain test's own line loop under
+    // UTF-8 reads the comment and the `unset` line as one, so it passes a file that unsets the key (Darwin rc 3, line 2);
+    // systemd ignores a line with no `=`, so Linux decides `on` from ccrc.env.
+    /** What one feeder answers: today's NUL arm, the line the plain test refuses, or a decided value and where it came from. */
+    type Want = { rc: 3; nul: true } | { rc: 3; line: number } | { rc: 0; val: string; src: 'env' | 'exp' };
+    /** `[label, ccrc.env, exposure file or null, answers per feeder]`. A feeder a row does not list is not asserted for it
+     *  (none today: every row states both). */
+    const U4U: Array<[string, string, string | null, { darwin?: Want; linux?: Want }]> = [
+      ['F1: a lead byte right before the NUL', 'CCRC_AUTH=off\n', '# caf\xc3\0\nCCRC_AUTH=on\n',
+        { darwin: { rc: 3, nul: true }, linux: { rc: 3, nul: true } }],
+      ['F1b: the NUL as the last byte, after a lead byte', 'CCRC_AUTH=off\n', 'CCRC_AUTH=on\n#\xc3\0',
+        { darwin: { rc: 3, nul: true }, linux: { rc: 3, nul: true } }],
+      ['F2: a comment ending in a lone lead byte keeps its newline', 'CCRC_AUTH=on\n', '# caf\xc3\nCCRC_AUTH=off\n',
+        { darwin: { rc: 0, val: 'off', src: 'exp' }, linux: { rc: 0, val: 'off', src: 'exp' } }],
+      ['L1: the same merge in ccrc.env, no exposure file', '# caf\xc3\nCCRC_AUTH=on\n', null,
+        { darwin: { rc: 0, val: 'on', src: 'env' }, linux: { rc: 0, val: 'on', src: 'env' } }],
+      ['G1: the plain test\'s own line loop (review 269 F1)', 'CCRC_AUTH=on\n', '# caf\xc3\nunset CCRC_AUTH\n',
+        { darwin: { rc: 3, line: 2 }, linux: { rc: 0, val: 'on', src: 'env' } }],
     ];
 
-    it('U4u: under a UTF-8 locale, a lead byte before a NUL still reads rc 3, and a comment ending in a lead byte does not swallow the next line on Darwin (D-3833; 670d25fd under UTF-8: Darwin rc 0 `on`, twice)', () => {
+    it('U4u: under a UTF-8 locale, a lead byte before a NUL still reads rc 3, and a comment ending in a lead byte does not swallow the next line on either feeder (D-3833, D-3979; main under UTF-8: Linux rc 0 `on` for F2 and rc 0 empty for L1)', () => {
       const loc = utf8Locale();
+      // `expect.soft`: every row is measured, so a red run names each one that moved (F2 and L1 together), not the first.
       const rows: UnitEnvRow[] = U4U.map(([label, env, exp]) => ({ label, env, exp, key: 'CCRC_AUTH' }));
       for (const os of ['darwin', 'linux'] as const) {
         const got = unitEnvAnswers(rows, os, loc);
-        U4U.forEach(([label, , , want, oses], i) => {
-          if (!oses.includes(os)) return;
+        U4U.forEach(([label, , , wants], i) => {
+          const want = wants[os];
+          if (want === undefined) return;
           const a = got[i]!;
           const tag = `${os} under LC_ALL=${loc}: ${label}`;
-          if (want.rc === 3) {
-            expect([a.rc, a.val, a.src], tag).toEqual([3, '', '']);
-            expect(a.why.startsWith(`${a.expPath} holds a NUL byte`), `${tag}: ${a.why}`).toBe(true);
+          if (want.rc === 3 && 'nul' in want) {
+            expect.soft([a.rc, a.val, a.src], tag).toEqual([3, '', '']);
+            expect.soft(a.why.startsWith(`${a.expPath} holds a NUL byte`), `${tag}: ${a.why}`).toBe(true);
+          } else if (want.rc === 3) {
+            expect.soft([a.rc, a.val, a.src], tag).toEqual([3, '', '']);
+            expect.soft(a.why.startsWith(`${a.expPath} line ${want.line} is not a plain NAME=value line`), `${tag}: ${a.why}`).toBe(true);
           } else {
-            expect([a.rc, a.val, a.src], tag).toEqual([0, want.val, a.expPath]);
+            expect.soft([a.rc, a.val, a.src], tag).toEqual([0, want.val, want.src === 'env' ? a.envPath : a.expPath]);
           }
         });
       }
+    });
+
+    // Wave 11 (D-3979): the placement of the Linux pin is pinned structurally, in whatever spelling. `local LC_ALL=C` must
+    // sit BELOW the Darwin dispatch: above it, it would also cover `_box_unit_env_shell`, whose own `LC_ALL=C` (D-3833)
+    // would stop being load-bearing, and T4-M31 (dropping that one) would no longer red U4u (measured). No `LC_ALL` token
+    // at all may precede the dispatch, on its own line or on the first `local` line.
+    it('U4p: `_box_unit_env` pins `local LC_ALL=C` below its Darwin dispatch and no `LC_ALL` above it, and `_box_unit_env_shell` keeps its own pin (D-3979; T4-M31)', () => {
+      const src = readFileSync(CCRC_SRC, 'utf8');
+      const m = /_box_unit_env\(\) \{([\s\S]*?)\n\}/.exec(src);
+      expect(m, '_box_unit_env must be readable by /_box_unit_env\\(\\) \\{([\\s\\S]*?)\\n\\}/').not.toBeNull();
+      const body = m![1]!;
+      const d = body.indexOf('_box_unit_env_shell "$key"; return; fi');
+      expect(d, 'the Darwin dispatch must be in _box_unit_env').toBeGreaterThan(-1);
+      expect(/\bLC_ALL\b/.test(body.slice(0, d)), 'an LC_ALL token above the Darwin dispatch would cover _box_unit_env_shell too, so T4-M31 would stop reding (D-3979)').toBe(false);
+      expect(/^  local LC_ALL=C$/m.test(body.slice(d)), 'the Linux arm must pin `local LC_ALL=C` below the dispatch (D-3979)').toBe(true);
+      expect(/_box_unit_env_shell\(\) \{[^\n]*\n  local key="\$1" v rc bad="" LC_ALL=C\n/.test(src), '_box_unit_env_shell must keep its own LC_ALL=C (T4-M31, D-3833)').toBe(true);
     });
 
     it('U4n: `_box_env_has_nul` alone, called with NO caller pinning a locale, under a UTF-8 one — it reads bytes itself, so neither arm\'s answer leans on its caller (D-3833)', () => {
