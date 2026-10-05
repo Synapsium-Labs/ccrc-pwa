@@ -18,11 +18,11 @@ import { describe, expect } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { itLinux } from './platformFixtures.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  CCRC_SRC, FROZEN_VERIFY_S0, SWEEP_OK, makeBox, runSweep, calls, poisonFiles, report, survivors, reapSurvivors,
+  BASH, CCRC_SRC, FROZEN_VERIFY_S0, SWEEP_OK, makeBox, runSweep, sweepSpawn, calls, poisonFiles, report, survivors, reapSurvivors,
   type Box, type UnitPlant,
 } from './sweepFixture.js';
 
@@ -581,6 +581,78 @@ describe('_upd_sweep, Linux arm: one shared verify window, a re-check, crash-sha
     }, 60_000);
   });
 });
+
+/** Spawn the sweep as the leader of a process group of its own, so a case can signal the GROUP as a terminal does. */
+function spawnGroup(box: Box, o: Parameters<typeof sweepSpawn>[1]): {
+  pid: number; done: Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string }>;
+} {
+  const { args, env } = sweepSpawn(box, o);
+  const c = spawn(BASH, args, { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '';
+  c.stdout!.on('data', (d: Buffer) => { stdout += d.toString('latin1'); });
+  c.stderr!.on('data', () => { /* drained */ });
+  const done = new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string }>((res) => {
+    c.on('close', (code, signal) => res({ code, signal, stdout }));
+  });
+  return { pid: c.pid!, done };
+}
+const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+describe('W21: a signal to the sweep\'s process group during a concurrent batch (D-3988; D-141: an operator\'s Ctrl-C must abort)', () => {
+  const killShadow = 'kill() { case "$1" in -TERM) printf \'%s\\n\' "$*" >> "$HOME/kill-log" ;; esac; builtin kill "$@"; }';
+  // `group` is a terminal's Ctrl-C (every process of the sweep's group); `shell` is a `kill -INT <pid>` of the sweep's
+  // own shell alone, which the launcher subshell (its foreground child) never sees.
+  itLinux.each([
+    ['SIGINT', 'group', 130], ['SIGINT', 'shell', 130], ['SIGTERM', 'group', 143], ['SIGTERM', 'shell', 143],
+  ] as const)(
+    'W21: %s to the sweep\'s %s mid-batch ends the run by that signal, stops both jobs once each, leaves nothing', async (sig, target, status) => {
+      const script = fixtureScript('v21.sh', [
+        'printf \'%s\\n\' "$1" >> "$HOME/fixture-calls"',
+        'sleep 20',
+        'echo "verified: $1"',
+      ].join('\n'));
+      const box = makeBox({ units: [stable(A, 0), stable(B, 1)], verifySrc: script });
+      const g = spawnGroup(box, { pre: killShadow });
+      let ended: { code: number | null; signal: NodeJS.Signals | null; stdout: string } | null = null;
+      let elapsed = -1;
+      try {
+        for (let i = 0; i < 150 && fixtureCalls(box).length < 2; i++) await sleepMs(100);
+        const started = fixtureCalls(box).length;
+        await sleepMs(300);
+        const t0 = Date.now();
+        try { process.kill(target === 'group' ? -g.pid : g.pid, sig); } catch { /* already gone: the assertions say so */ }
+        ended = await Promise.race([g.done, sleepMs(15_000).then(() => null)]);
+        elapsed = Date.now() - t0;
+        expect(started, 'both jobs were running when the signal was sent').toBe(2);
+      } finally {
+        // Collect, reap, assert (T-1): the sweep itself (a red run) is HOME-tagged too, so the reap ends it.
+        try { process.kill(-g.pid, 'SIGKILL'); } catch { /* gone */ }
+        var after = collect(box);
+      }
+      const { found, left } = after;
+      expect(ended, 'the sweep ended on its own, within 15 s').not.toBeNull();
+      expect(ended!.signal === sig || ended!.code === status,
+        `ended by ${sig}: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
+      expect(elapsed, 'within about a second of the signal').toBeLessThan(5_000);
+      expect(ended!.stdout).not.toContain(SWEEP_OK);
+      expect(left.filter((n) => n.startsWith('ccrc-sweep.')), `left in tmp: ${left.join(' ')}`).toEqual([]);
+      expect(found, `survivors: ${found.join(' ')}`).toEqual([]);
+      // The jobs' groups are TERMed through `_upd_sweep_kill`, each once; the INT handler's own TERM of the launcher
+      // (a plain pid, no group) is the only other line there may be.
+      const log = killLog(box);
+      const groups = log.filter((l) => l.startsWith('-TERM -- -'));
+      expect(groups.length, `kill-log: ${log.join(' | ')}`).toBe(2);
+      expect(new Set(groups).size, 'each job group is signalled once').toBe(2);
+      for (const l of groups) expect(l).toMatch(/^-TERM -- -\d+$/);
+      // An INT is handled by the sweep's own trap, which stops the launcher (one TERM, by pid); a TERM has no handler.
+      const byPid = log.filter((x) => !x.startsWith('-TERM -- -'));
+      expect(byPid.length, `the INT handler stops the launcher once, a TERM does not: ${byPid.join(' | ')}`)
+        .toBe(sig === 'SIGINT' ? 1 : 0);
+      for (const l of byPid) expect(l, 'the launcher, by pid').toMatch(/^-TERM \d+$/);
+      noPoison(box);
+    }, 60_000);
+});
+
 
 describe('_upd_sweep, Linux arm, with the FROZEN wave-10 script S0 (a rollback pairs this sweep with an older script)', () => {
   const s0 = (): string => readFileSync(FROZEN_VERIFY_S0, 'utf8');

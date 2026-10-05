@@ -21056,7 +21056,7 @@ _upd_sweep() {
     return 0
   fi
   local -a units=() missing=() crash=() unrec=() ncfail=()
-  local vdir="" vjobs="${CCRC_SWEEP_VERIFY_JOBS:-128}" i j k r lrc d o cu _cl cw _cs _cd clist crc=0 m inb cb kc=0 mn=0 rfail=""
+  local vdir="" vjobs="${CCRC_SWEEP_VERIFY_JOBS:-128}" i j k r lrc d o cu _cl cw _cs _cd clist crc=0 m inb cb kc=0 mn=0 rfail="" lpid=""
   [[ "$vjobs" =~ ^[1-9][0-9]{0,3}$ ]] || vjobs=128
   for u in $(printf '%s\n' "$after_listing" | awk '{print $1}'); do units+=("$u"); done
   if [ -f "$verify" ]; then
@@ -21103,7 +21103,16 @@ _upd_sweep() {
       crash=(); unrec=()
       if [ -n "$vdir" ]; then
         j=$((i + vjobs)); [ "$j" -le "${#units[@]}" ] || j=${#units[@]}
-        lrc=0; ( _upd_sweep_launch "$vdir" "$verify" "$i" "$j" ) 2>"$vdir/launch.err" || lrc=$?
+        # A Ctrl-C ABORTS (wave 11, D-3988; D-141: an operator's Ctrl-C must abort, `cmd_passwd`'s header). `set -m` puts
+        # every job in a group of its own, so an INT never reaches a job, and a shell runs its own trap only after its
+        # foreground child returns: a `kill -INT` of this shell alone waited out the whole batch and the run went on to
+        # SWEEP_OK (measured). So the launcher runs in the background and this shell WAITS on it, which a trapped signal
+        # interrupts at once. The handler stops the launcher, then RE-RAISES on this shell (`exit 130` would not read
+        # as an INT death to our caller): the exit chain TERMs each unrecorded job, once, and removes the scratch dir.
+        lrc=0; trap 'trap - INT; kill -TERM "$lpid" 2>/dev/null; kill -INT "$BASHPID"' INT
+        ( _upd_sweep_launch "$vdir" "$verify" "$i" "$j" ) 2>"$vdir/launch.err" &
+        lpid=$!; wait "$lpid" || lrc=$?
+        trap - INT
         if [ "$lrc" -ne 0 ]; then
           _upd_sweep_kill "$vdir"
           echo "update: warning: the verify launcher exited $lrc — each unit of this batch with no recorded result is verified alone, in the foreground" >&2
