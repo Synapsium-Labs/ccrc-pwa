@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=421b042041d63404d41875da8f6c787d58c9c755620844da791a1f78e1691796
+# ccrc:generated 1 sha256=1661b6921a503d6e99bcea3d5c3da9a677439e5ab830302baa08715150505a2f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3134,8 +3134,8 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 181
-# invocations across 152 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 185
+# invocations across 155 non-comment lines.
 #
 # THE LAST MOVE WAS the EXPIRE region's reads (workspace lifecycle wave 3); before it the rescue wait's, the +3; before that D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`);
 # then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
@@ -13945,7 +13945,7 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
   local token="$1" id="$2"
   local resumed; resumed=$(_reg_get "$id" reaping)
   if [[ -n "$resumed" ]]; then
-    [[ "$resumed" != reclaim:* ]] || { _ws_reclaim_mirror "$id" "$resumed"; return 0; }   # see "WS-REAP'S MIRROR", below the RECLAIM region
+    [[ "$resumed" != reclaim:* && "$resumed" != expire:* ]] || { _ws_reclaim_mirror "$id" "$resumed"; return 0; }   # see "WS-REAP'S MIRROR", below the RECLAIM region
     # Resume: the tombstone written at (b) is what distinguishes "the user
     # deleted the worktree" from "we did".
     #
@@ -24820,8 +24820,10 @@ cmd_reclaim_pause() {   # ccd reclaim-pause --state on|off — raise or lower th
   # matters — `ws-reclaim` itself refuses `paused` at its rung 3 and again on
   # resume, because a gate only the server evaluates fails open into deletion
   # the moment the pause lands mid-flight, the server's snapshot is one tick
-  # stale, or a crashed reclaim resumes. Pausing stops reclamation and nothing
-  # else; lowering it lets the sweep drain what waited.
+  # stale, or a crashed reclaim resumes. Pausing stops reclamation and — since
+  # workspace lifecycle wave 3 — the seven-day expiry of an archived workspace,
+  # which reads this same file at the same rung 3 (`_ws_reclaim_ladder`) and on
+  # its resume, and nothing else; lowering it lets the sweep drain what waited.
   #
   # A COPY OF `cmd_coord_pause` IN EVERY RESPECT, and granted on its argument: a
   # registry-file write/unlink, non-destructive and idempotent, that widens
@@ -26782,14 +26784,16 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP
       parents+=(-p "$sha"); plist+=" $sha"
     done < "$mh"
   fi
-  msg="ccrc: WIP pinned at reclaim of $id (run $childof)"
+  local what="reclaim of $id (run $childof)"
+  [[ "$_WS_RCL_ACT" != expire ]] || what="expiry of $id (archived at $childof)"
+  msg="ccrc: WIP pinned at $what"
   have=''
   if [[ "$itree" != "$htree" && "$itree" != "$tree" ]]; then
     # The staged version is kept (the header's "A STAGED INTERMEDIATE
     # VERSION"): an attic WIP of this tree and these first parents whose last
     # parent is already an index commit of this staged tree on HEAD answers
     # for both; otherwise the index commit is written, then the WIP on it.
-    imsg="ccrc: index pinned at reclaim of $id (run $childof)"
+    imsg="ccrc: index pinned at $what"
     cands=$(git -C "$dir" for-each-ref --format='%(objectname)%09%(tree) %(parent)%09%(authoremail)%09%(subject)' \
       "refs/ccrc/attic/$id/" 2>/dev/null \
       | awk -F'\t' -v want="$tree $plist" -v subj="$msg" \
@@ -27390,8 +27394,9 @@ _ws_reclaim_tomb_fields() {   # childof [worktree: present|absent] -> the reclai
   # A branch this reclaim KEEPS (a drifted HEAD's) is recorded from the start;
   # the key is written only when there is one, as the tail's own patch does.
   (( ${#RECLAIM_KEPT[@]} )) && kept="\"keptBranches\":$(_ws_reclaim_kept_json),"
-  printf '"mode":"reclaim","childOf":%s,"worktree":%s,"wip":%s,"secretsDropped":%s,%s"containment":{"sameRepository":%s,"foreignProven":%s},"residueBytes":null,' \
-    "$childof" "$(_json_str "$worktree")" "$( [[ -n "$RECLAIM_WIP" ]] && _json_str "$RECLAIM_WIP" || echo null)" \
+  local bindkey=childOf; [[ "$_WS_RCL_ACT" != expire ]] || bindkey=archivedAt
+  printf '"mode":%s,"%s":%s,"worktree":%s,"wip":%s,"secretsDropped":%s,%s"containment":{"sameRepository":%s,"foreignProven":%s},"residueBytes":null,' \
+    "$(_json_str "$_WS_RCL_ACT")" "$bindkey" "$childof" "$(_json_str "$worktree")" "$( [[ -n "$RECLAIM_WIP" ]] && _json_str "$RECLAIM_WIP" || echo null)" \
     "$(_ws_reclaim_secrets_json)" "$kept" "$same" "$foreign"
 }
 
@@ -27542,7 +27547,7 @@ _ws_reclaim_fail() {   # id lctx token detail [k v]... -> journals a post-start 
   # on stdout (read by the server) — and two spellings of one detail drift: they
   # already had. So both are written from the one `$4` here.
   local id="$1" lctx="$2" tok="$3" msg="$4"; shift 4
-  _lc_fail reclaim "$id" "$lctx" "$tok" "$msg" verb ws-reclaim "$@"
+  _lc_fail "$_WS_RCL_ACT" "$id" "$lctx" "$tok" "$msg" verb "ws-$_WS_RCL_ACT" "$@"
   _ws_reclaim_failed_json "$tok" "$msg"
   return 1
 }
@@ -27675,11 +27680,13 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   local project workdir main tomb branch tip wip tid tuuid tregbranch attic residue wtout stamp unitstate rec lrc
   local regproject regworkdir reguuid regbranch childlines recorded merged cj first cline cpath crest cbr chead
   local holders wdreal tdir troot cdir croot kept=() k keptjson keptall treegone crc killrc dropped
+  local noun=reclaim donekey=reclaimed bindkey=childOf
+  [[ "$_WS_RCL_ACT" != expire ]] || { noun=expiry; donekey=expired; bindkey=archivedAt; }
   tomb="$REG/.reaped/$id.json"
   case "$phase" in
     children|worktree|branch|artifacts) : ;;
     *) _ws_reclaim_fail "$id" "$lctx" reaping-phase-unknown \
-         "breadcrumb phase 'reclaim:$phase' for $id is not one ccd ever writes — refusing to guess which steps already ran"
+         "breadcrumb phase '$_WS_RCL_ACT:$phase' for $id is not one ccd ever writes — refusing to guess which steps already ran"
        return 1 ;;
   esac
   # (1) UNSUPERVISE AND KILL THE PANE — FIRST, UNCONDITIONALLY, on the fresh arm
@@ -27981,7 +27988,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
         return 1
       }
     fi
-    _reg_set "$id" reaping reclaim:worktree
+    _reg_set "$id" reaping "$_WS_RCL_ACT:worktree"
     phase=worktree
   fi
   # (4) The worktree. `--force` because the secret-shaped files the pin phase
@@ -28011,7 +28018,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
         "${_WS_ABSENT_WHY:-something that is not a directory stands at $workdir} — ccd cannot prove $id's own tree is gone, so nothing further was deleted"
       return 1
     fi
-    _reg_set "$id" reaping reclaim:branch
+    _reg_set "$id" reaping "$_WS_RCL_ACT:branch"
     phase=branch
   fi
   # (5) The branch, by CAS on the tip the tombstone recorded — never a forced
@@ -28078,7 +28085,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       git -C "$main" update-ref -d "refs/heads/$branch" "$tip" 2>/dev/null \
         || { _ws_reclaim_fail "$id" "$lctx" branch-moved "$branch moved after it was pinned at $tip — nothing further was deleted"; return 1; }
     fi
-    _reg_set "$id" reaping reclaim:artifacts
+    _reg_set "$id" reaping "$_WS_RCL_ACT:artifacts"
     phase=artifacts
   fi
   # (6) The artifacts (rule 2): the clips directory under its two existing
@@ -28123,25 +28130,25 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   _reg_purge "$id" || _rcl_prc=$?
   if (( _rcl_prc == 3 )); then
     _ws_reclaim_fail "$id" "$lctx" purge-incomplete \
-      "the reclaim completed — worktree, branch, clips and temp root are gone — and the registry row WAS purged, but $REG_PURGE_UNREMOVED could not be removed and still stands" \
+      "the $noun completed — worktree, branch, clips and temp root are gone — and the registry row WAS purged, but $REG_PURGE_UNREMOVED could not be removed and still stands" \
       meas.branch "$branch" meas.unremoved "$REG_PURGE_UNREMOVED"
     return 1
   elif (( _rcl_prc == 2 )); then
     _ws_reclaim_fail "$id" "$lctx" purge-mechanism-absent \
-      "the reclaim completed — worktree, branch, clips and temp root are gone — but the registry row could not be purged: the compaction lock's mechanism is absent on this box while $REG/$id.generation is present" \
+      "the $noun completed — worktree, branch, clips and temp root are gone — but the registry row could not be purged: the compaction lock's mechanism is absent on this box while $REG/$id.generation is present" \
       meas.branch "$branch"
     return 1
   elif (( _rcl_prc != 0 )); then
-    local _rcl_why; _rcl_why=$(_compact_lock_why_remedy "$id" ws-reclaim)
+    local _rcl_why; _rcl_why=$(_compact_lock_why_remedy "$id" "ws-$_WS_RCL_ACT")
     _ws_reclaim_fail "$id" "$lctx" purge-refused \
-      "the reclaim completed — worktree, branch, clips and temp root are gone — but the registry row could not be purged: $_rcl_why" \
+      "the $noun completed — worktree, branch, clips and temp root are gone — but the registry row could not be purged: $_rcl_why" \
       meas.branch "$branch"
     return 1
   fi
   # A BRANCH THIS ACT KEPT — nested, or a drifted HEAD's — is said on the done
   # row, whichever attempt kept it: the record carries it across a resume.
   keptall=$(_ws_reclaim_kept_read "$tomb") || keptall=""
-  _lc_done reclaim "$id" "$lctx" verb ws-reclaim meas.childOf "$childof" meas.branch "$branch" \
+  _lc_done "$_WS_RCL_ACT" "$id" "$lctx" verb "ws-$_WS_RCL_ACT" "meas.$bindkey" "$childof" meas.branch "$branch" \
     meas.tip "$tip" meas.wip "$wip" meas.tombstone "$tomb" meas.attic "${attic:-0}" \
     meas.residueBytes "$residue" meas.resumed "$resumed" \
     detail "${keptall:+kept branch(es): $keptall}"
@@ -28149,8 +28156,8 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # so a reclaim that committed nothing but dropped a secret-shaped edit never
   # reads as "nothing was left"; `null` when the record could not be read.
   dropped=$(_ws_reclaim_dropped_count "$tomb") && [[ "$dropped" =~ ^[0-9]+$ ]] || dropped=null
-  printf '{"reclaimed":%s,"childOf":%s,"wip":%s,"attic":%s,"residueBytes":%s,"secretsDropped":%s}\n' \
-    "$(_json_str "$id")" "$childof" "$( [[ -n "$wip" ]] && _json_str "$wip" || echo null)" \
+  printf '{"%s":%s,"%s":%s,"wip":%s,"attic":%s,"residueBytes":%s,"secretsDropped":%s}\n' \
+    "$donekey" "$(_json_str "$id")" "$bindkey" "$childof" "$( [[ -n "$wip" ]] && _json_str "$wip" || echo null)" \
     "${attic:-0}" "$residue" "$dropped"
 }
 
@@ -28572,11 +28579,227 @@ _ws_expire_eval() {   # id -> 0 when the expiry ladder passes (REAP_VERDICT=expi
   REAP_VERDICT=expirable
 }
 
+_ws_expire_tomb_epoch() {   # tombstone -> its `archivedAt`, an integer, on stdout; rc 1 when unreadable or absent
+  local f="$1"
+  [[ -s "$f" ]] || return 1
+  LC_ALL=C.UTF-8 python3 -c '
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    v = json.load(fh).get("archivedAt")
+if type(v) is not int or v < 1:
+    sys.exit(1)
+sys.stdout.write(str(v))
+' "$f" 2>/dev/null
+}
+
+_ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token, else REAP_VERDICT
+  # A CRASH MAY NOT LAUNDER A REFUSAL (CCR-15 §5.6, carried). What authorised
+  # this expiry is re-asserted before anything else runs: the row; the ARCHIVE
+  # EPOCH — still the one the tombstone recorded when the act began, and still
+  # old enough (a workspace that was returned is `not-archived`; one archived
+  # again since is `state-changed`); no child marker; the pause; the hold; and,
+  # at `children`, rung 5's presence. The resume token binds the phase, the
+  # epoch and the recorded tip.
+  _ws_reclaim_reset
+  local id="$1" phase="$2" tomb tombtip tombbranch tombarch
+  [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
+  tomb="$REG/.reaped/$id.json"
+  tombarch=$(_ws_expire_tomb_epoch "$tomb") \
+    || { _ws_reclaim_unmeasured "the tombstone at $tomb does not record the archive this expiry began on, so whether it is still that archive is unknown"; return 1; }
+  _ws_expire_archived "$id" || return 1
+  [[ "$EXPIRE_ARCHIVED_AT" == "$tombarch" ]] \
+    || { _reap_refuse state-changed "$id was archived again ($EXPIRE_ARCHIVED_AT) since this expiry began on its archive of $tombarch — an interrupted expiry never finishes on another archive"; return 1; }
+  _ws_expire_not_child "$id" || return 1
+  [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
+    || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
+  if [[ -e "$REG/$id.hold" ]]; then
+    _reap_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
+  fi
+  # A PANE THAT CAME BACK IS NEVER KILLED BEFORE THE TEARDOWN BEGINS (ruling D,
+  # carried to the resume). At `children` nothing has been deleted yet and the
+  # tail has not stopped anything, so rung 5's two questions are asked again: a
+  # pane that is up, attached or not, or a running unit, refuses `live` and the
+  # breadcrumb stands for the retry. From `worktree` on, the interrupted run had
+  # already stopped both and proved the pane gone, so the tail's own
+  # unsupervise-and-kill runs as a reclaim's does.
+  if [[ "$phase" == children ]]; then
+    _session_probe "$id" anchored
+    case "$PROBE_VERDICT" in
+      gone|live) : ;;
+      *) _ws_reclaim_unmeasured "whether $(_tmux "$id") is up could not be asked — tmux answered: ${PROBE_DETAIL:-nothing}"; return 1 ;;
+    esac
+    _ws_expire_presence "$id" "$PROBE_VERDICT" || return 1
+  fi
+  tombbranch=$(_ws_tomb_str "$tomb" branch) || tombbranch=""
+  tombtip=$(_ws_tomb_str "$tomb" tip) || tombtip=""
+  [[ -n "$tombbranch" ]] \
+    || { _ws_reclaim_unmeasured "the tombstone at $tomb cannot be read, so which steps of the interrupted expiry already ran is unknown"; return 1; }
+  REAP_BRANCH="$tombbranch"; REAP_TIP="$tombtip"
+  REAP_TOKEN=$(_ws_reclaim_fingerprint "mode=expire-resume" "id=$id" "archivedAt=$tombarch" \
+    "phase=$phase" "branch=$tombbranch" "tip=$tombtip")
+  REAP_VERDICT=expirable
+}
+
+_ws_expire_fork() {   # id -> the flavour fork, run ONCE, contained — the one copy `ws-audit --expire` and
+  #                       `ws-expire` both call. Sets REAP_* through whichever eval it runs, and
+  #                       RECLAIM_RESUME_PHASE to an `expire:` breadcrumb's phase, or "" on every other path.
+  _ws_reclaim_contained _ws_expire_fork_contained "$@"
+}
+
+_ws_expire_fork_contained() {   # `_ws_expire_fork`'s body, run under `_ws_reclaim_contained` — call that
+  local id="$1" rbc
+  RECLAIM_RESUME_PHASE=""
+  rbc=$(_reg_get "$id" reaping)
+  # An `expire:` breadcrumb resumes THIS verb; a `reclaim:` one is ws-reclaim's
+  # and any other is ws-reap's — an expiry never finishes another verb's work,
+  # and each of them refuses this one's in turn. A breadcrumb that STANDS but
+  # reads as nothing is unmeasured: which verb left it, and where, is unknown.
+  if [[ -z "$rbc" ]] && [[ -e "$REG/$id.reaping" || -L "$REG/$id.reaping" ]]; then
+    _ws_reclaim_reset
+    _ws_reclaim_unmeasured "a breadcrumb stands at $REG/$id.reaping but cannot be read — which verb left it, and at which step, is unknown" || :
+  elif [[ "$rbc" == reclaim:* ]]; then
+    _ws_reclaim_reset
+    _reap_refuse reclaim-in-progress "an interrupted ws-reclaim of $id stopped at its '${rbc#reclaim:}' step — an expiry never finishes another verb's work" || :
+  elif [[ -n "$rbc" && "$rbc" != expire:* ]]; then
+    _ws_reclaim_reset
+    _reap_refuse reap-in-progress "an interrupted ws-reap of $id stopped at its '$rbc' step — an expiry never finishes another verb's work" || :
+  elif [[ -n "$rbc" ]]; then
+    RECLAIM_RESUME_PHASE="${rbc#expire:}"
+    _ws_expire_resume_eval "$id" "$RECLAIM_RESUME_PHASE" || :
+  else
+    _ws_expire_eval "$id" || :
+  fi
+}
+
+cmd_ws_expire() {   # ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]
+  # THE DESTRUCTIVE VERB FOR AN ARCHIVED WORKSPACE, composed by the server and
+  # by nothing else. The token `ws-audit --expire` minted must equal the one
+  # recomputed here, inside the reap lock, at the instant of deletion; it binds
+  # the archive's epoch. stdout is ONE JSON line: `{"expired":…}`, a refusal
+  # document at exit 0, or `{"failed":…}` at exit 1 (the breadcrumb resumes it).
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 args=()
+  while (( $# )); do
+    case "$1" in
+      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
+                   lc_gs=1; lc_surface="$2"; shift 2 ;;
+      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
+                   lc_ga=1; lc_actor="$2"; shift 2 ;;
+      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --reason)    [[ $# -ge 2 ]] || die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
+                   lc_gr=1; lc_reason="$2"; shift 2 ;;
+      --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      *)           args+=("$1"); shift ;;
+    esac
+  done
+  if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
+  if (( lc_ga )); then
+    [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
+    _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
+  fi
+  if (( lc_gr )); then
+    [[ -n "${lc_reason//[[:space:]]/}" ]] || die "--reason must be non-blank"
+    _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"
+  fi
+  set -- ${args[@]+"${args[@]}"}
+  # NO `--defer-expired`: it lands in `args`, and four positionals is the only shape.
+  [[ $# -eq 4 && $1 == --expect && $3 == --session ]] \
+    || die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
+  local token=$2 id=$4
+  [[ $token =~ ^[0-9a-f]{64}$ ]]         || die "bad token"
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]]         || die "bad session id"
+  _json_str probe >/dev/null 2>&1 \
+    || die "python3 unavailable — cannot quote the expiry record safely"
+  # THE FLAVOUR, for this call and everything it reaches (THE FLAVOUR, RECLAIM region).
+  local _WS_RCL_ACT=expire
+  # THE SHARED LOCK: `$REG/.reap-<id>.lock`, the one ws-reap, ws-reclaim and
+  # ws-restore take — and, for an archived row, every spawn path
+  # (`_ws_expire_spawn_gate`) — so none of them runs on this workspace at once.
+  local lock="$REG/.reap-$id.lock" lfd rc=0
+  command -v flock >/dev/null 2>&1 \
+    || _lc_refuse expire "$id" flock-unavailable \
+         "flock (util-linux) is unavailable — refusing to run the destructive verb unserialised"
+  exec {lfd}>>"$lock" \
+    || _lc_refuse expire "$id" lock-unopenable "cannot open the reap lock at $lock"
+  flock -n "$lfd" || {
+    _lc_emit expire refused "$id" "" verb ws-expire refusal in-progress \
+      detail "another ccd process is already reaping, reclaiming, expiring or restoring $id and still holds the lock"
+    exec {lfd}>&-
+    printf '{"refused":"in-progress","detail":%s,"paths":[]}\n' \
+      "$(_json_str "another ccd process is already reaping, reclaiming, expiring or restoring $id and still holds the lock")"
+    return 0
+  }
+  _ws_expire_locked "$token" "$id" "$lc_surface" "$lc_actor" "$lc_reason"; rc=$?
+  exec {lfd}>&-
+  return "$rc"
+}
+
+_ws_expire_locked() {   # token id surface actor reason — everything the shared lock serialises, for an expiry
+  local token="$1" id="$2" surface="$3" actor="$4" reason="$5"
+  local phase="" resumed="" declared="" lctx project workdir main clips pinned=0 start=children
+  [[ "$surface" == none ]] || declared="$surface"
+  _ws_expire_fork "$id"
+  phase="$RECLAIM_RESUME_PHASE"; resumed="$phase"
+  # The consent IS the fingerprint, recomputed HERE, inside the lock.
+  if [[ "$REAP_VERDICT" == expirable && "$token" != "$REAP_TOKEN" ]]; then
+    _reap_refuse state-changed "expected $REAP_TOKEN, was given $token — $id changed since the audit that minted the token" || :
+  fi
+  if [[ "$REAP_VERDICT" == unmeasured ]]; then
+    _ws_reclaim_failed_json probe-unmeasured "$REAP_DETAIL"
+    return 1
+  fi
+  # ONE EMIT FOR EVERY REFUSAL — this verdict point — plus the flock decline in
+  # `cmd_ws_expire`: two under `verb ws-expire`, a count `ccd-refusal-scan.test.ts`
+  # pins. (The audit's terminal line journals under `verb ws-audit`, outside it.)
+  if [[ "$REAP_VERDICT" != expirable ]]; then
+    _lc_emit expire refused "$id" "" verb ws-expire refusal "$REAP_VERDICT" detail "$REAP_DETAIL" \
+      dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
+    printf '{"refused":%s,"detail":%s,"paths":[]}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
+    return 0
+  fi
+  project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir); main="$PROJECTS_ROOT/$project"
+  lctx=$(_lc_tx)
+  _lc_intent expire "$id" "$lctx" verb ws-expire meas.archivedAt "$EXPIRE_ARCHIVED_AT" meas.project "$project" \
+    meas.workdir "$workdir" meas.branch "$REAP_BRANCH" meas.resumed "$resumed" \
+    dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
+  if [[ -z "$phase" ]]; then
+    # THE PIN PHASE, before anything is destroyed, then the tombstone (its
+    # `mode` is `expire`, its binding `archivedAt`), then the `expire:`
+    # breadcrumb — every later step resumable, and described by a record that
+    # outlives the row. A vanished worktree takes the RECLAIM region's own arm.
+    if [[ "$RECLAIM_WORKTREE" == absent ]]; then
+      _ws_reclaim_pin_absent "$id" "$main" "$REAP_BRANCH" "$RECLAIM_HEAD" "$workdir" && pinned=1
+      start=branch
+    else
+      _ws_reclaim_pin "$id" "$workdir" "$main" "$REAP_BRANCH" "$EXPIRE_ARCHIVED_AT" && pinned=1
+    fi
+    if (( ! pinned )); then
+      _ws_reclaim_fail "$id" "$lctx" pin-failed "$RECLAIM_PIN_WHY"
+      return 1
+    fi
+    clips=$(_ws_clip_manifest "$id") || clips=null
+    _ws_tombstone "$id" "$clips" "$(_ws_reclaim_tomb_fields "$EXPIRE_ARCHIVED_AT" "$RECLAIM_WORKTREE")" >/dev/null
+    if [[ ! -s "$REG/.reaped/$id.json" ]] \
+       || [[ "$(_ws_tomb_str "$REG/.reaped/$id.json" uuid)" != "$(_reg_get "$id" uuid)" ]] \
+       || ! _reg_set "$id" reaping "expire:$start"; then
+      _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not write the tombstone or the breadcrumb for $id — nothing was destroyed"
+      return 1
+    fi
+    phase="$start"
+  fi
+  _ws_reclaim_tail "$id" "$phase" "$lctx" "$EXPIRE_ARCHIVED_AT" "$surface" "$declared" "$resumed"
+}
+
 # ── end archived-workspace expiry ───────────────────────────────────────────── EXPIRE-END ──
 
 # ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──
 _ws_reap_leaf_ok() { [[ ! -L "${1%"${1##*[!/]}"}" ]] || _reap_refuse containment-unproven "$1 is a symbolic link — ccd never follows a link to a tree it would delete, so it cannot prove the tree at that path is $2's own"; }   # workdir id -> 0, or rc 1 refused
-_ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` breadcrumb, on stdout
+_ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` or an `expire:` breadcrumb, on stdout
+  if [[ "$2" == expire:* ]]; then   # ws-expire's interrupted work (workspace lifecycle, spec 2026-09-24 §5.3)
+    printf '{"refused":"expire-in-progress","detail":%s,"paths":[]}\n' \
+      "$(_json_str "an interrupted expiry of $1 stopped at its '${2#expire:}' step — ws-reap never finishes another verb's work")"
+    return 0
+  fi
   printf '{"refused":"reclaim-in-progress","detail":%s,"paths":[]}\n' \
     "$(_json_str "an interrupted reclamation of $1 stopped at its '${2#reclaim:}' step — ws-reap never finishes another verb's work")"
 }

@@ -106,11 +106,14 @@ describe('the lifecycle block cannot poison wsaudit.test.ts\'s scan', () => {
     // the pin above stays 55 and byte-identical. Measured the same way: the full
     // scan answers 65, ENTERED the expiry's new words, LEFT none; the scan
     // outside the three blocks answers 55.
+    // 65 -> 66 (Task 4, the verb): `expire-in-progress`, ws-reap's refusal of an `expire:`
+    // breadcrumb, in the MIRROR block beside its reclaim twin; the rest of the
+    // verb's words are already counted. The scan outside the blocks answers 55.
     const full = readFileSync(CCD, 'utf8');
-    expect.soft(scan(full)).toHaveLength(65);
+    expect.soft(scan(full)).toHaveLength(66);
     expect.soft(scan(full).filter((t) => !scan(src).includes(t)))
-      .toEqual(['attached', 'child', 'containment-unproven', 'live', 'not-a-child', 'not-expired', 'paused',
-        'reap-in-progress', 'reclaim-in-progress', 'tree-busy']);
+      .toEqual(['attached', 'child', 'containment-unproven', 'expire-in-progress', 'live', 'not-a-child',
+        'not-expired', 'paused', 'reap-in-progress', 'reclaim-in-progress', 'tree-busy']);
     expect.soft(reclaimRegion(full).length, 'the region was found — an empty cut proves nothing').toBeGreaterThan(5000);
     expect.soft(markedBlock(full, 'MIRROR-BEGIN', 'MIRROR-END'), 'the mirror block was found, and holds ws-reap’s breadcrumb word')
       .toContain('"refused":"reclaim-in-progress"');

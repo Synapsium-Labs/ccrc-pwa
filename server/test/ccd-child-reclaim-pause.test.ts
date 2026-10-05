@@ -228,7 +228,7 @@ describe('ccd reclaim-pause', () => {
       expect(fnEnd, `${name} has no closing brace at column 0`).toBeGreaterThan(fnStart);
       return src.slice(fnStart, fnEnd + 1);
     };
-    for (const name of ['_ws_reclaim_ladder', '_ws_reclaim_resume_eval']) {
+    for (const name of ['_ws_reclaim_ladder', '_ws_reclaim_resume_eval', '_ws_expire_resume_eval']) {
       expect(sliceFn(name).some((l) => READER.test(l)), `${name} does not read $REG/reclaim-paused`).toBe(true);
     }
   });
