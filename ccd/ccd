@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c6f81ced2bb9c918cd64c4e2cce1c5e810ef726f2e8a4c9f11ced213cd696c9d
+# ccrc:generated 1 sha256=240d96ddf150f5a91d0e9cef94acd7916185479b852473558106fc00931e0ebc
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -25928,12 +25928,13 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
           || { _reap_refuse attached "a terminal is attached to $(_tmux "$id"): ${clients//$'\n'/, }"; return 1; } ;;
       *) _ws_reclaim_unmeasured "whether $(_tmux "$id") is up could not be asked — tmux answered: ${PROBE_DETAIL:-nothing}"; return 1 ;;
     esac
-    # AN EXPIRY ASKS MORE OF THIS RUNG, AND ONLY MORE: a DETACHED pane and a live
-    # unit refuse it too (`_ws_expire_presence`, the EXPIRE region). Never a
-    # reclaim's question: a child's tail kills its pane by design (spec §5.6).
+    # AN EXPIRY ASKS MORE OF THIS RUNG, AND ONLY MORE: a DETACHED pane, a live
+    # unit and a process working in the worktree refuse it too
+    # (`_ws_expire_presence`, the EXPIRE region). Never a reclaim's question: a
+    # child's tail kills its pane by design (spec §5.6).
     # Keyed on the BINDING the expiry's rungs 1-2 set, never on the flavour
     # global: a caller of `_ws_expire_eval` that forgot the flavour still asks.
-    [[ "${_WS_LADDER_BIND[0]-}" != mode=expire ]] || _ws_expire_presence "$id" "$PROBE_VERDICT" detached || return 1
+    [[ "${_WS_LADDER_BIND[0]-}" != mode=expire ]] || _ws_expire_presence "$id" "$PROBE_VERDICT" "$workdir" detached || return 1
   fi
   # THE LEAF IS NEVER FOLLOWED (spec §5.5). A workdir that is itself a link
   # reaches a tree ccd cannot prove is this child's: the pin would commit that
@@ -28486,10 +28487,10 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 # population: returned, or never archived); TERMINAL — `not-a-workspace`,
 # `branch-elsewhere`, `tree-unreadable`, `containment-unproven`,
 # `no-worktree-record`; RETRY — `not-expired`, `child`, `paused`, `held`,
-# `attached`, `live`, `tree-busy`, `state-changed`, `in-progress`,
-# `reap-in-progress`, `reclaim-in-progress`. Eighteen. The ones the RECLAIM
+# `attached`, `live`, `in-use`, `tree-busy`, `state-changed`, `in-progress`,
+# `reap-in-progress`, `reclaim-in-progress`. Nineteen. The ones the RECLAIM
 # region spells stay spelled there; this region spells only its own
-# (`not-archived`, `not-expired`, `child`, `live`, and the two flavour
+# (`not-archived`, `not-expired`, `child`, `live`, `in-use`, and the two flavour
 # refusals). `unmeasured` is no word, exactly as there: a probe that could not
 # run is a `"failed"` document at exit 1 (`probe-unmeasured`), retried.
 # `--defer-expired` does not exist here: `attached`, `live` and `tree-busy` are
@@ -28532,12 +28533,13 @@ _ws_expire_not_child() {   # id -> 0 when NO `.child` marker stands; else rc 1 r
     || { _reap_refuse child "$id carries a child marker ($REG/$id.child) — a child is reclaimed by ws-reclaim when its run closes, never expired"; return 1; }
 }
 
-_ws_expire_presence() {   # id probe-verdict [detached] -> 0 when nothing runs for id; else rc 1 (`live`, or unmeasured)
+_ws_expire_presence() {   # id probe-verdict workdir [detached] -> 0 when nothing runs for id; else rc 1 (`live`,
+  #                           `in-use`, or unmeasured). `workdir` is the worktree's path, passed by BOTH callers.
   # RUNG 5, ASKED MORE OF FOR AN EXPIRY (the RECLAIM region's ladder calls this
   # after its own `attached` question, only when the binding leads with
   # `mode=expire`; `_ws_expire_resume_eval` asks it where nothing has been
   # stopped yet: at `children`, and at `branch` on the vanished-worktree arm).
-  # `detached` is passed by the caller that has ALREADY proved no client is
+  # `detached` (the fourth argument) is passed by the caller that has ALREADY proved no client is
   # attached (the ladder, just after its `attached` question): only then may
   # the refusal say so. The resume's anchored probe never asked for clients, so
   # its refusal for a pane that is up claims no more than that it is up.
@@ -28554,9 +28556,11 @@ _ws_expire_presence() {   # id probe-verdict [detached] -> 0 when nothing runs f
   # asks it: `state = running`, or any loaded job (exit 0), is `live`; only
   # exit 113 ("Could not find service") lets the stamp stand for stopped; any
   # other status is a question never answered — unmeasured.
-  # WHAT IT DOES NOT SEE: a process with its cwd in the worktree that runs
-  # outside the `cc-<id>` pane and outside the unit (an operator's own shell).
-  local id="$1" verdict="$2" how="${3-}" unit out lrc
+  # AND A PROCESS WITH ITS WORKING DIRECTORY IN THE WORKTREE, whatever it is
+  # (an operator's own shell, outside the pane and the unit): `in-use`,
+  # retryable, asked last (`_ws_expire_cwd_users`, 3962). WHAT IT DOES NOT SEE:
+  # a process of ANOTHER UNIX user — its cwd link cannot be read from here.
+  local id="$1" verdict="$2" workdir="$3" how="${4-}" unit out lrc
   [[ "$verdict" != live ]] \
     || { _reap_refuse live "$(_tmux "$id") is up$([[ "$how" == detached ]] && printf ' with no terminal attached') — an archived workspace whose pane runs is in use, and is never expired"; return 1; }
   unit=$(_svc_is_active "claude-session@$id")
@@ -28572,10 +28576,126 @@ _ws_expire_presence() {   # id probe-verdict [detached] -> 0 when nothing runs f
     esac
   fi
   case "$unit" in
-    inactive|failed) return 0 ;;
+    inactive|failed) : ;;
     '') _ws_reclaim_unmeasured "whether claude-session@$id is running could not be asked — the service manager answered nothing"; return 1 ;;
     *) _reap_refuse live "claude-session@$id answered '$unit' — a supervised workspace respawns its pane, and is never expired"; return 1 ;;
   esac
+  _ws_expire_cwd_users "$id" "$workdir"
+}
+
+# THE SEAMS of the working-directory question, as `_ws_expire_now` is the clock's: a test names another root, or a
+# listing, and the real box answers /proc and lsof.
+_ws_expire_proc_root() { printf '%s' /proc; }
+_ws_expire_lsof() { lsof -a -d cwd -Fpn; }
+
+_ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working directory at workdir or under it; else
+  #                          rc 1: `in-use` (naming the pids and the paths), or unmeasured
+  # AMENDMENT 3 (3962), ASKED OF AN EXPIRY ONLY — `_ws_expire_presence` is its one
+  # caller, so a reclaim never meets it (a finished child's tail kills its pane
+  # by design, and a process in its tree is its run's). It has two callers
+  # above that, the fresh ladder's rung 5 and the resume where nothing has been
+  # stopped yet, and both hand it the worktree explicitly.
+  # WHAT IS COMPARED. The worktree's REAL path with its LEAF NOT FOLLOWED: the
+  # real path of its parent, then the leaf's own name. At rung 5 the workdir
+  # has been proved one plain path (`_ws_reclaim_plain_path`) but the leaf `-L`
+  # rung has not run, and a link at the leaf would be followed by a resolving
+  # `pwd -P` onto another tree. A process's cwd is a kernel-resolved path that
+  # never goes through a link, so for a link leaf the comparison is vacuous by
+  # construction and the later rung refuses the link, terminally. A cwd is IN
+  # the worktree when it equals that path or begins with it followed by `/` — a
+  # sibling `<worktree>2` is not.
+  # WHAT STANDS AT THE PATH. Nothing (PROVEN, `_ws_reclaim_absent`): no process
+  # can have it as a cwd, so the answer is "nobody" without reading /proc. A
+  # path whose existence could not be looked at is unmeasured.
+  # HOW IT IS ASKED, with NO fork per process. Linux: ONE python3 call walks
+  # `<root>/<pid>/cwd` (the root is `_ws_expire_proc_root`). Darwin (`CCD_OS`):
+  # the same call parses ONE `_ws_expire_lsof` listing. A pid that vanished
+  # between the listing and the read is SKIPPED, and so is a pid whose cwd link
+  # cannot be read — a process of ANOTHER UNIX user (EACCES on a root daemon is
+  # routine): the fleet is single-user, and refusing on every unreadable link
+  # would refuse every expiry for ever. THAT IS THE LIMIT, stated: a process
+  # of another user with its cwd in the worktree is not seen.
+  # WHAT IS NOT A USER: ccd's own process (`$$`, `$BASHPID`), the scan's own
+  # children (any pid whose parent is one of those: the python3 and, on Darwin,
+  # the lsof, both of which inherit ccd's own cwd) and the call's python3 itself.
+  # ccd's ANCESTORS are not skipped: a caller whose shell sits in the worktree
+  # IS using it.
+  # WHEN THE LISTING IS TRUSTED. Only when it holds ccd's own process — the one
+  # pid the scan can be sure of. A /proc that cannot be listed, an lsof that is
+  # missing, fails or prints nothing, and a listing without ccd in it measured
+  # nothing: unmeasured, never "nobody". (lsof's exit status is not read: it
+  # exits 1 over any one process it could not inspect, and a listing that holds
+  # ccd is a listing.)
+  local id="$1" workdir="$2" rc leaf parent preal wt me=$$ sub=$BASHPID mode=proc root='' listing='' out pid pth n=0 shown=''
+  _ws_reclaim_plain_path "$workdir" \
+    || { _ws_reclaim_unmeasured "$workdir is not one plain absolute path, so whether a process works inside it was never asked"; return 1; }
+  _ws_reclaim_absent "$workdir"; rc=$?
+  (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_ABSENT_WHY — whether a process works inside $workdir was never asked"; return 1; }
+  (( rc != 0 )) || return 0
+  leaf="${workdir##*/}"; parent="${workdir%/*}"; [[ -n "$parent" ]] || parent=/
+  preal=$(cd -- "$parent" >/dev/null 2>&1 && pwd -P) \
+    || { _ws_reclaim_unmeasured "the directory $parent that holds $workdir cannot be resolved, so whether a process works inside it was never asked"; return 1; }
+  wt="${preal%/}/$leaf"
+  if [[ "$CCD_OS" == darwin ]]; then
+    mode=lsof; listing=$(_ws_expire_lsof 2>/dev/null)
+  fi
+  root=$(_ws_expire_proc_root)
+  out=$(LC_ALL=C.UTF-8 python3 -c '
+import os, subprocess, sys
+mode, wt, me, sub, root = sys.argv[1:6]
+mine = {me, sub, str(os.getpid())}
+def inside(p):
+    return p == wt or p.startswith(wt + "/")
+def ppid_of(pid):
+    if mode == "proc":
+        with open("%s/%s/stat" % (root, pid), "rb") as fh:
+            raw = fh.read().decode("utf-8", "replace")
+        return raw[raw.rindex(")") + 2:].split()[1]
+    r = subprocess.run(["ps", "-o", "ppid=", "-p", pid], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise OSError(pid)
+    return r.stdout.strip()
+cwds = []
+if mode == "proc":
+    try:
+        names = os.listdir(root)
+    except OSError:
+        sys.exit(3)
+    for n in names:
+        if not (n.isascii() and n.isdigit()):
+            continue
+        try:
+            cwds.append((n, os.readlink("%s/%s/cwd" % (root, n))))
+        except OSError:
+            continue
+else:
+    cur = None
+    for line in sys.stdin.read().split("\n"):
+        if line.startswith("p"):
+            cur = line[1:]
+        elif line.startswith("n") and cur is not None:
+            cwds.append((cur, line[1:]))
+if me not in [c[0] for c in cwds]:
+    sys.exit(3)
+for pid, p in cwds:
+    if pid in mine or not inside(p):
+        continue
+    try:
+        if ppid_of(pid) in mine:
+            continue
+    except (OSError, ValueError, IndexError):
+        continue
+    sys.stdout.buffer.write(os.fsencode("%s\t%s\n" % (pid, p)))
+' "$mode" "$wt" "$me" "$sub" "$root" <<< "$listing" 2>/dev/null); rc=$?
+  (( rc == 0 )) \
+    || { _ws_reclaim_unmeasured "the processes of this box could not be listed ($( [[ "$mode" == lsof ]] && echo lsof || echo "$root" )), so whether one works inside $workdir was never asked"; return 1; }
+  [[ -n "$out" ]] || return 0
+  while IFS=$'\t' read -r pid pth; do
+    n=$(( n + 1 ))
+    (( n > 5 )) || shown+="${shown:+, }process $pid has its working directory at $pth"
+  done <<< "$out"
+  (( n <= 5 )) || shown+=", and $(( n - 5 )) more"
+  _reap_refuse in-use "$shown — an archived workspace somebody is working in is never expired"
 }
 
 _ws_expire_eval() {   # id -> 0 when the expiry ladder passes (REAP_VERDICT=expirable, REAP_TOKEN set), else
@@ -28625,7 +28745,7 @@ _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token,
   # where nothing has been stopped yet, rung 5's presence (below). The resume
   # token binds the phase, the epoch and the recorded tip.
   _ws_reclaim_reset
-  local id="$1" phase="$2" tomb tombtip tombbranch tombarch tombwt askpresence=0
+  local id="$1" phase="$2" tomb tombtip tombbranch tombarch tombwt tombworkdir askpresence=0
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
   tomb="$REG/.reaped/$id.json"
   tombarch=$(_ws_expire_tomb_epoch "$tomb") \
@@ -28664,12 +28784,15 @@ _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token,
     [[ "$tombwt" == present ]] || askpresence=1
   fi
   if (( askpresence )); then
+    # THE WORKTREE, as the tail reads it: from the tombstone, never the registry.
+    tombworkdir=$(_ws_tomb_str "$tomb" workdir) && [[ -n "$tombworkdir" ]] \
+      || { _ws_reclaim_unmeasured "the tombstone at $tomb does not name the worktree, so whether a process works inside it was never asked"; return 1; }
     _session_probe "$id" anchored
     case "$PROBE_VERDICT" in
       gone|live) : ;;
       *) _ws_reclaim_unmeasured "whether $(_tmux "$id") is up could not be asked — tmux answered: ${PROBE_DETAIL:-nothing}"; return 1 ;;
     esac
-    _ws_expire_presence "$id" "$PROBE_VERDICT" || return 1
+    _ws_expire_presence "$id" "$PROBE_VERDICT" "$tombworkdir" || return 1
   fi
   tombbranch=$(_ws_tomb_str "$tomb" branch) || tombbranch=""
   tombtip=$(_ws_tomb_str "$tomb" tip) || tombtip=""

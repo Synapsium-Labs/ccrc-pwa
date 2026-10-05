@@ -393,8 +393,10 @@ and the README and `wave-lifecycle.md` §6 text above are wave 3b's, planned aft
   `failed` unit answer that comes from ccd's own stamp is re-asked of launchd, as the reclaim tail re-asks it; and an
   interrupted expiry's resume asks it again when it resumes at `children`, or at `branch` when the tombstone records the
   worktree absent (the vanished-worktree arm's first phase), before that attempt's tail stops anything (3963).
-  `ws-reclaim` is never asked this. It asks the pane and the unit, not processes: a shell an operator opened in the worktree by hand is not
-  seen.
+  `ws-reclaim` is never asked this. It also refuses `in-use` (retryable) when any process's working directory is the
+  worktree or lies under it — a shell an operator opened there by hand, say (3962) — fresh and at the resume's
+  `children`; a process whose cwd cannot be read, or has vanished, is skipped, so a process of another UNIX user is not
+  seen, and a process list that cannot be read is unmeasured, retried.
 - **Rung 2′'s words.** `not-archived` (no stamp), `not-expired` (younger than `WS_EXPIRE_AFTER_S`, a future stamp
   included) and `child`; a stamp that is not an epoch ccd writes is unmeasured, never old.
 - **`ws-reap`'s `expire:` arm refuses** (`expire-in-progress`), the twin of its `reclaim:` mirror. The arm that RESUMES

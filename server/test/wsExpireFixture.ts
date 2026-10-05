@@ -8,6 +8,7 @@
 // FIXTURE HOME ONLY. `makePrHarness`'s HOME is the single isolation boundary, and `ws-expire` is destructive:
 // `CHILD_STUBS` records the unit and pane calls instead of making them, and `CHILD_ENV` keeps the residue probe
 // inside that HOME (both from `childReclaimFixture.ts`, whose machinery this verb shares).
+import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { WS_ADD } from './ccdWsHelpers.js';
@@ -78,4 +79,13 @@ export function expireVerb(
   h: PrHarness, token: string, opts: { extra?: string; pre?: string } = {},
 ): { code: number; stdout: string; stderr: string } {
   return h.run(`${EXP_STUBS} ${opts.pre ?? ''} ${CHILD_ENV} cmd_ws_expire --expect ${token} --session ${EXP_ID} ${opts.extra ?? ''}`);
+}
+
+/** A process of the box that is NOT the pane and NOT the unit — an operator's own shell, here a `sleep` — with its
+ *  working directory at `dir` (amendment 3: rung 5 refuses `in-use` for it). `spawn` returns once the child has
+ *  exec'd, so `/proc/<pid>/cwd` already names `dir`. ALWAYS `stop()` it in a `finally`. */
+export function holdCwd(dir: string): { pid: number; stop: () => void } {
+  const p: ChildProcess = spawn('sleep', ['60'], { cwd: dir, stdio: 'ignore' });
+  if (p.pid === undefined) throw new Error(`could not start a process in ${dir}`);
+  return { pid: p.pid, stop: () => { p.kill('SIGKILL'); } };
 }

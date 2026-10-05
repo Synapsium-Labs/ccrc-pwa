@@ -9,7 +9,7 @@ import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf, refusalsOf } from './lifecycleHelpers.js';
 import { childIndex, hookRuns, plantRepoPrograms, plantTmux } from './childReclaimFixture.js';
 import {
-  EXP_ID, EXP_STUBS, NOW, OLD, archiveAt, expireAudit, expireEvalOf, expireToken, expireVerb, makeArchived,
+  EXP_ID, EXP_STUBS, NOW, OLD, archiveAt, expireAudit, expireEvalOf, expireToken, expireVerb, holdCwd, makeArchived,
 } from './wsExpireFixture.js';
 
 let h: PrHarness;
@@ -122,6 +122,29 @@ describe('the audit refuses a live archived workspace — `live`, no token', () 
     const doc = JSON.parse(expireAudit(h).stdout) as Record<string, unknown>;
     expect(doc['verdict'], String(doc['detail'])).toBe('live');
     expect(doc['alive']).toBe(true);
+    expect(doc['token']).toBeUndefined();
+  }, 60_000);
+});
+
+describe('the audit refuses an archived workspace a process is working in — `in-use`, no token', () => {
+  it('a `sleep` with its cwd in the worktree', () => {
+    const a = makeArchived(h);
+    const sleeper = holdCwd(a.wt);
+    try {
+      const r = expireAudit(h);
+      expect(r.code, 'a retryable refusal is an answer: exit 0').toBe(0);
+      const doc = JSON.parse(r.stdout) as Record<string, unknown>;
+      expect(doc['verdict'], String(doc['detail'])).toBe('in-use');
+      expect(doc['token']).toBeUndefined();
+    } finally { sleeper.stop(); }
+  }, 60_000);
+
+  it('and an unlistable /proc is the audit’s `unmeasured`: exit 1, no token', () => {
+    makeArchived(h);
+    const r = expireAudit(h, { pre: '_ws_expire_proc_root() { printf %s "$HOME/no-such-proc"; };' });
+    expect(r.code).toBe(1);
+    const doc = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(doc['verdict']).toBe('unmeasured');
     expect(doc['token']).toBeUndefined();
   }, 60_000);
 });

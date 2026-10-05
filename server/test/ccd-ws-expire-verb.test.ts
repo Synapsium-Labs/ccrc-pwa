@@ -15,7 +15,7 @@ import { makePrHarness, CFG_DIR, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf, measOf, refusalsOf } from './lifecycleHelpers.js';
 import { childIndex, gcNow, hasCommit, hookRuns, plantRepoPrograms, plantTmux, tmuxSessions } from './childReclaimFixture.js';
 import {
-  EXP_BRANCH, EXP_ID, EXP_STUBS, NOW, OLD, archiveAt, expireEvalOf, expireVerb, makeArchived, type Archived,
+  EXP_BRANCH, EXP_ID, EXP_STUBS, NOW, OLD, archiveAt, expireEvalOf, expireVerb, holdCwd, makeArchived, type Archived,
 } from './wsExpireFixture.js';
 
 let h: PrHarness;
@@ -216,6 +216,18 @@ describe('a refusal destroys nothing, and every one is journaled as an expiry', 
     }
   }, 120_000);
 
+  it('refuses in-use when a process stands in the worktree at the instant of deletion — a token minted before it arrived', () => {
+    const a = makeArchived(h);
+    const tok = expireEvalOf(h).token;
+    const sleeper = holdCwd(a.wt);
+    try {
+      expect(refusedWith(expireVerb(h, tok))).toBe('in-use');
+      intact(a);
+      expect(refusalsOf(h.home)).toContainEqual({ act: 'expire', token: 'in-use' });
+      expect(h.reg(EXP_ID, 'reaping'), 'a refusal leaves no breadcrumb').toBeNull();
+    } finally { sleeper.stop(); }
+  }, 90_000);
+
   it('refuses in-progress while another ccd process holds the reap lock', () => {
     const a = makeArchived(h);
     const tok = expireEvalOf(h).token;
@@ -307,6 +319,27 @@ describe('a crash at each phase resumes through the `expire:` breadcrumb — and
     const detail = (JSON.parse(r.stdout) as { detail: string }).detail;
     expect(detail).toContain(`cc-${EXP_ID} is up`);
     expect(detail, 'true of a pane with a client too').not.toContain('no terminal attached');
+  }, 120_000);
+
+  // AMENDMENT 3 (3962), CARRIED TO THE RESUME: a process of the box with its cwd in the worktree is asked about again at
+  // `children`, where nothing has been deleted — and the breadcrumb stands for the retry once it has left.
+  it('at `children`, a process with its working directory in the worktree refuses in-use — nothing stopped, nothing deleted', () => {
+    const a = makeArchived(h);
+    interrupted(a, 'children');
+    const tok = resumeToken('children');
+    const sleeper = holdCwd(a.wt);
+    try {
+      const r = expireVerb(h, tok);
+      expect(refusedWith(r)).toBe('in-use');
+      expect((JSON.parse(r.stdout) as { detail: string }).detail).toContain(`process ${sleeper.pid} `);
+      expect(fs.existsSync(a.wt), 'nothing was deleted').toBe(true);
+      expect(h.reg(EXP_ID, 'reaping'), 'the breadcrumb stands, for the retry').toBe('expire:children');
+      expect(unsupervised(), 'the unit was not touched').toEqual([]);
+      expect(h.calls(), 'the pane was not touched').not.toContain(KILL);
+    } finally { sleeper.stop(); }
+    const again = expireVerb(h, tok);
+    expect(again.code, again.stdout + again.stderr).toBe(0);
+    expired(a);
   }, 120_000);
 
   // THE VANISHED-WORKTREE ARM'S FIRST BREADCRUMB IS `expire:branch`, written before the tail has stopped anything (the

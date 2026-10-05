@@ -12,7 +12,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CHILD_ID, CHILD_STUBS, TMUX_FAULTS, evalOf, makeChild, plantTmux } from './childReclaimFixture.js';
-import { EXP_BRANCH, EXP_ID, EXP_STUBS, NOW, OLD, WEEK, archiveAt, expireEvalOf, makeArchived } from './wsExpireFixture.js';
+import {
+  EXP_BRANCH, EXP_ID, EXP_STUBS, NOW, OLD, WEEK, archiveAt, expireEvalOf, holdCwd, makeArchived,
+} from './wsExpireFixture.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ws-expire-ladder-'); });
@@ -253,6 +255,163 @@ describe('rung 5 on Darwin — a `failed` stamp is stopped only when launchd say
     expect(r.verdict, r.detail).toBe(want);
     expect(h.calls(), 'launchd was asked by the label ccd spells').toContain(`launchctl print ${LABEL}`);
   }, 60_000);
+});
+
+// THE COORDINATOR'S RULING 3 (3962): rung 5, for an expiry only, also refuses `in-use` (retryable) when any process's
+// working directory is the worktree or lies under it — the process the pane and the unit questions cannot see (an
+// operator's own shell). `sleep 60` stands for it, started with its cwd where the case says; the CONTROL is a
+// `ws-reclaim` over the same shape, which never asks. `/proc` is read through the seam `_ws_expire_proc_root`, and a
+// FAKE root (a directory of `<pid>/cwd` links and `<pid>/stat` files) names the cases a live box cannot be made to
+// produce on demand: ccd's own process in the worktree, its children, a pid that vanished, a link nobody may read.
+describe('rung 5, a process whose working directory is the worktree — `in-use`', () => {
+  const real = (p: string): string => fs.realpathSync(p);
+
+  it('a `sleep` whose cwd IS the worktree refuses in-use, names the pid and the path, and nothing is touched', () => {
+    const { wt } = makeArchived(h);
+    const s = holdCwd(wt);
+    try {
+      const r = expireEvalOf(h);
+      expect(r.verdict, r.detail).toBe('in-use');
+      expect(r.detail).toContain(`process ${s.pid} `);
+      expect(r.detail).toContain(real(wt));
+      expect(r.token).toBe('');
+      expect(h.calls(), 'no unit or pane call was made').toEqual(expect.not.arrayContaining([expect.stringMatching(/^(unsupervise|tmux kill)/)]));
+      expect(fs.existsSync(wt)).toBe(true);
+    } finally { s.stop(); }
+  }, 60_000);
+
+  it('a `sleep` whose cwd is a SUBDIRECTORY of the worktree refuses in-use too', () => {
+    const { wt } = makeArchived(h);
+    fs.mkdirSync(path.join(wt, 'deep', 'er'), { recursive: true });
+    const s = holdCwd(path.join(wt, 'deep', 'er'));
+    try {
+      const r = expireEvalOf(h);
+      expect(r.verdict, r.detail).toBe('in-use');
+      expect(r.detail).toContain(`process ${s.pid} `);
+    } finally { s.stop(); }
+  }, 60_000);
+
+  it('a `sleep` in a SIBLING directory whose name merely begins with the worktree’s (`<worktree>2`) is not in it — expirable', () => {
+    const { wt } = makeArchived(h);
+    const sibling = `${wt}2`;
+    fs.mkdirSync(sibling);
+    const s = holdCwd(sibling);
+    try {
+      const r = expireEvalOf(h);
+      expect(r.verdict, r.detail).toBe('expirable');
+    } finally { s.stop(); }
+  }, 60_000);
+
+  it('the same `sleep` once it is gone: the CONTROL — expirable', () => {
+    const { wt } = makeArchived(h);
+    const s = holdCwd(wt);
+    s.stop();   // SIGKILL: the cwd link is released at exit, a zombie's cannot be read
+    expect(expireEvalOf(h).verdict).toBe('expirable');
+  }, 60_000);
+
+  it('a /proc that cannot be listed is UNMEASURED — never "nobody", never a token', () => {
+    makeArchived(h);
+    const missing = expireEvalOf(h, { pre: '_ws_expire_proc_root() { printf %s "$HOME/no-such-proc"; };' });
+    expect(missing.verdict, missing.detail).toBe('unmeasured');
+    expect(missing.token).toBe('');
+    fs.mkdirSync(path.join(h.home, 'empty-proc'));
+    const empty = expireEvalOf(h, { pre: '_ws_expire_proc_root() { printf %s "$HOME/empty-proc"; };' });
+    expect(empty.verdict, 'a listing that does not even hold ccd’s own pid measured nothing').toBe('unmeasured');
+    expect(empty.token).toBe('');
+  }, 60_000);
+
+  // The fake root: `$HOME/fp/<pid>/cwd` (a link) and `stat` (the kernel's one line, whose fourth field is the parent).
+  const FAKE = (wt: string): string => [
+    'mkdir -p "$HOME/fp/$$"; ln -s "$HOME" "$HOME/fp/$$/cwd";',
+    '_fp() { mkdir -p "$HOME/fp/$1"; ln -s "$2" "$HOME/fp/$1/cwd"; printf "%s (a b) S %s 1 1 0\\n" "$1" "$3" > "$HOME/fp/$1/stat"; };',
+    `_fp 4242 "${real(wt)}/sub" 1;`,
+    '_ws_expire_proc_root() { printf %s "$HOME/fp"; };',
+  ].join(' ');
+
+  it('a fake /proc: a stranger in the worktree refuses in-use; ccd’s own process, its children and a vanished pid are skipped', () => {
+    const { wt } = makeArchived(h);
+    // ccd's own process has its cwd in the worktree (a caller that ran it from there); a child of ccd, a pid with no
+    // cwd link left, and a pid whose link nobody may read are not users either.
+    const skipped = [
+      'rm -f "$HOME/fp/$$/cwd"; _fp $$ "' + real(wt) + '" 1;',   // ccd itself, with a readable stat: only the skip of its own pid can pass it
+      '_fp 4300 "' + real(wt) + '" $$;',
+      'mkdir -p "$HOME/fp/4301";',
+      '_fp 4302 "' + real(wt) + '" $BASHPID;',
+    ].join(' ');
+    const alone = expireEvalOf(h, { pre: `${FAKE(wt)} rm -rf "$HOME/fp/4242"; ${skipped}` });
+    expect(alone.verdict, alone.detail).toBe('expirable');
+    const withStranger = expireEvalOf(h, { pre: `${FAKE(wt)} ${skipped}` });
+    expect(withStranger.verdict, withStranger.detail).toBe('in-use');
+    expect(withStranger.detail).toContain('process 4242 ');
+    expect(withStranger.detail).not.toContain('process 4300 ');
+  }, 60_000);
+
+  it('a leaf that is a symbolic link is judged by its own name: nobody’s cwd reads through it, and the later rung refuses it', () => {
+    const { wt } = makeArchived(h);
+    const target = `${wt}-real`;
+    fs.renameSync(wt, target);
+    fs.symlinkSync(target, wt);
+    const s = holdCwd(target);
+    try {
+      const r = expireEvalOf(h);
+      expect(r.verdict, 'not in-use: the process is in the link’s TARGET; the link itself is containment-unproven').toBe('containment-unproven');
+    } finally { s.stop(); }
+  }, 60_000);
+
+  it('a VANISHED worktree has no cwd to ask about — expirable over what is left', () => {
+    const { wt } = makeArchived(h);
+    fs.rmSync(wt, { recursive: true, force: true });
+    expect(expireEvalOf(h).verdict).toBe('expirable');
+  }, 60_000);
+
+  it('the CONTROL: ws-reclaim is NOT asked this — a finished child with a process in its worktree is still reclaimable', () => {
+    const c = makeChild(h);
+    const s = holdCwd(c.wt);
+    try {
+      const r = evalOf(h);
+      expect(r.verdict, r.detail).toBe('reclaimable');
+    } finally { s.stop(); }
+  }, 60_000);
+});
+
+// ON DARWIN the same question is asked of `lsof -a -d cwd -Fpn`, through the seam `_ws_expire_lsof` (no lsof is
+// installed here, and a stub can name the listing exactly). A listing is trusted only when it holds ccd's own process —
+// the Linux arm's rule — so an lsof that is missing, fails, or prints nothing is UNMEASURED.
+describe('rung 5 on Darwin — a cwd under the worktree, asked of lsof', () => {
+  const lsof = (body: string, rc = 0): string => `CCD_OS=darwin; _ws_expire_lsof() { ${body} return ${rc}; };`;
+  const listing = (pid: number | string, dir: string): string =>
+    `printf 'p%s\\nn%s\\np%s\\nn%s\\n' "$$" "$HOME" "${pid}" "${dir}";`;
+
+  it('lists a process with its cwd in the worktree → in-use; in a sibling → expirable', () => {
+    const { wt } = makeArchived(h);
+    const sibling = `${wt}2`;
+    fs.mkdirSync(sibling);
+    const s = holdCwd(wt);
+    const t = holdCwd(sibling);
+    try {
+      const hit = expireEvalOf(h, { pre: lsof(listing(s.pid, fs.realpathSync(wt))) });
+      expect(hit.verdict, hit.detail).toBe('in-use');
+      expect(hit.detail).toContain(`process ${s.pid} `);
+      const sub = expireEvalOf(h, { pre: lsof(listing(s.pid, `${fs.realpathSync(wt)}/sub`)) });
+      expect(sub.verdict, 'a subdirectory').toBe('in-use');
+      const miss = expireEvalOf(h, { pre: lsof(listing(t.pid, fs.realpathSync(sibling))) });
+      expect(miss.verdict, miss.detail).toBe('expirable');
+    } finally { s.stop(); t.stop(); }
+  }, 60_000);
+
+  it('an lsof that fails, prints nothing, or lists everybody but ccd is UNMEASURED', () => {
+    makeArchived(h);
+    for (const [what, pre] of [
+      ['exits 1 with nothing', lsof('', 1)],
+      ['exits 0 with nothing', lsof('')],
+      ['is absent', 'CCD_OS=darwin; _ws_expire_lsof() { lsof-that-is-not-installed; };'],
+      ['lists a listing without ccd', lsof(`printf 'p1\\nn/\\n';`)],
+    ] as const) {
+      const r = expireEvalOf(h, { pre });
+      expect(r.verdict, `lsof ${what}: ${r.detail}`).toBe('unmeasured');
+      expect(r.token).toBe('');
+    }
+  }, 90_000);
 });
 
 describe('rungs 7 to 9 and the identity refusal — the RECLAIM ladder’s, asked unchanged', () => {
