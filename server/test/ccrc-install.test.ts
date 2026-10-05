@@ -1844,7 +1844,7 @@ describe('runInstall: the noManager option (wave 9 M7)', () => {
   itLinux('noManager makes the final-env check require BOTH manager names absent — under ccrcEnv they resolve to the fixture front, so it refuses (wave 9 M7)', () => {
     expect(() => runInstall(freshBox('ccrc-install-nomgr-'), ['install'], {}, { noManager: true }))
       .toThrow(/systemd-run was expected absent/);
-  });
+  }, 60_000);   // freshBox builds a whole tree: measured past the 20 s default under load 30-50 (final review)
 });
 
 describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {

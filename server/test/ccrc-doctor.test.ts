@@ -3637,6 +3637,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       }
     });
 
+    // PLATFORM-ONLY: this is the macOS reader — the launchd job sources the file with `set -a; . file`, so bash's
+    // rules decide the line, where on Linux systemd's EnvironmentFile= does (A1). Its Linux twin is A1.
     itDarwin('A1d: the same box on macOS — a trailing space or tab is dropped by bash (ARMED); a leading one makes the line a command, so not measured', () => {
       const home = noPassBox('ccrc-doctor-auth-a1d-', '');
       const base = readEnv(home);
@@ -3684,6 +3686,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       expectOneUndecidedWarn(runDoctor(home).stdout, expPath(home));
     });
 
+    // PLATFORM-ONLY: bash ends a comment at the newline; systemd's EnvironmentFile= (E3) may continue it
+    // after a backslash. The two readers disagree, so each has its own case. Its Linux twin is E3.
     itDarwin('E3d: the same files read gated on macOS — bash ends a comment at the newline, backslash or not (measured, bash 5.2)', () => {
       const home = healthy('ccrc-doctor-auth-e3d-');
       editExposure(home, (s) => s.replace('CCRC_AUTH=on\n', '# a comment ending in a backslash \\\nCCRC_AUTH=on\n'));
@@ -3706,6 +3710,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       expect(r.stdout).not.toMatch(/^WARN auth: /m);
     });
 
+    // PLATFORM-ONLY: the macOS reader is bash's `. file`, whose whole-file rule has no precedence over a
+    // failing file; on Linux the second EnvironmentFile= wins by presence (E5). Its Linux twin is E5.
     itDarwin('E5d: the same files on macOS — the WHOLE-FILE rule has no precedence over a failing file: not measured, naming ccrc.env', () => {
       const home = healthy('ccrc-doctor-auth-e5d-');
       writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH = on\n`);
@@ -3718,6 +3724,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
     });
 
+    // PLATFORM-ONLY: bash accepts `export NAME=value` as a plain assignment; systemd's EnvironmentFile=
+    // does not take `export` (E6). The platforms differ by reader. Its Linux twin is E6.
     itDarwin('E6d: the same line on macOS — bash\'s `export NAME=value` is a plain assignment, so ARMED, and with no passphrase the gate FAILs shut', () => {
       const home = noPassBox('ccrc-doctor-auth-e6d-', 'export CCRC_AUTH=on\n');
       const r = runDoctor(home);
@@ -3786,6 +3794,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       expect(authLine(r.stdout)).toContain(expPath(home));
     });
 
+    // PLATFORM-ONLY: this is systemd's EnvironmentFile= reading — it discards a CR. The macOS reader is
+    // bash's `. file`, which keeps it, so that platform's answer differs. Its macOS twin is E14d.
     itLinux('E14: a CR in the OTHER file is discarded by systemd — `CCRC_AUTH=on` in ccrc.env still arms, and with no passphrase the gate FAILs shut, as at main', () => {
       const home = healthy('ccrc-doctor-auth-e14-');
       rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
@@ -3796,6 +3806,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       expect(r.code).toBe(1);
     });
 
+    // PLATFORM-ONLY: bash's `. file` keeps a CR in the value; systemd's EnvironmentFile= discards it
+    // (E14). The platforms differ by reader. Its Linux twin is E14.
     itDarwin('E14d: the same files on macOS — bash keeps a CR in the exposure file\'s value, so not measured, naming the exposure file line 1', () => {
       const home = healthy('ccrc-doctor-auth-e14d-');
       rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
@@ -3827,6 +3839,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       expect(out, label).not.toMatch(/^(PASS|FAIL) auth: /m);
     };
 
+    // PLATFORM-ONLY: splitting or skipping a file whole on a CR, NUL or non-UTF-8 byte is systemd's
+    // EnvironmentFile= behaviour; bash's `. file` does neither. The macOS whole-file cases are E5d and E14d.
     itLinux('E15: the EXPOSURE file is split or skipped whole by systemd — ccrc.env says `on`, the exposure file `off` (or a key the reader would have decided) — not measured, never a false ARMED (main: `on`)', () => {
       for (const [label, shape, phrase] of WHOLE_FILE) {
         const home = healthy('ccrc-doctor-auth-e15-');
@@ -3836,6 +3850,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       }
     });
 
+    // PLATFORM-ONLY: splitting or skipping a file whole on a CR, NUL or non-UTF-8 byte is systemd's
+    // EnvironmentFile= behaviour; bash's `. file` does neither. Its pair is E15; the macOS whole-file cases are E5d and E14d.
     itLinux('E16: ccrc.env is split or skipped whole by systemd — with the flag on in it and no exposure file, not measured, never a false OFF or ARMED (main: a false OFF for a CR, a false ARMED for NUL and non-UTF-8)', () => {
       for (const [label, shape, phrase] of WHOLE_FILE) {
         const home = noPassBox('ccrc-doctor-auth-e16-', '');
@@ -3868,7 +3884,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // ── the reader itself, as tables ─────────────────────────────────────
     // [label, file bytes, [stdout, rc] at MAIN (two-argument, `_box_env_value f CCRC_AUTH`), [stdout, rc] in `unit` mode]
     // The `main` column was CAPTURED from a copy of `ccd/ccrc` at the merge base, in a scratch tree, before the
-    // function was touched: it is what 43 callers must keep reading, byte for byte.
+    // function was touched: it is what 45 callers must keep reading, byte for byte.
     const SHAPES: Array<[string, string, [string, number], [string, number]]> = [
       ['A1 trailing space', 'CCRC_AUTH=on \n', ['on ', 0], ['on', 0]],
       ['A1 trailing tab', 'CCRC_AUTH=on\t\n', ['on\t', 0], ['on', 0]],
@@ -8281,6 +8297,8 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
       noRunnerBugLine(r.stdout, 'update-exposure');
     });
 
+    // PLATFORM-ONLY: bash's `. file` fails the whole-file rule on a spaced assignment, where the Linux
+    // reader lets the exposure file decide (X2). The platforms differ by reader. Its Linux twin is X2.
     itDarwin('X2d: the same files on macOS — the spaced line fails the whole-file rule, so not measured, naming the exposure file and that line\'s number', () => {
       const home = unexposed('ccrc-doctor-upx-x2d-');
       writeExposureEnv(home);
@@ -8304,6 +8322,8 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
       noRunnerBugLine(r.stdout, 'update-exposure');
     });
 
+    // PLATFORM-ONLY: both reads are rc 3 under bash's whole-file rule, so arm 2 speaks about CCRC_AUTH;
+    // the Linux reader (X3) reports on the spaced CCRC_HOST line. The platforms differ by reader. Its Linux twin is X3.
     itDarwin('X3d: the same box on macOS — both reads are rc 3 (the whole-file rule), so arm 2 speaks: whether CCRC_AUTH is on is not measured, naming ccrc.env line 2', () => {
       const home = unexposed('ccrc-doctor-upx-x3d-',
         'CCRC_FLEET=local\nCCRC_HOST = 0.0.0.0\nCCRC_PORT=7788\n');
@@ -8322,6 +8342,8 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
       noRunnerBugLine(r.stdout, 'update-exposure');
     });
 
+    // PLATFORM-ONLY: the whole-file rule makes CCRC_HOST rc 3 under bash's `. file`, so this WARNs; the Linux
+    // reader (X4) reads the spaced line as absent and PASSes. The platforms differ by reader. Its Linux twin is X4.
     itDarwin('X4d: the same box on macOS — the whole-file rule makes CCRC_HOST rc 3 too, so arm 2 WARNs, naming ccrc.env line 2', () => {
       const home = unexposed('ccrc-doctor-upx-x4d-',
         'CCRC_FLEET=local\nCCRC_AUTH = on\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n');

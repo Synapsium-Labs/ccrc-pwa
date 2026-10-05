@@ -12617,6 +12617,23 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
       expect(has(home, '20250102-000000')).toBe(true);
     });
 
+    it('B9: with ~/.ccrc/update.lock a DIRECTORY (the lock cannot be measured) the prune says so, removes nothing, and ccrc backup exits 0', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b9-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      // `exec 9>>dir` fails, and `_ver_lock_try` answers rc 3 — the `*)` arm of `_bak_prune`'s case, which B3 (rc 1),
+      // B5 (rc 2) and B8 (no floor) do not reach. Falling through to the prune would remove both planted dirs.
+      mkdirSync(lockPath(home), { recursive: true });
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      const own = ownDir(r);   // BEFORE the skip line: a backup that died cannot pass as a prune that skipped
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain('backup: prune skipped — ~/.ccrc/update.lock could not be measured; nothing was pruned');
+      expect(existsSync(own)).toBe(true);
+      expect(has(home, '20250101-000000')).toBe(true);
+      expect(has(home, '20250102-000000')).toBe(true);
+      assertNoExtras(home);
+    });
+
     it('_bak_gc and _bak_prune each call _bak_keepset, and [ -f "$d/coord.db" ] appears once in ccd/ccrc (one selection)', () => {
       const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
       const body = (name: string): string => {
@@ -12676,7 +12693,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(treeDigest(v1), 'the kept version\'s content must survive untouched').toEqual(keptBefore);
     expect(existsSync(plainFile), 'the plain timestamp-named file is not a timestamped backup').toBe(true);
     expect(fileText(plainFile)).toBe(plainBefore);
-  });
+  }, 60_000);   // a move onto v2.0.0 plus a rollback: 13.7-17 s alone, timed out 3 of 6 at load 30-50 (final review)
 });
 
 describe('ccrc update: the codex steps ride the staged spine (Plan 2b-2 Task 10)', () => {

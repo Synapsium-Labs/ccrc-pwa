@@ -10,19 +10,19 @@
 // * CONTAINED_TOOLS. Before this wave, "contained" meant whatever each builder remembered: `ghContainedEnv` planted
 //   gh (and, on request, the managers and tmux); a builder planted curl and journalctl by hand. Measured at main
 //   (the wave-9 Task 3 report): `updateEnv` left ssh, scp, tmux and curl real; `ccrcEnv` in ccrc-cli and
-//   ccrc-install-graphify left ssh, scp, tmux and systemd-run real; `chainEnv`, the sourced harness and every raw
-//   spawn of the real `ccd/ccrc` left systemctl and systemd-run real as well; and EVERY one of them inherited the
-//   real `XDG_RUNTIME_DIR`, which is the real user bus. One list, read by the poisons, the checker, FIXTURE_BINS
+//   ccrc-install-graphify left ssh, scp, tmux and systemd-run real; `chainEnv` and every raw spawn of the real
+//   `ccd/ccrc` left systemctl and systemd-run real as well, and the sourced harness left systemd-run real; and
+//   EVERY one of them inherited the real `XDG_RUNTIME_DIR`, which is the real user bus. One list, read by the poisons, the checker, FIXTURE_BINS
 //   and the darwin probe bin, is what keeps those from drifting apart again.
 //
 // * plantPoison is CREATE-IF-ABSENT, `ghContainedEnv`'s systemd/tmux rule and for its reason: a builder plants its
 //   functional stub AFTER the poisons, and must win; a stub planted BEFORE them must be kept. A poison that
 //   overwrote would turn every functional `ssh` or `systemctl` a case wrote first into a refusal.
 //
-// * loopbackCurlFront. Two cases in ccrc-update.test.ts measure the REAL curl's own `--max-time`/`--max-filesize`
-//   bounds against a listener the case itself opened, and a poison would answer 97 and measure nothing. So their
-//   curl is a front that execs the real one ONLY for a URL on 127.0.0.1 at a port the case listed in
-//   `$HOME/curl-allow-ports`: never the live server's 7788 or the agent's 7789 by default, never another host, never
+// * loopbackCurlFront. Four cases in ccrc-update.test.ts (each calls `allowCurlPort`) measure the REAL curl: its own
+//   `--max-time`/`--max-filesize` bounds against a listener the case itself opened, and a refused connection at
+//   port 9. A poison would answer 97 and measure nothing. So their curl is a front that execs the real one ONLY
+//   for a URL on 127.0.0.1 at a port the case listed in `$HOME/curl-allow-ports`: never the live server's 7788 or the agent's 7789 by default, never another host, never
 //   a `-K` config file (which could name a URL this scan cannot see). Everything it refuses is recorded.
 //
 // * assertNoRealTool reads RESOLUTION, never executes the tool: `command -v` under the env, then `realpath` of
