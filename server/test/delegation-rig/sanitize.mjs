@@ -5,8 +5,14 @@
 // root becomes `/rig` (its munged form `-rig`) and the binaries' directory `/rig/versions`, and then the WHOLE corpus is scanned by ALLOWLIST:
 // an absolute path is residue unless its first segment is `rig`, `usr` or `bin`, or it is
 // `/dev/null`; so is `ccrc-dlg-rig`, `sk-ant-`, and the running user's name or the host's first
-// label as a whole word (4+ characters). Any finding exits 1 naming the bundle and a JSON pointer —
-// a key is named by its INDEX, never its text — and NOTHING is written.
+// label as a whole word (4+ characters, case-insensitive, letters only as word characters). Also residue: a `..` path
+// segment, a `//`-led host or path (`file:///srv/x`, `//share/x`), a munged foreign path (`-mnt-…`, `-home-…`), and
+// any of these in a `\uXXXX`- or `%2F`-escaped spelling (both the string and its decoded form are scanned).
+// KNOWN LIMIT: base64 (or any other encoding) of residue is not decoded and not chased.
+// Any finding exits 1 naming the bundle and a JSON pointer — a key is named by its INDEX, never its text — a bundle
+// that cannot be read as a bundle (bad version directory, no `root` file, bad scenario name) is a finding too, and
+// NOTHING is written: fixtures are built in a sibling of <fixtures-dir> and moved in only once all of them passed.
+// An exception prints one fixed line (never its message, which names a raw path) and exits 1.
 // Usage: node sanitize.mjs <raw-root> <fixtures-dir>
 import fs from 'node:fs';
 import os from 'node:os';
@@ -97,51 +103,106 @@ function bundle(dir) {
 }
 
 const esc = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// A residue WORD is the user's name or the host's first label, 4+ characters, matched case-insensitively with
+// LETTERS as the only word characters: `<user>2`, `x_<user>` and `<USER>` all fail; `<user>x` is a different word.
 const WORDS = [os.userInfo().username, os.hostname().split('.')[0]]
   .filter((w) => typeof w === 'string' && w.length >= 4)
-  .map((w) => new RegExp(`(^|[^A-Za-z0-9])${esc(w)}($|[^A-Za-z0-9])`));
+  .map((w) => new RegExp(`(^|[^A-Za-z])${esc(w)}($|[^A-Za-z])`, 'i'));
+// The user's home directory in its munged spelling (every non-alphanumeric as `-`), as Claude Code names a project dir.
+const HOME_MUNGED = (() => { const m = munge(os.homedir()); return m.length >= 4 ? m : null; })();
+// Munged FOREIGN paths: `-mnt-<vol>-projects-…`, `-home-<user>-…`, `-Users-…`. Only `-rig` survives the replacer.
+const MUNGED_FOREIGN = /(^|[^A-Za-z0-9])-(home|mnt|tmp|srv|opt|var|root|Users|private|proc)-/;
 // `:` is a BOUNDARY, not a continuation: a PATH-like `/usr/bin:/home/<user>/.bin` carries a second absolute path.
 const ABS = /(?<![A-Za-z0-9._~/-])\/([A-Za-z0-9._-]+)/g;
+// A `//`-led name: `file:///srv/x`, `//fileserver/share`, `http://internal-host.corp/p`. Only an allowed top, or
+// the placeholder loopback address, may follow; a `//` INSIDE a path (`/rig//x`) is a join artefact, not a host.
+const DOUBLE = /(?<![A-Za-z0-9._~-])\/\/([A-Za-z0-9._-]+)/g;
 const ALLOWED_TOP = new Set(['rig', 'usr', 'bin']);
-function residue(s) {
+const ALLOWED_HOST = new Set(['127.0.0.1']);
+// A path segment of `..` walks out of whatever allowed top precedes it (`/rig/../srv/x`, `../../srv/x`).
+const DOTDOT = /(^|\/)\.\.(\/|$)/;
+// The escaped spellings of `/` and of any character a JSON string may carry as `\uXXXX`, and percent-encoded `/`.
+const decode = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16))).replace(/%2[Ff]/g, '/');
+function residue1(s) {
   for (const m of s.matchAll(ABS)) {
     if (ALLOWED_TOP.has(m[1])) continue;
     if (m[1] === 'dev' && s.startsWith('/null', m.index + m[0].length) && !/[A-Za-z0-9._-]/.test(s[m.index + m[0].length + 5] ?? '')) continue;
     return true;
   }
-  return s.includes('ccrc-dlg-rig') || s.includes('sk-ant-') || WORDS.some((re) => re.test(s));
+  for (const m of s.matchAll(DOUBLE)) if (!ALLOWED_TOP.has(m[1]) && !ALLOWED_HOST.has(m[1])) return true;
+  if (DOTDOT.test(s)) return true;
+  if (MUNGED_FOREIGN.test(s) || (HOME_MUNGED !== null && s.includes(HOME_MUNGED))) return true;
+  return /ccrc-dlg-rig/i.test(s) || /sk-ant-/i.test(s) || WORDS.some((re) => re.test(s));
+}
+// Both the string as it stands and its decoded spelling are scanned. Base64 (or any other encoding) of residue is a
+// KNOWN LIMIT: it is not decoded and not chased.
+function residue(s) {
+  const d = decode(s);
+  return residue1(s) || (d !== s && residue1(d));
 }
 const SAFE_SEG = /^[A-Za-z0-9_.-]{1,40}$/;
-const findings = [];
-const scan = (v, ptr, where) => {
+const scan = (v, ptr, where, findings) => {
   if (typeof v === 'string') { if (residue(v)) findings.push(`${where} ${ptr || '/'}`); return; }
-  if (Array.isArray(v)) { v.forEach((x, i) => scan(x, `${ptr}/${i}`, where)); return; }
+  if (Array.isArray(v)) { v.forEach((x, i) => scan(x, `${ptr}/${i}`, where, findings)); return; }
   if (v !== null && typeof v === 'object') {
     Object.entries(v).forEach(([k, x], i) => {
       const seg = SAFE_SEG.test(k) && !residue(k) ? k : `#${i}`;
       if (residue(k)) findings.push(`${where} ${ptr}/#${i} (key)`);
-      scan(x, `${ptr}/${seg}`, where);
+      scan(x, `${ptr}/${seg}`, where, findings);
     });
   }
 };
 
-const fixtures = [];
-for (const v of fs.readdirSync(raw).filter((n) => VERSION.test(n)).sort()) {
-  for (const s of fs.readdirSync(path.join(raw, v)).sort()) {
-    const d = path.join(raw, v, s);
-    if (!fs.existsSync(path.join(d, 'root'))) continue;
-    if (!NAME.test(s)) { findings.push(`${v}/#name (scenario directory name)`); continue; }
-    const f = bundle(d);
-    scan(f, '', `${v}/${s}`);
-    fixtures.push({ v, s, f });
+const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+
+function main() {
+  const findings = [];
+  const fixtures = [];
+  const versionDirs = fs.readdirSync(raw).sort().filter((n) => isDir(path.join(raw, n)));
+  versionDirs.forEach((v, vi) => {
+    if (!VERSION.test(v)) { findings.push(`#${vi} (version directory name)`); return; }
+    fs.readdirSync(path.join(raw, v)).sort().filter((n) => isDir(path.join(raw, v, n))).forEach((s, si) => {
+      const d = path.join(raw, v, s);
+      if (!fs.existsSync(path.join(d, 'root'))) { findings.push(`${v}/#${si} (bundle without a root file)`); return; }
+      if (!NAME.test(s) || residue(s)) { findings.push(`${v}/#${si} (scenario directory name)`); return; }
+      const f = bundle(d);
+      scan(f, '', `${v}/${s}`, findings);
+      fixtures.push({ v, s, f });
+    });
+  });
+  if (findings.length > 0) {
+    for (const x of findings) process.stderr.write(`sanitize: residue in ${x}\n`);
+    return 1;
   }
+  // Nothing reaches outDir until EVERY bundle has passed AND been written: build in a sibling, then move in.
+  const out = path.resolve(outDir);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  const tmp = fs.mkdtempSync(path.join(path.dirname(out), '.sanitize-tmp-'));
+  try {
+    for (const { v, s, f } of fixtures) {
+      fs.mkdirSync(path.join(tmp, v), { recursive: true });
+      fs.writeFileSync(path.join(tmp, v, `${s}.json`), `${JSON.stringify(f, null, 1)}\n`);
+    }
+    if (fs.existsSync(out) && !isDir(out)) { process.stderr.write('sanitize: the fixtures path exists and is not a directory\n'); return 1; }
+    for (const v of fs.readdirSync(tmp)) {
+      const dest = path.join(out, v);
+      if (fs.existsSync(dest) && !isDir(dest)) { process.stderr.write(`sanitize: ${v} exists in the fixtures directory and is not a directory\n`); return 1; }
+    }
+    fs.mkdirSync(out, { recursive: true });
+    for (const v of fs.readdirSync(tmp)) {
+      fs.mkdirSync(path.join(out, v), { recursive: true });
+      for (const n of fs.readdirSync(path.join(tmp, v))) fs.renameSync(path.join(tmp, v, n), path.join(out, v, n));
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  process.stdout.write(`sanitize: ${fixtures.length} fixture(s) written\n`);
+  return 0;
 }
-if (findings.length > 0) {
-  for (const x of findings) process.stderr.write(`sanitize: residue in ${x}\n`);
-  process.exit(1);
+try {
+  process.exitCode = main();
+} catch {
+  // An I/O error's message names a raw path: print a fixed line, never the exception.
+  process.stderr.write('sanitize: internal error (no detail printed)\n');
+  process.exitCode = 1;
 }
-for (const { v, s, f } of fixtures) {
-  fs.mkdirSync(path.join(outDir, v), { recursive: true });
-  fs.writeFileSync(path.join(outDir, v, `${s}.json`), `${JSON.stringify(f, null, 1)}\n`);
-}
-process.stdout.write(`sanitize: ${fixtures.length} fixture(s) written\n`);

@@ -480,7 +480,187 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     const r = leakRun({ note: `x-${os.userInfo().username}-y` });
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('2.1.999/leak /events/0/payload/note');
+    expect(r.stderr.toLowerCase()).not.toContain(os.userInfo().username.toLowerCase());
     expect(r.written).toEqual([]);
+  });
+
+  // The user's and host's names are read at test time, never written here.
+  const USER = os.userInfo().username;
+  const HOST = os.hostname().split('.')[0] as string;
+  const cap = (w: string): string => w.charAt(0).toUpperCase() + w.slice(1);
+  const expectNamed = (r: { status: number | null; stderr: string; written: string[] }, ptr: string, ...secrets: string[]): void => {
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toContain(`2.1.999/leak ${ptr}`);
+    for (const x of secrets) expect(r.stderr.toLowerCase()).not.toContain(x.toLowerCase());
+    expect(r.written).toEqual([]);
+  };
+
+  it('fails closed on a `..` path segment, however the path before it reads', () => {
+    for (const leak of ['/rig/../srv/acme', '/usr/../mnt/x', '/dev/null/../../srv/x', '../../srv/acme', '..']) {
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'srv/acme');
+    }
+    for (const fine of ['a..b', 'wait...', '/rig/repo/a..b']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+  });
+
+  it('fails closed on a `//`-led host or path (a URL, a share, a file:/// URL), and still passes the placeholder loopback', () => {
+    for (const leak of ['file:///srv/x', '//fileserver/share', 'http://internal-host.corp/path', 'https://acme.example.org', 'x //srv/y']) {
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'fileserver', 'internal-host', 'acme.example');
+    }
+    for (const fine of ['http://127.0.0.1:4000/v1/messages', '/rig//x', '/usr//bin/git', 'a // b']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+  });
+
+  it.skipIf(USER.length < 4)('fails closed on the user\'s name in any case', () => {
+    for (const leak of [`x-${cap(USER)}-y`, `x ${USER.toUpperCase()} y`, USER.toUpperCase()]) expectNamed(leakRun({ note: leak }), '/events/0/payload/note', USER);
+  });
+
+  it.skipIf(HOST.length < 4)('fails closed on the host\'s first label in any case', () => {
+    for (const leak of [`a ${HOST.toUpperCase()} b`, `a ${cap(HOST)} b`, `a ${HOST} b`]) expectNamed(leakRun({ note: leak }), '/events/0/payload/note', HOST);
+  });
+
+  it.skipIf(USER.length < 4)('fails closed on the user\'s name glued to a digit or an underscore, and passes it glued to a letter', () => {
+    for (const leak of [`${USER}2`, `3${USER}`, `${USER}_x`, `x_${USER}`]) expectNamed(leakRun({ note: leak }), '/events/0/payload/note', USER);
+    const r = leakRun({ note: `${USER}x` });
+    expect(r.status, r.stderr).toBe(0);
+  });
+
+  it('fails closed on a key-shaped string in any case', () => {
+    for (const leak of ['SK-ANT-xyz', 'Sk-Ant-xyz', 'ANTHROPIC=sk-ant-xyz']) expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'xyz');
+    expectNamed(leakRun({ note: 'CCRC-DLG-RIG.x' }), '/events/0/payload/note', 'dlg');
+  });
+
+  it('fails closed on a munged foreign path, and on the munged home directory', () => {
+    for (const leak of ['-mnt-vol-0000-projects-acme', 'x -home-someone-else-repo', '-Users-x-y', '/rig/-srv-a/b']) {
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'someone-else', 'acme');
+    }
+    // the home directory is whatever HOME says; give it a shape no fixed pattern names
+    const raw = mkTmp('ccrc-dlg-raw.');
+    const out = mkTmp('ccrc-dlg-fix-');
+    rawBundle(raw, ROOT, '2.1.999', 'leak', [['Stop', 1, { hook_event_name: 'Stop', note: '-weird-sandbox-home-x' }]]);
+    const r = spawnSync(process.execPath, [SANITIZE, raw, out], { encoding: 'utf8', env: { ...process.env, HOME: '/weird/sandbox-home' } });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toContain('2.1.999/leak /events/0/payload/note');
+    expect(r.stderr).not.toContain('sandbox');
+    expect(fs.readdirSync(out)).toEqual([]);
+    // the same string passes when HOME is something else: the finding really is the home spelling
+    const ok = spawnSync(process.execPath, [SANITIZE, raw, out], { encoding: 'utf8', env: { ...process.env, HOME: '/rig/h' } });
+    expect(ok.status, ok.stderr).toBe(0);
+  });
+
+  it.skipIf(USER.length < 4)('scans the decoded spelling of an escaped string: \\uXXXX and %2F', () => {
+    const esc = (w: string): string => [...w].map((c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`).join('');
+    for (const leak of ['\\u002fsrv\\u002fx', '{"p":"\\u002fsrv\\u002fx"}', 'x %2Fsrv%2Fx', `x-${esc(USER)}-y`, '\\u002e\\u002e\\u002fx']) {
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', USER);
+    }
+  });
+
+  it('finds residue under disk.*, each finding named by place', () => {
+    const cases: Array<[string, (d: string) => void, string]> = [
+      ['branches', (d) => fs.writeFileSync(path.join(d, 'branches'), 'main\n/srv/box/x\n'), '/disk/branches/1'],
+      ['worktrees-left', (d) => fs.writeFileSync(path.join(d, 'worktrees-left'), '/srv/box/x\n'), '/disk/worktreesLeft/0'],
+      ['worktree-list', (d) => fs.writeFileSync(path.join(d, 'worktree-list'), 'worktree /srv/box/x\n'), '/disk/worktreeList'],
+      ['admin gitdir', (d) => fs.writeFileSync(path.join(d, 'admin', 'agent-abc', 'gitdir'), '/srv/box/x/.git\n'), '/disk/admin/agent-abc/gitdir'],
+      ['meta value', (d) => fs.writeFileSync(path.join(d, 'meta', 'cfg', `${MUNGED}-repo`, 'uuid-1', 'subagents', 'agent-abc.meta.json'), JSON.stringify({ worktreePath: '/srv/box/x' })), '/disk/metas/#0/worktreePath'],
+      ['snapshot', (d) => fs.writeFileSync(path.join(d, 'snapshots', 'before-kill', 'worktrees'), '/srv/box/x\n'), '/disk/snapshots/before-kill/worktrees/0'],
+      ['label', (d) => fs.writeFileSync(path.join(d, 'labels'), '["/srv/box/x"]\n'), '/labels/0'],
+      ['note', (d) => fs.writeFileSync(path.join(d, 'notes'), '/srv/box/x\n'), '/notes/0'],
+    ];
+    for (const [name, plant, ptr] of cases) {
+      const raw = mkTmp('ccrc-dlg-raw.');
+      const out = mkTmp('ccrc-dlg-fix-');
+      plant(rawBundle(raw, ROOT, '2.1.999', 'leak', [['Stop', 1, { hook_event_name: 'Stop' }]]));
+      const r = sanitize(raw, out);
+      expect(r.status, `${name}: ${r.stderr}`).toBe(1);
+      expect(r.stderr, name).toContain(`2.1.999/leak ${ptr}\n`);
+      expect(r.stderr, name).not.toContain('srv/box');
+      expect(fs.readdirSync(out), name).toEqual([]);
+    }
+  });
+
+  it('a scenario directory with a bad name, or a residue-bearing one, is a finding named by index', () => {
+    const raw = mkTmp('ccrc-dlg-raw.');
+    const out = mkTmp('ccrc-dlg-fix-');
+    rawBundle(raw, ROOT, '2.1.999', 'clean', [['Stop', 1, { hook_event_name: 'Stop' }]]);
+    rawBundle(raw, ROOT, '2.1.999', 'Bad_Name', [['Stop', 1, { hook_event_name: 'Stop' }]]);
+    rawBundle(raw, ROOT, '2.1.999', 'ccrc-dlg-rig-x', [['Stop', 1, { hook_event_name: 'Stop' }]]);
+    const r = sanitize(raw, out);
+    expect(r.status).toBe(1);
+    // sorted: Bad_Name (0), ccrc-dlg-rig-x (1), clean (2)
+    expect(r.stderr).toContain('2.1.999/#0 (scenario directory name)\n');
+    expect(r.stderr).toContain('2.1.999/#1 (scenario directory name)\n');
+    expect(r.stderr).not.toContain('#2');
+    expect(r.stderr).not.toContain('Bad_Name');
+    expect(r.stderr).not.toContain('dlg');
+    expect(fs.readdirSync(out)).toEqual([]);
+  });
+
+  it('a name that passes the shape test but carries residue (a scenario named for the user) is a finding too', () => {
+    const letters = USER.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (letters.length < 4 || !new RegExp(`(^|[^A-Za-z])${letters}($|[^A-Za-z])`, 'i').test(`x-${letters}`) || letters !== USER.toLowerCase()) return;
+    const raw = mkTmp('ccrc-dlg-raw.');
+    const out = mkTmp('ccrc-dlg-fix-');
+    rawBundle(raw, ROOT, '2.1.999', `x-${letters}`, [['Stop', 1, { hook_event_name: 'Stop' }]]);
+    const r = sanitize(raw, out);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('2.1.999/#0 (scenario directory name)\n');
+    expect(r.stderr.toLowerCase()).not.toContain(letters);
+    expect(fs.readdirSync(out)).toEqual([]);
+  });
+
+  it('reports a bundle it would otherwise drop: a version directory that is not a version, a scenario directory with no root file', () => {
+    const raw = mkTmp('ccrc-dlg-raw.');
+    const out = mkTmp('ccrc-dlg-fix-');
+    rawBundle(raw, ROOT, '2.1.999', 'clean', [['Stop', 1, { hook_event_name: 'Stop' }]]);
+    fs.mkdirSync(path.join(raw, '2.1.999', 'noroot'));
+    fs.mkdirSync(path.join(raw, 'latest', 'x'), { recursive: true });
+    const r = sanitize(raw, out);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('sanitize: residue in #1 (version directory name)\n');
+    expect(r.stderr).toContain('2.1.999/#1 (bundle without a root file)\n');
+    expect(r.stderr).not.toContain('latest');
+    expect(r.stderr).not.toContain('noroot');
+    expect(fs.readdirSync(out)).toEqual([]);
+  });
+
+  it('ignores plain files in the raw root (the rig\'s all.log and .done)', () => {
+    const raw = mkTmp('ccrc-dlg-raw.');
+    const out = mkTmp('ccrc-dlg-fix-');
+    rawBundle(raw, ROOT, '2.1.999', 'clean', [['Stop', 1, { hook_event_name: 'Stop' }]]);
+    fs.writeFileSync(path.join(raw, '.done'), '2026-10-05T00:00:00Z\n');
+    fs.writeFileSync(path.join(raw, 'all.log'), '/srv/not-scanned\n');
+    const r = sanitize(raw, out);
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.readdirSync(out)).toEqual(['2.1.999']);
+  });
+
+  it('writes NOTHING when a later step fails: a file where a version directory would go leaves the fixtures directory as it was', () => {
+    const raw = mkTmp('ccrc-dlg-raw.');
+    const base = mkTmp('ccrc-dlg-fixbase-');
+    const out = path.join(base, 'fix');
+    fs.mkdirSync(out);
+    rawBundle(raw, ROOT, '2.1.998', 'clean', [['Stop', 1, { hook_event_name: 'Stop' }]]);
+    rawBundle(raw, ROOT, '2.1.999', 'clean', [['Stop', 1, { hook_event_name: 'Stop' }]]);
+    fs.writeFileSync(path.join(out, '2.1.999'), 'planted');
+    const r = sanitize(raw, out);
+    expect(r.status).toBe(1);
+    expect(r.stderr).not.toContain(base);
+    expect(fs.readdirSync(out)).toEqual(['2.1.999']);
+    expect(fs.readFileSync(path.join(out, '2.1.999'), 'utf8')).toBe('planted');
+    expect(fs.readdirSync(base)).toEqual(['fix']); // and no temp sibling is left behind
+  });
+
+  it('an I/O failure prints one fixed line, never the exception or a raw path', () => {
+    const missing = path.join(mkTmp('ccrc-dlg-raw.'), 'no-such-raw-root');
+    const out = mkTmp('ccrc-dlg-fix-');
+    const r = sanitize(missing, out);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toBe('sanitize: internal error (no detail printed)\n');
+    expect(r.stdout).toBe('');
   });
 
   it('refuses missing arguments with exit 2', () => {
