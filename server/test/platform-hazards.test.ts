@@ -284,3 +284,78 @@ describe('the deadline shim, asked directly (D-2661)', () => {
   });
 
 });
+
+// ── R14(i): THE UTF-8 LOCALE BASH TAKES, AND WHETHER THE LOCALE PINS CAN RED ──
+// D-3833 and D-3979 pin `LC_ALL=C` around the auth readers (`_box_env_has_nul`, `_box_unit_env`,
+// `_box_unit_env_shell`) because under a UTF-8 locale bash 5.x (1) misses a NUL that follows a lead byte in an
+// unpinned `read -d ''`, and (2) merges a line ending in a lead byte with the next one in an unpinned `read -r`
+// loop. Both are measured on Linux; neither was ever measured on macOS, and the macOS tests that rely on them
+// (U4n, U4u in `ccrc-doctor.test.ts`) could be hollow there if the runner's bash did not misread. So this asks,
+// and RECORDS: a Darwin case here asserts only that the probes ran, because a red would be a `full-suite` red,
+// which blocks `stable`. The coordinator reads the answer from the PR's `probe-macos` and `test-macos` logs.
+describe('R14(i): the UTF-8 locale bash takes here, and whether D-3833/D-3979\'s locale pins are load-bearing on this platform', () => {
+  /** The first UTF-8 locale under which bash counts the two-byte `é` as ONE character. A copy of
+   *  `ccrc-doctor.test.ts`'s `utf8Locale()` candidate list and one-character test: a test file cannot be imported
+   *  from another. It yields `'none'` rather than throwing, so collection never fails here (H1 does). */
+  const LOC = ((): string => {
+    try {
+      for (const loc of ['C.UTF-8', 'en_US.UTF-8']) {
+        const r = spawnSync('bash', ['-c', `x=$'\\xc3\\xa9'; printf '%s' "\${#x}"`], {
+          encoding: 'utf8', timeout: 15_000, env: { PATH: process.env.PATH ?? '', LC_ALL: loc },
+        });
+        if (r.status === 0 && r.stdout === '1') return loc;
+      }
+    } catch { /* fall through: H1 reports it */ }
+    return 'none';
+  })();
+
+  /** The two unpinned reads, under `locale` and no pin anywhere. `NUL_RC` is `read -d ''`'s rc over a lead byte
+   *  then a NUL (0 = found it, 1 = missed it); `LINES` is how many lines an unpinned `read -r` loop counts over
+   *  `# caf<lead byte>\nX=1\n` (2 = kept them apart, 1 = merged them). */
+  const probe = (locale: string): { status: number | null; nulRc: string; lines: string; out: string } => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-r14i-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'nul'), '# caf\xc3\0\nCCRC_AUTH=on\n', 'latin1');
+      fs.writeFileSync(path.join(dir, 'lines'), '# caf\xc3\nX=1\n', 'latin1');
+      const script = [
+        `IFS= read -r -d '' x < ${JSON.stringify(path.join(dir, 'nul'))}; echo "NUL_RC=$?"`,
+        `n=0; while IFS= read -r l; do n=$((n+1)); done < ${JSON.stringify(path.join(dir, 'lines'))}; echo "LINES=$n"`,
+      ].join('\n');
+      const r = spawnSync('bash', ['-c', script], {
+        encoding: 'utf8', timeout: 15_000, env: { PATH: process.env.PATH ?? '', LC_ALL: locale },
+      });
+      const out = (r.stdout ?? '') + (r.stderr ?? '');
+      return { status: r.status, nulRc: field(out, 'NUL_RC'), lines: field(out, 'LINES'), out };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it(`R14(i): bash takes ${LOC} here`, () => {
+    // Fails, never skips: a host with no UTF-8 locale makes every UTF-8 row elsewhere hollow.
+    expect(LOC, 'no UTF-8 locale takes effect in bash on this runner (C.UTF-8, en_US.UTF-8)').not.toBe('none');
+    console.info(`R14(i): bash takes ${LOC} here (${process.platform})`);
+  });
+
+  // The control. Both answers are the hazard itself, which is why dropping a pin reds T4-M32, T4-M31 and T1-1 on
+  // Linux. If either flipped here, those mutation rows would be hollow on this platform.
+  itLinux('R14(i): on Linux, under the UTF-8 locale and no pin, read -d \'\' misses a NUL after a lead byte and a read -r loop merges the lines', () => {
+    const p = probe(LOC);
+    expect.soft(p.nulRc, `under ${LOC}: an unpinned read -d '' over a lead byte then a NUL (${p.out.slice(0, 200)})`).toBe('1');
+    expect.soft(p.lines, `under ${LOC}: an unpinned read -r loop over a line ending in a lead byte (${p.out.slice(0, 200)})`).toBe('1');
+  });
+
+  // RECORDED, not wished for: either answer is a fact, so this asserts only that each probe ran and produced its
+  // field, and prints which answer the runner gave.
+  itDarwin('R14(i): on macOS, RECORDED — do the unpinned reads misread under the UTF-8 locale?', () => {
+    const p = probe(LOC);
+    const misses = p.nulRc === '1';
+    const merges = p.lines === '1';
+    const answer = `R14(i): under ${LOC}, an unpinned read -d '' ${misses ? 'misses' : 'sees'} the NUL after a lead byte `
+      + `(so U4n ${misses ? 'can' : 'cannot'} red here); an unpinned read ${merges ? 'merges' : 'keeps'} the line `
+      + `(so U4u F2 and G1 ${merges ? 'can' : 'cannot'} red here)`;
+    console.info(answer);
+    expect(['0', '1'], `${answer}. The NUL probe gave NUL_RC=${p.nulRc}.`).toContain(p.nulRc);
+    expect(['1', '2'], `${answer}. The line probe gave LINES=${p.lines}.`).toContain(p.lines);
+  });
+});
