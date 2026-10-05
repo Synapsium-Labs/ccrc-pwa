@@ -325,6 +325,27 @@ describe('rig.sh wait_run_quiet (cleanup_run waits out a process still under the
     expect(await gone(stuck.pid!)).toBe(true);
     expect(alive(elsewhere.pid!)).toBe(true);
   }, 60_000);
+
+  it('kill_if_under re-reads the cwd right before the signal: a pid whose cwd is outside the root survives', async () => {
+    const text = fs.readFileSync(RIGSH, 'utf8');
+    const from = text.indexOf('procs_under() {');
+    const to = text.indexOf('cleanup_run() {');
+    expect(from).toBeGreaterThan(0);
+    expect(to).toBeGreaterThan(from);
+    const root = mkTmp('ccrc-dlg-rig.');
+    const outside = spawn('sleep', ['60'], { cwd: mkTmp('ccrc-dlg-else-'), stdio: 'ignore' });
+    children.push(outside);
+    try {
+      await new Promise((r) => setTimeout(r, 200));
+      expect(alive(outside.pid!)).toBe(true);
+      const r = spawnSync('bash', ['-c', `${text.slice(from, to)}\nkill_if_under "$2" "$1"`, 'x', root, String(outside.pid)], { encoding: 'utf8', timeout: 60_000 });
+      expect(r.status, r.stderr).toBe(0);
+      await new Promise((res) => setTimeout(res, 300));
+      expect(alive(outside.pid!)).toBe(true);
+    } finally {
+      outside.kill('SIGKILL');
+    }
+  }, 60_000);
 });
 
 describe('rig.sh reap, sockets and scenario text', () => {
@@ -501,7 +522,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
   }, 60_000);
 
   it('a `<` is not a path boundary: a shell redirect or a tag around a real path still fails closed', () => {
-    for (const prompt of ['a</srv/x', 'done</mnt/x/y', 'wc -l</etc/hosts', '<x></opt/app/conf></x>', 'sort</srv/data/list']) {
+    for (const prompt of ['a</srv/x', 'done</mnt/x/y', 'wc -l</etc/hosts', '<x></opt/app/conf></x>', 'sort</srv/data/list', '</srv.corp:8080>', '</a.b>']) {
       const r = leakRun({ prompt });
       expect(r.status, prompt).toBe(1);
       expect(r.written, prompt).toEqual([]);
