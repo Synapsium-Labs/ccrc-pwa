@@ -3652,7 +3652,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   // and removes only the FUNCTION, so every constant the guard also checks
   // stays present — a dropped `_box_unit_env` term is the only thing that can
   // red this pin. `BUE_VAL=on` is preset AFTER sourcing ccrc (a shell
-  // assignment, never an env entry — `ccd/ccrc:2939` resets it at file scope
+  // assignment, never an env entry — `BUE_VAL=""`, the out-param block's first line above `_box_unit_env`, resets it at file scope
   // on load) in case some path through the ungoverned body reads it, but in
   // THIS harness (`PATH` pointing nowhere) it never gets the chance.
   // MEASURED (wave 9, R11-F2), with the guard's `|| ! declare -F _box_unit_env`
@@ -4257,6 +4257,65 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
           expect(a.fix, label).toContain(a.envPath);
         }
       });
+    });
+
+    // Wave 11 R14(j) (D-3980): the launchd job sources both env files with /bin/bash under `set -a`. Assigning one of the
+    // names /bin/bash reserves ends that shell before its `exec` when POSIXLY_CORRECT has turned POSIX mode on (bash's
+    // six read-only variables; in 3.2 also BASH_ARGC, BASH_ARGV, BASH_LINENO, BASH_SOURCE, FUNCNAME and GROUPS), so the
+    // job never starts, whatever CCRC_AUTH says. The plain test refuses the thirteen as a NAME, in either file and in any
+    // order, under its own cause: the reason names the line, never the variable (A1) and calls none of them read-only (A5).
+    const U5_NAMES = ['POSIXLY_CORRECT', 'BASHOPTS', 'BASH_VERSINFO', 'EUID', 'PPID', 'SHELLOPTS', 'UID',
+      'BASH_ARGC', 'BASH_ARGV', 'BASH_LINENO', 'BASH_SOURCE', 'FUNCNAME', 'GROUPS'];
+    /** Names that merely look like one of the thirteen (or are other reserved-looking names bash lets a file set). */
+    const U5_CONTROLS = ['PATH=/usr/bin', 'HOME=/x', 'LC_ALL=C.UTF-8', 'BASH_COMPAT=0', 'BASH_XTRACEFD=0', 'MY_UID=0', 'UIDX=0', 'uid=0', 'POSIXLY_CORRECTX=1'];
+    const U5_REVIEW: UnitEnvRow = { label: 'the review\'s input', env: 'POSIXLY_CORRECT=1\n', exp: 'UID=0\nCCRC_AUTH=on\n', key: 'CCRC_AUTH' };
+
+    it('U5: on Darwin, each of the thirteen names /bin/bash reserves is rc 3 for the gate, naming the file and the line and never the variable; names that only look like one read as before (D-3980)', () => {
+      const rows: UnitEnvRow[] = [
+        ...U5_NAMES.map((n) => ({ label: n, env: `${n}=0\nCCRC_AUTH=on\n`, exp: null, key: 'CCRC_AUTH' })),
+        U5_REVIEW,
+        { label: 'order-free: the name below the key, in the exposure file', env: 'CCRC_AUTH=on\n', exp: 'CCRC_RP_ID=x\nGROUPS=0\n', key: 'CCRC_AUTH' },
+        ...U5_CONTROLS.map((c) => ({ label: `control: ${c}`, env: `${c}\nCCRC_AUTH=on\n`, exp: null, key: 'CCRC_AUTH' })),
+      ];
+      const got = unitEnvAnswers(rows, 'darwin');
+      const prefix = 'assigns a variable /bin/bash reserves';
+      U5_NAMES.forEach((name, i) => {
+        const a = got[i]!;
+        expect.soft([a.rc, a.val, a.src], name).toEqual([3, '', '']);
+        expect.soft(a.why.startsWith(`${a.envPath} line 1 ${prefix}`), `${name}: ${a.why}`).toBe(true);
+        expect.soft(a.why, name).not.toContain(name);
+        expect.soft(a.fix, name).not.toContain(name);
+        expect.soft(a.fix, name).toContain(`line 1 of ${a.envPath}`);
+        expect.soft(a.why + a.fix, name).not.toMatch(/read-only|readonly/i);
+      });
+      const n = U5_NAMES.length;
+      const rev = got[n]!;
+      expect.soft([rev.rc, rev.val, rev.src], 'the review\'s input').toEqual([3, '', '']);
+      expect.soft(rev.why.startsWith(`${rev.envPath} line 1 ${prefix}`), rev.why).toBe(true);
+      const ord = got[n + 1]!;
+      expect.soft([ord.rc, ord.val, ord.src], 'order-free').toEqual([3, '', '']);
+      expect.soft(ord.why.startsWith(`${ord.expPath} line 2 ${prefix}`), ord.why).toBe(true);
+      expect.soft(ord.why + ord.fix, 'order-free').not.toContain('GROUPS');
+      U5_CONTROLS.forEach((c, i) => {
+        const a = got[n + 2 + i]!;
+        expect.soft([a.rc, a.val, a.src, a.why, a.fix], `control: ${c}`).toEqual([0, 'on', a.envPath, '', '']);
+      });
+    });
+
+    it('U5l: the same input with CCD_OS=linux reads `on` from the exposure file — systemd sets both as plain environment, so the platform split is data (D-3980)', () => {
+      const [a] = unitEnvAnswers([U5_REVIEW], 'linux');
+      expect([a!.rc, a!.val, a!.src]).toEqual([0, 'on', a!.expPath]);
+    });
+
+    // macOS only: the end-to-end line. The coordinator reads it on `test-macos`.
+    itDarwin('E20d: the review\'s input through `ccrc doctor` on macOS — one WARN auth, not measured, naming ccrc.env line 1, never a PASS ARMED (D-3980)', () => {
+      const home = healthy('ccrc-doctor-auth-e20d-');
+      writeCcrcEnv(home, `POSIXLY_CORRECT=1\n${readEnv(home)}`);
+      writeFileSync(expPath(home), 'UID=0\nCCRC_AUTH=on\n');
+      const r = runDoctor(home);
+      expectOneUndecidedWarn(r.stdout, envPath(home));
+      expect(authLine(r.stdout)).toContain(`${envPath(home)} line 1 `);
+      expect(r.stdout).not.toMatch(/^PASS auth: .*gated/m);
     });
   });
 });
@@ -8480,7 +8539,7 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
   // BOTH files intact and removes only the FUNCTION (never `unset
   // CCRC_EXPOSURE_FILE`, which the guard tests first and would mask the
   // mutation), with `BUE_VAL=on` preset AFTER sourcing ccrc as a shell
-  // assignment (an env entry is reset at ccrc's own file scope, `:2939`) — a
+  // assignment (an env entry is reset at ccrc's own file scope (`BUE_VAL=""`'s line)) — a
   // guard missing this term reads that stale value as ARMED instead of
   // failing shut.
   it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, not a stale ARMED PASS', () => {

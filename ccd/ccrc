@@ -2836,8 +2836,9 @@ _box_env_value() {   # <file> <key> [unit|shell]
 # `. file` stops at the first NUL, so the job sets what comes before it and nothing after, while `read` below drops the
 # NUL and would pass the file — so it is found first, by `_box_env_has_nul`, never by `read`). rc 1 otherwise: BEP_LINE
 # is the first failing line's NUMBER (0 for a NUL: the cause is the file's, so no line is named) and BEP_CAUSE is `nul`,
-# `cr` or `shape`. It never records the line's bytes — ccrc.env holds tokens. Called directly, never in `$(…)`, so the
-# out-params reach the caller.
+# `cr`, `shape` or `name` (an assignment to one of the thirteen names /bin/bash reserves, which stops the job's shell
+# before its `exec`, D-3980). It never records the line's bytes — ccrc.env holds tokens. Called directly, never in
+# `$(…)`, so the out-params reach the caller.
 _box_env_shell_plain() {   # <file>
   local file="$1" raw rest name val inner n=0
   BEP_LINE=0; BEP_CAUSE=""
@@ -2852,6 +2853,14 @@ _box_env_shell_plain() {   # <file>
     case "$rest" in *=*) ;; *) BEP_LINE=$n; BEP_CAUSE=shape; return 1 ;; esac
     name="${rest%%=*}"
     case "$name" in ''|[0-9]*|*[!A-Za-z0-9_]*) BEP_LINE=$n; BEP_CAUSE=shape; return 1 ;; esac
+    # Wave 11 R14(j) (D-3980): names /bin/bash reserves. Under the job's `set -a; . file`, POSIXLY_CORRECT turns POSIX
+    # mode on, and in POSIX mode assigning one of bash's six read-only variables — or, in bash 3.2, BASH_ARGC, BASH_ARGV,
+    # BASH_LINENO, BASH_SOURCE, FUNCNAME or GROUPS — ends the shell before its `exec` (measured: bash 3.2.57, 5.2.21), so
+    # the job never starts, whatever CCRC_AUTH says. Refused as a NAME, in either file and in any order.
+    case "$name" in
+      POSIXLY_CORRECT|BASHOPTS|BASH_VERSINFO|EUID|PPID|SHELLOPTS|UID|BASH_ARGC|BASH_ARGV|BASH_LINENO|BASH_SOURCE|FUNCNAME|GROUPS)
+        BEP_LINE=$n; BEP_CAUSE=name; return 1 ;;
+    esac
     val="${rest#*=}"; val="${val%"${val##*[!$' \t']}"}"
     case "$val" in *[!A-Za-z0-9_./:@%+,=-]*) ;; *) continue ;; esac
     case "$val" in
@@ -2944,7 +2953,7 @@ BUE_EXP=""     # the exposure file's state: absent | readable | unreadable
 BUE_WHY=""     # rc 3 only (wave 9 R10e, D-3823): the cause, as a clause naming the file; "" otherwise
 BUE_FIX=""     # rc 3 only: the remedy clause for that cause
 BEP_LINE=0     # _box_env_shell_plain: the first failing line's NUMBER (0 for a NUL byte; never its bytes)
-BEP_CAUSE=""   # _box_env_shell_plain: nul | cr | shape
+BEP_CAUSE=""   # _box_env_shell_plain: nul | cr | shape | name
 BEW_LINE=0     # _box_env_unit_whole: the first offending line's NUMBER (0 for a NUL byte; never its bytes)
 BEW_CAUSE=""   # _box_env_unit_whole: cr | nul | utf8
 
@@ -3065,6 +3074,9 @@ _box_unit_env_shell() {   # <KEY>
          BUE_FIX="remove the NUL byte from $bad (ccrc expose rewrites the exposure file)" ;;
     cr) BUE_WHY="$bad line $BEP_LINE carries a carriage return, which bash keeps in the value — on macOS the launchd job sources both env files with bash"
         BUE_FIX="save $bad without carriage returns (ccrc expose rewrites the exposure file)" ;;
+    # D-3980: the cause and the line, never the variable (A1), and none of them called read-only (A5).
+    name) BUE_WHY="$bad line $BEP_LINE assigns a variable /bin/bash reserves, and on macOS the launchd job sources both env files with /bin/bash, which can stop at such an assignment before the server starts (in POSIX mode, which one of those variables turns on)"
+          BUE_FIX="delete line $BEP_LINE of $bad, or rename the variable it sets (ccrc expose rewrites the exposure file)" ;;
     *)  BUE_WHY="$bad line $BEP_LINE is not a plain NAME=value line, and on macOS the launchd job sources both env files with bash, so that line can change what they set"
         BUE_FIX="rewrite line $BEP_LINE of $bad as NAME=value, with a value of letters, digits and _./:@%+,=- only, or one whole '…' pair, or one whole \"…\" pair with no \$, backtick, backslash or \" inside — or delete it (ccrc expose rewrites the exposure file)" ;;
   esac
