@@ -1783,7 +1783,7 @@ Expected: `82`, `78`, `157`, `14`, `3`, `18`, `28`, `99`, `54`, `13`, `3`, `2`, 
 
 Then every row of Tasks 1–3, re-run on the branch tip, is red. The per-task tables above give each row's red at its own
 task's tree; on the tip (merge-deny 82 cases, sync-advisory 78, coordinator-skill 157) the counts are re-measured by
-the wave and reported in its wave-done, and every row must red. Wave 2's H20, H21 and H39 stay `80 passed (80)` (retired, Task 2 Step 3). A row that
+the wave and reported in its wave-done, and every row must red. Wave 2's H20, H21 and H39 stay `82 passed (82)` (retired, Task 2 Step 3). A row that
 reds one timing case MORE than this is load (Global Constraints): re-run it alone.
 
 - [ ] **Step 4: Confirm the author, push, open the PR**
