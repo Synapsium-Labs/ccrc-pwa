@@ -281,8 +281,8 @@ describe('the move INTO wave 10: main\'s _upd_sweep, sourced unedited, with the 
     const body = m![1]!;
     expect(body, hint).toContain('local verify="$BOX_TREE_DIR/deploy/verify-service.sh"');
     expect(body, hint).toContain('bash "$verify" "$u" \\');
-    // The Linux arm's own sentence, through "systemctl --user status": the Darwin arm
-    // above it carries the same `|| _ccrc_die "$u was restarted and did not stay up` prefix.
+    // The Linux arm's own quote, not the plan's shorter prefix (D-3950): the Darwin arm
+    // carries that prefix too, so the short form could not go red when only this arm changes.
     expect(body, hint).toContain('|| _ccrc_die "$u was restarted and did not stay up — read: systemctl --user status $u.');
     expect(ccrc, hint).toContain('BOX_TREE_DIR="$HOME/ccrc"');
   }, 60_000);

@@ -290,6 +290,10 @@ These are departures from what the code at `b40f4145` documents.
     - `deploy/deploy.sh:985-986`.
   - Wave 11 rewords them together with the Darwin arm.
   - macOS boxes are not centrally managed, so no control-plane halt follows from this.
+- **D-3950** — *X0's die-line quote is the Linux arm's, not the plan's prefix* (found by the worker, Task 2).
+  - The X0 row asks `_upd_sweep`'s body to hold `|| _ccrc_die "$u was restarted and did not stay up`. The Darwin arm carries the same prefix (`ccd/ccrc:20552`), so T2, which mutates only the Linux arm's die (`ccd/ccrc:20637`), could not turn that substring red.
+  - X0 asserts the Linux arm's longer quote instead, through `— read: systemctl --user status $u.`. That is the text Task 2 Step 1 already anchors at `:20637`.
+  - With it, T2 reds X0 and X3 as the T2 row lists. The plan's X0 row is left as written; this entry governs it.
 
 ## File structure
 
