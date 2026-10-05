@@ -980,8 +980,8 @@ report's writer alive, or no readable pid) or the lock is held; otherwise it run
 --from pwa`, or `rollback` in place of `update` — two fixed argument lists with the tag the only word that varies, outside the
 exec whitelist — and answers `accepted` once the detaching parent has exited 0 (killed at its bound it answers `accepted` too
 if it queued or cannot be attributed). The server node is spawned the same way on its own box, after the same `busy` check.
-`accepted` only holds the lease (the row reads `pending`): it settles on the node's own report naming the tag, not a sweep
-measuring the target, and a request for the tag a node already runs is settled without a move. A refusal releases the lease in
+`accepted` only holds the lease (the row reads `pending`): it settles on the node's own report naming the tag, confirmed by a sweep that
+measures the target, and a request for the tag a node already runs is settled without a move. A refusal releases the lease in
 the same turn and never consumes the request — `busy`, or a link that was down before the op left the server, returns the row
 to `idle`; a link that fails after the op was handed to it holds the lease until the node's own report of the run settles it or
 the deadline fails it, because the node may already have started the run — while a spawn that fails, a tag or kind the agent
@@ -1036,10 +1036,10 @@ it cleared before it: the caps file, and the install record only when it was a c
 build's own sha, provided `~/ccrc` names the tree it named before (D-3462); neither comes back for a marker-less
 spine whose stamp did not move, or when a legacy flip-back failed. Arm 3's MIXED tree loses its kept record, so no
 flip returns to it. `ccrc versions` lists the kept trees (`*` marks the one `~/ccrc` points at; `written-through` marks one whose
-bytes are no longer the kept ones, and `unmeasured` one kept before digests existed or whose tree cannot be measured; neither changes a prune verdict). After an install or
-update whose gate passes, and by `ccrc versions --prune`, the trees nothing needs are removed, each by a rename to a
-dot-name first: never the one `~/ccrc` points at, `previous`, a tag this node's projection names, or a version a
-running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_KEEP` (default 3) complete trees
+bytes are no longer the kept ones, and `unmeasured` one `ccrc` cannot show to be complete — for example kept before digests existed, its tree or digest unmeasurable, its
+`ccd/ccrc` or its role's build missing, or its kept stamp missing, unparseable or naming another tag; neither changes a prune verdict). After an install or update whose
+gate passes, and by `ccrc versions --prune`, the trees nothing needs are removed, each by a rename to a dot-name first: never the one `~/ccrc` points at, `previous`, a
+tag this node's projection names, or a version a running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_KEEP` (default 3) complete trees
 stay. An input that cannot be read prunes nothing (a `CCRC_VERSIONS_KEEP` that is not a whole number from 0 to 9999 is one), a dead process's `.pruning-`/`.incoming.` leftover is swept once per prune, and only `--prune` removes an incomplete tree. `deploy.sh` still
 pushes its tree through `~/ccrc`, into whichever version directory that points at.
 
@@ -1063,22 +1063,22 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed |
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same directory shape, pruned
-to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — hand-made siblings are never touched), as
-update and rollback do after a passed gate. `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own
-unit (`ccrc.service`, or `ccrc-agent.service` when the recorded role is `fleet`) — on macOS it tails the
-LaunchAgent's `~/.ccrc/logs/<label>.log`, with `-f`/`-n` passed through. `ccrc uninstall`
-takes the box off ccrc and leaves reinstall safe: it refuses while live sessions exist, and while an update holds
-`~/.ccrc/update.lock` or that lock cannot be measured (`--force` passes both; D-3453), removes the units (every
-enabled `ccrc-codex-usage@<id>.timer` disabled first, while its template is still on disk; another tool's
-`ccgpt-usage@` units are never touched), ccrc's managed settings.json hook entries (per-file backup;
-unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts
-inside `~/.cc-sessions` file-by-file, `~/ccrc`, a staged `~/ccrc.new` link (D-3452), every kept tree under
-`~/ccrc-versions` and a leftover `~/ccrc.migrating`, and the installed executables — and preserves
-`~/.ccrc` (less the node's install-state files — `installed`, `node-id`, `ccrc-caps`, `floor`,
-`previous`, `install-step`, `update.json`, `update.lock`, `update-intent`, `migrating-to` — which leave with the
-tree), the registry rows and operator switches, worktrees and `~/ccrc-backups`, printing
-(never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc`'s config
-(roster, identity, `ccrc.env`, `build.json`, …) and `~/ccrc-backups` — but **preserves
+to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — never the backup it just made, a dir named
+after it began, or the newest earlier tree backup and coord.db snapshot, and nothing at all while another ccrc run
+holds `~/.ccrc/update.lock`; hand-made siblings are never touched), as update and rollback do after a passed gate.
+`ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own unit (`ccrc.service`, or `ccrc-agent.service`
+when the recorded role is `fleet`) — on macOS it tails the LaunchAgent's `~/.ccrc/logs/<label>.log`, with `-f`/`-n`
+passed through. `ccrc uninstall` takes the box off ccrc and leaves reinstall safe: it refuses while live sessions
+exist, and while an update holds `~/.ccrc/update.lock` or that lock cannot be measured (`--force` passes both;
+D-3453), removes the units (every enabled `ccrc-codex-usage@<id>.timer` disabled first, while its template is still on
+disk; another tool's `ccgpt-usage@` units are never touched), ccrc's managed settings.json hook entries (per-file
+backup; unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts inside
+`~/.cc-sessions` file-by-file, `~/ccrc`, a staged `~/ccrc.new` link (D-3452), every kept tree under `~/ccrc-versions`
+and a leftover `~/ccrc.migrating`, and the installed executables — and preserves `~/.ccrc` (less the node's
+install-state files — `installed`, `node-id`, `ccrc-caps`, `floor`, `previous`, `install-step`, `update.json`,
+`update.lock`, `update-intent`, `migrating-to` — which leave with the tree), the registry rows and operator switches,
+worktrees and `~/ccrc-backups`, printing (never running) the keep-aside restore commands. `--purge` additionally
+removes `~/.ccrc`'s config (roster, identity, `ccrc.env`, `build.json`, …) and `~/ccrc-backups` — but **preserves
 `~/.ccrc/memory`** (every project's durable memory, the sole live copy since `ccrc memory --apply`;
 a session's prose is not configuration) unless `--purge-memory` is also given, which extends `--purge`
 to remove it too; never worktrees, never tmux state. It also removes graphify's skill from every rostered home,
@@ -1216,14 +1216,14 @@ with a `Secure` cookie, which produces a login that answers 204 and bounces
 straight back to the login screen with nothing failing anywhere, or an `https:`
 one with the dev opt-out left on.
 
-**`ccrc doctor`'s `auth` check** reports where a box actually stands: a PASS on an un-armed box
-(that is the shipped default, and a doctor that warned about it would train an operator to
-skim), a FAIL on an armed box with no passphrase file, and a FAIL on a passphrase file the
-server would refuse to boot on. It SKIPs on a fleet box (`ccrc-agent.service` and no
-`ccrc.service`), where nothing reads a passphrase file, and WARNs, measuring nothing, when
-`exposure.env` is there but cannot be read. The flag is read exactly as `ccrc.service` gets it —
-`ccrc.env`, then the exposure file, the later one winning — never from the shell doctor runs
-in. It prints no byte of the file's contents, and neither does the server's own boot refusal.
+**`ccrc doctor`'s `auth` check** reports where a box actually stands: a PASS on an un-armed box (that is the
+shipped default, and a doctor that warned about it would train an operator to skim), a FAIL on an armed box
+with no passphrase file, and a FAIL on a passphrase file the server would refuse to boot on. It SKIPs on a
+fleet box (`ccrc-agent.service` and no `ccrc.service`), where nothing reads a passphrase file, and WARNs,
+measuring nothing, when `exposure.env` is there but cannot be read. The flag is read exactly as
+`ccrc.service` gets it — `ccrc.env`, then the exposure file, the later one winning, each as its feeder reads
+it (systemd; on macOS the launchd job's shell) — never from the shell doctor runs in; what it cannot decide
+is not measured. It prints no byte of the file's contents, and neither does the server's own boot refusal.
 
 ## The box decides `--remote-control`: `~/.ccrc/remote-control`
 

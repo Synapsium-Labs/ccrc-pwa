@@ -1307,9 +1307,24 @@ _check_auth() {
   # and has three arms for it — but the flag's PROVENANCE is named in every
   # verdict below, so a reader can tell "the file says off" from "there is no
   # file" without this check having to duplicate that check's arms.
-  local flag="" where="$BOX_ENV_FILE" unmeasured=0 expnamed=0
-  _box_unit_env CCRC_AUTH || unmeasured=1
+  local flag="" where="$BOX_ENV_FILE" unmeasured=0 expnamed=0 authwhy="" authfix="" unwhy="" unfix=""
+  _box_unit_env CCRC_AUTH || unmeasured=$?
+  authwhy="$BUE_WHY"; authfix="$BUE_FIX"
   flag="$BUE_VAL"
+  # Wave 9 R10e (D-3823): the unmeasured state has TWO causes, and its words are
+  # the cause's own. rc 2 is the exposure file there and unreadable (D-3596's
+  # sentences, byte-identical); rc 3 is a readable file whose line this reader
+  # cannot decide, worded from the reader's own `BUE_WHY`/`BUE_FIX`; any other
+  # non-zero is a reader that answered something it was never meant to.
+  case "$unmeasured" in
+    0) ;;
+    2) unwhy="$CCRC_EXPOSURE_FILE is there and cannot be read"
+       unfix="look at what is really there (ls -ld $CCRC_EXPOSURE_FILE) — then re-run: ccrc expose duckdns (or: ccrc expose byo); it rewrites the file 0600" ;;
+    3) unwhy="$authwhy"
+       unfix="$authfix — then re-run ccrc doctor" ;;
+    *) unwhy="its env-file reader answered rc $unmeasured"
+       unfix="re-run ccrc doctor; if this repeats it is a bug in ccrc — see _box_unit_env in $CCRC_HERE/ccrc" ;;
+  esac
   if [ "$BUE_SRC" = "$CCRC_EXPOSURE_FILE" ]; then
     where="$CCRC_EXPOSURE_FILE (it overrides $BOX_ENV_FILE)"; expnamed=1
   elif [ "$BUE_ENV" != ok ]; then
@@ -1382,9 +1397,9 @@ _check_auth() {
       # gate is armed was not measured — the exposure file is there, unreadable,
       # and what the service manager does with it was not measured either.
       # Neither PASS arm below is honest here.
-      if [ "$unmeasured" -eq 1 ]; then
-        _dr_warn auth "$secret$via holds a usable passphrase ($detail), but $CCRC_EXPOSURE_FILE is there and cannot be read, so whether logins are gated was not measured" \
-          "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE) — then re-run: ccrc expose duckdns (or: ccrc expose byo); it rewrites the file 0600"
+      if [ "$unmeasured" -ne 0 ]; then
+        _dr_warn auth "$secret$via holds a usable passphrase ($detail), but $unwhy, so whether logins are gated was not measured" \
+          "$unfix"
         return 2
       fi
       if [ "$armed" -eq 1 ]; then
@@ -1401,9 +1416,11 @@ _check_auth() {
       # Wave 8 item D, D-3596: same reasoning as rc 0's — with no passphrase
       # file EITHER, whether the gate is armed (and failing shut) is the one
       # fact this box needs and the one this check cannot give it.
-      if [ "$unmeasured" -eq 1 ]; then
-        _dr_warn auth "there is no passphrase file at $secret$via, and $CCRC_EXPOSURE_FILE is there and cannot be read, so whether the gate is armed (and failing shut) was not measured" \
-          "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE) and re-run ccrc expose; if the gate is meant to be armed, run: ccrc passwd"
+      if [ "$unmeasured" -ne 0 ]; then
+        # This arm's own rc-2 remedy (D-3596), byte-identical; every other cause keeps `unfix`.
+        [ "$unmeasured" -ne 2 ] || unfix="look at what is really there (ls -ld $CCRC_EXPOSURE_FILE) and re-run ccrc expose; if the gate is meant to be armed, run: ccrc passwd"
+        _dr_warn auth "there is no passphrase file at $secret$via, and $unwhy, so whether the gate is armed (and failing shut) was not measured" \
+          "$unfix"
         return 2
       fi
       if [ "$armed" -eq 1 ]; then
@@ -1449,8 +1466,11 @@ _check_auth() {
       # expiring them. Printing `ccrc passwd` alone here would send an operator
       # to a command that is about to refuse.
       local when="the moment CCRC_AUTH=on is set, the server will refuse to boot on it"
-      if [ "$unmeasured" -eq 1 ]; then
+      if [ "$unmeasured" -eq 2 ]; then
         when="if CCRC_AUTH is on (whether it is was not measured: $CCRC_EXPOSURE_FILE cannot be read), the server refuses to boot on it"
+      elif [ "$unmeasured" -ne 0 ]; then
+        # rc 3, or a reader answer this check never expected: its own cause, never an empty one.
+        when="if CCRC_AUTH is on (whether it is was not measured: $unwhy), the server refuses to boot on it"
       elif [ "$armed" -eq 1 ]; then
         when="with $gate the server REFUSES TO BOOT on it — readAuthSecret is called uncaught at startup"
       fi
@@ -1831,8 +1851,12 @@ _check_update-exposure() {
   # printed only where its value is `on`, and there BUE_SRC is the file that
   # named it — exactly what the old `[ -z "$auth" ] || authsrc=…` line was
   # working around by hand.
-  local auth="" authsrc=""
-  _box_unit_env CCRC_AUTH || :
+  # Wave 9 R10e (D-3823): the reader's rc is kept now, and the WHY and FIX of an
+  # rc 3 are captured right here — each read resets both out-params, so the
+  # CCRC_HOST read below would otherwise erase this one's cause.
+  local auth="" authsrc="" authrc=0 authwhy="" authfix=""
+  _box_unit_env CCRC_AUTH || authrc=$?
+  authwhy="$BUE_WHY"; authfix="$BUE_FIX"
   auth="$BUE_VAL"; authsrc="$BUE_SRC"
 
   # ── REACHABLE ────────────────────────────────────────────────────────────
@@ -1840,8 +1864,9 @@ _check_update-exposure() {
   # exposure file is systemd's own way of reasserting the loopback default
   # over whatever ccrc.env named, not "no opinion, keep reading ccrc.env's
   # bind" — `_box_unit_env`'s presence rule gives that for free.
-  local bindhost="" bindsrc=""
-  _box_unit_env CCRC_HOST || :
+  local bindhost="" bindsrc="" hostrc=0 hostwhy="" hostfix=""
+  _box_unit_env CCRC_HOST || hostrc=$?
+  hostwhy="$BUE_WHY"; hostfix="$BUE_FIX"
   bindhost="$BUE_VAL"; bindsrc="$BUE_SRC"
   local -a reach=()
   case "$bindhost" in
@@ -1873,9 +1898,22 @@ _check_update-exposure() {
       "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE; the exposure check above says what it found), then re-run ccrc expose — it rewrites the file 0600"
     return 2
   fi
+  # An undecidable CCRC_AUTH WARNs only where its answer could matter: a box PROVABLY loopback-only (CCRC_HOST
+  # measured, and no exposure file, Caddyfile or ddns unit) gets the loopback PASS below whatever the flag is, because
+  # neither non-FAIL exit of this tail depends on it.
+  if [ "$authrc" -eq 3 ] && { [ "${#reach[@]}" -gt 0 ] || [ "$hostrc" -eq 3 ]; }; then
+    _dr_warn update-exposure "$authwhy, so whether CCRC_AUTH is on — and so whether the update routes are gated — was not measured" \
+      "$authfix — then re-run ccrc doctor"
+    return 2
+  fi
   if [ "$auth" = on ]; then
     _dr_pass update-exposure "CCRC_AUTH=on (read from $authsrc) — the update routes sit behind the session gate"
     return 0
+  fi
+  if [ "$hostrc" -eq 3 ] && [ "${#reach[@]}" -eq 0 ]; then
+    _dr_warn update-exposure "$hostwhy, so whether this box is reachable — and so whether its ungated update routes answer anyone — was not measured" \
+      "$hostfix — then re-run ccrc doctor"
+    return 2
   fi
   if [ "${#reach[@]}" -gt 0 ]; then
     _dr_fail update-exposure "this box is reachable ($(_dr_join "${reach[@]}")) and CCRC_AUTH is not on in $BOX_ENV_FILE or $CCRC_EXPOSURE_FILE — the update routes, and every other write route, answer anyone who can reach it" \

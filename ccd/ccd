@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1fcb583acc4bf160bea7e70035ad61327511793f83c8c581f3d98066f5778816
+# ccrc:generated 1 sha256=0e18bb60ad504abde2fd12668a19098fdda57d8400d0d6db0cf1197abbfeb4a5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2880,7 +2880,7 @@ _pool_mismatch_why() {   # account-id account-state project project-pool-state -
   echo "$1 is in pool '${2#named }' (measured from the projection, $REG/pool-epoch — not the declared roster) and project '$3' is in pool '${4#named }'"
 }
 _id()    { echo "$1-$2"; }                                  # wrapper project -> id
-_tmux()  { echo "cc-$1"; }                                  # id -> tmux NAME, for `new-session -s` only; a -t target is `_tmux_t` (D-3525)
+_tmux()  { local n="cc-$1"; echo "${n//[.:]/_}"; }             # id -> tmux NAME, sanitised as tmux 3.4 renames it (wave 9 M8); a -t target is `_tmux_t` (D-3525)
 # `tmux has-session` answers THREE questions with one exit status, and every
 # failure is rc=1. Measured 2026-08-19 on an isolated socket; the three rows tmux answers re-measured 2026-09-28 (tmux 3.4) with the EXACT target `=cc-demo:` this probe now sends, same words (D-3525):
 #
@@ -19655,9 +19655,9 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
     # width is a property of the client, not of how far the TUI has come up.
     #
     # rc 6 is NEW and its own code — 3/4/5 are load-bearing at four call sites
-    # plus `_supervised_start` and must not be renumbered. `${1#cc-}` because
-    # this function knows the tmux NAME and `_pane_measurable` takes the id
-    # `_tmux` built it from.
+    # plus `_supervised_start` and must not be renumbered. `${1#cc-}`: for a
+    # dotted id the strip gives the sanitised id, which `_tmux` maps to the same
+    # name, so the target `_pane_measurable` builds is the same session (wave 9 M8).
     [[ "$i" == 1 ]] && ! _pane_measurable "${1#cc-}" && return 6
     pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
     # THE EXTERNAL-IMPORT GATE, AND IT IS ASKED ABOVE THE READY MARKERS (D-3107).
@@ -20706,7 +20706,7 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
   # we watched come up — which subsumes main's "never synthesize a keystroke into an auth flow"
   # (rc 2 fails `== 0` too) rather than dropping it.
   # BACKEND, not placement: this types Claude-specific input into the TUI.
-  _is_anthropic_backend "$wrapper" && [[ "$prompt_rc" == 0 ]] && _inject_spawn_effort "$tname"
+  _is_anthropic_backend "$wrapper" && [[ "$prompt_rc" == 0 ]] && _inject_spawn_effort "$tname" "$id"
   # D-2231 — after the effort injection, so its local-command chatter is already
   # in the tail the detector skips. Only on a clean landing: rc 5 is hard-blocked
   # (a keystroke there is the swap's job), rc 2 is a login screen.
@@ -20739,9 +20739,9 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
   _spawn_settle "$1" "$SPAWN_FROMSWAP"
 }
 
-_inject_spawn_effort() {   # tmuxname — apply the settle-time effort, once the TUI is up.
-  # The id is the tmux name with `cc-` stripped (`_tmux`), so the signature the
-  # settle calls with stays (`ccd-backend-vs-placement.test.ts` pins the call).
+_inject_spawn_effort() {   # tmuxname [id] — apply the settle-time effort, once the TUI is up.
+  # The id is the second argument; the one-argument form strips `cc-` from the
+  # name, which is the id only for a name with no `.` or `:` (wave 9 M8).
   # THE EFFORT FIELD DECIDES (routing spec 2026-09-14 §5.2, controller rulings
   # S1-R8 and S1-R11): a session whose record carries an `effort` file — ANY
   # value, including `auto` and including bytes no vocabulary admits — never
@@ -20772,7 +20772,7 @@ _inject_spawn_effort() {   # tmuxname — apply the settle-time effort, once the
   # side effect only (the haiku+effort refusal note and the unrecognised-value
   # reject note) — its return value is never typed, so nothing unrecognised
   # reaches a keystroke because nothing recognised does either.
-  local t id="${1#cc-}" level; t=$(_tmux_at "$1")
+  local t id="${2:-${1#cc-}}" level; t=$(_tmux_at "$1")
   _pane_measurable "$id" || { echo "ccd: pane is under ${READER_MIN_COLS} columns, skipped /effort $SPAWN_EFFORT (§6.3)" >&2; return 0; }
   if [[ -e "$REG/$id.effort" ]]; then
     _route_effort_for "$id" "$(_route_get "$id" class)" >/dev/null
@@ -24883,11 +24883,11 @@ cmd_reclaim_pause() {   # ccd reclaim-pause --state on|off — raise or lower th
 #     `=cc-x:`      `can't find session: cc-x`, every   exact, every command
 #                   command — the ONE death message
 #
-# So `=` + name + `:` — "the current window of exactly this session" — and the
-# name REWRITTEN the way tmux rewrites it: `-s cc-w-my.site` creates
-# `cc-w-my_site` (`.` and `:` become `_`, measured), and `_ws_project_valid`
-# admits a dot. Anchoring the unrewritten name answers `can't find session`
-# for a LIVE session, which `_session_probe` reads as `gone` — destroy-eligible.
+# So `=` + name + `:` — "the current window of exactly this session". `_tmux`
+# hands tmux an already-sanitised name, because tmux 3.4 rewrites `.` and `:` in
+# a session name to `_` and tmux 3.7c keeps them (measured on the macOS runner).
+# `_tmux_at`'s rewrite is kept, a no-op on every name `ccd` builds: `cc-auth-$id`
+# too, since `cmd_account_pane` admits only an id of `^[a-z][a-z0-9-]{0,31}$`.
 #
 # NEVER anchor an `-s`: `new-session -s =cc-y` creates a session literally named
 # `=cc-y` (measured). The TypeScript twin is `shared/tmux-target.ts`'s
