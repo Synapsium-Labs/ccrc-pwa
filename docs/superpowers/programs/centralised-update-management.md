@@ -1576,6 +1576,55 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - R14 (f–j), the auth reader's residue, with (f) first. It edits the same `ccd/ccrc` functions and test file the
       wave touches anyway.
     - R14 (a–e) joins wave 12's deferrals.
+
+- **2026-10-05 13:58 UTC: wave 11's plan drafted and attacked; the operator re-ruled ruling 6 ("re-check once").**
+  - **The draft:** one Opus writer, read-only on `main` at `00f8a193`, produced 9 tasks. The departures are numbers
+    3972 to 3982, 3983 to 3986 are spare, and 3987 to 3991 are the worker's reserve (bare: the plan is not yet
+    committed).
+    - It measured `LoadState` on systemd 255's system manager.
+    - It measured a stub prototype of the concurrent verify: 65 units in 8.7 s, against about 11.6 min serial.
+    - It measured which variable names abort the launchd job's `.` under bash 3.2.57 and 5.2.
+  - **The attack** (workflow `wf_6ef19291-c0d`: four Opus lenses, read-only on the live box, then one Sonnet
+    refuter per lens) confirmed 26 findings. None was blocking after refutation; nine were important.
+  - **F1 (live window), measured on the 24 recorded update sweeps since 2026-09-29:**
+    - Supervisor exits run hot right after a sweep's restart: 3 in the first 120 s against 0.25 expected at the
+      0.30/h baseline.
+    - The shared window puts every unit's one exposure about 22 to 27 s after the restart. On 2026-10-04 at 22:06, a
+      supervisor whose tmux session ended exited 28 s after its restart and came back at +30 s.
+    - A shared window would have failed that update. The serial loop passed it, because it verified the unit after
+      the unit recovered. So: the old sweep with wave 10's script fails 0 of 24; the planned sweep fails 1 of 24.
+    - Ruling 6's premise, "wave 11's single window cuts that exposure about N-fold", holds for permanent stops only,
+      not for a transient death.
+  - **The operator's ruling (13:58, asked as 22:56's deferred question): "Re-check once."**
+    - A unit whose verify fails in a crash-like way (a non-zero exit and no "stopped on purpose" line) gets ONE more
+      single-unit verify after its batch. The update fails only if that also fails. Every re-checked unit is named.
+    - Units that read crash-shaped (`activating` or `failed`) in the post-restart listing are verified, with the same
+      re-check, instead of only warned about. So a crash-looping build fails, where today it can pass (the
+      attack's F4: wave 8 item G only warns).
+    - `inactive` keeps item G's warning, because it is a deliberate stop.
+    - It supersedes ruling 6 for wave 11. It takes two of the spare numbers.
+  - **My rulings on the rest:** every confirmed finding is applied in the revision, and the plan's readings stand as
+    drafted except where these change them.
+    - **F3, the reload storm:** each restarted supervisor's `systemctl --user enable` reloads the user manager,
+      serially, for 27 s at 71 units. Keep the bound at 128, but state the storm and mark the stub-measured timings as
+      such. The re-check covers a read that times out behind it. `--no-reload` in `_svc_enable` goes to wave 12 as
+      residue (a `ccd/ccd` change).
+    - **F7, the root disk filling mid-sweep:** the re-check runs in the foreground, with no rc file, so a full
+      scratch disk cannot fail a healthy fleet.
+    - **P1, a failed fork:** the sweep never exits without a report. A failed launch falls back to serial for the
+      rest.
+    - **P4, leftover scratch dirs:** a sweep removes stale scratch dirs of its own prefix at its start.
+    - **T-1, verify jobs that outlive their sweep:** the sweep's exit path kills its own verify children by pid, and
+      a case asserts that none survives.
+    - **A1, a refused name in the reason text:** `BUE_WHY` names the cause and the line number, never the name.
+    - **T-4, a `-t` filter that matches nothing:** the gate asserts that each `-t` part ran at least one test.
+    - **T-8, the frozen old sweep:** pin, or freeze, the helpers it calls.
+  - **Measured and now stated as measured:**
+    - `LoadState=loaded` holds on the live USER manager for never-existed ids, escaped ids, `..` and 35 real purged
+      ids (F5).
+    - A dispatched swap sleeps a 0-120 s jitter before it stops a unit. `swap.log` shows 0 dispatches within 130 s
+      of any sweep (F2).
+
   - **Live effect:** none yet. Both boxes are held by the unacked v0.0.78 fleet row. After the ack, auto moves the
     fleet box straight to the newest release, which now carries waves 9 and 10, and that move runs v0.0.78's sweep
     with wave 10's script. Wave 9's live tmux names are unchanged for every live-alphabet id (review 265, tmux 3.4).
