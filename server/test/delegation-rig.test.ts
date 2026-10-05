@@ -290,6 +290,43 @@ describe('rig.sh reap, an ownerless run root (a late writer recreated it after c
   }, 60_000);
 });
 
+describe('rig.sh wait_run_quiet (cleanup_run waits out a process still under the run root)', () => {
+  /** Run wait_run_quiet from rig.sh's own text (the case dispatch at its foot would otherwise run), with a 1 s bound. */
+  const wait = (root: string): { status: number | null; stderr: string; ms: number } => {
+    const text = fs.readFileSync(RIGSH, 'utf8');
+    const from = text.indexOf('procs_under() {');
+    const to = text.indexOf('cleanup_run() {');
+    expect(from).toBeGreaterThan(0);
+    expect(to).toBeGreaterThan(from);
+    const t0 = Date.now();
+    const r = spawnSync('bash', ['-c', `${text.slice(from, to)}\nwait_run_quiet "$1" ""`, 'x', root], { encoding: 'utf8', env: { ...process.env, RUN_QUIET_S: '1' }, timeout: 60_000 });
+    return { status: r.status, stderr: r.stderr, ms: Date.now() - t0 };
+  };
+  const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const gone = async (pid: number): Promise<boolean> => { for (let i = 0; i < 50; i++) { if (!alive(pid)) return true; await new Promise((r) => setTimeout(r, 100)); } return false; };
+
+  it('returns at once when nothing is under the root', () => {
+    const root = mkTmp('ccrc-dlg-rig.');
+    const r = wait(root);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.ms).toBeLessThan(900);
+  }, 60_000);
+
+  it('waits for a process under the root to exit, and SIGKILLs one that outlasts the bound; a process elsewhere is never touched', async () => {
+    const root = mkTmp('ccrc-dlg-rig.');
+    const elsewhere = spawn('sleep', ['60'], { cwd: mkTmp('ccrc-dlg-else-'), stdio: 'ignore' });
+    const brief = spawn('sleep', ['0.5'], { cwd: root, stdio: 'ignore' });
+    const stuck = spawn('sleep', ['60'], { cwd: root, stdio: 'ignore' });
+    children.push(elsewhere, brief, stuck);
+    await new Promise((r) => setTimeout(r, 200));
+    const r = wait(root);
+    expect(r.status, r.stderr).toBe(0);
+    expect(await gone(brief.pid!)).toBe(true);
+    expect(await gone(stuck.pid!)).toBe(true);
+    expect(alive(elsewhere.pid!)).toBe(true);
+  }, 60_000);
+});
+
 describe('rig.sh reap, sockets and scenario text', () => {
   it('reap removes only the private socket of a dead owner (never `default`, never a live owner\'s)', () => {
     const tmuxTmp = fs.mkdtempSync('/tmp/dlgt-');   // short: a unix socket path is capped near 108 bytes
@@ -460,6 +497,14 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     for (const file of ['/rig/tmp/x.output', `${ROOT}/tmp/x.output`]) {
       const ok = leakRun(note(file));
       expect(ok.status, `${file}: ${ok.stderr}`).toBe(0);
+    }
+  }, 60_000);
+
+  it('a `<` is not a path boundary: a shell redirect or a tag around a real path still fails closed', () => {
+    for (const prompt of ['a</srv/x', 'done</mnt/x/y', 'wc -l</etc/hosts', '<x></opt/app/conf></x>', 'sort</srv/data/list']) {
+      const r = leakRun({ prompt });
+      expect(r.status, prompt).toBe(1);
+      expect(r.written, prompt).toEqual([]);
     }
   }, 60_000);
 

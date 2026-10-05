@@ -264,8 +264,10 @@ collect() {
   if [[ -f $RUN_R/notes ]]; then cp "$RUN_R/notes" "$O/notes"; else : > "$O/notes"; fi
 }
 # Pids (never this shell's own) whose working directory is at or under <root>, by /proc (Linux, as
-# claude_pid already is). A process whose cwd was removed under it reads "<path> (deleted)" and still
-# matches. Every caller passes a root that guard_root accepted, so this never names a foreign process.
+# claude_pid already is). A process whose cwd was REMOVED reads "<path> (deleted)": it still matches when
+# the cwd was a directory under the root (the suffix follows the path), but not when the cwd was the root
+# itself, which is harmless because the wait runs BEFORE the rm. Every caller passes a root that guard_root
+# accepted, so this never names a foreign process.
 procs_under() {
   local root=${1%/} l p c
   [[ -n $root ]] || return 0
@@ -282,13 +284,20 @@ pid_tree() {
   printf '%s\n' "$1"
   for c in $(pgrep -P "$1" 2>/dev/null); do pid_tree "$c"; done
 }
+# SIGKILL <pid> only if its cwd is STILL at or under <root>: re-read right before the signal, so a pid
+# the kernel recycled between the scan and the kill is never hit.
+kill_if_under() {
+  local c
+  c=$(readlink "/proc/$1/cwd" 2>/dev/null) || return 0
+  [[ $c == "$2" || $c == "$2"/* ]] && kill -9 "$1" 2>/dev/null || true
+}
 pid_live() { kill -0 "$1" 2>/dev/null && ! grep -q '^State:[[:space:]]*Z' "/proc/$1/status" 2>/dev/null; }
 # Wait (bounded) until nothing tied to this run is left to write under its root: the pane's pid tree
 # captured before the server died, and any process whose cwd is under the root. A late flush from a
 # dying Claude Code recreated the removed root once (measured, 98-run capture), and reap, which keys on
 # .owner, then skipped it for good. A straggler past the bound is SIGKILLed by its cwd alone.
 wait_run_quiet() {
-  local root=$1 tree=$2 end=$(( SECONDS + 10 )) p alive stage=0
+  local root=$1 tree=$2 end=$(( SECONDS + ${RUN_QUIET_S:-10} )) p alive stage=0
   while :; do
     alive=0
     for p in $tree; do pid_live "$p" && alive=1; done
@@ -296,7 +305,7 @@ wait_run_quiet() {
     (( alive )) || return 0
     if (( SECONDS >= end )); then
       (( stage )) && { printf 'rig: processes still hold run root %s\n' "${root##*/}" >&2; return 0; }
-      for p in $(procs_under "$root"); do kill -9 "$p" 2>/dev/null || true; done
+      for p in $(procs_under "$root"); do kill_if_under "$p" "${root%/}"; done
       stage=1; end=$(( SECONDS + 3 ))
     fi
     sleep 0.2
