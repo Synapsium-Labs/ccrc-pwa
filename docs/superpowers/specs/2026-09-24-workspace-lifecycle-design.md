@@ -394,9 +394,13 @@ and the README and `wave-lifecycle.md` §6 text above are wave 3b's, planned aft
   interrupted expiry's resume asks it again when it resumes at `children`, or at `branch` when the tombstone records the
   worktree absent (the vanished-worktree arm's first phase), before that attempt's tail stops anything (3963).
   `ws-reclaim` is never asked this. It also refuses `in-use` (retryable) when any process's working directory is the
-  worktree or lies under it — a shell an operator opened there by hand, say (3962) — fresh and at the resume's
-  `children`; a process whose cwd cannot be read, or has vanished, is skipped, so a process of another UNIX user is not
-  seen, and a process list that cannot be read is unmeasured, retried.
+  worktree or lies under it — a shell an operator opened there by hand, say (3962) — fresh, and at the resume
+  wherever presence is asked again (`children`, and `branch` on the vanished-worktree arm, where the worktree is absent
+  and the question is vacuously clear). A process is skipped only on proof it vanished, or when its cwd link answers
+  EACCES: so what is not seen is a process of another UNIX user and a same-user non-dumpable one (an `ssh-agent`,
+  anything that cleared its dumpable flag, a setuid or setgid exec) — refusing on those would wedge every expiry while
+  an ssh-agent runs. Anything else that goes wrong (a process list that cannot be read, a `ps` that is missing) is
+  unmeasured, retried.
 - **Rung 2′'s words.** `not-archived` (no stamp), `not-expired` (younger than `WS_EXPIRE_AFTER_S`, a future stamp
   included) and `child`; a stamp that is not an epoch ccd writes is unmeasured, never old.
 - **`ws-reap`'s `expire:` arm refuses** (`expire-in-progress`), the twin of its `reclaim:` mirror. The arm that RESUMES

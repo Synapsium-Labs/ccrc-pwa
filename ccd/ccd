@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=240d96ddf150f5a91d0e9cef94acd7916185479b852473558106fc00931e0ebc
+# ccrc:generated 1 sha256=15f8fe4f007c659eace511cfed3ceed590bcbacdb54d1025e96bd05534b5c88e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28586,7 +28586,11 @@ _ws_expire_presence() {   # id probe-verdict workdir [detached] -> 0 when nothin
 # THE SEAMS of the working-directory question, as `_ws_expire_now` is the clock's: a test names another root, or a
 # listing, and the real box answers /proc and lsof.
 _ws_expire_proc_root() { printf '%s' /proc; }
-_ws_expire_lsof() { lsof -a -d cwd -Fpn; }
+_ws_expire_lsof_fallback() { printf '%s' /usr/sbin/lsof; }   # macOS keeps lsof in /usr/sbin, which a PATH may omit
+_ws_expire_lsof() {
+  local bin; bin=$(command -v lsof) || bin=$(_ws_expire_lsof_fallback)
+  "$bin" -a -d cwd -Fpn
+}
 
 _ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working directory at workdir or under it; else
   #                          rc 1: `in-use` (naming the pids and the paths), or unmeasured
@@ -28609,12 +28613,21 @@ _ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working dir
   # path whose existence could not be looked at is unmeasured.
   # HOW IT IS ASKED, with NO fork per process. Linux: ONE python3 call walks
   # `<root>/<pid>/cwd` (the root is `_ws_expire_proc_root`). Darwin (`CCD_OS`):
-  # the same call parses ONE `_ws_expire_lsof` listing. A pid that vanished
-  # between the listing and the read is SKIPPED, and so is a pid whose cwd link
-  # cannot be read — a process of ANOTHER UNIX user (EACCES on a root daemon is
-  # routine): the fleet is single-user, and refusing on every unreadable link
-  # would refuse every expiry for ever. THAT IS THE LIMIT, stated: a process
-  # of another user with its cwd in the worktree is not seen.
+  # the same call parses ONE `_ws_expire_lsof` listing (`lsof` is found on PATH,
+  # else at `_ws_expire_lsof_fallback`, /usr/sbin/lsof: macOS keeps it there and
+  # a PATH may omit it; an lsof found nowhere is unmeasured).
+  # A PROCESS IS SKIPPED ONLY ON PROOF IT VANISHED, or on the one ruled
+  # exception. Vanished: its cwd link or its stat file answers ENOENT/ESRCH
+  # (Linux), or `ps` exits non-zero with NO output for it (Darwin). The
+  # exception is a cwd link that answers EACCES: the fleet is single-user, and
+  # refusing on every unreadable link (a root daemon's is routine) would
+  # refuse every expiry for ever. THE LIMIT, stated: what that skips is NOT
+  # SEEN — a process of ANOTHER UNIX user, and a SAME-user NON-DUMPABLE one
+  # (ssh-agent, anything that called prctl(PR_SET_DUMPABLE, 0), a setuid or
+  # setgid exec), whose /proc/<pid>/cwd is EACCES too, measured: `ssh-agent -D`
+  # in a worktree is unseen. Every OTHER failure — `ps` missing or unrunnable,
+  # a stat file that does not parse, an exception nobody anticipated — is
+  # UNMEASURED, never a skip: a skip on a guess reads as "nobody".
   # WHAT IS NOT A USER: ccd's own process (`$$`, `$BASHPID`), the scan's own
   # children (any pid whose parent is one of those: the python3 and, on Darwin,
   # the lsof, both of which inherit ccd's own cwd) and the call's python3 itself.
@@ -28646,49 +28659,66 @@ mode, wt, me, sub, root = sys.argv[1:6]
 mine = {me, sub, str(os.getpid())}
 def inside(p):
     return p == wt or p.startswith(wt + "/")
+VANISHED = (FileNotFoundError, ProcessLookupError)
 def ppid_of(pid):
+    # the parent pid, or None ONLY on proof the process is gone; anything else
+    # that goes wrong is unmeasured (exit 3), never a skip
     if mode == "proc":
-        with open("%s/%s/stat" % (root, pid), "rb") as fh:
-            raw = fh.read().decode("utf-8", "replace")
-        return raw[raw.rindex(")") + 2:].split()[1]
-    r = subprocess.run(["ps", "-o", "ppid=", "-p", pid], capture_output=True, text=True)
-    if r.returncode != 0:
-        raise OSError(pid)
-    return r.stdout.strip()
-cwds = []
-if mode == "proc":
-    try:
-        names = os.listdir(root)
-    except OSError:
-        sys.exit(3)
-    for n in names:
-        if not (n.isascii() and n.isdigit()):
-            continue
         try:
-            cwds.append((n, os.readlink("%s/%s/cwd" % (root, n))))
+            with open("%s/%s/stat" % (root, pid), "rb") as fh:
+                raw = fh.read().decode("utf-8", "replace")
+        except VANISHED:
+            return None
+        f = raw[raw.rfind(")") + 2:].split() if ")" in raw else []
+        if len(f) < 2 or not f[1].isdigit():
+            sys.exit(3)
+        return f[1]
+    r = subprocess.run(["ps", "-o", "ppid=", "-p", pid], capture_output=True, text=True)
+    out = r.stdout.strip()
+    if r.returncode != 0:
+        if out == "":
+            return None
+        sys.exit(3)
+    if not out.isdigit():
+        sys.exit(3)
+    return out
+def scan():
+    cwds = []
+    if mode == "proc":
+        try:
+            names = os.listdir(root)
         except OSError:
+            sys.exit(3)
+        for n in names:
+            if not (n.isascii() and n.isdigit()):
+                continue
+            try:
+                cwds.append((n, os.readlink("%s/%s/cwd" % (root, n))))
+            except VANISHED + (PermissionError,):
+                continue
+    else:
+        cur = None
+        for line in sys.stdin.read().split("\n"):
+            if line.startswith("p"):
+                cur = line[1:]
+            elif line.startswith("n") and cur is not None:
+                cwds.append((cur, line[1:]))
+    if me not in [c[0] for c in cwds]:
+        sys.exit(3)
+    for pid, p in cwds:
+        if pid in mine or not inside(p):
             continue
-else:
-    cur = None
-    for line in sys.stdin.read().split("\n"):
-        if line.startswith("p"):
-            cur = line[1:]
-        elif line.startswith("n") and cur is not None:
-            cwds.append((cur, line[1:]))
-if me not in [c[0] for c in cwds]:
+        pp = ppid_of(pid)
+        if pp is None or pp in mine:
+            continue
+        sys.stdout.buffer.write(os.fsencode("%s\t%s\n" % (pid, p)))
+try:
+    scan()
+except Exception:
     sys.exit(3)
-for pid, p in cwds:
-    if pid in mine or not inside(p):
-        continue
-    try:
-        if ppid_of(pid) in mine:
-            continue
-    except (OSError, ValueError, IndexError):
-        continue
-    sys.stdout.buffer.write(os.fsencode("%s\t%s\n" % (pid, p)))
 ' "$mode" "$wt" "$me" "$sub" "$root" <<< "$listing" 2>/dev/null); rc=$?
   (( rc == 0 )) \
-    || { _ws_reclaim_unmeasured "the processes of this box could not be listed ($( [[ "$mode" == lsof ]] && echo lsof || echo "$root" )), so whether one works inside $workdir was never asked"; return 1; }
+    || { _ws_reclaim_unmeasured "the processes of this box could not be measured ($( [[ "$mode" == lsof ]] && echo lsof || echo "$root" )), so whether one works inside $workdir was never asked"; return 1; }
   [[ -n "$out" ]] || return 0
   while IFS=$'\t' read -r pid pth; do
     n=$(( n + 1 ))

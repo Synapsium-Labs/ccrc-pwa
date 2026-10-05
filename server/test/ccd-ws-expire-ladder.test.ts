@@ -8,6 +8,7 @@
 // `containment-unproven`) — with rung 5 asked MORE of for an expiry: a detached pane and a live unit refuse `live`.
 // FIXTURE HOME ONLY (`wsExpireFixture.ts`).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
@@ -331,20 +332,49 @@ describe('rung 5, a process whose working directory is the worktree — `in-use`
   it('a fake /proc: a stranger in the worktree refuses in-use; ccd’s own process, its children and a vanished pid are skipped', () => {
     const { wt } = makeArchived(h);
     // ccd's own process has its cwd in the worktree (a caller that ran it from there); a child of ccd, a pid with no
-    // cwd link left, and a pid whose link nobody may read are not users either.
+    // cwd link left (4301), a pid whose cwd link vanished after the listing (4303: a cwd but NO stat file) and a pid
+    // whose cwd link answers EACCES (4304: its directory cannot be searched — planted unless the suite runs as root,
+    // which reads through it) are not users either. `$BASHPID` is pinned apart from `$$` by the next case.
+    const root = process.getuid?.() === 0;
     const skipped = [
       'rm -f "$HOME/fp/$$/cwd"; _fp $$ "' + real(wt) + '" 1;',   // ccd itself, with a readable stat: only the skip of its own pid can pass it
       '_fp 4300 "' + real(wt) + '" $$;',
       'mkdir -p "$HOME/fp/4301";',
-      '_fp 4302 "' + real(wt) + '" $BASHPID;',
+      '_fp 4303 "' + real(wt) + '" 1; rm -f "$HOME/fp/4303/stat";',
+      root ? ':' : '_fp 4304 "' + real(wt) + '" 1; chmod 000 "$HOME/fp/4304";',
     ].join(' ');
-    const alone = expireEvalOf(h, { pre: `${FAKE(wt)} rm -rf "$HOME/fp/4242"; ${skipped}` });
-    expect(alone.verdict, alone.detail).toBe('expirable');
-    const withStranger = expireEvalOf(h, { pre: `${FAKE(wt)} ${skipped}` });
-    expect(withStranger.verdict, withStranger.detail).toBe('in-use');
-    expect(withStranger.detail).toContain('process 4242 ');
-    expect(withStranger.detail).not.toContain('process 4300 ');
+    const eacces = path.join(h.home, 'fp', '4304');
+    try {
+      const alone = expireEvalOf(h, { pre: `${FAKE(wt)} rm -rf "$HOME/fp/4242"; ${skipped}` });
+      expect(alone.verdict, alone.detail).toBe('expirable');
+      const withStranger = expireEvalOf(h, { pre: `${FAKE(wt)} ${skipped}` });
+      expect(withStranger.verdict, withStranger.detail).toBe('in-use');
+      expect(withStranger.detail).toContain('process 4242 ');
+      expect(withStranger.detail).not.toContain('process 4303 ');
+      expect(withStranger.detail).not.toContain('process 4304 ');
+      expect(withStranger.detail).not.toContain('process 4300 ');
+    } finally { if (fs.existsSync(eacces)) fs.chmodSync(eacces, 0o755); }
   }, 60_000);
+
+  it('`$BASHPID` is skipped apart from `$$`: a process whose parent is the scanning subshell is not a user', () => {
+    const { wt } = makeArchived(h);
+    const asked = (child: string): string => h.sh(`${EXP_STUBS} ${FAKE(wt)} rm -rf "$HOME/fp/4242"; _ws_reclaim_reset;`
+      + ` ( ${child} _ws_expire_cwd_users ${EXP_ID} "${wt}"; printf '%s' "$REAP_VERDICT" )`);
+    expect(asked('_fp 4310 "' + real(wt) + '" $BASHPID;'), 'a child of the subshell that scans (BASHPID != $$ here)').toBe('');
+    expect(asked('_fp 4310 "' + real(wt) + '" 1;'), 'the CONTROL: the same process under another parent').toBe('in-use');
+  }, 60_000);
+
+  // A skip needs PROOF the process vanished. What is not proof — a stat file that does not parse, a ps that is missing
+  // or fails with output — is UNMEASURED: reading it as "gone" would answer "nobody" over a live process (measured by
+  // review: with ps missing, the broad except skipped the live sleep and the scan answered rc 0).
+  it('a stat file that does not parse is UNMEASURED — never a skip, never "nobody"', () => {
+    const { wt } = makeArchived(h);
+    for (const bad of ['garbage', '4242 (a b) S', '4242 (a b) S notanumber 1 1 0', '']) {
+      const r = expireEvalOf(h, { pre: `${FAKE(wt)} printf '%s\\n' '${bad}' > "$HOME/fp/4242/stat";` });
+      expect(r.verdict, `stat ${JSON.stringify(bad)}: ${r.detail}`).toBe('unmeasured');
+      expect(r.token).toBe('');
+    }
+  }, 90_000);
 
   it('a leaf that is a symbolic link is judged by its own name: nobody’s cwd reads through it, and the later rung refuses it', () => {
     const { wt } = makeArchived(h);
@@ -398,6 +428,55 @@ describe('rung 5 on Darwin — a cwd under the worktree, asked of lsof', () => {
       expect(miss.verdict, miss.detail).toBe('expirable');
     } finally { s.stop(); t.stop(); }
   }, 60_000);
+
+  // `ps` is how the Darwin arm learns a hit's parent. It is hidden from the scan alone (PATH narrowed to a directory
+  // that holds python3 and nothing else, for the python3 call only), so the rest of the ladder still finds its tools.
+  const withPs = (dir: string): string => `python3() { PATH="${dir}" command python3 "$@"; };`;
+  const binDir = (name: string, ps?: string): string => {
+    const d = path.join(h.home, name);
+    fs.mkdirSync(d);
+    fs.symlinkSync(execFileSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).trim(), path.join(d, 'python3'));
+    if (ps !== undefined) fs.writeFileSync(path.join(d, 'ps'), `#!/bin/sh\n${ps}\n`, { mode: 0o755 });
+    return d;
+  };
+
+  it('a live process in the worktree and a `ps` that is MISSING is UNMEASURED — never skipped as if it had vanished', () => {
+    const { wt } = makeArchived(h);
+    const s = holdCwd(wt);
+    try {
+      const r = expireEvalOf(h, { pre: lsof(listing(s.pid, fs.realpathSync(wt))) + withPs(binDir('no-ps')) });
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.token).toBe('');
+    } finally { s.stop(); }
+  }, 60_000);
+
+  it('`ps` failing with OUTPUT is unmeasured; `ps` exiting non-zero with NO output is the proof of a vanished pid — skipped', () => {
+    const { wt } = makeArchived(h);
+    const s = holdCwd(wt);
+    try {
+      const pre = (dir: string): string => lsof(listing(s.pid, fs.realpathSync(wt))) + withPs(dir);
+      const boom = expireEvalOf(h, { pre: pre(binDir('ps-boom', 'echo "ps: kernel said no"; exit 2')) });
+      expect(boom.verdict, boom.detail).toBe('unmeasured');
+      const garbage = expireEvalOf(h, { pre: pre(binDir('ps-garbage', 'echo not-a-pid')) });
+      expect(garbage.verdict, garbage.detail).toBe('unmeasured');
+      const gone = expireEvalOf(h, { pre: pre(binDir('ps-gone', 'exit 1')) });
+      expect(gone.verdict, 'the CONTROL: exit 1, nothing printed — the pid is not there').toBe('expirable');
+    } finally { s.stop(); }
+  }, 90_000);
+
+  it('lsof not on PATH is found at the fallback (/usr/sbin on macOS); found nowhere it is unmeasured', () => {
+    const { wt } = makeArchived(h);
+    const s = holdCwd(wt);
+    try {
+      const stub = path.join(h.home, 'sbin-lsof');
+      fs.writeFileSync(stub, `#!/bin/sh\nprintf 'p%s\\nn%s\\np%s\\nn%s\\n' "$PPID_OF_CCD" "$HOME" "${s.pid}" "${fs.realpathSync(wt)}"\n`, { mode: 0o755 });
+      const notOnPath = 'CCD_OS=darwin; command() { if [[ "$1" == -v && "$2" == lsof ]]; then return 1; fi; builtin command "$@"; };';
+      const found = expireEvalOf(h, { pre: `${notOnPath} export PPID_OF_CCD=$$; _ws_expire_lsof_fallback() { printf %s "${stub}"; };` });
+      expect(found.verdict, found.detail).toBe('in-use');
+      const nowhere = expireEvalOf(h, { pre: `${notOnPath} _ws_expire_lsof_fallback() { printf %s "${h.home}/no-such-lsof"; };` });
+      expect(nowhere.verdict, nowhere.detail).toBe('unmeasured');
+    } finally { s.stop(); }
+  }, 90_000);
 
   it('an lsof that fails, prints nothing, or lists everybody but ccd is UNMEASURED', () => {
     makeArchived(h);
