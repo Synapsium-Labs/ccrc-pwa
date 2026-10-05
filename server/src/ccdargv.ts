@@ -417,6 +417,16 @@ export const CCD_ARGV = {
   wsReclaim: (token: string, childOf: number, id: string, deferExpired: boolean, dec: ActorFlags | null) =>
     argv(['ws-reclaim', '--expect', token, '--child-of', String(childOf), '--session', id,
           ...deferFlags(deferExpired), ...decFlags(dec)]),
+  /** `ws-audit --expire` (workspace lifecycle, spec 2026-09-24 §5.3): the SAME verb and granted prefix as
+   *  `wsAudit` — `['ws-audit','--session']` — with the mode flag after the id, the order `cmd_ws_audit` reads. No
+   *  grant of its own, and no `--defer-expired`: an expiry never skips its presence rungs. */
+  wsExpireAudit: (id: string) => argv(['ws-audit', '--session', id, '--expire']),
+  /** `ws-expire` — the server-composed teardown of an ARCHIVED workspace seven days after its archive. `token` is
+   *  `ws-audit --expire`'s, re-proven by ccd inside the reap lock; it binds the archive's epoch. The confirmation token
+   *  LEADS (`['ws-expire','--expect']` is the grant); the dec trails, and ccd strips it before it binds a positional.
+   *  Composed by nothing in this build: workspace lifecycle wave 3b's lane is its one caller, behind `EXPIRE_CAP`. */
+  wsExpire: (token: string, id: string, dec: ActorFlags | null) =>
+    argv(['ws-expire', '--expect', token, '--session', id, ...decFlags(dec)]),
   wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),
   /** The dec flags ride AFTER `--reason`, and `--reason` is NOT one of them: on
    *  `ws-hold` the hold reason IS the declared reason (ccd's `cmd_ws_hold` says
