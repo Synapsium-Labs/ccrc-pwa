@@ -470,6 +470,14 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Numbers:** 3918–3920 stay spares.
   - **For the stable gate:** F1's fix should also clear session-hook-merge-deny's macOS reds (bright-river's mail
     3461), because the macOS runner's jq is 1.8.2.
+- **2026-10-05 11:05 — F3 reshaped** (the worker's question 3508, answered by 3510). Once the segment rule exists,
+  it matches every shape bash runs that MERGE_OVERCAP_RE matches. The regex is therefore redundant, and its
+  mutations can only red when composed with another.
+  - **Ruling:** RETIRE MERGE_OVERCAP_RE. The fixed-split segment rule stands alone, with a word-bounded `gh`, and
+    every single-row mutation goes red.
+  - 3915 is restated as history, superseded by 3917.
+  - The newline-separated `gh`/`pr`/`merge`, which only the regex matched, is three commands to bash, so it is
+    pinned as a pass.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
