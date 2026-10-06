@@ -560,6 +560,19 @@ carries it (spec §5.1, amended 2026-09-24).
     `6850f261`.
   - **Merge order with #286:** whichever acceptance lands first merges first. The second merges main and
     re-stamps `ccd/ccd`, by the shared-region ruling.
+- **2026-10-06 20:21 — review 289 ACCEPTED wave 3** (review-done 3656, reviewed tip `6850f261`; report copied on receipt).
+  This session's mail was held for about twelve hours behind a background planning workflow, so 3656 was read only
+  at 20:15.
+  - **The verdict:** 15 agents, no unverified lens. 4 confirmed and 0 refuted. Six findings, all minor and text-only.
+    Everything the brief asked holds: MB 1 and F2P 3 on both jqs; the accepted class in both directions; the canary
+    deny/deny and fail-open on 3f9cca09; 54 deny shapes still denied; ordinary commands pass.
+  - **The landing round was sent** (mail 3751; run 250 back at `working`):
+    - `git merge origin/main`, where only `ccd/ccd`'s stamp conflicts (#286), then re-stamp;
+    - the text fixes F1–F4 and F6, with no number;
+    - the re-gate, and the canary on the merged hook.
+  - **F5, the stale PR #248 body, is the coordinator's.** I re-write it from the plan's Task 5 text before merging.
+  - **ccrc-history** (quiet-ridge's runs 293 and 302) edits README, the doctor checks and deploy.sh. It has consent
+    (3750); the second lander merges main.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

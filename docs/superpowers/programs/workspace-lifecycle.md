@@ -21,7 +21,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
 | 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | #286 | merged 2026-10-06 (`77c11245`) after review 288; run 245 closed; deploy AGENT-FIRST via ccrc's updater; plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
-| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | run 290 open (planned; the run's wave 4 of 5), block 4114–4125; to plan. FIRST commit: review 288's residue. Its operator text names a pid's process (R4) |
+| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | run 290 open (planned; the run's wave 4 of 5), block 4114–4125; plan on `docs/workspace-lifecycle-wave3b-plan` (12 tasks; re-anchoring on #290's main); FIRST commit: review 288's residue; the lane ships SHADOWED |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan (the run's wave 5 of 5) |
 
 ## Decisions & deviations
@@ -568,6 +568,35 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
       exact bytes;
     - each guard has a mutation row.
   - **The returned plan is checked for this before dispatch,** and amended if it carries the spliced form.
+- **2026-10-06 20:21 — wave 3b's plan is ready:** branch `docs/workspace-lifecycle-wave3b-plan` at `335c0e7c` (5,694 lines,
+  12 tasks, 12 departure slugs). It was made by workflow wf_45bc20c3-008, whose 7 agents all returned. The
+  reviser applied 24 findings and rejected 4, each with a reason. A Sonnet verifier replayed all 117 blocks onto
+  `b27fabc15` (#290): 114 matched exactly once and 3 needed a re-anchor by content, as the plan predicted. All 14
+  mutation rows it ran went red. The plan has no stray D-tokens and no docserver URLs.
+  - **The security ruling of 09:18 is built in** (Task 3, rows T3.4 and T3.5): `json.dumps` at the source, pid as an
+    integer, and a non-digit pid is unmeasured.
+  - **3893 is closed by "a return clears the archive inside its gate"**, measured smaller and safe on all five
+    verbs. Holding the lock across the journal line breaks every supervised return.
+  - **CORRECTION to ruling (E)'s figure:** review 284's R4 "29" counts rows with no process in their tree, not rows
+    past seven days. The plan measured the backlog read-only: **20 of 30 archived rows past seven days at 09:34 UTC,
+    22 at 18:56.** The ruling stands: ship shadowed.
+  - **Rulings on its coordinator questions:**
+    - (4) child reclamation's 3657 and 3666 were answered in 3749. 3b edits none of the shared tail, containment,
+      ladder or platform. `_ws_expire_cwd_users`' header is wave 6's and its body is 3b's.
+    - (5) the sibling pass is ACCEPTED as ruling (D).
+    - (6) the plan is re-anchored onto main after #290. A Sonnet agent is doing it now, with the two stale counts.
+    - The five plan-only departures reach spec §5.2 and §5.3 in Task 12.
+    - Q1's docs half: README, clause 3 and wave-lifecycle §6 state the arming condition, so they are true before and
+      after arming.
+  - **For the operator:**
+    - the PWA confirm copy before arming;
+    - the first armed pass (about 20 expiries, at most one a pass), or raising `WS_EXPIRE_AFTER_S` first;
+    - whether to end brisk-mesa's leaked test tmux server before arming.
+  - **Wave 3's deploy:** the fleet box runs v0.0.105 (`b27fabc1`, which contains #286) since 19:03 UTC. v0.0.96 is
+    the first release containing it.
+  - **Child reclamation wave 6** (run 291, plan #293) changes shared code that `ws-expire` runs: F6's GIT_CONFIG
+    strip, `_ws_leaf_remove`, the bounded temp-root wait, the token's `branchState=`, and the gone-directory recovery
+    (expire breadcrumbs are not evidence). All of it is AGREED under the 3622 rule (3749).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
