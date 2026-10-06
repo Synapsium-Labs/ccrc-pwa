@@ -4480,39 +4480,39 @@ while executing is named in the wave-done mail by a new slug. A session that can
 Departures from the spec that this plan makes, each measured above — **thirteen, against a block of ten** (the brief:
 list them all; the coordinator issues the three past the block):
 
-- `scope-sweep-stop-shadowed` — the coordinator's safety ruling (C): spec §5.6 has the sweep STOP an inert scope; this
+- **D-4012** `scope-sweep-stop-shadowed` — the coordinator's safety ruling (C): spec §5.6 has the sweep STOP an inert scope; this
   wave records it `would-stop` and issues the stop only while `$REG/scope-sweep-live` exists, a file nothing in the
   tree writes (pinned by `single-definition.test.ts`'s appended describe — shell, and every other file under `ccd/` and
   `deploy/`: rows 3.48–3.50), with `$REG/scope-sweep-paused` still stopping everything, the shadow record included.
   Carried into §5.6's text (Task 7). Rows 3.1–3.3, 3.48–3.50.
-- `scope-sweep-stops-at-most-three-a-tick` — spec §5.6 stops every inert scope "at the first tick"; armed, this sweep
+- **D-4013** `scope-sweep-stops-at-most-three-a-tick` — spec §5.6 stops every inert scope "at the first tick"; armed, this sweep
   stops at most `SCOPE_SWEEP_MAX_STOPS` (3) in one tick and records the rest `held` for the next, so the first armed
   tick after a shadow week — or a misjudgment the shadow week missed — costs three scopes a minute, not every inert
   scope at once (the plan review's safety lens). Carried into §5.6's text. Row 3.4.
-- `scope-sweep-recycled-server-reported` — spec §5.6 checks the server "by pid, comm and a start time earlier than the
+- **D-4014** `scope-sweep-recycled-server-reported` — spec §5.6 checks the server "by pid, comm and a start time earlier than the
   scope's, against pid reuse" but says nothing of the scope whose check FAILS. Ruling D says never stop it; the plan
   records it dead with `server=reused`, `verdict=report`, `why=server-pid-reused`, so doctor lists it rather than
   hiding a scope whose server is certainly gone. The comparison is in ticks against monotonic microseconds, because the
   server and its first pane start in the same second (Pre-flight 5; its own case). Rows 3.12–3.14.
-- `scope-sweep-unmeasurable-carries-the-old-line` — §5.6's "skips that scope for the tick and records nothing" is read
+- **D-4015** `scope-sweep-unmeasurable-carries-the-old-line` — §5.6's "skips that scope for the tick and records nothing" is read
   as: the scope's previous verdict line is carried UNCHANGED (its first-seen clock and `cpu0` kept), a scope never seen
   before gets no line, and the tick goes on to the next scope; dropping the line would restart a six-hour clock on
   every unreadable tick. "Cannot measure" is read wide (Task 3's list): a failed `show`, a foreign or empty
   `ControlGroup`, an unreported CPU or start time, a silent tmux for a scope whose server still runs, a process in
   another network namespace, an unreadable `/proc/net` table, and any process on the box whose stat it cannot read.
   Rows 3.7, 3.8, 3.10, 3.29–3.44, 3.51, 3.53.
-- `scope-sweep-ccds-server-is-the-default-socket` — "ccd's current server" is the server `tmux list-panes -a` answers
+- **D-4016** `scope-sweep-ccds-server-is-the-default-socket` — "ccd's current server" is the server `tmux list-panes -a` answers
   from on the default socket, as ccd's own `tmux` calls address it; a scope of a live server tmux did not name is
   another server's and is dropped, and when tmux answers nothing (no server, a deleted socket, no tmux) a scope whose
   server still runs is UNMEASURABLE — its line carried — while the scopes of a server that no longer runs are judged.
   A wedged server is bounded by the unit's `TimeoutStartSec=45`, the script having no `timeout` (macos-platform's
   scan). Rows 3.9–3.11.
-- `scope-sweep-mcp-servers-are-startup-children` — §5.6 lists "every process older than a day in a live pane scope,
+- **D-4017** `scope-sweep-mcp-servers-are-startup-children` — §5.6 lists "every process older than a day in a live pane scope,
   other than the pane's own process and its Claude Code's MCP servers" without saying how an MCP server is told apart.
   The plan's reading: a direct child of the pane's process started within `SCOPE_SWEEP_MCP_SEC` (120 s) of it, and that
   child's descendants; a background shell started later is listed. The list is the sweep's record's (`old` lines), so
   doctor reads it rather than deriving it. Rows 3.46, 3.47, 5.5.
-- `scope-sweep-children-elsewhere-by-cgroup-procs` — §5.6's "no process is the parent of one in another cgroup" is
+- **D-4018** `scope-sweep-children-elsewhere-by-cgroup-procs` — §5.6's "no process is the parent of one in another cgroup" is
   decided by the scope's own `cgroup.procs` against every process on the box: a child of one of its processes that it
   does not hold is elsewhere (a per-child cgroup-path comparison can never differ for a child it holds, which a first
   draft's row proved green). Rows 3.27, 3.28.
