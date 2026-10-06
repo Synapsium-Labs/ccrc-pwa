@@ -371,9 +371,9 @@ Refusing keeps one rule at one rung instead of a conditional two places must agr
 2. Everything else uncommitted — tracked modifications (an edit git was told not to look at, under
    skip-worktree or assume-unchanged, included), a staged version that differs from both HEAD and the disk,
    and non-secret untracked files — becomes one WIP commit. It is built with `git commit-tree` in a scratch
-   copy of the tree's own index, so the user's index file is never written, and its parents are the ones
-   `git commit` would give it: HEAD, then each `MERGE_HEAD` line while a merge is in progress, and last,
-   only when the staged version differs from both HEAD's tree and the WIP's, a commit of that staged index.
+   copy of the tree's own index, so the user's index file is never written, and its parents are HEAD and
+   each `MERGE_HEAD` line, where `git commit` would put them, and last, only when the staged version
+   differs from both HEAD's tree and the WIP's, a commit of that staged index.
    **It moves no branch and no HEAD** (wave 3's `wip-moves-no-ref`, D-3365): it is kept by its id in the
    attic (step 3), so whichever branch the tree has checked out is never written, and the tombstone's `tip`
    is the branch's own tip, never the WIP. Each same-repository nested checkout gets its own WIP commit the
