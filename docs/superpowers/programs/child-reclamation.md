@@ -44,6 +44,23 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 00:48 — finding 3608 (Task 7) ruled D: a named residual, carried to wave 6.**
+  - **The finding.** Task 7 is built as the plan prescribes and passed its per-task review. ccd purges the
+    registry row a few milliseconds before it journals `done reclaim`, and the journal mirror runs on its own
+    5 s clock (`LC_SWEEP_MS`), which the 2 s tick never awaits. So the vanish re-read usually lands before the
+    mirror holds `done`. R21 then falls through to the row rule, the row is absent, and the chip reads null. The
+    row also stays openable until the next mount. The reviewer estimates this at about 80%; nobody has measured
+    it. Before Task 7, the same row showed a stale `pending` until the next mount.
+  - **The ruling (answer mail 3609), D.**
+    - Build none of A, B or C:
+      - A, awaiting the mirror for a vanished marked child before the fleet frame: it changes the order of the
+        2 s tick, the pre-flight never reviewed it, and it lies in WL 3b's lane.
+      - B, an "under way" word for an absent row behind an `intent`: it amends R21, and it would stick forever
+        when ccd dies between `_reg_purge` and `_lc_done`.
+      - C, follow-up re-reads on later frames: a retry cadence the no-polling rule never covered.
+    - The effect is staleness until the next mount, the class the plan already accepts for pending → refused.
+    - The worker names `vanish-reread-races-mirror` in the wave-done and in one sentence of the PR body. It gets
+      no D number, because it is not a departure.
 - **2026-10-05 18:47 — #282 merged, and wave 5 dispatched as run 260 to `ccrc-pwa-quiet-meadow`.**
   - **The docs PR.** The required checks passed on `e453ef1b`. Main had moved by #240, #280, #281 and #250, none of
     which touches these files, and the merge was clean. #282 merged as `6f6923cd`, and the four docs files on main
@@ -1217,6 +1234,11 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 - **Wave 6 inherits (moved from wave 5 by R38), from the row-placement review (2026-10-01):** recovery for gone-directory alternate rows. An
   alternate row whose path is gone holds every other child at `unmeasured`, and two vanished or interrupted children
   hold each other; the recovery must prove the gone path was ccd's own worktree without consulting process state.
+- **Wave 6 inherits (finding 3608, ruled 2026-10-06 00:48): `vanish-reread-races-mirror`.** Wave 5's vanish re-read
+  usually lands before the journal mirror holds the `done reclaim`, so the row shows no chip and stays openable
+  until the next mount. Wave 6's pre-flight picks the fix. The candidates are A, the tick awaiting the mirror for
+  a vanished marked child before it emits the fleet frame (only after WL 3b's tick changes land), or a change to
+  ccd's ordering. R21's fall-through stands until then.
 - **After wave 6 (R38), a path-identity follow-up programme:** a re-pointed alias and a bind-mount spelling resolve
   `complete` and outside although a session may sit inside the child; device/inode ancestry is the measured
   direction, and the window between `_ws_reclaim_owned` and the tail's `git worktree remove` rides with it.
