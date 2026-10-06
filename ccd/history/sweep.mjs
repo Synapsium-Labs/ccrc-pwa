@@ -2063,9 +2063,10 @@ function tickStmts(db) {
       WHERE f.source_key = '' AND f.status = 'live' AND f.size > f.offset ORDER BY p.path`),
     // Examination is proof the file is there: a gone row it finds again is live (Task 19's markGoneIfPathless).
     examined: db.prepare("UPDATE ingest_files SET size = ?, mtime_ns = ?, eof_ms = coalesce(?, eof_ms), status = 'live' WHERE file_id = ?"),
-    behindStats: db.prepare(`SELECT count(*) AS files, coalesce(sum(f.size - f.offset), 0) AS bytes FROM ingest_files f
-      WHERE f.source_key = '' AND f.status = 'live' AND f.size > f.offset
-        AND EXISTS (SELECT 1 FROM file_paths p WHERE p.file_id = f.file_id)`),
+    // behindStats' rows: one per (live short row, path), for behindStats to filter by rostered home and count by file_id.
+    behindRows: db.prepare(`SELECT f.file_id AS fileId, f.size - f.offset AS gap, p.path AS path FROM ingest_files f
+      JOIN file_paths p ON p.file_id = f.file_id
+      WHERE f.source_key = '' AND f.status = 'live' AND f.size > f.offset`),
     tickIns: db.prepare('INSERT INTO ticks (ts_ms, lag_ms, bytes, files_behind, bytes_behind) VALUES (?, ?, ?, ?, ?)'),
     factless: db.prepare(`SELECT e.cc_session_uuid AS uuid, min(p.path) AS path FROM epochs e
       JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid AND t.agent_id = ''
@@ -2245,11 +2246,30 @@ export function backfillEpochFacts(db, ctx) {
   }
 }
 
+/** Files and bytes behind, counted the way behindFiles selects them: a live row short of its measured
+ *  size with at least one path under a rostered home's `projects/`, each row once however many paths
+ *  name it. A row whose every path sits under a home that has left the roster is never read again (not
+ *  by hint, scan or behindFiles), so counting it would hold files_behind above 0, freeze
+ *  `last_zero_behind_ms` and fail doctor's lag for good (D-4309, slug history-behind-rostered-homes).
+ *  No homes at all is an unreadable roster, not an empty one: nothing then says a path is un-rostered,
+ *  so every path counts and the count is never reassuringly 0. */
+export function behindStats(db, homes) {
+  const gaps = new Map();
+  for (const r of tickStmts(db).behindRows.all()) {
+    if (homes.length > 0 && !homes.some((h) => r.path.startsWith(`${h}/projects/`))) continue;
+    gaps.set(r.fileId, r.gap);
+  }
+  let bytes = 0;
+  for (const g of gaps.values()) bytes += g;
+  return { files: gaps.size, bytes };
+}
+
 /** The tick's `ticks` row and its journal `tick` record (§9.2 step 6; W1-b, doctor's catching-up; slug
  *  history-event-tables-v1, D-4213).
  *  `ing` is ingestTick's answer, or null when a cap or floor pause skipped ingest; the lag is then
  *  unmeasured (NULL), never a reassuring 0. Files and bytes behind count live rows that a path
- *  still names, short of their last examined size (examinedSize): bytes a later tick can read.
+ *  still names under a rostered home (behindStats), short of their last examined size (examinedSize):
+ *  bytes a later tick can read.
  *  meta `last_zero_behind_ms` is the newest tick with none behind,
  *  and it is status's lag (task 27). A failed journal append is counted, never thrown: the tick
  *  record is a copy of this row, not the source of anything. */
@@ -2257,7 +2277,7 @@ export function recordTick(db, ctx, ing) {
   const t = tickStmts(db);
   const lagMs = ing === null ? null : lagOfTick({ tickStartMs: ctx.nowMs, newEntries: ing.newEntries, minNewTsMs: ing.minNewTsMs });
   withTx(db, 'NORMAL', () => {
-    const behind = t.behindStats.get();
+    const behind = behindStats(db, ctx.homes);
     t.tickIns.run(ctx.nowMs, lagMs, ing === null ? 0 : ing.bytes, behind.files, behind.bytes);
     if (behind.files === 0) setMeta(db, 'last_zero_behind_ms', String(ctx.nowMs));
   });

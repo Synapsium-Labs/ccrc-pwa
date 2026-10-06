@@ -1215,6 +1215,30 @@ describe('history ingest: budget, backlog and the ticks row (plan task 20)', () 
     } finally { db.close(); }
   });
 
+  it('behind counts only what a later tick can read: a copy whose home left the roster is not behind, and an unreadable roster (no homes) is not a reassuring zero (D-4309)', async () => {
+    const box = IX.newBox('ccrc-hist-behind-unrostered-');
+    IX.plantCopy(box.homes[0]!, IX.U, backlog(4));
+    const { db, ids } = await IX.openFixtureStore(box);
+    const lastZero = (): string | undefined => (db.prepare("SELECT v FROM meta WHERE k = 'last_zero_behind_ms'").get() as { v: string } | undefined)?.v;
+    const lastRow = (): { n: number; b: number } =>
+      db.prepare('SELECT files_behind AS n, bytes_behind AS b FROM ticks ORDER BY tick_id DESC LIMIT 1').get() as { n: number; b: number };
+    try {
+      const t0 = IX.tsMs(0) + 60_000;
+      expect(await tickBehind(db, box, ids, t0, { maxBytes: 1, chunkBytes: 64 })).toBe(1);   // CONTROL: rostered, one line read, behind
+      const bytesBehind = lastRow().b;
+      expect(bytesBehind).toBeGreaterThan(0);
+      expect(lastZero()).toBeUndefined();
+      // No homes: the roster could not be read, so nothing says the path is un-rostered. Still behind, lag not advanced.
+      S.recordTick(db, S.makeIngestCtx(box.home, [], t0 + 60_000, ids), null);
+      expect(lastRow()).toEqual({ n: 1, b: bytesBehind });
+      expect(lastZero()).toBeUndefined();
+      // The only path sits under a home the roster no longer lists: never read again, so not behind for good.
+      S.recordTick(db, S.makeIngestCtx(box.home, [box.homes[1]!], t0 + 120_000, ids), null);
+      expect(lastRow()).toEqual({ n: 0, b: 0 });
+      expect(lastZero()).toBe(String(t0 + 120_000));
+    } finally { db.close(); }
+  });
+
   it('DM20 (cursor clause): two hardlinked paths of one transcript in two homes bind one row, and the cursor advances once', async () => {
     const box = IX.newBox('ccrc-hist-dm20c-');
     const text = IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), IX.user(IX.uuidN(2), IX.uuidN(1), 'two', 2)]);
