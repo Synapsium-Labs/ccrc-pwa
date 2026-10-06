@@ -1483,3 +1483,28 @@ Code citations are to `77c11245`. They are hints, so locate code by content.
   - **`expoAI-assistant-calm-mesa`** (branch proven absent; HEAD and every reflog commit on `origin/main`; clean
     tree) reclaims on its own once wave 6's gone-branch pin is live. Until then the operator may recreate the branch
     at HEAD to reclaim it sooner.
+
+## 13. Rulings, 2026-10-06 (wave 5's fix round 1) — binding; they AMEND sections 1–12
+
+- **R60 — `child-birth-unplaced` is a doubt word (fix round 1's F11, number 3941).** This amends R41's class table.
+  - The kept class loses `child-birth-unplaced`, and the doubt class gains it.
+  - Its sentence reads like the other doubt words: the sweep reads it again on its next pass. It does not end
+    "ccrc never reclaims it on its own", and it writes no `child reclaim kept` feed row.
+  - The reason is R40's own list: "an unplaceable birth" is doubt there, and each judging pass places the birth
+    afresh, so the word can end with no person acting.
+  - The spec's §5.9 lists it with the doubt words from wave 5's PR on.
+- **R61 — `kept-word-ends-on-late-birth` is a stated residual (number 3944).** It is display-only and gates nothing.
+  - **The window.** A slug is recycled, and its new `create` is not placed yet: either it is not ingested, or its
+    `at` is ahead of the server's clock. Meanwhile the new marker's minting run is already past `minting-run-open`.
+    A judging pass then reads the older generation's birth (`childReclaimBornAt` reads `create` events only). It
+    can answer `minting-run-postdates-child`, or, negligibly, `coordinating`.
+  - **What that costs.** The chip reads `refused` with a kept sentence, one `child reclaim kept` feed row is
+    written, and the banner lists the child. Once the new birth is placed, the same child can turn eligible and is
+    reclaimed, so "ccrc never reclaims it on its own" was false for it. The eventual reclaim is correct. In normal
+    operation the window lasts seconds.
+  - **What stands.** The kept sentences and the spec's §5.9 ending stand unchanged; this is not reworded away.
+  - **The closure goes to wave 7's pre-flight,** beside R57's recycled-slug proof. The direction:
+    - The birth reader treats the last placed `create` as unplaced when a placed removal of the same id follows it.
+      That makes the answer doubt (R60).
+    - It never compares the birth with the minting run's dispatch. That comparison would fold every truly
+      postdating run into doubt and empty `minting-run-postdates-child` of its meaning.

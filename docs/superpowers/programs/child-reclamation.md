@@ -46,6 +46,20 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 12:39 — `kept-word-ends-on-late-birth` is a stated residual, number 3944 (mail 3695, ruled in 3696).**
+  - **The finding.** quiet-meadow found it during fix round 1 while making F11 true. A recycled slug's new `create`
+    may not be placed yet. If its minting run is already past `minting-run-open`, a pass judges the new marker against
+    the older birth (`childReclaimBornAt` reads `create` events only). It can then answer
+    `minting-run-postdates-child`, a kept word, for a child that turns eligible seconds later.
+  - **What it affects.** Display only, and the eventual reclaim is correct.
+  - **Ruling: option A.** Number 3944 is defined in the wave-5 plan, and no code or ruled sentence changes.
+    - B is rejected: it would weaken a promise that is true everywhere else.
+    - C as worded is rejected: comparing the birth with the run's dispatch would fold every true postdating run into
+      doubt.
+  - **What carries forward.** The closure goes to wave 7's pre-flight: the last placed create counts as unplaced
+      when a placed removal follows it.
+  - **The contract.** Contract §13 is appended. R60 moves `child-birth-unplaced` to doubt, amending R41's table
+    (F11, number 3941). R61 records the residual. 3945 stays in reserve.
 - **2026-10-06 12:31 — a macOS red is ours, intermittent, and carried to wave 7's pre-flight (mail 3691, answered in 3692).**
   - **The red.** In full CI run 37456924516 (PR #295, not ours), test-macos 2/4 (job 112246816971) failed wave 4's
     case "reclaims through a SYMBOLIC ref and a stale empty `.lock`". The reclaim completed, but the purge answered
@@ -1558,6 +1572,7 @@ Then dispatch one fresh child:
 **Wave 7** (the collector verb, R57) and **wave 8** (its lane, R58) are new runs, each opened before the previous
 wave's run closes, each with its own block, plan and pre-flight. Wave 7 inherits: a kept clips leaf with no collector;
 whole-second `btime`; the recycled-slug quarantine proof; the witness writer's temp-file residue; the intermittent
-macOS `purge-refused` in the symbolic-ref reflogs case (decision 12:31). Wave 8 waits for
+macOS `purge-refused` in the symbolic-ref reflogs case (decision 12:31); the closure of `kept-word-ends-on-late-birth`
+(R61, decision 12:39). Wave 8 waits for
 workspace-lifecycle wave 3b and for the fleet's `ccd caps` to advertise wave 7's token. The path-identity follow-up
 programme comes after wave 8.
