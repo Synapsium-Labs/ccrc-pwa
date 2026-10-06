@@ -44,6 +44,44 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 08:49 — wave 6's pre-flight done. Rulings R48–R59 are drafted as contract §12; the plan is
+  drafting.**
+  - **The pre-flight.** Six read-only Opus scouts (workflow `wf_9703ecf7-bc3`) read `77c11245`, #290 and the live box.
+    The evidence is in `.superpowers/sdd/ccr15-evidence-archive/wave6-preflight/`.
+  - **R38's first measurement.** Wave 3's tail removed `~/.cc-tmp/ccrc-pwa-swift-hollow` while the killed pane's
+    processes still ran with `TMPDIR` set to it. One of them recreated it 3.7 s after `reclaim done`, at
+    22:12:10.735 on 2026-10-04; the pane's scope ended 2 ms later. The tail asks only whether tmux still has the
+    session. The leaf's 2026-10-05 birth time comes from the operator's rsync onto the new disk.
+  - **The live population.**
+    - 26 child leaves, about 27 GiB, every one marked and rowed;
+    - one orphan leaf (swift-hollow, empty);
+    - 18 foreign directories and 105 loose files, about 6.66 GiB.
+  - **The rulings, in summary** (contract §12 lands with the plan in the docs PR):
+    - **R48:** R38's wave 6 becomes three waves.
+      - Wave 6 (run 291) repairs `ws-reclaim` and lays the collector's groundwork.
+      - Wave 7 adds the collector verb, inert and AGENT-FIRST.
+      - Wave 8 adds its server lane, after WL 3b and after the fleet advertises wave 7's token.
+      The reason is one destructive subject per SAFETY panel, given an unsplit 8k to 12k insertions.
+    - **R49:** ONE removal helper with a three-way answer. Its in-use probe reads `TMPDIR` in environ, cwd and fds.
+      The tail waits at most 15 s after the kill, keeps a temp root that is still in use, and runs its destructive
+      git calls contained.
+    - **R50:** the positive witness `$REG/tmproots/<id>`, written by `_child_tmpdir`'s rc-0 arm. It binds
+      `dev`/`ino`/`btime` and dies only after the leaf is proven absent.
+    - **R51:** F6 unsets `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG` and `GIT_CONFIG_COUNT` above the count, and the
+      harness strip goes in a new `gitEnvStrip.ts`.
+    - **R52:** `probe-unmeasured` is journaled `failed`, an R5′ exception. The pre-lock dies tied to an id are
+      journaled `refused` and classified.
+    - **R53:** `git show-ref --exists` three-way at every arm, with an explicit `branch=absent` in the token.
+    - **R54:** a `recorded` placement basis, with a git-record arm, a breadcrumb arm and the moved-tree check.
+    - **R55:** the vanish re-read gets a second trigger, the mirror's newest reclaim-`done` `at` carried on the
+      `coord` frame.
+    - **R56:** #290 lands first, then the overlap rule and the citation tax.
+    - **R57 and R58:** the outlines of waves 7 and 8.
+    - **R59:** the live residue stays the operator's.
+  - **Overlap.** The proposal went to `ccrc-pwa-quiet-river` (mail 3657): the shared tail and containment, a new
+    probe, `_child_tmpdir`, and a new strip file beside run 274's `ccdWsHelpers.ts`.
+  - **The plan.** Seven Opus drafters, one per task group (workflow `wf_0103bba8-870`). After them come an attack
+    review, a docs PR (plan, contract §12, spec §5.5 step 3 and §8), and dispatch after #290 merges.
 - **2026-10-06 08:31 — wave 6's run opened (run 291, `planned`) before run 260 closes; its block allocated.**
   - Run 291 is opened as wave 6 of 6 under the programme's own title. Run 260 keeps `waveOf` 5 (R38).
   - **Block:** 24 numbers, written singly: 4126, 4127, 4128, 4129, 4130, 4131, 4132, 4133, 4134, 4135, 4136, 4137,
