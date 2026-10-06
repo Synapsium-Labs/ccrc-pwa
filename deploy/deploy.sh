@@ -983,7 +983,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # which ATTACHES to a live session rather than spawning a second one.
   # try-restart touches only units that are already active (a fresh box with
   # zero sessions is a no-op), and each restarted supervisor is then held to
-  # the same standard as the agent itself: verify-service.sh, per unit —
+  # verify-service.sh, per unit, as the agent is (a session also passes stopped on purpose, D-3947) —
   # after the agent chain, so a broken agent fails the deploy before any
   # supervisor is touched.
   # The export is NOT decorative: this is a FRESH ssh session (AGENT_CMD's own

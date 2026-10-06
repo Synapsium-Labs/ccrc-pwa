@@ -172,7 +172,7 @@ CCRC_DOCTOR_CHECKS=(
   jq
   jq_regex
   python3
-  flock
+  flock timeout   # one line, as `models codex` below; _check_timeout is at the END of this file
   gh_auth
   git_email
   linger
@@ -521,7 +521,7 @@ _check_jq_regex() {
   return 1
 }
 _check_python3() {
-  _dr_need_bin python3 "ccd's session hook and its registry locking are python3 (ccd:1043-1110)" \
+  _dr_need_bin python3 "~/.local/bin/ccd is a standard-library python3 launcher in front of the bash body (D-3696), and the graph engine's venv is built with it" \
     "install it: sudo apt install python3"
 }
 _check_flock() {
@@ -6626,4 +6626,51 @@ _dr_cx_sessions() {   # <id> — sets DRX_LIVE, DRX_UNASKED, DRX_UNASKED_SID
     esac
   done
   return 0
+}
+
+# ── timeout: the bound the session hook and the status line put on tmux ──
+# APPENDED HERE, not beside `_check_flock` where it belongs by kind: lines in
+# this file are cited by number from `ccrc` and the tests, and a function
+# inserted mid-file would move every one of them. Its table entry shares
+# `flock`'s line for the same reason.
+#
+# WHY IT IS A CHECK AT ALL. `ccd/session-hook.sh` and `ccd/statusline-command.sh`
+# each ask tmux one question — which session is this pane in — bounded by
+# `timeout` or, failing that, `gtimeout` (Homebrew's coreutils spelling; macOS
+# ships no `timeout`). With NEITHER on PATH each SKIPS the question rather
+# than asking it unbounded (the comments above each file's tmux call argue
+# why), and the consequence is total and silent: the hook exits before every
+# arm — no hookstate, no turn marker, no search-gate or worker-merge deny, no
+# SessionStart card — and the status line writes no usage sidecar, for every
+# session on the box, with no error anywhere. `ccd`
+# and `ccrc` are not the subject — their `_plat_timeout` carries a bash
+# fallback; these two files are installed alone and carry only its selection
+# arm. FAIL, because nothing on the box reports the loss otherwise and the
+# board falls back to reading panes.
+#
+# SKIP on a `server`-role box: it hosts no sessions, so neither file runs there
+# (the D-3111 reading every per-session check here takes). The name found is
+# the name PASSed, `timeout` before `gtimeout` — the two files' own order.
+#
+# THE CHECK NAME IS QUOTED in the verdict calls below, unlike every other
+# check's: `macos-platform.test.ts` scans this file for a bare GNU `timeout`
+# call, and `_dr_pass timeout "…"` reads as one. `"timeout"` does not.
+_check_timeout() {
+  local _srv_role="" bin p
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip "timeout" "this box records CCRC_ROLE=server, so it hosts no sessions and neither the session hook nor the status line runs here"
+    return 3
+  fi
+  for bin in timeout gtimeout; do
+    p="$(command -v "$bin" 2>/dev/null)"
+    if [ -n "$p" ]; then
+      _dr_pass "timeout" "$bin at $p"
+      return 0
+    fi
+  done
+  local remedy="install GNU coreutils: sudo apt install coreutils"
+  [ "${CCD_OS:-linux}" = darwin ] && remedy="install GNU coreutils: brew install coreutils (it installs timeout as gtimeout)"
+  _dr_fail "timeout" "neither timeout nor gtimeout is on PATH — the session hook and the status line bound their one tmux call with one of them and, with neither, skip it: the hook then does nothing at all (no hookstate, no turn marker, no search-gate or worker-merge deny, no SessionStart card) and the status line writes no usage sidecar, for every session on this box, silently" \
+    "$remedy"
 }

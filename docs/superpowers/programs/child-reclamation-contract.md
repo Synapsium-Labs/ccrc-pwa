@@ -602,3 +602,604 @@ and A1 to A15. These four rulings are the cross-wave ones.
   close reclaims a marked child that is any run's `claimedBy`, in any state. This covers a programme's heir, through the
   reclaim door, and a nested coordinator. The operator's rule 4 reserves manual cleanup for coordinator workspaces, and
   coordinator clause 3 says such a workspace is cleaned up by a human. The close answers `has-coordinated`.
+
+## 11. Rulings, 2026-10-05 (wave 5's pre-flight) — binding; they AMEND sections 1–10
+
+Wave 5's pre-flight read its plan against `334fb722a` (`origin/main` `c41bf8c5` plus the coordinator's ledger
+commits), and read the live fleet read-only. Three Opus lenses raised 50 findings. Five design agents turned the
+ledger's "Wave 5 inherits" items into options. Four composers wrote the plan's amendments from the coordinator's
+rulings. Three Opus agents attacked them, and the coordinator then ruled on the attacks and on the composers' open
+issues, and last on the items the section editors raised against one another's text. The rulings below are all of
+that, folded together: where a later ruling overlaps an earlier one, this section states the later one. The wave-5
+plan's appended "Pre-dispatch amendments (coordinator, 2026-10-05)" carry the detail, including the new Tasks 0b and
+0c. The plan carries no rulings subsection of its own: this section is the binding ruling text, appended to this
+contract in the same docs PR as those amendments, and they are written to it and cite it as contract §11.
+
+When the coordinator accepted a departure a composer took, it became ruling text in this section. It is named here by
+its slug in backticks and takes no number. A composer's rejection stands unless a ruling here says otherwise. Code
+citations are to `334fb722a`. They are hints, so locate code by content.
+
+- **R38 — the wave is split. Wave 5 carries the chip and the server-side inherits; a new wave 6 carries R36 and the
+  ccd-side inherits.**
+  - **Wave 5 (run 260) is server and PWA only.** It changes no file under `ccd/`, `agent/` or `deploy/`. It needs no
+    capability token, adds no `coord.db` migration and owes no re-stamp. It pays S6-R11 for every cited file it
+    inserts into. Its scope:
+    - the run chip (§5, as R41 to R45 amend it);
+    - R39: new Task 0b, server only, done first, BLOCKING;
+    - R40: new Task 0c, after 0b, BLOCKING;
+    - R41 to R46.
+
+    A task that finds it needs a `ccd/`, `agent/` or `deploy/` edit stops and names the departure. It never builds it.
+  - **Wave 6** is a new run, opened before run 260 closes, with its own block allocated at its own open.
+    - It is AGENT-FIRST.
+    - It has its own pre-flight. That pre-flight first measures why `~/.cc-tmp/ccrc-pwa-swift-hollow` reappeared after
+      wave 3's tail removed it.
+    - It is dispatched only after workspace-lifecycle wave 3 (run 245) merges. It runs under an overlap rule agreed
+      with that programme's coordinator, which names `ccd/ccd`'s RECLAIM region and `server/src/watch.ts`'s sweep
+      pass.
+    - Its SAFETY and SECURITY lenses are mandatory.
+  - **Wave 6's scope.** This ruling sets it in outline; wave 6's own pre-flight rules the detail.
+    - **R36's collector.** R25's conditions are necessary, not sufficient. "No registry row names it" is never enough,
+      because 16 directories (6.5 GB) that sessions wrote straight into `~/.cc-tmp` meet R25 as written. A leaf is a
+      candidate only when a positive witness names it, written when ccd made the leaf a child's temp root. The
+      collector also needs:
+      - an in-use refusal;
+      - an idle floor;
+      - ONE removal helper, extracted from wave 3's tail as workspace-lifecycle wave 3 leaves it.
+    - **Dot-locks.** `.reap-<id>.lock`, `.<id>.compactions.lock` and `.prstate-<id>.lock` are not rows, and they are
+      never unlinked. The collector's "no entry" test is `_ws_slug_free` (`ccd/ccd:6526`), not R36's "no `$REG` entry
+      of any suffix".
+    - **F6 (review 254).** `_ws_reclaim_contained` drops git's whole `--local-env-vars` list, and the reclaim suites
+      gain a harness strip. Until that lands, F6 is a residual that wave 5's SAFETY lens measures (R47).
+    - **Journaling.** ccd journals the audit-time `unmeasured`, `probe-unmeasured` and the pre-lock dies. Each new
+      token is classified as R43 requires.
+    - **The gone-branch pin.** A proven-absent registry branch pins HEAD and every per-worktree reflog commit, deletes
+      no branch, and the reclaim proceeds. Spec §5.5 step 3's branch-tip pin then reads "the branch tip when the
+      branch exists".
+    - **The gone-directory alternate-row recovery,** for the hold that R31's stated cost describes.
+  - Wave 6 ships a second destructive verb, so §3's "the only destructive wave" no longer holds.
+  - No collector in this programme touches the foreign entries in `~/.cc-tmp`. That live residue, and a child whose
+    registry branch is already gone, are offered to the operator and never acted on by a session.
+  - The path-identity follow-up (R31's re-pointed-alias and bind-mount residuals) opens after wave 6, not after wave
+    5.
+  - **Run 260 keeps `waveOf` 5.** Hold accounting renders each run's own `wave` and `waveOf` (wave 4's R-1), so
+    nothing is mis-accounted when a sixth wave opens. Nothing edits a run's `waveOf`.
+  - **Why:**
+    - With R36 and every inherit amended in, the wave was estimated above waves 3 and 4: at least 12k insertions over
+      at least 80 files.
+    - One destructive subject per SAFETY panel keeps each panel narrow.
+    - The chip is read-only and need not wait on R36's fix rounds.
+    - R36's measured backlog is one empty directory.
+    - R36's tail helper must come from workspace-lifecycle wave 3's refactor of the same region.
+
+- **R39 — the wait on presence is bounded by a lease, on clocks that cannot hide a hole, starting from the answer's
+  arrival (`bound-three-figures`; G3, G4 and G1 of review 258).** This is new Task 0b. It amends wave 4's R-4 and
+  R-5a, wave 4's A9 item 1 and its lens-1 sentence, §8 R4′, and §4's in-memory state.
+  - **Notation.**
+    - C = `CHILD_RECLAIM_DEFER_CEILING_MS`: 900 000 ms (`server/src/childReclaimSweep.ts:27`).
+    - S = the largest monotonic spacing between consecutive passes. The lane's interval is `CHILD_RECLAIM_SWEEP_MS`,
+      60 000 ms (`server/src/watch.ts:147`). Measured on 2026-10-05, passes were at most 79.6 s apart, with a median
+      of 68.2 s.
+    - G = `CHILD_RECLAIM_PRESENCE_GAP_PASSES` × `CHILD_RECLAIM_SWEEP_MS` = 150 000 ms. The multiplier stays 2.5
+      (`childReclaimSweep.ts:397`).
+    - STALL = `CHILD_RECLAIM_STALL_MS`: 480 000 ms (`watch.ts:165`).
+    - L_p and L_r are the largest latencies of a presence answer and of a licensed reclaim.
+    - A presence-held child is one whose entry has `presenceHeldSince !== null`: an unlicensed presence answer put it
+      in line.
+  - **The lease.** L1's `childReclaimAskOrder(due): { order; holderId }` replaces L4's inline fairness sort
+    (`due.sort((a, b) => {`, `watch.ts:3386`).
+    - The holder is the due presence-held child that is least by (`presenceHeldSince`, `firstEligibleAt`, id).
+    - The holder comes first. It is asked on EVERY pass it is due, never on every other pass.
+    - Every other due child follows in R-5a's fairness order.
+    - `order` is a permutation of `due`. Asks per pass, `CHILD_RECLAIM_MAX_IN_FLIGHT`, the backoff and every pacing
+      rule are unchanged or only slower.
+    - Only the order reads `presenceHeldSince`. The licence never does.
+    - **Accepted cost.** While a lease runs, no other due child is asked, so a backlog drain pauses for at most one
+      lease per presence-held child. That reshapes R-5a's fairness for one bounded tenure. An unbounded wedge is what
+      spec §5.7 forbids.
+  - **The tenure, decided in L1.** Each request carries `asHolder`.
+    - A holder forfeits the lease (`presenceHeldSince` → `null`) when its unlicensed presence answer does not continue
+      its episode. It re-joins at the back on its next unlicensed presence answer.
+    - A waiting member asked as a non-holder keeps its place.
+    - **Rejections (`reject-written-as-failed`).** EVERY rejected request is written as a failed attempt, whether or
+      not it was a holder's. That ends the episode, forfeits a holder's lease and backs off. At HEAD the rejection arm
+      writes nothing (`watch.ts:3442-3444`).
+    - **Stalls (`stall-forfeit-by-late-answer`).** A stalled request sent as holder forfeits on its late answer, which
+      arrives at least STALL after the request, and STALL > G. Nothing is written at stall time, because such a write
+      would make the identity guard drop that late answer.
+    - A waiting member that becomes holder after a T2 breach may forfeit on its first answer as holder. That costs
+      liveness only. No grace is added.
+  - **The bound. These are three separate figures; never combine them into one.**
+    - From the lease's first ASK, the holder is licensed within C + S + L_p. That is about 16.5 minutes at the
+      2026-10-05 spacing (S = 80 s, L_p = 10 s).
+    - One lease, from its first ask to the next lease's first ask, takes at most C + 2S + L_p + L_r. That is about
+      18.6 minutes at the same spacing (L_r = 45 s).
+    - The k-th presence-held child in the ask order is licensed within k × (C + 2G + STALL) = k × 28 minutes. That is
+      the worst case under T1 to T4.
+  - **The hypotheses the bound rests on:**
+    - T1: S + L_p ≤ G (90 s live);
+    - T2: a presence answer settles before the next pass;
+    - T3: no wall-clock step or suspend happens during the lease;
+    - T4: the lane's memory is not cleared, and each presence-held child stays eligible and answers presence while
+      unlicensed.
+  - **When the hypotheses fail.**
+    - A violation of T1 to T4 forfeits the lease, restarts one episode and fails closed.
+    - A persistent breach licenses no presence-held child, exactly as for a lone child today. Every other due child is
+      still asked: each presence-held child ahead of it costs at most two asks.
+    - A cleared memory restarts every lease and every episode. Memory is cleared by a raised pause, a missing
+      capability, a pass-level fail-shut or a restart.
+  - **The clocks (G4).**
+    - The lane reads `ChildReclaimLaneNow { monoMs; wallMs }` once per pass. It reads it again once per settled
+      request, as the first statement of the success callback and of the rejection callback.
+    - `monoMs` is `Deps.monotonicMs?.()`, defaulting to `performance.now()`.
+    - Every decision clock is monotonic:
+      - the throttle, whose never-run sentinel is `null`;
+      - the in-flight stall clock;
+      - the entry's `firstEligibleAt`, `lastAskedAt`, `lastFailedAt`, `refusedAt`, `firstPresenceDeferredAt`,
+        `lastPresenceDeferredAt` and `presenceHeldSince`.
+    - The wall clock has exactly three uses:
+      - comparisons with another process's stamps (the generation picks, and the attention list's and the verdict's
+        `nowMs`);
+      - `firstDeferredAt`, which is display only (`deferredSinceMs` and the chip's `at`; a test pins it as an epoch);
+      - `lastPresenceWallAt`.
+    - The gap and freshness predicates read the LARGER of the monotonic and wall-clock differences, inclusive at G.
+      The ceiling's span reads the monotonic clock alone.
+    - So a suspend reads as a hole, and so does a backward wall step. A forward step over-reads, which restarts the
+      episode.
+    - This also closes two forward-step hazards that are live at HEAD: a pass run early, and the one slot freed while
+      a reclaim is still in flight.
+  - **The arrival (G1).**
+    - The episode starts at the ARRIVAL of its first presence answer. The arrival is read in that answer's own
+      callback, never taken from the pass's clock.
+    - Continuity is measured from the new answer's arrival back to the previous answer's REQUEST.
+    - Freshness at the ask is still measured from the request.
+    - This reverses the ledger's 2026-10-04 G1 convention for the episode start. In simulation, the request-stamped
+      rule licensed 72 times on observation chains shorter than 900 s.
+  - **One entry describes one workspace generation (`entry-generation-reset`).** The entry carries `bornAt`: R-5d's
+    birth, on ccd's clock, compared for equality only. When `bornAt` differs from the child's current birth, the entry
+    is replaced by a first sighting. So a slug recycled between two passes never inherits the old workspace's
+    sighting, episode or lease. A null birth never matches.
+  - **Interfaces.** These live in L1 (`server/src/childReclaimSweep.ts`), which still imports L0 only.
+    - `ChildReclaimLaneNow`, and `ChildReclaimAsk { at: ChildReclaimLaneNow; licensed: boolean; asHolder: boolean }`.
+    - `ChildReclaimSweepEntry` gains `lastPresenceWallAt`, `presenceHeldSince` and `bornAt`, each `number | null`.
+    - `childReclaimFirstSighting(monoMs, bornAt)` and `childReclaimSameGeneration(entry, bornAt)`.
+    - `childReclaimNextEntry(entry, outcome, ask, answered, passIntervalMs)`.
+    - `childReclaimDeferExpired(entry, now: ChildReclaimLaneNow, passIntervalMs)`.
+    - `childReclaimDue(entry, monoMs, passIntervalMs)`.
+    - `childReclaimAskOrder`.
+
+    Nothing is persisted or sent: there is no wire field and no schema change. This ruling leaves
+    `ChildReclaimRequest` unchanged, and `deferredSinceMs` stays wall-clock epoch ms (§7 R4).
+  - **Nothing that guards deletion moves.**
+    - `childReclaimSweepVerdict` keeps every conjunct.
+    - The executor's presence skip under `deferExpired` (`server/src/coord/childReclaim.ts:801`) is unchanged, and so
+      are ccd's rungs 5 and 6.
+    - A licensed request's answer, rejection or stall ends or restarts its episode, so the rule of one licence per
+      episode stands.
+    - No ask is licensed that a lone child would not get.
+  - **Required red.** Without the forfeit, a seeded case in which one breaching holder starves a reclaimable child
+    goes red.
+  - **The record.** These wave-4 texts are corrected in an append-only `## Post-merge corrections (wave 5,
+    2026-10-05)` block at the foot of the wave-4 plan:
+    - A9 item 1's backlog sentence, its "Why 2.5", and its lane case that pinned no licence for three due children;
+    - lens 1's "presence can defer but never reset the ceiling";
+    - the lane's single clock;
+    - the lane's rejection arm.
+
+    The block occurs exactly once, and the lines above it stand as the record. No chip sentence promises a bound the
+    lane does not keep: the sweep-deferred sentence names the condition that ends the wait, never a time by which it
+    ends.
+
+- **R40 — "has coordinated" is fenced to the workspace's current generation (`release-job-fourth-consumer`,
+  `unreadable-stamp-folds-unplaced`).** This is new Task 0c. It amends R37, R34's fifth condition, wave 4's R-1
+  condition 4 and R-5c, and wave 4's A9 item 3, A10 item 4 and A11.
+  - **The rule.** R37's "a workspace that has ever coordinated a run" means this incarnation of the slug. A marked
+    child has coordinated when its id has a claim on record and any one of these holds:
+    1. A run naming it `claimedBy` is not terminal (`open`). `'unknown'` counts as open, by `programOpenRunCount`'s
+       predicate (`server/src/coord/store.ts:3606`).
+    2. A terminal claiming run, or a displacement row naming it, carries no readable instant (`unplaced`). That is a
+       NULL `closedAt`, or a `closedAt` or displacement `at` that does not read as a positive safe integer, a value
+       stored as REAL or TEXT among them, since the schema is not STRICT (`unreadable-stamp-folds-unplaced`: R40's
+       "anything unplaceable keeps the child", applied to the stamps).
+    3. Its current-generation birth cannot be placed, or either side of the comparison is not a number.
+    4. The claim's instant is at or after the birth minus `CHILD_BIRTH_SKEW_MS` (120 000 ms,
+       `server/src/coord/childSpent.ts:58`).
+  - **A claim's instant** is the greatest of:
+    - each terminal `claimedBy` run's `closedAt`;
+    - the `at` of every `reclaim:` displacement row that names the id as the displaced side. Its claim ended there,
+      and no run names it any more;
+    - the `at` of every such row that names it as the heir. Its claim on already-terminal runs began there:
+      `reclaimProgram` rewrites terminal runs too (`UPDATE runs SET claimedBy = ?`, `store.ts:1839`), and the reclaim
+      door requires no open run.
+
+    Without the heir side, an heir that took a finished programme's chair after its own birth would read as never
+    having coordinated.
+  - **The birth** is R-5d's: the opening `create` of the current generation,
+    `childReclaimGeneration(coord.lifecycleCreatesFor(id), nowMs)[0]?.at ?? null`, with wall-clock `nowMs`. It reads
+    ccd's `at` alone (R22′), never R35's `sessionBornAt`. One helper, `childReclaimBornAt`, places it for three
+    readers: R-5d's fence, this fence, and R39's `bornAt`.
+  - **ONE fence, ONE store read, ONE birth placement.**
+    - **L1.** `ChildReclaimCoordinatorClaim = number | 'open' | 'unplaced'`, and `childReclaimCoordinated(claim,
+      bornAt: () => number | null, skewMs)`. It reads the birth only for a numeric claim, and it is written so that a
+      NaN keeps the child.
+    - **The store.** `childReclaimCoordinatorClaims(): ReadonlyMap<string, ChildReclaimCoordinatorClaim>` replaces
+      `childReclaimCoordinatorIds()` (`store.ts:3291`), which is deleted. The fold puts `'open'` over everything, then
+      `'unplaced'` over any number, then takes the greatest number. An unparseable displacement row throws.
+    - **`server/src/coord/childReclaim.ts`.** `childReclaimBornAt(coord, sessionId, nowMs)` and
+      `childReclaimHasCoordinated(coord, sessionId, nowMs)`.
+  - **Four consumers decide through the one fence.** Each keeps its existing unreadable answer.
+    - close's `has-coordinated` (`server/src/coord/close.ts:694`);
+    - the executor's step 2a (`childReclaim.ts:767`);
+    - the hold-release job's step 5 (`childReclaim.ts:1103`);
+    - the sweep's `coordinating` (`watch.ts:3113`). The sweep hands the raw claim to its verdict as
+      `coordinatorClaim`.
+
+    No unfenced read decides anything.
+  - **R34's fifth condition** now reads "the child has not coordinated in its current generation". Its other four
+    conditions are unchanged, and R35 is consumed unchanged. Left unfenced, the release job would answer `changed` on
+    every pass for a recycled-slug child under a retired programme hold, while the sweep answered `hold-retired`. That
+    would be a new silent wedge.
+  - **Why it is safe.**
+    - ccd journals a `done create` only at the end of `cmd_ws_add` (`_lc_done create "$id"`, `ccd/ccd:7467`).
+    - `cmd_ws_add` refuses `slug in use` while any registry file for the id exists (`_ws_slug_free`, `ccd/ccd:6526`),
+      or while the slug's git state is taken.
+    - So a newer `create` proves that the earlier workspace, the coordinator's, was removed by `ws-reap`, `ws-rm` or a
+      reclaim before this generation was created, and that no session can still be inside it.
+    - Rule 4 reserves manual cleanup for coordinator workspaces, and a recycled slug's later child is not one.
+    - This incarnation's own coordination always counts, whether as coordinator, nested coordinator or heir.
+    - The population is still marker-only.
+  - **Doubt keeps the child:** an open claim of any generation, an unplaced claim, an unplaceable birth, a non-number,
+    or an unreadable store.
+  - **Residuals, accepted.**
+    - **Clock offsets (fail-open, in the direction R-5d's fence already names).** The fence compares ccd's clock with
+      the server's. An offset beyond `CHILD_BIRTH_SKEW_MS` at those instants can make the child reclaimable: a claim
+      this generation ended within that excess after its birth reads as before the birth. The offset may be a
+      sustained skew between the boxes, or a step of either box's wall clock.
+    - **An heir chosen before its own `ws-add` journaled `create done`** has the same exposure, because the door reads
+      `const now = Date.now();` before its awaits (`server/src/coord/reclaim.ts:298`).
+    - **Mirror lag fails closed.**
+    - **A lost `coord.db`** loses the claim history, and every minting run with it, so the sweep answers
+      `minting-run-absent`.
+    - **The window between step 2a and ccd's lock** is R37's, unchanged.
+  - **The fence is a SAFETY-lens item.** Required red: drop the time bound, and a recycled-slug case whose CURRENT
+    generation coordinated is reclaimed.
+  - **The live case.** `ccrc-pwa-brisk-meadow`'s August incarnation coordinated program-leverage runs 10, 12, 14, 16,
+    18, 19, 28 and 30. All are `done`, and the last closed on 2026-09-04. Its current generation was born on
+    2026-09-26, for review 171. It becomes eligible once the server box converges.
+
+- **R41 — the sweep's verdicts are visible.** It amends R5's "from the mirror ONLY", §4's `ChildReclaimAttention` and
+  its derivation, §8 R20's failing arm, §5's chip inputs and mapping, §7 R7's switch row, §8 R16′ and §8 R21.
+  - **The record.** On every judging pass, the sweep's per-child loop records each marked child's last verdict. That
+    verdict is L1's `ChildReclaimSweepVerdict`, itself unedited.
+    - The accessor is `FleetWatcher.currentChildReclaimVerdicts(): ReadonlyMap<string, ChildReclaimSweepVerdict> |
+      null`, beside `currentChildReclaimDefers()` (`watch.ts:1521`).
+    - `null` means no judging pass has run since this process started. An id absent from the map was not judged.
+    - A pass that judged nothing reduces the map to its kept verdicts (`childReclaimKeptVerdicts`, L1) and drops the
+      transient ones. Those passes are the ones where the defers are cleared: the switch raised, a reclaim capability
+      missing, or the mirror or coordination read failed.
+    - "No verdict yet" never reads as eligible.
+    - The accessor costs no I/O. No decision reads it: not the verdict's inputs, the due set, the lease or the
+      executor. The verdicts reach only the run chip and the attention list: its kept arm, and the failing items it
+      withholds for a held child. The list reaches the executor only as R44's `feedQuiet`, which decides nothing but
+      whether a feed row repeats, and a child is dispatched only on an eligible verdict in the same pass, so no kept
+      or held filter changes what a dispatched child's request carries.
+    - The lane logs `coordinating` once per child per process, as it logs an absence.
+  - **The classes, in ONE table.** `CHILD_RECLAIM_SKIP` (`server/src/childReclaimSweep.ts`) is total over
+    `ChildReclaimSweepSkip` and classes each word exactly once:
+    - **kept** (L0: `ChildReclaimKeptWord`, `CHILD_RECLAIM_KEPT_WORDS`, `isChildReclaimKeptWord`): `coordinating` (as
+      R40 fences it), `minting-run-absent`, `minting-run-postdates-child`, `child-birth-unplaced`,
+      `reviewed-run-absent`, `not-a-workspace`;
+    - **doubt:** `marker-unreadable`, `identity-unmeasured`, `hold-unmeasured`, `minting-run-unreadable`,
+      `reviewed-run-unreadable`, `siblings-unreadable`;
+    - **held:** `held`, meaning a hand hold, or an accounted programme hold while its programme has an open run;
+    - **ordinary,** with no sentence: `not-a-child`, `hold-retired`, `terminal-refusal`, `minting-run-open`,
+      `dispatch-in-flight`, `review-report-live`, `siblings-open`.
+  - **Sentences.**
+    - A kept sentence says why the child is kept, and ends "ccrc never reclaims it on its own; a person removes it
+      once nothing still needs it."
+    - The two minting-run words carry "After a rebuild, workers may still be running in these." directly before that
+      ending (`rebuild-sentence-before-the-ending`). So a lost database never tells the operator to remove workspaces
+      whose workers are still running.
+    - `not-a-workspace` (a project's main checkout carrying a child marker) ends instead "ccrc never reclaims it on
+      its own; a person removes the marker, never the checkout." (`not-a-workspace-removes-the-marker`).
+    - The `coordinating` sentence never says "ever".
+    - A doubt sentence says the sweep reads it again on its next pass.
+  - **The chip (§5).** There is no sixth word: the five stand. The chip's inputs gain:
+    - the sweep's last verdict (`unjudged`, `eligible`, or a skip word);
+    - whether the sweep's entry is in a run of failed attempts;
+    - when this generation's unbroken run of failure lines began, set only once that run has lasted the ceiling;
+    - the composer's wall clock.
+
+    "The gate" is §5's: the registry carries a mark naming this run, and no open run names the session. The first
+    match wins:
+    1. The run is not terminal, or has no session: `null`.
+    2. Settled answers:
+       - a latest `done` is `reclaimed`;
+       - a token of kind `gone` is `null`;
+       - a terminal refusal is `refused`, with ccd's sentence. It outranks every verdict.
+    3. The verdict, where the gate holds:
+       - kept is `refused`, with its sentence and a null `at`. The switch NEVER replaces it, a pause included;
+       - doubt or held is `deferred`, with its sentence. The switch turns it to `paused`.
+    4. The remaining events:
+       - a failure line (R43) is `deferred`. Once the failure run has lasted the ceiling, it carries the attention
+         list's own sentence and `at`;
+       - `refused` with no token is `refused`;
+       - the `paused` token is `paused`;
+       - a retryable token is `deferred`;
+       - an unclassified token is `refused`;
+       - `intent` or `unknown` falls through to the row rule.
+    5. The row rule, where the gate holds:
+       - a review child whose reviewed run is not terminal in the list is `pending`, with the review-kept sentence;
+       - a sweep failure run is `deferred`;
+       - a sweep defer is `deferred`, at `firstDeferredAt`;
+       - an eligible or ordinary verdict is `pending`;
+       - no verdict yet is `pending`, with its own not-judged sentence and never the eligible one.
+
+    So a done reclaim, a gone answer and a terminal refusal outrank the verdict, and a non-ordinary verdict (kept,
+    doubt or held) outranks every other event: a failure line, a retryable refusal, a refusal with no token, the
+    `paused` token and an unclassified token (`verdict-outranks-retry-events`). Otherwise R21's latest-event rule
+    stands. R16′'s review rows answer only after any non-ordinary verdict has answered. A review child that the sweep
+    answers `reviewed-run-absent` reads `refused`, with that sentence. No row promises a retry that a hold or a kept
+    word prevents, and the fleet-paused sentence no longer promises a reclaim.
+  - **The attention list's shape (§4).** `ChildReclaimAttention` (L0) replaces the interface at `shared/api.ts:3793`
+    with four arms:
+    - `terminal` and `failing`, each `{ sessionId; runId: number | null; token; sentence; at }`;
+    - `kept`, `{ sessionId; runId: number; word: ChildReclaimKeptWord; sentence }`;
+    - `kept-many`, `{ word; members: readonly { sessionId; runId }[]; sentence }`.
+
+    `kind` is additive. An item from an older server has no `kind` and reads as before. An older PWA drops a
+    `kept-many` item, which is the accepted cost.
+  - **R5 now reads:**
+    - The attention list is derived from durable state (the lifecycle mirror, the registry listing and `coord.db`) by
+      the sweep's own passes.
+    - Every pass derives the terminal and failing arms from the mirror.
+    - Every pass that JUDGED derives the kept arm. A judging pass is one where the switch is down, both reclaim
+      capabilities are advertised, and the mirror and coordination reads succeeded. A pass that judged nothing keeps
+      the kept arm and never erases it.
+    - No executor answer and no sweep entry is ever an input.
+    - A restart rebuilds the mirror arms on its first pass, and the kept arm on its first judging pass.
+    - The list has one write site.
+  - **The attention list's rules.**
+    - Kept words reach the list from the first judging pass that answers one, with one emit per change (the coord
+      frame's byte-equality guard). Doubt words and `held` never reach it.
+    - **One item per child.** A kept item REPLACES a failing item for the same child
+      (`kept-replaces-failing-on-the-banner`). A terminal item stands, and that child gets no kept item.
+    - **A held child.** A child whose last measured verdict is `held` is not listed by the failing arm.
+      - With no verdict recorded (a restart, or a pause), wave 4's failing arm stands unchanged.
+      - Under a pause, the banner's paused state governs.
+      - Only `held` is withheld. A child whose last verdict is a doubt word keeps wave 4's failing item: a failed read
+        never lists a child by itself, and never takes one off the list.
+      - Pinned: a held child whose mirror failure run is past the ceiling is absent from the banner, and a doubt
+        child's failing item stands. Dropping the held check reds the first case; widening it to every non-ordinary
+        verdict reds the second.
+    - **The collapse.** More than five children (`CHILD_RECLAIM_KEPT_MANY_OVER = 5`) answering one kept word collapse
+      into one `kept-many` line. Its sentence states the count, and the line lists the children. That is the shape a
+      lost or rebuilt coordination database produces. The PWA counts nothing itself.
+    - **The feed row.** Each kept word writes one `child reclaim kept` feed row per child, per word, per process. It
+      is recorded, never pushed. A child that leaves the registry listing is forgotten, so a recycled id is a new
+      child.
+
+- **R42 — the ten close words are not stored.**
+  - They are close-time snapshots (`ChildReclaimNotWhy`, `server/src/coord/childReclaim.ts:307`). They ride only
+    `CloseOutcome.childReclaimWhy`, and they go stale.
+  - No schema, migration, run event or wire field carries them. A run-row column is rejected.
+  - The chip reads current state instead:
+    - `has-coordinated` reaches it as the sweep's `coordinating`, through R40's fence. That verdict is kept across a
+      pause;
+    - the four `not-finished` words reach it as `held` while the programme has an open run, then as `hold-retired`,
+      then as eligible;
+    - `siblings-unreadable` reaches it as the doubt verdict;
+    - `not-a-child`, `marker-unreadable` and `siblings-open` are handled by the gate;
+    - `review-report-live` reaches it through the review rows.
+  - No `pwa/src` file reads `childReclaimWhy`.
+  - This answers the question wave 4's R-2 left open. It also replaces R32's "the sweep and wave 5's chip act on them
+    differently": the chip acts on the sweep's verdict, never on a close word.
+
+- **R43 — the server reads `flock-unavailable` and `lock-unopenable` as failures, never as `refused`.** Since wave 3,
+  ccd journals both as `reclaim` `refused`: `_lc_refuse reclaim "$id" flock-unavailable` at `ccd/ccd:28166`, and
+  `lock-unopenable` at `:28169`. The executor reads the same die as a `failed` `pre-lock-die`
+  (`server/src/coord/childReclaim.ts:664`), which the sweep retries.
+  - **Exactly these two tokens, by name.** Both of these live in `server/src/childReclaimSweep.ts`:
+    - `CHILD_RECLAIM_PRE_LOCK_TOKEN`;
+    - ONE predicate, `childReclaimFailureLine(e)`: `failed`, or `refused` with one of the two tokens.
+
+    The attention list's failing arm and the chip both read the predicate. On the chip such a line reads `deferred`;
+    on the attention list it is listed by the failing arm after 15 minutes of unbroken failure. Any other journal-only
+    token stays unclassified and reads `refused` through the fallback.
+  - **Unchanged.** `CHILD_RECLAIM_TOKEN_KIND`, `childReclaimTokenKind` and `childReclaimTerminalRefusal` are
+    byte-identical to `main`. Neither token is terminal, and retry pacing is unchanged.
+  - **Disjoint vocabularies.** The ws-reclaim tokens and the journal-only tokens stay disjoint, pinned by a case.
+  - **No quoted literal.** No quoted pre-lock token literal is written under `server/src/coord`; code there reads the
+    tokens by property. This keeps `mail-routes.test.ts`'s kebab scanner green.
+  - **Wave 6's tokens.** A token that wave 6 starts journaling under `reclaim` is never inherited unclassified. Wave 6
+    classifies each new one, in `CHILD_RECLAIM_PRE_LOCK_TOKEN` or in the kind map, when it adds it.
+  - **Wave 4's R-11 is corrected.** These two tokens do reach the mirror. The failures the mirror never sees are
+    `probe-unmeasured`, the audit-time `unmeasured`, and the pre-lock argv and `python3` dies. Journaling them is wave
+    6's work (R38); until then, the chip's sweep-failing row shows them.
+  - It amends §7 R7's unclassified-token row for these two tokens, and §8 R20's failure run, which now includes their
+    `refused` lines.
+
+- **R44 — feed rows are de-duplicated.** It amends §3's "exactly ONE explicit feed row" per outcome, and spec §5.9's
+  "one feed row per outcome".
+  - **The rules.**
+    - A non-presence deferral writes one feed row per episode, not one per pass.
+    - A child the attention list already lists as failing writes no further row for a failure with the same word. A
+      row is written again when the word changes, or when the child leaves the list.
+    - A ceiling-expired attempt always writes, because its row states the wait it ended (§7 R4).
+    - Presence deferrals keep today's shape: the lease holder writes one row per pass for up to about 15 minutes, as a
+      lone child does.
+    - Each kept word's single row is R41's.
+  - **Interfaces.**
+    - `ChildReclaimSweepEntry.lastDeferWhy: string | null`.
+    - L1: `ChildReclaimFeedQuiet { deferWhy: string | null; failureToken: string | null }`, and
+      `childReclaimFeedQuiet(entry, listed, sessionId)`.
+    - `ChildReclaimRequest.feedQuiet: ChildReclaimFeedQuiet`. Close sends `CHILD_RECLAIM_FEED_QUIET_NONE`.
+    - The `failed` arm of `ChildReclaimOutcome` gains `token: string | null`: ccd's failure word, or the pre-lock
+      die's token.
+    - `childReclaimFeedSkips(outcome, req)`.
+  - **Scope.** The skip decides only whether the executor's own feed row repeats what the feed already says. It
+    changes no outcome, dispatch or pacing, and only `childReclaimFeedQuiet` reads `lastDeferWhy`. The de-duplication
+    memory is the process's, so after a restart a row is written once more.
+
+- **R45 — the abandon confirmation tells the truth.**
+  - **One reader.** The ONE PWA reader of `FleetSession.child` is `childMarkOf` (`pwa/src/fleet/runWords.ts`). It
+    gives four answers and never folds them:
+    - `child`, with its `runId`;
+    - `none`, which includes an absent key from a server that predates markers;
+    - `unreadable`;
+    - `unrecognised`.
+
+    The fleet line's `childOfRunLabel` and the abandon sheet's `abandonChildOf` both project it, so no null is
+    overloaded. Pinned: `pwa/src` reads `FleetSession.child` once, and no `pwa/src` file reads the close response's
+    `childReclaimWhy`.
+  - **The sheet's four branches.**
+    - **No session:** decided on `run.sessionId` alone.
+    - **Child:** any child mark, including a child handed over from an earlier wave.
+    - **Not a child:** this sentence is byte-identical to `main`'s (`pwa/src/fleet/AbandonSheet.tsx:217`).
+    - **Unknown:** no fleet row, or an unreadable or unrecognised mark. This branch hedges both ways.
+
+    Every child sentence, and the label's child title, says what happens WHEN nothing keeps the child ("the server
+    reclaims it when nothing keeps it"). None says that it will happen.
+  - **The route comment.** The comment above the abandon route (`server/src/coord/routes.ts:1604-1606`, "a release
+    destroys nothing, so the two-tap confirm in the sheet is the whole ceremony here") is corrected in the same PR as
+    the copy, by the wave's prose task (R46), and so is the sheet's header (`pwa/src/fleet/AbandonSheet.tsx:20-23`),
+    which says the same. The ungated abandon door (D-282) can reach a destructive act. That is inside the single-user
+    trust model: it is recorded, not changed.
+  - **The token pin.** §5's "the PWA maps no token" pin extends to wave 4's two PWA reclaim files and to the abandon
+    sheet. Each file is addressed by path.
+  - It amends §5's last bullet: the label reads `FleetSession.child` through `childMarkOf`.
+
+- **R46 — prose, and where the spec text lands.**
+  - **G2 (review 258).** `childReclaimReleaseAnswered`'s docstring (`server/src/watch.ts`) and wave 4's A10 both give
+    a false reason for keeping the release mark. Both get the small-items design's replacement: keeping the mark is a
+    choice, not a safety need. A10's own lines are not edited. The correction is a bullet appended under the wave-4
+    plan's one `## Post-merge corrections (wave 5, 2026-10-05)` heading (`g2-a10-corrected-by-append`).
+  - **G5 (review 258).** `ChildReclaimRequest`'s "on the same clock" is replaced: `deferExpired` is the sweep's
+    verdict on a different clock, the current presence episode. The replacement also names the entry's lifetime
+    (`g5-names-the-entry-lifetime`). `deferredSinceMs` is the first deferral of any kind since the sweep's in-memory
+    entry for this child was last created. Every reset of that entry, a restart included, starts it again. This
+    corrects §7 R4's "the first deferral the sweep saw for this child", and bounds §8 R4′'s "the first deferral of ANY
+    kind" by the entry's lifetime.
+  - Neither text carries a content pin (wave 1's ruling).
+  - **Spec text, in the coordinator's docs commit (`wave3-spec-debt-to-coordinator-docs`).** Code comments cite plain
+    "spec §5.7" or "spec §5.9" (R23). Every spec text for R39 to R44 lands in the coordinator's docs commit. That
+    commit is in the same docs PR as this section and the plan's amendments, and it merges before dispatch. Its
+    placement is final. It carries:
+    - §5.7: the lease and R39's three figures; R40's "has coordinated", fenced to the current generation; the
+      paragraph on a programme's own hold ending with the programme (R34); and the sentences on R-5d's birth fence;
+    - §5.9: the visible verdicts, the kept arm, R44's feed rows, and R43's two journal-only lock tokens read as
+      failures;
+    - wave 3's leftover spec debt: R30's placement in §5.3, with the qualifier it needs in §4's "Spent" ("dated to it
+      (§5.3)") and in §5.7's "spent by a PR dated to it (§5.3)"; and T1's counts in §6 and Appendix A. Appendix A's
+      other values stay the `46aca9fe` snapshot, with a one-line note that waves 1 to 4 moved other counts and where
+      to measure them;
+    - §8: its wave table gains a wave-6 row, wave 5's row reads "server + pwa", and the paragraph under the table no
+      longer calls wave 3 the only wave that destroys anything;
+    - the corrections to §1's "One qualification" and to §7 item 2: each says that the automatic path keeps, for a
+      person, the children the sweep's kept verdicts name (R41), a child under a terminal refusal (`branch-elsewhere`
+      included), and, until wave 6, a child that fails past the ceiling for good (such as `pin-failed` with its branch
+      gone);
+    - the status line, whose "five waves" becomes six.
+  - **Wave 5's prose task carries only these:**
+    - G2 and G5;
+    - the comment fixes next to the abandon copy: the abandon route's docstring (`server/src/coord/routes.ts`) and the
+      sheet's header (`pwa/src/fleet/AbandonSheet.tsx`);
+    - README's "The same row lists…" sentence, which gains the children the sweep keeps for a person (R41),
+      re-measured by the README citation cases;
+    - wave 3's spec debt for `wip-moves-no-ref` (D-3365): spec §5.5 steps 2 and 3, rewritten to what shipped;
+    - in spec §1, the operator's ruled row kept verbatim, with one line added under the table, after a blank line: "As
+      built (§5.5 step 2; wave 3's `wip-moves-no-ref`), the WIP commit is pinned in the attic and moves no branch."
+
+- **R47 — process.**
+  - **Deploy.** The path is: merge; then the prerelease (`release-main.yml` runs on every push to `main` with no paths
+    filter, `.github/workflows/release-main.yml:19-21`); then the fleet's own updater, fleet box first and then the
+    server box. The wave is live once the server box converges.
+    - Nobody runs `ccrc rollout` or `ccrc update` except with `--check`, which only measures (operator ruling,
+      2026-09-30).
+    - The coordinator observes convergence read-only, and never acks an update row.
+    - Every hand rollout step in the plan's Task 10, Global Constraints and PR body is removed.
+
+    This replaces §6's "the deploy order for the wave".
+  - **Deploy class:** server + PWA. There is no ccd re-stamp, no capability token and no `coord.db` migration.
+  - **Review lenses.** The SAFETY lens is mandatory (`opus`, `xhigh`), because R39 and R40 change when a destructive
+    ask is licensed and which children may be taken. The plan's "this wave destroys nothing, so the safety lens does
+    not apply" is struck. The SAFETY lens:
+    - re-derives R39's three figures under T1 to T4;
+    - runs its own seeded interleavings, with persistent slow answers and rejected licensed requests among the modes,
+      and shows that a persistent breach cannot hold the lease for ever;
+    - re-derives R40's fence and its four consumers against `cmd_ws_add`'s refusals;
+    - confirms that R41's accessor reaches no decision;
+    - reads the abandon copy against every condition that keeps a child.
+
+    The plan's lenses run in addition to the held-out panel.
+  - **F6's residual (`git-env-whole-local-list`).** Only the FLEET box runs ccd's reclaim: in remote mode the server
+    box runs no ccd.
+    - So the SAFETY lens measures, read-only and printing names only, that neither the fleet box's ccrc units nor its
+      user manager carry any of git's local environment variables. The list comes from `git rev-parse
+      --local-env-vars`, which is a superset of `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG`.
+    - A non-empty or unmeasured answer stops the landing until the coordinator rules.
+    - The server box is out of scope for this measurement, not unmeasured.
+  - **Route.** `{class:'opus', effort:'xhigh', subagent:'sonnet', workflow:'on', compact:'40'}`. This is the bulk
+    row's workflow mode at `xhigh`, not ultracode, because the amended wave exceeds one context. Before dispatch, the
+    coordinator records in the ledger the change from wave 4's route (Opus·high, workflows off) and this reason.
+    Routing floors:
+    - every implementation task: `sonnet`, `high` at least;
+    - Task 0b: `opus`, `xhigh`;
+    - Task 0c and the verdict accessor: `opus`, `high` or higher;
+    - the entry-condition preflight: may run on `haiku`.
+
+    No subagent inherits the main loop's model. This amends §6's "implementation `sonnet`".
+  - **Delivery.** The docs PR that carries this section and the plan's amendments merges before dispatch, and the
+    child is minted from `main` after it, so the worker reads the plan at `main`. The worker brief and the review
+    brief still each carry `homeRepoRoot`, `planRepoPath` and `planSha`. `planSha` is that docs PR's squash-merge
+    commit on `main`.
+    - Beside `planSha`, each brief tells its reader to stop and read the blob if their copy of the plan lacks the
+      amendments section.
+    - That section's first line repeats this only as a backstop.
+    - Before dispatch, the coordinator takes `planSha` from that merge commit, and proves that the blob resolves and
+      carries the amendments section.
+  - **The operator is told before landing (`r40-pre-landing-class-list`).** R39 and R40 widen what reaches the
+    destructive path the moment the server box converges, with no capability gate, while F6 waits for wave 6. So,
+    before landing and read-only:
+    - The coordinator re-measures, from the fleet box, which marked children R40 moves. It reads the child markers,
+      the open runs and the closed runs (`ccrc-api runs list`, without and with `--closed 1`), and each claimant's
+      `ccrc-api lifecycle list`. For each claimant it records its current birth, its claim instant and its class:
+      `open`, `unplaced`, birth unplaced, kept, or would move.
+    - A marked child is listed "would move" when at least one run names it `claimedBy`, every such run is terminal,
+      and every `closedAt` falls before its current generation's `create` (from `ccrc-api lifecycle list`) minus
+      `CHILD_BIRTH_SKEW_MS`. A marked child that no run names is not listed, because R40 does not change it; the one
+      exception the API cannot see is the residual below.
+    - The list covers claimants only. Displacement rows cannot be read through the API, and no read of the server's
+      `coord.db` is made, so a child kept today only by a `reclaim:` displacement row naming it on the `from` side is
+      invisible to the list. That is the list's stated residual ("not listed: the API cannot read displacement rows"),
+      and the child is not over-listed.
+    - The coordinator writes one ledger line before landing. It records the list, the widening, F6's residual as
+      measured, and the operator's stop: `reclaim-pause`, on the Runs screen.
+    - The coordinator tells the operator about every child the list marks "would move" other than
+      `ccrc-pwa-brisk-meadow`.
+    - The PR body names `ccrc-pwa-brisk-meadow` and `reclaim-pause`, and asks for no hand rollout.
+  - **Deviations (`defined-d-token-exception`).**
+    - A departure is named by slug in the wave-done mail.
+    - The coordinator numbers each departure from run 260's block and defines it in the plan's `## Deviations found`
+      in the same act. The block is 3926, 3927, 3928, 3929, 3930, 3931, 3932, 3933, 3934, 3935, 3936, 3937, 3938,
+      3939, 3940, 3941, 3942, 3943, 3944 and 3945.
+    - No departure slug accepted in this section takes a number, so the block stays whole for departures found while
+      executing.
+    - Wave 6's block is allocated at wave 6's own open, and is never drawn from this one.
+    - A worker writes no `D-` token for a number that `origin/main` does not define, and none in a commit message. It
+      adds a defined one to a file only where the amendments prescribe it verbatim, and D-282 and D-3365 are the only
+      two. The comments the plan's own Tasks 5 and 6 prescribe repeat D-2545 and D-287, which
+      `server/src/coord/routes.ts` and `pwa/src/screens/RunsScreen.tsx` already carry. No other `D-` token is added by
+      this wave.
+
+    This amends §6's single programme block, and relaxes wave 4's R-12 to that one exception.
+  - **CI.** Selection is `enforce` (`.github/workflows/ci.yml:94`), so the PR's CI arbitrates only its own selection.
+    The worker's FIRST full run in its worktree is the wave-done's `suite:` line. The review brief names the suites to
+    run.
+  - **Overlaps.** Before dispatch, the coordinator reads `GET /api/claims?project=ccrc-pwa`.
+    - On a path another programme holds, edits stay narrow and additive (wave 4's R-13).
+    - `server/src/watch.ts`'s sweep pass is shared with workspace-lifecycle wave 3b's planned lane. The coordinator
+      tells that programme's coordinator before dispatch.
+    - Whichever PR lands second absorbs `main` only when one of worker clause 16's triggers fires, and only with `git
+      merge`: never a rebase, a force-push or `update-branch`. After absorbing, it re-runs the sweep suites and every
+      suite the merge touched, and re-pays S6-R11 wherever the merge moved a cited file.
