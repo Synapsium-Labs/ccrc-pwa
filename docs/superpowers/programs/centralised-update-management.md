@@ -2022,6 +2022,34 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **The rounds:** as for wave 11. One bar-class finding gets one fix round, then a scoped review. A coverage or prose
     finding is fixed in that round if one runs, otherwise it becomes residue for wave 13.
 
+- **2026-10-06 06:31 UTC: review 286 ruled. Wave 12 meets the bar; #291 merges once `server 4/5` re-runs green.**
+  - **The review:** run by `ccrc-pwa-warm-ridge` (workflow `wf_4dd7d251-566`, 40 agents, 0 errors). It ran the held-out
+    panel and both wave lenses. No lens went unverified and none was unexamined. 2 findings were confirmed and 9
+    refuted. Its report was copied into the coordinator's worktree under `.superpowers/w12-evidence/` before the
+    close.
+    - **What the lenses measured:**
+      - W17e reds 2 of 65 under the filter's mutant, causally.
+      - With `preRestart` absent, all 60 other boxes write listings byte-identical to `d2bac7ae`'s.
+      - S10 is `cmp`-equal to v0.0.91's script.
+      - A `makeBox` that ignores `verifySrc` reds R2 and Q1–Q10.
+      - The re-raise pin was 8 of 8 green with no mutation, at load 31–45, and an `exit 130` mutant reds its five shell
+        arms 3 of 3.
+      - README's sentence is true of every arm.
+      - Every amendment is dated, and every wave-11 red set is quoted in run 270's wave-done.
+      - Only D-4068 to D-4071 and reserve number 4072 are defined.
+    - **macOS:** D3d passed, D3 was skipped, and no macOS red belongs to the branch.
+  - **Rulings:**
+    - **F1 (CI):** full run 37420910246's `server 4/5` was red with every test passing (8056). The cause was
+      `ccrc-update.test.ts`'s `afterAll(removeTmpFixtures)` timing out at 20 s.
+      - The branch adds no fixture to that file, and the PR run's Linux legs are all green.
+      - **Ruled:** re-run that one job (attempt 2). Merge only when it is green. The timeout is not widened.
+      - The same hook timed out on a shard at `670d25fd` in wave 9, so this is now recurring. It goes to residue as
+        R20.
+    - **F2 (prose):** the plan's "As built" leaves out the worker's two deliberate citation corrections. The shipped
+      citations are the true ones, so this goes to wave 13 as one As-built bullet (R20).
+    - **F3:** the PR body gives the `/files` view beside the plan link only. It is cosmetic, and moot once merged, so
+      no action.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
@@ -2207,6 +2235,13 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   - (c) F2: amend the plan's W20 row to the shipped `toBe(-1)`, with the worker's reason.
   - (d) F3: freeze S10, the script at v0.0.80–v0.0.91, as a fixture, and pin the NEW sweep with it.
   - (e) F4: rename the S0 fixture's prose to "pre-wave-10 (v0.0.79)".
+- **R20 (wave 12, review 286; for wave 13).**
+  - (a) **CI:** `ccrc-update.test.ts`'s file-level `afterAll(removeTmpFixtures)` (`server/test/tmpHelpers.ts`) can
+    exceed vitest's 20 s hook timeout on a CI shard while every test passes. It happened at `670d25fd` (wave 9) and at
+    `7b0a5454` (wave 12). Measure what the hook removes and why it takes longer than 20 s, then make the cleanup cheaper
+    or spread it out. Do not widen the timeout.
+  - (b) **Prose:** wave 12's "As built" section should name the worker's two citation corrections: A9's "(run 270's
+    wave-done, residue item 7)", and A19's T6-RERAISE quote of `_upd_sweep`'s INT-handler comment.
 ## Next-wave brief
 
 **Wave 2 (run 128) — dispatched 2026-09-23.** The brief as sent is the plan's path and sha, tasks 1–15, execution
