@@ -305,6 +305,35 @@ describe('the one Archive — a main checkout', () => {
     expect(b.ccd()).toEqual([]);
   });
 
+  // Review 244, F1: ccd's grep finds no `"status":"<word>"` in a status that is not a string, so `_ws_status` cannot
+  // read it. The parsed value used to be String()-ed first — `["idle"]` stopped the pane as idle (fail OPEN), `true`
+  // read as a busy turn the operator could consent to lose. Both are unmeasured now: the reader keeps strings only.
+  it.each([
+    ['an array holding "idle"', ['idle']],
+    ['a boolean', true],
+  ] as const)('a live file whose `status` is %s is unmeasured: 409 status-unknown, with and without `interrupt`, no verb', async (_why, status) => {
+    const b = await box();
+    seed(b.home, 'claude-a-demo', { workspace: null });
+    const dir = path.join(b.home, '.claude-a', 'sessions');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `${PANE}.json`), JSON.stringify({ pid: PANE, sessionId: 'u', status }));
+    expect((await post(b.app, 'claude-a-demo')).json()).toEqual({ ok: false, error: 'status-unknown' });
+    expect((await post(b.app, 'claude-a-demo', { interrupt: true })).json()).toEqual({ ok: false, error: 'status-unknown' });
+    expect(b.ccd()).toEqual([]);
+  });
+
+  // Review 244, F2, ruled: the config dir is read FIRST for both kinds of row — ccd's `_ws_status` order — so a main
+  // checkout whose registry wrapper the roster no longer knows is unmeasured even when tmux proves its pane GONE. It
+  // fails closed: no verb runs, and "Stop only" (`/stop`, which reads no verdict) remains the way to put it down.
+  it('a GONE main checkout whose wrapper has no config dir is unmeasured: 409 status-unknown, with and without `interrupt`, no verb', async () => {
+    const b = await box({ alive: false });
+    seed(b.home, 'claude-a-demo', { workspace: null });
+    writeFileSync(path.join(b.home, '.cc-sessions', 'claude-a-demo.wrapper'), 'claude-unrostered');
+    expect((await post(b.app, 'claude-a-demo')).json()).toEqual({ ok: false, error: 'status-unknown' });
+    expect((await post(b.app, 'claude-a-demo', { interrupt: true })).json()).toEqual({ ok: false, error: 'status-unknown' });
+    expect(b.ccd()).toEqual([]);
+  });
+
   it('a busy main checkout that coordinates is refused BEFORE its programme is ended — busy is the first check', async () => {
     const b = await box();
     seed(b.home, 'claude-a-demo', { workspace: null });

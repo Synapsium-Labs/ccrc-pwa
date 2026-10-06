@@ -261,6 +261,19 @@ describe('the client stays closed', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('hands the token to curl on stdin, as one `-K -` config line, and on no argv (R16)', () => {
+    // A `-H` value is readable in every process listing on the box for the
+    // life of the call. The behaviour is pinned in ccrc-api.test.ts (a curl
+    // that records its argv and stdin); this pins the one sink in the source,
+    // so a second header site, or the old `-H "x-ccrc-mail-token: $TOKEN"`,
+    // reds here by its line.
+    const code = clientCode();
+    const mentions = code.split('\n').filter((l) => /x-ccrc-mail-token/i.test(l)).map((l) => l.trim());
+    expect(mentions).toEqual([`code=$(printf 'header = "x-ccrc-mail-token: %s"\\n' "$TOKEN" \\`]);
+    expect(code).toContain(`\n    | curl "\${args[@]}" "$url" 2>/dev/null)\n`);
+    expect(code).toMatch(/^\s*local -a args=\(-sS -K - /m);
+  });
+
   it('validates every caller-supplied fragment before it can reach a URL', () => {
     // The id and the query value are the ONLY caller-supplied text that ever
     // lands in a path or a query string, so they are the only places a path

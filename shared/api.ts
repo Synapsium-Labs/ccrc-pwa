@@ -3768,35 +3768,91 @@ export function isMarkerState(v: unknown): v is MarkerState {
   return typeof v === 'string' && (MARKER_STATES as readonly string[]).includes(v);
 }
 
-/** One child the fleet-level attention item reports (child-reclamation spec
- *  §5.9): a child a TERMINAL reclaim refusal left standing, or one whose
- *  reclaim has kept FAILING past the defer ceiling — which is still retried,
- *  backing off in between. A REPORT, never a tap: nothing waits on it, and
- *  ignoring it costs disk rather than correctness. DERIVED on the server from
- *  the lifecycle mirror ALONE (the latest `reclaim` event of any outcome in the
- *  id's current workspace generation is that refusal, or the last of that run
- *  of failures, and the registry row still exists), so a restart does not
- *  lose it.
+/** The sweep's words for a marked child it keeps for a person (child-reclamation
+ *  spec §5.9): standing answers, read from records rather than a failed read, that
+ *  automatic reclamation never acts on while they stand. Spelled ONCE, as the keys
+ *  of a total table, and the runtime list is derived. The SERVER's sweep answers
+ *  them and composes their sentences (`server/src/childReclaimSweep.ts`, which
+ *  says what ends each). The PWA renders sentences and never switches on a word. */
+export type ChildReclaimKeptWord =
+  | 'coordinating' | 'minting-run-absent' | 'minting-run-postdates-child'
+  | 'reviewed-run-absent' | 'not-a-workspace';
+const CHILD_RECLAIM_KEPT_WORD_TABLE: Readonly<Record<ChildReclaimKeptWord, true>> = {
+  coordinating: true, 'minting-run-absent': true, 'minting-run-postdates-child': true,
+  'reviewed-run-absent': true, 'not-a-workspace': true,
+};
+export const CHILD_RECLAIM_KEPT_WORDS: readonly ChildReclaimKeptWord[] =
+  Object.keys(CHILD_RECLAIM_KEPT_WORD_TABLE) as ChildReclaimKeptWord[];
+/** Use THIS, never `.includes(x as ChildReclaimKeptWord)`: `isRunState`'s rule. */
+export function isChildReclaimKeptWord(v: unknown): v is ChildReclaimKeptWord {
+  return typeof v === 'string' && (CHILD_RECLAIM_KEPT_WORDS as readonly string[]).includes(v);
+}
+/** One child inside a collapsed kept line (`kind: 'kept-many'`). */
+export interface ChildReclaimKeptMember { readonly sessionId: string; readonly runId: number }
+
+/** One entry of the fleet-level attention list (child-reclamation spec §5.9):
+ *  a child that automatic reclamation has left standing, or one whose reclaim
+ *  keeps failing. A REPORT, never a tap: nothing waits on it, and ignoring it
+ *  costs disk rather than correctness. There are FOUR arms, told apart by
+ *  `kind`:
+ *
+ *  - `terminal`: a TERMINAL reclaim refusal left the child standing.
+ *  - `failing`: the child's reclaim has kept FAILING past the defer ceiling,
+ *    and is still retried, backing off in between. The run of failures is made
+ *    of `failed` lines, plus `refused` lines whose token is one of the two
+ *    pre-lock tokens (`flock-unavailable`, `lock-unopenable`): those are
+ *    pre-lock dies that the server retries.
+ *  - `kept`: one marked child the sweep keeps on purpose, named by a
+ *    `ChildReclaimKeptWord`.
+ *  - `kept-many`: one collapsed line for many children kept for the same word
+ *    (a lost coordination database keeps every child at once).
+ *
+ *  `terminal` and `failing` are DERIVED from the lifecycle mirror by EVERY
+ *  sweep pass (the latest `reclaim` event of any outcome in the id's current
+ *  workspace generation is that refusal, or the last of that run of failures,
+ *  and the registry row still exists), so a restart does not lose them.
+ *  `kept` and `kept-many` come from the sweep's last JUDGING pass over durable
+ *  state: the registry listing, coord.db and the mirror. They are kept as they
+ *  are, never erased, across a pass that judged nothing.
+ *
+ *  A child has at most one item. A `kept` item replaces a `failing` item for
+ *  the same child. A child whose last judged verdict is `held` has no `failing`
+ *  item; with no verdict recorded (a restart, or a pass that judged nothing)
+ *  the failing arm lists it as before. A `terminal` item stands, and that
+ *  child gets no kept item.
  *
  *  `sentence` is the SERVER's — a refusal's through `wsaudit.ts`'s one lookup,
- *  a failure's from the journal's own word for it — and the PWA renders it and
- *  maps no token itself: several of `ws-reclaim`'s tokens share names with the
- *  audit's, and the two vocabularies are held disjoint server-side. `token` is
- *  the refusal's or the failure's (empty when ccd journaled a failure with
+ *  a failure's from the journal's own word for it, a kept word's from the
+ *  sweep — and the PWA renders it and maps no token or word itself: several of
+ *  `ws-reclaim`'s tokens share names with the audit's, and the two
+ *  vocabularies are held disjoint server-side. On the two mirror arms `token`
+ *  is the refusal's or the failure's (empty when ccd journaled a failure with
  *  none) and rides beside it for a maintainer's grep, never for a renderer's
  *  switch. `runId` is the minting run the registry marker names, or null when
- *  the marker no longer reads as a child. `at` (epoch ms) is since when, on
- *  ccd's clock alone: a refusal's journal line, or the first failure of the
- *  run that ccd placed. A child whose latest line carried no `at` cannot be
- *  placed and is not listed — the mirror's `ingestedAt` is the server's clock
- *  and is never read as an event time (D8, `server/src/coord/schema.ts`). */
-export interface ChildReclaimAttention {
-  readonly sessionId: string;
-  readonly runId: number | null;
-  readonly token: string;
-  readonly sentence: string;
-  readonly at: number;
-}
+ *  the marker no longer reads as a child (a `kept` item's `runId` is never
+ *  null).
+ *
+ *  `at` (epoch ms) exists only on the two mirror arms, and it is ccd's clock
+ *  alone: a refusal's journal line, or the first failure of the run that ccd
+ *  placed. A child whose latest line carried no `at` cannot be placed and is
+ *  not listed — the mirror's `ingestedAt` is the server's clock and is never
+ *  read as an event time (D8, `server/src/coord/schema.ts`). A kept item
+ *  carries no time: its condition is durable and nothing this read holds dates
+ *  it.
+ *
+ *  `kind` is ADDITIVE: an older server's items carry none, and the PWA's one
+ *  reader reads such an item as it always did. A `kept-many` item has no
+ *  `sessionId`, so an older PWA bundle's reader drops it under its own
+ *  malformed-member rule. That is the accepted cost. */
+export type ChildReclaimAttention =
+  | { readonly kind: 'terminal'; readonly sessionId: string; readonly runId: number | null;
+      readonly token: string; readonly sentence: string; readonly at: number }
+  | { readonly kind: 'failing'; readonly sessionId: string; readonly runId: number | null;
+      readonly token: string; readonly sentence: string; readonly at: number }
+  | { readonly kind: 'kept'; readonly sessionId: string; readonly runId: number;
+      readonly word: ChildReclaimKeptWord; readonly sentence: string }
+  | { readonly kind: 'kept-many'; readonly word: ChildReclaimKeptWord;
+      readonly members: readonly ChildReclaimKeptMember[]; readonly sentence: string };
 
 /** The three markers the coordination lane is governed by, read together
  *  because they come from one listing: `coordinator-paused` (spec §4.2 — the
@@ -5733,6 +5789,52 @@ export interface RunHealth {
   readonly coordKickoffPendingSince: number | null;
 }
 
+/* ── child-workspace reclamation: the closed run's chip (wave 5, spec §5.9) ── */
+
+/**
+ * What became of a CHILD workspace once its run closed, in the five words spec
+ * §5.9 names. THE SERVER CHOOSES THE WORD AND COMPOSES THE SENTENCE
+ * (`childReclaimStatus`, `server/src/coord/childReclaim.ts`). The PWA renders
+ * both and maps no ws-reclaim refusal token itself. Several of that verb's
+ * tokens share names with the audit's, whose sentences are server-only, and the
+ * PWA-reachable journal words (`LC_REFUSAL_WORD`) are held DISJOINT from them by
+ * a red suite. So the phone can say the server's sentence only by being
+ * handed it.
+ *
+ * Spelled ONCE, as the keys of a total table. `CHILD_RECLAIM_WORDS` is derived
+ * (`single-definition`'s doctrine), so adding a word here is a compile error at
+ * every total `Record<ChildReclaimWord, …>` the PWA keeps.
+ */
+export type ChildReclaimWord = 'reclaimed' | 'pending' | 'deferred' | 'paused' | 'refused';
+const CHILD_RECLAIM_WORD_TABLE: Readonly<Record<ChildReclaimWord, true>> = {
+  reclaimed: true, pending: true, deferred: true, paused: true, refused: true,
+};
+export const CHILD_RECLAIM_WORDS: readonly ChildReclaimWord[] =
+  Object.keys(CHILD_RECLAIM_WORD_TABLE) as ChildReclaimWord[];
+/** Use THIS, never `CHILD_RECLAIM_WORDS.includes(x as ChildReclaimWord)` — `isRunState`'s rule. */
+export function isChildReclaimWord(v: unknown): v is ChildReclaimWord {
+  return typeof v === 'string' && (CHILD_RECLAIM_WORDS as readonly string[]).includes(v);
+}
+
+/**
+ * One closed run's chip. `sentence` is the server's, verbatim. It is null only
+ * where the server had none to give. `at` is epoch ms, and its source depends
+ * on the word:
+ *   • a word read off the lifecycle mirror takes the journal event's own `at`
+ *     (ccd's clock), and is null when the line carried none. A failure run
+ *     past the ceiling takes the `at` of the run's first placed line instead;
+ *   • a defer the sweep is holding takes the sweep's FIRST deferral of any kind
+ *     (the server's clock), never the presence-only clock of the defer ceiling;
+ *   • every other word has `at: null`.
+ * It is NEVER `ingestedAt`, which is the mirror's own clock and never an event
+ * time (D8).
+ */
+export interface ChildReclaimStatus {
+  readonly word: ChildReclaimWord;
+  readonly sentence: string | null;
+  readonly at: number | null;
+}
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
@@ -5865,6 +5967,28 @@ export interface RunSummary {
    * tolerance guarantee. No JSX reads a member directly.
    */
   health: RunHealth;
+
+  /**
+   * Child-reclamation wave 5 (spec §5.9): what became of this run's CHILD
+   * workspace. `null` means there is nothing to say: the run is still open, its
+   * workspace is not a child, or nothing about it is known yet.
+   *
+   * COMPOSED BY `GET /api/runs` AND NOWHERE ELSE. The store answers `null` for
+   * every row (`hydrateRun`), because the answer needs the registry's child
+   * marker and the sweep's in-memory defer, and the store sees neither. Every
+   * OTHER emitter of a `RunSummary` carries only runs for which the derivation's
+   * own answer is `null` too (`childReclaimStatus`'s first rule: a non-terminal
+   * run says nothing). Those emitters are the live `{type:'runs'}` frame and its
+   * cold-start copy, both active-only by construction, and the advance route's
+   * echo, which never reaches a terminal state (`ADVANCE_TARGETS`). So that
+   * `null` is the same answer, not a second meaning.
+   *
+   * ADDITIVE; `FLEET_PROTO` is not bumped. REQUIRED here for `health`'s reason
+   * (`hydrateRun` returns a literal). OPTIONAL at the PWA's one reader,
+   * `childReclaimChip` (`pwa/src/fleet/runWords.ts`), because an older server
+   * omits it and a `RunSummary` is cast, never revived.
+   */
+  childReclaim: ChildReclaimStatus | null;
 }
 
 /** Speed and quality per run (routing spec 2026-09-14 §6), READ-ONLY, from the
@@ -6961,6 +7085,10 @@ export type LifecycleAct =
                     // automated end of a workspace dispatch minted for one run. One
                     // act per verb, so the journal never has to be read with a verb
                     // filter to tell the two apart.
+  | 'expire'        // ws-expire (spec 2026-09-24 §5.3): an ARCHIVED workspace's pin-then-
+                    // teardown, server-composed seven days after its archive. Its own act,
+                    // never `reclaim`'s: the population, the token and the deciding rung
+                    // differ, and stage 4's crash clause reads a deliberate removal by act.
   | 'rehome'        // A session's HOME account moving. TWO EMITTERS, both
                     // landed (account pools, wave 2b): the 5-second tick's
                     // own re-seed (`_auto_swap_check`, §5.5.4 — grep
@@ -7006,7 +7134,7 @@ export type LifecycleAct =
 const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
-  'attic-drop': true, reap: true, reclaim: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
+  'attic-drop': true, reap: true, reclaim: true, expire: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
   swap: true, enable: true, stop: true, forget: true, unarchive: true,
   unknown: true,
 };

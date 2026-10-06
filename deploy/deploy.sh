@@ -441,7 +441,7 @@ ACCOUNTS_JSON="${CCRC_ACCOUNTS_JSON:-deploy/accounts.default.json}"
 require_node() {
   command -v node >/dev/null 2>&1 || {
     echo "deploy: FAILED — no \`node\` on PATH on THIS machine (the one running deploy.sh)." >&2
-    echo "  deploy/gen-accounts.mjs projects the roster into bash and needs node >=22.13.0 locally;" >&2
+    echo "  deploy/gen-accounts.mjs projects the roster into bash and needs node locally;" >&2
     echo "  this is NOT a problem with $ACCOUNTS_JSON or with the roster on $BOX. Install node and re-run." >&2
     exit 1
   }
@@ -983,7 +983,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # which ATTACHES to a live session rather than spawning a second one.
   # try-restart touches only units that are already active (a fresh box with
   # zero sessions is a no-op), and each restarted supervisor is then held to
-  # the same standard as the agent itself: verify-service.sh, per unit —
+  # verify-service.sh, per unit, as the agent is (a session also passes stopped on purpose, D-3947) —
   # after the agent chain, so a broken agent fails the deploy before any
   # supervisor is touched.
   # The export is NOT decorative: this is a FRESH ssh session (AGENT_CMD's own

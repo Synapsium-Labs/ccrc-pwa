@@ -151,6 +151,9 @@ const PROBES: Record<string, Probe> = {
   // `no-such-session` as JSON for the absent id — the five session verbs'
   // witness, and proof the dec was stripped before `--session` bound.
   'ws-reclaim': { argv: (d) => CCD_ARGV.wsReclaim('a'.repeat(64), 7, ABSENT, false, d), reached: refusedForTheAbsentSession },
+  // Workspace lifecycle, wave 3: ws-reclaim's sibling, the same parse and the same witness — the reap lock taken and
+  // `no-such-session` answered as JSON for the absent id, the dec stripped before `--session` bound.
+  'ws-expire': { argv: (d) => CCD_ARGV.wsExpire('a'.repeat(64), ABSENT, d), reached: refusedForTheAbsentSession },
   'ws-add': {
     argv: (d) => CCD_ARGV.wsAddWorker(PROJECT, d),
     setup: () => { h.makeRepo(PROJECT); },
@@ -221,7 +224,7 @@ const runCcd = (args: readonly string[]): { code: number; out: string } => {
 };
 
 describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a dec on', () => {
-  it('derives the dec-appending verbs from the table, and finds seven — the five workspace verbs, ws-add and ws-reclaim', () => {
+  it('derives the dec-appending verbs from the table, and finds eight — the five workspace verbs, ws-add, ws-reclaim and ws-expire', () => {
     // BOTH DIRECTIONS, and the second one is the one this suite was written
     // for. A verb ADDED here without a ccd that parses it is caught by the
     // execution test below; a verb SILENTLY added is caught right here, because
@@ -235,7 +238,7 @@ describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a de
     // not a property of source text: it is the AGENT-FIRST deploy order, stated
     // where the argv is composed.
     expect(decAppendingVerbs())
-      .toEqual(['ws-add', 'ws-archive', 'ws-hold', 'ws-reclaim', 'ws-release', 'ws-rename', 'ws-restore']);
+      .toEqual(['ws-add', 'ws-archive', 'ws-expire', 'ws-hold', 'ws-reclaim', 'ws-release', 'ws-rename', 'ws-restore']);
   });
 
   it('has a probe for every derived verb — a new one cannot join unmeasured', () => {

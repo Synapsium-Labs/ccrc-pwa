@@ -22,7 +22,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | #237 | **merged** `7e858c8bf` (2026-10-04 12:40, R26) |
 | 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **merged** `698f679da` (2026-10-04 21:21, R33); live at the next auto-update |
-| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`); Task 4 server comments | #246 | **accepted** at `376d1ffb1` (review 264, R37); run 259 at `merging`, awaiting the operator's merge after the last ledger PR |
+| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`); Task 4 server comments | #246 | **merged** `4100ae1c9` (2026-10-05 06:53, R38); skills reach homes through `ccrc update` |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -640,6 +640,32 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     server's on-the-run read) and R31's worker-clause sentence. If both are declined or left open, #246 merges as it
     is and both stay recorded residue. If either is approved, it becomes a fix round on #246, or a follow-up PR if
     #246 has merged, under a fresh allocation.
+- **R38 (coordinator, 2026-10-05 06:54): the programme is complete.** The operator said "Merge".
+  - **The merges.** #249 (ledger R33–R37 and D-3807's definition) merged first, at `360f0d946` (06:53:30). #246
+    (wave 7) merged second, at `4100ae1c9` (06:53:41). Both were pinned to their heads, and both probes against `main`
+    were clean. #246's head `376d1ffb1` equals the handoff, which is the merge proof.
+  - **The last run.** Run 259 closed `final:true`: `done`, `released:true`, child reclaim queued. No stall-watch run
+    remains open, so the programme retires, as it should at its end.
+  - **What shipped across waves 3 to 7:**
+    - the quiet clocks restart on re-activation;
+    - the coordinator and worker stall clauses;
+    - indexed stall mail reads and the curated minors;
+    - the four shadow-review defects (G1–G4) and the replay-door fix;
+    - the clause 16 amendment and the wake-list guards.
+  - **Arming, which stays the operator's.** `stall-watch-live` and `mail-gate-busy-shadow` are armed (R26).
+    `stall-watch-escalate` waits on waves 6 and 7 being deployed and seen live in shadow. `stall-watch-w2-live` waits
+    on the busy-shadow log review, a shadow re-measure of coord-deaf's new clocks and of mail-stuck's busy hold, and
+    R19's run-less push count. `mail-gate-busy` waits on the busy-shadow evidence. The arming track above names each
+    gate.
+  - **Recorded residue, with no wave planned for it:**
+    - review 262's F1 (clause 16 says "the next mail to or from the worker"; the server reads mail on the run) and
+      R31's worker-clause sentence. The operator merged #246 without them;
+    - R37's F2 and F3;
+    - R28's F2 and F3 (the dialog cap under `dialogPending`, and a plumbing restamp);
+    - the strict-mode `shell` residual (R19);
+    - review 257's split observation (`stallDeafBody` prints the queue age).
+  - **The follow-up the operator asked for:** a Settings-page "Stall watch" section (R30). The operator chose "D, a
+    mix" on 2026-10-05. It is designed as its own programme, from a brainstorm and a spec, not as a wave of this one.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;

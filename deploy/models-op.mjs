@@ -54,7 +54,7 @@
 // Bare `node` — no build step, no `tsx`, no compiled `dist/` — which is why
 // every import below is a `.mjs`.
 
-import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 import {
@@ -63,6 +63,7 @@ import {
 } from '../shared/models.mjs';
 import {
   MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, effortFile, mergeSettingsEnv, modelEnvBlock,
+  readRegular,
 } from '../shared/modelenv.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
@@ -152,28 +153,20 @@ function refuseRegistry(e, id) {
   return refuse(1, 'registry-invalid', `${e.message}${remedy}`, e.field);
 }
 
-/** A LANE FILE's read, type-tested first (Plan 3a final fix wave, F2 —
- *  D-2380's class). `readFileSync` opens BY NAME with no regard for TYPE: a
- *  FIFO with no writer at one of these paths blocks INSIDE the open, so no
- *  `catch` below ever runs, and `ccrc doctor`'s `_check_codex` and `--fix`'s
- *  `_fix_codex`, which call this op with no deadline, hang whole. So the
- *  type is asked first, as `_check_models` asks it. `statSync` FOLLOWS links,
- *  as bash `-f` does, so a symlink to a real file still reads as before, and
- *  an absent path or a dangling link still throws ENOENT exactly as the bare
- *  read did. Anything that is not a regular file throws `ENOTREG`, which each
- *  caller's existing non-ENOENT arm answers: that read's own unreadable
- *  answer, never a block. */
-function readRegular(p) {
-  if (!statSync(p).isFile()) throw Object.assign(new Error('not a regular file'), { code: 'ENOTREG' });
-  return readFileSync(p, 'utf8');
-}
+/** A LANE FILE's read is `readRegular`, imported from `shared/modelenv.mjs`:
+ *  Plan 3a's final fix wave (MF-2, F2 — D-2380's class) wrote it here, and
+ *  Plan 3b Task A6 moved it there so `mergeSettingsEnv` and
+ *  `clearSettingsEnv` read through the same type test. Its docstring there
+ *  says why a FIFO must never be opened by name. */
 
 /** THE ONE ROSTER READ, and it is READ-ONLY. Absent and unreadable are two
- *  codes: the remedies differ. */
+ *  codes: the remedies differ. Type-tested (`readRegular`, Plan 3b Task A6):
+ *  every op reads the roster before anything else, so a FIFO here used to
+ *  hang every verb; it is `roster-unreadable` now, through the same arm. */
 function readRoster(file) {
   let raw;
   try {
-    raw = readFileSync(file, 'utf8');
+    raw = readRegular(file);
   } catch (e) {
     if (e.code === 'ENOENT') {
       return { err: ['roster-absent',

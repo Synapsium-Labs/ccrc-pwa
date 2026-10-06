@@ -44,7 +44,7 @@ import {
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkTmp } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool, CONTAINED_TOOLS } from './containedTools.js';
 import { itLinux, itDarwin, platformContrast, python3ProgramArm, IS_DARWIN } from './platformFixtures.js';
@@ -57,6 +57,20 @@ import {
   SPINE_CONTAINMENT_PROBE, spineRunCalls, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms,
   spineSystemdRun, plantLiveShape, foreignSnapshot, stateCallsNaming,
 } from './codexLaneFixture.js';
+import { docsProbeProgram } from './docsHelperPy.js';
+import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
+
+/** The two python3 invocations ccd's Docs front makes when the closing
+ *  doctor's `docs` check runs the installed ccd (Docs W1a): the floor probe,
+ *  read off the shipped ccd/ccd so it is never re-typed, and the ready line
+ *  the doctor suite's own stub prints. The `python3` stub below embeds both
+ *  in single quotes, so a quote or a newline in either is refused here,
+ *  before a stub that parses differently is ever written. */
+const DOCS_PROBE = docsProbeProgram();
+const DOCS_READY_LINE = JSON.stringify(DOCS_INDEX_READY);
+if (/['\n]/.test(DOCS_PROBE + DOCS_READY_LINE)) {
+  throw new Error('the docs probe or the ready line holds a quote or a newline; the python3 stub cannot embed it');
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -365,7 +379,10 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     'case "$1" in',
     '  bootstrap) [ -f "$3" ] || { echo "fixture launchctl: no job file: $3" >&2; exit 1; };',
     '             printf \'%s\\n\' "${3##*/}" >> "$HOME/launchctl-loaded"; exit 0 ;;',
-    '  bootout|enable|disable|kickstart) exit 0 ;;',
+    '  bootout|enable|disable) exit 0 ;;',
+    // Wave 11 (R12): a kickstart zeroes that label's print counter, which
+    // `fixture-pid-churn-first.<label>` reads (see the `print` arm).
+    '  kickstart) printf \'0\\n\' > "$HOME/fx-kick.${3##*/}"; exit 0 ;;',
     '  print)',
     '    lbl="${2##*/}"',
     '    if [ -f "$HOME/launchctl-loaded" ] && grep -q "^$lbl.plist$" "$HOME/launchctl-loaded"; then',
@@ -382,7 +399,16 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     // SESSION jobs (the sweep's subject), `fixture-main-pid-churn` the
     // ccrc/ccrc-agent jobs (the gate's), so each case measures one of them.
     '      churn=""',
-    '      case "$lbl" in app.ccrc.session.*) [ -f "$HOME/fixture-pid-churn" ] && churn=1 ;; *) [ -f "$HOME/fixture-main-pid-churn" ] && churn=1 ;; esac',
+    // Wave 11 (R12), two per-label knobs, additive: `fixture-pid-churn.<label>`
+    // churns that one job; `fixture-pid-churn-first.<label>`, holding K, churns
+    // the first K prints of that label AFTER its kickstart and answers 4242
+    // from then on (a job whose window failed and whose re-check holds).
+    '      case "$lbl" in app.ccrc.session.*) { [ -f "$HOME/fixture-pid-churn" ] || [ -f "$HOME/fixture-pid-churn.$lbl" ]; } && churn=1 ;; *) [ -f "$HOME/fixture-main-pid-churn" ] && churn=1 ;; esac',
+    '      if [ -f "$HOME/fixture-pid-churn-first.$lbl" ]; then',
+    '        k=0; n=0; IFS= read -r k < "$HOME/fixture-pid-churn-first.$lbl"; [ -f "$HOME/fx-kick.$lbl" ] && IFS= read -r n < "$HOME/fx-kick.$lbl"',
+    '        n=$((n + 1)); printf \'%s\\n\' "$n" > "$HOME/fx-kick.$lbl"',
+    '        [ "$n" -le "$k" ] && churn=1',
+    '      fi',
     '      if [ -n "$churn" ]; then',
     '        echo "	pid = $(($(wc -l < "$HOME/launchctl-calls") + 4000))"',
     '      else',
@@ -609,6 +635,12 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     // preflight probe (`import os`) go to the real interpreter; every other
     // `-c` is refused below, like any other unexpected argv.
     ...python3ProgramArm(REAL_PYTHON3),
+    // ccd's Docs front, reached by the closing doctor's `docs` check through the
+    // INSTALLED ccd (Docs W1a): the 3.8 floor probe passes, and the helper
+    // prints the canned ready answer. Canned rather than forwarded to the real
+    // python3, so the install stays hermetic and reads no projects root.
+    `[ "$1" = -c ] && [ "$2" = '${DOCS_PROBE}' ] && exit 0`,
+    `[ "$1" = /dev/fd/3 ] && [ "$2" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
   // The verifier seam (design §5): `ccrc update` runs the INSTALLED tree's
@@ -648,7 +680,7 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     'esac',
     `exec ${REAL_NODE} "$@"`,
   ].join('\n') + '\n');
-  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT',
     'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
@@ -2941,6 +2973,137 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
       .not.toMatch(/kickstart/);
   });
 
+  // ── Wave 11 (R12), Task 7: the Darwin arm — one shared window, one re-check ──
+  // D0–D2, D4 and D6–D8 reach the arm from any runner (`sourcedCcrc` forces CCD_OS after
+  // the `.`), and D3 from a Linux runner (wave 12, R19a; D-4068); the launchctl stub is
+  // `updateEnv`'s own, and the window knobs are 0.
+  const SWEEP_D = 'CCD_OS=darwin; UPD_BACKUP_DIR="$HOME/ccrc-backups/fixture"; ';
+  const IDS3 = ['alpha', 'beta', 'gamma'];
+  const darwinBox = (prefix: string, ids: string[]): string => {
+    const home = freshUpdateBox(prefix);
+    for (const id of ids) plantSessionPlist(home, id);
+    return home;
+  };
+  const calls = (home: string): string[] => readFileSync(join(home, 'launchctl-calls'), 'utf8').split('\n').filter(Boolean);
+  const plantReport = (home: string, pid: number): string => {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const body = `{"target":"v0.0.85","phase":"resolving","startedAt":1700000000,"updatedAt":1700000001,"detail":null,"from":"auto","pid":${pid}}\n`;
+    writeFileSync(join(home, '.ccrc', 'update.json'), body);
+    return body;
+  };
+  const OWN_REPORT = 'UPD_REPORTING=1; UPD_REPORT_PID=4242; UPD_REPORT_TARGET=v0.0.85; UPD_FROM=auto; UPD_REPORT_STARTED=1; ';
+
+  it('D0: the Darwin arm\'s dies go through the guard — no bare _ccrc_die, exactly two _upd_sweep_die calls (wave 11, D-3973)', () => {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const m = /_upd_sweep\(\) \{([\s\S]*?)\n\}/.exec(src);
+    expect(m, '_upd_sweep() { … } not found in ccd/ccrc').not.toBeNull();
+    const sweep = m![1]!;
+    const d0 = sweep.indexOf('"$CCD_OS" = darwin');
+    expect(d0, '_upd_sweep lost its Darwin arm').toBeGreaterThan(-1);
+    const dEnd = sweep.indexOf('\n  fi', d0);
+    expect(dEnd, "_upd_sweep's Darwin arm never closes").toBeGreaterThan(d0);
+    const darwin = sweep.slice(d0, dEnd);
+    expect(darwin).not.toContain('_ccrc_die');
+    expect(darwin.match(/_upd_sweep_die "/g)?.length ?? 0).toBe(2);
+  });
+
+  it('D1: ONE shared window — every job is kicked, then every job is read, then every job is read again (wave 11, D-3975)', () => {
+    const home = darwinBox('ccrc-update-sweep-d1-', IDS3);
+    const r = sourcedCcrc(home, `${SWEEP_D}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toContain('3 restarted and re-measured still up');
+    expect(r.stderr).not.toContain('re-check:');
+    const all = calls(home);
+    let lastKick = -1;
+    all.forEach((l, i) => { if (l.startsWith('kickstart ')) lastKick = i; });
+    expect(lastKick, 'no kickstart was recorded').toBeGreaterThan(-1);
+    const after = all.slice(lastKick + 1);
+    expect(after.length, after.join('\n')).toBe(6);
+    expect(after.map((l) => l.replace(/^print gui\/\d+\/app\.ccrc\.session\./, '')))
+      .toEqual(['alpha', 'beta', 'gamma', 'alpha', 'beta', 'gamma']);
+    for (const l of after) expect(l).toMatch(/^print gui\/\d+\/app\.ccrc\.session\.[a-z]+$/);
+  });
+
+  it('D2: a job that churns through its re-check is named, with the counts, and no backup is promised (wave 11, D-3974)', () => {
+    const home = darwinBox('ccrc-update-sweep-d2-', IDS3);
+    writeFileSync(join(home, 'fixture-pid-churn.app.ccrc.session.beta'), 'yes\n');
+    const r = sourcedCcrc(home, `${SWEEP_D}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toContain('update: sweep: re-check: claude-session@beta.service did not stay up (pid ');
+    expect(r.stderr).toContain('update: sweep: re-check: claude-session@beta.service failed its re-check too');
+    expect(r.stderr).toContain('ccrc: sweep: 1 of 3 launchd session jobs did not stay up on a first window; a re-check failed, '
+      + '0 left un-re-checked — install complete, nothing was rolled back (first failed re-check: claude-session@beta.service, pid ');
+    expect(r.stderr).not.toContain('backup');
+    expect(r.stdout).not.toContain('restarted and re-measured still up');
+  });
+
+  const D3_BODY = (shim: string): string =>
+    `${SWEEP_D}${shim}${OWN_REPORT}_upd_sweep`;
+  const d3 = (home: string, shim: string): void => {
+    writeFileSync(join(home, 'fixture-pid-churn.app.ccrc.session.beta'), 'yes\n');
+    const plant = plantReport(home, 999999);
+    const r = sourcedCcrc(home, D3_BODY(shim));
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')).toBe(plant);
+    expect(r.stdout).toContain('update: report: skipped — ');
+  };
+  // `_upd_report_readable` reads the file's size through `_plat_size`, which under a forced
+  // CCD_OS=darwin runs BSD `stat -f %z` — a Linux runner's GNU stat refuses that and the foreign report
+  // would read as this run's own. D3 stands the platform primitive in with GNU `stat -c %s`, which BSD
+  // stat refuses in turn, so D3 is Linux-only; D3d (macOS) runs the real one (wave 12, R19a; D-4068).
+  itLinux('D3: a foreign report survives the Darwin die (GNU stat stands in for the platform size primitive) (wave 11, D-3973)', () => {
+    d3(darwinBox('ccrc-update-sweep-d3-', IDS3), '_plat_size() { stat -c %s "$@"; }; ');
+  });
+  itDarwin('D3d: a foreign report survives the Darwin die, the real _plat_size (wave 11, D-3973)', () => {
+    d3(darwinBox('ccrc-update-sweep-d3d-', IDS3), '');
+  });
+
+  it('D4: the single-unit contract the gate and _inst_enable lean on — two prints, the one-job detail (wave 11, D-3975)', () => {
+    const home = darwinBox('ccrc-update-sweep-d4-', ['alpha']);
+    const one = 'CCD_OS=darwin; _ccrc_job_stayed_up claude-session@alpha.service; echo "rc=$? detail=$CCRC_STAYED_DETAIL"';
+    const ok = sourcedCcrc(home, one);
+    expect(ok.code, ok.stderr).toBe(0);
+    expect(ok.stdout).toMatch(/^rc=0 detail=pid 4242 -> 4242 across 0s\+0s$/m);
+    expect(calls(home).filter((l) => l.startsWith('print ')).length).toBe(2);
+    writeFileSync(join(home, 'fixture-pid-churn'), 'yes\n');
+    const bad = sourcedCcrc(home, one);
+    expect(bad.code, bad.stderr).toBe(0);
+    expect(bad.stdout).toMatch(/^rc=1 detail=pid 4\d+ -> 4\d+ across 0s\+0s$/m);
+  });
+
+  it('D6: the Darwin cap keeps the facts — a 31-character id, the report detail at most 200 characters (wave 11, D-3974)', () => {
+    const id = `demo-${'x'.repeat(26)}`;
+    expect(id.length).toBe(31);
+    const home = darwinBox('ccrc-update-sweep-d6-', [id]);
+    writeFileSync(join(home, 'fixture-pid-churn'), 'yes\n');
+    plantReport(home, 4242);
+    const r = sourcedCcrc(home, `${SWEEP_D}${OWN_REPORT}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    const j = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as { phase: string; detail: string };
+    expect(j.phase).toBe('failed');
+    expect(j.detail.length).toBeLessThanOrEqual(200);
+    for (const want of ['1 of 1', 'did not stay up', 'nothing was rolled back']) expect(j.detail, want).toContain(want);
+  });
+
+  it('D7: the re-check passes a job that recovered (wave 11, D-3983)', () => {
+    const home = darwinBox('ccrc-update-sweep-d7-', IDS3);
+    writeFileSync(join(home, 'fixture-pid-churn-first.app.ccrc.session.beta'), '2\n');
+    const r = sourcedCcrc(home, `${SWEEP_D}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).toContain('re-check: claude-session@beta.service passed its re-check');
+    expect(r.stdout).toContain('3 restarted and re-measured still up');
+  });
+
+  it('D8: every job churning makes exactly ONE re-check, then the update dies (Reading 17, wave 11, D-3983)', () => {
+    const home = darwinBox('ccrc-update-sweep-d8-', IDS3);
+    writeFileSync(join(home, 'fixture-pid-churn'), 'yes\n');
+    const r = sourcedCcrc(home, `${SWEEP_D}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr.match(/re-measuring it once more, alone/g)?.length ?? 0).toBe(1);
+    expect(r.stderr.match(/and is not re-checked/g)?.length ?? 0).toBe(2);
+    expect(r.stderr).toContain('3 of 3 launchd session jobs did not stay up on a first window; a re-check failed, 2 left un-re-checked');
+  });
+
   itDarwin('a job file missing AbandonProcessGroup REFUSES the sweep — loud on stderr, DEGRADED on stdout, and NO kickstart for ANY session', () => {
     const home = freshUpdateBox('ccrc-update-sweep-darwin-refused-');
     plantOldBox(home, { version: 'v1.0.0' });
@@ -2967,7 +3130,7 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
   });
 
-  itDarwin('a kicked supervisor whose pid did not hold across the window FAILS the update, naming the pre-update backup', () => {
+  itDarwin('a kicked supervisor whose pid did not hold across the window FAILS the update, naming how many and the first job, and no backup no path restores (wave 11, D-3974)', () => {
     const home = freshUpdateBox('ccrc-update-sweep-darwin-loop-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantSessionPlist(home, 'alpha');
@@ -2978,8 +3141,9 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     const r = runUpdate(home);
     expect(r.code, 'a supervisor that did not stay up must FAIL the update').not.toBe(0);
     expect(r.stderr).toMatch(/did not stay up/);
-    // The one line in the whole update path that points at the rollback.
-    expect(r.stderr).toMatch(/pre-update backup is complete at \S*ccrc-backups/);
+    // Wave 11 (D-3974): the facts, and no promise of a backup nothing restores from.
+    expect(r.stderr).toContain('sweep: 1 of 1 launchd session jobs');
+    expect(r.stderr).not.toContain('pre-update backup');
   });
 
   itDarwin('a session carrying the start-limit stamp is warned about and skipped — not kicked, not fatal', () => {
@@ -12796,3 +12960,10 @@ describe('Plan 3a Task 10 — ccrc update onto this tree over today\'s live shap
       .toHaveLength(1);
   }, 120_000);
 });
+
+// R20a (centralised-update wave 13): each test's fixture homes go in a root `afterEach`, not all at once in the
+// file's `afterAll`. Measured at 9221416a: the three parts of this file leave 648 homes, about 99,700 entries and
+// 2.47 GB to that one hook, which overran vitest's 20 s hook timeout on CI shards at 670d25fd and 7b0a5454. It sits
+// at the END of the file so no line above moves: a top-level hook registers on the root suite wherever it is
+// written, because vitest collects the whole file before it runs a test.
+removeTmpFixturesEachTest();

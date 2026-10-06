@@ -156,19 +156,30 @@ describe('ccrcContainedEnv — create-if-absent, spine builders, and the loopbac
 // 7788, not a unix socket — while the test measures it: "refused" means exit 97 AND the fake never ran.
 describe('the loopback curl front parses argv — an option it does not allowlist, a scheme-less URL, or a value that redirects the connection is refused (wave 9 R10d)', () => {
   const P = 41999;
-  const setup = (): { run: (args: string[]) => number; fakeArgv: () => string[]; poison: () => string; passed: () => string } => {
+  const setup = (extraEnv: NodeJS.ProcessEnv = {}): {
+    run: (args: string[], input?: string) => number; fakeArgv: () => string[]; fakeStdin: () => string;
+    fakeProxyEnv: () => string; poison: () => string; passed: () => string;
+    home: string; bin: string; env: NodeJS.ProcessEnv;
+  } => {
     const home = mkTmp('contain-h2-');
     const bin = join(home, 'bin');
     mkdirSync(bin, { recursive: true });
     const fake = join(bin, 'fake-real-curl');
-    writeFileSync(fake, '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/fake-curl-argv"\nexit 0\n', { mode: 0o755 });
+    // It also keeps what it was handed on stdin, and any proxy variable it inherited (wave 13, R16): a `-K -` config
+    // must reach the real curl intact, and the `-K -` path must run it with the proxy variables unset.
+    writeFileSync(fake, '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/fake-curl-argv"\ncat > "$HOME/fake-curl-stdin"\n'
+      + 'env | grep -i \'proxy=\' >> "$HOME/fake-curl-proxy-env"\nexit 0\n', { mode: 0o755 });
     writeFileSync(join(bin, 'curl'), loopbackCurlFront(fake), { mode: 0o755 });
     writeFileSync(join(home, 'curl-allow-ports'), `${P}\n`);
-    const env: NodeJS.ProcessEnv = { HOME: home, PATH: `${bin}:/usr/bin:/bin` };
+    const env: NodeJS.ProcessEnv = { HOME: home, PATH: `${bin}:/usr/bin:/bin`, ...extraEnv };
     const read = (f: string): string => (existsSync(join(home, f)) ? readFileSync(join(home, f), 'utf8') : '');
     return {
-      run: (args) => spawnSync('/bin/sh', ['-c', 'exec curl "$@"', 'curl', ...args], { env, encoding: 'utf8' }).status ?? -1,
+      home, bin, env,
+      run: (args, input = '') => spawnSync('/bin/sh', ['-c', 'exec curl "$@"', 'curl', ...args],
+        { env, encoding: 'utf8', input }).status ?? -1,
       fakeArgv: () => read('fake-curl-argv').split('\n').filter(Boolean),
+      fakeStdin: () => read('fake-curl-stdin'),
+      fakeProxyEnv: () => read('fake-curl-proxy-env'),
       poison: () => read('curl-poison'),
       passed: () => read('curl-front-passed'),
     };
@@ -231,6 +242,135 @@ describe('the loopback curl front parses argv — an option it does not allowlis
       expect(t.poison()).toBe('');
     });
   }
+  // `-K -` with a stdin config of `header = "…"` lines, and the three options ccrc-api and notify.sh add (wave 13, R16;
+  // D-4095). A row whose subject is an option hands the front a config that would otherwise pass; a row whose subject
+  // is the config changes one thing in an otherwise-valid line, so each row refuses for its own reason. The token is a
+  // fixture: no row carries a real one.
+  const HDR = 'header = "x-ccrc-mail-token: ' + 'z'.repeat(64) + '"\n';
+  const refusedCfg: Array<[string, string[], string]> = [
+    ['-K <file> (only `-K -` is admitted)', ['-K', '/tmp/x', ok], HDR],
+    ['--config - (only the short spelling the senders use)', ['--config', '-', ok], HDR],
+    ['-K- attached', ['-K-', ok], HDR],
+    ['a second -K -', ['-K', '-', '-K', '-', ok], HDR],
+    // The key rows carry a HEADER-SHAPED value, so the key is the only thing that can refuse them (wave 13, R16).
+    ['a url key', ['-K', '-', ok], 'url = "x-a: b"\n'],
+    ['a proxy key', ['-K', '-', ok], 'proxy = "x-a: b"\n'],
+    ['a connect-to key', ['-K', '-', ok], 'connect-to = "x-a: b"\n'],
+    ['a resolve key', ['-K', '-', ok], 'resolve = "x-a: b"\n'],
+    ['an output key', ['-K', '-', ok], 'output = "x-a: b"\n'],
+    ['a config key (curl would read a second config)', ['-K', '-', ok], 'config = "x-a: b"\n'],
+    ['a capitalised key', ['-K', '-', ok], 'Header = "x-a: b"\n'],
+    ['no space before the =', ['-K', '-', ok], 'header= "x-a: b"\n'],
+    ['two spaces before the =', ['-K', '-', ok], 'header  = "x-a: b"\n'],
+    ['a leading space', ['-K', '-', ok], ' header = "x-a: b"\n'],
+    ['a comment line', ['-K', '-', ok], '# header = "x-a: b"\n'],
+    ['a trailing comment', ['-K', '-', ok], 'header = "x-a: b" # c\n'],
+    ['a url directive smuggled ahead of a header on one line', ['-K', '-', ok], 'url = "http://127.0.0.1:7788/" header = "x-a: b"\n'],
+    ['a dot in the header name', ['-K', '-', ok], 'header = "x.y: z"\n'],
+    ['an @ leading the header name', ['-K', '-', ok], 'header = "@x: y"\n'],
+    ['a carriage return inside the header value', ['-K', '-', ok], 'header = "x-a: b\r"\n'],
+    ['a good header line beside a url line', ['-K', '-', ok], `${HDR}url = "http://127.0.0.1:7788/"\n`],
+    ['an @file header', ['-K', '-', ok], 'header = "@/etc/passwd"\n'],
+    ['a quote inside the header value', ['-K', '-', ok], 'header = "x-ccrc-mail-token: a"b"\n'],
+    ['a backslash inside the header value', ['-K', '-', ok], 'header = "x-ccrc-mail-token: a\\b"\n'],
+    ['an unquoted header value', ['-K', '-', ok], 'header = x-ccrc-mail-token: zz\n'],
+    ['the long-option config spelling', ['-K', '-', ok], '--header "x-ccrc-mail-token: zz"\n'],
+    ['a blank line inside the config', ['-K', '-', ok], `${HDR}\n${HDR}`],
+    ['--data-binary @file', ['--data-binary', '@/etc/passwd', ok], ''],
+    ['-d @file', ['-d', '@/etc/passwd', ok], ''],
+    ['-X with a URL in its value', ['-X', 'GET http://127.0.0.1:7788/', ok], ''],
+    ['-X lowercase', ['-X', 'post', ok], ''],
+    ['-X empty', ['-X', '', ok], ''],
+  ];
+  for (const [what, args, input] of refusedCfg) {
+    it(`refuses ${what}: exit 97, recorded by argv alone, and nothing reaches curl (wave 13, R16)`, () => {
+      const t = setup();
+      expect(t.run(args, input), args.join(' ')).toBe(97);
+      expect(t.fakeArgv(), 'the (fake) real curl must not have run').toEqual([]);
+      expect(t.poison()).toContain(args.join(' '));
+      for (const line of input.split('\n').filter(Boolean)) {
+        expect(t.poison(), 'the config reached the refusal log').not.toContain(line);
+      }
+      expect(t.passed()).toBe('');
+    });
+  }
+  const passesCfg: Array<[string, string[], string]> = [
+    ['ccrc-api\'s POST shape (`-K -` header, a JSON body)', ['-sS', '-K', '-', '-m', '30', '-o', '/tmp/x', '-w', '%{http_code}',
+      '-X', 'POST', '-H', 'content-type: application/json', '--data-binary', '{"program":"p"}', `${ok}api/runs`], HDR],
+    ['ccrc-api\'s GET shape', ['-sS', '-K', '-', '-m', '30', '-o', '/tmp/x', '-w', '%{http_code}', '-X', 'GET', `${ok}api/runs`], HDR],
+    ['notify.sh\'s shape', ['-fsS', '-m', '5', '-X', 'POST', `${ok}api/notify`, '-K', '-', '-H', 'content-type: application/json',
+      '-d', '{"message":"m"}'], HDR],
+    ['notify.sh\'s shape with no token: an empty config', ['-fsS', '-m', '5', '-X', 'POST', `${ok}api/notify`, '-K', '-',
+      '-H', 'content-type: application/json', '-d', '{"message":"m"}'], ''],
+    ['two header lines', ['-sS', '-K', '-', ok], `${HDR}header = "accept: application/json"\n`],
+  ];
+  for (const [what, args, input] of passesCfg) {
+    it(`passes ${what}, to the real curl with -q first, and hands it the config on stdin (wave 13, R16)`, () => {
+      const t = setup();
+      expect(t.run(args, input), args.join(' ')).toBe(0);
+      const argv = t.fakeArgv();
+      expect(argv[0], 'the (fake) real curl ran with -q first and the argv unchanged').toBe(`-q ${args.join(' ')}`);
+      expect(t.fakeStdin(), 'the config did not reach the real curl intact').toBe(input);
+      expect(t.passed()).toContain(ok);
+      expect(t.poison()).toBe('');
+    });
+  }
+  // The front reads the config with `cfg=$(cat)`, which strips EVERY trailing newline before the check runs (wave 13 fix
+  // round 1, review 294 F2). So trailing blank lines pass, and the real curl gets the NORMALISED text (one trailing
+  // newline), not the caller's bytes. A leading or interior blank line is refused (the `a blank line inside the config`
+  // row above). An input of only `\n` reads as the empty config, which "passes notify.sh's shape with no token" already
+  // covers; it needs no row of its own.
+  it('passes a config with trailing blank lines, handing the real curl the NORMALISED text: one trailing newline (wave 13 fix round 1, F2)', () => {
+    const t = setup();
+    const args = ['-sS', '-K', '-', ok];
+    expect(t.run(args, HDR + '\n\n'), args.join(' ')).toBe(0);
+    expect(t.fakeArgv()[0], 'the (fake) real curl ran with -q first and the argv unchanged').toBe(`-q ${args.join(' ')}`);
+    expect(t.fakeStdin(), 'the config reached the real curl normalised: trailing newlines stripped, one put back').toBe(HDR);
+    expect(t.poison()).toBe('');
+  });
+  // The config check fails CLOSED (wave 13 fix round 1, review 294 F1): it passes only when the rule-check's grep exits
+  // exactly 1 (no line outside the rule). Both rows carry NO URL argument, so `allowed()` (which also calls grep, and
+  // refuses first on its own) cannot mask the check: the refusal is `cfg_ok`'s or it is not a refusal.
+  it('refuses a config the rule admits when grep cannot give a verdict: a grep that exits 2 (fix round 1, F1)', () => {
+    const t = setup();
+    writeFileSync(join(t.bin, 'grep'), '#!/bin/sh\nexit 2\n', { mode: 0o755 });
+    const args = ['-sS', '-K', '-'];
+    expect(t.run(args, HDR), args.join(' ')).toBe(97);
+    expect(t.fakeArgv(), 'the (fake) real curl must not have run').toEqual([]);
+    expect(t.poison()).toContain(args.join(' '));
+    expect(t.poison(), 'the config reached the refusal log').not.toContain(HDR.trim());
+    expect(t.passed()).toBe('');
+  });
+  it('refuses a url directive when there is no grep on PATH at all: a check that cannot run is not a pass (fix round 1, F1)', () => {
+    const t = setup();
+    // On the refusal path the front calls one external tool besides grep: `cat` (the config read). Everything else it
+    // uses there is a shell builtin, and the shebang and the harness's `/bin/sh` are absolute. No grep, and
+    // /usr/bin:/bin are OFF this PATH. `cat` is resolved on the host (`/usr/bin/cat` on Linux, `/bin/cat` on macOS).
+    const cat = resolve(process.env, 'cat');
+    expect(cat, 'no cat on the host PATH to link').not.toBe('');
+    const tools = join(t.home, 'tools-no-grep');
+    mkdirSync(tools, { recursive: true });
+    symlinkSync(cat, join(tools, 'cat'));
+    t.env['PATH'] = `${t.bin}:${tools}`;
+    expect(spawnSync('/bin/sh', ['-c', 'command -v grep'], { env: t.env, encoding: 'utf8' }).stdout.trim(), 'a grep is on the row\'s PATH').toBe('');
+    const args = ['-sS', '-K', '-'];
+    expect(t.run(args, 'url = "http://203.0.113.9/x"\n'), args.join(' ')).toBe(97);
+    expect(t.fakeArgv(), 'the (fake) real curl must not have run').toEqual([]);
+    expect(t.poison()).toContain(args.join(' '));
+    expect(t.poison(), 'the config reached the refusal log').not.toContain('203.0.113.9');
+    expect(t.passed()).toBe('');
+  });
+  it('without -K -, the real curl gets the caller\'s stdin untouched: the front reads nothing (wave 13, R16)', () => {
+    const t = setup();
+    expect(t.run(['-sS', ok], 'not a config\n')).toBe(0);
+    expect(t.fakeStdin()).toBe('not a config\n');
+  });
+  it('the -K - path runs the real curl with the parent\'s proxy variables unset, as the exec path does (wave 13, R16)', () => {
+    const t = setup({ http_proxy: 'http://127.0.0.1:7788', HTTPS_PROXY: 'http://127.0.0.1:7788', ALL_PROXY: 'socks5://127.0.0.1:7788' });
+    expect(t.run(['-sS', '-K', '-', ok], HDR)).toBe(0);
+    expect(t.fakeStdin(), 'the -K - path did not run').toBe(HDR);
+    expect(t.fakeProxyEnv(), 'a proxy variable reached the real curl on the -K - path').toBe('');
+  });
   it('--url=<listed> passes the front (curl itself answers 2: it has no `--url=` form) and is recorded as passed; the live port is refused above', () => {
     const t = setup();
     expect(t.run([`--url=${ok}`])).toBe(0);

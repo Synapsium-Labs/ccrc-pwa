@@ -40,6 +40,9 @@ export type ModelEnv = {
   CLAUDE_CODE_MAX_CONTEXT_TOKENS?: string;
 };
 export declare class ModelEnvInvalid extends Error {}
+/** A lane file's text, type-tested first: throws ENOTREG for anything that is
+ *  not a regular file (a FIFO above all), ENOENT for an absent path. */
+export declare function readRegular(p: string): string;
 export declare const MODEL_ENV_KEYS: readonly string[];
 /** The client's default window for a model id it does not know (spec §6.1).
  *  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` never exceeds this. */

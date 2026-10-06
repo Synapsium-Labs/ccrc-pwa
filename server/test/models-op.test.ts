@@ -1733,4 +1733,58 @@ describe('a FIFO at a lane file\'s path is that read\'s unreadable answer, never
     expect(fs.statSync(out).isFIFO(), 'the check-only call wrote at --out').toBe(true);
     expect(fs.existsSync(`${out}.prev`)).toBe(false);
   }, 20_000);
+
+  // ── Plan 3b Task A6: the writer path and the roster read ────────────────
+  // `mergeSettingsEnv` and `clearSettingsEnv` (`shared/modelenv.mjs`) read the
+  // lane's settings.json, and `readRoster` is every op's first read: each
+  // opened BY NAME, so a FIFO there blocked `materialise` (and with it
+  // `_fix_codex`'s re-render), `rm`, and every verb. Each now reads through
+  // the one `readRegular`, and a FIFO gets that read's EXISTING answer.
+  it('materialise with a FIFO settings.json answers settings-unwritable, and writes nothing after the refused merge (Plan 3b A-6)', () => {
+    init();
+    const tsv = path.join(home, '.ccrc', 'models', `${CODEX_ROW.id}.classes.tsv`);
+    const tsvBefore = fs.statSync(tsv).mtimeMs;
+    fifo(settingsPath());
+    const r = bounded('materialise', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.body['error']).toBe('settings-unwritable');
+    expect(r.body['detail']).toMatch(/settings\.json could not be read: not a regular file\. Nothing was written\.$/);
+    expect(fs.statSync(settingsPath()).isFIFO(), 'materialise replaced the FIFO it refused').toBe(true);
+    expect(fs.statSync(tsv).mtimeMs, 'materialise wrote the TSV after refusing the settings merge').toBe(tsvBefore);
+  }, 20_000);
+
+  it('rm with a FIFO settings.json reaps the lane files, then answers settings-unwritable — never a block (Plan 3b A-6)', () => {
+    init();
+    fifo(settingsPath());
+    const r = bounded('rm', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.body['error']).toBe('settings-unwritable');
+    expect(r.body['detail']).toMatch(/settings\.json could not be read: not a regular file\. Nothing was written\.$/);
+    // `rm`'s unlink loop runs BEFORE its settings step, by design (an orphan
+    // has no settings to clear), so the model files are already reaped.
+    expect(fs.existsSync(regPath(CODEX_ROW.id))).toBe(false);
+    expect(fs.statSync(settingsPath()).isFIFO(), 'rm replaced the FIFO it refused').toBe(true);
+  }, 20_000);
+
+  it('every op with a FIFO roster answers roster-unreadable — never a block (Plan 3b A-6)', () => {
+    fifo(rosterPath());
+    const r = bounded('lanes', '--file', rosterPath());
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.body['error']).toBe('roster-unreadable');
+    expect(r.body['detail']).toMatch(/accounts\.json exists and could not be read: not a regular file\. /);
+    expect(fs.statSync(rosterPath()).isFIFO()).toBe(true);
+  }, 20_000);
+
+  // The control: a DIRECTORY at settings.json never blocked (EISDIR is
+  // immediate), and its code must not move. Green before this task and after.
+  it('materialise with a DIRECTORY at settings.json still answers settings-unwritable (Plan 3b A-6)', () => {
+    init();
+    fs.rmSync(settingsPath());
+    fs.mkdirSync(settingsPath());
+    const r = bounded('materialise', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.body['error']).toBe('settings-unwritable');
+    expect(r.body['detail']).toMatch(/settings\.json could not be read: /);
+    expect(fs.statSync(settingsPath()).isDirectory()).toBe(true);
+  }, 20_000);
 });

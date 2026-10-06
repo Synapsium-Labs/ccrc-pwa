@@ -2,7 +2,7 @@
 
 **Status:** design approved by the operator 2026-09-22; written spec accepted the same day. Ticket CCR-15 ("Reclamation policy: the fleet can act on
 idle and finished workspaces"). Supersedes nothing; **narrows** two standing rulings and **satisfies** a
-third that has been open since 2026-08-11. Implementation rides five waves, agent-first.
+third that has been open since 2026-08-11. Implementation rides six waves, agent-first.
 
 This document is the design. The numbered deviations, the task breakdown and the mutation tables belong to
 the plans that follow it.
@@ -36,13 +36,18 @@ Four further rulings, given the same day against four questions this design coul
 | The child's conversation transcripts | **Keep them.** Not an artifact under rule 2. |
 | How much of the 2026-08-11 Tier B ceremony to keep | **Kill-switch plus attached-defer.** A fleet-visible pause toggled from the phone, and a defer while someone is present. Every reclaim lands in the feed; no push per reap. |
 
+As built (§5.5 step 2; wave 3's `wip-moves-no-ref`), the WIP commit is pinned in the attic and moves no branch.
+
 **Rule 4 is the load-bearing one**, and not because of what it asks for. It changes the *population* an
 automatic collector acts on, and that is what makes one safe here where the last one was not — see §3.
 
 One qualification is owed up front, because the first ruling's "nothing waits for a human" is not kept
 absolutely: three conditions — two where proceeding would destroy work **nobody could see**, and one where
 ccd cannot tell the directory is the child's at all — refuse instead of proceeding. They are argued at §5.5
-and bounded at §7, and they are the only three.
+and bounded at §7. They are not all that the automatic path keeps for a person: it also keeps a child
+under any other terminal refusal (`branch-elsewhere` among them), each child the sweep's kept verdicts name
+(§5.9), and, until wave 6, a child whose reclaim fails past the ceiling for good, such as `pin-failed` with
+its branch already gone. Each is reported (§5.9).
 
 ---
 
@@ -126,8 +131,8 @@ Three words, each with exactly one definition and one authority.
 and recorded it — never because a heuristic recognised it later. There is no path by which a human's
 workspace, a coordinator's workspace, or any workspace that exists today becomes a child.
 
-**Spent.** A child whose branch has ever had a PR, in any phase — open, draft, merged or closed. Spending is
-monotone: nothing un-spends a child.
+**Spent.** A child whose branch has ever had a PR dated to it (§5.3), in any phase — open, draft, merged or
+closed. Spending is monotone: nothing un-spends a child.
 
 **Reclaim.** The act: pin everything recoverable, then destroy the worktree, the branch, the clips, the
 per-session temp root, the pane, the unit and the registry row. It keeps the attic refs, the tombstone, the
@@ -234,6 +239,22 @@ instead of an assumption.
   branch the registry currently records; when that disagrees with git's own worktree record it refuses with
   that word and persists nothing, rather than measuring the wrong branch. A drifted child is one whose PR
   this gate provably did not look for, which is the definition of unmeasured.
+- **Which workspace a PR spent.** A child's branch name is a recycled slug, so a PR on it may belong to an
+  earlier workspace that wore the same name. The live rung counts every same-repository PR whose head is the
+  child's branch, in any state and whatever its base, and places each against the child's birth: the stamp
+  the dispatch that minted it took on the server's clock just before its `ws-add`, written once when it
+  bound the session. With 120 seconds of skew either side, a PR created at or after the birth plus the skew
+  is placed `this`; one created before the birth less the skew is placed `inherited`, and dropped; anything
+  else is `unplaced`: no creation date, a date inside the skew, or a birth that cannot be placed (the
+  minting run unreadable, absent or bound to another session, or holding no birth that is provably this
+  occupant's, as for a workspace a dispatch adopted rather than minted). The fast path carries no date, so
+  its answers are `unplaced` too.
+- **The bind and the close read the placement differently.** A bind refuses on `this` or `unplaced`,
+  because a wrong refusal costs one round. A close treats `spent` as finished only when a dated live row
+  proves `this`, and re-dates a fast-path answer through the live rung before it decides; `unplaced` and
+  `inherited` hold the child. A wrong reclaim would destroy a held child's clips, temp root, ignored files
+  and pane, and on this repository merge-commit merges have bound old PRs to recycled slugs. A child held
+  this way is released when its programme ends (§5.7).
 
 ### 5.4 Rule 3: two refusals
 
@@ -347,12 +368,31 @@ Refusing keeps one rule at one rung instead of a conditional two places must agr
    same disposition, or an accident of `.gitignore` decides whether a credential is committed and then
    attic-pinned **permanently in a public repository**. Their paths are recorded in the tombstone; their
    bytes are not.
-2. Everything else uncommitted — tracked modifications and non-secret untracked files — becomes one WIP
-   commit on the child's own branch. **ccd has no commit helper today**; this one is new, and it is the
-   only place in ccd that writes a commit, which is reason enough for it to be one function with one caller.
-3. Attic pins are taken: the branch tip including that WIP commit, the reflog entries the existing pin
-   already takes, every stash attributed to the branch, and the in-progress operation heads
-   (`REBASE_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `ORIG_HEAD`) where present.
+2. Everything else uncommitted — tracked modifications (an edit git was told not to look at, under
+   skip-worktree or assume-unchanged, included), a staged version that differs from both HEAD and the disk,
+   and non-secret untracked files — becomes one WIP commit. It is built with `git commit-tree` in a scratch
+   copy of the tree's own index, so the user's index file is never written, and its parents are HEAD and
+   each `MERGE_HEAD` line, where `git commit` would put them, and last, only when the staged version
+   differs from both HEAD's tree and the WIP's, a commit of that staged index.
+   **It moves no branch and no HEAD** (wave 3's `wip-moves-no-ref`, D-3365): it is kept by its id in the
+   attic (step 3), so whichever branch the tree has checked out is never written, and the tombstone's `tip`
+   is the branch's own tip, never the WIP. Each same-repository nested checkout gets its own WIP commit the
+   same way, innermost first. ccd had no commit helper before this verb; every commit a reclaim writes —
+   these, and step 3's reflog keep — goes through one writer (`_ws_reclaim_commit_tree`) with one fixed
+   identity, under the reclaim's git containment, and it is still the only place in ccd that writes a commit.
+3. Attic pins are taken under `refs/ccrc/attic/<id>/`, and none is optional: the in-progress operation heads
+   (`REBASE_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `ORIG_HEAD`) where present; HEAD; the WIP commit, by its
+   id; each nested same-repository checkout's operation heads, HEAD and WIP commit; the branch tip, which is
+   required because it is the commit the tail deletes the branch at and, on a detached or drifted tree,
+   nothing else pins it; and every stash attributed to the branch. Then every commit the child's own reflogs
+   name (its HEAD's, its branch's, and each nested checkout's and nested branch's), and everything the
+   child's and each nested checkout's own git directory names, is kept reachable from
+   `refs/ccrc/attic/<id>/reflogs`. A pin that cannot be taken fails the reclaim as `pin-failed` while nothing
+   is destroyed, and a branch that does not resolve is one, because it leaves the tail no tip to delete at. A
+   nested checkout of a different repository cannot be pinned here, so each run of this phase proves it again
+   by rung 9's predicate, and a failure there is a pin that cannot be taken. A HEAD that has drifted onto
+   another branch keeps that branch: it is recorded, and the tail deletes only the child's own. The tail runs
+   this whole phase again as its settle once the pane is dead; every pin is idempotent.
 4. The tombstone is written **before the first destructive act**, recording the branch, the tip, the WIP
    commit sha, the attic refs, the secret-shaped paths that were dropped, the containment verdict and the
    residue measurement. It is the one document that outlives the workspace.
@@ -401,7 +441,8 @@ reclaim can never un-close a run — the child is reclaimed when all of:
 - the workspace is a child (the registry verdict names a run id; `unreadable` defers), **and**
 - no sibling run is open, re-read **inside the coordination mutex** immediately before the argv is composed,
   with an unreadable sibling list counting as *ineligible* rather than as "none", **and**
-- the close is `final`, **or** the child is `spent`, **or** this close retires the program.
+- the close is `final`, **or** the child is `spent` by a PR dated to it (§5.3), **or** this close retires
+  the program.
 
 The mutex is available here and only here. It is not exported and the watcher holds no handle on it, so
 **the sweep cannot take it** — which is the second reason the `--expect` token exists rather than a nicety:
@@ -427,6 +468,34 @@ a review child is not reclaimed when its review run closes. It is reclaimed once
 terminal, by whichever trigger sees that first. And an archive request on an eligible child is overruled: the
 close releases and reclaims instead, because an archived child would wait on a human's `ws-reap`, which
 rule 4 forbids. A non-child's archive is unchanged.
+
+**A workspace that has coordinated is a coordinator's workspace**, and rule 4 reserves manual cleanup for
+those. So neither trigger reclaims a marked child that has coordinated a run in its current generation: the
+close answers `has-coordinated`, and the sweep keeps the child as `coordinating` (§5.9). Slugs recycle
+(§5.6), so the question is asked of this incarnation of the workspace, never of its name. A child has
+coordinated when its session id holds a claim on record and any one of these is true:
+
+- a run naming it `claimedBy` is not terminal;
+- a claim has no instant that can be read: a terminal claiming run with no `closedAt`, or a stored instant
+  that does not read as a time;
+- its creation cannot be placed: the lifecycle journal holds no dated `create` row opening its current
+  generation;
+- the claim's latest instant is no earlier than 120 seconds before that creation, the skew allowed between
+  the fleet box's clock and the server's.
+
+A claim's instant is the latest of each terminal claiming run's `closedAt` and the time of every
+reassignment of a dead coordinator's claim (§4) that names the id on either side: the displaced
+coordinator's claim ended there, and the heir's claim on runs already terminal began there. A claim that
+ended before this generation was created belonged to an earlier workspace under the same name, and keeps
+nothing. That is safe because ccd journals a `create` only after refusing a slug that has any registry
+entry or whose git state is taken, so a later `create` proves that the coordinator's workspace was removed
+before this one existed. Every doubt keeps the child. One fence decides the question everywhere it is
+asked: the close, the executor's re-read before it composes the argv, the sweep's verdict, and the sweep's
+release of a finished programme's hold (below). Its residual is stated: the fence compares the fleet box's
+clock with the server's, so an offset between them larger than the skew can make reclaimable a child whose
+own coordination ended within that excess after its creation. That fails open, in the same direction as
+the sweep's check that a child's minting run predates it (below). A lost or rebuilt coordination database
+loses the claim history, but it loses every minting run with it, and the sweep then keeps every child.
 
 **Close decides; it does not wait.** The eligibility above is decided inside the mutex, and the act —
 `ws-audit --reclaim` → token → `ws-reclaim` — runs on the session's own queue immediately *after* close has
@@ -456,7 +525,22 @@ So the sweep's subject is **the marker**, which already holds the minting run id
 **A minting run absent from the database makes a child ineligible**, not eligible. The first draft of this
 section said the opposite, and it fails open in the one case that matters: a lost or rebuilt coordination
 database makes *every* child's run absent at once, the live ones included. Absence is logged and
-skipped; the orphans that motivated it are reached through the bullet above instead.
+skipped; the orphans that motivated it are reached through the bullet above instead. Two more answers keep
+a child for the same reason. Run ids restart when the database is rebuilt, so a minting run that opened
+more than 120 seconds after the child was created (the dated `create` row opening its current generation
+in the lifecycle journal) cannot be the run that made it; a fleet box whose clock runs behind the server's
+gives the same answer. And a child whose creation the journal does not date cannot be matched to its run
+at all. Each is kept, never reclaimed automatically, and reported (§5.9).
+
+**A programme's own hold ends with the programme.** The close holds a child it cannot prove finished
+(§5.3), and no later close decides a child an earlier run minted, so "no hold" alone would keep such a
+child for ever, against rule 1. A hold therefore stops protecting a marked child when its text is the
+server's own rendering of a terminal run that names the child (a dispatch's claim, or a non-final
+close's), that run's programme has no open run, the minting run is terminal, no open run names the child,
+and the child has not coordinated in its current generation (above). The text is compared, never parsed,
+so a person's hold is never released, even one written in a programme's grammar, and neither is one that
+cannot be read. The sweep releases such a hold in its own job, which re-reads everything first and deletes
+nothing but the hold, and the child is judged afresh on the passes after.
 
 The lane runs on a pass that already reads the registry, so it costs one predicate rather than a new timer;
 the plan names which pass, under the constraint that it must not race the write routes.
@@ -487,6 +571,59 @@ safety rung: rungs 5 and 6 measure presence, not containment, and the pin phase 
 operation heads. Unbounded would be worse than absent: the PWA's terminal
 drawer opens a real `tmux attach`, so a phone that locks with the drawer open would wedge a child forever,
 and the only exit would be a human detaching from a sub-workspace — rule 4 inverted by its own safeguard.
+
+**Continuous means observed.** A child that is not asked writes nothing, so time nobody measured never
+counts as presence. Each presence-class answer (the server's visibility claim, or ccd's `attached` or
+`tree-busy`) brackets its observation between the request that asked and its own arrival. An episode starts
+at its first answer's arrival. The next answer continues it only if it arrives within two and a half pass
+intervals of the previous answer's request; otherwise the episode restarts at that arrival. The ceiling
+licenses one `--defer-expired` ask once the episode has spanned 15 minutes and its latest answer's request
+is that recent. A licensed answer, any other outcome, and a request that fails without an answer each end
+or restart the episode, so one episode licenses at most once. None of this licenses an ask earlier, or
+more often, than the ceiling would for a lone child.
+
+**Two clocks.** The clocks the sweep keeps for its own decisions (its pacing, and each child's episode and
+place in line) are the server's monotonic clock, which never steps and stops while the box is suspended;
+stamps it compares with another process's stay on the wall clock. Each gap is read as the larger of the
+monotonic and the wall-clock difference, so a suspended box and a backward wall step each read as a hole,
+never as continuity, and a forward step over-reads and restarts the episode, which fails closed. The
+ceiling's span is read on the monotonic clock alone, which never over-reads. A suspend and a backward wall
+step inside the same gap under-read both clocks; that residual is stated, not closed. Of the times the
+sweep keeps, the one it displays is a child's first deferral, which stays wall-clock: the chip's time and
+the wait a feed row states (§5.9).
+
+**The lease.** The sweep asks one child at a time. Asked in turn, three or more due children that kept
+deferring kept every presence-held child's episode broken, so none was ever licensed: the unbounded wait
+this section forbids. So a presence-held child joins a line at its first unlicensed presence answer, and
+the due child longest in that line holds a lease. It is asked first, on every pass it is due, exactly as a
+lone child is, and every other due child follows in the fairness order (never asked first, then least
+recently asked). The order adds no ask and relaxes no pacing. Its cost is stated: while a lease runs no
+other due child is asked, so a backlog drain pauses for one lease per presence-held child.
+
+**The lease's tenure is bounded.** A holder whose answer does not continue its episode, or whose request
+fails without an answer or stalls, forfeits the lease and re-joins the line at the back; a child waiting
+in line keeps its place. So a breach of the timing costs one lease, never the lane, and licenses nothing a
+continuous episode did not earn.
+
+**The bound, as three figures that are never added together.** C is the 15-minute ceiling; S the largest
+spacing between two passes, measured at up to 80 seconds on 2026-10-05; G the gap of two and a half pass
+intervals, 150 seconds; STALL the 480 seconds after which an unanswered request stops holding the one
+slot; L_p and L_r the largest latencies of a presence answer and of a reclaim.
+
+- From its lease's first ask, a holder is licensed within C + S + L_p, about 16.5 minutes at that spacing.
+- One lease, from its first ask to the next lease's first ask, takes at most C + 2S + L_p + L_r, about
+  18.6 minutes.
+- The k-th presence-held child in the ask order is licensed within k × (C + 2G + STALL), k × 28 minutes:
+  the worst case the timing allows.
+
+They hold while a pass plus a presence answer stays within G, an answer settles before the next pass,
+neither clock steps nor the box suspends during the lease, each child in the line stays eligible and keeps
+answering presence until it is licensed, and the sweep's memory is not cleared. A raised
+switch, a missing capability, a failed read and a restart clear it, and every episode and lease then starts
+again. A violation forfeits the lease and fails closed: on a box so slow that a pass and an answer exceed
+G, no presence-held child is licensed, as no lone child would be, and every other due child is still
+asked. And that memory holds one workspace generation per child: a slug minted again is a new child,
+sighted afresh.
 
 **Presence never authorises deletion.** `--defer-expired` changes the fingerprint and skips the presence
 rungs. It never skips the ownership comparison with other rows (§5.5, D-3731). The converse holds too: no
@@ -519,29 +656,78 @@ Default: running. Pausing stops reclamation fleet-wide and nothing else; unpausi
 and is already readable per session after the workspace is gone. A new act, `reclaim`, joins its vocabulary
 (§6 lists every site that declaration touches).
 
-**One feed row per outcome** — reclaimed, deferred with its elapsed time, refused with its sentence — written
-explicitly by the lane. This is stated because it does not come for free: a reclaim on an already-closed run
-is an observation rather than a transition, and the existing event path deliberately skips observations, so
-a design that assumed a feed row would have delivered none while promising all.
+**One feed row per outcome, unless it repeats one** — reclaimed, deferred with its elapsed time, refused or
+failed with its sentence — written explicitly by the lane. This is stated because it does not come for free:
+a reclaim on an already-closed run is an observation rather than a transition, and the existing event path
+deliberately skips observations, so a design that assumed a feed row would have delivered none while
+promising all. A row that repeats what the feed already says is not written. A deferral for any reason but
+presence writes one row per episode, not one per pass. A failure the attention item already lists writes
+no further row until its word changes or it leaves the list. A presence deferral writes its row on every
+pass, and an attempt the ceiling licensed always writes, because its row states the wait it ended. A child
+the sweep keeps for a person (below) writes one `child reclaim kept` row per word, once in each server
+process.
 
 **A chip on the closed run's row**, reading the lifecycle mirror rather than the registry row that no longer
-exists: reclaimed, pending, deferred, paused, or refused with the sentence. Refusal sentences come from a
+exists, and the sweep's last verdict on a child that still stands: reclaimed, pending, deferred, paused, or
+refused with the sentence. Refusal sentences come from a
 lookup keyed by the refusal token, never respelled at the surface — **and the lookup is the server's**. The
 PWA-reachable refusal words and the server's audit sentences are held disjoint by a test today, and several
 of this verb's tokens share names with the audit's. So the server composes the sentence and ships it with
 the status; the PWA renders what it is given and maps no token itself. A reclaimed child's row stops
 offering to open its session, which no longer exists.
 
+**The chip says why the sweep leaves a child alone.** The sweep keeps each marked child's last verdict in
+memory. A reclaim that happened, ccd's word that the session is already gone, and a terminal refusal ccd
+recorded are settled, and answer first. A verdict that keeps the child, holds it, or could not judge it
+answers next, ahead of every other event, a retryable refusal or a failure among them, because an older
+answer must not promise a retry the sweep will not make.
+
+- A child the sweep keeps for a person reads `refused`, with a sentence that says why and ends "ccrc never
+  reclaims it on its own; a person removes it once nothing still needs it." The kept words are
+  `coordinating` (§5.7), `minting-run-absent`, `minting-run-postdates-child`,
+  `reviewed-run-absent`, and `not-a-workspace`, a project's main checkout carrying a marker. The two
+  minting-run sentences add "After a rebuild, workers may still be running in these." before that ending,
+  and the main checkout's ends by telling a person to remove the marker, never the checkout. The switch
+  never replaces a kept answer: a pause leaves it standing, because the attention item keeps listing the
+  child.
+- A child the sweep could not judge because a read failed (`marker-unreadable`, `identity-unmeasured`,
+  `hold-unmeasured`, `minting-run-unreadable`, `reviewed-run-unreadable`, `siblings-unreadable`), or
+  because the lifecycle journal holds no dated creation of its workspace (`child-birth-unplaced`), reads
+  `deferred`, with a sentence naming the read and saying the sweep reads it again on its next pass. A held
+  child, under a person's hold or a programme's while that programme is open, reads `deferred` with the
+  hold's sentence. The switch turns both to `paused`.
+- Where nothing else answers, a child with no verdict yet reads `pending` with a sentence of its own, never
+  the one that says it is waiting to be reclaimed, and the switch turns it to `paused`. That is every child
+  after a restart until the first judging pass, and every child but the kept ones after a pass that judged
+  nothing (the switch raised, a capability missing, a read failed).
+- The two lock refusals the attention item reads as failures (below) read `deferred` on the chip too.
+
+There is no sixth word: the chip keeps its five.
+
 **No child appears in the reap or archive sheets unless a person archived it by hand.** Every session offers
 Archive (workspace lifecycle §5.2), so a child can be archived like any workspace; "Archive all" skips children
 (workspace lifecycle §5.1, §6 item 3).
 
-**One fleet-level attention item** collects children under a terminal refusal, and children whose reclaim
-has kept failing past the defer ceiling (retries back off in between), with each one's sentence.
+**One fleet-level attention item** collects children under a terminal refusal, children whose reclaim
+has kept failing past the defer ceiling (retries back off in between), and children the sweep keeps for a
+person, with each one's sentence. A failure includes the two refusals ccd journals when it cannot take the
+reclaim's lock, `flock-unavailable` and `lock-unopenable`: ccd records them as refusals, but the server
+retries them, so every surface reads them as failures and never as settled refusals. Only those two are
+read that way, by name; a refusal ccd later journals the same way is classified when it is added, never
+inherited.
 It is a *report*, not a tap: nothing waits on it, and ignoring it costs disk rather than correctness. It
 lives in the reclaim row of the Runs screen's banner, beside the pause toggle, carried on the coordination
-frame and derived from the lifecycle mirror so a restart does not lose it. It is **not** a divergence
-pattern: nothing in the PWA reads divergences today, so one there would be a report nobody receives.
+frame. On every sweep pass its terminal and failing children are
+derived from the lifecycle mirror so a restart does not lose it. Its kept children come from the sweep's
+last judging pass, which reads only durable state (the registry listing, the coordination database and the
+mirror); they stay listed across a pass that judged nothing, a paused one included, and a restart lists
+them again at its first judging pass. A child has one item: a kept item replaces a failing one, and a
+terminal item stands, with no kept item beside it. More than five children answering one kept word, which
+is what a lost or rebuilt coordination database produces, render as one line with the count and the list
+behind it. A failed read never lists a child by itself. A child whose last verdict is a hold is not listed
+for a failure, though its terminal item stands; with no verdict recorded, a failing child is listed as before.
+It is **not** a divergence pattern: nothing in the PWA reads divergences today, so one there would be a
+report nobody receives.
 
 ---
 
@@ -577,7 +763,8 @@ tool.
 - **The new lifecycle act is seven edits, not one.** Three declaration sites (the union and its total map in
   `shared/api.ts`; ccd's own act array, which is alphabetical and excludes the reader's degrade; the PWA's
   word map) and **four independent cardinal assertions** across four test files — two counting the union
-  and two counting it minus the degrade. Adding `reclaim` moves 25 to 26 twice and 24 to 25 twice.
+  and two counting it minus the degrade. Adding `reclaim` moved 25 to 26 twice and 24 to 25 twice (wave 3's
+  Task 1; Appendix A records the values as built).
 - **The route cardinals that move are the ones for its own file.** Registering the pause route in
   `coord/routes.ts` moves that file's exact count and the whole-tree count; the count for `server.ts` is
   untouched. Registering it in `server.ts` instead would move the other two *and* put it out of reach of the
@@ -613,7 +800,11 @@ token** and omitted when the box does not advertise it, with the omission record
 without the marker is simply not a child, which is the same fallback the pre-policy stock already takes.
 
 **Not changed, deliberately:** `ws-reap`, `ws-rm`, `ws-gc`, `ws-archive`, `ws-restore`, their grants, their
-refusals, the audit-token ceremony, and every PWA surface that drives them.
+refusals, the audit-token ceremony, and every PWA surface that drives them. (Qualified by workspace lifecycle's
+wave 3, which adds two refusals of its own: `ws-reap` refuses `expire-in-progress` when the breadcrumb starts
+`expire:`, beside its `reclaim:` mirror, and `ws-restore` refuses `in-progress` under its lock when an `expire:`
+breadcrumb stands. Their grants and every other refusal stand. See
+`2026-09-24-workspace-lifecycle-design.md` §5.3.)
 
 ---
 
@@ -626,11 +817,14 @@ approved on a narrow one.
    root, and covers tool scratch only insofar as the writer respects `TMPDIR`. Writers that hardcode `/tmp`,
    or write to `~/.cache`, `~/.npm`, a docker volume or the project's main checkout, are not contained. The
    residue probe measures the remainder so it is a number rather than a belief.
-2. **"Always" in rule 1 is bounded by three refusals.** A child whose tree cannot be read, which holds a
-   foreign repository's unpushed commits, or whose directory git does not record as a worktree, is reported
-   and left alone. That is the operator's pin-everything
+2. **"Always" in rule 1 is bounded by three refusals, and by the children kept for a person.** A child
+   whose tree cannot be read, which holds a foreign repository's unpushed commits, or whose directory git
+   does not record as a worktree, is reported and left alone. That is the operator's pin-everything
    ruling applied honestly: it overrides conditions where the work is visible and can be pinned, not
-   conditions where proceeding means silent loss.
+   conditions where proceeding means silent loss. The automatic path also keeps, for a person, and
+   reports: a child under any other terminal refusal (`branch-elsewhere` among them, §5.5); each child the
+   sweep's kept verdicts name (§5.9); and, until wave 6, a child whose reclaim fails past the ceiling for
+   good, such as `pin-failed` with its branch already gone.
 3. **Rule 4 has one exception, and it is a report.** The attention item asks nothing of the human and
    nothing waits on it.
 4. **The pre-policy stock is out of scope.** Every workspace that exists when wave 1 ships carries no
@@ -655,11 +849,15 @@ unbindable — without any destructive verb existing yet.
 | 2 | server | the registry field through the measured reader; the three-valued spent verdict; the two 409s; the unbind on dispatch | **rule 3 enforced**: a second bind on a PR-bearing child refuses, an unreadable marker refuses, a research child still hands over |
 | 3 | both | `ws-audit --reclaim` and the token; `ws-reclaim` and its ladder; its own tail arm and breadcrumb; close's fourth act; delivery cancellation after a successful reclaim | **rules 1 and 2**: a child is gone after its final close, its temp root with it, its work in the attic |
 | 4 | both | the sweep lane; `reclaim-pause` and its route and toggle; the attention item | **rule 4**: an orphaned child is reclaimed with no human act; the switch stops it from a phone |
-| 5 | pwa | the run-row chip and its sentences | the operator can read what became of a child |
+| 5 | server + pwa | the run-row chip and its sentences; the sweep's verdicts on the chip and the attention item; feed rows that do not repeat; the presence lease and its bound; "has coordinated" fenced to the workspace's current generation | the operator can read what became of a child, and why the sweep keeps one; a presence-held child is licensed within the stated bound |
+| 6 | both | the collector for a child temp root that a human verb orphaned; ccd journaling the failures the lifecycle mirror never sees; the pin for a child whose branch is already gone; recovery from a registry row whose directory is gone; git's local environment dropped inside the reclaim's containment | an orphaned temp root is collected with no human act; a child whose branch is gone is reclaimed rather than failing |
 
-Wave 3 is the only wave that destroys anything, and it is the one to review hardest. Delivery cancellation
-rides with it rather than with the sweep, because §5.6 makes it part of the act: shipping reclaim-on-close
-without it would run the slug-recycling hazard at the new, higher rate for as long as wave 4 took to land.
+Wave 3 built the destructive verb, and it is the one to review hardest. Every later wave that changes what
+reaches a destructive act is reviewed for safety too: wave 4's sweep is its first automatic caller, wave 5's
+lease and coordination fence change when a wait licenses `--defer-expired` and which children may be taken,
+and wave 6's collector is a second destructive path. Delivery cancellation rides with wave 3 rather than with
+the sweep, because §5.6 makes it part of the act: shipping reclaim-on-close without it would run the
+slug-recycling hazard at the new, higher rate for as long as wave 4 took to land.
 
 ---
 
@@ -701,6 +899,17 @@ silently**, so re-measure before relying on any of them.
 | `server/test/single-definition.test.ts:2919` | `expect(LIFECYCLE_ACTS.length).toBe(25)` | same |
 | `server/test/lifecycle-vocabulary.test.ts:149` | `.toBe(24)` — the union minus the degrade, compared against ccd's executed array | same |
 | `server/test/ccd-lifecycle-emit.test.ts:28` | `.toBe(24)` — the ccd-side twin | same |
+
+**As built.** Wave 3's Task 1 (#187) added `reclaim` at all seven sites, and no act has been added since.
+At `origin/main` `c41bf8c5`: the union and `ACT_WORD` hold 26; `_LC_ACTS` holds 25 (`ccd/ccd:4368-4370`,
+read with `sed -n 4368,4370p ccd/ccd`); the two union cardinals read `.toBe(26)`
+(`server/test/lifecycle-acts.test.ts:33`, `server/test/single-definition.test.ts:3064`), and the two that
+exclude the degrade read `.toBe(25)` (`server/test/lifecycle-vocabulary.test.ts:149`,
+`server/test/ccd-lifecycle-emit.test.ts:28`).
+
+Waves 1 to 4 moved other values below as well; they stay as the `46aca9fe` snapshot, so re-measure each
+at the site its entry names (`server/test/auth-gate.test.ts`, `server/test/ccd-archive.test.ts`,
+`agent/src/whitelist.ts`, `ccd/ccd`, `shared/api.ts`, `server/src/watch.ts`, `server/src/registry.ts`).
 
 **Route censuses.** `server/test/auth-gate.test.ts` holds three exact counts: `scanRoutes('server.ts')` is
 **51**, `scanRoutes('coord/routes.ts')` is **30**, and the whole-tree `ROUTES.length` is **81**. A route

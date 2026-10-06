@@ -136,7 +136,7 @@ Copied from `CLAUDE.md`, the spec and the programme ledger. Every task's require
 - **The `_reg_get` census.** Task 1 adds no `_reg_get` call; Task 2 adds one (`_typed_note`'s read of `typed`);
   Task 3 one more (`_operator_choice_keep`'s). `$SCRATCH/reg-get-census.py <delta>` (Task 2 Step 5) re-derives the
   pair from `origin/main`'s own sentence plus `<delta>` — idempotent, so Task 3 and Task 5 run the same script:
-  179/150 at `22f7931af`, 180/151 after Task 2, 181/152 after Task 3.
+  179/150 at `22f7931af`, 180/151 after Task 2, 181/152 after Task 3, 182/153 on the tip (the gpt-lane skip's `_is_anthropic_backend` read: a delta of 3 over main).
 - **Locate code by CONTENT.** Line numbers are "at `22f7931af`" and are hints, never addresses. Every edit below is an
   "In `<file>`, find:" block whose anchor matches exactly once on `origin/main` at `22f7931af`.
 - **Shell state does not survive between Bash calls.** Every block that names `$SCRATCH` sets it itself
@@ -269,7 +269,8 @@ same at both); live reads are read-only.
    `cmd_ws_rm`, `cmd_forget`, `_ws_reap_tail`, `_ws_reclaim_tail` (the row ends), `cmd_account_pane` (an account's
    login pane, `_tmux_at "$pane"`, not a session) and `cmd_supervise`'s launchd `bootout` after a crash loop (Claude
    Code already exited; the revival path, Open question 1). `_swap_refuse`'s restart follows `cmd_swap`'s own stop.
-   A supervisor revival (`cmd_supervise` → `cmd_ensure`) follows no ccd stop at all.
+   A supervisor revival (`cmd_supervise` → `cmd_ensure`) follows no ccd stop at all (superseded: every spawn keeps, at
+   `_spawn_start`'s one choke point; see `operator-choice-keeps-at-every-spawn`).
 5. **The class vocabulary IS the alias table.** `ROUTE_CLASSES="fable opus sonnet haiku default"` (≈1576) — exactly
    the five aliases the spec lists — so the alias table is derived from it, not hand-kept; `single-definition`'s
    models scan already lists `ccd/ccd` as a holder of the four classes, and adding the port changes no holder list
@@ -1713,14 +1714,15 @@ Expected: `26 passed (26)` (9 + 3 + 14); then `372 passed (372)` (`ccd-auto-swap
 | 2.1 | `ccd/ccd` | `_typed_note "$id" effort "$level"   # the settle's keystroke, never the operator's choice (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “the settle journals its /effort before it types it”; “the settle /effort on a session with no effort field is not promoted” |
 | 2.2 | `ccd/ccd` | `_typed_note "$id" model "$cls"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 3 failed \| 34 passed (37): “route --apply journals the class it types and the effort, and nothing for auto”; “the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator's own”; “a route --apply /model is not promoted — not even a degraded class typed over the operator's fable, in either acknowledgement shape” |
 | 2.3 | `ccd/ccd` | `_typed_note "$id" effort "$eff"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “route --apply journals the class it types and the effort, and nothing for auto” |
-| 2.4 | `ccd/ccd` | `<<<"$rows" \| tail -n "$((TYPED_KEEP_ROWS - 1))")` → `<<<"$rows")` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token” |
-| 2.5 | `ccd/ccd` | `[[ "$kind" == since \|\| ( "$kind" =~ ^(model\|effort)$ && "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ) ]] \|\| return 0` → `[[ "$kind" == since \|\| "$kind" =~ ^(model\|effort)$ ]] \|\| return 0` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token” |
+| 2.4 | `ccd/ccd` | `rows=$(printf '%s\n' "$rows" \| tail -n "$((TYPED_KEEP_ROWS - 1))")` → `rows=$(printf '%s\n' "$rows")` | ccd-operator-choice.test.ts | 2 failed \| 61 passed (63): “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token”; “a keystroke that rotated out of the journal is still never promoted: the floor follows the rotation” |
+| 2.5 | `ccd/ccd` | `[[ "$kind" == since \|\| "$kind" == moved \|\| ( "$kind" =~ ^(model\|effort)$ && "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ) ]] \|\| return 0` → `[[ "$kind" == since \|\| "$kind" == moved \|\| "$kind" =~ ^(model\|effort)$ ]] \|\| return 0` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token” |
 | 2.6 | `ccd/ccd` | `_route_word_in "${v,,}" "$ROUTE_CLASSES" && { printf '%s\n' "${v,,}"; return 0; }` → (nothing) | ccd-operator-choice.test.ts | 11 failed \| 26 passed (37): “the aliases — ROUTE_CLASSES, each also with [1m] — and an acknowledgement's display word”; “/model opus, acknowledged: the class is written through cmd_route, actor=operator-session”; “the picker takes no argument: its acknowledgement names the value, in either shape Claude Code writes it”; … and 8 more |
 | 2.7 | `ccd/ccd` | `local v="${1%\[1m\]}"` → `local v="$1"` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “the aliases — ROUTE_CLASSES, each also with [1m] — and an acknowledgement's display word” |
 | 2.8 | `ccd/ccd` | `MODEL_FAMILY_TOKENS="-fable-:fable -opus-:opus -sonnet-:sonnet -haiku-:haiku"` → `MODEL_FAMILY_TOKENS="-opus-:opus -fable-:fable -sonnet-:sonnet -haiku-:haiku"` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “_model_family_class agrees with familyClassOf on every id, and MODEL_FAMILY_TOKENS is FAMILY_TOKENS” |
 | 2.9 | `ccd/ccd` | `[[ "$1" == *"${t%%:*}"* ]] && { printf '%s\n' "${t##*:}"; return 0; }` → `[[ "$1" == *"${t##*:}"* ]] && { printf '%s\n' "${t##*:}"; return 0; }` | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “a full model id through the port, and everything else outside the vocabulary”; “_model_family_class agrees with familyClassOf on every id, and MODEL_FAMILY_TOKENS is FAMILY_TOKENS” |
 | 2.10 | `ccd/ccd` | `_typed_note "$id" since   # the operator-choice journal opens at this ccd's first spawn of the row: no older command is read as the operator's (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “the spawn opens the journal at a floor, and a later spawn or keystroke keeps that floor” |
 | 2.11 | `ccd/ccd` | `if [[ "$floor" =~ ^[0-9]{1,12}\ since$ ]]; then` → `if false; then` | ccd-operator-choice.test.ts | 4 failed \| 33 passed (37): “the spawn opens the journal at a floor, and a later spawn or keystroke keeps that floor”; “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token”; “the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator's own”; … and 1 more |
+| 2.12 | `ccd/ccd` | `(( fe > 10#${floor%% *} )) && floor="$fe since"` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 39 passed (40): “a keystroke that rotated out of the journal is still never promoted: the floor follows the rotation” |
 
 Every row is measured on the full prototype (37 cases), so rows 2.1, 2.2 and 2.11 also red Task 3's cases — among
 them the spec's first two mutation rows ("the settle /effort on a session with no effort field is not promoted", "a
@@ -2301,31 +2303,56 @@ raises in the reader, which logs `unmeasured` and promotes nothing, so the refus
 | # | File | Exact edit (old → new) | Suite | Measured red on the full prototype |
 |---|---|---|---|---|
 | 3.1 | `ccd/ccd` | `is outside the $field vocabulary — the record is unchanged" / continue` → `is outside the $field vocabulary — the record is unchanged" / die "operator-choice: outside the vocabulary"` | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “an argument that is not one token is logged with its real size as outside the vocabulary, never split into fields”; “an unmappable value does not abort a swap: logged, the record unchanged, and the swap lands” |
-| 3.2 | `ccd/ccd` | `( cmd_route --session "$id" --set "$field=$want" --actor operator-session --reason "its own /$kind, kept across a restart" ) >/dev/null 2>&1` → `{ cmd_route --session "$id" --set "$field=$want" --actor operator-session --reason "its own /$kind, kept across a restart"; } >/dev/null 2>&1` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “…nor does a value the record's own checks refuse (haiku takes no effort level)” |
-| 3.3 | `ccd/ccd` | `_operator_choice_keep "$id"   # a stop the spawn below follows: the operator's own /model and /effort reach the record first (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 4 failed \| 33 passed (37): “an unmappable value does not abort a swap: logged, the record unchanged, and the swap lands”; “…nor does a value the record's own checks refuse (haiku takes no effort level)”; “an operator /model opus survives an auto-home: the home-ward swap writes it before its stop, and the next spawn composes opus”; … and 1 more |
-| 3.4 | `ccd/ccd` | `_operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “ccd stop: `ccd start`/`enable` respawn from the record”; “every stop in ccd is classified: three keep the operator's choice first, the rest end the row” |
-| 3.5 | `ccd/ccd` | `_operator_choice_keep "$id"; _ws_unsupervise "$id"      #` → `_ws_unsupervise "$id"      #` | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “ccd ws-archive: ws-restore respawns from the record”; “every stop in ccd is classified: three keep the operator's choice first, the rest end the row” |
+| 3.2 | `ccd/ccd` | `( cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, kept across a restart" ) >/dev/null 2>&1` → `{ cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, kept across a restart"; } >/dev/null 2>&1` | ccd-operator-choice.test.ts | 2 failed \| 55 passed (57): “…nor does a value the record's own checks refuse (haiku takes no effort level)”; “a pair the record refuses (haiku, then a level) is refused whole: one line per kind, the record unchanged” |
+| 3.3 | `ccd/ccd` | `[[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"   # a stop the spawn below follows: the operator's own /model and /effort reach the record first; a session already stopped and read (a marker) is not read again (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 5 failed \| 58 passed (63): “an unmappable value does not abort a swap …”; “…nor does a value the record's own checks refuse (haiku takes no effort level)”; “an operator /model opus survives an auto-home …”; “a swap logs an out-of-vocabulary /model once: the landing's cmd_ensure does not read again”; “every stop in ccd is classified …” |
+| 3.4 | `ccd/ccd` | `` [[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first; a session already stopped and read is not read again (§5.7) `` → (nothing) | ccd-operator-choice.test.ts | 6 failed \| 49 passed (55): “ccd stop: `ccd start`/`enable` respawn from the record”; “a stop and then a ws-archive of the same dead session read once and log once”; “two stops in a row of the same dead session read once and log once”; “a kill that failed on a session that is still there leaves no marker”; “control: a kill that failed because the session was already gone keeps the marker”; “every stop in ccd is classified …” |
+| 3.5 | `ccd/ccd` | `[[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"; _ws_unsupervise "$id"      #` → `_ws_unsupervise "$id"      #` | ccd-operator-choice.test.ts | 2 failed \| 53 passed (55): “ccd ws-archive: ws-restore respawns from the record”; “every stop in ccd is classified …” |
 | 3.6 | `ccd/ccd` | `(( 10#$fm >= 10#$at )) && continue` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “the record wins when it is newer: a field written after the command is not overwritten” |
 | 3.7 | `ccd/ccd` | `[[ "$(_route_peek "$id" "$field")" == "$want" ]] && continue` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “a value the record already holds is not written again” |
-| 3.8 | `ccd/ccd` | `if not ack or at < floor:` → `if at < floor:` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “an acknowledged command wins over a later one Claude Code refused, which changed nothing” |
+| 3.8 | `ccd/ccd` | `if not ack:` → `if False:` | ccd-operator-choice.test.ts | 4 failed \| 59 passed (63): “an acknowledged command wins over a later one Claude Code refused, which changed nothing”; “an acknowledgement in a wording this ccd does not recognise logs unmeasured once, writes nothing, and --stage 7 counts it”; “a /model and an /effort both unrecognised log ONE line for the keep”; “an unrecognised acknowledgement older than a recognised one is not the newest: no line” |
 | 3.9 | `ccd/ccd` | `if text is None or ENV.sub("", text).strip():` → `if text is None:` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “a human QUOTING the envelope is not a command, even above an acknowledgement” |
 | 3.10 | `ccd/ccd` | `or row.get("isSidechain") is True:` → `:` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “a subagent's row is not the operator's” |
 | 3.11 | `ccd/ccd` | `and abs(t - at) <= window for t, k, v in rows` → `for t, k, v in rows` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “control: the same /effort an hour from any journalled keystroke is the operator's” |
 | 3.12 | `ccd/ccd` | `print(kind, val if SAFE.fullmatch(val) else "?", at, len(val.encode()))` → `print(kind, val, at, len(val.encode()))` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “an argument that is not one token is logged with its real size as outside the vocabulary, never split into fields” |
 | 3.13 | `ccd/ccd` | `fm=$(_plat_mtime "$REG/$id.$field" 2>/dev/null) && [[ "$fm" =~ ^[0-9]+$ ]] \|\| continue` → `fm=$(_plat_mtime "$REG/$id.$field" 2>/dev/null) && [[ "$fm" =~ ^[0-9]+$ ]] \|\| :` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “a field whose time cannot be read is not overwritten” |
 | 3.14 | `ccd/ccd` | `newest[kind] = (val, at)` → `newest.setdefault(kind, (val, at))` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “the newest of two acknowledged commands wins” |
-| 3.15 | `ccd/ccd` | `if any(k == kind and v == val.lower() and abs(t - at) <= window for t, k, v in rows): / continue / newest[kind] = (val, at) / for kind, (val, at) in sorted(newest.items()):` → `newest[kind] = (val, at) / for kind, (val, at) in sorted(newest.items()): / if any(k == kind and v == val.lower() and abs(t - at) <= window for t, k, v in rows): / continue` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator's own” |
+| 3.15 | `ccd/ccd` | `if any(k == kind and v == val.lower() and abs(t - at) <= window for t, k, v in rows): / continue / newest[kind] = (val, at) / for kind, (val, at) in sorted(newest.items()): / print(kind, val if SAFE.fullmatch(val) else "?", at, len(val.encode()))` → `if True: / newest[kind] = (val, at) / pass / for kind, (val, at) in sorted(newest.items()): / if not any(k == kind and v == val.lower() and abs(t - at) <= window for t, k, v in rows): print(kind, val if SAFE.fullmatch(val) else "?", at, len(val.encode()))` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator's own” |
 | 3.16 | `ccd/ccd` | `[[ -f "$f" && -r "$f" ]] \|\| { _operator_choice_say "$id" "unmeasured (its transcript is not a readable regular file)"; return 0; }` → (nothing) | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “could not measure is said, never silent: a directory for a transcript, no python3, a reader that failed — rc 0, the record unchanged”; “a FIFO where the transcript should be is never opened: the stop is not held, and it is said” |
 | 3.17 | `ccd/ccd` | `command -v python3 >/dev/null 2>&1 \|\| { _operator_choice_say "$id" "unmeasured (no python3)"; return 0; }` → `command -v python3 >/dev/null 2>&1 \|\| return 0` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “could not measure is said, never silent: a directory for a transcript, no python3, a reader that failed — rc 0, the record unchanged” |
 | 3.18 | `ccd/ccd` | `2>/dev/null) \|\| { _operator_choice_say "$id" "unmeasured (the transcript reader failed)"; return 0; }` → `2>/dev/null) \|\| return 0` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “could not measure is said, never silent: a directory for a transcript, no python3, a reader that failed — rc 0, the record unchanged” |
-| 3.19 | `ccd/ccd` | `if not ack or at < floor:` → `if not ack:` | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “a session with no journal yet (spawned by an older ccd) promotes nothing at its first stop, opens the journal, and says so”; “a command older than the journal's floor is not read” |
+| 3.19 | `ccd/ccd` | `if at < floor: / continue` → (nothing) | ccd-operator-choice.test.ts | 5 failed \| 58 passed (63): “a keystroke that rotated out of the journal is still never promoted: the floor follows the rotation”; “an unrecognised acknowledgement older than the journal floor is not read: no line”; “a swap between a non-Anthropic and an Anthropic lane moves the journal floor to its landing …”; “a session with no journal yet (spawned by an older ccd) promotes nothing at its first stop, opens the journal, and says so”; “a command older than the journal's floor is not read” |
 | 3.20 | `ccd/ccd` | `why="its journal opened only now, so an older command may be an older ccd's own keystroke"` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “a session with no journal yet (spawned by an older ccd) promotes nothing at its first stop, opens the journal, and says so” |
 | 3.21 | `ccd/ccd` | `if kind == "model" and named.endswith("(default)"): / named = "default"` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “a picker row Claude Code marks (default) is the default class, not the model it resolves to” |
 | 3.22 | `ccd/ccd` | `CLEAN = re.compile(r"\x1b\[[0-9;]*m\|`")` → `CLEAN = re.compile(r"\x1b\[[0-9;]*m")` | ccd-operator-choice.test.ts | 4 failed \| 33 passed (37): “the picker takes no argument: its acknowledgement names the value, in either shape Claude Code writes it”; “a picker row Claude Code marks (default) is the default class, not the model it resolves to”; “the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator's own”; … and 1 more |
 | 3.23 | `ccd/ccd` | `\|(Ultracode) on\b")}` → `")}` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “/effort ultracode as 2.1.284 and later acknowledge it ("Ultracode on …") is read” |
 | 3.24 | `ccd/ccd` | `shown="$val"; [[ "$val" == "?" ]] && shown=` → `shown="?"; [[ "$val" == "?" ]] && shown=` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “an unmappable value does not abort a swap: logged, the record unchanged, and the swap lands” |
 | 3.25 | `ccd/ccd` | `shown="(${n//[^0-9]/} bytes, not one token)"` → `shown="(${#val} bytes, not one token)"` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “an argument that is not one token is logged with its real size as outside the vocabulary, never split into fields” |
-| 3.26 | `ccd/ccd` | `_route_apply_now() {   # id -> 0 everything wanted is applied` → `_bounce_session() { local id="$1"; _svc_stop "claude-session@$id" 2>/dev/null; _svc_start "claude-session@$id"; } / _route_apply_now() {   # id -> 0 everything wanted is applied` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “every stop in ccd is classified: three keep the operator's choice first, the rest end the row” |
+| 3.26 | `ccd/ccd` | `_route_apply_now() {   # id -> 0 everything wanted is applied` → `_bounce_session() { local id="$1"; _svc_stop "claude-session@$id" 2>/dev/null; _svc_start "claude-session@$id"; }; _route_apply_now() {   # id -> 0 everything wanted is applied` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “every stop in ccd is classified: three keep the operator's choice first, the rest end the row” |
+| 3.27 | `ccd/ccd` | `_is_anthropic_backend "$(_reg_get "$id" wrapper)" \|\| return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 38 passed (39): “a session on a non-Anthropic lane is skipped: its /model is never read, logged or written” |
+| 3.28 | `ccd/ccd` | `` [[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"   # EVERY spawn reads, here at the one choke point: a revival (Claude Code exited — a pane-scope OOM kill, /exit — and `_supervised_start`'s two unsupervised fallbacks) reads; a spawn that a stop's keep already read for (swap landing, start after stop, ws-restore after ws-archive, refusal restart) does not read again (§5.7). BEFORE the floor line below, or an older ccd's session would open its journal first and the keep read nothing `` → (nothing) | ccd-operator-choice.test.ts | 6 failed \| 44 passed (50): “a supervisor revival: cmd_ensure in the unit keeps the operator's /model before its spawn”; “after a stop's keep and a spawn the marker is gone, so a later revival reads again”; both “_supervised_start's fallback revival keeps the operator's /model opus” cases; “the keep runs BEFORE the spawn opens the journal …”; “every stop in ccd is classified …” |
+| 3.29 | `ccd/ccd` | `[[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"` → `_operator_choice_keep "$id"` | ccd-operator-choice.test.ts | 4 failed \| 46 passed (50): “a swap logs an out-of-vocabulary /model once: the landing's cmd_ensure does not read again”; “after a stop's keep and a spawn the marker is gone, so a later revival reads again”; “a spawn after a stop's keep does not read again (the marker gates the choke point)”; “every stop in ccd is classified …” |
+| 3.30 | `ccd/ccd` | `rm -f "$REG/$id.choicekept"   # every spawn ends the marker: it means "a keep ran since the last spawn" (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 5 failed \| 45 passed (50): “after a stop's keep and a spawn the marker is gone, so a later revival reads again”; “ccd ws-archive: ws-restore respawns from the record”; both “_supervised_start's fallback revival keeps the operator's /model opus” cases; “every stop in ccd is classified …” |
+| 3.31 | `ccd/ccd` | `(( _oc_from == _oc_to )) \|\| _typed_note "$id" moved   # a move between an Anthropic and a non-Anthropic lane: no command typed on the other lane is read by a later stop (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 44 passed (45): “a swap between a non-Anthropic and an Anthropic lane moves the journal floor to its landing: a later stop reads nothing typed before it” |
+| 3.32 | `ccd/ccd` | `_is_anthropic_backend "$(_reg_get "$id" wrapper)" \|\| return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7) / typed=$(_reg_get "$id" typed) / if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then / _typed_note "$id" since / why="its journal opened only now, so an older command may be an older ccd's own keystroke" / fi` → `typed=$(_reg_get "$id" typed) / if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then / _typed_note "$id" since / why="its journal opened only now, so an older command may be an older ccd's own keystroke" / fi / _is_anthropic_backend "$(_reg_get "$id" wrapper)" \|\| return 0` | ccd-operator-choice.test.ts | 1 failed \| 44 passed (45): “a session on a non-Anthropic lane is skipped: its /model is never read, logged or written” |
+| 3.33 | `ccd/ccd` | `(( n > 10#${floor%% *} )) && floor="$n since"` → `floor="$n since"` | ccd-operator-choice.test.ts | 1 failed \| 44 passed (45): “the floor only ever moves forward: a lane change never moves it back, and keeps the journal's rows” |
+| 3.34 | `ccd/ccd` | `(( _oc_from == _oc_to )) \|\| _typed_note "$id" moved   # a move between an Anthropic and a non-Anthropic lane: no command typed on the other lane is read by a later stop (§5.7)` → `_typed_note "$id" moved   # a move between an Anthropic and a non-Anthropic lane: no command typed on the other lane is read by a later stop (§5.7)` | ccd-operator-choice.test.ts | 1 failed \| 44 passed (45): “control: the same /model typed on an Anthropic lane, swapped to another Anthropic lane, is still read (and logged)” |
+| 3.35 | `ccd/ccd` | `[[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"   # EVERY spawn reads / _typed_note "$id" since   # the operator-choice journal` → `_typed_note "$id" since   # the floor first / [[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"   # the operator-choice journal` | ccd-operator-choice.test.ts | 3 failed \| 47 passed (50): “the keep runs BEFORE the spawn opens the journal: a session an older ccd spawned says unmeasured once”; “a FIFO where the transcript should be is never opened …”; “every stop in ccd is classified …” |
+| 3.36 | `ccd/ccd` | `_route_apply_now() {   # id -> 0 everything wanted is applied` → `_revive_session() { local id="$1"; _tmux_new_session -d -s "cc-$id" claude; }; _route_apply_now() {   # id -> 0 everything wanted is applied` | ccd-operator-choice.test.ts | 1 failed \| 49 passed (50): “every spawn primitive in ccd sits in _spawn_start, or in a named exception” |
+| 3.37 | `ccd/ccd` | `[[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"; _ws_unsupervise "$id"` → `_operator_choice_keep "$id"; _ws_unsupervise "$id"` | ccd-operator-choice.test.ts | 2 failed \| 53 passed (55): “a stop and then a ws-archive of the same dead session read once and log once”; “every stop in ccd is classified …” |
+| 3.38 | `ccd/ccd` | `_operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7) / sleep 1` → `true   # a kill that failed on a live session leaves no marker (§5.7) / sleep 1` | ccd-operator-choice.test.ts | 1 failed \| 54 passed (55): “every stop in ccd is classified …” |
+| 3.39 | `ccd/ccd` | `_ws_unsupervise "$id"      # clears Restart=always; ws-restore respawns from the record (§5.7) / tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null \|\| _operator_choice_unmark "$id"` → `_ws_unsupervise "$id"      # clears Restart=always; ws-restore respawns from the record (§5.7) / tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null \|\| true` | ccd-operator-choice.test.ts | 2 failed \| 53 passed (55): “ws-archive: a kill that failed on a live session leaves no marker”; “every stop in ccd is classified …” |
+| 3.40 | `ccd/ccd` | `[[ "$PROBE_VERDICT" == gone \|\| "$PROBE_SUBSTRATE" == absent ]] \|\| rm -f "$REG/$1.choicekept" 2>/dev/null` → `rm -f "$REG/$1.choicekept" 2>/dev/null` | ccd-operator-choice.test.ts | 4 failed \| 60 passed (64): “a stop and then a ws-archive of the same dead session read once and log once”; “two stops in a row of the same dead session read once and log once”; “control: a kill that failed because the session was already gone keeps the marker”; “a stop whose kill failed because no tmux server is running keeps the marker: a following ws-archive reads once and logs once” |
+| 3.41 | `ccd/ccd` | `[[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"   # a stop the spawn below follows` → `_operator_choice_keep "$id"   # a stop the spawn below follows` | ccd-operator-choice.test.ts | 1 failed \| 54 passed (55): “every stop in ccd is classified …” |
+| 3.42 | `ccd/ccd` | `_operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7) / echo "stopped $id"` → `true   # a kill that failed on a live session leaves no marker (§5.7) / echo "stopped $id"` | ccd-operator-choice.test.ts | 2 failed \| 53 passed (55): “a kill that failed on a session that is still there leaves no marker”; “every stop in ccd is classified …” |
+| 3.43 | `ccd/ccd` | `` [[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first; a session already stopped and read `` → `` _operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first; a session already stopped and read `` | ccd-operator-choice.test.ts | 2 failed \| 53 passed (55): “two stops in a row of the same dead session read once and log once”; “every stop in ccd is classified …” |
+| 3.44 | `ccd/ccd` | `sets+=(--set "$field=$want"); kinds+=("$kind:$want")` → `( cmd_route --session "$id" --set "$field=$want" --actor operator-session --reason "its own /$kind, kept across a restart" ) >/dev/null 2>&1 \|\| _operator_choice_say "$id" "/$kind $want refused by the route record's own checks — the record is unchanged"` | ccd-operator-choice.test.ts | 2 failed \| 55 passed (57): “a haiku record, then /model opus and /effort high: the pair is applied in one call, so class=opus AND effort=high”; “a pair the record refuses (haiku, then a level) is refused whole …” |
+| 3.45 | `ccd/ccd` | `\|\| for kind in "${kinds[@]}"; do` → `\|\| for kind in "${kinds[0]}"; do` | ccd-operator-choice.test.ts | 1 failed \| 56 passed (57): “a pair the record refuses (haiku, then a level) is refused whole: one line per kind, the record unchanged” |
+| 3.46 | `ccd/ccd` | `unack[kind] = True` → `pass` | ccd-operator-choice.test.ts | 3 failed \| 60 passed (63): “an acknowledged command wins over a later one Claude Code refused, which changed nothing”; “an acknowledgement in a wording this ccd does not recognise logs unmeasured once, writes nothing, and --stage 7 counts it”; “a /model and an /effort both unrecognised log ONE line for the keep” |
+| 3.47 | `ccd/ccd` | `if any(unack.values()):` → `for _ in [k for k in unack if unack[k]]:` | ccd-operator-choice.test.ts | 1 failed \| 62 passed (63): “a /model and an /effort both unrecognised log ONE line for the keep” |
+| 3.48 | `ccd/ccd` | `if not any(k == kind and (not given or v == given) and abs(t - at) <= window for t, k, v in rows):` → `if True:` | ccd-operator-choice.test.ts | 1 failed \| 62 passed (63): “ccd's own journalled keystroke whose acknowledgement drifted is not the operator's loss: no line” |
+| 3.49 | `ccd/ccd` | `unack[kind] = False` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 62 passed (63): “an unrecognised acknowledgement older than a recognised one is not the newest: no line” |
+| 3.50 | `ccd/ccd` | `drift)  _operator_choice_say "$id" "unmeasured (a /model or /effort command with no acknowledgement this ccd recognises)"; continue ;;` → (nothing) | ccd-operator-choice.test.ts | 3 failed \| 60 passed (63): “an acknowledged command wins over a later one Claude Code refused, which changed nothing”; “an acknowledgement in a wording this ccd does not recognise logs unmeasured once, writes nothing, and --stage 7 counts it”; “a /model and an /effort both unrecognised log ONE line for the keep” |
+| 3.51 | `ccd/ccd` | `[[ "$PROBE_VERDICT" == gone \|\| "$PROBE_SUBSTRATE" == absent ]] \|\| rm -f "$REG/$1.choicekept" 2>/dev/null` → `[[ "$PROBE_VERDICT" == gone ]] \|\| rm -f "$REG/$1.choicekept" 2>/dev/null` | ccd-operator-choice.test.ts | 1 failed \| 63 passed (64): “a stop whose kill failed because no tmux server is running keeps the marker: a following ws-archive reads once and logs once” |
 
 ```bash
 git add ccd/ccd server/test/ccd-operator-choice.test.ts server/test/ccd-die-containment.test.ts
@@ -2557,8 +2584,8 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   `ccd stop` (a later `start`/`enable` respawns from the record) and `ccd ws-archive` (`ws-restore` does) —
   `_operator_choice_keep` reads the transcript for the newest acknowledged `/model` and `/effort` that no journal
   row explains and writes an operator's value through `cmd_route`'s own writer: `route <id>: class fable -> opus
-  [actor=operator-session]` in `swap.log`. A supervisor revival after a crash has no ccd stop, so it reads nothing
-  (spec §5.7 scopes it out).
+  [actor=operator-session]` in `swap.log`. A spawn that follows no ccd stop (a supervisor revival after a crash, the
+  unsupervised fallbacks, `ws-restore`) keeps the choice too, at `_spawn_start`, the one choke point of every spawn.
 - **ccd's own keystrokes are not the operator's.** The settle's `/effort` and `route --apply` journal what they
   type in `$REG/<id>.typed` (`<epoch> <model|effort> <value>`, the last `TYPED_KEEP_ROWS=16`, purged with the
   row); a command with the same value within `TYPED_MATCH_WINDOW=60` seconds of a row is ccd's and is left alone.
@@ -2589,11 +2616,12 @@ In `docs/superpowers/specs/2026-09-23-session-continuity-design.md`, find this a
 and insert, directly above it:
 
 ```text
-**As planned (wave 3, 2026-10-04).** The stops that a spawn follows are `cmd_swap`'s (every rescue, auto-home,
+**As planned (wave 3, 2026-10-04; the spec now reads "As built", with the coordinator's rulings).** The stops that a spawn follows are `cmd_swap`'s (every rescue, auto-home,
 manual, PWA and `swap-self` move), `ccd stop`'s (a later `start` or `enable` respawns from the record) and
 `ccd ws-archive`'s (`ws-restore` does); the stops that end the row (`ws-rm`, `forget`, the reap and reclaim
-tails) are not, `_swap_refuse`'s restart follows `cmd_swap`'s own stop, and a supervisor revival has no ccd stop
-at all. The short window is `TYPED_MATCH_WINDOW` (60 s), and `.typed` keeps its last 16 rows below a floor row.
+tails) are not, `_swap_refuse`'s restart follows `cmd_swap`'s own stop, and a spawn that follows no ccd stop (a
+supervisor revival, the unsupervised fallbacks, `ws-restore`) keeps the choice too, at `_spawn_start`, the one choke
+point of every spawn. The short window is `TYPED_MATCH_WINDOW` (60 s), and `.typed` keeps its last 16 rows below a floor row.
 The readings the text above leaves open are fixed: "the newest command" is one per kind (`/model` and `/effort`
 are two fields), chosen among the commands no row matches; a command's value is its argument or, for the picker and
 the slider, which take none, the value Claude Code's acknowledgement names (ANSI bold or backticks removed; a row
@@ -2665,7 +2693,7 @@ EOF
 - [ ] **Step 1: Merge current `main`, and re-measure on the merged tree**
 
 ONE gated block. It resolves, by script, exactly the two conflicts another wave can leave in `ccd/ccd` — the line-2
-stamp, and the `_reg_get` census's comment lines (MAIN's side, which `reg-get-census.py 2` then re-derives) — and
+stamp, and the `_reg_get` census's comment lines (MAIN's side, which `reg-get-census.py 3` then re-derives) — and
 nothing else; it commits only when both scripts succeeded, `bash -n` passed and no conflict marker is left; on anything
 else it commits nothing and aborts the merge. The resolver is wave 2's, verbatim:
 
@@ -2709,26 +2737,26 @@ if ! git fetch origin main; then
 elif git -c merge.conflictStyle=merge merge --no-edit origin/main; then
   echo 'merged without a conflict, or already up to date'
 elif [ "$(git diff --name-only --diff-filter=U)" = ccd/ccd ] && python3 "$SCRATCH/resolve-census-merge.py" \
-     && python3 "$SCRATCH/reg-get-census.py" 2 && ~/.local/bin/ccrc restamp ccd/ccd && bash -n ccd/ccd \
+     && python3 "$SCRATCH/reg-get-census.py" 3 && ~/.local/bin/ccrc restamp ccd/ccd && bash -n ccd/ccd \
      && ! grep -qE '^(<<<<<<< |=======$|>>>>>>> )' ccd/ccd; then
   git add ccd/ccd && git commit --no-edit && echo 'merged: the stamp and the census resolved'
 else
   echo 'STOP: a conflict this block does not resolve — report it'; git merge --abort
 fi
 git log -1 --format='%h %s'
-python3 "$SCRATCH/reg-get-census.py" 2   # on any merged tree: idempotent, and it STOPs if the census is not main's + 2
+python3 "$SCRATCH/reg-get-census.py" 3   # on any merged tree: idempotent, and it STOPs if the census is not main's + 3 (the tree's own delta)
 ```
 
 Expected: `Already up to date.` and `merged without a conflict, or already up to date` when `main` has not moved (a
 `main` that changed `ccd/ccd` always conflicts on its stamp), or `merged: the stamp and the census resolved`.
 Measured on scratch clones (base `22f7931af`; this wave's prototype as one commit; `origin` a real remote, so the
 fetch runs): another wave that added a `_reg_get` read and re-measured the census → `resolved 2 hunk(s): the stamp
-and the census block, main's side`, `census 180/151 -> 182/153`, committed, `bash -n` clean, a clean tree; a `main`
+and the census block, main's side`, `census 180/151 -> 182/153` (measured while the tree's delta was 2; the tip's delta is 3, so the same merge now gives main's pair + 3), committed, `bash -n` clean, a clean tree; a `main`
 that edited the README line Task 4 anchors on → `STOP`, the merge aborted, the tip unchanged, a clean tree; an edit
 far from this wave's files → `merged without a conflict, or already up to date`. On `STOP` — another file conflicted (a wave that also touched `README.md`, the spec or
 `deploy/measure-continuity.py`: the coordinator rules those hunks) — the branch's tip is unchanged, no merge is in
 progress and the tree is clean: report it and stop. Never resolve by hand; never `git checkout --theirs` on a file.
-Then on the merged tree: the S6-R11 procedure, the census commands (`181`/`152` over main's stated pair), and
+Then on the merged tree: the S6-R11 procedure, the census commands (`182`/`153` over main's stated pair), and
 `corpus-frozen`.
 
 - [ ] **Step 2: The server suite in twelve sequential shards on the merged tip, then agent and pwa**
@@ -2757,8 +2785,8 @@ git fetch origin main && ./node_modules/.bin/vitest run test/deviation-refs.test
 
 Expected (measured on the prototype): `158 passed` (37 + 102 + 12 + 2 + 5); `357 passed`; `ccd-workspaces` 79 and
 `typecheck-tests` 12 and `ccd-die-containment` 12; `87 passed` (`deviation-refs` compares this branch's entries against `origin/main`'s without
-merging); `7 passed | 328 skipped (335)`; and the S6-R11 procedure `147 / 197 / 52 / 35` with the census at main's
-stated pair + 2.
+merging); `7 passed | 328 skipped (335)`; and the S6-R11 procedure `147 / 197 / 55 / 35` with the census at main's
+stated pair + 3.
 
 - [ ] **Step 4: Confirm the author, push, open the PR**
 
@@ -2771,7 +2799,7 @@ Wave 3 of the session-continuity programme (spec `docs/superpowers/specs/2026-09
 1. **Wave 2's residue (review 246), the first commit.** A rescue wait ends `swap` only at `cmd_swap`'s landing (a refused auto-rescue leaves it open); rule 3 counts a rescue, and marks the account it left, only once that landing follows it; the do-not-bounce cause names the BEST account with room; a not-blocked tick forks nothing; a forged `reset=` cannot crash the history read, and its lists are checked against sets. Spec §9's stage-4 target is restated as ruled: 0 sessions with a fourth rescue in an hour that no chain wait preceded (the raw 4+ count reported) — `--stage 4` counts it, asked of a fourth rescue the chain wait could have held (a dated block not past its reset's grace; the coordinator confirms that filter).
 2. **Stage 7: the operator's own `/model` and `/effort` survive a restart.** ccd journals its own keystrokes (the settle's `/effort`, `route --apply`) in `$REG/<id>.typed`, above a floor the first spawn opens so an older ccd's unjournalled keystrokes are never promoted at the deploy; before each stop a spawn follows (`cmd_swap`, `ccd stop`, `ws-archive` — a census classifies every stop in ccd) it reads the transcript for the newest acknowledged command no journal row explains (backtick, ANSI, `(default)` and `Ultracode on` acknowledgements alike), maps it (the class vocabulary as the alias table, `[1m]` too; a full id through the bash port of `familyClassOf`, pinned to it) and writes it through `cmd_route` with `actor=operator-session`. Outside the vocabulary or refused: logged, record unchanged, the stop goes on; could not read: logged `unmeasured`. `--stage 7` counts the writes, the reverts and the unmeasured stops.
 
-Citation corpus (S6-R11): unmoved (`147/197/52/35`); every edit above the corpus is line-neutral. `_reg_get` census +2 over the base's stated pair (179/150 -> 181/152 on this plan's base). `_reg_purge` inventory 43 -> 44 (`typed`).
+Citation corpus (S6-R11): unmoved (`147/197/55/35`); every edit above the corpus is line-neutral. `_reg_get` census +3 over the base's stated pair (179/150 -> 182/153 on this plan's base). `_reg_purge` inventory 43 -> 44 (`typed`).
 
 **Deploy: by ccrc's own update mechanism (no hand rollout, operator ruling 2026-09-30); AGENT-FIRST — ccd only.**
 
@@ -2842,53 +2870,155 @@ in the same act as the wave's acceptance; a worker never calls the allocator (wo
 while executing is named in the wave-done mail by a new slug. A session that cannot reach the coordinator writes
 `D-TBD-<slug>` in its report and nowhere in a committed file.
 
-Departures from the spec (and from wave 2's plan) that this plan makes, each measured above — nine, against a block
-of ten (Open question 9):
+Departures from the spec (and from wave 2's plan) that this plan makes, each measured above — nineteen (3896–3905, 3921–3925 and 3966–3969): the block
+of ten (Open question 9) and the coordinator's later issues:
 
-- **`rule-three-counts-landed-rescues`** — minor 5, decided with F1: spec §5.4 rule 3's count and its just-left skip
+- **D-3896** `rule-three-counts-landed-rescues` — minor 5, decided with F1: spec §5.4 rule 3's count and its just-left skip
   read only rescues whose `cmd_swap` landing line followed them before the session's next rescue; the spread list
   keeps every dispatch, landed or in flight (a move still carrying is the herd). Spec rev 7 amended (Task 1 Step 6).
   Rows 1.2, 1.3.
-- **`stage-four-target-restated`** — F6, ruled by the coordinator 2026-10-03: §9's stage-4 target is "0 sessions with
+- **D-3897** `stage-four-target-restated` — F6, ruled by the coordinator 2026-10-03: §9's stage-4 target is "0 sessions with
   a fourth auto-rescue in an hour that no chain wait preceded" (the raw 4+ count reported). This plan adds two
   readings the ruling did not carry and writes BOTH into the §9 row (Task 1 Step 6): it counts landed rescues, and it
   asks only of a fourth rescue the chain wait could have held (a dated block not past its five-hour reset's grace,
-  rule 3's own gate) — the second is a narrowing put to the coordinator to confirm or drop (Open question 5). A
+  rule 3's own gate) — the second, a narrowing the ruling did not carry, was confirmed by the coordinator at dispatch (Open question 5). A
   Codex-lane session, never chain-waited by rule, is the named cost; a `reset=` that is not one to twelve digits is
   no date. Rows 1.7–1.10, 1.12–1.14.
-- **`operator-choice-which-command`** — §5.7 says "the newest `/model` or `/effort` local command that no `.typed`
+- **D-3898** `operator-choice-which-command` — §5.7 says "the newest `/model` or `/effort` local command that no `.typed`
   row matches". The plan reads that as one newest command PER KIND (two fields), chosen among the commands no row
   matches (so a later `route --apply` never hides the operator's earlier one — the first draft's order, which did,
   is row 3.15); reads only commands an acknowledgement follows; takes the value from `<command-args>` or, when that
   is empty (the picker, the slider, `route --apply`), from the acknowledgement with its ANSI bold or backticks
   removed, a `(default)` row as the `default` class and `Ultracode on` as `ultracode`; and never reads a human
   quoting the envelope or a subagent's row. Rows 2.2, 3.8–3.10, 3.14, 3.15, 3.21–3.23.
-- **`operator-choice-record-newer-wins`** — not in §5.7: a route field written after the keystroke (or whose time
+- **D-3899** `operator-choice-record-newer-wins` — not in §5.7: a route field written after the keystroke (or whose time
   cannot be read) is not overwritten, and a value the record already holds is not written again — so a PWA or
   coordinator choice made after the operator's `/model` stands, and no stop re-writes the same value. Rows 3.6, 3.7,
   3.13.
-- **`operator-choice-journal-floor`** — §5.7 does not bound `.typed` or say where it starts: it keeps its last
-  `TYPED_KEEP_ROWS` (16) keystroke rows below a FLOOR row (`<epoch> since`) that `_spawn_start` opens and nothing
-  moves, admits one-token values only, and matches within `TYPED_MATCH_WINDOW` (60 s); no command older than the
+- **D-3900** `operator-choice-journal-floor` — §5.7 does not bound `.typed` or say where it starts: it keeps its last
+  `TYPED_KEEP_ROWS` (16) keystroke rows below a FLOOR row (`<epoch> since`) that `_spawn_start` opens and that moves only
+  forward, past a rotated-out row (see the rotation bullet below), admits one-token values only, and matches within `TYPED_MATCH_WINDOW` (60 s); no command older than the
   floor is read, and a stop that finds no floor opens it and promotes nothing — because before the floor an older
   ccd's unjournalled keystrokes and the operator's cannot be told apart (review measured on the first draft: `effort ∅ ->
   ultracode` and `class fable -> opus [actor=operator-session]` from pre-deploy keystrokes). Rows 2.4, 2.5, 2.10,
   2.11, 3.11, 3.19, 3.20.
-- **`operator-choice-unmeasured-logged`** — §5.7 asks only that an out-of-vocabulary value be logged. The plan logs
+- **D-3901** `operator-choice-unmeasured-logged` — §5.7 asks only that an out-of-vocabulary value be logged. The plan logs
   that value by name when it is one token and by its real byte size otherwise, and also logs `unmeasured (…)` where a
   stop could not read at all (no floor yet, a transcript that is not a readable regular file — never `grep` on a
-  FIFO — no python3, a failed reader), so no lost choice is silent. Rows 3.16–3.18, 3.24, 3.25.
-- **`operator-choice-three-stop-sites`** — §5.7's "a stop that will be followed by a spawn" is read as `cmd_swap`,
+  FIFO — no python3, a failed reader), so no lost choice is silent (superseded: the silent cases are listed in the README and the spec; see `operator-choice-silences-named-and-ack-drift-measured`). Rows 3.16–3.18, 3.24, 3.25.
+- **D-3902** `operator-choice-three-stop-sites` — §5.7's "a stop that will be followed by a spawn" is read as `cmd_swap`,
   `cmd_stop` and `cmd_ws_archive` (Pre-flight 4), pinned by a census that classifies EVERY stop in `ccd/ccd`, so a
-  new one reds until it is named; a supervisor revival, which follows no ccd stop, is out (Open question 1). Rows
-  3.3, 3.4, 3.5, 3.26.
-- **`alias-table-is-route-classes`** — the spec's alias table is derived from `ROUTE_CLASSES` (the same five words)
+  new one reds until it is named; a supervisor revival, which follows no ccd stop, is out of THIS list (Open question 1)
+  — the coordinator's ruling adds a fourth keeper that is not a stop, the revival keep below (superseded: that keep sits in
+  `_spawn_start`; see `operator-choice-keeps-at-every-spawn`). Rows 3.3, 3.4, 3.5, 3.26.
+- **D-3903** `alias-table-is-route-classes` — the spec's alias table is derived from `ROUTE_CLASSES` (the same five words)
   rather than written again, case-folded so an acknowledgement's display word maps, and a `[1m]` variant maps to its
   base class because the record has no context dimension (Open question 2). Rows 2.6, 2.7.
-- **`stage-seven-counts-logged-reverts`** — §9's stage-7 row ("restarts that revert an operator's `/model`") is
+- **D-3904** `stage-seven-counts-logged-reverts` — §9's stage-7 row ("restarts that revert an operator's `/model`") is
   measured as the restarts whose `/model` ccd logged as outside the vocabulary or refused, with the stops that could
-  not read the transcript reported beside it, never folded in; a revert on a path with no stop (a supervisor revival)
-  leaves no line and is not counted. Spec §9's row amended to say so. Rows 4.1–4.5.
+  not read the transcript reported beside it, never folded in; a supervisor revival is read and logs like a stop (the
+  revival keep), and a session on a non-Anthropic lane leaves no line and is not counted. Spec §9's row amended to say so. Rows 4.1–4.5.
+- **D-3905** `operator-choice-skips-other-lanes` — the coordinator's ruling (c) on Open question 8: `_operator_choice_keep`
+  does nothing for a session whose backend is not Anthropic, keyed on `_is_anthropic_backend` of the row's wrapper
+  exactly as the settle is. A gpt-lane session's `/model` values (`gpt-5.6-sol`, …) are outside the class vocabulary
+  by construction, so reading them would log at every stop and fill stage 7's revert row with lines that are not
+  reverts. The guard sits directly after the `.uuid` check and before the journal's floor is opened, so a skipped
+  session also gains no journal row from this path, and it is silent by design (the ruling: "does nothing"). It adds
+  one `_reg_get`, which makes the task's census delta 3 (179/150 -> 182/153). Row 3.27.
+- **D-3921** `operator-choice-keeps-at-a-revival` — the coordinator's ruling (d) on Open question 1: `cmd_ensure`'s
+  in-unit branch calls `_operator_choice_keep` directly above its `_spawn_start` (superseded: the keep moved into `_spawn_start`
+  itself; see `operator-choice-keeps-at-every-spawn`). A revival after Claude Code exited
+  (most often a pane-scope OOM kill, the commonest session death on this fleet) respawns from the route record with no
+  ccd stop before it, so without this line the operator's `/model` reverted at exactly the restart that is most
+  frequent. The call is unconditional: a `mode=new` spawn has no transcript yet, so the keep returns silently. The stop
+  census gains a `REVIVES` list beside `KEEPS` (a revival holds no stop line, so it is not a keeper of the first kind)
+  and pins that the call is the statement before the spawn; a spawn that a stop's keep already read for does not read
+  again (the once-per-restart bullet below). Rows 3.28.
+- **D-3922** `journal-floor-follows-rotation` — found by Task 2's review, by simulation: `_typed_note` kept the last
+  `TYPED_KEEP_ROWS` keystroke rows below a floor that never moved, so after the 17th keystroke ccd journalled the oldest
+  ccd command in the transcript had no row, became "the newest command no row explains", and the next stop promoted it
+  as `actor=operator-session` (17 settle `/effort ultracode` keystrokes -> `effort ∅ -> ultracode`; 16 promoted nothing).
+  Decided (the coordinator's ruling): when keeping the last rows drops one or more, the floor moves FORWARD to the
+  newest dropped row's epoch + `TYPED_MATCH_WINDOW` + 1, never backward (the larger of the old floor and that value),
+  its shape `<epoch> since` and its first place unchanged, so the reader's `at < floor` refusal covers the dropped
+  row's own command. Cost: an operator command typed within `TYPED_MATCH_WINDOW` after a rotated-out ccd keystroke,
+  and never kept at a stop since, falls under the moved floor and is not kept, silently (the same silence as any
+  command older than the floor). It adds no `_reg_get`. Row 2.12.
+- **D-3923** `operator-choice-once-per-restart` — found by Task 3's review (I1): the revival keep ran before EVERY
+  supervised spawn, because `cmd_supervise` -> `cmd_ensure` is the unit's ExecStart for a swap's landing, `ccd start`,
+  a refusal's restart and Restart=always alike, so a swap or a stop/start logged each `outside the vocabulary`,
+  `refused` and `unmeasured` line twice (the stop's keep and the landing's), which would have double-counted stage 7's
+  revert row. Decided (the coordinator's ruling): every `_operator_choice_keep` call that finds a registry row leaves
+  `$REG/<id>.choicekept` (an rc-safe write, early returns included), `cmd_ensure` runs its keep only when the marker is
+  absent (superseded: `_spawn_start` runs it, see `operator-choice-keeps-at-every-spawn`), and `_spawn_start` removes it on every spawn, so the marker means "a keep ran since the last spawn" and
+  `_reg_purge`'s inventory names it (line-neutral, so the citation census does not move). A revival, which no stop's
+  keep precedes, still reads. Cost: a spawn path that bypasses `_spawn_start` would leave the marker, and a later revival
+  would skip its keep. It adds no `_reg_get` (the marker is tested with `-e`). Rows 3.28–3.30.
+- **D-3924** `operator-choice-floor-at-a-lane-change` — found by Task 3's review (I2): ruling (c) skips on the CURRENT
+  lane, so after a gpt -> Anthropic home swap the gpt lane's `/model` rows (and a `route --apply` pick whose acknowledgement
+  does not name the journalled class) rode the carried transcript, were read on the Anthropic lane at the landing, and
+  were logged (or, for a custom model id that held a family token, could be promoted). Decided (the coordinator's ruling):
+  when `cmd_swap` lands a move whose source and target differ in `_is_anthropic_backend`, it calls `_typed_note <id> moved`
+  beside the landing's `swap <id>: … (uuid …)` line, which moves the journal floor FORWARD to the landing time (the larger
+  of the old floor and now, rows kept, never back; one more kind word on the one writer, rc 0 always). Cost: an
+  Anthropic-lane `/model` typed before a round trip through a gpt lane, and never through a stop, is not kept; every stop
+  before the move keeps it. Rows 3.31–3.33 (3.32 pins the ruling-(c) guard's place before the floor is opened, review
+  M3).
+- **D-3925** `operator-choice-not-across-a-clear` — found by the final whole-branch review (I1): the keep reads only the
+  transcript of the session's CURRENT uuid, and `/clear` mints a new uuid and a fresh transcript file (in 41 recent
+  transcripts a `/clear` sat on rows 4-8 of a fresh file; compaction keeps the same file, so it is not affected). Spec
+  §5.7's "survives a restart" therefore does not reach a `/model` or `/effort` typed before a `/clear`: the next restart
+  reads a transcript with no command in it and the record's old class is composed, with no line logged. Listed as a
+  known silent cost in the README and the spec; the code fix (reading the transcript the `/clear` left) is deferred to
+  a later wave and put to the coordinator.
+- **D-3966** `operator-choice-keeps-at-every-spawn` — review 268 (F1) found `_supervised_start`'s two unsupervised fallbacks
+  ("no systemctl or launchctl", "the unit will not enable") call `_spawn_start` with no keep before it, so a session whose
+  Claude Code exited on such a box was revived off the record and an operator's `/model opus` was reverted with no line and
+  nothing for `--stage 7` to count; `ws-restore` and any future spawner shared the shape. Ruled by the coordinator: the guarded
+  keep (`[[ -e choicekept ]] || _operator_choice_keep`) moves into `_spawn_start`, ABOVE both the journal-floor line and the
+  marker's `rm -f` (a session an older ccd spawned would otherwise open its journal first, and the one-time `unmeasured` line
+  would be lost), so every spawn reads once; `cmd_ensure`'s own keep is removed (its in-unit branch calls `_spawn_start`), and
+  the three stop-site keeps stay. The census test gains a spawn census: every live `tmux new-session` / `_tmux_new_session`
+  sits in `_spawn_start` or a named exception (`cmd_account_pane`: a login pane, not a session). Cost: a spawn now pays the
+  keep's transcript read (bounded, rc 0 always; it costs seconds on a GB-scale transcript, 3.3 s measured on 909 MB) at its first call per restart. Rows 3.28 (rebased: the choke-point line
+  removed), 3.29, 3.30, 3.35, 3.36.
+- **D-3969** `operator-choice-marker-tracks-a-dead-session` — review 268 (F6) found the three stop-site keeps unconditional, so a
+  stop followed by a swap or a ws-archive of the same dead session read twice (an out-of-vocabulary value logged twice, and
+  `--stage 7` double-counting), and a `tmux kill-session … || true` that FAILED on a live session left it marked, so its next
+  revival skipped its read. Ruled by the coordinator: each stop-site keep is gated on `choicekept`, and the marker is removed
+  after a failed kill unless the session is proven `gone` or no tmux server runs at all (`_operator_choice_unmark`, one
+  `_session_probe` call, only on a failed kill: it keeps the marker on `PROBE_VERDICT == gone` or `PROBE_SUBSTRATE == absent`,
+  since no server means no pane; a `live` verdict, or an `unknown` one with a server that did not answer, unmarks, so the worst
+  case is one extra logged read); `_spawn_start` still removes it at every spawn. Costs: a failed kill whose session cannot be
+  proven gone (a tmux server that is there but silent) is read again at its next revival; and an INTERRUPTED stop is a known
+  silent cost: if a stop dies between its keep (which writes the marker) and its kill, the pane survives marked, and a later
+  stop or revival skips its read, so a choice typed in between is reverted with no line. The window is narrow, and closing it
+  needs the marker bound to a pane instance. `ws-archive`'s line pair stays line-neutral (ccd/ccd's citation census does not
+  move). Rows 3.3, 3.4, 3.5 (rebased to the guarded lines), 3.37–3.43, 3.51.
+- **D-3968** `operator-choice-one-route-call` — review 268 (F3) found `for kind … in sorted(newest.items())` applied `effort` before
+  `model`, one `cmd_route` call each, so a record holding `class=haiku` that took the operator's `/model opus` then `/effort high`
+  ended `class=opus` with the effort lost and `/effort high refused by the route record's own checks` logged: the pair check
+  ran on a half-written record. Ruled by the coordinator: the per-field checks stay per field (outside the vocabulary, already
+  held, record newer, mtime unreadable), and the fields that pass them are combined into ONE `cmd_route` call with one `--set`
+  each (it accepts repeated `--set` and validates the merged pair). If that call refuses, one line per kind in the existing
+  refused shape is logged (`--stage 7` counts `/model` reverts from it). Cost: a pair the record refuses is refused whole, so a
+  valid `/model haiku` typed beside an `/effort high` is no longer kept on its own (both logged, the record unchanged), and
+  the writer's reason names both kinds. Rows 3.2 (rebased), 3.44, 3.45.
+- **D-3967** `operator-choice-silences-named-and-ack-drift-measured` — review 268 (F2) found the header's "never a silent loss"
+  false at the tip, and one silence unnamed anywhere: if Claude Code rewords `Set model to …`, the reader treats every command as
+  "no acknowledgement, changed nothing", stage 7 goes dark fleet-wide with no line, and `--stage 7` reads zero, which looks
+  healthy. Ruled by the coordinator, in two halves. THIS commit is (b), the code: a `/model` or `/effort` envelope with no
+  acknowledgement this ccd recognises logs ONE line per keep, `unmeasured (a /model or /effort command with no acknowledgement
+  this ccd recognises)`, which `--stage 7` already counts in its unmeasured row. The signal fires only when the NEWEST
+  qualifying command of a kind is unacknowledged — at or after the floor, a real envelope, not a sidechain, and not explained by
+  a journal row (ccd's own keystrokes are journalled, so their rewording is not the operator's loss) — at most once per keep
+  even when both kinds qualify, and it does not stop an older acknowledged command from being applied. Cost: a command Claude
+  Code refused (`Model 'opus' is not available on this plan`) is newest and unacknowledged, so it reads as drift until a later
+  command of its kind is acknowledged; the line repeats on every restart that finds it newest. Its prose half landed in the docs
+  commit: the header no longer claims "never a silent loss", and the README and spec list every silent case (the
+  60-second window after a rotated-out keystroke, a round trip through a non-Anthropic lane, `/clear`, an unrostered
+  source, a route field whose mtime cannot be read), with drifted acknowledgement wording named as `unmeasured`. Rows 3.8 and 3.19
+  (rebased to the split `if`), 3.46–3.50.
 
 ---
 
@@ -2931,7 +3061,8 @@ README (+34 / −2), the spec (+25 / −5), two new test files (488 and 89 lines
    kill, 16 in a week per spec §1.3 — and `cmd_supervise` respawns it from the record) follows no ccd stop. The
    transcript is still readable there; one call to `_operator_choice_keep` before the resume spawn in `cmd_ensure`
    would cover it (and the census would then list `cmd_ensure` among the keepers). Built as the spec says (not
-   covered); the operator may widen it.
+   covered); the operator may widen it. (Superseded: the coordinator widened it, and the keep now sits in `_spawn_start`,
+   which every spawn passes through; see `operator-choice-keeps-at-every-spawn`.)
 2. **`/model opus[1m]` survives as `opus`.** The route record's class has no context dimension, so the 1M-context
    choice is kept as its family and the next spawn runs the default context. Accept, or add a context field — a
    routing-spec change outside this programme.
