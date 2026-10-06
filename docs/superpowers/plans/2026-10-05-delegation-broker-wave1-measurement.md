@@ -3090,10 +3090,14 @@ guard that cannot have a row says so); the wave-done reports the cells.
 | 8 | F14 | a `ref:` HEAD resolved read-only, `'unmeasured'` when it cannot be (D-4065) | the `movedFromBase` describe |
 
 **Fix round 2 (review 296).** Every guard arm the round added or touched, each measured red by mutating that arm alone
-in a scratch copy. The counts are the implementers', over the filter each task ran (the sanitiser's: its block, the
-corpus row and, from `12f7c4aac`, the arguments row), unless a row names another run; each task's reviewer
-re-measured them. From `12f7c4aac` every known limit the sanitiser's header declares is pinned by a row that reds when
-the limit closes (at `858caf47d` the `\u` half of the one-pass limit was not: 0 red, task A's review).
+in a scratch copy. The counts are the implementers', over the filter each task ran (the sanitiser's: its block and the
+corpus row), unless a row names another run. Each task's reviewer re-measured them, task A's follow-up arms
+(`12f7c4aac`) included: its re-review ran 26 mutations of its own, and every count matches. Two counts carry no
+reviewer's re-run, and their rows say so: the residue-bearing-key arm's and the implementer's base64 decode (task A's
+review measured both with mutations of its own). Two rows are the controller's measurements: Task 8's ENOTDIR fold
+(re-run by the write-up's reviewer: 1 red of 27) and the `--scan` file index of `a4d1da74f` (re-run for this write-up: 1
+red of 77). From `12f7c4aac` every known limit the sanitiser's header declares is pinned by a row that reds when the
+limit closes (at `858caf47d` the `\u` half of the one-pass limit was not: 0 red, task A's review).
 
 | Task | Finding | Guard | Row |
 |---|---|---|---|
@@ -3112,17 +3116,18 @@ the limit closes (at `858caf47d` the `\u` half of the one-pass limit was not: 0 
 | 5 | F1 | either case | "decodes every `%XX`, in either case …" and the user's-name row (upper-case hex only: 2 red) |
 | 5 | F9 | `--scan` runs the bundle scan over the committed corpus (D-4007) | "--scan of an unplanted copy …", the two "--scan names the file and the pointer of %s planted …" rows, "--scan reads KEYS too …", "--scan reads the matrix.json …" and the build-matrix row "the committed corpus covers every scenario on at least one version, and carries no residue" (the scan call deleted: 6 red) |
 | 5 | F9 | `--scan` reads `matrix.json` | "--scan reads the matrix.json …" and the corpus row (2 red) |
-| 5 | F9 | a residue-bearing key is a finding (the shared `scan()`) | "names a leaking KEY by its index …", the F1 KEY row and "--scan reads KEYS too …" (3 red) |
+| 5 | F9 | a residue-bearing key is a finding (the shared `scan()`) | "names a leaking KEY by its index …", the F1 KEY row and "--scan reads KEYS too …" (the key finding deleted: 3 red, the implementer's count; task A's review, guarding that finding off in `--scan` mode only, reds 1, "--scan reads KEYS too …") |
 | 5 | F9 | a file that is not JSON, a badly named version directory or file, nothing to scan, the argument count | "--scan fails closed on a fixture file that is not JSON …"; "--scan fails closed on a directory that is not a version and on a fixture file whose name is not a name …" (each name arm); "--scan of a directory with nothing to scan fails …"; "--scan refuses a missing directory argument and a surplus one …" (each way): 1 red each |
 | 5 | F9 | the string and key tallies | "--scan of an unplanted copy …" and the corpus row (2 red each) |
+| 5 | F9 (task A re-review n1/n2) | the `--scan` file index counts in code-unit order (`LC_ALL=C ls`) | "--scan names a file by its place in the code-unit-sorted list of its directory: a clean sibling sorting first makes the planted one #1 (F9)" (the pointer finding's `#${i}` made `#0`: 1 red, the controller's measurement, `a4d1da74f`) |
 | 5 | F9 (task A review m3) | `--scan` refuses a fixture file name with residue, and reads no further into it | "--scan refuses a fixture file whose name passes the shape test but carries residue, named by index and never by its text (m3)" (` \|\| residue(base)` deleted: 1 red; the `return` after the name finding deleted: 1 red, its planted-body half) |
 | 5 | F9 (task A review m3) | `--scan` names every file by index, never by its name | "--scan fails closed on a fixture file that is not JSON …" (the unreadable-JSON finding named by text: 1 red); the two planted-value rows, the planted-KEY row and "--scan reads the matrix.json …" (pointer findings named by text: 4 red) |
 | 5 | F9 (task A review m4) | main mode's argument check: a surplus argument, a missing fixtures directory, a missing raw root | "refuses missing arguments with exit 2, and a surplus one, and an empty one (m4)": 1 red each for ` \|\| args.length > 2`, `!outDir` and `!raw` deleted (at `858caf47d` the first two reddened nothing, task A's review) |
 | 5 | F11 | the declared glue set is exactly `ABS`'s lookbehind (a known limit) | "a `/` glued after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (declared limit, not a guarantee) …" reds for each of the six characters dropped from the lookbehind, and for `@` added. Counted in that one row: 1 each. Over the sanitiser block and the corpus row (73 rows, task A's review): `~`, `_`, `-` and `@` 1 each, `.` 2 (also the corpus row, a committed fixture's shell command), a letter 37, a digit 38 |
 | 5 | F12 | `MUNGED_FOREIGN`'s ten tops (a known limit) | "a munged foreign path whose top MUNGED_FOREIGN does not list passes (declared limit, not a guarantee) …": 1 red each for `data`, `media` or `/i` added, and for `proc` dropped |
-| 5 | header (`base64-pin-row`) | base64 is not decoded (a known limit) | "base64 of residue is not decoded (declared limit, not a guarantee) …" (a base64 decode of runs of 12 or more characters added: 1 red; task A's review, decoding more broadly, reds 14, this row among them) |
+| 5 | header (`base64-pin-row`) | base64 is not decoded (a known limit) | "base64 of residue is not decoded (declared limit, not a guarantee) …" (a base64 decode of runs of 12 or more characters added: 1 red, the implementer's count; task A's review, decoding more broadly, reds 14, this row among them) |
 | 8 | F13 | an lstat ENOENT is "nothing there" (D-4065) | "a ref: HEAD resolves through packed-refs when there is no loose ref …" and "still answers from packed-refs when nothing at all is at the loose path …" (every lstat failure unreadable: 2 red) |
-| 8 | F13 | an lstat failing other than ENOENT is unreadable | "reports 'unmeasured' when the loose path cannot be examined at all (its parent directory refuses search) …" (every lstat failure null: 1 red; skipped as root); "reports 'unmeasured' when a parent component of the loose path is a file (lstat ENOTDIR) …" (ENOTDIR folded into nothing-there: 1 red) |
+| 8 | F13 | an lstat failing other than ENOENT is unreadable | "reports 'unmeasured' when the loose path cannot be examined at all (its parent directory refuses search) …" (every lstat failure null: 1 red; skipped as root); "reports 'unmeasured' when a parent component of the loose path is a file (lstat ENOTDIR) …" (ENOTDIR folded into nothing-there: 1 red, the controller's measurement) |
 | 8 | F13 | a real directory falls through to `packed-refs` | "a ref: HEAD resolves through packed-refs when there is no loose ref …", its directory assertion (1 red) |
 | 8 | F13 | a failed read is unreadable | round 1's "reports 'unmeasured' for a loose ref that exists but cannot be read …", the DANGLING-symlink row, the symlink-to-a-DIRECTORY row and the KNOWN LIMIT text-link row (4 red) |
 | 8 | F13 | lstat, not stat | the DANGLING, DIRECTORY-symlink and KNOWN LIMIT rows (3 red) |
@@ -3308,8 +3313,8 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   the split, 20,486 strings and 23,892 keys, is `858caf47d`'s `--scan` over the same 99 files); the corpus holds no
   `127.0.0.1`.
 
-  Corrected in fix round 2 (review 296 F1, F9, F11, F12), true from `858caf47d` and, where a sentence names
-  `12f7c4aac` (task A's review m1–m4), from that commit:
+  Corrected in fix round 2 (review 296 F1, F9, F11, F12), true from `858caf47d`, or from the later commit a sentence
+  names (`12f7c4aac`, task A's review m1–m4; `dda34c43c`; `a4d1da74f`):
   - **Every percent escape is decoded (F1).** Until then the decode turned only `%2F` into `/`, so a `%2F` glued
     after another escape or a name character sat where both lookbehinds skip it: `cat%20%2Fhome%2F…`,
     `http%3A%2F%2Fsrv.corp%2Fx` and the first of these as a key passed, as they did at `347b7b64`. So "`%2f`
@@ -3324,12 +3329,14 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
     a file that is not JSON, a version directory or fixture file whose name has the wrong shape, and an empty or
     unreadable directory. From `12f7c4aac` it refuses a fixture file name by the test `main` applies to a scenario name
     (the NAME shape AND no residue in it), reads no further into a refused file, and names every file by
-    `<version>/#<index>` (or `#<index>`), never by its name. The build-matrix row "the committed corpus covers every
-    scenario on at least one version, and carries no residue" runs it, so a fixture committed with residue reds the
-    suite; before, that row checked only `/tmp/` outside `/rig` and six literals. At `158bc2227` it reads 127 files,
-    26,328 strings and 30,705 keys, and finds no residue.
-  - **The known limits, as the header names them at `12f7c4aac`**, each pinned by a row that reds when the limit
-    closes. At `858caf47d` one half was not: with the `\u` pass applied twice every row stayed green (task A's
+    `<version>/#<index>` (or `#<index>`), never by its name, the index counting the directory's `*.json` files in
+    code-unit order, as `LC_ALL=C ls` lists them (`a4d1da74f`; a UTF-8 locale's `ls` may differ). The build-matrix row
+    "the committed corpus covers every scenario on at least one version, and carries no residue" runs it, so a fixture
+    committed with residue reds the suite; before, that row checked only `/tmp/` outside `/rig` and six literals. At
+    `158bc2227` it reads 127 files, 26,328 strings and 30,705 keys, and finds no residue.
+  - **The known limits, as the header names them at `dda34c43c`** (`12f7c4aac`'s text with its three escape examples
+    respelled with a literal backslash; the code they describe is `12f7c4aac`'s), each pinned by a row that reds when
+    the limit closes. At `858caf47d` one half was not: with the `\u` pass applied twice every row stayed green (task A's
     review), and the header's one-pass sentence named only the same kind twice.
     - base64, or any other encoding the decode does not know, is not decoded. "base64 of residue is not decoded
       (declared limit, not a guarantee) …" passes a base64 foreign path and a base64 `//` URL.
@@ -3435,13 +3442,19 @@ unused):
   harmless while an unanswered dialog left no note; once F2 made one a failure, it would have turned every workflow
   capture `unmeasured`, and Q1 and Q7 rest on those scenarios. The step is now `{"sleep": 10}` in the same position
   (`39a2e2565`): `wf-dialog-step-replaced-by-sleep`, a consequence of the F2 ruling recorded here, with no number of its
-  own (as the F4 ruling did for D-4007's sub-slugs). It presses nothing either and is at most about 1.1 s shorter, and
-  in each of the four the next step is a polling `waitLabels` (180 s, or 120 s in wf-limit-pause) that absorbs the gap,
-  so the four scenarios still run as they ran for the committed fixtures. If a workflow dialog ever does show, nothing
-  answers it, the workflow never runs, that `waitLabels` times out and the cell builds `unmeasured`. The row "a scenario
-  carries an answerDialog step only if EVERY committed fixture of it holds that dialog's answered note, and
-  interrupt-exit's step is answered in every version (C1)" pins it: interrupt-exit is now the only scenario with such a
-  step, answered in 9 of 9 versions.
+  own (as the F4 ruling did for D-4007's sub-slugs). It presses nothing either and is at most about 1.1 s shorter. The
+  polling `waitLabels` after it never waited in a committed run: its labels were in long before the old step ended
+  (measured from each fixture's `dtMs`, counted from the prompt's UserPromptSubmit: every wf-plain and wf-iso event
+  within 5.1 s, wf-iso-resume's and wf-limit-pause's SubagentStarts within 2.4 s, and wf-iso-resume's resumed
+  SessionStart at 19.1 to 20.4 s, which leaves that wait no time to have waited). So every later step, and the settle
+  window, now starts up to about 1.1 s earlier, and none of them depends on that: wf-plain's and wf-iso's last event
+  came at 1.1 to 3.5 s and 1.3 to 5.1 s, long before they settle (15 s and 20 s); wf-iso-resume's snapshot and kill act
+  on a run quiet since 0.9 to 2.7 s (r2 done, r1 hung); wf-limit-pause's 70 s sleep ended about 17 to 20 s after l1's
+  final Stop (61.2 to 63.1 s), and its probe allows 180 s; and `build-matrix.mjs`, which derives the matrix, reads
+  neither `dtMs` nor `seq`. If a workflow dialog ever does show, nothing answers it, the workflow never runs, that
+  `waitLabels` times out and the cell builds `unmeasured`. The row "a scenario carries an answerDialog step only if
+  EVERY committed fixture of it holds that dialog's answered note, and interrupt-exit's step is answered in every
+  version (C1)" pins it: interrupt-exit is now the only scenario with such a step, answered in 9 of 9 versions.
 - **D-4059** — `no-merge-before-handoff` (review 277 F7): departs from Precondition 1 ("Merge `origin/main` into
   this workspace's branch first") and from the Global Constraint "merge `origin/main` (never rebase) before the
   handoff", which this run did not do. Both are superseded: worker clause 16 licenses an absorb only on a measured
