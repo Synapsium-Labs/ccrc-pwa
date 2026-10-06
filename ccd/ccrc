@@ -1504,7 +1504,7 @@ CCRC_DDNS_UNIT="ccrc-ddns"
 # Task 22 is what makes `cmd_account` WRITE these files, and Task 33 is what
 # adds a doctor check that MEASURES them by existence — NEITHER EXISTS YET.
 # This build has no `accounts` entry in `CCRC_DOCTOR_CHECKS`
-# (ccrc-doctor-checks:166-195), and nothing anywhere in this repository reads
+# (ccrc-doctor-checks:173-202), and nothing anywhere in this repository reads
 # the variable defined below — it is spelled here, ahead of its first use, so
 # the writer Task 22 adds and the reader Task 33 adds spell the same directory
 # from day one rather than drifting the way D-166's comment describes.
@@ -1525,7 +1525,7 @@ CCRC_DDNS_UNIT="ccrc-ddns"
 ACCT_SECRETS_DIR="$HOME/.cc-secrets"
 
 # ── THE SUBCOMMANDS THIS BUILD IMPLEMENTS, SPELLED ONCE ───────────────────
-# DATA, in `CCRC_DOCTOR_CHECKS`'s shape (ccrc-doctor-checks:166) and for its
+# DATA, in `CCRC_DOCTOR_CHECKS`'s shape (ccrc-doctor-checks:173) and for its
 # reason. `cmd_account` matches the operator's word against THIS list, and BOTH
 # refusals print it — so a subcommand that dispatches without being named, or a
 # name printed that nothing dispatches, cannot happen. Adding one is one word
@@ -8017,7 +8017,7 @@ _acct_upstream_id() {   # <what-still-stands> -> ACCT_UPSTREAM_ID
 # Restart-each-session list of length zero in front of somebody whose panes are
 # all still holding the old token. Any non-zero rc is read as "nobody could
 # tell", which is the reading `_check_tmux_skew` takes of the same call
-# (ccrc-doctor-checks:443-457 — rc 124 and every other non-zero alike SKIP). The
+# (ccrc-doctor-checks:450-464 — rc 124 and every other non-zero alike SKIP). The
 # polarity is deliberately the opposite of `remove`'s (Task 32), which REFUSES
 # on an unmeasurable tmux: reporting a gap is right for a write that has already
 # succeeded, and refusing is right for a delete that has not started.
@@ -9221,7 +9221,7 @@ _acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to
 # `gtimeout`, then a bash fallback that reports GNU's own 124 on expiry
 # ":because that is the code the call sites branch on" — this is a call site
 # that branches on it, in the shape `_check_tmux_skew` already uses
-# (`ccrc-doctor-checks:443-452`).
+# (`ccrc-doctor-checks:450-459`).
 #
 # THREE: THE CWD IS OURS, AND SO IS CREATING IT — see `CCRC_PROBE_DIR`'s banner.
 #

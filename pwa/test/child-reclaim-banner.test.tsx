@@ -27,8 +27,9 @@ const makeStore = (): FleetStore => createFleetStore({
 const coord = (over: Partial<CoordStatus> = {}): CoordStatus =>
   ({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], ...over });
 
-const item = (over: Partial<ChildReclaimAttention> = {}): ChildReclaimAttention => ({
-  sessionId: 'ccrc-pwa-quiet-basin', runId: 41, token: 'tree-unreadable',
+const item = (over: Partial<Extract<ChildReclaimAttention, { kind: 'terminal' }>> = {}):
+  Extract<ChildReclaimAttention, { kind: 'terminal' }> => ({
+  kind: 'terminal', sessionId: 'ccrc-pwa-quiet-basin', runId: 41, token: 'tree-unreadable',
   sentence: 'ccrc could not read this worktree, so it cannot prove nothing here would be lost. Nothing was removed.',
   at: Date.now() - 60_000, ...over,
 });
@@ -342,5 +343,167 @@ describe('the two tolerant readers', () => {
   it('childReclaimAttentionOf accepts a member with no token or at — the renderer never reads either', () => {
     const bare = { sessionId: 'ccrc-pwa-bare-item', runId: null, sentence: 'a sentence with no token or at' };
     expect(childReclaimAttentionOf({ childReclaimAttention: [bare] })).toEqual([bare]);
+  });
+
+  // `kind` is ADDITIVE on the wire (spec §5.9): a server older than the arms
+  // sends items with none, and the one reader reads such an item as it always
+  // did. Deleting `kind` from a built item is the older server's frame.
+  it('an item from a server older than the arms (no `kind`) still renders its sentence', () => {
+    const { kind: _kind, ...older } = item();
+    expect(_kind).toBe('terminal');
+    expect(childReclaimAttentionOf({ childReclaimAttention: [older] })).toEqual([older]);
+    const store = makeStore();
+    seen(store, coord({ childReclaimAttention: [older as unknown as ChildReclaimAttention] }));
+    render(<ChildReclaimBanner store={store} />);
+    const rows = [...document.querySelectorAll('.child-reclaim-item')];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toContain(older.sentence);
+    expect(rows[0]!.textContent).toContain(older.sessionId);
+  });
+});
+
+// The collapsed kept line (spec §5.9): more than five children kept for one
+// reason arrive as ONE `kept-many` item, which has no `sessionId` and carries
+// the server's sentence — already stating the count — and the children behind
+// it. The PWA counts nothing and maps no word: it renders what it is given.
+describe('the collapsed kept line', () => {
+  const keptMany = (n: number, over: Partial<Extract<ChildReclaimAttention, { kind: 'kept-many' }>> = {}):
+    Extract<ChildReclaimAttention, { kind: 'kept-many' }> => ({
+    kind: 'kept-many', word: 'minting-run-absent',
+    members: Array.from({ length: n }, (_, i) => ({ sessionId: `ccrc-pwa-kept-${i + 1}`, runId: 200 + i })),
+    sentence: `${n} child workspaces are kept for the same reason. For each one: ccrc cannot see the run that minted it, so it keeps the workspace.`,
+    ...over,
+  });
+  const kept = (over: Partial<Extract<ChildReclaimAttention, { kind: 'kept' }>> = {}):
+    Extract<ChildReclaimAttention, { kind: 'kept' }> => ({
+    kind: 'kept', sessionId: 'ccrc-pwa-kept-single', runId: 171, word: 'coordinating',
+    sentence: 'This child coordinates a programme of its own, so ccrc keeps it.', ...over,
+  });
+  const rowsOf = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.child-reclaim-item')];
+  const whoOf = (li: HTMLElement): string[] =>
+    [...li.querySelectorAll('.child-reclaim-who')].map((n) => n.textContent ?? '');
+
+  // (i)
+  it('a kept-many item with six members renders ONE row: the sentence, then six "run #N · id" lines', () => {
+    const store = makeStore();
+    const many = keptMany(6);
+    seen(store, coord({ childReclaimAttention: [many] }));
+    render(<ChildReclaimBanner store={store} />);
+    const rows = rowsOf();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.querySelector('.child-reclaim-sentence')?.textContent).toBe(many.sentence);
+    expect(whoOf(rows[0]!)).toEqual(many.members.map((m) => `run #${m.runId} · ${m.sessionId}`));
+    expect(whoOf(rows[0]!)).toHaveLength(6);
+    // The sentence, THEN the member lines: the order of the li's own children.
+    expect([...rows[0]!.children].map((c) => c.className))
+      .toEqual(['child-reclaim-sentence', ...Array.from({ length: 6 }, () => 'child-reclaim-who')]);
+    // The PWA maps no word: the word is a React key and is never the rendered text.
+    expect(rows[0]!.textContent).not.toContain(many.word);
+    // A report, not a tap: the collapsed line adds no control.
+    expect([...screen.queryAllByRole('button'), ...screen.queryAllByRole('link')]).toHaveLength(1);
+  });
+
+  // (ii) The existing reader's path: a `kept` item has a `sessionId` and no
+  // `at`, and renders like any other item.
+  it('a kept item renders "run #171 · id" and its sentence, like any item', () => {
+    const store = makeStore();
+    const one = kept();
+    seen(store, coord({ childReclaimAttention: [one] }));
+    render(<ChildReclaimBanner store={store} />);
+    const rows = rowsOf();
+    expect(rows).toHaveLength(1);
+    expect(whoOf(rows[0]!)).toEqual([`run #171 · ${one.sessionId}`]);
+    expect(rows[0]!.querySelector('.child-reclaim-sentence')?.textContent).toBe(one.sentence);
+    expect(rows[0]!.textContent).not.toContain(one.word);
+    expect(childReclaimAttentionOf({ childReclaimAttention: [one] })).toEqual([one]);
+  });
+
+  // (iii)
+  it('a member that is not { sessionId: string, runId: number } is dropped on its own — the other five render', () => {
+    const store = makeStore();
+    const many = keptMany(6);
+    const members = [...many.members];
+    members[2] = { sessionId: 'ccrc-pwa-kept-bad', runId: 'x' as unknown as number };
+    seen(store, coord({ childReclaimAttention: [{ ...many, members }] }));
+    render(<ChildReclaimBanner store={store} />);
+    const rows = rowsOf();
+    expect(rows).toHaveLength(1);
+    expect(whoOf(rows[0]!)).toEqual(many.members.filter((_, i) => i !== 2).map((m) => `run #${m.runId} · ${m.sessionId}`));
+    expect(rows[0]!.textContent).not.toContain('run #x');
+    expect(rows[0]!.textContent).not.toContain('ccrc-pwa-kept-bad');
+  });
+
+  // (iv)
+  it('mixed kept and kept-many items keep the SERVER\'s order', () => {
+    const store = makeStore();
+    const first = kept({ sessionId: 'ccrc-pwa-kept-first', runId: 11 });
+    const many = keptMany(6);
+    const last = kept({ sessionId: 'ccrc-pwa-kept-last', runId: 12 });
+    seen(store, coord({ childReclaimAttention: [first, many, last] }));
+    render(<ChildReclaimBanner store={store} />);
+    const rows = rowsOf();
+    expect(rows).toHaveLength(3);
+    expect(rows[0]!.textContent).toContain(first.sessionId);
+    expect(rows[1]!.textContent).toContain(many.sentence);
+    expect(rows[2]!.textContent).toContain(last.sessionId);
+    expect(childReclaimAttentionOf({ childReclaimAttention: [first, many, last] }).map((a) => a.sentence))
+      .toEqual([first.sentence, many.sentence, last.sentence]);
+    // A group first and a single after it is no different: the reader sorts nothing.
+    expect(childReclaimAttentionOf({ childReclaimAttention: [many, last, first] }).map((a) => a.sentence))
+      .toEqual([many.sentence, last.sentence, first.sentence]);
+  });
+
+  // The two shapes are told apart by `sessionId` — the field the reader
+  // checks — never by `members`, which it does not check on a single item. A
+  // single child whose wire object carries a stray `members` (null, empty, or
+  // anything else) is still one ordinary row with its own run and id, and a
+  // collapsed line that also carries a `sessionId` and a `runId` is read as the
+  // single child the reader's own check takes it for, its members never rendered.
+  it('a single child carrying a stray `members` renders as one ordinary row, never as a collapsed line', () => {
+    const base = kept({ sessionId: 'ccrc-pwa-kept-stray', runId: 1 });
+    for (const stray of [null, [], 'x']) {
+      cleanup();
+      const store = makeStore();
+      seen(store, coord({ childReclaimAttention: [{ ...base, members: stray } as unknown as ChildReclaimAttention] }));
+      render(<ChildReclaimBanner store={store} />);
+      const rows = rowsOf();
+      expect(rows).toHaveLength(1);
+      expect(whoOf(rows[0]!)).toEqual(['run #1 · ccrc-pwa-kept-stray']);
+      expect(rows[0]!.querySelector('.child-reclaim-sentence')?.textContent).toBe(base.sentence);
+    }
+  });
+
+  it('a kept-many item that also carries a sessionId and runId reads as a single child — its members are never rendered unchecked', () => {
+    const many = keptMany(3);
+    const members = [{ sessionId: 'ccrc-pwa-kept-bad', runId: 'x' as unknown as number }, ...many.members];
+    const store = makeStore();
+    seen(store, coord({ childReclaimAttention: [
+      { ...many, sessionId: 'ccrc-pwa-stray', runId: 7, members } as unknown as ChildReclaimAttention] }));
+    render(<ChildReclaimBanner store={store} />);
+    const rows = rowsOf();
+    expect(rows).toHaveLength(1);
+    expect(whoOf(rows[0]!)).toEqual(['run #7 · ccrc-pwa-stray']);
+    expect(rows[0]!.textContent).not.toContain('run #x');
+  });
+
+  // The reader drops a collapsed line that names nobody, and one wrong in
+  // exactly one field — kind, word, sentence, members — each on its own, so each
+  // check pins itself.
+  it('childReclaimAttentionOf drops a kept-many item left with no member, and one wrong in a single field', () => {
+    const good = keptMany(6);
+    const noMembers = { ...good, members: [] };
+    const allBad = { ...good, members: [{ sessionId: 7, runId: 1 }, { sessionId: 'ccrc-pwa-x', runId: '1' }, null, 'y'] };
+    const noWord = { kind: good.kind, sentence: good.sentence, members: good.members };
+    const noSentence = { kind: good.kind, word: good.word, members: good.members };
+    const membersNotArray = { ...good, members: 'ccrc-pwa-kept-1' };
+    // Wrong in `kind` alone: another arm's kind, and none at all.
+    const keptKind = { ...good, kind: 'kept' };
+    const noKind = { word: good.word, sentence: good.sentence, members: good.members };
+    for (const bad of [noMembers, allBad, noWord, noSentence, membersNotArray, keptKind, noKind]) {
+      expect(childReclaimAttentionOf({ childReclaimAttention: [good, bad] })).toEqual([good]);
+    }
+    // A member wrong in only its sessionId is dropped alone.
+    const oneBadId = { ...good, members: [{ sessionId: 7, runId: 1 }, ...good.members] };
+    expect(childReclaimAttentionOf({ childReclaimAttention: [oneBadId] })).toEqual([good]);
   });
 });

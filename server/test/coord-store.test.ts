@@ -2917,36 +2917,178 @@ describe('CoordStore: openCoordinatorIds', () => {
   });
 });
 
-describe('CoordStore.childReclaimCoordinatorIds — the displacement-row selection is case-sensitive', () => {
+describe('CoordStore.childReclaimCoordinatorClaims — the displacement-row selection is case-sensitive', () => {
   // `reclaimProgram` writes its own displacement rows lower-case
-  // (`reclaim:<from> -> <to>`), and `childReclaimDisplacedCandidates`'s own
-  // `startsWith('reclaim:')` check is case-sensitive. An operator can write
-  // ANY text into a run's own trail by hand, so a row that merely starts with
-  // the same six letters in a different case must never be read as this
-  // writer's own — reading it that way would either add a session that never
-  // coordinated anything, or (worse) throw and stop the whole reclaim lane
-  // fleet-wide for a run event unrelated to reclamation.
-  it('an operator row `RECLAIM:x -> y` is neither added to the set nor makes the read throw', () => {
+  // (`reclaim:<from> -> <to>`), and both parsers' own `startsWith('reclaim:')`
+  // check is case-sensitive. An operator can write ANY text into a run's own
+  // trail by hand, so a row that merely starts with the same six letters in a
+  // different case must never be read as this writer's own — reading it that
+  // way would either add a session that never coordinated anything, or
+  // (worse) throw and stop the whole reclaim lane fleet-wide for a run event
+  // unrelated to reclamation.
+  it('an operator row `RECLAIM:x -> y` adds neither side to the map, nor makes the read throw', () => {
     const s = store();
     const r = openRun(s, { claimedBy: 'the-coordinator' }) as { id: number };
     s.recordRunEvent(r.id, 'operator', 'RECLAIM:x -> y');
-    expect(() => s.childReclaimCoordinatorIds()).not.toThrow();
-    expect(s.childReclaimCoordinatorIds()).not.toContain('x');
+    expect(() => s.childReclaimCoordinatorClaims()).not.toThrow();
+    const ids = [...s.childReclaimCoordinatorClaims().keys()];
+    expect(ids).not.toContain('x');
+    expect(ids).not.toContain('y');
   });
 
   it('mixed case is refused too — `Reclaim:x -> y`', () => {
     const s = store();
     const r = openRun(s, { claimedBy: 'the-coordinator' }) as { id: number };
     s.recordRunEvent(r.id, 'operator', 'Reclaim:x -> y');
-    expect(() => s.childReclaimCoordinatorIds()).not.toThrow();
-    expect(s.childReclaimCoordinatorIds()).not.toContain('x');
+    expect(() => s.childReclaimCoordinatorClaims()).not.toThrow();
+    const ids = [...s.childReclaimCoordinatorClaims().keys()];
+    expect(ids).not.toContain('x');
+    expect(ids).not.toContain('y');
   });
 
-  it('the CONTROL: a genuine lower-case `reclaim:x -> y` row does yield `x`', () => {
+  it('the CONTROL: a genuine lower-case `reclaim:x -> y` row does yield `x`, and its heir `y`', () => {
     const s = store();
     const r = openRun(s, { claimedBy: 'the-coordinator' }) as { id: number };
     s.recordRunEvent(r.id, 'operator', 'reclaim:x -> y');
-    expect(s.childReclaimCoordinatorIds()).toContain('x');
+    const ids = [...s.childReclaimCoordinatorClaims().keys()];
+    expect(ids).toContain('x');
+    expect(ids).toContain('y');
+  });
+});
+
+// K3 — the ONE store read the coordination fence reads (spec §1 rule 4, with
+// spec §5.6's recycled slugs: "has coordinated" is fenced to the workspace's
+// current generation by `childReclaimCoordinated`, which needs WHEN each
+// claim ended, not only that one existed). Per id: `'open'` over everything,
+// then `'unplaced'` over any number, then the greatest instant.
+describe('CoordStore.childReclaimCoordinatorClaims — the latest instant per id', () => {
+  let progN = 0;
+  /** A run claimed by `by`, in a programme of its own. */
+  const claimed = (s: CoordStore, by: string): { id: number; program: string } => {
+    const program = `k3-prog-${++progN}`;
+    const r = openRun(s, { program, title: program, claimedBy: by });
+    if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
+    return { id: r.id, program };
+  };
+  /** Abandon it (terminal), then — when given — pin its `closedAt` by direct SQL. */
+  const closed = (s: CoordStore, by: string, at?: number | string | null): { id: number; program: string } => {
+    const r = claimed(s, by);
+    expect(s.closeRun({ runId: r.id, finalState: 'failed', causedBy: 'test', handoffCommit: null,
+      program: r.program, viaClosing: false }).ok).toBe(true);
+    if (at !== undefined) s.db.prepare('UPDATE runs SET closedAt = ? WHERE id = ?').run(at, r.id);
+    return r;
+  };
+
+  it('(a) a run closed at 1 000 beside an open run, both claimed by X: open', () => {
+    const s = store();
+    closed(s, 'X', 1_000);
+    claimed(s, 'X');
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('open');
+  });
+
+  it('(b) two terminal runs, closed at 1 000 and 5 000: the LATEST, 5 000', () => {
+    const s = store();
+    closed(s, 'X', 1_000);
+    closed(s, 'X', 5_000);
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe(5_000);
+  });
+
+  it('(c) a terminal run whose closedAt is NULL is unplaced — alone, and beside a run closed at 5 000', () => {
+    const s = store();
+    closed(s, 'X', null);
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('unplaced');
+    closed(s, 'X', 5_000);
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('unplaced');
+  });
+
+  it('(d) a row whose state reads `unknown` counts as open — the predicate every open read here shares', () => {
+    const s = store();
+    const r = closed(s, 'X', 1_000);
+    s.db.prepare("UPDATE runs SET state = 'unknown' WHERE id = ?").run(r.id);
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('open');
+  });
+
+  it('(e) a reclaim dates BOTH sides at its own instant: the displaced from AND the heir', () => {
+    const s = store();
+    const r = closed(s, 'X');
+    const c = okRun(s.run(r.id))!.closedAt!;
+    const d = c + 60_000;
+    expect(s.reclaimProgram(r.id, 'Y', d, null)).toMatchObject({ ok: true });
+    const claims = s.childReclaimCoordinatorClaims();
+    expect(claims.get('X')).toBe(d);
+    expect(claims.get('Y')).toBe(d);
+  });
+
+  // The heir side walks EVERY ` -> ` suffix, not only the last: an heir id that
+  // itself holds ` -> ` must still be dated at the reclaim's instant. `d > c`
+  // keeps that visible — the runs read alone would date the rewritten
+  // `claimedBy` at the run's `closedAt`, `c`.
+  it('(e2) an heir id holding ` -> ` is dated at the reclaim, as is its last suffix', () => {
+    const s = store();
+    const r = closed(s, 'X');
+    const c = okRun(s.run(r.id))!.closedAt!;
+    const d = c + 60_000;
+    expect(s.reclaimProgram(r.id, 'heir -> y', d, null)).toMatchObject({ ok: true });
+    const claims = s.childReclaimCoordinatorClaims();
+    expect(claims.get('heir -> y')).toBe(d);
+    expect(claims.get('y')).toBe(d);
+  });
+
+  it('(f) a `reclaim:` row that does not parse THROWS, as before', () => {
+    const s = store();
+    const r = claimed(s, 'X');
+    s.recordRunEvent(r.id, 'operator', 'reclaim:mangled-with-no-arrow');
+    expect(() => s.childReclaimCoordinatorClaims()).toThrow(/unparseable reclaim-displacement row/);
+  });
+
+  it('(g) a closedAt that is not a positive safe integer is unplaced — TEXT or REAL, alone and beside 5 000', () => {
+    const s = store();
+    closed(s, 'X', 'x');
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('unplaced');
+    closed(s, 'X', 5_000);
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('unplaced');
+    closed(s, 'Z', 1_000.5);
+    expect(s.childReclaimCoordinatorClaims().get('Z')).toBe('unplaced');
+  });
+
+  it('(h) a `reclaim:` row whose at is not a positive safe integer leaves both its sides unplaced', () => {
+    const s = store();
+    const r = closed(s, 'X', 1_000);
+    expect(s.reclaimProgram(r.id, 'Y', 2_000, null)).toMatchObject({ ok: true });
+    s.db.prepare("UPDATE run_events SET at = 'x' WHERE substr(detail, 1, 8) = 'reclaim:'").run();
+    const claims = s.childReclaimCoordinatorClaims();
+    expect(claims.get('X')).toBe('unplaced');
+    expect(claims.get('Y')).toBe('unplaced');
+  });
+
+  // A non-canonical TEXT stamp. `Number()` reads `0x10` as 16 and `0b1` as 1 —
+  // instants before any workspace's birth, so a fold that took them would call
+  // the coordinator "not coordinated" (fail-open). The canonical parse leaves
+  // them unplaced, which keeps the child.
+  it('(i) a closedAt in a non-canonical spelling (0x10, 0b1) is unplaced — alone, and beside a run closed at 5 000', () => {
+    const s = store();
+    closed(s, 'X', '0x10');
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('unplaced');
+    closed(s, 'X', 5_000);
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('unplaced');
+    closed(s, 'Z', '0b1');
+    expect(s.childReclaimCoordinatorClaims().get('Z')).toBe('unplaced');
+  });
+
+  it('(j) a `reclaim:` row whose at is a non-canonical spelling (0x20) leaves both its sides unplaced', () => {
+    const s = store();
+    const r = closed(s, 'X', 1_000);
+    expect(s.reclaimProgram(r.id, 'Y', 2_000, null)).toMatchObject({ ok: true });
+    s.db.prepare("UPDATE run_events SET at = '0x20' WHERE substr(detail, 1, 8) = 'reclaim:'").run();
+    const claims = s.childReclaimCoordinatorClaims();
+    expect(claims.get('X')).toBe('unplaced');
+    expect(claims.get('Y')).toBe('unplaced');
+  });
+
+  it('an id no run names and no displacement names is absent from the map', () => {
+    const s = store();
+    closed(s, 'X', 1_000);
+    expect(s.childReclaimCoordinatorClaims().has('never-claimed')).toBe(false);
   });
 });
 

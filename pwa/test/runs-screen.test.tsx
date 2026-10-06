@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { RUN_STATES, SPAWN_STALL_MS, type CoordCapsView, type FleetSession, type RunSummary } from '../../shared/api';
+import { RUN_STATES, SPAWN_STALL_MS, type ChildReclaimStatus, type CoordCapsView, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
-import { CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
+import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -39,7 +39,7 @@ const r = (over: Partial<RunSummary> = {}): RunSummary => ({
   // predates the warn row and must keep rendering exactly as it did.
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, ...over,
 });
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
@@ -1505,5 +1505,221 @@ describe('the run board marks review runs (design 2026-09-14 §8)', () => {
     expect(chip!.querySelector('.run-kind-glyph')?.getAttribute('aria-hidden')).toBe('true');
     expect(chip!.textContent).toContain('reviews #47');
     expect(chip!.getAttribute('title')).toContain('coordinator rules');
+  });
+});
+
+// ── child-reclamation wave 5: the closed run's reclaim chip (spec §5.9) ─────
+//
+// The SERVER chooses the word and writes the sentence; this board renders both
+// and maps no token. `childReclaimChip` is the one reader of the field, and it
+// is tolerant because `RunSummary` is cast, never revived.
+describe('childReclaimChip — the one tolerant reader of RunSummary.childReclaim (wave 5)', () => {
+  it('is silent when the server said null, and on a row from a server that never heard of the field', () => {
+    expect(childReclaimChip(r({ childReclaim: null }))).toBeNull();
+    const older = { ...r() } as Partial<RunSummary>;
+    delete older.childReclaim;
+    expect(childReclaimChip(older)).toBeNull();
+  });
+
+  it('renders the server’s word with a glyph and carries its sentence verbatim', () => {
+    expect(childReclaimChip(r({ childReclaim: { word: 'refused', sentence: 'SERVER SENTENCE', at: 5_000 } })))
+      .toEqual({ word: 'refused', glyph: CHILD_RECLAIM_CHIP_GLYPH.refused, label: 'workspace refused',
+                 sentence: 'SERVER SENTENCE', line: 'SERVER SENTENCE', at: 5_000 });
+  });
+
+  it('puts the sentence on its own line only for a refusal — the other words carry it in the title', () => {
+    for (const word of ['reclaimed', 'pending', 'deferred', 'paused'] as const) {
+      expect(childReclaimChip(r({ childReclaim: { word, sentence: 'S', at: null } }))!.line, word).toBeNull();
+    }
+  });
+
+  it('names a word this build was never compiled to know as unknown — never a blank cell, never a guess', () => {
+    const newer = r({ childReclaim: { word: 'evicted', sentence: 'S', at: null } as unknown as ChildReclaimStatus });
+    expect(childReclaimChip(newer)).toMatchObject({ word: 'unknown', label: 'workspace: unknown state', line: null });
+  });
+
+  it('titles the chip with the sentence, and the age of its moment when it has one', () => {
+    const chip = childReclaimChip(r({ childReclaim: { word: 'deferred', sentence: 'waiting', at: 1_000_000 } }))!;
+    expect(childReclaimTitle(chip, 1_000 + 3 * 3_600)).toBe('waiting · 3h ago');
+    const bare = childReclaimChip(r({ childReclaim: { word: 'pending', sentence: null, at: null } }))!;
+    expect(childReclaimTitle(bare, 0)).toBe('workspace pending');
+  });
+
+  // Each of the reader's own guards, by a case that reds when that guard is deleted.
+  it('reads an empty sentence as none — no line, and the label as the title', () => {
+    const chip = childReclaimChip(r({ childReclaim: { word: 'refused', sentence: '', at: null } }))!;
+    expect(chip.sentence).toBeNull();
+    expect(chip.line).toBeNull();
+    expect(childReclaimTitle(chip, 0)).toBe('workspace refused');
+  });
+
+  it('reads a moment that is not a finite number as none — the title carries no age', () => {
+    const chip = childReclaimChip(r({ childReclaim: { word: 'deferred', sentence: 'S', at: NaN } }))!;
+    expect(chip.at).toBeNull();
+    expect(childReclaimTitle(chip, 1_000_000)).toBe('S');
+  });
+
+  // The empty-string case cannot see the `typeof` check: these can.
+  it.each([['missing', undefined], ['a number', 5]] as const)('reads a sentence that is %s as none', (_what, sentence) => {
+    const raw = sentence === undefined ? { word: 'refused', at: null } : { word: 'refused', sentence, at: null };
+    const chip = childReclaimChip(r({ childReclaim: raw as unknown as ChildReclaimStatus }))!;
+    expect(chip.sentence).toBeNull();
+    expect(chip.line).toBeNull();
+  });
+
+  it.each(['x', 5, true])('is silent on a childReclaim that is not an object (%s)', (v) => {
+    expect(childReclaimChip(r({ childReclaim: v as unknown as ChildReclaimStatus }))).toBeNull();
+  });
+
+  it('calls a row gone only when its workspace was reclaimed', () => {
+    expect(childReclaimGone(childReclaimChip(r({ childReclaim: { word: 'reclaimed', sentence: null, at: null } })))).toBe(true);
+    for (const word of ['pending', 'deferred', 'paused', 'refused'] as const) {
+      expect(childReclaimGone(childReclaimChip(r({ childReclaim: { word, sentence: null, at: null } }))), word).toBe(false);
+    }
+    expect(childReclaimGone(null)).toBe(false);
+  });
+});
+
+describe('the finished row carries the reclaim chip, and a reclaimed row is inert (wave 5)', () => {
+  const boardWith = async (childReclaim: ChildReclaimStatus | null): Promise<void> => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadCaps={NO_CAPS} loadRuns={async () => ({
+      runs: [r({ id: 7, state: 'done', closedAt: Date.now() - 60_000, childReclaim })],
+    })} />);
+    await screen.findByRole('group', { name: /finished/i });
+  };
+  const chipEl = (): HTMLElement | null => document.querySelector('.run-child-reclaim');
+
+  it('renders nothing for a row the server says nothing about — the no-regression baseline', async () => {
+    await boardWith(null);
+    expect(chipEl()).toBeNull();
+    expect(document.querySelector('.run-open')).not.toBeNull();
+  });
+
+  it('renders both cues, and the server’s sentence as the title', async () => {
+    await boardWith({ word: 'pending', sentence: 'waiting to be reclaimed', at: null });
+    expect(chipEl()).toHaveAttribute('data-child-reclaim', 'pending');
+    const glyph = chipEl()!.querySelector('.run-child-reclaim-glyph');
+    expect(glyph?.textContent).toBe(CHILD_RECLAIM_CHIP_GLYPH.pending);
+    expect(glyph).toHaveAttribute('aria-hidden', 'true');
+    expect(chipEl()!.textContent).toContain('workspace pending');
+    expect(chipEl()).toHaveAttribute('title', 'waiting to be reclaimed');
+    expect(document.querySelector('.run-child-reclaim-sentence')).toBeNull();
+  });
+
+  it('spells a refusal’s sentence out on its own line, verbatim', async () => {
+    await boardWith({ word: 'refused', sentence: 'A SENTENCE THE SERVER COMPOSED', at: null });
+    expect(document.querySelector('.run-child-reclaim-sentence')?.textContent).toBe('A SENTENCE THE SERVER COMPOSED');
+  });
+
+  it('stops offering to open a session that no longer exists once it is reclaimed', async () => {
+    await boardWith({ word: 'reclaimed', sentence: 'gone', at: null });
+    expect(document.querySelector('.run-open')).toBeNull();
+    const li = chipEl()!.closest('li');
+    expect(li).toHaveAttribute('data-inert', 'true');
+    expect(li!.querySelector('.run-abandon')).not.toBeNull();
+  });
+
+  it.each(['pending', 'deferred', 'paused', 'refused'] as const)('keeps the open door on a %s row', async (word) => {
+    await boardWith({ word, sentence: 'S', at: null });
+    expect(document.querySelector('.run-open')).not.toBeNull();
+  });
+
+  // Only `reclaimed` is gone. A word this build does not know leaves a workspace
+  // it cannot rule out, so the row keeps its door.
+  it('keeps the open door on a row whose word this build does not know', async () => {
+    await boardWith({ word: 'evicted', sentence: 'S', at: null } as unknown as ChildReclaimStatus);
+    expect(chipEl()).toHaveAttribute('data-child-reclaim', 'unknown');
+    expect(document.querySelector('.run-open')).not.toBeNull();
+    expect(chipEl()!.closest('li')).not.toHaveAttribute('data-inert');
+  });
+
+  // The inert row keeps both controls, and keeps them where they were: last,
+  // the resume door before the abandon control. A dead coordinator and a
+  // programme with no open run are what make the resume door render at all.
+  it('keeps the resume door and the abandon control on a reclaimed row — its last two children, in that order', async () => {
+    const store = makeStore();
+    act(() => {
+      store.setState({
+        runs: [], runsFrameSeen: true, fleetFrameSeen: true,
+        sessions: [sess({ id: 'ccrc-pwa-coordinator', workspace: null, branch: null, status: 'dead', lifecycle: 'orphan' })],
+      });
+    });
+    render(<RunsScreen store={store} loadCaps={NO_CAPS} loadRuns={async () => ({
+      runs: [r({ id: 7, state: 'done', closedAt: Date.now() - 60_000,
+                 childReclaim: { word: 'reclaimed', sentence: 'gone', at: null } })],
+    })} />);
+    const resume = await screen.findByRole('button', { name: /resume run 7/i });
+    const li = resume.closest('li')!;
+    expect(li).toHaveAttribute('data-inert', 'true');
+    expect(document.querySelector('.run-open')).toBeNull();
+    expect([...li.children].slice(-2).map((c) => c.className)).toEqual(['run-resume', 'run-abandon']);
+  });
+});
+
+describe('childReclaimRefreshDue — a vanish, never a poll (wave 5)', () => {
+  const SID = 'ccrc-pwa-clear-cove';
+  const row = (word: ChildReclaimStatus['word'] | null, over: Partial<RunSummary> = {}): RunSummary =>
+    r({ id: 7, state: 'done', closedAt: 1, childReclaim: word === null ? null : { word, sentence: null, at: null }, ...over });
+
+  it('is due when an unsettled finished row’s session leaves the fleet', () => {
+    for (const word of ['pending', 'deferred', 'paused'] as const) {
+      expect(childReclaimRefreshDue([row(word)], new Set([SID]), new Set()), word).toBe(true);
+    }
+  });
+
+  it('is not due for a settled word, a session still listed, a session never listed, or a row with no chip', () => {
+    expect(childReclaimRefreshDue([row('reclaimed')], new Set([SID]), new Set())).toBe(false);
+    expect(childReclaimRefreshDue([row('refused')], new Set([SID]), new Set())).toBe(false);
+    expect(childReclaimRefreshDue([row('pending')], new Set([SID]), new Set([SID]))).toBe(false);
+    expect(childReclaimRefreshDue([row('pending')], new Set(), new Set())).toBe(false);
+    expect(childReclaimRefreshDue([row(null)], new Set([SID]), new Set())).toBe(false);
+  });
+});
+
+describe('the board re-reads the archive when a finished child leaves the fleet (wave 5)', () => {
+  const pendingRow = (): RunSummary =>
+    r({ id: 7, state: 'done', closedAt: Date.now() - 60_000, childReclaim: { word: 'pending', sentence: null, at: null } });
+
+  it('re-reads once when the pending child’s session vanishes from the fleet frame', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true, sessions: [sess()], fleetFrameSeen: true }); });
+    const loadRuns = vi.fn(async (): Promise<{ runs: RunSummary[] }> => ({ runs: [pendingRow()] }));
+    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
+    await screen.findByRole('group', { name: /finished/i });
+    expect(loadRuns).toHaveBeenCalledTimes(1);
+    act(() => { store.setState({ sessions: [] }); });
+    await waitFor(() => expect(loadRuns).toHaveBeenCalledTimes(2));
+  });
+
+  it('reads once per vanish: the read that lands, a later frame and the passage of time are not reasons to read again', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true, sessions: [sess()], fleetFrameSeen: true }); });
+    const loadRuns = vi.fn(async (): Promise<{ runs: RunSummary[] }> => ({ runs: [pendingRow()] }));
+    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
+    await screen.findByRole('group', { name: /finished/i });
+    act(() => { store.setState({ sessions: [] }); });
+    await waitFor(() => expect(loadRuns).toHaveBeenCalledTimes(2));
+    // The row still reads pending and its session is still gone, so a trigger
+    // that compared a frame with itself, or kept the old baseline, would read again.
+    act(() => { store.setState({ sessions: [] }); });               // a later frame, the same ids
+    await act(async () => { await new Promise((res) => setTimeout(res, 60)); });
+    expect(loadRuns).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not re-read when an unrelated session vanishes, or when the row already reads reclaimed', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true,
+      sessions: [sess(), sess({ id: 'ccrc-pwa-keen-dune' })], fleetFrameSeen: true }); });
+    const loadRuns = vi.fn(async (): Promise<{ runs: RunSummary[] }> => ({ runs: [
+      r({ id: 7, state: 'done', closedAt: Date.now() - 60_000, childReclaim: { word: 'reclaimed', sentence: null, at: null } }),
+    ] }));
+    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
+    await screen.findByRole('group', { name: /finished/i });
+    act(() => { store.setState({ sessions: [sess()] }); });          // an unrelated session left
+    act(() => { store.setState({ sessions: [] }); });               // this row's left, but it is settled
+    await act(async () => { await Promise.resolve(); });
+    expect(loadRuns).toHaveBeenCalledTimes(1);
   });
 });

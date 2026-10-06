@@ -12,7 +12,7 @@
 // pins them as standing tests. THIS file pins the behaviour: the table's rows, the
 // three-part output contract, and the refusals.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { AddressInfo } from 'node:net';
 import fs from 'node:fs';
@@ -25,6 +25,7 @@ import { hashLine } from '../src/auth/secret.js';
 import { CCRC_API, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { loopbackCurlFront } from './containedTools.js';
 
 let home: string;
 let server: Server;
@@ -383,6 +384,7 @@ describe('the output contract', () => {
     const body = JSON.parse(r.stdout.trim());
     expect(body).toMatchObject({ ok: false, error: 'transport' });
     expect(typeof body.detail).toBe('string');
+    expect(r.stdout + r.stderr, 'the transport refusal echoed the token (R16)').not.toContain(TOKEN);
   });
 });
 
@@ -412,6 +414,114 @@ describe('the token', () => {
     const r = await runBoth(['runs', 'list']);
     expect(r.status).not.toBe(0);
     expect(seen).toHaveLength(0);
+  });
+});
+
+// R16 (centralised-update wave 13). A `-H` header value is readable in every
+// process listing on the box (`ps`, /proc/<pid>/cmdline) for the life of the
+// call, and the box token is one shared secret. So the client hands it to curl
+// on STDIN as a `-K -` config line. A curl that RECORDS what it was given, one
+// argv word per line plus its stdin, then execs the real curl with that stdin,
+// so the listener above still measures what arrived. Asserting `-K -` in argv
+// as well as the config on stdin is what tells "sent on stdin" from "a recorder
+// that always captures stdin" (ccd-pool-sync.test.ts's warning about its stub).
+describe('the token never rides curl\'s argv (R16)', () => {
+  const REAL_CURL = spawnSync('/bin/sh', ['-c', 'command -v curl'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/curl';
+  const plantRecorder = (): void => {
+    fs.writeFileSync(path.join(harnessBin(home), 'curl'),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > "$HOME/curl.argv"\ncat > "$HOME/curl.stdin"\n`
+      + `exec '${REAL_CURL}' "$@" < "$HOME/curl.stdin"\n`, { mode: 0o755 });
+  };
+  const argv = (): string[] => fs.readFileSync(path.join(home, 'curl.argv'), 'utf8').split('\n');
+  const stdin = (): string => fs.readFileSync(path.join(home, 'curl.stdin'), 'utf8');
+  const CONFIG = `header = "x-ccrc-mail-token: ${TOKEN}"\n`;
+
+  it.each([
+    ['a GET', ['runs', 'list'], undefined, ''],
+    ['a POST whose body is a --json file', ['runs', 'open', '--json', 'BODYFILE'], undefined, '{"program":"p","wave":1}'],
+    // THE COLLISION CASE: stdin is the body (read by `body=$(cat)`) AND curl's
+    // config (the printf pipe). The mail envelope's own ack line is this shape.
+    ['a POST whose body is --json - (stdin twice: the body, then curl\'s config)', ['asks', 'answer', '7', '--json', '-'],
+      '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}', '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}'],
+  ])('%s: argv holds neither the token nor its header, stdin carries the config, and both arrive', async (_what, args, input, body) => {
+    plantRecorder();
+    if (args.includes('BODYFILE')) fs.writeFileSync(path.join(home, 'body.json'), body);
+    const r = await run(args.map((a) => (a === 'BODYFILE' ? path.join(home, 'body.json') : a)), input);
+    expect(r.status, r.stderr).toBe(0);
+    const words = argv();
+    expect(words.filter((w) => w.includes(TOKEN)), 'the token is on curl\'s argv').toEqual([]);
+    expect(words.filter((w) => /x-ccrc-mail-token/i.test(w)), 'the token header is on curl\'s argv').toEqual([]);
+    expect(words.some((w, i) => w === '-K' && words[i + 1] === '-'), `no \`-K -\` in argv: ${words.join(' ')}`).toBe(true);
+    expect(stdin()).toBe(CONFIG);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.auth).toBe(TOKEN);
+    expect(seen[0]!.body).toBe(body);
+  });
+
+  it('drives the client through the loopback curl front: the front admits its exact calls, and the header arrives', async () => {
+    fs.writeFileSync(path.join(harnessBin(home), 'curl'), loopbackCurlFront(REAL_CURL), { mode: 0o755 });
+    fs.writeFileSync(path.join(home, 'curl-allow-ports'), `${(server.address() as AddressInfo).port}\n`);
+    const body = '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}';
+    const a = await run(['asks', 'answer', '7', '--json', '-'], body);
+    const b = await run(['runs', 'list']);
+    expect([a.status, b.status], `${a.stderr}\n${b.stderr}`).toEqual([0, 0]);
+    expect(fs.existsSync(path.join(home, 'curl-poison')), 'the front refused a call the client makes').toBe(false);
+    expect(seen.map((x) => [x.method, x.url, x.auth, x.body])).toEqual([
+      ['POST', '/api/asks/7/answer', TOKEN, body],
+      ['GET', '/api/runs', TOKEN, ''],
+    ]);
+  });
+
+  // THE OTHER DIRECTION OF THE COLLISION (wave 13, R16): the CALLER's stdin must
+  // never reach curl's `-K -` parser. If it could, any caller could add a `url`,
+  // `output` or `proxy` line, and the box token header would follow it. `runs
+  // list` reads no stdin, so a hostile stdin is still there when curl starts.
+  it('a caller\'s stdin never reaches curl\'s config: hostile config lines on stdin send nothing anywhere else', async () => {
+    const elsewhere: string[] = [];
+    const other = createServer((req: IncomingMessage, res: ServerResponse) => {
+      elsewhere.push(`${req.method} ${req.url} ${String(req.headers['x-ccrc-mail-token'] ?? '')}`);
+      res.writeHead(200); res.end('{}');
+    });
+    await new Promise<void>((r) => other.listen(0, '127.0.0.1', r));
+    try {
+      plantRecorder();
+      const pwn = path.join(home, 'pwn');
+      const hostile = `url = "http://127.0.0.1:${(other.address() as AddressInfo).port}/stolen"\n`
+        + `output = "${pwn}"\nheader = "x-evil: 1"\n`;
+      const r = await run(['runs', 'list'], hostile);
+      expect(r.status, r.stderr).toBe(0);
+      expect(stdin(), 'curl was handed something besides the client\'s one config line').toBe(CONFIG);
+      expect(elsewhere, 'a URL from the caller\'s stdin was fetched').toEqual([]);
+      expect(fs.existsSync(pwn), 'an output path from the caller\'s stdin was written').toBe(false);
+      expect(seen.map((x) => [x.method, x.url, x.auth])).toEqual([['GET', '/api/runs', TOKEN]]);
+    } finally {
+      await new Promise<void>((r) => { other.close(() => r()); });
+    }
+  });
+
+  // An error path is scanned too: with the server gone, curl fails (rc 7) and
+  // the client answers its `transport` envelope. The token is on no argv, and on
+  // no output.
+  it('the transport refusal: argv holds no token, and neither stream echoes it', async () => {
+    plantRecorder();
+    await new Promise<void>((r) => { server.close(() => r()); });
+    const r = await run(['runs', 'list']);
+    expect(r.status).toBe(3);
+    expect(JSON.parse(r.stdout.trim())).toMatchObject({ ok: false, error: 'transport' });
+    const words = argv();
+    expect(words.filter((w) => w.includes(TOKEN) || /x-ccrc-mail-token/i.test(w)), 'the token is on curl\'s argv').toEqual([]);
+    expect(stdin()).toBe(CONFIG);
+    expect(r.stdout + r.stderr, 'the transport refusal echoed the token').not.toContain(TOKEN);
+  });
+
+  // `set +x` (R16): an inherited xtrace — `bash -x`, or an exported
+  // SHELLOPTS=xtrace — would trace `read_token` and the printf line to stderr,
+  // which the calling session reads into its transcript.
+  it('an inherited xtrace prints no token: SHELLOPTS=xtrace leaves stderr clean', async () => {
+    const r = await run(['runs', 'list'], undefined, { SHELLOPTS: 'xtrace' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr, 'an inherited xtrace printed the token').not.toContain(TOKEN);
+    expect(seen.map((x) => x.auth)).toEqual([TOKEN]);
   });
 });
 

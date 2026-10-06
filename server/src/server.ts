@@ -296,6 +296,9 @@ export interface Deps {
    *  session's own `KeyedQueue` — so a close and a sweep reclaim identically.
    *  A test sets it to assert what the lane asks for without a fleet box. */
   childReclaimExec?: (req: ChildReclaimRequest) => Promise<ChildReclaimOutcome>;
+  /** The process's monotonic clock in ms, read by the child-reclaim sweep lane alone. Unset in production: the lane
+   *  reads `performance.now()`. A test sets it. */
+  monotonicMs?: () => number;
   /** The box token every fleet->server POST must carry (coord/token.ts).
    *  Optional the same way `push`/`notifyLog` are: a box with none configured
    *  keeps working, unauthenticated, and says so once at boot. NOT optional the
