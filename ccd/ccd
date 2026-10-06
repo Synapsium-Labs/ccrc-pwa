@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2ff1fdbc783f358c4401788baefc0461d97cdd308ebafb29d630a69861af8152
+# ccrc:generated 1 sha256=d27acac861713d7b6d0a7df577bd614dc8f73e856e161e3e090ff0f446d6cef9
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31474,7 +31474,14 @@ FETCH_ABSENT_MARK = "couldn't find remote ref"
 FETCH_FSCK_PACK_RE = r'index-pack|unpack-objects'
 FETCH_FSCK_ERROR_RE = r'fsck error in pack|^error: object [0-9a-f]{40}(?:[0-9a-f]{24})?: [A-Za-z]+: '
 FETCH_AUTH_MARKS = ('Authentication failed', 'could not read Username', 'Permission denied (publickey)')
+# ref-locked means ANOTHER process holds a ref lock (spec 2 (g) step 7, retried),
+# so 'cannot lock ref' alone is not enough: git says the same two words for a
+# directory/file conflict ("'refs/remotes/origin/foo' exists; cannot create
+# ..."), which only a prune cures and which --no-prune never will. The lock arm
+# needs git's own lock-file evidence beside it, `Unable to create '<ref>.lock':
+# File exists` (measured on git 2.43.0 under LC_ALL=C).
 FETCH_LOCK_MARK = 'cannot lock ref'
+FETCH_LOCK_EVIDENCE_RE = r"Unable to create '[^'\n]*\.lock': File exists"
 
 # A failure's `detail` (the envelope's bound, section 2 (b)): redacted BEFORE it
 # is cut, so a cut never slides a secret out from under a pattern's length floor.
@@ -31492,18 +31499,21 @@ FETCH_STAMP_FILE_MODE = 0o600
 def classify_fetch(rc, stderr, timed_out):
     """Step 7's table, in its order: None for a fetch that exited 0, else the
     one word. Pure. rc is None only when nothing ran (a spent deadline, which
-    arrives as timed_out); stderr is already decoded."""
-    if timed_out:
-        return 'fetch-timeout'
+    arrives as timed_out); stderr is already decoded. rc 0 comes first, as the
+    spec's table has it: git itself completed (a SIGTERMed git does not exit 0),
+    so a bound that expired only on a grandchild's pipe still answers ok, and
+    the caller reads the ref to say what actually moved."""
     if rc == 0:
         return None
+    if timed_out:
+        return 'fetch-timeout'
     if rc == 128 and FETCH_ABSENT_MARK in stderr:
         return 'remote-branch-absent'
     if re.search(FETCH_FSCK_PACK_RE, stderr) and re.search(FETCH_FSCK_ERROR_RE, stderr, re.M):
         return 'fetch-rejected-objects'
     if any(m in stderr for m in FETCH_AUTH_MARKS):
         return 'fetch-auth-failed'
-    if rc == 1 and FETCH_LOCK_MARK in stderr:
+    if rc == 1 and FETCH_LOCK_MARK in stderr and re.search(FETCH_LOCK_EVIDENCE_RE, stderr):
         return 'ref-locked'
     if rc == 128:
         return 'fetch-transport'

@@ -75,13 +75,13 @@ const ageStamp = (p: string, ms: number): void => {
 /** Python that answers `docs-fetch --project <project>` through the helper's own `run` (the envelope and the
  *  failure body included) and prints that line parsed. `pre` runs first, after `H` is loaded: a `Sys` swap, or
  *  a `VERBS` entry that lowers a bound by passing it. */
-const fetchUnit = (project: string, pre: string[] = []): string => [
+const fetchUnit = (project: string, pre: string[] = [], branch: string | null = null): string => [
   'import json',
   'import os',
   ...pre,
   "HOME = os.environ['HOME']",
   "argv = ['docs-fetch', os.path.join(HOME, 'projects'), os.path.join(HOME, 'worktrees'),",
-  `        os.path.join(HOME, '.cc-sessions'), '--project', ${JSON.stringify(project)}]`,
+  `        os.path.join(HOME, '.cc-sessions'), '--project', ${JSON.stringify(project)}${branch === null ? '' : `, '--branch', ${JSON.stringify(branch)}`}]`,
   "out(json.loads(H.run(argv).decode('utf-8')))",
 ].join('\n');
 
@@ -254,11 +254,15 @@ describe('docs-fetch classifier (row 42; R6: measured on git 2.43 under LC_ALL=C
     const FSCK_FETCH_PACK = 'error: object 59a23ae80cdb80f2ad9bff6a77ddbe720c0842bd: duplicateEntries: contains duplicate file entries\n'
       + 'fatal: fsck error in packed object\nfatal: fetch-pack: invalid index-pack output\n';
     const LOCK = "error: cannot lock ref 'refs/remotes/origin/main': Unable to create '/r/.git/refs/remotes/origin/main.lock': File exists.\n";
+    const DIRFILE = "error: cannot lock ref 'refs/remotes/origin/foo/bar': 'refs/remotes/origin/foo' exists; cannot create 'refs/remotes/origin/foo/bar'\n";
     const CASES: [string, number | null, string, boolean, string | null][] = [
       ['rc 0', 0, '', false, null],
       ['rc 0 with the forced-update warning', 0, 'warning: fetch normally indicates which branches had a forced update,\n', false, null],
       ['the bound ran out', null, '', true, 'fetch-timeout'],
       ['the bound wins over any message', 128, "fatal: couldn't find remote ref refs/heads/x\n", true, 'fetch-timeout'],
+      // Step 7's table lists rc 0 first: git itself completed (a SIGTERMed git never exits 0), so a bound that
+      // expired on a grandchild's pipe after a clean exit is still an ok, and the ref is read to say what moved.
+      ['the bound and rc 0', 0, '', true, null],
       ['missing remote branch', 128, "fatal: couldn't find remote ref refs/heads/nosuch\n", false, 'remote-branch-absent'],
       ['missing-ref text needs rc 128', 1, "fatal: couldn't find remote ref refs/heads/nosuch\n", false, 'fetch-failed'],
       ['fsck refusal, index-pack failed', 128, FSCK_INDEX_PACK, false, 'fetch-rejected-objects'],
@@ -269,6 +273,13 @@ describe('docs-fetch classifier (row 42; R6: measured on git 2.43 under LC_ALL=C
       ['auth: no prompt', 128, "fatal: could not read Username for 'https://example.invalid': terminal prompts disabled\n", false, 'fetch-auth-failed'],
       ['auth: ssh', 128, 'git@example.invalid: Permission denied (publickey).\r\nfatal: Could not read from remote repository.\n', false, 'fetch-auth-failed'],
       ['lock', 1, LOCK, false, 'ref-locked'],
+      // A directory/file conflict says "cannot lock ref" too, but no other process holds anything: only a prune
+      // cures it, so it is not the retried word. Measured on git 2.43.0 (see the lab case below).
+      ['a ref directory/file conflict is not a lock', 1, DIRFILE, false, 'fetch-failed'],
+      ['lock evidence alone is not a lock', 1, "fatal: Unable to create '/r/.git/index.lock': File exists.\n", false, 'fetch-failed'],
+      ['a lock that cannot be created for another reason', 1,
+        "error: cannot lock ref 'refs/remotes/origin/main': Unable to create '/r/.git/refs/remotes/origin/main.lock': Permission denied\n",
+        false, 'fetch-failed'],
       ['lock text needs rc 1', 128, LOCK, false, 'fetch-transport'],
       ['other rc 128', 128, "fatal: '/r/nowhere.git' does not appear to be a git repository\n", false, 'fetch-transport'],
       ['other rc 1', 1, 'error: something else\n', false, 'fetch-failed'],
@@ -281,6 +292,22 @@ describe('docs-fetch classifier (row 42; R6: measured on git 2.43 under LC_ALL=C
       'out([H.classify_fetch(rc, err, to) for _name, rc, err, to, _want in cases])',
     ].join('\n'));
     expect(CASES.map((c, i) => [c[0], got[i]])).toEqual(CASES.map((c) => [c[0], c[4]]));
+  });
+
+  it('a stale ref where a remote branch needs a directory answers fetch-failed with git\'s own message, never ref-locked (lab)', () => {
+    // refs/remotes/origin/foo is a stale ref (the remote branch was deleted); the remote now has foo/bar. git cannot
+    // create the directory refs/remotes/origin/foo/, says "cannot lock ref", and --no-prune never removes the stale
+    // ref, so a retry cannot succeed. Measured on git 2.43.0: rc 1, no lock file is involved.
+    const main = h.makeRepo('demo');
+    const tip = rev(main, 'refs/remotes/origin/main');
+    h.git(main, 'update-ref', 'refs/remotes/origin/foo', tip);
+    h.git(originOf('demo'), 'update-ref', 'refs/heads/foo/bar', tip);
+    const a = fetchDocs('demo', 'foo/bar');
+    expect(a).toMatchObject({ ok: false, failure: 'fetch-failed', branch: 'foo/bar', rc: 1 });
+    expect(a, 'not the transient word').not.toHaveProperty('lockAgeMs');
+    expect(String(a['detail'])).toContain("'refs/remotes/origin/foo' exists; cannot create");
+    expect(readStampFile(stampFile(main, 'foo/bar')), 'a failed attempt is still stamped').toMatchObject({
+      lastOutcome: 'fetch-failed' });
   });
 
   it('a fetch that outlives a lowered bound answers fetch-timeout, and its grandchild is gone (killpg)', async () => {
@@ -336,6 +363,11 @@ describe('docs-fetch ref-locked and its lock age (rows 42 and 61, ccd half)', ()
     expect(a).toMatchObject({ ok: false, failure: 'ref-locked' });
     expect(a['lockAgeMs'] as number).toBeGreaterThanOrEqual(120_000 - 10);
     expect(a['lockAgeMs'] as number).toBeLessThanOrEqual(120_000 + spanMs + 10);
+  });
+
+  it('a lock stamped in the future (the clock stepped back) answers lockAgeMs 0, never a negative age', () => {
+    const { a } = lockedFetch(-3_600_000);
+    expect(a).toMatchObject({ ok: false, failure: 'ref-locked', lockAgeMs: 0 });
   });
 
   it('a lock gone before its lstat answers lockAgeMs null; an lstat that fails otherwise leaves the field out', () => {
@@ -437,7 +469,8 @@ describe('docs-fetch stamp and floor (row 43)', () => {
       'import itertools',
       'stderrs = ["", "fatal: x\\n", "fatal: couldn\'t find remote ref refs/heads/x\\n",',
       '           "error: object 59a23ae80cdb80f2ad9bff6a77ddbe720c0842bd: duplicateEntries: x\\nfatal: fsck error in packed object\\nfatal: index-pack failed\\n",',
-      '           "fatal: Authentication failed for x\\n", "error: cannot lock ref \'r\': File exists.\\n"]',
+      '           "fatal: Authentication failed for x\\n",',
+      '           "error: cannot lock ref \'r\': Unable to create \'r.lock\': File exists.\\n"]',
       'words = sorted({str(H.classify_fetch(rc, e, to)) for rc, e, to in itertools.product((None, 0, 1, 2, 128, -9), stderrs, (False, True))})',
       "out({'words': words, 'outcomes': sorted(H.STAMP_OUTCOMES)})",
     ].join('\n'));
@@ -470,6 +503,50 @@ describe('docs-fetch stamp and floor (row 43)', () => {
       okCommit: rev(main, 'refs/remotes/origin/main') }));
     expect(fetchDocs('demo')).toMatchObject({ ok: true, stamp: 'written' });
     expect(readStampFile(p).attemptMs).toBeLessThan(ahead);
+  });
+
+  it('a stamp for ANOTHER branch at this branch\'s path holds no floor and carries no okMs', () => {
+    const main = h.makeRepo('demo');
+    const p = stampFile(main, 'main');
+    fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+    const now = Date.now();
+    fs.writeFileSync(p, JSON.stringify({ v: 1, branch: 'other', attemptMs: now, lastOutcome: 'ok', okMs: now,
+      okCommit: rev(main, 'refs/remotes/origin/main') }));
+    expect(fetchDocs('demo', 'main'), 'fetch-too-soon would mean another branch\'s stamp set the floor').toMatchObject({
+      ok: true, stamp: 'written' });
+    // And a failure after it carries nothing over from the foreign stamp.
+    fs.writeFileSync(p, JSON.stringify({ v: 1, branch: 'other', attemptMs: now - 60_000, lastOutcome: 'ok', okMs: now - 60_000,
+      okCommit: rev(main, 'refs/remotes/origin/main') }));
+    h.git(main, 'remote', 'set-url', 'origin', path.join(h.home, 'nowhere.git'));
+    expect(fetchDocs('demo', 'main')).toMatchObject({ ok: false, failure: 'fetch-transport' });
+    expect(readStampFile(p)).toMatchObject({ branch: 'main', lastOutcome: 'fetch-transport', okMs: null, okCommit: null });
+  });
+
+  it('a tracked ref that is absent after a fetch that exited 0 answers git-failed {step: for-each-ref}, never a silent ok', () => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'update-ref', '-d', 'refs/remotes/origin/main');
+    const a = unitJson<Answer>(h.home, fetchUnit('demo', cannedFetch(0, ''), 'main'));
+    expect(a).toMatchObject({ ok: false, failure: 'git-failed', step: 'for-each-ref' });
+    expect(a).not.toHaveProperty('okCommit');
+    expect(fs.existsSync(stampFile(main, 'main')), 'no stamp for an attempt that could not be read back').toBe(false);
+  });
+
+  it('a for-each-ref that fails answers git-failed {step: for-each-ref} before any fetch, and stamps nothing', () => {
+    const main = h.makeRepo('demo');
+    const rec = plantGitRecorder(h.home, { failWhen: ['--end-of-options refs/remotes/origin/main'] });
+    expect(fetchDocs('demo', 'main')).toMatchObject({ ok: false, failure: 'git-failed', step: 'for-each-ref' });
+    // Without tracked_oid's rc check the failure reads as an absent ref and the fetch goes ahead.
+    expect(fetchCalls(rec.calls()), 'the failed read of `before` stops the verb before the network').toEqual([]);
+    expect(fs.existsSync(stampFile(main, 'main'))).toBe(false);
+  });
+
+  it('a directory at the stamp leaf answers stamp unwritten and leaves no temporary file behind', () => {
+    const main = h.makeRepo('demo');
+    const p = stampFile(main, 'main');
+    fs.mkdirSync(p, { recursive: true, mode: 0o700 });
+    expect(fetchDocs('demo', 'main')).toMatchObject({ ok: true, stamp: 'unwritten' });
+    expect(fs.lstatSync(p).isDirectory(), 'the directory was not replaced').toBe(true);
+    expect(fs.readdirSync(path.dirname(p)).filter((n) => /^\..*\.tmp$/.test(n)), 'the rename failed, and its temporary file went').toEqual([]);
   });
 
   it('a FIFO at the stamp path neither hangs the call nor is opened: it is replaced', () => {
