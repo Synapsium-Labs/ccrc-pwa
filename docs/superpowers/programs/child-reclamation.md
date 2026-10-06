@@ -46,6 +46,15 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 10:50 — #293 merged (`26e3318b`); wave 6's brief is ready; dispatch waits for #290 and quiet-river.**
+  - **The PR.** The required checks passed on `372e663b`: server 4/4, agent, pwa, build, typecheck. macOS is
+    advisory. The squash merge is `26e3318b`, and the plan, the contract and this ledger on main equal the tested
+    tree.
+  - **planSha** is `26e3318b3ee3f66cd21a875b58946aab2d205208`. The brief, about 4 KB, is in the evidence archive as
+    `wave6-brief.md`.
+  - **quiet-river** got the full X2 list in status mail 3666. Mail 3657's question stays open: does WL 3b edit the
+    tail, the containment, the ladder or the platform block?
+  - **Dispatch** follows #290's merge, the answer to that question, and a fresh claims read.
 - **2026-10-06 10:40 — wave 6's plan is written, attack-reviewed and corrected. Contract §12 is appended. The docs PR
   is next.**
   - **Drafting.**
