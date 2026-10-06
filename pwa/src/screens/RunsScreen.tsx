@@ -37,7 +37,7 @@ import type { ReactNode } from 'react';
 import { type CoordCapsView, type FleetSession, graphReadCount, type RunSummary, unmeasuredFields } from '../../../shared/api';
 import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runKindChip, runWarnings, runClosedAt, runItems, runState, runsByProgram, waveLabel } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
-import { AbandonSheet } from '../fleet/AbandonSheet';
+import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
 import { ChildReclaimBanner } from '../fleet/ChildReclaimBanner';
 import { CapsControl } from '../fleet/CapsControl';
@@ -552,6 +552,10 @@ export function RunsScreen({
   }, [sessions, fleetFrameSeen]);
 
   const sessionById = new Map(sessions.map((s) => [s.id, s] as const));
+  // CCR-15 wave 5 (spec §5.7): the abandon sheet's confirm line branches on the
+  // run's workspace's child mark, read off the fleet row this board already looks up.
+  const abandonSession = abandonTarget === null || abandonTarget.sessionId === null
+    ? undefined : sessionById.get(abandonTarget.sessionId);
   // ACTIVE reads `live` the instant the socket has said anything at all
   // (`runsFrameSeen`) — including an honest `[]`, which is what a run
   // closing broadcasts. Falling back to `live.length > 0 ? live : cold`
@@ -810,7 +814,8 @@ export function RunsScreen({
           own vanish-diff (above) also fires for the same close, and both
           landing is harmless because they feed separate slices (`active`
           from `live`, `finished` from `cold`, never merged). */}
-      <AbandonSheet run={abandonTarget} onClose={() => setAbandonTarget(null)} onDone={() => { void loadCold(); }} />
+      <AbandonSheet run={abandonTarget} workspaceChild={abandonChildOf(abandonSession)}
+        onClose={() => setAbandonTarget(null)} onDone={() => { void loadCold(); }} />
       {/* Spec §7.3: `onDone` re-runs `loadCold()` for the same reason the
           abandon sheet's does — a reclaim rewrites `claimedBy` on EVERY run of
           the program, terminal ones included (contract R1), and the finished

@@ -92,3 +92,24 @@ describe('the PWA maps no ws-reclaim token — the sentence is the server’s (s
     expect(reads).toEqual({ 'pwa/src/fleet/runWords.ts': 2 });
   });
 });
+
+// The abandon confirmation's pins: `FleetSession.child` has ONE reader, and the PWA
+// renders no close word. Counts are code-only (`codeOnly`): a sentence ABOUT a
+// field is not a read of it. Known limit: `.child\b` cannot see a destructured
+// read (`const { child } = session`), because `child` is too common a word to
+// scan for bare.
+it('has ONE reader of FleetSession.child in pwa/src — childMarkOf, in runWords.ts', () => {
+  const reads = Object.fromEntries(pwaSources()
+    .map((f) => [path.relative(root, f), (codeOnly(readFileSync(f, 'utf8')).match(/\.child\b/g) ?? []).length] as const)
+    .filter(([, n]) => n > 0));
+  // archiveReleased.ts reads `releasedFrom.child`, a DIFFERENT field; its own
+  // docstring: "never `FleetSession.child`: one decision, one field".
+  expect(reads).toEqual({ 'pwa/src/fleet/archiveReleased.ts': 1, 'pwa/src/fleet/runWords.ts': 1 });
+});
+
+it('no pwa/src file reads the close response’s why-word — the PWA renders no close word', () => {
+  const readers = pwaSources()
+    .filter((f) => /\bchildReclaimWhy\b/.test(codeOnly(readFileSync(f, 'utf8'))))
+    .map((f) => path.relative(root, f));
+  expect(readers).toEqual([]);
+});

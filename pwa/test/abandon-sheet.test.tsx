@@ -12,12 +12,12 @@
 // ever exists in its own isolated test file ships missing the moment
 // someone drops the line from `RunsScreen`.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import type { CoordCapsView } from '../../shared/api';
+import type { ChildMark, CoordCapsView, FleetSession } from '../../shared/api';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { RunSummary } from '../../shared/api';
-import { AbandonSheet } from '../src/fleet/AbandonSheet';
+import { AbandonSheet, abandonConsequence } from '../src/fleet/AbandonSheet';
 import { ToastHost } from '../src/components/Toast';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { RunsScreen } from '../src/screens/RunsScreen';
@@ -43,6 +43,27 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
             lastRejectCode: null, briefQueued: true, clearError: null,
             coordKickoffPendingSince: null }, childReclaim: null, ...over,
 });
+
+// `runs-screen.test.tsx`'s own `sess` builder, verbatim: a full `FleetSession`
+// literal, because `tsc` covers `test/`. Its `id` is the `sessionId` of `run()`.
+const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
+  id: 'ccrc-pwa-clear-cove', wrapper: 'claude', home: 'claude', project: 'ccrc-pwa',
+  workdir: '/w', workspace: 'clear-cove', name: null, status: 'idle', statusUpdatedAt: null,
+  limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
+  branch: 'ws/clear-cove', ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
+  bucket: 'working', bucketSince: null, unmeasured: [], statusUnmeasured: false,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
+});
+
+// The confirm line's four sentences, for `run()` (id 3, workspace clear-cove), spelled
+// out in full: a sentence is the thing under test here, so it is never rebuilt from the
+// source's own pieces. The not-a-child one is the sentence the sheet shipped
+// before it learned about children, byte for byte.
+const NOT_CHILD = 'Abandon run 3 — clear-cove? A release destroys nothing: the worktree survives, the record stays.';
+const CHILD = 'Abandon run 3 — clear-cove? clear-cove is a child workspace, so the server reclaims it when nothing keeps it: its commits and uncommitted work (not ignored or secret-shaped files) are pinned in the attic and its transcripts kept, then its session is stopped and its worktree, branch and clips are removed.';
+const UNKNOWN = 'Abandon run 3 — clear-cove? This board cannot tell whether clear-cove is a child workspace. If it is, the server reclaims it when nothing keeps it, pinning its commits and uncommitted work (not ignored or secret-shaped files) in the attic first; if not, a release destroys nothing.';
+const NO_SESSION = 'Abandon run 3? It holds no workspace, so nothing is released or reclaimed.';
 
 const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null,
@@ -89,7 +110,7 @@ describe('AbandonSheet — the copy and the refusals', () => {
   });
 
   it('says a release destroys nothing — the worktree survives, the record stays', () => {
-    render(<AbandonSheet run={run()} onClose={() => {}} />);
+    render(<AbandonSheet run={run()} workspaceChild="not-child" onClose={() => {}} />);
     expect(screen.getByText(/a release destroys nothing/i)).toBeInTheDocument();
     expect(screen.getByText(/worktree survives/i)).toBeInTheDocument();
     expect(screen.getByText(/record stays/i)).toBeInTheDocument();
@@ -195,6 +216,48 @@ describe('AbandonSheet — the copy and the refusals', () => {
   });
 });
 
+// The confirm line says what happens to the run's workspace, in four cases the
+// sheet decides on its own: no session, a child, not a child, and "cannot tell".
+// Every child sentence says what happens WHEN NOTHING KEEPS IT, never that it
+// will: the sheet cannot know before the tap whether an open sibling, a hold,
+// the pause switch, presence or a refusal will keep the child.
+describe('AbandonSheet — what the confirm line says about a child workspace', () => {
+  it('a child: the server reclaims it when nothing keeps it, its work pinned first', () => {
+    expect(abandonConsequence(run(), 'child')).toBe(CHILD);
+    render(<AbandonSheet run={run()} workspaceChild="child" onClose={() => {}} />);
+    expect(screen.getByText(CHILD)).toBeInTheDocument();
+    expect(screen.queryByText(NOT_CHILD)).toBeNull();
+  });
+
+  it('not a child: the sentence the sheet always carried, byte for byte', () => {
+    expect(abandonConsequence(run(), 'not-child')).toBe(
+      'Abandon run 3 — clear-cove? A release destroys nothing: the worktree survives, the record stays.',
+    );
+    expect(abandonConsequence(run(), 'not-child')).toBe(NOT_CHILD);
+  });
+
+  it('unknown: the board cannot tell, so the line hedges both ways', () => {
+    expect(abandonConsequence(run(), 'unknown')).toBe(UNKNOWN);
+    // No `workspaceChild` prop at all: a caller that did not say reads unknown.
+    render(<AbandonSheet run={run()} onClose={() => {}} />);
+    expect(screen.getByText(UNKNOWN)).toBeInTheDocument();
+    expect(screen.queryByText(NOT_CHILD)).toBeNull();
+  });
+
+  // A run with no session names no workspace, so it names no child: the line is
+  // decided on `run.sessionId` alone, whatever the child answer is.
+  it.each(['child', 'not-child', 'unknown'] as const)(
+    'no session: says it holds no workspace, whatever the child answer (%s)',
+    (child) => {
+      const bare = run({ sessionId: null, workspace: null, state: 'planned' });
+      expect(abandonConsequence(bare, child)).toBe(NO_SESSION);
+      cleanup();
+      render(<AbandonSheet run={bare} workspaceChild={child} onClose={() => {}} />);
+      expect(screen.getByText(NO_SESSION)).toBeInTheDocument();
+    },
+  );
+});
+
 // Build 8 Wave 2, Task 214. Until now the sheet DISCARDED the resolution: an
 // abandon that closed the run but could not release the workspace — because a
 // sibling wave is still open — closed saying nothing at all. That silence is
@@ -267,7 +330,7 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     // First tap: the row's own control opens the sheet. Nothing has been
     // sent to any route yet — opening is not confirming.
     fireEvent.click(screen.getByRole('button', { name: /abandon run 3/i }));
-    expect(await screen.findByText(/a release destroys nothing/i)).toBeInTheDocument();
+    expect(await screen.findByText(/abandon run 3 — clear-cove\?/i)).toBeInTheDocument();
     expect(otherCalls()).toHaveLength(0);
 
     // Second tap: the sheet's OWN confirm button is what actually abandons,
@@ -281,7 +344,31 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     expect(url).toBe('/api/runs/3/abandon');
     expect(init.method).toBe('POST');
     // The sheet closes on success.
-    expect(screen.queryByText(/a release destroys nothing/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/abandon run 3 — clear-cove\?/i)).not.toBeInTheDocument();
+  });
+
+  // The board hands the sheet the child mark of the run's workspace, read off the
+  // fleet row it already looks up. A child handed over from an earlier wave carries
+  // that wave's run id and is just as finished, so ANY child mark gets the child
+  // sentence, not only one naming this run. A server predating the field omits the
+  // key (the live frame is cast, never revived), and says nothing about children.
+  const legacy = { ...sess() } as Record<string, unknown>;
+  delete legacy['child'];
+  it.each<readonly [string, FleetSession[], string]>([
+    ['a child of this run', [sess({ child: { kind: 'child', runId: 3 } })], CHILD],
+    ['a child handed over from an earlier wave', [sess({ child: { kind: 'child', runId: 1 } })], CHILD],
+    ['no marker', [sess({ child: { kind: 'none' } })], NOT_CHILD],
+    ['an older server, no child key at all', [legacy as unknown as FleetSession], NOT_CHILD],
+    ['an unreadable marker', [sess({ child: { kind: 'unreadable' } })], UNKNOWN],
+    ['a marker shape this build cannot read', [sess({ child: { kind: 'child', runId: 'x' } as unknown as ChildMark })], UNKNOWN],
+    ['no fleet row for the session', [], UNKNOWN],
+  ])('the sheet the board opens says the right thing for %s', async (_name, sessions, expected) => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [run()], runsFrameSeen: true, sessions, fleetFrameSeen: true }); });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })));
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    fireEvent.click(screen.getByRole('button', { name: /abandon run 3/i }));
+    expect(await screen.findByText(expected)).toBeInTheDocument();
   });
 
   // D-287 (was D-B4-14): the fix round's own anchor — `RunsScreen.tsx:118-122` used to

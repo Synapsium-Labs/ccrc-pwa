@@ -23,8 +23,8 @@
 // the run and its workspace IS the whole ceremony here, not a truncated one.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { isRunState, type RunSummary } from '../../../shared/api';
-import { RUN_WORD } from './runWords';
+import { isRunState, type FleetSession, type RunSummary } from '../../../shared/api';
+import { RUN_WORD, childMarkOf } from './runWords';
 import { Sheet } from '../components/Sheet';
 import { ApiError, COORD_UNSUPPORTED_TEXT, api } from '../lib/api';
 import { toast } from '../components/Toast';
@@ -117,14 +117,57 @@ function abandonErrorText(err: unknown): string {
   return ABANDON_COPY.unknown;
 }
 
+/** Which consequence the confirm line states: the sheet's own three-way answer about
+ *  the run's workspace. A run with no session is decided on `run.sessionId` alone. */
+export type AbandonChild = 'child' | 'not-child' | 'unknown';
+
+/** The fleet row -> the confirm line's case. `undefined` means no fleet row for this
+ *  session (no frame yet, or the registry does not list it): the board cannot tell,
+ *  so the line hedges. Reads the mark ONLY through `childMarkOf`. */
+export function abandonChildOf(session: FleetSession | undefined): AbandonChild {
+  if (session === undefined) return 'unknown';
+  const mark = childMarkOf(session);
+  if (mark.kind === 'child') return 'child';
+  if (mark.kind === 'none') return 'not-child';
+  return 'unknown';
+}
+
+const workspaceOf = (run: Pick<RunSummary, 'id' | 'workspace' | 'branch'>): string =>
+  run.workspace ?? run.branch ?? String(run.id);
+
+/** The confirm line. Says what happens WHEN nothing keeps a child, never that it
+ *  will: the sheet cannot know before the tap what will keep it. */
+export function abandonConsequence(
+  run: Pick<RunSummary, 'id' | 'sessionId' | 'workspace' | 'branch'>, child: AbandonChild,
+): string {
+  // Decided on `run.sessionId` alone: a run with no session names no workspace,
+  // so it names no child (close.ts's abandon arm does no fleet act for it).
+  if (run.sessionId === null) {
+    return `Abandon run ${run.id}? It holds no workspace, so nothing is released or reclaimed.`;
+  }
+  const ws = workspaceOf(run);
+  switch (child) {
+    case 'not-child':
+      return `Abandon run ${run.id} — ${ws}? A release destroys nothing: the worktree survives, the record stays.`;
+    case 'child':
+      return `Abandon run ${run.id} — ${ws}? ${ws} is a child workspace, so the server reclaims it when nothing keeps it: its commits and uncommitted work (not ignored or secret-shaped files) are pinned in the attic and its transcripts kept, then its session is stopped and its worktree, branch and clips are removed.`;
+    case 'unknown':
+      return `Abandon run ${run.id} — ${ws}? This board cannot tell whether ${ws} is a child workspace. If it is, the server reclaims it when nothing keeps it, pinning its commits and uncommitted work (not ignored or secret-shaped files) in the attic first; if not, a release destroys nothing.`;
+  }
+}
+
 export interface AbandonSheetProps {
   run: RunSummary | null;
+  /** The run's workspace's child mark, as `abandonChildOf` reads it off the fleet
+   *  row. Absent means the caller did not say, which reads 'unknown'. */
+  workspaceChild?: AbandonChild;
   onClose: () => void;
   onDone?: () => void;
 }
 
 export function AbandonSheet({
   run,
+  workspaceChild = 'unknown',
   onClose,
   onDone,
   abandonRun = api.abandonRun,
@@ -172,7 +215,7 @@ export function AbandonSheet({
 
   if (run === null) return null;
 
-  const ws = run.workspace ?? run.branch ?? String(run.id);
+  const ws = workspaceOf(run);
 
   const confirm = (): void => {
     if (busy) return;
@@ -214,7 +257,7 @@ export function AbandonSheet({
     <Sheet open onClose={onClose} title="Abandon this run?">
       <div className="abandon-sheet">
         <p className="qc-consequence">
-          {`Abandon run ${run.id} — ${ws}? A release destroys nothing: the worktree survives, the record stays.`}
+          {abandonConsequence(run, workspaceChild)}
         </p>
         <div className="qc-actions">
           <button type="button" className="btn-primary" disabled={busy} onClick={confirm}>

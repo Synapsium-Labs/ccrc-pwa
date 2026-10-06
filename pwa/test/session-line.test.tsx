@@ -4,9 +4,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { ASK_OPERATOR_PRINCIPAL, graphGateCount, READER_MIN_COLS, sessionAsk, type AskState, type FleetSession } from '../../shared/api';
+import { ASK_OPERATOR_PRINCIPAL, graphGateCount, READER_MIN_COLS, sessionAsk, type AskState, type ChildMark, type FleetSession } from '../../shared/api';
 import { SessionLine } from '../src/fleet/SessionLine';
-import { childOfRunLabel } from '../src/fleet/runWords';
+import { childMarkOf, childOfRunLabel, type ChildMarkRead } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself
@@ -1516,6 +1516,7 @@ describe('a child workspace says which run minted it (wave 5)', () => {
     expect(cell()?.textContent).toBe('child of run #42');
     expect(cell()).toHaveAttribute('data-child', 'child');
     expect(cell()?.tagName).toBe('SPAN');
+    expect(cell()).toHaveAttribute('title', 'minted by run #42 for one PR; the server reclaims it when nothing keeps it');
   });
 
   it('says the marker could not be read rather than dropping it', () => {
@@ -1532,5 +1533,31 @@ describe('a child workspace says which run minted it (wave 5)', () => {
     expect(cell()).toBeNull();
     expect(childOfRunLabel({})).toBeNull();
     expect(childOfRunLabel({ child: { kind: 'child', runId: 'x' } as unknown as { kind: 'child'; runId: number } })).toBeNull();
+  });
+
+  // `childMarkOf` is the ONE reader of `FleetSession.child` in pwa/src, and it
+  // answers four ways, never folded: the label says nothing for `none` or
+  // `unrecognised`, but the abandon sheet must hedge on `unrecognised` and not on
+  // `none`. Each shape is cast: the live frame is cast, never revived.
+  const cast = (child: unknown): { child?: ChildMark } => ({ child } as { child?: ChildMark });
+  it.each<readonly [string, { child?: ChildMark }, ChildMarkRead]>([
+    ['a child names its minting run', { child: { kind: 'child', runId: 42 } }, { kind: 'child', runId: 42 }],
+    ['no marker', { child: { kind: 'none' } }, { kind: 'none' }],
+    ['no key at all, which only an older server sends', {}, { kind: 'none' }],
+    ['an unreadable marker', { child: { kind: 'unreadable' } }, { kind: 'unreadable' }],
+    ['a run id that is not a number', cast({ kind: 'child', runId: 'x' }), { kind: 'unrecognised' }],
+    ['a run id no integer can carry', cast({ kind: 'child', runId: 2 ** 53 }), { kind: 'unrecognised' }],
+    ['a fractional run id', cast({ kind: 'child', runId: 1.5 }), { kind: 'unrecognised' }],
+    ['a kind this build does not know', cast({ kind: 'grandchild' }), { kind: 'unrecognised' }],
+    ['a null marker', cast(null), { kind: 'unrecognised' }],
+    ['a marker that is not an object', cast('child'), { kind: 'unrecognised' }],
+  ])('childMarkOf answers four ways, never folded: %s', (_name, input, expected) => {
+    expect(childMarkOf(input)).toEqual(expected);
+  });
+
+  it('the label says nothing for a marker this build cannot read, and for an unsafe run id', () => {
+    expect(childOfRunLabel(cast(null))).toBeNull();
+    expect(childOfRunLabel(cast({ kind: 'child', runId: 2 ** 53 }))).toBeNull();
+    expect(childOfRunLabel(cast({ kind: 'grandchild' }))).toBeNull();
   });
 });

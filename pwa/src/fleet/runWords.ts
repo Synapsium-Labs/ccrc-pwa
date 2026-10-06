@@ -718,6 +718,36 @@ export function childReclaimRefreshDue(
   return false;
 }
 
+/** What a fleet row's `child` field says — four answers, never folded. `child`: a
+ *  marker naming run `runId`. `none`: no marker — or no key at all, which only a
+ *  server predating child marks sends, and such a server reclaims nothing.
+ *  `unreadable`: the server could not read the marker. `unrecognised`: a shape this
+ *  build cannot read (a newer or faulty server). */
+export type ChildMarkRead =
+  | { readonly kind: 'child'; readonly runId: number }
+  | { readonly kind: 'none' }
+  | { readonly kind: 'unreadable' }
+  | { readonly kind: 'unrecognised' };
+
+/** THE ONE READER of `FleetSession.child` in `pwa/src`. Optional here although the
+ *  wire type requires it: the live `fleet` frame is cast, never revived. Two
+ *  callers: `childOfRunLabel` (the fleet line) and `abandonChildOf` (the abandon
+ *  sheet). The label says nothing for `none` OR `unrecognised`; the sheet must
+ *  hedge on `unrecognised` and not on `none`. So this answers four ways, and the
+ *  label's `null` is never reused as a mark. */
+export const childMarkOf = (session: { child?: ChildMark }): ChildMarkRead => {
+  const c: unknown = session.child;
+  if (c === undefined) return { kind: 'none' };
+  if (c === null || typeof c !== 'object') return { kind: 'unrecognised' };
+  const o = c as { kind?: unknown; runId?: unknown };
+  if (o.kind === 'child' && typeof o.runId === 'number' && Number.isSafeInteger(o.runId)) {
+    return { kind: 'child', runId: o.runId };
+  }
+  if (o.kind === 'none') return { kind: 'none' };
+  if (o.kind === 'unreadable') return { kind: 'unreadable' };
+  return { kind: 'unrecognised' };
+};
+
 export interface ChildOfRunLabel {
   readonly text: string;
   readonly data: 'child' | 'unreadable';
@@ -725,26 +755,22 @@ export interface ChildOfRunLabel {
 }
 
 /**
- * THE ONE READER of `FleetSession.child` in `pwa/src`, for the fleet line's
- * label. Optional here although the wire type requires it: the live `fleet`
- * frame is cast, never revived, and a server predating the field omits the key.
- * THREE answers and no boolean (spec §5.1). A child names its minting run. An
- * unreadable marker says so, because the server treats it as neither "a child"
- * nor "not a child": it refuses a second run and defers a reclaim. No marker,
- * or a shape this build cannot read, says nothing.
+ * The fleet line's label, projected from `childMarkOf` (the one reader of
+ * `FleetSession.child`). THREE answers and no boolean (spec §5.1). A child names
+ * its minting run. An unreadable marker says so, because the server treats it as
+ * neither "a child" nor "not a child": it refuses a second run and defers a
+ * reclaim. No marker, or a shape this build cannot read, says nothing.
  */
 export const childOfRunLabel = (session: { child?: ChildMark }): ChildOfRunLabel | null => {
-  const c: unknown = session.child;
-  if (c === undefined || c === null || typeof c !== 'object') return null;
-  const o = c as { kind?: unknown; runId?: unknown };
-  if (o.kind === 'child' && typeof o.runId === 'number' && Number.isSafeInteger(o.runId)) {
+  const m = childMarkOf(session);
+  if (m.kind === 'child') {
     return {
-      text: `child of run #${o.runId}`,
+      text: `child of run #${m.runId}`,
       data: 'child',
-      title: `minted by run #${o.runId} for one PR; the server reclaims it when its run closes`,
+      title: `minted by run #${m.runId} for one PR; the server reclaims it when nothing keeps it`,
     };
   }
-  if (o.kind === 'unreadable') {
+  if (m.kind === 'unreadable') {
     return {
       text: 'child marker unreadable',
       data: 'unreadable',
