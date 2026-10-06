@@ -17,7 +17,8 @@
 // The attention list is a REPORT, not a tap: no button, no link, no remedy
 // offered. Rule 4 says the human does not tend sub-workspaces; this tells them
 // what is costing disk, and asks nothing. The sentences are the SERVER's — the
-// PWA renders them and maps no token.
+// PWA renders them and maps no token. A collapsed line names its children after
+// the server's sentence; the PWA counts nothing itself.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { MarkerState } from '../../../shared/api';
@@ -131,7 +132,14 @@ export function ChildReclaimBanner({
       </div>
       {attention.length > 0 && (
         <ul className="child-reclaim-attention" aria-label="children reclamation could not clean up">
-          {attention.map((a) => (
+          {attention.map((a) => 'members' in a ? (
+            <li key={`kept-many ${a.word}`} className="child-reclaim-item">
+              <span className="child-reclaim-sentence">{a.sentence}</span>
+              {a.members.map((m) => (
+                <span key={m.sessionId} className="child-reclaim-who">{`run #${m.runId} · ${m.sessionId}`}</span>
+              ))}
+            </li>
+          ) : (
             <li key={a.sessionId} className="child-reclaim-item">
               <span className="child-reclaim-who">
                 {a.runId === null ? a.sessionId : `run #${a.runId} · ${a.sessionId}`}
