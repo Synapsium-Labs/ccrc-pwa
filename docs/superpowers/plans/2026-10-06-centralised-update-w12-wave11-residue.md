@@ -1117,7 +1117,7 @@ These are departures from a ledger ruling, or from what shipped text at `d2bac7a
 
 ## Coordinator rulings on this plan's readings (2026-10-06)
 
-The coordinator ruled every reading on 2026-10-06 at about 04:45 UTC. The plan was drafted by workflow `wf_a11d694f-c70`:
+The coordinator ruled every reading on 2026-10-06 at 04:35 UTC. The plan was drafted by workflow `wf_a11d694f-c70`:
 - a scout;
 - an Opus drafter that prototyped in its own worktree;
 - three Opus attack lenses (pins, fixtures, scope), with 23 findings;
