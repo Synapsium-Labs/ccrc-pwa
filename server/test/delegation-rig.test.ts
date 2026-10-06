@@ -1495,20 +1495,26 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(snap(base)).toBe(before);
   });
 
-  // The index is the file's place in its directory's `*.json` list in CODE-UNIT order (`LC_ALL=C ls`), so a clean sibling that
-  // sorts first moves the planted file to #1. `wf-iso-resume.json` sorts BEFORE `wf-iso.json` by code unit (`-` < `.`), where a
-  // UTF-8 locale's `ls` lists them the other way round (per-task re-review n1/n2).
-  it('--scan names a file by its place in the code-unit-sorted list of its directory: a clean sibling sorting first makes the planted one #1 (F9)', () => {
+  // The index is the file's place in its directory's `*.json` list in CODE-UNIT order (`LC_ALL=C ls`). Every one of a version's
+  // fixtures is copied in with residue planted under a key that names it, so each finding pairs an index with a file: an index
+  // taken in another order (a locale's punctuation-blind order swaps `wf-iso-resume.json` and `wf-iso.json`: `-` < `.` by code
+  // unit), or a fixed one, misnames a file. Deleting `jsonIn`'s `.sort()` is an EQUIVALENT mutant under Node: `readdirSync`
+  // already returns names in `strcmp` order (libuv sorts scandir; measured: `ls -U` lists the same directory otherwise), so no
+  // row can red it; the `.sort()` states the order the index promises (per-task re-review n1/n2 and re-review 2 m2).
+  it('--scan names a file by its place in the code-unit-sorted list of its directory: every fixture of a version, each planted, pairs index and file exactly (F9)', () => {
     const { dir, v } = plantedCorpus(() => {});
-    fs.rmSync(path.join(dir, v, 'agent-plain.json'));
-    const read = (n: string): Record<string, any> => JSON.parse(fs.readFileSync(path.join(CORPUS, v, n), 'utf8')) as Record<string, any>;
-    const bad = read('wf-iso.json');
-    bad.events[0].payload.cwd = 'x /opt/acme/x';
-    fs.writeFileSync(path.join(dir, v, 'wf-iso.json'), `${JSON.stringify(bad, null, 1)}\n`);
-    fs.writeFileSync(path.join(dir, v, 'wf-iso-resume.json'), `${JSON.stringify(read('wf-iso-resume.json'), null, 1)}\n`);
+    const names = fs.readdirSync(path.join(CORPUS, v)).filter((n) => n.endsWith('.json'));
+    expect(names.length).toBeGreaterThanOrEqual(14);
+    const sorted = [...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    for (const n of names) {
+      const f = JSON.parse(fs.readFileSync(path.join(CORPUS, v, n), 'utf8')) as Record<string, any>;
+      f[`p_${n.slice(0, -'.json'.length)}`] = 'x /opt/acme/x';
+      fs.writeFileSync(path.join(dir, v, n), `${JSON.stringify(f, null, 1)}\n`);
+    }
+    expect(sorted.indexOf('wf-iso-resume.json')).toBeLessThan(sorted.indexOf('wf-iso.json'));
     const r = scanRun('--scan', dir);
     expect(r.status).toBe(1);
-    expect(r.stderr).toBe(`sanitize: residue in ${v}/#1 /events/0/payload/cwd\n`);
+    expect(r.stderr).toBe(sorted.map((n, i) => `sanitize: residue in ${v}/#${i} /p_${n.slice(0, -'.json'.length)}\n`).join(''));
   });
 
   it('--scan reads KEYS too: a residue-bearing key of a committed fixture is named by index, never by its text (F9)', () => {
