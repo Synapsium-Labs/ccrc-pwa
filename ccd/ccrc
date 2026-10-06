@@ -8017,7 +8017,7 @@ _acct_upstream_id() {   # <what-still-stands> -> ACCT_UPSTREAM_ID
 # Restart-each-session list of length zero in front of somebody whose panes are
 # all still holding the old token. Any non-zero rc is read as "nobody could
 # tell", which is the reading `_check_tmux_skew` takes of the same call
-# (ccrc-doctor-checks:451-465 — rc 124 and every other non-zero alike SKIP). The
+# (ccrc-doctor-checks:450-464 — rc 124 and every other non-zero alike SKIP). The
 # polarity is deliberately the opposite of `remove`'s (Task 32), which REFUSES
 # on an unmeasurable tmux: reporting a gap is right for a write that has already
 # succeeded, and refusing is right for a delete that has not started.
@@ -9194,7 +9194,7 @@ _acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to
 # `gtimeout`, then a bash fallback that reports GNU's own 124 on expiry
 # ":because that is the code the call sites branch on" — this is a call site
 # that branches on it, in the shape `_check_tmux_skew` already uses
-# (`ccrc-doctor-checks:451-460`).
+# (`ccrc-doctor-checks:450-459`).
 #
 # THREE: THE CWD IS OURS, AND SO IS CREATING IT — see `CCRC_PROBE_DIR`'s banner.
 #
