@@ -3095,8 +3095,8 @@ corpus row), unless a row names another run. Each task's reviewer re-measured th
 (`12f7c4aac`) included: its re-review ran 26 mutations of its own, and every count matches. Two counts carry no
 reviewer's re-run, and their rows say so: the residue-bearing-key arm's and the implementer's base64 decode (task A's
 review measured both with mutations of its own). Two rows are the controller's measurements: Task 8's ENOTDIR fold
-(re-run by the write-up's reviewer: 1 red of 27) and the `--scan` file index of `a4d1da74f` (re-run for this write-up: 1
-red of 77). From `12f7c4aac` every known limit the sanitiser's header declares is pinned by a row that reds when the
+(re-run by the write-up's reviewer: 1 red of 27) and the `--scan` file index row (first `a4d1da74f`, hardened after the write-up's
+re-review 2 to plant every fixture of a version; its counts are in its row). From `12f7c4aac` every known limit the sanitiser's header declares is pinned by a row that reds when the
 limit closes (at `858caf47d` the `\u` half of the one-pass limit was not: 0 red, task A's review).
 
 | Task | Finding | Guard | Row |
@@ -3119,7 +3119,7 @@ limit closes (at `858caf47d` the `\u` half of the one-pass limit was not: 0 red,
 | 5 | F9 | a residue-bearing key is a finding (the shared `scan()`) | "names a leaking KEY by its index …", the F1 KEY row and "--scan reads KEYS too …" (the key finding deleted: 3 red, the implementer's count; task A's review, guarding that finding off in `--scan` mode only, reds 1, "--scan reads KEYS too …") |
 | 5 | F9 | a file that is not JSON, a badly named version directory or file, nothing to scan, the argument count | "--scan fails closed on a fixture file that is not JSON …"; "--scan fails closed on a directory that is not a version and on a fixture file whose name is not a name …" (each name arm); "--scan of a directory with nothing to scan fails …"; "--scan refuses a missing directory argument and a surplus one …" (each way): 1 red each |
 | 5 | F9 | the string and key tallies | "--scan of an unplanted copy …" and the corpus row (2 red each) |
-| 5 | F9 (task A re-review n1/n2) | the `--scan` file index counts in code-unit order (`LC_ALL=C ls`) | "--scan names a file by its place in the code-unit-sorted list of its directory: a clean sibling sorting first makes the planted one #1 (F9)" (the pointer finding's `#${i}` made `#0`: 1 red, the controller's measurement, `a4d1da74f`) |
+| 5 | F9 (task A re-review n1/n2; re-review 2 m2) | the `--scan` file index is a file's place in its directory's code-unit order (`LC_ALL=C ls`) | "--scan names a file by its place in the code-unit-sorted list of its directory: every fixture of a version, each planted, pairs index and file exactly (F9)" — all 14 fixtures of a version planted under keys that name them: the pointer finding's `#${i}` made `#0` reds 1; a punctuation-blind locale sort reds 2 (this row and the bad-names row); deleting `jsonIn`'s `.sort()` is an EQUIVALENT mutant (0 red): Node's `readdirSync` already returns names in `strcmp` order (libuv sorts scandir; `ls -U` lists the same directory otherwise, measured). The controller's measurements, at the row's final form |
 | 5 | F9 (task A review m3) | `--scan` refuses a fixture file name with residue, and reads no further into it | "--scan refuses a fixture file whose name passes the shape test but carries residue, named by index and never by its text (m3)" (` \|\| residue(base)` deleted: 1 red; the `return` after the name finding deleted: 1 red, its planted-body half) |
 | 5 | F9 (task A review m3) | `--scan` names every file by index, never by its name | "--scan fails closed on a fixture file that is not JSON …" (the unreadable-JSON finding named by text: 1 red); the two planted-value rows, the planted-KEY row and "--scan reads the matrix.json …" (pointer findings named by text: 4 red) |
 | 5 | F9 (task A review m4) | main mode's argument check: a surplus argument, a missing fixtures directory, a missing raw root | "refuses missing arguments with exit 2, and a surplus one, and an empty one (m4)": 1 red each for ` \|\| args.length > 2`, `!outDir` and `!raw` deleted (at `858caf47d` the first two reddened nothing, task A's review) |
@@ -3449,8 +3449,8 @@ unused):
   SessionStart at 19.1 to 20.4 s, which leaves that wait no time to have waited). So every later step, and the settle
   window, now starts up to about 1.1 s earlier, and none of them depends on that: wf-plain's and wf-iso's last event
   came at 1.1 to 3.5 s and 1.3 to 5.1 s, long before they settle (15 s and 20 s); wf-iso-resume's snapshot and kill act
-  on a run quiet since 0.9 to 2.7 s (r2 done, r1 hung); wf-limit-pause's 70 s sleep ended about 17 to 20 s after l1's
-  final Stop (61.2 to 63.1 s), and its probe allows 180 s; and `build-matrix.mjs`, which derives the matrix, reads
+  on a run quiet since 0.9 to 2.7 s (r2 done, r1 hung); wf-limit-pause's 70 s sleep ended about 17 to 20 s after the run's
+  final Stop, the parent's (61.2 to 63.1 s), and its probe allows 180 s; and `build-matrix.mjs`, which derives the matrix, reads
   neither `dtMs` nor `seq`. If a workflow dialog ever does show, nothing answers it, the workflow never runs, that
   `waitLabels` times out and the cell builds `unmeasured`. The row "a scenario carries an answerDialog step only if
   EVERY committed fixture of it holds that dialog's answered note, and interrupt-exit's step is answered in every
