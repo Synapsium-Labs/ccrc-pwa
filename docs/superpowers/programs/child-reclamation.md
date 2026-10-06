@@ -46,6 +46,16 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 11:42 — stall-watch-settings W1 (run 295, `ccrc-pwa-calm-harbor`) is sequenced after run 260 (mail 3674).**
+  - **Their wave.** Run 295 waits for run 260 to release its claims on `shared/api.ts`, `coord/store.ts`, `watch.ts`
+    and `coord/routes.ts`.
+  - **The overlap with wave 6.** Wave 6 (run 291) also touches `shared/api.ts` (additive tokens, meas keys and one
+    optional `CoordStatus` field) and `watch.ts` (a small change). It leaves `store.ts` and `routes.ts` alone.
+  - **The proposed rule (mail 3675), the same as 3622.**
+    - Both proceed once run 260 releases its claims, and neither waits on the other.
+    - Edits stay additive.
+    - The second lander merges main, then re-runs `single-definition`, `typecheck-tests`, the citation cases and
+      `deviation-refs`.
 - **2026-10-06 10:50 — #293 merged (`26e3318b`); wave 6's brief is ready; dispatch waits for #290 and quiet-river.**
   - **The PR.** The required checks passed on `372e663b`: server 4/4, agent, pwa, build, typecheck. macOS is
     advisory. The squash merge is `26e3318b`, and the plan, the contract and this ledger on main equal the tested
