@@ -6,7 +6,7 @@
 Run it on your own box. Drive twenty agents from your phone.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](#license)
-[![Node](https://img.shields.io/badge/node-%E2%89%A522.13-339933.svg?logo=node.js&logoColor=white)](#requirements)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522.16-339933.svg?logo=node.js&logoColor=white)](#requirements)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-one%20box-8b5cf6.svg)](#quickstart)
 [![No telemetry](https://img.shields.io/badge/telemetry-none-64748b.svg)](#privacy)
 [![PWA](https://img.shields.io/badge/PWA-installable-f59e0b.svg)](#quickstart)
@@ -167,9 +167,9 @@ Download it, or use `bash <(curl -fsSL …)`.
 
 ## Requirements
 
-- **Node ≥ 22.13.0** — not negotiable, and not a style choice: the coordination database
-  is `node:sqlite`, which is flagged below that. All three packages declare the same floor
-  and a test pins it.
+- **Node ≥ 22.16.0** — not negotiable, and not a style choice: the coordination database
+  is `node:sqlite` (flagged below 22.13), and ccrc history needs its FTS5 (absent below 22.16).
+  All three packages declare the same floor and a test pins it.
 - **git**, **tmux**, **bash**, **curl**, **rsync**, **diff** — `ccrc install` refuses by
   name without `rsync` (it places the tree) or `diff` (every skill installer compares
   with it). **`openssl`** only mints the box and agent tokens by hand (`openssl rand -hex 32`).
@@ -4924,7 +4924,7 @@ you need to reason about one.*
 
 ## Architecture
 
-- `server/` — Node ≥22.13.0 (`engines.node`; `node:sqlite` needs it unflagged,
+- `server/` — Node ≥22.16.0 (`engines.node`; `node:sqlite` needs 22.13 unflagged and 22.16 for FTS5,
   and `server/test/node-floor.test.ts` pins both the declaration and the
   import) + Fastify (TS ESM). One process, systemd user unit
   `ccrc.service` (a launchd agent on macOS), bound to one interface only
@@ -4949,7 +4949,7 @@ you need to reason about one.*
   WS client talking to `agent/` on the fleet host instead (see "Remote fleet
   mode" above). Either way the whole thing is unit-testable off-box against
   fixtures.
-- `agent/` — Node ≥22.13.0 (same `engines.node` floor as `server/`; the three
+- `agent/` — Node ≥22.16.0 (same `engines.node` floor as `server/`; the three
   packages must agree — `node-floor.test.ts` — though `node:sqlite` itself is
   server-only) WS service (TS ESM) that runs ON the fleet host and
   exposes a small, whitelisted exec/file/tail/pty surface over a bearer-token
@@ -5421,7 +5421,7 @@ npm run build                            # server/agent: tsc → dist/; pwa: tsc
 ```
 
 The server suite executes the real `ccd`, `ccrc` and hook scripts against fixture `$HOME`s, so the
-machine needs what a fleet box needs: Node ≥ 22.13.0, `bash` 4.4 or newer, `tmux`, `git`, `jq`,
+machine needs what a fleet box needs: Node ≥ 22.16.0, `bash` 4.4 or newer, `tmux`, `git`, `jq`,
 `python3` and `flock`, plus `strace` on Linux (`ci-trace-run.test.ts` runs the real one and fails
 loudly without it; macOS skips that file). On macOS: `brew install bash tmux flock jq coreutils`
 (`coreutils` supplies `gtimeout`). Run one file with
@@ -5443,9 +5443,9 @@ serves the PWA through Vite with `/api` and `/ws` proxied to `127.0.0.1:7788`.
 `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`). A **pull request** runs the server
 tests its change can affect — `.github/ci/select-tests.mjs` chooses them from a traced dependency map,
 sharded behind the required `test (server)` summary, which also needs `typecheck (server)` — while
-`test (agent)` and `test (pwa)` (vitest, then `tsc --noEmit`) and `build-pwa` run in full; `test-macos`
+`test (agent)` and `test (pwa)` (vitest, then `tsc --noEmit`), `build-pwa` and `node-floor` (the floor test on exactly the `engines.node` version) run in full; `test-macos`
 runs the same selection and `probe-macos` a fixed probe; neither blocks a pull request, but
-`full-suite` needs `test-macos`, so a red macOS leg blocks a promotion to `stable`. A change under
+`full-suite` needs `test-macos` and `node-floor`, so a red macOS or floor leg blocks a promotion to `stable`. A change under
 `.github/` or `server/scripts/`, to a `package.json` or lockfile, a `vitest.*config.*`, a
 `tsconfig*.json`, `.gitattributes` or `.npmrc`, a symlink, a path the map's own baseline reads, or a
 missing map runs the whole server suite instead. A **merge-queue** run (`merge_group`) runs what a

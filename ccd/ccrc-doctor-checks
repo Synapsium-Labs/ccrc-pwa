@@ -408,7 +408,7 @@ _check_node() {
     _dr_pass node "$running satisfies $declared (declared in $pkg), at $p"
   else
     _dr_fail node "$running is below the floor $declared declared in $pkg" \
-      "upgrade Node to at least ${maj}.${min}.${pat} — below it the server does not degrade, it fails to boot (node:sqlite is imported unconditionally)"
+      "upgrade Node to at least ${maj}.${min}.${pat} — below it the server either fails to boot (node:sqlite is imported unconditionally) or boots without ccrc history's search (that node:sqlite has no FTS5)"
     return 1
   fi
 }
