@@ -1648,7 +1648,7 @@ the main loop's never does. A wait whose outcome IS the measurement is a `probeL
   "scenario": "wf-plain", "covers": ["Q1", "Q2", "Q4"],
   "steps": [
     {"waitReady": 60}, {"type": "dlg wf-plain"}, {"keys": ["Enter"]},
-    {"sleep": 10},
+    {"answerDialog": "Run a dynamic workflow", "timeoutS": 10},
     {"waitLabels": ["wf-p1", "wf-p2"], "timeoutS": 180}
   ],
   "settleS": 15,
@@ -1669,7 +1669,7 @@ the main loop's never does. A wait whose outcome IS the measurement is a `probeL
   "scenario": "wf-iso", "covers": ["Q1", "Q3", "Q6"],
   "steps": [
     {"waitReady": 60}, {"type": "dlg wf-iso"}, {"keys": ["Enter"]},
-    {"sleep": 10},
+    {"answerDialog": "Run a dynamic workflow", "timeoutS": 10},
     {"waitLabels": ["wf-i1-done", "wf-i2"], "timeoutS": 180}
   ],
   "settleS": 20,
@@ -1795,7 +1795,7 @@ the main loop's never does. A wait whose outcome IS the measurement is a `probeL
   "scenario": "wf-iso-resume", "covers": ["Q7"],
   "steps": [
     {"waitReady": 60}, {"type": "dlg wf-iso-resume"}, {"keys": ["Enter"]},
-    {"sleep": 10},
+    {"answerDialog": "Run a dynamic workflow", "timeoutS": 10},
     {"waitLabels": ["r1-hang", "r2"], "timeoutS": 180}, {"sleep": 5}, {"snapshot": "before-kill"},
     {"kill9": true}, {"sleep": 3}, {"relaunch": true}, {"waitReady": 60}, {"sleep": 30},
     {"probeLabels": ["r1-resumed"], "timeoutS": 120}
@@ -1820,7 +1820,7 @@ names follow the scratch rig's `anthropic-ratelimit-unified-*` family):
   "scenario": "wf-limit-pause", "covers": ["Q7"],
   "steps": [
     {"waitReady": 60}, {"type": "dlg wf-limit-pause"}, {"keys": ["Enter"]},
-    {"sleep": 10},
+    {"answerDialog": "Run a dynamic workflow", "timeoutS": 10},
     {"waitLabels": ["l1-limited"], "timeoutS": 120}, {"sleep": 70},
     {"probeLabels": ["l1-done"], "timeoutS": 180}
   ],
@@ -3090,29 +3090,37 @@ guard that cannot have a row says so); the wave-done reports the cells.
 | 8 | F14 | a `ref:` HEAD resolved read-only, `'unmeasured'` when it cannot be (D-4065) | the `movedFromBase` describe |
 
 **Fix round 2 (review 296).** Every guard arm the round added or touched, each measured red by mutating that arm alone
-in a scratch copy (the implementers' counts; each task's reviewer re-measured them where its review has run). A
-known limit the sanitiser's header declares is pinned by a row that reds when the limit closes.
+in a scratch copy. The counts are the implementers', over the filter each task ran (the sanitiser's: its block, the
+corpus row and, from `12f7c4aac`, the arguments row), unless a row names another run; each task's reviewer
+re-measured them. From `12f7c4aac` every known limit the sanitiser's header declares is pinned by a row that reds when
+the limit closes (at `858caf47d` the `\u` half of the one-pass limit was not: 0 red, task A's review).
 
 | Task | Finding | Guard | Row |
 |---|---|---|---|
 | 4 | F2 | `answerDialog`'s else arm: a dialog that never shows is a failure note, and nothing is pressed (D-4058) | "answerDialog: a dialog that never appears sends no key and writes a failure note, so the run is unmeasured and not a measured zero (F2)" and the notes census "rig.sh writes nine notes …" (the else line deleted: 2 red) |
 | 7 | F2 | `FAIL_NOTE`'s `answerDialog: no dialog:` alternative (D-4058) | "answerDialog: a dialog that never appears …", and for the new note the "rig.sh writes %j: a run carrying it is unmeasured …" row and its "with text after it" twin (the alternative removed: 3 red) |
 | 4 | F2 (task B review C1) | an `answerDialog` step only where every committed fixture of its scenario recorded it answered, and interrupt-exit's answered in every version (D-4058, `wf-dialog-step-replaced-by-sleep`) | "a scenario carries an answerDialog step only if EVERY committed fixture of it holds that dialog's answered note, and interrupt-exit's step is answered in every version (C1)": 1 red each for the old workflow step put back (all nine `*/wf-plain` named), an unanswered step on another scenario, interrupt-exit losing its step, one interrupt-exit fixture unanswered, and a version without one |
-| 4 | F8 | `wait_run_quiet` waits before it kills (D-4062) | "wait_run_quiet WAITS, within its bound, … (F10d)": a wait that returns at once (`returned after 3 ms`) and round 1's `end=$SECONDS` each red it (1 red each in the F10d filter, re-measured after M1) |
+| 4 | F8 | `wait_run_quiet` waits before it kills (D-4062) | "wait_run_quiet WAITS, within its bound, … (F10d)": a wait that returns at once (`returned after 3 ms`) and round 1's `end=$SECONDS` each red it (1 red each in the F10d filter, re-measured after M1; over the whole file the first reds 3, F10d with the stuck-holder and F10c rows, task B's re-review) |
 | 4 | F8 (task B review M1) | F10d's timer starts before the go file | F10d: the old order with a 1 s stall injected reds a correct wait (1 red); the new order with the same stall stays green |
 | 4 | F10 | `claude_pid` compares against the physically resolved versions directory, keeps the spelling when it cannot resolve it, and still compares (D-4006) | "claude_pid finds the Claude Code process when HOME is spelled through a symlink … (F10)", Linux-only: 1 red each for the unresolved comparison, the fallback widened to empty, and the comparison deleted |
 | 5 | F1 | every `%XX` is decoded (D-4007) | the three "a percent-escaped spelling of %s is residue as a value …" rows, "the same percent-escaped string as a KEY …", "decodes every `%XX`, in either case …" and "the user's name with its first letter percent-escaped …" (the old `%2F`-only decode: 6 red) |
 | 5 | F1 | the decode never throws | "what the percent decode leaves alone passes …" (a `decodeURIComponent` decode: 1 red) |
-| 5 | F1 | one decode pass per kind (a known limit) | "a double-encoded spelling is NOT chased …" (the decode applied twice: 1 red) |
+| 5 | F1 | one decode pass per kind: the percent kind twice is not chased (a known limit) | "a double-encoded spelling is NOT chased …" (the percent pass applied twice: 1 red) |
+| 5 | F1 (task A review m1) | the `\u` kind twice is not chased (a known limit) | "a double-encoded spelling is NOT chased …" (a second `\u` pass appended: 1 red, from `12f7c4aac`; 0 at `858caf47d`) |
+| 5 | F1 (task A review m1) | the pass order `\uXXXX`, `%XX`, `\/` (a later kind producing an earlier one is not chased; an earlier one producing a later one is) | "a double-encoded spelling is NOT chased …" and "an escape IS chased where an earlier pass produces a later kind …" (the `%` pass moved before the `\u` pass: 2 red); "an escape IS chased …" (the `\/` pass moved before the `%` pass: 1 red) |
+| 5 | F11 (task A review m2) | a complete closing tag `</name>` is a tag, not a path (a known limit; D-4010's exemption) | "a complete closing tag `</name>` is a tag, not a path (declared limit, not a guarantee) …", "reads a closing tag as a tag, not a path …", the unplanted `--scan` control, both planted-value `--scan` rows, the planted-KEY and not-JSON `--scan` rows and the corpus row (the lookahead deleted from `ABS`: 8 red, since the committed fixtures hold closing tags) |
 | 5 | F1 | either case | "decodes every `%XX`, in either case …" and the user's-name row (upper-case hex only: 2 red) |
 | 5 | F9 | `--scan` runs the bundle scan over the committed corpus (D-4007) | "--scan of an unplanted copy …", the two "--scan names the file and the pointer of %s planted …" rows, "--scan reads KEYS too …", "--scan reads the matrix.json …" and the build-matrix row "the committed corpus covers every scenario on at least one version, and carries no residue" (the scan call deleted: 6 red) |
 | 5 | F9 | `--scan` reads `matrix.json` | "--scan reads the matrix.json …" and the corpus row (2 red) |
 | 5 | F9 | a residue-bearing key is a finding (the shared `scan()`) | "names a leaking KEY by its index …", the F1 KEY row and "--scan reads KEYS too …" (3 red) |
 | 5 | F9 | a file that is not JSON, a badly named version directory or file, nothing to scan, the argument count | "--scan fails closed on a fixture file that is not JSON …"; "--scan fails closed on a directory that is not a version and on a fixture file whose name is not a name …" (each name arm); "--scan of a directory with nothing to scan fails …"; "--scan refuses a missing directory argument and a surplus one …" (each way): 1 red each |
 | 5 | F9 | the string and key tallies | "--scan of an unplanted copy …" and the corpus row (2 red each) |
-| 5 | F11 | the declared glue set is exactly `ABS`'s lookbehind (a known limit) | "a `/` glued after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (declared limit, not a guarantee) …": 1 red for each of the six characters dropped from the lookbehind, and for `@` added |
+| 5 | F9 (task A review m3) | `--scan` refuses a fixture file name with residue, and reads no further into it | "--scan refuses a fixture file whose name passes the shape test but carries residue, named by index and never by its text (m3)" (` \|\| residue(base)` deleted: 1 red; the `return` after the name finding deleted: 1 red, its planted-body half) |
+| 5 | F9 (task A review m3) | `--scan` names every file by index, never by its name | "--scan fails closed on a fixture file that is not JSON …" (the unreadable-JSON finding named by text: 1 red); the two planted-value rows, the planted-KEY row and "--scan reads the matrix.json …" (pointer findings named by text: 4 red) |
+| 5 | F9 (task A review m4) | main mode's argument check: a surplus argument, a missing fixtures directory, a missing raw root | "refuses missing arguments with exit 2, and a surplus one, and an empty one (m4)": 1 red each for ` \|\| args.length > 2`, `!outDir` and `!raw` deleted (at `858caf47d` the first two reddened nothing, task A's review) |
+| 5 | F11 | the declared glue set is exactly `ABS`'s lookbehind (a known limit) | "a `/` glued after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (declared limit, not a guarantee) …" reds for each of the six characters dropped from the lookbehind, and for `@` added. Counted in that one row: 1 each. Over the sanitiser block and the corpus row (73 rows, task A's review): `~`, `_`, `-` and `@` 1 each, `.` 2 (also the corpus row, a committed fixture's shell command), a letter 37, a digit 38 |
 | 5 | F12 | `MUNGED_FOREIGN`'s ten tops (a known limit) | "a munged foreign path whose top MUNGED_FOREIGN does not list passes (declared limit, not a guarantee) …": 1 red each for `data`, `media` or `/i` added, and for `proc` dropped |
-| 5 | header (`base64-pin-row`) | base64 is not decoded (a known limit) | "base64 of residue is not decoded (declared limit, not a guarantee) …" (a base64 decode added: 1 red) |
+| 5 | header (`base64-pin-row`) | base64 is not decoded (a known limit) | "base64 of residue is not decoded (declared limit, not a guarantee) …" (a base64 decode of runs of 12 or more characters added: 1 red; task A's review, decoding more broadly, reds 14, this row among them) |
 | 8 | F13 | an lstat ENOENT is "nothing there" (D-4065) | "a ref: HEAD resolves through packed-refs when there is no loose ref …" and "still answers from packed-refs when nothing at all is at the loose path …" (every lstat failure unreadable: 2 red) |
 | 8 | F13 | an lstat failing other than ENOENT is unreadable | "reports 'unmeasured' when the loose path cannot be examined at all (its parent directory refuses search) …" (every lstat failure null: 1 red; skipped as root); "reports 'unmeasured' when a parent component of the loose path is a file (lstat ENOTDIR) …" (ENOTDIR folded into nothing-there: 1 red) |
 | 8 | F13 | a real directory falls through to `packed-refs` | "a ref: HEAD resolves through packed-refs when there is no loose ref …", its directory assertion (1 red) |
@@ -3296,10 +3304,12 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
 
   Both raw captures are gone (a box-level `/tmp` reaper removed them after they were sanitised and committed), so the
   re-sanitise-and-diff check is replaced by a scan of the committed corpus under the final sanitiser: 99 files,
-  20,486 strings and 23,892 keys (44,378 in all), 0 findings (measured with `82fae4d7b`'s `scan`, and again with
-  `78f5a2bae`'s); the corpus holds no `127.0.0.1`.
+  44,378 strings and keys, 0 findings (that total measured with `82fae4d7b`'s `scan`, and again with `78f5a2bae`'s;
+  the split, 20,486 strings and 23,892 keys, is `858caf47d`'s `--scan` over the same 99 files); the corpus holds no
+  `127.0.0.1`.
 
-  Corrected in fix round 2 (review 296 F1, F9, F11, F12), true from `858caf47d`:
+  Corrected in fix round 2 (review 296 F1, F9, F11, F12), true from `858caf47d` and, where a sentence names
+  `12f7c4aac` (task A's review m1–m4), from that commit:
   - **Every percent escape is decoded (F1).** Until then the decode turned only `%2F` into `/`, so a `%2F` glued
     after another escape or a name character sat where both lookbehinds skip it: `cat%20%2Fhome%2F…`,
     `http%3A%2F%2Fsrv.corp%2Fx` and the first of these as a key passed, as they did at `347b7b64`. So "`%2f`
@@ -3310,22 +3320,42 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
     is refused" now holds of a percent-escaped spelling too.
   - **The sanitiser scans the committed corpus itself (F9).** `node sanitize.mjs --scan <fixtures-dir>` runs the same
     scan (the same `residue()` over every string value and every key, the same pointers) over every `*.json` in the
-    directory and in its version directories, the fixtures and `matrix.json`. It writes nothing, and it fails closed
-    on a file that is not JSON, a version directory or fixture file whose name has the wrong shape, and an empty or
-    unreadable directory. The build-matrix row "the committed corpus covers every scenario on at least one version,
-    and carries no residue" runs it, so a fixture committed with residue reds the suite; before, that row checked only
-    `/tmp/` outside `/rig` and six literals. At `158bc2227` it reads 127 files, 26,328 strings and 30,705 keys, and
-    finds no residue.
-  - **The known limits, as the header names them**, each pinned by a row that reds when the limit closes:
-    - base64 or any other encoding of residue is not decoded, and neither is an escape of an escape of the SAME
-      kind: the decode is one pass per kind, so `%252F` reads `%2F` and no further;
-    - a `/` glued straight after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (`ABS`'s lookbehind; F11),
-      so `x/srv/acme`, `./srv/acme`, `a_/srv/acme`, a home-anchored `~/srv/acme` and a scheme-less
-      `127.0.0.1:4000/home/x` pass, while a `/` after any other character is scanned;
+    directory and in its version directories, the fixtures and `matrix.json`. It writes nothing, and it fails closed on
+    a file that is not JSON, a version directory or fixture file whose name has the wrong shape, and an empty or
+    unreadable directory. From `12f7c4aac` it refuses a fixture file name by the test `main` applies to a scenario name
+    (the NAME shape AND no residue in it), reads no further into a refused file, and names every file by
+    `<version>/#<index>` (or `#<index>`), never by its name. The build-matrix row "the committed corpus covers every
+    scenario on at least one version, and carries no residue" runs it, so a fixture committed with residue reds the
+    suite; before, that row checked only `/tmp/` outside `/rig` and six literals. At `158bc2227` it reads 127 files,
+    26,328 strings and 30,705 keys, and finds no residue.
+  - **The known limits, as the header names them at `12f7c4aac`**, each pinned by a row that reds when the limit
+    closes. At `858caf47d` one half was not: with the `\u` pass applied twice every row stayed green (task A's
+    review), and the header's one-pass sentence named only the same kind twice.
+    - base64, or any other encoding the decode does not know, is not decoded. "base64 of residue is not decoded
+      (declared limit, not a guarantee) …" passes a base64 foreign path and a base64 `//` URL.
+    - The decode is ONE pass per kind, in the fixed order `\uXXXX`, `%XX`, `\/`. So an escape is chased only where an
+      earlier pass produces a later kind, and nothing else is: neither the same kind twice nor a later kind producing
+      an earlier one. "a double-encoded spelling is NOT chased …" passes `%252Fhome%252Fsomeone-else` and
+      `cat%20%252Fhome%252Fx` (the percent kind twice: `%252F` reads `%2F`), `cat \u005Cu002Fhome…` (the `\u` kind
+      twice: it reads `\u002F`) and `cat %5Cu002Fhome…` (a percent escape producing a `\u` escape: it reads
+      `\u002F`). "an escape IS chased where an earlier pass produces a later kind …" refuses `x \u00252Fhome…`
+      (`\u0025` is `%`, then `%2F` is `/`) and `http:%5C%2F%5C%2F[fd00::abcd]:8080` (`%5C%2F` is `\/`, then `/`).
+    - A `/` glued straight after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (`ABS`'s lookbehind; F11).
+      The F11 row, "a `/` glued after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (declared limit, not a
+      guarantee) …", passes `~/srv/acme`, `./srv/acme`, `a_/srv/acme`, `x/srv/acme`, `1/srv/acme`, `a-/srv/acme` and
+      a scheme-less `127.0.0.1:4000/home/x`, and refuses the same path after a space, `=`, `:`, a quote, `(` or `@`.
+    - A `/` after any other character is scanned, except the `/` of a COMPLETE closing tag `</name>` (`<`, `/`, a
+      plain name, `>`): a tag, not a path, which hides one bare segment at most (D-4010 made the exemption, for Claude
+      Code's `<task-notification>` XML). "a complete closing tag `</name>` is a tag, not a path (declared limit, not
+      a guarantee) …" passes `x </srv> y`, `</srv>` and `%3C%2Fsrv%3E` and refuses `x </srv/x> y`, `</srv.corp>`,
+      `x </srv y` and `x /srv> y`; the block's first row, "reads a closing tag as a tag, not a path …", still fails a
+      foreign output file inside the tags closed.
     - `MUNGED_FOREIGN` is a DENYLIST of ten tops, not a class (F12): a munged foreign path is caught only when its top
-      is one of `home mnt tmp srv opt var root Users private proc`, case-sensitive, so `-data-…`, `-media-…` and
-      `-Home-…` pass, and inside an allowed `/rig` path it is the only check on a munged spelling. "Munged foreign
-      paths" above means the paths under those ten tops, not the class.
+      is one of `home mnt tmp srv opt var root Users private proc`, case-sensitive, and inside an allowed `/rig` path
+      it is the only check on a munged spelling. "Munged foreign paths" above means the paths under those ten tops,
+      not the class. "a munged foreign path whose top MUNGED_FOREIGN does not list passes (declared limit, not a
+      guarantee) …" passes `-media-vol-client`, `-data-acme-client-proj`, `-Home-x` and `x -Mnt-vol-0000`, and
+      refuses each of the ten listed tops.
 - **D-4008** — `census-malformed-and-unreadable-distinct` (Task 8 review): the plan's census folded an unparsable meta
   into `found:true, keys:[]` (identical to a valid meta with no `worktreePath` — an overloaded value at a seam), a
   malformed or path-less wf meta into `metaMissing`, and an unreadable home into "nothing there". It now reports
@@ -3385,27 +3415,33 @@ unused):
   never the option). Re-captured on all seven versions, re-sanitised into the corpus and `matrix.json` re-derived:
   only the seven interrupt-exit cells changed, and each now records one SessionEnd (`prompt_input_exit`), no Stop, no
   SubagentStop, and one tree left, locked.
-  Widened in fix round 2 (review 296 F2). The interrupt-exit SessionEnd cell rests on `answerDialog`, and a dialog
-  that never showed used to leave no note: a re-capture without it would have built a MEASURED zero SessionEnd, the
-  defect this entry fixed. Since `a7647d942` a dialog that does not appear within the step's timeout notes
-  `answerDialog: no dialog: <text>`, nothing is pressed, and `FAIL_NOTE`'s alternative for that note builds the cell
-  `unmeasured`, with the note as its reason. Rows: "answerDialog: a dialog that never appears sends no key and writes
-  a failure note, so the run is unmeasured and not a measured zero (F2)", beside its control "answerDialog: a dialog
-  that appears is answered with Enter and noted as an outcome, so the run stays measured"; the notes census, now
-  "rig.sh writes nine notes, every one read here, each decided: two outcomes (a probe, a dialog) and seven failures";
-  and the rows fed from rig.sh's own note text ("rig.sh writes %j: a run carrying it is unmeasured …", its "with text
-  after it" twin, and "FAIL_NOTE is anchored: …"), which now run for the new note too.
-  The same else arm reached the four workflow scenarios (wf-plain, wf-iso, wf-iso-resume, wf-limit-pause), whose step
-  `{"answerDialog": "Run a dynamic workflow", "timeoutS": 10}` was Task 4's own. That dialog never shows, because
-  the rig grants `Workflow` through `permissions.allow`: none of the 36 committed workflow fixtures carries a
-  `dialog answered:` note. So the step always waited its full 10 s and pressed nothing. That was harmless while an
-  unanswered dialog left no note; once F2 made one a failure, it would have turned every workflow capture
-  `unmeasured`, and Q1 and Q7 rest on those scenarios. The step is now `{"sleep": 10}` in the same position
-  (`39a2e2565`, `wf-dialog-step-replaced-by-sleep`), which reproduces every committed workflow run; if a workflow
-  dialog ever does show, nothing answers it, the workflow never runs, `waitLabels` times out and the cell builds
-  `unmeasured`. The row "a scenario carries an answerDialog step only if EVERY committed fixture of it holds that
-  dialog's answered note, and interrupt-exit's step is answered in every version (C1)" pins it: interrupt-exit is now
-  the only scenario with such a step, answered in 9 of 9 versions.
+  Widened in fix round 2 (review 296 F2), which departs further from Task 4's `run_steps` (its `answerDialog` arm has no
+  else) and from Task 7's `FAIL_NOTE` (as D-4060 already re-spelled it). The interrupt-exit SessionEnd cell rests on
+  `answerDialog`, and a dialog that never showed used to leave no note: a re-capture without it would have built a
+  MEASURED zero SessionEnd, the defect this entry fixed. Since `a7647d942` a dialog that does not appear within the
+  step's timeout notes `answerDialog: no dialog: <text>`, nothing is pressed, and `FAIL_NOTE`'s alternative for that
+  note builds the cell `unmeasured`, with the note as its reason. Rows: "answerDialog: a dialog that never appears sends
+  no key and writes a failure note, so the run is unmeasured and not a measured zero (F2)", beside its control
+  "answerDialog: a dialog that appears is answered with Enter and noted as an outcome, so the run stays measured"; the
+  notes census, now "rig.sh writes nine notes, every one read here, each decided: two outcomes (a probe, a dialog) and
+  seven failures"; and the rows fed from rig.sh's own note text ("rig.sh writes %j: a run carrying it is unmeasured …",
+  its "with text after it" twin, and "FAIL_NOTE is anchored: …"), which now run for the new note too.
+  The same else arm reached Task 4's four workflow scenarios, `wf-plain.json`, `wf-iso.json`, `wf-iso-resume.json` and
+  `wf-limit-pause.json`, each of which carries `{"answerDialog": "Run a dynamic workflow", "timeoutS": 10}` after its
+  prompt; this entry also departs from those four copies, which stay as Task 4 wrote them. That dialog never shows,
+  because the rig grants `Workflow` through `permissions.allow`: none of the 36 committed workflow fixtures carries a
+  `dialog answered:` note. So the step waited out its timeout and pressed nothing; `wait_text` counts whole seconds and
+  polls the pane every 0.25 s, so that took 10 to 11 s (10.5 s and 11.1 s measured, task B's re-review). That was
+  harmless while an unanswered dialog left no note; once F2 made one a failure, it would have turned every workflow
+  capture `unmeasured`, and Q1 and Q7 rest on those scenarios. The step is now `{"sleep": 10}` in the same position
+  (`39a2e2565`): `wf-dialog-step-replaced-by-sleep`, a consequence of the F2 ruling recorded here, with no number of its
+  own (as the F4 ruling did for D-4007's sub-slugs). It presses nothing either and is at most about 1.1 s shorter, and
+  in each of the four the next step is a polling `waitLabels` (180 s, or 120 s in wf-limit-pause) that absorbs the gap,
+  so the four scenarios still run as they ran for the committed fixtures. If a workflow dialog ever does show, nothing
+  answers it, the workflow never runs, that `waitLabels` times out and the cell builds `unmeasured`. The row "a scenario
+  carries an answerDialog step only if EVERY committed fixture of it holds that dialog's answered note, and
+  interrupt-exit's step is answered in every version (C1)" pins it: interrupt-exit is now the only scenario with such a
+  step, answered in 9 of 9 versions.
 - **D-4059** — `no-merge-before-handoff` (review 277 F7): departs from Precondition 1 ("Merge `origin/main` into
   this workspace's branch first") and from the Global Constraint "merge `origin/main` (never rebase) before the
   handoff", which this run did not do. Both are superseded: worker clause 16 licenses an absorb only on a measured
