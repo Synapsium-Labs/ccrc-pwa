@@ -45,6 +45,9 @@ export const FROZEN_SWEEP = join(here, 'fixtures', 'upd-sweep-pre-wave11.bash');
  *  script, with no deliberate-stop classifier — byte for byte (`git show v0.0.79:deploy/verify-service.sh`; wave 12,
  *  R19e, which corrects the "as wave 10 shipped it" this line said). */
 export const FROZEN_VERIFY_S0 = join(here, 'fixtures', 'verify-service-pre-wave10.sh');
+/** S10, the verify script as v0.0.80 through v0.0.91 ship it — wave 10's, with the classifier and none of wave 11's
+ *  purged-arm guards — byte for byte (`git show v0.0.91:deploy/verify-service.sh`; wave 12, R19d, D-4069). */
+export const FROZEN_VERIFY_S10 = join(here, 'fixtures', 'verify-service-pre-wave11.sh');
 
 /** What gets a poison planted by `makeBox`. `gh` is not here: `ghContainedEnv` plants it. */
 export const POISONS: readonly string[] =
