@@ -178,6 +178,7 @@ describe('skewRemedy — what the skew banner advises (R15(c))', () => {
     ['the lagging box has no tag to move to (rolled back) while the leader has one', [node({ desiredTag: null, current: at('v0.0.7') }), server({ desiredTag: 'v0.0.10', current: at('v0.0.9') })], [intent('channel')]],
     ['the lagging box is hand-placed off the release lane (no version, no tag)', [node({ desiredTag: null }), server({ desiredTag: 'v0.0.10', current: at('v0.0.9') })], [intent('channel')]],
     ['a pin below the leader: the lagging box moves, but not to where the leader is', [node({ desiredTag: 'v0.0.8', current: at('v0.0.7') }), server({ desiredTag: null, current: at('v0.0.9') })], [intent('channel')]],
+    ['no node has a tag to move to, though every node runs the same release tag (a dirty or hand-built box on that tag)', [node({ desiredTag: null, current: at('v0.0.9') }), server({ desiredTag: null, current: at('v0.0.9') })], [intent('channel')]],
   ] as const)('the terminal verbs when %s', (_what, nodes, intents) => {
     expect(skewRemedy(nodes as readonly NodeWire[] | null, intents as readonly UpdateIntentWire[])).toEqual({ kind: 'cli' });
   });
