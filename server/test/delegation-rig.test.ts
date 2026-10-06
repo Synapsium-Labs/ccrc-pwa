@@ -670,9 +670,52 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     for (const leak of ['file:///srv/x', '//fileserver/share', 'http://internal-host.corp/path', 'https://acme.example.org', 'x //srv/y']) {
       expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'fileserver', 'internal-host', 'acme.example');
     }
-    for (const fine of ['http://127.0.0.1:4000/v1/messages', '/rig//x', '/usr//bin/git', 'a // b']) {
+    for (const fine of ['http://127.0.0.1:4000', '/rig//x', '/usr//bin/git', 'a // b']) {
       const r = leakRun({ note: fine });
       expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+  });
+
+  it('scans the path after an allowed loopback host and port like any absolute path (F1a): `http://127.0.0.1:4000/home/…` is residue, a bare loopback URL is not', () => {
+    for (const leak of ['http://127.0.0.1:4000/home/someone-else/x', 'http://127.0.0.1/srv/acme', 'curl //127.0.0.1:4000/mnt/vol/client',
+      'http://127.0.0.1:4000//srv/acme', 'http://127.0.0.1:4000/v1/messages', 'http://127.0.0.1:4000/dev/null/srv/acme']) {
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'someone-else', 'srv/acme', 'vol/client');
+    }
+    for (const fine of ['http://127.0.0.1:4000', 'http://127.0.0.1', 'ANTHROPIC_BASE_URL=http://127.0.0.1:4000 x', 'http://127.0.0.1:4000/', 'http://127.0.0.1:4000/rig/state', 'http://127.0.0.1:4000/usr/bin']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+  });
+
+  it('a `//`-led path whose first segment is an allowed top passes (`file:///rig/…`), and one that is not still fails closed', () => {
+    for (const fine of ['file:///rig/tmp/x.output', '//usr/bin/git', 'x //bin/sh y']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+    expectNamed(leakRun({ note: 'file:///rigx/tmp/x' }), '/events/0/payload/note', 'rigx');
+  });
+
+  it('`/dev/null` is exempt only as the WHOLE path: a path under it is residue (F1b)', () => {
+    for (const leak of ['/dev/null/srv/acme', '2>/dev/null/mnt/vol/client', 'cmd >/dev/null/home/someone-else/x']) {
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'srv/acme', 'vol/client', 'someone-else');
+    }
+  });
+
+  it('`/dev/null` is exempt only when nothing path-like follows it: near misses fail closed, the plain spellings pass (F2a)', () => {
+    for (const leak of ['/dev/nullsrv', '/dev/null.d', '/dev/null-x', '/dev/null_x', '/dev/null0', '2>/dev/nullsrv']) {
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'nullsrv');
+    }
+    for (const fine of ['/dev/null', '2>/dev/null', 'cmd >/dev/null 2>&1', '(/dev/null)', '/dev/null,']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+  });
+
+  it('fails closed on a JSON-escaped slash: a payload string holding a literal backslash-slash spelling of a foreign path (F2b)', () => {
+    // These are the characters backslash, slash — in the capture file they read `\\/srv\\/acme`.
+    for (const leak of ['\\/srv\\/acme', 'x \\/mnt\\/vol-0000\\/client']) {
+      expect(leak).toContain('\\/');
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'srv', 'vol-0000');
     }
   });
 
@@ -813,6 +856,49 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(fs.readdirSync(out)).toEqual(['2.1.999']);
     expect(fs.readFileSync(path.join(out, '2.1.999'), 'utf8')).toBe('planted');
     expect(fs.readdirSync(base)).toEqual(['fix']); // and no temp sibling is left behind
+  });
+
+  // F13: the move into the fixtures directory is one `renameSync` per file, so EVERY destination is checked first.
+  // Two versions are fed; the later (2.1.999) is the one whose destination is planted, and the earlier (2.1.998)
+  // sorts first, so a per-file check that only runs as each version is reached has already moved it in.
+  const halfMove = (plant: (out: string, base: string) => void, undo?: (out: string) => void): { r: ReturnType<typeof sanitize>; out: string; base: string } => {
+    const raw = mkTmp('ccrc-dlg-raw.');
+    const base = mkTmp('ccrc-dlg-fixbase-');
+    const out = path.join(base, 'fix');
+    fs.mkdirSync(path.join(out, '2.1.999'), { recursive: true });
+    plant(out, base);
+    rawBundle(raw, ROOT, '2.1.998', 'clean', [['Stop', 1, { hook_event_name: 'Stop' }]]);
+    rawBundle(raw, ROOT, '2.1.999', 'clean', [['Stop', 1, { hook_event_name: 'Stop' }]]);
+    try {
+      const r = sanitize(raw, out);
+      expect(fs.existsSync(path.join(out, '2.1.998')), 'the earlier version received nothing').toBe(false);
+      return { r, out, base };
+    } finally { undo?.(out); }
+  };
+
+  it('writes NOTHING when a later version directory holds a directory or a link where a fixture file would go: no earlier version is moved in first (F13)', () => {
+    const shapes: Array<[string, (out: string, base: string) => void]> = [
+      ['a directory', (out) => fs.mkdirSync(path.join(out, '2.1.999', 'clean.json'))],
+      ['a symbolic link to a regular file', (out, base) => { fs.writeFileSync(path.join(base, 'elsewhere'), 'x'); fs.symlinkSync(path.join(base, 'elsewhere'), path.join(out, '2.1.999', 'clean.json')); }],
+    ];
+    for (const [name, plant] of shapes) {
+      const { r, out, base } = halfMove(plant);
+      expect(r.status, name).toBe(1);
+      expect(r.stderr, name).toBe('sanitize: 2.1.999 holds an entry that is not a regular file where a fixture would go\n');
+      expect(r.stderr, name).not.toContain(base);
+      expect(r.stdout, name).toBe('');
+      expect(fs.readdirSync(out), name).toEqual(['2.1.999']);
+      expect(fs.readdirSync(path.join(out, '2.1.999')), name).toEqual(['clean.json']);
+      expect(fs.readdirSync(base).sort(), name).toEqual(name === 'a directory' ? ['fix'] : ['elsewhere', 'fix']); // and no temp sibling is left behind
+    }
+  });
+
+  it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)('a destination it cannot look at is not an absent one: the run stops with its fixed line and nothing is moved (F13)', () => {
+    const { r, base } = halfMove((out) => fs.chmodSync(path.join(out, '2.1.999'), 0o000), (out) => fs.chmodSync(path.join(out, '2.1.999'), 0o755));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toBe('sanitize: internal error (no detail printed)\n');
+    expect(r.stderr).not.toContain(base);
+    expect(fs.readdirSync(base)).toEqual(['fix']); // no temp sibling is left behind
   });
 
   it('an I/O failure prints one fixed line, never the exception or a raw path', () => {

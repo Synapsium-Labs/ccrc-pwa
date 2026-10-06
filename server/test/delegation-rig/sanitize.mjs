@@ -3,15 +3,22 @@
 // (delegation broker wave 1, spec 2026-10-04 §8.2). The captures are SYNTHETIC (mock API, fixture
 // HOME, fixture repo); what could still leak is the box they ran on. So every spelling of the run
 // root becomes `/rig` (its munged form `-rig`) and the binaries' directory `/rig/versions`, and then the WHOLE corpus is scanned by ALLOWLIST:
-// an absolute path is residue unless its first segment is `rig`, `usr` or `bin`, or it is
-// `/dev/null`; so is `ccrc-dlg-rig`, `sk-ant-`, and the running user's name or the host's first
+// an absolute path is residue unless its first segment is `rig`, `usr` or `bin`, or it is exactly `/dev/null` (the WHOLE
+// path: `/dev/null/x` and `/dev/nullx` are residue); so is `ccrc-dlg-rig`, `sk-ant-`, and the running user's name or the host's first
 // label as a whole word (4+ characters, case-insensitive, letters only as word characters). Also residue: a `..` path
-// segment, a `//`-led host or path (`file:///srv/x`, `//share/x`), a munged foreign path (`-mnt-…`, `-home-…`), and
+// segment, a `//`-led host or path (`file:///srv/x`, `//share/x`; only the placeholder loopback address may follow `//`,
+// and whatever path follows it, after an optional `:<port>`, is scanned like any absolute path, so `http://127.0.0.1:4000/srv/x`
+// is residue and a bare `http://127.0.0.1:4000` is not), a munged foreign path (`-mnt-…`, `-home-…`), and
 // any of these in a `\uXXXX`- or `%2F`-escaped spelling (both the string and its decoded form are scanned).
 // KNOWN LIMIT: base64 (or any other encoding) of residue is not decoded and not chased.
-// Any finding exits 1 naming the bundle and a JSON pointer — a key is named by its INDEX, never its text — a bundle
+// Any finding exits 1 naming the bundle and a JSON pointer. A pointer prints a key as TEXT only when the key is
+// SAFE_SEG-shaped (1-40 of `[A-Za-z0-9_.-]`) AND carries no residue itself (so the pointer stays locatable in a synthetic
+// bundle, whose key names are placeholder vocabulary: `/disk/admin/agent-abc/gitdir`); any other key, every residue-bearing
+// key included, prints as `#<index>`, never its text. A bundle
 // that cannot be read as a bundle (bad version directory, no `root` file, bad scenario name) is a finding too, and
-// NOTHING is written: fixtures are built in a sibling of <fixtures-dir> and moved in only once all of them passed.
+// NOTHING is written: fixtures are built in a sibling of <fixtures-dir>, EVERY destination is checked before the first
+// file is moved (a directory where a fixture file would go refuses the run with nothing moved), and the files move in
+// only once all of them passed.
 // An exception prints one fixed line (never its message, which names a raw path) and exits 1.
 // Usage: node sanitize.mjs <raw-root> <fixtures-dir>
 import fs from 'node:fs';
@@ -126,13 +133,21 @@ const ALLOWED_HOST = new Set(['127.0.0.1']);
 const DOTDOT = /(^|\/)\.\.(\/|$)/;
 // The escaped spellings of `/` and of any character a JSON string may carry as `\uXXXX`, and percent-encoded `/`.
 const decode = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16))).replace(/%2[Ff]/g, '/');
+// `/dev/null` is exempt only as the WHOLE path (F1b/F2a): it must be followed by NO path character (`/dev/nullsrv`,
+// `/dev/null.d`) and NOT by a `/` (`/dev/null/srv/acme`, whose tail would otherwise never be scanned).
+const DEV_NULL_REST = /^\/null(?![A-Za-z0-9._-])(?!\/)/;
+// Is an absolute path whose first segment is `top`, and which continues with `rest` (the text after that segment), residue?
+const topResidue = (top, rest) => !ALLOWED_TOP.has(top) && !(top === 'dev' && DEV_NULL_REST.test(rest));
 function residue1(s) {
-  for (const m of s.matchAll(ABS)) {
+  for (const m of s.matchAll(ABS)) if (topResidue(m[1], s.slice(m.index + m[0].length))) return true;
+  for (const m of s.matchAll(DOUBLE)) {
     if (ALLOWED_TOP.has(m[1])) continue;
-    if (m[1] === 'dev' && s.startsWith('/null', m.index + m[0].length) && !/[A-Za-z0-9._-]/.test(s[m.index + m[0].length + 5] ?? '')) continue;
-    return true;
+    if (!ALLOWED_HOST.has(m[1])) return true;
+    // An allowed loopback host: ABS never starts a match at a `/` that follows a digit, so the path after `host[:port]`
+    // is scanned HERE, by the same allowlist as any absolute path (F1a). A bare `http://127.0.0.1:4000` has none.
+    const tail = /^(?::[0-9]+)?\/+([A-Za-z0-9._-]+)/.exec(s.slice(m.index + 2 + m[1].length));
+    if (tail !== null && topResidue(tail[1], s.slice(m.index + 2 + m[1].length + tail[0].length))) return true;
   }
-  for (const m of s.matchAll(DOUBLE)) if (!ALLOWED_TOP.has(m[1]) && !ALLOWED_HOST.has(m[1])) return true;
   if (DOTDOT.test(s)) return true;
   if (MUNGED_FOREIGN.test(s) || (HOME_MUNGED !== null && s.includes(HOME_MUNGED))) return true;
   return /ccrc-dlg-rig/i.test(s) || /sk-ant-/i.test(s) || WORDS.some((re) => re.test(s));
@@ -157,6 +172,11 @@ const scan = (v, ptr, where, findings) => {
 };
 
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+// 'absent' (ENOENT only), 'file' (a regular file, which a rename may replace) or 'other'. Any OTHER failure to look
+// throws, to the fixed-line catch below, before anything moves: an unreadable destination is not an absent one.
+const destKind = (p) => {
+  try { return fs.lstatSync(p).isFile() ? 'file' : 'other'; } catch (e) { if (e !== null && typeof e === 'object' && e.code === 'ENOENT') return 'absent'; throw e; }
+};
 
 function main() {
   const findings = [];
@@ -190,6 +210,11 @@ function main() {
     for (const v of fs.readdirSync(tmp)) {
       const dest = path.join(out, v);
       if (fs.existsSync(dest) && !isDir(dest)) { process.stderr.write(`sanitize: ${v} exists in the fixtures directory and is not a directory\n`); return 1; }
+      // EVERY destination file is checked before the first one moves (F13): a directory (or a link) where a fixture
+      // would go refuses the run with nothing moved, not with the earlier versions already in place.
+      for (const n of fs.readdirSync(path.join(tmp, v))) {
+        if (destKind(path.join(dest, n)) === 'other') { process.stderr.write(`sanitize: ${v} holds an entry that is not a regular file where a fixture would go\n`); return 1; }
+      }
     }
     fs.mkdirSync(out, { recursive: true });
     for (const v of fs.readdirSync(tmp)) {
