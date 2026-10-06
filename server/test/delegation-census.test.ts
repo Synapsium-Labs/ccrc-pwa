@@ -350,40 +350,77 @@ describe('delegation-census (read-only, path-free)', () => {
       } finally { fs.chmodSync(loose, 0o600); }
     });
 
-    // F13: a symlink at the loose-ref path. Measured read-only in a temp repo (git, with the packed-refs line stale):
-    // `git rev-parse HEAD` on a `ref:` HEAD whose loose ref is a VALID symlink follows it and answers the target's sha
-    // (not the packed one); on a DANGLING symlink it fails "unknown revision" (for-each-ref falls through to the packed
-    // line, rev-parse does not). readFileSync follows a symlink the same way, so the valid one needs nothing; the
-    // dangling one reads ENOENT through it and must be told from "nothing there" by an lstat of the path itself.
+    // F13 (+ review I1/M2): what sits at the loose-ref path, judged as git's files backend judges it: it lstats the path;
+    // ENOENT falls through to packed-refs, a REAL directory falls through too, and anything else is read (an error
+    // there is an error, never a fall-through). Measured read-only in a temp repo with a stale packed-refs line, by
+    // `git rev-parse HEAD` in a linked worktree whose HEAD is `ref: refs/heads/<n>`:
+    //   valid symlink to a file ........ the target's sha (followed; beats the packed line)   -> the census agrees
+    //   DANGLING symlink ............... fails "unknown revision" (for-each-ref alone would fall through)
+    //   symlink to a DIRECTORY ......... fails "unknown revision"
+    //   real directory / nothing ....... the packed line
+    //   a symlink whose TEXT is a ref name (git's symbolic-ref form, resolved from the git dir) .... resolves; the census
+    //     reads it as a file path under the link's own directory, finds nothing and answers 'unmeasured': fail-closed, a
+    //     KNOWN LIMIT (pinned below so that resolving it on purpose is a visible edit, never an accident).
     function symWorld(): (n: string) => unknown {
       const w = mini([
         { name: 's-valid', files: { HEAD: 'ref: refs/heads/wt-link\n', CLAUDE_BASE: SHA_A }, wt: 'wt-s1' },
         { name: 's-dangling', files: { HEAD: 'ref: refs/heads/wt-dangle\n', CLAUDE_BASE: SHA_A }, wt: 'wt-s2' },
         { name: 's-absent', files: { HEAD: 'ref: refs/heads/wt-packed-only\n', CLAUDE_BASE: SHA_A }, wt: 'wt-s3' },
+        { name: 's-dirlink', files: { HEAD: 'ref: refs/heads/wt-dirlink\n', CLAUDE_BASE: SHA_A }, wt: 'wt-s4' },
+        { name: 's-textlink', files: { HEAD: 'ref: refs/heads/wt-textlink\n', CLAUDE_BASE: SHA_A }, wt: 'wt-s5' },
       ]);
       const git = path.join(w.repo, '.git');
-      fs.mkdirSync(path.join(git, 'refs', 'heads'), { recursive: true });
+      const heads = path.join(git, 'refs', 'heads');
+      fs.mkdirSync(heads, { recursive: true });
       fs.writeFileSync(path.join(w.repo, 'link-target'), `${SHA_A}\n`);   // the real tip: equal to CLAUDE_BASE
-      fs.symlinkSync(path.join(w.repo, 'link-target'), path.join(git, 'refs', 'heads', 'wt-link'));
-      fs.symlinkSync(path.join(w.repo, 'no-such-file'), path.join(git, 'refs', 'heads', 'wt-dangle'));
+      fs.mkdirSync(path.join(w.repo, 'a-dir'));
+      fs.symlinkSync(path.join(w.repo, 'link-target'), path.join(heads, 'wt-link'));
+      fs.symlinkSync(path.join(w.repo, 'no-such-file'), path.join(heads, 'wt-dangle'));
+      fs.symlinkSync(path.join(w.repo, 'a-dir'), path.join(heads, 'wt-dirlink'));
+      fs.symlinkSync('refs/heads/wt-link', path.join(heads, 'wt-textlink'));   // the symbolic-ref text form (git resolves it to SHA_A)
       fs.writeFileSync(path.join(git, 'packed-refs'), [
         `${SHA_B} refs/heads/wt-link`,   // stale: would read `true` if the valid symlink were not followed
         `${SHA_B} refs/heads/wt-dangle`,   // stale: would read `true` if a dangling symlink counted as "nothing there"
         `${SHA_B} refs/heads/wt-packed-only`,   // no loose path at all (lstat ENOENT): packed-refs answers
+        `${SHA_B} refs/heads/wt-dirlink`,   // stale: would read `true` if a symlink to a directory counted as a directory
+        `${SHA_B} refs/heads/wt-textlink`,   // stale: would read `true` if the text form fell through
         '',
       ].join('\n'));
       const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
-      const order = ['s-valid', 's-dangling', 's-absent'].sort();
+      const order = ['s-valid', 's-dangling', 's-absent', 's-dirlink', 's-textlink'].sort();
       return (n) => out.records[order.indexOf(n)].movedFromBase;
     }
     it("reports 'unmeasured' for a loose ref that is a DANGLING symlink, never the stale packed-refs line behind it", () => {
       expect(symWorld()('s-dangling')).toBe('unmeasured');
+    });
+    it("reports 'unmeasured' for a loose ref that is a symlink to a DIRECTORY (git fails there too), never the stale packed-refs line behind it", () => {
+      expect(symWorld()('s-dirlink')).toBe('unmeasured');
     });
     it('follows a loose ref that is a VALID symlink, as git does (the target holds the real tip; the packed line is stale)', () => {
       expect(symWorld()('s-valid')).toBe(false);
     });
     it('still answers from packed-refs when nothing at all is at the loose path (the lstat agrees: ENOENT stays "nothing there")', () => {
       expect(symWorld()('s-absent')).toBe(true);
+    });
+    it("KNOWN LIMIT: a loose ref that is a symlink whose text is a ref name (git's symbolic-ref form) reads 'unmeasured', fail-closed", () => {
+      expect(symWorld()('s-textlink')).toBe('unmeasured');
+    });
+    // lstat fails with something other than ENOENT: here the parent directory refuses search (mode 000), so the path
+    // cannot be examined at all. Measured: `git rev-parse HEAD` fails "unknown revision" there while `for-each-ref`
+    // alone falls through to the packed line; the census says 'unmeasured', never the stale packed line.
+    it("reports 'unmeasured' when the loose path cannot be examined at all (its parent directory refuses search), never the stale packed-refs line", () => {
+      if (process.getuid?.() === 0) return;   // root searches through mode 000
+      const w = mini([{ name: 's-noaccess', files: { HEAD: 'ref: refs/heads/wt-noaccess\n', CLAUDE_BASE: SHA_A }, wt: 'wt-s6' }]);
+      const git = path.join(w.repo, '.git');
+      const heads = path.join(git, 'refs', 'heads');
+      fs.mkdirSync(heads, { recursive: true });
+      fs.writeFileSync(path.join(heads, 'wt-noaccess'), `${SHA_A}\n`);   // the real tip: equal to CLAUDE_BASE
+      fs.writeFileSync(path.join(git, 'packed-refs'), `${SHA_B} refs/heads/wt-noaccess\n`);   // stale: would read `true`
+      fs.chmodSync(heads, 0o000);
+      try {
+        const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
+        expect(out.records[0].movedFromBase).toBe('unmeasured');
+      } finally { fs.chmodSync(heads, 0o755); }
     });
 
     it("refuses a ref name that is not shaped refs/<safe chars> or has a .. segment: 'unmeasured', never joined onto a path", () => {

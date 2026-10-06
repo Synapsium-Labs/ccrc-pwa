@@ -53,28 +53,30 @@ const json = (f) => {
   try { const v = JSON.parse(fs.readFileSync(f, 'utf8')); return v !== null && typeof v === 'object' && !Array.isArray(v) ? v : MALFORMED; } catch { return MALFORMED; }
 };
 const exists = (f) => { try { fs.statSync(f); return true; } catch { return false; } };
-// A loose ref file's text, with the failure kept apart (never folded to null like `text`): null = truly nothing at that
-// path (ENOENT with an lstat of the path itself agreeing), or a directory there (EISDIR; git falls through a directory
-// to packed-refs too); UNREADABLE = an entry that exists but cannot be read (EACCES, ELOOP, EIO, ...), whose stale
-// packed-refs line must not stand in for it. A DANGLING SYMLINK is that case: readFileSync follows it and reports ENOENT
-// for its target, so an ENOENT is re-asked with lstat — an entry still there at the path is UNREADABLE (git answers
-// `rev-parse HEAD` "unknown revision" there, where `for-each-ref` alone would fall through to the packed line). A valid
-// symlink needs nothing: readFileSync follows it, as git does.
+// A loose ref's text, judged as git's files backend judges it — lstat the path FIRST, then read — with the failure kept
+// apart (never folded to null like `text`): null = nothing at the path (lstat ENOENT) or a REAL directory there, both of
+// which git falls through to packed-refs for; UNREADABLE = anything else that is there but cannot be answered from: an
+// lstat failing other than ENOENT (EACCES on a parent, ENOTDIR, EIO, ...) or a read failing (EACCES, EIO, and every
+// symlink that does not lead to a readable file: a DANGLING one, whose target is ENOENT, and one to a DIRECTORY, whose
+// read is EISDIR). git fails `rev-parse HEAD` "unknown revision" for those two, where `for-each-ref` alone would fall
+// through to the packed line; a stale packed-refs line must never stand in for an entry that exists. A valid symlink to
+// a file is followed by the read, as git follows it. KNOWN LIMIT: a symlink whose TEXT is a ref name is git's symbolic-ref
+// form, which git resolves from the git dir; read here as a path under the link's own directory it leads nowhere, so it
+// is UNREADABLE (fail-closed: 'unmeasured', never a wrong boolean).
 const UNREADABLE = Symbol('unreadable');
 const looseText = (f) => {
-  try { return fs.readFileSync(f, 'utf8'); } catch (e) {
-    if (e.code === 'EISDIR') return null;
-    if (e.code !== 'ENOENT') return UNREADABLE;
-    try { fs.lstatSync(f); return UNREADABLE; } catch (l) { return l.code === 'ENOENT' ? null : UNREADABLE; }
-  }
+  let st;
+  try { st = fs.lstatSync(f); } catch (e) { return e.code === 'ENOENT' ? null : UNREADABLE; }
+  if (st.isDirectory()) return null;   // a real directory (lstat does not follow a symlink): git falls through to packed-refs
+  try { return fs.readFileSync(f, 'utf8'); } catch { return UNREADABLE; }
 };
 // A `ref: <name>` HEAD's tip, read-only in the common dir: the loose ref file's first line, else the `packed-refs`
 // line `<sha> <name>` (the `#` header and a `^` peeled line match no such line, so they are skipped by shape).
 // Returns a sha, or null for "unresolved" — the caller says 'unmeasured', since for movedFromBase null is spoken
 // for. A name that is not `refs/<safe chars>`, or has a `..` segment, is never joined onto a path. Only an ABSENT
-// loose file (nothing at the path, lstat included — or a directory there) goes on to packed-refs; one that exists and
-// is not a sha, or cannot be read (a dangling symlink included), is unresolved — a stale packed line behind it would
-// be a silently wrong answer.
+// loose ref (nothing at the path, or a real directory there) goes on to packed-refs; one that exists and is not a sha,
+// or cannot be read (see `looseText`: a dangling symlink and a symlink to a directory included), is unresolved — a
+// stale packed line behind it would be a silently wrong answer.
 const REF_NAME = /^refs\/[A-Za-z0-9._/-]+$/;
 const PACKED_LINE = /^([0-9a-f]{40}) (refs\/\S+)$/;
 const refTip = (name) => {
