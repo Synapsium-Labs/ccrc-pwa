@@ -11883,9 +11883,9 @@ In the same function, change the doc comment's last list item from `Stop and Pos
   // Then the candidates: startup and resume lines awaiting `.uuid`, and clear epochs awaiting `.uuid` or their
   // location. Each is decided in its own FULL transaction and flushed right after (§9.2 step 1, §6.1).
   confirmCandidates(db, ctx);
-  // The periodic scan (every SCAN_INTERVAL_MS): every $REG/<id>.uuid that names no epoch becomes a registry
-  // mapping, committed FULL before any ingest chunk can need it (§6.1 "Backfill"; §9.2 step 4 "Every verdict
-  // commits first").
+  // The periodic scan (every SCAN_INTERVAL_MS): every $REG/<id>.uuid that names no epoch of its id and no confirmed
+  // epoch anywhere becomes a registry mapping, committed FULL before any ingest chunk can need it (§6.1 "Backfill";
+  // §9.2 step 4 "Every verdict commits first"; D-4297).
   if (scanDue(db, ctx.now())) {
     registryBackfill(db, ctx);
     markScan(db, ctx.now());
@@ -12731,9 +12731,9 @@ export function firstUuidRowCwd(homes, userHome, uuid) {
   // Then the candidates: startup and resume lines awaiting `.uuid`, and clear epochs awaiting `.uuid` or their
   // location. Each is decided in its own FULL transaction and flushed right after (§9.2 step 1, §6.1).
   confirmCandidates(db, ctx);
-  // The periodic scan (every SCAN_INTERVAL_MS): every $REG/<id>.uuid that names no epoch becomes a registry
-  // mapping, committed FULL before any ingest chunk can need it (§6.1 "Backfill"; §9.2 step 4 "Every verdict
-  // commits first").
+  // The periodic scan (every SCAN_INTERVAL_MS): every $REG/<id>.uuid that names no epoch of its id and no confirmed
+  // epoch anywhere becomes a registry mapping, committed FULL before any ingest chunk can need it (§6.1 "Backfill";
+  // §9.2 step 4 "Every verdict commits first"; D-4297).
   const scan = scanDue(db, ctx.now());
   if (scan) registryBackfill(db, ctx);
   // Steps 2-3, discovery and the plan. The tick examines hinted confirmed sids, files left short of their end, and
