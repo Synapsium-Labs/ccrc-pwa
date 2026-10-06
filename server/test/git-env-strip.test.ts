@@ -88,7 +88,7 @@ describe('every reclaim and expire suite takes its environment through the strip
   /** A git spawn, in any of node's spellings. Each call is read to its MATCHING
    *  paren, so an options object with no `env:` is seen, and so is an argv split
    *  over lines; `env: process.env` is no strip either. */
-  const GIT_SPAWN = /\b(?:execFileSync|spawnSync|execFile|spawn)\(\s*'git'|\bexecSync\(\s*[`'"]git\b/g;
+  const GIT_SPAWN = /\b(?:execFileSync|spawnSync|execFile|spawn)\(\s*[`'"]git[`'"]|\bexecSync\(\s*[`'"]git\b/g;
   const hitsIn = (f: string, src: string): string[] => {
     const hits: string[] = [];
     src.split('\n').forEach((l, i) => {
@@ -129,14 +129,22 @@ describe('every reclaim and expire suite takes its environment through the strip
       "execFileSync('git', ['init', dir], { env: inheritedEnv() });",
       "execFileSync('git', ['init', dir], {\n  encoding: 'utf8',\n  env: { ...inheritedEnv(), HOME: h },\n});",
       "  // execFileSync('git', ['init', dir]);",                // 13: a comment
+      'const c = Object.fromEntries(Object.entries(process.env));', // 14: a whole-environment copy
+      "execFile('git', ['status'], cb);",                        // 15: execFile, with a callback and no options
+      "spawn('git', ['status']);",                               // 16: spawn
+      'execFileSync("git", [\'status\']);',                      // 17: the command in double quotes
     ].join('\n');
     expect(hitsIn('planted', planted)).toEqual([
       'planted:7: const e = { ...process.env, HOME: h };',
+      'planted:14: const c = Object.fromEntries(Object.entries(process.env));',
       "planted:1: execFileSync('git', ['init', dir])",
       "planted:2: execFileSync('git', ['status'], { encoding: 'utf8' })",
       "planted:3: execFileSync('git', [ 'init', dir])",
       "planted:5: spawnSync('git', ['status'], { env: process.env })",
       'planted:6: execSync(`git -C ${dir} status`)',
+      "planted:15: execFile('git', ['status'], cb)",
+      "planted:16: spawn('git', ['status'])",
+      'planted:17: execFileSync("git", [\'status\'])',
     ]);
   });
 

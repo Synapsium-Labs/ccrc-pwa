@@ -13,7 +13,11 @@
 // config (init.templateDir, core.hooksPath, commit.gpgsign, url.insteadOf)
 // still reaches the repository it makes; and a kept GIT_CONFIG_GLOBAL or
 // GIT_CONFIG_SYSTEM outranks a fixture HOME's global config at every `h.sh`
-// and `h.git` too. A stated harness residual.
+// and `h.git` too. Two more kept variables outside git's local list reach
+// the fixture repositories the same way:
+// GIT_TEMPLATE_DIR (the environment twin of init.templateDir, so a runner's
+// template hooks reach every `git init` here) and GIT_EXEC_PATH (the
+// directory git runs its own subcommands from). A stated harness residual.
 import { execFileSync } from 'node:child_process';
 
 /** `git rev-parse --local-env-vars` on git 2.43.0, the fleet box's git: the
