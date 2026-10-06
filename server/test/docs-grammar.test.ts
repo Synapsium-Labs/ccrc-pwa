@@ -127,6 +127,7 @@ describe('the section grammar', () => {
 describe('the relative-path grammar', () => {
   const E = cp(0xe9);           // 2 UTF-8 bytes
   const GRIN = cp(0x1f600);     // 4 UTF-8 bytes, a surrogate pair in a JS string
+  const CJK = cp(0x6587);       // 3 UTF-8 bytes, one UTF-16 unit: utf8Bytes' third arm
   const deep = (n: number): string => Array.from({ length: n }, () => 'a').join('/');
   const ACCEPT = [
     'x.md', 'a/b/c.md', '2026-10-01-design.md', '.hidden.md', 'a/..x', E + '.md', cp(0x6587) + '.md', GRIN + '.png',
@@ -135,6 +136,8 @@ describe('the relative-path grammar', () => {
     name(DOCS_PATH_MAX_COMPONENT_BYTES),
     E.repeat(127) + 'a',                                   // 255 bytes, 128 code points
     GRIN.repeat(63) + 'abc',                               // 255 bytes, 66 code points
+    CJK.repeat(85),                                        // 255 bytes, 85 code points
+    Array.from({ length: 5 }, () => CJK.repeat(68)).join('/'),    // 1024 bytes, 344 code points
     deep(DOCS_PATH_MAX_DEPTH),
   ];
   /** Refused by a byte or depth bound alone: each is at most 1024 code points, so the grammar admits it. */
@@ -144,6 +147,8 @@ describe('the relative-path grammar', () => {
     name(DOCS_PATH_MAX_COMPONENT_BYTES + 1),
     E.repeat(128),                                         // 256 bytes, 128 code points
     GRIN.repeat(64),                                       // 256 bytes, 64 code points
+    CJK.repeat(86),                                        // 258 bytes, 86 code points
+    [...Array.from({ length: 4 }, () => CJK.repeat(68)), CJK.repeat(68) + 'a'].join('/'),    // 1025 bytes, 345 code points
     deep(DOCS_PATH_MAX_DEPTH + 1),
   ];
   const REFUSE = [
@@ -373,6 +378,10 @@ describe('one grammar on both sides: L0 predicates and _docs_py agree (rows 2, 3
     [E.repeat(102), E.repeat(102), E.repeat(102), E.repeat(102), E.repeat(102) + 'a'].join('/'),
     [E.repeat(103), E.repeat(103), E.repeat(103), E.repeat(103), E.repeat(103)].join('/'),
     run(255), run(256), E.repeat(127) + 'a', E.repeat(128), GRIN.repeat(63) + 'abc', GRIN.repeat(64),
+    // utf8Bytes' 3-byte arm at both bounds: 255/258-byte components and 1024/1025-byte paths of U+6587
+    '\u{6587}'.repeat(85), '\u{6587}'.repeat(86),
+    Array.from({ length: 5 }, () => '\u{6587}'.repeat(68)).join('/'),
+    [...Array.from({ length: 4 }, () => '\u{6587}'.repeat(68)), '\u{6587}'.repeat(68) + 'a'].join('/'),
     deep(16), deep(17),
     '../../README.md', 'a/../b', 'a/./b', './a', 'a/..', 'a\u{0000}b', 'a\u{001f}b', 'a\u{007f}b', 'a\u{0085}b',
     'a\u{009f}b', 'a\nb', 'a\tb', 'a\u{202e}b.md', 'READ\u{200b}ME.md',

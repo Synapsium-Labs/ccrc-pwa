@@ -773,6 +773,10 @@ describe('(G) resolveDocRef (spec 4.11; M5.7, L0 cases)', () => {
     ['four levels up from three', SPEC, '../../../../x', refused('above-root')],
     ['a/../../../../../x', SPEC, 'a/../../../../../x', refused('above-root')],
     ['an encoded climb past the root', SPEC, '%2e%2e/%2E%2E/.%2e/%2e./x', refused('above-root')],
+    // A `.` segment stays put (climbsAboveRoot's single-dot clause): counted as a step down, each of these would
+    // climb back to the root exactly and resolve as a repo link to `x`.
+    ['a dot segment does not descend', SPEC, './../../../../x', refused('above-root')],
+    ['an encoded dot segment does not descend', SPEC, '%2e/../../../../x', refused('above-root')],
     ['x.md from a nested spec', NESTED, 'x.md', doc('specs', 'sub/x.md')],
     ['../x.md from a nested spec', NESTED, '../x.md', doc('specs', 'x.md')],
     ['%2541.md, decoded once', SPEC, '%2541.md', doc('specs', '%41.md')],
