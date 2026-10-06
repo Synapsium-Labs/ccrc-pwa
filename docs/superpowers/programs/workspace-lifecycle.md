@@ -423,6 +423,26 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     done). That build contains #215 (`b40f4145`) and #252.
   - **The brief carries rulings 1–4,** including the `in-use` amendment (3962). The worktree disk had 13 GB free at
     dispatch, against ccd's 10 GB floor.
+- **2026-10-06 04:55 — wave 3's wave-done** (mail 3607; PR #286 at `3373287e`; 17 commits plus a merge of main).
+  - **What landed:** the ten tasks, amendment (3) as Task 9A (`/proc` on Linux, `lsof` on Darwin bounded at 20 s;
+    unmeasured refuses), and spare 3963 (the resume asks presence on the vanished-worktree arm). 3964 and 3965 are
+    unused.
+  - **Re-measured:** the tip matches the claim, and every required Linux check is green; the macOS legs gate nothing.
+    The run went to `awaiting-review`, and its ten items were settled.
+  - **Review 284** is dispatched to `ccrc-pwa-amber-river`, with the held-out panel named.
+  - **Rulings on the worker's two asks:**
+    - (a) The return-verb journal race (3893's disclosed residual) is CARRIED TO 3B AS A PRECONDITION. Nothing calls
+      the verb until 3b's lane, so the race is unreachable now, and 3b closes it before the server ever calls the
+      verb.
+    - (b) Yes, the `in-use` probe also runs at the later resume phases where the worktree is present. Asking only
+      refuses, and deletion happens there. It goes into a fix round if review 284 asks for one; otherwise it is a 3b
+      precondition.
+  - **Overlap with child-reclamation wave 5** (calm-mesa's 3560, agreed in 3622):
+    - additive and disjoint edits in shared/api.ts, single-definition and wsaudit.ts;
+    - the second lander merges main and re-runs single-definition, typecheck-tests, the citation cases and
+      deviation-refs;
+    - neither wave waits on the other;
+    - child-reclamation's wave 6 (the ccd half) dispatches after #286 merges.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 

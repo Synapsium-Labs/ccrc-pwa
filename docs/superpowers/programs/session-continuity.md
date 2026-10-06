@@ -426,6 +426,25 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     does.
   - **(F)** The units are installed by the installer spine.
   - **(G)** The overlap rule with #248, run 245 and run 271.
+- **2026-10-06 04:55 — wave 4's plan is ready: #288** (`1cbb1c75`, 4,604 lines, 8 tasks, 13 departure slugs).
+  - **How it was made:** four Opus lenses, none unverified; the reviser applied all 33 findings.
+  - **What the safety lens found:** no path to a stop while shadowed, while paused or in any must-never-stop class.
+    Its fixes: the cgroup and CPU sanity guard is pinned; the first-seen clock is boot-relative and bounded; an
+    unreadable socket table carries rather than reading as clear.
+  - **The verifier** replayed every anchor exactly once onto `d2bac7ae`. All 26 re-run rows went red. Three counts
+    moved with #287, as pre-flight 15 says.
+  - **Rulings on its open questions:**
+    - accepted: at most three stops per tick once armed; a point-in-time reading of inert survivors; the 120 s MCP
+      window; editing wave 3's merged plan entries in place (text only).
+    - **arming `scope-sweep-live` is the operator's,** recommended after a week of shadow verdicts that match what the
+      operator would stop by hand;
+    - the leaked test tmux server (`/tmp/tmuxtest_verify`, alive since 2026-09-14) is reported to the operator. The
+      sweep ignores it by design, and no session may touch tmux.
+  - **Numbers:** 4088–4093 issued (the last three slugs, then three spares).
+  - **Pre-deploy stage-6 reading, from the plan:** 2026-09-28 to 2026-10-05 17:00 had 40 pane-scope OOM stops, 2 of
+    them reap-class. Baseline B is read one week after this wave deploys; the deploy time is recorded here when it
+    happens.
+  - The brief and its dispatch body are ready. Run 274 dispatches when #288 merges.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

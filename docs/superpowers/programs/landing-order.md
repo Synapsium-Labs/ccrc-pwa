@@ -520,6 +520,22 @@ carries it (spec §5.1, amended 2026-09-24).
   3. **After Step 4, this coordinator's landing spelling becomes clause 15's queue spelling:**
      `gh pr merge <n> --match-head-commit <sha>`, with no `--admin` and no `--squash`. Step 1's two box reads use
      `ccrc version` on each box (read-only). No `ccrc rollout`, even `--check`.
+- **2026-10-06 04:55 — review 273 ruled; fix round 2 sent** (mail 3621). Report: `~/.cc-clips/ccrc-pwa-quiet-mesa/review-273-2324053a.md`.
+  - **The panel ran as written:** 11 confirmed, 1 refuted, nothing unexamined, no lens unverified.
+  - **The round is sound:** the suites are green under jq 1.7 and 1.8.2, every row reds, the canary behaves on both
+    jq versions, and the hook replay is byte-identical.
+  - **Rulings:**
+    - F1 (important): a tight multi-byte fixture, so a byte-offset slice reds.
+    - F2: the over-cap prose class is ACCEPTED and NAMED. THE COST sentence names any one segment holding `gh`,
+      then `pr`, then `merge` as words, a one-line JSON mail body included. The refusal also names `ccrc-api mail
+      send --json <file>` as the way to send a long mail. There is no narrowing, because a flags-only gap needs the
+      nested quantifier the rule exists to avoid.
+    - F3: absorb main (#281's README and doctor test, keeping both sides; #250's stamp), then re-gate under both jqs
+      and re-run the canary.
+    - F4: the fix round's rows go into the plan as JSON.
+    - F5 (a)–(j): text and tests.
+  - **The worker's ledger note (a), carried as an OPERATOR CANDIDATE:** today any jq runtime error passes the deny.
+    A held or child session whose payload holds `merge` could fail CLOSED instead. Not this wave's.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
