@@ -105,6 +105,9 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
     expect(await screen.findByText(ACK_UNREADABLE_TEXT)).toBeInTheDocument();
     await waitFor(() => expect(first.onAcked).toHaveBeenCalledTimes(1));
+    const held = screen.getByRole('button', { name: 'Ack fleet' });
+    expect(held, 'an unreadable answer may have cleared the row: it stays down until a poll shows a new lease').toBeDisabled();
+    expect(held).toHaveTextContent('Acked');
     cleanup();
     const busy = new ApiError(409, { ok: false, error: 'busy' });
     vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(busy);
