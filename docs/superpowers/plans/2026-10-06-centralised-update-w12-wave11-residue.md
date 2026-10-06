@@ -1184,4 +1184,7 @@ Written at 05:46 UTC, after the final whole-branch review's fixes. It records wh
   - 8 of 8 green with no mutation, measured twice, by the implementer and by the task reviewer;
   - `exit 130` in place of the re-raise reds 5 of 5.
 - **T6-RERAISE** is therefore pinned. The bullet under "Not in this wave" carries a dated marker saying so.
+- **Two citations in the amended wave-11 plan differ from Task 4's replacement text, on purpose, and the shipped ones are the true sources** (review 286 F2; this bullet added 2026-10-06 by wave 13, R20b):
+  - A9's sentence ends "(run 270's wave-done, residue item 7)", where Task 4's text says "(the worker's A2)".
+  - A19's T6-RERAISE row quotes `_upd_sweep`'s INT-handler comment in `ccd/ccrc` ("`exit 130` would not read as an INT death to our caller"), where Task 4's text gives the words to D-3988, whose entry does not carry them.
 - **Reserve numbers:** 4072 spent (Reading 8). 4073 to 4076 are unspent.

@@ -23,7 +23,9 @@
 //   `--max-time`/`--max-filesize` bounds against a listener the case itself opened, and a refused connection at
 //   port 9. A poison would answer 97 and measure nothing. So their curl is a front that execs the real one ONLY
 //   for a URL on 127.0.0.1 at a port the case listed in `$HOME/curl-allow-ports`: never the live server's 7788 or the agent's 7789 by default, never another host, never
-//   a `-K` config file (which could name a URL this scan cannot see). Everything it refuses is recorded.
+//   a `-K` config file (which could name a URL this scan cannot see). Everything it refuses is recorded. Since wave 13
+//   (R16) it admits `-K -` with a stdin config of `header = "…"` lines only, because ccrc-api and notify.sh send the box
+//   token that way, and `-m`, `-X` and `-d`/`--data-binary`, so either sender can be driven through it.
 //
 // * assertNoRealTool reads RESOLUTION, never executes the tool: `command -v` under the env, then `realpath` of
 //   what it printed. realpath, because a symlink from the fixture HOME to a real binary resolves to a path inside
@@ -60,11 +62,25 @@ export function plantPoison(bin: string, name: string): void {
  *    `--connect-timeout`, `--max-time`, `--max-filesize`, `--speed-limit`, `--speed-time` with theirs. A value-taking
  *    option's value is CONSUMED as its value, never read as a URL. Names are matched exactly: curl itself accepts
  *    unambiguous prefixes (`--max-t`), and an abbreviation is refused here.
+ *  - PASSES, since wave 13 (R16, D-4095): what ccd/ccrc-api and deploy/notify.sh add, NOT what ccrc uses — `-m` with
+ *    its value; `-X` with a method of capital letters only; `-d` and `--data-binary` with a value that does not start
+ *    with `@` (no file read); and `-K -` exactly, whose stdin config must be `header = "<name>: <value>"` lines only,
+ *    each line starting `header = "`, the name `[A-Za-z0-9-]+`, the value holding no `"`, no `\` and no control
+ *    character; an EMPTY config passes too (notify.sh sends one when it has no token). Any other key (`url`, `proxy`,
+ *    `connect-to`, `resolve`, `output`, `config`, …), another spelling of the key, an `@file` header, a leading or
+ *    interior blank line, a comment line, a second `-K -`, `-K <file>` and `--config` are refused. The config is read
+ *    once with `cfg=$(cat)`, which strips EVERY trailing newline before the check runs: so trailing blank lines pass, a
+ *    config of only newlines reads as the empty config, and the real curl gets that NORMALISED text on its stdin (one
+ *    trailing newline), not the caller's bytes. The check FAILS CLOSED (wave 13 fix round 1): a non-empty config passes
+ *    only when its grep exits exactly 1, so a grep that errors or is not on PATH refuses, as a line outside the rule
+ *    does. The config is never written to a log. Every `ccrcContainedEnv(…, { curl: 'loopback' })` case runs
+ *    behind this same front, so a ccrc call using these would pass too: none of them can move the connection off the
+ *    URL this scan reads (a method word, a body that names no file, a time bound, request headers).
  *  - EVERY URL — each remaining positional argument, and the value of `--url` or `--url=` — must be
  *    `http://127.0.0.1:<port>/…` (or end after the port) with `<port>` a line of `$HOME/curl-allow-ports`. A scheme-less
  *    positional (curl defaults it to http), another host, userinfo, https, and an unlisted port (the live server's 7788
  *    and the agent's 7789 included) are refused.
- *  - REFUSED, whatever its value: every other option. That subsumes `-K`/`--config`, `-x`/`--proxy`, `--preproxy`,
+ *  - REFUSED, whatever its value: every other option. That subsumes `--config`, `-x`/`--proxy`, `--preproxy`,
  *    `--socks*`, `--connect-to`, `--resolve`, `--unix-socket`, `--abstract-unix-socket`, `--doh-url`, `--next`/`-:`, `--`
  *    and an unknown spelling: each could move the connection off the URL this scan reads.
  *
@@ -101,13 +117,34 @@ export function loopbackCurlFront(realCurl: string): string {
     'url_ok() {',
     '  if [ "$mode" = check ]; then allowed "$1" || refuse; else printf \'%s\\n\' "$1" >> "$HOME/curl-front-passed"; fi',
     '}',
+    // `-K -` (wave 13, R16): stdin is read ONCE, in the check pass, and must be nothing but `header = "<name>: <value>"`
+    // lines, anchored at the line start — no other key, no `@file`, no quote, backslash or control character in the
+    // value. `cfg=$(cat)` strips every TRAILING newline first, so a trailing blank line passes and the real curl is
+    // re-fed the NORMALISED text (one trailing newline); a leading or interior blank line is refused, and a config of
+    // only newlines reads as the empty config. An EMPTY config passes (notify.sh with no token sends one; it can name
+    // nothing), and a second `-K -` is refused. The config is never logged: a refusal records argv only.
+    // `cat`'s own status is deliberately not a verdict: what the check sees is exactly what is re-fed, so a read that
+    // fails part-way checks and feeds the same prefix (a closed stdin is an empty config, and passes).
+    'cfg=; have_cfg=',
+    // FAILS CLOSED (wave 13 fix round 1, review 294 F1): grep -qv exits 1 only when NO line falls outside the rule, and
+    // that is the one status that passes. 0 is a line outside the rule; 2 (an error) and 127 (no grep on PATH) are a
+    // check that gave no verdict. Never fold grep's status through `!`: that would pass 2 and 127.
+    'cfg_ok() {',
+    '  [ -n "$cfg" ] || return 0',
+    '  printf \'%s\\n\' "$cfg" | grep -qvE \'^header = "[A-Za-z0-9-]+: [^"\\\\[:cntrl:]]*"$\'',
+    '  [ $? -eq 1 ]',
+    '}',
     'scan() {',
     '  while [ $# -gt 0 ]; do',
     '    a=$1; shift',
     '    case "$a" in',
     '      --url) [ $# -gt 0 ] || refuse; url_ok "$1"; shift ;;',
     '      --url=*) url_ok "${a#--url=}" ;;',
-    '      --connect-timeout|--max-time|--max-filesize|--speed-limit|--speed-time|-o|-w|-H) [ $# -gt 0 ] || refuse; shift ;;',
+    '      --connect-timeout|--max-time|--max-filesize|--speed-limit|--speed-time|-m|-o|-w|-H) [ $# -gt 0 ] || refuse; shift ;;',
+    '      -X) [ $# -gt 0 ] || refuse; case "$1" in ""|*[!A-Z]*) refuse ;; esac; shift ;;',
+    '      -d|--data-binary) [ $# -gt 0 ] || refuse; case "$1" in @*) refuse ;; esac; shift ;;',
+    '      -K) [ $# -gt 0 ] && [ "$1" = - ] || refuse',
+    '          if [ "$mode" = check ]; then [ -z "$have_cfg" ] || refuse; cfg=$(cat); have_cfg=1; cfg_ok || refuse; fi; shift ;;',
     '      -[sSfL]*) case "${a#-}" in *[!sSfL]*) refuse ;; esac ;;',
     '      -*) refuse ;;',
     '      *) url_ok "$a" ;;',
@@ -118,6 +155,9 @@ export function loopbackCurlFront(realCurl: string): string {
     'mode=record; scan "$@"',
     // A proxy in the parent env would carry a loopback URL off the box.
     'unset http_proxy HTTP_PROXY https_proxy HTTPS_PROXY all_proxy ALL_PROXY',
+    // The config read in the check pass goes back on the real curl's stdin; without `-K -`, stdin is the caller's. It
+    // sits AFTER the unset above, so the `-K -` path runs the real curl with no proxy variable either.
+    `[ -z "$have_cfg" ] || { { [ -z "$cfg" ] || printf '%s\\n' "$cfg"; } | ${real} -q "$@"; exit $?; }`,
     `exec ${real} -q "$@"`,
   ].join('\n') + '\n';
 }

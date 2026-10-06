@@ -4,7 +4,7 @@
 // `vi.stubGlobal('fetch')`: the pins below are about a conditional GET — the
 // second poll must SEND `If-None-Match` and a 304 must write nothing — and a
 // stubbed global cannot read the request's headers to decide whether to answer
-// 304. Same fixture shape as `ccrc-api.test.ts:52-65` (`listen(0,
+// 304. Same fixture shape as `ccrc-api.test.ts:53-66` (`listen(0,
 // '127.0.0.1')`, the port read back off `server.address()`).
 //
 // The store behind the poller is the REAL `CoordStore` on a fixture
