@@ -22,8 +22,8 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | merged 2026-10-02 (`a934a59b`); run 219 closed; deploy AGENT-FIRST by the update mechanism |
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
-| 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | accepted (review 305); landing round (merge main + text, 3758); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
-| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | to plan |
+| 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | run 308 open (planned; the run's wave 5), block 4316–4325; to plan; FIRST commit: wave 4's residue (review 305 F1(a), the PASS line, I1, …) |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -510,6 +510,17 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     - doctor's PASS line, qualified for a carried live scope.
     These sit beside the worker's residue (I1, `s6_inert`'s staleness, the zombie, the paused log line, baseline B's
     non-zero check).
+- **2026-10-06 22:54 — wave 4 MERGED: #299** (`1bb88d5e`, 22:54; after review 305 and the landing round).
+  - **The landing round** (wave-done 3766 at `8c48de36`) merged main `8d85c7cf4` and hit FOUR conflicts, not the three
+    measured. The fourth was `ccd/ccrc-doctor-checks`: main's `_check_model-default` (#302) and this wave's
+    `_check_scope-sweep` were both appended after `_check_timeout`, and both were kept byte-identical. The round's own
+    commits are text, comments, one blank line and the stamp (verified file by file).
+  - **The re-gate** was green on every file's first run. Correction 3767: the round did not re-run the whole suite. By
+    clause 15 its suite word is `unrun`; the last whole run is 3694's, with 4 known environmental reds.
+  - **Runs:** 274 advanced to `merging`, then closed final (`merged`), and its child workspace is queued for
+    reclamation. **Run 308 (wave 4b, the run's wave 5) was opened first,** planned, with numbers 4316–4325 written bare.
+  - **Next:** wave 4b waits for baseline B's week, which starts at THIS wave's deploy. The deploy time is recorded
+    here when both boxes carry `1bb88d5e`. The stop stays shadowed until the operator arms `scope-sweep-live`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
