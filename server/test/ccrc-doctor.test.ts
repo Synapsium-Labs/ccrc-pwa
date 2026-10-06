@@ -11968,6 +11968,66 @@ describeLinux('ccrc doctor: scope-sweep', () => {
     expect(anyVerdictFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^SKIP scope-sweep: no verdict record at /);
   });
 
+  // ── fix round 1 (Task 5 review): a garbled record is a WARN, never a FAIL ──────────────
+  // A leading zero is an octal error in `$(( ))`, which aborts the check inside its `$( … )` and
+  // makes doctor FAIL it ("printed no verdict line"); an unbounded digit run wraps the arithmetic.
+  const DEADLINE = (o: Record<string, string> = {}): string => {
+    const f = { first: String(UP - 7 * 3600), oldest: '90000', age: '90000', mem: '1', ...o };
+    return `dead ${DEAD} first=${f.first} cpu0=7 verdict=would-stop why=none server=gone procs=3 mem=${f.mem} sockets=0 youngest=90000 oldest=${f.oldest} age=${f.age} pids=1,2,3`;
+  };
+  const noFail = (out: string): void => { expect(out).not.toMatch(/^FAIL scope-sweep/m); expect(out).not.toContain('printed no verdict line'); };
+
+  it('a header with a leading-zero tick is not a v1 record: WARN, never an octal abort and FAIL', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-octal-tick-');
+    writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=0${now()} up=${UP} mode=shadow\n`);
+    const out = runDoctor(home).stdout;
+    noFail(out);
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: the verdict record at .* is unreadable or not a v1 record/);
+  });
+
+  it('a 20-digit tick is not a v1 record: WARN — never a wrapped age that PASSes a stale record as fresh', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-wide-tick-');
+    writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=${'9'.repeat(20)} up=${UP} mode=shadow\n`);
+    const out = runDoctor(home).stdout;
+    noFail(out);
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: the verdict record at .* is unreadable or not a v1 record/);
+  });
+
+  it('a dead line with a leading-zero number is named as a line it cannot read: WARN, never FAIL', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-octal-line-');
+    record(home, [DEADLINE({ first: '08' }), `old ${LIVE} pid=4242 age=0${3 * 86400} comm=bash`]);
+    const out = runDoctor(home).stdout;
+    noFail(out);
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: .*2 line\(s\) it cannot read/);
+  });
+
+  it('a dead scope whose processes could not be measured (oldest=-1) is listed, not dropped', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-oldest-minus-');
+    record(home, [DEADLINE({ oldest: '-1' })]);
+    const out = runDoctor(home).stdout;
+    noFail(out);
+    expect(lineFor(out, 'scope-sweep')).toContain(`${DEAD} dead 420 min`);
+    expect(lineFor(out, 'scope-sweep')).not.toContain('cannot read');
+  });
+
+  it('a garbage line under a good header is a WARN — an all-unparseable record never PASSes', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-garbage-');
+    record(home, ['this is not a record line']);
+    const out = runDoctor(home).stdout;
+    expect(out).not.toMatch(/^PASS scope-sweep/m);
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: .*1 line\(s\) it cannot read/);
+  });
+
+  it('CCRC_SCOPE_SWEEP_STALE_S that is not a number falls back to 300 s: neither an abort nor a disabled check', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-stale-nan-');
+    record(home, [], 600);
+    const stale = runDoctor(home, ['doctor'], { CCRC_SCOPE_SWEEP_STALE_S: 'abc' }).stdout;
+    noFail(stale);
+    expect(lineFor(stale, 'scope-sweep')).toMatch(/^WARN scope-sweep: the verdict record is \d+s old/);
+    record(home, [], 10);
+    expect(lineFor(runDoctor(home, ['doctor'], { CCRC_SCOPE_SWEEP_STALE_S: 'abc' }).stdout, 'scope-sweep')).toMatch(/^PASS scope-sweep: /);
+  });
+
   it('services: an installed, stopped ccd-scope-sweep.timer WARNS — a reboot empties the record, so only `known` sees it', () => {
     const home = healthy('ccrc-doctor-services-scope-sweep-timer-');
     writeUnitFile(home, 'ccd-scope-sweep.timer');

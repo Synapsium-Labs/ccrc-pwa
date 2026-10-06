@@ -6673,8 +6673,12 @@ _check_timeout() {
 # it then rewrites nothing, so its record ages by design — never a stopped timer).
 # CCRC_SCOPE_SWEEP_STATE is the test seam, CCRC_CADDY_SYSTEM_FILE's shape.
 _check_scope-sweep() {
-  local _srv_role="" reg rec hdr tick up mode now age line n nd=0 no=0
+  local _srv_role="" reg rec hdr tick up mode now age line n nd=0 no=0 bad=0 ln=0 stale
   local -a found=()
+  # Every number this function does ARITHMETIC on is bounded here: a leading zero is an octal error that would abort the check
+  # inside `$( … )` (doctor then FAILs it: no verdict line), and an unbounded digit run wraps. The writer re-reads `first=` with the
+  # same bound. Each is ONE capture group, so the group numbers below do not move. A line that fails them is counted, never dropped.
+  local N='(0|[1-9][0-9]{0,15})' M='(0|[1-9][0-9]{0,15}|\?)' O='(-1|0|[1-9][0-9]{0,15})'
   if [ "${CCD_OS:-linux}" = darwin ]; then
     _dr_skip scope-sweep "pane scopes are a Linux mechanism — no sweep runs on this box"; return 3
   fi
@@ -6691,29 +6695,34 @@ _check_scope-sweep() {
     _dr_skip scope-sweep "no verdict record at $rec — the sweep is not installed here, or has not run since its timer was armed or the box booted (\`services\` asks after the timer)"; return 3
   fi
   { IFS= read -r hdr < "$rec"; } 2>/dev/null || hdr=""
-  if ! [[ "$hdr" =~ ^\#\ ccd-scope-sweep\ v1\ tick=([0-9]+)\ up=([0-9]+)\ mode=(shadow|live)$ ]]; then
+  if ! [[ "$hdr" =~ ^\#\ ccd-scope-sweep\ v1\ tick=${N}\ up=${N}\ mode=(shadow|live)$ ]]; then
     _dr_warn scope-sweep "the verdict record at $rec is unreadable or not a v1 record, so its dead scopes cannot be listed" \
       "let the sweep rewrite it: systemctl --user start ccd-scope-sweep.service; then re-run doctor"
     return 2
   fi
   tick=${BASH_REMATCH[1]} up=${BASH_REMATCH[2]} mode=${BASH_REMATCH[3]}
   now=$(date +%s); age=$(( now - tick ))
-  if (( age > ${CCRC_SCOPE_SWEEP_STALE_S:-300} )); then
+  stale=${CCRC_SCOPE_SWEEP_STALE_S:-300}; [[ "$stale" =~ ^[1-9][0-9]{0,8}$ ]] || stale=300   # a non-number would abort the arithmetic below
+  if (( age > stale )); then
     _dr_warn scope-sweep "the verdict record is ${age}s old — the sweep runs every minute, so it has stopped, and its dead-scope report is stale" \
       "systemctl --user status ccd-scope-sweep.timer ccd-scope-sweep.service; journalctl --user -u ccd-scope-sweep.service"
     return 2
   fi
   while IFS= read -r line; do
-    if [[ "$line" =~ ^dead\ (tmux-spawn-[^ ]+\.scope)\ first=([0-9]+)\ .*verdict=([a-z-]+)\ why=([^ ]+)\ server=([a-z]+)\ procs=([0-9]+)\ mem=([0-9]+|\?)\ sockets=([0-9]+)\ youngest=-?[0-9]+\ oldest=([0-9]+)\ age=([0-9]+)\ pids=([0-9,]+)$ ]]; then
+    ln=$((ln + 1)); [ "$ln" -eq 1 ] && continue   # the header, read above
+    if [[ "$line" =~ ^dead\ (tmux-spawn-[^ ]+\.scope)\ first=${N}\ .*verdict=([a-z-]+)\ why=([^ ]+)\ server=([a-z]+)\ procs=([0-9]+)\ mem=${M}\ sockets=([0-9]+)\ youngest=-?[0-9]+\ oldest=${O}\ age=${N}\ pids=([0-9,]+)$ ]]; then
       local -a m=("${BASH_REMATCH[@]}")   # copied first: the `=~` below overwrites BASH_REMATCH
       n=${m[7]}; [[ "$n" =~ ^[0-9]+$ ]] && n="$(( n / 1048576 )) MiB"
       found+=("${m[1]} dead $(( (up - m[2]) / 60 )) min, the scope $(( m[10] / 3600 )) h old, its oldest process $(( m[9] / 3600 )) h: ${m[6]} process(es) (pids ${m[11]}), $n, ${m[8]} socket(s), its server ${m[5]}, ${m[3]} (${m[4]})")
       nd=$((nd + 1))
-    elif [[ "$line" =~ ^old\ (tmux-spawn-[^ ]+\.scope)\ pid=([0-9]+)\ age=([0-9]+)\ comm=([^ ]*)$ ]]; then
+    elif [[ "$line" =~ ^old\ (tmux-spawn-[^ ]+\.scope)\ pid=([0-9]+)\ age=${N}\ comm=([^ ]*)$ ]]; then
       found+=("${BASH_REMATCH[1]} live: pid ${BASH_REMATCH[2]} (${BASH_REMATCH[4]}) running $(( BASH_REMATCH[3] / 3600 )) h")
       no=$((no + 1))
+    elif [ -n "$line" ]; then
+      bad=$((bad + 1))   # a line under a good header that neither shape reads: said, never PASSed over
     fi
   done < "$rec"
+  (( bad )) && found+=("$bad line(s) it cannot read")
   if [ "${#found[@]}" -eq 0 ]; then
     _dr_pass scope-sweep "no dead pane scope, and no process older than a day in a live one (the sweep's record, ${age}s old, mode $mode)"
     return 0
