@@ -8,7 +8,7 @@
 //   the worker.
 // - The tick's wiring runs as the box runs it.
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import type { BigIntStats } from 'node:fs';
 import path from 'node:path';
@@ -17,7 +17,7 @@ import { createHash } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as zc } from 'node:zlib';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
-import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, plantSession, counters, SWEEP, type HistoryBox } from './historyHelpers.js';
+import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, plantSession, counters, journalRecords, spoolLine, SWEEP, type HistoryBox } from './historyHelpers.js';
 import { boundaryRow } from './historyFixtures.js';
 import { createStore, openWriter, closeWriter } from '../../ccd/history/store.mjs';
 import { historyPaths, sha256Hex } from '../../ccd/history/lib.mjs';
@@ -943,6 +943,318 @@ describe('history ingest: chunk writes in-process (plan task 19)', () => {
       expect(n).toBeLessThan(40);
       expect(IX.cursorOf(db, r!.fileId)).toBe(r!.offset);
       expect((db.prepare('SELECT n FROM counters WHERE name = ?').get('capture_paused_low_disk') as { n: number }).n).toBe(1);
+    } finally { db.close(); }
+  });
+});
+
+interface IxSweep {
+  recordTick(db: DatabaseSync, ctx: IxCtx, ing: IxTickResult | null): void;
+}
+const IX_RSS_PRELOAD = path.join(__dirname, 'fixtures', 'history', 'preload-rss.mjs');
+/** O20's bound on the real sweep's peak RSS, in KiB. The spec's 256 MiB is asserted on the floor interpreter, 22.16.0
+ *  (the node-floor CI leg's), where this pass measured 172884 KiB with 2 MiB chunks, and 247412 KiB with 4 MiB chunks once
+ *  task 23 indexes inline. Node 24.14.1 measured 216676 to 270240 KiB for the same pass under load, more after task 23, and
+ *  smaller chunks do not bring it under 256 MiB, so any other interpreter is held to 512 MiB, half the carrier's
+ *  MemoryMax=1G (D-4244). DM47 (task 21) uses the same bound. */
+const IX_RSS_BOUND_KIB = process.version === 'v22.16.0' ? 256 * 1024 : 512 * 1024;
+
+describe('history ingest: budget, backlog and the ticks row (plan task 20)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  let S: IxSweep;
+  let lib: typeof import('../../ccd/history/lib.mjs');
+  beforeAll(async () => { ({ sweep: S, lib } = await IX.api()); });
+  /** `n` rows of about 1.2 KB each, with distinct bodies and uuids from `base`. */
+  const backlog = (n: number, base = 0): string => {
+    const rows: IxRow[] = [];
+    for (let i = 1; i <= n; i += 1) rows.push(IX.user(IX.uuidN(base + i), i === 1 ? null : IX.uuidN(base + i - 1), IX.words(150, base + i), i));
+    return IX.jsonl(rows);
+  };
+  const drain = async (db: DatabaseSync, box: HistoryBox, ids: IxIds, size: number, limits: { maxBytes: number; chunkBytes: number }): Promise<number[]> => {
+    const offsets: number[] = [];
+    for (let tick = 1; tick <= 60; tick += 1) {
+      const ctx = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + tick * 120_000, ids);
+      await S.ingestTick(db, ctx, S.newBudget(Date.now, limits));
+      offsets.push((db.prepare('SELECT offset FROM ingest_files').get() as { offset: number }).offset);
+      if (offsets[offsets.length - 1] === size) break;
+    }
+    return offsets;
+  };
+  /** One in-process tick at `nowMs` with its ticks row; answers that row's files_behind. */
+  const tickBehind = async (db: DatabaseSync, box: HistoryBox, ids: IxIds, nowMs: number, limits?: { maxBytes: number; chunkBytes: number }): Promise<number> => {
+    const ctx = S.makeIngestCtx(box.home, box.homes, nowMs, ids);
+    S.recordTick(db, ctx, await S.ingestTick(db, ctx, S.newBudget(Date.now, limits)));
+    return (db.prepare('SELECT files_behind AS n FROM ticks ORDER BY tick_id DESC LIMIT 1').get() as { n: number }).n;
+  };
+  const counterOf = (db: DatabaseSync, name: string): number | undefined =>
+    (db.prepare('SELECT n FROM counters WHERE name = ?').get(name) as { n: number } | undefined)?.n;
+
+  it('a tick writes one ticks row: bytes read, the lag of the oldest new row of a resumed file (none for a first read), files and bytes behind; eof_ms and last_zero_behind_ms follow', async () => {
+    const box = IX.newBox('ccrc-hist-tick-');
+    const p = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), IX.user(IX.uuidN(2), IX.uuidN(1), 'two', 2)]));
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const t0 = IX.tsMs(0) + 600_000;
+      const tick = async (nowMs: number, limits?: { maxBytes: number; chunkBytes: number }): Promise<void> => {
+        const ctx = S.makeIngestCtx(box.home, box.homes, nowMs, ids);
+        S.recordTick(db, ctx, await S.ingestTick(db, ctx, S.newBudget(Date.now, limits)));
+      };
+      const sizeA = fs.statSync(p).size;
+      const tD = t0 + lib.SCAN_INTERVAL_MS + 1_000;
+      await tick(t0);                                                    // A: both rows new, but a first read: lag unmeasured
+      await tick(t0 + 120_000);                                          // B: nothing new
+      S.recordTick(db, S.makeIngestCtx(box.home, box.homes, t0 + 240_000, ids), null);   // C: a paused tick
+      fs.appendFileSync(p, backlog(3, 100));
+      await tick(tD, { maxBytes: 1, chunkBytes: 64 });                   // D: the scan resumes the file; one line, then the budget
+      const rows = (db.prepare('SELECT ts_ms, lag_ms, bytes, files_behind, bytes_behind FROM ticks ORDER BY tick_id').all() as
+        { ts_ms: number; lag_ms: number | null; bytes: number; files_behind: number; bytes_behind: number }[])
+        .map((r) => ({ ts: r.ts_ms, lag: r.lag_ms, bytes: r.bytes, fb: r.files_behind, bb: r.bytes_behind }));
+      const size = fs.statSync(p).size;
+      const off = (db.prepare('SELECT offset FROM ingest_files').get() as { offset: number }).offset;
+      expect(rows.slice(0, 3)).toEqual([
+        { ts: t0, lag: null, bytes: sizeA, fb: 0, bb: 0 },
+        { ts: t0 + 120_000, lag: 0, bytes: 0, fb: 0, bb: 0 },
+        { ts: t0 + 240_000, lag: null, bytes: 0, fb: 0, bb: 0 },
+      ]);
+      // D's one new row is backlog's first, stamped IX.ts(1), read from a resumed file
+      expect(rows[3]).toMatchObject({ ts: tD, lag: tD - IX.tsMs(1), fb: 1, bb: size - off });
+      // tick A left the file at end-of-file; B examined nothing (no hint, no scan, not behind);
+      // D examined it and left it short, which keeps the old mark
+      expect((db.prepare('SELECT eof_ms FROM ingest_files').get() as { eof_ms: number }).eof_ms).toBe(t0);
+      expect((db.prepare("SELECT v FROM meta WHERE k = 'last_zero_behind_ms'").get() as { v: string }).v).toBe(String(t0 + 240_000));
+      expect(journalRecords(box)).toContainEqual(expect.objectContaining({ k: 'tick', t: tD, lag_ms: tD - IX.tsMs(1) }));
+    } finally { db.close(); }
+  });
+
+  it('O4: a backlog twelve times the run byte budget drains over at least ten ticks: monotone cursor, no duplicates', async () => {
+    const box = IX.newBox('ccrc-hist-o4-');
+    const text = backlog(400);
+    const size = Buffer.byteLength(text);
+    IX.plantCopy(box.homes[0]!, IX.U, text);
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const offsets = await drain(db, box, ids, size, { maxBytes: Math.floor(size / 12), chunkBytes: 1024 });
+      expect(offsets[offsets.length - 1]).toBe(size);
+      expect(offsets.length).toBeGreaterThanOrEqual(10);
+      for (let i = 1; i < offsets.length; i += 1) expect(offsets[i]!).toBeGreaterThan(offsets[i - 1]!);
+      expect(IX.count(db, 'entries')).toBe(400);
+      expect(IX.count(db, 'memberships')).toBe(400);
+    } finally { db.close(); }
+  });
+
+  it('O5: one budget for the run: a clock past 90 s after file 1 defers files 2..n to the next tick', async () => {
+    const box = IX.newBox('ccrc-hist-o5-');
+    plantSession(box, 'claude-demo2', { uuid: IX.U2, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+    plantSession(box, 'claude-demo3', { uuid: IX.U3, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+    [IX.U, IX.U2, IX.U3].forEach((u, k) => IX.plantCopy(box.homes[0]!, u, IX.jsonl([IX.user(IX.uuidN(10 * k + 1), null, `session ${k}`, 1)])));
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const t0 = 1_000_000;
+      // The run's clock reads 91 s later as soon as any entry is committed: after file 1's chunk.
+      const clock = (): number => (IX.count(db, 'entries') > 0 ? t0 + 91_000 : t0);
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget(clock));
+      expect(IX.count(db, 'ingest_files')).toBe(1);
+      expect((db.prepare('SELECT count(DISTINCT transcript_pk) AS n FROM entries').get() as { n: number }).n).toBe(1);
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids), S.newBudget());
+      expect(IX.count(db, 'ingest_files')).toBe(3);   // the cut-short scan ran again
+    } finally { db.close(); }
+  });
+
+  it('O20 (ticks): a file three times the run byte budget is captured over three or more ticks with a monotone cursor', async () => {
+    const box = IX.newBox('ccrc-hist-o20a-');
+    const text = backlog(90);
+    const size = Buffer.byteLength(text);
+    IX.plantCopy(box.homes[0]!, IX.U, text);
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const offsets = await drain(db, box, ids, size, { maxBytes: Math.ceil(size / 3), chunkBytes: 1024 });
+      expect(offsets[offsets.length - 1]).toBe(size);
+      expect(offsets.length).toBeGreaterThanOrEqual(3);
+      for (let i = 1; i < offsets.length; i += 1) expect(offsets[i]!).toBeGreaterThan(offsets[i - 1]!);
+      expect(IX.count(db, 'entries')).toBe(90);
+    } finally { db.close(); }
+  });
+
+  it('O20 (memory): a 96 MiB transcript is captured by the real sweep with peak RSS under O20\'s bound', () => {
+    const box = IX.newBox('ccrc-hist-o20b-');
+    try {
+      const dir = path.join(box.homes[0]!, 'projects', IX.SLUG);
+      fs.mkdirSync(dir, { recursive: true });
+      const fd = fs.openSync(path.join(dir, `${IX.U}.jsonl`), 'w');
+      let rows = 0;
+      try {
+        for (let size = 0, i = 1; size < 96 * 1024 * 1024; i += 1) {
+          const line = `${JSON.stringify(IX.user(IX.uuidN(i), i === 1 ? null : IX.uuidN(i - 1), IX.words(600, i), i))}\n`;
+          fs.writeSync(fd, line);
+          size += Buffer.byteLength(line);
+          rows = i;
+        }
+      } finally { fs.closeSync(fd); }
+      let peak = 0;
+      for (let pass = 0; pass < 2; pass += 1) {
+        const r = runSweep(box, [], { preloads: [IX_RSS_PRELOAD] });
+        expect(r.code, r.stderr).toBe(0);
+        const m = /history-test-maxrss-kib=(\d+)/.exec(r.stderr);
+        expect(m, 'the RSS preload printed nothing').not.toBeNull();
+        peak = Math.max(peak, Number(m![1]));
+      }
+      const db = openStoreRO(box);
+      try { expect(IX.count(db, 'entries')).toBe(rows); } finally { db.close(); }
+      console.log(`O20 peak RSS ${peak} KiB on ${process.version}`);   // the reading the commit records (task 20 step 11)
+      expect(peak).toBeLessThan(IX_RSS_BOUND_KIB);
+    } finally {
+      fs.rmSync(box.home, { recursive: true, force: true });   // 96 MiB plus its store: never left for the file's afterAll alone
+    }
+  }, 300_000);
+
+  it('O22: a write lock held past busy_timeout ends the tick with no partial chunk, and the next tick ingests', async () => {
+    const box = IX.newBox('ccrc-hist-o22-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'held', 1)]));
+    const { db, ids } = await IX.openFixtureStore(box);
+    const holder = spawn(process.execPath, ['--no-warnings', '--input-type=module', '-e',
+      `import { DatabaseSync } from 'node:sqlite';
+       const d = new DatabaseSync(${JSON.stringify(lib.historyPaths(box.home).dbFile)});
+       d.exec('BEGIN IMMEDIATE'); process.stdout.write('held\\n'); setInterval(() => {}, 1000);`],
+      { stdio: ['ignore', 'pipe', 'ignore'], env: box.env, cwd: box.home });
+    const exited = new Promise((resolve) => { holder.once('exit', resolve); });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        holder.stdout!.once('data', () => resolve());
+        void exited.then(() => reject(new Error('the lock holder exited before it held the lock')));
+      });
+      // This connection waits 300 ms rather than the writer's 30 s: a setting on the test's own
+      // connection, not a shipped seam. The sweep's answer to SQLITE_BUSY is what is under test.
+      db.exec('PRAGMA busy_timeout = 300');
+      const r = await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());
+      expect(r.busy).toBe(true);
+    } finally {
+      holder.kill('SIGKILL');
+      await exited;
+    }
+    try {
+      expect(IX.count(db, 'entries')).toBe(0);
+      expect(IX.count(db, 'blobs')).toBe(0);
+      const r2 = await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids), S.newBudget());
+      expect(r2.busy).toBe(false);
+      expect(IX.count(db, 'entries')).toBe(1);
+    } finally { db.close(); }
+  });
+
+  it('a uuid named only by a spool hint is ingested on the next pass, with no periodic scan due', () => {
+    const box = IX.newBox('ccrc-hist-hint-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'first session', 1)]));
+    IX.sweepTwice(box);                                    // the scan has run; the next is 30 min away
+    plantSession(box, 'claude-demo2', { uuid: IX.U2, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+    IX.plantCopy(box.homes[0]!, IX.U2, IX.jsonl([IX.user(IX.uuidN(21), null, 'second session', 21)]));
+    fs.mkdirSync(path.join(box.root, 'spool'), { recursive: true });
+    spoolLine(box, 'claude-demo2', { v: 1, ev: 'Stop', id: 'claude-demo2' });
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    const db = openStoreRO(box);
+    try { expect(IX.count(db, 'entries', `uuid = '${IX.uuidN(21)}'`)).toBe(1); } finally { db.close(); }
+  });
+
+  it('a FIFO at a hinted id\'s .uuid never wedges the pass (D-4299)', () => {
+    const box = IX.newBox('ccrc-hist-hint-fifo-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'first session', 1)]));
+    IX.sweepTwice(box);                                    // the scan has run; the next is 30 min away
+    plantSession(box, 'claude-demo2', { uuid: IX.U2, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+    IX.plantCopy(box.homes[0]!, IX.U2, IX.jsonl([IX.user(IX.uuidN(21), null, 'second session', 21)]));
+    // The id's .uuid is a FIFO with no writer: a bare open(2) of it blocks for ever, which no run budget can interrupt.
+    const uuidFile = path.join(box.reg, 'claude-demo2.uuid');
+    fs.rmSync(uuidFile);
+    expect(spawnSync('mkfifo', [uuidFile]).status).toBe(0);
+    spoolLine(box, 'claude-demo2', { v: 1, ev: 'Stop', id: 'claude-demo2' });
+    const r = runSweep(box, [], { timeoutMs: 5000 });
+    expect(r.code, 'hint read blocked on a FIFO').toBe(0);
+    const db = openStoreRO(box);
+    try { expect(IX.count(db, 'entries', `uuid = '${IX.uuidN(21)}'`)).toBe(0); } finally { db.close(); }   // a FIFO hints nothing
+  });
+
+  it('behind counts only what a later tick can read: a copy replaced at its path by a new inode is not behind', async () => {
+    const box = IX.newBox('ccrc-hist-behind-repl-');
+    const p = IX.plantCopy(box.homes[0]!, IX.U, backlog(4));
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const t0 = IX.tsMs(0) + 60_000;
+      expect(await tickBehind(db, box, ids, t0, { maxBytes: 1, chunkBytes: 64 })).toBe(1);   // CONTROL: one line read, behind
+      // A carry's `cp --remove-destination`: a new inode at the same path. The old inode stays allocated under another
+      // name outside projects/, so the new file cannot reuse its number and the old row keeps its own identity.
+      fs.renameSync(p, path.join(box.home, 'held-inode'));
+      fs.writeFileSync(p, backlog(2, 10));
+      expect(await tickBehind(db, box, ids, t0 + 120_000)).toBe(0);
+      expect(IX.count(db, 'ingest_files')).toBe(2);                                          // the old row stays, pathless
+    } finally { db.close(); }
+  });
+
+  it('behind counts only what a later tick can read: a deleted copy is gone, counted file_missing once, and not behind', async () => {
+    const box = IX.newBox('ccrc-hist-behind-del-');
+    const p = IX.plantCopy(box.homes[0]!, IX.U, backlog(4));
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const t0 = IX.tsMs(0) + 60_000;
+      expect(await tickBehind(db, box, ids, t0, { maxBytes: 1, chunkBytes: 64 })).toBe(1);   // CONTROL: behind
+      fs.rmSync(p);
+      expect(await tickBehind(db, box, ids, t0 + 120_000)).toBe(0);
+      expect(await tickBehind(db, box, ids, t0 + 240_000)).toBe(0);
+      expect(counterOf(db, 'file_missing')).toBe(1);        // a gone row is not re-read every tick
+    } finally { db.close(); }
+  });
+
+  it('behind counts only what a later tick can read: a tail with no newline that nobody wrote for a scan interval is not behind', async () => {
+    const box = IX.newBox('ccrc-hist-behind-torn-');
+    const p = IX.plantCopy(box.homes[0]!, IX.U, `${backlog(2)}{"type":"user","uuid":"${IX.uuidN(9)}","mess`);
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const now = Date.now();
+      // CONTROL: a tail written just now may still be finished, so the file is behind
+      expect(await tickBehind(db, box, ids, now)).toBe(1);
+      const stale = new Date(now - 2 * lib.SCAN_INTERVAL_MS);
+      fs.utimesSync(p, stale, stale);
+      expect(await tickBehind(db, box, ids, now + 120_000)).toBe(0);
+      expect(IX.count(db, 'entries')).toBe(2);
+    } finally { db.close(); }
+  });
+
+  it('DM20 (cursor clause): two hardlinked paths of one transcript in two homes bind one row, and the cursor advances once', async () => {
+    const box = IX.newBox('ccrc-hist-dm20c-');
+    const text = IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), IX.user(IX.uuidN(2), IX.uuidN(1), 'two', 2)]);
+    const p = IX.plantCopy(box.homes[0]!, IX.U, text);
+    const dir1 = path.join(box.homes[1]!, 'projects', IX.SLUG);
+    fs.mkdirSync(dir1, { recursive: true });
+    const q = path.join(dir1, `${IX.U}.jsonl`);
+    fs.linkSync(p, q);
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const ctx = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids);
+      const b = S.newBudget();
+      const r1 = await S.ingestPath(db, ctx, { path: p, uuid: IX.U, home: box.homes[0]! }, b);
+      const r2 = await S.ingestPath(db, ctx, { path: q, uuid: IX.U, home: box.homes[1]! }, b);
+      expect(r2!.fileId).toBe(r1!.fileId);
+      expect({ first: r1!.bytes, second: r2!.bytes, run: b.bytes }).toEqual({ first: Buffer.byteLength(text), second: 0, run: Buffer.byteLength(text) });
+      expect(IX.count(db, 'ingest_files')).toBe(1);
+      expect(IX.count(db, 'file_paths')).toBe(2);
+      expect(IX.count(db, 'memberships')).toBe(2);
+      expect(IX.cursorOf(db, r1!.fileId)).toBe(Buffer.byteLength(text));
+    } finally { db.close(); }
+  });
+
+  it('a session read before its epoch is chained still gets its launch facts once the epoch confirms', () => {
+    const box = IX.newBox('ccrc-hist-facts-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'first session', 1)]));
+    IX.sweepTwice(box);                                    // the scan has run; the next is 30 min away
+    plantSession(box, 'claude-demo2', { uuid: IX.U2, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+    IX.plantCopy(box.homes[0]!, IX.U2, IX.jsonl([IX.user(IX.uuidN(21), null, 'second session', 21)]));
+    spoolLine(box, 'claude-demo2', { v: 1, ev: 'SessionStart', id: 'claude-demo2', sid: IX.U2, src: 'startup', reg: IX.U2 });
+    // Pass N renames the startup line and, hinted by its id's $REG uuid, reads U2's transcript from 0 before any U2
+    // epoch exists. Pass N+1 drains the line, which chains and confirms U2's epoch, with the transcript at its end.
+    for (let i = 0; i < 2; i += 1) { const r = runSweep(box); expect(r.code, r.stderr).toBe(0); }
+    const db = openStoreRO(box);
+    try {
+      const ep = db.prepare('SELECT started_ms, cwd, git_branch, confirmed_ms FROM epochs WHERE cc_session_uuid = ?').get(IX.U2) as
+        { started_ms: number | null; cwd: string | null; git_branch: string | null; confirmed_ms: number | null };
+      expect(ep.confirmed_ms).not.toBeNull();             // CONTROL: the epoch was chained and confirmed
+      expect({ started: ep.started_ms, cwd: ep.cwd, branch: ep.git_branch })
+        .toEqual({ started: IX.tsMs(21), cwd: '/home/u/tree', branch: 'main' });
     } finally { db.close(); }
   });
 });

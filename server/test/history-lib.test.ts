@@ -1714,3 +1714,18 @@ describe('lib: ingest row helpers (plan task 19)', () => {
     expect(Object.isFrozen(lib.ROW_TYPES) && Object.isFrozen(lib.RAW_ROW) && Object.isFrozen(lib.PARSE_STATE)).toBe(true);
   });
 });
+
+describe('lib: lagOfTick (plan task 20)', () => {
+  it('is the wait of the oldest newly captured row, 0 with nothing new, null when unmeasurable, never negative', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.lagOfTick({ tickStartMs: 10_000, newEntries: 3, minNewTsMs: 4_000 })).toBe(6_000);
+    expect(lib.lagOfTick({ tickStartMs: 10_000, newEntries: 0, minNewTsMs: null })).toBe(0);
+    expect(lib.lagOfTick({ tickStartMs: 10_000, newEntries: 2, minNewTsMs: null })).toBeNull();
+    expect(lib.lagOfTick({ tickStartMs: 10_000, newEntries: 1, minNewTsMs: 12_000 })).toBe(0);
+  });
+  it('CHUNK_BYTES is 2 MiB, within the spec bound of 16 MiB, and LINE_MAX stays 16 MiB', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.CHUNK_BYTES).toBe(2 * 1024 * 1024);
+    expect(lib.LINE_MAX).toBe(16 * 1024 * 1024);
+  });
+});

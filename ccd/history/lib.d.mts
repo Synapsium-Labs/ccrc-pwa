@@ -289,3 +289,4 @@ export function toolUsesOf(content: unknown): ToolUse[];
 export function toolResultIdsOf(content: unknown): string[];
 export function rawRowKey(ccSessionUuid: string, rawShaHex: string): string;
 export function launchFactsOf(row: unknown): { cwd: string | null; gitBranch: string | null };
+export function lagOfTick(i: { tickStartMs: number; newEntries: number; minNewTsMs: number | null }): number | null;

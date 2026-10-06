@@ -117,7 +117,8 @@ export const REPARSE_MAX_TARGETS = 500;
 export const CARRIER_KILL_S = 600;                  // == the unit's TimeoutStartSec=10min (DM43)
 export const EXPORT_MARGIN_DAYS = 30;
 export const LINE_MAX = 16 * 1024 * 1024;           // a longer transcript line is stored raw-only
-export const CHUNK_BYTES = 16 * 1024 * 1024;        // parsed lines per ingest transaction
+// 2 MiB, within §9.2's "≤16 MiB": the most headroom under O20's 256 MiB on Node 22.16.0 (whole sweep 172884 KiB; 4 MiB chunks: 210824 KiB, 247412 KiB once FTS indexes inline) (plan tasks 20, 23; D-4244).
+export const CHUNK_BYTES = 2 * 1024 * 1024;         // parsed lines per ingest transaction
 export const RUN_BUDGET_MS = 90_000;                // one budget per run, never reset per file
 export const RUN_BUDGET_BYTES = 512 * 1024 * 1024;
 export const CAP_DEFAULT_GB = 50;
@@ -1835,4 +1836,16 @@ export function launchFactsOf(row) {
     cwd: typeof o.cwd === 'string' ? o.cwd : null,
     gitBranch: typeof o.gitBranch === 'string' ? o.gitBranch : null,
   };
+}
+
+/** A tick's lag (ticks.lag_ms; W1-b's series, §10.7): how long the oldest message this tick
+ *  captured for the FIRST time had waited, from its own timestamp to the tick's start. The sweep
+ *  passes only resumed files' timestamps (a first read is discovery, not capture lag; plan task
+ *  20). 0 when the tick captured nothing new; null (unmeasured) when it captured rows none of
+ *  which carried a timestamp it passes. Never negative: a row stamped ahead of the box's clock
+ *  reads 0. */
+export function lagOfTick({ tickStartMs, newEntries, minNewTsMs }) {
+  if (newEntries === 0) return 0;
+  if (minNewTsMs === null) return null;
+  return Math.max(0, tickStartMs - minNewTsMs);
 }

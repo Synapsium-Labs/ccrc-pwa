@@ -38,7 +38,7 @@ import {
   passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText,
   CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
-  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf,
+  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick,
 } from './lib.mjs';
 import {
   StoreError, bump, closeWriter, createStore, dropPending, finishPending, getMeta, measureStoreFacts, openReader,
@@ -1396,7 +1396,13 @@ export async function tick(db, ctx) {
   // an unreadable roster discovers nothing, as Task 18's line did (§9.2 step 2). The ingest probes the
   // free-space floor on db/ before every chunk (§9.3, BK17).
   const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir));
-  if (ctx.ingest && !ctx.rosterUnreadable) await ingestTick(db, ictx, ctx.budget);
+  // §9.2 steps 2-5 and 7: one budget for the run; a busy store ends the tick (O22).
+  const ing = ctx.ingest && !ctx.rosterUnreadable ? await ingestTick(db, ictx, ctx.budget) : null;
+  if (ing !== null && ing.busy) return;   // the write lock is another's: nothing more this tick
+  // §6.2 epochs: launch facts an epoch chained after its transcript's first chunk missed (plan task 20).
+  if (ing !== null) backfillEpochFacts(db, ictx);
+  // §9.2 step 6: the tick's row and journal record. A paused ingest records an unmeasured lag.
+  recordTick(db, ictx, ing);
   if (scan && !ctx.rosterUnreadable) markScan(db, ctx.now());
   // <<< history tick steps
   mkdirSync(ctx.paths.spool, { recursive: true, mode: 0o700 });
@@ -1525,10 +1531,15 @@ export async function runPass(argv, deps = {}) {
         journalHalf(home, null, now());
         return say('held');
       }
-      await tick(db, {
-        home, paths: P, parsed, plan, free, now,
-        ids, homes: parsed.homes, rosterUnreadable: parsed.rosterUnreadable, out, ingest: plan.ingest, budget: newBudget(now),
-      });
+      try {
+        await tick(db, {
+          home, paths: P, parsed, plan, free, now,
+          ids, homes: parsed.homes, rosterUnreadable: parsed.rosterUnreadable, out, ingest: plan.ingest, budget: newBudget(now),
+        });
+      } catch (e) {
+        // §9.10: another connection held the write lock past busy_timeout. The tick ends; the next tick retries.
+        if (!isBusy(e)) throw e;
+      }
     } finally {
       closeWriter(db);
     }
@@ -2019,23 +2030,243 @@ export function makeIngestCtx(home, homes, nowMs, ids, floorProbe = FLOOR_ALWAYS
   return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe };
 }
 
-/** One tick's ingest (§9.2 steps 2-5): every transcript of every known uuid, in discovery order,
- *  under the run's one budget. history-off ends it between files as it does between chunks; the
- *  free-space floor ends the run's ingest (`paused`). */
+// ---------------------------------------------------------------------------------------------
+// The tick's ingest and its accounting (§9.2 steps 2, 6-7; plan task 20).
+// ---------------------------------------------------------------------------------------------
+
+/** The meta key holding when the periodic scan last examined every known uuid's files. */
+const SCAN_META = 'scan_discover_ms';
+
+/** SQLITE_BUSY (5) and its extended codes: another connection held the write lock past
+ *  busy_timeout. The tick ends and is retried next tick (§9.10). */
+export function isBusy(e) {
+  return e !== null && typeof e === 'object' && typeof e.errcode === 'number' && (e.errcode & 0xff) === 5;
+}
+
+/** A tail with no '\n' in a file nobody has written for this long is not a line still being
+ *  written: its bytes are no message a later tick can read, so they are not counted behind. */
+const TORN_STALE_MS = SCAN_INTERVAL_MS;
+/** Epochs per tick whose missed launch facts backfillEpochFacts fills in. */
+const EPOCH_FACTS_MAX = 32;
+
+const TICK_STMTS = new WeakMap();
+function tickStmts(db) {
+  let t = TICK_STMTS.get(db);
+  if (t !== undefined) return t;
+  t = {
+    // The id's two most recently confirmed epochs: its current one, and the one a just-confirmed /clear replaced.
+    epochsOfId: db.prepare(`SELECT e.cc_session_uuid AS u FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk
+      WHERE s.ccrc_id = ? AND e.confirmed_ms IS NOT NULL ORDER BY e.confirmed_ms DESC LIMIT 2`),
+    // "Behind" is a live row a path still names, short of its last measured size: bytes a later tick can read.
+    behindPaths: db.prepare(`SELECT p.path AS path, t.cc_session_uuid AS uuid FROM ingest_files f
+      JOIN file_paths p ON p.file_id = f.file_id JOIN transcripts t ON t.transcript_pk = f.transcript_pk
+      WHERE f.source_key = '' AND f.status = 'live' AND f.size > f.offset ORDER BY p.path`),
+    // Examination is proof the file is there: a gone row it finds again is live (Task 19's markGoneIfPathless).
+    examined: db.prepare("UPDATE ingest_files SET size = ?, mtime_ns = ?, eof_ms = coalesce(?, eof_ms), status = 'live' WHERE file_id = ?"),
+    behindStats: db.prepare(`SELECT count(*) AS files, coalesce(sum(f.size - f.offset), 0) AS bytes FROM ingest_files f
+      WHERE f.source_key = '' AND f.status = 'live' AND f.size > f.offset
+        AND EXISTS (SELECT 1 FROM file_paths p WHERE p.file_id = f.file_id)`),
+    tickIns: db.prepare('INSERT INTO ticks (ts_ms, lag_ms, bytes, files_behind, bytes_behind) VALUES (?, ?, ?, ?, ?)'),
+    factless: db.prepare(`SELECT e.cc_session_uuid AS uuid, min(p.path) AS path FROM epochs e
+      JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid AND t.agent_id = ''
+      JOIN ingest_files f ON f.transcript_pk = t.transcript_pk AND f.source_key = '' AND f.offset > 0
+      JOIN file_paths p ON p.file_id = f.file_id
+      WHERE e.confirmed_ms IS NOT NULL AND e.started_ms IS NULL AND e.cwd IS NULL AND e.git_branch IS NULL
+      GROUP BY e.cc_session_uuid ORDER BY random() LIMIT ?`),
+  };
+  TICK_STMTS.set(db, t);
+  return t;
+}
+
+/** The size recorded for an examined file: its measured size, except that a tail with no '\n' in a
+ *  file unwritten for TORN_STALE_MS counts as read (the cursor, the end of its last whole line). The
+ *  file is read again as soon as it changes: bindFile records the new size when it is bound. */
+function examinedSize(r, nowMs) {
+  if (r.tornAt === undefined) return r.size;
+  return nowMs - Number(r.mtimeNs / 1_000_000n) >= TORN_STALE_MS ? r.tornAt : r.size;
+}
+
+/** Whether this tick's ingest runs the periodic discovery scan: never run, or SCAN_INTERVAL_MS since
+ *  the last one that examined every candidate (a budget-cut scan runs again next tick). Its clock is
+ *  meta `scan_discover_ms`; Task 17's exported `scanDue`/`markScan` keep `scan_ms` for the registry
+ *  backfill, a separate clock, so the two names never collide in this module. */
+function ingestScanDue(db, nowMs) {
+  const last = getMeta(db, SCAN_META);
+  return last === null || nowMs - Number(last) >= SCAN_INTERVAL_MS;
+}
+
+/** `$REG/<id>.uuid` when it holds a uuid, else null. A discovery hint only: no epoch is decided
+ *  from it here (§9.2 step 1 decides from the observation sidecar). The read is type-checked before
+ *  the open (readRegPresence, the `_reg_read` lesson, as knownUuids): a FIFO or a link to /dev/zero at
+ *  a hinted id's path would otherwise block this pass in open(2) or read(2), which no run budget can
+ *  interrupt, so a FIFO hints nothing (D-4299, slug history-reg-uuid-read-type-checked). */
+function readRegUuid(home, id) {
+  const v = readRegPresence(`${historyPaths(home).reg}/${id}.uuid`);
+  return v.state === 'value' && UUID_RE.test(v.value) ? v.value : null;
+}
+
+/** The uuids the spool hints at this tick. These are every id with a file in `spool/.draining/`
+ *  (renamed this tick, or held): that id's two most recently confirmed epochs, and its
+ *  `$REG/<id>.uuid`. Not every epoch the id ever had: a long-lived id's older transcripts are
+ *  done, or behind (behindFiles), and re-binding them all on every Stop line is waste. */
+function hintedUuids(db, home) {
+  let names;
+  try { names = readdirSync(historyPaths(home).draining); } catch { return new Set(); }
+  const uuids = new Set();
+  const t = tickStmts(db);
+  for (const n of names) {
+    if (n.startsWith('.') || !n.endsWith('.jsonl')) continue;
+    const id = idOfDrainingName(n);
+    if (!idOk(id)) continue;
+    for (const r of t.epochsOfId.all(id)) uuids.add(r.u);
+    const reg = readRegUuid(home, id);
+    if (reg !== null) uuids.add(reg);
+  }
+  return uuids;
+}
+
+/** Files a cursor left short of their last measured size, each under the rostered home that holds
+ *  it. A path whose home is no longer rostered is not read. */
+function behindFiles(db, homes) {
+  const out = [];
+  for (const r of tickStmts(db).behindPaths.all()) {
+    const home = homes.find((h) => r.path.startsWith(`${h}/projects/`));
+    if (home !== undefined) out.push({ path: r.path, uuid: r.uuid, home });
+  }
+  return out;
+}
+
+/** This tick's candidate files, in order: hinted (fresh activity, so the lowest lag), then behind
+ *  (the backlog), then, at the periodic scan, every known uuid's files; each path once. `uuids` is
+ *  the uuid set the files came from (task 21 takes their sidecars). */
+export function candidateFiles(db, ctx, scan) {
+  const hinted = hintedUuids(db, ctx.home);
+  const uuids = new Set(hinted);
+  const files = [];
+  const seen = new Set();
+  const take = (list) => {
+    for (const f of list) {
+      uuids.add(f.uuid);
+      if (!seen.has(f.path)) { seen.add(f.path); files.push(f); }
+    }
+  };
+  take(discoverTranscripts(ctx.homes, hinted));
+  take(behindFiles(db, ctx.homes));
+  if (scan) {
+    const known = knownUuids(db, ctx.home);
+    for (const u of known) uuids.add(u);
+    take(discoverTranscripts(ctx.homes, known));
+  }
+  return { files, uuids };
+}
+
+/** Every examined file's measured size and mtime, `eof_ms` for those left at end-of-file, and the
+ *  scan mark when this tick's scan examined every candidate: one transaction. */
+function recordExamined(db, ctx, examined, scanDone) {
+  const t = tickStmts(db);
+  withTx(db, 'NORMAL', () => {
+    for (const f of examined) t.examined.run(f.size, f.mtimeNs, f.atEof ? ctx.nowMs : null, f.fileId);
+    if (scanDone) setMeta(db, SCAN_META, String(ctx.nowMs));
+  });
+}
+
+/** One tick's ingest (§9.2 steps 2-5, 7; slug history-ingest-by-cursor, D-4236): the candidates in
+ *  candidateFiles' order, under the run's ONE budget, which is never reset per file (O5). A busy database ends the tick with no partial
+ *  chunk (O22): every chunk is its own transaction, and the one that met the lock never began. The
+ *  free-space floor (Task 19's per-chunk probe) ends the run's ingest: `paused`. */
 export async function ingestTick(db, ctx, budget) {
+  const scan = ingestScanDue(db, ctx.nowMs);
+  const { files } = candidateFiles(db, ctx, scan);
+  const examined = [];
   let bytes = 0;
   let newEntries = 0;
   let minNewTsMs = null;
-  for (const f of discoverTranscripts(ctx.homes, knownUuids(db, ctx.home))) {
-    if (!budgetLeft(budget) || ctx.historyOff()) break;
-    const r = await ingestPath(db, ctx, f, budget);
-    if (r === null) continue;
-    bytes += r.bytes;
-    newEntries += r.newEntries;
-    if (r.minNewTsMs !== null) minNewTsMs = minNewTsMs === null ? r.minNewTsMs : Math.min(minNewTsMs, r.minNewTsMs);
-    if (r.floor !== undefined) return { busy: false, bytes, newEntries, minNewTsMs, paused: true };
+  let complete = true;
+  let paused = false;
+  try {
+    for (const f of files) {
+      if (!budgetLeft(budget) || ctx.historyOff()) { complete = false; break; }
+      const r = await ingestPath(db, ctx, f, budget);
+      if (r === null) continue;
+      examined.push({ fileId: r.fileId, size: examinedSize(r, ctx.nowMs), mtimeNs: r.mtimeNs, atEof: r.atEof });
+      bytes += r.bytes;
+      newEntries += r.newEntries;
+      if (r.minNewTsMs !== null) minNewTsMs = minNewTsMs === null ? r.minNewTsMs : Math.min(minNewTsMs, r.minNewTsMs);
+      if (r.floor !== undefined) { paused = true; complete = false; break; }
+    }
+    recordExamined(db, ctx, examined, scan && complete);
+  } catch (e) {
+    if (!isBusy(e)) throw e;
+    return { busy: true, bytes, newEntries, minNewTsMs, paused };
   }
-  return { busy: false, bytes, newEntries, minNewTsMs, paused: false };
+  return { busy: false, bytes, newEntries, minNewTsMs, paused };
+}
+
+/** The first uuid row of an admitted file, from its first FIRST_ROW_SCAN bytes (Task 17's bound for
+ *  the location rule's read); undefined when no whole uuid row lies there. */
+function firstUuidRowOf(fd) {
+  const b = Buffer.alloc(FIRST_ROW_SCAN);
+  const n = readSync(fd, b, 0, b.length, 0);
+  const lines = b.subarray(0, n).toString('utf8').split('\n');
+  lines.pop();   // the last piece has no newline yet, so it is never a whole row
+  for (const line of lines) {
+    let row;
+    try { row = JSON.parse(line); } catch { continue; }
+    if (row !== null && typeof row === 'object' && typeof row.uuid === 'string' && row.uuid !== '') return row;
+  }
+  return undefined;
+}
+
+/** Launch facts an epoch missed (§2, §6.2 `epochs`; slug history-epoch-cwd-real for `cwd_real`).
+ *  A transcript's first chunk writes them only when its epochs row already exists, and a spool hint
+ *  or a registry uuid can have the transcript read one tick before the drain chains the epoch. So,
+ *  after the ingest, each confirmed epoch still holding no fact, whose transcript a cursor has read
+ *  from, takes them from that file's first uuid row: read through admission, bounded to
+ *  FIRST_ROW_SCAN bytes, EPOCH_FACTS_MAX epochs a tick in random order, so an epoch whose first row
+ *  cannot be read never starves the rest. */
+export function backfillEpochFacts(db, ctx) {
+  const s = stmts(db);
+  for (const r of tickStmts(db).factless.all(EPOCH_FACTS_MAX)) {
+    const home = ctx.homes.find((h) => r.path.startsWith(`${h}/projects/`));
+    if (home === undefined) continue;
+    const a = admitFile(r.path, home, ctx.homes, ctx.home);
+    if (!a.ok) continue;
+    let row;
+    try { row = firstUuidRowOf(a.fd); } finally { closeSync(a.fd); }
+    if (row === undefined) continue;
+    const f = launchFactsOf(row);
+    let cwdReal = null;
+    let unresolved = false;
+    if (f.cwd !== null) { try { cwdReal = realpathSync(f.cwd); } catch { unresolved = true; } }
+    withTx(db, 'NORMAL', () => {
+      s.epochFacts.run(entryOf(row, { apiBlockIndex: null }).tsMs, f.cwd, f.gitBranch, cwdReal, r.uuid);
+      if (unresolved) bump(db, 'cwd_unresolved');
+    });
+  }
+}
+
+/** The tick's `ticks` row and its journal `tick` record (§9.2 step 6; W1-b, doctor's catching-up; slug
+ *  history-event-tables-v1, D-4213).
+ *  `ing` is ingestTick's answer, or null when a cap or floor pause skipped ingest; the lag is then
+ *  unmeasured (NULL), never a reassuring 0. Files and bytes behind count live rows that a path
+ *  still names, short of their last examined size (examinedSize): bytes a later tick can read.
+ *  meta `last_zero_behind_ms` is the newest tick with none behind,
+ *  and it is status's lag (task 27). A failed journal append is counted, never thrown: the tick
+ *  record is a copy of this row, not the source of anything. */
+export function recordTick(db, ctx, ing) {
+  const t = tickStmts(db);
+  const lagMs = ing === null ? null : lagOfTick({ tickStartMs: ctx.nowMs, newEntries: ing.newEntries, minNewTsMs: ing.minNewTsMs });
+  withTx(db, 'NORMAL', () => {
+    const behind = t.behindStats.get();
+    t.tickIns.run(ctx.nowMs, lagMs, ing === null ? 0 : ing.bytes, behind.files, behind.bytes);
+    if (behind.files === 0) setMeta(db, 'last_zero_behind_ms', String(ctx.nowMs));
+  });
+  try {
+    appendJournal(ctx.home, ctx.ids, [journalRecord('tick', ctx.nowMs, { lag_ms: lagMs })], ctx.nowMs);
+  } catch (e) {
+    if (!(e instanceof JournalError)) throw e;
+    withTx(db, 'NORMAL', () => { bump(db, 'journal_write_failed'); });
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
