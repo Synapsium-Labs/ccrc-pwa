@@ -3,11 +3,18 @@
 > **Status: PLANNED 2026-10-05 on `main` `d12b5aba0` — ready for dispatch** (programme session-continuity, CCR-18;
 > wave 4 = run 274, planned). The prototype was built on `77f8d63a5` (#250, wave 3's merge); `main` then took #282 and
 > #283, which touch `README.md`, `CLAUDE.md` and child-reclamation documents only, so the prototype merged them, every
-> README anchor was re-cut, and every block below was replayed onto an export of `d12b5aba0`.
+> README anchor was re-cut, and every block below was replayed onto an export of `d12b5aba0`. **Revised 2026-10-06**
+> after four review lenses (spec, safety, replay, tests): every finding applied or rejected with its reason (Pre-flight
+> 14), the prototype rebuilt, every changed count and every mutation row re-measured, and the whole document replayed
+> onto `d12b5aba0` again. `main` then took #287 (`d2bac7ae6`: `README.md`, `agent/test/deploy-verify.test.ts`,
+> `ccd/ccrc`, `deploy/deploy.sh`, `server/test/ccrc-doctor.test.ts` among its files): this document replays onto
+> `d2bac7ae6` too — every anchor exactly once — and the result is byte-identical to the revised prototype merged with
+> it (a clean `git merge`). Counts below are at `d12b5aba0` unless they say otherwise; Pre-flight 15 has the merged
+> tree's.
 >
 > 1. **Prototype-first.** Every block below marked `<!-- replay: … -->` is the prototype's bytes. A replay of this
 >    document onto an export of `d12b5aba0` (each `replace` anchor asserted to match exactly once in its file at its
->    turn) followed by `ccrc restamp ccd/ccd` is byte-identical to the prototype on all 25 files it touches. Each task's
+>    turn) followed by `ccrc restamp ccd/ccd` is byte-identical to the prototype on all 27 files it touches. Each task's
 >    tests were measured red on the previous task's tree and green on its own, and every mutation row was measured on
 >    the full prototype, each mutation applied to a saved copy of the file and restored from that copy (`cmp`-checked).
 > 2. **Task 1 is wave 3's residue and this wave's FIRST commit** — review 272 (run 272 of run 248, at `f6faff4c`), F1–F11,
@@ -18,8 +25,11 @@
 > 3. **Deviation numbers are the coordinator's.** The block issued for this wave's WORKER is 4012 to 4021, written bare;
 >    this plan defines none. Departures are named below as slugs only.
 > 4. **Not in this wave** (the coordinator's rulings B and E): `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the
->    spawn environment (wave 4b, after the baseline week this wave's deploy starts), ccd stopping a pane's scope when it
->    ends the pane (needs stage 3), and the `/clear` fix wave 3 deferred (wave 4b, beside the spawn variable).
+>    spawn environment (wave 4b, after the baseline week this wave's deploy starts — so the spec's "ships first" is
+>    amended in rev 8, departure `pressure-reap-variable-ships-after-baseline-b`) with §9's pressure-kill metric that
+>    measures it, ccd stopping a pane's scope when it ends the pane (needs stage 3), doctor recording what the operator
+>    stopped (spec §6, §7: not in ruling B's list), and the `/clear` fix wave 3 deferred (wave 4b, beside the spawn
+>    variable). "Carried" below lists each.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -30,9 +40,10 @@ guarded lines, the argless drift arm and ws-restore after ws-archive are pinned 
 instrument's key note and wave 3's mutation cells say what the code does — and then give the fleet box the collector
 spec §1.3 found missing: `ccd-scope-sweep`, a one-minute oneshot beside `ccd-cap-scopes` that records every dead ccd
 pane scope with the stop predicates it passes or fails, issues `systemctl --user stop --no-block` on an inert one ONLY
-when the operator has armed it, and never touches a scope that is not a ccd pane's; `ccrc doctor` reading that record;
-`deploy/measure-continuity.py --stage 6` counting the OOM stops of the pressure reap's own class, so the week after this
-deploy is baseline B; and the limit-banner test harness killing its child's whole process group on timeout.
+when the operator has armed it (at most three a tick), and never touches a scope that is not a ccd pane's; `ccrc doctor`
+reading that record; `deploy/measure-continuity.py --stage 6` counting the OOM stops of the pressure reap's own class,
+so the week after this deploy is baseline B, and reading off the record the inert scopes that survive a day; and the
+timed test harness (limit-banner's, and auto-compact's copy of it) killing its child's whole process group on timeout.
 
 **Architecture:** Task 1 edits wave 3's section of `ccd/ccd` in place (`_operator_choice_keep`'s loop and reader,
 `_operator_choice_unmark`, the section's header comments — all below the frozen citation corpus's last cited line, so
@@ -44,7 +55,8 @@ shape, fixture-portable), with its own `deploy/systemd/ccd-scope-sweep.{service,
 `gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES`, the lifecycle registry — gated off `--role server` like the reaper. Doctor
 gains ONE check, `scope-sweep`, appended at the END of `ccrc-doctor-checks` with its table entry sharing `scopes`'
 line (lines above are cited by number), and `ccd-scope-sweep.timer` joins `_check_services`' `known`. The instrument
-gains `stage6` and one `--journal` flag.
+gains `stage6` and one `--journal` flag. The forking harness moves to `ccdWsHelpers.ts` as `BOUNDED`, used by both
+timed FIFO cases.
 
 **Tech Stack:** bash 5.2 (`ccd/ccd`, `ccd/ccd-scope-sweep`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`; `set -uo pipefail`,
 no `-e`), python 3 (`deploy/measure-continuity.py`, read-only), TypeScript + vitest 4.1 (tests), systemd user units.
@@ -108,10 +120,11 @@ implicitly include this section.
   box.
 - **Rings / no overloaded null.** `ccd-scope-sweep`'s record keeps distinct words for distinct states, never folded:
   a scope it could not measure is NOT recorded anew (its previous line is carried unchanged), a dead scope is `report`
-  (with every failing predicate named in `why=`), `would-stop` (inert, shadowed), `stopped` or `stop-failed` (armed);
-  a recycled server pid is `server=reused`, a vanished one `server=gone`, ccd's live one `server=ccd`. Doctor's
-  `scope-sweep` keeps "no record" (SKIP), "a record it cannot read" (WARN), "a stale record" (WARN) and "dead scopes"
-  (WARN) apart. `_operator_choice_keep` stays rc 0 on every path.
+  (with every failing predicate named in `why=`), `would-stop` (inert, shadowed), `stopped`, `stop-failed` or `held`
+  (inert and armed, past the tick's stop budget); a recycled server pid is `server=reused`, a vanished one
+  `server=gone`, ccd's live one `server=ccd`. Doctor's `scope-sweep` keeps "no record" (SKIP), "paused by the operator"
+  (SKIP), "a record it cannot read" (WARN), "a stale record" (WARN) and "dead scopes" (WARN) apart; the instrument's
+  inert count keeps an absent record (`absent`) apart from zero. `_operator_choice_keep` stays rc 0 on every path.
 - **Wire discipline.** No frame changes; `FLEET_PROTO` untouched; no server or agent code reads the sweep's record or
   its journal lines (measured at `d12b5aba0`: `grep -rn 'scope-sweep' server/src agent/src shared pwa/src` → only the
   `shared/lifecycle.ts` declaration Task 4 adds).
@@ -146,7 +159,8 @@ implicitly include this section.
   (run 245) edits `ccd/ccd`'s RECLAIM/EXPIRE regions and the spawn paths; delegation-broker's run 271 edits
   `ccd/session-hook.sh`. This wave edits `ccd/ccd` (wave 3's section only), `ccd/ccrc-doctor-checks` (the table line
   holding `scopes`, `_check_services`' `known` line and one `why` case, and an appended function) and
-  `ccrc-doctor.test.ts` (`doctorEnv`, `healthy()`, `HEALTHY_SKIPS`, an appended describe). Whichever lands SECOND runs
+  `ccrc-doctor.test.ts` (`doctorEnv`, `healthy()`, `HEALTHY_SKIPS`, an appended describe), and appends `BOUNDED` to
+  `server/test/ccdWsHelpers.ts` (imported by every ccd suite: a hunk there is kept both sides). Whichever lands SECOND runs
   `git merge origin/main` (NEVER a rebase), keeps both sides of any hunk in those files (a `known` list holds both
   sides' names; `HEALTHY_SKIPS` counts both sides' skips), re-stamps `ccd/ccd`, and re-runs the citation cases,
   `cite-remeasure.py` and the `_reg_get` census before its final gate (Task 8 Step 1).
@@ -162,28 +176,38 @@ first; each is a named case in its owning task and red when its guard is removed
    pane-shaped Description; a Description that does not parse (a vanished unit's `show` answers `Description=<its own
    name>`, measured); a scope of a LIVE tmux server that is not ccd's (one ran on the fleet box while planning, since
    2026-09-14); a scope with a live pane of ccd's server; a server pid now naming another process, or a tmux server
-   started after the scope (ccd's own pid recycled included). → Task 3, six cases (rows 3.4, 3.6–3.10, 3.24).
-2. **A stop issued in shadow** (ruling C). No `scope-sweep-live` → never a stop call even when every predicate holds;
-   `scope-sweep-live` → exactly one `--no-block` stop; `scope-sweep-paused` → nothing at all, record untouched. → Task 3
-   (rows 3.1–3.3b), and the no-writer pin (row 3.25).
+   started after the scope (ccd's own pid recycled included); a tmux that answers nothing while the scope's server still
+   runs. → Task 3, nine cases (rows 3.5, 3.6, 3.8, 3.9, 3.11, 3.12, 3.14, 3.15; 3.10 keeps the silent-tmux scope's line).
+2. **A stop issued in shadow, or too many at once** (ruling C). No `scope-sweep-live` → never a stop call even when every
+   predicate holds; `scope-sweep-live` → exactly one `--no-block` stop per inert scope, at most three a tick (the rest
+   `held`); `scope-sweep-paused` → nothing at all, record untouched. → Task 3, rows 3.1–3.4, and the no-writer pins
+   (rows 3.48–3.50: shell, Python, a unit file).
 3. **A predicate measured wrong in the safe-looking direction.** A `listen` bit read off the wrong `/proc/net/unix`
-   column, UDP left out, a child "elsewhere" by a cgroup-path comparison that can never differ, an fd directory it
-   cannot read counted as "no sockets". → Task 3, rows 3.14–3.19.
+   column; UDP or TCP6 left out; a `/proc/net` table it cannot read, a process in another network namespace, or an fd
+   directory it cannot read counted as "no sockets"; a child "elsewhere" by a cgroup-path comparison that can never
+   differ, or hidden behind a stat it cannot read; an empty or foreign `ControlGroup` reading another cgroup's
+   processes; an unreported CPU or start time. → Task 3, rows 3.24–3.28, 3.31–3.33, 3.36, 3.38, 3.40–3.44.
 4. **Integer seconds deciding pid reuse.** ccd's tmux server and its FIRST pane scope start in the same second (measured:
    server at 225,148,844 ticks, scope at 2,251,488,475,320 µs); seconds would read ccd's own server as recycled, and
-   ticks vs `ActiveEnterTimestampMonotonic` microseconds is the comparison that holds. → Task 3, rows 3.8, 3.11.
-5. **"Records nothing" read as "drops the entry".** An unmeasurable tick that dropped a scope's line would restart its
-   six-hour clock and lose `cpu0`; the sweep carries the line unchanged, and a never-seen scope gets none. → Task 3,
-   rows 3.20, 3.19.
-6. **A deleted tmux socket read as "no server"** (F1). → Task 1, row 1.1, with "no server running" kept (row 1.2).
-7. **A drift or out-of-vocabulary line about a command the record has since superseded** (F6). → Task 1, row 1.3.
-8. **The reap-class count mis-mapping a scope to a session.** The spawn event comes 2–6 s AFTER its scope's start
-   (measured on 4,638 scopes); a symmetric window maps the previous spawn; two sessions spawned together are
-   `unmapped`, never guessed. → Task 2, rows 2.4, 2.6.
-9. **Doctor re-deriving instead of reading.** Every unit in the doctor cases is absent from the fixture's own
-   `systemctl list-units`, so a check that asked the box would list none of them; a test reading a REAL box's record.
-   → Task 5, rows 5.4, 5.5, 5.7.
-10. **A harness that kills bash and leaves `tail`.** → Task 6, rows 6.1, 6.2.
+   ticks vs `ActiveEnterTimestampMonotonic` microseconds is the comparison that holds. → Task 3, its same-second case,
+   row 3.13 (and 3.12, the comparison deleted).
+5. **"Records nothing" read as "drops the entry", or as "skips the tick".** An unmeasurable value that dropped a scope's
+   line would restart its six-hour clock and lose `cpu0`; one that ended the tick would skip every other scope. The
+   sweep carries the line unchanged, a never-seen scope gets none, and the tick runs to its end. → Task 3, rows 3.7,
+   3.10, 3.16, 3.29, 3.30, 3.34, 3.37.
+6. **The six-hour clock.** Pinned at both edges (six hours ± a minute, for the first-seen clock and the youngest
+   process) and boot-relative, so a forged, stale or stepped `first=` is not believed. → Task 3, rows 3.17–3.20.
+7. **A deleted tmux socket read as "no server"** (F1). → Task 1, row 1.1, with "no server running" kept (row 1.2).
+8. **A drift or out-of-vocabulary line about a command the record has since superseded** (F6). → Task 1, row 1.3.
+9. **The reap-class count mis-mapping a scope to a session, or moving its idle edge.** The spawn event comes 2–6 s
+   AFTER its scope's start (measured on 4,638 scopes); a symmetric window maps the previous spawn; two sessions spawned
+   together are `unmapped`, never guessed; 30 minutes is pinned from both sides. → Task 2, rows 2.4, 2.6, 2.9.
+10. **Doctor re-deriving instead of reading, or a paused sweep read as a dead timer.** Every unit in the doctor cases is
+    absent from the fixture's own `systemctl list-units`, so a check that asked the box would list none of them; a
+    test reading a REAL box's record; `scope-sweep-paused` is a SKIP, never a stale WARN. → Task 5, rows 5.4, 5.5, 5.7,
+    5.8.
+11. **A harness that kills bash and leaves `tail` — or hangs.** → Task 6, rows 6.1–6.3, and the two FIFO guards it
+    bounds (6.4, 6.5).
 
 ---
 
@@ -195,18 +219,19 @@ first; each is a named case in its owning task and red when its guard is removed
 | `server/test/ccd-operator-choice.test.ts` | Modify (Task 1) — one describe appended | The residue's eight cases |
 | `server/test/measure-continuity-stage7.test.ts` | Modify (Task 1) — one line | The binding case dates its field before its command |
 | `deploy/measure-continuity.py` | Modify — Task 1 (stage 7's comment), Task 2 (`stage6`, `--journal`) | §9's rows, read-only |
-| `server/test/measure-continuity-stage6.test.ts` | Create (Task 2) | The stage-6 row, and its lifecycle reader bound to ccd's |
+| `server/test/measure-continuity-stage6.test.ts` | Create (Task 2) | The stage-6 row's two counts, and its lifecycle reader bound to ccd's |
 | `ccd/ccd-scope-sweep` | Create (Task 3), mode 755 | The sweep: record every dead ccd pane scope, stop an inert one only when armed |
-| `server/test/scope-sweep.test.ts` | Create (Task 3) | Every predicate, the shadow, and what must never be stopped |
-| `server/test/single-definition.test.ts` | Modify (Task 3) — one describe appended | `scope-sweep-live` has no writer |
+| `server/test/scope-sweep.test.ts` | Create (Task 3) | Every predicate, the shadow, what must never be stopped, and every unmeasurable value |
+| `server/test/single-definition.test.ts` | Modify (Task 3) — one describe appended | `scope-sweep-live` has no writer, in shell or anything else under `ccd/` and `deploy/` |
 | `deploy/systemd/ccd-scope-sweep.{service,timer}` | Create (Task 4) | Its oneshot and its one-minute timer |
 | `ccd/ccrc`, `deploy/deploy.sh`, `deploy/gen-wrappers.mjs`, `shared/lifecycle.ts` | Modify (Task 4) | Install, uninstall, the agent lane, the toolchain set, the lifecycle class |
 | `server/test/{ccrc-install,ccrc-uninstall,lifecycle}.test.ts`, `server/test/installTreeFixture.ts`, `agent/test/deploy-verify.test.ts` | Modify (Task 4; `ccrc-install` again in Task 5) | Their pins, on the reaper's pattern |
 | `ccd/ccrc-doctor-checks` | Modify (Task 5) — the table line, `known`, one `why`, one appended check | Doctor reads the record |
 | `server/test/ccrc-doctor.test.ts` | Modify (Task 5) | The check's cases, its fixture seam, `HEALTHY_SKIPS` on macOS |
-| `server/test/ccd-limit-banner.test.ts` | Modify (Task 6) | The timed harness kills its child's process group |
+| `server/test/ccdWsHelpers.ts` | Modify (Task 6) — `BOUNDED` appended | The timed harness, once, killing its child's process group |
+| `server/test/ccd-limit-banner.test.ts`, `server/test/ccd-auto-compact.test.ts` | Modify (Task 6) | Both timed FIFO cases use it; the pin bounds its own run from outside |
 | `README.md` | Modify — Task 1 (two sentences), Task 7 (a table row, an uninstall name, one subsection) | The canonical description |
-| `docs/superpowers/specs/2026-09-23-session-continuity-design.md` | Modify — Task 1 (§5.7's two sentences), Task 7 (rev 8: §5.6's shadow, §9's B) | The spec stays true to what ships |
+| `docs/superpowers/specs/2026-09-23-session-continuity-design.md` | Modify — Task 1 (§5.7's two sentences), Task 7 (rev 8: §5.6 items 1 and 2, §9's stage-6 targets, §10, §11 item 4, B) | The spec stays true to what ships |
 | `docs/superpowers/plans/2026-10-04-session-continuity-wave3-operator-choice.md` | Modify (Task 1) — six table cells, three departure entries' text | Wave 3's record reproduces at its tip |
 
 **Not modified, deliberately:** `server/src/**`, `agent/src/**`, `shared/api.ts`, `pwa/**`; `ccd/session-hook.sh`;
@@ -255,12 +280,20 @@ Measured 2026-10-05 on `77f8d63a5`, `d12b5aba0` and the prototype; live reads ar
    `USER_UNIT=tmux-spawn-…`) and its OOM stop (`UNIT_RESULT=oom-kill`, "Failed with result 'oom-kill'."); ccd's
    lifecycle journal records each `spawn` (`act=spawn`, `outcome=done`, `id`, `at` ms). Over the 4,638 scopes started
    after the lifecycle journal's first event, the nearest spawn event came 2–6 s AFTER the scope's start for most
-   (+2 s: 592, +4 s: 640, +6 s: 156), and 2,322 scopes had none within two minutes (test and probe panes).
-8. **Stage 6's readings before the deploy** (`TZ=UTC`, the exported journal): the whole retention → 63 pane-scope OOM
-   stops, 1 reap-class, 26 busy, 10 idle without a live shell, 12 unmapped (7 no spawn, 5 two sessions spawned
-   together), 14 unmeasured (no transcript any more); `--since 2026-09-16 --until 2026-09-24` → **16** stops, which
-   reproduces spec §1.3's "16 session deaths … 2026-09-16..23", 0 reap-class; `--since 2026-09-28 --until '2026-10-05
-   17:00'` → 19 stops, 1 reap-class, 12 busy, 3 idle without a shell, 2 unmapped, 1 unmeasured.
+   (+2 s: 592, +4 s: 640, +6 s: 156), and 2,322 scopes had none within two minutes (test and probe panes). Reading
+   them: `journalctl --user -o json -u 'tmux-spawn-*.scope'` took 5 min 41 s (2026-10-06 00:16 UTC, load ≈30) — a
+   unit glob walks the whole journal, against the instrument's own 600 s bound — while the two indexed field matches
+   `JOB_TYPE=start + UNIT_RESULT=oom-kill` took 23 s and return the same 6,115 `tmux-spawn-*` start and OOM records
+   (compared record for record up to the glob export's last entry); the instrument asks the field matches.
+8. **Stage 6's readings before the deploy** (`TZ=UTC`, the instrument's own live `journalctl` path, re-measured
+   2026-10-06 00:24 UTC; the first planning reading came from an export that ended near 2026-10-03 12:00, which is
+   why it read 19 and 63 — the review's replay lens found the 21-stop gap): `--since 2026-09-16 --until 2026-09-24` →
+   **16** stops, which reproduces spec §1.3's "16 session deaths … 2026-09-16..23", 0 reap-class, 13 busy, 1 idle
+   without a shell, 1 unmapped (two sessions spawned together), 1 unmeasured; `--since 2026-09-28 --until '2026-10-05
+   17:00'` → **40** stops, **2** reap-class, 22 busy, 3 idle without a shell, 8 unmapped (no spawn), 5 unmeasured; the
+   whole retention (from 2026-08-03) → 84 stops, 2 reap-class, 36 busy, 10 idle without a shell, 18 unmapped (13 no
+   spawn, 5 two sessions spawned together), 18 unmeasured (no transcript any more). No pane-scope OOM stop landed
+   between 2026-10-05 12:00 and 23:35 UTC. Each run takes ≈40 s.
 9. **Where the reaper ships, the sweep ships:** `ccd-tmp-sweep` (#168) touched 16 files; the sweep follows it file for
    file (`_inst_bins`' non-Darwin arm, `_inst_units`' `!= server` gate, `_inst_enable_timer`'s degrade, both uninstall
    lists, the orphan scan's case, `TOOLCHAIN_EXECUTABLES`, `deploy.sh`'s agent lane, the lifecycle registry, and each
@@ -273,8 +306,63 @@ Measured 2026-10-05 on `77f8d63a5`, `d12b5aba0` and the prototype; live reads ar
     maps each gain `"scope-sweep": "SKIP"` (the install fixture's runtime dir holds no record) and nothing else moves.
 12. **`main` moved while planning** (#282, #283: README, CLAUDE.md, child-reclamation documents); README's anchors were
     re-cut on `d12b5aba0` and the whole document replayed there. `CLAUDE.md`'s README size claim now reads ~5700, and
-    the prototype's README is 5,762 lines (inside `pools-prose.test.ts`'s ±100).
-13. **The full suite on the prototype:** the server in 24 shards (the three large files excluded) `2 failed | 21321 passed | 45 skipped (21368)` — `boot`'s "a hung ccd … does not delay listen" (a known load flake: 3 of 3 alone) and `session-hook`'s "skips a scratch slug — /tmp work accumulates no durable memory", which reds whenever `TMPDIR` is not a `/tmp` shape (the volume TMPDIR this box's rules require; 1 of 1 with `TMPDIR=/tmp`) — then `ccrc-doctor` in its five slices 74 / 183 / 141 / 109 / 168, `ccrc-install` in its four 57 / 70 / 62 / 105, `ccrc-update` in its two 298 / 196, all green; agent `453 passed (453)`; pwa `3237 passed (3237)`. `tmp-sweep`'s known red passed in this run. Load 18–65 throughout.
+    the prototype's README is 5,767 lines (inside `pools-prose.test.ts`'s ±100).
+13. **The full suite on the prototype:** the server in 24 shards (the three large files excluded) `2 failed | 21321 passed | 45 skipped (21368)` — `boot`'s "a hung ccd … does not delay listen" (a known load flake: 3 of 3 alone) and `session-hook`'s "skips a scratch slug — /tmp work accumulates no durable memory", which reds whenever `TMPDIR` is not a `/tmp` shape (the volume TMPDIR this box's rules require; 1 of 1 with `TMPDIR=/tmp`) — then `ccrc-doctor` in its five slices 74 / 183 / 141 / 109 / 168, `ccrc-install` in its four 57 / 70 / 62 / 105, `ccrc-update` in its two 298 / 196, all green; agent `453 passed (453)`; pwa `3237 passed (3237)`. `tmp-sweep`'s known red passed in this run. Load 18–65 throughout. (The first prototype's run; item 14 has the
+revised prototype's.)
+14. **The plan review (four `opus` lenses on `d93e5957`) and this revision.** Every finding was verified on a rebuilt
+    prototype and applied; none was rejected outright, two were applied in a different form than proposed (marked ◐).
+    Spec lens: the spawn variable's new order named and written into §5.6 item 1, §10 and §11 item 4
+    (`pressure-reap-variable-ships-after-baseline-b`); §9's inert-survivor metric counted by `--stage 6` off the record,
+    its target amended, the pressure-kill metric carried (`inert-survivors-counted-while-shadowed`); a silent tmux now
+    carries the line of a scope whose server still runs (row 3.10) instead of dropping it; doctor prints the dead-for
+    minutes on the record's own clock with the scope's and its oldest process's age and the pids (row 5.10); doctor
+    recording operator stops carried (not in ruling B); an unreadable stat anywhere on the box makes predicate 5
+    unmeasurable (rows 3.43, 3.44); the live branch's drop pinned (row 3.16); a paused sweep is a doctor SKIP (row 5.8);
+    Review Focus rewritten. Safety lens: the `ControlGroup`/CPU/start guard split into three lines with a case and a row
+    each (3.31–3.33) — measured first, with the cgroup check deleted the sweep read the ROOT `cgroup.procs` and stopped;
+    ◐ the clock made boot-relative and bounded by the scope's own start (row 3.20) — no `boot_id` in the header: unit
+    names are per-boot uuids, the record is on a tmpfs, and the bound already refuses a clock older than its scope;
+    sockets read only for processes in the sweep's own network namespace, any other unmeasurable (row 3.38); a failed
+    `show` carries (row 3.7); the no-writer scan widened to every non-shell file under `ccd/` and `deploy/` (rows 3.49,
+    3.50; the unit's `Description` stopped naming the arming file); at most three stops a tick (row 3.4,
+    `scope-sweep-stops-at-most-three-a-tick`) and the rollback sentence. Replay lens: Pre-flight 8 and Task 2 Step 6
+    re-measured on the live path; Task 4 Step 2's filter and Task 3 Step 4's command corrected; auto-compact's copy of
+    the harness fixed by sharing `BOUNDED` (`timed-harness-shared-with-auto-compact`); the spec's §5.6 item 1 and §10.
+    Tests lens: unreadable `/proc/net` tables (rows 3.40–3.42), TCP6 (3.26), the six-hour edges (3.18, 3.19), the
+    same-second server (3.13), the server-role SKIP (5.9), the idle edge (2.9); every unmeasurable case now asserts
+    `rc 0`, a header the tick rewrote and — where the value is the scope's own — a companion scope judged that tick, with
+    `|| exit 3` rows for three arms (3.29, 3.34, 3.37), and Task 3 Step 2's prose corrected; ◐ the in-scope "stat
+    unreadable" guard was REMOVED rather than pinned — measured redundant (the box read carries a process that still
+    exists, the namespace and fd reads one that has gone; rows 3.53 and 3.39 delete each pair) — and the pin now bounds
+    its own run from outside (row 6.3 reds in 10 s instead of hanging). Found while revising: a server whose `comm`
+    cannot be read is now a carried case (row 3.51), and the instrument's journal read moved from a unit glob to two
+    indexed field matches (Pre-flight 7). Found by the revised prototype's own full run: the paused check first spelled
+`$HOME/.cc-sessions/scope-sweep-paused` on a code line, a third `.cc-sessions/<name>` literal in
+`ccrc-doctor-checks` that `pool-name-parity.test.ts` refuses; it reads `$reg/scope-sweep-paused` off a bare
+`reg="$HOME/.cc-sessions"`, as `_check_pools` does. Re-measured on the revised prototype (2026-10-06, load 17–30): the
+server in 24 shards (the three large files excluded) `4 failed | 21345 passed | 45 skipped (21394)` — 26 more cases
+than item 13 (scope-sweep +23, stage 6 +2, the no-writer scan +1); the four reds are `boot`'s "a hung ccd … does not
+delay listen" (3 of 3 alone), `session-hook`'s TMPDIR-shaped "skips a scratch slug…" (item 13), `update-store-nodes`'
+"the heir guard IS `isHalting` …" (a 26 s property case under load; 43 of 43 alone) and `pool-name-parity`'s
+`.cc-sessions/<dir>` census (the literal above, fixed: 21 of 21) — then `ccrc-doctor` in its five slices 74 / 183 /
+141 / 109 / 170, `ccrc-install` in its four 57 / 70 / 62 / 105, `ccrc-update` in its two 298 / 196, all green; agent
+`453 passed (453)`; pwa `3237 passed (3237)`; the Task 8 Step 3 guards as stated there; the citation census `147 /
+197 / 55 / 35`, every `ENTERED`/`LEFT` empty; the `_reg_get` census unmoved (no `ccd/ccd` line changed past Task 1).
+Every mutation row in Tasks 2, 3, 5 and 6 was re-run on the revised prototype; Task 1's and Task 4's code did not
+change, and their rows stand as the first prototype and the replay lens both measured them.
+15. **`main` moved again while revising** (#287, `d2bac7ae6`, centralised-update wave 11: it touches five of this plan's
+    files above every anchor here — `README.md`, `agent/test/deploy-verify.test.ts`, `ccd/ccrc` +350 lines above
+    `_inst_bins`, `deploy/deploy.sh`, `server/test/ccrc-doctor.test.ts` — and not `ccd/ccd`). Replayed onto an export of
+    `d2bac7ae6`: 98 blocks, every anchor exactly once, re-stamped; byte-identical on all 27 files to the revised
+    prototype `git merge`d with it (no conflict). On that merged tree (2026-10-06): `deploy-verify` `85 passed (85)`;
+    `ccrc-doctor`'s five slices 74 / 186 / 141 / 109 / 170 (`695` cases); `ccrc-install`'s four 57 / 70 / 62 / 105;
+    `ccrc-update`'s two 306 / 196 (`514`); uninstall, install-census, lifecycle and gen-wrappers `184 passed | 4 skipped
+    (188)`; #287's sweep suites and `platform-hazards` `64 passed | 5 skipped (69)`; the repo-wide guards with
+    `pool-name-parity` `509 passed | 11 skipped (520)`; `readme-holds`, `pools-prose`, `deviation-refs`, `dtbd` `76
+    passed (76)`; the citation cases `7 passed | 328 skipped (335)`; `cite-remeasure.py` against `d2bac7ae6` `147 / 197
+    / 55 / 35`, every `ENTERED`/`LEFT` empty. So a worker whose Step 0 merges `d2bac7ae6` sees `deploy-verify` at 85,
+    not 75 (its red-first count and rows 4.11–4.13 were measured at `d12b5aba0`: re-measure them on the merged tree), `ccrc-doctor` at 695 cases, not 691 (its second slice
+    at 186), and `ccrc-update`'s first slice at 306 — the counts of the files #287 did not touch are unchanged by it.
 
 ---
 
@@ -285,7 +373,7 @@ the file as it stands at that turn; the next fenced block replaces it. `create`:
 one fenced block, appended at the end of the file. A fenced block's text is every line between its fences, each ending
 in a newline; a block whose text holds a line of three backticks is fenced with four. `ccd/ccd`'s line-2 stamp is never
 replayed: re-stamp after every `ccd/ccd` edit. Measured: this document, replayed onto an export of `d12b5aba0` and
-re-stamped, is byte-identical to the prototype on all 25 files it touches.
+re-stamped, is byte-identical to the prototype on all 27 files it touches.
 
 ## The citation tax, mechanised (S6-R11)
 
@@ -936,13 +1024,16 @@ Then `git add -A && git commit` — "continuity wave 4: wave 3's residue (review
 - Create: `server/test/measure-continuity-stage6.test.ts`
 
 **Interfaces:**
-- Consumes: the user journal (`journalctl --user -o json` records of `tmux-spawn-*.scope`: `JOB_TYPE`, `JOB_RESULT`,
-  `UNIT_RESULT`, `__REALTIME_TIMESTAMP`), or `--journal FILE` holding those lines; `<home>/.cc-sessions/.lifecycle/
-  journal-*.ndjson`'s `spawn`/`done` events; `<home>/.cc-sessions/<id>.uuid`; the largest copy of
-  `<home>/.claude*/projects/*/<uuid>.jsonl` (every copy with `--all-copies`).
+- Consumes: the user journal (`journalctl --user -o json JOB_TYPE=start + UNIT_RESULT=oom-kill`, the `tmux-spawn-*`
+  records kept: `JOB_TYPE`, `JOB_RESULT`, `UNIT_RESULT`, `__REALTIME_TIMESTAMP` — Pre-flight 7 has why field matches,
+  not a unit glob), or `--journal FILE` holding those lines; `<home>/.cc-sessions/.lifecycle/journal-*.ndjson`'s
+  `spawn`/`done` events; `<home>/.cc-sessions/<id>.uuid`; the largest copy of `<home>/.claude*/projects/*/<uuid>.jsonl`
+  (every copy with `--all-copies`); and the sweep's verdict record, `$XDG_RUNTIME_DIR/ccd-scope-sweep.state` (Task 3's
+  format), read once at the reading.
 - Produces: `--stage 6` → `stage6.reap_class_oom` = `{pane_scope_oom_stops, reap_class, idle_without_a_live_background_shell,
   busy_within_the_idle_window, unmapped, unmapped_by_reason, unmeasured, reap_class_by_session}`, or `{journal:
-  "unreadable"}`. `S6_IDLE = 1800`, `S6_SPAWN_SLOP = 10`.
+  "unreadable"}`; and `stage6.inert_scopes` = `{mode, dead, inert, inert_dead_a_day_or_more}`, or `{record: "absent"}` /
+  `{record: "unreadable"}`. `S6_IDLE = 1800`, `S6_SPAWN_SLOP = 10`, `S6_DAY = 86400`.
 
 **What it counts, and why this way.** Spec §9's B is "OOM stops of pane scopes whose session had been idle 30 minutes
 or more with a live background shell": the class Claude Code's pressure reap chooses by (§1.3), counted the week the
@@ -952,6 +1043,15 @@ lifecycle journal has every spawn but no scope; a scope's start and its session'
 anything else is `unmapped`, never guessed. The transcript then decides idle (no user or assistant row in the 30
 minutes before the stop; a `system` row is not input) and live (a `run_in_background` start since that spawn — a
 shell of an earlier process died with it — with no `<task-notification>` for its id by the stop).
+
+**And §9's second stage-6 metric** — "dead ccd scopes that pass the inert test yet survive a day", target 0 — belongs
+to this wave's sweep, so its count ships with it (the programme's carried constraint: a wave adds the §9 rows it owns in
+the same PR as the mechanism they measure). The sweep keeps no history, so it is read off the verdict record AT THE
+READING (`--since`/`--until` do not apply): `dead` lines whose verdict says every stop predicate held (`would-stop`,
+`held`, `stop-failed`), and of those the ones first seen dead a day or more before the record's tick. While the stop
+is shadowed every inert scope survives by design, so the count is reported and its target applies once the operator
+arms the stop (rev 8 amends §9; departure `inert-survivors-counted-while-shadowed`). §9's first metric, pressure kills
+of background shells, measures wave 4b's variable and is carried with it.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -980,11 +1080,14 @@ beforeEach(() => { h = makeCcdHarness('ccrc-measure-continuity-s6-'); });
 afterEach(() => { h.cleanup(); });
 
 type Row = Record<string, number | string | Record<string, number>>;
-const run = (extra: string[] = []): Row => {
+/** The whole stage-6 reading. XDG_RUNTIME_DIR is a fixture directory: no case reads a real box's verdict record. */
+const stage = (extra: string[] = []): { reap_class_oom: Row; inert_scopes: Row } => {
+  const xdg = path.join(h.home, 'xdg'); fs.mkdirSync(xdg, { recursive: true });
   const out = execFileSync('python3', [TOOL, '--home', h.home, '--stage', '6', '--journal', path.join(h.home, 'journal.json'), ...extra, '--json'],
-    { encoding: 'utf8', env: { ...process.env, TZ: 'UTC' } });
-  return (JSON.parse(out) as { stage6: { reap_class_oom: Row } }).stage6.reap_class_oom;
+    { encoding: 'utf8', env: { ...process.env, TZ: 'UTC', XDG_RUNTIME_DIR: xdg } });
+  return (JSON.parse(out) as { stage6: { reap_class_oom: Row; inert_scopes: Row } }).stage6;
 };
+const run = (extra: string[] = []): Row => stage(extra).reap_class_oom;
 
 const T = Date.parse('2026-10-06T12:00:00Z') / 1000;            // the hour every stop below happens in
 const iso = (t: number): string => new Date(t * 1000).toISOString();
@@ -1054,11 +1157,14 @@ describe('stage 6 counts what its row says (TZ=UTC, a hand-built journal)', () =
     // 11 — a scope that ended for any other reason is not an OOM stop
     started(11, T - 7700); spawned('clean', T - 7699);
     journal.push(JSON.stringify({ __REALTIME_TIMESTAMP: String((T + 9) * 1e6), USER_UNIT: unit(11), UNIT_RESULT: 'exit-code' }));
+    // 12 — its last turn 45 minutes before the stop, its shell live: the reap's class at 30 minutes (busy at 60)
+    started(12, T - 7800); spawned('edge', T - 7795); oom(12, T + 10);
+    session('edge', [rows.bg(T - 6000, 'b12'), rows.turn(T - 2700)]);
     flush();
     const r = run(['--since', '2026-10-06']);
-    expect(r.pane_scope_oom_stops).toBe(9);
-    expect(r.reap_class).toBe(3);
-    expect(r.reap_class_by_session).toEqual({ late: 1, reap: 1, sys: 1 });
+    expect(r.pane_scope_oom_stops).toBe(10);
+    expect(r.reap_class).toBe(4);
+    expect(r.reap_class_by_session).toEqual({ edge: 1, late: 1, reap: 1, sys: 1 });
     expect(r.busy_within_the_idle_window).toBe(1);
     expect(r.idle_without_a_live_background_shell).toBe(2);
     expect(r.unmapped).toBe(2);
@@ -1068,6 +1174,26 @@ describe('stage 6 counts what its row says (TZ=UTC, a hand-built journal)', () =
 
   it('a journal it cannot read is said, never counted as zero', () => {
     expect(run()).toEqual({ journal: 'unreadable' });
+  });
+});
+
+describe('stage 6\'s second metric: inert dead scopes that survive a day, read off the sweep\'s verdict record now', () => {
+  const UP = 100 * 86400;
+  const record = (lines: string[]): void => {
+    const xdg = path.join(h.home, 'xdg'); fs.mkdirSync(xdg, { recursive: true });
+    fs.writeFileSync(path.join(xdg, 'ccd-scope-sweep.state'), [`# ccd-scope-sweep v1 tick=1 up=${UP} mode=shadow`, ...lines].join('\n') + '\n');
+  };
+  const dead = (n: number, ago: number, verdict: string): string =>
+    `dead tmux-spawn-0000000${n}-0000-4000-8000-000000000000.scope first=${UP - ago} cpu0=7 verdict=${verdict} why=none server=gone procs=1 mem=1 sockets=0 youngest=1 oldest=1 age=1 pids=1`;
+
+  it('counts the dead, the inert (every stop predicate held), and the inert dead a day or more', () => {
+    record([dead(1, 25 * 3600, 'would-stop'), dead(2, 2 * 86400, 'held'), dead(3, 23 * 3600, 'stop-failed'), dead(4, 3 * 86400, 'report'),
+      'old tmux-spawn-00000005-0000-4000-8000-000000000000.scope pid=9 age=90000 comm=bash']);
+    expect(stage().inert_scopes).toEqual({ mode: 'shadow', dead: 4, inert: 3, inert_dead_a_day_or_more: 2 });
+  });
+
+  it('no record is `absent`, never zero', () => {
+    expect(stage().inert_scopes).toEqual({ record: 'absent' });
   });
 });
 
@@ -1093,7 +1219,7 @@ describe('the lifecycle reader is bound to the event the real ccd writes', () =>
 cd server && ./node_modules/.bin/vitest run test/measure-continuity-stage6.test.ts --maxWorkers=1
 ```
 
-Expected: `3 failed (3)` (`--stage 6` is not a choice yet, so the tool exits 2 under each).
+Expected: `5 failed (5)` (`--stage 6` is not a choice yet, so the tool exits 2 under each).
 
 - [ ] **Step 3: The stage-6 block**
 
@@ -1167,8 +1293,22 @@ and replace it with:
 # transcript changed uuid since the stop (a /clear) reads the newer file, which
 # holds no row before the stop, so it reads as idle with no shell; a background
 # shell ended by Claude Code without a notification row reads as live.
+# §9's second stage-6 metric, dead ccd scopes that pass the inert test yet
+# survive a day, is read from a FIFTH source, at the moment of the reading (the
+# record keeps no history, so `--since`/`--until` do not apply to it):
+#   ccd-scope-sweep.state  the sweep's verdict record ($XDG_RUNTIME_DIR): its
+#                     `dead` lines whose verdict says every stop predicate held
+#                     (`would-stop`, `held`, `stop-failed`), and of those the
+#                     ones first seen dead a day or more before its tick. While
+#                     the stop is shadowed every inert scope survives by design:
+#                     the count is reported, and its target of 0 applies once the
+#                     operator arms the stop. An absent record is `absent`, never 0.
 S6_IDLE = 1800
 S6_SPAWN_SLOP = 10
+S6_DAY = 86400
+S6_HDR = re.compile(r"# ccd-scope-sweep v1 tick=(\d+) up=(\d+) mode=(shadow|live)")
+S6_DEAD = re.compile(r"dead tmux-spawn-\S+\.scope first=(\d+) cpu0=\d+ verdict=([a-z-]+) ")
+S6_INERT = ("would-stop", "held", "stop-failed")
 S6_TS = re.compile(rb'"timestamp":"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)')
 S6_ROW = re.compile(rb'"type":"(?:user|assistant)"')
 S6_BG = re.compile(rb"Command running in background with ID: ([A-Za-z0-9_-]+)")
@@ -1186,9 +1326,13 @@ def s6_journal(ctx):
             with open(ctx["journal"], "rb") as fh:
                 raw = fh.read()
         else:
+            # Two FIELD matches, OR'd (`+`), never `-u 'tmux-spawn-*.scope'`: a unit glob
+            # walks the whole journal (5 min 41 s on the fleet box, 2026-10-06, against
+            # this call's own 600 s bound), the indexed matches take 23 s, and the
+            # tmux-spawn records they return are the same 6,115 (filtered below).
             p = subprocess.run(["journalctl", "--user", "--no-pager", "-o", "json",
                                 "--output-fields=USER_UNIT,UNIT_RESULT,JOB_TYPE,JOB_RESULT",
-                                "-u", "tmux-spawn-*.scope"], capture_output=True, timeout=600)
+                                "JOB_TYPE=start", "+", "UNIT_RESULT=oom-kill"], capture_output=True, timeout=600)
             if p.returncode != 0:
                 return None
             raw = p.stdout
@@ -1278,10 +1422,39 @@ def s6_classify(paths, born, at):
     return "reap-class" if started - ended else "idle-no-shell"
 
 
+def s6_inert():
+    """The sweep's verdict record, read once: its dead, its inert, and its inert dead a day or more."""
+    rec = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid(), "ccd-scope-sweep.state")
+    try:
+        lines = read_lines(rec)
+    except FileNotFoundError:
+        return {"record": "absent"}
+    except OSError:
+        return {"record": "unreadable"}
+    m = S6_HDR.fullmatch(lines[0]) if lines else None
+    if not m:
+        return {"record": "unreadable"}
+    up, dead, inert, day = int(m.group(2)), 0, 0, 0
+    for line in lines[1:]:
+        d = S6_DEAD.match(line)
+        if not d:
+            continue
+        dead += 1
+        if d.group(2) in S6_INERT:
+            inert += 1
+            if up - int(d.group(1)) >= S6_DAY:
+                day += 1
+    return {"mode": m.group(3), "dead": dead, "inert": inert, "inert_dead_a_day_or_more": day}
+
+
 def stage6(ctx):
+    return {"reap_class_oom": s6_reap(ctx), "inert_scopes": s6_inert()}
+
+
+def s6_reap(ctx):
     recs = s6_journal(ctx)
     if recs is None:
-        return {"reap_class_oom": {"journal": "unreadable"}}
+        return {"journal": "unreadable"}
     born, stops = {}, []
     for e in recs:
         try:
@@ -1317,7 +1490,7 @@ def stage6(ctx):
         counts[cls] += 1
         if cls == "reap-class":
             sessions[sid] += 1
-    return {"reap_class_oom": {
+    return {
         "pane_scope_oom_stops": len(stops),
         "reap_class": counts["reap-class"],
         "idle_without_a_live_background_shell": counts["idle-no-shell"],
@@ -1326,7 +1499,7 @@ def stage6(ctx):
         "unmapped_by_reason": dict(sorted(unmapped.items())),
         "unmeasured": counts["unmeasured"],
         "reap_class_by_session": dict(sorted(sessions.items())),
-    }}
+    }
 
 
 # ── stage 7 (wave 3): the operator's choice survives a restart ──────────────
@@ -1378,11 +1551,13 @@ and replace it with:
 cd server && ./node_modules/.bin/vitest run test/measure-continuity-stage6.test.ts test/measure-continuity-stage7.test.ts test/measure-continuity-stage4.test.ts test/measure-continuity.test.ts --maxWorkers=1
 ```
 
-Expected: `22 passed (22)` (3 + 2 + 12 + 5).
+Expected: `24 passed (24)` (5 + 2 + 12 + 5).
 
 - [ ] **Step 5: Mutation check**
 
-| # | File | Exact edit (old → new) | Measured red (of 3) |
+`measure-continuity-stage6.test.ts` alone at `--maxWorkers=1`, each row applied to a saved copy and restored (`cmp`).
+
+| # | File | Exact edit (old → new) | Measured red (of 5) |
 |---|---|---|---|
 | 2.1 | `deploy/measure-continuity.py` | `if lo < ts <= hi and not busy:` → `if False:` | 1 failed: “the reap's class, the idle and the busy stops, and every stop it cannot map or measure” |
 | 2.2 | ″ | `ended.add(m.group(1))` → `pass` | 1 failed: ″ |
@@ -1392,20 +1567,28 @@ Expected: `22 passed (22)` (3 + 2 + 12 + 5).
 | 2.6 | ″ | `if t0 <= s <= t0 + S6_SPAWN_SLOP]` → `if abs(s - t0) <= S6_SPAWN_SLOP]` | 1 failed: ″ |
 | 2.7 | ″ | `busy = bool(S6_ROW.search(line))` → `busy = True` | 1 failed: ″ |
 | 2.8 | ″ | `s6_journal`'s `except (OSError, subprocess.SubprocessError): / return None` → `… / return []` | 1 failed: “a journal it cannot read is said, never counted as zero” |
+| 2.9 | ″ | `S6_IDLE = 1800` → `S6_IDLE = 3600` (the idle edge doubled) | 1 failed: “the reap's class, the idle and the busy stops, …” (scope 12, idle 45 minutes, turns busy) |
+| 2.10 | ″ | `        if d.group(2) in S6_INERT:` → `        if True:` | 1 failed: “counts the dead, the inert (every stop predicate held), and the inert dead a day or more” |
+| 2.11 | ″ | `            if up - int(d.group(1)) >= S6_DAY:` → `            if up - int(d.group(1)) >= 0:` | 1 failed: ″ |
+| 2.12 | ″ | `s6_inert`'s `except FileNotFoundError: / return {"record": "absent"}` → `… / return {"mode": "shadow", "dead": 0, "inert": 0, "inert_dead_a_day_or_more": 0}` | 1 failed: “no record is `absent`, never zero” |
 
-One hand-built journal carries eleven scopes, each guarding one reading, so seven of the eight rows red the same case;
+One hand-built journal carries twelve scopes, each guarding one reading, so eight of the twelve rows red the same case;
 each row was measured on its own.
 
 - [ ] **Step 6: The pre-deploy reading (read-only), then commit**
 
 ```bash
-python3 deploy/measure-continuity.py --stage 6 --since 2026-09-16 --until 2026-09-24 --json
-python3 deploy/measure-continuity.py --stage 6 --since 2026-09-28 --json
+TZ=UTC python3 deploy/measure-continuity.py --stage 6 --since 2026-09-16 --until 2026-09-24 --json
+TZ=UTC python3 deploy/measure-continuity.py --stage 6 --since 2026-09-28 --until '2026-10-05 17:00' --json
+TZ=UTC python3 deploy/measure-continuity.py --stage 6 --since 2026-09-28 --json
 ```
 
-Expected (on the fleet box, `TZ=UTC`): the first reads `"pane_scope_oom_stops": 16` (spec §1.3's sixteen) with
-`"reap_class": 0`; the second, about 19 stops and 1 reap-class through 2026-10-05 17:00 (Pre-flight 8; later stops
-add). Report both in the wave-done mail. Then commit — "continuity wave 4: --stage 6, the pressure reap's OOM class".
+Expected (on the fleet box, the instrument's live `journalctl` path, ≈40 s each — Pre-flight 8): the first reads
+`"pane_scope_oom_stops": 16` (spec §1.3's sixteen) with `"reap_class": 0`; the second `"pane_scope_oom_stops": 40`
+with `"reap_class": 2`, 22 busy, 3 idle without a shell, 8 unmapped, 5 unmeasured; the third, the same through
+2026-10-05 17:00 plus any stop since. `inert_scopes` reads `{"record": "absent"}` until the sweep's first tick on that
+box. Report all three in the wave-done mail. Then commit — "continuity wave 4: --stage 6, the pressure reap's OOM
+class".
 
 ---
 
@@ -1421,33 +1604,45 @@ add). Report both in the wave-done mail. Then commit — "continuity wave 4: --s
 - Consumes: `systemctl --user list-units --no-legend --plain 'tmux-spawn-*.scope'`; `systemctl --user show <unit> -p Id
   -p Slice -p Description -p ControlGroup -p CPUUsageNSec -p MemoryCurrent -p ActiveEnterTimestampMonotonic`;
   `tmux list-panes -a -F '#{pid} #{pane_pid}'` on the default socket (ccd's server); `$CCRC_CGROUP_ROOT<ControlGroup>/
-  cgroup.procs`; `$CCRC_PROC_ROOT/{uptime,<pid>/stat,<pid>/comm,<pid>/fd/*,net/tcp,net/tcp6,net/udp,net/udp6,net/unix}`;
-  `$REG/scope-sweep-paused`, `$REG/scope-sweep-live` (`$REG` = `$HOME/.cc-sessions`); its own previous record.
+  cgroup.procs`; `$CCRC_PROC_ROOT/{uptime,self/ns/net,<pid>/stat,<pid>/comm,<pid>/ns/net,<pid>/fd/*,net/tcp,net/tcp6,
+  net/udp,net/udp6,net/unix}`; `$REG/scope-sweep-paused`, `$REG/scope-sweep-live` (`$REG` = `$HOME/.cc-sessions`);
+  its own previous record.
 - Produces: `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`, rewritten by rename every tick — `# ccd-scope-sweep v1 tick=<epoch>
-  mode=<shadow|live>`, then `dead <unit> first=<epoch> cpu0=<nsec> verdict=<report|would-stop|stopped|stop-failed>
-  why=<none|predicate,…> server=<ccd|gone|reused> procs=<n> mem=<bytes|?> sockets=<n> youngest=<s> pids=<p,…>` per dead
-  ccd scope and `old <unit> pid=<p> age=<s> comm=<word>` per long-lived process in a live one; at most one
-  `systemctl --user stop --no-block <unit>` per inert scope per tick, and only when armed; a stdout line when a scope
-  is first seen dead, first reaches `would-stop`, or is stopped; exit 1 with a named refusal on stderr when there is no
-  runtime dir, no `/proc`, or no answer from `systemctl`.
+  up=<s> mode=<shadow|live>`, then `dead <unit> first=<s since boot> cpu0=<nsec>
+  verdict=<report|would-stop|stopped|stop-failed|held> why=<none|predicate,…> server=<ccd|gone|reused> procs=<n>
+  mem=<bytes|?> sockets=<n> youngest=<s> oldest=<s> age=<s> pids=<p,…>` per dead ccd scope (`age` is the scope's
+  own, from its `ActiveEnterTimestampMonotonic`) and `old <unit> pid=<p> age=<s> comm=<word>` per long-lived process
+  in a live one; at most one `systemctl --user stop --no-block <unit>` per inert scope per tick, at most
+  `SCOPE_SWEEP_MAX_STOPS` (3) per tick, and only when armed; a stdout line when a scope is first seen dead, first
+  reaches `would-stop` or `held`, or is stopped; exit 1 with a named refusal on stderr when there is no runtime dir,
+  no `/proc`, or no answer from `systemctl list-units`.
 
 **How it decides** (the script's header states each rule, and each is a red row below):
 - **Whose scope.** Only units whose NAME is `tmux-spawn-*.scope` (re-checked after the list: `ccrc-tmux-server.scope`
-  never passes), whose `Slice` is the session slice, and whose `Description` parses; a parse failure, an unreadable
-  value or an unreadable `cgroup.procs` is UNMEASURABLE: the scope's previous line is carried unchanged and a scope
-  never seen before gets none.
+  never passes) and whose `Slice` is the session slice — a scope in another slice is dropped, never recorded.
+- **Unmeasurable — the scope is skipped, never the tick.** A `show` that fails or answers no `Slice` (a vanished
+  unit); a `Description` that does not parse; a `ControlGroup` that does not end in the unit's own name (empty
+  included: never `$CGROOT/cgroup.procs`, the root's); a `CPUUsageNSec` or `ActiveEnterTimestampMonotonic` that is not
+  a number (or is 0); a `cgroup.procs` it cannot read or that is empty; a server pid whose stat or comm it cannot read;
+  a tmux that answers nothing for a scope whose server still runs; a process in another network namespace than the
+  sweep's own (its sockets are in tables this sweep does not read), or in its `cgroup.procs` with no `/proc` entry; an
+  fd directory, or a `/proc/net` table, it cannot read; any process on the box whose stat cannot be read while it
+  still exists (it could be a child elsewhere). Each carries the scope's previous line unchanged — its clock and
+  `cpu0` kept — gives a never-seen scope no line, and moves on to the next scope.
 - **Whose server.** The server pid in the Description is `gone` when `/proc/<pid>` is absent; `reused` when that pid
   is not a `tmux: server` or started at or after the scope (ticks against `ActiveEnterTimestampMonotonic`
   microseconds — Pre-flight 5); `ccd` when it is the server `tmux list-panes -a` answers from; and any other live tmux
-  server's scope is skipped outright, never recorded. When tmux answers nothing at all, no live server is ccd's, so
-  only the scopes of a server that no longer runs are judged.
+  server's scope is skipped outright, never recorded (tmux answered, and named another server).
 - **Dead.** A ccd scope is LIVE when any of its processes is a live pane of ccd's server (its line drops; its
   long-lived processes are listed instead); a `gone` or `reused` scope is dead.
+- **The clock.** `first=` is `/proc/uptime`'s seconds when the scope was first seen dead — boot-relative, so a
+  wall-clock step moves no stop; a carried `first=` earlier than the scope's own start or later than now is not
+  believed, and the scope is first seen now (its `cpu0` with it).
 - **Inert, then stopped.** First seen dead six hours ago or more, its `CPUUsageNSec` equal to the value then, its
-  youngest process six hours old or more, no TCP/UDP socket and no listening Unix socket (`__SO_ACCEPTCON`, `0x10000`,
-  in `/proc/net/unix`'s flags), and no child that its `cgroup.procs` does not hold. A `reused` scope is `report
-  why=server-pid-reused`, never stopped. The stop needs `$REG/scope-sweep-live`; without it the verdict is
-  `would-stop`.
+  youngest process six hours old or more, no TCP/UDP socket (IPv4 or IPv6) and no listening Unix socket
+  (`__SO_ACCEPTCON`, `0x10000`, in `/proc/net/unix`'s flags), and no child that its `cgroup.procs` does not hold. A
+  `reused` scope is `report why=server-pid-reused`, never stopped. The stop needs `$REG/scope-sweep-live`; without it
+  the verdict is `would-stop`. Armed, the fourth inert scope in one tick is `held` for the next.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1471,9 +1666,10 @@ import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 const SWEEP = path.resolve(__dirname, '../../ccd/ccd-scope-sweep');
 const SLICE = 'app-claude\\x2dsession.slice';
-const UP = 100 * 86400;                  // the fixture box has been up 100 days
+const UP = 100 * 86400;                  // the fixture box has been up 100 days: /proc/uptime, the sweep's clock
 const HOUR = 3600;
 const CCD_SERVER = 2000;
+const NETNS = 'net:[4026531840]';        // the sweep's own network namespace, and every fixture process's unless it says otherwise
 
 interface Fx { base: string; home: string; xdg: string; proc: string; cg: string; bin: string }
 let fx: Fx;
@@ -1481,8 +1677,9 @@ let fx: Fx;
 beforeEach(() => {
   const base = mkTmp('ccrc-scope-sweep-');
   fx = { base, home: path.join(base, 'home'), xdg: path.join(base, 'xdg'), proc: path.join(base, 'proc'), cg: path.join(base, 'cg'), bin: path.join(base, 'bin') };
-  for (const d of [path.join(fx.home, '.cc-sessions'), fx.xdg, path.join(fx.proc, 'net'), fx.cg, fx.bin, path.join(base, 'show')]) fs.mkdirSync(d, { recursive: true });
+  for (const d of [path.join(fx.home, '.cc-sessions'), fx.xdg, path.join(fx.proc, 'net'), path.join(fx.proc, 'self', 'ns'), fx.cg, fx.bin, path.join(base, 'show')]) fs.mkdirSync(d, { recursive: true });
   fs.writeFileSync(path.join(fx.proc, 'uptime'), `${UP}.25 1234.00\n`);
+  fs.symlinkSync(NETNS, path.join(fx.proc, 'self', 'ns', 'net'));
   fs.writeFileSync(path.join(fx.proc, 'net', 'tcp'), '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n');
   for (const f of ['tcp6', 'udp', 'udp6']) fs.copyFileSync(path.join(fx.proc, 'net', 'tcp'), path.join(fx.proc, 'net', f));
   fs.writeFileSync(path.join(fx.proc, 'net', 'unix'), 'Num       RefCount Protocol Flags    Type St Inode Path\n');
@@ -1494,7 +1691,8 @@ beforeEach(() => {
     '[ "$1" = --user ] || { echo "fixture systemctl: not --user: $*" >&2; exit 90; }',
     'case "$2" in',
     '  list-units) cat "$F/units"; exit 0 ;;',
-    '  show) if [ -f "$F/show/$3" ]; then cat "$F/show/$3"; else printf "Id=%s\\nDescription=%s\\nSlice=\\nControlGroup=\\n" "$3" "$3"; fi; exit 0 ;;',
+    '  show) [ -f "$F/show-rc" ] && exit "$(cat "$F/show-rc")"',
+    '        if [ -f "$F/show/$3" ]; then cat "$F/show/$3"; else printf "Id=%s\\nDescription=%s\\nSlice=\\nControlGroup=\\n" "$3" "$3"; fi; exit 0 ;;',
     '  stop) [ "$3" = --no-block ] || exit 91; [ -f "$F/stop-rc" ] && exit "$(cat "$F/stop-rc")"; exit 0 ;;',
     'esac',
     'echo "fixture systemctl: unexpected argv: $*" >&2; exit 90',
@@ -1512,37 +1710,41 @@ beforeEach(() => {
 afterEach(() => { removeTmpFixtures(); });
 
 /** A process in the fixture /proc: started `age` seconds ago, in cgroup `cg`, holding `sockets` (inode numbers). */
-function proc(pid: number, o: { age: number; comm?: string; ppid?: number; cg?: string; sockets?: number[]; fdUnreadable?: boolean }): void {
+function proc(pid: number, o: { age: number; comm?: string; ppid?: number; cg?: string; sockets?: number[]; fdUnreadable?: boolean; netns?: string; statUnreadable?: boolean }): void {
   const d = path.join(fx.proc, String(pid));
   fs.mkdirSync(path.join(d, 'fd'), { recursive: true });
+  fs.mkdirSync(path.join(d, 'ns'));
   const comm = o.comm ?? 'node';
   const ticks = (UP - o.age) * 100;
   // `pid (comm) state ppid …` with the start time as field 22 — the comm carries a space and a paren, as real ones can
   fs.writeFileSync(path.join(d, 'stat'), `${pid} (${comm}) S ${o.ppid ?? 1} ${pid} ${pid} 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 ${ticks} 1000 10 0\n`);
   fs.writeFileSync(path.join(d, 'comm'), `${comm}\n`);
   fs.writeFileSync(path.join(d, 'cgroup'), `0::${o.cg ?? '/elsewhere.scope'}\n`);
+  fs.symlinkSync(o.netns ?? NETNS, path.join(d, 'ns', 'net'));
   (o.sockets ?? []).forEach((ino, i) => fs.symlinkSync(`socket:[${ino}]`, path.join(d, 'fd', String(10 + i))));
   fs.symlinkSync('/dev/null', path.join(d, 'fd', '0'));
   if (o.fdUnreadable) fs.chmodSync(path.join(d, 'fd'), 0o000);
+  if (o.statUnreadable) fs.chmodSync(path.join(d, 'stat'), 0o000);
 }
 function server(pid: number, age: number, comm = 'tmux: server'): void { proc(pid, { age, comm, cg: '/ccrc-tmux-server.scope' }); }
 const cgOf = (unit: string): string => `/user.slice/user-1000.slice/user@1000.service/app.slice/${SLICE}/${unit}`;
 const unitName = (n: number): string => `tmux-spawn-0000000${n}-0000-4000-8000-000000000000.scope`;
 
-/** A pane scope: listed, shown, its cgroup holding `procs`. `bornAgo` dates its ActiveEnterTimestampMonotonic. */
+/** A pane scope: listed, shown, its cgroup holding `procs`. `bornAgo` (and `monoOffset`, µs) date its
+ *  ActiveEnterTimestampMonotonic; `cgShown`, `cpuShown` and `monoShown` replace what `show` answers. */
 function scope(n: number, o: {
-  pane: number; server?: number; procs: number[]; cpu?: number; mem?: number; bornAgo?: number;
-  slice?: string; desc?: string; unit?: string; noProcsFile?: boolean;
+  pane: number; server?: number; procs: number[]; cpu?: number; mem?: number; bornAgo?: number; monoOffset?: number;
+  slice?: string; desc?: string; unit?: string; noProcsFile?: boolean; cgShown?: string; cpuShown?: string; monoShown?: string;
 }): string {
   const u = o.unit ?? unitName(n);
   const cg = cgOf(u);
   fs.appendFileSync(path.join(fx.base, 'units'), `${u} loaded active running tmux child pane\n`);
-  const mono = (UP - (o.bornAgo ?? 9 * 86400)) * 1_000_000 + 475_320;
+  const mono = (UP - (o.bornAgo ?? 9 * 86400)) * 1_000_000 + (o.monoOffset ?? 475_320);
   fs.writeFileSync(path.join(fx.base, 'show', u), [
     `Id=${u}`, `Slice=${o.slice ?? SLICE}`,
     `Description=${o.desc ?? `tmux child pane ${o.pane} launched by process ${o.server ?? CCD_SERVER}`}`,
-    `ControlGroup=${cg}`, `CPUUsageNSec=${o.cpu ?? 7255660000}`, `MemoryCurrent=${o.mem ?? 20 * 2 ** 20}`,
-    `ActiveEnterTimestampMonotonic=${mono}`,
+    `ControlGroup=${o.cgShown ?? cg}`, `CPUUsageNSec=${o.cpuShown ?? o.cpu ?? 7255660000}`, `MemoryCurrent=${o.mem ?? 20 * 2 ** 20}`,
+    `ActiveEnterTimestampMonotonic=${o.monoShown ?? mono}`,
   ].join('\n') + '\n');
   if (!o.noProcsFile) {
     fs.mkdirSync(path.join(fx.cg, cg), { recursive: true });
@@ -1559,10 +1761,10 @@ function inert(n: number, pid = 3000 + n): string {
 }
 const STATE = (): string => path.join(fx.xdg, 'ccd-scope-sweep.state');
 const seenLines: string[] = [];
+/** A previous tick's line: first seen dead `ago` seconds ago on the sweep's boot-relative clock. */
 function seen(u: string, ago: number, cpu: number, verdict = 'report'): void {
-  const now = Math.floor(Date.now() / 1000);
-  seenLines.push(`dead ${u} first=${now - ago} cpu0=${cpu} verdict=${verdict} why=dead-under-6h server=ccd procs=1 mem=1 sockets=0 youngest=1 pids=1`);
-  fs.writeFileSync(STATE(), ['# ccd-scope-sweep v1 tick=1 mode=shadow', ...seenLines].join('\n') + '\n');
+  seenLines.push(`dead ${u} first=${UP - ago} cpu0=${cpu} verdict=${verdict} why=dead-under-6h server=ccd procs=1 mem=1 sockets=0 youngest=1 oldest=1 age=1 pids=1`);
+  fs.writeFileSync(STATE(), ['# ccd-scope-sweep v1 tick=1 up=1 mode=shadow', ...seenLines].join('\n') + '\n');
 }
 beforeEach(() => { seenLines.length = 0; });
 const arm = (): void => fs.writeFileSync(path.join(fx.home, '.cc-sessions', 'scope-sweep-live'), '');
@@ -1596,9 +1798,9 @@ describe('the stop is shadowed: recorded `would-stop` until the operator arms sc
     const u = inert(1);
     const r = run();
     expect(r.code, r.err).toBe(0);
-    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', why: 'none', server: 'ccd', sockets: '0' });
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', why: 'none', server: 'ccd', sockets: '0', oldest: String(2 * 86400), age: String(9 * 86400) });
     expect(stops()).toEqual([]);
-    expect(fs.readFileSync(STATE(), 'utf8').split('\n')[0]).toMatch(/^# ccd-scope-sweep v1 tick=\d+ mode=shadow$/);
+    expect(fs.readFileSync(STATE(), 'utf8').split('\n')[0]).toMatch(new RegExp(`^# ccd-scope-sweep v1 tick=\\d+ up=${UP} mode=shadow$`));
   });
 
   it('the same scope with scope-sweep-live: one `systemctl --user stop --no-block`, recorded `stopped`', () => {
@@ -1613,6 +1815,13 @@ describe('the stop is shadowed: recorded `would-stop` until the operator arms sc
     const u = inert(1); arm(); fs.writeFileSync(path.join(fx.base, 'stop-rc'), '1');
     run();
     expect(rows('dead')[u]!['verdict']).toBe('stop-failed');
+  });
+
+  it('armed, one tick stops at most three scopes: a fourth inert one is `held` for the next tick', () => {
+    const us = [1, 2, 3, 4].map((n) => inert(n)); arm();
+    expect(run().code).toBe(0);
+    expect(stops()).toHaveLength(3);
+    expect(us.map((u) => rows('dead')[u]!['verdict']).sort()).toEqual(['held', 'stopped', 'stopped', 'stopped']);
   });
 
   it('scope-sweep-paused stops EVERYTHING: nothing measured, recorded or stopped, armed or not', () => {
@@ -1639,13 +1848,12 @@ describe('each stop predicate, one at a time — the scope is reported, never st
     expect(stops()).toEqual([]);
   };
 
-  it('first seen dead NOW: its clock starts, and it says so once', () => {
+  it('first seen dead NOW: its clock starts at the box\'s uptime, and it says so once', () => {
     proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
     const u = scope(1, { pane: 3001, procs: [3001] });
     arm();
     const r = run();
-    expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'dead-under-6h' });
-    expect(Number(rows('dead')[u]!['first'])).toBeGreaterThan(Date.now() / 1000 - 60);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'dead-under-6h', first: String(UP) });
     expect(r.out).toContain(`${u} is dead`);
     expect(stops()).toEqual([]);
   });
@@ -1654,6 +1862,19 @@ describe('each stop predicate, one at a time — the scope is reported, never st
     proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
     const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 5 * HOUR, 7255660000);
     reportedFor(u, 'dead-under-6h');
+  });
+
+  it('dead a minute short of six hours: not yet', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 6 * HOUR - 60, 7255660000);
+    reportedFor(u, 'dead-under-6h');
+  });
+
+  it('control: dead a minute past six hours, and everything else inert — would-stop', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 6 * HOUR + 60, 7255660000);
+    run();
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', why: 'none' });
   });
 
   it('its CPU moved since it was first seen dead', () => {
@@ -1668,9 +1889,29 @@ describe('each stop predicate, one at a time — the scope is reported, never st
     reportedFor(u, 'process-started-under-6h');
   });
 
+  it('a process in it started a minute short of six hours ago', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) }); proc(3002, { age: 6 * HOUR - 60, cg: cgOf(unitName(1)), ppid: 3001 });
+    const u = scope(1, { pane: 3001, procs: [3001, 3002] }); seen(u, 7 * HOUR, 7255660000);
+    reportedFor(u, 'process-started-under-6h');
+  });
+
+  it('control: its youngest process started a minute past six hours ago — would-stop', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) }); proc(3002, { age: 6 * HOUR + 60, cg: cgOf(unitName(1)), ppid: 3001 });
+    const u = scope(1, { pane: 3001, procs: [3001, 3002] }); seen(u, 7 * HOUR, 7255660000);
+    run();
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', youngest: String(6 * HOUR + 60) });
+  });
+
   it('a process in it holds a TCP socket', () => {
     fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), '   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 424242 1 0000000000000000 100 0 0 10 0\n');
     proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)), sockets: [424242] });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
+    reportedFor(u, 'socket');
+  });
+
+  it('a process in it holds a TCP6 socket (a server listening on ::)', () => {
+    fs.appendFileSync(path.join(fx.proc, 'net', 'tcp6'), '   0: 00000000000000000000000000000000:1F40 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 535353 1 0000000000000000 100 0 0 10 0\n');
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)), sockets: [535353] });
     const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
     reportedFor(u, 'socket');
   });
@@ -1710,6 +1951,20 @@ describe('each stop predicate, one at a time — the scope is reported, never st
     run();
     expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop' });
   });
+
+  it('a first-seen clock earlier than the scope itself is not believed: first seen now', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, UP - 1, 7255660000);   // first=1: before the scope (born 9 days ago) existed
+    reportedFor(u, 'dead-under-6h');
+    expect(rows('dead')[u]!['first']).toBe(String(UP));
+  });
+
+  it('a first-seen clock later than now is not believed either: first seen now', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, -HOUR, 7255660000);
+    reportedFor(u, 'dead-under-6h');
+    expect(rows('dead')[u]!['first']).toBe(String(UP));
+  });
 });
 
 // ── WHAT THE SWEEP MUST NEVER STOP (the coordinator's ruling D) ─────────────
@@ -1720,15 +1975,6 @@ describe('what the sweep never stops, armed and inert or not', () => {
     const u = scope(1, { pane: 3001, procs: [3001], unit: 'ccrc-tmux-server.scope' }); seen(u, 7 * HOUR, 7255660000);
     arm(); run();
     expect(Object.keys(rows('dead'))).toEqual([]);
-    expect(stops()).toEqual([]);
-  });
-
-  it('a scope whose Description does not parse is unmeasurable: its old line is carried, nothing stopped', () => {
-    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
-    const u = scope(1, { pane: 3001, procs: [3001], desc: `${unitName(1)}` }); seen(u, 7 * HOUR, 7255660000);
-    const line = seenLines[0]!;
-    arm(); run();
-    expect(fs.readFileSync(STATE(), 'utf8').split('\n')).toContain(line);
     expect(stops()).toEqual([]);
   });
 
@@ -1775,17 +2021,17 @@ describe('what the sweep never stops, armed and inert or not', () => {
     expect(stops()).toEqual([]);
   });
 
+  it('control: ccd\'s server and a scope born in the SAME second, 35 ms apart — the server is ccd\'s, not reused', () => {
+    // Pre-flight 5's measurement: a comparison in whole seconds reads ccd's own server as recycled.
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001], bornAgo: 10 * 86400, monoOffset: 35_000 });
+    run();
+    expect(rows('dead')[u]).toMatchObject({ server: 'ccd', why: 'dead-under-6h' });
+  });
+
   it('a scope outside the session slice is not the sweep\'s', () => {
     proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
     const u = scope(1, { pane: 3001, procs: [3001], slice: 'app.slice' }); seen(u, 7 * HOUR, 7255660000);
-    arm(); run();
-    expect(rows('dead')[u]).toBeUndefined();
-    expect(stops()).toEqual([]);
-  });
-
-  it('with no ccd server answering (tmux: no server running), a scope of a server that still RUNS is not ccd\'s to judge', () => {
-    fs.rmSync(path.join(fx.base, 'panes'));
-    const u = inert(1);
     arm(); run();
     expect(rows('dead')[u]).toBeUndefined();
     expect(stops()).toEqual([]);
@@ -1800,27 +2046,148 @@ describe('what the sweep never stops, armed and inert or not', () => {
   });
 });
 
-// ── UNMEASURABLE SKIPS; LIVE RESETS ─────────────────────────────────────────
+// ── UNMEASURABLE SKIPS THE SCOPE (NOT THE TICK); LIVE RESETS ────────────────
 
-describe('a predicate it cannot measure skips the scope for the tick; a live scope resets its clock', () => {
-  it('an fd directory it cannot read: the old line is carried unchanged, and nothing is stopped', () => {
-    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)), fdUnreadable: true });
-    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
-    const line = seenLines[0]!;
+describe('a value it cannot measure skips that scope for the tick — the old line carried, the tick run to its end', () => {
+  /** A dead scope beside the unmeasurable one, measurable: first seen this tick (its server is gone). */
+  const companion = (): string => {
+    proc(3900, { age: 2 * 86400, cg: cgOf(unitName(9)) });
+    return scope(9, { pane: 3900, server: 7777, procs: [3900] });
+  };
+  /** Armed; the tick ends with a fresh header, `line` byte for byte, nothing stopped — and, when there is
+   *  a companion, the companion judged that same tick (only THAT scope was skipped, not the tick). */
+  const carried = (line: string, o: { companion?: string } = {}): void => {
     arm();
-    try { run(); } finally { fs.chmodSync(path.join(fx.proc, '3001', 'fd'), 0o755); }
-    expect(fs.readFileSync(STATE(), 'utf8').split('\n')).toContain(line);
+    const r = run();
+    expect(r.code, r.err).toBe(0);
+    const text = fs.readFileSync(STATE(), 'utf8').split('\n');
+    expect(text[0], 'the tick ran to its end and rewrote the record').toMatch(new RegExp(`^# ccd-scope-sweep v1 tick=\\d{10} up=${UP} mode=live$`));
+    expect(text).toContain(line);
+    if (o.companion) expect(rows('dead')[o.companion]).toMatchObject({ verdict: 'report', why: 'dead-under-6h', first: String(UP) });
     expect(stops()).toEqual([]);
+  };
+  const one = (o: Parameters<typeof scope>[1] & { procOpts?: Parameters<typeof proc>[1] }): string => {
+    proc(3001, o.procOpts ?? { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, o); seen(u, 7 * HOUR, 7255660000);
+    return u;
+  };
+
+  it('a Description that does not parse', () => {
+    one({ pane: 3001, procs: [3001], desc: unitName(1) });
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
   });
 
-  it('a cgroup.procs it cannot read: carried, nothing stopped — and a scope never seen before records nothing', () => {
+  it('a `systemctl show` that fails (or answers no Slice: a unit that vanished)', () => {
+    one({ pane: 3001, procs: [3001] });
+    fs.writeFileSync(path.join(fx.base, 'show-rc'), '1');
+    carried(seenLines[0]!);
+  });
+
+  it('an empty ControlGroup — never the root cgroup\'s processes', () => {
+    one({ pane: 3001, procs: [3001], cgShown: '' });
+    fs.writeFileSync(path.join(fx.cg, 'cgroup.procs'), '3001\n');   // what a path built from an empty string would read
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
+  });
+
+  it('a ControlGroup that names another unit', () => {
+    const other = '/user.slice/user-1000.slice/user@1000.service/app.slice/mekwar-ddb.service';
+    one({ pane: 3001, procs: [3001], cgShown: other });
+    fs.mkdirSync(path.join(fx.cg, other), { recursive: true });
+    fs.writeFileSync(path.join(fx.cg, other, 'cgroup.procs'), '3001\n');
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
+  });
+
+  it('a CPUUsageNSec systemd does not report', () => {
+    one({ pane: 3001, procs: [3001], cpuShown: '[not set]' });
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
+  });
+
+  it('an ActiveEnterTimestampMonotonic of 0', () => {
+    one({ pane: 3001, procs: [3001], monoShown: '0' });
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
+  });
+
+  it('a cgroup.procs it cannot read — and a scope never seen before records nothing', () => {
     const u = scope(1, { pane: 3001, procs: [3001], noProcsFile: true }); seen(u, 7 * HOUR, 7255660000);
-    const v = scope(2, { pane: 3002, procs: [3002], noProcsFile: true });
-    const line = seenLines[0]!;
-    arm(); run();
-    expect(fs.readFileSync(STATE(), 'utf8').split('\n')).toContain(line);
-    expect(rows('dead')[v]).toBeUndefined();
-    expect(stops()).toEqual([]);
+    const w = scope(2, { pane: 3002, procs: [3002], noProcsFile: true });
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
+    expect(rows('dead')[w]).toBeUndefined();
+  });
+
+  it('an empty cgroup.procs', () => {
+    one({ pane: 3001, procs: [] });
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
+  });
+
+  it('an fd directory it cannot read', () => {
+    one({ pane: 3001, procs: [3001], procOpts: { age: 2 * 86400, cg: cgOf(unitName(1)), fdUnreadable: true } });
+    const v = companion();
+    try { carried(seenLines[0]!, { companion: v }); } finally { fs.chmodSync(path.join(fx.proc, '3001', 'fd'), 0o755); }
+  });
+
+  it('a process in another network namespace, holding a socket these tables do not list', () => {
+    one({ pane: 3001, procs: [3001], procOpts: { age: 2 * 86400, cg: cgOf(unitName(1)), netns: 'net:[4026532999]', sockets: [999999] } });
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
+  });
+
+  it('a process in its cgroup.procs that has no /proc entry any more', () => {
+    one({ pane: 3001, procs: [3001, 3002] });
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
+  });
+
+  it('a /proc/net/tcp it cannot read, holding the socket', () => {
+    fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), '   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 424242 1 0000000000000000 100 0 0 10 0\n');
+    one({ pane: 3001, procs: [3001], procOpts: { age: 2 * 86400, cg: cgOf(unitName(1)), sockets: [424242] } });
+    fs.chmodSync(path.join(fx.proc, 'net', 'tcp'), 0o000);
+    carried(seenLines[0]!);
+  });
+
+  it('a /proc/net/unix it cannot read, holding the listening socket', () => {
+    fs.appendFileSync(path.join(fx.proc, 'net', 'unix'), '0000000000000000: 00000002 00000000 00010000 0001 01 626262 /tmp/server.sock\n');
+    one({ pane: 3001, procs: [3001], procOpts: { age: 2 * 86400, cg: cgOf(unitName(1)), sockets: [626262] } });
+    fs.chmodSync(path.join(fx.proc, 'net', 'unix'), 0o000);
+    carried(seenLines[0]!);
+  });
+
+  it('a process in it whose stat cannot be read', () => {
+    one({ pane: 3001, procs: [3001, 3002] });
+    proc(3002, { age: 2 * 86400, cg: cgOf(unitName(1)), statUnreadable: true });
+    carried(seenLines[0]!);
+  });
+
+  it('a server pid whose comm cannot be read: it cannot be told a tmux server', () => {
+    one({ pane: 3001, procs: [3001] });
+    fs.chmodSync(path.join(fx.proc, String(CCD_SERVER), 'comm'), 0o000);
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
+  });
+
+  it('a server pid whose stat cannot be read', () => {
+    one({ pane: 3001, procs: [3001] });
+    fs.chmodSync(path.join(fx.proc, String(CCD_SERVER), 'stat'), 0o000);
+    carried(seenLines[0]!);
+  });
+
+  it('a process ELSEWHERE on the box whose stat cannot be read: it could be a child of this scope', () => {
+    one({ pane: 3001, procs: [3001] });
+    proc(3500, { age: 2 * 86400, statUnreadable: true });
+    carried(seenLines[0]!);
+  });
+
+  it('with no ccd server answering (tmux: no server running), a scope of a server that still RUNS cannot be judged', () => {
+    fs.rmSync(path.join(fx.base, 'panes'));
+    const u = inert(1); void u;
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
   });
 
   it('a scope seen live drops its entry, so it dies again from zero', () => {
@@ -1874,13 +2241,27 @@ In `server/test/single-definition.test.ts`, append at the end of the file:
 describe('the pane-scope sweep: its arming file has no writer in the tree', () => {
   // `scope-sweep-live` arms `ccd-scope-sweep`'s stop: without it every inert scope is only recorded `would-stop`.
   // Like `stall-watch-live` the operator touches and removes it by hand, so the ONE line of shell that may name
-  // it is the sweep's own read, and no TypeScript names it at all. KNOWN WIDTH: a name assembled from pieces is
-  // not seen; the bar is the ordinary copy.
+  // it is the sweep's own read, no TypeScript names it at all, and no other file under ccd/ or deploy/ does on a
+  // code line. KNOWN WIDTH: a name assembled from pieces is not seen; the bar is the ordinary copy.
   it('scope-sweep-live: one shell holder, ccd/ccd-scope-sweep, whose one line is a read; no TS holder', () => {
     expect(holdersOf('scope-sweep-live'), 'a line of shell other than the sweep names it — a writer in waiting').toEqual(['ccd/ccd-scope-sweep']);
     expect(codeLines(path.join(ccrcRoot, 'ccd', 'ccd-scope-sweep')).filter((l) => l.includes('scope-sweep-live')))
       .toEqual(['[ -e "$REG/scope-sweep-live" ] && MODE=live']);
     expect(ALL.filter((f) => stallCode(f).includes('scope-sweep-live')).map(rel)).toEqual([]);
+  });
+
+  // A writer need not be shell: every OTHER file under ccd/ and deploy/ — Python, .mjs, a unit file's
+  // `ExecStartPre=` — is read on its non-comment lines too (`#`, `//`, `*` and `/*` lines dropped; Markdown,
+  // which is prose, skipped).
+  const nonShell = (dir: string): string[] => readdirSync(dir).flatMap((e) => {
+    const p = path.join(dir, e);
+    return statSync(p).isDirectory() ? nonShell(p) : (BASH.includes(p) || p.endsWith('.md') ? [] : [p]);
+  });
+  it('scope-sweep-live: no other file under ccd/ or deploy/ names it on a code line — no Python, .mjs or unit-file writer', () => {
+    const others = bashRoots.flatMap(nonShell);
+    expect(others.length, 'the walk reached the non-shell files').toBeGreaterThan(40);
+    expect(others.filter((f) => readFileSync(f, 'utf8').split('\n')
+      .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes('scope-sweep-live'))).map(rel)).toEqual([]);
   });
 });
 ```
@@ -1892,9 +2273,10 @@ cd server && ./node_modules/.bin/vitest run test/scope-sweep.test.ts --maxWorker
 ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'arming file' --maxWorkers=1
 ```
 
-Expected: `26 failed | 3 passed (29)` — the three that pass assert only that nothing is recorded or stopped (outside
-the slice; another live tmux server; no ccd server answering), each measured red by its row instead (3.5, 3.7, 3.24);
-then `1 failed | 274 skipped (275)`.
+Expected: `52 failed (52)` — no case passes with the sweep absent: every "nothing recorded" case starts from a seeded
+line it expects dropped, and every unmeasurable case asserts `rc 0` and a header rewritten by the tick (the first
+draft's three cases passed with no sweep at all — the plan review's tests lens); then `1 failed | 1 passed | 274 skipped
+(276)` — the shell holder's case reds on the missing file, and the non-shell scan has nothing to find yet.
 
 - [ ] **Step 3: The sweep**
 
@@ -1919,15 +2301,17 @@ Create `ccd/ccd-scope-sweep`:
 #     name checked again here (a list that ever returned another unit — ccd's
 #     own `ccrc-tmux-server.scope` sits in the same slice — must not reach the
 #     rest), whose `Slice` is the session slice and whose `Description` parses
-#     as `tmux child pane <pid> launched by process <pid>`. Any other scope is
-#     outside the sweep: never recorded, never stopped. A Description that does
-#     not parse is UNMEASURABLE.
+#     as `tmux child pane <pid> launched by process <pid>`. A scope in another
+#     slice is outside the sweep: never recorded, never stopped. A `show` that
+#     answers no Slice at all, or a Description that does not parse, is
+#     UNMEASURABLE.
 #   * every value from `systemctl --user show` (`ControlGroup`, `CPUUsageNSec`,
 #     `MemoryCurrent`, `ActiveEnterTimestampMonotonic`) — the cgroup path is
 #     ASKED FOR, never built from a string: building it is what left
-#     ccd-cap-scopes capping nothing for 13 days (that script's own header).
+#     ccd-cap-scopes capping nothing for 13 days (that script's own header). A
+#     ControlGroup that does not end in the unit's own name is unmeasurable.
 #   * the scope's `cgroup.procs`, and /proc for each process: its start, its
-#     parent, its open sockets.
+#     parent, its network namespace, its open sockets.
 #
 # DEAD, AND CCD'S. A scope is DEAD when none of its processes is a live pane of
 # the tmux server its Description names. It is CCD'S when that server is ccd's
@@ -1938,14 +2322,19 @@ Create `ccd/ccd-scope-sweep`:
 # server is never touched and never recorded (its panes are not ccd's to ask
 # about). A server pid that now names another process, or a process that
 # started after the scope, is `server-pid-reused`: the scope is reported, never
-# stopped.
+# stopped. When tmux answers nothing (no server, a deleted socket, a timeout),
+# a scope whose server still RUNS cannot be judged either way: unmeasurable.
 #
 # THE STOP — every predicate, in order (spec §5.6):
 #   1. first seen dead at least SCOPE_SWEEP_DEAD_SEC (six hours) ago;
 #   2. its CPUUsageNSec has not moved since it was first seen dead;
 #   3. no process in it started in the last six hours;
-#   4. no process in it holds a TCP or UDP socket, or a LISTENING Unix socket;
-#   5. no process in it is the parent of a process in another cgroup;
+#   4. no process in it holds a TCP or UDP socket, or a LISTENING Unix socket —
+#      read from this sweep's own /proc/net tables, so a process in ANOTHER
+#      network namespace (a sandbox's) is unmeasurable, never "no socket";
+#   5. no process in it is the parent of a process in another cgroup — read
+#      over every process on the box, so one whose stat cannot be read while it
+#      still exists makes this predicate unmeasurable;
 #   6. no live handoff record names one of its processes — Claude Code's native
 #      adopt record, if the stage-2 spike makes native handoff primary. None
 #      exists before stage 3 (the stage-3 launch record carries run and agent
@@ -1953,30 +2342,41 @@ Create `ccd/ccd-scope-sweep`:
 #      no code until then;
 #   7. `$REG/scope-sweep-paused` is absent — checked first of all: a paused
 #      sweep does NOTHING, shadow verdicts and the record included.
-# A predicate it cannot measure (a value systemd does not report, a cgroup or a
-# /proc entry it cannot read) SKIPS that scope for the tick and records nothing
-# new: the scope's previous verdict line is carried unchanged. A scope seen LIVE
-# drops its entry, so its clock starts again from zero the next time it dies.
+# A predicate it cannot measure (a value systemd does not report, a cgroup, a
+# /proc entry or a /proc/net table it cannot read) SKIPS that scope for the tick
+# and records nothing new: the scope's previous verdict line is carried
+# unchanged, and the other scopes are judged as usual. A scope seen LIVE drops
+# its entry, so its clock starts again from zero the next time it dies.
+#
+# THE CLOCK is boot-relative: `first=` is /proc/uptime's seconds when the scope
+# was first seen dead, so a wall-clock step (NTP, a manual `date`) moves no
+# stop. A carried `first=` earlier than the scope's own start or later than now
+# is not believed: the scope is first seen now. A reboot empties
+# $XDG_RUNTIME_DIR (a tmpfs) and with it every clock — the safe direction.
 #
 # SHADOWED (wave 4's safety ruling). A scope that passes every predicate is
 # recorded `would-stop`, and `systemctl --user stop --no-block` is issued ONLY
 # when `$REG/scope-sweep-live` exists. NOTHING IN THIS TREE WRITES THAT FILE —
 # the operator arms the stop by hand, as with stall-watch-live, and
 # `single-definition.test.ts` pins that no line of shell other than this file's
-# one read names it. A reboot empties $XDG_RUNTIME_DIR and with it every
-# first-seen clock, which is the safe direction.
+# one read names it. Armed, at most SCOPE_SWEEP_MAX_STOPS scopes are stopped in
+# one tick; an inert scope past that budget is recorded `held` and waits for
+# the next tick, so a misjudgment the shadow week missed costs three scopes a
+# minute, not every scope at once.
 #
 # THE VERDICT RECORD, `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`, rewritten whole
-# by rename every tick: a header `# ccd-scope-sweep v1 tick=<epoch> mode=<shadow|live>`,
-# one `dead` line per dead ccd scope (first seen, CPU then, verdict, why,
-# server, processes, memory, sockets, youngest process, pids), and one `old`
-# line per process older than a day in a LIVE pane scope that is neither the
-# pane's own process nor one of its Claude Code's MCP servers (a direct child
-# of the pane's process started within SCOPE_SWEEP_MCP_SEC of it, and that
-# child's descendants). `ccrc doctor` READS this record and never re-derives it.
+# by rename every tick: a header `# ccd-scope-sweep v1 tick=<epoch> up=<s>
+# mode=<shadow|live>`, one `dead` line per dead ccd scope (first seen, CPU
+# then, verdict, why, server, processes, memory, sockets, youngest and oldest
+# process, the scope's own age, pids), and one `old` line per process older
+# than a day in a LIVE pane scope that is neither the pane's own process nor
+# one of its Claude Code's MCP servers (a direct child of the pane's process
+# started within SCOPE_SWEEP_MCP_SEC of it, and that child's descendants).
+# `ccrc doctor` READS this record and never re-derives it.
 #
 # OUTPUT. Silent on an ordinary tick; one line when a scope is first seen dead,
-# first reaches `would-stop`, or is stopped. Refusals go to stderr, exit 1.
+# first reaches `would-stop` or `held`, or is stopped. Refusals go to stderr,
+# exit 1.
 #
 # FIXTURE SEAMS, the doctor's own names: CCRC_PROC_ROOT (default /proc) and
 # CCRC_CGROUP_ROOT (default /sys/fs/cgroup); `systemctl` and `tmux` are found
@@ -2000,6 +2400,7 @@ SLICE='app-claude\x2dsession.slice'
 SCOPE_SWEEP_DEAD_SEC=21600    # six hours: first seen dead -> the earliest stop, and the youngest process a stop allows
 SCOPE_SWEEP_OLD_SEC=86400     # a process older than a day in a LIVE pane scope is listed for doctor
 SCOPE_SWEEP_MCP_SEC=120       # a direct child of the pane's Claude Code started this soon after it is one of its MCP servers
+SCOPE_SWEEP_MAX_STOPS=3       # armed: the most scopes one tick stops; the rest are `held` for the next
 DESC_RE='^tmux child pane ([0-9]+) launched by process ([0-9]+)$'
 
 _ss_die() { echo "scope-sweep: $*" >&2; exit 1; }
@@ -2014,6 +2415,7 @@ UP="${UP%%.*}"
 TCK=$(getconf CLK_TCK 2>/dev/null) || TCK=100
 [[ "$TCK" =~ ^[1-9][0-9]*$ ]] || TCK=100
 NOW=$(date +%s)
+NETNS=$(readlink "$PROC/self/ns/net" 2>/dev/null) || NETNS=""   # this sweep's own network namespace: the one its /proc/net tables describe
 MODE=shadow
 # The ONE read of the arming file, here and nowhere else in the tree (single-definition.test.ts).
 [ -e "$REG/scope-sweep-live" ] && MODE=live
@@ -2045,9 +2447,10 @@ _ss_age() { echo $(( UP - TICKS[$1] / TCK )); }          # seconds; the caller r
 _ss_comm() { local c; { IFS= read -r c < "$PROC/$1/comm"; } 2>/dev/null || return 1; printf '%s' "$c"; }
 
 # ── ccd's tmux server and its live panes ──────────────────────────────────────
-# Any failure (no server, a deleted socket, no tmux) leaves SERVER empty: then no
-# LIVE server is ccd's, and only the scopes of a server that no longer runs can
-# be dead and ccd's — the safe direction for every reading.
+# Any failure (no server, a deleted socket, no tmux) leaves SERVER empty: then a
+# scope whose server still runs cannot be told ccd's or another server's, and is
+# skipped as unmeasurable; only the scopes of a server that no longer runs are
+# judged — the safe direction for every reading.
 SERVER=""
 declare -A PANE=()
 if out=$(tmux list-panes -a -F '#{pid} #{pane_pid}' 2>/dev/null); then
@@ -2078,6 +2481,8 @@ _ss_sockets() {   # rc 1 unmeasurable
 _ss_socket_count() {   # pid... -> the TCP/UDP and listening Unix sockets they hold; rc 1 unmeasurable
   local p fd t n=0
   for p in "$@"; do
+    # A process in another network namespace holds sockets these tables do not list: unmeasurable, never "none".
+    t=$(readlink "$PROC/$p/ns/net" 2>/dev/null) && [[ "$t" == "$NETNS" ]] || return 1
     [ -d "$PROC/$p/fd" ] && [ -r "$PROC/$p/fd" ] && [ -x "$PROC/$p/fd" ] || return 1
     for fd in "$PROC/$p/fd"/*; do
       t=$(readlink "$fd" 2>/dev/null) || continue
@@ -2089,13 +2494,21 @@ _ss_socket_count() {   # pid... -> the TCP/UDP and listening Unix sockets they h
 }
 
 # ── every process on the box and its parent, read once for predicate 5 ───────
-BOX_READ=0
-_ss_box() { local d; (( BOX_READ )) && return 0; for d in "$PROC"/[0-9]*; do _ss_stat "${d##*/}" || :; done; BOX_READ=1; }
+BOX_READ=0 BOX_BAD=0
+_ss_box() {   # rc 1 unmeasurable: a process that still exists but whose stat cannot be read
+  local d
+  if (( ! BOX_READ )); then
+    for d in "$PROC"/[0-9]*; do _ss_stat "${d##*/}" || { [ -e "$d" ] && BOX_BAD=1; }; done
+    BOX_READ=1
+  fi
+  (( ! BOX_BAD ))
+}
 
 # ── the scopes ────────────────────────────────────────────────────────────────
 units=$(systemctl --user list-units --no-legend --plain 'tmux-spawn-*.scope' 2>/dev/null) \
   || _ss_die "systemctl --user list-units did not answer, so no pane scope can be listed"
 OUT=() SAID=()
+STOPS=0
 declare -A P=() MINE=()
 _ss_carry() { [[ -n "${PREV[$u]+x}" ]] && OUT+=("${PREV[$u]}"); return 0; }   # unmeasurable: the old line, unchanged
 while read -r u _; do
@@ -2103,12 +2516,15 @@ while read -r u _; do
   P=()
   while IFS='=' read -r k v; do [[ -n "$k" ]] && P[$k]="$v"; done < <(systemctl --user show "$u" -p Id -p Slice \
     -p Description -p ControlGroup -p CPUUsageNSec -p MemoryCurrent -p ActiveEnterTimestampMonotonic 2>/dev/null)
-  [[ "${P[Slice]:-}" == "$SLICE" ]] || continue       # outside the session slice: not the sweep's
+  [[ -n "${P[Slice]:-}" ]] || { _ss_carry; continue; }  # `show` failed or the unit vanished: unmeasurable
+  [[ "${P[Slice]}" == "$SLICE" ]] || continue           # outside the session slice: not the sweep's
   [[ "${P[Description]:-}" =~ $DESC_RE ]] || { _ss_carry; continue; }   # a Description that does not parse: unmeasurable
   pane=${BASH_REMATCH[1]} server=${BASH_REMATCH[2]}
   cg="${P[ControlGroup]:-}" cpu="${P[CPUUsageNSec]:-}" mono="${P[ActiveEnterTimestampMonotonic]:-}"
   mem="${P[MemoryCurrent]:-}"; [[ "$mem" =~ ^[0-9]+$ ]] || mem='?'
-  [[ "$cg" == /*"/$u" && "$cpu" =~ ^[0-9]+$ && "$mono" =~ ^[1-9][0-9]*$ ]] || { _ss_carry; continue; }
+  [[ "$cg" == /*"/$u" ]] || { _ss_carry; continue; }   # the cgroup systemd names for THIS unit, or nothing is read
+  [[ "$cpu" =~ ^[0-9]+$ ]] || { _ss_carry; continue; }
+  [[ "$mono" =~ ^[1-9][0-9]*$ ]] || { _ss_carry; continue; }
   procs=()
   { mapfile -t procs < "$CGROOT$cg/cgroup.procs"; } 2>/dev/null || { _ss_carry; continue; }
   (( ${#procs[@]} )) || { _ss_carry; continue; }
@@ -2119,6 +2535,7 @@ while read -r u _; do
     comm=$(_ss_comm "$server") || { _ss_carry; continue; }
     if [[ "$comm" != "tmux: server" ]] || (( TICKS[$server] * (1000000 / TCK) >= mono )); then state=reused
     elif [[ "$server" == "$SERVER" ]]; then state=ccd
+    elif [[ -z "$SERVER" ]]; then _ss_carry; continue   # tmux answered nothing: ccd's server or another's, it cannot say
     else continue                                       # another LIVE tmux server's pane: never touched, never recorded
     fi
   fi
@@ -2150,44 +2567,47 @@ while read -r u _; do
     continue
   fi
   # DEAD. Every predicate measured; any one that cannot be carries the old line.
-  youngest=-1 bad=0
+  youngest=-1 oldest=-1
   for p in "${procs[@]}"; do
-    _ss_stat "$p" || { bad=1; break; }
-    a=$(_ss_age "$p"); (( youngest < 0 || a < youngest )) && youngest=$a
+    _ss_stat "$p" || continue   # unreadable: one that still exists makes _ss_box below unmeasurable, one that has gone has no ns/net to read
+    a=$(_ss_age "$p"); (( youngest < 0 || a < youngest )) && youngest=$a; (( a > oldest )) && oldest=$a
   done
-  (( bad )) && { _ss_carry; continue; }
   _ss_sockets || { _ss_carry; continue; }
   socks=$(_ss_socket_count "${procs[@]}") || { _ss_carry; continue; }
-  _ss_box
+  _ss_box || { _ss_carry; continue; }
   MINE=(); for p in "${procs[@]}"; do MINE[$p]=1; done
   elsewhere=0
   for q in "${!PARENT[@]}"; do   # a child of one of its processes that its cgroup.procs does not hold lives in another cgroup
     [[ -n "${MINE[${PARENT[$q]}]+x}" && -z "${MINE[$q]+x}" ]] && elsewhere=1
   done
-  first=${FIRST[$u]:-$NOW} cpu0=${CPU0[$u]:-$cpu}
+  born=$(( mono / 1000000 ))     # the scope's own start, seconds since boot
+  first=${FIRST[$u]:-} cpu0=${CPU0[$u]:-}
+  if [[ -z "$first" ]] || (( first < born || first > UP )); then first=$UP cpu0=$cpu; fi   # a clock it cannot believe starts now
   why=()
   if [[ "$state" == reused ]]; then why+=(server-pid-reused)
   else
-    (( NOW - first >= SCOPE_SWEEP_DEAD_SEC )) || why+=(dead-under-6h)
+    (( UP - first >= SCOPE_SWEEP_DEAD_SEC )) || why+=(dead-under-6h)
     [[ "$cpu" == "$cpu0" ]] || why+=(cpu-moved)
     (( youngest >= SCOPE_SWEEP_DEAD_SEC )) || why+=(process-started-under-6h)
     (( socks == 0 )) || why+=(socket)
     (( elsewhere == 0 )) || why+=(parent-of-a-process-elsewhere)
   fi
   if (( ${#why[@]} )); then verdict=report
-  elif [[ "$MODE" == live ]]; then
+  elif [[ "$MODE" != live ]]; then verdict=would-stop
+  elif (( STOPS >= SCOPE_SWEEP_MAX_STOPS )); then verdict=held
+  else
+    STOPS=$((STOPS + 1))
     if systemctl --user stop --no-block "$u" 2>/dev/null; then verdict=stopped; else verdict=stop-failed; fi
-  else verdict=would-stop
   fi
   w="${why[*]:-none}" pl="${procs[*]}"
-  OUT+=("dead $u first=$first cpu0=$cpu0 verdict=$verdict why=${w// /,} server=$state procs=${#procs[@]} mem=$mem sockets=$socks youngest=$youngest pids=${pl// /,}")
+  OUT+=("dead $u first=$first cpu0=$cpu0 verdict=$verdict why=${w// /,} server=$state procs=${#procs[@]} mem=$mem sockets=$socks youngest=$youngest oldest=$oldest age=$(( UP - born )) pids=${pl// /,}")
   if [[ -z "${PREV[$u]+x}" ]]; then SAID+=("scope-sweep: $u is dead, its server $state, ${#procs[@]} process(es): first seen now")
-  elif [[ "$verdict" != report && "$verdict" != "${PREVV[$u]:-}" ]]; then SAID+=("scope-sweep: $u $verdict — dead since $first, ${#procs[@]} process(es), its CPU unmoved, no socket, nothing elsewhere")
+  elif [[ "$verdict" != report && "$verdict" != "${PREVV[$u]:-}" ]]; then SAID+=("scope-sweep: $u $verdict — dead $(( (UP - first) / 60 )) min, ${#procs[@]} process(es), its CPU unmoved, no socket, nothing elsewhere")
   fi
 done <<<"$units"
 
 tmp=$(mktemp "$STATE.XXXXXX") || _ss_die "cannot write beside $STATE"
-{ echo "# ccd-scope-sweep v1 tick=$NOW mode=$MODE"; (( ${#OUT[@]} )) && printf '%s\n' "${OUT[@]}"; } > "$tmp"
+{ echo "# ccd-scope-sweep v1 tick=$NOW up=$UP mode=$MODE"; (( ${#OUT[@]} )) && printf '%s\n' "${OUT[@]}"; } > "$tmp"
 mv -f "$tmp" "$STATE" || { rm -f "$tmp"; _ss_die "cannot write $STATE"; }
 (( ${#SAID[@]} )) && printf '%s\n' "${SAID[@]}"
 exit 0
@@ -2203,43 +2623,80 @@ Expected: `100755 … ccd/ccd-scope-sweep` — tracked executable, as `ccd/ccd-t
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/scope-sweep.test.ts --maxWorkers=1
-./node_modules/.bin/vitest run test/macos-platform.test.ts test/single-definition.test.ts --maxWorkers=1
+cd server && ./node_modules/.bin/vitest run test/macos-platform.test.ts test/scope-sweep.test.ts --maxWorkers=1
+./node_modules/.bin/vitest run test/single-definition.test.ts --maxWorkers=1
 ```
 
-Expected: `29 passed (29)`; then `126 passed | 11 skipped (137)` for the platform scan with the sweep suite, and `single-definition` green.
+Expected: `149 passed | 11 skipped (160)` (the platform scan's 97 with its 11 macOS-only skips, and the sweep's 52); then
+`276 passed (276)`.
 
 - [ ] **Step 5: Mutation check, then commit**
 
-`scope-sweep.test.ts` run alone at `--maxWorkers=1` for every row but 3.25 (`single-definition.test.ts -t 'arming file'`).
+`scope-sweep.test.ts` run alone at `--maxWorkers=1` for every row but 3.48–3.50 (`single-definition.test.ts -t 'arming
+file'`, 2 cases). Multi-line edits show their lines joined by ` / `; `(nothing)` is a deletion; a row of two edits
+applies both. Every unmeasurable case's companion — a second dead scope, measurable, first seen this tick — is why a
+deleted dead-under-6h check (3.17) or a deleted carry (3.30) reds so many.
 
-| # | File | Exact edit (old → new) | Measured red on the full prototype (of 29) |
+| # | File | Exact edit (old → new) | Measured red on the full prototype (of 52) |
 |---|---|---|---|
-| 3.1 | `ccd/ccd-scope-sweep` | `[ -e "$REG/scope-sweep-live" ] && MODE=live` → `MODE=live` | 3 failed: “a dead ccd scope inert for six hours, with no scope-sweep-live: would-stop, and NEVER a stop call”; “control: a CONNECTED Unix socket … — would-stop”; “control: a child in the SAME scope is not elsewhere — would-stop” |
-| 3.2 | `ccd/ccd-scope-sweep` | `if systemctl --user stop --no-block "$u" 2>/dev/null; then verdict=stopped;` → `if true; then verdict=stopped;` | 3 failed: “the same scope with scope-sweep-live: one `systemctl --user stop --no-block`, recorded `stopped`”; “a stop systemd refuses is recorded `stop-failed`”; “control: a scope of a server that no longer runs IS ccd's, and an inert one is stopped when armed” |
-| 3.3b | `ccd/ccd-scope-sweep` | `[ -e "$PAUSE" ] && { echo` → `[ -e "$PAUSE" ] && false && { echo` | 1 failed: “scope-sweep-paused stops EVERYTHING: nothing measured, recorded or stopped, armed or not” |
-| 3.4 | `ccd/ccd-scope-sweep` | `  [[ "$u" == tmux-spawn-*.scope ]] \|\| continue` → `  :` | 1 failed: “ccd's own ccrc-tmux-server.scope, even listed with a pane Description: never recorded, never stopped” |
-| 3.5 | `ccd/ccd-scope-sweep` | `  [[ "${P[Slice]:-}" == "$SLICE" ]] \|\| continue` → `  :` | 1 failed: “a scope outside the session slice is not the sweep's” |
-| 3.6 | `ccd/ccd-scope-sweep` | `DESC_RE='^tmux child pane ([0-9]+) launched by process ([0-9]+)$'` → `DESC_RE='([0-9]+)[^0-9]+([0-9]+)'` | 1 failed: “a scope whose Description does not parse is unmeasurable: its old line is carried, nothing stopped” |
-| 3.7 | `ccd/ccd-scope-sweep` | `else continue   # another LIVE …` → `else state=gone   # another LIVE …` | 2 failed: “a scope of a LIVE tmux server that is not ccd's: never recorded, never stopped”; “with no ccd server answering (tmux: no server running), a scope of a server that still RUNS is not ccd's to judge” |
-| 3.8 | `ccd/ccd-scope-sweep` | ` \|\| (( TICKS[$server] * (1000000 / TCK) >= mono )); then state=reused` → `; then state=reused` | 2 failed: “a scope whose server pid now names a process that started AFTER the scope: reported server-pid-reused, never stopped”; “ccd's server pid itself, recycled after the scope was born: reported, never stopped” |
-| 3.9 | `ccd/ccd-scope-sweep` | `if [[ "$comm" != "tmux: server" ]] \|\| ` → `if ` | 1 failed: “a scope whose server pid now names a process that is not a tmux server: reported, never stopped” |
-| 3.10 | `ccd/ccd-scope-sweep` | `[[ -n "${PANE[$p]+x}" ]] && live=1` → `:` | 3 failed: “a scope with a live pane of ccd's server is LIVE: its old entry drops, nothing stopped”; “a scope seen live drops its entry, so it dies again from zero”; “a background shell two hours after the pane, older than a day: listed; …” |
-| 3.11 | `ccd/ccd-scope-sweep` | `(( NOW - first >= SCOPE_SWEEP_DEAD_SEC )) \|\| why+=(dead-under-6h)` → (nothing) | 3 failed: “first seen dead NOW: its clock starts, and it says so once”; “dead for five hours, not six”; “a scope seen live drops its entry, so it dies again from zero” |
-| 3.12 | `ccd/ccd-scope-sweep` | `[[ "$cpu" == "$cpu0" ]] \|\| why+=(cpu-moved)` → (nothing) | 1 failed: “its CPU moved since it was first seen dead” |
-| 3.13 | `ccd/ccd-scope-sweep` | `(( youngest >= SCOPE_SWEEP_DEAD_SEC )) \|\| why+=(process-started-under-6h)` → (nothing) | 1 failed: “a process in it started in the last six hours” |
-| 3.14 | `ccd/ccd-scope-sweep` | `(( socks == 0 )) \|\| why+=(socket)` → (nothing) | 3 failed: “a process in it holds a TCP socket”; “… a UDP socket”; “… a LISTENING Unix socket” |
-| 3.15 | `ccd/ccd-scope-sweep` | `(( (16#$flags & 0x10000) != 0 )) && LISTEN[$ino]=1` → `LISTEN[$ino]=1` | 1 failed: “control: a CONNECTED Unix socket (a client of something) does not hold it — would-stop” |
-| 3.16 | `ccd/ccd-scope-sweep` | `for f in tcp tcp6 udp udp6; do` → `for f in tcp tcp6; do` | 1 failed: “a process in it holds a UDP socket” |
-| 3.17 | `ccd/ccd-scope-sweep` | `(( elsewhere == 0 )) \|\| why+=(parent-of-a-process-elsewhere)` → (nothing) | 1 failed: “a process in it is the parent of a process in another cgroup” |
-| 3.18 | `ccd/ccd-scope-sweep` | ` && -z "${MINE[$q]+x}" ]] && elsewhere=1` → ` ]] && elsewhere=1` | 1 failed: “control: a child in the SAME scope is not elsewhere — would-stop” |
-| 3.19 | `ccd/ccd-scope-sweep` | `[ -d "$PROC/$p/fd" ] && [ -r "$PROC/$p/fd" ] && [ -x "$PROC/$p/fd" ] \|\| return 1` → `:` | 1 failed: “an fd directory it cannot read: the old line is carried unchanged, and nothing is stopped” |
-| 3.20 | `ccd/ccd-scope-sweep` | `_ss_carry() { [[ -n "${PREV[$u]+x}" ]] && OUT+=("${PREV[$u]}"); return 0; }` → `_ss_carry() { return 0; }` | 3 failed: “a scope whose Description does not parse is unmeasurable…”; “an fd directory it cannot read…”; “a cgroup.procs it cannot read: carried, nothing stopped — and a scope never seen before records nothing” |
-| 3.21 | `ccd/ccd-scope-sweep` | `[ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$XDG_RUNTIME_DIR" ] \` → `: \` | 1 failed: “with no XDG_RUNTIME_DIR it refuses: no clock can run, nothing is stopped” |
-| 3.22 | `ccd/ccd-scope-sweep` | `(( mcp )) && continue` → (nothing) | 1 failed: “a background shell two hours after the pane, older than a day: listed; the pane and an MCP server (and its child) are not” |
-| 3.23 | `ccd/ccd-scope-sweep` | `[[ "$p" == "$pane" ]] && continue` → (nothing) | 1 failed: “″” |
-| 3.24 | `ccd/ccd-scope-sweep` | `elif [[ "$server" == "$SERVER" ]]; then state=ccd` → `elif [[ -z "$SERVER" \|\| "$server" == "$SERVER" ]]; then state=ccd` | 1 failed: “with no ccd server answering (tmux: no server running), a scope of a server that still RUNS is not ccd's to judge” |
-| 3.25 | `ccd/ccd-cap-scopes` | `capped=0` → `capped=0 / : > "$HOME/.cc-sessions/scope-sweep-live"` (a second shell line naming the file) | `single-definition.test.ts -t 'arming file'`: 1 failed: “scope-sweep-live: one shell holder, ccd/ccd-scope-sweep, whose one line is a read; no TS holder” |
+| 3.1 | `ccd/ccd-scope-sweep` | `[ -e "$REG/scope-sweep-live" ] && MODE=live` → `MODE=live` | 5 failed: “a dead ccd scope inert for six hours, with no scope-sweep-live: would-stop, and NEVER a stop call”; “control: a CONNECTED Unix socket (a client of something) does not hold it — would-stop”; “control: a child in the SAME scope is not elsewhere — would-stop”; “control: dead a minute past six hours, and everything else inert — would-stop”; “control: its youngest process started a minute past six hours ago — would-stop” |
+| 3.2 | `ccd/ccd-scope-sweep` | `if systemctl --user stop --no-block "$u" 2>/dev/null; then verdict=stopped;` → `if true; then verdict=stopped;` | 4 failed: “a stop systemd refuses is recorded `stop-failed`”; “armed, one tick stops at most three scopes: a fourth inert one is `held` for the next tick”; “control: a scope of a server that no longer runs IS ccd's, and an inert one is stopped when armed”; “the same scope with scope-sweep-live: one `systemctl --user stop --no-block`, recorded `stopped`” |
+| 3.3 | `ccd/ccd-scope-sweep` | `[ -e "$PAUSE" ] && { echo` → `[ -e "$PAUSE" ] && false && { echo` | 1 failed: “scope-sweep-paused stops EVERYTHING: nothing measured, recorded or stopped, armed or not” |
+| 3.4 | `ccd/ccd-scope-sweep` | `elif (( STOPS >= SCOPE_SWEEP_MAX_STOPS )); then verdict=held` → `elif false; then verdict=held` | 1 failed: “armed, one tick stops at most three scopes: a fourth inert one is `held` for the next tick” |
+| 3.5 | `ccd/ccd-scope-sweep` | `[[ "$u" == tmux-spawn-*.scope ]] \|\| continue` → `:` | 1 failed: “ccd's own ccrc-tmux-server.scope, even listed with a pane Description: never recorded, never stopped” |
+| 3.6 | `ccd/ccd-scope-sweep` | `[[ "${P[Slice]}" == "$SLICE" ]] \|\| continue` → `:` | 1 failed: “a scope outside the session slice is not the sweep's” |
+| 3.7 | `ccd/ccd-scope-sweep` | `[[ -n "${P[Slice]:-}" ]] \|\| { _ss_carry; continue; }` → `:` | 1 failed: “a `systemctl show` that fails (or answers no Slice: a unit that vanished)” |
+| 3.8 | `ccd/ccd-scope-sweep` | `DESC_RE='^tmux child pane ([0-9]+) launched by process ([0-9]+)$'` → `DESC_RE='([0-9]+)[^0-9]+([0-9]+)'` | 1 failed: “a Description that does not parse” |
+| 3.9 | `ccd/ccd-scope-sweep` | `else continue                                       # another LIVE` → `else state=gone                                    # another LIVE` | 1 failed: “a scope of a LIVE tmux server that is not ccd's: never recorded, never stopped” |
+| 3.10 | `ccd/ccd-scope-sweep` | `elif [[ -z "$SERVER" ]]; then _ss_carry; continue` → `elif [[ -z "$SERVER" ]]; then continue` | 1 failed: “with no ccd server answering (tmux: no server running), a scope of a server that still RUNS cannot be judged” |
+| 3.11 | `ccd/ccd-scope-sweep` | `elif [[ "$server" == "$SERVER" ]]; then state=ccd` → `elif [[ -z "$SERVER" \|\| "$server" == "$SERVER" ]]; then state=ccd` | 1 failed: “with no ccd server answering (tmux: no server running), a scope of a server that still RUNS cannot be judged” |
+| 3.12 | `ccd/ccd-scope-sweep` | `\|\| (( TICKS[$server] * (1000000 / TCK) >= mono )); then state=reused` → `; then state=reused` | 2 failed: “a scope whose server pid now names a process that started AFTER the scope: reported server-pid-reused, never stopped”; “ccd's server pid itself, recycled after the scope was born: reported, never stopped” |
+| 3.13 | `ccd/ccd-scope-sweep` | `(( TICKS[$server] * (1000000 / TCK) >= mono ))` → `(( TICKS[$server] / TCK >= mono / 1000000 ))` | 1 failed: “control: ccd's server and a scope born in the SAME second, 35 ms apart — the server is ccd's, not reused” |
+| 3.14 | `ccd/ccd-scope-sweep` | `if [[ "$comm" != "tmux: server" ]] \|\|` → `if` | 1 failed: “a scope whose server pid now names a process that is not a tmux server: reported, never stopped” |
+| 3.15 | `ccd/ccd-scope-sweep` | `[[ -n "${PANE[$p]+x}" ]] && live=1` → `:` | 3 failed: “a background shell two hours after the pane, older than a day: listed; the pane and an MCP server (and its child) are not”; “a scope seen live drops its entry, so it dies again from zero”; “a scope with a live pane of ccd's server is LIVE: its old entry drops, nothing stopped” |
+| 3.16 | `ccd/ccd-scope-sweep` | `OUT+=("old $u pid=$p age=$age comm=${c// /_}") /     done /     continue /` → `OUT+=("old $u pid=$p age=$age comm=${c// /_}") /     done /     _ss_carry; continue /` | 2 failed: “a scope seen live drops its entry, so it dies again from zero”; “a scope with a live pane of ccd's server is LIVE: its old entry drops, nothing stopped” |
+| 3.17 | `ccd/ccd-scope-sweep` | `(( UP - first >= SCOPE_SWEEP_DEAD_SEC )) \|\| why+=(dead-under-6h) /` → (nothing) | 19 failed: the five clock cases (“first seen dead NOW: its clock starts at the box's uptime, and it says so once”; “dead for five hours, not six”; “dead a minute short of six hours: not yet”; both “a first-seen clock … is not believed” cases), the same-second control, “a scope seen live drops its entry, so it dies again from zero”, and the twelve unmeasurable cases whose companion is first seen this tick |
+| 3.18 | `ccd/ccd-scope-sweep` | `SCOPE_SWEEP_DEAD_SEC=21600` → `SCOPE_SWEEP_DEAD_SEC=19800` | 2 failed: “a process in it started a minute short of six hours ago”; “dead a minute short of six hours: not yet” |
+| 3.19 | `ccd/ccd-scope-sweep` | `SCOPE_SWEEP_DEAD_SEC=21600` → `SCOPE_SWEEP_DEAD_SEC=25140` | 2 failed: “control: dead a minute past six hours, and everything else inert — would-stop”; “control: its youngest process started a minute past six hours ago — would-stop” |
+| 3.20 | `ccd/ccd-scope-sweep` | `if [[ -z "$first" ]] \|\| (( first < born \|\| first > UP )); then` → `if [[ -z "$first" ]]; then` | 2 failed: “a first-seen clock earlier than the scope itself is not believed: first seen now”; “a first-seen clock later than now is not believed either: first seen now” |
+| 3.21 | `ccd/ccd-scope-sweep` | `[[ "$cpu" == "$cpu0" ]] \|\| why+=(cpu-moved) /` → (nothing) | 1 failed: “its CPU moved since it was first seen dead” |
+| 3.22 | `ccd/ccd-scope-sweep` | `(( youngest >= SCOPE_SWEEP_DEAD_SEC )) \|\| why+=(process-started-under-6h) /` → (nothing) | 2 failed: “a process in it started a minute short of six hours ago”; “a process in it started in the last six hours” |
+| 3.23 | `ccd/ccd-scope-sweep` | `(( socks == 0 )) \|\| why+=(socket) /` → (nothing) | 4 failed: “a process in it holds a LISTENING Unix socket”; “a process in it holds a TCP socket”; “a process in it holds a TCP6 socket (a server listening on ::)”; “a process in it holds a UDP socket” |
+| 3.24 | `ccd/ccd-scope-sweep` | `(( (16#$flags & 0x10000) != 0 )) && LISTEN[$ino]=1` → `LISTEN[$ino]=1` | 1 failed: “control: a CONNECTED Unix socket (a client of something) does not hold it — would-stop” |
+| 3.25 | `ccd/ccd-scope-sweep` | `for f in tcp tcp6 udp udp6; do` → `for f in tcp tcp6; do` | 1 failed: “a process in it holds a UDP socket” |
+| 3.26 | `ccd/ccd-scope-sweep` | `for f in tcp tcp6 udp udp6; do` → `for f in tcp udp udp6; do` | 1 failed: “a process in it holds a TCP6 socket (a server listening on ::)” |
+| 3.27 | `ccd/ccd-scope-sweep` | `(( elsewhere == 0 )) \|\| why+=(parent-of-a-process-elsewhere) /` → (nothing) | 1 failed: “a process in it is the parent of a process in another cgroup” |
+| 3.28 | `ccd/ccd-scope-sweep` | `&& -z "${MINE[$q]+x}" ]] && elsewhere=1` → `]] && elsewhere=1` | 2 failed: “control: a child in the SAME scope is not elsewhere — would-stop”; “control: its youngest process started a minute past six hours ago — would-stop” |
+| 3.29 | `ccd/ccd-scope-sweep` | `[[ "${P[Description]:-}" =~ $DESC_RE ]] \|\| { _ss_carry; continue; }` → `[[ "${P[Description]:-}" =~ $DESC_RE ]] \|\| exit 3` | 1 failed: “a Description that does not parse” |
+| 3.30 | `ccd/ccd-scope-sweep` | `_ss_carry() { [[ -n "${PREV[$u]+x}" ]] && OUT+=("${PREV[$u]}"); return 0; }` → `_ss_carry() { return 0; }` | 18 failed: all eighteen unmeasurable cases (every “a value it cannot measure skips that scope for the tick …” case but the live-reset and the runtime-dir ones) |
+| 3.31 | `ccd/ccd-scope-sweep` | `[[ "$cg" == /*"/$u" ]] \|\| { _ss_carry; continue; }` → `:` | 2 failed: “a ControlGroup that names another unit”; “an empty ControlGroup — never the root cgroup's processes” |
+| 3.32 | `ccd/ccd-scope-sweep` | `[[ "$cpu" =~ ^[0-9]+$ ]] \|\| { _ss_carry; continue; }` → `:` | 1 failed: “a CPUUsageNSec systemd does not report” |
+| 3.33 | `ccd/ccd-scope-sweep` | `[[ "$mono" =~ ^[1-9][0-9]*$ ]] \|\| { _ss_carry; continue; }` → `:` | 1 failed: “an ActiveEnterTimestampMonotonic of 0” |
+| 3.34 | `ccd/ccd-scope-sweep` | `{ mapfile -t procs < "$CGROOT$cg/cgroup.procs"; } 2>/dev/null \|\| { _ss_carry; continue; }` → `{ mapfile -t procs < "$CGROOT$cg/cgroup.procs"; } 2>/dev/null \|\| exit 3` | 1 failed: “a cgroup.procs it cannot read — and a scope never seen before records nothing” |
+| 3.35 | `ccd/ccd-scope-sweep` | `(( ${#procs[@]} )) \|\| { _ss_carry; continue; }` → `:` | 1 failed: “an empty cgroup.procs” |
+| 3.36 | `ccd/ccd-scope-sweep` | `[ -d "$PROC/$p/fd" ] && [ -r "$PROC/$p/fd" ] && [ -x "$PROC/$p/fd" ] \|\| return 1` → `:` | 1 failed: “an fd directory it cannot read” |
+| 3.37 | `ccd/ccd-scope-sweep` | `socks=$(_ss_socket_count "${procs[@]}") \|\| { _ss_carry; continue; }` → `socks=$(_ss_socket_count "${procs[@]}") \|\| exit 3` | 3 failed: “a process in another network namespace, holding a socket these tables do not list”; “a process in its cgroup.procs that has no /proc entry any more”; “an fd directory it cannot read” |
+| 3.38 | `ccd/ccd-scope-sweep` | `t=$(readlink "$PROC/$p/ns/net" 2>/dev/null) && [[ "$t" == "$NETNS" ]] \|\| return 1` → `:` | 1 failed: “a process in another network namespace, holding a socket these tables do not list” |
+| 3.39 | `ccd/ccd-scope-sweep` | `t=$(readlink "$PROC/$p/ns/net" 2>/dev/null) && [[ "$t" == "$NETNS" ]] \|\| return 1` → `:`; `[ -d "$PROC/$p/fd" ] && [ -r "$PROC/$p/fd" ] && [ -x "$PROC/$p/fd" ] \|\| return 1` → `:` | 3 failed: “a process in another network namespace, holding a socket these tables do not list”; “a process in its cgroup.procs that has no /proc entry any more”; “an fd directory it cannot read” |
+| 3.40 | `ccd/ccd-scope-sweep` | `_ss_sockets \|\| { _ss_carry; continue; }` → `_ss_sockets \|\| :` | 2 failed: “a /proc/net/tcp it cannot read, holding the socket”; “a /proc/net/unix it cannot read, holding the listening socket” |
+| 3.41 | `ccd/ccd-scope-sweep` | `[ -r "$PROC/net/$f" ] \|\| return 1` → `[ -r "$PROC/net/$f" ] \|\| continue` | 1 failed: “a /proc/net/tcp it cannot read, holding the socket” |
+| 3.42 | `ccd/ccd-scope-sweep` | `[ -r "$PROC/net/unix" ] \|\| return 1 /` → (nothing) | 1 failed: “a /proc/net/unix it cannot read, holding the listening socket” |
+| 3.43 | `ccd/ccd-scope-sweep` | `{ [ -e "$d" ] && BOX_BAD=1; }` → `:` | 2 failed: “a process ELSEWHERE on the box whose stat cannot be read: it could be a child of this scope”; “a process in it whose stat cannot be read” |
+| 3.44 | `ccd/ccd-scope-sweep` | `_ss_box \|\| { _ss_carry; continue; }` → `_ss_box \|\| :` | 2 failed: “a process ELSEWHERE on the box whose stat cannot be read: it could be a child of this scope”; “a process in it whose stat cannot be read” |
+| 3.45 | `ccd/ccd-scope-sweep` | `[ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$XDG_RUNTIME_DIR" ] \` → `: \` | 1 failed: “with no XDG_RUNTIME_DIR it refuses: no clock can run, nothing is stopped” |
+| 3.46 | `ccd/ccd-scope-sweep` | `(( mcp )) && continue /` → (nothing) | 1 failed: “a background shell two hours after the pane, older than a day: listed; the pane and an MCP server (and its child) are not” |
+| 3.47 | `ccd/ccd-scope-sweep` | `[[ "$p" == "$pane" ]] && continue /` → (nothing) | 1 failed: “a background shell two hours after the pane, older than a day: listed; the pane and an MCP server (and its child) are not” |
+| 3.48 | `ccd/ccd-cap-scopes` | `capped=0` → `capped=0 / : > "$HOME/.cc-sessions/scope-sweep-live"` | 1 failed: “scope-sweep-live: one shell holder, ccd/ccd-scope-sweep, whose one line is a read; no TS holder” |
+| 3.49 | `deploy/measure-continuity.py` | `S6_IDLE = 1800 /` → `S6_IDLE = 1800 / ARM = os.path.expanduser("~/.cc-sessions/scope-sweep-live") /` | 1 failed: “scope-sweep-live: no other file under ccd/ or deploy/ names it on a code line — no Python, .mjs or unit-file writer” |
+| 3.50 | `deploy/systemd/ccd-scope-sweep.service` | `ExecStart=%h/.local/bin/ccd-scope-sweep` → `ExecStartPre=/usr/bin/touch %h/.cc-sessions/scope-sweep-live / ExecStart=%h/.local/bin/ccd-scope-sweep` | 1 failed: “scope-sweep-live: no other file under ccd/ or deploy/ names it on a code line — no Python, .mjs or unit-file writer” |
+| 3.51 | `ccd/ccd-scope-sweep` | `comm=$(_ss_comm "$server") \|\| { _ss_carry; continue; }` → `comm=$(_ss_comm "$server")` | 1 failed: “a server pid whose comm cannot be read: it cannot be told a tmux server” |
+| 3.53 | `ccd/ccd-scope-sweep` | `_ss_stat "$server" \|\| { _ss_carry; continue; }` → `_ss_stat "$server" \|\| :`; `{ [ -e "$d" ] && BOX_BAD=1; }` → `:` | 3 failed: “a process ELSEWHERE on the box whose stat cannot be read: it could be a child of this scope”; “a process in it whose stat cannot be read”; “a server pid whose stat cannot be read” |
+
+NOT a row: `    _ss_stat "$server" || { _ss_carry; continue; }` → `… || :` alone stays green (`52 passed (52)`, measured): a
+server pid whose stat cannot be read is also a process on the box whose stat cannot be read, so `_ss_box` carries the
+scope's line too. Its pin is the two together (row 3.53); the guard stays, because without it `TICKS[$server]` is read
+unset under `set -u`. Likewise a pid in `cgroup.procs` with no `/proc` entry is carried by the namespace read and the
+fd read both (row 3.39 deletes the two).
 
 Then commit — "continuity wave 4: ccd-scope-sweep, shadowed until the operator arms it".
 
@@ -2597,11 +3054,13 @@ and replace it with:
 ```bash
 cd server && ./node_modules/.bin/vitest run test/ccrc-uninstall.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/lifecycle.test.ts --maxWorkers=1
-./node_modules/.bin/vitest run test/ccrc-install.test.ts -t "ccd-scope-sweep lands|^ccrc install: the unit directory|^ccrc install --role" --maxWorkers=1
+./node_modules/.bin/vitest run test/ccrc-install.test.ts -t "ccd-scope-sweep lands|^ccrc install: the units|^ccrc install --role" --maxWorkers=1
 cd ../agent && ./node_modules/.bin/vitest run test/deploy-verify.test.ts --maxWorkers=1
 ```
 
-Expected: (each test file at this task, the code at Task 3's tree) `ccrc-uninstall` `2 failed | 77 passed | 4 skipped (83)` (the unit-file census and the executables case); `lifecycle` `1 failed | 51 passed (52)`; `ccrc-install`'s three filters `6 failed | 27 passed | 281 skipped (314)` (the new bins case, the unit-file and enable-order cases, and the fleet and `--role both` units); `deploy-verify` `1 failed | 74 passed (75)`.
+Expected: (each test file at this task, the code at Task 3's tree) `ccrc-uninstall` `2 failed | 77 passed | 4 skipped (83)` (the unit-file census and the executables case); `lifecycle` `1 failed | 51 passed (52)`; `ccrc-install`'s three filters `6 failed | 27 passed | 281 skipped (314)` (the new bins case, the unit-file and enable-order cases, the fleet lane's
+two, and `--role both`; re-measured with the filter's middle term `^ccrc install: the units` — the first draft named
+the unit-DIRECTORY describe, which the plan review's replay lens measured at `4 failed | 12 passed | 298 skipped`); `deploy-verify` `1 failed | 74 passed (75)`.
 
 - [ ] **Step 3: The units, the install spine, the agent lane, the toolchain set and the lifecycle class**
 
@@ -2610,7 +3069,7 @@ Create `deploy/systemd/ccd-scope-sweep.service`:
 <!-- replay: create deploy/systemd/ccd-scope-sweep.service -->
 ```ini
 [Unit]
-Description=Report dead ccd pane scopes and stop only the inert ones (shadowed until ~/.cc-sessions/scope-sweep-live)
+Description=Report dead ccd pane scopes and stop only the inert ones (the stop shadowed until the operator arms it)
 [Service]
 Type=oneshot
 ExecStart=%h/.local/bin/ccd-scope-sweep
@@ -2943,10 +3402,12 @@ Then commit — "continuity wave 4: the sweep's units, install and uninstall, on
 **Interfaces:**
 - Consumes: the record Task 3 writes, at `${CCRC_SCOPE_SWEEP_STATE:-${XDG_RUNTIME_DIR:-/run/user/<uid>}/ccd-scope-sweep.state}`
   (the variable is the test seam, `CCRC_CADDY_SYSTEM_FILE`'s shape); `BOX_ENV_FILE`'s `CCRC_ROLE`.
-- Produces: `scope-sweep` — SKIP on Darwin, on a `server`-role box, and with no record; WARN on a record that is not
-  v1, on a tick older than `CCRC_SCOPE_SWEEP_STALE_S` (300 s), and on any `dead` or `old` line (each listed: unit, age,
-  processes, MiB, sockets, its server, verdict and why — or pid, comm and hours); PASS otherwise, naming the record's
-  age and mode. `services` names `ccd-scope-sweep.timer` in `known`, with its own consequence. Never FAIL: a dead scope
+- Produces: `scope-sweep` — SKIP on Darwin, on a `server`-role box, while `~/.cc-sessions/scope-sweep-paused` exists
+  (the operator's pause: the sweep then rewrites nothing, so a stale record is by design, never a stopped timer), and
+  with no record; WARN on a record that is not v1, on a tick older than `CCRC_SCOPE_SWEEP_STALE_S` (300 s), and on any
+  `dead` or `old` line (each listed: unit, minutes dead on the record's own `up=` clock, the scope's own age and its
+  oldest process's in hours, process count and pids, MiB, sockets, its server, verdict and why — or pid, comm and
+  hours); PASS otherwise, naming the record's age and mode. `services` names `ccd-scope-sweep.timer` in `known`, with its own consequence. Never FAIL: a dead scope
   is a runtime fact, and `ccrc install` ends with doctor (`_check_scopes`' argument).
 
 It asks nothing of systemd or `/proc` about scopes: the sweep's verdict is the one its stop acts on, and two readers
@@ -2984,7 +3445,7 @@ and replace it with:
 ```ts
   plantScope(home, { procs: [4101, 4102] });
   // The pane-scope sweep's verdict record, fresh and empty: `scope-sweep` PASSes.
-  writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=${Math.floor(Date.now() / 1000)} mode=shadow\n`);
+  writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=${Math.floor(Date.now() / 1000)} up=8640000 mode=shadow\n`);
 ```
 
 In `server/test/ccrc-doctor.test.ts`, find:
@@ -3018,8 +3479,9 @@ In `server/test/ccrc-doctor.test.ts`, append at the end of the file:
 // check that asked the box instead of the record would list none of them.
 describeLinux('ccrc doctor: scope-sweep', () => {
   const now = (): number => Math.floor(Date.now() / 1000);
+  const UP = 100 * 86400;   // the sweep's boot-relative clock at the record's tick: `first=` is read against it
   const record = (home: string, lines: string[], ago = 0, mode = 'shadow'): void => {
-    writeFileSync(join(home, 'fixture-scope-sweep.state'), [`# ccd-scope-sweep v1 tick=${now() - ago} mode=${mode}`, ...lines].join('\n') + '\n');
+    writeFileSync(join(home, 'fixture-scope-sweep.state'), [`# ccd-scope-sweep v1 tick=${now() - ago} up=${UP} mode=${mode}`, ...lines].join('\n') + '\n');
   };
   const DEAD = 'tmux-spawn-00000001-0000-4000-8000-000000000000.scope';
   const LIVE = 'tmux-spawn-00000002-0000-4000-8000-000000000000.scope';
@@ -3029,15 +3491,30 @@ describeLinux('ccrc doctor: scope-sweep', () => {
     expect(lineFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^PASS scope-sweep: no dead pane scope, and no process older than a day in a live one \(the sweep's record, \d+s old, mode shadow\)$/);
   });
 
-  it('WARNS with every dead scope: its processes, age, sockets, memory and verdict', () => {
+  it('WARNS with every dead scope: how long dead, the scope\'s and its oldest process\'s age, pids, memory, sockets and verdict', () => {
     const home = healthy('ccrc-doctor-scope-sweep-dead-');
-    record(home, [`dead ${DEAD} first=${now() - 7 * 3600} cpu0=7 verdict=would-stop why=none server=gone procs=3 mem=${20 * 2 ** 20} sockets=0 youngest=90000 pids=1,2,3`]);
+    record(home, [`dead ${DEAD} first=${UP - 7 * 3600} cpu0=7 verdict=would-stop why=none server=gone procs=3 mem=${20 * 2 ** 20} sockets=0 youngest=90000 oldest=${27 * 86400} age=${28 * 86400} pids=1,2,3`]);
     const out = runDoctor(home).stdout.split('\n');
     const i = out.findIndex((l) => l.startsWith('WARN scope-sweep: '));
     expect(i, out.join('\n')).toBeGreaterThan(-1);
-    expect(out[i]).toContain(`${DEAD} dead 420 min: 3 process(es), 20 MiB, 0 socket(s), its server gone, would-stop (none)`);
+    expect(out[i]).toContain(`${DEAD} dead 420 min, the scope 672 h old, its oldest process 648 h: 3 process(es) (pids 1,2,3), 20 MiB, 0 socket(s), its server gone, would-stop (none)`);
     expect(out[i]).toContain('(mode shadow)');
     expect(out[i + 1]).toMatch(/^ {2}remedy: read each before acting: /);
+  });
+
+  it('SKIPs while the operator has paused the sweep — never a stale record\'s WARN', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-paused-');
+    record(home, [], 3600);                                        // the paused sweep rewrote nothing for an hour
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'scope-sweep-paused'), '');
+    expect(anyVerdictFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^SKIP scope-sweep: paused by the operator /);
+  });
+
+  it('SKIPs on a server-role box: it runs no pane scope and no sweep', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-server-');
+    record(home, [`dead ${DEAD} first=${UP - 7 * 3600} cpu0=7 verdict=would-stop why=none server=gone procs=3 mem=1 sockets=0 youngest=90000 oldest=90000 age=90000 pids=1,2,3`]);
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    expect(anyVerdictFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^SKIP scope-sweep: this box records CCRC_ROLE=server/);
   });
 
   it('WARNS with every process older than a day in a live pane scope', () => {
@@ -3054,7 +3531,7 @@ describeLinux('ccrc doctor: scope-sweep', () => {
 
   it('WARNS on a record that is not a v1 record', () => {
     const home = healthy('ccrc-doctor-scope-sweep-garbled-');
-    writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v2 tick=${now()} mode=shadow\ndead something\n`);   // a later format this doctor cannot read
+    writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v2 tick=${now()} up=${UP} mode=shadow\ndead something\n`);   // a later format this doctor cannot read
     expect(lineFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^WARN scope-sweep: the verdict record at .* is unreadable or not a v1 record/);
   });
 
@@ -3236,7 +3713,7 @@ cd server && ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts -t '^ccrc d
 ./node_modules/.bin/vitest run test/ccrc-install.test.ts -t 'BASE_LIVE_SHAPE is its measured answer|live shape: two installs|the flip, in Plan 3b' --maxWorkers=1
 ```
 
-Expected: (the tests at this task, the doctor at Task 4's tree) `8 failed | 30 passed | 651 skipped (689)` — the six `scope-sweep` cases and both `services:` cases; and `3 failed | 311 skipped (314)` — the live shape's three cases, each naming `scope-sweep` as the class that moved.
+Expected: (the tests at this task, the doctor at Task 4's tree) `10 failed | 30 passed | 651 skipped (691)` — the eight `scope-sweep` cases and both `services:` cases; and `3 failed | 311 skipped (314)` — the live shape's three cases, each naming `scope-sweep` as the class that moved.
 
 - [ ] **Step 3: The check, its table entry and `known`**
 
@@ -3302,8 +3779,10 @@ In `ccd/ccrc-doctor-checks`, append at the end of the file:
 # WHAT ccd-scope-sweep RECORDED — READ, NEVER RE-DERIVED (session-continuity
 # spec §5.6 item 2, wave 4). The sweep keeps one verdict record,
 # `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`, rewritten whole every minute: a
-# `dead` line per dead ccd pane scope (first seen dead, verdict, why, server,
-# processes, memory, sockets) and an `old` line per process older than a day in
+# `dead` line per dead ccd pane scope (first seen dead on the sweep's
+# boot-relative clock, verdict, why, server, processes and their pids, memory,
+# sockets, its oldest process, the scope's own age — the header's `up=` dates
+# the two clocks) and an `old` line per process older than a day in
 # a LIVE pane scope that is neither the pane's own process nor one of its Claude
 # Code's MCP servers. This check lists both, and asks nothing of systemd or
 # /proc itself: two readers deriving "dead" twice is how they come to disagree,
@@ -3321,10 +3800,12 @@ In `ccd/ccrc-doctor-checks`, append at the end of the file:
 # its record is FRESH — a tick older than CCRC_SCOPE_SWEEP_STALE_S is a sweep
 # that stopped. No record at all is a SKIP, never a WARN: a fresh install arms
 # the timer two minutes before its first tick, and a reboot empties the runtime
-# dir. SKIP on Darwin (no cgroup scopes) and on a `server`-role box (no sessions).
+# dir. SKIP on Darwin (no cgroup scopes), on a `server`-role box (no sessions),
+# and while the operator has PAUSED the sweep (`~/.cc-sessions/scope-sweep-paused`:
+# it then rewrites nothing, so its record ages by design — never a stopped timer).
 # CCRC_SCOPE_SWEEP_STATE is the test seam, CCRC_CADDY_SYSTEM_FILE's shape.
 _check_scope-sweep() {
-  local _srv_role="" rec hdr tick mode now age line n nd=0 no=0
+  local _srv_role="" reg rec hdr tick up mode now age line n nd=0 no=0
   local -a found=()
   if [ "${CCD_OS:-linux}" = darwin ]; then
     _dr_skip scope-sweep "pane scopes are a Linux mechanism — no sweep runs on this box"; return 3
@@ -3333,17 +3814,21 @@ _check_scope-sweep() {
   if [ "$_srv_role" = server ]; then
     _dr_skip scope-sweep "this box records CCRC_ROLE=server, so it runs no pane scope and no sweep"; return 3
   fi
+  reg="$HOME/.cc-sessions"   # the bare directory, never `.cc-sessions/<name>` on a code line: pool-name-parity.test.ts pins those
+  if [ -e "$reg/scope-sweep-paused" ]; then
+    _dr_skip scope-sweep "paused by the operator ($reg/scope-sweep-paused exists): the sweep measures, records and stops nothing until that file is removed"; return 3
+  fi
   rec="${CCRC_SCOPE_SWEEP_STATE:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ccd-scope-sweep.state}"
   if [ ! -e "$rec" ]; then
     _dr_skip scope-sweep "no verdict record at $rec — the sweep is not installed here, or has not run since its timer was armed or the box booted (\`services\` asks after the timer)"; return 3
   fi
   { IFS= read -r hdr < "$rec"; } 2>/dev/null || hdr=""
-  if ! [[ "$hdr" =~ ^\#\ ccd-scope-sweep\ v1\ tick=([0-9]+)\ mode=(shadow|live)$ ]]; then
+  if ! [[ "$hdr" =~ ^\#\ ccd-scope-sweep\ v1\ tick=([0-9]+)\ up=([0-9]+)\ mode=(shadow|live)$ ]]; then
     _dr_warn scope-sweep "the verdict record at $rec is unreadable or not a v1 record, so its dead scopes cannot be listed" \
       "let the sweep rewrite it: systemctl --user start ccd-scope-sweep.service; then re-run doctor"
     return 2
   fi
-  tick=${BASH_REMATCH[1]} mode=${BASH_REMATCH[2]}
+  tick=${BASH_REMATCH[1]} up=${BASH_REMATCH[2]} mode=${BASH_REMATCH[3]}
   now=$(date +%s); age=$(( now - tick ))
   if (( age > ${CCRC_SCOPE_SWEEP_STALE_S:-300} )); then
     _dr_warn scope-sweep "the verdict record is ${age}s old — the sweep runs every minute, so it has stopped, and its dead-scope report is stale" \
@@ -3351,10 +3836,10 @@ _check_scope-sweep() {
     return 2
   fi
   while IFS= read -r line; do
-    if [[ "$line" =~ ^dead\ (tmux-spawn-[^ ]+\.scope)\ first=([0-9]+)\ .*verdict=([a-z-]+)\ why=([^ ]+)\ server=([a-z]+)\ procs=([0-9]+)\ mem=([0-9]+|\?)\ sockets=([0-9]+) ]]; then
+    if [[ "$line" =~ ^dead\ (tmux-spawn-[^ ]+\.scope)\ first=([0-9]+)\ .*verdict=([a-z-]+)\ why=([^ ]+)\ server=([a-z]+)\ procs=([0-9]+)\ mem=([0-9]+|\?)\ sockets=([0-9]+)\ youngest=-?[0-9]+\ oldest=([0-9]+)\ age=([0-9]+)\ pids=([0-9,]+)$ ]]; then
       local -a m=("${BASH_REMATCH[@]}")   # copied first: the `=~` below overwrites BASH_REMATCH
       n=${m[7]}; [[ "$n" =~ ^[0-9]+$ ]] && n="$(( n / 1048576 )) MiB"
-      found+=("${m[1]} dead $(( (now - m[2]) / 60 )) min: ${m[6]} process(es), $n, ${m[8]} socket(s), its server ${m[5]}, ${m[3]} (${m[4]})")
+      found+=("${m[1]} dead $(( (up - m[2]) / 60 )) min, the scope $(( m[10] / 3600 )) h old, its oldest process $(( m[9] / 3600 )) h: ${m[6]} process(es) (pids ${m[11]}), $n, ${m[8]} socket(s), its server ${m[5]}, ${m[3]} (${m[4]})")
       nd=$((nd + 1))
     elif [[ "$line" =~ ^old\ (tmux-spawn-[^ ]+\.scope)\ pid=([0-9]+)\ age=([0-9]+)\ comm=([^ ]*)$ ]]; then
       found+=("${BASH_REMATCH[1]} live: pid ${BASH_REMATCH[2]} (${BASH_REMATCH[4]}) running $(( BASH_REMATCH[3] / 3600 )) h")
@@ -3381,41 +3866,82 @@ cd server && ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts -t '^ccrc d
 # then ccrc-doctor.test.ts in its five slices and ccrc-install.test.ts in its four (Task 8 Step 2)
 ```
 
-Expected: `38 passed | 651 skipped (689)`; `3 passed | 311 skipped (314)`; then the five doctor slices 74 / 183 / 141 / 109 / 168 and the four install slices 57 / 70 / 62 / 105, all green.
+Expected: `40 passed | 651 skipped (691)`; `3 passed | 311 skipped (314)`; then the five doctor slices 74 / 183 / 141 / 109 / 170 and the four install slices 57 / 70 / 62 / 105, all green.
 
 - [ ] **Step 5: Mutation check, then commit**
 
-`ccrc-doctor.test.ts -t '^ccrc doctor: (scope-sweep|services|the check list)'` alone at `--maxWorkers=1` (38 cases).
+`ccrc-doctor.test.ts -t '^ccrc doctor: (scope-sweep|services|the check list)'` alone at `--maxWorkers=1` (40 cases).
 
-| # | File | Exact edit (old → new) | Measured red on the full prototype (of 38) |
+| # | File | Exact edit (old → new) | Measured red on the full prototype (of 40) |
 |---|---|---|---|
-| 5.1 | `ccd/ccrc-doctor-checks` | `  scopes scope-sweep   # one line…` → `  scopes   # one line…` | 7 failed: “every name in the table has a _check_<name> function, and vice versa” and the six `scope-sweep` cases |
+| 5.1 | `ccd/ccrc-doctor-checks` | `  scopes scope-sweep   # one line…` → `  scopes   # one line…` | 9 failed: “every name in the table has a _check_<name> function, and vice versa” and the eight `scope-sweep` cases |
 | 5.2 | `ccd/ccrc-doctor-checks` | `if (( age > ${CCRC_SCOPE_SWEEP_STALE_S:-300} )); then` → `if false; then` | 1 failed: “WARNS when the record is stale: the sweep has stopped running” |
 | 5.3 | `ccd/ccrc-doctor-checks` | `ccd-scope-sweep\ v1\ tick=` → `ccd-scope-sweep\ v[0-9]+\ tick=` (the header regex) | 1 failed: “WARNS on a record that is not a v1 record” |
-| 5.4 | `ccd/ccrc-doctor-checks` | the `dead` line's `if [[ "$line" =~ ^dead\ … ]]; then` → `if false; then` | 1 failed: “WARNS with every dead scope: its processes, age, sockets, memory and verdict” |
-| 5.5 | `ccd/ccrc-doctor-checks` | the `old` line's `elif [[ "$line" =~ ^old\ … ]]; then` → `elif false; then` | 1 failed: “WARNS with every process older than a day in a live pane scope” |
+| 5.4 | `ccd/ccrc-doctor-checks` | the `dead` line's `    if [[ "$line" =~ ^dead\ ` → `    if false && [[ "$line" =~ ^dead\ ` | 1 failed: “WARNS with every dead scope: how long dead, the scope's and its oldest process's age, pids, memory, sockets and verdict” |
+| 5.5 | `ccd/ccrc-doctor-checks` | the `old` line's `    elif [[ "$line" =~ ^old\ ` → `    elif false && [[ "$line" =~ ^old\ ` | 1 failed: “WARNS with every process older than a day in a live pane scope” |
 | 5.6 | `ccd/ccrc-doctor-checks` | `known`'s ` ccd-tmp-sweep.timer ccd-scope-sweep.timer)` → ` ccd-tmp-sweep.timer)` | 2 failed: both `services:` cases |
-| 5.7 | `ccd/ccrc-doctor-checks` | `rec="${CCRC_SCOPE_SWEEP_STATE:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ccd-scope-sweep.state}"` → `rec="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ccd-scope-sweep.state"` (the real runtime dir) | 6 failed: “reports a dead service and a dead timer as TWO lines, each with its own remedy” and five `scope-sweep` cases |
+| 5.7 | `ccd/ccrc-doctor-checks` | `rec="${CCRC_SCOPE_SWEEP_STATE:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ccd-scope-sweep.state}"` → `rec="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ccd-scope-sweep.state"` (the real runtime dir) | 6 failed: “reports a dead service and a dead timer as TWO lines, each with its own remedy” and five `scope-sweep` cases (PASS, not v1, stale, dead, old) |
+| 5.8 | `ccd/ccrc-doctor-checks` | `  if [ -e "$reg/scope-sweep-paused" ]; then` → `  if false; then` | 1 failed: “SKIPs while the operator has paused the sweep — never a stale record's WARN” |
+| 5.9 | `ccd/ccrc-doctor-checks` | `  if [ "$_srv_role" = server ]; then / _dr_skip scope-sweep` → `  if false; then / _dr_skip scope-sweep` | 1 failed: “SKIPs on a server-role box: it runs no pane scope and no sweep” |
+| 5.10 | `ccd/ccrc-doctor-checks` | `$(( (up - m[2]) / 60 ))` → `$(( (now - m[2]) / 60 ))` (the dead-for minutes off the wall clock, not the record's `up=`) | 1 failed: “WARNS with every dead scope: how long dead, …” |
 
 Then commit — "continuity wave 4: doctor reads the sweep's verdict record".
 
 ---
 
-### Task 6: The limit-banner harness kills its child's whole process group (spec §5.6 item 3)
+### Task 6: The timed harness kills its child's whole process group (spec §5.6 item 3)
 
 **Model routing:** `sonnet`, effort `medium`.
 
-**Files:** Modify `server/test/ccd-limit-banner.test.ts` — `detectTimed`'s bound, and one case.
+**Files:** Modify `server/test/ccdWsHelpers.ts` (`BOUNDED`, appended), `server/test/ccd-limit-banner.test.ts` (its
+imports, `detectTimed`'s bound, one case), `server/test/ccd-auto-compact.test.ts` (its import, its FIFO case's bound).
 
-**Interfaces:** `BOUNDED` — `perl -e '…' <secs> <argv…>` forks the child into a process group of its own, `exec`s it
-there, and on the alarm kills the GROUP, reaps it and exits 142 (the old form's code); otherwise it exits as the child
-did. `detectTimed`'s callers are unchanged.
+**Interfaces:** `BOUNDED` (exported from `ccdWsHelpers.ts`) — `perl -e '…' <secs> <argv…>` forks the child into a
+process group of its own, `exec`s it there, and on the alarm kills the GROUP, reaps it and exits 142 (the old form's
+code); otherwise it exits as the child did. `detectTimed`'s callers are unchanged.
 
 The leak it closes: `perl -e 'alarm shift; exec @ARGV'` became the child, so the alarm killed bash alone, and a
 `tail` that bash had forked — blocked opening the FIFO whenever a mutation removed the detector's guard — outlived
-every timed-out run. Spec §1.3 found such `tail` processes holding dead pane scopes for weeks.
+every timed-out run. Spec §1.3 found such `tail` processes holding dead pane scopes for weeks. The spec names the
+limit-banner harness; `ccd-auto-compact.test.ts` carried the same one-liner around `_transcript_last_turn_ts`'s FIFO
+guard, so the bound moves into the shared helper and both cases use it (departure
+`timed-harness-shared-with-auto-compact`). The new pin bounds its OWN run from outside (a 10 s `spawnSync` deadline,
+through `ghContainedEnv` like every bash spawn in a ccd suite), so a harness that cannot kill its group FAILS the case
+instead of hanging the file — and its `finally` still releases and kills whatever holds the FIFO.
 
-- [ ] **Step 1: The harness and its pin**
+- [ ] **Step 1: The harness, its two users and its pin**
+
+In `server/test/ccdWsHelpers.ts`, append at the end of the file:
+
+<!-- replay: append server/test/ccdWsHelpers.ts -->
+```ts
+
+/** A shell prefix that runs `<secs> <argv…>` under a cross-platform alarm and, on
+ *  the alarm, kills the child's WHOLE process group, reaps it and exits 142 (the
+ *  old form's code); otherwise it exits as the child did. Perl is on both
+ *  supported userlands. The old `perl -e 'alarm shift; exec @ARGV'` BECAME the
+ *  child, so the alarm signalled bash alone and a `tail` bash had forked —
+ *  blocked opening a FIFO whenever a mutation removed a detector's guard —
+ *  outlived every timed-out run; the fleet box's dead pane scopes held such
+ *  processes for weeks (session-continuity spec §1.3, §5.6 item 3). perl now
+ *  forks the child into a process group of its own and kills that group. */
+export const BOUNDED = `perl -e '$t = shift; $p = fork; die "fork: $!" unless defined $p; if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 } $SIG{ALRM} = sub { kill "KILL", -$p; waitpid($p, 0); exit 142 }; alarm $t; waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)'`;
+```
+
+In `server/test/ccd-limit-banner.test.ts`, find:
+
+<!-- replay: replace server/test/ccd-limit-banner.test.ts -->
+```ts
+import { execFileSync } from 'node:child_process';
+import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+```
+
+and replace it with:
+
+```ts
+import { execFileSync, spawnSync } from 'node:child_process';
+import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE, BOUNDED, ghContainedEnv } from './ccdWsHelpers.js';
+```
 
 In `server/test/ccd-limit-banner.test.ts`, find:
 
@@ -3429,14 +3955,8 @@ const detectTimed = (fn: string, p: string): string =>
 and replace it with:
 
 ```ts
- *  NOT block. Perl is available on both supported userlands; the alarm exits 142.
- *  THE WHOLE PROCESS GROUP dies on the alarm (session-continuity spec §5.6 item
- *  3): the old `alarm shift; exec @ARGV` signalled bash alone, so a `tail` it had
- *  forked — blocked opening the FIFO whenever a mutation removed the guard —
- *  outlived every timed-out run, and the fleet box's dead pane scopes held them
- *  for weeks. perl now forks the child into a group of its own and, on the
- *  alarm, kills that group, reaps it, and exits 142. */
-const BOUNDED = `perl -e '$t = shift; $p = fork; die "fork: $!" unless defined $p; if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 } $SIG{ALRM} = sub { kill "KILL", -$p; waitpid($p, 0); exit 142 }; alarm $t; waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)'`;
+ *  NOT block. `BOUNDED` (ccdWsHelpers.ts) kills the child's WHOLE process group
+ *  on the alarm and exits 142 (session-continuity spec §5.6 item 3). */
 const detectTimed = (fn: string, p: string): string =>
   h.sh(`${BOUNDED} 5 bash -c "$(declare -f ${fn}); REDRIVE_TAIL_LINES=$REDRIVE_TAIL_LINES; ${fn} \\"\\$1\\"" _ ${JSON.stringify(p)} >/dev/null 2>&1; echo "rc=$?"`);
 ```
@@ -3458,7 +3978,13 @@ and replace it with:
     seed(); const f = path.join(h.home, `leak-${process.pid}.fifo`); execFileSync('mkfifo', [f]);
     const holders = (): string[] => execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }).split('\n').filter((l) => l.includes(f) && !l.includes('ps -eo'));
     try {
-      expect(h.sh(`_leaky() { tail -n 1 -- "$1"; }; ${BOUNDED} 1 bash -c "$(declare -f _leaky); _leaky \\"\\$1\\"" _ ${JSON.stringify(f)} >/dev/null 2>&1; echo "rc=$?"`)).toBe('rc=142');
+      // Bounded from OUTSIDE too (10 s, no ccd sourced: the case needs none), so a harness that cannot kill
+      // its group fails this case instead of hanging the file — and the `finally` below still runs.
+      const r = spawnSync('bash', ['-c', `_leaky() { tail -n 1 -- "$1"; }; ${BOUNDED} 1 bash -c "$(declare -f _leaky); _leaky \\"\\$1\\"" _ ${JSON.stringify(f)} >/dev/null 2>&1; echo "rc=$?"`],
+        { encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL',
+          env: ghContainedEnv(h.home, { PATH: process.env['PATH'] ?? '', HOME: h.home }, { systemd: true, tmux: true }) });
+      expect(r.error, 'the bounded run did not return within 10 s: the group was not killed').toBeUndefined();
+      expect(r.stdout.trim()).toBe('rc=142');
       expect(holders(), 'a process still holds the FIFO after the harness timed out').toEqual([]);
     } finally {
       // Release any leftover reader (a writer opening the FIFO ends its `tail`), then kill what is left.
@@ -3467,26 +3993,64 @@ and replace it with:
     }
 ```
 
-- [ ] **Step 2: Run it**
+In `server/test/ccd-auto-compact.test.ts`, find:
+
+<!-- replay: replace server/test/ccd-auto-compact.test.ts -->
+```ts
+import { execFileSync } from 'node:child_process';
+import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+```
+
+and replace it with:
+
+```ts
+import { execFileSync } from 'node:child_process';
+import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE, BOUNDED } from './ccdWsHelpers.js';
+```
+
+In `server/test/ccd-auto-compact.test.ts`, find:
+
+<!-- replay: replace server/test/ccd-auto-compact.test.ts -->
+```ts
+    expect(h.sh(`perl -e 'alarm shift; exec @ARGV' 5 bash -c "$(declare -f _transcript_last_turn_ts); COMPACT_TURN_TAIL_LINES=$COMPACT_TURN_TAIL_LINES; _transcript_last_turn_ts \\"\\$1\\"" _ ${JSON.stringify(f)} >/dev/null 2>&1; echo "rc=$?"`))
+```
+
+and replace it with:
+
+```ts
+    // BOUNDED kills the whole process group on its alarm: a `tail` forked at a FIFO whose guard a mutation
+    // removed dies with bash instead of outliving the run (session-continuity spec §5.6 item 3).
+    expect(h.sh(`${BOUNDED} 5 bash -c "$(declare -f _transcript_last_turn_ts); COMPACT_TURN_TAIL_LINES=$COMPACT_TURN_TAIL_LINES; _transcript_last_turn_ts \\"\\$1\\"" _ ${JSON.stringify(f)} >/dev/null 2>&1; echo "rc=$?"`))
+```
+
+- [ ] **Step 2: Run them**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/ccd-limit-banner.test.ts --maxWorkers=1
-ps -eo pid,args | grep -c '[l]eak-.*\.fifo'
+./node_modules/.bin/vitest run test/ccd-auto-compact.test.ts --maxWorkers=1
+./node_modules/.bin/vitest run test/ccd-workspaces.test.ts -t 'routes EVERY bash call site' --maxWorkers=1
+ps -eo pid,args | grep -c -e '[f]ifo[.]jsonl' -e '[l]eak-[0-9]*[.]fifo'
 ```
 
-Expected: `137 passed (137)`, then `0`. The new case cleans up after itself even when it fails: a writer opening the
-FIFO ends any `tail` still reading, and whatever is left is killed by pid.
+Expected: `137 passed (137)`; `52 passed (52)`; the containment scan green (the pin's `spawnSync` asks
+`ghContainedEnv` with `systemd: true, tmux: true`, as every ccd suite's bash spawn must); then `0`.
 
 - [ ] **Step 3: Mutation check, then commit**
 
-`ccd-limit-banner.test.ts -t FIFO` alone (3 cases), and `ps` afterwards finds nothing: the case's own cleanup ran.
+Rows 6.1–6.4: `ccd-limit-banner.test.ts -t FIFO` alone (3 cases); row 6.5: `ccd-auto-compact.test.ts -t FIFO` alone (1
+case). After every row `ps` finds nothing (`grep -c -e '[f]ifo[.]jsonl' -e '[l]eak-[0-9]*[.]fifo'` → `0`, measured):
+the bound killed the group, or the case's own cleanup ran. Rows 6.4 and 6.5 remove the detector guard the harness
+exists to bound, so they show the harness doing its job — a red, not a leak. `ccd/ccd` is re-stamped around them.
 
-| # | File | Exact edit (old → new) | Measured red (of 3) |
+| # | File | Exact edit (old → new) | Measured red |
 |---|---|---|---|
-| 6.1 | `server/test/ccd-limit-banner.test.ts` | `const BOUNDED = …` (the forking bound) → ``const BOUNDED = `perl -e 'alarm shift; exec @ARGV'`;`` (the old bound) | 1 failed: “the timed harness kills its child's WHOLE process group on timeout: a grandchild blocked on a FIFO does not outlive it” |
-| 6.2 | ″ | `kill "KILL", -$p;` → `kill "KILL", $p;` (the child alone, not its group) | 1 failed: ″ |
+| 6.1 | `server/test/ccdWsHelpers.ts` | `export const BOUNDED = …` (the forking bound) → ``export const BOUNDED = `perl -e 'alarm shift; exec @ARGV'`;`` (the old bound) | 1 failed (of 3): “the timed harness kills its child's WHOLE process group on timeout: a grandchild blocked on a FIFO does not outlive it” |
+| 6.2 | ″ | `kill "KILL", -$p;` → `kill "KILL", $p;` (the child alone, not its group) | 1 failed (of 3): ″ |
+| 6.3 | ″ | `setpgrp(0, 0); ` → (nothing) (no group of its own: the group kill misses and perl's `waitpid` would block for ever) | 1 failed (of 3): ″ — red by the 10 s outer deadline, not a hang |
+| 6.4 | `ccd/ccd` | in `_transcript_limit_banner`: `[[ -f "$f" && -r "$f" ]] \|\| return 2 / rows=$(tail -n "$REDRIVE_TAIL_LINES" …` → `rows=$(tail -n "$REDRIVE_TAIL_LINES" …` | 1 failed (of 3): “a FIFO at the path: rc 2 without blocking — `-r` alone would open it and wait for ever …” |
+| 6.5 | `ccd/ccd` | in `_transcript_last_turn_ts`: `[[ -f "$f" && -r "$f" ]] \|\| return 2 / rows=$(tail -n "$COMPACT_TURN_TAIL_LINES" …` → `rows=$(tail -n "$COMPACT_TURN_TAIL_LINES" …` | 1 failed (of 1): “a FIFO: rc 2 without blocking — `-r` alone would open it and wait for ever …” |
 
-Then commit — "continuity wave 4: the limit-banner harness kills its child's process group".
+Then commit — "continuity wave 4: the timed harness kills its child's process group".
 
 ---
 
@@ -3496,7 +4060,9 @@ Then commit — "continuity wave 4: the limit-banner harness kills its child's p
 
 **Files:** Modify `README.md` (the timer table's row, the uninstall list's name, a "Pane-scope sweep" subsection after
 the temp-dir reaper's), `docs/superpowers/specs/2026-09-23-session-continuity-design.md` (the status line's rev 8;
-§5.6 item 2 carries the shadow ruling; §5.6's named trade defines how B is counted).
+§5.6 item 2 carries the shadow ruling, the per-tick budget, the clock and the unmeasurable cases; §5.6's named trade
+defines how B is counted; §5.6 item 1, §10 and §11 item 4 say the spawn variable follows the baseline week; §9's
+stage-6 targets say when the inert-survivor target applies).
 
 - [ ] **Step 1: README**
 
@@ -3542,20 +4108,25 @@ recycled pid is reported, never trusted). A scope of another live tmux server is
 A dead ccd scope passes as **inert** only when it was first seen dead six hours ago or more, its CPU has not
 moved since, no process in it started in the last six hours, none holds a TCP or UDP socket or a listening
 Unix socket, and none is the parent of a process in another cgroup (and no live handoff record names one of
-its processes: none exists yet). A value it cannot measure skips the scope for that tick; a scope seen live
-starts its clock again. **The stop ships shadowed:** an inert scope is recorded `would-stop`, and
-`systemctl --user stop --no-block` is issued only while `~/.cc-sessions/scope-sweep-live` exists — nothing
-writes that file; the operator touches it after reading the shadow verdicts. `~/.cc-sessions/scope-sweep-paused`
-stops everything, the shadow record included.
+its processes: none exists yet). A value it cannot measure — a process in another network namespace, a
+process on the box whose parent cannot be read, a tmux that does not answer for a scope whose server still
+runs — skips the scope for that tick, its previous line carried; a scope seen live starts its clock again.
+The clock is boot-relative (`/proc/uptime`), so a wall-clock step moves no stop. **The stop ships
+shadowed:** an inert scope is recorded `would-stop`, and `systemctl --user stop --no-block` is issued only
+while `~/.cc-sessions/scope-sweep-live` exists — nothing writes that file; the operator touches it after
+reading the shadow verdicts. Armed, one tick stops at most three scopes and records the rest `held`.
+`~/.cc-sessions/scope-sweep-paused` stops everything, the shadow record included.
 
 Its verdicts live in `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`, rewritten every tick (a reboot empties it,
 which restarts every clock): one `dead` line per dead ccd scope and one `old` line per process older than a
 day in a live pane scope, other than the pane's own and its Claude Code's MCP servers. `ccrc doctor`'s
-`scope-sweep` check reads that record and never re-derives it: it lists every dead scope with its
-processes, age, sockets, memory and verdict, and every such long-lived process, and warns when the record
-is stale. `deploy/measure-continuity.py --stage 6` counts the OOM stops of pane scopes whose session had
-been idle 30 minutes or more with a live background shell — the pressure reap's own class — beside every
-pane-scope OOM stop; the week after the sweep's deploy is its baseline.
+`scope-sweep` check reads that record and never re-derives it: it lists every dead scope — how long dead,
+the scope's own age and its oldest process's, its pids, memory, sockets and verdict — and every such
+long-lived process, warns when the record is stale, and SKIPs while the sweep is paused.
+`deploy/measure-continuity.py --stage 6` counts the OOM stops of pane scopes whose session had been idle 30
+minutes or more with a live background shell — the pressure reap's own class — beside every pane-scope OOM
+stop (the week after the sweep's deploy is its baseline), and reads off the record how many inert scopes
+have been dead a day or more.
 
 ### Memory guardrails (Linux)
 ```
@@ -3586,7 +4157,8 @@ and replace it with:
 
 ```markdown
 and records stage 7 as planned by its wave-3 plan, 2026-10-04 · rev 8 ships stage 6's sweep with its stop SHADOWED
-until the operator arms it, and defines §9's stage-6 reap-class count as measured (wave 4, 2026-10-05) ·
+until the operator arms it, BEFORE the spawn variable (which follows baseline B's week), and defines §9's stage-6
+counts as measured (wave 4, 2026-10-05) ·
 ```
 
 In `docs/superpowers/specs/2026-09-23-session-continuity-design.md`, find:
@@ -3603,10 +4175,15 @@ and replace it with:
    - **The stop ships SHADOWED** (the coordinator's safety ruling at wave 4's planning): a scope that passes every
      predicate is recorded `would-stop`, and the stop is issued only while `$REG/scope-sweep-live` exists. Nothing
      in the tree writes that file — the operator arms it by hand after reading the shadow verdicts, as with
-     `stall-watch-live` — and `$REG/scope-sweep-paused` still stops everything, the shadow record included. A
+     `stall-watch-live` — and `$REG/scope-sweep-paused` still stops everything, the shadow record included. Armed,
+     one tick stops at most three scopes; an inert scope past that is recorded `held` for the next tick. A
      server pid that now names another process, or a tmux server younger than the scope, is reported and never
-     stopped; the record also holds one line per process older than a day in a live pane scope, other than the
-     pane's own process and the MCP servers its Claude Code started in its first two minutes, for doctor.
+     stopped. The first-seen clock is boot-relative, and a carried one earlier than the scope or later than now
+     starts again; a process in another network namespace (whose sockets the sweep's tables cannot see), a
+     process on the box whose parent cannot be read, and a tmux that does not answer for a scope whose server
+     still runs are each unmeasurable. The record also holds one line per process older than a day in a live pane
+     scope, other than the pane's own process and the MCP servers its Claude Code started in its first two
+     minutes, for doctor.
 ```
 
 In `docs/superpowers/specs/2026-09-23-session-continuity-design.md`, find:
@@ -3627,6 +4204,68 @@ transcript for no user or assistant row in the 30 minutes before the stop and a 
 the spawn with no `<task-notification>` for it. An aggregate `MemoryHigh` must never return to the slice.
 ```
 
+§5.6 item 1, §9's stage-6 targets, §10 and §11 item 4 — the spawn variable now follows the sweep (ruling B,
+departure `pressure-reap-variable-ships-after-baseline-b`), and the inert-survivor target applies once the stop is
+armed (departure `inert-survivors-counted-while-shadowed`):
+
+In `docs/superpowers/specs/2026-09-23-session-continuity-design.md`, find:
+
+<!-- replay: replace docs/superpowers/specs/2026-09-23-session-continuity-design.md -->
+```markdown
+   beside the resume variables, from stage 6's first deploy; it does not wait for item 2. The reap stops only
+```
+
+and replace it with:
+
+```markdown
+   beside the resume variables, once baseline B (§9) has been counted with the reap still on: rev 8 ships items 2
+   and 3 first (wave 4), and the variable a week after their deploy (wave 4b); it does not wait for item 2's stop
+   to be armed. The reap stops only
+```
+
+In `docs/superpowers/specs/2026-09-23-session-continuity-design.md`, find:
+
+<!-- replay: replace docs/superpowers/specs/2026-09-23-session-continuity-design.md -->
+```markdown
+| 6 | pressure kills of background shells; dead ccd scopes that pass the inert test yet survive a day; OOM stops of pane scopes whose session was idle 30 minutes or more with a live background shell, and all pane-scope OOM stops | 186 since 2026-09-04 (9 since 09-18); 5 of 12 on 2026-09-23; B, measured the week before the variable ships, and 16 in 2026-09-16..23 | 0; 0; at most B + 2 a week, reported |
+```
+
+and replace it with:
+
+```markdown
+| 6 | pressure kills of background shells; dead ccd scopes that pass the inert test yet survive a day; OOM stops of pane scopes whose session was idle 30 minutes or more with a live background shell, and all pane-scope OOM stops | 186 since 2026-09-04 (9 since 09-18); 5 of 12 on 2026-09-23; B, measured the week before the variable ships, and 16 in 2026-09-16..23 | 0 (from wave 4b's variable); 0 once the operator arms the stop — while it is shadowed every inert scope survives by design, and `--stage 6` reports the count off the sweep's verdict record; at most B + 2 a week, reported |
+```
+
+In `docs/superpowers/specs/2026-09-23-session-continuity-design.md`, find:
+
+<!-- replay: replace docs/superpowers/specs/2026-09-23-session-continuity-design.md -->
+```markdown
+of swaps that cut work reads stage 3's manifest scan and ships after it. Stage 6 ships in two parts. The first — the spawn variable (after its one-week baseline, §5.6),
+the dead-scope report, the inert stop, and the harness fix — needs nothing from stages 1–5 and
+```
+
+and replace it with:
+
+```markdown
+of swaps that cut work reads stage 3's manifest scan and ships after it. Stage 6 ships in two parts. The first — the dead-scope report, the inert stop
+(shipped shadowed), and the harness fix, then the spawn variable once the one-week baseline their deploy starts has
+been counted (§5.6; rev 8: waves 4 and 4b) — needs nothing from stages 1–5 and
+```
+
+In `docs/superpowers/specs/2026-09-23-session-continuity-design.md`, find:
+
+<!-- replay: replace docs/superpowers/specs/2026-09-23-session-continuity-design.md -->
+```markdown
+   serves or forks. The pressure-reap variable ships first (§10). The operator stopped the DynamoDB Local server the
+```
+
+and replace it with:
+
+```markdown
+   serves or forks. The pressure-reap variable was to ship first; rev 8 ships it after the sweep, once baseline B
+   has been counted with the reap still on (§10). The operator stopped the DynamoDB Local server the
+```
+
 - [ ] **Step 3: Run the prose pins and the tax, then commit**
 
 ```bash
@@ -3634,7 +4273,7 @@ cd server && ./node_modules/.bin/vitest run test/readme-holds.test.ts test/pools
 ```
 
 Expected: `199 passed (199)`; then the S6-R11 procedure (`147 / 197 / 55 / 35`, `corpus-frozen`). `pools-prose`'s
-README size pin: the README is 5,762 lines against CLAUDE.md's "~5700" (inside ±100). Commit — "continuity wave 4:
+README size pin: the README is 5,767 lines against CLAUDE.md's "~5700" (inside ±100). Commit — "continuity wave 4:
 README and the spec, rev 8".
 
 ---
@@ -3709,7 +4348,7 @@ cd ../agent && npm ci && ./node_modules/.bin/vitest run --maxWorkers=2
 cd ../pwa   && npm ci && ./node_modules/.bin/vitest run --maxWorkers=2
 ```
 
-Expected: PASS everywhere but the known reds (Global Constraints). Measured on the prototype: Pre-flight 13's sums.
+Expected: PASS everywhere but the known reds (Global Constraints). Measured on the revised prototype: Pre-flight 14's sums (the known load flakes and `session-hook`'s TMPDIR-shaped case aside).
 Re-run any load flake IN ISOLATION before calling it a break; report every summary, their sums and the merged sha.
 **If `main` moves again before the PR merges, repeat Step 1 and every shard.**
 
@@ -3725,8 +4364,9 @@ git fetch origin main && ./node_modules/.bin/vitest run test/deviation-refs.test
 ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'
 ```
 
-Expected (measured on the prototype): `29 passed`; `72 passed`; `22 passed`; `487 passed | 11 skipped (498)`;
-`105 passed (105)`; `deviation-refs` and `dtbd` green (with `topology-clean`, `87 passed (87)`, measured with this plan on the branch); `7 passed | 328 skipped (335)`; then the S6-R11 procedure (`147 / 197 / 55 / 35`,
+Expected (measured on the revised prototype): `52 passed (52)`; `72 passed (72)`; `24 passed (24)`; `488 passed | 11
+skipped (499)`; `105 passed (105)`; `deviation-refs` and `dtbd` green (with `topology-clean`, `87 passed (87)`, measured
+with this plan on the branch); `7 passed | 328 skipped (335)`; then the S6-R11 procedure (`147 / 197 / 55 / 35`,
 `corpus-frozen`) and the `_reg_get` census (`182` / `153` over `d12b5aba0`'s stated pair). Then a replay of THIS
 document onto an export of the merge base, re-stamped, compared with the tip on every touched file — the planning
 check, re-run by the worker as a whole-branch self-check (expected: byte-identical but for main's own later changes).
@@ -3740,10 +4380,10 @@ gh pr create --base main --title "Session continuity wave 4: wave 3's residue, t
 Wave 4 of the session-continuity programme (spec `docs/superpowers/specs/2026-09-23-session-continuity-design.md` §5.6 items 2–3, §9's stage-6 row; plan `docs/superpowers/plans/2026-10-05-session-continuity-wave4-scope-sweep.md`). **AGENT-FIRST.** No wire change.
 
 1. **Wave 3's residue (review 272, F1–F11), the first commit.** A failed kill keeps the operator-choice marker only on `gone` or tmux's own "no server running" — a deleted socket no longer reads as no server; the record-newer check is asked first, so a command older than its field is neither written nor logged; cmd_swap's two guarded lines, the argless drift arm and ws-restore after ws-archive are pinned by behaviour; the comment drift, the refused-command prose, the stage-7 key note and wave 3's six mutation cells and two red-first counts are restated as measured; the `/effort` slider's noise is measured (a counts-only census: no `Kept effort level as …` row in 6,794 transcripts) and stated.
-2. **`--stage 6`:** OOM stops of pane scopes whose session had been idle 30 minutes or more with a live background shell — the pressure reap's own class — beside every pane-scope OOM stop, mapped scope → session through ccd's own spawn events. The week after this deploy is baseline B (wave 4b's variable is judged against it).
-3. **`ccd-scope-sweep`**, a one-minute oneshot beside `ccd-cap-scopes`: reads only `tmux-spawn-*.scope` units in the session slice with a pane Description, records every dead ccd pane scope in `$XDG_RUNTIME_DIR/ccd-scope-sweep.state` with the stop predicates it passes or fails, and — **SHADOWED** — issues `systemctl --user stop --no-block` on an inert one ONLY when `~/.cc-sessions/scope-sweep-live` exists, a file nothing in the tree writes. `scope-sweep-paused` stops everything. Never touched: `ccrc-tmux-server.scope`, an unparseable Description, another live tmux server's scope, a scope with a live pane, a recycled server pid. Installed like `ccd-tmp-sweep` (fleet and both roles), removed by uninstall.
-4. **`ccrc doctor`'s `scope-sweep`** reads that record and never re-derives it; `ccd-scope-sweep.timer` joins `services`' `known`.
-5. **The limit-banner harness** kills its child's whole process group on timeout.
+2. **`--stage 6`:** OOM stops of pane scopes whose session had been idle 30 minutes or more with a live background shell — the pressure reap's own class — beside every pane-scope OOM stop, mapped scope → session through ccd's own spawn events. The week after this deploy is baseline B (wave 4b's variable is judged against it). It also reads, off the sweep's record, the inert scopes dead a day or more (§9's second stage-6 metric; reported while the stop is shadowed).
+3. **`ccd-scope-sweep`**, a one-minute oneshot beside `ccd-cap-scopes`: reads only `tmux-spawn-*.scope` units in the session slice with a pane Description, records every dead ccd pane scope in `$XDG_RUNTIME_DIR/ccd-scope-sweep.state` with the stop predicates it passes or fails, and — **SHADOWED** — issues `systemctl --user stop --no-block` on an inert one ONLY when `~/.cc-sessions/scope-sweep-live` exists, a file nothing in the tree writes, and at most three a tick. `scope-sweep-paused` stops everything. Never touched: `ccrc-tmux-server.scope`, an unparseable Description, another live tmux server's scope, a scope with a live pane, a recycled server pid; any value it cannot measure skips that scope for the tick, its line carried. Installed like `ccd-tmp-sweep` (fleet and both roles), removed by uninstall.
+4. **`ccrc doctor`'s `scope-sweep`** reads that record and never re-derives it (SKIP while paused); `ccd-scope-sweep.timer` joins `services`' `known`.
+5. **The timed test harness** (limit-banner's, and auto-compact's copy) kills its child's whole process group on timeout.
 
 Citation corpus (S6-R11): unmoved (`147/197/55/35`). `_reg_get` census unmoved (182/153).
 
@@ -3756,7 +4396,7 @@ EOF
 - [ ] **Step 5: Report (the wave-done mail)**
 
 Per the worker skill: the branch tip sha; Step 1's outcome; every shard and slice summary and their sums at that merged
-sha, agent and pwa; each task's S6-R11 output; every mutation row's measured red at its own commit; Task 2 Step 6's two
+sha, agent and pwa; each task's S6-R11 output; every mutation row's measured red at its own commit; Task 2 Step 6's three
 readings; every departure from this plan, named by a slug (the coordinator numbers it from 4012 to 4021). Then stop.
 
 - [ ] **Step 6: Merge (the coordinator's)**
@@ -3785,23 +4425,28 @@ systemctl --user is-active ccd-scope-sweep.timer
 head -1 "$XDG_RUNTIME_DIR/ccd-scope-sweep.state"; grep -c '^dead ' "$XDG_RUNTIME_DIR/ccd-scope-sweep.state"
 ccrc doctor 2>/dev/null | grep -A1 '^[A-Z]* scope-sweep:'
 journalctl --user -u ccd-scope-sweep.service --since today | grep -c 'scope-sweep: .* stopped'
-python3 "$HOME/ccrc/deploy/measure-continuity.py" --stage 6 --since "<the deploy time, YYYY-MM-DD HH:MM>"
+TZ=UTC python3 "$HOME/ccrc/deploy/measure-continuity.py" --stage 6 --since "<the deploy time, YYYY-MM-DD HH:MM>" --json
 ```
 
-Expected: `active`; a header `… mode=shadow`; the dead count doctor lists; `0` stops (shadow); and stage 6 from the
-deploy on — B is that reading's `reap_class` over the seven days that follow (the coordinator records the deploy time
-in the ledger and reads it again a week later).
+Expected: `active`; a header `… up=<s> mode=shadow`; the dead count doctor lists; `0` stops (shadow); and stage 6
+from the deploy on — B is that reading's `reap_class` over the seven days that follow (the coordinator records the
+deploy time in the ledger and reads it again a week later), and `inert_scopes` the record's inert scopes dead a day or
+more at the moment of each reading.
 
 **What the deploy itself does to the fleet.** Nothing is stopped: the sweep starts recording two minutes after its
 timer is armed, and with no `scope-sweep-live` every inert scope is only `would-stop`. Doctor's new check SKIPs until
-the first tick, then lists the dead scopes the planning census found (three today, none inert). A rollback is the
-operator's call through the same mechanism and is safe on the data: the record lives in the runtime dir, an older
+the first tick, then lists the dead scopes the planning census found (three on 2026-10-05, none inert). A rollback is
+the operator's call through the same mechanism and is safe on the data: the record lives in the runtime dir, an older
 `ccrc` uninstalls nothing it did not place (the units stay until an uninstall of a tree that knows them), and an
-older doctor never reads the record.
+older doctor never reads the record. **But a rollback does not stop the sweep:** its binary and timer stay and keep
+ticking, so an ARMED sweep keeps stopping inert scopes (three a tick at most) under an older doctor that no longer
+reports them — `touch ~/.cc-sessions/scope-sweep-paused` on the fleet box is how to halt it, and removing
+`scope-sweep-live` returns it to shadow.
 
 **Arming the stop is the operator's act, after the shadow week** (Open question 1): read the `would-stop` lines and
-doctor's report; then `touch ~/.cc-sessions/scope-sweep-live` on the fleet box, by hand. `touch
-~/.cc-sessions/scope-sweep-paused` stops everything at once.
+doctor's report; then `touch ~/.cc-sessions/scope-sweep-live` on the fleet box, by hand. The first armed tick stops at
+most three scopes and records the rest `held`; they follow three a minute. `touch ~/.cc-sessions/scope-sweep-paused`
+stops everything at once.
 
 ---
 
@@ -3813,9 +4458,15 @@ wave 3's drift entry), F3 (cells restated at the tip), F4 (two swap cases), F5 (
 first — wave 3's header already listed "a field newer than the keystroke" among the silent cases), F7 (prose), F8 (one
 case), F9 (one case), F10 (two counts restated), F11 (one sentence). Rows 1.1–1.8.
 
-**Carried to wave 4b** (rulings B and E): the pressure-reap variable in the spawn environment, after the baseline week;
-and wave 3's deferred `/clear` fix — keep the operator's choice across a `/clear` by reading the transcript the
-`/clear` left, at the uuid rotation (review 268's F4 design note: `_sync_uuid` is where the new uuid is learned).
+**Carried to wave 4b** (rulings B and E): the pressure-reap variable in the spawn environment, after the baseline week
+(this wave's deploy starts it), with §9's first stage-6 metric — pressure kills of background shells, target 0 — which
+measures that variable and so ships with it; and wave 3's deferred `/clear` fix — keep the operator's choice across a
+`/clear` by reading the transcript the `/clear` left, at the uuid rotation (review 268's F4 design note: `_sync_uuid`
+is where the new uuid is learned).
+**Carried past this wave, not in ruling B's list:** doctor RECORDING what the operator stopped (spec §6: "doctor's next
+run records what the operator stopped"; §7's doctor row: "records operator stops") — this wave's doctor lists what the
+record holds, and a scope the operator stopped simply leaves it; recording the stop needs a reader of the gone
+scopes' history that the record, rewritten whole each minute, does not keep. It belongs with stage 6's second part.
 **Carried past this programme's stage 3:** ccd stopping a pane's scope when it ends the pane, and the handoff-record
 predicate (satisfied by construction until a record exists).
 
@@ -3826,34 +4477,45 @@ in the same act as the wave's acceptance; a worker never calls the allocator (wo
 while executing is named in the wave-done mail by a new slug. A session that cannot reach the coordinator writes
 `D-TBD-<slug>` in its report and nowhere in a committed file.
 
-Departures from the spec that this plan makes, each measured above — nine, against a block of ten:
+Departures from the spec that this plan makes, each measured above — **thirteen, against a block of ten** (the brief:
+list them all; the coordinator issues the three past the block):
 
 - `scope-sweep-stop-shadowed` — the coordinator's safety ruling (C): spec §5.6 has the sweep STOP an inert scope; this
   wave records it `would-stop` and issues the stop only while `$REG/scope-sweep-live` exists, a file nothing in the
-  tree writes (pinned by `single-definition.test.ts`'s appended describe, row 3.25), with `$REG/scope-sweep-paused`
-  still stopping everything, the shadow record included. Carried into §5.6's text (Task 7). Rows 3.1–3.3b, 3.25.
+  tree writes (pinned by `single-definition.test.ts`'s appended describe — shell, and every other file under `ccd/` and
+  `deploy/`: rows 3.48–3.50), with `$REG/scope-sweep-paused` still stopping everything, the shadow record included.
+  Carried into §5.6's text (Task 7). Rows 3.1–3.3, 3.48–3.50.
+- `scope-sweep-stops-at-most-three-a-tick` — spec §5.6 stops every inert scope "at the first tick"; armed, this sweep
+  stops at most `SCOPE_SWEEP_MAX_STOPS` (3) in one tick and records the rest `held` for the next, so the first armed
+  tick after a shadow week — or a misjudgment the shadow week missed — costs three scopes a minute, not every inert
+  scope at once (the plan review's safety lens). Carried into §5.6's text. Row 3.4.
 - `scope-sweep-recycled-server-reported` — spec §5.6 checks the server "by pid, comm and a start time earlier than the
   scope's, against pid reuse" but says nothing of the scope whose check FAILS. Ruling D says never stop it; the plan
   records it dead with `server=reused`, `verdict=report`, `why=server-pid-reused`, so doctor lists it rather than
   hiding a scope whose server is certainly gone. The comparison is in ticks against monotonic microseconds, because the
-  server and its first pane start in the same second (Pre-flight 5). Rows 3.8, 3.9.
+  server and its first pane start in the same second (Pre-flight 5; its own case). Rows 3.12–3.14.
 - `scope-sweep-unmeasurable-carries-the-old-line` — §5.6's "skips that scope for the tick and records nothing" is read
-  as: the scope's previous verdict line is carried UNCHANGED (its first-seen clock and `cpu0` kept), and a scope never
-  seen before gets no line; dropping the line would restart a six-hour clock on every unreadable tick. Rows 3.19, 3.20.
+  as: the scope's previous verdict line is carried UNCHANGED (its first-seen clock and `cpu0` kept), a scope never seen
+  before gets no line, and the tick goes on to the next scope; dropping the line would restart a six-hour clock on
+  every unreadable tick. "Cannot measure" is read wide (Task 3's list): a failed `show`, a foreign or empty
+  `ControlGroup`, an unreported CPU or start time, a silent tmux for a scope whose server still runs, a process in
+  another network namespace, an unreadable `/proc/net` table, and any process on the box whose stat it cannot read.
+  Rows 3.7, 3.8, 3.10, 3.29–3.44, 3.51, 3.53.
 - `scope-sweep-ccds-server-is-the-default-socket` — "ccd's current server" is the server `tmux list-panes -a` answers
-  from on the default socket, as ccd's own `tmux` calls address it; when tmux answers nothing (no server, a deleted
-  socket, no tmux), no LIVE server is ccd's, so only the scopes of a server that no longer runs are judged (safe in
-  both directions). A wedged server is bounded by the unit's `TimeoutStartSec=45`, the script having no `timeout`
-  (macos-platform's scan). Rows 3.7, 3.24.
+  from on the default socket, as ccd's own `tmux` calls address it; a scope of a live server tmux did not name is
+  another server's and is dropped, and when tmux answers nothing (no server, a deleted socket, no tmux) a scope whose
+  server still runs is UNMEASURABLE — its line carried — while the scopes of a server that no longer runs are judged.
+  A wedged server is bounded by the unit's `TimeoutStartSec=45`, the script having no `timeout` (macos-platform's
+  scan). Rows 3.9–3.11.
 - `scope-sweep-mcp-servers-are-startup-children` — §5.6 lists "every process older than a day in a live pane scope,
   other than the pane's own process and its Claude Code's MCP servers" without saying how an MCP server is told apart.
   The plan's reading: a direct child of the pane's process started within `SCOPE_SWEEP_MCP_SEC` (120 s) of it, and that
   child's descendants; a background shell started later is listed. The list is the sweep's record's (`old` lines), so
-  doctor reads it rather than deriving it. Rows 3.22, 3.23, 5.5.
+  doctor reads it rather than deriving it. Rows 3.46, 3.47, 5.5.
 - `scope-sweep-children-elsewhere-by-cgroup-procs` — §5.6's "no process is the parent of one in another cgroup" is
-  decided by the scope's own `cgroup.procs`: a child of one of its processes that it does not hold is elsewhere (a
-  per-child cgroup-path comparison can never differ for a child it holds, which a first draft's row proved green).
-  Rows 3.17, 3.18.
+  decided by the scope's own `cgroup.procs` against every process on the box: a child of one of its processes that it
+  does not hold is elsewhere (a per-child cgroup-path comparison can never differ for a child it holds, which a first
+  draft's row proved green). Rows 3.27, 3.28.
 - `scope-sweep-installed-like-the-tmp-reaper` — spec §7 names the units, `deploy.sh`, the install spine and
   `deploy-verify`; the plan also gates the units and the enable off `--role server` (a server box runs no pane
   scope), declares the record in `shared/lifecycle.ts` and the binary in `TOOLCHAIN_EXECUTABLES`, takes no `flock` (a
@@ -3861,38 +4523,56 @@ Departures from the spec that this plan makes, each measured above — nine, aga
   `TimeoutStartSec=45`, `MemoryMax=256M`, `OnActiveSec=2min`. Rows 4.1–4.13.
 - `doctor-scope-sweep-reads-record-and-known` — §5.6 has doctor read the record; the plan also puts the timer in
   `services`' `known` (a reboot empties the record, so only `known` sees a timer that never ran again), makes a missing
-  record a SKIP (a fresh install's first tick is two minutes away), warns on a record older than 300 s, and gives the
-  record's path a test seam (`CCRC_SCOPE_SWEEP_STATE`) so no test reads a real box's. `BASE_LIVE_SHAPE` gains
-  `"scope-sweep": "SKIP"` in its three maps. Rows 5.1–5.7.
+  record a SKIP (a fresh install's first tick is two minutes away) and a paused sweep a SKIP (never a stale WARN),
+  warns on a record older than 300 s, prints each dead scope's age on the record's own clock with the scope's and its
+  oldest process's age and its pids, and gives the record's path a test seam (`CCRC_SCOPE_SWEEP_STATE`) so no test
+  reads a real box's. `BASE_LIVE_SHAPE` gains `"scope-sweep": "SKIP"` in its three maps. Rows 5.1–5.10.
 - `stage-six-maps-scopes-through-ccd-spawns` — §9 names B but not its instrument. The plan reads the user journal (one
-  read-only `journalctl --user` run — the instrument's header said it runs nothing but read-only opens — or `--journal
-  FILE`, a new flag and `ctx` key the carried "one shape" constraint did not list), maps a scope to the one session
-  whose ccd `spawn` event landed within ten seconds AFTER the scope's start (else `unmapped`), and reads idle and the
-  live shell from that session's current transcript (a `/clear` since the stop reads as idle with no shell: named).
-  Rows 2.1–2.8.
+  read-only `journalctl --user` run on two indexed field matches — the instrument's header said it runs nothing but
+  read-only opens — or `--journal FILE`, a new flag and `ctx` key the carried "one shape" constraint did not list), maps
+  a scope to the one session whose ccd `spawn` event landed within ten seconds AFTER the scope's start (else
+  `unmapped`), and reads idle and the live shell from that session's current transcript (a `/clear` since the stop
+  reads as idle with no shell: named). Rows 2.1–2.9.
+- `inert-survivors-counted-while-shadowed` — §9's stage-6 row has "dead ccd scopes that pass the inert test yet survive
+  a day", target 0. With the stop shadowed (ruling C) every inert scope survives by design, so the count is REPORTED —
+  read by `--stage 6` off the verdict record at the reading (the record keeps no history), `would-stop`/`held`/
+  `stop-failed` lines first seen dead a day or more before its tick — and rev 8 says the target of 0 applies once the
+  operator arms the stop. Rows 2.10–2.12.
+- `pressure-reap-variable-ships-after-baseline-b` — the coordinator's ruling B: spec §5.6 item 1 ships the variable
+  "from stage 6's first deploy", and §11 item 4 says it "ships first (§10)"; this wave — stage 6's first deploy — ships
+  items 2 and 3 without it, so the reap is still on while baseline B is counted, and wave 4b ships it after that
+  week. Rev 8 amends §5.6 item 1, §10's "first part" and §11 item 4 (Task 7). §9's pressure-kill metric goes with it
+  ("Carried").
+- `timed-harness-shared-with-auto-compact` — spec §5.6 item 3 names the limit-banner harness; `ccd-auto-compact.test.ts`
+  carried the same `alarm shift; exec @ARGV` bound around `_transcript_last_turn_ts`'s FIFO guard, with the same leak
+  under a mutation (the plan review's replay lens). The forking bound moves to `ccdWsHelpers.ts` as `BOUNDED` and both
+  FIFO cases use it; the pin bounds its own run from outside, so a broken harness reds instead of hanging. Rows
+  6.1–6.5.
 
 ---
 
 ## Review lenses
 
-Four lenses, all `opus` — a diff of one new process-stopping script (`ccd/ccd-scope-sweep`, 286 lines), one shipped
+Four lenses, all `opus` — a diff of one new process-stopping script (`ccd/ccd-scope-sweep`, 327 lines), one shipped
 script's residue (`ccd/ccd`: +32 / −22), the install spine (`ccd/ccrc` +23 / −6, `deploy.sh` +6, two unit files),
-doctor (+78 / −3), the instrument (+204 / −6), and tests (+405, +126, +90, +84, +29, +22, +15, …) — sized to the fleet
+doctor (+85 / −3), the instrument (+251 / −6), and tests (+577, +152, +100, +90, +29, +29, +24, …) — sized to the fleet
 policy's 3–5 reviewers; one `sonnet` refute pass per finding.
 
 1. **What the sweep can stop (opus, xhigh).** Prove `systemctl --user stop` is reachable only for a `tmux-spawn-*.scope`
    in the session slice, with a parseable Description, whose server is ccd's or gone (never reused, never another
-   live server's), with no live pane, past every predicate, with `scope-sweep-live` present and `scope-sweep-paused`
-   absent; that every unmeasurable value carries the old line and stops nothing; that no environment variable shortens
-   six hours; that a hang in tmux is bounded; and that nothing in the tree writes `scope-sweep-live`.
+   live server's, never one tmux was silent about), with no live pane, past every predicate, with `scope-sweep-live`
+   present and `scope-sweep-paused` absent, and at most three a tick; that every unmeasurable value carries the old
+   line, stops nothing and ends no tick; that no environment variable shortens six hours and no carried clock can; that
+   a hang in tmux is bounded; and that nothing in the tree writes `scope-sweep-live`.
 2. **The predicates are measured right (opus, high).** `/proc/<pid>/stat` read past the last `) `; ticks against
    monotonic microseconds; `/proc/net/unix`'s flags column and `__SO_ACCEPTCON`; TCP/UDP inode columns in all four
-   tables; `cgroup.procs` as the authority for "elsewhere"; CPU compared to the value first seen; the clock carried
-   across ticks and dropped when a scope is seen live or vanishes.
+   tables, read in the sweep's own network namespace only; `cgroup.procs` as the authority for "elsewhere" over every
+   process on the box; CPU compared to the value first seen; the boot-relative clock carried across ticks, bounded by
+   the scope's own start, and dropped when a scope is seen live or vanishes.
 3. **The residue and stage 6 (opus, high).** Review 272's eleven rulings each met and pinned; the record-newer check's
-   move changes no write and only silences lines about superseded commands; stage 6's mapping window and its
-   `unmapped`/`unmeasured` columns; the instrument opens nothing for writing and runs nothing but read-only
-   `journalctl`.
+   move changes no write and only silences lines about superseded commands; stage 6's mapping window, its 30-minute
+   edge and its `unmapped`/`unmeasured` columns; the inert-survivor count read off the record; the instrument opens
+   nothing for writing and runs nothing but read-only `journalctl`.
 4. **Guard fidelity, the install spine and the tax (opus, high).** Every mutation row mutates the guard it names; the
    sweep ships through every path the reaper ships through and is removed by every path that removes the reaper;
    doctor reads, never re-derives; the S6-R11 and `_reg_get` censuses came from the instruments.
@@ -3902,18 +4582,23 @@ policy's 3–5 reviewers; one `sonnet` refute pass per finding.
 ## Open questions for the operator
 
 1. **When to arm the stop.** The sweep ships shadowed. After its first week, read the `would-stop` lines (doctor lists
-   them) and decide whether to `touch ~/.cc-sessions/scope-sweep-live`. Today's read-only census (Pre-flight 6): three
-   dead ccd scopes, four processes, 2 MiB, none inert (one young process, two holding a socket) — the 2026-09-23
-   measurement had five inert of twelve.
-2. **A live test tmux server** (`tmux -S /tmp/tmuxtest_verify …`, alive since 2026-09-14, one pane scope) is outside the
+   them; `--stage 6` counts the ones dead a day or more) and decide whether to `touch ~/.cc-sessions/scope-sweep-live`.
+   The planning census (Pre-flight 6, 2026-10-05): three dead ccd scopes, four processes, 2 MiB, none inert (one young
+   process, two holding a socket) — the 2026-09-23 measurement had five inert of twelve.
+2. **The per-tick budget** (`scope-sweep-stops-at-most-three-a-tick`): three stops a minute once armed. Confirm the
+   number, or name another (it is one constant and one row).
+3. **A live test tmux server** (`tmux -S /tmp/tmuxtest_verify …`, alive since 2026-09-14, one pane scope) is outside the
    sweep by design (another live server's scope is never touched). It is somebody's leaked test server; stopping it is
    a hand act.
-3. **The MCP-server reading** (`scope-sweep-mcp-servers-are-startup-children`): confirm the 120-second window, or name
+4. **The MCP-server reading** (`scope-sweep-mcp-servers-are-startup-children`): confirm the 120-second window, or name
    another rule (Claude Code's own MCP configuration is not read).
-4. **Stage 6's unmapped and unmeasured columns.** Over the journal's retention, 12 of 63 stops were unmapped (5 with two
-   sessions spawned together, 7 with no spawn — test panes) and 14 unmeasured (the session's workspace since reclaimed).
-   B is read with those beside it, never folded in.
-5. **Wave 3's plan was edited in place** (F3's six cells, F10's two counts, F2's noise, F1's narrowing in its
+5. **Stage 6's unmapped and unmeasured columns.** Over the journal's retention, 18 of 84 stops were unmapped (5 with two
+   sessions spawned together, 13 with no spawn — test panes) and 18 unmeasured (the session's workspace since
+   reclaimed). B is read with those beside it, never folded in.
+6. **The inert-survivor count is a reading, not a week** (`inert-survivors-counted-while-shadowed`): the record keeps
+   no history, so `--stage 6` reports the inert scopes dead a day or more at the moment it runs. Confirm that reading
+   satisfies §9's row, or ask for the sweep to journal each tick's count.
+7. **Wave 3's plan was edited in place** (F3's six cells, F10's two counts, F2's noise, F1's narrowing in its
    entries), as the residue ruling asked; the entries keep their numbers, and no new number is written there.
-6. **Wave 4b's scheduling.** B's week starts at this deploy; 4b (the pressure-reap variable, and the `/clear` fix) is
-   planned against B a week later.
+8. **Wave 4b's scheduling.** B's week starts at this deploy; 4b (the pressure-reap variable with its pressure-kill
+   metric, and the `/clear` fix) is planned against B a week later. The coordinator records the deploy time.
