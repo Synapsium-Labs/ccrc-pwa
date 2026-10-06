@@ -593,10 +593,13 @@ none) — and no command older than it is read, because an older ccd typed its k
 outside the vocabulary is logged by name when it is one token, by size otherwise; and a stop that cannot read at
 all (no floor yet, a transcript that is not a readable regular file, no python, a failed reader), or whose newest
 `/model` or `/effort` has no acknowledgement in the wording this ccd recognises (drifted wording, a command Claude
-Code itself refused, or a dismissed `/effort` slider: `Kept effort level as …`), logs `unmeasured`, once per keep. §9's stage-7 row counts the keep-time stops whose `/model` ccd
+Code itself refused — `/effort`'s `Invalid argument …`, 18 rows in 6,794 fleet transcripts counted on 2026-10-05, where
+a dismissed `/effort` slider wrote no row at all), logs `unmeasured`, once per keep, unless the field was written after
+the command (that check is asked first). §9's stage-7 row counts the keep-time stops whose `/model` ccd
 logged as outside the vocabulary or refused, with `stops_that_could_not_read_the_transcript` beside it (it counts KEEPS that
 could not measure, one per `unmeasured` line, keeps at a spawn and the acknowledgement-drift line included, and a refused
-command repeats at every keep until a later operator command of its kind is acknowledged, a ccd keystroke not clearing it); it counts those STOPS, not
+command repeats at every keep until a later operator command of its kind is acknowledged or its field is written after
+it, a ccd keystroke not clearing it); it counts those STOPS, not
 distinct choices or restarts, because a `/model` ccd cannot keep is logged again at every later keep until a newer
 command replaces it, and a session stopped for good, or archived and then removed, is counted although no restart
 happened (an over-count by design). A session on a non-Anthropic lane is skipped, and a swap that crosses

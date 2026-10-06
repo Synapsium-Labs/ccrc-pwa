@@ -2333,13 +2333,14 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   `cmd_route` call, so a pair the record refuses is refused whole (`/model haiku` beside `/effort high` keeps
   neither, and two lines say so). A stop that cannot read at all, or whose newest `/model` or `/effort` has no
   acknowledgement in the wording this ccd recognises (Claude Code's own wording drifted, Claude Code itself
-  refused the command, or the operator dismissed the `/effort` slider: `Kept effort level as …`), logs `operator-choice <id>: unmeasured (…)`, once per keep. A field written after the keystroke (the PWA picker, a coordinator's
-  route, this step's last write) is the later choice and wins. `python3 deploy/measure-continuity.py --stage 7`
+  refused the command — `/effort`'s `Invalid argument …`, 18 rows in the 6,794 fleet transcripts counted on
+  2026-10-05; a dismissed `/effort` slider wrote no row there, no `Kept effort level as …` at all), logs `operator-choice <id>: unmeasured (…)`, once per keep. A field written after the keystroke (the PWA picker, a coordinator's
+  route, this step's last write) is the later choice and wins, and is asked first, so an older command is not logged either. `python3 deploy/measure-continuity.py --stage 7`
   counts the writes, the stops that logged a `/model` ccd could not keep, and, in
   `stops_that_could_not_read_the_transcript`, the KEEPS that could not measure: one per `unmeasured (…)` line, so a keep at a
   spawn counts and so does the acknowledgement-drift line (a successful read of a command with no recognised acknowledgement).
-  A refused command repeats at every keep until a later operator command of its kind is acknowledged (a ccd keystroke
-  does not clear it). The row
+  A refused command, and the drift line, repeat at every keep until a later operator command of its kind is
+  acknowledged or its field is written after it (a `route --set`, the PWA picker; a ccd keystroke does not clear it). The row
   counts keep-time STOPS that a spawn may follow, not distinct choices or restarts: a `/model` the record cannot hold
   is logged again at every later keep until a newer command replaces it, since it reverts again at each, and a
   session stopped for good, or archived and then removed, is counted although no restart happened (an over-count by

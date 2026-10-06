@@ -71,6 +71,7 @@ describe('each regex is bound to the line the real _operator_choice_keep writes'
     field('class', 'fable');
     transcript('model', 'opus', 'Set model to `Opus 5.5` for this session only');
     h.sh(`_operator_choice_keep ${ID}`);
+    field('class', 'opus');   // dated before the next command again: the record-newer check is asked first (review 272 F6)
     transcript('model', 'gpt-5.6-sol', 'Set model to `gpt-5.6-sol` for this session only');
     h.sh(`_operator_choice_keep ${ID}`);
     field('class', 'haiku');

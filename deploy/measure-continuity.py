@@ -476,13 +476,16 @@ def stage4(ctx):
 # Those two are the keep-time stops at which ccd KNOWS it reverted the operator's
 # choice, so they are the row. It counts STOPS (keeps), not distinct choices or restarts: a
 # `/model` ccd cannot keep is logged again at every later keep until a newer
-# command replaces it (it reverts again at each). The writes are reported
+# command replaces it or its field is written after it (it reverts again at each).
+# The row's key, `restarts_that_reverted_an_operator_model`, keeps its wave-3 name
+# although what it counts is those keep-time STOPS. The writes are reported
 # beside the row, and so are the stops where ccd could not read at all
 # (`operator-choice <id>: unmeasured (…)`), which MAY have reverted one — never
 # folded into the row, never dropped. The field `stops_that_could_not_read_the_transcript`
-# counts KEEPS that could not measure, one per such line: keeps at a spawn count,
+# (its name kept too) counts KEEPS that could not measure, one per such line: keeps at a spawn count,
 # so does the acknowledgement-drift line, and a refused command repeats at every
-# keep until a later operator command of its kind is acknowledged. (The key keeps its name.) Named cost: a
+# keep until a later operator command of its kind is acknowledged or its field is
+# written after it. Named cost: a
 # supervisor revival reads the transcript before its spawn and logs like a stop,
 # but a session on a non-Anthropic lane is skipped and leaves no line, so its
 # `/model` is never counted.
