@@ -72,12 +72,50 @@ describe('the PWA maps no ws-reclaim token — the sentence is the server’s (s
     expect(read('pwa/src/fleet/AbandonSheet.tsx')).toContain('export function AbandonSheet');
   });
 
-  /** The tokens `src` spells as a quoted string literal. */
-  const spelled = (src: string, ts: readonly string[]): string[] =>
-    ts.filter((t) => new RegExp(`['"\`]${t.replace(/-/g, '\\-')}['"\`]`).test(src));
+  /** The tokens `src` spells: as a quoted string literal (read off the raw
+   *  text), or, for a token that is a valid identifier, as a BARE object key —
+   *  `{ held: … }` — read off `codeOnly` text so a comment naming it is no
+   *  spelling. A key position is `{` or `,` (or a line start) before the
+   *  token and `:` after it on the same line (`[ \t]*`, so a ternary broken
+   *  across lines is not one; `\??` takes an optional member `held?:`).
+   *  A hyphenated token cannot be a bare key, so the quoted arm already sees
+   *  every spelling it has. A property ACCESS (`x.held`) and a `case held:`
+   *  are not keys and do not match. A TS type member or a typed parameter named
+   *  like a token IS a hit — it names the token as a field, which is what this
+   *  rule bars — and so is prose such as `, held: x` inside a quoted string,
+   *  since `codeOnly` keeps string literals: a false red, never a missed
+   *  spelling. None of the scanned files holds either today. */
+  const spelled = (src: string, ts: readonly string[]): string[] => {
+    const code = codeOnly(src);
+    return ts.filter((t) => new RegExp(`['"\`]${t.replace(/-/g, '\\-')}['"\`]`).test(src)
+      || (/^[A-Za-z_]\w*$/.test(t) && new RegExp(`(?:^|[{,])\\s*${t}[ \\t]*\\??:`, 'm').test(code)));
+  };
 
-  it.each(TOKEN_FILES)('%s spells no ws-reclaim refusal token as a string literal', (f) => {
+  it.each(TOKEN_FILES)('%s spells no ws-reclaim refusal token as a string literal or a bare key', (f) => {
     expect(spelled(read(f), tokens)).toEqual([]);
+  });
+
+  // `spelled` itself, on the shapes it must and must not see: a bare key is one
+  // spelling, and every look-alike that is not a key is not.
+  it('spelled: sees a quoted token and a bare object key, each in its own right', () => {
+    expect(spelled("const a = 'tree-busy';", ['tree-busy', 'held'])).toEqual(['tree-busy']);
+    expect(spelled("const a = { coordinating: 'x', held: 'y' };", ['coordinating', 'held', 'attached'])).toEqual(['coordinating', 'held']);
+    expect(spelled('const a = {\n  attached: 1,\n  held?: 2,\n};', ['attached', 'held'])).toEqual(['attached', 'held']);
+    expect(spelled('const a = { x: 1 , held : 2 };', ['held'])).toEqual(['held']);
+  });
+
+  it('spelled: a property access, a ternary, a case label and a comment are no spelling', () => {
+    const src = [
+      'const a = x.held ? y.attached : z;',
+      'const b = c ? held : attached;',
+      'const d = c\n  ? held\n  : attached;',
+      // A comma before the token, but its `:` is on the NEXT line: the ternary's own.
+      'const e = c ? (a, held\n  : b);',
+      'switch (k) { case held: break; }',
+      '// { held: 1 }',
+      '/* , attached: 2 */',
+    ].join('\n');
+    expect(spelled(src, ['held', 'attached'])).toEqual([]);
   });
 
   // SessionLine.tsx is out of TOKEN_FILES only for `'held'`, an ASK state it
@@ -91,11 +129,22 @@ describe('the PWA maps no ws-reclaim token — the sentence is the server’s (s
   });
 
   // Counts code-only reads, not files: a comment naming the field is no read,
-  // and a destructured or bracketed read is one.
+  // and a destructured or bracketed read is one. `childReclaim` is distinctive
+  // enough to count bare, so `const { childReclaim } = run` and `run['childReclaim']`
+  // (a string literal, which `codeOnly` keeps) each add one.
+  const childReclaimReads = (src: string): number => (codeOnly(src).match(/\bchildReclaim\b/g) ?? []).length;
+
+  it('counts a destructured and a bracketed read of childReclaim, and not a comment', () => {
+    expect(childReclaimReads('const { childReclaim } = run;')).toBe(1);
+    expect(childReclaimReads("const c = run['childReclaim'];")).toBe(1);
+    expect(childReclaimReads('const c = run.childReclaim;')).toBe(1);
+    expect(childReclaimReads("// run['childReclaim'] and run.childReclaim\nconst c = 1;")).toBe(0);
+  });
+
   it('has ONE reader of RunSummary.childReclaim in pwa/src — runWords.ts', () => {
     const reads = Object.fromEntries(
       pwaSources()
-        .map((f) => [path.relative(root, f), (codeOnly(readFileSync(f, 'utf8')).match(/\bchildReclaim\b/g) ?? []).length] as const)
+        .map((f) => [path.relative(root, f), childReclaimReads(readFileSync(f, 'utf8'))] as const)
         .filter(([, n]) => n > 0),
     );
     // runWords.ts: childReclaimChip's parameter type and its one read.
@@ -105,12 +154,32 @@ describe('the PWA maps no ws-reclaim token — the sentence is the server’s (s
 
 // The abandon confirmation's pins: `FleetSession.child` has ONE reader, and the PWA
 // renders no close word. Counts are code-only (`codeOnly`): a sentence ABOUT a
-// field is not a read of it. Known limit: `.child\b` cannot see a destructured
-// read (`const { child } = session`), because `child` is too common a word to
-// scan for bare.
+// field is not a read of it. A read is a property access (`session.child`) or a
+// bracketed one with a literal key (`session['child']`, `session?.["child"]`,
+// ``session[`child`]``). The bracket must follow an identifier character, `)` or
+// `]` with nothing between, so an array literal (`['child']`, `return ['child']`)
+// is not a read. Known limits: a destructured read (`const { child } = session`),
+// because `child` is too common a word to scan for bare; a computed key
+// (`session[k]`); and a spaced bracket (`session ['child']`), which cannot be told
+// from `return ['child']` without parsing.
+const FLEET_CHILD_READ = /\.child\b|[\w$)\]](?:\?\.)?\[\s*(['"`])child\1\s*\]/g;
+const fleetChildReads = (src: string): number => (codeOnly(src).match(FLEET_CHILD_READ) ?? []).length;
+
+it('counts a property and a bracketed read of FleetSession.child, and no look-alike', () => {
+  expect(fleetChildReads('const c = session.child;')).toBe(1);
+  expect(fleetChildReads("const c = session['child'];")).toBe(1);
+  expect(fleetChildReads('const c = session["child"];')).toBe(1);
+  expect(fleetChildReads('const c = session[`child`];')).toBe(1);
+  expect(fleetChildReads("const c = session?.['child'];")).toBe(1);
+  expect(fleetChildReads("const c = rows[0]['child'] ?? f()['child'];")).toBe(2);
+  expect(fleetChildReads("const k = ['child'];\nconst m = ['child', 'x'];\nreturn ['child'];\nf(['child']);")).toBe(0);
+  expect(fleetChildReads("const c = session['childReclaim'] ?? session['kid'];")).toBe(0);
+  expect(fleetChildReads("// session['child'] and session.child\nconst c = 1;")).toBe(0);
+});
+
 it('has ONE reader of FleetSession.child in pwa/src — childMarkOf, in runWords.ts', () => {
   const reads = Object.fromEntries(pwaSources()
-    .map((f) => [path.relative(root, f), (codeOnly(readFileSync(f, 'utf8')).match(/\.child\b/g) ?? []).length] as const)
+    .map((f) => [path.relative(root, f), fleetChildReads(readFileSync(f, 'utf8'))] as const)
     .filter(([, n]) => n > 0));
   // archiveReleased.ts reads `releasedFrom.child`, a DIFFERENT field; its own
   // docstring: "never `FleetSession.child`: one decision, one field".
