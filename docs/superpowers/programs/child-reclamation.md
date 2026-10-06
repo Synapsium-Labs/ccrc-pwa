@@ -46,6 +46,19 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 17:16 — run 260's fix round 1 is verified; scoped review run 303 is opened (wave-done 3728).**
+  - **The claim.** `ws/quiet-meadow` at `9aa20cb2b` is PR #290's head, and the PR is open. It contains the merge
+    `19441194b` of `77c11245a`, and `git merge-tree` against today's main (`4db20aa17`) is clean.
+  - **The run.** `advance` moved run 260 to `awaiting-review`, and all 19 items read done.
+  - **Numbers.** 3926, 3927, 3928, 3929, 3930, 3931, 3932, 3933, 3934, 3935, 3936, 3937, 3938, 3939, 3940, 3941, 3942,
+    3943 and 3944 are defined in the plan. 3945 is unused.
+  - **The suite.** `red`, with no real break: load reds that are green alone, plus three files red on a clean
+    origin/main.
+  - **Review run 303.** Its brief is `ccr15-evidence-archive/review-260fr1-brief.md`. It covers F1, F2/F18, F4 (with
+    the SAFETY lens, Opus xhigh) and F11/F12, then the merge's `--remerge-diff`, then the rest of the round's diff.
+    Each finding is classed as shipped behaviour, shipped prose or record only.
+  - **Dispatch.** The rolling daily cap refused at 24 of 24. The oldest dispatch ages out at 17:31:54, and a
+    background retry re-measures and dispatches then.
 - **2026-10-06 12:39 — `kept-word-ends-on-late-birth` is a stated residual, number 3944 (mail 3695, ruled in 3696).**
   - **The finding.** quiet-meadow found it during fix round 1 while making F11 true. A recycled slug's new `create`
     may not be placed yet. If its minting run is already past `minting-run-open`, a pass judges the new marker against
