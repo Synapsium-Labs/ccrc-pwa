@@ -13,7 +13,7 @@
 // NOT HERE: `server/src/coord/store.ts`'s SQL (`haltingRowSql`) and JS (`rowHalts`) forms of the halt. They are
 // the store's own notion and are pinned equal to `isHalting` by `update-store-nodes.test.ts`.
 import {
-  PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, UPDATE_GATE_CAP, type AutoMode, type UpdateChannel,
+  PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, UPDATE_GATE_CAP, isReleaseTag, type AutoMode, type UpdateChannel,
 } from './api.js';
 import { UPDATE_OP } from './agent-protocol.js';
 
@@ -61,4 +61,12 @@ export function autoPermits(auto: AutoMode, channel: UpdateChannel | null): bool
  *  never checked (decision 11). */
 export function agentPredatesUpdateOp(agentOps: readonly string[] | null): boolean {
   return agentOps !== null && !agentOps.includes(UPDATE_OP);
+}
+
+/** The node's stamp did not read (`stampRead` not `ok`), or it read a version that is not a release tag: what it
+ *  runs is UNREAD (`moveRefusal`'s `stamp-unread` for every update move; D-3379, wave 3's D-3307 line). A stamp
+ *  that read with no version is unversioned, not unread. Moved to L0 in wave 14 (D-4270): the skew banner says
+ *  "auto moves the lagging box" only where the dispatcher would not refuse the move as stamp-unread. */
+export function stampUnread(stampRead: string, currentVersion: string | null): boolean {
+  return stampRead !== 'ok' || (currentVersion !== null && !isReleaseTag(currentVersion));
 }

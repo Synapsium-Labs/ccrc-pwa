@@ -115,12 +115,25 @@ describe('autoWouldMove — the dispatcher\'s auto path, from L0', () => {
     ['no update-gate in its caps (no-update-gate)', node({ caps: ['detach'] }), 'channel'],
     ['no tag to move to (a converged row)', node({ desiredTag: null }), 'channel'],
     ['a node the console cannot move', node({ reachable: false }), 'channel'],
+    ['a stamp that did not read (stamp-unread)', node({ stampRead: 'unreadable' }), 'channel'],
+    ['a running version that is not a release tag (stamp-unread)',
+      node({ current: { sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-10-05T12:00:00Z', dirty: false, version: 'main' } }), 'channel'],
   ] as const)('not with %s', (_what, n, auto) => {
     expect(autoWouldMove(n as NodeWire, auto)).toBe(false);
   });
 
   it('a channel word this build cannot name reads as unresolved, never as a throw', () => {
     expect(autoWouldMove({ ...node(), channel: 'nightly' } as unknown as NodeWire, 'channel')).toBe(false);
+  });
+
+  it('a stampRead that is not a string reads as unread, never as a throw (D-4270)', () => {
+    expect(autoWouldMove({ ...node(), stampRead: undefined } as unknown as NodeWire, 'channel')).toBe(false);
+  });
+
+  it('a stamp that read a release tag, or read no version, is not unread (D-4270)', () => {
+    const current = (version: string) => ({ sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-10-05T12:00:00Z', dirty: false, version });
+    expect(autoWouldMove(node({ current: current('v0.0.8') }), 'channel')).toBe(true);
+    expect(autoWouldMove(node({ current: null }), 'channel')).toBe(true);
   });
 });
 
@@ -134,6 +147,9 @@ describe('skewRemedy — what the skew banner advises (R15(c))', () => {
     const stuck = [node({ update: lease('failed', 'x'), caps: [] }), server({ caps: [] })];
     expect(skewRemedy(stuck, [intent('channel')]), 'the console cannot move them after the ack either')
       .toEqual({ kind: 'halt', halting: [stuck[0]], then: 'cli' });
+    const unread = [node({ update: lease('failed', 'x') }), server({ stampRead: 'unreadable' })];
+    expect(skewRemedy(unread, [intent('channel')]), 'a stamp that did not read is refused after the ack too (D-4270)')
+      .toEqual({ kind: 'halt', halting: [unread[0]], then: 'cli' });
   });
 
   it('auto on (stable or channel) and every node movable: the console\'s own move', () => {
@@ -154,6 +170,7 @@ describe('skewRemedy — what the skew banner advises (R15(c))', () => {
     ['a node with no update-gate', [node({ caps: ['detach'] }), server()], [intent('channel')]],
     ['no node with a tag to move to (one box hand-installed ahead)', [node({ desiredTag: null }), server({ desiredTag: null })], [intent('channel')]],
     ['a lease that could not be read', [{ ...node(), update: undefined } as unknown as NodeWire, server()], [intent('channel')]],
+    ['a node whose stamp did not read', [node({ stampRead: 'unreadable' }), server()], [intent('channel')]],
   ] as const)('the terminal verbs when %s', (_what, nodes, intents) => {
     expect(skewRemedy(nodes as readonly NodeWire[] | null, intents as readonly UpdateIntentWire[])).toEqual({ kind: 'cli' });
   });

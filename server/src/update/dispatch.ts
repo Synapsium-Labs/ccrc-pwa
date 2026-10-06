@@ -22,7 +22,7 @@ import {
 } from '../../../shared/agent-protocol.js';
 import { isNewerTag } from '../../../shared/semver.js';
 import {
-  DETACH_CAP, agentPredatesUpdateOp, autoPermits, carriesDetachCap, carriesUpdateGate, isHaltingUpdate,
+  DETACH_CAP, agentPredatesUpdateOp, autoPermits, carriesDetachCap, carriesUpdateGate, isHaltingUpdate, stampUnread,
 } from '../../../shared/update-move.js';
 import { floorOf, type EligibilityRow } from './resolve.js';
 
@@ -118,9 +118,9 @@ export { autoPermits };
  *  could not be read is never "unversioned" (D-3379; wave 3's D-3307 line). */
 type Current = { kind: 'versioned'; tag: string } | { kind: 'unversioned' } | { kind: 'unread' };
 function currentOf(row: Pick<DispatchRow, 'stampRead' | 'currentVersion'>): Current {
-  if (row.stampRead !== 'ok') return { kind: 'unread' };
-  if (row.currentVersion === null) return { kind: 'unversioned' };
-  return isReleaseTag(row.currentVersion) ? { kind: 'versioned', tag: row.currentVersion } : { kind: 'unread' };
+  // Wave 14 (D-4270): the unread rule is L0's, so the skew banner's auto advice and this dispatcher agree.
+  if (stampUnread(row.stampRead, row.currentVersion)) return { kind: 'unread' };
+  return row.currentVersion === null ? { kind: 'unversioned' } : { kind: 'versioned', tag: row.currentVersion };
 }
 
 /** THE refusal source: this node's own refused tags (D-3394) — `moveRefusal`'s `refused-by-node` and, D-3409, the

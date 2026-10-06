@@ -6,10 +6,10 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { AUTO_MODES, UPDATE_CHANNELS, UPDATE_GATE_CAP, UPDATE_STATES } from '../../shared/api.js';
+import { AUTO_MODES, UPDATE_CHANNELS, UPDATE_GATE_CAP, UPDATE_STATES, isReleaseTag } from '../../shared/api.js';
 import { UPDATE_OP } from '../../shared/agent-protocol.js';
 import {
-  DETACH_CAP, agentPredatesUpdateOp, autoPermits, carriesDetachCap, carriesUpdateGate, isHaltingUpdate,
+  DETACH_CAP, agentPredatesUpdateOp, autoPermits, carriesDetachCap, carriesUpdateGate, isHaltingUpdate, stampUnread,
 } from '../../shared/update-move.js';
 import * as dispatch from '../src/update/dispatch.js';
 
@@ -72,6 +72,47 @@ describe('the capability clauses — moveRefusal\'s no-detach-cap, no-update-gat
     expect(src).toContain("if (agentPredatesUpdateOp(row.agentOps)) return 'agent-predates-update-op';");
     expect(src).not.toMatch(/caps\.includes\(DETACH_CAP\)|caps\.includes\(UPDATE_GATE_CAP\)|agentOps\.includes\(UPDATE_OP\)/);
     expect(src).toContain('return isHaltingUpdate(row.updateState, row.updateDetail);');
+    expect(src).toContain('if (stampUnread(row.stampRead, row.currentVersion)) return { kind: \'unread\' };');
+    expect(src).not.toMatch(/stampRead !== 'ok'/);
+  });
+});
+
+describe('stampUnread — moveRefusal\'s stamp-unread clause, moved to L0 (D-4270)', () => {
+  const STAMPS = ['ok', 'absent', 'unreadable', 'malformed', ''];
+  const VERSIONS: (string | null)[] = [null, 'v0.0.9', 'v1.2.3', 'main', '0.0.9', 'v0.0.9-rc1', ''];
+
+  it('a stamp that did not read, or a version that is not a release tag; a stamp that read with no version is not unread', () => {
+    for (const stamp of STAMPS) {
+      for (const version of VERSIONS) {
+        const want = stamp !== 'ok' || (version !== null && !/^v\d+\.\d+\.\d+$/.test(version));
+        expect(stampUnread(stamp, version), `${JSON.stringify(stamp)} / ${JSON.stringify(version)}`).toBe(want);
+      }
+    }
+  });
+
+  it('agrees with isReleaseTag, the one tag-shape guard', () => {
+    for (const version of VERSIONS) {
+      if (version === null) continue;
+      expect(stampUnread('ok', version), JSON.stringify(version)).toBe(!isReleaseTag(version));
+    }
+  });
+
+  it('moveRefusal answers stamp-unread through it, and only for an unread node', () => {
+    const row: dispatch.DispatchRow = {
+      nodeId: '0f0f0f0f-0000-4000-8000-00000000000f', role: 'fleet', label: 'fleet',
+      currentVersion: 'v0.0.9', highestVersion: 'v0.0.9', floorRead: 'measured', stampRead: 'ok',
+      caps: [DETACH_CAP, UPDATE_GATE_CAP], agentOps: [UPDATE_OP], reachable: true,
+      updateState: 'idle', updateTarget: null, updateStartedAt: null, updateDetail: null, reportedUpdatedAt: null,
+      channel: 'stable', desiredTag: null, provenance: 'verified', requestedTag: null, requestedKind: null, requestedAt: null,
+    };
+    const releases = [{ tag: 'v0.0.10', channel: 'stable' as const, bundleListed: true, yanked: false }];
+    const refusal = (o: Partial<dispatch.DispatchRow>) => dispatch.moveRefusal(
+      { row: { ...row, ...o }, auto: 'off', refusedTags: new Set<string>() },
+      { kind: 'update', target: 'v0.0.10', source: 'request' }, releases, { haltedBy: [], leaseHeldBy: null });
+    expect(refusal({ stampRead: 'unreadable' })).toBe('stamp-unread');
+    expect(refusal({ stampRead: 'ok', currentVersion: 'main' })).toBe('stamp-unread');
+    expect(refusal({ stampRead: 'ok', currentVersion: null })).not.toBe('stamp-unread');
+    expect(refusal({})).toBeNull();
   });
 });
 
@@ -142,7 +183,7 @@ describe('centralised-update wave 14: the halt rule, the move predicates and the
   });
 
   it('each L0 predicate is declared in shared/update-move.ts alone', () => {
-    for (const name of ['isHaltingUpdate', 'carriesDetachCap', 'carriesUpdateGate', 'agentPredatesUpdateOp', 'autoPermits']) {
+    for (const name of ['isHaltingUpdate', 'carriesDetachCap', 'carriesUpdateGate', 'agentPredatesUpdateOp', 'autoPermits', 'stampUnread']) {
       const re = new RegExp(`^\\s*(?:export\\s+)?(?:function|const)\\s+${name}\\b`, 'm');
       expect(ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/update-move.ts']);
     }

@@ -213,7 +213,12 @@ These are departures from R15 as ruled, from the brief's "PWA wave", or from wha
   - **Shipped:** `UpdateMoveSheet.tsx`'s header and the `moveSkippedText` docstring say: "a skip of a node the sheet never listed is the plan agreeing with the server, and is not said." So a 202 that requested one node and skipped an unnamed halting one closed the sheet silently, while the request waited for an ack.
   - **Now:** `halted` is the one exception, and the node is named through the plan's inventory (`moveLabel`). Every other unnamed skip stays unsaid.
 
-The worker's reserve: numbers 4270 to 4274, written bare until defined.
+- **D-4270** — *`autoWouldMove` also asks the dispatcher's `stamp-unread` clause, which moves to L0 as `stampUnread` (`shared/update-move.ts`); `dispatch.ts`'s `currentOf` calls it. A second server touch, in D-4266's shape. (Worker reserve; Task 3 fix round 1.)*
+  - **Found:** Task 3's review. The resolver gives a `desiredTag` to a node whose stamp did not read, or whose running version is not a release tag, because `floorOf` falls back to the floor file and `ResolveInput` carries no `stampRead`. `moveRefusal` then answers `stamp-unread` on every tick. The plan's `autoWouldMove` did not ask this, so the skew banner said auto moves the lagging box (or `then: 'auto'` behind a halt) where the dispatcher never would. That is against Reading 6(a) as ruled ("only where the dispatcher's own auto path would move every lagging node"). On the fleet row it is worse: `fleetAuto` also holds the server's auto move `waiting-for-fleet`.
+  - **Now:** `stampUnread(stampRead, currentVersion)` is declared only in `shared/update-move.ts`, pinned by the census in `update-move.test.ts`. `currentOf` answers `unread` through it with the same answers for every input. `autoWouldMove` refuses a node it answers true for, reading `stampRead` and `current.version` off the wire; a `stampRead` that is not a string reads as unread.
+  - **Not taken:** a standing request outranks auto (`intendedMove`), so a refused or unreadable request also keeps a node still while `autoWouldMove` says auto would move it. Answering false for any request would turn the banner to the terminal verbs while a console move the operator just tapped is under way. That is a product call, so it goes to residue beside Reading 11.
+
+The worker's reserve: numbers 4271 to 4274, written bare until defined (4270 is spent above).
 
 ## File structure
 
@@ -228,7 +233,7 @@ The worker's reserve: numbers 4270 to 4274, written bare until defined.
 - `pwa/test/halt-banner.test.tsx` (Task 4).
 
 **Changed**
-- `server/src/update/dispatch.ts` (Task 1): one import, the two re-exports and their comments, the body of `isHalting`, three `moveRefusal` clauses, and `autoPermits` removed.
+- `server/src/update/dispatch.ts` (Task 1): one import, the two re-exports and their comments, the body of `isHalting`, three `moveRefusal` clauses, and `autoPermits` removed; Task 3 fix round 1 (D-4270): the stampUnread import and currentOf's delegation.
 - `server/test/update-dispatch.test.ts` (Task 1): the ring case's title and import set.
 - `shared/agent-protocol.ts` (Task 1): three header comment lines, rewritten in place.
 - `pwa/src/screens/SettingsScreen.tsx` (Task 2): one import, the re-export, `canAck` removed, and the `ack` closure now calls `sendAck`.

@@ -11,11 +11,12 @@
 //
 // WHETHER AUTO MOVES A NODE is the dispatcher's own auto path, from L0 too: `autoPermits` (intendedMove's auto
 // clause), a `desiredTag` to move to (a converged row's is NULL), and moveRefusal's capability clauses for an auto
-// move — `carriesDetachCap`, `carriesUpdateGate` (`no-update-gate`), `agentPredatesUpdateOp`.
+// move — `carriesDetachCap`, `carriesUpdateGate` (`no-update-gate`), `agentPredatesUpdateOp` — and `stampUnread`
+// (`stamp-unread`, D-4270): the resolver gives a tag to a node whose stamp did not read, which the dispatcher refuses.
 import type { AutoMode, NodeWire, UpdateIntentWire } from '../../../shared/api';
 import { FLEET_SCOPE, isAutoMode, isUpdateChannel } from '../../../shared/api';
 import {
-  agentPredatesUpdateOp, autoPermits, carriesDetachCap, carriesUpdateGate, isHaltingUpdate,
+  agentPredatesUpdateOp, autoPermits, carriesDetachCap, carriesUpdateGate, isHaltingUpdate, stampUnread,
 } from '../../../shared/update-move';
 import { isManagedNode } from './movePlan';
 
@@ -77,6 +78,10 @@ export function consoleCanMove(n: NodeWire): boolean {
  *  (`no-update-gate`), auto permits its resolved channel, and the resolver gave it a tag to move to. */
 export function autoWouldMove(n: NodeWire, auto: AutoMode): boolean {
   if (!consoleCanMove(n) || !carriesUpdateGate(n.caps)) return false;
+  // moveRefusal's stamp-unread (D-4270): the resolver can give a node whose stamp did not read a tag, which the
+  // dispatcher then refuses on every tick. A wire field that is not the type it should be reads as unread.
+  const version = typeof n.current?.version === 'string' ? n.current.version : null;
+  if (typeof n.stampRead !== 'string' || stampUnread(n.stampRead, version)) return false;
   const channel = isUpdateChannel(n.channel) ? n.channel : null;
   return autoPermits(auto, channel) && typeof n.desiredTag === 'string' && n.desiredTag !== '';
 }
