@@ -7,7 +7,7 @@
 // Two cues per row, always: the word is the fact and the glyph is the shape, so
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildReclaimWord, isRunState,
-  type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary } from '../../../shared/api';
+  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary } from '../../../shared/api';
 import { formatAge } from './formatReset';
 
 export const RUN_WORD: Record<RunState, string> = {
@@ -717,3 +717,39 @@ export function childReclaimRefreshDue(
   }
   return false;
 }
+
+export interface ChildOfRunLabel {
+  readonly text: string;
+  readonly data: 'child' | 'unreadable';
+  readonly title: string;
+}
+
+/**
+ * THE ONE READER of `FleetSession.child` in `pwa/src`, for the fleet line's
+ * label. Optional here although the wire type requires it: the live `fleet`
+ * frame is cast, never revived, and a server predating the field omits the key.
+ * THREE answers and no boolean (spec §5.1). A child names its minting run. An
+ * unreadable marker says so, because the server treats it as neither "a child"
+ * nor "not a child": it refuses a second run and defers a reclaim. No marker,
+ * or a shape this build cannot read, says nothing.
+ */
+export const childOfRunLabel = (session: { child?: ChildMark }): ChildOfRunLabel | null => {
+  const c: unknown = session.child;
+  if (c === undefined || c === null || typeof c !== 'object') return null;
+  const o = c as { kind?: unknown; runId?: unknown };
+  if (o.kind === 'child' && typeof o.runId === 'number' && Number.isSafeInteger(o.runId)) {
+    return {
+      text: `child of run #${o.runId}`,
+      data: 'child',
+      title: `minted by run #${o.runId} for one PR; the server reclaims it when its run closes`,
+    };
+  }
+  if (o.kind === 'unreadable') {
+    return {
+      text: 'child marker unreadable',
+      data: 'unreadable',
+      title: 'this workspace’s child marker could not be read: it takes no second run, and is not reclaimed until it can be read',
+    };
+  }
+  return null;
+};

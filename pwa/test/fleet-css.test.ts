@@ -380,7 +380,11 @@ describe('selection is polarity, status is hue', () => {
                         // The context-pressure chip (D-2011): its own
                         // `--status-attention-text` (and `--status-dead-text`
                         // on the wedge variant, D-2016) strands the same way.
-                        '.sess-ctxpressure']) {
+                        '.sess-ctxpressure',
+                        // Child-reclamation wave 5's label: its own
+                        // `color: var(--ink-tertiary)` strands on the slab exactly
+                        // like `.sess-substrate`'s would without its entry here.
+                        '.sess-child']) {
       expect(group).toContain(`.sess-line--active ${cell}`);
     }
   });
@@ -499,6 +503,24 @@ describe('selection is polarity, status is hue', () => {
     // text-overflow:ellipsis, no `flex: none`), and §2.4 lengthens what it holds
     // in the same build. A chip without `flex: none` truncates it first.
     expect(ruleFor('.sess-spawn')).toContain('flex: none');
+  });
+
+  it('gives the child-of-run label .sess-substrate\'s shape, in a rule of its own (wave 5, spec §5.9)', () => {
+    // The ruled shape: `color: var(--ink-tertiary); flex: none`, no truncation. Fixed
+    // words beside the hold reason, the row's one shrinkable cell, so the label
+    // never truncates and never steals the hold reason's room. Its OWN rule,
+    // not a second selector on .sess-substrate's: that rule's key is
+    // grandfathered in contrast.test.ts's uncovered census, and renaming it
+    // would read as a new blind spot.
+    const substrate = ruleFor('.sess-substrate');
+    const child = ruleFor('.sess-child');
+    for (const prop of ['color', 'flex']) {
+      expect(declValue(child, prop), prop).not.toBeNull();
+      expect(declValue(child, prop), prop).toBe(declValue(substrate, prop));
+    }
+    const props = stripComments(child).split(';').map((d) => d.split(':')[0]!.trim()).filter((p) => p !== '');
+    expect(props.sort(), 'no truncation, and nothing beyond the ruled shape').toEqual(['color', 'flex']);
+    expect(selectorsOf(css, '.sess-child')).toEqual(['.sess-child']);
   });
 
   // The list above names cells; this names the RULE that keeps producing them.

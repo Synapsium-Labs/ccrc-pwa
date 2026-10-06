@@ -6,6 +6,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ASK_OPERATOR_PRINCIPAL, graphGateCount, READER_MIN_COLS, sessionAsk, type AskState, type FleetSession } from '../../shared/api';
 import { SessionLine } from '../src/fleet/SessionLine';
+import { childOfRunLabel } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself
@@ -1494,5 +1495,42 @@ describe('the repo label (board-placement wave 2, Task 6)', () => {
     render(<SessionLine session={s()} onOpen={() => {}} onActions={() => {}} />);
     expect(document.querySelector('.sess-repo')).toBeNull();
     expect(screen.getByRole('button', { name: 'quiet-mesa' })).toBeInTheDocument();
+  });
+});
+
+// ── child-reclamation wave 5: the child-of-run label ────────────────────────
+//
+// `.sess-held`'s ink register: a short fact, no action. Three answers, never two
+// (spec §5.1): a child names its minting run; an unreadable marker says so
+// rather than reading as "not a child"; no marker says nothing.
+describe('a child workspace says which run minted it (wave 5)', () => {
+  const cell = (): HTMLElement | null => document.querySelector('.sess-child');
+
+  it('says nothing for a workspace that is not a child — the no-regression baseline', () => {
+    render(<SessionLine session={s({ child: { kind: 'none' } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()).toBeNull();
+  });
+
+  it('names the minting run on a child, as inert text', () => {
+    render(<SessionLine session={s({ child: { kind: 'child', runId: 42 } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.textContent).toBe('child of run #42');
+    expect(cell()).toHaveAttribute('data-child', 'child');
+    expect(cell()?.tagName).toBe('SPAN');
+  });
+
+  it('says the marker could not be read rather than dropping it', () => {
+    render(<SessionLine session={s({ child: { kind: 'unreadable' } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.textContent).toBe('child marker unreadable');
+    expect(cell()).toHaveAttribute('data-child', 'unreadable');
+  });
+
+  it('reads the field DEFENSIVELY — a live fleet frame is cast, never revived', () => {
+    const legacy = { ...s() } as Record<string, unknown>;
+    delete legacy['child'];
+    expect(() => render(<SessionLine session={legacy as unknown as FleetSession}
+                                     onOpen={() => {}} onActions={() => {}} />)).not.toThrow();
+    expect(cell()).toBeNull();
+    expect(childOfRunLabel({})).toBeNull();
+    expect(childOfRunLabel({ child: { kind: 'child', runId: 'x' } as unknown as { kind: 'child'; runId: number } })).toBeNull();
   });
 });
