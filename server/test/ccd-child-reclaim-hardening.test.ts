@@ -26,6 +26,7 @@ import {
   looseCommits, makeChild, plantTmux, tmuxSessions, type Child,
 } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-hardening-'); });
@@ -40,7 +41,7 @@ const spawnCcd = (snippet: string, timeout: number): {
   const t0 = Date.now();
   const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout,
-    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
+    env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }),
   });
   const err = r.error as (Error & { code?: string }) | undefined;
   return { code: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', ms: Date.now() - t0, error: err?.code ?? '' };
@@ -734,7 +735,7 @@ describe('the hidden read’s memo is a GLOBAL table — ccd sourced inside a fu
       + ` _ws_reclaim_hidden "${wt}"; rc=$?; printf '%s\\n' "$rc" "\${_WS_HIDDEN_PATHS[*]}";`
       + ` declare -p _WS_HIDDEN_STAND | cut -c1-10; printf '%s\\n' "\${!_WS_HIDDEN_STAND[@]}" | sort`], {
       encoding: 'utf8', cwd: h.home, timeout: 60_000,
-      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
+      env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }),
     });
     expect(r.stdout.trim().split('\n'), r.stderr).toEqual(['0', 'f1.txt', 'declare -A', path.join(wt, 'gone1'), path.join(wt, 'gone2')]);
     expect(r.stderr).toBe('');

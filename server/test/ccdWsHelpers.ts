@@ -11,6 +11,7 @@ import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { asManagerCalls } from './platformFixtures.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 /** The home-able ids of the test roster — the set ccd reads as `CCRC_HOME_ABLE`
  *  out of the roster `seedAccountsSh` writes below. Derived, not hand-typed,
@@ -544,7 +545,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   ghContainedEnv(home, {}, { systemd: true, tmux: true });
 
   const gitEnv = (): NodeJS.ProcessEnv => ({
-    ...process.env, HOME: home,
+    ...inheritedEnv(), HOME: home,
     GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x',
     GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x',
   });
@@ -557,8 +558,8 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   const makeRepoAt = (name: string): string => {
     const origin = path.join(home, 'origins', `${name}.git`);
     const main = path.join(home, 'projects', name);
-    execFileSync('git', ['init', '--bare', '-b', 'main', origin]);
-    execFileSync('git', ['init', '-b', 'main', main]);
+    execFileSync('git', ['init', '--bare', '-b', 'main', origin], { env: inheritedEnv() });
+    execFileSync('git', ['init', '-b', 'main', main], { env: inheritedEnv() });
     fs.writeFileSync(path.join(main, 'README.md'), 'hi\n');
     git(main, 'add', 'README.md');
     git(main, 'commit', '-m', 'init');
@@ -583,7 +584,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     sh: (snippet, env = {}) =>
       execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
         { encoding: 'utf8', cwd: home,
-          env: ghContainedEnv(home, { ...process.env, HOME: home, ...env }, { systemd: true, tmux: true }) }).trim(),
+          env: ghContainedEnv(home, { ...inheritedEnv(), HOME: home, ...env }, { systemd: true, tmux: true }) }).trim(),
     reg: (id, field) => {
       const p = path.join(home, '.cc-sessions', `${id}.${field}`);
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;

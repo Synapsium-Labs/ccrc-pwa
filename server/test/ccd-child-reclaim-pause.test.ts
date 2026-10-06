@@ -21,6 +21,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-child-reclaim-pause-'); });
@@ -41,7 +42,7 @@ const shFail = (snippet: string): { code: number; stderr: string; stdout: string
 const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
   const opts = {
     encoding: 'utf8' as const, cwd: h.home,
-    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
+    env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }),
   };
   try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
   catch (e) {

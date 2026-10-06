@@ -15,6 +15,7 @@ import {
   CHILD_BRANCH, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, childIndex, childReclaimVerb, evalOf, hookRuns, makeChild,
   plantRepoPrograms, plantTmux, type Child,
 } from './childReclaimFixture.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-audit-'); });
@@ -30,7 +31,7 @@ const audit = (flags = ''): Record<string, unknown> =>
 const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
   try {
     return { code: 0, stderr: '', stdout: execFileSync('bash', ['-p', CCD, ...args], { encoding: 'utf8', cwd: h.home,
-      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) }).trim() };
+      env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }) }).trim() };
   } catch (e) {
     const err = e as { status?: number; stdout?: string; stderr?: string };
     return { code: err.status ?? 1, stdout: String(err.stdout ?? '').trim(), stderr: String(err.stderr ?? '') };

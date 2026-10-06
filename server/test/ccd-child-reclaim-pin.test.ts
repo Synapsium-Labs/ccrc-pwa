@@ -13,6 +13,7 @@ import { CCD } from './ccdWsHelpers.js';
 import {
   CHILD_BRANCH, CHILD_ID, CHILD_RUN, CHILD_STUBS, appendReflog, atticReach, hasCommit, looseCommits, makeChild, type Child,
 } from './childReclaimFixture.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-pin-'); });
@@ -583,14 +584,14 @@ describe('nested checkouts, re-proven and pinned on every call', () => {
   /** A clean, pushed clone of ANOTHER repository at `<wt>/vendor/other`. */
   const foreignClone = (wt: string): string => {
     const origin = path.join(h.home, 'origins', 'other.git');
-    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin]);
+    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin], { env: inheritedEnv() });
     const seedRepo = path.join(h.home, 'seed-other');
-    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo]);
+    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo], { env: inheritedEnv() });
     fs.writeFileSync(path.join(seedRepo, 'r'), 'r');
     h.git(seedRepo, 'add', 'r'); h.git(seedRepo, 'commit', '-m', 'r');
     h.git(seedRepo, 'remote', 'add', 'origin', origin); h.git(seedRepo, 'push', '-q', 'origin', 'main');
     const clone = path.join(wt, 'vendor', 'other');
-    execFileSync('git', ['clone', '-q', origin, clone]);
+    execFileSync('git', ['clone', '-q', origin, clone], { env: inheritedEnv() });
     return clone;
   };
 
@@ -1040,7 +1041,7 @@ describe('a hidden-flag edit is found by CONTENT, in every tree the pin commits 
     h.git(c.wt, 'add', '.env'); h.git(c.wt, 'commit', '-m', 'link');
     h.git(c.wt, 'update-index', '--skip-worktree', '.env');
     const sha256Repo = path.join(h.home, 'sha256-cwd');
-    execFileSync('git', ['init', '-q', '--object-format=sha256', sha256Repo]);
+    execFileSync('git', ['init', '-q', '--object-format=sha256', sha256Repo], { env: inheritedEnv() });
     const p = pinOf(c, { pre: `cd "${sha256Repo}";` });
     expect(p.rc, p.why).toBe('0');
     expect(p.wip, 'an unchanged link never grows a commit — the raw-bytes stage is already -C "$dir"').toBe('');
@@ -1151,21 +1152,21 @@ describe('a hidden-flag edit is found by CONTENT, in every tree the pin commits 
     const p = pinOf(c);
     expect(p.rc, p.why).toBe('0');
     expect(p.wip).toMatch(/^[0-9a-f]{40}$/);
-    const kept = execFileSync('git', ['-C', c.main, 'cat-file', 'blob', `${p.wip}:cfg.txt`]);
+    const kept = execFileSync('git', ['-C', c.main, 'cat-file', 'blob', `${p.wip}:cfg.txt`], { env: inheritedEnv() });
     expect(kept.equals(fs.readFileSync(path.join(c.wt, 'cfg.txt'))), `kept ${JSON.stringify(kept.toString())}, not the disk's bytes`).toBe(true);
   }, 60_000);
 
   it('FAILS when a checkout of ANOTHER repository gained a hidden-flag edit after the ladder — it cannot be pinned here', () => {
     const c = makeChild(h);
     const origin = path.join(h.home, 'origins', 'other.git');
-    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin]);
+    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin], { env: inheritedEnv() });
     const seedRepo = path.join(h.home, 'seed-other');
-    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo]);
+    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo], { env: inheritedEnv() });
     fs.writeFileSync(path.join(seedRepo, 'cfg.yml'), 'orig\n');
     h.git(seedRepo, 'add', 'cfg.yml'); h.git(seedRepo, 'commit', '-m', 'cfg');
     h.git(seedRepo, 'remote', 'add', 'origin', origin); h.git(seedRepo, 'push', '-q', 'origin', 'main');
     const clone = path.join(c.wt, 'vendor', 'other');
-    execFileSync('git', ['clone', '-q', origin, clone]);
+    execFileSync('git', ['clone', '-q', origin, clone], { env: inheritedEnv() });
     h.git(clone, 'update-index', '--skip-worktree', 'cfg.yml');
     const p = pinOf(c, { between: `printf 'LOCAL-EDIT\\n' > "${clone}/cfg.yml"` });
     expect(p.rc, 'a foreign hidden edit went with the tree unkept').toBe('1');

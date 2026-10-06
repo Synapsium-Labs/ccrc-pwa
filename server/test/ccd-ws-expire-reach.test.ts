@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ws-expire-reach-'); });
@@ -15,7 +16,7 @@ afterEach(() => { h.cleanup(); });
 const runCcd = (...args: string[]): { code: number; stderr: string } => {
   try {
     execFileSync('bash', ['-p', CCD, ...args], { encoding: 'utf8', cwd: h.home,
-      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) });
+      env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }) });
     return { code: 0, stderr: '' };
   } catch (e) {
     const err = e as { status?: number; stderr?: string };
@@ -43,7 +44,7 @@ describe('reachable: the capability token and the dispatcher arm', () => {
       let code = 0; let stderr = '';
       try {
         execFileSync('bash', [CCD, ...argv], { encoding: 'utf8', cwd: h.home,
-          env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) });
+          env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }) });
       } catch (e) { const err = e as { status?: number; stderr?: string }; code = err.status ?? 1; stderr = String(err.stderr ?? ''); }
       expect(code, argv.join(' ')).toBe(125);
       expect(stderr).toContain('refused (entry-unprivileged)');
