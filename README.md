@@ -562,12 +562,13 @@ under "Attention, notifications and answering" below.
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
 `skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111),
-and `timeout`.
+`timeout` and `model-default`.
 
 | checks | what they measure |
 |---|---|
 | `node`, `tmux`, `git`, `gh`, `jq`, `python3`, `flock` | on `PATH`; `node` also against the `engines.node` floor |
 | `timeout` | `timeout` or `gtimeout` on `PATH`: the session hook and the status line bound their one `tmux` call with it and skip the call without it — the hook then does nothing at all, and the status line writes no usage sidecar |
+| `model-default` | each Anthropic lane's `settings.json` default model (`env.ANTHROPIC_MODEL`, else `model`): a WARN when it is Fable (`fable`, `fable[1m]`, or an id carrying `-fable-`), because a session there with no routing record, or class `default`, starts on Fable; a file it cannot read or parse is a WARN, unmeasured (never a FAIL, no `--fix`: ccrc does not own the key) |
 | `tmux_skew` | the tmux client on disk against the running tmux server (a WARN: restart that server at a quiet moment) |
 | `gh_auth`, `git_email` | `gh` logged in with the `repo` scope; a commit identity |
 | `linger`, `path`, `disk` | linger enabled; `~/.local/bin` on `PATH`; free space on `$HOME`'s filesystem |
@@ -2564,6 +2565,9 @@ refusal, not a pass of nothing. Beside it, the status-line hook writes a per-ses
 `<ccd-id>.agents/`), which the fleet row reads and calls stale after 30 minutes. Doctor's `routing` check FAILs an
 Anthropic lane whose `settings.json` sets `CLAUDE_CODE_EFFORT_LEVEL`, or pins `CLAUDE_CODE_SUBAGENT_MODEL` while
 every live session carries a record (a WARN while any does not) — either key would silently override the record.
+Its `model-default` check WARNs an Anthropic lane whose `settings.json` defaults the model to Fable: Claude Code's
+`/model <name>` saves that default (`s` in the `/model` picker, which ccd presses, is session-only), and a session
+there with no record, or class `default` — a dispatched worker whose run names no class included — starts on Fable.
 
 ## Using the console
 

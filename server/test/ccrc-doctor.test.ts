@@ -1673,6 +1673,202 @@ describe('ccrc doctor: timeout', () => {
   });
 });
 
+// ── model-default: an Anthropic lane whose settings.json defaults to Fable ──
+// Claude Code's `/model <name>` saves `model` into the account home's
+// settings.json, and ccd composes `--model` only from a routing record whose
+// class is set and is not `default` — so every other spawn on that lane (no
+// record, class `default`, a worker whose run names no class) starts on what
+// that key says. ccrc's routing never chooses Fable itself; this check is how
+// a stray `/model fable` on a lane becomes visible. Most cases source the
+// checks file and call the one function (fast, and the subject is the
+// function's verdict); the table wiring and the server-role SKIP — which
+// needs `ccrc`'s `BOX_ENV_FILE` — go through `ccrc doctor` end to end.
+// Imported HERE for the reason the codex fixtures' import above gives: ES
+// modules hoist it, and lines above this point are cited by number.
+import { familyClassOf } from '../../shared/models.mjs';
+
+describe('ccrc doctor: model-default', () => {
+  // Two Anthropic lanes and one codex lane: the codex lane's `fable` alias
+  // names a GPT model (ANTHROPIC_DEFAULT_FABLE_MODEL), so it is not the subject.
+  const MD_ROSTER = { version: 1, accounts: [
+    { id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'claude-a', label: 'claude-a', configDirSuffix: '.claude-a',
+      exec: { kind: 'generated', secretsFile: '.cc-secrets/claude-a-oauth.env' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    { id: 'cx', label: 'cx', configDirSuffix: '.claude-cx',
+      exec: { kind: 'codex', provider: 'openai', proxyPort: 41001, litellmPort: 41002, authDir: codexAuthDir('cx') },
+      homeAble: false, telemetry: 'codex' },
+  ] };
+  /** A home with the projection and a real `node` (behind the `--version`
+   *  stub every doctor fixture uses) on an otherwise-empty contained PATH. */
+  const mdHome = (prefix: string): string => {
+    const home = mkTmp(prefix);
+    stubNode(home, 'v22.20.0');
+    seedAccountsSh(home, MD_ROSTER);
+    return home;
+  };
+  const settings = (home: string, suffix: string, body: unknown): string => {
+    const d = join(home, suffix);
+    mkdirSync(d, { recursive: true });
+    const p = join(d, 'settings.json');
+    writeFileSync(p, typeof body === 'string' ? body : JSON.stringify(body, null, 2));
+    return p;
+  };
+  /** `_check_model-default` alone, sourced the way the launchd routing case
+   *  sources `_check_routing`. */
+  const runCheck = (home: string): { code: number; out: string } => {
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(CHECKS_SRC)}; _check_model-default`],
+      { encoding: 'utf8', env: { HOME: home, PATH: containedPath(home), LC_ALL: 'C' } });
+    return { code: r.status ?? -1, out: r.stdout ?? '' };
+  };
+  const verdicts = (out: string): string[] => out.split('\n').filter((l) => /^(PASS|WARN|FAIL|SKIP) model-default: /.test(l));
+  const FABLE_LEAD = /^WARN model-default: an Anthropic lane's settings\.json defaults the model to Fable: /;
+
+  it('WARNs on `model: "fable"` through `ccrc doctor` itself, naming the lane, the consequence and the remedy — never a FAIL', () => {
+    const home = healthy('ccrc-doctor-mdef-alias-');
+    seedAccountsSh(home, MD_ROSTER);
+    settings(home, '.claude-a', { model: 'fable' });
+    const r = runDoctor(home);
+    const line = lineFor(r.stdout, 'model-default');
+    expect(line, r.stdout).toMatch(FABLE_LEAD);
+    expect(line).toContain('Fable: claude-a (model=fable) — ');
+    expect(line).toContain('a session there with no routing record, or class `default`, starts on Fable (a dispatched worker whose run names no class included)');
+    expect(r.stdout).toMatch(/^WARN model-default: .*\n {2}remedy: in that lane's settings\.json set `model` to Opus or remove it .*a `\/model` typed with a name saves the account default, while `s` in the \/model picker is session-only$/m);
+    expect(r.stdout).not.toMatch(/^FAIL model-default:/m);
+  });
+
+  it('WARNs on `fable[1m]` and on a full Fable id — the alias with its suffix, and the dash-token rule', () => {
+    const home = mdHome('ccrc-doctor-mdef-ids-');
+    settings(home, '.claude', { model: 'fable[1m]' });
+    settings(home, '.claude-a', { model: 'claude-fable-5-1' });
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toHaveLength(1);
+    expect(verdicts(r.out)[0]).toMatch(FABLE_LEAD);
+    expect(verdicts(r.out)[0]).toContain('Fable: claude (model=fable[1m]), claude-a (model=claude-fable-5-1) — ');
+  });
+
+  it('WARNs on env.ANTHROPIC_MODEL naming Fable — it outranks `model` — and PASSes when it outranks a Fable `model`', () => {
+    const home = mdHome('ccrc-doctor-mdef-env-');
+    settings(home, '.claude-a', { model: 'opus', env: { ANTHROPIC_MODEL: 'claude-fable-5-1' } });
+    const r = runCheck(home);
+    expect(verdicts(r.out)).toEqual([expect.stringMatching(FABLE_LEAD)]);
+    expect(r.out).toContain('Fable: claude-a (env.ANTHROPIC_MODEL=claude-fable-5-1) — ');
+    // The precedence the other way round: the env key decides, so the stale
+    // `model` underneath it starts nothing.
+    const back = mdHome('ccrc-doctor-mdef-env-back-');
+    settings(back, '.claude-a', { model: 'fable', env: { ANTHROPIC_MODEL: 'opus' } });
+    expect(verdicts(runCheck(back).out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+    // An EMPTY env value is no value — the `model` beneath it is what runs.
+    const empty = mdHome('ccrc-doctor-mdef-env-empty-');
+    settings(empty, '.claude-a', { model: 'fable', env: { ANTHROPIC_MODEL: '' } });
+    expect(runCheck(empty).out).toContain('Fable: claude-a (model=fable) — ');
+  });
+
+  it('PASSes on `opus`, on an absent key and on an absent file, naming how many lanes it measured', () => {
+    const home = mdHome('ccrc-doctor-mdef-pass-');
+    settings(home, '.claude', { model: 'opus' });
+    settings(home, '.claude-a', { env: { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' } });
+    const r = runCheck(home);
+    expect(r.code).toBe(0);
+    expect(verdicts(r.out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+    const bare = mdHome('ccrc-doctor-mdef-nofile-');
+    expect(verdicts(runCheck(bare).out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+  });
+
+  it('ignores a codex lane whose `model` is `fable` — the alias names a GPT slot there', () => {
+    const home = mdHome('ccrc-doctor-mdef-codex-');
+    settings(home, '.claude-cx', { model: 'fable' });
+    expect(verdicts(runCheck(home).out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+  });
+
+  it('agrees with familyClassOf id for id: a Fable verdict exactly when the alias is `fable` or the family is fable', () => {
+    const corpus = ['fable', 'fable[1m]', 'FABLE', 'Fable[1m]', 'fable-ish', 'xfable', 'claude-fable-5-1', 'claude-fable-5-1[1m]',
+      'claude-fable-opus-hybrid-1', 'claude-opus-fable-x-1', 'claude-opus-5-5', 'claude-sonnet-5', 'opus', 'opus[1m]',
+      'default', 'claude-fable', 'CLAUDE-FABLE-5-1', 'anthropic/claude-fable-5-1', 'us.anthropic.claude-fable-5-1-v1:0', ''];
+    const home = mdHome('ccrc-doctor-mdef-agree-');
+    const dir = join(home, 'corpus');
+    mkdirSync(dir);
+    corpus.forEach((id, i) => writeFileSync(join(dir, `${i}.json`), JSON.stringify({ model: id })));
+    const r = spawnSync(BASH, ['-c', [
+      `set -uo pipefail; . ${shq(CHECKS_SRC)}; mkdir -p "$HOME/.claude-a"`,
+      `for i in $(seq 0 ${corpus.length - 1}); do cp "$HOME/corpus/$i.json" "$HOME/.claude-a/settings.json"; _check_model-default >/dev/null; echo "$?"; done`,
+    ].join('\n')], { encoding: 'utf8', env: { HOME: home, PATH: `${containedPath(home)}:/usr/bin:/bin`, LC_ALL: 'C' } });
+    const got = (r.stdout ?? '').trim().split('\n');
+    expect(got, r.stderr).toHaveLength(corpus.length);
+    corpus.forEach((id, i) => {
+      const fable = id.replace(/\[1m\]$/, '').toLowerCase() === 'fable' || familyClassOf(id) === 'fable';
+      expect(got[i], JSON.stringify(id)).toBe(fable ? '2' : '0');
+    });
+  });
+
+  it('SKIPs on a server-role box — it hosts no sessions', () => {
+    const home = healthy('ccrc-doctor-mdef-server-');
+    seedAccountsSh(home, MD_ROSTER);
+    settings(home, '.claude-a', { model: 'fable' });
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP model-default: this box records CCRC_ROLE=server, so it hosts no sessions/m);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) model-default:/m);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('WARNs UNMEASURED — never PASSes — on a settings.json it cannot read, naming the errno', () => {
+    const home = mdHome('ccrc-doctor-mdef-unread-');
+    const p = settings(home, '.claude-a', { model: 'opus' });
+    chmodSync(p, 0o000);
+    try {
+      const r = runCheck(home);
+      expect(r.code).toBe(2);
+      expect(verdicts(r.out)).toEqual([
+        'WARN model-default: unmeasured: settings.json exists but could not be read for: claude-a (EACCES), so whether it defaults the model to Fable is unknown',
+      ]);
+      expect(r.out).toContain('remedy: fix its mode/ownership (chmod u+r <home>/settings.json)');
+    } finally {
+      chmodSync(p, 0o600);
+    }
+  });
+
+  it('WARNs UNMEASURED on invalid JSON and on JSON that is not an object — its own line, not the unreadable one', () => {
+    const home = mdHome('ccrc-doctor-mdef-badjson-');
+    settings(home, '.claude', '{"model": "fable",');
+    settings(home, '.claude-a', '["fable"]');
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toEqual([
+      'WARN model-default: unmeasured: settings.json is not a JSON object for: claude, claude-a, so whether it defaults the model to Fable is unknown',
+    ]);
+    expect(r.out).toContain('remedy: repair that lane\'s settings.json so it parses as a JSON object');
+  });
+
+  it('WARNs UNMEASURED when the reader exits with a code it does not define — never PASSes on it', () => {
+    const home = mdHome('ccrc-doctor-mdef-weird-');
+    settings(home, '.claude-a', { model: 'fable' });
+    stub(home, 'node',
+      `if [ "$1" = "--version" ]; then echo 'v22.20.0'; exit 0; fi\n`
+      + 'case "$*" in *CCRC_DOCTOR_SETTINGS*) exit 9 ;; esac\n'
+      + `exec '${process.execPath}' "$@"`);
+    const r = runCheck(home);
+    expect(verdicts(r.out)).toEqual([expect.stringMatching(/^WARN model-default: unmeasured: .*could not be read for: claude-a \(node exit 9\)/)]);
+  });
+
+  it('a Fable lane and an unmeasured lane each get their own WARN, and no PASS', () => {
+    const home = mdHome('ccrc-doctor-mdef-mixed-');
+    settings(home, '.claude', { model: 'fable' });
+    settings(home, '.claude-a', 'not json');
+    const v = verdicts(runCheck(home).out);
+    expect(v).toHaveLength(2);
+    expect(v[0]).toMatch(FABLE_LEAD);
+    expect(v[1]).toMatch(/^WARN model-default: unmeasured: settings\.json is not a JSON object for: claude-a,/);
+  });
+
+  it('WARNs when the projection predates CCRC_ANTHROPIC_BACKEND, and PASSes vacuously with no projection at all', () => {
+    const home = mdHome('ccrc-doctor-mdef-stale-sh-');
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), 'CCRC_ACCOUNTS=(claude)\n');
+    expect(verdicts(runCheck(home).out)).toEqual([expect.stringMatching(/^WARN model-default: could not read the roster projection .*predates CCRC_ANTHROPIC_BACKEND/)]);
+    rmSync(join(home, '.ccrc', 'accounts.sh'));
+    expect(verdicts(runCheck(home).out)).toEqual([expect.stringMatching(/^PASS model-default: 0 Anthropic lane\(s\): no roster projection/)]);
+  });
+});
+
 // ── tmux client/server skew ───────────────────────────────────────────────
 // The loaded gun (substrate-unreachable spec §5): `tmux -V` is the CLIENT on
 // disk, `display-message -p '#{version}'` is the RUNNING SERVER's own answer,
