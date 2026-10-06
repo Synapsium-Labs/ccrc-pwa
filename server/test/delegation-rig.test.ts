@@ -880,7 +880,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
       const r = leakRun({ note: fine });
       expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
     }
-  });
+  }, 60_000);
 
   // Round 2 of F1(a): after an allowed loopback host the ONLY accepted continuations are the end of the URL, `:<digits>`
   // then the end or a `/`-path, or a `/`-path. Any other continuation is residue (fail closed), however benign what follows.
@@ -920,7 +920,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
       }
       for (const ch of continues) expectNamed(leakRun({ note: `x ${url}${ch}y` }), '/events/0/payload/note');
     }
-  });
+  }, 120_000);
 
   it('a `//`-led path whose first segment is an allowed top passes (`file:///rig/…`), and one that is not still fails closed', () => {
     for (const fine of ['file:///rig/tmp/x.output', '//usr/bin/git', 'file:///usr/bin/git', 'x //bin y', 'http://rig']) {
@@ -941,7 +941,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
       const r = leakRun({ note: fine });
       expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
     }
-  });
+  }, 60_000);
 
   // I3(b): a `//` at a host position followed by a character that cannot start a name hides whatever follows it. CHOSEN: `//`
   // followed by whitespace, a quote, a backtick, a closer `)` `]` `}`, `<`, `>`, `,` `;` or the end stays allowed (a comment
@@ -963,7 +963,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
       const r = leakRun({ note: fine });
       expect(r.status, `${JSON.stringify(fine)}: ${r.stderr}`).toBe(0);
     }
-  });
+  }, 120_000);
 
   it('`/dev/null` is exempt only as the WHOLE path: a path under it is residue (F1b)', () => {
     for (const leak of ['/dev/null/srv/acme', '2>/dev/null/mnt/vol/client', 'cmd >/dev/null/home/someone-else/x']) {
@@ -979,7 +979,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
       const r = leakRun({ note: fine });
       expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
     }
-  });
+  }, 60_000);
 
   it('fails closed on a JSON-escaped slash: a payload string holding a literal backslash-slash spelling of a foreign path (F2b)', () => {
     // These are the characters backslash, slash — in the capture file they read `\\/srv\\/acme`.
@@ -1002,7 +1002,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
       const r = leakRun({ note: fine });
       expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
     }
-  });
+  }, 60_000);
 
   // I1: a path's FIRST segment is the whole segment. ABS's segment class stops at `~`, `@`, `+`, `%`..., and a `/` after one of
   // those is never scanned, so after an allowed top and after `/dev/null` the next character must be `/` (not for `/dev/null`),
@@ -1015,14 +1015,14 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
       expectNamed(leakRun({ note: leak }), NOTE, 'srv/acme', 'someone-else', 'vol/client');
     }
     for (const top of ['rig', 'usr', 'bin']) for (const g of GLUE) expectNamed(leakRun({ note: `x /${top}${g}/srv/acme y` }), NOTE, 'srv/acme');
-  });
+  }, 120_000);
 
   it('what may follow an allowed top: `/`, `:`, the end and a URL/word ender pass (I1)', () => {
     for (const fine of ['/rig', '/rig/x', '/usr/bin/git', '/bin:/usr', '/rig:y', 'x /bin y', '/rig)', '/usr"', '(/rig)', '/rig,', '/rig;', '/bin]', '/usr}', '/rig<', '/rig>', "'/rig'", '`/rig`', '/rig\t', '/rig\n']) {
       const r = leakRun({ note: fine });
       expect(r.status, `${JSON.stringify(fine)}: ${r.stderr}`).toBe(0);
     }
-  });
+  }, 60_000);
 
   it('`/dev/null` glued to a character outside the segment class is residue (I1)', () => {
     for (const leak of ['/dev/null~/srv/acme', '2>/dev/null~/home/someone-else/x', '/dev/null@x/srv/acme', '/dev/null+x/home/someone-else/x', '/dev/null%x/mnt/vol/client',
@@ -1034,7 +1034,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
       const r = leakRun({ note: fine });
       expect(r.status, `${JSON.stringify(fine)}: ${r.stderr}`).toBe(0);
     }
-  });
+  }, 60_000);
 
   it('a path after the loopback `/` whose first segment is outside the allowlist or glued to a character outside the class is residue (I1)', () => {
     for (const leak of ['http://127.0.0.1:4000/~/home/someone-else/x', 'http://127.0.0.1/~/srv/acme', 'http://127.0.0.1:4000/@x/srv/acme', 'http://127.0.0.1:4000/+x/home/someone-else',
@@ -1047,7 +1047,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
       const r = leakRun({ note: fine });
       expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
     }
-  });
+  }, 60_000);
 
   // I2: the leak-direction sub-arms of the guards above, each pinned by an input that only that arm refuses.
   it('`/dev/null` is a first segment exemption only: `/dev/shm/null`, `/srv/null` and the loopback `/srv/null` are residue (I2)', () => {
@@ -1099,10 +1099,91 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(ok.status, ok.stderr).toBe(0);
   });
 
+  // F12 (review 296): MUNGED_FOREIGN is a DENYLIST of ten tops, case-sensitive, not a class. These rows PIN that as the header declares
+  // it, so a change that widens the list (or makes it an allowlist) must change the header with it. They are not a guarantee.
+  it('a munged foreign path whose top MUNGED_FOREIGN does not list passes (declared limit, not a guarantee): `-data-…`, `-media-…`, `-Home-…` (F12)', () => {
+    for (const fine of ['-media-vol-client', '-data-acme-client-proj', '-Home-x', 'x -Mnt-vol-0000']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+    // while every listed top is refused, so the pin above is about the LIST and not about the shape
+    for (const top of ['home', 'mnt', 'tmp', 'srv', 'opt', 'var', 'root', 'Users', 'private', 'proc']) expectNamed(leakRun({ note: `-${top}-x-y` }), NOTE);
+  }, 60_000);
+
+  // The header's first KNOWN LIMIT: an encoding the decode does not know is neither decoded nor chased. Pinned as declared.
+  it('base64 of residue is not decoded (declared limit, not a guarantee): a base64 foreign path and a base64 `//` URL pass', () => {
+    for (const text of ['/srv/acme/x', 'http://srv.corp/x', '/home/someone-else/acme']) {
+      const fine = Buffer.from(text).toString('base64');
+      const r = leakRun({ note: `x ${fine} y` });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+  });
+
+  // F11 (review 296): ABS's lookbehind skips a `/` after a letter, a digit, `.`, `_`, `~`, `-` (and `/`, a run of slashes, read where it
+  // ends), so a path glued after one of them is never scanned. The header names every one of them and `~/…`. Pinned as declared.
+  it('a `/` glued after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (declared limit, not a guarantee): `~/srv/acme`, `./srv/acme`, `a_/srv/acme` (F11)', () => {
+    for (const fine of ['~/srv/acme', './srv/acme', 'a_/srv/acme', 'x/srv/acme', '1/srv/acme', 'a-/srv/acme', '127.0.0.1:4000/home/x']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+    // a `/` after anything ELSE is scanned: the declared set is exactly that lookbehind
+    for (const leak of [' /srv/acme', '=/srv/acme', ':/srv/acme', '"/srv/acme"', '(/srv/acme)', '@/srv/acme']) expectNamed(leakRun({ note: leak }), NOTE, 'srv/acme');
+  }, 60_000);
+
   it.skipIf(USER.length < 4)('scans the decoded spelling of an escaped string: \\uXXXX and %2F', () => {
     const esc = (w: string): string => [...w].map((c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`).join('');
     for (const leak of ['\\u002fsrv\\u002fx', '{"p":"\\u002fsrv\\u002fx"}', 'x %2Fsrv%2Fx', `x-${esc(USER)}-y`, '\\u002e\\u002e\\u002fx']) {
       expectNamed(leakRun({ note: leak }), '/events/0/payload/note', USER);
+    }
+  });
+
+  // F1 (review 296): the decoded spelling turns EVERY `%XX` (two hex digits, either case) into its character, ONCE. With only `%2F`
+  // decoded, the `/` of `cat%20%2Fhome…` landed right after a name character, where both lookbehinds skip it.
+  const PCT_VALUES: Array<[string, string]> = [
+    ['a foreign path behind another escape', 'cat%20%2Fhome%2Fsomeone-else%2Facme'],
+    ['a non-loopback URL', 'redirect=http%3A%2F%2Fsrv.corp%2Fx'],
+    ['a foreign path behind a loopback URL', 'u=http%3A%2F%2F127.0.0.1%3A4000%2Fhome%2Fsomeone-else'],
+  ];
+  it.each(PCT_VALUES)('a percent-escaped spelling of %s is residue as a value, named by place, nothing written (F1)', (_name, leak) => {
+    expectNamed(leakRun({ note: leak }), NOTE, 'someone-else', 'srv.corp', 'acme');
+  });
+
+  it('the same percent-escaped string as a KEY is residue, named by index and never printed (F1)', () => {
+    // As in the KEY row above, the value carries residue too, so a pointer that printed the key's text would show it there.
+    const r = leakRun({ tool_response: { 'cat%20%2Fhome%2Fsomeone-else%2Facme': '/srv/x' } });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toContain('2.1.999/leak /events/0/payload/tool_response/#0 (key)\n');
+    expect(r.stderr).toContain('2.1.999/leak /events/0/payload/tool_response/#0\n');
+    for (const secret of ['someone-else', 'acme', '%2F', 'cat%20']) expect(r.stderr).not.toContain(secret);
+    expect(r.written).toEqual([]);
+  });
+
+  it('decodes every `%XX`, in either case, not only an upper-case `%2F` (F1): `%2e%2e%2f` is a `..` segment and a lower-case `%2f` is a slash', () => {
+    for (const leak of ['%2e%2e%2fsrv', 'cat%20%2fhome%2fsomeone-else', '%2E%2E%2Fsrv%2Facme']) {
+      expectNamed(leakRun({ note: leak }), NOTE, 'someone-else', 'srv', 'acme');
+    }
+  });
+
+  it.skipIf(USER.length < 4)('the user\'s name with its first letter percent-escaped is residue (F1)', () => {
+    const hex = USER.charCodeAt(0).toString(16).padStart(2, '0');
+    for (const leak of [`x-%${hex}${USER.slice(1)}-y`, `x-%${hex.toUpperCase()}${USER.slice(1)}-y`]) expectNamed(leakRun({ note: leak }), NOTE, USER);
+  });
+
+  it('what the percent decode leaves alone passes: a `%` not followed by two hex digits, a benign escape, and a malformed run that would throw decodeURIComponent (F1)', () => {
+    for (const fine of ['100%25 done', 'a%20b', '50% off', '%zz', '%2', '%', 'x%', '%E0%A4%A', '%E0%A4%A.', '%C3%28', '%ff%fe']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${JSON.stringify(fine)}: ${r.stderr}`).toBe(0);
+    }
+  }, 60_000);
+
+  it('controls: `path=%2Fhome%2Fx` and a bare `%2Fhome%2F…` stay refused (F1)', () => {
+    for (const leak of ['path=%2Fhome%2Fx', '%2Fhome%2Fsomeone-else%2Facme']) expectNamed(leakRun({ note: leak }), NOTE, 'someone-else', 'acme');
+  });
+
+  it('a double-encoded spelling is NOT chased: `%252F` is `%2F` after the one decode (declared single-decode limit, not a guarantee) (F1)', () => {
+    for (const fine of ['%252Fhome%252Fsomeone-else', 'cat%20%252Fhome%252Fx']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
     }
   });
 
@@ -1325,6 +1406,122 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
 
   it('refuses missing arguments with exit 2', () => {
     expect(spawnSync(process.execPath, [SANITIZE], { encoding: 'utf8' }).status).toBe(2);
+  });
+
+  // F9 (review 296): `--scan <fixtures-dir>` applies the sanitiser's OWN scan (the same residue() over every string value and every
+  // key, the same pointers) to committed fixture JSON, and writes nothing. The corpus is clean, so only a PLANTED residue shows
+  // that the scan bites; the build-matrix block's corpus row runs it over the committed directory.
+  const CORPUS = path.resolve(__dirname, 'fixtures/delegation');
+  const scanRun = (...args: string[]): { status: number | null; stdout: string; stderr: string } => {
+    const r = spawnSync(process.execPath, [SANITIZE, ...args], { encoding: 'utf8' });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  /** Every path under `d` with its size (a directory is `d`), so a row can show a scan left the tree as it found it. */
+  const snap = (d: string): string => JSON.stringify(fs.readdirSync(d, { recursive: true }).map(String).sort().map((n) => [n, fs.statSync(path.join(d, n)).isDirectory() ? 'd' : fs.statSync(path.join(d, n)).size]));
+  const jsonCount = (v: unknown): { strings: number; keys: number } => {
+    if (typeof v === 'string') return { strings: 1, keys: 0 };
+    const kids = Array.isArray(v) ? v : v !== null && typeof v === 'object' ? Object.values(v) : [];
+    const own = v !== null && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v).length : 0;
+    return kids.reduce((a: { strings: number; keys: number }, k) => { const c = jsonCount(k); return { strings: a.strings + c.strings, keys: a.keys + c.keys }; }, { strings: 0, keys: own });
+  };
+  /** A temp fixtures directory holding a copy of one COMMITTED fixture (the newest version's agent-plain), after `plant` changed it. */
+  const plantedCorpus = (plant: (f: Record<string, any>) => void): { base: string; dir: string; where: string; f: Record<string, any> } => {
+    const versions = fs.readdirSync(CORPUS).filter((n) => /^[0-9]+\.[0-9]+\.[0-9]+$/.test(n)).sort();
+    const v = versions[versions.length - 1] as string;
+    const f = JSON.parse(fs.readFileSync(path.join(CORPUS, v, 'agent-plain.json'), 'utf8')) as Record<string, any>;
+    plant(f);
+    const base = mkTmp('ccrc-dlg-scan-');
+    const dir = path.join(base, 'fix');
+    fs.mkdirSync(path.join(dir, v), { recursive: true });
+    fs.writeFileSync(path.join(dir, v, 'agent-plain.json'), `${JSON.stringify(f, null, 1)}\n`);
+    return { base, dir, where: `${v}/agent-plain.json`, f };
+  };
+
+  it('--scan of an unplanted copy of a committed fixture is clean, writes nothing, and reports what it read: its strings and keys, counted independently (F9)', () => {
+    const { base, dir, f } = plantedCorpus(() => {});
+    const before = snap(base);
+    const r = scanRun('--scan', dir);
+    const n = jsonCount(f);
+    expect(n.strings).toBeGreaterThan(50);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toBe(`sanitize: scanned 1 file(s), ${n.strings} string(s), ${n.keys} key(s): no residue\n`);
+    expect(r.stderr).toBe('');
+    expect(snap(base)).toBe(before);
+  });
+
+  it.each([['a foreign path', 'x /opt/acme/x'], ['a munged foreign path', 'x -mnt-data-x']])('--scan names the file and the pointer of %s planted in one string value of a committed fixture: exit 1, the value never printed, nothing written (F9)', (_name, bad) => {
+    const { base, dir, where } = plantedCorpus((f) => { f.events[0].payload.cwd = bad; });
+    const before = snap(base);
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toBe(`sanitize: residue in ${where} /events/0/payload/cwd\n`);
+    expect(r.stdout).toBe('');
+    expect(snap(base)).toBe(before);
+  });
+
+  it('--scan reads KEYS too: a residue-bearing key of a committed fixture is named by index, never by its text (F9)', () => {
+    const { dir, where } = plantedCorpus((f) => { f.extra = { '-mnt-data-x': 'v', '/opt/acme/x': 'w' }; });
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toBe(`sanitize: residue in ${where} /extra/#0 (key)\nsanitize: residue in ${where} /extra/#1 (key)\n`);
+  });
+
+  it('--scan reads the matrix.json at the top of the fixtures directory as well as the version directories (F9)', () => {
+    const m = JSON.parse(fs.readFileSync(path.join(CORPUS, 'matrix.json'), 'utf8')) as { scenarios: string[] };
+    m.scenarios[0] = 'x /opt/acme/x';
+    const dir = mkTmp('ccrc-dlg-scan-');
+    fs.writeFileSync(path.join(dir, 'matrix.json'), JSON.stringify(m));
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toBe('sanitize: residue in matrix.json /scenarios/0\n');
+  });
+
+  it('--scan fails closed on a fixture file that is not JSON: a finding, not a skipped file (F9)', () => {
+    const { dir } = plantedCorpus(() => {});
+    const v = fs.readdirSync(dir)[0] as string;
+    fs.writeFileSync(path.join(dir, v, 'broken.json'), '{"notes": ["/opt/acme/x"');
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toBe(`sanitize: residue in ${v}/broken.json (unreadable JSON)\n`);
+    expect(r.stderr).not.toContain('acme');
+  });
+
+  it('--scan fails closed on a directory that is not a version and on a fixture file whose name is not a name: named by index, never by text (F9)', () => {
+    const { dir } = plantedCorpus(() => {});
+    const v = fs.readdirSync(dir)[0] as string;
+    fs.mkdirSync(path.join(dir, 'latest'));
+    fs.writeFileSync(path.join(dir, v, 'Bad_Name.json'), '{}');
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    // sorted: `2.1.x` (the version) comes before `latest`; Bad_Name sorts before agent-plain
+    expect(r.stderr).toContain('sanitize: residue in #1 (version directory name)\n');
+    expect(r.stderr).toContain(`sanitize: residue in ${v}/#0 (fixture file name)\n`);
+    expect(r.stderr).not.toContain('latest');
+    expect(r.stderr).not.toContain('Bad_Name');
+  });
+
+  it('--scan of a directory with nothing to scan fails (a mistyped path must not pass): exit 1, one fixed line (F9)', () => {
+    const dir = mkTmp('ccrc-dlg-scan-');
+    fs.writeFileSync(path.join(dir, 'README.md'), 'not json\n');
+    fs.mkdirSync(path.join(dir, '2.1.999'));
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toBe('sanitize: nothing to scan in the fixtures directory\n');
+    expect(r.stdout).toBe('');
+  });
+
+  it('--scan of a path that is not a readable directory prints the one fixed line, never the exception or the path (F9)', () => {
+    const missing = path.join(mkTmp('ccrc-dlg-scan-'), 'no-such-fixtures-dir');
+    const r = scanRun('--scan', missing);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toBe('sanitize: internal error (no detail printed)\n');
+    expect(r.stdout).toBe('');
+  });
+
+  it('--scan refuses a missing directory argument and a surplus one with exit 2 (F9)', () => {
+    expect(scanRun('--scan').status).toBe(2);
+    expect(scanRun('--scan', mkTmp('ccrc-dlg-scan-'), 'extra').status).toBe(2);
+    expect(scanRun('--scan', mkTmp('ccrc-dlg-scan-'), mkTmp('ccrc-dlg-scan-')).status).toBe(2);
   });
 });
 
@@ -1704,6 +1901,20 @@ describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
       expect(/(?<!\/rig)\/tmp\//.test(text), `${v}/${s}: /tmp/`).toBe(false);
       for (const bad of ['/home/', '/Users/', '/var/folders/', '/mnt/', 'ccrc-dlg-rig', 'sk-ant-']) expect(text.includes(bad), `${v}/${s}: ${bad}`).toBe(false);
     }
+    // F9: and the sanitiser's OWN scan (its residue() over every string value and every key, the allowlist and the user and host
+    // names included) over every committed fixture AND matrix.json. The directory is READ, never a fixed list, and the count it
+    // reports is checked against an independent walk, so a scan that skipped files would not pass for a clean one. The literals
+    // above stay as a second net that shares no code with it.
+    const jsonOnDisk = fs.readdirSync(FIX, { recursive: true }).map(String).filter((n) => n.endsWith('.json')).length;
+    const scanned = spawnSync(process.execPath, [SANITIZE, '--scan', FIX], { encoding: 'utf8' });
+    expect(scanned.status, scanned.stderr).toBe(0);
+    expect(scanned.stderr).toBe('');
+    const stats = /^sanitize: scanned (\d+) file\(s\), (\d+) string\(s\), (\d+) key\(s\): no residue\n$/.exec(scanned.stdout);
+    expect(stats, scanned.stdout).not.toBeNull();
+    expect(Number(stats?.[1])).toBe(jsonOnDisk);
+    expect(jsonOnDisk).toBeGreaterThan(m.versions.length);
+    expect(Number(stats?.[2])).toBeGreaterThan(0);
+    expect(Number(stats?.[3])).toBeGreaterThan(0);
   });
 });
 

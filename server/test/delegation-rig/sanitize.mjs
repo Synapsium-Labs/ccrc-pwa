@@ -8,7 +8,9 @@
 // closer `)` `]` `}`, `<`, `>`, `,` `;`): `/rig~/srv/x` and `/usr@h/x` are residue -- or it is exactly `/dev/null`
 // (the same rule minus `/`: `/dev/null/x`, `/dev/nullx` and `/dev/null~/x` are residue); so is `ccrc-dlg-rig`, `sk-ant-`,
 // and the running user's name or the host's first label as a whole word (4+ characters, case-insensitive, letters only
-// as word characters). Also residue: a `..` path segment, and a `//`-led host or path:
+// as word characters). Also residue: a `..` path segment, the running user's home directory in its munged spelling, a munged
+// foreign path whose top MUNGED_FOREIGN lists (`-mnt-…`, `-home-…`: a DENYLIST of ten tops, see KNOWN LIMITS), and a `//`-led
+// host or path:
 //   - `//` followed by a character that cannot start a name (`[`, `@`, `%`, `~`, `:`, `\`, `$`...) is residue
 //     (`http://[fd00::abcd]:8080/x`, `http://@h/x`, `//~/x`); `//` followed by whitespace, a quote, a closer, `<`, `>`,
 //     `,` `;` or the end stays allowed (a code comment `// x`), and `///` is a run of slashes, read where it ends;
@@ -18,10 +20,18 @@
 //     follows is accepted only as the end of the URL or a `/`-path scanned like any absolute path: `http://127.0.0.1:4000/srv/x`,
 //     `http://127.0.0.1@host/x`, `http://127.0.0.1:abc`, `http://127.0.0.1?x`, `http://rig@host/x` and `//rig/home/x` are
 //     residue, a bare `http://127.0.0.1:4000` is not;
-//   - and a munged foreign path (`-mnt-…`, `-home-…`), and any of these in a `\uXXXX`-, `%2F`- or `\/`-escaped spelling (both
-//     the string and its decoded form are scanned).
-// KNOWN LIMITS: base64 (or any other encoding) of residue is not decoded and not chased. A `/` glued after a name
-// character is read as part of a RELATIVE path and not scanned (`x/srv/acme`, a scheme-less `127.0.0.1:4000/home/x`).
+//   - and any of these in an escaped spelling: `\uXXXX`, EVERY percent escape `%XX` (two hex digits, either case: `cat%20%2Fhome…`,
+//     `http%3A%2F%2Fsrv.corp%2Fx`) and `\/`, each decoded in ONE pass (both the string and its decoded form are scanned).
+// KNOWN LIMITS (each is pinned by a row that reds when the limit closes, so closing one means rewriting its line here):
+//   - base64 (or any other encoding) of residue is not decoded and not chased, and neither is an escape of an escape of the SAME kind:
+//     the decode is one pass per kind, so `%252F` reads `%2F` afterwards and no further.
+//   - A `/` glued straight after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (ABS's lookbehind; a `/` after a `/` is a run
+//     of slashes, read where it ends). So `x/srv/acme`, `1/srv/acme`, `./srv/acme`, `a_/srv/acme`, `a-/srv/acme`, a home-anchored
+//     `~/srv/acme` and a scheme-less `127.0.0.1:4000/home/x` all pass. A `/` after ANY other character (a space, `=`, `:`, a quote, a
+//     bracket, `@`...) is scanned.
+//   - MUNGED_FOREIGN is a DENYLIST of tops, not a class: a munged foreign path is caught only when its top is one of `home mnt tmp
+//     srv opt var root Users private proc` (case-sensitive), so `-data-…`, `-media-…` and `-Home-…` pass. Inside an allowed `/rig`
+//     path it is the only check on a munged spelling.
 // Any finding exits 1 naming the bundle and a JSON pointer. A pointer prints a key as TEXT only when the key is
 // SAFE_SEG-shaped (1-40 of `[A-Za-z0-9_.-]`) AND carries no residue itself (so the pointer stays locatable in a synthetic
 // bundle, whose key names are placeholder vocabulary: `/disk/admin/agent-abc/gitdir`); any other key, every residue-bearing
@@ -32,13 +42,21 @@
 // and a destination directory that exists but cannot be written, refuse the run with nothing moved), and the files move in
 // only once all of them passed.
 // An exception prints one fixed line (never its message, which names a raw path) and exits 1.
+// `--scan <fixtures-dir>` writes nothing and runs that same scan over the COMMITTED corpus (every `*.json` in the directory and in
+// its version directories: the fixtures and matrix.json), so a fixture committed with residue in it is found; see `scanCorpus`.
 // Usage: node sanitize.mjs <raw-root> <fixtures-dir>
+//        node sanitize.mjs --scan <fixtures-dir>
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const [raw, outDir] = process.argv.slice(2);
-if (!raw || !outDir || process.argv.length > 4) { process.stderr.write('usage: node sanitize.mjs <raw-root> <fixtures-dir>\n'); process.exit(2); }
+const args = process.argv.slice(2);
+const SCAN = args[0] === '--scan';
+const [raw, outDir] = args;
+if (SCAN ? args.length !== 2 : (!raw || !outDir || args.length > 2)) {
+  process.stderr.write('usage: node sanitize.mjs <raw-root> <fixtures-dir>\n       node sanitize.mjs --scan <fixtures-dir>\n');
+  process.exit(2);
+}
 
 const CAP_NAME = /^([A-Za-z]{1,40})-([0-9]{1,16})-([0-9]{1,10})\.cap$/;
 const NAME = /^[a-z0-9-]{1,40}$/;
@@ -129,7 +147,9 @@ const WORDS = [os.userInfo().username, os.hostname().split('.')[0]]
   .map((w) => new RegExp(`(^|[^A-Za-z])${esc(w)}($|[^A-Za-z])`, 'i'));
 // The user's home directory in its munged spelling (every non-alphanumeric as `-`), as Claude Code names a project dir.
 const HOME_MUNGED = (() => { const m = munge(os.homedir()); return m.length >= 4 ? m : null; })();
-// Munged FOREIGN paths: `-mnt-<vol>-projects-…`, `-home-<user>-…`, `-Users-…`. Only `-rig` survives the replacer.
+// Munged FOREIGN paths: `-mnt-<vol>-projects-…`, `-home-<user>-…`, `-Users-…`. A DENYLIST of these ten tops, case-sensitive, NOT the
+// class (F12): `-data-…`, `-media-…` and `-Home-…` pass, and the header names that as a KNOWN LIMIT. An allowlist (only `-rig…`) would
+// refuse ordinary flags such as `-data-dir`.
 const MUNGED_FOREIGN = /(^|[^A-Za-z0-9])-(home|mnt|tmp|srv|opt|var|root|Users|private|proc)-/;
 // `:` is a BOUNDARY, not a continuation: a PATH-like `/usr/bin:/home/<user>/.bin` carries a second absolute path.
 // A COMPLETE closing tag (`</result>`: `<`, `/`, a plain name, `>`) is a tag, not the path `/result` (Claude Code's
@@ -143,9 +163,13 @@ const ALLOWED_TOP = new Set(['rig', 'usr', 'bin']);
 const ALLOWED_HOST = new Set(['127.0.0.1']);
 // A path segment of `..` walks out of whatever allowed top precedes it (`/rig/../srv/x`, `../../srv/x`).
 const DOTDOT = /(^|\/)\.\.(\/|$)/;
-// The escaped spellings of `/` and of any character a JSON string may carry as `\uXXXX`, percent-encoded `/`, and a JSON-escaped
-// slash `\/` (N1: `http:\/\/[fd00::abcd]:8080` shows its `//` host only once decoded).
-const decode = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16))).replace(/%2[Ff]/g, '/').replace(/\\\//g, '/');
+// The escaped spellings of `/` and of any character a JSON string may carry as `\uXXXX`, EVERY percent escape `%XX` (two hex digits,
+// either case: F1, review 296 -- `cat%20%2Fhome…` shows its path only once the `%20` before it is decoded too, because a `/` glued
+// after a name character is never scanned), and a JSON-escaped slash `\/` (N1: `http:\/\/[fd00::abcd]:8080` shows its `//` host
+// only once decoded). Each is ONE pass over the string, in that order: `%252F` is `%2F` afterwards and is not chased. A `%` that is
+// not followed by two hex digits stays as it is: this never throws (`decodeURIComponent` does, on `%E0%A4%A`).
+const decode = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+  .replace(/%([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16))).replace(/\\\//g, '/');
 // Characters that END a URL or a word, so nothing is hidden behind them: whitespace, a quote, a backtick, a closer `)` `]`
 // `}`, `<`, `>`, `,` and `;`. `.`, `:`, `?`, `#`, `@`, `\`, `~`, `%`, `=`, `+` and the rest can CONTINUE one, so they are not here.
 const END_CHARS = '\\s"\'`)\\]}<>,;';
@@ -209,19 +233,22 @@ function residue(s) {
   return residue1(s) || (d !== s && residue1(d));
 }
 const SAFE_SEG = /^[A-Za-z0-9_.-]{1,40}$/;
-const scan = (v, ptr, where, findings) => {
-  if (typeof v === 'string') { if (residue(v)) findings.push(`${where} ${ptr || '/'}`); return; }
-  if (Array.isArray(v)) { v.forEach((x, i) => scan(x, `${ptr}/${i}`, where, findings)); return; }
+// `tally` (optional, `--scan` only) counts the strings and the keys this looked at.
+const scan = (v, ptr, where, findings, tally = null) => {
+  if (typeof v === 'string') { if (tally !== null) tally.strings += 1; if (residue(v)) findings.push(`${where} ${ptr || '/'}`); return; }
+  if (Array.isArray(v)) { v.forEach((x, i) => scan(x, `${ptr}/${i}`, where, findings, tally)); return; }
   if (v !== null && typeof v === 'object') {
     Object.entries(v).forEach(([k, x], i) => {
+      if (tally !== null) tally.keys += 1;
       const seg = SAFE_SEG.test(k) && !residue(k) ? k : `#${i}`;
       if (residue(k)) findings.push(`${where} ${ptr}/#${i} (key)`);
-      scan(x, `${ptr}/${seg}`, where, findings);
+      scan(x, `${ptr}/${seg}`, where, findings, tally);
     });
   }
 };
 
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 // A path that IS a symbolic link (lstat, not stat: a dangling link is one too). A path it cannot look at is not judged here:
 // the checks that follow it look at the same path and throw to the fixed-line catch below, before anything moves.
 const isLink = (p) => { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } };
@@ -292,8 +319,38 @@ function main() {
   process.stdout.write(`sanitize: ${fixtures.length} fixture(s) written\n`);
   return 0;
 }
+// `--scan <fixtures-dir>` (F9, review 296): the committed corpus's own check. It reads `<dir>/*.json` (matrix.json) and
+// `<dir>/<version>/*.json` and runs the SAME `scan` over each one -- `residue()` on every string value and every key, the
+// same pointers -- that `main` runs over a bundle, so a fixture committed with residue in it is found by the scan that would
+// have refused it. It writes nothing. A fixture file that is not JSON, a directory that is not a version and a file whose
+// name is not a name are findings (named by index, never by text), and so is a directory with no JSON file in it at all:
+// a mistyped path must not pass as a clean corpus.
+function scanCorpus(dir) {
+  const findings = [];
+  const tally = { files: 0, strings: 0, keys: 0 };
+  const jsonIn = (d) => fs.readdirSync(d).sort().filter((n) => n.endsWith('.json') && isFile(path.join(d, n)));
+  const readAll = (d, names, prefix) => names.forEach((n, i) => {
+    if (!NAME.test(n.slice(0, -'.json'.length))) { findings.push(`${prefix}#${i} (fixture file name)`); return; }
+    let f;
+    try { f = JSON.parse(fs.readFileSync(path.join(d, n), 'utf8')); } catch { findings.push(`${prefix}${n} (unreadable JSON)`); return; }
+    tally.files += 1;
+    scan(f, '', `${prefix}${n}`, findings, tally);
+  });
+  readAll(dir, jsonIn(dir), '');
+  fs.readdirSync(dir).sort().filter((n) => isDir(path.join(dir, n))).forEach((v, vi) => {
+    if (!VERSION.test(v)) { findings.push(`#${vi} (version directory name)`); return; }
+    readAll(path.join(dir, v), jsonIn(path.join(dir, v)), `${v}/`);
+  });
+  if (findings.length > 0) {
+    for (const x of findings) process.stderr.write(`sanitize: residue in ${x}\n`);
+    return 1;
+  }
+  if (tally.files === 0) { process.stderr.write('sanitize: nothing to scan in the fixtures directory\n'); return 1; }
+  process.stdout.write(`sanitize: scanned ${tally.files} file(s), ${tally.strings} string(s), ${tally.keys} key(s): no residue\n`);
+  return 0;
+}
 try {
-  process.exitCode = main();
+  process.exitCode = SCAN ? scanCorpus(outDir) : main();
 } catch {
   // An I/O error's message names a raw path: print a fixed line, never the exception.
   process.stderr.write('sanitize: internal error (no detail printed)\n');
