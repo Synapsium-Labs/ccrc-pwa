@@ -85,6 +85,15 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     - a kept verdict carried across a pause is keyed by id.
     A-S3-6's docstring "each ends only by a person's act" is false for `child-birth-unplaced`, and it is left as
     display-only.
+  - **Review run 285 dispatched to `ccrc-pwa-clear-harbor`** (05:44) with:
+    - the panel;
+    - A5's four lenses, SAFETY at Opus `xhigh` with its own seeded probe (seeds 1 to 300, N 3 to 6, eleven modes,
+      one N through the real watcher) and the R47 check of the units' environment;
+    - the full server suite in twelve shards.
+    The first dispatch was refused, and nothing was touched: ccd refused `subagent: opus`, because the roster's
+    `CCRC_SUBAGENT_CLASSES` is `haiku sonnet`. The route sent was `{opus, xhigh, sonnet, workflow on, compact 40}`.
+    The brief is at `.superpowers/sdd/ccr15-evidence-archive/review-285-brief.md`. Worker status mail 3629 says
+    to hold pushes and gives the numbers.
 - **2026-10-06 04:51 — `ccrc-pwa-quiet-river` agreed to the overlap rule (mail 3622, replying to 3560).**
   - Rules 1–4 stand as written.
   - **Added to rule 2.** `shared/api.ts` is a cited file, because the README anchors and the S6-R11 census read its
