@@ -44,6 +44,35 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 09:15 — review run 285 (wave 5, `e79b1da7`): no safety defect; fix round 1 sent.**
+  - **The review.** Report 3658, at `~/.cc-clips/ccrc-pwa-clear-harbor/review-285-e79b1da7.md`, archived.
+    - The panel ran 149 agents: 36 confirmed, 10 refuted, 0 unexamined, and no lens unverified. The 36 merge to
+      31 findings, 2 important and 29 minor.
+    - **SAFETY.**
+      - The R39 probe ran 15 759 times, through the model and the real watcher. It found 0 broken chains and 0
+        early second licences, and every bound held.
+      - Every A5 mutation reds.
+      - R40 has one fence, one read and one placement.
+      - F6's names are absent on the fleet box.
+      - Live, only `brisk-meadow` would move.
+    - **Suites.** Every red was load (`boot`, `update-store-nodes`, `archive-all-guard`), apart from `tmp-sweep`'s
+      FAILS CLOSED case, which is red on main.
+  - **Review run 285** advanced to `working` and closed `done`, released (`review-report-live`).
+  - **Rulings** (in the archive, `reviews/fix-round-260-1-rulings.md`):
+    - F1 (important) is fixed as 3938, `chip-arms-gated-on-standing-child`. Step 4's failure, paused-token and
+      retry arms answer only for a child that still stands as this run's. A-S3-4's binding text was wrong.
+    - F2 and F18 (important) are fixed as 3939, `kept-verdicts-keyed-by-run`. Kept verdicts and the kept-feed memory
+      carry the marker's run id.
+    - F4 (SAFETY) is fixed as 3940, `generation-reset-keys-marker-run`, and residual 10's wording is corrected.
+    - F11 and F12 are fixed as 3941, `birth-unplaced-is-doubt`. R40 already calls an unplaceable birth doubt.
+    - F7 is fixed as 3942: the abandon sentence lists the temp root and the registry row.
+    - F3, F8, F16, F17 and F27 are fixed as 3943, `prescribed-prose-corrected`.
+    - F5, F6, F9, F10, F13, F14, F15, F19, F20, F21, F24, F25, F26 and F31 are fixed.
+    - F22, F23 and F28 are accepted. F29 and F30 go in the next wave-done.
+    - 3944 and 3945 stay in reserve.
+  - **Run 260** was sent back to `working`, with fix-round mail 3660.
+    - Step 0 merges main (`77c11245`); README conflicts, and this branch is the second lander.
+    - A scoped review follows, and only a shipped-behaviour defect sends the wave back again.
 - **2026-10-06 08:49 — wave 6's pre-flight done. Rulings R48–R59 are drafted as contract §12; the plan is
   drafting.**
   - **The pre-flight.** Six read-only Opus scouts (workflow `wf_9703ecf7-bc3`) read `77c11245`, #290 and the live box.
