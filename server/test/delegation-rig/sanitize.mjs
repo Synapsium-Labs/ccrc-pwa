@@ -3,23 +3,33 @@
 // (delegation broker wave 1, spec 2026-10-04 §8.2). The captures are SYNTHETIC (mock API, fixture
 // HOME, fixture repo); what could still leak is the box they ran on. So every spelling of the run
 // root becomes `/rig` (its munged form `-rig`) and the binaries' directory `/rig/versions`, and then the WHOLE corpus is scanned by ALLOWLIST:
-// an absolute path is residue unless its first segment is `rig`, `usr` or `bin`, or it is exactly `/dev/null` (the WHOLE
-// path: `/dev/null/x` and `/dev/nullx` are residue); so is `ccrc-dlg-rig`, `sk-ant-`, and the running user's name or the host's first
-// label as a whole word (4+ characters, case-insensitive, letters only as word characters). Also residue: a `..` path
-// segment, a `//`-led host or path (`file:///srv/x`, `//share/x`; only the placeholder loopback address may follow `//`,
-// and what follows it is accepted only as the end of the URL, `:<digits>` then the end or a path, or a path scanned like any
-// absolute path: `http://127.0.0.1:4000/srv/x`, `http://127.0.0.1@host/x`, `http://127.0.0.1:abc` and `http://127.0.0.1?x` are
-// residue and a bare `http://127.0.0.1:4000` is not), a munged foreign path (`-mnt-…`, `-home-…`), and
-// any of these in a `\uXXXX`- or `%2F`-escaped spelling (both the string and its decoded form are scanned).
-// KNOWN LIMIT: base64 (or any other encoding) of residue is not decoded and not chased.
+// an absolute path is residue unless its first segment is `rig`, `usr` or `bin` -- the WHOLE segment, which must be
+// followed by `/`, `:` (a PATH separator), the end, or a character that ends a URL or a word (whitespace, a quote, a
+// closer `)` `]` `}`, `<`, `>`, `,` `;`): `/rig~/srv/x` and `/usr@h/x` are residue -- or it is exactly `/dev/null`
+// (the same rule minus `/`: `/dev/null/x`, `/dev/nullx` and `/dev/null~/x` are residue); so is `ccrc-dlg-rig`, `sk-ant-`,
+// and the running user's name or the host's first label as a whole word (4+ characters, case-insensitive, letters only
+// as word characters). Also residue: a `..` path segment, and a `//`-led host or path:
+//   - `//` followed by a character that cannot start a name (`[`, `@`, `%`, `~`, `:`, `\`, `$`...) is residue
+//     (`http://[fd00::abcd]:8080/x`, `http://@h/x`, `//~/x`); `//` followed by whitespace, a quote, a closer, `<`, `>`,
+//     `,` `;` or the end stays allowed (a code comment `// x`), and `///` is a run of slashes, read where it ends;
+//   - `///<top>/...` (the third slash starts the path) is that path, and its first segment follows the rule above;
+//   - `//<name>` at a host position is residue unless the name is the placeholder loopback address (an optional
+//     `:<digits>` may follow it) or an allowed top (NO port: `http://rig:4000/x` is residue, it is not a host), and what
+//     follows is accepted only as the end of the URL or a `/`-path scanned like any absolute path: `http://127.0.0.1:4000/srv/x`,
+//     `http://127.0.0.1@host/x`, `http://127.0.0.1:abc`, `http://127.0.0.1?x`, `http://rig@host/x` and `//rig/home/x` are
+//     residue, a bare `http://127.0.0.1:4000` is not;
+//   - and a munged foreign path (`-mnt-…`, `-home-…`), and any of these in a `\uXXXX`- or `%2F`-escaped spelling (both the
+//     string and its decoded form are scanned).
+// KNOWN LIMITS: base64 (or any other encoding) of residue is not decoded and not chased. A `/` glued after a name
+// character is read as part of a RELATIVE path and not scanned (`x/srv/acme`, a scheme-less `127.0.0.1:4000/home/x`).
 // Any finding exits 1 naming the bundle and a JSON pointer. A pointer prints a key as TEXT only when the key is
 // SAFE_SEG-shaped (1-40 of `[A-Za-z0-9_.-]`) AND carries no residue itself (so the pointer stays locatable in a synthetic
 // bundle, whose key names are placeholder vocabulary: `/disk/admin/agent-abc/gitdir`); any other key, every residue-bearing
 // key included, prints as `#<index>`, never its text. A bundle
 // that cannot be read as a bundle (bad version directory, no `root` file, bad scenario name) is a finding too, and
 // NOTHING is written: fixtures are built in a sibling of <fixtures-dir>, EVERY destination is checked before the first
-// file is moved (a directory where a fixture file would go refuses the run with nothing moved), and the files move in
-// only once all of them passed.
+// file is moved (a directory or a link where a fixture file would go, and a destination directory that exists but cannot
+// be written, refuse the run with nothing moved), and the files move in only once all of them passed.
 // An exception prints one fixed line (never its message, which names a raw path) and exits 1.
 // Usage: node sanitize.mjs <raw-root> <fixtures-dir>
 import fs from 'node:fs';
@@ -125,8 +135,8 @@ const MUNGED_FOREIGN = /(^|[^A-Za-z0-9])-(home|mnt|tmp|srv|opt|var|root|Users|pr
 // <task-notification> prompt). A name with `.` or `:` (`</srv.corp:8080>`) is a host:port, not a tag.
 // `<` alone is NOT a boundary: `sort</srv/data/list` is a redirect from a real path.
 const ABS = /(?<![A-Za-z0-9._~/-])(?!(?<=<)\/[A-Za-z][A-Za-z0-9_-]*>)\/([A-Za-z0-9._-]+)/g;
-// A `//`-led name: `file:///srv/x`, `//fileserver/share`, `http://internal-host.corp/p`. Only an allowed top, or
-// the placeholder loopback address, may follow; a `//` INSIDE a path (`/rig//x`) is a join artefact, not a host.
+// A `//`-led name: `file:///srv/x`, `//fileserver/share`, `http://internal-host.corp/p`. At a host position only an
+// allowed top, or the placeholder loopback address, may follow; a `//` INSIDE a path (`/rig//x`) is a join artefact, not a host.
 const DOUBLE = /(?<![A-Za-z0-9._~-])\/\/([A-Za-z0-9._-]+)/g;
 const ALLOWED_TOP = new Set(['rig', 'usr', 'bin']);
 const ALLOWED_HOST = new Set(['127.0.0.1']);
@@ -134,35 +144,58 @@ const ALLOWED_HOST = new Set(['127.0.0.1']);
 const DOTDOT = /(^|\/)\.\.(\/|$)/;
 // The escaped spellings of `/` and of any character a JSON string may carry as `\uXXXX`, and percent-encoded `/`.
 const decode = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16))).replace(/%2[Ff]/g, '/');
-// `/dev/null` is exempt only as the WHOLE path (F1b/F2a): it must be followed by NO path character (`/dev/nullsrv`,
-// `/dev/null.d`) and NOT by a `/` (`/dev/null/srv/acme`, whose tail would otherwise never be scanned).
-const DEV_NULL_REST = /^\/null(?![A-Za-z0-9._-])(?!\/)/;
+// Characters that END a URL or a word, so nothing is hidden behind them: whitespace, a quote, a backtick, a closer `)` `]`
+// `}`, `<`, `>`, `,` and `;`. `.`, `:`, `?`, `#`, `@`, `\`, `~`, `%`, `=`, `+` and the rest can CONTINUE one, so they are not here.
+const END_CHARS = '\\s"\'`)\\]}<>,;';
+const URL_END = new RegExp(`^(?:$|[${END_CHARS}])`);
+// What may follow a path's WHOLE first segment (I1): `/`, `:` (a PATH separator: ABS reads what follows as a path of its own),
+// the end, or a character that ends a URL or a word. ABS's segment class stops at `~`, `@`, `+`, `%`..., and a `/` after one of
+// those is never scanned, so a segment glued to such a character is residue, not a first segment that happens to be allowed.
+const AFTER_SEG = new RegExp(`^(?:$|[/:${END_CHARS}])`);
+// `/dev/null` is exempt only as the WHOLE path (F1b/F2a/I1): AFTER_SEG's rule minus `/` (`/dev/null/srv/acme` is a path
+// under it, whose tail would otherwise never be scanned), and anchored at the segment (`/dev/shm/null` is not it).
+const DEV_NULL_REST = new RegExp(`^/null(?:$|[:${END_CHARS}])`);
 // Is an absolute path whose first segment is `top`, and which continues with `rest` (the text after that segment), residue?
-const topResidue = (top, rest) => !ALLOWED_TOP.has(top) && !(top === 'dev' && DEV_NULL_REST.test(rest));
-// After an allowed loopback host: an optional numeric port, then the END of the URL (end of string, whitespace, a quote,
-// a backtick, a closer `)` `]` `}`, `<`, `>`, `,` or `;` -- characters that cannot continue a URL; `.`, `:`, `?`, `#`,
-// `@`, `\` and the rest can, so they are not here) or a `/`-path (its first segment, if any, is checked by topResidue).
+const topResidue = (top, rest) => (ALLOWED_TOP.has(top) ? !AFTER_SEG.test(rest) : !(top === 'dev' && DEV_NULL_REST.test(rest)));
+// After an allowed loopback host: an optional numeric port, then the END of the URL or a `/`-path.
 const LOOPBACK_PORT = /^:[0-9]+/;
-const URL_END = /^(?:$|[\s"'`)\]}<>,;])/;
-const LOOPBACK_PATH = /^\/+([A-Za-z0-9._-]+)?/;
+// A `/`-path after an allowed host: slashes, then a first segment the allowlist accepts. Slashes with no segment after them
+// are accepted only at the end of the URL (`http://127.0.0.1:4000/`); `/~/x`, `/@x/x` and `/?x/x` hide a path and are residue.
+const SLASHES = /^\/+/;
+const SEGMENT = /^[A-Za-z0-9._-]+/;
+// `//` at a host position (DOUBLE's lookbehind) followed by a character that cannot start a name (I3b): `[`, `@`, `%`, `~`, `:`,
+// `\`, `$`... A following name is DOUBLE's, a following `/` is a longer run of slashes (read where it ends), and whitespace, a
+// quote, a closer, `<`, `>`, `,` `;` or the end leave nothing hidden (a code comment `// x`).
+const DOUBLE_ODD = new RegExp(`(?<![A-Za-z0-9._~-])//(?![A-Za-z0-9._/-]|$|[${END_CHARS}])`);
+// What follows an allowed `//<host>` (after its port, if it may have one) is residue unless it is the end of the URL or a
+// `/`-path whose first segment the allowlist accepts.
+function hostTailResidue(rest) {
+  if (URL_END.test(rest)) return false;
+  const slashes = SLASHES.exec(rest);
+  if (slashes === null) return true;
+  const after = rest.slice(slashes[0].length);
+  const seg = SEGMENT.exec(after);
+  if (seg === null) return !URL_END.test(after);
+  return topResidue(seg[0], after.slice(seg[0].length));
+}
 function residue1(s) {
   for (const m of s.matchAll(ABS)) if (topResidue(m[1], s.slice(m.index + m[0].length))) return true;
   for (const m of s.matchAll(DOUBLE)) {
-    if (ALLOWED_TOP.has(m[1])) continue;
-    if (!ALLOWED_HOST.has(m[1])) return true;
-    // An allowed loopback host: ABS never starts a match at a `/` that follows a digit, so what follows `host[:port]` is
-    // scanned HERE (F1a). The ONLY accepted continuations are the end of the URL, `:<digits>` then the end or a `/`-path,
-    // or a `/`-path whose first segment the allowlist accepts; ANY other continuation (`@` userinfo, `:abc`, `?`, `#`,
-    // `\`, a glued `%`…) is residue, however benign what follows it reads. (A name glued on with `.`, `-` or `_` never
-    // gets here: DOUBLE's name class takes it into m[1], and `127.0.0.1.x` is not an allowed host.)
     const rest = s.slice(m.index + 2 + m[1].length);
-    const port = LOOPBACK_PORT.exec(rest);
-    const cont = port === null ? rest : rest.slice(port[0].length);
-    if (URL_END.test(cont)) continue;
-    const tail = LOOPBACK_PATH.exec(cont);
-    if (tail === null) return true;
-    if (tail[1] !== undefined && topResidue(tail[1], cont.slice(tail[0].length))) return true;
+    // `///x`: this `//` is the tail of a run of slashes and the path starts at the third (`file:///rig/x` is `/rig/x`).
+    if (m.index > 0 && s[m.index - 1] === '/') { if (topResidue(m[1], rest)) return true; continue; }
+    const loopback = ALLOWED_HOST.has(m[1]);
+    if (!loopback && !ALLOWED_TOP.has(m[1])) return true;
+    // An allowed host (I3a: an allowed TOP is read the same way, but has no port): ABS never starts a match at a `/` that follows
+    // a digit or a letter, so what follows `host[:port]` is scanned HERE (F1a). The ONLY accepted continuations are the end of
+    // the URL, `:<digits>` (loopback only) then the end or a `/`-path, or a `/`-path whose first segment the allowlist accepts;
+    // ANY other continuation (`@` userinfo, `:abc`, `?`, `#`, `\`, a glued `%`...) is residue, however benign what follows it
+    // reads. (A name glued on with `.`, `-` or `_` never gets here: DOUBLE's name class takes it into m[1], and
+    // `127.0.0.1.x` is not an allowed host.)
+    const port = loopback ? LOOPBACK_PORT.exec(rest) : null;
+    if (hostTailResidue(port === null ? rest : rest.slice(port[0].length))) return true;
   }
+  if (DOUBLE_ODD.test(s)) return true;
   if (DOTDOT.test(s)) return true;
   if (MUNGED_FOREIGN.test(s) || (HOME_MUNGED !== null && s.includes(HOME_MUNGED))) return true;
   return /ccrc-dlg-rig/i.test(s) || /sk-ant-/i.test(s) || WORDS.some((re) => re.test(s));
@@ -187,6 +220,9 @@ const scan = (v, ptr, where, findings) => {
 };
 
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+// A directory this process may write into (a regular user's 0555 directory is not). Any failure to write is "not writable":
+// the run refuses with a fixed line before anything moves.
+const writable = (p) => { try { fs.accessSync(p, fs.constants.W_OK); return true; } catch { return false; } };
 // 'absent' (ENOENT only), 'file' (a regular file, which a rename may replace) or 'other'. Any OTHER failure to look
 // throws, to the fixed-line catch below, before anything moves: an unreadable destination is not an absent one.
 const destKind = (p) => {
@@ -225,6 +261,12 @@ function main() {
     for (const v of fs.readdirSync(tmp)) {
       const dest = path.join(out, v);
       if (fs.existsSync(dest) && !isDir(dest)) { process.stderr.write(`sanitize: ${v} exists in the fixtures directory and is not a directory\n`); return 1; }
+      // A destination directory that exists but cannot be written would fail the rename AFTER the earlier versions moved in (M2):
+      // the version directory itself, and the fixtures directory when this version's directory has to be created in it.
+      if (isDir(dest) ? !writable(dest) : isDir(out) && !writable(out)) {
+        process.stderr.write(isDir(dest) ? `sanitize: ${v} in the fixtures directory is not writable\n` : 'sanitize: the fixtures directory is not writable\n');
+        return 1;
+      }
       // EVERY destination file is checked before the first one moves (F13): a directory (or a link) where a fixture
       // would go refuses the run with nothing moved, not with the earlier versions already in place.
       for (const n of fs.readdirSync(path.join(tmp, v))) {

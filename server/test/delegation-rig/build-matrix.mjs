@@ -24,8 +24,11 @@ const cmpV = (a, b) => {
   return 0;
 };
 // The notes rig.sh writes when a run did not go as scripted, spelled as rig.sh's own printf/note lines spell
-// them (anchored: a probe's `probe ["x-timeout"]: not reached`, or a dialog's text, must never match).
-const FAIL_NOTE = /^(waitLabels \[.*\]: timeout|waitReady: no ready prompt|kill9: no pid|relaunch: no session id captured|unknown step verb .*|run aborted)$/;
+// them. Anchored at the START only: a probe's `probe ["x-timeout"]: not reached`, or a dialog's text, must never
+// match (an outcome note begins `probe ` or `dialog answered: `, never with a failure template), while a note that
+// STARTS with one of these templates is a failure even with text after it. An end anchor could only turn such a
+// note into "measured", the unsafe direction: a failed run's zeros would read as observed.
+const FAIL_NOTE = /^(waitLabels \[.*\]: timeout|waitReady: no ready prompt|kill9: no pid|relaunch: no session id captured|unknown step verb .*|run aborted)/;
 const PROBE_NOTE = /^probe (\[.*\]): not reached$/;
 const CAPTURE_CAP = 200;
 const share = (xs, pred) => (xs.length === 0 ? null : xs.every(pred) ? 'all' : xs.some(pred) ? 'some' : 'none');

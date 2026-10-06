@@ -151,6 +151,29 @@ const rigsh = (args: string[], env: NodeJS.ProcessEnv = {}, cwd?: string): { sta
   const r = spawnSync('bash', [RIGSH, ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 120_000, ...(cwd ? { cwd } : {}) });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 };
+/** The text of rig.sh's own top-level definitions named here, so a row can run them without the case dispatch at
+ *  its foot: a function (a one-line body, or through its closing `}` line) or a `NAME=` assignment line. */
+function rigText(...names: string[]): string {
+  const lines = fs.readFileSync(RIGSH, 'utf8').split('\n');
+  return names.map((n) => {
+    const i = lines.findIndex((l) => l.startsWith(`${n}() {`) || l.startsWith(`${n}=`));
+    expect(i, `rig.sh defines ${n}`).toBeGreaterThanOrEqual(0);
+    const first = lines[i] as string;
+    if (!first.startsWith(`${n}() {`) || first.trimEnd().endsWith('}')) return first;
+    const j = lines.indexOf('}', i);
+    expect(j, `${n} closes`).toBeGreaterThan(i);
+    return lines.slice(i, j + 1).join('\n');
+  }).join('\n');
+}
+/** A `bash -c` script that runs rig.sh's own cleanup_run, and what it calls, under the script's own strictness, with a
+ *  run that has collected already (so no `collect`) and no socket, mock or run root unless `vars` sets one. */
+function cleanupScript(vars: string): string {
+  return [
+    'set -euo pipefail', 'REAL_HOME=$HOME',
+    rigText('SOCK_RE', 'SESSION', 'guard_root', 'guard_sock', 'die', 'T', 'procs_under', 'pid_tree', 'kill_if_under', 'pid_live', 'wait_run_quiet', 'cleanup_run'),
+    'COLLECTED=1 OUT_DIR="" RUN_R="" SOCK="" MOCK_PID=""', vars, 'cleanup_run',
+  ].join('\n');
+}
 
 describe('rig.sh guards (the rig never names the real HOME or the default tmux server)', () => {
   it('guard-root accepts only an absolute, canonical ccrc-dlg-rig.* path outside $HOME', () => {
@@ -173,6 +196,37 @@ describe('rig.sh guards (the rig never names the real HOME or the default tmux s
     const r = rigsh(['setup', path.join(home, 'ccrc-dlg-rig.inside')], { HOME: home });
     expect(r.status).toBe(2);
     expect(fs.existsSync(path.join(home, 'ccrc-dlg-rig.inside'))).toBe(false);
+  }, 60_000);
+
+  it('guard-root refuses a root under HOME by either spelling: HOME spelled through a symlink refuses the link spelling and the physical path alike (F10b)', () => {
+    const real = fs.realpathSync(mkTmp('ccrc-dlg-home-'));
+    const outside = fs.realpathSync(mkTmp('ccrc-dlg-out-'));
+    const linkHome = path.join(outside, 'home-link');
+    fs.symlinkSync(real, linkHome);                       // HOME is the link; the physical directory is `real`
+    const guard = (root: string): number | null => rigsh(['guard-root', root], { HOME: linkHome }).status;
+    expect(guard(`${linkHome}/ccrc-dlg-rig.x`), 'under HOME by its spelling (the physical HOME arm accepts it)').toBe(1);
+    expect(guard(`${real}/ccrc-dlg-rig.x`), 'under HOME by its physical path (the spelling arm accepts it)').toBe(1);
+    expect(guard(`${outside}/ccrc-dlg-rig.x`), 'outside both').toBe(0);
+  }, 60_000);
+
+  it('setup refuses a root by its SPELLING alone (relative, a `..` segment, a trailing slash) when its physical path is acceptable, and creates nothing there (F10a)', () => {
+    const home = mkTmp('ccrc-dlg-home-');
+    const base = fs.realpathSync(mkTmp('ccrc-dlg-base-'));
+    fs.mkdirSync(path.join(base, 'sub'));
+    const cases: Array<[string, string, string]> = [   // [what, the root as spelled, its directory]
+      ['a relative root', 'ccrc-dlg-rig.rel', 'ccrc-dlg-rig.rel'],
+      ['a `..` segment', `${base}/sub/../ccrc-dlg-rig.dots`, 'ccrc-dlg-rig.dots'],
+      ['a trailing slash', `${base}/ccrc-dlg-rig.slash/`, 'ccrc-dlg-rig.slash'],
+    ];
+    for (const [what, spelled, dir] of cases) {
+      fs.mkdirSync(path.join(base, dir));
+      // The premise: the physical path passes the guard, so only the spelling guard in cmd_setup can refuse it.
+      expect(rigsh(['guard-root', path.join(base, dir)], { HOME: home }).status, `${what}: the physical path is acceptable`).toBe(0);
+      const r = rigsh(['setup', spelled], { HOME: home }, base);
+      expect.soft(r.status, `${what}: ${r.stderr}`).toBe(2);   // soft: each spelling is measured on its own
+      expect.soft(r.stderr, what).toContain('it must be absolute, canonical');
+      expect.soft(fs.readdirSync(path.join(base, dir)), `${what}: nothing created under it`).toEqual([]);
+    }
   }, 60_000);
 
   it('check-scenario refuses a non-integer wait, a tmux separator among keys, and an unknown verb', () => {
@@ -364,24 +418,105 @@ describe.skipIf(!LINUX)('rig.sh wait_run_quiet (cleanup_run waits out a process 
       outside.kill('SIGKILL');
     }
   }, 60_000);
+
+  it('wait_run_quiet WAITS, within its bound, for a process under the root that exits on its own: it is never signalled (F10d)', async () => {
+    const root = mkTmp('ccrc-dlg-rig.');
+    const aux = mkTmp('ccrc-dlg-aux-');
+    const go = path.join(aux, 'go'); const mark = path.join(aux, 'mark');
+    // Waits for the go file, lives one second more, then writes its marker and exits: only a process left alone gets that far.
+    const holder = spawn('bash', ['-c', 'while [ ! -e "$GO" ]; do sleep 0.1; done; sleep 1; echo ok > "$MARK"'], { cwd: root, env: { ...process.env, GO: go, MARK: mark }, stdio: 'ignore' });
+    children.push(holder);
+    await new Promise((r) => setTimeout(r, 200));
+    const script = ['set -euo pipefail', rigText('procs_under', 'kill_if_under', 'pid_live', 'wait_run_quiet'), ': > "$GO"', 'wait_run_quiet "$ROOT" ""'].join('\n');
+    // The bound (8 s) is far above the holder's lifetime (about 1 s): a wait that honours it returns when the holder is gone.
+    const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { ...process.env, GO: go, ROOT: root, RUN_QUIET_S: '8' }, timeout: 60_000 });
+    expect(r.status, r.stderr).toBe(0);
+    expect(await gone(holder.pid!)).toBe(true);
+    expect(fs.existsSync(mark), 'the process was killed before it could finish; the wait did not wait').toBe(true);
+    expect(r.stderr).not.toContain('still hold run root');
+  }, 60_000);
+
+  describe('cleanup_run (F10c: it calls wait_run_quiet, and it never removes a root it could not measure)', () => {
+    const env = (extra: Record<string, string>): NodeJS.ProcessEnv => ({ ...process.env, HOME: mkTmp('ccrc-dlg-home-'), ...extra });
+
+    it('removes the root only after wait_run_quiet: a process under it that exits on its own finds the root still there', async () => {
+      const root = mkTmp('ccrc-dlg-rig.');
+      const aux = mkTmp('ccrc-dlg-aux-');
+      const go = path.join(aux, 'go'); const mark = path.join(aux, 'mark');
+      // On the go file it records whether its run root still exists, then exits. The harness raises the go file one second in.
+      const holder = spawn('bash', ['-c', 'while [ ! -e "$GO" ]; do sleep 0.1; done; if [ -d "$ROOT" ]; then echo present > "$MARK"; else echo absent > "$MARK"; fi'],
+        { cwd: root, env: { ...process.env, GO: go, MARK: mark, ROOT: root }, stdio: 'ignore' });
+      children.push(holder);
+      await new Promise((r) => setTimeout(r, 200));
+      const r = spawnSync('bash', ['-c', `( sleep 1; : > "$GO" ) &\n${cleanupScript('RUN_R=$ROOT')}`], { encoding: 'utf8', env: env({ GO: go, ROOT: root, RUN_QUIET_S: '8' }), timeout: 60_000 });
+      expect(r.status, r.stderr).toBe(0);
+      expect(await gone(holder.pid!)).toBe(true);
+      expect(fs.readFileSync(mark, 'utf8').trim(), 'the root was removed under a process still holding it').toBe('present');
+      expect(fs.existsSync(root), 'and once the process was gone, the root was removed').toBe(false);
+    }, 60_000);
+
+    it('leaves the root, and says so, when there is no /proc to measure by; with a /proc the same root is removed', () => {
+      const root = mkTmp('ccrc-dlg-rig.');
+      fs.writeFileSync(path.join(root, 'keep'), 'x');
+      const blind = spawnSync('bash', ['-c', cleanupScript('RUN_R=$ROOT')], { encoding: 'utf8', env: env({ ROOT: root, RIG_PROC_ROOT: mkTmp('ccrc-dlg-noproc-'), RUN_QUIET_S: '2' }), timeout: 60_000 });
+      expect(blind.status, blind.stderr).toBe(0);
+      expect(fs.existsSync(path.join(root, 'keep')), 'the root was removed although no process under it could be measured').toBe(true);
+      expect(blind.stderr).toContain(`rig: no /proc to measure processes under run root ${path.basename(root)}; leaving it`);
+      const sighted = spawnSync('bash', ['-c', cleanupScript('RUN_R=$ROOT')], { encoding: 'utf8', env: env({ ROOT: root, RUN_QUIET_S: '2' }), timeout: 60_000 });
+      expect(sighted.status, sighted.stderr).toBe(0);
+      expect(fs.existsSync(root), 'with /proc present the guard was the only thing that held it').toBe(false);
+    }, 120_000);
+  });
 });
 
 describe('rig.sh reap, sockets and scenario text', () => {
+  /** A socket file whose listener is gone: bind, then die without unlinking. */
+  const staleSocket = (dir: string, name: string): void => {
+    const code = `require('node:net').createServer().listen(${JSON.stringify(path.join(dir, name))}, () => process.kill(process.pid, 'SIGKILL'))`;
+    spawnSync(process.execPath, ['-e', code], { timeout: 10_000 });
+  };
   it('reap removes only the private socket of a dead owner (never `default`, never a live owner\'s)', () => {
     const tmuxTmp = fs.mkdtempSync('/tmp/dlgt-');   // short: a unix socket path is capped near 108 bytes
     try {
       const dir = path.join(tmuxTmp, `tmux-${os.userInfo().uid}`);
       fs.mkdirSync(dir);
       const deadPid = spawnSync('true').pid;
-      const stale = (name: string): void => {   // a socket file whose listener is gone: bind, then die without unlinking
-        const code = `require('node:net').createServer().listen(${JSON.stringify(path.join(dir, name))}, () => process.kill(process.pid, 'SIGKILL'))`;
-        spawnSync(process.execPath, ['-e', code], { timeout: 10_000 });
-      };
-      for (const n of [`dlg${deadPid}`, `dlg${process.pid}`, 'default']) stale(n);
+      for (const n of [`dlg${deadPid}`, `dlg${process.pid}`, 'default']) staleSocket(dir, n);
       for (const n of [`dlg${deadPid}`, `dlg${process.pid}`, 'default']) expect(fs.statSync(path.join(dir, n)).isSocket(), n).toBe(true);
       const r = rigsh(['reap'], { TMUX_TMPDIR: tmuxTmp, TMPDIR: mkTmp('ccrc-dlg-tmp-'), HOME: mkTmp('ccrc-dlg-home-') });
       expect(r.status, r.stderr).toBe(0);
       expect(fs.readdirSync(dir).sort()).toEqual(['default', `dlg${process.pid}`].sort());
+    } finally { fs.rmSync(tmuxTmp, { recursive: true, force: true }); }
+  }, 60_000);
+
+  it('reap keeps a socket named dlg plus anything but digits: only a numeric pid can name a dead owner (F10h)', () => {
+    const tmuxTmp = fs.mkdtempSync('/tmp/dlgt-');
+    try {
+      const dir = path.join(tmuxTmp, `tmux-${os.userInfo().uid}`);
+      fs.mkdirSync(dir);
+      const names = ['dlgabc', 'dlg12x', 'dlg'];   // each passes guard-sock; none is a pid, so `kill -0` would call its owner dead
+      for (const n of names) staleSocket(dir, n);
+      for (const n of names) expect(fs.statSync(path.join(dir, n)).isSocket(), n).toBe(true);
+      const r = rigsh(['reap'], { TMUX_TMPDIR: tmuxTmp, TMPDIR: mkTmp('ccrc-dlg-tmp-'), HOME: mkTmp('ccrc-dlg-home-') });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stderr).not.toContain('reaped private server');
+      expect(fs.readdirSync(dir).sort()).toEqual([...names].sort());
+    } finally { fs.rmSync(tmuxTmp, { recursive: true, force: true }); }
+  }, 60_000);
+
+  it('cleanup_run removes its own tmux socket file after the server is killed, and only that one (F10g)', () => {
+    const tmuxTmp = fs.mkdtempSync('/tmp/dlgt-');
+    try {
+      const dir = path.join(tmuxTmp, `tmux-${os.userInfo().uid}`);
+      fs.mkdirSync(dir);
+      // A stale socket stands in for a server that kill-server could not reach (or that died with its socket): the `rm` is
+      // the only thing that can take it away. A neighbour's socket and `default` are never named.
+      for (const n of ['dlg4242', 'dlg4243', 'default']) staleSocket(dir, n);
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: mkTmp('ccrc-dlg-home-'), TMUX_TMPDIR: tmuxTmp };
+      delete env.TMUX;
+      const r = spawnSync('bash', ['-c', cleanupScript('SOCK=dlg4242')], { encoding: 'utf8', env, timeout: 60_000 });
+      expect(r.status, r.stderr).toBe(0);
+      expect(fs.readdirSync(dir).sort()).toEqual(['default', 'dlg4243']);
     } finally { fs.rmSync(tmuxTmp, { recursive: true, force: true }); }
   }, 60_000);
 
@@ -426,6 +561,26 @@ describe('rig.sh reap, sockets and scenario text', () => {
   }, 60_000);
 });
 
+describe('rig.sh wait_ready (F10g: the ready prompt is its footer, never the version banner)', () => {
+  /** rig.sh's own wait_ready, with `pane` replaced by a fixed screen and a 1 s bound: its exit status. */
+  const ready = (screen: string): number | null => {
+    const script = ['set -uo pipefail', rigText('wait_ready'), 'pane() { printf \'%s\\n\' "$SCREEN"; }', 'wait_ready 1'].join('\n');
+    return spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { ...process.env, SCREEN: screen }, timeout: 60_000 }).status;
+  };
+  const BANNER = ' Claude Code v2.1.289\n Rig Fixture\n /rig/repo';
+
+  it('is ready on "? for shortcuts" (older builds) and on each "<mode> on" footer line (2.1.289 and after)', () => {
+    for (const footer of ['  ? for shortcuts', '  manual mode on (shift+tab to cycle)', '  plan mode on (shift+tab to cycle)', '  auto mode on (shift+tab to cycle)', '  accept edits on (shift+tab to cycle)']) {
+      expect.soft(ready(`${BANNER}\n${footer}`), footer).toBe(0);   // soft: each alternative is measured on its own
+    }
+  }, 60_000);
+
+  it('is not ready on the version banner alone: the input box follows it', () => {
+    expect(ready(BANNER), 'the banner').toBe(1);
+    expect(ready(''), 'a blank screen').toBe(1);
+  }, 60_000);
+});
+
 describe('rig.sh setup (fixture HOME and repo)', () => {
   it('builds the fixture HOME and repo under its root, with ccrc\'s own hook registered by ccrc\'s own installer', () => {
     const home = mkTmp('ccrc-dlg-home-');
@@ -441,6 +596,7 @@ describe('rig.sh setup (fixture HOME and repo)', () => {
     expect(s).toMatchObject({ enableWorkflows: true, worktree: { baseRef: 'head' } });
     expect(s.permissions.allow).toEqual(expect.arrayContaining(['Bash', 'Agent', 'Workflow']));
     expect(s.permissions.defaultMode).toBe('default');
+    expect(s.permissions.disableAutoMode, 'an unanswered auto-mode modal must not be able to block a run (D-4004)').toBe('disable');
     expect(JSON.stringify(s)).not.toMatch(/bypassPermissions/);
     expect(fs.readFileSync(path.join(root, 'fixhome/.cc-sessions/session-hook.sh')))
       .toEqual(fs.readFileSync(path.join(TREE, 'ccd/session-hook.sh')));
@@ -728,11 +884,40 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
   });
 
   it('a `//`-led path whose first segment is an allowed top passes (`file:///rig/…`), and one that is not still fails closed', () => {
-    for (const fine of ['file:///rig/tmp/x.output', '//usr/bin/git', 'x //bin/sh y']) {
+    for (const fine of ['file:///rig/tmp/x.output', '//usr/bin/git', 'file:///usr/bin/git', 'x //bin y', 'http://rig']) {
       const r = leakRun({ note: fine });
       expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
     }
     expectNamed(leakRun({ note: 'file:///rigx/tmp/x' }), '/events/0/payload/note', 'rigx');
+  });
+
+  // I3(a): an allowed TOP at a host position (`http://rig…`) is read like the loopback host, except that it has no port: after
+  // `//<top>` only the end of the URL or a `/`-path whose first segment the allowlist accepts may follow.
+  it('an allowed top used as a HOST gets the loopback rule without a port: `http://rig:4000/…`, `http://rig@evil…` and a backslash are residue (I3a)', () => {
+    for (const leak of ['http://rig:4000/home/someone-else/x', 'http://rig@evil.example/srv/acme', 'http://rig\\srv\\acme', 'http://usr:80', 'http://bin:1/x',
+      'http://rig?x=/rig', 'http://rig#f', 'x //bin/sh y', '//rig/home/someone-else/x', 'http://rig/srv/acme', 'http://rig//srv/acme', 'http://rig/~/srv/acme']) {
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'someone-else', 'evil.example', 'srv/acme', 'srv');
+    }
+    for (const fine of ['http://rig/rig/x', 'http://usr/bin/git', 'http://rig/', 'http://rig, x', '(//bin)', 'file:///rig/x', '/rig//x']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+  });
+
+  // I3(b): a `//` at a host position followed by a character that cannot start a name hides whatever follows it. CHOSEN: `//`
+  // followed by whitespace, a quote, a backtick, a closer `)` `]` `}`, `<`, `>`, `,` `;` or the end stays allowed (a comment
+  // `// x`), and `//` followed by `/` is a longer run of slashes; every other character after `//` is residue.
+  it('a `//` at a host position followed by a character that cannot start a name is residue: `[`, `@`, `%`, `~`, `:`, `\\` and the like (I3b)', () => {
+    for (const leak of ['http://[fd00::abcd]:8080/home/someone-else/x', 'http://[::1]:4000/srv/acme', 'http://@evil.example/srv/acme', 'http://%65vil.example/home/someone-else',
+      'smb://$share/mnt/vol/client', '//~/srv/acme', '//:4000/srv/acme', '//\\share\\x', 'x //!y', 'x //=y', 'x //(y', 'x //|y', 'x //?y', 'x //#y', 'x //*y', 'x //+y', 'x //&y', 'x //^y', 'x //{y', 'x //éy']) {
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'someone-else', 'evil.example', 'srv/acme', 'vol/client');
+    }
+    // and a `//` INSIDE a path or a word (preceded by a name character, `.`, `_`, `-` or `~`) is a join artefact, not a host position
+    for (const fine of ['a // b', 'x //', '// x', 'x //\ny', 'a //, b', '"//"', '(//)', '<//>', '///', 'x //; y', 'a //\ty', "'//'", '`//`', '[//]', '{//}',
+      '/rig//[x]', '/rig//~x', 'a//@b', 'a.//(b)', 'a_//%b', 'a-//$b', 'a~//|b']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${JSON.stringify(fine)}: ${r.stderr}`).toBe(0);
+    }
   });
 
   it('`/dev/null` is exempt only as the WHOLE path: a path under it is residue (F1b)', () => {
@@ -756,6 +941,64 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     for (const leak of ['\\/srv\\/acme', 'x \\/mnt\\/vol-0000\\/client']) {
       expect(leak).toContain('\\/');
       expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'srv', 'vol-0000');
+    }
+  });
+
+  // I1: a path's FIRST segment is the whole segment. ABS's segment class stops at `~`, `@`, `+`, `%`..., and a `/` after one of
+  // those is never scanned, so after an allowed top and after `/dev/null` the next character must be `/` (not for `/dev/null`),
+  // `:` (a PATH separator), the end, or a character that ends a URL or a word. Anything else is residue.
+  const NOTE = '/events/0/payload/note';
+  const GLUE = ['~', '@x', '+x', '%x', '=x', '?x', '#x', '!x', '$x', '*x', '^x', '&x', '|x', '\\x'];
+  it('an allowed top glued to a character outside the segment class is residue, not an allowed first segment (I1)', () => {
+    for (const leak of ['/rig~/srv/acme', '/usr~/home/someone-else/x', '/bin~/mnt/vol/client', '/rig@x/srv/acme', '/rig+x/home/someone-else/x', '/usr%x/mnt/vol/client',
+      '/bin=x/srv/acme', '/rig?x/srv/acme', '/rig#x/mnt/vol/client']) {
+      expectNamed(leakRun({ note: leak }), NOTE, 'srv/acme', 'someone-else', 'vol/client');
+    }
+    for (const top of ['rig', 'usr', 'bin']) for (const g of GLUE) expectNamed(leakRun({ note: `x /${top}${g}/srv/acme y` }), NOTE, 'srv/acme');
+  });
+
+  it('what may follow an allowed top: `/`, `:`, the end and a URL/word ender pass (I1)', () => {
+    for (const fine of ['/rig', '/rig/x', '/usr/bin/git', '/bin:/usr', '/rig:y', 'x /bin y', '/rig)', '/usr"', '(/rig)', '/rig,', '/rig;', '/bin]', '/usr}', '/rig<', '/rig>', "'/rig'", '`/rig`', '/rig\t', '/rig\n']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${JSON.stringify(fine)}: ${r.stderr}`).toBe(0);
+    }
+  });
+
+  it('`/dev/null` glued to a character outside the segment class is residue (I1)', () => {
+    for (const leak of ['/dev/null~/srv/acme', '2>/dev/null~/home/someone-else/x', '/dev/null@x/srv/acme', '/dev/null+x/home/someone-else/x', '/dev/null%x/mnt/vol/client',
+      '/dev/null=x/srv/acme', '/dev/null#x/srv/acme', '/dev/null?x/srv/acme']) {
+      expectNamed(leakRun({ note: leak }), NOTE, 'srv/acme', 'someone-else', 'vol/client');
+    }
+    for (const g of GLUE) expectNamed(leakRun({ note: `x /dev/null${g}/srv/acme y` }), NOTE, 'srv/acme');
+    for (const fine of ['/dev/null:y', '/dev/null)', '/dev/null;', '"/dev/null"', '/dev/null\n', '/dev/null>', '/dev/null]']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${JSON.stringify(fine)}: ${r.stderr}`).toBe(0);
+    }
+  });
+
+  it('a path after the loopback `/` whose first segment is outside the allowlist or glued to a character outside the class is residue (I1)', () => {
+    for (const leak of ['http://127.0.0.1:4000/~/home/someone-else/x', 'http://127.0.0.1/~/srv/acme', 'http://127.0.0.1:4000/@x/srv/acme', 'http://127.0.0.1:4000/+x/home/someone-else',
+      'http://127.0.0.1:4000/%7Ex/mnt/vol/client', 'http://127.0.0.1:4000/?x/srv/acme', 'http://127.0.0.1:4000/#x/home/someone-else', 'http://127.0.0.1:4000/rig~/mnt/vol/client',
+      'http://127.0.0.1:4000/rig?x/srv/acme', 'http://127.0.0.1:4000/usr@x/srv/acme', 'http://127.0.0.1:4000/dev/null~/srv/acme']) {
+      expectNamed(leakRun({ note: leak }), NOTE, 'srv/acme', 'someone-else', 'vol/client');
+    }
+    for (const g of GLUE) expectNamed(leakRun({ note: `http://127.0.0.1:4000/rig${g}/srv/acme` }), NOTE, 'srv/acme');
+    for (const fine of ['http://127.0.0.1:4000/', 'http://127.0.0.1:4000/ y', 'http://127.0.0.1:4000/rig, y', 'http://127.0.0.1:4000/dev/null', 'http://127.0.0.1:4000//rig/x']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+  });
+
+  // I2: the leak-direction sub-arms of the guards above, each pinned by an input that only that arm refuses.
+  it('`/dev/null` is a first segment exemption only: `/dev/shm/null`, `/srv/null` and the loopback `/srv/null` are residue (I2)', () => {
+    for (const leak of ['/dev/shm/null', '/dev/disk/by-id/x/null', '/srv/null', '/home/null', '/mnt/null', 'http://127.0.0.1:4000/srv/null', 'http://127.0.0.1:4000/dev/shm/null']) {
+      expectNamed(leakRun({ note: leak }), NOTE, 'srv', 'home', 'mnt');
+    }
+  });
+
+  it('the loopback port is read AT the host, not anywhere after it: `http://127.0.0.1@x/rig:1` and `http://127.0.0.1?a/rig:1` are residue (I2)', () => {
+    for (const leak of ['http://127.0.0.1@x/rig:1', 'http://127.0.0.1?a/rig:1', 'http://127.0.0.1/:1']) {
+      expectNamed(leakRun({ note: leak }), NOTE);
     }
   });
 
@@ -892,6 +1135,9 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     fs.writeFileSync(path.join(out, '2.1.999'), 'planted');
     const r = sanitize(raw, out);
     expect(r.status).toBe(1);
+    // the EXACT line, so that the version-directory pre-check is what refused (M4): without it destKind's ENOTDIR reaches the
+    // internal-error line, which also exits 1
+    expect(r.stderr).toBe('sanitize: 2.1.999 exists in the fixtures directory and is not a directory\n');
     expect(r.stderr).not.toContain(base);
     expect(fs.readdirSync(out)).toEqual(['2.1.999']);
     expect(fs.readFileSync(path.join(out, '2.1.999'), 'utf8')).toBe('planted');
@@ -933,11 +1179,58 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     }
   });
 
-  it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)('a destination it cannot look at is not an absent one: the run stops with its fixed line and nothing is moved (F13)', () => {
-    const { r, base } = halfMove((out) => fs.chmodSync(path.join(out, '2.1.999'), 0o000), (out) => fs.chmodSync(path.join(out, '2.1.999'), 0o755));
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  it.skipIf(isRoot)('a destination it cannot look at is not an absent one: the run stops with its fixed line and nothing is moved (F13)', () => {
+    // mode 0200: writable (the writability pre-check passes) but not searchable, so looking at `clean.json` inside it is EACCES
+    const { r, base } = halfMove((out) => fs.chmodSync(path.join(out, '2.1.999'), 0o200), (out) => fs.chmodSync(path.join(out, '2.1.999'), 0o755));
     expect(r.status).toBe(1);
     expect(r.stderr).toBe('sanitize: internal error (no detail printed)\n');
     expect(r.stderr).not.toContain(base);
+    expect(fs.readdirSync(base)).toEqual(['fix']); // no temp sibling is left behind
+  });
+
+  it.skipIf(isRoot)('a version directory that exists but cannot be written is refused before any version moves (M2)', () => {
+    const { r, base } = halfMove((out) => fs.chmodSync(path.join(out, '2.1.999'), 0o555), (out) => fs.chmodSync(path.join(out, '2.1.999'), 0o755));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toBe('sanitize: 2.1.999 in the fixtures directory is not writable\n');
+    expect(r.stderr).not.toContain(base);
+    expect(r.stdout).toBe('');
+    expect(fs.readdirSync(base)).toEqual(['fix']); // no temp sibling is left behind
+  });
+
+  it.skipIf(isRoot)('a fixtures directory that cannot be written, when a version directory has to be created in it, is refused before any version moves (M2)', () => {
+    const raw = mkTmp('ccrc-dlg-raw.');
+    const base = mkTmp('ccrc-dlg-fixbase-');
+    const out = path.join(base, 'fix');
+    fs.mkdirSync(path.join(out, '2.1.998'), { recursive: true }); // writable, and present: it would take its file
+    rawBundle(raw, ROOT, '2.1.998', 'clean', [['Stop', 1, { hook_event_name: 'Stop' }]]);
+    rawBundle(raw, ROOT, '2.1.999', 'clean', [['Stop', 1, { hook_event_name: 'Stop' }]]); // absent: its directory cannot be created
+    fs.chmodSync(out, 0o555);
+    try {
+      const r = sanitize(raw, out);
+      expect(fs.readdirSync(path.join(out, '2.1.998')), 'the earlier version received nothing').toEqual([]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toBe('sanitize: the fixtures directory is not writable\n');
+      expect(r.stderr).not.toContain(base);
+    } finally { fs.chmodSync(out, 0o755); }
+    expect(fs.readdirSync(base)).toEqual(['fix']); // no temp sibling is left behind
+  });
+
+  it('a second run into a fixtures directory that already holds the corpus replaces its files and exits 0 (M3: a regular file is a destination)', () => {
+    const raw = mkTmp('ccrc-dlg-raw.');
+    const base = mkTmp('ccrc-dlg-fixbase-');
+    const out = path.join(base, 'fix');
+    const d = rawBundle(raw, ROOT, '2.1.999', 'clean', [['Stop', 1, { hook_event_name: 'Stop' }]]);
+    const first = sanitize(raw, out);
+    expect(first.status, first.stderr).toBe(0);
+    const before = fs.readFileSync(path.join(out, '2.1.999', 'clean.json'), 'utf8');
+    fs.writeFileSync(path.join(d, 'notes'), 'a note\n');
+    const second = sanitize(raw, out);
+    expect(second.status, second.stderr).toBe(0);
+    expect(second.stderr).toBe('');
+    const after = JSON.parse(fs.readFileSync(path.join(out, '2.1.999', 'clean.json'), 'utf8'));
+    expect(after.notes).toEqual(['a note']);
+    expect(JSON.parse(before).notes).toEqual([]);
     expect(fs.readdirSync(base)).toEqual(['fix']); // no temp sibling is left behind
   });
 
@@ -1082,6 +1375,138 @@ describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
     expect(one('{ not json').cell).toEqual({ status: 'unmeasured', reason: 'fixture unreadable' });
     expect(one('[]').cell).toEqual({ status: 'unmeasured', reason: 'fixture unreadable' });
     expect(one(fixture({ events: 'x' })).cell).toEqual({ status: 'unmeasured', reason: 'fixture unreadable' });
+  });
+
+  // shaped()'s remaining clauses (D-4009). Each fixture below is otherwise MEASURABLE (one parseable event, no failure note), so
+  // a clause that stops refusing lets the builder reach the field and either crash on it or return a measured cell of garbage.
+  const live = [ev(1, 'SessionStart', { session_id: 'S' })];
+  const diskOf = (over: Record<string, unknown>): Record<string, unknown> =>
+    ({ admin: {}, worktreesLeft: [], branches: [], worktreeList: '', metas: {}, snapshots: {}, ...over });
+  // `undefined` is a MISSING key: JSON.stringify drops it. null and 'x' (a string, which Object.entries/values and [...] and .length
+  // all accept without crashing) tell the `!== null` clauses from the `typeof … === 'object'` and Array.isArray ones.
+  // [field, the fixture over-rides for one value of it, the values that are not the right shape, a value that is].
+  const shapedCases: Array<[string, (v: unknown) => Record<string, unknown>, unknown[], unknown]> = [
+    ['notes', (v) => ({ notes: v }), ['x', null, undefined], []],
+    ['labels', (v) => ({ labels: v }), ['x', null, undefined], []],
+    ['disk', (v) => ({ disk: v }), [null, undefined, 'x'], diskOf({})],
+    ['disk.admin', (v) => ({ disk: diskOf({ admin: v }) }), [null, undefined, 'x'], {}],
+    ['disk.worktreesLeft', (v) => ({ disk: diskOf({ worktreesLeft: v }) }), ['x', null, undefined], []],
+    ['disk.metas', (v) => ({ disk: diskOf({ metas: v }) }), [null, undefined, 'x'], {}],
+  ];
+
+  it('each shaped() row\'s fixture, with the right shape in the field, is measured (so no row can pass for another reason)', () => {
+    for (const [field, mk, , good] of shapedCases) expect(one(fixture({ events: live, ...mk(good) })).cell.status, field).toBe('measured');
+  });
+
+  it.each(shapedCases)('a fixture whose %s is missing, null or mistyped is unreadable, not a measured cell and not a crash', (field, mk, bads) => {
+    for (const bad of bads) {
+      expect(one(fixture({ events: live, ...mk(bad) })).cell, `${field} = ${bad === undefined ? '(missing)' : JSON.stringify(bad)}`).toEqual({ status: 'unmeasured', reason: 'fixture unreadable' });
+    }
+  });
+
+  // FAIL_NOTE (F9): the notes rig.sh writes when a run did not go as scripted. Every row below is fed from rig.sh's OWN text, never a
+  // hand copy: the `note "…"` calls are read out of it, their shell expansions substituted, and each note goes through the builder.
+  /** The raw template (between the quotes) of every `note "…"` call in text, in source order. A `$(…)` inside a template may quote. */
+  function noteTemplates(text: string): string[] {
+    const found: string[] = [];
+    const re = /\bnote "/g;
+    for (let m = re.exec(text); m; m = re.exec(text)) {
+      const start = m.index + m[0].length;
+      let i = start;
+      let depth = 0;
+      for (; i < text.length; i += 1) {
+        const c = text[i];
+        if (c === '\\') { i += 1; continue; }
+        if (depth === 0 && c === '"') break;
+        if (c === '$' && text[i + 1] === '(') { depth += 1; i += 1; continue; }
+        if (depth > 0 && c === ')') { depth -= 1; continue; }
+        if (depth > 0 && c === '"') { for (i += 1; i < text.length && text[i] !== '"'; i += 1) if (text[i] === '\\') i += 1; }
+      }
+      if (i >= text.length) throw new Error('rig.sh: a note "… never closes');
+      // the call must end there: a second argument would be one more string `note` joins and this scan would not see
+      if (!/^[ \t]*(?:[;&|)}]|\n|$)/.test(text.slice(i + 1))) throw new Error(`rig.sh: a note call continues after its first string: ${text.slice(start, i)}`);
+      found.push(text.slice(start, i));
+      re.lastIndex = i + 1;
+    }
+    return found;
+  }
+  /** rig.sh's note calls and its `note` call sites (not the `note()` definition, not a comment line): the two must agree. */
+  const rigNoteScan = (): { templates: string[]; sites: number } => {
+    const code = fs.readFileSync(RIGSH, 'utf8').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    return { templates: noteTemplates(code), sites: (code.match(/\bnote\b(?!\()/g) ?? []).length };
+  };
+  /** One template as rig.sh would print it. Every expansion in a note is decided here; one this does not know throws. */
+  function concreteNote(template: string, v: { waitLabels?: string; probeLabels?: string; dialog?: string; verb?: string } = {}): string {
+    const known: Record<string, string> = {
+      'jq -c .waitLabels <<<"$step"': v.waitLabels ?? '["x"]',
+      'jq -c .probeLabels <<<"$step"': v.probeLabels ?? '["r1-resumed"]',
+      'jq -r .answerDialog <<<"$step"': v.dialog ?? 'Background work is running',
+    };
+    if (template.includes('\\')) throw new Error(`rig.sh note carries a backslash this test does not unescape: ${template}`);
+    return template.replace(/\$\(([^)]*)\)|\$(\w+)/g, (_m, cmd: string | undefined, name: string | undefined) => {
+      if (cmd !== undefined) {
+        const val = known[cmd];
+        if (val === undefined) throw new Error(`rig.sh note expands a command this test has no value for: $(${cmd})`);
+        return val;
+      }
+      if (name !== 'verb') throw new Error(`rig.sh note expands a variable this test has no value for: $${name}`);
+      return v.verb ?? 'bogus';
+    });
+  }
+  // The decision, made once: an OUTCOME is a note about something the run observed (a probe that was not reached, a dialog that was
+  // answered); every other note says the run did not go as scripted. A new note in rig.sh with neither shape reads as a failure here.
+  const isOutcome = (template: string): boolean => template.startsWith('probe ') || template.startsWith('dialog answered: ');
+  // The collection-time lists below must never throw (a throw would fail the whole file at collection): a note this test cannot read is
+  // left out of them, and the first row, which does not catch, is the one that goes red naming it.
+  const scanned = ((): string[] => { try { return rigNoteScan().templates; } catch { return []; } })();
+  const readable = (ts: string[]): string[] => ts.flatMap((t) => { try { return [concreteNote(t)]; } catch { return []; } });
+  const failureNotes = readable(scanned.filter((t) => !isOutcome(t)));
+  const outcomeNotes = readable(scanned.filter(isOutcome));
+  const outcomeTemplates = scanned.filter(isOutcome);
+
+  it('rig.sh writes eight notes, every one read here, each decided: two outcomes (a probe, a dialog) and six failures', () => {
+    const { templates, sites } = rigNoteScan();
+    expect(templates, 'every `note` in rig.sh reads as a note "…" call this test can parse').toHaveLength(sites);
+    const concrete = templates.map((t) => concreteNote(t));
+    expect(concrete.every((n) => n.length > 0 && !n.includes('$')), 'every expansion was substituted').toBe(true);
+    expect(templates.filter(isOutcome).map((t) => t.split(' ')[0]), 'the outcomes').toEqual(['probe', 'dialog']);
+    expect(templates.filter((t) => !isOutcome(t)), 'a new note needs a decision here: an outcome joins isOutcome, a failure joins build-matrix.mjs\'s FAIL_NOTE').toHaveLength(6);
+    expect(new Set(concrete).size, 'no two calls write the same note').toBe(concrete.length);
+  });
+
+  it('the scanner reads a quoted string inside a $(…), an escaped quote and the end of a call, and refuses a call that goes on', () => {
+    // `)` and `"` inside the substitution's own quotes belong to it; a note ends at the first unescaped quote outside any $(…)
+    expect(noteTemplates('a || note "x $(jq -r ".k)\\"" <<<"$s") y" ;;\nnote "z"; fi\n')).toEqual(['x $(jq -r ".k)\\"" <<<"$s") y', 'z']);
+    expect(noteTemplates('note "a\\"b" ;;')).toEqual(['a\\"b']);
+    expect(noteTemplates('note "last"')).toEqual(['last']);
+    expect(() => noteTemplates('note "a" "b"')).toThrow(/continues after its first string/);
+    expect(() => noteTemplates('note "never closes')).toThrow(/never closes/);
+  });
+
+  it.each(failureNotes.map((n) => [n]))('rig.sh writes %j: a run carrying it is unmeasured, with that note as its reason and no question field', (note) => {
+    expect(one(fixture({ notes: [note], events: live })).cell).toEqual({ status: 'unmeasured', reason: note, eventsSeen: { SessionStart: 1 } });
+  });
+
+  // FAIL_NOTE is anchored at the start only: text after a failure note (a rig.sh that appends a detail to one) leaves it a failure. An end
+  // anchor could only turn such a note into "measured", so a failed run's zeros would read as observed.
+  it.each(failureNotes.map((n) => [n]))('rig.sh writes %j with text after it: the run is still unmeasured', (note) => {
+    const extended = `${note} (x)`;
+    expect(one(fixture({ notes: [extended], events: live })).cell).toEqual({ status: 'unmeasured', reason: extended, eventsSeen: { SessionStart: 1 } });
+  });
+
+  // A probe note must also be READ (PROBE_NOTE copies its wording too): a reworded one would leave the run measured with probesMissed
+  // empty, a missed probe silently recorded as reached.
+  it.each(outcomeNotes.map((n) => [n, n.startsWith('probe ') ? ['r1-resumed'] : []] as const))('rig.sh writes %j: an outcome, so the run stays measured (probesMissed %j)', (note, missed) => {
+    expect(one(fixture({ notes: [note], events: live })).cell).toMatchObject({ status: 'measured', subagentStarts: 0, probesMissed: missed });
+  });
+
+  it.each(failureNotes.map((n) => [n]))('FAIL_NOTE is anchored: %j quoted inside a dialog\'s text or a probe\'s label does not make the run unmeasured', (failure) => {
+    const [probe, dialog] = ['probe ', 'dialog answered: '].map((p) => outcomeTemplates.find((t) => t.startsWith(p)) as string);
+    const notes = [concreteNote(probe, { probeLabels: JSON.stringify([failure]) }), concreteNote(dialog, { dialog: failure })];
+    // the dialog carries the failure note verbatim; the probe carries it as a JSON label, which is what rig.sh's `jq -c` prints
+    expect(notes[0], 'the probe carries it as a label').toContain(JSON.stringify(failure));
+    expect(notes[1], 'the dialog carries it as its text').toContain(failure);
+    expect(one(fixture({ notes, events: live })).cell).toMatchObject({ status: 'measured', probesMissed: [failure] });
   });
 
   it('a non-version directory is skipped with one stderr line that does not name it', () => {
