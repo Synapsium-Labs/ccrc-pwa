@@ -30,11 +30,29 @@
 // that proactive compaction is what keeps an unexpectedly large lane from
 // hitting the provider's 400 ("input exceeds the context window").
 
-import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, unlinkSync, statSync } from 'node:fs';
 import { CLASSES, SUBAGENT_CLASSES, UNAVAILABLE_PREFIX, deriveModels } from './models.mjs';
 
 export class ModelEnvInvalid extends Error {
   constructor(message) { super(message); this.name = 'ModelEnvInvalid'; }
+}
+
+/** A LANE FILE's read, type-tested first: the ONE definition. Plan 3a's
+ *  final fix wave (MF-2) wrote it in `deploy/models-op.mjs`; Plan 3b Task A6
+ *  moved it here so this module's own two `settings.json` reads use it too,
+ *  and `deploy/models-op.mjs` imports it (`single-definition.test.ts` pins
+ *  one definition). `readFileSync` opens BY NAME with no regard for TYPE: a
+ *  FIFO with no writer blocks INSIDE the open, so no `catch` ever runs, and
+ *  `ccrc doctor`'s `_check_codex` and `--fix`'s `_fix_codex`, which call the
+ *  op with no deadline, hang whole. So the type is asked first. `statSync`
+ *  FOLLOWS links, as bash `-f` does: a symlink to a regular file reads as
+ *  before, and an absent path or a dangling link throws ENOENT exactly as
+ *  the bare read did. Anything that is not a regular file throws `ENOTREG`,
+ *  which every caller's existing non-ENOENT arm answers as that read's own
+ *  unreadable answer, never a block. */
+export function readRegular(p) {
+  if (!statSync(p).isFile()) throw Object.assign(new Error('not a regular file'), { code: 'ENOTREG' });
+  return readFileSync(p, 'utf8');
 }
 
 /** The client's default window for a model id it does not know (spec §6.1).
@@ -248,7 +266,8 @@ export function mergeSettingsEnv(settingsPath, block) {
   let json = {};
   let existed = false;
   try {
-    const text = readFileSync(settingsPath, 'utf8');
+    // Type-tested (Plan 3b Task A6): a FIFO is "could not be read", never a block.
+    const text = readRegular(settingsPath);
     existed = true;
     try {
       json = JSON.parse(text);
@@ -325,7 +344,8 @@ export function mergeSettingsEnv(settingsPath, block) {
 export function clearSettingsEnv(settingsPath, keys) {
   let json;
   try {
-    const text = readFileSync(settingsPath, 'utf8');
+    // Type-tested (Plan 3b Task A6): a FIFO is "could not be read", never a block.
+    const text = readRegular(settingsPath);
     try {
       json = JSON.parse(text);
     } catch (e) {

@@ -5833,7 +5833,16 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
   fi
   t="$(_codex_usage_timer "$id")"; f="$(_codex_usage_foreign "$id")"
   # (1) WHO publishes this lane's row.
-  if _codex_usage_enabled "$f"; then
+  # BOTH ARMED (Plan 3b Task A2, D-4048):
+  # the converge withdraws ccrc's own while the foreign one stands, but a
+  # withdrawal the manager refused, or answered while the link stayed,
+  # leaves both, and "ccrc withholds its own" would be false over a link
+  # that says otherwise.
+  if _codex_usage_enabled "$f" && _codex_usage_enabled "$t"; then
+    _dr_cx_warn "$id: another repository's $f is enabled, and ccrc's own $t is enabled too, so two publishers race this lane's ~/.cc-limits row and two token refreshes its OAuth directory" \
+      "systemctl --user disable --now $t (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws $t while $f stands and re-measures the link. Once this lane's cutover no longer needs $f, disable it yourself: systemctl --user disable --now $f — ccrc never disables another tool's unit"
+    rc=2
+  elif _codex_usage_enabled "$f"; then
     _dr_cx_warn "$id: another repository's $f is enabled, so two publishers would race this lane's ~/.cc-limits row and two token refreshes its OAuth directory — ccrc withholds its own $t while it stands" \
       "once this lane's cutover no longer needs it, disable it yourself: systemctl --user disable --now $f, then run: ccrc install — ccrc never disables another tool's unit"
     rc=2
@@ -5887,6 +5896,47 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
   # through models-op's `show`, and a second copy would print each twice.
   DR_CODEX_USAGE_NOTE="$(_dr_join ${note[@]+"${note[@]}"})"
   return "$rc"
+}
+
+# ── the usage timer ccrc left enabled for an id that is no longer a Codex lane ──
+# Plan 3b Task A2 (D-4048). The rows above
+# walk TODAY's codex lanes, so a flip back whose withdrawal never happened left
+# `ccrc-codex-usage@<id>.timer` polling with no row to name it. Two causes: no
+# `ccrc install` since the roster edit, or a disable the manager answered while
+# its link stayed. That timer rewrites ~/.cc-limits/<id>.json and runs a token
+# refresh against the authDir in the lane.json a flip back keeps.
+# THE SET is ccrc's own reading of the manager's links (`_codex_usage_enabled_ids`,
+# D-3726), which reads no roster, minus the codex lanes `_check_codex` read.
+# MEASURED BEFORE the empty-population SKIP (`_check_codex`): such an id is a
+# subject on its own. A set that cannot be listed (`_codex_usage_enabled_ids`
+# rc 1: the shape contract is missing, which the `wrappers` check FAILs) is
+# UNMEASURED, never empty, and is its own WARN. NOT APPLICABLE ON macOS
+# (decision 17): ccrc places no launchd job, so there is nothing to find (rc 3).
+# No systemctl call, and no file under the timer is read.
+_dr_codex_usage_surplus() {   # <codex lane id>… -> rc 0 measured, 1 unlistable, 3 macOS; sets DR_CODEX_USAGE_SURPLUS
+  local have e
+  DR_CODEX_USAGE_SURPLUS=()
+  [ "${CCD_OS:-linux}" = darwin ] && return 3
+  have="$(_codex_usage_enabled_ids 2>/dev/null)" || return 1
+  for e in $have; do
+    _dr_cx_member "$e" "$@" || DR_CODEX_USAGE_SURPLUS+=("$e")
+  done
+  return 0
+}
+
+_dr_codex_usage_surplus_rows() {   # <_dr_codex_usage_surplus's rc> -> WARN findings, recorded through _dr_cx_warn
+  local id t
+  if [ "$1" -eq 1 ]; then
+    _dr_cx_warn "ccrc's own enabled usage timers could not be listed (the wrapper shape contract could not be read), so a ccrc-codex-usage@<id>.timer left enabled for an id that is no longer a Codex lane cannot be seen — unmeasured, never none" \
+      "ccrc install — the wrapper shape contract ships with ccrc, and the install places it again"
+    return 0
+  fi
+  for id in ${DR_CODEX_USAGE_SURPLUS[@]+"${DR_CODEX_USAGE_SURPLUS[@]}"}; do
+    t="$(_codex_usage_timer "$id")"
+    _dr_cx_warn "$t is still enabled, and '$id' is not a Codex lane in \$HOME/.ccrc/accounts.json, so ccrc's usage publisher for '$id' runs whenever the manager starts that timer: the writer of \$HOME/.cc-limits/$id.json, and of a token refresh in the authDir its lane.json names, for a lane ccrc no longer runs" \
+      "systemctl --user disable --now $t (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws a ccrc usage timer whose id is no longer a Codex lane and re-measures the link"
+  done
+  return 0
 }
 
 # ── codex: the ccrc-owned Codex lanes on this box, measured end to end ────
@@ -5953,7 +6003,7 @@ _check_codex() {
             _codex_litellm_yaml _codex_runtime_cli _models_node _models_roster_path _models_litellm_template \
             _codex_tier_ours _codex_tier_stale _codex_foreign_what _codex_tier_is_our_handle \
             _svc_is_active _svc_status_hint \
-            _codex_usage_enabled _codex_usage_timer _codex_usage_foreign _codex_usage_wants _codex_usage_flat_foreign \
+            _codex_usage_enabled _codex_usage_enabled_ids _codex_usage_timer _codex_usage_foreign _codex_usage_wants _codex_usage_flat_foreign \
             _plat_mtime; do
     if ! declare -F "$fn" >/dev/null 2>&1 || [ -z "${BOX_TREE_DIR:-}" ] || [ -z "${CODEX_TIERS:-}" ]; then
       _dr_fail codex "ccrc's own Codex lane library is not loaded ($fn, BOX_TREE_DIR or CODEX_TIERS is missing), so no lane on this box was measured" \
@@ -5979,12 +6029,34 @@ _check_codex() {
         return 1 ;;
     esac
   fi
-  for d in "$root"/*/; do
-    [ -d "$d" ] || continue
-    n="${d%/}"; n="${n##*/}"
-    _dr_cx_member "$n" ${lanes[@]+"${lanes[@]}"} || left+=("$n")
-  done
-  if [ "${#lanes[@]}" -eq 0 ] && [ "${#left[@]}" -eq 0 ]; then
+  # Plan 3b Task A5, D-4052: a lane-state root that EXISTS (or is a link) and cannot
+  # be listed — a directory this user cannot read and search, or anything
+  # that is not a directory — is UNMEASURED. The glob below matches nothing
+  # either way (measured: a mode-000 directory, a regular file, a dangling
+  # link), so without this test such a root folded into the empty-population
+  # SKIP, indistinguishable from a box with no lane state (`_check_pools`'
+  # `pools-unlistable` class). A WARN by ruling A-5: nothing ccrc runs reads
+  # lane state for an id that is not a codex row, and a codex row's own rows
+  # below still measure its own files. An ABSENT root is an answer, not a
+  # finding: the existence conjunct is what keeps it the SKIP.
+  local root_unlistable=0
+  if { [ -e "$root" ] || [ -L "$root" ]; } && { [ ! -d "$root" ] || [ ! -r "$root" ] || [ ! -x "$root" ]; }; then
+    root_unlistable=1
+  else
+    for d in "$root"/*/; do
+      [ -d "$d" ] || continue
+      n="${d%/}"; n="${n##*/}"
+      _dr_cx_member "$n" ${lanes[@]+"${lanes[@]}"} || left+=("$n")
+    done
+  fi
+  # Plan 3b Task A2: ccrc's own usage timers left enabled for an id that is not
+  # a codex lane now, measured BEFORE the empty-population SKIP. Such a timer is
+  # a subject on its own, and so is a set that cannot be listed
+  # (`_dr_codex_usage_surplus`, above).
+  local -a DR_CODEX_USAGE_SURPLUS=()
+  local surplus_rc=0
+  _dr_codex_usage_surplus ${lanes[@]+"${lanes[@]}"} || surplus_rc=$?
+  if [ "${#lanes[@]}" -eq 0 ] && [ "${#left[@]}" -eq 0 ] && [ "${#DR_CODEX_USAGE_SURPLUS[@]}" -eq 0 ] && [ "$surplus_rc" -ne 1 ] && [ "$root_unlistable" -eq 0 ]; then
     if [ -e "$roster" ] || [ -L "$roster" ]; then
       _dr_skip codex "no account in \$HOME/.ccrc/accounts.json is exec.kind \"codex\", and no lane state is left under $root, so there is no Codex lane to measure"
     else
@@ -5996,7 +6068,7 @@ _check_codex() {
   local -a DRX_CLASS=() DRX_WHAT=() DRX_FIX=() DRX_OK=() bad=()
   local -A owner=()
   local DRX_RUNTIME='' DRX_LANE_WORDS='' DRX_TIER_WORDS='' models=1 p
-  local DRX_LIVE=0 DRX_UNASKED=0 DRX_UNASKED_SID=''
+  local DRX_LIVE=0 DRX_UNASKED=0 DRX_UNASKED_SID='' DRX_UNREADABLE=0 DRX_UNREADABLE_SID=''
   local DR_CODEX_USAGE_PAIR=present DR_CODEX_USAGE_BOX_NOTE='' DR_CODEX_USAGE_NOTE=''
   if [ "${#lanes[@]}" -gt 0 ]; then
     _dr_cx_bins
@@ -6042,10 +6114,27 @@ _check_codex() {
       DRX_OK+=("$id ($DRX_LANE_WORDS; $DRX_TIER_WORDS${DR_CODEX_USAGE_NOTE:+; $DR_CODEX_USAGE_NOTE})")
     done
   fi
+  local left_reads
   for n in ${left[@]+"${left[@]}"}; do
-    _dr_cx_warn "lane state is left under $root/$n, and '$n' is not a Codex lane in \$HOME/.ccrc/accounts.json — a flip back to another launcher keeps it on purpose, and nothing of ccrc's reads it while '$n' is not a Codex lane" \
+    # Plan 3b Task A2: the publisher reads this lane.json, so "nothing of ccrc's
+    # reads it" is said only when the enabled set WAS listed and no ccrc usage
+    # timer is enabled for '$n'. A set that could not be listed (`surplus_rc` 1)
+    # is unmeasured, never none (fix round 1): the empty array it leaves is not
+    # the empty set, and the WARN on that set says why.
+    left_reads="nothing of ccrc's reads it while '$n' is not a Codex lane"
+    if [ "$surplus_rc" -eq 1 ]; then
+      left_reads="whether ccrc's own usage timer still reads it is unmeasured (the WARN on ccrc's enabled usage timers says why)"
+    elif _dr_cx_member "$n" ${DR_CODEX_USAGE_SURPLUS[@]+"${DR_CODEX_USAGE_SURPLUS[@]}"}; then
+      left_reads="ccrc's own $(_codex_usage_timer "$n") still reads it (the WARN naming that timer says how to withdraw it)"
+    fi
+    _dr_cx_warn "lane state is left under $root/$n, and '$n' is not a Codex lane in \$HOME/.ccrc/accounts.json — a flip back to another launcher keeps it on purpose, and $left_reads" \
       "if the flip back is final and ccrc runs nothing for '$n' any more (its tiers were stopped with 'ccrc codex stop $n' before the flip), remove $root/$n by hand; ccrc never deletes a lane's state on a flip"
   done
+  if [ "$root_unlistable" -eq 1 ]; then
+    _dr_cx_warn "$root exists and cannot be listed (it is not a directory this user can read and search), so whether any Codex lane state is left under it was not measured — unmeasured, never read as no lane state" \
+      "make it a directory this user can list again (ccrc creates it with mode 0700: chmod 700 $root), or move aside by hand whatever sits there, then re-run doctor; ccrc never changes or removes it for you"
+  fi
+  _dr_codex_usage_surplus_rows "$surplus_rc"
   _dr_cx_report "${#lanes[@]} Codex lane(s): $(_dr_cx_join ', ' ${DRX_OK[@]+"${DRX_OK[@]}"}); runtime ${DRX_RUNTIME:-unmeasured}; the four GPT-lane executables match the shipped tree${DR_CODEX_USAGE_BOX_NOTE:+; $DR_CODEX_USAGE_BOX_NOTE}"
 }
 
@@ -6302,16 +6391,19 @@ _dr_cx_report() {   # <PASS detail>
 # itself, so a fifth executable or a rename reds there before this list can drift.
 CODEX_LANE_BINS=(ccgpt-proxy.py ccgpt-usage.py ccgpt-runtime ccrc-codex)
 _dr_cx_bins() {
-  local tree="$BOX_TREE_DIR/ccd" bin="$HOME/.local/bin" name
-  local -a notree=() missing=() drift=()
-  if ! command -v cmp >/dev/null 2>&1; then
-    _dr_cx_warn "cmp is not on PATH, so the GPT-lane executables in \$HOME/.local/bin could not be compared with the shipped tree — unmeasured, not current" \
-      "install diffutils (it ships cmp), then re-run doctor"
-    return 0
-  fi
+  local tree="$BOX_TREE_DIR/ccd" bin="$HOME/.local/bin" name have_cmp=1
+  local -a notree=() missing=() drift=() uncompared=()
+  # Plan 3b Task A5, D-4052: no `cmp` costs the BYTE compare only. A file missing
+  # from the shipped tree or from ~/.local/bin, or not executable, is a fact
+  # `cmp` plays no part in, and is FAILed by name whatever PATH holds; the
+  # early return this replaced swallowed it, and with it the only FAIL that
+  # lets `_fix_codex` (FAIL-only, R-C8) place the file. A file left
+  # uncompared is named in its own WARN, never claimed current.
+  command -v cmp >/dev/null 2>&1 || have_cmp=0
   for name in "${CODEX_LANE_BINS[@]}"; do
     if [ ! -f "$tree/$name" ]; then notree+=("$name"); continue; fi
     if [ ! -f "$bin/$name" ] || [ ! -x "$bin/$name" ]; then missing+=("$name"); continue; fi
+    if [ "$have_cmp" -eq 0 ]; then uncompared+=("$name"); continue; fi
     cmp -s "$tree/$name" "$bin/$name" || drift+=("$name")
   done
   [ "${#notree[@]}" -eq 0 ] || _dr_cx_fail "the shipped tree ($tree) has no $(_dr_cx_join ', ' "${notree[@]}"), so nothing on this box says what the GPT-lane executables should be" \
@@ -6320,6 +6412,8 @@ _dr_cx_bins() {
     "run 'ccrc update' (or 'ccrc install' from a checkout): it places them from the shipped tree on every role but server"
   [ "${#drift[@]}" -eq 0 ] || _dr_cx_fail "$(_dr_cx_join ', ' "${drift[@]}") in \$HOME/.local/bin differ from the shipped tree's copies in $tree, so a lane would run bytes this build did not ship" \
     "run 'ccrc update' (or 'ccrc install' from a checkout): it re-places them from the shipped tree"
+  [ "${#uncompared[@]}" -eq 0 ] || _dr_cx_warn "cmp is not on PATH, so $(_dr_cx_join ', ' "${uncompared[@]}") in \$HOME/.local/bin could not be compared with the shipped tree — unmeasured, not current" \
+    "install diffutils (it ships cmp), then re-run doctor"
   return 0
 }
 
@@ -6504,7 +6598,7 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
 #     tier that died after a start that wrote stays down until the next
 #     start, D-3716).
 _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
-  local id="$1" tier q word own lq=3 sq=3
+  local id="$1" tier q word own lq=3 sq=3 unread='' refix=''
   local -a words=()
   for tier in $CODEX_TIERS; do
     CX_LISTEN_WHY=''
@@ -6559,8 +6653,9 @@ _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
       _dr_cx_warn "$id's LiteLLM tier is not running while $DRX_LIVE live session(s) run on this lane, so every turn they send fails at the gateway — a tier that died after its start stays down until the next start" \
         "start it: ccrc codex start $id (every session launch runs the same start)"
     elif [ "$DRX_UNASKED" -gt 0 ]; then
-      _dr_cx_warn "$id's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked ($DRX_UNASKED unanswered) — unmeasured, not idle" \
-        "ask by hand${DRX_UNASKED_SID:+ ($(_svc_status_hint "claude-session@$DRX_UNASKED_SID.service"))}; if one is live, start the lane: ccrc codex start $id"
+      [ "$DRX_UNREADABLE" -eq 0 ] || { unread="; $DRX_UNREADABLE of them: \$HOME/.cc-sessions/$DRX_UNREADABLE_SID.wrapper cannot be read by this user, so which lane that session runs on is unknown"; refix="read or fix that file's mode (ccd writes it), and "; }
+      _dr_cx_warn "$id's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked ($DRX_UNASKED unanswered) — unmeasured, not idle$unread" \
+        "${refix}ask by hand${DRX_UNASKED_SID:+ ($(_svc_status_hint "claude-session@$DRX_UNASKED_SID.service"))}; if one is live, start the lane: ccrc codex start $id"
     fi
   fi
   if [ "$lq:$sq" = 1:1 ]; then
@@ -6577,16 +6672,30 @@ _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
 # and NOT ASKED (the manager printed no word), which is never folded into
 # not-live. `[ -f ]` first, so a FIFO planted at a `.wrapper` path is never
 # opened (D-2380's class).
-_dr_cx_sessions() {   # <id> — sets DRX_LIVE, DRX_UNASKED, DRX_UNASKED_SID
+# AN UNREADABLE `.wrapper` IS NOT ANOTHER LANE'S (Plan 3b Task A5, D-4052): it is a
+# session that may be on this lane, counted into DRX_UNASKED (the "could not tell" word),
+# never into DRX_LIVE and never skipped, and named apart in DRX_UNREADABLE(_SID): its remedy
+# is the file's mode, never the manager (D-4052). Whether it was READ is the redirection's
+# answer, not `read`'s: ccd writes the field with `printf '%s'` (`_reg_set`), no trailing
+# newline, so `read` returns 1 on every real wrapper while still setting `w`. Spelled POSITIVE on purpose:
+# under bash 5.2 `if ! { …; } 2>/dev/null < f` takes the readable branch when
+# the open fails (measured), and `2>/dev/null` sits before the `<` so bash's
+# own "Permission denied" never reaches doctor's output.
+_dr_cx_sessions() {   # <id> — sets DRX_LIVE, DRX_UNASKED, DRX_UNASKED_SID, DRX_UNREADABLE, DRX_UNREADABLE_SID
   local id="$1" reg="$HOME/.cc-sessions" wf w sid
-  DRX_LIVE=0; DRX_UNASKED=0; DRX_UNASKED_SID=''
+  DRX_LIVE=0; DRX_UNASKED=0; DRX_UNASKED_SID=''; DRX_UNREADABLE=0; DRX_UNREADABLE_SID=''
   [ -d "$reg" ] || return 0
   if [ ! -r "$reg" ] || [ ! -x "$reg" ]; then DRX_UNASKED=1; return 0; fi
   for wf in "$reg"/*.wrapper; do
     [ -f "$wf" ] || continue
-    w=''; { IFS= read -r w < "$wf"; } 2>/dev/null
-    [ "$w" = "$id" ] || continue
     sid="${wf##*/}"; sid="${sid%.wrapper}"
+    w=''
+    if { IFS= read -r w || :; } 2>/dev/null < "$wf"; then
+      [ "$w" = "$id" ] || continue
+    else
+      DRX_UNASKED=$((DRX_UNASKED + 1)); DRX_UNREADABLE=$((DRX_UNREADABLE + 1)); [ -n "$DRX_UNREADABLE_SID" ] || DRX_UNREADABLE_SID="$sid"
+      continue
+    fi
     case "$(_svc_is_active "claude-session@$sid.service")" in
       active|activating|reloading|refreshing|deactivating) DRX_LIVE=$((DRX_LIVE + 1)) ;;
       '') DRX_UNASKED=$((DRX_UNASKED + 1)); [ -n "$DRX_UNASKED_SID" ] || DRX_UNASKED_SID="$sid" ;;
