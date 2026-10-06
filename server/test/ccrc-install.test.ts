@@ -8176,7 +8176,8 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  three maps each gained `"timeout": "PASS"` and nothing else moved — every
  *  other class, both codes and both refreshes equal. RE-MEASURED again when
  *  doctor gained its `model-default` check, the same way, on a disposable
- *  `git archive` copy of that branch's tree: the three maps each gained
+ *  `git archive` copy of `36438851d`'s tree (the commit that added the check,
+ *  on `b3b5a73ed`): the three maps each gained
  *  `"model-default": "PASS"` and nothing else moved (`codex` measured `SKIP`
  *  in all three, which these maps leave out by design — see the first case).
  *  It is a golden: nothing re-measures
