@@ -255,6 +255,13 @@ These are departures from the 07:07 ruling, or from what shipped text at `922141
     - everything else stays refused, with a row each, and the regex's four parts each have a mutation row (T1-1 to T1-15);
     - the config goes back to the real curl on its stdin, after the proxy variables are unset, and is never logged.
   - **Reach:** `ccrcContainedEnv(…, { curl: 'loopback' })` installs the same front for `ccrc-update`, `ccrc-cli`, `ccrc-install-graphify` and `sweepFixture`'s users. A ccrc curl call that used these options would now pass where it was refused before. That is safe for containment, because none of them can move the connection off the URL the front checks: a method word, a body that names no file, a time bound, and request headers only. The docstring now lists them as the senders' options, not ccrc's. `ccrc-install.test.ts` plants a poisoned curl and is unaffected.
+- **D-4096** — *`ccd/ccrc-api` gains `set +x` on line 57, a secrets control the ruling's idiom did not name (Reading 4, ruled a departure 2026-10-06).*
+  - **Ruled:** the ruling copies the `-K -` spelling `ccd-pool-sync` and `ccd-update-sync` ship, and says never print the token. It does not name their `set +x`.
+  - **Shipped:** line 57 was `set -uo pipefail`. An inherited `SHELLOPTS=xtrace` (or `bash -x`) traced `read_token` and the header line, printing the token 4 times on stderr, which the calling session reads (measured by two lenses).
+  - **Now:**
+    - line 57 is `set +x; set -uo pipefail`, folded in place so `ccrc-api:100`, `:122-126` and `:206-207` hold;
+    - the xtrace case in `ccrc-api.test.ts` pins it (T2-6);
+    - `notify.sh` gets none (Reading 4).
 
 ## File structure
 
