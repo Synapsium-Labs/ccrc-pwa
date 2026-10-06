@@ -143,3 +143,26 @@ export function unitJson<T>(home: string, body: string, opts?: { env?: NodeJS.Pr
     throw new Error(`docs helper unit wrote no single JSON value (${String(e)}):\n${r.stdout.slice(0, 2000)}\n--- stderr ---\n${r.stderr}`);
   }
 }
+
+/**
+ * The `filters-bypassed` caveat the draft phase adds on THIS host before a fixture plants anything (spec 2026-10-01
+ * section 2 (d): "Any neutralised filter adds the `filters-bypassed` caveat"). The helper deletes every GIT_* key, so
+ * its filter probe reads the host's SYSTEM gitconfig too, and a runner image that configures a filter driver there
+ * (GitHub's ubuntu image installs git-lfs's, filter.lfs.clean/smudge/process/required) truthfully earns the caveat on
+ * every holder. So the baseline is MEASURED, never assumed: this runs the helper's own probe, `_draft_git` with
+ * `DRAFT_FILTER_ARGS`, its rc read exactly as `_snapshot_once` reads it (rc 1 is no driver) and its output through
+ * `filter_neutralisers`, under `runDocsUnit`'s contained env and `home` as HOME and cwd. `home` is not a repository,
+ * so only the system and global (fixture HOME) layers answer; a case that plants a driver in a fixture repo's own
+ * config carries that caveat itself. Returns a fresh array each call, to append to a case's own caveats.
+ */
+export function hostFilterCaveat(home: string): [] | ['filters-bypassed'] {
+  const bypassed = unitJson<boolean>(home, [
+    'import os',
+    "dl = H.Deadline(H.HELPER_DEADLINE_S['docs-tree'])",
+    "sp = H._draft_git('filter-config', os.environ['HOME'], H.DRAFT_FILTER_ARGS, dl, H.CALL_S['ref'])",
+    'if sp.overflow or sp.rc not in (0, 1):',
+    "    raise SystemExit('hostFilterCaveat: the filter probe answered rc %r: %r' % (sp.rc, sp.err[:400]))",
+    'out(sp.rc == 0 and H.filter_neutralisers(sp.out)[1])',
+  ].join('\n'));
+  return bypassed ? ['filters-bypassed'] : [];
+}

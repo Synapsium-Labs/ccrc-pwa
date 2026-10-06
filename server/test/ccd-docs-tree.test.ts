@@ -1821,7 +1821,7 @@ import * as t14fs from 'node:fs';
 import * as t14path from 'node:path';
 import { createHash as t14createHash } from 'node:crypto';
 import { execFileSync as t14execFile } from 'node:child_process';
-import { unitJson as t14unitJson } from './docsHelperPy.js';
+import { hostFilterCaveat as t14hostFilterCaveat, unitJson as t14unitJson } from './docsHelperPy.js';
 import { plantGitRecorder as t14plantGitRecorder } from './ccdDocsHelpers.js';
 
 const T14_S = 'docs/superpowers/specs/';
@@ -1961,7 +1961,7 @@ describe('docs draft snapshot (docs W1a Task 14)', () => {
       });
       expect(o.facts).toEqual({
         state: 'holder', branch: 'ws/a', worktree: { path: wt, head, class: 'workspace' },
-        baseEqual: true, base: null, caveats: [], opaque: [`${T14_S}nested`],
+        baseEqual: true, base: null, caveats: t14hostFilterCaveat(h.home), opaque: [`${T14_S}nested`],
       });
       expect(o.unlisted).toEqual({});
       expect(o.main).toBe(main);
@@ -2035,6 +2035,32 @@ describe('docs draft snapshot (docs W1a Task 14)', () => {
       let rc = 0;
       try { h.git(wt, 'status', '--porcelain'); } catch (e) { rc = (e as { status?: number }).status ?? -1; }
       expect(rc === 128 || t14fs.existsSync(cleanMarker) || t14fs.existsSync(processMarker)).toBe(true);
+    }, 60000);
+
+    it('row 14: a driver in the HOME gitconfig (git-lfs\'s shape) is neutralised too and adds filters-bypassed; the host baseline is measured', () => {
+      const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      // The baseline the other cases append: the helper's own probe, before this case plants anything.
+      const base = t14hostFilterCaveat(h.home);
+      const plain = t14phase({ served: head });
+      expect(plain.facts).toMatchObject({ state: 'holder', caveats: base });
+      // On a host with no system filter driver, the plain holder carries no caveat at all.
+      if (base.length === 0) expect(plain.facts['caveats']).toEqual([]);
+      // git-lfs's own `git lfs install` lines, in the fixture HOME's ~/.gitconfig (the global layer).
+      const gitconfig = t14path.join(h.home, '.gitconfig');
+      t14fs.appendFileSync(gitconfig, [
+        '[filter "lfs"]',
+        '\tclean = git-lfs clean -- %f',
+        '\tsmudge = git-lfs smudge -- %f',
+        '\tprocess = git-lfs filter-process',
+        '\trequired = true',
+        '',
+      ].join('\n'));
+      expect(t14hostFilterCaveat(h.home)).toEqual(['filters-bypassed']);
+      t14fs.writeFileSync(t14path.join(wt, '.gitattributes'), 'a.md filter=lfs\n');
+      t14statDirty(wt, `${T14_S}a.md`, 'cccc\n');
+      const o = t14phase({ served: head });
+      expect(o.rows).toEqual({ 'specs:a.md': t14row('modified', t14file('cccc\n')) });
+      expect(o.facts).toMatchObject({ state: 'holder', caveats: ['filters-bypassed'] });
     }, 60000);
 
     it('row 14: a driver named `a b` is unreadable {step:filter-config} and status never runs', () => {
@@ -2121,7 +2147,7 @@ describe('docs draft snapshot (docs W1a Task 14)', () => {
       expect(h.git(wt, 'status', '--porcelain', '--', 'docs')).toBe('');
       const o = t14phase({ served: head });
       expect(o.rows).toEqual({ 'specs:a.md': t14row('modified', t14file('edited\n'), 'hash') });
-      expect(o.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged', 'skip-worktree'] });
+      expect(o.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged', 'skip-worktree', ...t14hostFilterCaveat(h.home)] });
     }, 60000);
 
     it('row 36: assume-unchanged + rm is deleted {trust:hash}; an unedited assume-unchanged doc is no draft but keeps its caveat', () => {
@@ -2131,7 +2157,7 @@ describe('docs draft snapshot (docs W1a Task 14)', () => {
       expect(h.git(wt, 'status', '--porcelain', '--', 'docs')).toBe('');
       const o = t14phase({ served: head });
       expect(o.rows).toEqual({ 'specs:a.md': t14row('deleted', T14_ABSENT, 'hash') });
-      expect(o.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged'] });
+      expect(o.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged', ...t14hostFilterCaveat(h.home)] });
     }, 60000);
 
     it('row 35, tree half: a gitignored .md in a section is never listed; CONTROL: git calls it ignored', () => {
@@ -2540,7 +2566,7 @@ describe('docs draft snapshot guards (docs W1a Task 14, G8)', () => {
     t14fs.writeFileSync(t14path.join(wt, T14_S, `rlo-${String.fromCodePoint(0x202e)}.md`), 'edited\n');
     const o = t14phase({ served: head });
     expect(o.rows).toEqual({});
-    expect(o.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged'] });
+    expect(o.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged', ...t14hostFilterCaveat(h.home)] });
     expect(o.unlisted).toEqual({});
   }, 60000);
 
@@ -2556,7 +2582,7 @@ describe('docs draft snapshot guards (docs W1a Task 14, G8)', () => {
     h.git(wt, 'update-index', '--assume-unchanged', ...names);
     for (const rel of names.slice(0, 1000)) t14fs.writeFileSync(t14path.join(wt, rel), 'z\n');
     const ok = t14phase({ served: head });
-    expect(ok.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged'] });
+    expect(ok.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged', ...t14hostFilterCaveat(h.home)] });
     expect(Object.keys(ok.rows)).toHaveLength(1000);
     t14fs.writeFileSync(t14path.join(wt, names[1000]!), 'z\n');
     const over = t14phase({ served: head });
@@ -2682,7 +2708,7 @@ describe('docs draft snapshot guards (docs W1a Task 14, G8)', () => {
       'specs:b.md': t14row('modified', t14file('edited again, too\n')),
     });
     expect(Object.values(o.rows).filter((r) => r['trust'] === 'hash')).toEqual([]);
-    expect(o.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged', 'skip-worktree'] });
+    expect(o.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged', 'skip-worktree', ...t14hostFilterCaveat(h.home)] });
   }, 60000);
 
   it('opaque: a nested repo AT a section path is opaque as that section path (Decided item 13)', () => {
@@ -2774,7 +2800,7 @@ import {
   commitOn as t15commitOn, docsRepo as t15docsRepo, parseOneLine as t15parse,
   plantGitRecorder as t15recorder, runCcdDocs as t15runCcd,
 } from './ccdDocsHelpers.js';
-import { unitJson as t15unitJson } from './docsHelperPy.js';
+import { hostFilterCaveat as t15hostFilterCaveat, unitJson as t15unitJson } from './docsHelperPy.js';
 import {
   DOCS_MAX_ENTRIES as T15_MAX_ENTRIES, DOCS_MAX_LISTING_WIRE_BYTES as T15_MAX_WIRE_BYTES,
 } from '../../shared/docs.js';
@@ -2911,7 +2937,7 @@ describe('docs-tree end to end (docs W1a Task 15)', () => {
       ]);
       expect(t.drafts).toEqual({
         state: 'holder', branch: 'main', worktree: { path: real, head, class: 'main' },
-        baseEqual: true, base: null, caveats: [], opaque: [],
+        baseEqual: true, base: null, caveats: t15hostFilterCaveat(h.home), opaque: [],
       });
       // Committed rows in SECTIONS order, the draft-only row where a listing puts it; ws/a's drafts are not
       // main's, so none of them is here.
@@ -2939,7 +2965,7 @@ describe('docs-tree end to end (docs W1a Task 15)', () => {
       });
       expect(t.drafts).toEqual({
         state: 'holder', branch: 'ws/a', worktree: { path: t15fs.realpathSync(wt), head, class: 'workspace' },
-        baseEqual: true, base: null, caveats: [], opaque: [],
+        baseEqual: true, base: null, caveats: t15hostFilterCaveat(h.home), opaque: [],
       });
       expect(t15drafted(t)).toEqual({
         'specs:a.md': t15row('modified', T15_WT_A),
@@ -2966,7 +2992,7 @@ describe('docs-tree end to end (docs W1a Task 15)', () => {
       });
       expect(t.drafts).toEqual({
         state: 'holder', branch: 'ws/a', worktree: { path: t15fs.realpathSync(wt), head: local, class: 'workspace' },
-        baseEqual: false, base: { ahead: 0, behind: 1, count: 'measured' }, caveats: [], opaque: [],
+        baseEqual: false, base: { ahead: 0, behind: 1, count: 'measured' }, caveats: t15hostFilterCaveat(h.home), opaque: [],
       });
       // Facts only: the drafts are still reported; whether they overlay is entryView's call, not ccd's.
       expect(Object.keys(t15drafted(t))).toEqual(['specs:a.md', 'specs:new.md']);
