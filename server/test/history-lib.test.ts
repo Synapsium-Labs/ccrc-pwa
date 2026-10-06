@@ -27,6 +27,7 @@ import {
   parseJournalRecord, journalRecord,
 } from '../../ccd/history/lib.mjs';
 import * as libPlan from '../../ccd/history/lib.mjs';
+import * as libEpoch from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -897,5 +898,105 @@ describe('formOf and decideOpGate: the speed bumps, decided once (spec 8.4, C64 
   it('every reason the gate answers is a REFUSALS word', () => {
     const refusals = libPlan.REFUSALS as unknown as readonly string[];
     for (const r of ['bad-args', 'apply-in-session', 'needs-tty', 'irreversible-in-pane', 'history-off']) expect(refusals, r).toContain(r);
+  });
+});
+
+// ===========================================================================
+// Task 7: the epoch and family decisions, the ONE implementation the drain
+// and replay share (O56's decideEpochLine half), in-process on lib.mjs alone.
+// ===========================================================================
+describe('decideEpochLine: the drain and replay take one verdict per line (O56, spec 6.1)', () => {
+  const U1 = '11111111-1111-4111-8111-111111111111';
+  const U2 = '22222222-2222-4222-8222-222222222222';
+  const PANE = '33333333-3333-4333-8333-333333333333';
+  const absent: libEpoch.Presence<string> = { state: 'absent' };
+  const obs = (o: Partial<libEpoch.Observation> = {}): libEpoch.Observation => ({
+    v: 1, observedMs: 1_000, uuid: absent, generation: absent, project: absent, workdir: absent,
+    journaled: null, heldMatches: {}, ...o,
+  });
+  const uuidIs = (value: string): libEpoch.Presence<string> => ({ state: 'value', value });
+  it('a ccd start whose reg equals its sid confirms by reg, even with .uuid moved on before the rename (CT6)', () => {
+    expect(libEpoch.decideEpochLine({ src: 'startup', sid: U1, reg: U1 }, obs({ uuid: uuidIs(U2) }))).toEqual({ kind: 'confirm', by: 'reg' });
+    expect(libEpoch.decideEpochLine({ src: 'resume', sid: U1, reg: U1 }, obs())).toEqual({ kind: 'confirm', by: 'reg' });
+  });
+  it('a nested claude -p (reg is the pane uuid, .uuid is the pane uuid) stays a candidate', () => {
+    expect(libEpoch.decideEpochLine({ src: 'startup', sid: U1, reg: PANE }, obs({ uuid: uuidIs(PANE) }))).toEqual({ kind: 'candidate' });
+  });
+  it('a line without reg confirms by the observed .uuid, else by a held match, else waits', () => {
+    expect(libEpoch.decideEpochLine({ src: 'startup', sid: U1 }, obs({ uuid: uuidIs(U1) }))).toEqual({ kind: 'confirm', by: 'observed' });
+    expect(libEpoch.decideEpochLine({ src: 'resume', sid: U1 }, obs({ uuid: uuidIs(U2), heldMatches: { [U1]: 5_000 } }))).toEqual({ kind: 'confirm', by: 'held-match' });
+    expect(libEpoch.decideEpochLine({ src: 'startup', sid: U1 }, obs({ uuid: uuidIs(U2) }))).toEqual({ kind: 'candidate' });
+    expect(libEpoch.decideEpochLine({ src: 'startup', sid: U1 }, obs({ uuid: { state: 'unreadable' } }))).toEqual({ kind: 'candidate' });
+  });
+  it('a clear line always chains, confirmed by the observation or a held match, else unconfirmed', () => {
+    expect(libEpoch.decideEpochLine({ src: 'clear', sid: U2 }, obs({ uuid: uuidIs(U2) }))).toEqual({ kind: 'chain', confirmedBy: 'observed' });
+    expect(libEpoch.decideEpochLine({ src: 'clear', sid: U2 }, obs({ heldMatches: { [U2]: 5_000 } }))).toEqual({ kind: 'chain', confirmedBy: 'held-match' });
+    expect(libEpoch.decideEpochLine({ src: 'clear', sid: U2 }, obs({ uuid: uuidIs(U1) }))).toEqual({ kind: 'chain', confirmedBy: null });
+  });
+  it('a source outside the spool set throws rather than chains', () => {
+    expect(() => libEpoch.decideEpochLine({ src: 'fork' as 'startup', sid: U1 }, obs())).toThrow(TypeError);
+  });
+});
+
+describe('decideCandidate: later-tick confirmation inside the 7-day window (spec 6.1)', () => {
+  const U1 = '11111111-1111-4111-8111-111111111111';
+  const U2 = '22222222-2222-4222-8222-222222222222';
+  const WINDOW = libEpoch.EPOCH_CONFIRM_WINDOW_MS;
+  const at = (o: Partial<Parameters<typeof libEpoch.decideCandidate>[0]> = {}) => libEpoch.decideCandidate({
+    sid: U1, journaledMs: 1_000, nowMs: 1_000 + 60_000, currentUuid: { state: 'value', value: U1 }, supersededByLaterClearOfSameId: false, ...o,
+  });
+  it('the window is 7 days', () => { expect(WINDOW).toBe(7 * 24 * 3600 * 1000); });
+  it('.uuid naming the sid inside the window confirms later-tick, up to the window edge', () => {
+    expect(at()).toEqual({ kind: 'confirm', by: 'later-tick' });
+    expect(at({ nowMs: 1_000 + WINDOW })).toEqual({ kind: 'confirm', by: 'later-tick' });
+  });
+  it('another or an unreadable .uuid inside the window waits', () => {
+    expect(at({ currentUuid: { state: 'value', value: U2 } })).toEqual({ kind: 'wait' });
+    expect(at({ currentUuid: { state: 'unreadable' } })).toEqual({ kind: 'wait' });
+  });
+  it('past the window the candidate drops, superseded only when a later clear of the same id took .uuid', () => {
+    expect(at({ nowMs: 1_000 + WINDOW + 1 })).toEqual({ kind: 'drop', superseded: false });
+    expect(at({ nowMs: 1_000 + WINDOW + 1, currentUuid: { state: 'value', value: U2 }, supersededByLaterClearOfSameId: true })).toEqual({ kind: 'drop', superseded: true });
+  });
+});
+
+describe('joinGeneration, locationMatches and decideRekey (spec 6.1, DM19b, DM46, DM18b pure halves)', () => {
+  const G = '0189abcd-1234-4678-9abc-0123456789ab';
+  const G2 = '0189abcd-1234-4678-9abc-ba9876543210';
+  it("a line's own gen wins over the registry", () => {
+    expect(libEpoch.joinGeneration({ lineGen: G, observedGen: { state: 'value', value: G2 } })).toEqual({ generation: G, via: 'line' });
+  });
+  it("a gen-less line joins the registry's generation", () => {
+    expect(libEpoch.joinGeneration({ lineGen: null, observedGen: { state: 'value', value: G } })).toEqual({ generation: G, via: 'registry' });
+  });
+  it("an absent generation joins '' as absent", () => {
+    expect(libEpoch.joinGeneration({ lineGen: null, observedGen: { state: 'absent' } })).toEqual({ generation: '', via: 'absent' });
+  });
+  it("an unreadable or malformed generation joins '' as unreadable, never absent (IV5)", () => {
+    expect(libEpoch.joinGeneration({ lineGen: null, observedGen: { state: 'unreadable' } })).toEqual({ generation: '', via: 'unreadable' });
+    expect(libEpoch.joinGeneration({ lineGen: null, observedGen: { state: 'value', value: 'not-a-uuid' } })).toEqual({ generation: '', via: 'unreadable' });
+  });
+  it('realpaths decide the location rule when both resolved', () => {
+    const workdir: libEpoch.Presence<string> = { state: 'value', value: '/home/u/worktrees/p/quiet-basin' };
+    expect(libEpoch.locationMatches({ cwd: '/home/u/wt/quiet-basin', cwdReal: '/data/wt/quiet-basin', workdir, workdirReal: '/data/wt/quiet-basin' })).toBe(true);
+    expect(libEpoch.locationMatches({ cwd: '/home/u/worktrees/p/quiet-basin', cwdReal: '/data/a', workdir, workdirReal: '/data/b' })).toBe(false);
+  });
+  it('verbatim strings decide when either path no longer resolves; an absent or unreadable workdir never matches', () => {
+    const workdir: libEpoch.Presence<string> = { state: 'value', value: '/home/u/worktrees/p/quiet-basin' };
+    expect(libEpoch.locationMatches({ cwd: '/home/u/worktrees/p/quiet-basin', cwdReal: null, workdir, workdirReal: '/data/wt' })).toBe(true);
+    expect(libEpoch.locationMatches({ cwd: '/home/u/other', cwdReal: null, workdir, workdirReal: null })).toBe(false);
+    expect(libEpoch.locationMatches({ cwd: '/home/u/worktrees/p/quiet-basin', cwdReal: null, workdir: { state: 'absent' }, workdirReal: null })).toBe(false);
+    expect(libEpoch.locationMatches({ cwd: '/home/u/worktrees/p/quiet-basin', cwdReal: null, workdir: { state: 'unreadable' }, workdirReal: null })).toBe(false);
+    expect(libEpoch.locationMatches({ cwd: null, cwdReal: null, workdir, workdirReal: null })).toBe(false);
+    expect(libEpoch.locationMatches({ cwd: '', cwdReal: null, workdir: { state: 'value', value: '' }, workdirReal: null })).toBe(false);
+  });
+  it('an unreadable workdir never confirms, whatever realpaths the caller passes', () => {
+    expect(libEpoch.locationMatches({ cwd: '/home/u/wt/a', cwdReal: '/data/wt/a', workdir: { state: 'unreadable' }, workdirReal: '/data/wt/a' })).toBe(false);
+  });
+  it("a '' family merges into (id, G) only on a uuid it holds, and only for a uuid-shaped G", () => {
+    const held = new Set(['11111111-1111-4111-8111-111111111111']);
+    expect(libEpoch.decideRekey({ observedGeneration: G, uuid: '11111111-1111-4111-8111-111111111111', emptyFamilyUuids: held })).toBe('merge');
+    expect(libEpoch.decideRekey({ observedGeneration: G, uuid: '22222222-2222-4222-8222-222222222222', emptyFamilyUuids: held })).toBe('none');
+    expect(libEpoch.decideRekey({ observedGeneration: '', uuid: '11111111-1111-4111-8111-111111111111', emptyFamilyUuids: held })).toBe('none');
   });
 });

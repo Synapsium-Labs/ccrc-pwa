@@ -821,3 +821,86 @@ export function decideOpGate(form, env, isTTY, paneName) {
   if (env.historyOff && !f.binding) return refuseGate('history-off');
   return { ok: true };
 }
+
+// ===========================================================================
+// Epochs and families (spec §6.1, §9.2 step 1, §9.14 Holds). These are the
+// ONE implementation of the confirmation rules: the drain calls them, and
+// replay (B2) calls the same functions, so a recovered store decides exactly
+// as the live one did. None reads $REG. The registry facts arrive as the
+// observation the sweep wrote beside a draining file at its rename (§9.2).
+// ===========================================================================
+
+/** The generation a line joins (§6.1). A line's own `gen` wins. A gen-less
+ *  line of any kind joins the generation the observation read from
+ *  `$REG/<id>.generation`; only when the registry has none does it join the
+ *  legacy `''` family (`family_gen_absent`). A generation the observation
+ *  could not read, or read in a shape that is not a uuid, is UNREADABLE and
+ *  joins `''` too, counted apart (`family_gen_unreadable`), never folded into
+ *  absent (rev 3.2 review, IV5). D-4193
+ *  D-4192 */
+export function joinGeneration({ lineGen, observedGen }) {
+  if (typeof lineGen === 'string' && UUID_RE.test(lineGen)) return { generation: lineGen, via: 'line' };
+  if (observedGen.state === 'absent') return { generation: '', via: 'absent' };
+  if (observedGen.state === 'value' && UUID_RE.test(observedGen.value)) return { generation: observedGen.value, via: 'registry' };
+  return { generation: '', via: 'unreadable' };
+}
+
+/** What the drain does with one epoch line (§6.1, §9.2 step 1).
+ *  - startup/resume: confirmed on its own evidence first — its `reg` equals
+ *    its `sid` (CT6: ccd writes `.uuid` before it spawns, so every ccd start
+ *    carries it) — else the `.uuid` observed at the rename, else the first
+ *    match recorded while held; otherwise it waits as a candidate. A nested
+ *    `claude -p` books its own sid beside the pane's `reg`, so it never
+ *    confirms here.
+ *  - clear: chained at drain in line order, confirmed when the observation
+ *    or a held match names its sid, else chained UNCONFIRMED (out of every
+ *    scope until a later tick or the location rule confirms it, SE5).
+ *  D-4190 D-4189
+ *  D-4175 */
+export function decideEpochLine(line, obs) {
+  const observed = obs.uuid.state === 'value' && obs.uuid.value === line.sid;
+  const held = Object.hasOwn(obs.heldMatches, line.sid);
+  if (line.src === 'clear') {
+    return { kind: 'chain', confirmedBy: observed ? 'observed' : held ? 'held-match' : null };
+  }
+  if (line.src !== 'startup' && line.src !== 'resume') {
+    throw new TypeError(`decideEpochLine: src outside SPOOL_SOURCES: ${String(line.src)}`);
+  }
+  if (typeof line.reg === 'string' && line.reg === line.sid) return { kind: 'confirm', by: 'reg' };
+  if (observed) return { kind: 'confirm', by: 'observed' };
+  if (held) return { kind: 'confirm', by: 'held-match' };
+  return { kind: 'candidate' };
+}
+
+/** A waiting candidate at a later tick (§6.1): confirmed when `.uuid` names
+ *  its sid within `EPOCH_CONFIRM_WINDOW_MS` of the line's journaling, dropped
+ *  after it (`epoch_unconfirmed`, or `epoch_unconfirmed_superseded` when the
+ *  caller found the observed `.uuid` to be a later clear line's sid of the
+ *  same id, §14 risk 24). An unreadable `.uuid` neither confirms nor drops
+ *  early. D-4190 */
+export function decideCandidate({ sid, journaledMs, nowMs, currentUuid, supersededByLaterClearOfSameId }) {
+  if (nowMs - journaledMs > EPOCH_CONFIRM_WINDOW_MS) return { kind: 'drop', superseded: supersededByLaterClearOfSameId === true };
+  if (currentUuid.state === 'value' && currentUuid.value === sid) return { kind: 'confirm', by: 'later-tick' };
+  return { kind: 'wait' };
+}
+
+/** §6.1's location rule for a clear epoch `.uuid` no longer names (two quick
+ *  `/clear`s): its transcript's first uuid row's `cwd` against the observed
+ *  `.workdir`. Realpaths decide when both resolved; verbatim strings decide
+ *  when either no longer resolves. An absent or unreadable `.workdir`, or a
+ *  row with no `cwd`, never confirms. D-4189
+ *  D-4191 */
+export function locationMatches({ cwd, cwdReal, workdir, workdirReal }) {
+  if (workdir.state !== 'value' || typeof cwd !== 'string' || cwd === '') return false;
+  if (typeof cwdReal === 'string' && typeof workdirReal === 'string') return cwdReal === workdirReal;
+  return cwd === workdir.value;
+}
+
+/** Re-keying is a MERGE (§6.1, DI4): when a generation reads for an id whose
+ *  `''` family holds a confirmed uuid of the same row-life, that family merges
+ *  into (id, G). A generation is minted only on absence, so the shared uuid
+ *  proves one row-life. The executor (the drain) moves the epochs and keeps
+ *  `merged_into`; this only decides. D-4194 */
+export function decideRekey({ observedGeneration, uuid, emptyFamilyUuids }) {
+  return UUID_RE.test(observedGeneration) && emptyFamilyUuids.has(uuid) ? 'merge' : 'none';
+}

@@ -197,3 +197,23 @@ export function formOf(op: string, args: readonly string[]): string | null;
 export type OpGateReason = 'bad-args' | 'apply-in-session' | 'needs-tty' | 'irreversible-in-pane' | 'history-off';
 export function decideOpGate(form: string | null, env: { claudecode: boolean; historyOff: boolean }, isTTY: boolean, paneName: string | null):
   { ok: true } | { ok: false; rc: 2; reason: OpGateReason };
+
+// --- Task 7: epochs and families (spec §6.1, §9.2 step 1, §9.14 Holds)
+export interface Observation {
+  v: 1; observedMs: number;
+  uuid: Presence<string>; generation: Presence<string>; project: Presence<string>; workdir: Presence<string>;
+  journaled: null | { t: number; storeId: string; writer: string };
+  heldMatches: Record<string, number>;
+}
+export function joinGeneration(i: { lineGen: string | null; observedGen: Presence<string> }):
+  { generation: string; via: 'line' | 'registry' | 'absent' | 'unreadable' };
+export type EpochLineVerdict =
+  | { kind: 'confirm'; by: 'reg' | 'observed' | 'held-match' }
+  | { kind: 'candidate' }
+  | { kind: 'chain'; confirmedBy: 'observed' | 'held-match' | null };
+export function decideEpochLine(line: { src: 'startup' | 'resume' | 'clear'; sid: string; reg?: string }, obs: Observation): EpochLineVerdict;
+export function decideCandidate(i: {
+  sid: string; journaledMs: number; nowMs: number; currentUuid: Presence<string>; supersededByLaterClearOfSameId: boolean;
+}): { kind: 'confirm'; by: 'later-tick' } | { kind: 'wait' } | { kind: 'drop'; superseded: boolean };
+export function locationMatches(i: { cwd: string | null; cwdReal: string | null; workdir: Presence<string>; workdirReal: string | null }): boolean;
+export function decideRekey(i: { observedGeneration: string; uuid: string; emptyFamilyUuids: ReadonlySet<string> }): 'merge' | 'none';
