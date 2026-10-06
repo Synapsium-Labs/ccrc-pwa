@@ -500,6 +500,29 @@ describe('rung 5 on Darwin — a cwd under the worktree, asked of lsof', () => {
     } finally { s.stop(); }
   }, 90_000);
 
+  // THE LSOF IS BOUNDED (`WS_EXPIRE_LSOF_DEADLINE_S`, through `_plat_timeout`): the reap lock is held while it runs and a
+  // hung network mount can block it for ever. The stub is a real BINARY (a function stub cannot wedge — the bound execs
+  // its argv) that prints ccd's own pid and the stranger FIRST and then hangs, so a listing that is only cut short would
+  // still look complete: a timeout is unmeasured, never "nobody" and never a partial listing believed. The sleeper is
+  // finite (30 s) so that, with the bound removed, the case FAILS on its own elapsed-time assertion rather than hanging.
+  it('an lsof that outruns its bound is UNMEASURED — even one that already listed ccd and a process in the worktree', () => {
+    const { wt } = makeArchived(h);
+    const s = holdCwd(wt);
+    try {
+      const stub = path.join(h.home, 'slow-lsof');
+      fs.writeFileSync(stub, `#!/bin/sh\nprintf 'p%s\\nn%s\\np%s\\nn%s\\n' "$PID_OF_CCD" "$HOME" "${s.pid}" "${fs.realpathSync(wt)}"\nexec sleep 30\n`, { mode: 0o755 });
+      const pre = 'CCD_OS=darwin; command() { if [[ "$1" == -v && "$2" == lsof ]]; then return 1; fi; builtin command "$@"; };'
+        + ` export PID_OF_CCD=$$; WS_EXPIRE_LSOF_DEADLINE_S=1; CCD_TIMEOUT_KILL_AFTER=2; _ws_expire_lsof_fallback() { printf %s "${stub}"; };`;
+      const t0 = Date.now();
+      const r = expireEvalOf(h, { pre });
+      const took = Date.now() - t0;
+      expect(took, 'the bound cut it short (the stub sleeps 30 s)').toBeLessThan(15_000);
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.detail).toContain('did not finish within 1s');
+      expect(r.token).toBe('');
+    } finally { s.stop(); }
+  }, 40_000);
+
   it('an lsof that fails, prints nothing, or lists everybody but ccd is UNMEASURED', () => {
     makeArchived(h);
     for (const [what, pre] of [
