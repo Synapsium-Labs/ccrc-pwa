@@ -23,7 +23,7 @@ time.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | — | planned |
+| 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | — | run 295 planned for dispatch; run 260 overlap is handled by claims |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README | server (it serves the PWA) | — | planned; dispatched after wave 1 merges |
 
 ## Decisions & deviations
@@ -62,6 +62,15 @@ time.
   - The worker extracts one task brief at a time (subagent-driven development), so a task never needs the whole plan
     in context.
   - Revisit at wave-done if the wave's evidence says the chain outgrew one context.
+- **R5 (2026-10-06 11:39)**, run 260's shared claims do not block W1's start.
+  - PR #285 merged as `4e7cf095f`; all of its checks passed. Run 295 is open in `planned` state, and the programme's
+    deviation block is not allocated again.
+  - Run 260 still holds `shared/api.ts`, `server/src/coord/store.ts`, `server/src/watch.ts`,
+    `server/src/coord/routes.ts` and related tests for child-reclamation W5. The W1 plan names this exact overlap and
+    says it does not block the start: the worker takes the full all-or-nothing claim, reports the expected 409, and
+    works only uncontested paths until the coordinator sequences the shared paths after release.
+  - Preserve the seven-item wave. The child-reclamation coordinator was notified by mail 3674; no early release was
+    asked. Any same-sentence co-edit still stops for a coordinator ruling under the plan's overtaken-PR rule.
 
 ## Carried constraints (reviewers get these)
 
@@ -79,13 +88,15 @@ time.
 
 ## Next-wave brief
 
-- **Wave 1:** `docs/superpowers/plans/2026-10-05-stall-watch-settings-w1-server.md`, all seven tasks, on a fresh child
-  of `ccrc-pwa`.
-  - Read the plan by its commit sha on `main`.
-  - Dispatch only after the docs PR carrying the spec, both plans and this ledger is merged (the plan's
-    Preconditions 1 and 2).
-  - Before dispatch: re-read claims, re-measure the migration slot, and check the child-reclamation W5 overlap the
-    plan names.
+- **Wave 1:** run 295, `docs/superpowers/plans/2026-10-05-stall-watch-settings-w1-server.md`, all seven tasks,
+  on a fresh child of `ccrc-pwa`.
+  - Read the plan at merged commit `4e7cf095f` (plan blob `30994b7702d2b8627c2cf9e64bf5b66d94eb50c9`).
+  - The docs prerequisite is satisfied: PR #285 merged on 2026-10-06 11:33 UTC with every CI check green.
+  - Re-read claims at dispatch. Run 260's known overlap does not block the start: follow R5 and the plan's claim
+    precondition, work only uncontested paths after the expected all-or-nothing 409, and sequence the shared paths
+    when they release. A different holder gets the same treatment; do not split the seven-task wave.
+  - The migration count on `origin/main` at `b3b5a73ed` remains 16, so W1's planned migration is still slot 17;
+    re-measure it immediately before dispatch and again before merge.
   - Execution: `superpowers:subagent-driven-development` with `superpowers:test-driven-development`, with routing per
     R4.
 - **Wave 2:** `docs/superpowers/plans/2026-10-05-stall-watch-settings-w2-pwa.md`, dispatched after wave 1's PR is
