@@ -30,3 +30,17 @@ upstream: src/prompt-recall.ts
 commit: e05d8d3
 upstream-sha256: 8267a6480b02386789b8213fecdfbedd4fd47d39a0dae1083a4d0eda2a069c7b
 changed: IDENTIFIER_RE is PROMPT_RECALL_SENSITIVE_IDENTIFIER_PATTERN (:23-24) verbatim; SECRET_SHAPE_RES is PROMPT_RECALL_SENSITIVE_VALUE_PATTERN (:26-27) split into its arms, each made global for replacement, both the - and _ arms of sk|rk|pk kept, the PEM arm widened from the header line to the whole block, and a JWT shape added (not upstream)
+
+item: writer connection pragmas (V6)
+ours: ccd/history/store.mjs
+upstream: src/db/connection.ts
+commit: e05d8d3
+upstream-sha256: 0ea8572327226b8af35cdcc7924bed674cfa85ee11cd7e8f3ab2b0ecd2e02f15
+changed: upstream lines 51-61 and 111, as WRITER_PRAGMAS and closeWriter; journal_size_limit added; journal_mode set and then asserted at every open (store-not-wal) rather than set blind; no allowExtension handle is ever opened; auto_vacuum=INCREMENTAL is set once, at creation (createStore)
+
+item: read-only reader with query_only (V4)
+ours: ccd/history/store.mjs
+upstream: src/cli/database.ts
+commit: e05d8d3
+upstream-sha256: 968f1886124603ebe9af0a1e41b97e45488433ee620f6bd2db02a983de3484a9
+changed: upstream lines 24-25, as openReader; node:sqlite imported statically; a 0-byte or missing file is refused with a StoreError word instead of a CliError; busy_timeout set

@@ -1593,3 +1593,56 @@ export function retentionLowered(homeRetentionDays) {
   const home = entries.find(([, d]) => d === days)[0];
   return { home, days, othersMin: Math.min(...above) };
 }
+
+/** What each schema version added (§6.11, BK13): its tables, each with the
+ *  columns it added in declaration order, and whether its migration is heavy
+ *  (backfills or indexes a large table, so `planMigration` counts the copy
+ *  twice). v1 is the whole schema. A later version lists only what it adds —
+ *  migrations are additive only — and the CLI builds its named-column queries
+ *  for a store's own version from the union up to it. Spelled once, here;
+ *  history-store.test.ts holds it equal to the DDL store.mjs runs. */
+export const SCHEMA_ADDED = Object.freeze({
+  1: Object.freeze({
+    heavy: false,
+    tables: Object.freeze({
+      meta: Object.freeze(['k', 'v']),
+      sessions: Object.freeze(['session_pk', 'ccrc_id', 'generation', 'project', 'first_seen_ms', 'merged_into']),
+      epochs: Object.freeze(['session_pk', 'seq', 'cc_session_uuid', 'cause', 'declared_by', 'started_ms', 'cwd',
+        'git_branch', 'cwd_real', 'confirmed_ms']),
+      epoch_candidates: Object.freeze(['cc_session_uuid', 'ccrc_id', 'generation', 'cause', 'ts_ms', 'first_seen_ms']),
+      transcripts: Object.freeze(['transcript_pk', 'cc_session_uuid', 'harness', 'agent_id', 'parent_tool_use_id',
+        'workflow_run_id', 'agent_type']),
+      ingest_files: Object.freeze(['file_id', 'dev', 'ino', 'source_key', 'transcript_pk', 'size', 'mtime_ns',
+        'birth_ns', 'head_sha256', 'offset', 'tail_sha256', 'status', 'eof_ms', 'retry_attempts', 'next_attempt_ms',
+        'last_error_code', 'last_error_offset', 'parser_version']),
+      file_paths: Object.freeze(['path', 'file_id', 'last_seen_ms']),
+      blobs: Object.freeze(['blob_id', 'sha256', 'codec', 'z', 'raw_len', 'fts_indexed', 'pruned_ms', 'exported_ms',
+        'exported_seg']),
+      entries: Object.freeze(['entry_id', 'uuid', 'transcript_pk', 'type', 'subtype', 'role', 'model', 'parent_uuid',
+        'ts_ms', 'request_id', 'api_block_index', 'msg_id', 'source_tool_use_id', 'tool_name', 'is_compact_summary',
+        'provenance', 'prov_version', 'parse_state', 'struct_rank_ns', 'struct_file_id', 'exported_ms', 'exported_seg',
+        'blob_id']),
+      memberships: Object.freeze(['file_id', 'entry_id', 'line']),
+      entry_variants: Object.freeze(['entry_id', 'blob_id', 'first_file_id', 'first_seen_ms', 'cause']),
+      boundaries: Object.freeze(['entry_id', 'transcript_pk', 'ord', 'trigger', 'head_uuid', 'anchor_uuid', 'tail_uuid',
+        'kept_blob_id', 'pre_tokens', 'post_tokens', 'duration_ms']),
+      sidecars: Object.freeze(['transcript_pk', 'name', 'blob_id', 'entry_id', 'first_seen_ms']),
+      sidecar_seen: Object.freeze(['path', 'size', 'mtime_ns', 'blob_id']),
+      nodes: Object.freeze(['node_id', 'session_pk', 'epoch_seq', 'transcript_pk', 'kind', 'depth', 'status', 'gist',
+        'topics', 'summary_blob_id', 'boundary_entry_id', 'span_start_uuid', 'earliest_ms', 'latest_ms', 'src_chars',
+        'desc_count', 'desc_chars', 'directive_flag', 'capped', 'parser_version', 'created_ms']),
+      node_sources: Object.freeze(['node_id', 'entry_id', 'ord']),
+      node_children: Object.freeze(['node_id', 'child_id', 'ord']),
+      node_refs: Object.freeze(['node_id', 'kind', 'value', 'origin']),
+      redact_hashes: Object.freeze(['len', 'sha256', 'first_seen_ms']),
+      spool_receipts: Object.freeze(['event_key', 'payload_sha', 'received_ms', 'ts_ms', 'ts_source']),
+      ticks: Object.freeze(['tick_id', 'ts_ms', 'lag_ms', 'bytes', 'files_behind', 'bytes_behind']),
+      recall_calls: Object.freeze(['event_key', 'ccrc_id', 'generation', 'ts_ms', 'verb', 'rc', 'ms', 'arm']),
+      steer_receipts: Object.freeze(['event_key', 'ccrc_id', 'cc_session_uuid', 'leaf_id', 'ts_ms']),
+      derivation_state: Object.freeze(['step', 'version', 'cursor', 'completed_ms']),
+      breaker: Object.freeze(['key', 'consecutive_fail', 'open_until_ms']),
+      counters: Object.freeze(['name', 'n']),
+      journal_outbox: Object.freeze(['seq', 'rec']),
+    }),
+  }),
+});

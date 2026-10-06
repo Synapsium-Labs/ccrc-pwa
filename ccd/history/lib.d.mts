@@ -275,3 +275,6 @@ export function planExport(i: {
   blobs: readonly { key: string; referrers: readonly ExportCandidate[] }[]; reducer?: ExportReducer;
 }): { horizonDays: number; due: string[]; overdue: string[] };
 export function retentionLowered(homeRetentionDays: Readonly<Record<string, number>>): null | { home: string; days: number; othersMin: number };
+
+export interface SchemaVersionAdded { readonly heavy: boolean; readonly tables: Readonly<Record<string, readonly string[]>> }
+export const SCHEMA_ADDED: Readonly<Record<number, SchemaVersionAdded>>;
