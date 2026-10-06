@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5519cb61a34c862f8ec18c4d1fa7ab9863331b7e217da5ace103ea6e01984e71
+# ccrc:generated 1 sha256=c0beeeffa7519d704df5da7f364679b1e49b50ce03835a749cc8bf401cd3b7fd
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28890,6 +28890,13 @@ class Deadline(object):
     def bound(self, call_s):
         return min(call_s, self.left())
 
+    def shortened(self, reserve_s):
+        """A Deadline that ends reserve_s seconds before this one: a phase
+        that must leave its caller a tail it still has to spend."""
+        d = Deadline(0)
+        d.end = self.end - reserve_s
+        return d
+
 
 class GitRefused(ValueError):
     """A git argv outside the allowlist: a contract break inside the helper,
@@ -30771,6 +30778,10 @@ def _snapshot_once(repo, trusted, holder, served_commit, blobs, dl, call_s, stdo
     seen = {'assume-unchanged': False, 'skip-worktree': False, 'filters-bypassed': bypassed}
     try:
         for key, state in pending:
+            # The reads are python work no git bound holds, so the deadline is
+            # checked per path: a spent one degrades the phase (D-4164).
+            if dl.left() <= 0:
+                raise DraftUnreadable('status', 'timeout')
             if state == 'deleted':
                 rows[key] = _draft_deleted('status')
                 continue
@@ -30804,6 +30815,8 @@ def _snapshot_once(repo, trusted, holder, served_commit, blobs, dl, call_s, stdo
             seen['skip-worktree'] = seen['skip-worktree'] or skipped
             if path in by_path or mode in ('120000', '160000'):
                 continue
+            if dl.left() <= 0:
+                raise DraftUnreadable('ls-files', 'timeout')
             facts, blob = draft_facts(trusted, SECTIONS[placed[0]] + '/' + placed[1], spend, fmt)
             if facts['kind'] == 'absent':
                 # Skip-worktree and absent is a sparse checkout: no draft.
@@ -30916,6 +30929,10 @@ import stat
 TREE_SECTION_ORDER = dict((slug, i) for i, slug in enumerate(SECTIONS))
 # The HEAD git prints in a worktree record whose branch is unborn.
 TREE_UNBORN_HEADS = frozenset(('0' * 40, '0' * 64))
+# The seconds of the helper deadline the draft phase may not spend: the tail
+# that tree_main_checkout's fallback (tree_head_of_m's two ref reads in M)
+# still runs on when the phase's own `worktree list` gave no record (D-4164).
+TREE_TAIL_RESERVE_S = 2
 
 
 def tree_short_branch(refname):
@@ -31048,9 +31065,19 @@ def verb_tree(ctx, a):
     repo = discover(ctx, a.project, dl)
     ref = resolve(repo, a.ref, dl)
     sections, entries, unlisted, blobs = list_committed(repo, ref['commit'], dl)
-    ph = draft_phase(ctx, repo, ref['name'], ref, blobs, dl)
-    main_checkout = tree_main_checkout(repo, ph.main, dl)
+    # The committed side's own reads come BEFORE the draft phase, or on a
+    # tail it cannot spend, so a phase that runs out of time degrades the
+    # drafts and never fails the tree (D-4164): origin_url here, and the
+    # mainCheckout fallback on the TREE_TAIL_RESERVE_S the phase leaves.
     url = origin_url(repo, dl)
+    if len(entries) > DOCS_MAX_ENTRIES:
+        # too-many-entries either way (guard_listing answers it from this
+        # body), so no draft-phase or mainCheckout call is spent on drafts
+        # that will never be listed. drafts and mainCheckout never leave.
+        return {'project': a.project, 'sections': sections, 'entries': entries,
+                'mainCheckout': None, 'drafts': None}
+    ph = draft_phase(ctx, repo, ref['name'], ref, blobs, dl.shortened(TREE_TAIL_RESERVE_S))
+    main_checkout = tree_main_checkout(repo, ph.main, dl)
     return {'project': a.project,
             'repo': {'key': repo.key, 'objectFormat': repo.object_format, 'shallow': repo.shallow},
             'github': github_of(url),

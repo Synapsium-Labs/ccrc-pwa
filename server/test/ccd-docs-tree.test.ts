@@ -3331,3 +3331,107 @@ describe('docs-tree end to end: the guards of "Decided here" (docs W1a Task 15)'
     expect(t.freshness.stamp).toMatchObject({ lastOutcome: 'ok', okCommit });
   });
 });
+
+// ---- docs W1 final review (contract F1, security SEC-2; D-4164): the draft phase is held to the deadline ----
+// §2 (d): "The draft phase degrades; it never fails the tree." Each unit runs the SHIPPED verb through the helper's
+// own `run` with `H.SYS` swapped for a `Sys` whose clock jumps forward after one named git call, so the deadline is
+// spent exactly where the case says, with no sleep. Each goes red when the guard its title quotes is reverted.
+describe('docs-tree: a spent deadline degrades the drafts, never the tree (D-4164)', () => {
+  /** `H.run(['docs-tree', ..., '--project', 'demo'])` under `pre` (a `Sys` swap), as its parsed line. */
+  const d4164Tree = (pre: string[]): T15Answer => t15unitJson<T15Answer>(h.home, [
+    'import json',
+    'import os',
+    ...pre,
+    "HOME = os.environ['HOME']",
+    "argv = ['docs-tree', os.path.join(HOME, 'projects'), os.path.join(HOME, 'worktrees'),",
+    "        os.path.join(HOME, '.cc-sessions'), '--project', 'demo']",
+    "out(json.loads(H.run(argv).decode('utf-8')))",
+  ].join('\n'));
+  /** A `Sys` whose clock jumps `after` seconds forward once a git call holding the token `token` returns. With
+   *  `spend`, a call holding `spend` runs nothing and consumes its whole bound, as a hung call killed at it does. */
+  const d4164Clock = (token: string, after: number, spend: string | null = null): string[] => [
+    'class Clock(H.Sys):',
+    '    skew = 0.0',
+    '    def monotonic(self):',
+    '        return H.Sys.monotonic(self) + self.skew',
+    '    def spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin=None):',
+    `        if ${spend === null ? 'None' : JSON.stringify(spend)} in argv:`,
+    '            self.skew += timeout_s',
+    "            return H.Spawned(None, b'', b'', True, False)",
+    '        r = H.Sys.spawn(self, argv, env, cwd, timeout_s, stdout_cap, stdin)',
+    `        if ${JSON.stringify(token)} in argv:`,
+    `            self.skew += ${after}`,
+    '        return r',
+    'H.SYS = Clock()',
+  ];
+  const ENTRIES = ['specs:a.md', 'specs:b.md', 'plans:p.md'];
+
+  it('`url = origin_url(repo, dl)` runs before the draft phase: a deadline spent after status answers ok, drafts unreadable', () => {
+    const main = t15docsRepo(h, 'demo', T15_FILES);
+    const t = d4164Tree(d4164Clock('status', 30));
+    expect(t, JSON.stringify(t)).toMatchObject({
+      ok: true, drafts: { state: 'unreadable', branch: 'main', step: 'ls-files', detail: 'timeout' },
+      freshness: { remote: 'origin', trackedRef: 'refs/remotes/origin/main' },
+    });
+    expect(t.entries.map(t15key)).toEqual(ENTRIES);
+    expect(t.mainCheckout).toEqual({ path: t15fs.realpathSync(main), branch: 'main', head: h.git(main, 'rev-parse', 'HEAD') });
+  });
+
+  it('`raise DraftUnreadable(\'status\', \'timeout\')`: the status-listed reads stop at a spent deadline', () => {
+    const main = t15docsRepo(h, 'demo', T15_FILES);
+    t15write(main, `${T15_SPECS}/a.md`, '# A, edited on main\n');
+    const t = d4164Tree(d4164Clock('ls-files', 30));
+    expect(t, JSON.stringify(t)).toMatchObject({
+      ok: true, drafts: { state: 'unreadable', branch: 'main', step: 'status', detail: 'timeout' },
+    });
+    expect(t.entries.map(t15key)).toEqual(ENTRIES);
+    expect(t15drafted(t)).toEqual({});
+  });
+
+  it('`raise DraftUnreadable(\'ls-files\', \'timeout\')`: the lie-mode reads stop at a spent deadline', () => {
+    const main = t15docsRepo(h, 'demo', T15_FILES);
+    h.git(main, 'update-index', '--assume-unchanged', `${T15_SPECS}/a.md`);
+    t15write(main, `${T15_SPECS}/a.md`, '# A, hidden from status\n');
+    // CONTROL: status does not list it, so only the lie-mode loop reaches it.
+    expect(h.git(main, 'status', '--porcelain')).toBe('');
+    const t = d4164Tree(d4164Clock('ls-files', 30));
+    expect(t, JSON.stringify(t)).toMatchObject({
+      ok: true, drafts: { state: 'unreadable', branch: 'main', step: 'ls-files', detail: 'timeout' },
+    });
+    expect(t.entries.map(t15key)).toEqual(ENTRIES);
+  });
+
+  it('`dl.shortened(TREE_TAIL_RESERVE_S)`: a worktree list that spends the phase leaves mainCheckout\'s fallback its tail', () => {
+    const main = t15docsRepo(h, 'demo', T15_FILES);
+    // ls-tree takes 5 s of the 12, then `worktree list` runs to its whole bound and is killed.
+    const t = d4164Tree(d4164Clock('ls-tree', 5, 'worktree'));
+    expect(t, JSON.stringify(t)).toMatchObject({
+      ok: true, drafts: { state: 'unreadable', branch: 'main', worktree: null, step: 'worktree-list', detail: 'timeout' },
+    });
+    expect(t.entries.map(t15key)).toEqual(ENTRIES);
+    expect(t.mainCheckout).toEqual({ path: t15fs.realpathSync(main), branch: 'main', head: h.git(main, 'rev-parse', 'HEAD') });
+  });
+
+  it('`if len(entries) > DOCS_MAX_ENTRIES`: a listing over the cap answers too-many-entries with zero draft-phase calls (ctl: 5000)', () => {
+    const main = h.makeRepo('demo');
+    const blob = blobT10(h, main, 'x\n');
+    const rows = (n: number): RowT10[] => Array.from({ length: n }, (_v, i) => ['100644', blob, `${T15_SPECS}/f${i}.md`] as const);
+    const subsOf = (calls: { argv: string[] }[]): string[] => calls.map((c) => t15sub(c.argv).slice(0, 2).join(' '));
+    const DRAFT_SUBS = ['worktree list', 'status --porcelain=v2', 'ls-files -z'];
+
+    h.git(main, 'update-ref', 'refs/remotes/origin/main', commitRowsT10(h, main, rows(5001)));
+    const rec = t15recorder(h.home);
+    const over = t15tree();
+    expect(over).toMatchObject({ v: 1, verb: 'docs-tree', ok: false, failure: 'too-many-entries', count: 5001 });
+    expect(over).not.toHaveProperty('entries');
+    expect(subsOf(rec.calls()).filter((s) => DRAFT_SUBS.includes(s))).toEqual([]);
+    expect(subsOf(rec.calls())).toContain('ls-tree -r');
+
+    // CONTROL: at the cap the same verb runs the draft phase, so the recorder does see those calls.
+    h.git(main, 'update-ref', 'refs/remotes/origin/main', commitRowsT10(h, main, rows(5000)));
+    rec.reset();
+    const at = t15tree();
+    expect(at.ok, JSON.stringify(at).slice(0, 300)).toBe(true);
+    expect(subsOf(rec.calls())).toContain('worktree list');
+  }, 120000);
+});
