@@ -33,7 +33,7 @@ numbers; the spec wave each one implements is named beside it.
 | 9 | — (stable readiness) | this programme's 12 macOS reds (harness, the Linux-only control, the escapee, the rsync recorder, the Darwin missing-deps block), tmux names sanitised at creation (M8, live), structural containment of the ccrc builders (R10d, R9-F8), doctor's auth reader models the unit's feeder (R10a, R10e), `ccrc backup`'s prune takes the lock (R10g), a prose batch | fleet-first | — | **MERGED** `00f8a193` (PR #251, 2026-10-05 11:10:12 UTC, run 223 done; released as v0.0.84 at 11:11:17). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `0491a823` onto `main` at `b5593725`. That `main` differs from the one CI tested (`4100ae1c9`) only by #252's one plan file, which touches none of this wave's files. Every Linux leg was green, and the macOS acceptance was met. Scoped review 269 met neither class of the round-2 bar; its four minors are residue R14(g–j). It reaches neither box until the operator acks the failed v0.0.78 fleet row. Was: **Fix round 2 done** 2026-10-05 at `0491a823` (mail 3491; one commit on `670d25fd`, 4 files; reserve number 3833 spent, defined in the plan on the worker branch; `main` not merged, `git merge-tree` onto `4100ae1c9` clean). Every Linux leg of CI run 37290717097 is green, and the macOS acceptance is met on its `test-macos` legs. Scoped review run 269 dispatched 10:28 UTC to `ccrc-pwa-swift-prairie` once the work volume read 10.48 GB, under the round-2 bar in the rulings; after it, #251 merges. Was: **Fix round 2 (the last) sent** 2026-10-05 08:50 UTC (mail 3490, `rulings-run223-fix2.md`) on scoped review 266 at `670d25fd`: F1, the Darwin NUL test missing a NUL under a UTF-8 locale, is round 1's scoped class 2, so it goes back, with reserve number 3833 for the Darwin arm's C-locale pin (bare: its definition goes on the worker branch); a scoped review follows under the bar in the rulings, then #251 merges. Was: **Fix round 1 done** 2026-10-05 at `670d25fd` (mail 3485; one commit on `f74f5e90`, 7 files; reserve number 3832 spent, defined in the plan on the worker branch; `main` not merged, `git merge-tree` onto `4100ae1c9` clean). Scoped review run 266 dispatched 07:47 UTC to `ccrc-pwa-plain-prairie`, under the bar in the rulings; after it, #251 merges. Was: **Fix round 1 sent** 2026-10-05 (mail 3480, `rulings-run223-fix1.md`) on review 265 at `f74f5e90`: F1, a Darwin false ARMED on a NUL byte, is the bar's class 2, so the bar gives the one round, with reserve number 3832 for it (bare: its definition goes on the worker branch); a scoped review follows under the bar committed in the rulings, then #251 merges. Was: **Wave-done** 2026-10-05 05:51 UTC (mail 3473) at `f74f5e90` (PR #251, 7/7 items; reserve number 3831 spent, defined in the plan on the worker branch). The held-out review follows, under the bar committed before it. Was: **DISPATCHED** 2026-10-04 12:46 UTC to `ccrc-pwa-amber-harbor` (run 223), the brief brought up to date with `main` `59a435f0`. Was: **PLANNED** 2026-10-02 14:20 UTC; plan `e52f9859` (23 departures defined in it; a five-number reserve named in the brief). Its merge reaches both boxes by auto within about 35 min. The stable gate also needs the GPT lane's 45 macOS reds fixed by that programme. |
 | 10 | — (R12, script half) | `deploy/verify-service.sh` tells a deliberate supervisor stop (settled `inactive` + `.stopped` stamp or a purged row) from a crash, so a serial sweep verify stops failing healthy updates; tests on fixture HOMEs; a cross-version case against `main`'s sweep | fleet-first (the move INTO it runs the old sweep with the new script) | — | **MERGED** `a6daa9cf` (PR #247, 2026-10-05 03:19:04 UTC, run 261 done; released as v0.0.80 at 03:19:51). The merged tree is byte-identical to the tested tip, `main` was unmoved at `b40f4145`, and every Linux leg is green. Review 263 met no bar class; residue R13. It reaches neither box until the operator acks the failed v0.0.78 fleet row. The first move after the ack goes straight to the newest release, so it runs v0.0.78's sweep with this script. Was: **Wave-done** 2026-10-05 02:18 UTC (mail 3446) at `a9a1cef8` (PR #247, 3/3 items; reserve number 3950 spent, defined in the plan on the worker branch). Review run 263 was dispatched to `ccrc-pwa-clear-meadow` at 02:42:59 UTC, under the bar committed before it. Was: **DISPATCHED** 2026-10-05 00:05 UTC to `ccrc-pwa-keen-harbor` (run 261). Was: **PLANNED** 2026-10-04 23:59 UTC (run 261); plan `e60d7174` (D-3946..D-3949 defined; a five-number reserve, numbers 3950 to 3954, named in the brief). Was: **SCOPED** 22:56 UTC (`wf_790a5b99-8ca`); runs beside wave 9, no shared file. |
 | 11 | — (R12, sweep half) | `_upd_sweep`: one shared verify window by concurrent per-unit calls, the die's report-ownership guard and wording, no die in a subshell, the Darwin arm | fleet-first | — | **MERGED** `d2bac7ae` (PR #287, run 270 done) 2026-10-06 02:37 UTC, released as v0.0.92 (dev). The merged tree is byte-identical to the tested tip `33f4eaaa` (`main` unmoved at `d12b5aba`, every Linux leg green). Review 281 met none of the bar's eight classes; its four findings and D3's macOS red go to R19, before stable. Was: **IN REVIEW** 2026-10-06 01:29 UTC: wave-done at `33f4eaaa`, PR #287, `main` `d12b5aba` merged in as `9b3ba1fa`; reserve numbers 3987 and 3988 spent (bare: their definitions are on the worker branch); the bar is committed in the 01:29 entry; review run 281 dispatched 01:32 UTC to `ccrc-pwa-amber-cove` (the held-out panel plus five wave lenses). Was: **DISPATCHED** 2026-10-05 16:04 UTC to `ccrc-pwa-clear-meadow` (run 270). Plan `966ffe9f`, 9 tasks; it defines D-3972 to D-3984, and the five-number reserve, numbers 3987 to 3991, is named in the brief. Was: **Run 270 open, planned** 2026-10-05 11:10 UTC, opened before run 223 closed so the programme keeps an open run; to plan, with R13, R14 and R14(f) first. Was: **SCOPED** 2026-10-04 22:56 UTC; after wave 9 merges (`ccd/ccrc`). The 10-02 wave-10 deferrals move to wave 12. |
-| 12 | — (wave 11's test and prose residue) | before stable: R19 (D3's GNU-only shim, F1's unpinnable filter, F2's W20 prose, F3's NEW+S10 pin, F4's S0 naming); R18(c)–(e) prose. No shipped runtime code changes | none (tests and docs) | — | **DISPATCHED** 2026-10-06 04:37 UTC to `ccrc-pwa-soft-delta` (run 282; 5 items; route Opus·high / Sonnet / workflow off / compact 40). Was: **Run 282 open, planned** 2026-10-06 02:38 UTC, opened before run 270 closed. Deviation block 4068 to 4087 (bare until defined). Scoped 02:45 UTC; plan `04c977cb` + `bc495fed` (drafted by workflow `wf_a11d694f-c70`: prototype, attack, revise; readings ruled 04:35). 5 tasks; it defines D-4068 to D-4071, and the reserve is numbers 4072 to 4076 (Reading 8's ruling spends 4072). |
+| 12 | — (wave 11's test and prose residue) | before stable: R19 (D3's GNU-only shim, F1's unpinnable filter, F2's W20 prose, F3's NEW+S10 pin, F4's S0 naming); R18(c)–(e) prose. No shipped runtime code changes | none (tests and docs) | — | **IN REVIEW** 2026-10-06 05:57 UTC: wave-done at `7b0a5454`, PR #291; reserve number 4072 spent (bare: defined on the worker branch); the bar is in the 05:57 entry. Was: **DISPATCHED** 2026-10-06 04:37 UTC to `ccrc-pwa-soft-delta` (run 282; 5 items; route Opus·high / Sonnet / workflow off / compact 40). Was: **Run 282 open, planned** 2026-10-06 02:38 UTC, opened before run 270 closed. Deviation block 4068 to 4087 (bare until defined). Scoped 02:45 UTC; plan `04c977cb` + `bc495fed` (drafted by workflow `wf_a11d694f-c70`: prototype, attack, revise; readings ruled 04:35). 5 tasks; it defines D-4068 to D-4071, and the reserve is numbers 4072 to 4076 (Reading 8's ruling spends 4072). |
 | 13 | — (residue) | item 3's false "is FAILED" sweep warning, R17, R18(a)–(b), R2, R3, R4-1/3, R8a–h, R9-R1, R10c/f/i/j/k, R14(a–e), `--no-reload` for `_svc_enable`, ccd/ccd harness containment, the dotted-id reverse maps; from wave 12's plan: a unit `activating` before the restart (restarted, then neither verified nor warned), the pgid filter's untestable exception, T6-INT-W, and `_upd_sweep_stop`'s shipped "(a stale pid is never signalled)" comment | to plan | — | scoped 2026-10-06 02:45 UTC; opened after wave 12 |
 | — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
 
@@ -1975,6 +1975,52 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - **Reading 9:** to wave 13.
     - **Reading 12:** `ccrc-doctor`'s non-auth parts go to CI's selection.
     - **One addition:** Q10, review 281's tenth S10 shape (crash-shaped, `failed`, purged).
+
+- **2026-10-06 05:57 UTC: wave 12's wave-done (mail 3637), re-measured, and the bar committed BEFORE its review.**
+  - **Evidence:** copied on receipt into the coordinator's worktree under `.superpowers/w12-evidence/` (gitignored).
+    That covers the mail, the task briefs and reports, the review diffs and the gate log.
+  - **The claim:** PR #291 at `7b0a5454`, re-measured.
+    - It is open, not draft and mergeable. Its head equals the fingerprint and the local tip.
+    - It has 8 commits, each with the noreply author and committer, and changes 8 files (+1664/−36), exactly File
+      structure's. There is no merge.
+    - `main` moved by docs only (`0dad0fdf`, `21f536a5`), touching none of the branch's files. `merge-tree` is clean.
+  - **What the worker reports:**
+    - `suite: unrun`: no whole server suite ran locally. Every gate file was green, including `ccrc-update`
+      (20 + 169 + 313 = 502, equal to `vitest list`) and doctor's auth part.
+    - **Every mutation row matched its expected set.** The rows:
+      - W17e reds only under the filter's mutant.
+      - Every Q case proves S10 by digest.
+      - The re-raise pin (reserve number 4072): 8 of 8 green with no mutation, and 5 of 5 red when the re-raise is
+        dropped.
+      - The wave-11 rows re-measured with the same sets as that worker's.
+      - T7-1's isolated mutant, measured for the first time, reds D1 only.
+    - The D-number check prints nothing.
+    - README went from 5732 to 5735 lines.
+  - **CI at 05:57:** full run 37420910246 and PR run 37420844106 were in progress.
+    - The PR's `probe-macos` was red on D-2661's FIFO-EOF case. That case belongs to account-connections wave 1, and
+      its plan already logs it as OPEN and intermittent. It is the second red in three recent macOS runs, and it
+      gates nothing here.
+    - `main`'s daily run at `d2bac7ae` was red on macOS through D3, which this wave fixes, and landing-order's
+      merge-deny cases.
+  - **Bar for the merge.** The held-out review (clause 14) must find NO confirmed finding of these classes:
+    1. a change to shipped runtime code: anything under `ccd/`, `deploy/`, `server/src`, `agent/src`, `pwa/` or
+       `shared/`, or a unit;
+    2. a new or changed pin that cannot red when its guard is mutated, or that passes on the pairing or shape it
+       claims to guard. That covers W17e, Q0–Q10 and the re-raise pin;
+    3. a test that reads or writes outside its fixture HOME, or a real tool that can run;
+    4. S10 not byte-identical to v0.0.91's `deploy/verify-service.sh`, or any edit to the S0 or OLD-sweep fixtures;
+    5. README or the amended wave-11 plan stating something false about shipped behaviour or measured red sets. That
+       includes an amendment with no dated marker, and a red set recorded as the wave-11 worker's that is not in its
+       wave-done;
+    6. a case this branch adds or changes going red on macOS on correct code. D3 must be skipped there, and D3d must
+       pass;
+    7. a wrong deviation number: anything defined beyond D-4068 to D-4071 and reserve number 4072, or 4073 to 4087
+       written with the prefix.
+
+    Also, every Linux leg of full run 37420910246 must be green. On the macOS legs, every red must be named and owned,
+    and none may be this branch's.
+  - **The rounds:** as for wave 11. One bar-class finding gets one fix round, then a scoped review. A coverage or prose
+    finding is fixed in that round if one runs, otherwise it becomes residue for wave 13.
 
 ## Carried constraints
 
