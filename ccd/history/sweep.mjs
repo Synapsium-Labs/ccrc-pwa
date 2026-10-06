@@ -25,13 +25,15 @@
 // allow-list single-definition.test.ts pins; tests reach every fault through a
 // test-only preload, never a variable this file reads (§10.1 "Seams").
 import fs, {
-  closeSync, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync,
-  realpathSync, statSync, unlinkSync, writeSync,
+  chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync,
+  readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
+import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   CARRIER_KILL_S, EXIT, SCHEMA_ADDED, SCHEMA_VERSION, STATFS_DEADLINE_MS, capOf, decideStoreOpen, floorThreshold,
-  UUID_RE, WRITER_RE, historyPaths, journalRecord, passOutcome, planMigration, planRun, readBoxEnvValue,
+  UUID_RE, WRITER_RE, drainingNameOk, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
+  passOutcome, planMigration, planRun, readBoxEnvValue, sha256Bytes, splitSpoolText,
 } from './lib.mjs';
 import {
   StoreError, bump, closeWriter, createStore, dropPending, finishPending, getMeta, measureStoreFacts, openReader,
@@ -265,6 +267,412 @@ export function countOutside(db, name) {
   try { withTx(db, 'NORMAL', () => bump(db, name)); } catch { /* recounted on the next tick that meets it */ }
 }
 
+// ── The spool drain, two-phase (spec §9.2 step 1, §9.14 "The order of writes") ──────────────────────────────
+//
+// At tick N each spool/<id>.jsonl is renamed to spool/.draining/<id>.<tickMs>.<pid>.jsonl (so a name is never reused)
+// and observed. It is read at tick N+1. A hook that opened the old inode just before the rename still lands its line.
+// Every per-file step below follows §9.14's order:
+//   1. the observation sidecar;
+//   2. the `file` and `spool` records, one write, fsynced, then the sidecar's journaled mark;
+//   3. the drain transaction under synchronous=FULL, holding its verdicts and one `drained` outbox row;
+//   4. the verdict append, fsynced;
+//   5. the unlink of the file and its sidecar;
+//   6. the outbox delete.
+// So a drained file's lines and the verdicts taken from them are both in the fsynced journal before the file goes.
+
+/** Registry values ccd writes are a few dozen bytes; anything larger was not written by ccd. */
+const REG_VALUE_MAX = 4096;
+/** A sidecar is one observation plus the first-match times of its held lines. */
+const SIDECAR_MAX = 64 * 1024;
+/** The absent and unreadable Presences. `ABSENT` is this Presence object; Task 22's set of absent-file error codes
+ *  is a different value under its own name, `ABSENT_CODES`, so the module never declares `ABSENT` twice. */
+const ABSENT = Object.freeze({ state: 'absent' });
+const UNREADABLE = Object.freeze({ state: 'unreadable' });
+const DRAINING_RE = /^(.+)\.([0-9]+)\.([0-9]+)\.jsonl$/;
+
+/** `<id>.<tickMs>.<pid>.jsonl`. At SPOOL_ID_MAX (224) with a 7-digit pid, it is 252 bytes, within lib's
+ *  DRAINING_NAME_MAX (253, D-4303); its sidecar is 250 and the sidecar's temp 254, under the 255-byte NAME_MAX (§5.1). */
+export function drainingName(id, tickMs, pid) { return `${id}.${tickMs}.${pid}.jsonl`; }
+
+/** The id is everything before the last three dot-components, so `a.b.c` drains under `a.b.c`. Anything not of
+ *  this shape is not a draining file. The grammar is lib's `drainingNameOk` (an id passing idOk, a tick of at most
+ *  16 digits, a pid of at most 10, DRAINING_NAME_MAX = 253 bytes in all, D-4303), the one the journal's `file` and `drained` records are checked
+ *  against: a name it refuses is never listed, journaled or drained, so it can never make journalRecord throw
+ *  mid-tick. DRAINING_RE only splits a name that grammar already admitted. */
+export function parseDrainingName(name) {
+  if (!drainingNameOk(name)) return null;
+  const m = DRAINING_RE.exec(name);
+  return { id: m[1], tickMs: Number(m[2]), pid: Number(m[3]) };
+}
+
+export function idOfDrainingName(name) {
+  const p = parseDrainingName(name);
+  return p === null ? null : p.id;
+}
+
+/** `.jsonl` replaced by `.obs`, not appended to it: `<file>.obs` would not fit 255 bytes at SPOOL_ID_MAX. */
+export function sidecarName(name) { return `${name.slice(0, -'.jsonl'.length)}.obs`; }
+
+/** Read a small regular file, with its type checked BEFORE the open. This is the `_reg_read` lesson
+ *  (ccd/ccd:3238-3246): a FIFO with no writer blocks in open(2) forever, and a link to /dev/zero blocks in read(2).
+ *  Absent and unreadable are two answers, never folded together (rev 3.2 review, IV5). */
+function readSmall(path, max) {
+  let st;
+  try { st = statSync(path); } catch (e) { return e && e.code === 'ENOENT' ? ABSENT : UNREADABLE; }
+  if (!st.isFile() || st.size > max) return UNREADABLE;
+  try {
+    return { state: 'value', value: readFileSync(path, 'utf8') };
+  } catch (e) {
+    return e && e.code === 'ENOENT' ? ABSENT : UNREADABLE;
+  }
+}
+
+/** One registry field as a Presence. The value is trimmed: ccd writes `printf '%s'`, and the hook's `_ct_read`
+ *  trims whitespace the same way. */
+export function readRegPresence(path) {
+  const p = readSmall(path, REG_VALUE_MAX);
+  return p.state === 'value' ? { state: 'value', value: p.value.trim() } : p;
+}
+
+/** The four facts a drain decides from: `$REG/<id>.uuid`, `.generation`, `.project` and `.workdir`. */
+export function readObservation(home, id, nowMs) {
+  const reg = historyPaths(home).reg;
+  return {
+    observedMs: nowMs,
+    uuid: readRegPresence(`${reg}/${id}.uuid`),
+    generation: readRegPresence(`${reg}/${id}.generation`),
+    project: readRegPresence(`${reg}/${id}.project`),
+    workdir: readRegPresence(`${reg}/${id}.workdir`),
+  };
+}
+
+function readSidecar(path) {
+  const p = readSmall(path, SIDECAR_MAX);
+  if (p.state !== 'value') return null;
+  let o;
+  try { o = JSON.parse(p.value); } catch { return null; }
+  return o !== null && typeof o === 'object' && o.v === 1 && typeof o.observedMs === 'number' ? o : null;
+}
+
+/** Temp, fsync, rename, fsync the directory. The temp is `<sidecar>.tmp` (254 bytes at the bound), so no longer
+ *  suffix fits. One lock holder at a time, so one temp name is enough. */
+function writeSidecar(path, obs) {
+  const tmp = `${path}.tmp`;
+  const fd = openSync(tmp, 'w', 0o600);
+  try {
+    const buf = Buffer.from(JSON.stringify(obs), 'utf8');
+    if (writeSync(fd, buf) !== buf.length) throw new Error('sidecar: short write');
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tmp, path);
+  fsyncDir(dirname(path));
+}
+
+/** The file's observation (slugs history-journal-observation-sidecar, D-4231; history-observe-at-rename, D-4232). The registry is
+ *  read right after the rename and kept beside the file. Every decision the drain later takes uses this earliest
+ *  observation, never the registry as it is then. An existing sidecar is reused, never re-read: a re-journal after a
+ *  crash decides from the same facts. A sidecar that does not parse is observed again. */
+export function observe(home, name, nowMs) {
+  const side = `${historyPaths(home).draining}/${sidecarName(name)}`;
+  const had = readSidecar(side);
+  if (had !== null) return had;
+  const obs = {
+    v: 1, ...readObservation(home, idOfDrainingName(name), nowMs),
+    late: null, journalT: null, journaled: null, heldMatches: {},
+  };
+  writeSidecar(side, obs);
+  return obs;
+}
+
+/** A line whose `ts` is later than the rename's observation is a late append to the old inode. It is decided from
+ *  the re-read taken when its file was journaled (§9.2: "re-reads only for lines whose ts is later"). */
+export function obsForLine(obs, rec) {
+  if (obs.late === null || typeof rec.ts !== 'number' || !(rec.ts > obs.observedMs)) return obs;
+  return { ...obs, ...obs.late };
+}
+
+/** The draining files, in journaling order: tick ms, then pid, then name. That is the order their `file` records
+ *  were written in, so a held clear never chains before an earlier held startup of the same id (rev 3.2 review, DI9).
+ *  readdir order is a hash order, and lexical order puts tick 1000 before tick 900. Neither is used. */
+export function listDraining(home) {
+  let names;
+  try { names = readdirSync(historyPaths(home).draining); } catch (e) { if (e && e.code === 'ENOENT') return []; throw e; }
+  return names
+    .map((n) => ({ n, p: parseDrainingName(n) }))
+    .filter((x) => x.p !== null)
+    .sort((a, b) => a.p.tickMs - b.p.tickMs || a.p.pid - b.p.pid || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0))
+    .map((x) => x.n);
+}
+
+/** spool/ and spool/.draining/, 0700. Only a bound, open store makes them, and the hook spools only into an
+ *  existing spool/ (§5.1), so capture starts with the first tick of a bound store. */
+export function ensureSpoolDirs(home) {
+  mkdirSync(historyPaths(home).draining, { recursive: true, mode: 0o700 });
+}
+
+/** Rename each regular spool/<id>.jsonl into .draining/ under a fresh name, chmod 0600 (uncounted, §9.2; the 0700
+ *  directory is the protection, slug history-spool-mode-by-directory, D-4233). A name no hook writes (an id outside the
+ *  grammar), a dot-file, a link or a FIFO stays where it is and is never read. */
+export function renameSpoolFiles(home, tickMs, pid) {
+  const P = historyPaths(home);
+  let names;
+  try { names = readdirSync(P.spool).sort(); } catch (e) { if (e && e.code === 'ENOENT') return []; throw e; }
+  const out = [];
+  for (const n of names) {
+    if (n.startsWith('.') || !n.endsWith('.jsonl')) continue;
+    const id = n.slice(0, -'.jsonl'.length);
+    if (!idOk(id)) continue;
+    let st;
+    try { st = lstatSync(`${P.spool}/${n}`); } catch { continue; }
+    if (!st.isFile()) continue;
+    mkdirSync(P.draining, { recursive: true, mode: 0o700 });
+    const to = drainingName(id, tickMs, pid);
+    try {
+      renameSync(`${P.spool}/${n}`, `${P.draining}/${to}`);
+    } catch (e) {
+      if (e && e.code === 'ENOENT') continue;
+      throw e;
+    }
+    try { chmodSync(`${P.draining}/${to}`, 0o600); } catch { /* uncounted (§9.2): the 0700 directory protects it */ }
+    out.push(to);
+  }
+  return out;
+}
+
+function renameAndObserve(home, tickMs, nowMs) {
+  for (const n of renameSpoolFiles(home, tickMs, process.pid)) observe(home, n, nowMs);
+}
+
+/** A draining file's whole text. It is opened O_NOFOLLOW|O_NONBLOCK and must be a regular file, so a link or a FIFO
+ *  planted in .draining/ is refused rather than followed or waited on. */
+export function readDrainingText(path) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    if (!fstatSync(fd).isFile()) throw Object.assign(new Error('draining file is not a regular file'), { code: 'NON_REGULAR' });
+    const chunks = [];
+    let pos = 0;
+    for (;;) {
+      const b = Buffer.alloc(64 * 1024);
+      const n = readSync(fd, b, 0, b.length, pos);
+      if (n === 0) break;
+      chunks.push(b.subarray(0, n));
+      pos += n;
+    }
+    const buf = Buffer.concat(chunks);
+    return { text: buf.toString('utf8'), bytes: buf.length };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** The lines that pass parseSpoolLine AND name the file's own id. Only those are journaled and drained (slug
+ *  history-journal-spool-grammar, D-4174; the fence that gives empty lines no ordinal, history-spool-line-fenced, D-4176). A line claiming another id would be decided from the wrong id's observation; only
+ *  a stray same-user writer or a short write produces either kind of reject. Empty lines, which the fence leaves,
+ *  take no ordinal (splitSpoolText). */
+export function spoolRecordsOf(text, fileId) {
+  const valid = [];
+  let rejected = 0;
+  for (const { ordinal, raw } of splitSpoolText(text)) {
+    const p = parseSpoolLine(raw);
+    if (!p.ok || p.rec.id !== fileId) { rejected += 1; continue; }
+    valid.push({ ordinal, raw, rec: p.rec });
+  }
+  return { valid, rejected };
+}
+
+/** Steps 1 and 2 for one draining file. Returns the observation and the exact text journaled, which the drain then
+ *  decides from.
+ *  - Journaled once: a mark naming this store with the same byte count means nothing is written again. A drain under
+ *    another store_id journals the file into its own directory first (rev 3.2 review, DI5).
+ *  - The journaling time goes into the sidecar BEFORE the append, so a crash between the fsync and the mark
+ *    re-journals with the same `t`. A line's receive time never changes (DI14).
+ *  - Any late line takes a re-read of the registry, kept in the sidecar too. */
+export function journalFile(home, ids, name, nowMs) {
+  const P = historyPaths(home);
+  const side = `${P.draining}/${sidecarName(name)}`;
+  const obs = observe(home, name, nowMs);
+  const { text, bytes } = readDrainingText(`${P.draining}/${name}`);
+  const j = obs.journaled;
+  if (j !== null && j.storeId === ids.storeId && j.bytes === bytes) return { obs, text };
+  const { valid } = spoolRecordsOf(text, idOfDrainingName(name));
+  let dirty = false;
+  if (obs.journalT === null) { obs.journalT = nowMs; dirty = true; }
+  if (obs.late === null && valid.some((v) => typeof v.rec.ts === 'number' && v.rec.ts > obs.observedMs)) {
+    obs.late = readObservation(home, idOfDrainingName(name), nowMs);
+    dirty = true;
+  }
+  if (dirty) writeSidecar(side, obs);
+  const t = obs.journalT;
+  appendJournal(home, ids, [
+    journalRecord('file', t, { name }),
+    ...valid.map((v) => journalRecord('spool', t, { ord: v.ordinal, rec: v.rec })),
+  ], nowMs);
+  obs.journaled = { t, storeId: ids.storeId, writer: ids.writer, bytes };
+  writeSidecar(side, obs);
+  return { obs, text };
+}
+
+/** What one fresh receipt does besides being received (slug history-event-tables-v1, D-4213; a CLI's counters are
+ *  recall lines folded here, history-cli-counts-via-spool, D-4228).
+ *  - recall: a recall_calls row (W1-f, the W2 gate).
+ *  - steer: a steer_receipts row (written from W3; drained from day one, FE2).
+ *  - Stop and PostCompact: a receipt and a discovery hint, nothing else.
+ *  A gen-less recall joins the observed generation, and that join is a verdict, because it read the registry
+ *  (§9.14). */
+export function applyEventLine(db, c, ev) {
+  const { rec } = ev;
+  if (rec.ev === 'recall') {
+    const g = joinGeneration({ lineGen: rec.gen ?? null, observedGen: ev.obs.generation });
+    db.prepare('INSERT INTO recall_calls (event_key, ccrc_id, generation, ts_ms, verb, rc, ms, arm) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (event_key) DO NOTHING')
+      .run(ev.key, rec.id, g.generation, ev.tsMs, rec.cmd, rec.rc, rec.ms, rec.arm ?? null);
+    return g.via === 'line' ? [] : [journalRecord('verdict', c.now(), { event_key: ev.key, kind: 'generation-joined', ccrc_id: rec.id, generation: g.generation, via: g.via })];
+  }
+  if (rec.ev === 'steer') {
+    db.prepare('INSERT INTO steer_receipts (event_key, ccrc_id, cc_session_uuid, leaf_id, ts_ms) VALUES (?, ?, ?, ?, ?) ON CONFLICT (event_key) DO NOTHING')
+      .run(ev.key, rec.id, rec.sid, rec.leaf, ev.tsMs);
+    return [];
+  }
+  return [];
+}
+
+function unlinkIfPresent(path) {
+  try { unlinkSync(path); } catch (e) { if (!(e && e.code === 'ENOENT')) throw e; }
+}
+
+/** Steps 3 to 6 for one journaled file (slugs history-drain-synchronous-full, D-4229; history-journal-drained-record,
+ *  D-4230).
+ *  - The receipts: event_key comes from the draining name and the ordinal, never a receive time (§9.14).
+ *    received_ms is the journaling time; ts_ms is the line's ts ('line'), else received_ms ('received').
+ *  - A duplicate key is a no-op. The same key with a different payload is counted and never throws.
+ *  - Effects, verdicts and one `drained` outbox row all commit in the one FULL transaction.
+ *  - Then the verdicts are appended, then the unlink, then the outbox delete. */
+export function drainFile(db, c, name, obs, text) {
+  const P = historyPaths(c.home);
+  const { valid, rejected } = spoolRecordsOf(text, idOfDrainingName(name));
+  const recvMs = obs.journaled.t;
+  const nowMs = c.now();
+  const hints = [];
+  withTx(db, 'FULL', () => {
+    const insert = db.prepare('INSERT INTO spool_receipts (event_key, payload_sha, received_ms, ts_ms, ts_source) VALUES (?, ?, ?, ?, ?) ON CONFLICT (event_key) DO NOTHING');
+    const prior = db.prepare('SELECT payload_sha FROM spool_receipts WHERE event_key = ?');
+    const recs = [];
+    for (const v of valid) {
+      const key = eventKey(name, v.ordinal);
+      const sha = sha256Bytes(v.raw);
+      const fromLine = typeof v.rec.ts === 'number';
+      const tsMs = fromLine ? v.rec.ts : recvMs;
+      if (Number(insert.run(key, sha, recvMs, tsMs, fromLine ? 'line' : 'received').changes) === 0) {
+        if (!Buffer.from(prior.get(key).payload_sha).equals(sha)) bump(db, 'receipt_collision');
+        continue;   // a duplicate is a no-op: its effects were applied when its receipt was
+      }
+      recs.push(...applyEventLine(db, c, { key, rec: v.rec, recvMs, tsMs, obs: obsForLine(obs, v.rec) }));
+      if (typeof v.rec.sid === 'string') hints.push(v.rec.sid);
+    }
+    if (rejected > 0) bump(db, 'spool_line_rejected', rejected);
+    recs.push(journalRecord('verdict', nowMs, { event_key: 'none', kind: 'drained', file: name }));
+    const put = db.prepare('INSERT INTO journal_outbox (rec) VALUES (?)');
+    for (const r of recs) put.run(r);
+  });
+  const flushed = appendOutbox(db, c.home, c.ids, nowMs);
+  unlinkSync(`${P.draining}/${name}`);
+  unlinkIfPresent(`${P.draining}/${sidecarName(name)}`);
+  deleteOutbox(db, flushed.upto);
+  return { hints };
+}
+
+/** While a file is held, re-read `.uuid` for its startup and resume lines whose sid the observation did not name.
+ *  Record the first time each is named (§9.14 Holds), so a session that /clears during a hold keeps its earlier
+ *  startup epoch. */
+export function recordHeldMatches(home, name, nowMs) {
+  const P = historyPaths(home);
+  const side = `${P.draining}/${sidecarName(name)}`;
+  const obs = readSidecar(side);
+  if (obs === null) return;
+  const id = idOfDrainingName(name);
+  const named = obs.uuid.state === 'value' ? obs.uuid.value : null;
+  const waiting = spoolRecordsOf(readDrainingText(`${P.draining}/${name}`).text, id).valid
+    .filter((v) => v.rec.ev === 'SessionStart' && (v.rec.src === 'startup' || v.rec.src === 'resume')
+      && v.rec.sid !== named && !Object.hasOwn(obs.heldMatches, v.rec.sid));
+  if (waiting.length === 0) return;
+  const now = readRegPresence(`${P.reg}/${id}.uuid`);
+  if (now.state !== 'value' || !waiting.some((v) => v.rec.sid === now.value)) return;
+  obs.heldMatches[now.value] = nowMs;
+  writeSidecar(side, obs);
+}
+
+/** The journal half (§9.2; rev 3.1 review, BK2). It runs whenever the drain cannot: an unopenable or unwritable
+ *  store, a refused or escalated migration, a newer schema, or a missing writer token. It renames, observes and,
+ *  when `ids` names the store (store.id and store.writer both readable), journals each file, then holds it in
+ *  .draining/. It never opens a DB and never counts, because no DB holds a counter here (IV2); the caller prints
+ *  `journal-unwritable` on failure. */
+export function journalHalf(home, ids, nowMs) {
+  const held = [];
+  let journalFailed = false;
+  // Rename first, so this pass's spool files are observed and journaled in this same pass (§9.2: "renames,
+  // observes and journals each spool file as step 1 does"). A line a hook lands on the old inode after this
+  // grows the file, and the next pass re-journals it under the same `t` (journalFile compares byte counts).
+  renameAndObserve(home, nowMs, nowMs);
+  for (const name of listDraining(home)) {
+    try {
+      observe(home, name, nowMs);
+      if (ids !== null && !journalFailed) {
+        try {
+          journalFile(home, ids, name, nowMs);
+        } catch (e) {
+          if (!(e instanceof JournalError)) throw e;
+          journalFailed = true;
+        }
+      }
+      recordHeldMatches(home, name, nowMs);
+      held.push(name);
+    } catch (e) {
+      if (e && (e.code === 'ENOENT' || e.code === 'ELOOP' || e.code === 'NON_REGULAR')) continue;
+      throw e;
+    }
+  }
+  return { held, journalFailed };
+}
+
+/** Step 1 with an open store: every draining file in journaling order, each journaled then drained; then this tick's
+ *  renames. Returns the sids of the fresh lines (discovery's hints).
+ *  - A journal failure stops here, and so does a commit that fails (busy, or the injected test seam). The rest wait,
+ *    in order, so no id's later file drains before its earlier one.
+ *  - A link or FIFO planted in .draining/ is removed and counted. */
+export function drainSpool(db, c) {
+  const tickMs = c.now();
+  ensureSpoolDirs(c.home);
+  const hints = [];
+  for (const name of listDraining(c.home)) {
+    let j;
+    try {
+      j = journalFile(c.home, c.ids, name, c.now());
+    } catch (e) {
+      if (e instanceof JournalError) { countOutside(db, 'journal_write_failed'); break; }
+      if (e && (e.code === 'ELOOP' || e.code === 'NON_REGULAR')) {
+        // journalFile observed before it read, so the planted name has a sidecar too. listDraining lists only
+        // `*.jsonl`, so a sidecar left here would never be removed.
+        unlinkIfPresent(`${historyPaths(c.home).draining}/${name}`);
+        unlinkIfPresent(`${historyPaths(c.home).draining}/${sidecarName(name)}`);
+        countOutside(db, 'non_regular');
+        continue;
+      }
+      if (e && e.code === 'ENOENT') continue;
+      throw e;
+    }
+    try {
+      hints.push(...drainFile(db, c, name, j.obs, j.text).hints);
+    } catch (e) {
+      if (e instanceof JournalError) { countOutside(db, 'journal_write_failed'); break; }
+      if (e && e.code === 'ERR_SQLITE_ERROR') { countOutside(db, 'drain_deferred'); break; }
+      throw e;
+    }
+  }
+  renameAndObserve(c.home, tickMs, c.now());
+  return hints;
+}
+
 /**
  * What one tick of a bound, open store carries. runPass builds it; tick and the steps below read it.
  * @typedef {object} TickCtx
@@ -300,6 +708,9 @@ export async function tick(db, ctx) {
       countOutside(db, 'journal_write_failed');
     }
   }
+  // Step 1, the drain: journal first, then the FULL drain transaction, then its verdicts, then the unlink (§9.14).
+  // runPass never ticks without both binding names: a missing store.writer is a hold there (§9.10 "Writer token").
+  ctx.hints = drainSpool(db, ctx);
   // <<< history tick steps
   mkdirSync(ctx.paths.spool, { recursive: true, mode: 0o700 });
   if (ctx.parsed.rosterUnreadable) bump(db, 'roster_unreadable');
@@ -382,8 +793,19 @@ export async function runPass(argv, deps = {}) {
     const plan = planRun({
       historyOff: false, store, free, sizeBytes, capGb: capOf(capText(P.cap)).gb, migration, recovering: false,
     });
-    if (plan.arm === 'hold') return say(plan.holdWord);
-    if (plan.arm !== 'run') return say('held');
+    if (plan.arm !== 'run') {
+      // The journal half (§9.2): whenever the drain cannot run, rename, observe and, when store.id and
+      // store.writer both read, journal each spool file. Each file is held in .draining/ for the drain that
+      // follows the hold. Never on a server box, which spools nothing (§6.9); history-off never reaches here.
+      if (plan.holdWord !== 'store-create-refused-role') {
+        // store.id and store.writer as measured: both must be readable values of their grammars (StoreFacts).
+        const holdIds = facts.storeId.state === 'value' && facts.writer.state === 'value'
+          ? { storeId: facts.storeId.value, writer: facts.writer.value } : null;
+        const half = journalHalf(home, holdIds, now());
+        if (half.journalFailed) out('history-sweep: journal-unwritable');
+      }
+      return say(plan.arm === 'hold' ? plan.holdWord : 'held');
+    }
 
     let finished = false;
     if (store.act === 'drop-pending-create') dropPending(home);
@@ -409,6 +831,13 @@ export async function runPass(argv, deps = {}) {
       const sid = token(P.storeId, UUID_RE);
       const writer = token(P.writer, WRITER_RE);
       const ids = sid !== null && writer !== null ? { storeId: sid, writer } : null;
+      if (ids === null) {
+        // store.writer (or store.id) cannot be read after the binding step, so no journal file can be named and
+        // nothing may be drained: journal first (§9.2). The journal half observes only, as for an unbound store,
+        // until a binding writes the token. Nothing is counted: this is a hold, not a failed append.
+        journalHalf(home, null, now());
+        return say('held');
+      }
       await tick(db, {
         home, paths: P, parsed, plan, free, now,
         ids, homes: parsed.homes, rosterUnreadable: parsed.rosterUnreadable, out,
