@@ -7,8 +7,9 @@
 // path: `/dev/null/x` and `/dev/nullx` are residue); so is `ccrc-dlg-rig`, `sk-ant-`, and the running user's name or the host's first
 // label as a whole word (4+ characters, case-insensitive, letters only as word characters). Also residue: a `..` path
 // segment, a `//`-led host or path (`file:///srv/x`, `//share/x`; only the placeholder loopback address may follow `//`,
-// and whatever path follows it, after an optional `:<port>`, is scanned like any absolute path, so `http://127.0.0.1:4000/srv/x`
-// is residue and a bare `http://127.0.0.1:4000` is not), a munged foreign path (`-mnt-…`, `-home-…`), and
+// and what follows it is accepted only as the end of the URL, `:<digits>` then the end or a path, or a path scanned like any
+// absolute path: `http://127.0.0.1:4000/srv/x`, `http://127.0.0.1@host/x`, `http://127.0.0.1:abc` and `http://127.0.0.1?x` are
+// residue and a bare `http://127.0.0.1:4000` is not), a munged foreign path (`-mnt-…`, `-home-…`), and
 // any of these in a `\uXXXX`- or `%2F`-escaped spelling (both the string and its decoded form are scanned).
 // KNOWN LIMIT: base64 (or any other encoding) of residue is not decoded and not chased.
 // Any finding exits 1 naming the bundle and a JSON pointer. A pointer prints a key as TEXT only when the key is
@@ -138,15 +139,29 @@ const decode = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCha
 const DEV_NULL_REST = /^\/null(?![A-Za-z0-9._-])(?!\/)/;
 // Is an absolute path whose first segment is `top`, and which continues with `rest` (the text after that segment), residue?
 const topResidue = (top, rest) => !ALLOWED_TOP.has(top) && !(top === 'dev' && DEV_NULL_REST.test(rest));
+// After an allowed loopback host: an optional numeric port, then the END of the URL (end of string, whitespace, a quote,
+// a backtick, a closer `)` `]` `}`, `<`, `>`, `,` or `;` -- characters that cannot continue a URL; `.`, `:`, `?`, `#`,
+// `@`, `\` and the rest can, so they are not here) or a `/`-path (its first segment, if any, is checked by topResidue).
+const LOOPBACK_PORT = /^:[0-9]+/;
+const URL_END = /^(?:$|[\s"'`)\]}<>,;])/;
+const LOOPBACK_PATH = /^\/+([A-Za-z0-9._-]+)?/;
 function residue1(s) {
   for (const m of s.matchAll(ABS)) if (topResidue(m[1], s.slice(m.index + m[0].length))) return true;
   for (const m of s.matchAll(DOUBLE)) {
     if (ALLOWED_TOP.has(m[1])) continue;
     if (!ALLOWED_HOST.has(m[1])) return true;
-    // An allowed loopback host: ABS never starts a match at a `/` that follows a digit, so the path after `host[:port]`
-    // is scanned HERE, by the same allowlist as any absolute path (F1a). A bare `http://127.0.0.1:4000` has none.
-    const tail = /^(?::[0-9]+)?\/+([A-Za-z0-9._-]+)/.exec(s.slice(m.index + 2 + m[1].length));
-    if (tail !== null && topResidue(tail[1], s.slice(m.index + 2 + m[1].length + tail[0].length))) return true;
+    // An allowed loopback host: ABS never starts a match at a `/` that follows a digit, so what follows `host[:port]` is
+    // scanned HERE (F1a). The ONLY accepted continuations are the end of the URL, `:<digits>` then the end or a `/`-path,
+    // or a `/`-path whose first segment the allowlist accepts; ANY other continuation (`@` userinfo, `:abc`, `?`, `#`,
+    // `\`, a glued `%`…) is residue, however benign what follows it reads. (A name glued on with `.`, `-` or `_` never
+    // gets here: DOUBLE's name class takes it into m[1], and `127.0.0.1.x` is not an allowed host.)
+    const rest = s.slice(m.index + 2 + m[1].length);
+    const port = LOOPBACK_PORT.exec(rest);
+    const cont = port === null ? rest : rest.slice(port[0].length);
+    if (URL_END.test(cont)) continue;
+    const tail = LOOPBACK_PATH.exec(cont);
+    if (tail === null) return true;
+    if (tail[1] !== undefined && topResidue(tail[1], cont.slice(tail[0].length))) return true;
   }
   if (DOTDOT.test(s)) return true;
   if (MUNGED_FOREIGN.test(s) || (HOME_MUNGED !== null && s.includes(HOME_MUNGED))) return true;

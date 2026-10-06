@@ -687,6 +687,46 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     }
   });
 
+  // Round 2 of F1(a): after an allowed loopback host the ONLY accepted continuations are the end of the URL, `:<digits>`
+  // then the end or a `/`-path, or a `/`-path. Any other continuation is residue (fail closed), however benign what follows.
+  it('a loopback host followed by userinfo (`@`) is residue: the real host is whatever follows the `@`', () => {
+    for (const leak of ['http://127.0.0.1@evil.example/home/x', 'http://127.0.0.1:4000@evil.example', 'http://127.0.0.1@evil.example']) {
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'evil.example', 'home/x');
+    }
+  });
+
+  it('a loopback host with a port that is not digits is residue, even when the path after it is an allowed one', () => {
+    for (const leak of ['http://127.0.0.1:abc/home/x', 'http://127.0.0.1:abc', 'http://127.0.0.1:abc/rig/x', 'http://127.0.0.1:', 'http://127.0.0.1:4000x', 'http://127.0.0.1:4000:x']) {
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'home/x');
+    }
+  });
+
+  it('a name glued onto the loopback address with `.`, `-` or `_` is another host, not the loopback', () => {
+    for (const leak of ['http://127.0.0.1.evil.example/x', 'http://127.0.0.1.evil.example', 'http://127.0.0.1-x.example/p', 'http://127.0.0.1_x', '//127.0.0.1.1']) {
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'evil.example', 'x.example');
+    }
+  });
+
+  it('a query, a fragment or a backslash straight after the loopback host or its port is residue (a backslash is a path separator to a browser)', () => {
+    for (const leak of ['http://127.0.0.1?x=1', 'http://127.0.0.1:4000#f', 'http://127.0.0.1:4000?x=1', 'http://127.0.0.1:4000\\srv\\acme']) {
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'srv');
+    }
+  });
+
+  it('the characters that END a loopback URL (whitespace, a quote, a closer, `<`, `>`, `,`, `;`) pass; every other character after it is residue', () => {
+    const ends = [' ', '\t', '\n', '"', "'", '`', ')', ']', '}', '<', '>', ',', ';'];
+    const continues = ['.', ':', '?', '#', '@', '\\', '!', '=', '&', '|', '(', '[', '{', '%', '~', '*', '+', '$'];
+    for (const url of ['http://127.0.0.1', 'http://127.0.0.1:4000']) {
+      const end = leakRun({ note: `x ${url}` });
+      expect(end.status, `${url} at the end of the string: ${end.stderr}`).toBe(0);
+      for (const ch of ends) {
+        const r = leakRun({ note: `x ${url}${ch}y` });
+        expect(r.status, `${url} then ${JSON.stringify(ch)}: ${r.stderr}`).toBe(0);
+      }
+      for (const ch of continues) expectNamed(leakRun({ note: `x ${url}${ch}y` }), '/events/0/payload/note');
+    }
+  });
+
   it('a `//`-led path whose first segment is an allowed top passes (`file:///rig/…`), and one that is not still fails closed', () => {
     for (const fine of ['file:///rig/tmp/x.output', '//usr/bin/git', 'x //bin/sh y']) {
       const r = leakRun({ note: fine });
