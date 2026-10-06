@@ -18,6 +18,7 @@ import { unreadableField as withUnreadableField } from './ioDoubles.js';
 import { okRun } from './coordReadHelpers.js';
 import { isChildReclaimKebab } from '../src/coord/childReclaim.js';
 import { isStallKebab } from '../src/coord/stall.js';
+import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -828,8 +829,15 @@ describe('the rejection table is total, in both directions', () => {
         // through the exported guard, which is derived from those Records and
         // tuples, and never through NOT_CODES, for the reason every union
         // above gives.
-        || isStallKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word or stall-watch word`).toBe(true);
+        || isStallKebab(tok)
+        // WORKSPACE LIFECYCLE WAVE 3b: the THIRTEENTH union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/expireArchived.ts` (the expiry lane's one executor) spells ccd's
+        // nineteen `ws-expire` words, its two box words, its outcome kinds and its defer reasons as literals. None is
+        // a mail rejection or a run refusal — they ride the lane's memory and the feed, never a `refused` or
+        // `reject.code`. Admitted through the exported guard, derived from `archivedExpiry.ts`'s Records, never
+        // NOT_CODES, for the reason every union above gives.
+        || isArchivedExpiryKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word or expiry word`).toBe(true);
     }
   });
 });
