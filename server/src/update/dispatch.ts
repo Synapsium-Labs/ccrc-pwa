@@ -21,11 +21,16 @@ import {
   UPDATE_OP, UPDATE_OP_DETAIL_MAX, firstStderrLine, isUpdateOpError, type UpdateOpError,
 } from '../../../shared/agent-protocol.js';
 import { isNewerTag } from '../../../shared/semver.js';
+import {
+  DETACH_CAP, agentPredatesUpdateOp, autoPermits, carriesDetachCap, carriesUpdateGate, isHaltingUpdate,
+} from '../../../shared/update-move.js';
 import { floorOf, type EligibilityRow } from './resolve.js';
 
 /** Wave 4's other two ccrc-caps words (`_inst_caps`; `detach` is Linux-only, decision 17). UPDATE_GATE_CAP is
- *  the third's one spelling (shared/api.ts, D-3305); these two have no reader outside this file. */
-export const DETACH_CAP = 'detach';
+ *  the third's one spelling (shared/api.ts, D-3305). DETACH_CAP moved to L0 in wave 14 (`shared/update-move.ts`,
+ *  D-4266), because the PWA now asks whether the console can move a node; it is re-exported here so every caller
+ *  keeps its import. ROLLBACK_CAP has no reader outside the server. */
+export { DETACH_CAP };
 export const ROLLBACK_CAP = 'rollback';
 /** Spec §10, verbatim: the lease detail for an update to a node whose stamp reads but names no version. */
 export const UNVERSIONED_DETAIL = 'unversioned box — any eligible release is newer';
@@ -92,9 +97,8 @@ const isSettled = (s: UpdateState): boolean => SETTLED.includes(s);
  *  way W2's store derives HALTED_UPDATE_STATES, so a settled state added later halts by default — EXCEPT a
  *  `failed` row whose detail begins PROVENANCE_DETAIL_PREFIX: a verdict on the release, not a fault of the node. */
 export function isHalting(row: Pick<DispatchRow, 'updateState' | 'updateDetail'>): boolean {
-  if (!isSettled(row.updateState) || row.updateState === 'idle') return false;
-  if (row.updateState === 'failed' && row.updateDetail !== null && row.updateDetail.startsWith(PROVENANCE_DETAIL_PREFIX)) return false;
-  return true;
+  // Wave 14 (D-4266): the rule is L0's, so the PWA's halt banner and this dispatcher cannot disagree about who halts.
+  return isHaltingUpdate(row.updateState, row.updateDetail);
 }
 
 const byNodeId = (a: DispatchRow, b: DispatchRow): number => (a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0);
@@ -107,18 +111,8 @@ export function fleetGate(rows: readonly DispatchRow[]): FleetGate {
   };
 }
 
-/** 'off' → false; 'stable' → the node resolved to stable; 'channel' → it resolved to any channel. */
-export function autoPermits(auto: AutoMode, channel: UpdateChannel | null): boolean {
-  switch (auto) {
-    case 'off': return false;
-    case 'stable': return channel === 'stable';
-    case 'channel': return channel !== null;
-    default: {
-      const unhandled: never = auto;
-      return unhandled;
-    }
-  }
-}
+// `autoPermits` moved to L0 in wave 14 (shared/update-move.ts, D-4266): the PWA's skew banner asks it too.
+export { autoPermits };
 
 /** What the node's version reads as. ONLY a stamp that read (`ok`) with no version is unversioned; a stamp that
  *  could not be read is never "unversioned" (D-3379; wave 3's D-3307 line). */
@@ -192,10 +186,10 @@ export function moveRefusal(view: DispatchNodeView, move: { kind: RequestKind; t
     if (rb !== null) return rb;
   }
   if (refusedByNode(view, move.target)) return 'refused-by-node';
-  if (!row.caps.includes(DETACH_CAP)) return 'no-detach-cap';
+  if (!carriesDetachCap(row.caps)) return 'no-detach-cap';
   if (move.kind === 'rollback' && !row.caps.includes(ROLLBACK_CAP)) return 'no-rollback-cap';
-  if (move.source === 'auto' && !row.caps.includes(UPDATE_GATE_CAP)) return 'no-update-gate';
-  if (row.agentOps !== null && !row.agentOps.includes(UPDATE_OP)) return 'agent-predates-update-op';
+  if (move.source === 'auto' && !carriesUpdateGate(row.caps)) return 'no-update-gate';
+  if (agentPredatesUpdateOp(row.agentOps)) return 'agent-predates-update-op';
   return null;
 }
 

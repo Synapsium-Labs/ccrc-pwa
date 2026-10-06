@@ -748,12 +748,15 @@ describe('dispatchRefusalDetail — one sentence per word, stable across runs (R
 });
 
 describe('the ring (programme wave 5, D-3383)', () => {
-  it('dispatch.ts imports only the three shared modules and the resolver — no fs, no store, no link, no Runner', () => {
+  it('dispatch.ts imports only the four shared modules and the resolver — no fs, no store, no link, no Runner', () => {
     const src = readFileSync(path.join(here, '..', 'src', 'update', 'dispatch.ts'), 'utf8');
     const specs = [...src.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s+['"]([^'"]+)['"]|^\s*import\s+['"]([^'"]+)['"]/gm)]
       .map((m) => m[1] ?? m[2]);
+    // Wave 14 (D-4266): `shared/update-move.js` holds the halt rule, the capability predicates and autoPermits, which
+    // the PWA asks too.
     expect(new Set(specs)).toEqual(new Set([
-      '../../../shared/api.js', '../../../shared/agent-protocol.js', '../../../shared/semver.js', './resolve.js',
+      '../../../shared/api.js', '../../../shared/agent-protocol.js', '../../../shared/semver.js', '../../../shared/update-move.js',
+      './resolve.js',
     ]));
     expect(/\brequire\(|import\(/.test(src)).toBe(false);
   });
