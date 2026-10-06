@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ffbf277acef6d7e84da8c72c01c918a230baf4e761573aef85a1892a86f6c28b
+# ccrc:generated 1 sha256=ab516ed72194ef775f1b2b4374d94296f1e9cdfe517769067abfc7c22683d2b7
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28897,7 +28897,10 @@ _ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working dir
   # else at `_ws_expire_lsof_fallback`, /usr/sbin/lsof: macOS keeps it there and
   # a PATH may omit it; an lsof found nowhere is unmeasured; one that outruns
   # `WS_EXPIRE_LSOF_DEADLINE_S` is unmeasured too — the reap lock is held, and a
-  # hung network mount can block lsof for ever).
+  # hung network mount can block lsof for ever). The bound is not absolute: a
+  # process in uninterruptible kernel wait survives TERM and KILL, and `timeout`
+  # (or the bash fallback, which sends TERM only) waits for it — the answer is
+  # still never "nobody", but the reap lock can stay held while it waits.
   # A PROCESS IS SKIPPED ONLY ON PROOF IT VANISHED, or on the one ruled
   # exception. Vanished: its cwd link or its stat file answers ENOENT/ESRCH
   # (Linux), or, on Darwin, `ps` could not name its parent AND the kernel
