@@ -180,13 +180,16 @@ current_sid() {
 # The Claude Code process of the pane: the pane's process when it is the binary, else its child
 # that is (the launch line runs the binary under `timeout`). Linux identifies by /proc/<pid>/exe.
 claude_pid() {
-  local p dead c exe
+  local p dead c exe vd
   read -r dead p < <(T "$SOCK" display-message -p -t "$SESSION" '#{pane_dead} #{pane_pid}') || return 1
   [[ $dead == 0 && $p =~ ^[0-9]+$ ]] || return 1
+  # /proc/<pid>/exe is always PHYSICAL and $VERSIONS is spelled from $REAL_HOME, so compare against the resolved
+  # directory (as guard_root and run_base resolve HOME); one that cannot be resolved keeps its spelling, never wider.
+  vd=$(cd -P -- "$VERSIONS" 2>/dev/null && pwd) || vd=$VERSIONS
   for c in "$p" $(pgrep -P "$p" 2>/dev/null); do
     exe=$(readlink "/proc/$c/exe" 2>/dev/null) || exe=""
     if [[ -z $exe && ! -d /proc ]]; then [[ $c != "$p" ]] && { printf '%s' "$c"; return 0; }; continue; fi
-    [[ $exe == "$VERSIONS"/* ]] && { printf '%s' "$c"; return 0; }
+    [[ $exe == "$vd"/* ]] && { printf '%s' "$c"; return 0; }
   done
   return 1
 }
@@ -222,6 +225,7 @@ run_steps() {
                       || note "probe $(jq -c .probeLabels <<<"$step"): not reached" ;;
       answerDialog) if wait_text "$(jq -r .answerDialog <<<"$step")" "$(jq -r '.timeoutS // 10' <<<"$step")"; then
                       T "$SOCK" send-keys -t "$SESSION" Enter; note "dialog answered: $(jq -r .answerDialog <<<"$step")"
+                    else note "answerDialog: no dialog: $(jq -r .answerDialog <<<"$step")"
                     fi ;;
       sleep)        sleep "$(jq -r .sleep <<<"$step")" ;;
       kill9)        if pid=$(claude_pid); then kill -9 "$pid"; else note "kill9: no pid"; fi ;;

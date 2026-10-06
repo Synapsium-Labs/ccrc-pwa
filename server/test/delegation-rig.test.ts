@@ -262,6 +262,38 @@ describe('rig.sh guards (the rig never names the real HOME or the default tmux s
     expect(text).toContain('for d in "$(run_base)"/ccrc-dlg-rig.*; do');
   }, 120_000);
 
+  it.skipIf(!LINUX)('claude_pid finds the Claude Code process when HOME is spelled through a symlink: /proc/<pid>/exe is physical, so $VERSIONS is compared resolved, and only that one (F10)', async () => {
+    const real = fs.realpathSync(mkTmp('ccrc-dlg-home-'));
+    const outside = fs.realpathSync(mkTmp('ccrc-dlg-out-'));
+    const linkHome = path.join(outside, 'home-link');
+    fs.symlinkSync(real, linkHome);                       // HOME is the link; the physical directory is `real`
+    // `<v>` is a COPY of a real ELF binary (a stand-in for the Claude Code binary) started from its SYMLINKED spelling, so the kernel
+    // reports /proc/<pid>/exe as the physical path. A copy of the same binary outside the versions directory is the foreign process.
+    const sleepBin = fs.realpathSync(spawnSync('sh', ['-c', 'command -v sleep'], { encoding: 'utf8' }).stdout.trim());
+    const versions = path.join(real, '.local/share/claude/versions');
+    fs.mkdirSync(versions, { recursive: true });
+    const copy = (to: string): void => { fs.copyFileSync(sleepBin, to); fs.chmodSync(to, 0o755); };
+    copy(path.join(versions, '2.1.0'));
+    copy(path.join(outside, 'not-claude'));
+    const start = (bin: string): number => { const c = spawn(bin, ['60'], { argv0: 'sleep', stdio: 'ignore' }); children.push(c); return c.pid!; };
+    const claude = start(path.join(linkHome, '.local/share/claude/versions/2.1.0'));
+    const foreign = start(path.join(outside, 'not-claude'));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(fs.readlinkSync(`/proc/${claude}/exe`), 'the premise: the kernel names the physical path').toBe(path.join(versions, '2.1.0'));
+    // rig.sh's own claude_pid, VERSIONS spelled by rig.sh's own line from this HOME; tmux answers `0 <pid>` (a live pane, this pid).
+    const script = ['set -euo pipefail', rigText('REAL_HOME', 'VERSIONS', 'SESSION', 'claude_pid'), 'SOCK=dlgx', 'T() { printf \'0 %s\\n\' "$PANE_PID"; }', 'claude_pid'].join('\n');
+    const find = (home: string, pid: number): { status: number | null; stdout: string } => {
+      const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { ...process.env, HOME: home, PANE_PID: String(pid) }, timeout: 60_000 });
+      return { status: r.status, stdout: r.stdout };
+    };
+    expect(find(real, claude), 'a HOME spelled physically (the control: this always worked)').toEqual({ status: 0, stdout: String(claude) });
+    expect(find(linkHome, claude), 'a HOME spelled through a symlink').toEqual({ status: 0, stdout: String(claude) });
+    // Fail closed, exactly as before: a process outside the versions directory is not the binary, and a $VERSIONS that cannot be resolved
+    // (no such directory) falls back to its spelling, which no /proc/<pid>/exe can match: never every absolute path.
+    expect(find(linkHome, foreign), 'a binary outside the versions directory').toEqual({ status: 1, stdout: '' });
+    expect(find(mkTmp('ccrc-dlg-home-'), claude), 'a HOME with no versions directory').toEqual({ status: 1, stdout: '' });
+  }, 60_000);
+
   it('no line of rig.sh calls tmux except through the private-socket helper', () => {
     const lines = fs.readFileSync(RIGSH, 'utf8').split('\n').filter((l) => /\btmux\b(?!-)/.test(l) && !/^\s*#/.test(l));
     const ok = (l: string): boolean => l.includes('tmux -L "$s" -f /dev/null') || l.includes('for c in jq tmux git');
@@ -423,17 +455,23 @@ describe.skipIf(!LINUX)('rig.sh wait_run_quiet (cleanup_run waits out a process 
     const root = mkTmp('ccrc-dlg-rig.');
     const aux = mkTmp('ccrc-dlg-aux-');
     const go = path.join(aux, 'go'); const mark = path.join(aux, 'mark');
-    // Waits for the go file, lives one second more, then writes its marker and exits: only a process left alone gets that far.
-    const holder = spawn('bash', ['-c', 'while [ ! -e "$GO" ]; do sleep 0.1; done; sleep 1; echo ok > "$MARK"'], { cwd: root, env: { ...process.env, GO: go, MARK: mark }, stdio: 'ignore' });
+    // Waits for the go file, lives two seconds more, then writes its marker and exits: only a process left alone gets that far.
+    const holder = spawn('bash', ['-c', 'while [ ! -e "$GO" ]; do sleep 0.1; done; sleep 2; echo ok > "$MARK"'], { cwd: root, env: { ...process.env, GO: go, MARK: mark }, stdio: 'ignore' });
     children.push(holder);
     await new Promise((r) => setTimeout(r, 200));
-    const script = ['set -euo pipefail', rigText('procs_under', 'kill_if_under', 'pid_live', 'wait_run_quiet'), ': > "$GO"', 'wait_run_quiet "$ROOT" ""'].join('\n');
-    // The bound (8 s) is far above the holder's lifetime (about 1 s): a wait that honours it returns when the holder is gone.
+    // The harness times the call itself (F8): the holder finishes on its own whether or not anything waits for it, so the marker
+    // and `gone` alone cannot tell a wait that waited from one that returned at once.
+    const script = ['set -euo pipefail', rigText('procs_under', 'kill_if_under', 'pid_live', 'wait_run_quiet'), ': > "$GO"',
+      't0=$(date +%s%N)', 'wait_run_quiet "$ROOT" ""', 't1=$(date +%s%N)', 'echo "waited_ms=$(( (t1 - t0) / 1000000 ))"'].join('\n');
+    // The bound (8 s) is far above the holder's lifetime (about 2 s): a wait that honours it returns when the holder is gone.
     const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { ...process.env, GO: go, ROOT: root, RUN_QUIET_S: '8' }, timeout: 60_000 });
     expect(r.status, r.stderr).toBe(0);
     expect(await gone(holder.pid!)).toBe(true);
     expect(fs.existsSync(mark), 'the process was killed before it could finish; the wait did not wait').toBe(true);
     expect(r.stderr).not.toContain('still hold run root');
+    // A LOWER bound, comfortably under the holder's two seconds: load only makes a wait longer, so it cannot redden this.
+    const waited = Number(/^waited_ms=(\d+)$/m.exec(r.stdout)?.[1]);
+    expect(waited, `wait_run_quiet returned after ${waited} ms, before the holder (2 s) could have exited on its own: it did not wait`).toBeGreaterThanOrEqual(1500);
   }, 60_000);
 
   describe('cleanup_run (F10c: it calls wait_run_quiet, and it never removes a root it could not measure)', () => {
@@ -1517,15 +1555,47 @@ describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
   const outcomeNotes = readable(scanned.filter(isOutcome));
   const outcomeTemplates = scanned.filter(isOutcome);
 
-  it('rig.sh writes eight notes, every one read here, each decided: two outcomes (a probe, a dialog) and six failures', () => {
+  it('rig.sh writes nine notes, every one read here, each decided: two outcomes (a probe, a dialog) and seven failures', () => {
     const { templates, sites } = rigNoteScan();
     expect(templates, 'every `note` in rig.sh reads as a note "…" call this test can parse').toHaveLength(sites);
     const concrete = templates.map((t) => concreteNote(t));
     expect(concrete.every((n) => n.length > 0 && !n.includes('$')), 'every expansion was substituted').toBe(true);
     expect(templates.filter(isOutcome).map((t) => t.split(' ')[0]), 'the outcomes').toEqual(['probe', 'dialog']);
-    expect(templates.filter((t) => !isOutcome(t)), 'a new note needs a decision here: an outcome joins isOutcome, a failure joins build-matrix.mjs\'s FAIL_NOTE').toHaveLength(6);
+    expect(templates.filter((t) => !isOutcome(t)), 'a new note needs a decision here: an outcome joins isOutcome, a failure joins build-matrix.mjs\'s FAIL_NOTE').toHaveLength(7);
     expect(new Set(concrete).size, 'no two calls write the same note').toBe(concrete.length);
     expect(strayNoteWriters(), 'the notes file is written by note() alone: any other line that names it is a note this census cannot see').toEqual([]);
+  });
+
+  // answerDialog (review 296 F2). It is the one verb whose SUCCESS is an outcome note (`dialog answered: …`), and its failure used to leave no
+  // note at all: an interrupt-exit run whose dialog never came built `measured` with a SessionEnd count of zero, the same cell as an exit that
+  // fired no SessionEnd. These rows run rig.sh's own run_steps over a one-step scenario, `wait_text` stubbed to see the dialog or not, and pass
+  // what it actually wrote through the builder: no note text is copied here.
+  const answerDialog = (seen: boolean): { notes: string[]; tmux: string[] } => {
+    const dir = mkTmp('ccrc-dlg-ans-');
+    const scen = path.join(dir, 'scen.json');
+    fs.writeFileSync(scen, JSON.stringify({ steps: [{ answerDialog: 'Background work is running', timeoutS: 1 }], entries: [] }));
+    const script = ['set -euo pipefail', rigText('SESSION', 'note', 'run_steps'),
+      `wait_text() { return ${seen ? 0 : 1}; }`, 'T() { printf \'%s\\n\' "$*" >> "$RUN_R/tmux-calls"; }', 'run_steps'].join('\n');
+    const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { ...process.env, RUN_R: dir, SCEN: scen, SOCK: 'dlgx' }, timeout: 60_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const read = (n: string): string[] => (fs.existsSync(path.join(dir, n)) ? fs.readFileSync(path.join(dir, n), 'utf8').split('\n').filter(Boolean) : []);
+    return { notes: read('notes'), tmux: read('tmux-calls') };
+  };
+
+  it('answerDialog: a dialog that appears is answered with Enter and noted as an outcome, so the run stays measured', () => {
+    const { notes, tmux } = answerDialog(true);
+    expect(tmux, 'Enter, once, into the private session').toEqual(['dlgx send-keys -t cc-rig-hookcap Enter']);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/^dialog answered: /);
+    expect(one(fixture({ notes, events: live })).cell.status).toBe('measured');
+  });
+
+  it('answerDialog: a dialog that never appears sends no key and writes a failure note, so the run is unmeasured and not a measured zero (F2)', () => {
+    const { notes, tmux } = answerDialog(false);
+    expect(tmux, 'no Enter into a pane that showed no dialog').toEqual([]);
+    expect(notes, 'one note').toHaveLength(1);
+    expect(notes[0], 'and not the success one').not.toMatch(/^dialog answered/);
+    expect(one(fixture({ notes, events: live })).cell).toMatchObject({ status: 'unmeasured', reason: notes[0] });
   });
 
   it('the scanner reads a quoted string inside a $(…), an escaped quote and the end of a call, and refuses a call that goes on', () => {
