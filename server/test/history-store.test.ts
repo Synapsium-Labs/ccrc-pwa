@@ -20,6 +20,7 @@ import {
   measuredSize, getMeta, setMeta, bump, closeWriter, schemaOf,
   mintStoreId, mintWriter, writeFileAtomic, peekStoreId, measureStoreFacts, removeStaleTemps, createStore,
   finishPending, dropPending, syncWriterMirror,
+  readAttempts, clearDoneMarkers, assertAdditive, runMigration,
 } from '../../ccd/history/store.mjs';
 
 /** A delete-mode (rollback-journal) v1 store built by hand, the shape a
@@ -404,5 +405,117 @@ describe('store.mjs: the binding', () => {
     syncWriterMirror(db, h);
     expect(getMeta(db, 'writer')).toBe('feedf00d');
     closeWriter(db);
+  });
+});
+
+describe('store.mjs: the migration executor', () => {
+  /** A bound store and its live writer, ready to migrate. */
+  const bound = (): { h: string; db: DatabaseSync; storeId: string } => {
+    const h = mkTmp('ccrc-history-mig-');
+    const { storeId } = createStore(h);
+    return { h, db: openWriter(historyPaths(h).dbFile), storeId };
+  };
+  /** A TEST-ONLY v2 and v3, passed in as data: shipped code has no v2. */
+  const V2 = 'CREATE TABLE extra_v2 (x INTEGER); ALTER TABLE meta ADD COLUMN note TEXT;';
+  const V3 = 'CREATE INDEX extra_v2_x ON extra_v2(x);';
+  const TEST_MIGRATIONS = [MIGRATIONS[0]!, V2, V3];
+
+  it('DM42 (executor half): every verdict but snapshot-then-migrate is refused, and nothing is written', () => {
+    const { h, db } = bound();
+    for (const verdict of ['none', 'refuse-newer', 'refuse-low-disk', 'snapshot-needs-op'] as const) {
+      expect(wordOf(() => runMigration(db, h, { verdict, from: 1, to: 2, migrations: TEST_MIGRATIONS })), verdict)
+        .toBe('migration-not-admitted');
+    }
+    expect(userVersion(db)).toBe(1);
+    expect(fs.existsSync(historyPaths(h).backups)).toBe(false);
+    closeWriter(db);
+  });
+
+  it('v1 -> v2: the snapshot opens at v1 with the same store_id, the live store reads v2, copy_bps is recorded', () => {
+    const { h, db, storeId } = bound();
+    const P = historyPaths(h);
+    fs.mkdirSync(P.backups, { mode: 0o700 });
+    fs.writeFileSync(path.join(P.backups, '.pre-v2.db.tmp'), 'a stale partial copy');
+    fs.writeFileSync(path.join(P.backups, '.pre-v2.db.tmp-journal'), 'a stale hot journal');
+    const out = runMigration(db, h, { verdict: 'snapshot-then-migrate', from: 1, to: 2, migrations: TEST_MIGRATIONS });
+    expect(out.snapshot).toBe(path.join(P.backups, 'pre-v2.db'));
+    expect(fs.readdirSync(P.backups).sort()).toEqual(['pre-v2.db']);
+    expect(mode(out.snapshot)).toBe(0o600);
+    const snap = new DatabaseSync(out.snapshot, { readOnly: true });
+    expect(userVersion(snap)).toBe(1);
+    expect(getMeta(snap, 'store_id')).toBe(storeId);
+    snap.close();
+    expect(userVersion(db)).toBe(2);
+    expect(schemaOf(db)['extra_v2']).toEqual(['x']);
+    expect(Number(getMeta(db, 'copy_bps'))).toBe(out.copyBps);
+    expect(out.copyBps).toBeGreaterThan(0);
+    closeWriter(db);
+  });
+
+  it('v2 -> v3 keeps only the newest pre-migration snapshot, and never touches an operator <ts>.db', () => {
+    const { h, db } = bound();
+    const P = historyPaths(h);
+    runMigration(db, h, { verdict: 'snapshot-then-migrate', from: 1, to: 2, migrations: TEST_MIGRATIONS });
+    fs.writeFileSync(path.join(P.backups, '20261005T000000Z.db'), 'an operator backup');
+    runMigration(db, h, { verdict: 'snapshot-then-migrate', from: 2, to: 3, migrations: TEST_MIGRATIONS });
+    expect(fs.readdirSync(P.backups).sort()).toEqual(['20261005T000000Z.db', 'pre-v3.db']);
+    expect(fs.readFileSync(path.join(P.backups, '20261005T000000Z.db'), 'utf8')).toBe('an operator backup');
+    expect(userVersion(db)).toBe(3);
+    closeWriter(db);
+  });
+
+  it('a migration that drops or renames a column is refused and rolled back, its marker left as an attempt', () => {
+    const { h, db } = bound();
+    const DROPS = 'ALTER TABLE counters RENAME COLUMN n TO total;';
+    expect(wordOf(() => runMigration(db, h, {
+      verdict: 'snapshot-then-migrate', from: 1, to: 2, migrations: [MIGRATIONS[0]!, DROPS],
+    }))).toBe('migration-not-additive');
+    expect(userVersion(db)).toBe(1);
+    expect(schemaOf(db)['counters']).toEqual(['name', 'n']);
+    expect(readAttempts(h, 2)).toBe(1);
+    closeWriter(db);
+  });
+
+  it('assertAdditive: an added table or column passes; a dropped table, a dropped or renamed column throws', () => {
+    const prev = { meta: ['k', 'v'], counters: ['name', 'n'] };
+    expect(() => assertAdditive(prev, { ...prev, extra: ['x'], meta: ['k', 'v', 'note'] })).not.toThrow();
+    expect(() => assertAdditive(prev, { meta: ['k', 'v'] })).toThrow(/counters/);
+    expect(() => assertAdditive(prev, { meta: ['k', 'v'], counters: ['name', 'total'] })).toThrow(/counters\.n/);
+  });
+
+  it('readAttempts: absent is 0, a count reads as itself, anything else escalates to the cap', () => {
+    const { h, db } = bound();
+    closeWriter(db);
+    const P = historyPaths(h);
+    expect(readAttempts(h, 2)).toBe(0);
+    fs.mkdirSync(P.backups, { mode: 0o700 });
+    fs.writeFileSync(path.join(P.backups, '.pre-v2.attempt'), '1\n');
+    expect(readAttempts(h, 2)).toBe(1);
+    fs.writeFileSync(path.join(P.backups, '.pre-v2.attempt'), 'garbled');
+    expect(readAttempts(h, 2)).toBe(2);
+  });
+
+  it('O51: a killed creation\'s temp and its -wal go together, a recycled pid starts clean, and a done marker is cleared', () => {
+    const h = mkTmp('ccrc-history-mig-');
+    const P = historyPaths(h);
+    fs.mkdirSync(P.dbDir, { recursive: true, mode: 0o700 });
+    const recycled = `history.db.new.${process.pid}`;
+    // A sidecar with no temp beside it: O_EXCL alone would let this pid create
+    // the temp, and SQLite would then pair the stale WAL with it by name.
+    fs.writeFileSync(path.join(P.dbDir, `${recycled}-wal`), 'its wal');
+    expect(() => createStore(h)).toThrow(/never opened/);
+    fs.writeFileSync(path.join(P.dbDir, recycled), 'half a database');
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'drop-pending-create' });
+    expect(removeStaleTemps(h).sort()).toEqual([recycled, `${recycled}-wal`]);
+    dropPending(h);
+    createStore(h);
+    expect(fs.readdirSync(P.dbDir)).toEqual(['history.db']);
+
+    fs.mkdirSync(P.backups, { mode: 0o700 });
+    fs.writeFileSync(path.join(P.backups, '.pre-v2.attempt'), '1\n');
+    fs.writeFileSync(path.join(P.backups, '.pre-v3.attempt'), '1\n');
+    expect(clearDoneMarkers(h, 1)).toEqual([]);
+    expect(clearDoneMarkers(h, 2)).toEqual(['.pre-v2.attempt']);
+    expect(fs.readdirSync(P.backups)).toEqual(['.pre-v3.attempt']);
   });
 });

@@ -2,7 +2,7 @@
 // compact-card.d.mts precedent). Hand-written; grows with each task. Nothing
 // machine-checks it against store.mjs, so every export is declared here.
 import type { DatabaseSync } from 'node:sqlite';
-import type { Presence, StoreFacts } from './lib.mjs';
+import type { MigrationVerdict, Presence, StoreFacts } from './lib.mjs';
 
 export const CODEC: 'br5';
 export class StoreError extends Error {
@@ -33,3 +33,9 @@ export function createStore(home: string): { storeId: string; writer: string };
 export function finishPending(home: string): void;
 export function dropPending(home: string): void;
 export function syncWriterMirror(db: DatabaseSync, home: string): void;
+export function readAttempts(home: string, n: number): number;
+export function clearDoneMarkers(home: string, version: number): string[];
+export function assertAdditive(prev: Record<string, readonly string[]>, next: Record<string, readonly string[]>): void;
+export function runMigration(db: DatabaseSync, home: string, i: {
+  verdict: MigrationVerdict; from: number; to: number; migrations: readonly string[];
+}): { snapshot: string; copyBps: number };

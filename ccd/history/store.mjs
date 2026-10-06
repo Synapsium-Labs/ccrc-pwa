@@ -23,7 +23,7 @@ import {
 } from 'node:fs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z } from 'node:zlib';
-import { BUSY_TIMEOUT_MS, SCHEMA_VERSION, UUID_RE, WRITER_RE, historyPaths } from './lib.mjs';
+import { BUSY_TIMEOUT_MS, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, UUID_RE, WRITER_RE, historyPaths } from './lib.mjs';
 
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
 export const CODEC = 'br5';
@@ -621,4 +621,117 @@ export function syncWriterMirror(db, home) {
   const w = readBindingFile(historyPaths(home).writer, WRITER_RE);
   if (w.state !== 'value') return;
   if (getMeta(db, 'writer') !== w.value) setMeta(db, 'writer', w.value);
+}
+
+// ── migrations: the executor behind the pre-migration snapshot ──────────────
+
+const attemptMarker = (home, n) => `${historyPaths(home).backups}/.pre-v${n}.attempt`;
+
+/** How many attempts at migrating to version `n` were started and never
+ *  finished (§6.11). Absent is 0. A marker that cannot be read, or holds
+ *  anything but a count, reads as MAX_INTERRUPTED_ATTEMPTS — the escalating
+ *  direction: a scheduled pass then answers `snapshot-needs-op` rather than
+ *  copy again on a guess, and the operator's `--op migrate` is unbounded. */
+export function readAttempts(home, n) {
+  let text;
+  try { text = readFileSync(attemptMarker(home, n), 'utf8'); } catch (e) {
+    return e && e.code === 'ENOENT' ? 0 : MAX_INTERRUPTED_ATTEMPTS;
+  }
+  const v = text.trim();
+  return /^[0-9]{1,6}$/.test(v) ? Number(v) : MAX_INTERRUPTED_ATTEMPTS;
+}
+
+/** A marker a kill left AFTER its migration committed (DI13): once the store
+ *  reads `version`, every `.pre-v<N>.attempt` with N ≤ version is done with.
+ *  Returns the names removed. */
+export function clearDoneMarkers(home, version) {
+  const dir = historyPaths(home).backups;
+  let names;
+  try { names = readdirSync(dir); } catch { return []; }
+  const removed = [];
+  for (const n of names.sort()) {
+    const m = /^\.pre-v([0-9]+)\.attempt$/.exec(n);
+    if (!m || Number(m[1]) > version) continue;
+    rmSync(`${dir}/${n}`, { force: true });
+    removed.push(n);
+  }
+  return removed;
+}
+
+/** Throws unless `next` keeps every table and column `prev` had: migrations add
+ *  tables, columns and indexes, and never rename or drop (§6.11, DM44; D-4212
+ *  history-cli-reads-store-version), because
+ *  an older CLI reads a newer store by the columns it names. A rename is a drop
+ *  plus an add, so it is caught as the drop. */
+export function assertAdditive(prev, next) {
+  const lost = [];
+  for (const [table, cols] of Object.entries(prev)) {
+    const now = next[table];
+    if (now === undefined) { lost.push(table); continue; }
+    for (const c of cols) if (!now.includes(c)) lost.push(`${table}.${c}`);
+  }
+  if (lost.length > 0) {
+    throw new StoreError('migration-not-additive', `a migration may only add; it removed ${lost.join(', ')}`);
+  }
+}
+
+/** Run migrations `from`..`to`-1 behind a snapshot of the store as it was
+ *  (§6.11, ruled Q6; D-4182 history-pre-migration-snapshot). The verdict is a PARAMETER: this function has no path
+ *  that migrates without `snapshot-then-migrate` in hand (DM42), and lib.mjs's
+ *  `planMigration` is the only thing that answers it. With N = `to`:
+ *
+ *   1. remove a stale `backups/.pre-v<N>.db.tmp` and its `-journal` (the
+ *      `deploy/backup-coord.mjs` pre-clean), then write the attempt marker
+ *      `backups/.pre-v<N>.attempt` holding the attempt count, temp-then-rename;
+ *   2. `VACUUM INTO` the `.tmp`, its name a bound parameter, then 0600 (SQLite
+ *      creates it 0644 under the default umask);
+ *   3. fsync it, rename it to `backups/pre-v<N>.db`, fsync backups/;
+ *   4. remove every older `pre-v*.db` — only the newest pre-migration snapshot
+ *      is kept, and the operator's `<ts>.db` files are never touched;
+ *   5. the migrations in ONE `BEGIN IMMEDIATE` (FULL), which checks they were
+ *      additive, records `copy_bps` (the copy's measured rate, which the next
+ *      `planMigration` reads) and ends by raising user_version; then the marker
+ *      goes.
+ *
+ *  A kill in 1-3 leaves only the `.tmp` and the marker, user_version unchanged;
+ *  the next attempt removes the `.tmp` first, and the marker's count escalates a
+ *  scheduled pass to `snapshot-needs-op` after two. A finished `pre-v<N>.db` from
+ *  an interrupted attempt is never reused: step 2 always copies afresh. */
+export function runMigration(db, home, i) {
+  if (i.verdict !== 'snapshot-then-migrate') {
+    throw new StoreError('migration-not-admitted', `runMigration was handed '${i.verdict}'; only snapshot-then-migrate migrates`);
+  }
+  const P = historyPaths(home);
+  const n = i.to;
+  mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+  const tmp = `${P.backups}/.pre-v${n}.db.tmp`;
+  const snapshot = `${P.backups}/pre-v${n}.db`;
+  rmSync(tmp, { force: true });
+  rmSync(`${tmp}-journal`, { force: true });
+  writeFileAtomic(attemptMarker(home, n), `${readAttempts(home, n) + 1}\n`);
+
+  const t0 = process.hrtime.bigint();
+  db.prepare('VACUUM INTO ?').run(tmp);
+  chmodSync(tmp, 0o600);
+  const fd = openSync(tmp, FS.O_RDONLY);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+  const seconds = Number(process.hrtime.bigint() - t0) / 1e9;
+  const size = statSync(tmp).size;
+  renameSync(tmp, snapshot);
+  fsyncDir(P.backups);
+  for (const name of readdirSync(P.backups)) {
+    const m = /^pre-v([0-9]+)\.db$/.exec(name);
+    if (m && Number(m[1]) < n) rmSync(`${P.backups}/${name}`, { force: true });
+  }
+
+  const copyBps = Math.max(1, Math.round(size / Math.max(seconds, 0.001)));
+  withTx(db, 'FULL', () => {
+    const before = schemaOf(db);
+    for (let v = i.from; v < i.to; v += 1) db.exec(i.migrations[v]);
+    assertAdditive(before, schemaOf(db));
+    setMeta(db, 'copy_bps', copyBps);
+    db.exec(`PRAGMA user_version = ${i.to}`);
+  });
+  rmSync(attemptMarker(home, n), { force: true });
+  return { snapshot, copyBps };
 }
