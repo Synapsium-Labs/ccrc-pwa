@@ -37,8 +37,9 @@ under its own heading. Until that is here, nothing in waves 2–6 may depend on 
 all 98 cells are `measured`. Measured means measured **within the rig**, and two of §8.1's situations are reached
 only through a proxy:
 - **Parent crash is a SIGKILL of the parent's Claude Code process** (`kill9` in parent-kill, wf-iso-resume and
-  clear-compact-resume). It is the rig's proxy for §8.1's OOM column. A cgroup OOM kill of the pane's scope takes the
-  whole process tree, not the parent alone, and that is unmeasured.
+  clear-compact-resume). It is the rig's proxy for §8.1's OOM column. A cgroup OOM kill of the pane's scope can take
+  the whole process tree, not the parent alone; whether it does is the unit's OOM policy (an assumption about the
+  box's systemd and cgroup settings, not measured here), and that case is unmeasured.
 - **The account swap is a config-dir swap.** swap-resume's `swapConfig` copies the fixture config dir to a second
   one under the same fixture HOME, with the same mock auth, and resumes there. It is not a swap between accounts.
 
@@ -149,7 +150,9 @@ the eleven Agent and Workflow scenarios. Each item holds on all seven versions u
   SessionEnd (parent-kill) is never terminal evidence either, which confirms §5.11. The dialog's other two options
   ("Move to background and exit", "Stay") are unmeasured. Superseded: before D-4058 the scenario's Escape reached an
   idle prompt (the parent's turn had already ended with a Stop), and its `/exit` stopped at this dialog unanswered, so
-  that corpus's "none" measured no exit at all.
+  that corpus's "none" measured no exit at all. That was OBSERVED on 2.1.289 only, from the pane while re-scripting;
+  on the other six versions it is inferred, from the Stop that ends every old fixture (with no SessionEnd and no
+  note, 7 of 7) and from the dialog the re-capture met on all seven.
 - **Q6 removal:** an unchanged isolated tree was removed natively for Agent (agent-iso-unchanged) and for Workflow
   (wf-iso's unchanged worker, wf-limit-pause). wf-iso's committing worker's tree stayed (its record holds the
   commit). Committed trees stayed (agent-iso-changed, and agent-iso-bg, whose subagent commits too: its tip differs
@@ -167,10 +170,12 @@ the eleven Agent and Workflow scenarios. Each item holds on all seven versions u
   probe was reached on every version. Whether a mock 429 provokes Claude Code's five-hour pause stays unknown
   (`wf-limit-pause-is-an-attempt`, D-3997).
 - **Q2** asked `Agent` or `Task`. Claude Code offers its tools in each request, and the mock answers with the first
-  entry of its `nameAny` list (`["Agent", "Task"]`) that the request offers (`mockapi.mjs`'s `toolName`), so the
-  corpus shows that Claude Code offered and ran `Agent` on every version (D-3994). Whether it also offered `Task`
-  cannot be told from the corpus: `Agent` is listed first, and no fixture records the offered tool list (`Task`
-  appears in no fixture). A `Task` spelling is not observed, not excluded.
+  entry of its `nameAny` list (`["Agent", "Task"]`) that the request offers, falling back to the list's first entry,
+  `Agent`, when it offers neither (`mockapi.mjs`'s `toolName`: `… ?? tu.nameAny[0]`). So the mock's pick alone shows
+  nothing; the evidence that Claude Code offered and executed `Agent` on every version is that the call RAN as
+  `Agent`: a main-loop Agent PreToolUse and an `async_launched` PostToolUse on 49 of 49 Agent launches (D-3994).
+  Whether it also offered `Task` cannot be told from the corpus: `Agent` is listed first, and no fixture records the
+  offered tool list (`Task` appears in no fixture). A `Task` spelling is not observed, not excluded.
 
 ### Hook-side costs (Q8)
 

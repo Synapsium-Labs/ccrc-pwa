@@ -3281,13 +3281,16 @@ Fix round 1 (review 277; issued 4058–4067):
   scenario, which could not do its scripted thing. Its main turn had ENDED before the Escape — the mock answered the
   parent's post-launch request with `DLG-WAIT` and Stop fired — so the Escape interrupted nothing, and the `/exit`
   that followed opened Claude Code's "Background work is running" dialog, which the scenario never answered: the
-  parent never exited, and no SessionEnd was captured on any version. Task 6 Step 3 has a failure that is the rig's
-  fixed in the rig and re-run on every version. Fixed: the mock HOLDS the parent's post-launch request
-  (`main-hang`: kind `main`, carrying the launch's `tool_result`, hang 600 s); the run waits on
-  `["sub-hang","main-hang"]` before the Escape, so the Escape lands in a live main-loop turn; and after `/exit`, `answerDialog "Background work is running"` presses Enter on the default
-  option, "Exit and stop tasks". Re-captured on all seven versions, re-sanitised into the corpus and `matrix.json`
-  re-derived: only the seven interrupt-exit cells changed, and each now records one SessionEnd
-  (`prompt_input_exit`), no Stop, no SubagentStop, and one tree left, locked.
+  parent never exited, and no SessionEnd was captured on any version. The idle prompt and the unanswered dialog were
+  OBSERVED on 2.1.289 only, from the pane while re-scripting; on the other six versions they are inferred, from the
+  Stop that ends every old fixture (with no SessionEnd and no note, 7 of 7) and from the dialog the re-capture met on
+  all seven. Task 6 Step 3 says a failure that is the rig's is fixed in the rig and re-run on every version. Fixed:
+  the mock HOLDS the parent's post-launch request (`main-hang`: kind `main`, carrying the launch's `tool_result`,
+  hang 600 s); the run waits on `["sub-hang","main-hang"]` before the Escape, so the Escape lands in a live main-loop
+  turn; and after `/exit`, `answerDialog "Background work is running"` presses Enter on the default option, "Exit and
+  stop tasks". Re-captured on all seven versions, re-sanitised into the corpus and `matrix.json` re-derived: only the
+  seven interrupt-exit cells changed, and each now records one SessionEnd (`prompt_input_exit`), no Stop, no
+  SubagentStop, and one tree left, locked.
 - **D-4059** — `no-merge-before-handoff` (review 277 F7): departs from Precondition 1 ("Merge `origin/main` into
   this workspace's branch first") and from the Global Constraint "merge `origin/main` (never rebase) before the
   handoff", which this run did not do. Both are superseded: worker clause 16 licenses an absorb only on a measured
@@ -3314,15 +3317,17 @@ Fix round 1 (review 277; issued 4058–4067):
   `347b7b64`: two reap rows and the three rows of the `wait_run_quiet` describe). Fix round 1 (task D) adds rows
   under that same Linux-only describe that pin, by behaviour, `cleanup_run`'s call to `wait_run_quiet` and its
   no-`/proc` refusal (review 277 F10c), each red when its arm alone is deleted.
-- **D-4062** — `rig-guard-rows-declared` (review 277 F10): reap's foreign-owner skip (`! -O`, D-4006) has no row,
-  because a hermetic row would need a directory owned by a second uid, which an unprivileged test cannot make; it
+- **D-4062** — `rig-guard-rows-declared` (review 277 F10): departs from the Global Constraint "every guard below ships
+  with a row that goes red when it is deleted, measured" and from fix round 1's rule that every guard arm it adds or
+  touches ships with a row measured red by deleting that arm alone. Reap's foreign-owner skip (`! -O`, D-4006) has no
+  row, because a hermetic row would need a directory owned by a second uid, which an unprivileged test cannot make; it
   is declared untestable here. And fix round 1's F10 rows are BEHAVIOUR rows, not the source-text pins the ruling
   allowed: each runs `rig.sh`'s own function text, extracted by name (a renamed function fails the row loudly), in a
-  harness — `cleanup_run`'s call to `wait_run_quiet` and its no-`/proc` refusal, `wait_run_quiet`'s waiting half,
-  the ready footer, `cleanup_run`'s socket removal — or `rig.sh` itself (the `dlg<non-digit>` socket filter,
-  `disableAutoMode`). No substitution is recorded for T4-M3: a relative, a `..`-spelled and a trailing-slash root
-  are each refused only by `cmd_setup`'s spelling guard, so deleting that line alone reds the row "setup refuses a
-  root by its SPELLING alone … (F10a)" (1 red, measured), and T4-M3 bites as worded.
+  harness — `cleanup_run`'s call to `wait_run_quiet` and its no-`/proc` refusal, `wait_run_quiet`'s waiting half, the
+  ready footer, `cleanup_run`'s socket removal — or `rig.sh` itself (the `dlg<non-digit>` socket filter,
+  `disableAutoMode`). No substitution is recorded for T4-M3: a relative, a `..`-spelled and a trailing-slash root are
+  each refused only by `cmd_setup`'s spelling guard, so deleting that line alone reds the row "setup refuses a root by
+  its SPELLING alone … (F10a)" (1 red, measured), and T4-M3 bites as worded.
 - **D-4063** — `plan-rows-strengthened` (review 277 F28): plan-prescribed Task 3 and Task 4 rows were split, renamed
   or changed with no number, each a strengthening: the plan's "refuses to start without MOCK_SCRIPT, and writes no
   file when MOCK_LOG and MOCK_REQDIR are unset" row became two; `SUB_SYSTEM` gained the main-loop marker;
