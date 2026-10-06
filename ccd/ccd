@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ed6a18d223188fffbb632b2f708f575103ea8d2ff8105de295ea351e42a97f2e
+# ccrc:generated 1 sha256=700ede257e1a79b2ded928b2f4211f39d6f8bcca483f190f309fa4894c7f8dfb
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -27992,6 +27992,16 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
          "breadcrumb phase '$_WS_RCL_ACT:$phase' for $id is not one ccd ever writes — refusing to guess which steps already ran"
        return 1 ;;
   esac
+  # EVERY DESTRUCTIVE GIT CALL BELOW RUNS CONTAINED (spec §5.6): each `git
+  # worktree remove` and each `update-ref -d`, the nested checkouts' and the
+  # child's own, under `_ws_reclaim_contained`, as the pins before them do.
+  # Uncontained (measured, git 2.43), `update-ref -d` runs the repository's
+  # reference-transaction hook, and a `worktree remove` with no force flag on a
+  # tree that stands runs its core.fsmonitor program and its post-index-change
+  # hook. `ws-expire` takes this tail too. The two branch deletes spell
+  # `--no-deref`: a symbolic ref is deleted itself, never followed to the
+  # branch it names (measured, git 2.43: a plain `update-ref -d` deletes the
+  # target and leaves the symbolic ref dangling).
   # (1) UNSUPERVISE AND KILL THE PANE — FIRST, UNCONDITIONALLY, on the fresh arm
   # AND on every resumed one (spec §5.6), whatever phase the tail enters at —
   # the vanished-worktree arm, entering at the branch, included: a session whose
@@ -28234,7 +28244,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
         fi
         _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$cpath" \
           || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
-        wtout=$(git -C "$main" worktree remove --force "$cpath" 2>&1) \
+        wtout=$(_ws_reclaim_contained git -C "$main" worktree remove --force "$cpath" 2>&1) \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
       elif (( rec == 0 )); then
         if [[ "$_WS_NREC_BRANCH" != "$cbr" ]]; then
@@ -28244,7 +28254,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
         fi
         _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$cpath" 1 \
           || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — git's record of $cpath stands, and nothing further was deleted"; return 1; }
-        wtout=$(git -C "$main" worktree remove "$cpath" 2>&1) \
+        wtout=$(_ws_reclaim_contained git -C "$main" worktree remove "$cpath" 2>&1) \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
       fi
       # A NESTED BRANCH IS DELETED ONLY WHEN IT IS PROVABLY THE LINE'S, AND
@@ -28274,7 +28284,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
           fi
           _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" branch "$cbr" \
             || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — $cbr stands, and nothing further was deleted"; return 1; }
-          git -C "$main" update-ref -d "refs/heads/$cbr" "$chead" 2>/dev/null || {
+          _ws_reclaim_contained git -C "$main" update-ref -d --no-deref "refs/heads/$cbr" "$chead" 2>/dev/null || {
             _ws_reclaim_fail "$id" "$lctx" branch-moved "$cbr moved after it was pinned at $chead — nothing further was deleted"
             return 1
           }
@@ -28312,7 +28322,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     if [[ -d "$workdir" ]]; then
       _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$workdir" \
         || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — the tree at $workdir stands, and nothing further was deleted"; return 1; }
-      wtout=$(git -C "$main" worktree remove --force "$workdir" 2>&1) \
+      wtout=$(_ws_reclaim_contained git -C "$main" worktree remove --force "$workdir" 2>&1) \
         || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
     elif ! _ws_reclaim_absent "$workdir"; then
       # Not a directory, and not PROVEN gone: something else stands there, or
@@ -28356,7 +28366,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       if (( rec == 0 )); then
         _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$workdir" 1 \
           || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — git's record of $workdir stands, and nothing further was deleted"; return 1; }
-        wtout=$(git -C "$main" worktree remove "$workdir" 2>&1) \
+        wtout=$(_ws_reclaim_contained git -C "$main" worktree remove "$workdir" 2>&1) \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
       fi
     fi
@@ -28385,7 +28395,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       fi
       _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" branch "$branch" \
         || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — $branch stands, and nothing further was deleted"; return 1; }
-      git -C "$main" update-ref -d "refs/heads/$branch" "$tip" 2>/dev/null \
+      _ws_reclaim_contained git -C "$main" update-ref -d --no-deref "refs/heads/$branch" "$tip" 2>/dev/null \
         || { _ws_reclaim_fail "$id" "$lctx" branch-moved "$branch moved after it was pinned at $tip — nothing further was deleted"; return 1; }
     fi
     _reg_set "$id" reaping "$_WS_RCL_ACT:artifacts"
