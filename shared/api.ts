@@ -3854,6 +3854,24 @@ export type ChildReclaimAttention =
   | { readonly kind: 'kept-many'; readonly word: ChildReclaimKeptWord;
       readonly members: readonly ChildReclaimKeptMember[]; readonly sentence: string };
 
+/** One ARCHIVED WORKSPACE the expiry lane reports (workspace lifecycle spec 2026-09-24 §5.3, wave 3b): one the lane
+ *  WOULD clean up while it runs shadowed (`would-expire`), one held past its seven days (`held`), one a process keeps
+ *  (`in-use`, after it has stood a few passes), one ccd refused for good (`refused`), one whose cleanup keeps failing
+ *  (`failing`), and one whose fleet box cannot say when it expires (`no-evidence`). A REPORT, never a tap. NEVER
+ *  child reclamation's: its own list, so wave 5's run chip cannot see it. `sentence` is the SERVER's — the pid, the
+ *  command and the path of an `in-use` row among them — and the PWA renders it. `archivedAt` and `expiresAt` are
+ *  epoch SECONDS, ccd's (`expiresAt` is ccd's own `archivedAt + WS_EXPIRE_AFTER_S`, null when the box did not say);
+ *  `at` (epoch ms, the server's clock) is since when this report stands — kept in the lane's memory, so a restart
+ *  rebuilds it on the passes that follow rather than reading it back. */
+export interface ExpiryAttention {
+  readonly sessionId: string;
+  readonly kind: 'would-expire' | 'held' | 'in-use' | 'refused' | 'failing' | 'no-evidence';
+  readonly sentence: string;
+  readonly archivedAt: number;
+  readonly expiresAt: number | null;
+  readonly at: number;
+}
+
 /** The three markers the coordination lane is governed by, read together
  *  because they come from one listing: `coordinator-paused` (spec §4.2 — the
  *  one file that stops a program mid-flight), `mail-disabled` (the injection
@@ -3871,6 +3889,9 @@ export interface CoordStatus {
   mail: MarkerState;
   reclaim: MarkerState;
   childReclaimAttention: readonly ChildReclaimAttention[];
+  /** The expiry lane's own list (wave 3b). OPTIONAL on the wire: an older server omits it, and the PWA's one reader
+   *  (`pwa/src/fleet/expiryWords.ts`) reads absence as no items. */
+  expiryAttention?: readonly ExpiryAttention[];
 }
 
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed

@@ -30,7 +30,7 @@ import { askActions, askKey } from './askkey.js';
 import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  ChildMark, ChildReclaimAttention, ChildReclaimKeptWord, CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion,
+  ChildMark, ChildReclaimAttention, ChildReclaimKeptWord, CoordStatus, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
   LifecycleHealth, MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
   SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
@@ -1075,6 +1075,10 @@ export class FleetWatcher {
    *  `[]` until the first sweep — which runs on the first tick after a restart, so the mirror arms are
    *  rebuilt within one tick, and the kept arm at the first judging pass, rather than lost. */
   private childReclaimAttentionList: readonly ChildReclaimAttention[] = [];
+  /** The expiry lane's attention list (workspace lifecycle wave 3b) as `sweepArchivedExpiry` last derived it from its
+   *  own memory — never child reclamation's list, so nothing that reads that one sees an expiry. `[]` until the lane's
+   *  first pass. */
+  private expiryAttentionList: readonly ExpiryAttention[] = [];
   /** `emitPools`'s byte-equality guard and last measured value — `lastCoordJson`
    *  and `coord`'s idiom, for their reasons. `null` until a tick has measured,
    *  and `currentPools()` sends NOTHING while it is: a fabricated empty map
@@ -2123,11 +2127,11 @@ export class FleetWatcher {
   private emitCoord(names: readonly string[] | null): void {
     const status: CoordStatus = names === null
       ? { pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable',
-          childReclaimAttention: this.childReclaimAttentionList }
+          childReclaimAttention: this.childReclaimAttentionList, expiryAttention: this.expiryAttentionList }
       : { pause: names.includes(COORDINATOR_PAUSE_MARKER) ? 'set' : 'clear',
           mail: names.includes(MAIL_DISABLED_MARKER) ? 'set' : 'clear',
           reclaim: names.includes(RECLAIM_PAUSE_MARKER) ? 'set' : 'clear',
-          childReclaimAttention: this.childReclaimAttentionList };
+          childReclaimAttention: this.childReclaimAttentionList, expiryAttention: this.expiryAttentionList };
     const json = JSON.stringify(status);
     if (json === this.lastCoordJson) return;
     this.lastCoordJson = json;
