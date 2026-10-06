@@ -5,10 +5,12 @@
 //
 // WHAT RUNS. This tree's `_upd_sweep` out of the sourced `ccd/ccrc`, on a fixture HOME whose `systemctl` and
 // `journalctl` are stubs, against this tree's `deploy/verify-service.sh` (S11) — or, for R1 to R3, against the FROZEN
-// wave-10 script (`fixtures/verify-service-pre-wave10.sh`, S0, v0.0.79's bytes): a rollback pairs THIS sweep with an
-// OLDER script, so the sweep must hold with a script that knows nothing of `stopped on purpose:`. The OLD sweep with
-// the NEW script — the move INTO wave 11 — is `ccrc-sweep-deliberate-stop.test.ts`'s. The builders are
-// `sweepFixture.ts`'s.
+// pre-wave-10 script (`fixtures/verify-service-pre-wave10.sh`, S0, v0.0.79's bytes), and for Q1 to Q10 against the
+// FROZEN wave-10 script (`fixtures/verify-service-pre-wave11.sh`, S10, v0.0.91's bytes): a rollback pairs THIS sweep
+// with an OLDER script, so the sweep must hold with a script that knows nothing of `stopped on purpose:` (S0), or
+// nothing of wave 11's purged-arm guards (S10). The OLD sweep with the NEW script — the move INTO wave 11 — is
+// `ccrc-sweep-deliberate-stop.test.ts`'s. The builders are `sweepFixture.ts`'s. (Wave 12, R19e: this header called
+// S0 "wave-10"; it is the script BEFORE wave 10.)
 //
 // SAFETY. A fixture HOME only, an env built from scratch, every tool that is not a stub a recording POISON, and
 // `runSweep` proves containment on the spawn's FINAL env before every spawn. No verify job outlives its case (T-1):
@@ -510,6 +512,34 @@ describe('_upd_sweep, Linux arm: one shared verify window, a re-check, crash-sha
     noPoison(box);
   }, 60_000);
 
+  // D-3984 verifies a crash-shaped unit only when it is one of `missing`, and `missing` is drawn from `before`: the
+  // units the PRE-restart listing shows ACTIVE. The crash listing's loop takes a unit only if it is one of `missing`
+  // (`if [ "$m" = "$cu" ]`). Every other case plants its units active before, so only this one can see that filter
+  // (review 281 F1; wave 12, R19b, D-4070). Demo-b is missing, so the listing is read; demo-x is in it but was not
+  // active before, so it is neither verified nor warned about. In (b) the pre-restart listing does not show demo-x at
+  // all, and try-restart leaves such a unit alone. In (a) demo-x read `activating` before the restart, and systemd's
+  // try-restart DOES restart an activating unit: (a) pins the shipped choice, to verify only units that were active,
+  // and is no proof that the choice is right (a question for wave 13).
+  const X = U('x');
+  const W17E: ReadonlyArray<readonly [string, string, UnitPlant]> = [
+    ['a', 'crash-looping before the restart too',
+      { unit: X, active: ['activating'], mainPid: [], listed: 'crash:activating', preRestart: 'activating' }],
+    ['b', 'absent from the pre-restart listing',
+      { unit: X, active: ['failed'], mainPid: [], listed: 'crash:failed', preRestart: null }],
+  ];
+  itLinux.each(W17E)('W17e (%s) a crash-listed unit that was not active before the restart (%s) is not verified (D-3984)', (_k, _label, x) => {
+    const box = makeBox({ units: [stable(A, 0), { unit: B, active: ['inactive'], mainPid: [], listed: 'gone' }, x] });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(count(box, LIST_CRASH), 'demo-b is missing, so the crash listing is read').toBe(1);
+    expect(r.stderr, ctx(r)).not.toContain(`${X} was active before try-restart`);
+    expect(count(box, act(X)), 'demo-x is never verified').toBe(0);
+    expect(r.stderr).toContain(`${B} was active before try-restart and is not active after it`);
+    expect(r.stderr).not.toContain(RECHECK);
+    expect(r.stdout).toContain(SWEEP_OK);
+    noPoison(box);
+  }, 60_000);
+
   // A copy of the launcher that starts only unit `$3`'s job, prints a fork error and exits 254 (W18, W20 (a)).
   const launcherCopy = (wait: boolean): string => [
     '_upd_sweep_launch() {',
@@ -787,7 +817,7 @@ itLinux('W22: the caller\'s own INT trap is put back after the concurrent batch 
   noPoison(box);
 }, 60_000);
 
-describe('_upd_sweep, Linux arm, with the FROZEN wave-10 script S0 (a rollback pairs this sweep with an older script)', () => {
+describe('_upd_sweep, Linux arm, with the FROZEN pre-wave-10 script S0 (a rollback to v0.0.79 or older)', () => {
   const s0 = (): string => readFileSync(FROZEN_VERIFY_S0, 'utf8');
 
   itLinux('R0 the frozen S0 is v0.0.79\'s script', () => {
