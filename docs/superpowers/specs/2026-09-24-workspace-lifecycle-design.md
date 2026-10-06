@@ -402,7 +402,9 @@ and the README and `wave-lifecycle.md` §6 text above are wave 3b's, planned aft
   EACCES: so what is not seen is a process of another UNIX user and a same-user non-dumpable one (an `ssh-agent`,
   anything that cleared its dumpable flag, a setuid or setgid exec) — refusing on those would wedge every expiry while
   an ssh-agent runs. Anything else that goes wrong (a process list that cannot be read, a `ps` that is missing) is
-  unmeasured, retried.
+  unmeasured, retried — Darwin's `lsof` listing too when it outruns its 20-second bound
+  (`WS_EXPIRE_LSOF_DEADLINE_S`), even one that already listed ccd and a process in the worktree. The bound's stated
+  limit: a process in uninterruptible kernel wait survives TERM and KILL, so `lsof` can hold the reap lock past it.
 - **Rung 2′'s words.** `not-archived` (no stamp), `not-expired` (younger than `WS_EXPIRE_AFTER_S`, a future stamp
   included) and `child`; a stamp that is not an epoch ccd writes is unmeasured, never old.
 - **`ws-reap`'s `expire:` arm refuses** (`expire-in-progress`), the twin of its `reclaim:` mirror. The arm that RESUMES
@@ -415,7 +417,10 @@ and the README and `wave-lifecycle.md` §6 text above are wave 3b's, planned aft
   an archived row, a held reap lock — before they journal their act (a refused return must not read as a return to
   §9's instrument), and so does `enable`, which journals before it reaches `start`; on an archived row a breadcrumb
   that stands but cannot be read refuses too; `ws-restore` refuses `in-progress` under its lock; `_spawn_start`, where every session pane is
-  made, holds the same gate as the backstop. The lock half refuses whatever holds it: a spawn of an archived row during
+  made, holds the same gate as the backstop. One gap remains (3893's residual): the return verbs take the gate and
+  release it before their journal line, so an expiry that wins the lock inside that gap leaves the refused return
+  journaled as `done`; nothing is lost, and wave 3b closes it before its lane goes live (the coordinator's ruling (a)).
+  The lock half refuses whatever holds it: a spawn of an archived row during
   a human `ws-reap` or `ws-restore` of that row refuses too, where it used to race. `ws-add` never mints a row over a
   standing breadcrumb (its slug stays taken).
 - **The direct-entry boundary.** `ws-expire` and `ws-audit --session <id> --expire` are protected shapes, as
@@ -515,7 +520,9 @@ agent frame in remote mode.
   2. Coordinator clause 3's closing sentence (§5.3).
   3. Spec §5.9 "No child ever appears in the reap or archive sheets". A person may now archive a child by hand, and
      "Archive all" skips children (§5.1).
-  4. Wave 3's "exactly ONE addition" to `ws-reap`'s resume fork: the `expire:` arm is a second (§5.3).
+  4. Wave 3's "exactly ONE addition" to `ws-reap`'s resume fork: the `expire:` arm is a second (§5.3). Amended by
+     this design's wave 3 (3965): CCR-15's §6 now names `ws-reap`'s `expire-in-progress` refusal beside its `reclaim:`
+     mirror, and `ws-restore`'s refusal of an expiry in progress.
   5. `closeRun`'s `causedBy` vocabulary gains `'sweep'` (§5.4).
   6. Wave 4's lane gains a second population (§5.3).
   7. The contract's `shared/api.ts` line citations (R9), which waves 1 and 2 must place below or re-point (§4).

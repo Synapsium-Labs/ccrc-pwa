@@ -82,10 +82,13 @@ def open_db(path):
 def close_time(text):
     """The server's rule for a close time (`persistedInt` in `lastRunBySession`, server/src/coord/store.ts): the column
     CAST to text, read as a number, is a positive safe integer — anything else (NULL, zero, a negative, a fraction, a
-    word) is doubt, None. The SAME answer for every text CAST makes of an INTEGER or REAL value, and for decimal TEXT;
-    `_` is refused because Python's float() reads `1_000` and JavaScript's Number() does not. One divergence is left,
-    stated: a hand-written TEXT value in JavaScript's own radix spellings (`0x10`, `0b1`, `0o7`) is a number to the
-    server and doubt here — no writer produces one (the server writes closedAt as an integer)."""
+    word) is doubt, None. The SAME answer for every text CAST makes of an INTEGER or REAL value, and for ASCII decimal
+    TEXT; `_` is refused because Python's float() reads `1_000` and JavaScript's Number() does not. Divergences are left,
+    stated, each measured: a hand-written TEXT value in JavaScript's own radix spellings (`0x10`, `0b1`, `0o7`) is a
+    number to the server and doubt here; Arabic-Indic digits (U+0661 and its row) and fullwidth digits (U+FF11 and its
+    row) are an int here (float() reads any Unicode decimal digit) and NaN, so doubt, on the server; a leading U+FEFF
+    (the byte-order mark) is None here (float() does not strip it) and the number on the server (Number() does). No
+    writer produces any of them (the server writes closedAt as an integer)."""
     if text is None or '_' in text:
         return None
     try:
