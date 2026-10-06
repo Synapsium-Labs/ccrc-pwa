@@ -24,15 +24,18 @@
 // (`deps.home ?? process.env.HOME`, integration contract 4) — the frozen
 // allow-list single-definition.test.ts pins; tests reach every fault through a
 // test-only preload, never a variable this file reads (§10.1 "Seams").
-import fs, { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import fs, {
+  closeSync, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync,
+  realpathSync, statSync, unlinkSync, writeSync,
+} from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import {
   CARRIER_KILL_S, EXIT, SCHEMA_ADDED, SCHEMA_VERSION, STATFS_DEADLINE_MS, capOf, decideStoreOpen, floorThreshold,
-  historyPaths, passOutcome, planMigration, planRun, readBoxEnvValue,
+  UUID_RE, WRITER_RE, historyPaths, journalRecord, passOutcome, planMigration, planRun, readBoxEnvValue,
 } from './lib.mjs';
 import {
   StoreError, bump, closeWriter, createStore, dropPending, finishPending, getMeta, measureStoreFacts, openReader,
-  openWriter, readAttempts, removeStaleTemps, syncWriterMirror, userVersion,
+  openWriter, readAttempts, removeStaleTemps, syncWriterMirror, userVersion, withTx,
 } from './store.mjs';
 
 const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] --secrets <file...> -- <home...>';
@@ -117,6 +120,168 @@ function capText(capPath) {
   }
 }
 
+// ── The journal (spec §9.14) ──────────────────────────────────────────────────────────────────────────────
+//
+// The second copy of what only the store holds: drained spool lines, the verdicts taken from registry state or an
+// operator's argument, learned redaction pairs and tick records (D-4227, slug history-spool-journal-retained). It follows
+// coord.db's doctrine, "the markdown ledger stays the disaster-recovery ground truth" (server/src/coord/db.ts:110).
+// - It is append-only and sits in the real root on the home filesystem, never under db/, so a volume lost with the
+//   store leaves it.
+// - There is one file per UTC month and writer token, journal/<store_id>/<YYYY-MM>.<writer>.jsonl (slug
+//   history-journal-writer-token; D-4226), so two boxes that ran one store in turn never write the same name.
+// - The caller reads the token into `ids` from ~/.ccrc/history/store.writer only (D-4220, slug history-store-writer-file),
+//   never from meta. The journal half must be able to name its file exactly when the DB is missing or must not be
+//   opened.
+// - Only this sweep writes here, under the shim's flock.
+
+/** A journal append, its fsync, or a month file's creation that did not complete. The caller keeps the draining
+ *  file in `.draining/` and runs no drain transaction for it (§9.2 "Journal first"). A verdict stays in the outbox.
+ *  `code` is a closed word ('bad-name' | 'short-write' | 'append-failed'), never an OS message. */
+export class JournalError extends Error {
+  constructor(code, cause) {
+    super(`journal: ${code}`, cause === undefined ? undefined : { cause });
+    this.name = 'JournalError';
+    this.code = code;
+  }
+}
+
+const MONTH_RE = /^[0-9]{4}-(0[1-9]|1[0-2])$/;
+
+/** The UTC month an append at `ms` lands in, 'YYYY-MM'. UTC, so a box's timezone never splits one month in two. */
+export function monthOf(ms) {
+  const d = new Date(ms);
+  return `${String(d.getUTCFullYear()).padStart(4, '0')}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+/** The one place a journal file's name is spelled. The guard matters: `storeId` and `writer` become path segments,
+ *  and a value that is not a store id or a writer token must never name a file. A `..` would leave the store's own
+ *  directory. */
+export function journalFilePath(home, storeId, writer, month) {
+  if (!UUID_RE.test(storeId) || !WRITER_RE.test(writer) || !MONTH_RE.test(month)) throw new JournalError('bad-name');
+  return `${historyPaths(home).journalDir}/${storeId}/${month}.${writer}.jsonl`;
+}
+
+/** fsync a directory, so a link(), rename or unlink inside it survives a power loss. */
+export function fsyncDir(dir) {
+  const fd = openSync(dir, 'r');
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+/** A month file is born holding its `head` (rev 3.2 review, DI14):
+ *  - the head goes into a fsynced temp;
+ *  - the temp is link()ed to the month's name;
+ *  - the directory is fsynced.
+ *  So wherever a kill lands, the month file either does not exist or opens with its head. A temp left by a killed
+ *  pass is removed first. Its name starts with a dot and ends in `.tmp`, so nothing that lists `*.jsonl` ever reads
+ *  it. */
+function createMonthFile(dir, file, ids, month, nowMs) {
+  for (const n of readdirSync(dir)) {
+    if (n.startsWith(`.${month}.${ids.writer}.jsonl.`) && n.endsWith('.tmp')) unlinkSync(`${dir}/${n}`);
+  }
+  const tmp = `${dir}/.${month}.${ids.writer}.jsonl.${process.pid}.tmp`;
+  const fd = openSync(tmp, 'wx', 0o600);
+  try {
+    const head = Buffer.from(`${journalRecord('head', nowMs, { store_id: ids.storeId, month, writer: ids.writer })}\n`, 'utf8');
+    if (writeSync(fd, head) !== head.length) throw new JournalError('short-write');
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  linkSync(tmp, file);
+  unlinkSync(tmp);
+  fsyncDir(dir);
+}
+
+/** Append `lines` (each one record, with no newline) to this month's file for this store and writer, in ONE write,
+ *  then fsync.
+ *  - A torn last line: if the file's last byte is not `\n` (a short write under a full filesystem), the same write
+ *    adds `\n` first. That is an append, never a rewrite, so the torn line stays one malformed line that replay
+ *    skips, and the next record starts clean (§9.14 "A torn last line", RC4).
+ *  - Modes are explicit (0700 directories, 0600 files), so an inherited umask never decides them.
+ *  - Any failure throws JournalError. It never retries by itself. */
+export function appendJournal(home, ids, lines, nowMs) {
+  const month = monthOf(nowMs);
+  const file = journalFilePath(home, ids.storeId, ids.writer, month);
+  if (lines.length === 0) return;
+  const dir = `${historyPaths(home).journalDir}/${ids.storeId}`;
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (!existsSync(file)) createMonthFile(dir, file, ids, month, nowMs);
+    const fd = openSync(file, 'a+', 0o600);
+    try {
+      let lead = '';
+      const size = fstatSync(fd).size;
+      if (size > 0) {
+        const last = Buffer.alloc(1);
+        readSync(fd, last, 0, 1, size - 1);
+        if (last[0] !== 0x0a) lead = '\n';
+      }
+      const buf = Buffer.from(`${lead}${lines.map((l) => `${l}\n`).join('')}`, 'utf8');
+      if (writeSync(fd, buf) !== buf.length) throw new JournalError('short-write');
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  } catch (e) {
+    if (e instanceof JournalError) throw e;
+    throw new JournalError('append-failed', e);
+  }
+}
+
+// ── The outbox (§9.14 "The order of writes"; D-4225, slug history-journal-outbox) ─────────────────────────────────
+// A verdict is inserted into journal_outbox under synchronous=FULL, in the transaction that makes it. It reaches the
+// journal through here: appended and fsynced as one block, and only then deleted. A crash between the two leaves the
+// rows, and the next tick appends them again before anything else. That costs a duplicate record, which replay
+// absorbs; it never loses one.
+
+/** Append every outbox row, in seq order, as one journal block. Returns the highest seq appended (0 when none) and
+ *  how many rows. The caller deletes them only after whatever must follow the append has happened (a drain's
+ *  unlink, §9.14 steps 5 and 6). */
+export function appendOutbox(db, home, ids, nowMs) {
+  const rows = db.prepare('SELECT seq, rec FROM journal_outbox ORDER BY seq').all();
+  if (rows.length === 0) return { upto: 0, count: 0 };
+  appendJournal(home, ids, rows.map((r) => r.rec), nowMs);
+  return { upto: rows[rows.length - 1].seq, count: rows.length };
+}
+
+/** Delete the outbox rows that a journal append already holds. */
+export function deleteOutbox(db, uptoSeq) {
+  if (uptoSeq <= 0) return;
+  withTx(db, 'NORMAL', () => { db.prepare('DELETE FROM journal_outbox WHERE seq <= ?').run(uptoSeq); });
+}
+
+/** Append and fsync, then delete. Used for a later confirmation, for a mapping, and as the tick's own first act
+ *  (§9.2 "First, the outbox"). Returns how many rows reached the journal. A failed append throws JournalError with
+ *  every row still in the outbox. */
+export function flushOutbox(db, home, ids, nowMs) {
+  const out = appendOutbox(db, home, ids, nowMs);
+  deleteOutbox(db, out.upto);
+  return out.count;
+}
+
+/** A counter bumped outside any other transaction. A database too busy to take it now is no reason to fail the pass
+ *  that noticed: the condition it counts recurs, and so does the count. */
+export function countOutside(db, name) {
+  try { withTx(db, 'NORMAL', () => bump(db, name)); } catch { /* recounted on the next tick that meets it */ }
+}
+
+/**
+ * What one tick of a bound, open store carries. runPass builds it; tick and the steps below read it.
+ * @typedef {object} TickCtx
+ * @property {string} home  the HOME this pass serves
+ * @property {object} paths  historyPaths(home) (Task 14; its tick reads `ctx.paths.spool`)
+ * @property {object} parsed  parseSweepArgv's result (Task 14; its tick reads `ctx.parsed.rosterUnreadable`)
+ * @property {{storeId: string, writer: string} | null} ids  store.id and store.writer as read from the home
+ *   filesystem after the create/finish step (§9.14: never from meta); null when either is not a readable value of
+ *   its grammar
+ * @property {() => number} now  deps.now ?? Date.now
+ * @property {string[]} homes  the rostered homes the shim passed after `--`
+ * @property {boolean} rosterUnreadable  the shim passed --roster-unreadable
+ * @property {(line: string) => void} out  the outcome-line printer (deps.out ?? one console.log line)
+ * @property {string[]} [hints]  set by the drain: sids of this tick's fresh spool lines
+ * @property {object[]} [planned]  set by Task 18's discovery step: the files bound this tick (Task 19's ingest
+ *   discovers and binds per path instead, and leaves it unset)
+ */
 /** The bound store's tick (§9.2), handed an open writer connection. Steps are
  *  added here in §9.2's order by the tasks that ship them; what it runs now:
  *  - spool/ exists from a bound store's first tick on: the hook's gate is that
@@ -124,6 +289,18 @@ function capText(capPath) {
  *    store — Darwin, a server, a refused store — spools nothing;
  *  - an unreadable roster is counted, once per pass (FE4, O54). */
 export async function tick(db, ctx) {
+  // >>> history tick steps (spec §9.2; D-4224, slug history-tick-order) ──────────────────────────────────────────
+  // First, the outbox. Verdict rows a crash left behind reach the journal before anything else, outside the run
+  // budget. With no writer token the journal cannot be named, so the rows wait in the DB and nothing is lost.
+  if (ctx.ids !== null) {
+    try {
+      flushOutbox(db, ctx.home, ctx.ids, ctx.now());
+    } catch (e) {
+      if (!(e instanceof JournalError)) throw e;
+      countOutside(db, 'journal_write_failed');
+    }
+  }
+  // <<< history tick steps
   mkdirSync(ctx.paths.spool, { recursive: true, mode: 0o700 });
   if (ctx.parsed.rosterUnreadable) bump(db, 'roster_unreadable');
 }
@@ -223,7 +400,19 @@ export async function runPass(argv, deps = {}) {
     try {
       if (finished) bump(db, 'store_creation_completed');
       syncWriterMirror(db, home);
-      await tick(db, { home, paths: P, parsed, plan, free, now });
+      // The journal's two names, read from the home filesystem AFTER the create/finish step, never from meta
+      // (§9.14; D-4220, slug history-store-writer-file). `facts` cannot supply them: it was measured before
+      // finishPending, when only store.id.pending held the id, so on the finish-pending arm it names no store.
+      const token = (p, re) => {
+        try { const v = readFileSync(p, 'utf8').trim(); return re.test(v) ? v : null; } catch { return null; }
+      };
+      const sid = token(P.storeId, UUID_RE);
+      const writer = token(P.writer, WRITER_RE);
+      const ids = sid !== null && writer !== null ? { storeId: sid, writer } : null;
+      await tick(db, {
+        home, paths: P, parsed, plan, free, now,
+        ids, homes: parsed.homes, rosterUnreadable: parsed.rosterUnreadable, out,
+      });
     } finally {
       closeWriter(db);
     }

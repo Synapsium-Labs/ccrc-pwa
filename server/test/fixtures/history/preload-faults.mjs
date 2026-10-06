@@ -40,3 +40,103 @@ if (kill) {
   };
 }
 syncBuiltinESMExports();
+// >>> history fault recorder (plan W1-B1, tasks 15-16) ──────────────────────────────────────────────────────
+// Test-only and never shipped (nothing under server/test/ is on a release PATHSPEC). These env vars arm it:
+//   HISTORY_TEST_RECORD=<file>     append one line per observed operation, in order, synchronously
+//   HISTORY_TEST_KILL_AT=<ev>:<n>  SIGKILL this process right after the n-th <ev> is observed. A `commit` is
+//                                  observed BEFORE it runs, so commit:<n> kills with that transaction still open.
+//   HISTORY_TEST_ENOSPC=<substr>   the first Buffer write to a file whose path holds <substr> writes half of
+//                                  itself, then throws ENOSPC
+//   HISTORY_TEST_FAIL_COMMIT=<n>   the n-th COMMIT under synchronous=FULL throws instead of committing. The error
+//                                  carries code ERR_SQLITE_ERROR, as node:sqlite's own errors do.
+// Events:
+//   journal-open <name>            an open under /journal/
+//   journal-write <name>           a write of a journal *.jsonl
+//   journal-fsync <name>           an fsync of a journal *.jsonl
+//   sidecar <name>                 a rename onto *.obs
+//   unlink <name>                  an unlink under /.draining/
+//   commit sync=<0..3>             PRAGMA synchronous at that COMMIT
+//   outbox-delete                  a DELETE FROM journal_outbox
+// Every wrapper composes with whatever the code above installed: it calls the function it found there.
+import hfFs from 'node:fs';
+import { syncBuiltinESMExports as hfSyncBuiltins } from 'node:module';
+import { DatabaseSync as HfDatabaseSync, StatementSync as HfStatementSync } from 'node:sqlite';
+
+const hfPrev = {
+  openSync: hfFs.openSync, closeSync: hfFs.closeSync, writeSync: hfFs.writeSync, fsyncSync: hfFs.fsyncSync,
+  renameSync: hfFs.renameSync, unlinkSync: hfFs.unlinkSync, appendFileSync: hfFs.appendFileSync,
+};
+const hfRecordFile = process.env.HISTORY_TEST_RECORD ?? '';
+const [hfKillEvent = '', hfKillNth = ''] = (process.env.HISTORY_TEST_KILL_AT ?? '').split(':');
+const hfEnospcPath = process.env.HISTORY_TEST_ENOSPC ?? '';
+const hfFailCommitNth = Number(process.env.HISTORY_TEST_FAIL_COMMIT ?? '0');
+const hfSeen = new Map();
+const hfFdPath = new Map();
+let hfEnospcSpent = false;
+let hfFullCommits = 0;
+const hfBase = (p) => { const s = String(p); return s.slice(s.lastIndexOf('/') + 1); };
+const hfIsJournal = (p) => String(p).includes('/journal/');
+
+function hfNote(event, detail) {
+  if (hfRecordFile !== '') hfPrev.appendFileSync(hfRecordFile, `${event}${detail === '' ? '' : ` ${detail}`}\n`);
+  const n = (hfSeen.get(event) ?? 0) + 1;
+  hfSeen.set(event, n);
+  if (event === hfKillEvent && String(n) === hfKillNth) process.kill(process.pid, 'SIGKILL');
+}
+
+hfFs.openSync = function openSync(p, ...rest) {
+  const fd = hfPrev.openSync.call(this, p, ...rest);
+  hfFdPath.set(fd, String(p));
+  if (hfIsJournal(p)) hfNote('journal-open', hfBase(p));
+  return fd;
+};
+hfFs.closeSync = function closeSync(fd, ...rest) {
+  hfFdPath.delete(fd);
+  return hfPrev.closeSync.call(this, fd, ...rest);
+};
+hfFs.writeSync = function writeSync(fd, data, ...rest) {
+  const p = hfFdPath.get(fd) ?? '';
+  if (hfEnospcPath !== '' && !hfEnospcSpent && p.includes(hfEnospcPath) && ArrayBuffer.isView(data) && data.byteLength > 1) {
+    hfEnospcSpent = true;
+    hfPrev.writeSync.call(this, fd, data, 0, Math.floor(data.byteLength / 2));
+    throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC', errno: -28, syscall: 'write' });
+  }
+  const r = hfPrev.writeSync.call(this, fd, data, ...rest);
+  if (hfIsJournal(p) && p.endsWith('.jsonl')) hfNote('journal-write', hfBase(p));
+  return r;
+};
+hfFs.fsyncSync = function fsyncSync(fd) {
+  const r = hfPrev.fsyncSync.call(this, fd);
+  const p = hfFdPath.get(fd) ?? '';
+  if (hfIsJournal(p) && p.endsWith('.jsonl')) hfNote('journal-fsync', hfBase(p));
+  return r;
+};
+hfFs.renameSync = function renameSync(from, to) {
+  const r = hfPrev.renameSync.call(this, from, to);
+  if (String(to).endsWith('.obs')) hfNote('sidecar', hfBase(to));
+  return r;
+};
+hfFs.unlinkSync = function unlinkSync(p) {
+  const r = hfPrev.unlinkSync.call(this, p);
+  if (String(p).includes('/.draining/')) hfNote('unlink', hfBase(p));
+  return r;
+};
+const hfExec = HfDatabaseSync.prototype.exec;
+HfDatabaseSync.prototype.exec = function exec(sql) {
+  if (/^\s*COMMIT\b/i.test(String(sql))) {
+    const sync = this.prepare('PRAGMA synchronous').get().synchronous;
+    if (sync === 2) {
+      hfFullCommits += 1;
+      if (hfFullCommits === hfFailCommitNth) throw Object.assign(new Error('injected commit failure'), { code: 'ERR_SQLITE_ERROR' });
+    }
+    hfNote('commit', `sync=${sync}`);
+  }
+  return hfExec.call(this, sql);
+};
+const hfRun = HfStatementSync.prototype.run;
+HfStatementSync.prototype.run = function run(...args) {
+  if (/^\s*DELETE\s+FROM\s+journal_outbox\b/i.test(this.sourceSQL)) hfNote('outbox-delete', '');
+  return hfRun.apply(this, args);
+};
+hfSyncBuiltins();
+// <<< history fault recorder
