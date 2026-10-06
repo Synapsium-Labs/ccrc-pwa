@@ -3206,7 +3206,9 @@ describe('docs-tree end to end (docs W1a Task 15)', () => {
     });
   });
 
-  it('M6.8: about 1000 committed docs with ~1000-byte paths frame past 1 MiB, under the entry cap: too-many-entries {count, bytes}', () => {
+  // PATH_MAX is 1024 on macOS; the fixture's absolute path exceeds it (ENAMETOOLONG). The framed bound is pinned
+  // platform-independently by the T10 unit at M6.8 above (ccd-docs-tree.test.ts) and T11's in ccd-docs-index.test.ts.
+  it.skipIf(process.platform === 'darwin')('M6.8: about 1000 committed docs with ~1000-byte paths frame past 1 MiB, under the entry cap: too-many-entries {count, bytes}', () => {
     const main = h.makeRepo('demo');
     const dir = `${T15_SPECS}/${'a'.repeat(250)}/${'b'.repeat(250)}/${'c'.repeat(250)}`;
     for (let i = 0; i < 1000; i += 1) t15write(main, `${dir}/${String(i).padStart(4, '0')}${'d'.repeat(240)}.md`, `${i}\n`);
