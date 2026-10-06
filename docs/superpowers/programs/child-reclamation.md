@@ -44,6 +44,12 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 08:31 — wave 6's run opened (run 291, `planned`) before run 260 closes; its block allocated.**
+  - Run 291 is opened as wave 6 of 6 under the programme's own title. Run 260 keeps `waveOf` 5 (R38).
+  - **Block:** 24 numbers, written singly: 4126, 4127, 4128, 4129, 4130, 4131, 4132, 4133, 4134, 4135, 4136, 4137, 4138, 4139, 4140, 4141, 4142, 4143, 4144, 4145, 4146, 4147, 4148, 4149. Floor 4150.
+  - **Next:** wave 6's pre-flight against `77c11245`. It begins with R38's first measurement, why
+    `~/.cc-tmp/ccrc-pwa-swift-hollow` reappeared after wave 3's tail removed it. Then come the coordinator's rulings
+    on the detail, as contract §12; the plan; an attack review; a docs PR; and the dispatch.
 - **2026-10-06 08:30 — #286 merged (WL wave 3, `77c11245`, 08:28); wave 6 is clear to dispatch; #290's CI is green.**
   - **WL's notice (mail 3655).**
     - The CCR-15 spec now carries the one agreed hunk in the "Not changed, deliberately" passage (about :778 to
