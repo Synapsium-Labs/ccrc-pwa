@@ -2221,7 +2221,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     from the job log:
     - `session-hook-merge-deny` (20 cases): landing-order's, already ruled.
     - `ccd-child-reclaim-verb-reflogs` (1 case, `:394`, `purge-refused` on a `.compactions.lock`):
-      child-reclamation's (wave 4, #215). This branch touches neither the file nor `ccd/`.
+      child-reclamation's (wave 4, #215). This branch touches neither the file nor `ccd/`. Its coordinator
+      confirmed it at 12:32 UTC (mail 3692). It is intermittent: the case passed on `test-macos` in the last three
+      daily full runs on `main`. It is the purge's lock wait, not the reflog keep, and it is carried to their wave 7.
+      If the stable gate needs it green first, the answer is a full re-run, not a code change.
     - BSD curl accepts `-K -`: the senders' cases pass on every macOS shard.
   - **The round's bar** is at the end of the rulings file. It names five classes: the front still fails open; a
     previously admitted config now refuses; a pin that cannot red; an edit outside the round's files or to either
