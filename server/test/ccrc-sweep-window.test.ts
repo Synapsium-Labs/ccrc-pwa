@@ -868,7 +868,7 @@ describe('_upd_sweep, Linux arm, with the FROZEN pre-wave-10 script S0 (a rollba
 // guards (no `ccd_id_ok`, no `LoadState` query). A rollback to one of those releases pairs THIS sweep with it. Review
 // 281 measured the pairing correct and nothing pinned it (F3; wave 12, R19d, D-4069): Q1 to Q10 do, one case per shape
 // that review measured. Every Q case asserts that the script the box was given is S10 by its digest (`ranS10`), so a
-// fixture that stopped honouring `verifySrc` would red all ten. Q3 is the one shape where S10 and S11 also BEHAVE
+// fixture that stopped honouring `verifySrc` would red every Q case. Q3 is the one shape where S10 and S11 also BEHAVE
 // apart — S11 asks `LoadState` on a purged row, S10 never does — so its `noLoadState` is behavioural; in the other
 // cases S11 would not ask either, and that assertion is a tripwire only.
 describe('_upd_sweep, Linux arm, with the FROZEN wave-10 script S10 (a rollback to v0.0.80–v0.0.91)', () => {
@@ -984,6 +984,7 @@ describe('_upd_sweep, Linux arm, with the FROZEN wave-10 script S10 (a rollback 
     expect(count(box, act(B)), 'the first verify and its re-check both ran S10').toBe(2);
     expect(r.stdout).not.toContain('stopped on purpose:');
     expect(dieOf(r.stderr), ctx(r)).toBe(dieLine(1, 2, 0, B));
+    expect(count(box, LIST_CRASH), 'demo-b is in the active listing: no crash listing is read').toBe(0);
     ranS10(box);
     noLoadState(box);
     noPoison(box);

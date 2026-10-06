@@ -1169,3 +1169,19 @@ These rulings win over any sentence above that disagrees with them. Do not resha
   - Q10 checks the digest of the script its box ran, as every Q case does. Its row says which is-active count it asserts.
   - Task 3's `-t "FROZEN"` count becomes 16. T3-2's red set gains Q10.
   - No new deviation number: it is a case under D-4069.
+
+## As built (the wave-12 worker's record, 2026-10-06)
+
+Written at 05:46 UTC, after the final whole-branch review's fixes. It records what shipped and what was measured, where the text above (which stays as drafted, with the rulings) says otherwise. Measured values only.
+
+- **Q7 and Q10.** Task 3's text above plants Q7 with `listed: 'crash:failed'`, which is the shape the coordinator's Q10 names. As built, Q7 drops `listed`: its unit is IN the active listing, reads `failed` at every read, and has a purged row. Q10 is the crash-listed failed+purged shape. These are review 281's "failed+purged" and "crash-shaped failed+purged". The worker told the coordinator in mail 3620. Q7 now asserts that no crash listing is read (`count(box, LIST_CRASH)` is 0), so it cannot quietly become Q10: putting `listed: 'crash:failed'` back on Q7's unit reds Q7 alone (1 of 16), `expected 1 to be +0`.
+- **Counts.** `-t "FROZEN"` is 16 (R0–R3 and Q0–Q10, Q9 twice). The window file is 65, where the text above says 64.
+  - T3-1 measured 12 of 16 (Q0 and Q1–Q10).
+  - T3-2 measured 12 of 16 (R2 and Q1–Q10).
+  - T3-3 measured 10 of 16 (the listed set plus Q10, `expected 1 to be 2`).
+  - D-4069's "Every Q1–Q9 case" is Q1–Q10.
+- **Reading 8's pin** landed as its own commit after Task 3, and is defined as D-4072 above. The five SIGINT-to-the-shell arms of W21 assert `signal === 'SIGINT'`:
+  - 8 of 8 green with no mutation, measured twice, by the implementer and by the task reviewer;
+  - `exit 130` in place of the re-raise reds 5 of 5.
+- **T6-RERAISE** is therefore pinned. The bullet under "Not in this wave" carries a dated marker saying so.
+- **Reserve numbers:** 4072 spent (Reading 8). 4073 to 4076 are unspent.
