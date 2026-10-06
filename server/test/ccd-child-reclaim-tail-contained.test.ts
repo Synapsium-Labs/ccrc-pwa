@@ -42,21 +42,21 @@ interface Built { c: Child; tok: string; gone: string[] }
 /** The tail's three arms, each reaching a different set of the six sites. `plant`
  *  plants the repository's programs AFTER every setup git call that would run them. */
 const ARMS: Record<string, (plant: boolean) => Built> = {
-  // :28222 (nested --force), :28262 (nested CAS), :28300 (tree --force), :28373 (branch CAS)
+  // the nested --force remove, the nested branch CAS, step (4)'s --force remove of the tree, step (5)'s branch CAS
   'a fresh reclaim with a nested checkout': (plant) => {
     const c = makeChild(h);
     h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', path.join(c.wt, 'inner'));
     if (plant) plantRepoPrograms(h, c);
     return { c, tok: containedToken(), gone: [CHILD_BRANCH, 'ws/nested'] };
   },
-  // :28344 (the vanished tree's record), :28373
+  // step (5)'s remove of the vanished tree's record, step (5)'s branch CAS
   'a vanished tree whose record git still keeps': (plant) => {
     const c = makeChild(h);
     if (plant) plantRepoPrograms(h, c);
     fs.rmSync(c.wt, { recursive: true, force: true });
     return { c, tok: containedToken(), gone: [CHILD_BRANCH] };
   },
-  // :28232 (gone nested line, record standing), :28262, :28344, :28373
+  // the nested remove of a gone line's standing record, the nested branch CAS, step (5)'s record remove, step (5)'s branch CAS
   'a resume at children whose nested line is gone, its record standing': (plant) => {
     const c = makeChild(h);
     interrupted(c, 'children');
@@ -96,6 +96,11 @@ describe('the tail runs none of the repository’s programs while it deletes (sp
     expect(JSON.parse(r.stdout).expired).toBe(EXP_ID);
     expect(h.git(a.main, 'branch', '--list', EXP_BRANCH), 'the branch was deleted').toBe('');
     expect(hookRuns(h), 'a program the repository names ran inside ws-expire’s tail').toEqual([]);
+    // The CONTROL, after the subject: the planted hook is live for an uncontained ref delete.
+    h.git(a.main, 'branch', 'ws/control', 'HEAD');
+    fs.rmSync(runsFile(), { force: true });
+    h.sh(`git -C "${a.main}" update-ref -d refs/heads/ws/control`);
+    expect(hookRuns(h), 'the CONTROL: an uncontained update-ref -d runs reference-transaction').toContain('reference-transaction');
   }, 120_000);
 });
 
@@ -129,14 +134,49 @@ describe('every destructive git call the tail makes carries the pins (spec §5.6
 });
 
 describe('the tail spells every destructive git call contained', () => {
+  /** A destructive git call, as this scan reads one: `worktree remove|prune`;
+   *  `update-ref` with `-d` anywhere among its flags (`--no-deref -d` too), or
+   *  with `--stdin`, whose transaction may delete; `branch -d|-D|--delete`. A
+   *  call continued over `\`-ended lines is read as ONE line, and whole-line
+   *  comments are dropped first. Any spelling but the allowed one reds as
+   *  "uncontained", because the SHIM reads that spelling alone: it records only
+   *  `git -C <dir> worktree remove|update-ref -d …`, so a `-c` or `--git-dir`
+   *  before the subcommand, `update-ref --no-deref -d` and `update-ref --stdin`
+   *  would pass it unrecorded. BLIND SPOTS, left by name: a git reached through
+   *  a variable or an alias, and every git call a helper makes from outside the
+   *  tail's slice (`_ws_reclaim_keep_of` and its kin are read nowhere here). */
+  const DESTRUCTIVE = /\bgit\b.*\b(worktree (remove|prune)|update-ref\b.*\s(-d|--stdin)\b|branch (-[dD]|--delete)\b)/;
+  const codeOf = (body: string): string[] =>
+    body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').replace(/\s*\\\n\s*/g, ' ').split('\n');
+
+  it('CONTROL: the classifier reads each spelling it names, over a continuation too, and passes a read and a comment', () => {
+    const planted = [
+      'git -C "$main" update-ref --no-deref -d "refs/heads/$b" "$t"',
+      'git -C "$main" branch --delete "$b"',
+      'printf "delete %s\\n" "$r" | git -C "$main" update-ref --stdin',
+      'git -C "$main" \\',
+      '  update-ref -d "refs/heads/$b" "$t"',
+      '  # git -C "$main" branch -D "$b"',
+      'git -C "$main" show-ref --verify --quiet "refs/heads/$b"',
+    ].join('\n');
+    expect(codeOf(planted).filter((l) => DESTRUCTIVE.test(l))).toEqual([
+      'git -C "$main" update-ref --no-deref -d "refs/heads/$b" "$t"',
+      'git -C "$main" branch --delete "$b"',
+      'printf "delete %s\\n" "$r" | git -C "$main" update-ref --stdin',
+      'git -C "$main" update-ref -d "refs/heads/$b" "$t"',
+    ]);
+  });
+
   it('six calls, each `_ws_reclaim_contained git -C "$main" …`, and no uncontained one', () => {
     const src = fs.readFileSync(CCD, 'utf8');
     const tail = src.slice(src.indexOf('\n_ws_reclaim_tail() {'), src.indexOf('\ncmd_ws_reclaim() {'));
     expect(tail.length, 'the CONTROL: the tail was found').toBeGreaterThan(1000);
-    const code = tail.split('\n').filter((l) => !/^\s*#/.test(l));
-    const destructive = code.filter((l) => /\bgit\b.*\b(worktree (remove|prune)|update-ref -d|branch -[dD])\b/.test(l));
+    const destructive = codeOf(tail).filter((l) => DESTRUCTIVE.test(l));
     expect(destructive.filter((l) => !/_ws_reclaim_contained git -C "\$main" (worktree remove|update-ref -d) /.test(l)),
       'an uncontained destructive git call').toEqual([]);
+    // Both branch CASes delete the ref they name, never one a symbolic ref points at (spec §5.6).
+    expect(destructive.filter((l) => /\bupdate-ref\b/.test(l) && !/update-ref -d --no-deref "refs\/heads\//.test(l)),
+      'a branch CAS that would follow a symbolic ref').toEqual([]);
     // Pinned at 6 by Task 3. A later task that adds or moves a destructive git call in the tail
     // re-pins this count in its own commit, and keeps the call contained (ruling X3).
     expect(destructive.length, 'nested remove ×2, nested CAS, the tree, its record, the branch CAS').toBe(6);
