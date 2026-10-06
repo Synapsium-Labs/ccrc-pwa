@@ -431,6 +431,7 @@ export interface DocsFetchOk { v:1; verb:'docs-fetch'; ok:true; elapsedMs:number
   before:Sha|null; after:Sha; moved:'created'|'updated'|'unchanged'; stamp:'written'|'unwritten' }
 
 export interface DocsIndexOk { v:1; verb:'docs-index'; ok:true; elapsedMs:number; unlisted:number;
+  unwalked?:number;                                             // projects not reached before the helper deadline; absent when 0 (D-4157)
   duplicates: { repoKey:string; projects:string[] }[];          // every repoKey held by two or more rows
   projects: { project:string;
     state:'ready'|'not-a-git-repo'|'linked-worktree'|'shared-repo'|'partial-clone'|'no-default-branch'|'repo-unreadable';
@@ -584,7 +585,8 @@ A second remote (one measured repo has one) is never read.
 **The draft phase degrades; it never fails the tree.** Steps 1–3 and the draft reads below form the draft phase.
 - A `status` or `ls-files` stdout overflow (16 MiB) gives `too-many {count: records parsed before the cut, bytes: bytes read}`.
 - A per-call timeout gives `unreadable {step, detail:'timeout'}`.
-- In both cases the committed listing still answers in full.
+- So does the helper deadline (D-4164). The draft reads check it per path (`step:'status'` for the status-listed reads, `'ls-files'` for the lie-mode reads), and the phase runs on the helper deadline less a 2 s tail that `mainCheckout`'s fallback keeps. `remote.origin.url` is read before the phase, and a committed listing already over `DOCS_MAX_ENTRIES` skips the phase, because the answer is `too-many-entries` either way.
+- In all these cases the committed listing still answers in full.
 
 #### Classification
 
@@ -811,9 +813,9 @@ The class is L0 `contentClass(path)` (§5.1): one of `markdown`, `raster`, `svg`
    ```
    git --no-pager -c core.hooksPath=/dev/null -c core.fsmonitor=false -c gc.auto=0 -c maintenance.auto=false \
        -c fetch.writeCommitGraph=false -c submodule.recurse=false -c fetch.recurseSubmodules=false \
-       -c fetch.fsckObjects=true -c transfer.fsckObjects=true -C <M> \
+       -c fetch.fsckObjects=true -c transfer.fsckObjects=true -c remote.origin.followRemoteHEAD=never -C <M> \
        fetch --quiet --no-tags --no-prune --no-recurse-submodules --no-write-fetch-head \
-             --no-auto-gc --no-auto-maintenance --no-show-forced-updates \
+             --no-auto-gc --no-auto-maintenance --no-show-forced-updates --refmap= \
              --end-of-options origin +refs/heads/<b>:refs/remotes/origin/<b>
    ```
 
@@ -822,7 +824,7 @@ The class is L0 `contentClass(path)` (§5.1): one of `markdown`, `raster`, `svg`
    - The two fsck settings make git refuse a malformed object rather than write it into a store that live sessions share.
    - `--no-write-fetch-head` keeps a worker's `FETCH_HEAD` untouched (sheet B §9).
    - `+` matches git's default refspec, so a force-pushed `ws/*` branch does not stay stale.
-   - Only one ref moves per call. There is no `set-head` and no prune.
+   - Only one ref moves per call. There is no `set-head` and no prune. The explicit refspec alone does not make that true (D-4163): git also maps the fetched ref through every configured `remote.origin.fetch` line, so a `+refs/heads/*:refs/heads/*` line would force-move the local branch. The empty `--refmap=` drops those mappings, and `followRemoteHEAD=never` stops a git >= 2.48 creating `refs/remotes/origin/HEAD` (2.43 ignores the key).
 7. **Classify**, with `LC_ALL=C` stderr. The four rc/message pairs are measured; whether a translated locale would change them is UNMEASURED, because the box has only C locales.
 
    | Result | Word |
@@ -832,9 +834,11 @@ The class is L0 `contentClass(path)` (§5.1): one of `markdown`, `raster`, `svg`
    | rc 128 and `couldn't find remote ref` | `remote-branch-absent` (the PWA says "local only") |
    | git's fsck refusal: an `index-pack`/`unpack-objects` failure naming an fsck error, pinned by fixture | `fetch-rejected-objects`. The ref is unmoved. |
    | `Authentication failed`, `could not read Username` or `Permission denied (publickey)` | `fetch-auth-failed` |
-   | rc 1 and `cannot lock ref` | `ref-locked {lockAgeMs}`. ccd `lstat`s `<common-dir>/refs/remotes/origin/<b>.lock`: `lockAgeMs` is fleet-now minus its mtime, or `null` when the lock has already gone. |
+   | rc 1, `cannot lock ref` and git's lock-file evidence `Unable to create '<ref>.lock': File exists` (D-4158) | `ref-locked {lockAgeMs}`. ccd `lstat`s `<common-dir>/refs/remotes/origin/<b>.lock`: `lockAgeMs` is fleet-now minus its mtime, or `null` when the lock has already gone. |
    | other rc 128 | `fetch-transport {stderrHead}` |
    | anything else | `fetch-failed {rc, stderrHead}` |
+
+   The rows are read in order, so rc 0 answers ok even when the deadline expired on a grandchild's pipe: git itself completed, and step 8 reads what moved (D-4159). A ref directory/file conflict also says `cannot lock ref`, but carries no lock-file evidence and no prune cures it under `--no-prune`, so it answers `fetch-failed` with git's message (D-4158).
 
    Every stderr-derived field passes through the one redactor (b).
 8. `after` comes from `for-each-ref` again. `moved` is `created`, `updated` or `unchanged`.
@@ -956,6 +960,7 @@ There is no exec concurrency cap on the agent (`agent/src/server.ts:816-829`), w
 - **Non-git directories** get `sectionsOnDisk` from four `lstat` calls, and are never served.
 - **What it skips.** It runs no worktree enumeration and no status.
 - **Failures.** A per-project failure becomes that row's `state`, never a failure of the whole answer.
+- **Deadline.** The walk stops at its helper deadline. The projects it did not reach are counted in `unwalked` (absent when 0), never labelled `repo-unreadable`; the doctor WARNs on `unwalked > 0` (D-4157).
 - **Duplicates.** `duplicates` lists every `repoKey` that two or more rows share.
 - **Cost.** 0.27–0.32 s over 16 repos (ops M5).
 - **One root.** All of it reads ccd's root, so Docs is self-consistent even on a box whose `CCRC_PROJECTS_ROOT` differs.
