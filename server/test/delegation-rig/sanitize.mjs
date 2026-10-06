@@ -24,9 +24,9 @@
 //     `http%3A%2F%2Fsrv.corp%2Fx`) and `\/`, each decoded in ONE pass (both the string and its decoded form are scanned).
 // KNOWN LIMITS (each is pinned by a row that reds when the limit closes, so closing one means rewriting its line here):
 //   - base64 (or any other encoding) of residue is not decoded and not chased. The decode is ONE pass per kind, in the fixed order
-//     `\uXXXX`, `%XX`, `\/`, so an escape is chased only where an earlier pass produces a later kind (`%` then `2F`;
-//     `%5C%2F`). Anything else is not: the same kind twice (`%252F` reads `%2F` afterwards, `\u002F` reads `/`), and a
-//     later kind producing an earlier one (`%5Cu002F` reads `/`).
+//     `\uXXXX`, `%XX`, `\/`, so an escape is chased only where an earlier pass produces a later kind (`\u0025` then `2F`;
+//     `%5C%2F`). Anything else is not: the same kind twice (`%252F` reads `%2F` afterwards, `\u005Cu002F` reads `\u002F`), and a
+//     later kind producing an earlier one (`%5Cu002F` reads `\u002F`).
 //   - A `/` glued straight after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (ABS's lookbehind; a `/` after a `/` is a run
 //     of slashes, read where it ends). So `x/srv/acme`, `1/srv/acme`, `./srv/acme`, `a_/srv/acme`, `a-/srv/acme`, a home-anchored
 //     `~/srv/acme` and a scheme-less `127.0.0.1:4000/home/x` all pass. A `/` after ANY other character (a space, `=`, `:`, a quote, a
