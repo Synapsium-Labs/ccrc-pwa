@@ -359,8 +359,10 @@ describe('delegation-census (read-only, path-free)', () => {
     //   symlink to a DIRECTORY ......... fails "unknown revision"
     //   real directory / nothing ....... the packed line
     //   a symlink whose TEXT is a ref name (git's symbolic-ref form, resolved from the git dir) .... resolves; the census
-    //     reads it as a file path under the link's own directory, finds nothing and answers 'unmeasured': fail-closed, a
-    //     KNOWN LIMIT (pinned below so that resolving it on purpose is a visible edit, never an accident).
+    //     reads it as a file path under the link's own directory, normally finds nothing and answers 'unmeasured':
+    //     fail-closed, a KNOWN LIMIT (pinned below so that resolving it on purpose is a visible edit, never an accident).
+    //     Where that relative path does exist (a doubled refs/heads/refs/heads/<n>), the census reads the wrong ref: the
+    //     limit is then a possibly wrong boolean, a shape nothing Claude Code is known to make.
     function symWorld(): (n: string) => unknown {
       const w = mini([
         { name: 's-valid', files: { HEAD: 'ref: refs/heads/wt-link\n', CLAUDE_BASE: SHA_A }, wt: 'wt-s1' },
@@ -421,6 +423,19 @@ describe('delegation-census (read-only, path-free)', () => {
         const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
         expect(out.records[0].movedFromBase).toBe('unmeasured');
       } finally { fs.chmodSync(heads, 0o755); }
+    });
+
+    // lstat fails ENOTDIR: a parent component of the loose path is a regular file (the census's own `ls` helper folds
+    // ENOTDIR into "nothing there"; this reader must not). Measured: `git rev-parse HEAD` fails "unknown revision".
+    it("reports 'unmeasured' when a parent component of the loose path is a file (lstat ENOTDIR), never the stale packed-refs line", () => {
+      const w = mini([{ name: 's-notdir', files: { HEAD: 'ref: refs/heads/wt-nd/x\n', CLAUDE_BASE: SHA_A }, wt: 'wt-n1' }]);
+      const git = path.join(w.repo, '.git');
+      const heads = path.join(git, 'refs', 'heads');
+      fs.mkdirSync(heads, { recursive: true });
+      fs.writeFileSync(path.join(heads, 'wt-nd'), `${SHA_A}\n`);   // a parent component is a regular file: lstat ENOTDIR
+      fs.writeFileSync(path.join(git, 'packed-refs'), `${SHA_B} refs/heads/wt-nd/x\n`);   // stale: would read `true`
+      const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
+      expect(out.records[0].movedFromBase).toBe('unmeasured');
     });
 
     it("refuses a ref name that is not shaped refs/<safe chars> or has a .. segment: 'unmeasured', never joined onto a path", () => {

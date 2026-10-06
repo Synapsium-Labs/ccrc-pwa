@@ -12,7 +12,7 @@
 // `movedFromBase` compares a record's HEAD tip with its CLAUDE_BASE: `null` means ONLY "no valid CLAUDE_BASE to
 // compare against" (not applicable); a boolean is the comparison; `'unmeasured'` is a HEAD the census could not
 // resolve to a commit (unreadable or malformed HEAD, or a `ref:` HEAD whose ref is absent, symbolic, not a sha or
-// not shaped like a ref name). A `ref:` HEAD is resolved READ-ONLY in the common dir (`<repo>/.git`): the loose ref
+// not shaped like a ref name, or whose loose ref is there but cannot be answered from — see `looseText`). A `ref:` HEAD is resolved READ-ONLY in the common dir (`<repo>/.git`): the loose ref
 // file, else the `packed-refs` line — never by running git.
 // Usage: node deploy/delegation-census.mjs --repo <main checkout> [--ccd-root <dir>] --home <dir> [--home <dir>]...
 import fs from 'node:fs';
@@ -61,8 +61,10 @@ const exists = (f) => { try { fs.statSync(f); return true; } catch { return fals
 // read is EISDIR). git fails `rev-parse HEAD` "unknown revision" for those two, where `for-each-ref` alone would fall
 // through to the packed line; a stale packed-refs line must never stand in for an entry that exists. A valid symlink to
 // a file is followed by the read, as git follows it. KNOWN LIMIT: a symlink whose TEXT is a ref name is git's symbolic-ref
-// form, which git resolves from the git dir; read here as a path under the link's own directory it leads nowhere, so it
-// is UNREADABLE (fail-closed: 'unmeasured', never a wrong boolean).
+// form, which git resolves from the git dir; read here as a path under the link's own directory, it normally leads
+// nowhere, so it is UNREADABLE (fail-closed: 'unmeasured'). Where that relative path DOES exist (a doubled
+// `refs/heads/refs/heads/<n>`, as git makes under `core.preferSymlinkRefs` with such a branch), the census reads the
+// wrong ref and its boolean can be wrong; nothing Claude Code does is known to produce either shape.
 const UNREADABLE = Symbol('unreadable');
 const looseText = (f) => {
   let st;
