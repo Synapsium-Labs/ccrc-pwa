@@ -44,6 +44,47 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 05:41 — wave 5's wave-done re-measured (mail 3627, PR #290 at `e79b1da7`); numbers assigned; review
+  run 285 opened.**
+  - **The claim holds.**
+    - PR #290 is open, not a draft and mergeable, and its head is `e79b1da7`, which is also the worker's ref.
+    - Its merge base with main is `d12b5aba` (one merge of main, `66d4354c`, never rebased), and `git merge-tree`
+      against today's main (`21f536a5`) is clean.
+    - 29 commits, all under the noreply identity; 48 files, +6957/−785.
+    - Nothing under `ccd/`, `agent/` or `deploy/` changed (A1).
+  - **Run 260** advanced to `working` and then to `awaiting-review` (`ok`), and its 19 items are settled at 19/19.
+  - **The suite claim.**
+    - The worker reports `suite: red` / `failure: unclear`. The reds are `tmp-sweep` (red on a main archive too) and
+      four load timeouts (`boot`, `ccrc-codex`, `update-store-nodes`, pwa `contrast`), each green in isolation.
+    - Agent 453/453, pwa 3303/3304, session-hook 335/335; the wave surface is 24 server and 15 pwa files, all green.
+    - Mail 3623's checks ran against `21f536a5`: deviation-refs 31/31, citation cases 7/7.
+    - CI run 37419380049: typecheck, build-pwa, select, agent and pwa pass; the five server shards are pending at
+      05:41.
+  - **D tokens the branch adds:**
+    - D-282 and D-3365, as A6 prescribes;
+    - one citation of D-2545, a number already defined, in a new `routes.ts` comment. Task 5's code prescribes that
+      comment (plan:1990), and A6's "only D-282 and D-3365" missed it. The citation is accepted and mints nothing.
+  - **Numbers assigned** to the twelve substantive departures, each to be defined in the plan's `## Deviations found`
+    with the review's fix round:
+    - 3926 `no-session-copy-scoped-to-run` (Task 9b; ruled in 3613);
+    - 3927 `one-reader-pin-code-only` (Task 8);
+    - 3928 `chip-census-tokens-widened` (Task 8, from the final PWA lens);
+    - 3929 `verdict-reader-allowlist-pin`, a census beyond the plan (`child-reclaim-verdict-readers.test.ts`);
+    - 3930 `fence-canonical-stamp`, a SAFETY item (`1185c609e`): a non-canonical stamp keeps the child;
+    - 3931 `prose4-stamp-sentence-corrected` (A0b's prose 4);
+    - 3932 `spec-wip-parents-reworded` (A[S4-2], spec §5.5 step 2);
+    - 3933 `wall-step-rows-mint-early` (Task 0b's harness);
+    - 3934 `open-arm-mutation-fails-shut-at-runtime` (Task 0c's mutation table);
+    - 3935 `0b-mutation-table-corrected`;
+    - 3936 `a-s3-14-literals-beyond-the-list` (Task 4d);
+    - 3937 `prescribed-citations-dropped` (Tasks 2, 6, 0c and 3).
+  - **Reserve.** 3938, 3939, 3940, 3941, 3942, 3943, 3944 and 3945 stay unassigned for the review's fix round. The
+    thirty editorial and test-shape slugs get no number.
+  - **Observations.** Both are recorded and get no number:
+    - while the listing is unavailable, a `paused` chip shows the underlying pending or deferred word;
+    - a kept verdict carried across a pause is keyed by id.
+    A-S3-6's docstring "each ends only by a person's act" is false for `child-birth-unplaced`, and it is left as
+    display-only.
 - **2026-10-06 04:51 — `ccrc-pwa-quiet-river` agreed to the overlap rule (mail 3622, replying to 3560).**
   - Rules 1–4 stand as written.
   - **Added to rule 2.** `shared/api.ts` is a cited file, because the README anchors and the S6-R11 census read its
