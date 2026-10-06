@@ -69,7 +69,8 @@
 // Exit 0 with the document on stdout; exit 2 with one stderr line when the
 // argument is missing or is not a directory, or when a `--root` is malformed
 // (no `<label>=`, a label outside `[a-z][a-z0-9-]{0,20}`, a relative path, or a path
-// that is only slashes: a root of `/` classifies nothing).
+// that normalises to `/`, as `/`, `//`, `/.` and `/..` do: a root of `/` classifies nothing).
+// A root is stored normalised, so `//srv` and `/srv/.` are `/srv`.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
@@ -189,8 +190,9 @@ let badArgs = false;
 for (let i = 1; i < argv.length; i += 2) {
   const m = argv[i] === '--root' && typeof argv[i + 1] === 'string' ? /^([^=]+)=(\/.*)$/.exec(argv[i + 1]) : null;
   if (m === null || !LABEL.test(m[1])) { badArgs = true; break; }
-  const rootPath = m[2].replace(/\/+$/, '');
-  // `=/`, `=//`, `=///` normalise to an empty path: a root of `/` would make every cwd `other`.
+  // Normalise FIRST (`//srv` and `/srv/.` are `/srv`; `/.`, `/..` and `//.` are `/`), then strip the
+  // trailing slash: `=/`, `=//`, `=/.` all end empty, and a root of `/` would make every cwd `other`.
+  const rootPath = path.posix.normalize(m[2]).replace(/\/+$/, '');
   if (rootPath === '') { badArgs = true; break; }
   roots.push({ label: m[1], path: rootPath });
 }

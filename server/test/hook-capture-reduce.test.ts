@@ -411,7 +411,8 @@ describe('the delegation block (delegation broker wave 1)', () => {
     }));
     const r = reduceRaw([dir]);
     expect(r.status, r.stderr).toBe(0);
-    for (const raw of ['toolu_rig000123', 'toolu_rig000124', 'toolu_rig000125', 'waa', 'wbz', 'id7', 'mixed_key']) {
+    // `wide` runs waa..wby (alpha(0)..alpha(50)): 'waa' and 'wby' are its first and last key, both present.
+    for (const raw of ['toolu_rig000123', 'toolu_rig000124', 'toolu_rig000125', 'waa', 'wby', 'id7', 'mixed_key']) {
       expect(r.stdout, raw).not.toContain(raw);
     }
     const calls = (JSON.parse(r.stdout) as { delegation: { calls: Record<string, Call> } }).delegation.calls;
@@ -420,6 +421,33 @@ describe('the delegation block (delegation broker wave 1)', () => {
     // A single digit-bearing key collapses the whole object; the clean input beside it still lists its keys.
     expect(calls['PostToolUse:Workflow']?.inputKeys).toEqual([['args', 'script']]);
     expect(calls['PostToolUse:Workflow']?.responseKeys).toEqual([['(map)']]);
+  });
+
+  it('prints a non-object Agent, Task or Workflow input or response as its JSON type, never the value', () => {
+    // `topKeys`'s non-object arm is the only thing keeping a string, an array or a null here out of the
+    // output: Object.keys of those is no key list at all. Each carries a path-shaped sentinel.
+    const sentinel = '/srv/acme/x';
+    cap('PostToolUse', 1, 'sid-sentinel-0001', leaky('PostToolUse', {
+      tool_name: 'Agent', tool_input: sentinel, tool_response: sentinel,
+    }));
+    cap('PostToolUse', 2, 'sid-sentinel-0001', leaky('PostToolUse', {
+      tool_name: 'Task',
+      tool_input: [{ type: 'text', text: `done in ${sentinel}` }],
+      tool_response: [{ type: 'text', text: `done in ${sentinel}` }],
+    }));
+    cap('PostToolUse', 3, 'sid-sentinel-0001', leaky('PostToolUse', {
+      tool_name: 'Workflow', tool_input: null, tool_response: null,
+    }));
+    const r = reduceRaw([dir]);
+    expect(r.status, r.stderr).toBe(0);
+    for (const raw of [sentinel, 'srv/acme', 'done in']) expect(r.stdout, raw).not.toContain(raw);
+    const calls = (JSON.parse(r.stdout) as { delegation: { calls: Record<string, Call> } }).delegation.calls;
+    expect(calls['PostToolUse:Agent']?.inputKeys).toEqual([['(string)']]);
+    expect(calls['PostToolUse:Agent']?.responseKeys).toEqual([['(string)']]);
+    expect(calls['PostToolUse:Task']?.inputKeys).toEqual([['(array)']]);
+    expect(calls['PostToolUse:Task']?.responseKeys).toEqual([['(array)']]);
+    expect(calls['PostToolUse:Workflow']?.inputKeys).toEqual([['(null)']]);
+    expect(calls['PostToolUse:Workflow']?.responseKeys).toEqual([['(null)']]);
   });
 
   it('counts an isolation value outside worktree and remote as other, without printing it', () => {
@@ -479,11 +507,13 @@ describe('the delegation block (delegation broker wave 1)', () => {
     }
   });
 
-  it('refuses a --root whose path is the filesystem root (=/, =//, =///) with exit 2, and still accepts an ordinary root', () => {
+  it('refuses a --root that normalises to the filesystem root (=/, =//, =///, =/., =/.., =//.) with exit 2, and accepts an ordinary root', () => {
     // `=/` normalises to an empty path, and with `/` as the root every cwd would be classified
-    // `other`, a root that measures nothing and says so in no way.
+    // `other`, a root that measures nothing and says so in no way. `/.`, `/..` and `//.` are the
+    // same root spelled round the trailing-slash strip: only a posix normalise first sees them.
     cap('PreToolUse', 1, null, leaky('PreToolUse', { cwd: '/srv/acme/x' }));
-    for (const bad of ['fs=/', 'fs=//', 'fs=///']) {
+    cap('PreToolUse', 2, null, leaky('PreToolUse', { cwd: '/srv' }));
+    for (const bad of ['fs=/', 'fs=//', 'fs=///', 'fs=/.', 'fs=/..', 'fs=//.']) {
       const r = reduceRaw([dir, '--root', bad]);
       expect(r.status, bad).toBe(2);
       expect(r.stdout, bad).toBe('');
@@ -492,9 +522,17 @@ describe('the delegation block (delegation broker wave 1)', () => {
     }
     // A root of `/` beside a good one refuses the whole call, not just that argument.
     expect(reduceRaw([dir, '--root', 'repo=/srv/acme', '--root', 'fs=/']).status).toBe(2);
-    // Control: an ordinary root, with or without a trailing slash, is accepted and classifies below it.
-    for (const ok of ['fs=/srv/acme', 'fs=/srv/acme/']) {
-      expect(dlgOf(['--root', ok]).sequence.map((e) => e.cwd), ok).toEqual(['fs/*']);
-    }
+    expect(reduceRaw([dir, '--root', 'repo=/srv/acme', '--root', 'fs=/.']).status).toBe(2);
+    // Control: an ordinary root, with or without a trailing slash, is accepted and classifies below it
+    // (cwd `/srv` is not below `/srv/acme`). A root that NORMALISES to `/srv` (`/srv/.`, `//srv`,
+    // `/srv/acme/..`) is stored as `/srv`: the second cwd is then equal to it, the first below it.
+    const controls: Array<[string, string[]]> = [
+      ['fs=/srv/acme', ['fs/*', 'other']],
+      ['fs=/srv/acme/', ['fs/*', 'other']],
+      ['fs=/srv/.', ['fs/*', 'fs']],
+      ['fs=//srv', ['fs/*', 'fs']],
+      ['fs=/srv/acme/..', ['fs/*', 'fs']],
+    ];
+    for (const [ok, want] of controls) expect(dlgOf(['--root', ok]).sequence.map((e) => e.cwd), ok).toEqual(want);
   });
 });
