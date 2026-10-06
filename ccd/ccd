@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=baae6a1b17880c44e0a18e916ca1462261875e82507b0e62094513fc7b4c5efc
+# ccrc:generated 1 sha256=07dc2c6e4792a5a74cd2560156cf40a4e97d24004a66d9fe95a22c58484bfbee
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31063,8 +31063,213 @@ def verb_tree(ctx, a):
             'freshness': freshness(ctx, repo, ref, url)}
 
 # ===== docs: show =====
+# docs-show, the COMMITTED pin (spec 2026-10-01 section 2 (e) CommittedPin and
+# its provenance, section 2 (f) Committed and Encoding, section 2 (b)'s final
+# show guard, section 6.1 --max-bytes). Every byte served is named by the
+# pinned commit C, a section constant, and the caller's path matched by EXACT
+# bytes against ONE ls-tree of that section. The caller's path never enters an
+# argv or a pathspec, and no `<commit>:<path>` name is ever built: the part
+# before the colon is revision syntax and the part after it is cwd-relative.
+# This section's own imports; a repeat of an earlier section's is a no-op.
+import base64
+import hashlib
+import json
+
+# The object-id length of each object format discovery reports. A --commit of
+# the other length is bad-commit, decided before any git call reads it.
+SHOW_OID_HEX = {'sha1': 40, 'sha256': 64}
+# The committed modes a record may carry that are never served: a symlink's
+# blob is its link target, and a gitlink names another repository's commit.
+SHOW_REFUSED_MODES = {'120000': 'symlink', '160000': 'submodule'}
+
+
+def show_git(repo, args, dl, call_s, stdin=None, stdout_cap=GIT_STDOUT_CAP):
+    """One git call for docs-show, in the project, through docs_git with
+    soft=True: every outcome comes back as a Spawned and the caller names it.
+    That is what lets a cat-file read bounded at size + 1 call an overflow a
+    length mismatch, and lets onRef call an expiry unmeasured."""
+    return docs_git(repo.path, args, call_s=call_s, dl=dl, ceiling=ceiling_of(repo.path),
+                    stdin=stdin, soft=True, stdout_cap=stdout_cap)
+
+
+def show_failed(step, r, **ctx):
+    """git-failed {step, rc, stderrHead} for a git call that ran and answered."""
+    return fail('git-failed', step=step, rc=r.rc, stderrHead=stderr_head(r.err), **ctx)
+
+
+def show_object_type(repo, oid, dl):
+    """`cat-file --batch-check` of ONE full object id, fed on stdin: its type
+    (commit, tree, blob or tag), or None when the store does not hold it.
+    GIT_NO_REPLACE_OBJECTS is in the read env, so a replace ref never answers
+    for the id asked about."""
+    r = show_git(repo, ['cat-file', '--batch-check'], dl, CALL_S['show'],
+                 stdin=(oid + '\n').encode('ascii'))
+    if r.timed_out:
+        raise fail('git-timeout', step='cat-file')
+    if r.rc != 0 or r.overflow:
+        raise show_failed('cat-file', r)
+    words = r.out.decode('ascii', 'replace').rstrip('\n').split(' ')
+    if words == [oid, 'missing']:
+        return None
+    if len(words) == 3 and words[0] == oid and words[2].isdigit():
+        return words[1]
+    raise show_failed('cat-file', r, detail='unexpected cat-file --batch-check output')
+
+
+def read_committed(repo, a, dl):
+    """The bytes of a.section/a.path at a.commit, as (data, blob, mode), in
+    section 2 (f)'s order:
+    1. batch-check C: missing is unknown-commit, any other type than commit
+       is not-a-commit;
+    2. ONE ls-tree of the section at C; the section path is a constant;
+    3. the record whose path is the section, '/', and the caller's path, byte
+       for byte. The section itself as a record is not-a-file
+       {section-not-a-directory}; no record, but some under that path plus
+       '/', is not-a-file {directory}; neither is absent-path;
+    4. mode 120000 is not-a-file {symlink}, 160000 not-a-file {submodule};
+    5. the --long size against cap = min(--max-bytes, file_ceiling()): over
+       it is too-large {size, cap}, and cat-file never runs;
+    6. `cat-file blob <id>`, read to at most size + 1 bytes: any other length
+       is git-failed {step:'cat-file'}; on rc 128 batch-check asks again, and
+       a missing object is object-missing, anything else git-failed."""
+    kind = show_object_type(repo, a.commit, dl)
+    if kind is None:
+        raise fail('unknown-commit')
+    if kind != 'commit':
+        raise fail('not-a-commit')
+    sec = SECTIONS[a.section]
+    r = show_git(repo, ['ls-tree', '-r', '-z', '--long', '--full-tree', '--end-of-options',
+                        a.commit, '--', sec], dl, CALL_S['show'])
+    if r.timed_out:
+        raise fail('git-timeout', step='ls-tree')
+    if r.overflow:
+        raise fail('too-many-entries', bytes=len(r.out))
+    if r.rc != 0:
+        raise show_failed('ls-tree', r)
+    sec_b = sec.encode('ascii')
+    want = sec_b + b'/' + a.path.encode('utf-8')
+    hit = None
+    under = False
+    for mode, _typ, oid, size, path in parse_ls_tree_long(r.out):
+        if path == sec_b:
+            raise fail('not-a-file', kind='section-not-a-directory')
+        if path == want:
+            if hit is None:
+                hit = (mode, oid, size)
+        elif path.startswith(want + b'/'):
+            under = True
+    if hit is None:
+        if under:
+            raise fail('not-a-file', kind='directory')
+        raise fail('absent-path')
+    mode, oid, size = hit
+    if mode in SHOW_REFUSED_MODES:
+        raise fail('not-a-file', kind=SHOW_REFUSED_MODES[mode])
+    cap = min(int(a.max_bytes), file_ceiling())
+    if size > cap:
+        raise fail('too-large', size=size, cap=cap)
+    r = show_git(repo, ['cat-file', 'blob', oid], dl, CALL_S['show'], stdout_cap=size + 1)
+    if r.timed_out:
+        raise fail('git-timeout', step='cat-file')
+    if r.overflow:
+        raise fail('git-failed', step='cat-file',
+                   detail='cat-file wrote more than the %d bytes ls-tree sized' % size)
+    if r.rc == 128 and show_object_type(repo, oid, dl) is None:
+        raise fail('object-missing')
+    if r.rc != 0:
+        raise show_failed('cat-file', r)
+    if len(r.out) != size:
+        raise fail('git-failed', step='cat-file',
+                   detail='cat-file wrote %d bytes of a blob ls-tree sized %d' % (len(r.out), size))
+    return r.out, oid, mode
+
+
+def on_ref(repo, commit, ref, dl):
+    """CommittedPin provenance (spec 2026-10-01 section 2 (e)): is C on R, the
+    served ref the tree answer named? `merge-base --is-ancestor` under the 2 s
+    soft bound. rc 0 is contains and rc 1 not-contained. R absent or not a
+    commit (rc 128), any other rc, an expiry or an overflow is unmeasured:
+    never a guess either way. A SHALLOW repository's rc 1 is unmeasured too: a
+    cut history can hide the very ancestry asked about, which is why section
+    2 (h) 6 reports a shallow repository's relation as unmeasured. Asked after
+    the read, and never used to choose bytes."""
+    r = show_git(repo, ['merge-base', '--is-ancestor', '--end-of-options', commit, ref],
+                 dl, CALL_S['onref'])
+    if r.timed_out or r.overflow:
+        return 'unmeasured'
+    if r.rc == 0:
+        return 'contains'
+    if r.rc == 1 and not repo.shallow:
+        return 'not-contained'
+    return 'unmeasured'
+
+
+def encode_show(data, base):
+    """The answer body for `data`: `base` plus encoding and text, or encoding
+    and b64 (spec 2026-10-01 section 2 (f) Encoding, section 6.1).
+
+    utf8 iff the bytes are strict UTF-8, hold no NUL, and the utf8 line frames
+    no longer than the base64 line. Framed is the length once the agent
+    JSON-encodes the stdout line a second time: a quote is 2 bytes in the line
+    and 4 framed, which is how the singly escaped rule picked utf8 for a 3 MiB
+    text with a quote in every three characters and framed it at 6291617 B
+    (section 6.0). Comparing the bodies decides exactly what comparing the
+    whole lines would: the envelope adds the same characters to both, and a
+    string's framed length is the sum of its characters' framed lengths. So
+    framed(show) stays within 4 * ceil(size / 3) + DOCS_ENVELOPE_RESERVE."""
+    b64 = dict(base)
+    b64['encoding'] = 'base64'
+    b64['b64'] = base64.b64encode(data).decode('ascii')
+    if b'\0' in data:
+        return b64
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        return b64
+    utf8 = dict(base)
+    utf8['encoding'] = 'utf8'
+    utf8['text'] = text
+    if framed_len(line_of(utf8)) <= framed_len(line_of(b64)):
+        return utf8
+    return b64
+
+
+def guard_show(line):
+    """docs-show's final guard (spec 2026-10-01 section 2 (b)): `line`, or a
+    too-large line in its place when the line, framed as the agent frames it,
+    exceeds DOCS_MAX_ANSWER_BYTES.
+
+    The framed length is the measure, never the raw one: a quote is 2 bytes in
+    the line and 4 once framed. encode_show keeps the answer for any file within
+    the ceiling far below this bound, so the guard is the backstop for a broken
+    cap, not a path a real file takes. Its context is {bytes, cap}: `bytes` is
+    the framed length (the measure too-many-entries names `bytes` too), `cap`
+    the bound it was held to; `size` stays the file's own size everywhere.
+    run() hands it ok lines only, without their newline."""
+    framed = framed_len(line)
+    if framed <= DOCS_MAX_ANSWER_BYTES:
+        return line
+    obj = json.loads(line.decode('utf-8'))
+    return line_of({'v': 1, 'verb': obj['verb'], 'ok': False, 'elapsedMs': obj['elapsedMs'],
+                    'failure': 'too-large', 'bytes': framed, 'cap': DOCS_MAX_ANSWER_BYTES})
+
 def verb_show(ctx, a):
-    raise NotImplementedError('docs-show')
+    """docs-show: one file's bytes at one pin, as DocsShowOk's body (spec
+    2026-10-01 section 2 (b)). Discovery first, as in every verb. A committed
+    pin's commit must be the repository's own object-id length, else
+    bad-commit (the grammar already refused anything but 40 or 64 hex), and
+    its answer always carries onRef. run() puts the line through guard_show."""
+    dl = Deadline(HELPER_DEADLINE_S[ctx.verb])
+    repo = discover(ctx, a.project, dl)
+    if isinstance(a, ShowDraftArgs):
+        raise NotImplementedError('docs-show draft')
+    if len(a.commit) != SHOW_OID_HEX.get(repo.object_format):
+        raise fail('bad-commit')
+    data, blob, mode = read_committed(repo, a, dl)
+    base = {'source': 'committed', 'section': a.section, 'path': a.path, 'size': len(data),
+            'sha256': hashlib.sha256(data).hexdigest(), 'commit': a.commit, 'blob': blob,
+            'mode': mode, 'onRef': on_ref(repo, a.commit, a.ref, dl)}
+    return encode_show(data, base)
 
 # ===== docs: fetch =====
 def verb_fetch(ctx, a):
