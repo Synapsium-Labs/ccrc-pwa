@@ -924,6 +924,9 @@ function doctorEnv(home: string): NodeJS.ProcessEnv {
     CCRC_CGROUP_ROOT: join(home, 'fixture-cgroup'),
     CCRC_PROC_ROOT: join(home, 'fixture-proc'),
     CCRC_SCOPE_SETTLE_SEC: '1',
+    // `_check_scope-sweep` reads the sweep's verdict record from the runtime dir;
+    // a test must never read a real box's, so the record is a fixture file.
+    CCRC_SCOPE_SWEEP_STATE: join(home, 'fixture-scope-sweep.state'),
   };
 }
 
@@ -1050,6 +1053,8 @@ function healthy(prefix: string): string {
   // A pane scope with nothing parked: `_check_scopes` PASSes, and returns
   // WITHOUT settling, so the healthy fixture costs no extra second.
   plantScope(home, { procs: [4101, 4102] });
+  // The pane-scope sweep's verdict record, fresh and empty: `scope-sweep` PASSes.
+  writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=${Math.floor(Date.now() / 1000)} up=8640000 mode=shadow\n`);
   // tmux answers its versions, client and server agreeing — a healthy box is
   // one where every check PASSES (see the fleet note below), and tmux_skew
   // measures a version pair, not a presence.
@@ -1467,8 +1472,13 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  (`_check_codex`'s empty-set SKIP). `healthyCodexBox()` is the fixture
  *  where it answers. Measured the same way: deleting this `+ 1` reds the
  *  summary and count pins that read this constant (Plan 3a Task 4's
- *  mutation row). */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 1 : 0) + 4;
+ *  mutation row).
+ *
+ *  RAISED BY ONE ON macOS ONLY (session-continuity wave 4): `scope-sweep` SKIPs
+ *  there, as `scopes` does — pane scopes are a Linux mechanism. On Linux
+ *  `healthy()` plants a fresh verdict record, so it PASSes and this count is
+ *  unchanged there. */
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 4;
 
 // ── the table itself ──────────────────────────────────────────────────────
 
@@ -12851,5 +12861,153 @@ describeCodex('ccrc doctor --fix: codex, on a real doctor run (Plan 3a Task 8)',
     expect(second).toMatch(/^FAIL codex: /m);
     expect(second).toMatch(/^ {2}remedy: .*ccrc codex login codex-a/m);
     expect(existsSync(auth), '--fix created the authDir').toBe(false);
+  });
+});
+
+// ── scope-sweep (session-continuity wave 4) ─────────────────────────────────
+// `_check_scope-sweep` READS the sweep's verdict record and never re-derives it:
+// every unit below is absent from the fixture's own `systemctl list-units`, so a
+// check that asked the box instead of the record would list none of them.
+describeLinux('ccrc doctor: scope-sweep', () => {
+  const now = (): number => Math.floor(Date.now() / 1000);
+  const UP = 100 * 86400;   // the sweep's boot-relative clock at the record's tick: `first=` is read against it
+  const record = (home: string, lines: string[], ago = 0, mode = 'shadow'): void => {
+    writeFileSync(join(home, 'fixture-scope-sweep.state'), [`# ccd-scope-sweep v1 tick=${now() - ago} up=${UP} mode=${mode}`, ...lines].join('\n') + '\n');
+  };
+  const DEAD = 'tmux-spawn-00000001-0000-4000-8000-000000000000.scope';
+  const LIVE = 'tmux-spawn-00000002-0000-4000-8000-000000000000.scope';
+
+  it('PASSes on a fresh record with nothing in it, and says the mode it ran in', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-pass-');
+    expect(lineFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^PASS scope-sweep: no dead pane scope the sweep could measure, and no process older than a day in a live one \(the sweep's record, \d+s old, mode shadow\)$/);
+  });
+
+  it('WARNS with every dead scope: how long dead, the scope\'s and its oldest process\'s age, pids, memory, sockets and verdict', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-dead-');
+    record(home, [`dead ${DEAD} first=${UP - 7 * 3600} cpu0=7 verdict=would-stop why=none server=gone procs=3 mem=${20 * 2 ** 20} sockets=0 youngest=90000 oldest=${27 * 86400} age=${28 * 86400} pids=1,2,3`]);
+    const out = runDoctor(home).stdout.split('\n');
+    const i = out.findIndex((l) => l.startsWith('WARN scope-sweep: '));
+    expect(i, out.join('\n')).toBeGreaterThan(-1);
+    expect(out[i]).toContain(`${DEAD} dead 420 min, the scope 672 h old, its oldest process 648 h: 3 process(es) (pids 1,2,3), 20 MiB, 0 socket(s), its server gone, would-stop (none)`);
+    expect(out[i]).toContain('(mode shadow)');
+    expect(out[i + 1]).toMatch(/^ {2}remedy: read each before acting: /);
+  });
+
+  it('SKIPs while the operator has paused the sweep — never a stale record\'s WARN', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-paused-');
+    record(home, [], 3600);                                        // the paused sweep rewrote nothing for an hour
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'scope-sweep-paused'), '');
+    expect(anyVerdictFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^SKIP scope-sweep: paused by the operator /);
+  });
+
+  it('SKIPs on a server-role box: it runs no pane scope and no sweep', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-server-');
+    record(home, [`dead ${DEAD} first=${UP - 7 * 3600} cpu0=7 verdict=would-stop why=none server=gone procs=3 mem=1 sockets=0 youngest=90000 oldest=90000 age=90000 pids=1,2,3`]);
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    expect(anyVerdictFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^SKIP scope-sweep: this box records CCRC_ROLE=server/);
+  });
+
+  it('WARNS with every process older than a day in a live pane scope', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-old-');
+    record(home, [`old ${LIVE} pid=4242 age=${3 * 86400} comm=bash`]);
+    expect(lineFor(runDoctor(home).stdout, 'scope-sweep')).toContain(`${LIVE} live: pid 4242 (bash) running 72 h`);
+  });
+
+  it('WARNS when the record is stale: the sweep has stopped running', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-stale-');
+    record(home, [], 600);
+    expect(lineFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^WARN scope-sweep: the verdict record is \d+s old/);
+  });
+
+  it('WARNS on a record that is not a v1 record', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-garbled-');
+    writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v2 tick=${now()} up=${UP} mode=shadow\ndead something\n`);   // a later format this doctor cannot read
+    expect(lineFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^WARN scope-sweep: the verdict record at .* is unreadable or not a v1 record/);
+  });
+
+  it('SKIPs with no record: not installed, or not yet run since its timer was armed or the box booted', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-absent-');
+    rmSync(join(home, 'fixture-scope-sweep.state'));
+    expect(anyVerdictFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^SKIP scope-sweep: no verdict record at /);
+  });
+
+  // ── fix round 1 (Task 5 review): a garbled record is a WARN, never a FAIL ──────────────
+  // A leading zero is an octal error in `$(( ))`, which aborts the check inside its `$( … )` and
+  // makes doctor FAIL it ("printed no verdict line"); an unbounded digit run wraps the arithmetic.
+  const DEADLINE = (o: Record<string, string> = {}): string => {
+    const f = { first: String(UP - 7 * 3600), oldest: '90000', age: '90000', mem: '1', ...o };
+    return `dead ${DEAD} first=${f.first} cpu0=7 verdict=would-stop why=none server=gone procs=3 mem=${f.mem} sockets=0 youngest=90000 oldest=${f.oldest} age=${f.age} pids=1,2,3`;
+  };
+  const noFail = (out: string): void => { expect(out).not.toMatch(/^FAIL scope-sweep/m); expect(out).not.toContain('printed no verdict line'); };
+
+  it('a header with a leading-zero tick is not a v1 record: WARN, never an octal abort and FAIL', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-octal-tick-');
+    writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=0${now()} up=${UP} mode=shadow\n`);
+    const out = runDoctor(home).stdout;
+    noFail(out);
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: the verdict record at .* is unreadable or not a v1 record/);
+  });
+
+  it('a 20-digit tick is not a v1 record: WARN — never a wrapped age that PASSes a stale record as fresh', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-wide-tick-');
+    writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=${'9'.repeat(20)} up=${UP} mode=shadow\n`);
+    const out = runDoctor(home).stdout;
+    noFail(out);
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: the verdict record at .* is unreadable or not a v1 record/);
+  });
+
+  it('a dead line with a leading-zero number is named as a line it cannot read: WARN, never FAIL', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-octal-line-');
+    record(home, [DEADLINE({ first: '08' }), `old ${LIVE} pid=4242 age=0${3 * 86400} comm=bash`]);
+    const out = runDoctor(home).stdout;
+    noFail(out);
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: .*2 line\(s\) it cannot read/);
+  });
+
+  it('a dead scope whose processes could not be measured (oldest=-1) is listed, not dropped', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-oldest-minus-');
+    record(home, [DEADLINE({ oldest: '-1' })]);
+    const out = runDoctor(home).stdout;
+    noFail(out);
+    expect(lineFor(out, 'scope-sweep')).toContain(`${DEAD} dead 420 min`);
+    expect(lineFor(out, 'scope-sweep')).not.toContain('cannot read');
+  });
+
+  it('a garbage line under a good header is a WARN — an all-unparseable record never PASSes', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-garbage-');
+    record(home, ['this is not a record line']);
+    const out = runDoctor(home).stdout;
+    expect(out).not.toMatch(/^PASS scope-sweep/m);
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: .*1 line\(s\) it cannot read/);
+  });
+
+  it('CCRC_SCOPE_SWEEP_STALE_S that is not a number falls back to 300 s: neither an abort nor a disabled check', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-stale-nan-');
+    record(home, [], 600);
+    const stale = runDoctor(home, ['doctor'], { CCRC_SCOPE_SWEEP_STALE_S: 'abc' }).stdout;
+    noFail(stale);
+    expect(lineFor(stale, 'scope-sweep')).toMatch(/^WARN scope-sweep: the verdict record is \d+s old/);
+    record(home, [], 10);
+    expect(lineFor(runDoctor(home, ['doctor'], { CCRC_SCOPE_SWEEP_STALE_S: 'abc' }).stdout, 'scope-sweep')).toMatch(/^PASS scope-sweep: /);
+  });
+
+  it('services: an installed, stopped ccd-scope-sweep.timer WARNS — a reboot empties the record, so only `known` sees it', () => {
+    const home = healthy('ccrc-doctor-services-scope-sweep-timer-');
+    writeUnitFile(home, 'ccd-scope-sweep.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-scope-sweep.timer'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccd-scope-sweep.timer is installed but inactive');
+    expect(lines[i]).toContain('no dead pane scope is recorded or collected');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccd-scope-sweep\.timer$/);
+  });
+
+  it('services: an active ccd-scope-sweep.timer is named among the PASSes', () => {
+    const home = healthy('ccrc-doctor-services-scope-sweep-timer-ok-');
+    writeUnitFile(home, 'ccd-scope-sweep.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-scope-sweep.timer'), 'active\n');
+    expect(lineFor(runDoctor(home).stdout, 'services')).toContain('ccd-scope-sweep.timer is active');
   });
 });
