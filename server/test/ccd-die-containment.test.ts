@@ -343,6 +343,13 @@ describe('ccd/ccd', () => {
     // All three are called plainly by `cmd_ws_add` and `cmd_start` — never
     // inside `$( )`, which is what the demotion scan above is for, and what
     // makes "nothing was touched" true rather than merely printed.
+    // `_ws_expire_refuse_return` joined them in workspace lifecycle wave 3: the
+    // return verbs' refusal of an expiry in progress, called plainly by
+    // `cmd_start`, `cmd_ensure`, `cmd_swap` and `cmd_enable` before they journal their act —
+    // never inside `$( )` — so its `die` ends the verb, not a subshell.
+    // `_ws_expire_audit_contained` joined them with `ws-audit --expire`: it
+    // `die`s on an id or a python3 it cannot use, before any read, reached
+    // through `cmd_ws_audit`'s hand-off and never inside `$( )`.
     // `_place_for_class` is deliberately NOT here: it is called inside a command
     // substitution on both of its call sites, so it must answer on stdout and a
     // `die` in it would be demoted to rc 1 — the D-297 shape.
@@ -356,7 +363,7 @@ describe('ccd/ccd', () => {
     expect([...fatal].filter((f) => f.startsWith('_')).sort())
       .toEqual(['_account_still_rostered', '_lc_refuse', '_operator_choice_keep', '_route_argv_check',
         '_route_argv_write', '_route_seed_default', '_spawn', '_spawn_start',
-        '_supervised_start', '_swap_refuse']);
+        '_supervised_start', '_swap_refuse', '_ws_expire_audit_contained', '_ws_expire_refuse_return']);
     expect(fatal.has('_place_for_class'),
       'placement started dying instead of answering on stdout — both its call sites are `$( )`').toBe(false);
     expect(fatal.has('_wrapper_rostered_now'),
