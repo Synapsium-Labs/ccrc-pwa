@@ -1265,7 +1265,11 @@ const ENV_SECRET_NAME_RE = /(?:^|[^A-Za-z0-9])PRIVATE(?=$|[^A-Za-z0-9])/i;
  *  Upstream's one detection pattern split into its arms and made global for replacement, both the `-` and `_`
  *  arms of sk|rk|pk kept; the PEM arm widened from the header line to the
  *  whole block (a header alone would leave the key printed); plus the JWT
- *  shape `eyJ….….…`. */
+ *  shape `eyJ….….…`. This list holds every arm that is a plain regex, all
+ *  linear-time on any input (audited, D-4306). The JWT arm is NOT in it: as a
+ *  regex it backtracks quadratically on a long run of dotless `eyJ` starts,
+ *  so `redactJwtShapes` finds the same matches by a linear scan and
+ *  `redactLayers` applies it after this list. D-4306 (history-redaction-shapes-linear) */
 export const SECRET_SHAPE_RES = Object.freeze([
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
   /\bAKIA[0-9A-Z]{16}\b/gi,
@@ -1274,7 +1278,6 @@ export const SECRET_SHAPE_RES = Object.freeze([
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/gi,
   /\b(?:sk|rk|pk)-[A-Za-z0-9_-]{10,}\b/gi,
   /\b(?:sk|rk|pk)_[A-Za-z0-9_]{10,}\b/gi,
-  /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g,
 ]);
 
 /** What replaces a secret. It holds no `"`, `\`, `<`, `>` or `&`, so a
@@ -1394,6 +1397,61 @@ export function makePairIndex(pairs) {
   return { byLen };
 }
 
+/** The JWT shape arm, `\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}`
+ *  as a regex, found by a linear scan with that regex's own matches (leftmost,
+ *  non-overlapping, the third segment greedy). The regex backtracks
+ *  quadratically on a long run of dotless starts (`'eyJ-'.repeat(65536)`
+ *  measured 57 s over 256 KiB): each start's first segment runs to the end of
+ *  its `.`-free stretch, fails for want of a `.`, and gives back one character
+ *  at a time. One synchronous `replace` over a large tool_result would then
+ *  outlive the carrier's kill on every tick, and `redactRun`'s RangeError
+ *  catch cannot help, because this is time, not stack. A match lies wholly
+ *  inside one maximal run of `[A-Za-z0-9_.-]`, so the callback sees a run and
+ *  walks its `.`-separated segments left to right, never revisiting a
+ *  character. The regex's first segment is a whole segment (the class has no
+ *  `.`, so giving characters back never yields a dot), hence all `eyJ` starts
+ *  in one segment share their tail conditions and only the first start that
+ *  has a word boundary before it matters: it has the longest first segment.
+ *  D-4306 (history-redaction-shapes-linear) */
+function redactJwtRun(run) {
+  let j = run.indexOf('eyJ');
+  if (j === -1) return run;
+  let out = '';
+  let copied = 0;
+  let segStart = 0;
+  for (;;) {
+    const segEnd = run.indexOf('.', segStart);
+    if (segEnd === -1) break; // the last segment has no `.` after it: no match can start in it
+    // The first `eyJ` in this segment with a word boundary before it: at the
+    // segment's start (the run's start or a `.` precedes) or after a `-`.
+    // `j` only moves forward, so the `eyJ` search is one pass over the run.
+    if (j !== -1 && j < segStart) j = run.indexOf('eyJ', segStart);
+    while (j !== -1 && j < segEnd && j !== segStart && run[j - 1] !== '-') j = run.indexOf('eyJ', j + 1);
+    if (j !== -1 && j < segEnd && segEnd - (j + 3) >= 5) {
+      const s2Start = segEnd + 1;
+      const s2End = run.indexOf('.', s2Start);
+      if (s2End !== -1 && s2End - s2Start >= 5) {
+        const s3Start = s2End + 1;
+        const found = run.indexOf('.', s3Start);
+        const s3End = found === -1 ? run.length : found;
+        if (s3End - s3Start >= 5) {
+          out += run.slice(copied, j) + REDACTED_MARK;
+          copied = s3End;
+          segStart = s3End + 1;
+          continue;
+        }
+      }
+    }
+    segStart = segEnd + 1;
+  }
+  return copied === 0 ? run : out + run.slice(copied);
+}
+
+/** Every JWT-shaped match of `s` replaced by the mark (see `redactJwtRun`). */
+function redactJwtShapes(s) {
+  return s.replace(/[A-Za-z0-9_.-]+/g, redactJwtRun);
+}
+
 /** An ANSI CSI sequence (`ESC[…m` and kin). Written as the escape text, never
  *  the raw byte (source-bytes.test.ts). */
 const ANSI_CSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
@@ -1438,7 +1496,7 @@ function redactLayers(segment, idx) {
   s = s.replace(/([?&]token=)([^&\s"'#]+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
   // Layer 3: shapes.
   for (const re of SECRET_SHAPE_RES) s = s.replace(re, REDACTED_MARK);
-  return s;
+  return redactJwtShapes(s);
 }
 
 /** Redact one field's FULL raw text, before any cut, cap, escape or

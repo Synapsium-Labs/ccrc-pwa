@@ -1377,6 +1377,101 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     const pem = ['-----BEGIN ', 'RSA PRIVATE KEY-----\n', rndAlnum(64), '\n', rndAlnum(64), '\n-----END RSA PRIVATE KEY-----'].join('');
     expect(libRedact.redactField(`key:\n${pem}\ndone`, none)).toBe(`key:\n${M}\ndone`);
   });
+  // Task 9S (D-4306): the JWT arm as a regex backtracked quadratically on a
+  // long run of dotless `eyJ` starts, so one large tool_result pinned a sweep
+  // pass past the carrier's kill. Every expectation below was computed with
+  // that regex first and is pinned literally; `~` stands for the three
+  // characters that open a JWT, so no JWT-shaped literal sits in the repo.
+  const EY = 'ey' + 'J';
+  it('the JWT arm finds exactly the matches the old regex found (pinned literals, computed with it)', () => {
+    const none = libRedact.makePairIndex([]);
+    const table: Array<[string, string]> = [
+    ['~aaaaaaaa.CCCCCCC.DDDDDDD', '[redacted]'],
+    ['x ~aaaaaaaa.CCCCCCC.DDDDDDD y', 'x [redacted] y'],
+    ['-~aaaaaaaa.CCCCCCC.DDDDDDD', '-[redacted]'],
+    ['.~aaaaaaaa.CCCCCCC.DDDDDDD', '.[redacted]'],
+    ['a~aaaaaaaa.CCCCCCC.DDDDDDD', 'a~aaaaaaaa.CCCCCCC.DDDDDDD'],
+    ['_~aaaaaaaa.CCCCCCC.DDDDDDD', '_~aaaaaaaa.CCCCCCC.DDDDDDD'],
+    ['Bearer ~aaaaaaaa.CCCCCCC.DDDDDDD', 'Bearer [redacted]'],
+    ['~aaaaaaaa.CCCCCCC.DDDDDDD ~aaaaaaaa.CCCCCCC.DDDDDDD', '[redacted] [redacted]'],
+    ['~aaaaaaaa.CCCCCCC.DDDDDDD.~aaaaaaaa.CCCCCCC.DDDDDDD', '[redacted].[redacted]'],
+    ['~aaaaaaaa.CCCCCCC.DDDDDDD-~aaaaaaaa.CCCCCCC.DDDDDDD', '[redacted].CCCCCCC.DDDDDDD'],
+    ['~abcd.bbbbb.ccccc', '~abcd.bbbbb.ccccc'],
+    ['~abcde.bbbb.ccccc', '~abcde.bbbb.ccccc'],
+    ['~abcde.bbbbb.cccc', '~abcde.bbbbb.cccc'],
+    ['~abcde.bbbbb.ccccc.', '[redacted].'],
+    ['~abcde.bbbbb.ccccc.ddddd', '[redacted].ddddd'],
+    ['~abcde.bbbbb.ccccc.ddd', '[redacted].ddd'],
+    ['~abcde.bbbbb', '~abcde.bbbbb'],
+    ['~abcde..ccccc', '~abcde..ccccc'],
+    ['~abcde.bbbbb.', '~abcde.bbbbb.'],
+    ['~-~abcde.bbbbb.ccccc', '[redacted]'],
+    ['~-~.bbbbb.ccccc', '~-~.bbbbb.ccccc'],
+    ['~ab-~abcde.bbbbb.ccccc', '[redacted]'],
+    ['~aa.~bbbbb.ccccc.ddddd', '~aa.[redacted]'],
+    ['~aa.~bbbbb.ccccc.ddddd.eeeee', '~aa.[redacted].eeeee'],
+    ['~aaaaa.bbbbb.ccccc.~aaaaa.bbbbb.ccccc', '[redacted].[redacted]'],
+    ['~aaaaa.bbbbb.ccccc.~aaaaa.bbbbb.ccccc.~aaaaa.bbbbb.ccccc', '[redacted].[redacted].[redacted]'],
+    ['x~aaaaa.bbbbb.ccccc', 'x~aaaaa.bbbbb.ccccc'],
+    ['~aaaaa.b~bb.ccccc', '[redacted]'],
+    ['~aaaaa.bbbbb.c~cc', '[redacted]'],
+    ['~aaaaa.bbbbb.ccccc.-~aaaaa.bbbbb.ccccc', '[redacted].-[redacted]'],
+    ['~aaaaaa.bbbbbb.ccccc=more', '[redacted]=more'],
+    ['EYJaaaaaa.bbbbbb.cccccc', 'EYJaaaaaa.bbbbbb.cccccc'],
+    ['eyjaaaaaa.bbbbbb.cccccc', 'eyjaaaaaa.bbbbbb.cccccc'],
+    ['~aaaaa.bbbbb.ccccc\n~aaaaa.bbbbb.ccccc', '[redacted]\n[redacted]'],
+    ['..~aaaaa.bbbbb.ccccc..', '..[redacted]..'],
+    ['~.....~aaaaa.bbbbb.ccccc', '~.....[redacted]'],
+    ['~aaaa.~aaaaa.bbbbb.ccccc', '~aaaa.[redacted]'],
+    ['~aaaaa.bbbb.~aaaaa.bbbbb.ccccc', '~aaaaa.bbbb.[redacted]'],
+    ['~aaaaa.bbbbb.cccc.~aaaaa.bbbbb.ccccc', '~aaaaa.bbbbb.cccc.[redacted]'],
+    ['a.~aaaaa.bbbbb.ccccc', 'a.[redacted]'],
+    ['a-~aaaaa.bbbbb.ccccc.~a', 'a-[redacted].~a'],
+    ['~aaaaa.bbbbb.ccccc.~aaaaa.bbbbb', '[redacted].~aaaaa.bbbbb'],
+    ['~_aaaa.b_b_b_b.c-c-c-c', '[redacted]'],
+    ['~aaaaa.bbbbb.ccccc-~aaaaa.bbbbb.ccccc', '[redacted].bbbbb.ccccc'],
+    ['~aaaaa.bbbbb.ccccc[x]~aaaaa.bbbbb.ccccc', '[redacted][x][redacted]'],
+    ['~-----.-----.-----', '[redacted]'],
+    ['~a.~aaaaa.bbbbb.ccccc', '~a.[redacted]'],
+    ];
+    for (const [input, expected] of table) {
+      expect(libRedact.redactField(input.replaceAll('~', EY), none), input).toBe(expected.replaceAll('~', EY));
+    }
+  });
+  it('the JWT scan agrees with the old regex on 20,000 seeded strings built from the shape\'s own pieces', () => {
+    const none = libRedact.makePairIndex([]);
+    const old = new RegExp(String.raw`\b${EY}[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}`, 'g');
+    const pieces = [EY, '.', '-', '_', 'a', 'bbbbb', 'cc', 'ccccc', 'dddddd', 'Z', '9', ' ', 'x', `${EY}aaaaa`, 'e', 'y', 'J'];
+    let seed = 12345;
+    const rnd = (): number => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    for (let i = 0; i < 20_000; i += 1) {
+      let s = '';
+      for (let k = 1 + Math.floor(rnd() * 14); k > 0; k -= 1) s += pieces[Math.floor(rnd() * pieces.length)];
+      expect(libRedact.redactField(s, none), s).toBe(s.replace(old, M));
+    }
+  });
+  // A bound picked from measurement: the fixed code takes about 0.1 s on each
+  // 256 KiB case below (x20 = 2 s; 5 s kept for a loaded box), the old regex
+  // 57 s and 26 s, far above it.
+  const LINEAR_MS = 5_000;
+  it('a 256 KiB run of dotless eyJ starts is redacted in linear time and left as it was', () => {
+    const none = libRedact.makePairIndex([]);
+    for (const unit of [`${EY}-`, `${EY}aaaaa-`]) {
+      const run = unit.repeat(Math.ceil((256 * 1024) / unit.length));
+      const t0 = Date.now();
+      const out = libRedact.redactField(run, none);
+      expect(Date.now() - t0, unit).toBeLessThan(LINEAR_MS);
+      expect(out === run, unit).toBe(true);
+    }
+  });
+  it('a real JWT after a 256 KiB run of dotless starts is still found, in linear time', () => {
+    const none = libRedact.makePairIndex([]);
+    const prefix = `${EY}-`.repeat(65536);
+    const t0 = Date.now();
+    const out = libRedact.redactField(`${prefix} ${EY}aaaaa.bbbbb.ccccc`, none);
+    expect(Date.now() - t0).toBeLessThan(LINEAR_MS);
+    expect(out === `${prefix} ${M}`).toBe(true);
+  });
   it('the mark holds no JSON- or XML-special character, and the final belt applies the same layers', () => {
     expect(M).not.toMatch(/["\\<>&]/);
     const tok = rndHex(32);
