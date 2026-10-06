@@ -1872,6 +1872,53 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - Items 2 (pre-existing in the script: an unsearchable registry, and `_reg_purge`'s order), 4 (Darwin), 5
       (wording), 6 (mutation bookkeeping) and 7 (the W21 bound) go to wave 12 as R18.
 
+- **2026-10-06 02:35 UTC: review 281 ruled. Wave 11 meets the bar, and #287 merges.**
+  - **The review:** run by `ccrc-pwa-amber-cove` (workflow `wf_e7d29566-e2c`, 38 agents, 0 errors). It ran the
+    held-out panel and the five wave lenses on Opus, with three Sonnet refuters per finding and the majority
+    deciding. No lens went unverified and none was unexamined. 4 findings were confirmed and 6 refuted.
+    - **What the lenses measured beyond the findings:**
+      - The frozen sweep is byte-identical to `_upd_sweep` at every tag from v0.0.59 to v0.0.91.
+      - A 36-case pairing matrix (OLD+S11, NEW+S11, NEW+S10, NEW+S0) was all correct.
+      - About 30 adversarial inputs to the purged arm all fail.
+      - A Linux differential of 3000 pairs × 3 locales gave 0 differences against `main`.
+      - On Darwin, 125 names × 28 values on bash 3.2 and 4.4: only HISTCMD and OPTIND stop the job, and both are
+        refused.
+      - Every signal shape matched the worker's tables.
+      - 12 no-signal fixtures × 3 runs were byte-identical between head and base.
+    - **The four confirmed findings** are all coverage or prose, introduced by the branch, and meet no bar class:
+      - F1: D-3984's "was active before" filter cannot go red, because every fixture plants its units as active
+        before the restart;
+      - F2: the plan's W20 row contradicts the shipped `toBe(-1)`;
+      - F3: no case pins the NEW sweep with S10, which was measured correct;
+      - F4: the S0 fixture is misnamed as wave 10's script; it is v0.0.79's.
+  - **CI:**
+    - Every Linux leg of full run 37399068946 and of PR run 37398985082 is green. `full-suite` is red only through
+      the macOS legs.
+    - The macOS reds, split by owner and re-measured from the job logs:
+      - **`ccrc-update` D3 is this programme's, and the defect is my ruling.** The plan's ruling (Task 7's D3) said
+        "D3 runs on every platform" with a GNU-only `stat -c %s` shim, which BSD stat refuses. Its `itDarwin` twin D3d,
+        on the real `_plat_size`, passed on the same leg, so the shipped code is right on macOS.
+      - **`session-hook-merge-deny` is landing-order's**, in that programme's fix round. It is red on `main`'s
+        daily too.
+      - **`platform-hazards` D-2661's FIFO-EOF case is a flake.** It failed on the full run and passed on the PR
+        run's macOS leg at the same tip. The case predates this branch.
+    - **The macOS cases the wave-done listed are all green:**
+      - E20d, D0–D2, D4, D6–D8 and D3d passed.
+      - `ccrc-doctor` passed whole on macOS: 685 tests, 73 skipped, so U4p, U5 and U5l passed.
+      - R14(i) recorded that the runner takes C.UTF-8 under bash 5.3.15, where the unpinned reads do not misread. So
+        U4n, U4u F2 and G1 cannot go red there; that is the answer R14(i) asked for.
+  - **Rulings:**
+    - **The merge:** no confirmed finding meets classes 1–8, and every Linux leg is green. By the bar, no fix round
+      runs, and #287 merges.
+    - **R19, before stable, to residue:** D3 becomes Linux-only, or takes a portable shim; D3d already covers Darwin
+      with the real primitive. This is test-only. It lands before `stable` is promoted, with F1 to F4 and R18(e), in
+      the first small part of wave 12.
+    - **Two refuted signal findings are kept as notes:**
+      - In R17: a second SIGINT within about 10 ms of the first cuts the INT cleanup short. One refuter would keep it
+        as residue.
+      - In R18: if a caller traps a signal other than INT, `wait` returns early, and a run takes about twice as
+        long with the right verdict. No caller does this today.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
@@ -2049,6 +2096,14 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
     - Removing the pgid filter's "TERMed group" exception reds nothing.
   - (e) Item 1's prose point and item 3's false warning, from the 01:29 entry, land here unless a fix round takes
     them.
+- **R19 — before stable (wave 11, review 281; for wave 12's first part).**
+  - (a) `ccrc-update` D3 runs on macOS with a GNU-only `stat -c %s` shim and goes red there. The cause is the
+    coordinator's ruling on the plan. Make D3 Linux-only, or give it a portable shim. D3d covers Darwin.
+  - (b) F1: plant a crash-listed unit that was not active before the restart, while another unit is missing. Assert
+    it is not verified, with a mutation row for the filter.
+  - (c) F2: amend the plan's W20 row to the shipped `toBe(-1)`, with the worker's reason.
+  - (d) F3: freeze S10, the script at v0.0.80–v0.0.91, as a fixture, and pin the NEW sweep with it.
+  - (e) F4: rename the S0 fixture's prose to "pre-wave-10 (v0.0.79)".
 ## Next-wave brief
 
 **Wave 2 (run 128) — dispatched 2026-09-23.** The brief as sent is the plan's path and sha, tasks 1–15, execution
