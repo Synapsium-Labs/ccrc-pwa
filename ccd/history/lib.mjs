@@ -1461,3 +1461,135 @@ export function redactField(text, idx) {
 export function redactFinal(text, idx) {
   return redactField(text, idx);
 }
+
+// ===========================================================================
+// The harness table and the export's horizon (spec §6.10 item 3, §9.15).
+// B1 ships the due rule and its census so doctor reports the gap before the
+// export writer (B4) exists; nothing here reads a file — the sweep measures
+// each settings file as `absent`, `unreadable` or its text, and passes it in.
+// ===========================================================================
+
+/** Claude Code's retention default when no file sets `cleanupPeriodDays`
+ *  ("default: 30", M), and the value of a home never measured. */
+export const CLAUDE_CODE_DEFAULT_RETENTION_DAYS = 30;
+
+const EXPORT_DAY_MS = 86400000;
+
+/** One settings file's `cleanupPeriodDays`: absent (no file, or no key), a
+ *  positive integer, or bad (unparseable JSON, a non-object, or a value that
+ *  is not a positive integer — Claude Code's schema says "Minimum 1"). */
+function retentionKey(text) {
+  let o;
+  try {
+    o = JSON.parse(text);
+  } catch {
+    return { state: 'bad' };
+  }
+  if (o === null || typeof o !== 'object' || Array.isArray(o)) return { state: 'bad' };
+  if (!Object.hasOwn(o, 'cleanupPeriodDays')) return { state: 'absent' };
+  const v = o.cleanupPeriodDays;
+  return Number.isSafeInteger(v) && v >= 1 ? { state: 'days', days: v } : { state: 'bad' };
+}
+
+/** Claude Code's `retention` reader (§9.15): the smallest `cleanupPeriodDays`
+ *  over the home's `settings.json` and every system managed-settings file
+ *  (`managed-settings.json` and each `managed-settings.d/*.json`), because
+ *  whichever source Claude Code's merge ranks first, the minimum is never
+ *  later than it. No file setting the key means the default. An unreadable
+ *  file, or a bad value in any of them, is `unmeasured`: the home keeps its
+ *  last measured value (`lastDays`), and only a home never measured counts as
+ *  the default — Claude Code itself skips its cleanup on such a file, so
+ *  keeping the last value errs no later than Claude Code does.
+ *  D-4210 */
+export function claudeCodeRetention({ home, managed, lastDays }) {
+  const values = [];
+  for (const f of [home, ...managed]) {
+    if (f.state === 'absent') continue;
+    const k = f.state === 'text' ? retentionKey(f.text) : { state: 'bad' };
+    if (k.state === 'bad') return { days: lastDays ?? CLAUDE_CODE_DEFAULT_RETENTION_DAYS, state: 'unmeasured' };
+    if (k.state === 'days') values.push(k.days);
+  }
+  if (values.length === 0) return { days: CLAUDE_CODE_DEFAULT_RETENTION_DAYS, state: 'default' };
+  return { days: Math.min(...values), state: 'measured' };
+}
+
+/** The harness table (§6.10 item 3): one frozen row per harness, keyed by
+ *  name; `HARNESSES` is derived from its keys, never declared apart (the
+ *  `PR_REASONS` precedent). W1 ships one row, `claude-code`, holding one
+ *  member, `retention`: the arm's other six members stay text until the first
+ *  adapter dispatches through them (rev 3.2 review, FE19).
+ *  D-4209 */
+export const HARNESS_TABLE = Object.freeze({
+  'claude-code': Object.freeze({ retention: claudeCodeRetention }),
+});
+export const HARNESSES = Object.freeze(Object.keys(HARNESS_TABLE));
+
+/** The smallest retention over the harness's rostered homes; the default when
+ *  no home was measured at all. */
+export function shortestRetention(homeRetentionDays) {
+  const v = Object.values(homeRetentionDays);
+  return v.length === 0 ? CLAUDE_CODE_DEFAULT_RETENTION_DAYS : Math.min(...v);
+}
+
+/** The reducers `planExport` may take: per candidate referrer, the retention
+ *  its age is measured against. The ruled rule (Q6 e) is `shortestHome`, the
+ *  node's shortest retention whatever homes hold the referrer; Q15, if ruled
+ *  yes, adds a reducer reading the referrer's own files and changes no
+ *  signature (rev 3.2 review, FE13). */
+export const EXPORT_REDUCERS = Object.freeze({
+  shortestHome: (_candidate, homeRetentionDays) => shortestRetention(homeRetentionDays),
+});
+
+/** The horizon: retention minus `EXPORT_MARGIN_DAYS`, floored at 0. */
+export function exportHorizonDays(retentionDays) {
+  return Math.max(0, retentionDays - EXPORT_MARGIN_DAYS);
+}
+
+/** A referrer's age (§9.15): now minus its row's `ts_ms`, or, when that is
+ *  NULL, minus the mtime of the newest file holding it — deliberately the
+ *  opposite of prune, where NULL is "never old": here "never" would never
+ *  copy it. A referrer with no time and no holding file has no clock at all
+ *  and counts as old: the export errs early, never late (plan-chosen).
+ *  D-4208 */
+function referrerAgeMs(r, nowMs) {
+  if (r.tsMs !== null) return nowMs - r.tsMs;
+  if (r.files.length === 0) return Number.POSITIVE_INFINITY;
+  return nowMs - Math.max(...r.files.map((f) => f.mtimeMs));
+}
+
+/** The export's due and overdue sets (§9.15). A blob is DUE when every
+ *  referrer is older than its horizon, the retention coming from the reducer
+ *  (default: the ruled `shortestHome`). It is OVERDUE — measured source loss,
+ *  doctor's FAIL — when it is due and every holding file of every referrer is
+ *  gone from disk or past its own deletion date by the file clock (its mtime
+ *  plus its home's retention). A blob with no referrer is neither.
+ *  D-4207 */
+export function planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.shortestHome }) {
+  const due = [];
+  const overdue = [];
+  for (const blob of blobs) {
+    if (blob.referrers.length === 0) continue;
+    const isDue = blob.referrers.every((r) => referrerAgeMs(r, nowMs) > exportHorizonDays(reducer(r, homeRetentionDays)) * EXPORT_DAY_MS);
+    if (!isDue) continue;
+    due.push(blob.key);
+    const gone = blob.referrers.every((r) => r.files.every((f) => {
+      const days = homeRetentionDays[f.home] ?? CLAUDE_CODE_DEFAULT_RETENTION_DAYS;
+      return !f.present || f.mtimeMs + days * EXPORT_DAY_MS < nowMs;
+    }));
+    if (gone) overdue.push(blob.key);
+  }
+  return { horizonDays: exportHorizonDays(shortestRetention(homeRetentionDays)), due, overdue };
+}
+
+/** Doctor's `retention-lowered` input (§9.15): when the homes disagree, the
+ *  home that sets the node's minimum (the first by name on a tie), its value,
+ *  and the next value above it. Null when no home's value is above the
+ *  minimum (one home, or all agree): nothing was lowered relative to anything. */
+export function retentionLowered(homeRetentionDays) {
+  const entries = Object.entries(homeRetentionDays).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const days = Math.min(...entries.map(([, d]) => d));
+  const above = entries.map(([, d]) => d).filter((d) => d > days);
+  if (above.length === 0) return null;
+  const home = entries.find(([, d]) => d === days)[0];
+  return { home, days, othersMin: Math.min(...above) };
+}

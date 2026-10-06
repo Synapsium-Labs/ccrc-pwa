@@ -257,3 +257,21 @@ export interface PairIndex { readonly byLen: ReadonlyMap<number, ReadonlySet<str
 export function makePairIndex(pairs: Iterable<SecretPair>): PairIndex;
 export function redactField(text: string, idx: PairIndex): string;
 export function redactFinal(text: string, idx: PairIndex): string;
+// --- Task 10: harness table and the export's horizon (spec §6.10 item 3, §9.15)
+export type Readable = { state: 'absent' } | { state: 'unreadable' } | { state: 'text'; text: string };
+export const CLAUDE_CODE_DEFAULT_RETENTION_DAYS: 30;
+export interface Retention { days: number; state: 'measured' | 'default' | 'unmeasured' }
+export function claudeCodeRetention(i: { home: Readable; managed: readonly Readable[]; lastDays: number | null }): Retention;
+export const HARNESS_TABLE: Readonly<{ 'claude-code': Readonly<{ retention: typeof claudeCodeRetention }> }>;
+export const HARNESSES: readonly string[];
+export function shortestRetention(homeRetentionDays: Readonly<Record<string, number>>): number;
+export interface ExportFile { home: string; mtimeMs: number; present: boolean }
+export interface ExportCandidate { tsMs: number | null; files: readonly ExportFile[] }
+export type ExportReducer = (candidate: ExportCandidate, homeRetentionDays: Readonly<Record<string, number>>) => number;
+export const EXPORT_REDUCERS: Readonly<{ shortestHome: ExportReducer }>;
+export function exportHorizonDays(retentionDays: number): number;
+export function planExport(i: {
+  nowMs: number; homeRetentionDays: Readonly<Record<string, number>>;
+  blobs: readonly { key: string; referrers: readonly ExportCandidate[] }[]; reducer?: ExportReducer;
+}): { horizonDays: number; due: string[]; overdue: string[] };
+export function retentionLowered(homeRetentionDays: Readonly<Record<string, number>>): null | { home: string; days: number; othersMin: number };

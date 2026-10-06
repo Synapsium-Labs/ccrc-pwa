@@ -32,6 +32,7 @@ import * as libRows from '../../ccd/history/lib.mjs';
 import * as rowFx from './historyFixtures.js';
 import * as libRedact from '../../ccd/history/lib.mjs';
 import * as historyCrypto from 'node:crypto';
+import * as libExport from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -1378,5 +1379,122 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     expect(named).toEqual(['.cc-secrets/*', '.ccrc/*.token', '.ccrc/exposure.env', '.ccrc/codex/*/runtime.env', '.ccrc/ccrc.env', '.ccrc/agent.env', '.ccrc/sessions.json']);
     expect(JSON.stringify(libRedact.SECRET_SOURCES)).not.toMatch(/auth[_-]?dir|oauth/i);
     expect(Object.isFrozen(libRedact.SECRET_SOURCES)).toBe(true);
+  });
+});
+
+// ===========================================================================
+// Task 10: the harness table (DM39) and the export's due rule, pure halves.
+// O38 itself, driven through the sweep's census, is Task 26's; O14's binding
+// of HARNESS_TABLE, HARNESSES and EPOCH_CAUSES is Task 34's.
+// ===========================================================================
+describe('HARNESS_TABLE: one row, one reader, HARNESSES derived from it (DM39)', () => {
+  it("has exactly one row, claude-code, and that row's keys are exactly retention, a reader", () => {
+    expect(Object.keys(libExport.HARNESS_TABLE)).toEqual(['claude-code']);
+    expect(Object.keys(libExport.HARNESS_TABLE['claude-code'])).toEqual(['retention']);
+    expect(typeof libExport.HARNESS_TABLE['claude-code'].retention).toBe('function');
+    expect(libExport.HARNESS_TABLE['claude-code'].retention).toBe(libExport.claudeCodeRetention);
+  });
+  it('HARNESSES equals the keys of HARNESS_TABLE, and both are frozen', () => {
+    expect([...libExport.HARNESSES]).toEqual(Object.keys(libExport.HARNESS_TABLE));
+    expect(Object.isFrozen(libExport.HARNESS_TABLE)).toBe(true);
+    expect(Object.isFrozen(libExport.HARNESS_TABLE['claude-code'])).toBe(true);
+    expect(Object.isFrozen(libExport.HARNESSES)).toBe(true);
+  });
+  it('EPOCH_CAUSES has no harness-change member: it joins with its adapter (ruled Q11 c)', () => {
+    expect(libExport.EPOCH_CAUSES as unknown as readonly string[]).not.toContain('harness-change');
+  });
+});
+
+describe('claudeCodeRetention: the smallest cleanupPeriodDays it can read (spec 9.15)', () => {
+  const absent: libExport.Readable = { state: 'absent' };
+  const text = (o: unknown): libExport.Readable => ({ state: 'text', text: JSON.stringify(o) });
+  const ret = (home: libExport.Readable, managed: libExport.Readable[] = [], lastDays: number | null = null) =>
+    libExport.claudeCodeRetention({ home, managed, lastDays });
+  it('a home setting 180 reads 180, measured', () => {
+    expect(ret(text({ cleanupPeriodDays: 180 }))).toEqual({ days: 180, state: 'measured' });
+  });
+  it('no file setting the key reads the 30-day default', () => {
+    expect(ret(absent)).toEqual({ days: 30, state: 'default' });
+    expect(ret(text({ theme: 'dark' }))).toEqual({ days: 30, state: 'default' });
+  });
+  it('a managed file under a home of 180 wins with 90, a drop-in with 60, and the minimum always wins', () => {
+    expect(ret(text({ cleanupPeriodDays: 180 }), [text({ cleanupPeriodDays: 90 })])).toEqual({ days: 90, state: 'measured' });
+    expect(ret(text({ cleanupPeriodDays: 180 }), [text({ cleanupPeriodDays: 90 }), text({ cleanupPeriodDays: 60 })])).toEqual({ days: 60, state: 'measured' });
+    expect(ret(absent, [text({ cleanupPeriodDays: 90 })])).toEqual({ days: 90, state: 'measured' });
+    expect(ret(text({ cleanupPeriodDays: 20 }), [text({ cleanupPeriodDays: 90 })])).toEqual({ days: 20, state: 'measured' });
+  });
+  it('0, "x", a fraction or unparseable JSON on a home measured at 180 is unmeasured and keeps 180', () => {
+    for (const bad of [text({ cleanupPeriodDays: 0 }), text({ cleanupPeriodDays: 'x' }), text({ cleanupPeriodDays: 1.5 }), text([180]), { state: 'text', text: '{not json' } as libExport.Readable]) {
+      expect(ret(bad, [], 180)).toEqual({ days: 180, state: 'unmeasured' });
+    }
+  });
+  it('an unreadable home or managed file is unmeasured, and a never-measured home falls back to 30', () => {
+    expect(ret({ state: 'unreadable' }, [], 180)).toEqual({ days: 180, state: 'unmeasured' });
+    expect(ret(text({ cleanupPeriodDays: 180 }), [{ state: 'unreadable' }], 180)).toEqual({ days: 180, state: 'unmeasured' });
+    expect(ret({ state: 'unreadable' }, [], null)).toEqual({ days: 30, state: 'unmeasured' });
+  });
+});
+
+describe('planExport and retentionLowered: what is due, what is overdue (spec 9.15, O38 and O41 pure halves)', () => {
+  const DAY = 86_400_000;
+  const NOW = Date.UTC(2026, 11, 1);
+  const homes = { '/home/u/.claude-a': 180, '/home/u/.claude-b': 180 };
+  const file = (home: string, ageDays: number, present = true): libExport.ExportFile => ({ home, mtimeMs: NOW - ageDays * DAY, present });
+  const ref = (tsAgeDays: number | null, files: libExport.ExportFile[]): libExport.ExportCandidate => ({ tsMs: tsAgeDays === null ? null : NOW - tsAgeDays * DAY, files });
+  it('a home of 180 gives a horizon of 150 days; the margin floors at 0', () => {
+    expect(libExport.exportHorizonDays(180)).toBe(150);
+    expect(libExport.exportHorizonDays(30)).toBe(0);
+    expect(libExport.exportHorizonDays(10)).toBe(0);
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [] }).horizonDays).toBe(150);
+  });
+  it('a blob whose every referrer is past the horizon is due; one younger referrer keeps it from being due', () => {
+    const old = { key: 'b-old', referrers: [ref(151, [file('/home/u/.claude-a', 10)])] };
+    const mixed = { key: 'b-mixed', referrers: [ref(151, [file('/home/u/.claude-a', 10)]), ref(20, [file('/home/u/.claude-a', 10)])] };
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [old, mixed] }).due).toEqual(['b-old']);
+  });
+  it('a referrer with a NULL ts ages by its newest holding file, never as never-old', () => {
+    const nullTs = { key: 'b-null', referrers: [ref(null, [file('/home/u/.claude-a', 200), file('/home/u/.claude-b', 160)])] };
+    const nullYoung = { key: 'b-null-young', referrers: [ref(null, [file('/home/u/.claude-a', 200), file('/home/u/.claude-b', 5)])] };
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [nullTs, nullYoung] }).due).toEqual(['b-null']);
+  });
+  it('one home on the 30-day default makes every old-enough blob due at once (the ruled rule), and is named', () => {
+    const lowered = { ...homes, '/home/u/.claude-c': 30 };
+    const young = { key: 'b-young', referrers: [ref(1, [file('/home/u/.claude-a', 1)])] };
+    const r = libExport.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: [young] });
+    expect(r.horizonDays).toBe(0);
+    expect(r.due).toEqual(['b-young']);
+    expect(libExport.retentionLowered(lowered)).toEqual({ home: '/home/u/.claude-c', days: 30, othersMin: 180 });
+  });
+  it('retentionLowered is null for one home or when all homes agree', () => {
+    expect(libExport.retentionLowered({ '/home/u/.claude-a': 30 })).toBe(null);
+    expect(libExport.retentionLowered(homes)).toBe(null);
+    expect(libExport.retentionLowered({})).toBe(null);
+  });
+  it('a due blob whose holding files are gone, or past their file-clock deletion date, is overdue; fresh files are not', () => {
+    const gone = { key: 'b-gone', referrers: [ref(170, [file('/home/u/.claude-a', 10, false)])] };
+    const pastClock = { key: 'b-past', referrers: [ref(170, [file('/home/u/.claude-a', 181)])] };
+    const fresh = { key: 'b-fresh', referrers: [ref(170, [file('/home/u/.claude-a', 10)])] };
+    const r = libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [gone, pastClock, fresh] });
+    expect(r.due).toEqual(['b-gone', 'b-past', 'b-fresh']);
+    expect(r.overdue).toEqual(['b-gone', 'b-past']);
+  });
+  it('a file clock reads its own home: a file in a 30-day home is past its date sooner', () => {
+    const lowered = { ...homes, '/home/u/.claude-c': 30 };
+    const inShort = { key: 'b-short', referrers: [ref(40, [file('/home/u/.claude-c', 31)])] };
+    const inLong = { key: 'b-long', referrers: [ref(40, [file('/home/u/.claude-a', 31)])] };
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: [inShort, inLong] }).overdue).toEqual(['b-short']);
+  });
+  it('a referrer with no time and no holding file counts as old, and a blob with no referrer is neither due nor overdue', () => {
+    const r = libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [{ key: 'b-orphan', referrers: [] }, { key: 'b-clockless', referrers: [ref(null, [])] }] });
+    expect(r.due).toEqual(['b-clockless']);
+    expect(r.overdue).toEqual(['b-clockless']);
+  });
+  it('a reducer is the only seam Q15 needs: the same inputs under another reducer change the answer, not the signature', () => {
+    const blob = { key: 'b-1', referrers: [ref(100, [file('/home/u/.claude-a', 100)])] };
+    const lowered = { ...homes, '/home/u/.claude-c': 30 };
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: [blob] }).due).toEqual(['b-1']);
+    const ownCopies: libExport.ExportReducer = (c, h) => Math.min(...c.files.map((f) => h[f.home] ?? 30));
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: [blob], reducer: ownCopies }).due).toEqual([]);
+    expect(libExport.EXPORT_REDUCERS.shortestHome(blob.referrers[0]!, lowered)).toBe(30);
   });
 });
