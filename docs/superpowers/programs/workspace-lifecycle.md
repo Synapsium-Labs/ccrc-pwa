@@ -549,6 +549,25 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     breadcrumb (both readings are retries).
   - **(I) Overlap.** #290 (child reclamation wave 5) edits the sweep and banner files, so the plan is re-verified on
     main after #290 merges, before dispatch. `ccd/ccd` is shared by region.
+- **2026-10-06 09:18 — a security finding against the 3b draft, binding before dispatch.** An automated commit review
+  flagged a MEDIUM JSON injection in the plan drafter's prototype of ruling (G) (workflow worktree, `proto T3 green`),
+  not in main.
+  - **The flaw:** the cwd probe's python emits `pid<TAB>comm<TAB>path` lines, and bash splices `$pid` raw into an
+    `EXPIRE_IN_USE` JSON array. A newline in a cwd path, or in a process's `comm` (both set by whoever owns the
+    process), splits one record into two, and the second record's "pid" is attacker-chosen text inside the JSON.
+  - **Reach:** none to a deletion. ccd re-measures every rung, rung 5 included, under the reap lock, and the token is
+    ccd's own. The reach is the integrity of the audit document the lane will parse: a forged key, or a malformed
+    line read as unmeasured.
+  - **Main is not affected.** Its probe emits `pid<TAB>path` into prose only.
+  - **RULED, binding on the 3b plan:**
+    - python emits each record already JSON-encoded (`json.dumps`, pid as an integer, strings decoded with
+      surrogateescape), one per line, or the whole array at once;
+    - bash never splices a field;
+    - a pid that is not `^[0-9]+$` makes the probe unmeasured;
+    - a fixture whose cwd path and `comm` carry a newline, a tab and a quote yields one record, valid JSON, with the
+      exact bytes;
+    - each guard has a mutation row.
+  - **The returned plan is checked for this before dispatch,** and amended if it carries the spliced form.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
