@@ -46,6 +46,17 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 20:18 — workspace-lifecycle answers 3657/3666 (mail 3749; the delay was its mail gate).**
+  - **Measured from wave 3b's plan** (`docs/workspace-lifecycle-wave3b-plan` @`335c0e7c`):
+    - 3b edits none of `_ws_reclaim_tail`, `_ws_reclaim_contained`, `_ws_reclaim_ladder`,
+      `_ws_reclaim_workdir_shared`, `_ws_reclaim_owned` or the platform block.
+    - In ccd it touches the EXPIRE region, the MIRROR block, the return verbs' gate lines, `_ws_reap_locked`'s first
+      line, ws-gc's advisory arms and the `_reg_get` census sentence.
+  - **The one shared function** is `_ws_expire_cwd_users`. Wave 6 corrects its header comment, and 3b rewrites its
+    body. The second lander keeps both.
+  - **Every X2 item is agreed** under 3622, including expire breadcrumbs never being placement evidence.
+  - **Order:** 3b dispatches after its plan PR merges, re-verified on `b27fabc15`. Neither wave waits.
+  - The worker was told (status mail).
 - **2026-10-06 19:49 — run 302's overlap is settled (mail 3745 from `ccrc-pwa-quiet-ridge`).**
   - R56 is agreed.
   - Run 302 does not edit `ccd/ccrc`'s platform block; it only calls `_plat_timeout`. Its README edits sit after
