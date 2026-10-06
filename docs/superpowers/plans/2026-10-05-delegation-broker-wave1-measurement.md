@@ -3067,15 +3067,15 @@ guard that cannot have a row says so); the wave-done reports the cells.
 | 4 | F10d | `wait_run_quiet` waits within its bound before it kills (D-4010) | "wait_run_quiet WAITS, within its bound, for a process under the root that exits on its own: it is never signalled (F10d)" |
 | 4 | F10e | the fixture `settings.json`'s `disableAutoMode` (D-4004) | the setup row, "builds the fixture HOME and repo under its root, …" |
 | 4 | F10g | the ready footer: each alternative, never the version banner (D-4004) | the two rows of the "rig.sh wait_ready (F10g …)" describe |
-| 4 | F10g | `cleanup_run` removes its own socket file, and only that one (D-4004) | "cleanup_run removes its own tmux socket file after the server is killed, and only that one (F10g)" |
+| 4 | F10g | `cleanup_run` removes its own socket file, and only that one (D-4004) | "cleanup_run's rm removes its own socket file, and only that one: a neighbour's and `default` stay (F10g)" |
 | 4 | F10h | reap's numeric-pid filter on `dlg<pid>` sockets (D-4004) | "reap keeps a socket named dlg plus anything but digits: only a numeric pid can name a dead owner (F10h)" |
 | 4 | F10f | reap's foreign-owner skip (`! -O`, D-4006) | none: untestable without a second uid (D-4062) |
 | 5 | F1 | a path after an allowed loopback host is scanned; only the URL's end, `:<digits>` or a `/`-path may follow (D-4007) | the F1a row, and the userinfo, non-numeric port, glued name, `?`/`#`/`\`, and end-character rows; "the loopback port is read AT the host, not anywhere after it …"; "a path after the loopback `/` whose first segment is outside the allowlist or glued to a character outside the class is residue …" |
 | 5 | F1 | an allowed top at a host position takes the loopback rule without a port; a `//` before a character that cannot start a name is residue (D-4007) | "an allowed top used as a HOST gets the loopback rule without a port …"; "a `//` at a host position followed by a character that cannot start a name is residue …"; "a `//`-led path whose first segment is an allowed top passes …" |
 | 5 | F1 | an allowed top is a whole segment: only `/`, `:`, the end or a URL/word ender may follow it (D-4007) | "an allowed top glued to a character outside the segment class is residue …"; "what may follow an allowed top …" |
 | 5 | F1, F2 | `/dev/null` exempt only as the whole path, with nothing path-like after it | the two `/dev/null` rows (F1b, F2a); "`/dev/null` glued to a character outside the segment class is residue …"; "`/dev/null` is a first segment exemption only …" |
-| 5 | F2 | the `\/` escape | "fails closed on a JSON-escaped slash …" (F2b) |
-| 5 | F13 | every destination checked before anything moves: not a regular file, unreadable, an unwritable version directory, an unwritable fixtures directory | "writes NOTHING when a later version directory holds a directory or a link where a fixture file would go …"; "a destination it cannot look at is not an absent one …"; "a version directory that exists but cannot be written is refused …"; "a fixtures directory that cannot be written, when a version directory has to be created in it, is refused …" (the last three skipped as root) |
+| 5 | F2 | the `\/` escape | "fails closed on a JSON-escaped slash …" (F2b); "scans the decoded spelling of a JSON-escaped slash …" (N1) |
+| 5 | F13 | every destination checked before anything moves: not a regular file, unreadable, an unwritable version directory, an unwritable fixtures directory | "writes NOTHING when a later version directory holds a directory or a link where a fixture file would go …"; "a destination it cannot look at is not an absent one …"; "a version directory that exists but cannot be written is refused …"; "a fixtures directory that cannot be written, when a version directory has to be created in it, is refused …" (the last three skipped as root); "refuses a symbolic link where a version directory would go, before any version moves …" (N2) |
 | 7 | F9 | rig.sh's notes are all read and decided: two outcomes, six failures | "rig.sh writes eight notes, every one read here, each decided: two outcomes (a probe, a dialog) and six failures"; the scanner's own row |
 | 7 | F9 | each `FAIL_NOTE` alternative, fed from rig.sh's own note text (D-4060) | "rig.sh writes %j: a run carrying it is unmeasured …" (one row per failure note) |
 | 7 | F9 | the start anchor: a failure quoted in an outcome is no failure (D-4060) | "FAIL_NOTE is anchored: %j quoted inside a dialog's text or a probe's label …" (one row per failure note) |
@@ -3210,8 +3210,9 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   Corrected in fix round 1 (review 277 F1, F2, F12, F13): at `347b7b64` two of the shapes above had no row that went
   red — the `/dev/null` exactness (deleting its next-character test left the sanitiser's rows green) and the `\/`
   escape (no row had a `\/` input) — so "each closed shape has a row and a measured mutation" was not true of them.
-  It is true at `82fae4d7b`: fix round 1 added both rows, and every shape below has a row measured red by deleting
-  its arm alone. Fix round 1 also closed:
+  It is true from `78f5a2bae`: fix round 1 added both rows, and every shape below has a row measured red by deleting
+  its arm alone (at `82fae4d7b` the run-of-slashes arm of the `//` rule below still survived its own mutation). Fix
+  round 1 also closed:
   - **An allowed top is a WHOLE segment.** After `rig`, `usr` or `bin` the next character must be `/`, `:`, the end
     of the string or a character that ends a URL or a word (whitespace, a quote, a closer, `<`, `>`, `,`, `;`); after
     `/dev/null` the same, minus `/`. So `/rig~/srv/acme`, `/dev/null~/x`, `/dev/null/srv/acme` and `/dev/nullsrv` are
@@ -3223,10 +3224,15 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
     hands Claude Code only the bare `http://127.0.0.1:<port>`), and so are `//rig/home/x` and `x //bin/sh y`
     (`double-slash-allowed-top-is-a-host`); `file:///rig/x`, `//usr/bin/git` and `/rig//x` still pass. A `//` at a
     host position followed by a character that cannot start a name (`[`, `@`, `%`, `~`, `:`, `\`) is residue; a `//`
-    followed by whitespace, a quote, a closer, `<`, `>`, `,`, `;` or the end stays allowed (a code comment).
+    followed by whitespace, a quote, a closer, `<`, `>`, `,`, `;` or the end stays allowed (a code comment). A run of
+    slashes is judged where it ends (`http:///[fd00::abcd]:8080/…`, `///~/srv/acme` are residue).
+  - **A JSON-escaped `\/` is decoded** like `\uXXXX` and `%2F` before the second scan, so a host written
+    `http:\/\/[fd00::abcd]:8080` is residue; a single decoding pass, so a doubly-escaped spelling is covered by the
+    "other encodings" limit.
   - **Nothing moves before every destination is checked (F13).** The move refuses, with nothing moved, when any
     destination is not a regular file (a directory or a link), when a destination version directory cannot be
-    written, or when the fixtures directory cannot be written and a version directory must be created in it.
+    written, when a version directory in the fixtures directory is a symbolic link (a dangling one included), or
+    when the fixtures directory cannot be written and a version directory must be created in it.
   - **The header is true to the code (F12).** A finding's pointer prints a key as text only when the key is
     `SAFE_SEG`-shaped and carries no residue; any other key prints as `#<index>`. The header also names the known
     limits: base64 and other encodings, and a scheme-less `<host>:<port>/<path>` (`127.0.0.1:4000/home/x`), which the
@@ -3234,7 +3240,7 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
 
   Both raw captures are gone (a box-level `/tmp` reaper removed them after they were sanitised and committed), so the
   re-sanitise-and-diff check is replaced by a scan of the committed corpus under the final sanitiser: 99 files,
-  44,378 strings (values and keys), 0 findings (measured with `82fae4d7b`'s `scan`); the corpus holds no `127.0.0.1`.
+  44,378 strings (values and keys), 0 findings (measured with `82fae4d7b`'s `scan`, and again with `78f5a2bae`'s); the corpus holds no `127.0.0.1`.
 - **D-4008** — `census-malformed-and-unreadable-distinct` (Task 8 review): the plan's census folded an unparsable meta
   into `found:true, keys:[]` (identical to a valid meta with no `worktreePath` — an overloaded value at a seam), a
   malformed or path-less wf meta into `metaMissing`, and an unreadable home into "nothing there". It now reports
