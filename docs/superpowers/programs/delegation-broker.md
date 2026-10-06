@@ -35,7 +35,7 @@ under its own heading. Until that is here, nothing in waves 2–6 may depend on 
 
 **Versions covered:** 2.1.280, 2.1.281, 2.1.285, 2.1.286, 2.1.287, 2.1.288 and 2.1.289, each with 14 scenarios, and
 all 98 cells are `measured`. Measured means measured **within the rig**, and two of §8.1's situations are reached
-only through a proxy:
+only through a proxy (`oom-and-account-swap-are-proxies`, D-4066):
 - **Parent crash is a SIGKILL of the parent's Claude Code process** (`kill9` in parent-kill, wf-iso-resume and
   clear-compact-resume). It is the rig's proxy for §8.1's OOM column. A cgroup OOM kill of the pane's scope can take
   the whole process tree, not the parent alone; whether it does is the unit's OOM policy (an assumption about the
@@ -81,7 +81,7 @@ failure note. Each row names the scenario it reads.
 | Q4 subagent Bash: parent's session id (agent-plain) / `cwd` in worktree (agent-iso-changed) | all / all | all / all | all / all | all / all | all / all | all / all | all / all |
 | Q5 SessionStarts (clear-compact-resume) | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 |
 | Q5 SessionStarts (swap-resume) | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 |
-| Q6 trees left: agent-iso-unchanged / -changed / -dirty / -bg / parent-kill / interrupt-exit / raw-worktree | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 |
+| Q6 trees left: agent-iso-unchanged / -changed / -dirty / -bg / parent-kill / interrupt-exit / raw-worktree (the first six read `worktreesLeft`; raw-worktree reads `otherRecordsLeft`, its admin record, since its tree is outside `.claude/worktrees` and its `worktreesLeft` is 0) | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 |
 | Q6 SessionEnd: interrupt-exit reasons / parent-kill count | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 |
 | Q7 wf-iso-resume: probes missed / records before kill / at end | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 |
 | Q7 wf-limit-pause: probes missed | none | none | none | none | none | none | none |
@@ -225,6 +225,10 @@ From `deploy/delegation-census.mjs` `.totals`. `adminRead` was `ok` for all five
 `metaMalformed`, `metaPathless`, `homesUnreadable` and `adminRead: 'not-main'` are the census's additive fields
 (D-4008). The census records show more than the totals.
 - Every `agent-*` and `wf_*` record, 123 of 123, carries a `CLAUDE_BASE` that agrees with its first `logs/HEAD` line.
+- HEAD shape, as read at this census: of those 123 records, 102 have a `ref:` HEAD (89 `agent-*`, 13 `wf_*`) and 21 a
+  detached one (19 `agent-*`, 2 `wf_*`); ref / detached by label: `this-repo` 8 / 11, `project-1` 71 / 3,
+  `project-2` 20 / 7, `project-3` 2 / 0, `project-4` 1 / 0. The census of that date computed `movedFromBase` for a
+  detached HEAD only (before D-4065): `true` for all 21 detached records, `null` for all 102 `ref:` ones.
 - A found meta's `worktreePath` equals its record's path, but that is a measurement for Agent records only. For the
   107 `agent-*` records with a found meta, the census finds the meta by the id in the record's name and then
   compares: 107 of 107 equal (the 108th agent record, in `project-4`, has no meta). For the 15 `wf_*` records it is
@@ -314,7 +318,8 @@ the exception.
   session-UUID history records the pair as one rotation (clear-compact-resume) — spec §5.3 SessionEnd row,
   §5.2 `delegation_sessions`.
 - `orphaned-background-agent-has-no-terminal-event` — a background isolated agent still running when its parent
-  quits (`/exit`, answered "Exit and stop tasks" at the background-work dialog: interrupt-exit) or is SIGKILLed
+  quits (`/exit`, its background-work dialog answered with Enter on the default option — "Exit and stop tasks" as
+  read from the pane on 2.1.280 and 2.1.289 only: interrupt-exit) or is SIGKILLed
   (parent-kill; wf-iso-resume's hung worker) leaves its tree, unchanged included, with a SubagentStart and no
   SubagentStop or notification; the quitting parent's SessionEnd says nothing about its agent. Under the ephemeral
   rule such a tree is never due unless the parent is proved dead, so wave 2 must name what ends it (interrupt-exit,
@@ -346,8 +351,10 @@ the exception.
 - `orphaned-agent-tree-is-locked` — every tree left by an agent still running when its parent died or quit carries a
   `locked` admin file (interrupt-exit, parent-kill, wf-iso-resume: 21 of 21), and no finished agent's tree does
   (agent-iso-changed, -dirty, -bg and wf-iso's committing worker: 0 of 28; the raw `git worktree add` record is
-  unlocked too, 0 of 7). Admission rung 4 requires an unlocked tree, so such an orphan stays refused whatever
-  terminal evidence wave 2 names — spec §5.11 admission ladder rung 4, terminal evidence.
+  unlocked too, 0 of 7). Admission rung 4 requires an unlocked tree, so such an orphan is refused while its lock
+  stands. The corpus measures the lock only up to each run's end, and every lock's reason names a pid and a process
+  start time (`claude agent <id> (pid <n> start <n>)`, 21 of 21), so whether a lock outlives that process is
+  unmeasured, left to the after-merge real-lane cross-check — spec §5.11 admission ladder rung 4, terminal evidence.
 
 ### Real-lane cross-check
 

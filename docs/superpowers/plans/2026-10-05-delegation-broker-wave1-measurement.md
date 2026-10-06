@@ -23,7 +23,9 @@ worktrees and their subagent metadata, path-free.
 no dependencies (`mockapi.mjs`, `sanitize.mjs`, `build-matrix.mjs`, `deploy/*.mjs`), vitest from `server/`.
 
 **Spec:** `docs/superpowers/specs/2026-10-04-delegation-broker-design.md` — covers §3.1 (re-measured), §5.3's
-`SessionEnd` registration, §7 stage 1, §8.1 (questions 1-8 and 10 measured; 9 by a proxy), §8.2 (the fixture corpus and its rig). Lists
+`SessionEnd` registration, §7 stage 1, §8.1 (questions 1-8 and 10 measured, two of their situations only by a
+proxy — a parent OOM by a SIGKILL of the parent, an account swap by a config-dir swap (D-4066); 9 by a proxy
+(D-4001)), §8.2 (the fixture corpus and its rig). Lists
 ten pre-planned entries under "Deviations found": eight departures from the spec (stage placement of `SessionEnd`,
 the matrix's shape, the rig's committed payloads, and five smaller ones) and two method notes that depart from no
 spec sentence (D-3994, D-3995).
@@ -278,7 +280,7 @@ cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATI
 | T1-M1 | drop `"SessionEnd"` from `EVENTS_JSON` | `install-session-hooks`: the twelve-events row and the derived-set row |
 | T1-M2 | delete the `SessionEnd)` arm | `install-session-hooks` derived-set row; `session-hook-turnmark` capture row |
 | T1-M3 | exit line back to `[[ -n "$stopfail" ]] && exit 0` | `session-hook-turnmark`: "writes no hookstate.json …", "byte-identical" and the capture row (it writes hookstate) |
-| T1-M4 | remove ` sessend=""` from the declaration line | `session-hook-turnmark`: every row that reaches the exit line fails the exit-0 contract (`sessend: unbound variable`) — 52 of 59 (measured at `fc2dd5ee9`); rows that exit earlier survive by construction |
+| T1-M4 | remove ` sessend=""` from the declaration line | `session-hook-turnmark`: every row whose event is not SessionEnd and that runs the hook to the exit line fails the exit-0 contract (`sessend: unbound variable`) — 52 of 59 (measured at `fc2dd5ee9`, and again at `e47f3689f`). The 7 survivors: the three rows that run SessionEnd alone reach the exit line with `sessend=1` already set by its arm, and four never reach it (an unknown event exits in the default arm; three rows run no hook) — corrected in fix round 2 (review 296 F7) |
 | T1-M5 | add `"WorktreeCreate"` to `EVENTS_JSON` | `install-session-hooks`: the twelve-events row (`toBeUndefined`) and the derived-set row |
 | T1-M6 | the turn-marker case's `Stop) tmkind=done` becomes `Stop\|SessionEnd) tmkind=done` | `session-hook-turnmark`: the three SessionEnd rows on their marker assertions — "writes no hookstate.json when none existed, and no turn marker", "leaves an existing hookstate.json and turn marker byte-identical", "is captured in a -hookcap session as one .cap file, and still writes no hookstate" (3 of 59, measured at `fc2dd5ee9`; added in fix round 1, review 277) |
 
@@ -1888,9 +1890,9 @@ both print nothing (`bash server/test/delegation-rig/rig.sh reap` removes what a
 
 | # | Mutation | Expected red |
 |---|---|---|
-| T4-M1 | `guard_root`'s `$REAL_HOME` clause deleted | "guard-root accepts only …" (`${home}/ccrc-dlg-rig.x` passes) |
+| T4-M1 | `guard_root`'s `$REAL_HOME` clause deleted | "guard-root refuses a root under HOME by either spelling … (F10b)" (with HOME spelled through a symlink, a root under the link spelling passes) — 1 red, measured at `e47f3689f`; "guard-root accepts only …" stays green, its `${home}/ccrc-dlg-rig.x` still refused by the physical-HOME arm (D-4002) — corrected in fix round 2 (review 296 F6) |
 | T4-M2 | `SOCK_RE` widened to `^.*$` | "guard-sock accepts only …" |
-| T4-M3 | `cmd_setup`'s `guard_root` line deleted | "setup refuses a root the guard refuses …" |
+| T4-M3 | `cmd_setup`'s `guard_root` line deleted | "setup refuses a root by its SPELLING alone … (F10a)" — 1 red, measured at `e47f3689f`; "setup refuses a root the guard refuses …" stays green, its root still refused by the physical-path guard that follows (D-4062) — corrected in fix round 2 (review 296 F6) |
 | T4-M4 | a bare `tmux ls` line added to `cleanup_run` | "no line of rig.sh calls tmux except …" |
 | T4-M5 | the installer call removed from `cmd_setup` | "builds the fixture HOME …" (no `/session-hook.sh` under `PreToolUse`) |
 | T4-M6 | `check_scenario`'s key-name rule deleted | "check-scenario refuses …" (the `;` chain passes) |
@@ -3220,10 +3222,12 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   - **`//` hosts.** After an allowed `//` host — the loopback `127.0.0.1`, or an allowed top at a host position —
     only the end of the URL, `:<digits>` (the loopback only) or a `/`-path scanned like any absolute path may follow.
     So userinfo, a non-numeric port, a glued name, and `?`, `#` or `\` are residue. A loopback URL WITH a path
-    (`http://127.0.0.1:<port>/v1/…`) is residue too, an accepted departure, `loopback-api-path-now-residue` (the rig
-    hands Claude Code only the bare `http://127.0.0.1:<port>`), and so are `//rig/home/x` and `x //bin/sh y`
-    (`double-slash-allowed-top-is-a-host`); `file:///rig/x`, `//usr/bin/git` and `/rig//x` still pass. A `//` at a
-    host position followed by a character that cannot start a name (`[`, `@`, `%`, `~`, `:`, `\`) is residue; a `//`
+    (`http://127.0.0.1:<port>/v1/…`) is residue too, `loopback-api-path-now-residue` (the rig hands Claude Code only
+    the bare `http://127.0.0.1:<port>`), and so are `//rig/home/x` and `x //bin/sh y`
+    (`double-slash-allowed-top-is-a-host`). Both sub-slugs are tightenings inside review 277's F1 ruling ("fix both
+    shapes"), accepted with it, and carry no number of their own. `file:///rig/x`, `//usr/bin/git` and `/rig//x`
+    still pass. A `//` at a host position followed by a character that cannot start a name (`[`, `@`, `%`, `~`, `:`,
+    `\`) is residue; a `//`
     followed by whitespace, a quote, a closer, `<`, `>`, `,`, `;` or the end stays allowed (a code comment). A run of
     slashes is judged where it ends (`http:///[fd00::abcd]:8080/…`, `///~/srv/acme` are residue).
   - **A JSON-escaped `\/` is decoded** like `\uXXXX` and `%2F` before the second scan, so a host written
@@ -3279,9 +3283,10 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   records) aggregate the census `records` (kind and flags only, no names) rather than `.totals`.
   `q10-amendment-grounded-in-source`: the incarnation amendment is grounded in source (D-3996), not in a matrix cell
   or a census total. D-4011 is the last number of the run's original block (3992–4011); fix round 1 was issued
-  4058–4067.
+  4058–4067, and all ten are defined — 4058–4065 in fix round 1, 4066–4067 in fix round 2 — none unused.
 
-Fix round 1 (review 277; issued 4058–4067):
+Fix round 1 (review 277; the block 4058–4067 issued; 4058–4065 defined here, 4066–4067 in fix round 2 below — none
+unused):
 
 - **D-4058** — `interrupt-exit-rescripted-to-a-live-turn` (review 277 F4): departs from Task 4's interrupt-exit
   scenario, which could not do its scripted thing. Its main turn had ENDED before the Escape — the mock answered the
@@ -3292,10 +3297,12 @@ Fix round 1 (review 277; issued 4058–4067):
   Stop that ends every old fixture (with no SessionEnd and no note, 7 of 7) and from the dialog the re-capture met on
   all seven. Task 6 Step 3 says a failure that is the rig's is fixed in the rig and re-run on every version. Fixed:
   the mock HOLDS the parent's post-launch request (`main-hang`: kind `main`, carrying the launch's `tool_result`,
-  hang 600 s); the run waits on `["sub-hang","main-hang"]` before the Escape, so the Escape lands in a live main-loop
-  turn; and after `/exit`, `answerDialog "Background work is running"` presses Enter on the default option, "Exit and
-  stop tasks". Re-captured on all seven versions, re-sanitised into the corpus and `matrix.json` re-derived: only the
-  seven interrupt-exit cells changed, and each now records one SessionEnd (`prompt_input_exit`), no Stop, no
+  hang 600 s; its match by kind with no unique text, and the scenario's final sleep raised from 5 s to 15 s, are
+  D-4067); the run waits on `["sub-hang","main-hang"]` before the Escape, so the Escape lands in a live main-loop
+  turn; and after `/exit`, `answerDialog "Background work is running"` presses Enter on the dialog's default option
+  — "Exit and stop tasks" as read from the pane on 2.1.280 and 2.1.289 only (the fixture note names the dialog,
+  never the option). Re-captured on all seven versions, re-sanitised into the corpus and `matrix.json` re-derived:
+  only the seven interrupt-exit cells changed, and each now records one SessionEnd (`prompt_input_exit`), no Stop, no
   SubagentStop, and one tree left, locked.
 - **D-4059** — `no-merge-before-handoff` (review 277 F7): departs from Precondition 1 ("Merge `origin/main` into
   this workspace's branch first") and from the Global Constraint "merge `origin/main` (never rebase) before the
@@ -3347,10 +3354,42 @@ Fix round 1 (review 277; issued 4058–4067):
   (a non-object Agent, Task or Workflow input or response prints as its JSON type, never the value).
 - **D-4065** — `census-moved-from-base-resolves-ref-head` (review 277 F14): departs from Task 8's census, which
   computed `movedFromBase` for a detached HEAD only, so it was `null` for every `ref:` HEAD — 102 of the 123
-  delegated records of the Task 8 census, and every delegated admin record in the corpus (49 of 49). It now resolves
+  delegated records of the Task 8 census (the HEAD-shape line of the ledger's census section: 102 `ref:`, 21
+  detached), and every delegated admin record in the corpus (49 of 49). It now resolves
   a `ref:` HEAD read-only (the loose ref, else `packed-refs`; never git), and answers `'unmeasured'` for a ref that
   does not resolve, an unreadable loose ref, a ref name not shaped `refs/<safe chars>` or holding a `..` segment, and
   an unreadable or malformed HEAD; `null` now means only "no valid `CLAUDE_BASE`". Each arm has a row measured red.
+
+Fix round 2 (review 296; 4066–4067, the last two of fix round 1's block):
+
+- **D-4066** — `oom-and-account-swap-are-proxies` (review 296 F3): departs from spec §8.1's column "parent SIGKILL /
+  OOM behaviour" (`:549`) and from Q5's "account swaps" (`:558`), and so from §7's stage-1 gate, "every §8.1 row
+  filled for every version on the fleet" (`:536`): the rig reaches both situations only through a proxy. A parent
+  crash is a SIGKILL of the parent's Claude Code process (`kill9`, in parent-kill, wf-iso-resume and
+  clear-compact-resume). A cgroup OOM kill of the pane's scope can take the whole process tree, not the parent
+  alone; whether it does is the unit's OOM policy, an assumption about the box's systemd and cgroup settings, and
+  that case is unmeasured. An account swap is swap-resume's `swapConfig` step, which copies the fixture config dir to
+  a second one under the same fixture HOME (`rig.sh`'s `swapConfig` arm: `cp -a "$RUN_H/cfg/." "$RUN_H/cfg2/"`),
+  with the same mock auth, and resumes there: a config-dir swap, not a swap between accounts. Measured: `kill9`
+  (three scenarios) and `swapConfig` (one) are the only crash and swap steps the fourteen scenarios use. The ledger's
+  Measurement matrix has declared both proxies since review 277's F17 ruling ("one line each"); this entry gives
+  them a number, after D-4001's precedent that a declared proxy carries one, and the plan header now names both.
+- **D-4067** — `main-hang-matches-by-kind` (review 296 F18): two departures inside the interrupt-exit entry that
+  D-4058 describes (`scenarios/interrupt-exit.json`, from `fc2dd5ee9`), neither recorded there. First, from Task 4's
+  scenario rule ("Every entry matches `kind: "tools"` (main or sub) on a unique text, so a version whose main-loop
+  marker changed still matches"): `main-hang` matches `{"kind": "main", "hasToolResult": true}`, by kind and with no
+  `lastUser` text, because the request it must hold offers none. Measured by the controller on 2.1.291 (an
+  exploratory interrupt-exit run with the mock dumping request bodies, 2026-10-06 14:16 UTC, in a private directory,
+  not committed): the parent's post-launch request's last user message is ONE `tool_result`, whose text is Claude
+  Code's own background-launch notice ("Async agent launched successfully. …", a random agent id, the task's
+  output-file path, and instructions); it carries no scenario-controlled text, neither the Agent call's
+  `description` ("dlg interrupt") nor its `prompt` ("dlg-sub-int"). The cost fails closed: the mock tells `main`
+  only by `MAIN_MARKER` in the system prompt (`mockapi.mjs`'s `classify`), so on a version whose main-loop marker
+  changed the request classifies `sub`, `main-hang` is never reached, the step `waitLabels ["sub-hang","main-hang"]`
+  times out (its note is a `FAIL_NOTE` alternative), and the cell builds `unmeasured`, never a measured zero. Every
+  interrupt-exit fixture in the corpus lists `main-hang` among its labels. Second, the scenario's final `sleep`,
+  after the answered dialog, went from 5 s to 15 s (`fc2dd5ee9`), so that the stop of the background task, the
+  parent's exit and its SessionEnd hook complete before the run is collected.
 
 ## Self-review (record)
 
