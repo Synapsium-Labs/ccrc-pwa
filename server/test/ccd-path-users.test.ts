@@ -193,6 +193,23 @@ describe('a FAKE process table — the cases a live box cannot be made to produc
     }
   }, 60_000);
 
+  it('a RELISTING that fails is UNMEASURED — a walk that cannot list the table again never reads as "nobody"', () => {
+    // The same FIFO sequencing: the probe's read of 4242's status is what moves
+    // the whole table away, BEFORE that read returns. 4242 then reads as
+    // vanished, and the relisting the fixed point needs cannot list the table.
+    const fifo = '"$HOME/fp/4242/status"';
+    const status4242 = `printf 'Name:\\tx\\nPPid:\\t1\\nUid:\\t%s\\t%s\\t%s\\t%s\\n' "$u" "$u" "$u" "$u"`;
+    try {
+      const a = ask(leafOf(), `${FAKE} u=$(id -u); _fpp 4242 1 "$u"; rm -f ${fifo}; mkfifo ${fifo};`
+        + ` { exec 3>${fifo}; mv "$HOME/fp" "$HOME/fp-gone"; ${status4242} >&3; exec 3>&-; } >/dev/null 2>&1 &`);
+      expect(a.rc, a.why).toBe('2');
+      expect(a.why).toContain('could not be measured');
+      expect(fs.existsSync(path.join(h.home, 'fp-gone', '4242')), 'the CONTROL: the table moved during the walk').toBe(true);
+    } finally {
+      h.sh(`if [ -p ${fifo} ]; then : <> ${fifo}; fi`);
+    }
+  }, 60_000);
+
   /** 4242's own entries read as VANISHED (its cwd is gone), and its thread 4243 lives under `task/`. */
   const LEADER_GONE = `${FAKE} _fpp 4242 1 "$(id -u)"; rm -f "$HOME/fp/4242/cwd"; mkdir -p "$HOME/fp/4242/task/4243/fd";`
     + ' ln -sfn / "$HOME/fp/4242/task/4243/cwd";';
@@ -218,6 +235,31 @@ describe('a FAKE process table — the cases a live box cannot be made to produc
     expect(exiting.rc, exiting.why).toBe('0');
   }, 60_000);
 
+  /** LEADER_GONE, with its thread 4243's environ planted and locked: the thread is asked whether it is in exit. */
+  const THREAD_LOCKED = `${LEADER_GONE} : > "$HOME/fp/4242/task/4243/environ"; chmod 000 "$HOME/fp/4242/task/4243/environ";`;
+
+  it.skipIf(ROOT_USER)('a locked thread whose stat does not parse is UNMEASURED — never read as a thread in exit', () => {
+    const a = ask(leafOf(), `${THREAD_LOCKED} printf 'garbage' > "$HOME/fp/4242/task/4243/stat";`);
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toContain('could not be measured');
+  }, 60_000);
+
+  it.skipIf(ROOT_USER)('a locked thread whose stat this uid may not read is UNMEASURED — never read as a thread in exit', () => {
+    const a = ask(leafOf(), `${THREAD_LOCKED} printf '4243 (x) R 1 4242 4242 0 -1 ${0x400100} 0 0\\n' > "$HOME/fp/4242/task/4243/stat";`
+      + ' chmod 000 "$HOME/fp/4242/task/4243/stat";');
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toContain('could not be measured');
+  }, 60_000);
+
+  it.skipIf(ROOT_USER)('a leader that exited whose task/ this uid may not list is UNMEASURED — its threads were never read', () => {
+    const task = path.join(h.home, 'fp', '4242', 'task');
+    try {
+      const a = ask(leafOf(), `${LEADER_GONE} chmod 000 "$HOME/fp/4242/task";`);
+      expect(a.rc, a.why).toBe('2');
+      expect(a.why).toContain('could not be measured');
+    } finally { if (fs.existsSync(task)) fs.chmodSync(task, 0o755); }
+  }, 60_000);
+
   it('a status that does not parse is UNMEASURED — never "nobody"', () => {
     for (const bad of ['garbage', 'PPid:\\tx\\nUid:\\t1\\n', '']) {
       const a = ask(leafOf(), `${FAKE} _fpp 4242 1 "$(id -u)"; printf '${bad}' > "$HOME/fp/4242/status";`);
@@ -225,6 +267,20 @@ describe('a FAKE process table — the cases a live box cannot be made to produc
       expect(a.why).toContain('could not be measured');
     }
   }, 90_000);
+
+  it('an entry that fails in a way no arm names (an environ that is a directory) is UNMEASURED — the catch-all', () => {
+    const a = ask(leafOf(), `${FAKE} _fpp 4242 1 "$(id -u)"; rm -f "$HOME/fp/4242/environ"; mkdir "$HOME/fp/4242/environ";`);
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toContain('could not be measured');
+  }, 60_000);
+
+  it('every C0 control byte and DEL in a path a user uses reaches the answer as `?`, not only a tab or a newline', () => {
+    const a = ask(leafOf(), `${FAKE} _fpp 4242 1 "$(id -u)";`
+      + ` printf 'TMPDIR=%s/a\\001b\\033c\\rd\\177e\\037f\\0' "${leafOf()}" > "$HOME/fp/4242/environ";`);
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain(`process 4242 carries TMPDIR=${leafOf()}/a?b?c?d?e?f`);
+    expect(a.why).not.toMatch(/[\x00-\x1f\x7f]/);
+  }, 60_000);
 
   it('a table that cannot be listed, or one without ccd’s own pid, measured nothing', () => {
     const missing = ask(leafOf(), 'CCD_OS=linux; _ws_path_users_proc_root() { printf %s "$HOME/no-such-proc"; };');
@@ -260,8 +316,12 @@ describe('answers that never look', () => {
     fs.mkdirSync(path.join(locked, 'x'), { recursive: true });
     fs.chmodSync(locked, 0o000);
     try {
-      const a = ask(path.join(locked, 'x', ID), 'CCD_OS=linux;');
+      const target = path.join(locked, 'x', ID);
+      const a = ask(target, 'CCD_OS=linux;');
       expect(a.rc, a.why).toBe('2');
+      // The ABSENCE guard answers, not the `cd` that would also fail after it.
+      expect(a.why).toContain(`${locked} cannot be searched`);
+      expect(a.why).toContain(` — who uses ${target} was never asked`);
     } finally { fs.chmodSync(locked, 0o755); }
   }, 60_000);
 });

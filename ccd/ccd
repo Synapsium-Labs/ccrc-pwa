@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=08f951d5b0510089c5c40a890f7b6f13d363dd7c143451466d94904798ae7438
+# ccrc:generated 1 sha256=8e9d8dc40b3ec8fad44685e2b4e94c4aad90983022cd213b8a584c54762e798b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28024,14 +28024,28 @@ _ws_path_users() {   # path -> 0 when no process of this uid uses it; 1 when one
   # process of this uid (ssh-agent, a setuid exec, anything that called
   # prctl(PR_SET_DUMPABLE, 0)) — is NOT SEEN, as in the expiry probe, and
   # neither is any process of another uid. Refusing on them would keep every
-  # temp root for ever on a box that runs an ssh-agent. Two more are not seen.
-  # An environment is the one the process was exec'd with, so a TMPDIR it set
-  # after its exec is not read. And a cwd or fd reached through ANOTHER MOUNT
-  # of the same directory reads that mount's spelling, which neither compared
-  # spelling names: `$HOME/.cc-tmp` is a bind mount on the fleet box, and its
-  # device is mounted whole elsewhere. The TMPDIR arm compares ccd's own
-  # spelling, the one `_child_tmpdir` composes, so the pane's own processes
-  # are seen through it.
+  # temp root for ever on a box that runs an ssh-agent. Four more are not seen:
+  # - An environment is read from the process's LIVE memory, the block its
+  #   exec placed there: a TMPDIR it set after its exec (setenv writes it
+  #   elsewhere) is not read, and a process that overwrites that block in
+  #   place can hide the TMPDIR it was given.
+  # - A cwd or fd reached through ANOTHER MOUNT of the same directory reads
+  #   that mount's spelling, which neither compared spelling names:
+  #   `$HOME/.cc-tmp` is a bind mount on the fleet box, and its device is
+  #   mounted whole elsewhere. The TMPDIR arm compares ccd's own spelling, the
+  #   one `_child_tmpdir` composes, so the pane's own processes are seen
+  #   through it.
+  # - A LEADER CAUGHT INSIDE ITS OWN EXIT, between releasing its memory and
+  #   releasing its cwd (`exit_mm`, then `exit_fs`), reads EACCES on its
+  #   environ while its cwd still reads, so it does not read as vanished and
+  #   its live threads go unread for that walk. The window is microseconds.
+  #   It is NOT closed by sending a PF_EXITING leader whose environ answers
+  #   EACCES through `task/`: measured, that makes a NON-DUMPABLE leader with
+  #   surviving threads answer unmeasured for every path on the box.
+  # - A thread that is not its group's leader but has its OWN cwd or fd
+  #   table (it unshared CLONE_FS or CLONE_FILES) is not read while its
+  #   leader lives: only a leader whose own entries read as vanished is asked
+  #   through `task/<tid>`.
   # WHAT IS NOT A USER: ccd's own process (`$$`, `$BASHPID`), the scan's own
   # chain (the python3 and every process between it and ccd) and any child of
   # those. ccd's ANCESTORS are users like any other.
@@ -28200,7 +28214,9 @@ def scan():
                 continue
             for what, p in uses_of(pid) or []:
                 hit = True
-                clean = p.replace("\t", "?").replace("\n", "?")
+                # EVERY C0 control byte and DEL reads as "?": a tab or a newline
+                # would split this line, and the rest reach a reader verbatim
+                clean = "".join("?" if ord(c) < 32 or ord(c) == 127 else c for c in p)
                 sys.stdout.buffer.write(os.fsencode("%s\t%s\t%s\n" % (pid, what, clean)))
         if not hit:
             try:
