@@ -3999,7 +3999,7 @@ held by the very kill-switch the operator just raised.
 **The reclaim sweep, and how to stop it.** Besides the close path, the server
 runs an automatic sweep (once a minute) that reclaims CHILD workspaces through
 `ccd ws-reclaim` — only a child whose minting run is terminal, or has bound a
-different session, with no other open run, no hold and no coordination history
+different session, with no other open run, no hold and no coordination since its workspace was created
 (a review child also waits until the run it reviewed is terminal), asked on two
 consecutive passes and at most one at a time, and only while the fleet `ccd`
 advertises both `reclaim-v1` and `reclaim-pause-v1` (**A child is not a reap**,
@@ -4015,8 +4015,8 @@ hold, a human's included, keeps the child. The sweep's switch is
 `ccd reclaim-pause --state on` on the fleet host; `--state off` lowers it. While
 it stands the sweep and the close path ask for nothing, and `ws-reclaim` itself
 refuses `paused` on the box. The same row lists the children that need a
-human's eye: each standing under a terminal refusal, and each whose reclaim
-has kept failing for 15 minutes.
+human's eye: each under a terminal refusal, each whose reclaim has kept failing
+for 15 minutes, and each the sweep keeps for a person while its reason stands.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
@@ -4707,8 +4707,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7688-7690`), each with an operator sentence of its own at `:7730`,
-`:7738` and `:7751`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7812-7814`), each with an operator sentence of its own at `:7854`,
+`:7862` and `:7875`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
