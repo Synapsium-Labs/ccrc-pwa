@@ -3,7 +3,8 @@
 
 Run by hand on the fleet box, as the fleet user; it opens every file it reads
 read-only, writes nothing anywhere, never runs `ccd`, never touches tmux or a
-unit. It grows with the programme: each wave adds the §9 rows it owns as one
+unit (`--stage 6` reads the user journal by one read-only `journalctl --user`
+run, unless `--journal` names an export of it). It grows with the programme: each wave adds the §9 rows it owns as one
 function registered in STAGES (`N: stageN`), in the same PR as the mechanism
 those rows measure. `stageN(ctx)` returns a dict of named sections.
 
@@ -29,6 +30,7 @@ import json
 import mmap
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -467,6 +469,245 @@ def stage4(ctx):
     }}
 
 
+# ── stage 6 (wave 4): the OOM stops of the pressure reap's own class ─────────
+# §9's stage-6 row, baseline B: OOM stops of pane scopes whose session had been
+# idle 30 minutes or more with a live background shell — the class Claude Code's
+# background-shell pressure reap chooses by (spec §1.3) — with every pane-scope
+# OOM stop beside it. B is the count over the week that starts at wave 4's
+# deploy, with the reap still on (wave 4b ships the variable that disables it).
+# Four sources, all read-only:
+#   the user journal  every `tmux-spawn-*.scope` record: its start (JOB_TYPE
+#                     start, JOB_RESULT done) and its OOM stop (UNIT_RESULT
+#                     oom-kill — under OOMPolicy=stop the kill of any process in
+#                     a pane scope ends the scope and its session). Read from
+#                     `--journal FILE` (`journalctl -o json` lines) when given,
+#                     else by ONE read-only `journalctl --user` run.
+#   .lifecycle/       ccd's own `spawn` events: a scope is the session whose
+#                     spawn event landed in the S6_SPAWN_SLOP seconds AFTER the
+#                     scope's start (the event follows the settle: measured on
+#                     the fleet box, 2–6 s after the scope for most spawns) —
+#                     exactly one session, or the stop is `unmapped`. The same
+#                     event dates that Claude Code's process.
+#   <id>.uuid         the session's transcript (the largest copy, as stage 1).
+#   the transcript    idle: no user or assistant row in the S6_IDLE seconds
+#                     before the stop; a live background shell: a Bash
+#                     `run_in_background` start ("Command running in background
+#                     with ID: X") after the spawn and at or before the stop,
+#                     with no `<task-notification>` for X at or before it.
+# Named costs: a scope whose start fell out of the journal's retention, or whose
+# spawn shared its window with another session's, is `unmapped`; a session whose
+# transcript changed uuid since the stop (a /clear) reads the newer file, which
+# holds no row before the stop, so it reads as idle with no shell; a background
+# shell ended by Claude Code without a notification row reads as live.
+# §9's second stage-6 metric, dead ccd scopes that pass the inert test yet
+# survive a day, is read from a FIFTH source, at the moment of the reading (the
+# record keeps no history, so `--since`/`--until` do not apply to it):
+#   ccd-scope-sweep.state  the sweep's verdict record ($XDG_RUNTIME_DIR): its
+#                     `dead` lines whose verdict says every stop predicate held
+#                     (`would-stop`, `held`, `stop-failed`), and of those the
+#                     ones first seen dead a day or more before its tick. While
+#                     the stop is shadowed every inert scope survives by design:
+#                     the count is reported, and its target of 0 applies once the
+#                     operator arms the stop. An absent record is `absent`, never 0.
+S6_IDLE = 1800
+S6_SPAWN_SLOP = 10
+S6_DAY = 86400
+S6_HDR = re.compile(r"# ccd-scope-sweep v1 tick=(\d+) up=(\d+) mode=(shadow|live)")
+S6_DEAD = re.compile(r"dead tmux-spawn-\S+\.scope first=(\d+) cpu0=\d+ verdict=([a-z-]+) ")
+S6_INERT = ("would-stop", "held", "stop-failed")
+S6_TS = re.compile(rb'"timestamp":"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)')
+S6_ROW = re.compile(rb'"type":"(?:user|assistant)"')
+S6_BG = re.compile(rb"Command running in background with ID: ([A-Za-z0-9_-]+)")
+S6_NOTE = re.compile(rb"<task-notification>(?:\\n|\s)*<task-id>([A-Za-z0-9_-]+)</task-id>")
+
+
+def s6_iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)).encode()
+
+
+def s6_journal(ctx):
+    """The journal's pane-scope records as dicts, or None when they cannot be read."""
+    try:
+        if ctx.get("journal"):
+            with open(ctx["journal"], "rb") as fh:
+                raw = fh.read()
+        else:
+            # Two FIELD matches, OR'd (`+`), never `-u 'tmux-spawn-*.scope'`: a unit glob
+            # walks the whole journal (5 min 41 s on the fleet box, 2026-10-06, against
+            # this call's own 600 s bound), the indexed matches take 23 s, and the
+            # tmux-spawn records they return are the same 6,115 (filtered below).
+            p = subprocess.run(["journalctl", "--user", "--no-pager", "-o", "json",
+                                "--output-fields=USER_UNIT,UNIT_RESULT,JOB_TYPE,JOB_RESULT",
+                                "JOB_TYPE=start", "+", "UNIT_RESULT=oom-kill"], capture_output=True, timeout=600)
+            if p.returncode != 0:
+                return None
+            raw = p.stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = []
+    for line in raw.decode("utf-8", "replace").splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(e, dict) and str(e.get("USER_UNIT", "")).startswith("tmux-spawn-"):
+            out.append(e)
+    return out
+
+
+def s6_spawns(ctx):
+    """ccd's lifecycle `spawn` events: (epoch seconds, session id), oldest first."""
+    out = []
+    for f in sorted(glob.glob(os.path.join(ctx["home"], ".cc-sessions", ".lifecycle", "journal-*.ndjson"))):
+        try:
+            lines = read_lines(f)
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(e, dict) and e.get("act") == "spawn" and e.get("outcome") == "done" \
+                    and isinstance(e.get("at"), int) and isinstance(e.get("id"), str):
+                out.append((e["at"] / 1000.0, e["id"]))
+    return sorted(out)
+
+
+def s6_transcript(ctx, sid):
+    try:
+        with open(os.path.join(ctx["home"], ".cc-sessions", sid + ".uuid"), "rb") as fh:
+            uuid = fh.read().decode("utf-8", "replace").strip()
+    except OSError:
+        return []
+    if not re.fullmatch(r"[0-9a-f-]{36}", uuid):
+        return []
+    best = []
+    for p in glob.glob(os.path.join(ctx["home"], ".claude*", "projects", "*", uuid + ".jsonl")):
+        try:
+            best.append((os.path.getsize(p), p))
+        except OSError:
+            pass
+    best.sort(reverse=True)
+    return [p for _, p in best] if ctx["all_copies"] else [p for _, p in best[:1]]
+
+
+def s6_classify(paths, born, at):
+    """-> busy | idle-no-shell | reap-class, read off the transcript's own rows."""
+    lo, hi, born_iso = s6_iso(at - S6_IDLE), s6_iso(at), s6_iso(born)
+    started, ended, busy = set(), set(), False
+    for p in paths:
+        with open(p, "rb") as fh:
+            if os.fstat(fh.fileno()).st_size == 0:
+                continue
+            mm = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+            try:
+                def row_at(pos):
+                    a = mm.rfind(b"\n", 0, pos) + 1
+                    b = mm.find(b"\n", pos)
+                    line = mm[a:b if b >= 0 else len(mm)]
+                    m = S6_TS.search(line)
+                    return line, (m.group(1) if m else None)
+                for m in S6_TS.finditer(mm):
+                    ts = m.group(1)
+                    if lo < ts <= hi and not busy:
+                        line, _ = row_at(m.start())
+                        busy = bool(S6_ROW.search(line))
+                for m in S6_BG.finditer(mm):
+                    _, ts = row_at(m.start())
+                    if ts is not None and born_iso <= ts <= hi:
+                        started.add(m.group(1))
+                for m in S6_NOTE.finditer(mm):
+                    _, ts = row_at(m.start())
+                    if ts is not None and ts <= hi:
+                        ended.add(m.group(1))
+            finally:
+                mm.close()
+    if busy:
+        return "busy"
+    return "reap-class" if started - ended else "idle-no-shell"
+
+
+def s6_inert():
+    """The sweep's verdict record, read once: its dead, its inert, and its inert dead a day or more."""
+    rec = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid(), "ccd-scope-sweep.state")
+    try:
+        lines = read_lines(rec)
+    except FileNotFoundError:
+        return {"record": "absent"}
+    except OSError:
+        return {"record": "unreadable"}
+    m = S6_HDR.fullmatch(lines[0]) if lines else None
+    if not m:
+        return {"record": "unreadable"}
+    up, dead, inert, day = int(m.group(2)), 0, 0, 0
+    for line in lines[1:]:
+        d = S6_DEAD.match(line)
+        if not d:
+            continue
+        dead += 1
+        if d.group(2) in S6_INERT:
+            inert += 1
+            if up - int(d.group(1)) >= S6_DAY:
+                day += 1
+    return {"mode": m.group(3), "dead": dead, "inert": inert, "inert_dead_a_day_or_more": day}
+
+
+def stage6(ctx):
+    return {"reap_class_oom": s6_reap(ctx), "inert_scopes": s6_inert()}
+
+
+def s6_reap(ctx):
+    recs = s6_journal(ctx)
+    if recs is None:
+        return {"journal": "unreadable"}
+    born, stops = {}, []
+    for e in recs:
+        try:
+            t = int(e["__REALTIME_TIMESTAMP"]) / 1e6
+        except (KeyError, TypeError, ValueError):
+            continue
+        u = e["USER_UNIT"]
+        if e.get("JOB_TYPE") == "start" and e.get("JOB_RESULT") == "done":
+            born[u] = t
+        elif e.get("UNIT_RESULT") == "oom-kill" and in_window(int(t), ctx):
+            stops.append((t, u))
+    spawns = s6_spawns(ctx)
+    counts, unmapped, sessions = collections.Counter(), collections.Counter(), collections.Counter()
+    for at, unit in sorted(stops):
+        t0 = born.get(unit)
+        if t0 is None:
+            unmapped["no start record"] += 1
+            continue
+        near = [(s, sid) for s, sid in spawns if t0 <= s <= t0 + S6_SPAWN_SLOP]
+        if len({sid for _, sid in near}) != 1:
+            unmapped["no spawn" if not near else "two sessions spawned together"] += 1
+            continue
+        spawned, sid = near[-1]
+        paths = s6_transcript(ctx, sid)
+        if not paths:
+            counts["unmeasured"] += 1
+            continue
+        try:
+            cls = s6_classify(paths, spawned, at)
+        except (OSError, ValueError):
+            counts["unmeasured"] += 1
+            continue
+        counts[cls] += 1
+        if cls == "reap-class":
+            sessions[sid] += 1
+    return {
+        "pane_scope_oom_stops": len(stops),
+        "reap_class": counts["reap-class"],
+        "idle_without_a_live_background_shell": counts["idle-no-shell"],
+        "busy_within_the_idle_window": counts["busy"],
+        "unmapped": sum(unmapped.values()),
+        "unmapped_by_reason": dict(sorted(unmapped.items())),
+        "unmeasured": counts["unmeasured"],
+        "reap_class_by_session": dict(sorted(sessions.items())),
+    }
+
+
 # ── stage 7 (wave 3): the operator's choice survives a restart ──────────────
 # §9's stage-7 row, "restarts that revert an operator's /model", read off
 # swap.log. Before a stop that a spawn follows, ccd writes an operator's own
@@ -532,7 +773,7 @@ def stage7(ctx):
     }}
 
 
-STAGES = {1: stage1, 4: stage4, 7: stage7}
+STAGES = {1: stage1, 4: stage4, 6: stage6, 7: stage7}
 
 
 def when(s):
@@ -556,13 +797,14 @@ def main(argv):
     ap.add_argument("--until", type=when, help="YYYY-MM-DD[ HH:MM[:SS]] (local), exclusive")
     ap.add_argument("--deployed", type=when, help="the stage's rollout time (local): splits out pairs stranded before it")
     ap.add_argument("--all-copies", action="store_true", help="read every transcript copy, not the largest per uuid")
+    ap.add_argument("--journal", help="stage 6: a `journalctl --user -o json` export to read instead of running journalctl")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     ctx = {
         "home": a.home,
         "swap_log": a.swap_log or os.path.join(a.home, ".cc-sessions", "swap.log"),
         "since": a.since, "until": a.until, "deployed": a.deployed,
-        "all_copies": a.all_copies,
+        "all_copies": a.all_copies, "journal": a.journal,
     }
     out = {f"stage{n}": STAGES[n](ctx) for n in (a.stage or sorted(STAGES))}
     if a.json:

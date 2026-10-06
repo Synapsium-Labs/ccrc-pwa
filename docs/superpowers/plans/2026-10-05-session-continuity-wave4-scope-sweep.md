@@ -4527,13 +4527,13 @@ list them all; the coordinator issues the three past the block):
   warns on a record older than 300 s, prints each dead scope's age on the record's own clock with the scope's and its
   oldest process's age and its pids, and gives the record's path a test seam (`CCRC_SCOPE_SWEEP_STATE`) so no test
   reads a real box's. `BASE_LIVE_SHAPE` gains `"scope-sweep": "SKIP"` in its three maps. Rows 5.1–5.10.
-- `stage-six-maps-scopes-through-ccd-spawns` — §9 names B but not its instrument. The plan reads the user journal (one
+- **D-4021** `stage-six-maps-scopes-through-ccd-spawns` — §9 names B but not its instrument. The plan reads the user journal (one
   read-only `journalctl --user` run on two indexed field matches — the instrument's header said it runs nothing but
   read-only opens — or `--journal FILE`, a new flag and `ctx` key the carried "one shape" constraint did not list), maps
   a scope to the one session whose ccd `spawn` event landed within ten seconds AFTER the scope's start (else
   `unmapped`), and reads idle and the live shell from that session's current transcript (a `/clear` since the stop
   reads as idle with no shell: named). Rows 2.1–2.9.
-- `inert-survivors-counted-while-shadowed` — §9's stage-6 row has "dead ccd scopes that pass the inert test yet survive
+- **D-4088** `inert-survivors-counted-while-shadowed` — §9's stage-6 row has "dead ccd scopes that pass the inert test yet survive
   a day", target 0. With the stop shadowed (ruling C) every inert scope survives by design, so the count is REPORTED —
   read by `--stage 6` off the verdict record at the reading (the record keeps no history), `would-stop`/`held`/
   `stop-failed` lines first seen dead a day or more before its tick — and rev 8 says the target of 0 applies once the
