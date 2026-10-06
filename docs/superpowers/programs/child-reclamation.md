@@ -57,8 +57,8 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
   - **Review run 303.** Its brief is `ccr15-evidence-archive/review-260fr1-brief.md`. It covers F1, F2/F18, F4 (with
     the SAFETY lens, Opus xhigh) and F11/F12, then the merge's `--remerge-diff`, then the rest of the round's diff.
     Each finding is classed as shipped behaviour, shipped prose or record only.
-  - **Dispatch.** The rolling daily cap refused at 24 of 24. The oldest dispatch ages out at 17:31:54, and a
-    background retry re-measures and dispatches then.
+  - **Dispatch.** The rolling daily cap refused at 24 of 24. The background retry dispatched it at 17:32:11, once
+    the oldest dispatch aged out, to `ccrc-pwa-brisk-delta` (the skill is present).
 - **2026-10-06 12:39 — `kept-word-ends-on-late-birth` is a stated residual, number 3944 (mail 3695, ruled in 3696).**
   - **The finding.** quiet-meadow found it during fix round 1 while making F11 true. A recycled slug's new `create`
     may not be placed yet. If its minting run is already past `minting-run-open`, a pass judges the new marker against
