@@ -90,6 +90,12 @@ time.
     and `used: 24`.
   - The server again spawned and held nothing; run 295 remains planned with no workspace, branch or queued brief.
     Do not poll, retry again, open another run or alter routing. Resume from this run after the rolling budget ages out.
+- **R9 (2026-10-06 12:37)**, the operator-directed resume still met the rolling daily gate.
+  - `ccrc-api whoami` proved this pane is the programme coordinator `ccrc-pwa-calm-harbor`. Run 295 remained planned,
+    `origin/main` remained `b3b5a73ed` with 16 migrations, and run 260 still held the expected overlapping claims.
+  - The unchanged seven-item brief and R4 route were dispatched once. The server refused `cap-daily` with `limit: 24`
+    and `used: 24`, creating no worker, workspace, branch, hold or queued brief. Leave run 295 planned and make no
+    replacement, split, routing change or further retry until there is a real indication that the rolling budget cleared.
 
 ## Carried constraints (reviewers get these)
 
