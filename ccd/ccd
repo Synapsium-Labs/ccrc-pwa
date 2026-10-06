@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8e9d8dc40b3ec8fad44685e2b4e94c4aad90983022cd213b8a584c54762e798b
+# ccrc:generated 1 sha256=b15acb3807b7c419441f9737654425ddbcd6fd15722afd2669ab8e11cf83827b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28251,6 +28251,96 @@ except Exception:
   return 1
 }
 
+# ── the ONE removal of a per-session leaf (child reclamation wave 6, spec §5.6) ──
+_WS_LEAF_WHY=''
+_ws_leaf_uid() {   # path -> the uid that owns the path ITSELF (`ls -dn`: numeric on GNU and BSD, never follows the path's own link); a test's seam
+  # Not `stat -c %u`/`stat -f %u`: those spellings live in the platform block
+  # alone (macos-platform.test.ts's 'GNU/BSD stat' row refuses them here).
+  local l u
+  l=$(LC_ALL=C ls -dn -- "$1" 2>/dev/null) || return 1
+  read -r _ _ u _ <<< "$l"
+  [[ "$u" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$u"
+}
+_ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROVEN by `_ws_reclaim_absent`;
+  #                       1 refused (_WS_LEAF_WHY); 2 unmeasured (_WS_LEAF_WHY)
+  # THE ONE REMOVAL of `<root>/<id>`, a per-session leaf under a box-wide root:
+  # the reclaim and expiry tail's clips directory and temp root, and wave 7's
+  # collector. Extracted from the tail's step (6), which threw away rm's exit
+  # code and a failed permission pass, crossed mounts, and never proved the
+  # leaf gone. Here:
+  # - THE ID is re-validated (ccd's id alphabet, and never `.` or `..`) before
+  #   anything is looked at.
+  # - THE ROOT is resolved physically (`pwd -P`): it MAY be a link or a mount
+  #   (`$HOME/.cc-tmp` is a bind mount on the fleet box). A root that is gone,
+  #   PROVEN, holds no leaf: 0.
+  # - A LINK OR FILE LEAF is unlinked with `rm -f --`, never followed: `-L` is
+  #   asked first, so a link's target, wherever it points, is untouched. Such a
+  #   leaf is what `_child_tmpdir`'s rc 2 leaves in place; kept, a recycled
+  #   slug would meet it on every spawn.
+  # - A DIRECTORY LEAF goes only when it is this uid's own (`_ws_leaf_uid`,
+  #   `ls -dn`, never follows it), its physical path
+  #   is exactly `<root>/<id>`, and — when the caller names one — its dev:ino
+  #   is the one the caller recorded. It is normalised first
+  #   (`_ws_reclaim_normalise`: an entry that stays unreadable REFUSES the whole
+  #   leaf rather than leave a partial tree; a pass that could not run is
+  #   unmeasured), then removed NEVER ACROSS A FILE-SYSTEM BOUNDARY
+  #   (`--one-file-system`; BSD's `-x` on Darwin). THE LIMIT, STATED: both
+  #   compare `st_dev` alone, so a bind mount of the SAME file system inside
+  #   the leaf is crossed (GNU rm's own documented limit); only root can make
+  #   one.
+  # - EVERY EXIT CODE IS READ, and the answer is a MEASUREMENT: after any
+  #   removal the leaf's absence is PROVEN, and a leaf that stands again (a
+  #   writer re-created it) is unmeasured, never "removed". rc 2 is not
+  #   "untouched": an `rm` that failed part-way removed what it reached, and
+  #   the caller keeps and records what stands.
+  # - THE CHECKS ARE NOT ATOMIC WITH THE REMOVAL: a same-uid rename onto
+  #   `<root>/<id>` between them and the `rm` is removed with it (the
+  #   single-user trust model). Wave 7's collector closes this with a
+  #   quarantine rename.
+  local root="$1" id="$2" want="${3-}" rroot leaf me owner lreal have err rc
+  _WS_LEAF_WHY=''
+  if ! [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || [[ "$id" == . || "$id" == .. ]]; then
+    _WS_LEAF_WHY="'$id' is not a session id ccd mints, so nothing under $root was touched"; return 1
+  fi
+  _ws_reclaim_absent "$root"; rc=$?
+  (( rc != 0 )) || return 0
+  (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_ABSENT_WHY — whether $id stands under it was never asked"; return 2; }
+  rroot=$(cd -- "$root" >/dev/null 2>&1 && pwd -P) \
+    || { _WS_LEAF_WHY="$root cannot be resolved, so whether $id stands under it was never asked"; return 2; }
+  leaf="${rroot%/}/$id"
+  if [[ -L "$leaf" || ( -e "$leaf" && ! -d "$leaf" ) ]]; then
+    err=$(rm -f -- "$leaf" 2>&1) \
+      || { _WS_LEAF_WHY="$leaf could not be unlinked: $(printf '%s' "${err:-rm said nothing}" | head -1)"; return 2; }
+  elif [[ -d "$leaf" ]]; then
+    me=$(id -u) || { _WS_LEAF_WHY="this uid could not be read, so whether $leaf is ours was never asked"; return 2; }
+    owner=$(_ws_leaf_uid "$leaf") || { _WS_LEAF_WHY="who owns $leaf could not be read, so nothing under it was removed"; return 2; }
+    [[ "$owner" == "$me" ]] \
+      || { _WS_LEAF_WHY="$leaf belongs to uid $owner, not this uid $me — ccd never removes a directory it does not own"; return 1; }
+    lreal=$(cd -- "$leaf" >/dev/null 2>&1 && pwd -P) \
+      || { _WS_LEAF_WHY="$leaf cannot be entered, so where it resolves was never asked"; return 2; }
+    [[ "$lreal" == "$leaf" ]] \
+      || { _WS_LEAF_WHY="$leaf resolves to $lreal — ccd never removes a tree it would reach through another path"; return 1; }
+    if [[ -n "$want" ]]; then
+      have=$(_plat_devino "$leaf" 2>/dev/null) \
+        || { _WS_LEAF_WHY="the identity of $leaf could not be read, so nothing under it was removed"; return 2; }
+      [[ "$have" == "$want" ]] \
+        || { _WS_LEAF_WHY="$leaf is $have, not the $want its record names — a leaf that is not the recorded one is never removed"; return 1; }
+    fi
+    _ws_reclaim_normalise "$leaf"; rc=$?
+    (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_NORMALISE_WHY — nothing under $leaf was removed"; return 2; }
+    (( rc != 1 )) || { _WS_LEAF_WHY="$_WS_NORMALISE_WHY — nothing under $leaf was removed"; return 1; }
+    if [[ "$CCD_OS" == darwin ]]; then err=$(rm -rfx -- "$leaf" 2>&1); rc=$?
+    else err=$(rm -rf --one-file-system -- "$leaf" 2>&1); rc=$?; fi
+    (( rc == 0 )) \
+      || { _WS_LEAF_WHY="removing $leaf failed (rm exit $rc): $(printf '%s' "${err:-rm said nothing}" | head -1)"; return 2; }
+  fi
+  _ws_reclaim_absent "$leaf"; rc=$?
+  (( rc != 1 )) || { _WS_LEAF_WHY="$leaf stands again after its removal — something re-created it"; return 2; }
+  (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_ABSENT_WHY — that $leaf is gone was never proven"; return 2; }
+  return 0
+}
+
 _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|'') — the journalled
   #                        destructive sequence for a CHILD. Its OWN arm (spec §5.6), never
   #                        `_ws_reap_tail`: that tail refuses `not-archived` (a child never is) and
@@ -28259,8 +28349,9 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   local id="$1" phase="$2" lctx="$3" childof="$4" surface="$5" declared="$6" resumed="$7"
   local project workdir main tomb branch tip wip tid tuuid tregbranch attic residue wtout stamp unitstate rec lrc
   local regproject regworkdir reguuid regbranch childlines recorded merged cj first cline cpath crest cbr chead
-  local holders wdreal tdir troot cdir croot kept=() k keptjson keptall treegone crc killrc dropped
+  local holders wdreal kept=() k keptjson keptall treegone crc killrc dropped
   local noun=reclaim donekey=reclaimed bindkey=childOf
+  local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts
   [[ "$_WS_RCL_ACT" != expire ]] || { noun=expiry; donekey=expired; bindkey=archivedAt; }
   tomb="$REG/.reaped/$id.json"
   case "$phase" in
@@ -28682,38 +28773,28 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     _reg_set "$id" reaping "$_WS_RCL_ACT:artifacts"
     phase=artifacts
   fi
-  # (6) The artifacts (rule 2): the clips directory under its two existing
-  # containment re-checks, then the per-session temp root under the SAME two —
-  # the id's shape re-validated before any `rm -rf`, and the resolved path
-  # (`pwd -P`, so a symlink cannot pass) a DIRECT child of its root. Each is
-  # normalised first, so a mode-000 directory inside cannot survive the rm.
-  if [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]]; then
-    cdir=$(cd -- "$HOME/.cc-clips" >/dev/null 2>&1 && cd -- "./$id" >/dev/null 2>&1 && pwd -P) || cdir=""
-    croot=$(cd -- "$HOME/.cc-clips" >/dev/null 2>&1 && pwd -P) || croot=""
-    if [[ -n "$cdir" && -n "$croot" && "$cdir" == "$croot/$id" ]]; then
-      _ws_reclaim_normalise "$cdir" || :
-      rm -rf "$cdir"
-    fi
-    tdir=$(cd -- "$HOME/.cc-tmp" >/dev/null 2>&1 && cd -- "./$id" >/dev/null 2>&1 && pwd -P) || tdir=""
-    troot=$(cd -- "$HOME/.cc-tmp" >/dev/null 2>&1 && pwd -P) || troot=""
-    if [[ -n "$tdir" && -n "$troot" && "$tdir" == "$troot/$id" ]]; then
-      _ws_reclaim_normalise "$tdir" || :
-      rm -rf "$tdir"
-    elif [[ -n "$troot" ]] && [[ -L "$troot/$id" || ( -e "$troot/$id" && ! -d "$troot/$id" ) ]]; then
-      # A LEAF THAT IS NOT A DIRECTORY (spec §5.2, "A temp root that cannot be
-      # made private is not used"). Wave 1's `_child_tmpdir` (its rc 2) composes
-      # TMPDIR only for a leaf that is, or was just made, a real directory owned
-      # by this uid with mode 0700; any other leaf — a symlink, a regular file —
-      # is left exactly where it was found at `$HOME/.cc-tmp/<id>`, and that
-      # child spawns without TMPDIR. Left here, it outlives the reclaim, and the
-      # next child minted under this recycled slug meets the same leaf and
-      # spawns uncontained on every spawn. So it is UNLINKED, never followed:
-      # `-L` is asked first, the path is the literal leaf under the resolved
-      # root (the id re-validated above), and `rm -f --` never recurses — a
-      # symlink's target, wherever it points, is untouched.
-      rm -f -- "$troot/$id" 2>/dev/null || :
-    fi
-  fi
+  # (6) The artifacts (rule 2), each through `_ws_leaf_remove`, the ONE
+  # removal helper (spec §5.6): the clips directory, then the per-session
+  # temp root. A leaf the helper refuses, or could not measure, is KEPT: the
+  # act still completes, and the done row says so (`meas.clipsKept`,
+  # `meas.tmpRootKept`, and why in `detail`) — never kept in silence, and never
+  # a refusal. The helper's own header says what it proves before it removes.
+  _ws_leaf_remove "$HOME/.cc-clips" "$id"; lfrc=$?
+  case "$lfrc" in
+    0) : ;;
+    1) clipskept=refused; clipswhy="$_WS_LEAF_WHY" ;;
+    *) clipskept=unmeasured; clipswhy="$_WS_LEAF_WHY" ;;
+  esac
+  _ws_leaf_remove "$HOME/.cc-tmp" "$id"; lfrc=$?
+  case "$lfrc" in
+    0) : ;;
+    1) tmpkept=refused; tmpwhy="$_WS_LEAF_WHY" ;;
+    *) tmpkept=unmeasured; tmpwhy="$_WS_LEAF_WHY" ;;
+  esac
+  cword=gone; tword=gone
+  [[ -z "$clipskept" ]] || cword="kept ($clipskept)"
+  [[ -z "$tmpkept" ]] || tword="kept ($tmpkept)"
+  gone="worktree and branch are gone, clips $cword, temp root $tword"
   # (7) The residue probe — measured, never deleted — recorded before the row goes.
   residue=$(_ws_reclaim_residue "$workdir")
   _ws_tombstone_patch "$id" "{\"residueBytes\":$residue}" || :   # a failed patch leaves null: unmeasured, never 0
@@ -28724,28 +28805,32 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   _reg_purge "$id" || _rcl_prc=$?
   if (( _rcl_prc == 3 )); then
     _ws_reclaim_fail "$id" "$lctx" purge-incomplete \
-      "the $noun completed — worktree, branch, clips and temp root are gone — and the registry row WAS purged, but $REG_PURGE_UNREMOVED could not be removed and still stands" \
-      meas.branch "$branch" meas.unremoved "$REG_PURGE_UNREMOVED"
+      "the $noun completed — $gone — and the registry row WAS purged, but $REG_PURGE_UNREMOVED could not be removed and still stands" \
+      meas.branch "$branch" meas.unremoved "$REG_PURGE_UNREMOVED" meas.clipsKept "$clipskept" meas.tmpRootKept "$tmpkept"
     return 1
   elif (( _rcl_prc == 2 )); then
     _ws_reclaim_fail "$id" "$lctx" purge-mechanism-absent \
-      "the $noun completed — worktree, branch, clips and temp root are gone — but the registry row could not be purged: the compaction lock's mechanism is absent on this box while $REG/$id.generation is present" \
-      meas.branch "$branch"
+      "the $noun completed — $gone — but the registry row could not be purged: the compaction lock's mechanism is absent on this box while $REG/$id.generation is present" \
+      meas.branch "$branch" meas.clipsKept "$clipskept" meas.tmpRootKept "$tmpkept"
     return 1
   elif (( _rcl_prc != 0 )); then
     local _rcl_why; _rcl_why=$(_compact_lock_why_remedy "$id" "ws-$_WS_RCL_ACT")
     _ws_reclaim_fail "$id" "$lctx" purge-refused \
-      "the $noun completed — worktree, branch, clips and temp root are gone — but the registry row could not be purged: $_rcl_why" \
-      meas.branch "$branch"
+      "the $noun completed — $gone — but the registry row could not be purged: $_rcl_why" \
+      meas.branch "$branch" meas.clipsKept "$clipskept" meas.tmpRootKept "$tmpkept"
     return 1
   fi
   # A BRANCH THIS ACT KEPT — nested, or a drifted HEAD's — is said on the done
   # row, whichever attempt kept it: the record carries it across a resume.
   keptall=$(_ws_reclaim_kept_read "$tomb") || keptall=""
+  dparts="${keptall:+kept branch(es): $keptall}"
+  [[ -z "$clipskept" ]] || dparts+="${dparts:+; }clips $HOME/.cc-clips/$id kept ($clipskept): $clipswhy"
+  [[ -z "$tmpkept" ]] || dparts+="${dparts:+; }temp root $HOME/.cc-tmp/$id kept ($tmpkept): $tmpwhy"
   _lc_done "$_WS_RCL_ACT" "$id" "$lctx" verb "ws-$_WS_RCL_ACT" "meas.$bindkey" "$childof" meas.branch "$branch" \
     meas.tip "$tip" meas.wip "$wip" meas.tombstone "$tomb" meas.attic "${attic:-0}" \
     meas.residueBytes "$residue" meas.resumed "$resumed" \
-    detail "${keptall:+kept branch(es): $keptall}"
+    meas.clipsKept "$clipskept" meas.tmpRootKept "$tmpkept" \
+    detail "$dparts"
   # `secretsDropped` COUNTS what the record names (every attempt's, unioned),
   # so a reclaim that committed nothing but dropped a secret-shaped edit never
   # reads as "nothing was left"; `null` when the record could not be read.
