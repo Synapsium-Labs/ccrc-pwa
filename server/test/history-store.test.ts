@@ -322,6 +322,38 @@ describe('store.mjs: the binding', () => {
     expect(measureStoreFacts(h, 'fleet').dbDir).toBe('dir');
   });
 
+  // Root bypasses mode 000, so an unlistable directory cannot be made as uid 0.
+  it.skipIf(process.getuid?.() === 0)('an evidence directory that exists but cannot be listed is ONE "(unlistable)" entry, and a both-absent store refuses store-recoverable', () => {
+    // journal/ unlistable, no db/ at all.
+    const h1 = home();
+    const P1 = historyPaths(h1);
+    fs.mkdirSync(P1.journalDir, { recursive: true });
+    fs.chmodSync(P1.journalDir, 0o000);
+    try {
+      const f = measureStoreFacts(h1, 'fleet');
+      expect(f.db).toBe('absent');
+      expect(f.storeId).toEqual({ state: 'absent' });
+      expect(f.journalStoreDirs).toEqual(['(unlistable)']);
+      expect(decideStoreOpen(f)).toEqual({ act: 'refuse', word: 'store-recoverable' });
+    } finally {
+      fs.chmodSync(P1.journalDir, 0o700);
+    }
+    // db/backups/ unlistable under a real db/ with no history.db.
+    const h2 = home();
+    const P2 = historyPaths(h2);
+    fs.mkdirSync(P2.backups, { recursive: true });
+    fs.chmodSync(P2.backups, 0o000);
+    try {
+      const f = measureStoreFacts(h2, 'fleet');
+      expect(f.dbDir).toBe('dir');
+      expect(f.db).toBe('absent');
+      expect(f.backupsDb).toEqual(['(unlistable)']);
+      expect(decideStoreOpen(f)).toEqual({ act: 'refuse', word: 'store-recoverable' });
+    } finally {
+      fs.chmodSync(P2.backups, 0o700);
+    }
+  });
+
   it('peekStoreId: the DB\'s own meta.store_id, absent without the row, unreadable for a file that is no store', () => {
     const h = home();
     const { storeId } = createStore(h);
