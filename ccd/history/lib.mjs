@@ -1315,8 +1315,10 @@ export function extractSecretValues(text, kind) {
     while (stack.length > 0) {
       const v = stack.pop();
       if (typeof v === 'string') { if (v !== '') out.push(v); }
-      else if (Array.isArray(v)) stack.push(...v);
-      else if (v !== null && typeof v === 'object') stack.push(...Object.values(v));
+      // One at a time, never `push(...v)`: a spread of a 200,000-element array
+      // overflows the call stack (RangeError), and a secrets file may hold one.
+      else if (Array.isArray(v)) for (let i = 0; i < v.length; i += 1) stack.push(v[i]);
+      else if (v !== null && typeof v === 'object') for (const x of Object.values(v)) stack.push(x);
     }
     return out;
   }

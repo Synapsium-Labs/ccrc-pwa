@@ -1281,6 +1281,20 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     expect(libRedact.kindOfPath('/home/u/.cc-secrets/claude-a-oauth.env')).toBe('env');
     expect(libRedact.kindOfPath('/home/u/.config/lane/key')).toBe('env');
   });
+  it('a json secret file with a 200,000-element array or object does not throw and yields every string leaf (D-4204)', () => {
+    const n = 200000;
+    const arr = JSON.stringify(Array.from({ length: n }, (_, i) => `v${i}`));
+    const fromArr = libRedact.extractSecretValues(arr, 'json');
+    expect(fromArr.length).toBe(n);
+    expect(fromArr).toContain('v0');
+    expect(fromArr).toContain(`v${n - 1}`);
+    const obj: Record<string, string> = {};
+    for (let i = 0; i < n; i += 1) obj[`k${i}`] = `w${i}`;
+    const fromObj = libRedact.extractSecretValues(JSON.stringify(obj), 'json');
+    expect(fromObj.length).toBe(n);
+    expect(fromObj).toContain('w0');
+    expect(fromObj).toContain(`w${n - 1}`);
+  });
   it("sessions.json's idHash loads as a (43, idHash) pair, never hashed again, and redacts the session token", () => {
     const token = historyCrypto.randomBytes(32).toString('base64url');
     expect(token).toHaveLength(43);
