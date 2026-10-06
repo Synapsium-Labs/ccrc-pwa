@@ -904,3 +904,281 @@ export function locationMatches({ cwd, cwdReal, workdir, workdirReal }) {
 export function decideRekey({ observedGeneration, uuid, emptyFamilyUuids }) {
   return UUID_RE.test(observedGeneration) && emptyFamilyUuids.has(uuid) ? 'merge' : 'none';
 }
+
+// ===========================================================================
+// Row extraction (spec §2, §6.1, §6.2). Pure functions over ONE parsed
+// transcript row. The sweep (L4) reads and parses lines, asks
+// `isBoundaryLine` from ../compact-card.mjs (which only L4 files import, so
+// this file stays `node:crypto`-only) and hands the results in.
+// ===========================================================================
+
+function rowObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v) ? v : null;
+}
+function rowString(v) {
+  return typeof v === 'string' ? v : null;
+}
+/** A row's `timestamp` (ISO-8601 in every row Claude Code writes) as epoch
+ *  ms; null when absent or unparseable, never 0 and never "now". */
+function rowTsMs(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? Math.trunc(v) : null;
+  if (typeof v !== 'string') return null;
+  const ms = Date.parse(v);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** G13: a row with no uuid is metadata (33.5-36% of rows), and some such rows
+ *  (`bridge-session`) carry account and organisation identifiers, so it is
+ *  counted by type and never stored. D-4199 */
+export function isStoredRow(row) {
+  const o = rowObject(row);
+  return o !== null && typeof o.uuid === 'string' && o.uuid !== '';
+}
+
+/** The `<type>` of an unstored row's counter (`uuidless:<type>`). A type that
+ *  is not a short identifier counts as `unknown`, so a garbled or hostile row
+ *  can never mint an arbitrary counter name. */
+export function uuidlessTypeOf(row) {
+  const t = rowObject(row)?.type;
+  return typeof t === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(t) ? t : 'unknown';
+}
+
+const DROPPED_BLOCK_TYPES = new Set(['thinking', 'redacted_thinking']);
+
+/** What a blob holds (§6.2), one rule per row type: user and assistant rows
+ *  their `message.content` with thinking blocks removed (decision: thinking
+ *  is not stored, §2); system rows their `content`; attachment rows their
+ *  `attachment` object; any other type its `content`. Sidecars are file
+ *  bytes and never come through here. */
+export function blobBodyOf(row) {
+  if (row.type === 'user' || row.type === 'assistant') {
+    const c = rowObject(row.message)?.content;
+    if (Array.isArray(c)) return c.filter((b) => !(rowObject(b) !== null && DROPPED_BLOCK_TYPES.has(b.type)));
+    return c === undefined ? null : c;
+  }
+  if (row.type === 'attachment') return row.attachment === undefined ? null : row.attachment;
+  return row.content === undefined ? null : row.content;
+}
+
+/** The named structure columns of one stored row (§6.2 `entries`). `model` is
+ *  an assistant row's `message.model` verbatim, NULL on every other row
+ *  (RG9); the backend is derived at read time by `backendOf`, never stored.
+ *  `apiBlockIndex` is not in the row: the sweep passes the row's 0-based
+ *  ordinal among the rows of its `requestId` in the file it is reading.
+ *  D-4198 */
+export function entryOf(row, ctx = {}) {
+  const msg = rowObject(row.message);
+  const type = typeof row.type === 'string' ? row.type : 'unknown';
+  let toolName = null;
+  if (type === 'assistant' && Array.isArray(msg?.content)) {
+    const use = msg.content.find((b) => rowObject(b) !== null && b.type === 'tool_use' && typeof b.name === 'string');
+    if (use !== undefined) toolName = use.name;
+  }
+  return {
+    uuid: row.uuid,
+    type,
+    subtype: rowString(row.subtype),
+    role: rowString(msg?.role),
+    model: type === 'assistant' ? rowString(msg?.model) : null,
+    parentUuid: rowString(row.parentUuid),
+    tsMs: rowTsMs(row.timestamp),
+    requestId: rowString(row.requestId),
+    apiBlockIndex: Number.isSafeInteger(ctx.apiBlockIndex) ? ctx.apiBlockIndex : null,
+    msgId: rowString(msg?.id),
+    sourceToolUseId: rowString(row.sourceToolUseID),
+    toolName,
+    isCompactSummary: row.isCompactSummary === true ? 1 : 0,
+  };
+}
+
+/** A compact_boundary row's metadata (§6.1 span rule, §6.2 `boundaries`), read
+ *  from `compactMetadata.{trigger, preTokens, postTokens, durationMs}`,
+ *  `.preservedSegment.{headUuid, anchorUuid, tailUuid}` and
+ *  `.preservedMessages.allUuids`. A field that is absent or of the wrong
+ *  shape is NULL and named in `missing` (the sweep counts
+ *  `boundary_field_missing`), never a throw: the format is Claude Code's,
+ *  undocumented, and has varied by version. Null when the row is not a
+ *  boundary by structure. */
+export function boundaryOf(row) {
+  const o = rowObject(row);
+  if (o === null || o.type !== 'system' || o.subtype !== 'compact_boundary') return null;
+  const meta = rowObject(o.compactMetadata);
+  const seg = rowObject(meta?.preservedSegment);
+  const kept = rowObject(meta?.preservedMessages);
+  const missing = [];
+  const take = (name, v, ok) => {
+    if (ok(v)) return v;
+    missing.push(name);
+    return null;
+  };
+  const isText = (v) => typeof v === 'string' && v !== '';
+  const isCount = (v) => Number.isSafeInteger(v) && v >= 0;
+  const all = kept?.allUuids;
+  const allUuids = Array.isArray(all) ? all.filter(isText) : null;
+  if (allUuids === null) missing.push('allUuids');
+  return {
+    trigger: take('trigger', meta?.trigger, isText),
+    headUuid: take('headUuid', seg?.headUuid, isText),
+    anchorUuid: take('anchorUuid', seg?.anchorUuid, isText),
+    tailUuid: take('tailUuid', seg?.tailUuid, isText),
+    allUuids,
+    preTokens: take('preTokens', meta?.preTokens, isCount),
+    postTokens: take('postTokens', meta?.postTokens, isCount),
+    durationMs: take('durationMs', meta?.durationMs, isCount),
+    missing,
+  };
+}
+
+/** Is this Bash command a recall: its first word `ccrc` or a path ending in
+ *  `/ccrc` (one pair of surrounding quotes stripped), and its second word
+ *  `history`? Structure only (§6.2): never a sentinel in any body. */
+export function isHistoryCommand(command) {
+  const words = command.trim().split(/\s+/);
+  if (words.length < 2) return false;
+  const first = words[0].replace(/^(["'])(.*)\1$/, '$2');
+  return (first === 'ccrc' || first.endsWith('/ccrc')) && words[1] === 'history';
+}
+
+/** The text a user row's content begins with: the string itself, or its
+ *  first text block's text. */
+function leadText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  const t = content.find((b) => rowObject(b) !== null && b.type === 'text' && typeof b.text === 'string');
+  return t === undefined ? '' : t.text;
+}
+
+/** Provenance from structured fields, never from text (§6.2). Assistant rows
+ *  are `model`; a summary row is `summary`; a tool's result is `tool`, or
+ *  `recall-echo` when its paired `tool_use` is a Bash `ccrc history` command;
+ *  typed user text is `operator`. Everything else — attachments, system rows,
+ *  the G16 `<local-command-stdout>` echo, user rows Claude Code marks
+ *  `isMeta` (injected, not typed: plan-chosen), unknown types — is `harness`.
+ *  `ccrc-injected` is not produced by B1's ingest; it is excluded from
+ *  default search exactly as `harness` is. The caller pairs a `tool_result`
+ *  with its `tool_use` and passes `{name, command}`.
+ *  D-4197 */
+export function provenanceOf(row, ctx) {
+  if (row.type === 'assistant') return 'model';
+  if (row.type !== 'user') return 'harness';
+  if (row.isCompactSummary === true) return 'summary';
+  const content = rowObject(row.message)?.content;
+  if (leadText(content).trimStart().startsWith('<local-command-stdout>')) return 'harness';
+  if (row.isMeta === true) return 'harness';
+  if (Array.isArray(content) && content.some((b) => rowObject(b) !== null && b.type === 'tool_result')) {
+    const p = ctx.pairedToolUse;
+    return p !== null && p.name === 'Bash' && typeof p.command === 'string' && isHistoryCommand(p.command) ? 'recall-echo' : 'tool';
+  }
+  return 'operator';
+}
+
+/** Every string leaf of a value, depth-first in key order, with an explicit
+ *  stack: a tool input is the model's JSON, and its depth is not ours to
+ *  bound by recursion. */
+function stringLeaves(value, out) {
+  const stack = [value];
+  while (stack.length > 0) {
+    const v = stack.pop();
+    if (typeof v === 'string') out.push(v);
+    else if (Array.isArray(v)) for (let i = v.length - 1; i >= 0; i -= 1) stack.push(v[i]);
+    else if (rowObject(v) !== null) {
+      const keys = Object.keys(v);
+      for (let i = keys.length - 1; i >= 0; i -= 1) stack.push(v[keys[i]]);
+    }
+  }
+}
+
+/** The FTS body: extracted plain text, never the JSON (RV3). Text blocks,
+ *  the string leaves of `tool_use.input`, the text of `tool_result` content
+ *  and `system` content, joined with `\n`; a sidecar's first
+ *  `SIDECAR_FTS_BYTES` bytes decoded as UTF-8. Redaction is the caller's
+ *  next step (§6.2: the index sees redacted text only).
+ *  D-4195 */
+export function ftsTextOf(body, kind) {
+  if (kind === 'sidecar') {
+    const bytes = body instanceof Uint8Array ? body : new Uint8Array(0);
+    const cut = bytes.length > SIDECAR_FTS_BYTES;
+    const text = new TextDecoder('utf-8').decode(cut ? bytes.subarray(0, SIDECAR_FTS_BYTES) : bytes);
+    // A cut inside a multi-byte character decodes to one U+FFFD; drop it.
+    return cut ? text.replace(/�$/, '') : text;
+  }
+  const parts = [];
+  if (typeof body === 'string') parts.push(body);
+  else if (Array.isArray(body)) {
+    for (const b of body) {
+      if (typeof b === 'string') { parts.push(b); continue; }
+      const o = rowObject(b);
+      if (o === null) continue;
+      if (o.type === 'text' && typeof o.text === 'string') parts.push(o.text);
+      else if (o.type === 'tool_use') stringLeaves(o.input, parts);
+      else if (o.type === 'tool_result') {
+        if (typeof o.content === 'string') parts.push(o.content);
+        else if (Array.isArray(o.content)) {
+          for (const x of o.content) if (rowObject(x) !== null && x.type === 'text' && typeof x.text === 'string') parts.push(x.text);
+        }
+      }
+    }
+  }
+  return parts.join('\n');
+}
+
+/** Is this pair of text blocks ccd's `_sanitize_anthropic` shape: the same
+ *  block but for `text`, one side empty or whitespace (or missing) and the
+ *  other exactly `...`? */
+function sanitizedPair(a, b) {
+  const x = rowObject(a);
+  const y = rowObject(b);
+  if (x === null || y === null || x.type !== 'text' || y.type !== 'text') return false;
+  const blank = (t) => t === undefined || (typeof t === 'string' && t.trim() === '');
+  const shapeMatches = (blank(x.text) && y.text === '...') || (blank(y.text) && x.text === '...');
+  if (!shapeMatches) return false;
+  const { text: _xText, ...xr } = x;
+  const { text: _yText, ...yr } = y;
+  return canonicalJson(xr) === canonicalJson(yr);
+}
+
+/** The cause of a variant (§6.1): `ccd-sanitize` when the two bodies differ
+ *  only in text blocks ccd's sanitiser fills with `...` on a gateway to
+ *  Anthropic carry (9,791 of 510,153 shared rows, every one that shape, M);
+ *  `unknown` otherwise. D-4200 */
+export function variantCauseOf(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return 'unknown';
+  let sanitized = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    if (canonicalJson(a[i]) === canonicalJson(b[i])) continue;
+    if (!sanitizedPair(a[i], b[i])) return 'unknown';
+    sanitized += 1;
+  }
+  return sanitized > 0 ? 'ccd-sanitize' : 'unknown';
+}
+
+/** A row's backend, from its model name alone (§6.2, `BACKENDS`). A name
+ *  starting `claude` is `anthropic`; NULL, empty, or angle-bracketed
+ *  (`<synthetic>`: Claude Code's own notices, no backend's output) is
+ *  `unknown`; any other name is `other`. Nothing is read from the roster.
+ *  D-4196 */
+export function backendOf(model) {
+  if (typeof model !== 'string' || model === '') return 'unknown';
+  if (model.startsWith('<') && model.endsWith('>')) return 'unknown';
+  return model.startsWith('claude') ? 'anthropic' : 'other';
+}
+
+/** The producer of a boundary (§6.2): the backend of the first assistant row
+ *  AFTER its summary row, in the copy that holds it, whose backend is not
+ *  `unknown`. A swap landing compacts on the TARGET backend, so the last row
+ *  before the boundary is the wrong witness. D-4196 */
+export function producerOf(modelsAfterSummary) {
+  for (const m of modelsAfterSummary) {
+    const b = backendOf(m);
+    if (b !== 'unknown') return b;
+  }
+  return 'unknown';
+}
+
+/** `producerOf` over a copy's rows in file order, given the summary row's
+ *  index: only assistant rows after it are witnesses. */
+export function producerOfCopy(rows, summaryIndex) {
+  const after = [];
+  for (let i = summaryIndex + 1; i < rows.length; i += 1) if (rows[i].type === 'assistant') after.push(rows[i].model);
+  return producerOf(after);
+}

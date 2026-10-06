@@ -28,6 +28,8 @@ import {
 } from '../../ccd/history/lib.mjs';
 import * as libPlan from '../../ccd/history/lib.mjs';
 import * as libEpoch from '../../ccd/history/lib.mjs';
+import * as libRows from '../../ccd/history/lib.mjs';
+import * as rowFx from './historyFixtures.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -998,5 +1000,199 @@ describe('joinGeneration, locationMatches and decideRekey (spec 6.1, DM19b, DM46
     expect(libEpoch.decideRekey({ observedGeneration: G, uuid: '11111111-1111-4111-8111-111111111111', emptyFamilyUuids: held })).toBe('merge');
     expect(libEpoch.decideRekey({ observedGeneration: G, uuid: '22222222-2222-4222-8222-222222222222', emptyFamilyUuids: held })).toBe('none');
     expect(libEpoch.decideRekey({ observedGeneration: '', uuid: '11111111-1111-4111-8111-111111111111', emptyFamilyUuids: held })).toBe('none');
+  });
+});
+
+// ===========================================================================
+// Task 8: row extraction over the synthetic rows of historyFixtures.ts. The
+// pins whose store halves need a sweep (DM12, DM13, DM30, DM32, DM2b, DM38)
+// are owned by later tasks; these are their pure halves, plus DM38b whole.
+// ===========================================================================
+describe('isStoredRow, blobBodyOf and entryOf: what is stored and how (spec 2, 6.2)', () => {
+  const T0 = '2026-10-01T10:00:00.000Z';
+  it('a uuid-less bridge-session row is not stored and counts by its type (DM13 pure half)', () => {
+    const r = rowFx.bridgeSessionRow({ ts: T0, accountUuid: 'aaaaaaaa-0000-4000-8000-000000000001', organizationUuid: 'bbbbbbbb-0000-4000-8000-000000000002' });
+    expect(libRows.isStoredRow(r)).toBe(false);
+    expect(libRows.uuidlessTypeOf(r)).toBe('bridge-session');
+    expect(libRows.isStoredRow(rowFx.userRow({ uuid: 'u-1', ts: T0, text: 'hi' }))).toBe(true);
+    expect(libRows.isStoredRow({ uuid: '' })).toBe(false);
+    expect(libRows.isStoredRow(null)).toBe(false);
+  });
+  it('an unstored row with a garbled type counts as unknown, never an arbitrary counter name', () => {
+    expect(libRows.uuidlessTypeOf({ type: 'a b; drop' })).toBe('unknown');
+    expect(libRows.uuidlessTypeOf({ type: 7 })).toBe('unknown');
+    expect(libRows.uuidlessTypeOf('x')).toBe('unknown');
+  });
+  it('a thinking block is removed from the blob body, and its sentinel is nowhere in it (DM12 pure half)', () => {
+    const r = rowFx.assistantRow({ uuid: 'a-1', ts: T0, text: 'visible answer', thinking: 'SENTINEL-THINKING-7f3a' });
+    const body = libRows.blobBodyOf(r);
+    expect(JSON.stringify(body)).not.toContain('SENTINEL-THINKING-7f3a');
+    expect(body).toEqual([{ type: 'text', text: 'visible answer' }]);
+    const redacted = { ...r, message: { ...(r['message'] as object), content: [{ type: 'redacted_thinking', data: 'SENTINEL-R' }, { type: 'text', text: 'x' }] } };
+    expect(JSON.stringify(libRows.blobBodyOf(redacted))).not.toContain('SENTINEL-R');
+  });
+  it('a summary keeps its string content; system, attachment and unknown rows keep their own field', () => {
+    expect(libRows.blobBodyOf(rowFx.summaryRow({ uuid: 's-1', ts: T0, text: 'This session is being continued' }))).toBe('This session is being continued');
+    expect(libRows.blobBodyOf(rowFx.systemRow({ uuid: 'y-1', ts: T0, subtype: 'informational', content: 'note' }))).toBe('note');
+    expect(libRows.blobBodyOf(rowFx.attachmentRow({ uuid: 't-1', ts: T0, attachment: { type: 'hook_additional_context', content: ['c'] } })))
+      .toEqual({ type: 'hook_additional_context', content: ['c'] });
+    expect(libRows.blobBodyOf({ uuid: 'q-1', type: 'queue-operation' })).toBe(null);
+  });
+  it('an assistant row keeps message.model verbatim; a user row stores NULL (DM38 pure half)', () => {
+    const a = libRows.entryOf(rowFx.assistantRow({ uuid: 'a-1', ts: T0, text: 'x', model: 'gpt-fixture-5', requestId: 'req_1', msgId: 'msg_1' }), { apiBlockIndex: 2 });
+    expect(a).toEqual({
+      uuid: 'a-1', type: 'assistant', subtype: null, role: 'assistant', model: 'gpt-fixture-5', parentUuid: null,
+      tsMs: Date.UTC(2026, 9, 1, 10, 0, 0), requestId: 'req_1', apiBlockIndex: 2, msgId: 'msg_1',
+      sourceToolUseId: null, toolName: null, isCompactSummary: 0,
+    });
+    expect(libRows.entryOf(rowFx.userRow({ uuid: 'u-1', ts: T0, text: 'x' })).model).toBe(null);
+    expect(libRows.entryOf({ ...rowFx.userRow({ uuid: 'u-4', ts: T0, text: 'x' }), message: { role: 'user', model: 'claude-fixture-4', content: 'x' } }).model).toBe(null);
+    expect(libRows.entryOf(rowFx.assistantRow({ uuid: 'a-2', ts: T0, text: 'x', model: '<synthetic>' })).model).toBe('<synthetic>');
+  });
+  it('entryOf reads the tool name, the producing tool, the summary flag and a missing timestamp as NULL', () => {
+    expect(libRows.entryOf(rowFx.toolUseRow({ uuid: 'a-3', ts: T0, toolUseId: 'toolu_01', name: 'Bash', input: { command: 'ls' } })).toolName).toBe('Bash');
+    expect(libRows.entryOf(rowFx.toolResultRow({ uuid: 'u-3', ts: T0, toolUseId: 'toolu_01', content: 'out', sourceToolUseID: 'toolu_01' })).sourceToolUseId).toBe('toolu_01');
+    expect(libRows.entryOf(rowFx.summaryRow({ uuid: 's-1', ts: T0, text: 's' })).isCompactSummary).toBe(1);
+    expect(libRows.entryOf({ uuid: 'n-1', type: 'user', timestamp: 'not a time' }).tsMs).toBe(null);
+    expect(libRows.entryOf({ uuid: 'n-2', type: 'user' }).tsMs).toBe(null);
+  });
+});
+
+describe('boundaryOf: compact_boundary metadata, every absent field NULL and named (spec 6.1, 6.2)', () => {
+  const T0 = '2026-10-01T10:00:00.000Z';
+  const base = { uuid: 'b-1', ts: T0, trigger: 'manual' as const, headUuid: 'h-1', anchorUuid: 's-1', tailUuid: 't-1', allUuids: ['k-1', 'k-2'] };
+  it('reads trigger, the preserved segment, allUuids and the token counts', () => {
+    expect(libRows.boundaryOf(rowFx.boundaryRow({ ...base, preTokens: 150_000, postTokens: 9_000, durationMs: 30_000 }))).toEqual({
+      trigger: 'manual', headUuid: 'h-1', anchorUuid: 's-1', tailUuid: 't-1', allUuids: ['k-1', 'k-2'],
+      preTokens: 150_000, postTokens: 9_000, durationMs: 30_000, missing: [],
+    });
+  });
+  it('a boundary without a preserved segment or kept list reads NULL there and names each field', () => {
+    const b = libRows.boundaryOf(rowFx.boundaryRow({ ...base, omit: ['preservedSegment', 'preservedMessages', 'durationMs'] }));
+    expect(b).not.toBe(null);
+    expect(b!.headUuid).toBe(null);
+    expect(b!.allUuids).toBe(null);
+    expect([...b!.missing].sort()).toEqual(['allUuids', 'anchorUuid', 'durationMs', 'headUuid', 'tailUuid']);
+  });
+  it('a row with no compactMetadata at all is still a boundary with every field missing, and never throws', () => {
+    const b = libRows.boundaryOf({ uuid: 'b-2', type: 'system', subtype: 'compact_boundary' });
+    expect(b!.missing.length).toBe(8);
+  });
+  it('a row that is not a boundary by structure is null', () => {
+    expect(libRows.boundaryOf(rowFx.systemRow({ uuid: 'y-1', ts: T0, subtype: 'informational', content: 'compact_boundary' }))).toBe(null);
+    expect(libRows.boundaryOf(null)).toBe(null);
+  });
+});
+
+describe('provenanceOf: by structure, never by text (spec 6.2, DM32 pure half)', () => {
+  const T0 = '2026-10-01T10:00:00.000Z';
+  const none = { pairedToolUse: null };
+  it('typed user text is operator, assistant output is model, the summary is summary', () => {
+    expect(libRows.provenanceOf(rowFx.userRow({ uuid: 'u-1', ts: T0, text: 'please refactor' }), none)).toBe('operator');
+    expect(libRows.provenanceOf(rowFx.assistantRow({ uuid: 'a-1', ts: T0, text: 'done' }), none)).toBe('model');
+    expect(libRows.provenanceOf(rowFx.toolUseRow({ uuid: 'a-2', ts: T0, toolUseId: 'toolu_01', name: 'Read', input: { file_path: '/x' } }), none)).toBe('model');
+    expect(libRows.provenanceOf(rowFx.summaryRow({ uuid: 's-1', ts: T0, text: 'summary' }), none)).toBe('summary');
+  });
+  it('attachments, system rows, the G16 echo, isMeta rows and unknown types are harness', () => {
+    expect(libRows.provenanceOf(rowFx.attachmentRow({ uuid: 't-1', ts: T0, attachment: { type: 'x' } }), none)).toBe('harness');
+    expect(libRows.provenanceOf(rowFx.systemRow({ uuid: 'y-1', ts: T0, subtype: 'informational', content: 'n' }), none)).toBe('harness');
+    expect(libRows.provenanceOf(rowFx.localCommandEchoRow({ uuid: 'e-1', ts: T0, stdout: '<ccrc-leaf>x</ccrc-leaf>' }), none)).toBe('harness');
+    expect(libRows.provenanceOf({ ...rowFx.userRow({ uuid: 'm-1', ts: T0, text: 'Base directory for this skill' }), isMeta: true }, none)).toBe('harness');
+    expect(libRows.provenanceOf({ uuid: 'z-1', type: 'atis-latch' }, none)).toBe('harness');
+  });
+  it('a tool result is tool; paired with a Bash ccrc history command it is recall-echo', () => {
+    const r = rowFx.toolResultRow({ uuid: 'u-2', ts: T0, toolUseId: 'toolu_02', content: 'hits' });
+    expect(libRows.provenanceOf(r, none)).toBe('tool');
+    expect(libRows.provenanceOf(r, { pairedToolUse: { name: 'Bash', command: '"$HOME/.local/bin/ccrc" history grep needle' } })).toBe('recall-echo');
+    expect(libRows.provenanceOf(r, { pairedToolUse: { name: 'Bash', command: 'ccrc history status' } })).toBe('recall-echo');
+    expect(libRows.provenanceOf(r, { pairedToolUse: { name: 'Bash', command: 'ccrc doctor' } })).toBe('tool');
+    expect(libRows.provenanceOf(r, { pairedToolUse: { name: 'Read', command: 'ccrc history grep x' } })).toBe('tool');
+  });
+  it('a cat of a file that merely contains <ccrc-recall stays tool, so default search keeps it (DM32)', () => {
+    const r = rowFx.toolResultRow({ uuid: 'u-3', ts: T0, toolUseId: 'toolu_03', content: '<ccrc-recall src=x trust="untrusted">old</ccrc-recall>' });
+    expect(libRows.provenanceOf(r, { pairedToolUse: { name: 'Bash', command: 'cat notes/recall.txt' } })).toBe('tool');
+  });
+  it('isHistoryCommand reads the first two words only', () => {
+    expect(libRows.isHistoryCommand('  /home/u/.local/bin/ccrc   history describe L0123')).toBe(true);
+    expect(libRows.isHistoryCommand("'/opt/x/ccrc' history tree")).toBe(true);
+    expect(libRows.isHistoryCommand('env -u CLAUDECODE ccrc history prune')).toBe(false);
+    expect(libRows.isHistoryCommand('ccrcx history grep')).toBe(false);
+    expect(libRows.isHistoryCommand('ccrc')).toBe(false);
+  });
+});
+
+describe('ftsTextOf: the FTS body is plain text, never JSON (spec 6.2, DM30 pure half)', () => {
+  const T0 = '2026-10-01T10:00:00.000Z';
+  it('a word after a newline in a text block is its own line; the keys type and text never appear', () => {
+    const body = libRows.blobBodyOf(rowFx.assistantRow({ uuid: 'a-1', ts: T0, text: 'first line\nsecondword here' }));
+    const text = libRows.ftsTextOf(body, 'entry');
+    expect(text).toBe('first line\nsecondword here');
+    expect(text).not.toMatch(/\btype\b|\btext\b/);
+  });
+  it('tool_use input string leaves, tool_result text and system content are joined with newlines', () => {
+    const use = libRows.blobBodyOf(rowFx.toolUseRow({ uuid: 'a-2', ts: T0, toolUseId: 'toolu_01', name: 'Bash', input: { command: 'grep -r alpha', opts: { cwd: '/w', n: 3 } } }));
+    expect(libRows.ftsTextOf(use, 'entry')).toBe('grep -r alpha\n/w');
+    const res = libRows.blobBodyOf(rowFx.toolResultRow({ uuid: 'u-2', ts: T0, toolUseId: 'toolu_01', content: [{ type: 'text', text: 'one' }, { type: 'text', text: 'two' }] }));
+    expect(libRows.ftsTextOf(res, 'entry')).toBe('one\ntwo');
+    const plain = libRows.blobBodyOf(rowFx.toolResultRow({ uuid: 'u-4', ts: T0, toolUseId: 'toolu_02', content: 'plain result text' }));
+    expect(libRows.ftsTextOf(plain, 'entry')).toBe('plain result text');
+    expect(libRows.ftsTextOf('system note', 'entry')).toBe('system note');
+  });
+  it('a deeply nested tool input is walked without recursion', () => {
+    let deep: unknown = 'leaf-at-the-bottom';
+    for (let i = 0; i < 20_000; i += 1) deep = { d: deep };
+    expect(libRows.ftsTextOf([{ type: 'tool_use', id: 'toolu_x', name: 'X', input: deep }], 'entry')).toBe('leaf-at-the-bottom');
+  });
+  it('a sidecar indexes its first SIDECAR_FTS_BYTES bytes only, and a cut multi-byte character is dropped', () => {
+    const N = libRows.SIDECAR_FTS_BYTES;
+    const bytes = Buffer.concat([Buffer.alloc(N - 1, 0x61), Buffer.from('é'), Buffer.from(' SENTINEL-AFTER-WINDOW')]);
+    const text = libRows.ftsTextOf(bytes, 'sidecar');
+    expect(text.length).toBe(N - 1);
+    expect(text).not.toContain('SENTINEL-AFTER-WINDOW');
+    expect(libRows.ftsTextOf(Buffer.from('short é'), 'sidecar')).toBe('short é');
+  });
+});
+
+describe('variantCauseOf, backendOf and the producer rule (spec 6.1, 6.2, DM2b pure half, DM38b)', () => {
+  it("two copies differing only in an empty text block filled with '...' are ccd-sanitize", () => {
+    const gateway = [{ type: 'text', text: '' }, { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } }];
+    const anthropic = [{ type: 'text', text: '...' }, { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } }];
+    expect(libRows.variantCauseOf(gateway, anthropic)).toBe('ccd-sanitize');
+    expect(libRows.variantCauseOf(anthropic, gateway)).toBe('ccd-sanitize');
+    expect(libRows.variantCauseOf([{ type: 'text', text: '  \n' }], [{ type: 'text', text: '...' }])).toBe('ccd-sanitize');
+    expect(libRows.variantCauseOf([{ type: 'text' }], [{ type: 'text', text: '...' }])).toBe('ccd-sanitize');
+  });
+  it('any other difference is unknown', () => {
+    expect(libRows.variantCauseOf([{ type: 'text', text: 'a' }], [{ type: 'text', text: 'b' }])).toBe('unknown');
+    expect(libRows.variantCauseOf([{ type: 'text', text: '' }], [{ type: 'text', text: '..' }])).toBe('unknown');
+    expect(libRows.variantCauseOf([{ type: 'text', text: '' }, { type: 'text', text: 'x' }], [{ type: 'text', text: '...' }, { type: 'text', text: 'y' }])).toBe('unknown');
+    expect(libRows.variantCauseOf([{ type: 'text', text: '', citations: [] }], [{ type: 'text', text: '...' }])).toBe('unknown');
+    expect(libRows.variantCauseOf('a', 'b')).toBe('unknown');
+    expect(libRows.variantCauseOf([1], [1, 2])).toBe('unknown');
+  });
+  it('backendOf: claude names are anthropic, NULL, empty and angle-bracketed are unknown, anything else other', () => {
+    expect(libRows.backendOf('claude-fixture-4')).toBe('anthropic');
+    for (const m of [null, undefined, '', '<synthetic>']) expect(libRows.backendOf(m)).toBe('unknown');
+    expect(libRows.backendOf('gpt-fixture-5')).toBe('other');
+    expect([...new Set(['claude-x', null, 'gpt-x'].map((m) => libRows.backendOf(m)))].sort()).toEqual([...(libRows.BACKENDS as unknown as readonly string[])].sort());
+  });
+  it('DM38b: an Anthropic to gateway straddle is produced by other, read after the summary', () => {
+    const copy = [
+      { type: 'assistant', model: 'claude-fixture-4' },
+      { type: 'assistant', model: 'claude-fixture-4' },
+      { type: 'system', model: null },
+      { type: 'user', model: null },
+      { type: 'assistant', model: 'gpt-fixture-5' },
+    ];
+    expect(libRows.producerOfCopy(copy, 3)).toBe('other');
+  });
+  it('DM38b: a <synthetic> row right after the summary is skipped, and a later claude row decides', () => {
+    const copy = [{ type: 'user', model: null }, { type: 'assistant', model: '<synthetic>' }, { type: 'assistant', model: 'claude-fixture-4' }];
+    expect(libRows.producerOfCopy(copy, 0)).toBe('anthropic');
+    expect(libRows.producerOf(['<synthetic>', null, 'claude-fixture-4'])).toBe('anthropic');
+  });
+  it('DM38b: no real assistant row after the summary is unknown', () => {
+    expect(libRows.producerOfCopy([{ type: 'assistant', model: 'claude-fixture-4' }, { type: 'user', model: null }], 1)).toBe('unknown');
+    expect(libRows.producerOf([])).toBe('unknown');
   });
 });

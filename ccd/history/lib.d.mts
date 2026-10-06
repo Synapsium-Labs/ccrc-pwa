@@ -217,3 +217,27 @@ export function decideCandidate(i: {
 }): { kind: 'confirm'; by: 'later-tick' } | { kind: 'wait' } | { kind: 'drop'; superseded: boolean };
 export function locationMatches(i: { cwd: string | null; cwdReal: string | null; workdir: Presence<string>; workdirReal: string | null }): boolean;
 export function decideRekey(i: { observedGeneration: string; uuid: string; emptyFamilyUuids: ReadonlySet<string> }): 'merge' | 'none';
+
+// --- Task 8: row extraction (spec §2, §6.1, §6.2)
+export function isStoredRow(row: unknown): boolean;
+export function uuidlessTypeOf(row: unknown): string;
+export function blobBodyOf(row: Record<string, unknown>): unknown;
+export interface EntryColumns {
+  uuid: string; type: string; subtype: string | null; role: string | null; model: string | null;
+  parentUuid: string | null; tsMs: number | null; requestId: string | null; apiBlockIndex: number | null;
+  msgId: string | null; sourceToolUseId: string | null; toolName: string | null; isCompactSummary: 0 | 1;
+}
+export function entryOf(row: Record<string, unknown>, ctx?: { apiBlockIndex?: number | null }): EntryColumns;
+export interface BoundaryFacts {
+  trigger: string | null; headUuid: string | null; anchorUuid: string | null; tailUuid: string | null;
+  allUuids: string[] | null; preTokens: number | null; postTokens: number | null; durationMs: number | null;
+  missing: string[];
+}
+export function boundaryOf(row: unknown): BoundaryFacts | null;
+export function isHistoryCommand(command: string): boolean;
+export function provenanceOf(row: Record<string, unknown>, ctx: { pairedToolUse: null | { name: string; command?: string } }): Provenance;
+export function ftsTextOf(body: unknown, kind: 'entry' | 'sidecar'): string;
+export function variantCauseOf(a: unknown, b: unknown): 'ccd-sanitize' | 'unknown';
+export function backendOf(model: string | null | undefined): Backend;
+export function producerOf(modelsAfterSummary: readonly (string | null)[]): Backend;
+export function producerOfCopy(rows: readonly { type: string; model: string | null }[], summaryIndex: number): Backend;
