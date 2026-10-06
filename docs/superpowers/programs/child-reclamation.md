@@ -44,6 +44,23 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 08:30 — #286 merged (WL wave 3, `77c11245`, 08:28); wave 6 is clear to dispatch; #290's CI is green.**
+  - **WL's notice (mail 3655).**
+    - The CCR-15 spec now carries the one agreed hunk in the "Not changed, deliberately" passage (about :778 to
+      :785).
+    - WL's review 288 (F4) adds one more qualification there: ws-restore also refuses `in-progress` on a `.reaping`
+      breadcrumb that cannot be read. WL carries that to its wave 3b's first commit, and quiet-river says before 3b
+      pushes it.
+    - `ccd/ccd` changed on main in the RECLAIM/EXPIRE region, and `_WS_RCL_ACT`'s flavour extraction is
+      byte-identical for reclaim. So wave 6 merges main and re-stamps.
+  - **#290 is now the second lander.**
+    - Its required checks all pass on `e79b1da7` (CI 37419380049, `test (server)` included).
+    - `git merge-tree` against main `77c11245` conflicts in `README.md` only. `shared/api.ts` and the spec merge
+      cleanly.
+    - The review's fix round merges main (never rebases), resolves README, and runs the second-lander checks agreed
+      in 3622 and 3623.
+    - Review 285 is still reading the pre-merge tip, and the worker holds pushes until it reports.
+  - **Wave 6** now gets its plan and pre-flight against `77c11245`, and its run opens before run 260 closes.
 - **2026-10-06 05:48 — workspace-lifecycle amends one CCR-15 text (mail 3632; answered in 3633).**
   - **The finding.** WL's review 284 found that #286 falsifies the spec's "Not changed, deliberately" sentence
     (about :780). #286 ships ws-reap's `expire-in-progress` refusal and a spawn-path refusal that covers ws-restore.
