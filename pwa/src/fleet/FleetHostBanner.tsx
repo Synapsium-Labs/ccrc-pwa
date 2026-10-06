@@ -24,9 +24,10 @@
 //    `skewRemedy`'s (updateHalt.ts; programme wave 14, R15(c)): while a node
 //    halts the fleet, the halt and its Ack (the halt banner), then what happens
 //    after the ack; while the fleet's auto-install is on and auto would move
-//    every node that has a tag to move to, the console's own move, followed in
-//    Settings; otherwise — and whenever the inventory has not answered, or a
-//    lease could not be read — `ccrc rollout`/`ccrc update` from a terminal.
+//    every lagging node, so that every node ends on one tag (D-4271), the
+//    console's own move, followed in Settings; otherwise — and whenever the
+//    inventory has not answered, or a lease could not be read — `ccrc rollout`/
+//    `ccrc update` from a terminal.
 //    `'unknown'` remains silent, same rule as the two above.
 //  - POOLS UNAVAILABLE (amber): the host is up, but its ccd has no project-pool
 //    capability. No action button: the remedy is an agent-lane deploy.

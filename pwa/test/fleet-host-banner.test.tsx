@@ -274,7 +274,7 @@ describe('FleetHostBanner', () => {
 describe('FleetHostBanner — the skew arm\'s remedy (R15(c))', () => {
   const skewed = health({ connected: true, downSince: null, roster: 'agreed', build: 'skewed' });
   const movable = (role: 'fleet' | 'server', current: BuildInfo): NodeWire =>
-    ({ ...inventoryNode(role, current), caps: ['detach', 'update-gate'], agentOps: role === 'fleet' ? ['update'] : null });
+    ({ ...inventoryNode(role, current), caps: ['detach', 'update-gate'], agentOps: role === 'fleet' ? ['update'] : null, desiredTag: 'v0.0.9' });
   const autoOn: UpdateIntentWire[] = [{ scope: '*', channel: 'stable', pinnedTag: null, auto: 'stable', notify: 'off', setAt: 1, setBy: 'pwa' }];
   const msg = (): string => document.querySelector('.fleet-host-banner-msg')?.textContent ?? '';
 
@@ -321,5 +321,13 @@ describe('FleetHostBanner — the skew arm\'s remedy (R15(c))', () => {
     expect(msg()).toContain(cli);
     rerender(<FleetHostBanner health={skewed} nodes={null} intent={autoOn} />);
     expect(msg(), 'no inventory answer: the console cannot vouch for a move').toContain(cli);
+  });
+
+  it('auto on but the lagging box has no tag to move to (rolled back): the terminal verbs, never auto', () => {
+    const fleet = { ...movable('fleet', FLEET_V7), desiredTag: null };
+    const server = { ...movable('server', SERVER_V9), desiredTag: 'v0.0.10' };
+    render(<FleetHostBanner health={skewed} nodes={[fleet, server]} intent={autoOn} />);
+    expect(msg()).toContain('Run ccrc rollout from the deploying machine, or ccrc update on the lagging box, fleet box first.');
+    expect(msg()).not.toMatch(/auto-install/i);
   });
 });

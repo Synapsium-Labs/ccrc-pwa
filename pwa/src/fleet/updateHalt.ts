@@ -14,7 +14,7 @@
 // move — `carriesDetachCap`, `carriesUpdateGate` (`no-update-gate`), `agentPredatesUpdateOp` — and `stampUnread`
 // (`stamp-unread`, D-4270): the resolver gives a tag to a node whose stamp did not read, which the dispatcher refuses.
 import type { AutoMode, NodeWire, UpdateIntentWire } from '../../../shared/api';
-import { FLEET_SCOPE, isAutoMode, isUpdateChannel } from '../../../shared/api';
+import { FLEET_SCOPE, isAutoMode, isReleaseTag, isUpdateChannel } from '../../../shared/api';
 import {
   agentPredatesUpdateOp, autoPermits, carriesDetachCap, carriesUpdateGate, isHaltingUpdate, stampUnread,
 } from '../../../shared/update-move';
@@ -90,13 +90,23 @@ export function autoWouldMove(n: NodeWire, auto: AutoMode): boolean {
  *   - `halt`: a node halts the fleet, so nothing moves until it is acked. This outranks everything. `then` says what
  *     happens AFTER the ack, by the same rule as the two arms below over the same rows (an ack clears the lease and
  *     the request, never the channel, the caps or the desired tag);
- *   - `auto`: the fleet intent's auto-install is on, at least one node has a tag auto would move it to, and every such
- *     node is one auto would move (`autoWouldMove`), so the console moves the lagging box itself;
+ *   - `auto`: the fleet intent's auto-install is on, at least one node has a tag auto would move it to, every such
+ *     node is one auto would move (`autoWouldMove`), and every node then ENDS on the same release tag (D-4271), so
+ *     the console moves the lagging box itself — and closes the skew;
  *   - `cli`: anything else, including no inventory answer (a box with no control plane, or a first poll still in
  *     flight) and a lease that could not be read. The console cannot vouch for a move then, so the terminal verbs
  *     stand. */
 export type SkewRemedy =
   | { kind: 'halt'; halting: NodeWire[]; then: 'auto' | 'cli' } | { kind: 'auto' } | { kind: 'cli' };
+
+/** Where one node ENDS once auto has done its work: the tag the resolver gave it (auto moves it there), else the
+ *  release tag it runs (it stays). null when neither is a release tag — a stamp that did not read, a hand-placed
+ *  untagged tree, no current at all: the console cannot say where that node ends (D-4271). */
+function endTag(n: NodeWire): string | null {
+  if (typeof n.desiredTag === 'string' && n.desiredTag !== '') return n.desiredTag;
+  const version = n.stampRead === 'ok' && typeof n.current?.version === 'string' ? n.current.version : null;
+  return isReleaseTag(version) ? version : null;
+}
 
 function autoArm(nodes: readonly NodeWire[], intent: readonly UpdateIntentWire[] | null | undefined): 'auto' | 'cli' {
   const fleet = Array.isArray(intent) ? intent.find((i) => i.scope === FLEET_SCOPE) ?? null : null;
@@ -104,7 +114,13 @@ function autoArm(nodes: readonly NodeWire[], intent: readonly UpdateIntentWire[]
   if (fleet === null || !isAutoMode(fleet.auto)) return 'cli';
   const auto = fleet.auto;
   const pending = nodes.filter((n) => typeof n.desiredTag === 'string' && n.desiredTag !== '');
-  return pending.length > 0 && pending.every((n) => autoWouldMove(n, auto)) ? 'auto' : 'cli';
+  if (pending.length === 0 || !pending.every((n) => autoWouldMove(n, auto))) return 'cli';
+  // Every lagging node, not merely every tagged one (D-4271): a box with no tag to move to — rolled back past the
+  // newest release, or hand-placed off the release lane — stays where it is while auto moves the others, so the
+  // skew would widen, not close. `auto` only when every node ends on the SAME release tag.
+  const ends = nodes.map(endTag);
+  const first = ends[0];
+  return typeof first === 'string' && ends.every((e) => e === first) ? 'auto' : 'cli';
 }
 
 export function skewRemedy(

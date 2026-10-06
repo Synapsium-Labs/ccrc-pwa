@@ -139,6 +139,7 @@ describe('autoWouldMove — the dispatcher\'s auto path, from L0', () => {
 
 describe('skewRemedy — what the skew banner advises (R15(c))', () => {
   const movable = [node(), server()];
+  const at = (version: string) => ({ sha: 'c'.repeat(40), ref: 'main', builtAt: '2026-10-05T12:00:00Z', dirty: false, version });
   it('a halt outranks everything, auto on or off, and says what happens after the ack', () => {
     const halted = [node({ update: lease('failed', 'x') }), server()];
     expect(skewRemedy(halted, [intent('channel')])).toEqual({ kind: 'halt', halting: [halted[0]], then: 'auto' });
@@ -150,6 +151,9 @@ describe('skewRemedy — what the skew banner advises (R15(c))', () => {
     const unread = [node({ update: lease('failed', 'x') }), server({ stampRead: 'unreadable' })];
     expect(skewRemedy(unread, [intent('channel')]), 'a stamp that did not read is refused after the ack too (D-4270)')
       .toEqual({ kind: 'halt', halting: [unread[0]], then: 'cli' });
+    const rolledBack = [node({ desiredTag: null, current: at('v0.0.7'), update: lease('reverted') }), server({ desiredTag: 'v0.0.10', current: at('v0.0.9') })];
+    expect(skewRemedy(rolledBack, [intent('channel')]), 'auto would move the leader after the ack, not the lagging box (D-4271)')
+      .toEqual({ kind: 'halt', halting: [rolledBack[0]], then: 'cli' });
   });
 
   it('auto on (stable or channel) and every node movable: the console\'s own move', () => {
@@ -171,12 +175,20 @@ describe('skewRemedy — what the skew banner advises (R15(c))', () => {
     ['no node with a tag to move to (one box hand-installed ahead)', [node({ desiredTag: null }), server({ desiredTag: null })], [intent('channel')]],
     ['a lease that could not be read', [{ ...node(), update: undefined } as unknown as NodeWire, server()], [intent('channel')]],
     ['a node whose stamp did not read', [node({ stampRead: 'unreadable' }), server()], [intent('channel')]],
+    ['the lagging box has no tag to move to (rolled back) while the leader has one', [node({ desiredTag: null, current: at('v0.0.7') }), server({ desiredTag: 'v0.0.10', current: at('v0.0.9') })], [intent('channel')]],
+    ['the lagging box is hand-placed off the release lane (no version, no tag)', [node({ desiredTag: null }), server({ desiredTag: 'v0.0.10', current: at('v0.0.9') })], [intent('channel')]],
+    ['a pin below the leader: the lagging box moves, but not to where the leader is', [node({ desiredTag: 'v0.0.8', current: at('v0.0.7') }), server({ desiredTag: null, current: at('v0.0.9') })], [intent('channel')]],
   ] as const)('the terminal verbs when %s', (_what, nodes, intents) => {
     expect(skewRemedy(nodes as readonly NodeWire[] | null, intents as readonly UpdateIntentWire[])).toEqual({ kind: 'cli' });
   });
 
   it('a converged node is not asked to be movable: only the nodes with a tag to move to are', () => {
-    expect(skewRemedy([node(), server({ desiredTag: null, reachable: false })], [intent('channel')])).toEqual({ kind: 'auto' });
+    expect(skewRemedy([node(), server({ desiredTag: null, reachable: false, current: at('v0.0.9') })], [intent('channel')])).toEqual({ kind: 'auto' });
+  });
+
+  it('auto when the lagging box is tagged and the leader already runs that tag', () => {
+    expect(skewRemedy([node({ desiredTag: 'v0.0.9', current: at('v0.0.7') }), server({ desiredTag: null, current: at('v0.0.9') })], [intent('channel')]))
+      .toEqual({ kind: 'auto' });
   });
 
   it('no intent answer at all reads as auto off', () => {
