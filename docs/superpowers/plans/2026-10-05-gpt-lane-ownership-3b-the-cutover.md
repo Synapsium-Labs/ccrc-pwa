@@ -1476,8 +1476,8 @@ The operator rules each at plan review. B1 records each ruling with the census i
   | A2-M12 | … and only when ccrc's own is enabled | the same condition → `if _codex_usage_enabled "$f"; then` | 1: the withheld-only second-writer case |
   | A2-M13 | the reader is in the loaded guard | drop `_codex_usage_enabled_ids ` from the guard's list | 1: the `it.each` row `_codex_usage_enabled_ids not loaded: …` |
   | A2-M14 | the unlistable WARN is recorded, never skipped | in `_dr_codex_usage_surplus_rows`, `if [ "$1" -eq 1 ]; then` → `if false; then` | 2: the unlistable rows case and the unlistable end-to-end case (a PASS with nothing recorded) |
-| A2-M15 | uninstall counts a stop only when re-measured | `ccd/ccrc`, in `_uninst_codex_usage`, drop ` && ! _codex_usage_enabled "$u"` | 1: the Plan 3b uninstall keep-link case |
-| A2-M16 | an unlistable set is never read as none in the left-state WARN (fix round 1) | in the left-state loop, `if [ "$surplus_rc" -eq 1 ]; then` → `if false; then` | 1: the unlistable left-state case |
+  | A2-M15 | uninstall counts a stop only when re-measured | `ccd/ccrc`, in `_uninst_codex_usage`, drop ` && ! _codex_usage_enabled "$u"` | 1: the Plan 3b uninstall keep-link case |
+  | A2-M16 | an unlistable set is never read as none in the left-state WARN (fix round 1) | in the left-state loop, `if [ "$surplus_rc" -eq 1 ]; then` → `if false; then` | 1: the unlistable left-state case |
 
   Plan 3a's doctor row M14 (`_dr_cx_member "$n" … || left+=("$n")` → `:`) must still red the re-aimed flip-back case. Record it as `a2-mut-3aM14`.
 
@@ -2850,6 +2850,14 @@ The operator rules each at plan review. B1 records each ruling with the census i
   | M7 | (c) the new `if/else/fi` → the negated spelling: `if ! { IFS= read -r w \|\| :; } 2>/dev/null < "$wf"; then` + the two unasked lines + `continue` + `fi`, then `[ "$w" = "$id" ] \|\| continue` | 1: wrapper-unreadable (bash 5.2's negated redirection failure takes the readable branch, measured) |
   | M8 | (c) `if { IFS= read -r w \|\| :; } 2>/dev/null < "$wf"; then` → `if IFS= read -r w 2>/dev/null < "$wf"; then` (keyed on `read`'s status) | 1: wrapper-nonl (ccd's newline-less wrapper reads as unanswered, not live) |
   | M9 | (c) the new `if/else/fi` → the base's `{ IFS= read -r w < "$wf"; } 2>/dev/null` then `[ "$w" = "$id" ] \|\| continue` | 1: wrapper-unreadable |
+  | M10 | (c) `if { IFS= read -r w \|\| :; } 2>/dev/null < "$wf"; then` → `if { IFS= read -r w \|\| :; } < "$wf" 2>/dev/null; then` (the redirections swapped, so bash's own open-failure line reaches stderr) | 1 (measured): wrapper-unreadable only, through its `stderr` assertion |
+  | M11 | (b) `{ [ -e "$root" ] \|\| [ -L "$root" ]; } && {` → `{ [ -e "$root" ]; } && {` | 1 (measured): the dangling-symlink case only |
+  | M12 | (b) drop `[ ! -r "$root" ] \|\| ` from the unlistable test | 1 (measured): the mode-0300 directory case only |
+  | M13 | (b) drop ` \|\| [ ! -x "$root" ]` from the unlistable test | 1 (measured): the mode-0600 directory case only |
+  | M14 | (b) drop `[ ! -d "$root" ] \|\| ` from the unlistable test | 1 (measured): the mode-0755 regular-file case only |
+  | M15 | (a) the tree-absent arm also does `uncompared+=("$name")` | 1 (measured): nocmp-notree only, through its anchored WARN assertion |
+
+  Rows M10-M15 were added at review, one for each case Task A5's review added or tightened. Every one runs with the filter `-t 'Plan 3b A-5'`, and each reds exactly its own case. The mode-0300 and mode-0600 cases skip as root.
 
   Under every row, the control cases outside the row's Red column stay green.
 
@@ -6500,6 +6508,7 @@ Per ruling A-8, these stay tickets. This plan creates none. Each is listed for t
 - **`pwa/src/fleet/SwapSheet.tsx`'s comment says manual swaps are pool-unconstrained.** That contradicts `ccd/ccd`'s `cmd_swap` header, which states that a manual swap is pool-constrained like an automatic one. The comment is stale prose, and a reader of the PWA gets the wrong model.
 - **The PWA has no per-node update-intent control.** The Settings screen hardcodes `FLEET_SCOPE`, so a per-box pause, which the server and store fully support, is API-only (R-O6).
 - **The FIFO class outside the lane files (ruling R7).** `deploy/account-op.mjs` opens the roster by name with its own read, and `deploy/models-op.mjs` reads the providers whitelist, an `--endpoints` file and the LiteLLM template with bare `readFileSync`. A6 leaves both: they are shipped-tree or argv files, not lane files.
+- **The bash library's by-name `jq` roster reads can block on a FIFO at `accounts.json`.** `_codex_lanes`, `_codex_row`, `cmd_models`' reserved-word guard, and so `_check_codex` and `_fix_codex` hand the roster's path to `jq` by name, and `jq` blocks on a FIFO (measured: `timeout 3 jq … <fifo>` exits 124). A6 type-tests only the `deploy/models-op.mjs` reads and `shared/modelenv.mjs`' settings reads. This predates Plan 3b.
 - **A `_models_litellm` that exits 0 with an empty body reads `litellm: "unchanged"`** (ruling R17, A4's residue). No path does that today. B4's render-mtime cross-check is the independent signal.
 
 ## Carry-forward to Plan 4
