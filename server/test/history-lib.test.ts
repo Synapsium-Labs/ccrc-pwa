@@ -1497,6 +1497,15 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     const out = libRedact.redactField(`\x1b[32m${tok}\x1b[0m and ${tok.slice(0, 7)}\x1b[1m${tok.slice(7)}`, idx);
     expect(out).toBe(`${M} and ${M}`);
   });
+  it('a redaction mark after a bare ESC survives the joined belt whole (redaction can create a CSI shape)', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    const split = ['s', 'k-ant', '\x1b[m', '-api03-', 'x'.repeat(40)].join('');
+    // the first redaction leaves `ESC` + the mark, which reads as `ESC[r...` to a CSI match over the redacted text
+    const out = libRedact.redactField(`\x1b${tok} \x1b[31m${split}`, idx);
+    expect(out).toBe(`\x1b${M} ${M}`);
+    expect(out.split(M)).toHaveLength(3);
+  });
   it('a field with no CSI sequence takes the per-fragment path alone (a bare ESC is not a CSI)', () => {
     const tok = rndHex(32);
     const idx = idxOf([tok]);

@@ -1512,8 +1512,9 @@ function redactLayers(segment, idx) {
  *  A token coloured in PART (`grep --color=always`, a word-diff, a
  *  highlighter) is split across fragments, and no layer sees it whole. So a
  *  field that holds a CSI sequence gets a second pass: the per-fragment result
- *  `A`, its CSI sequences removed (`P`), run through the layers once more
- *  (`C`). `C === P` means the joined text holds nothing new, and `A` is
+ *  `A`, its CSI sequences removed (`P`, accumulated from the fragments
+ *  themselves, never by re-matching CSI in `A`), run through the layers once
+ *  more (`C`). `C === P` means the joined text holds nothing new, and `A` is
  *  returned with its colours; otherwise `C` is returned, the sequences dropped
  *  from that one field's output (presentation only, the stored blob stays
  *  verbatim) and the result the union of both passes' redactions. A field
@@ -1521,17 +1522,23 @@ function redactLayers(segment, idx) {
  *  D-4307 (history-redaction-csi-joined-belt) */
 export function redactField(text, idx) {
   let out = '';
+  let plain = '';
   let last = 0;
   let sawCsi = false;
   ANSI_CSI_RE.lastIndex = 0;
   for (let m = ANSI_CSI_RE.exec(text); m !== null; m = ANSI_CSI_RE.exec(text)) {
-    out += redactRun(text.slice(last, m.index), idx) + m[0];
+    const frag = redactRun(text.slice(last, m.index), idx);
+    out += frag + m[0];
+    plain += frag;
     last = m.index + m[0].length;
     sawCsi = true;
   }
-  const perFragment = out + redactRun(text.slice(last), idx);
+  const tail = redactRun(text.slice(last), idx);
+  const perFragment = out + tail;
   if (!sawCsi) return perFragment;
-  const plain = perFragment.replace(ANSI_CSI_RE, '');
+  // `plain` is accumulated from the fragments, never rebuilt by re-matching CSI in `perFragment`: a redaction can
+  // create a CSI shape (a bare ESC before `[redacted]` reads as `ESC[r...`), and a re-strip would eat the mark.
+  plain += tail;
   const joined = redactRun(plain, idx);
   return joined === plain ? perFragment : joined;
 }
