@@ -32,7 +32,12 @@
 // noted nowhere either: it is no refusal of the row), so for those this
 // sentence is the only place the operator learns why. A readable reply that requested nothing
 // at all is said the same way (MOVE_NOTHING_REQUESTED_TEXT); a skip of a node
-// the sheet never listed is the plan agreeing with the server, and is not said.
+// the sheet never listed is the plan agreeing with the server, and is not said
+// — EXCEPT `halted` (programme wave 14, R15(b); D-4269). A halting row is a
+// fact about the whole fleet, not that node: every request the same reply wrote
+// waits behind it until the ack. A failed row already at the tag is never named
+// by the plan, so before this wave the sheet closed on that 202 as if the move
+// had started.
 //
 // A fleet-wide rollback is one single-node request per node, in order,
 // stopping at the first refusal (D-3390); the
@@ -107,14 +112,16 @@ export async function sendMove(
 }
 
 /** The answers' skips of nodes this plan NAMED — the server refused them for a reason the plan could not preview.
- *  A skip of a node the plan never listed is the plan agreeing with the server, and is not said. */
+ *  A skip of a node the plan never listed is the plan agreeing with the server, and is not said, unless it is
+ *  `halted`: that node holds every other request until it is acked (D-4269), so it is named through the plan's
+ *  inventory (moveLabel). */
 export function moveSkippedText(answers: ReadonlyArray<MoveRequestAnswer | 'unreadable'>, plan: PlannedMove): string | null {
   const named = new Map(plan.nodes.map((n) => [n.nodeId, n.label] as const));
   const said: string[] = [];
   for (const a of answers) {
     if (a === 'unreadable' || !Array.isArray(a.skipped)) continue;
     for (const s of a.skipped) {
-      const label = named.get(s.nodeId);
+      const label = named.get(s.nodeId) ?? (s.why === 'halted' ? moveLabel(plan, s.nodeId) : undefined);
       if (label !== undefined) said.push(`${label}: ${moveSkipText(s.why)}`);
     }
   }
