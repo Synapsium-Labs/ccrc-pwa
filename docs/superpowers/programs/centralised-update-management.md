@@ -34,7 +34,7 @@ numbers; the spec wave each one implements is named beside it.
 | 10 | — (R12, script half) | `deploy/verify-service.sh` tells a deliberate supervisor stop (settled `inactive` + `.stopped` stamp or a purged row) from a crash, so a serial sweep verify stops failing healthy updates; tests on fixture HOMEs; a cross-version case against `main`'s sweep | fleet-first (the move INTO it runs the old sweep with the new script) | — | **MERGED** `a6daa9cf` (PR #247, 2026-10-05 03:19:04 UTC, run 261 done; released as v0.0.80 at 03:19:51). The merged tree is byte-identical to the tested tip, `main` was unmoved at `b40f4145`, and every Linux leg is green. Review 263 met no bar class; residue R13. It reaches neither box until the operator acks the failed v0.0.78 fleet row. The first move after the ack goes straight to the newest release, so it runs v0.0.78's sweep with this script. Was: **Wave-done** 2026-10-05 02:18 UTC (mail 3446) at `a9a1cef8` (PR #247, 3/3 items; reserve number 3950 spent, defined in the plan on the worker branch). Review run 263 was dispatched to `ccrc-pwa-clear-meadow` at 02:42:59 UTC, under the bar committed before it. Was: **DISPATCHED** 2026-10-05 00:05 UTC to `ccrc-pwa-keen-harbor` (run 261). Was: **PLANNED** 2026-10-04 23:59 UTC (run 261); plan `e60d7174` (D-3946..D-3949 defined; a five-number reserve, numbers 3950 to 3954, named in the brief). Was: **SCOPED** 22:56 UTC (`wf_790a5b99-8ca`); runs beside wave 9, no shared file. |
 | 11 | — (R12, sweep half) | `_upd_sweep`: one shared verify window by concurrent per-unit calls, the die's report-ownership guard and wording, no die in a subshell, the Darwin arm | fleet-first | — | **MERGED** `d2bac7ae` (PR #287, run 270 done) 2026-10-06 02:37 UTC, released as v0.0.92 (dev). The merged tree is byte-identical to the tested tip `33f4eaaa` (`main` unmoved at `d12b5aba`, every Linux leg green). Review 281 met none of the bar's eight classes; its four findings and D3's macOS red go to R19, before stable. Was: **IN REVIEW** 2026-10-06 01:29 UTC: wave-done at `33f4eaaa`, PR #287, `main` `d12b5aba` merged in as `9b3ba1fa`; reserve numbers 3987 and 3988 spent (bare: their definitions are on the worker branch); the bar is committed in the 01:29 entry; review run 281 dispatched 01:32 UTC to `ccrc-pwa-amber-cove` (the held-out panel plus five wave lenses). Was: **DISPATCHED** 2026-10-05 16:04 UTC to `ccrc-pwa-clear-meadow` (run 270). Plan `966ffe9f`, 9 tasks; it defines D-3972 to D-3984, and the five-number reserve, numbers 3987 to 3991, is named in the brief. Was: **Run 270 open, planned** 2026-10-05 11:10 UTC, opened before run 223 closed so the programme keeps an open run; to plan, with R13, R14 and R14(f) first. Was: **SCOPED** 2026-10-04 22:56 UTC; after wave 9 merges (`ccd/ccrc`). The 10-02 wave-10 deferrals move to wave 12. |
 | 12 | — (wave 11's test and prose residue) | before stable: R19 (D3's GNU-only shim, F1's unpinnable filter, F2's W20 prose, F3's NEW+S10 pin, F4's S0 naming); R18(c)–(e) prose. No shipped runtime code changes | none (tests and docs) | — | **MERGED** `9221416a` (PR #291, run 282 done) 2026-10-06 06:40 UTC. The merged tree `a6c85f7c` equals `merge-tree`'s, and every branch file is byte-identical to the tested tip `7b0a5454` (`main` had moved by docs only, to `21f536a5`). Review 286 met none of the bar's seven classes; `server 4/5`'s cleanup-hook timeout re-ran green. Was: **IN REVIEW** 2026-10-06 05:57 UTC: wave-done at `7b0a5454`, PR #291; reserve number 4072 spent (bare: defined on the worker branch); the bar is in the 05:57 entry; review run 286 dispatched 05:59 UTC to `ccrc-pwa-warm-ridge` (the held-out panel plus two lenses: pins and fixtures, the truth of the prose). Was: **DISPATCHED** 2026-10-06 04:37 UTC to `ccrc-pwa-soft-delta` (run 282; 5 items; route Opus·high / Sonnet / workflow off / compact 40). Was: **Run 282 open, planned** 2026-10-06 02:38 UTC, opened before run 270 closed. Deviation block 4068 to 4087 (bare until defined). Scoped 02:45 UTC; plan `04c977cb` + `bc495fed` (drafted by workflow `wf_a11d694f-c70`: prototype, attack, revise; readings ruled 04:35). 5 tasks; it defines D-4068 to D-4071, and the reserve is numbers 4072 to 4076 (Reading 8's ruling spends 4072). |
-| 13 | — (security + CI) | R16: the box token leaves `curl`'s argv in `ccd/ccrc-api` and `deploy/notify.sh` (`-K -` with a stdin `header = …` config, the idiom `ccd-pool-sync` and `ccd-update-sync` ship), and the test curl front admits exactly that; R20: the CI cleanup-hook timeout and wave 12's As-built bullet | fleet-first (the client and the hook reach every home through the install spine) | — | **DISPATCHED** 2026-10-06 10:01 UTC to `ccrc-pwa-still-ridge` (run 287; 6 items; route Opus·high / Sonnet / workflow off / compact 40; held 20 min by the fleet-wide daily cap, 24 of 24). Was: **Run 287 open, planned** 2026-10-06 06:41 UTC; re-scoped 07:07 UTC to R16 + R20 (scoping workflow `wf_286a790a-7fa`). Deviation block 4094 to 4113 (bare until defined). Plan `31f24eac` (workflow `wf_3aff815b-3ef`; readings ruled 09:30): 6 tasks; it defines D-4094 and D-4095, and the reserve is numbers 4096 to 4100 (Reading 4 spends 4096). |
+| 13 | — (security + CI) | R16: the box token leaves `curl`'s argv in `ccd/ccrc-api` and `deploy/notify.sh` (`-K -` with a stdin `header = …` config, the idiom `ccd-pool-sync` and `ccd-update-sync` ship), and the test curl front admits exactly that; R20: the CI cleanup-hook timeout and wave 12's As-built bullet | fleet-first (the client and the hook reach every home through the install spine) | — | **IN REVIEW** 2026-10-06 11:34 UTC: wave-done at `ee5dd409`, PR #295; reserve number 4096 spent (bare: defined on the worker branch); the bar is in the 11:34 entry. Was: **DISPATCHED** 2026-10-06 10:01 UTC to `ccrc-pwa-still-ridge` (run 287; 6 items; route Opus·high / Sonnet / workflow off / compact 40; held 20 min by the fleet-wide daily cap, 24 of 24). Was: **Run 287 open, planned** 2026-10-06 06:41 UTC; re-scoped 07:07 UTC to R16 + R20 (scoping workflow `wf_286a790a-7fa`). Deviation block 4094 to 4113 (bare until defined). Plan `31f24eac` (workflow `wf_3aff815b-3ef`; readings ruled 09:30): 6 tasks; it defines D-4094 and D-4095, and the reserve is numbers 4096 to 4100 (Reading 4 spends 4096). |
 | 14 | — (R15, PWA) | the home screen shows a halt and offers Ack in place; **Update all** says why it skipped; the skew banner drops the stale `ccrc rollout` advice | server (PWA bundle) | — | to plan; product shape asked of the operator (07:07 entry) |
 | 15 | — (`ccd/ccd`) | `--no-reload` for `_svc_enable`, alone | fleet-first | — | to plan (claim 1043 ended, so `ccd/ccd` is free) |
 | 16 | — (sweep accounting) | `ccrc-api` placed by the install spine (wave 13's Reading 1(a): a `_inst_bins` line, its census pin, README's sentence); item 3's false "is FAILED" warning, the unit `activating` before the restart (Reading 9), the shipped stale-pid comment, the pgid clause's comment | fleet-first, an attended first move | — | gated on claim 1046 (`ccd/ccrc`, README) and on the operator's Reading 9 ruling |
@@ -2153,6 +2153,50 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - **Reading 7:** the JSON body that still rides argv goes to residue as R21.
     - **Reading 9:** a near-full CI selection is accepted.
     - Readings 3, 5 and 8 stand as written.
+
+- **2026-10-06 11:34 UTC: wave 13's wave-done (mail 3668), re-measured, and the bar committed BEFORE its review.**
+  - **Evidence:** copied on receipt into the coordinator's worktree under `.superpowers/w13-evidence/`.
+  - **The claim:** PR #295 at `ee5dd409`, re-measured.
+    - It is open and not draft. Its head equals the fingerprint and the local tip.
+    - It has 7 commits, each with the noreply author and committer. They include a merge of `main` at `26e3318b`, as
+      the plan's Task 6 asked.
+    - It changes 14 files (+1783/−24), exactly File structure's. The only shipped ones are `ccd/ccrc-api` and
+      `deploy/notify.sh`.
+  - **`main` has moved since** by `d5f95837` (#292, GPT lane Plan 3b Part A, code) and `4e7cf095` (#285, docs).
+    - Neither touches any of the 14 files, and `merge-tree` is clean.
+    - #292's `ccd/ccrc` cites `deploy/notify.sh:29`, and that line is byte-identical at the tip.
+  - **What the worker reports:**
+    - `suite: unrun`. The 30-file gate was green on first runs, including `ccrc-update` (20 + 169 + 313 = 502).
+    - All 33 mutation rows matched their listed sets.
+    - **Header-arrival proofs** used real curl against a real listener: a GET, a `--json <file>` body, a `--json -`
+      body, hostile caller stdin, a drive-through behind the front, and the armed feed route. In every case the header
+      arrived and the token was on no argv.
+    - The reviewer's `/proc` scan found 0 hits over 8 call shapes, where the baseline client gave 10.
+    - **R20(a):** the `afterAll` went from 648 homes (2.48 GB, 3.8 s) to 0. The largest per-test cleanup took 95 ms.
+    - Reserve number 4096 is spent on `set +x`.
+    - **D-4094 is unchanged:** this fleet box's client is a regular file, so it keeps leaking until the operator
+      relinks it.
+  - **Bar for the merge.** The held-out review (clause 14) must find NO confirmed finding of these classes:
+    1. the token reaches argv, stderr, a file, a log or the transcript on any path of either sender: success,
+       refusal, transport failure, `--json -`, or `ccrc-api` under an inherited xtrace. The pre-existing exported-`TOKEN`
+       environ case and `notify.sh`'s xtrace, both ruled or recorded, are excepted;
+    2. any `ccrc-api` verb family fails to deliver the header or the body to a real listener, or `notify.sh` with a
+       token fails to deliver the header, or a caller's stdin reaches curl's config;
+    3. the test curl front admits a config or option that can move the connection off the checked URL, read a file, or
+       carry a non-header directive, or now passes a previously refused variant. The pre-existing argv `-H @file` and
+       `-w @file` are wave 19's;
+    4. a new pin that cannot red when its guard is mutated;
+    5. R20(a) leaves a home behind at the end of a file, removes another test's home, or widens the 20 s timeout;
+    6. a test reads a real token, or reads or writes outside its fixture HOME, or a real tool can run;
+    7. an edit outside File structure, including any file claim 1046 holds;
+    8. a wrong deviation number: anything defined beyond D-4094, D-4095 and reserve number 4096, or 4097 to 4113
+       written with the prefix.
+
+    Also, every Linux leg of full run 37456924516 must be green. On the macOS legs, every red must be named and owned,
+    and none may be this branch's. A sender's `curl` on the macOS legs counts as a Linux-class requirement: BSD curl
+    must accept `-K -`.
+  - **The rounds:** one bar-class finding gets one fix round, then a scoped review. Coverage and prose findings are
+    fixed in that round if one runs, otherwise they become residue.
 
 ## Carried constraints
 
