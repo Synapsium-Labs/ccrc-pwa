@@ -13,9 +13,10 @@ subagent metadata — measured per installed binary, so the delegation broker (s
   presses Enter, which takes the dialog's default option, once its text is on the pane, and notes
   `dialog answered: <text>`; a dialog whose text does not appear within the step's timeout is a failure note,
   `answerDialog: no dialog: <text>` (nothing is pressed), and the cell builds `unmeasured`. `interrupt-exit` uses it
-  after `/exit`: at Claude Code's "Background work is running" dialog the default is "Exit and stop tasks". What is
-  measured after it: the session ends (SessionEnd `prompt_input_exit`), the agent emits no SubagentStop, and its tree
-  is left, locked.
+  after `/exit`: at Claude Code's "Background work is running" dialog the default is "Exit and stop tasks", as read
+  from the pane on 2.1.280 and 2.1.289 only (the note names the dialog, never the option). What is measured after
+  it: the session ends (SessionEnd `prompt_input_exit`), the agent emits no SubagentStop, and its tree is left,
+  locked.
 - `sanitize.mjs` — raw run bundles → `server/test/fixtures/delegation/<version>/<scenario>.json`, fail-closed on any
   residue of a real path, user or host.
 - `build-matrix.mjs` — the fixtures → `server/test/fixtures/delegation/matrix.json` (derived; never hand-edited).
