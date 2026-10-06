@@ -1,0 +1,16 @@
+{
+  "scenario": "agent-iso-bg", "covers": ["Q3", "Q6"],
+  "steps": [
+    {"waitReady": 60}, {"type": "dlg agent-iso-bg"}, {"keys": ["Enter"]},
+    {"waitLabels": ["sub-done"], "timeoutS": 150}
+  ],
+  "settleS": 20,
+  "entries": [
+    {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg agent-iso-bg"},
+     "tool_use": {"nameAny": ["Agent", "Task"], "input": {"description": "dlg iso bg", "prompt": "dlg-sub-iso-bg", "subagent_type": "general-purpose", "run_in_background": true, "isolation": "worktree"}}},
+    {"label": "sub-bash", "match": {"kind": "tools", "lastUser": "dlg-sub-iso-bg"},
+     "tool_use": {"name": "Bash", "input": {"command": "printf 'x\\n' > bg.txt && git add bg.txt && git commit -qm dlg-bg && echo DLG-ACK-iso-bg", "description": "commit a change"}}},
+    {"label": "sub-done", "match": {"kind": "tools", "lastUser": "DLG-ACK-iso-bg"}, "text": "DLG-SUB-DONE-iso-bg"}
+  ],
+  "default": {"text": "DLG-WAIT", "repeat": true}
+}

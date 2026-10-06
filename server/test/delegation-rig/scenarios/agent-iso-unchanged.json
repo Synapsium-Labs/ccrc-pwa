@@ -1,0 +1,15 @@
+{
+  "scenario": "agent-iso-unchanged", "covers": ["Q2", "Q3", "Q6"],
+  "steps": [
+    {"waitReady": 60}, {"type": "dlg agent-iso-unchanged"}, {"keys": ["Enter"]},
+    {"waitLabels": ["sub-done", "main-done"], "timeoutS": 120}
+  ],
+  "settleS": 10,
+  "entries": [
+    {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg agent-iso-unchanged"},
+     "tool_use": {"nameAny": ["Agent", "Task"], "input": {"description": "dlg iso unchanged", "prompt": "dlg-sub-iso-u", "subagent_type": "general-purpose", "run_in_background": false, "isolation": "worktree"}}},
+    {"label": "sub-done", "match": {"kind": "tools", "lastUser": "dlg-sub-iso-u"}, "text": "DLG-SUB-DONE-iso-u"},
+    {"label": "main-done", "match": {"kind": "tools", "lastUser": "DLG-SUB-DONE-iso-u|^$"}, "text": "DLG-DONE"}
+  ],
+  "default": {"text": "DLG-WAIT", "repeat": true}
+}

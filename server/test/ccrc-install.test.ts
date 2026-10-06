@@ -8198,7 +8198,16 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  `origin/main` into native Docs W1, when doctor gained its `docs` check, by the same
  *  case on a disposable copy of the merged tree: the three maps each gained
  *  `"docs": "PASS"` and nothing else moved (`codex: SKIP`, which the measurement
- *  also prints, stays out: the live cases spread it over this golden). It is a golden: nothing re-measures
+ *  also prints, stays out: the live cases spread it over this golden). RE-MEASURED
+ *  again when doctor gained its `model-default` check, the same way, on a disposable
+ *  `git archive` copy of `36438851d`'s tree (the commit that added the check,
+ *  on `b3b5a73ed`): the three maps each gained `"model-default": "PASS"` and
+ *  nothing else moved. RE-MEASURED once more on that branch's merge of
+ *  `origin/main` (`b27fabc15`), which carries both checks, by the same case on a
+ *  disposable `git archive` copy of the merged tree (`git write-tree` of the
+ *  resolved index): exactly `origin/main`'s three maps plus `"model-default":
+ *  "PASS"` in each — both codes 0, both refreshes equal, `codex` `SKIP` in all
+ *  three. It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
  *  base, never hand-edited (it held on the final fix wave's merge of
@@ -8238,6 +8247,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "jq_regex": "PASS",
         "linger": "PASS",
         "memory": "PASS",
+        "model-default": "PASS",
         "models": "PASS",
         "name": "SKIP",
         "node": "PASS",
@@ -8285,6 +8295,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "jq_regex": "PASS",
         "linger": "PASS",
         "memory": "PASS",
+        "model-default": "PASS",
         "models": "PASS",
         "name": "SKIP",
         "node": "PASS",
@@ -8402,6 +8413,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "jq_regex": "PASS",
       "linger": "PASS",
       "memory": "PASS",
+      "model-default": "PASS",
       "models": "PASS",
       "name": "SKIP",
       "node": "PASS",

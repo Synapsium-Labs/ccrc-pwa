@@ -1,0 +1,17 @@
+{
+  "scenario": "agent-plain", "covers": ["Q2", "Q4"],
+  "steps": [
+    {"waitReady": 60}, {"type": "dlg agent-plain"}, {"keys": ["Enter"]},
+    {"waitLabels": ["sub-done", "main-done"], "timeoutS": 120}
+  ],
+  "settleS": 8,
+  "entries": [
+    {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg agent-plain"},
+     "tool_use": {"nameAny": ["Agent", "Task"], "input": {"description": "dlg plain", "prompt": "dlg-sub-plain", "subagent_type": "general-purpose", "run_in_background": false}}},
+    {"label": "sub-bash", "match": {"kind": "tools", "lastUser": "dlg-sub-plain"},
+     "tool_use": {"name": "Bash", "input": {"command": "echo DLG-ACK-plain", "description": "ack"}}},
+    {"label": "sub-done", "match": {"kind": "tools", "lastUser": "DLG-ACK-plain"}, "text": "DLG-SUB-DONE-plain"},
+    {"label": "main-done", "match": {"kind": "tools", "lastUser": "DLG-SUB-DONE-plain|^$"}, "text": "DLG-DONE"}
+  ],
+  "default": {"text": "DLG-WAIT", "repeat": true}
+}

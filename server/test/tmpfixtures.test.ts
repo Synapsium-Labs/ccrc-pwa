@@ -126,9 +126,21 @@ describe('removeTmpFixturesEachTest (R20a)', () => {
     expect(existsSync(fromBeforeAll), 'a home made in a beforeAll was removed after one test').toBe(true);
   });
 
-  it('ccrc-update.test.ts opts in, at its top level, outside any comment', () => {
-    const src = readFileSync(path.join(__dirname, 'ccrc-update.test.ts'), 'utf8').split('\n');
+  it.each(['ccrc-update.test.ts', 'ccrc-install-graphify.test.ts'])('%s opts in, at its top level, outside any comment', (file) => {
+    const src = readFileSync(path.join(__dirname, file), 'utf8').split('\n');
     expect(src.filter((l) => l === 'removeTmpFixturesEachTest();'),
-      'ccrc-update.test.ts must call removeTmpFixturesEachTest() once, unindented').toHaveLength(1);
+      `${file} must call removeTmpFixturesEachTest() once, unindented`).toHaveLength(1);
+  });
+
+  // ONE MARK PER REGISTRATION, so an opted-in file must never run its tests concurrently: a second test starting
+  // while the first is open would move the mark, and whichever ended first would remove from the other's mark on —
+  // a running test's home included. Refused here, by reading the file, rather than at run time: a runtime refusal
+  // keyed on a still-open mark would also fire after any describe-level afterEach threw (vitest then skips the root
+  // afterEach that closes the mark) and turn one red into a red for every later test in the file.
+  it.each(['ccrc-update.test.ts', 'ccrc-install-graphify.test.ts'])('%s runs no test concurrently', (file) => {
+    const code = readFileSync(path.join(__dirname, file), 'utf8').split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+    expect(code.filter((l) => /\.concurrent\b|concurrent:\s*true/.test(l)),
+      `${file} opts in to removeTmpFixturesEachTest(), whose one mark cannot serve overlapping tests`).toEqual([]);
   });
 });
