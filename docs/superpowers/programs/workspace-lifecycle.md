@@ -458,7 +458,8 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
       probe-macos's platform-hazards red is main's.
     - **P4 → 3965:** the CCR-15 texts this wave falsifies are amended now, per spec §6: ws-reap's resume fork, and
       CCR-15's "Not changed, deliberately" sentence (it now names ws-reap's `expire-in-progress` and ws-restore's
-      refusal). Child reclamation's coordinator was told in mail 3632.
+      refusal). Child reclamation's coordinator was told in mail 3632 and agreed (3633). Their #290 edits that
+      spec's §1 and §5.5 only, so this edit stays inside the :780 passage; a wider edit asks first (mail 3634).
     - **P1–P3, P5–P8:** text and test corrections. P3 adds the young re-archive case. P6 writes Task 9A's as-built
       section with review 284's rows M08, M09, M14 and M26. P7 names the 20 s lsof bound in 3962. P8 records
       caps-token-shape's repair in 3961.
