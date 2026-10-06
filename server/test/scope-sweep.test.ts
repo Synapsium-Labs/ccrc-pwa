@@ -557,7 +557,7 @@ describe('a value it cannot measure skips that scope for the tick — the old li
     expect(stops()).toEqual([]);
   });
 
-  // ── Task 3's review (D-4092): a stop kills the scope's whole cgroup SUBTREE, and a scope's directory is user-writable ──
+  // ── Task 3's review (scope-sweep-child-cgroups-are-unmeasurable): a stop kills the scope's whole cgroup SUBTREE, and a scope's directory is user-writable ──
 
   const listener = (): void => {   // a double-forked TCP server (ppid 1), listening: the thing a stop must not kill unseen
     fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), '   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 424242 1 0000000000000000 100 0 0 10 0\n');
@@ -574,6 +574,17 @@ describe('a value it cannot measure skips that scope for the tick — the old li
     listener(); nested('nested');
     const v = companion();
     carried(seenLines[0]!, { companion: v });
+  });
+
+  // A scope's owner can chmod its own cgroup directory: cgroup.procs stays readable (the file's own mode), but a glob
+  // of the directory sees nothing, which would read as "no child cgroup". A root test run bypasses mode bits.
+  it.skipIf(process.getuid?.() === 0)('a cgroup directory the sweep cannot list (mode 0300, cgroup.procs still readable) hides a child cgroup: unmeasurable', () => {
+    one({ pane: 3001, procs: [3001] });
+    listener(); nested('nested');
+    const dir = path.join(fx.cg, cgOf(unitName(1)));
+    const v = companion();
+    fs.chmodSync(dir, 0o300);
+    try { carried(seenLines[0]!, { companion: v }); } finally { fs.chmodSync(dir, 0o755); }
   });
 
   it('a child cgroup named like a dotfile is a child cgroup too', () => {

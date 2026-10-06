@@ -61,7 +61,7 @@
 #   the processes in it (`mkdir` and move itself in), and every predicate above
 #   reads `cgroup.procs` of the scope ITSELF — a listening server in a child
 #   cgroup is seen by none of them. Fail closed, never walk-and-proceed
-#   (D-4092). Likewise a record's `first=`/`cpu0=` outside the bounds this
+#   (scope-sweep-child-cgroups-are-unmeasurable). Likewise a record's `first=`/`cpu0=` outside the bounds this
 #   sweep writes (first: 1-16 digits, no leading zero; cpu0: 0 or 1-20 digits)
 #   is not believed — a past-2^64 value wraps in bash arithmetic and a leading
 #   zero aborts it — so the clock starts now, as for an absent line; a
