@@ -9248,7 +9248,7 @@ describe('ccrc doctor: docs', () => {
     ['not JSON', '#!/bin/sh\necho not json\n'],
     ['nothing at all', '#!/bin/sh\nexit 0\n'],
     ['two answers', `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(DOCS_INDEX_READY)}' '${JSON.stringify(DOCS_INDEX_READY)}'\n`],
-    ['wire v 2', docsIndexStubScript('{"v":2}')],
+    ['wire v 2', docsIndexStubScript(JSON.stringify({ ...DOCS_INDEX_READY, v: 2 }))],
     ['another verb', docsIndexStubScript(JSON.stringify({ ...DOCS_INDEX_READY, verb: 'docs-tree' }))],
     ['ok:true with no projects list', docsIndexStubScript('{"v":1,"verb":"docs-index","ok":true,"elapsedMs":0}')],
     ['ok neither true nor false', docsIndexStubScript('{"v":1,"verb":"docs-index","ok":"yes","elapsedMs":0}')],
