@@ -635,7 +635,8 @@ describe('the keep reads G as git reads it (spec §5.5)', () => {
 describe('containment drops an inherited GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE (spec §5.5)', () => {
   const SHOW = 'bash -c \'printf "%s|%s|%s" "${GIT_DIR-unset}" "${GIT_WORK_TREE-unset}" "${GIT_INDEX_FILE-unset}"\'';
   /** Every other variable that selects a repository, its objects, refs or history: `git rev-parse
-   *  --local-env-vars` on git 2.43 less the GIT_CONFIG_* entries, plus GIT_NAMESPACE. */
+   *  --local-env-vars` on git 2.43 less the GIT_CONFIG_* entries (`ccd-child-reclaim-config-env.test.ts`
+   *  pins those three, spec §5.6), plus GIT_NAMESPACE. */
   const OTHERS = ['GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE',
     'GIT_IMPLICIT_WORK_TREE', 'GIT_GRAFT_FILE', 'GIT_REPLACE_REF_BASE', 'GIT_PREFIX', 'GIT_SHALLOW_FILE'];
 

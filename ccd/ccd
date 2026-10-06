@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=3e90aeb94e68dc05edfe259d173d2f1c7ac100a266c0493630e21e4a3c395438
+# ccrc:generated 1 sha256=ed6a18d223188fffbb632b2f708f575103ea8d2ff8105de295ea351e42a97f2e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -26549,10 +26549,12 @@ _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it mak
   #                              fsmonitor-free, free of optional locks and with untracked files
   #                              shown whatever the repository's or the user's config files say,
   #                              and no inherited GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE or other
-  #                              repository-selecting variable;
+  #                              repository-selecting variable, and no inherited config entry
+  #                              (GIT_CONFIG_PARAMETERS, GIT_CONFIG, GIT_CONFIG_COUNT);
   #                              answers cmd's status
-  # WHAT THIS DOES TO GIT'S CONFIG — EXACTLY FOUR THINGS (and, outermost, it
-  # drops the inherited variables that select a repository: the foot of this function). Three it DISABLES (the plan's Task
+  # WHAT THIS DOES TO GIT'S CONFIG — EXACTLY FOUR THINGS (and, outermost and
+  # FIRST, it drops the inherited variables that select a repository or carry
+  # config: the block above the count, below). Three it DISABLES (the plan's Task
   # 3: "no hook of the repository runs"): the repository's HOOKS
   # (`core.hooksPath=/dev/null`), its FSMONITOR (`core.fsmonitor=false`) and
   # git's OPTIONAL LOCKS (`GIT_OPTIONAL_LOCKS=0`). A hook is not only a
@@ -26583,14 +26585,51 @@ _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it mak
   # `_ws_reclaim_stash_shas`, `_ws_reclaim_keep_reflogs`), and every read of the
   # ladder (`_ws_reclaim_fork`) and of `ws-audit --reclaim`
   # (`_ws_reclaim_audit_contained`). `local -x` scopes the export to this
-  # call, and entries a caller already exported are kept: ours are APPENDED,
-  # and a later entry wins. EXCEPT GIT_CONFIG_PARAMETERS, what `git -c`
-  # exports to its children: git applies it AFTER the GIT_CONFIG_COUNT entries,
-  # so an inherited one OVERRIDES every pin here whose key it names, the hook
-  # and fsmonitor pins included (measured, git 2.43.0). The unattended agent
-  # and systemd path does not carry it: only a ccd started under a `git -c …`
-  # (from a hook, say) inherits one, and its value is the operator's own. It is
-  # NOT unset here; that decision is carried to the next wave.
+  # call. THE THREE PINS ARE THE ONLY ENTRIES (spec §5.6): an inherited
+  # config variable outranked or redirected them (measured, git 2.43.0).
+  # GIT_CONFIG_PARAMETERS, what `git -c` exports to its children, is applied
+  # AFTER the GIT_CONFIG_COUNT entries, so it overrode every pin whose key it
+  # named, the hook and fsmonitor pins included. GIT_CONFIG sends every `git
+  # config` read to its own file, the two made beneath this function among
+  # them (`_ws_reclaim_keep_reflogs`' extensions.refStorage, the WIP commit's
+  # core.fileMode). And a caller's GIT_CONFIG_COUNT entries reached those same
+  # reads. So the OUTERMOST containment unsets all three, in the block below,
+  # BEFORE the count is computed: the count starts at 0. Once the count is
+  # unset a stale GIT_CONFIG_KEY_<n>/VALUE_<n> is inert (measured), so those are
+  # left. A caller's own `git -c` entries go with them; nothing a reclaim runs
+  # wants one. A NESTED containment appends its three to the outer's three,
+  # which are ccd's own. GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM name this
+  # uid's own files, under the single-user trust model, and stay a stated
+  # residual.
+  # AND NO REPOSITORY BUT THE ONE EACH CALL NAMES (spec §5.5: nothing that is
+  # not the child's is read, pinned or deleted). An inherited GIT_DIR,
+  # GIT_WORK_TREE or GIT_INDEX_FILE — ccd started from a git hook, or by
+  # anything that exported one — outranks every `git -C <dir>` beneath: the
+  # ladder would read, and the pin commit, another repository or another
+  # index. So do the rest of `git rev-parse --local-env-vars` (git 2.43's own
+  # list of what selects a repository, its objects, refs and history): a
+  # pre-receive quarantine exports GIT_OBJECT_DIRECTORY, and the WIP's objects
+  # would land outside the child's repository. GIT_NAMESPACE, not on that
+  # list, scopes every ref read and write, so it goes too. That list's three
+  # config variables go with the rest (above). GIT_NO_REPLACE_OBJECTS is not
+  # unset but SET (below). So the OUTERMOST containment unsets them all, and does not put
+  # them back: nothing a reclaim runs wants its caller's repository, and a
+  # restore would re-arm it for everything after. Unset, never shadowed —
+  # measured, bash 5.2: a `local` of an exported name, set or unset, still
+  # hands the global's value to every child; and unset repeatedly, since each
+  # `unset` removes one scope's variable, a caller's local first. A NESTED
+  # containment (`_WS_RECLAIM_CONTAINED`, set by the outer one, cleared at
+  # load below so no environment can pre-set it) leaves them alone: inside,
+  # they are ccd's own — the WIP commit hands the hidden-edit read its scratch
+  # index as GIT_INDEX_FILE, and the count is the outer containment's.
+  if [[ -z "${_WS_RECLAIM_CONTAINED:-}" ]]; then
+    local _ws_u
+    for _ws_u in 1 2 3 4; do
+      unset -v GIT_CONFIG_PARAMETERS GIT_CONFIG GIT_CONFIG_COUNT \
+        GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+        GIT_NAMESPACE GIT_IMPLICIT_WORK_TREE GIT_GRAFT_FILE GIT_REPLACE_REF_BASE GIT_PREFIX GIT_SHALLOW_FILE
+    done
+  fi
   local n="${GIT_CONFIG_COUNT:-0}"
   [[ "$n" =~ ^[0-9]+$ ]] || n=0
   local -x GIT_CONFIG_COUNT=$(( n + 3 )) \
@@ -26601,35 +26640,6 @@ _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it mak
   # opportunistically, under `index.lock`, and the pin phase, the ladder and
   # the audit all promise that file stays byte-identical.
   local -x GIT_OPTIONAL_LOCKS=0
-  # AND NO REPOSITORY BUT THE ONE EACH CALL NAMES (spec §5.5: nothing that is
-  # not the child's is read, pinned or deleted). An inherited GIT_DIR,
-  # GIT_WORK_TREE or GIT_INDEX_FILE — ccd started from a git hook, or by
-  # anything that exported one — outranks every `git -C <dir>` beneath: the
-  # ladder would read, and the pin commit, another repository or another
-  # index. So do the rest of `git rev-parse --local-env-vars` (git 2.43's own
-  # list of what selects a repository, its objects, refs and history): a
-  # pre-receive quarantine exports GIT_OBJECT_DIRECTORY, and the WIP's objects
-  # would land outside the child's repository. GIT_NAMESPACE, not on that
-  # list, scopes every ref read and write, so it goes too. The GIT_CONFIG_*
-  # entries stay: they are this function's own mechanism, and a caller's are
-  # kept, an inherited GIT_CONFIG_PARAMETERS too, though it outranks the pins
-  # (above). GIT_NO_REPLACE_OBJECTS is not unset but SET (below). So the OUTERMOST containment unsets them all, and does not put
-  # them back: nothing a reclaim runs wants its caller's repository, and a
-  # restore would re-arm it for everything after. Unset, never shadowed —
-  # measured, bash 5.2: a `local` of an exported name, set or unset, still
-  # hands the global's value to every child; and unset repeatedly, since each
-  # `unset` removes one scope's variable, a caller's local first. A NESTED
-  # containment (`_WS_RECLAIM_CONTAINED`, set by the outer one, cleared at
-  # load below so no environment can pre-set it) leaves them alone: inside,
-  # they are ccd's own — the WIP commit hands the hidden-edit read its scratch
-  # index as GIT_INDEX_FILE.
-  if [[ -z "${_WS_RECLAIM_CONTAINED:-}" ]]; then
-    local _ws_u
-    for _ws_u in 1 2 3 4; do
-      unset -v GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
-        GIT_NAMESPACE GIT_IMPLICIT_WORK_TREE GIT_GRAFT_FILE GIT_REPLACE_REF_BASE GIT_PREFIX GIT_SHALLOW_FILE
-    done
-  fi
   # And every read sees the REAL object graph: a replace ref substitutes one
   # commit's history for another's in every reachability read (rung 9's
   # count, `branch --contains`), so replacement is switched OFF, never merely
