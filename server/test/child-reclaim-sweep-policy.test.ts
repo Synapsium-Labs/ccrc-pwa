@@ -1662,19 +1662,31 @@ describe('feed rows de-duplicated (spec §5.9) — lastDeferWhy and childReclaim
       .lastDeferWhy, 'a refusal ends it too').toBeNull();
   });
 
-  it('(a) lastDeferWhy changes no pacing: due, the ceiling and the order read the same entry without it', () => {
+  it('(a) lastDeferWhy changes no pacing: due and the ceiling read the same entry without it', () => {
     const deferred = childReclaimNextEntry(fresh, { kind: 'deferred', why: 'state-changed' }, ask(NOW, false), at(NOW), PASS)!;
     const without: ChildReclaimSweepEntry = { ...deferred, lastDeferWhy: null };
     expect(childReclaimDue(deferred, NOW + 1, PASS)).toBe(childReclaimDue(without, NOW + 1, PASS));
     expect(childReclaimDeferExpired(deferred, at(NOW + C), PASS)).toBe(childReclaimDeferExpired(without, at(NOW + C), PASS));
-    // The order: the same due list, the deferred child among two others, asked in the same order either way.
-    const orderOf = (e: ChildReclaimSweepEntry): { ids: string[]; holderId: string | null } => {
-      const { order, holderId } = childReclaimAskOrder([
-        { id: 'demo-a', entry: { ...fresh, lastAskedAt: NOW - 30_000 } }, { id: 'demo-c', entry: fresh }, { id: 'demo-b', entry: e },
-      ]);
+  });
+
+  // The order, in BOTH directions: the same due list, with `lastDeferWhy` set on each child in turn, asked in
+  // the order the list gives with it set on none. The three sit at the three places of the fairness order
+  // (never asked, asked longest ago, asked most recently), so a comparator that promoted a child carrying the
+  // word and one that demoted it each move a child here.
+  it('(a) lastDeferWhy changes no ask order, whichever child carries it', () => {
+    const due = [
+      { id: 'demo-a', entry: { ...fresh, lastAskedAt: NOW - 30_000 } },
+      { id: 'demo-b', entry: { ...fresh, lastAskedAt: NOW - 10_000 } },
+      { id: 'demo-c', entry: fresh },
+    ];
+    const orderWith = (carrier: string | null): { ids: string[]; holderId: string | null } => {
+      const { order, holderId } = childReclaimAskOrder(
+        due.map((x) => (x.id === carrier ? { ...x, entry: { ...x.entry, lastDeferWhy: 'state-changed' } } : x)));
       return { ids: order.map((x) => x.id), holderId };
     };
-    expect(orderOf(deferred)).toEqual(orderOf(without));
+    const plain = orderWith(null);
+    expect(plain.ids, 'the fixture: never asked first, then the longest-ago, then the most recent').toEqual(['demo-c', 'demo-a', 'demo-b']);
+    for (const x of due) expect(orderWith(x.id), `${x.id} carrying lastDeferWhy`).toEqual(plain);
   });
 
   const failing = (sessionId: string, token: string): ChildReclaimAttention =>
