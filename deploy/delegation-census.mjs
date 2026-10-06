@@ -53,19 +53,28 @@ const json = (f) => {
   try { const v = JSON.parse(fs.readFileSync(f, 'utf8')); return v !== null && typeof v === 'object' && !Array.isArray(v) ? v : MALFORMED; } catch { return MALFORMED; }
 };
 const exists = (f) => { try { fs.statSync(f); return true; } catch { return false; } };
-// A loose ref file's text, with the failure kept apart (never folded to null like `text`): null = nothing at that
-// path (ENOENT), or a directory there (EISDIR; git falls through a directory to packed-refs too); UNREADABLE = a
-// file that exists but cannot be read (EACCES, ELOOP, EIO, ...), whose stale packed-refs line must not stand in for it.
+// A loose ref file's text, with the failure kept apart (never folded to null like `text`): null = truly nothing at that
+// path (ENOENT with an lstat of the path itself agreeing), or a directory there (EISDIR; git falls through a directory
+// to packed-refs too); UNREADABLE = an entry that exists but cannot be read (EACCES, ELOOP, EIO, ...), whose stale
+// packed-refs line must not stand in for it. A DANGLING SYMLINK is that case: readFileSync follows it and reports ENOENT
+// for its target, so an ENOENT is re-asked with lstat — an entry still there at the path is UNREADABLE (git answers
+// `rev-parse HEAD` "unknown revision" there, where `for-each-ref` alone would fall through to the packed line). A valid
+// symlink needs nothing: readFileSync follows it, as git does.
 const UNREADABLE = Symbol('unreadable');
 const looseText = (f) => {
-  try { return fs.readFileSync(f, 'utf8'); } catch (e) { return e.code === 'ENOENT' || e.code === 'EISDIR' ? null : UNREADABLE; }
+  try { return fs.readFileSync(f, 'utf8'); } catch (e) {
+    if (e.code === 'EISDIR') return null;
+    if (e.code !== 'ENOENT') return UNREADABLE;
+    try { fs.lstatSync(f); return UNREADABLE; } catch (l) { return l.code === 'ENOENT' ? null : UNREADABLE; }
+  }
 };
 // A `ref: <name>` HEAD's tip, read-only in the common dir: the loose ref file's first line, else the `packed-refs`
 // line `<sha> <name>` (the `#` header and a `^` peeled line match no such line, so they are skipped by shape).
 // Returns a sha, or null for "unresolved" — the caller says 'unmeasured', since for movedFromBase null is spoken
 // for. A name that is not `refs/<safe chars>`, or has a `..` segment, is never joined onto a path. Only an ABSENT
-// loose file (or a directory there) goes on to packed-refs; one that exists and is not a sha, or cannot be read,
-// is unresolved — a stale packed line behind it would be a silently wrong answer.
+// loose file (nothing at the path, lstat included — or a directory there) goes on to packed-refs; one that exists and
+// is not a sha, or cannot be read (a dangling symlink included), is unresolved — a stale packed line behind it would
+// be a silently wrong answer.
 const REF_NAME = /^refs\/[A-Za-z0-9._/-]+$/;
 const PACKED_LINE = /^([0-9a-f]{40}) (refs\/\S+)$/;
 const refTip = (name) => {
