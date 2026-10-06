@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=64a2a833c5efd06569a4a9d05e026115bb5d3ef04fb0bd24f773fe762c146f6c
+# ccrc:generated 1 sha256=9797fa193216c86a484d72b76cac07e86ca70b41a3cf4a9c88586fcc6a5997b1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29126,6 +29126,7 @@ _ws_expire_archived() {   # id -> 0 with EXPIRE_ARCHIVED_AT = the archive epoch,
   arch=$(_reg_get "$id" archived)
   _ws_expire_epoch_ok "$arch" \
     || { _ws_reclaim_unmeasured "the archive stamp at $f cannot be read as an epoch (it reads '$arch')"; return 1; }
+  EXPIRE_STAMP_AT="$arch"   # the archive AS READ, old enough or not: the audit's `archivedAt` and `expiresAt` (wave 3b)
   now=$(_ws_expire_now) && _ws_expire_epoch_ok "$now" \
     || { _ws_reclaim_unmeasured "the clock could not be read, so the archive's age was never measured"; return 1; }
   (( now - arch >= WS_EXPIRE_AFTER_S )) \
@@ -29266,7 +29267,7 @@ _ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working dir
   # nothing: unmeasured, never "nobody". (lsof's exit status is not read: it
   # exits 1 over any one process it could not inspect, and a listing that holds
   # ccd is a listing.)
-  local id="$1" workdir="$2" rc leaf parent preal wt me=$$ sub=$BASHPID mode=proc root='' listing='' out pid pth n=0 shown=''
+  local id="$1" workdir="$2" rc leaf parent preal wt me=$$ sub=$BASHPID mode=proc root='' listing='' out line shown=''
   _ws_reclaim_plain_path "$workdir" \
     || { _ws_reclaim_unmeasured "$workdir is not one plain absolute path, so whether a process works inside it was never asked"; return 1; }
   _ws_reclaim_absent "$workdir"; rc=$?
@@ -29285,7 +29286,7 @@ _ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working dir
   fi
   root=$(_ws_expire_proc_root)
   out=$(LC_ALL=C.UTF-8 python3 -c '
-import os, subprocess, sys
+import json, os, re, subprocess, sys
 mode, wt, me, sub, root = sys.argv[1:6]
 mine = {me, sub, str(os.getpid())}
 def inside(p):
@@ -29317,6 +29318,28 @@ def ppid_of(pid):
     except ProcessLookupError:
         return None
     sys.exit(3)
+def comm_of(pid):
+    # WHAT IT IS, for the operator text (wave 3b, ruling G of its coordinator):
+    # the fleet tmux server is a `tmux: server` too, so a pid is never
+    # named without its command. DESCRIPTIVE ONLY: a command that cannot be read
+    # is "" and changes no verdict. Its bytes are kept as read (surrogateescape),
+    # save the one newline the kernel or ps ends it with.
+    try:
+        if mode == "proc":
+            with open("%s/%s/comm" % (root, pid), "rb") as fh:
+                raw = fh.read()
+        else:
+            raw = subprocess.run(["ps", "-o", "comm=", "-p", pid], capture_output=True).stdout
+    except Exception:
+        return ""
+    if raw.endswith(b"\n"):
+        raw = raw[:-1]
+    return raw.decode("utf-8", "surrogateescape")
+def say(s):
+    # the detail sentence is ONE line: a control character in a path or a
+    # command is written there as its escape (the record keeps the bytes)
+    return "".join(c if c.isprintable() else ascii(c)[1:-1] for c in s)
+PID = re.compile("[0-9]+")
 def scan():
     cwds = []
     if mode == "proc":
@@ -29340,13 +29363,30 @@ def scan():
                 cwds.append((cur, line[1:]))
     if me not in [c[0] for c in cwds]:
         sys.exit(3)
+    users = []
     for pid, p in cwds:
+        if not PID.fullmatch(pid):
+            sys.exit(3)   # a pid that is not ASCII digits: no listing to trust
         if pid in mine or not inside(p):
             continue
         pp = ppid_of(pid)
         if pp is None or pp in mine:
             continue
-        sys.stdout.buffer.write(os.fsencode("%s\t%s\n" % (pid, p)))
+        users.append((pid, p))
+    if not users:
+        return
+    # THE RECORDS ARE JSON HERE, never in the shell (wave 3b, a security ruling
+    # of its coordinator): one json.dumps line per process, at most five, the
+    # pid an integer and every string as read; then one "#" line, the detail
+    # sentence. json.dumps escapes every control character, so a newline in a
+    # path or a command can never start a second record.
+    shown = []
+    for pid, p in users[:5]:
+        c = comm_of(pid)
+        sys.stdout.write(json.dumps({"pid": int(pid), "comm": c, "cwd": p}) + "\n")
+        shown.append("process %s%s has its working directory at %s" % (pid, " (%s)" % say(c) if c else "", say(p)))
+    more = ", and %d more" % (len(users) - 5) if len(users) > 5 else ""
+    sys.stdout.write("#" + ", ".join(shown) + more + "\n")
 try:
     scan()
 except Exception:
@@ -29355,11 +29395,15 @@ except Exception:
   (( rc == 0 )) \
     || { _ws_reclaim_unmeasured "the processes of this box could not be measured ($( [[ "$mode" == lsof ]] && echo lsof || echo "$root" )), so whether one works inside $workdir was never asked"; return 1; }
   [[ -n "$out" ]] || return 0
-  while IFS=$'\t' read -r pid pth; do
-    n=$(( n + 1 ))
-    (( n > 5 )) || shown+="${shown:+, }process $pid has its working directory at $pth"
+  # The python printed each record ALREADY JSON (`{...}`, at most five) and one
+  # `#` line, the detail sentence: a record is kept exactly as printed — this
+  # shell never splices a field into JSON (wave 3b, a security ruling).
+  while IFS= read -r line; do
+    case "$line" in
+      '{'*) EXPIRE_IN_USE+=("$line") ;;
+      '#'*) shown="${line#\#}" ;;
+    esac
   done <<< "$out"
-  (( n <= 5 )) || shown+=", and $(( n - 5 )) more"
   _reap_refuse in-use "$shown — an archived workspace somebody is working in is never expired"
 }
 
@@ -29498,7 +29542,7 @@ _ws_expire_fork() {   # id -> the flavour fork, run ONCE, contained — the one 
 
 _ws_expire_fork_contained() {   # `_ws_expire_fork`'s body, run under `_ws_reclaim_contained` — call that
   local id="$1" rbc
-  RECLAIM_RESUME_PHASE=""
+  RECLAIM_RESUME_PHASE=""; EXPIRE_STAMP_AT=""; EXPIRE_IN_USE=()
   rbc=$(_reg_get "$id" reaping)
   # An `expire:` breadcrumb resumes THIS verb; a `reclaim:` one is ws-reclaim's
   # and any other is ws-reap's — an expiry never finishes another verb's work,
@@ -29673,10 +29717,21 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
     (( first )) || sens+=","; first=0; sens+="$(_json_str "$s")"
   done
   sens+="]"
-  printf '{"session":%s,"mode":"expire","archivedAt":%s,"alive":%s,"exists":%s,"reaping":%s,"sensitive":%s,' \
-    "$(_json_str "$id")" "$( _ws_expire_epoch_ok "$EXPIRE_ARCHIVED_AT" && echo "$EXPIRE_ARCHIVED_AT" || echo null)" \
+  # `archivedAt` is the archive AS READ — on `not-expired` too — and `expiresAt`
+  # is the instant it becomes expirable, `archivedAt + WS_EXPIRE_AFTER_S`, from
+  # the ONE definition above: the server reads the threshold here and never
+  # types its own (wave 3b; the kill rule raises this constant and nothing
+  # else). Both null when no archive could be read as an epoch.
+  local stamp=null expires=null
+  if _ws_expire_epoch_ok "$EXPIRE_STAMP_AT"; then stamp="$EXPIRE_STAMP_AT"; expires=$(( EXPIRE_STAMP_AT + WS_EXPIRE_AFTER_S )); fi
+  printf '{"session":%s,"mode":"expire","archivedAt":%s,"expiresAt":%s,"alive":%s,"exists":%s,"reaping":%s,"sensitive":%s,' \
+    "$(_json_str "$id")" "$stamp" "$expires" \
     "$aliveflag" "$exists" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)" "$sens"
   [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
+  # WHO IS IN IT (an `in-use` refusal only): pid, command and cwd, at most five.
+  if [[ "$REAP_VERDICT" == in-use && ${#EXPIRE_IN_USE[@]} -gt 0 ]]; then
+    local IFS=,; printf '"inUse":[%s],' "${EXPIRE_IN_USE[*]}"; unset IFS
+  fi
   if [[ "$REAP_VERDICT" == expirable ]]; then
     # spelled through `_json_str`, never the literal verdict shape the refusal harvests read
     printf '"verdict":%s,"detail":"","token":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_TOKEN")"

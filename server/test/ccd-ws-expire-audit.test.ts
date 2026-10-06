@@ -9,7 +9,7 @@ import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf, refusalsOf } from './lifecycleHelpers.js';
 import { childIndex, hookRuns, plantRepoPrograms, plantTmux } from './childReclaimFixture.js';
 import {
-  EXP_ID, EXP_STUBS, NOW, OLD, archiveAt, expireAudit, expireEvalOf, expireToken, expireVerb, holdCwd, makeArchived,
+  EXP_ID, EXP_STUBS, NOW, OLD, WEEK, archiveAt, expireAudit, expireEvalOf, expireToken, expireVerb, holdCwd, makeArchived,
 } from './wsExpireFixture.js';
 
 let h: PrHarness;
@@ -24,8 +24,8 @@ describe('ws-audit --expire — the token the verb spends', () => {
     const r = expireAudit(h);
     expect(r.code, r.stderr).toBe(0);
     const doc = JSON.parse(r.stdout) as Record<string, unknown>;
-    expect(Object.keys(doc)).toEqual(['session', 'mode', 'archivedAt', 'alive', 'exists', 'reaping', 'sensitive', 'verdict', 'detail', 'token']);
-    expect(doc).toMatchObject({ session: EXP_ID, mode: 'expire', archivedAt: OLD, alive: false, exists: true, reaping: null, verdict: 'expirable' });
+    expect(Object.keys(doc)).toEqual(['session', 'mode', 'archivedAt', 'expiresAt', 'alive', 'exists', 'reaping', 'sensitive', 'verdict', 'detail', 'token']);
+    expect(doc).toMatchObject({ session: EXP_ID, mode: 'expire', archivedAt: OLD, expiresAt: OLD + WEEK, alive: false, exists: true, reaping: null, verdict: 'expirable' });
     expect(doc['token']).toBe(expireEvalOf(h).token);
   }, 60_000);
 
@@ -52,6 +52,34 @@ describe('ws-audit --expire — the token the verb spends', () => {
     const gone = JSON.parse(expireAudit(h).stdout) as Record<string, unknown>;
     expect(gone['verdict']).toBe('not-archived');
     expect(gone['archivedAt']).toBeNull();
+    expect(gone['expiresAt'], 'no archive, no instant').toBeNull();
+  }, 60_000);
+
+  // WAVE 3b's THRESHOLD, CARRIED BY THE DOCUMENT (the coordinator's ruling (C)): the server never types the seven
+  // days. `expiresAt` is `archivedAt + WS_EXPIRE_AFTER_S`, from the ONE ccd definition, on `expirable` AND on
+  // `not-expired` — whose `archivedAt` is now set too, since the stamp WAS read (wave 3's Carried row).
+  it('`not-expired` carries the archive it read and the instant it expires', () => {
+    makeArchived(h);
+    archiveAt(h, NOW - 60);
+    const young = JSON.parse(expireAudit(h).stdout) as Record<string, unknown>;
+    expect(young['verdict']).toBe('not-expired');
+    expect(young['archivedAt']).toBe(NOW - 60);
+    expect(young['expiresAt']).toBe(NOW - 60 + WEEK);
+  }, 60_000);
+
+  it('`expiresAt` is ccd’s own threshold: raise WS_EXPIRE_AFTER_S and the instant moves with it', () => {
+    makeArchived(h);
+    const doc = JSON.parse(expireAudit(h, { pre: 'WS_EXPIRE_AFTER_S=1209600;' }).stdout) as Record<string, unknown>;
+    expect(doc['verdict'], 'eight days old is young against fourteen').toBe('not-expired');
+    expect(doc['expiresAt']).toBe(OLD + 1_209_600);
+  }, 60_000);
+
+  it('a refusal PAST the age still carries both — the lane reads when it became due, whatever holds it', () => {
+    makeArchived(h);
+    fs.writeFileSync(reg('hold'), 'x');
+    const doc = JSON.parse(expireAudit(h).stdout) as Record<string, unknown>;
+    expect(doc['verdict']).toBe('held');
+    expect(doc).toMatchObject({ archivedAt: OLD, expiresAt: OLD + WEEK });
   }, 60_000);
 
   it('a probe that could not RUN exits 1 — the document says unmeasured, no token, and nothing is journaled', () => {
@@ -62,6 +90,8 @@ describe('ws-audit --expire — the token the verb spends', () => {
     const doc = JSON.parse(r.stdout) as Record<string, unknown>;
     expect(doc['verdict']).toBe('unmeasured');
     expect(doc['token']).toBeUndefined();
+    expect(doc['archivedAt'], 'a stamp that is not an epoch is no archive').toBeNull();
+    expect(doc['expiresAt'], 'and no instant').toBeNull();
     expect(r.stderr).toContain('ws-audit --expire measured nothing');
     expect(refusalsOf(h.home)).toEqual([]);
     expect(fs.existsSync(a.wt)).toBe(true);
@@ -136,7 +166,64 @@ describe('the audit refuses an archived workspace a process is working in — `i
       const doc = JSON.parse(r.stdout) as Record<string, unknown>;
       expect(doc['verdict'], String(doc['detail'])).toBe('in-use');
       expect(doc['token']).toBeUndefined();
+      // WHAT IT IS, NOT ONLY ITS NUMBER (the coordinator's ruling (G)): the lane's operator text names the pid, its
+      // command and the path, because the fleet's own tmux server is also a `tmux: server` and a pid alone invites
+      // the wrong kill. The document carries them as data; the detail sentence names the command too.
+      expect(doc['inUse']).toEqual([{ pid: sleeper.pid, comm: 'sleep', cwd: fs.realpathSync(a.wt) }]);
+      expect(String(doc['detail'])).toContain(`process ${sleeper.pid} (sleep) has its working directory at `);
     } finally { sleeper.stop(); }
+  }, 60_000);
+
+  it('`inUse` appears only on an `in-use` refusal', () => {
+    makeArchived(h);
+    expect(JSON.parse(expireAudit(h).stdout)['inUse']).toBeUndefined();
+  }, 60_000);
+
+  // THE RECORD IS JSON AT ITS SOURCE (the coordinator's security ruling, binding on wave 3b): the probe's python prints
+  // each `inUse` record already `json.dumps`-encoded — the pid an integer, every string as read (surrogateescape) — and
+  // the shell keeps it as printed, never splicing a field. A cwd and a command are chosen by whoever owns the process,
+  // so a newline, a tab or a quote in them yields ONE record, valid JSON, with the exact bytes — never a second record
+  // whose "pid" is text the process chose. A FAKE /proc names the process (`_ws_expire_proc_root`): ccd's own pid is
+  // planted by the shell, which alone knows it; pid 4242 by the test, with exact bytes.
+  const FAKE_PROC = 'CCD_OS=linux; mkdir -p "$HOME/fp/$$"; ln -sfn "$HOME" "$HOME/fp/$$/cwd";'
+    + ' _ws_expire_proc_root() { printf %s "$HOME/fp"; };';
+  const plantProcess = (cwd: string, comm: Buffer | null): void => {
+    const d = path.join(h.home, 'fp', '4242');
+    fs.mkdirSync(d, { recursive: true });
+    fs.symlinkSync(cwd, path.join(d, 'cwd'));
+    fs.writeFileSync(path.join(d, 'stat'), '4242 (x) S 1 1 1 0\n');
+    if (comm !== null) fs.writeFileSync(path.join(d, 'comm'), comm);
+  };
+
+  it('a cwd and a command carrying a newline, a tab and a quote are ONE record — valid JSON, the exact bytes', () => {
+    const a = makeArchived(h);
+    const dir = path.join(fs.realpathSync(a.wt), 'a\nb\tc"d');
+    fs.mkdirSync(dir);
+    plantProcess(dir, Buffer.from('x\ty\n"z\n'));   // the kernel ends `comm` with one newline of its own
+    const r = expireAudit(h, { pre: FAKE_PROC });
+    expect(r.code, r.stderr).toBe(0);
+    const doc = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(doc['verdict'], String(doc['detail'])).toBe('in-use');
+    expect(doc['inUse']).toEqual([{ pid: 4242, comm: 'x\ty\n"z', cwd: dir }]);
+    // The detail sentence is one line: a control character is written there as its escape.
+    expect(String(doc['detail'])).toContain('process 4242 (x\\ty\\n"z) has its working directory at ');
+  }, 60_000);
+
+  it('a command that is not UTF-8 keeps its bytes (surrogateescape) — never a replacement character', () => {
+    const a = makeArchived(h);
+    const dir = fs.realpathSync(a.wt);
+    plantProcess(dir, Buffer.from([0x71, 0xff, 0x71, 0x0a]));
+    const doc = JSON.parse(expireAudit(h, { pre: FAKE_PROC }).stdout) as Record<string, unknown>;
+    expect(doc['inUse']).toEqual([{ pid: 4242, comm: 'q\udcffq', cwd: dir }]);
+  }, 60_000);
+
+  it('a command the box could not read is "" — the record keeps its cwd, and the sentence names the path', () => {
+    const a = makeArchived(h);
+    const dir = fs.realpathSync(a.wt);
+    plantProcess(dir, null);
+    const doc = JSON.parse(expireAudit(h, { pre: FAKE_PROC }).stdout) as Record<string, unknown>;
+    expect(doc['inUse']).toEqual([{ pid: 4242, comm: '', cwd: dir }]);
+    expect(String(doc['detail'])).toContain(`process 4242 has its working directory at ${dir} — `);
   }, 60_000);
 
   it('and an unlistable /proc is the audit’s `unmeasured`: exit 1, no token', () => {
