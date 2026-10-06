@@ -698,7 +698,9 @@ describe('W21: a signal to the sweep\'s process group during a concurrent batch 
       }
       const { found, jobs, left } = after;
       expect(ended, 'the sweep ended on its own, within 15 s').not.toBeNull();
-      expect(ended!.signal === sig || ended!.code === status,
+      // Wave 12, Reading 8 (D-4072): a shell-alone INT must end the run BY the signal. The handler re-raises (D-3988, ruled in
+      // answer 3565), and `exit 130` would not read as an INT death to a caller.
+      expect(sig === 'SIGINT' && target === 'shell' ? ended!.signal === 'SIGINT' : ended!.signal === sig || ended!.code === status,
         `ended by ${sig}: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
       expect(elapsed, 'within about a second of the signal').toBeLessThan(5_000);
       expect(ended!.stdout).not.toContain(SWEEP_OK);
@@ -762,7 +764,10 @@ describe('W21: a signal to the sweep\'s process group during a concurrent batch 
       const started = killLog(box).filter((l) => l.startsWith('-TERM -- -')).length;
       expect(pids, 'the signal was sent mid-loop').toBeGreaterThanOrEqual(10);
       expect(ended, 'the sweep ended on its own, within 20 s').not.toBeNull();
-      expect(ended!.signal === sig || ended!.code === status, `ended by ${sig}: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
+      // Wave 12, Reading 8 (D-4072): a shell-alone INT must end the run BY the signal. The handler re-raises (D-3988, ruled in
+      // answer 3565), and `exit 130` would not read as an INT death to a caller.
+      expect(sig === 'SIGINT' && target === 'shell' ? ended!.signal === 'SIGINT' : ended!.signal === sig || ended!.code === status,
+        `ended by ${sig}: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
       expect(ended!.stdout).not.toContain(SWEEP_OK);
       if (mode.startsWith('full')) {
         // A survivor in a TERMed group writes its capture files while `rm -rf` runs: the dir is asserted only without one.
@@ -801,7 +806,8 @@ describe('W21: a signal to the sweep\'s process group during a concurrent batch 
     }
     expect(second, 'the signal was sent while the second batch was forking').toBeGreaterThanOrEqual(10);
     expect(ended, 'the sweep ended on its own, within 20 s').not.toBeNull();
-    expect(ended!.signal === 'SIGINT' || ended!.code === 130, `ended by SIGINT: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
+    // Wave 12, Reading 8 (D-4072): a shell-alone INT ends the run BY the signal (the handler re-raises, D-3988, answer 3565).
+    expect(ended!.signal === 'SIGINT', `ended by SIGINT: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
     expect(ended!.stdout).not.toContain(SWEEP_OK);
     if (after.termed.length === 0) expect(after.left.filter((n) => n.startsWith('ccrc-sweep.')), `left in tmp: ${after.left.join(' ')}`).toEqual([]);
     expect(after.leaks, `launcher leaks (survivors in a group never TERMed): ${after.leaks.join(' ')} of ${after.found.join(' ')}`).toEqual([]);

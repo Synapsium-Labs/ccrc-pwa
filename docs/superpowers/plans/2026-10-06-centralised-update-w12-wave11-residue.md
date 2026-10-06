@@ -251,6 +251,14 @@ These are departures from a ledger ruling, or from what shipped text at `d2bac7a
   - R18(c): "five helpers" at its five sites (`ccd/ccrc` ships six: D-3988 added `_upd_sweep_stop`), and D-3977's lowercase sentence start.
   - R18(d): T5-6's red set; T7-1's measured respelling; the rows added during the wave, with this wave's measured red sets, under ids the amendment says are wave 12's unless the worker's report was read; wave 12's own guard rows in a table of their own.
   - R18(e): D-3988's "so a stale pid is never signalled" and "W21 asserts at most 10 + 50".
+- **D-4072** — *W21's SIGINT-to-the-shell arms assert an INT death (`signal === 'SIGINT'`), so dropping the handler's re-raise reds.* Reading 8's ruling spends this number.
+  - **Shipped:** W21 accepted `ended.signal === sig || ended.code === status`, with status 130. So `kill -INT "$BASHPID"` replaced by `exit 130` passed every SIGINT arm (T6-RERAISE: 0 of 12 red before this change).
+  - **Why:** the coordinator's ruling on Reading 8. The re-raise is a ruled guard (answer 3565: "Re-raise rather than `exit 130`"), and a ruled guard ships with a pin that reds.
+  - **Now:**
+    - The five SIGINT-to-the-shell arms assert `signal === 'SIGINT'`: mid-batch and its caller-trap row, launch-loop and its caller-trap row, and the second-batch case. In the two `.each` cases the branch is `sig === 'SIGINT' && target === 'shell'`.
+    - The group arms and every SIGTERM arm keep `signal === sig || code === status`, unchanged.
+    - Stability, no mutation: 8 of 8 runs of the five arms green (5 passed each), under box load 18 to 20.
+    - T6-RERAISE (`kill -INT "$BASHPID"' INT` becomes `exit 130' INT` in `_upd_sweep`'s INT trap): the five-arm filter reds 5 of 5, each on `ended by SIGINT: signal null, code 130: expected false to be true`; `-t "W2[12]"` reds the same 5 of 12 and nothing else (the group arms, the SIGTERM arms and W22 stay green).
 
 ## File structure
 
