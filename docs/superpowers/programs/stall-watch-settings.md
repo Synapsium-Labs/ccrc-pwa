@@ -76,6 +76,14 @@ time.
     and held nothing; the run remains planned, with its seven-item brief and route ready to resend unchanged.
   - Wait for one active run to leave `dispatched`, `working` or `unknown`, then retry run 295 once. Do not open a
     replacement run, change routing, split the wave or bypass the cap.
+- **R7 (2026-10-06 11:50)**, child-reclamation W6 and this wave proceed without ordering each other.
+  - The child-reclamation coordinator's mail 3675 names its planned run 291 and merged plan #293 (`26e3318b`). That
+    wave also edits `shared/api.ts` additively and makes a small mirror-clock/frame edit in `server/src/watch.ts`;
+    it does not edit `server/src/coord/store.ts` or `server/src/coord/routes.ts`.
+  - Once run 260 releases its claims, both waves may proceed. Edits stay in their own regions; whichever PR lands
+    second merges current `main` (never rebases), resolves only structural adjacency, and re-runs `single-definition`,
+    `typecheck-tests`, the `session-hook` citation cases and `deviation-refs`. A same-sentence edit still returns for
+    a coordinator ruling under R5 rather than being resolved mechanically.
 
 ## Carried constraints (reviewers get these)
 
