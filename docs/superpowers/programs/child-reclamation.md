@@ -46,6 +46,10 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 20:21 — delegation-broker's overlap is closed (mail 3755).** Its wave 1 (#284) landed second, as
+  `22b4eabda`, after #290. `git merge-tree` against `b27fabc15` was clean. Its coordinator ran
+  `session-hook.test.ts` (335/335), `typecheck-tests` and the hook suites on that exact merged tree. Nothing is owed
+  between the two programmes.
 - **2026-10-06 20:18 — workspace-lifecycle answers 3657/3666 (mail 3749; the delay was its mail gate).**
   - **Measured from wave 3b's plan** (`docs/workspace-lifecycle-wave3b-plan` @`335c0e7c`):
     - 3b edits none of `_ws_reclaim_tail`, `_ws_reclaim_contained`, `_ws_reclaim_ladder`,
