@@ -71,6 +71,11 @@ time.
     works only uncontested paths until the coordinator sequences the shared paths after release.
   - Preserve the seven-item wave. The child-reclamation coordinator was notified by mail 3674; no early release was
     asked. Any same-sentence co-edit still stops for a coordinator ruling under the plan's overtaken-PR rule.
+- **R6 (2026-10-06 11:47)**, dispatch waits at the measured concurrency cap.
+  - The first dispatch of run 295 was refused `cap-concurrency`, with `limit: 7` and `running: 7`. The server spawned
+    and held nothing; the run remains planned, with its seven-item brief and route ready to resend unchanged.
+  - Wait for one active run to leave `dispatched`, `working` or `unknown`, then retry run 295 once. Do not open a
+    replacement run, change routing, split the wave or bypass the cap.
 
 ## Carried constraints (reviewers get these)
 
