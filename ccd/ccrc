@@ -10158,8 +10158,11 @@ _models_litellm_stop_blocked() {   # -> rc 0 and one clause on stdout iff the ex
 MODELS_CODEX_UNTOLD=''
 MODELS_CODEX_UNTOLD_RC=0
 _models_litellm_codex() {   # <accountId> -> 0 codex, 1 not codex, 2 the roster cannot say (above)
-  local ids rc=0
+  local ids rc=0 roster
   MODELS_CODEX_UNTOLD=''; MODELS_CODEX_UNTOLD_RC=0
+  # D-4046: an ABSENT roster is not undecidable, it answers 1: with no roster no row can be codex, and the external
+  # arm's own read then refuses `roster-absent` with its own remedy. A dangling link still goes to `_codex_lanes`.
+  roster="$(_models_roster_path)"; { [ -e "$roster" ] || [ -L "$roster" ]; } || return 1
   ids="$(_codex_lanes)" || rc=$?
   if [ "$rc" -ne 0 ]; then
     MODELS_CODEX_UNTOLD_RC="$rc"

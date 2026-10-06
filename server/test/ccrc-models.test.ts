@@ -2434,6 +2434,32 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
       for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
     });
 
+  // Final-review fix wave (MF4, D-4046): an ABSENT roster is not undecidable — with no roster, no row is codex —
+  // so it keeps the base's answer and remedy: the external arm's own read refuses `roster-absent` ("run ccrc
+  // install"), never `roster-invalid` ("fix the roster"). Two conditions, two remedies, two words.
+  it('an ABSENT roster is not undecidable: the dispatcher answers the external arm\'s roster-absent, never roster-invalid (Plan 3b Task A1)', () => {
+    fs.rmSync(join(home, '.ccrc', 'accounts.json'));
+    const r = run(['models', 'litellm', 'codex-a']);
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['error']).toBe('roster-absent');
+    expect(r.stderr, 'the lane library was asked about a roster that is not there').not.toMatch(/^ccrc codex: roster-invalid/m);
+    expect(fs.existsSync(boxGlobal())).toBe(false);
+    expect(fs.existsSync(lanePath('codex-a'))).toBe(false);
+    for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
+  });
+
+  // …and its control: a roster that is a DANGLING link is there and cannot be read, so it stays undecidable.
+  it('a roster that is a dangling link is still undecidable: refused roster-invalid before either arm, never read as absent (Plan 3b Task A1)', () => {
+    const roster = join(home, '.ccrc', 'accounts.json');
+    fs.rmSync(roster);
+    fs.symlinkSync(join(home, 'no-such-roster.json'), roster);
+    const r = run(['models', 'litellm', 'codex-a']);
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['error']).toBe('roster-invalid');
+    expect(fs.existsSync(boxGlobal())).toBe(false);
+    for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
+  });
+
   // Plan 3b Task A1: the refresh row of such a roster is a FAILED row whose reason
   // is the lane library's own forwarded line. The probe never runs, so the row is
   // never fetched down the external path, and neither LiteLLM arm is taken.
