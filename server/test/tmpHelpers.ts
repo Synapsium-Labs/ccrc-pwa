@@ -28,7 +28,7 @@
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll } from 'vitest';
+import { afterAll, afterEach, beforeEach } from 'vitest';
 
 const made: string[] = [];
 
@@ -47,7 +47,7 @@ export function mkTmp(prefix: string): string {
   // assertion, and it is a no-op wherever the temp root holds no symlink —
   // which is every Linux box this suite has ever run on.
   const dir = realpathSync(mkdtempSync(path.join(tmpdir(), prefix)));
-  made.push(dir);
+  made.push(dir); madeThisTest?.push(dir);   // the second: see removeTmpFixturesAfterEachTest
   return dir;
 }
 
@@ -59,6 +59,65 @@ export function removeTmpFixtures(): void {
   // case, not an error — several files own their own cleanup and this is the
   // net underneath them.
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  madeThisTest?.splice(0);   // forgotten here too, or a per-test afterEach would remove them again
 }
 
 afterAll(removeTmpFixtures);
+
+/** What the running TEST has made, while a file that opted in is between its
+ *  `beforeEach` and its `afterEach`; `null` everywhere else — at collection,
+ *  in a `beforeAll`, and in every file that did not opt in. */
+let madeThisTest: string[] | null = null;
+
+/** OPT-IN, once at a file's top level: remove what each TEST made when that
+ *  test ends, so the `afterAll` above is left only what was made outside a
+ *  test (at collection or in a `beforeAll`) — the fixtures a later test may
+ *  still be reading.
+ *
+ *  WHY, measured (2026-10-06). `ccrc-update.test.ts` hands nearly every one of
+ *  its ~500 cases a fresh HOME holding one or more copies of the ccrc tree,
+ *  and all of them used to wait for the one `afterAll`: 648 directories,
+ *  2.50 GB, 99,710 entries at the end of a local run. The synchronous loop
+ *  above took 23.2 s over them on the dev box at load ~40 (the hook timed out
+ *  there too) and 13.4 s on a re-run at load ~30 — against a 20 s
+ *  `hookTimeout` (`vitest.config.ts`). On GitHub's runners the same file
+ *  failed with every one of its tests passing (`Hook timed out in 20000ms`
+ *  at the `afterAll` line above) in four jobs of the last 300 `ci.yml` runs
+ *  (2026-10-02..06), always this file and no other, while its case count grew
+ *  481 -> 514; the one job that was re-run went green. No process was left writing into the fixtures (a `ps`
+ *  filtered to the temp root, taken in the hook, named none of that file's):
+ *  the hook timed out on VOLUME, and the volume grows with every case added.
+ *  Removed per test, the same bytes go in ~500 small removals, each inside
+ *  its own hook budget, and the final hook is bounded by what the file makes
+ *  outside its tests — 0 directories for that file, measured. The
+ *  next heaviest files measured at their `afterAll`: ccrc-install-graphify
+ *  (41 dirs, 564 MB, 6.4 s), ccrc-doctor (681, 289 MB, 80k entries, 2.4 s),
+ *  ccrc-install (270, 2.52 GB, 86k entries, 2.1 s); the rest under 1 s.
+ *
+ *  Not the default, deliberately: a file that makes a fixture inside one test
+ *  and reads it from a later one would lose it. A file opts in once it has
+ *  none of those.
+ *
+ *  `maxRetries` because a test may leave a detached child still exiting into
+ *  its HOME (the `--detach` cases run one for real) — `rm`'s own retry on
+ *  `ENOTEMPTY`/`EBUSY` covers that window instead of failing a passed test in
+ *  its `afterEach`. */
+export function removeTmpFixturesAfterEachTest(): void {
+  beforeEach(() => { madeThisTest = []; });
+  afterEach(() => {
+    const mine = madeThisTest ?? [];
+    madeThisTest = null;
+    if (mine.length === 0) return;
+    // FORGET them before removing them, for the reason `removeTmpFixtures`
+    // forgets: a path `mkdtemp` may hand out again must not be removed twice.
+    const gone = new Set(mine);
+    made.splice(0, made.length, ...made.filter((d) => !gone.has(d)));
+    for (const dir of mine) rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+  });
+}
+
+/** Every directory `mkTmp` made in this file that is still waiting for the
+ *  `afterAll` — what a file asserts on to prove its own final hook is small. */
+export function pendingTmpFixtures(): readonly string[] {
+  return made.slice();
+}

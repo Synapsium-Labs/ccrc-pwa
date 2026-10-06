@@ -44,7 +44,7 @@ import {
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkTmp } from './tmpHelpers.js';
+import { mkTmp, pendingTmpFixtures, removeTmpFixturesAfterEachTest } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool, CONTAINED_TOOLS } from './containedTools.js';
 import { itLinux, itDarwin, platformContrast, python3ProgramArm, IS_DARWIN } from './platformFixtures.js';
@@ -57,6 +57,13 @@ import {
   SPINE_CONTAINMENT_PROBE, spineRunCalls, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms,
   spineSystemdRun, plantLiveShape, foreignSnapshot, stateCallsNaming,
 } from './codexLaneFixture.js';
+
+// Every case's HOME is removed when that case ends, not at the end of the file:
+// ~650 of them (2.5 GB, ~100k entries) left for the one `afterAll` overran its
+// 20s hook budget on CI with every test green (tmpHelpers'
+// `removeTmpFixturesAfterEachTest` carries the measurement). The LAST describe
+// in this file is the guard.
+removeTmpFixturesAfterEachTest();
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -12939,4 +12946,29 @@ describe('Plan 3a Task 10 — ccrc update onto this tree over today\'s live shap
     expect(r.stdout.split('\n').filter((l) => l.startsWith('SKIP codex: ')), 'the staged spine\'s closing doctor')
       .toHaveLength(1);
   }, 120_000);
+});
+
+// The guard for `removeTmpFixturesAfterEachTest()` at the top of this file.
+// LAST, so that in a whole-file run it also witnesses everything the file
+// made: with the per-test removal gone, every HOME above is still pending
+// here (~650 of them, the volume that timed the `afterAll` out), and with it
+// in place nothing is. Two cases, because the removal happens BETWEEN them —
+// `-t` on this describe's name is enough to run the guard on its own.
+describe('fixture cleanup: a case\'s HOME goes when the case ends, so the file\'s afterAll is bounded', () => {
+  let made = '';
+  it('a real update box is made, and is pending, while its case runs', () => {
+    made = freshUpdateBox('ccrc-update-cleanup-probe-');
+    plantOldBox(made, { version: 'v1.0.0' });
+    expect(existsSync(join(made, 'ccrc')), 'the probe box was never planted').toBe(true);
+    expect(pendingTmpFixtures()).toContain(made);
+  });
+
+  it('… and once that case has ended it is gone from disk and from the afterAll\'s list, which holds nothing', () => {
+    expect(made, 'the first case never ran — this one would be vacuous').not.toBe('');
+    expect(existsSync(made), 'the previous case\'s HOME outlived its case').toBe(false);
+    // NOTHING pending: this file makes no fixture outside a test, so the final
+    // hook has nothing left to remove. A deliberate collection-time or
+    // `beforeAll` fixture would be listed here by name — never by raising a count.
+    expect(pendingTmpFixtures(), 'fixtures waiting for the afterAll').toEqual([]);
+  });
 });
