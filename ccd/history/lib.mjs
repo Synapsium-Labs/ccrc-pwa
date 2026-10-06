@@ -903,10 +903,12 @@ export function decideEpochLine(line, obs) {
 
 /** A waiting candidate at a later tick (§6.1): confirmed when `.uuid` names
  *  its sid within `EPOCH_CONFIRM_WINDOW_MS` of the line's journaling, dropped
- *  after it (`epoch_unconfirmed`, or `epoch_unconfirmed_superseded` when the
- *  caller found the observed `.uuid` to be a later clear line's sid of the
- *  same id, §14 risk 24). An unreadable `.uuid` neither confirms nor drops
- *  early. D-4190 */
+ *  after it (`epoch_unconfirmed`, or `epoch_unconfirmed_superseded` when
+ *  `.uuid` AT THE DROP names ANY clear epoch of the same id, §14 risk 24; not
+ *  only a later clear line's sid, since the v1 `epoch_candidates` row keeps no
+ *  observation and no line order, D-4190). The parameter keeps its older name
+ *  `supersededByLaterClearOfSameId`: every caller passes it by name. An
+ *  unreadable `.uuid` neither confirms nor drops early. D-4190 */
 export function decideCandidate({ sid, journaledMs, nowMs, currentUuid, supersededByLaterClearOfSameId }) {
   if (nowMs - journaledMs > EPOCH_CONFIRM_WINDOW_MS) return { kind: 'drop', superseded: supersededByLaterClearOfSameId === true };
   if (currentUuid.state === 'value' && currentUuid.value === sid) return { kind: 'confirm', by: 'later-tick' };
@@ -914,8 +916,9 @@ export function decideCandidate({ sid, journaledMs, nowMs, currentUuid, supersed
 }
 
 /** §6.1's location rule for a clear epoch `.uuid` no longer names (two quick
- *  `/clear`s): its transcript's first uuid row's `cwd` against the observed
- *  `.workdir`. Realpaths decide when both resolved; verbatim strings decide
+ *  `/clear`s): its transcript's first uuid row's `cwd` against `.workdir` as
+ *  the caller read it (observed at drain; the registry's at a later tick,
+ *  D-4189). Realpaths decide when both resolved; verbatim strings decide
  *  when either no longer resolves. An absent or unreadable `.workdir`, or a
  *  row with no `cwd`, never confirms. D-4189
  *  D-4191 */
