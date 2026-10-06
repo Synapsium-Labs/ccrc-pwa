@@ -27,7 +27,7 @@
 // it. The sheet cannot know before the tap what will keep it, so
 // `abandonConsequence` says what happens WHEN nothing does and never that it
 // will; it branches on the workspace's child mark, read only through
-// `childMarkOf` (`runWords.ts`). The abandon door is ungated against the box
+// `childMarkOf` (`runWords.ts`), by `abandonChildOf`. The abandon door is ungated against the box
 // token (D-282; the route's UNGATED note, `server/src/coord/routes.ts`); its
 // reaching that destructive act is inside the single-user trust model:
 // recorded, not changed.
@@ -153,7 +153,7 @@ export function abandonConsequence(
   // Decided on `run.sessionId` alone: a run with no session names no workspace,
   // so it names no child (close.ts's abandon arm does no fleet act for it).
   if (run.sessionId === null) {
-    return `Abandon run ${run.id}? It holds no workspace, so nothing is released or reclaimed.`;
+    return `Abandon run ${run.id}? It holds no workspace of its own, so it has none to release or reclaim.`;
   }
   const ws = workspaceOf(run);
   switch (child) {

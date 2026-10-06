@@ -1545,6 +1545,32 @@ describe('childReclaimChip — the one tolerant reader of RunSummary.childReclai
     expect(childReclaimTitle(bare, 0)).toBe('workspace pending');
   });
 
+  // Each of the reader's own guards, by a case that reds when that guard is deleted.
+  it('reads an empty sentence as none — no line, and the label as the title', () => {
+    const chip = childReclaimChip(r({ childReclaim: { word: 'refused', sentence: '', at: null } }))!;
+    expect(chip.sentence).toBeNull();
+    expect(chip.line).toBeNull();
+    expect(childReclaimTitle(chip, 0)).toBe('workspace refused');
+  });
+
+  it('reads a moment that is not a finite number as none — the title carries no age', () => {
+    const chip = childReclaimChip(r({ childReclaim: { word: 'deferred', sentence: 'S', at: NaN } }))!;
+    expect(chip.at).toBeNull();
+    expect(childReclaimTitle(chip, 1_000_000)).toBe('S');
+  });
+
+  // The empty-string case cannot see the `typeof` check: these can.
+  it.each([['missing', undefined], ['a number', 5]] as const)('reads a sentence that is %s as none', (_what, sentence) => {
+    const raw = sentence === undefined ? { word: 'refused', at: null } : { word: 'refused', sentence, at: null };
+    const chip = childReclaimChip(r({ childReclaim: raw as unknown as ChildReclaimStatus }))!;
+    expect(chip.sentence).toBeNull();
+    expect(chip.line).toBeNull();
+  });
+
+  it.each(['x', 5, true])('is silent on a childReclaim that is not an object (%s)', (v) => {
+    expect(childReclaimChip(r({ childReclaim: v as unknown as ChildReclaimStatus }))).toBeNull();
+  });
+
   it('calls a row gone only when its workspace was reclaimed', () => {
     expect(childReclaimGone(childReclaimChip(r({ childReclaim: { word: 'reclaimed', sentence: null, at: null } })))).toBe(true);
     for (const word of ['pending', 'deferred', 'paused', 'refused'] as const) {
@@ -1598,6 +1624,37 @@ describe('the finished row carries the reclaim chip, and a reclaimed row is iner
   it.each(['pending', 'deferred', 'paused', 'refused'] as const)('keeps the open door on a %s row', async (word) => {
     await boardWith({ word, sentence: 'S', at: null });
     expect(document.querySelector('.run-open')).not.toBeNull();
+  });
+
+  // Only `reclaimed` is gone. A word this build does not know leaves a workspace
+  // it cannot rule out, so the row keeps its door.
+  it('keeps the open door on a row whose word this build does not know', async () => {
+    await boardWith({ word: 'evicted', sentence: 'S', at: null } as unknown as ChildReclaimStatus);
+    expect(chipEl()).toHaveAttribute('data-child-reclaim', 'unknown');
+    expect(document.querySelector('.run-open')).not.toBeNull();
+    expect(chipEl()!.closest('li')).not.toHaveAttribute('data-inert');
+  });
+
+  // The inert row keeps both controls, and keeps them where they were: last,
+  // the resume door before the abandon control. A dead coordinator and a
+  // programme with no open run are what make the resume door render at all.
+  it('keeps the resume door and the abandon control on a reclaimed row — its last two children, in that order', async () => {
+    const store = makeStore();
+    act(() => {
+      store.setState({
+        runs: [], runsFrameSeen: true, fleetFrameSeen: true,
+        sessions: [sess({ id: 'ccrc-pwa-coordinator', workspace: null, branch: null, status: 'dead', lifecycle: 'orphan' })],
+      });
+    });
+    render(<RunsScreen store={store} loadCaps={NO_CAPS} loadRuns={async () => ({
+      runs: [r({ id: 7, state: 'done', closedAt: Date.now() - 60_000,
+                 childReclaim: { word: 'reclaimed', sentence: 'gone', at: null } })],
+    })} />);
+    const resume = await screen.findByRole('button', { name: /resume run 7/i });
+    const li = resume.closest('li')!;
+    expect(li).toHaveAttribute('data-inert', 'true');
+    expect(document.querySelector('.run-open')).toBeNull();
+    expect([...li.children].slice(-2).map((c) => c.className)).toEqual(['run-resume', 'run-abandon']);
   });
 });
 

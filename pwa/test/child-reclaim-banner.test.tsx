@@ -394,6 +394,9 @@ describe('the collapsed kept line', () => {
     expect(rows[0]!.querySelector('.child-reclaim-sentence')?.textContent).toBe(many.sentence);
     expect(whoOf(rows[0]!)).toEqual(many.members.map((m) => `run #${m.runId} · ${m.sessionId}`));
     expect(whoOf(rows[0]!)).toHaveLength(6);
+    // The sentence, THEN the member lines: the order of the li's own children.
+    expect([...rows[0]!.children].map((c) => c.className))
+      .toEqual(['child-reclaim-sentence', ...Array.from({ length: 6 }, () => 'child-reclaim-who')]);
     // The PWA maps no word: the word is a React key and is never the rendered text.
     expect(rows[0]!.textContent).not.toContain(many.word);
     // A report, not a tap: the collapsed line adds no control.
@@ -484,7 +487,7 @@ describe('the collapsed kept line', () => {
   });
 
   // The reader drops a collapsed line that names nobody, and one wrong in
-  // exactly one field — word, sentence, members — each on its own, so each
+  // exactly one field — kind, word, sentence, members — each on its own, so each
   // check pins itself.
   it('childReclaimAttentionOf drops a kept-many item left with no member, and one wrong in a single field', () => {
     const good = keptMany(6);
@@ -493,7 +496,10 @@ describe('the collapsed kept line', () => {
     const noWord = { kind: good.kind, sentence: good.sentence, members: good.members };
     const noSentence = { kind: good.kind, word: good.word, members: good.members };
     const membersNotArray = { ...good, members: 'ccrc-pwa-kept-1' };
-    for (const bad of [noMembers, allBad, noWord, noSentence, membersNotArray]) {
+    // Wrong in `kind` alone: another arm's kind, and none at all.
+    const keptKind = { ...good, kind: 'kept' };
+    const noKind = { word: good.word, sentence: good.sentence, members: good.members };
+    for (const bad of [noMembers, allBad, noWord, noSentence, membersNotArray, keptKind, noKind]) {
       expect(childReclaimAttentionOf({ childReclaimAttention: [good, bad] })).toEqual([good]);
     }
     // A member wrong in only its sessionId is dropped alone.

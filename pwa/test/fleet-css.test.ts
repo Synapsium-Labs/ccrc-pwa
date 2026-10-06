@@ -521,6 +521,11 @@ describe('selection is polarity, status is hue', () => {
     const props = stripComments(child).split(';').map((d) => d.split(':')[0]!.trim()).filter((p) => p !== '');
     expect(props.sort(), 'no truncation, and nothing beyond the ruled shape').toEqual(['color', 'flex']);
     expect(selectorsOf(css, '.sess-child')).toEqual(['.sess-child']);
+    // No truncation from ANY rule that targets the label — the active-slab group
+    // and a later rule of the same name included, not only the one read above.
+    for (const prop of ['text-overflow', 'overflow', 'overflow-x', 'overflow-y', 'white-space']) {
+      expect(declaredValues(css, '.sess-child', prop), prop).toEqual([]);
+    }
   });
 
   // The list above names cells; this names the RULE that keeps producing them.

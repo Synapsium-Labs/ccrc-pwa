@@ -63,7 +63,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 const NOT_CHILD = 'Abandon run 3 — clear-cove? A release destroys nothing: the worktree survives, the record stays.';
 const CHILD = 'Abandon run 3 — clear-cove? clear-cove is a child workspace, so the server reclaims it when nothing keeps it: its commits and uncommitted work (not ignored or secret-shaped files) are pinned in the attic and its transcripts kept, then its session is stopped and its worktree, branch and clips are removed.';
 const UNKNOWN = 'Abandon run 3 — clear-cove? This board cannot tell whether clear-cove is a child workspace. If it is, the server reclaims it when nothing keeps it, pinning its commits and uncommitted work (not ignored or secret-shaped files) in the attic first; if not, a release destroys nothing.';
-const NO_SESSION = 'Abandon run 3? It holds no workspace, so nothing is released or reclaimed.';
+const NO_SESSION = 'Abandon run 3? It holds no workspace of its own, so it has none to release or reclaim.';
 
 const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null,
