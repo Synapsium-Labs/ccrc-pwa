@@ -85,7 +85,7 @@ Reviewers: do not raise these.
   - The scope text for this wave lists R18(d)'s other points but not this one, and the 02:45 wave-13 list does not name it either.
   - Removing an exception can only make a case stricter. So no red can show the exception is needed unless a case plants the fork-window race it absorbs.
   - Reading 4 asks the coordinator where it goes. No code changes for it here.
-- **The unpinned guards this wave's measurement found** (T6-INT-W, T6-RERAISE: 0 red each). They are recorded as rows (Task 4, A19), not pinned; pinning them is a new test (Reading 8).
+- **The unpinned guards this wave's measurement found** (T6-INT-W, T6-RERAISE: 0 red each). They are recorded as rows (Task 4, A19), not pinned; pinning them is a new test (Reading 8). *(Ruled 2026-10-06, Reading 8: T6-RERAISE is pinned in this wave, D-4072; T6-INT-W goes to wave 13.)*
 - **A portable shim for D3**, such as `_plat_size() { wc -c < "$1"; }`. The coordinator preferred Linux-only (Reading 1).
 - **README beyond the one sentence, and CLAUDE.md.** README grows by 3 lines (5732 → 5735). That stays inside CLAUDE.md's `~5700` ratchet (`pools-prose.test.ts`: |claimed − real| ≤ 100), so CLAUDE.md is not edited.
 - **Retiring S0 or S10.** D-3982's retirement rule covers both: they retire once no box can roll back to a pre-wave-10 or pre-wave-11 script.
