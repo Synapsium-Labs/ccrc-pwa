@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9d63daff548b7761879e28ec4ca818f9fd2e0dd22710c0a284c719a5c43c4aea
+# ccrc:generated 1 sha256=2c308fb21194b924499cac27063494631e74a2c7a4488bb5352a089142bbd982
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -18643,7 +18643,7 @@ _route_note() {   # id reason [detail] — record why the applier declined this 
   # argues at length there: `$REG/<id>.routeskip` is the MARKER (`<epoch>
   # <reason>`, rewritten the moment the reason CHANGES, removed by
   # `_route_note_clear`) and `$REG/<id>.routenote` is the log floor's ANCHOR (a
-  # bare epoch, cleared only by `_route_readback`). Without that split a reason that FLAPS — an
+  # bare epoch, cleared by `_route_readback` and reaped with the row by `_reg_purge`). Without that split a reason that FLAPS — an
   # overlay hiding the statusline for one tick, a turn starting between two
   # ticks — defeats the floor completely and writes a swap.log line every 5s.
   #
@@ -19221,13 +19221,44 @@ _route_ack_subject() {   # label desc want -> stdout the ERE naming the model th
   # and the acknowledgement — `Set model to Opus 5.5 (default) for this session
   # only` — never carried it: every `class=default` apply on such a lane was
   # `apply-unconfirmed`. The sentence is the no-model form whatever follows it.
-  local label="$1" desc="$2" want="$3" model=""
+  #
+  # …BUT IT NAMES ITS MODEL ALL THE SAME, and the outcome carries it (review
+  # finding 2): `(currently Opus 5.5)` on the row, `Yes, switch to Opus 5.5
+  # (default)` on the cache dialog and `Set model to Opus 5.5 (default) for this
+  # session only` as the outcome (measured, `cc291-model-default-*`). So the
+  # `(currently X)` is read with its parentheses BALANCED — 2.1.280 draws
+  # `(currently Opus 5.5 (1M context))` — and the row binds `X (default)`. The
+  # loose `.*` is left only to a Default row that names no model at all (a
+  # `(currently …` cut by a wrap, a row with no description), and
+  # `_route_model_ack_wait` never presses Enter on a dialog for that subject.
+  #
+  # THE SUBJECT IS MATCHED WHOLE (review finding 4): the caller anchors it at
+  # both ends, so `(Opus|Opus 5\.5)` no longer binds `Opus 4.1` or `Opus 5.5 (1M
+  # context)`. A row read with a label and no description (the shapes this
+  # tree's own fixtures draw) keeps its old reach — the label, then optionally
+  # more words — rather than demanding an outcome nobody measured for it.
+  local label="$1" desc="$2" want="$3" model="" cur="" rest c i depth=0
   [[ "$desc" == *" · "* ]] && model="${desc%% · *}"
   [[ "$model" == "Use the default model ("* ]] && model=""
-  if [[ -n "$model" ]]; then printf '(%s|%s)' "$(_route_re_quote "$label")" "$(_route_re_quote "$model")"
-  elif [[ -n "$label" && "$want" != Default ]]; then _route_re_quote "$label"
+  if [[ "$want" == Default && "$desc" == "Use the default model (currently "* ]]; then
+    rest="${desc#Use the default model (currently }"
+    for ((i = 0; i < ${#rest}; i++)); do
+      c="${rest:i:1}"
+      if [[ "$c" == "(" ]]; then depth=$((depth + 1))
+      elif [[ "$c" == ")" ]]; then
+        (( depth == 0 )) && { cur="${rest:0:i}"; break; }
+        depth=$((depth - 1))
+      fi
+    done
+  fi
+  if [[ -n "$cur" ]]; then printf '%s \\(default\\)' "$(_route_re_quote "$cur")"
+  elif [[ -n "$model" ]]; then
+    printf '(%s|%s)' "$(_route_re_quote "$label")" "$(_route_re_quote "$model")"
+    [[ "$want" == Default ]] && printf '( \\(default\\))?'
+  elif [[ -n "$label" && "$want" != Default ]]; then printf '%s( .+)?' "$(_route_re_quote "$label")"
   else printf '.*'
   fi
+  return 0
 }
 
 _pane_model_state() {   # pane -> `picker` | `dialog [<its cursor row>]` | `ack <outcome>` | `none`: the LOWEST of the /model flow's three shapes
@@ -19259,16 +19290,25 @@ _pane_model_state() {   # pane -> `picker` | `dialog [<its cursor row>]` | `ack 
   # place of the cache sentence (read in the bundled source, not measured):
   # that confirmation is the account owner's gate, never ccd's to press, so it
   # reads `dialog` with nothing after it and nothing answers it.
+  # THE SUBTITLE IS WHAT TELLS THEM APART, never the sentence (review finding
+  # 3): the hook's reason is the hook author's text and may quote the cache
+  # sentence. The 2.1.291 bundle picks the subtitle from the one condition —
+  # `A PreModelSwitch hook asked you to confirm` for a hook, `Your next response
+  # will be slower and use more tokens` for the cache — so the cache form is the
+  # one whose FIRST line under the title is that subtitle (measured), carrying
+  # the sentence, with no hook subtitle anywhere in the block.
   printf '%s\n' "$1" | LC_ALL=C awk '
     { t = $0; gsub(/^[ \t]+|[ \t]+$/, "", t) }
     t == "Select model"  { kind = "picker"; text = ""; next }
-    t == "Switch model?" { kind = "dialog"; text = ""; cache = 0; next }
+    t == "Switch model?" { kind = "dialog"; text = ""; cache = 0; subt = 0; hook = 0; first = 1; next }
     index(t, "⎿") == 1 {
       a = t; sub(/^⎿[ \t]+/, "", a)
       if (index(a, "Set model to ") == 1 || index(a, "Kept model as ") == 1) { kind = "ack"; text = a }
       next }
+    kind == "dialog" && first && t != "" { first = 0; if (t == "Your next response will be slower and use more tokens") subt = 1 }
+    kind == "dialog" && index(t, "A PreModelSwitch hook asked you to confirm") { hook = 1; text = "" }
     kind == "dialog" && index(t, "is cached for the current model") { cache = 1 }
-    kind == "dialog" && cache && t ~ /^❯[ \t]*[0-9]+\./ { text = t }
+    kind == "dialog" && cache && subt && !hook && t ~ /^❯[ \t]*[0-9]+\./ { text = t }
     END { if (kind == "") print "none"; else print kind (text != "" ? " " text : "") }'
 }
 
@@ -19323,15 +19363,19 @@ _route_model_ack_wait() {   # id subject-ERE -> 0 iff the pane's LATEST model ou
   # carries the cache sentence, and whose cursor row is `1. Yes, switch to` the
   # model this row selects — never to a picker, where Enter is "set as
   # default", the form that SAVES the model into the lane's settings.json.
+  # Both patterns hold the subject WHOLE, anchored at its end (review finding
+  # 4), and the loose `.*` a Default row naming no model keeps answers no
+  # dialog at all (review finding 2): an Enter bound to nothing is an Enter on
+  # whatever model `s` happened to land on.
   local id="$1" subj="$2" t i st answered=0
   t=$(_tmux_t "$id")
   for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
     st=$(_pane_model_state "$(tmux capture-pane -t "$t" -p 2>/dev/null)")
     case "$st" in
       "ack "*)
-        printf '%s\n' "${st#ack }" | grep -qE "^Set model to ($subj).*for this session only" && return 0 ;;
+        printf '%s\n' "${st#ack }" | grep -qE "^Set model to ($subj) for this session only\$" && return 0 ;;
       "dialog "*)
-        if [[ "$answered" == 0 ]] && printf '%s\n' "${st#dialog }" | grep -qE "^❯[[:space:]]*1\.[[:space:]]+Yes, switch to ($subj)"; then
+        if [[ "$answered" == 0 && "$subj" != '.*' ]] && printf '%s\n' "${st#dialog }" | grep -qE "^❯[[:space:]]*1\.[[:space:]]+Yes, switch to ($subj)\$"; then
           tmux send-keys -t "$t" Enter; answered=1
         fi ;;
     esac
@@ -19385,15 +19429,27 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
   # lowest thing on the pane: on a loaded box one second after Enter is not
   # always enough for it to draw, and a capture taken before it did used to
   # answer `no-picker-row` while the picker opened behind the Escape.
-  local id="$1" cls="$2" w="$3" t pane="" picker rows n cur label desc want target=0 curs=0 i tlabel="" tdesc=""
+  #
+  # …AND ONLY A PICKER `/model` OPENED COUNTS (review finding 1). A picker
+  # QUOTED on the pane — a reply or a tool output showing one, which this
+  # repo's own sessions print — is a `Select model` title like any other, and
+  # with nothing drawn under it but the prompt chrome it is the lowest shape
+  # before anything is typed. The wait then broke on the quote and took its
+  # rows, cursor and delta for the real picker's. So the pane is captured
+  # ONCE BEFORE `/model`, and a picker block identical to the one already on
+  # screen then is not the one this act opened: the wait goes on, and a quote
+  # that stays the only picker answers `no-picker-row`.
+  local id="$1" cls="$2" w="$3" t pane="" picker="" base rows n cur label desc want target=0 curs=0 exact=0 i tlabel="" tdesc=""
   t=$(_tmux_t "$id")
+  base=$(_pane_model_picker "$(tmux capture-pane -t "$t" -p 2>/dev/null)")
   tmux send-keys -t "$t" -l "/model"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
   for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
     pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
-    [[ "$(_pane_model_state "$pane")" == picker ]] && break
+    picker=$(_pane_model_picker "$pane")
+    [[ -n "$picker" && "$picker" != "$base" ]] && break
+    picker=""
     sleep 1
   done
-  picker=$(_pane_model_picker "$pane")
   rows=$(_route_picker_rows "$picker")
   if [[ "$cls" == default || -z "$cls" ]]; then want="Default"; else want="${cls^}"; fi
   while IFS=$'\t' read -r n cur label desc; do
@@ -19402,8 +19458,13 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
     # THE ROW'S OWN WORDS ARE KEPT, not just its number: `_route_ack_subject`
     # binds the acknowledgement to the model this row selects, and the loop
     # variables hold the LAST row read by the time it is asked.
+    # A LABEL THAT IS THE CLASS WORD EXACTLY WINS, then the FIRST row whose label
+    # starts with it (review finding 5): 2.1.280 lists `4. Sonnet` and `5. Sonnet
+    # 5 (1M context)`, and the last first-word match moved `class=sonnet` to the
+    # 1M variant.
     if [[ "$want" == Default ]] || _is_anthropic_backend "$w"; then
-      [[ "${label%% *}" == "$want" ]] && { target="$n"; tlabel="$label"; tdesc="$desc"; }
+      if [[ "$exact" == 0 && "$label" == "$want" ]]; then exact=1; target="$n"; tlabel="$label"; tdesc="$desc"
+      elif [[ "$target" == 0 && "${label%% *}" == "$want" ]]; then target="$n"; tlabel="$label"; tdesc="$desc"; fi
     else
       [[ "$desc" == *"Custom $want model"* ]] && { target="$n"; tlabel="$label"; tdesc="$desc"; }
     fi
@@ -19416,7 +19477,8 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
   if [[ "$target" == 0 || "$curs" == 0 ]]; then
     _route_model_close "$id"
     KS_WHY=no-picker-row
-    if [[ -z "$picker" ]]; then KS_DETAIL="class=$cls, the capture carries no model picker"
+    if [[ -z "$picker" && -n "$base" ]]; then KS_DETAIL="class=$cls, the capture carries no model picker but the one on the pane before /model"
+    elif [[ -z "$picker" ]]; then KS_DETAIL="class=$cls, the capture carries no model picker"
     elif [[ "$curs" == 0 ]]; then KS_DETAIL="class=$cls, the capture carries no cursor row"
     else KS_DETAIL="class=$cls"; fi
     return 2
@@ -19749,13 +19811,12 @@ _route_effort_shown() {   # level -> the word the status line, and so the usage 
   # ONE SPELLING OF A MEASURED FACT (2.1.280): `ultracode` shows as `xhigh` —
   # it is xhigh plus dynamic workflow orchestration, and the status line's
   # `effort.level` names only the level. `_route_effort_ack_wait` reads the
-  # `🤖` segment through it, and the read-back asks it which record words a
-  # sidecar's word could mean.
+  # `🤖` segment through it.
   [[ "$1" == ultracode ]] && { printf 'xhigh'; return 0; }
   printf '%s' "$1"
 }
 
-_usage_sidecar_read() {   # id -> ONE line: absent | unreadable | malformed | reading <ts> <model|-> <effort|->. Always 0.
+_usage_sidecar_read() {   # id -> ONE line: absent | unreadable | malformed | reading <ts> <model|-> <effort|-> <uuid|->. Always 0.
   # FOUR ANSWERS, NEVER ONE NULL — `readUsageMeasured`'s (server/src/usage.ts),
   # in bash. A sidecar that is not there, one that is there and cannot be read
   # (not a regular file, no read permission — never `cat` on a FIFO), and one
@@ -19764,23 +19825,35 @@ _usage_sidecar_read() {   # id -> ONE line: absent | unreadable | malformed | re
   # three remedies, and none of them is "the pane runs nothing". Freshness is
   # the CALLER's question, asked of the `ts` this answers.
   #
-  # FIELDS BY KEY, NOT BY POSITION. The hook writes `jq -c` output, whose string
-  # values escape every `"`, so `"<key>":` preceded by `{` or `,` occurs only as
-  # a real key. A model id outside a conservative charset, or a null one, is
-  # `-`; so is an effort that is not one lower-case word.
-  local f="$REG/usage/$1.json" body ts="" model=- effort=-
+  # FIELDS BY KEY, NOT BY POSITION — over THE HOOK'S OWN SHAPE ONLY: one flat
+  # `jq -c` object of scalars (statusline-command.sh), whose string values
+  # escape every `"`, so there `"<key>":` preceded by `{` or `,` occurs only as
+  # a real key. The file is writable by anything running as the fleet's one
+  # user, though, and a body that a JSON parser would read differently — a
+  # nested object, a key given twice (the regex takes the first, the server's
+  # `JSON.parse` the last) — is `malformed` rather than a reading the two
+  # readers disagree on (review finding 8). A model id outside a conservative
+  # charset, or a null one, is `-`; so is an effort that is not one lower-case
+  # word, and a `uuid` that is not a session id's hex-and-dashes.
+  local f="$REG/usage/$1.json" body ts="" model=- effort=- uuid=- k
   local re_ts='[{,]"ts":([0-9]{1,12})[,}]' re_model='[{,]"model":"([A-Za-z0-9._:/@-]{1,128}(\[1m\])?)"' re_eff='[{,]"effort":"([a-z]{1,16})"'
+  local re_uuid='[{,]"uuid":"([0-9A-Fa-f-]{1,64})"'
   [[ -e "$f" || -L "$f" ]] || { echo absent; return 0; }
   [[ -f "$f" && -r "$f" ]] || { echo unreadable; return 0; }
   body=$(head -c 4096 -- "$f" 2>/dev/null) || { echo unreadable; return 0; }
   [[ "$body" =~ ^[[:space:]]*\{.*\}[[:space:]]*$ && "$body" =~ $re_ts ]] || { echo malformed; return 0; }
   ts="${BASH_REMATCH[1]}"
+  [[ "${body#*\{}" == *"{"* ]] && { echo malformed; return 0; }
+  for k in ts model effort uuid; do
+    [[ "$body" == *"\"$k\":"*"\"$k\":"* ]] && { echo malformed; return 0; }
+  done
   [[ "$body" =~ $re_model ]] && model="${BASH_REMATCH[1]}"
   [[ "$body" =~ $re_eff ]] && effort="${BASH_REMATCH[1]}"
-  echo "reading $ts $model $effort"
+  [[ "$body" =~ $re_uuid ]] && uuid="${BASH_REMATCH[1]}"
+  echo "reading $ts $model $effort $uuid"
 }
 
-_route_readback() {   # id -> 0 iff it recorded the pending class (and effort) as already running and nothing is pending now; 1 the tick goes on
+_route_readback() {   # id -> 0 iff it recorded the pending class as already running and nothing is pending now; 1 the tick goes on
   # A READING COUNTS ONLY WHEN IT IS OF THIS PANE, NOW. Each of these is its own
   # condition and none of them counts: no reading (`_usage_sidecar_read`'s
   # absent / unreadable / malformed); a reading older than ROUTE_READBACK_FRESH
@@ -19792,15 +19865,28 @@ _route_readback() {   # id -> 0 iff it recorded the pending class (and effort) a
   # pending class. `default` never reads back: no model id is the lane's
   # default, so that class waits for the picker's own acknowledgement.
   #
-  # CLASS FIRST, THEN EFFORT — `_route_apply_now`'s order, for its reason
-  # (D-2811). While the class is pending and unread, effort is not asked.
+  # "OLDER THAN" IS HELD TO THE SECOND, NOT ACROSS IT (review finding 7): the
+  # sidecar's `ts` is `date +%s` and the stamp a whole-second mtime, so a
+  # reading from the stamp's own second cannot be told from the previous
+  # process's last render, and it must be strictly later. The stamp is
+  # whatever last wrote `routeapplied` — a spawn, an acknowledged apply, a
+  # read-back, the seed — which is stricter than "the last spawn", and safe:
+  # it costs one more render.
   #
-  # EFFORT READS BACK ONLY WHERE THE SIDECAR'S WORD MEANS ONE RECORD WORD. The
-  # sidecar carries the status line's `effort.level`, and `ultracode` shows as
-  # `xhigh` there (`_route_effort_shown`), so a sidecar `xhigh` is `xhigh` or
-  # `ultracode` and reads back as neither; `low`, `medium`, `high` and `max`
-  # map one to one. `auto` is never pending past one tick (recorded without a
-  # keystroke) and no sidecar says it.
+  # A READING OF ANOTHER CLAUDE IS NOT THIS PANE'S (review finding 10). The
+  # hook names the file after the tmux SESSION, so a second interactive
+  # `claude` in a split of `cc-<id>` writes here too; the reading counts only
+  # when its `uuid` is the one `_sync_uuid` mirrored into the registry this
+  # same tick, before this runs.
+  #
+  # EFFORT NEVER READS BACK (review finding 6). The sidecar's `effort` is the
+  # status line's `effort.level`, which is the MODEL'S DEFAULT when no level
+  # was set: a session spawned with none, asked for the level its model
+  # happens to default to, would be recorded as carrying a session-only effort
+  # nothing ever typed — and the next class change, which keeps a TYPED
+  # session-only effort (D-2811) and lets a default follow the new model,
+  # would leave the record naming a level the pane no longer runs, with
+  # nothing pending to correct it. The tick types the effort as it always did.
   #
   # WHAT IT CLEARS, and why `routenote` too, which `_route_note_clear` keeps on
   # purpose: that anchor floors a STANDING refusal so a flapping reason cannot
@@ -19812,25 +19898,20 @@ _route_readback() {   # id -> 0 iff it recorded the pending class (and effort) a
   #
   # ONE LINE in swap.log says what was recorded and on what reading. `--apply`
   # never reaches this: the operator's verb types (`cmd_route`).
-  local id="$1" want cls eff rd ts model effort now stamp got="" n w
-  want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
+  local id="$1" want cls rd ts model effort uuid now stamp got="" mine
+  want=$(_route_wanted "$id"); cls="${want%% *}"
   rd=$(_usage_sidecar_read "$id")
   [[ "$rd" == "reading "* ]] || return 1
-  read -r _ ts model effort <<< "$rd"
+  read -r _ ts model effort uuid <<< "$rd"
   now=$(date +%s)
   [[ "$ts" =~ ^[0-9]+$ && $((now - 10#$ts)) -le "$ROUTE_READBACK_FRESH" ]] || return 1
   stamp=$(_plat_mtime "$REG/$id.routeapplied" 2>/dev/null) || return 1
-  [[ "$stamp" =~ ^[0-9]+$ && 10#$ts -ge 10#$stamp ]] || return 1
+  [[ "$stamp" =~ ^[0-9]+$ && 10#$ts -gt 10#$stamp ]] || return 1
+  mine=$(_reg_get "$id" uuid 2>/dev/null)
+  [[ "$uuid" != - && -n "$mine" && "$uuid" == "$mine" ]] || return 1
   if [[ -n "$cls" && "$cls" != "$(_route_applied_get "$id" class)" ]]; then
     [[ "$model" != - && "$(_model_family_class "$model")" == "$cls" ]] || return 1
     _route_applied_set "$id" class "$cls"; got="class=$cls"
-  fi
-  if [[ -n "$eff" && "$eff" != "$(_route_applied_get "$id" effort)" && "$effort" != - ]]; then
-    n=0
-    for w in $ROUTE_EFFORTS; do [[ "$(_route_effort_shown "$w")" == "$effort" ]] && n=$((n + 1)); done
-    if [[ "$n" == 1 && "$(_route_effort_shown "$eff")" == "$effort" ]]; then
-      _route_applied_set "$id" effort "$eff"; got="${got:+$got }effort=$eff"
-    fi
   fi
   [[ -n "$got" ]] || return 1
   _route_tries_clear "$id"; _route_note_clear "$id"; rm -f -- "$REG/$id.routenote"

@@ -2528,13 +2528,18 @@ session-only `/model` or `/effort` — once the pane is idle, not drafting and n
 `workflow` and `subagent` take effect at the next spawn and `compact` at the compactor's next tick. With `--apply`
 ccd tries those keystrokes at once, under the same test; a pane that fails it has the refusal recorded, the verb
 answers `queued`, and the tick retries. The `/model` keystrokes find the picker anywhere on the pane by its title,
-answer Claude Code's `Switch model?` confirmation (raised whenever the conversation has turns), and count a switch
-only on the pane's newest `Set model to … for this session only` line naming the row chosen. A class the pane
-already runs needs no keystroke: when the session's usage sidecar (below) is under 30 minutes old, was written
-after the session's last spawn, and names a model of the pending class, the tick records the class applied, clears
-its retry count and refusal note, and writes one `route-readback` line to swap.log. An effort level reads back the
-same way, except `xhigh`, which the status line also shows for `ultracode`. `default` never reads back, since no
-model id names it. `haiku` takes no effort level, and the pair is refused whichever order it arrives in. A session
+taking only a picker that was not already on screen before `/model` was typed, so a picker quoted in the
+conversation is never driven. They answer the cache form of Claude Code's `Switch model?` confirmation (raised
+whenever the conversation has turns), and only when it names the row chosen; a PreModelSwitch hook's confirmation
+is never answered, and that apply ends `apply-unconfirmed`. A switch counts only on the pane's newest `Set model to
+… for this session only` line naming the row chosen, whole: the Default row's name is the model in its own
+`(currently …)` plus ` (default)`. A class the pane already runs needs no keystroke: when the session's usage
+sidecar (below) is under 30 minutes old, was written after `routeapplied` was last stamped (a spawn, an apply, a
+read-back), belongs to the session's own `uuid`, and names a model of the pending class, the tick records the class
+applied, clears its retry count and refusal note, and writes one `route-readback` line to swap.log. An effort level
+never reads back, since the status line shows a model's default level the same way as one that was set, and the
+tick types it. `default` never reads back either, since no model id names it. `haiku` takes no effort level, and
+the pair is refused whichever order it arrives in. A session
 with no record spawns as it always did.
 
 **From the phone**, the session header's model and effort chips (or **Change model** / **Change effort** in its

@@ -803,6 +803,9 @@ describe('the /model flow as Claude Code 2.1.285–2.1.291 draws it (measured 20
     h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
     expect(h.reg(ID, 'routeapplied')).not.toContain('class=fable');
     expect(h.reg(ID, 'routeskip')).toMatch(/apply-unconfirmed/);
+    // ONCE (review finding 11): a dialog still drawn on the next poll is a slow repaint, not a second
+    // question — a further Enter could land on the prompt box the moment it closes.
+    expect(keys().slice(keys().indexOf('-l s') + 1).filter((k) => k === 'Enter')).toHaveLength(1);
   });
 
   it('Escape on the dialog lands on the PICKER (measured), so a second Escape closes it', () => {
@@ -863,18 +866,198 @@ describe('the /model flow as Claude Code 2.1.285–2.1.291 draws it (measured 20
     expect(swapLog()).toContain('the capture carries no model picker');
   });
 
+  /** tmux whose first `n` captures answer `$HOME/late.txt` — the pane before the picker has drawn —
+   *  and every later one `pane.txt`. Two covers the capture taken before `/model` is typed (the
+   *  baseline a quoted picker is told apart by) and the first one after it. */
+  const lateStub = (n: number): string => {
+    const s = TMUX_STUB.replace('capture-pane) cat "$HOME/pane.txt" ;;',
+      'capture-pane) local stub_caps; stub_caps=$(( $(cat "$HOME/cap-count" 2>/dev/null || echo 0) + 1 )); echo "$stub_caps" > "$HOME/cap-count"; '
+      + `if [[ "$stub_caps" -le ${n} ]]; then cat "$HOME/late.txt"; else cat "$HOME/pane.txt"; fi ;;`);
+    expect(s, 'the stub rewrite applied').not.toBe(TMUX_STUB);
+    return s;
+  };
+
   it('a picker that draws LATE (a loaded box) is waited for, not refused on the first capture', () => {
     // The capture right after Enter shows the prompt still; the picker is there on the next one.
-    const lateStub = TMUX_STUB.replace('capture-pane) cat "$HOME/pane.txt" ;;',
-      'capture-pane) local stub_caps; stub_caps=$(( $(cat "$HOME/cap-count" 2>/dev/null || echo 0) + 1 )); echo "$stub_caps" > "$HOME/cap-count"; '
-      + 'if [[ "$stub_caps" == 1 ]]; then cat "$HOME/late.txt"; else cat "$HOME/pane.txt"; fi ;;');
-    expect(lateStub, 'the stub rewrite applied').not.toBe(TMUX_STUB);
     fs.writeFileSync(path.join(h.home, 'late.txt'), IDLE_PANE);
     h.sh(`_reg_set ${ID} class opus; _reg_set ${ID} routeapplied "class=default"`);
     after('model', PICKER_PANE); after('s', ACK_MODEL('Opus 5'));
-    h.sh(`${lateStub} _route_apply_now ${ID}`);
+    h.sh(`${lateStub(2)} _route_apply_now ${ID}`);
     expect(keys()).toEqual(['-l /model', 'Enter', 'Down', 'Down', '-l s']);
     expect(h.reg(ID, 'routeapplied')).toContain('class=opus');
+  });
+
+  it('a picker QUOTED as the lowest shape while the real one draws LATE: the keys come off the REAL picker', () => {
+    // Review finding 1. The quote was already the pane's lowest model shape before `/model` was typed,
+    // so the first capture after it read `picker` and its rows, cursor and delta were the QUOTE's: with
+    // the quote's cursor on Default, `s` landed on the real picker's cursor row (the current model) and
+    // `class=default` was recorded against a pane still running Fable.
+    const quote = `● The picker read:\n${PICKER('  ❯ 1. Default (recommended) ✔\n    2. Sonnet\n    3. Opus')}`;
+    fs.writeFileSync(path.join(h.home, 'late.txt'), `${quote}${IDLE_PANE}`);
+    pane(`${quote}${IDLE_PANE}`);
+    h.sh(`_reg_set ${ID} class default; _reg_set ${ID} routeapplied "class=fable"`);
+    after('model', `${quote}${capture('cc291-model-default-picker-120x30.txt')}`);
+    after('s', capture('cc291-model-default-switch-120x30.txt'));
+    after('Enter', capture('cc291-model-default-ack-120x30.txt'));
+    h.sh(`${lateStub(2)} _route_apply_now ${ID}`);
+    expect(keys()).toEqual(['-l /model', 'Enter', 'Up', 'Up', '-l s', 'Enter']);
+    expect(h.reg(ID, 'routeapplied')).toContain('class=default');
+  });
+
+  it('…and a quote that is still the only picker after `/model` moves nothing', () => {
+    const quote = `● The picker read:\n${PICKER('  ❯ 1. Default (recommended) ✔\n    2. Sonnet\n    3. Opus')}`;
+    pane(`${quote}${IDLE_PANE}`);
+    h.sh(`_reg_set ${ID} class sonnet; _reg_set ${ID} routeapplied "class=fable"`);
+    after('model', `${quote}${IDLE_PANE}`);
+    after('Escape', `${quote}${IDLE_PANE}`);
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
+    expect(keys().filter((k) => k === 'Down' || k === 'Up' || k === '-l s')).toEqual([]);
+    expect(h.reg(ID, 'routeskip')).toMatch(/no-picker-row/);
+    expect(swapLog()).toContain('the capture carries no model picker but the one on the pane before /model');
+  });
+
+  it('the Default row binds `<X> (default)` off its own `(currently X)`: another model\'s dialog is never answered', () => {
+    // Review finding 2: the Default row's subject was `.*`, so Enter went to ANY cache dialog.
+    const other = capture('cc291-model-default-switch-120x30.txt').replaceAll('Opus 5.5 (default)', 'Haiku 4.5');
+    h.sh(`_reg_set ${ID} class default; _reg_set ${ID} routeapplied "class=fable"`);
+    after('model', capture('cc291-model-default-picker-120x30.txt'));
+    after('s', other);
+    after('Enter', capture('cc291-model-default-ack-120x30.txt'));
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
+    expect(keys().slice(keys().indexOf('-l s') + 1)).not.toContain('Enter');
+    expect(h.reg(ID, 'routeapplied')).not.toContain('class=default');
+  });
+
+  it('…nor is another model\'s outcome taken for the Default row\'s', () => {
+    h.sh(`_reg_set ${ID} class default; _reg_set ${ID} routeapplied "class=fable"`);
+    after('model', capture('cc291-model-default-picker-120x30.txt'));
+    after('s', ACK_MODEL('Haiku 4.5'));
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
+    expect(h.reg(ID, 'routeapplied')).not.toContain('class=default');
+    expect(h.reg(ID, 'routeskip')).toMatch(/apply-unconfirmed/);
+  });
+
+  it('the WRAPPED Default row (80x24) and the nested `(currently Opus 5.5 (1M context))` bind their own name', () => {
+    h.sh(`_reg_set ${ID} class default; _reg_set ${ID} routeapplied "class=fable"`);
+    after('model', capture('cc291-model-picker-80x24.txt'));
+    after('s', ACK_MODEL('Haiku 4.5'));
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
+    expect(h.reg(ID, 'routeapplied')).not.toContain('class=default');
+    expect(h.sh(`_route_ack_subject 'Default (recommended)' 'Use the default model (currently Opus 5.5) ·' Default`))
+      .toBe('Opus 5\\.5 \\(default\\)');
+    expect(h.sh(`_route_ack_subject 'Default (recommended)' 'Use the default model (currently Opus 5.5 (1M context)) · $4/$20' Default`))
+      .toBe('Opus 5\\.5 \\(1M context\\) \\(default\\)');
+  });
+
+  it('a Default row naming no model at all keeps the loose outcome and never answers a dialog', () => {
+    h.sh(`_reg_set ${ID} class default; _reg_set ${ID} routeapplied "class=opus"`);
+    after('model', `${IDLE_PANE}${PICKER('  1. Default (recommended)\n  2. Sonnet\n❯ 3. Opus ✔\n  4. Haiku')}`);
+    after('s', capture('cc291-model-default-switch-120x30.txt'));
+    after('Enter', capture('cc291-model-default-ack-120x30.txt'));
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
+    expect(keys().slice(keys().indexOf('-l s') + 1)).not.toContain('Enter');
+    expect(h.reg(ID, 'routeskip')).toMatch(/apply-unconfirmed/);
+  });
+
+  it('a PreModelSwitch hook\'s gate is never answered, even when its reason quotes the cache sentence', () => {
+    // Review finding 3: one component draws both; only the subtitle tells them apart.
+    const hook = capture('cc291-model-switch-220x50-full.txt')
+      .replace('Your next response will be slower and use more tokens', 'A PreModelSwitch hook asked you to confirm');
+    expect(hook).toContain('is cached for the current model');
+    h.sh(`_reg_set ${ID} class fable; _reg_set ${ID} routeapplied "class=default"`);
+    after('model', capture('cc291-model-picker-220x50-full.txt'));
+    after('s', hook);
+    after('Enter', capture('cc291-model-ack-220x50-full.txt'));
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
+    expect(keys().slice(keys().indexOf('-l s') + 1)).not.toContain('Enter');
+    expect(h.reg(ID, 'routeapplied')).not.toContain('class=fable');
+  });
+
+  it('`_pane_model_state` reports a cursor row only for the cache form: subtitle first, cache sentence, no hook line anywhere', () => {
+    const dlg = (sub: string, extra = ''): string => `${RULE}\n  Switch model?\n  ${sub}\n${extra}  This conversation is cached for the current model. Switching to Sonnet 5.5 means the full history gets\n  re-read on your next message.\n  ❯ 1. Yes, switch to Sonnet 5.5\n    2. No, go back\n`;
+    const state = (p: string): string => { fs.writeFileSync(path.join(h.home, 'probe.txt'), p); return h.sh('_pane_model_state "$(cat "$HOME/probe.txt")"'); };
+    expect(state(dlg('Your next response will be slower and use more tokens'))).toBe('dialog ❯ 1. Yes, switch to Sonnet 5.5');
+    expect(state(dlg('A PreModelSwitch hook asked you to confirm'))).toBe('dialog');
+    expect(state(dlg('Your next response will be slower and use more tokens', '  A PreModelSwitch hook asked you to confirm\n'))).toBe('dialog');
+  });
+
+  it('a `Switch model?` carrying the cache sentence but not the cache subtitle is never answered', () => {
+    const odd = capture('cc291-model-switch-220x50-full.txt')
+      .replace('Your next response will be slower and use more tokens', 'Fable needs a budget sign-off on this account.');
+    h.sh(`_reg_set ${ID} class fable; _reg_set ${ID} routeapplied "class=default"`);
+    after('model', capture('cc291-model-picker-220x50-full.txt'));
+    after('s', odd);
+    after('Enter', capture('cc291-model-ack-220x50-full.txt'));
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
+    expect(keys().slice(keys().indexOf('-l s') + 1)).not.toContain('Enter');
+  });
+
+  it('the row\'s name is matched WHOLE: `Fable 5.1 (1M context)` neither answers nor confirms a `Fable 5.1` row', () => {
+    // Review finding 4: an unanchored `(Fable|Fable 5\.1)` matched any Fable-* model.
+    const wider = capture('cc291-model-switch-220x50-full.txt').replaceAll('Fable 5.1', 'Fable 5.1 (1M context)');
+    h.sh(`_reg_set ${ID} class fable; _reg_set ${ID} routeapplied "class=default"`);
+    after('model', capture('cc291-model-picker-220x50-full.txt'));
+    after('s', wider);
+    after('Enter', ACK_MODEL('Fable 5.1 (1M context)'));
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
+    expect(keys().slice(keys().indexOf('-l s') + 1)).not.toContain('Enter');
+    expect(h.reg(ID, 'routeapplied')).not.toContain('class=fable');
+  });
+
+  it('…and an outcome naming a NEIGHBOUR of the row\'s model confirms nothing', () => {
+    h.sh(`_reg_set ${ID} class fable; _reg_set ${ID} routeapplied "class=default"`);
+    after('model', capture('cc291-model-picker-220x50-full.txt'));
+    after('s', ACK_MODEL('Fable 4.1'));
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
+    expect(h.reg(ID, 'routeapplied')).not.toContain('class=fable');
+    expect(h.reg(ID, 'routeskip')).toMatch(/apply-unconfirmed/);
+  });
+
+  it('class=sonnet on the 2.1.280 picker takes the `Sonnet` row, never `Sonnet 5 (1M context)` below it', () => {
+    // Review finding 5: the last first-word match won, so the session moved to the 1M variant.
+    h.sh(`_reg_set ${ID} class sonnet; _reg_set ${ID} routeapplied "class=default"`);
+    after('model', capture('cc280-model-fullscreen-100.txt'));
+    after('s', ACK_MODEL('Sonnet 5'));
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID}`);
+    expect(keys()).toEqual(['-l /model', 'Enter', 'Down', 'Down', 'Down', '-l s']);
+    expect(h.reg(ID, 'routeapplied')).toContain('class=sonnet');
+  });
+
+  it('…and an EXACT `Sonnet` label wins over a `Sonnet …` variant listed above it', () => {
+    h.sh(`_reg_set ${ID} class sonnet; _reg_set ${ID} routeapplied "class=default"`);
+    after('model', `${IDLE_PANE}${PICKER('❯ 1. Default (recommended) ✔\n  2. Sonnet (1M context)\n  3. Sonnet\n  4. Haiku')}`);
+    after('s', ACK_MODEL('Sonnet 5'));
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID}`);
+    expect(keys()).toEqual(['-l /model', 'Enter', 'Down', 'Down', '-l s']);
+  });
+
+  it('the dialog still the lowest shape after the first Escape gets the second', () => {
+    // Review finding 13: no Escape transition, so the pane stays on the dialog.
+    const other = capture('cc291-model-switch-220x50-full.txt').replace('Yes, switch to Fable 5.1', 'Yes, switch to Sonnet 5.5');
+    h.sh(`_reg_set ${ID} class fable; _reg_set ${ID} routeapplied "class=default"`);
+    after('model', capture('cc291-model-picker-220x50-full.txt'));
+    after('s', other);
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
+    expect(keys().slice(keys().indexOf('-l s') + 1)).toEqual(['Escape', 'Escape']);
+  });
+
+  it('a newer `Kept model as …` supersedes an older `Set model to …` (built from the bundled source\'s string, not measured)', () => {
+    // Review finding 14: a cancel's outcome below an older switch's is the pane's latest word.
+    h.sh(`_reg_set ${ID} class fable; _reg_set ${ID} routeapplied "class=default"`);
+    after('model', capture('cc291-model-picker-220x50-full.txt'));
+    after('s', `${MODEL_OUTCOME('Set model to Fable 5.1 for this session only')}${MODEL_OUTCOME('Kept model as Opus 5.5')}${IDLE_PANE}`);
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
+    expect(h.reg(ID, 'routeapplied')).not.toContain('class=fable');
+    expect(h.reg(ID, 'routeskip')).toMatch(/apply-unconfirmed/);
+  });
+
+  it('the picker ends at its footer: a numbered line drawn below it is no row', () => {
+    // Review finding 15.
+    h.sh(`_reg_set ${ID} class sonnet; _reg_set ${ID} routeapplied "class=default"`);
+    after('model', `${IDLE_PANE}${PICKER('❯ 1. Default (recommended) ✔\n  2. Opus\n  3. Haiku')}  4. Sonnet  quoted\n`);
+    after('Escape', IDLE_PANE);
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
+    expect(keys().filter((k) => k === 'Down' || k === 'Up' || k === '-l s')).toEqual([]);
   });
 
   it('`_route_picker_rows` reads a scroll marker as a row and never as the cursor', () => {
@@ -894,8 +1077,8 @@ describe('the read-back — a class the pane already runs is recorded, never typ
   };
   const nowS = (): number => Math.floor(Date.now() / 1000);
   /** The hook's own `jq -c` shape (statusline-command.sh), key order and all. */
-  const reading = (model: string | null, ageS = 5, effort: string | null = 'medium'): string =>
-    `${JSON.stringify({ ts: nowS() - ageS, uuid: UUID, account: 'acct-a', model, effort, ctxPct: 12, cost: 0.5, agent: null })}\n`;
+  const reading = (model: string | null, ageS = 5, effort: string | null = 'medium', uuid = UUID): string =>
+    `${JSON.stringify({ ts: nowS() - ageS, uuid, account: 'acct-a', model, effort, ctxPct: 12, cost: 0.5, agent: null })}\n`;
   /** The stamp's time is what a reading must postdate: put the last spawn ten minutes back. */
   const stampAged = (ageS = 600): void => {
     const f = path.join(h.home, '.cc-sessions', `${ID}.routeapplied`);
@@ -968,9 +1151,9 @@ describe('the read-back — a class the pane already runs is recorded, never typ
       expect(h.reg(ID, 'routeapplied'), bad).toBe('class=fable');
     }
     sidecar(reading(null, 5, null));
-    expect(h.sh(`_usage_sidecar_read ${ID}`).trim()).toMatch(/^reading \d+ - -$/);
+    expect(h.sh(`_usage_sidecar_read ${ID}`).trim()).toMatch(new RegExp(`^reading \\d+ - - ${UUID}$`));
     sidecar(reading('claude-opus-5-5', 5, 'high'));
-    expect(h.sh(`_usage_sidecar_read ${ID}`).trim()).toMatch(/^reading \d+ claude-opus-5-5 high$/);
+    expect(h.sh(`_usage_sidecar_read ${ID}`).trim()).toMatch(new RegExp(`^reading \\d+ claude-opus-5-5 high ${UUID}$`));
     expect(swapLog()).not.toContain('route-readback');
   });
 
@@ -982,21 +1165,59 @@ describe('the read-back — a class the pane already runs is recorded, never typ
     expect(h.reg(ID, 'routeapplied')).toBe('class=fable');
   });
 
-  it('effort reads back where the sidecar\'s word means ONE record word — `high` yes, `xhigh` never', () => {
-    h.sh(`_reg_set ${ID} effort high; _reg_set ${ID} routeapplied "class=opus effort=xhigh"`);
+  it('effort NEVER reads back: the sidecar cannot tell a level set from the model\'s default, so the tick TYPES it', () => {
+    // Review finding 6. A session spawned with no effort runs its model's DEFAULT level, which is what
+    // the status line (so the sidecar) shows. Recorded as an applied session-only effort, nothing was
+    // typed — and the next class change then dropped it, since only a TYPED session-only effort
+    // survives a model change (D-2811), with nothing pending to re-ask it.
+    h.sh(`_reg_set ${ID} effort medium; _reg_set ${ID} routeapplied "class=opus"; rm -f "$REG/${ID}.routetries"`);
     stampAged();
-    sidecar(reading('claude-opus-5-5', 5, 'high'));
+    sidecar(reading('claude-opus-5-5', 5, 'medium'));
     h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
-    expect(h.reg(ID, 'routeapplied')).toBe('class=opus effort=high');
-    expect(swapLog()).toMatch(new RegExp(`route-readback ${ID}: effort=high already running`));
-    // `xhigh` on the status line is xhigh OR ultracode, so it reads back as neither.
-    for (const want of ['xhigh', 'ultracode']) {
-      h.sh(`_reg_set ${ID} effort ${want}; _reg_set ${ID} routeapplied "class=opus effort=high"`);
-      stampAged();
-      sidecar(reading('claude-opus-5-5', 5, 'xhigh'));
-      h.sh(`${TMUX_STUB} _route_readback ${ID} || :`);
-      expect(h.reg(ID, 'routeapplied'), want).toBe('class=opus effort=high');
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
+    expect(swapLog()).not.toContain('route-readback');
+    expect(keys()[0]).toBe('-l /effort');
+  });
+
+  it('a reading from the SAME SECOND as the stamp is not placed after it', () => {
+    // Review finding 7: both clocks tick in whole seconds, so `ts == stamp` cannot be told from a
+    // previous process's last render.
+    const t = nowS() - 5;
+    fs.utimesSync(path.join(h.home, '.cc-sessions', `${ID}.routeapplied`), t, t);
+    sidecar(`${JSON.stringify({ ts: t, uuid: UUID, account: 'acct-a', model: 'claude-opus-5-5', effort: 'medium', ctxPct: 12, cost: 0.5, agent: null })}\n`);
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(h.reg(ID, 'routeapplied')).toBe('class=fable');
+  });
+
+  it('a sidecar naming ANOTHER session (a second claude in the tmux session) counts for nothing', () => {
+    // Review finding 10: the hook keys the file on the tmux SESSION, so any agent-less render in it writes here.
+    sidecar(reading('claude-opus-5-5', 5, 'medium', 'cafef00d-0000-4000-8000-000000000000'));
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(h.reg(ID, 'routeapplied')).toBe('class=fable');
+    expect(swapLog()).not.toContain('route-readback');
+  });
+
+  it('a body two JSON readers could read differently (nested, duplicate key) is malformed', () => {
+    // Review finding 8: the regex takes the first `"model":`, JSON.parse the last.
+    const ts = nowS() - 5;
+    for (const bad of [
+      `{"ts":${ts},"x":{"model":"claude-opus-5-5"},"model":"claude-sonnet-5"}\n`,
+      `{"ts":${ts},"x":{"model":"claude-opus-5-5"}}\n`,
+      `{"ts":${ts},"model":"claude-opus-5-5","model":"claude-sonnet-5"}\n`,
+      `{"ts":${ts},"ts":${ts - 3600},"model":"claude-opus-5-5"}\n`,
+      `{"ts":${ts},"model":"claude-opus-5-5","effort":"low","effort":"max"}\n`,
+    ]) {
+      sidecar(bad);
+      expect(h.sh(`_usage_sidecar_read ${ID}`).trim(), bad).toBe('malformed');
     }
+  });
+
+  it('a FIFO at the sidecar path is unreadable, never a read that blocks the tick', { timeout: 60_000 }, () => {
+    // Review finding 12: `head` on a FIFO waits for a writer; the `-f` test is what keeps the tick alive.
+    fs.mkdirSync(path.dirname(usageFile()), { recursive: true });
+    execFileSync('mkfifo', [usageFile()]);
+    const out = h.sh(`timeout 10 bash -c 'source "$1"; _usage_sidecar_read "$2"' ccd-fifo-probe '${CCD}' ${ID} || echo "rc=$?"`);
+    expect(out.trim()).toBe('unreadable');
   });
 
   it('class read back, effort still pending and unreadable: the tick goes on and TYPES the effort', () => {
