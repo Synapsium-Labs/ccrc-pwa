@@ -162,6 +162,9 @@ describe('store.mjs: open, schema v1, pragmas', () => {
     expect(probeFts5(r)).toBe('present');
     expect(() => r.exec('CREATE VIRTUAL TABLE temp.probe USING fts5(x)')).toThrow();
     expect(() => r.exec("INSERT INTO meta (k, v) VALUES ('x', 'y')")).toThrow();
+    // The second lock: with query_only lifted, the readOnly open flag alone must still refuse a write.
+    r.exec('PRAGMA query_only = OFF');
+    expect(() => r.exec("INSERT INTO meta (k, v) VALUES ('x', 'y')")).toThrow(/readonly database/);
     r.close();
   });
 
