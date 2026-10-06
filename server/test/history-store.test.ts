@@ -476,6 +476,23 @@ describe('store.mjs: the migration executor', () => {
     closeWriter(db);
   });
 
+  it('the attempt marker counts: each interrupted attempt raises it by one, from a planted count too (the escalation to snapshot-needs-op reads it)', () => {
+    const { h, db } = bound();
+    const P = historyPaths(h);
+    const DROPS = 'ALTER TABLE counters RENAME COLUMN n TO total;';
+    const failing = { verdict: 'snapshot-then-migrate', from: 1, to: 2, migrations: [MIGRATIONS[0]!, DROPS] } as const;
+    expect(wordOf(() => runMigration(db, h, failing))).toBe('migration-not-additive');
+    expect(readAttempts(h, 2)).toBe(1);
+    expect(wordOf(() => runMigration(db, h, failing))).toBe('migration-not-additive');
+    expect(readAttempts(h, 2)).toBe(2);
+    // A count planted by an earlier, killed attempt is carried forward, not reset.
+    fs.writeFileSync(path.join(P.backups, '.pre-v2.attempt'), '1\n');
+    expect(wordOf(() => runMigration(db, h, failing))).toBe('migration-not-additive');
+    expect(readAttempts(h, 2)).toBe(2);
+    expect(userVersion(db)).toBe(1);
+    closeWriter(db);
+  });
+
   it('assertAdditive: an added table or column passes; a dropped table, a dropped or renamed column throws', () => {
     const prev = { meta: ['k', 'v'], counters: ['name', 'n'] };
     expect(() => assertAdditive(prev, { ...prev, extra: ['x'], meta: ['k', 'v', 'note'] })).not.toThrow();
