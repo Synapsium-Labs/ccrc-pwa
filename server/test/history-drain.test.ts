@@ -620,3 +620,356 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
     expect(fs.readdirSync(DRAIN(box.home))).toEqual([]);
   });
 });
+
+// ── Task 17: epochs and families ────────────────────────────────────────────────────────────────────────
+interface SweepEpochs {
+  confirmCandidates(db: DatabaseSync, c: TickCtx): void;
+  registryBackfill(db: DatabaseSync, c: TickCtx): void;
+  ensureFamily(db: DatabaseSync, ccrcId: string, generation: string, project: string, nowMs: number):
+    { sessionPk: number; created: boolean; generation: string };
+  scanDue(db: DatabaseSync, nowMs: number): boolean;
+}
+let EP: SweepEpochs;
+beforeAll(async () => { EP = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepEpochs; });
+
+const WEEK = 7 * 24 * 60 * 60 * 1000;
+const start = (id: string, sid: string, src: 'startup' | 'resume' | 'clear', extra: Record<string, unknown> = {}): Record<string, unknown> =>
+  ({ v: 1, ev: 'SessionStart', id, sid, src, ...extra });
+type Family = { session_pk: number; ccrc_id: string; generation: string; project: string; merged_into: number | null };
+type Epoch = { seq: number; cc_session_uuid: string; cause: string; declared_by: string; confirmed_ms: number | null };
+const familiesOf = (db: DatabaseSync): Family[] =>
+  db.prepare('SELECT session_pk, ccrc_id, generation, project, merged_into FROM sessions ORDER BY session_pk').all() as unknown as Family[];
+const epochsOf = (db: DatabaseSync, id: string, generation: string): Epoch[] =>
+  db.prepare('SELECT e.seq, e.cc_session_uuid, e.cause, e.declared_by, e.confirmed_ms FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE s.ccrc_id = ? AND s.generation = ? ORDER BY e.seq')
+    .all(id, generation) as unknown as Epoch[];
+const candidatesOf = (db: DatabaseSync): Array<{ cc_session_uuid: string; ccrc_id: string; cause: string }> =>
+  db.prepare('SELECT cc_session_uuid, ccrc_id, cause FROM epoch_candidates ORDER BY first_seen_ms, cc_session_uuid')
+    .all() as unknown as Array<{ cc_session_uuid: string; ccrc_id: string; cause: string }>;
+const counterOf = (db: DatabaseSync, name: string): number =>
+  (db.prepare('SELECT n FROM counters WHERE name = ?').get(name) as { n: number } | undefined)?.n ?? 0;
+const verdictsOf = (home: string, storeId: string): Array<Record<string, unknown>> =>
+  journalOf(home, storeId).filter((r) => r['k'] === 'verdict');
+/** A transcript whose first row is uuid-less (as a bridge-session row is) and whose first uuid row carries `cwd`. */
+const firstRows = (cwd: string): string =>
+  `${JSON.stringify({ type: 'bridge-session' })}\n${JSON.stringify({ type: 'user', uuid: 'row-1', cwd, message: { role: 'user', content: 'hi' } })}\n`;
+const transcriptIn = (home: string, slug: string, uuid: string, text: string): string => {
+  const dir = path.join(home, 'projects', slug);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${uuid}.jsonl`), text);
+  return path.join(dir, `${uuid}.jsonl`);
+};
+
+describe('epochs and families, decided at drain (spec §6.1, §9.2 step 1, §9.14 verdicts)', () => {
+  let box: HistoryBox;
+  let ids: Ids;
+  let db: DatabaseSync;
+  let clock: { ms: number };
+  let c: TickCtx;
+  beforeEach(() => {
+    box = makeHistoryBox('ccrc-hist-epoch-', { role: 'fleet' });
+    ids = createStore(box.home);
+    db = openWriter(historyPaths(box.home).dbFile);
+    clock = { ms: T };
+    c = { home: box.home, ids, now: () => clock.ms, homes: box.homes, rosterUnreadable: false, out: () => undefined };
+  });
+  afterEach(() => { closeWriter(db); });
+  /** Two drains: the first renames and observes the spool, the second journals and drains it (§9.2: read at N+1). */
+  const pass = (): void => { SW.drainSpool(db, c); clock.ms += 1000; SW.drainSpool(db, c); clock.ms += 1000; };
+
+  it('a startup line whose own reg names its sid is an epoch at drain, even with .uuid moved on before the observation (DM19, CT6)', () => {
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1); setReg(box, ID, 'project', 'demo');
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1 }));
+    pass();
+    expect(epochsOf(db, ID, G1)).toEqual([{ seq: 1, cc_session_uuid: U1, cause: 'startup', declared_by: 'hook', confirmed_ms: expect.any(Number) }]);
+    expect(familiesOf(db)).toEqual([expect.objectContaining({ ccrc_id: ID, generation: G1, project: 'demo', merged_into: null })]);
+  });
+
+  it('a line the observed .uuid names is an epoch; one nothing names is a candidate, dropped and counted after 7 days (DM19)', () => {
+    setReg(box, ID, 'uuid', U1); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U1, 'startup'));                  // ccd's own start: .uuid names it
+    spool(box.home, ID, start(ID, U2, 'startup', { reg: U9 }));     // a nested `claude -p`: its own sid, the pane's reg
+    pass();
+    expect(epochsOf(db, ID, G1).map((e) => e.cc_session_uuid)).toEqual([U1]);
+    expect(candidatesOf(db)).toEqual([{ cc_session_uuid: U2, ccrc_id: ID, cause: 'startup' }]);
+    clock.ms += 60_000;
+    EP.confirmCandidates(db, c);
+    expect(candidatesOf(db)).toHaveLength(1);
+    clock.ms = T + WEEK + 10_000;
+    EP.confirmCandidates(db, c);
+    expect(candidatesOf(db)).toEqual([]);
+    expect(epochsOf(db, ID, G1).map((e) => e.cc_session_uuid)).toEqual([U1]);
+    expect(counterOf(db, 'epoch_unconfirmed')).toBe(1);
+    expect(verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'epoch-unconfirmed')).toEqual([
+      expect.objectContaining({ event_key: 'none', ccrc_id: ID, cc_session_uuid: U2, superseded: false }),
+    ]);
+  });
+
+  it('a candidate the registry names at a later tick within 7 days is confirmed then, in its own FULL transaction, journaled right after', () => {
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U2, 'startup', { reg: U9 }));
+    pass();
+    expect(candidatesOf(db)).toHaveLength(1);
+    setReg(box, ID, 'uuid', U2);
+    clock.ms += 60_000;
+    EP.confirmCandidates(db, c);
+    expect(epochsOf(db, ID, G1)).toEqual([expect.objectContaining({ cc_session_uuid: U2, cause: 'startup', declared_by: 'hook' })]);
+    expect(candidatesOf(db)).toEqual([]);
+    expect(verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'epoch-confirmed').at(-1))
+      .toMatchObject({ event_key: 'none', by: 'later-tick', cc_session_uuid: U2, generation: G1 });
+    expect(outboxCount(db)).toBe(0);
+  });
+
+  it('a startup candidate whose sid lost to a later /clear of the same id is dropped as superseded (§9.2, §14 risk 24)', () => {
+    setReg(box, ID, 'uuid', U2); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U9 }));
+    spool(box.home, ID, start(ID, U2, 'clear'));
+    pass();
+    clock.ms = T + WEEK + 10_000;
+    EP.confirmCandidates(db, c);
+    expect(counterOf(db, 'epoch_unconfirmed')).toBe(1);
+    expect(counterOf(db, 'epoch_unconfirmed_superseded')).toBe(1);
+    expect(verdictsOf(box.home, ids.storeId).find((v) => v['kind'] === 'epoch-unconfirmed')).toMatchObject({ cc_session_uuid: U1, superseded: true });
+  });
+
+  it('every decision read from the registry is a verdict carrying its line\'s event_key, reached through the outbox (§9.14)', () => {
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1); setReg(box, ID, 'project', 'demo');
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1 }));
+    pass();
+    const recs = journalOf(box.home, ids.storeId);
+    const name = String(recs.find((r) => r['k'] === 'file')!['name']);
+    expect(recs.filter((r) => r['k'] === 'verdict').map((r) => [r['kind'], r['event_key']])).toEqual([
+      ['generation-joined', eventKey(name, 1)], ['family', eventKey(name, 1)], ['epoch-confirmed', eventKey(name, 1)], ['drained', 'none'],
+    ]);
+    expect(recs.find((r) => r['kind'] === 'generation-joined')).toMatchObject({ ccrc_id: ID, generation: G1, via: 'registry' });
+    expect(recs.find((r) => r['kind'] === 'family')).toMatchObject({ ccrc_id: ID, generation: G1, project: 'demo' });
+    expect(recs.find((r) => r['kind'] === 'epoch-confirmed')).toMatchObject({ cc_session_uuid: U1, cause: 'startup', declared_by: 'hook', by: 'reg' });
+    expect(outboxCount(db)).toBe(0);
+  });
+
+  it('a gen-less resume line after a swap joins the generation the registry reads (DM19b)', () => {
+    setReg(box, ID, 'uuid', U1); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U1, 'resume', { reg: U1 }));
+    pass();
+    expect(familiesOf(db).map((f) => f.generation)).toEqual([G1]);
+    expect(epochsOf(db, ID, G1).map((e) => e.cc_session_uuid)).toEqual([U1]);
+  });
+
+  it('a gen-less clear line on that row joins the same family: one family, the clear chained after the resume (DM19b CONTROL)', () => {
+    setReg(box, ID, 'uuid', U2); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U1, 'resume', { reg: U1 }));
+    spool(box.home, ID, start(ID, U2, 'clear'));
+    pass();
+    expect(familiesOf(db)).toHaveLength(1);
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid, e.cause])).toEqual([[1, U1, 'resume'], [2, U2, 'clear']]);
+  });
+
+  it('with .generation absent a gen-less line joins the legacy \'\' family, counted family_gen_absent (DM19b)', () => {
+    setReg(box, ID, 'uuid', U1);
+    spool(box.home, ID, start(ID, U1, 'resume', { reg: U1 }));
+    pass();
+    expect(epochsOf(db, ID, '').map((e) => e.cc_session_uuid)).toEqual([U1]);
+    expect(counterOf(db, 'family_gen_absent')).toBe(1);
+    expect(counterOf(db, 'family_gen_unreadable')).toBe(0);
+  });
+
+  it('with .generation unreadable it joins \'\' too, counted family_gen_unreadable and never family_gen_absent (DM19b, IV5)', () => {
+    setReg(box, ID, 'uuid', U1); setReg(box, ID, 'generation', { unreadable: true });
+    spool(box.home, ID, start(ID, U1, 'resume', { reg: U1 }));
+    pass();
+    expect(epochsOf(db, ID, '').map((e) => e.cc_session_uuid)).toEqual([U1]);
+    expect(counterOf(db, 'family_gen_unreadable')).toBe(1);
+    expect(counterOf(db, 'family_gen_absent')).toBe(0);
+  });
+
+  it('one ccrc id with two generations is two families (DM18)', () => {
+    setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1, gen: G1 }));
+    pass();
+    setReg(box, ID, 'generation', G2);
+    spool(box.home, ID, start(ID, U2, 'startup', { reg: U2, gen: G2 }));
+    pass();
+    expect(familiesOf(db).map((f) => [f.ccrc_id, f.generation])).toEqual([[ID, G1], [ID, G2]]);
+    expect(epochsOf(db, ID, G1).map((e) => e.cc_session_uuid)).toEqual([U1]);
+    expect(epochsOf(db, ID, G2).map((e) => e.cc_session_uuid)).toEqual([U2]);
+  });
+
+  it('a generation minted later for a row whose \'\' family holds a confirmed uuid merges that family into (id, G) (DM18b)', () => {
+    setReg(box, ID, 'uuid', U1);
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1 }));
+    pass();
+    expect(epochsOf(db, ID, '').map((e) => e.cc_session_uuid)).toEqual([U1]);
+    setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U1, 'resume', { reg: U1, gen: G1 }));
+    pass();
+    const fams = familiesOf(db);
+    const legacy = fams.find((f) => f.generation === '')!;
+    const keyed = fams.find((f) => f.generation === G1)!;
+    expect(legacy.merged_into).toBe(keyed.session_pk);
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid])).toEqual([[1, U1]]);
+    expect(epochsOf(db, ID, '')).toEqual([]);
+    expect(counterOf(db, 'family_rekeyed')).toBe(1);
+    expect(verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'rekeyed')).toEqual([expect.objectContaining({ ccrc_id: ID, generation: G1 })]);
+  });
+
+  it('re-keying into an (id, G) that already holds a gen-less clear keeps both, the \'\' family\'s epochs first; a replay of (id, \'\') lands in (id, G) (DM18b)', () => {
+    setReg(box, ID, 'uuid', U1);
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1 }));
+    pass();                                                          // ('' ) holds U1
+    setReg(box, ID, 'generation', G1); setReg(box, ID, 'uuid', U2);
+    spool(box.home, ID, start(ID, U2, 'clear'));
+    pass();                                                          // (G1) holds U2, joined through the registry
+    expect(epochsOf(db, ID, G1).map((e) => e.cc_session_uuid)).toEqual([U2]);
+    spool(box.home, ID, start(ID, U1, 'resume', { reg: U1, gen: G1 }));
+    pass();                                                          // the evidence: U1, confirmed in '', under G1
+    const fams = familiesOf(db);
+    const legacy = fams.find((f) => f.generation === '')!;
+    const keyed = fams.find((f) => f.generation === G1)!;
+    expect(legacy.merged_into).toBe(keyed.session_pk);
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid])).toEqual([[1, U1], [2, U2]]);
+    expect(EP.ensureFamily(db, ID, '', 'demo', clock.ms)).toEqual({ sessionPk: keyed.session_pk, created: false, generation: G1 });
+  });
+
+  it('a row that gains a generation re-keys its \'\' family at the next registry scan too (§6.10 "A respawn that mints a missing generation")', () => {
+    setReg(box, ID, 'uuid', U1);
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1 }));
+    pass();
+    setReg(box, ID, 'generation', G1);
+    EP.registryBackfill(db, c);
+    const keyed = familiesOf(db).find((f) => f.generation === G1)!;
+    expect(familiesOf(db).find((f) => f.generation === '')!.merged_into).toBe(keyed.session_pk);
+    expect(epochsOf(db, ID, G1).map((e) => e.cc_session_uuid)).toEqual([U1]);
+    expect(counterOf(db, 'family_rekeyed')).toBe(1);
+  });
+
+  it('an Anthropic→gateway→Anthropic swap keeps one family and one epoch, with nothing unconfirmed (DM18c)', () => {
+    setReg(box, ID, 'uuid', U1); setReg(box, ID, 'generation', G1); setReg(box, ID, 'project', 'demo');
+    for (const h of box.homes.slice(0, 3)) transcriptIn(h, 'demo', U1, firstRows(path.join(box.home, 'work')));
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1, gen: G1 }));
+    for (let i = 0; i < 3; i += 1) spool(box.home, ID, start(ID, U1, 'resume', { reg: U1, gen: G1 }));
+    pass();
+    expect(familiesOf(db)).toHaveLength(1);
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid, e.cause])).toEqual([[1, U1, 'startup']]);
+    expect(candidatesOf(db)).toEqual([]);
+    expect(counterOf(db, 'epoch_unconfirmed')).toBe(0);
+  });
+
+  it('a uuid two families claim stays with the first claim; the second is counted (DM23)', () => {
+    spool(box.home, 'x-first', start('x-first', U1, 'startup', { reg: U1, gen: G1 }));
+    spool(box.home, 'y-second', start('y-second', U1, 'startup', { reg: U1, gen: G2 }));
+    pass();
+    expect(epochsOf(db, 'x-first', G1).map((e) => e.cc_session_uuid)).toEqual([U1]);
+    expect(epochsOf(db, 'y-second', G2)).toEqual([]);
+    expect(counterOf(db, 'uuid_two_sessions')).toBe(1);
+  });
+
+  it('a new uuid file with no SessionStart(clear) line is never a clear epoch: /clear is declared, not inferred (DM11)', () => {
+    setReg(box, ID, 'uuid', U1); setReg(box, ID, 'generation', G1);
+    transcriptIn(box.homes[0]!, 'demo', U1, firstRows(path.join(box.home, 'work')));
+    transcriptIn(box.homes[0]!, 'demo', U2, firstRows(path.join(box.home, 'work')));
+    pass();
+    EP.registryBackfill(db, c);
+    expect(epochsOf(db, ID, G1).map((e) => [e.cc_session_uuid, e.cause, e.declared_by])).toEqual([[U1, 'import', 'registry']]);
+    expect((db.prepare("SELECT count(*) AS n FROM epochs WHERE cause = 'clear' OR cc_session_uuid = ?").get(U2) as { n: number }).n).toBe(0);
+  });
+
+  it('a planted clear line naming another project\'s transcript chains unconfirmed and is counted after 7 days (DM46)', () => {
+    const work = path.join(box.home, 'work', 'x'); fs.mkdirSync(work, { recursive: true });
+    const elsewhere = path.join(box.home, 'work', 'other'); fs.mkdirSync(elsewhere, { recursive: true });
+    setReg(box, ID, 'uuid', U0); setReg(box, ID, 'generation', G1); setReg(box, ID, 'workdir', work);
+    transcriptIn(box.homes[0]!, 'other', U5, firstRows(elsewhere));
+    spool(box.home, ID, start(ID, U5, 'clear', { gen: G1 }));
+    pass();
+    expect(epochsOf(db, ID, G1)).toEqual([expect.objectContaining({ cc_session_uuid: U5, cause: 'clear', confirmed_ms: null })]);
+    clock.ms += 60_000;
+    EP.confirmCandidates(db, c);
+    expect(epochsOf(db, ID, G1)[0]!.confirmed_ms).toBeNull();
+    setReg(box, ID, 'uuid', U5);                                      // .uuid names it only after the window: too late
+    clock.ms = T + WEEK + 10_000;
+    EP.confirmCandidates(db, c);
+    expect(epochsOf(db, ID, G1)[0]!.confirmed_ms, 'confirmed past its 7 days').toBeNull();
+    expect(counterOf(db, 'epoch_unconfirmed')).toBe(1);
+    expect(candidatesOf(db)).toEqual([]);
+  });
+
+  it('a registry scan does not confirm a clear epoch past its 7 days (DM46, IV4, D-4297)', () => {
+    const work = path.join(box.home, 'work', 'x'); fs.mkdirSync(work, { recursive: true });
+    const elsewhere = path.join(box.home, 'work', 'other'); fs.mkdirSync(elsewhere, { recursive: true });
+    setReg(box, ID, 'uuid', U0); setReg(box, ID, 'generation', G1); setReg(box, ID, 'workdir', work);
+    transcriptIn(box.homes[0]!, 'other', U5, firstRows(elsewhere));
+    spool(box.home, ID, start(ID, U5, 'clear', { gen: G1 }));
+    pass();
+    setReg(box, ID, 'uuid', U5);                                      // .uuid names it only after the window: too late
+    clock.ms = T + WEEK + 10_000;
+    EP.confirmCandidates(db, c);
+    EP.registryBackfill(db, c);                                       // the scan must not graft what the window dropped
+    expect(epochsOf(db, ID, G1)).toEqual([expect.objectContaining({ cc_session_uuid: U5, cause: 'clear', declared_by: 'hook', confirmed_ms: null })]);
+    expect(counterOf(db, 'epoch_unconfirmed')).toBe(1);
+    expect(verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'mapping')).toEqual([]);
+  });
+
+  it('two quick /clears in the pane\'s own project both confirm: the first by location, the second by .uuid (DM46)', () => {
+    const work = path.join(box.home, 'work', 'x'); fs.mkdirSync(work, { recursive: true });
+    setReg(box, ID, 'uuid', U2); setReg(box, ID, 'generation', G1); setReg(box, ID, 'workdir', work);
+    transcriptIn(box.homes[0]!, 'x', U1, firstRows(work));
+    spool(box.home, ID, start(ID, U1, 'clear', { gen: G1 }));
+    spool(box.home, ID, start(ID, U2, 'clear', { gen: G1 }));
+    pass();
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid, e.confirmed_ms !== null])).toEqual([[1, U1, true], [2, U2, true]]);
+    const by = verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'epoch-confirmed').map((v) => [v['cc_session_uuid'], v['by']]);
+    expect(by).toEqual([[U1, 'location'], [U2, 'observed']]);
+  });
+
+  it('held files for one id drain in journaling order, so their epochs take seq in line order (O50)', () => {
+    setReg(box, ID, 'generation', G1);
+    fs.mkdirSync(DRAIN(box.home), { recursive: true });
+    const put = (name: string, rec: Record<string, unknown>): void => { fs.writeFileSync(path.join(DRAIN(box.home), name), `\n${JSON.stringify(rec)}\n`); };
+    put(`${ID}.1100.1.jsonl`, start(ID, U3, 'clear', { gen: G1 }));
+    put(`${ID}.900.1.jsonl`, start(ID, U1, 'startup', { reg: U1, gen: G1 }));
+    put(`${ID}.1000.1.jsonl`, start(ID, U2, 'clear', { gen: G1 }));
+    SW.drainSpool(db, c);
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid, e.cause])).toEqual([[1, U1, 'startup'], [2, U2, 'clear'], [3, U3, 'clear']]);
+  });
+
+  it('a line appended after the rename is decided from the registry as the journaling re-read it, not as the rename saw it (§9.2)', () => {
+    setReg(box, ID, 'uuid', U0); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U0, 'startup'));
+    SW.drainSpool(db, c);                                             // renames at T: the observation reads .uuid = U0
+    const [name] = drainingNames(box.home);
+    setReg(box, ID, 'uuid', U1);
+    fs.appendFileSync(path.join(DRAIN(box.home), name!), `\n${JSON.stringify(start(ID, U1, 'resume', { ts: T + 30_000 }))}\n`);
+    clock.ms = T + 60_000;
+    SW.drainSpool(db, c);
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid])).toEqual([[1, U0], [2, U1]]);
+    expect(verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'epoch-confirmed').map((v) => v['by'])).toEqual(['observed', 'observed']);
+  });
+});
+
+describe('the tick runs the epoch steps, as the box runs it (spec §9.2, §6.1 "Backfill")', () => {
+  it('a first pass maps every $REG/<id>.uuid that names no epoch: a family and a registry mapping, journaled once', () => {
+    const box = makeHistoryBox('ccrc-hist-backfill-', { role: 'fleet' });
+    setReg(box, ID, 'uuid', U1); setReg(box, ID, 'generation', G1); setReg(box, ID, 'project', 'demo');
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    const ids = storeIds(box.home);
+    expect(rowsOf(box, 'SELECT ccrc_id, generation, project FROM sessions')).toEqual([{ ccrc_id: ID, generation: G1, project: 'demo' }]);
+    expect(rowsOf(box, 'SELECT cc_session_uuid, cause, declared_by FROM epochs')).toEqual([{ cc_session_uuid: U1, cause: 'import', declared_by: 'registry' }]);
+    const kinds = (): unknown[] => verdictsOf(box.home, ids.storeId).map((v) => [v['kind'], v['event_key'], v['declared_by'] ?? null]);
+    expect(kinds()).toEqual([['family', 'none', null], ['mapping', 'none', 'registry']]);
+    expect(runSweep(box).code).toBe(0);
+    expect(kinds()).toEqual([['family', 'none', null], ['mapping', 'none', 'registry']]);
+  });
+
+  it('a candidate is confirmed by a later scheduled pass once .uuid names it', () => {
+    const box = makeHistoryBox('ccrc-hist-candidate-', { role: 'fleet' });
+    expect(runSweep(box).code).toBe(0);                     // binds the store; its scan finds an empty registry
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U2, 'startup', { reg: U9 }));
+    expect(runSweep(box).code).toBe(0);
+    expect(runSweep(box).code).toBe(0);
+    expect(rowsOf(box, 'SELECT cc_session_uuid FROM epoch_candidates')).toEqual([{ cc_session_uuid: U2 }]);
+    setReg(box, ID, 'uuid', U2);
+    expect(runSweep(box).code).toBe(0);
+    expect(rowsOf(box, 'SELECT cc_session_uuid, cause FROM epochs')).toEqual([{ cc_session_uuid: U2, cause: 'startup' }]);
+    expect(rowsOf(box, 'SELECT cc_session_uuid FROM epoch_candidates')).toEqual([]);
+  });
+});

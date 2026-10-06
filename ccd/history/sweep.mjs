@@ -31,13 +31,14 @@ import fs, {
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  CARRIER_KILL_S, EXIT, SCHEMA_ADDED, SCHEMA_VERSION, STATFS_DEADLINE_MS, capOf, decideStoreOpen, floorThreshold,
+  CARRIER_KILL_S, EXIT, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
+  decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
   UUID_RE, WRITER_RE, drainingNameOk, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
   passOutcome, planMigration, planRun, readBoxEnvValue, sha256Bytes, splitSpoolText,
 } from './lib.mjs';
 import {
   StoreError, bump, closeWriter, createStore, dropPending, finishPending, getMeta, measureStoreFacts, openReader,
-  openWriter, readAttempts, removeStaleTemps, syncWriterMirror, userVersion, withTx,
+  openWriter, readAttempts, removeStaleTemps, setMeta, syncWriterMirror, userVersion, withTx,
 } from './store.mjs';
 
 const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] --secrets <file...> -- <home...>';
@@ -531,11 +532,12 @@ export function journalFile(home, ids, name, nowMs) {
  *  recall lines folded here, history-cli-counts-via-spool, D-4228).
  *  - recall: a recall_calls row (W1-f, the W2 gate).
  *  - steer: a steer_receipts row (written from W3; drained from day one, FE2).
- *  - Stop and PostCompact: a receipt and a discovery hint, nothing else.
+ *  - Stop and PostCompact: a receipt and a discovery hint, nothing else. SessionStart declares epochs (applyEpochLine).
  *  A gen-less recall joins the observed generation, and that join is a verdict, because it read the registry
  *  (§9.14). */
 export function applyEventLine(db, c, ev) {
   const { rec } = ev;
+  if (rec.ev === 'SessionStart') return applyEpochLine(db, c, ev);
   if (rec.ev === 'recall') {
     const g = joinGeneration({ lineGen: rec.gen ?? null, observedGen: ev.obs.generation });
     db.prepare('INSERT INTO recall_calls (event_key, ccrc_id, generation, ts_ms, verb, rc, ms, arm) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (event_key) DO NOTHING')
@@ -686,6 +688,391 @@ export function drainSpool(db, c) {
   return hints;
 }
 
+// ── Epochs and families (spec §6.1, §9.2 step 1, §9.14 verdicts) ──────────────────────────────────────────
+//
+// A family is one row-life of a ccrc id, (ccrc_id, generation) (D-4192, slug history-family-per-generation). The ccrc id is the
+// box-local id (D-4234, slug history-family-box-local). An epoch is one Claude Code uuid in a family, numbered in line order.
+// Every decision that attributes rows to a family AND reads registry state is a verdict: an outbox row inserted in the
+// FULL transaction that makes it, flushed to the journal right after (D-4225, slug history-journal-outbox). The rules are lib's
+// (decideEpochLine, decideCandidate, joinGeneration, locationMatches, decideRekey), which replay calls too (IV4). This
+// section only applies them, and decides nothing from file timing (DM11).
+
+const INSERT_CANDIDATE = 'INSERT INTO epoch_candidates (cc_session_uuid, ccrc_id, generation, cause, ts_ms, first_seen_ms) '
+  + 'VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (cc_session_uuid, ccrc_id) DO NOTHING';
+const DELETE_CANDIDATE = 'DELETE FROM epoch_candidates WHERE cc_session_uuid = ? AND ccrc_id = ?';
+/** The location rule needs only the first uuid row (§6.1). No more of a transcript than this is read for it. */
+const FIRST_ROW_SCAN = 1024 * 1024;
+
+function verdictRecord(nowMs, key, kind, fields) {
+  return journalRecord('verdict', nowMs, { event_key: key, kind, ...fields });
+}
+
+/** The family row for (ccrc id, generation), made when absent. A `''` row a re-key merged answers with the family it
+ *  was merged into, so a replayed `family(id, '')`, or an epoch verdict naming (id, ''), lands in (id, G) (DM18b). */
+export function ensureFamily(db, ccrcId, generation, project, nowMs) {
+  const row = db.prepare('SELECT session_pk, merged_into FROM sessions WHERE ccrc_id = ? AND generation = ?').get(ccrcId, generation);
+  if (row !== undefined && row.merged_into !== null) {
+    const into = db.prepare('SELECT session_pk, generation FROM sessions WHERE session_pk = ?').get(row.merged_into);
+    return { sessionPk: into.session_pk, created: false, generation: into.generation };
+  }
+  if (row !== undefined) return { sessionPk: row.session_pk, created: false, generation };
+  const r = db.prepare('INSERT INTO sessions (ccrc_id, generation, project, first_seen_ms) VALUES (?, ?, ?, ?)').run(ccrcId, generation, project, nowMs);
+  return { sessionPk: Number(r.lastInsertRowid), created: true, generation };
+}
+
+/** A re-key is a merge, never a rename (rev 3.2 review, DI4; D-4194, slug history-rekey-merges).
+ *  - The `''` family's epochs move into (id, G) and are numbered first, because a generation is minted after them.
+ *  - A uuid both families hold stays where (id, G) has it.
+ *  - The `''` row stays, with merged_into naming (id, G).
+ *  - Renumbering goes through negative seqs, so no statement collides with PRIMARY KEY (session_pk, seq).
+ *  - The `''` family's recall rows follow it.
+ *  Renaming the key in place throws under UNIQUE (ccrc_id, generation) as soon as (id, G) exists, and a replay over
+ *  a backup that already holds the re-key could not repeat it. */
+export function mergeFamily(db, fromPk, toPk) {
+  db.prepare('DELETE FROM epochs WHERE session_pk = ? AND cc_session_uuid IN (SELECT cc_session_uuid FROM epochs WHERE session_pk = ?)').run(fromPk, toPk);
+  const moving = db.prepare('SELECT seq FROM epochs WHERE session_pk = ? ORDER BY seq').all(fromPk);
+  db.prepare('UPDATE epochs SET seq = -seq WHERE session_pk IN (?, ?)').run(fromPk, toPk);
+  const place = db.prepare('UPDATE epochs SET seq = ? WHERE session_pk = ? AND seq = ?');
+  moving.forEach((m, i) => { place.run(i + 1, fromPk, -m.seq); });
+  db.prepare('UPDATE epochs SET seq = ? - seq WHERE session_pk = ? AND seq < 0').run(moving.length, toPk);
+  db.prepare('UPDATE epochs SET session_pk = ? WHERE session_pk = ?').run(toPk, fromPk);
+  const into = db.prepare('SELECT ccrc_id, generation FROM sessions WHERE session_pk = ?').get(toPk);
+  db.prepare("UPDATE recall_calls SET generation = ? WHERE ccrc_id = ? AND generation = ''").run(into.generation, into.ccrc_id);
+  db.prepare('UPDATE sessions SET merged_into = ? WHERE session_pk = ?').run(toPk, fromPk);
+}
+
+/** When generation G appears for an id whose unmerged `''` family holds `uuid` confirmed, that family is G's row-life:
+ *  a generation is minted only on absence (§6.1). So it merges into (id, G), which is made when absent. */
+function rekeyIfDue(db, ccrcId, generation, uuid, project, nowMs, v) {
+  const legacy = db.prepare("SELECT session_pk FROM sessions WHERE ccrc_id = ? AND generation = '' AND merged_into IS NULL").get(ccrcId);
+  if (legacy === undefined) return;
+  const confirmed = new Set(db.prepare('SELECT cc_session_uuid FROM epochs WHERE session_pk = ? AND confirmed_ms IS NOT NULL')
+    .all(legacy.session_pk).map((r) => r.cc_session_uuid));
+  if (decideRekey({ observedGeneration: generation, uuid, emptyFamilyUuids: confirmed }) !== 'merge') return;
+  const to = ensureFamily(db, ccrcId, generation, project, nowMs);
+  if (to.created) v('family', { ccrc_id: ccrcId, generation, project, first_seen_ms: nowMs });
+  mergeFamily(db, legacy.session_pk, to.sessionPk);
+  bump(db, 'family_rekeyed');
+  v('rekeyed', { ccrc_id: ccrcId, generation });
+}
+
+/** The family a line, candidate or mapping lands in.
+ *  - A gen-less source joins the generation the registry reads when it takes effect (D-4193,
+ *    slug history-genless-line-joins-registry-generation).
+ *  - An absent generation joins `''`, counted family_gen_absent; an unreadable one joins `''` counted
+ *    family_gen_unreadable, never folded into absent (IV5).
+ *  - The join is a verdict when it read the registry (`joinVerdict`).
+ *  - A new family takes the observed `.project`, as a `family` verdict. Absent or unreadable, it is ''. */
+function joinFamily(db, c, j) {
+  const nowMs = c.now();
+  const g = joinGeneration({ lineGen: j.lineGen, observedGen: j.observedGen });
+  if (g.via === 'absent') bump(db, 'family_gen_absent');
+  if (g.via === 'unreadable') bump(db, 'family_gen_unreadable');
+  if (j.joinVerdict && g.via !== 'line') j.v('generation-joined', { ccrc_id: j.ccrcId, generation: g.generation, via: g.via });
+  const project = j.observedProject.state === 'value' ? j.observedProject.value : '';
+  if (g.generation !== '') rekeyIfDue(db, j.ccrcId, g.generation, j.uuid, project, nowMs, j.v);
+  const f = ensureFamily(db, j.ccrcId, g.generation, project, nowMs);
+  if (f.created) j.v('family', { ccrc_id: j.ccrcId, generation: f.generation, project, first_seen_ms: nowMs });
+  return f;
+}
+
+function claimedElsewhere(db, sessionPk, ccUuid) {
+  return db.prepare('SELECT 1 AS x FROM epochs WHERE cc_session_uuid = ? AND session_pk <> ? AND confirmed_ms IS NOT NULL LIMIT 1')
+    .get(ccUuid, sessionPk) !== undefined;
+}
+
+/** Chain `ccUuid` into a family at the next seq, in line order.
+ *  - First claim stands: another family holding the uuid confirmed wins, and this claim is counted uuid_two_sessions
+ *    (§6.5). An unconfirmed claim elsewhere (a planted clear line) blocks nobody.
+ *  - A uuid this family already holds is not chained again; an unconfirmed one is confirmed when `confirmedMs` is
+ *    given. */
+export function chainEpoch(db, sessionPk, ccUuid, cause, declaredBy, confirmedMs) {
+  if (claimedElsewhere(db, sessionPk, ccUuid)) { bump(db, 'uuid_two_sessions'); return null; }
+  const mine = db.prepare('SELECT seq, confirmed_ms FROM epochs WHERE session_pk = ? AND cc_session_uuid = ?').get(sessionPk, ccUuid);
+  if (mine !== undefined) {
+    if (mine.confirmed_ms === null && confirmedMs !== null) {
+      db.prepare('UPDATE epochs SET confirmed_ms = ? WHERE session_pk = ? AND seq = ?').run(confirmedMs, sessionPk, mine.seq);
+      return { seq: mine.seq, created: false, confirmedNow: true };
+    }
+    return { seq: mine.seq, created: false, confirmedNow: false };
+  }
+  const seq = db.prepare('SELECT COALESCE(MAX(seq), 0) + 1 AS s FROM epochs WHERE session_pk = ?').get(sessionPk).s;
+  db.prepare('INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(sessionPk, seq, ccUuid, cause, declaredBy, confirmedMs);
+  return { seq, created: true, confirmedNow: confirmedMs !== null };
+}
+
+/** Lexically under `$HOME/.claude*`: the first path segment below the user's HOME starts with `.claude`. This is the
+ *  agent whitelist's glob (agent/src/whitelist.ts:47-53), applied to the rostered home's path as the shim passed it,
+ *  so a home that is itself a symlink still qualifies (§5.2). */
+function underClaudeGlob(home, userHome) {
+  if (!home.startsWith(`${userHome}/`)) return false;
+  return home.slice(userHome.length + 1).split('/')[0].startsWith('.claude');
+}
+
+function realOrNull(p) {
+  try { return realpathSync(p); } catch { return null; }
+}
+
+/** The `cwd` of a transcript's first uuid row: a string, null for a uuid row without one, undefined for no whole uuid
+ *  row in the first FIRST_ROW_SCAN bytes. */
+function firstUuidRowCwdOf(fd) {
+  const b = Buffer.alloc(FIRST_ROW_SCAN);
+  const n = readSync(fd, b, 0, b.length, 0);
+  const lines = b.subarray(0, n).toString('utf8').split('\n');
+  lines.pop();   // the last piece has no newline yet, so it is never a whole row
+  for (const line of lines) {
+    let row;
+    try { row = JSON.parse(line); } catch { continue; }
+    if (row !== null && typeof row === 'object' && typeof row.uuid === 'string' && row.uuid !== '') {
+      return typeof row.cwd === 'string' ? row.cwd : null;
+    }
+  }
+  return undefined;
+}
+
+/** For the location rule (§6.1): the first uuid row's cwd of `<home>/projects/*\/<uuid>.jsonl`, across the rostered
+ *  homes. The file is opened O_NOFOLLOW|O_NONBLOCK, must be regular, and must resolve under its home's projects/.
+ *  Only that first row is read: until the epoch confirms, nothing else of the file is (SE5). */
+export function firstUuidRowCwd(homes, userHome, uuid) {
+  for (const home of homes) {
+    if (!underClaudeGlob(home, userHome)) continue;
+    let root;
+    let slugs;
+    try {
+      root = realpathSync(`${home}/projects`);
+      slugs = readdirSync(`${home}/projects`).sort();
+    } catch {
+      continue;
+    }
+    for (const slug of slugs) {
+      const p = `${home}/projects/${slug}/${uuid}.jsonl`;
+      let fd;
+      try { fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); } catch { continue; }
+      try {
+        if (!fstatSync(fd).isFile() || !realpathSync(p).startsWith(`${root}/`)) continue;
+        const cwd = firstUuidRowCwdOf(fd);
+        if (cwd !== undefined) return cwd;
+      } catch {
+        continue;
+      } finally {
+        closeSync(fd);
+      }
+    }
+  }
+  return null;
+}
+
+/** A clear epoch confirms by location when its transcript's first uuid row's cwd resolves to the observed `.workdir`:
+ *  both realpaths when both resolve, otherwise the verbatim strings (§6.1; D-4191, slug history-epoch-cwd-real). */
+function locationConfirms(c, uuid, workdir) {
+  if (workdir.state !== 'value') return false;
+  const cwd = firstUuidRowCwd(c.homes, c.home, uuid);
+  if (cwd === null) return false;
+  return locationMatches({ cwd, cwdReal: realOrNull(cwd), workdir, workdirReal: realOrNull(workdir.value) });
+}
+
+/** One SessionStart line, inside its file's drain transaction. Returns its verdict lines.
+ *  - startup/resume: confirmed by its own reg, by the observed `.uuid`, or by a first match while held. Otherwise it
+ *    is a candidate, never chained (D-4190, slug history-epoch-confirmation).
+ *  - clear: chained now, in line order. It is confirmed by `.uuid`, a held match or its location, else left
+ *    unconfirmed with a candidate row to time its 7 days (D-4189, slug history-clear-epoch-confirmed).
+ *  cause='clear' comes from nothing but this line (DM11). */
+export function applyEpochLine(db, c, ev) {
+  const { rec, obs, key } = ev;
+  const nowMs = c.now();
+  const out = [];
+  const v = (kind, fields) => { out.push(verdictRecord(nowMs, key, kind, fields)); };
+  const d = decideEpochLine(rec.reg === undefined ? { src: rec.src, sid: rec.sid } : { src: rec.src, sid: rec.sid, reg: rec.reg }, obs);
+  if (d.kind === 'candidate') {
+    db.prepare(INSERT_CANDIDATE).run(rec.sid, rec.id, rec.gen ?? '', rec.src, ev.tsMs, ev.recvMs);
+    return out;
+  }
+  const fam = joinFamily(db, c, {
+    ccrcId: rec.id, lineGen: rec.gen ?? null, observedGen: obs.generation, observedProject: obs.project,
+    uuid: rec.sid, v, joinVerdict: true,
+  });
+  if (d.kind === 'confirm') {
+    const r = chainEpoch(db, fam.sessionPk, rec.sid, rec.src, 'hook', nowMs);
+    if (r !== null && (r.created || r.confirmedNow)) {
+      db.prepare(DELETE_CANDIDATE).run(rec.sid, rec.id);
+      v('epoch-confirmed', { ccrc_id: rec.id, generation: fam.generation, cc_session_uuid: rec.sid, cause: rec.src, declared_by: 'hook', by: d.by });
+    }
+    return out;
+  }
+  const by = d.confirmedBy ?? (locationConfirms(c, rec.sid, obs.workdir) ? 'location' : null);
+  const r = chainEpoch(db, fam.sessionPk, rec.sid, 'clear', 'hook', by === null ? null : nowMs);
+  if (r === null) return out;
+  if (r.created) v('epoch-chained', { ccrc_id: rec.id, generation: fam.generation, cc_session_uuid: rec.sid, cause: 'clear' });
+  if (by !== null && (r.created || r.confirmedNow)) {
+    v('epoch-confirmed', { ccrc_id: rec.id, generation: fam.generation, cc_session_uuid: rec.sid, cause: 'clear', declared_by: 'hook', by });
+  }
+  if (r.created && by === null) db.prepare(INSERT_CANDIDATE).run(rec.sid, rec.id, fam.generation, 'clear', ev.tsMs, ev.recvMs);
+  return out;
+}
+
+/** A verdict made outside a drain: one FULL transaction holding its outbox rows, flushed right after (§9.14). With no
+ *  writer token the rows wait in the outbox for one. */
+function verdictTx(db, c, fn) {
+  withTx(db, 'FULL', () => {
+    const put = db.prepare('INSERT INTO journal_outbox (rec) VALUES (?)');
+    for (const r of fn()) put.run(r);
+  });
+  if (c.ids === null) return;
+  try {
+    flushOutbox(db, c.home, c.ids, c.now());
+  } catch (e) {
+    if (!(e instanceof JournalError)) throw e;
+    countOutside(db, 'journal_write_failed');
+  }
+}
+
+/** A clear epoch awaiting confirmation, at a later tick: `.uuid` naming it, or its location against the registry's
+ *  `.workdir` now. Past the window it is counted epoch_unconfirmed and stays out of every scope; its epochs row is
+ *  never deleted. Never confirmed while another family holds the uuid confirmed.
+ *  - The 7-day rule is lib's decideCandidate, the same call a startup candidate takes, so the window is decided once
+ *    (IV4): past it the candidate drops, even when `.uuid` or the location would match now.
+ *  - The location check reads `.workdir` as the registry holds it at this tick, not as observed at the rename, as
+ *    §6.1 words it: the v1 epoch_candidates row keeps no observation (D-4189). A pane's
+ *    workdir is fixed for its row-life, so the two agree unless the row was replaced meanwhile. */
+function confirmClear(db, c, k, currentUuid, nowMs) {
+  const fam = db.prepare('SELECT session_pk, merged_into FROM sessions WHERE ccrc_id = ? AND generation = ?').get(k.ccrc_id, k.generation);
+  const pk = fam === undefined ? null : (fam.merged_into ?? fam.session_pk);
+  const ep = pk === null ? undefined
+    : db.prepare('SELECT seq, confirmed_ms FROM epochs WHERE session_pk = ? AND cc_session_uuid = ?').get(pk, k.cc_session_uuid);
+  if (ep !== undefined && ep.confirmed_ms !== null) {   // confirmed meanwhile, by a resume line or a registry mapping
+    withTx(db, 'NORMAL', () => { db.prepare(DELETE_CANDIDATE).run(k.cc_session_uuid, k.ccrc_id); });
+    return;
+  }
+  const d = decideCandidate({ sid: k.cc_session_uuid, journaledMs: k.first_seen_ms, nowMs, currentUuid, supersededByLaterClearOfSameId: false });
+  let by = null;
+  if (d.kind !== 'drop' && ep !== undefined && !claimedElsewhere(db, pk, k.cc_session_uuid)) {
+    if (d.kind === 'confirm') by = 'later-tick';
+    else if (locationConfirms(c, k.cc_session_uuid, readRegPresence(`${historyPaths(c.home).reg}/${k.ccrc_id}.workdir`))) by = 'location';
+  }
+  if (by === null && d.kind !== 'drop' && ep !== undefined) return;
+  verdictTx(db, c, () => {
+    const out = [];
+    db.prepare(DELETE_CANDIDATE).run(k.cc_session_uuid, k.ccrc_id);
+    const generation = pk === null ? k.generation : db.prepare('SELECT generation FROM sessions WHERE session_pk = ?').get(pk).generation;
+    if (by !== null) {
+      db.prepare('UPDATE epochs SET confirmed_ms = ? WHERE session_pk = ? AND seq = ?').run(nowMs, pk, ep.seq);
+      out.push(verdictRecord(nowMs, 'none', 'epoch-confirmed', { ccrc_id: k.ccrc_id, generation, cc_session_uuid: k.cc_session_uuid, cause: 'clear', declared_by: 'hook', by }));
+    } else {
+      bump(db, 'epoch_unconfirmed');
+      out.push(verdictRecord(nowMs, 'none', 'epoch-unconfirmed', { ccrc_id: k.ccrc_id, generation, cc_session_uuid: k.cc_session_uuid, superseded: false }));
+    }
+    return out;
+  });
+}
+
+/** Every tick, after the drain: each candidate is confirmed, kept waiting, or dropped after 7 days of its journaling.
+ *  - A startup or resume candidate confirms when `.uuid` names its sid. A gen-less one joins the generation the
+ *    registry reads then.
+ *  - A drop is superseded when `.uuid`, as the registry holds it at the drop, names any clear epoch of the same id
+ *    (§14 risk 24). §9.2 words it as the candidate's OBSERVED `.uuid` naming a LATER clear line; the v1
+ *    epoch_candidates row keeps no observation and no line order, so the tick reads the registry then
+ *    (D-4190).
+ *  - Each decision commits FULL in its own transaction and is flushed right after.
+ *  The v1 DDL keeps no event_key on a candidate, so these verdicts carry `none` with their natural key, (ccrc_id,
+ *  cc_session_uuid). */
+export function confirmCandidates(db, c) {
+  const P = historyPaths(c.home);
+  const rows = db.prepare('SELECT cc_session_uuid, ccrc_id, generation, cause, first_seen_ms FROM epoch_candidates ORDER BY first_seen_ms, ccrc_id, cc_session_uuid').all();
+  for (const k of rows) {
+    const nowMs = c.now();
+    const currentUuid = readRegPresence(`${P.reg}/${k.ccrc_id}.uuid`);
+    if (k.cause === 'clear') { confirmClear(db, c, k, currentUuid, nowMs); continue; }
+    const superseded = currentUuid.state === 'value' && db.prepare(
+      "SELECT 1 AS x FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE s.ccrc_id = ? AND e.cause = 'clear' AND e.cc_session_uuid = ? LIMIT 1",
+    ).get(k.ccrc_id, currentUuid.value) !== undefined;
+    const d = decideCandidate({ sid: k.cc_session_uuid, journaledMs: k.first_seen_ms, nowMs, currentUuid, supersededByLaterClearOfSameId: superseded });
+    if (d.kind === 'wait') continue;
+    verdictTx(db, c, () => {
+      const out = [];
+      const v = (kind, fields) => { out.push(verdictRecord(nowMs, 'none', kind, fields)); };
+      db.prepare(DELETE_CANDIDATE).run(k.cc_session_uuid, k.ccrc_id);
+      if (d.kind === 'drop') {
+        bump(db, 'epoch_unconfirmed');
+        if (d.superseded) bump(db, 'epoch_unconfirmed_superseded');
+        v('epoch-unconfirmed', { ccrc_id: k.ccrc_id, generation: k.generation, cc_session_uuid: k.cc_session_uuid, superseded: d.superseded });
+        return out;
+      }
+      const reg = readObservation(c.home, k.ccrc_id, nowMs);
+      const fam = joinFamily(db, c, {
+        ccrcId: k.ccrc_id, lineGen: k.generation === '' ? null : k.generation, observedGen: reg.generation,
+        observedProject: reg.project, uuid: k.cc_session_uuid, v, joinVerdict: true,
+      });
+      const r = chainEpoch(db, fam.sessionPk, k.cc_session_uuid, k.cause, 'hook', nowMs);
+      if (r !== null && (r.created || r.confirmedNow)) {
+        v('epoch-confirmed', { ccrc_id: k.ccrc_id, generation: fam.generation, cc_session_uuid: k.cc_session_uuid, cause: k.cause, declared_by: 'hook', by: 'later-tick' });
+      }
+      return out;
+    });
+  }
+}
+
+/** The periodic scan's backfill (§6.1 "Backfill"). Each $REG/<id>.uuid that names no epoch of its id and no confirmed
+ *  epoch anywhere becomes a `mapping` verdict: cause 'import', declared_by 'registry', committed FULL in its own
+ *  transaction before any ingest chunk can need it, and flushed. A forked session enters this way (Q16). A uuid this id's `''` family
+ *  already holds is re-keyed instead, once the row reads a generation (§6.10, "A respawn that mints a missing
+ *  generation"). */
+export function registryBackfill(db, c) {
+  const reg = historyPaths(c.home).reg;
+  let names;
+  try { names = readdirSync(reg).sort(); } catch { return; }
+  for (const n of names) {
+    if (n.startsWith('.') || !n.endsWith('.uuid')) continue;
+    const id = n.slice(0, -'.uuid'.length);
+    if (!idOk(id)) continue;
+    const nowMs = c.now();
+    const obs = readObservation(c.home, id, nowMs);
+    if (obs.uuid.state !== 'value' || !UUID_RE.test(obs.uuid.value)) continue;
+    const uuid = obs.uuid.value;
+    const owner = db.prepare('SELECT s.ccrc_id, s.generation FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE e.cc_session_uuid = ? AND e.confirmed_ms IS NOT NULL LIMIT 1').get(uuid);
+    if (owner !== undefined) {
+      const g = joinGeneration({ lineGen: null, observedGen: obs.generation });
+      if (owner.ccrc_id !== id || owner.generation !== '' || g.generation === '') continue;
+      const project = obs.project.state === 'value' ? obs.project.value : '';
+      verdictTx(db, c, () => {
+        const out = [];
+        rekeyIfDue(db, id, g.generation, uuid, project, nowMs, (kind, fields) => { out.push(verdictRecord(nowMs, 'none', kind, fields)); });
+        return out;
+      });
+      continue;
+    }
+    // A clear epoch still awaiting confirmation is confirmCandidates' to decide, or to drop past 7 days (IV4, spec §6.1;
+    // D-4297, slug history-backfill-skips-unconfirmed-epoch); a registry mapping must not confirm it. Only a uuid with no
+    // epoch row of this id is a backfill. Scoped to this id, so another family's planted unconfirmed clear line still
+    // blocks nobody (chainEpoch's doc).
+    if (db.prepare('SELECT 1 AS x FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE e.cc_session_uuid = ? AND s.ccrc_id = ? AND e.confirmed_ms IS NULL LIMIT 1').get(uuid, id) !== undefined) continue;
+    verdictTx(db, c, () => {
+      const out = [];
+      const v = (kind, fields) => { out.push(verdictRecord(nowMs, 'none', kind, fields)); };
+      const fam = joinFamily(db, c, {
+        ccrcId: id, lineGen: null, observedGen: obs.generation, observedProject: obs.project, uuid, v, joinVerdict: false,
+      });
+      const r = chainEpoch(db, fam.sessionPk, uuid, 'import', 'registry', nowMs);
+      if (r !== null && (r.created || r.confirmedNow)) {
+        db.prepare(DELETE_CANDIDATE).run(uuid, id);
+        v('mapping', { ccrc_id: id, generation: fam.generation, cc_session_uuid: uuid, declared_by: 'registry' });
+      }
+      return out;
+    });
+  }
+}
+
+/** The periodic scan runs every SCAN_INTERVAL_MS (§9.2 step 2, *chosen* 30 min), timed by meta 'scan_ms'. A missing
+ *  or unparseable mark means the scan is due. */
+export function scanDue(db, nowMs) {
+  const last = getMeta(db, 'scan_ms');
+  return last === null || !(nowMs - Number(last) < SCAN_INTERVAL_MS);
+}
+
+export function markScan(db, nowMs) {
+  withTx(db, 'NORMAL', () => { setMeta(db, 'scan_ms', String(nowMs)); });
+}
+
 /**
  * What one tick of a bound, open store carries. runPass builds it; tick and the steps below read it.
  * @typedef {object} TickCtx
@@ -724,6 +1111,16 @@ export async function tick(db, ctx) {
   // Step 1, the drain: journal first, then the FULL drain transaction, then its verdicts, then the unlink (§9.14).
   // runPass never ticks without both binding names: a missing store.writer is a hold there (§9.10 "Writer token").
   ctx.hints = drainSpool(db, ctx);
+  // Then the candidates: startup and resume lines awaiting `.uuid`, and clear epochs awaiting `.uuid` or their
+  // location. Each is decided in its own FULL transaction and flushed right after (§9.2 step 1, §6.1).
+  confirmCandidates(db, ctx);
+  // The periodic scan (every SCAN_INTERVAL_MS): every $REG/<id>.uuid that names no epoch of its id and no confirmed
+  // epoch anywhere becomes a registry mapping, committed FULL before any ingest chunk can need it (§6.1 "Backfill";
+  // §9.2 step 4 "Every verdict commits first"; D-4297).
+  if (scanDue(db, ctx.now())) {
+    registryBackfill(db, ctx);
+    markScan(db, ctx.now());
+  }
   // <<< history tick steps
   mkdirSync(ctx.paths.spool, { recursive: true, mode: 0o700 });
   if (ctx.parsed.rosterUnreadable) bump(db, 'roster_unreadable');
