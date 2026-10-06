@@ -243,6 +243,15 @@ export const SENTENCES: Record<string, string> = {
   // `reclaim-in-progress` is ws-reap's refusal of a `reclaim:` one.
   'reap-in-progress': 'An interrupted clean-up of this workspace belongs to ws-reap, and reclamation never finishes another verb’s work. Nothing was removed.',
   'reclaim-in-progress': 'An interrupted reclamation of this workspace is waiting to finish, and ws-reap never finishes another verb’s work. Nothing was removed.',
+  // ── ws-expire (workspace lifecycle, spec 2026-09-24 §5.3): an ARCHIVED workspace cleaned up seven days after its
+  // archive. Its new words only; every other word it can answer is reused, sentence unedited. The retryable ones say
+  // the cleanup tries again; none asks the reader to act, because the lane that will read them (wave 3b) is the
+  // server's. `not-archived` is ws-reap's word and keeps its sentence.
+  'not-expired': 'This workspace was archived less than seven days ago, so nothing was removed. It is cleaned up seven days after its archive.',
+  'child': 'This workspace was created for a run, so it is cleaned up when that run closes, never by the seven-day expiry. Nothing was removed.',
+  'live': 'This archived workspace has a session running — a pane, or a service that would start one — so nothing was removed. The cleanup tries again later.',
+  'in-use': 'A process on this box has its working directory inside this archived workspace — a shell someone opened there, say — so nothing was removed. The cleanup tries again later.',
+  'expire-in-progress': 'An interrupted seven-day cleanup of this workspace is waiting to finish, and ws-reap never finishes another verb’s work. Nothing was removed.',
 };
 
 /** An OWN key only: `SENTENCES` is a plain object literal, so a bare

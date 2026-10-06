@@ -778,7 +778,11 @@ token** and omitted when the box does not advertise it, with the omission record
 without the marker is simply not a child, which is the same fallback the pre-policy stock already takes.
 
 **Not changed, deliberately:** `ws-reap`, `ws-rm`, `ws-gc`, `ws-archive`, `ws-restore`, their grants, their
-refusals, the audit-token ceremony, and every PWA surface that drives them.
+refusals, the audit-token ceremony, and every PWA surface that drives them. (Qualified by workspace lifecycle's
+wave 3, which adds two refusals of its own: `ws-reap` refuses `expire-in-progress` when the breadcrumb starts
+`expire:`, beside its `reclaim:` mirror, and `ws-restore` refuses `in-progress` under its lock when an `expire:`
+breadcrumb stands. Their grants and every other refusal stand. See
+`2026-09-24-workspace-lifecycle-design.md` §5.3.)
 
 ---
 
