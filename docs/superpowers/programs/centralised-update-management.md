@@ -34,7 +34,13 @@ numbers; the spec wave each one implements is named beside it.
 | 10 | — (R12, script half) | `deploy/verify-service.sh` tells a deliberate supervisor stop (settled `inactive` + `.stopped` stamp or a purged row) from a crash, so a serial sweep verify stops failing healthy updates; tests on fixture HOMEs; a cross-version case against `main`'s sweep | fleet-first (the move INTO it runs the old sweep with the new script) | — | **MERGED** `a6daa9cf` (PR #247, 2026-10-05 03:19:04 UTC, run 261 done; released as v0.0.80 at 03:19:51). The merged tree is byte-identical to the tested tip, `main` was unmoved at `b40f4145`, and every Linux leg is green. Review 263 met no bar class; residue R13. It reaches neither box until the operator acks the failed v0.0.78 fleet row. The first move after the ack goes straight to the newest release, so it runs v0.0.78's sweep with this script. Was: **Wave-done** 2026-10-05 02:18 UTC (mail 3446) at `a9a1cef8` (PR #247, 3/3 items; reserve number 3950 spent, defined in the plan on the worker branch). Review run 263 was dispatched to `ccrc-pwa-clear-meadow` at 02:42:59 UTC, under the bar committed before it. Was: **DISPATCHED** 2026-10-05 00:05 UTC to `ccrc-pwa-keen-harbor` (run 261). Was: **PLANNED** 2026-10-04 23:59 UTC (run 261); plan `e60d7174` (D-3946..D-3949 defined; a five-number reserve, numbers 3950 to 3954, named in the brief). Was: **SCOPED** 22:56 UTC (`wf_790a5b99-8ca`); runs beside wave 9, no shared file. |
 | 11 | — (R12, sweep half) | `_upd_sweep`: one shared verify window by concurrent per-unit calls, the die's report-ownership guard and wording, no die in a subshell, the Darwin arm | fleet-first | — | **MERGED** `d2bac7ae` (PR #287, run 270 done) 2026-10-06 02:37 UTC, released as v0.0.92 (dev). The merged tree is byte-identical to the tested tip `33f4eaaa` (`main` unmoved at `d12b5aba`, every Linux leg green). Review 281 met none of the bar's eight classes; its four findings and D3's macOS red go to R19, before stable. Was: **IN REVIEW** 2026-10-06 01:29 UTC: wave-done at `33f4eaaa`, PR #287, `main` `d12b5aba` merged in as `9b3ba1fa`; reserve numbers 3987 and 3988 spent (bare: their definitions are on the worker branch); the bar is committed in the 01:29 entry; review run 281 dispatched 01:32 UTC to `ccrc-pwa-amber-cove` (the held-out panel plus five wave lenses). Was: **DISPATCHED** 2026-10-05 16:04 UTC to `ccrc-pwa-clear-meadow` (run 270). Plan `966ffe9f`, 9 tasks; it defines D-3972 to D-3984, and the five-number reserve, numbers 3987 to 3991, is named in the brief. Was: **Run 270 open, planned** 2026-10-05 11:10 UTC, opened before run 223 closed so the programme keeps an open run; to plan, with R13, R14 and R14(f) first. Was: **SCOPED** 2026-10-04 22:56 UTC; after wave 9 merges (`ccd/ccrc`). The 10-02 wave-10 deferrals move to wave 12. |
 | 12 | — (wave 11's test and prose residue) | before stable: R19 (D3's GNU-only shim, F1's unpinnable filter, F2's W20 prose, F3's NEW+S10 pin, F4's S0 naming); R18(c)–(e) prose. No shipped runtime code changes | none (tests and docs) | — | **MERGED** `9221416a` (PR #291, run 282 done) 2026-10-06 06:40 UTC. The merged tree `a6c85f7c` equals `merge-tree`'s, and every branch file is byte-identical to the tested tip `7b0a5454` (`main` had moved by docs only, to `21f536a5`). Review 286 met none of the bar's seven classes; `server 4/5`'s cleanup-hook timeout re-ran green. Was: **IN REVIEW** 2026-10-06 05:57 UTC: wave-done at `7b0a5454`, PR #291; reserve number 4072 spent (bare: defined on the worker branch); the bar is in the 05:57 entry; review run 286 dispatched 05:59 UTC to `ccrc-pwa-warm-ridge` (the held-out panel plus two lenses: pins and fixtures, the truth of the prose). Was: **DISPATCHED** 2026-10-06 04:37 UTC to `ccrc-pwa-soft-delta` (run 282; 5 items; route Opus·high / Sonnet / workflow off / compact 40). Was: **Run 282 open, planned** 2026-10-06 02:38 UTC, opened before run 270 closed. Deviation block 4068 to 4087 (bare until defined). Scoped 02:45 UTC; plan `04c977cb` + `bc495fed` (drafted by workflow `wf_a11d694f-c70`: prototype, attack, revise; readings ruled 04:35). 5 tasks; it defines D-4068 to D-4071, and the reserve is numbers 4072 to 4076 (Reading 8's ruling spends 4072). |
-| 13 | — (residue) | item 3's false "is FAILED" sweep warning, R17, R18(a)–(b), R2, R3, R4-1/3, R8a–h, R9-R1, R10c/f/i/j/k, R14(a–e), `--no-reload` for `_svc_enable`, ccd/ccd harness containment, the dotted-id reverse maps; from wave 12's plan: a unit `activating` before the restart (restarted, then neither verified nor warned), the pgid filter's untestable exception, T6-INT-W, and `_upd_sweep_stop`'s shipped "(a stale pid is never signalled)" comment | to plan | — | **Run 287 open, planned** 2026-10-06 06:41 UTC, opened before run 282 closed. Deviation block 4094 to 4113 (bare until defined). Scoped 2026-10-06 02:45 UTC; R20 joins it. |
+| 13 | — (security + CI) | R16: the box token leaves `curl`'s argv in `ccd/ccrc-api` and `deploy/notify.sh` (`-K -` with a stdin `header = …` config, the idiom `ccd-pool-sync` and `ccd-update-sync` ship), and the test curl front admits exactly that; R20: the CI cleanup-hook timeout and wave 12's As-built bullet | fleet-first (the client and the hook reach every home through the install spine) | — | **Run 287 open, planned** 2026-10-06 06:41 UTC; re-scoped 07:07 UTC to R16 + R20 (scoping workflow `wf_286a790a-7fa`). Deviation block 4094 to 4113 (bare until defined). To plan. |
+| 14 | — (R15, PWA) | the home screen shows a halt and offers Ack in place; **Update all** says why it skipped; the skew banner drops the stale `ccrc rollout` advice | server (PWA bundle) | — | to plan; product shape asked of the operator (07:07 entry) |
+| 15 | — (`ccd/ccd`) | `--no-reload` for `_svc_enable`, alone | fleet-first | — | to plan (claim 1043 ended, so `ccd/ccd` is free) |
+| 16 | — (sweep accounting) | item 3's false "is FAILED" warning, the unit `activating` before the restart (Reading 9), the shipped stale-pid comment, the pgid clause's comment | fleet-first, an attended first move | — | gated on claim 1046 (`ccd/ccrc`, README) and on the operator's Reading 9 ruling |
+| 17 | — (verify script, Darwin helper) | R18(a) (unsearchable registry; `_reg_purge`'s order), R18(b), R10j | fleet-first, an attended first move | — | gated on claim 1046 |
+| 18 | — (backup prune) | R14(a), R10i, R8c, R10c's `deploy.sh` listing guard, R8g | fleet-first | — | gated on claim 1046 |
+| 19 | — (test containment) | `makeCcdHarness` containment parity, R14(b)'s raw-spawn census, R8f's `pathWithout` | none (tests) | — | gated on claim 1046; after wave 13 |
 | — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
 
 **Order.** 2 → {3, 4} → {5, 6} → rollout. Waves 3 and 4 touch disjoint files (PWA + notifier vs `ccd/ccrc` +
@@ -2070,6 +2076,54 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - a green `full-suite` on a `main` commit.
 
     The promotion is the operator's to call.
+
+- **2026-10-06 07:07 UTC: wave 13 re-scoped, and the residue mapped to waves 13–19.**
+  - **The scoping:** workflow `wf_286a790a-7fa` ran 5 agents in 24 min. Two Sonnet inventories measured 61 queued items
+    at `main` `9221416a`. An Opus designer split them, an Opus critic gave nine findings (all applied), and an Opus
+    reviser re-measured. The result is copied into the coordinator's worktree under `.superpowers/w13-evidence/`.
+  - **The constraint:** claim 1046 (session-continuity wave 4, run 274) holds `ccd/ccrc`, `ccd/ccrc-doctor-checks`,
+    `deploy/deploy.sh`, `agent/test/deploy-verify.test.ts` and `README.md`. So every sweep, verify-script and prune
+    item waits on that claim (waves 16–19). Claim 1043 has ended, so `ccd/ccd` is free (wave 15).
+  - **Wave 13 is R16 + R20, the unclaimed security and CI pair.** I take R16 into this programme, since no other
+    programme owns `ccrc-api`.
+    - **R16's shape:** `-K -`, a stdin `curl` config carrying `header = "x-ccrc-mail-token: …"`. Two shipped sites
+      already use it (`ccd-pool-sync`, `ccd-update-sync`), so the spelling and escaping follow theirs.
+    - `ccrc-api` reads stdin for `--body -` before `curl` runs. A case must prove that the two uses do not collide.
+    - **The test curl front's `-K -` rule moves into wave 13.** Without it, any contained case that drives `ccrc-api`
+      or `notify.sh` through `loopbackCurlFront`, which refuses `-K`, would exit 97, and `notify.sh`'s refusal is
+      silent. `containedTools.ts` is unclaimed. The rule admits only `header = "…"` lines and refuses `url`, `proxy`,
+      `connect-to` and every other key, with mutation rows.
+    - **R20(a):** the cleanup removes only the dirs made inside the current test, and the 20 s timeout is not
+      widened. `installTreeFixture.ts` is under claim 1046 and is not edited.
+    - **R20(b):** wave 12's As-built bullet.
+    - **Risk:** a broken `ccrc-api` breaks every session's mail, claims and ledger calls fleet-wide, within about an
+      hour of the merge. The plan's attack gets a lens for that blast radius and one for the config-file parsing.
+  - **Ruled now, so no plan re-asks:**
+    - **Dropped, measured closed:** R14(d), R4-2, R8i, R9's done items, R10 a/b/d/e/g/h, and R14(e), which was ruled
+      not owed. R-D's two halves stay accepted residue.
+    - **R4-3 is closed as accepted.** It is a few hundred bytes per SIGKILLed phase, and never read. A new deletion
+      sweep inside every update is the larger risk.
+    - **T6-INT-W:** wave 16 pins it only if that needs no new seam in shipped code. Otherwise it closes as an
+      unpinnable guard, with its measurement.
+    - **R17(a) and (b) are closed as accepted residue.** They are bounded at about 8 s, read-only, and at parity with
+      the base, and the real sender is a cgroup stop. R17(c) and R18's caller-other-signal note stay as notes. The
+      ruling against a third reshape of the TERM trap stands.
+    - **Held, unscheduled until each gets a design:** R2 (the lease model), R3, R8a/d/e, R10c's phase design, R10f,
+      R10k and the dotted-id reverse maps. R9-R1, R9-F2, R8b, R4-1 and R9-F4 are moot on this fleet, since both boxes
+      keep only digested versions. They stay listed because the repo is public.
+    - **Never recovered:** the text of R14(c)'s six minors, R8h's row and review 181's F3/F5/F7/F9/F10 lived in
+      reclaimed workspaces. They close unless someone re-finds them.
+  - **Asked of the operator (none of these blocks wave 13):**
+    1. **Reading 9:** a unit that was already crash-looping BEFORE an update and is still down after it: warn only,
+       or verify it and fail the update? The 13:58 "Re-check once" text verifies every crash-shaped unit, and D-3984
+       narrowed that to units active before.
+    2. **Attended first moves:** for waves 16 and 17, which change the sweep and the verify script, should auto be
+       held while they merge, with the next move applied from the console while watched? Or should whichever auto
+       move comes next be watched?
+    3. **R16:** rotate the box token once wave 13 is live on both boxes?
+    4. **R15's product shape:** Ack in place on the home screen's halt banner.
+    5. **Dotted ids:** look the registry up by sanitised name, or have `ws-add` refuse colliding ids, which narrows
+       the id alphabet?
 
 ## Carried constraints
 
