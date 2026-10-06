@@ -450,6 +450,39 @@ describe('the collapsed kept line', () => {
       .toEqual([many.sentence, last.sentence, first.sentence]);
   });
 
+  // The two shapes are told apart by `sessionId` — the field the reader
+  // checks — never by `members`, which it does not check on a single item. A
+  // single child whose wire object carries a stray `members` (null, empty, or
+  // anything else) is still one ordinary row with its own run and id, and a
+  // collapsed line that also carries a `sessionId` and a `runId` is read as the
+  // single child the reader's own check takes it for, its members never rendered.
+  it('a single child carrying a stray `members` renders as one ordinary row, never as a collapsed line', () => {
+    const base = kept({ sessionId: 'ccrc-pwa-kept-stray', runId: 1 });
+    for (const stray of [null, [], 'x']) {
+      cleanup();
+      const store = makeStore();
+      seen(store, coord({ childReclaimAttention: [{ ...base, members: stray } as unknown as ChildReclaimAttention] }));
+      render(<ChildReclaimBanner store={store} />);
+      const rows = rowsOf();
+      expect(rows).toHaveLength(1);
+      expect(whoOf(rows[0]!)).toEqual(['run #1 · ccrc-pwa-kept-stray']);
+      expect(rows[0]!.querySelector('.child-reclaim-sentence')?.textContent).toBe(base.sentence);
+    }
+  });
+
+  it('a kept-many item that also carries a sessionId and runId reads as a single child — its members are never rendered unchecked', () => {
+    const many = keptMany(3);
+    const members = [{ sessionId: 'ccrc-pwa-kept-bad', runId: 'x' as unknown as number }, ...many.members];
+    const store = makeStore();
+    seen(store, coord({ childReclaimAttention: [
+      { ...many, sessionId: 'ccrc-pwa-stray', runId: 7, members } as unknown as ChildReclaimAttention] }));
+    render(<ChildReclaimBanner store={store} />);
+    const rows = rowsOf();
+    expect(rows).toHaveLength(1);
+    expect(whoOf(rows[0]!)).toEqual(['run #7 · ccrc-pwa-stray']);
+    expect(rows[0]!.textContent).not.toContain('run #x');
+  });
+
   // The reader drops a collapsed line that names nobody, and one wrong in
   // exactly one field — word, sentence, members — each on its own, so each
   // check pins itself.

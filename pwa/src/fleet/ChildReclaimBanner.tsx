@@ -1,7 +1,8 @@
 // The reclaim row on /runs (child-reclamation spec §5.8, §5.9): the switch on
 // AUTOMATIC reclamation of child workspaces, and the one fleet-level attention
-// list — the children a terminal refusal left standing, and those whose reclaim
-// has kept failing past the defer ceiling, each with the server's sentence.
+// list — the children a terminal refusal left standing, those whose reclaim
+// has kept failing past the defer ceiling, and those the sweep keeps for a
+// person to remove, each with the server's sentence.
 // `CoordBanner`'s shape, deliberately, because an operator reading two
 // switches in one place must not have to learn two behaviours:
 //
@@ -18,7 +19,9 @@
 // offered. Rule 4 says the human does not tend sub-workspaces; this tells them
 // what is costing disk, and asks nothing. The sentences are the SERVER's — the
 // PWA renders them and maps no token. A collapsed line names its children after
-// the server's sentence; the PWA counts nothing itself.
+// the server's sentence; the PWA counts nothing itself. The two item shapes are
+// told apart by `sessionId`, the field the reader checks: every single item has
+// one, and a collapsed line is rebuilt by the reader with none.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { MarkerState } from '../../../shared/api';
@@ -132,7 +135,7 @@ export function ChildReclaimBanner({
       </div>
       {attention.length > 0 && (
         <ul className="child-reclaim-attention" aria-label="children reclamation could not clean up">
-          {attention.map((a) => 'members' in a ? (
+          {attention.map((a) => !('sessionId' in a) ? (
             <li key={`kept-many ${a.word}`} className="child-reclaim-item">
               <span className="child-reclaim-sentence">{a.sentence}</span>
               {a.members.map((m) => (
