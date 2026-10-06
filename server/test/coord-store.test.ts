@@ -3019,6 +3019,21 @@ describe('CoordStore.childReclaimCoordinatorClaims — the latest instant per id
     expect(claims.get('Y')).toBe(d);
   });
 
+  // The heir side walks EVERY ` -> ` suffix, not only the last: an heir id that
+  // itself holds ` -> ` must still be dated at the reclaim's instant. `d > c`
+  // keeps that visible — the runs read alone would date the rewritten
+  // `claimedBy` at the run's `closedAt`, `c`.
+  it('(e2) an heir id holding ` -> ` is dated at the reclaim, as is its last suffix', () => {
+    const s = store();
+    const r = closed(s, 'X');
+    const c = okRun(s.run(r.id))!.closedAt!;
+    const d = c + 60_000;
+    expect(s.reclaimProgram(r.id, 'heir -> y', d, null)).toMatchObject({ ok: true });
+    const claims = s.childReclaimCoordinatorClaims();
+    expect(claims.get('heir -> y')).toBe(d);
+    expect(claims.get('y')).toBe(d);
+  });
+
   it('(f) a `reclaim:` row that does not parse THROWS, as before', () => {
     const s = store();
     const r = claimed(s, 'X');

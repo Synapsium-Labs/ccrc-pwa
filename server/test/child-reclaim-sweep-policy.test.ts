@@ -1600,6 +1600,14 @@ describe('feed rows de-duplicated (spec §5.9) — lastDeferWhy and childReclaim
     const without: ChildReclaimSweepEntry = { ...deferred, lastDeferWhy: null };
     expect(childReclaimDue(deferred, NOW + 1, PASS)).toBe(childReclaimDue(without, NOW + 1, PASS));
     expect(childReclaimDeferExpired(deferred, at(NOW + C), PASS)).toBe(childReclaimDeferExpired(without, at(NOW + C), PASS));
+    // The order: the same due list, the deferred child among two others, asked in the same order either way.
+    const orderOf = (e: ChildReclaimSweepEntry): { ids: string[]; holderId: string | null } => {
+      const { order, holderId } = childReclaimAskOrder([
+        { id: 'demo-a', entry: { ...fresh, lastAskedAt: NOW - 30_000 } }, { id: 'demo-c', entry: fresh }, { id: 'demo-b', entry: e },
+      ]);
+      return { ids: order.map((x) => x.id), holderId };
+    };
+    expect(orderOf(deferred)).toEqual(orderOf(without));
   });
 
   const failing = (sessionId: string, token: string): ChildReclaimAttention =>

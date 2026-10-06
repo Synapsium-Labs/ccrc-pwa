@@ -185,7 +185,11 @@ describe('GET /api/runs composes the reclaim chip (wave 5, spec §5.9)', () => {
     expect(h.coord.closeRun({ runId: work.id, finalState: 'done', causedBy: 'coordinator', handoffCommit: null,
                               program, viaClosing: true }).ok).toBe(true);
     judgedAs(h.watcher, { eligible: true, runId: review.id });
+    const read = vi.spyOn(h.coord, 'childReclaimEvents');
     expect(chipOf(await getRuns(h.app), review.id)).toEqual({ word: 'pending', sentence: S.pending, at: null });
+    // ONE mirror read per board load, though two terminal sessions are on this board.
+    expect(read).toHaveBeenCalledTimes(1);
+    expect([...read.mock.calls[0]![0]].sort()).toEqual(['ccrc-pwa-busy-reef', SID].sort());
   });
 
   it('says nothing on a handed-over child while the next wave’s run is open on it', async () => {
@@ -219,7 +223,10 @@ describe('GET /api/runs composes the reclaim chip (wave 5, spec §5.9)', () => {
     vi.spyOn(h.coord, 'childReclaimEvents').mockImplementation(() => { throw new Error('disk I/O error'); });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(chipOf(await getRuns(h.app), id)).toBeNull();
-    expect(warn.mock.calls.some(([l]) => String(l).includes('reclaim chip'))).toBe(true);
+    const line = warn.mock.calls.map(([l]) => String(l)).find((l) => l.includes('reclaim chip'));
+    expect(line).toBeDefined();
+    // The server's log prefix: it runs with fastify's logger off, so this line is its only trace.
+    expect(line!.startsWith('ccrc-server: ')).toBe(true);
   });
 
   // What the sweep decides, made visible (spec §5.9).

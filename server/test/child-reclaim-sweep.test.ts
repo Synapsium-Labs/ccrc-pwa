@@ -269,10 +269,14 @@ const coordinatingChild = (f: ReturnType<typeof fixture>, id = 'demo-a'): number
 };
 
 /** The WHOLE attention list as one label per item, `kept-many` (which has no `sessionId`) included, so an
- *  exact-list assertion cannot skip an item it did not expect. */
-const attentionLabels = (f: ReturnType<typeof fixture>): string[] =>
-  (f.watcher.currentCoord()?.childReclaimAttention ?? [])
+ *  exact-list assertion cannot skip an item it did not expect. The coord frame must have been measured: an
+ *  empty list is a claim about a frame, and a frame never measured would otherwise read as one. */
+const attentionLabels = (f: ReturnType<typeof fixture>): string[] => {
+  const coord = f.watcher.currentCoord();
+  expect(coord, 'no coord frame has been measured').not.toBeNull();
+  return coord!.childReclaimAttention
     .map((a) => (a.kind === 'kept-many' ? `kept-many:${a.word}` : `${a.kind}:${a.sessionId}`));
+};
 
 const deferredAs = (why: 'presence' | 'state-changed' | 'held', req: ChildReclaimRequest): ChildReclaimOutcome =>
   ({ kind: 'deferred', sessionId: req.sessionId, runId: req.runId, why, detail: `deferred: ${why}` });
@@ -2517,17 +2521,20 @@ describe('the attention list\'s kept arm — the sweep\'s kept verdicts, listed 
   it('a doubt verdict and an ordinary one reach neither the list nor the feed', async () => {
     const { home, notifyLog } = await feedFixture();
     const f = fixture({ home, notifyLog });
-    // `hold-unmeasured` (doubt): a hold no run of this child's own can account for is `held`, so the doubt
-    // case is a registry row whose marker cannot be read.
+    // `identity-unmeasured` (doubt), on a row that is STILL A CHILD: its marker reads, so the lane's `live`
+    // map carries its run id, and a doubt word let through as kept would list it. A listed but unreadable
+    // identity field (a directory where `demo-a.wrapper` should be) is what makes the identity unmeasured.
     finishedChild(f, 'demo-a');
-    writeFileSync(path.join(f.reg, 'demo-a.child'), 'not-a-run-id');
+    rmSync(path.join(f.reg, 'demo-a.wrapper'));
+    mkdirSync(path.join(f.reg, 'demo-a.wrapper'));
     // `minting-run-open` (ordinary): the minting run is still open and names this session.
     const open = f.openRun();
     f.coord.setSession(open.id, 'demo-b');
     f.plant('demo-b', { child: String(open.id) });
     await f.pass();
     await f.watcher.tick();
-    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a')).toEqual({ eligible: false, why: 'marker-unreadable' });
+    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a')).toEqual({ eligible: false, why: 'identity-unmeasured' });
+    expect(f.watcher.currentChildMarks()?.get('demo-a')).toMatchObject({ kind: 'child' });
     expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-b')).toEqual({ eligible: false, why: 'minting-run-open' });
     expect(attentionLabels(f)).toEqual([]);
     expect(keptRows(f)).toEqual([]);
@@ -2600,12 +2607,15 @@ describe('sweepChildReclaim — what each request says the feed already carries 
     expect(attentionLabels(listed)).toEqual(['failing:demo-a']);
     expect(listed.requests).toHaveLength(1);
     expect(listed.requests[0]!.feedQuiet).toEqual({ deferWhy: null, failureToken: 'pin-failed' });
+    // A listed failure is what the feed says, never a licence: the request is not ceiling-expired.
+    expect(listed.requests[0]!.deferExpired).toBe(false);
     // The same stub for a child no failing item names: nothing is quiet.
     const unlisted = fixture({ outcome: stub });
     finishedChild(unlisted);
     await unlisted.pass(); unlisted.next(); await unlisted.pass();
     expect(unlisted.requests).toHaveLength(1);
     expect(unlisted.requests[0]!.feedQuiet).toEqual({ deferWhy: null, failureToken: null });
+    await unlisted.watcher.tick();
     expect(attentionLabels(unlisted)).toEqual([]);
   });
 

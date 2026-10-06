@@ -1338,6 +1338,32 @@ describe('feed rows de-duplicated (spec §5.9) — childReclaimFeedSkips, reclai
     expect(other.feed(), 'the word changed').toEqual(['child reclaim failed']);
   });
 
+  // What the feed already says decides nothing (spec §5.9): whatever `feedQuiet` carries, the request reaches
+  // ccd with the same argv — never licensed past the ceiling by it — and a child someone is viewing is still
+  // deferred for presence before any ccd call.
+  it('feedQuiet changes no ccd argv and skips no presence check', async () => {
+    const values: ChildReclaimFeedQuiet[] = [
+      CHILD_RECLAIM_FEED_QUIET_NONE,
+      { deferWhy: 'state-changed', failureToken: 'pin-failed' },
+      { deferWhy: 'held', failureToken: null },
+      { deferWhy: null, failureToken: 'pin-failed' },
+    ];
+    const stripped = (calls: string[][]): string[][] => calls.map((c) => c.map((a) => (a === TOK ? '<token>' : a)));
+    const argvs: string[][][] = [];
+    for (const q of values) {
+      const why = JSON.stringify(q);
+      const s = await rig();
+      expect(await reclaimChild(s.deps, s.req(false, 1, q)), why).toMatchObject({ kind: 'reclaimed' });
+      expect(s.calls.some((c) => c.includes('--defer-expired')), why).toBe(false);
+      argvs.push(stripped(s.calls));
+      const seen = await rig({ visible: true });
+      expect(await reclaimChild(seen.deps, seen.req(false, 1, q)), why).toMatchObject({ kind: 'deferred', why: 'presence' });
+      expect(seen.calls, why).toEqual([]);
+    }
+    expect(argvs[0]!.map((c) => c[0]), 'the audit, then the verb').toEqual(['ws-audit', 'ws-reclaim']);
+    for (const a of argvs.slice(1)) expect(a).toEqual(argvs[0]);
+  });
+
   it('the failure carries ccd\'s own word out of the executor, and none where ccd gave none', async () => {
     const viaVerb = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
       verb: { code: 1, stdout: JSON.stringify({ failed: 'worktree-remove-failed', detail: 'busy' }) } }) });
