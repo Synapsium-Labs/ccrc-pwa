@@ -311,7 +311,7 @@ export const REQUIRED_VERB_FLAG = {
   'ws-reap': '--expect', 'ws-rename': '--session', 'coord-pause': '--state',
   'project-pool': '--project', 'route': '--session',
   'win-size': '--session', 'ws-reclaim': '--expect',
-  'reclaim-pause': '--state',
+  'reclaim-pause': '--state', 'ws-expire': '--expect',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -419,6 +419,11 @@ export const EXEC_WHITELIST = {
     // `--child-of` the server composed. `ws-audit --reclaim` needs NO grant of
     // its own: it rides `['ws-audit','--session']`, and it destroys nothing.
     ['ws-reclaim', '--expect'],
+    // ARCHIVED-WORKSPACE EXPIRY (workspace lifecycle spec 2026-09-24 §5.3): ws-reclaim's sibling, the second
+    // destructive verb the SERVER sends with no human in the path. Granted on its confirmation token for the same
+    // reason, ENROLLED in `REQUIRED_VERB_FLAG` above (g15), and its audit rides `['ws-audit','--session']`. ccd
+    // re-proves the token — which binds the archive's epoch — inside the reap lock.
+    ['ws-expire', '--expect'],
     ['ws-attic', '--session'],
     // The workspace-hold pair. The spec's "zero new agent whitelist grants"
     // bullet is about KEYS — no `gh`, no new command — and its own next clause

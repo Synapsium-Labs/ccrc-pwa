@@ -64,6 +64,10 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   wsReclaimAudit: ['demo-quiet-basin', true],
   wsReclaim: ['a'.repeat(64), 7, 'demo-quiet-basin', false,
               { surface: 'agent', actor: 'run:7 reclaim close', reason: null }],
+  // WORKSPACE LIFECYCLE wave 3: the expiry's audit rides wsAudit's grant; the verb carries a dec, so layer 2 proves
+  // the FLAGGED shape crosses its own grant.
+  wsExpireAudit: ['demo-quiet-dune'],
+  wsExpire: ['a'.repeat(64), 'demo-quiet-dune', { surface: 'agent', actor: 'expiry sweep', reason: null }],
   wsAttic: ['demo-quiet-basin'],
   // The one sample that carries a dec, so layer 2's `isExecAllowed` check
   // actually proves the FLAGGED shape is reachable under the granted
@@ -231,6 +235,17 @@ describe('layer 3 — the list never drifts wider than the code', () => {
   // CHILD RECLAMATION wave 3 — the second destructive verb, and the first the
   // SERVER sends with no human in the path. Same mechanism, same reasons, read
   // from the object across the package boundary.
+  it('ws-expire is grantable ONLY with its confirmation token, and its audit needs no grant of its own', () => {
+    const tok = 'a'.repeat(64);
+    const ex = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-expire');
+    expect(ex, 'exactly one ws-expire grant, on its token').toEqual([['ws-expire', '--expect']]);
+    expect(isExecAllowed('ccd', ['ws-expire'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-expire', '--session', 'demo-quiet-dune'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsExpire(tok, 'demo-quiet-dune', null)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsExpireAudit('demo-quiet-dune')])).toBe(true);
+    expect(UNGRANTABLE_VERBS, 'ws-expire has a lawful grantable form; it is not ungrantable').not.toContain('ws-expire');
+  });
+
   it('ws-reclaim is grantable ONLY with its confirmation token, and its audit needs no grant of its own', () => {
     const rc = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-reclaim');
     expect(rc.length, 'exactly one ws-reclaim grant').toBe(1);
@@ -511,6 +526,8 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsReclaimAudit: ['ws-audit', '--session', 'demo-quiet-basin', '--reclaim', '--defer-expired'],
     wsReclaim: ['ws-reclaim', '--expect', 'a'.repeat(64), '--child-of', '7', '--session', 'demo-quiet-basin',
                 '--surface', 'agent', '--actor', 'run:7 reclaim close'],
+    wsExpireAudit: ['ws-audit', '--session', 'demo-quiet-dune', '--expire'],
+    wsExpire: ['ws-expire', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-dune', '--surface', 'agent', '--actor', 'expiry sweep'],
     wsAttic: ['ws-attic', '--session', 'demo-quiet-basin'],
     wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:agent-evals wave:1/4',
              '--surface', 'pwa', '--actor', 'device:iPhone'],

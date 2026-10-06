@@ -139,6 +139,19 @@ describe('readLiveState', () => {
     expect(liveSessionStatus(live!.status)).toBe('busy');
   });
 
+  // Review 244, F1 (workspace lifecycle wave 3): `String(raw.status ?? '')` turned a status that is not a string into
+  // one — `["idle"]` into `'idle'`, `true` into `'true'` — so the archive door's fail-closed read (`stopVerdict`) took
+  // an array for an idle pane and stopped it. ccd's `_ws_status` greps the raw bytes for `"status":"<word>"` and finds
+  // nothing in either. A status that is not a string is no status: `''`, which every reader already reads as work.
+  it('a `status` that is not a string reads as no status (`\'\'`) — never as the word its String() spells', async () => {
+    for (const status of [['idle'], true, 0, { idle: 1 }, null]) {
+      const { configDir, pid } = seedLive({ ...base, status });
+      const live = await readLiveStateMeasured(localIO, configDir, pid);
+      expect(live.ok, JSON.stringify(status)).toBe(true);
+      expect(live.ok && live.state.status, JSON.stringify(status)).toBe('');
+    }
+  });
+
   it('D-76: a non-string `waitingFor` degrades to null rather than reaching the wire', async () => {
     const { configDir, pid } = seedLive({ ...base, status: 'waiting', waitingFor: 17 });
     const live = await readLiveState(localIO, configDir, pid);

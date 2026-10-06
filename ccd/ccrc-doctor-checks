@@ -158,6 +158,13 @@ fi
 # knob.)
 : "${CCRC_DOCTOR_GH_TIMEOUT:=15}"
 
+# How long `ccd docs-index --all` may take before the `docs` check calls it
+# unanswered (spec 2026-10-01 §7.2). The DEFAULT equals the server's runner
+# budget for the same verb (20 s), so doctor waits exactly as long as a Docs
+# page would; Docs W2 adds that budget and the test that holds the two equal.
+# Overridable for the gh knob's reason above.
+: "${CCRC_DOCTOR_DOCS_TIMEOUT:=20}"
+
 # ── the check table ───────────────────────────────────────────────────────
 # DATA. `cmd_doctor` iterates this array and calls `_check_<name>` for each
 # entry, so adding a check is one entry here, one function below, and one test
@@ -203,7 +210,7 @@ CCRC_DOCTOR_CHECKS=(
   fleet
   memory
   routing
-  models codex   # two entries on one line: every line below is cited by number elsewhere
+  models codex docs   # three entries on one line: every line below is cited by number elsewhere
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -402,7 +409,7 @@ _check_node() {
     _dr_pass node "$running satisfies $declared (declared in $pkg), at $p"
   else
     _dr_fail node "$running is below the floor $declared declared in $pkg" \
-      "upgrade Node to at least ${maj}.${min}.${pat} — below it the server does not degrade, it fails to boot (node:sqlite is imported unconditionally)"
+      "upgrade Node to at least ${maj}.${min}.${pat} — below it the server either fails to boot (node:sqlite is imported unconditionally) or boots without ccrc history's search (that node:sqlite has no FTS5)"
     return 1
   fi
 }
@@ -521,7 +528,7 @@ _check_jq_regex() {
   return 1
 }
 _check_python3() {
-  _dr_need_bin python3 "~/.local/bin/ccd is a standard-library python3 launcher in front of the bash body (D-3696), and the graph engine's venv is built with it" \
+  _dr_need_bin python3 "~/.local/bin/ccd is a standard-library python3 launcher in front of the bash body (D-3696), the graph engine's venv is built with it, and ccd's Docs helper needs python3 3.8 or newer" \
     "install it: sudo apt install python3"
 }
 _check_flock() {
@@ -5797,6 +5804,177 @@ _check_models() {
   _dr_pass models "$n $plural, $(_dr_join "${ok[@]}")"
 }
 
+# ── docs: does this box's ccd answer Docs (spec 2026-10-01 §7.2) ──────────
+# The FLEET half of Docs, measured through the verb itself. Every Docs page
+# is read by the agent exec-ing `$HOME/.local/bin/ccd docs-*` (spec §7.1), so
+# this check runs the one verb of the four that is read-only by construction
+# — `docs-index --all` writes nothing, never fetches and enumerates no
+# worktree (§2 (h)) — under a deadline, and classifies its one-line answer.
+# It is the first check in this file that runs a ccd verb against the live
+# box, and it runs in every doctor, including the tail of an install or an
+# update. What a FAIL here costs depends on the path, because only one of them
+# lets doctor gate anything:
+#   (1) A plain `ccrc install`: `_inst_doctor_tail` in ccd/ccrc is its own
+#       gate (the update lock is free), so a FAIL keeps `~/ccrc.migrating`,
+#       skips `_ver_gc`, and the install exits 1.
+#   (2) `ccrc update`, and `ccrc rollback`'s kept spine: the staged spine's
+#       doctor tail finds the updater's lock held and gates nothing. The
+#       verb's health gate decides the migration finish and the version GC,
+#       so a docs FAIL strands neither; it turns the verb's exit into 3
+#       (D-3114), with the box on the new build and Docs unable to run on it.
+# Either way the FAIL is honest and meant to be seen, not swallowed. A WARN
+# never gates (`cmd_doctor` returns 1 only when a check FAILed).
+#
+# THE PYTHON FLOOR LIVES IN ccd, NOT HERE (C2). `_check_python3` stays a
+# presence check; the 3.8 floor is ccd's docs bash front, which answers
+# `helper-unavailable` with the detail `python-missing` or `python-too-old`,
+# so this check reads the floor through the verb rather than restating it.
+# It measures the python3 ccd finds under THIS shell's PATH; the agent's unit
+# may carry another PATH, which no doctor check can see.
+#
+# COUNTS ONLY, NEVER A PROJECT NAME: doctor output gets pasted. No arm below
+# prints a field of the answer except the failure WORD (held to a word
+# grammar by the jq program) and the two fixed `helper-unavailable` details;
+# a row's name and a `detail` string never reach a verdict line. The WARN's
+# remedy is the one-liner that lists the unreadable rows on the operator's
+# own terminal.
+#
+# STDOUT AND STDERR ARE CAPTURED APART, never `2>&1`: the answer is one JSON
+# line by contract (§2 (b)), and one merged warning would turn a working box
+# into an unparseable answer. NO TEMP FILE holds the stderr either: `mktemp`
+# and `rm` are coreutils, and this file does not let a check's own diagnosis
+# depend on a binary the broken box may lack (`_check_node`'s rule; the
+# doctor suite's PATH carries neither). The inner shell serialises the three
+# values with `declare -p` and `eval` reads them back here — bash's own
+# quoting, so no byte ccd prints can escape it — and `3>&-` keeps ccd from
+# inheriting the descriptor that carries them.
+#
+# `unwalked` (docs-index's count of projects its walk did not reach before its
+# helper deadline, absent when 0) is a WARN, never a FAIL: the rows listed are
+# intact and the box answers Docs. The line gains ", N not checked (time
+# budget)"; a count, never a name.
+#
+# "SERVED BY DOCS" is a row whose `state` is `ready`: a repository with a
+# default branch, the one state whose tree the Docs screen opens. The other
+# six states are listed and serve no page.
+_check_docs() {
+  # A server-role box runs no ccd verb for Docs: the fleet box's doctor
+  # measures the verb where the agent execs it. The role read is
+  # `_check_memory`'s idiom — `-f` before `-r`, and `${BOX_ENV_FILE:-}`
+  # because this file is sourced under `set -u` by callers that are not ccrc.
+  local _srv_role=""
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip docs "no ccd answers Docs here; the fleet box's doctor measures it"
+    return 3
+  fi
+  # The path the agent execs (spec §7.1), never `command -v ccd`, which can
+  # find a checkout's copy the agent never runs.
+  local ccd="$HOME/.local/bin/ccd"
+  if [ ! -e "$ccd" ] && [ ! -L "$ccd" ]; then
+    _dr_fail docs "no ccd at \$HOME/.local/bin/ccd, the file the agent runs for every Docs read" \
+      "ccrc update"
+    return 1
+  fi
+  if [ ! -f "$ccd" ] || [ ! -x "$ccd" ]; then
+    _dr_fail docs "\$HOME/.local/bin/ccd is not an executable file, so the agent cannot run it for a Docs read" \
+      "ccrc update"
+    return 1
+  fi
+
+  local out="" err="" rc=0 cap
+  cap="$(
+    {
+      err="$(
+        { out="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" "$ccd" docs-index --all </dev/null 3>&-)"; rc=$?; } 2>&1
+        declare -p out rc >&3
+      )"
+      declare -p err
+    } 3>&1
+  )"
+  eval "$cap"
+
+  if [ "$rc" -eq 124 ]; then
+    _dr_fail docs "ccd docs-index did not answer within $CCRC_DOCTOR_DOCS_TIMEOUT s" \
+      "run \$HOME/.local/bin/ccd docs-index --all by hand to see whether it returns at all, then re-run: ccrc doctor"
+    return 1
+  fi
+  if [ "$rc" -ne 0 ]; then
+    # An old ccd's unknown-verb arm answers exactly rc 1 with `usage: ccd
+    # {...}` on stderr (spec §7.2), which is the line this quotes: the first
+    # one, cut to 200 BYTES — `LC_ALL=C` inside the substitution only, so the
+    # cut counts bytes and the rest of the check keeps the box's locale.
+    local first
+    first="$(_dr_first_line "$err")"
+    first="$(LC_ALL=C; printf '%s' "${first:0:200}")"
+    _dr_fail docs "ccd could not run docs-index (rc $rc: ${first:-nothing on stderr}); it predates Docs or died" \
+      "ccrc update"
+    return 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    _dr_fail docs "jq is not on PATH, so ccd's docs-index answer cannot be read" \
+      "install jq first — see the 'jq' check above"
+    return 1
+  fi
+
+  # ONE jq program is both the shape gate and the reader, so no state exists
+  # in which the shape was accepted and the fields could not be read. `-s`
+  # slurps every JSON value stdout carries, so two answers are refused as
+  # surely as none, and `type == "object"` comes first so a bare number reads
+  # false rather than raising. The answer must be exactly one object with v 1
+  # and verb docs-index, and either ok:true with a projects array or ok:false
+  # with a word-shaped failure; anything else prints nothing and lands on the
+  # last arm. The program is one single-quoted string: no apostrophe in it.
+  local row tag a b c d
+  row="$(jq -r -s '
+    if length == 1 and (.[0] | type == "object" and .v == 1 and .verb == "docs-index") then .[0] else empty end
+    | if .ok == true and (.projects | type) == "array" then
+        "ok \(.projects | length) \([.projects[] | select(type == "object" and .state == "ready")] | length) \([.projects[] | select(type == "object" and .state == "repo-unreadable")] | length) \(if (.unwalked | type) == "number" and .unwalked > 0 then .unwalked | floor else 0 end)"
+      elif .ok == false and (.failure | type) == "string" and (.failure | test("^[a-z][a-z0-9-]{0,63}$")) then
+        "fail \(.failure) \(if .detail == "python-missing" or .detail == "python-too-old" then .detail else "-" end)"
+      else empty end' <<<"$out" 2>/dev/null)"
+  read -r tag a b c d <<<"$row"
+  case "$tag" in
+    ok)
+      local line="$a projects under ccd's projects root, $b served by Docs"
+      [ "$c" -gt 0 ] && line="$line, $c unreadable"
+      [ "$d" -gt 0 ] && line="$line, $d not checked (time budget)"
+      if [ "$c" -gt 0 ]; then
+        _dr_warn docs "$line" \
+          "ccd docs-index --all | jq -r '.projects[] | select(.state==\"repo-unreadable\") | .project'"
+        return 2
+      fi
+      if [ "$d" -gt 0 ]; then
+        _dr_warn docs "$line" \
+          "the index walk stopped at its time budget; re-run when the box is quieter: ccrc doctor"
+        return 2
+      fi
+      _dr_pass docs "$line"
+      return 0
+      ;;
+    fail)
+      if [ "$a" = helper-unavailable ]; then
+        local why="its python3 probe failed"
+        case "$b" in
+          python-missing) why="ccd found no python3 it can run (python-missing)" ;;
+          python-too-old) why="the python3 ccd runs is older than 3.8 (python-too-old)" ;;
+        esac
+        _dr_fail docs "ccd answers docs-index with helper-unavailable: $why — its Docs helper needs python3 3.8 or newer" \
+          "install python3 3.8 or newer on the PATH ccd runs with (Debian/Ubuntu: sudo apt install python3; macOS: brew install python3), then re-run: ccrc doctor"
+        return 1
+      fi
+      _dr_fail docs "ccd answers docs-index with $a — Docs cannot list this box's projects" \
+        "run \$HOME/.local/bin/ccd docs-index --all by hand and read its detail field; if it names ccd itself: ccrc update"
+      return 1
+      ;;
+    *)
+      _dr_fail docs "ccd's docs-index answer is not one docs-v1 JSON object (v 1, verb docs-index, ok:true with a projects list or ok:false with a failure word)" \
+        "run \$HOME/.local/bin/ccd docs-index --all by hand and read what it prints; ccrc update brings ccd and this doctor to one build"
+      return 1
+      ;;
+  esac
+}
+
 # ── `_check_codex`'s usage rows (Plan 3a Task 6; spec §12; rulings R2, R6) ──
 # THREE findings, each its own sentence with its own remedy. Each is RECORDED
 # through `_check_codex`'s `_dr_cx_warn` (Task 4) and printed by its
@@ -5866,7 +6044,16 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
   fi
   t="$(_codex_usage_timer "$id")"; f="$(_codex_usage_foreign "$id")"
   # (1) WHO publishes this lane's row.
-  if _codex_usage_enabled "$f"; then
+  # BOTH ARMED (Plan 3b Task A2, D-4048):
+  # the converge withdraws ccrc's own while the foreign one stands, but a
+  # withdrawal the manager refused, or answered while the link stayed,
+  # leaves both, and "ccrc withholds its own" would be false over a link
+  # that says otherwise.
+  if _codex_usage_enabled "$f" && _codex_usage_enabled "$t"; then
+    _dr_cx_warn "$id: another repository's $f is enabled, and ccrc's own $t is enabled too, so two publishers race this lane's ~/.cc-limits row and two token refreshes its OAuth directory" \
+      "systemctl --user disable --now $t (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws $t while $f stands and re-measures the link. Once this lane's cutover no longer needs $f, disable it yourself: systemctl --user disable --now $f — ccrc never disables another tool's unit"
+    rc=2
+  elif _codex_usage_enabled "$f"; then
     _dr_cx_warn "$id: another repository's $f is enabled, so two publishers would race this lane's ~/.cc-limits row and two token refreshes its OAuth directory — ccrc withholds its own $t while it stands" \
       "once this lane's cutover no longer needs it, disable it yourself: systemctl --user disable --now $f, then run: ccrc install — ccrc never disables another tool's unit"
     rc=2
@@ -5920,6 +6107,47 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
   # through models-op's `show`, and a second copy would print each twice.
   DR_CODEX_USAGE_NOTE="$(_dr_join ${note[@]+"${note[@]}"})"
   return "$rc"
+}
+
+# ── the usage timer ccrc left enabled for an id that is no longer a Codex lane ──
+# Plan 3b Task A2 (D-4048). The rows above
+# walk TODAY's codex lanes, so a flip back whose withdrawal never happened left
+# `ccrc-codex-usage@<id>.timer` polling with no row to name it. Two causes: no
+# `ccrc install` since the roster edit, or a disable the manager answered while
+# its link stayed. That timer rewrites ~/.cc-limits/<id>.json and runs a token
+# refresh against the authDir in the lane.json a flip back keeps.
+# THE SET is ccrc's own reading of the manager's links (`_codex_usage_enabled_ids`,
+# D-3726), which reads no roster, minus the codex lanes `_check_codex` read.
+# MEASURED BEFORE the empty-population SKIP (`_check_codex`): such an id is a
+# subject on its own. A set that cannot be listed (`_codex_usage_enabled_ids`
+# rc 1: the shape contract is missing, which the `wrappers` check FAILs) is
+# UNMEASURED, never empty, and is its own WARN. NOT APPLICABLE ON macOS
+# (decision 17): ccrc places no launchd job, so there is nothing to find (rc 3).
+# No systemctl call, and no file under the timer is read.
+_dr_codex_usage_surplus() {   # <codex lane id>… -> rc 0 measured, 1 unlistable, 3 macOS; sets DR_CODEX_USAGE_SURPLUS
+  local have e
+  DR_CODEX_USAGE_SURPLUS=()
+  [ "${CCD_OS:-linux}" = darwin ] && return 3
+  have="$(_codex_usage_enabled_ids 2>/dev/null)" || return 1
+  for e in $have; do
+    _dr_cx_member "$e" "$@" || DR_CODEX_USAGE_SURPLUS+=("$e")
+  done
+  return 0
+}
+
+_dr_codex_usage_surplus_rows() {   # <_dr_codex_usage_surplus's rc> -> WARN findings, recorded through _dr_cx_warn
+  local id t
+  if [ "$1" -eq 1 ]; then
+    _dr_cx_warn "ccrc's own enabled usage timers could not be listed (the wrapper shape contract could not be read), so a ccrc-codex-usage@<id>.timer left enabled for an id that is no longer a Codex lane cannot be seen — unmeasured, never none" \
+      "ccrc install — the wrapper shape contract ships with ccrc, and the install places it again"
+    return 0
+  fi
+  for id in ${DR_CODEX_USAGE_SURPLUS[@]+"${DR_CODEX_USAGE_SURPLUS[@]}"}; do
+    t="$(_codex_usage_timer "$id")"
+    _dr_cx_warn "$t is still enabled, and '$id' is not a Codex lane in \$HOME/.ccrc/accounts.json, so ccrc's usage publisher for '$id' runs whenever the manager starts that timer: the writer of \$HOME/.cc-limits/$id.json, and of a token refresh in the authDir its lane.json names, for a lane ccrc no longer runs" \
+      "systemctl --user disable --now $t (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws a ccrc usage timer whose id is no longer a Codex lane and re-measures the link"
+  done
+  return 0
 }
 
 # ── codex: the ccrc-owned Codex lanes on this box, measured end to end ────
@@ -5986,7 +6214,7 @@ _check_codex() {
             _codex_litellm_yaml _codex_runtime_cli _models_node _models_roster_path _models_litellm_template \
             _codex_tier_ours _codex_tier_stale _codex_foreign_what _codex_tier_is_our_handle \
             _svc_is_active _svc_status_hint \
-            _codex_usage_enabled _codex_usage_timer _codex_usage_foreign _codex_usage_wants _codex_usage_flat_foreign \
+            _codex_usage_enabled _codex_usage_enabled_ids _codex_usage_timer _codex_usage_foreign _codex_usage_wants _codex_usage_flat_foreign \
             _plat_mtime; do
     if ! declare -F "$fn" >/dev/null 2>&1 || [ -z "${BOX_TREE_DIR:-}" ] || [ -z "${CODEX_TIERS:-}" ]; then
       _dr_fail codex "ccrc's own Codex lane library is not loaded ($fn, BOX_TREE_DIR or CODEX_TIERS is missing), so no lane on this box was measured" \
@@ -6012,12 +6240,34 @@ _check_codex() {
         return 1 ;;
     esac
   fi
-  for d in "$root"/*/; do
-    [ -d "$d" ] || continue
-    n="${d%/}"; n="${n##*/}"
-    _dr_cx_member "$n" ${lanes[@]+"${lanes[@]}"} || left+=("$n")
-  done
-  if [ "${#lanes[@]}" -eq 0 ] && [ "${#left[@]}" -eq 0 ]; then
+  # Plan 3b Task A5, D-4052: a lane-state root that EXISTS (or is a link) and cannot
+  # be listed — a directory this user cannot read and search, or anything
+  # that is not a directory — is UNMEASURED. The glob below matches nothing
+  # either way (measured: a mode-000 directory, a regular file, a dangling
+  # link), so without this test such a root folded into the empty-population
+  # SKIP, indistinguishable from a box with no lane state (`_check_pools`'
+  # `pools-unlistable` class). A WARN by ruling A-5: nothing ccrc runs reads
+  # lane state for an id that is not a codex row, and a codex row's own rows
+  # below still measure its own files. An ABSENT root is an answer, not a
+  # finding: the existence conjunct is what keeps it the SKIP.
+  local root_unlistable=0
+  if { [ -e "$root" ] || [ -L "$root" ]; } && { [ ! -d "$root" ] || [ ! -r "$root" ] || [ ! -x "$root" ]; }; then
+    root_unlistable=1
+  else
+    for d in "$root"/*/; do
+      [ -d "$d" ] || continue
+      n="${d%/}"; n="${n##*/}"
+      _dr_cx_member "$n" ${lanes[@]+"${lanes[@]}"} || left+=("$n")
+    done
+  fi
+  # Plan 3b Task A2: ccrc's own usage timers left enabled for an id that is not
+  # a codex lane now, measured BEFORE the empty-population SKIP. Such a timer is
+  # a subject on its own, and so is a set that cannot be listed
+  # (`_dr_codex_usage_surplus`, above).
+  local -a DR_CODEX_USAGE_SURPLUS=()
+  local surplus_rc=0
+  _dr_codex_usage_surplus ${lanes[@]+"${lanes[@]}"} || surplus_rc=$?
+  if [ "${#lanes[@]}" -eq 0 ] && [ "${#left[@]}" -eq 0 ] && [ "${#DR_CODEX_USAGE_SURPLUS[@]}" -eq 0 ] && [ "$surplus_rc" -ne 1 ] && [ "$root_unlistable" -eq 0 ]; then
     if [ -e "$roster" ] || [ -L "$roster" ]; then
       _dr_skip codex "no account in \$HOME/.ccrc/accounts.json is exec.kind \"codex\", and no lane state is left under $root, so there is no Codex lane to measure"
     else
@@ -6029,7 +6279,7 @@ _check_codex() {
   local -a DRX_CLASS=() DRX_WHAT=() DRX_FIX=() DRX_OK=() bad=()
   local -A owner=()
   local DRX_RUNTIME='' DRX_LANE_WORDS='' DRX_TIER_WORDS='' models=1 p
-  local DRX_LIVE=0 DRX_UNASKED=0 DRX_UNASKED_SID=''
+  local DRX_LIVE=0 DRX_UNASKED=0 DRX_UNASKED_SID='' DRX_UNREADABLE=0 DRX_UNREADABLE_SID=''
   local DR_CODEX_USAGE_PAIR=present DR_CODEX_USAGE_BOX_NOTE='' DR_CODEX_USAGE_NOTE=''
   if [ "${#lanes[@]}" -gt 0 ]; then
     _dr_cx_bins
@@ -6075,10 +6325,27 @@ _check_codex() {
       DRX_OK+=("$id ($DRX_LANE_WORDS; $DRX_TIER_WORDS${DR_CODEX_USAGE_NOTE:+; $DR_CODEX_USAGE_NOTE})")
     done
   fi
+  local left_reads
   for n in ${left[@]+"${left[@]}"}; do
-    _dr_cx_warn "lane state is left under $root/$n, and '$n' is not a Codex lane in \$HOME/.ccrc/accounts.json — a flip back to another launcher keeps it on purpose, and nothing of ccrc's reads it while '$n' is not a Codex lane" \
+    # Plan 3b Task A2: the publisher reads this lane.json, so "nothing of ccrc's
+    # reads it" is said only when the enabled set WAS listed and no ccrc usage
+    # timer is enabled for '$n'. A set that could not be listed (`surplus_rc` 1)
+    # is unmeasured, never none (fix round 1): the empty array it leaves is not
+    # the empty set, and the WARN on that set says why.
+    left_reads="nothing of ccrc's reads it while '$n' is not a Codex lane"
+    if [ "$surplus_rc" -eq 1 ]; then
+      left_reads="whether ccrc's own usage timer still reads it is unmeasured (the WARN on ccrc's enabled usage timers says why)"
+    elif _dr_cx_member "$n" ${DR_CODEX_USAGE_SURPLUS[@]+"${DR_CODEX_USAGE_SURPLUS[@]}"}; then
+      left_reads="ccrc's own $(_codex_usage_timer "$n") still reads it (the WARN naming that timer says how to withdraw it)"
+    fi
+    _dr_cx_warn "lane state is left under $root/$n, and '$n' is not a Codex lane in \$HOME/.ccrc/accounts.json — a flip back to another launcher keeps it on purpose, and $left_reads" \
       "if the flip back is final and ccrc runs nothing for '$n' any more (its tiers were stopped with 'ccrc codex stop $n' before the flip), remove $root/$n by hand; ccrc never deletes a lane's state on a flip"
   done
+  if [ "$root_unlistable" -eq 1 ]; then
+    _dr_cx_warn "$root exists and cannot be listed (it is not a directory this user can read and search), so whether any Codex lane state is left under it was not measured — unmeasured, never read as no lane state" \
+      "make it a directory this user can list again (ccrc creates it with mode 0700: chmod 700 $root), or move aside by hand whatever sits there, then re-run doctor; ccrc never changes or removes it for you"
+  fi
+  _dr_codex_usage_surplus_rows "$surplus_rc"
   _dr_cx_report "${#lanes[@]} Codex lane(s): $(_dr_cx_join ', ' ${DRX_OK[@]+"${DRX_OK[@]}"}); runtime ${DRX_RUNTIME:-unmeasured}; the four GPT-lane executables match the shipped tree${DR_CODEX_USAGE_BOX_NOTE:+; $DR_CODEX_USAGE_BOX_NOTE}"
 }
 
@@ -6335,16 +6602,19 @@ _dr_cx_report() {   # <PASS detail>
 # itself, so a fifth executable or a rename reds there before this list can drift.
 CODEX_LANE_BINS=(ccgpt-proxy.py ccgpt-usage.py ccgpt-runtime ccrc-codex)
 _dr_cx_bins() {
-  local tree="$BOX_TREE_DIR/ccd" bin="$HOME/.local/bin" name
-  local -a notree=() missing=() drift=()
-  if ! command -v cmp >/dev/null 2>&1; then
-    _dr_cx_warn "cmp is not on PATH, so the GPT-lane executables in \$HOME/.local/bin could not be compared with the shipped tree — unmeasured, not current" \
-      "install diffutils (it ships cmp), then re-run doctor"
-    return 0
-  fi
+  local tree="$BOX_TREE_DIR/ccd" bin="$HOME/.local/bin" name have_cmp=1
+  local -a notree=() missing=() drift=() uncompared=()
+  # Plan 3b Task A5, D-4052: no `cmp` costs the BYTE compare only. A file missing
+  # from the shipped tree or from ~/.local/bin, or not executable, is a fact
+  # `cmp` plays no part in, and is FAILed by name whatever PATH holds; the
+  # early return this replaced swallowed it, and with it the only FAIL that
+  # lets `_fix_codex` (FAIL-only, R-C8) place the file. A file left
+  # uncompared is named in its own WARN, never claimed current.
+  command -v cmp >/dev/null 2>&1 || have_cmp=0
   for name in "${CODEX_LANE_BINS[@]}"; do
     if [ ! -f "$tree/$name" ]; then notree+=("$name"); continue; fi
     if [ ! -f "$bin/$name" ] || [ ! -x "$bin/$name" ]; then missing+=("$name"); continue; fi
+    if [ "$have_cmp" -eq 0 ]; then uncompared+=("$name"); continue; fi
     cmp -s "$tree/$name" "$bin/$name" || drift+=("$name")
   done
   [ "${#notree[@]}" -eq 0 ] || _dr_cx_fail "the shipped tree ($tree) has no $(_dr_cx_join ', ' "${notree[@]}"), so nothing on this box says what the GPT-lane executables should be" \
@@ -6353,6 +6623,8 @@ _dr_cx_bins() {
     "run 'ccrc update' (or 'ccrc install' from a checkout): it places them from the shipped tree on every role but server"
   [ "${#drift[@]}" -eq 0 ] || _dr_cx_fail "$(_dr_cx_join ', ' "${drift[@]}") in \$HOME/.local/bin differ from the shipped tree's copies in $tree, so a lane would run bytes this build did not ship" \
     "run 'ccrc update' (or 'ccrc install' from a checkout): it re-places them from the shipped tree"
+  [ "${#uncompared[@]}" -eq 0 ] || _dr_cx_warn "cmp is not on PATH, so $(_dr_cx_join ', ' "${uncompared[@]}") in \$HOME/.local/bin could not be compared with the shipped tree — unmeasured, not current" \
+    "install diffutils (it ships cmp), then re-run doctor"
   return 0
 }
 
@@ -6537,7 +6809,7 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
 #     tier that died after a start that wrote stays down until the next
 #     start, D-3716).
 _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
-  local id="$1" tier q word own lq=3 sq=3
+  local id="$1" tier q word own lq=3 sq=3 unread='' refix=''
   local -a words=()
   for tier in $CODEX_TIERS; do
     CX_LISTEN_WHY=''
@@ -6592,8 +6864,9 @@ _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
       _dr_cx_warn "$id's LiteLLM tier is not running while $DRX_LIVE live session(s) run on this lane, so every turn they send fails at the gateway — a tier that died after its start stays down until the next start" \
         "start it: ccrc codex start $id (every session launch runs the same start)"
     elif [ "$DRX_UNASKED" -gt 0 ]; then
-      _dr_cx_warn "$id's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked ($DRX_UNASKED unanswered) — unmeasured, not idle" \
-        "ask by hand${DRX_UNASKED_SID:+ ($(_svc_status_hint "claude-session@$DRX_UNASKED_SID.service"))}; if one is live, start the lane: ccrc codex start $id"
+      [ "$DRX_UNREADABLE" -eq 0 ] || { unread="; $DRX_UNREADABLE of them: \$HOME/.cc-sessions/$DRX_UNREADABLE_SID.wrapper cannot be read by this user, so which lane that session runs on is unknown"; refix="read or fix that file's mode (ccd writes it), and "; }
+      _dr_cx_warn "$id's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked ($DRX_UNASKED unanswered) — unmeasured, not idle$unread" \
+        "${refix}ask by hand${DRX_UNASKED_SID:+ ($(_svc_status_hint "claude-session@$DRX_UNASKED_SID.service"))}; if one is live, start the lane: ccrc codex start $id"
     fi
   fi
   if [ "$lq:$sq" = 1:1 ]; then
@@ -6610,16 +6883,30 @@ _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
 # and NOT ASKED (the manager printed no word), which is never folded into
 # not-live. `[ -f ]` first, so a FIFO planted at a `.wrapper` path is never
 # opened (D-2380's class).
-_dr_cx_sessions() {   # <id> — sets DRX_LIVE, DRX_UNASKED, DRX_UNASKED_SID
+# AN UNREADABLE `.wrapper` IS NOT ANOTHER LANE'S (Plan 3b Task A5, D-4052): it is a
+# session that may be on this lane, counted into DRX_UNASKED (the "could not tell" word),
+# never into DRX_LIVE and never skipped, and named apart in DRX_UNREADABLE(_SID): its remedy
+# is the file's mode, never the manager (D-4052). Whether it was READ is the redirection's
+# answer, not `read`'s: ccd writes the field with `printf '%s'` (`_reg_set`), no trailing
+# newline, so `read` returns 1 on every real wrapper while still setting `w`. Spelled POSITIVE on purpose:
+# under bash 5.2 `if ! { …; } 2>/dev/null < f` takes the readable branch when
+# the open fails (measured), and `2>/dev/null` sits before the `<` so bash's
+# own "Permission denied" never reaches doctor's output.
+_dr_cx_sessions() {   # <id> — sets DRX_LIVE, DRX_UNASKED, DRX_UNASKED_SID, DRX_UNREADABLE, DRX_UNREADABLE_SID
   local id="$1" reg="$HOME/.cc-sessions" wf w sid
-  DRX_LIVE=0; DRX_UNASKED=0; DRX_UNASKED_SID=''
+  DRX_LIVE=0; DRX_UNASKED=0; DRX_UNASKED_SID=''; DRX_UNREADABLE=0; DRX_UNREADABLE_SID=''
   [ -d "$reg" ] || return 0
   if [ ! -r "$reg" ] || [ ! -x "$reg" ]; then DRX_UNASKED=1; return 0; fi
   for wf in "$reg"/*.wrapper; do
     [ -f "$wf" ] || continue
-    w=''; { IFS= read -r w < "$wf"; } 2>/dev/null
-    [ "$w" = "$id" ] || continue
     sid="${wf##*/}"; sid="${sid%.wrapper}"
+    w=''
+    if { IFS= read -r w || :; } 2>/dev/null < "$wf"; then
+      [ "$w" = "$id" ] || continue
+    else
+      DRX_UNASKED=$((DRX_UNASKED + 1)); DRX_UNREADABLE=$((DRX_UNREADABLE + 1)); [ -n "$DRX_UNREADABLE_SID" ] || DRX_UNREADABLE_SID="$sid"
+      continue
+    fi
     case "$(_svc_is_active "claude-session@$sid.service")" in
       active|activating|reloading|refreshing|deactivating) DRX_LIVE=$((DRX_LIVE + 1)) ;;
       '') DRX_UNASKED=$((DRX_UNASKED + 1)); [ -n "$DRX_UNASKED_SID" ] || DRX_UNASKED_SID="$sid" ;;
