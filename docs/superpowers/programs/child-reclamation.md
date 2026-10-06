@@ -46,6 +46,16 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 12:31 — a macOS red is ours, intermittent, and carried to wave 7's pre-flight (mail 3691, answered in 3692).**
+  - **The red.** In full CI run 37456924516 (PR #295, not ours), test-macos 2/4 (job 112246816971) failed wave 4's
+    case "reclaims through a SYMBOLIC ref and a stale empty `.lock`". The reclaim completed, but the purge answered
+    `purge-refused` because `.demo-quiet-basin.compactions.lock` was unavailable. COMPACT_LOCK_WHY was empty, so this
+    was contention: a `flock -w 5` timeout, or a failed alias `link` or open.
+  - **It is intermittent.** The same case passed on test-macos in the last three daily full runs on main: jobs
+    112094297477, 111606033808 and 111362458510.
+  - **Ruling.** No gate (the macOS ruling). Wave 6's plan does not touch the purge lock. The cause is carried to
+    wave 7's pre-flight as a residual, unmeasured. If the stable gate needs it green first, the answer is a full
+    re-run.
 - **2026-10-06 11:42 — stall-watch-settings W1 (run 295, `ccrc-pwa-calm-harbor`) is sequenced after run 260 (mail 3674).**
   - **Their wave.** Run 295 waits for run 260 to release its claims on `shared/api.ts`, `coord/store.ts`, `watch.ts`
     and `coord/routes.ts`.
@@ -1547,6 +1557,7 @@ Then dispatch one fresh child:
 
 **Wave 7** (the collector verb, R57) and **wave 8** (its lane, R58) are new runs, each opened before the previous
 wave's run closes, each with its own block, plan and pre-flight. Wave 7 inherits: a kept clips leaf with no collector;
-whole-second `btime`; the recycled-slug quarantine proof; the witness writer's temp-file residue. Wave 8 waits for
+whole-second `btime`; the recycled-slug quarantine proof; the witness writer's temp-file residue; the intermittent
+macOS `purge-refused` in the symbolic-ref reflogs case (decision 12:31). Wave 8 waits for
 workspace-lifecycle wave 3b and for the fleet's `ccd caps` to advertise wave 7's token. The path-identity follow-up
 programme comes after wave 8.
