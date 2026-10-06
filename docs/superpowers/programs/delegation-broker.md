@@ -18,7 +18,7 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **in review (fix round 1)** — wave-done verified 2026-10-06 11:50 UTC at `e47f3689f`; review run 296 dispatched 2026-10-06 12:42 UTC (`ccrc-pwa-soft-prairie`) after the daily cap freed; #284 CI green on every required leg |
+| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **fix round 2** since 2026-10-06 14:11 UTC — review 296 at `e47f3689f`: 18 findings, 3 important; plus a capture of 2.1.290/2.1.291 |
 | 2 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | wave 1's matrix and its real-lane cross-check | — | to plan once wave 1's measurement section is complete |
 | 3 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 2 | — | to plan |
 | 4 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 3 | — | to plan |
@@ -107,6 +107,25 @@ its own heading. Until both are here, nothing in waves 2–6 may depend on a hoo
     protect-list entry is the operator's call.
   - Review run 296's dispatch was refused `cap-daily` (24 of 24, fleet-wide). It retries at each measured age-out,
     the first at 12:41 UTC.
+- **2026-10-06 — review 296's verdict (`ccrc-pwa-soft-prairie`, at `e47f3689f`):** 18 findings (3 important).
+  - Previous findings: 29 of review 277's 36 landed as ruled, 6 with a remainder, and F34 was left by ruling.
+  - Mutation: 15 of review 277's 16 survived or row-less cells now red, and one is declared untestable as ruled.
+    All 34 original mutation-table rows red through their named rows.
+  - Public content: 0 hits. `matrix.json` re-derives byte-identically.
+  - The CI red is a strace harness flake the branch cannot reach: 3 of 18 runs at the tip, 3 of 18 on main.
+  - Per lens, confirmed out of raised: fix-range panel 6/8, whole-branch panel 6/11, wave lenses 14/34.
+- **2026-10-06 — fix round 2 rulings (mail 3704).**
+  - The sanitiser gets a stopping line. A spelling that contradicts a claim the header or the deviation entry
+    makes is fixed, or the claim is corrected (F1: every `%XX` is decoded for the scan). An exotic spelling the
+    corpus lacks and the synthetic rig cannot produce becomes a named known limit (F11 glue characters and `~/`,
+    F12 the munged-top denylist). An attack review of a parser never converges otherwise.
+  - F2: a missing dialog answer becomes a failure note, never a measured zero.
+  - F3: the two §8.1 proxies get number 4066. 4067 is reserved for F18's scenario-rule departure, or is recorded
+    as unused.
+  - No escalation: effort stays xhigh, because round 1 landed 29 of 36 cleanly.
+  - **New versions:** 12 of 15 lanes now run 2.1.290/2.1.291, which the corpus lacked, and spec §8.1 lets no
+    contract depend on a field until every version the fleet runs is measured. So this round captures both,
+    stopping at the versions installed when the capture starts. The 2.1.280/2.1.281 fixtures stay as history.
 - **2026-10-05 — the parent incarnation field is already in the tree** (spec §5.1, §8.1 item 10): `$REG/<id>.generation`
   (D-2605) is never rewritten once present. The hook also sees it as `CCRC_SESSION_GENERATION`, but ccd does not set
   that on every spawn path, so later waves read the file. Wave 1 records this from source. **Corrected after review
@@ -134,6 +153,12 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
 - Nothing new lands above `ccd/session-hook.sh:2900` (README's anchor); edits above it stay line-neutral.
 - `CLAUDE.md`'s amendments (spec §13) land with the wave that ships each verb or route, not before.
 - The program runs through `runs open` / `runs dispatch`; open wave N+1's run before closing wave N's.
+- **The corpus must cover every Claude Code version the fleet runs before a wave depends on a hook field** (spec
+  §8.1). Lanes update often, so each such wave begins by re-reading the lane versions and capturing any the
+  corpus lacks with the rig's recapture steps.
+- **Wave 2's spool line (review 296):** on the largest repo the worktree-name listing alone is about 3.9 KB, which
+  nearly fills spec §5.3's 4 KiB line. Wave 2's line design must measure that case: the listing is the optional
+  field that gets dropped, and the worst case is about 8.5 ms per call.
 
 ## Next-wave brief
 
