@@ -57,6 +57,8 @@ const SKEW_MS = CHILD_BIRTH_SKEW_MS;
 const T0 = NOW;
 /** The birth of the workspace generation an entry describes (ccd's clock). */
 const BORN = NOW - 3_600_000;
+/** The run its `.child` marker names: the generation's other key. */
+const RUN = 7;
 /** One reading of the lane's two clocks; the wall defaults to the monotonic
  *  reading, so a row that is not about the clocks reads one number. */
 const at = (mono: number, wall: number = mono): ChildReclaimLaneNow => ({ monoMs: mono, wallMs: wall });
@@ -437,11 +439,11 @@ describe('childReclaimHoldRead — accounting a hold\'s text against this child\
 });
 
 describe('the twice-observed memory, its two clocks, the presence episode, and the failure backoff', () => {
-  const entry: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN);
+  const entry: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN, RUN);
 
   it('a first sighting starts no clock, counts no failure, and was never asked', () => {
     expect(entry).toEqual({ firstEligibleAt: NOW - 60_000, firstDeferredAt: null, firstPresenceDeferredAt: null,
-      lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null, bornAt: BORN,
+      lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null, bornAt: BORN, markerRunId: RUN,
       lastDeferWhy: null, consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null });
   });
 
@@ -672,7 +674,7 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
   /** The gap bound, as the policy derives it from the interval it is handed. */
   const G = 2.5 * PASS;
   /** A first sighting at monotonic 0. */
-  const fresh: ChildReclaimSweepEntry = childReclaimFirstSighting(0, BORN);
+  const fresh: ChildReclaimSweepEntry = childReclaimFirstSighting(0, BORN, RUN);
   /** One due item, the shape `childReclaimAskOrder` takes. */
   const item = (id: string, over: Partial<ChildReclaimSweepEntry> = {}): { id: string; entry: ChildReclaimSweepEntry } =>
     ({ id, entry: { ...fresh, ...over } });
@@ -851,12 +853,24 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
   });
 
   it('P14: one entry describes one workspace generation — a null birth never matches', () => {
-    const e = childReclaimFirstSighting(5_000, BORN);
+    const e = childReclaimFirstSighting(5_000, BORN, RUN);
     expect(e.bornAt).toBe(BORN);
-    expect(childReclaimSameGeneration(e, BORN)).toBe(true);
-    expect(childReclaimSameGeneration(e, BORN + 1)).toBe(false);
-    expect(childReclaimSameGeneration(e, null)).toBe(false);
-    expect(childReclaimSameGeneration(childReclaimFirstSighting(5_000, null), null)).toBe(false);
+    expect(childReclaimSameGeneration(e, BORN, RUN)).toBe(true);
+    expect(childReclaimSameGeneration(e, BORN + 1, RUN)).toBe(false);
+    expect(childReclaimSameGeneration(e, null, RUN)).toBe(false);
+    expect(childReclaimSameGeneration(childReclaimFirstSighting(5_000, null, RUN), null, RUN)).toBe(false);
+  });
+
+  it('P15: a recycled slug re-marked by another run while its birth still reads the old one is a NEW generation — a licence-ripe episode never carries over', () => {
+    const m0 = 5 * C;
+    const ripe: ChildReclaimSweepEntry = { ...fresh, firstPresenceDeferredAt: m0 - C, lastPresenceDeferredAt: m0 - PASS,
+      lastPresenceWallAt: m0 - PASS, presenceHeldSince: m0 - C };
+    expect(childReclaimDeferExpired(ripe, at(m0), PASS), 'the old workspace\'s episode is ripe').toBe(true);
+    expect(childReclaimSameGeneration(ripe, BORN, RUN + 1), 'the birth unchanged, the marker names another run').toBe(false);
+    expect(childReclaimSameGeneration(ripe, BORN, RUN), 'both keys unchanged: the same generation').toBe(true);
+    const seeded = childReclaimFirstSighting(m0, BORN, RUN + 1);
+    expect(seeded.markerRunId).toBe(RUN + 1);
+    expect(childReclaimDeferExpired(seeded, at(m0), PASS), 'the new workspace starts unlicensed').toBe(false);
   });
 });
 
@@ -930,8 +944,8 @@ describe('S1: seeded interleavings of the lane model — every licence rests on 
       const due: { id: string; entry: ChildReclaimSweepEntry }[] = [];
       for (const id of [...listed].sort()) {
         const entry = entries.get(id);
-        if (entry === undefined || !childReclaimSameGeneration(entry, BORN)) {
-          entries.set(id, childReclaimFirstSighting(asked.monoMs, BORN));
+        if (entry === undefined || !childReclaimSameGeneration(entry, BORN, RUN)) {
+          entries.set(id, childReclaimFirstSighting(asked.monoMs, BORN, RUN));
           continue;
         }
         if (inFlight.has(id)) continue;
@@ -1578,7 +1592,7 @@ describe('the attention list\'s kept arm (spec §5.9)', () => {
 // for, and the failure word the attention list shows for it. The entry remembers the first; the list
 // carries the second. Nothing here paces, decides or dispatches.
 describe('feed rows de-duplicated (spec §5.9) — lastDeferWhy and childReclaimFeedQuiet', () => {
-  const fresh: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN);
+  const fresh: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN, RUN);
 
   it('(a) a deferral sets lastDeferWhy to its word, any later non-deferral clears it, and a first sighting reads null', () => {
     expect(fresh.lastDeferWhy).toBeNull();

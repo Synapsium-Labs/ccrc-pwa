@@ -143,7 +143,7 @@ describe('GET /api/runs composes the reclaim chip (wave 5, spec §5.9)', () => {
     // reads as an epoch near T_CLOSE: a chip that dated itself from one would
     // miss the expected `at`.
     vi.spyOn(h.watcher, 'currentChildReclaimDefers').mockReturnValue(new Map([[SID, {
-      ...childReclaimFirstSighting(5_000, null),
+      ...childReclaimFirstSighting(5_000, null, id),
       firstDeferredAt: T_CLOSE + 9_000,
       firstPresenceDeferredAt: 35_000,
       lastPresenceDeferredAt: 35_000,
@@ -254,7 +254,7 @@ describe('GET /api/runs composes the reclaim chip (wave 5, spec §5.9)', () => {
     const id = closedRun(h.coord, SID);
     markedAs(h.watcher, id);
     vi.spyOn(h.watcher, 'currentChildReclaimDefers').mockReturnValue(new Map([[SID, {
-      ...childReclaimFirstSighting(5_000, null), consecutiveFailures: 2,
+      ...childReclaimFirstSighting(5_000, null, id), consecutiveFailures: 2,
     }]]));
     expect(chipOf(await getRuns(h.app), id)).toEqual({ word: 'deferred', sentence: S.sweepFailing, at: null });
   });

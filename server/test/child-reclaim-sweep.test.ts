@@ -40,7 +40,8 @@ import {
   childReclaimJournalRow, childReclaimKeptManySentence,
 } from '../src/childReclaimSweep.js';
 import {
-  CHILD_RECLAIM_FEED_QUIET_NONE, CHILD_RECLAIM_TOKEN_KIND, childReclaimGeneration, childReclaimHasCoordinated, childReclaimLatest,
+  CHILD_RECLAIM_FEED_QUIET_NONE, CHILD_RECLAIM_TOKEN_KIND, childReclaimBornAt, childReclaimGeneration, childReclaimHasCoordinated,
+  childReclaimLatest,
   childReclaimTokenKind, type ChildReclaimOutcome, type ChildReclaimRequest,
 } from '../src/coord/childReclaim.js';
 import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
@@ -164,14 +165,16 @@ const fixture = (opts: FixtureOpts = {}) => {
   /** A registry row, `divergence-sweep.test.ts`'s idiom. `child` is the
    *  marker. ws-add journals the workspace's `create` as it mints it, so the
    *  row gets that line too: without it the mirror holds no generation for
-   *  the id at all, and the fence answers nothing (spec §5.6's recycled slugs). */
-  const plant = (id: string, extra: Record<string, string> = {}): void => {
+   *  the id at all, and the fence answers nothing (spec §5.6's recycled slugs).
+   *  `create: false` is ws-add's own window: the row and its marker written,
+   *  its `create` not yet journalled or not yet mirrored. */
+  const plant = (id: string, extra: Record<string, string> = {}, opts: { readonly create?: boolean } = {}): void => {
     const fields: Record<string, string> = {
       uuid: `u-${id}`, wrapper: 'claude', project: 'demo', workdir: `/w/${id}`,
       workspace: id.slice('demo-'.length), branch: `ws/${id}`, base: 'origin/main', started: '1', ...extra,
     };
     for (const [f, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${f}`), v);
-    journal(id, 'done', null, 'create');
+    if (opts.create !== false) journal(id, 'done', null, 'create');
   };
   let progN = 0;
   const openRun = (): { id: number; program: string } => {
@@ -1947,6 +1950,27 @@ describe('one entry describes one workspace generation (spec §5.6, §5.7)', () 
     f.next(); await f.pass();
     expect(f.requests).toHaveLength(16);
     expect(f.requests[15]).toMatchObject({ runId: r2.id, deferExpired: false });
+  });
+
+  it('L18: a recycled slug re-marked by ANOTHER run before its create is mirrored starts from a first sighting — the old licence-ripe episode never licenses a request to it', async () => {
+    const { home, reg } = leaseHome();
+    const f = fixture({ home, outcome: (req) => (req.deferExpired ? reclaimedAndGone(reg, req) : deferredAs('presence', req)) });
+    const r2 = f.openRun();                                   // opened at the old workspace's birth: inside the birth fence's skew
+    finishedChild(f);
+    await f.pass();
+    while (f.requests.length < 15) { f.next(); await f.pass(); }
+    expect(asksOf(f, 'demo-a'), 'fifteen unlicensed asks: the next would be licensed').toEqual(Array.from({ length: 15 }, () => false));
+    f.next();
+    f.abandon(r2);                                            // its minting run is terminal by the first pass that lists it
+    for (const n of readdirSync(reg)) if (n.startsWith('demo-a.')) rmSync(path.join(reg, n));
+    f.plant('demo-a', { uuid: 'u-demo-a-2', child: String(r2.id) }, { create: false });   // removed and re-minted in one pass
+    expect(childReclaimBornAt(f.coord, 'demo-a', f.now()), 'the birth still reads the old workspace\'s').toBe(T0);
+    await f.pass();
+    expect(f.requests, 'a fresh first sighting asks nothing').toHaveLength(15);
+    f.next(); await f.pass();
+    expect(f.requests).toHaveLength(16);
+    expect(f.requests[15]).toMatchObject({ runId: r2.id, deferExpired: false });
+    expect(asksOf(f, 'demo-a').filter(Boolean), 'no request of the new workspace is licensed').toEqual([]);
   });
 });
 

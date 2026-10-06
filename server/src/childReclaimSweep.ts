@@ -67,9 +67,9 @@ export interface ChildReclaimAsk {
  *  `firstDeferredAt` is wall-clock epoch ms because it is DISPLAYED (each
  *  request's `deferredSinceMs`, the run chip's `at`). `lastPresenceWallAt` is
  *  the presence gap's second operand. `bornAt` is ccd's clock, compared for
- *  equality only. That is safe only because this memory never leaves the
- *  process: it is never persisted or sent, and nothing but `firstDeferredAt`
- *  is read as an epoch.
+ *  equality only, and `markerRunId` is no clock at all. That is safe only
+ *  because this memory never leaves the process: it is never persisted or
+ *  sent, and nothing but `firstDeferredAt` is read as an epoch.
  *
  *  The presence clock is an EPISODE, not a lifetime total: any outcome other
  *  than a presence-class deferral ends it (a failure, a terminal refusal, or a
@@ -100,8 +100,10 @@ export interface ChildReclaimAsk {
  *  forfeits the lease, so a slow box costs the lease and never stops the lane.
  *  Without the lease, three or more due children that kept deferring kept
  *  every presence-held child unlicensed for good (spec §5.7: "Unbounded would
- *  be worse than absent"). The entry describes ONE workspace generation
- *  (`bornAt`): a slug minted again is a new child, sighted afresh.
+ *  be worse than absent"). The entry describes ONE workspace generation, by
+ *  two keys, its birth (`bornAt`) and the run its marker names
+ *  (`markerRunId`): a slug minted again is a new child, sighted afresh
+ *  (`childReclaimSameGeneration` states the one window the two keys leave).
  *
  *  THE BOUND (spec §5.7) is three figures, never run together. From its
  *  lease's first ask, the holder is licensed within the ceiling plus one pass
@@ -165,23 +167,46 @@ export interface ChildReclaimSweepEntry {
    *  (`childReclaimSameGeneration`). A different birth is a different
    *  workspace under a recycled slug, which starts from a first sighting. */
   readonly bornAt: number | null;
+  /** The run the `.child` marker named when this entry was sighted: the
+   *  generation's second key (`childReclaimSameGeneration`). ws-add writes a
+   *  recycled slug's new row and marker before it journals the new `create`,
+   *  and the mirror ingests that line later still, so for a while the birth
+   *  still reads the OLD workspace's; a marker naming a different run is a
+   *  new workspace all the same, and starts from a first sighting. */
+  readonly markerRunId: number;
   /** The `why` of the latest outcome when it was a deferral, or null after any other outcome:
    *  the deferral EPISODE a feed row is written once for (spec §5.9). No pacing reads it. */
   readonly lastDeferWhy: string | null;
 }
 
 /** A child seen eligible for the first time, in the workspace generation born
- *  at `bornAt`: no clock, no failure, never asked. `monoMs` is the lane's
- *  monotonic clock. */
-export const childReclaimFirstSighting = (monoMs: number, bornAt: number | null): ChildReclaimSweepEntry => ({
+ *  at `bornAt` and marked by run `markerRunId`: no clock, no failure, never
+ *  asked. `monoMs` is the lane's monotonic clock. */
+export const childReclaimFirstSighting = (
+  monoMs: number, bornAt: number | null, markerRunId: number,
+): ChildReclaimSweepEntry => ({
   firstEligibleAt: monoMs, firstDeferredAt: null, firstPresenceDeferredAt: null, lastPresenceDeferredAt: null,
   lastPresenceWallAt: null, presenceHeldSince: null,
-  consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null, bornAt, lastDeferWhy: null,
+  consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null, bornAt, markerRunId,
+  lastDeferWhy: null,
 });
 
-/** Does this entry describe the workspace generation born at `bornAt` (spec §5.6: slugs recycle)? A null birth never matches. */
-export const childReclaimSameGeneration = (entry: ChildReclaimSweepEntry, bornAt: number | null): boolean =>
-  entry.bornAt !== null && entry.bornAt === bornAt;
+/** Does this entry describe the workspace generation born at `bornAt` whose `.child` marker names run
+ *  `markerRunId` (spec §5.6: slugs recycle)? BOTH keys must match. A recycled slug's new row and marker
+ *  are listed before its new birth can be placed, so the birth alone would let an old workspace's
+ *  licence-ripe presence episode license a request to the new one; a marker naming a different run
+ *  ends the old generation there. A null birth never matches.
+ *
+ *  THE ONE WINDOW LEFT is one run minting the same slug twice, with no pass between to forget the old
+ *  entry. The old workspace must have been eligible while its run could still mint: `planned`, bound to
+ *  another session past the spawn stall. Then, before the next pass, the old row is removed by anything
+ *  but this lane's own reclaim (whose answer forgets the entry), a dispatch finds that session spent and
+ *  unbinds the run, the next dispatch's ws-add draws the same slug, and the run is abandoned. The next pass must also come before the mirror holds
+ *  the new `create`. A pass in between reads the run with no session, with this one, or inside the spawn
+ *  stall, and its ineligible verdict deletes the entry. */
+export const childReclaimSameGeneration = (
+  entry: ChildReclaimSweepEntry, bornAt: number | null, markerRunId: number,
+): boolean => entry.bornAt !== null && entry.bornAt === bornAt && entry.markerRunId === markerRunId;
 
 /** The minting run as the store answered: a row, no row, or a row this process
  *  could not represent — three answers, never folded. `openedAt` is the run's

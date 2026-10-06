@@ -773,7 +773,8 @@ export class FleetWatcher {
    *  Its decision clocks are this process's monotonic clock; `firstDeferredAt`
    *  and `lastPresenceWallAt` are wall-clock epoch ms and `bornAt` is ccd's
    *  clock, compared for equality only (`ChildReclaimSweepEntry`). An entry
-   *  describes one workspace generation; a new birth replaces it with a first sighting. */
+   *  describes one workspace generation; a new birth or a marker naming a new
+   *  run replaces it with a first sighting. */
   private childReclaimSweepState = new Map<string, ChildReclaimSweepEntry>();
   /** Children whose reclaim this lane has asked for and not heard back on. A
    *  pass never asks a child already in this set twice: the executor can hold
@@ -3435,11 +3436,14 @@ export class FleetWatcher {
       // listing may predate the answer (`childReclaimReleaseAnswered`).
       if (this.childReclaimReleaseAnswered.delete(r.id)) continue;
       const entry = this.childReclaimSweepState.get(r.id);
-      // A birth this entry does not describe is a recycled slug's NEW
-      // workspace (spec §5.6): it starts from a first sighting, never from
-      // the old workspace's sighting or presence.
-      if (entry === undefined || !childReclaimSameGeneration(entry, childBornAt)) {
-        this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(mono, childBornAt));
+      // A birth this entry does not describe, or a marker naming a run it was
+      // not sighted under, is a recycled slug's NEW workspace (spec §5.6): it
+      // starts from a first sighting, never from the old workspace's sighting
+      // or presence. The run is the key that changes first: ws-add writes the
+      // new marker before the mirror can place the new birth.
+      // `v.runId` is the marker's own (`childReclaimSweepVerdict`).
+      if (entry === undefined || !childReclaimSameGeneration(entry, childBornAt, v.runId)) {
+        this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(mono, childBornAt, v.runId));
         continue;
       }
       if (this.childReclaimInFlight.has(r.id)) continue;

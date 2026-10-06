@@ -361,9 +361,9 @@ const src = (over: Partial<ChildReclaimSources> = {}): ChildReclaimSources => ({
 const mirrored = (act: string, outcome: string, at: number, refusal: string | null = null): MirroredLifecycleEvent =>
   ({ act, outcome, at, refusal, id: SID }) as unknown as MirroredLifecycleEvent;
 /** A sweep entry as the chip reads it: the decision clocks are the lane's monotonic ones (never an epoch), `bornAt`
- *  is the idle null, and the two fields the chip reads are the caller's. */
+ *  is the idle null, `markerRunId` is the marker's own run, and the two fields the chip reads are the caller's. */
 const entry = (firstDeferredAt: number | null, firstPresenceDeferredAt: number | null = null, consecutiveFailures = 0) =>
-  ({ ...childReclaimFirstSighting(5_000, null), firstDeferredAt, firstPresenceDeferredAt, consecutiveFailures });
+  ({ ...childReclaimFirstSighting(5_000, null, RUN), firstDeferredAt, firstPresenceDeferredAt, consecutiveFailures });
 
 describe('withChildReclaim — the composer GET /api/runs calls', () => {
   it('keeps every other field and sets childReclaim on each row', () => {
