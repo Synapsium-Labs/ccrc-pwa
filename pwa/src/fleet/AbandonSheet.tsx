@@ -17,10 +17,20 @@
 // archive flag even by accident — and this sheet offers no archive control
 // of any kind, anywhere, which is a negative pin (`abandon-sheet.test.tsx`).
 //
-// "A release destroys nothing" (spec §4.3): unlike the reap flow's audit ->
-// confirmed-destroy ceremony (`ReapSheet.tsx`), a release destroys no data —
-// the worktree survives, the record stays — so the two-tap confirm naming
-// the run and its workspace IS the whole ceremony here, not a truncated one.
+// "A release destroys nothing" (spec §4.3) — for a workspace that is not a
+// child: the worktree survives, the record stays, so the two-tap confirm
+// naming the run and its workspace IS the whole ceremony here, not a
+// truncated one (unlike the reap flow's audit -> confirmed-destroy ceremony,
+// `ReapSheet.tsx`). A CHILD's abandon is a finished close (child-reclamation
+// spec §5.7): the close, or the server's sweep once nothing keeps the child,
+// hands it to the reclaim, which pins its work in the attic and then removes
+// it. The sheet cannot know before the tap what will keep it, so
+// `abandonConsequence` says what happens WHEN nothing does and never that it
+// will; it branches on the workspace's child mark, read only through
+// `childMarkOf` (`runWords.ts`). The abandon door is ungated against the box
+// token (D-282; the route's UNGATED note, `server/src/coord/routes.ts`); its
+// reaching that destructive act is inside the single-user trust model:
+// recorded, not changed.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isRunState, type FleetSession, type RunSummary } from '../../../shared/api';

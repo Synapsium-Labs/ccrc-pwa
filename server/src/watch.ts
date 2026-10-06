@@ -822,10 +822,13 @@ export class FleetWatcher {
    *  (the mirror or coordination-history fail-shut, and the switches and
    *  capabilities return), and the vanished-row loop, so a mark never
    *  outlives its child. An INELIGIBLE verdict deletes the entry but KEEPS
-   *  the mark, deliberately: the listing that matters most is the stale HELD
-   *  one, read before ccd unlinked the hold, and spending the mark there
-   *  would reopen the window it exists to close. Keeping it costs at most one
-   *  pass, once. IN MEMORY ONLY, the `childReclaimSweepState` idiom. */
+   *  the mark — a choice, not a safety need: ticks are serialised (`tick()`'s
+   *  `ticking` guard) and this lane awaits nothing before its loop, so only
+   *  one pass's listing can predate a release answer; that pass's held row
+   *  seeds nothing anyway, and the next listing postdates the answer, so
+   *  spending the mark there would still leave two fresh unheld passes.
+   *  Keeping it costs at most one pass, once. IN MEMORY ONLY, the
+   *  `childReclaimSweepState` idiom. */
   private childReclaimReleaseAnswered = new Set<string>();
   /** The sweep's verdicts (spec §5.9): one per marked row the last JUDGING pass listed, L1's own
    *  `ChildReclaimSweepVerdict`, recorded and never re-decided here. A pass that judged nothing

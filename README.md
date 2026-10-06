@@ -3968,8 +3968,8 @@ reap**, above). Its switch is `$REG/reclaim-paused`: tap the reclaim row on
 `ccd reclaim-pause --state on` on the fleet host; `--state off` lowers it. While
 it stands the sweep and the close path ask for nothing, and `ws-reclaim` itself
 refuses `paused` on the box. The same row lists the children that need a
-human's eye: each standing under a terminal refusal, and each whose reclaim
-has kept failing for 15 minutes.
+human's eye: each under a terminal refusal, each whose reclaim has kept failing
+for 15 minutes, and each the sweep keeps and never reclaims on its own.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one

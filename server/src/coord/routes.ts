@@ -1601,9 +1601,16 @@ export function registerCoordRoutes(
    * THE REQUEST BODY IS NEVER READ (D-280 (was D-B4-7)). `{intent:'abandon'}` is
    * constructed here, so `archive` is not a field a caller can send — "the
    * phone can abandon; the phone can never archive" is structural rather than
-   * a validation a later edit can loosen. Destruction keeps its existing
-   * ceremony (audit → reap, typed `expect`); a release destroys nothing, so
-   * the two-tap confirm in the sheet is the whole ceremony here.
+   * a validation a later edit can loosen. A human's destruction keeps its
+   * existing ceremony (audit → reap, typed `expect`), and a release destroys
+   * nothing. A CHILD's abandon is a finished close all the same
+   * (child-reclamation spec §5.7): the close, or the sweep once nothing keeps
+   * the child, hands it to the server's reclaim, which pins its work in the
+   * attic and then removes it behind a token re-proved on the box. The
+   * sheet's two-tap confirm says which applies (`abandonConsequence`,
+   * `AbandonSheet.tsx`) and is the whole ceremony on this door: a door
+   * ungated against the box token (below) reaching a destructive act is
+   * inside the single-user trust model, recorded, not changed.
    *
    * UNGATED — deliberately NOT behind `requireMailToken`, for
    * `POST /api/coord/pause`'s own reason (D-282 (was D-B4-9) and spec §4.1): the box token

@@ -5540,3 +5540,10 @@ Appended, never edited in place; the lines above stand as the record of what wav
 - **Lens 1's "presence can defer but never reset the ceiling"** is replaced by: "presence defers, and the ceiling bounds only a CONTINUOUS presence episode. An answer arriving more than 2.5 pass intervals after the previous answer's request (the larger of the monotonic and wall-clock differences), a licensed presence answer, or any other outcome restarts or ends it. Presence can restart the ceiling, never shorten it. Only a continuous, freshly observed episode spanning the ceiling on the monotonic clock sets `deferExpired`, and only the lease's holder is asked on every pass. The wait is the three figures of the A9 correction above, never run together: about 16.5 minutes from the lease's first ask to the holder's licence and about 18.6 minutes per lease at the 2026-10-05 spacing, and k × 28 minutes at worst for the k-th presence-held child in the ask order."
 - **The lane's clock.** Wave 4's lane read one `Date.now()` per pass for everything. Wave 5's Task 0b moves every decision clock to the monotonic clock. `firstDeferredAt` alone stays wall-clock epoch ms.
 - **The rejection arm.** Wave 4's lane left the entry untouched when an attempt rejected ("left for the next pass"). Wave 5's Task 0b writes it as a failed attempt.
+- **A10, "The answer's mark", its fourth bullet (review 258, G2; wave 5's Task 9c).** It reads "An ineligible
+  verdict deletes the entry but keeps the mark, deliberately. The listing that matters most is the stale held one,
+  read before ccd unlinked the hold. Spending the mark there would reopen the window it exists to close. Keeping
+  it costs at most one pass, once." Read instead: "An ineligible verdict deletes the entry but keeps the mark. That
+  is a choice, not a safety need (review 258, G2): ticks are serialised and the sweep awaits nothing before its
+  loop, so only one pass's listing can predate the answer, that pass's held row seeds nothing anyway, and the
+  next listing postdates it. Keeping it costs at most one pass, once."

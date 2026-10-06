@@ -36,6 +36,8 @@ Four further rulings, given the same day against four questions this design coul
 | The child's conversation transcripts | **Keep them.** Not an artifact under rule 2. |
 | How much of the 2026-08-11 Tier B ceremony to keep | **Kill-switch plus attached-defer.** A fleet-visible pause toggled from the phone, and a defer while someone is present. Every reclaim lands in the feed; no push per reap. |
 
+As built (§5.5 step 2; wave 3's `wip-moves-no-ref`), the WIP commit is pinned in the attic and moves no branch.
+
 **Rule 4 is the load-bearing one**, and not because of what it asks for. It changes the *population* an
 automatic collector acts on, and that is what makes one safe here where the last one was not — see §3.
 
@@ -366,12 +368,31 @@ Refusing keeps one rule at one rung instead of a conditional two places must agr
    same disposition, or an accident of `.gitignore` decides whether a credential is committed and then
    attic-pinned **permanently in a public repository**. Their paths are recorded in the tombstone; their
    bytes are not.
-2. Everything else uncommitted — tracked modifications and non-secret untracked files — becomes one WIP
-   commit on the child's own branch. **ccd has no commit helper today**; this one is new, and it is the
-   only place in ccd that writes a commit, which is reason enough for it to be one function with one caller.
-3. Attic pins are taken: the branch tip including that WIP commit, the reflog entries the existing pin
-   already takes, every stash attributed to the branch, and the in-progress operation heads
-   (`REBASE_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `ORIG_HEAD`) where present.
+2. Everything else uncommitted — tracked modifications (an edit git was told not to look at, under
+   skip-worktree or assume-unchanged, included), a staged version that differs from both HEAD and the disk,
+   and non-secret untracked files — becomes one WIP commit. It is built with `git commit-tree` in a scratch
+   copy of the tree's own index, so the user's index file is never written, and its parents are the ones
+   `git commit` would give it: HEAD, then each `MERGE_HEAD` line while a merge is in progress, and last,
+   only when the staged version differs from both HEAD's tree and the WIP's, a commit of that staged index.
+   **It moves no branch and no HEAD** (wave 3's `wip-moves-no-ref`, D-3365): it is kept by its id in the
+   attic (step 3), so whichever branch the tree has checked out is never written, and the tombstone's `tip`
+   is the branch's own tip, never the WIP. Each same-repository nested checkout gets its own WIP commit the
+   same way, innermost first. ccd had no commit helper before this verb; every commit a reclaim writes —
+   these, and step 3's reflog keep — goes through one writer (`_ws_reclaim_commit_tree`) with one fixed
+   identity, under the reclaim's git containment, and it is still the only place in ccd that writes a commit.
+3. Attic pins are taken under `refs/ccrc/attic/<id>/`, and none is optional: the in-progress operation heads
+   (`REBASE_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `ORIG_HEAD`) where present; HEAD; the WIP commit, by its
+   id; each nested same-repository checkout's operation heads, HEAD and WIP commit; the branch tip, which is
+   required because it is the commit the tail deletes the branch at and, on a detached or drifted tree,
+   nothing else pins it; and every stash attributed to the branch. Then every commit the child's own reflogs
+   name (its HEAD's, its branch's, and each nested checkout's and nested branch's), and everything the
+   child's and each nested checkout's own git directory names, is kept reachable from
+   `refs/ccrc/attic/<id>/reflogs`. A pin that cannot be taken fails the reclaim as `pin-failed` while nothing
+   is destroyed, and a branch that does not resolve is one, because it leaves the tail no tip to delete at. A
+   nested checkout of a different repository cannot be pinned here, so each run of this phase proves it again
+   by rung 9's predicate, and a failure there is a pin that cannot be taken. A HEAD that has drifted onto
+   another branch keeps that branch: it is recorded, and the tail deletes only the child's own. The tail runs
+   this whole phase again as its settle once the pane is dead; every pin is idempotent.
 4. The tombstone is written **before the first destructive act**, recording the branch, the tip, the WIP
    commit sha, the attic refs, the secret-shaped paths that were dropped, the containment verdict and the
    residue measurement. It is the one document that outlives the workspace.

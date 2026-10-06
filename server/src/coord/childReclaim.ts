@@ -292,12 +292,16 @@ export type ChildReclaimOutcome =
  *  whether its own feed row repeats them (`childReclaimFeedSkips`). Close
  *  sends `CHILD_RECLAIM_FEED_QUIET_NONE`.
  *
- *  `deferredSinceMs`: epoch ms of the FIRST deferral the sweep
- *  saw for this child, or `null` — close's value, always a first attempt. It
- *  exists so the feed row can say how long the child waited and why (spec
- *  §5.7, §5.9); the executor decides nothing on it. `deferExpired` is the
- *  sweep's own verdict on the same clock, carried separately because it is a
- *  fingerprint input on the box and this is not. */
+ *  `deferredSinceMs`: epoch ms of the FIRST deferral of ANY kind
+ *  (`firstDeferredAt`) since the sweep's in-memory entry for this child was
+ *  last created — every reset of that entry, a restart included, starts it
+ *  again — or `null`: close's value, always a first attempt. It exists so
+ *  the feed row can say how long the child waited and why (spec §5.7,
+ *  §5.9); the executor decides nothing on it. `deferExpired` is the sweep's
+ *  verdict on a DIFFERENT clock — the current presence episode, which
+ *  `childReclaimDeferExpired` reads — so a long wait here never implies a
+ *  licence. It is carried separately because it is a fingerprint input on
+ *  the box and this is not. */
 export interface ChildReclaimRequest {
   readonly sessionId: string; readonly runId: number;
   readonly trigger: 'close' | 'sweep'; readonly deferExpired: boolean;
