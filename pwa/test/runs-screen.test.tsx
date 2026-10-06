@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { RUN_STATES, SPAWN_STALL_MS, type CoordCapsView, type FleetSession, type RunSummary } from '../../shared/api';
+import { RUN_STATES, SPAWN_STALL_MS, type ChildReclaimStatus, type CoordCapsView, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
-import { CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
+import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -1505,5 +1505,98 @@ describe('the run board marks review runs (design 2026-09-14 §8)', () => {
     expect(chip!.querySelector('.run-kind-glyph')?.getAttribute('aria-hidden')).toBe('true');
     expect(chip!.textContent).toContain('reviews #47');
     expect(chip!.getAttribute('title')).toContain('coordinator rules');
+  });
+});
+
+// ── child-reclamation wave 5: the closed run's reclaim chip (spec §5.9) ─────
+//
+// The SERVER chooses the word and writes the sentence; this board renders both
+// and maps no token. `childReclaimChip` is the one reader of the field, and it
+// is tolerant because `RunSummary` is cast, never revived.
+describe('childReclaimChip — the one tolerant reader of RunSummary.childReclaim (wave 5)', () => {
+  it('is silent when the server said null, and on a row from a server that never heard of the field', () => {
+    expect(childReclaimChip(r({ childReclaim: null }))).toBeNull();
+    const older = { ...r() } as Partial<RunSummary>;
+    delete older.childReclaim;
+    expect(childReclaimChip(older)).toBeNull();
+  });
+
+  it('renders the server’s word with a glyph and carries its sentence verbatim', () => {
+    expect(childReclaimChip(r({ childReclaim: { word: 'refused', sentence: 'SERVER SENTENCE', at: 5_000 } })))
+      .toEqual({ word: 'refused', glyph: CHILD_RECLAIM_CHIP_GLYPH.refused, label: 'workspace refused',
+                 sentence: 'SERVER SENTENCE', line: 'SERVER SENTENCE', at: 5_000 });
+  });
+
+  it('puts the sentence on its own line only for a refusal — the other words carry it in the title', () => {
+    for (const word of ['reclaimed', 'pending', 'deferred', 'paused'] as const) {
+      expect(childReclaimChip(r({ childReclaim: { word, sentence: 'S', at: null } }))!.line, word).toBeNull();
+    }
+  });
+
+  it('names a word this build was never compiled to know as unknown — never a blank cell, never a guess', () => {
+    const newer = r({ childReclaim: { word: 'evicted', sentence: 'S', at: null } as unknown as ChildReclaimStatus });
+    expect(childReclaimChip(newer)).toMatchObject({ word: 'unknown', label: 'workspace: unknown state', line: null });
+  });
+
+  it('titles the chip with the sentence, and the age of its moment when it has one', () => {
+    const chip = childReclaimChip(r({ childReclaim: { word: 'deferred', sentence: 'waiting', at: 1_000_000 } }))!;
+    expect(childReclaimTitle(chip, 1_000 + 3 * 3_600)).toBe('waiting · 3h ago');
+    const bare = childReclaimChip(r({ childReclaim: { word: 'pending', sentence: null, at: null } }))!;
+    expect(childReclaimTitle(bare, 0)).toBe('workspace pending');
+  });
+
+  it('calls a row gone only when its workspace was reclaimed', () => {
+    expect(childReclaimGone(childReclaimChip(r({ childReclaim: { word: 'reclaimed', sentence: null, at: null } })))).toBe(true);
+    for (const word of ['pending', 'deferred', 'paused', 'refused'] as const) {
+      expect(childReclaimGone(childReclaimChip(r({ childReclaim: { word, sentence: null, at: null } }))), word).toBe(false);
+    }
+    expect(childReclaimGone(null)).toBe(false);
+  });
+});
+
+describe('the finished row carries the reclaim chip, and a reclaimed row is inert (wave 5)', () => {
+  const boardWith = async (childReclaim: ChildReclaimStatus | null): Promise<void> => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadCaps={NO_CAPS} loadRuns={async () => ({
+      runs: [r({ id: 7, state: 'done', closedAt: Date.now() - 60_000, childReclaim })],
+    })} />);
+    await screen.findByRole('group', { name: /finished/i });
+  };
+  const chipEl = (): HTMLElement | null => document.querySelector('.run-child-reclaim');
+
+  it('renders nothing for a row the server says nothing about — the no-regression baseline', async () => {
+    await boardWith(null);
+    expect(chipEl()).toBeNull();
+    expect(document.querySelector('.run-open')).not.toBeNull();
+  });
+
+  it('renders both cues, and the server’s sentence as the title', async () => {
+    await boardWith({ word: 'pending', sentence: 'waiting to be reclaimed', at: null });
+    expect(chipEl()).toHaveAttribute('data-child-reclaim', 'pending');
+    const glyph = chipEl()!.querySelector('.run-child-reclaim-glyph');
+    expect(glyph?.textContent).toBe(CHILD_RECLAIM_CHIP_GLYPH.pending);
+    expect(glyph).toHaveAttribute('aria-hidden', 'true');
+    expect(chipEl()!.textContent).toContain('workspace pending');
+    expect(chipEl()).toHaveAttribute('title', 'waiting to be reclaimed');
+    expect(document.querySelector('.run-child-reclaim-sentence')).toBeNull();
+  });
+
+  it('spells a refusal’s sentence out on its own line, verbatim', async () => {
+    await boardWith({ word: 'refused', sentence: 'A SENTENCE THE SERVER COMPOSED', at: null });
+    expect(document.querySelector('.run-child-reclaim-sentence')?.textContent).toBe('A SENTENCE THE SERVER COMPOSED');
+  });
+
+  it('stops offering to open a session that no longer exists once it is reclaimed', async () => {
+    await boardWith({ word: 'reclaimed', sentence: 'gone', at: null });
+    expect(document.querySelector('.run-open')).toBeNull();
+    const li = chipEl()!.closest('li');
+    expect(li).toHaveAttribute('data-inert', 'true');
+    expect(li!.querySelector('.run-abandon')).not.toBeNull();
+  });
+
+  it.each(['pending', 'deferred', 'paused', 'refused'] as const)('keeps the open door on a %s row', async (word) => {
+    await boardWith({ word, sentence: 'S', at: null });
+    expect(document.querySelector('.run-open')).not.toBeNull();
   });
 });

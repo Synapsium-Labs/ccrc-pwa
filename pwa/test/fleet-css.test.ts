@@ -654,12 +654,22 @@ describe('runs are not living panes', () => {
       // grounded for the contrast gate by the named-ancestor route, so they
       // need no `INHERITED_GROUNDS` entry of their own, but that route is
       // silent about glow — nothing else asserted these rules exist at all.
-      '.run-row .run-project', '.run-row .run-crossing', '.run-row .run-crossing-glyph']) {
+      '.run-row .run-project', '.run-row .run-crossing', '.run-row .run-crossing-glyph',
+      // Child-reclamation wave 5's chip and its refusal line join the list: the
+      // line carries the attention hue, the shape that tends to acquire a glow next.
+      '.run-row .run-child-reclaim', '.run-row .run-child-reclaim-glyph', '.run-row .run-child-reclaim-sentence']) {
       const rule = norm(stripComments(ruleIn(css, sel)));
       expect(rule, sel).not.toContain('--glow');
       expect(rule, sel).not.toContain('animation');
       expect(rule, sel).not.toContain('box-shadow');
     }
+  });
+
+  it('inks the reclaim chip from pairs already priced — no new colour pair (wave 5)', () => {
+    expect(declValue(ruleFor('.run-row .run-child-reclaim'), 'color')).toBe('var(--ink-secondary)');
+    expect(declValue(ruleFor('.run-row .run-child-reclaim-glyph'), 'color')).toBe('var(--ink-tertiary)');
+    expect(declValue(ruleFor('.run-row .run-child-reclaim-sentence'), 'color')).toBe('var(--status-attention-text)');
+    expect(declValue(ruleFor('.run-row .run-child-reclaim-sentence'), 'flex')).toBe('1 0 100%');
   });
 });
 

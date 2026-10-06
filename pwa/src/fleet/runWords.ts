@@ -6,8 +6,8 @@
 //
 // Two cues per row, always: the word is the fact and the glyph is the shape, so
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
-import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isRunState,
-  type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary } from '../../../shared/api';
+import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildReclaimWord, isRunState,
+  type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary } from '../../../shared/api';
 import { formatAge } from './formatReset';
 
 export const RUN_WORD: Record<RunState, string> = {
@@ -621,3 +621,74 @@ export function runWarnings(
   return out;
 }
 
+/* ── child-workspace reclamation (child-reclamation wave 5, spec §5.9) ────── */
+
+/**
+ * One glyph per word, TOTAL over `ChildReclaimWord`: a word the server gains is
+ * a TS2741 here before it is a blank cell anywhere. The glyph is the SHAPE and
+ * the word is the FACT, the board's standing two-cue rule. `⊘` is the
+ * journal's own refusal glyph (`OUTCOME_GLYPH.refused`), so one mark means one
+ * thing across both surfaces.
+ */
+export const CHILD_RECLAIM_CHIP_GLYPH: Record<ChildReclaimWord, string> = {
+  reclaimed: '∅', pending: '…', deferred: '⧖', paused: '‖', refused: '⊘',
+};
+
+export interface ChildReclaimChip {
+  /** The server's word, or `unknown` for one this build was never compiled to know. */
+  readonly word: ChildReclaimWord | 'unknown';
+  readonly glyph: string;
+  /** The visible text. */
+  readonly label: string;
+  /** The server's sentence, verbatim, or null. Never composed here. */
+  readonly sentence: string | null;
+  /** The sentence again when the word is a refusal, the one word the operator
+   *  may need to read in full, so it gets its own wrapped line. Null otherwise;
+   *  the other words carry their sentence in the title. */
+  readonly line: string | null;
+  /** Epoch ms of the moment the word describes, or null. */
+  readonly at: number | null;
+}
+
+/**
+ * THE ONE READER of `RunSummary.childReclaim` in `pwa/src` (CLAUDE.md "Wire
+ * discipline": a newer peer tolerates an older peer omitting a field, through a
+ * SINGLE reader per field). The field is optional here although the wire type
+ * requires it: `api.runs()` is a bare cast, and a server that predates wave 5
+ * omits the key. Every member is checked, not trusted. `null` means render
+ * nothing, which is what every non-child row and every open row does.
+ *
+ * It MAPS NOTHING. The word is the server's, the sentence is the server's, and
+ * the only vocabulary here is `CHILD_RECLAIM_CHIP_GLYPH`, keyed on the word.
+ */
+export const childReclaimChip = (run: { childReclaim?: ChildReclaimStatus | null }): ChildReclaimChip | null => {
+  const s: unknown = run.childReclaim;
+  if (s === undefined || s === null || typeof s !== 'object') return null;
+  const o = s as { word?: unknown; sentence?: unknown; at?: unknown };
+  const sentence = typeof o.sentence === 'string' && o.sentence !== '' ? o.sentence : null;
+  const at = typeof o.at === 'number' && Number.isFinite(o.at) ? o.at : null;
+  if (!isChildReclaimWord(o.word)) {
+    return { word: 'unknown', glyph: '·', label: 'workspace: unknown state', sentence, line: null, at };
+  }
+  return {
+    word: o.word,
+    glyph: CHILD_RECLAIM_CHIP_GLYPH[o.word],
+    label: `workspace ${o.word}`,
+    sentence,
+    line: o.word === 'refused' ? sentence : null,
+    at,
+  };
+};
+
+/** The chip's `title`: the server's sentence, or the label when it sent none,
+ *  and the age of the chip's moment when it has one. */
+export const childReclaimTitle = (chip: ChildReclaimChip, nowSec: number): string => {
+  const head = chip.sentence ?? chip.label;
+  return chip.at === null ? head : `${head} · ${formatAge(nowSec - Math.floor(chip.at / 1000))}`;
+};
+
+/** Is the session this row names GONE? Only a reclaimed child's is, and then
+ *  the row must stop offering to open it (spec §5.9). Every other word leaves
+ *  a workspace behind. */
+export const childReclaimGone = (chip: ChildReclaimChip | null): boolean =>
+  chip !== null && chip.word === 'reclaimed';

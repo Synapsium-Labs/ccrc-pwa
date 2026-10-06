@@ -2620,6 +2620,30 @@ button.proj-card-pool::before {
 .run-row .run-resumed {
   font-size: var(--text-2xs); color: var(--ink-tertiary);
 }
+/* Child-reclamation wave 5 (spec §5.9): what became of a finished run's CHILD
+   workspace. Scoped under `.run-row`, which is self-grounded (background and
+   colour both set), so these inherit the recovered ground `.run-row .run-kind`
+   does: no new token pair for design/contrast-check.mjs to price. The chip takes
+   `--ink-secondary` like `.run-kind`, and its glyph `--ink-tertiary` like every
+   glyph on this row. A refusal is told apart by its WORD and its glyph, never
+   by a hue. Its sentence gets its own wrapped line in the amber `.run-warn`
+   already prices (`--status-attention-text`), because a terminal refusal is the
+   one word here the operator may need to read in full. NO --glow, NO animation,
+   NO box-shadow: runs are not living panes (`fleet-css.test.ts`). */
+.run-row .run-child-reclaim {
+  display: inline-flex; align-items: baseline; gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--text-2xs);
+  color: var(--ink-secondary);
+}
+.run-row .run-child-reclaim-glyph { color: var(--ink-tertiary); }
+.run-row .run-child-reclaim-sentence {
+  flex: 1 0 100%;
+  min-width: 0;
+  padding-bottom: var(--sp-1);
+  font-size: var(--text-2xs);
+  color: var(--status-attention-text);
+}
 /* Task 12, spec §4.3, D-287: a SIBLING of `.run-open` inside `.run-row`'s
    own `<li>`, never a descendant of it — see RunsScreen.tsx's own comment on
    why a nested button is the defect this shape avoids. Self-grounded via

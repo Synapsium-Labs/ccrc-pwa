@@ -35,7 +35,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type CoordCapsView, type FleetSession, graphReadCount, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runKindChip, runWarnings, runClosedAt, runItems, runState, runsByProgram, waveLabel } from '../fleet/runWords';
+import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, childReclaimChip, childReclaimGone, childReclaimTitle, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runKindChip, runWarnings, runClosedAt, runItems, runState, runsByProgram, waveLabel } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
@@ -178,6 +178,10 @@ function RunRow({
   // a server that has never heard of `health`. This component picks no words and
   // compares no thresholds; it lays out what it was handed.
   const warnings = runWarnings(run, nowMs);
+  // Child-reclamation wave 5 (spec §5.9): what became of this run's CHILD
+  // workspace. `childReclaimChip` is the one reader. The word and the sentence
+  // are the server's, and this component picks neither.
+  const reclaim = childReclaimChip(run);
   const body = (
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
@@ -257,6 +261,23 @@ function RunRow({
         <span className="run-resumed" data-cleared={String(resume.cleared)} title={resume.title}>
           {resume.word}
         </span>
+      )}
+      {/* Wave 5: the reclaim chip, `.run-kind`'s shape (glyph + word, the long
+          form in `title`). Informational, so it lives inside `body` and
+          therefore inside `.run-open`, like `.run-warn`: the sibling rule
+          binds controls, and this is prose. */}
+      {reclaim !== null && (
+        <span className="run-child-reclaim" data-child-reclaim={reclaim.word}
+          title={childReclaimTitle(reclaim, nowSec)}>
+          <span className="run-child-reclaim-glyph" aria-hidden="true">{reclaim.glyph}</span>
+          {reclaim.label}
+        </span>
+      )}
+      {/* A refusal's sentence on its own wrapped line (`flex-basis: 100%`,
+          `.run-warn`'s idiom). The chip decides when there is one; this lays
+          out what it was handed. */}
+      {reclaim !== null && reclaim.line !== null && (
+        <span className="run-child-reclaim-sentence">{reclaim.line}</span>
       )}
       {degradedFields.length > 0 && (
         <span
@@ -373,7 +394,12 @@ function RunRow({
   // or hides what the row now says while the spawn is under way. Making the
   // row tappable to let the affordance through would have traded a true
   // sentence for a dead tap onto a session id that does not exist yet.
-  return run.sessionId === null
+  //
+  // A reclaimed child's session no longer exists either (spec §5.9: the row
+  // "stops offering to open its session"). It gets the same inert row, for the
+  // same reason. `resumeButton` and `abandonButton` keep their place: neither
+  // is about the worker's session.
+  return run.sessionId === null || childReclaimGone(reclaim)
     ? <li className="run-row" data-inert="true">{body}{resumeButton}{abandonButton}</li>
     : (
       <li className="run-row">
