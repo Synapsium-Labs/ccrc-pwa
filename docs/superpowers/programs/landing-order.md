@@ -536,6 +536,9 @@ carries it (spec §5.1, amended 2026-09-24).
     - F5 (a)–(j): text and tests.
   - **The worker's ledger note (a), carried as an OPERATOR CANDIDATE:** today any jq runtime error passes the deny.
     A held or child session whose payload holds `merge` could fail CLOSED instead. Not this wave's.
+- **2026-10-06 07:02 — `ccd/ccd` shared by region** (mail 3648, for the record). Run 250's claim 1043 keeps the stamp and
+  its `pr-state` lines. Runs 245 and 274 edit their own regions of `ccd/ccd` without a claim. The second to land
+  merges main and re-stamps. Fix round 2 is unchanged.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

@@ -472,6 +472,12 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **Carried to 3b's operator text (R4):** one archived row on the fleet box today, `ccrc-pwa-brisk-mesa`, holds a
     leaked test tmux server in its tree. The lane will refuse it `in-use` on every pass. The refusal text must name
     what a pid is before it suggests ending one, because the fleet's own tmux server is also a `tmux: server`.
+- **2026-10-06 07:02 — fix round 1 edits `ccd/ccd` without a claim** (mail 3647, answering bright-canyon's stuck 3635).
+  - **`ccd/ccd` is shared by region, not by claim.** Claim 1043 (run 250) does not block a disjoint-region edit,
+    and nobody takes, breaks or waits on a `ccd/ccd` claim for it. The regions: run 250 has the stamp and its
+    `pr-state` lines; run 245 has the RECLAIM/EXPIRE region and the spawn paths' refusal; run 274 has wave 3's
+    operator-choice section, then what its plan names. The second to land merges main, re-stamps and re-runs the
+    citation cases, cite-remeasure and the `_reg_get` census. A worker whose edit must leave its region asks first.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 

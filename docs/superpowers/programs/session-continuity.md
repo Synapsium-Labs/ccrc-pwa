@@ -455,6 +455,13 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - **The concurrency cap refused it three times first** (05:19, 05:53 and 06:23, seven of seven). A slot freed
     by 06:53.
   - **The workspace branch is at `9221416a`**, origin/main (after #291), with nothing ahead. It contains #288.
+- **2026-10-06 07:02 — ask 18 answered: option 0, Task 1 edits `ccd/ccd` now** and stays the first commit. Explained in
+  mails 3646–3648.
+  - **`ccd/ccd` is shared by region, not by claim.** Claim 1043 (run 250) does not block a disjoint-region edit,
+    and nobody takes, breaks or waits on a `ccd/ccd` claim for it. The regions: run 250 has the stamp and its
+    `pr-state` lines; run 245 has the RECLAIM/EXPIRE region and the spawn paths' refusal; run 274 has wave 3's
+    operator-choice section, then what its plan names. The second to land merges main, re-stamps and re-runs the
+    citation cases, cite-remeasure and the `_reg_get` census. A worker whose edit must leave its region asks first.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
