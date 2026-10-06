@@ -35,7 +35,7 @@ numbers; the spec wave each one implements is named beside it.
 | 11 | — (R12, sweep half) | `_upd_sweep`: one shared verify window by concurrent per-unit calls, the die's report-ownership guard and wording, no die in a subshell, the Darwin arm | fleet-first | — | **MERGED** `d2bac7ae` (PR #287, run 270 done) 2026-10-06 02:37 UTC, released as v0.0.92 (dev). The merged tree is byte-identical to the tested tip `33f4eaaa` (`main` unmoved at `d12b5aba`, every Linux leg green). Review 281 met none of the bar's eight classes; its four findings and D3's macOS red go to R19, before stable. Was: **IN REVIEW** 2026-10-06 01:29 UTC: wave-done at `33f4eaaa`, PR #287, `main` `d12b5aba` merged in as `9b3ba1fa`; reserve numbers 3987 and 3988 spent (bare: their definitions are on the worker branch); the bar is committed in the 01:29 entry; review run 281 dispatched 01:32 UTC to `ccrc-pwa-amber-cove` (the held-out panel plus five wave lenses). Was: **DISPATCHED** 2026-10-05 16:04 UTC to `ccrc-pwa-clear-meadow` (run 270). Plan `966ffe9f`, 9 tasks; it defines D-3972 to D-3984, and the five-number reserve, numbers 3987 to 3991, is named in the brief. Was: **Run 270 open, planned** 2026-10-05 11:10 UTC, opened before run 223 closed so the programme keeps an open run; to plan, with R13, R14 and R14(f) first. Was: **SCOPED** 2026-10-04 22:56 UTC; after wave 9 merges (`ccd/ccrc`). The 10-02 wave-10 deferrals move to wave 12. |
 | 12 | — (wave 11's test and prose residue) | before stable: R19 (D3's GNU-only shim, F1's unpinnable filter, F2's W20 prose, F3's NEW+S10 pin, F4's S0 naming); R18(c)–(e) prose. No shipped runtime code changes | none (tests and docs) | — | **MERGED** `9221416a` (PR #291, run 282 done) 2026-10-06 06:40 UTC. The merged tree `a6c85f7c` equals `merge-tree`'s, and every branch file is byte-identical to the tested tip `7b0a5454` (`main` had moved by docs only, to `21f536a5`). Review 286 met none of the bar's seven classes; `server 4/5`'s cleanup-hook timeout re-ran green. Was: **IN REVIEW** 2026-10-06 05:57 UTC: wave-done at `7b0a5454`, PR #291; reserve number 4072 spent (bare: defined on the worker branch); the bar is in the 05:57 entry; review run 286 dispatched 05:59 UTC to `ccrc-pwa-warm-ridge` (the held-out panel plus two lenses: pins and fixtures, the truth of the prose). Was: **DISPATCHED** 2026-10-06 04:37 UTC to `ccrc-pwa-soft-delta` (run 282; 5 items; route Opus·high / Sonnet / workflow off / compact 40). Was: **Run 282 open, planned** 2026-10-06 02:38 UTC, opened before run 270 closed. Deviation block 4068 to 4087 (bare until defined). Scoped 02:45 UTC; plan `04c977cb` + `bc495fed` (drafted by workflow `wf_a11d694f-c70`: prototype, attack, revise; readings ruled 04:35). 5 tasks; it defines D-4068 to D-4071, and the reserve is numbers 4072 to 4076 (Reading 8's ruling spends 4072). |
 | 13 | — (security + CI) | R16: the box token leaves `curl`'s argv in `ccd/ccrc-api` and `deploy/notify.sh` (`-K -` with a stdin `header = …` config, the idiom `ccd-pool-sync` and `ccd-update-sync` ship), and the test curl front admits exactly that; R20: the CI cleanup-hook timeout and wave 12's As-built bullet | fleet-first (the client and the hook reach every home through the install spine) | — | **MERGED** `8b0547b4` (PR #295, 2026-10-06 16:03:00 UTC, run 287 done). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `77cf2367` onto `main` at `b3b5a73e` (`154cbb2c`), and `main` did not move after the review. Every Linux leg was green; the only macOS red was landing-order's. Scoped review 297 met none of the round's five classes; its five coverage and prose findings are residue R23. Was: **FIX ROUND 1 DONE** 2026-10-06 13:01 UTC at `77cf2367` (mail 3698; one commit on `ee5dd409`, 3 files, the round's only; no number spent; `main` not merged, `merge-tree` onto `b3b5a73e` clean; every Linux leg green on PR run 37465993934 and full run 37465994132). Scoped review run 297 dispatched 15:34 UTC to `ccrc-pwa-plain-cove`, after waiting out the fleet-wide daily cap (24 of 24). Both runs' only macOS red is landing-order's `session-hook-merge-deny`. After the review, #295 merges. Was: **FIX ROUND 1 SENT** 2026-10-06 12:27 UTC (mail 3690, `rulings-run287-fix1.md`) on review 294 at `ee5dd409`. Its F1, the test curl front failing open when grep cannot run, meets the bar's class 3 as written, so the bar gives the one round. A scoped review follows under the bar in the rulings, then #295 merges. Was: **IN REVIEW** 2026-10-06 11:34 UTC: wave-done at `ee5dd409`, PR #295; reserve number 4096 spent (bare: defined on the worker branch); the bar is in the 11:34 entry; review run 294 dispatched 11:35 UTC to `ccrc-pwa-quiet-harbor` (the held-out panel plus two lenses: token exposure and the front's parser; delivery, compatibility and the cleanup). Was: **DISPATCHED** 2026-10-06 10:01 UTC to `ccrc-pwa-still-ridge` (run 287; 6 items; route Opus·high / Sonnet / workflow off / compact 40; held 20 min by the fleet-wide daily cap, 24 of 24). Was: **Run 287 open, planned** 2026-10-06 06:41 UTC; re-scoped 07:07 UTC to R16 + R20 (scoping workflow `wf_286a790a-7fa`). Deviation block 4094 to 4113 (bare until defined). Plan `31f24eac` (workflow `wf_3aff815b-3ef`; readings ruled 09:30): 6 tasks; it defines D-4094 and D-4095, and the reserve is numbers 4096 to 4100 (Reading 4 spends 4096). |
-| 14 | — (R15, PWA) | the home screen shows a halt and offers Ack in place; **Update all** says why it skipped; the skew banner drops the stale `ccrc rollout` advice | server (PWA bundle) | — | **Run 299 open, planned** 2026-10-06 16:03 UTC, opened before run 287 closed. Deviation block 4266 to 4285 (bare until defined). To plan; the product shape is asked of the operator (07:07 entry). |
+| 14 | — (R15, PWA) | the home screen shows a halt and offers Ack in place; **Update all** says why it skipped; the skew banner drops the stale `ccrc rollout` advice | server (PWA bundle) | — | **Planned; the shape ruled.** Plan `053cf1cb5` (workflow `wf_f9c94b88-140`; 7 tasks; it defines D-4266 to D-4269, and the reserve is numbers 4270 to 4274). The operator saw the designs and ruled "all recommended" at 2026-10-06 19:00 UTC. Was: **Run 299 open, planned** 2026-10-06 16:03 UTC, opened before run 287 closed. Deviation block 4266 to 4285 (bare until defined). |
 | 15 | — (`ccd/ccd`) | `--no-reload` for `_svc_enable`, alone | fleet-first | — | **Run 300 open, planned** 2026-10-06 16:07 UTC. Deviation block 4286 to 4295 (bare until defined). To plan. `ccd/ccd` is unclaimed, but open PRs #299, #301 and #303 also edit it, so whichever lands later rebases and restamps. |
 | 16 | — (sweep accounting) | `ccrc-api` placed by the install spine (wave 13's Reading 1(a): a `_inst_bins` line, its census pin, README's sentence); item 3's false "is FAILED" warning, the unit `activating` before the restart (Reading 9), the shipped stale-pid comment, the pgid clause's comment | fleet-first, an attended first move | — | gated on claim 1046 (`ccd/ccrc`, README) and on the operator's Reading 9 ruling |
 | 17 | — (verify script, Darwin helper) | R18(a) (unsearchable registry; `_reg_purge`'s order), R18(b), R10j | fleet-first, an attended first move | — | gated on claim 1046 |
@@ -2297,6 +2297,29 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **Wave 15's run 300** opened at 16:07 with block 4286 to 4295. Both plans are drafted next. Wave 14 dispatches
     only once the operator confirms R15's shape (the 07:07 entry's question 4).
 
+- **2026-10-06 19:01 UTC: wave 14's shape ruled by the operator ("all recommended"), and its plan committed (`053cf1cb5`).**
+  - **The planning:** workflow `wf_f9c94b88-140` ran 10 agents (two pipelines, one per wave) in 121 min, with none dead.
+    For each wave: a Sonnet scout, an Opus prototyping drafter, two Opus attack lenses, then an Opus reviser. Wave 14's
+    lenses were product and state, then pins and scope. Their 17 findings: 13 applied, 4 made Readings. The plan's own
+    evidence is in the coordinator's scratchpad, not tracked.
+  - **What the lenses changed:**
+    - The skew banner's halt arm no longer promises that the console moves the box. It names what follows the Ack:
+      auto, or the terminal verbs.
+    - Its auto arm uses the dispatcher's own auto path, moved to L0 under D-4266 (`autoPermits`, `carriesUpdateGate`).
+    - A halted row says "last tried", never "moving to".
+    - The Ack holds per lease, so it cannot be sent twice.
+    - The five holder pins left `single-definition.test.ts`, which claim 1056 now holds, for the wave's own
+      `update-move.test.ts`.
+    - Claims 1048 and 1049 ended, so the banner's rules go in `fleet.css` in place.
+  - **Shown to the operator** as mockups in the PWA's own tokens and copy: the Ack's place (its own banner, the release
+    banner or the skew banner), Update all disabled or enabled, the skew banner's cases, the wording, amber or red, and
+    the three gaps. The operator ruled "all recommended" at 19:00 UTC, and the plan's "Coordinator rulings" section
+    records each reading.
+  - **The plan is served for the operator's review** from this branch (committed and pushed, so `?ref=` serves it).
+  - **Residue R24** takes Readings 11, 12, 13, 15 and 16.
+  - **Dispatch waits on the operator's review** of the committed plan. Run 299 stays `planned` until the operator says
+    to go, or asks for changes, which become a revision of this plan.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
@@ -2508,6 +2531,16 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
     corrects a count and does not reshape the ruling. Correct plan:1280 to say the ruling carries an aside.
   - (d) A LEADING blank line refuses, as measured, but no row feeds one. The cited row's blank line is interior.
   - (e) plan:1291 says all three new rows carry no URL argument. The F2 pass row carries one.
+- **R24 (wave 14, its plan's Readings; for the next PWA wave unless noted).**
+  - (a) Settings' release-row Install sends `{all: true}` and stays enabled on a halt. Disable it, and the per-node
+    Update, with `updateAllHaltedText`'s line (Reading 16).
+  - (b) Staleness after a failed poll is marked on no update surface. Mark it on all of them at once: "as of the last
+    read". While a failure stands, the skew arm answers `cli` (Reading 15).
+  - (c) The halt banner could list the requests a racing `{all: true}` wrote while the halt stood (Reading 11).
+  - (d) The store's `rowHalts` can call `isHaltingUpdate`, and Settings' `caps.includes(UPDATE_GATE_CAP)` can call
+    `carriesUpdateGate`. The SQL form stays (Reading 12).
+  - (e) README's skew, Update-all and move-sheet passages, and spec §13: the coordinator's docs PR after the merge
+    (Reading 13).
 ## Next-wave brief
 
 **Wave 2 (run 128) — dispatched 2026-09-23.** The brief as sent is the plan's path and sha, tasks 1–15, execution
