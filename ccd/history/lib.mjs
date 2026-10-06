@@ -290,3 +290,71 @@ export function historyPaths(home) {
     shim: `${h}/.local/bin/ccd-history-sweep`,
   });
 }
+
+// ── canonical JSON, digests and ids (§6.1, §6.5, §9.14) ───────────────────
+/** One body, one string, on every box and in every locale: object keys sorted
+ *  by `Array.prototype.sort()`'s default order — UTF-16 code units, which no
+ *  locale moves — never `localeCompare` (`tr_TR` reorders `i`/`I`, measured;
+ *  DM8). Arrays keep their order; primitives are JSON.stringify's; a key whose
+ *  value is `undefined` is dropped, as JSON.stringify drops it. */
+export function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') {
+    const s = JSON.stringify(value);
+    return s === undefined ? 'null' : s;
+  }
+  if (Array.isArray(value)) return `[${value.map((v) => canonicalJson(v)).join(',')}]`;
+  const keys = Object.keys(value).filter((k) => value[k] !== undefined).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(',')}}`;
+}
+
+export function sha256Bytes(data) {
+  return createHash('sha256').update(data).digest();
+}
+
+export function sha256Hex(data) {
+  return createHash('sha256').update(data).digest('hex');
+}
+
+// derived from lossless-claw src/pending-summary-projection.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+/** Hash ordered identity parts with unambiguous separators: the domain
+ *  prefix, then a NUL before each part, so `['ab','c']` and `['a','bc']`
+ *  never collide (§11 V3). Strings hash as UTF-8. */
+export function digestText(prefix, parts) {
+  const hash = createHash('sha256');
+  hash.update(prefix);
+  for (const part of parts) {
+    hash.update('\0');
+    hash.update(part);
+  }
+  return hash.digest('hex');
+}
+
+/** A leaf's id, minted BEFORE compaction so instructions and the card can
+ *  carry it (§6.1). The boundary-qualified form is the later of two forked
+ *  copies that compacted after one head (`leaf_id_forked`). */
+export function leafId(ccrcId, ccUuid, spanStartUuid, boundaryUuid) {
+  const parts = [ccrcId, ccUuid, spanStartUuid];
+  if (boundaryUuid) parts.push(boundaryUuid);
+  return `L${digestText('ccrc-leaf/v1', parts).slice(0, 20)}`;
+}
+
+export function parentId(childIds) {
+  return `N${digestText('ccrc-node/v1', childIds).slice(0, 20)}`;
+}
+
+/** A spool line's key (§9.14): where the line SITS — its draining file's name
+ *  and its ordinal — never when it was received, so a file journaled again
+ *  after a crash, and a line with no `ts`, keep their keys. */
+export function eventKey(drainingFileName, ordinal) {
+  return digestText('ccrc-spool/v1', [drainingFileName, String(ordinal)]);
+}
+
+/** A blob's address (§6.1): sha256 over the body's canonical JSON. */
+export function blobShaOfBody(body) {
+  return sha256Bytes(canonicalJson(body));
+}
+
+/** A sidecar's address: sha256 over the file's own bytes. */
+export function blobShaOfBytes(bytes) {
+  return sha256Bytes(bytes);
+}

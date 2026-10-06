@@ -5733,3 +5733,12 @@ triggers nothing; you owe source only when you both modify it and expose it to o
 Source files carry no per-file licence headers. Every file in this repository opens with a
 comment explaining the reasoning behind its design, and a boilerplate header on top of that
 would compete with the thing the reader is actually there for. This section is the notice.
+
+**Third-party code.** A few helpers under `ccd/history/` are derived from lossless-claw
+(Martian Engineering, MIT-licensed; Copyright (c) 2026 Josh Lehman / Martian Engineering), at
+upstream commit `e05d8d3`. MIT material may be combined into this AGPL-3.0 program as long as
+its notice travels with every copy, so the upstream licence sits byte for byte in
+`ccd/history/LICENSE.lossless-claw`, beside the code it covers, and ships in every release
+tarball. `ccd/history/PROVENANCE` names each copied item, its upstream file and what changed,
+and each copied function carries a one-line comment saying where it came from: a rationale
+comment, not a licence header.

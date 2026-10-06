@@ -105,3 +105,13 @@ export interface HistoryPaths {
   readonly ccrcEnv: string; readonly accountsSh: string; readonly reg: string; readonly shim: string;
 }
 export function historyPaths(home: string): HistoryPaths;
+
+export function canonicalJson(value: unknown): string;
+export function sha256Bytes(data: string | Uint8Array): Buffer;
+export function sha256Hex(data: string | Uint8Array): string;
+export function digestText(prefix: string, parts: readonly string[]): string;
+export function leafId(ccrcId: string, ccUuid: string, spanStartUuid: string, boundaryUuid?: string): string;
+export function parentId(childIds: readonly string[]): string;
+export function eventKey(drainingFileName: string, ordinal: number): string;
+export function blobShaOfBody(body: unknown): Buffer;
+export function blobShaOfBytes(bytes: Uint8Array): Buffer;

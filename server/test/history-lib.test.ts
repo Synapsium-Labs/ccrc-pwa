@@ -7,9 +7,10 @@
 // in a scratch directory. Runs on darwin too (spec §13: lib tests run there).
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import {
   EXIT, REASONS, REFUSALS, WRITING_FORMS, STORE_DB_REL, HISTORY_ROOT_REL, STORE_DB_FILE, STORE_FILES, SWITCHES,
@@ -17,6 +18,9 @@ import {
   SPOOL_EVENTS, SPOOL_SOURCES, EPOCH_CAUSES, DECLARED_BY, ERROR_CODES, COVERAGE, SCOPE_SOURCES, VARIANT_CAUSES,
   BACKENDS, JOURNAL_KINDS, JOURNAL_VERDICTS, BIND_KINDS, MIGRATION_VERDICTS, PASS_WORDS, HEALTH_WORDS,
   UUID_RE, WRITER_RE, idOk, readBoxEnvValue, historyPaths,
+} from '../../ccd/history/lib.mjs';
+import {
+  canonicalJson, sha256Hex, sha256Bytes, digestText, leafId, parentId, eventKey, blobShaOfBody, blobShaOfBytes,
 } from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -210,5 +214,92 @@ describe('O53: readBoxEnvValue agrees with ccrc\'s _box_env_value, row by row', 
     writeFileSync(file, text);
     expect(readBoxEnvValue(text, 'CCRC_ROLE'), 'readBoxEnvValue').toEqual(want);
     expect(viaBash(file, 'CCRC_ROLE'), '_box_env_value').toEqual(want);
+  });
+});
+
+describe('canonical JSON and the digests (spec §6.1, §6.5, §9.14)', () => {
+  it('sorts object keys by UTF-16 code unit at every depth, keeps array order, and drops undefined', () => {
+    expect(canonicalJson({ b: 1, a: [3, { d: 1, c: 2 }], e: undefined })).toBe('{"a":[3,{"c":2,"d":1}],"b":1}');
+    expect(canonicalJson({ i: 1, I: 2, 'ı': 3, 'İ': 4, a: 5 })).toBe('{"I":2,"a":5,"i":1,"İ":4,"ı":3}');
+    expect(canonicalJson('x\n"y"')).toBe(JSON.stringify('x\n"y"'));
+    expect(canonicalJson(null)).toBe('null');
+    expect(canonicalJson([undefined])).toBe('[null]');
+  });
+
+  it('one body is one address however its keys arrived', () => {
+    expect(blobShaOfBody({ a: 1, b: [1, 2] }).equals(blobShaOfBody({ b: [1, 2], a: 1 }))).toBe(true);
+    expect(blobShaOfBody({ a: 1 }).equals(blobShaOfBody({ a: 2 }))).toBe(false);
+    expect(blobShaOfBytes(Buffer.from('abc')).toString('hex')).toBe(sha256Hex('abc'));
+    expect(sha256Bytes('abc').toString('hex')).toBe(createHash('sha256').update('abc').digest('hex'));
+  });
+
+  it('digestText is the domain prefix then a NUL before each part (§11 V3)', () => {
+    expect(digestText('p', ['a', 'b'])).toBe(createHash('sha256').update('p\u0000a\u0000b').digest('hex'));
+    // The separator is what keeps two splits of one string apart.
+    expect(digestText('p', ['ab', 'c'])).not.toBe(digestText('p', ['a', 'bc']));
+    expect(digestText('p', [])).toBe(createHash('sha256').update('p').digest('hex'));
+  });
+
+  it('leaf and parent ids are a letter and 20 hex; the boundary-qualified leaf differs from the plain one', () => {
+    const u1 = '0189abcd-1234-5678-9abc-0123456789ab';
+    const u2 = '0189abcd-1234-5678-9abc-0123456789ac';
+    const plain = leafId('demo-quiet-basin', u1, u2);
+    expect(plain).toMatch(/^L[0-9a-f]{20}$/);
+    expect(plain).toBe(`L${digestText('ccrc-leaf/v1', ['demo-quiet-basin', u1, u2]).slice(0, 20)}`);
+    const forked = leafId('demo-quiet-basin', u1, u2, '0189abcd-1234-5678-9abc-0123456789ad');
+    expect(forked).toMatch(/^L[0-9a-f]{20}$/);
+    expect(forked).not.toBe(plain);
+    expect(parentId([plain, forked])).toMatch(/^N[0-9a-f]{20}$/);
+    expect(parentId([plain, forked])).not.toBe(parentId([forked, plain]));
+  });
+
+  it('eventKey depends on the draining name and the ordinal only — never on a clock', () => {
+    const k = eventKey('demo-quiet-basin.1700000000000.4242.jsonl', 1);
+    expect(k).toMatch(/^[0-9a-f]{64}$/);
+    expect(eventKey('demo-quiet-basin.1700000000000.4242.jsonl', 1)).toBe(k);
+    expect(eventKey('demo-quiet-basin.1700000000000.4242.jsonl', 2)).not.toBe(k);
+    expect(eventKey('demo-quiet-basin.1700000000001.4242.jsonl', 1)).not.toBe(k);
+    expect(eventKey.length, 'eventKey takes exactly the name and the ordinal').toBe(2);
+  });
+});
+
+// DM8: the canonical hash and every id are identical under LC_ALL=tr_TR.UTF-8
+// and LC_ALL=C. Run in CHILD processes, because a locale is a process
+// property; each child imports lib.mjs by file URL and prints what it
+// computed. The CONTROL is the tr child's own Intl locale: Node's ICU needs
+// no OS locale (spec §6.7, measured), but a small-icu build resolves tr-TR to
+// something else, and then this case skips and says so instead of passing
+// vacuously.
+describe('DM8: ids and the canonical hash do not move with the locale', () => {
+  const PROBE = [
+    `import { canonicalJson, leafId, eventKey } from ${JSON.stringify(pathToFileURL(LIB).href)};`,
+    "const body = { i: 1, I: 2, 'ı': 3, 'İ': 4, a: 5, nested: { 'İ': [1, { z: 1, Z: 2 }] } };",
+    'process.stdout.write(JSON.stringify({',
+    '  locale: Intl.DateTimeFormat().resolvedOptions().locale,',
+    '  canon: canonicalJson(body),',
+    "  leaf: leafId('İstanbul-ıi', '0189abcd-1234-5678-9abc-0123456789ab', '0189abcd-1234-5678-9abc-0123456789ac'),",
+    "  key: eventKey('İ.1700000000000.1.jsonl', 3),",
+    '}));',
+  ].join('\n');
+
+  const run = (lc: string): { locale: string; canon: string; leaf: string; key: string } => {
+    const env: NodeJS.ProcessEnv = { PATH: process.env['PATH'] ?? '/usr/bin:/bin', LC_ALL: lc, LANG: lc };
+    const r = spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', PROBE], { encoding: 'utf8', env });
+    expect(r.status, r.stderr).toBe(0);
+    return JSON.parse(r.stdout) as { locale: string; canon: string; leaf: string; key: string };
+  };
+
+  it('tr_TR.UTF-8 and C compute the same canonical JSON, leaf id and event key', (ctx) => {
+    const tr = run('tr_TR.UTF-8');
+    if (tr.locale !== 'tr-TR') {
+      ctx.skip(`this node resolves tr_TR to ${tr.locale} (small-icu?) — DM8 cannot see a locale here`);
+      return;
+    }
+    const c = run('C');
+    expect(c.locale, 'the C child must not ALSO be Turkish, or the comparison is vacuous').not.toBe('tr-TR');
+    expect(tr.canon).toBe(c.canon);
+    expect(tr.canon).toBe('{"I":2,"a":5,"i":1,"nested":{"İ":[1,{"Z":2,"z":1}]},"İ":4,"ı":3}');
+    expect(tr.leaf).toBe(c.leaf);
+    expect(tr.key).toBe(c.key);
   });
 });

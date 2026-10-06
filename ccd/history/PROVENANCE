@@ -1,0 +1,25 @@
+ccd/history/PROVENANCE: where the third-party material in ccrc history came from.
+
+This is THIRD-PARTY CODE PROVENANCE, not release provenance: ccrc's own release
+tarballs are attested and checked by deploy/verify-provenance.mjs and doctor's
+`provenance` check, which never read this file. Everything listed here is
+lossless-claw (Martian Engineering, MIT); its licence is LICENSE.lossless-claw,
+byte for byte, in every directory that holds copied material.
+
+One entry per copied item, entries separated by a blank line, six fields each:
+  item             what was copied, with its harvest id (spec 2026-10-05 §11)
+  ours             the repo-relative file that holds it now
+  upstream         the upstream file's path inside lossless-claw
+  commit           the upstream commit it was copied from
+  upstream-sha256  sha256 of that whole upstream file at that commit
+  changed          what this copy changed, or "nothing"
+The file named by `ours` carries a one-line rationale comment of the form
+"derived from lossless-claw <upstream> @ <commit>, MIT, see LICENSE.lossless-claw";
+server/test/license.test.ts pins both directions.
+
+item: digestText (V3)
+ours: ccd/history/lib.mjs
+upstream: src/pending-summary-projection.ts
+commit: e05d8d3
+upstream-sha256: 0d4833ab872b41666b13bd9c0c5a7db1896d6bd0e39e06a39313d56b2a14aeaa
+changed: JavaScript without the TypeScript annotations; `parts` is any readonly array of strings; otherwise line for line

@@ -154,3 +154,131 @@ describe('the release owner (S1)', () => {
     }
   });
 });
+
+// ── third-party code: lossless-claw (ccrc history spec 2026-10-05 §12) ──────
+// MIT material may be combined into this AGPL-3.0-only tree, but its notice
+// must travel with EVERY copy, and the release tarball ships `install.sh
+// shared ccd deploy` without the root README or LICENSE
+// (deploy/build-release.sh's PATHSPEC). So the upstream LICENSE sits byte for
+// byte beside the copied code, in every directory that holds some, and
+// `ccd/history/PROVENANCE` says what was copied from where.
+
+/** sha256 of lossless-claw's LICENSE at commit e05d8d3 (1,090 bytes, MIT,
+ *  "Copyright (c) 2026 Josh Lehman / Martian Engineering"), measured against
+ *  the upstream file. Pinned as a hash for the reason AGPL_SHA256 is: a
+ *  licence is only the licence while it is verbatim. Changing this constant
+ *  is a deliberate legal act, not a test fix. */
+const LOSSLESS_CLAW_MIT_SHA256 = 'b88a085e19252796c5ba424a8bfe8eb0d4a0af3b89e4460a0dc334a634a995c0';
+const SIDECAR = 'LICENSE.lossless-claw';
+/** The rationale comment every copied function carries (§12), with the
+ *  upstream path and commit it names. Backticks around the path are allowed. */
+const DERIVED = /derived from lossless-claw `?([^\s`,]+)`? @ ([0-9a-f]{7,40})/g;
+
+/** Every regular file under ccd/, repo-relative, minus the two legal files
+ *  themselves (they describe the marker; they are not marked material). */
+const ccdFiles = (): string[] => {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const e of readdirSync(join(REPO, dir), { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name === '__pycache__' || e.name === '.git') continue;
+      const rel = `${dir}/${e.name}`;
+      if (e.isDirectory()) walk(rel);
+      else if (e.isFile() && e.name !== SIDECAR && e.name !== 'PROVENANCE') out.push(rel);
+    }
+  };
+  walk('ccd');
+  return out;
+};
+
+/** The release PATHSPEC, read from the one `PATHSPEC=(…)` assignment in
+ *  deploy/build-release.sh (the conditional `PATHSPEC+=` arm is not a root). */
+const pathspec = (): string[] => {
+  const code = read('deploy/build-release.sh').split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
+  const all = [...code.matchAll(/^PATHSPEC=\(([^)]*)\)/gm)];
+  expect(all, 'deploy/build-release.sh must hold exactly one PATHSPEC=(…)').toHaveLength(1);
+  return all[0]![1]!.trim().split(/\s+/);
+};
+
+interface ProvenanceEntry { item: string; ours: string; upstream: string; commit: string; sha: string; changed: string }
+/** `ccd/history/PROVENANCE`'s entries: blank-line-separated blocks that open
+ *  with `item:`, six `key: value` fields each. */
+const provenance = (): ProvenanceEntry[] => read('ccd/history/PROVENANCE').split(/\n\s*\n/)
+  .filter((b) => b.startsWith('item: '))
+  .map((b) => {
+    const f = Object.fromEntries(b.split('\n').map((l) => /^([a-z0-9-]+): (.+)$/.exec(l)).filter((m) => m !== null)
+      .map((m) => [m![1]!, m![2]!.trim()]));
+    return { item: f['item'] ?? '', ours: f['ours'] ?? '', upstream: f['upstream'] ?? '', commit: f['commit'] ?? '',
+      sha: f['upstream-sha256'] ?? '', changed: f['changed'] ?? '' };
+  });
+
+describe('third-party code: the lossless-claw MIT notice travels with the copied material', () => {
+  it('ccd/history/LICENSE.lossless-claw is the upstream LICENSE, byte for byte', () => {
+    const bytes = readFileSync(join(REPO, 'ccd', 'history', SIDECAR));
+    expect(bytes.length).toBe(1090);
+    // Hashed over the BYTES, never a decoded string: a re-encoding that
+    // survives a utf8 round trip is still a different file.
+    expect(createHash('sha256').update(bytes).digest('hex'),
+      `${SIDECAR} no longer matches lossless-claw's LICENSE at e05d8d3`).toBe(LOSSLESS_CLAW_MIT_SHA256);
+  });
+
+  it('every directory holding marked material has the sidecar, and every sidecar covers marked material', () => {
+    const marked = new Set(ccdFiles().filter((f) => /derived from lossless-claw/.test(read(f))).map((f) => path.dirname(f)));
+    // Liveness: a walk that marked nothing would pass both directions.
+    expect(marked.size, 'no file under ccd/ carries a "derived from lossless-claw" comment').toBeGreaterThan(0);
+    for (const d of marked) expect(existsSync(join(REPO, d, SIDECAR)), `${d}/ holds copied material and no ${SIDECAR}`).toBe(true);
+    const sidecars: string[] = [];
+    const find = (dir: string): void => {
+      for (const e of readdirSync(join(REPO, dir), { withFileTypes: true })) {
+        if (e.name === 'node_modules' || e.name === '.git') continue;
+        if (e.isDirectory()) find(`${dir}/${e.name}`);
+        else if (e.name === SIDECAR) sidecars.push(dir);
+      }
+    };
+    find('ccd');
+    for (const d of sidecars) expect(marked.has(d), `${d}/${SIDECAR} covers nothing marked as copied`).toBe(true);
+  });
+
+  it('every sidecar lies under a release PATHSPEC root, so the notice ships with the code', () => {
+    const roots = pathspec();
+    expect(roots, 'the PATHSPEC read nothing').toContain('ccd');
+    const rel = `ccd/history/${SIDECAR}`;
+    expect(roots.some((r) => rel === r || rel.startsWith(`${r}/`)), `${rel} is outside every PATHSPEC root`).toBe(true);
+  });
+
+  it('every PROVENANCE entry is complete, names an existing file, and that file carries the matching comment', () => {
+    const entries = provenance();
+    expect(entries.length, 'ccd/history/PROVENANCE lists no entry').toBeGreaterThan(0);
+    for (const e of entries) {
+      expect(e.commit, `${e.item}: commit`).toBe('e05d8d3');
+      expect(e.sha, `${e.item}: upstream-sha256`).toMatch(/^[0-9a-f]{64}$/);
+      expect(e.upstream, `${e.item}: upstream`).toMatch(/^[\w./-]+$/);
+      expect(e.changed.length, `${e.item}: changed`).toBeGreaterThan(0);
+      expect(existsSync(join(REPO, e.ours)), `${e.item}: ${e.ours} does not exist`).toBe(true);
+      expect(read(e.ours), `${e.ours} carries no rationale comment for ${e.upstream}`)
+        .toContain(`derived from lossless-claw ${e.upstream} @ ${e.commit}`);
+    }
+  });
+
+  it('every rationale comment under ccd/ has its PROVENANCE entry', () => {
+    const entries = provenance();
+    let seen = 0;
+    for (const f of ccdFiles()) {
+      for (const m of read(f).matchAll(DERIVED)) {
+        seen += 1;
+        expect(entries.some((e) => e.ours === f && e.upstream === m[1] && e.commit === m[2]),
+          `${f} copies ${m[1]} @ ${m[2]} and ccd/history/PROVENANCE does not say so`).toBe(true);
+      }
+    }
+    expect(seen, 'the comment scan matched nothing').toBeGreaterThan(0);
+  });
+
+  it('README\'s License section names the third-party code and where its notice is', () => {
+    const readme = read('README.md');
+    const lic = readme.slice(readme.indexOf('\n## License\n'));
+    expect(lic).toContain('**Third-party code.**');
+    for (const s of ['lossless-claw', 'MIT', 'e05d8d3', 'Copyright (c) 2026 Josh Lehman / Martian Engineering',
+      '`ccd/history/LICENSE.lossless-claw`', '`ccd/history/PROVENANCE`']) {
+      expect(lic, `README's License section does not name ${s}`).toContain(s);
+    }
+  });
+});
