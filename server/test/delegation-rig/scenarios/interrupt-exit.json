@@ -2,14 +2,15 @@
   "scenario": "interrupt-exit", "covers": ["Q6"],
   "steps": [
     {"waitReady": 60}, {"type": "dlg interrupt-exit"}, {"keys": ["Enter"]},
-    {"waitLabels": ["sub-hang"], "timeoutS": 120}, {"sleep": 5}, {"keys": ["Escape"]}, {"sleep": 5},
-    {"type": "/exit"}, {"keys": ["Enter"]}, {"sleep": 5}
+    {"waitLabels": ["sub-hang", "main-hang"], "timeoutS": 120}, {"sleep": 5}, {"keys": ["Escape"]}, {"sleep": 5},
+    {"type": "/exit"}, {"keys": ["Enter"]}, {"answerDialog": "Background work is running", "timeoutS": 15}, {"sleep": 15}
   ],
   "settleS": 3,
   "entries": [
     {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg interrupt-exit"},
      "tool_use": {"nameAny": ["Agent", "Task"], "input": {"description": "dlg interrupt", "prompt": "dlg-sub-int", "subagent_type": "general-purpose", "run_in_background": false, "isolation": "worktree"}}},
-    {"label": "sub-hang", "match": {"kind": "tools", "lastUser": "dlg-sub-int"}, "hang_ms": 600000, "text": "never"}
+    {"label": "sub-hang", "match": {"kind": "tools", "lastUser": "dlg-sub-int"}, "hang_ms": 600000, "text": "never"},
+    {"label": "main-hang", "match": {"kind": "main", "hasToolResult": true}, "hang_ms": 600000, "text": "never"}
   ],
   "default": {"text": "DLG-WAIT", "repeat": true}
 }

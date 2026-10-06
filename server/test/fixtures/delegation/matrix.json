@@ -996,6 +996,18 @@
       "transcript_path"
      ]
     },
+    "SessionEnd": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
     "SessionStart": {
      "count": 1,
      "withAgentId": 0,
@@ -1005,23 +1017,6 @@
       "model",
       "session_id",
       "source",
-      "transcript_path"
-     ]
-    },
-    "Stop": {
-     "count": 1,
-     "withAgentId": 0,
-     "keys": [
-      "background_tasks",
-      "cwd",
-      "effort",
-      "hook_event_name",
-      "last_assistant_message",
-      "permission_mode",
-      "prompt_id",
-      "session_crons",
-      "session_id",
-      "stop_hook_active",
       "transcript_path"
      ]
     },
@@ -1054,6 +1049,7 @@
    },
    "labels": [
     "main-call",
+    "main-hang",
     "sub-hang"
    ],
    "probesMissed": [],
@@ -1073,8 +1069,10 @@
    "otherClaudeBase": null,
    "worktreesLeft": 1,
    "sessionEnd": {
-    "count": 0,
-    "reasons": []
+    "count": 1,
+    "reasons": [
+     "prompt_input_exit"
+    ]
    },
    "sessionIds": 1,
    "sessionStarts": [
@@ -3023,6 +3021,18 @@
       "transcript_path"
      ]
     },
+    "SessionEnd": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
     "SessionStart": {
      "count": 1,
      "withAgentId": 0,
@@ -3032,23 +3042,6 @@
       "model",
       "session_id",
       "source",
-      "transcript_path"
-     ]
-    },
-    "Stop": {
-     "count": 1,
-     "withAgentId": 0,
-     "keys": [
-      "background_tasks",
-      "cwd",
-      "effort",
-      "hook_event_name",
-      "last_assistant_message",
-      "permission_mode",
-      "prompt_id",
-      "session_crons",
-      "session_id",
-      "stop_hook_active",
       "transcript_path"
      ]
     },
@@ -3081,6 +3074,7 @@
    },
    "labels": [
     "main-call",
+    "main-hang",
     "sub-hang"
    ],
    "probesMissed": [],
@@ -3100,8 +3094,10 @@
    "otherClaudeBase": null,
    "worktreesLeft": 1,
    "sessionEnd": {
-    "count": 0,
-    "reasons": []
+    "count": 1,
+    "reasons": [
+     "prompt_input_exit"
+    ]
    },
    "sessionIds": 1,
    "sessionStarts": [
@@ -5050,6 +5046,18 @@
       "transcript_path"
      ]
     },
+    "SessionEnd": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
     "SessionStart": {
      "count": 1,
      "withAgentId": 0,
@@ -5059,23 +5067,6 @@
       "model",
       "session_id",
       "source",
-      "transcript_path"
-     ]
-    },
-    "Stop": {
-     "count": 1,
-     "withAgentId": 0,
-     "keys": [
-      "background_tasks",
-      "cwd",
-      "effort",
-      "hook_event_name",
-      "last_assistant_message",
-      "permission_mode",
-      "prompt_id",
-      "session_crons",
-      "session_id",
-      "stop_hook_active",
       "transcript_path"
      ]
     },
@@ -5108,6 +5099,7 @@
    },
    "labels": [
     "main-call",
+    "main-hang",
     "sub-hang"
    ],
    "probesMissed": [],
@@ -5127,8 +5119,10 @@
    "otherClaudeBase": null,
    "worktreesLeft": 1,
    "sessionEnd": {
-    "count": 0,
-    "reasons": []
+    "count": 1,
+    "reasons": [
+     "prompt_input_exit"
+    ]
    },
    "sessionIds": 1,
    "sessionStarts": [
@@ -7077,6 +7071,18 @@
       "transcript_path"
      ]
     },
+    "SessionEnd": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
     "SessionStart": {
      "count": 1,
      "withAgentId": 0,
@@ -7086,23 +7092,6 @@
       "model",
       "session_id",
       "source",
-      "transcript_path"
-     ]
-    },
-    "Stop": {
-     "count": 1,
-     "withAgentId": 0,
-     "keys": [
-      "background_tasks",
-      "cwd",
-      "effort",
-      "hook_event_name",
-      "last_assistant_message",
-      "permission_mode",
-      "prompt_id",
-      "session_crons",
-      "session_id",
-      "stop_hook_active",
       "transcript_path"
      ]
     },
@@ -7135,6 +7124,7 @@
    },
    "labels": [
     "main-call",
+    "main-hang",
     "sub-hang"
    ],
    "probesMissed": [],
@@ -7154,8 +7144,10 @@
    "otherClaudeBase": null,
    "worktreesLeft": 1,
    "sessionEnd": {
-    "count": 0,
-    "reasons": []
+    "count": 1,
+    "reasons": [
+     "prompt_input_exit"
+    ]
    },
    "sessionIds": 1,
    "sessionStarts": [
@@ -9104,6 +9096,18 @@
       "transcript_path"
      ]
     },
+    "SessionEnd": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
     "SessionStart": {
      "count": 1,
      "withAgentId": 0,
@@ -9113,23 +9117,6 @@
       "model",
       "session_id",
       "source",
-      "transcript_path"
-     ]
-    },
-    "Stop": {
-     "count": 1,
-     "withAgentId": 0,
-     "keys": [
-      "background_tasks",
-      "cwd",
-      "effort",
-      "hook_event_name",
-      "last_assistant_message",
-      "permission_mode",
-      "prompt_id",
-      "session_crons",
-      "session_id",
-      "stop_hook_active",
       "transcript_path"
      ]
     },
@@ -9162,6 +9149,7 @@
    },
    "labels": [
     "main-call",
+    "main-hang",
     "sub-hang"
    ],
    "probesMissed": [],
@@ -9181,8 +9169,10 @@
    "otherClaudeBase": null,
    "worktreesLeft": 1,
    "sessionEnd": {
-    "count": 0,
-    "reasons": []
+    "count": 1,
+    "reasons": [
+     "prompt_input_exit"
+    ]
    },
    "sessionIds": 1,
    "sessionStarts": [
@@ -11131,6 +11121,18 @@
       "transcript_path"
      ]
     },
+    "SessionEnd": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
     "SessionStart": {
      "count": 1,
      "withAgentId": 0,
@@ -11140,23 +11142,6 @@
       "model",
       "session_id",
       "source",
-      "transcript_path"
-     ]
-    },
-    "Stop": {
-     "count": 1,
-     "withAgentId": 0,
-     "keys": [
-      "background_tasks",
-      "cwd",
-      "effort",
-      "hook_event_name",
-      "last_assistant_message",
-      "permission_mode",
-      "prompt_id",
-      "session_crons",
-      "session_id",
-      "stop_hook_active",
       "transcript_path"
      ]
     },
@@ -11189,6 +11174,7 @@
    },
    "labels": [
     "main-call",
+    "main-hang",
     "sub-hang"
    ],
    "probesMissed": [],
@@ -11208,8 +11194,10 @@
    "otherClaudeBase": null,
    "worktreesLeft": 1,
    "sessionEnd": {
-    "count": 0,
-    "reasons": []
+    "count": 1,
+    "reasons": [
+     "prompt_input_exit"
+    ]
    },
    "sessionIds": 1,
    "sessionStarts": [
@@ -13158,6 +13146,18 @@
       "transcript_path"
      ]
     },
+    "SessionEnd": {
+     "count": 1,
+     "withAgentId": 0,
+     "keys": [
+      "cwd",
+      "hook_event_name",
+      "prompt_id",
+      "reason",
+      "session_id",
+      "transcript_path"
+     ]
+    },
     "SessionStart": {
      "count": 1,
      "withAgentId": 0,
@@ -13167,23 +13167,6 @@
       "model",
       "session_id",
       "source",
-      "transcript_path"
-     ]
-    },
-    "Stop": {
-     "count": 1,
-     "withAgentId": 0,
-     "keys": [
-      "background_tasks",
-      "cwd",
-      "effort",
-      "hook_event_name",
-      "last_assistant_message",
-      "permission_mode",
-      "prompt_id",
-      "session_crons",
-      "session_id",
-      "stop_hook_active",
       "transcript_path"
      ]
     },
@@ -13216,6 +13199,7 @@
    },
    "labels": [
     "main-call",
+    "main-hang",
     "sub-hang"
    ],
    "probesMissed": [],
@@ -13235,8 +13219,10 @@
    "otherClaudeBase": null,
    "worktreesLeft": 1,
    "sessionEnd": {
-    "count": 0,
-    "reasons": []
+    "count": 1,
+    "reasons": [
+     "prompt_input_exit"
+    ]
    },
    "sessionIds": 1,
    "sessionStarts": [

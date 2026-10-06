@@ -4,18 +4,21 @@
  "scenario": "interrupt-exit",
  "labels": [
   "main-call",
+  "main-hang",
   "sub-hang"
  ],
- "notes": [],
+ "notes": [
+  "dialog answered: Background work is running"
+ ],
  "events": [
   {
    "seq": 1,
    "dtMs": 0,
    "event": "SessionStart",
-   "envSid": "d1063d76-0bf6-497a-b5aa-be7a898b4891",
+   "envSid": "36757430-3422-4895-8ebd-e187bd1348c5",
    "payload": {
-    "session_id": "d1063d76-0bf6-497a-b5aa-be7a898b4891",
-    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/d1063d76-0bf6-497a-b5aa-be7a898b4891.jsonl",
+    "session_id": "36757430-3422-4895-8ebd-e187bd1348c5",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/36757430-3422-4895-8ebd-e187bd1348c5.jsonl",
     "cwd": "/rig/repo",
     "hook_event_name": "SessionStart",
     "source": "startup",
@@ -24,14 +27,14 @@
   },
   {
    "seq": 2,
-   "dtMs": 273,
+   "dtMs": 259,
    "event": "UserPromptSubmit",
-   "envSid": "d1063d76-0bf6-497a-b5aa-be7a898b4891",
+   "envSid": "36757430-3422-4895-8ebd-e187bd1348c5",
    "payload": {
-    "session_id": "d1063d76-0bf6-497a-b5aa-be7a898b4891",
-    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/d1063d76-0bf6-497a-b5aa-be7a898b4891.jsonl",
+    "session_id": "36757430-3422-4895-8ebd-e187bd1348c5",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/36757430-3422-4895-8ebd-e187bd1348c5.jsonl",
     "cwd": "/rig/repo",
-    "prompt_id": "a65a0329-d455-4e2a-bcf0-4b02508a4de0",
+    "prompt_id": "161a2cb6-fd46-4ee3-937a-854aab585b07",
     "permission_mode": "default",
     "hook_event_name": "UserPromptSubmit",
     "prompt": "dlg interrupt-exit"
@@ -39,14 +42,14 @@
   },
   {
    "seq": 3,
-   "dtMs": 642,
+   "dtMs": 620,
    "event": "PreToolUse",
-   "envSid": "d1063d76-0bf6-497a-b5aa-be7a898b4891",
+   "envSid": "36757430-3422-4895-8ebd-e187bd1348c5",
    "payload": {
-    "session_id": "d1063d76-0bf6-497a-b5aa-be7a898b4891",
-    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/d1063d76-0bf6-497a-b5aa-be7a898b4891.jsonl",
+    "session_id": "36757430-3422-4895-8ebd-e187bd1348c5",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/36757430-3422-4895-8ebd-e187bd1348c5.jsonl",
     "cwd": "/rig/repo",
-    "prompt_id": "a65a0329-d455-4e2a-bcf0-4b02508a4de0",
+    "prompt_id": "161a2cb6-fd46-4ee3-937a-854aab585b07",
     "permission_mode": "default",
     "effort": {
      "level": "medium"
@@ -64,29 +67,29 @@
   },
   {
    "seq": 4,
-   "dtMs": 777,
+   "dtMs": 1053,
    "event": "SubagentStart",
-   "envSid": "d1063d76-0bf6-497a-b5aa-be7a898b4891",
+   "envSid": "36757430-3422-4895-8ebd-e187bd1348c5",
    "payload": {
-    "session_id": "d1063d76-0bf6-497a-b5aa-be7a898b4891",
-    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/d1063d76-0bf6-497a-b5aa-be7a898b4891.jsonl",
-    "cwd": "/rig/repo/.claude/worktrees/agent-a5ad73fa533cac9a5",
-    "prompt_id": "a65a0329-d455-4e2a-bcf0-4b02508a4de0",
-    "agent_id": "a5ad73fa533cac9a5",
+    "session_id": "36757430-3422-4895-8ebd-e187bd1348c5",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/36757430-3422-4895-8ebd-e187bd1348c5.jsonl",
+    "cwd": "/rig/repo/.claude/worktrees/agent-a73b18a64bd278ce8",
+    "prompt_id": "161a2cb6-fd46-4ee3-937a-854aab585b07",
+    "agent_id": "a73b18a64bd278ce8",
     "agent_type": "general-purpose",
     "hook_event_name": "SubagentStart"
    }
   },
   {
    "seq": 5,
-   "dtMs": 778,
+   "dtMs": 1056,
    "event": "PostToolUse",
-   "envSid": "d1063d76-0bf6-497a-b5aa-be7a898b4891",
+   "envSid": "36757430-3422-4895-8ebd-e187bd1348c5",
    "payload": {
-    "session_id": "d1063d76-0bf6-497a-b5aa-be7a898b4891",
-    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/d1063d76-0bf6-497a-b5aa-be7a898b4891.jsonl",
+    "session_id": "36757430-3422-4895-8ebd-e187bd1348c5",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/36757430-3422-4895-8ebd-e187bd1348c5.jsonl",
     "cwd": "/rig/repo",
-    "prompt_id": "a65a0329-d455-4e2a-bcf0-4b02508a4de0",
+    "prompt_id": "161a2cb6-fd46-4ee3-937a-854aab585b07",
     "permission_mode": "default",
     "effort": {
      "level": "medium"
@@ -102,50 +105,35 @@
     "tool_response": {
      "isAsync": true,
      "status": "async_launched",
-     "agentId": "a5ad73fa533cac9a5",
+     "agentId": "a73b18a64bd278ce8",
      "description": "dlg interrupt",
      "resolvedModel": "claude-opus-5-5[1m]",
      "prompt": "dlg-sub-int",
-     "outputFile": "/rig/tmp/claude-1000/-rig-repo/d1063d76-0bf6-497a-b5aa-be7a898b4891/tasks/a5ad73fa533cac9a5.output",
+     "outputFile": "/rig/tmp/claude-1000/-rig-repo/36757430-3422-4895-8ebd-e187bd1348c5/tasks/a73b18a64bd278ce8.output",
      "canReadOutputFile": true
     },
     "tool_use_id": "toolu_rig000001",
-    "duration_ms": 72
+    "duration_ms": 341
    }
   },
   {
    "seq": 6,
-   "dtMs": 1058,
-   "event": "Stop",
-   "envSid": "d1063d76-0bf6-497a-b5aa-be7a898b4891",
+   "dtMs": 11995,
+   "event": "SessionEnd",
+   "envSid": "36757430-3422-4895-8ebd-e187bd1348c5",
    "payload": {
-    "session_id": "d1063d76-0bf6-497a-b5aa-be7a898b4891",
-    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/d1063d76-0bf6-497a-b5aa-be7a898b4891.jsonl",
+    "session_id": "36757430-3422-4895-8ebd-e187bd1348c5",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/36757430-3422-4895-8ebd-e187bd1348c5.jsonl",
     "cwd": "/rig/repo",
-    "prompt_id": "a65a0329-d455-4e2a-bcf0-4b02508a4de0",
-    "permission_mode": "default",
-    "effort": {
-     "level": "medium"
-    },
-    "hook_event_name": "Stop",
-    "stop_hook_active": false,
-    "last_assistant_message": "DLG-WAIT",
-    "background_tasks": [
-     {
-      "id": "a5ad73fa533cac9a5",
-      "type": "subagent",
-      "status": "running",
-      "description": "dlg interrupt",
-      "agent_type": "general-purpose"
-     }
-    ],
-    "session_crons": []
+    "prompt_id": "3dbdd292-dd6f-405e-bfd1-9f0e85b52168",
+    "hook_event_name": "SessionEnd",
+    "reason": "prompt_input_exit"
    }
   }
  ],
  "disk": {
   "admin": {
-   "agent-a5ad73fa533cac9a5": {
+   "agent-a73b18a64bd278ce8": {
     "files": [
      "CLAUDE_BASE",
      "commondir",
@@ -156,27 +144,27 @@
      "logs",
      "ORIG_HEAD"
     ],
-    "gitdir": "/rig/repo/.claude/worktrees/agent-a5ad73fa533cac9a5/.git",
-    "head": "ref: refs/heads/worktree-agent-a5ad73fa533cac9a5",
+    "gitdir": "/rig/repo/.claude/worktrees/agent-a73b18a64bd278ce8/.git",
+    "head": "ref: refs/heads/worktree-agent-a73b18a64bd278ce8",
     "claudeBase": "e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd",
     "locked": true,
     "firstLogSha": "e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd"
    }
   },
   "worktreesLeft": [
-   "agent-a5ad73fa533cac9a5"
+   "agent-a73b18a64bd278ce8"
   ],
   "branches": [
    "main",
-   "worktree-agent-a5ad73fa533cac9a5"
+   "worktree-agent-a73b18a64bd278ce8"
   ],
-  "worktreeList": "worktree /rig/repo\nHEAD e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd\nbranch refs/heads/main\n\nworktree /rig/repo/.claude/worktrees/agent-a5ad73fa533cac9a5\nHEAD e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd\nbranch refs/heads/worktree-agent-a5ad73fa533cac9a5\nlocked claude agent agent-a5ad73fa533cac9a5 (pid 3702988 start 409088764)",
+  "worktreeList": "worktree /rig/repo\nHEAD e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd\nbranch refs/heads/main\n\nworktree /rig/repo/.claude/worktrees/agent-a73b18a64bd278ce8\nHEAD e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd\nbranch refs/heads/worktree-agent-a73b18a64bd278ce8\nlocked claude agent agent-a73b18a64bd278ce8 (pid 1080784 start 410288354)",
   "metas": {
-   "cfg/-rig-repo/d1063d76-0bf6-497a-b5aa-be7a898b4891/subagents/agent-a5ad73fa533cac9a5.meta.json": {
+   "cfg/-rig-repo/36757430-3422-4895-8ebd-e187bd1348c5/subagents/agent-a73b18a64bd278ce8.meta.json": {
     "agentType": "general-purpose",
-    "worktreePath": "/rig/repo/.claude/worktrees/agent-a5ad73fa533cac9a5",
+    "worktreePath": "/rig/repo/.claude/worktrees/agent-a73b18a64bd278ce8",
     "spawnedWithWorktree": true,
-    "worktreeBranch": "worktree-agent-a5ad73fa533cac9a5",
+    "worktreeBranch": "worktree-agent-a73b18a64bd278ce8",
     "description": "dlg interrupt",
     "toolUseId": "toolu_rig000001",
     "spawnDepth": 1,
