@@ -8418,6 +8418,28 @@ _acct_unprovision() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
     || _acct_refuse 1 hooks-remove "$inst --remove refused for $cfg. Its diagnostic is above; home cleanup may now be partial. $stands"
 }
 
+# THE LIVENESS CENSUS, as `remove` gates on it: the registry fields naming <id>
+# (ACCT_ROW_FIELDS, the list the rehome walks), then whether a pane runs on the
+# lane, refused when that cannot be told and when one does; <clause> ends both
+# refusals. `_acct_remove` takes it a SECOND time when its usage half waited
+# (D-4050): ccd's placements never take the placement lock this verb holds
+# (ccd/ccd's "A RE-READ, NOT A LOCK"), so a session can land on the lane during
+# the wait, and the census taken before it no longer says what the tier stop,
+# the rehome and the home sweep act on.
+_acct_remove_census() {   # <id> <clause>
+  local sid
+  local -a live_args=(--id "$1")
+  _acct_row_fields_on "$1"
+  _acct_live "$1"
+  [ "$ACCT_LIVE_MEASURED" = true ] \
+    || _acct_refuse 1 live-unmeasured "$ACCT_LIVE_WHY, and the registry has at least one row on $1, so this removal cannot prove the lane has no live pane. $2"
+  [ "${#ACCT_LIVE_IDS[@]}" -gt 0 ] || return 0
+  for sid in "${ACCT_LIVE_IDS[@]}"; do live_args+=(--live "$sid"); done
+  _acct_read_op "$2" refuse-live "${live_args[@]}"
+  printf '%s\n' "$ACCT_OUT"
+  exit 1
+}
+
 _acct_remove() {
   local id="" v="" flag="" item="" sid="" field="" f="" model="" stands="" modelfiles="" lane_dir="" tier="" unit="" port="" q=0 usage_note=""
   local keepcred=0 seen_id=0 seen_keep=0 was_placeable=0 rc=0 already=0
@@ -8460,17 +8482,7 @@ _acct_remove() {
   _acct_upstream_id "Nothing was written."
   _acct_remove_home_preflight "$id" "Nothing was written."
   _acct_marker_lock "Nothing was written."
-  _acct_row_fields_on "$id"
-  _acct_live "$id"
-  [ "$ACCT_LIVE_MEASURED" = true ] \
-    || _acct_refuse 1 live-unmeasured "$ACCT_LIVE_WHY, and the registry has at least one row on $id, so this removal cannot prove the lane has no live pane. Nothing was written."
-  if [ "${#ACCT_LIVE_IDS[@]}" -gt 0 ]; then
-    local -a live_args=(--id "$id")
-    for sid in "${ACCT_LIVE_IDS[@]}"; do live_args+=(--live "$sid"); done
-    _acct_read_op "Nothing was written." refuse-live "${live_args[@]}"
-    printf '%s\n' "$ACCT_OUT"
-    exit 1
-  fi
+  _acct_remove_census "$id" "Nothing was written."
 
   # Validate the shared auth deadline before the first mutation, but only when
   # this run will actually invoke logout for a login credential.
@@ -8493,6 +8505,16 @@ _acct_remove() {
       || _acct_refuse 1 last-home-able "account $id is the only globally placeable lane - every other home-able account is disabled or has no executable launcher, so removing it would leave no fresh-placement destination. Nothing was written."
   fi
 
+  # THE USAGE HALF, BEFORE ANY TIER STOP, REHOME OR HOME SWEEP (D-4050): its
+  # header says why it waits and why a refusal here is retryable. A run that
+  # waited takes the census again: ccd's placements never wait on our lock.
+  stands="The roster entry and all account artifacts still stand; no registry field was rehomed, no codex tier was stopped and no home was swept."
+  _acct_remove_usage "$id" "$stands"; [ -z "$ACCT_USAGE_REMOVED" ] || { removed+=("$ACCT_USAGE_REMOVED"); usage_note=" ccrc's usage timer for $id was disabled; 'ccrc install' enables it again for a lane that is still codex."; }; [ -z "$ACCT_USAGE_STEP" ] || operator_steps+=("$ACCT_USAGE_STEP"); [ -z "$ACCT_USAGE_WAIT_STEP" ] || operator_steps+=("$ACCT_USAGE_WAIT_STEP")
+  if [ -n "$ACCT_USAGE_WAITED" ]; then
+    stands="Nothing was written."; [ -z "$ACCT_USAGE_REMOVED" ] || stands="Nothing else was written.$usage_note"
+    _acct_remove_census "$id" "$stands"
+  fi
+
   # A CODEX LANE'S TIERS ARE STOPPED HERE: BEFORE THE FIRST REGISTRY MOVE,
   # BEFORE THE ROSTER DROP. Its FILES are reaped only AFTER the drop, in the
   # arm below `_acct_projection`. Each position is an argument (spec §9):
@@ -8503,9 +8525,12 @@ _acct_remove() {
   #     id no verb names any more, because `ccrc codex stop` and `_uninst_codex`
   #     both go by the roster. The only safe failure is one that leaves the
   #     roster standing and names the remedy;
-  #   * `_acct_live` above has proved that no pane runs on this lane, and
-  #     `_acct_marker_lock` holds the placement lock, so no ccd placement can
-  #     start the lane again between here and the drop;
+  #   * `_acct_live` above has proved that no pane runs on this lane, taken
+  #     again after the usage half's wait when it waited (D-4050). The
+  #     placement lock `_acct_marker_lock` holds serialises only `ccrc
+  #     account`'s writing verbs: ccd's placements do not take it (ccd/ccd's "A
+  #     RE-READ, NOT A LOCK"), so one landing between that census and the drop
+  #     is the window ccd's re-read accepts, seconds long, never the wait;
   #   * THE LANE LOCK (`_codex_lock`, rulings R11, R16, R19) is taken around the
   #     stop and its verdict, inside the placement lock (placement, then lane),
   #     and released through `_codex_unlock`, the only release, BEFORE the
@@ -8513,9 +8538,9 @@ _acct_remove() {
   #     flight finishes before this stop runs, and no start can run between the
   #     stop and the verdict that re-measures it. The drop is not under it: a
   #     hand-run `ccrc codex start` between the unlock and the drop can still
-  #     start the lane. No ccd placement can, because the placement lock is
-  #     held throughout, so that starter is the operator racing their own
-  #     removal;
+  #     start the lane, and so can a session ccd places there, since ccd takes
+  #     no placement lock: the same seconds-long window ccd's re-read accepts,
+  #     not one this verb can close;
   #   * the file reap removes `.lock` itself (rulings R10, R11). If the reap ran
   #     while the lane was still rostered, the next starter would open a NEW
   #     `.lock`, lock it at once, find the row, and start the lane between the
@@ -8558,7 +8583,7 @@ _acct_remove() {
       { [ -e "$f" ] || [ -L "$f" ]; } && lane_before+=("$f")
     done
     _codex_lock "$id" >&2 \
-      || _acct_refuse 1 codex-reap-failed "codex lane $id's lock could not be taken, so its tiers cannot be stopped without racing a start - the lane library's reason is on stderr. The roster, projection, launcher, registry rows and every account artifact still stand. Retry the removal once 'ccrc codex status $id' shows no start in progress."
+      || _acct_refuse 1 codex-reap-failed "codex lane $id's lock could not be taken, so its tiers cannot be stopped without racing a start - the lane library's reason is on stderr. The roster, projection, launcher, registry rows and every account artifact still stand.$usage_note Retry the removal once 'ccrc codex status $id' shows no start in progress."
     _codex_stop_lane "$id" >&2 || :
     for tier in $CODEX_TIERS; do
       q=0; _codex_tier_ours "$id" "$tier" >&2 || q=$?
@@ -8591,7 +8616,7 @@ _acct_remove() {
     # reap after the drop removes the very `.lock` this lock sits on.
     _codex_unlock
     [ "${#lane_left[@]}" -eq 0 ] \
-      || _acct_refuse 1 codex-reap-failed "codex lane $id's ${lane_left[*]} tier(s) still run as this lane's after the stop, could not be asked, or read as a live unit whose identity is unproven - the lane library's reason is on stderr. The roster, projection, launcher, registry rows and every other account artifact still stand; a tier that did stop starts again with the lane's next session. Stop the lane with 'ccrc codex stop $id', then retry the removal in a few seconds."
+      || _acct_refuse 1 codex-reap-failed "codex lane $id's ${lane_left[*]} tier(s) still run as this lane's after the stop, could not be asked, or read as a live unit whose identity is unproven - the lane library's reason is on stderr. The roster, projection, launcher, registry rows and every other account artifact still stand; a tier that did stop starts again with the lane's next session.$usage_note Stop the lane with 'ccrc codex stop $id', then retry the removal in a few seconds."
   fi
 
   for item in ${ACCT_ROW_FIELDS[@]+"${ACCT_ROW_FIELDS[@]}"}; do
@@ -8601,13 +8626,13 @@ _acct_remove() {
       stands="No roster entry, projection, launcher, credential, marker, limits file, hookstate file, or config directory was removed."
       [ "${#rehomed_fields[@]}" -eq 0 ] \
         || stands="Registry fields already rehomed to $ACCT_UPSTREAM_ID: ${rehomed_fields[*]}. No roster entry or artifact was removed; those field moves remain."
-      _acct_refuse 1 registry-changed "$_SVC_REG/$sid.$field named $id during the registry census and changed before it could be rehomed. Re-measure the session row, then retry. $stands"
+      _acct_refuse 1 registry-changed "$_SVC_REG/$sid.$field named $id during the registry census and changed before it could be rehomed. Re-measure the session row, then retry. $stands$usage_note"
     fi
     if [ "$rc" -ne 0 ]; then
       stands="No roster entry, projection, launcher, credential, marker, limits file, hookstate file, or config directory was removed."
       [ "${#rehomed_fields[@]}" -eq 0 ] \
         || stands="Registry fields already rehomed to $ACCT_UPSTREAM_ID: ${rehomed_fields[*]}. No roster entry or artifact was removed; those field moves remain."
-      _acct_refuse 1 rehome-failed "could not rehome $_SVC_REG/$sid.$field from $id to $ACCT_UPSTREAM_ID. $stands"
+      _acct_refuse 1 rehome-failed "could not rehome $_SVC_REG/$sid.$field from $id to $ACCT_UPSTREAM_ID. $stands$usage_note"
     fi
     rehomed_fields+=("$sid.$field")
     already=0
@@ -8615,7 +8640,7 @@ _acct_remove() {
     [ "$already" -eq 1 ] || rehomed+=("$sid")
   done
 
-  stands="Registry fields already rehomed to $ACCT_UPSTREAM_ID: ${rehomed_fields[*]:-none}. The roster entry, projection, launcher, credential, marker, limits file, hookstate file, and config directory still stand."
+  stands="Registry fields already rehomed to $ACCT_UPSTREAM_ID: ${rehomed_fields[*]:-none}. The roster entry, projection, launcher, credential, marker, limits file, hookstate file, and config directory still stand.$usage_note"
   _acct_unprovision "$id" "$stands"
   # THE ROWS BY NAME, not "registry fields were rehomed". This clause is the one
   # the operator reads when the drop refuses, and by this line two irreversible
@@ -8626,8 +8651,7 @@ _acct_remove() {
   # `_acct_write_op`'s clause covers the empty-body and noisy-helper paths, and
   # the `--stands` key covers node's own refusals, which `_acct_run_op` re-emits
   # verbatim and bash may not reword.
-  stands="Registry fields already rehomed to $ACCT_UPSTREAM_ID: ${rehomed_fields[*]:-none}. ccrc-managed settings, hooks, and skills were swept from $ACCT_REMOVE_CFG. The roster entry and all account artifacts still stand; the config directory and transcript history remain intentionally."
-  _acct_remove_usage "$id" "$stands"; [ -z "$ACCT_USAGE_REMOVED" ] || { removed+=("$ACCT_USAGE_REMOVED"); usage_note=" ccrc's usage timer for $id was disabled; 'ccrc install' enables it again for a lane that is still codex."; }; stands="$stands$usage_note"; [ -z "$ACCT_USAGE_STEP" ] || operator_steps+=("$ACCT_USAGE_STEP"); [ -z "$ACCT_USAGE_WAIT_STEP" ] || operator_steps+=("$ACCT_USAGE_WAIT_STEP")
+  stands="Registry fields already rehomed to $ACCT_UPSTREAM_ID: ${rehomed_fields[*]:-none}. ccrc-managed settings, hooks, and skills were swept from $ACCT_REMOVE_CFG. The roster entry and all account artifacts still stand; the config directory and transcript history remain intentionally.$usage_note"
   _acct_write_op "$stands" drop --file "$(_acct_roster_path)" --id "$id" --stands "$stands"
   stands="The roster no longer contains $id, but \$HOME/.ccrc/accounts.sh still projects the old roster and all account artifacts still stand. Registry fields and home cleanup are not rolled back; the config directory and transcript history remain intentionally.$usage_note"
   _acct_projection "$stands"
@@ -22515,18 +22539,22 @@ _uninst_codex_usage() {
 # still stand", which is false of a timer link that is gone, so whenever the link
 # measures not enabled at the bound the refusal adds ONE sentence, "Except ccrc's
 # usage timer ...", that says whose doing it is: this run's disable, or not this
-# run's (a retry finds the link its first run took). The caller's drop and
-# projection clauses get the same correction for a link this run took.
+# run's (a retry finds the link its first run took). Every later refusal of the
+# caller's carries the same correction for a link this run took (`usage_note`).
 #
-# THE CALLER RUNS IT BEFORE THE ROSTER DROP (D-4050).
-# Plan 3a ran it after the drop, where it could not refuse. A refusal there could
-# not be retried, because `_acct_lane` answers `unknown-id` for an id the roster no
-# longer names. Before the drop, every earlier step repeats as a no-op on a second
-# run: rehoming finds no field naming the id, the home sweep finds nothing, a
-# stopped tier stays stopped, and this function skips a disabled timer. So the
-# retry the refusal asks for is safe. It waits under the placement lock
-# `_acct_marker_lock` already holds, for at most the bound. One poll is a token
-# refresh plus one request the publisher bounds at 30 s (the unit's own comment).
+# THE CALLER RUNS IT BEFORE THE CODEX TIER STOP, THE REHOME AND THE HOME SWEEP
+# (D-4050), and so before the roster drop. Plan 3a ran it after the drop, where
+# it could not refuse. A refusal there could not be retried, because
+# `_acct_lane` answers `unknown-id` for an id the roster no longer names. Here
+# only the census and its read-only checks precede it, and on a second run this
+# function skips a disabled timer, so the retry the refusal asks for is safe.
+# The wait runs under the placement lock `_acct_marker_lock` already holds, for
+# at most the bound, and that lock holds off only `ccrc account`'s other writing
+# verbs: ccd's placements do NOT wait on it (ccd/ccd's "A RE-READ, NOT A LOCK"),
+# so a session can be placed on the lane while this waits. So a run that waited
+# sets ACCT_USAGE_WAITED, and the caller takes its liveness census again before
+# it stops a tier or moves anything. One poll is a token refresh plus one
+# request the publisher bounds at 30 s (the unit's own comment).
 #
 # ASKED ONLY WHERE A POLL CAN RUN: on Linux, with ccrc's template
 # `ccrc-codex-usage@.service` placed in the unit directory, whether or not the
@@ -22547,7 +22575,7 @@ _acct_usage_wait_secs() {
   printf '%s' "$s"
 }
 _acct_remove_usage() {   # <id> <what-still-stands>
-  ACCT_USAGE_REMOVED=''; ACCT_USAGE_STEP=''; ACCT_USAGE_WAIT_STEP=''
+  ACCT_USAGE_REMOVED=''; ACCT_USAGE_STEP=''; ACCT_USAGE_WAIT_STEP=''; ACCT_USAGE_WAITED=''
   local u s tpl state limit t0 said=0 timer still="${2:-}"
   u="$(_codex_usage_timer "$1")"; s="${u%.timer}.service"; tpl="$BOX_UNIT_DIR/${s%%@*}@.service"
   if _codex_usage_enabled "$u"; then
@@ -22573,7 +22601,7 @@ _acct_remove_usage() {   # <id> <what-still-stands>
     esac
     if [ "$said" -eq 0 ]; then
       printf '%s\n' "$PROG account remove: ccrc's usage poll $s is running ($state); waiting up to ${limit}s for it to finish before \$HOME/.cc-limits/$1.json is removed. ccrc never stops it: it may be writing the lane's OAuth token file." >&2
-      said=1
+      said=1; ACCT_USAGE_WAITED=1
     fi
     if [ $(( SECONDS - t0 )) -ge "$limit" ]; then
       if _codex_usage_enabled "$u"; then
