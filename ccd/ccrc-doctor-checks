@@ -6768,18 +6768,28 @@ _check_timeout() {
 # (`_route_type_model`) presses `s` on a picker row — "for this session only" —
 # and is not a writer of the key.
 #
-# WHAT IS READ: `env.ANTHROPIC_MODEL` when it is a non-empty string, else
-# `model` — Claude Code's precedence below `--model`. Classified through the
-# record's alias (`fable`, with or without `[1m]`, case-folded as ccd's
-# `_model_class_of` folds it) and, for a full id, the dash-token rule of
-# `familyClassOf` (`shared/models.mjs`) and ccd's `_model_family_class`: the
-# Fable token is the FIRST in that table, so "contains `-fable-`" is exactly
-# "familyClassOf answers fable". ONLY THE FABLE SPELLINGS ARE TYPED HERE:
+# WHAT IS READ — Claude Code's own precedence below `--model` (2.1.291's
+# `Sy()` then `WHe()`): `env.ANTHROPIC_MODEL`, else `model`, else
+# `env.ANTHROPIC_DEFAULT_MODEL`, each only when it is a non-empty string. The
+# value is normalised as Claude Code's resolver (`xt`) normalises it — trimmed,
+# case-folded, a trailing `[1m]` stripped in any case — and is Fable-class when
+# that alias is `fable`, when it is `best` (which resolves to the Fable default
+# on a lane entitled to Fable, and says so), when the raw value carries
+# `-fable-` (the dash-token rule of `familyClassOf` in `shared/models.mjs` and
+# ccd's `_model_family_class`: the Fable token is the FIRST in that table, so
+# "contains `-fable-`" is exactly "familyClassOf answers fable"; a full id is
+# not case-folded there, nor here), or when any other alias resolves through
+# the lane's own `env.ANTHROPIC_DEFAULT_<ALIAS>_MODEL` remap to such an id (the
+# key is BUILT from the alias, not listed). NOT read: the remap of the
+# account's implicit default when no rung names a model — which alias that is
+# depends on the account, so it is unmeasured here, not guessed. This follows
+# Claude Code, not ccd's `_model_class_of` (which classifies a `/model`
+# argument read from a transcript). ONLY THE FABLE SPELLINGS ARE TYPED HERE:
 # `single-definition.test.ts` reds a file whose code spells all four class
 # words, this file's code already spells `haiku` in the form that scan counts,
 # and this check adds `fable` — so the remedy below names Opus capitalised,
-# which the scan does not count, rather than leave the file one quoted class
-# word short of a false holder.
+# which the scan does not count. Claude Code case-folds the alias (`xt`'s
+# `toLowerCase()`), so `Opus` typed as written resolves exactly as `opus`.
 #
 # ONLY ANTHROPIC-BACKEND LANES (`CCRC_ANTHROPIC_BACKEND`): on a codex lane the
 # `fable` alias resolves through ANTHROPIC_DEFAULT_FABLE_MODEL to a GPT model,
@@ -6790,8 +6800,9 @@ _check_timeout() {
 # comment) — and ccrc does not own the `model` key, so there is no `--fix` arm
 # either. A settings.json that exists but cannot be read or does not parse is
 # its own WARN, UNMEASURED, one line per condition (a mode fix and a JSON fix
-# are different remedies) — never folded into the PASS. An ABSENT one sets no
-# default, which is a measured answer.
+# are different remedies) — never folded into the PASS; so is a reader (node)
+# that fails, and a lane the projection gives no config dir. An ABSENT one sets
+# no default, which is a measured answer.
 #
 # SKIP on a `server`-role box: it hosts no sessions (D-3111).
 _check_model-default() {
@@ -6801,7 +6812,7 @@ _check_model-default() {
     _dr_skip model-default "this box records CCRC_ROLE=server, so it hosts no sessions and no lane's default model on it is ccrc's concern"
     return 3
   fi
-  local sh="$HOME/.ccrc/accounts.sh" raw="" a d f out rc n=0 fab="" unread="" unparsed="" why
+  local sh="$HOME/.ccrc/accounts.sh" raw="" a d f out rc n=0 fab="" unread="" unparsed="" nodefail="" nodir="" why nl=$'\n'
   if [ ! -e "$sh" ]; then
     _dr_pass model-default "0 Anthropic lane(s): no roster projection at \$HOME/.ccrc/accounts.sh, so no lane's settings.json was measured (the wrappers check owns the roster's health)"
     return 0
@@ -6809,12 +6820,19 @@ _check_model-default() {
   # A projection that is there but unreadable, does not source, or predates
   # the backend array is UNMEASURED — `_check_routing`'s S1-R9 reasoning: the
   # vacuous PASS below is reserved for an array that IS declared and empty.
-  if ! [ -r "$sh" ] || ! ( . "$sh" 2>/dev/null && declare -p CCRC_ANTHROPIC_BACKEND >/dev/null 2>&1 ); then
-    _dr_warn model-default "could not read the roster projection at \$HOME/.ccrc/accounts.sh, or it predates CCRC_ANTHROPIC_BACKEND, so which lanes are Anthropic lanes is unmeasured" \
-      "re-run ccrc install to regenerate it, or check each Anthropic lane's settings.json by hand for a \`model\` (or env.ANTHROPIC_MODEL) of the Fable class"
-    return 2
-  fi
-  raw="$( . "$sh" 2>/dev/null && for a in "${CCRC_ANTHROPIC_BACKEND[@]}"; do printf '%s\t%s\n' "$a" "$(_ccrc_cfg_dir "$a")"; done )"
+  # It is sourced with its stdout discarded, so nothing it prints reaches
+  # doctor's output or is read as a lane, and `#sourced` is printed only once
+  # it has been sourced to the end with the array declared — so one that
+  # `exit`s part-way is unmeasured too, not a roster with no Anthropic lane.
+  [ -r "$sh" ] && raw="$( . "$sh" >/dev/null 2>&1 && declare -p CCRC_ANTHROPIC_BACKEND >/dev/null 2>&1 && printf '#sourced\n' \
+    && for a in "${CCRC_ANTHROPIC_BACKEND[@]}"; do printf '%s\t%s\n' "$a" "$(_ccrc_cfg_dir "$a")"; done )"
+  case "$raw" in
+    '#sourced') raw="" ;;
+    "#sourced$nl"*) raw="${raw#"#sourced$nl"}" ;;
+    *) _dr_warn model-default "could not read the roster projection at \$HOME/.ccrc/accounts.sh, or it predates CCRC_ANTHROPIC_BACKEND, so which lanes are Anthropic lanes is unmeasured" \
+         "re-run ccrc install to regenerate it, or check each Anthropic lane's settings.json by hand for a \`model\` (or env.ANTHROPIC_MODEL) of the Fable class"
+       return 2 ;;
+  esac
   if [ -z "$raw" ]; then
     _dr_pass model-default "0 Anthropic lane(s): the roster declares no Anthropic-backend account"
     return 0
@@ -6826,6 +6844,7 @@ _check_model-default() {
   fi
   while IFS=$'\t' read -r a d; do
     [ -n "$a" ] || continue
+    if [ -z "$d" ]; then nodir="${nodir:+$nodir, }$a"; continue; fi
     n=$((n + 1)); f="$d/settings.json"
     [ -e "$f" ] || [ -L "$f" ] || continue
     # Parsed by node, as `_check_node` parses package.json (a box with no jq
@@ -6842,32 +6861,55 @@ _check_model-default() {
       let j;
       try { j = JSON.parse(text); } catch (e) { process.exit(3); }
       if (!j || typeof j !== "object" || Array.isArray(j)) process.exit(4);
-      const env = j.env && typeof j.env === "object" ? j.env : {};
-      let key = "model", v = j.model;
-      if (typeof env.ANTHROPIC_MODEL === "string" && env.ANTHROPIC_MODEL !== "") { key = "env.ANTHROPIC_MODEL"; v = env.ANTHROPIC_MODEL; }
-      if (typeof v !== "string") process.exit(0);
-      if (v.replace(/\[1m\]$/, "").toLowerCase() !== "fable" && !v.includes("-fable-")) process.exit(0);
-      process.stdout.write(key + "=" + (/^[A-Za-z0-9._\[\]-]{1,80}$/.test(v) ? v : "<a Fable-class id>"));
+      const env = j.env && typeof j.env === "object" && !Array.isArray(j.env) ? j.env : {};
+      const set = (x) => typeof x === "string" && x !== "";
+      let key, v;
+      if (set(env.ANTHROPIC_MODEL)) { key = "env.ANTHROPIC_MODEL"; v = env.ANTHROPIC_MODEL; }
+      else if (set(j.model)) { key = "model"; v = j.model; }
+      else if (set(env.ANTHROPIC_DEFAULT_MODEL)) { key = "env.ANTHROPIC_DEFAULT_MODEL"; v = env.ANTHROPIC_DEFAULT_MODEL; }
+      else process.exit(0);
+      const show = (k, s) => k + "=" + (/^[A-Za-z0-9._\[\]-]{1,80}$/.test(s) ? s : "<a Fable-class id>");
+      const alias = v.trim().toLowerCase().replace(/(\[1m\])+$/, "").trim();
+      let said = null;
+      if (alias === "fable" || v.includes("-fable-")) said = show(key, v);
+      else if (alias === "best") said = show(key, v) + ", which resolves to Fable when the account is entitled to it";
+      else if (/^[a-z]+$/.test(alias)) {
+        const rk = "ANTHROPIC_DEFAULT_" + alias.toUpperCase() + "_MODEL";
+        if (set(env[rk]) && env[rk].includes("-fable-")) said = show(key, v) + ", via " + show("env." + rk, env[rk]);
+      }
+      if (said === null) process.exit(0);
+      process.stdout.write(said);
       process.exit(7);
     ' 2>/dev/null)"; rc=$?
     case "$rc" in
       0) ;;
       7) fab="${fab:+$fab, }$a ($out)" ;;
       5) why="${out#READERR:}"; [ -n "$why" ] && [ "$why" != "$out" ] || why=unreadable
+         if [ "$why" = ENOENT ] && [ -L "$f" ]; then why="ENOENT, a symlink whose target is missing"; fi
          unread="${unread:+$unread, }$a ($why)" ;;
       3|4) unparsed="${unparsed:+$unparsed, }$a" ;;
-      *) unread="${unread:+$unread, }$a (node exit $rc)" ;;
+      *) nodefail="${nodefail:+$nodefail, }$a (exit $rc)" ;;
     esac
   done <<<"$raw"
   rc=0
   if [ -n "$fab" ]; then
     _dr_warn model-default "an Anthropic lane's settings.json defaults the model to Fable: $fab — a session there with no routing record, or class \`default\`, starts on Fable (a dispatched worker whose run names no class included), although ccrc's routing never chooses Fable itself" \
-      "in that lane's settings.json set \`model\` to Opus or remove it (and any env.ANTHROPIC_MODEL naming Fable); a \`/model\` typed with a name saves the account default, while \`s\` in the /model picker is session-only"
+      "in that lane's settings.json set \`model\` to Opus or remove it (and any env.ANTHROPIC_MODEL, env.ANTHROPIC_DEFAULT_MODEL or env.ANTHROPIC_DEFAULT_<ALIAS>_MODEL naming Fable); a \`/model\` typed with a name saves the account default, while \`s\` in the /model picker is session-only"
     rc=2
   fi
   if [ -n "$unread" ]; then
-    _dr_warn model-default "unmeasured: settings.json exists but could not be read for: $unread, so whether it defaults the model to Fable is unknown" \
-      "fix its mode/ownership (chmod u+r <home>/settings.json), or check its \`model\` key and env.ANTHROPIC_MODEL by hand"
+    _dr_warn model-default "unmeasured: settings.json is present but could not be read for: $unread, so whether it defaults the model to Fable is unknown" \
+      "fix or remove it — a symlink whose target is missing, a directory in its place, or its mode/ownership (chmod u+r <home>/settings.json) — or check its \`model\` key and env.ANTHROPIC_MODEL by hand"
+    rc=2
+  fi
+  if [ -n "$nodefail" ]; then
+    _dr_warn model-default "unmeasured: the settings reader (node) failed for: $nodefail, so whether its settings.json defaults the model to Fable is unknown" \
+      "check that node runs (node -e 0) — see the 'node' check above — then re-run ccrc doctor"
+    rc=2
+  fi
+  if [ -n "$nodir" ]; then
+    _dr_warn model-default "unmeasured: the roster projection names no config dir for: $nodir, so whether its settings.json defaults the model to Fable is unknown" \
+      "re-run ccrc install to regenerate \$HOME/.ccrc/accounts.sh"
     rc=2
   fi
   if [ -n "$unparsed" ]; then

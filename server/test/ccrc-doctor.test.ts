@@ -1819,9 +1819,9 @@ describe('ccrc doctor: model-default', () => {
       const r = runCheck(home);
       expect(r.code).toBe(2);
       expect(verdicts(r.out)).toEqual([
-        'WARN model-default: unmeasured: settings.json exists but could not be read for: claude-a (EACCES), so whether it defaults the model to Fable is unknown',
+        'WARN model-default: unmeasured: settings.json is present but could not be read for: claude-a (EACCES), so whether it defaults the model to Fable is unknown',
       ]);
-      expect(r.out).toContain('remedy: fix its mode/ownership (chmod u+r <home>/settings.json)');
+      expect(r.out).toContain('or its mode/ownership (chmod u+r <home>/settings.json)');
     } finally {
       chmodSync(p, 0o600);
     }
@@ -1847,7 +1847,7 @@ describe('ccrc doctor: model-default', () => {
       + 'case "$*" in *CCRC_DOCTOR_SETTINGS*) exit 9 ;; esac\n'
       + `exec '${process.execPath}' "$@"`);
     const r = runCheck(home);
-    expect(verdicts(r.out)).toEqual([expect.stringMatching(/^WARN model-default: unmeasured: .*could not be read for: claude-a \(node exit 9\)/)]);
+    expect(verdicts(r.out)).toEqual([expect.stringMatching(/^WARN model-default: unmeasured: the settings reader \(node\) failed for: claude-a \(exit 9\)/)]);
   });
 
   it('a Fable lane and an unmeasured lane each get their own WARN, and no PASS', () => {
@@ -1866,6 +1866,149 @@ describe('ccrc doctor: model-default', () => {
     expect(verdicts(runCheck(home).out)).toEqual([expect.stringMatching(/^WARN model-default: could not read the roster projection .*predates CCRC_ANTHROPIC_BACKEND/)]);
     rmSync(join(home, '.ccrc', 'accounts.sh'));
     expect(verdicts(runCheck(home).out)).toEqual([expect.stringMatching(/^PASS model-default: 0 Anthropic lane\(s\): no roster projection/)]);
+  });
+
+  // ── review fixes (lane A) ──
+  /** One exit code per `model` value, through the one function — the
+   *  agreement case's loop. */
+  const exitsFor = (prefix: string, bodies: unknown[]): string[] => {
+    const home = mdHome(prefix);
+    const dir = join(home, 'corpus');
+    mkdirSync(dir);
+    bodies.forEach((b, i) => writeFileSync(join(dir, `${i}.json`), JSON.stringify(b)));
+    const r = spawnSync(BASH, ['-c', [
+      `set -uo pipefail; . ${shq(CHECKS_SRC)}; mkdir -p "$HOME/.claude-a"`,
+      `for i in $(seq 0 ${bodies.length - 1}); do cp "$HOME/corpus/$i.json" "$HOME/.claude-a/settings.json"; _check_model-default >/dev/null; echo "$?"; done`,
+    ].join('\n')], { encoding: 'utf8', env: { HOME: home, PATH: `${containedPath(home)}:/usr/bin:/bin`, LC_ALL: 'C' } });
+    const got = (r.stdout ?? '').trim().split('\n');
+    expect(got, r.stderr).toHaveLength(bodies.length);
+    return got;
+  };
+
+  it('normalises the value as Claude Code\'s own resolver does — trimmed, case-folded, `[1m]` stripped in any case — and counts `best`', () => {
+    // The expectations are Claude Code 2.1.291's `xt`: `e.trim()`, then
+    // `toLowerCase()`, then `[1m]` stripped by `/(\[1m\])+$/i` and re-trimmed,
+    // then the alias switch, whose `best` arm resolves to the Fable default on
+    // an entitled lane. A full id is NOT case-folded there (`-fable-` stays
+    // case-sensitive, as `familyClassOf` is).
+    const table: Array<[string, '2' | '0']> = [
+      ['best', '2'], ['Best', '2'], [' best ', '2'], ['best[1m]', '2'],
+      [' fable', '2'], ['fable ', '2'], ['FABLE[1M]', '2'], ['fable[1M]', '2'], ['fable [1m]', '2'],
+      ['opus', '0'], [' opus ', '0'], ['OPUS[1M]', '0'], ['bestx', '0'], ['best-of', '0'], ['fable[2m]', '0'],
+      ['CLAUDE-FABLE-5-1', '0'],
+    ];
+    const got = exitsFor('ccrc-doctor-mdef-resolver-', table.map(([m]) => ({ model: m })));
+    table.forEach(([m, want], i) => expect(got[i], JSON.stringify(m)).toBe(want));
+    // `best` is Fable only where the account is entitled to it — said so.
+    const home = mdHome('ccrc-doctor-mdef-best-');
+    settings(home, '.claude-a', { model: 'best' });
+    expect(runCheck(home).out).toContain('Fable: claude-a (model=best, which resolves to Fable when the account is entitled to it) — ');
+  });
+
+  it('reads env.ANTHROPIC_DEFAULT_MODEL as the lowest rung — only when neither env.ANTHROPIC_MODEL nor `model` names a model', () => {
+    const got = exitsFor('ccrc-doctor-mdef-defrung-', [
+      { env: { ANTHROPIC_DEFAULT_MODEL: 'fable' } },
+      { model: '', env: { ANTHROPIC_DEFAULT_MODEL: 'claude-fable-5-1' } },
+      { model: 'opus', env: { ANTHROPIC_DEFAULT_MODEL: 'fable' } },
+      { env: { ANTHROPIC_MODEL: 'opus', ANTHROPIC_DEFAULT_MODEL: 'fable' } },
+      { env: { ANTHROPIC_DEFAULT_MODEL: 'opus' } },
+    ]);
+    expect(got).toEqual(['2', '2', '0', '0', '0']);
+    const home = mdHome('ccrc-doctor-mdef-defrung-line-');
+    settings(home, '.claude-a', { env: { ANTHROPIC_DEFAULT_MODEL: 'fable' } });
+    expect(runCheck(home).out).toContain('Fable: claude-a (env.ANTHROPIC_DEFAULT_MODEL=fable) — ');
+  });
+
+  it('follows an alias through the lane\'s own ANTHROPIC_DEFAULT_<ALIAS>_MODEL remap to a Fable id', () => {
+    const got = exitsFor('ccrc-doctor-mdef-remap-', [
+      { model: 'opus', env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-fable-5-1' } },
+      { model: 'Sonnet[1m]', env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-fable-5-1' } },
+      { env: { ANTHROPIC_DEFAULT_MODEL: 'opus', ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-fable-5-1' } },
+      { model: 'opus', env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5-5' } },
+      { model: 'opus', env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-fable-5-1' } },
+    ]);
+    expect(got).toEqual(['2', '2', '2', '0', '0']);
+    const home = mdHome('ccrc-doctor-mdef-remap-line-');
+    settings(home, '.claude-a', { model: 'opus', env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-fable-5-1' } });
+    expect(runCheck(home).out).toContain('Fable: claude-a (model=opus, via env.ANTHROPIC_DEFAULT_OPUS_MODEL=claude-fable-5-1) — ');
+  });
+
+  it('masks a Fable-class value that is not a plain id — no raw settings.json bytes reach the terminal', () => {
+    const home = mdHome('ccrc-doctor-mdef-mask-');
+    settings(home, '.claude', { model: 'claude-fable-5-1\u001b[31mRED' });
+    settings(home, '.claude-a', { model: 'us.anthropic.claude-fable-5-1-v1:0' });
+    const r = runCheck(home);
+    expect(r.out).toContain('Fable: claude (model=<a Fable-class id>), claude-a (model=<a Fable-class id>) — ');
+    expect(r.out).not.toContain('\u001b');
+  });
+
+  it('a dangling settings.json symlink and a directory in its place are "present but could not be read", with a remedy that fits them', () => {
+    const home = mdHome('ccrc-doctor-mdef-dangle-');
+    mkdirSync(join(home, '.claude-a'), { recursive: true });
+    symlinkSync(join(home, 'nowhere.json'), join(home, '.claude-a', 'settings.json'));
+    mkdirSync(join(home, '.claude', 'settings.json'), { recursive: true });
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toEqual([
+      'WARN model-default: unmeasured: settings.json is present but could not be read for: claude (EISDIR), claude-a (ENOENT, a symlink whose target is missing), so whether it defaults the model to Fable is unknown',
+    ]);
+    expect(r.out).toContain('remedy: fix or remove it — a symlink whose target is missing, a directory in its place, or its mode/ownership (chmod u+r <home>/settings.json)');
+    expect(r.out).not.toContain('exists but could not be read');
+  });
+
+  it('a reader (node) that fails is its own WARN, pointing at node — not an unreadable file with a chmod remedy', () => {
+    const home = mdHome('ccrc-doctor-mdef-nodefail-');
+    settings(home, '.claude-a', { model: 'opus' });
+    stub(home, 'node',
+      `if [ "$1" = "--version" ]; then echo 'v22.20.0'; exit 0; fi\n`
+      + 'case "$*" in *CCRC_DOCTOR_SETTINGS*) echo boom >&2; exit 1 ;; esac\n'
+      + `exec '${process.execPath}' "$@"`);
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toEqual([
+      'WARN model-default: unmeasured: the settings reader (node) failed for: claude-a (exit 1), so whether its settings.json defaults the model to Fable is unknown',
+    ]);
+    expect(r.out).toContain('remedy: check that node runs (node -e 0) — see the \'node\' check above — then re-run ccrc doctor');
+    expect(r.out).not.toContain('chmod');
+  });
+
+  it('a lane the projection gives no config dir is UNMEASURED, never counted as measured', () => {
+    const home = mdHome('ccrc-doctor-mdef-nodir-');
+    appendFileSync(join(home, '.ccrc', 'accounts.sh'), 'CCRC_ANTHROPIC_BACKEND+=(ghost)\n');
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toEqual([
+      'WARN model-default: unmeasured: the roster projection names no config dir for: ghost, so whether its settings.json defaults the model to Fable is unknown',
+    ]);
+  });
+
+  it('a projection that prints, or exits part-way, never leaks onto doctor output nor yields a lane or a PASS', () => {
+    const home = mdHome('ccrc-doctor-mdef-leak-');
+    const sh = join(home, '.ccrc', 'accounts.sh');
+    writeFileSync(sh, `echo SIDE-EFFECT-PRINTED\n${readFileSync(sh, 'utf8')}`);
+    const printed = runCheck(home);
+    expect(printed.out).not.toContain('SIDE-EFFECT-PRINTED');
+    expect(verdicts(printed.out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+    const cut = mdHome('ccrc-doctor-mdef-cut-');
+    const csh = join(cut, '.ccrc', 'accounts.sh');
+    writeFileSync(csh, `echo SIDE-EFFECT-PRINTED; exit 0\n${readFileSync(csh, 'utf8')}`);
+    const r = runCheck(cut);
+    expect(r.out).not.toContain('SIDE-EFFECT-PRINTED');
+    expect(verdicts(r.out)).toEqual([expect.stringMatching(/^WARN model-default: could not read the roster projection /)]);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('WARNs UNMEASURED — never the vacuous PASS — on a projection that exists but cannot be read', () => {
+    const home = mdHome('ccrc-doctor-mdef-unread-sh-');
+    settings(home, '.claude-a', { model: 'fable' });
+    const sh = join(home, '.ccrc', 'accounts.sh');
+    chmodSync(sh, 0o000);
+    try {
+      const r = runCheck(home);
+      expect(r.code).toBe(2);
+      expect(verdicts(r.out)).toEqual([expect.stringMatching(/^WARN model-default: could not read the roster projection at \$HOME\/\.ccrc\/accounts\.sh/)]);
+    } finally {
+      chmodSync(sh, 0o600);
+    }
   });
 });
 
