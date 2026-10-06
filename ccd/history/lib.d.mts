@@ -278,3 +278,4 @@ export function retentionLowered(homeRetentionDays: Readonly<Record<string, numb
 
 export interface SchemaVersionAdded { readonly heavy: boolean; readonly tables: Readonly<Record<string, readonly string[]>> }
 export const SCHEMA_ADDED: Readonly<Record<number, SchemaVersionAdded>>;
+export function passOutcome(word: string): { word: string; exit: number };

@@ -1728,3 +1728,34 @@ export const SCHEMA_ADDED = Object.freeze({
     }),
   }),
 });
+
+/** What a pass that does NOT run its tick prints and exits with (§5.3, §9.10;
+ *  rev 3.2 review, IV2): `history-sweep: <word>` and an exit code.
+ *
+ *  Exit 0 for a pass that ended as designed — the switch, the server role (no
+ *  store is ever made there), an unreachable volume, a journal that could not
+ *  be written while no DB was open — and for EVERY migration hold, so a timer
+ *  unit stays green through a pause it cannot help. `migration-refused` clears
+ *  once there is room; `migration-needs-op` waits on the operator's
+ *  `ccrc history doctor --migrate`, and doctor, not the unit's exit, carries
+ *  that FAIL and its remedy (§6.11). Exit 5 (EXIT.DB) for a store the writer
+ *  refuses until the OPERATOR repairs it: a binding refusal, a newer schema, a
+ *  store that will not take WAL. A held migration prints its own word (doctor
+ *  reads the same word from the store's meta). Any other word is a bug in the
+ *  caller, so it throws. */
+export function passOutcome(word) {
+  switch (word) {
+    case 'off':
+    case 'held':
+    case 'store-create-refused-role':
+    case 'store-unreachable':
+    case 'journal-unwritable':
+      return { word, exit: EXIT.OK };
+    case 'migration-refused':
+    case 'migration-needs-op':   // waits on the operator, but doctor carries it, not the exit
+      return { word, exit: EXIT.OK };
+    default:
+      if (PASS_WORDS.includes(word)) return { word, exit: EXIT.DB };
+      throw new Error(`passOutcome: '${word}' is not a pass word`);
+  }
+}

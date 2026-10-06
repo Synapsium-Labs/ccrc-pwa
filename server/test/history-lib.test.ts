@@ -1638,3 +1638,17 @@ describe('planExport and retentionLowered: what is due, what is overdue (spec 9.
     expect(libExport.EXPORT_REDUCERS.shortestHome(blob.referrers[0]!, lowered)).toBe(30);
   });
 });
+
+describe('passOutcome: the word and exit of a pass that does not tick', () => {
+  it('exit 0 for a pause and every migration hold, exit 5 for a store the operator must repair; a held migration prints its own word', async () => {
+    const { passOutcome, PASS_WORDS, EXIT } = await import('../../ccd/history/lib.mjs');
+    const quiet = ['off', 'held', 'store-create-refused-role', 'store-unreachable', 'journal-unwritable', 'migration-refused', 'migration-needs-op'];
+    for (const w of quiet) expect(passOutcome(w), w).toEqual({ word: w, exit: EXIT.OK });
+    // `migrated` (Task 24) is a pass that DID its work; it joins the quiet arm there.
+    const loud = PASS_WORDS.filter((w) => !quiet.includes(w) && w !== 'migrated');
+    expect(loud, 'the vocabulary lost its store refusals').toEqual(expect.arrayContaining(['store-unbound', 'schema-newer', 'store-not-wal']));
+    for (const w of loud) expect(passOutcome(w), w).toEqual({ word: w, exit: EXIT.DB });
+    for (const w of [...quiet, ...loud]) expect(PASS_WORDS).toContain(passOutcome(w).word);
+    expect(() => passOutcome('ok')).toThrow(/not a pass word/);
+  });
+});
