@@ -75,16 +75,21 @@ const sweepChildReclaimLines = (): string[] => {
 };
 
 describe('the sweep’s verdicts are read by no decision (spec §5.9)', () => {
+  const DECLARATION = 'private childReclaimJudged: ReadonlyMap<string, ChildReclaimSweepVerdict> | null = null';
+  const ACCESSOR = 'currentChildReclaimVerdicts(): ReadonlyMap<string, ChildReclaimSweepVerdict> | null';
+  const ACCESSOR_READ = 'return this.childReclaimJudged';
+  const REDUCTION =
+    'if (this.childReclaimJudged !== null) this.childReclaimJudged = childReclaimKeptVerdicts(this.childReclaimJudged)';
+  const ASSIGNMENT = 'this.childReclaimJudged = judged';
+  const PUBLISH = 'this.childReclaimJudged ?? new Map<string, ChildReclaimSweepVerdict>()';
+  const ROUTE = 'verdicts: watcher?.currentChildReclaimVerdicts() ?? null';
+  // EVERY code mention of either name, never a call alone: a method reference
+  // (`.call`, `.bind`, `.apply`, a bare value passed on), a bracketed read and a
+  // destructure carry no `(` after the name, and each is a read of the map.
+  const VERDICT_NAME = /\bchildReclaimJudged\b|\bcurrentChildReclaimVerdicts\b/;
+
   it('(a) the verdict map has its declaration, accessor, two reductions, one assignment, the attention write and the chip route', () => {
-    const DECLARATION = 'private childReclaimJudged: ReadonlyMap<string, ChildReclaimSweepVerdict> | null = null';
-    const ACCESSOR = 'currentChildReclaimVerdicts(): ReadonlyMap<string, ChildReclaimSweepVerdict> | null';
-    const ACCESSOR_READ = 'return this.childReclaimJudged';
-    const REDUCTION =
-      'if (this.childReclaimJudged !== null) this.childReclaimJudged = childReclaimKeptVerdicts(this.childReclaimJudged)';
-    const ASSIGNMENT = 'this.childReclaimJudged = judged';
-    const PUBLISH = 'this.childReclaimJudged ?? new Map<string, ChildReclaimSweepVerdict>()';
-    const ROUTE = 'verdicts: watcher?.currentChildReclaimVerdicts() ?? null';
-    expect(expressionHits(/\bchildReclaimJudged\b|\bcurrentChildReclaimVerdicts\(/,
+    expect(expressionHits(VERDICT_NAME,
       [DECLARATION, ACCESSOR, ACCESSOR_READ, REDUCTION, ASSIGNMENT, PUBLISH, ROUTE])).toEqual([
       // routes.ts `composeChildReclaim`: the chip's inputs, display only.
       `coord/routes.ts: ${ROUTE}`,
@@ -100,6 +105,27 @@ describe('the sweep’s verdicts are read by no decision (spec §5.9)', () => {
       // `childReclaimPublishAttention`, the attention list's one write.
       `watch.ts: ${PUBLISH}`,
     ].sort());
+  });
+
+  // The census's own eye, pinned without a scratch edit to server/src: each spelling of a read that has no `(`
+  // after the accessor's name is a hit no allowed expression holds, and the two allowed instances stay allowed.
+  it('(a) sees a method-reference read of the accessor, a bracketed one and a destructure — not only a call', () => {
+    const reads = [
+      'w.currentChildReclaimVerdicts.call(w)',
+      'w.currentChildReclaimVerdicts.bind(w)()',
+      'w.currentChildReclaimVerdicts.apply(w, [])',
+      'const read = w.currentChildReclaimVerdicts;',
+      'schedule(w.currentChildReclaimVerdicts)',
+      "w['currentChildReclaimVerdicts']()",
+      'const { currentChildReclaimVerdicts } = w;',
+      'w.currentChildReclaimVerdicts()',
+      'w.childReclaimJudged',
+    ];
+    for (const code of reads) {
+      expect(coverage('probe', code, VERDICT_NAME, [ACCESSOR, ROUTE]), code).toEqual([`probe: NOT ALLOWED ${code}`]);
+    }
+    expect(coverage('probe', ROUTE, VERDICT_NAME, [ACCESSOR, ROUTE])).toEqual([`probe: ${ROUTE}`]);
+    expect(coverage('probe', ACCESSOR, VERDICT_NAME, [ACCESSOR, ROUTE])).toEqual([`probe: ${ACCESSOR}`]);
   });
 
   it('(b) across the whole of sweepChildReclaim, the local `judged` is declared, set per child and assigned — nothing else', () => {
