@@ -820,9 +820,10 @@ function realOrNull(p) {
   try { return realpathSync(p); } catch { return null; }
 }
 
-/** The `cwd` of a transcript's first uuid row: a string, null for a uuid row without one, undefined for no whole uuid
- *  row in the first FIRST_ROW_SCAN bytes. */
-function firstUuidRowCwdOf(fd) {
+/** A transcript's first whole uuid row, from its first FIRST_ROW_SCAN bytes: the parsed row, or undefined when no whole
+ *  uuid row lies there. The one definition: the location rule (firstUuidRowCwdOf) and the epoch-facts backfill both read
+ *  the row through it. */
+function firstUuidRowOf(fd) {
   const b = Buffer.alloc(FIRST_ROW_SCAN);
   const n = readSync(fd, b, 0, b.length, 0);
   const lines = b.subarray(0, n).toString('utf8').split('\n');
@@ -830,11 +831,16 @@ function firstUuidRowCwdOf(fd) {
   for (const line of lines) {
     let row;
     try { row = JSON.parse(line); } catch { continue; }
-    if (row !== null && typeof row === 'object' && typeof row.uuid === 'string' && row.uuid !== '') {
-      return typeof row.cwd === 'string' ? row.cwd : null;
-    }
+    if (row !== null && typeof row === 'object' && typeof row.uuid === 'string' && row.uuid !== '') return row;
   }
   return undefined;
+}
+
+/** The `cwd` of a transcript's first uuid row: a string, null for a uuid row without one, undefined for no whole uuid
+ *  row in the first FIRST_ROW_SCAN bytes. */
+function firstUuidRowCwdOf(fd) {
+  const r = firstUuidRowOf(fd);
+  return r === undefined ? undefined : (typeof r.cwd === 'string' ? r.cwd : null);
 }
 
 /** For the location rule (§6.1): the first uuid row's cwd of this uuid's transcript, across the rostered homes, read
@@ -2201,21 +2207,6 @@ export async function ingestTick(db, ctx, budget) {
     return { busy: true, bytes, newEntries, minNewTsMs, paused };
   }
   return { busy: false, bytes, newEntries, minNewTsMs, paused };
-}
-
-/** The first uuid row of an admitted file, from its first FIRST_ROW_SCAN bytes (Task 17's bound for
- *  the location rule's read); undefined when no whole uuid row lies there. */
-function firstUuidRowOf(fd) {
-  const b = Buffer.alloc(FIRST_ROW_SCAN);
-  const n = readSync(fd, b, 0, b.length, 0);
-  const lines = b.subarray(0, n).toString('utf8').split('\n');
-  lines.pop();   // the last piece has no newline yet, so it is never a whole row
-  for (const line of lines) {
-    let row;
-    try { row = JSON.parse(line); } catch { continue; }
-    if (row !== null && typeof row === 'object' && typeof row.uuid === 'string' && row.uuid !== '') return row;
-  }
-  return undefined;
 }
 
 /** Launch facts an epoch missed (§2, §6.2 `epochs`; slug history-epoch-cwd-real for `cwd_real`).
