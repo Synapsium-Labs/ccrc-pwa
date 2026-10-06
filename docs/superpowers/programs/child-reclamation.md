@@ -44,6 +44,19 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 01:36 — finding 3612 (Task 9b) ruled A: the no-session abandon sentence is scoped to the run.**
+  - **The finding.** A[S4-1] prescribed "It holds no workspace, so nothing is released or reclaimed." That is false
+    in one reachable case. Wave N+1's run is opened unbound, wave N's close holds its child for wave N+1, and the
+    operator then abandons that unbound run. The programme retires, the sweep answers `hold-retired`, and wave N's
+    child is released and then reclaimed.
+  - **The ruling (answer mail 3613).**
+    - The sentence becomes "Abandon run ${run.id}? It holds no workspace of its own, so it has none to release or
+      reclaim." The worker's "so none is released or reclaimed" still read as "no workspace is".
+    - AB4's constant changes with it, with a mutation row on "of its own".
+    - It is a departure, slug `no-session-copy-scoped-to-run`, numbered from the block at wave-done.
+    - B, copy naming the programme-retire effect, is not built. That effect is rule 1 working, the work is pinned
+      first, leaving it out states nothing false, and B would need the PWA to judge "last open run" with copy nobody
+      has reviewed. The wave-done mentions the omission. It is not carried.
 - **2026-10-06 00:48 — finding 3608 (Task 7) ruled D: a named residual, carried to wave 6.**
   - **The finding.** Task 7 is built as the plan prescribes and passed its per-task review. ccd purges the
     registry row a few milliseconds before it journals `done reclaim`, and the journal mirror runs on its own
