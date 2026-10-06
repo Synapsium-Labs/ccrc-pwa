@@ -182,7 +182,13 @@ describe('the sweep’s verdicts are read by no decision (spec §5.9)', () => {
   // decision could read through `currentCoord()` instead. Measured: server/src
   // reads it as a property nowhere — the frame literal names it only as a key —
   // so the allowed set is empty. A property read, a bracketed one, and a
-  // one-line destructure are each a read.
+  // one-line destructure are each a read. KNOWN MISSES, left so on purpose (the
+  // scan is per line, and a pattern that chased every destructure form would
+  // never stop growing): a destructure spread over several lines, a parameter
+  // destructure (`({ childReclaimAttention }: CoordStatus) => …`, whose `}` is
+  // followed by `:` and not `=`), and a loop head
+  // (`for (const { childReclaimAttention } of …)`, whose `}` is followed by
+  // `of`). Each reads the list without a `.childReclaimAttention` access.
   it('(e) the published coord frame’s attention list is read by nothing in server/src', () => {
     expect(codeHits(
       /\.childReclaimAttention\b|\[\s*['"`]childReclaimAttention['"`]\s*\]|\{[^{}\n]*\bchildReclaimAttention\b[^{}\n]*\}\s*=(?!=)/,

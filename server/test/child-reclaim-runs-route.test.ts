@@ -241,14 +241,22 @@ describe('GET /api/runs composes the reclaim chip (wave 5, spec §5.9)', () => {
   });
 
   // The route's cost claim (spec §5.9): the chip is composed from the watcher's in-memory copies and ONE mirror
-  // statement. A registry read or a ccd call added to the composer reads as nothing on the board, so the doors
-  // are spied, and the case first proves the composer ran (a chip on the board) before it asserts silence.
+  // statement. A registry read or a ccd call added to the composer, or to either watcher accessor it calls,
+  // reads as nothing on the board, so the doors are spied. The watcher's own copies are SEEDED here (what a 2 s
+  // tick would have left), not mocked, so the real `currentChildMarks` and `currentChildReclaimVerdicts` run
+  // under the spies; and the case first proves the composer ran (the chip is on the board) before it asserts
+  // silence. The seed assigns the two private fields, so a rename of either leaves no chip and reds the first
+  // assertion rather than going quiet.
   it('composes the chip with no registry read, no ccd call and no exec — memory and the mirror alone', async () => {
     const h = await probedHarness();
     const id = closedRun(h.coord, SID);
     journal(h.coord, [{ at: T_CREATE, act: 'create', outcome: 'done', id: SID }]);
-    markedAs(h.watcher, id);
-    judgedAs(h.watcher, { eligible: true, runId: id });
+    const memory = h.watcher as unknown as {
+      childMarks: ReadonlyMap<string, ChildMark> | null;
+      childReclaimJudged: ReadonlyMap<string, ChildReclaimSweepVerdict> | null;
+    };
+    memory.childMarks = new Map<string, ChildMark>([[SID, { kind: 'child', runId: id }]]);
+    memory.childReclaimJudged = new Map<string, ChildReclaimSweepVerdict>([[SID, { eligible: true, runId: id }]]);
     h.reset();
     const runs = await getRuns(h.app);
     expect(chipOf(runs, id)).toEqual({ word: 'pending', sentence: S.pending, at: null });

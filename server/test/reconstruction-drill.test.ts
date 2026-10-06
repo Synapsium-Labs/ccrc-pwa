@@ -331,11 +331,11 @@ describe('the reconstruction drill', () => {
     // failure line) cannot reach it. The registry-side answers still can, and
     // a rebuilt row is not always silent: where the watcher's last listing
     // carries a `.child` marker naming the rebuilt run's id and no open run
-    // names its session, the chip reads off the sweep's verdict (pending when
-    // unjudged or eligible, refused for a kept word, deferred for a doubt or
-    // held one, and paused while the fleet switch stands; spec §5.9). With no
-    // such marker it shows no chip. Either way it says only what the registry
-    // and the sweep show now, never a mirror answer for an instant nobody can place.
+    // names its session, the chip answers by the row rule, as for any marked
+    // row (spec §5.9: the sweep's verdict and its in-memory entry, and the
+    // fleet switch). With no such marker it shows no chip. Either way it says
+    // only what the registry and the sweep show now, never a mirror answer for
+    // an instant nobody can place.
     expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(25);
 
     const r = reconstruct(fx);
