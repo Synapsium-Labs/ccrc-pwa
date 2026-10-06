@@ -1756,7 +1756,7 @@ describe('the presence lease at the lane: the senior presence-held child is aske
   });
 });
 
-describe('the lane\'s two clocks: every decision clock is monotonic, the displayed one is the wall clock (spec §5.7)', () => {
+describe('the lane\'s two clocks: the throttle, the slot and the entry\'s instants are monotonic, the display stamp is the wall clock and the presence gap reads both (spec §5.7)', () => {
   /** The child's own birth sits this far before the lane first sees it, so a
    *  600 s backward wall step does not cross it. The generation fence compares
    *  ccd's `create` `at` with the WALL clock, by necessity: a step back past a
@@ -1852,7 +1852,7 @@ describe('the lane\'s two clocks: every decision clock is monotonic, the display
     expect(f.entryOf('demo-a')).toMatchObject({ firstPresenceDeferredAt: askedMono + 30_000, lastPresenceDeferredAt: askedMono });
   });
 
-  it('L12: the display clock stays WALL while the decision clocks are monotonic', async () => {
+  it('L12: the display clock stays WALL while the entry\'s own instants are monotonic', async () => {
     const f = fixture({ outcome: (req) => deferredAs('state-changed', req) });
     expect(f.mono(), 'the two clocks have distinct origins').not.toBe(f.now());
     finishedChild(f);

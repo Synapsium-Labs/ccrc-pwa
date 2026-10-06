@@ -646,16 +646,17 @@ export type ChildReclaimSweepOutcome =
  *  difference. The lease holder (`childReclaimAskOrder`) is asked on every
  *  pass it is due, so its gap is one pass spacing plus its answer's latency.
  *  Passes are at least 60 s apart, because the watcher's monotonic throttle
- *  refuses an earlier one, and were measured 60–80 s apart on 2026-10-05; the
- *  51.5 s figure seen that day was the spacing of `ws-reclaim` intents, not
- *  of passes. An audit answers in seconds, so the margin is about 60 s. A
- *  slow tick, a slow answer, a forward wall-clock step or a suspended box can
- *  push a gap past it. The episode then restarts, the licence is withheld and
- *  the holder forfeits the lease, which fails closed and costs that child its
- *  place in line. A child that does not hold the lease is asked only when the
- *  order reaches it, usually later than that, so its episode restarts until
- *  it holds the lease. The bound is this multiplier times the interval the
- *  caller hands in, never a constant of its own. */
+ *  refuses an earlier one, and measured pass gaps run 60–80 s; the
+ *  51.5–79.6 s measured on 2026-10-05 was the spacing of `ws-reclaim`
+ *  intents, not of passes. An audit answers in seconds, so the margin is
+ *  about 60 s. A slow tick, a slow answer, a forward wall-clock step or a
+ *  suspended box can push a gap past it. The episode then restarts, the
+ *  licence is withheld and the holder forfeits the lease, which fails closed
+ *  and costs that child its place in line. A child that does not hold the
+ *  lease is asked only when the order reaches it, usually later than that, so
+ *  its episode restarts until it holds the lease. The bound is this
+ *  multiplier times the interval the caller hands in, never a constant of its
+ *  own. */
 const CHILD_RECLAIM_PRESENCE_GAP_PASSES = 2.5;
 
 /** Is `now` within `CHILD_RECLAIM_PRESENCE_GAP_PASSES` pass intervals of the

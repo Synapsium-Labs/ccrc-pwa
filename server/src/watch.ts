@@ -3151,11 +3151,13 @@ export class FleetWatcher {
     const coord = this.deps.coord;
     if (!coord) return;
     // The lane's two clocks, read ONCE for the pass (spec §5.7). `mono` is
-    // every decision clock: the throttle, the in-flight stall clock and the
-    // entry's own instants. `now`, the wall clock, is only what is compared
-    // with another process's stamps (the generation fences, the attention
-    // list, the verdict's spawn-stall window) and the displayed
-    // `firstDeferredAt`, which L1 stamps from `ask.at.wallMs`.
+    // the throttle, the in-flight stall clock and the entry's own instants
+    // (`ChildReclaimSweepEntry` names the exceptions). `now`, the wall clock,
+    // is what is compared with another process's stamps (the generation
+    // fences, the attention list, the verdict's spawn-stall window), and what
+    // L1 stamps from `ask.at.wallMs`: the displayed `firstDeferredAt` and
+    // `lastPresenceWallAt`, the presence gap's second operand (the gap reads
+    // the larger of the monotonic and the wall-clock difference).
     const asked = this.childReclaimLaneNow();
     const now = asked.wallMs;
     const mono = asked.monoMs;
