@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=37c925e657feaf60f873caf3659d92899d846247e7adacd82c77e18e3a5860f1
+# ccrc:generated 1 sha256=9ca6ebd3d586f90ccc3394b6c912753d2ba863af8931198e5898bbbc798316f8
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29136,7 +29136,9 @@ _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token,
     _ws_expire_presence "$id" "$PROBE_VERDICT" "$tombworkdir" || return 1
   elif (( askcwd )); then
     # 3964. THE CWD QUESTION ALONE, never the pane or the unit: the interrupted attempt stopped both, and the tail
-    # kills what came back. A tree already gone is vacuously clear (`_ws_expire_cwd_users` answers nobody).
+    # kills what came back — but a REAL pane that came back runs a shell whose cwd is in the standing tree, so it
+    # is itself a cwd user and refuses `in-use` here, never killed (as does any survivor of the killed pane). A tree
+    # already gone is vacuously clear (`_ws_expire_cwd_users` answers nobody).
     _ws_expire_cwd_users "$id" "$tombworkdir" || return 1
   fi
   tombbranch=$(_ws_tomb_str "$tomb" branch) || tombbranch=""
