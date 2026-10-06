@@ -21,11 +21,13 @@ removed on 2026-09-10 was not.
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **deployed** v0.0.33 (`1ffdf947`, merged 2026-09-28 16:14 UTC, rolled out 16:16–16:21, fleet box first, rc 0; run 148 on `plain-summit`; reviews 170, 171, 172). Live: run 148's close reclaimed `plain-summit` in 10 s |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 | **done** — accepted by convergence review run 258 on `f8f0af9a`; merged as `b40f4145` 2026-10-04 22:10; release v0.0.79 |
-| 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | — | **planned** — run 260; pre-dispatch amendments and contract §11 (R38–R47) written 2026-10-05, docs PR before dispatch |
-| 6 | R36's orphan temp-root collector (positive witness); the dot-locks; F6; ccd journaling of the mirror-invisible failures; the gone-branch pin; the gone-directory row recovery | **AGENT-FIRST** | — | **to plan** (R38): its own run, block and pre-flight; dispatched after workspace-lifecycle wave 3 (run 245) merges |
+| 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | #290 | **in fix round 1** — run 260; review 285 found no safety defect (2 important, 29 minor); a scoped review follows; lands before wave 6 dispatches (R56) |
+| 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | — | **planned** — run 291, its 24-number block (listed singly in the brief below); plan `2026-10-06-child-reclamation-wave6-reclaim-repairs.md` + contract §12; dispatched after #290 merges |
+| 7 | the temp-root collector verb, inert (R57): audit + token, destructive verb, cap token, agent grant, entry guard; witness-matched, slug-free, unused, idle 24 h, twice observed | **AGENT-FIRST** | — | **to plan**: its own run, block and pre-flight |
+| 8 | the collector's server lane (R58), after workspace-lifecycle wave 3b merges and the fleet advertises wave 7's token; SAFETY and SECURITY lenses | server | — | **to plan** |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
-PR-bearing child refuses. **Wave 3 is the only wave that destroys anything.** Waves 3 and 4 do nothing on a
+PR-bearing child refuses. **Wave 3's `ws-reclaim` and wave 7's collector are the only verbs that destroy anything** (R38, R48). Waves 3 and 4 do nothing on a
 box whose ccd does not advertise their capability tokens; wave 2 does nothing to a workspace without a
 marker, which is every workspace until wave 1 is deployed.
 
@@ -44,6 +46,50 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 10:40 — wave 6's plan is written, attack-reviewed and corrected. Contract §12 is appended. The docs PR
+  is next.**
+  - **Drafting.**
+    - Seven Opus drafters (`wf_0103bba8-870`) wrote Tasks 1 to 12, against `77c11245` and #290.
+    - The coordinator ruled on their 64 open items (`wave6-preflight/drafts-rulings.md`).
+      - X1: dispatch only after #290 merges, so there is no mid-wave merge.
+      - The witness's staleness test includes `run`.
+      - The old-git positive fallback.
+      - A new `failed` token, `branch-unmeasured`, at step 5.
+      - A clips leaf the helper refuses is kept and recorded.
+    - Appliers turned the rulings into exact edits, and a frame writer wrote the header and Tasks 0, 13 and 14
+      (`wf_61563232-198`).
+    - 80 contract citations inside code blocks were mapped to spec sections, as R23 requires.
+  - **The attack** (`wf_40cb2b7a-1f5`): four Opus lenses, safety-removal and safety-placement at `xhigh`, plus security
+    and executability, with two Sonnet refuters per serious finding. The important findings that stood, and their
+    fixes (`attack-rulings.md`):
+    - **S2-2.** A symbolic registry branch read `present`, and the step-5 CAS would have deleted the branch it names,
+      possibly main. Wave 3's code already has this. Now such a branch reads `unmeasured`, and every branch delete is
+      `update-ref -d --no-deref`.
+    - **S2-1.** The breadcrumb arm could place a moved tree. It now places a row only while git keeps no record of the
+      tree.
+    - **S1-02.** The in-use probe's single snapshot missed a fork-then-exit chain (40 of 40 in scratch). The walk is
+      now a fixed point.
+    - **S1-03.** An exited thread-group leader is now read through its threads. A thread that is already exiting
+      counts as vanishing, measured.
+    - **S1-04.** Link and file leaves skip the probe and are unlinked as in wave 3.
+    - **S1-01.** A `stat` call outside the platform block is replaced by `ls -dn`.
+    - **S1-05 and S2-3.** Two scan and grep defects are fixed: one check's scope, and `grep -F`.
+    - **SEC-3.** The harness-strip scan is broadened.
+    - **The executability findings.**
+      - Task 0's h5 now counts 4.
+      - `ALL_TOKENS` keeps `branch-unmeasured`.
+      - Task 8 pays the R43 status list.
+      - Task 12 pays S6-R11.
+      - The bare `reclaim*` identifiers are renamed `childReclaim*`.
+    - Every minor finding is accepted as a text or test fix, and Task 13 states each residual in spec §7.
+    - 189 edits were applied with uniqueness checks. The coordinator fixed one more: an old-git shim pattern that
+      never matched `--exists`.
+  - **The plan** is at `docs/superpowers/plans/2026-10-06-child-reclamation-wave6-reclaim-repairs.md`, about 9200
+    lines.
+  - **Contract §12 (R48–R59)** is appended, with R49, R53 and R54 carrying the attack's fixes.
+  - **The waves table** now has rows 6, 7 and 8, and the next-wave brief is rewritten.
+  - **The docs PR** carries the plan, contract §12 and this ledger. It merges before dispatch, and dispatch waits for
+    #290.
 - **2026-10-06 09:15 — review run 285 (wave 5, `e79b1da7`): no safety defect; fix round 1 sent.**
   - **The review.** Report 3658, at `~/.cc-clips/ccrc-pwa-clear-harbor/review-285-e79b1da7.md`, archived.
     - The panel ran 149 agents: 36 confirmed, 10 refuted, 0 unexamined, and no lens unverified. The 36 merge to
@@ -1187,6 +1233,20 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 Findings every wave's reviewers get, because each is easy to lose between waves:
 
+- **Placed 2026-10-06 by wave 6's plan and contract §12.** The "Wave 6 inherits" items below are placed as follows:
+  - the gone-directory alternate-row recovery: Task 9 (R54);
+  - `vanish-reread-races-mirror`: Task 12 (R55);
+  - F6: Task 1 (R51);
+  - ccd journaling of the mirror-invisible failures: Tasks 10 and 11 (R52);
+  - the gone-branch pin: Task 8 (R53).
+  These go to wave 7 instead (R48, R57):
+  - R36's collector, with the dot-locks: `_ws_slug_free` is the no-entry test, and dot-locks are never unlinked.
+  - Wave 6 lays only the collector's groundwork: the witness (R50), the removal helper and the in-use probe (R49).
+  Wave 7 also inherits:
+  - a kept clips leaf, which nothing collects;
+  - the witness's whole-second `btime`;
+  - the recycled-slug quarantine proof;
+  - the witness writer's temp-file residue.
 - **macOS CI legs are treated as FLAKY** (operator, 2026-09-28: "ignore the macos runs for now, they are being
   fixed, treat as flaky for the moment"). A red, cancelled or hung macOS leg (`test-macos`, `probe-macos`) blocks no
   merge, no review and no wave-done, and nobody waits on one or re-runs one. Darwin evidence is still reported as
@@ -1438,31 +1498,36 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 
 ## Next-wave brief
 
-**Wave 5 is run 260, `planned`,** with its block 3926, 3927, 3928, 3929, 3930, 3931, 3932, 3933, 3934, 3935, 3936,
-3937, 3938, 3939, 3940, 3941, 3942, 3943, 3944 and 3945. No number is spent on the amendments themselves; the block is
-the worker's.
+**Wave 5 is run 260, in fix round 1** (mail 3660), at `working`. The fix round merges `main`, defines its eighteen
+assigned numbers (listed singly in the 05:41 and 09:15 entries) in the wave-5 plan, and sends one wave-done. A SCOPED review run follows: F1, F2, F4,
+F11, the merge and the round's diff. Only a shipped-behaviour defect sends it back again. Before #290 lands, the
+operator is told in one ledger line (R47); the PR body names `brisk-meadow` and `reclaim-pause`. Then merge,
+observe the deploy read-only, and close run 260 (wave 6's run 291 is already open, so the programme stays live).
 
-**Its plan is `docs/superpowers/plans/2026-09-22-child-reclamation-wave5-run-chip.md`, with its section "Pre-dispatch
-amendments (coordinator, 2026-10-05) — binding" appended, and contract §11 (R38–R47).** Both, and the coordinator's
-spec edits, reach `main` in one docs PR before dispatch, as #179 and #188 did. The brief names `homeRepoRoot`,
-`planRepoPath` and `planSha`, which is that PR's squash commit on `main`.
+**Wave 6 is run 291, `planned`,** with its block 4126, 4127, 4128, 4129, 4130, 4131, 4132, 4133, 4134, 4135, 4136,
+4137, 4138, 4139, 4140, 4141, 4142, 4143, 4144, 4145, 4146, 4147, 4148 and 4149.
+
+**Its plan is `docs/superpowers/plans/2026-10-06-child-reclamation-wave6-reclaim-repairs.md`, binding with contract
+§12 (R48–R59).** Both reach `main` in one docs PR before dispatch, and the brief names `homeRepoRoot`, `planRepoPath`
+and `planSha` (that PR's squash commit). The plan carries its drafting rulings and attack rulings already applied.
 
 Before dispatch:
-1. Merge the docs PR. Its prerelease rides the automatic updater like any other merge.
-2. Re-read `GET /api/claims?project=ccrc-pwa`. The overlap rules proposed in mails 3560 (workspace-lifecycle, run
-   245) and 3562 (delegation-broker, run 271) stand unless their coordinators replied otherwise.
-3. Record the route change in the Decisions log, with its reason (clause 13).
+1. #290 has merged (R56; X1: the worker branches from a `main` that already carries wave 5, and Task 0 proves it).
+2. Tell `ccrc-pwa-quiet-river` what reaches ws-expire through shared code (drafting ruling X2): F6, the contained
+   tail, the helper and the wait, the gone-branch reads, the gone-directory recovery, the expire-probe header
+   comment, `ccdWsHelpers.ts`'s in-place strip and the `ccd/ccrc` platform-block edit. Mail 3657's question about
+   WL 3b's edits to `_ws_reclaim_tail`/`_ws_reclaim_contained` is answered first.
+3. Re-read `GET /api/claims?project=ccrc-pwa` and apply R56's overlap rule (workspace-lifecycle; run 274).
 
 Then dispatch one fresh child:
-- **Route:** `{class:'opus', effort:'xhigh', subagent:'sonnet', workflow:'on', compact:'40'}`.
-- **Execution skill:** `superpowers:subagent-driven-development`.
-- **Task order:** Task 0b, then Task 0c, then Tasks 1 to 9 with their new tasks, then Task 10.
-- **Lenses:** the mandatory SAFETY lens.
+- **Route:** `{class:'opus', effort:'xhigh', subagent:'sonnet', workflow:'on', compact:'40'}` (the bulk row: about 9200
+  plan lines, ccd-heavy). Tasks 3 to 9 are SAFETY-critical and run on Opus `high` implementers and reviewers.
+- **Execution skill:** `superpowers:subagent-driven-development`, with `superpowers:test-driven-development`.
+- **Task order:** Task 0, Tasks 1 to 12 in order, Task 13 (docs), Task 14 (whole-branch verification and the PR).
+- **Lenses:** the plan's SAFETY (Opus `xhigh`) and SECURITY lenses, both mandatory, beside the held-out panel.
 
-Before the wave lands, the operator is told in one ledger line (R47). It widens what reaches the destructive path the
-moment the server converges, with no capability gate, while F6 waits for wave 6. The PR body names `brisk-meadow` and
-`reclaim-pause`.
-
-**Wave 6 (R38)** is a new run, opened before run 260 closes, with its own block at its own open. It gets its own plan
-and pre-flight, and is dispatched only after workspace-lifecycle wave 3 (run 245) merges. The path-identity follow-up
-programme comes after wave 6.
+**Wave 7** (the collector verb, R57) and **wave 8** (its lane, R58) are new runs, each opened before the previous
+wave's run closes, each with its own block, plan and pre-flight. Wave 7 inherits: a kept clips leaf with no collector;
+whole-second `btime`; the recycled-slug quarantine proof; the witness writer's temp-file residue. Wave 8 waits for
+workspace-lifecycle wave 3b and for the fleet's `ccd caps` to advertise wave 7's token. The path-identity follow-up
+programme comes after wave 8.

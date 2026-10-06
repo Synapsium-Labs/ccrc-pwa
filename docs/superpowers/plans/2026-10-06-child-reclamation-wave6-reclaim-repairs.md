@@ -189,8 +189,8 @@ These rulings are ALREADY APPLIED in the task text below. This section is the re
 | `server/src/coord/journalparse.ts` | 5 | `reviveMeas` carries the two keys |
 | `server/src/childReclaimSweep.ts` | 10, 11 | 10: the failure docstring. 11: `CHILD_RECLAIM_PRE_LOCK_TOKEN` gains `token` and `runId`, and `childReclaimFailureLine`'s docstring |
 | `server/src/coord/childReclaim.ts` | 10, 11, 12 | 10: `CHILD_RECLAIM_PROBE_UNMEASURED satisfies LcRefusalToken`. 11: two die patterns and two comments. 12: `childMarkLeftListing` |
-| `server/src/coord/mirrorplan.ts` | 12 | `reclaimDoneHighWater` (pure) |
-| `server/src/coord/mirror.ts` | 12 | `reclaimDoneAt()`, raised in `commit` after the ingest returns |
+| `server/src/coord/mirrorplan.ts` | 12 | `childReclaimDoneHighWater` (pure) |
+| `server/src/coord/mirror.ts` | 12 | `childReclaimDoneAt()`, raised in `commit` after the ingest returns |
 | `server/src/watch.ts` | 12 | `currentChildReclaimDoneAt()`, `emitCoord`'s field, and the clock reset on a child vanish (no await) |
 | `pwa/src/fleet/childReclaimWords.ts` | 12 | `childReclaimDoneAtOf`, the ONE reader |
 | `pwa/src/fleet/runWords.ts` | 12 | `childRunsSeen`, `childReclaimDoneRefreshDue` |
@@ -210,7 +210,7 @@ These rulings are ALREADY APPLIED in the task text below. This section is the re
 | `server/test/ccd-child-reclaim-gone-branch.test.ts` (new) | 8 | The three-way read at every arm, old git, the live shape |
 | `server/test/ccd-child-reclaim-recovery.test.ts` (new) | 9 | Both arms, the moved tree, the never-list |
 | `server/test/ccd-child-reclaim-unmeasured-journal.test.ts` (new) | 10 | `probe-unmeasured` journaled `failed` |
-| `server/test/ccd-child-reclaim-prelock-journal.test.ts` (new) | 11 | The id-tied dies journaled, and three dies not journaled |
+| `server/test/ccd-child-reclaim-prelock-journal.test.ts` (new) | 11 | The id-tied dies journaled, and the seven other pre-lock dies not journaled |
 | `server/test/child-reclaim-done-at.test.ts` (new) | 12 | High water, coord field, clock reset |
 | `pwa/test/child-reclaim-done-reread.test.tsx` (new) | 12 | One reader, once per change |
 | `server/test/ccdWsHelpers.ts` | 2 | `inheritedEnv()` at four sites (R56 overlap file) |
@@ -237,7 +237,7 @@ Task 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 1
 |---|---|---|---|
 | 0 Entry conditions | — | `sonnet`, medium | Proves #290 and its fix round are in the tree, the tools, and every anchor's starting state |
 | 1 F6 | 0 | `opus`, high | The environment Tasks 3, 8 and 9 rely on |
-| 2 Harness strip | 1 | `sonnet`, high | Its scan binds every test file Tasks 3–12 create |
+| 2 Harness strip | 1 | `sonnet`, high | Its scan binds the reclaim and expire suites and every new ccd suite and fixture Tasks 3–11 create |
 | 3 Contained tail | 1, 2 | `opus`, high | Pins the destructive-call count (6) that later tail edits keep |
 | 4 In-use probe | 2 | `opus`, high | A new function, never `_ws_expire_cwd_users` |
 | 5 Removal helper | 4 | `opus`, high | The first `shared/api.ts` insertion (meas keys), with README's tax |
@@ -360,7 +360,7 @@ grep -c 'show-ref --exists' ccd/ccd                                             
 grep -c '^_ws_reclaim_branch_state()' ccd/ccd                                                        # (h2) 0
 grep -cF 'rev-parse --verify --quiet "refs/heads/$branch^{commit}"' ccd/ccd                          # (h3) 4
 grep -c 'there is no branch tip to pin' ccd/ccd                                                      # (h4) 1
-grep -cF 'show-ref --verify --quiet "refs/heads/$branch"' ccd/ccd                                    # (h5) 1: the tail's step 5
+grep -cF 'show-ref --verify --quiet "refs/heads/$branch"' ccd/ccd                                    # (h5) 4: cmd_ws_rm (:8001), _ws_reap_tail (:14827), _ws_gc_prune_row (:15673), and the reclaim tail's step 5 (:28348), at 77c11245a. Task 8 edits only the last
 grep -c 'FAILS when the branch no longer resolves' server/test/ccd-child-reclaim-pin.test.ts         # (h6) 1
 grep -n '^_ws_reclaim_reset()' ccd/ccd                                                               # (h7) one line > 19109
 # Task 9
@@ -666,7 +666,7 @@ Apply each mutation alone, run `(cd server && ./node_modules/.bin/vitest run tes
 | 1 | Delete `GIT_CONFIG_PARAMETERS ` from the `unset -v` line | `inherited GIT_CONFIG_PARAMETERS`, `all three at once`, `a NESTED containment…` | `expected ''core.hookspath'='/from-parameters' …\|unset\|3\|core.hooksPath=/dev/null' to be 'unset\|unset\|3\|core.hooksPath=/dev/null'` |
 | 2 | Delete `GIT_CONFIG ` (the bare name, not its siblings) from the `unset -v` line | `inherited GIT_CONFIG`, `all three at once` | `expected 'unset\|<home>/alt.gitconfig\|3\|core.hooksPath=/dev/null' to be …` |
 | 3 | Delete `GIT_CONFIG_COUNT ` from the `unset -v` line | `inherited GIT_CONFIG_COUNT and its entries`, `a stale …`, `a caller’s LOCAL count…` | `expected 'unset\|unset\|5\|extensions.refStorage=reftable' to be …`; `expected 'live\|7' to be 'absent\|3'`; `expected '4' to be '3'` |
-| 4 | Move the whole `if [[ -z "${_WS_RECLAIM_CONTAINED:-}" ]]; … fi` block back to just below the `local -x GIT_CONFIG_COUNT=…` statement (its names unchanged) | every `inherited %s` row | `expected 'unset\|unset\|unset\|core.hooksPath=/dev/null' to be 'unset\|unset\|3\|core.hooksPath=/dev/null'`. The unset removed the count's own local, and with it all three pins |
+| 4 | Move the whole `if [[ -z "${_WS_RECLAIM_CONTAINED:-}" ]]; … fi` block back to just below the `local -x GIT_CONFIG_COUNT=…` statement (its names unchanged) | every case | Measured on bash 5.2.21: the `unset` makes the count's own `local` invisible, and an inherited count, where there is one, shows through. `inherited GIT_CONFIG_PARAMETERS` and `inherited GIT_CONFIG`: `expected 'unset\|unset\|unset\|core.hooksPath=/dev/null' to be 'unset\|unset\|3\|core.hooksPath=/dev/null'`. `inherited GIT_CONFIG_COUNT and its entries` and `all three at once`: `expected 'unset\|unset\|2\|extensions.refStorage=reftable' to be …`. `a stale …`: `expected 'live\|4' to be 'absent\|3'`. `a NESTED containment…`: `expected '3\|unset' to be '6\|unset'`. `a caller’s LOCAL count…`: `expected '1' to be '3'` (the caller's local shows through). In every case all three pins are lost |
 | 5 | Take the three config names out of the guarded `unset -v`, and add `local _ws_c; for _ws_c in 1 2 3 4; do unset -v GIT_CONFIG_PARAMETERS GIT_CONFIG GIT_CONFIG_COUNT; done` unguarded, directly above `local n=` | `a NESTED containment…` | `expected '3\|unset' to be '6\|unset'`, and then (with the first assertion commented out) `expected '.git/hooks' to be '/dev/null'` |
 | 6 | Change `for _ws_u in 1 2 3 4; do` to `for _ws_u in 1; do` | `a caller’s LOCAL count…` | `expected '5' to be '3'`: the caller's local went and the exported `2` showed through |
 
@@ -724,6 +724,8 @@ One exported helper returns `process.env` minus three things: git's `--local-env
 - It is NEVER put inside `ghContainedEnv`. That function's callers pass git variables on purpose: the containment CONTROLs in `ccd-child-reclaim-hardening.test.ts`, and Task 1's file.
 - `ccdWsHelpers.ts` is touched only under R56's overlap rule. Its edit is four in-place substitutions (`:547`, `:560`, `:561`, `:586`) plus one import, and nothing else; the in-place edit is accepted (ruling f6.OPEN3). The coordinator tells workspace-lifecycle's coordinator (`ccrc-pwa-quiet-river`) before dispatch, and the worker names this file's in-place strip in the wave-done (ruling X2).
 
+**What the strip does NOT do: a stated harness residual.** It makes the fixtures repository-clean, not HOME-clean. The 23 git spawns keep the runner's HOME, as they do today, so the runner's own global git config still applies to the repositories they create: an `init.templateDir` whose hooks are copied in, a global `core.hooksPath`, `commit.gpgsign`, a `url.<base>.insteadOf`. And because `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` are kept (they are not on git's list), a runner that exports either one outranks the fixture HOME's global config at every `h.sh` and `h.git` too. ccd's containment keeps those two for its own reason (they name this uid's own files, R51); in the harness the same two variables are a hole in "HOME is the single isolation boundary". R51 rules no HOME strip, so this task adds none. The worker names it in the wave-done as a harness residual.
+
 **Sites** (at `77c11245a`; the line numbers are hints, and the scan in Step 1 re-measures them, so a site count that differs is reported, never retyped. Wave 5 (#290), already in the worker's tree, touches none of these files):
 - The nine spreads, all spelled `...process.env, HOME:`:
   - `server/test/ccdWsHelpers.ts:547` (`gitEnv`) and `:586` (`sh`)
@@ -755,7 +757,19 @@ One exported helper returns `process.env` minus three things: git's `--local-env
   export function gitLocalEnvVars(): readonly string[];    // this box's git, asked once with PATH alone
   export function inheritedEnv(): NodeJS.ProcessEnv;       // a COPY of process.env minus FLOOR ∪ live list, GIT_NAMESPACE, GIT_CONFIG_KEY_*/VALUE_*
   ```
-  From this task on, every file matching the scan's `SCOPE` (`ccd-child-reclaim-*.test.ts`, `ccd-ws-expire-*.test.ts`, `childReclaim*.ts`, `wsExpireFixture.ts`, `ccdWsHelpers.ts`) takes its inherited environment through `inheritedEnv()`. That covers every new test file Tasks 3–12 create. The scan in `git-env-strip.test.ts` reds on any `...process.env`, any `entries(process.env)`, or any `execFileSync('git', [...])` without options in those files. The name `inheritedEnv()` is fixed (ruling X3, f6.OPEN2): every later task imports it under that name.
+  From this task on, every file matching the scan's `SCOPE` takes its inherited environment through `inheritedEnv()`. `SCOPE` is R51's reclaim and expire suites and fixtures (`ccd-child-reclaim-*.test.ts`, `ccd-ws-expire-*.test.ts`, `childReclaim*.ts`, `wsExpireFixture.ts`, `ccdWsHelpers.ts`), plus the four names Tasks 4, 5 and 7 create outside those patterns (`ccd-path-users.test.ts`, `pathUsersFixture.ts`, `ccd-leaf-remove.test.ts`, `ccd-child-tmproot-*.test.ts`). A case in the scan's describe pins that it names every new ccd suite and fixture Tasks 3–11 create. Task 12's two new tests spawn neither git nor ccd and lie outside it: `child-reclaim-done-at.test.ts`, and the pwa test, which is not in `server/test` at all.
+
+  **What the scan proves, and no more.** In a `SCOPE` file, outside comment lines:
+  - no line spreads `...process.env` or copies `entries(process.env)`;
+  - every call spelled `execFileSync`, `execFile`, `spawnSync` or `spawn` on `'git'`, or `execSync` on a string that starts `git`, names `env:` inside its own parentheses and does not name `env: process.env`. The call is read to its MATCHING paren, so an options object with no `env:` is seen, and so is an argv split over lines.
+
+  It does not see:
+  - git reached through a variable command name or through a shell (`h.sh`, `bash -c 'git …'`). Those run under the environment the harness's `sh` and `gitEnv` build, which is stripped;
+  - an `env:` that carries `process.env` under another name (`env: base` where `base` is `process.env`, or `Object.assign({}, process.env)`);
+  - a parenthesis inside a string literal that unbalances the matcher;
+  - any file outside `SCOPE`: `ccdPrHelpers.ts`, `lifecycleHelpers.ts` and the rest of `server/test`.
+
+  The name `inheritedEnv()` is fixed (ruling X3, f6.OPEN2): every later task imports it under that name.
 - Consumes: `makeCcdHarness(prefix)` (`sh`, `git`, `makeRepo`, `home`, `cleanup`).
 
 - [ ] **Step 1: Write the failing test**
@@ -844,18 +858,72 @@ describe('the harness drops an inherited GIT_DIR (spec §5.6’s pin)', () => {
 
 describe('every reclaim and expire suite takes its environment through the strip', () => {
   /** The suites and fixtures R51 names: the reclaim and expire ccd suites, their fixtures, and the base harness. */
-  const SCOPE = /^(ccd-child-reclaim-.*\.test\.ts|ccd-ws-expire-.*\.test\.ts|childReclaim[A-Za-z]*\.ts|wsExpireFixture\.ts|ccdWsHelpers\.ts)$/;
+  const SCOPE = /^(ccd-child-reclaim-.*\.test\.ts|ccd-child-tmproot-.*\.test\.ts|ccd-path-users\.test\.ts|ccd-leaf-remove\.test\.ts|ccd-ws-expire-.*\.test\.ts|childReclaim[A-Za-z]*\.ts|pathUsersFixture\.ts|wsExpireFixture\.ts|ccdWsHelpers\.ts)$/;
+  // ...and the ccd suites and the fixture that Tasks 4, 5 and 7 add under names
+  // those patterns miss: `ccd-path-users`, `pathUsersFixture`, `ccd-leaf-remove`
+  // and `ccd-child-tmproot-*`.
+  /** A spread or a whole-environment copy: one line shows it. */
+  const SPREAD = /\.\.\.process\.env\b|entries\(process\.env\)/;
+  /** A git spawn, in any of node's spellings. Each call is read to its MATCHING
+   *  paren, so an options object with no `env:` is seen, and so is an argv split
+   *  over lines; `env: process.env` is no strip either. */
+  const GIT_SPAWN = /\b(?:execFileSync|spawnSync|execFile|spawn)\(\s*'git'|\bexecSync\(\s*[`'"]git\b/g;
+  const hitsIn = (f: string, src: string): string[] => {
+    const hits: string[] = [];
+    src.split('\n').forEach((l, i) => {
+      if (/^\s*(\/\/|\*)/.test(l)) return;
+      if (SPREAD.test(l)) hits.push(`${f}:${i + 1}: ${l.trim()}`);
+    });
+    for (const m of src.matchAll(GIT_SPAWN)) {
+      const at = m.index!;
+      if (/^\s*(\/\/|\*)/.test(src.slice(src.lastIndexOf('\n', at) + 1, at))) continue;
+      let i = at + m[0].length, d = 1;
+      while (d && i < src.length) { const c = src[i++]; d += c === '(' ? 1 : c === ')' ? -1 : 0; }
+      const call = src.slice(at, i);
+      if (!/\benv\s*:/.test(call) || /\benv\s*:\s*process\.env\b/.test(call)) {
+        hits.push(`${f}:${src.slice(0, at).split('\n').length}: ${call.replace(/\s+/g, ' ').slice(0, 120)}`);
+      }
+    }
+    return hits;
+  };
+
+  it('SCOPE names every new ccd suite and fixture Tasks 3–11 create — before any of them exists', () => {
+    const later = [
+      'ccd-child-reclaim-tail-contained.test.ts', 'ccd-path-users.test.ts', 'pathUsersFixture.ts', 'ccd-leaf-remove.test.ts',
+      'ccd-child-reclaim-tmproot-wait.test.ts', 'ccd-child-tmproot-witness.test.ts', 'ccd-child-reclaim-gone-branch.test.ts',
+      'ccd-child-reclaim-recovery.test.ts', 'ccd-child-reclaim-unmeasured-journal.test.ts', 'ccd-child-reclaim-prelock-journal.test.ts',
+    ];
+    expect(later.filter((f) => !SCOPE.test(f)), 'a later task’s file the scan would never read').toEqual([]);
+  });
+
+  it('CONTROL: the matcher flags each spelling, over lines too, and passes a stripped spawn and a comment', () => {
+    const planted = [
+      "execFileSync('git', ['init', dir]);",                     // 1: no options
+      "execFileSync('git', ['status'], { encoding: 'utf8' });", // 2: options, no env
+      "execFileSync('git', [",                                  // 3: an argv over two lines
+      "  'init', dir]);",
+      "spawnSync('git', ['status'], { env: process.env });",    // 5: the whole environment, by name
+      'execSync(`git -C ${dir} status`);',                      // 6: a shell string
+      'const e = { ...process.env, HOME: h };',                 // 7: a spread
+      "execFileSync('git', ['init', dir], { env: inheritedEnv() });",
+      "execFileSync('git', ['init', dir], {\n  encoding: 'utf8',\n  env: { ...inheritedEnv(), HOME: h },\n});",
+      "  // execFileSync('git', ['init', dir]);",                // 13: a comment
+    ].join('\n');
+    expect(hitsIn('planted', planted)).toEqual([
+      'planted:7: const e = { ...process.env, HOME: h };',
+      "planted:1: execFileSync('git', ['init', dir])",
+      "planted:2: execFileSync('git', ['status'], { encoding: 'utf8' })",
+      "planted:3: execFileSync('git', [ 'init', dir])",
+      "planted:5: spawnSync('git', ['status'], { env: process.env })",
+      'planted:6: execSync(`git -C ${dir} status`)',
+    ]);
+  });
+
   it('no `...process.env` spread, no `entries(process.env)`, and no git spawn that names no env', () => {
     const files = fs.readdirSync(__dirname).filter((f) => SCOPE.test(f)).sort();
     expect(files, 'the CONTROL: the scope finds the suites')
       .toEqual(expect.arrayContaining(['ccdWsHelpers.ts', 'childReclaimFixture.ts', 'ccd-child-reclaim-hardening.test.ts', 'ccd-ws-expire-reach.test.ts']));
-    const hits: string[] = [];
-    for (const f of files) {
-      fs.readFileSync(path.join(__dirname, f), 'utf8').split('\n').forEach((l, i) => {
-        if (/^\s*(\/\/|\*)/.test(l)) return;
-        if (/\.\.\.process\.env\b|entries\(process\.env\)|execFileSync\('git', \[[^\]]*\]\)/.test(l)) hits.push(`${f}:${i + 1}: ${l.trim()}`);
-      });
-    }
+    const hits = files.flatMap((f) => hitsIn(f, fs.readFileSync(path.join(__dirname, f), 'utf8')));
     expect(hits).toEqual([]);
   });
 });
@@ -882,6 +950,12 @@ Create `server/test/gitEnvStrip.ts`:
 // variables to ccd on purpose (the containment CONTROLs), and only the
 // INHERITED environment is stripped. GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM
 // are not on git's list and are kept (R51: a stated residual).
+// The strip is repository-clean, not HOME-clean. A git spawn handed
+// `inheritedEnv()` keeps the runner's HOME, so the runner's own global git
+// config (init.templateDir, core.hooksPath, commit.gpgsign, url.insteadOf)
+// still reaches the repository it makes; and a kept GIT_CONFIG_GLOBAL or
+// GIT_CONFIG_SYSTEM outranks a fixture HOME's global config at every `h.sh`
+// and `h.git` too. A stated harness residual.
 import { execFileSync } from 'node:child_process';
 
 /** `git rev-parse --local-env-vars` on git 2.43.0, the fleet box's git: the
@@ -920,10 +994,10 @@ export function inheritedEnv(): NodeJS.ProcessEnv {
 
 Run: `(cd server && ./node_modules/.bin/vitest run test/git-env-strip.test.ts)`
 
-Expected: 3 pass and 2 fail.
-- `inheritedEnv` × 3: PASS.
+Expected: 5 pass and 2 fail.
+- `inheritedEnv` × 3, `SCOPE names every new ccd suite…` and the matcher's `CONTROL`: PASS.
 - `the harness drops an inherited GIT_DIR`: `what ccd inherits: expected '<home>/decoy/.git|<home>/decoy|'core.hookspath'='/from-parameters'' to be 'unset|unset|unset'`.
-- The scan: `expected [ …(33) ] to deeply equal []`. The 33 hits are the 9 spreads, the 1 `entries(process.env)` and the 23 env-less git spawns named under **Sites**. If the count differs, a merge since `77c11245a` touched these files (wave 5, #290, touches none of them, so it is not the cause): wire every hit it lists, and name the difference in the wave-done.
+- The scan: `expected [ …(33) ] to deeply equal []`. The 33 hits are the 9 spreads and the 1 `entries(process.env)` that the line check sees, and the 23 env-less git spawns that the paren-matched check sees, all named under **Sites**. This was measured at `77c11245a` with this file's `hitsIn` over the widened `SCOPE`: the four names Tasks 4, 5 and 7 add match no file yet, and no other git spawn in `SCOPE` lacks an `env:`. If the count differs, a merge since `77c11245a` touched these files (wave 5, #290, touches none of them, so it is not the cause): wire every hit it lists, and name the difference in the wave-done.
 
 - [ ] **Step 4: Wire the strip at every site**
 
@@ -935,7 +1009,7 @@ cd server/test
 sed -i 's/\.\.\.process\.env, HOME:/...inheritedEnv(), HOME:/' \
   ccdWsHelpers.ts childReclaimFixture.ts ccd-child-reclaim-hardening.test.ts ccd-child-reclaim-audit.test.ts \
   ccd-child-reclaim-pause.test.ts ccd-ws-expire-reach.test.ts
-# The 23 env-less git spawns: give each the stripped environment and nothing else (HOME stays the runner's, as today).
+# The 23 env-less git spawns: give each the stripped environment and nothing else. HOME stays the runner's, as today, and so does its global git config: a stated harness residual (see Why).
 sed -i -E "s/execFileSync\('git', (\[[^]]*\])\)/execFileSync('git', \1, { env: inheritedEnv() })/" \
   ccdWsHelpers.ts ccd-child-reclaim-ladder.test.ts ccd-child-reclaim-verb-reflogs.test.ts ccd-child-reclaim-pin.test.ts
 # cleanEnv in the entry suite.
@@ -976,7 +1050,7 @@ Check the edits:
 ```
 
 Run each line in the FOREGROUND with a timeout of at least 600000 ms. Expected: PASS everywhere.
-- `git-env-strip` passes 5 of 5.
+- `git-env-strip` passes 7 of 7.
 - The containment CONTROLs in `ccd-child-reclaim-hardening` stay green, because they pass their git variables through `sh`'s explicit `env`, which is laid over the strip.
 - `ccd-workspaces` is a heavy consumer of the base harness's `makeRepo`/`sh`, run once to show the substitution in `ccdWsHelpers.ts` changes nothing on a clean runner.
 
@@ -992,7 +1066,13 @@ Apply each alone, run `(cd server && ./node_modules/.bin/vitest run test/git-env
 | 4 | Add `if (k === 'GIT_CONFIG_GLOBAL') continue;` as the loop's first line | `drops git’s local list…` | `a variable outside the list was dropped`: the diff shows `GIT_CONFIG_GLOBAL: undefined` |
 | 5 | In `ccdWsHelpers.ts`'s `sh:`, change `...inheritedEnv(), HOME: home, ...env` back to `...process.env, HOME: home, ...env` | harness pin and scan | `what ccd inherits: expected '<home>/decoy/.git\|<home>/decoy\|'core.hookspath'='/from-parameters'' to be 'unset\|unset\|unset'`; the scan lists `ccdWsHelpers.ts:<n>: env: ghContainedEnv(home, { ...process.env, …` |
 | 6 | In `makeRepoAt`, drop `, { env: inheritedEnv() }` from `execFileSync('git', ['init', '-b', 'main', main], …)` | harness pin and scan | `h.makeRepo('demo')` throws `Command failed: git -C <home>/projects/demo add README.md` (the init went to the decoy, so `demo` holds no `.git`; the exact git wording may differ, but the case reds inside `makeRepo`); the scan lists that line |
-| 7 | In `ccd-child-reclaim-pin.test.ts`, drop `, { env: inheritedEnv() }` from the `--object-format=sha256` init | scan | `expected [ 'ccd-child-reclaim-pin.test.ts:<n>: execFileSync(\'git\', [\'init\', \'-q\', \'--object-format=sha256\', sha256Repo]);' ] to deeply equal []` |
+| 7 | In `ccd-child-reclaim-pin.test.ts`, drop `, { env: inheritedEnv() }` from the `--object-format=sha256` init | scan | `expected [ 'ccd-child-reclaim-pin.test.ts:<n>: execFileSync(\'git\', [\'init\', \'-q\', \'--object-format=sha256\', sha256Repo])' ] to deeply equal []` |
+| 8 | Add the line `execFileSync('git', ['status'], { encoding: 'utf8' });` as the last line of `childReclaimFixture.ts` (the scan reads text, so it need not compile) | scan | `expected [ 'childReclaimFixture.ts:<n>: execFileSync(\'git\', [\'status\'], { encoding: \'utf8\' })' ] to deeply equal []`: an options object with no `env:` |
+| 9 | In `ccd-child-reclaim-ladder.test.ts`, replace the first `execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin], { env: inheritedEnv() })` with the same argv over three lines and no options: `execFileSync('git', [⏎    'init', '--bare', '-q', '-b', 'main', origin,⏎  ])` (⏎ marks a line break) | scan | `expected [ 'ccd-child-reclaim-ladder.test.ts:<n>: execFileSync(\'git\', [ \'init\', \'--bare\', \'-q\', \'-b\', \'main\', origin, ])' ] to deeply equal []`: an argv split over lines |
+| 10 | In `ccd-child-reclaim-pin.test.ts`, replace the `--object-format=sha256` init's `{ env: inheritedEnv() }` with `{ env: process.env }` | scan | `expected [ 'ccd-child-reclaim-pin.test.ts:<n>: execFileSync(\'git\', [\'init\', \'-q\', \'--object-format=sha256\', sha256Repo], { env: process.env })' ] to deeply equal []` |
+| 11 | In `hitsIn`, delete ` \|\| /\benv\s*:\s*process\.env\b/.test(call)` | `CONTROL: the matcher flags…` | the received array lacks `planted:5: spawnSync('git', ['status'], { env: process.env })` |
+| 12 | In `hitsIn`, delete the line `if (/^\s*(\/\/\|\*)/.test(src.slice(src.lastIndexOf('\n', at) + 1, at))) continue;` | `CONTROL: the matcher flags…` | the received array gains `planted:13: execFileSync('git', ['init', dir])`: a comment was read as a call |
+| 13 | In `SCOPE`, delete `\|ccd-path-users\.test\.ts` | `SCOPE names every new ccd suite…` | `a later task’s file the scan would never read: expected [ 'ccd-path-users.test.ts' ] to deeply equal []` |
 
 - [ ] **Step 7: Commit**
 
@@ -1012,7 +1092,10 @@ no env. A runner started under a git hook therefore no longer hands its
 GIT_DIR to ccd or to the fixture repositories. It is not put inside
 ghContainedEnv, whose callers pass git variables on purpose. A pin sets
 GIT_DIR and shows the harness drops it, and a scan keeps every such site
-behind the strip.
+behind the strip: every spread, and every git spawn, read to its matching
+paren, that names no env or names process.env. The strip is
+repository-clean, not HOME-clean: the fixture git spawns keep the
+runner's HOME and so its global git config, a stated harness residual.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
@@ -1051,7 +1134,7 @@ The tail is in the RECLAIM region, and `ws-expire` calls the same `_ws_reclaim_t
 Every line is below `:19109`, and the comment insertion is too.
 
 **Files:**
-- Modify: `ccd/ccd`. Prefix `_ws_reclaim_contained ` to the six calls, and add one comment paragraph above `# (1) UNSUPERVISE AND KILL THE PANE`. Then re-stamp.
+- Modify: `ccd/ccd`. Prefix `_ws_reclaim_contained ` to the six calls, give the two branch CASes `--no-deref` (ruling S2-2, defence in depth), and add one comment paragraph above `# (1) UNSUPERVISE AND KILL THE PANE`. Then re-stamp.
 - Test: `server/test/ccd-child-reclaim-tail-contained.test.ts` (new, per R56)
 
 **Interfaces:**
@@ -1226,7 +1309,7 @@ If a hook-run case answers a non-zero `code` or a refusal, the arm's fixture has
 
 - [ ] **Step 3: Implement — contain the six calls**
 
-In `ccd/ccd`, `_ws_reclaim_tail`, make six one-line edits. Each line keeps its continuation and its `||` arm, and only the prefix is added:
+In `ccd/ccd`, `_ws_reclaim_tail`, make six one-line edits. Each line keeps its continuation and its `||` arm. Only the prefix is added, and on the two `update-ref -d` lines `--no-deref` follows `-d`:
 
 ```bash
         wtout=$(_ws_reclaim_contained git -C "$main" worktree remove --force "$cpath" 2>&1) \
@@ -1235,7 +1318,7 @@ In `ccd/ccd`, `_ws_reclaim_tail`, make six one-line edits. Each line keeps its c
         wtout=$(_ws_reclaim_contained git -C "$main" worktree remove "$cpath" 2>&1) \
 ```
 ```bash
-          _ws_reclaim_contained git -C "$main" update-ref -d "refs/heads/$cbr" "$chead" 2>/dev/null || {
+          _ws_reclaim_contained git -C "$main" update-ref -d --no-deref "refs/heads/$cbr" "$chead" 2>/dev/null || {
 ```
 ```bash
       wtout=$(_ws_reclaim_contained git -C "$main" worktree remove --force "$workdir" 2>&1) \
@@ -1244,10 +1327,12 @@ In `ccd/ccd`, `_ws_reclaim_tail`, make six one-line edits. Each line keeps its c
         wtout=$(_ws_reclaim_contained git -C "$main" worktree remove "$workdir" 2>&1) \
 ```
 ```bash
-      _ws_reclaim_contained git -C "$main" update-ref -d "refs/heads/$branch" "$tip" 2>/dev/null \
+      _ws_reclaim_contained git -C "$main" update-ref -d --no-deref "refs/heads/$branch" "$tip" 2>/dev/null \
 ```
 
-These replace, in order, the lines at `:28222`, `:28232`, `:28262`, `:28300`, `:28344` and `:28373`. Each original line is the same text without `_ws_reclaim_contained `.
+These replace, in order, the lines at `:28222`, `:28232`, `:28262`, `:28300`, `:28344` and `:28373`. Each original line is the same text without `_ws_reclaim_contained ` (and, on the two branch CASes, without ` --no-deref`).
+
+Why `--no-deref` (ruling S2-2, defence in depth). Measured on git 2.43.0: after `git symbolic-ref refs/heads/ws/f refs/heads/other`, a plain `git update-ref -d refs/heads/ws/f <other's sha>` answers rc 0, deletes `refs/heads/other`, and leaves `ws/f` standing as a dangling symbolic ref. `update-ref -d --no-deref` deletes `ws/f` itself, and its old-value check still compares the commit the symbolic ref resolves to: a wrong sha answers rc 1, `cannot lock ref … is at <sha> but expected <sha>`. So the CAS keeps its meaning and can delete only the ref it names. The flag is written after `-d`, never before it: git's option parser takes either order (measured, identical results), and `-d --no-deref` keeps `"$3 $4"` at `update-ref -d`. This task's shim, its scan, its `SEEN` rows and the Step 3 checks below therefore read the same call, and the count stays six. Task 8's symbolic-branch guard answers first at every real read of the child's branch, so this flag is a second layer. Task 8 pins it on its own (`never the branch a symbolic one names`, Task 8 Step 5 row 18).
 
 Directly above the line `  # (1) UNSUPERVISE AND KILL THE PANE — FIRST, UNCONDITIONALLY, on the fresh arm`, insert:
 
@@ -1258,12 +1343,16 @@ Directly above the line `  # (1) UNSUPERVISE AND KILL THE PANE — FIRST, UNCOND
   # Uncontained (measured, git 2.43), `update-ref -d` runs the repository's
   # reference-transaction hook, and a `worktree remove` with no force flag on a
   # tree that stands runs its core.fsmonitor program and its post-index-change
-  # hook. `ws-expire` takes this tail too.
+  # hook. `ws-expire` takes this tail too. The two branch deletes spell
+  # `--no-deref`: a symbolic ref is deleted itself, never followed to the
+  # branch it names (measured, git 2.43: a plain `update-ref -d` deletes the
+  # target and leaves the symbolic ref dangling).
 ```
 
 Check:
 - `grep -cE '_ws_reclaim_contained git -C "\$main" (worktree remove|update-ref -d)' ccd/ccd` prints `6`.
-- `grep -nE '[^_]git -C "\$main" (worktree remove|update-ref -d)' ccd/ccd | grep -v '_ws_reclaim_contained git' | grep -v '^\s*[0-9]*:\s*#'` prints nothing.
+- `awk '/^_ws_reclaim_tail\(\) \{/,/^cmd_ws_reclaim\(\) \{/' ccd/ccd | grep -vE '^\s*#' | grep -E 'git -C "\$main" (worktree remove|update-ref -d)' | grep -v '_ws_reclaim_contained git'` prints nothing. It reads the tail's slice alone, the same slice the scan in Step 1 reads (from `_ws_reclaim_tail() {` to `cmd_ws_reclaim() {`), with whole-line comments dropped.
+- Uncontained destructive git calls in OTHER verbs (`ws-rm`, `ws-reap`'s `_ws_reap_tail` and others: six of them at `77c11245a`, at about `:7881`, `:10534`, `:14662`, `:14788`, `:14828` and `:15645`) are outside this wave and are never edited here. A whole-file grep prints them; that is not a red.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -1279,11 +1368,13 @@ Apply each alone, run `(cd server && ./node_modules/.bin/vitest run test/ccd-chi
 |---|---|---|---|
 | 1 | Drop `_ws_reclaim_contained ` from the nested `worktree remove --force "$cpath"` | shim: `a fresh reclaim with a nested checkout` | `a destructive git call ran uncontained: expected [ 'worktree remove --force\tunset\tunset' ] to deeply equal []` |
 | 2 | Drop it from the nested `worktree remove "$cpath"` (no force) | shim: `a resume at children whose nested line is gone…` | `expected [ 'worktree remove\tunset\tunset' ] to deeply equal []` |
-| 3 | Drop it from `update-ref -d "refs/heads/$cbr" "$chead"` | hook-run: `a fresh reclaim with a nested checkout`, `a resume at children…`; shim: the same two | `a program the repository names ran inside the tail: expected [ 'reference-transaction', … ] to deeply equal []`; `expected [ 'update-ref -d\tunset\tunset' ] to deeply equal []` |
+| 3 | Drop it from `update-ref -d --no-deref "refs/heads/$cbr" "$chead"` | hook-run: `a fresh reclaim with a nested checkout`, `a resume at children…`; shim: the same two | `a program the repository names ran inside the tail: expected [ 'reference-transaction', … ] to deeply equal []`; `expected [ 'update-ref -d\tunset\tunset' ] to deeply equal []` |
 | 4 | Drop it from step (4)'s `worktree remove --force "$workdir"` | shim: `a fresh reclaim with a nested checkout` | `expected [ 'worktree remove --force\tunset\tunset' ] to deeply equal []` |
 | 5 | Drop it from step (5)'s `worktree remove "$workdir"` | shim: `a vanished tree…`, `a resume at children…` | `expected [ 'worktree remove\tunset\tunset' ] to deeply equal []` |
-| 6 | Drop it from step (5)'s `update-ref -d "refs/heads/$branch" "$tip"` | hook-run: all three arms and `ws-expire’s tail too`; shim: all three arms | `expected [ 'reference-transaction', … ] to deeply equal []` |
+| 6 | Drop it from step (5)'s `update-ref -d --no-deref "refs/heads/$branch" "$tip"` | hook-run: all three arms and `ws-expire’s tail too`; shim: all three arms | `expected [ 'reference-transaction', … ] to deeply equal []` |
 | 7 | Add `git -C "$main" branch -D "ws/never-$id" 2>/dev/null \|\| :` as the first line of step (6) | scan | `an uncontained destructive git call: expected [ 'git -C "$main" branch -D "ws/never-$id" 2>/dev/null \|\| :' ] to deeply equal []` |
+
+Dropping `--no-deref` from either CAS reds nothing in this file: no fixture here builds a symbolic branch. Task 8 pins the step-5 one (its Step 5, row 18), because only Task 8's read can be stubbed past its own symbolic-branch guard. The nested one is a disclosed survivor (Task 8, Step 5).
 
 - [ ] **Step 6: Re-stamp `ccd/ccd`, then run the stamp gate and the tail's suites**
 
@@ -1315,6 +1406,8 @@ the child, now run under _ws_reclaim_contained, as the pins before them
 do. Uncontained, update-ref -d ran the repository's reference-transaction
 hook, and a worktree remove with no force flag on a standing tree runs
 core.fsmonitor and post-index-change. ws-expire runs the same tail.
+The two branch deletes spell update-ref -d --no-deref, so a symbolic
+ref is deleted itself and never followed to the branch it names.
 A shim records the hooks path and fsmonitor that git would use for every
 destructive call, and a scan keeps the tail's six calls contained.
 
@@ -1354,6 +1447,7 @@ MSG
   - **cwd and fd are tested against both spellings.** The physical spelling is the parent resolved with `pwd -P` plus the leaf's name, so the leaf itself is not followed.
   - "Under" means the path followed by `/`.
   - **Not users:** ccd's own `$$` and `$BASHPID`, the scan's own process chain (python3 up to ccd), and any child of those.
+  - **The walk is a FIXED POINT, never one snapshot:** the table is listed again until a listing names no pid the walk has not read, bounded by `WS_PATH_USERS_SCAN_S` (running out of time is unmeasured, never nobody). A thread-group leader whose own entries read as vanished is asked through `task/<tid>`, and a thread entry unreadable for any reason but vanishing is unmeasured.
   - **Darwin** answers 2.
   - **Never edits or calls `_ws_expire_cwd_users`.**
 - Produces (test fixture, `server/test/pathUsersFixture.ts`):
@@ -1440,7 +1534,8 @@ Create `server/test/ccd-path-users.test.ts`:
 // killed pane's stragglers; a FAKE process table (the seam
 // `_ws_path_users_proc_root`) names the cases a live box cannot be made to
 // produce on demand: another uid, an unreadable entry, a pid that vanished, a
-// status that does not parse.
+// status that does not parse, a pid only a SECOND listing holds (a FIFO
+// sequences that race), and a thread-group leader that exited before its threads.
 // FIXTURE HOME ONLY: every path asked about is under the harness's HOME, and
 // the probe reads — it never writes or deletes.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -1608,6 +1703,49 @@ describe('a FAKE process table — the cases a live box cannot be made to produc
     expect(a.rc, a.why).toBe('0');
   }, 60_000);
 
+  it('a pid that only a SECOND listing holds is read — the walk is a fixed point, never one snapshot', () => {
+    // A FIFO at 4242's status SEQUENCES what a live box does by chance: the
+    // probe's own read of 4242, after its first listing, is what plants 4243 —
+    // the successor a process forked before it exited — and 4243 carries the leaf.
+    const fifo = '"$HOME/fp/4242/status"';
+    const status4242 = `printf 'Name:\\tx\\nPPid:\\t1\\nUid:\\t%s\\t%s\\t%s\\t%s\\n' "$u" "$u" "$u" "$u"`;
+    try {
+      const a = ask(leafOf(), `${FAKE} u=$(id -u); _fpp 4242 1 "$u"; rm -f ${fifo}; mkfifo ${fifo};`
+        + ` { exec 3>${fifo}; _fpp 4243 1 "$u"; ${envOf(4243, leafOf())} ${status4242} >&3; exec 3>&-; } >/dev/null 2>&1 &`);
+      expect(a.rc, a.why).toBe('1');
+      expect(a.pids).toBe('4243');
+    } finally {
+      // A probe that never read 4242 (the red phase) leaves the writer blocked
+      // opening the FIFO: an O_RDWR open is a reader, and releases it.
+      h.sh(`if [ -p ${fifo} ]; then : <> ${fifo}; fi`);
+    }
+  }, 60_000);
+
+  /** 4242's own entries read as VANISHED (its cwd is gone), and its thread 4243 lives under `task/`. */
+  const LEADER_GONE = `${FAKE} _fpp 4242 1 "$(id -u)"; rm -f "$HOME/fp/4242/cwd"; mkdir -p "$HOME/fp/4242/task/4243/fd";`
+    + ' ln -sfn / "$HOME/fp/4242/task/4243/cwd";';
+
+  it('a thread-group LEADER that exited before its threads is asked through task/<tid> — its live thread uses the leaf', () => {
+    const a = ask(leafOf(), `${LEADER_GONE} printf 'TMPDIR=%s\\0' "${leafOf()}" > "$HOME/fp/4242/task/4243/environ";`);
+    expect(a.rc, a.why).toBe('1');
+    expect(a.pids).toBe('4242');
+    // THE CONTROL: the same leader with no thread left IS gone — proof, so nobody.
+    const gone = ask(leafOf(), `${FAKE} _fpp 4242 1 "$(id -u)"; rm -f "$HOME/fp/4242/cwd";`);
+    expect(gone.rc, gone.why).toBe('0');
+  }, 60_000);
+
+  it.skipIf(ROOT_USER)('a LIVE thread’s entry this uid may not read is UNMEASURED; a thread already in exit (PF_EXITING) is vanishing', () => {
+    const locked = `${LEADER_GONE} : > "$HOME/fp/4242/task/4243/environ"; chmod 000 "$HOME/fp/4242/task/4243/environ";`;
+    const stat = (flags: number): string => `printf '4243 (x) R 1 4242 4242 0 -1 ${flags} 0 0\\n' > "$HOME/fp/4242/task/4243/stat";`;
+    const live = ask(leafOf(), `${locked} ${stat(0x400100)}`);
+    expect(live.rc, live.why).toBe('2');
+    expect(live.why).toContain('could not be measured');
+    // THE CONTROL: the same entry on a thread in exit (measured on a busy box: State R,
+    // PF_EXITING 0x4 set, its memory released, its environ EACCES) is vanishing, so nobody.
+    const exiting = ask(leafOf(), `${locked} ${stat(0x40044c)}`);
+    expect(exiting.rc, exiting.why).toBe('0');
+  }, 60_000);
+
   it('a status that does not parse is UNMEASURED — never "nobody"', () => {
     for (const bad of ['garbage', 'PPid:\\tx\\nUid:\\t1\\n', '']) {
       const a = ask(leafOf(), `${FAKE} _fpp 4242 1 "$(id -u)"; printf '${bad}' > "$HOME/fp/4242/status";`);
@@ -1698,12 +1836,37 @@ _ws_path_users() {   # path -> 0 when no process of this uid uses it; 1 when one
   # edits nor calls): unmeasured is never "nobody". A table that cannot be
   # listed, a listing without ccd's own pid, a `status` that does not parse, a
   # walk that outruns `WS_PATH_USERS_SCAN_S`, python3 missing: unmeasured. A
-  # process is skipped only on PROOF it vanished (ENOENT/ESRCH). THE LIMIT,
-  # STATED: an entry this uid may not read — EACCES, a NON-DUMPABLE process of
-  # this uid (ssh-agent, a setuid exec, anything that called
+  # process is skipped only on PROOF it vanished (ENOENT/ESRCH) — and proof
+  # that ONE process vanished is no proof about the processes it left:
+  # - THE WALK IS A FIXED POINT, NEVER ONE SNAPSHOT. A process that forks its
+  #   successor and exits between the listing and its own read leaves a child
+  #   no listing held (measured: such a chain read "nobody" 40 of 40 on a
+  #   single pass). So the table is listed again until a listing names no pid
+  #   this walk has not read, and the first user found ends it. A table that
+  #   never stops minting new pids inside `WS_PATH_USERS_SCAN_S` is
+  #   unmeasured, never "nobody"; a pid reused inside one walk is not read
+  #   twice (a stated residual).
+  # - A THREAD-GROUP LEADER THAT EXITED BEFORE ITS THREADS (`pthread_exit`
+  #   from main: State Z, Threads > 1) shows a vanished cwd while its other
+  #   threads still run with its environment, cwd and fds. A leader whose own
+  #   entries read as vanished is asked through `task/<tid>`, and a thread
+  #   entry unreadable for any reason but vanishing is unmeasured. A thread
+  #   already in exit (gone, or PF_EXITING in its `stat` flags) IS vanishing:
+  #   its memory is released, so its environ answers EACCES (measured: 10 of
+  #   30 walks of a busy box met one), and reading that as unmeasured would
+  #   keep temp roots for nothing.
+  # THE LIMIT, STATED: an entry this uid may not read — EACCES, a NON-DUMPABLE
+  # process of this uid (ssh-agent, a setuid exec, anything that called
   # prctl(PR_SET_DUMPABLE, 0)) — is NOT SEEN, as in the expiry probe, and
   # neither is any process of another uid. Refusing on them would keep every
-  # temp root for ever on a box that runs an ssh-agent.
+  # temp root for ever on a box that runs an ssh-agent. Two more are not seen.
+  # An environment is the one the process was exec'd with, so a TMPDIR it set
+  # after its exec is not read. And a cwd or fd reached through ANOTHER MOUNT
+  # of the same directory reads that mount's spelling, which neither compared
+  # spelling names: `$HOME/.cc-tmp` is a bind mount on the fleet box, and its
+  # device is mounted whole elsewhere. The TMPDIR arm compares ccd's own
+  # spelling, the one `_child_tmpdir` composes, so the pane's own processes
+  # are seen through it.
   # WHAT IS NOT A USER: ccd's own process (`$$`, `$BASHPID`), the scan's own
   # chain (the python3 and every process between it and ccd) and any child of
   # those. ccd's ANCESTORS are users like any other.
@@ -1754,9 +1917,9 @@ def status(pid):
     if ppid is None or uids is None:
         sys.exit(3)
     return ppid, uids
-def uses(pid):
-    # what of the path this process uses; None ONLY on proof it vanished mid-read
-    base = "%s/%s" % (root, pid)
+def uses(base):
+    # what of the path the entries under <base> show (a process, or one of
+    # its threads); None ONLY on proof they vanished mid-read
     found = []
     try:
         with open(base + "/environ", "rb") as fh:
@@ -1790,6 +1953,53 @@ def uses(pid):
         if under(t):
             found.append(("fd", t))
     return found
+def uses_of(pid):
+    # what of the path process <pid> uses; None ONLY on proof it is gone
+    found = uses("%s/%s" % (root, pid))
+    if found is not None:
+        return found
+    # A LEADER THAT EXITED is not a process that exited: its other threads
+    # keep the environment, cwd and fds its own entries no longer show
+    # (measured: State Z, Threads 2, cwd ENOENT, environ and fd EACCES).
+    try:
+        tids = [t for t in os.listdir("%s/%s/task" % (root, pid)) if t != pid]
+    except VANISHED:
+        return None
+    except PermissionError:
+        sys.exit(3)
+    found = []
+    for t in tids:
+        tb = "%s/%s/task/%s" % (root, pid, t)
+        # a thread entry unreadable for any reason but vanishing is UNMEASURED
+        try:
+            with open(tb + "/environ", "rb"):
+                pass
+            os.readlink(tb + "/cwd")
+            os.listdir(tb + "/fd")
+        except VANISHED:
+            continue
+        except PermissionError:
+            if exiting(tb):
+                continue
+            sys.exit(3)
+        found.extend(uses(tb) or [])
+    return found
+def exiting(base):
+    # True ONLY on proof the task is going: gone, or PF_EXITING (0x4) in the
+    # flags field of its stat. A thread in exit has released its memory, so
+    # its environ answers EACCES (measured: 10 of 30 walks of a busy box met
+    # one, State R, PF_EXITING set). Anything else is unmeasured.
+    try:
+        with open(base + "/stat", "rb") as fh:
+            raw = fh.read().decode("ascii", "replace")
+    except VANISHED:
+        return True
+    except PermissionError:
+        sys.exit(3)
+    f = raw[raw.rfind(")") + 2:].split()
+    if len(f) < 7 or not (f[6].isascii() and f[6].isdigit()):
+        sys.exit(3)
+    return (int(f[6]) & 4) != 0
 def scan():
     try:
         names = [n for n in os.listdir(root) if n.isascii() and n.isdigit()]
@@ -1805,18 +2015,33 @@ def scan():
         if st is None or st[0] in (me, sub, "0", "1"):
             break
         cur = st[0]
-    for pid in names:
-        if pid in own:
-            continue
-        st = status(pid)
-        if st is None:
-            continue
-        ppid, uids = st
-        if uid not in uids or ppid in own:
-            continue
-        for what, p in uses(pid) or []:
-            clean = p.replace("\t", "?").replace("\n", "?")
-            sys.stdout.buffer.write(os.fsencode("%s\t%s\t%s\n" % (pid, what, clean)))
+    # NOT ONE SNAPSHOT: a process made after the listing by one that then
+    # exited before it was read is in no listing yet (measured: a chain that
+    # forks its successor and exits read "nobody" 40 of 40 on one pass). So
+    # the table is listed again until a listing names no pid this walk has
+    # not read; the first user ends it. WS_PATH_USERS_SCAN_S bounds the whole
+    # walk (124: unmeasured, never nobody).
+    seen, todo, hit = set(), names, False
+    while todo and not hit:
+        for pid in todo:
+            seen.add(pid)
+            if pid in own:
+                continue
+            st = status(pid)
+            if st is None:
+                continue
+            ppid, uids = st
+            if uid not in uids or ppid in own:
+                continue
+            for what, p in uses_of(pid) or []:
+                hit = True
+                clean = p.replace("\t", "?").replace("\n", "?")
+                sys.stdout.buffer.write(os.fsencode("%s\t%s\t%s\n" % (pid, what, clean)))
+        if not hit:
+            try:
+                todo = [n for n in os.listdir(root) if n.isascii() and n.isdigit() and n not in seen]
+            except OSError:
+                sys.exit(3)
 try:
     scan()
 except Exception:
@@ -1856,6 +2081,8 @@ cd server && ./node_modules/.bin/vitest run test/ccd-ws-expire-ladder.test.ts
 
 Expected: `ccd-path-users` passes in full on Linux. `ccd-ws-expire-ladder` stays green and unchanged, which proves the expiry probe was not touched.
 
+THE REAL FORK-AND-EXIT CHAIN IS MEASURED IN SCRATCH, NOT PINNED IN THE SUITE. The FIFO case is the deterministic pin of the fixed point. A real chain (each process sleeps 5 ms, forks its successor with `TMPDIR=<leaf>`, and exits) cannot be made deterministic here: one pass misses it most of the time but not every time, and its fork rate is the load this suite is sensitive to. The pre-flight attack measured it on the fleet box's userland (git 2.43, python 3.12, kernel 6.8, about 630 processes): one pass answered "nobody" 40 of 40, and 55 of 60 in a second run; the fixed-point walk found the chain 30 of 30 and 59 of 60 (the sixtieth unmeasured, never nobody), averaging 641 ms against one pass's 116 ms, well inside `WS_PATH_USERS_SCAN_S`. The walk as this step writes it (fixed point, task walk and `exiting`) was re-measured in scratch while the plan was amended: 30 of 30 found against a 5 ms hopper, about 0.7 s per walk on the fleet box, and 40 of 40 walks of the live table answered without an unmeasured (before `exiting` was added, 10 of 30 met a thread in exit and answered unmeasured). Lens 0 re-runs it, with a hopping straggler in every seed.
+
 - [ ] **Step 5: Re-stamp, then the citation and ownership gates**
 
 ```bash
@@ -1876,7 +2103,7 @@ Expected:
 |---|---|---|---|
 | 1 | In `uses`, delete the whole `try: … environ … except PermissionError: pass` block | `cd server && ./node_modules/.bin/vitest run test/ccd-path-users.test.ts` | "a process whose TMPDIR IS the leaf": `expected '0' to be '1'`; the fake "stranger of this uid" case fails the same way |
 | 2 | In `under`, replace `p == b or p.startswith(b + "/")` with `p.startswith(b)` | same | the NEGATIVE CONTROL: `expected '1' to be '0'` |
-| 3 | In the bash, replace `phys="${preal%/}/$name"` with `phys="$p"` | same | "a root reached through a LINK": `expected '1' to be '1'` holds, but the pid list reds: `expected [ '<viaPhys>' ] to deeply equal [ '<inCwd>', '<viaPhys>' ]` |
+| 3 | In the bash, replace `phys="${preal%/}/$name"` with `phys="$p"` | same | "a root reached through a LINK": `expected '0' to be '1'` (with one spelling, neither the cwd process nor the `TMPDIR=<physical>` process is seen) |
 | 4 | Replace `if uid not in uids or ppid in own:` with `if ppid in own:` | same | "under ANOTHER uid": `expected '1' to be '0'` |
 | 5 | In `uses`' environ block, replace `except PermissionError:\n        pass` with `except PermissionError:\n        sys.exit(3)` | same | "an environment this uid may not read": `expected '2' to be '0'` |
 | 6 | In `status`, replace `except VANISHED:\n        return None` with `except VANISHED:\n        sys.exit(3)` | same | "a pid that vanished": `expected '2' to be '0'` |
@@ -1887,6 +2114,10 @@ Expected:
 | 11 | In the bash, delete the `if (( rc == 124 )); then … fi` block | same | "a walk that outruns its bound": `expected 'the processes of this box could not be measured (…)' to contain 'did not finish within'` |
 | 12 | In `uses`, delete the fd loop's `if under(t):\n            found.append(("fd", t))` | same | "holding a file … OPEN": `expected '0' to be '1'`; the fake fd case fails the same way |
 | 13 | In `uses`, delete `if under(c):\n            found.append(("cwd", c))` | same | "working directory is under the leaf": `expected '0' to be '1'` |
+| 14 | In `scan`, replace `while todo and not hit:` with `if todo:` (ONE listing, never a fixed point) | same | "a pid that only a SECOND listing holds": `expected '0' to be '1'` |
+| 15 | Replace `uses_of`'s whole body with `return uses("%s/%s" % (root, pid))` (no task walk) | same | "a thread-group LEADER that exited before its threads": `expected '0' to be '1'` |
+| 16 | In `uses_of`'s thread loop, replace `if exiting(tb):\n                continue\n            sys.exit(3)` with `continue` | same | "a LIVE thread’s entry this uid may not read": `expected '0' to be '2'` |
+| 17 | In `exiting`, replace `return (int(f[6]) & 4) != 0` with `return False` | same | the same case's CONTROL, the thread in exit: `expected '2' to be '0'` |
 
 Revert each mutation, re-stamp (`bash ccd/ccrc restamp ccd/ccd`), and confirm the suite is green again. Then:
 
@@ -1901,7 +2132,10 @@ string test, so a leaf that is already gone still counts, which is how a
 killed pane's straggler re-created one after its reclaim. The probe keeps
 the expiry probe's discipline: unmeasured is never nobody, a process is
 skipped only on proof it vanished, and an unreadable entry is the stated
-limit. Darwin answers unmeasured. _ws_expire_cwd_users is untouched.
+limit. The walk lists the table again until no unread pid remains, so a
+straggler that hands itself to a child and exits is still read, and a
+leader that exited before its threads is asked through them. Darwin
+answers unmeasured. _ws_expire_cwd_users is untouched.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
@@ -1946,11 +2180,11 @@ The helper answers three ways (removed or absent, refused, unmeasured). The tail
   - Test side: `makeChild`, `childReclaimVerb`, `evalOf`, `CHILD_ID`, `CHILD_BRANCH` (`server/test/childReclaimFixture.ts`); `makeArchived`, `expireToken`, `expireVerb`, `EXP_ID` (`server/test/wsExpireFixture.ts`); `eventsOf`, `measOf` (`server/test/lifecycleHelpers.ts`).
 - Produces:
   ```bash
-  _ws_leaf_uid <path>                          # -> the owning uid of the path itself (stat, no -L); a test's seam
+  _ws_leaf_uid <path>                          # -> the owning uid of the path itself (`ls -dn`: never follows the path's own link, and no `stat` outside the platform block); a test's seam
   _ws_leaf_remove <root> <id> [<expect-devino>] # rc 0 removed-or-absent (proven by _ws_reclaim_absent) | 1 refused | 2 unmeasured
   _WS_LEAF_WHY                                 # rc 1 and rc 2: why, in a sentence
   ```
-  - Done row (both flavours, and the three purge-failure rows): `meas.clipsKept` and `meas.tmpRootKept`. Each is `refused` or `unmeasured` (Task 6 adds `in-use` to `tmpRootKept`), and empty, so omitted, when the leaf went. The row's `detail` says why.
+  - Done row (both flavours, and the three purge-failure rows): `meas.clipsKept` and `meas.tmpRootKept`. Each is `refused` or `unmeasured` (Task 6 adds `in-use` to `tmpRootKept`), and empty, so omitted, when the leaf went. The row's `detail` says why. `unmeasured` does not mean untouched: an rc 2 that follows a removal which failed part-way (or was undone) has removed what it reached, so "kept" means NOT PROVEN GONE, and the tail keeps and records what stands.
   - `shared/api.ts`: `LifecycleMeas.tmpRootKept: string | null`, `LifecycleMeas.clipsKept: string | null`. `LIFECYCLE_MEAS_KEYS` goes 32 → 34, and these two keys go into `shared/api.ts` in this task's commit like any other L0 edit. Tasks 10 and 11, and any later task that adds a `meas.` key, continue the census from the 34 this task leaves, never from 32 (X3; probe-helper-tail.OPEN10).
   - For Task 7: step (6)'s temp-root removal is the ONE line `_ws_leaf_remove "$HOME/.cc-tmp" "$id"; lfrc=$?`. After Task 6 it sits inside the `0)` arm of the probe's `case`. Task 7 replaces exactly that call with `_ws_tmproot_remove "$id"`.
 
@@ -1985,7 +2219,7 @@ const ID = 'demo-quiet-basin';
 const ROOT_USER = process.getuid?.() === 0;
 const rootOf = (): string => path.join(h.home, 'root');
 const leafOf = (): string => path.join(rootOf(), ID);
-/** What `rm` is handed for a directory leaf: never across a mount. */
+/** What `rm` is handed for a directory leaf: never across a file-system boundary. */
 const RM_TREE = process.platform === 'darwin' ? '-rfx --' : '-rf --one-file-system --';
 
 interface Answer { rc: string; why: string }
@@ -2054,7 +2288,7 @@ describe('_ws_leaf_remove — removed, or absent: rc 0, PROVEN', () => {
     expect(fs.lstatSync(rootOf()).isSymbolicLink(), 'the root link stays').toBe(true);
   }, 60_000);
 
-  it('a directory leaf is handed to rm NEVER ACROSS A MOUNT, by its physical path', () => {
+  it('a directory leaf is handed to rm NEVER ACROSS A FILE-SYSTEM BOUNDARY, by its physical path', () => {
     fs.mkdirSync(path.join(leafOf(), 'x'), { recursive: true });
     const a = remove(rootOf(), ID, { pre: 'rm() { printf "rm %s\\n" "$*" >> "$HOME/rm-calls"; command rm "$@"; };' });
     expect(a.rc, a.why).toBe('0');
@@ -2277,8 +2511,14 @@ In `ccd/ccd`, directly ABOVE `_ws_reclaim_tail() {` (below Task 4's `_ws_path_us
 ```bash
 # ── the ONE removal of a per-session leaf (child reclamation wave 6, spec §5.6) ──
 _WS_LEAF_WHY=''
-_ws_leaf_uid() {   # path -> the uid that owns the path ITSELF (`stat` without -L: a link is never followed)
-  if [[ "$CCD_OS" == darwin ]]; then stat -f %u "$1"; else stat -c %u "$1"; fi
+_ws_leaf_uid() {   # path -> the uid that owns the path ITSELF (`ls -dn`: numeric on GNU and BSD, never follows the path's own link); a test's seam
+  # Not `stat -c %u`/`stat -f %u`: those spellings live in the platform block
+  # alone (macos-platform.test.ts's 'GNU/BSD stat' row refuses them here).
+  local l u
+  l=$(LC_ALL=C ls -dn -- "$1" 2>/dev/null) || return 1
+  read -r _ _ u _ <<< "$l"
+  [[ "$u" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$u"
 }
 _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROVEN by `_ws_reclaim_absent`;
   #                       1 refused (_WS_LEAF_WHY); 2 unmeasured (_WS_LEAF_WHY)
@@ -2296,16 +2536,26 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   #   asked first, so a link's target, wherever it points, is untouched. Such a
   #   leaf is what `_child_tmpdir`'s rc 2 leaves in place; kept, a recycled
   #   slug would meet it on every spawn.
-  # - A DIRECTORY LEAF goes only when it is this uid's own, its physical path
+  # - A DIRECTORY LEAF goes only when it is this uid's own (`_ws_leaf_uid`,
+  #   `ls -dn`, never follows it), its physical path
   #   is exactly `<root>/<id>`, and — when the caller names one — its dev:ino
   #   is the one the caller recorded. It is normalised first
   #   (`_ws_reclaim_normalise`: an entry that stays unreadable REFUSES the whole
   #   leaf rather than leave a partial tree; a pass that could not run is
-  #   unmeasured), then removed NEVER ACROSS A MOUNT (`--one-file-system`;
-  #   BSD's `-x` on Darwin).
+  #   unmeasured), then removed NEVER ACROSS A FILE-SYSTEM BOUNDARY
+  #   (`--one-file-system`; BSD's `-x` on Darwin). THE LIMIT, STATED: both
+  #   compare `st_dev` alone, so a bind mount of the SAME file system inside
+  #   the leaf is crossed (GNU rm's own documented limit); only root can make
+  #   one.
   # - EVERY EXIT CODE IS READ, and the answer is a MEASUREMENT: after any
   #   removal the leaf's absence is PROVEN, and a leaf that stands again (a
-  #   writer re-created it) is unmeasured, never "removed".
+  #   writer re-created it) is unmeasured, never "removed". rc 2 is not
+  #   "untouched": an `rm` that failed part-way removed what it reached, and
+  #   the caller keeps and records what stands.
+  # - THE CHECKS ARE NOT ATOMIC WITH THE REMOVAL: a same-uid rename onto
+  #   `<root>/<id>` between them and the `rm` is removed with it (the
+  #   single-user trust model). Wave 7's collector closes this with a
+  #   quarantine rename (R57).
   local root="$1" id="$2" want="${3-}" rroot leaf me owner lreal have err rc
   _WS_LEAF_WHY=''
   if ! [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || [[ "$id" == . || "$id" == .. ]]; then
@@ -2409,12 +2659,12 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
 
 ```ts
   /** The per-session temp root (`$HOME/.cc-tmp/<id>`) a `reclaim` or `expire`
-   *  tail KEPT instead of removing (child reclamation wave 6, spec §5.6):
-   *  `in-use` (a process of this uid still used it after the tail's bounded
-   *  wait), `unmeasured` (whether one did, or what its removal left, could not
-   *  be measured) or `refused` (the removal helper refused the leaf). The act
-   *  still COMPLETED, so this rides the `done` row (and a purge failure's), and
-   *  the row's `detail` says why. Null: the leaf went, or the act is another. */
+   *  tail did not prove gone (child reclamation wave 6, spec §5.6): `in-use`
+   *  (a process of this uid still used it after the tail's bounded wait),
+   *  `unmeasured` (whether one did could not be measured, or a removal failed
+   *  part-way or was undone: kept means NOT PROVEN GONE, not untouched) or
+   *  `refused` (the helper refused it). The act COMPLETED, so this rides the
+   *  `done` row and a purge failure's; `detail` says why. Null: it went, or another act. */
   readonly tmpRootKept: string | null;
   /** The same for the session's clips directory (`$HOME/.cc-clips/<id>`):
    *  `refused` or `unmeasured` only — nothing waits on a clips directory's users. */
@@ -2464,8 +2714,15 @@ cd server && ./node_modules/.bin/vitest run test/ownership.test.ts
 cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'every line citation is anchored'
 ```
 
+Then run the platform sweep, in the FOREGROUND with a timeout of at least 600000 ms, because `_ws_leaf_uid` is new code outside the platform block:
+
+```bash
+(cd server && ./node_modules/.bin/vitest run test/macos-platform.test.ts)
+```
+
 Expected:
 - `ccd-leaf-remove` passes in full (Linux; on macOS the temp-root case is skipped).
+- `macos-platform` is green: `_ws_leaf_uid` reads the owner with `ls -dn`, so no `stat -c` or `stat -f` stands outside the platform block (its `'GNU/BSD stat'` row, `ccd/ccd carries no un-shimmed GNU call`).
 - The existing verb suites stay green unchanged. Their link-leaf, file-leaf and mode-000-clips cases now run through the helper and assert the same disk state.
 - `ccd-lifecycle-contain` is green at 34; `tsc` prints nothing; `mark.mjs --check` exits 0; `ownership` is green.
 - `ccd-child-reclaim-tail-contained` (Task 3) stays green with its count still at 6 (X3). This task adds no git deletion to `_ws_reclaim_tail`. The helper's `rm` is not a git call, and the helper sits above `_ws_reclaim_tail() {`, outside the scan's slice. If the scan reds, a git deletion was added to the tail or moved within it. Contain it, and re-pin the count in that test with the cause named. Never loosen the scan.
@@ -2481,7 +2738,7 @@ If anything OTHER than README reds, STOP and report, because a frozen-corpus cen
 
 | # | Mutation (exact edit) | Command | Expected red |
 |---|---|---|---|
-| 1 | In `_ws_leaf_remove`, replace `rm -rf --one-file-system -- "$leaf"` with `rm -rf -- "$leaf"` | `cd server && ./node_modules/.bin/vitest run test/ccd-leaf-remove.test.ts` | "NEVER ACROSS A MOUNT": `expected [ 'rm -rf -- …/root/demo-quiet-basin' ] to deeply equal [ 'rm -rf --one-file-system -- …' ]` |
+| 1 | In `_ws_leaf_remove`, replace `rm -rf --one-file-system -- "$leaf"` with `rm -rf -- "$leaf"` | `cd server && ./node_modules/.bin/vitest run test/ccd-leaf-remove.test.ts` | "NEVER ACROSS A FILE-SYSTEM BOUNDARY": `expected [ 'rm -rf -- …/root/demo-quiet-basin' ] to deeply equal [ 'rm -rf --one-file-system -- …' ]` |
 | 2 | Delete the `[[ "$owner" == "$me" ]] \|\| { … return 1; }` statement | same | "another uid owns": `expected '0' to be '1'`; the tail case "a clips leaf the helper refuses": `the clips directory is kept: expected false to be true` |
 | 3 | Delete the `[[ "$lreal" == "$leaf" ]] \|\| { … return 1; }` statement | same | "physical path is not root/<id>": `expected '0' to be '1'` |
 | 4 | Delete the whole `if [[ -n "$want" ]]; then … fi` block | same | "a dev:ino that is not the leaf’s": `expected '0' to be '1'` |
@@ -2494,6 +2751,11 @@ If anything OTHER than README reds, STOP and report, because a frozen-corpus cen
 | 11 | In step (8), drop `meas.clipsKept "$clipskept"` from the `_lc_done` call | same | "a clips leaf the helper refuses": `expected undefined to be 'refused'` |
 | 12 | Restore one purge text to `worktree, branch, clips and temp root are gone` (the `purge-incomplete` call) | same | "a purge failure after a kept leaf": `expected '… clips and temp root are gone …' to contain 'clips kept (refused)'` |
 | 13 | Remove `tmpRootKept: true, clipsKept: true,` from `LIFECYCLE_MEAS_KEY_MAP` and the two members from `LifecycleMeas` | `cd server && ./node_modules/.bin/vitest run test/ccd-lifecycle-contain.test.ts` | `an unlisted meas key: expected [ 'clipsKept', 'tmpRootKept' ] to deeply equal []` |
+| 14 | Delete `(( rc != 2 )) \|\| { _WS_LEAF_WHY="$_WS_NORMALISE_WHY — nothing under $leaf was removed"; return 2; }` (the normalise rc-2 arm) | same | "a permission pass that could not RUN": `expected '0' to be '2'` (the stub's 2 falls through to `rm`, and the leaf goes) |
+| 15 | Replace the link arm's two lines `err=$(rm -f -- "$leaf" 2>&1) \` and `\|\| { _WS_LEAF_WHY="$leaf could not be unlinked: …"; return 2; }` with the one line `err=$(rm -f -- "$leaf" 2>&1)` | same | "a link leaf whose unlink fails": `expected '<leaf> stands again after its removal — something re-created it' to contain 'could not be unlinked'` |
+| 16 | Replace `_ws_leaf_uid`'s body with `stat -c %u "$1"` | `(cd server && ./node_modules/.bin/vitest run test/macos-platform.test.ts -t 'ccd/ccd carries no un-shimmed GNU call')` | `ccd/ccd runs a GNU-only command outside the platform block — …: expected [ 'GNU/BSD stat: stat -c %u "$1"' ] to deeply equal []` |
+
+THE ROOT'S rc-2 ARM HAS NO RED OF ITS OWN. Deleting `(( rc != 2 )) || { _WS_LEAF_WHY="$_WS_ABSENT_WHY — whether $id stands under it was never asked"; return 2; }` leaves "a root that cannot be searched" green, because the `cd -- "$root"` resolution directly below it fails on the same root and answers the same 2. That arm is defence in depth, backstopped by the resolution, and no row pins it alone.
 
 Revert each mutation, re-stamp, and re-run the Step 5 commands green. Then:
 
@@ -2507,7 +2769,8 @@ feat(ccd): one removal helper for a session's leaves; the tail keeps and says
 _ws_leaf_remove removes <root>/<id> only when the id is one ccd mints, the
 root resolves, and a directory leaf is this uid's own at exactly root/id
 (and the recorded dev:ino when one is given). It never follows a link
-leaf, never crosses a mount, reads every exit code, and proves the leaf
+leaf, never crosses a file-system boundary, reads every exit code, and
+proves the leaf
 gone. It answers removed-or-absent, refused or unmeasured. The reclaim and
 expiry tail removes its clips directory and temp root through it. A leaf
 it did not remove is kept, the act completes, and the done row records it
@@ -2525,9 +2788,9 @@ MSG
 
 **Why:** This is contract R49's tail ruling, and it closes the measured `swift-hollow` race. After the kill, the tail waits, bounded, until `_ws_path_users` answers nobody for the temp root. The bound is at most 15 s. Only then does it remove the leaf through the helper. If the probe still answers in use or unmeasured, the tail KEEPS the leaf (and, from Task 7, its witness), completes the reclaim, and records the kept leaf in the done row as `meas.tmpRootKept` (`in-use` or `unmeasured`). That is not a refusal. The wait comes BEFORE everything the tail deletes, so the worktree's removal is unchanged except for the wait. A straggler writing into a removed worktree path after the bound is a stated residual.
 
-On Darwin the probe answers unmeasured (Task 4), so a Darwin reclaim always keeps its temp root. That is what R49 rules. Four existing assertions that expect the temp root gone become Linux-only.
+On Darwin the probe answers unmeasured (Task 4), so a Darwin reclaim always keeps a DIRECTORY temp root that stands. That is what R49 rules. A link or file leaf is no one's temp root: `_child_tmpdir` composes `TMPDIR` only for a real directory (its rc 2 composes none), and unlinking such a leaf touches nothing it names. So step (6) never asks the probe of one: it is unlinked as wave 3 unlinks it, on every platform (wave 3's recycled-slug rule). Two existing assertions that expect a directory temp root gone become Linux-only. Wave 3's link and file pins (`ccd-child-reclaim-verb-tail.test.ts:143` and `:151`) stay unconditional.
 
-The tail also stays inside its remote budget: `ws-reclaim` and `ws-expire` each have 240 s in `server/src/remote/runner.ts` (`grep -n "'ws-reclaim': 240_000" server/src/remote/runner.ts`), and this adds at most 15 s.
+The tail also stays inside its remote budget: `ws-reclaim` and `ws-expire` each have 240 s in `server/src/remote/runner.ts` (`grep -n "'ws-reclaim': 240_000" server/src/remote/runner.ts`). The worst case this adds is the bound plus two walks, about 35 s, not 15 s. The wait reads the clock only after each `_ws_path_users` returns, so a walk begun just before the 15 s bound may run its full `WS_PATH_USERS_SCAN_S` (10 s), and step (6)'s re-ask may run another 10 s, plus the quarter-second sleeps. That is well inside the 240 s.
 
 The header of `_ws_expire_cwd_users` at ccd/ccd:28878 to :28880 (`grep -n 'a reclaim never meets it' ccd/ccd`) says "a reclaim never meets it". R49 found that false, so it is corrected here. The correction is comment lines only, and the function's code is untouched (R56). It sits in workspace-lifecycle's EXPIRE region, and the coordinator has accepted it as comment-only (probe-helper-tail.DEP3).
 
@@ -2540,7 +2803,7 @@ The header of `_ws_expire_cwd_users` at ccd/ccd:28878 to :28880 (`grep -n 'a rec
   3. Add ONE call after the pane re-measure's `esac` (ccd/ccd:28067 at `77c11245a`; it is the `esac` directly above `  # THE TOMBSTONE IS THE ONE SOURCE for what this tail deletes`).
   4. Replace Task 5's temp-root lines in step (6).
   5. Rewrite the three header comment lines of `_ws_expire_cwd_users`.
-- Modify: `server/test/ccd-child-reclaim-verb.test.ts` (:65), and `server/test/ccd-child-reclaim-verb-tail.test.ts` (:143, :151, :199). Each assertion that the temp root is gone becomes Linux-only.
+- Modify: `server/test/ccd-child-reclaim-verb.test.ts` (:65), and `server/test/ccd-child-reclaim-verb-tail.test.ts` (:199). Each assertion that a DIRECTORY temp root is gone becomes Linux-only. The link and file pins at `ccd-child-reclaim-verb-tail.test.ts:143` and `:151` are NOT touched: those leaves are never kept for their users, and are unlinked on every platform.
 - Test: `server/test/ccd-child-reclaim-tmproot-wait.test.ts` (new)
 
 **Interfaces:**
@@ -2556,7 +2819,7 @@ The header of `_ws_expire_cwd_users` at ccd/ccd:28878 to :28880 (`grep -n 'a rec
   _ws_reclaim_tmproot_wait_s            # -> prints the effective bound, whole seconds
   _ws_reclaim_tmproot_quiet <path>      # -> _ws_path_users' LAST answer (0/1/2), asked every 0.25 s until 0 or the bound; Darwin: asked once
   ```
-  - Done row (both flavours): `meas.tmpRootKept` is `in-use` (the probe still answered 1 at the instant of removal), `unmeasured` (the probe answered 2, or the helper did), or `refused` (the helper refused). The row's `detail` carries `temp root <path> kept (<word>): <why>`.
+  - Done row (both flavours): `meas.tmpRootKept` is `in-use` (the probe still answered 1 at the instant of removal), `unmeasured` (the probe answered 2, or the helper did), or `refused` (the helper refused). The row's `detail` carries `temp root <path> kept (<word>): <why>`. A probe's `in-use` or `unmeasured` is recorded only while something stands at the leaf (`_ws_reclaim_absent` answers 1 or 2): over nothing, nothing is kept and nothing is recorded. A link or file leaf is never kept for its users: step (6) hands it to the helper, which unlinks it, on every platform.
   - **The tail's ONE wait knob (X3).** `CCD_RECLAIM_TMPROOT_WAIT_S` is the only way a case shortens the wait. Task 7's keep cases, and any later case that reaches step (6) with a stubbed in-use or unmeasured `_ws_path_users`, set `CCD_RECLAIM_TMPROOT_WAIT_S=0`, never a stubbed `sleep`. At 0, `_ws_reclaim_tmproot_quiet` asks once and returns without sleeping. The bound row `'0' -> '0'` and the case "a bound of 0 asks exactly once" pin that.
 
 - [ ] **Step 1: Write the failing test**
@@ -2659,6 +2922,38 @@ describe('the tail', () => {
     expect(measOf(done)['tmpRootKept']).toBe('unmeasured');
     expect(String(done['detail'])).toContain('stub: not measured');
   }, 90_000);
+
+  it.each(['link', 'file'] as const)('a %s leaf is no one’s temp root: never kept for its users — unlinked on every platform, its target untouched', (shape) => {
+    makeChild(h);
+    const outside = path.join(h.home, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'keep'), 'not the child’s');
+    fs.mkdirSync(path.join(h.home, '.cc-tmp'), { recursive: true });
+    if (shape === 'link') fs.symlinkSync(outside, leafOf(CHILD_ID));
+    else fs.writeFileSync(leafOf(CHILD_ID), 'a file where the root should be');
+    // The Darwin answer, forced on any host: the probe cannot measure. A link or file leaf goes anyway.
+    const pre = "CCD_RECLAIM_TMPROOT_WAIT_S=0; _ws_path_users() { _WS_PATH_USERS_PIDS=''; _WS_PATH_USERS_WHY='stub: not measured'; return 2; };";
+    const r = childReclaimVerb(h, evalOf(h).token, { pre });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
+    expect(() => fs.lstatSync(leafOf(CHILD_ID)), `the ${shape} leaf itself is unlinked`).toThrow();
+    expect(fs.readFileSync(path.join(outside, 'keep'), 'utf8'), 'its target is untouched').toBe('not the child’s');
+    expect(fs.existsSync(path.join(h.home, '.cc-tmp')), 'the root itself stays').toBe(true);
+    expect(measOf(doneOf('reclaim'))['tmpRootKept'], 'nothing was kept').toBeUndefined();
+  }, 90_000);
+
+  it.each([['in use', 1], ['unmeasured', 2]] as const)('a probe answering %s over a temp root that does NOT stand records nothing — kept means something stands', (_label, rc) => {
+    // Every Darwin `ws-expire` of a non-child meets this: the probe answers unmeasured, and no temp root ever stood.
+    makeArchived(h);
+    expect(fs.existsSync(leafOf(EXP_ID)), 'the CONTROL: no temp root stands').toBe(false);
+    const pre = `CCD_RECLAIM_TMPROOT_WAIT_S=0; _ws_path_users() { _WS_PATH_USERS_PIDS=4242; _WS_PATH_USERS_WHY='stub: answered ${rc}'; return ${rc}; };`;
+    const r = expireVerb(h, expireToken(h), { pre });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).expired).toBe(EXP_ID);
+    const done = doneOf('expire');
+    expect(measOf(done)['tmpRootKept']).toBeUndefined();
+    expect(String(done['detail'] ?? ''), 'no detail claims a temp root was kept').not.toContain('temp root');
+  }, 90_000);
 });
 
 /** A straggler: it waits for the kill (the `_ws_unsupervise` stub below touches `killed` right before
@@ -2742,6 +3037,7 @@ Expected: FAIL.
 - **THE SWIFT-HOLLOW RACE:** `the straggler outlived the kill and wrote while the leaf stood: expected 'recreated' to be 'wrote-in-place'`. Task 5's tail removes the leaf at once, and the straggler re-creates it. This reproduces the measured incident.
 - **"outlives the BOUND":** `the tail sat out its bound: expected <n> to be greater than or equal to 2000`, or `the temp root is kept` fails.
 - **The expire case:** `expected false to be true`.
+- **The `link` and `file` leaf cases, and the two "does NOT stand" cases, PASS.** Task 5's tail never asks the probe: it unlinks a link or file leaf, and records nothing over a leaf that is not there. They pin that Task 6 keeps it so; their reds are mutation rows 10, 11 and 12.
 
 - [ ] **Step 3: Implement the wait**
 
@@ -2804,8 +3100,17 @@ In `_ws_reclaim_tail`:
   # THE TEMP ROOT'S USERS ARE ASKED AGAIN, AT THIS INSTANT (spec §5.6): the
   # wait after the kill delayed everything since, and this is the answer the
   # removal acts on. Nobody: the helper removes it. In use, or unmeasured (on
-  # Darwin, always): the leaf is KEPT, and said.
-  _ws_path_users "$HOME/.cc-tmp/$id"; tmpq=$?
+  # Darwin, always): the leaf is KEPT, and said — but only a leaf that STANDS
+  # is kept: over nothing, nothing is recorded.
+  # A LINK OR FILE LEAF is no one's temp root (`_child_tmpdir` composes TMPDIR
+  # only for a real directory), and unlinking it touches nothing it names: it
+  # is never kept for its users, on any platform (spec §5.6; wave 3's
+  # recycled-slug rule), so the probe is not asked of it.
+  if [[ -L "$HOME/.cc-tmp/$id" || ( -e "$HOME/.cc-tmp/$id" && ! -d "$HOME/.cc-tmp/$id" ) ]]; then
+    tmpq=0
+  else
+    _ws_path_users "$HOME/.cc-tmp/$id"; tmpq=$?
+  fi
   case "$tmpq" in
     0) _ws_leaf_remove "$HOME/.cc-tmp" "$id"; lfrc=$?
        case "$lfrc" in
@@ -2813,8 +3118,10 @@ In `_ws_reclaim_tail`:
          1) tmpkept=refused; tmpwhy="$_WS_LEAF_WHY" ;;
          *) tmpkept=unmeasured; tmpwhy="$_WS_LEAF_WHY" ;;
        esac ;;
-    1) tmpkept=in-use; tmpwhy="still in use after the bounded wait — $_WS_PATH_USERS_WHY" ;;
-    *) tmpkept=unmeasured; tmpwhy="$_WS_PATH_USERS_WHY" ;;
+    1) if _ws_reclaim_absent "$HOME/.cc-tmp/$id"; then :   # nothing stands there: nothing is kept
+       else tmpkept=in-use; tmpwhy="still in use after the bounded wait — $_WS_PATH_USERS_WHY"; fi ;;
+    *) if _ws_reclaim_absent "$HOME/.cc-tmp/$id"; then :   # nothing stands there: nothing is kept
+       else tmpkept=unmeasured; tmpwhy="$_WS_PATH_USERS_WHY"; fi ;;
   esac
 ```
 
@@ -2838,14 +3145,15 @@ with:
 
 Only comment lines change, and the function's code is byte-identical. Check with `git diff -U0 ccd/ccd | grep '^[-+][^-+#]' | grep -v '^[-+]  *#'`: it must print nothing from inside `_ws_expire_cwd_users`.
 
-(e) The four existing assertions that expect the temp root gone become Linux-only. On Darwin the probe answers unmeasured, so the tail keeps the leaf (R49). Each line stays where it is:
+(e) The two existing assertions that expect a DIRECTORY temp root gone become Linux-only. On Darwin the probe answers unmeasured, so the tail keeps a directory leaf that stands (R49). Each line stays where it is:
 
 - `server/test/ccd-child-reclaim-verb.test.ts` (:65). Replace `expect(fs.existsSync(path.join(h.home, '.cc-tmp', CHILD_ID)), 'temp root').toBe(false);` with:
   ```ts
     // Darwin: the in-use probe answers unmeasured there, so the tail KEEPS the temp root (contract R49).
     expect(fs.existsSync(path.join(h.home, '.cc-tmp', CHILD_ID)), 'temp root').toBe(process.platform === 'darwin');
   ```
-- `server/test/ccd-child-reclaim-verb-tail.test.ts` (:143, :151, :199). Prefix each of the three statements with `if (process.platform !== 'darwin') `. Two are `expect(() => fs.lstatSync(path.join(h.home, '.cc-tmp', CHILD_ID)), …).toThrow();`, and the third is `expect(fs.existsSync(path.join(h.home, '.cc-tmp', CHILD_ID)), 'temp root').toBe(false);`. Add one comment above each: `// Darwin keeps the temp root: the in-use probe answers unmeasured there (contract R49).`
+- `server/test/ccd-child-reclaim-verb-tail.test.ts` (:199). Prefix `expect(fs.existsSync(path.join(h.home, '.cc-tmp', CHILD_ID)), 'temp root').toBe(false);` with `if (process.platform !== 'darwin') `, and add one comment above it: `// Darwin keeps the temp root: the in-use probe answers unmeasured there (contract R49).`
+- `ccd-child-reclaim-verb-tail.test.ts:143` (`the leaf symlink is unlinked`) and `:151` (`the leaf file is unlinked`) stay UNCONDITIONAL and unedited. A link or file leaf is never handed to the probe (step (6) above), so it is unlinked on Darwin too. Making them Darwin-aware would drop wave 3's pin of the recycled-slug rule.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -2885,13 +3193,17 @@ Expected:
 | # | Mutation (exact edit) | Command | Expected red |
 |---|---|---|---|
 | 1 | Delete the tail's line `  _ws_reclaim_tmproot_quiet "$HOME/.cc-tmp/$id" \|\| :   # its answer is re-asked at step (6)` | `cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-tmproot-wait.test.ts` | "waits AFTER the kill": `expected [ 'probe wt-gone …' ] to deeply equal [ 'probe wt-present …', 'probe wt-gone …' ]`; THE SWIFT-HOLLOW RACE: `the straggler did not re-create the leaf after the reclaim`, because the leaf is kept `in-use` at step (6): `expected true to be false` |
-| 2 | Restore the pre-wave behaviour: delete the wait line AND replace step (6)'s `_ws_path_users …; tmpq=$?` and its `case "$tmpq"` with Task 5's bare `_ws_leaf_remove "$HOME/.cc-tmp" "$id"; lfrc=$?` and its `case "$lfrc"` | same | THE SWIFT-HOLLOW RACE: `expected 'recreated' to be 'wrote-in-place'`; "outlives the BOUND": `the temp root is kept` fails (ENOENT reading `scratch`) |
+| 2 | Restore the pre-wave behaviour: delete the wait line AND replace step (6)'s probe block (from `if [[ -L "$HOME/.cc-tmp/$id"` through its `fi`) and its `case "$tmpq"` with Task 5's bare `_ws_leaf_remove "$HOME/.cc-tmp" "$id"; lfrc=$?` and its `case "$lfrc"` | same | THE SWIFT-HOLLOW RACE: `expected 'recreated' to be 'wrote-in-place'`; "outlives the BOUND": `the temp root is kept` fails (ENOENT reading `scratch`) |
 | 3 | In `_ws_reclaim_tmproot_wait_s`, replace `(( 10#$o < b ))` with `(( 10#$o != b ))` | same | `CCD_RECLAIM_TMPROOT_WAIT_S=99 -> 15`: `expected '99' to be '15'` |
 | 4 | Replace `WS_RECLAIM_TMPROOT_WAIT_S=15` with `WS_RECLAIM_TMPROOT_WAIT_S=30` | same | `CCD_RECLAIM_TMPROOT_WAIT_S=undefined -> 15`: `expected '30' to be '15'` |
 | 5 | In `_ws_reclaim_tmproot_quiet`, delete `[[ "$CCD_OS" != darwin ]] \|\| return "$rc"` | same | "on Darwin it asks ONCE": `expected [ 'probe', 'probe', … ] to have a length of 1 but got <n>` |
 | 6 | In `_ws_reclaim_tmproot_quiet`, replace `(( $(_plat_epoch_ms) < end )) \|\| return "$rc"` with `return "$rc"` | same | "three asks, then 0": `expected '1' to be '0'`; THE SWIFT-HOLLOW RACE reds as row 1 |
 | 7 | In step (8)'s `_lc_done`, drop `meas.tmpRootKept "$tmpkept"` | same | "outlives the BOUND": `expected undefined to be 'in-use'` |
-| 8 | In step (6), swap the arms: `1) tmpkept=unmeasured; …` and `*) tmpkept=in-use; …` | same | "outlives the BOUND": `expected 'unmeasured' to be 'in-use'`; "UNMEASURED keeps": `expected 'in-use' to be 'unmeasured'` |
+| 8 | In step (6), swap the two kept words: the `1)` arm's `tmpkept=in-use` becomes `tmpkept=unmeasured`, and the `*)` arm's `tmpkept=unmeasured` becomes `tmpkept=in-use` | same | "outlives the BOUND": `expected 'unmeasured' to be 'in-use'`; "UNMEASURED keeps": `expected 'in-use' to be 'unmeasured'` |
+| 9 | Replace step (6)'s re-ask `_ws_path_users "$HOME/.cc-tmp/$id"; tmpq=$?` with `tmpq=0`; the wait line stays | same | "outlives the BOUND": `the temp root is kept` fails (ENOENT reading `scratch`): the wait alone, with no re-ask at the instant of removal, removes a leaf still in use |
+| 10 | Replace the probe block `if [[ -L "$HOME/.cc-tmp/$id" \|\| … ]]; then tmpq=0; else …; fi` with its `else` arm alone, `_ws_path_users "$HOME/.cc-tmp/$id"; tmpq=$?` | same | "a link leaf is no one’s temp root": `the link leaf itself is unlinked: expected [Function] to throw an error`; the `file` row the same. On Darwin, `ccd-child-reclaim-verb-tail.test.ts`'s `the leaf symlink is unlinked` and `the leaf file is unlinked` red too |
+| 11 | In the `1)` arm, replace `if _ws_reclaim_absent "$HOME/.cc-tmp/$id"; then : … else tmpkept=in-use; tmpwhy=…; fi` with `tmpkept=in-use; tmpwhy="still in use after the bounded wait — $_WS_PATH_USERS_WHY"` | same | "a probe answering in use over a temp root that does NOT stand": `expected 'in-use' to be undefined` |
+| 12 | In the `*)` arm, replace `if _ws_reclaim_absent "$HOME/.cc-tmp/$id"; then : … else tmpkept=unmeasured; tmpwhy=…; fi` with `tmpkept=unmeasured; tmpwhy="$_WS_PATH_USERS_WHY"` | same | "a probe answering unmeasured over a temp root that does NOT stand": `expected 'unmeasured' to be undefined` |
 
 Revert each mutation, re-stamp (`bash ccd/ccrc restamp ccd/ccd`), and re-run Step 4 green. Then:
 
@@ -2994,9 +3306,9 @@ MSG
   _ws_tmproot_witness_file <id>                       # prints "$REG/tmproots/<id>"
   _ws_tmproot_witness_write <id> <leaf> <run>         # rc 0 written-or-current | 1 not written (the caller warns)
   _ws_tmproot_witness_read <id>                       # rc 0 parsed (sets _WS_WIT_DEV _WS_WIT_INO _WS_WIT_BTIME _WS_WIT_RUN _WS_WIT_UID _WS_WIT_AT) | 1 absent | 2 unreadable or malformed
-  _ws_tmproot_remove <id> [<expect-devino>]           # _ws_leaf_remove "$HOME/.cc-tmp" <id> [<devino>]; on its rc 0 rm -f the witness; returns the helper's rc
+  _ws_tmproot_remove <id> [<expect-devino>]           # _ws_leaf_remove "$HOME/.cc-tmp" <id> [<devino>]; on its rc 0 rm -f the witness; returns the helper's rc; an id _ws_tmproot_id_ok refuses is rc 1 (_WS_LEAF_WHY) with nothing asked or touched
   ```
-  The file format is one line plus LF, keys in this order: `v=1 id=<id> run=<run-id> dev=<decimal> ino=<decimal> btime=<positive decimal or -> uid=<decimal> at=<13-digit epoch ms>`. An internal helper `_ws_tmproot_id_ok <id>` is not part of the interface. It holds the tail's id shape and refuses any dot-leading id, because dot-leading names in `tmproots/` are the writer's own temp files.
+  The file format is one line plus LF, keys in this order: `v=1 id=<id> run=<run-id> dev=<decimal> ino=<decimal> btime=<positive decimal or -> uid=<decimal> at=<13-digit epoch ms>`. An internal helper `_ws_tmproot_id_ok <id>` is not part of the interface. It holds the tail's id shape and refuses any dot-leading id, because dot-leading names in `tmproots/` are the writer's own temp files. The reader, the writer and `_ws_tmproot_remove` each ask it first.
 - Consumes:
   - from Task 5: `_ws_leaf_remove <root> <id> [<expect-devino>]` with rc 0, 1 or 2 and `_WS_LEAF_WHY`;
   - from Task 6: `_ws_path_users`, which this task's tail cases stub, the tail's kept arm, and its wait knob `CCD_RECLAIM_TMPROOT_WAIT_S` (it can only lower the bound), which this task's keep cases set to `0`;
@@ -3364,6 +3676,17 @@ describe('_ws_tmproot_remove: the witness dies only after the leaf is PROVEN abs
     run(`${STUB(0)} _ws_tmproot_remove ${ID} 5:6; _ws_tmproot_remove ${ID}`);
     expect(calls()).toEqual([`3|${root()}|${ID}|5:6|`, `2|${root()}|${ID}|`]);
   });
+
+  // A collector walking tmproots/ must never turn a writer's in-flight temp
+  // file into a leaf to remove: the id is refused before the helper is asked.
+  it.each([['.demo-quiet-mesa.4242.17.tmp'], ['.x']])('an id no witness is named for (%j) answers 1 and touches nothing — a planted file of that name stands', (id) => {
+    fs.mkdirSync(wdir(), { recursive: true });
+    fs.writeFileSync(witness(id), 'a writer’s in-flight temp file');
+    expect(run(`${STUB(0)} _ws_tmproot_remove '${id}'; echo "[rc=$?] $_WS_LEAF_WHY"`).out)
+      .toBe(`[rc=1] '${id}' is not an id a witness is named for, so nothing was touched`);
+    expect(fs.existsSync(path.join(h.home, 'leaf-calls')), 'the removal helper was asked').toBe(false);
+    expect(fs.readFileSync(witness(id), 'utf8')).toBe('a writer’s in-flight temp file');
+  });
 });
 
 describe('the tail removes the witness only with the leaf, and keeps both when it keeps the leaf (R49, R50)', () => {
@@ -3520,7 +3843,7 @@ In `server/test/macos-platform.test.ts`, in the `arms` table of "the Linux arms 
 ```
 
 Expected:
-- **`ccd-child-tmproot-witness`: FAIL, 51 of 57.**
+- **`ccd-child-tmproot-witness`: FAIL, 53 of 59.**
   - **Cases that need a witness written** fail on the read. The message is `ENOENT: no such file or directory, open '<home>/.cc-sessions/tmproots/demo-quiet-mesa'`, or `expected false to be true` on an existence CONTROL.
   - **Writer, reader and removal cases** fail with `…command not found…[rc=127]` against the expected `[rc=1]`, `[rc=0]` or `[rc=2] |||||`.
   - **The three "never fails the spawn" cases** fail with `expected '<leaf>[rc=0]' to contain "ccd: warn: demo-quiet-mesa's temp root"`.
@@ -3598,11 +3921,22 @@ Directly after `_child_tmpdir`'s closing brace, and before `# ── \`ws-add --
 
 ```bash
 # ── THE TEMP ROOT'S POSITIVE WITNESS (child-reclamation contract §12, R50) ──
-# `$REG/tmproots/<id>` says "ccd made THIS directory a child's temp root": one
-# line, `v=1 id=<id> run=<run> dev=<n> ino=<n> btime=<n|-> uid=<n> at=<ms>`,
-# taken by stat of the leaf right after `_child_tmpdir`'s mkdir and chmod. A
+# `$REG/tmproots/<id>` says "ccd handed THIS directory, by dev, ino and btime,
+# to run <run> as its temp root": one line, `v=1 id=<id> run=<run> dev=<n>
+# ino=<n> btime=<n|-> uid=<n> at=<ms>`, taken by stat of the leaf right after
+# `_child_tmpdir`'s mkdir and chmod. That mkdir is `-p`, so a leaf that
+# already stood (one older than this code) is witnessed as it is found: the
+# witness says ccd HANDED the directory over, not that ccd created it. A
 # collector takes a leaf only while its dev, ino and btime still match; a
 # leaf that does not match is offered to the operator, never taken.
+#
+# TRUST. Any process of this uid can write this file, the session it judges
+# included: it guards against ccd's own mistakes and a recycled id, never
+# against a hostile session. The dev/ino/btime binding limits a forgery to a
+# leaf ccd made, at the id-derived path `$HOME/.cc-tmp/<id>`, and that limit
+# is convention, not an OS wall: a same-uid process can plant a directory
+# there and a witness for it alike. So a collector takes a path only from the
+# id, never from the witness body.
 #
 # WHERE. A DOTLESS registry subdirectory, the `pools/` precedent (POOLS_DIR):
 # every registry glob ccd ships is suffix-shaped and every registry `find` is
@@ -3611,11 +3945,17 @@ Directly after `_child_tmpdir`'s closing brace, and before `# ── \`ws-add --
 # does not take it — the witness OUTLIVES the row, the case R25 exists for —
 # and `_ws_slug_free` does not count it. `ccd-child-tmproot-witness.test.ts`
 # measures that census and refuses a walker that could see it. A file inside
-# the leaf was rejected (the session it judges can write it), and so was a
-# sidecar in `~/.cc-tmp` (sessions write straight into that root). The
-# writer's temp file is dot-leading INSIDE `tmproots/`, never `$REG/.<x>`,
-# so no `tmproots/*` glob sees it and `_reg_purge`'s dot-prefixed inventory
-# is unchanged.
+# the leaf was rejected, and so was a sidecar in `~/.cc-tmp`: both sit where
+# a session's own scratch goes, so its ordinary writes and cleanups could
+# take or clobber them by accident. `tmproots/` is no harder to write on
+# purpose (TRUST, above); it is only out of the session's way. The writer's
+# temp file is dot-leading INSIDE `tmproots/`, never `$REG/.<x>`, so no
+# `tmproots/*` glob sees it and `_reg_purge`'s dot-prefixed inventory is
+# unchanged. A writer that dies between its `printf` and its `mv` leaves that
+# temp file behind, and nothing in this wave reaps it: a stated residue. No
+# id names it (`_ws_tmproot_id_ok` refuses every dot-leading name, at the
+# reader, the writer and `_ws_tmproot_remove`), so a collector walking
+# `tmproots/` skips or reaps dot-leading names and never takes one for an id.
 #
 # WHEN. Every rc-0 answer of `_child_tmpdir` asks; the file is WRITTEN (temp
 # file, then `mv`) only when it is absent, unparseable, or its dev, ino or
@@ -3718,12 +4058,20 @@ Directly after Task 5's `_ws_leaf_remove` closing brace in the RECLAIM region (`
 # to do and is cleaned by the next call; the reverse order could leave a
 # leaf with no witness, which no collector may ever take. A refusal or an
 # unmeasured answer leaves the witness beside the leaf it still describes.
-# The tail passes NO dev:ino (the row and the marker prove identity there);
+# The tail passes NO dev:ino (the row and the marker prove identity there,
+# and the check-to-rm window is `_ws_leaf_remove`'s own stated residual);
 # a collector passes the witness's own. A witness that cannot be unlinked
 # after a proven-absent leaf is warned about and changes nothing: the act
 # this helper reports is the leaf's.
+# An id no witness is named for (`_ws_tmproot_id_ok`: anything dot-leading,
+# `.`, `..` and the writer's own `.<id>.*.tmp` names among them) is refused
+# FIRST, rc 1 with `_WS_LEAF_WHY`, and nothing is asked or touched: a
+# collector walking `tmproots/` must never turn a writer's temp file into a
+# leaf to remove. The writer refuses the same ids, so such a leaf was never
+# witnessed either; the tail keeps and records it, a leak and never a loss.
 _ws_tmproot_remove() {   # id [expect-devino] -> _ws_leaf_remove's rc (0 removed-or-absent | 1 refused | 2 unmeasured; _WS_LEAF_WHY)
   local id="${1-}" rc=0 w
+  _ws_tmproot_id_ok "$id" || { _WS_LEAF_WHY="'$id' is not an id a witness is named for, so nothing was touched"; return 1; }
   if [[ -n "${2-}" ]]; then
     _ws_leaf_remove "$HOME/.cc-tmp" "$id" "$2"; rc=$?
   else
@@ -3764,7 +4112,7 @@ node shared/mark.mjs --check ccd/ccd
 Run every suite in the foreground.
 
 Expected: PASS.
-- `ccd-child-tmproot-witness` passes 57 of 57.
+- `ccd-child-tmproot-witness` passes 59 of 59.
 - **`ccd-child-tmpdir` passes unchanged.**
   - Its exact `"<leaf>[rc=0]\n"` assertion is the proof that a successful witness write is silent.
   - Its marker-reader census still names only `_spawn_start`.
@@ -3833,6 +4181,9 @@ Apply each row on its own: edit, re-stamp (`bash ccd/ccrc restamp ccd/ccd`), run
 | 23 | In BOTH platform blocks, change `stat -c %W` to `stat -c %Y` | `(cd server && ./node_modules/.bin/vitest run test/macos-platform.test.ts -t '_plat_btime')`, and `T` with `GNU %W on Linux` | `_plat_btime's Linux arm changed: expected … to match /…stat -c %W…/m`; `expected '-c %Y /x' to be '-c %W /x'` |
 | 24 | In `ccd/ccrc` only, change `stat -f %B` to `stat -f %b` | `(cd server && ./node_modules/.bin/vitest run test/macos-platform.test.ts -t 'byte-identical')` | `is byte-identical in ccd and ccrc`: the `toBe` diff shows the `%B` line |
 | 25 | In the CURRENT test, delete ` && "$_WS_WIT_RUN" == "$run"` | `T` with `SAME inode` | `a same-inode witness still names the old run: expected '7' to be '8'` |
+| 26 | In `_ws_tmproot_remove`, delete the line `_ws_tmproot_id_ok "$id" \|\| { _WS_LEAF_WHY=…; return 1; }` | `T` with `no witness is named for` | for each row, `expected '[rc=0] stub-why' to be '[rc=1] \'<id>\' is not an id a witness is named for, so nothing was touched'`: the stub was asked, and its rc 0 went on to `rm -f` the planted file |
+
+Row 4 cannot red alone. The witness statement's ORDER is defence in depth behind row 3's guard (`[[ -d "$leaf" && ! -L "$leaf" && -O "$leaf" ]]`), which refuses the symlinked leaf wherever the statement sits. So row 4 applies row 3 too, and pins the order only together with that guard.
 
 Row 22 is the census's own control mutation, applied to test code. Revert it like the others.
 
@@ -3866,7 +4217,7 @@ MSG
 
 **Model routing:** `opus`, effort `high`. SAFETY-critical: this task changes when the destructive verb goes ahead over a missing branch, and it changes the reclaim token.
 
-**Why:** Wave 3's reclaim folds "the branch is absent" and "the branch could not be read" into one empty `REAP_TIP`. Measured on git 2.43.0 (the fleet box), `rev-parse --verify --quiet` and `show-ref --verify --quiet` both answer rc 1 for three cases: an absent ref, a corrupt loose ref, and a ref under an unreadable directory. Only `git show-ref --exists` gives three answers: 0 present, 2 absent, and anything else (1 for a ref that will not read, 128 for no repository, 129 for a git older than 2.43 that does not know the flag) means the read did not run. On any answer but 0 or 2, a successful `rev-parse --verify --quiet refs/heads/<b>^{commit}` still reads present (the positive fallback, ruled on gone-branch.OPEN4), so only `--exists` rc 2 can ever prove absent, and a box on a git older than 2.43 (Apple's 2.39, for one) reclaims a standing branch as it does today and never a gone one.
+**Why:** Wave 3's reclaim folds "the branch is absent" and "the branch could not be read" into one empty `REAP_TIP`. Measured on git 2.43.0 (the fleet box), `rev-parse --verify --quiet` and `show-ref --verify --quiet` both answer rc 1 for three cases: an absent ref, a corrupt loose ref, and a ref under an unreadable directory. Only `git show-ref --exists` gives three answers: 0 present, 2 absent, and anything else (1 for a ref that will not read, 128 for no repository, 129 for a git older than 2.43 that does not know the flag) means the read did not run. On any answer but 0 or 2, a successful `rev-parse --verify --quiet refs/heads/<b>^{commit}` still reads present (the positive fallback, ruled on gone-branch.OPEN4), so only `--exists` rc 2 can ever prove absent, and a box on a git older than 2.43 (Apple's 2.39, for one) reclaims a standing branch as it does today and never a gone one. One old-git shape is a stated residual, not closed: a resume whose step 5 already deleted the branch, or whose branch someone else deleted after the pin, reads `unmeasured` there and stops at step 5 as `branch-unmeasured` on every retry. The fleet runs 2.43 (see the carried residuals at the foot of this task).
 
 Because of the fold, the two worktree arms disagree today:
 - **The present arm.** The ladder mints a token with `tip=` over a gone branch. The pin then fails `pin-failed` for good. The live `expoAI-assistant-calm-mesa` child has failed this way 95 times, while its HEAD and every reflog commit are already on `origin/main`.
@@ -3878,42 +4229,51 @@ R53 rules one rule at every seam, in one act:
 - the vanished arm's pin read;
 - the tail's step-5 test.
 
-The token gains a `branchState` input, and a read that did not run mints no token at all. A proven-absent branch pins HEAD, the WIP commit and every per-worktree ref and reflog commit, deletes no branch, and the reclaim goes ahead. Three cases stay closed:
-- a branch that reappears after the tombstone stays `branch-moved`;
+The token gains a `branchState` input, and a read that did not run mints no token at all. A proven-absent branch pins HEAD, the WIP commit and every per-worktree ref and reflog commit, deletes no branch, and the reclaim goes ahead. Four cases stay closed:
+- a branch that reappears after the tombstone stays `branch-moved`. As today, a branch made between the verb's in-lock recompute and the pin is adopted at the tip the pin reads. The gone-branch consent is therefore re-checked at the tombstone, not at the pin. This is a stated residual: that tip is pinned and its reflog is kept, so nothing is lost;
 - a HEAD still symbolic to the gone branch stays `pin-failed`;
+- a registry branch that is itself a SYMBOLIC ref reads `unmeasured`. Measured on git 2.43:
+  - `show-ref --exists` answers 0 for it, and `rev-parse` peels it to the commit it names;
+  - a plain `update-ref -d` on it deletes the branch it NAMES (the project's main line, or a branch checked out elsewhere), past the holder check, the main-line check and the reflog keep, which are all asked of the child's own branch name.
+
+  As defence in depth, Task 3 spells both of the tail's branch CASes `update-ref -d --no-deref`;
 - a read failure at step 5 stops the tail with a new `failed` word, `branch-unmeasured`, journaled through `_ws_reclaim_fail` with its own `LC_REFUSAL_WORD` sentence.
 
 **Files:**
-- Modify: `ccd/ccd`, inside the RECLAIM region only. It is `RECLAIM-BEGIN` at ccd/ccd:25241 at `77c11245a`; locate it with `grep -n 'RECLAIM-BEGIN\|RECLAIM-END' ccd/ccd`. Every edit below lands far below ccd/ccd:19109, so R56's citation tax does not apply. Confirm before editing that `grep -n '^_ws_reclaim_reset()' ccd/ccd` prints a line above 19109. The sites:
-  - `_ws_reclaim_reset`: ccd/ccd:25274, `grep -n '^_ws_reclaim_reset()' ccd/ccd`. Its `RECLAIM_HEAD` entry is at ccd/ccd:25279, `grep -n 'RECLAIM_HEAD=""           # the child' ccd/ccd`.
-  - New helpers go directly after `_ws_reclaim_main_line_refuse`: ccd/ccd:25965, `grep -n '^_ws_reclaim_main_line_refuse()' ccd/ccd`.
-  - The ladder's present-arm tip read: ccd/ccd:26416, the FIRST hit of `grep -n 'REAP_TIP=$(git -C "$main" rev-parse --verify --quiet' ccd/ccd`. Its fingerprint input line is at ccd/ccd:26435, the first hit of `grep -n '"worktreeHead=$wthead" "tip=$REAP_TIP" "head=' ccd/ccd`.
-  - `_ws_reclaim_eval_absent`'s tip read (R19's vanished arm): ccd/ccd:26489, the SECOND hit of the same grep. Its fingerprint line is at ccd/ccd:26502, the second hit of the fingerprint grep.
+- Modify: `ccd/ccd`, inside the RECLAIM region only. It is `RECLAIM-BEGIN` at ccd/ccd:25241 at `77c11245a`; locate it with `grep -nF -e 'RECLAIM-BEGIN' -e 'RECLAIM-END' ccd/ccd`, which prints two lines (the region's first and last). Every edit below lands far below ccd/ccd:19109, so R56's citation tax does not apply. Confirm before editing that `grep -nF '_ws_reclaim_reset() {' ccd/ccd` prints one line whose number is greater than 19109 (below the boundary, so R56's citation tax does not apply).
+
+  Every anchor below is a FIXED string (`grep -nF`). To a regex grep, a `$` inside a pattern is an anchor, and under the harness's `grep` (a function that runs ugrep) such a pattern matches nothing. A locate grep would then print no line, and a `# 0` check would pass over the very read it is meant to catch (measured on `77c11245a`: 0 there, against GNU grep's 4). Each grep below says what it prints. The sites:
+  - `_ws_reclaim_reset`: ccd/ccd:25274, `grep -nF '_ws_reclaim_reset() {' ccd/ccd` (one line). Its `RECLAIM_HEAD` entry is at ccd/ccd:25279, `grep -nF 'RECLAIM_HEAD=""           # the child' ccd/ccd` (one line).
+  - New helpers go directly after `_ws_reclaim_main_line_refuse`: ccd/ccd:25965, `grep -nF '_ws_reclaim_main_line_refuse() {' ccd/ccd` (one line).
+  - The ladder's present-arm tip read: ccd/ccd:26416. It is the FIRST of the four lines that `grep -nF 'REAP_TIP=$(git -C "$main" rev-parse --verify --quiet' ccd/ccd` prints. Its fingerprint input line is at ccd/ccd:26435, the first of the two lines that `grep -nF '"worktreeHead=$wthead" "tip=$REAP_TIP" "head=' ccd/ccd` prints.
+  - `_ws_reclaim_eval_absent`'s tip read (R19's vanished arm): ccd/ccd:26489, the SECOND line of the same tip-read grep. Its fingerprint line is at ccd/ccd:26502, the second line of the fingerprint grep.
   - `_ws_reclaim_pin_contained`:
-    - its HEAD read: ccd/ccd:27560, `grep -n 'headref=$(git -C "$workdir" symbolic-ref -q HEAD' ccd/ccd`, whose `elif` arm ends at ccd/ccd:27565, `grep -n 'could not read which branch $workdir has checked out' ccd/ccd`;
-    - its tip block: ccd/ccd:27628, `grep -n 'THE BRANCH TIP IS A REQUIRED PIN' ccd/ccd`. The block runs through the `extras+=("$REAP_TIP")` line that follows the hard failure at ccd/ccd:27632.
-  - `_ws_reclaim_pin_absent_contained`'s tip read: ccd/ccd:27749, the FOURTH hit of the tip-read grep.
+    - its HEAD read: ccd/ccd:27560, `grep -nF 'headref=$(git -C "$workdir" symbolic-ref -q HEAD' ccd/ccd` (one line). Its `elif` arm ends at ccd/ccd:27565, `grep -nF 'could not read which branch $workdir has checked out' ccd/ccd` (one line);
+    - its tip block: ccd/ccd:27628, `grep -nF 'THE BRANCH TIP IS A REQUIRED PIN' ccd/ccd` (one line). The block runs through the `extras+=("$REAP_TIP")` line that follows the hard failure at ccd/ccd:27632.
+  - `_ws_reclaim_pin_absent_contained`'s tip read: ccd/ccd:27749, the FOURTH line of the tip-read grep.
   - `_ws_reclaim_tail`:
-    - its third `local` line: ccd/ccd:27970, `grep -n 'local holders wdreal' ccd/ccd`;
-    - the settle: ccd/ccd:28106, `grep -n 'if ! _ws_reclaim_pin "$id" "$workdir" "$main" "$branch" "$childof"; then' ccd/ccd`;
-    - step 5's branch test: ccd/ccd:28348, `grep -n 'show-ref --verify --quiet "refs/heads/$branch"' ccd/ccd`.
+    - its third `local` line: ccd/ccd:27970, `grep -nF 'local holders wdreal' ccd/ccd` (one line). If Task 5 or 6 renamed `wdreal`, use the one `local holders` line inside `_ws_reclaim_tail`;
+    - the settle: ccd/ccd:28106, `grep -nF 'if ! _ws_reclaim_pin "$id" "$workdir" "$main" "$branch" "$childof"; then' ccd/ccd` (one line);
+    - step 5's branch test: ccd/ccd:28348, `grep -nF 'show-ref --verify --quiet "refs/heads/$branch"' ccd/ccd`. This prints FOUR lines. The one to edit is the hit inside `_ws_reclaim_tail`, the last of the four. The other three (ccd/ccd:8001, :14827 and :15673) are ws-reap and gc code outside the RECLAIM region, and are never edited.
 
     Earlier tasks of this wave (3, 5 and 6) edit the tail, so locate every tail site by content, never by number.
-- Modify: `server/test/ccd-child-reclaim-pin.test.ts`. The one case whose behaviour R53 reverses: server/test/ccd-child-reclaim-pin.test.ts:573, `grep -n 'FAILS when the branch no longer resolves' server/test/ccd-child-reclaim-pin.test.ts`, inside `describe('the branch tip is a REQUIRED pin'`.
+- Modify: `server/test/ccd-child-reclaim-pin.test.ts`. The one case whose behaviour R53 reverses: server/test/ccd-child-reclaim-pin.test.ts:573, `grep -nF 'FAILS when the branch no longer resolves' server/test/ccd-child-reclaim-pin.test.ts` (one line), inside `describe('the branch tip is a REQUIRED pin'`.
 - Test: `server/test/ccd-child-reclaim-gone-branch.test.ts` (new; R56).
-- Modify: `shared/api.ts` (gone-branch.OPEN5, R43): `LcRefusalToken` gains `'branch-unmeasured'`, and `LC_REFUSAL_WORD` gains its sentence. Find them with `grep -n '^export type LcRefusalToken' shared/api.ts` and `grep -n "^  'unit-still-active':$" shared/api.ts`; the line numbers on the worker's tree are hints, because wave 5 and #286 moved them.
-- Modify: `server/test/lifecycle-refusal-word.test.ts`: `ALL_TOKENS`, `expect(TOKENS.length).toBe(14)` (`:27` and `:35` at `77c11245a`), and the `it.each(['pin-failed', 'unit-still-active'] as const)` word case.
-- Modify: `README.md`. Only the three `LC_REFUSAL_WORD` map anchors in the purge-refusal sentence, re-pointed by content (Step 4). Find it with ``grep -n '`purge-mechanism-absent` (`shared/api.ts:' README.md``.
+- Modify: `shared/api.ts` (gone-branch.OPEN5, R43): `LcRefusalToken` gains `'branch-unmeasured'`, and `LC_REFUSAL_WORD` gains its sentence. Find them with `grep -nF 'export type LcRefusalToken' shared/api.ts` and `grep -nF "'unit-still-active':" shared/api.ts` (one line each: the union's first line, and the `LC_REFUSAL_WORD` key, never the union member, which ends in `;`). The line numbers on the worker's tree are hints, because wave 5 and #286 moved them.
+- Modify: `server/test/lifecycle-refusal-word.test.ts`: `ALL_TOKENS`, `expect(TOKENS.length).toBe(14)` (`:22` and `:35` at `77c11245a`), and the `it.each(['pin-failed', 'unit-still-active'] as const)` word case.
+- Modify: `server/test/child-reclaim-status.test.ts` (R43: its failure-word list). Add one `ROWS` entry directly after the `failed unit-still-active → deferred…` row, and append `'branch-unmeasured'` to the token list of `reads a failure token’s journal word ahead of the audit sentences` (near `:274` at `e79b1da7`; a hint, so find both by their quoted names with `grep -nF`).
+- Modify: `README.md`. Only the three `LC_REFUSAL_WORD` map anchors in the purge-refusal sentence, re-pointed by content (Step 4). Find it with ``grep -nF '`purge-mechanism-absent` (`shared/api.ts:' README.md`` (one line).
 - Modify, only if Step 4 measures it red: `server/test/session-hook.test.ts`, the `'shared/api.ts'` entry of the CITATION DEBT `byFile` census.
 
 **Interfaces:**
 - Produces:
   ```bash
   _ws_reclaim_branch_state <gitdir-or-repo> <branch>   # prints exactly one of "present <40-hex>", "absent", "unmeasured"; always rc 0.
-                                                       # git show-ref --exists under _ws_reclaim_contained: rc 2 absent, the ONLY proof of
-                                                       # absence. On rc 0, or on any answer but 0 or 2 (an older git's 129: the positive
-                                                       # fallback, gone-branch.OPEN4), present when rev-parse --verify --quiet
-                                                       # refs/heads/<b>^{commit} peels it to a commit; anything else unmeasured.
+                                                       # git show-ref --exists under _ws_reclaim_contained: rc 2 absent, the ONLY answer
+                                                       # taken as absent. On rc 0, or on any answer but 0 or 2 (an older git's 129: the
+                                                       # positive fallback, gone-branch.OPEN4), present when the ref is NOT symbolic
+                                                       # (symbolic-ref -q answers 1) and rev-parse --verify --quiet refs/heads/<b>^{commit}
+                                                       # peels it to a commit; anything else unmeasured, a SYMBOLIC ref included.
   _ws_reclaim_tip_read <main> <branch>                 # rc 0 with REAP_TIP ('' when PROVEN absent) and RECLAIM_BRANCHSTATE (present|absent);
                                                        # rc 1 with _WS_BRANCH_WHY. The ONE tip read of the ladder's two arms, the pin and the
                                                        # vanished arm's pin.
@@ -3924,7 +4284,7 @@ The token gains a `branchState` input, and a read that did not run mints no toke
   The journal vocabulary gains `'branch-unmeasured'` (`LcRefusalToken`, with its `LC_REFUSAL_WORD` sentence): the tail's step 5 answers it, through `_ws_reclaim_fail`, when whether the branch exists could not be read. It is a `failed` line, so it needs no `CHILD_RECLAIM_PRE_LOCK_TOKEN` entry, and wave 5's executor reads its document as `resumable`, which is the tail's real state there (the breadcrumb stands at `branch`).
 - Consumes:
   - `_ws_reclaim_contained`, as Task 1 left it (F6: its outermost block unsets the config variables and the repository-selecting ones);
-  - the step-5 `update-ref -d` line exactly as Task 3 left it (contained), which this task does not touch;
+  - the step-5 `update-ref -d --no-deref` line exactly as Task 3 left it (contained), which this task does not touch;
   - `_ws_reclaim_attic_extra`, which already skips an empty sha (`[[ -n "$sha" ]] || continue`);
   - `_ws_reclaim_unmeasured`, `_ws_reclaim_fail`;
   - test fixtures: `makePrHarness`, `makeChild`, `evalOf`, `childReclaimVerb`, `CHILD_BRANCH`, `CHILD_ID`, `verbHelpers` (`tombOf`, `atticShas`, `unsupervised`, `refusedWith`, `interrupted`, `resumeToken`, `failedPairAgrees`), `eventsOf`;
@@ -4058,12 +4418,17 @@ function oldGit(): string {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'git'), [
     '#!/bin/sh',
-    'case " $* " in *" show-ref "*" --exists "*) echo "error: unknown option exists" >&2; exit 129 ;; esac',
+    'case " $* " in *" show-ref "*"--exists "*) echo "error: unknown option exists" >&2; exit 129 ;; esac',
     `exec "${real}" "$@"`,
     '',
   ].join('\n'), { mode: 0o755 });
   return 'PATH="$HOME/oldgit:$PATH";';
 }
+
+/** `_ws_reclaim_branch_state` as it would read with NO symbolic-branch guard: `present` whenever rev-parse
+ *  peels the name. The guard answers first at every real read, so only this stub lets the tail's step-5 CAS
+ *  meet a symbolic branch, and so pins Task 3's `--no-deref` (defence in depth) on its own. */
+const PRE_GUARD_READ = `_ws_reclaim_branch_state() { local s; s=$(git -C "$1" rev-parse --verify --quiet "refs/heads/$2^{commit}" 2>/dev/null) && printf 'present %s\\n' "$s" || printf 'unmeasured\\n'; };`;
 
 describe('_ws_reclaim_branch_state reads three ways (R53)', () => {
   it('answers present <sha>, absent, and unmeasured outside a repository — rc 0 each time', () => {
@@ -4107,6 +4472,31 @@ describe('_ws_reclaim_branch_state reads three ways (R53)', () => {
     expect(existsRc(c.main, pre), 'the CONTROL: uncontained, git reads the inherited repository').toBe('2');
     expect(stateOf(c.main, pre)).toBe(`present ${c.tip}|0`);
   }, 60_000);
+
+  it('a SYMBOLIC registry branch is unmeasured, never present: update-ref -d would delete the branch it names', () => {
+    const c = makeChild(h);
+    goneBranch(c);
+    const absentToken = evalOf(h).token;
+    expect(absentToken, 'the CONTROL: a proven absence mints a token').toMatch(/^[0-9a-f]{64}$/);
+    const mainTip = h.git(c.main, 'rev-parse', 'refs/heads/main');
+    h.git(c.main, 'symbolic-ref', `refs/heads/${CHILD_BRANCH}`, 'refs/heads/main');
+    expect(existsRc(c.main), 'the CONTROL: git answers that the ref exists').toBe('0');
+    expect(h.git(c.main, 'rev-parse', '--verify', '--quiet', `refs/heads/${CHILD_BRANCH}^{commit}`),
+      'the CONTROL: rev-parse peels it to main’s commit').toBe(mainTip);
+    expect(stateOf(c.main)).toBe('unmeasured|0');
+    const a = evalOf(h);
+    expect(a.verdict).toBe('unmeasured');
+    expect(a.token, 'no token is minted over a symbolic branch').toBe('');
+    expect(a.detail).toMatch(READ_FAILED);
+    const r = childReclaimVerb(h, absentToken);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect((JSON.parse(r.stdout) as { failed: string }).failed).toBe('probe-unmeasured');
+    expect(h.git(c.main, 'rev-parse', 'refs/heads/main'), 'main did not move').toBe(mainTip);
+    expect(h.git(c.main, 'symbolic-ref', `refs/heads/${CHILD_BRANCH}`), 'the symbolic branch stands as it was').toBe('refs/heads/main');
+    expect(fs.existsSync(c.wt), 'the tree stands').toBe(true);
+    expect(h.reg(CHILD_ID, 'uuid'), 'the row stands').not.toBeNull();
+    expect(h.reg(CHILD_ID, 'reaping'), 'no breadcrumb').toBeNull();
+  }, 90_000);
 });
 
 describe('the ladder, present arm', () => {
@@ -4317,6 +4707,30 @@ describe('the pin and the tail', () => {
     expect(fs.existsSync(path.join(h.home, '.cc-clips', CHILD_ID, 'shot.png')), 'the artifacts step never ran').toBe(true);
   }, 90_000);
 
+  it('the tail deletes the registry branch itself, never the branch a symbolic one names (--no-deref)', () => {
+    const c = makeChild(h);
+    h.git(c.wt, 'checkout', '-q', '--detach');
+    interrupted(c, 'children');
+    expect(tombOf()['tip'], 'the CONTROL: the pin recorded the tip').toBe(c.tip);
+    // The tail died after step (4), as in the step-5 case above.
+    h.git(c.main, 'worktree', 'remove', '--force', c.wt);
+    h.sh(`_reg_set ${CHILD_ID} reaping reclaim:branch`);
+    // The registry branch becomes SYMBOLIC, naming another branch at the same commit.
+    h.git(c.main, 'branch', 'ws/target', c.tip);
+    h.git(c.main, 'symbolic-ref', `refs/heads/${CHILD_BRANCH}`, 'refs/heads/ws/target');
+    expect(h.git(c.main, 'symbolic-ref', `refs/heads/${CHILD_BRANCH}`), 'the CONTROL: the registry branch is symbolic')
+      .toBe('refs/heads/ws/target');
+    // The real read answers `unmeasured` here (the case above), so the read is stubbed to its pre-guard self:
+    // the CAS's own `--no-deref` is the only guard left.
+    const r = childReclaimVerb(h, resumeToken('branch'), { pre: PRE_GUARD_READ });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((JSON.parse(r.stdout) as { reclaimed: string }).reclaimed).toBe(CHILD_ID);
+    expect(h.git(c.main, 'for-each-ref', '--format=%(objectname)', 'refs/heads/ws/target'),
+      'the branch the symbolic one named stands').toBe(c.tip);
+    expect(h.git(c.main, 'for-each-ref', '--format=%(refname)', `refs/heads/${CHILD_BRANCH}`),
+      'the symbolic registry branch itself was deleted').toBe('');
+  }, 90_000);
+
   it('the fresh pin reads the branch itself: unmeasured there is pin-failed', () => {
     const c = makeChild(h);
     h.git(c.wt, 'checkout', '-q', '--detach');
@@ -4417,17 +4831,29 @@ Then, in `server/test/lifecycle-refusal-word.test.ts` (R43: the new word carries
   });
 ```
 
+Then, in `server/test/child-reclaim-status.test.ts` (R43: the failure-word list; wave 5's file, on the worker's tree), make two edits. Find both sites by name: `grep -nF 'failed unit-still-active → deferred' server/test/child-reclaim-status.test.ts` and `grep -nF 'reads a failure token’s journal word ahead of the audit sentences' server/test/child-reclaim-status.test.ts` each print one line.
+- Directly after the `ROWS` entry `failed unit-still-active → deferred, wave 3’s journal word, not the audit fallback` (its three lines), add:
+
+```ts
+  { name: 'failed branch-unmeasured → deferred, its journal word, not the audit fallback',
+    input: base({ event: ev('failed', 'branch-unmeasured') }),
+    want: { word: 'deferred', sentence: lcRefusalWord('branch-unmeasured'), at: EV_AT } },
+```
+
+  In the comment directly above those rows, `these two rows cannot pass on a missing word` becomes `these rows cannot pass on a missing word`.
+- In `reads a failure token’s journal word ahead of the audit sentences`, the list `['pin-failed', 'unit-still-active', 'flock-unavailable', 'lock-unopenable']` becomes `['pin-failed', 'unit-still-active', 'flock-unavailable', 'lock-unopenable', 'branch-unmeasured']`.
+
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run, in the foreground with a timeout of at least 600000 ms:
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-gone-branch.test.ts test/ccd-child-reclaim-pin.test.ts -t 'three ways|ladder|vanished|pin and the tail|PROVEN absent'
-cd server && ./node_modules/.bin/vitest run test/lifecycle-refusal-word.test.ts
+cd server && ./node_modules/.bin/vitest run test/lifecycle-refusal-word.test.ts test/child-reclaim-status.test.ts
 ```
 
-Expected: FAIL. Everything below fails except two cases, which PASS. `a token minted over absence is refused once the branch reappears` is the control, because the `tip` input already changes. `a git older than 2.43 reclaims a standing branch exactly as today` is the fallback's control: today's reads never ask `--exists`, so the shim changes nothing yet. The failures, case by case:
-- **The five `_ws_reclaim_branch_state` cases:** `expected '|127' to be 'present <sha>|0'` (or `'absent|0'` / `'unmeasured|0'`). The function does not exist, so the command substitution answers 127. Their CONTROLs (`existsRc`) pass first.
+Expected: FAIL. Everything below fails except three cases, which PASS. `the tail deletes the registry branch itself, never the branch a symbolic one names` is the defence Task 3 already put in place. Today's step 5 follows the symbolic ref through `show-ref --verify`, but Task 3's CAS (`update-ref -d --no-deref`) deletes only the symbolic ref, and the stub changes nothing yet. Its red is Step 5's row 18. `a token minted over absence is refused once the branch reappears` is the control, because the `tip` input already changes. `a git older than 2.43 reclaims a standing branch exactly as today` is the fallback's control: today's reads never ask `--exists`, so the shim changes nothing yet. The failures, case by case:
+- **The six `_ws_reclaim_branch_state` cases:** `expected '|127' to be 'present <sha>|0'` (or `'absent|0'` / `'unmeasured|0'`). The function does not exist, so the command substitution answers 127. Their CONTROLs (`existsRc`, and the symbolic case's `rev-parse`) pass first.
 - **`present arm: absence mints …`:** `expected [ …(n) ] to deeply equal ArrayContaining [ 'worktree=present', 'tip=<sha>', 'branchState=present' ]`.
 - **`present arm: a corrupt/unreadable branch …` and `vanished arm: a corrupt/unreadable branch …`:** `expected 'reclaimable' to be 'unmeasured'`, because the fold mints a token.
 - **`vanished arm: absence mints …`:** the `ArrayContaining` assertion, because `branchState=absent` is missing.
@@ -4440,6 +4866,10 @@ Expected: FAIL. Everything below fails except two cases, which PASS. `a token mi
 - **`a git older than 2.43 …`:** `expected 'reclaimable' to be 'unmeasured'`.
 - **The rewritten pin case:** `expected '1' to be '0'`, with why `refs/heads/ws/quiet-basin does not resolve`.
 - **`lifecycle-refusal-word`:** `isLcRefusalToken(branch-unmeasured)` gives `expected false to be true`. `covers the whole union` gives a diff with `branch-unmeasured` only on the expected side. The `branch-unmeasured says nothing further went …` row and the new word case give `TypeError: .toMatch() expects to receive a string, but got undefined`.
+- **`child-reclaim-status`:**
+  - The `failed branch-unmeasured → deferred…` row: `expected { word: 'deferred', sentence: 'ccrc declined: branch-unmeasured.', … } to deeply equal { word: 'deferred', sentence: null, … }`. `lcRefusalWord` answers `null` for a token outside the union, and the derivation falls back to `refusalSentence`.
+  - `gives every word it answers a sentence`: `expected null not to be null`.
+  - The token loop: `branch-unmeasured has no LC_REFUSAL_WORD entry: wave 3's journal words did not land: expected null not to be null`.
 
 The unreadable cases report as skipped when the suite runs as root.
 
@@ -4466,23 +4896,33 @@ _ws_reclaim_branch_state() {   # gitdir-or-repo branch -> prints exactly one of 
   # `show-ref --exists` does: 0 present, 2 absent, and anything else — 1 for a
   # ref that would not read, 128 for no repository, 129 from a git older than
   # 2.43 that does not know the flag — is a read that did not run. ONLY rc 2
-  # EVER PROVES ABSENT. THE POSITIVE FALLBACK (spec §5.5, old git): on rc 0,
-  # or on any answer but 0 or 2, a ref that `rev-parse --verify --quiet` peels
-  # to a commit reads `present`, so a box on a git older than 2.43 reclaims a
-  # standing branch as before and never a gone one. Anything else is
-  # `unmeasured`, and every caller stops on it. A branch is never taken for
-  # gone over a read that did not run. Contained, so an inherited GIT_DIR or
-  # GIT_NAMESPACE cannot answer for another repository's refs. `present`
-  # carries the sha, read once more; a ref that will not peel to a commit is
-  # unmeasured too.
-  local repo="$1" b="$2" rc sha
+  # IS EVER TAKEN AS ABSENT. It is necessary, though not sufficient alone: a
+  # loose ref that is a dangling symlink over a packed entry answers 2 too,
+  # while git still lists the packed branch (measured, git 2.43). That
+  # branch is then never deleted, only left with no row: a leak, never a
+  # loss, and a stated residual. THE POSITIVE FALLBACK (spec §5.5, old
+  # git): on rc 0, or on any answer but 0 or 2, a ref that
+  # `rev-parse --verify --quiet` peels to a commit reads `present`, so a box
+  # on a git older than 2.43 reclaims a standing branch as before and never
+  # a gone one. A SYMBOLIC branch never reads `present` (the guard below).
+  # Anything else is `unmeasured`, and every caller stops on it. A branch is
+  # never taken for gone over a read that did not run. Contained, so an
+  # inherited GIT_DIR or GIT_NAMESPACE cannot answer for another
+  # repository's refs. `present` carries the sha, read once more; a ref that
+  # will not peel to a commit is unmeasured too.
+  local repo="$1" b="$2" rc src sha
   if [[ -n "$b" ]]; then
     _ws_reclaim_contained git -C "$repo" show-ref --exists "refs/heads/$b" >/dev/null 2>&1; rc=$?
     if (( rc == 2 )); then
       printf 'absent\n'; return 0
     fi
-    sha=$(_ws_reclaim_contained git -C "$repo" rev-parse --verify --quiet "refs/heads/$b^{commit}" 2>/dev/null) \
-      && [[ "$sha" =~ ^[0-9a-f]{40}$ ]] && { printf 'present %s\n' "$sha"; return 0; }
+    # A SYMBOLIC branch is never present: `update-ref -d` follows it and deletes
+    # the branch it names (measured, git 2.43), past every check asked of <b>.
+    _ws_reclaim_contained git -C "$repo" symbolic-ref -q "refs/heads/$b" >/dev/null 2>&1; src=$?
+    if (( src == 1 )); then
+      sha=$(_ws_reclaim_contained git -C "$repo" rev-parse --verify --quiet "refs/heads/$b^{commit}" 2>/dev/null) \
+        && [[ "$sha" =~ ^[0-9a-f]{40}$ ]] && { printf 'present %s\n' "$sha"; return 0; }
+    fi
   fi
   printf 'unmeasured\n'
   return 0
@@ -4500,7 +4940,7 @@ _ws_reclaim_tip_read() {   # main branch -> 0 with REAP_TIP (the tip; '' when th
     "present "*) REAP_TIP="${s#present }"; RECLAIM_BRANCHSTATE=present; return 0 ;;
     absent) RECLAIM_BRANCHSTATE=absent; return 0 ;;
   esac
-  _WS_BRANCH_WHY="whether refs/heads/$2 exists in $1 could not be read (git show-ref --exists answered neither present nor absent: a ref that will not read, no repository, or a git older than 2.43) — a branch is never taken for gone over a read that did not run"
+  _WS_BRANCH_WHY="whether refs/heads/$2 exists in $1 could not be read (git show-ref --exists answered neither present nor absent, or the ref is symbolic: a ref that will not read, no repository, a git older than 2.43, or a branch that names another) — a branch is never taken for gone over a read that did not run"
   return 1
 }
 ```
@@ -4543,7 +4983,7 @@ and put this above the `REAP_TOKEN=` line, below `# 10 is the VERB's …`:
   # so no token is ever spent as "absent" over a ref that would not read.
 ```
 
-**(d)** `_ws_reclaim_eval_absent`. Replace its tip read, now the FIRST remaining hit of `grep -n 'REAP_TIP=$(git -C "$main" rev-parse --verify --quiet' ccd/ccd`:
+**(d)** `_ws_reclaim_eval_absent`. Replace its tip read, now the FIRST of the three lines that `grep -nF 'REAP_TIP=$(git -C "$main" rev-parse --verify --quiet' ccd/ccd` prints:
 
 ```bash
   REAP_TIP=$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch^{commit}" 2>/dev/null) || REAP_TIP=""
@@ -4598,7 +5038,7 @@ Then replace the whole tip block, from `# THE BRANCH TIP IS A REQUIRED PIN (spec
   extras+=("$REAP_TIP")
 ```
 
-**(f)** `_ws_reclaim_pin_absent_contained`. Replace its tip read (the last remaining hit of the tip-read grep) with:
+**(f)** `_ws_reclaim_pin_absent_contained`. Replace its tip read (the one line the `grep -nF` tip-read grep still prints) with:
 
 ```bash
   # Read three ways (`_ws_reclaim_tip_read`, spec §5.5): a branch PROVEN
@@ -4631,7 +5071,7 @@ add:
     if git -C "$main" show-ref --verify --quiet "refs/heads/$branch"; then
 ```
 
-(find it with `grep -n 'show-ref --verify --quiet "refs/heads/$branch"' ccd/ccd`) with:
+(find it with `grep -nF 'show-ref --verify --quiet "refs/heads/$branch"' ccd/ccd`, which prints four lines: edit only the hit inside `_ws_reclaim_tail`, the last of the four; the other three are ws-reap and gc code and are never edited) with:
 
 ```bash
     # WHETHER THE BRANCH STANDS, READ THREE WAYS (spec §5.5): `absent` is
@@ -4648,7 +5088,7 @@ add:
     if [[ "$bstate" == "present "* ]]; then
 ```
 
-The body of that `if` (the `branch-moved` test on a tip that is not 40-hex, the holders, the main-line proof, the keep, and Task 3's contained `update-ref -d`) and its closing `fi` are unchanged.
+The body of that `if` (the `branch-moved` test on a tip that is not 40-hex, the holders, the main-line proof, the keep, and Task 3's contained `update-ref -d --no-deref`) and its closing `fi` are unchanged.
 
 **(i)** The new word, in L0 (`shared/api.ts`; gone-branch.OPEN5, R43). Locate both sites by content (see Files).
 - The union's last member `| 'unit-still-active';      // ws-reclaim (spec 2026-09-22 §5.6): …` loses its `;` and keeps its comment unchanged. Directly after it, add ONE line:
@@ -4676,15 +5116,20 @@ The union gains exactly ONE line, and Step 4's citation tax depends on that. No 
 Verify the one act took:
 
 ```bash
-grep -c 'show-ref --exists' ccd/ccd                                        # 1
-grep -c '_ws_reclaim_tip_read "$main" "$branch"' ccd/ccd                   # 4
-grep -c 'bstate=$(_ws_reclaim_branch_state "$main" "$branch")' ccd/ccd     # 1
-grep -c 'branchState=$RECLAIM_BRANCHSTATE' ccd/ccd                         # 2
-grep -c 'rev-parse --verify --quiet "refs/heads/$branch^{commit}"' ccd/ccd # 0
-grep -c 'show-ref --verify --quiet "refs/heads/$branch"' ccd/ccd           # 0
-grep -c '_ws_reclaim_fail "$id" "$lctx" branch-unmeasured' ccd/ccd         # 1
-grep -cE '_ws_reclaim_contained git -C "\$main" (worktree remove|update-ref -d)' ccd/ccd   # unchanged by this task (X3)
+R() { sed -n '/── RECLAIM-BEGIN ──/,/── RECLAIM-END ──/p' ccd/ccd; }   # the RECLAIM region; every count below is scoped to it
+R | grep -cF 'show-ref --exists'                                            # 3: (b)'s header line, its call, the _WS_BRANCH_WHY text
+R | grep -cF 'symbolic-ref -q "refs/heads/$b"'                              # 1: (b)'s symbolic-branch guard
+R | grep -cF '_ws_reclaim_tip_read "$main" "$branch"'                       # 4: (c), (d), (e), (f)
+R | grep -cF 'bstate=$(_ws_reclaim_branch_state "$main" "$branch")'         # 1: (h)
+R | grep -cF 'branchState=$RECLAIM_BRANCHSTATE'                             # 2: the two fingerprint calls
+R | grep -cF 'rev-parse --verify --quiet "refs/heads/$branch^{commit}"'     # 0: all four old tip reads replaced
+R | grep -cF 'show-ref --verify --quiet "refs/heads/$branch"'               # 0: step 5's old test replaced (three more stand OUTSIDE the region, in ws-reap and gc code: never edit them)
+R | grep -cF '_ws_reclaim_fail "$id" "$lctx" branch-unmeasured'             # 1: (h)
+R | grep -cF '_ws_reclaim_contained git -C "$main" worktree remove'         # 4: unchanged by this task (X3), or what Tasks 5 to 7 re-pinned it to
+R | grep -cF '_ws_reclaim_contained git -C "$main" update-ref -d --no-deref' # 2: unchanged by this task (X3): Task 3's two branch CASes
 ```
+
+Each line prints one number, and its comment gives the number expected and where it comes from. Every pattern is a fixed string (`-F`), so a `$` in it is literal under GNU grep and under the harness's ugrep alike. `R` keeps the three ws-reap and gc lines that spell the old step-5 test out of the `# 0` count. A `0` where the comment expects more means the edit did not land. It never means the pattern matched nothing.
 
 - [ ] **Step 4: Re-stamp `ccd/ccd`, then run the tests to verify they pass**
 
@@ -4766,6 +5211,10 @@ Make one edit at a time, run the command, see the red, then restore. Every row r
 | 14 | In step 5, `_ws_reclaim_fail "$id" "$lctx" branch-unmeasured \` → `_ws_reclaim_fail "$id" "$lctx" branch-elsewhere \` | `cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-gone-branch.test.ts test/ccd-refusal-scan.test.ts -t 'step 5\|set-equal'` | `expected 'branch-elsewhere' to be 'branch-unmeasured'`; and `declared journal-only tokens with no literal ccd call-site argument: expected [ 'branch-unmeasured' ] to deeply equal []` |
 | 15 | In `LC_REFUSAL_WORD['branch-unmeasured']`, `stopped before removing anything further` → `stopped, and the workspace is intact` | `cd server && ./node_modules/.bin/vitest run test/lifecycle-refusal-word.test.ts` | `branch-unmeasured says nothing further went, and never that anything is intact`: `expected '…the workspace is intact…' not to match /intact/` |
 | 16 | In `_ws_reclaim_branch_state`, prefix the `sha=$(_ws_reclaim_contained git -C "$repo" rev-parse …` line with `(( rc == 0 )) && ` (the fallback dropped) | `cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-gone-branch.test.ts -t 'rejects --exists\|reclaims a standing branch'` | `expected 'unmeasured\|0' to be 'present <sha>\|0'`; and `expected 'unmeasured' to be 'reclaimable'` |
+| 17 | In `_ws_reclaim_branch_state`, `if (( src == 1 )); then` → `if (( src <= 1 )); then` (the symbolic-branch guard dropped) | same file, `-t 'SYMBOLIC registry branch'` | `expected 'present <main’s sha>\|0' to be 'unmeasured\|0'` |
+| 18 | In the tail's step 5, `update-ref -d --no-deref "refs/heads/$branch" "$tip"` → `update-ref -d "refs/heads/$branch" "$tip"` (Task 3's `--no-deref` dropped) | same file, `-t 'never the branch a symbolic one names'` | `the branch the symbolic one named stands: expected '' to be '<sha>'`. The CAS followed the symbolic ref and deleted `ws/target` |
+
+Rows 17 and 18 are the guard and its defence in depth. Each reds alone: row 17 at the read, and row 18 only under `PRE_GUARD_READ`, the stub that stands in for the guard's absence. **Disclosed survivor:** dropping `--no-deref` from the NESTED CAS (`update-ref -d --no-deref "refs/heads/$cbr" "$chead"`) reds no case. The nested reads keep the two-way read (gone-branch.OPEN6), and no fixture builds a symbolic nested branch, so the flag there is defence in depth only.
 
 Restore everything, re-stamp (`bash ccd/ccrc restamp ccd/ccd && node shared/mark.mjs --check ccd/ccd`), and re-run Step 4's first two commands (green).
 
@@ -4773,7 +5222,7 @@ Restore everything, re-stamp (`bash ccd/ccrc restamp ccd/ccd && node shared/mark
 
 ```bash
 git add ccd/ccd shared/api.ts README.md server/test/ccd-child-reclaim-gone-branch.test.ts server/test/ccd-child-reclaim-pin.test.ts \
-  server/test/lifecycle-refusal-word.test.ts
+  server/test/lifecycle-refusal-word.test.ts server/test/child-reclaim-status.test.ts
 git add server/test/session-hook.test.ts   # only if Step 4's census re-measure changed it
 git commit -m "$(cat <<'MSG'
 feat(ccd): a branch proven gone no longer strands a child's reclaim
@@ -4787,15 +5236,20 @@ arms, the pin, the vanished arm's pin and the tail's step 5.
 A branch proven absent pins HEAD, the WIP commit and every reflog,
 deletes no branch, and the reclaim goes ahead. The token carries
 branchState, so it is never spent over a ref that would not read.
-Three cases stay closed:
+Four cases stay closed:
 - a branch that reappears after the record stays branch-moved;
 - a HEAD still on the gone branch stays pin-failed;
+- a registry branch that is a symbolic ref reads unmeasured, because
+  update-ref -d would follow it and delete the branch it names;
 - a read that fails at step 5 stops the tail instead of purging the row,
   with a new failed word, branch-unmeasured.
 
 On a git older than 2.43, which rejects --exists, a branch rev-parse
 still peels reads present, so such a box reclaims a standing branch as
-before. Only --exists' own absent answer ever proves a branch gone.
+before. Only --exists' own absent answer ever proves a branch gone. So
+on such a box a resume whose branch is already gone stays
+branch-unmeasured, until the branch is re-created at its recorded tip
+or git is upgraded.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
@@ -4806,11 +5260,15 @@ MSG
 - `_ws_reclaim_branch_state` and `_ws_reclaim_tip_read`, read in the shared ladder, pin and tail (the `_WS_RCL_ACT=expire` flavour);
 - the `branchState=` fingerprint input: an audit token minted before the deploy and spent after it costs one `state-changed` per child, on both verbs;
 - the old-git positive fallback: on a git older than 2.43 a standing branch reads present and a gone one unmeasured;
-- `branch-unmeasured`, the shared tail's step-5 `failed` word, which under `ws-expire` journals with `act expire` and `verb ws-expire`.
+- `branch-unmeasured`, the shared tail's step-5 `failed` word, which under `ws-expire` journals with `act expire` and `verb ws-expire`;
+- the symbolic-branch guard: a registry branch that is a symbolic ref reads `unmeasured` on both verbs. Its defence in depth is Task 3's `update-ref -d --no-deref` at both branch CASes of the shared tail.
 
-It also lists the two carried residuals:
+It also lists the carried residuals:
 - the tail's step-3 nested-branch reads, and the manifest and PR-phase reads, keep the two-way read (gone-branch.OPEN6);
-- once its branch is proven absent, a `(no branch)` stash is neither attributed nor attic-pinned; it stays in `refs/stash` and nothing deletes it (gone-branch.OPEN7).
+- once its branch is proven absent, a `(no branch)` stash is neither attributed nor attic-pinned; it stays in `refs/stash` and nothing deletes it (gone-branch.OPEN7);
+- on a git older than 2.43, a reclaim or expiry stops at step 5 as `branch-unmeasured` on every retry in two cases: its step 5 already deleted the branch (the tail died before its `artifacts` breadcrumb), or someone else deleted the branch after the pin. Recreating the branch at the tombstone's `tip`, or upgrading git, lets it finish. The fleet runs 2.43, so this is stated, not closed (ruling S2-4);
+- as today, a branch that appears between the verb's in-lock recompute and the pin is adopted at the tip the pin reads. A token minted over `branchState=absent` is then spent over it, because the gone-branch consent is re-checked at the tombstone, not at the pin. That tip is pinned and its reflog is kept, so nothing is lost (ruling S2-5);
+- a loose ref that is a dangling symlink over a packed entry answers `show-ref --exists` rc 2 while git still lists the packed branch. It therefore reads `absent`, and that branch is never deleted, only left with no row: a leak, never a loss (ruling S2-6).
 
 
 ### Task 9: The gone-directory recovery — a second placement basis, `recorded`, in `_ws_reclaim_workdir_shared` (R54)
@@ -4819,7 +5277,7 @@ It also lists the two carried residuals:
 
 **Why:** R31 (run 208) places another row only on a `complete` resolution. A row whose directory is gone resolves only as `absent-suffix`, so it is collected into `unres` and holds every child: a present child, a vanished one, and two vanished children, who hold each other (contract R31's stated cost). R54 lifts that hold only on positive evidence, through one resolver. The audit, the verb's locked recomputation and `_ws_reclaim_owned` all reach `_ws_reclaim_workdir_shared` (R31), so one edit there reaches all three.
 - **Git-record arm.** It ends the hold for a hand-deleted workspace, whose record git keeps and marks `prunable`.
-- **Breadcrumb arm.** It ends "two interrupted children hold each other". After ccd's own `git worktree remove`, git's record is gone too, so the git-record arm can never fire there.
+- **Breadcrumb arm.** It ends "two interrupted children hold each other". After ccd's own `git worktree remove`, git's record is gone too, so the git-record arm can never fire there. For the same reason the arm places a row only while git keeps NO record of the tree (`_ws_reclaim_record` rc 1, ruling S2-1). Both verbs also write those phases over a workdir that was already absent, moved away rather than removed: ws-reap's `branch` whenever the workdir is gone at its step (f), and the reclaim tail's `reclaim:branch` before its step 5 clears git's record. A record git still keeps (a moved tree's, a locked one) is the git-record arm's to place or to hold, together with its moved-tree check.
 - **Moved-tree check.** It closes the hole the git-record arm opens. A record says where a tree *was*. An `mv` leaves the stanza exactly as an `rm` does, and the moved tree's `.git` still names the same admin directory (scout, git 2.43). Rung 9 already refuses such a checkout of the child's own repository (`_ws_reclaim_gitdir_own`). A clean checkout of another repository passes `_ws_reclaim_foreign_clean` and would go with the child.
 
 **Scope.**
@@ -4866,7 +5324,8 @@ It also lists the two carried residuals:
                                              placed by), _WS_RECORDED_G (resolved admin dir; '' on the breadcrumb
                                              arm); rc 1: not proven (the row holds, as before)
   _ws_reclaim_recorded_git <id> <workdir>    rc 0 with _WS_RECORDED_G; rc 1 otherwise
-  _ws_reclaim_recorded_crumb <id> <workdir>  rc 0 proven; rc 1 otherwise
+  _ws_reclaim_recorded_crumb <id> <workdir>  rc 0 proven, and git keeps no record of the tree; rc 1 otherwise
+                                             (a record git still keeps, or a list it could not give, included)
   _ws_reclaim_moved_check <nested-list>      rc 0 none; rc 1 a recovered row's moved tree (_WS_MOVED_WHY);
                                              rc 2 unmeasured (_WS_MOVED_WHY)
   _WS_RECORDED_GDIRS                         "id<TAB>resolved-admin-dir" lines; reset by every
@@ -4898,7 +5357,9 @@ Create `server/test/ccd-child-reclaim-recovery.test.ts`:
 //     that stanza `prunable`; the leaf is the only absent component; the parent resolves `complete` to its
 //     literal spelling. The row is then placed by that physical path.
 //   - the breadcrumb arm: the row's `.reaping` phase is `branch`, `artifacts` or `clips` (a `reclaim:` one only
-//     beside its tombstone's `worktree: present`), and the tombstone's uuid and workdir equal the row's.
+//     beside its tombstone's `worktree: present`), the tombstone's uuid and workdir equal the row's, and git keeps
+//     NO record of the tree. Both verbs write those phases over a tree that was moved away too, and only ccd's own
+//     removal takes git's record with it.
 // The moved-tree hole is closed: no nested checkout of the child, of any repository, may resolve its git
 // directory to the admin directory a recovered row named — asked after the ladder's nested scan, and again in
 // `_ws_reclaim_owned`. Every item of R54's never-list has a case here or a line in the scan at the foot.
@@ -5165,6 +5626,21 @@ describe('the breadcrumb arm', () => {
     restore(s.wt);
     placed(evalOf(h), 'the CONTROL: restored, the breadcrumb places it again');
   }, 120_000);
+
+  it('a breadcrumb never places a row git still records — a tree moved away, its record locked', () => {
+    const c = makeChild(h);
+    const s = sibling();
+    pinned(SIB, s.wt, c.main);
+    h.git(c.main, 'worktree', 'lock', s.wt);
+    // The tail's own state between its steps 4 and 5: `reclaim:branch` over a tree that was MOVED, not removed.
+    fs.renameSync(s.wt, path.join(h.home, 'moved-away'));
+    expect(fs.existsSync(s.wt), 'the CONTROL: nothing stands at the row’s path').toBe(false);
+    expect(stanza(c.main, s.wt), 'the CONTROL: git still records the tree, locked').toContain('\nlocked');
+    held(evalOf(h), SIB, 'a breadcrumb over a record git keeps');
+    fs.rmSync(path.join(s.admin, 'locked'));
+    expect(stanza(c.main, s.wt), 'the CONTROL: unlocked, git marks the record prunable').toContain('\nprunable');
+    placed(evalOf(h), 'the CONTROL: unlocked, the git arm places it');
+  }, 120_000);
 });
 
 describe('the moved-tree hole', () => {
@@ -5286,7 +5762,7 @@ cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-recovery.test
 cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-ladder.test.ts -t 'ambiguous row hold'
 ```
 
-Expected: the recovery file FAILS 18 of 19. The one that passes is `a lifecycle create row alone keeps the hold`, by construction: it pins an absence. The `unreadable` case skips as root. Each failure, in order:
+Expected: the recovery file FAILS 19 of 20. The one that passes is `a lifecycle create row alone keeps the hold`, by construction: it pins an absence. The `unreadable` case skips as root. Each failure, in order:
 
 - `a hand-deleted workspace…` fails at `git’s record places the gone sibling: … expected 'unmeasured' to be 'reclaimable'`.
 - `two hand-deleted children…` fails at `the child, its sibling placed by git’s record: … expected 'unmeasured' to be 'reclaimable'`.
@@ -5295,7 +5771,8 @@ Expected: the recovery file FAILS 18 of 19. The one that passes is `a lifecycle 
   - `a locked record…` at `unlocked, the same record places it`;
   - `a parent that is gone too…` at `with the parent back`;
   - `a parent spelled through a link…` at `spelled physically`;
-  - `an unreadable…` at `listable again`.
+  - `an unreadable…` at `listable again`;
+  - `a breadcrumb never places a row git still records…` at `unlocked, the git arm places it`.
 - `two interrupted children…` fails at `expected '1' to be '0'`. Its message names `registry row(s) demo-still-harbor name a workdir that cannot be resolved completely`.
 - The six `… keeps the hold` variants each fail at `the CONTROL: the breadcrumb and its tombstone place the sibling: … expected 'unmeasured' to be 'reclaimable'`.
 - Both moved-tree cases fail at `expected 'unmeasured' to be 'containment-unproven'`.
@@ -5490,17 +5967,21 @@ _ws_reclaim_recorded_crumb() {   # id workdir -> rc 0 when the row's own breadcr
   # CCD'S OWN REMOVAL, READ OFF CCD'S OWN RECORDS. ccd takes a tree away with
   # git's own worktree removal, which takes git's record with it, so the git
   # arm can never place a tree ccd removed — and two interrupted children held
-  # each other for good. Here a breadcrumb written only AFTER ccd removed the
-  # tree places it: ws-reap's `branch` and `clips`, a reclaim's
-  # `reclaim:branch` and `reclaim:artifacts`. But a reclaim's vanished arm
+  # each other for good. Here a breadcrumb written past ccd's removal step
+  # places it — ws-reap's `branch` and `clips`, a reclaim's `reclaim:branch`
+  # and `reclaim:artifacts` — and only while git keeps no record of the tree:
+  # both verbs write those phases over a workdir that was already absent, so
+  # a record that still stands (a moved tree's, a locked one) is the git
+  # arm's to judge. But a reclaim's vanished arm
   # writes `reclaim:branch` at its START, with nothing taken by ccd, so a
   # `reclaim:` phase counts only beside its tombstone's `worktree: present`.
   # The tombstone must be THIS row's: its `uuid` the row's, its `workdir` the
   # row's spelling (a recycled slug can leave an earlier act's). Every other
   # phase proves nothing — an expiry's `expire:` ones included — and so does
-  # an unreadable breadcrumb, row or tombstone, or a missing python3 (the
-  # tombstone's one reader).
-  local o="$1" w="$2" crumb tomb tuuid twd ruuid tworktree need=0
+  # an unreadable breadcrumb, row or tombstone, a missing python3 (the
+  # tombstone's one reader), or a worktree list git could not give. The
+  # record's globals are shadowed here, as in the git arm.
+  local o="$1" w="$2" crumb tomb tuuid twd ruuid tworktree need=0 project rc RECLAIM_REC_BRANCH='' RECLAIM_REC_HEAD='' RECLAIM_REC_MAIN=0 RECLAIM_REC_PRUNABLE=0
   crumb=$(_reg_read "$o" reaping) || return 1
   case "$crumb" in
     branch|clips) : ;;
@@ -5517,6 +5998,14 @@ _ws_reclaim_recorded_crumb() {   # id workdir -> rc 0 when the row's own breadcr
     tworktree=$(_ws_tomb_str "$tomb" worktree) || return 1
     [[ "$tworktree" == present ]] || return 1
   fi
+  # A BREADCRUMB SAYS CCD GOT PAST A STEP, NOT THAT CCD REMOVED THE TREE: both
+  # verbs write that phase over a workdir that was already absent (moved away),
+  # and only ccd's own worktree removal takes git's record with it. A tree git
+  # still records is the git arm's to place or to hold.
+  project=$(_reg_read "$o" project) || return 1
+  [[ -n "$project" && "$project" != */* && "$project" != . && "$project" != .. && "$project" != *[[:cntrl:]]* ]] || return 1
+  _ws_reclaim_record "$PROJECTS_ROOT/$project" "$w"; rc=$?
+  (( rc == 1 )) || return 1
   return 0
 }
 
@@ -5557,26 +6046,24 @@ _ws_reclaim_moved_check() {   # nested -> rc 0 when no checkout in nested (resol
 
 The scan in Step 1 reads each body's code lines, including each function's first line with its trailing `#` comment. Keep the forbidden words out of those lines: `mkdir`, `prune`, `rm`, `unlink`, `update-ref`, `worktree remove`, `/proc`, `tmux`, `_svc_`, `pane_`, `.lifecycle`. The prose above already respects this.
 
-**3.5 — The ladder asks it after the nested scan.** In `_ws_reclaim_ladder`, replace
+**3.5 — The ladder asks it after the nested scan.** In `_ws_reclaim_ladder`, find these two lines (`grep -nF 'RECLAIM_FOREIGN+="$p"' ccd/ccd` prints the first one, and the second follows it):
 
 ```
     RECLAIM_FOREIGN+="$p"$'\n'
   done <<< "$nested"$'\n'
-  # The facts the pin phase will act on, each a fingerprint input.
 ```
 
-with
+Insert these five lines directly below them:
 
 ```
-    RECLAIM_FOREIGN+="$p"$'\n'
-  done <<< "$nested"$'\n'
   # NOR IS ANY CHECKOUT INSIDE IT A GONE ROW'S MOVED TREE (spec §5.5):
   # asked after the scan, over its answer — `_ws_reclaim_moved_check` says why.
   _ws_reclaim_moved_check "$nested"; rc=$?
   (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_MOVED_WHY"; return 1; }
   (( rc == 0 )) || { _reap_refuse containment-unproven "$_WS_MOVED_WHY"; return 1; }
-  # The facts the pin phase will act on, each a fingerprint input.
 ```
+
+They go ABOVE Task 8's four-line `# The facts the pin phase will act on, each a fingerprint input. The branch …` comment, which stays exactly as Task 8 left it. Task 8 (c) rewrote that comment's first line and added three more, so never match it as a whole line.
 
 **3.6 — `_ws_reclaim_owned` asks it again.** Replace
 
@@ -5641,7 +6128,7 @@ cd server
 ```
 
 Expected: every file PASSES.
-- `ccd-child-reclaim-recovery`: 19/19, with `unreadable` skipped as root.
+- `ccd-child-reclaim-recovery`: 20/20, with `unreadable` skipped as root.
 - The ladder suite: all three `ambiguous row hold` cases stay green. The edited one is held because its records were pruned, not because the code cannot see them.
 - `child-reclaim`'s harvested word set is unchanged: `containment-unproven` already exists.
 - `ccd-wsaudit-nonpoison`'s counts are unchanged: there is no new refusal word.
@@ -5677,6 +6164,7 @@ Apply each row alone. Re-stamp (`bash ccd/ccrc restamp ccd/ccd`), run the comman
 | 18 | In `_ws_reclaim_moved_check`, `[[ -n "$o" && "$pg" == "$g" ]]` → `[[ -n "$o" && "$p" == "$g" ]]` (the checkout's path compared, not its git directory) | `moved checkout of ANOTHER` | `expected 'reclaimable' to be 'containment-unproven'` |
 | 19 | Insert `mkdir -p -- "$w" 2>/dev/null \|\| :` as the first body line of `_ws_reclaim_recorded` | `four bodies` and `hand-deleted workspace` | scan: `expected [ '_ws_reclaim_recorded creates a directory: mkdir -p -- "$w" 2>/dev/null \|\| :' ] to deeply equal []`; case: `expected 'unmeasured' to be 'reclaimable'`, because the leaf no longer reads absent |
 | 20 | Insert `git -C "$main" worktree prune 2>/dev/null \|\| :` directly before `_ws_reclaim_log_of "$main" tree "$w" 1` | `git worktree prune never runs` | `git worktree prune never ran: expected '-C … worktree prune\n' to be ''`. The scan reds too: `prunes git’s records`. |
+| 21 | In `_ws_reclaim_recorded_crumb`, delete `(( rc == 1 )) \|\| return 1` | `git still records` | `a breadcrumb over a record git keeps: … expected 'reclaimable' to be 'unmeasured'`. `two interrupted children` and the VARIANTS stay GREEN: `removedByTail` clears the record there, so the check passes. |
 
 `a lifecycle create row alone keeps the hold` has no row. It pins an absence (nothing reads the journal), so the guard is the scan's `reads the lifecycle journal` line. Mutation: insert `: "$_LC_DIR"` into `_ws_reclaim_recorded_crumb` → `four bodies` reds with `… reads the lifecycle journal: : "$_LC_DIR"`.
 
@@ -5693,8 +6181,10 @@ _ws_reclaim_workdir_shared gains a second placement basis, `recorded`, for a
 row whose workdir is gone. Git's record places it when exactly one admin entry
 names the tree, git marks that stanza prunable, the leaf is the only absent
 component and the parent resolves completely to its literal spelling. Ccd's
-own breadcrumb places it when the phase was written after ccd's own removal
-(a reclaim's only with worktree: present) and the tombstone is this row's.
+own breadcrumb places it when the phase was written past ccd's own removal
+step (a reclaim's only with worktree: present), the tombstone is this row's,
+and git keeps no record of the tree: a breadcrumb also stands over a tree
+that was moved away, and a record git keeps is the git arm's to judge.
 Anything short of that holds, as before. The ladder after its nested scan, and
 _ws_reclaim_owned, refuse a checkout inside the child that resolves to a
 recovered row's admin directory: a record says where a tree was, not that it
@@ -5787,7 +6277,7 @@ If either wave-5 grep is empty, this branch was not cut from a `main` carrying #
 (a) Create `server/test/ccd-child-reclaim-unmeasured-journal.test.ts`:
 
 ```ts
-// Child-reclamation wave 6, Task 10 (spec §5.9, amending R5′): a probe the
+// Child-reclamation wave 6, Task 10 (spec §5.9): a probe the
 // reclaim ladder needs that could not run, or whose answer could not be read,
 // is JOURNALED as `failed` with the word `probe-unmeasured`, in BOTH arms that
 // answer it: `ws-reclaim`'s locked recomputation (`verb ws-reclaim`) and
@@ -5827,7 +6317,7 @@ const printedBy = (detail: string): string => {
   return h.sh('_ws_reclaim_failed_json probe-unmeasured "$(cat "$HOME/detail.txt")"');
 };
 
-describe('ws-reclaim: a probe that could not run under the lock is ONE failed line (R52)', () => {
+describe('ws-reclaim: a probe that could not run under the lock is ONE failed line (spec §5.9)', () => {
   it('journals failed probe-unmeasured, verb ws-reclaim, the declared actor, no tx and no intent — and prints the SAME document at exit 1', () => {
     makeChild(h);
     const r = childReclaimVerb(h, evalOf(h).token, { pre: STASH_FAILS, extra: "--surface agent --actor 'run:7 reclaim close'" });
@@ -5857,7 +6347,7 @@ describe('ws-reclaim: a probe that could not run under the lock is ONE failed li
   }, 60_000);
 });
 
-describe('ws-audit --reclaim: the unmeasured answer is ONE failed line, verb ws-audit (R52, amending R5′)', () => {
+describe('ws-audit --reclaim: the unmeasured answer is ONE failed line, verb ws-audit (spec §5.9)', () => {
   it('exit 1, the reclaim document unchanged, one failed line carrying the document’s own detail', () => {
     makeChild(h);
     const r = audit(STASH_FAILS);
@@ -5880,7 +6370,7 @@ describe('ws-audit --reclaim: the unmeasured answer is ONE failed line, verb ws-
   }, 60_000);
 });
 
-describe('wave 5’s reader takes both lines as failures, worded by the journal map (R43, R52)', () => {
+describe('wave 5’s reader takes both lines as failures, worded by the journal map (spec §5.9)', () => {
   it('each arm’s line parses, is a failure line, and words through LC_REFUSAL_WORD', () => {
     makeChild(h);
     childReclaimVerb(h, evalOf(h).token, { pre: STASH_FAILS });
@@ -5897,7 +6387,7 @@ describe('wave 5’s reader takes both lines as failures, worded by the journal 
   }, 90_000);
 
   it('probe-unmeasured is classified nowhere else: not a pre-lock refusal, not a ws-reclaim refusal', () => {
-    // A `failed` line needs no table entry (R52). Putting the word in either table would class it a
+    // A `failed` line needs no table entry (spec §5.9). Putting the word in either table would class it a
     // second time, by a reader that need not agree.
     expect(Object.values(CHILD_RECLAIM_PRE_LOCK_TOKEN)).not.toContain('probe-unmeasured');
     expect(Object.keys(CHILD_RECLAIM_TOKEN_KIND)).not.toContain('probe-unmeasured');
@@ -5916,7 +6406,7 @@ describe('its word is true of both arms', () => {
 });
 ```
 
-(b) `server/test/lifecycle-refusal-word.test.ts`: `ALL_TOKENS` becomes:
+(b) `server/test/lifecycle-refusal-word.test.ts`: `ALL_TOKENS`' last line, as Task 8 left it, `'pin-failed': true, 'unit-still-active': true, 'branch-unmeasured': true,` becomes `'pin-failed': true, 'unit-still-active': true, 'branch-unmeasured': true, 'probe-unmeasured': true,`. Edit that ONE line; never paste a whole literal over the tree's. The literal then reads (16 keys, Task 8's `branch-unmeasured` kept):
 
 ```ts
 const ALL_TOKENS: Record<LcRefusalToken, true> = {
@@ -5924,7 +6414,7 @@ const ALL_TOKENS: Record<LcRefusalToken, true> = {
   'flock-unavailable': true, 'lock-unopenable': true, 'is-a-workspace': true,
   'session-live': true, 'session-verdict-unknown': true, 'spawn-failed': true,
   'purge-refused': true, 'purge-incomplete': true, 'purge-mechanism-absent': true,
-  'pin-failed': true, 'unit-still-active': true, 'probe-unmeasured': true,
+  'pin-failed': true, 'unit-still-active': true, 'branch-unmeasured': true, 'probe-unmeasured': true,
 };
 ```
 
@@ -5963,10 +6453,10 @@ and `expect(TOKENS.length).toBe(15);` (Task 8's) becomes `expect(TOKENS.length).
     want: { word: 'deferred', sentence: lcRefusalWord('probe-unmeasured'), at: EV_AT } },
 ```
 
-- In `reads a failure token’s journal word ahead of the audit sentences, never the generic fallback`, the list becomes `['pin-failed', 'unit-still-active', 'flock-unavailable', 'lock-unopenable', 'probe-unmeasured']`.
+- In `reads a failure token’s journal word ahead of the audit sentences, never the generic fallback`, the list becomes `['pin-failed', 'unit-still-active', 'flock-unavailable', 'lock-unopenable', 'branch-unmeasured', 'probe-unmeasured']`, keeping Task 8's `branch-unmeasured`.
 
 (e) `server/test/ccd-child-reclaim-audit.test.ts`:
-- The title `'a probe that could not RUN EXITS 1 — a reclaim document saying unmeasured, no token, no terminal word, nothing journaled'` becomes `'a probe that could not RUN EXITS 1 — a reclaim document saying unmeasured, no token, no terminal word, journaled as ONE failure (contract R52)'`.
+- The title `'a probe that could not RUN EXITS 1 — a reclaim document saying unmeasured, no token, no terminal word, nothing journaled'` becomes `'a probe that could not RUN EXITS 1 — a reclaim document saying unmeasured, no token, no terminal word, journaled as ONE failure (spec §5.9)'`.
 - Its `expect(eventsOf(h.home, 'reclaim'), 'an unmeasured answer is journaled nowhere').toEqual([]);` becomes:
 
 ```ts
@@ -5975,7 +6465,7 @@ and `expect(TOKENS.length).toBe(15);` (Task 8's) becomes `expect(TOKENS.length).
       .toEqual([['failed', 'probe-unmeasured', 'ws-audit']]);
 ```
 
-- The breadcrumb case's `expect(eventsOf(h.home, 'reclaim'), 'unmeasured is journaled nowhere').toEqual([]);` becomes the same assertion with the message `'unmeasured is ONE failed line (contract R52)'`.
+- The breadcrumb case's `expect(eventsOf(h.home, 'reclaim'), 'unmeasured is journaled nowhere').toEqual([]);` becomes the same assertion with the message `'unmeasured is ONE failed line (spec §5.9)'`.
 - In `absent-suffix alternate row is unmeasured and mints no token`, `expect(eventsOf(h.home, 'reclaim'), 'a retry is journaled nowhere — no terminal refusal row').toEqual([]);` becomes:
 
 ```ts
@@ -5989,7 +6479,7 @@ and `expect(TOKENS.length).toBe(15);` (Task 8's) becomes `expect(TOKENS.length).
   }
 ```
 
-- In the comment above `const PROJECTED`, `not be placed — exit 1, \`unmeasured\`, no token, nothing journaled — and` becomes `not be placed — exit 1, \`unmeasured\`, no token, one failed line (R52) — and`.
+- In the comment above `const PROJECTED`, `not be placed — exit 1, \`unmeasured\`, no token, nothing journaled — and` becomes `not be placed — exit 1, \`unmeasured\`, no token, one failed line (spec §5.9) — and`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -6080,12 +6570,12 @@ with:
 
 ```
 # stderr, and the audit EXITS 1. The server maps ANY audit exit 1 to `failed`
-# and retries. It is journaled as a FAILURE, never a refusal (spec §5.9,
-# the one exception to R5′'s terminal-only rule): one `_lc_fail` line with the
+# and retries. It is journaled as a FAILURE, never a refusal (spec §5.9:
+# the one audit-time line that is not a terminal refusal): one `_lc_fail` line with the
 # token `probe-unmeasured` and `verb ws-audit`. ws-reclaim's locked
 # recomputation journals the same word with `verb ws-reclaim`. The line is
 # written on the `return 1` line itself, because `cmd_ws_audit` sits above the
-# frozen citation boundary and may not grow. R20's backoff bounds the repeat.
+# frozen citation boundary and may not grow. The sweep's backoff (spec §5.9) bounds the repeat.
 ```
 
 The comment must spell none of the shapes `wsaudit.test.ts` and `ccd-wsaudit-nonpoison.test.ts` harvest:
@@ -6121,7 +6611,7 @@ becomes
 
 ```
  *  (`verb ws-audit`), and a failure is an `_lc_fail` line (an attempt that
- *  started, or a probe that could not run, R52) or a pre-lock die's `_lc_refuse` line
+ *  started, or a probe that could not run, spec §5.9) or a pre-lock die's `_lc_refuse` line
 ```
 
 (f) In `server/src/coord/childReclaim.ts` (journal.OPEN7), make the one word this file special-cases a member of the L0 vocabulary. Both edits are line-neutral, and the docstring above the constant does not change:
@@ -6277,11 +6767,12 @@ Task 13 carries the prose this task does not write. That includes the amendment 
 Today `cmd_ws_reclaim` dies on a malformed `--expect` token or `--child-of` run id with nothing in the journal. The executor reads the die as a `pre-lock-die` failure with no word (`token: null`), and the mirror never sees it. R52 rules on these dies:
 - **Journaled.** The two dies TIED TO AN ID, the bad token and the bad run id, are journaled `refused` through `_lc_refuse`. They follow the `flock-unavailable` and `lock-unopenable` siblings, with new tokens, AFTER the session id is validated. So the session-id check moves first.
 - **Classified.** Each new token is classified in `CHILD_RECLAIM_PRE_LOCK_TOKEN`, so wave 5's reader counts its line as a FAILURE (the chip reads `deferred`), never as an unclassified refusal.
-- **Unjournaled, with stated reasons.** Three dies stay unjournaled:
-  - the usage die and a bad session id, because neither has a trustworthy id;
+- **Unjournaled, with stated reasons.** Seven dies stay unjournaled:
+  - the usage die and the four `--actor`/`--reason` checks, because they run before any id is bound;
+  - a bad session id, because it is no trustworthy id to journal against;
   - python3 unavailable, because the journal's encoder (`_lc_json`) IS python3.
 
-The four `--actor`/`--reason` checks run before any id is bound. R52 does not name them, so they stay sanctioned dies (see the open issue in the plan's ledger).
+R52 does not name the four `--actor`/`--reason` checks, so they stay sanctioned dies (see the open issue in the plan's ledger).
 
 Token names follow #290's entries. A key names the die, and the value is `<subject>-<condition>`, as in `flock`→`flock-unavailable` and `lock`→`lock-unopenable`. So the new pairs are `token`→`token-malformed` and `runId`→`run-id-malformed`.
 
@@ -6336,7 +6827,7 @@ grep -n "toBe(15)" server/test/ccd-refusal-scan.test.ts; grep -n "toBe(16)" serv
 
 Expected:
 - One line each for the first four. The fourth is Task 10's last union member.
-- The fifth prints reclaim's three dies and ws-expire's two (`bad token`, `bad session id`), at line numbers inside the RECLAIM and EXPIRE regions.
+- The fifth prints SIX lines, all inside the RECLAIM and EXPIRE regions: reclaim's three dies, ws-expire's two (`bad token`, `bad session id`), and `_ws_expire_audit_contained`'s `bad session id` (at `77c11245a`: `:28489`, `:28490`, `:28491`, `:29220`, `:29221` and `:29326`).
 - The last two print one line each (the scan's 15, and Task 10's 16).
 
 If the third is empty, this branch was not cut from a `main` carrying #290: STOP and report it.
@@ -6346,12 +6837,13 @@ If the third is empty, this branch was not cut from a `main` carrying #290: STOP
 (a) Create `server/test/ccd-child-reclaim-prelock-journal.test.ts`:
 
 ```ts
-// Child-reclamation wave 6, Task 11 (spec §5.9, R43): of cmd_ws_reclaim's
+// Child-reclamation wave 6, Task 11 (spec §5.9): of cmd_ws_reclaim's
 // pre-lock dies, the two TIED TO AN ID — a malformed --expect token and a
 // malformed --child-of run id — are journaled `refused` through `_lc_refuse`
 // (emit, then the SAME die). That happens AFTER the session id is validated,
-// with words wave 5's reader classes as pre-lock FAILURES. Three dies stay
-// unjournaled, each for its stated reason: the usage die and a bad session id
+// with words wave 5's reader classes as pre-lock FAILURES. Seven dies stay
+// unjournaled, each for its stated reason: the usage die and the four
+// --actor/--reason checks (they run before any id is bound), a bad session id
 // (no trustworthy id to journal against), and python3 unavailable (the
 // journal's encoder IS python3). Fixture HOMEs only. Nothing here reaches the
 // reap lock, and nothing may.
@@ -6379,7 +6871,7 @@ const verb = (argv: string, pre = ''): { code: number; stdout: string; stderr: s
   h.run(`${CHILD_STUBS} ${pre} ${CHILD_ENV} cmd_ws_reclaim ${argv}`);
 const lockFile = (): string => path.join(h.home, '.cc-sessions', `.reap-${CHILD_ID}.lock`);
 /** Every `reclaim` line, WHATEVER its id: a line written against a malformed id must show here too. */
-const reclaimRows = (): Record<string, unknown>[] => readJournal(h.home).filter((e) => e['act'] === 'reclaim');
+const childReclaimRows = (): Record<string, unknown>[] => readJournal(h.home).filter((e) => e['act'] === 'reclaim');
 const shape = (e: Record<string, unknown>) =>
   ({ outcome: e['outcome'], id: e['id'], refusal: e['refusal'], detail: e['detail'], tx: e['tx'] ?? '' });
 
@@ -6391,7 +6883,7 @@ const JOURNALED = [
   ['a malformed token AND run id', `--expect x --child-of 0 --session ${CHILD_ID}`, 'token-malformed', 'bad token'],
 ] as const;
 
-describe('the id-tied pre-lock dies journal ONE refused line, then die exactly as before (R52)', () => {
+describe('the id-tied pre-lock dies journal ONE refused line, then die exactly as before (spec §5.9)', () => {
   it.each(JOURNALED)('%s', (_what, argv, token, said) => {
     makeChild(h);
     const r = verb(argv);
@@ -6401,19 +6893,19 @@ describe('the id-tied pre-lock dies journal ONE refused line, then die exactly a
     // that matters: the same die as before, now naming the word ccd journaled for it.
     expect(parseChildReclaimResult(CHILD_ID, r.stdout, r.stderr))
       .toEqual({ kind: 'failed', resume: 'pre-lock-die', detail: said, token });
-    expect(reclaimRows().map(shape)).toEqual([{ outcome: 'refused', id: CHILD_ID, refusal: token, detail: said, tx: '' }]);
+    expect(childReclaimRows().map(shape)).toEqual([{ outcome: 'refused', id: CHILD_ID, refusal: token, detail: said, tx: '' }]);
     expect(fs.existsSync(lockFile()), 'the lock was never opened').toBe(false);
   }, 60_000);
 });
 
-describe('three dies stay unjournaled, each for its stated reason (R52)', () => {
+describe('the seven other pre-lock dies stay unjournaled, each for its stated reason (spec §5.9)', () => {
   it('the session id is validated FIRST: a malformed id beside a malformed token and run id dies "bad session id" and journals nothing', () => {
     makeChild(h);
     const r = verb(`--expect x --child-of 0 --session ${BAD_ID}`);
     expect(r.code).toBe(1);
     expect(parseChildReclaimResult(CHILD_ID, r.stdout, r.stderr))
       .toEqual({ kind: 'failed', resume: 'pre-lock-die', detail: 'bad session id', token: null });
-    expect(reclaimRows(), 'an id that failed its own shape check is never journaled against').toEqual([]);
+    expect(childReclaimRows(), 'an id that failed its own shape check is never journaled against').toEqual([]);
     expect(readJournal(h.home).filter((e) => e['id'] === BAD_ID), 'under no act at all').toEqual([]);
   }, 60_000);
 
@@ -6422,7 +6914,7 @@ describe('three dies stay unjournaled, each for its stated reason (R52)', () => 
     const r = verb(`--expect ${TOK} --session ${CHILD_ID}`);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain('usage: ccd ws-reclaim');
-    expect(reclaimRows()).toEqual([]);
+    expect(childReclaimRows()).toEqual([]);
   }, 60_000);
 
   it('the python3 die journals nothing — the journal encoder is python3', () => {
@@ -6431,17 +6923,31 @@ describe('three dies stay unjournaled, each for its stated reason (R52)', () => 
     expect(r.code).toBe(1);
     expect(parseChildReclaimResult(CHILD_ID, r.stdout, r.stderr)).toEqual({ kind: 'failed', resume: 'pre-lock-die',
       detail: 'python3 unavailable — cannot quote the reclaim record safely', token: null });
-    expect(reclaimRows()).toEqual([]);
+    expect(childReclaimRows()).toEqual([]);
+    expect(fs.existsSync(lockFile())).toBe(false);
+  }, 60_000);
+
+  it.each([
+    ['a blank --actor', "--actor ' '", '--actor must be non-blank'],
+    ['an over-long --actor', `--actor ${'x'.repeat(513)}`, '--actor is longer than'],
+    ['a blank --reason', "--reason ' '", '--reason must be non-blank'],
+    ['an over-long --reason', `--reason ${'x'.repeat(513)}`, '--reason is longer than'],
+  ] as const)('%s journals nothing — the four --actor/--reason checks run before any id is bound', (_what, flag, said) => {
+    makeChild(h);
+    const r = verb(`--expect ${TOK} --child-of 7 --session ${CHILD_ID} ${flag}`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(said);
+    expect(childReclaimRows()).toEqual([]);
     expect(fs.existsSync(lockFile())).toBe(false);
   }, 60_000);
 });
 
-describe('wave 5’s reader classes each journaled die as a pre-lock FAILURE, never a refusal (R43, R52)', () => {
+describe('wave 5’s reader classes each journaled die as a pre-lock FAILURE, never a refusal (spec §5.9)', () => {
   it('each line ccd writes parses to a failure line, is never terminal, and words through LC_REFUSAL_WORD', () => {
     makeChild(h);
     verb(`--expect x --child-of 7 --session ${CHILD_ID}`);
     verb(`--expect ${TOK} --child-of 0 --session ${CHILD_ID}`);
-    const rows = reclaimRows();
+    const rows = childReclaimRows();
     expect(rows.map((e) => e['refusal'])).toEqual(['token-malformed', 'run-id-malformed']);
     for (const e of rows) {
       const j = parseJournalLine(JSON.stringify(e));
@@ -6488,7 +6994,7 @@ describe('the two words claim only what is true at their one site', () => {
  * thing being reported. Two are the `--reason` loop arms, which run before any
  * id is bound. The set is EXACT: a fifteenth sanctioned die reds the count.
  *
- * Six are cmd_ws_reclaim's (child reclamation, wave 3), for reap's own reasons: its usage line runs before $id is bound, its four --actor/--reason checks are the loop arms that run before any id is bound, and its _json_str probe is the emitter being missing. Its "bad session id" is the SAME literal as reap's and needs no second entry; it stays a die because an id that failed its own shape check is no id to journal against (spec §5.9). Its token and run-id checks are NOT here: since wave 6 they run after the session id is validated and journal through `_lc_refuse` (R52) — "bad token" stays in this set for reap's and ws-expire's own literal.
+ * Six are cmd_ws_reclaim's (child reclamation, wave 3), for reap's own reasons: its usage line runs before $id is bound, its four --actor/--reason checks are the loop arms that run before any id is bound, and its _json_str probe is the emitter being missing. Its "bad session id" is the SAME literal as reap's and needs no second entry; it stays a die because an id that failed its own shape check is no id to journal against (spec §5.9). Its token and run-id checks are NOT here: since wave 6 they run after the session id is validated and journal through `_lc_refuse` (spec §5.9) — "bad token" stays in this set for reap's and ws-expire's own literal.
  *
  * Two are cmd_ws_expire's (workspace lifecycle, wave 3), for the same reasons: its usage line runs before $id is bound, and its _json_str probe is the emitter being missing. Its four --actor/--reason checks are the SAME literals as ws-reclaim's, and its "bad token" and "bad session id" the SAME as reap's, and need no second entry.
  */
@@ -6497,7 +7003,7 @@ describe('the two words claim only what is true at their one site', () => {
 (If the worker's tree's docstring differs from `77c11245a`'s, keep its other sentences and change only what this text changes.) The count NARROWS by one: `bad run id` was reclaim's alone, while `bad token` stays sanctioned for reap and ws-expire. `holds the reclaim emits at exactly two` does not move, because `_lc_refuse` never spells the refused-emit literal it counts.
 
 (c) `server/test/lifecycle-refusal-word.test.ts`:
-- `ALL_TOKENS`' last line `'pin-failed': true, 'unit-still-active': true, 'probe-unmeasured': true,` gains a following line `'token-malformed': true, 'run-id-malformed': true,`.
+- `ALL_TOKENS`' last line, as Task 10 left it, `'pin-failed': true, 'unit-still-active': true, 'branch-unmeasured': true, 'probe-unmeasured': true,` gains a following line `'token-malformed': true, 'run-id-malformed': true,` (18 keys: Task 8's `branch-unmeasured` and Task 10's `probe-unmeasured` both kept).
 - `.toBe(16)` becomes `.toBe(18)`.
 
 (d) `server/test/child-reclaim-sweep-policy.test.ts`, in `describe('childReclaimFailureLine — …')`:
@@ -6585,7 +7091,7 @@ Expected: FAIL.
 - `ccd-child-reclaim-prelock-journal`:
   - The four `JOURNALED` cases: `expected { kind: 'failed', resume: 'pre-lock-die', detail: 'bad token', token: null } to deeply equal { …, token: 'token-malformed' }`, and the same for `bad run id`.
   - The session-first case: `expected { … detail: 'bad token', token: null } to deeply equal { … detail: 'bad session id', token: null }`, because today the token is checked first.
-  - The usage and python3 cases PASS, before and after. They pin what must not change.
+  - The usage, python3 and four `--actor`/`--reason` cases PASS, before and after. They pin what must not change.
   - The round trip: `expected [] to deeply equal [ 'token-malformed', 'run-id-malformed' ]`.
   - The table case: a `toEqual` diff with `token` and `runId` missing.
   - The words: `TypeError: .toMatch() expects to receive a string, but got undefined`.
@@ -6687,12 +7193,12 @@ with
   local token=$2 childof=$4 id=$6
   # THE SESSION ID IS VALIDATED FIRST (spec §5.9). The two checks after it
   # journal their refusal against `$id`, so `$id` must already be a shape ccrc
-  # mints. Three dies stay unjournaled, each for its reason:
-  #   - the usage die above, because no id is bound yet;
+  # mints. Seven dies stay unjournaled, each for its reason:
+  #   - the usage die and the four --actor/--reason checks above, because no
+  #     id is bound yet;
   #   - a malformed session id, because it is no id to journal against;
   #   - the python3 probe below, which cannot journal at all, because the
   #     journal's encoder (`_lc_json`) is python3.
-  # The --actor/--reason checks above also run before any id is bound.
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]]         || die "bad session id"
   [[ $token =~ ^[0-9a-f]{64}$ ]]         || _lc_refuse reclaim "$id" token-malformed "bad token"
   _child_runid_valid "$childof"          || _lc_refuse reclaim "$id" run-id-malformed "bad run id"   # wave 1's grammar, ASCII under LC_ALL=C
@@ -6768,11 +7274,12 @@ and the exit code are unchanged. Wave 5's reader classes both words in
 CHILD_RECLAIM_PRE_LOCK_TOKEN and in the die patterns, so the chip reads
 them as pre-lock failures, deferred, never as refusals.
 
-Three dies stay unjournaled, each for its stated reason: the usage die and
-a bad session id have no trustworthy id, and the journal's encoder is
-python3. The sanctioned-die set loses "bad run id" (fifteen to fourteen),
-and the pre-lock pins widen from two tokens to four. README's three
-shared/api.ts map anchors are re-pointed by content.
+Seven dies stay unjournaled, each for its stated reason: the usage die
+and the four --actor/--reason checks run before any id is bound, a bad
+session id is no trustworthy id, and the journal's encoder is python3. The
+sanctioned-die set loses "bad run id" (fifteen to fourteen), and the
+pre-lock pins widen from two tokens to four. README's three shared/api.ts
+map anchors are re-pointed by content.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
@@ -6824,7 +7331,7 @@ So wave 5's board re-read on the vanish (`childReclaimRefreshDue`, `pwa/src/flee
 
 **Design choices this task pins:**
 - **Committed, not merely parsed.** The value is raised AFTER `CoordStore.ingestJournal` returns. A frame must never name a row that `GET /api/runs` cannot yet read.
-- **The value is omitted, never `null`, while the mirror has committed no reclaim `done`.** Absence then has one meaning to the reader: "nothing measured", whether the server restarted or is older than this field. The reader handles both cases identically. Omitting the field also keeps the three whole-frame `toEqual` pins in `server/test/fleetws.test.ts` (`grep -n "childReclaimAttention: \[\] })" server/test/fleetws.test.ts`) unchanged, because a key whose value is `undefined` is equal under `toEqual` and is dropped by `JSON.stringify`.
+- **The value is omitted, never `null`, while the mirror has committed no reclaim `done`.** Absence then has one meaning to the reader: "nothing measured", whether the server restarted or is older than this field. The reader handles both cases identically. Omitting the field also keeps every whole-frame coord `toEqual` pin in `server/test/fleetws.test.ts` unchanged (ten at `77c11245a` and at `e79b1da7`, measured: `grep -c "childReclaimAttention: \[\] }" server/test/fleetws.test.ts`), because a key whose value is `undefined` is equal under `toEqual` and is dropped by `JSON.stringify`.
 - **Which runs had a child.** By the time the value changes, the child has left the fleet frame and its row may carry no chip. So the board remembers, for as long as it is mounted, every run id that either:
   - a fleet frame's `ChildMark` named, through `childMarkOf`; or
   - a finished row ever carried a non-null chip for, through `childReclaimChip`.
@@ -6835,12 +7342,12 @@ So wave 5's board re-read on the vanish (`childReclaimRefreshDue`, `pwa/src/flee
 
 **Files:**
 - Modify: `server/src/coord/mirrorplan.ts`.
-  - Add `reclaimDoneHighWater` after `shouldSweep` (`grep -n "export function shouldSweep" server/src/coord/mirrorplan.ts`; `:227` at `77c11245a`).
+  - Add `childReclaimDoneHighWater` after `shouldSweep` (`grep -n "export function shouldSweep" server/src/coord/mirrorplan.ts`; `:227` at `77c11245a`).
   - Widen the type import at `:182` (`grep -n "import type { LifecycleHealthState }" server/src/coord/mirrorplan.ts`) to `LifecycleAct, LifecycleHealthState, LifecycleOutcome`.
 - Modify: `server/src/coord/mirror.ts`.
-  - Add the field and the accessor `reclaimDoneAt()`.
+  - Add the field and the accessor `childReclaimDoneAt()`.
   - Raise the value in `commit` (`grep -n "private commit(gen: string" server/src/coord/mirror.ts`; `:160` at `77c11245a`).
-  - Add `reclaimDoneHighWater` to the `./mirrorplan.js` import on line 7.
+  - Add `childReclaimDoneHighWater` to the `./mirrorplan.js` import on line 7.
 - Modify: `server/src/coord/childReclaim.ts`. Add `childMarkLeftListing` directly after `childReclaimStatus`, before `childReclaimSessions` (`grep -n "^export function childReclaimSessions" server/src/coord/childReclaim.ts`).
 - Modify: `server/src/watch.ts`.
   - `tick()`: the `childMarks` assignment.
@@ -6858,6 +7365,8 @@ So wave 5's board re-read on the vanish (`childReclaimRefreshDue`, `pwa/src/flee
   - Add the imports.
 - Test (new, R56): `server/test/child-reclaim-done-at.test.ts`
 - Test (new, R56): `pwa/test/child-reclaim-done-reread.test.tsx`
+- Modify: `README.md`, its `shared/api.ts:` union anchor and its three `LC_REFUSAL_WORD` map anchors, re-pointed by content (Step 5b). `CoordStatus` sits above `LcRefusalToken`, so this task's insertion moves all four, where Tasks 10 and 11 moved only the map.
+- Modify, only if Step 5b measures it red: `server/test/session-hook.test.ts`, the `'shared/api.ts'` entry of the CITATION DEBT `byFile` census.
 
 No `ccd/ccd` edit, so this task has no re-stamp.
 
@@ -6865,12 +7374,12 @@ No `ccd/ccd` edit, so this task has no re-stamp.
 - Produces:
   ```ts
   // server/src/coord/mirrorplan.ts (pure)
-  export function reclaimDoneHighWater(
+  export function childReclaimDoneHighWater(
     prev: number | null,
     rows: readonly { readonly act: LifecycleAct; readonly outcome: LifecycleOutcome; readonly at: number | null }[],
   ): number | null;
   // server/src/coord/mirror.ts
-  JournalMirror.reclaimDoneAt(): number | null;
+  JournalMirror.childReclaimDoneAt(): number | null;
   // server/src/coord/childReclaim.ts (pure)
   export function childMarkLeftListing(
     prev: ReadonlyMap<string, ChildMark> | null, next: ReadonlyMap<string, ChildMark>,
@@ -6925,7 +7434,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { JournalMirror } from '../src/coord/mirror.js';
-import { LC_CAP_TOKEN, reclaimDoneHighWater } from '../src/coord/mirrorplan.js';
+import { LC_CAP_TOKEN, childReclaimDoneHighWater } from '../src/coord/mirrorplan.js';
 import { parseJournalLine } from '../src/coord/journalparse.js';
 import { childMarkLeftListing } from '../src/coord/childReclaim.js';
 import { genFile } from './lifecycleHelpers.js';
@@ -7002,9 +7511,9 @@ const tickRig = () => {
 
 const rowsOf = (...o: Record<string, unknown>[]) => o.map((x) => parseJournalLine(JSON.stringify(x)));
 
-describe('reclaimDoneHighWater — the mirror’s one decision (pure)', () => {
+describe('childReclaimDoneHighWater — the mirror’s one decision (pure)', () => {
   it('takes the newest at of a reclaim done row, and of nothing else', () => {
-    expect(reclaimDoneHighWater(null, rowsOf(
+    expect(childReclaimDoneHighWater(null, rowsOf(
       ev(A, 'reclaim', 'done', T + 4), ev(B, 'reclaim', 'done', T + 2),
       ev(A, 'reclaim', 'refused', T + 9), ev(A, 'reclaim', 'failed', T + 8),
       ev(A, 'reclaim', 'intent', T + 12), ev(B, 'reap', 'done', T + 11),
@@ -7013,34 +7522,34 @@ describe('reclaimDoneHighWater — the mirror’s one decision (pure)', () => {
   });
 
   it('answers null for none, and never falls below what it was handed', () => {
-    expect(reclaimDoneHighWater(null, [])).toBeNull();
-    expect(reclaimDoneHighWater(null, rowsOf(ev(A, 'reap', 'done', T)))).toBeNull();
-    expect(reclaimDoneHighWater(T + 50, rowsOf(ev(A, 'reclaim', 'done', T + 4)))).toBe(T + 50);
-    expect(reclaimDoneHighWater(T + 50, rowsOf(ev(A, 'reclaim', 'done', T + 60)))).toBe(T + 60);
+    expect(childReclaimDoneHighWater(null, [])).toBeNull();
+    expect(childReclaimDoneHighWater(null, rowsOf(ev(A, 'reap', 'done', T)))).toBeNull();
+    expect(childReclaimDoneHighWater(T + 50, rowsOf(ev(A, 'reclaim', 'done', T + 4)))).toBe(T + 50);
+    expect(childReclaimDoneHighWater(T + 50, rowsOf(ev(A, 'reclaim', 'done', T + 60)))).toBe(T + 60);
   });
 });
 
-describe('JournalMirror.reclaimDoneAt (wave 6)', () => {
+describe('JournalMirror.childReclaimDoneAt (wave 6)', () => {
   it('is null before any sweep, and after a sweep that committed no reclaim done', async () => {
     const r = mirrorRig();
-    expect(r.m.reclaimDoneAt()).toBeNull();
+    expect(r.m.childReclaimDoneAt()).toBeNull();
     r.append(ev(A, 'reclaim', 'intent', T), ev(A, 'reclaim', 'refused', T + 1));
     await r.m.sweep();
     expect(r.store.lifecycleFor({ limit: 10 }), 'the fixture did not ingest').toHaveLength(2);
-    expect(r.m.reclaimDoneAt()).toBeNull();
+    expect(r.m.childReclaimDoneAt()).toBeNull();
   });
 
   it('records the newest committed reclaim done, and only ever rises', async () => {
     const r = mirrorRig();
     r.append(ev(A, 'reclaim', 'done', T + 4), ev(B, 'reclaim', 'done', T + 2));
     await r.m.sweep();
-    expect(r.m.reclaimDoneAt()).toBe(T + 4);
+    expect(r.m.childReclaimDoneAt()).toBe(T + 4);
     r.append(ev(B, 'reclaim', 'done', T + 1));       // a late line, older than the one held
     await r.m.sweep();
-    expect(r.m.reclaimDoneAt(), 'the value fell').toBe(T + 4);
+    expect(r.m.childReclaimDoneAt(), 'the value fell').toBe(T + 4);
     r.append(ev(B, 'reclaim', 'done', T + 20));
     await r.m.sweep();
-    expect(r.m.reclaimDoneAt()).toBe(T + 20);
+    expect(r.m.childReclaimDoneAt()).toBe(T + 20);
   });
 
   it('raises nothing when the ingest fails: the frame may only name a row GET /api/runs can read', async () => {
@@ -7048,9 +7557,9 @@ describe('JournalMirror.reclaimDoneAt (wave 6)', () => {
     r.append(ev(A, 'reclaim', 'done', T + 4));
     vi.spyOn(r.store, 'ingestJournal').mockImplementationOnce(() => { throw new Error('disk full'); });
     await r.m.sweep();                                // never throws: sweep() swallows
-    expect(r.m.reclaimDoneAt(), 'raised before the row was committed').toBeNull();
+    expect(r.m.childReclaimDoneAt(), 'raised before the row was committed').toBeNull();
     await r.m.sweep();                                // the cursor did not move, so the row comes again
-    expect(r.m.reclaimDoneAt()).toBe(T + 4);
+    expect(r.m.childReclaimDoneAt()).toBe(T + 4);
   });
 });
 
@@ -7372,16 +7881,16 @@ describe('the board re-reads the archive when the newest reclaim end changes (wa
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/child-reclaim-done-at.test.ts
-cd pwa && ./node_modules/.bin/vitest run test/child-reclaim-done-reread.test.tsx
+(cd server && ./node_modules/.bin/vitest run test/child-reclaim-done-at.test.ts)
+(cd pwa && ./node_modules/.bin/vitest run test/child-reclaim-done-reread.test.tsx)
 ```
 
 Expected for `child-reclaim-done-at`: 11 of 12 FAIL.
 
 | Case | Expected failure |
 |---|---|
-| both `reclaimDoneHighWater` cases | `TypeError: reclaimDoneHighWater is not a function` |
-| all three `JournalMirror.reclaimDoneAt` cases | `TypeError: r.m.reclaimDoneAt is not a function` |
+| both `childReclaimDoneHighWater` cases | `TypeError: childReclaimDoneHighWater is not a function` |
+| all three `JournalMirror.childReclaimDoneAt` cases | `TypeError: r.m.childReclaimDoneAt is not a function` |
 | "carries the value, and re-emits the frame only when it changes" | `expected undefined to be 1758500000004` |
 | "carries it on the unmeasurable arm too" | a `toMatchObject` diff whose received object has no `childReclaimDoneAt` |
 | the `childMarkLeftListing` case | `TypeError: childMarkLeftListing is not a function` |
@@ -7431,7 +7940,7 @@ Add directly after `shouldSweep`:
  * The act and the outcome are compared as typed literals, so a rename in
  * `LifecycleAct` or `LifecycleOutcome` is a compile error here.
  */
-export function reclaimDoneHighWater(
+export function childReclaimDoneHighWater(
   prev: number | null,
   rows: readonly { readonly act: LifecycleAct; readonly outcome: LifecycleOutcome; readonly at: number | null }[],
 ): number | null {
@@ -7444,23 +7953,23 @@ export function reclaimDoneHighWater(
 }
 ```
 
-In `server/src/coord/mirror.ts`, add `reclaimDoneHighWater` to the `./mirrorplan.js` import. Add this field directly after `private readonly unorderableSeen`:
+In `server/src/coord/mirror.ts`, add `childReclaimDoneHighWater` to the `./mirrorplan.js` import. Add this field directly after `private readonly unorderableSeen`:
 
 ```ts
   /** Child-reclamation wave 6 (spec §5.9): the newest `at` of a
    *  `reclaim`/`done` row this mirror has COMMITTED, or null while it has
    *  committed none. IN MEMORY: a restart reads null until the next reclaim
    *  ends, and the board treats null as "no news", never as a change. */
-  private reclaimDoneNewest: number | null = null;
+  private childReclaimDoneNewest: number | null = null;
 ```
 
 Add this accessor directly before `health()`:
 
 ```ts
-  /** `reclaimDoneNewest`, read by `FleetWatcher.currentChildReclaimDoneAt` for
+  /** `childReclaimDoneNewest`, read by `FleetWatcher.currentChildReclaimDoneAt` for
    *  the coord frame. */
-  reclaimDoneAt(): number | null {
-    return this.reclaimDoneNewest;
+  childReclaimDoneAt(): number | null {
+    return this.childReclaimDoneNewest;
   }
 ```
 
@@ -7474,7 +7983,7 @@ Replace `commit`'s body with:
     // tells the board to read GET /api/runs, which reads these rows from
     // SQLite. A value raised before a commit that then threw would send the
     // board to read a row that is not there yet.
-    this.reclaimDoneNewest = reclaimDoneHighWater(this.reclaimDoneNewest, rows);
+    this.childReclaimDoneNewest = childReclaimDoneHighWater(this.childReclaimDoneNewest, rows);
   }
 ```
 
@@ -7533,7 +8042,7 @@ Directly after `currentChildMarks()`, add:
    *  committed reclaim end, or null when no mirror exists yet or it has
    *  committed none. In memory; read by `emitCoord` alone. */
   currentChildReclaimDoneAt(): number | null {
-    return this.mirror?.reclaimDoneAt() ?? null;
+    return this.mirror?.childReclaimDoneAt() ?? null;
   }
 ```
 
@@ -7693,21 +8202,21 @@ Directly after wave 5's fleet-vanish effect (the one closing on `}, [sessions, f
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/child-reclaim-done-at.test.ts \
+(cd server && ./node_modules/.bin/vitest run test/child-reclaim-done-at.test.ts \
   test/lifecycle-sweep.test.ts test/lifecycle-mirror.test.ts test/lifecycle-replay.test.ts test/mirrorplan.test.ts \
   test/child-reclaim-watch-view.test.ts test/child-reclaim-verdict-readers.test.ts \
   test/child-reclaim-chip-source.test.ts test/child-reclaim-runs-route.test.ts test/fleetws.test.ts \
-  test/single-definition.test.ts
-cd server && ./node_modules/.bin/tsc --noEmit -p .
-cd pwa && ./node_modules/.bin/vitest run test/child-reclaim-done-reread.test.tsx test/runs-screen.test.tsx \
-  test/child-reclaim-banner.test.tsx test/coord-banner.test.tsx test/stores.test.ts
-cd pwa && ./node_modules/.bin/tsc --noEmit
+  test/single-definition.test.ts)
+(cd server && ./node_modules/.bin/tsc --noEmit -p .)
+(cd pwa && ./node_modules/.bin/vitest run test/child-reclaim-done-reread.test.tsx test/runs-screen.test.tsx \
+  test/child-reclaim-banner.test.tsx test/coord-banner.test.tsx test/stores.test.ts)
+(cd pwa && ./node_modules/.bin/tsc --noEmit)
 ```
 
 Expected:
 - `child-reclaim-done-at` passes 12/12, and `child-reclaim-done-reread` passes 14/14.
 - Every other listed suite stays green UNCHANGED:
-  - `fleetws.test.ts`'s three whole-frame `toEqual` pins hold because the field is omitted.
+  - `fleetws.test.ts`'s whole-frame coord `toEqual` pins (ten, measured at `e79b1da7`) all hold because the field is omitted.
   - `child-reclaim-verdict-readers` (c) and (e) hold because the frame literal is byte-identical and nothing in `server/src` reads the published attention list.
   - `child-reclaim-chip-source` holds because no token is spelled and `\bchildReclaim\b` is not matched by the new names.
 - Both `tsc` runs print nothing.
@@ -7715,22 +8224,73 @@ Expected:
 Then confirm that no route, gate or ccd file moved, which leaves the auth census untouched:
 
 ```bash
-git diff --name-only | grep -E 'routes\.ts|server\.ts|auth/gate\.ts|ccd/ccd$|README\.md' || echo none
+git diff --name-only | grep -E 'routes\.ts|server\.ts|auth/gate\.ts|ccd/ccd$' || echo none
 ```
 
 Expected: `none`.
 
+- [ ] **Step 5b: Pay the citation tax (S6-R11; README is repaired, the census is re-measured)**
+
+Step 3 inserted lines into `CoordStatus`: the new field, its docstring, and any rewrap of the ADDITIVE paragraph. `CoordStatus` sits far ABOVE `LcRefusalToken` and `LC_REFUSAL_WORD`, so README's union anchor AND its three map anchors all move down by the same N, the net count of lines this task added to `shared/api.ts`. Unlike Tasks 10 and 11, the insertion also sits above the CITATION DEBT `'shared/api.ts'` referent, so that entry may move too.
+
+Run (a) and (b) in ONE shell, because (b) reads (a)'s variables.
+
+(a) Measure. Run Task 10 Step 6(a)'s block verbatim, then:
+
+```bash
+N=$(git diff --numstat -- shared/api.ts | awk '{ print $1 - $2 }'); echo "N=${N}"
+git diff -U0 -- shared/api.ts | grep '^@@'; grep -n '^export type LcRefusalToken' shared/api.ts
+```
+
+Expected:
+- `N` is positive, and every hunk header the second line prints starts above the `LcRefusalToken` line number.
+- The tree's first and third union line numbers are README's two union numbers (`OLD_U`), each plus N.
+- Each of the tree's three map numbers is README's number plus N.
+- Then `SAME-BYTES`.
+
+If the `diff` prints anything, STOP and report it in the wave-done mail: README was already stale at `HEAD`, before this task touched it.
+
+(b) Re-point all four anchors, the highest map number first:
+
+```bash
+perl -pi -e "s/shared\/api\.ts:${OLD_U}\`/shared\/api.ts:${U1}-${U3}\`/; s/\`:${OM3}\`/\`:${M3}\`/; s/\`:${OM2}\`/\`:${M2}\`/; s/\`:${OM1}\`/\`:${M1}\`/" README.md
+git diff --stat -- README.md
+```
+
+Every number moves up by the same N, so a new number can equal an older, lower one: with N = 13, the old `:7858` becomes `:7871`, which is the old third anchor. Replacing from the highest down never meets a number it has just written.
+
+Expected: `README.md | 4 ++--`. That is the two lines of the purge-refusal sentence (the union anchor shares the first) and nothing else. If more lines changed, run `git checkout -- README.md` and edit those two lines by hand.
+
+(c) Re-measure the census, including README's own:
+
+```bash
+(cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts \
+  -t 'every line citation is anchored|CITATION DEBT|README HAS ITS OWN CENSUS|LOCATION INDEXES|ROW PASS|THE RANGE BOUND')
+```
+
+Expected: PASS. *README HAS ITS OWN CENSUS ENTRY, and it is EMPTY* passes because of (b). If ONLY the `'shared/api.ts'` CITATION DEBT entry (and so the `total`) is red, re-measure it under the standing rule, as Task 10 Step 6(c) items 1–3 say: the RECEIVED values, never values from this plan, with this comment directly above the entry:
+
+```ts
+    // RE-MEASURED at child-reclamation wave 6, Task 12 (S6-R11, no rule changed): `shared/api.ts`
+    // <old> -> <new>. This task inserted `CoordStatus.childReclaimDoneAt` and its docstring, above
+    // anchors the frozen spec/plan corpus cites by line. No corpus document may be re-pointed. README's
+    // union anchor and three map anchors into the same file were RE-ANCHORED BY CONTENT in the same
+    // commit (`diff`-proved byte-identical), so README contributes nothing here.
+```
+
+Then re-run (c): PASS. This task edits no `ccd/ccd`, so a red naming `ccd/ccd` is not this task's: `session-hook` is a known load flake, so re-run it in isolation first.
+
 - [ ] **Step 6: Mutation check**
 
 Make each mutation alone, run its command, see the stated red, then revert it. Commands:
-- **S** = `cd server && ./node_modules/.bin/vitest run test/child-reclaim-done-at.test.ts`
-- **P** = `cd pwa && ./node_modules/.bin/vitest run test/child-reclaim-done-reread.test.tsx`
+- **S** = `(cd server && ./node_modules/.bin/vitest run test/child-reclaim-done-at.test.ts)`
+- **P** = `(cd pwa && ./node_modules/.bin/vitest run test/child-reclaim-done-reread.test.tsx)`
 
 | # | Mutation (exact edit) | Cmd | Expected red |
 |---|---|---|---|
-| 1 | In `JournalMirror.commit`, move `this.reclaimDoneNewest = reclaimDoneHighWater(…)` ABOVE `this.deps.store.ingestJournal(…)` | S | "raises nothing when the ingest fails": `raised before the row was committed: expected 1758500000004 to be null` |
-| 2 | In `reclaimDoneHighWater`, replace `if (high === null \|\| r.at > high) high = r.at;` with `high = r.at;` | S | `reclaimDoneHighWater` case 2: `expected 1758500000004 to be 1758500000050`; mirror case 2: `the value fell: expected 1758500000001 to be 1758500000004` |
-| 3 | In `reclaimDoneHighWater`, delete `\|\| r.outcome !== 'done'` | S | case 1: `expected 1758500000012 to be 1758500000004` |
+| 1 | In `JournalMirror.commit`, move `this.childReclaimDoneNewest = childReclaimDoneHighWater(…)` ABOVE `this.deps.store.ingestJournal(…)` | S | "raises nothing when the ingest fails": `raised before the row was committed: expected 1758500000004 to be null` |
+| 2 | In `childReclaimDoneHighWater`, replace `if (high === null \|\| r.at > high) high = r.at;` with `high = r.at;` | S | `childReclaimDoneHighWater` case 2: `expected 1758500000004 to be 1758500000050`; mirror case 2: `the value fell: expected 1758500000001 to be 1758500000004` |
+| 3 | In `childReclaimDoneHighWater`, delete `\|\| r.outcome !== 'done'` | S | case 1: `expected 1758500000012 to be 1758500000004` |
 | 4 | In `emitCoord`, replace `doneAt === null ? base : { ...base, childReclaimDoneAt: doneAt }` with `{ ...base, childReclaimDoneAt: doneAt }` | S | "omits the field…": `expected { pause: 'clear', …(4) } not to have property "childReclaimDoneAt"` |
 | 5 | In `emitCoord`, replace `doneAt === null ?` with `doneAt === null \|\| names === null ?` | S | "carries it on the unmeasurable arm too": a `toMatchObject` diff with `childReclaimDoneAt` missing |
 | 6 | In `tick()`, delete the `if (childMarkLeftListing(this.childMarks, childMarks)) this.lastLifecycleSweep = 0;` line | S | "sweeps on the tick that sees a child vanish": `expected "sweep" to be called 2 times, but got 1 times` |
@@ -7754,7 +8314,8 @@ Mutation 8 also typechecks; it is a second reader, which the census exists to re
 git add server/src/coord/mirrorplan.ts server/src/coord/mirror.ts server/src/coord/childReclaim.ts \
   server/src/watch.ts shared/api.ts pwa/src/fleet/childReclaimWords.ts pwa/src/fleet/runWords.ts \
   pwa/src/screens/RunsScreen.tsx server/test/child-reclaim-done-at.test.ts \
-  pwa/test/child-reclaim-done-reread.test.tsx
+  pwa/test/child-reclaim-done-reread.test.tsx README.md
+git add server/test/session-hook.test.ts   # only if Step 5b(c) re-measured it
 git commit -m "$(cat <<'MSG'
 feat(child-reclaim): a second trigger for the vanish re-read
 
@@ -7769,7 +8330,8 @@ of that value while a finished row is unsettled: a pending, deferred or
 paused chip, or no chip on a run it saw mint a child. Never on null, never
 on a timer. A child-marked id leaving the listing resets the mirror's clock
 without an await, so the end is usually measured on that same tick. The
-tick's order, ccd's journal and every route are unchanged.
+tick's order, ccd's journal and every route are unchanged. README's four
+shared/api.ts anchors are re-pointed by content.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
@@ -7925,7 +8487,7 @@ temp-root leaves go through one removal helper. It:
 - unlinks a link or file leaf without following it;
 - takes a directory leaf only when it is a real directory this uid owns, at exactly root/id (and at the
   expected device and inode when a caller names them);
-- removes it without crossing a mount, and reads every exit code;
+- removes it without crossing a file-system boundary, and reads every exit code;
 - proves the leaf absent.
 
 It answers removed, refused with a reason, or unmeasured. A temp root still in use, or unmeasured, when the
@@ -7987,9 +8549,9 @@ Edit 7d. Insert directly after the sentence ending `is classified when it is add
  ccd also journals two failures as `failed`. The first is a probe that could not measure
 (`probe-unmeasured`), from the locked recomputation and from `ws-audit --reclaim`, told apart by the line's
 verb; it is the one audit-time line that is not a terminal refusal. The second is a tail that could not read
-whether the branch still exists (`branch-unmeasured`). Three dies stay unjournaled: the usage die and a
-malformed session id bind no trustworthy id, and the journal's encoder is the `python3` whose absence the
-third reports.
+whether the branch still exists (`branch-unmeasured`). Seven dies stay unjournaled: the usage die and
+the four `--actor`/`--reason` checks run before any id is bound, a malformed session id binds no
+trustworthy id, and the journal's encoder is the `python3` whose absence the last reports.
 ```
 
 Edit 7e. Measure §5.7 and change nothing unless a sentence there is now false:
@@ -8021,7 +8583,28 @@ Insert, directly after item 5 ("**The box is not a wall.**…running ccd directl
      reclaim's git containment.
    - A straggler that writes into the removed worktree's path recreates a directory there that nothing
      collects. The tail's wait covers the temp root only.
-   - On Darwin every temp root a tail meets is kept (§5.2).
+   - On Darwin every directory temp root a tail meets is kept (§5.2). A link or file leaf is unlinked, as before.
+   - Removal compares devices only. So `rm --one-file-system` does cross a bind mount of the SAME file system nested
+     inside a leaf, and only root can make one.
+   - The removal helper's checks are not atomic with its `rm`. A same-uid rename of another directory onto
+     `<root>/<id>` between the two is removed with it. Wave 7's quarantine rename (R57) closes this for the
+     collector.
+   - The in-use probe reads each process's environment as exec'd, so a TMPDIR set after exec is not seen.
+     - A cwd or fd reached through another mount of the same directory has a spelling neither of its compared
+       spellings names. `~/.cc-tmp` is a bind mount on the fleet box, and the TMPDIR arm compares ccd's own
+       spelling.
+     - A pid reused within one walk is read once.
+     - A process table whose churn outlasts the walk's time limit reads unmeasured, never nobody.
+     - Same-uid non-dumpable processes and other uids' processes are not read.
+   - On a git older than 2.43, a tail resume after its own branch CAS can stay `branch-unmeasured` until the branch
+     is recreated. The fleet runs 2.43.
+   - A branch created between the locked recomputation and the pin is adopted at its pinned tip, as before.
+   - A dangling-symlink loose ref that shadows a packed entry reads absent. The branch is then left, never
+     deleted: a leak, not a loss.
+   - A symbolic registry branch reads unmeasured and is never deleted through. Every branch delete in the tail
+     is `update-ref -d --no-deref`.
+   - The test harness's git spawns keep the runner's own `HOME` git config.
+   - A witness writer's interrupted temp file (`$REG/tmproots/.<id>.*.tmp`) is reaped by nothing.
 ```
 
 - [ ] **Step 9: The contract: "§12 as built", appended to §12**
@@ -8040,8 +8623,8 @@ This note amends; it edits no earlier text.
 - **R43.**
   - "Exactly these two tokens, by name" now names four: `flock-unavailable`, `lock-unopenable`,
     `token-malformed` and `run-id-malformed`, each in `CHILD_RECLAIM_PRE_LOCK_TOKEN` and its die pattern.
-  - "The failures the mirror never sees" are now three dies: the usage die, a malformed session id, and
-    `python3` unavailable. Each stays unjournaled for its stated reason.
+  - "The failures the mirror never sees" are now the usage die, the four `--actor`/`--reason` checks, a
+    malformed session id, and `python3` unavailable. Each stays unjournaled for its stated reason.
   - `probe-unmeasured` and `branch-unmeasured` are `failed` lines, read as failure lines with no
     classification. The server's `CHILD_RECLAIM_PROBE_UNMEASURED` is typed `satisfies LcRefusalToken`.
   - `die "bad run id"` was reclaim's alone, so the sanctioned unjournaled set narrows by one.
@@ -8057,8 +8640,8 @@ This note amends; it edits no earlier text.
 - **R49.**
   - The bound is `WS_RECLAIM_TMPROOT_WAIT_S=15`, lowered only by `CCD_RECLAIM_TMPROOT_WAIT_S`.
   - The probe's walk is bounded by `WS_PATH_USERS_SCAN_S=10`, and an expired walk is unmeasured.
-  - The `done` row and the three purge-failure rows carry `meas.tmpRootKept` and `meas.clipsKept` (each
-    `in-use`, `unmeasured` or `refused`).
+  - The `done` row and the three purge-failure rows carry `meas.tmpRootKept` (`in-use`, `unmeasured` or
+    `refused`) and `meas.clipsKept` (`unmeasured` or `refused`), each omitted when nothing was kept.
   - A clips leaf is kept and recorded the same way as a temp root.
   - A same-uid process the kernel will not let ccd read, or another uid's process, is skipped as a stated
     limit, as the expiry probe does.
@@ -8103,8 +8686,8 @@ Then:
 bash ccd/ccrc restamp ccd/ccd
 node shared/mark.mjs --check ccd/ccd; echo "rc=$?"                  # rc=0
 git diff --numstat -- ccd/ccd                                       # equal added and deleted counts (the comment line and the stamp line)
-cd server && ./node_modules/.bin/vitest run test/ownership.test.ts
-cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'every line citation is anchored|CITATION DEBT|README HAS ITS OWN CENSUS|THE RANGE BOUND'
+(cd server && ./node_modules/.bin/vitest run test/ownership.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'every line citation is anchored|CITATION DEBT|README HAS ITS OWN CENSUS|THE RANGE BOUND')
 ```
 
 Expected: PASS. The edit is line-neutral above the boundary. If a citation case reds on an anchor at `_lc_fail`, apply S6-R11's procedure with the instrument, name `lc-fail-header-citation` in the wave-done, and never retype an anchor.
@@ -8129,7 +8712,7 @@ git diff --numstat -- README.md     # this task's README edit: 1	1
 
 ```bash
 git fetch origin main
-cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts test/topology-clean.test.ts test/single-definition.test.ts
+(cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts test/topology-clean.test.ts test/single-definition.test.ts)
 git diff -U0 -- docs README.md ccd/ccd | grep -E '^\+' | grep -cE 'D-[0-9]'      # 0: no D- token added by this task
 ```
 Expected: PASS, and `0`.
@@ -8229,9 +8812,9 @@ git diff -U0 origin/main...HEAD -- ccd/ccd | awk '/^@@/{ split($2,o,","); split(
 git diff --numstat origin/main...HEAD -- ccd/ccrc
 git diff -U0 origin/main...HEAD -- ccd/ccrc | grep '^@@'; grep -n '^# ── END PLATFORM LAYER\|^# ── PLATFORM LAYER' ccd/ccrc
 git diff --name-only origin/main...HEAD -- shared/api.ts README.md server/test/session-hook.test.ts
-cd server && ./node_modules/.bin/vitest run test/ownership.test.ts
-cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'every line citation is anchored|CITATION DEBT|README HAS ITS OWN CENSUS|THE RANGE BOUND'
-cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts
+(cd server && ./node_modules/.bin/vitest run test/ownership.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'every line citation is anchored|CITATION DEBT|README HAS ITS OWN CENSUS|THE RANGE BOUND')
+(cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts)
 ```
 
 Expected:
@@ -8265,31 +8848,31 @@ If anything prints, STOP: revert it and name it by slug.
 Run each `ccd-*` file on its own line, because each is long:
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-config-env.test.ts
-cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-tail-contained.test.ts
-cd server && ./node_modules/.bin/vitest run test/ccd-path-users.test.ts
-cd server && ./node_modules/.bin/vitest run test/ccd-leaf-remove.test.ts
-cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-tmproot-wait.test.ts
-cd server && ./node_modules/.bin/vitest run test/ccd-child-tmproot-witness.test.ts
-cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-gone-branch.test.ts
-cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-recovery.test.ts
-cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-unmeasured-journal.test.ts
-cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-prelock-journal.test.ts
-cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-pin.test.ts
-cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-ladder.test.ts
-cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-verb-tail.test.ts
-cd server && ./node_modules/.bin/vitest run test/ccd-ws-expire-verb.test.ts
-cd server && ./node_modules/.bin/vitest run test/git-env-strip.test.ts test/child-reclaim-done-at.test.ts \
+(cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-config-env.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-tail-contained.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-path-users.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-leaf-remove.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-tmproot-wait.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-child-tmproot-witness.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-gone-branch.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-recovery.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-unmeasured-journal.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-prelock-journal.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-pin.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-ladder.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-verb-tail.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-ws-expire-verb.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/git-env-strip.test.ts test/child-reclaim-done-at.test.ts \
   test/ccd-lifecycle-contain.test.ts test/lifecycle-wire.test.ts test/lifecycle-refusal-word.test.ts \
   test/ccd-refusal-scan.test.ts test/child-reclaim.test.ts test/child-reclaim-status.test.ts \
   test/child-reclaim-sweep-policy.test.ts test/macos-platform.test.ts test/ccd-child-tmpdir.test.ts \
-  test/fleetws.test.ts test/wsaudit.test.ts test/ccd-wsaudit-nonpoison.test.ts test/single-definition.test.ts
-cd pwa && ./node_modules/.bin/vitest run test/child-reclaim-done-reread.test.tsx test/runs-screen.test.tsx
+  test/fleetws.test.ts test/wsaudit.test.ts test/ccd-wsaudit-nonpoison.test.ts test/single-definition.test.ts)
+(cd pwa && ./node_modules/.bin/vitest run test/child-reclaim-done-reread.test.tsx test/runs-screen.test.tsx)
 ```
 
 Expected: PASS. Then record:
 - the counts each pin now reads, read from the files and never typed: Task 3's destructive-call count, `LIFECYCLE_MEAS_KEYS`, `TOKENS.length` and `SANCTIONED.length`;
-- `fleetws.test.ts`'s three whole-frame pins unchanged from `origin/main`.
+- `fleetws.test.ts`'s whole-frame coord pins unchanged from `origin/main`: every one of them (ten at `e79b1da7`; `grep -c "childReclaimAttention: \[\] }" server/test/fleetws.test.ts`, the same count on both trees).
 
 - [ ] **Step 6: Check the commit author before pushing**
 
@@ -8307,12 +8890,12 @@ gh pr create --base main --title "Child reclamation wave 6: what ws-reclaim dele
 Wave 6 of 8 of the child-reclamation programme (CCR-15; spec §5.2, §5.5, §5.6, §5.9, §7, §8), run 291. **AGENT-FIRST:** the `ccd/ccd` half is live when the fleet box converges, and the server + pwa half when the server box does.
 
 **What changes for `ws-reclaim`.**
-1. **The temp root no longer comes back.** After the kill, the tail waits at most 15 s until no process of this uid uses the temp root (its `TMPDIR`, its cwd, an open fd), then removes it through ONE removal helper. The helper never follows a leaf link, takes only a real directory this uid owns at exactly root/id, never crosses a mount, reads every exit code, and proves absence. A temp root still in use or unmeasured, and a clips leaf the helper refuses or cannot measure, are KEPT and recorded on the `done` row (`tmpRootKept`, `clipsKept`). That is not a refusal. This fixes the measured recreation 3.7 s after `reclaim done`.
+1. **The temp root no longer comes back.** After the kill, the tail waits at most 15 s until no process of this uid uses the temp root (its `TMPDIR`, its cwd, an open fd), then removes it through ONE removal helper. The helper never follows a leaf link, takes only a real directory this uid owns at exactly root/id, never crosses a file-system boundary, reads every exit code, and proves absence. A temp root still in use or unmeasured, and a clips leaf the helper refuses or cannot measure, are KEPT and recorded on the `done` row (`tmpRootKept`, `clipsKept`). That is not a refusal. This fixes the measured recreation 3.7 s after `reclaim done`.
 2. **A positive witness.** `$REG/tmproots/<id>` binds each child's temp root (device, inode, birth time, run, uid) at spawn. It outlives the row, and dies only after its leaf is proven absent. Nothing collects by it yet: the collector is wave 7's, and its lane wave 8's.
 3. **Contained git.** The reclaim's git containment drops an inherited `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG` and `GIT_CONFIG_COUNT` before it pins, and the tail's six deleting git calls now run inside it, so no repository hook or fsmonitor runs while it deletes.
 4. **A gone branch.** Whether the branch exists is read three ways (`git show-ref --exists`) at every arm, in one act. A proven-absent branch pins HEAD, the WIP commit and every reflog commit, and deletes no branch. A read that did not run is unmeasured at the audit, and `branch-unmeasured` at the tail with the row kept. The token gains `branchState=`. A git older than 2.43 reclaims a standing branch as before and never a gone one.
 5. **A gone directory.** A registry row whose workdir is gone stops holding other children only on positive evidence: git's own prunable record, or its own interrupted reclaim's breadcrumb and tombstone. The moved-tree check runs after the nested scan and in the final ownership check. It never prunes, creates or purges.
-6. **Journaling.** `probe-unmeasured` is journaled `failed` (verb `ws-reclaim` or `ws-audit`). `token-malformed` and `run-id-malformed` are journaled `refused` after the session id is validated, and are read as pre-lock failures. The usage die, a malformed session id and a missing `python3` stay unjournaled, each for its stated reason.
+6. **Journaling.** `probe-unmeasured` is journaled `failed` (verb `ws-reclaim` or `ws-audit`). `token-malformed` and `run-id-malformed` are journaled `refused` after the session id is validated, and are read as pre-lock failures. The usage die, the four `--actor`/`--reason` checks, a malformed session id and a missing `python3` stay unjournaled, each for its stated reason.
 7. **The board.** The coord frame carries the newest reclaim `done` the mirror ingested (`childReclaimDoneAt`, optional, omitted until measured; one PWA reader; no `FLEET_PROTO` bump). The board re-reads once per change while a finished chip is unsettled, so a vanish re-read that raced the mirror is corrected. It is not a poll.
 
 **What changes for `ws-expire`.** It shares the containment, the ladder pieces and the tail, so F6, the contained deletes, the helper with its wait and keep (recorded on the `expire` done row), the gone-branch reads and the gone-directory recovery all reach it. Its EXPIRE-region code is unchanged except for three header comment lines of `_ws_expire_cwd_users`. Its own unmeasured answer stays unjournaled. Workspace-lifecycle's coordinator was told before dispatch.
@@ -8441,18 +9024,20 @@ The destructive subject is this one alone (R48). Read these together, at the tip
   Your count of destructive git calls must equal the one Task 3's scan pins. Every one of them runs under `_ws_reclaim_contained`, and none is added outside the tail.
 - **The helper.**
   - rc 0 only with absence PROVEN by `_ws_reclaim_absent`.
-  - rc 1 and rc 2 touch nothing.
+  - rc 1 touches nothing. rc 2 either touched nothing (a read, or the permission pass, did not run) or follows a removal that failed part-way or was undone, and `_WS_LEAF_WHY` says which; the tail keeps and records what stands.
   - Every exit code is read.
   - A link or file leaf is unlinked, never followed.
-  - A directory leaf is taken only when it is a real directory this uid owns, with its physical path equal to root/id and a `dev:ino` match when one is given. It is removed with `--one-file-system` (`-x` on Darwin).
+  - A directory leaf is taken only when it is a real directory this uid owns (`_ws_leaf_uid`'s `ls -dn`, never a `stat` outside the platform block), with its physical path equal to root/id and a `dev:ino` match when one is given. It is removed never across a file-system boundary: `--one-file-system` (`-x` on Darwin). Both compare `st_dev` alone, so a bind mount of the SAME file system inside the leaf is crossed (GNU rm's documented limit); only root can make one. Confirm the helper's header states it as a residual.
   - A leaf with an entry that stays unreadable is refused whole.
+  - The checks are not atomic with the `rm`: a same-uid rename onto `<root>/<id>` between them and the removal is removed with it. Confirm the helper's header states this window (the single-user trust model) and names wave 7's quarantine rename (R57) as what closes it.
 - **The wait and keep.**
   - Derive the bound from the constants: at most 15 s, and the override can only lower it.
-  - Derive the tail's worst added wall time, the `WS_PATH_USERS_SCAN_S` walk included, against `server/src/remote/runner.ts`'s 240 000 ms per-verb budget.
-  - "Nobody" comes only from a completed walk; unmeasured always keeps.
+  - Derive the tail's worst added wall time, the `WS_PATH_USERS_SCAN_S` walk included, against `server/src/remote/runner.ts`'s 240 000 ms per-verb budget. The plan derives about 35 s: the 15 s bound, plus one walk begun just before it (10 s), plus step (6)'s re-ask (10 s).
+  - "Nobody" comes only from a completed walk that reached its fixed point (a listing with no unread pid), with every leader whose entries read as vanished asked through its threads; unmeasured always keeps, and so does running out of time.
   - The re-ask comes at the instant of removal.
-  - Darwin asks once and keeps.
-  - A kept leaf is recorded on the `done` row and on each purge-failure row.
+  - Darwin asks once and keeps a directory leaf that stands.
+  - A link or file leaf is never kept for its users: it is unlinked on every platform, and wave 3's pins for it stay unconditional.
+  - A kept leaf is recorded on the `done` row and on each purge-failure row, and only while something stands at it.
   - The worktree's removal is unchanged but for the wait.
 - **The witness order.**
   - Remove, prove absent, THEN unlink the witness.
@@ -8476,7 +9061,7 @@ The destructive subject is this one alone (R48). Read these together, at the tip
 **Cases the reviewer runs itself (built independently of the worker's harness, in scratch):**
 - **Straggler races.**
   - Run seeds 1 to at least 50.
-  - Each seed spawns 1 to 4 processes that use the leaf by `TMPDIR`, by cwd or by an open fd, and exit at a random time from 0 to 20 s after the kill. One per seed recreates the leaf on exit.
+  - Each seed spawns 1 to 4 processes that use the leaf by `TMPDIR`, by cwd or by an open fd, and exit at a random time from 0 to 20 s after the kill. One per seed recreates the leaf on exit. One per seed HOPS: every few milliseconds it forks its successor (which inherits `TMPDIR=<leaf>`) and exits, until its own random exit time. On at least five seeds, one process is a thread-group leader that calls `pthread_exit` while another of its threads keeps writing into the leaf.
   - Run each seed under `reclaim` and under `expire`.
   - Report per seed and in total:
     - (i) removals while a user lived: must be 0;
@@ -8517,6 +9102,10 @@ The destructive subject is this one alone (R48). Read these together, at the tip
 **Mutation re-checks.** Each mutation must red its named case:
 - the wait removed → `THE SWIFT-HOLLOW RACE`;
 - the helper ignoring `rm`'s exit code → `an rm that fails … is UNMEASURED`;
+- the probe's walk back to ONE listing → `a pid that only a SECOND listing holds`;
+- the probe's task walk dropped → `a thread-group LEADER that exited before its threads`;
+- a thread in exit read as unmeasured → the CONTROL of `a LIVE thread’s entry this uid may not read`;
+- step (6)'s link-or-file bypass dropped → the `link` and `file` leaf cases in `ccd-child-reclaim-tmproot-wait.test.ts`;
 - F6's unset moved below the count → the F6 describe;
 - one tail call uncontained → the six-call scan;
 - step 5 back to two-way → `step 5: a branch the tail cannot read stops it`;
@@ -8542,8 +9131,9 @@ Re-derive at the tip:
   - `/proc/<pid>/environ` is split on NUL by python3.
   - `TMPDIR` is compared in its literal and physical spellings.
   - The same uid is established by the status `Uid` line.
-  - A pid that vanished is skipped as proof that it is gone. An unparseable status is unmeasured. Non-dumpable and other-uid processes are skipped as a stated limit. The walk is bounded.
-  - Confirm that NO environment value other than the leaf path itself reaches stderr, a `_WS_PATH_USERS_WHY`, a journal `detail` or a `meas` value: only pids and the kind of use. Grep the tip for every write of those variables.
+  - A pid that vanished is skipped as proof that it is gone, and the table is listed again until a listing names no unread pid (the fixed point), so a vanished process's successor is still read. A leader whose own entries read as vanished is asked through `task/<tid>`, and a thread entry unreadable for any reason but vanishing is unmeasured. An unparseable status is unmeasured. Non-dumpable and other-uid processes are skipped as a stated limit. The walk is bounded, and running out of time is unmeasured.
+  - The stated limit also names two shapes: a TMPDIR set after exec (`environ` is the exec-time block), and a cwd or fd reached through ANOTHER MOUNT of the same directory. `~/.cc-tmp` is a bind mount on the fleet box and its device is mounted whole elsewhere, so that spelling is never compared; the TMPDIR arm compares ccd's own spelling, the one `_child_tmpdir` composes. Confirm the probe's header states both.
+  - Confirm what reaches stderr, a `_WS_PATH_USERS_WHY`, a journal `detail` or a `meas` value: pids, the kind of use, and the path the use names, which is the leaf or a path under it by construction (`under()`), with tabs and newlines replaced. Nothing outside the leaf is reported, no other environment variable is ever read out, and no environ VALUE beyond that TMPDIR path. Grep the tip for every write of those variables.
 - **Inherited git environment.**
   - F6's three names are unset in the outermost block only, above the count.
   - Diff git's `--local-env-vars` list against the containment's unset list on the reviewer's own git.
@@ -8553,7 +9143,7 @@ Re-derive at the tip:
   - `_ws_reclaim_branch_state` reads the repository it is named, under the containment.
 - **Path resolution and link following.**
   - The helper resolves the ROOT physically. A root link to a data volume is followed by design; state why that is safe.
-  - The LEAF is never followed. The physical path must equal root/id. The owner is read without `-L`. The removal never crosses a mount.
+  - The LEAF is never followed. The physical path must equal root/id. The owner is read by `_ws_leaf_uid`'s `ls -dn`, which never follows the leaf (not `stat`, which the platform sweep refuses outside the block). The removal never crosses a file-system boundary; a same-file-system bind mount inside a leaf is the stated residual (only root can make one).
   - The recovery places by literal spelling, and requires a `complete` resolution of the parent. It follows no leaf link.
   - `_child_tmpdir`'s rc 2 arm (a symlinked leaf) is unchanged.
 - **The platform block.**
