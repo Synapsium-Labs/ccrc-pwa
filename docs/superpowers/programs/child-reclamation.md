@@ -46,6 +46,25 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 19:12 — the first live reclaims on wave 5, observed read-only. Both children are gone; one took two
+  passes.**
+  - **`ccrc-pwa-quiet-meadow`** (run 260's child, a recycled slug) was reclaimed in one pass: intent 19:05:50, done
+    19:06:07.
+  - **`ccrc-pwa-brisk-meadow`** (archived by hand on 09-28; the one child R40 moves) was reclaimed on the second pass.
+    - **The first attempt failed closed.** It started at 19:05:51 and stopped at 19:06:05 on
+      `worktree-remove-failed`, with the breadcrumb at `reclaim:children` and the session unsupervised. The reason:
+      "registry row(s) ccrc-pwa-quiet-meadow name a workdir that cannot be resolved completely". The two reclaims ran
+      concurrently. ccd had already removed quiet-meadow's tree, but its row and breadcrumb stood until its purge,
+      two seconds later. So brisk-meadow's check of the other rows was unmeasured, and it stopped before deleting
+      anything further.
+    - **The resume succeeded.** It ran at 19:11:18 and finished at 19:11:26 (`purge done`, `reclaim done`). The
+      worktree and the breadcrumb are gone.
+  - **What this shows.**
+    - The fail-closed arm and the breadcrumb resume work live.
+    - The state the race exposed is exactly what wave 6's Task 9 breadcrumb arm (R54) places. That is a row whose
+      tree ccd's own `git worktree remove` took, with a `branch`, `artifacts` or `clips` phase beside its tombstone.
+      So after wave 6 this race passes in one pass instead of two, and no instruction to the worker is needed.
+  - **R59's first live-residue item is resolved.** `brisk-meadow` moved when wave 5 deployed, as R59 said it would.
 - **2026-10-06 19:05 — wave 5 is LIVE (v0.0.105), and run 260 is closed.**
   - **The deploy, observed read-only.** The updater dispatched the fleet box at 19:01:42 and the server box at
     19:04:14. `ccrc rollout --to v0.0.105 --check` then read both `[current]` at `b27fabc1`. Nothing was rolled out by
