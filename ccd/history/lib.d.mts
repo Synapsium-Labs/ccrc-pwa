@@ -145,3 +145,55 @@ export type JournalRead =
   | { kind: 'malformed' } | { kind: 'unknown' } | { kind: 'newer' };
 export function parseJournalRecord(line: string): JournalRead;
 export function journalRecord(kind: JournalKind, t: number, fields: JournalFields): string;
+
+// --- Task 6: planners and gates (spec §5.3, §6.2, §6.9, §6.11, §8.3, §8.4, §9.2, §9.3)
+export type Presence<T> = { state: 'absent' } | { state: 'unreadable' } | { state: 'value'; value: T };
+export type DbDirState = 'dir' | 'absent' | 'dangling' | 'unmeasured';
+export type DbFileState = 'present' | 'absent' | 'zero-byte' | 'unmeasured';
+export interface StoreFacts {
+  role: string; dbDir: DbDirState; storeId: Presence<string>; pending: Presence<string>; writer: Presence<string>;
+  db: DbFileState; dbStoreId: Presence<string>; wal: boolean; shm: boolean;
+  journalStoreDirs: readonly string[]; backupsDb: readonly string[];
+}
+export type StoreOpenVerdict =
+  | { act: 'create' } | { act: 'open' } | { act: 'finish-pending' } | { act: 'drop-pending-create' }
+  | { act: 'refuse'; word: string };
+export function decideStoreOpen(f: StoreFacts): StoreOpenVerdict;
+export interface CliStoreFacts {
+  darwin: boolean; role: string; statSettled: boolean; dbDir: DbDirState; shim: 'present' | 'absent' | 'unmeasured';
+  storeId: Presence<string>; pending: Presence<string>; writer: Presence<string>; db: DbFileState; dbStoreId: Presence<string>;
+  wal: boolean; shm: boolean; journalStoreDirs: readonly string[]; backupsDb: readonly string[];
+}
+export interface CliStoreVerdict { exit: number; reason?: string; read: boolean }
+export function decideCliStore(f: CliStoreFacts): CliStoreVerdict;
+export function planCopy(i: { freeBytes: number; thresholdBytes: number; sizeBytes: number }): { admit: boolean; needBytes: number | null };
+export function floorThreshold(fsSizeBytes: number, runBudgetBytes?: number): number;
+export function capOf(text: string | null): { gb: number; malformed: boolean };
+export function capBytes(gb: number): number;
+export interface MigrationInputs {
+  stored: number; code: number; freeBytes: number; thresholdBytes: number; sizeBytes: number;
+  boundS: number | null; copyBps: number | null; attempts: number; heavy: boolean;
+}
+export function planMigration(i: MigrationInputs): MigrationVerdict;
+export function withinBudget(i: { elapsedMs: number; bytes: number }): boolean;
+export type FreeProbe = { state: 'ok'; bytes: number; fsSize: number } | { state: 'unsettled' } | { state: 'threw' };
+export interface RunInputs {
+  historyOff: boolean; store: StoreOpenVerdict; free: FreeProbe; sizeBytes: number; capGb: number;
+  migration: MigrationVerdict; recovering: boolean;
+}
+export interface RunPlan {
+  arm: 'off' | 'hold' | 'migrate' | 'recover' | 'run'; holdWord: string | null;
+  drain: boolean; ingest: boolean; pause: null | 'at-cap' | 'low-disk';
+}
+export function planRun(i: RunInputs): RunPlan;
+export interface CursorRow { transcriptUuid: string; birthNs: number | bigint | null; headSha: string | null; offset: number; tailSha: string | null }
+export interface FileReadInputs {
+  row: CursorRow | null; stat: { size: number; birthNs: number | bigint | null } | null;
+  pathUuid: string; headSha: string | null; tailShaAtOffset: string | null;
+}
+export function planFileRead(i: FileReadInputs): 'resume' | 'rescan' | 'retire' | 'skip';
+export const UNKNOWN_OP_FORM: 'unknown-op';
+export function formOf(op: string, args: readonly string[]): string | null;
+export type OpGateReason = 'bad-args' | 'apply-in-session' | 'needs-tty' | 'irreversible-in-pane' | 'history-off';
+export function decideOpGate(form: string | null, env: { claudecode: boolean; historyOff: boolean }, isTTY: boolean, paneName: string | null):
+  { ok: true } | { ok: false; rc: 2; reason: OpGateReason };

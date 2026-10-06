@@ -26,6 +26,7 @@ import {
   SPOOL_KEYS, SPOOL_LINE_MAX, DRAINING_NAME_MAX, JOURNAL_V, CONFIRM_BY, GENERATION_VIA, splitSpoolText, parseSpoolLine, drainingNameOk,
   parseJournalRecord, journalRecord,
 } from '../../ccd/history/lib.mjs';
+import * as libPlan from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -545,5 +546,356 @@ describe('journalRecord: the writer can never append a line its own reader skips
   it('puts v, k and t first, then the fields in the order given', () => {
     expect(journalRecord('redact', 7, { len: 43, sha256: 'b'.repeat(64) }))
       .toBe(`{"v":1,"k":"redact","t":7,"len":43,"sha256":"${'b'.repeat(64)}"}`);
+  });
+});
+
+// ===========================================================================
+// Task 6: the planners and gates, pinned in-process on lib.mjs alone. They
+// are L1 decisions (O56), so these cases need no fixture HOME, no spawn and
+// no clock, and they run on every platform, darwin included (O24).
+// ===========================================================================
+const PLAN_SID = '0189abcd-1234-4678-9abc-0123456789ab';
+const PLAN_OTHER = '0189abcd-1234-4678-9abc-ba9876543210';
+const planAbsent: libPlan.Presence<string> = { state: 'absent' };
+const planUnreadable: libPlan.Presence<string> = { state: 'unreadable' };
+const planValue = (value: string): libPlan.Presence<string> => ({ state: 'value', value });
+/** Task 3's vocabularies, read as plain records whatever literal types its
+ *  declarations carry. */
+const planReasons = libPlan.REASONS as unknown as Readonly<Record<string, number>>;
+const planHealth = libPlan.HEALTH_WORDS as unknown as Readonly<Record<string, string>>;
+const planPassWords = libPlan.PASS_WORDS as unknown as readonly string[];
+
+describe('decideStoreOpen: the store-open decision (spec 6.2, 6.9, 5.3)', () => {
+  const facts = (o: Partial<libPlan.StoreFacts> = {}): libPlan.StoreFacts => ({
+    role: 'fleet', dbDir: 'dir', storeId: planAbsent, pending: planAbsent, writer: planAbsent,
+    db: 'absent', dbStoreId: planAbsent, wal: false, shm: false, journalStoreDirs: [], backupsDb: [], ...o,
+  });
+  const bound: Partial<libPlan.StoreFacts> = {
+    storeId: planValue(PLAN_SID), writer: planValue('0a1b2c3d'), db: 'present', dbStoreId: planValue(PLAN_SID),
+  };
+  const refuse = (word: string): libPlan.StoreOpenVerdict => ({ act: 'refuse', word });
+  const ROWS: Array<{ name: string; f: libPlan.StoreFacts; want: libPlan.StoreOpenVerdict }> = [
+    { name: 'a fresh box with nothing on disk creates', f: facts(), want: { act: 'create' } },
+    { name: 'a bound store whose meta.store_id equals store.id opens', f: facts(bound), want: { act: 'open' } },
+    { name: 'a server role refuses even over a bound store', f: facts({ ...bound, role: 'server' }), want: refuse('store-create-refused-role') },
+    { name: 'a server role refuses on a fresh box', f: facts({ role: 'server' }), want: refuse('store-create-refused-role') },
+    { name: 'a dangling db link refuses store-root-dangling', f: facts({ dbDir: 'dangling', storeId: planValue(PLAN_SID) }), want: refuse('store-root-dangling') },
+    { name: 'an unmeasured db dir refuses store-unmeasured', f: facts({ dbDir: 'unmeasured' }), want: refuse('store-unmeasured') },
+    { name: 'an unmeasured db file refuses store-unmeasured', f: facts({ db: 'unmeasured' }), want: refuse('store-unmeasured') },
+    { name: 'an unreadable store.id refuses store-unmeasured and never creates', f: facts({ storeId: planUnreadable }), want: refuse('store-unmeasured') },
+    { name: 'an unreadable pending marker refuses store-unmeasured', f: facts({ pending: planUnreadable }), want: refuse('store-unmeasured') },
+    { name: 'an unreadable store.writer refuses store-unmeasured', f: facts({ ...bound, writer: planUnreadable }), want: refuse('store-unmeasured') },
+    { name: 'a present DB whose meta cannot be read refuses store-unmeasured', f: facts({ ...bound, dbStoreId: planUnreadable }), want: refuse('store-unmeasured') },
+    { name: 'a 0-byte history.db refuses store-zero-byte', f: facts({ ...bound, db: 'zero-byte' }), want: refuse('store-zero-byte') },
+    { name: 'a present DB with no meta.store_id refuses store-schema-missing', f: facts({ ...bound, dbStoreId: planAbsent }), want: refuse('store-schema-missing') },
+    { name: 'store.id present and the DB absent refuses store-missing', f: facts({ storeId: planValue(PLAN_SID) }), want: refuse('store-missing') },
+    { name: 'store.id naming another store refuses store-mismatch', f: facts({ ...bound, storeId: planValue(PLAN_OTHER) }), want: refuse('store-mismatch') },
+    { name: 'a DB with no store.id and no pending marker refuses store-unbound', f: facts({ db: 'present', dbStoreId: planValue(PLAN_SID) }), want: refuse('store-unbound') },
+    { name: 'a DB with no store.id and a pending marker for another store refuses store-unbound', f: facts({ db: 'present', dbStoreId: planValue(PLAN_SID), pending: planValue(PLAN_OTHER) }), want: refuse('store-unbound') },
+    { name: 'a DB with no store.id and its own pending marker finishes the creation', f: facts({ db: 'present', dbStoreId: planValue(PLAN_SID), pending: planValue(PLAN_SID) }), want: { act: 'finish-pending' } },
+    { name: 'a leftover WAL with no DB refuses store-wal-orphaned', f: facts({ wal: true }), want: refuse('store-wal-orphaned') },
+    { name: 'a leftover SHM with no DB refuses store-wal-orphaned', f: facts({ shm: true }), want: refuse('store-wal-orphaned') },
+    { name: 'a journal store directory refuses store-recoverable', f: facts({ journalStoreDirs: [PLAN_OTHER] }), want: refuse('store-recoverable') },
+    { name: 'a regular backups db refuses store-recoverable', f: facts({ backupsDb: ['20261001T000000Z.db'] }), want: refuse('store-recoverable') },
+    { name: 'a pending marker with no DB is dropped and the store created anew', f: facts({ pending: planValue(PLAN_SID) }), want: { act: 'drop-pending-create' } },
+    { name: 'a pending marker with no DB but recoverable evidence still refuses', f: facts({ pending: planValue(PLAN_SID), journalStoreDirs: [PLAN_SID] }), want: refuse('store-recoverable') },
+  ];
+  it.each(ROWS)('$name', ({ f, want }) => {
+    expect(libPlan.decideStoreOpen(f)).toEqual(want);
+  });
+  it('every word it refuses with is a PASS_WORDS member and a HEALTH_WORDS fail', () => {
+    const words = ROWS.map((r) => libPlan.decideStoreOpen(r.f)).flatMap((v) => (v.act === 'refuse' ? [v.word] : []));
+    expect(words.length, 'the table refused nothing').toBeGreaterThan(5);
+    for (const w of words) {
+      expect(planPassWords, w).toContain(w);
+      if (w !== 'store-create-refused-role') expect(planHealth[w], w).toBe('fail');
+    }
+  });
+});
+
+describe('decideCliStore: which no-store answer (spec 8.3 table, C36 pure rows)', () => {
+  const facts = (o: Partial<libPlan.CliStoreFacts> = {}): libPlan.CliStoreFacts => ({
+    darwin: false, role: 'fleet', statSettled: true, dbDir: 'dir', shim: 'present', storeId: planAbsent, pending: planAbsent,
+    writer: planAbsent, db: 'absent', dbStoreId: planAbsent, wal: false, shm: false, journalStoreDirs: [], backupsDb: [], ...o,
+  });
+  const bound: Partial<libPlan.CliStoreFacts> = { storeId: planValue(PLAN_SID), db: 'present', dbStoreId: planValue(PLAN_SID) };
+  const ROWS: Array<{ name: string; f: libPlan.CliStoreFacts; exit: number; reason?: string; read?: boolean }> = [
+    { name: 'Darwin answers 9 whatever is on disk', f: facts({ ...bound, darwin: true }), exit: 9 },
+    { name: 'a server role with a stale shim, store.id and DB answers 9', f: facts({ ...bound, role: 'server' }), exit: 9 },
+    { name: 'no shim, no store.id and no DB answers 9', f: facts({ shim: 'absent' }), exit: 9 },
+    { name: 'a shim with no store.id and no DB answers 6', f: facts(), exit: 6 },
+    { name: 'the same with a journal store directory answers 5 store-recoverable', f: facts({ journalStoreDirs: [PLAN_OTHER] }), exit: 5, reason: 'store-recoverable' },
+    { name: 'the same with a backups db answers 5 store-recoverable', f: facts({ backupsDb: ['20261001T000000Z.db'] }), exit: 5, reason: 'store-recoverable' },
+    { name: 'the same with a leftover WAL answers 5 store-wal-orphaned', f: facts({ wal: true }), exit: 5, reason: 'store-wal-orphaned' },
+    { name: 'store.id without a DB answers 5 store-missing', f: facts({ storeId: planValue(PLAN_SID) }), exit: 5, reason: 'store-missing' },
+    { name: 'a DB without store.id answers 5 store-unbound', f: facts({ db: 'present', dbStoreId: planValue(PLAN_SID) }), exit: 5, reason: 'store-unbound' },
+    { name: 'a DB without store.id but its own pending marker answers 6', f: facts({ db: 'present', dbStoreId: planValue(PLAN_SID), pending: planValue(PLAN_SID) }), exit: 6 },
+    { name: 'a store.id naming another store answers 5 store-mismatch', f: facts({ ...bound, storeId: planValue(PLAN_OTHER) }), exit: 5, reason: 'store-mismatch' },
+    { name: 'a 0-byte store answers 5 store-zero-byte', f: facts({ ...bound, db: 'zero-byte' }), exit: 5, reason: 'store-zero-byte' },
+    { name: 'a DB with no meta.store_id answers 5 store-schema-missing', f: facts({ ...bound, dbStoreId: planAbsent }), exit: 5, reason: 'store-schema-missing' },
+    { name: 'a bound store reads', f: facts(bound), exit: 0, read: true },
+    { name: 'a stat that did not settle answers 5 store-unreachable first', f: facts({ ...bound, statSettled: false, storeId: planUnreadable }), exit: 5, reason: 'store-unreachable' },
+    { name: 'a dangling db link answers 5 store-root-dangling', f: facts({ dbDir: 'dangling', storeId: planValue(PLAN_SID) }), exit: 5, reason: 'store-root-dangling' },
+    { name: 'an unreadable store.id answers 5 store-unmeasured, never 6', f: facts({ storeId: planUnreadable }), exit: 5, reason: 'store-unmeasured' },
+    { name: 'an unreadable store.writer answers 5 store-unmeasured', f: facts({ ...bound, writer: planUnreadable }), exit: 5, reason: 'store-unmeasured' },
+    { name: 'an unmeasured shim answers 5 store-unmeasured, never 9', f: facts({ shim: 'unmeasured' }), exit: 5, reason: 'store-unmeasured' },
+  ];
+  it.each(ROWS)('$name', ({ f, exit, reason, read }) => {
+    const got = libPlan.decideCliStore(f);
+    expect(got.exit).toBe(exit);
+    expect(got.reason).toBe(reason);
+    expect(got.read).toBe(read ?? false);
+  });
+  it('every reason it answers is a REASONS word whose code is the exit it answered', () => {
+    const answered = ROWS.map((r) => libPlan.decideCliStore(r.f)).filter((v) => v.reason !== undefined);
+    expect(answered.length, 'the table gave no reason').toBeGreaterThan(5);
+    for (const v of answered) expect(planReasons[v.reason as string], v.reason).toBe(v.exit);
+  });
+});
+
+describe('planCopy and planMigration: the migration verdict is L1 (DM41, DM43 pure table)', () => {
+  const GiB = 1073741824;
+  const threshold = 20 * GiB;
+  const size = 3 * GiB;
+  const mig = (o: Partial<libPlan.MigrationInputs> = {}): libPlan.MigrationInputs => ({
+    stored: 1, code: 2, freeBytes: threshold + size + 1, thresholdBytes: threshold, sizeBytes: size,
+    boundS: null, copyBps: null, attempts: 0, heavy: false, ...o,
+  });
+  it('equal versions answer none', () => {
+    expect(libPlan.planMigration(mig({ stored: 2 }))).toBe('none');
+  });
+  it('a stored version newer than the code answers refuse-newer', () => {
+    expect(libPlan.planMigration(mig({ stored: 3 }))).toBe('refuse-newer');
+  });
+  it('free = threshold + size + 1 with a copy that fits answers snapshot-then-migrate', () => {
+    expect(libPlan.planMigration(mig({ boundS: libPlan.CARRIER_KILL_S, copyBps: 1_000_000_000 }))).toBe('snapshot-then-migrate');
+  });
+  it('free = threshold + size - 1 answers refuse-low-disk', () => {
+    expect(libPlan.planMigration(mig({ freeBytes: threshold + size - 1, boundS: libPlan.CARRIER_KILL_S, copyBps: 1_000_000_000 }))).toBe('refuse-low-disk');
+  });
+  it('free exactly threshold + size answers refuse-low-disk: free space must exceed it', () => {
+    expect(libPlan.planMigration(mig({ freeBytes: threshold + size }))).toBe('refuse-low-disk');
+  });
+  it('planCopy answers the same boundary for every caller', () => {
+    expect(libPlan.planCopy({ freeBytes: threshold + size + 1, thresholdBytes: threshold, sizeBytes: size })).toEqual({ admit: true, needBytes: threshold + size });
+    expect(libPlan.planCopy({ freeBytes: threshold + size - 1, thresholdBytes: threshold, sizeBytes: size })).toEqual({ admit: false, needBytes: threshold + size });
+    expect(libPlan.planCopy({ freeBytes: threshold + size, thresholdBytes: threshold, sizeBytes: size }).admit).toBe(false);
+  });
+  it('planCopy never admits on an input that was not measured', () => {
+    for (const bad of [Number.NaN, -1, Number.POSITIVE_INFINITY]) {
+      expect(libPlan.planCopy({ freeBytes: bad, thresholdBytes: 0, sizeBytes: 0 })).toEqual({ admit: false, needBytes: null });
+      expect(libPlan.planCopy({ freeBytes: 10 * GiB, thresholdBytes: bad, sizeBytes: 0 })).toEqual({ admit: false, needBytes: null });
+      expect(libPlan.planCopy({ freeBytes: 10 * GiB, thresholdBytes: 0, sizeBytes: bad })).toEqual({ admit: false, needBytes: null });
+    }
+  });
+  it('DM43: an estimate over half the carrier bound escalates to snapshot-needs-op; at half it copies', () => {
+    const bound = libPlan.CARRIER_KILL_S;
+    const rate = 10_000_000;
+    const atHalf = (bound / 2) * rate;
+    expect(libPlan.planMigration(mig({ sizeBytes: atHalf, freeBytes: threshold + atHalf + 1, boundS: bound, copyBps: rate }))).toBe('snapshot-then-migrate');
+    expect(libPlan.planMigration(mig({ sizeBytes: atHalf + rate, freeBytes: threshold + atHalf + rate + 1, boundS: bound, copyBps: rate }))).toBe('snapshot-needs-op');
+  });
+  it('DM43: no copy_bps uses the chosen 10 MB/s, and a heavy version counts the store twice', () => {
+    const bound = libPlan.CARRIER_KILL_S;
+    expect(libPlan.DEFAULT_COPY_BPS).toBe(10_000_000);
+    const atHalf = (bound / 2) * libPlan.DEFAULT_COPY_BPS;
+    const room = { sizeBytes: atHalf, freeBytes: threshold + atHalf + 1, boundS: bound };
+    expect(libPlan.planMigration(mig({ ...room, copyBps: null }))).toBe('snapshot-then-migrate');
+    expect(libPlan.planMigration(mig({ ...room, copyBps: 0 }))).toBe('snapshot-then-migrate');
+    expect(libPlan.planMigration(mig({ ...room, copyBps: null, heavy: true }))).toBe('snapshot-needs-op');
+  });
+  it('DM43: two interrupted attempts escalate whatever the size; an --op pass (no bound) skips both tests', () => {
+    expect(libPlan.planMigration(mig({ boundS: libPlan.CARRIER_KILL_S, copyBps: 1_000_000_000, attempts: 2 }))).toBe('snapshot-needs-op');
+    expect(libPlan.planMigration(mig({ boundS: libPlan.CARRIER_KILL_S, copyBps: 1_000_000_000, attempts: 1 }))).toBe('snapshot-then-migrate');
+    const big = 100 * GiB;
+    expect(libPlan.planMigration(mig({ boundS: null, copyBps: 1, attempts: 5, sizeBytes: big, freeBytes: threshold + big + 1 }))).toBe('snapshot-then-migrate');
+  });
+  it('every answer is a MIGRATION_VERDICTS member, and the table reaches all five', () => {
+    const seen = new Set<string>();
+    for (const stored of [1, 2, 3]) for (const delta of [-1, 1]) for (const boundS of [null, libPlan.CARRIER_KILL_S]) for (const attempts of [0, 2]) {
+      seen.add(libPlan.planMigration(mig({ stored, freeBytes: threshold + size + delta, boundS, attempts, copyBps: 1_000_000_000 })));
+    }
+    const vocab = libPlan.MIGRATION_VERDICTS as unknown as readonly string[];
+    for (const w of seen) expect(vocab, w).toContain(w);
+    expect([...seen].sort()).toEqual([...vocab].sort());
+  });
+});
+
+describe('floorThreshold, capOf and withinBudget (spec 9.3, 9.2 step 7)', () => {
+  const GiB = 1073741824;
+  it('the threshold is min(15 GiB, 10% of the filesystem) plus one run budget', () => {
+    expect(libPlan.floorThreshold(100 * GiB)).toBe(10 * GiB + libPlan.RUN_BUDGET_BYTES);
+    expect(libPlan.floorThreshold(1024 * GiB)).toBe(15 * GiB + libPlan.RUN_BUDGET_BYTES);
+    expect(libPlan.floorThreshold(100 * GiB, 0)).toBe(10 * GiB);
+  });
+  it('an absent cap file is 50, a malformed one is 50 and says so', () => {
+    expect(libPlan.capOf(null)).toEqual({ gb: 50, malformed: false });
+    expect(libPlan.capOf(' 7\n')).toEqual({ gb: 7, malformed: false });
+    for (const bad of ['', '0', '-3', '1.5', 'x', '12GB', '99999999999999999999']) {
+      expect(libPlan.capOf(bad), JSON.stringify(bad)).toEqual({ gb: 50, malformed: true });
+    }
+    expect(libPlan.capBytes(50)).toBe(50 * GiB);
+  });
+  it('one budget per run: under 90 s and under 512 MiB', () => {
+    expect(libPlan.withinBudget({ elapsedMs: 89_999, bytes: 512 * 1024 * 1024 - 1 })).toBe(true);
+    expect(libPlan.withinBudget({ elapsedMs: 90_000, bytes: 0 })).toBe(false);
+    expect(libPlan.withinBudget({ elapsedMs: 0, bytes: 512 * 1024 * 1024 })).toBe(false);
+  });
+});
+
+describe('planRun: a hold stops the drain, a pause stops only ingest (O56, spec 9.2)', () => {
+  const GiB = 1073741824;
+  const fsSize = 1024 * GiB;
+  const plenty: libPlan.FreeProbe = { state: 'ok', bytes: 500 * GiB, fsSize };
+  const run = (o: Partial<libPlan.RunInputs> = {}): libPlan.RunPlan => libPlan.planRun({
+    historyOff: false, store: { act: 'open' }, free: plenty, sizeBytes: 1 * GiB, capGb: 50, migration: 'none', recovering: false, ...o,
+  });
+  const REFUSALS_OF_OPEN = ['store-create-refused-role', 'store-root-dangling', 'store-unmeasured', 'store-zero-byte', 'store-schema-missing',
+    'store-missing', 'store-mismatch', 'store-unbound', 'store-wal-orphaned', 'store-recoverable'];
+  const HOLDS: Array<{ name: string; o: Partial<libPlan.RunInputs>; arm: libPlan.RunPlan['arm']; holdWord: string | null }> = [
+    ...REFUSALS_OF_OPEN.map((word) => ({ name: `a store refused ${word}`, o: { store: { act: 'refuse' as const, word } }, arm: 'hold' as const, holdWord: word })),
+    { name: 'a statfs that did not settle', o: { free: { state: 'unsettled' } }, arm: 'hold', holdWord: 'store-unreachable' },
+    { name: 'a newer schema', o: { migration: 'refuse-newer' }, arm: 'hold', holdWord: 'schema-newer' },
+    { name: 'a migration refused for room', o: { migration: 'refuse-low-disk' }, arm: 'hold', holdWord: 'migration-refused' },
+    { name: 'a migration that needs an --op pass', o: { migration: 'snapshot-needs-op' }, arm: 'hold', holdWord: 'migration-needs-op' },
+    { name: 'a pass that migrates', o: { migration: 'snapshot-then-migrate' }, arm: 'migrate', holdWord: null },
+    { name: 'a registered recovery step', o: { recovering: true }, arm: 'recover', holdWord: null },
+    { name: 'history-off', o: { historyOff: true }, arm: 'off', holdWord: null },
+  ];
+  it.each(HOLDS)('$name holds the drain and ingest', ({ o, arm, holdWord }) => {
+    expect(run(o)).toEqual({ arm, holdWord, drain: false, ingest: false, pause: null });
+  });
+  it('history-off wins over every other input', () => {
+    expect(run({ historyOff: true, store: { act: 'refuse', word: 'store-unbound' }, free: { state: 'unsettled' } }).arm).toBe('off');
+  });
+  it('a healthy open, create, finish or drop runs with drain and ingest', () => {
+    for (const store of [{ act: 'open' }, { act: 'create' }, { act: 'finish-pending' }, { act: 'drop-pending-create' }] as libPlan.StoreOpenVerdict[]) {
+      expect(run({ store })).toEqual({ arm: 'run', holdWord: null, drain: true, ingest: true, pause: null });
+    }
+  });
+  it('a store at the cap pauses ingest and keeps the drain', () => {
+    expect(run({ sizeBytes: 50 * GiB })).toEqual({ arm: 'run', holdWord: null, drain: true, ingest: false, pause: 'at-cap' });
+    expect(run({ sizeBytes: 50 * GiB - 1 }).pause).toBe(null);
+  });
+  it('free space below the floor, or a statfs that threw, pauses ingest as low-disk and keeps the drain', () => {
+    const floor = libPlan.floorThreshold(fsSize);
+    expect(run({ free: { state: 'ok', bytes: floor - 1, fsSize } })).toEqual({ arm: 'run', holdWord: null, drain: true, ingest: false, pause: 'low-disk' });
+    expect(run({ free: { state: 'ok', bytes: floor, fsSize } }).pause).toBe(null);
+    expect(run({ free: { state: 'threw' } })).toEqual({ arm: 'run', holdWord: null, drain: true, ingest: false, pause: 'low-disk' });
+  });
+  it('a recovery step below the floor pauses as low-disk and still holds the drain (spec 9.3)', () => {
+    const floor = libPlan.floorThreshold(fsSize);
+    expect(run({ recovering: true, free: { state: 'ok', bytes: floor - 1, fsSize } })).toEqual({ arm: 'recover', holdWord: null, drain: false, ingest: false, pause: 'low-disk' });
+    expect(run({ recovering: true, free: { state: 'ok', bytes: floor, fsSize } }).pause).toBe(null);
+  });
+  it('a migration word outside MIGRATION_VERDICTS throws rather than runs', () => {
+    expect(() => run({ migration: 'later' as libPlan.MigrationVerdict })).toThrow(TypeError);
+  });
+});
+
+describe('planFileRead: a cursor resumes only on its own file (spec 9.2 step 3, DM45 pure)', () => {
+  const U = '0189abcd-1234-4678-9abc-0123456789ab';
+  const V = '0189abcd-1234-4678-9abc-ba9876543210';
+  const BIRTH = 1_700_000_000_123_456_789n;
+  const row: libPlan.CursorRow = { transcriptUuid: U, birthNs: BIRTH, headSha: 'aa', offset: 100, tailSha: 'bb' };
+  const read = (o: Partial<libPlan.FileReadInputs> = {}): string => libPlan.planFileRead({
+    row, stat: { size: 200, birthNs: BIRTH }, pathUuid: U, headSha: 'aa', tailShaAtOffset: 'bb', ...o,
+  });
+  it('the same identity, a size at or past the offset and the same tail sha resume', () => {
+    expect(read()).toBe('resume');
+    expect(read({ stat: { size: 100, birthNs: BIRTH } })).toBe('resume');
+  });
+  it('a file that cannot be stat-ed is skipped; a file with no row is scanned from the start', () => {
+    expect(read({ stat: null })).toBe('skip');
+    expect(read({ row: null })).toBe('rescan');
+  });
+  it('another uuid at the path retires the row', () => {
+    expect(read({ pathUuid: V })).toBe('retire');
+  });
+  it('a different birth time retires the row, compared exactly past 2^53', () => {
+    expect(read({ stat: { size: 200, birthNs: BIRTH - 1n } })).toBe('retire');
+  });
+  it('an equal birth time proves identity even when the first line differs', () => {
+    expect(read({ headSha: 'cc' })).toBe('resume');
+  });
+  it('with no birth time on either side the first line stands in', () => {
+    expect(read({ stat: { size: 200, birthNs: null }, headSha: 'cc' })).toBe('retire');
+    expect(read({ stat: { size: 200, birthNs: null }, headSha: 'aa' })).toBe('resume');
+    expect(read({ row: { ...row, birthNs: null }, headSha: 'cc' })).toBe('retire');
+  });
+  it('a row bound before the file had a first line never retires on the head', () => {
+    expect(read({ row: { ...row, birthNs: null, headSha: null }, headSha: 'cc' })).toBe('resume');
+  });
+  it('a file shorter than the cursor, or a different tail sha, rescans', () => {
+    expect(read({ stat: { size: 99, birthNs: BIRTH } })).toBe('rescan');
+    expect(read({ tailShaAtOffset: 'zz' })).toBe('rescan');
+  });
+});
+
+describe('formOf and decideOpGate: the speed bumps, decided once (spec 8.4, C64 pure)', () => {
+  const FORMS = libPlan.WRITING_FORMS as unknown as Readonly<Record<string, Readonly<{ op: string; irreversible: boolean; binding: boolean }>>>;
+  const NAMES = Object.keys(FORMS);
+  const env = (o: Partial<{ claudecode: boolean; historyOff: boolean }> = {}) => ({ claudecode: false, historyOff: false, ...o });
+  it('formOf maps an --op verb and its argv to a WRITING_FORMS key, null for a dry run', () => {
+    expect(libPlan.formOf('import', [])).toBe(null);
+    expect(libPlan.formOf('import', ['--session', 'demo-quiet-basin'])).toBe(null);
+    expect(libPlan.formOf('import', ['--apply'])).toBe('import-apply');
+    expect(libPlan.formOf('import', ['--session', 'demo-quiet-basin', '--file', '/home/u/.claude-a/projects/p/x.jsonl', '--apply'])).toBe('import-session-apply');
+    expect(libPlan.formOf('prune', ['--older-than', '90d'])).toBe(null);
+    expect(libPlan.formOf('prune', ['--older-than', '90d', '--apply'])).toBe('prune-apply');
+    expect(libPlan.formOf('reparse', [])).toBe(null);
+    expect(libPlan.formOf('reparse', ['--apply'])).toBe('reparse-apply');
+    expect(libPlan.formOf('recall-off', ['demo-quiet-basin'])).toBe('recall-off');
+    expect(libPlan.formOf('recall-off', ['--clear-all'])).toBe('recall-off-clear-all');
+    for (const op of ['repair', 'backup', 'migrate', 'adopt', 'restore', 'rebuild']) expect(libPlan.formOf(op, [])).toBe(op);
+    expect(libPlan.formOf('frobnicate', ['--apply'])).toBe(libPlan.UNKNOWN_OP_FORM);
+  });
+  it('every non-null form formOf answers for a known verb is a WRITING_FORMS key', () => {
+    const argvs = [[], ['--apply'], ['--session', 'x', '--file', 'y', '--apply'], ['--clear-all']];
+    for (const op of ['import', 'prune', 'reparse', 'recall-off', 'repair', 'backup', 'migrate', 'adopt', 'restore', 'rebuild']) {
+      for (const a of argvs) {
+        const f = libPlan.formOf(op, a);
+        if (f !== null) expect(NAMES, `${op} ${a.join(' ')}`).toContain(f);
+      }
+    }
+    expect(NAMES).not.toContain(libPlan.UNKNOWN_OP_FORM);
+  });
+  it('a dry run passes every bump', () => {
+    expect(libPlan.decideOpGate(null, env({ claudecode: true, historyOff: true }), false, 'cc-demo-quiet-basin')).toEqual({ ok: true });
+  });
+  it('an unknown verb is refused bad-args', () => {
+    expect(libPlan.decideOpGate(libPlan.UNKNOWN_OP_FORM, env(), true, null)).toEqual({ ok: false, rc: 2, reason: 'bad-args' });
+  });
+  it('CLAUDECODE refuses every writing form apply-in-session, before every other bump', () => {
+    for (const f of NAMES) {
+      expect(libPlan.decideOpGate(f, env({ claudecode: true, historyOff: true }), false, 'cc-demo-quiet-basin'), f).toEqual({ ok: false, rc: 2, reason: 'apply-in-session' });
+    }
+  });
+  it('without a TTY only the irreversible forms refuse needs-tty', () => {
+    for (const f of NAMES) {
+      const want = FORMS[f]!.irreversible ? { ok: false, rc: 2, reason: 'needs-tty' } : { ok: true };
+      expect(libPlan.decideOpGate(f, env(), false, null), f).toEqual(want);
+    }
+    expect(FORMS['import-session-apply']!.irreversible).toBe(true);
+    expect(FORMS['import-apply']!.irreversible).toBe(false);
+    expect(FORMS['migrate']!.irreversible).toBe(false);
+  });
+  it('from a cc- pane only the irreversible forms refuse irreversible-in-pane; another pane passes', () => {
+    for (const f of NAMES) {
+      const want = FORMS[f]!.irreversible ? { ok: false, rc: 2, reason: 'irreversible-in-pane' } : { ok: true };
+      expect(libPlan.decideOpGate(f, env(), true, 'cc-demo-quiet-basin'), f).toEqual(want);
+      expect(libPlan.decideOpGate(f, env(), true, 'ops'), f).toEqual({ ok: true });
+    }
+  });
+  it('under history-off every writing form refuses except the three binding verbs', () => {
+    for (const f of NAMES) {
+      const want = FORMS[f]!.binding ? { ok: true } : { ok: false, rc: 2, reason: 'history-off' };
+      expect(libPlan.decideOpGate(f, env({ historyOff: true }), true, null), f).toEqual(want);
+    }
+    expect(NAMES.filter((f) => FORMS[f]!.binding).sort()).toEqual(['adopt', 'rebuild', 'restore']);
+  });
+  it('every reason the gate answers is a REFUSALS word', () => {
+    const refusals = libPlan.REFUSALS as unknown as readonly string[];
+    for (const r of ['bad-args', 'apply-in-session', 'needs-tty', 'irreversible-in-pane', 'history-off']) expect(refusals, r).toContain(r);
   });
 });

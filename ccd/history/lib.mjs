@@ -182,7 +182,7 @@ export const MIGRATION_VERDICTS = Object.freeze(['none', 'refuse-newer', 'refuse
 export const PASS_WORDS = Object.freeze([
   'store-create-refused-role', 'store-unreachable', 'journal-unwritable', 'store-recoverable',
   'store-wal-orphaned', 'store-missing', 'store-mismatch', 'store-unbound', 'store-unmeasured',
-  'store-root-dangling', 'store-zero-byte', 'store-not-wal', 'schema-newer', 'migration-refused',
+  'store-root-dangling', 'store-zero-byte', 'store-schema-missing', 'store-not-wal', 'schema-newer', 'migration-refused',
   'migration-needs-op', 'held', 'off',
 ]);
 /** Every durability word `status --json` reports and doctor's `_check_history`
@@ -205,7 +205,7 @@ const healthEntries = [
     'tick-stale', 'lag-high', 'at-cap', 'capture-paused-low-disk', 'mode-wrong', 'schema-newer',
     'store-not-wal', 'store-unmeasured', 'recovery-stalled', 'store-root-dangling', 'store-missing',
     'store-mismatch', 'store-unbound', 'store-unreachable', 'store-recoverable', 'store-wal-orphaned',
-    'store-zero-byte', 'migration-refused', 'migration-needs-op', 'journal-unwritable',
+    'store-zero-byte', 'store-schema-missing', 'migration-refused', 'migration-needs-op', 'journal-unwritable',
     'export-segment-newer', 'export-overdue', 'status-unreadable',
   ]),
 ];
@@ -546,4 +546,278 @@ export function journalRecord(kind, t, fields) {
   const back = parseJournalRecord(line);
   if (back.kind !== 'record') throw new TypeError(`journalRecord: a ${kind} record with these fields reads back as ${back.kind}`);
   return line;
+}
+
+// ===========================================================================
+// Planners and gates (spec §5.3, §6.2, §6.9, §6.11, §8.3, §8.4, §9.2, §9.3).
+// Every function in this block is a DECISION over measured inputs passed in
+// as data. None reads a file, a clock, the environment or a terminal: the
+// sweep and the CLI (L4) measure and execute, this ring only answers. That is
+// what lets O56 and DM41 pin them in-process, with no fixture HOME at all.
+// ===========================================================================
+
+/** Bytes in one GiB: the unit of the free-space floor (§9.3, "15 GiB") and,
+ *  plan-chosen, of the cap file's integer (`history-max-gb`), so the two sizes
+ *  doctor compares against the store are in one unit. */
+const PLANNER_GIB = 1073741824;
+
+/** A measured presence has three states, never two. `unreadable` is not
+ *  `absent` (rev 3.2 review, IV5): a file that exists and cannot be read says
+ *  nothing about whether a store existed, so every decision below refuses on
+ *  it rather than reading it as absence. */
+function presenceUnreadable(p) {
+  return p.state === 'unreadable';
+}
+function presenceValue(p) {
+  return p.state === 'value' ? p.value : null;
+}
+function refuseStoreOpen(word) {
+  return { act: 'refuse', word };
+}
+
+/** The store-open decision the sweep takes before it opens or creates
+ *  anything: §6.2's open-time rules, §6.9's binding table and §5.3's rows, in
+ *  the spec's order — role, root, measurability, truncation, then the binding.
+ *  `store-schema-missing` (a DB whose `meta.store_id` is absent) is the one
+ *  plan-chosen word: the spec's "schema-less store" (§8.3, exit 5) needs a
+ *  name in the sweep too, and folding it into `store-mismatch` would give a
+ *  damaged file the two-stores remedy.
+ *  D-4183 D-4186
+ *  D-4184 D-4185
+ *  D-4188 */
+export function decideStoreOpen(f) {
+  // A server box hosts no sessions: never create, never open. This is the
+  // second of §6.9's three guards, the one that covers a stale shim a re-role
+  // left behind.
+  if (f.role === 'server') return refuseStoreOpen('store-create-refused-role');
+  // A dangling db/ link is a volume that is not there: never mkdir over it.
+  if (f.dbDir === 'dangling') return refuseStoreOpen('store-root-dangling');
+  if (f.dbDir === 'unmeasured' || f.db === 'unmeasured') return refuseStoreOpen('store-unmeasured');
+  if (presenceUnreadable(f.storeId) || presenceUnreadable(f.pending) || presenceUnreadable(f.writer)) return refuseStoreOpen('store-unmeasured');
+  if (f.db === 'present' && presenceUnreadable(f.dbStoreId)) return refuseStoreOpen('store-unmeasured');
+  // Creation goes through a temp and link(), so a 0-byte history.db can only
+  // mean truncation: never open it as a fresh store (DM16).
+  if (f.db === 'zero-byte') return refuseStoreOpen('store-zero-byte');
+  const inDb = f.db === 'present' ? presenceValue(f.dbStoreId) : null;
+  if (f.db === 'present' && inDb === null) return refuseStoreOpen('store-schema-missing');
+  const marker = presenceValue(f.storeId);
+  if (marker !== null) {
+    if (f.db === 'absent') return refuseStoreOpen('store-missing');
+    return inDb === marker ? { act: 'open' } : refuseStoreOpen('store-mismatch');
+  }
+  if (f.db === 'present') {
+    // This box's own interrupted creation, restore or rebuild: finish it.
+    // Anything else is a store nobody bound here, which only the operator's
+    // `doctor --adopt` may bind (S13).
+    return presenceValue(f.pending) === inDb ? { act: 'finish-pending' } : refuseStoreOpen('store-unbound');
+  }
+  // Both absent: a first install, unless something says a store existed (S15).
+  if (f.wal || f.shm) return refuseStoreOpen('store-wal-orphaned');
+  if (f.journalStoreDirs.length > 0 || f.backupsDb.length > 0) return refuseStoreOpen('store-recoverable');
+  if (f.pending.state === 'value') return { act: 'drop-pending-create' };
+  return { act: 'create' };
+}
+
+function refuseCli(reason) {
+  return { exit: REASONS[reason], reason, read: false };
+}
+
+/** §8.3's "Which no-store answer" table, row by row, before any DB open.
+ *  The reachability stat runs after the Darwin and role rows and before the
+ *  rest (§8.3), so a hung volume answers `store-unreachable` whatever else is
+ *  on disk. Exits 6 and 9 carry no reason (one meaning each); exit 5 carries
+ *  its `REASONS` word, and its code is read from `REASONS`, never retyped.
+ *  D-4183 D-4187
+ *  D-4169 */
+export function decideCliStore(f) {
+  if (f.darwin) return { exit: EXIT.NO_STORE, read: false };
+  if (f.role === 'server') return { exit: EXIT.NO_STORE, read: false };
+  if (!f.statSettled) return refuseCli('store-unreachable');
+  if (f.dbDir === 'dangling') return refuseCli('store-root-dangling');
+  if (f.dbDir === 'unmeasured' || f.shim === 'unmeasured' || f.db === 'unmeasured') return refuseCli('store-unmeasured');
+  // §5.3's "Binding reads" row names store.writer beside store.id and the
+  // pending marker: the sweep holds on it (decideStoreOpen), so the CLI must
+  // not read past it as healthy.
+  if (presenceUnreadable(f.storeId) || presenceUnreadable(f.pending) || presenceUnreadable(f.writer)) return refuseCli('store-unmeasured');
+  if (f.db === 'present' && presenceUnreadable(f.dbStoreId)) return refuseCli('store-unmeasured');
+  const marker = presenceValue(f.storeId);
+  if (marker === null && f.db === 'absent') {
+    if (f.shim === 'absent') return { exit: EXIT.NO_STORE, read: false };
+    if (f.wal || f.shm) return refuseCli('store-wal-orphaned');
+    if (f.journalStoreDirs.length > 0 || f.backupsDb.length > 0) return refuseCli('store-recoverable');
+    return { exit: EXIT.NOT_INDEXED, read: false };
+  }
+  if (f.db === 'zero-byte') return refuseCli('store-zero-byte');
+  if (f.db === 'absent') return refuseCli('store-missing');
+  const inDb = presenceValue(f.dbStoreId);
+  if (inDb === null) return refuseCli('store-schema-missing');
+  if (marker === null) {
+    // The writer finishes a matching pending marker on its next tick: "not yet".
+    return presenceValue(f.pending) === inDb ? { exit: EXIT.NOT_INDEXED, read: false } : refuseCli('store-unbound');
+  }
+  return inDb === marker ? { exit: EXIT.OK, read: true } : refuseCli('store-mismatch');
+}
+
+/** The one size-aware copy preflight (§6.11): free space must EXCEED the
+ *  threshold plus the copy's size, so a copy can never push live transcript
+ *  appends below the floor. `doctor --backup`, the pre-migration snapshot,
+ *  `doctor --restore` and each export segment all call this, so they cannot
+ *  disagree about room. An input that is not a finite, non-negative number
+ *  was not measured, and an unmeasured input never admits a copy.
+ *  D-4182 */
+export function planCopy({ freeBytes, thresholdBytes, sizeBytes }) {
+  const measured = [freeBytes, thresholdBytes, sizeBytes].every((n) => Number.isFinite(n) && n >= 0);
+  if (!measured) return { admit: false, needBytes: null };
+  const needBytes = thresholdBytes + sizeBytes;
+  return { admit: freeBytes > needBytes, needBytes };
+}
+
+/** §9.3's threshold: min(15 GiB, 10% of the filesystem's size) plus one run's
+ *  byte budget — disk-hygiene's FAIL floor with one run of headroom.
+ *  D-4179 */
+export function floorThreshold(fsSizeBytes, runBudgetBytes = RUN_BUDGET_BYTES) {
+  const pct = Math.floor((fsSizeBytes * FLOOR_PCT) / 100);
+  return Math.min(FLOOR_GIB * PLANNER_GIB, pct) + runBudgetBytes;
+}
+
+/** The cap file's text (null when the file is absent) to a cap in GiB. A
+ *  value that is not one positive integer uses the default and says so, so
+ *  doctor can WARN naming the file (§9.3). D-4166 */
+export function capOf(text) {
+  if (text === null) return { gb: CAP_DEFAULT_GB, malformed: false };
+  const m = /^\s*([1-9][0-9]*)\s*$/.exec(text);
+  const gb = m ? Number(m[1]) : Number.NaN;
+  return Number.isSafeInteger(gb) ? { gb, malformed: false } : { gb: CAP_DEFAULT_GB, malformed: true };
+}
+
+/** A cap in GiB as bytes, the unit the store's measured size is in. */
+export function capBytes(gb) {
+  return gb * PLANNER_GIB;
+}
+
+/** §6.11's verdict, an arm of the run plan. `boundS` is the pass's wall-clock
+ *  bound — `CARRIER_KILL_S` for a scheduled pass, null for an `--op` pass,
+ *  which runs under no carrier — so a scheduled pass never starts a copy its
+ *  carrier would kill. `copyBps` is `meta.copy_bps`, null before the first
+ *  measured copy. D-4182 D-4180 */
+export function planMigration(i) {
+  if (i.stored === i.code) return 'none';
+  if (i.stored > i.code) return 'refuse-newer';
+  if (!planCopy({ freeBytes: i.freeBytes, thresholdBytes: i.thresholdBytes, sizeBytes: i.sizeBytes }).admit) return 'refuse-low-disk';
+  if (i.boundS !== null) {
+    if (i.attempts >= MAX_INTERRUPTED_ATTEMPTS) return 'snapshot-needs-op';
+    const rate = Number.isFinite(i.copyBps) && i.copyBps > 0 ? i.copyBps : DEFAULT_COPY_BPS;
+    const estimateS = (i.sizeBytes * (i.heavy ? 2 : 1)) / rate;
+    if (estimateS > i.boundS / 2) return 'snapshot-needs-op';
+  }
+  return 'snapshot-then-migrate';
+}
+
+/** One wall-clock and byte budget per run, never reset per file (§9.2 step 7). */
+export function withinBudget({ elapsedMs, bytes }) {
+  return elapsedMs < RUN_BUDGET_MS && bytes < RUN_BUDGET_BYTES;
+}
+
+function haltRun(arm, holdWord) {
+  return { arm, holdWord, drain: false, ingest: false, pause: null };
+}
+
+/** The run plan (§9.2, §9.3, §6.11). The asymmetry is the point (O56): a HOLD
+ *  (the store cannot be opened or written, or a migration or recovery owns the
+ *  tick) stops the drain too, and only the journal half runs; a PAUSE (the cap,
+ *  the floor) stops only ingest, so the drain and its epoch confirmations stay
+ *  timely. `migration` is the caller's `planMigration` verdict, `'none'` for a
+ *  store about to be created. A statfs that THREW pauses as `low-disk`, not as
+ *  a word of its own: §9.10's failure table gives "Free space | below the
+ *  floor, or `statfs` throws" one row and one direction (capture pauses,
+ *  doctor FAIL); only a probe that does not settle is a hold. A recovery step
+ *  below the floor pauses exactly as ingest does (§9.3): it stays on the
+ *  recover arm, still holding the drain, and says the floor holds it, so B2's
+ *  step counts `capture_paused_low_disk` and never `recovery-stalled`.
+ *  D-4187 D-4179
+ *  D-4182 */
+export function planRun(i) {
+  if (i.historyOff) return haltRun('off', null);
+  if (i.store.act === 'refuse') return haltRun('hold', i.store.word);
+  if (i.free.state === 'unsettled') return haltRun('hold', 'store-unreachable');
+  if (!MIGRATION_VERDICTS.includes(i.migration)) throw new TypeError(`planRun: migration verdict outside MIGRATION_VERDICTS: ${String(i.migration)}`);
+  if (i.migration === 'refuse-newer') return haltRun('hold', 'schema-newer');
+  if (i.migration === 'refuse-low-disk') return haltRun('hold', 'migration-refused');
+  if (i.migration === 'snapshot-needs-op') return haltRun('hold', 'migration-needs-op');
+  if (i.migration === 'snapshot-then-migrate') return haltRun('migrate', null);
+  const lowDisk = i.free.state === 'threw' || i.free.bytes < floorThreshold(i.free.fsSize);
+  if (i.recovering) return { ...haltRun('recover', null), pause: lowDisk ? 'low-disk' : null };
+  let pause = null;
+  if (i.sizeBytes >= capBytes(i.capGb)) pause = 'at-cap';
+  else if (lowDisk) pause = 'low-disk';
+  return { arm: 'run', holdWord: null, drain: true, ingest: pause === null, pause };
+}
+
+/** The file planner (§9.2 step 3): resume only with proof that the cursor row
+ *  and the file on disk are one file. Identity first — the path's uuid, then
+ *  the birth time where the filesystem reports one on both sides, else the
+ *  first line's sha — and only then the size and the tail sha. A mismatch of
+ *  identity means the inode was freed and reused: the row is RETIRED, never
+ *  rescanned onto (DM45). Birth times are compared as BigInt, because a
+ *  nanosecond epoch is past 2^53 and two Numbers may round to one.
+ *  D-4178 */
+export function planFileRead({ row, stat, pathUuid, headSha, tailShaAtOffset }) {
+  if (stat === null) return 'skip';
+  if (row === null) return 'rescan';
+  if (pathUuid !== row.transcriptUuid) return 'retire';
+  const births = row.birthNs != null && stat.birthNs != null;
+  if (births && BigInt(row.birthNs) !== BigInt(stat.birthNs)) return 'retire';
+  if (!births && row.headSha !== null && headSha !== null && row.headSha !== headSha) return 'retire';
+  if (stat.size < row.offset) return 'rescan';
+  if (tailShaAtOffset !== row.tailSha) return 'rescan';
+  return 'resume';
+}
+
+/** What `formOf` answers for an `--op` verb the sweep does not know. It is
+ *  never a `WRITING_FORMS` key, so `decideOpGate` refuses it `bad-args`; it is
+ *  never null, which means a dry run (no overloaded null at a seam). */
+export const UNKNOWN_OP_FORM = 'unknown-op';
+
+/** An `--op` verb and its arguments to its `WRITING_FORMS` key, or null for a
+ *  dry run (§8.4: dry run by default). `import --session <id> --file <path>
+ *  --apply` is its own, irreversible form (rev 3.2 review, SE7). */
+export function formOf(op, args) {
+  const has = (flag) => args.includes(flag);
+  switch (op) {
+    case 'import':
+      if (!has('--apply')) return null;
+      return has('--session') || has('--file') ? 'import-session-apply' : 'import-apply';
+    case 'prune':
+      return has('--apply') ? 'prune-apply' : null;
+    case 'reparse':
+      return has('--apply') ? 'reparse-apply' : null;
+    case 'recall-off':
+      return has('--clear-all') ? 'recall-off-clear-all' : 'recall-off';
+    case 'repair': case 'backup': case 'migrate': case 'adopt': case 'restore': case 'rebuild':
+      return op;
+    default:
+      return UNKNOWN_OP_FORM;
+  }
+}
+
+function refuseGate(reason) {
+  return { ok: false, rc: EXIT.REFUSED, reason };
+}
+
+/** The speed bumps, decided once and executed twice: the CLI runs this before
+ *  it spawns the shim, and the sweep's `--op` dispatch runs it again from its
+ *  own `CLAUDECODE`, `isatty(0)` and bounded tmux read (§8.4). Speed bumps,
+ *  not walls: `env -u CLAUDECODE` defeats the first. A dry run (null) passes
+ *  every bump; the three binding verbs alone pass under `history-off`, which
+ *  is how the operator holds capture while recovering.
+ *  D-4181 */
+export function decideOpGate(form, env, isTTY, paneName) {
+  if (form === null) return { ok: true };
+  if (!Object.hasOwn(WRITING_FORMS, form)) return refuseGate('bad-args');
+  const f = WRITING_FORMS[form];
+  if (env.claudecode) return refuseGate('apply-in-session');
+  if (f.irreversible && !isTTY) return refuseGate('needs-tty');
+  if (f.irreversible && typeof paneName === 'string' && paneName.startsWith('cc-')) return refuseGate('irreversible-in-pane');
+  if (env.historyOff && !f.binding) return refuseGate('history-off');
+  return { ok: true };
 }
