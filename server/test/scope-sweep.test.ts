@@ -656,3 +656,31 @@ describe('the record lists every process older than a day in a live pane scope, 
     expect(rows('dead')[u]).toBeUndefined();
   });
 });
+
+// ── THE UNITS' DIRECTIVES ───────────────────────────────────────────────────
+// ccrc-install compares the installed unit against the repo's own copy, so a
+// changed value there goes unnoticed; these pin the values themselves, on
+// tmp-sweep.test.ts's pattern.
+
+describe('ccd-scope-sweep ships a budgeted oneshot on its own activation-anchored timer', () => {
+  const SYSTEMD = path.resolve(__dirname, '../../deploy/systemd');
+  const directives = (name: string): string[] => fs.readFileSync(path.join(SYSTEMD, name), 'utf8')
+    .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+
+  it('the service is a deadline-bounded, memory-capped, nice oneshot running the installed copy', () => {
+    const d = directives('ccd-scope-sweep.service');
+    expect(d).toContain('Type=oneshot');
+    expect(d).toContain('ExecStart=%h/.local/bin/ccd-scope-sweep');
+    // The only bound on a hung `tmux list-panes`: systemd disables the start timeout for oneshot by default.
+    expect(d).toContain('TimeoutStartSec=45');
+    expect(d).toContain('MemoryMax=256M');
+    expect(d).toContain('Nice=10');
+  });
+
+  it('the timer is every minute and anchored to its own activation, never to boot', () => {
+    const d = directives('ccd-scope-sweep.timer');
+    expect(d).toContain('OnActiveSec=2min');
+    expect(d).toContain('OnUnitActiveSec=60s');
+    expect(d.filter((l) => l.startsWith('OnBootSec='))).toEqual([]);
+  });
+});
