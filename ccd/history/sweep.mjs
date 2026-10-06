@@ -28,13 +28,14 @@ import fs, {
   chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync,
   readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   CARRIER_KILL_S, EXIT, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
   UUID_RE, WRITER_RE, drainingNameOk, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
-  passOutcome, planMigration, planRun, readBoxEnvValue, sha256Bytes, splitSpoolText,
+  passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText,
 } from './lib.mjs';
 import {
   StoreError, bump, closeWriter, createStore, dropPending, finishPending, getMeta, measureStoreFacts, openReader,
@@ -831,33 +832,21 @@ function firstUuidRowCwdOf(fd) {
   return undefined;
 }
 
-/** For the location rule (§6.1): the first uuid row's cwd of `<home>/projects/*\/<uuid>.jsonl`, across the rostered
- *  homes. The file is opened O_NOFOLLOW|O_NONBLOCK, must be regular, and must resolve under its home's projects/.
- *  Only that first row is read: until the epoch confirms, nothing else of the file is (SE5). */
+/** For the location rule (§6.1): the first uuid row's cwd of this uuid's transcript, across the rostered homes, read
+ *  only through admission (O_NOFOLLOW, O_NONBLOCK, a regular file under a rostered root). Only that first row is
+ *  read: until the epoch confirms, nothing else of the file is (SE5). A read that throws on an admitted file skips
+ *  that file, as Task 17's did; it never fails the tick (D-4298, slug history-first-row-read-error-skips-file). */
 export function firstUuidRowCwd(homes, userHome, uuid) {
-  for (const home of homes) {
-    if (!underClaudeGlob(home, userHome)) continue;
-    let root;
-    let slugs;
+  for (const f of discoverTranscripts(homes, [uuid])) {
+    const a = admitFile(f.path, f.home, homes, userHome);
+    if (!a.ok) continue;
     try {
-      root = realpathSync(`${home}/projects`);
-      slugs = readdirSync(`${home}/projects`).sort();
+      const cwd = firstUuidRowCwdOf(a.fd);
+      if (cwd !== undefined) return cwd;
     } catch {
-      continue;
-    }
-    for (const slug of slugs) {
-      const p = `${home}/projects/${slug}/${uuid}.jsonl`;
-      let fd;
-      try { fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); } catch { continue; }
-      try {
-        if (!fstatSync(fd).isFile() || !realpathSync(p).startsWith(`${root}/`)) continue;
-        const cwd = firstUuidRowCwdOf(fd);
-        if (cwd !== undefined) return cwd;
-      } catch {
-        continue;
-      } finally {
-        closeSync(fd);
-      }
+      continue;   // a read that fails on an admitted file: this file cannot place the epoch, the next may (Task 17's rule kept)
+    } finally {
+      closeSync(a.fd);
     }
   }
   return null;
@@ -1073,6 +1062,279 @@ export function markScan(db, nowMs) {
   withTx(db, 'NORMAL', () => { setMeta(db, 'scan_ms', String(nowMs)); });
 }
 
+// ── Discovery and file identity (spec §9.2 steps 2-3, §5.2 "Read only", §6.5 "A cursor row's file") ───────────
+//
+// The cursor is keyed on (dev, ino), proved by the file's identity: its path's uuid, its birth time where the
+// filesystem reports one, and its first line's sha where it does not (slugs history-cursor-per-inode,
+// history-cursor-file-identity).
+// - Every path of an inode is an alias, a file_paths row.
+// - An inode freed and reused (every swap carry unlinks before it writes; Claude Code's own cleanup frees inodes) is
+//   caught by the identity check. The old row is retired, its paths re-pointed, and the new file gets its own row.
+//   It is never resumed or rescanned onto the old row.
+// - A rescan deletes nothing (G17).
+
+/** ingest_files.parser_version for every row this build binds. */
+export const PARSER_VERSION = 1;
+/** A first line longer than this is identified by its first HEAD_MAX bytes: identity needs stability, not the whole
+ *  line. */
+const HEAD_MAX = 64 * 1024;
+const READ_STEP = 64 * 1024;
+
+/** realpath(<home>/projects) of each rostered home lexically under `$HOME/.claude*`. A home with no projects/ yet
+ *  (a new account) has no root and is skipped silently. */
+export function rosterRoots(homes, userHome) {
+  const out = [];
+  for (const h of homes) {
+    if (!underClaudeGlob(h, userHome)) continue;
+    try { out.push(realpathSync(`${h}/projects`)); } catch { /* no projects/ yet: nothing to admit under it */ }
+  }
+  return out;
+}
+
+/** Admission (§5.2, §9.2 step 2). A file is read only when all of these hold:
+ *  - its home is rostered and lexically under `$HOME/.claude*`;
+ *  - it opens O_NOFOLLOW, so a symlinked name is refused, even one pointing inside the roots;
+ *  - it opens O_NONBLOCK, so a FIFO is refused at once and never waited on;
+ *  - it is a regular file;
+ *  - its realpath lies under one of the rostered projects/ roots.
+ *  `missing` and `unreadable` are kept apart from `non_regular` and `outside-roots`, never folded. On `ok` the caller
+ *  owns `fd` and must close it. */
+export function admitFile(p, home, homes, userHome) {
+  if (!homes.includes(home) || !underClaudeGlob(home, userHome)) return { ok: false, why: 'outside-roots' };
+  let fd;
+  try {
+    fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (e) {
+    const code = e && e.code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { ok: false, why: 'missing' };
+    if (code === 'ELOOP') return { ok: false, why: 'non_regular' };
+    return { ok: false, why: 'unreadable' };
+  }
+  let keep = false;
+  try {
+    const st = fstatSync(fd, { bigint: true });
+    if (!st.isFile()) return { ok: false, why: 'non_regular' };
+    let real;
+    try { real = realpathSync(p); } catch { return { ok: false, why: 'missing' }; }
+    if (!rosterRoots(homes, userHome).some((r) => real.startsWith(`${r}/`))) return { ok: false, why: 'outside-roots' };
+    keep = true;
+    return { ok: true, fd, st };
+  } finally {
+    if (!keep) closeSync(fd);
+  }
+}
+
+/** `<home>/projects/*\/<uuid>.jsonl` for every wanted uuid, across the rostered homes the shim passed. Paths come
+ *  from directory entries, never from a uuid spliced into a path. A home with no projects/ is skipped silently. */
+export function discoverTranscripts(homes, uuids) {
+  const want = new Set(uuids);
+  const out = [];
+  if (want.size === 0) return out;
+  for (const home of homes) {
+    let slugs;
+    try { slugs = readdirSync(`${home}/projects`).sort(); } catch { continue; }
+    for (const slug of slugs) {
+      let names;
+      try { names = readdirSync(`${home}/projects/${slug}`).sort(); } catch { continue; }
+      for (const n of names) {
+        if (!n.endsWith('.jsonl')) continue;
+        const uuid = n.slice(0, -'.jsonl'.length);
+        if (want.has(uuid)) out.push({ path: `${home}/projects/${slug}/${n}`, uuid, home });
+      }
+    }
+  }
+  return out;
+}
+
+/** The uuids the periodic scan resolves: every confirmed epoch's, and every `$REG/*.uuid` of the UUID grammar. An
+ *  unconfirmed clear epoch and a candidate are not known: their files are never discovered for ingest (SE5). */
+export function knownUuids(db, home) {
+  const out = new Set(db.prepare('SELECT DISTINCT cc_session_uuid AS u FROM epochs WHERE confirmed_ms IS NOT NULL').all().map((r) => r.u));
+  const reg = historyPaths(home).reg;
+  let names = [];
+  try { names = readdirSync(reg); } catch { /* no registry: only the store's epochs are known */ }
+  for (const n of names) {
+    if (n.startsWith('.') || !n.endsWith('.uuid') || !idOk(n.slice(0, -'.uuid'.length))) continue;
+    const v = readRegPresence(`${reg}/${n}`);
+    if (v.state === 'value' && UUID_RE.test(v.value)) out.add(v.value);
+  }
+  return out;
+}
+
+/** sha256 of the first line without its `\n`, or of the first HEAD_MAX bytes when no `\n` falls inside them. Null
+ *  while a short file has no whole first line yet. */
+export function headShaOf(fd, size) {
+  const b = Buffer.alloc(Math.min(HEAD_MAX, size));
+  const n = b.length === 0 ? 0 : readSync(fd, b, 0, b.length, 0);
+  const nl = b.subarray(0, n).indexOf(0x0a);
+  if (nl >= 0) return sha256Hex(b.subarray(0, nl));
+  return n >= HEAD_MAX ? sha256Hex(b.subarray(0, n)) : null;
+}
+
+/** sha256 of the last whole line before `offset`, without its `\n`: the proof a resume needs (§9.2 step 3). Ingest
+ *  stores exactly this as tail_sha256. Null when `offset` is 0, past the end, or not just after a `\n`, so a cursor
+ *  that no longer sits on a line boundary is never proof. The line is streamed, so any length costs no more than
+ *  READ_STEP of memory. */
+export function lineShaBefore(fd, offset, size) {
+  if (offset <= 0 || offset > size) return null;
+  const one = Buffer.alloc(1);
+  if (readSync(fd, one, 0, 1, offset - 1) !== 1 || one[0] !== 0x0a) return null;
+  const buf = Buffer.alloc(READ_STEP);
+  let start = 0;
+  for (let pos = offset - 1; pos > 0;) {
+    const len = Math.min(buf.length, pos);
+    const from = pos - len;
+    const n = readSync(fd, buf, 0, len, from);
+    const i = buf.subarray(0, n).lastIndexOf(0x0a);
+    if (i >= 0) { start = from + i + 1; break; }
+    pos = from;
+  }
+  const h = createHash('sha256');
+  for (let p = start; p < offset - 1;) {
+    const n = readSync(fd, buf, 0, Math.min(buf.length, offset - 1 - p), p);
+    if (n === 0) break;
+    h.update(buf.subarray(0, n));
+    p += n;
+  }
+  return h.digest('hex');
+}
+
+/** The transcripts row of a Claude Code main-thread session: harness 'claude-code' and agent_id '' (the column
+ *  defaults; slug history-harness-seam-named). The ONE definition in sweep.mjs: it runs inside its caller's
+ *  transaction (bindFile's here), and Task 21's sidecar ingest calls this same function inside a withTx of its
+ *  own rather than declaring a second one. */
+function ensureTranscript(db, uuid) {
+  db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?) ON CONFLICT (cc_session_uuid, agent_id) DO NOTHING').run(uuid);
+  return db.prepare("SELECT transcript_pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = ''").get(uuid).transcript_pk;
+}
+
+/** After a retire: the old row's paths that now resolve to the new file move with it (§9.2). A path that resolves
+ *  elsewhere, or nowhere, keeps naming the old row. */
+function repointPaths(db, fromId, toId, st) {
+  const move = db.prepare('UPDATE file_paths SET file_id = ? WHERE path = ?');
+  for (const { path: p } of db.prepare('SELECT path FROM file_paths WHERE file_id = ?').all(fromId)) {
+    let s;
+    try { s = statSync(p, { bigint: true }); } catch { continue; }
+    if (s.dev === st.dev && s.ino === st.ino) move.run(toId, p);
+  }
+}
+
+const ROW_BY_INODE = 'SELECT i.file_id, i.dev, i.ino, i.transcript_pk, t.cc_session_uuid, i.birth_ns, i.head_sha256, i.offset, i.tail_sha256 '
+  + "FROM ingest_files i JOIN transcripts t ON t.transcript_pk = i.transcript_pk WHERE i.dev = ? AND i.ino = ? AND i.source_key = ''";
+const hexOf = (b) => (b === null ? null : Buffer.from(b).toString('hex'));
+
+/** Bind one admitted file to its cursor row and say how to read it. This is lib's planFileRead, executed. The whole
+ *  bind is one NORMAL transaction; identity is decided from the transcript alone, so it is not a verdict.
+ *  - Identity first. A row whose transcript, birth time or (with no birth time) first-line sha differs is retired:
+ *    its source_key becomes 'retired:' + hex(sha256(dev ∖0 ino ∖0 transcript_pk ∖0 retire_ms)), it is counted
+ *    inode_recycled, and its paths are re-pointed. The file gets a fresh '' row, read from 0.
+ *  - A shrink, or a tail sha that no longer matches, rescans from 0 (a shrink is counted source_shrank). It deletes
+ *    nothing: memberships and entries stay.
+ *  - Otherwise resume at the cursor.
+ *  - Every path seen is an alias in file_paths.
+ *  nanosecond columns are read as BigInt (setReadBigInts): as a JS number they throw ERR_OUT_OF_RANGE. */
+export function bindFile(db, f, nowMs) {
+  return withTx(db, 'NORMAL', () => {
+    const transcriptPk = ensureTranscript(db, f.uuid);
+    const birth = f.st.birthtimeNs > 0n ? f.st.birthtimeNs : null;
+    const size = Number(f.st.size);
+    const sel = db.prepare(ROW_BY_INODE);
+    sel.setReadBigInts(true);
+    const row = sel.get(f.st.dev, f.st.ino);
+    const rowOffset = row === undefined ? 0 : Number(row.offset);
+    const plan = planFileRead({
+      row: row === undefined ? null : {
+        transcriptUuid: row.cc_session_uuid,
+        birthNs: row.birth_ns,   // a BigInt (setReadBigInts): Task 6's planFileRead compares birth times as BigInt
+        // a row bound before its first line was whole has no head yet: the first whole one it shows is its own
+        headSha: row.head_sha256 === null && rowOffset === 0 ? f.headSha : hexOf(row.head_sha256),
+        offset: rowOffset,
+        tailSha: hexOf(row.tail_sha256),
+      },
+      stat: { size, birthNs: birth },
+      pathUuid: f.uuid,
+      headSha: f.headSha,
+      tailShaAtOffset: row === undefined ? null : lineShaBefore(f.fd, rowOffset, size),
+    });
+    const head = f.headSha === null ? null : Buffer.from(f.headSha, 'hex');
+    let fileId;
+    let action = plan;
+    let offset = 0;
+    let boundTranscript = transcriptPk;
+    if (row === undefined || plan === 'retire') {
+      if (plan === 'retire') {
+        const key = `retired:${sha256Hex(`${row.dev}\0${row.ino}\0${row.transcript_pk}\0${nowMs}`)}`;
+        db.prepare("UPDATE ingest_files SET source_key = ?, status = 'retired' WHERE file_id = ?").run(key, row.file_id);
+        bump(db, 'inode_recycled');
+      }
+      fileId = Number(db.prepare("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, size, mtime_ns, birth_ns, head_sha256, offset, tail_sha256, status, parser_version) VALUES (?, ?, '', ?, ?, ?, ?, ?, 0, NULL, 'live', ?)")
+        .run(f.st.dev, f.st.ino, transcriptPk, size, f.st.mtimeNs, birth, head, PARSER_VERSION).lastInsertRowid);
+      if (plan === 'retire') repointPaths(db, Number(row.file_id), fileId, f.st);
+      if (row === undefined) action = 'rescan';
+    } else {
+      fileId = Number(row.file_id);
+      boundTranscript = Number(row.transcript_pk);
+      if (plan === 'rescan') {
+        if (size < rowOffset) bump(db, 'source_shrank');
+        db.prepare("UPDATE ingest_files SET offset = 0, tail_sha256 = NULL, size = ?, mtime_ns = ?, birth_ns = ?, head_sha256 = ?, status = 'live' WHERE file_id = ?")
+          .run(size, f.st.mtimeNs, birth, head, fileId);
+      } else {
+        offset = rowOffset;
+        db.prepare('UPDATE ingest_files SET size = ?, mtime_ns = ?, birth_ns = COALESCE(birth_ns, ?), head_sha256 = COALESCE(head_sha256, ?) WHERE file_id = ?')
+          .run(size, f.st.mtimeNs, birth, head, fileId);
+      }
+    }
+    db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, ?, ?) ON CONFLICT (path) DO UPDATE SET file_id = excluded.file_id, last_seen_ms = excluded.last_seen_ms')
+      .run(f.path, fileId, nowMs);
+    return { fileId, transcriptPk: boundTranscript, action, offset };
+  });
+}
+
+/** The uuids a tick examines (§9.2 step 2):
+ *  - spool hints whose sid is a confirmed epoch;
+ *  - every live file still short of its end (a backlog drains over ticks);
+ *  - at the periodic scan, every known uuid. */
+export function examineUuids(db, home, hints, scan) {
+  const out = new Set();
+  const confirmed = db.prepare('SELECT 1 AS x FROM epochs WHERE cc_session_uuid = ? AND confirmed_ms IS NOT NULL LIMIT 1');
+  for (const h of hints) if (confirmed.get(h) !== undefined) out.add(h);
+  const behind = db.prepare("SELECT DISTINCT t.cc_session_uuid AS u FROM ingest_files i JOIN transcripts t ON t.transcript_pk = i.transcript_pk WHERE i.source_key = '' AND i.size > i.offset").all();
+  for (const r of behind) out.add(r.u);
+  if (scan) for (const v of knownUuids(db, home)) out.add(v);
+  return [...out].sort();
+}
+
+/** Steps 2-3: discover, admit, bind and plan. One planned item per inode: a hardlinked alias binds as a path, and
+ *  the cursor advances once (DM20). Refusals are counted:
+ *  - non_regular for a link, a FIFO or a realpath outside the roots;
+ *  - file_missing and file_unreadable apart;
+ *  - a live file whose every path has gone is skipped and counted, with its cursor untouched (§9.10 "File missing").
+ *  Each planned item carries the inode it was bound on, so ingest can re-check it. */
+export function discoverAndPlan(db, c, uuids) {
+  const planned = [];
+  const seen = new Set();
+  const found = new Set();
+  for (const f of discoverTranscripts(c.homes, uuids)) {
+    const a = admitFile(f.path, f.home, c.homes, c.home);
+    if (!a.ok) {
+      countOutside(db, a.why === 'missing' ? 'file_missing' : a.why === 'unreadable' ? 'file_unreadable' : 'non_regular');
+      continue;
+    }
+    found.add(f.uuid);
+    try {
+      const b = bindFile(db, { path: f.path, uuid: f.uuid, fd: a.fd, st: a.st, headSha: headShaOf(a.fd, Number(a.st.size)) }, c.now());
+      if (seen.has(b.fileId)) continue;
+      seen.add(b.fileId);
+      planned.push({ ...b, path: f.path, dev: a.st.dev, ino: a.st.ino });
+    } finally {
+      closeSync(a.fd);
+    }
+  }
+  const live = db.prepare("SELECT 1 AS x FROM ingest_files i JOIN transcripts t ON t.transcript_pk = i.transcript_pk WHERE t.cc_session_uuid = ? AND i.source_key = '' LIMIT 1");
+  for (const v of uuids) if (!found.has(v) && live.get(v) !== undefined) countOutside(db, 'file_missing');
+  return planned;
+}
+
 /**
  * What one tick of a bound, open store carries. runPass builds it; tick and the steps below read it.
  * @typedef {object} TickCtx
@@ -1117,10 +1379,13 @@ export async function tick(db, ctx) {
   // The periodic scan (every SCAN_INTERVAL_MS): every $REG/<id>.uuid that names no epoch of its id and no confirmed
   // epoch anywhere becomes a registry mapping, committed FULL before any ingest chunk can need it (§6.1 "Backfill";
   // §9.2 step 4 "Every verdict commits first"; D-4297).
-  if (scanDue(db, ctx.now())) {
-    registryBackfill(db, ctx);
-    markScan(db, ctx.now());
-  }
+  const scan = scanDue(db, ctx.now());
+  if (scan) registryBackfill(db, ctx);
+  // Steps 2-3, discovery and the plan. The tick examines hinted confirmed sids, files left short of their end, and
+  // at the scan every known uuid, across the rostered homes; each admitted file is bound to its cursor row by
+  // identity. An unreadable roster skips discovery and leaves the scan due for the next readable pass (§9.2 step 2).
+  ctx.planned = ctx.rosterUnreadable ? [] : discoverAndPlan(db, ctx, examineUuids(db, ctx.home, ctx.hints ?? [], scan));
+  if (scan && !ctx.rosterUnreadable) markScan(db, ctx.now());
   // <<< history tick steps
   mkdirSync(ctx.paths.spool, { recursive: true, mode: 0o700 });
   if (ctx.parsed.rosterUnreadable) bump(db, 'roster_unreadable');
