@@ -8,6 +8,8 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { Bus } from '../src/bus.js';
+import { localIO } from '../src/io.js';
+import type { Runner } from '../src/exec.js';
 import { FleetWatcher } from '../src/watch.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -40,6 +42,37 @@ const harness = async (): Promise<{ coord: CoordStore; watcher: FleetWatcher; ap
   const watcher = new FleetWatcher(deps, bus);
   app = await buildServer(deps, bus, watcher);
   return { coord, watcher, app };
+};
+
+/** `harness`, with every door a request could reach the fleet through under a spy: each method of the
+ *  registry's `io` (a copy of `localIO`, so no other suite sees the spy), the `ccd` runner, and the raw exec
+ *  runner under both it and tmux. `reset` zeroes them, since boot may legitimately read; `touched` names
+ *  every door a call came through since. */
+const probedHarness = async () => {
+  const home = mkTmp('ccrc-cr-route-');
+  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const exec = vi.fn<Runner>(async () => ({ code: 1, stdout: '', stderr: '' }));
+  const base = testDeps(home, exec);
+  const io = { ...localIO };
+  const door = io as unknown as Record<string, (...a: unknown[]) => unknown>;
+  const ioSpies = Object.keys(door).filter((k) => typeof door[k] === 'function')
+    .map((k) => [k, vi.spyOn(door, k)] as const);
+  const runCcd = vi.fn(base.runCcd);
+  const deps = { ...base, io, runCcd, coord };
+  const bus = new Bus();
+  const watcher = new FleetWatcher(deps, bus);
+  app = await buildServer(deps, bus, watcher);
+  const reset = (): void => {
+    for (const [, spy] of ioSpies) spy.mockClear();
+    runCcd.mockClear();
+    exec.mockClear();
+  };
+  const touched = (): string[] => [
+    ...ioSpies.filter(([, spy]) => spy.mock.calls.length > 0).map(([k]) => `io.${k}`),
+    ...(runCcd.mock.calls.length > 0 ? ['runCcd'] : []),
+    ...(exec.mock.calls.length > 0 ? ['exec'] : []),
+  ];
+  return { coord, watcher, app, reset, touched };
 };
 
 let n = 0;
@@ -205,6 +238,21 @@ describe('GET /api/runs composes the reclaim chip (wave 5, spec §5.9)', () => {
     const id = closedRun(h.coord, SID);
     vi.spyOn(h.watcher, 'currentChildMarks').mockReturnValue(new Map<string, ChildMark>([[SID, { kind: 'none' }]]));
     expect(chipOf(await getRuns(h.app), id)).toBeNull();
+  });
+
+  // The route's cost claim (spec §5.9): the chip is composed from the watcher's in-memory copies and ONE mirror
+  // statement. A registry read or a ccd call added to the composer reads as nothing on the board, so the doors
+  // are spied, and the case first proves the composer ran (a chip on the board) before it asserts silence.
+  it('composes the chip with no registry read, no ccd call and no exec — memory and the mirror alone', async () => {
+    const h = await probedHarness();
+    const id = closedRun(h.coord, SID);
+    journal(h.coord, [{ at: T_CREATE, act: 'create', outcome: 'done', id: SID }]);
+    markedAs(h.watcher, id);
+    judgedAs(h.watcher, { eligible: true, runId: id });
+    h.reset();
+    const runs = await getRuns(h.app);
+    expect(chipOf(runs, id)).toEqual({ word: 'pending', sentence: S.pending, at: null });
+    expect(h.touched()).toEqual([]);
   });
 
   it('reads no mirror row for a board with nothing terminal on it', async () => {
