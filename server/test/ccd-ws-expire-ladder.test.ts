@@ -214,7 +214,9 @@ describe('rung 5, asked more of for an expiry — a live pane or a live unit ref
     expect(r.detail).toContain(`claude-session@${EXP_ID}`);
     expect(expireEvalOf(h, { pre: '_svc_is_active() { printf activating; };' }).verdict).toBe('live');
     expect(expireEvalOf(h, { pre: '_svc_is_active() { :; };' }).verdict, 'no answer is not absence').toBe('unmeasured');
-    expect(expireEvalOf(h, { pre: '_svc_is_active() { printf failed; };' }).verdict, 'a failed unit is not restarted').toBe('expirable');
+    // On a Darwin host `failed` is ccd's own stamp and is re-asked of launchd (the next describe); here launchd says the
+    // job is not loaded (exit 113), so the stamp stands for stopped on either host.
+    expect(expireEvalOf(h, { pre: '_svc_is_active() { printf failed; }; _svc_launchctl() { return 113; };' }).verdict, 'a failed unit is not restarted').toBe('expirable');
   }, 60_000);
 
   it('asked by the BINDING, not the flavour: `_ws_expire_eval` called with no `_WS_RCL_ACT` set still refuses live', () => {
@@ -263,8 +265,11 @@ describe('rung 5 on Darwin — a `failed` stamp is stopped only when launchd say
 // `ws-reclaim` over the same shape, which never asks. `/proc` is read through the seam `_ws_expire_proc_root`, and a
 // FAKE root (a directory of `<pid>/cwd` links and `<pid>/stat` files) names the cases a live box cannot be made to
 // produce on demand: ccd's own process in the worktree, its children, a pid that vanished, a link nobody may read.
+// The cases that hand the probe a FAKE /proc are Linux scenarios: they force `CCD_OS=linux` after the source (as the
+// Darwin rows below force `darwin`), or a macOS host would take the lsof arm and never read the root they name.
 describe('rung 5, a process whose working directory is the worktree — `in-use`', () => {
   const real = (p: string): string => fs.realpathSync(p);
+  const LINUX = 'CCD_OS=linux;';
 
   it('a `sleep` whose cwd IS the worktree refuses in-use, names the pid and the path, and nothing is touched', () => {
     const { wt } = makeArchived(h);
@@ -311,17 +316,18 @@ describe('rung 5, a process whose working directory is the worktree — `in-use`
 
   it('a /proc that cannot be listed is UNMEASURED — never "nobody", never a token', () => {
     makeArchived(h);
-    const missing = expireEvalOf(h, { pre: '_ws_expire_proc_root() { printf %s "$HOME/no-such-proc"; };' });
+    const missing = expireEvalOf(h, { pre: `${LINUX} _ws_expire_proc_root() { printf %s "$HOME/no-such-proc"; };` });
     expect(missing.verdict, missing.detail).toBe('unmeasured');
     expect(missing.token).toBe('');
     fs.mkdirSync(path.join(h.home, 'empty-proc'));
-    const empty = expireEvalOf(h, { pre: '_ws_expire_proc_root() { printf %s "$HOME/empty-proc"; };' });
+    const empty = expireEvalOf(h, { pre: `${LINUX} _ws_expire_proc_root() { printf %s "$HOME/empty-proc"; };` });
     expect(empty.verdict, 'a listing that does not even hold ccd’s own pid measured nothing').toBe('unmeasured');
     expect(empty.token).toBe('');
   }, 60_000);
 
   // The fake root: `$HOME/fp/<pid>/cwd` (a link) and `stat` (the kernel's one line, whose fourth field is the parent).
   const FAKE = (wt: string): string => [
+    LINUX,
     'mkdir -p "$HOME/fp/$$"; ln -sfn "$HOME" "$HOME/fp/$$/cwd";',
     '_fp() { mkdir -p "$HOME/fp/$1"; ln -sfn "$2" "$HOME/fp/$1/cwd"; printf "%s (a b) S %s 1 1 0\\n" "$1" "$3" > "$HOME/fp/$1/stat"; };',
     `_fp 4242 "${real(wt)}/sub" 1;`,

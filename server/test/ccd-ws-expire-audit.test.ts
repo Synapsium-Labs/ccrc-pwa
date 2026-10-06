@@ -141,7 +141,8 @@ describe('the audit refuses an archived workspace a process is working in — `i
 
   it('and an unlistable /proc is the audit’s `unmeasured`: exit 1, no token', () => {
     makeArchived(h);
-    const r = expireAudit(h, { pre: '_ws_expire_proc_root() { printf %s "$HOME/no-such-proc"; };' });
+    // A Linux scenario (a fake /proc root), forced as one so a macOS host does not take the lsof arm instead.
+    const r = expireAudit(h, { pre: 'CCD_OS=linux; _ws_expire_proc_root() { printf %s "$HOME/no-such-proc"; };' });
     expect(r.code).toBe(1);
     const doc = JSON.parse(r.stdout) as Record<string, unknown>;
     expect(doc['verdict']).toBe('unmeasured');
