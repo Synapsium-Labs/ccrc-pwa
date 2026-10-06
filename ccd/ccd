@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d27acac861713d7b6d0a7df577bd614dc8f73e856e161e3e090ff0f446d6cef9
+# ccrc:generated 1 sha256=5519cb61a34c862f8ec18c4d1fa7ab9863331b7e217da5ace103ea6e01984e71
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31449,16 +31449,24 @@ import re
 # it. The two fsck pairs make git REFUSE a malformed object rather than write
 # it into a store live sessions share (R16 is the price: a remote holding such
 # an object is refused on every fetch of that branch).
-FETCH_ARGV_HEAD=('-c','gc.auto=0','-c','maintenance.auto=false','-c','fetch.writeCommitGraph=false','-c','submodule.recurse=false','-c','fetch.recurseSubmodules=false','-c','fetch.fsckObjects=true','-c','transfer.fsckObjects=true')
-# --no-write-fetch-head leaves a worker's FETCH_HEAD alone; --no-tags and the
-# one explicit refspec move exactly one ref; the leading `+` matches git's
-# default refspec, so a force-pushed ws/* branch does not stay stale. The
-# refspec itself is appended per call: +refs/heads/<b>:refs/remotes/origin/<b>.
+FETCH_ARGV_HEAD=('-c','gc.auto=0','-c','maintenance.auto=false','-c','fetch.writeCommitGraph=false','-c','submodule.recurse=false','-c','fetch.recurseSubmodules=false','-c','fetch.fsckObjects=true','-c','transfer.fsckObjects=true','-c','remote.origin.followRemoteHEAD=never')
+# --no-write-fetch-head leaves a worker's FETCH_HEAD alone. Exactly one ref
+# moves (D-4163): --no-tags takes no tag, and --refmap= (EMPTY) drops every
+# configured remote.origin.fetch refspec, which git would otherwise ALSO apply
+# to the fetched ref as an opportunistic mapping (a `+refs/heads/*:refs/heads/*`
+# line in M's config force-moves the LOCAL branch; a second namespace line
+# moves refs/remotes/<it>/<b>), so the one explicit refspec is the only map.
+# followRemoteHEAD=never stops a git >= 2.48 creating refs/remotes/origin/HEAD
+# on an explicit-dst fetch (no set-head); git 2.43 ignores the unknown key.
+# Both pass the runner deliberately: --refmap= is not a NEVER_FLAGS prefix and
+# remote.origin.followremotehead is not a PINNED_KEYS key. The leading `+`
+# matches git's default refspec, so a force-pushed ws/* branch does not stay
+# stale. The refspec is appended per call: +refs/heads/<b>:refs/remotes/origin/<b>.
 # The branch reached the helper through the bare-ref grammar, which admits no
 # `:`, `+`, `*`, `^` or `~`, so it cannot widen the refspec.
 FETCH_SUBCOMMAND = ('fetch', '--quiet', '--no-tags', '--no-prune', '--no-recurse-submodules',
                     '--no-write-fetch-head', '--no-auto-gc', '--no-auto-maintenance',
-                    '--no-show-forced-updates', '--end-of-options', 'origin')
+                    '--no-show-forced-updates', '--refmap=', '--end-of-options', 'origin')
 FETCH_TRACKED_PREFIX = 'refs/remotes/origin/'
 
 # Step 7's evidence: git's own English, which the fetch env pins with LC_ALL=C.

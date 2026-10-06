@@ -46,9 +46,10 @@ const SPEC_FETCH_LINE = (main: string, b: string): string[] => [
   '--no-pager', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'gc.auto=0',
   '-c', 'maintenance.auto=false', '-c', 'fetch.writeCommitGraph=false', '-c', 'submodule.recurse=false',
   '-c', 'fetch.recurseSubmodules=false', '-c', 'fetch.fsckObjects=true', '-c', 'transfer.fsckObjects=true',
+  '-c', 'remote.origin.followRemoteHEAD=never',
   '-C', main,
   'fetch', '--quiet', '--no-tags', '--no-prune', '--no-recurse-submodules', '--no-write-fetch-head',
-  '--no-auto-gc', '--no-auto-maintenance', '--no-show-forced-updates',
+  '--no-auto-gc', '--no-auto-maintenance', '--no-show-forced-updates', '--refmap=',
   '--end-of-options', 'origin', `+refs/heads/${b}:refs/remotes/origin/${b}`,
 ];
 
@@ -172,6 +173,37 @@ describe('docs-fetch hygiene: the exact line, and nothing but one ref moves (row
     ageStamp(stampFile(main, 'main'), 60_000);
     const next = advanceOrigin('demo');
     expect(fetchDocs('demo')).toMatchObject({ ok: true, defaultVia: 'default:origin-head', before: tip, after: next, moved: 'updated' });
+  });
+
+  it('configured fetch refspecs move nothing: only origin/<b> moves, local b and mirror/b stay (--refmap=, D-4163; ctl: without it both move)', () => {
+    const main = h.makeRepo('demo');
+    const o = originOf('demo');
+    const old = rev(main, 'refs/heads/main');
+    h.git(o, 'update-ref', 'refs/heads/b', old);
+    h.git(main, 'branch', 'b', old);
+    h.git(main, 'update-ref', 'refs/remotes/mirror/b', old);
+    h.git(main, 'config', '--add', 'remote.origin.fetch', '+refs/heads/*:refs/heads/*');
+    h.git(main, 'config', '--add', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/mirror/*');
+    const next = advanceOrigin('demo', 'b');
+    const allRefs = (): Map<string, string> => new Map(h.git(main, 'for-each-ref', '--format=%(refname) %(objectname)')
+      .split('\n').filter((l) => l !== '').map((l) => l.split(' ') as [string, string]));
+    const before = allRefs();
+
+    expect(fetchDocs('demo', 'b')).toMatchObject({
+      ok: true, branch: 'b', trackedRef: 'refs/remotes/origin/b', before: null, after: next, moved: 'created',
+    });
+    const after = allRefs();
+    const moved = [...new Set([...before.keys(), ...after.keys()])].filter((r) => before.get(r) !== after.get(r));
+    expect(moved).toEqual(['refs/remotes/origin/b']);
+    expect(rev(main, 'refs/heads/b')).toBe(old);
+    expect(rev(main, 'refs/remotes/mirror/b')).toBe(old);
+
+    // CONTROL: the same explicit refspec WITHOUT --refmap= lets both configured lines map the fetched ref too, so
+    // the local branch and the mirror are force-moved, which is exactly what the empty refmap holds back.
+    const again = advanceOrigin('demo', 'b');
+    h.git(main, 'fetch', '-q', '--no-write-fetch-head', 'origin', '+refs/heads/b:refs/remotes/origin/b');
+    expect(rev(main, 'refs/heads/b')).toBe(again);
+    expect(rev(main, 'refs/remotes/mirror/b')).toBe(again);
   });
 });
 
