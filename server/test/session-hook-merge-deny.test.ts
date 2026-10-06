@@ -62,7 +62,8 @@ const bash = (command: string, nulStderr = false): { deny: string | null; stdout
   // A NUL in the command makes bash warn on stderr when a read of the payload decodes it: the
   // graph-search read (a payload matching rg|grep|ag|ack|find|fd) and the merge arm (a payload
   // holding `merge`). `echo hi\0there` is silent; this fixture's cwd carries `merge` (and so
-  // `rg`), so every NUL command here reaches both.
+  // `rg`), so a NUL command here warns from both reads under the cap, and from the graph-search
+  // read only over it (over the cap `capped` hands the merge arm nothing to decode).
   if (!nulStderr) expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
   const line = r.stdout.trim();
   if (line === '') return { deny: null, stdout: '' };
@@ -361,8 +362,9 @@ describe('the worker merge deny', () => {
 
     it('LISTED over-cap pass, not a closure: a NUL next to the word is denied under the cap and passes over it', () => {
       hold(WAVE_HOLD);
-      // bash strips NUL from command text (and warns on stderr, here from both reads: the
-      // graph-search read, the payload holding `merge` and so `rg`, and the merge arm's read).
+      // bash strips NUL from command text and warns on stderr: under the cap from both reads (the
+      // graph-search read, the payload holding `merge` and so `rg`, and the merge arm's read);
+      // over the cap from the graph-search read only, since `ocwords` is false there.
       expect(bash('gh pr merge\u0000 42', true).deny, 'under the cap the strip reads it').not.toBeNull();
       expect(bash(over('gh pr merge\u0000 42'), true).deny, 'the listed pass was refused: update the hook header\'s list').toBeNull();
     });
@@ -722,8 +724,9 @@ const jqTokens = (src: string, subs: string[]): JqTok[] => {
 
 /** Every `as` binding in `program` whose source term, read leftwards from the
  *  keyword to where the term starts, holds a binary operator at depth 0: jq 1.7
- *  binds `as` to the nearest term, jq 1.8 to the whole chain, so it means two
- *  different programs. The source ends at an unmatched opener, a `|`, `;`, `:`,
+ *  binds `as` to the nearest term, jq 1.8 to the whole chain, so most of these mean
+ *  two different programs. It flags every binary operator, including one both
+ *  versions read alike (`,`), so a reader never has to know which. The source ends at an unmatched opener, a `|`, `;`, `:`,
  *  or a keyword that precedes a term (`then`, `reduce`, …), or the start. */
 const jqAmbiguousAs = (program: string): Array<{ binding: string; op: string }> => {
   const subs: string[] = [];
