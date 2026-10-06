@@ -59,7 +59,10 @@ const bash = (command: string, nulStderr = false): { deny: string | null; stdout
       TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
   });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
-  // A NUL in the command makes bash warn on stderr, on any command, at a line before the merge arm.
+  // A NUL in the command makes bash warn on stderr when a read of the payload decodes it: the
+  // graph-search read (a payload matching rg|grep|ag|ack|find|fd) and the merge arm (a payload
+  // holding `merge`). `echo hi\0there` is silent; this fixture's cwd carries `merge` (and so
+  // `rg`), so every NUL command here reaches both.
   if (!nulStderr) expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
   const line = r.stdout.trim();
   if (line === '') return { deny: null, stdout: '' };
@@ -358,7 +361,8 @@ describe('the worker merge deny', () => {
 
     it('LISTED over-cap pass, not a closure: a NUL next to the word is denied under the cap and passes over it', () => {
       hold(WAVE_HOLD);
-      // bash strips NUL from command text (and warns on stderr, for any command holding one).
+      // bash strips NUL from command text (and warns on stderr, here because the payload holds
+      // `merge`: the merge arm's read decodes the NUL).
       expect(bash('gh pr merge\u0000 42', true).deny, 'under the cap the strip reads it').not.toBeNull();
       expect(bash(over('gh pr merge\u0000 42'), true).deny, 'the listed pass was refused: update the hook header\'s list').toBeNull();
     });
@@ -367,6 +371,16 @@ describe('the worker merge deny', () => {
       hold(WAVE_HOLD);
       expect(bash(over('é😀 gh -R o/r pr merge 42')).deny, 'a multi-byte prefix misaligned the slice').not.toBeNull();
       expect(bash(over('é😀 gh pr view 3 merged')).deny).toBeNull();
+    });
+
+    // The case above cannot red for a byte-offset slice: its ` -R o/r` between `gh` and
+    // `pr` absorbs the 4-character overshoot a byte slice makes after `é😀` (review 273 F1).
+    // This fixture has nothing between the words to absorb it.
+    it('reads a TIGHT `gh pr merge` after multi-byte text: a byte-offset slice misses it (review 273 F1)', () => {
+      hold(WAVE_HOLD);
+      const d = bash(over('é😀 gh pr merge 42')).deny;
+      expect(d, 'a byte-offset slice after é😀 skipped past the `pr` and let the merge through').not.toBeNull();
+      expect(d).toContain('parse cap');
     });
 
     it('refuses a bare backtick `gh pr merge` over the cap — a STRICTER over-cap reading, not a closure: under the cap it passes', () => {
@@ -393,7 +407,12 @@ describe('the worker merge deny', () => {
     // `splits` over `;` or `gh;` took 43 to 52 s and 14 s here (jq 1.7); the
     // fixed-string split and the prefilter cost 90 to 320 ms (the first five
     // shapes), and 343 to 384 ms on the costliest, at load ~15; a review
-    // measured ~600 ms once (review 267 F3).
+    // measured ~600 ms once (review 267 F3). Three of the six (`;` only, `gh;`
+    // repeated, newlines only) never reach the split: the whole-command
+    // `contains("gh") and contains("merge")` prefilter is false for each, so
+    // the `splits` timings describe a rule without the prefilter. What guards
+    // `splits` is the structural `splits(` ban below and mutation row SP, not
+    // these three clocks (review 273 F5 (b)).
     // The last shape is the costliest measured: many segments that pass the prefilter.
     it.each([
       ['`;` only', ';'],
@@ -435,6 +454,35 @@ describe('the worker merge deny', () => {
       expect(d).toContain('parse cap');
       expect(d).toContain('or rephrase it');
       expect(d).toContain('Write tool');
+      // The way out for a long MAIL is named, not only a PR body's (review 273 F2): the file
+      // goes to `ccrc-api mail send --json`, which keeps the command short.
+      expect(d, 'the refusal does not name the mail file way out').toContain('send it with `ccrc-api mail send --json <file>`');
+      expect(d).toContain('gh pr create --body-file <file>');
+      expect(d).toContain('prose that names gh, pr and merge in that order reads as one');
+      expect(d).toContain('A landing is the operator\'s, from their own shell.');
+    });
+
+    // THE ACCEPTED CLASS (review 273 F2, ruling 3510): over the cap, any ONE segment that names
+    // `gh`, then `pr`, then `merge` as words is refused, prose included. Not a closure and not a
+    // bug: it is the hook header's THE COST sentence. A narrowing (only flags between the words)
+    // would need a repeated group, the nested quantifier the rule exists to avoid.
+    it.each([
+      ['a one-line JSON mail body that only MENTIONS the words in that order', (pad: number): string =>
+        'ccrc-api mail send --json - <<JSON\n{"body":"' + sized('the wave is done and the suite is green. ', '', pad) +
+        'I read PR state with gh pr view 248 and gh pr checks, and the coordinator may merge it after the panel"}\nJSON'],
+      ['a trailing `# comment` that says merge', (pad: number): string =>
+        'gh pr create --title x --body-file /tmp/b.md --base main ' + sized('--label wave ', '', pad) + ' # merge later'],
+    ])('refuses %s over the cap, the ACCEPTED cost (review 273 F2, ruling 3510: see the hook header\'s THE COST sentence) — and passes it under the cap', (_n, build) => {
+      hold(WAVE_HOLD);
+      const short = build(0);
+      expect(Buffer.byteLength(short), 'the unpadded shape is under the cap').toBeLessThanOrEqual(CAP);
+      expect(bash(short).deny, 'under the cap the parse reads it as text or a non-merge').toBeNull();
+      const c = build(CAP);
+      expect(Buffer.byteLength(c)).toBeGreaterThan(CAP);
+      const d = bash(c).deny;
+      expect(d, 'the accepted over-cap class was let through: the hook header\'s THE COST sentence is stale').not.toBeNull();
+      expect(d).toContain('parse cap');
+      expect(d).toContain('send it with `ccrc-api mail send --json <file>`');
     });
 
     it('answers an over-cap quote-dense command in bounded time — the strip never reads it', () => {
@@ -737,15 +785,18 @@ describe('every jq `as $name` binding in the hook is parenthesised on its own (j
   const asBindings = (programs: Array<{ body: string }>): number =>
     programs.reduce((n, p) => n + (p.body.match(/\bas \$/g) ?? []).length, 0);
 
-  it('the checker flags what jq 1.7 and 1.8 read differently, flags two more conservatively, and accepts what they read alike', () => {
+  it('the checker flags an `as` after a binary operator, whether jq 1.7 and 1.8 read it differently (`//`) or alike (`,`), and accepts a parenthesised or leading `as`', () => {
     for (const bad of [
       '1 + (2) as $x | $x', 'true and ((.w) + ")") as $wp | $wp',
       'if . then 1 else 2 + (3) as $x | $x end', '"\\(1 + (2) as $x | $x)"',
     ]) expect(jqAmbiguousAs(bad), `flagged: ${bad}`).not.toEqual([]);
-    // jq 1.7 and 1.8 read these two alike; the checker refuses them anyway, so a
-    // reader never has to know which operators bind loosely.
-    for (const conservative of ['.a // (.b) as $x | $x', '.a, (.b) as $x | $x']) {
-      expect(jqAmbiguousAs(conservative), `flagged conservatively: ${conservative}`).not.toEqual([]);
+    // Measured on {"a":5,"b":2} (review 273 F5 (c)): jq 1.7 and 1.8.2 read `//` differently,
+    // `.a // (.b) as $x | [$x]` giving `5` on 1.7 and `[5]` on 1.8.2 (with a bare `| $x` body
+    // both give `5`, which hides it). They read `,` alike: `.a, (.b) as $x | [$x]` gives `5`
+    // then `[2]` on both. The checker flags both, so a reader never has to know which
+    // operators bind loosely.
+    for (const flagged of ['.a // (.b) as $x | [$x]', '.a // (.b) as $x | $x', '.a, (.b) as $x | $x']) {
+      expect(jqAmbiguousAs(flagged), `flagged: ${flagged}`).not.toEqual([]);
     }
     expect(jqAmbiguousAs('true and ((.w) + ")") as $wp | $wp').map((f) => f.op)).toEqual(['and']);
     for (const ok of [

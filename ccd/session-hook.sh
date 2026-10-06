@@ -3530,7 +3530,11 @@ fi
 # regex-global walk, measured superlinear on jq 1.7 (43-52 s at 100 KB of
 # `;`, 14 s at 100 KB of `gh;`), and a hook that times out fails this deny
 # OPEN. A `contains("gh") and contains("merge")` prefilter, whole and per
-# segment, keeps the word tests off nearly every segment. Measured through
+# segment, keeps the word tests off nearly every segment. Three of the six
+# 100 KB pins (`;` only, `gh;` repeated, newlines only) never reach the
+# split, since the whole-command prefilter is false for each, so the `splits`
+# timings above describe a rule without the prefilter; the structural
+# `splits(` ban and mutation row SP are what guard it. Measured through
 # the whole hook at 100 KB, on jq 1.7 and 1.8.2: 90 to 320 ms on `;`, `gh;`,
 # `gh pr merged;`, newlines and `gh merge `; the costliest measured, `gh
 # merge;` and `merge gh pr;` repeated (many segments that pass the prefilter),
@@ -3551,29 +3555,37 @@ fi
 # each hold a quote or a `<` (`"$(<)"` repeated), one nested strip per span:
 # ~350 ms of CPU at 2048 bytes and ~650 ms at 4096 (bare `"`: ~125 and
 # ~190 ms), measured on the fleet box at load ~18.
-# THE COST, said: a held session's long command whose raw text reads as a
-# `gh pr merge` — a PR body or a mail that QUOTES it — is refused until it is
-# split or rephrased. The coordinator accepted it: of 3,537 over-cap fleet
-# commands in another two-day window, the segment rule refuses at most 12
-# more than a word-bounded three-word match would (that count measured the
-# three word tests unordered; the in-order search is stricter). The backtick
+# THE COST, said: a held session's over-cap command is refused when any ONE
+# segment (the text between `;` `&` `|` and newlines) names `gh`, then `pr`,
+# then `merge` as words, prose included: a one-line JSON mail body (its `\n`
+# escapes keep it one segment), a trailing `# comment`, a PR body that quotes
+# or merely mentions them in that order. It stays refused until it is split,
+# rephrased, or moved into a file. The coordinator accepted it (ruling 3510):
+# of 3,537 over-cap fleet commands in another two-day window, the segment
+# rule refuses at most 12 more than a word-bounded three-word match would
+# (that count measured the three word tests unordered; the in-order search
+# is stricter). No narrowing: letting only gh's flags stand between the
+# words would need a repeated group, the nested quantifier this rule exists
+# to avoid. The backtick
 # is a STRICTER OVER-CAP READING, NOT A CLOSURE: a bare `` `gh pr merge` `` is
 # refused over the cap because the end class holds a backtick, while legacy
 # backticks still pass under the cap (listed above). WHAT PASSES OVER THE
 # CAP, said, each measured through this hook, held, padded past the cap:
 # `bash -c "gh pr merge"` and `eval "gh pr merge"` (the closing quote is not
-# in the end class; `bash -c "gh pr merge 42"` is refused), `gh pr \<newline>
-# merge` (a continuation), quoting inside a word (`g"h" pr merge`, `gh p""r
-# merge`), a variable (`x=gh; $x pr merge`), an alias, a separator inside a
+# in the end class; `bash -c "gh pr merge 42"` is refused), quoting inside
+# a word (`g"h" pr merge`, `gh p""r merge`), a variable (`x=gh; $x pr merge`),
+# an alias, a separator inside a
 # quoted flag value or inside a substitution that holds `;` `&` `|` or a
 # newline (`gh pr -R "a;b" merge 42`), and a NUL next to a word (`gh pr
 # merge\0 42`, which passes over the cap and is denied under it; bash strips
 # NUL from command text and Node refuses it in spawn arguments).
 # `gh<newline>pr<newline>merge` passes too, rightly: bash reads three
-# commands. Two classes pass under the cap too, so they are not regressions
-# of it: a redirection glued between the command words (`gh pr>x merge 42`,
-# `gh>x pr merge 42`; GH_MERGE_RE needs a blank before `pr` and `merge`), and
-# a backslash-newline straight after `merge` (`gh pr merge\<newline> 42`).
+# commands. Three classes pass under the cap too, so they are not regressions
+# of it: a backslash-newline continuation between the words (`gh pr
+# \<newline> merge 42`, measured held, under the cap), a redirection glued
+# between the command words (`gh pr>x merge 42`, `gh>x pr merge 42`;
+# GH_MERGE_RE needs a blank before `pr` and `merge`), and a backslash-newline
+# straight after `merge` (`gh pr merge\<newline> 42`).
 # Classified, not closed (the stopping line, ruled 2026-10-03).
 # The cap also BOUNDS every superlinear walk above: the strip and GH_MERGE_RE
 # never read more than MERGE_PARSE_CAP bytes, so the 36-200 KB timings above
@@ -3660,7 +3672,7 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
     fi
     if [[ -n "$mwhy" && -n "$mover" ]]; then
       mreason="ccrc: this command is $mover bytes, over the merge deny's $MERGE_PARSE_CAP-byte parse cap, and its raw text reads as a \`gh … pr … merge\` command, so the deny cannot read whether it runs one; $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
-      mreason+=" Split it into commands of at most $MERGE_PARSE_CAP bytes, or rephrase it so its text does not read as a \`gh … pr … merge\` command (a mail or PR body that quotes it): write a long body to a file with the Write tool and pass the path (\`gh pr create --body-file <file>\`, \`ccrc-api ... --json <file>\`). A landing is the operator's, from their own shell."
+      mreason+=" Split it into commands of at most $MERGE_PARSE_CAP bytes, or rephrase it so its text does not read as a \`gh … pr … merge\` command (prose that names gh, pr and merge in that order reads as one, a mail or PR body that quotes it included): write a long mail body to a file with the Write tool and send it with \`ccrc-api mail send --json <file>\`, which keeps the command short, or a long PR body to a file for \`gh pr create --body-file <file>\`. A landing is the operator's, from their own shell."
     elif [[ -n "$mwhy" ]]; then
       mreason="ccrc: $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
       mreason+=" Report wave-done to your coordinator; it lands the PR."
