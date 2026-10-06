@@ -51,6 +51,11 @@ import { plantAuthHelper, plantAuthModule, fixtureSecretLine } from './authFixtu
 import { SCRATCH_SLUGS, PERSISTENT_SLUGS } from './scratchSlugs.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin, IS_DARWIN } from './platformFixtures.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
+// The canned `docs-index` answers (Docs W1a): ONE module, which `ccd-docs-index.test.ts`
+// holds the real verb to, so the `docs` check's stub ccd cannot drift from ccd.
+import {
+  DOCS_INDEX_READY, DOCS_INDEX_UNREADABLE, DOCS_HELPER_UNAVAILABLE_MISSING_LINE, docsIndexStubScript,
+} from './docsIndexFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -1208,6 +1213,14 @@ function healthy(prefix: string): string {
   writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
     started: new Date().toISOString(), finished: new Date().toISOString(),
     pin: '0.9.9', status: 'ok', trees: [] }] }));
+  // …and its ccd answers Docs (spec 2026-10-01 §7.2): `docs` is a check, and
+  // healthy()'s contract is that every check PASSES. `$HOME/.local/bin/ccd`,
+  // the file the agent execs and the check runs, prints the canned ready
+  // `docs-index` answer — builtins only, because this PATH holds no system
+  // directory — and `ccd-docs-index.test.ts` holds the real verb to the same
+  // object, so this stub cannot drift from ccd.
+  writeFileSync(join(home, '.local', 'bin', 'ccd'),
+    docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY)), { mode: 0o755 });
   return home;
 }
 
@@ -1680,6 +1693,345 @@ describe('ccrc doctor: timeout', () => {
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/^SKIP timeout: this box records CCRC_ROLE=server, so it hosts no sessions/m);
     expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) timeout:/m);
+  });
+});
+
+// ── model-default: an Anthropic lane whose settings.json defaults to Fable ──
+// Claude Code's `/model <name>` saves `model` into the account home's
+// settings.json, and ccd composes `--model` only from a routing record whose
+// class is set and is not `default` — so every other spawn on that lane (no
+// record, class `default`, a worker whose run names no class) starts on what
+// that key says. ccrc's routing never chooses Fable itself; this check is how
+// a stray `/model fable` on a lane becomes visible. Most cases source the
+// checks file and call the one function (fast, and the subject is the
+// function's verdict); the table wiring and the server-role SKIP — which
+// needs `ccrc`'s `BOX_ENV_FILE` — go through `ccrc doctor` end to end.
+// Imported HERE for the reason the codex fixtures' import above gives: ES
+// modules hoist it, and lines above this point are cited by number.
+import { familyClassOf } from '../../shared/models.mjs';
+
+describe('ccrc doctor: model-default', () => {
+  // Two Anthropic lanes and one codex lane: the codex lane's `fable` alias
+  // names a GPT model (ANTHROPIC_DEFAULT_FABLE_MODEL), so it is not the subject.
+  const MD_ROSTER = { version: 1, accounts: [
+    { id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'claude-a', label: 'claude-a', configDirSuffix: '.claude-a',
+      exec: { kind: 'generated', secretsFile: '.cc-secrets/claude-a-oauth.env' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    { id: 'cx', label: 'cx', configDirSuffix: '.claude-cx',
+      exec: { kind: 'codex', provider: 'openai', proxyPort: 41001, litellmPort: 41002, authDir: codexAuthDir('cx') },
+      homeAble: false, telemetry: 'codex' },
+  ] };
+  /** A home with the projection and a real `node` (behind the `--version`
+   *  stub every doctor fixture uses) on an otherwise-empty contained PATH. */
+  const mdHome = (prefix: string): string => {
+    const home = mkTmp(prefix);
+    stubNode(home, 'v22.20.0');
+    seedAccountsSh(home, MD_ROSTER);
+    return home;
+  };
+  const settings = (home: string, suffix: string, body: unknown): string => {
+    const d = join(home, suffix);
+    mkdirSync(d, { recursive: true });
+    const p = join(d, 'settings.json');
+    writeFileSync(p, typeof body === 'string' ? body : JSON.stringify(body, null, 2));
+    return p;
+  };
+  /** `_check_model-default` alone, sourced the way the launchd routing case
+   *  sources `_check_routing`. */
+  const runCheck = (home: string): { code: number; out: string } => {
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(CHECKS_SRC)}; _check_model-default`],
+      { encoding: 'utf8', env: { HOME: home, PATH: containedPath(home), LC_ALL: 'C' } });
+    return { code: r.status ?? -1, out: r.stdout ?? '' };
+  };
+  const verdicts = (out: string): string[] => out.split('\n').filter((l) => /^(PASS|WARN|FAIL|SKIP) model-default: /.test(l));
+  const FABLE_LEAD = /^WARN model-default: an Anthropic lane's settings\.json defaults the model to Fable: /;
+
+  it('WARNs on `model: "fable"` through `ccrc doctor` itself, naming the lane, the consequence and the remedy — never a FAIL', () => {
+    const home = healthy('ccrc-doctor-mdef-alias-');
+    seedAccountsSh(home, MD_ROSTER);
+    settings(home, '.claude-a', { model: 'fable' });
+    const r = runDoctor(home);
+    const line = lineFor(r.stdout, 'model-default');
+    expect(line, r.stdout).toMatch(FABLE_LEAD);
+    expect(line).toContain('Fable: claude-a (model=fable) — ');
+    expect(line).toContain('a session there with no routing record, or class `default`, starts on Fable (a dispatched worker whose run names no class included)');
+    expect(r.stdout).toMatch(/^WARN model-default: .*\n {2}remedy: in that lane's settings\.json set `model` to Opus or remove it .*a `\/model` typed with a name saves the account default, while `s` in the \/model picker is session-only$/m);
+    expect(r.stdout).not.toMatch(/^FAIL model-default:/m);
+  });
+
+  it('WARNs on `fable[1m]` and on a full Fable id — the alias with its suffix, and the dash-token rule', () => {
+    const home = mdHome('ccrc-doctor-mdef-ids-');
+    settings(home, '.claude', { model: 'fable[1m]' });
+    settings(home, '.claude-a', { model: 'claude-fable-5-1' });
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toHaveLength(1);
+    expect(verdicts(r.out)[0]).toMatch(FABLE_LEAD);
+    expect(verdicts(r.out)[0]).toContain('Fable: claude (model=fable[1m]), claude-a (model=claude-fable-5-1) — ');
+  });
+
+  it('WARNs on env.ANTHROPIC_MODEL naming Fable — it outranks `model` — and PASSes when it outranks a Fable `model`', () => {
+    const home = mdHome('ccrc-doctor-mdef-env-');
+    settings(home, '.claude-a', { model: 'opus', env: { ANTHROPIC_MODEL: 'claude-fable-5-1' } });
+    const r = runCheck(home);
+    expect(verdicts(r.out)).toEqual([expect.stringMatching(FABLE_LEAD)]);
+    expect(r.out).toContain('Fable: claude-a (env.ANTHROPIC_MODEL=claude-fable-5-1) — ');
+    // The precedence the other way round: the env key decides, so the stale
+    // `model` underneath it starts nothing.
+    const back = mdHome('ccrc-doctor-mdef-env-back-');
+    settings(back, '.claude-a', { model: 'fable', env: { ANTHROPIC_MODEL: 'opus' } });
+    expect(verdicts(runCheck(back).out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+    // An EMPTY env value is no value — the `model` beneath it is what runs.
+    const empty = mdHome('ccrc-doctor-mdef-env-empty-');
+    settings(empty, '.claude-a', { model: 'fable', env: { ANTHROPIC_MODEL: '' } });
+    expect(runCheck(empty).out).toContain('Fable: claude-a (model=fable) — ');
+  });
+
+  it('PASSes on `opus`, on an absent key and on an absent file, naming how many lanes it measured', () => {
+    const home = mdHome('ccrc-doctor-mdef-pass-');
+    settings(home, '.claude', { model: 'opus' });
+    settings(home, '.claude-a', { env: { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' } });
+    const r = runCheck(home);
+    expect(r.code).toBe(0);
+    expect(verdicts(r.out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+    const bare = mdHome('ccrc-doctor-mdef-nofile-');
+    expect(verdicts(runCheck(bare).out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+  });
+
+  it('ignores a codex lane whose `model` is `fable` — the alias names a GPT slot there', () => {
+    const home = mdHome('ccrc-doctor-mdef-codex-');
+    settings(home, '.claude-cx', { model: 'fable' });
+    expect(verdicts(runCheck(home).out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+  });
+
+  it('agrees with familyClassOf id for id: a Fable verdict exactly when the alias is `fable` or the family is fable', () => {
+    const corpus = ['fable', 'fable[1m]', 'FABLE', 'Fable[1m]', 'fable-ish', 'xfable', 'claude-fable-5-1', 'claude-fable-5-1[1m]',
+      'claude-fable-opus-hybrid-1', 'claude-opus-fable-x-1', 'claude-opus-5-5', 'claude-sonnet-5', 'opus', 'opus[1m]',
+      'default', 'claude-fable', 'CLAUDE-FABLE-5-1', 'anthropic/claude-fable-5-1', 'us.anthropic.claude-fable-5-1-v1:0', ''];
+    const home = mdHome('ccrc-doctor-mdef-agree-');
+    const dir = join(home, 'corpus');
+    mkdirSync(dir);
+    corpus.forEach((id, i) => writeFileSync(join(dir, `${i}.json`), JSON.stringify({ model: id })));
+    const r = spawnSync(BASH, ['-c', [
+      `set -uo pipefail; . ${shq(CHECKS_SRC)}; mkdir -p "$HOME/.claude-a"`,
+      `for i in $(seq 0 ${corpus.length - 1}); do cp "$HOME/corpus/$i.json" "$HOME/.claude-a/settings.json"; _check_model-default >/dev/null; echo "$?"; done`,
+    ].join('\n')], { encoding: 'utf8', env: { HOME: home, PATH: `${containedPath(home)}:/usr/bin:/bin`, LC_ALL: 'C' } });
+    const got = (r.stdout ?? '').trim().split('\n');
+    expect(got, r.stderr).toHaveLength(corpus.length);
+    corpus.forEach((id, i) => {
+      const fable = id.replace(/\[1m\]$/, '').toLowerCase() === 'fable' || familyClassOf(id) === 'fable';
+      expect(got[i], JSON.stringify(id)).toBe(fable ? '2' : '0');
+    });
+  });
+
+  it('SKIPs on a server-role box — it hosts no sessions', () => {
+    const home = healthy('ccrc-doctor-mdef-server-');
+    seedAccountsSh(home, MD_ROSTER);
+    settings(home, '.claude-a', { model: 'fable' });
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP model-default: this box records CCRC_ROLE=server, so it hosts no sessions/m);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) model-default:/m);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('WARNs UNMEASURED — never PASSes — on a settings.json it cannot read, naming the errno', () => {
+    const home = mdHome('ccrc-doctor-mdef-unread-');
+    const p = settings(home, '.claude-a', { model: 'opus' });
+    chmodSync(p, 0o000);
+    try {
+      const r = runCheck(home);
+      expect(r.code).toBe(2);
+      expect(verdicts(r.out)).toEqual([
+        'WARN model-default: unmeasured: settings.json is present but could not be read for: claude-a (EACCES), so whether it defaults the model to Fable is unknown',
+      ]);
+      expect(r.out).toContain('or its mode/ownership (chmod u+r <home>/settings.json)');
+    } finally {
+      chmodSync(p, 0o600);
+    }
+  });
+
+  it('WARNs UNMEASURED on invalid JSON and on JSON that is not an object — its own line, not the unreadable one', () => {
+    const home = mdHome('ccrc-doctor-mdef-badjson-');
+    settings(home, '.claude', '{"model": "fable",');
+    settings(home, '.claude-a', '["fable"]');
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toEqual([
+      'WARN model-default: unmeasured: settings.json is not a JSON object for: claude, claude-a, so whether it defaults the model to Fable is unknown',
+    ]);
+    expect(r.out).toContain('remedy: repair that lane\'s settings.json so it parses as a JSON object');
+  });
+
+  it('WARNs UNMEASURED when the reader exits with a code it does not define — never PASSes on it', () => {
+    const home = mdHome('ccrc-doctor-mdef-weird-');
+    settings(home, '.claude-a', { model: 'fable' });
+    stub(home, 'node',
+      `if [ "$1" = "--version" ]; then echo 'v22.20.0'; exit 0; fi\n`
+      + 'case "$*" in *CCRC_DOCTOR_SETTINGS*) exit 9 ;; esac\n'
+      + `exec '${process.execPath}' "$@"`);
+    const r = runCheck(home);
+    expect(verdicts(r.out)).toEqual([expect.stringMatching(/^WARN model-default: unmeasured: the settings reader \(node\) failed for: claude-a \(exit 9\)/)]);
+  });
+
+  it('a Fable lane and an unmeasured lane each get their own WARN, and no PASS', () => {
+    const home = mdHome('ccrc-doctor-mdef-mixed-');
+    settings(home, '.claude', { model: 'fable' });
+    settings(home, '.claude-a', 'not json');
+    const v = verdicts(runCheck(home).out);
+    expect(v).toHaveLength(2);
+    expect(v[0]).toMatch(FABLE_LEAD);
+    expect(v[1]).toMatch(/^WARN model-default: unmeasured: settings\.json is not a JSON object for: claude-a,/);
+  });
+
+  it('WARNs when the projection predates CCRC_ANTHROPIC_BACKEND, and PASSes vacuously with no projection at all', () => {
+    const home = mdHome('ccrc-doctor-mdef-stale-sh-');
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), 'CCRC_ACCOUNTS=(claude)\n');
+    expect(verdicts(runCheck(home).out)).toEqual([expect.stringMatching(/^WARN model-default: could not read the roster projection .*predates CCRC_ANTHROPIC_BACKEND/)]);
+    rmSync(join(home, '.ccrc', 'accounts.sh'));
+    expect(verdicts(runCheck(home).out)).toEqual([expect.stringMatching(/^PASS model-default: 0 Anthropic lane\(s\): no roster projection/)]);
+  });
+
+  // ── review fixes (lane A) ──
+  /** One exit code per `model` value, through the one function — the
+   *  agreement case's loop. */
+  const exitsFor = (prefix: string, bodies: unknown[]): string[] => {
+    const home = mdHome(prefix);
+    const dir = join(home, 'corpus');
+    mkdirSync(dir);
+    bodies.forEach((b, i) => writeFileSync(join(dir, `${i}.json`), JSON.stringify(b)));
+    const r = spawnSync(BASH, ['-c', [
+      `set -uo pipefail; . ${shq(CHECKS_SRC)}; mkdir -p "$HOME/.claude-a"`,
+      `for i in $(seq 0 ${bodies.length - 1}); do cp "$HOME/corpus/$i.json" "$HOME/.claude-a/settings.json"; _check_model-default >/dev/null; echo "$?"; done`,
+    ].join('\n')], { encoding: 'utf8', env: { HOME: home, PATH: `${containedPath(home)}:/usr/bin:/bin`, LC_ALL: 'C' } });
+    const got = (r.stdout ?? '').trim().split('\n');
+    expect(got, r.stderr).toHaveLength(bodies.length);
+    return got;
+  };
+
+  it('normalises the value as Claude Code\'s own resolver does — trimmed, case-folded, `[1m]` stripped in any case — and counts `best`', () => {
+    // The expectations are Claude Code 2.1.291's `xt`: `e.trim()`, then
+    // `toLowerCase()`, then `[1m]` stripped by `/(\[1m\])+$/i` and re-trimmed,
+    // then the alias switch, whose `best` arm resolves to the Fable default on
+    // an entitled lane. A full id is NOT case-folded there (`-fable-` stays
+    // case-sensitive, as `familyClassOf` is).
+    const table: Array<[string, '2' | '0']> = [
+      ['best', '2'], ['Best', '2'], [' best ', '2'], ['best[1m]', '2'],
+      [' fable', '2'], ['fable ', '2'], ['FABLE[1M]', '2'], ['fable[1M]', '2'], ['fable [1m]', '2'],
+      ['opus', '0'], [' opus ', '0'], ['OPUS[1M]', '0'], ['bestx', '0'], ['best-of', '0'], ['fable[2m]', '0'],
+      ['CLAUDE-FABLE-5-1', '0'],
+    ];
+    const got = exitsFor('ccrc-doctor-mdef-resolver-', table.map(([m]) => ({ model: m })));
+    table.forEach(([m, want], i) => expect(got[i], JSON.stringify(m)).toBe(want));
+    // `best` is Fable only where the account is entitled to it — said so.
+    const home = mdHome('ccrc-doctor-mdef-best-');
+    settings(home, '.claude-a', { model: 'best' });
+    expect(runCheck(home).out).toContain('Fable: claude-a (model=best, which resolves to Fable when the account is entitled to it) — ');
+  });
+
+  it('reads env.ANTHROPIC_DEFAULT_MODEL as the lowest rung — only when neither env.ANTHROPIC_MODEL nor `model` names a model', () => {
+    const got = exitsFor('ccrc-doctor-mdef-defrung-', [
+      { env: { ANTHROPIC_DEFAULT_MODEL: 'fable' } },
+      { model: '', env: { ANTHROPIC_DEFAULT_MODEL: 'claude-fable-5-1' } },
+      { model: 'opus', env: { ANTHROPIC_DEFAULT_MODEL: 'fable' } },
+      { env: { ANTHROPIC_MODEL: 'opus', ANTHROPIC_DEFAULT_MODEL: 'fable' } },
+      { env: { ANTHROPIC_DEFAULT_MODEL: 'opus' } },
+    ]);
+    expect(got).toEqual(['2', '2', '0', '0', '0']);
+    const home = mdHome('ccrc-doctor-mdef-defrung-line-');
+    settings(home, '.claude-a', { env: { ANTHROPIC_DEFAULT_MODEL: 'fable' } });
+    expect(runCheck(home).out).toContain('Fable: claude-a (env.ANTHROPIC_DEFAULT_MODEL=fable) — ');
+  });
+
+  it('follows an alias through the lane\'s own ANTHROPIC_DEFAULT_<ALIAS>_MODEL remap to a Fable id', () => {
+    const got = exitsFor('ccrc-doctor-mdef-remap-', [
+      { model: 'opus', env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-fable-5-1' } },
+      { model: 'Sonnet[1m]', env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-fable-5-1' } },
+      { env: { ANTHROPIC_DEFAULT_MODEL: 'opus', ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-fable-5-1' } },
+      { model: 'opus', env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5-5' } },
+      { model: 'opus', env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-fable-5-1' } },
+    ]);
+    expect(got).toEqual(['2', '2', '2', '0', '0']);
+    const home = mdHome('ccrc-doctor-mdef-remap-line-');
+    settings(home, '.claude-a', { model: 'opus', env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-fable-5-1' } });
+    expect(runCheck(home).out).toContain('Fable: claude-a (model=opus, via env.ANTHROPIC_DEFAULT_OPUS_MODEL=claude-fable-5-1) — ');
+  });
+
+  it('masks a Fable-class value that is not a plain id — no raw settings.json bytes reach the terminal', () => {
+    const home = mdHome('ccrc-doctor-mdef-mask-');
+    settings(home, '.claude', { model: 'claude-fable-5-1\u001b[31mRED' });
+    settings(home, '.claude-a', { model: 'us.anthropic.claude-fable-5-1-v1:0' });
+    const r = runCheck(home);
+    expect(r.out).toContain('Fable: claude (model=<a Fable-class id>), claude-a (model=<a Fable-class id>) — ');
+    expect(r.out).not.toContain('\u001b');
+  });
+
+  it('a dangling settings.json symlink and a directory in its place are "present but could not be read", with a remedy that fits them', () => {
+    const home = mdHome('ccrc-doctor-mdef-dangle-');
+    mkdirSync(join(home, '.claude-a'), { recursive: true });
+    symlinkSync(join(home, 'nowhere.json'), join(home, '.claude-a', 'settings.json'));
+    mkdirSync(join(home, '.claude', 'settings.json'), { recursive: true });
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toEqual([
+      'WARN model-default: unmeasured: settings.json is present but could not be read for: claude (EISDIR), claude-a (ENOENT, a symlink whose target is missing), so whether it defaults the model to Fable is unknown',
+    ]);
+    expect(r.out).toContain('remedy: fix or remove it — a symlink whose target is missing, a directory in its place, or its mode/ownership (chmod u+r <home>/settings.json)');
+    expect(r.out).not.toContain('exists but could not be read');
+  });
+
+  it('a reader (node) that fails is its own WARN, pointing at node — not an unreadable file with a chmod remedy', () => {
+    const home = mdHome('ccrc-doctor-mdef-nodefail-');
+    settings(home, '.claude-a', { model: 'opus' });
+    stub(home, 'node',
+      `if [ "$1" = "--version" ]; then echo 'v22.20.0'; exit 0; fi\n`
+      + 'case "$*" in *CCRC_DOCTOR_SETTINGS*) echo boom >&2; exit 1 ;; esac\n'
+      + `exec '${process.execPath}' "$@"`);
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toEqual([
+      'WARN model-default: unmeasured: the settings reader (node) failed for: claude-a (exit 1), so whether its settings.json defaults the model to Fable is unknown',
+    ]);
+    expect(r.out).toContain('remedy: check that node runs (node -e 0) — see the \'node\' check above — then re-run ccrc doctor');
+    expect(r.out).not.toContain('chmod');
+  });
+
+  it('a lane the projection gives no config dir is UNMEASURED, never counted as measured', () => {
+    const home = mdHome('ccrc-doctor-mdef-nodir-');
+    appendFileSync(join(home, '.ccrc', 'accounts.sh'), 'CCRC_ANTHROPIC_BACKEND+=(ghost)\n');
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toEqual([
+      'WARN model-default: unmeasured: the roster projection names no config dir for: ghost, so whether its settings.json defaults the model to Fable is unknown',
+    ]);
+  });
+
+  it('a projection that prints, or exits part-way, never leaks onto doctor output nor yields a lane or a PASS', () => {
+    const home = mdHome('ccrc-doctor-mdef-leak-');
+    const sh = join(home, '.ccrc', 'accounts.sh');
+    writeFileSync(sh, `echo SIDE-EFFECT-PRINTED\n${readFileSync(sh, 'utf8')}`);
+    const printed = runCheck(home);
+    expect(printed.out).not.toContain('SIDE-EFFECT-PRINTED');
+    expect(verdicts(printed.out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+    const cut = mdHome('ccrc-doctor-mdef-cut-');
+    const csh = join(cut, '.ccrc', 'accounts.sh');
+    writeFileSync(csh, `echo SIDE-EFFECT-PRINTED; exit 0\n${readFileSync(csh, 'utf8')}`);
+    const r = runCheck(cut);
+    expect(r.out).not.toContain('SIDE-EFFECT-PRINTED');
+    expect(verdicts(r.out)).toEqual([expect.stringMatching(/^WARN model-default: could not read the roster projection /)]);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('WARNs UNMEASURED — never the vacuous PASS — on a projection that exists but cannot be read', () => {
+    const home = mdHome('ccrc-doctor-mdef-unread-sh-');
+    settings(home, '.claude-a', { model: 'fable' });
+    const sh = join(home, '.ccrc', 'accounts.sh');
+    chmodSync(sh, 0o000);
+    try {
+      const r = runCheck(home);
+      expect(r.code).toBe(2);
+      expect(verdicts(r.out)).toEqual([expect.stringMatching(/^WARN model-default: could not read the roster projection at \$HOME\/\.ccrc\/accounts\.sh/)]);
+    } finally {
+      chmodSync(sh, 0o600);
+    }
   });
 });
 
@@ -10206,6 +10558,280 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
   });
 });
 
+// ── docs (spec 2026-10-01 §7.2; mutation rows M7.4 and M7.6) ──────────────
+//
+// `_check_docs` runs `$HOME/.local/bin/ccd docs-index --all` — the file the
+// agent execs — and classifies its one line. Every case below replaces that
+// file and reads one verdict. The canned answers come from
+// `docsIndexFixtures.ts`, the module `ccd-docs-index.test.ts` holds the REAL
+// verb to, so a PASS here is a PASS on the bytes the real ccd prints. M7.4's
+// last clause (the timeout default equals the server's runner budget) is
+// Docs W2's `docs-budget.test.ts`, not this file's.
+
+/** `$HOME/.local/bin/ccd`: where `healthy()` plants the canned stub. */
+function docsCcd(home: string): string {
+  return join(home, '.local', 'bin', 'ccd');
+}
+
+/** Replaces the fixture's ccd. `writeFileSync`'s `mode` applies only when it
+ *  CREATES the file, and `healthy()` already did, so the mode is set again. */
+function plantDocsCcd(home: string, script: string, mode = 0o755): void {
+  writeFileSync(docsCcd(home), script, { mode });
+  chmodSync(docsCcd(home), mode);
+}
+
+/** The `docs` verdict line and the line after it (its remedy, when it has
+ *  one). Two empty strings when doctor printed no `docs` line at all. */
+function docsVerdict(out: string): { line: string; next: string } {
+  const lines = out.split('\n');
+  const i = lines.findIndex((l) => /^(PASS|WARN|FAIL|SKIP) docs: /.test(l));
+  return i < 0 ? { line: '', next: '' } : { line: lines[i] ?? '', next: lines[i + 1] ?? '' };
+}
+
+/** What the check counts, computed from the canned answer rather than
+ *  re-typed: every row, the `ready` rows, the `repo-unreadable` rows. */
+function docsCounts(o: typeof DOCS_INDEX_READY): { n: number; k: number; u: number } {
+  return {
+    n: o.projects.length,
+    k: o.projects.filter((p) => p.state === 'ready').length,
+    u: o.projects.filter((p) => p.state === 'repo-unreadable').length,
+  };
+}
+
+describe('ccrc doctor: docs', () => {
+  it('is in the table, right after codex', () => {
+    const names = tableNames();
+    expect(names).toContain('docs');
+    expect(names.indexOf('docs')).toBe(names.indexOf('codex') + 1);
+  });
+
+  it('PASSES on the healthy box, reporting counts only', () => {
+    const { n, k, u } = docsCounts(DOCS_INDEX_READY);
+    // The fixture's premise, checked rather than assumed: more rows than
+    // served ones (so "K served" cannot be "N rows" mislabelled), at least one
+    // served, none unreadable.
+    expect(n).toBeGreaterThan(k);
+    expect(k).toBeGreaterThan(0);
+    expect(u).toBe(0);
+    const r = runDoctor(healthy('ccrc-doctor-docs-pass-'));
+    expect(docsVerdict(r.stdout).line, r.stdout)
+      .toBe(`PASS docs: ${n} projects under ccd's projects root, ${k} served by Docs`);
+  });
+
+  it.each([
+    ['ready', DOCS_INDEX_READY, 'PASS'],
+    ['unreadable', DOCS_INDEX_UNREADABLE, 'WARN'],
+  ] as const)('never prints a project name (%s answer)', (label, fixture, verdict) => {
+    // SENTINEL names, planted into the canned answer: the CONTROL proves they
+    // really are in what ccd prints, so their absence from doctor's stdout is
+    // the check's doing, not an accident of the fixture.
+    const named = {
+      ...fixture,
+      projects: fixture.projects.map((p, i) => ({ ...p, project: `docs-sentinel-${label}-${i}` })),
+    };
+    const script = docsIndexStubScript(JSON.stringify(named));
+    expect(named.projects.length).toBeGreaterThan(0);
+    for (const p of named.projects) expect(script).toContain(`"project":"${p.project}"`);
+    const home = healthy(`ccrc-doctor-docs-names-${label}-`);
+    plantDocsCcd(home, script);
+    const r = runDoctor(home);
+    expect(docsVerdict(r.stdout).line, r.stdout).toMatch(new RegExp(`^${verdict} docs: `));
+    expect(r.stdout).not.toContain('docs-sentinel');
+  });
+
+  it('WARNS on a repo-unreadable row, with the one-liner that lists them', () => {
+    const { n, k, u } = docsCounts(DOCS_INDEX_UNREADABLE);
+    expect(u).toBeGreaterThan(0);   // the fixture's premise
+    const home = healthy('ccrc-doctor-docs-unreadable-');
+    plantDocsCcd(home, docsIndexStubScript(JSON.stringify(DOCS_INDEX_UNREADABLE)));
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout)
+      .toBe(`WARN docs: ${n} projects under ccd's projects root, ${k} served by Docs, ${u} unreadable`);
+    expect(v.next)
+      .toBe(`  remedy: ccd docs-index --all | jq -r '.projects[] | select(.state=="repo-unreadable") | .project'`);
+    expect(r.stdout).not.toMatch(/^FAIL docs: /m);
+  });
+
+  it('WARNS, never FAILS, when the index walk left projects unchecked (unwalked), counting them', () => {
+    // docs-index's answer carries `unwalked` (only when above 0): the projects
+    // its walk did not reach before its helper deadline. Rows are intact, so
+    // the box answers Docs; the count line says how many were not checked.
+    const { n, k } = docsCounts(DOCS_INDEX_READY);
+    const unwalked = 3;
+    const home = healthy('ccrc-doctor-docs-unwalked-');
+    plantDocsCcd(home, docsIndexStubScript(JSON.stringify({ ...DOCS_INDEX_READY, unwalked })));
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout)
+      .toBe(`WARN docs: ${n} projects under ccd's projects root, ${k} served by Docs, ${unwalked} not checked (time budget)`);
+    expect(v.next).toMatch(/^ {2}remedy: \S/);
+    expect(r.stdout).not.toMatch(/^FAIL docs: /m);
+  });
+
+  it.each([
+    ['python-missing', DOCS_HELPER_UNAVAILABLE_MISSING_LINE],
+    ['python-too-old', DOCS_HELPER_UNAVAILABLE_MISSING_LINE.replace('"python-missing"', '"python-too-old"')],
+  ] as const)('FAILS naming python3 3.8 when ccd answers helper-unavailable (%s)', (detail, line) => {
+    expect(line).toContain(`"detail":"${detail}"`);   // CONTROL: the replace above really happened
+    const home = healthy(`ccrc-doctor-docs-${detail}-`);
+    plantDocsCcd(home, docsIndexStubScript(line));
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout)
+      .toMatch(/^FAIL docs: ccd answers docs-index with helper-unavailable: .* — its Docs helper needs python3 3\.8 or newer$/);
+    expect(v.line).toContain(`(${detail})`);
+    expect(v.next).toMatch(/^ {2}remedy: install python3 3\.8 or newer /);
+    expect(r.code).toBe(1);
+  });
+
+  it('FAILS naming the word on any other ok:false answer, and quotes none of its detail', () => {
+    const home = healthy('ccrc-doctor-docs-helper-failed-');
+    plantDocsCcd(home, docsIndexStubScript(JSON.stringify({
+      v: 1, verb: 'docs-index', ok: false, elapsedMs: 3, failure: 'helper-failed',
+      detail: 'RuntimeError: docs-detail-sentinel',
+    })));
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout)
+      .toBe("FAIL docs: ccd answers docs-index with helper-failed — Docs cannot list this box's projects");
+    expect(v.line).not.toContain('python3');   // not the helper-unavailable arm
+    expect(v.next).toMatch(/^ {2}remedy: \S/);
+    expect(r.stdout).not.toContain('docs-detail-sentinel');
+  });
+
+  it('PASSES when ccd also writes to stderr: the two streams are never merged', () => {
+    const home = healthy('ccrc-doctor-docs-stderr-');
+    plantDocsCcd(home,
+      `#!/bin/sh\necho 'docs-stderr-sentinel' >&2\nprintf '%s\\n' '${JSON.stringify(DOCS_INDEX_READY)}'\n`);
+    const r = runDoctor(home);
+    expect(docsVerdict(r.stdout).line, r.stdout).toMatch(/^PASS docs: /);
+    expect(r.stdout).not.toContain('docs-stderr-sentinel');
+  });
+
+  it('FAILS naming jq, not the answer, when jq is not on PATH', () => {
+    const home = healthy('ccrc-doctor-docs-no-jq-');
+    unstub(home, 'jq');
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout).toBe("FAIL docs: jq is not on PATH, so ccd's docs-index answer cannot be read");
+    expect(v.next).toBe("  remedy: install jq first — see the 'jq' check above");
+  });
+
+  it('quotes a hostile stderr line literally: the capture executes nothing it reads', () => {
+    // `$(...)`, backquotes, a double quote and a trailing backslash: every
+    // shape an unquoted re-read would run or mangle. The payload creates its
+    // marker with `: >`, a shell builtin, because this PATH has no `touch`: a
+    // payload that could not run anyway would prove nothing by not running.
+    const home = healthy('ccrc-doctor-docs-hostile-');
+    const pwned = join(home, 'docs-pwned');
+    expect(existsSync(pwned)).toBe(false);
+    const hostile = 'boom $(: > "$HOME/docs-pwned") `: > "$HOME/docs-pwned"` "q" \\';
+    plantDocsCcd(home, `#!/bin/sh\nprintf '%s\\n' '${hostile}' >&2\nexit 2\n`);
+    const v = docsVerdict(runDoctor(home).stdout);
+    expect(v.line).toBe(`FAIL docs: ccd could not run docs-index (rc 2: ${hostile}); it predates Docs or died`);
+    expect(existsSync(pwned)).toBe(false);
+  });
+
+  it("FAILS 'predates' on an old ccd's usage refusal, quoting at most 200 bytes of its stderr", () => {
+    // An old ccd's unknown-verb arm: exactly rc 1 with `usage: ccd {...}` on
+    // stderr. Longer than 200 bytes, so the bound has something to cut.
+    const usage = `usage: ccd {${Array.from({ length: 40 }, (_, i) => `verb-${i}`).join('|')}|version}`;
+    expect(usage.length).toBeGreaterThan(200);
+    const home = healthy('ccrc-doctor-docs-old-ccd-');
+    plantDocsCcd(home, `#!/bin/sh\nprintf '%s\\n' '${usage}' >&2\nexit 1\n`);
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    const m = /^FAIL docs: ccd could not run docs-index \(rc 1: (.*)\); it predates Docs or died$/.exec(v.line);
+    expect(m, r.stdout).toBeTruthy();
+    expect(m?.[1]).toBe(usage.slice(0, 200));
+    expect(v.next).toBe('  remedy: ccrc update');
+  });
+
+  it('FAILS "did not answer" when ccd outlives CCRC_DOCTOR_DOCS_TIMEOUT', () => {
+    // Bounded by the check's OWN deadline, the tmux_skew wedge case's idiom:
+    // the stub sleeps 5 s and the knob says 1.
+    const home = healthy('ccrc-doctor-docs-slow-');
+    linkReal(home, 'sleep');
+    plantDocsCcd(home, '#!/bin/sh\nexec sleep 5\n');
+    const r = runDoctor(home, ['doctor'], { CCRC_DOCTOR_DOCS_TIMEOUT: '1' });
+    const v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout).toBe('FAIL docs: ccd docs-index did not answer within 1 s');
+    expect(v.next).toMatch(/^ {2}remedy: \S/);
+  });
+
+  it.each([
+    ['not JSON', '#!/bin/sh\necho not json\n'],
+    ['nothing at all', '#!/bin/sh\nexit 0\n'],
+    ['two answers', `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(DOCS_INDEX_READY)}' '${JSON.stringify(DOCS_INDEX_READY)}'\n`],
+    ['wire v 2', docsIndexStubScript(JSON.stringify({ ...DOCS_INDEX_READY, v: 2 }))],
+    ['another verb', docsIndexStubScript(JSON.stringify({ ...DOCS_INDEX_READY, verb: 'docs-tree' }))],
+    ['ok:true with no projects list', docsIndexStubScript('{"v":1,"verb":"docs-index","ok":true,"elapsedMs":0}')],
+    ['ok neither true nor false', docsIndexStubScript('{"v":1,"verb":"docs-index","ok":"yes","elapsedMs":0}')],
+    ['a failure that is not a word',
+      docsIndexStubScript('{"v":1,"verb":"docs-index","ok":false,"elapsedMs":0,"failure":"Not A Word"}')],
+  ] as const)('FAILS on an answer that is not one docs-v1 object: %s', (label, script) => {
+    const home = healthy('ccrc-doctor-docs-shape-');
+    plantDocsCcd(home, script);
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    expect(v.line, `${label}\n${r.stdout}`)
+      .toMatch(/^FAIL docs: ccd's docs-index answer is not one docs-v1 JSON object /);
+    expect(v.next).toMatch(/^ {2}remedy: \S/);
+    expect(r.stdout).not.toContain('Not A Word');
+  });
+
+  it("FAILS with remedy 'ccrc update' when there is no ccd at $HOME/.local/bin/ccd", () => {
+    const home = healthy('ccrc-doctor-docs-no-ccd-');
+    rmSync(docsCcd(home), { force: true });
+    const v = docsVerdict(runDoctor(home).stdout);
+    expect(v.line).toMatch(/^FAIL docs: no ccd at \$HOME\/\.local\/bin\/ccd, /);
+    expect(v.next).toBe('  remedy: ccrc update');
+  });
+
+  it("FAILS with remedy 'ccrc update' when $HOME/.local/bin/ccd is not executable", () => {
+    const home = healthy('ccrc-doctor-docs-noexec-ccd-');
+    chmodSync(docsCcd(home), 0o644);
+    const v = docsVerdict(runDoctor(home).stdout);
+    expect(v.line).toMatch(/^FAIL docs: \$HOME\/\.local\/bin\/ccd is not an executable file, /);
+    expect(v.next).toBe('  remedy: ccrc update');
+  });
+
+  it('SKIPS on a server-role box, with no remedy line, and never runs ccd', () => {
+    // A RECORDING stub: `: >` is a shell builtin, so it needs nothing on PATH.
+    const home = healthy('ccrc-doctor-docs-server-');
+    const ran = join(home, 'docs-ccd-ran');
+    plantDocsCcd(home,
+      `#!/bin/sh\n: > "$HOME/docs-ccd-ran"\nprintf '%s\\n' '${JSON.stringify(DOCS_INDEX_READY)}'\n`);
+    writeCcrcEnv(home,
+      ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    let r = runDoctor(home);
+    let v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout).toBe("SKIP docs: no ccd answers Docs here; the fleet box's doctor measures it");
+    expect(v.next).not.toMatch(/^ {2}remedy:/);
+    expect(existsSync(ran)).toBe(false);
+    // CONTROL: the same box with no role recorded runs the same stub and
+    // PASSES, so the SKIP was the role's doing and the marker can be written.
+    writeCcrcEnv(home, ['CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    r = runDoctor(home);
+    v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout).toMatch(/^PASS docs: /);
+    expect(existsSync(ran)).toBe(true);
+  });
+
+  it("names the Docs helper in python3's reason, which the docs check does not replace", () => {
+    // `_check_python3` stays a presence check (spec §7.2); only its reason
+    // changes. The docs check still PASSES here, because the canned ccd needs
+    // no python — the floor is measured through the verb, never twice.
+    const home = healthy('ccrc-doctor-docs-python3-reason-');
+    unstub(home, 'python3');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(
+      /^FAIL python3: not on PATH — ~\/\.local\/bin\/ccd is a standard-library python3 launcher in front of the bash body \(D-3696\), the graph engine's venv is built with it, and ccd's Docs helper needs python3 3\.8 or newer$/m);
+    expect(docsVerdict(r.stdout).line).toMatch(/^PASS docs: /);
+  });
+});
+
 // ── Plan 3a Task 4: `_check_codex`, part 1 (spec §12) ─────────────────────
 // Every case runs the FULL `ccrc doctor` and reads the codex lines, and every
 // case asserts no runner-bug line: a check whose return code disagrees with
@@ -10376,6 +11002,45 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     const home = await healthyCodexBox('ccrc-doctor-codex-notree-');
     rmSync(join(home, 'ccrc', 'ccd', 'ccgpt-runtime'));
     expect(runDoctor(home).stdout).toMatch(/^FAIL codex: the shipped tree \(.*\/ccrc\/ccd\) has no ccgpt-runtime, /m);
+  });
+
+  // ── Plan 3b Task A5 (a): no cmp costs the byte compare, and nothing else ──
+  // A file missing from ~/.local/bin, not executable, or absent from the
+  // shipped tree is a fact cmp plays no part in. `_dr_cx_bins` used to return
+  // on the cmp-absent WARN before its loop ever ran, so those FAILs were
+  // swallowed and `_fix_codex`, which runs only on a FAIL, was unreachable.
+  it('with no cmp on PATH, a GPT-lane executable missing from ~/.local/bin still FAILs by name, and only the compare is unmeasured (Plan 3b A-5)', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-nocmp-missing-');
+    unstub(home, 'cmp');
+    rmSync(join(binDir(home), 'ccrc-codex'));
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^FAIL codex: ccrc-codex missing from \$HOME\/\.local\/bin, or not executable — every Codex lane needs all four$/m);
+    const re = /^WARN codex: cmp is not on PATH, so ccgpt-proxy\.py, ccgpt-usage\.py, ccgpt-runtime in \$HOME\/\.local\/bin could not be compared with the shipped tree — unmeasured, not current$/m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: install diffutils (it ships cmp), then re-run doctor');
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('with no cmp on PATH, a shipped tree that lacks one still FAILs by name (Plan 3b A-5)', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-nocmp-notree-');
+    unstub(home, 'cmp');
+    rmSync(join(home, 'ccrc', 'ccd', 'ccgpt-runtime'));
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^FAIL codex: the shipped tree \(.*\/ccrc\/ccd\) has no ccgpt-runtime, /m);
+    // The tree-absent file is FAILed, not counted as uncompared: the WARN names
+    // the other three only.
+    expect(r.stdout, r.stdout).toMatch(/^WARN codex: cmp is not on PATH, so ccgpt-proxy\.py, ccgpt-usage\.py, ccrc-codex in \$HOME\/\.local\/bin could not be compared with the shipped tree — unmeasured, not current$/m);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('with no cmp on PATH and all four placed, the one codex verdict is the WARN naming all four — never a PASS claiming they match (Plan 3b A-5)', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-nocmp-all-');
+    unstub(home, 'cmp');
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([
+      'WARN codex: cmp is not on PATH, so ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex in $HOME/.local/bin could not be compared with the shipped tree — unmeasured, not current',
+    ]);
+    noRunnerBugLine(r.stdout, 'codex');
   });
 
   const restamp = (home: string, patch: Record<string, string>): void => {
@@ -10570,10 +11235,60 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
       id: 'codex-b', label: 'codex-b', configDirSuffix: '.claude-codex-b',
       exec: { kind: 'external' }, homeAble: false, telemetry: 'codex',
     }], { accountsSh: false });
+    // Plan 3b Task A2: this is the state AFTER the converge a flip back runs, which
+    // withdraws codex-b's usage timer, so its link goes as a manager's disable
+    // removes it. The timer left enabled is the next case's subject.
+    rmSync(join(home, '.config', 'systemd', 'user', 'timers.target.wants', 'ccrc-codex-usage@codex-b.timer'));
     const r = runDoctor(home);
     expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(
       /^WARN codex: lane state is left under \S+\/\.ccrc\/codex\/codex-b, and 'codex-b' is not a Codex lane in /)]);
     expect(existsSync(join(home, '.ccrc', 'codex', 'codex-b', 'lane.json'))).toBe(true);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  itLinux('a flip back whose usage timer is still enabled: the left-state WARN no longer says nothing of ccrc\'s reads it, and the timer is its own WARN (Plan 3b Task A2)', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-flipback-timer-', ['codex-a', 'codex-b']);
+    const keep = lanePorts(home, 'codex-a');
+    codexRoster(home, [{ id: 'codex-a', ...keep }], [{
+      id: 'codex-b', label: 'codex-b', configDirSuffix: '.claude-codex-b',
+      exec: { kind: 'external' }, homeAble: false, telemetry: 'codex',
+    }], { accountsSh: false });
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([
+      expect.stringMatching(/^WARN codex: lane state is left under \S+\/\.ccrc\/codex\/codex-b, and 'codex-b' is not a Codex lane in \$HOME\/\.ccrc\/accounts\.json — a flip back to another launcher keeps it on purpose, and ccrc's own ccrc-codex-usage@codex-b\.timer still reads it \(the WARN naming that timer says how to withdraw it\)$/),
+      SURPLUS_WARN('codex-b'),
+    ]);
+    expect(remedyAfter(r.stdout, /^WARN codex: ccrc-codex-usage@codex-b\.timer is still enabled/)).toBe(SURPLUS_FIX('codex-b'));
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  itLinux('lane state left behind while the usage-timer set cannot be listed: the left-state WARN says whether ccrc\'s timer reads it is unmeasured — never "nothing of ccrc\'s reads it" (Plan 3b Task A2, fix round 1)', () => {
+    const home = healthy('ccrc-doctor-codex-leftstate-unlistable-');
+    mkdirSync(join(home, '.ccrc', 'codex', 'ext-a'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'codex', 'ext-a', 'lane.json'), '{}\n');
+    rmSync(join(home, 'ccrc', 'ccd', 'ccrc-wrapper-shape'), { force: true });
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([
+      expect.stringMatching(/^WARN codex: lane state is left under \S+\/ext-a, and 'ext-a' is not a Codex lane in \$HOME\/\.ccrc\/accounts\.json — a flip back to another launcher keeps it on purpose, and whether ccrc's own usage timer still reads it is unmeasured \(the WARN on ccrc's enabled usage timers says why\)$/),
+      UNLISTABLE_WARN,
+    ]);
+    expect(r.stdout, 'an unmeasured set was read as none').not.toMatch(/nothing of ccrc's reads it/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  itLinux('a ccrc usage timer left enabled with no Codex lane and no lane state at all is a WARN — never the empty-population SKIP (Plan 3b Task A2)', () => {
+    const home = healthy('ccrc-doctor-codex-surplus-only-');
+    plantCodexUsage(home, 'ext-a', { pair: false, row: false });   // a dangling link still reads enabled (D-3726)
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([SURPLUS_WARN('ext-a')]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  itLinux('a box whose usage-timer set cannot be listed is a WARN, unmeasured — never the empty-population SKIP (Plan 3b Task A2)', () => {
+    const home = healthy('ccrc-doctor-codex-surplus-unlistable-');
+    rmSync(join(home, 'ccrc', 'ccd', 'ccrc-wrapper-shape'), { force: true });
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([UNLISTABLE_WARN]);
     noRunnerBugLine(r.stdout, 'codex');
   });
 
@@ -10585,6 +11300,87 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     expect(codexVerdicts(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: lane state is left under \S+\/ext-a, /)]);
     noRunnerBugLine(r.stdout, 'codex');
   });
+
+  // ── Plan 3b Task A5 (b): a lane-state root that cannot be listed ─────────
+  // `for d in "$root"/*/` matches nothing on a mode-000 directory, a regular
+  // file or a dangling link (measured), so each of them used to fold into the
+  // empty-population SKIP. `_check_pools`' `pools-unlistable` class, worded as
+  // a WARN by ruling A-5. An ABSENT root still SKIPs: the two SKIP cases above
+  // are this pair's control.
+  it.skipIf(process.getuid?.() === 0)(
+    'an unlistable ~/.ccrc/codex is unmeasured — a WARN, never the empty-population SKIP (Plan 3b A-5)', () => {
+      // Skipped as root: root lists any directory, so the fixture cannot be built.
+      const home = healthy('ccrc-doctor-codex-root-unlistable-');
+      const root = join(home, '.ccrc', 'codex');
+      mkdirSync(join(root, 'ext-a'), { recursive: true });
+      writeFileSync(join(root, 'ext-a', 'lane.json'), '{}\n');
+      chmodSync(root, 0o000);
+      try {
+        const r = runDoctor(home);
+        const re = /^WARN codex: \S+\/\.ccrc\/codex exists and cannot be listed \(it is not a directory this user can read and search\), so whether any Codex lane state is left under it was not measured — unmeasured, never read as no lane state$/m;
+        expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(re)]);
+        expect(remedyAfter(r.stdout, re)).toMatch(/^ {2}remedy: make it a directory this user can list again \(ccrc creates it with mode 0700: chmod 700 \S+\/\.ccrc\/codex\), /);
+        noRunnerBugLine(r.stdout, 'codex');
+      } finally {
+        chmodSync(root, 0o700);   // mkTmp's cleanup cannot empty a mode-000 directory
+      }
+    });
+
+  it('a regular file where ~/.ccrc/codex belongs is unmeasured too — a WARN, never the SKIP, at any uid (Plan 3b A-5)', () => {
+    const home = healthy('ccrc-doctor-codex-root-file-');
+    writeFileSync(join(home, '.ccrc', 'codex'), 'not a directory\n');
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(
+      /^WARN codex: \S+\/\.ccrc\/codex exists and cannot be listed \(it is not a directory this user can read and search\), /)]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // One case per conjunct of `_check_codex`'s unlistable-root predicate
+  // (`-e || -L`, `! -d`, `! -r`, `! -x`): each fixture fails exactly ONE of
+  // them, so deleting that conjunct alone turns the WARN into the SKIP. The
+  // two cases above cannot bind them: a mode-000 directory fails `-r` AND `-x`,
+  // and a 0644 file fails `-d` AND `-x`.
+  const UNLISTABLE_ROOT_WARN = /^WARN codex: \S+\/\.ccrc\/codex exists and cannot be listed \(it is not a directory this user can read and search\), /;
+  it('a dangling symlink where ~/.ccrc/codex belongs is unmeasured — a WARN, never read as an absent root (Plan 3b A-5)', () => {
+    // `-e` follows the link and says no; only `-L` says it is there.
+    const home = healthy('ccrc-doctor-codex-root-dangling-');
+    symlinkSync(join(home, 'nowhere'), join(home, '.ccrc', 'codex'));
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(UNLISTABLE_ROOT_WARN)]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('a regular file with every mode bit a directory needs is still unmeasured — it fails `-d` alone (Plan 3b A-5)', () => {
+    const home = healthy('ccrc-doctor-codex-root-file755-');
+    const root = join(home, '.ccrc', 'codex');
+    writeFileSync(root, 'not a directory\n');
+    chmodSync(root, 0o755);
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(UNLISTABLE_ROOT_WARN)]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // Skipped as root, who reads and searches any directory: the fixture cannot be built.
+  const unlistableDirOfMode = (prefix: string, mode: number): void => {
+    const home = healthy(prefix);
+    const root = join(home, '.ccrc', 'codex');
+    mkdirSync(join(root, 'ext-a'), { recursive: true });
+    writeFileSync(join(root, 'ext-a', 'lane.json'), '{}\n');
+    chmodSync(root, mode);
+    try {
+      const r = runDoctor(home);
+      expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(UNLISTABLE_ROOT_WARN)]);
+      noRunnerBugLine(r.stdout, 'codex');
+    } finally {
+      chmodSync(root, 0o700);   // mkTmp's cleanup cannot empty a directory it cannot search
+    }
+  };
+  it.skipIf(process.getuid?.() === 0)(
+    'a ~/.ccrc/codex directory this user can search but not read (mode 0300) is unmeasured — it fails `-r` alone (Plan 3b A-5)',
+    () => unlistableDirOfMode('ccrc-doctor-codex-root-mode0300-', 0o300));
+  it.skipIf(process.getuid?.() === 0)(
+    'a ~/.ccrc/codex directory this user can read but not search (mode 0600) is unmeasured — it fails `-x` alone (Plan 3b A-5)',
+    () => unlistableDirOfMode('ccrc-doctor-codex-root-mode0600-', 0o600));
 
   // ── the worst class ─────────────────────────────────────────────────────
   it('one lane FAILing and another WARNing: FAIL lines, then WARN lines, each with its own remedy, and the check returns the worst', async () => {
@@ -10783,6 +11579,50 @@ describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stal
     noRunnerBugLine(r.stdout, 'codex');
   });
 
+  // ── Plan 3b Task A5 (c): an unreadable .wrapper is not "another lane's" ──
+  // ccd writes every registry field with `printf '%s'` (`_reg_set`): no
+  // trailing newline, so `read`'s own status is 1 on EVERY real wrapper.
+  // Only a failed REDIRECTION says "could not be read". The second case is
+  // the control that pins ccd's own shape, so a fix keyed on read's status reds.
+  it.skipIf(IS_DARWIN || process.getuid?.() === 0)(
+    'a lane session whose .wrapper cannot be read is unanswered — never another lane\'s, never idle (Plan 3b A-5)', async () => {
+      // Skipped as root, who reads a 0000-mode file; and on macOS, for the
+      // remedy's systemctl spelling, as the "no word" case above is.
+      const home = await healthyCodexBox('ccrc-doctor-codex-wrapper-unreadable-');
+      const reg = join(home, '.cc-sessions');
+      mkdirSync(reg, { recursive: true });
+      writeFileSync(join(reg, 'proj-b.wrapper'), 'codex-a');
+      chmodSync(join(reg, 'proj-b.wrapper'), 0o000);
+      // Live, to show a live unit does not make an unreadable wrapper "this lane's".
+      writeFileSync(join(home, 'fixture-unit-claude-session@proj-b.service'), 'active\n');
+      const r = runDoctor(home);
+      expect(r.stdout, r.stdout).not.toMatch(/live session\(s\) run on this lane/);
+      // Final-review fix wave (MF5, D-4052): still counted unanswered (the verdict is the same WARN), but named apart.
+      // The manager was never the cause, so its status hint is not the remedy; the file's mode is.
+      const re = /^WARN codex: codex-a's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked \(1 unanswered\) — unmeasured, not idle; 1 of them: \$HOME\/\.cc-sessions\/proj-b\.wrapper cannot be read by this user, so which lane that session runs on is unknown$/m;
+      expect(r.stdout, r.stdout).toMatch(re);
+      expect(r.stdout).toContain('proj-b.wrapper cannot be read');
+      expect(remedyAfter(r.stdout, re)).toBe('  remedy: read or fix that file\'s mode (ccd writes it), and ask by hand; if one is live, start the lane: ccrc codex start codex-a');
+      expect(r.stdout, 'an unreadable .wrapper sent the operator to the manager').not.toContain('claude-session@proj-b');
+      // STDERR, not stdout: `cmd_doctor` captures only a check's stdout, so bash's
+      // own open-failure line (printed when `2>/dev/null` comes AFTER the `<`,
+      // measured) reaches the real stderr, which `runDoctor` returns apart.
+      expect(r.stderr).not.toMatch(/Permission denied/);
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+  it("a .wrapper in ccd's own shape — no trailing newline — still reads as this lane's: one live session (Plan 3b A-5)", async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-wrapper-nonl-');
+    const reg = join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    writeFileSync(join(reg, 'proj-b.wrapper'), 'codex-a');
+    writeFileSync(join(home, 'fixture-unit-claude-session@proj-b.service'), 'active\n');
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^WARN codex: codex-a's LiteLLM tier is not running while 1 live session\(s\) run on this lane, /m);
+    expect(r.stdout).not.toMatch(/could not be asked/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
   it('a listener that accepts and never answers costs the check its probe bound — never a hang', async () => {
     // IN-PROCESS, on purpose (the header above): while doctor runs, this
     // process's event loop is blocked, so the kernel completes the connect
@@ -10853,6 +11693,20 @@ function usageBox(prefix: string, o: Parameters<typeof plantCodexUsage>[2] = {})
   return home;
 }
 
+/** Plan 3b Task A2 (D-4048): the surplus row,
+ *  measured, recorded and printed alone, for `usageRows`' `script`. */
+const SURPLUS_ROWS = [
+  'DRX_CLASS=(); DRX_WHAT=(); DRX_FIX=()',
+  's=0; _dr_codex_usage_surplus codex-a || s=$?',
+  'printf "rc=%s\\nsurplus=%s\\n" "$s" "${DR_CODEX_USAGE_SURPLUS[*]-}"',
+  '_dr_codex_usage_surplus_rows "$s"',
+  '_dr_cx_report "surplus measured"; :',
+].join('\n');
+const SURPLUS_WARN = (id: string): string => `WARN codex: ccrc-codex-usage@${id}.timer is still enabled, and '${id}' is not a Codex lane in $HOME/.ccrc/accounts.json, so ccrc's usage publisher for '${id}' runs whenever the manager starts that timer: the writer of $HOME/.cc-limits/${id}.json, and of a token refresh in the authDir its lane.json names, for a lane ccrc no longer runs`;
+const SURPLUS_FIX = (id: string): string => `  remedy: systemctl --user disable --now ccrc-codex-usage@${id}.timer (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws a ccrc usage timer whose id is no longer a Codex lane and re-measures the link`;
+const UNLISTABLE_WARN = "WARN codex: ccrc's own enabled usage timers could not be listed (the wrapper shape contract could not be read), so a ccrc-codex-usage@<id>.timer left enabled for an id that is no longer a Codex lane cannot be seen — unmeasured, never none";
+const UNLISTABLE_FIX = '  remedy: ccrc install — the wrapper shape contract ships with ccrc, and the install places it again';
+
 // LINUX ONLY: on a macOS host bash's own OSTYPE is darwin*, so ccrc computes
 // CCD_OS=darwin at source time and every row below would answer
 // not-applicable. The forced-Darwin, unloaded and threshold cases need no
@@ -10888,6 +11742,18 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
 
   it('ANOTHER repository\'s timer enabled for the same lane: one WARN naming it, remedy the operator\'s own disable, and a stale row is not judged — ccrc is not its writer (R6)', () => {
     const home = usageBox('ccrc-doctor-usage-second-writer-', { ageS: 99_999 });
+    plantForeignUsage(home, 'codex-a');
+    const r = usageRows(home);
+    // Plan 3b Task A2: this fixture is BOTH armed (`usageBox` enables ccrc's own
+    // timer), so the WARN says so and names ccrc's withdrawal first. The title is
+    // §20.10's row of record, kept verbatim; the withheld-only case is the next one.
+    expect(warns(r.stdout)).toEqual([`WARN codex: codex-a: another repository's ccgpt-usage@codex-a.timer is enabled, and ccrc's own ${T} is enabled too, so two publishers race this lane's ~/.cc-limits row and two token refreshes its OAuth directory`]);
+    expect(r.stdout).toMatch(new RegExp(`^ {2}remedy: systemctl --user disable --now ${esc(T)} \\(ccrc's own unit; no ccrc fixer withdraws it\\), or leave it to the next update, whose converge withdraws ${esc(T)} while ccgpt-usage@codex-a\\.timer stands and re-measures the link\\. Once this lane's cutover no longer needs ccgpt-usage@codex-a\\.timer, disable it yourself: systemctl --user disable --now ccgpt-usage@codex-a\\.timer — ccrc never disables another tool's unit$`, 'm'));
+    expect(r.asked).toEqual([]);
+  });
+
+  it('ANOTHER repository\'s timer enabled and ccrc\'s own withheld, as the converge leaves it: the WARN says ccrc withholds its own — true only now (Plan 3b Task A2)', () => {
+    const home = usageBox('ccrc-doctor-usage-second-writer-withheld-', { enabled: false });
     plantForeignUsage(home, 'codex-a');
     const r = usageRows(home);
     expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: another repository's ccgpt-usage@codex-a\.timer is enabled, so two publishers would race this lane's ~\/\.cc-limits row and two token refreshes its OAuth directory — ccrc withholds its own ccrc-codex-usage@codex-a\.timer while it stands$/)]);
@@ -10951,6 +11817,34 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: .*codex-a\.json carries no numeric ts, so its age cannot be measured$/)]);
   });
 
+  it('every enabled ccrc usage timer belongs to a Codex lane: no surplus, nothing recorded, the manager never asked (Plan 3b Task A2)', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-surplus-none-'), false, SURPLUS_ROWS);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^rc=0$/m);
+    expect(r.stdout).toMatch(/^surplus=$/m);
+    expect(warns(r.stdout), r.stdout).toEqual([]);
+    expect(r.asked).toEqual([]);
+  });
+
+  it('a ccrc usage timer enabled for an id that is no longer a Codex lane WARNs by name — read off the manager\'s links, never the roster — remedy the exact disable, with the next update\'s converge as its automatic cure (Plan 3b Task A2)', () => {
+    const home = usageBox('ccrc-doctor-usage-surplus-');
+    plantCodexUsage(home, 'ext-a', { row: false });
+    const r = usageRows(home, false, SURPLUS_ROWS);
+    expect(r.stdout).toMatch(/^rc=0$/m);
+    expect(r.stdout).toMatch(/^surplus=ext-a$/m);
+    expect(warns(r.stdout), r.stdout).toEqual([SURPLUS_WARN('ext-a')]);
+    expect(remedyAfter(r.stdout, /^WARN codex: ccrc-codex-usage@ext-a\.timer is still enabled/)).toBe(SURPLUS_FIX('ext-a'));
+    expect(r.asked, 'the surplus row asked the user manager').toEqual([]);
+  });
+
+  it('ccrc\'s enabled usage timers that cannot be listed are their own WARN, unmeasured — never "no surplus" (Plan 3b Task A2)', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-surplus-unlistable-'), false,
+      `unset WRAPPER_ID_RE WRAPPER_SUFFIX_SAFE_RE; CCRC_HERE="$HOME/no-shape-contract-here"\n${SURPLUS_ROWS}`);
+    expect(r.stdout).toMatch(/^rc=1$/m);
+    expect(warns(r.stdout), r.stdout).toEqual([UNLISTABLE_WARN]);
+    expect(remedyAfter(r.stdout, /^WARN codex: ccrc's own enabled usage timers could not be listed/)).toBe(UNLISTABLE_FIX);
+  });
+
   itCodex('wired into _check_codex on a doctor-clean codex box: a second writer turns its PASS into a WARN on the check\'s own name', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-usage-e2e-');   // Task 4's fixture, extended by Step 3b
     expect(lineFor(runDoctor(home).stdout, 'codex'), 'the doctor-clean codex box no longer PASSes codex')
@@ -10975,6 +11869,15 @@ describe('ccrc doctor: codex — the usage rows, on any host (Plan 3a Task 6)', 
     expect(r.stdout).toMatch(/^note=usage timer not applicable on macOS$/m);
   });
 
+  it('forced Darwin: the surplus row is not applicable — rc 3 and nothing recorded, even over a ccrc link for a non-codex id (Plan 3b Task A2)', () => {
+    const home = usageBox('ccrc-doctor-usage-surplus-darwin-');
+    plantCodexUsage(home, 'ext-a', { row: false });
+    const r = usageRows(home, true, SURPLUS_ROWS);
+    expect(r.stdout).toMatch(/^rc=3$/m);
+    expect(r.stdout).toMatch(/^surplus=$/m);
+    expect(warns(r.stdout), r.stdout).toEqual([]);
+  });
+
   it('sourced without ccrc, the rows FAIL naming the bug, rather than reading a function that does not exist', () => {
     const home = usageBox('ccrc-doctor-usage-unloaded-');
     const r = spawnSync(BASH, ['-c', `set -uo pipefail\n. ${shq(CHECKS_SRC)}\n_dr_codex_usage_box; echo "rc=$?"`],
@@ -10990,7 +11893,7 @@ describe('ccrc doctor: codex — the usage rows, on any host (Plan 3a Task 6)', 
   // away. This box has no lane executables and no runtime, so a check that got
   // past the guard would record FAILs: one FAIL line, the guard's, is the
   // proof that nothing recorded was lost.
-  it.each(['_codex_usage_enabled', '_codex_usage_timer', '_codex_usage_foreign', '_codex_usage_wants',
+  it.each(['_codex_usage_enabled', '_codex_usage_enabled_ids', '_codex_usage_timer', '_codex_usage_foreign', '_codex_usage_wants',
     '_codex_usage_flat_foreign', '_plat_mtime'])('%s not loaded: _check_codex FAILs in its loaded guard, before any finding is recorded (fix round 1)', (fn) => {
     const r = usageRows(usageBox('ccrc-doctor-usage-guard-'), false, `unset -f ${fn}\n_check_codex; echo "rc=$?"`);
     expect(r.stdout.split('\n').filter((l) => /^(PASS|WARN|FAIL|SKIP) codex: /.test(l)), r.stdout).toEqual([

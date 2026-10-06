@@ -6,7 +6,7 @@
 Run it on your own box. Drive twenty agents from your phone.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](#license)
-[![Node](https://img.shields.io/badge/node-%E2%89%A522.13-339933.svg?logo=node.js&logoColor=white)](#requirements)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522.16-339933.svg?logo=node.js&logoColor=white)](#requirements)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-one%20box-8b5cf6.svg)](#quickstart)
 [![No telemetry](https://img.shields.io/badge/telemetry-none-64748b.svg)](#privacy)
 [![PWA](https://img.shields.io/badge/PWA-installable-f59e0b.svg)](#quickstart)
@@ -167,9 +167,9 @@ Download it, or use `bash <(curl -fsSL …)`.
 
 ## Requirements
 
-- **Node ≥ 22.13.0** — not negotiable, and not a style choice: the coordination database
-  is `node:sqlite`, which is flagged below that. All three packages declare the same floor
-  and a test pins it.
+- **Node ≥ 22.16.0** — not negotiable, and not a style choice: the coordination database
+  is `node:sqlite` (flagged below 22.13), and ccrc history needs its FTS5 (absent below 22.16).
+  All three packages declare the same floor and a test pins it.
 - **git**, **tmux**, **bash**, **curl**, **rsync**, **diff** — `ccrc install` refuses by
   name without `rsync` (it places the tree) or `diff` (every skill installer compares
   with it). **`openssl`** only mints the box and agent tokens by hand (`openssl rand -hex 32`).
@@ -563,12 +563,13 @@ under "Attention, notifications and answering" below.
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
 `skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111),
-and `timeout`.
+`timeout` and `model-default`.
 
 | checks | what they measure |
 |---|---|
 | `node`, `tmux`, `git`, `gh`, `jq`, `python3`, `flock` | on `PATH`; `node` also against the `engines.node` floor |
 | `timeout` | `timeout` or `gtimeout` on `PATH`: the session hook and the status line bound their one `tmux` call with it and skip the call without it — the hook then does nothing at all, and the status line writes no usage sidecar |
+| `model-default` | each Anthropic lane's `settings.json` default model (`env.ANTHROPIC_MODEL`, else `model`, else `env.ANTHROPIC_DEFAULT_MODEL`), read as Claude Code reads it — trimmed, any case, `[1m]` in any case: a WARN when it is Fable (`fable`, `fable[1m]`, `best` — Fable where the account is entitled to it — an id carrying `-fable-`, or an alias the lane's own `env.ANTHROPIC_DEFAULT_<ALIAS>_MODEL` points at such an id), because a session there with no routing record, or class `default`, starts on Fable; a file it cannot read or parse, a reader (node) that fails, or a lane with no config dir is a WARN, unmeasured (never a FAIL, no `--fix`: ccrc does not own the key). Not measured: the remap of the account's implicit default when no key names a model |
 | `tmux_skew` | the tmux client on disk against the running tmux server (a WARN: restart that server at a quiet moment) |
 | `gh_auth`, `git_email` | `gh` logged in with the `repo` scope; a commit identity |
 | `linger`, `path`, `disk` | linger enabled; `~/.local/bin` on `PATH`; free space on `$HOME`'s filesystem |
@@ -2529,8 +2530,20 @@ itself: the supervise tick (about every five seconds on a live session) types a 
 session-only `/model` or `/effort` — once the pane is idle, not drafting and not sitting out a limit, while
 `workflow` and `subagent` take effect at the next spawn and `compact` at the compactor's next tick. With `--apply`
 ccd tries those keystrokes at once, under the same test; a pane that fails it has the refusal recorded, the verb
-answers `queued`, and the tick retries. `haiku` takes no effort level, and the pair is refused whichever order it
-arrives in. A session with no record spawns as it always did.
+answers `queued`, and the tick retries. The `/model` keystrokes find the picker anywhere on the pane by its title,
+taking only a picker that was not already on screen before `/model` was typed, so a picker quoted in the
+conversation is never driven. They answer the cache form of Claude Code's `Switch model?` confirmation (raised
+whenever the conversation has turns), and only when it names the row chosen; a PreModelSwitch hook's confirmation
+is never answered, and that apply ends `apply-unconfirmed`. A switch counts only on the pane's newest `Set model to
+… for this session only` line naming the row chosen, whole: the Default row's name is the model in its own
+`(currently …)` plus ` (default)`. A class the pane already runs needs no keystroke: when the session's usage
+sidecar (below) is under 30 minutes old, was written after `routeapplied` was last stamped (a spawn, an apply, a
+read-back), belongs to the session's own `uuid`, and names a model of the pending class, the tick records the class
+applied, clears its retry count and refusal note, and writes one `route-readback` line to swap.log. An effort level
+never reads back, since the status line shows a model's default level the same way as one that was set, and the
+tick types it. `default` never reads back either, since no model id names it. `haiku` takes no effort level, and
+the pair is refused whichever order it arrives in. A session
+with no record spawns as it always did.
 
 **From the phone**, the session header's model and effort chips (or **Change model** / **Change effort** in its
 menu) write one field each through `POST /api/sessions/:id/route`, which runs `ccd route … --apply` (`501` from a
@@ -2566,6 +2579,9 @@ refusal, not a pass of nothing. Beside it, the status-line hook writes a per-ses
 `<ccd-id>.agents/`), which the fleet row reads and calls stale after 30 minutes. Doctor's `routing` check FAILs an
 Anthropic lane whose `settings.json` sets `CLAUDE_CODE_EFFORT_LEVEL`, or pins `CLAUDE_CODE_SUBAGENT_MODEL` while
 every live session carries a record (a WARN while any does not) — either key would silently override the record.
+Its `model-default` check WARNs an Anthropic lane whose `settings.json` defaults the model to Fable: Claude Code's
+`/model <name>` saves that default (`s` in the `/model` picker, which ccd presses, is session-only), and a session
+there with no record, or class `default` — a dispatched worker whose run names no class included — starts on Fable.
 
 ## Using the console
 
@@ -4001,7 +4017,7 @@ held by the very kill-switch the operator just raised.
 **The reclaim sweep, and how to stop it.** Besides the close path, the server
 runs an automatic sweep (once a minute) that reclaims CHILD workspaces through
 `ccd ws-reclaim` — only a child whose minting run is terminal, or has bound a
-different session, with no other open run, no hold and no coordination history
+different session, with no other open run, no hold and no coordination since its workspace was created
 (a review child also waits until the run it reviewed is terminal), asked on two
 consecutive passes and at most one at a time, and only while the fleet `ccd`
 advertises both `reclaim-v1` and `reclaim-pause-v1` (**A child is not a reap**,
@@ -4017,8 +4033,8 @@ hold, a human's included, keeps the child. The sweep's switch is
 `ccd reclaim-pause --state on` on the fleet host; `--state off` lowers it. While
 it stands the sweep and the close path ask for nothing, and `ws-reclaim` itself
 refuses `paused` on the box. The same row lists the children that need a
-human's eye: each standing under a terminal refusal, and each whose reclaim
-has kept failing for 15 minutes.
+human's eye: each under a terminal refusal, each whose reclaim has kept failing
+for 15 minutes, and each the sweep keeps for a person while its reason stands.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
@@ -4709,8 +4725,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7688-7690`), each with an operator sentence of its own at `:7730`,
-`:7738` and `:7751`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7812-7814`), each with an operator sentence of its own at `:7854`,
+`:7862` and `:7875`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -4966,7 +4982,7 @@ you need to reason about one.*
 
 ## Architecture
 
-- `server/` — Node ≥22.13.0 (`engines.node`; `node:sqlite` needs it unflagged,
+- `server/` — Node ≥22.16.0 (`engines.node`; `node:sqlite` needs 22.13 unflagged and 22.16 for FTS5,
   and `server/test/node-floor.test.ts` pins both the declaration and the
   import) + Fastify (TS ESM). One process, systemd user unit
   `ccrc.service` (a launchd agent on macOS), bound to one interface only
@@ -4991,7 +5007,7 @@ you need to reason about one.*
   WS client talking to `agent/` on the fleet host instead (see "Remote fleet
   mode" above). Either way the whole thing is unit-testable off-box against
   fixtures.
-- `agent/` — Node ≥22.13.0 (same `engines.node` floor as `server/`; the three
+- `agent/` — Node ≥22.16.0 (same `engines.node` floor as `server/`; the three
   packages must agree — `node-floor.test.ts` — though `node:sqlite` itself is
   server-only) WS service (TS ESM) that runs ON the fleet host and
   exposes a small, whitelisted exec/file/tail/pty surface over a bearer-token
@@ -5146,8 +5162,8 @@ untouched; every write is `jq`-gated and backed up to `~/ccrc-backups/<ts>/`.
 The managed entry is one command, `bash "$HOME/.cc-sessions/session-hook.sh"`,
 registered under every event the hook's `case` block handles — `PreToolUse`
 (matcher `*`), `PostToolUse`, `PermissionRequest`, `UserPromptSubmit`, `Stop`,
-`StopFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact` and
-`SessionStart`; `Notification` is not among them. The installer's event list
+`StopFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`,
+`SessionStart` and `SessionEnd`; `Notification` is not among them. The installer's event list
 and the hook's `case` arms are one set written twice, and `server/test/install-session-hooks.test.ts` derives the
 expected one from the hook's `case` block, because they once drifted and a
 `SessionStart` arm sat dead on the fleet for months (D-306). The installer also
@@ -5463,7 +5479,7 @@ npm run build                            # server/agent: tsc → dist/; pwa: tsc
 ```
 
 The server suite executes the real `ccd`, `ccrc` and hook scripts against fixture `$HOME`s, so the
-machine needs what a fleet box needs: Node ≥ 22.13.0, `bash` 4.4 or newer, `tmux`, `git`, `jq`,
+machine needs what a fleet box needs: Node ≥ 22.16.0, `bash` 4.4 or newer, `tmux`, `git`, `jq`,
 `python3` and `flock`, plus `strace` on Linux (`ci-trace-run.test.ts` runs the real one and fails
 loudly without it; macOS skips that file). On macOS: `brew install bash tmux flock jq coreutils`
 (`coreutils` supplies `gtimeout`). Run one file with
@@ -5485,9 +5501,9 @@ serves the PWA through Vite with `/api` and `/ws` proxied to `127.0.0.1:7788`.
 `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`). A **pull request** runs the server
 tests its change can affect — `.github/ci/select-tests.mjs` chooses them from a traced dependency map,
 sharded behind the required `test (server)` summary, which also needs `typecheck (server)` — while
-`test (agent)` and `test (pwa)` (vitest, then `tsc --noEmit`) and `build-pwa` run in full; `test-macos`
+`test (agent)` and `test (pwa)` (vitest, then `tsc --noEmit`), `build-pwa` and `node-floor` (the floor test on exactly the `engines.node` version) run in full; `test-macos`
 runs the same selection and `probe-macos` a fixed probe; neither blocks a pull request, but
-`full-suite` needs `test-macos`, so a red macOS leg blocks a promotion to `stable`. A change under
+`full-suite` needs `test-macos` and `node-floor`, so a red macOS or floor leg blocks a promotion to `stable`. A change under
 `.github/` or `server/scripts/`, to a `package.json` or lockfile, a `vitest.*config.*`, a
 `tsconfig*.json`, `.gitattributes` or `.npmrc`, a symlink, a path the map's own baseline reads, or a
 missing map runs the whole server suite instead. A **merge-queue** run (`merge_group`) runs what a
@@ -5668,8 +5684,15 @@ file under `~/.ccrc/hook-capture/<id>/` (at most 200; the first line a meta
 line naming the pane's session id, then the payload as sent). Raw captures
 carry prompts, paths and tool arguments and never leave the box:
 `node deploy/hook-capture-reduce.mjs <dir>` reduces a directory to key paths,
-types and validated tokens, and only that is fit to commit. Every other
-session pays one string test for the arm.
+types and validated tokens, and only that is fit to commit. `SessionEnd` is
+registered for the delegation broker's measurement (spec 2026-10-04 §5.3): it is
+captured in a `-hookcap` session and otherwise writes nothing. The reducer's
+`delegation` block (`--root <label>=<path>` classifies `cwd`) reports tool names
+from a fixed set, Agent/Workflow key names, isolation as a token and ordinals in
+place of ids — still no value, id or path. Every other session pays one string
+test for the arm. `deploy/delegation-census.mjs` is a read-only, path-free
+census of one repository's leftover Agent/Workflow worktrees and their subagent
+metadata (delegation broker wave 1).
 
 Known real-format subtleties already encoded:
 

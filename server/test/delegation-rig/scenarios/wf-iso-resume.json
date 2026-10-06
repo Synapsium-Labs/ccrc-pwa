@@ -1,0 +1,19 @@
+{
+  "scenario": "wf-iso-resume", "covers": ["Q7"],
+  "steps": [
+    {"waitReady": 60}, {"type": "dlg wf-iso-resume"}, {"keys": ["Enter"]},
+    {"sleep": 10},
+    {"waitLabels": ["r1-hang", "r2"], "timeoutS": 180}, {"sleep": 5}, {"snapshot": "before-kill"},
+    {"kill9": true}, {"sleep": 3}, {"relaunch": true}, {"waitReady": 60}, {"sleep": 30},
+    {"probeLabels": ["r1-resumed"], "timeoutS": 120}
+  ],
+  "settleS": 10,
+  "entries": [
+    {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg wf-iso-resume"},
+     "tool_use": {"name": "Workflow", "input": {"script": "export const meta = { name: 'dlgwfr', description: 'dlg wf resume' }\nconst r = await Promise.all([agent('dlg-wf-r1', { label: 'r1', isolation: 'worktree' }), agent('dlg-wf-r2', { label: 'r2', isolation: 'worktree' })])\nreturn r\n"}}},
+    {"label": "r1-hang", "match": {"kind": "tools", "lastUser": "dlg-wf-r1"}, "hang_ms": 600000, "text": "never"},
+    {"label": "r2", "match": {"kind": "tools", "lastUser": "dlg-wf-r2"}, "text": "DLG-WF-R2"},
+    {"label": "r1-resumed", "match": {"kind": "tools", "lastUser": "dlg-wf-r1"}, "text": "DLG-WF-R1"}
+  ],
+  "default": {"text": "DLG-WAIT", "repeat": true}
+}
