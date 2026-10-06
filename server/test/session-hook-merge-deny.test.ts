@@ -361,8 +361,8 @@ describe('the worker merge deny', () => {
 
     it('LISTED over-cap pass, not a closure: a NUL next to the word is denied under the cap and passes over it', () => {
       hold(WAVE_HOLD);
-      // bash strips NUL from command text (and warns on stderr, here because the payload holds
-      // `merge`: the merge arm's read decodes the NUL).
+      // bash strips NUL from command text (and warns on stderr, here from both reads: the
+      // graph-search read, the payload holding `merge` and so `rg`, and the merge arm's read).
       expect(bash('gh pr merge\u0000 42', true).deny, 'under the cap the strip reads it').not.toBeNull();
       expect(bash(over('gh pr merge\u0000 42'), true).deny, 'the listed pass was refused: update the hook header\'s list').toBeNull();
     });

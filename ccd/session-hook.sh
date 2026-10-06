@@ -3555,30 +3555,28 @@ fi
 # each hold a quote or a `<` (`"$(<)"` repeated), one nested strip per span:
 # ~350 ms of CPU at 2048 bytes and ~650 ms at 4096 (bare `"`: ~125 and
 # ~190 ms), measured on the fleet box at load ~18.
-# THE COST, said: a held session's over-cap command is refused when any ONE
-# segment (the text between `;` `&` `|` and newlines) names `gh`, then `pr`,
+# THE COST, said: a held or child session's over-cap command is refused when any
+# ONE segment (the text between `;` `&` `|` and newlines) names `gh`, then `pr`,
 # then `merge` as words, prose included: a one-line JSON mail body (its `\n`
-# escapes keep it one segment), a trailing `# comment`, a PR body that quotes
-# or merely mentions them in that order. It stays refused until it is split,
-# rephrased, or moved into a file. The coordinator accepted it (ruling 3510):
-# of 3,537 over-cap fleet commands in another two-day window, the segment
-# rule refuses at most 12 more than a word-bounded three-word match would
-# (that count measured the three word tests unordered; the in-order search
-# is stricter). No narrowing: letting only gh's flags stand between the
-# words would need a repeated group, the nested quantifier this rule exists
-# to avoid. The backtick
+# escapes keep it one segment), a trailing `# comment`, a PR body that quotes or
+# merely mentions them in that order. It stays refused until it is split,
+# rephrased, or moved into a file. The coordinator accepted it (ruling 3510): of
+# 3,537 over-cap fleet commands in another two-day window, the segment rule
+# refuses at most 12 more than a word-bounded three-word match would (that count
+# measured the three word tests unordered; the in-order search is stricter). No
+# narrowing: letting only gh's flags stand between the words would need a
+# repeated group, the nested quantifier this rule exists to avoid. The backtick
 # is a STRICTER OVER-CAP READING, NOT A CLOSURE: a bare `` `gh pr merge` `` is
 # refused over the cap because the end class holds a backtick, while legacy
-# backticks still pass under the cap (listed above). WHAT PASSES OVER THE
-# CAP, said, each measured through this hook, held, padded past the cap:
-# `bash -c "gh pr merge"` and `eval "gh pr merge"` (the closing quote is not
-# in the end class; `bash -c "gh pr merge 42"` is refused), quoting inside
-# a word (`g"h" pr merge`, `gh p""r merge`), a variable (`x=gh; $x pr merge`),
-# an alias, a separator inside a
-# quoted flag value or inside a substitution that holds `;` `&` `|` or a
-# newline (`gh pr -R "a;b" merge 42`), and a NUL next to a word (`gh pr
-# merge\0 42`, which passes over the cap and is denied under it; bash strips
-# NUL from command text and Node refuses it in spawn arguments).
+# backticks still pass under the cap (listed above). WHAT PASSES OVER THE CAP,
+# said, each measured through this hook, held, padded past the cap: `bash -c "gh
+# pr merge"` and `eval "gh pr merge"` (the closing quote is not in the end
+# class; `bash -c "gh pr merge 42"` is refused), quoting inside a word (`g"h" pr
+# merge`, `gh p""r merge`), a variable (`x=gh; $x pr merge`), an alias, a
+# separator inside a quoted flag value or inside a substitution that holds `;`
+# `&` `|` or a newline (`gh pr -R "a;b" merge 42`), and a NUL next to a word
+# (`gh pr merge\0 42`, which passes over the cap and is denied under it; bash
+# strips NUL from command text and Node refuses it in spawn arguments).
 # `gh<newline>pr<newline>merge` passes too, rightly: bash reads three
 # commands. Three classes pass under the cap too, so they are not regressions
 # of it: a backslash-newline continuation between the words (`gh pr
