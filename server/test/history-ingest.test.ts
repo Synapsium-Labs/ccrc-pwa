@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import type { BigIntStats } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { syncBuiltinESMExports } from 'node:module';
 import { createHash } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as zc } from 'node:zlib';
 import type { DatabaseSync } from 'node:sqlite';
@@ -949,6 +950,7 @@ describe('history ingest: chunk writes in-process (plan task 19)', () => {
 
 interface IxSweep {
   recordTick(db: DatabaseSync, ctx: IxCtx, ing: IxTickResult | null): void;
+  backfillEpochFacts(db: DatabaseSync, ctx: IxCtx): void;
 }
 const IX_RSS_PRELOAD = path.join(__dirname, 'fixtures', 'history', 'preload-rss.mjs');
 /** O20's bound on the real sweep's peak RSS, in KiB. The spec's 256 MiB is asserted on the floor interpreter, 22.16.0
@@ -1280,5 +1282,46 @@ describe('history ingest: budget, backlog and the ticks row (plan task 20)', () 
       expect({ started: ep.started_ms, cwd: ep.cwd, branch: ep.git_branch })
         .toEqual({ started: IX.tsMs(21), cwd: '/home/u/tree', branch: 'main' });
     } finally { db.close(); }
+  });
+
+  it('an EIO on an admitted transcript\'s first-row read skips that epoch, leaves it factless and starves no other (D-4298, Task 20F)', async () => {
+    // readSync cannot be faulted in a spawned pass (the faults preload has no read event), so the read is faulted in
+    // this process: node:fs's readSync is replaced for one descriptor and syncBuiltinESMExports() carries it to
+    // sweep.mjs's named import.
+    const box = IX.newBox('ccrc-hist-facts-eio-');
+    const bad = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'unreadable', 1)]));
+    IX.plantCopy(box.homes[0]!, IX.U2, IX.jsonl([IX.user(IX.uuidN(21), null, 'readable', 21)]));
+    const { db, ids } = await IX.openFixtureStore(box);
+    const realRead = fs.readSync;
+    try {
+      const ctx = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids);
+      const b = S.newBudget();
+      for (const [uuid, name] of [[IX.U, bad], [IX.U2, path.join(path.dirname(bad), `${IX.U2}.jsonl`)]] as const) {
+        await S.ingestPath(db, ctx, { path: name, uuid, home: box.homes[0]! }, b);
+      }
+      // Two confirmed epochs, each holding no launch fact, each with a transcript a cursor has read from.
+      db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, 'claude-demo', 'g1', 'demo', 1), (2, 'claude-demo2', 'g2', 'demo', 1)").run();
+      db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (1, 1, ?, 'startup', 'spool', 1), (2, 1, ?, 'startup', 'spool', 1)").run(IX.U, IX.U2);
+      const factsOf = (uuid: string) => db.prepare('SELECT started_ms AS startedMs, cwd, git_branch AS branch FROM epochs WHERE cc_session_uuid = ?').get(uuid);
+      const none = { startedMs: null, cwd: null, branch: null };
+      expect(factsOf(IX.U)).toEqual(none);                 // CONTROL: both epochs start factless
+      expect(factsOf(IX.U2)).toEqual(none);
+      const eio = Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO', errno: -5, syscall: 'read' });
+      let faulted = 0;
+      (fs as { readSync: unknown }).readSync = function readSync(fd: number, ...rest: unknown[]): number {
+        if (fs.readlinkSync(`/proc/self/fd/${fd}`) === bad) { faulted += 1; throw eio; }
+        return (realRead as (...a: unknown[]) => number)(fd, ...rest);
+      };
+      syncBuiltinESMExports();
+      try {
+        expect(() => S.backfillEpochFacts(db, ctx)).not.toThrow();   // the error never leaves the step, so the tick goes on
+      } finally {
+        (fs as { readSync: unknown }).readSync = realRead;
+        syncBuiltinESMExports();
+      }
+      expect(faulted, 'the fault never fired: the unreadable epoch was not tried').toBe(1);
+      expect(factsOf(IX.U)).toEqual(none);                 // the epoch it could not read stays factless
+      expect(factsOf(IX.U2)).toEqual({ startedMs: IX.tsMs(21), cwd: '/home/u/tree', branch: 'main' });   // the other still got its facts
+    } finally { (fs as { readSync: unknown }).readSync = realRead; syncBuiltinESMExports(); db.close(); }
   });
 });

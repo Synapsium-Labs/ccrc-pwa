@@ -2233,7 +2233,13 @@ export function backfillEpochFacts(db, ctx) {
     const a = admitFile(r.path, home, ctx.homes, ctx.home);
     if (!a.ok) continue;
     let row;
-    try { row = firstUuidRowOf(a.fd); } finally { closeSync(a.fd); }
+    try {
+      row = firstUuidRowOf(a.fd);
+    } catch {
+      continue;   // a read that fails on an admitted file leaves its epoch factless and never fails the tick: the rest are tried (D-4298, slug history-first-row-read-error-skips-file)
+    } finally {
+      closeSync(a.fd);
+    }
     if (row === undefined) continue;
     const f = launchFactsOf(row);
     let cwdReal = null;
