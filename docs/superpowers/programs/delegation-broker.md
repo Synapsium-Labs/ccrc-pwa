@@ -18,7 +18,7 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **fix round 2** since 2026-10-06 14:11 UTC — review 296 at `e47f3689f`: 18 findings, 3 important; plus a capture of 2.1.290/2.1.291 |
+| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **in review (fix round 2)** — wave-done verified 2026-10-06 17:22 UTC at `3efb0ac37` (9 versions, 126 cells); review run 304 queued behind the daily cap |
 | 2 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | wave 1's matrix and its real-lane cross-check | — | to plan once wave 1's measurement section is complete |
 | 3 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 2 | — | to plan |
 | 4 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 3 | — | to plan |
@@ -126,6 +126,15 @@ its own heading. Until both are here, nothing in waves 2–6 may depend on a hoo
   - **New versions:** 12 of 15 lanes now run 2.1.290/2.1.291, which the corpus lacked, and spec §8.1 lets no
     contract depend on a field until every version the fleet runs is measured. So this round captures both,
     stopping at the versions installed when the capture starts. The 2.1.280/2.1.281 fixtures stay as history.
+- **2026-10-06 — fix round 2's wave-done verified (mail 3729).** The branch, the remote and #284 are all at
+  `3efb0ac37`, and the server accepted the fingerprint.
+  - All 18 rulings landed. 2.1.290 and 2.1.291 were captured with no rig adaptation: 9 versions, 126 of 126 cells
+    measured, every lane covered.
+  - The block 4058–4067 is fully defined.
+  - The worker's per-task review caught a consequence of my F2 ruling. The four workflow scenarios carried an
+    `answerDialog` for a dialog that never appears (Workflow is granted by `permissions.allow`), and the new
+    failure arm would have marked every workflow capture unmeasured. The worker replaced the step with an
+    equal sleep and pinned that with a data-derived row. Accepted, subject to review 304.
 - **2026-10-05 — the parent incarnation field is already in the tree** (spec §5.1, §8.1 item 10): `$REG/<id>.generation`
   (D-2605) is never rewritten once present. The hook also sees it as `CCRC_SESSION_GENERATION`, but ccd does not set
   that on every spawn path, so later waves read the file. Wave 1 records this from source. **Corrected after review
