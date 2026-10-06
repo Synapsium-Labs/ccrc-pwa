@@ -484,6 +484,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 | `ccd-telemetry-keepalive.timer` | fleet, both | 15 min | one minimal turn on an idle measured account (below) | `~/.ccrc/keepalive-paused` |
 | `ccrc-models.timer` | fleet, both | 1 h | `ccrc models refresh --all`: every lane's model catalogue | — |
 | `ccd-tmp-sweep.timer` | fleet, both | 1 h | reaps Claude Code's per-uid temp dir | `~/.ccrc/tmp-sweep-paused` |
+| `ccd-scope-sweep.timer` | fleet, both | 60 s | records every dead ccd pane scope; stops an inert one only when armed (below) | `~/.cc-sessions/scope-sweep-paused` |
 | `ccd-usage-sweep.timer` | fleet, both | 4 h | per-account usage totals from transcripts | `~/.ccrc/usage-sweep-paused` |
 | `ccrc-codex-usage@<id>.timer` | fleet, both | 15 min | one per `codex` lane: that lane's Codex usage into `~/.cc-limits` | — |
 
@@ -4891,6 +4892,46 @@ the journal (`journalctl --user -u ccd-tmp-sweep.service`). `ccd-tmp-sweep --dry
 pass would remove and removes nothing; `touch ~/.ccrc/tmp-sweep-paused` short-circuits every pass
 until removed. `ccrc doctor`'s `services` check warns when the timer is installed and stopped.
 
+### Pane-scope sweep (ccd-scope-sweep)
+
+Every ccd pane runs in its own transient `tmux-spawn-<uuid>.scope` under the session slice, and its
+processes stay there after the pane is gone: on 2026-09-23 twelve such scopes held 32 processes and
+1.32 GB, a 27-day-old DynamoDB Local server among them. `ccd-scope-sweep`, driven by its own
+`ccd-scope-sweep.timer` (`OnUnitActiveSec=60s`, beside `ccd-cap-scopes.timer` and never inside it), reads
+only `tmux-spawn-*.scope` units in the session slice whose `Description` parses as `tmux child pane <pid>
+launched by process <pid>` — ccd's own `ccrc-tmux-server.scope` and every other scope are outside it — and
+takes every value from `systemctl --user show`, never from a built cgroup path. A scope is **dead** when none
+of its processes is a live pane of the server its `Description` names, and **ccd's** when that server is
+ccd's current one or no longer runs (checked by pid, `comm` and a start earlier than the scope's, so a
+recycled pid is reported, never trusted). A scope of another live tmux server is never touched.
+
+A dead ccd scope passes as **inert** only when it was first seen dead six hours ago or more, its CPU has not
+moved since, no process in it started in the last six hours, none holds a TCP or UDP socket or a listening
+Unix socket, and none is the parent of a process in another cgroup (and no live handoff record names one of
+its processes: none exists yet). A value it cannot measure — a process in another network namespace, a
+process on the box whose parent cannot be read, a tmux that does not answer for a scope whose server still
+runs — skips the scope for that tick, its previous line carried; a scope seen live starts its clock again.
+So is a scope whose cgroup holds any child cgroup, or whose cgroup directory cannot be read and searched: a stop
+kills the whole cgroup subtree and the predicates read only the scope's own `cgroup.procs`, so such a scope is
+carried, never stopped (`scope-sweep-child-cgroups-are-unmeasurable`); a record's `first=` or `cpu0=` outside the
+bounds the sweep writes is not believed, and the clock starts again.
+The clock is boot-relative (`/proc/uptime`), so a wall-clock step moves no stop. **The stop ships
+shadowed:** an inert scope is recorded `would-stop`, and `systemctl --user stop --no-block` is issued only
+while `~/.cc-sessions/scope-sweep-live` exists — nothing writes that file; the operator touches it after
+reading the shadow verdicts. Armed, one tick stops at most three scopes and records the rest `held`.
+`~/.cc-sessions/scope-sweep-paused` stops everything, the shadow record included.
+
+Its verdicts live in `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`, rewritten every tick (a reboot empties it,
+which restarts every clock): one `dead` line per dead ccd scope and one `old` line per process older than a
+day in a live pane scope, other than the pane's own and its Claude Code's MCP servers. `ccrc doctor`'s
+`scope-sweep` check reads that record and never re-derives it: it lists every dead scope — how long dead,
+the scope's own age and its oldest process's, its pids, memory, sockets and verdict — and every such
+long-lived process, warns when the record is stale, and SKIPs while the sweep is paused.
+`deploy/measure-continuity.py --stage 6` counts the OOM stops of pane scopes whose session had been idle 30
+minutes or more with a live background shell — the pressure reap's own class — beside every pane-scope OOM
+stop (the week after the sweep's deploy is its baseline), and reads off the record how many inert scopes
+have been dead a day or more.
+
 ### Memory guardrails (Linux)
 
 Three cgroup layers, shipped as drop-ins under `deploy/systemd/` plus the `ccd-cap-scopes` enforcer (Linux
@@ -4985,7 +5026,7 @@ you need to reason about one.*
   installer with its default noise list; `ccrc-api`, the closed client
   sessions reach the coordination API through; the timer-driven helpers
   (`ccd-cap-scopes`, `ccd-pool-sync`, `ccd-update-sync`, `ccd-graph-sweep`,
-  `ccd-tmp-sweep`, `ccd-usage-sweep`, `ccd-account-health`,
+  `ccd-tmp-sweep`, `ccd-scope-sweep`, `ccd-usage-sweep`, `ccd-account-health`,
   `ccd-telemetry-keepalive`) and `ccrc-models-probe`, which
   `ccrc models refresh` runs per lane; `ccd-account-auth` (drives one account's
   sign-in and publishes its progress); the Codex-lane runtime (`ccrc-codex`,

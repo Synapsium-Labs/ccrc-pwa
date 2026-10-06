@@ -4545,7 +4545,7 @@ list them all; the coordinator issues the three past the block):
   read by `--stage 6` off the verdict record at the reading (the record keeps no history), `would-stop`/`held`/
   `stop-failed` lines first seen dead a day or more before its tick — and rev 8 says the target of 0 applies once the
   operator arms the stop. Rows 2.10–2.12.
-- `pressure-reap-variable-ships-after-baseline-b` — the coordinator's ruling B: spec §5.6 item 1 ships the variable
+- **D-4089** `pressure-reap-variable-ships-after-baseline-b` — the coordinator's ruling B: spec §5.6 item 1 ships the variable
   "from stage 6's first deploy", and §11 item 4 says it "ships first (§10)"; this wave — stage 6's first deploy — ships
   items 2 and 3 without it, so the reap is still on while baseline B is counted, and wave 4b ships it after that
   week. Rev 8 amends §5.6 item 1, §10's "first part" and §11 item 4 (Task 7). §9's pressure-kill metric goes with it
