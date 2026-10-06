@@ -8227,7 +8227,7 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  disposable `git archive` copy of the merged tree (`git write-tree` of the
  *  resolved index): exactly `origin/main`'s three maps plus `"model-default":
  *  "PASS"` in each — both codes 0, both refreshes equal, `codex` `SKIP` in all
- *  RE-MEASURED once more when doctor gained `scope-sweep` (session-continuity
+ *  three. RE-MEASURED once more when doctor gained `scope-sweep` (session-continuity
  *  wave 4): the three maps each gained `"scope-sweep": "SKIP"` (the fixture's
  *  runtime dir holds no verdict record) and nothing else moved.
  *  It is a golden: nothing re-measures
