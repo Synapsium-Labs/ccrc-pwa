@@ -12,6 +12,7 @@ import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { PoolSheet } from '../fleet/PoolSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
+import { HaltBanner } from '../fleet/HaltBanner';
 import { BuildLine } from '../fleet/BuildLine';
 import { useFleetHealth } from '../fleet/useFleetHealth';
 import { UpdateBanner } from '../fleet/UpdateBanner';
@@ -645,6 +646,9 @@ export function FleetScreen({
       </header>
 
       <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} />
+      {/* The halt, with each halting node's Ack in place (programme wave 14, R15(a)): above Update all, which it
+          disables while it stands. Re-polls on every Ack. */}
+      <HaltBanner updates={updates.view} onAcked={updates.reload} />
       <UpdateBanner updates={updates.view} health={fleetHealth} onMoved={updates.reload} />
 
       {/* The substrate fault, said once (spec §4) — derived from the SAME
