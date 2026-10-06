@@ -172,7 +172,9 @@ Reviewers: do not raise these.
    - Every config key but `header` is refused, and each key row carries a header-shaped value, so only the key can refuse it: `url`, `proxy`, `connect-to`, `resolve`, `output` and `config`.
    - So is every other spelling of the key: `Header`, `header=`, two spaces, a leading space, a comment line, a trailing comment, and a `url` directive smuggled ahead of a header on one line (T1-11, T1-12).
    - So is a header name outside `[A-Za-z0-9-]+` (T1-13), and a `"`, a `\` or a CR in the value (T1-7, T1-14).
-   - So is an `@file` header, a blank line, `-K <file>`, `--config -`, `-K-` and a second `-K -`.
+   - So is an `@file` header, a leading or interior blank line, `-K <file>`, `--config -`, `-K-` and a second `-K -`.
+   - A TRAILING blank line is not refused: `cfg=$(cat)` strips every trailing newline before the check runs, so `HDR` plus any number of trailing newlines passes, and a config of only newlines reads as the empty config. The real curl is re-fed the NORMALISED text, with exactly one trailing newline, not the caller's bytes (fix round 1, F2; pinned by the trailing-blank-lines row).
+   - The check fails closed: a non-empty config passes only when the rule-check's grep exits exactly 1. A grep that exits 2 or is not on PATH refuses (fix round 1, F1; T1-16).
    - The config is never logged (T1-8 reds 24).
    - The empty config passes. That is what notify.sh sends with no token, and it can name nothing (T1-9).
    - The `-K -` path runs the real curl after the proxy variables are unset (T1-15).
@@ -257,7 +259,7 @@ These are departures from the 07:07 ruling, or from what shipped text at `922141
   - **Reach:** `ccrcContainedEnv(…, { curl: 'loopback' })` installs the same front for `ccrc-update`, `ccrc-cli`, `ccrc-install-graphify` and `sweepFixture`'s users. A ccrc curl call that used these options would now pass where it was refused before. That is safe for containment, because none of them can move the connection off the URL the front checks: a method word, a body that names no file, a time bound, and request headers only. The docstring now lists them as the senders' options, not ccrc's. `ccrc-install.test.ts` plants a poisoned curl and is unaffected.
 - **D-4096** — *`ccd/ccrc-api` gains `set +x` on line 57, a secrets control the ruling's idiom did not name (Reading 4, ruled a departure 2026-10-06).*
   - **Ruled:** the ruling copies the `-K -` spelling `ccd-pool-sync` and `ccd-update-sync` ship, and says never print the token. It does not name their `set +x`.
-  - **Shipped:** line 57 was `set -uo pipefail`. An inherited `SHELLOPTS=xtrace` (or `bash -x`) traced `read_token` and the header line, printing the token 4 times on stderr, which the calling session reads (measured by two lenses).
+  - **Shipped:** line 57 was `set -uo pipefail`. An inherited `SHELLOPTS=xtrace` (or `bash -x`) traced `read_token` and the header line, printing the token on stderr, which the calling session reads. The count is 5 for the BASELINE on `runs list` under an inherited xtrace (`t=`, `[[ -n ]]`, `TOKEN=`, the `args=(… -H …)` line and the `curl … -H` line; measured by the review, `bash -x` and `SHELLOPTS=xtrace` alike). 4 is the T2-6 mutant's count: the new code with only `set +x` removed. The two lenses that first measured it reported 4, which is the mutant's figure, not the baseline's (review 294 F4).
   - **Now:**
     - line 57 is `set +x; set -uo pipefail`, folded in place so `ccrc-api:100`, `:122-126` and `:206-207` hold;
     - the xtrace case in `ccrc-api.test.ts` pins it (T2-6);
@@ -915,6 +917,9 @@ These are departures from the 07:07 ruling, or from what shipped text at `922141
   | T3-3 | curl reads the config | `"$BASE/api/notify" -K - \` → `"$BASE/api/notify" \` | notify-addr 2 of 21: "with a token: argv…" (`no \`-K -\` in argv`), and the with-token drive-through (`auth: undefined`). coord-token 1 of 8 |
   | T3-4 | `/api/notify` stays on the curl line | `curl -fsS -m 5 -X POST "$BASE/api/notify" -K - \` → `curl -fsS -m 5 -X POST -K - \`, plus a new line `  "$BASE/api/notify" \` | auth-passkey 1 of 1 (`the curl scan matched nothing — it has stopped looking: expected 1 to be greater than or equal to 2`). coord-token 1 of 8. notify-addr 0 of 21 |
   | T3-5 | the hook's stdin never reaches the config | `… "$tok"; } \|` → `… "$tok"; cat; } \|` | notify-addr 2 of 21: both hostile-stdin rows (`curl was handed the hook's stdin as config`). coord-token 1 of 8 |
+  | T1-16 | the config check fails closed (fix round 1) | `cfg_ok`'s two lines `printf … \| grep -qvE '…'` and `[ $? -eq 1 ]` → the one line `! printf … \| grep -qvE '…'` (the regex unchanged: the fold `ee5dd409` shipped) | 2 of 88: "refuses a config the rule admits when grep cannot give a verdict: a grep that exits 2" and "refuses a url directive when there is no grep on PATH at all" (both `-sS -K -: expected +0 to be 97`) |
+  | T1-17 | trailing newlines are stripped before the check (fix round 1) | `cfg=$(cat); have_cfg=1;` → `cfg=$(cat; echo x); cfg=${cfg%x}; cfg=${cfg%?}; have_cfg=1;` (exactly one trailing newline stripped) | 1 of 88: "passes a config with trailing blank lines, handing the real curl the NORMALISED text" (`expected 97 to be +0`) |
+  | T1-18 | the grep verdict is read (fix round 1) | `'  [ $? -eq 1 ]',` → `'  true',` | 25 of 88: T1-2's 23 config-subject rows plus the two fail-closed rows (`expected +0 to be 97`) |
 - [ ] **Step 7: Commit:** `fix(notify): notify.sh hands the box token to curl on stdin (-K -), never argv; no token still sends (wave 13, R16)`.
 
 ### Task 4: R20(a) — `ccrc-update.test.ts`'s fixtures are removed per test, not in one `afterAll`
@@ -1256,7 +1261,7 @@ These rulings win over any sentence above that disagrees with them. Do not resha
 - **Reading 3: as written.** No escaping and no refusal: the shipped token is hex, and a mangled config fails as a 401, never as a leak.
 - **Reading 4: `ccrc-api`'s `set +x` is a departure, so it spends reserve number 4096.**
   - Define it under Task 2, in the commit that first cites it.
-  - It is kept, because an inherited xtrace printed the token 4 times, measured.
+  - It is kept, because an inherited xtrace printed the token 4 times, measured. (5 at baseline; 4 is the T2-6 mutant's — see D-4096)
   - `notify.sh` gets no `set +x`, as written.
 - **Reading 5: as written.** `notify.sh` always passes `-K -`; only the header line is conditional.
 - **Reading 6: accept the shared widening, and keep D-4095.** No admitted option can move the connection, and every refused variant keeps its row. Do not add a `{ senders: true }` parameter.
@@ -1264,3 +1269,31 @@ These rulings win over any sentence above that disagrees with them. Do not resha
 - **Reading 8: as written.**
 - **Reading 9: accept.** The near-full CI selection is the price of fixing the hook in the one module that sees every home. The full run arbitrates.
 
+
+## Fix round 1 (2026-10-06): review 294's F1, F2 and F4
+
+The coordinator ruled F1 into the bar's class 3 and gave the wave its one fix round. No deviation number is spent: D-4095's "Now" already says the `-K -` config "takes zero or more lines matching" the rule and that "everything else stays refused", and this round brings the code to that text. No reserve number is taken.
+
+**What changed** (three files: `server/test/containedTools.ts`, `server/test/ccrc-containment.test.ts`, this plan; `ccd/ccrc-api` and `deploy/notify.sh` are untouched):
+- **F1.** `cfg_ok` ran `! printf … | grep -qvE '…'`, so a grep that exited 2 (error) or 127 (not on PATH) counted as a pass and the config reached the real curl. It is now `printf … | grep -qvE '…'` followed by `[ $? -eq 1 ]`: a non-empty config passes only when grep exits exactly 1 (no line outside the rule). 0 (a line outside the rule), 2 and 127 all refuse. The regex is byte-identical.
+- **F2.** The docstring's PASSES bullet, the inline comment above `'cfg=; have_cfg=',` and Review Focus 3 now say what the front does with blank lines: `cfg=$(cat)` strips every trailing newline before the check, so a leading or interior blank line is refused, a trailing one passes, a config of only newlines is the empty config, and the real curl is re-fed the NORMALISED text (one trailing newline). The behaviour is unchanged: it carries no directive.
+- **F4.** D-4096's "Shipped" clause gives both counts: 5 for the baseline under an inherited xtrace, 4 for the T2-6 mutant. "Readings" (Reading 4) and the coordinator's ruling still quote the earlier "4 times"; they record what was said then and are left as written.
+
+**The audit** (every tool status the generated front's verdict rests on):
+- `cfg_ok`'s grep: FOLDED through `!`. FIXED (above), pinned by two rows, T1-16 and T1-18.
+- `allowed()`: `[ -f "$allow" ] && grep -qx "$port" "$allow"`. Closed already: the function returns grep's own status, success only on 0, and every caller is `allowed … || refuse`, so 1, 2 and 127 all refuse. Measured too: a grep that is absent or exits 2 refuses a listed URL.
+- `allowed()`'s `[ -f ]`, and every other `[ … ]`, `case`, `${…%…}` in the script: shell builtins, no external status.
+- `cfg=$(cat)`: cat's status is ignored. NOT changed, deliberately: the text the check sees is exactly the text re-fed to the real curl, so a read that fails part-way checks and feeds the same prefix, and a missing `cat` gives an empty config, which can name nothing. And adding `|| refuse` would refuse an input that passes today with the tools present: with stdin CLOSED (`curl -sS -K - <url> <&-`) `cat` exits 1 and the front passes it as an empty config (measured at `ee5dd409`). The hard constraint forbids that, so no pin is feasible.
+- `refuse`'s `printf >> "$HOME/curl-poison"`: closed already. `exit 97` follows unconditionally, so a failed log write still refuses.
+- `url_ok`'s record-pass `printf >> curl-front-passed`: it runs only after the check pass has accepted every argument, and its status decides nothing.
+- The re-feed `{ …printf; } | real -q "$@"; exit $?` and the final `exec`: the status is curl's own, passed through, not a verdict.
+
+**The new rows** (all in the front's describe, beside the R16 rows; each carries NO URL argument, so `allowed()` cannot refuse first and mask `cfg_ok`):
+- a grep stub that exits 2, first on the row's PATH, on `HDR`: exit 97, the fake curl not run, `curl-poison` holding the argv record and not the config, `curl-front-passed` empty;
+- a PATH with `cat` only (a dir of one symlink) and NO grep, `/usr/bin:/bin` off it, on `url = "http://203.0.113.9/x"`: the same expectations;
+- a pass row on `HDR + '\n\n'`: exit 0, the real curl run with `-q` first and the argv unchanged, `fakeStdin()` equal to `HDR`.
+Red first, measured at `ee5dd409`'s front: the two F1 rows red (`expected +0 to be 97`), the F2 row green.
+
+**Counts.** `ccrc-containment` whole: 88 (85 + 3), equal to `vitest list`. The front's describe: 74 (71 + 3). `ccrc-api -t "R16"`: 7. `notify-addr -t "R16"`: 6. The earlier counts in this plan stand; they record the original tasks.
+
+**Mutation rows** (T1-16 to T1-18, after T3-5's row above): T1-16 restores the fold and reds exactly the two F1 rows; T1-17 reds exactly the F2 row; T1-18 reds 25. The 15 T1 mutation strings (T1-1 to T1-15) apply verbatim to the new code. Their red sets are unchanged except the rows the new cases join: T1-2 25 of 74 (its 23 plus the two F1 rows, which never reach a check), T1-6 6 (plus the F2 row), T1-8 26 (the two F1 rows assert the config is absent from the log), T1-10 32 (its 29 plus all three new rows).

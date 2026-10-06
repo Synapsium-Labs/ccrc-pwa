@@ -67,9 +67,13 @@ export function plantPoison(bin: string, name: string): void {
  *    with `@` (no file read); and `-K -` exactly, whose stdin config must be `header = "<name>: <value>"` lines only,
  *    each line starting `header = "`, the name `[A-Za-z0-9-]+`, the value holding no `"`, no `\` and no control
  *    character; an EMPTY config passes too (notify.sh sends one when it has no token). Any other key (`url`, `proxy`,
- *    `connect-to`, `resolve`, `output`, `config`, …), another spelling of the key, an `@file` header, a blank or
- *    comment line, a second `-K -`, `-K <file>` and `--config` are refused. The config is read once and handed to the
- *    real curl on its stdin; it is never written to a log. Every `ccrcContainedEnv(…, { curl: 'loopback' })` case runs
+ *    `connect-to`, `resolve`, `output`, `config`, …), another spelling of the key, an `@file` header, a leading or
+ *    interior blank line, a comment line, a second `-K -`, `-K <file>` and `--config` are refused. The config is read
+ *    once with `cfg=$(cat)`, which strips EVERY trailing newline before the check runs: so trailing blank lines pass, a
+ *    config of only newlines reads as the empty config, and the real curl gets that NORMALISED text on its stdin (one
+ *    trailing newline), not the caller's bytes. The check FAILS CLOSED (wave 13 fix round 1): a non-empty config passes
+ *    only when its grep exits exactly 1, so a grep that errors or is not on PATH refuses, as a line outside the rule
+ *    does. The config is never written to a log. Every `ccrcContainedEnv(…, { curl: 'loopback' })` case runs
  *    behind this same front, so a ccrc call using these would pass too: none of them can move the connection off the
  *    URL this scan reads (a method word, a body that names no file, a time bound, request headers).
  *  - EVERY URL — each remaining positional argument, and the value of `--url` or `--url=` — must be
@@ -115,12 +119,20 @@ export function loopbackCurlFront(realCurl: string): string {
     '}',
     // `-K -` (wave 13, R16): stdin is read ONCE, in the check pass, and must be nothing but `header = "<name>: <value>"`
     // lines, anchored at the line start — no other key, no `@file`, no quote, backslash or control character in the
-    // value. An EMPTY config passes (notify.sh with no token sends one; it can name nothing), and a second `-K -` is
-    // refused. The config is never logged: a refusal records argv only.
+    // value. `cfg=$(cat)` strips every TRAILING newline first, so a trailing blank line passes and the real curl is
+    // re-fed the NORMALISED text (one trailing newline); a leading or interior blank line is refused, and a config of
+    // only newlines reads as the empty config. An EMPTY config passes (notify.sh with no token sends one; it can name
+    // nothing), and a second `-K -` is refused. The config is never logged: a refusal records argv only.
+    // `cat`'s own status is deliberately not a verdict: what the check sees is exactly what is re-fed, so a read that
+    // fails part-way checks and feeds the same prefix (a closed stdin is an empty config, and passes).
     'cfg=; have_cfg=',
+    // FAILS CLOSED (wave 13 fix round 1, review 294 F1): grep -qv exits 1 only when NO line falls outside the rule, and
+    // that is the one status that passes. 0 is a line outside the rule; 2 (an error) and 127 (no grep on PATH) are a
+    // check that gave no verdict. Never fold grep's status through `!`: that would pass 2 and 127.
     'cfg_ok() {',
     '  [ -n "$cfg" ] || return 0',
-    '  ! printf \'%s\\n\' "$cfg" | grep -qvE \'^header = "[A-Za-z0-9-]+: [^"\\\\[:cntrl:]]*"$\'',
+    '  printf \'%s\\n\' "$cfg" | grep -qvE \'^header = "[A-Za-z0-9-]+: [^"\\\\[:cntrl:]]*"$\'',
+    '  [ $? -eq 1 ]',
     '}',
     'scan() {',
     '  while [ $# -gt 0 ]; do',

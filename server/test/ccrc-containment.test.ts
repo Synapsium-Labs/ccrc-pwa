@@ -159,6 +159,7 @@ describe('the loopback curl front parses argv — an option it does not allowlis
   const setup = (extraEnv: NodeJS.ProcessEnv = {}): {
     run: (args: string[], input?: string) => number; fakeArgv: () => string[]; fakeStdin: () => string;
     fakeProxyEnv: () => string; poison: () => string; passed: () => string;
+    home: string; bin: string; env: NodeJS.ProcessEnv;
   } => {
     const home = mkTmp('contain-h2-');
     const bin = join(home, 'bin');
@@ -173,6 +174,7 @@ describe('the loopback curl front parses argv — an option it does not allowlis
     const env: NodeJS.ProcessEnv = { HOME: home, PATH: `${bin}:/usr/bin:/bin`, ...extraEnv };
     const read = (f: string): string => (existsSync(join(home, f)) ? readFileSync(join(home, f), 'utf8') : '');
     return {
+      home, bin, env,
       run: (args, input = '') => spawnSync('/bin/sh', ['-c', 'exec curl "$@"', 'curl', ...args],
         { env, encoding: 'utf8', input }).status ?? -1,
       fakeArgv: () => read('fake-curl-argv').split('\n').filter(Boolean),
@@ -313,6 +315,51 @@ describe('the loopback curl front parses argv — an option it does not allowlis
       expect(t.poison()).toBe('');
     });
   }
+  // The front reads the config with `cfg=$(cat)`, which strips EVERY trailing newline before the check runs (wave 13 fix
+  // round 1, review 294 F2). So trailing blank lines pass, and the real curl gets the NORMALISED text (one trailing
+  // newline), not the caller's bytes. A leading or interior blank line is refused (the `a blank line inside the config`
+  // row above). An input of only `\n` reads as the empty config, which "passes notify.sh's shape with no token" already
+  // covers; it needs no row of its own.
+  it('passes a config with trailing blank lines, handing the real curl the NORMALISED text: one trailing newline (wave 13 fix round 1, F2)', () => {
+    const t = setup();
+    const args = ['-sS', '-K', '-', ok];
+    expect(t.run(args, HDR + '\n\n'), args.join(' ')).toBe(0);
+    expect(t.fakeArgv()[0], 'the (fake) real curl ran with -q first and the argv unchanged').toBe(`-q ${args.join(' ')}`);
+    expect(t.fakeStdin(), 'the config reached the real curl normalised: trailing newlines stripped, one put back').toBe(HDR);
+    expect(t.poison()).toBe('');
+  });
+  // The config check fails CLOSED (wave 13 fix round 1, review 294 F1): it passes only when the rule-check's grep exits
+  // exactly 1 (no line outside the rule). Both rows carry NO URL argument, so `allowed()` (which also calls grep, and
+  // refuses first on its own) cannot mask the check: the refusal is `cfg_ok`'s or it is not a refusal.
+  it('refuses a config the rule admits when grep cannot give a verdict: a grep that exits 2 (fix round 1, F1)', () => {
+    const t = setup();
+    writeFileSync(join(t.bin, 'grep'), '#!/bin/sh\nexit 2\n', { mode: 0o755 });
+    const args = ['-sS', '-K', '-'];
+    expect(t.run(args, HDR), args.join(' ')).toBe(97);
+    expect(t.fakeArgv(), 'the (fake) real curl must not have run').toEqual([]);
+    expect(t.poison()).toContain(args.join(' '));
+    expect(t.poison(), 'the config reached the refusal log').not.toContain(HDR.trim());
+    expect(t.passed()).toBe('');
+  });
+  it('refuses a url directive when there is no grep on PATH at all: a check that cannot run is not a pass (fix round 1, F1)', () => {
+    const t = setup();
+    // On the refusal path the front calls one external tool besides grep: `cat` (the config read). Everything else it
+    // uses there is a shell builtin, and the shebang and the harness's `/bin/sh` are absolute. No grep, and
+    // /usr/bin:/bin are OFF this PATH. `cat` is resolved on the host (`/usr/bin/cat` on Linux, `/bin/cat` on macOS).
+    const cat = resolve(process.env, 'cat');
+    expect(cat, 'no cat on the host PATH to link').not.toBe('');
+    const tools = join(t.home, 'tools-no-grep');
+    mkdirSync(tools, { recursive: true });
+    symlinkSync(cat, join(tools, 'cat'));
+    t.env['PATH'] = `${t.bin}:${tools}`;
+    expect(spawnSync('/bin/sh', ['-c', 'command -v grep'], { env: t.env, encoding: 'utf8' }).stdout.trim(), 'a grep is on the row\'s PATH').toBe('');
+    const args = ['-sS', '-K', '-'];
+    expect(t.run(args, 'url = "http://203.0.113.9/x"\n'), args.join(' ')).toBe(97);
+    expect(t.fakeArgv(), 'the (fake) real curl must not have run').toEqual([]);
+    expect(t.poison()).toContain(args.join(' '));
+    expect(t.poison(), 'the config reached the refusal log').not.toContain('203.0.113.9');
+    expect(t.passed()).toBe('');
+  });
   it('without -K -, the real curl gets the caller\'s stdin untouched: the front reads nothing (wave 13, R16)', () => {
     const t = setup();
     expect(t.run(['-sS', ok], 'not a config\n')).toBe(0);
