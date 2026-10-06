@@ -5821,10 +5821,10 @@ export function isChildReclaimWord(v: unknown): v is ChildReclaimWord {
  * where the server had none to give. `at` is epoch ms, and its source depends
  * on the word:
  *   • a word read off the lifecycle mirror takes the journal event's own `at`
- *     (ccd's clock), and is null when the line carried none;
- *   • a defer the sweep is holding takes the sweep's FIRST deferral of any
- *     kind (the server's clock), never the presence-only clock the defer
- *     ceiling runs on;
+ *     (ccd's clock), and is null when the line carried none. A failure run
+ *     past the ceiling takes the `at` of the run's first placed line instead;
+ *   • a defer the sweep is holding takes the sweep's FIRST deferral of any kind
+ *     (the server's clock), never the presence-only clock of the defer ceiling;
  *   • every other word has `at: null`.
  * It is NEVER `ingestedAt`, which is the mirror's own clock and never an event
  * time (D8).

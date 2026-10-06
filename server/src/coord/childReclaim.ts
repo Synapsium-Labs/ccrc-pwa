@@ -322,7 +322,13 @@ export interface ChildReclaimDeps {
   io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState;
   presence?: Pick<Presence, 'isVisible'>;
   notifyLog?: NotifyLog;
-  /** The clock the feed row's wait is rendered against (spec §5.7). Absent: `Date.now`. */
+  /** The wall clock, epoch ms. Absent: `Date.now`. It renders the feed row's wait (spec §5.7), and
+   *  it feeds two DECISIONS: it is the `nowMs` of the coordination fence (`childReclaimHasCoordinated`,
+   *  spec §1 rule 4, §5.6) at the executor's step 2a and at `releaseRetiredChildHold`'s step 5, the
+   *  instant at which the workspace's current generation, and so its birth, is placed. A clock that
+   *  reads earlier than every `create` (a monotonic one, say) or reads NaN places no birth. Any
+   *  coordinator claim on the session then keeps the child, an earlier workspace's included: step
+   *  2a defers and step 5 answers `changed`. Such a clock fails shut. */
   now?: () => number;
 }
 
