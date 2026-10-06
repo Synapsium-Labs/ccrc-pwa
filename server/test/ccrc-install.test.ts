@@ -8168,7 +8168,10 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  `origin/main` (`$SCRATCH/t10-base`). RE-MEASURED when doctor gained its
  *  `timeout` check, by Step 3's case on a disposable copy of that tree: the
  *  three maps each gained `"timeout": "PASS"` and nothing else moved — every
- *  other class, both codes and both refreshes equal. It is a golden: nothing re-measures
+ *  other class, both codes and both refreshes equal. RE-MEASURED again when
+ *  doctor gained `scope-sweep` (session-continuity wave 4): the three maps each
+ *  gained `"scope-sweep": "SKIP"` (the fixture's runtime dir holds no verdict
+ *  record) and nothing else moved. It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
  *  base, never hand-edited (it held on the final fix wave's merge of
@@ -8216,6 +8219,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "python3": "PASS",
         "rc": "PASS",
         "routing": "PASS",
+        "scope-sweep": "SKIP",
         "scopes": "SKIP",
         "services": "PASS",
         "skills": "PASS",
@@ -8261,6 +8265,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "python3": "PASS",
         "rc": "PASS",
         "routing": "PASS",
+        "scope-sweep": "SKIP",
         "scopes": "SKIP",
         "services": "PASS",
         "skills": "PASS",
@@ -8376,6 +8381,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "python3": "PASS",
       "rc": "PASS",
       "routing": "PASS",
+      "scope-sweep": "SKIP",
       "scopes": "SKIP",
       "services": "PASS",
       "skills": "PASS",

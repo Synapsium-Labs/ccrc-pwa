@@ -4527,7 +4527,7 @@ list them all; the coordinator issues the three past the block):
   scope), declares the record in `shared/lifecycle.ts` and the binary in `TOOLCHAIN_EXECUTABLES`, takes no `flock` (a
   oneshot never runs twice at once; a manual run beside the timer can only issue a stop twice), and sets
   `TimeoutStartSec=45`, `MemoryMax=256M`, `OnActiveSec=2min`. Rows 4.1–4.13.
-- `doctor-scope-sweep-reads-record-and-known` — §5.6 has doctor read the record; the plan also puts the timer in
+- **D-4020** `doctor-scope-sweep-reads-record-and-known` — §5.6 has doctor read the record; the plan also puts the timer in
   `services`' `known` (a reboot empties the record, so only `known` sees a timer that never ran again), makes a missing
   record a SKIP (a fresh install's first tick is two minutes away) and a paused sweep a SKIP (never a stale WARN),
   warns on a record older than 300 s, prints each dead scope's age on the record's own clock with the scope's and its
