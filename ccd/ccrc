@@ -14239,6 +14239,12 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
     # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name, or the
     # orphan scan in `_inst_wrappers` (every role) would report it.
     _inst_atomic "$tree/ccd/ccd-tmp-sweep" "$bin/ccd-tmp-sweep" 755
+    # The pane-scope sweep (session-continuity wave 4; its own header has the
+    # dead-scope census), on the temp-dir reaper's exact terms — every role,
+    # systemd only: its only runner is a timer, and it reads /proc and cgroups.
+    # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name, or the
+    # orphan scan in `_inst_wrappers` (every role) would report it.
+    _inst_atomic "$tree/ccd/ccd-scope-sweep" "$bin/ccd-scope-sweep" 755
     # The account-health probe, on the sweep's exact terms: every ROLE, but not
     # Darwin — its only runner is a systemd timer, and a binary whose runner
     # never fires would be the same no-op cap-scopes' own comment warns about.
@@ -14261,9 +14267,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-pool-sync, ccd-update-sync${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-pool-sync, ccd-update-sync${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
   fi
 }
 
@@ -14848,6 +14854,11 @@ _inst_units() {
     # server box runs none — there is nothing on it for the reaper to collect.
     _inst_atomic "$tree/deploy/systemd/ccd-tmp-sweep.service" "$dir/ccd-tmp-sweep.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-tmp-sweep.timer" "$dir/ccd-tmp-sweep.timer" 644
+    # The pane-scope sweep's pair, role-gated for its own reason rather than by
+    # imitation: it reads the pane scopes Claude Code sessions run in, and a
+    # server box runs none — there is no pane scope on it to sweep.
+    _inst_atomic "$tree/deploy/systemd/ccd-scope-sweep.service" "$dir/ccd-scope-sweep.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-scope-sweep.timer" "$dir/ccd-scope-sweep.timer" 644
     # The account-health probe's pair, role-gated for its own reason rather than
     # by imitation: a server box holds no wrapper HOMEs and no ~/.cc-secrets, so
     # there is no credential on it to measure.
@@ -15291,6 +15302,10 @@ _inst_enable() {
   # temp dir to reap), and the same DEGRADE-rather-than-die idiom: reclaiming
   # disk is housekeeping, not the guardrail `ccd-cap-scopes.timer` is.
   [ "$INST_ROLE" = server ] || _inst_enable_timer tmp-sweep ccd-tmp-sweep.timer
+  # Same gate as its unit files (a server box runs no pane scopes), and the same
+  # DEGRADE-rather-than-die idiom: collecting dead scopes is housekeeping — and
+  # shadowed until the operator arms it — not the guardrail `ccd-cap-scopes.timer` is.
+  [ "$INST_ROLE" = server ] || _inst_enable_timer scope-sweep ccd-scope-sweep.timer
   # Same gate, same DEGRADE-rather-than-die idiom as the sweep above it: a
   # health probe is a reading, not the guardrail `ccd-cap-scopes.timer` is, so a
   # systemd that will not take this one timer must not turn an otherwise
@@ -22962,6 +22977,7 @@ _uninst_units() {
       ccd-graph-sweep.timer ccd-graph-sweep.service \
       ccd-usage-sweep.timer ccd-usage-sweep.service \
       ccd-tmp-sweep.timer ccd-tmp-sweep.service \
+      ccd-scope-sweep.timer ccd-scope-sweep.service \
       ccd-account-health.timer ccd-account-health.service \
       ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service \
       ccrc-models.timer ccrc-models.service \
@@ -22988,6 +23004,7 @@ _uninst_units() {
     "$dir/ccd-graph-sweep.service" "$dir/ccd-graph-sweep.timer" \
     "$dir/ccd-usage-sweep.service" "$dir/ccd-usage-sweep.timer" \
     "$dir/ccd-tmp-sweep.service" "$dir/ccd-tmp-sweep.timer" \
+    "$dir/ccd-scope-sweep.service" "$dir/ccd-scope-sweep.timer" \
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \
     "$dir/ccrc-models.service" "$dir/ccrc-models.timer" \
@@ -23322,7 +23339,7 @@ _uninst_wrappers() {
     # is another repository's unmarked launcher, which the marker test below
     # already keeps, and nothing here places it (D-3478). `ccd-update-sync`
     # joins on the same terms as the timer-bound binary from programme wave 4.
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex) continue ;; esac
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -23493,7 +23510,7 @@ _uninst_tree_bins() {
   # strands an orphan on PATH for ever. That covers `ccd-cap-scopes` (spec §7
   # predates it), `ccd-graph-sweep` (graphify Task 10/fix-round F2),
   # `ccd-account-health`, `ccd-telemetry-keepalive`, `ccd-account-auth`,
-  # `ccd-tmp-sweep` (the temp-dir reaper), `ccd-pool-sync` (account-pool-membership wave 1, Task 4 fix round 1 (F4):
+  # `ccd-tmp-sweep` (the temp-dir reaper), `ccd-scope-sweep` (the pane-scope sweep), `ccd-pool-sync` (account-pool-membership wave 1, Task 4 fix round 1 (F4):
   # `_inst_bins` gained it on the non-Darwin arm, and `_uninst_units` above
   # gained its unit pair in the same round — a binary whose units this verb
   # removes and whose file it leaves is the exact orphan this rule exists to
@@ -23531,7 +23548,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-graph-sweep" "$HOME/.local/bin/ccd-account-health" \
     "$HOME/.local/bin/ccd-telemetry-keepalive" "$HOME/.local/bin/ccd-account-auth" \
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
-    "$HOME/.local/bin/ccd-tmp-sweep" "$HOME/.local/bin/ccd-pool-sync" \
+    "$HOME/.local/bin/ccd-tmp-sweep" "$HOME/.local/bin/ccd-scope-sweep" "$HOME/.local/bin/ccd-pool-sync" \
     "$HOME/.local/bin/ccd-update-sync" \
     "$HOME/.local/bin/ccgpt-proxy.py" "$HOME/.local/bin/ccgpt-usage.py" \
     "$HOME/.local/bin/ccgpt-runtime" "$HOME/.local/bin/ccrc-codex" \
@@ -23542,7 +23559,7 @@ _uninst_tree_bins() {
   rm -f -- "$HOME/.local/libexec/ccrc/ccd" \
     || _ccrc_die "removing ccd's body from \$HOME/.local/libexec/ccrc failed"
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an

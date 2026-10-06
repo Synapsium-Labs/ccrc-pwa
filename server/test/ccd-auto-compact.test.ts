@@ -37,7 +37,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE, BOUNDED } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-auto-compact-'); });
@@ -852,7 +852,9 @@ describe('_transcript_last_turn_ts (D-3102, D-3104)', () => {
   });
   it('a FIFO: rc 2 without blocking — `-r` alone would open it and wait for ever (D-2370)', () => {
     const f = path.join(h.home, 'fifo.jsonl'); execFileSync('mkfifo', [f]);
-    expect(h.sh(`perl -e 'alarm shift; exec @ARGV' 5 bash -c "$(declare -f _transcript_last_turn_ts); COMPACT_TURN_TAIL_LINES=$COMPACT_TURN_TAIL_LINES; _transcript_last_turn_ts \\"\\$1\\"" _ ${JSON.stringify(f)} >/dev/null 2>&1; echo "rc=$?"`))
+    // BOUNDED kills the whole process group on its alarm: a `tail` forked at a FIFO whose guard a mutation
+    // removed dies with bash instead of outliving the run (session-continuity spec §5.6 item 3).
+    expect(h.sh(`${BOUNDED} 5 bash -c "$(declare -f _transcript_last_turn_ts); COMPACT_TURN_TAIL_LINES=$COMPACT_TURN_TAIL_LINES; _transcript_last_turn_ts \\"\\$1\\"" _ ${JSON.stringify(f)} >/dev/null 2>&1; echo "rc=$?"`))
       .toBe('rc=2');
   });
   it('its window is its OWN, not the redrive detector’s', () => {
