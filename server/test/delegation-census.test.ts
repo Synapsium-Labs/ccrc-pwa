@@ -246,7 +246,7 @@ describe('delegation-census (read-only, path-free)', () => {
     const LOOSE_NAME = 'worktree-SENTINEL-refname';
     function refWorld(): { w: ReturnType<typeof mini>; out: { records: Array<{ movedFromBase: unknown }>; totals: Record<string, number> }; stdout: string; at: (n: string) => unknown } {
       const base = { CLAUDE_BASE: SHA_A };
-      const recs = [
+      const recs: Parameters<typeof mini>[0] = [
         { name: 'r-loose-eq', files: { HEAD: `ref: refs/heads/${LOOSE_NAME}\n`, ...base }, wt: 'wt-1' },
         { name: 'r-loose-ne', files: { HEAD: 'ref: refs/heads/worktree-two\n', ...base }, wt: 'wt-2' },
         { name: 'r-packed-eq', files: { HEAD: 'ref: refs/heads/worktree-pk\n', ...base }, wt: 'wt-3' },
