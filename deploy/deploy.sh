@@ -441,7 +441,7 @@ ACCOUNTS_JSON="${CCRC_ACCOUNTS_JSON:-deploy/accounts.default.json}"
 require_node() {
   command -v node >/dev/null 2>&1 || {
     echo "deploy: FAILED — no \`node\` on PATH on THIS machine (the one running deploy.sh)." >&2
-    echo "  deploy/gen-accounts.mjs projects the roster into bash and needs node >=22.13.0 locally;" >&2
+    echo "  deploy/gen-accounts.mjs projects the roster into bash and needs node >=22.16.0 locally;" >&2
     echo "  this is NOT a problem with $ACCOUNTS_JSON or with the roster on $BOX. Install node and re-run." >&2
     exit 1
   }
