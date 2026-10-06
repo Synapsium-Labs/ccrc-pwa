@@ -2,7 +2,7 @@
   "scenario": "wf-iso", "covers": ["Q1", "Q3", "Q6"],
   "steps": [
     {"waitReady": 60}, {"type": "dlg wf-iso"}, {"keys": ["Enter"]},
-    {"answerDialog": "Run a dynamic workflow", "timeoutS": 10},
+    {"sleep": 10},
     {"waitLabels": ["wf-i1-done", "wf-i2"], "timeoutS": 180}
   ],
   "settleS": 20,

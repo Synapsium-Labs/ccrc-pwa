@@ -460,18 +460,21 @@ describe.skipIf(!LINUX)('rig.sh wait_run_quiet (cleanup_run waits out a process 
     children.push(holder);
     await new Promise((r) => setTimeout(r, 200));
     // The harness times the call itself (F8): the holder finishes on its own whether or not anything waits for it, so the marker
-    // and `gone` alone cannot tell a wait that waited from one that returned at once.
-    const script = ['set -euo pipefail', rigText('procs_under', 'kill_if_under', 'pid_live', 'wait_run_quiet'), ': > "$GO"',
-      't0=$(date +%s%N)', 'wait_run_quiet "$ROOT" ""', 't1=$(date +%s%N)', 'echo "waited_ms=$(( (t1 - t0) / 1000000 ))"'].join('\n');
+    // and `gone` alone cannot tell a wait that waited from one that returned at once. The timer starts BEFORE the go file is raised (M1):
+    // the holder cannot exit sooner than two seconds after that file exists, so a wait that waited for it reads at least 2000 ms
+    // whatever the load did between the two lines.
+    const script = ['set -euo pipefail', rigText('procs_under', 'kill_if_under', 'pid_live', 'wait_run_quiet'),
+      't0=$(date +%s%N)', ': > "$GO"', 'wait_run_quiet "$ROOT" ""', 't1=$(date +%s%N)', 'echo "waited_ms=$(( (t1 - t0) / 1000000 ))"'].join('\n');
     // The bound (8 s) is far above the holder's lifetime (about 2 s): a wait that honours it returns when the holder is gone.
     const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { ...process.env, GO: go, ROOT: root, RUN_QUIET_S: '8' }, timeout: 60_000 });
     expect(r.status, r.stderr).toBe(0);
     expect(await gone(holder.pid!)).toBe(true);
     expect(fs.existsSync(mark), 'the process was killed before it could finish; the wait did not wait').toBe(true);
     expect(r.stderr).not.toContain('still hold run root');
-    // A LOWER bound, comfortably under the holder's two seconds: load only makes a wait longer, so it cannot redden this.
+    // A LOWER bound: a wait that waited reads at least 2000 ms, and load only makes it longer, so it cannot redden this. The 100 ms
+    // under that is slack for the wall clock `date` reads, not for load.
     const waited = Number(/^waited_ms=(\d+)$/m.exec(r.stdout)?.[1]);
-    expect(waited, `wait_run_quiet returned after ${waited} ms, before the holder (2 s) could have exited on its own: it did not wait`).toBeGreaterThanOrEqual(1500);
+    expect(waited, `wait_run_quiet returned after ${waited} ms, before the holder (2 s) could have exited on its own: it did not wait`).toBeGreaterThanOrEqual(1900);
   }, 60_000);
 
   describe('cleanup_run (F10c: it calls wait_run_quiet, and it never removes a root it could not measure)', () => {
@@ -1793,6 +1796,39 @@ describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
     expect(notes, 'one note').toHaveLength(1);
     expect(notes[0], 'and not the success one').not.toMatch(/^dialog answered/);
     expect(one(fixture({ notes, events: live })).cell).toMatchObject({ status: 'unmeasured', reason: notes[0] });
+  });
+
+  // The cost of that else arm, pinned (review C1). An answerDialog step is a promise that its dialog appears: one whose dialog never shows
+  // writes a failure note, and every later capture of its scenario builds unmeasured. Four wf-* scenarios once carried a step for a dialog
+  // the rig's `Workflow` grant never lets appear (44 of 44 committed workflow fixtures held no answered note). Derived from the committed
+  // scenarios and fixtures, over every version directory the corpus has: no list of versions or scenarios here, and the answered note is
+  // rig.sh's own `dialog answered: …` template filled with the step's own text.
+  it('a scenario carries an answerDialog step only if EVERY committed fixture of it holds that dialog\'s answered note, and interrupt-exit\'s step is answered in every version (C1)', () => {
+    const versions = fs.readdirSync(FIX).filter((n) => /^\d+\.\d+\.\d+$/.test(n) && fs.statSync(path.join(FIX, n)).isDirectory()).sort();
+    expect(versions.length, 'the corpus has version directories').toBeGreaterThan(0);
+    const template = outcomeTemplates.find((t) => t.startsWith('dialog answered: '));
+    expect(template, 'rig.sh writes a dialog note').toBeDefined();
+    const steps: Array<[string, string]> = [];   // [scenario, the dialog text its step waits for]
+    for (const f of fs.readdirSync(SCEN).filter((n) => n.endsWith('.json')).sort()) {
+      const s = JSON.parse(fs.readFileSync(path.join(SCEN, f), 'utf8')) as { steps: Array<Record<string, unknown>> };
+      for (const st of s.steps) if (typeof st.answerDialog === 'string') steps.push([f.replace(/\.json$/, ''), st.answerDialog]);
+    }
+    const unanswered: string[] = [];   // `<version>/<scenario>`: a fixture whose notes lack the step's answered note
+    const checked = new Map<string, number>();   // scenario -> fixtures read
+    for (const [scenario, text] of steps) {
+      const want = concreteNote(template as string, { dialog: text });
+      for (const v of versions) {
+        const file = path.join(FIX, v, `${scenario}.json`);
+        if (!fs.existsSync(file)) continue;
+        checked.set(scenario, (checked.get(scenario) ?? 0) + 1);
+        const notes = (JSON.parse(fs.readFileSync(file, 'utf8')) as { notes?: unknown }).notes;
+        if (!Array.isArray(notes) || !notes.includes(want)) unanswered.push(`${v}/${scenario}`);
+      }
+    }
+    expect(unanswered, 'a scenario whose answerDialog step was never answered in a committed fixture would build every capture of it unmeasured').toEqual([]);
+    // The converse, so the row cannot pass for want of steps or of fixtures: interrupt-exit has its step, and a fixture of it in every version.
+    expect(steps.filter(([s]) => s === 'interrupt-exit'), 'interrupt-exit answers one dialog').toHaveLength(1);
+    expect(checked.get('interrupt-exit'), 'and was read in every version directory').toBe(versions.length);
   });
 
   it('the scanner reads a quoted string inside a $(…), an escaped quote and the end of a call, and refuses a call that goes on', () => {

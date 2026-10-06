@@ -2,7 +2,7 @@
   "scenario": "wf-iso-resume", "covers": ["Q7"],
   "steps": [
     {"waitReady": 60}, {"type": "dlg wf-iso-resume"}, {"keys": ["Enter"]},
-    {"answerDialog": "Run a dynamic workflow", "timeoutS": 10},
+    {"sleep": 10},
     {"waitLabels": ["r1-hang", "r2"], "timeoutS": 180}, {"sleep": 5}, {"snapshot": "before-kill"},
     {"kill9": true}, {"sleep": 3}, {"relaunch": true}, {"waitReady": 60}, {"sleep": 30},
     {"probeLabels": ["r1-resumed"], "timeoutS": 120}

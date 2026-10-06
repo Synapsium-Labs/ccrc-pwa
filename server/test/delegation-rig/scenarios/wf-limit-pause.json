@@ -2,7 +2,7 @@
   "scenario": "wf-limit-pause", "covers": ["Q7"],
   "steps": [
     {"waitReady": 60}, {"type": "dlg wf-limit-pause"}, {"keys": ["Enter"]},
-    {"answerDialog": "Run a dynamic workflow", "timeoutS": 10},
+    {"sleep": 10},
     {"waitLabels": ["l1-limited"], "timeoutS": 120}, {"sleep": 70},
     {"probeLabels": ["l1-done"], "timeoutS": 180}
   ],
