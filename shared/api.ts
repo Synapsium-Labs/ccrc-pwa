@@ -3768,18 +3768,18 @@ export function isMarkerState(v: unknown): v is MarkerState {
   return typeof v === 'string' && (MARKER_STATES as readonly string[]).includes(v);
 }
 
-/** The sweep's words for a marked child that automatic reclamation will never
- *  take on its own (child-reclamation spec §5.9). Each ends only by a person's
- *  act, or by restoring the coordination database. Spelled ONCE, as the keys of
- *  a total table, and the runtime list is derived. The SERVER's sweep answers
- *  them and composes their sentences (`server/src/childReclaimSweep.ts`). The
- *  PWA renders sentences and never switches on a word. */
+/** The sweep's words for a marked child it keeps for a person (child-reclamation
+ *  spec §5.9): standing answers, read from records rather than a failed read, that
+ *  automatic reclamation never acts on while they stand. Spelled ONCE, as the keys
+ *  of a total table, and the runtime list is derived. The SERVER's sweep answers
+ *  them and composes their sentences (`server/src/childReclaimSweep.ts`, which
+ *  says what ends each). The PWA renders sentences and never switches on a word. */
 export type ChildReclaimKeptWord =
   | 'coordinating' | 'minting-run-absent' | 'minting-run-postdates-child'
-  | 'child-birth-unplaced' | 'reviewed-run-absent' | 'not-a-workspace';
+  | 'reviewed-run-absent' | 'not-a-workspace';
 const CHILD_RECLAIM_KEPT_WORD_TABLE: Readonly<Record<ChildReclaimKeptWord, true>> = {
   coordinating: true, 'minting-run-absent': true, 'minting-run-postdates-child': true,
-  'child-birth-unplaced': true, 'reviewed-run-absent': true, 'not-a-workspace': true,
+  'reviewed-run-absent': true, 'not-a-workspace': true,
 };
 export const CHILD_RECLAIM_KEPT_WORDS: readonly ChildReclaimKeptWord[] =
   Object.keys(CHILD_RECLAIM_KEPT_WORD_TABLE) as ChildReclaimKeptWord[];

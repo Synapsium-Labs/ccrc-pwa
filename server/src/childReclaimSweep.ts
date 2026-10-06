@@ -375,12 +375,12 @@ export interface ChildReclaimSweepInput {
   readonly nowMs: number;
 }
 
-/** Every reason the sweep leaves a marked child alone this pass. Twenty words: the six KEPT ones are
+/** Every reason the sweep leaves a marked child alone this pass. Twenty words: the five KEPT ones are
  *  the L0 word type (`ChildReclaimKeptWord`, which the attention list's kept arm carries), and the
  *  rest are the sweep's own. `CHILD_RECLAIM_SKIP` classes every one of them. */
 export type ChildReclaimSweepSkip =
   | ChildReclaimKeptWord
-  | 'not-a-child' | 'marker-unreadable' | 'identity-unmeasured'
+  | 'not-a-child' | 'marker-unreadable' | 'identity-unmeasured' | 'child-birth-unplaced'
   | 'held' | 'hold-unmeasured' | 'hold-retired' | 'terminal-refusal'
   | 'minting-run-unreadable' | 'minting-run-open' | 'dispatch-in-flight'
   | 'review-report-live' | 'reviewed-run-unreadable' | 'siblings-unreadable' | 'siblings-open';
@@ -422,13 +422,23 @@ export type ChildReclaimSkipRow =
  *  are the server's: the PWA renders what it is given and maps no word itself. Apostrophes are
  *  curly, as in `LC_REFUSAL_WORD`'s copy.
  *
- *  - `kept`: a standing answer. Automatic reclamation never takes the child, and only a person's
- *    act (or restoring the coordination database) ends it. The chip reads `refused`, which the
- *    fleet-wide switch never replaces; the banner lists the child. Each sentence but
- *    `not-a-workspace`'s ends with the same phrase, and the two minting-run words say, directly
- *    before it, that a rebuilt database may have left workers running.
- *  - `doubt`: a read that failed, so the sweep left the child alone and reads again next pass.
- *    The chip reads `deferred`, which the switch turns to `paused`; it never reaches the banner.
+ *  - `kept`: a standing answer, read from what the coordination database, the registry and the
+ *    lifecycle mirror hold, never from a read that failed, so no raised switch, missing capability
+ *    or failed read ends it, and automatic reclamation does not take the child while it stands.
+ *    It ends when what it was read from changes: a person removes the workspace or its marker, or
+ *    restores or rebuilds the coordination database (a rebuilt one's new runs come to reach the
+ *    marker's run id); or the child's birth, which the words at and past the birth fence depend
+ *    on and which every judging pass places afresh, moves with no person acting. A recycled
+ *    slug's newer `create`, mirrored late or dated ahead of the server's clock, can end
+ *    `coordinating` or `minting-run-postdates-child` that way and leave the child eligible. The
+ *    next judging pass judges it afresh. The chip reads `refused`, which the fleet-wide switch
+ *    never replaces; the banner lists the child. Each sentence but `not-a-workspace`'s ends with
+ *    the same phrase, and the two minting-run words say, directly before it, that a rebuilt
+ *    database may have left workers running.
+ *  - `doubt`: a read that failed, or one that placed no birth for the child
+ *    (`child-birth-unplaced`: the mirror holds no dated creation of the workspace), so the sweep
+ *    left the child alone and reads again next pass. The chip reads `deferred`, which the switch
+ *    turns to `paused`; it never reaches the banner or the kept feed row.
  *  - `held`: a hold stands. Read as `deferred` like a doubt; it never reaches the banner, and
  *    while it stands the attention list's failing arm does not list the child.
  *  - `ordinary`: the chip's planned rows already say it.
@@ -453,9 +463,6 @@ export const CHILD_RECLAIM_SKIP = {
     'The run this workspace’s child marker names opened after the workspace was created, so it cannot be the run that made it: either the coordination database was rebuilt, and then every child of the old database reads this way, or the fleet box’s clock reads behind the server’s. '
     + 'After a rebuild, workers may still be running in these. '
     + 'ccrc never reclaims it on its own; a person removes it once nothing still needs it.' },
-  'child-birth-unplaced': { class: 'kept', sentence:
-    'The lifecycle journal holds no dated creation of this workspace, so nothing proves the run its child marker names made it. '
-    + 'ccrc never reclaims it on its own; a person removes it once nothing still needs it.' },
   'reviewed-run-absent': { class: 'kept', sentence:
     'This review’s workspace holds a report the coordinator may still cite, and the run it reviewed is not in the coordination database, so nothing proves that run closed. '
     + 'ccrc never reclaims it on its own; a person removes it once nothing still needs it.' },
@@ -471,6 +478,9 @@ export const CHILD_RECLAIM_SKIP = {
     'The registry could not read this workspace’s identity on the last pass, so the sweep left it alone. It reads it again on its next pass.' },
   'hold-unmeasured': { class: 'doubt', sentence:
     'Whether this workspace’s hold belongs to its own programme could not be read, so the hold is treated as standing. The sweep reads it again on its next pass.' },
+  'child-birth-unplaced': { class: 'doubt', sentence:
+    'The lifecycle journal holds no dated creation of this workspace, so nothing proves the run its child marker names made it. '
+    + 'The sweep leaves it alone and looks for that creation again on its next pass.' },
   'minting-run-unreadable': { class: 'doubt', sentence:
     'The run this workspace’s child marker names could not be read from the coordination database. The sweep reads it again on its next pass.' },
   'reviewed-run-unreadable': { class: 'doubt', sentence:
@@ -552,7 +562,7 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
   // Reaching it needs the new database to count up to that id inside those
   // two minutes of the child's birth, so it is negligible in practice; it is
   // the fence's only fail-open direction.
-  if (i.childBornAt === null) return { eligible: false, why: 'child-birth-unplaced', runId: i.child.runId };
+  if (i.childBornAt === null) return { eligible: false, why: 'child-birth-unplaced' };
   if (run.openedAt > i.childBornAt + i.skewMs) {
     return { eligible: false, why: 'minting-run-postdates-child', runId: i.child.runId };
   }
@@ -571,7 +581,9 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
   // clips and the coordinator cites its path in fix-round mail, so the child
   // is kept while the run it reviewed is not terminal — the orphan branch
   // above included. `review-report-live` is wave 3's `childReclaimDecision`
-  // word for the same condition. Absent or unreadable is doubt, and doubt waits.
+  // word for the same condition. An unreadable reviewed run is doubt, and
+  // doubt waits. An absent one is kept: nothing proves that a run the
+  // database does not hold has closed.
   switch (i.reviewedRun.kind) {
     case 'not-a-review': break;
     case 'absent': return { eligible: false, why: 'reviewed-run-absent', runId: i.child.runId };
@@ -598,12 +610,14 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
   return { eligible: true, runId: i.child.runId };
 }
 
-/** The verdicts a pass that judged nothing keeps (spec §5.9): the KEPT words only. Each ends only by
- *  a person's act or a restored coordination database, so a raised switch, a missing capability or a
- *  failed read does not make it untrue, and the attention list keeps listing it. Every other verdict
- *  is dropped: after such a pass it reads "no verdict yet", never eligible. A kept verdict keeps the
- *  run it was judged under, so it stays the word of that workspace alone while the registry moves on
- *  (spec §5.6): the surfaces read it only for that run. */
+/** The verdicts a pass that judged nothing keeps (spec §5.9): the KEPT words only. Each is read from
+ *  what the coordination database, the registry and the lifecycle mirror hold, never from a read that
+ *  failed, so a raised switch, a missing capability or a failed read does not make it untrue, and the
+ *  attention list keeps listing it. What it was read from can still change meanwhile
+ *  (`CHILD_RECLAIM_SKIP`'s class notes say how), and the next judging pass reads the change. Every
+ *  other verdict is dropped, a doubt word's included: after such a pass it reads "no verdict yet",
+ *  never eligible. A kept verdict keeps the run it was judged under, so it stays the word of that
+ *  workspace alone while the registry moves on (spec §5.6): the surfaces read it only for that run. */
 export function childReclaimKeptVerdicts(
   verdicts: ReadonlyMap<string, ChildReclaimSweepVerdict>,
 ): ReadonlyMap<string, ChildReclaimSweepVerdict> {

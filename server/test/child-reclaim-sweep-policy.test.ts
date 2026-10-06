@@ -119,7 +119,6 @@ describe('childReclaimSweepVerdict', () => {
     const kept: readonly (readonly [ChildReclaimKeptWord, Partial<ChildReclaimSweepInput>])[] = [
       ['not-a-workspace', { workspace: null }],
       ['minting-run-absent', { mintingRun: { ok: true, run: null } }],
-      ['child-birth-unplaced', { childBornAt: null }],
       ['minting-run-postdates-child', { mintingRun: { ok: true, run: { state: 'done', sessionId: 'demo-a',
         dispatchStartedAt: null, openedAt: NOW - 3_600_000 + SKEW + 1 } } }],
       ['reviewed-run-absent', { reviewedRun: { kind: 'absent' } }],
@@ -130,6 +129,7 @@ describe('childReclaimSweepVerdict', () => {
       expect(skip({ ...over, child: marker }), why).toEqual({ eligible: false, why, runId: 12 });
     }
     expect(skip({ child: marker, held: { kind: 'held', reason: 'kept by hand' } })).toEqual({ eligible: false, why: 'held' });
+    expect(skip({ child: marker, childBornAt: null })).toEqual({ eligible: false, why: 'child-birth-unplaced' });
     expect(skip({ child: marker, identityMeasured: false })).toEqual({ eligible: false, why: 'identity-unmeasured' });
     expect(skip({ child: marker, siblings: { ok: true, open: 1 } })).toEqual({ eligible: false, why: 'siblings-open' });
   });
@@ -222,7 +222,7 @@ describe('childReclaimSweepVerdict', () => {
   });
 
   it('a child whose own birth this read could not place is doubt, and doubt waits', () => {
-    expect(skip({ childBornAt: null })).toEqual({ eligible: false, why: 'child-birth-unplaced', runId: 7 });
+    expect(skip({ childBornAt: null })).toEqual({ eligible: false, why: 'child-birth-unplaced' });
   });
 
   it('a minting run opened after the child\'s birth (plus the skew) cannot be the run that minted it', () => {
@@ -1261,8 +1261,8 @@ describe('CHILD_RECLAIM_SKIP — every skip word classed exactly once, with its 
   const KEPT_ENDING = 'ccrc never reclaims it on its own; a person removes it once nothing still needs it.';
   const MARKER_ENDING = 'ccrc never reclaims it on its own; a person removes the marker, never the checkout.';
   const REBUILD = 'After a rebuild, workers may still be running in these.';
-  const DOUBT = ['hold-unmeasured', 'identity-unmeasured', 'marker-unreadable', 'minting-run-unreadable',
-    'reviewed-run-unreadable', 'siblings-unreadable'];
+  const DOUBT = ['child-birth-unplaced', 'hold-unmeasured', 'identity-unmeasured', 'marker-unreadable',
+    'minting-run-unreadable', 'reviewed-run-unreadable', 'siblings-unreadable'];
   const ORDINARY = ['dispatch-in-flight', 'hold-retired', 'minting-run-open', 'not-a-child', 'review-report-live',
     'siblings-open', 'terminal-refusal'];
 
@@ -1293,6 +1293,18 @@ describe('CHILD_RECLAIM_SKIP — every skip word classed exactly once, with its 
   it('every doubt sentence ends with the sweep reading again, and the held sentence is said', () => {
     for (const w of DOUBT) expect(sentenceOf(w).endsWith('on its next pass.'), w).toBe(true);
     expect(sentenceOf('held').length).toBeGreaterThan(0);
+  });
+
+  // An unplaced birth is doubt, not kept: the lane places the birth afresh on every judging pass, so the
+  // word ends once the mirror holds a dated `create` for the workspace, with no person acting. Its
+  // sentence keeps the fact it could not prove and says the sweep looks again; it never says ccrc leaves
+  // the child for a person.
+  it('child-birth-unplaced is doubt: its sentence says what could not be placed and that the sweep looks again', () => {
+    expect(CHILD_RECLAIM_SKIP['child-birth-unplaced'].class).toBe('doubt');
+    expect(isChildReclaimKeptWord('child-birth-unplaced')).toBe(false);
+    expect(sentenceOf('child-birth-unplaced')).toBe(
+      'The lifecycle journal holds no dated creation of this workspace, so nothing proves the run its child marker names made it. '
+      + 'The sweep leaves it alone and looks for that creation again on its next pass.');
   });
 
   it('a classed word says its sentence, an ordinary word has none, and an apostrophe is the curly one', () => {
@@ -1331,9 +1343,10 @@ describe('CHILD_RECLAIM_SKIP — every skip word classed exactly once, with its 
 });
 
 // What a pass that judged nothing keeps of the sweep's last verdicts (spec §5.9): the KEPT words
-// alone, because each ends only by a person's act or a restored coordination database, so a raised
-// switch, a missing capability or a failed read does not make it untrue. Every other verdict is
-// dropped, and after such a pass reads "no verdict yet", never eligible.
+// alone, because each is read from what the coordination database, the registry and the lifecycle
+// mirror hold, never from a read that failed, so a raised switch, a missing capability or a failed
+// read does not make it untrue. Every other verdict is dropped, a doubt word's included (an unplaced
+// birth among them), and after such a pass reads "no verdict yet", never eligible.
 describe('childReclaimKeptVerdicts — what a pass that judged nothing keeps (spec §5.9)', () => {
   it('(p1) keeps exactly the kept words, with their verdicts', () => {
     const release = { reason: 'program:demo wave:2/3 run:7', program: 'demo', accountedRunId: 7 };
@@ -1346,6 +1359,7 @@ describe('childReclaimKeptVerdicts — what a pass that judged nothing keeps (sp
       ['d', { eligible: false, why: 'hold-unmeasured' }],
       ['e', e],
       ['f', { eligible: false, why: 'hold-retired', runId: 7, release }],
+      ['g', { eligible: false, why: 'child-birth-unplaced' }],
     ]);
     expect(childReclaimKeptVerdicts(verdicts)).toEqual(new Map([['a', a], ['e', e]]));
     expect([...childReclaimKeptVerdicts(verdicts).keys()]).toEqual(['a', 'e']);
@@ -1487,9 +1501,9 @@ describe('the attention list\'s kept arm (spec §5.9)', () => {
   it('(i) lists exactly the verdicts that are not eligible AND answer a kept word', () => {
     const verdicts = verdictsOf([
       ['a', skipped('coordinating')], ['b', skipped('hold-unmeasured')], ['c', skipped('held')],
-      ['d', skipped('review-report-live')], ['e', ELIGIBLE],
+      ['d', skipped('review-report-live')], ['e', ELIGIBLE], ['f', skipped('child-birth-unplaced')],
     ]);
-    expect(childReclaimKeptItems({ verdicts, live: listed(['a', 'b', 'c', 'd', 'e']), mirrorArms: [] })).toEqual([
+    expect(childReclaimKeptItems({ verdicts, live: listed(['a', 'b', 'c', 'd', 'e', 'f']), mirrorArms: [] })).toEqual([
       { kind: 'kept', sessionId: 'a', runId: 7, word: 'coordinating', sentence: CHILD_RECLAIM_SKIP.coordinating.sentence },
     ]);
   });
@@ -1580,7 +1594,7 @@ describe('the attention list\'s kept arm (spec §5.9)', () => {
     const six = (word: ChildReclaimKeptWord, prefix: string) =>
       ['6', '5', '4', '3', '2', '1'].map((n) => keptFor(`${prefix}${n}`, word));
     const out = childReclaimKeptList([
-      ...six('not-a-workspace', 'w'), keptFor('s1', 'child-birth-unplaced'), ...six('coordinating', 'c'),
+      ...six('not-a-workspace', 'w'), keptFor('s1', 'reviewed-run-absent'), ...six('coordinating', 'c'),
     ]);
     expect(out.map((a) => (a.kind === 'kept-many' ? `many:${a.word}` : `${a.kind}:${'sessionId' in a ? a.sessionId : ''}`)))
       .toEqual(['kept:s1', 'many:coordinating', 'many:not-a-workspace']);

@@ -154,7 +154,7 @@ const ROWS: readonly { readonly name: string; readonly input: ChildReclaimStatus
   { name: 'a FAILED run is terminal too → pending', input: base({ run: { id: RUN, state: 'failed', sessionId: SID } }), want: pending },
 
   // ── the sweep's last verdict (spec §5.9) ───────────────────────────────────
-  // KEPT: refused, settled until a person acts, and the switch never replaces it.
+  // KEPT: refused, a standing answer, and the switch never replaces it.
   { name: 'kept (coordinating) → refused, the kept sentence, at null',
     input: base({ verdict: skip('coordinating') }), want: kept(CHILD_RECLAIM_SKIP.coordinating.sentence) },
   { name: 'kept (coordinating) under a fleet pause → still refused, never the switch’s paused',
@@ -190,6 +190,12 @@ const ROWS: readonly { readonly name: string; readonly input: ChildReclaimStatus
     input: base({ verdict: skip('hold-unmeasured') }), want: deferredWith(CHILD_RECLAIM_SKIP['hold-unmeasured'].sentence) },
   { name: 'doubt (hold-unmeasured) under a fleet pause → paused',
     input: base({ verdict: skip('hold-unmeasured'), fleetPaused: true }), want: switchPaused },
+  // An unplaced birth is doubt, never kept: the sweep places the birth again on its next pass.
+  { name: 'doubt (child-birth-unplaced) → deferred, its sentence, at null, never refused',
+    input: base({ verdict: skip('child-birth-unplaced') }),
+    want: deferredWith(CHILD_RECLAIM_SKIP['child-birth-unplaced'].sentence) },
+  { name: 'doubt (child-birth-unplaced) under a fleet pause → paused, never refused',
+    input: base({ verdict: skip('child-birth-unplaced'), fleetPaused: true }), want: switchPaused },
   { name: 'held → deferred, the hold sentence, at null',
     input: base({ verdict: skip('held') }), want: deferredWith(CHILD_RECLAIM_SKIP.held.sentence) },
   { name: 'held under a fleet pause → paused',

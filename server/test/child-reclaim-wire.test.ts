@@ -4,7 +4,7 @@
 // shared/api.ts, and the runtime list is DERIVED from it. `RunSummary.childReclaim`
 // leaves the STORE as null for every row: the answer needs the registry's marker
 // and the sweep's in-memory defer, and the store sees neither. GET /api/runs is
-// the one composer (Task 5). The six kept words follow the same shape: one total
+// the one composer (Task 5). The five kept words follow the same shape: one total
 // table, one derived list, one guard.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
@@ -34,13 +34,14 @@ describe('the child-reclaim word vocabulary (wave 5, spec §5.9)', () => {
 });
 
 describe('the kept words (wave 5, spec §5.9)', () => {
-  it('are the six the sweep never takes on its own, derived from one table', () => {
+  // An unplaced birth is not among them: it is a doubt word, which the sweep reads again on its own.
+  it('are the five the sweep keeps for a person, derived from one table', () => {
     expect([...CHILD_RECLAIM_KEPT_WORDS].sort()).toEqual([
-      'child-birth-unplaced', 'coordinating', 'minting-run-absent',
-      'minting-run-postdates-child', 'not-a-workspace', 'reviewed-run-absent',
+      'coordinating', 'minting-run-absent', 'minting-run-postdates-child', 'not-a-workspace', 'reviewed-run-absent',
     ]);
     expect(isChildReclaimKeptWord('coordinating')).toBe(true);
     expect(isChildReclaimKeptWord('held')).toBe(false);
+    expect(isChildReclaimKeptWord('child-birth-unplaced')).toBe(false);
   });
 });
 

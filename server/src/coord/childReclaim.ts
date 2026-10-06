@@ -1577,7 +1577,8 @@ export function childReclaimStatus(input: ChildReclaimStatusInput): ChildReclaim
   // reason the sweep keeps or waits on outranks an older answer that promises a retry it will not make.
   if (marked && input.verdict.kind === 'skip') {
     const skip = CHILD_RECLAIM_SKIP[input.verdict.why];
-    // KEPT: settled until a person acts. The switch never replaces it.
+    // KEPT: a standing answer (`CHILD_RECLAIM_SKIP`'s class notes say what ends one). The switch never
+    // replaces it.
     if (skip.class === 'kept') return { word: 'refused', sentence: skip.sentence, at: null };
     if (skip.class !== 'ordinary') return waiting({ word: 'deferred', sentence: skip.sentence, at: null });
   }

@@ -281,6 +281,23 @@ const attentionLabels = (f: ReturnType<typeof fixture>): string[] => {
     .map((a) => (a.kind === 'kept-many' ? `kept-many:${a.word}` : `${a.kind}:${a.sessionId}`));
 };
 
+/** `GET /api/runs`' chip for one closed run, composed from the store's row and the REAL watcher's
+ *  in-memory reads, the four sources `composeChildReclaim` hands `withChildReclaim`
+ *  (`child-reclaim-runs-route.test.ts` pins that wiring). */
+const chipOf = (f: ReturnType<typeof fixture>, runId: number): ChildReclaimStatus | null => {
+  const read = f.coord.run(runId);
+  if (!read.ok || read.run === null) throw new Error(`run ${runId} unreadable`);
+  const summary = toRunSummary(read.run);
+  return withChildReclaim([summary], {
+    events: f.coord.childReclaimEvents(childReclaimSessions([summary])),
+    marks: f.watcher.currentChildMarks(),
+    defers: f.watcher.currentChildReclaimDefers(),
+    verdicts: f.watcher.currentChildReclaimVerdicts(),
+    fleetPaused: f.watcher.currentCoord()?.reclaim === 'set',
+    nowMs: f.now(),
+  })[0]!.childReclaim;
+};
+
 const deferredAs = (why: 'presence' | 'state-changed' | 'held', req: ChildReclaimRequest): ChildReclaimOutcome =>
   ({ kind: 'deferred', sessionId: req.sessionId, runId: req.runId, why, detail: `deferred: ${why}` });
 
@@ -2567,6 +2584,62 @@ describe('the attention list\'s kept arm — the sweep\'s kept verdicts, listed 
     expect(attentionLabels(f)).toEqual([]);
     expect(keptRows(f)).toEqual([]);
   });
+
+  /** A child minted by a run DISPATCHED onto it and closed `done`, whose `create` the mirror does not hold
+   *  (ws-add's line not mirrored yet, or a workspace minted before the mirror existed): its birth cannot be
+   *  placed, so the verdict is `child-birth-unplaced`. Returns the run id. */
+  const unplacedChild = (f: ReturnType<typeof fixture>, id = 'demo-a'): number => {
+    const r = f.openRun();
+    f.plant(id, { child: String(r.id) }, { create: false });
+    f.coord.dispatchRun({ runId: r.id, sessionId: id, workspace: id.slice('demo-'.length), branch: `ws/${id}`,
+      resumed: false, clearedAt: null, items: [] });
+    f.advance(1_000);
+    const closed = f.coord.closeRun({ runId: r.id, finalState: 'done', causedBy: 'coordinator', handoffCommit: null,
+      program: r.program, viaClosing: true });
+    if (!closed.ok) throw new Error(`close refused: ${JSON.stringify(closed)}`);
+    return r.id;
+  };
+
+  // An unplaced birth is doubt, never kept (spec §5.9). Its marker reads, so the lane's `live` map carries
+  // its run, and the word let through as kept would be listed and fed. The lane places the birth afresh on
+  // every judging pass, so the word ends once the mirror holds a dated `create`, with no person acting.
+  it('an unplaced birth reaches neither the list nor the feed, and ends on its own once the mirror places the birth', async () => {
+    const { home, notifyLog } = await feedFixture();
+    const f = fixture({ home, notifyLog });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const runId = unplacedChild(f);
+    await f.pass();
+    await f.watcher.tick();
+    expect(keptRows(f), 'an unplaced birth wrote a kept feed row').toEqual([]);
+    expect(attentionLabels(f), 'an unplaced birth was listed as kept').toEqual([]);
+    expect(f.watcher.currentChildMarks()?.get('demo-a')).toEqual({ kind: 'child', runId });
+    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a')).toEqual({ eligible: false, why: 'child-birth-unplaced' });
+    f.next(); await f.pass();
+    expect(keptRows(f)).toEqual([]);
+    // The mirror now holds a dated `create` for the workspace. The next judging pass places the birth and
+    // judges the child on the ordinary rule.
+    f.journal('demo-a', 'done', null, 'create');
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a')).toEqual({ eligible: true, runId });
+    expect(attentionLabels(f)).toEqual([]);
+    expect(keptRows(f)).toEqual([]);
+  });
+
+  it('an unplaced birth’s closed run reads deferred with the doubt sentence, and paused under the switch, never refused', async () => {
+    const f = fixture();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const runId = unplacedChild(f);
+    await f.pass();
+    await f.watcher.tick();
+    expect(chipOf(f, runId)).toEqual({ word: 'deferred', sentence: CHILD_RECLAIM_SKIP['child-birth-unplaced'].sentence, at: null });
+    writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
+    f.next(); await f.pass();                                  // judges nothing, and keeps no doubt verdict
+    await f.watcher.tick();
+    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a'), 'a pass that judged nothing kept a doubt verdict')
+      .toBeUndefined();
+    expect(chipOf(f, runId)).toEqual({ word: 'paused', sentence: CHILD_RECLAIM_STATUS_SENTENCE.fleetPaused, at: null });
+  });
 });
 
 // A recycled slug's next workspace is a new child (spec §5.6, §5.9). A kept verdict outlives a pass that
@@ -2579,22 +2652,6 @@ describe('the attention list\'s kept arm — the sweep\'s kept verdicts, listed 
 describe('a recycled slug’s next workspace never shows the old workspace’s kept word (wave 5)', () => {
   const S = CHILD_RECLAIM_STATUS_SENTENCE;
   const KEPT_CHIP: ChildReclaimStatus = { word: 'refused', sentence: CHILD_RECLAIM_SKIP.coordinating.sentence, at: null };
-  /** `GET /api/runs`' chip for one closed run, composed from the store's row and the REAL watcher's
-   *  in-memory reads, the four sources `composeChildReclaim` hands `withChildReclaim`
-   *  (`child-reclaim-runs-route.test.ts` pins that wiring). */
-  const chipOf = (f: ReturnType<typeof fixture>, runId: number): ChildReclaimStatus | null => {
-    const read = f.coord.run(runId);
-    if (!read.ok || read.run === null) throw new Error(`run ${runId} unreadable`);
-    const summary = toRunSummary(read.run);
-    return withChildReclaim([summary], {
-      events: f.coord.childReclaimEvents(childReclaimSessions([summary])),
-      marks: f.watcher.currentChildMarks(),
-      defers: f.watcher.currentChildReclaimDefers(),
-      verdicts: f.watcher.currentChildReclaimVerdicts(),
-      fleetPaused: f.watcher.currentCoord()?.reclaim === 'set',
-      nowMs: f.now(),
-    })[0]!.childReclaim;
-  };
   /** A child minted by a run DISPATCHED onto it and then closed `done`, so the run's row carries the
    *  session and the `closedAt` a chip needs. `coordinated`: the child also held a coordinator's chair at
    *  its own creation (`coordinatingChild`'s shape), so it is kept as `coordinating`. Returns the run id. */
