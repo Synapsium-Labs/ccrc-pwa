@@ -1,6 +1,6 @@
 # ccrc history: lossless, DAG-based session recall (design)
 
-**Status:** APPROVED design, rev 3.2, 2026-10-05.
+**Status:** APPROVED design, rev 3.3, 2026-10-06 (rev 3.2 plus two corrections from the W1-B2 plan review, §17).
 - **Operator approvals.** The operator approved decisions 1–11 and sections 1–6 (§5–§10 below) in conversation, 2026-10-02 to 2026-10-05.
 - **Grounding.** Three read-only grounding passes ran against `origin/main` `be93d159e`: hooks/card/install, the Claude Code surface on the installed 2.1.289, and repo constraints. Where grounding showed that a fact the brief relied on is wrong, §4.1 states the change and the smallest adjustment.
 - **Review.** Rev 2 answers three adversarial reviews (code accuracy, safety/security, invariants/feasibility). Every finding was re-checked against `be93d159e` and, for runtime claims, against an official Node 22.16.0 binary. §4.2 lists what changed. No approved decision is changed.
@@ -1675,7 +1675,7 @@ No overloaded value:
 
 ### 8.6 The card line
 
-**Shape**: `History: node L03a9c… (this compaction) · parent N7c1e2… · ~/.local/bin/ccrc history describe L03a9c`.
+**Shape**: `History: node L03a9c1… (this compaction) · parent N7c1e2f… · ~/.local/bin/ccrc history describe L03a9c1`. A display prefix is 6 hex digits after `L` or `N`, as the grammar gate requires (rev 3.3; rev 3.2 printed a 5-digit example).
 - `parent` is this leaf's parent when it is predictable (the 8th leaf of a run).
 - Otherwise it is the epoch's newest condensed node.
 - Otherwise it is omitted.
@@ -2823,6 +2823,7 @@ Slug `history-sole-copy-export`. Claude Code deletes a transcript some days afte
   - `ccd/history/` (helpers, template text);
   - `ccd/history-skill/` (policy sentences; `cp -a` carries it into every home's skill dir).
   - The 17 sanitiser test cases are **re-derived**, not copied. So `server/test/` holds no copied material and needs no sidecar.
+  - **One exception, a verbatim pin of shipped text** (rev 3.3). `server/test/history-skill.test.ts` (§8.5) quotes the skill's sentences, some adapted from lossless-claw, so that a softened sentence reds. The notice travels with the shipped copy (`ccd/history-skill/LICENSE.lossless-claw` and the V7 `PROVENANCE` entry), and the test's header names both. A pin is not a copy that ships or runs from the placed tree, so `server/test/` still gets no sidecar. The header avoids the rationale-comment phrase, so `license.test.ts`'s bijection stays exact.
 - **Why not one notice.** The tarball ships `install.sh shared ccd deploy`, but not the root README or LICENSE (`deploy/build-release.sh:103-106`, **M**). Material copied as a standalone file must run from the placed tree, which is why the sweep is a shim and not a copy.
 - **`ccd/history/PROVENANCE`** records, per copied item:
   - the upstream path;
@@ -3287,6 +3288,10 @@ The review of rev 3.1 (§4.7) raised four more. Q16 and Q19 would change a ruled
     - Export segments are linked, never renamed over, numbered once per store, named by a writer token, and carry the rows that place their text; a due row carries its blob; `export-overdue` keys on measured source loss, and `export-due` stops firing on the pass's own cadence. The retention reader reads drop-ins and keeps a home's last value.
     - The purge's kept set is one list, the cap and switch files included; O45 is relational.
     - One new question, Q15 (§15.3), new pins S15, DM43, DM44 and O46–O48, and 9 new slugs (§16).
+- **Rev 3.3**, 2026-10-06, with the W1-B2 plan: two corrections from its review.
+  - §8.6's display-prefix example now has 6 hex digits, the width its own grammar gate requires.
+  - §12 names the one place `server/test/` quotes adapted text: `history-skill.test.ts` pins the shipped skill sentences, with the notice beside the shipped copy.
+  - No ruling changed.
 - **Rev 3.2**, 2026-10-05: five adversarial reviews of rev 3.1 before the implementation plan (code truth, integrity, security, feasibility, invariants), re-checked against `d12b5aba0`, the 2.1.289 bundle and Node 22.15.1/22.16.0, with a refute pass (§4.7). No ruling changed.
   - Capture integrity: cursors proved by file identity, so a reused inode never carries another session's rows (DI1); startup lines carry `reg` and the registry is observed at the rename (CT6, DI7); clear epochs confirmed before scope reads them (SE5); forks ruled out of the spool within Q2 (CT7); fenced spool lines and a 1024-byte cap (DI10, DI11); sidecar ingest rules (FE6); the partial `from` summary anchor (CT5).
   - Durability: a `drained` record gates replay (DI2); bindings written before the store is visible (DI3); re-key as a merge (DI4); the writer token on the home filesystem (DI5); the tick order of migration and recovery (DI6); `redact` records through the outbox and a re-index by quoted phrase with merge steps (DI8, SE4); WAL at every open after a restore (CT3); held-file order, month-file heads, temp sidecars (DI9, DI13, DI14).
