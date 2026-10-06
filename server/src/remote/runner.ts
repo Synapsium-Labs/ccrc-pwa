@@ -53,6 +53,9 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // temp root — plus a pin phase and a settle. It earns ws-reap's budget, not
   // the flat 90 s it would silently inherit without this row.
   'ws-reclaim': 240_000,
+  // Archived-workspace expiry (spec 2026-09-24 §5.3): ws-reclaim's machinery — the pin phase, the settle and the same
+  // teardown — on an archived workspace, so it earns the same budget.
+  'ws-expire': 240_000,
   // The two SPAWNING verbs, and the reason they need the agent's MAXIMUM
   // (`MAX_EXEC_TIMEOUT_MS`, agent/src/server.ts) rather than a merely larger
   // number (F8, found live 2026-08-12). Both end in `_spawn`, which blocks in

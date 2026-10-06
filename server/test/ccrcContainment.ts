@@ -10,7 +10,7 @@ import { plantPoison, loopbackCurlFront } from './containedTools.js';
 
 /** The env every ccrc test builder, and every raw spawn of the real ccd/ccrc, starts from (wave 9 R10d): `base` with
  *  HOME the fixture, the user bus pointed at two paths under HOME that do not exist — SET, never deleted: ccrc's
- *  `: "${XDG_RUNTIME_DIR:=/run/user/$UID}"` (seven pairs in ccd/ccrc, :3295 first) would otherwise default to the REAL
+ *  `: "${XDG_RUNTIME_DIR:=/run/user/$UID}"` (seven pairs in ccd/ccrc, the first in `_box_units`) would otherwise default to the REAL
  *  bus — then gh and tmux poisons from `ghContainedEnv`, and ssh, scp and launchctl poisons and the curl rule beside
  *  them, all create-if-absent in `harnessBin(home)`, first on PATH.
  *  `managers: true` also asks `ghContainedEnv` for its systemctl/systemd-run/launchctl poisons. A SPINE builder passes

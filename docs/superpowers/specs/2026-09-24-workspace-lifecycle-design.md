@@ -225,8 +225,11 @@ undone.
      pane is idle only when its live file reads `idle` and the predicate is false. A measured busy refuses
      `409 session-busy` (`interrupt:true` lets it proceed). Whatever could not be read is not busy but unmeasured,
      and refuses `409 status-unknown` whatever the consents (3881): no config dir, tmux `unknown`, an unread pane
-     pid, an absent or unreadable live file, a status word `_ws_status` could not extract, and, the server's own
-     stricter arm, a missing frame row. Without `interrupt:true` it is re-read at the stop, so a turn begun during
+     pid, an absent or unreadable live file, a status word `_ws_status` could not extract, and the server's own two
+     stricter arms: a missing frame row, and a live file that is present but malformed (not JSON, or no string
+     `sessionId`), from which ccd's grep may still read a word. The word is read from the PARSED file, and a `status`
+     that is not a string is no word; a file that is not compact JSON (`"status": "idle"`) still diverges from ccd's
+     grep, which no observed writer produces. Without `interrupt:true` it is re-read at the stop, so a turn begun during
      the claim reads or the programme end refuses `409 session-busy` (or `status-unknown`, if the state became
      unreadable), naming any runs already ended.
      The same fail-closed read applies to a workspace whenever `programme:'end'` or `interrupt:true` is set: the end
@@ -380,6 +383,60 @@ box token) holds unchanged for a wider switch. This amends CCR-15's text (§6).
   the server seven days after it is archived". The verbatim pin moves in the same commit.
 - README's workspace-lifecycle section and `wave-lifecycle.md` §6 say what now happens after 7 days.
 
+**As wave 3 builds the verb** (amended with its plan, `docs/superpowers/plans/2026-10-04-workspace-lifecycle-wave3-ws-expire.md`;
+each item is a departure named there). Wave 3 ships `ws-expire` and only what lets the server compose it — the
+`CcdArgv` builders, `expire-v1`, the grant and its enrolment. The lane, the switch's wider label, coordinator clause 3
+and the README and `wave-lifecycle.md` §6 text above are wave 3b's, planned after it merges.
+- **Rung 5 asks more of an expiry.** A DETACHED live pane, or a unit that is running, refuses `live` (retryable): an
+  archived workspace has had no pane since its archive (§3 item 2), and `attached` and `tree-busy` alone let both
+  through, measured. The question is keyed on the token's binding, not on a flavour a caller could forget; on Darwin a
+  `failed` unit answer that comes from ccd's own stamp is re-asked of launchd, as the reclaim tail re-asks it; and an
+  interrupted expiry's resume asks it again when it resumes at `children`, or at `branch` when the tombstone records the
+  worktree absent (the vanished-worktree arm's first phase), before that attempt's tail stops anything (3963).
+  `ws-reclaim` is never asked this. It also refuses `in-use` (retryable) when any process's working directory is the
+  worktree or lies under it — a shell an operator opened there by hand, say (3962) — fresh, and at the resume
+  wherever presence is asked again (`children`, and `branch` on the vanished-worktree arm, where the worktree is absent
+  and the question is vacuously clear), and at `worktree`, where the tree may still stand and this is the one question
+  asked (3964). A process is skipped only on proof it vanished (its cwd link or stat file is gone, or
+  `ps` could not name its parent and the kernel answers no such process), or when its cwd link answers
+  EACCES: so what is not seen is a process of another UNIX user and a same-user non-dumpable one (an `ssh-agent`,
+  anything that cleared its dumpable flag, a setuid or setgid exec) — refusing on those would wedge every expiry while
+  an ssh-agent runs. Anything else that goes wrong (a process list that cannot be read, a `ps` that is missing) is
+  unmeasured, retried — Darwin's `lsof` listing too when it outruns its 20-second bound
+  (`WS_EXPIRE_LSOF_DEADLINE_S`), even one that already listed ccd and a process in the worktree. The bound's stated
+  limit: a process in uninterruptible kernel wait survives TERM and KILL, so `lsof` can hold the reap lock past it.
+- **Rung 2′'s words.** `not-archived` (no stamp), `not-expired` (younger than `WS_EXPIRE_AFTER_S`, a future stamp
+  included) and `child`; a stamp that is not an epoch ccd writes is unmeasured, never old.
+- **`ws-reap`'s `expire:` arm refuses** (`expire-in-progress`), the twin of its `reclaim:` mirror. The arm that RESUMES
+  an interrupted expiry and re-asserts the archive epoch is `ws-expire`'s own. `ws-expire` refuses a row
+  with a child marker, so an `expire:` breadcrumb stands only on an unmarked row; `ws-reclaim`, which runs only on
+  children, never meets one in practice, and answers it `reap-in-progress` wherever it does, as it answers every
+  breadcrumb not its own.
+- **A return during an expiry refuses, on every path.** Measured: before this wave no spawn path honoured a breadcrumb,
+  and only `ws-restore` took the reap lock. `start`, `ensure` and `swap` now refuse an `expire:` breadcrumb — and, for
+  an archived row, a held reap lock — before they journal their act (a refused return must not read as a return to
+  §9's instrument), and so does `enable`, which journals before it reaches `start`; on an archived row a breadcrumb
+  that stands but cannot be read refuses too; `ws-restore` refuses `in-progress` under its lock; `_spawn_start`, where every session pane is
+  made, holds the same gate as the backstop. One gap remains (3893's residual): the return verbs take the gate and
+  release it before their journal line, so an expiry that wins the lock inside that gap leaves the refused return
+  journaled as `done`; nothing is lost, and wave 3b closes it before its lane goes live (the coordinator's ruling (a)).
+  The lock half refuses whatever holds it: a spawn of an archived row during
+  a human `ws-reap` or `ws-restore` of that row refuses too, where it used to race. `ws-add` never mints a row over a
+  standing breadcrumb (its slug stays taken).
+- **The direct-entry boundary.** `ws-expire` and `ws-audit --session <id> --expire` are protected shapes, as
+  `ws-reclaim` and its audit are: the installed launcher starts them under `bash -p`, and the body refuses them
+  otherwise.
+- **The temp root.** The shared tail removes `~/.cc-tmp/<id>` unrecorded, as it does for a reclaim. Only a child is
+  ever given one, and an expiry never touches a row with a child marker, so what stands there was a previous row's
+  under a recycled slug — leaked scratch, not this workspace's.
+- **The instrument classifies every act.** §9's measurement reads the journal through three lists that place each of
+  ccd's acts exactly once: those that return from an archive, those that end one — `expire` and `reclaim` among them,
+  a removal and never a return — and a third, `NEUTRAL_ACTS`, for the rest (3887). A test runs ccd's own list, so a
+  new act is decided, not silently ignored.
+- **Its records.** The tombstone's kind is `"mode":"expire"` with `archivedAt`; the journal carries the epoch as the
+  existing `meas.archivedAt`; `ws-audit --expire` prints a document of its own (`session`, `mode`, `archivedAt`,
+  `alive`, `exists`, `reaping`, `sensitive`, `resume` when resuming, `verdict`, `detail`, `token` when it mints one).
+
 ### 5.4 Stage 4 — the dead-coordinator lane (L4)
 
 **The verdict is widened, not re-derived.** `measureClaimant` returns `{state, why}`, and the lifecycle word lives
@@ -463,7 +520,9 @@ agent frame in remote mode.
   2. Coordinator clause 3's closing sentence (§5.3).
   3. Spec §5.9 "No child ever appears in the reap or archive sheets". A person may now archive a child by hand, and
      "Archive all" skips children (§5.1).
-  4. Wave 3's "exactly ONE addition" to `ws-reap`'s resume fork: the `expire:` arm is a second (§5.3).
+  4. Wave 3's "exactly ONE addition" to `ws-reap`'s resume fork: the `expire:` arm is a second (§5.3). Amended by
+     this design's wave 3 (3965): CCR-15's §6 now names `ws-reap`'s `expire-in-progress` refusal beside its `reclaim:`
+     mirror, and `ws-restore`'s refusal of an expiry in progress.
   5. `closeRun`'s `causedBy` vocabulary gains `'sweep'` (§5.4).
   6. Wave 4's lane gains a second population (§5.3).
   7. The contract's `shared/api.ts` line citations (R9), which waves 1 and 2 must place below or re-point (§4).

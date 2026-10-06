@@ -132,6 +132,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the reclaim kill-switch granted without the flag that is its whole argument surface',
     codes: ['TS2322'],
   },
+  // WORKSPACE LIFECYCLE wave 3, g13's shape for ws-reclaim's sibling: the archived workspace's teardown, enrolled on
+  // its confirmation token, so the narrowed grant is a compile error.
+  'g15-ws-expire-without-expect.ts': {
+    what: 'the archived-workspace expiry verb granted without its confirmation token',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -340,6 +346,14 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
   // takes on import, which proves the crash fires, not that THIS verb's rule
   // is what fires it. This case runs the audit over a CONSTRUCTED table, so
   // the row reds here as an assertion instead.
+  it('throws on a ws-expire with no confirmation token, the third destructive verb (workspace lifecycle wave 3)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-expire']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-expire', '--session']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-expire', '--expect']]))).not.toThrow();
+  });
+
   it('throws on a ws-reclaim with no confirmation token, the second destructive verb', () => {
     expect(() => auditExecWhitelist(withCcd([['ws-reclaim']])))
       .toThrow(/only grantable with '--expect'/);

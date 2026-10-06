@@ -86,6 +86,9 @@ export type ChildReclaimPauseNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FL
  *  enrolment stops this project compiling. `g13-ws-reclaim-without-expect.ts`
  *  is the same mechanism from the other side. */
 export type WsReclaimNeedsExpect = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-reclaim'], '--expect'>>;
+/** Archived-workspace expiry (workspace lifecycle wave 3): ws-reclaim's sibling, enrolled on its confirmation token;
+ *  losing the enrolment stops this project compiling. `g15-ws-expire-without-expect.ts` is the other side. */
+export type WsExpireNeedsExpect = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-expire'], '--expect'>>;
 export type WsRmIsUngrantable = Assert<'ws-rm' extends (typeof UNGRANTABLE_VERBS)[number] ? true : false>;
 export type WsGcIsUngrantable = Assert<'ws-gc' extends (typeof UNGRANTABLE_VERBS)[number] ? true : false>;
 

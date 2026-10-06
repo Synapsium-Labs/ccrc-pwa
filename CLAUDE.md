@@ -49,7 +49,9 @@ real values: `deploy/reference-fleet.md` (gitignored).
   **`ws-reclaim` is forbidden to every session too**: it is the SERVER's act on a CHILD workspace only
   (one dispatch minted for a run, marked `$REG/<id>.child` and held by the server as that run's), composed
   after that run closes or binds a different session, with a token re-proved on the box — never a session's verb, and never run against
-  the live host from a shell or a test.
+  the live host from a shell or a test. **`ws-expire` is forbidden to every session too**: it is the SERVER's act on an
+  ARCHIVED workspace only, seven days after its archive (never a main checkout, never a child), with a token that binds
+  that archive and is re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
 - **NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly.** Each unit is a
   long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet. ONE scoped exception
   (operator ruling 2026-08-21, R1): `ccrc update`'s step-4 supervisor sweep (`_upd_sweep`) and deploy.sh's

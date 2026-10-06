@@ -793,10 +793,16 @@ the staged tree (role-aware, atomic, seed-once files untouched, every rostered h
 tree in a version directory of its own and flips `~/ccrc` to it — Versioned installs, below; it mints `~/.ccrc/node-id`
 once, rewrites `~/.ccrc/ccrc-caps` with what this install can do, and raises the floor last); the health gate (below);
 the supervisor sweep behind its mandatory `KillMode=process` preflight, each restarted supervisor then held to the
-stay-up check (`deploy/verify-service.sh` on Linux) — one that does not stay up fails the run (exit 1, reported
-`failed`), but on Linux a session stopped on purpose while the sweep walks (its unit settled `inactive` with ccd's
+stay-up check (`deploy/verify-service.sh` on Linux), all of them in one shared window (on Linux: for up to
+`CCRC_SWEEP_VERIFY_JOBS` units, default 128, given a scratch directory; more take one window per chunk, and with no
+scratch directory each unit is verified alone, in turn) — a unit that was active before the restart and that the
+post-restart listing shows `activating` or `failed` is verified too — and a crash-like first failure gets ONE
+re-check, alone: it fails the
+run (exit 1, reported `failed` unless a newer update owns the report) only if that fails too, and the re-checks stop at
+the first that fails; macOS runs the same window and re-check in-process, with no stop-on-purpose classifier. On Linux a
+session stopped on purpose while the sweep walks (its unit settled `inactive` with ccd's
 `~/.cc-sessions/<id>.stopped` stamp present or its registry row purged; a stop with neither still fails) passes on a
-line of its own, as it does in `deploy.sh agent`'s sweep; then the from→to report, and, after a passed gate and a
+line of its own, as it does in `deploy.sh agent`'s sweep (a serial loop with no re-check); then the from→to report, and, after a passed gate and a
 finished sweep, the `~/ccrc-backups` prune (`CCRC_BACKUP_KEEP` from the process environment, default 10).
 Rolling back is `ccrc rollback` (below), which, like any move below the floor, prints the coord.db restore commands rather than
 auto-restoring. **Across a two-box fleet, `ccrc rollout [--to] [--server-first] [--check] [--force]`** (with `--channel`,
@@ -4701,8 +4707,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7808-7810`), each with an operator sentence of its own at `:7850`,
-`:7858` and `:7871`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7812-7814`), each with an operator sentence of its own at `:7854`,
+`:7862` and `:7875`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 

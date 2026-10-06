@@ -128,8 +128,16 @@ export type TurnVerdict = 'idle' | 'busy' | 'unmeasured';
  * an unread pid, an absent or unread live file (`[[ -f $sf ]] || return 1`), and a status word ccd could not EXTRACT
  * (F1: `st=$(grep -oE '"status":"[a-z_-]+"' ... | cut -d'"' -f4)` then `[[ -n "$st" ]] || return 1` — a word that does
  * not match `[a-z_-]+`, an empty one included, is a state ccd could not read, where only a matching word other than
- * `idle` is `busy`). One arm is the SERVER'S OWN and stricter than ccd, which reads no frame row at all: a missing
- * frame row is `unmeasured` (no row is no measurement). Folding these into `busy` told an operator "it is working",
+ * `idle` is `busy`). The word is the PARSED file's top-level `status`, and only a string is a word: a `status` that is
+ * not one is `''` (`readLiveStateMeasured`), which ccd's grep cannot extract either (review 244, F1). That is ccd's
+ * answer only for compact JSON: a spaced `"status": "idle"` reads `idle` here and nothing to ccd's grep, and a nested
+ * `"status"` ahead of the top-level key is the one ccd's `head -1` takes — shapes no observed writer produces. Two arms
+ * are the SERVER'S OWN and stricter than ccd: a missing frame row is `unmeasured` (no row is no measurement; ccd reads
+ * none), and so is a live file that is PRESENT but malformed — not JSON, or no string `sessionId` — which
+ * `readLiveStateMeasured` answers `no-state` while ccd's grep may still read a word from it (review 244, F3). And the
+ * config dir is read first for BOTH kinds of row: a main checkout whose wrapper the roster does not know is unmeasured
+ * even with its pane proven gone, though `cmd_stop` reads no status at all (review 244, F2, ruled: it fails closed, and
+ * "Stop only" remains). Folding these into `busy` told an operator "it is working",
  * whose consent (`interrupt`) then skipped the read and ended a programme that ccd refused `status-unknown` afterwards.
  */
 export function stopVerdict(r: StopReadings): TurnVerdict {

@@ -36,7 +36,7 @@
 // that as a second net.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bodyDigest, markGenerated } from '../../shared/mark.mjs';
@@ -58,7 +58,7 @@ const seqArm = (counter: string, values: string[]): string =>
  *  `isActive` and `mainPid` are lists consumed one per call, so a crash loop is
  *  expressed the way the script has to detect it: the same query answered
  *  differently on either side of the observation window. */
-function stubs(opts: { isActive: string[]; mainPid: string[] }): string {
+function stubs(opts: { isActive: string[]; mainPid: string[]; loadState?: string }): string {
   const dir = mkTmp('ccrc-agent-deployverify-');
   const seq = seqArm;
 
@@ -76,6 +76,9 @@ function stubs(opts: { isActive: string[]; mainPid: string[] }): string {
     + '  *" is-active "*)\n'
     + `    ${seq('isactive', opts.isActive)}`
     + '    exit 0;;\n'
+    // `show -p LoadState --value <unit>` (wave 11, R13a): the word on one line and exit 0 — or, for '', nothing and exit 1.
+    + '  *" LoadState "*)\n'
+    + ((opts.loadState ?? 'loaded') === '' ? '    exit 1;;\n' : `    printf '%s\\n' ${JSON.stringify(opts.loadState ?? 'loaded')}; exit 0;;\n`)
     + '  *" MainPID "*)\n'
     + `    ${seq('mainpid', opts.mainPid)}`
     + '    exit 0;;\n'
@@ -91,7 +94,7 @@ function stubs(opts: { isActive: string[]; mainPid: string[] }): string {
 }
 
 function runVerify(dir: string, unit = 'ccrc-agent.service',
-  opts: { home?: string; env?: Record<string, string>; timeout?: number } = {},
+  opts: { home?: string; env?: Record<string, string>; timeout?: number; provesSleep?: boolean } = {},
 ): { code: number; stdout: string; stderr: string; calls: string; home: string } {
   // A FIXTURE HOME, always (wave 10, critic I7): the script reads
   // $HOME/.cc-sessions for a session unit, and spreading `process.env` used to
@@ -106,8 +109,9 @@ function runVerify(dir: string, unit = 'ccrc-agent.service',
   };
   // PROVE the stubs are what will be resolved, before executing anything. A test
   // whose safety depends on the thing it is testing is the loaded gun this
-  // package has already fired four times. Both `systemctl` and `journalctl`.
-  assertStubsResolve(env, dir);
+  // package has already fired four times. Both `systemctl` and `journalctl`
+  // (and `sleep`, for the one case that plants a stub of it: V27).
+  assertStubsResolve(env, dir, opts.provesSleep ? ['systemctl', 'journalctl', 'sleep'] : undefined);
 
   const r = spawnSync('bash', [VERIFY, unit], { encoding: 'utf8', timeout: opts.timeout ?? 15_000, env });
   let calls = '';
@@ -145,8 +149,8 @@ function regSnapshot(home: string): Array<[string, string]> {
 /** Before a spawn that runs the REAL script: `command -v systemctl` and `command -v journalctl`, run through
  *  `sh -c` under exactly the env the spawn will use, must each resolve inside `bin`; REFUSES otherwise.
  *  `journalctl` is not in the package-wide net (`contain-path.setup.ts` covers tmux, gh and systemctl only). */
-function assertStubsResolve(env: NodeJS.ProcessEnv, bin: string): void {
-  for (const name of ['systemctl', 'journalctl']) {
+function assertStubsResolve(env: NodeJS.ProcessEnv, bin: string, names: string[] = ['systemctl', 'journalctl']): void {
+  for (const name of names) {
     const resolved = spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8', env }).stdout.trim();
     expect(resolved.startsWith(`${bin}${path.sep}`),
       `${name} must resolve inside the stub dir; got "${resolved}" — REFUSING to run the real script`).toBe(true);
@@ -184,6 +188,7 @@ function sweepStubs(home: string, units: Array<{ unit: string; isActive: string[
     + '  *" try-restart "*) exit 0;;\n'
     + '  *" status "*) echo "[stub status]"; exit 0;;\n'
     + '  *" is-active "*)\n' + perUnit('isactive')
+    + '  *" LoadState "*) echo loaded; exit 0;;\n'
     + '  *" MainPID "*)\n' + perUnit('mainpid')
     + 'esac\n'
     + 'echo "stub systemctl: unexpected argv: $*" >&2\nexit 64\n', { mode: 0o755 });
@@ -2369,7 +2374,7 @@ describe('verify-service.sh tells a deliberate supervisor stop from a crash (wav
     ]);
   }, 30_000);
 
-  it('V2: a purged row passes (the purge keeps `generation`, D-2605)', () => {
+  it('V2: a purged row passes (a `.generation` left mid-purge is never read; D-2605 removes it last)', () => {
     const home = fixtureHome(); plantReg(home, { 'demo-gone.generation': '7' });
     const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
@@ -2548,6 +2553,7 @@ describe('verify-service.sh tells a deliberate supervisor stop from a crash (wav
     expect(r.calls.trim().split('\n')).toEqual([
       `systemctl --user is-active ${U}`,
       `systemctl --user is-active ${U}`,
+      `systemctl --user show -p LoadState --value ${U}`,
     ]);
   }, 30_000);
 
@@ -2602,5 +2608,80 @@ describe('verify-service.sh tells a deliberate supervisor stop from a crash (wav
     const lines = readFileSync(VERIFY, 'utf8').split('\n');
     expect(lines).toContain('STOP_POLLS="${CCRC_VERIFY_STOP_POLLS:-10}"');
     expect(lines).toContain('STOP_INTERVAL="${CCRC_VERIFY_STOP_INTERVAL:-1}"');
+  }, 30_000);
+
+  // ── wave 11, R13 (a)–(d) ──────────────────────────────────────────────────
+  const nLoadState = (calls: string): number => calls.split('\n').filter((l) => l.includes(' LoadState ')).length;
+
+  it('V23: an escaped name is not ccd\'s — the purged arm believes only a name ccd could have minted (R13a)', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.generation': '7' });
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }),
+      'claude-session@demo\\x2dgone.service', { home });
+    expect(r.code, `stdout:\n${r.stdout}`).toBe(1);
+    expect(nIsActive(r.calls)).toBe(3);
+    expect(nLoadState(r.calls)).toBe(0);
+  }, 30_000);
+
+  it.each(['not-found', 'masked', ''])('V24: a unit systemd cannot load (LoadState %j) is not a purged row (R13a)', (loadState) => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.generation': '7' });
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'], loadState }), U, { home });
+    expect(r.code, `stdout:\n${r.stdout}`).toBe(1);
+    expect(r.stderr).toContain("became 'inactive'");
+    expect(r.stderr).toContain('DEPLOY FAILED');
+    expect(nLoadState(r.calls)).toBe(1);
+  }, 30_000);
+
+  it('V25: a leading dot is not a ccd id — `claude-session@..service` passes the grammar and reads `loaded` (D-3977)', () => {
+    const home = fixtureHome(); plantReg(home, {});
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }),
+      'claude-session@..service', { home });
+    expect(r.code, `stdout:\n${r.stdout}`).toBe(1);
+    expect(nLoadState(r.calls)).toBe(0);
+  }, 30_000);
+
+  it('V26: a symlinked `.uuid` is a row, not nothing (D-3978)', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.generation': '7' });
+    symlinkSync(path.join(home, 'nowhere'), path.join(home, '.cc-sessions', 'demo-gone.uuid'));
+    expect(existsSync(path.join(home, '.cc-sessions', 'demo-gone.uuid')), 'the plant must be a dangling symlink').toBe(false);
+    expect(lstatSync(path.join(home, '.cc-sessions', 'demo-gone.uuid')).isSymbolicLink()).toBe(true);
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code, `stdout:\n${r.stdout}`).toBe(1);
+    expect(nLoadState(r.calls)).toBe(0);
+  }, 30_000);
+
+  it('V27: the re-poll sleeps STOP_INTERVAL between reads (R13b)', () => {
+    const home = fixtureHome(); stamp(home);
+    const dir = stubs({ isActive: ['active', 'deactivating', 'deactivating', 'deactivating', 'inactive'], mainPid: ['4242'] });
+    writeFileSync(path.join(dir, 'sleep'), `#!/bin/sh\nD=${JSON.stringify(dir)}\nprintf '%s\\n' "$1" >> "$D/sleeps"\nexit 0\n`, { mode: 0o755 });
+    const r = runVerify(dir, U, { home, env: { CCRC_VERIFY_STOP_INTERVAL: '7' }, provesSleep: true });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(STAMPED_LINE);
+    expect(readFileSync(path.join(dir, 'sleeps'), 'utf8').trim().split('\n')).toEqual(['0', '0', '7', '7']);
+  }, 30_000);
+
+  it('V28: a symlinked stamp is never read (R13c)', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u' });
+    writeFileSync(path.join(home, 'elsewhere'), 'canary-9f2\n');
+    symlinkSync(path.join(home, 'elsewhere'), path.join(home, '.cc-sessions', 'demo-gone.stopped'));
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(FIFO_LINE);
+    expect(r.stdout).not.toContain('canary-9f2');
+  }, 30_000);
+
+  it('V29: an empty id never passes — `claude-session@.service` is refused before any read (R13d)', () => {
+    const home = fixtureHome(); plantReg(home, { '.stopped': '1 ccd' });
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }),
+      'claude-session@.service', { home });
+    expect(r.code, `stdout:\n${r.stdout}`).toBe(1);
+    expect(nIsActive(r.calls)).toBe(2);
+  }, 30_000);
+
+  it('V30: ccd_id_ok spells the grammar with its alphabets written out, not as ranges (D-3976)', () => {
+    const verify = readFileSync(VERIFY, 'utf8');
+    expect(verify).toContain('  case "$1" in \'\'|.*|*[!${az}${d}._-]*) return 1 ;; esac');
+    expect(verify).toContain('  local az=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ d=0123456789');
+    expect(verify).toContain('_svc_real_home');
+    expect(verify).toMatch(/range is collation-dependent\s+# under some UTF-8 locales/);
   }, 30_000);
 });
