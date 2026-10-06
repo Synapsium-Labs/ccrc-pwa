@@ -8345,6 +8345,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // comment edits above them keep their line counts. Both corpus
       // documents are byte-identical to `origin/main`, so nothing is
       // re-pointed. S6-R11, no D-number.
+      // 147 -> 147 on the merge of `origin/main` at `77c11245` into docs W1,
+      // re-measured on the merged tree by `cite-remeasure.py` against
+      // `origin/main`: stated 147, base 147, tree 147, `ENTERED []`, `LEFT []`,
+      // no other key moved. The merged layout is main's `ccd/ccd` plus the
+      // branch's five `echo docs-*` caps lines (`:8629-8633`, under main's
+      // `reclaim-pause-v1` line), the two length-neutral comment edits and the
+      // docs block below every corpus anchor. Both corpus documents are main's,
+      // so nothing was re-pointed. S6-R11, no D-number.
       'ccd/ccd': 147,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
@@ -8650,6 +8658,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // census is main's, entry for entry; the `'ccd/ccd'` note above the map names what moved against the branch.
     // 197 -> 197 at docs W1a (Task 6), by the census's own arithmetic: no key
     // moved (argued beside the map, above the `'ccd/ccd'` entry).
+    // 197 -> 197 on the merge of `origin/main` at `77c11245` into docs W1: stated 197, base 197, tree 197,
+    // measured by `cite-remeasure.py` against `origin/main`; no key moved (argued beside the map).
     expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(197);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
@@ -9449,6 +9459,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // not debt appearing. Nothing was re-pointed (both corpus documents
         // are byte-identical to `origin/main`). S6-R11 covers the
         // re-measurement, so no D-number.
+        // RE-MEASURED on the merge of `origin/main` at `77c11245` into docs W1,
+        // on the merged tree by `cite-remeasure.py` against `origin/main`, FROM
+        // THE SAME RUN as the site-level set below: stated 54, main 55, tree 54
+        // (the branch 54); `--write` changed no literal. Against main: none
+        // entered; `ccd/ccd:11665-11670` left, once the five `echo docs-*` caps
+        // lines at `:8629-8633` slid every line below them down five, onto
+        // comment bytes that now pass the row: a coincidence, not a repair.
+        // Nothing was re-pointed. S6-R11 covers it, so no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9671,6 +9689,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // because no other pass reaches those sites, which is what this list
       // measures. The cause there is the five `echo docs-*` caps lines at
       // `:8627`; nothing re-pointed. S6-R11 covers it, so no D-number.
+      // RE-MEASURED on the merge of `origin/main` at `77c11245` into docs W1, 35 -> 35, FROM THE SAME RUN as
+      // the row-pass set above: stated 35, base 35, tree 35, nothing entered or left. S6-R11, no D-number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',
