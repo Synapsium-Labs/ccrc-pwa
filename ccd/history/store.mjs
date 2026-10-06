@@ -17,9 +17,13 @@
 // synchronous by design (server/src/coord/db.ts's `tx` header): a transaction
 // never yields, and nothing here wraps it async.
 import { DatabaseSync } from 'node:sqlite';
-import { lstatSync, statSync } from 'node:fs';
+import {
+  chmodSync, closeSync, constants as FS, existsSync, fchmodSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
+  readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeSync,
+} from 'node:fs';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z } from 'node:zlib';
-import { BUSY_TIMEOUT_MS } from './lib.mjs';
+import { BUSY_TIMEOUT_MS, SCHEMA_VERSION, UUID_RE, WRITER_RE, historyPaths } from './lib.mjs';
 
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
 export const CODEC = 'br5';
@@ -360,4 +364,261 @@ export function schemaOf(db) {
     out[name] = db.prepare('SELECT name FROM pragma_table_info(?) ORDER BY cid').all(name).map((r) => String(r.name));
   }
   return out;
+}
+
+// ── the binding: facts, creation, the pending marker ────────────────────────
+
+/** A random v4 uuid, lowercase: the NODE_ID_RE grammar (§6.2). Minted once per
+ *  store, by `createStore`; it never records the box's node-id (D-4219). */
+export function mintStoreId() {
+  return randomUUID();
+}
+
+/** The writer token (§9.14, BK8): 8 hex digits, minted at every binding, so two
+ *  boxes or two bindings of one store never name a journal file the same (D-4220). */
+export function mintWriter() {
+  return randomBytes(4).toString('hex');
+}
+
+/** fsync a directory, so a rename or link inside it survives a power loss. */
+function fsyncDir(dir) {
+  const fd = openSync(dir, FS.O_RDONLY);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+/** Temp in the same directory, written, fsynced, renamed over `path`, and the
+ *  directory fsynced: the file exists whole or not at all. `fchmod` after the
+ *  open, because a temp a killed run left behind keeps its old mode under a
+ *  plain `open(…, 'w', mode)`. */
+export function writeFileAtomic(path, text, mode = 0o600) {
+  const tmp = `${path}.tmp.${process.pid}`;
+  const fd = openSync(tmp, 'w', mode);
+  try {
+    fchmodSync(fd, mode);
+    writeSync(fd, text);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tmp, path);
+  fsyncDir(path.slice(0, path.lastIndexOf('/')));
+}
+
+/** One binding file (`store.id`, `store.id.pending`, `store.writer`) as a
+ *  Presence: absent, unreadable, or its trimmed value. A value that fails its
+ *  grammar is UNREADABLE, never absent — absent means "no store was bound",
+ *  which a garbled file does not say (IV5). */
+function readBindingFile(path, re) {
+  let text;
+  try { text = readFileSync(path, 'utf8'); } catch (e) {
+    return e && e.code === 'ENOENT' ? { state: 'absent' } : { state: 'unreadable' };
+  }
+  const v = text.trim();
+  return re.test(v) ? { state: 'value', value: v } : { state: 'unreadable' };
+}
+
+/** The DB's own `meta.store_id`, read through a read-only handle. A DB that
+ *  opens but carries no store_id row reads `absent`; a DB that will not open,
+ *  or has no meta table, reads `unreadable` (store-unmeasured, never "no store";
+ *  D-4219). */
+export function peekStoreId(dbPath) {
+  let db;
+  try {
+    db = openReader(dbPath);
+    const row = db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get();
+    if (row === undefined) return { state: 'absent' };
+    const v = String(row.v);
+    return UUID_RE.test(v) ? { state: 'value', value: v } : { state: 'unreadable' };
+  } catch {
+    return { state: 'unreadable' };
+  } finally {
+    try { db?.close(); } catch { /* read-only: nothing to lose */ }
+  }
+}
+
+/** A directory's entries, or the marker that it exists and cannot be listed.
+ *  ENOENT is an empty list: a store that never ran has no journal yet. */
+function listOrUnlistable(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true });
+  } catch (e) {
+    return e && e.code === 'ENOENT' ? [] : null;
+  }
+}
+
+/** Every fact `decideStoreOpen` (lib.mjs) needs, measured; nothing decided.
+ *
+ *  ORDER MATTERS ONCE: `-wal`/`-shm` are measured BEFORE the DB is peeked,
+ *  because a read-only open of a WAL database creates both sidecars and cannot
+ *  remove them (M, 22.16.0), and a sidecar is evidence only when it predates
+ *  this pass (store-wal-orphaned).
+ *
+ *  THE EVIDENCE LISTS. `journalStoreDirs` holds the uuid-named directories under
+ *  `journal/`, and `backupsDb` the regular `*.db` files directly in
+ *  `db/backups/`. A directory that exists but cannot be listed is reported as
+ *  ONE entry, `'(unlistable)'`, so the both-absent arm refuses
+ *  `store-recoverable` rather than mint a store over evidence it could not read
+ *  — the conservative direction, at the cost of naming recoverability where
+ *  readability is the fault. */
+export function measureStoreFacts(home, role) {
+  const P = historyPaths(home);
+  let dbDir;
+  try {
+    const l = lstatSync(P.dbDir);
+    if (l.isDirectory()) dbDir = 'dir';
+    else if (l.isSymbolicLink()) {
+      try { dbDir = statSync(P.dbDir).isDirectory() ? 'dir' : 'unmeasured'; } catch (e) {
+        dbDir = e && e.code === 'ENOENT' ? 'dangling' : 'unmeasured';
+      }
+    } else dbDir = 'unmeasured';
+  } catch (e) {
+    dbDir = e && e.code === 'ENOENT' ? 'absent' : 'unmeasured';
+  }
+
+  const facts = {
+    role,
+    dbDir,
+    storeId: readBindingFile(P.storeId, UUID_RE),
+    pending: readBindingFile(P.pending, UUID_RE),
+    writer: readBindingFile(P.writer, WRITER_RE),
+    db: 'absent',
+    dbStoreId: { state: 'absent' },
+    wal: false,
+    shm: false,
+    journalStoreDirs: [],
+    backupsDb: [],
+  };
+
+  const journal = listOrUnlistable(P.journalDir);
+  facts.journalStoreDirs = journal === null
+    ? ['(unlistable)']
+    : journal.filter((e) => e.isDirectory() && UUID_RE.test(e.name)).map((e) => e.name).sort();
+
+  if (dbDir === 'dir') {
+    facts.wal = existsSync(P.wal);
+    facts.shm = existsSync(P.shm);
+    facts.db = dbFileState(P.dbFile);
+    const backups = listOrUnlistable(P.backups);
+    facts.backupsDb = backups === null
+      ? ['(unlistable)']
+      : backups.filter((e) => e.isFile() && e.name.endsWith('.db')).map((e) => e.name).sort();
+    if (facts.db === 'present') facts.dbStoreId = peekStoreId(P.dbFile);
+  } else if (dbDir === 'unmeasured') {
+    facts.db = 'unmeasured';
+  }
+  return facts;
+}
+
+/** The writer's own temps (§6.2, DI13): a creation's `history.db.new.<pid>`
+ *  and a restore's `.history.db.restore.<…>`, each WITH its `-wal`, `-shm` and
+ *  `-journal`. SQLite pairs a WAL with its database by NAME, so a temp is never
+ *  reopened: the pass that holds the lock removes every one, sidecars
+ *  together, and returns the names it removed. */
+const TEMP_RE = /^(history\.db\.new\.|\.history\.db\.restore\.)/;
+export function removeStaleTemps(home) {
+  const P = historyPaths(home);
+  let names;
+  try { names = readdirSync(P.dbDir); } catch { return []; }
+  const removed = [];
+  for (const n of names.sort()) {
+    if (!TEMP_RE.test(n)) continue;
+    rmSync(`${P.dbDir}/${n}`, { force: true });
+    removed.push(n);
+  }
+  return removed;
+}
+
+/** First creation (§6.2), run only on `decideStoreOpen`'s `create` (or after
+ *  `dropPending` on `drop-pending-create`), under the shim's lock:
+ *
+ *   1. root and db/ exist, 0700;
+ *   2. mint the store_id and the writer token; `store.writer` first, then
+ *      `store.id.pending`, each temp-then-rename and fsynced (§9.14: the token
+ *      is on disk before any marker names the store);
+ *   3. `history.db.new.<pid>` created O_CREAT|O_EXCL 0600 — a temp whose name
+ *      exists, or whose sidecars exist, is never opened;
+ *   4. auto_vacuum, WAL, the v1 DDL, meta store_id and writer, user_version 1,
+ *      in ONE transaction; close (the WAL is checkpointed away);
+ *   5. fsync the temp, `link()` it to history.db (fails if one appeared), unlink
+ *      the temp, fsync db/;
+ *   6. rename `store.id.pending` to `store.id`, fsync the root.
+ *
+ *  A kill at any step leaves a state `decideStoreOpen` decides: before step 5
+ *  no history.db exists and the pending marker is dropped (`drop-pending-create`,
+ *  DM33); between 5 and 6 the DB carries the marker's id and the next pass
+ *  finishes the rename (`finish-pending`, DM33b).
+ *
+ *  D-4219 (the store.id / meta.store_id marker: a DB beside a marker naming
+ *  another store is refused, never restarted empty, §6.5) D-4220 (store.writer
+ *  is written before store.id.pending). */
+export function createStore(home) {
+  const P = historyPaths(home);
+  mkdirSync(P.dbDir, { recursive: true, mode: 0o700 });
+  chmodSync(P.root, 0o700);
+  if (lstatSync(P.dbDir).isDirectory()) chmodSync(P.dbDir, 0o700);
+
+  const storeId = mintStoreId();
+  const writer = mintWriter();
+  writeFileAtomic(P.writer, `${writer}\n`);
+  writeFileAtomic(P.pending, `${storeId}\n`);
+
+  const tmp = `${P.dbDir}/history.db.new.${process.pid}`;
+  for (const s of ['-wal', '-shm', '-journal']) {
+    if (existsSync(`${tmp}${s}`)) throw new Error(`${tmp}${s} exists; a temp with sidecars is never opened`);
+  }
+  closeSync(openSync(tmp, FS.O_CREAT | FS.O_EXCL | FS.O_WRONLY, 0o600));
+  const db = new DatabaseSync(tmp);
+  try {
+    db.exec('PRAGMA auto_vacuum = INCREMENTAL');
+    db.exec('PRAGMA journal_mode = WAL');
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.exec(MIGRATIONS[0]);
+      const put = db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)');
+      put.run('store_id', storeId);
+      put.run('writer', writer);
+      db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+      db.exec('COMMIT');
+    } catch (err) {
+      try { db.exec('ROLLBACK'); } catch { /* the transaction is already gone */ }
+      throw err;
+    }
+  } finally {
+    db.close();
+  }
+  const fd = openSync(tmp, FS.O_RDONLY);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+  linkSync(tmp, P.dbFile);
+  unlinkSync(tmp);
+  fsyncDir(P.dbDir);
+  renameSync(P.pending, P.storeId);
+  fsyncDir(P.root);
+  return { storeId, writer };
+}
+
+/** `finish-pending`: this box's own interrupted creation — the DB carries the
+ *  marker's id — so the rename the kill skipped is done now. The caller counts
+ *  `store_creation_completed` once the store opens. */
+export function finishPending(home) {
+  const P = historyPaths(home);
+  renameSync(P.pending, P.storeId);
+  fsyncDir(P.root);
+}
+
+/** `drop-pending-create`: a marker with no DB names a creation that never
+ *  linked; it is removed so the next `createStore` mints afresh. */
+export function dropPending(home) {
+  const P = historyPaths(home);
+  rmSync(P.pending, { force: true });
+  fsyncDir(P.root);
+}
+
+/** At open, `meta.writer` follows `store.writer` (§9.14, DI5; D-4220): the file is
+ *  the binding fact the journal half reads with no DB open, and the meta row
+ *  its mirror. An absent or garbled file changes nothing — the journal half
+ *  then observes only, until a binding writes the file. */
+export function syncWriterMirror(db, home) {
+  const w = readBindingFile(historyPaths(home).writer, WRITER_RE);
+  if (w.state !== 'value') return;
+  if (getMeta(db, 'writer') !== w.value) setMeta(db, 'writer', w.value);
 }

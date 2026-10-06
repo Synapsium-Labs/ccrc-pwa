@@ -7,15 +7,19 @@
 // live ~/.ccrc. Runs on every platform: an L3 file under test in-process needs
 // no carrier, and the children are plain node.
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { brotliCompressSync, constants as Z } from 'node:zlib';
 import { mkTmp } from './tmpHelpers.js';
-import { SCHEMA_ADDED, SCHEMA_VERSION } from '../../ccd/history/lib.mjs';
+import { SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths } from '../../ccd/history/lib.mjs';
 import {
   CODEC, MIGRATIONS, StoreError, openWriter, openReader, userVersion, probeFts5, withTx, brotli, unbrotli,
   measuredSize, getMeta, setMeta, bump, closeWriter, schemaOf,
+  mintStoreId, mintWriter, writeFileAtomic, peekStoreId, measureStoreFacts, removeStaleTemps, createStore,
+  finishPending, dropPending, syncWriterMirror,
 } from '../../ccd/history/store.mjs';
 
 /** A delete-mode (rollback-journal) v1 store built by hand, the shape a
@@ -208,5 +212,197 @@ describe('store.mjs: open, schema v1, pragmas', () => {
     expect((db.prepare("SELECT n FROM counters WHERE name = 'raw_only'").get() as { n: number }).n).toBe(7);
     closeWriter(db);
     expect(() => db.prepare('SELECT 1').get()).toThrow();
+  });
+});
+
+describe('store.mjs: the binding', () => {
+  const STORE = path.resolve(__dirname, '../../ccd/history/store.mjs');
+  const FAULTS = path.resolve(__dirname, 'fixtures/history/preload-faults.mjs');
+  const home = (): string => mkTmp('ccrc-history-bind-');
+  /** createStore in a child that the fault preload SIGKILLs at the named call. The `timeout` bounds a
+   *  child that hangs instead (vitest's testTimeout cannot interrupt a spawnSync); it ends one with
+   *  SIGTERM, so a hang is never read as the preload's planned SIGKILL. */
+  const createKilledAt = (h: string, kill: string): ReturnType<typeof spawnSync> => spawnSync(process.execPath, [
+    '--no-warnings', '--import', pathToFileURL(FAULTS).href, '--input-type=module', '-e',
+    `import { createStore } from ${JSON.stringify(pathToFileURL(STORE).href)}; createStore(process.argv[1]);`, h,
+  ], {
+    encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: h, HISTORY_TEST_KILL: kill },
+    timeout: 60_000, killSignal: 'SIGTERM',
+  });
+
+  it('ids: a v4 store_id and an 8-hex writer token, fresh each call', () => {
+    const a = mintStoreId(); const b = mintStoreId();
+    expect(a).toMatch(UUID_RE);
+    expect(a.split('-')[2]![0]).toBe('4');
+    expect(a).not.toBe(b);
+    expect(mintWriter()).toMatch(WRITER_RE);
+  });
+
+  it('writeFileAtomic leaves the file whole at 0600 and no temp, even over a stale temp with another mode', () => {
+    const d = home();
+    const p = path.join(d, 'store.writer');
+    fs.writeFileSync(`${p}.tmp.${process.pid}`, 'stale', { mode: 0o644 });
+    writeFileAtomic(p, 'abcdef01\n');
+    expect(fs.readFileSync(p, 'utf8')).toBe('abcdef01\n');
+    expect(mode(p)).toBe(0o600);
+    expect(fs.readdirSync(d)).toEqual(['store.writer']);
+  });
+
+  it('createStore: §6.2 sequence end to end — binding files, modes, WAL, v1, and an `open` verdict after', () => {
+    const h = home();
+    const { storeId, writer } = createStore(h);
+    const P = historyPaths(h);
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    expect(fs.readFileSync(P.writer, 'utf8').trim()).toBe(writer);
+    expect(fs.existsSync(P.pending)).toBe(false);
+    expect(fs.readdirSync(P.dbDir)).toEqual(['history.db']);
+    expect(mode(P.root)).toBe(0o700);
+    expect(mode(P.dbDir)).toBe(0o700);
+    expect(mode(P.dbFile)).toBe(0o600);
+    const r = new DatabaseSync(P.dbFile, { readOnly: true });
+    expect(userVersion(r)).toBe(SCHEMA_VERSION);
+    expect(pragma(r, 'journal_mode')).toBe('wal');
+    expect(pragma(r, 'auto_vacuum')).toBe(2);
+    expect(getMeta(r, 'store_id')).toBe(storeId);
+    expect(getMeta(r, 'writer')).toBe(writer);
+    r.close();
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'open' });
+  });
+
+  it('§9.14: store.writer is on disk before any marker names the store — a kill at the marker\'s write leaves the token alone', () => {
+    const h = home();
+    const P = historyPaths(h);
+    // The FIRST rename naming store.id.pending is the marker's own temp rename
+    // (store.id.pending.tmp.<pid>), killed before it runs: the state between the two binding writes.
+    const r = createKilledAt(h, 'renameSync:store.id.pending:1');
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.pending)).toBe(false);
+    expect(fs.readFileSync(P.writer, 'utf8').trim()).toMatch(WRITER_RE);
+  });
+
+  it('measureStoreFacts reports each binding read as value, absent or unreadable — never folded', () => {
+    const h = home();
+    const P = historyPaths(h);
+    const fresh = measureStoreFacts(h, 'both');
+    expect(fresh).toEqual({
+      role: 'both', dbDir: 'absent', storeId: { state: 'absent' }, pending: { state: 'absent' }, writer: { state: 'absent' },
+      db: 'absent', dbStoreId: { state: 'absent' }, wal: false, shm: false, journalStoreDirs: [], backupsDb: [],
+    });
+    fs.mkdirSync(P.dbDir, { recursive: true });
+    fs.writeFileSync(P.storeId, 'not-a-uuid\n');
+    fs.mkdirSync(P.writer);
+    fs.writeFileSync(P.dbFile, '');
+    fs.writeFileSync(P.wal, '');
+    fs.mkdirSync(path.join(P.journalDir, '33333333-3333-4333-8333-333333333333'), { recursive: true });
+    fs.mkdirSync(path.join(P.journalDir, 'not-a-store'));
+    fs.mkdirSync(P.backups);
+    fs.writeFileSync(path.join(P.backups, '20261005T000000Z.db'), 'x');
+    fs.writeFileSync(path.join(P.backups, '.pre-v2.db.tmp'), 'x');
+    const f = measureStoreFacts(h, 'fleet');
+    expect(f.storeId).toEqual({ state: 'unreadable' });
+    expect(f.writer).toEqual({ state: 'unreadable' });
+    expect(f.db).toBe('zero-byte');
+    expect(f.wal).toBe(true);
+    expect(f.shm).toBe(false);
+    expect(f.journalStoreDirs).toEqual(['33333333-3333-4333-8333-333333333333']);
+    expect(f.backupsDb).toEqual(['20261005T000000Z.db']);
+  });
+
+  it('measureStoreFacts tells a dangling db/ link from an absent one, and follows a live link', () => {
+    const h = home();
+    const P = historyPaths(h);
+    fs.mkdirSync(P.root, { recursive: true });
+    fs.symlinkSync(path.join(h, 'volume-gone'), P.dbDir);
+    expect(measureStoreFacts(h, 'fleet').dbDir).toBe('dangling');
+    fs.mkdirSync(path.join(h, 'volume-gone'), { mode: 0o700 });
+    expect(measureStoreFacts(h, 'fleet').dbDir).toBe('dir');
+  });
+
+  it('peekStoreId: the DB\'s own meta.store_id, absent without the row, unreadable for a file that is no store', () => {
+    const h = home();
+    const { storeId } = createStore(h);
+    const P = historyPaths(h);
+    expect(peekStoreId(P.dbFile)).toEqual({ state: 'value', value: storeId });
+    const w = openWriter(P.dbFile);
+    w.exec("DELETE FROM meta WHERE k = 'store_id'");
+    closeWriter(w);
+    expect(peekStoreId(P.dbFile)).toEqual({ state: 'absent' });
+    const junk = path.join(h, 'junk.db');
+    fs.writeFileSync(junk, 'this is not a database file at all, it is text\n'.repeat(40));
+    expect(peekStoreId(junk)).toEqual({ state: 'unreadable' });
+  });
+
+  it('DM33: a creation killed before its link() leaves no history.db, and the next run creates the store', () => {
+    // Two kill points: the temp just made (0 bytes), and the temp fully built
+    // and closed but not yet fsynced or linked (the second open of its name).
+    for (const kill of ['openSync:history.db.new.:1:after', 'openSync:history.db.new.:2']) {
+      const h = home();
+      const P = historyPaths(h);
+      const r = createKilledAt(h, kill);
+      expect(r.signal, `${kill}: ${String(r.stderr)}`).toBe('SIGKILL');
+      expect(fs.existsSync(P.dbFile), kill).toBe(false);
+      expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('history.db.new.')), kill).toHaveLength(1);
+      expect(fs.existsSync(P.pending), kill).toBe(true);
+
+      expect(decideStoreOpen(measureStoreFacts(h, 'fleet')), kill).toEqual({ act: 'drop-pending-create' });
+      expect(removeStaleTemps(h), kill).toHaveLength(1);
+      dropPending(h);
+      const { storeId } = createStore(h);
+      expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+      expect(peekStoreId(P.dbFile)).toEqual({ state: 'value', value: storeId });
+      // (A read-only open of a WAL store makes its -wal and -shm, M 22.16.0: only temps are asserted gone.)
+      expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('history.db.new.'))).toEqual([]);
+    }
+  });
+
+  it('DM33b: a creation killed between the link() and the rename is finished, never refused; a foreign marker stays refused', () => {
+    const h = home();
+    const P = historyPaths(h);
+    // The FIRST rename naming store.id.pending is the marker's own atomic write
+    // (its temp is store.id.pending.tmp.<pid>); the SECOND is the rename to store.id.
+    const r = createKilledAt(h, 'renameSync:store.id.pending:2');
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.dbFile)).toBe(true);
+    expect(fs.existsSync(P.storeId)).toBe(false);
+    const pending = fs.readFileSync(P.pending, 'utf8').trim();
+    expect(peekStoreId(P.dbFile)).toEqual({ state: 'value', value: pending });
+
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'finish-pending' });
+    finishPending(h);
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(pending);
+    expect(fs.existsSync(P.pending)).toBe(false);
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'open' });
+
+    // CONTROL: the same DB beside a marker naming ANOTHER store is not this box's
+    // creation — store-unbound, so S13's refusal is untouched.
+    fs.renameSync(P.storeId, P.pending);
+    fs.writeFileSync(P.pending, `${mintStoreId()}\n`);
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'refuse', word: 'store-unbound' });
+  });
+
+  it('removeStaleTemps removes each writer temp WITH its sidecars, and nothing else', () => {
+    const h = home();
+    createStore(h);
+    const P = historyPaths(h);
+    const plant = ['history.db.new.4242', 'history.db.new.4242-wal', 'history.db.new.4242-shm', 'history.db.new.4242-journal',
+      '.history.db.restore.1700000000000', '.history.db.restore.1700000000000-wal', 'notes.txt'];
+    for (const n of plant) fs.writeFileSync(path.join(P.dbDir, n), 'x');
+    const removed = removeStaleTemps(h);
+    expect(removed.sort()).toEqual(plant.filter((n) => n !== 'notes.txt').sort());
+    expect(fs.readdirSync(P.dbDir).sort()).toEqual(['history.db', 'notes.txt']);
+  });
+
+  it('syncWriterMirror: meta.writer follows store.writer, and an absent file changes nothing', () => {
+    const h = home();
+    createStore(h);
+    const P = historyPaths(h);
+    writeFileAtomic(P.writer, 'feedf00d\n');
+    const db = openWriter(P.dbFile);
+    syncWriterMirror(db, h);
+    expect(getMeta(db, 'writer')).toBe('feedf00d');
+    fs.rmSync(P.writer);
+    syncWriterMirror(db, h);
+    expect(getMeta(db, 'writer')).toBe('feedf00d');
+    closeWriter(db);
   });
 });
