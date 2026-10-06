@@ -1476,7 +1476,11 @@ function redactRun(segment, idx) {
 }
 
 function redactLayers(segment, idx) {
-  // Layer 1: values, by (length, sha256) of each [A-Za-z0-9_-]+ run.
+  // Layer 1: values, by (length, sha256) of each [A-Za-z0-9_-]+ run. A value
+  // glued to other run characters (`<secret>_file`) is not a run and is not
+  // matched here: that is §8.3's chosen grammar, since a substring search
+  // would hash every window of every stored length. The context and shape
+  // layers are the belt there.
   let s = segment.replace(/[A-Za-z0-9_-]+/g, (run) => {
     const shas = idx.byLen.get(run.length);
     return shas !== undefined && shas.has(sha256Hex(run)) ? REDACTED_MARK : run;
@@ -1503,16 +1507,33 @@ function redactLayers(segment, idx) {
  *  serialisation (§8.3: JSON escaping glues `\n` onto the next run, and a cut
  *  leaves a prefix no pair matches). Runs are split at ANSI CSI sequences
  *  first, so a coloured token is still one run; the sequences themselves are
- *  kept. D-4202 */
+ *  kept. D-4202
+ *
+ *  A token coloured in PART (`grep --color=always`, a word-diff, a
+ *  highlighter) is split across fragments, and no layer sees it whole. So a
+ *  field that holds a CSI sequence gets a second pass: the per-fragment result
+ *  `A`, its CSI sequences removed (`P`), run through the layers once more
+ *  (`C`). `C === P` means the joined text holds nothing new, and `A` is
+ *  returned with its colours; otherwise `C` is returned, the sequences dropped
+ *  from that one field's output (presentation only, the stored blob stays
+ *  verbatim) and the result the union of both passes' redactions. A field
+ *  with no CSI sequence takes the per-fragment path alone, at no extra cost.
+ *  D-4307 (history-redaction-csi-joined-belt) */
 export function redactField(text, idx) {
   let out = '';
   let last = 0;
+  let sawCsi = false;
   ANSI_CSI_RE.lastIndex = 0;
   for (let m = ANSI_CSI_RE.exec(text); m !== null; m = ANSI_CSI_RE.exec(text)) {
     out += redactRun(text.slice(last, m.index), idx) + m[0];
     last = m.index + m[0].length;
+    sawCsi = true;
   }
-  return out + redactRun(text.slice(last), idx);
+  const perFragment = out + redactRun(text.slice(last), idx);
+  if (!sawCsi) return perFragment;
+  const plain = perFragment.replace(ANSI_CSI_RE, '');
+  const joined = redactRun(plain, idx);
+  return joined === plain ? perFragment : joined;
 }
 
 /** The second belt (§8.3): the final rendered stdout, stderr or `--json`

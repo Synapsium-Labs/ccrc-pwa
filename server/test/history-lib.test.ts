@@ -1472,6 +1472,37 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     expect(Date.now() - t0).toBeLessThan(LINEAR_MS);
     expect(out === `${prefix} ${M}`).toBe(true);
   });
+  // Task 9S (D-4307): a token coloured in PART is split across fragments, and
+  // no layer sees it whole; a field with a CSI sequence gets a joined second pass.
+  it('a shape split by a CSI sequence is redacted', () => {
+    const none = libRedact.makePairIndex([]);
+    const split = ['s', 'k-ant', '\x1b[m', '-api03-', 'x'.repeat(40)].join('');
+    expect(libRedact.redactField(`\x1b[01;31m${split}`, none)).toBe(M);
+  });
+  it('a known value split by a CSI sequence is redacted', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    expect(libRedact.redactField(`id=\x1b[31m${tok.slice(0, 10)}\x1b[0m${tok.slice(10)} end`, idx)).toBe(`id=${M} end`);
+  });
+  it('a wholly coloured known value is redacted and its sequences are kept; a field with no secret is returned as it came', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    expect(libRedact.redactField(`a \x1b[32m${tok}\x1b[0m b`, idx)).toBe(`a \x1b[32m${M}\x1b[0m b`);
+    const plain = '\x1b[1mhello\x1b[0m world \x1b[38;5;196mred\x1b[m';
+    expect(libRedact.redactField(plain, idx)).toBe(plain);
+  });
+  it('a field holding a whole coloured secret and a partly coloured one comes back redacted twice over and uncoloured', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    const out = libRedact.redactField(`\x1b[32m${tok}\x1b[0m and ${tok.slice(0, 7)}\x1b[1m${tok.slice(7)}`, idx);
+    expect(out).toBe(`${M} and ${M}`);
+  });
+  it('a field with no CSI sequence takes the per-fragment path alone (a bare ESC is not a CSI)', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    expect(libRedact.redactField(`\x1b${tok}\x1b`, idx)).toBe(`\x1b${M}\x1b`);
+    expect(libRedact.redactField('no secret \x1b here', idx)).toBe('no secret \x1b here');
+  });
   it('the mark holds no JSON- or XML-special character, and the final belt applies the same layers', () => {
     expect(M).not.toMatch(/["\\<>&]/);
     const tok = rndHex(32);
