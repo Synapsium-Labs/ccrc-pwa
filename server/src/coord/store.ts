@@ -3259,10 +3259,15 @@ export class CoordStore {
    *  - `'unplaced'` when none is open but a claim carries no readable instant:
    *    a terminal run with no `closedAt`, as a reconstructed or legacy row has,
    *    or a `closedAt` or displacement `at` that is not the canonical decimal
-   *    spelling of a positive safe integer (CAST to TEXT, because the schema is
-   *    not STRICT, then `parseCanonicalPositiveSafeInteger`, never `Number()`:
-   *    `Number()` reads a TEXT `0x10` as 16, an instant before any workspace's
-   *    birth, which would let the fence call a coordinator "not coordinated").
+   *    spelling of a positive safe integer. Both columns are INTEGER affinity,
+   *    so SQLite already stores any spelling it can read as an integer as a
+   *    placed INTEGER on write (`'1e3'`, `' 5'`, `'+5'`, `'05'` and `'5.0'`
+   *    read back as 1000, 5, 5, 5 and 5). The parse guards what stays TEXT or
+   *    REAL (`'0x10'`, `'0b1'`, `''`, `5.5`, `1e20`, ±Infinity): CAST to TEXT,
+   *    because the schema is not STRICT, then `parseCanonicalPositiveSafeInteger`,
+   *    never `Number()`, which reads a TEXT `0x10` as 16, an instant before any
+   *    workspace's birth, and would let the fence call a coordinator "not
+   *    coordinated". No writer in this tree stores one of them.
    *  - Otherwise, the greatest of: each terminal run's `closedAt` that names it
    *    today; and the `at` of every `reclaim:` displacement row naming it on
    *    EITHER side. The `from` side (`childReclaimDisplacedCandidates`) is a
@@ -3295,9 +3300,12 @@ export class CoordStore {
     // The runs read. `closedAt` rides CAST to TEXT and is parsed by
     // `parseCanonicalPositiveSafeInteger`: the schema is not STRICT, and SQLite
     // ranks TEXT above INTEGER, so a raw read could hand this fold a string or
-    // a fraction. Canonical only, never `persistedInt`'s `Number()`: that reads
-    // a hex, binary or exponent spelling as an instant no writer wrote (`0x10`
-    // is 16, before any birth: fail-OPEN), where `'unplaced'` keeps the child.
+    // a fraction. The column's INTEGER affinity already turns a spelling SQLite
+    // reads as an integer (`'1e3'`, `' 5'`, `'+5'`, `'05'`, `'5.0'`) into a
+    // placed INTEGER on write; what the parse guards is what stays TEXT or REAL
+    // (`'0x10'`, `'0b1'`, `''`, `5.5`, `1e20`, ±Infinity). Canonical only, never
+    // `persistedInt`'s `Number()`: that reads `'0x10'` as an instant no writer
+    // wrote (16, before any birth: fail-OPEN), where `'unplaced'` keeps the child.
     const runs = this.db.prepare(
       `SELECT claimedBy, CASE WHEN state NOT IN ${TERMINAL_RUN_STATES_SQL} THEN 1 ELSE 0 END AS open, ` +
       'CAST(closedAt AS TEXT) AS closedAtText FROM runs WHERE claimedBy IS NOT NULL',
