@@ -44,7 +44,7 @@ import {
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkTmp } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool, CONTAINED_TOOLS } from './containedTools.js';
 import { itLinux, itDarwin, platformContrast, python3ProgramArm, IS_DARWIN } from './platformFixtures.js';
@@ -12940,3 +12940,10 @@ describe('Plan 3a Task 10 — ccrc update onto this tree over today\'s live shap
       .toHaveLength(1);
   }, 120_000);
 });
+
+// R20a (centralised-update wave 13): each test's fixture homes go in a root `afterEach`, not all at once in the
+// file's `afterAll`. Measured at 9221416a: the three parts of this file leave 648 homes, about 99,700 entries and
+// 2.47 GB to that one hook, which overran vitest's 20 s hook timeout on CI shards at 670d25fd and 7b0a5454. It sits
+// at the END of the file so no line above moves: a top-level hook registers on the root suite wherever it is
+// written, because vitest collects the whole file before it runs a test.
+removeTmpFixturesEachTest();
