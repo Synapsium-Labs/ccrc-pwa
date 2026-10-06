@@ -1182,6 +1182,54 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     expect(f.calls.map((c) => c[0])).toEqual(['ws-release']);
   });
 
+  // K7b / K7c — step 5's other two directions, so the fence is pinned HERE
+  // and not only by the close's and the executor's suites. K7 pins "an
+  // earlier workspace's claim does not stop the release"; these pin that a
+  // claim this generation made, and a claim whose birth cannot be placed,
+  // each DO.
+  let k7n = 0;
+  /** `RID`'s own terminal coordinator claim (a run it claimed, closed `failed`), its `closedAt` read back. */
+  const closedClaim = (coord: CoordStore, program: string): number => {
+    const claim = coord.openRun({ program, title: 't', project: 'demo', wave: 1, waveOf: null, claimedBy: RID });
+    if (!('id' in claim)) throw new Error(`openRun claim refused: ${JSON.stringify(claim)}`);
+    expect(coord.closeRun({ runId: claim.id, finalState: 'failed', causedBy: 'test', handoffCommit: null,
+      program, viaClosing: false }).ok).toBe(true);
+    const read = coord.run(claim.id);
+    if (!read.ok || read.run === null || read.run.closedAt === null) throw new Error('the claim has no closedAt');
+    return read.run.closedAt;
+  };
+
+  it('K7b: a terminal claim from THIS generation stops the release — changed, and ccd is never called', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    const closedAt = closedClaim(f.coord, 'demo-this');
+    // This generation's `create` is mirrored at the claim's own instant: the
+    // claim closed at (not before) the birth less the skew, so it is this
+    // workspace's own coordination.
+    k7n += 1;
+    const line = JSON.stringify({ uid: `k7b.1.${k7n}`, at: closedAt, act: 'create', outcome: 'done', verb: 'ws-add', id: RID });
+    f.coord.ingestJournal({ gen: '1790000000000000000', rows: [parseJournalLine(line)], cursor: k7n * 200,
+      size: k7n * 200, at: closedAt });
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold({ ...f.deps, now: () => closedAt + 1_000 }, req)).toBe('changed');
+    expect(f.calls).toEqual([]);
+  });
+
+  it('K7c: a birth the mirror cannot place keeps an old claim counting — changed, and ccd is never called', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    const closedAt = closedClaim(f.coord, 'demo-earlier');
+    // No `create` is mirrored at all, and the clock is a month past the claim:
+    // with no birth to compare against, doubt keeps the child.
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold({ ...f.deps, now: () => closedAt + 30 * 24 * 3_600_000 }, req)).toBe('changed');
+    expect(f.calls).toEqual([]);
+  });
+
   it('a child with an open coordinator claim — the coordinator read — no release', async () => {
     const f = await rrig();
     const runId = terminalRun(f.coord, 'demo');
