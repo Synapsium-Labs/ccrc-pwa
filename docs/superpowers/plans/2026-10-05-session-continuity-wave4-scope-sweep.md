@@ -4516,6 +4516,12 @@ list them all; the coordinator issues the three past the block):
   decided by the scope's own `cgroup.procs` against every process on the box: a child of one of its processes that it
   does not hold is elsewhere (a per-child cgroup-path comparison can never differ for a child it holds, which a first
   draft's row proved green). Rows 3.27, 3.28.
+- **D-4092** `scope-sweep-child-cgroups-are-unmeasurable` — spec §5.6's predicates read the scope's processes, but a stop
+  kills the scope's whole cgroup subtree and that subtree is user-writable (a pane process can `mkdir` a child cgroup and
+  move itself in), so a scope with any child cgroup is unmeasurable and its line is carried; with it, four hardenings of
+  the same rule found by the same review: the record's `first=`/`cpu0=` bounded, no leading-zero pid in the Description,
+  an fd link that exists but cannot be read is unmeasurable, and the parent walk capped at 64 hops. Found by Task 3's
+  review. Rows 3.54–3.58.
 - **D-4019** `scope-sweep-installed-like-the-tmp-reaper` — spec §7 names the units, `deploy.sh`, the install spine and
   `deploy-verify`; the plan also gates the units and the enable off `--role server` (a server box runs no pane
   scope), declares the record in `shared/lifecycle.ts` and the binary in `TOOLCHAIN_EXECUTABLES`, takes no `flock` (a

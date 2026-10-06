@@ -120,7 +120,7 @@ const livePanes = (...panes: number[]): void => fs.writeFileSync(path.join(fx.ba
 
 function run(env: Record<string, string | undefined> = {}): { code: number; out: string; err: string } {
   const r = spawnSync('bash', [SWEEP], {
-    encoding: 'utf8',
+    encoding: 'utf8', timeout: 30000,   // a sweep that spins (a parent cycle) is a red case, not a hung suite
     env: { PATH: `${fx.bin}:${process.env['PATH'] ?? ''}`, HOME: fx.home, XDG_RUNTIME_DIR: fx.xdg,
       CCRC_PROC_ROOT: fx.proc, CCRC_CGROUP_ROOT: fx.cg, LC_ALL: 'C', ...env },
   });
@@ -410,6 +410,7 @@ describe('a value it cannot measure skips that scope for the tick — the old li
     expect(r.code, r.err).toBe(0);
     const text = fs.readFileSync(STATE(), 'utf8').split('\n');
     expect(text[0], 'the tick ran to its end and rewrote the record').toMatch(new RegExp(`^# ccd-scope-sweep v1 tick=\\d{10} up=${UP} mode=live$`));
+    expect(stops(), 'a scope it cannot measure is never stopped').toEqual([]);
     expect(text).toContain(line);
     if (o.companion) expect(rows('dead')[o.companion]).toMatchObject({ verdict: 'report', why: 'dead-under-6h', first: String(UP) });
     expect(stops()).toEqual([]);
@@ -553,6 +554,86 @@ describe('a value it cannot measure skips that scope for the tick — the old li
     const r = run({ XDG_RUNTIME_DIR: undefined });
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/no-runtime-dir/);
+    expect(stops()).toEqual([]);
+  });
+
+  // ── Task 3's review (D-4092): a stop kills the scope's whole cgroup SUBTREE, and a scope's directory is user-writable ──
+
+  const listener = (): void => {   // a double-forked TCP server (ppid 1), listening: the thing a stop must not kill unseen
+    fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), '   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 424242 1 0000000000000000 100 0 0 10 0\n');
+    proc(3999, { age: 2 * 86400, ppid: 1, cg: cgOf(unitName(1)) + '/nested', sockets: [424242] });
+  };
+  const nested = (dir: string): void => {
+    const d = path.join(fx.cg, cgOf(unitName(1)), dir);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'cgroup.procs'), '3999\n');
+  };
+
+  it('a scope whose cgroup holds a CHILD cgroup: its processes there are unseen by every predicate, so it is unmeasurable', () => {
+    one({ pane: 3001, procs: [3001] });
+    listener(); nested('nested');
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
+  });
+
+  it('a child cgroup named like a dotfile is a child cgroup too', () => {
+    one({ pane: 3001, procs: [3001] });
+    listener(); nested('.hidden');
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
+  });
+
+  it('a Description whose server pid has a leading zero (process 007): /proc/007 is absent, which must not read as a server that is gone', () => {
+    one({ pane: 3001, procs: [3001], desc: 'tmux child pane 3001 launched by process 007' });
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
+  });
+
+  it('a socket fd link that exists but cannot be read: not "no socket"', () => {
+    fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), '   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 424242 1 0000000000000000 100 0 0 10 0\n');
+    one({ pane: 3001, procs: [3001], procOpts: { age: 2 * 86400, cg: cgOf(unitName(1)), sockets: [424242] } });
+    // a readlink that fails for that one fd (EACCES on another uid's /proc/<pid>/fd/N) and answers the real one for every other path
+    fs.writeFileSync(path.join(fx.bin, 'readlink'), '#!/usr/bin/env bash\ncase "$1" in */3001/fd/10) exit 1 ;; esac\nexec env PATH="${PATH#*:}" readlink "$@"\n', { mode: 0o755 });
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
+  });
+
+  it('a parent chain that loops (a recycled pid) in a live scope: capped, and the scope carried — never a spin to the unit\'s deadline', () => {
+    proc(3001, { age: 3 * 86400, comm: 'claude', cg: cgOf(unitName(1)) });
+    proc(3002, { age: 3 * 86400, ppid: 3003, comm: 'bash', cg: cgOf(unitName(1)) });
+    proc(3003, { age: 3 * 86400, ppid: 3002, comm: 'bash', cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001, 3002, 3003] }); seen(u, 7 * HOUR, 7255660000);
+    livePanes(3001);
+    const v = companion();
+    carried(seenLines[0]!, { companion: v });
+    expect(Object.keys(rows('old')), 'a scope it could not walk lists nothing').toEqual([]);
+  });
+});
+
+// ── A RECORD IT CANNOT BELIEVE: the clock starts now, as for an absent line (Task 3's review) ──
+
+describe('a record line whose first=/cpu0= is out of bounds is not believed: the scope is first seen now', () => {
+  const forged = (u: string, first: string, cpu0: string): void => {
+    fs.writeFileSync(STATE(), `# ccd-scope-sweep v1 tick=1 up=1 mode=shadow\ndead ${u} first=${first} cpu0=${cpu0} verdict=report why=dead-under-6h server=ccd procs=1 mem=1 sockets=0 youngest=1 oldest=1 age=1 pids=1\n`);
+  };
+  it('a first= past 2^64 that WRAPS into the believable range (2^64 + UP - 30000): not believed, never a stop on the first tick', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] });
+    forged(u, String(2n ** 64n + BigInt(UP - 30000)), '7255660000');
+    arm();
+    const r = run();
+    expect(r.code, r.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'dead-under-6h', first: String(UP) });
+    expect(stops()).toEqual([]);
+  });
+  it('a first= with a leading zero (08 is not a bash number): not believed, and the tick is not aborted', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] });
+    forged(u, '08', '7255660000');
+    arm();
+    const r = run();
+    expect(r.code, r.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'dead-under-6h', first: String(UP) });
     expect(stops()).toEqual([]);
   });
 });

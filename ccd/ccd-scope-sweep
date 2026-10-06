@@ -56,6 +56,19 @@
 #      no code until then;
 #   7. `$REG/scope-sweep-paused` is absent — checked first of all: a paused
 #      sweep does NOTHING, shadow verdicts and the record included.
+#   A scope whose cgroup holds ANY child cgroup is unmeasurable too: `systemctl
+#   stop` kills the whole cgroup SUBTREE, the scope's directory is writable by
+#   the processes in it (`mkdir` and move itself in), and every predicate above
+#   reads `cgroup.procs` of the scope ITSELF — a listening server in a child
+#   cgroup is seen by none of them. Fail closed, never walk-and-proceed
+#   (D-4092). Likewise a record's `first=`/`cpu0=` outside the bounds this
+#   sweep writes (first: 1-16 digits, no leading zero; cpu0: 0 or 1-20 digits)
+#   is not believed — a past-2^64 value wraps in bash arithmetic and a leading
+#   zero aborts it — so the clock starts now, as for an absent line; a
+#   Description's pids must be positive without a leading zero; a socket fd
+#   that still exists but cannot be read makes the socket count unmeasurable;
+#   and a parent chain walked more than SCOPE_SWEEP_MAX_HOPS hops (a recycled
+#   pid can make a cycle) makes the scope unmeasurable, never "not elsewhere".
 # A predicate it cannot measure (a value systemd does not report, a cgroup, a
 # /proc entry or a /proc/net table it cannot read) SKIPS that scope for the tick
 # and records nothing new: the scope's previous verdict line is carried
@@ -115,7 +128,8 @@ SCOPE_SWEEP_DEAD_SEC=21600    # six hours: first seen dead -> the earliest stop,
 SCOPE_SWEEP_OLD_SEC=86400     # a process older than a day in a LIVE pane scope is listed for doctor
 SCOPE_SWEEP_MCP_SEC=120       # a direct child of the pane's Claude Code started this soon after it is one of its MCP servers
 SCOPE_SWEEP_MAX_STOPS=3       # armed: the most scopes one tick stops; the rest are `held` for the next
-DESC_RE='^tmux child pane ([0-9]+) launched by process ([0-9]+)$'
+SCOPE_SWEEP_MAX_HOPS=64       # the parent-chain walk's cap: past it the scope is unmeasurable (a pid-reuse cycle)
+DESC_RE='^tmux child pane ([1-9][0-9]*) launched by process ([1-9][0-9]*)$'
 
 _ss_die() { echo "scope-sweep: $*" >&2; exit 1; }
 
@@ -138,7 +152,7 @@ MODE=shadow
 declare -A FIRST=() CPU0=() PREV=() PREVV=()
 if [ -r "$STATE" ]; then
   while IFS= read -r line; do
-    [[ "$line" =~ ^dead\ (tmux-spawn-[^ ]+\.scope)\ first=([0-9]+)\ cpu0=([0-9]+)\ verdict=([a-z-]+) ]] || continue
+    [[ "$line" =~ ^dead\ (tmux-spawn-[^ ]+\.scope)\ first=([1-9][0-9]{0,15})\ cpu0=(0|[1-9][0-9]{0,19})\ verdict=([a-z-]+) ]] || continue
     FIRST[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}; CPU0[${BASH_REMATCH[1]}]=${BASH_REMATCH[3]}
     PREVV[${BASH_REMATCH[1]}]=${BASH_REMATCH[4]}; PREV[${BASH_REMATCH[1]}]="$line"
   done < "$STATE"
@@ -199,7 +213,7 @@ _ss_socket_count() {   # pid... -> the TCP/UDP and listening Unix sockets they h
     t=$(readlink "$PROC/$p/ns/net" 2>/dev/null) && [[ "$t" == "$NETNS" ]] || return 1
     [ -d "$PROC/$p/fd" ] && [ -r "$PROC/$p/fd" ] && [ -x "$PROC/$p/fd" ] || return 1
     for fd in "$PROC/$p/fd"/*; do
-      t=$(readlink "$fd" 2>/dev/null) || continue
+      t=$(readlink "$fd" 2>/dev/null) || { [ -L "$fd" ] && return 1; continue; }   # one that still exists but cannot be read is unmeasurable; one that closed mid-tick is skipped
       [[ "$t" =~ ^socket:\[([0-9]+)\]$ ]] || continue
       [[ -n "${INET[${BASH_REMATCH[1]}]+x}" || -n "${LISTEN[${BASH_REMATCH[1]}]+x}" ]] && n=$((n + 1))
     done
@@ -242,6 +256,12 @@ while read -r u _; do
   procs=()
   { mapfile -t procs < "$CGROOT$cg/cgroup.procs"; } 2>/dev/null || { _ss_carry; continue; }
   (( ${#procs[@]} )) || { _ss_carry; continue; }
+  # A child cgroup (any child directory, dotfiles included) holds processes none of the predicates read: unmeasurable.
+  [ -r "$CGROOT$cg" ] && [ -x "$CGROOT$cg" ] || { _ss_carry; continue; }
+  kids=0; shopt -s dotglob nullglob
+  for d in "$CGROOT$cg"/*; do [ -d "$d" ] && { kids=1; break; }; done
+  shopt -u dotglob nullglob
+  (( kids == 0 )) || { _ss_carry; continue; }
   # WHOSE SERVER: by pid, comm, and a start EARLIER than the scope's (microseconds since boot, both)
   if [[ ! -e "$PROC/$server" ]]; then state=gone
   else
@@ -260,11 +280,13 @@ while read -r u _; do
     # but the pane's own and its Claude Code's MCP servers (a direct child of the
     # pane started within SCOPE_SWEEP_MCP_SEC of it, and that child's descendants).
     _ss_stat "$pane" || :
+    olds=() capped=0
     for p in "${procs[@]}"; do
       [[ "$p" == "$pane" ]] && continue
       _ss_stat "$p" || continue
-      x=$p mcp=0
+      x=$p mcp=0 hops=0
       while _ss_stat "$x"; do
+        (( ++hops > SCOPE_SWEEP_MAX_HOPS )) && { capped=1; break; }
         if [[ "${PARENT[$x]}" == "$pane" ]]; then
           [[ -n "${TICKS[$pane]+x}" ]] && (( (TICKS[$x] - TICKS[$pane]) / TCK <= SCOPE_SWEEP_MCP_SEC )) && mcp=1
           break
@@ -276,8 +298,9 @@ while read -r u _; do
       age=$(_ss_age "$p")
       (( age >= SCOPE_SWEEP_OLD_SEC )) || continue
       c=$(_ss_comm "$p") || c='?'
-      OUT+=("old $u pid=$p age=$age comm=${c// /_}")
+      olds+=("old $u pid=$p age=$age comm=${c// /_}")
     done
+    if (( capped )); then _ss_carry; elif (( ${#olds[@]} )); then OUT+=("${olds[@]}"); fi   # a chain it could not walk lists nothing
     continue
   fi
   # DEAD. Every predicate measured; any one that cannot be carries the old line.
