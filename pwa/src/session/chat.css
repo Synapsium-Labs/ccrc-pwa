@@ -1605,6 +1605,8 @@ button.metachip:active {
   }
   .send-btn,
   .inputbar,
+  /* a press transform like its neighbours — it was simply missed */
+  button.metachip,
   /* `.chat-back` left this list when the five back chevrons became @ccrc/ui's
      `BackButton`, which carries `motion-reduce:transition-none` itself — and
      carries it for all five, where this rule only ever covered one of them. */

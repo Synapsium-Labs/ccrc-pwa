@@ -3269,3 +3269,28 @@ button.proj-card-pool::before {
   width: 14px;
   height: 22px;
 }
+
+/* ── reduced motion, part two ──────────────────────────────────────────
+   A SECOND block, and its POSITION is the whole point. A media query adds
+   no specificity, so the block near the top of this file can only beat a
+   rule declared BEFORE it — every selector it names is, which is why it
+   works. These three are declared later (.acct-fill:813,
+   .program-start-door:2789, .program-start-go:2859), so naming them up
+   there sets `transition: none` and then the rule's own `transition`
+   re-declares it a thousand lines down and wins. Measured: adding them to
+   the first block changed nothing.
+
+   .acct-fill animates its WIDTH as a usage window fills. The first block's
+   `.acct-list .acct-row` entry never covered it — `transition` does not
+   inherit, and that row declares none of its own. The two program-start
+   controls are ordinary press transforms that were simply missed.
+
+   motion-reduced.test.ts checks BOTH halves now: that a moving rule is
+   named, and that the naming block is positioned to win. */
+@media (prefers-reduced-motion: reduce) {
+  .acct-fill,
+  .program-start-door,
+  .program-start-go {
+    transition: none;
+  }
+}
