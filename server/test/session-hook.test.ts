@@ -7587,6 +7587,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // of those four decides a reference's fate on its own. This is the fact
     // that makes the floor SAFE to have tightened: had the set been non-empty,
     // tightening it would have turned correct references stale.
+    // EMPTY AGAIN on the merge of `origin/main` at `cf9e4cc8` into child-reclamation
+    // wave 4, measured on the merged tree, as on main: the one coincidental entry
+    // the `338b7ff3` merge recorded (`spec:91`'s `ccd/ccd:13602`, anchored on
+    // `ccd` alone) is stale again under main's layout and back in the census.
+    // No rule changed.
     expect(weak, 'references anchored only by tokens at or below the short bound').toEqual([]);
   });
 
@@ -8241,6 +8246,52 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // :13602` and `spec:2123 :13573-13575` leave — Task 3's eight lines above
       // them, measured by the plan's `cite-remeasure.py` against the pre-task
       // tree. An unchanged count is not an unchanged debt. S6-R11, no D-number.
+      // CHILD-RECLAMATION WAVE 3 (Task 5) moves it, across the whole task,
+      // base -> `35d6d510`, 147 -> 149, +2, measured against the pre-Task-5
+      // tree (this task's own base) and diffing the two failure lists: TWO
+      // ENTER, `spec:1210 ccd/ccd:13602` and `spec:2123 ccd/ccd:13573-13575`;
+      // NONE LEAVES — `spec:91 ccd/ccd:13602` still fails at both trees, on a
+      // different token of the same line. None is a repair: the ONE cause,
+      // relative to base, is this task's own net insertion above these lines
+      // — `cmd_ws_audit`'s header, argv parse, one shared-fork call and its
+      // verdict line, plus `cmd_caps`'s verb line and token echo — sliding
+      // other bytes under these same fixed line numbers (review 170 F15:
+      // the dispatcher arm, measured at `35d6d510:ccd/ccd:25440` (added by
+      // `791d2256` at `:25434`), sits below every corpus anchor here and
+      // contributes nothing — corrected in place, not re-measured; review
+      // fr-H M6: 26206 was dfb66cc4's OWN line for the same arm, no tree
+      // named, and goes stale on the next RECLAIM-region insertion).
+      // (Fix round 1, review I1/I2, extracted that shared call,
+      // `_ws_reclaim_fork` — called by both `cmd_ws_audit` and
+      // `_ws_reclaim_locked` — and shrank the net insertion from the first
+      // commit's own shape; that shrink explains the difference FROM
+      // `791d2256`, not the cause relative to base, which is this task's
+      // final net shape alone.) Neither corpus document changed
+      // (`spec`/`plan` byte-identical to this task's base, measured). Still
+      // stale in fact; Task 11 still owns the re-anchor. S6-R11, no D-number.
+      // FIX ROUND 3 (a `ccd-wsaudit-nonpoison.test.ts` regression found after
+      // this task closed — its own pinned counts, outside this census, are
+      // argued in that file) moves it, across the whole task, base -> HEAD,
+      // 147 -> 148, +1: the same two ENTER as above, and now ONE LEAVES,
+      // `spec:2230 ccd/ccd:13618` — a coincidental pass, not a repair (neither
+      // corpus document changed). The cause is this round's one added line: a
+      // one-line pointer comment inside `cmd_ws_audit`'s success arm (`#
+      // never the literal … — see "RECLAIMABLE, SPELLED THROUGH _JSON_STR" in
+      // the RECLAIM region`), which spells the `"verdict":"reclaimable"` line
+      // through `_json_str` instead of as a literal, so
+      // `ccd-wsaudit-nonpoison.test.ts`'s own separate harvest — which has no
+      // `reclaimable` exclusion of its own — stops counting it as a new word.
+      // Task 11 still owns the re-anchor. S6-R11, no D-number.
+      // 147 -> 149 on the merge of `origin/main` at `338b7ff3` (#200-#209) into
+      // child-reclamation wave 4, re-measured on the merged tree and taken from
+      // neither side (main 147, the branch 148). The merged layout is main's
+      // `ccd/ccd` with the branch's two lines in `cmd_caps` above these anchors,
+      // so what moved is +2 under frozen anchors. Against main: entered
+      // `spec:1310 ccd/ccd:13602`, `spec:2125 ccd/ccd:13673`,
+      // `spec:2230 ccd/ccd:13673`; left `spec:91 ccd/ccd:13602` — which is
+      // weak-anchored now, on `ccd` alone (see THE TWO CORPUS FACTS). Measured by
+      // diffing the dumped failure sets of the two trees, never retyped; no rule
+      // changed. S6-R11, no deviation number.
       // RE-MEASURED (Plan 2b-2 Task 2), 147 -> 148. ONE cause: the platform
       //   helpers `_svc_have_user_manager` and `_svc_run_supervised`, 155
       //   lines inserted directly above the END PLATFORM LAYER sentinel,
@@ -8269,6 +8320,21 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // RE-MEASURED against the tree, never adjusted to keep a number green;
       // no rule changed, so no D-number (S6-R11).
       // 148 at the composition onto `0ffa07f3` (M 147, C 149): the note above the map names the movers.
+      // 149 -> 147 on the merge of `origin/main` at `cf9e4cc8` (#226, #222) into
+      // child-reclamation wave 4, re-measured on the merged tree: EQUAL to main
+      // (147, the same 197 entries), and taken from neither side by hand (the
+      // branch 149). Both frozen corpus documents are byte-identical at both
+      // parents and the merge, so nothing was re-pointed. What moved, against
+      // the branch, is main's own layout under the frozen anchors (the 30-line
+      // body guard at the top, the platform helpers): `ccd/ccd` entered
+      // `spec:91 :13602`, `spec:1250 :19`, `plan:3236 :19` and left `spec:2230
+      // :4006-4035`, `plan:3184 :4006-4035`, `plan:3184 :4020-4021`, `plan:2747
+      // :3940-3951`, `plan:3240 :3050-3070`; `deploy/deploy.sh` entered
+      // `spec:91 :570`, `spec:91 :648` (main's pair publisher); and
+      // `server/test/single-definition.test.ts` moved net zero (entered
+      // `spec:1347 :1298`, `plan:3236 :1298`; left `spec:1347 :1303-1304`,
+      // `plan:3236 :1304`). Measured by diffing the dumped failure sets of the
+      // three trees, never retyped. No rule changed; S6-R11, no deviation number.
       // DOCS W1a (Task 6) leaves this at 147, and the COMPOSITION is empty:
       // nothing enters and nothing leaves (measured by `cite-remeasure.py`
       // against the pre-task tree, `ENTERED []`, `LEFT []`). The five
@@ -8429,6 +8495,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   a coincidental pass and never a repair; main's own inserts moved it
       //   off again. The whole failure set was diffed against `origin/main`'s:
       //   identical, 195 = 195.
+      //   Child-reclamation wave 4, Task 4 (`CoordStatus.reclaim`,
+      //   `ChildReclaimAttention`): ONE hunk, `@@ -3766,5 +3766,48 @@` (`git
+      //   diff -U0` of that task's own commit), a net +43 wholly above the
+      //   referent, which — measured by the same bytes — goes `:5918` ->
+      //   `:5961`. Still not `:5644`, so the entry stays 1 -> 1.
       'shared/api.ts': 1,
       // `server/test/single-definition.test.ts` 0 -> 8, A NEW ENTRY, and the
       // whole of it is ONE shift. This wave's Task 1 added 23 lines low in that
@@ -8559,7 +8630,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // of BRANCH x MAIN, so it can only be derived on the merged tree and only
     // stays true until main moves again. Derive it last, then merge.
     // -> 194 at the centralised-update W6 versioned-installs wave (S6-R11: the note above the map names what moved).
+    // 194 -> 196 on the merge of `origin/main` at `338b7ff3` into child-reclamation
+    // wave 4: the same +2 the `'ccd/ccd'` entry above carries, and nothing else moved.
     // -> 195 at review 179's fix round 1 (S6-R11: `plan:3326 ccd/ccrc:5217` fails again; the note above the map names it).
+    // 196 -> 197 on the merge of `origin/main` at `a742eb6a` into child-reclamation wave 4: this
+    // branch's `'ccd/ccd'` 149 and main's `'ccd/ccrc'` 5 (review 179's `:5217`), each carried by its own
+    // side and nothing else moved. Measured on the merged tree, not added by hand. No D-number.
     // 195 -> 196 on Plan 2b-2 Task 2 (RE-MEASURED), the census's own
     // arithmetic: `ccd/ccd` 147 -> 148 and nothing else moved. The one cause
     // and the five movers are argued once, beside the map above. Derived
@@ -8570,6 +8646,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // (`ccd/ccd`); the note above the map names every mover and its one cause.
     // -> 196 at the composition onto `a742eb6a` (S6-R11): N's 195 + 1 (`ccd/ccd`, C's platform helpers), equal to
     // C's 196, because N's one mover (`ccd/ccrc:5217`) already fails in C; the note above the map names them.
+    // 197 -> 197 on the merge of `origin/main` at `cf9e4cc8` into child-reclamation wave 4: the merged
+    // census is main's, entry for entry; the `'ccd/ccd'` note above the map names what moved against the branch.
     // 197 -> 197 at docs W1a (Task 6), by the census's own arithmetic: no key
     // moved (argued beside the map, above the `'ccd/ccd'` entry).
     expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(197);
@@ -9281,6 +9359,65 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // `origin/main` at this tree, so nothing was re-pointed and every move is
         // that shift. A coincidental pass is not a green anchor. S6-R11 covers
         // the re-measurement, so no D-number.
+        // RE-MEASURED at child-reclamation wave 3 (Task 5, fix round 1), 53 ->
+        // 53, net zero but not unchanged: ONE ENTERS (`:13573-13575`) and ONE
+        // LEAVES (`:13650-13652`), measured against the pre-Task-5 tree (this
+        // task's own base) and diffing the two failure lists. THE MECHANISM,
+        // corrected here (a prior round of this paragraph stated it backwards):
+        // at base, the row's quoted token `_reg_purge "$id"` stands AT
+        // `:13573-13575` itself (`cmd_ws_reap`'s prologue), so that citation
+        // PASSES there. Task 5's net insertion above it — `cmd_ws_audit`'s
+        // header, argv parse, one shared-fork call and its verdict line, plus
+        // `cmd_caps`'s verb line and token echo (review 170 F15: not the
+        // dispatcher arm, which sits below every corpus anchor here and
+        // contributes nothing) — moves `_reg_purge "$id"` DOWN — to
+        // `:13608` at THIS tree (`35d6d510`; it
+        // stood at `:13625` at the fix round's own first commit, `791d2256`,
+        // before `_ws_reclaim_fork`'s extraction shrank the insertion again) —
+        // so `:13573-13575` no longer holds it and now FAILS (enters).
+        // `:13650-13652` now PASSES on some other token of its row landing
+        // there instead. Neither corpus document
+        // changed (byte-identical to this task's base, measured); still stale
+        // in fact, and Task 11 still owns the re-anchor. S6-R11, no D-number.
+        // RE-MEASURED at review 171's second fix round (F-C, F-D, F-E, F-G),
+        // 53 -> 53, and genuinely UNCHANGED — not a coincidental pass masking
+        // a swap: the produced array is byte-identical to this one, in the
+        // same order, measured by running this suite against the round's own
+        // tree rather than inferred. F-C and F-G's new code, and F-D's header
+        // rewrite, sit in the RECLAIM region, below every corpus anchor this
+        // set reaches (the highest is `:19131`, the boundary itself). F-E's
+        // six comment edits are the only ones inside a cited range —
+        // `:3400`'s "the other three" -> "the other four" lies inside
+        // `:3390-3402`, already in this set (below) — and a wording change
+        // inside an already-stale range does not by itself move it into or
+        // out of the set. Neither corpus document changed (byte-identical to
+        // `origin/main` at this tree, measured), so nothing was re-pointed
+        // either. S6-R11 covers the re-measurement, so no D-number.
+        // RE-MEASURED at child-reclamation wave 4 (Task 2), 53 -> 54: ONE ENTERS
+        // (`:13573-13575`, a second site) and NONE LEAVES, measured by running
+        // this audit against the pre-Task-2 tree and diffing the two failure
+        // lists rather than inferring it. THE CAUSE: `cmd_caps`'s verb heredoc
+        // line (`reclaim-pause`) and its token tail (`echo reclaim-pause-v1`)
+        // are the task's only two lines above the frozen corpus's highest
+        // anchor (`:19131`); `cmd_reclaim_pause` itself sits below `:19131`,
+        // after `cmd_ls`, and moves nothing. That `+2` shift slides a different
+        // `ccd/ccd` line under the row's second `:13573-13575` site, so the row
+        // now fails there a second time (it already failed there once, above,
+        // at this same key — two distinct sites sharing one anchor). Neither
+        // corpus document changed (byte-identical to `origin/main` at this
+        // tree, measured), so nothing was re-pointed. A coincidental fail is
+        // not new rot; the compaction-card plan's Task 11 still owns the
+        // re-anchor. S6-R11 covers the re-measurement, so no deviation number.
+        // RE-MEASURED on the merge of `origin/main` at `338b7ff3` (#200-#209)
+        // into child-reclamation wave 4, 58 -> 59, on the merged tree and taken
+        // from neither side (main 58, the branch 54). Both corpus documents are
+        // byte-identical at both parents and the merge, so nothing was
+        // re-pointed; the merged layout is main's `ccd/ccd` plus the branch's two
+        // `cmd_caps` lines above the frozen anchors, and that +2 is what moved.
+        // Against main: entered `ccd/ccd:11670`, `ccd/ccd:13673`; left
+        // `ccd/ccd:13650-13652`. Measured by diffing the dumped failure sets of
+        // the two trees, never retyped; values in the instrument's order. No
+        // rule changed; S6-R11, no deviation number.
         // RE-MEASURED (Plan 2b-2 Task 2), 53 -> 58, FROM THE SAME RUN as the
         // site-level set below. ONE cause: the platform helpers' 155 lines
         // inserted above `ccd/ccd`'s END PLATFORM LAYER sentinel, which move
@@ -9292,6 +9429,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // `:5819-5823`) and FOUR LEAVE (`:13650-13652`, `:4046`, `:8609`,
         // `:4642-4653`). None is re-pointed: the rows live in the two frozen
         // documents. S6-R11 covers the re-measurement, so no D-number.
+        // RE-MEASURED on the merge of `origin/main` at `cf9e4cc8` (#226, #222)
+        // into child-reclamation wave 4, 52 -> 55, on the merged tree and taken
+        // from neither side (main 52, the branch 59). Both corpus documents are
+        // byte-identical at both parents and the merge, so nothing was
+        // re-pointed; the merged layout is main's `ccd/ccd` plus the branch's two
+        // `cmd_caps` lines above the frozen anchors, and that +2 is what moved.
+        // Against main: entered `ccd/ccd:11665-11670`, `ccd/ccd:11669`,
+        // `ccd/ccd:13650-13652`; none left. Measured by diffing the dumped failure
+        // sets of the trees, never retyped; values in the instrument's order. No
+        // rule changed; S6-R11, no deviation number.
         // RE-MEASURED at docs W1a (Task 6), 52 -> 54, FROM THE SAME RUN as the
         // site-level set below, which does not move (35 -> 35). Two ENTER
         // (`ccd/ccd:11669` and `ccd/ccd:13650-13652`) and none leave: the five
@@ -9461,6 +9608,44 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // `spec:2125 ccd/ccd:13567` enters; `spec:2123` and `spec:2210`
       // `ccd/ccd:13573-13575` leave. One cause — Task 3's eight lines above
       // them — and nothing re-pointed. S6-R11 covers it, so no D-number.
+      // RE-MEASURED across the whole of child-reclamation wave 3 (Task 5),
+      // base -> `35d6d510`, 35 -> 36: `spec:2123 ccd/ccd:13573-13575` enters
+      // and NOTHING leaves — `spec:2125 ccd/ccd:13567` stands at BOTH the base
+      // and this tree. It is not unmoved in between: it correctly LEFT at the
+      // task's own first commit, `791d2256` (measured there, and right for
+      // that tree), then came back when fix round 1 (review I1, I2) shrank
+      // the net insertion above these lines from +50 (at `791d2256`) to +33
+      // (at `35d6d510`), sliding the row's token back within reach of this
+      // line — the fork extraction's own doing, not a fresh cause relative to
+      // base. This set is NOT derived from the row-pass set above this round
+      // — that one's own mover is `:13650-13652`, which no other pass reaches,
+      // so it is absent here, exactly as this list's own rule states. One
+      // cause, relative to base — this task's net insertion above these lines
+      // (the +33 it ends at) — and nothing re-pointed: both corpus documents
+      // are byte-identical to this task's base, measured. S6-R11, no
+      // D-number.
+      // RE-MEASURED at review 171's second fix round (F-C, F-D, F-E, F-G),
+      // FROM THE SAME RUN as the row-pass set above: 36 -> 36, genuinely
+      // UNCHANGED, same reasoning — every F-C/F-D/F-G insertion sits below
+      // this set's highest anchor (`spec:2125 ccd/ccd:19131`), and F-E's
+      // wording change at `:3400`/`:3401` lies inside the already-stale
+      // `spec:2209 ccd/ccd:3390-3402` / `:3401` entries below, unmoved.
+      // Neither corpus document changed. S6-R11, no D-number.
+      // RE-MEASURED at child-reclamation wave 4 (Task 2), FROM THE SAME RUN as
+      // the row-pass set above: 36 -> 37, ONE ENTERS (`spec:2210
+      // ccd/ccd:13573-13575`) and NONE LEAVES, measured against the pre-Task-2
+      // tree and diffing the two failure lists. Same cause as the row-pass set
+      // above — `cmd_caps`'s two bare lines, the task's only insertion above
+      // the corpus's highest anchor — sliding a different `ccd/ccd` line under
+      // this row's second `:13573-13575` site so it now also appears here.
+      // Neither corpus document changed. S6-R11, no deviation number.
+      // RE-MEASURED on the merge of `origin/main` at `338b7ff3` (#200-#209) into
+      // child-reclamation wave 4, 38 -> 39, from the same run as the row set above
+      // and taken from neither side (main 38, the branch 37). Nothing re-pointed;
+      // the merged layout's +2 over main (the branch's `cmd_caps` lines) is what
+      // moved. Against main: entered `spec:2125 ccd/ccd:13673`; none left.
+      // Measured by diffing the dumped sets of the two trees, never retyped. No
+      // rule changed; S6-R11, no deviation number.
       // RE-MEASURED (Plan 2b-2 Task 2), 35 -> 39, FROM THE SAME RUN as the
       // row-pass set above. Every move MIRRORS one there: `spec:2123
       // ccd/ccd:13573-13575`, `spec:2210 ccd/ccd:13573-13575`, `spec:2124

@@ -311,6 +311,7 @@ export const REQUIRED_VERB_FLAG = {
   'ws-reap': '--expect', 'ws-rename': '--session', 'coord-pause': '--state',
   'project-pool': '--project', 'route': '--session',
   'win-size': '--session', 'ws-reclaim': '--expect',
+  'reclaim-pause': '--state', 'ws-expire': '--expect',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -418,6 +419,11 @@ export const EXEC_WHITELIST = {
     // `--child-of` the server composed. `ws-audit --reclaim` needs NO grant of
     // its own: it rides `['ws-audit','--session']`, and it destroys nothing.
     ['ws-reclaim', '--expect'],
+    // ARCHIVED-WORKSPACE EXPIRY (workspace lifecycle spec 2026-09-24 §5.3): ws-reclaim's sibling, the second
+    // destructive verb the SERVER sends with no human in the path. Granted on its confirmation token for the same
+    // reason, ENROLLED in `REQUIRED_VERB_FLAG` above (g15), and its audit rides `['ws-audit','--session']`. ccd
+    // re-proves the token — which binds the archive's epoch — inside the reap lock.
+    ['ws-expire', '--expect'],
     ['ws-attic', '--session'],
     // The workspace-hold pair. The spec's "zero new agent whitelist grants"
     // bullet is about KEYS — no `gh`, no new command — and its own next clause
@@ -443,6 +449,19 @@ export const EXEC_WHITELIST = {
     // every positional form it might ever grow — reached from a route that
     // carries no token of any kind (D-282).
     ['coord-pause', '--state'],
+    // The reclaim kill-switch's writer (child-reclamation wave 4, spec §5.8),
+    // granted on `coord-pause`'s argument exactly: `$REG/reclaim-paused` is a
+    // registry-file write/unlink, non-destructive, and granting it widens
+    // nothing that deletes — the file can only STOP a deletion. The server may
+    // write only `~/.cc-clips` here and `FleetIO` has no unlink, so the marker
+    // is raised through this verb or not at all.
+    //
+    // ENROLLED in `REQUIRED_VERB_FLAG` above: `--state` is the verb's whole
+    // argument surface, reached from `POST /api/coord/reclaim-pause`, which
+    // carries no box token. A bare `['reclaim-pause']` would admit every
+    // positional form the verb might grow and stay green in
+    // `whitelist-subset.test.ts`'s layers 2 and 3 (g14 is the other side).
+    ['reclaim-pause', '--state'],
     // The project pool tag's writer (account pools, spec §5.4.2), granted on
     // `coord-pause`'s own argument: `$REG/pools/<project>` is a registry-file
     // write/unlink, non-destructive, and granting it widens nothing that

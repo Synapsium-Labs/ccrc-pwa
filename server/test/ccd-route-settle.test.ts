@@ -34,6 +34,14 @@ describe('_inject_spawn_effort reads the routing record (routing spec 2026-09-14
     seed(); h.sh('_reg_set myid effort auto'); settle();
     expect(typed()).toEqual([]);
   });
+  it('a DOTTED id\'s effort record is read by its id, not by its sanitised name (wave 9 M8)', () => {
+    // `_tmux w-my.site` is `cc-w-my_site`, so stripping `cc-` gives `w-my_site`,
+    // which is not the registry id: the settle takes the id as its second argument.
+    h.sh('_reg_set w-my.site wrapper claude; _reg_set w-my.site uuid deadbeef-0000-4000-8000-000000000000; '
+      + '_reg_set w-my.site class opus; _reg_set w-my.site effort high');
+    h.sh(`${STUBS} _inject_spawn_effort cc-w-my_site w-my.site`, { PANE_TEXT: READY });
+    expect(typed()).toEqual([]);
+  });
   it('a record with no effort field at all (only class): SPAWN_EFFORT, as today (controller ruling S1-R11)', () => {
     // THE EFFORT FIELD IS THE TEST, not `_route_any`. A record that names a
     // class and no effort chose nothing about effort, so the box default is

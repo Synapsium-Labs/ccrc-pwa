@@ -293,6 +293,7 @@ def stage4(ctx):
     except FileNotFoundError:
         return {"rescue": {"swap_log": "absent"}}
     rescues, landings, carried = [], collections.defaultdict(list), []
+    moves, landed_moves, chain_opens = collections.defaultdict(list), collections.defaultdict(list), collections.defaultdict(list)
     opened, ended = collections.Counter(), collections.Counter()
     chain_neither, near_swap = 0, 0
     # §11 item 6, ruled 2026-09-24 "leave it and count it": a STALLED session
@@ -324,12 +325,15 @@ def stage4(ctx):
             t = s4_epoch(m.group(1))
             if t is not None:
                 landings[m.group(2)].append(t)
+                landed_moves[m.group(2)].append((t, m.group(3), m.group(4)))
             continue
         m = S4_RESCUE.match(line)
         if m:
             t = s4_epoch(m.group(1))
             if inwin(t):
                 rescues.append((t, m.group(2), dict(S4_TOKEN.findall(m.group(5)))))
+            if t is not None:
+                moves[m.group(2)].append((t, m.group(3), m.group(4), dict(S4_TOKEN.findall(m.group(5)))))
             continue
         m = S4_CARRIED.match(line)
         if m:
@@ -342,6 +346,8 @@ def stage4(ctx):
             t = s4_epoch(m.group(1))
             if inwin(t):
                 opened[m.group(3)] += 1
+            if t is not None and m.group(3) == "chain":
+                chain_opens[m.group(2)].append(t)
             if upto(t):
                 pending[m.group(2)] = (m.group(3), m.group(5))
             continue
@@ -379,6 +385,39 @@ def stage4(ctx):
         past.append(("open", ref - int(reset)))
     past_by_end = collections.Counter(end for end, _ in past)
 
+    # §9's stage-4 target, restated 2026-10-03 (review 246's F6): no session
+    # takes a FOURTH rescue inside an hour that no chain wait preceded. Rule 3
+    # counts LANDED rescues (a dispatch whose swap was refused never left), so
+    # this row does too: a rescue landed when the session's next `swap <id>:
+    # <from> -> <to>` line, before its next rescue, names the same move. Only a
+    # fourth rescue the chain wait could have held is asked about — one on a
+    # dated block (`reset=` and `type=` on its line) not past its five-hour
+    # reset's grace, the chain wait's own gate; "preceded" is a `kind=chain`
+    # entry line for that session between the third rescue and the fourth. A
+    # `reset=` that is not one to twelve digits is no date: any session can
+    # append to swap.log, and `int()` of a forged token raises.
+    # Named cost: a Codex-lane session is never chain-waited, by rule, and the
+    # log does not say which lane a source account is, so a dated fourth rescue
+    # of one counts here; its line names its source account.
+    unchained = 0
+    for sid, mv in moves.items():
+        mv.sort(key=lambda x: x[0])
+        lands = sorted(landed_moves.get(sid, []))
+        done = []
+        for k, (t, src, dst, tok) in enumerate(mv):
+            nxt = mv[k + 1][0] if k + 1 < len(mv) else float("inf")
+            if any(t <= lt < nxt and (ls, ld) == (src, dst) for lt, ls, ld in lands):
+                done.append((t, tok))
+        for i in range(3, len(done)):
+            t, tok = done[i]
+            if not inwin(t) or t - done[i - 3][0] >= 3600 or not re.fullmatch(r"\d{1,12}", tok.get("reset", "")) or "type" not in tok:
+                continue
+            if tok.get("type") == "five_hour" and t >= int(tok["reset"]) + S4_GRACE:
+                continue
+            if not any(done[i - 1][0] <= c <= t for c in chain_opens.get(sid, [])):
+                unchained += 1
+                break
+
     # Sessions with RESCUE_CHAIN_COUNT + 1 (= 4) or more auto-rescues inside any 60 minutes.
     by_sess = collections.defaultdict(list)
     for t, sid, _ in rescues:
@@ -412,6 +451,7 @@ def stage4(ctx):
         "rescues": len(rescues),
         "sessions_with_4plus_rescues_in_an_hour": four_plus,
         "max_rescues_in_an_hour": worst,
+        "sessions_with_an_unchained_4th_rescue_in_an_hour": unchained,
         "chain_waits_ending_in_neither_swap_nor_reset": chain_neither,
         "rescues_on_a_carried_in_banner": on_carried,
         "rescues_with_a_dated_row": dated,
@@ -427,7 +467,69 @@ def stage4(ctx):
     }}
 
 
-STAGES = {1: stage1, 4: stage4}
+# ── stage 7 (wave 3): the operator's choice survives a restart ──────────────
+# §9's stage-7 row, "restarts that revert an operator's /model", read off
+# swap.log. Before a stop that a spawn follows, ccd writes an operator's own
+# `/model` or `/effort` to the route record (`route <id>: <field> <old> -> <new>
+# [actor=operator-session]`), or says why it could not: a value outside the
+# vocabulary, or one the record's own checks refused (`operator-choice <id>: …`).
+# Those two are the keep-time stops at which ccd KNOWS it reverted the operator's
+# choice, so they are the row. It counts STOPS (keeps), not distinct choices or restarts: a
+# `/model` ccd cannot keep is logged again at every later keep until a newer
+# command replaces it (it reverts again at each). The writes are reported
+# beside the row, and so are the stops where ccd could not read at all
+# (`operator-choice <id>: unmeasured (…)`), which MAY have reverted one — never
+# folded into the row, never dropped. The field `stops_that_could_not_read_the_transcript`
+# counts KEEPS that could not measure, one per such line: keeps at a spawn count,
+# so does the acknowledgement-drift line, and a refused command repeats at every
+# keep until a later operator command of its kind is acknowledged. (The key keeps its name.) Named cost: a
+# supervisor revival reads the transcript before its spawn and logs like a stop,
+# but a session on a non-Anthropic lane is skipped and leaves no line, so its
+# `/model` is never counted.
+# Self-contained, as stage 4.
+S7_WRITE = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) route (\S+): (class|effort) .+? -> (\S+) \[actor=operator-session\]")
+S7_SKIP = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) operator-choice (\S+): /(model|effort) .*(outside the \S+ vocabulary|refused by the route record)")
+S7_UNMEASURED = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) operator-choice (\S+): unmeasured \(")
+
+
+def stage7(ctx):
+    since, until = ctx["since"], ctx["until"]
+    path = ctx["swap_log"] or os.path.join(ctx["home"], ".cc-sessions", "swap.log")
+    try:
+        with open(path, "rb") as fh:
+            lines = [raw.decode("utf-8", "replace").rstrip("\n") for raw in fh]
+    except FileNotFoundError:
+        return {"operator_choice": {"swap_log": "absent"}}
+    def inwin(stamp):
+        try:
+            t = int(time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")))
+        except (ValueError, OverflowError):
+            return False
+        return (since is None or t >= since) and (until is None or t < until)
+    written, outside, refused = collections.Counter(), collections.Counter(), collections.Counter()
+    unmeasured = 0
+    for line in lines:
+        m = S7_WRITE.match(line)
+        if m and inwin(m.group(1)):
+            written[m.group(3)] += 1
+            continue
+        m = S7_SKIP.match(line)
+        if m and inwin(m.group(1)):
+            (outside if m.group(4).startswith("outside") else refused)[m.group(3)] += 1
+            continue
+        m = S7_UNMEASURED.match(line)
+        if m and inwin(m.group(1)):
+            unmeasured += 1
+    return {"operator_choice": {
+        "restarts_that_reverted_an_operator_model": outside["model"] + refused["model"],
+        "operator_choices_written_by_field": dict(sorted(written.items())),
+        "operator_values_outside_the_vocabulary_by_kind": dict(sorted(outside.items())),
+        "operator_choices_refused_by_kind": dict(sorted(refused.items())),
+        "stops_that_could_not_read_the_transcript": unmeasured,
+    }}
+
+
+STAGES = {1: stage1, 4: stage4, 7: stage7}
 
 
 def when(s):

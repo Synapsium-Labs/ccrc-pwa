@@ -1,10 +1,10 @@
 [Unit]
-Description=periodic usage poll for ccrc GPT lane %i
+Description=periodic usage poll for ccrc Codex lane %i
 # No Unit= line, exactly as ccd-account-health.timer and ccd-usage-sweep.timer:
 # systemd's default for a timer's target is a service of the same name minus
 # the suffix, and for a TEMPLATE instance that substitution carries the
-# instance through too — `ccgpt-usage@%i.timer` elapsing activates
-# `ccgpt-usage@%i.service` with no line needed to say so.
+# instance through too — `ccrc-codex-usage@%i.timer` elapsing activates
+# `ccrc-codex-usage@%i.service` with no line needed to say so.
 [Timer]
 # `OnActiveSec=`, not `OnBootSec=` — ccd-usage-sweep.timer's reason applies
 # here even more sharply. That unit is first armed by a DEPLOY, on a box that
@@ -15,5 +15,8 @@ Description=periodic usage poll for ccrc GPT lane %i
 OnActiveSec=5min
 OnUnitActiveSec=15min
 AccuracySec=1min
+# `WantedBy=timers.target` is also what `enable` links into
+# `timers.target.wants/`, the one place ccrc reads to know an instance is
+# enabled (D-3726).
 [Install]
 WantedBy=timers.target

@@ -1,6 +1,6 @@
 # Worker stall watch — the server notices a silent session, delivers mail past background work, and escalates — design
 
-**Status:** rev 3.1, APPROVED by the operator 2026-09-29 11:58 UTC (§11 records the rulings). Wave 1 is being planned.
+**Status:** rev 3.1, APPROVED by the operator 2026-09-29 11:58 UTC (§11 records the rulings). Wave 1 is being planned. Amended by the operator 2026-10-04: §6.1's coordinator clause only (§11 decision 13).
 - **Rev 3.1** applies the MekWarLive coordinator's read-back of S4 (mail 2526), checked against the worker's and the
   implementer's transcripts. §3.2 gains the measured self-resume contrast. §6.2's clause stops counting an agent whose
   completion says it may resume on its own as a wake; rev 3's text would have allowed S4's last turn-end. §2 prices the
@@ -684,6 +684,40 @@ one (SKILL.md's, CLAUDE.md's, README.md's). A new row pins that the quoted `stal
 exported from `stall.ts`. The insertion shifts every later cited SKILL.md line; the citation sweep re-proves each in the
 same commit. It is numbered after landing-order's and continuity's clauses if those land first (§10).
 
+**Amended 2026-10-04 (the operator; ledger R2 and R17 F1; `coordinator-wait-widened-ball-truthful` (D-3805)).** The
+text above shipped as coordinator clause 16. Two things in it needed changing. Its "until your next mail" was false
+against §4.2's ball rule, which this spec chose: the worker's own next ordinary mail hands the ball back too. And the
+shadow review (2026-10-02) found three episodes where a coordinator told a `working` worker to wait, behind another
+programme or until a time, in an ordinary mail with no `wait:` subject, so the ball stayed with the worker. The
+operator approved one amendment, and the clause ships as:
+
+> A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the
+> worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail,
+> then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours
+> because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is
+> dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text
+> for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well,
+> whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a
+> `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail
+> hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact
+> `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.
+
+What this holds and what it does not. The ball sentence is now true. The widening gives every park a `wait:`, but by
+the same §4.2 rule the ball it passes lasts only until the worker's next ordinary mail, and §6.2's clause ends by
+prompting exactly that mail ("mail the coordinator what you did and what wakes you next before the turn ends"). So a
+worker that answers a `wait:` with an ordinary `status` mail hands the ball straight back, as in the three episodes
+above (which predate §6.2's clause). The widening holds mainly when the worker stays silent after the `wait:`; if r1
+reaches it anyway, its `re stall-check: waiting` reply passes the ball (ledger R12). Keeping the ball through the
+worker's turn-end mail is a separate operator ruling, not part of this amendment. Two words are read narrowly:
+`working` is the run state (an idle pane on a `working` run is the case the widening exists for), so a parked
+`dispatched` worker is not named; and "a question" is a mail of kind `question`, as §4.2 reads it, while a structured
+ask is the separate `ask` hold and passes no ball.
+
+The clause count, its number and the server are unchanged. The verbatim pin moves with the text, and three new rows
+hold what a co-edit of SKILL.md and the pin could lose: the `wait:` sent past a stall mail, the ball's hand-back
+exceptions as `stall.ts` and `shared/api.ts` spell them, and every quoted token being one of the constants the clause
+relies on.
+
 ### 6.2 The next free worker clause (pinned)
 
 > End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent or workflow you
@@ -919,6 +953,9 @@ Where item 14's first two tickets are filed is still open.
 12. **The kill rules and the shadow periods** (§10, §5.1), as proposed: 48 h for the escalations, the `busy` gate and
     the wave-2 arms.
 13. **Clause texts** in §6.1 and §6.2.
+    **Amended 2026-10-04:** the operator approved one amendment to §6.1's clause (ledger R2 and R17 F1): it sends
+    `wait:` past a stall mail, and states the ball as §4.2 reads it. §6.1 carries the amended text. The 2026-09-29
+    approval of §6.2's text stands unchanged.
 14. **Side findings for separate tickets:** `runs signals` reports swaps 0 despite a swap; on 09-17 one session's pane
     stopped and unsupervised another session's unit during a rolling relaunch; the S4 queue defect for upstream.
 

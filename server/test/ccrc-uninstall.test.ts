@@ -126,7 +126,18 @@ function verbEnv(home: string): NodeJS.ProcessEnv {
     ...spineSystemctlArms(),
     'case "$1" in',
     '  daemon-reload) exit 0 ;;',
-    '  disable) [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
+    '  disable)',
+    '    [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
+    // Plan 3a Task 7: an instance of ccrc's usage template is disabled the
+    // way systemd disables one — its `timers.target.wants` link goes — and the
+    // stub records whether the TEMPLATE was still on disk at that moment, so
+    // "instances before the template" is a measurement.
+    '    case "$3" in ccrc-codex-usage@*.timer)',
+    '      t=absent; [ -e "$HOME/.config/systemd/user/ccrc-codex-usage@.timer" ] && t=present',
+    '      printf \'%s template=%s\\n\' "$3" "$t" >> "$HOME/usage-disables"',
+    '      rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$3" ;;',
+    '    esac',
+    '    exit 0 ;;',
     'esac',
     'echo "fixture systemctl: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
@@ -260,7 +271,9 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
     // C5: the models pair, mirroring the three role-gated siblings above.
     'ccrc-models.service', 'ccrc-models.timer',
     // W4a Task 9: the server-role watchdog's pair.
-    'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer']) {
+    'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer',
+    // Plan 3a Task 6: ccrc's own usage pair, placed on fleet/both.
+    'ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']) {
     writeFileSync(join(units, u), `[Unit]\nDescription=fixture ${u}\n`);
   }
   writeFileSync(join(units, 'claude-session@.service.d', 'limits.conf'), '[Service]\n');
@@ -465,32 +478,62 @@ describe('ccrc uninstall: the live-session gate', () => {
   });
 });
 
+/** Every regular file under the unit directory, relative to it, sorted —
+ *  what `plantInstalledBox`, or a case, actually put there. */
+function unitFilesUnder(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (rel: string): void => {
+    for (const e of readdirSync(rel === '' ? dir : join(dir, rel), { withFileTypes: true })) {
+      const r = rel === '' ? e.name : `${rel}/${e.name}`;
+      if (e.isDirectory()) walk(r);
+      else if (e.isFile()) out.push(r);
+    }
+  };
+  walk('');
+  return out.sort();
+}
+
+/** Every unit file `_inst_units`' systemd arm places, relative to the unit
+ *  directory, READ OUT OF ccd/ccrc (Plan 3a Task 7). Each is an
+ *  `_inst_atomic` destination, `"$dir/<name>"` or `"$slice/<name>"`, with
+ *  `$role_unit` read as both values the function gives it. Any other variable
+ *  in a destination THROWS: a name this reader cannot resolve would drop out
+ *  of the fixture check silently (install-census.test.ts's no-silent-drops
+ *  rule). */
+function instUnitsDestinations(): string[] {
+  const body = ccrcFunction('_inst_units');
+  const roles = [...body.matchAll(/\brole_unit=([A-Za-z0-9@._-]+)/g)].map((m) => m[1]!);
+  if (roles.length < 2) throw new Error(`_inst_units gives role_unit ${roles.length} value(s), not the two this reader expects`);
+  const slice = /\bslice="\$dir\/([^"]+)"/.exec(body);
+  if (slice === null) throw new Error('_inst_units no longer names its slice drop-in directory as slice="$dir/…"');
+  const out = new Set<string>();
+  for (const m of body.matchAll(/_inst_atomic\s+"[^"]*"\s*(?:\\\n\s*)?"\$(dir|slice)\/([^"]+)"/g)) {
+    const root = m[1]!; const rest = m[2]!;
+    for (const n of rest === '$role_unit' ? roles : [rest]) {
+      if (n.includes('$')) throw new Error(`_inst_units places "${m[0]}" through a variable this reader does not resolve — spell it literally, or teach it`);
+      out.add(root === 'slice' ? `${slice[1]!}/${n}` : n);
+    }
+  }
+  if (out.size < 10) throw new Error(`_inst_units read as only ${out.size} destinations — this reader has gone stale`);
+  return [...out].sort();
+}
+
 describe('ccrc uninstall: the remove set (spec §7)', () => {
-  itLinux('units: disable --now, delete every unit file incl. both drop-ins and the slice escape, daemon-reload — recording stub only', () => {
+  itLinux('units: every unit file the box had goes — read off the fixture, which must plant all of _inst_units — disable --now, daemon-reload last, recording stub only (Plan 3a Task 7; 2b-1 item 19)', () => {
     const home = mkTmp('ccrc-uninst-units-');
     plantInstalledBox(home);
+    const units = join(home, '.config', 'systemd', 'user');
+    const before = unitFilesUnder(units);
+    // THE FIXTURE COVERS THE INSTALL (D-3728). The hand-typed list this
+    // replaces named every pair but `ccd-usage-sweep`'s, while the fixture
+    // planted it and the uninstall removed it: a list with a hole is a green
+    // nobody earned.
+    for (const u of instUnitsDestinations()) {
+      expect(before, `plantInstalledBox does not plant ${u}, which _inst_units places — plant it, so its removal is measured`).toContain(u);
+    }
     const r = runVerb(home, 'uninstall');
     expect(r.code, r.stderr).toBe(0);
-    const units = join(home, '.config', 'systemd', 'user');
-    for (const u of ['ccrc.service', 'ccrc-agent.service', 'claude-session@.service',
-      'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
-      // account-pool-membership wave 1, Task 4: the pool-sync pair, which
-      // `_uninst_units` had never heard of — `ccrc uninstall` removed the
-      // binary's siblings and left this timer ENABLED and orphaned.
-      'ccd-pool-sync.service', 'ccd-pool-sync.timer',
-      // programme wave 4: the update-intent puller's pair.
-      'ccd-update-sync.service', 'ccd-update-sync.timer',
-      // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
-      'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
-      'ccd-tmp-sweep.service', 'ccd-tmp-sweep.timer',
-      'ccd-account-health.service', 'ccd-account-health.timer',
-      'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
-      // C5: the models pair, mirroring the three role-gated siblings above.
-      'ccrc-models.service', 'ccrc-models.timer',
-      // W4a Task 9: the server-role watchdog's pair.
-      'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer']) {
-      expect(existsSync(join(units, u)), `${u} survived`).toBe(false);
-    }
+    expect(before.filter((f) => existsSync(join(units, f))), 'these unit files survived the uninstall').toEqual([]);
     expect(existsSync(join(units, 'claude-session@.service.d'))).toBe(false);
     expect(existsSync(join(units, 'app-claude\\x2dsession.slice.d'))).toBe(false);
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8')
@@ -514,6 +557,31 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // systemctl target, and tmux is never touched (poison would have fired).
     expect(calls.join('\n')).not.toMatch(/claude-session@/);
     expect(existsSync(join(home, 'tmux-poison'))).toBe(false);
+  });
+
+  itLinux('every ENABLED instance of ccrc\'s usage template is stopped and disabled while its template is still on disk, whatever the roster says (Plan 3a Task 7; spec §13, ruling R-C9)', () => {
+    const home = mkTmp('ccrc-uninst-usage-instances-');
+    plantInstalledBox(home);
+    const units = join(home, '.config', 'systemd', 'user');
+    const wants = join(units, 'timers.target.wants');
+    mkdirSync(wants, { recursive: true });
+    // Two instances, and `plantInstalledBox`'s roster is not even a roster
+    // (`{"fixture":"roster"}`): the sweep reads the manager's links, never the roster.
+    for (const id of ['codex-a', 'codex-b']) {
+      symlinkSync(join(units, 'ccrc-codex-usage@.timer'), join(wants, `ccrc-codex-usage@${id}.timer`));
+    }
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, 'usage-disables'), 'utf8').split('\n').filter(Boolean), 'an instance was disabled after its template was gone, or not at all')
+      .toEqual(['ccrc-codex-usage@codex-a.timer template=present', 'ccrc-codex-usage@codex-b.timer template=present']);
+    expect(readdirSync(wants), 'an enabled instance survived the uninstall').toEqual([]);
+    for (const u of ['ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']) {
+      expect(existsSync(join(units, u)), `${u} survived`).toBe(false);
+    }
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8').split('\n').filter(Boolean);
+    expect(calls.indexOf('--user disable --now ccrc-codex-usage@codex-a.timer')).toBeGreaterThan(-1);
+    expect(calls[calls.length - 1]).toBe('--user daemon-reload');
+    expect(r.stdout).toMatch(/^uninstall: units: 2 codex usage timer\(s\) stopped and disabled$/m);
   });
 
   // The same three promises — stop it, forget it, remove it — in launchd's
@@ -828,15 +896,15 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
 
   // The GPT lane's FOUR placed executables (`plantInstalledBox` plants them),
   // and never a bare `ccgpt` — on a live fleet box that name is another
-  // repository's launcher (D-3478). The usage-window publisher's
+  // repository's launcher (D-3478). Another repository's
   // `ccgpt-usage@.{service,timer}` pair is the other half of this case since
-  // 2b-1's final review, F-1: no installer places it, because on a live fleet
-  // box those two names hold ANOTHER repository's pair with an instance
-  // enabled, so an uninstall that removed them would delete a live unit ccrc
-  // never wrote. They must survive byte for byte, their enabled instance's
-  // wants link too, and no systemctl verb may name them. `itLinux`, as every
-  // other systemd-argv assertion in this file.
-  itLinux('uninstall removes the four GPT-lane executables and leaves a ccgpt-usage@ unit pair it never placed alone', () => {
+  // 2b-1's final review, F-1: ccrc places its own under `ccrc-codex-usage@`
+  // (Plan 3a), because on a live fleet box those two names hold ANOTHER
+  // repository's pair with an instance enabled, so an uninstall that removed
+  // them would delete a live unit ccrc never wrote. They must survive byte for
+  // byte, their enabled instance's wants link too, and no systemctl verb may
+  // name them. `itLinux`, as every other systemd-argv assertion in this file.
+  itLinux('uninstall removes the four GPT-lane executables and ccrc\'s own usage pair and instance, and leaves a ccgpt-usage@ pair and instance it never placed alone (Plan 3a Task 7)', () => {
     const home = mkTmp('ccrc-uninst-ccgpt-');
     plantInstalledBox(home);
     const bin = join(home, '.local', 'bin');
@@ -848,6 +916,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     mkdirSync(join(units, 'timers.target.wants'), { recursive: true });
     const wants = join(units, 'timers.target.wants', 'ccgpt-usage@codex-a.timer');
     symlinkSync(join(units, 'ccgpt-usage@.timer'), wants);
+    // ccrc's OWN instance for the SAME id, beside the foreign one.
+    const ours = join(units, 'timers.target.wants', 'ccrc-codex-usage@codex-a.timer');
+    symlinkSync(join(units, 'ccrc-codex-usage@.timer'), ours);
     const r = runVerb(home, 'uninstall', ['--force']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     for (const name of GPT_LANE_BINS) {
@@ -866,6 +937,11 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       .toBe(foreignTimer);
     expect(lstatSync(wants).isSymbolicLink(), 'the enabled instance\'s wants link was removed').toBe(true);
     expect(readlinkSync(wants)).toBe(join(units, 'ccgpt-usage@.timer'));
+    expect(existsSync(ours) || (() => { try { lstatSync(ours); return true; } catch { return false; } })(),
+      'ccrc\'s own usage instance survived the uninstall').toBe(false);
+    for (const u of ['ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']) {
+      expect(existsSync(join(units, u)), `ccrc's own ${u} survived`).toBe(false);
+    }
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
     expect(calls, 'a systemctl verb named a ccgpt-usage unit, template or instance').not.toContain('ccgpt-usage');
   });

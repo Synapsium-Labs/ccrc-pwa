@@ -45,16 +45,17 @@ import {
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
+import { assertNoRealTool, CONTAINED_TOOLS } from './containedTools.js';
 import { itLinux, itDarwin, platformContrast, python3ProgramArm, IS_DARWIN } from './platformFixtures.js';
-import { installVersionedTree, keepDigest } from './installTreeFixture.js';
+import { installVersionedTree, keepDigest, rsyncRecorder } from './installTreeFixture.js';
 import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
 // Fix round 1 item 3 / review 155 C31: W2's OWN reader (never a hand copy),
 // the same import pattern `update-intent-cross-side.test.ts` already uses.
 import { reportFrom, type NodeFileRead } from '../src/update/inventory.js';
 import {
   SPINE_CONTAINMENT_PROBE, spineRunCalls, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms,
-  spineSystemdRun,
+  spineSystemdRun, plantLiveShape, foreignSnapshot, stateCallsNaming,
 } from './codexLaneFixture.js';
 import { docsProbeProgram } from './docsHelperPy.js';
 import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
@@ -337,13 +338,29 @@ function updateSpineSystemdRun(): string {
     .replace(`${terminalRefusal}\n`, `${ordinaryDetach}\n`);
 }
 
-/** `ccrcEnv` (ccrc-install.test.ts), trimmed: the poisoned gh from
- *  `ghContainedEnv` (later shadowed by the doctor stub — the shadow answers,
- *  never execs), journalctl poisoned, systemctl/loginctl as RECORDERS that
- *  answer the shapes the install spine asks, npm a recorder that fabricates
- *  node_modules, rsync a recorder that execs the real binary. */
+/** Wave 9 R10d (D-3819): a real-curl case lists the ONE loopback port its own listener holds (M4: its refused port 9)
+ *  in `$HOME/curl-allow-ports`, which `updateEnv`'s loopback curl front reads. Nothing else is let through. */
+function allowCurlPort(home: string, port: number): void {
+  writeFileSync(join(home, 'curl-allow-ports'), `${port}\n`);
+}
+/** What the loopback front handed to the REAL curl (one URL per line), '' when it handed none. A real-curl case
+ *  asserts this holds its URL, so a case that silently stopped reaching the real curl reds. */
+function curlFrontPassed(home: string): string {
+  const p = join(home, 'curl-front-passed');
+  return existsSync(p) ? readFileSync(p, 'utf8') : '';
+}
+
+/** `ccrcEnv` (ccrc-install.test.ts), trimmed: it starts from `ccrcContainedEnv` (wave 9 R10d, D-3818) — HOME the
+ *  fixture, the user bus pointed at two absent paths under it, and recording poisons for gh (later shadowed by the
+ *  doctor stub — the shadow answers, never execs), ssh, scp, tmux and launchctl, create-if-absent. It is a SPINE
+ *  builder, so it passes `managers: false`: it fronts its own systemctl/systemd-run below, after
+ *  `adoptPlantedSystemd`, which would rename an unmarked poison to a `.codex-*` delegate. Its curl is the LOOPBACK
+ *  front (D-3819): it execs the real curl only for `http://127.0.0.1:<port>/…` with the port listed in
+ *  `$HOME/curl-allow-ports`, which the real-curl cases write for their own listener; anything else is recorded and
+ *  refused. Then journalctl poisoned, systemctl/loginctl as RECORDERS that answer the shapes the install spine
+ *  asks, npm a recorder that fabricates node_modules, rsync a recorder that execs the real binary. */
 function updateEnv(home: string): NodeJS.ProcessEnv {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  const env = ccrcContainedEnv(home, process.env, { managers: false, curl: 'loopback' });
   const plant = (name: string, body: string): void =>
     writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });
   const poison = (name: string, says: string): void =>
@@ -362,7 +379,10 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     'case "$1" in',
     '  bootstrap) [ -f "$3" ] || { echo "fixture launchctl: no job file: $3" >&2; exit 1; };',
     '             printf \'%s\\n\' "${3##*/}" >> "$HOME/launchctl-loaded"; exit 0 ;;',
-    '  bootout|enable|disable|kickstart) exit 0 ;;',
+    '  bootout|enable|disable) exit 0 ;;',
+    // Wave 11 (R12): a kickstart zeroes that label's print counter, which
+    // `fixture-pid-churn-first.<label>` reads (see the `print` arm).
+    '  kickstart) printf \'0\\n\' > "$HOME/fx-kick.${3##*/}"; exit 0 ;;',
     '  print)',
     '    lbl="${2##*/}"',
     '    if [ -f "$HOME/launchctl-loaded" ] && grep -q "^$lbl.plist$" "$HOME/launchctl-loaded"; then',
@@ -379,7 +399,16 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     // SESSION jobs (the sweep's subject), `fixture-main-pid-churn` the
     // ccrc/ccrc-agent jobs (the gate's), so each case measures one of them.
     '      churn=""',
-    '      case "$lbl" in app.ccrc.session.*) [ -f "$HOME/fixture-pid-churn" ] && churn=1 ;; *) [ -f "$HOME/fixture-main-pid-churn" ] && churn=1 ;; esac',
+    // Wave 11 (R12), two per-label knobs, additive: `fixture-pid-churn.<label>`
+    // churns that one job; `fixture-pid-churn-first.<label>`, holding K, churns
+    // the first K prints of that label AFTER its kickstart and answers 4242
+    // from then on (a job whose window failed and whose re-check holds).
+    '      case "$lbl" in app.ccrc.session.*) { [ -f "$HOME/fixture-pid-churn" ] || [ -f "$HOME/fixture-pid-churn.$lbl" ]; } && churn=1 ;; *) [ -f "$HOME/fixture-main-pid-churn" ] && churn=1 ;; esac',
+    '      if [ -f "$HOME/fixture-pid-churn-first.$lbl" ]; then',
+    '        k=0; n=0; IFS= read -r k < "$HOME/fixture-pid-churn-first.$lbl"; [ -f "$HOME/fx-kick.$lbl" ] && IFS= read -r n < "$HOME/fx-kick.$lbl"',
+    '        n=$((n + 1)); printf \'%s\\n\' "$n" > "$HOME/fx-kick.$lbl"',
+    '        [ "$n" -le "$k" ] && churn=1',
+    '      fi',
     '      if [ -n "$churn" ]; then',
     '        echo "	pid = $(($(wc -l < "$HOME/launchctl-calls") + 4000))"',
     '      else',
@@ -411,6 +440,9 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     'case "$1" in',
     '  daemon-reload) exit 0 ;;',
     '  enable) [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
+    // Plan 3a Task 6: the usage converge (`_inst_enable`) may withdraw a ccrc
+    // usage timer; recorded and answered here, never a real manager.
+    '  disable) [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
     '  restart) [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
     '  try-restart) [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
     // Task 2 (§18 "the lock closes before the sweep": "a lingering stub
@@ -550,8 +582,7 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
   plant('npm',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
-  plant('rsync',
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
+  plant('rsync', rsyncRecorder(RSYNC));
   // Task 1 (design §10, "update.json is written at every phase … by rename"):
   // a RECORDING mv. When the destination is `~/.ccrc/update.json` it appends
   // the SOURCE file's one line to `$HOME/update-json-writes` before the real
@@ -673,6 +704,7 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
   // after this point in `updateEnv` touches PATH or these two names), and
   // `runUpdate`'s own call on the truly final env is the one that counts.
   assertSpineFrontContained(env, home);
+  assertNoRealTool(env, home);
   return env;
 }
 
@@ -684,6 +716,22 @@ function replantDoctorStubs(home: string): void {
     chmodSync(join(home, '.local', 'bin', f), 0o755);
   }
 }
+
+describe('updateEnv: containment (wave 9 R10d)', () => {
+  it('updateEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {
+    const home = mkTmp('ccrc-update-contained-');
+    expect(() => assertNoRealTool(updateEnv(home), home)).not.toThrow();
+  });
+
+  it('updateEnv is a SPINE builder: it hands `adoptPlantedSystemd` nothing to rename — no .codex-systemctl or .codex-systemd-run delegate (wave 9 R10d)', () => {
+    // `managers: true` would plant poisons that `adoptPlantedSystemd` renames to `.codex-*` delegates the fronts forward
+    // to: every `--detach` systemd-run would answer 97. The twin of ccrc-containment.test.ts's (g), at this builder.
+    const home = mkTmp('ccrc-update-spine-');
+    updateEnv(home);
+    const bin = join(home, '.local', 'bin');
+    for (const n of ['.codex-systemctl', '.codex-systemd-run']) expect(existsSync(join(bin, n)), n).toBe(false);
+  });
+});
 
 /** A box with an OLD install on it: an old `~/ccrc` tree (with a marker file
  *  a real update must delete), an old `~/.local/bin/ccd`, the two units, and
@@ -946,6 +994,8 @@ function runUpdate(home: string, args: string[] = [],
   // lost. This call is that fallback. No case in this file legitimately
   // reaches no manager at all.
   assertSpineFrontContained(env, home);
+  // Wave 9 R10d: and no real ssh, scp, tmux, gh, curl, launchctl, nor the real user bus (the final env).
+  assertNoRealTool(env, home);
   const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', ...args],
     { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
@@ -1354,7 +1404,10 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
   // and the assertions below measure that it did, at its own bound and not
   // before. A real `net.createServer`, NEVER a stubbed curl (modelled on the
   // never-answering-socket pin for `_upd_asset_listed`, fix round 1 item 12 /
-  // review 155 C32, below) — `updateEnv` alone, like that pin, NEVER
+  // review 155 C32, below) — `updateEnv` alone (whose curl is, since wave 9
+  // D-3819, the LOOPBACK FRONT: it execs the REAL curl only for the one port
+  // this case lists in `$HOME/curl-allow-ports`, and the case asserts the front
+  // passed its URL), like that pin, NEVER
   // `runUpdate`/`freshUpdateBox`'s own `replantDoctorStubs`, which would shadow
   // the real curl with the LOCAL-URL-only fixture shim (it never writes `-o`'s
   // destination file for a bare `http://` URL, so a run through it "fails" for
@@ -1423,11 +1476,13 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
         CCRC_RELEASE_SPEED_TIME: '1',
         CCRC_RELEASE_CONNECT_TIMEOUT: '2',
       };
+      allowCurlPort(home, host.port);
       const t0 = Date.now();
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update'],
         { env, encoding: 'utf8', timeout: 20_000 });
       const elapsedMs = Date.now() - t0;
       sent = await host.stop();
+      expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain(`http://127.0.0.1:${host.port}/`);
       expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
       // Ended by the OVERRIDDEN total bound (2 s): not before it (a stall or a
       // size bound would have ended it sooner), and not left trickling to
@@ -1470,10 +1525,12 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
         CCRC_RELEASE_CONNECT_TIMEOUT: '2',
       };
       delete env['CCRC_RELEASE_SUMS_MAX_FILESIZE'];
+      allowCurlPort(home, host.port);
       const t0 = Date.now();
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update'],
         { env, encoding: 'utf8', timeout: 25_000 });
       const elapsedMs = Date.now() - t0;
+      expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain(`http://127.0.0.1:${host.port}/`);
       expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
       // Ended by the size bound: curl 63, quickly — and the 30 s total bound
       // (set high on purpose) is nowhere near.
@@ -2811,7 +2868,7 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
   // the per-unit "not active after it" warnings and the old success line;
   // the restart itself already happened (its rc is untouched), so
   // try-restart IS in the recording.
-  itLinux('(b) the verify listing fails after a real restart — two DEGRADED lines replace the per-unit warnings and the old success line, rc stays 0', () => {
+  itLinux('(b) the verify listing fails after a real restart — a warning and a DEGRADED line replace the per-unit warnings and the old success line, rc stays 0', () => {
     const home = freshUpdateBox('ccrc-update-sweep-verify-fail-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantKillModeDropIn(home);
@@ -2916,6 +2973,137 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
       .not.toMatch(/kickstart/);
   });
 
+  // ── Wave 11 (R12), Task 7: the Darwin arm — one shared window, one re-check ──
+  // D0–D2, D4 and D6–D8 reach the arm from any runner (`sourcedCcrc` forces CCD_OS after
+  // the `.`), and D3 from a Linux runner (wave 12, R19a; D-4068); the launchctl stub is
+  // `updateEnv`'s own, and the window knobs are 0.
+  const SWEEP_D = 'CCD_OS=darwin; UPD_BACKUP_DIR="$HOME/ccrc-backups/fixture"; ';
+  const IDS3 = ['alpha', 'beta', 'gamma'];
+  const darwinBox = (prefix: string, ids: string[]): string => {
+    const home = freshUpdateBox(prefix);
+    for (const id of ids) plantSessionPlist(home, id);
+    return home;
+  };
+  const calls = (home: string): string[] => readFileSync(join(home, 'launchctl-calls'), 'utf8').split('\n').filter(Boolean);
+  const plantReport = (home: string, pid: number): string => {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const body = `{"target":"v0.0.85","phase":"resolving","startedAt":1700000000,"updatedAt":1700000001,"detail":null,"from":"auto","pid":${pid}}\n`;
+    writeFileSync(join(home, '.ccrc', 'update.json'), body);
+    return body;
+  };
+  const OWN_REPORT = 'UPD_REPORTING=1; UPD_REPORT_PID=4242; UPD_REPORT_TARGET=v0.0.85; UPD_FROM=auto; UPD_REPORT_STARTED=1; ';
+
+  it('D0: the Darwin arm\'s dies go through the guard — no bare _ccrc_die, exactly two _upd_sweep_die calls (wave 11, D-3973)', () => {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const m = /_upd_sweep\(\) \{([\s\S]*?)\n\}/.exec(src);
+    expect(m, '_upd_sweep() { … } not found in ccd/ccrc').not.toBeNull();
+    const sweep = m![1]!;
+    const d0 = sweep.indexOf('"$CCD_OS" = darwin');
+    expect(d0, '_upd_sweep lost its Darwin arm').toBeGreaterThan(-1);
+    const dEnd = sweep.indexOf('\n  fi', d0);
+    expect(dEnd, "_upd_sweep's Darwin arm never closes").toBeGreaterThan(d0);
+    const darwin = sweep.slice(d0, dEnd);
+    expect(darwin).not.toContain('_ccrc_die');
+    expect(darwin.match(/_upd_sweep_die "/g)?.length ?? 0).toBe(2);
+  });
+
+  it('D1: ONE shared window — every job is kicked, then every job is read, then every job is read again (wave 11, D-3975)', () => {
+    const home = darwinBox('ccrc-update-sweep-d1-', IDS3);
+    const r = sourcedCcrc(home, `${SWEEP_D}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toContain('3 restarted and re-measured still up');
+    expect(r.stderr).not.toContain('re-check:');
+    const all = calls(home);
+    let lastKick = -1;
+    all.forEach((l, i) => { if (l.startsWith('kickstart ')) lastKick = i; });
+    expect(lastKick, 'no kickstart was recorded').toBeGreaterThan(-1);
+    const after = all.slice(lastKick + 1);
+    expect(after.length, after.join('\n')).toBe(6);
+    expect(after.map((l) => l.replace(/^print gui\/\d+\/app\.ccrc\.session\./, '')))
+      .toEqual(['alpha', 'beta', 'gamma', 'alpha', 'beta', 'gamma']);
+    for (const l of after) expect(l).toMatch(/^print gui\/\d+\/app\.ccrc\.session\.[a-z]+$/);
+  });
+
+  it('D2: a job that churns through its re-check is named, with the counts, and no backup is promised (wave 11, D-3974)', () => {
+    const home = darwinBox('ccrc-update-sweep-d2-', IDS3);
+    writeFileSync(join(home, 'fixture-pid-churn.app.ccrc.session.beta'), 'yes\n');
+    const r = sourcedCcrc(home, `${SWEEP_D}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toContain('update: sweep: re-check: claude-session@beta.service did not stay up (pid ');
+    expect(r.stderr).toContain('update: sweep: re-check: claude-session@beta.service failed its re-check too');
+    expect(r.stderr).toContain('ccrc: sweep: 1 of 3 launchd session jobs did not stay up on a first window; a re-check failed, '
+      + '0 left un-re-checked — install complete, nothing was rolled back (first failed re-check: claude-session@beta.service, pid ');
+    expect(r.stderr).not.toContain('backup');
+    expect(r.stdout).not.toContain('restarted and re-measured still up');
+  });
+
+  const D3_BODY = (shim: string): string =>
+    `${SWEEP_D}${shim}${OWN_REPORT}_upd_sweep`;
+  const d3 = (home: string, shim: string): void => {
+    writeFileSync(join(home, 'fixture-pid-churn.app.ccrc.session.beta'), 'yes\n');
+    const plant = plantReport(home, 999999);
+    const r = sourcedCcrc(home, D3_BODY(shim));
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')).toBe(plant);
+    expect(r.stdout).toContain('update: report: skipped — ');
+  };
+  // `_upd_report_readable` reads the file's size through `_plat_size`, which under a forced
+  // CCD_OS=darwin runs BSD `stat -f %z` — a Linux runner's GNU stat refuses that and the foreign report
+  // would read as this run's own. D3 stands the platform primitive in with GNU `stat -c %s`, which BSD
+  // stat refuses in turn, so D3 is Linux-only; D3d (macOS) runs the real one (wave 12, R19a; D-4068).
+  itLinux('D3: a foreign report survives the Darwin die (GNU stat stands in for the platform size primitive) (wave 11, D-3973)', () => {
+    d3(darwinBox('ccrc-update-sweep-d3-', IDS3), '_plat_size() { stat -c %s "$@"; }; ');
+  });
+  itDarwin('D3d: a foreign report survives the Darwin die, the real _plat_size (wave 11, D-3973)', () => {
+    d3(darwinBox('ccrc-update-sweep-d3d-', IDS3), '');
+  });
+
+  it('D4: the single-unit contract the gate and _inst_enable lean on — two prints, the one-job detail (wave 11, D-3975)', () => {
+    const home = darwinBox('ccrc-update-sweep-d4-', ['alpha']);
+    const one = 'CCD_OS=darwin; _ccrc_job_stayed_up claude-session@alpha.service; echo "rc=$? detail=$CCRC_STAYED_DETAIL"';
+    const ok = sourcedCcrc(home, one);
+    expect(ok.code, ok.stderr).toBe(0);
+    expect(ok.stdout).toMatch(/^rc=0 detail=pid 4242 -> 4242 across 0s\+0s$/m);
+    expect(calls(home).filter((l) => l.startsWith('print ')).length).toBe(2);
+    writeFileSync(join(home, 'fixture-pid-churn'), 'yes\n');
+    const bad = sourcedCcrc(home, one);
+    expect(bad.code, bad.stderr).toBe(0);
+    expect(bad.stdout).toMatch(/^rc=1 detail=pid 4\d+ -> 4\d+ across 0s\+0s$/m);
+  });
+
+  it('D6: the Darwin cap keeps the facts — a 31-character id, the report detail at most 200 characters (wave 11, D-3974)', () => {
+    const id = `demo-${'x'.repeat(26)}`;
+    expect(id.length).toBe(31);
+    const home = darwinBox('ccrc-update-sweep-d6-', [id]);
+    writeFileSync(join(home, 'fixture-pid-churn'), 'yes\n');
+    plantReport(home, 4242);
+    const r = sourcedCcrc(home, `${SWEEP_D}${OWN_REPORT}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    const j = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as { phase: string; detail: string };
+    expect(j.phase).toBe('failed');
+    expect(j.detail.length).toBeLessThanOrEqual(200);
+    for (const want of ['1 of 1', 'did not stay up', 'nothing was rolled back']) expect(j.detail, want).toContain(want);
+  });
+
+  it('D7: the re-check passes a job that recovered (wave 11, D-3983)', () => {
+    const home = darwinBox('ccrc-update-sweep-d7-', IDS3);
+    writeFileSync(join(home, 'fixture-pid-churn-first.app.ccrc.session.beta'), '2\n');
+    const r = sourcedCcrc(home, `${SWEEP_D}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).toContain('re-check: claude-session@beta.service passed its re-check');
+    expect(r.stdout).toContain('3 restarted and re-measured still up');
+  });
+
+  it('D8: every job churning makes exactly ONE re-check, then the update dies (Reading 17, wave 11, D-3983)', () => {
+    const home = darwinBox('ccrc-update-sweep-d8-', IDS3);
+    writeFileSync(join(home, 'fixture-pid-churn'), 'yes\n');
+    const r = sourcedCcrc(home, `${SWEEP_D}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr.match(/re-measuring it once more, alone/g)?.length ?? 0).toBe(1);
+    expect(r.stderr.match(/and is not re-checked/g)?.length ?? 0).toBe(2);
+    expect(r.stderr).toContain('3 of 3 launchd session jobs did not stay up on a first window; a re-check failed, 2 left un-re-checked');
+  });
+
   itDarwin('a job file missing AbandonProcessGroup REFUSES the sweep — loud on stderr, DEGRADED on stdout, and NO kickstart for ANY session', () => {
     const home = freshUpdateBox('ccrc-update-sweep-darwin-refused-');
     plantOldBox(home, { version: 'v1.0.0' });
@@ -2942,7 +3130,7 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
   });
 
-  itDarwin('a kicked supervisor whose pid did not hold across the window FAILS the update, naming the pre-update backup', () => {
+  itDarwin('a kicked supervisor whose pid did not hold across the window FAILS the update, naming how many and the first job, and no backup no path restores (wave 11, D-3974)', () => {
     const home = freshUpdateBox('ccrc-update-sweep-darwin-loop-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantSessionPlist(home, 'alpha');
@@ -2953,8 +3141,9 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     const r = runUpdate(home);
     expect(r.code, 'a supervisor that did not stay up must FAIL the update').not.toBe(0);
     expect(r.stderr).toMatch(/did not stay up/);
-    // The one line in the whole update path that points at the rollback.
-    expect(r.stderr).toMatch(/pre-update backup is complete at \S*ccrc-backups/);
+    // Wave 11 (D-3974): the facts, and no promise of a backup nothing restores from.
+    expect(r.stderr).toContain('sweep: 1 of 1 launchd session jobs');
+    expect(r.stderr).not.toContain('pre-update backup');
   });
 
   itDarwin('a session carrying the start-limit stamp is warned about and skipped — not kicked, not fatal', () => {
@@ -4157,7 +4346,9 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
         'set -uo pipefail', progLine![0], redactBlock![0], dieLine![0],
         `_upd_phase() { printf '%s|%s\\n' "$1" "$2" >> '${rec}'; }`,
         'UPD_FAIL_PREFIX=""', body,
-      ].join('\n')], { encoding: 'utf8' });
+        // Wave 9 R10d: this harness handed no env and so inherited the REAL HOME. An extracted-function harness
+        // (builtins plus date/mkdir/chmod/mv/rm only), so it is exempt from assertNoRealTool, and PATH-less on purpose.
+      ].join('\n')], { env: { HOME: home }, encoding: 'utf8' });
       return { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
     };
     let r = run('UPD_REPORTING=0; _ccrc_die before the lock');
@@ -4188,7 +4379,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(redactBlock, 'ccd/ccrc has no _upd_redact block').not.toBeNull();
     const home = mkTmp('ccrc-update-redact-unit-');
     const call = (text: string): string => {
-      const p = spawnSync('bash', ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
+      const p = spawnSync(BASH, ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
         { env: { HOME: home }, encoding: 'utf8' });
       expect(p.status, p.stderr).toBe(0);
       return p.stdout;
@@ -4221,7 +4412,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     const redactBlock = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
     expect(redactBlock, 'ccd/ccrc has no _upd_redact block').not.toBeNull();
     const callWithHome = (text: string, home: string): string => {
-      const p = spawnSync('bash', ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
+      const p = spawnSync(BASH, ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
         { env: { HOME: home }, encoding: 'utf8' });
       expect(p.status, p.stderr).toBe(0);
       return p.stdout;
@@ -4259,7 +4450,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     const redactBlock = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
     expect(redactBlock, 'ccd/ccrc has no _upd_redact block').not.toBeNull();
     const call = (text: string): string => {
-      const p = spawnSync('bash', ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
+      const p = spawnSync(BASH, ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
         { env: { HOME: '/home/u' }, encoding: 'utf8' });
       expect(p.status, p.stderr).toBe(0);
       return p.stdout;
@@ -4325,10 +4516,10 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
         ].join('\n'), { mode: 0o755 });
       }
       const env = {
-        ...process.env, HOME: home,
-        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
         CCRC_RELEASE_BASE_URL: `http://user:${secret}@127.0.0.1:1/rel`,
       };
+      assertNoRealTool(env, home);
       const args = verb === 'update' ? ['update', '--to', 'v0.0.1'] : ['rollback', '--to', 'v0.0.1', '--from', 'pwa'];
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), ...args], { env, encoding: 'utf8' });
       expect(r.stdout, `${verb} stdout`).not.toContain(secret);
@@ -4397,7 +4588,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     chmodSync(join(longHome, '.ccrc', 'floor'), 0o000);
     let r: Result;
     try {
-      const p = spawnSync('bash', ['-c', harness],
+      const p = spawnSync(BASH, ['-c', harness],
         { env: { HOME: longHome, UPD_VERSION: 'v2.0.0' }, encoding: 'utf8' });
       r = { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
     } finally {
@@ -4447,11 +4638,34 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       `_upd_phase failed "unreadable: $HOME/.ccrc/ccrc.env is not a regular file"`,
     ].join('\n');
     mkdirSync(join(home, '.ccrc'), { recursive: true });
-    const r = spawnSync('bash', ['-c', harness], { env: { HOME: home }, encoding: 'utf8' });
+    const r = spawnSync(BASH, ['-c', harness], { env: { HOME: home }, encoding: 'utf8' });
     expect(r.status, r.stderr).toBe(0);
     const rep = JSON.parse(readFileSync(jsonPath, 'utf8')) as Record<string, unknown>;
     expect(String(rep['detail']), JSON.stringify(rep)).not.toContain(home);
     expect(rep['detail']).toBe('unreadable: ~/.ccrc/ccrc.env is not a regular file');
+  });
+
+  // Wave 9 M1-M3 (D-3808): five harnesses run functions extracted from ccd/ccrc
+  // under a PATH-less env, and a bare `bash` under that env resolves macOS's
+  // /bin/bash 3.2 (no BASHPID, `\/` in a ${//} replacement). They spawn the
+  // file's resolved BASH instead. This case reads the file itself, and the
+  // needle is built from two halves so the case never matches its own text.
+  it('no bare-`bash` spawn in this file hands its child an env — a PATH-less env resolves macOS\'s /bin/bash 3.2 (wave 9 M1–M3)', () => {
+    const text = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+    const NEEDLE = ['spawnSync(', "'bash'"].join('');
+    const hits: number[] = [];
+    for (let at = text.indexOf(NEEDLE); at !== -1; at = text.indexOf(NEEDLE, at + 1)) hits.push(at);
+    for (const at of hits) {
+      const end = text.indexOf('encoding:', at);
+      const slice = text.slice(at, end === -1 ? text.length : end);
+      expect(slice.includes('env:'),
+        `ccrc-update.test.ts spawns bare bash with an env at offset ${at} — use BASH`).toBe(false);
+    }
+    // The six env-less sites: the realPath and REAL_PYTHON3 probes, writeManifest,
+    // the SHA256SUMS writer, and the two locale probes.
+    expect(hits.length,
+      `ccrc-update.test.ts has ${hits.length} bare-bash spawns, expected exactly 6 — a new one must use BASH or be counted here`)
+      .toBe(6);
   });
 });
 
@@ -6732,8 +6946,10 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     const q = sourcedCcrc(home, 'UPD_REPORT_TARGET=v0.0.9\nUPD_FROM=pwa\n_upd_phase queued');
     expect(q.code, `stderr: ${q.stderr}`).toBe(0);
     const env = { ...updateEnv(home), CCRC_RELEASE_BASE_URL: 'http://127.0.0.1:9' };
+    allowCurlPort(home, 9);
     const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.9', '--from', 'pwa'],
       { env, encoding: 'utf8' });
+    expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain('http://127.0.0.1:9/');
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/could not ask the release host whether v0\.0\.9 exists/);
     const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
@@ -6761,7 +6977,8 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
   // Fix round 1 item 12 / review 155 C32: the pre-detach check
   // (`_upd_asset_listed`, via cmd_rollback's SHA256SUMS ask) against a
   // release host that ACCEPTS the TCP connection and never answers — a real
-  // `net.createServer` that never writes, NEVER a stubbed curl, so the REAL
+  // `net.createServer` that never writes, NEVER a stubbed curl (the loopback
+  // front, D-3819, execs the REAL curl for this one listed port), so the REAL
   // curl's own `--max-time` bound is what is measured. `CCRC_RELEASE_PROBE_
   // MAX_TIME` is overridden small so this pin finishes in a few seconds
   // rather than the production default (15s, itself well under W5's 20s
@@ -6780,10 +6997,12 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
         CCRC_RELEASE_PROBE_MAX_TIME: '2',
         CCRC_RELEASE_CONNECT_TIMEOUT: '2',
       };
+      allowCurlPort(home, port);
       const t0 = Date.now();
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.9', '--from', 'pwa'],
         { env, encoding: 'utf8', timeout: 20_000 });
       const elapsedMs = Date.now() - t0;
+      expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain(`http://127.0.0.1:${port}/`);
       expect(r.status, r.stderr).toBe(1);
       // Bounded by the OVERRIDDEN probe bound (2s), not left hanging to
       // curl's own (much longer) defaults or to this test's 20s kill.
@@ -6811,10 +7030,10 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       mkdirSync(join(home, '.local', 'bin'), { recursive: true });
       writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
       const env = {
-        ...process.env, HOME: home,
-        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
         [envVar]: badValue,
       };
+      assertNoRealTool(env, home);
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.1', '--from', 'pwa'],
         { env, encoding: 'utf8' });
       // The probe's own ceiling is the pre-detach one (W6 Task 8A); the
@@ -6844,10 +7063,10 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       mkdirSync(join(home, '.local', 'bin'), { recursive: true });
       writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
       const env = {
-        ...process.env, HOME: home,
-        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
         CCRC_RELEASE_PROBE_MAX_TIME: value,
       };
+      assertNoRealTool(env, home);
       return spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.1', '--from', 'pwa'],
         { env, encoding: 'utf8' });
     };
@@ -6880,10 +7099,10 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       mkdirSync(join(home, '.local', 'bin'), { recursive: true });
       writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
       const env = {
-        ...process.env, HOME: home,
-        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
         [envVar]: badValue,
       };
+      assertNoRealTool(env, home);
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', '--to', 'v0.0.1'],
         { env, encoding: 'utf8' });
       const what = envVar === 'CCRC_RELEASE_SPEED_LIMIT'
@@ -11084,10 +11303,14 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
 // a harness that could not see a leak would say so.
 describe('ccrc: one EXIT chain — a killed writer leaves no <dest>.tmp.$$, and no per-function trap clobbers another (W6 Task 8A)', () => {
   const chainEnv = (home: string): NodeJS.ProcessEnv => {
-    const env = ghContainedEnv(home, { ...process.env, HOME: home });
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
     for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
     return env;
   };
+  it('chainEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {
+    const home = mkTmp('ccrc-exit-chain-contained-');
+    expect(() => assertNoRealTool(chainEnv(home), home)).not.toThrow();
+  });
   const run = (home: string, body: string): { code: number; stdout: string; stderr: string } => {
     const r = spawnSync(BASH, ['-c', `set --; source "${join(REPO, 'ccd', 'ccrc')}"; mkdir -p "$HOME/.ccrc"; ${body}`],
       { env: chainEnv(home), encoding: 'utf8', timeout: 30_000 });
@@ -11553,19 +11776,33 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     expect(existsSync(join(home, 'kept-spine-argv')), "the kept version's spine ran").toBe(false);
     expect(linkOf(home)).toBe(link);
   };
-  /** Refused with C27's sentence, nothing moved. */
-  const expectRefused = (home: string, r: Result, link: string, reason?: string): void => {
+  /** The reason line's tail, by `_kf_remedy` (wave 9 R9-F1, D-3827, round-2 ruling R-D). It re-measures when it prints:
+   *  the hand install, only where the role is known and the version is kept complete, its own `ccd/ccrc` versioned and
+   *  (on a fleet box) its agent deps present; otherwise NO command and no recipe. */
+  const handInstall = (role: string): string =>
+    `re-installing v1.0.0 is a typed act, not a rollback's: bash ~/ccrc-versions/v1.0.0/ccd/ccrc install --role ${role} (it installs from that version's own kept directory: no download, no tree copy, no npm ci)`;
+  const NO_COMMAND = 'no safe one-line repair is known for this state, so this line names no command — nothing on this box was changed';
+  /** Refused with C27's sentence, nothing moved. `tail` is what the reason line ends in. */
+  const expectRefused = (home: string, r: Result, link: string, reason?: string, tail: string = NO_COMMAND): void => {
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(r.stderr).toMatch(SENTENCE);
     // The reason line, when conditions (1) to (3) held and (4)-(6) did not; none otherwise.
     if (reason === undefined) expect(r.stderr).not.toContain('the killed-flip state does not hold');
     else {
       expect(r.stderr).toContain(`rollback: the killed-flip state does not hold — ${reason}`);
-      // R-B1: the sentence's own remedy (`--to vX.Y.Z`) meets this refusal again, so the
-      // WORKING one — the typed re-install — rides the reason line.
-      expect(r.stderr).toContain(`${reason} — re-installing v1.0.0 is a typed act, not a rollback's: ccrc update --to v1.0.0 --downgrade\n`);
+      // R-B1 (as reshaped by wave 9 R9-F1): the sentence's own remedy (`--to vX.Y.Z`) meets this refusal again, so
+      // the line's tail says what the box can safely do instead — a typed hand install where it was measured safe
+      // just now, otherwise that no safe one-line repair is known. Never the in-place `update --to … --downgrade`.
+      expect(r.stderr).toContain(`${reason} — ${tail}\n`);
+      if (tail === NO_COMMAND) {
+        expect(tail, 'the no-command tail names a recipe').not.toMatch(/README|bash ~\/ccrc-versions/);
+        expect(r.stderr, 'a no-command refusal named a recipe').not.toContain('README');
+        expect(r.stderr, 'a no-command refusal named a command').not.toContain('bash ~/ccrc-versions');
+      } else {
+        expect(r.stderr, 'the hand-install refusal named a recipe').not.toContain('README');
+      }
     }
-    if (reason === undefined) expect(r.stderr).not.toContain('ccrc update --to');
+    expect(r.stderr, 'the in-place re-install is never advised (R9-F1)').not.toContain('ccrc update --to');
     expect(r.stderr).toContain('Nothing on this box was changed — name the target: ccrc rollback --to vX.Y.Z');
     expectNoReinstall(home, link);
     expect(existsSync(join(home, '.ccrc', 'installed')) ? fileText(join(home, '.ccrc', 'installed')) : null,
@@ -11751,6 +11988,23 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     publishV1(home);
     note(home);
     const why = "the target's kept stamp is not this box's stamp (another build's sha)";
+    // `_kf_remedy` re-measures at print time: this version is still kept complete with a versioned spine, so the
+    // hand install is named (role server, from ccrc.env).
+    expectRefused(home, rollbackRun(home), v2, why, handInstall('server'));
+    expectRefused(home, rollbackRun(home, ['--to', 'v1.0.0']), v2, why, handInstall('server'));
+  });
+
+  it('control (conditions 5 and 6 together): a kept pre-W6 target whose kept stamp has another sha — refused with condition 5\'s reason, and the tail names no command (wave 9 R9-F1)', () => {
+    // `_rollback_killed_flip_state` returns at (5) before it reads (6), so the reason is (5)'s — but the spine here is
+    // pre-W6, and a hand install from it would run its `npm ci` in `~/ccrc`, the tree the units run. An implementation
+    // that trusted which condition failed would print the hand install here; `_kf_remedy` measures again.
+    const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-othersha-prew6-', { oldSpine: KEPT_SPINE });
+    writeFileSync(join(v1, '.ccrc-stamp.json'), `${JSON.stringify({ sha: 'e'.repeat(40), ref: 'main', builtAt: '2026-09-23T00:00:00Z', dirty: false, version: 'v1.0.0' })}\n`);
+    expect(verKeptAnswer(home), 'the control is broken: the version must still be KEPT, so only (5) and (6) refuse').toBe('rc=0 why=');
+    expect(verKeptAnswer(home, 'v1.0.0', 'server')).toBe('rc=0 why=');
+    publishV1(home);
+    note(home);
+    const why = "the target's kept stamp is not this box's stamp (another build's sha)";
     expectRefused(home, rollbackRun(home), v2, why);
     expectRefused(home, rollbackRun(home, ['--to', 'v1.0.0']), v2, why);
   });
@@ -11799,7 +12053,9 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     expect(linkOf(home)).toBe(v1);
   });
 
-  it('control (the detached child): `rollback --to v1.0.0 --detach --from pwa` in the killed-flip state with the target NOT kept — the parent hands the run on, and the CHILD (which gets `--to` and never runs C27) dies with C27\'s sentence: no rsync, no npm, nothing downloaded, the report closed `failed`', () => {
+  // PLATFORM-ONLY: --detach is Linux-only (decision 17) — the macOS answer is
+  // `itDarwin('--detach refuses on macOS by name …')` above.
+  itLinux('control (the detached child): `rollback --to v1.0.0 --detach --from pwa` in the killed-flip state with the target NOT kept — the parent hands the run on, and the CHILD (which gets `--to` and never runs C27) dies with C27\'s sentence: no rsync, no npm, nothing downloaded, the report closed `failed`', () => {
     const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-detached-');
     rmSync(join(v1, '.ccrc-installed'));
     publishV1(home);
@@ -11831,13 +12087,100 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     const r = rollbackRun(home, args);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(r.stderr).toMatch(SENTENCE);
-    expect(r.stderr).toContain('rollback: the killed-flip state holds, so this rollback may only flip, and the flip could not be made (the one rename that points $HOME/ccrc at $HOME/ccrc-versions/v1.0.0 failed) — it does not fall back to a re-install — re-installing v1.0.0 is a typed act, not a rollback\'s: ccrc update --to v1.0.0 --downgrade\n');
+    // The rename is what fails; the version is kept complete, so the tail is the hand install (wave 9 R9-F1).
+    expect(r.stderr).toContain(`rollback: the killed-flip state holds, so this rollback may only flip, and the flip could not be made (the one rename that points $HOME/ccrc at $HOME/ccrc-versions/v1.0.0 failed) — it does not fall back to a re-install — ${handInstall('server')}\n`);
+    expect(r.stderr, 'the in-place re-install is never advised (R9-F1)').not.toContain('ccrc update --to');
     expect(r.stdout).not.toContain('rolling back by re-install instead');
     expectNoReinstall(home, v2);
     expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(false);
     if (args.includes('--from') && args[args.indexOf('--from') + 1] !== 'cli') {
       expect(lastReport(home)['phase'], 'the report was left non-terminal').toBe('failed');
     }
+  });
+
+  // ── wave 9 R9-F1 (D-3827): `_kf_remedy`, the reason line's tail, over fixture version dirs ─────────────────────
+  // It decides from a measurement it takes ITSELF, when it prints — `_ver_kept` under the role it was handed, the
+  // version's own `ccd/ccrc` carrying `^BOX_VERSIONS_ROOT=`, and (a fleet box) `agent/node_modules` — never from which
+  // condition of `_rollback_killed_flip_state` failed. The role is always named: a bare `ccrc install` defaults to role
+  // `both` and never reads the recorded role, so on a fleet box it would check and install the server build.
+  describe('_kf_remedy: the hand install only where measured safe, never the in-place update, never a recipe (wave 9 R9-F1)', () => {
+    type Row = { what: string; role: string; expected: string; kept: RegExp };
+    const keptBox = (prefix: string, o: { spine?: string; agentDeps?: boolean; keep?: boolean } = {}): { home: string; v1: string } => {
+      const home = freshUpdateBox(prefix);
+      const v1 = installVersionedTree(home, 'v1.0.0', { link: false, stamp: { sha: V1_SHA, version: 'v1.0.0' } });
+      writeFileSync(join(v1, 'ccd', 'ccrc'), o.spine ?? KEPT_SPINE_W6, { mode: 0o755 });
+      if (o.agentDeps === true) mkdirSync(join(v1, 'agent', 'node_modules'), { recursive: true });
+      keepDigest(v1, home);   // the spine and the deps dir are part of the kept bytes (D-3465)
+      return { home, v1 };
+    };
+    const remedy = (home: string, role: string): { out: string; stderr: string; status: number | null } => {
+      const r = spawnSync(BASH, ['-c', '. "$1"; _kf_remedy v1.0.0 "$2"', 'ccrc-under-test', join(REPO, 'ccd', 'ccrc'), role],
+        { env: updateEnv(home), encoding: 'utf8' });
+      return { out: r.stdout, stderr: r.stderr, status: r.status };
+    };
+    const rows: Row[] = [
+      { what: 'kept complete, a versioned ccd/ccrc, role server — the hand install, naming --role server', role: 'server',
+        expected: handInstall('server'), kept: /^rc=0 why=$/ },
+      { what: 'the same under role fleet WITH agent/node_modules — the hand install, naming --role fleet', role: 'fleet',
+        expected: handInstall('fleet'), kept: /^rc=0 why=$/ },
+      { what: 'role fleet WITHOUT agent/node_modules — no command (its kept arm would run npm ci in place)', role: 'fleet',
+        expected: NO_COMMAND, kept: /^rc=0 why=$/ /* fleet without agent deps is still KEPT: only the deps term refuses */ },
+      { what: 'kept complete with a PRE-W6 ccd/ccrc — no command (its spine runs npm ci in ~/ccrc)', role: 'server',
+        expected: NO_COMMAND, kept: /^rc=0 why=$/ /* the pre-W6 spine is still KEPT: only the spine term refuses */ },
+      { what: 'WRITTEN THROUGH since it was kept (a byte appended after the digest, _ver_kept rc 3), a versioned ccd/ccrc — no command', role: 'server',
+        expected: NO_COMMAND, kept: /^rc=3 / },
+      { what: 'not kept (no directory) — no command', role: 'server', expected: NO_COMMAND, kept: /^rc=1 / },
+      { what: 'incomplete (no install record) — no command', role: 'server', expected: NO_COMMAND, kept: /^rc=2 why=no kept install record/ },
+      { what: 'an EMPTY role, the version otherwise kept complete — no command (a bare install would default to role both)', role: '',
+        expected: NO_COMMAND, kept: /^rc=0 why=$/ /* an empty role reads both: kept, yet no command */ },
+    ];
+    const setups: Array<(name: string) => { home: string; v1: string }> = [
+      (n) => keptBox(n),
+      (n) => keptBox(n, { agentDeps: true }),
+      (n) => keptBox(n),
+      (n) => keptBox(n, { spine: KEPT_SPINE }),
+      (n) => {
+        const b = keptBox(n);
+        appendFileSync(join(b.v1, 'server', 'dist', 'server', 'src', 'index.js'), '// written through after the digest\n');
+        return b;
+      },
+      (n) => {
+        const b = keptBox(n);
+        rmSync(b.v1, { recursive: true, force: true });
+        return b;
+      },
+      (n) => {
+        const b = keptBox(n);
+        rmSync(join(b.v1, '.ccrc-installed'));
+        return b;
+      },
+      (n) => keptBox(n),
+    ];
+    it.each(rows.map((row, i) => [row.what, i] as const))('_kf_remedy: %s', (_what, i) => {
+      const row = rows[i]!;
+      const { home } = setups[i]!(`ccrc-fx-b-kf-remedy-${i}-`);
+      // the control, so a row cannot pass for another reason: `_ver_kept`'s own answer for this fixture under this role
+      expect(verKeptAnswer(home, 'v1.0.0', row.role)).toMatch(row.kept);
+      const r = remedy(home, row.role);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.out).toBe(`${row.expected}\n`);
+      expect(r.out, 'the in-place re-install is never advised').not.toContain('ccrc update --to');
+      expect(r.out).not.toContain('--downgrade');
+      if (row.expected === NO_COMMAND) {
+        expect(r.out, 'a no-command row named a recipe').not.toMatch(/README|recipe/);
+        expect(r.out, 'a no-command row named a command').not.toContain('bash ~/ccrc-versions');
+      } else {
+        expect(r.out).toContain(`--role ${row.role} (`);
+        expect(r.out).not.toMatch(/README|recipe/);
+      }
+    });
+    it('_kf_remedy: `_ver_kept` writes nothing to stdout (the remedy runs it inside $(…) on the reason line)', () => {
+      const { home } = keptBox('ccrc-fx-b-kf-quiet-');
+      const r = spawnSync(BASH, ['-c', '. "$1"; _ver_kept v1.0.0 server', 'ccrc-under-test', join(REPO, 'ccd', 'ccrc')],
+        { env: updateEnv(home), encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe('');
+    });
   });
 });
 
@@ -12304,6 +12647,204 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     assertNoExtras(home);
   });
 
+  // wave 9 R10g (D-3825, D-3826): `ccrc backup`'s prune keeps what `_bak_gc` keeps — through the ONE helper
+  // `_bak_keepset` — and takes ~/.ccrc/update.lock for the prune only. Nested here so `runBackup`, `plantDir`,
+  // `backupRoot` and `assertNoExtras` are in scope; the enclosing describe has no `holders`, so this one declares its own.
+  describe('ccrc backup: the prune keeps what _bak_gc keeps, and takes the lock (wave 9 R10g)', () => {
+    const holders: ChildProcess[] = [];
+    afterEach(() => {
+      for (const h of holders.splice(0)) h.kill('SIGKILL');
+    });
+    const lockPath = (home: string): string => join(home, '.ccrc', 'update.lock');
+    /** A FRESH open and a non-blocking flock — the probe's own measurement (the lock describe's, copied as a pattern). */
+    const lockFree = (home: string): boolean =>
+      spawnSync(BASH, ['-c', 'exec 9>>"$1" && flock -n 9', '_', lockPath(home)]).status === 0;
+    const waitUntil = (cond: () => boolean, what: string): void => {
+      const t0 = Date.now();
+      while (!cond()) {
+        if (Date.now() - t0 > 10_000) throw new Error(`timed out waiting for ${what}`);
+        spawnSync('sleep', ['0.05']);
+      }
+    };
+    /** ONE process takes flock on the lock file and becomes `sleep` (exec keeps the pid and the descriptor). Returns
+     *  once a fresh probe fails. */
+    const holdLock = (home: string): ChildProcess => {
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      const h = spawn(BASH, ['-c', 'exec 9>>"$1" && flock 9 && exec sleep 30', '_', lockPath(home)], { stdio: 'ignore' });
+      holders.push(h);
+      waitUntil(() => !lockFree(home), 'the fixture holder to take the lock');
+      return h;
+    };
+    /** The directory the backup announced: `backup: <dir> (coord.db snapshot, …`. */
+    const ownDir = (r: Result): string => {
+      const m = /^backup: (\S+) \(coord\.db snapshot/m.exec(r.stdout);
+      expect(m, `no "backup: <dir>" line — stdout: ${r.stdout}\nstderr: ${r.stderr}`).not.toBeNull();
+      return m![1]!;
+    };
+    const has = (home: string, name: string): boolean => existsSync(join(backupRoot(home), name));
+
+    it('B1: CCRC_BACKUP_KEEP=0 never removes the backup it just made, and removes both planted older dirs', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b1-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      const own = ownDir(r);
+      expect(existsSync(own), `this run's own backup ${own} must survive KEEP=0`).toBe(true);
+      expect(has(home, '20250101-000000')).toBe(false);
+      expect(has(home, '20250102-000000')).toBe(false);
+      assertNoExtras(home);
+    });
+
+    it('B2: KEEP=0 keeps the newest earlier tree backup and the newest earlier coord.db snapshot, and removes an unprotected dir', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b2-');
+      mkdirSync(join(plantDir(home, '20250101-000000'), 'server-dist'), { recursive: true });
+      plantDir(home, '20250102-000000', { coordDb: true });
+      plantDir(home, '20250103-000000');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20250101-000000'), 'the newest earlier tree backup').toBe(true);
+      expect(has(home, '20250102-000000'), 'the newest earlier coord.db snapshot').toBe(true);
+      expect(has(home, '20250103-000000'), 'nothing protects the empty one').toBe(false);
+      assertNoExtras(home);
+    });
+
+    it('B3: while another process holds ~/.ccrc/update.lock the prune says so, removes nothing, and ccrc backup exits 0', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b3-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      holdLock(home);
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain('backup: prune skipped — another ccrc run holds ~/.ccrc/update.lock; nothing was pruned');
+      expect(existsSync(ownDir(r))).toBe(true);
+      expect(has(home, '20250101-000000')).toBe(true);
+      expect(has(home, '20250102-000000')).toBe(true);
+      assertNoExtras(home);
+    });
+
+    it('B4: the floor ALONE — a dir named after this run began survives KEEP=0, though it is neither its own path nor a snapshot nor a tree', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b4-');
+      plantDir(home, '20991231-235959');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20991231-235959'), 'only the floor protects it').toBe(true);
+      expect(existsSync(ownDir(r))).toBe(true);
+      assertNoExtras(home);
+    });
+
+    it('B5: with no flock on PATH the prune says so, removes nothing, and ccrc backup exits 0 (the backup was taken first)', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b5-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      // `ccrc-uninstall.test.ts`'s `pathWithout` idiom: ONE link farm of every command on the parent's PATH, except
+      // flock and every CONTAINED_TOOLS name (those resolve to the fixture's stubs and poisons in $HOME/.local/bin).
+      // `pathWithoutFlock` links nine tools and `ccrc backup` outruns them before its prune.
+      const bin = join(home, '.local', 'bin');
+      expect(existsSync(join(bin, 'flock')), 'updateEnv must plant no flock').toBe(false);
+      const farm = join(home, 'no-flock-backup-bin');
+      mkdirSync(farm);
+      const skip = new Set<string>(['flock', ...CONTAINED_TOOLS]);
+      for (const dir of (process.env['PATH'] ?? '/usr/bin:/bin').split(':')) {
+        let names: string[] = [];
+        try { names = readdirSync(dir); } catch { continue; }
+        for (const name of names) {
+          if (skip.has(name)) continue;
+          skip.add(name);
+          symlinkSync(join(dir, name), join(farm, name));
+        }
+      }
+      const env = { ...updateEnv(home), PATH: `${bin}:${farm}` };
+      assertNoRealTool(env, home);
+      expect(spawnSync(BASH, ['-c', 'command -v flock'], { env, encoding: 'utf8' }).stdout.trim(), 'no flock under this PATH').toBe('');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0', PATH: env.PATH });
+      const own = ownDir(r);   // BEFORE the skip line: a backup that died cannot pass as a prune that skipped
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain('backup: prune skipped — flock is not on PATH, so ~/.ccrc/update.lock cannot be taken; nothing was pruned');
+      expect(existsSync(own)).toBe(true);
+      expect(has(home, '20250101-000000')).toBe(true);
+      expect(has(home, '20250102-000000')).toBe(true);
+      assertNoExtras(home);
+    });
+
+    it('B8: _bak_prune called with no recorded floor prunes nothing and says why — exit 0', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b8-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      const script = ['set -uo pipefail', '. "$1"', 'UPD_BAK_FLOOR=""', 'rc=0; _bak_prune || rc=$?', 'echo "rc=$rc"'].join('\n');
+      const r = spawnSync(BASH, ['-c', script, 'floor-guard', join(REPO, 'ccd', 'ccrc')],
+        { env: { ...updateEnv(home), CCRC_BACKUP_KEEP: '0' }, encoding: 'utf8' });
+      expect(r.stdout, `stderr: ${r.stderr}`).toContain(
+        "backup: prune skipped — this run's start time was not recorded, so nothing can say which backups are its own; nothing was pruned");
+      expect(r.stdout).toContain('rc=0');
+      expect(has(home, '20250101-000000')).toBe(true);
+      expect(has(home, '20250102-000000')).toBe(true);
+    });
+
+    it('B9: with ~/.ccrc/update.lock a DIRECTORY (the lock cannot be measured) the prune says so, removes nothing, and ccrc backup exits 0', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b9-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      // `exec 9>>dir` fails, and `_ver_lock_try` answers rc 3 — the `*)` arm of `_bak_prune`'s case, which B3 (rc 1),
+      // B5 (rc 2) and B8 (no floor) do not reach. Falling through to the prune would remove both planted dirs.
+      mkdirSync(lockPath(home), { recursive: true });
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      const own = ownDir(r);   // BEFORE the skip line: a backup that died cannot pass as a prune that skipped
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain('backup: prune skipped — ~/.ccrc/update.lock could not be measured; nothing was pruned');
+      expect(existsSync(own)).toBe(true);
+      expect(has(home, '20250101-000000')).toBe(true);
+      expect(has(home, '20250102-000000')).toBe(true);
+      assertNoExtras(home);
+    });
+
+    it('B10: the clock steps BACK between the floor and the backup (an NTP step, a DST fall-back) — this run\'s own dir sorts below the floor, and its own-path guard alone keeps it at KEEP=0', () => {
+      // Fix round 1, F3 (review 265): `cmd_backup` reads the floor with `date +%Y%m%d-%H%M%S`, then `_upd_backup` names
+      // its dir with a second such call. A `date` in the fixture's own bin (first on updateEnv's PATH) answers that
+      // format with 20300101-000000 the first time and 20250601-000000 after, so the floor does NOT cover the own dir:
+      // only `[ "$d" = "$UPD_BACKUP_DIR" ] && continue` does. Every other format runs the system's date. No real clock
+      // is touched.
+      const home = freshUpdateBox('ccrc-w9-r10g-b10-');
+      plantDir(home, '20250101-000000');
+      const realDate = ['/bin/date', '/usr/bin/date'].find((p) => existsSync(p));
+      expect(realDate, 'a system date for every other format').toBeDefined();
+      const calls = join(home, 'date-ts-calls');
+      const stub = join(home, '.local', 'bin', 'date');
+      writeFileSync(stub, [
+        '#!/bin/sh',
+        'if [ "$#" -eq 1 ] && [ "$1" = "+%Y%m%d-%H%M%S" ]; then',
+        `  echo x >> '${calls}'`,
+        `  if [ "$(wc -l < '${calls}')" -eq 1 ]; then echo 20300101-000000; else echo 20250601-000000; fi`,
+        '  exit 0',
+        'fi',
+        `exec '${realDate}' "$@"`,
+        '',
+      ].join('\n'));
+      chmodSync(stub, 0o755);
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      const own = ownDir(r);
+      expect(own, 'the backup took the stepped-back second, below the floor').toBe(join(backupRoot(home), '20250601-000000'));
+      expect(readFileSync(calls, 'utf8').split('\n').filter(Boolean).length, 'the floor read, then the backup\'s name').toBeGreaterThanOrEqual(2);
+      expect(existsSync(own), `this run's own backup ${own} must survive a floor that does not cover it`).toBe(true);
+      expect(has(home, '20250101-000000'), 'the prune ran: the unprotected earlier dir went').toBe(false);
+      assertNoExtras(home);
+    });
+
+    it('_bak_gc and _bak_prune each call _bak_keepset, and [ -f "$d/coord.db" ] appears once in ccd/ccrc (one selection)', () => {
+      const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+      const body = (name: string): string => {
+        const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(src);
+        expect(m, `ccd/ccrc has no ${name}`).not.toBeNull();
+        return m![0];
+      };
+      // A CALL (a command word at the start of a line), never a mention in a comment.
+      expect(body('_bak_gc'), '_bak_gc').toMatch(/^ +_bak_keepset(\s|$)/m);
+      expect(body('_bak_prune'), '_bak_prune').toMatch(/^ +_bak_keepset(\s|$)/m);
+      expect(src.split('[ -f "$d/coord.db" ]').length - 1, 'the snapshot test is spelled once').toBe(1);
+    });
+  });
+
   // fix round 1 item 9 (review 196 F10): a timestamp-named SYMLINK is a
   // timestamped backup for this prune (the glob matches the name; `_bak_list`
   // accepts it because `[ -d ]` follows a symlink to a directory) — so it is
@@ -12312,7 +12853,8 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
   // kept v1.0.0 — this box carries no v0.0.50) plus a plain timestamp-named
   // file, which is not a timestamped backup at all and must survive
   // unpruned. CCRC_BACKUP_KEEP=0 and every planted name below the run's lock
-  // second (2025…) put all three squarely in the removal set; neither target
+  // second (2025…) put both links squarely in the removal set; the plain file is
+  // never listed (`_bak_list` admits directories only); neither target
   // holds a coord.db, server-dist or agent-dist, so neither can be chosen as
   // the protected newest-earlier snap or tree keep. Assertions read the
   // FILESYSTEM (lstat for the links, a content digest for their targets),
@@ -12348,7 +12890,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(treeDigest(v1), 'the kept version\'s content must survive untouched').toEqual(keptBefore);
     expect(existsSync(plainFile), 'the plain timestamp-named file is not a timestamped backup').toBe(true);
     expect(fileText(plainFile)).toBe(plainBefore);
-  });
+  }, 60_000);   // a move onto v2.0.0 plus a rollback: 13.7-17 s alone, timed out 3 of 6 at load 30-50 (final review)
 });
 
 describe('ccrc update: the codex steps ride the staged spine (Plan 2b-2 Task 10)', () => {
@@ -12383,4 +12925,38 @@ describe('ccrc update: the codex steps ride the staged spine (Plan 2b-2 Task 10)
     expect(tiers).toBeGreaterThan(services);
     expect(spineRunCalls(home)).toEqual([]);
   });
+});
+
+// Plan 3a Task 10 — the merge is itself an inert rollout: the REAL update onto
+// this tree, over the fleet box's live shape (codexLaneFixture's `plantLiveShape`),
+// on the box the "codex steps ride the staged spine" describe above uses.
+describe('Plan 3a Task 10 — ccrc update onto this tree over today\'s live shape', () => {
+  itLinux('a real update leaves every foreign byte and link, names no ccgpt- unit in a state-changing verb, and builds nothing', () => {
+    const home = freshUpdateBox('ccrc-update-rehearsal-live-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    plantLiveShape(home, (argv) => {
+      const env: NodeJS.ProcessEnv = { ...updateEnv(home), CCGPT_CONFIG: undefined };   // REHEARSAL_ENV's reason
+      assertSpineFrontContained(env, home);
+      assertNoRealTool(env, home);   // wave 9 R10d: a spawn of the whole ccd/ccrc passes the checker on its final env
+      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), ...argv], { env, encoding: 'utf8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    });
+    const s0 = foreignSnapshot(home);
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(foreignSnapshot(home), 'the update changed a byte, mode or link another repository owns').toEqual(s0);
+    const calls = existsSync(join(home, 'systemctl-calls'))
+      ? readFileSync(join(home, 'systemctl-calls'), 'utf8').split('\n').filter(Boolean) : [];
+    expect(stateCallsNaming(calls, /\bccgpt-/), 'a state-changing systemctl verb named a ccgpt- unit').toEqual([]);
+    expect(calls.filter((a) => /^--user enable --now ccrc-codex-usage@/.test(a)),
+      'an instance was enabled on a box with no codex lane').toEqual([]);
+    expect(spineRunCalls(home)).toEqual([]);
+    expect(existsSync(join(home, 'foreign-ccgpt-calls')), 'ccrc ran the other repository\'s launcher').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'runtime', 'codex')), 'a runtime was built').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'codex')), 'lane state was written').toBe(false);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('SKIP codex: ')), 'the staged spine\'s closing doctor')
+      .toHaveLength(1);
+  }, 120_000);
 });

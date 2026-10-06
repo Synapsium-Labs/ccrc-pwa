@@ -22,12 +22,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderEnvelope, type EnvelopeInput } from '../src/coord/envelope.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
-import { STALL_REPORT_PREFIX, STALL_WAIT_PREFIX } from '../src/coord/stall.js';
+import { STALL_REPLY_WAITING_PREFIX, STALL_REPORT_PREFIX, STALL_WAIT_PREFIX } from '../src/coord/stall.js';
 import { dequeuedSubject, mergedSubject } from '../src/coord/rundefs.js';
 import type { DoneClaim } from '../src/coord/fingerprint.js';
 import {
   ASK_REFUSE_CODES, MAIL_BODY_MAX_BYTES, MAIL_REJECT_CODES, RUN_REFUSE_CODES,
-  isPrPhase, isRunRefuseCode, SUITE_WORDS, FAILURE_KINDS, SPAWN_VERDICTS,
+  isPrPhase, isRunRefuseCode, SUITE_WORDS, FAILURE_KINDS, SPAWN_VERDICTS, ACTIVE_RUN_STATES, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT,
 } from '../../shared/api.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -108,7 +108,7 @@ const serverSources = (): string => {
 const CONTRACT = [
   'Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.',
   'The box token is read from `~/.cc-secrets/ccrc-mail.token` and sent as the `x-ccrc-mail-token` header. It is never printed, never pasted into a prompt, never committed.',
-  'This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason. A child this session dispatched is reclaimed by the server when that child’s run closes; this session’s own workspace is cleaned up by a human, never by a sweep.',
+  'This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason. A child this session dispatched is reclaimed by the server once this session is finished with it — at its run’s close when nothing still needs it, otherwise later by the server’s sweep (a child held for its program’s next wave once that program has no open run, a review child once the run it reviewed has closed, a child whose reclaim was deferred or never started); this session’s own workspace is cleaned up by a human, never by a sweep.',
   'This session never unpauses itself. `$REG/coordinator-paused` is the operator’s file; a dispatch refused `paused` is a stop, and the next act is a report, not a retry.',
   'A wave brief is written prose, reviewed like code. The template is the shape; the content is this session’s judgement, and a brief that is missing something the next wave needs is a defect in the ledger.',
   'A `wave-done` is a claim, not a fact. Re-measure it, then submit the fingerprint to `POST /api/runs/:id/advance` and believe the server’s answer over your own.',
@@ -123,9 +123,9 @@ const CONTRACT = [
   // Landing-order wave 1 (spec 2026-09-23 §5.1). Written with no apostrophe at
   // all, so neither the straight nor the curly spelling can drift.
   'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`.',
-  // Worker stall watch, wave 3 (spec 2026-09-29 §6.1). Typographic apostrophes
+  // Worker stall watch, wave 3 (spec 2026-09-29 §6.1), amended by wave 7 (D-3805). Typographic apostrophes
   // and quotes, as clauses 3–12 are typed; no straight apostrophe at all.
-  'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for, which the watch reads as the run waiting on you until your next mail; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker.',
+  'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.',
 ];
 
 describe('the coordinator skill: its contract', () => {
@@ -248,7 +248,7 @@ describe('the coordinator skill: its contract', () => {
     const childReclaimSrc = readFileSync(path.join(root, 'server/src/coord/childReclaim.ts'), 'utf8');
     const notWhyUnion = /export type ChildReclaimNotWhy =([^;]+);/.exec(childReclaimSrc)![1]!;
     const shippedNotWhy = [...notWhyUnion.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]).sort();
-    expect(shippedNotWhy, 'the derivation read nothing from childReclaim.ts').toHaveLength(6);
+    expect(shippedNotWhy, 'the derivation read nothing from childReclaim.ts').toHaveLength(10);
     expect(listed, '§6 childReclaimWhy list ≠ ChildReclaimNotWhy').toEqual(shippedNotWhy);
     // Spec §5.7: the report outlives the review close; the coordinator
     // cites the reviewer's own path, and step 6 is not changed to say otherwise.
@@ -524,6 +524,13 @@ describe('the coordinator skill: linkage', () => {
       // first half of an invitation.
       'GET /api/coord/caps',
       'POST /api/coord/caps',
+      // CHILD-RECLAMATION wave 4 — the operator-dial shape once more, and the
+      // `POST /api/coord/pause` argument applied to the lane that deletes. A
+      // coordinator told about this route would be told how to stop, or
+      // restart, the reclamation of its OWN children — the act rule 4 takes out
+      // of every session's hands. The forbid-mention case below is what turns
+      // this permission-to-omit into a prohibition.
+      'POST /api/coord/reclaim-pause',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -1566,6 +1573,19 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     expect(allSkillText).not.toContain('/api/coord/caps');
   });
 
+  it('never names the reclaim switch — a door that would tell a coordinator how to stop its own children being reclaimed', () => {
+    // Child-reclamation wave 4, the caps dial's accounting: EXEMPT only
+    // PERMITS the omission; this is what FORBIDS the mention. Rule 4 takes
+    // the reclamation of a coordinator's children out of every session's
+    // hands and gives it to the server; the one switch over that is the
+    // operator's, from the phone. The BARE verb too, not only the route: ccd
+    // has no caller auth, so `ccd reclaim-pause --state on` from a session's
+    // own shell is the shorter door (and `reclaim-paused`, the marker it
+    // writes, contains the same token).
+    expect(allSkillText).not.toContain('/api/coord/reclaim-pause');
+    expect(allSkillText).not.toContain('reclaim-pause');
+  });
+
   it('never names the break door — a door the claimant is not the one to walk through', () => {
     // D16's accounting: `POST /api/claims/:id/break` is EXEMPT (the
     // `/api/runs/:id/abandon` shape) and stays unnamed in EVERY corpus file.
@@ -2586,5 +2606,55 @@ describe('the stall clause quotes what the stall watch sends and reads (stall wa
     expect(named, 'the clause no longer names the section it defers to').toBeDefined();
     expect(skill, `the clause defers to ‘${named}’, and SKILL.md has no such section`)
       .toContain(`\n## ${named}\n`);
+  });
+
+  // Stall watch wave 7, the operator's 2026-10-04 amendment
+  // (`coordinator-wait-widened-ball-truthful` (D-3805)). The clause now sends
+  // `wait:` past a stall mail, and states the ball as `stallFacts` reads it: a
+  // `wait:` holds the run only until the next mail to or from the worker,
+  // unless that mail passes the ball again. The verbatim pin holds the bytes;
+  // these three rows hold what a co-edit of SKILL.md and CONTRACT could lose.
+  //
+  // `unknown` is an active state, but the watch never judges it — `stallVerdictInner` holds it
+  // `run-unnamed` — so the clause may not tell the coordinator to send `wait:` to such a worker
+  // (review 262 F2).
+  const JUDGED_STATES: readonly string[] = ACTIVE_RUN_STATES.filter((s) => s !== 'unknown');
+  it('sends wait: past a stall mail too, for a worker in a state the watch reads', () => {
+    const line = stallClause();
+    expect(line, 'no contract clause opens "A mail from `…` whose subject begins `…`"').toBeDefined();
+    const tail = line!.slice(line!.indexOf('A stall mail never licenses re-dispatching a live worker.'));
+    expect(tail, 'the clause lost its last-but-two sentence').toMatch(/^A stall mail never licenses/);
+    expect(/ `([^`]+)` mail unasked/.exec(tail)?.[1],
+      'the clause sends wait: only in answer to a stall mail (ledger R2, approved 2026-10-04)').toBe(STALL_WAIT_PREFIX);
+    const state = /tell an? `([^`]+)` worker to wait/.exec(tail)?.[1];
+    expect(JUDGED_STATES.includes(state ?? ''),
+      `the clause names a worker in run state ${state}, which the watch never judges (only an active state other than unknown)`).toBe(true);
+  });
+
+  it('states the ball as stall.ts reads it: only until the next mail, past the hand-backs it exempts', () => {
+    const line = stallClause();
+    expect(line, 'no contract clause opens "A mail from `…` whose subject begins `…`"').toBeDefined();
+    expect(line, 'the clause says a wait: holds the run until your next mail; the worker’s next ordinary mail hands it back too')
+      .not.toMatch(/until your next mail/);
+    expect(line).toContain('only until the next mail to or from the worker');
+    expect(/a reply beginning `([^`]+)`/.exec(line!)?.[1],
+      'the clause names a waiting reply the stall watch does not read').toBe(STALL_REPLY_WAITING_PREFIX);
+    expect(/an exact `([^`]+)` or `([^`]+)` claim/.exec(line!)?.slice(1),
+      'the clause names done claims the stall watch does not read').toEqual([WAVE_DONE_SUBJECT, REVIEW_DONE_SUBJECT]);
+  });
+
+  it('quotes only the constants the clause relies on', () => {
+    const line = stallClause();
+    expect(line, 'no contract clause opens "A mail from `…` whose subject begins `…`"').toBeDefined();
+    const src = readFileSync(path.join(root, 'server/src/coord/stall.ts'), 'utf8');
+    const sender = /^(?:export )?const STALL_SENDER = '([^']+)';$/m.exec(src)?.[1];
+    const reliedOn = new Set<string>([sender ?? '', STALL_REPORT_PREFIX, STALL_WAIT_PREFIX, STALL_REPLY_WAITING_PREFIX,
+      WAVE_DONE_SUBJECT, REVIEW_DONE_SUBJECT, ...JUDGED_STATES]);
+    const quoted = [...new Set([...line!.matchAll(/`([^`]+)`/g)].map((m) => m[1]!))];
+    expect(quoted.length, 'the scan read no quoted token').toBeGreaterThan(0);
+    for (const q of quoted) {
+      expect(reliedOn.has(q),
+        `the clause quotes \`${q}\`, which is outside the constants it relies on: add the constant here, or unquote it`).toBe(true);
+    }
   });
 });

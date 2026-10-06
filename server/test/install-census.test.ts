@@ -55,9 +55,10 @@
 // the box's `~/ccrc` tree, was never PLACED, and the fallback deploy exited 0
 // — the four GPT-lane names, until Plan 2b-1 Task 7. The last describe below
 // compares ONE WAY, install ⊆ deploy, and that is a decision, not an
-// oversight: `deploy.sh` also places `ccrc-api` and `ccrc-models-probe`, which
-// `ccrc install` places nowhere — a PRE-EXISTING divergence between the two
-// installers, known and outside this guard, which the reverse would red on.
+// oversight: `deploy.sh` also places `ccrc-api` (and placed `ccrc-models-probe`
+// until Plan 3a, ruling R-C11), which `ccrc install` places nowhere — a
+// PRE-EXISTING divergence between the two installers, known and outside this
+// guard, which the reverse would red on.
 //
 // THE RULE IS NO SILENT DROPS. Every word this file reads that lands in a census
 // directory either resolves to a name or FAILS THE SUITE, naming the word and the
@@ -177,9 +178,12 @@
 //     and so is the literal target `_uninst_tree_bins` checks the graphify link
 //     against before removing it.
 //   - The disable census reads literal `systemctl --user … disable --now` calls
-//     only. `ccd/ccrc`'s `_svc_disable_now` helper and a separate stop-then-
-//     disable are not read, and a system-manager `systemctl disable` (no
-//     `--user`) is not a user-unit disable, so it does not count.
+//     only. `ccd/ccrc`'s `_svc_disable_now` helper, a separate stop-then-
+//     disable, and `_uninst_codex_usage`'s per-INSTANCE disable of ccrc's
+//     usage template (an instance name is built from an id at run time;
+//     `ccrc-uninstall.test.ts` measures it) are not read, and a
+//     system-manager `systemctl disable` (no `--user`) is not a user-unit
+//     disable, so it does not count.
 //   - Paths are normalised (`/./` and repeated `/` collapse, on both sides, so
 //     `$bin/./x` is `x`), but `~/…` and a destination whose variable is bound
 //     to the empty string are not read as names.
@@ -1638,22 +1642,25 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
     // lane (Plan 3). `ccrc install`'s `_inst_enable` arms neither. The families
     // are DERIVED from the templates the two installers place and the
     // repository ships, not typed, so this binds `claude-session@` and
-    // `ccgpt-usage@` alike, and any template added later.
+    // `ccrc-codex-usage@` alike, and any template added later — plus one family named below.
     const enabled = deployEnabled();
     expect(enabled.size,
       'the `systemctl … enable` extractor over deploy.sh found too few units — it has gone stale, unless deploy.sh really stopped enabling most of them')
       .toBeGreaterThan(ENABLE_FLOOR);
     // ...and every template unit file this repository SHIPS, placed or not
-    // (`git ls-files`, by basename): `ccgpt-usage@` ships in `deploy/systemd/`
-    // and no installer places it (F-1), because a live fleet box holds another
-    // repository's template at that name, and a deploy that armed one of its
-    // instances would arm THAT one.
+    // (`git ls-files`, by basename). PLUS ONE family no file here names any
+    // more: `ccgpt-usage@`, another repository's template on a live fleet box
+    // (FOREIGN_LIVE_BOX_UNIT_PREFIX, below). Until Plan 3a this repository
+    // shipped a pair under that name, so the derivation caught it. The rename
+    // to `ccrc-codex-usage@` (D-3717)
+    // would have dropped it silently, and a deploy that armed one of ITS
+    // instances would arm another tool's publisher.
     const shipped = [...trackedFiles()].map((f) => path.posix.basename(f)).filter(isTemplate);
     const templates = [...placedUnits(), ...deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS), ...shipped].filter(isTemplate);
     expect(templates.length,
       'neither installer places a template unit and the repository ships none, so the instance half of this case would check nothing — an extractor has gone stale')
       .toBeGreaterThan(0);
-    const families = [...new Set(templates.map((t) => t.slice(0, t.indexOf('@') + 1)))];
+    const families = [...new Set([...templates.map((t) => t.slice(0, t.indexOf('@') + 1)), FOREIGN_LIVE_BOX_UNIT_PREFIX])];
 
     expect([...enabled].filter((u) => isTemplate(u) || families.some((f) => u.startsWith(f))).sort(),
       `these \`systemctl … enable\` operands in ${DEPLOY_WHERE} are a template unit (\`name@.suffix\`) or an `
@@ -1706,6 +1713,15 @@ describe('neither installer ever writes a name another repository owns on the li
         + 'silently. Rename the destination.')
         .toEqual([]);
     }
+  });
+
+  it('ccrc\'s usage pair is placed under its OWN name, and nothing else of a usage family is (Plan 3a Task 6)', () => {
+    // The rename is what keeps the guard above green. A usage template placed
+    // under any other spelling, or a second one, is a decision to record here.
+    const usage = [...placedUnits()].filter((u) => isTemplate(u) && /usage@/.test(u)).sort();
+    expect(usage, 'the usage template _inst_units places is not ccrc\'s own pair')
+      .toEqual(['ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']);
+    expect(usage.filter((u) => u.startsWith(FOREIGN_LIVE_BOX_UNIT_PREFIX))).toEqual([]);
   });
 });
 
@@ -1917,6 +1933,13 @@ describe('every file `ccrc install` copies out of the tree rides the release tar
     for (const src of gated) {
       expect(sources, `${src} is placed behind _inst_bins' GPT-lane gate and the source census does not read it`)
         .toContain(src);
+    }
+    // Plan 3a Task 6: every TEMPLATE `_inst_units` places is copied out of a
+    // source this census read, so the tarball carries it. Derived from the
+    // placement, never typed: ccrc's usage pair today.
+    for (const t of [...placedUnits()].filter(isTemplate)) {
+      expect([...sources].some((s) => path.posix.basename(s) === t),
+        `${t} is placed by _inst_units and no tree source the release census read is that file`).toBe(true);
     }
   });
 });

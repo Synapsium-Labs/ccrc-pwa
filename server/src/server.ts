@@ -51,6 +51,7 @@ import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
+import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childReclaim.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { registerUpdateRoutes } from './update/routes.js';
@@ -289,6 +290,12 @@ export interface Deps {
   /** Which sessions a human is currently looking at, so `FleetWatcher` can
    *  suppress a push for the pane already on screen. */
   presence?: Presence;
+  /** The child-reclaim sweep's call into wave 3's executor, as a SEAM
+   *  (child-reclamation wave 4). Production leaves it UNSET: the watcher then
+   *  composes the one executor both triggers share — `reclaimChild` on the
+   *  session's own `KeyedQueue` — so a close and a sweep reclaim identically.
+   *  A test sets it to assert what the lane asks for without a fleet box. */
+  childReclaimExec?: (req: ChildReclaimRequest) => Promise<ChildReclaimOutcome>;
   /** The box token every fleet->server POST must carry (coord/token.ts).
    *  Optional the same way `push`/`notifyLog` are: a box with none configured
    *  keeps working, unauthenticated, and says so once at boot. NOT optional the

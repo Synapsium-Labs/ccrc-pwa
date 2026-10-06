@@ -436,13 +436,13 @@ describe('stallPushText: r3 and the three caps', () => {
     expect(body.toLowerCase()).not.toContain('reclaim');
   });
 
-  it('dialog-cap: a dialog with no question behind it, past 2 h of quiet', () => {
+  it('dialog-cap: a dialog with no question behind it, past 2 h of quiet, keyed and timed on its live stamp (D-3799)', () => {
     const input = s4({ worker: worker({ live: { ok: true, word: 'waiting', since: IDLE_SINCE }, dialogPending: true }), arming: escalated });
     const n = stallVerdict(input, R1_AT);
-    expect(n).toEqual({ act: 'notify', arm: 'dialog-cap', rung: 1, key: EPISODE, to: 'operator' });
+    expect(n).toEqual({ act: 'notify', arm: 'dialog-cap', rung: 1, key: IDLE_SINCE, to: 'operator' });
     expect(stallPushText(input, stallFacts(input), n as StallNotify, R1_AT)).toEqual({
       title: '⚠ stalled › demo-ws (dialog)',
-      body: `${LABEL}: worker demo-worker shows a dialog with no question behind it; this quiet episode opened 2026-09-28T21:17Z (2h 39m). Mail to the worker, its coordinator's included, cannot land while the dialog shows: answer or dismiss it on the pane.`,
+      body: `${LABEL}: worker demo-worker shows a dialog with no question behind it; its live status has read waiting since 2026-09-28T21:56Z (2h 0m). Mail to the worker, its coordinator's included, cannot land while the dialog shows: answer or dismiss it on the pane.`,
     });
   });
 
@@ -561,7 +561,7 @@ const sessionOf = (over: Partial<StallSessionInput> = {}): StallSessionInput => 
   arming: W2_ARMED, coordinationPaused: false, ...over,
 });
 const deliveryOf = (id: number, mailId: number, toId: string, over: Partial<StallDeliveryRow> = {}): StallDeliveryRow => ({
-  id, mailId, toId, state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null, ...over,
+  id, mailId, toId, state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null, replayCount: 0, ...over,
 });
 const runLess = (m: StallMailRow): StallMailRow => ({ ...m, runId: null });
 
@@ -1354,21 +1354,21 @@ describe('r1 after a send-back names the restarted clock (quiet-restarts-on-reac
   });
 });
 
-// The dialog and limit caps keep today's clock and key (coordinator ruling on `quiet-restarts-on-reactivation`, D-3788):
-// pushed on the first sweep after a send-back, their text still names the episode the worker's last mail opened, so
-// the span it prints is at least the cap's own threshold, as before.
-describe('the dialog cap after a send-back keeps today\'s key, so the span it prints stays true', () => {
+// The dialog and limit caps keep today's clock (coordinator ruling on `quiet-restarts-on-reactivation` (D-3788)), and the
+// dialog cap is keyed on its own live stamp (`dialog-cap-keyed-on-the-dialog` (D-3799)): pushed on the first sweep after
+// a send-back, its text names how long the live status has read so, which no send-back moves.
+describe('the dialog cap after a send-back keeps its clock and its key, so the span it prints stays true', () => {
   const REACT = T('2026-09-29T08:00:00Z');   // chosen: 10 h after S4's Stop
   const menu = s4({
     worker: worker({ live: { ok: true, word: 'waiting', since: IDLE_SINCE }, dialogPending: true }), arming: escalated,
     activation: { kind: 'reactivated', at: REACT },
   });
 
-  it('pushes on the first sweep after the advance, keyed on the worker\'s last mail, with the episode\'s true span', () => {
+  it('pushes on the first sweep after the advance, keyed on the dialog\'s live stamp, with the dialog\'s true span', () => {
     const at = REACT + 4_000;
     const n = stallVerdict(menu, at);
-    expect(n).toEqual({ act: 'notify', arm: 'dialog-cap', rung: 1, key: EPISODE, to: 'operator' });
-    expect(stallPushText(menu, stallFacts(menu), n as StallNotify, at).body).toContain('this quiet episode opened 2026-09-28T21:17Z (10h 42m).');
+    expect(n).toEqual({ act: 'notify', arm: 'dialog-cap', rung: 1, key: IDLE_SINCE, to: 'operator' });
+    expect(stallPushText(menu, stallFacts(menu), n as StallNotify, at).body).toContain('its live status has read waiting since 2026-09-28T21:56Z (10h 3m).');
   });
 });
 
@@ -1413,5 +1413,66 @@ describe('r2 after a send-back reports the silence from the send-back', () => {
     const text = stallReportMail(back, stallFacts(back), r1, null, REACT + 3 * H);
     expect(text.subject).toBe('stall: run 67 — worker silent 3h 0m, stall-check unanswered');
     expect(text.body.split('\n')[1]).toContain('no mail from the worker since 2026-09-29T08:00:00Z (3h 0m).');
+  });
+});
+
+// `fix-round-alias-reaches-the-ball` (D-3797): mail to the role `worker` on the run is the worker's, in every text that reads it.
+describe('mail to the role worker is mail to the worker, in r1\'s body and r3\'s text', () => {
+  it('r1 names an answer sent to the role worker as the newest mail to the worker, and owes the reply to it', () => {
+    const q = mail(2511, T('2026-09-28T21:20:00Z'), WORKER, 'coordinator', 'question', 'which base');
+    const ans = mail(2512, T('2026-09-28T21:30:00Z'), COORD, 'worker', 'answer', 'base B');
+    const input = s4({ mail: [m2509, m2510, q, ans] });
+    const text = stallCheckMail(input, stallFacts(input), R1_AT);
+    expect(text.body).toContain('Newest mail to you on this run: #2512 answer at 21:30:00Z.');
+    expect(text.subject).toBe('stall-check: run 67 — quiet 2h 0m, owed: reply to #2512');
+  });
+
+  it('r3 still-silent counts the coordinator\'s mail to the role worker after the report', () => {
+    const r2Text = stallReportMail(r2In, stallFacts(r2In), r1, null, R2_AT);
+    const report = mail(2540, R2_AT, 'operator', COORD, 'status', r2Text.subject);
+    const r2: StallNotice = { mode: 'live', arm: 'quiet', rung: 2, key: EPISODE, at: R2_AT };
+    const resume = mail(2541, T('2026-09-29T01:10:20Z'), COORD, 'worker', 'answer', 'resume');
+    const input = s4({ worker: restamped, mail: [m2509, m2510, check2531, report, resume], notices: [r1, r2], arming: escalated, coordinator: 'alive' });
+    const n: StallNotify = { act: 'notify', arm: 'quiet', rung: 3, key: EPISODE, to: 'operator', because: 'still-silent' };
+    const { body } = stallPushText(input, stallFacts(input), n, R3_AT);
+    expect(body).toContain('Its coordinator last mailed the worker at 01:10Z.');
+    expect(body).not.toContain('No mail from its coordinator');
+  });
+});
+
+// `dialog-cap-keyed-on-the-dialog` (D-3799): the push names the dialog's own stretch, from the live stamp its key comes from.
+describe('the dialog-cap push prints the dialog\'s own stretch, never the episode\'s age', () => {
+  it('names the live status and how long it has read so, and not the episode key (run 174\'s shape)', () => {
+    const SINCE = T('2026-10-02T19:38:19Z');
+    const input = s4({ worker: worker({ live: { ok: true, word: 'waiting', since: SINCE } }), arming: escalated });
+    const at = SINCE + 16 * 3_600_000 + 39 * 60_000;
+    const n = stallVerdict(input, at);
+    expect(n).toEqual({ act: 'notify', arm: 'dialog-cap', rung: 1, key: SINCE, to: 'operator' });
+    const { body } = stallPushText(input, stallFacts(input), n as StallNotify, at);
+    expect(body).toBe('run 67 — demo-program wave 9/9: worker demo-worker shows a dialog with no question behind it; its live status has read waiting since 2026-10-02T19:38Z (16h 39m). Mail to the worker, its coordinator\'s included, cannot land while the dialog shows: answer or dismiss it on the pane.');
+    expect(body).not.toContain(stallUtc(EPISODE));
+  });
+
+  it('a dialog older than the worker\'s last mail is keyed on that mail, and the text still names the live stamp', () => {
+    const own = mail(2520, T('2026-09-28T22:30:00Z'), WORKER, 'coordinator', 'status', 'still at the prompt');
+    const input = s4({ worker: worker({ live: { ok: true, word: 'waiting', since: IDLE_SINCE } }), mail: [m2509, m2510, own], arming: escalated });
+    const at = T('2026-09-29T00:30:00Z');
+    const n = stallVerdict(input, at);
+    expect(n).toEqual({ act: 'notify', arm: 'dialog-cap', rung: 1, key: own.at, to: 'operator' });
+    expect(stallPushText(input, stallFacts(input), n as StallNotify, at).body).toContain('its live status has read waiting since 2026-09-28T21:56Z (2h 33m).');
+  });
+
+  it('a worker with no measured live stamp is said to be unmeasured, never given a guessed span', () => {
+    const n: StallNotify = { act: 'notify', arm: 'dialog-cap', rung: 1, key: EPISODE, to: 'operator' };
+    const gone = s4({ worker: { present: false } });
+    expect(stallPushText(gone, stallFacts(gone), n, R1_AT).body).toContain('shows a dialog with no question behind it; its live status was not measured.');
+  });
+
+  it('the live word is printed only through stallSafe', () => {
+    const odd = s4({ worker: worker({ live: { ok: true, word: 'evil word', since: IDLE_SINCE }, dialogPending: true }) });
+    const n: StallNotify = { act: 'notify', arm: 'dialog-cap', rung: 1, key: IDLE_SINCE, to: 'operator' };
+    const { body } = stallPushText(odd, stallFacts(odd), n, R1_AT);
+    expect(body).toContain('its live status has read (unprintable) since 2026-09-28T21:56Z');
+    expect(body).not.toContain('evil word');
   });
 });

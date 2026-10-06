@@ -472,7 +472,7 @@ const echoed = (): { flags: string; argv: string[] } => {
 // The fourth column is where a MALFORMED audit shape must die: ordinary at
 // both entries, and still refused by `cmd_ws_audit`'s own parse (plan:112) —
 // so a dispatcher that wrongly accepted one cannot leave this table green.
-const USAGE = /^ccd: usage: ccd ws-audit --session <id> \[--reclaim \[--defer-expired\]\]$/m;
+const USAGE = /^ccd: usage: ccd ws-audit --session <id> \[--reclaim \[--defer-expired\] \| --expire\]$/m;
 const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean, RegExp | null]> = [
   ['ws-reclaim alone', ['ws-reclaim'], true, null],
   ['ws-reclaim with the full tail', ['ws-reclaim', '--expect', ANY_TOKEN, '--child-of', '7', '--session', 'x'], true, null],
@@ -486,6 +486,7 @@ const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean, RegEx
   // session id (`^[A-Za-z0-9._-]+$`), so this is a read-only plain audit of a session of that name.
   ['audit, missing session-value position', ['ws-audit', '--session', '--reclaim'], false, null],
   ['audit, --reclaim out of order', ['ws-audit', '--reclaim', '--session', 'x'], false, USAGE],
+  ['audit, --expire out of order', ['ws-audit', '--expire', '--session', 'x'], false, USAGE],
   ['audit, --defer-expired before --reclaim', ['ws-audit', '--session', 'x', '--defer-expired', '--reclaim'], false, USAGE],
   ['audit, a later duplicate --reclaim', ['ws-audit', '--session', 'x', '--reclaim', '--reclaim'], false, USAGE],
   ['audit, an extra token', ['ws-audit', '--session', 'x', '--reclaim', 'extra'], false, USAGE],
@@ -493,6 +494,16 @@ const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean, RegEx
   ['caps', ['caps'], false, null],
   ['a verb merely CONTAINING ws-reclaim later', ['caps', 'ws-reclaim'], false, null],
   ['ws-reclaimx (prefix only)', ['ws-reclaimx'], false, null],
+  // ws-expire (workspace lifecycle wave 3): the archived workspace's server-composed teardown, ws-reclaim's sibling —
+  // the same boundary, for the same reason (spec 2026-09-24 §5.3; reclaim-entry-safety's startup argument, above).
+  ['ws-expire alone', ['ws-expire'], true, null],
+  ['ws-expire with the full tail', ['ws-expire', '--expect', ANY_TOKEN, '--session', 'x'], true, null],
+  ['ws-expire with a malformed tail (the body’s parser owns that)', ['ws-expire', '--defer-expired'], true, null],
+  ['valid audit --expire', ['ws-audit', '--session', 'x', '--expire'], true, null],
+  ['audit, --expire --defer-expired (no such mode)', ['ws-audit', '--session', 'x', '--expire', '--defer-expired'], false, USAGE],
+  ['audit, a later duplicate --expire', ['ws-audit', '--session', 'x', '--expire', '--expire'], false, USAGE],
+  ['a verb merely CONTAINING ws-expire later', ['caps', 'ws-expire'], false, null],
+  ['ws-expirex (prefix only)', ['ws-expirex'], false, null],
 ];
 
 describe('the protected grammar — the launcher and the body classify the same argv the same way', () => {
@@ -523,6 +534,91 @@ describe('the protected grammar — the launcher and the body classify the same 
       }
     }, 60_000);
   }
+});
+
+// ── case variants: the launcher's classifier is a SUPERSET of the body's ─────
+/** An inherited `nocasematch` (BASHOPTS) folds the BODY's own entry guard and
+ *  dispatcher, and in a UTF-8 locale it folds beyond ASCII: U+0130 `İ` matches
+ *  `i` (measured, bash 5.2, C.UTF-8). An ordinary start keeps that option, so
+ *  each of these must start PROTECTED, where `-p` drops it. The `İ` rows are
+ *  the ones an ASCII-only `lower()` would miss. */
+const DOTTED_I = 'İ';
+const CASE_VARIANTS: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['WS-RECLAIM alone', ['WS-RECLAIM']],
+  ['Ws-Reclaim with the full tail', ['Ws-Reclaim', '--expect', ANY_TOKEN, '--child-of', '7', '--session', 'x']],
+  [`ws-recla${DOTTED_I}m (a non-ASCII fold)`, [`ws-recla${DOTTED_I}m`]],
+  ['WS-AUDIT --SESSION x --RECLAIM', ['WS-AUDIT', '--SESSION', 'x', '--RECLAIM']],
+  ['ws-audit --session x --Reclaim --DEFER-EXPIRED', ['ws-audit', '--session', 'x', '--Reclaim', '--DEFER-EXPIRED']],
+  [`ws-audit --sess${DOTTED_I}on x --reclaim (a non-ASCII fold)`, ['ws-audit', `--sess${DOTTED_I}on`, 'x', '--reclaim']],
+  ['WS-EXPIRE alone', ['WS-EXPIRE']],
+  [`ws-exp${DOTTED_I}re (a non-ASCII fold)`, [`ws-exp${DOTTED_I}re`]],
+  ['WS-AUDIT --SESSION x --EXPIRE', ['WS-AUDIT', '--SESSION', 'x', '--EXPIRE']],
+];
+/** Protected at the launcher although no locale measured here folds them —
+ *  the superset's other half, harmless by design. A non-ASCII character stands
+ *  for any one character: `ſ` (long s) in code points, and `é` as its two UTF-8
+ *  bytes, which a single-byte locale reads as two characters. */
+const SUPERSET_ONLY: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['w\u017f-reclaim (a code point no measured fold maps to s)', ['w\u017f-reclaim']],
+  ['ws-recl\u00e9m (two bytes, two characters to a single-byte locale)', ['ws-recl\u00e9m']],
+];
+/** Case variants of NON-protected shapes stay ordinary: the superset is the
+ *  protected skeleton without case, not "anything that looks close". */
+const CASE_ORDINARY: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['WS-RECLAIMX (prefix only)', ['WS-RECLAIMX']],
+  ['WS-AUDIT --SESSION x (a plain audit)', ['WS-AUDIT', '--SESSION', 'x']],
+  ['WS-AUDIT --SESSION x --DEFER-EXPIRED', ['WS-AUDIT', '--SESSION', 'x', '--DEFER-EXPIRED']],
+  ['CAPS WS-RECLAIM', ['CAPS', 'WS-RECLAIM']],
+  ['WS-EXPIREX (prefix only)', ['WS-EXPIREX']],
+  ['WS-AUDIT --SESSION x --EXPIRE --DEFER-EXPIRED', ['WS-AUDIT', '--SESSION', 'x', '--EXPIRE', '--DEFER-EXPIRED']],
+];
+const NOCASE = { BASHOPTS: 'nocasematch', LC_ALL: 'C.UTF-8' };
+
+describe('a case variant of a protected shape starts PROTECTED — the launcher folds case, a superset', () => {
+  for (const [name, argv] of [...CASE_VARIANTS, ...SUPERSET_ONLY]) {
+    it(`${name} → protected at the launcher`, () => {
+      de = installDirectEntry(h.home, { body: ECHO_BODY });
+      const r = direct(argv, NOCASE);
+      expect(r.code, r.stderr).toBe(0);
+      const got = echoed();
+      expect(got.argv, 'argv arrives exactly').toEqual([...argv]);
+      expect(got.flags.includes('p'), `launcher: flags ${got.flags}`).toBe(true);
+    }, 60_000);
+  }
+  for (const [name, argv] of CASE_ORDINARY) {
+    it(`${name} → ordinary at the launcher`, () => {
+      de = installDirectEntry(h.home, { body: ECHO_BODY });
+      const r = direct(argv, NOCASE);
+      expect(r.code, r.stderr).toBe(0);
+      expect(echoed().flags.includes('p'), `launcher: flags ${echoed().flags}`).toBe(false);
+    }, 60_000);
+  }
+
+  // PLATFORM-ONLY: the non-ASCII fold is measured in glibc's C.UTF-8, which a
+  // macOS userland does not ship under that name; the ASCII rows hold everywhere.
+  itLinux('the CONTROL: under that nocasematch the BODY reads every variant as protected (it refuses an unprivileged one), and none of the ordinary ones', () => {
+    // Without this, the rows above would pin a superset of NOTHING: here the
+    // body itself, started without -p and with the option inherited, folds
+    // each variant into a protected shape — the case the launcher must catch.
+    for (const [name, argv] of CASE_VARIANTS) {
+      const b = explicitBash([], argv, NOCASE);
+      expect(b.code === 125 && /refused \(entry-unprivileged\)/.test(b.stderr), `${name}: rc ${b.code} ${b.stderr.slice(0, 200)}`).toBe(true);
+    }
+    for (const [name, argv] of CASE_ORDINARY) {
+      const b = explicitBash([], argv, NOCASE);
+      expect(/refused \(entry-/.test(b.stderr), `${name}: ${b.stderr.slice(0, 200)}`).toBe(false);
+    }
+  }, 120_000);
+
+  it('started protected, the real body compares exactly again: a variant is no verb at all, and nothing is refused at entry', () => {
+    de = installDirectEntry(h.home);
+    for (const argv of [['WS-RECLAIM', '--expect', ANY_TOKEN], [`ws-recla${DOTTED_I}m`]]) {
+      const r = direct(argv, NOCASE);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/^usage: ccd \{/m);
+      expect(r.stderr).not.toContain('refused (entry-');
+    }
+  }, 60_000);
 });
 
 // ── the launcher itself ─────────────────────────────────────────────────

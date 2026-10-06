@@ -37,10 +37,22 @@
 # refused, and no active file moved — neither half was replaced. That is all
 # exit 1 proves: by the self-test, `~/.local/bin` and `~/.local/libexec/ccrc`
 # may already have been created and this installer's own leftovers swept, and
-# a refusal after it can follow the body's in-place mode repair; 2 the body
-# moved and the launcher did not — the mismatched pair now refuses every start
-# by digest, and a re-run converges. No rollback is attempted across the two
-# directories.
+# a refusal after it can follow an in-place mode repair of either half; 2 a
+# half moved and the run failed before it reported a verified pair, and stderr
+# names what moved and the state it left. A half whose re-measurement after its
+# rename failed is UNVERIFIED: what stands there may start ccd or refuse. When
+# the body moved and the launcher did not, and the launcher is not proved to
+# carry this run's bytes and mode, what stands at ~/.local/bin/ccd may refuse
+# every start (by digest, when it is an earlier launcher) or run an entry this
+# run never verified. When every half that moved re-measured and the launcher
+# carries what this run self-tested, only the run's own report failed after
+# that (a closed stdout) and the pair stands as staged. Every way, a re-run
+# converges the pair. No rollback is attempted across the two directories.
+#
+# A FAILING RUN KEEPS ITS STATUS. Once its stderr is written, an exit-1 or
+# exit-2 run points fd 1 at /dev/null (`quiet_stdout`), so a report still
+# buffered for a stdout whose reader has gone cannot fail Python's shutdown
+# flush a second time — which would replace the status with 120.
 #
 # STANDARD LIBRARY ONLY. Nothing here trusts the environment: `-I` already
 # ignores every PYTHON* variable, and the paths it writes come from argv.
@@ -97,6 +109,25 @@ class Refused(Exception):
 def say(msg):
     sys.stdout.write('install: ccd: %s\n' % msg)
     sys.stdout.flush()
+
+
+def quiet_stdout():
+    """Points fd 1 at /dev/null once a failing run has written its stderr.
+    A report written to a stdout whose reader has gone (`ccrc install | head`)
+    fails its flush and STAYS BUFFERED; the interpreter flushes stdout again at
+    shutdown, fails again, and exits 120 in place of the status this run
+    returned — which the lanes would read as a status they do not know. This is
+    the Python documentation's own remedy for a BrokenPipeError (the `signal`
+    module's note on SIGPIPE). Pending text is offered to a live stdout first.
+    Failing to do any of it changes nothing: the run's status stands."""
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+    try:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except Exception:
+        pass
 
 
 def check_interpreter():
@@ -218,6 +249,11 @@ def repair_mode(dest, mode):
         os.fchmod(fd, mode)
     finally:
         os.close(fd)
+
+
+def say_repaired(dest, mode):
+    """The report of `repair_mode`, said by its caller AFTER it records the
+    repair, so a report that fails is told apart from a repair that did."""
     say('%s: mode repaired to %o (its bytes were already the shipped ones)' % (dest, mode))
 
 
@@ -385,6 +421,13 @@ def install(tree, home):
 
     staged_body = staged_entry = None
     moved = []
+    # What this run has PROVED stands at each destination, so a failure after
+    # a half moved names the state it left. The body is proved once its rename
+    # re-measured; the launcher when it already carried these bytes and mode,
+    # once its mode is repaired, or once its rename re-measured. What fails
+    # after both are proved is only a report (stdout), and the pair stands.
+    body_proved = False
+    entry_proved = entry_state == 'same'
     try:
         staged_body = stage(libexec, body_data, BODY_MODE) if body_state == 'differ' else None
         staged_entry = stage(bindir, entry_data, ENTRY_MODE) if entry_state == 'differ' else None
@@ -399,28 +442,54 @@ def install(tree, home):
             return 0
         if body_state == 'mode':
             repair_mode(body_dest, BODY_MODE)
+            say_repaired(body_dest, BODY_MODE)
         if staged_body is not None:
             kind = destination_kind(body_dest)
             os.replace(staged_body, body_dest)
             staged_body = None
             moved.append('body')
             postcondition(body_dest, body_data, BODY_MODE, 'body')
+            body_proved = True
             say('body published at %s (replaced: %s)' % (body_dest, kind))
         if entry_state == 'mode':
             repair_mode(entry_dest, ENTRY_MODE)
+            entry_proved = True
+            say_repaired(entry_dest, ENTRY_MODE)
         if staged_entry is not None:
             kind = destination_kind(entry_dest)
             os.replace(staged_entry, entry_dest)
             staged_entry = None
             moved.append('launcher')
             postcondition(entry_dest, entry_data, ENTRY_MODE, 'launcher')
+            entry_proved = True
             say('launcher published at %s for %s (replaced: %s)' % (entry_dest, python, kind))
         return 0
     except (OSError, Refused) as e:
         if not moved:
             raise
-        sys.stderr.write('install: ccd: refused after the %s moved: %s — until a re-run converges the pair, every'
-                         ' ccd start refuses by digest\n' % (' and the '.join(moved), e))
+        if 'launcher' in moved and entry_proved:
+            state = ('the launcher was renamed into place and re-measured as the file just staged, so what stands'
+                     ' at %s is the launcher this run self-tested and the pair stands as staged; only the run\'s'
+                     ' report failed after that, and a re-run converges without moving anything' % entry_dest)
+        elif 'launcher' in moved:
+            state = ('the launcher was renamed into place and did not re-measure as the file just staged, so what'
+                     ' stands at %s is unverified until a re-run converges the pair' % entry_dest)
+        elif not body_proved:
+            state = ('the body was renamed into place and did not re-measure as the file just staged, so what'
+                     ' stands at %s is unverified until a re-run converges the pair; the launcher did not move'
+                     % body_dest)
+        elif entry_proved:
+            state = ('the body was renamed into place and re-measured as the file just staged, and the launcher at'
+                     ' %s carries the bytes and mode this run self-tested beside it, so the pair stands as staged;'
+                     ' only the run\'s report failed after that, and a re-run converges without moving anything'
+                     % entry_dest)
+        else:
+            state = ('the launcher did not move, so what stands at %s is not proved to be the launcher this run'
+                     ' self-tested beside this body: until a re-run converges the pair, a ccd start through it may'
+                     ' refuse (by digest, when it is an earlier launcher) or run an entry this run did not verify'
+                     % entry_dest)
+        sys.stderr.write('install: ccd: refused after the %s moved: %s — %s\n' % (' and the '.join(moved), e, state))
+        quiet_stdout()
         return 2
     finally:
         for p in (staged_body, staged_entry):
@@ -439,12 +508,15 @@ def main(argv):
         if argv[:1] == ['install'] and len(argv) == 3:
             return install(argv[1], argv[2])
         sys.stderr.write('usage: ccd-entry-install.py check | install <tree> <home>\n')
+        quiet_stdout()
         return 1
     except Refused as e:
         sys.stderr.write('install: ccd: refused: %s\n' % e)
+        quiet_stdout()
         return 1
     except OSError as e:
         sys.stderr.write('install: ccd: refused: %s\n' % e)
+        quiet_stdout()
         return 1
 
 

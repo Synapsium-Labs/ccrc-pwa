@@ -58,7 +58,13 @@ export const SENTENCES: Record<string, string> = {
   // narrows `nested-checkouts-present` above to STRAY checkouts only — a
   // checkout `ccd` itself registered as a worktree of this project gets one of
   // these four instead.
-  'child-dirty': 'A checkout nested under this workspace has uncommitted work of its own.',
+  // `child-dirty` has three causes: changed tracked files, untracked files, and
+  // files the child ignores (its own worktree config can ignore anything). So
+  // the sentence names all three and a read that shows all three. A plain `git
+  // status` never lists an ignored file, and it hides untracked AND ignored
+  // files under the child's own `status.showUntrackedFiles=no`; `--ignored
+  // --untracked-files=all` shows both, whatever that config says (git 2.43).
+  'child-dirty': 'A checkout nested under this workspace has work in no commit — changed tracked files, untracked files or ignored files — and removing it would lose that work. `git -C <child path> status --ignored --untracked-files=all` lists all three; commit, move or delete them in that checkout, then reap again.',
   'child-busy': 'A checkout nested under this workspace is mid-operation — finish or abort it there first.',
   // Whole-branch review, finding I3: the old sentence ("carries commits that
   // exist nowhere else") is false for the case this rung exists to catch —
@@ -237,10 +243,24 @@ export const SENTENCES: Record<string, string> = {
   // `reclaim-in-progress` is ws-reap's refusal of a `reclaim:` one.
   'reap-in-progress': 'An interrupted clean-up of this workspace belongs to ws-reap, and reclamation never finishes another verb’s work. Nothing was removed.',
   'reclaim-in-progress': 'An interrupted reclamation of this workspace is waiting to finish, and ws-reap never finishes another verb’s work. Nothing was removed.',
+  // ── ws-expire (workspace lifecycle, spec 2026-09-24 §5.3): an ARCHIVED workspace cleaned up seven days after its
+  // archive. Its new words only; every other word it can answer is reused, sentence unedited. The retryable ones say
+  // the cleanup tries again; none asks the reader to act, because the lane that will read them (wave 3b) is the
+  // server's. `not-archived` is ws-reap's word and keeps its sentence.
+  'not-expired': 'This workspace was archived less than seven days ago, so nothing was removed. It is cleaned up seven days after its archive.',
+  'child': 'This workspace was created for a run, so it is cleaned up when that run closes, never by the seven-day expiry. Nothing was removed.',
+  'live': 'This archived workspace has a session running — a pane, or a service that would start one — so nothing was removed. The cleanup tries again later.',
+  'in-use': 'A process on this box has its working directory inside this archived workspace — a shell someone opened there, say — so nothing was removed. The cleanup tries again later.',
+  'expire-in-progress': 'An interrupted seven-day cleanup of this workspace is waiting to finish, and ws-reap never finishes another verb’s work. Nothing was removed.',
 };
 
+/** An OWN key only: `SENTENCES` is a plain object literal, so a bare
+ *  `SENTENCES[token]` answers `Object.prototype`'s members for a token such
+ *  as `constructor` or `toString` — and the reclaim attention list, which
+ *  hands this a journal token as ccd wrote it, would then render a
+ *  function's source text as the sentence. */
 export function refusalSentence(token: string): string {
-  return SENTENCES[token] ?? `ccrc declined: ${token}.`;
+  return Object.prototype.hasOwnProperty.call(SENTENCES, token) ? SENTENCES[token]! : `ccrc declined: ${token}.`;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;

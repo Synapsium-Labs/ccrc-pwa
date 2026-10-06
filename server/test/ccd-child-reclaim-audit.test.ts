@@ -209,7 +209,7 @@ describe('ws-audit --reclaim', () => {
       ['--defer-expired', '--reclaim']]) {
       const r = runCcd('ws-audit', '--session', CHILD_ID, ...argv);
       expect(r.code, argv.join(' ')).toBe(1);
-      expect(r.stderr, argv.join(' ')).toContain('usage: ccd ws-audit --session <id> [--reclaim [--defer-expired]]');
+      expect(r.stderr, argv.join(' ')).toContain('usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire]');
     }
   });
 
@@ -292,6 +292,10 @@ describe('reachable: the capability token and the dispatcher arm', () => {
 // titles anchor the mutation table's selectors.
 const PROJECTED = 'demo-alias-live';
 const FORGED = 'demo-newline-row';
+/** The remedy for a row that cannot be placed, as the audit PRINTS it — on stdout's document and on stderr — so a
+ *  printer that drops or rewrites it reds here, not only a change to the sentence ccd builds. */
+const PROJECTED_REMEDY = 'make it searchable if a directory on its path cannot be searched, restore a link on its path'
+  + ' to its original target (never create a directory in a link\'s place), or purge the row once its session has ended';
 /** `<child>/server` holding another session's work, `$HOME/alias -> <child>` and a row through it — then the
  *  alias removed. Returns the row's raw spelling. */
 const plantProjectedRow = (c: Child): string => {
@@ -330,8 +334,10 @@ it('absent-suffix alternate row is unmeasured and mints no token', () => {
   expect(a, 'no token for a row that could not be placed').not.toHaveProperty('token');
   expect(r.code, r.stdout).toBe(1);
   expect(String(a['detail'])).toContain(`registry row(s) ${PROJECTED} `);
+  expect(String(a['detail']), 'the printed document carries the remedy').toContain(PROJECTED_REMEDY);
   expect(r.stderr).toContain('ws-audit --reclaim measured nothing');
   expect(r.stderr).toContain(`registry row(s) ${PROJECTED} `);
+  expect(r.stderr, 'the printed line carries the remedy').toContain(PROJECTED_REMEDY);
   for (const leak of [raw, `${h.home}/alias`, 'alias/server']) {
     expect(String(a['detail']), `the detail never prints ${leak}`).not.toContain(leak);
     expect(r.stderr, `stderr never prints ${leak}`).not.toContain(leak);

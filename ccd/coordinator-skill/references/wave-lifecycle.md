@@ -738,13 +738,12 @@ whole time, which is the only prevention this ordering rule buys.
    `--admin` where the repository's ruleset requires it) for exactly this
    reason — and on a native-queue project it lands with the same binding, as
    "Landing on a native-queue project" below says. An UNMARKED producer —
-   every workspace minted without a marker,
-   before wave 1's deploy, or by a dispatch that journaled `child-omitted`
-   (§2) — is never refused this way; dropping its `sessionId` anyway is
-   still safe and follows the same one-PR rule. The same-project arm is for
-   a producer whose workspace
-   opened no PR — a research or measurement wave —
-   and only for that. Naming a spent workspace is refused `workspace-spent`,
+   every workspace minted without a marker: by a box whose ccd did not yet
+   mark children, or by a dispatch that journaled `child-omitted` (§2) — is
+   never refused this way; dropping its `sessionId` anyway is still safe and
+   follows the same one-PR rule. The same-project arm is for a producer whose
+   workspace opened no PR — a research or measurement wave — and only for
+   that. Naming a spent workspace is refused `workspace-spent`,
    with `pr` naming the PR, and nothing is opened; `spent-unmeasured` means
    the server could not read the evidence either way — retry the same open,
    and do not drop `sessionId` on its account. If the PR lands after you
@@ -893,8 +892,8 @@ a PR after it was created, or a close that leaves your program with no open
 run — the server
 RELEASES it rather than holding it for a next wave, and the close response
 carries `"childReclaim":"queued"`. The reclaim itself runs after the answer,
-on the child's own queue: it commits anything left uncommitted on the child's
-branch as a WIP commit — except a secret-shaped file, which is never
+on the child's own queue: it records anything left uncommitted as a WIP
+commit (it moves no branch) — except a secret-shaped file, which is never
 committed and is deleted with the tree — pins every commit and stash in the
 attic, writes a tombstone, and then removes the pane, the worktree, the
 branch, the clips directory and the child's temp directory. Its outcome
@@ -904,8 +903,19 @@ run still names, or that the operator is looking at, is deferred and picked
 up later; nothing you do speeds it or stops it. Otherwise
 the response carries `"childReclaim":"not-queued"` and `childReclaimWhy`
 says why: `not-a-child`, `marker-unreadable`, `siblings-open`,
-`siblings-unreadable`, `review-report-live` or `not-finished` — the last is
-the ordinary non-final close holding a child for wave N+1. No
+`siblings-unreadable`, `review-report-live`, `has-coordinated`,
+`not-finished-undated`, `not-finished-merge-commit`, `not-finished-unmeasured`
+or `not-finished` — the last is
+the ordinary non-final close holding a child for wave N+1.
+`not-finished-undated`, `-merge-commit` and `-unmeasured` hold a child whose
+spent evidence the server could not use: a PR from its branch that no dated
+row places in this workspace's life, a fast-path PR number (the registry's
+own, or a `.prhistory` row) the live read dated to an earlier workspace of the
+same name, or a spent read that did not
+answer. A next wave's bind re-reads it and refuses `workspace-spent` or
+`spent-unmeasured` rather than take a spent child; the server reclaims it
+once your program has no open run. `has-coordinated` means the child has
+coordinated a run, so its workspace is cleaned up by a human. No
 `childReclaimWhy` at all means the child was eligible but the hand-off did
 not start; it is reached regardless. **A review run's reviewer
 is a child too, but it is kept while the run it reviewed is open**: its

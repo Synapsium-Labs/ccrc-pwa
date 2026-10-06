@@ -106,7 +106,8 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
             coordKickoffPendingSince: null }, ...over,
 });
 
-const coordStatus = (over: Partial<CoordStatus> = {}): CoordStatus => ({ pause: 'clear', mail: 'clear', ...over });
+const coordStatus = (over: Partial<CoordStatus> = {}): CoordStatus =>
+  ({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], ...over });
 
 const mailItem = (over: Partial<MailSummary> = {}): MailSummary => ({
   id: 1, deliveryId: 1, at: Date.now() - 30_000, fromId: 'coordinator', toId: 'ccrc-pwa-clear-cove',
@@ -277,6 +278,7 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-row .run-open'),
       ruleIn(chatCss, '.mail-strip .mail-strip-head'),
       ruleIn(fleetCss, '.coord-banner'), ruleIn(fleetCss, '.coord-toggle'),
+      ruleIn(fleetCss, '.child-reclaim-banner'), ruleIn(fleetCss, '.child-reclaim-toggle'),
       ruleIn(fleetCss, '.run-row .run-abandon'),
       ruleIn(fleetCss, '.program-start-door'), ruleIn(fleetCss, '.program-start-go'),
       ruleIn(fleetCss, '.caps-control'), ruleIn(fleetCss, '.caps-save'),
