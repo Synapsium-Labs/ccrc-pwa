@@ -201,9 +201,10 @@ export const childReclaimFirstSighting = (
  *  entry. The old workspace must have been eligible while its run could still mint: `planned`, bound to
  *  another session past the spawn stall. Then, before the next pass, the old row is removed by anything
  *  but this lane's own reclaim (whose answer forgets the entry), a dispatch finds that session spent and
- *  unbinds the run, the next dispatch's ws-add draws the same slug, and the run is abandoned. The next pass must also come before the mirror holds
- *  the new `create`. A pass in between reads the run with no session, with this one, or inside the spawn
- *  stall, and its ineligible verdict deletes the entry. */
+ *  unbinds the run, the next dispatch's ws-add draws the same slug, and the run then leaves that binding
+ *  (abandoned, or bound to yet another workspace past `planned`). The next pass must also come before
+ *  the mirror holds the new `create`. A pass in between that reads the run with no session, with this
+ *  one, or inside the spawn stall, or that lists no row for the slug, deletes the entry. */
 export const childReclaimSameGeneration = (
   entry: ChildReclaimSweepEntry, bornAt: number | null, markerRunId: number,
 ): boolean => entry.bornAt !== null && entry.bornAt === bornAt && entry.markerRunId === markerRunId;
