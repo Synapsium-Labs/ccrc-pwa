@@ -711,7 +711,11 @@ describe('ci.yml: the node-floor leg runs on exactly the declared floor (spec 20
 
   it('sets node-version to the engines floor, exactly and once (O18)', () => {
     const b = job('node-floor');
-    const versions = [...b.matchAll(/^ {10}node-version: '([^']+)'$/gm)].map((m) => m[1]);
+    // D-4261: count the setup-node STEPS and every node-version key in any
+    // quoting, so a second step (or a re-quoted line) cannot move the leg off
+    // the floor while this pin reads only the one line it knew.
+    expect(b.match(/uses:\s*actions\/setup-node@/g) ?? [], 'the node-floor leg must have exactly one setup-node step').toHaveLength(1);
+    const versions = [...b.matchAll(/^\s+node-version:\s*['"]?([^'"\s]+)['"]?\s*$/gm)].map((m) => m[1]);
     expect(versions, 'the node-floor leg must set node-version exactly once').toHaveLength(1);
     expect(versions[0], 'the leg must run the floor itself — any newer 22.x proves nothing about it').toBe(floor());
     // A version FILE would hand setup-node the range `>=x.y.z`, which resolves

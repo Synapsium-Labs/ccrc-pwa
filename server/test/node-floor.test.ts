@@ -76,10 +76,13 @@ describe('the node floor', () => {
 // (`no such module: fts5`), and a single probe would hide whether the iterate
 // leg still bites. Measured 2026-10-05 on 22.15.1 (both red: `no such module:
 // fts5`, `statement has been finalized`), 22.16.0 and 24.14.1 (both green).
-const childProbe = (src: string): { status: number | null; out: string } => {
+// D-4262: a failed spawn, or the 30 s bound firing (spawnSync reports it as
+// r.error ETIMEDOUT), comes back as `spawnError` and is asserted FIRST, so it
+// is never read as "no usable FTS5 — RAISE engines".
+const childProbe = (src: string): { status: number | null; out: string; spawnError?: string } => {
   const r = spawnSync(process.execPath,
-    ['--no-warnings', '--expose-gc', '--input-type=module', '-e', src], { encoding: 'utf8' });
-  return { status: r.status, out: `${r.stdout}${r.stderr}` };
+    ['--no-warnings', '--expose-gc', '--input-type=module', '-e', src], { encoding: 'utf8', timeout: 30000 });
+  return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}`, spawnError: r.error?.message };
 };
 
 /** The table shape the history store creates (spec §6.2): contentless, with
@@ -98,7 +101,7 @@ const FTS5_PROBE = [
   'db.close();',
 ].join('\n');
 
-/** An UNHELD statement paged past 500 rows: nothing but the loop references
+/** An UNHELD statement under a forced gc every 100 rows: nothing but the loop references
  *  it, so a collection mid-iteration finalizes it on 22.15.1. Without the
  *  `gc()` call the same loop completes there (measured) — the forced
  *  collection is what makes this leg see the defect at all. */
@@ -121,12 +124,14 @@ const ITERATE_PROBE = [
 describe('the node floor, assertion 4: what ccrc history needs from node:sqlite', () => {
   it('4a: FTS5 is compiled in — a contentless-delete table answers MATCH and forgets a deleted row', () => {
     const r = childProbe(FTS5_PROBE);
+    expect(r.spawnError, 'the probe child did not run to completion (spawn failure or 30 s timeout) — this is not a floor answer').toBeUndefined();
     expect(r.out, 'node:sqlite on this interpreter has no usable FTS5 — RAISE engines, never lower them').toBe('');
     expect(r.status).toBe(0);
   });
 
-  it('4b: .iterate() survives a forced gc past 500 rows on a statement nothing else holds', () => {
+  it('4b: .iterate() survives a forced gc every 100 rows on a statement nothing else holds', () => {
     const r = childProbe(ITERATE_PROBE);
+    expect(r.spawnError, 'the probe child did not run to completion (spawn failure or 30 s timeout) — this is not a floor answer').toBeUndefined();
     expect(r.out, 'node:sqlite finalized a statement mid-iteration — RAISE engines, never lower them').toBe('');
     expect(r.status).toBe(0);
   });
