@@ -76,15 +76,18 @@ describe('the PWA maps no ws-reclaim token — the sentence is the server’s (s
    *  text), or, for a token that is a valid identifier, as a BARE object key —
    *  `{ held: … }` — read off `codeOnly` text so a comment naming it is no
    *  spelling. A key position is `{` or `,` (or a line start) before the
-   *  token and `:` after it on the same line (`[ \t]*`, so a ternary broken
-   *  across lines is not one; `\??` takes an optional member `held?:`).
-   *  A hyphenated token cannot be a bare key, so the quoted arm already sees
-   *  every spelling it has. A property ACCESS (`x.held`) and a `case held:`
+   *  token and `:` after it on the same line (`[ \t]*`; `\??` takes an
+   *  optional member `held?:`). A hyphenated token cannot be a bare key, so the
+   *  quoted arm already sees every spelling it has. A property ACCESS (`x.held`),
+   *  a `case held:` and a ternary's `? held` followed by `: x` on the next line
    *  are not keys and do not match. A TS type member or a typed parameter named
    *  like a token IS a hit — it names the token as a field, which is what this
    *  rule bars — and so is prose such as `, held: x` inside a quoted string,
-   *  since `codeOnly` keeps string literals: a false red, never a missed
-   *  spelling. None of the scanned files holds either today. */
+   *  since `codeOnly` keeps string literals, and a ternary whose `held` opens
+   *  its own line (`c ?\n  held : other`): false reds. Known misses: a
+   *  shorthand property (`{ held, attached }`), an enum member
+   *  (`enum E { held = 1 }`) and a class field (`held = 1;`) carry no `:` and
+   *  are not seen. None of the scanned files holds any of these today. */
   const spelled = (src: string, ts: readonly string[]): string[] => {
     const code = codeOnly(src);
     return ts.filter((t) => new RegExp(`['"\`]${t.replace(/-/g, '\\-')}['"\`]`).test(src)
@@ -158,10 +161,12 @@ describe('the PWA maps no ws-reclaim token — the sentence is the server’s (s
 // bracketed one with a literal key (`session['child']`, `session?.["child"]`,
 // ``session[`child`]``). The bracket must follow an identifier character, `)` or
 // `]` with nothing between, so an array literal (`['child']`, `return ['child']`)
-// is not a read. Known limits: a destructured read (`const { child } = session`),
-// because `child` is too common a word to scan for bare; a computed key
-// (`session[k]`); and a spaced bracket (`session ['child']`), which cannot be told
-// from `return ['child']` without parsing.
+// is not a read. Known limits, misses: a destructured read (`const { child } =
+// session`), because `child` is too common a word to scan for bare; a computed
+// key (`session[k]`); a spaced bracket (`session ['child']`), which cannot be told
+// from `return ['child']` without parsing; and a TS non-null bracket read
+// (`session!['child']`, counted 0). Known limit, a false red: an indexed-access
+// type (`FleetSession['child']`) is counted as a read.
 const FLEET_CHILD_READ = /\.child\b|[\w$)\]](?:\?\.)?\[\s*(['"`])child\1\s*\]/g;
 const fleetChildReads = (src: string): number => (codeOnly(src).match(FLEET_CHILD_READ) ?? []).length;
 

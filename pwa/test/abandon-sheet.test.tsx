@@ -284,8 +284,9 @@ const SENTENCES: ReadonlyArray<{
   says: readonly string[]; never: readonly RegExp[];
 }> = [
   { name: 'child', run, child: 'child',
-    says: ['is a child workspace', 'when nothing keeps it', 'pinned in the attic', 'transcripts kept',
-      'session is stopped', 'temp root', 'are removed', 'registry row', 'is purged'],
+    says: ['is a child workspace', 'when nothing keeps it', 'not ignored or secret-shaped files',
+      'pinned in the attic', 'transcripts kept', 'session is stopped', 'temp root', 'are removed',
+      'registry row', 'is purged'],
     // It reclaims: the worktree does NOT survive.
     never: [/destroys nothing/i, /survives/i, /record stays/i] },
   { name: 'not-child', run, child: 'not-child',
@@ -295,8 +296,8 @@ const SENTENCES: ReadonlyArray<{
     says: ['holds no workspace of its own', 'none to release or reclaim'],
     never: [/attic/i, /removed/i, /purged/i, /survives/i, /child workspace/i] },
   { name: 'unknown', run, child: 'unknown',
-    says: ['cannot tell whether', 'is a child workspace', 'when nothing keeps it', 'in the attic first',
-      'a release destroys nothing'],
+    says: ['cannot tell whether', 'is a child workspace', 'when nothing keeps it',
+      'not ignored or secret-shaped files', 'in the attic first', 'a release destroys nothing'],
     never: [/removed/i, /purged/i, /survives/i] },
 ];
 
