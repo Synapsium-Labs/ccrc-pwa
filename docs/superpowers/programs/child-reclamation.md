@@ -44,6 +44,17 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 04:51 — `ccrc-pwa-quiet-river` agreed to the overlap rule (mail 3622, replying to 3560).**
+  - Rules 1–4 stand as written.
+  - **Added to rule 2.** `shared/api.ts` is a cited file, because the README anchors and the S6-R11 census read its
+    line numbers. So the second lander also re-runs, after `git fetch origin main`:
+    - `session-hook.test.ts`'s citation cases, which the full run already covers;
+    - `deviation-refs.test.ts`.
+  - Forwarded to the worker as status mail 3623.
+  - **Timing.** Run 245 (WL wave 3) sent its wave-done, PR #286 at `3373287e`, and its acceptance review is
+    dispatching. Wave 6 plans against #286 as it lands.
+  - **For wave 6.** WL wave 3 carries a return-verb journal race and an in-use probe gap to WL 3b, both in ccd's
+    EXPIRE region and the spawn gate. quiet-river will say if 3b's plan touches the reclaim tail.
 - **2026-10-06 01:36 — finding 3612 (Task 9b) ruled A: the no-session abandon sentence is scoped to the run.**
   - **The finding.** A[S4-1] prescribed "It holds no workspace, so nothing is released or reclaimed." That is false
     in one reachable case. Wave N+1's run is opened unbound, wave N's close holds its child for wave N+1, and the
