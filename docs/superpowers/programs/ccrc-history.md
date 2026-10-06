@@ -16,7 +16,7 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | W1 Part A: Node floor `>=22.16.0` in the three engines, node-floor assertion 4, the `node floor (22.16.0)` CI leg (plan Tasks 1–2) | engines + CI; full suite | — | planned |
+| 1 | W1 Part A: Node floor `>=22.16.0` in the three engines, node-floor assertion 4, the `node floor (22.16.0)` CI leg (plan Tasks 1–2) | engines + CI; full suite | — | run 293 opened 2026-10-06 |
 | 2 | W1-B1 "capture": `lib.mjs`, `store.mjs`, `sweep.mjs`, the shim, the hook's spool line, journal + pre-migration snapshot + purge carve-out, `status`, install/uninstall/deploy, doctor `history`, lifecycle rows, `measure-history.py` (plan Tasks 3–36). Sessions see no change | fleet (shim + timer); full suite (package.json via Part A already merged) | — | planned after wave 1 merges |
 | 3 | W1-B2 "recall": read verbs, parser, native leaves, the skill, operator verbs (`prune`, `doctor --repair/--backup/--adopt/--restore/--rebuild/--migrate`, `reparse`), recovery step | fleet + skills | — | plan owed (coordinator) |
 | 4 | W1-B3 "card line": scope marker, `_hook_history_card`, the S6-R11 census re-measure | fleet (hook) | — | plan owed; after wave 3 |
@@ -43,9 +43,10 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 - **How the plan was checked.** Eight batch reviewers, an integration reviewer and a refute pass per reviewer, then
   two smoke runs that transcribed every task into a throwaway worktree at `d12b5aba0` and ran it: every new
   history suite and every existing suite the plan edits passed (the one red, `tmp-sweep`, is red at the base too).
-- **Departures** are D-numbers defined in the plan's `## Deviations found`, issued in one block by the allocator when
-  the plan was committed to `main` (see the plan). Each wave's run gets its own small block at run-open, named in its
-  brief, for departures found while executing.
+- **Departures.** The wave-1 plan's 95 departures were issued in one block by the allocator on 2026-10-06 (95
+  numbers starting at D-4165) and are defined in the plan's `## Deviations found`, each beside its spec §16 slug.
+  Each wave's run gets its own small block at run-open, named in its brief and written bare here until a plan on
+  `main` defines it: run 293 (wave 1) holds deviations 4260, 4261, 4262, 4263, 4264 and 4265.
 - **Routing (clause 13).** Wave 1 is a dependent chain that fits one context: Opus · high main loop, Sonnet · high
   implementers, Opus · high per-task reviewer, workflows off, `compact 40`. Wave 2 (34 tasks) outgrows one context:
   the bulk row — Opus · ultracode orchestrating, Sonnet · high workers (implementation never below Sonnet · high),
