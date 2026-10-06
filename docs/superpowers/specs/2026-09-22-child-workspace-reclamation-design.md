@@ -684,14 +684,15 @@ answer must not promise a retry the sweep will not make.
 
 - A child the sweep keeps for a person reads `refused`, with a sentence that says why and ends "ccrc never
   reclaims it on its own; a person removes it once nothing still needs it." The kept words are
-  `coordinating` (§5.7), `minting-run-absent`, `minting-run-postdates-child`, `child-birth-unplaced`,
+  `coordinating` (§5.7), `minting-run-absent`, `minting-run-postdates-child`,
   `reviewed-run-absent`, and `not-a-workspace`, a project's main checkout carrying a marker. The two
   minting-run sentences add "After a rebuild, workers may still be running in these." before that ending,
   and the main checkout's ends by telling a person to remove the marker, never the checkout. The switch
   never replaces a kept answer: a pause leaves it standing, because the attention item keeps listing the
   child.
 - A child the sweep could not judge because a read failed (`marker-unreadable`, `identity-unmeasured`,
-  `hold-unmeasured`, `minting-run-unreadable`, `reviewed-run-unreadable`, `siblings-unreadable`) reads
+  `hold-unmeasured`, `minting-run-unreadable`, `reviewed-run-unreadable`, `siblings-unreadable`), or
+  because the lifecycle journal holds no dated creation of its workspace (`child-birth-unplaced`), reads
   `deferred`, with a sentence naming the read and saying the sweep reads it again on its next pass. A held
   child, under a person's hold or a programme's while that programme is open, reads `deferred` with the
   hold's sentence. The switch turns both to `paused`.
