@@ -3,7 +3,7 @@ import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { RUN_STATES, SPAWN_STALL_MS, type ChildReclaimStatus, type CoordCapsView, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
-import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
+import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -1598,5 +1598,71 @@ describe('the finished row carries the reclaim chip, and a reclaimed row is iner
   it.each(['pending', 'deferred', 'paused', 'refused'] as const)('keeps the open door on a %s row', async (word) => {
     await boardWith({ word, sentence: 'S', at: null });
     expect(document.querySelector('.run-open')).not.toBeNull();
+  });
+});
+
+describe('childReclaimRefreshDue — a vanish, never a poll (wave 5)', () => {
+  const SID = 'ccrc-pwa-clear-cove';
+  const row = (word: ChildReclaimStatus['word'] | null, over: Partial<RunSummary> = {}): RunSummary =>
+    r({ id: 7, state: 'done', closedAt: 1, childReclaim: word === null ? null : { word, sentence: null, at: null }, ...over });
+
+  it('is due when an unsettled finished row’s session leaves the fleet', () => {
+    for (const word of ['pending', 'deferred', 'paused'] as const) {
+      expect(childReclaimRefreshDue([row(word)], new Set([SID]), new Set()), word).toBe(true);
+    }
+  });
+
+  it('is not due for a settled word, a session still listed, a session never listed, or a row with no chip', () => {
+    expect(childReclaimRefreshDue([row('reclaimed')], new Set([SID]), new Set())).toBe(false);
+    expect(childReclaimRefreshDue([row('refused')], new Set([SID]), new Set())).toBe(false);
+    expect(childReclaimRefreshDue([row('pending')], new Set([SID]), new Set([SID]))).toBe(false);
+    expect(childReclaimRefreshDue([row('pending')], new Set(), new Set())).toBe(false);
+    expect(childReclaimRefreshDue([row(null)], new Set([SID]), new Set())).toBe(false);
+  });
+});
+
+describe('the board re-reads the archive when a finished child leaves the fleet (wave 5)', () => {
+  const pendingRow = (): RunSummary =>
+    r({ id: 7, state: 'done', closedAt: Date.now() - 60_000, childReclaim: { word: 'pending', sentence: null, at: null } });
+
+  it('re-reads once when the pending child’s session vanishes from the fleet frame', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true, sessions: [sess()], fleetFrameSeen: true }); });
+    const loadRuns = vi.fn(async (): Promise<{ runs: RunSummary[] }> => ({ runs: [pendingRow()] }));
+    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
+    await screen.findByRole('group', { name: /finished/i });
+    expect(loadRuns).toHaveBeenCalledTimes(1);
+    act(() => { store.setState({ sessions: [] }); });
+    await waitFor(() => expect(loadRuns).toHaveBeenCalledTimes(2));
+  });
+
+  it('reads once per vanish: the read that lands, a later frame and the passage of time are not reasons to read again', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true, sessions: [sess()], fleetFrameSeen: true }); });
+    const loadRuns = vi.fn(async (): Promise<{ runs: RunSummary[] }> => ({ runs: [pendingRow()] }));
+    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
+    await screen.findByRole('group', { name: /finished/i });
+    act(() => { store.setState({ sessions: [] }); });
+    await waitFor(() => expect(loadRuns).toHaveBeenCalledTimes(2));
+    // The row still reads pending and its session is still gone, so a trigger
+    // that compared a frame with itself, or kept the old baseline, would read again.
+    act(() => { store.setState({ sessions: [] }); });               // a later frame, the same ids
+    await act(async () => { await new Promise((res) => setTimeout(res, 60)); });
+    expect(loadRuns).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not re-read when an unrelated session vanishes, or when the row already reads reclaimed', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true,
+      sessions: [sess(), sess({ id: 'ccrc-pwa-keen-dune' })], fleetFrameSeen: true }); });
+    const loadRuns = vi.fn(async (): Promise<{ runs: RunSummary[] }> => ({ runs: [
+      r({ id: 7, state: 'done', closedAt: Date.now() - 60_000, childReclaim: { word: 'reclaimed', sentence: null, at: null } }),
+    ] }));
+    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
+    await screen.findByRole('group', { name: /finished/i });
+    act(() => { store.setState({ sessions: [sess()] }); });          // an unrelated session left
+    act(() => { store.setState({ sessions: [] }); });               // this row's left, but it is settled
+    await act(async () => { await Promise.resolve(); });
+    expect(loadRuns).toHaveBeenCalledTimes(1);
   });
 });

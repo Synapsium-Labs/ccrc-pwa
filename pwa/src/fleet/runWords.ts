@@ -692,3 +692,28 @@ export const childReclaimTitle = (chip: ChildReclaimChip, nowSec: number): strin
  *  a workspace behind. */
 export const childReclaimGone = (chip: ChildReclaimChip | null): boolean =>
   chip !== null && chip.word === 'reclaimed';
+
+const CHILD_RECLAIM_UNSETTLED: ReadonlySet<string> = new Set<ChildReclaimWord>(['pending', 'deferred', 'paused']);
+
+/**
+ * Should the board re-read its archive? Yes exactly when a FINISHED row whose
+ * chip is still unsettled names a session that was in the previous fleet frame
+ * and is not in this one. A child's reclaim purges its registry row, so this is
+ * the socket carrying the moment the chip goes stale. The board refuses a poll
+ * (RunsScreen's header) and needs none.
+ *
+ * `reclaimed` and `refused` are settled: the first has nothing left to vanish,
+ * and the second is the attention item's to keep live. A session never listed
+ * cannot vanish.
+ */
+export function childReclaimRefreshDue(
+  finished: readonly RunSummary[], before: ReadonlySet<string>, after: ReadonlySet<string>,
+): boolean {
+  for (const run of finished) {
+    const sid = run.sessionId;
+    if (sid === null || !before.has(sid) || after.has(sid)) continue;
+    const chip = childReclaimChip(run);
+    if (chip !== null && CHILD_RECLAIM_UNSETTLED.has(chip.word)) return true;
+  }
+  return false;
+}

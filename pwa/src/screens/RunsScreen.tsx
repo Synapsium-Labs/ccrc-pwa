@@ -35,7 +35,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type CoordCapsView, type FleetSession, graphReadCount, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, childReclaimChip, childReclaimGone, childReclaimTitle, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runKindChip, runWarnings, runClosedAt, runItems, runState, runsByProgram, waveLabel } from '../fleet/runWords';
+import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runKindChip, runWarnings, runClosedAt, runItems, runState, runsByProgram, waveLabel } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
@@ -531,6 +531,25 @@ export function RunsScreen({
     prevLiveIdsRef.current = ids;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, runsFrameSeen]);
+
+  // Child-reclamation wave 5 (spec §5.9): a finished row's reclaim chip changes
+  // AFTER its run closed (pending → reclaimed), and `finished` has one source,
+  // the cold read. A reclaim purges the child's registry row, so its session
+  // leaves the next fleet frame. That vanish is the trigger: a diff against the
+  // PREVIOUS fleet frame, exactly like the run-id diff above. It is not a poll:
+  // it fires only on a real transition. The decision is `childReclaimRefreshDue`'s.
+  // The dependencies are the fleet frame's, deliberately: a cold read landing is
+  // not a transition of the fleet, and re-running on it would compare a frame
+  // with itself. A re-read changes `cold`, never `sessions`, so it cannot loop.
+  const prevSessionIdsRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!fleetFrameSeen) return;
+    const ids = new Set(sessions.map((s) => s.id));
+    const prev = prevSessionIdsRef.current;
+    prevSessionIdsRef.current = ids;
+    if (prev !== null && childReclaimRefreshDue(cold ?? [], prev, ids)) void loadCold();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions, fleetFrameSeen]);
 
   const sessionById = new Map(sessions.map((s) => [s.id, s] as const));
   // ACTIVE reads `live` the instant the socket has said anything at all
