@@ -275,6 +275,20 @@ describe('a crash at each phase resumes through the `expire:` breadcrumb — and
     expect(h.reg(EXP_ID, 'reaping'), 'the breadcrumb stands').toBe('expire:children');
   }, 120_000);
 
+  // P3 (fix round 1). `_ws_expire_archived` runs BEFORE the epoch comparison and re-asserts the age, so a YOUNG
+  // re-archive answers `not-expired` and only an OLD one reaches `state-changed`. Pins existing behaviour.
+  it('re-asserts the age before the epoch: archived again YOUNG since the expiry began refuses not-expired', () => {
+    const a = makeArchived(h);
+    interrupted(a, 'children');
+    const tok = resumeToken('children');
+    archiveAt(h, NOW - 3600);
+    expect(refusedWith(expireVerb(h, tok))).toBe('not-expired');
+    expect(fs.existsSync(a.wt), 'nothing was deleted').toBe(true);
+    expect(h.reg(EXP_ID, 'reaping'), 'the breadcrumb stands').toBe('expire:children');
+    expect(unsupervised(), 'the unit was not touched').toEqual([]);
+    expect(h.calls(), 'the pane was not touched').not.toContain(KILL);
+  }, 120_000);
+
   it('re-asserts the rest of what authorised it — the child marker, the switch, the hold — and a stale resume token', () => {
     const a = makeArchived(h);
     interrupted(a, 'worktree');
@@ -294,7 +308,9 @@ describe('a crash at each phase resumes through the `expire:` breadcrumb — and
 
   // RULING (D), CARRIED TO THE RESUME: at `children` the teardown has not begun — the tail has stopped nothing — so a
   // pane or a unit standing there is somebody's, and is refused `live`, never killed. From `worktree` on, the
-  // interrupted run had already stopped both, and the tail's unsupervise-and-kill runs as a reclaim's.
+  // interrupted run had already stopped both, and the tail's unsupervise-and-kill runs as a reclaim's — but at
+  // `worktree` the tree may still STAND (the breadcrumb is written before the tail removes it), so the one question
+  // asked there is the cwd probe, `in-use` (3964); the pane and the unit are never asked.
   it('at `children`, a pane or a unit that stands refuses live — nothing is stopped, nothing deleted', () => {
     const a = makeArchived(h);
     interrupted(a, 'children');
@@ -389,7 +405,7 @@ describe('a crash at each phase resumes through the `expire:` breadcrumb — and
     expect(h.git(a.main, 'log', '-1', '--format=%s', ref)).toBe(`ccrc: reflog commits kept at expiry of ${EXP_ID}`);
   }, 120_000);
 
-  it('the CONTROL: from `worktree` on, a pane that stands is the tail’s to kill — the expiry finishes', () => {
+  it('the CONTROL: at `worktree` the pane and the unit are still the tail’s to kill — only the cwd probe is asked (3964)', () => {
     const a = makeArchived(h);
     interrupted(a, 'worktree');
     plantTmux(h, { sessions: [`cc-${EXP_ID}`] });
@@ -397,6 +413,41 @@ describe('a crash at each phase resumes through the `expire:` breadcrumb — and
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(tmuxSessions(h), 'the tail killed the pane').toEqual([]);
     expired(a);
+  }, 120_000);
+
+  // 3964. The tail writes `expire:worktree` BEFORE it removes the tree, so a crash in that window (or a
+  // `worktree-remove-failed`) leaves a resume at `worktree` with the tree standing. A shell that cd'd in since would
+  // lose its uncommitted edits to `git worktree remove --force`: the resume asks the cwd probe, and nothing else.
+  it('at `worktree`, a process with its working directory in the standing tree refuses in-use — nothing stopped, nothing deleted (3964)', () => {
+    const a = makeArchived(h);
+    interrupted(a, 'worktree');
+    const tok = resumeToken('worktree');
+    const sleeper = holdCwd(a.wt);
+    try {
+      const r = expireVerb(h, tok);
+      expect(refusedWith(r)).toBe('in-use');
+      expect((JSON.parse(r.stdout) as { detail: string }).detail).toContain(`process ${sleeper.pid} `);
+      expect(fs.existsSync(a.wt), 'nothing was deleted').toBe(true);
+      expect(h.reg(EXP_ID, 'reaping'), 'the breadcrumb stands, for the retry').toBe('expire:worktree');
+      expect(unsupervised(), 'the unit was not touched').toEqual([]);
+      expect(h.calls(), 'the pane was not touched').not.toContain(KILL);
+    } finally { sleeper.stop(); }
+    const again = expireVerb(h, tok);
+    expect(again.code, again.stdout + again.stderr).toBe(0);
+    expired(a);
+  }, 120_000);
+
+  it('at `worktree`, a cwd probe that cannot be answered is unmeasured (exit 1, probe-unmeasured) — nothing is deleted (3964)', () => {
+    const a = makeArchived(h);
+    interrupted(a, 'worktree');
+    const tok = resumeToken('worktree');
+    const r = expireVerb(h, tok, { pre: 'CCD_OS=linux; _ws_expire_proc_root() { printf %s "$HOME/no-such-proc"; };' });
+    expect(r.code, 'an unmeasured probe is a failure to measure, not a refusal').toBe(1);
+    expect(JSON.parse(r.stdout)).toMatchObject({ failed: 'probe-unmeasured' });
+    expect(fs.existsSync(a.wt), 'nothing was deleted').toBe(true);
+    expect(h.reg(EXP_ID, 'reaping'), 'the breadcrumb stands, for the retry').toBe('expire:worktree');
+    expect(unsupervised(), 'the unit was not touched').toEqual([]);
+    expect(h.calls(), 'the pane was not touched').not.toContain(KILL);
   }, 120_000);
 });
 

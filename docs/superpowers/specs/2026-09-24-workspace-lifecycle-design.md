@@ -396,7 +396,8 @@ and the README and `wave-lifecycle.md` §6 text above are wave 3b's, planned aft
   `ws-reclaim` is never asked this. It also refuses `in-use` (retryable) when any process's working directory is the
   worktree or lies under it — a shell an operator opened there by hand, say (3962) — fresh, and at the resume
   wherever presence is asked again (`children`, and `branch` on the vanished-worktree arm, where the worktree is absent
-  and the question is vacuously clear). A process is skipped only on proof it vanished (its cwd link or stat file is gone, or
+  and the question is vacuously clear), and at `worktree`, where the tree may still stand and this is the one question
+  asked (3964). A process is skipped only on proof it vanished (its cwd link or stat file is gone, or
   `ps` could not name its parent and the kernel answers no such process), or when its cwd link answers
   EACCES: so what is not seen is a process of another UNIX user and a same-user non-dumpable one (an `ssh-agent`,
   anything that cleared its dumpable flag, a setuid or setgid exec) — refusing on those would wedge every expiry while

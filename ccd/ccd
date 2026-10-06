@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ab516ed72194ef775f1b2b4374d94296f1e9cdfe517769067abfc7c22683d2b7
+# ccrc:generated 1 sha256=37c925e657feaf60f873caf3659d92899d846247e7adacd82c77e18e3a5860f1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28812,7 +28812,8 @@ _ws_expire_presence() {   # id probe-verdict workdir [detached] -> 0 when nothin
   # RUNG 5, ASKED MORE OF FOR AN EXPIRY (the RECLAIM region's ladder calls this
   # after its own `attached` question, only when the binding leads with
   # `mode=expire`; `_ws_expire_resume_eval` asks it where nothing has been
-  # stopped yet: at `children`, and at `branch` on the vanished-worktree arm).
+  # stopped yet: at `children`, and at `branch` on the vanished-worktree arm; at
+  # `worktree` it asks `_ws_expire_cwd_users` alone, never this — 3964).
   # `detached` (the fourth argument) is passed by the caller that has ALREADY proved no client is
   # attached (the ladder, just after its `attached` question): only then may
   # the refusal say so. The resume's anchored probe never asked for clients, so
@@ -28874,11 +28875,12 @@ _ws_expire_lsof() {   # -> lsof's cwd listing, BOUNDED as the tail bounds its su
 
 _ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working directory at workdir or under it; else
   #                          rc 1: `in-use` (naming the pids and the paths), or unmeasured
-  # AMENDMENT 3 (3962), ASKED OF AN EXPIRY ONLY — `_ws_expire_presence` is its one
-  # caller, so a reclaim never meets it (a finished child's tail kills its pane
-  # by design, and a process in its tree is its run's). It has two callers
-  # above that, the fresh ladder's rung 5 and the resume where nothing has been
-  # stopped yet, and both hand it the worktree explicitly.
+  # AMENDMENT 3 (3962), ASKED OF AN EXPIRY ONLY — a reclaim never meets it (a
+  # finished child's tail kills its pane by design, and a process in its tree is
+  # its run's). `_ws_expire_presence` calls it for the fresh ladder's rung 5 and
+  # for the resume where nothing has been stopped yet, and
+  # `_ws_expire_resume_eval` asks it ALONE at `worktree` (3964), where the tree
+  # may still stand; each hands it the worktree explicitly.
   # WHAT IS COMPARED. The worktree's REAL path with its LEAF NOT FOLLOWED: the
   # real path of its parent, then the leaf's own name. At rung 5 the workdir
   # has been proved one plain path (`_ws_reclaim_plain_path`) but the leaf `-L`
@@ -29067,11 +29069,12 @@ _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token,
   # this expiry is re-asserted before anything else runs: the row; the ARCHIVE
   # EPOCH — still the one the tombstone recorded when the act began, and still
   # old enough (a workspace that was returned is `not-archived`; one archived
-  # again since is `state-changed`); no child marker; the pause; the hold; and,
+  # again since is `state-changed` when its age has come, `not-expired` when it is
+  # young: the age is re-asserted first); no child marker; the pause; the hold; and,
   # where nothing has been stopped yet, rung 5's presence (below). The resume
   # token binds the phase, the epoch and the recorded tip.
   _ws_reclaim_reset
-  local id="$1" phase="$2" tomb tombtip tombbranch tombarch tombwt tombworkdir askpresence=0
+  local id="$1" phase="$2" tomb tombtip tombbranch tombarch tombwt tombworkdir askpresence=0 askcwd=0
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
   tomb="$REG/.reaped/$id.json"
   tombarch=$(_ws_expire_tomb_epoch "$tomb") \
@@ -29098,7 +29101,15 @@ _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token,
   # unit, refuses `live` and the breadcrumb stands for the retry. A `branch`
   # resume whose tombstone says `present` follows `worktree`, which only a tail
   # that had stopped both writes, as do `worktree` and `artifacts`: the tail's
-  # own unsupervise-and-kill runs as a reclaim's does. The field is read as
+  # own unsupervise-and-kill runs as a reclaim's does. ONE question is asked at
+  # `worktree` all the same (3964): the tail writes `expire:worktree` BEFORE it
+  # removes the tree, so a crash in that window, or a `worktree-remove-failed`,
+  # leaves a resume with the tree STANDING, and a shell that cd'd in since would
+  # lose its uncommitted edits to the `--force` removal. That resume asks the
+  # `in-use` cwd probe alone (`_ws_expire_cwd_users`) before the tail re-runs —
+  # `in-use`, retryable, or unmeasured, and never a kill; the pane and the unit
+  # stay the tail's to kill. At `artifacts`, and at `branch` after a `present`
+  # tombstone, the tree is gone and nothing more is asked. The field is read as
   # `_ws_tomb_str` answers it: a tombstone that cannot be read is unmeasured,
   # and anything but the word `present` — absent, or a value ccd never writes —
   # asks, because asking only refuses (retryably) and never kills.
@@ -29108,17 +29119,25 @@ _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token,
     tombwt=$(_ws_tomb_str "$tomb" worktree) \
       || { _ws_reclaim_unmeasured "the tombstone at $tomb cannot be read, so whether this expiry's worktree was already gone when it began is unknown"; return 1; }
     [[ "$tombwt" == present ]] || askpresence=1
+  elif [[ "$phase" == worktree ]]; then
+    askcwd=1
   fi
-  if (( askpresence )); then
+  if (( askpresence || askcwd )); then
     # THE WORKTREE, as the tail reads it: from the tombstone, never the registry.
     tombworkdir=$(_ws_tomb_str "$tomb" workdir) && [[ -n "$tombworkdir" ]] \
       || { _ws_reclaim_unmeasured "the tombstone at $tomb does not name the worktree, so whether a process works inside it was never asked"; return 1; }
+  fi
+  if (( askpresence )); then
     _session_probe "$id" anchored
     case "$PROBE_VERDICT" in
       gone|live) : ;;
       *) _ws_reclaim_unmeasured "whether $(_tmux "$id") is up could not be asked — tmux answered: ${PROBE_DETAIL:-nothing}"; return 1 ;;
     esac
     _ws_expire_presence "$id" "$PROBE_VERDICT" "$tombworkdir" || return 1
+  elif (( askcwd )); then
+    # 3964. THE CWD QUESTION ALONE, never the pane or the unit: the interrupted attempt stopped both, and the tail
+    # kills what came back. A tree already gone is vacuously clear (`_ws_expire_cwd_users` answers nobody).
+    _ws_expire_cwd_users "$id" "$tombworkdir" || return 1
   fi
   tombbranch=$(_ws_tomb_str "$tomb" branch) || tombbranch=""
   tombtip=$(_ws_tomb_str "$tomb" tip) || tombtip=""
@@ -29406,10 +29425,14 @@ _ws_expire_refuse_return() {   # id -> returns 0 when nothing refuses a return; 
   #                                (an ARCHIVED row only) and on a held reap lock (an ARCHIVED row only)
   # THE RETURN VERBS' OWN REFUSAL, asked by `cmd_start`, `cmd_ensure`, `cmd_swap`
   # and `cmd_enable` BEFORE they journal their act or write a field: a return that a
-  # breadcrumb refuses must leave no `start`/`ensure`/`swap`/`enable` row behind, or
-  # the lifecycle instrument (`deploy/measure-workspace-lifecycle.py`) pairs
-  # it with the archive as a RETURN, seven days or more after it — the exact
-  # number spec §9's kill rule reads. `ws-restore` asks the same breadcrumb
+  # breadcrumb refuses must leave no `start`/`ensure`/`swap`/`enable` row behind.
+  # A `start`, `ensure` or `swap` row (the instrument's `RETURN_ACTS`,
+  # `deploy/measure-workspace-lifecycle.py`) would be paired with the archive as
+  # a RETURN, seven days or more after it — the exact number spec §9's kill rule
+  # reads. An `enable` row is in its `NEUTRAL_ACTS` and pairs with nothing, but
+  # `cmd_enable` journals it BEFORE it reaches `cmd_start`, so without the early
+  # refusal it would record boot-persistence enabled for a return that never
+  # happened. `ws-restore` asks the same breadcrumb
   # under its lock and refuses through `_lc_refuse` (`in-progress`), and
   # `_spawn_start`'s gate is the backstop under all of them. It IS that gate,
   # asked early and let go at once: the breadcrumb after a crash, and the reap
