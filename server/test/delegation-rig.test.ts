@@ -1495,6 +1495,22 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(snap(base)).toBe(before);
   });
 
+  // The index is the file's place in its directory's `*.json` list in CODE-UNIT order (`LC_ALL=C ls`), so a clean sibling that
+  // sorts first moves the planted file to #1. `wf-iso-resume.json` sorts BEFORE `wf-iso.json` by code unit (`-` < `.`), where a
+  // UTF-8 locale's `ls` lists them the other way round (per-task re-review n1/n2).
+  it('--scan names a file by its place in the code-unit-sorted list of its directory: a clean sibling sorting first makes the planted one #1 (F9)', () => {
+    const { dir, v } = plantedCorpus(() => {});
+    fs.rmSync(path.join(dir, v, 'agent-plain.json'));
+    const read = (n: string): Record<string, any> => JSON.parse(fs.readFileSync(path.join(CORPUS, v, n), 'utf8')) as Record<string, any>;
+    const bad = read('wf-iso.json');
+    bad.events[0].payload.cwd = 'x /opt/acme/x';
+    fs.writeFileSync(path.join(dir, v, 'wf-iso.json'), `${JSON.stringify(bad, null, 1)}\n`);
+    fs.writeFileSync(path.join(dir, v, 'wf-iso-resume.json'), `${JSON.stringify(read('wf-iso-resume.json'), null, 1)}\n`);
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toBe(`sanitize: residue in ${v}/#1 /events/0/payload/cwd\n`);
+  });
+
   it('--scan reads KEYS too: a residue-bearing key of a committed fixture is named by index, never by its text (F9)', () => {
     const { dir, where } = plantedCorpus((f) => { f.extra = { '-mnt-data-x': 'v', '/opt/acme/x': 'w' }; });
     const r = scanRun('--scan', dir);

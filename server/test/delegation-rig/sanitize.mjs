@@ -47,8 +47,9 @@
 // An exception prints one fixed line (never its message, which names a raw path) and exits 1.
 // `--scan <fixtures-dir>` writes nothing and runs that same scan over the COMMITTED corpus (every `*.json` in the directory and in
 // its version directories: the fixtures and matrix.json), so a fixture committed with residue in it is found; see `scanCorpus`.
-// It names a file by `<version>/#<index>` (or `#<index>`), never by its name, and refuses a file name by the test `main` applies
-// to a scenario name: the NAME shape AND no residue in it.
+// It names a file by `<version>/#<index>` (or `#<index>`), never by its name -- the index counts the directory's `*.json` files in
+// CODE-UNIT order, as `LC_ALL=C ls` lists them (a UTF-8 locale's `ls` may differ) -- and refuses a file name by the test `main`
+// applies to a scenario name: the NAME shape AND no residue in it.
 // Usage: node sanitize.mjs <raw-root> <fixtures-dir>
 //        node sanitize.mjs --scan <fixtures-dir>
 import fs from 'node:fs';
@@ -330,8 +331,9 @@ function main() {
 // have refused it. It writes nothing. A fixture file that is not JSON, a directory that is not a version and a file whose
 // name is not a name (`main`'s own test for a scenario name: the NAME shape AND no residue in it) are findings, and so is a
 // directory with no JSON file in it at all: a mistyped path must not pass as a clean corpus. EVERY finding names a file by
-// `<version>/#<index>` (or `#<index>` for the top directory), never by its name: the index is its place in the sorted `*.json`
-// list of its directory, and a version directory is named only after VERSION's digits-and-dots shape has passed.
+// `<version>/#<index>` (or `#<index>` for the top directory), never by its name: the index is its place in the `*.json` list of
+// its directory sorted by code unit (`LC_ALL=C ls`; a UTF-8 locale's `ls` may order it differently), and a version directory
+// is named only after VERSION's digits-and-dots shape has passed.
 function scanCorpus(dir) {
   const findings = [];
   const tally = { files: 0, strings: 0, keys: 0 };
