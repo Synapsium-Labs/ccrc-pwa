@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e58798f239b5909a56efb43af706cfbc82ca78d691109003bdc9891f72dd6b4c
+# ccrc:generated 1 sha256=2ff1fdbc783f358c4401788baefc0461d97cdd308ebafb29d630a69861af8152
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31429,8 +31429,243 @@ def verb_show(ctx, a):
     return encode_show(data, base)
 
 # ===== docs: fetch =====
-def verb_fetch(ctx, a):
-    raise NotImplementedError('docs-fetch')
+# docs-fetch (spec 2026-10-01 section 2 (g) steps 1-9): ONE branch from origin
+# into refs/remotes/origin/<b>, and nothing else. In order: discovery (a
+# partial clone is refused there), the origin check, the branch, the floor
+# (read from the stamp, before any network call), `before`, the fetch, the
+# classifier, `after`, the stamp. There is NO ccd lock: git's own ref lock
+# arbitrates two fetches of one ref (the loser answers ref-locked), and the
+# server single-flights its own callers.
+import errno
+import json
+import os
+import re
+
+# Step 6's line. docs_git(fetch=True) writes FETCH_PREFIX first (`git
+# --no-pager -c core.hooksPath=/dev/null -c core.fsmonitor=false`), then these
+# -c pairs, then `-C <M>`, then the subcommand, so the argv git receives is the
+# spec's line byte for byte; ccd-docs-fetch.test.ts compares the recorded argv
+# with that line. --no-optional-locks belongs to the READ runner and is not on
+# it. The two fsck pairs make git REFUSE a malformed object rather than write
+# it into a store live sessions share (R16 is the price: a remote holding such
+# an object is refused on every fetch of that branch).
+FETCH_ARGV_HEAD=('-c','gc.auto=0','-c','maintenance.auto=false','-c','fetch.writeCommitGraph=false','-c','submodule.recurse=false','-c','fetch.recurseSubmodules=false','-c','fetch.fsckObjects=true','-c','transfer.fsckObjects=true')
+# --no-write-fetch-head leaves a worker's FETCH_HEAD alone; --no-tags and the
+# one explicit refspec move exactly one ref; the leading `+` matches git's
+# default refspec, so a force-pushed ws/* branch does not stay stale. The
+# refspec itself is appended per call: +refs/heads/<b>:refs/remotes/origin/<b>.
+# The branch reached the helper through the bare-ref grammar, which admits no
+# `:`, `+`, `*`, `^` or `~`, so it cannot widen the refspec.
+FETCH_SUBCOMMAND = ('fetch', '--quiet', '--no-tags', '--no-prune', '--no-recurse-submodules',
+                    '--no-write-fetch-head', '--no-auto-gc', '--no-auto-maintenance',
+                    '--no-show-forced-updates', '--end-of-options', 'origin')
+FETCH_TRACKED_PREFIX = 'refs/remotes/origin/'
+
+# Step 7's evidence: git's own English, which the fetch env pins with LC_ALL=C.
+# Each one was measured on git 2.43.0; whether a translated locale changes them
+# is UNMEASURED (R6), and a git that rewords one degrades that word toward
+# fetch-transport or fetch-failed, never to another specific word.
+FETCH_ABSENT_MARK = "couldn't find remote ref"
+# git's fsck refusal is two facts at once: the pack step failed (index-pack, or
+# unpack-objects) AND an fsck error is named, either index-pack's own "fsck
+# error in packed object" or the reporter's `error: object <oid>: <msgId>: <text>`
+# line. Measured: both fetch-pack's "invalid index-pack output" and a plain
+# "index-pack failed" carry both.
+FETCH_FSCK_PACK_RE = r'index-pack|unpack-objects'
+FETCH_FSCK_ERROR_RE = r'fsck error in pack|^error: object [0-9a-f]{40}(?:[0-9a-f]{24})?: [A-Za-z]+: '
+FETCH_AUTH_MARKS = ('Authentication failed', 'could not read Username', 'Permission denied (publickey)')
+FETCH_LOCK_MARK = 'cannot lock ref'
+
+# A failure's `detail` (the envelope's bound, section 2 (b)): redacted BEFORE it
+# is cut, so a cut never slides a secret out from under a pattern's length floor.
+FETCH_DETAIL_BYTES = 2048
+
+# The stamp's own directories under $REG: docs, fetch and <repo key>. $REG is
+# ccd's (`mkdir -p "$REG"` runs on every ccd start) and is opened as ccd opens
+# it; each of these three is created at 0700 and opened with O_NOFOLLOW, so a
+# symlink in any of them refuses the write rather than following it.
+FETCH_STAMP_DIRS = 3
+FETCH_STAMP_DIR_MODE = 0o700
+FETCH_STAMP_FILE_MODE = 0o600
+
+
+def classify_fetch(rc, stderr, timed_out):
+    """Step 7's table, in its order: None for a fetch that exited 0, else the
+    one word. Pure. rc is None only when nothing ran (a spent deadline, which
+    arrives as timed_out); stderr is already decoded."""
+    if timed_out:
+        return 'fetch-timeout'
+    if rc == 0:
+        return None
+    if rc == 128 and FETCH_ABSENT_MARK in stderr:
+        return 'remote-branch-absent'
+    if re.search(FETCH_FSCK_PACK_RE, stderr) and re.search(FETCH_FSCK_ERROR_RE, stderr, re.M):
+        return 'fetch-rejected-objects'
+    if any(m in stderr for m in FETCH_AUTH_MARKS):
+        return 'fetch-auth-failed'
+    if rc == 1 and FETCH_LOCK_MARK in stderr:
+        return 'ref-locked'
+    if rc == 128:
+        return 'fetch-transport'
+    return 'fetch-failed'
+
+
+def lock_age_ms(repo, branch):
+    """Fleet now minus the mtime of <common-dir>/refs/remotes/origin/<b>.lock,
+    in ms and never negative, or None when that lock has already gone. Any
+    other lstat failure is RAISED: "gone" and "could not look" are two answers
+    with two remedies, and verb_fetch answers the second by leaving lockAgeMs
+    out rather than folding it into null."""
+    p = os.path.join(repo.common_dir, 'refs', 'remotes', 'origin', *branch.split('/')) + '.lock'
+    try:
+        st = SYS.lstat(p)
+    except OSError as e:
+        if e.errno in (errno.ENOENT, errno.ENOTDIR):
+            return None
+        raise
+    return max(0, SYS.now_ms() - st.st_mtime_ns // 1000000)
+
+
+def fetch_detail(err):
+    """A fetch's stderr for `detail`: decoded, redacted, stripped, and only
+    then cut to FETCH_DETAIL_BYTES on a code point boundary."""
+    s = redact(err.decode('utf-8', 'replace')).strip()
+    return s.encode('utf-8')[:FETCH_DETAIL_BYTES].decode('utf-8', 'ignore')
+
+
+def tracked_oid(repo, ref, dl):
+    """The object `ref` names, or None when it is absent: one for-each-ref,
+    read by the EXACT refname (MM3), as steps 5 and 8 say. docs_git itself
+    answers a spent bound (git-timeout) and an overflow."""
+    r = docs_git(repo.path, ['for-each-ref', '--format=' + FER_FORMAT, '--end-of-options', ref],
+                 call_s=CALL_S['ref'], dl=dl, ceiling=ceiling_of(repo.path))
+    if r.rc != 0:
+        raise fail('git-failed', step='for-each-ref', rc=r.rc, stderrHead=stderr_head(r.err))
+    row = parse_for_each_ref(r.out).get(ref)
+    return None if row is None else row[1]
+
+
+def write_stamp(path, obj):
+    """Write the stamp `obj` at `path` (stamp_path's shape: $REG/docs/fetch/
+    <key>/<leaf>.json) and say whether it landed. Every missing one of the
+    stamp's three directories is created at 0700, and each is opened with
+    O_NOFOLLOW, so a symlinked one refuses the write. The bytes go to a fresh
+    file in the same directory (O_CREAT|O_EXCL, a random name, mode 0600:
+    mkstemp's contract, under the directory descriptor already opened) and
+    are renamed over the leaf with os.replace, which replaces a FIFO or a
+    symlink planted there and never opens it. Any failure removes the
+    temporary file and answers False, which the verb reports as
+    stamp:'unwritten'."""
+    leaf = os.path.basename(path)
+    names = []
+    base = os.path.dirname(path)
+    for _ in range(FETCH_STAMP_DIRS):
+        names.insert(0, os.path.basename(base))
+        base = os.path.dirname(base)
+    fds = []
+    tmp = None
+    try:
+        fds.append(os.open(base, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC))
+        for name in names:
+            try:
+                os.mkdir(name, FETCH_STAMP_DIR_MODE, dir_fd=fds[-1])
+            except FileExistsError:
+                pass
+            fds.append(os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                               dir_fd=fds[-1]))
+        data = json.dumps(obj, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        tmp = '.%s.%s.tmp' % (leaf, os.urandom(8).hex())
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     FETCH_STAMP_FILE_MODE, dir_fd=fds[-1])
+        try:
+            os.fchmod(fd, FETCH_STAMP_FILE_MODE)
+            while data:
+                data = data[os.write(fd, data):]
+        finally:
+            os.close(fd)
+        os.replace(tmp, leaf, src_dir_fd=fds[-1], dst_dir_fd=fds[-1])
+        tmp = None
+        return True
+    except (OSError, TypeError, ValueError):
+        if tmp is not None:
+            try:
+                os.unlink(tmp, dir_fd=fds[-1])
+            except OSError:
+                pass
+        return False
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+def verb_fetch(ctx, a, fetch_s=CALL_S['fetch'], total_s=HELPER_DEADLINE_S['docs-fetch']):
+    """DocsFetchOk's body {branch, trackedRef, defaultVia?, before, after,
+    moved, stamp}, or a failure word. fetch_s and total_s are the fetch's own
+    bound and the helper deadline: VERBS calls this with both defaults, and a
+    unit lowers one by passing it (no env knob, no argv flag)."""
+    dl = Deadline(total_s)
+    repo = discover(ctx, a.project, dl)
+    if origin_url(repo, dl) is None:
+        raise fail('remote-absent')
+    branch, via = a.branch, None
+    if branch is None:
+        picked = default_branch_name(repo, dl)
+        if picked is None:
+            raise fail('no-default-branch')
+        branch, via = picked
+    tracked = FETCH_TRACKED_PREFIX + branch
+    path = stamp_path(ctx.reg, repo.key, branch)
+    prior = read_stamp(path)
+    if prior is not None and prior['branch'] != branch:
+        prior = None
+    if prior is not None:
+        # The floor reads attemptMs, which every attempt writes. A stamp from
+        # the future (the fleet clock stepped back) holds no floor: this
+        # attempt rewrites it, where honouring it would refuse every fetch of
+        # this branch for as long as the step.
+        age = SYS.now_ms() - prior['attemptMs']
+        if 0 <= age < DOCS_FETCH_MIN_INTERVAL_MS:
+            raise fail('fetch-too-soon', branch=branch, retryAfterMs=DOCS_FETCH_MIN_INTERVAL_MS - age)
+    before = tracked_oid(repo, tracked, dl)
+    attempt_ms = SYS.now_ms()
+    args = list(FETCH_ARGV_HEAD) + list(FETCH_SUBCOMMAND) + ['+refs/heads/%s:%s' % (branch, tracked)]
+    r = docs_git(repo.path, args, call_s=fetch_s, dl=dl, ceiling=ceiling_of(repo.path),
+                 fetch=True, soft=True)
+    word = classify_fetch(r.rc, r.err.decode('utf-8', 'replace'), r.timed_out)
+    if word is None:
+        after = tracked_oid(repo, tracked, dl)
+        if after is None:
+            raise fail('git-failed', step='for-each-ref',
+                       detail=tracked + ' is absent after a fetch that exited 0')
+        written = write_stamp(path, {'v': 1, 'branch': branch, 'attemptMs': attempt_ms,
+                                     'lastOutcome': 'ok', 'okMs': attempt_ms, 'okCommit': after})
+        body = {'branch': branch, 'trackedRef': tracked}
+        if via is not None:
+            body['defaultVia'] = via
+        body['before'] = before
+        body['after'] = after
+        body['moved'] = 'created' if before is None else ('unchanged' if before == after else 'updated')
+        body['stamp'] = 'written' if written else 'unwritten'
+        return body
+    # A failed attempt is still an attempt: it is stamped, carrying the last
+    # success over, and the failure body itself has no `stamp` field.
+    write_stamp(path, {'v': 1, 'branch': branch, 'attemptMs': attempt_ms, 'lastOutcome': word,
+                       'okMs': None if prior is None else prior.get('okMs'),
+                       'okCommit': None if prior is None else prior.get('okCommit')})
+    fields = {'branch': branch}
+    text = fetch_detail(r.err)
+    if text:
+        fields['detail'] = text
+    if word == 'ref-locked':
+        try:
+            fields['lockAgeMs'] = lock_age_ms(repo, branch)
+        except OSError:
+            pass
+    elif word in ('fetch-transport', 'fetch-failed'):
+        fields['stderrHead'] = stderr_head(r.err)
+        if word == 'fetch-failed':
+            fields['rc'] = r.rc
+    raise fail(word, **fields)
 
 # ===== docs: entry =====
 # The verbs, by the name ccd's front passes first. A unit swaps one entry to
