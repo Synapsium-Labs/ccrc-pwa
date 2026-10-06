@@ -18,7 +18,7 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **fix round 1** since 2026-10-05 20:27 UTC — review 277 at `347b7b64`: 36 findings, 0 critical, 11 important |
+| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **in review (fix round 1)** — wave-done verified 2026-10-06 11:50 UTC at `e47f3689f`; review run 296 waits on the fleet's daily dispatch cap |
 | 2 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | wave 1's matrix and its real-lane cross-check | — | to plan once wave 1's measurement section is complete |
 | 3 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 2 | — | to plan |
 | 4 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 3 | — | to plan |
@@ -92,6 +92,21 @@ its own heading. Until both are here, nothing in waves 2–6 may depend on a hoo
   4062 F10, 4063 F28, the rest spare).
 - **2026-10-05 — routing:** the worker's effort rises from high to xhigh for fix round 1 (`runs route`, kind `shallow`:
   tests missed). The review found guards without a red row; the routing matrix raises effort one rung for that.
+- **2026-10-06 — fix round 1's wave-done verified (mail 3681).** The branch, the remote and #284 are all at
+  `e47f3689f` (13 commits), and the server accepted the fingerprint. The worker sent `suite: red` (carried from round
+  0), `failure: shallow`.
+  - F4 is a measured fix (number 4058): the old `/exit` had stopped at Claude Code's unanswered "Background work is
+    running" dialog. Re-scripted, every version shows `SessionEnd` `prompt_input_exit`, no `Stop`, and one locked
+    tree left.
+  - Asked (mail 3642), the worker measured `clear-compact-resume` and `swap-resume`: they launch no background
+    work, so they were never blocked.
+  - Numbers 4058 through 4065 are defined; 4066 and 4067 are unused.
+  - CI reds `server 4/5` on a compaction-card row of `session-hook.test.ts`. The worker reads it as strace
+    interleaving, outside this branch's diff, and review 296 is asked to reproduce that.
+  - The fleet box's `/tmp` reaper took the raw roots before merge; the committed corpus re-scans clean. A
+    protect-list entry is the operator's call.
+  - Review run 296's dispatch was refused `cap-daily` (24 of 24, fleet-wide). It retries at each measured age-out,
+    the first at 12:41 UTC.
 - **2026-10-05 — the parent incarnation field is already in the tree** (spec §5.1, §8.1 item 10): `$REG/<id>.generation`
   (D-2605) is never rewritten once present. The hook also sees it as `CCRC_SESSION_GENERATION`, but ccd does not set
   that on every spawn path, so later waves read the file. Wave 1 records this from source. **Corrected after review
