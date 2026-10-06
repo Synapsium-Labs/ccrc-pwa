@@ -1085,6 +1085,20 @@ describe('boundaryOf: compact_boundary metadata, every absent field NULL and nam
     expect(b!.allUuids).toBe(null);
     expect([...b!.missing].sort()).toEqual(['allUuids', 'anchorUuid', 'durationMs', 'headUuid', 'tailUuid']);
   });
+  it('a kept list with any non-string element is NULL and named in missing, exactly as an absent one (Review Focus 1)', () => {
+    for (const allUuids of [[1, 2], ['u1', 2]]) {
+      const b = libRows.boundaryOf(rowFx.boundaryRow({ ...base, allUuids: allUuids as unknown as string[] }));
+      expect(b!.allUuids).toBe(null);
+      expect(b!.missing).toEqual(['allUuids']);
+    }
+    // An all-string list and an empty list ("kept nothing", which B2's span rule reads) are unchanged.
+    const ok = libRows.boundaryOf(rowFx.boundaryRow({ ...base, allUuids: ['u1', 'u2'] }));
+    expect(ok!.allUuids).toEqual(['u1', 'u2']);
+    expect(ok!.missing).toEqual([]);
+    const empty = libRows.boundaryOf(rowFx.boundaryRow({ ...base, allUuids: [] }));
+    expect(empty!.allUuids).toEqual([]);
+    expect(empty!.missing).toEqual([]);
+  });
   it('a row with no compactMetadata at all is still a boundary with every field missing, and never throws', () => {
     const b = libRows.boundaryOf({ uuid: 'b-2', type: 'system', subtype: 'compact_boundary' });
     expect(b!.missing.length).toBe(8);

@@ -1046,7 +1046,7 @@ export function boundaryOf(row) {
   const isText = (v) => typeof v === 'string' && v !== '';
   const isCount = (v) => Number.isSafeInteger(v) && v >= 0;
   const all = kept?.allUuids;
-  const allUuids = Array.isArray(all) ? all.filter(isText) : null;
+  const allUuids = Array.isArray(all) && all.every(isText) ? all : null;
   if (allUuids === null) missing.push('allUuids');
   return {
     trigger: take('trigger', meta?.trigger, isText),
