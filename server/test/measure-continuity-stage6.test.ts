@@ -111,6 +111,22 @@ describe('stage 6 counts what its row says (TZ=UTC, a hand-built journal)', () =
     expect(r.unmeasured).toBe(1);
   });
 
+  it('a spawn two scopes started before is claimed by neither: ccd writes no spawn event for a same-rc respawn inside 300 s', () => {
+    fs.mkdirSync(path.join(h.home, '.cc-sessions'), { recursive: true });
+    // scope 1 started with NO spawn event of its own (a same-rc respawn within five minutes writes none);
+    // scope 2 started a second later, and session y's spawn landed in BOTH scopes' windows. Scope 1's stop
+    // must not be charged to y, whose transcript would read as the reap's class.
+    started(1, T - 3000); started(2, T - 2999); spawned('y', T - 2995); oom(1, T);
+    session('y', [rows.bg(T - 2900, 'by'), rows.turn(T - 2800)]);
+    flush();
+    const r = run();
+    expect(r.pane_scope_oom_stops).toBe(1);
+    expect(r.reap_class).toBe(0);
+    expect(r.reap_class_by_session).toEqual({});
+    expect(r.unmapped).toBe(1);
+    expect(r.unmapped_by_reason).toEqual({ 'two scopes started before one spawn': 1 });
+  });
+
   it('a journal it cannot read is said, never counted as zero', () => {
     expect(run()).toEqual({ journal: 'unreadable' });
   });

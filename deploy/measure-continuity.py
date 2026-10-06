@@ -495,7 +495,11 @@ def stage4(ctx):
 #                     with ID: X") after the spawn and at or before the stop,
 #                     with no `<task-notification>` for X at or before it.
 # Named costs: a scope whose start fell out of the journal's retention, or whose
-# spawn shared its window with another session's, is `unmapped`; a session whose
+# spawn shared its window with another session's, is `unmapped`; ccd writes no
+# spawn event for a respawn within five minutes with an unchanged rc, so that
+# scope is `unmapped`, or — when another session's spawn falls in its window —
+# caught by the reverse check (a spawn that two scope starts precede is claimed
+# by neither: both stops are `unmapped`, never guessed); a session whose
 # transcript changed uuid since the stop (a /clear) reads the newer file, which
 # holds no row before the stop, so it reads as idle with no shell; a background
 # shell ended by Claude Code without a notification row reads as live.
@@ -684,6 +688,11 @@ def s6_reap(ctx):
             unmapped["no spawn" if not near else "two sessions spawned together"] += 1
             continue
         spawned, sid = near[-1]
+        # The same window seen from the spawn's side: ccd writes no spawn event for a
+        # same-rc respawn within 300 s, so a scope can hold another session's spawn.
+        if sum(1 for b in born.values() if spawned - S6_SPAWN_SLOP <= b <= spawned) != 1:
+            unmapped["two scopes started before one spawn"] += 1
+            continue
         paths = s6_transcript(ctx, sid)
         if not paths:
             counts["unmeasured"] += 1

@@ -4533,6 +4533,7 @@ list them all; the coordinator issues the three past the block):
   a scope to the one session whose ccd `spawn` event landed within ten seconds AFTER the scope's start (else
   `unmapped`), and reads idle and the live shell from that session's current transcript (a `/clear` since the stop
   reads as idle with no shell: named). Rows 2.1–2.9.
+- **D-4091** `stage-six-spawn-claimed-by-one-scope` — The plan mapped a scope to the one session whose spawn event landed in the ten seconds after its start, and checked that window from the scope's side only. ccd does not log every spawn (`_spawn_settle` writes `_lc_done spawn` only when the rc changed or the previous spawn is more than 300 s old), so a same-rc respawn within five minutes has no event, and its scope's window can hold another session's spawn: the stop was charged to the wrong session. The fix adds the reverse check — the chosen spawn must have exactly one scope start in the ten seconds before it, else the stop is `unmapped` (`two scopes started before one spawn`); its named cost is that both scopes' stops go unmapped, never guessed. Found by Task 2's review.
 - **D-4088** `inert-survivors-counted-while-shadowed` — §9's stage-6 row has "dead ccd scopes that pass the inert test yet survive
   a day", target 0. With the stop shadowed (ruling C) every inert scope survives by design, so the count is REPORTED —
   read by `--stage 6` off the verdict record at the reading (the record keeps no history), `would-stop`/`held`/
