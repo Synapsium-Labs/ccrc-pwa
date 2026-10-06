@@ -283,7 +283,10 @@ spool answers Q9 exactly: a tree whose parent wrote no spool line had a non-ccd 
 
 **Q10, from source** (`incarnation-is-the-row-generation`, D-3996). Cited by content against `origin/main`
 `77c11245a` (`git show 77c11245a:ccd/ccd`), the newest `main` when this was written, because `main`'s lines are the
-ones a merged tree carries; the hook's lines are the same there as on this branch.
+ones a merged tree carries; the hook's lines are the same there as on this branch. Re-read at `origin/main`
+`f7e51156f` (2026-10-06, after #300 edited `ccd/ccd`): every line cited below has the same content; those past `:8626`,
+where #300 added five `caps` lines, sit five lines lower there (`:10452`, `:21870`, `:22097`, `:20780`-`:20866`,
+`:22073`).
 `$REG/<id>.generation` (D-2605) serves as a parent's registry incarnation.
 - It is read through an owned alias in `_reg_generation_read` (`ccd/ccd:3752`), which answers valid,
   present-but-invalid, or genuinely absent.
