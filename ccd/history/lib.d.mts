@@ -241,3 +241,19 @@ export function variantCauseOf(a: unknown, b: unknown): 'ccd-sanitize' | 'unknow
 export function backendOf(model: string | null | undefined): Backend;
 export function producerOf(modelsAfterSummary: readonly (string | null)[]): Backend;
 export function producerOfCopy(rows: readonly { type: string; model: string | null }[], summaryIndex: number): Backend;
+
+// --- Task 9: redaction (spec §8.3)
+export interface SecretSource { readonly glob?: string; readonly path?: string; readonly identifierKeysOnly?: true; readonly sessionHashes?: true }
+export const SECRET_SOURCES: readonly SecretSource[];
+export function kindOfPath(p: string): 'token' | 'json' | 'env';
+export const IDENTIFIER_RE: RegExp;
+export const SECRET_SHAPE_RES: readonly RegExp[];
+export const REDACTED_MARK: '[redacted]';
+export function extractSecretValues(text: string, kind: 'env' | 'env-identifier' | 'token' | 'json'): string[];
+export interface SecretPair { len: number; sha256: string }
+export function secretPairs(values: readonly string[]): { pairs: SecretPair[]; unsegmentable: number };
+export function sessionHashPairs(jsonText: string): SecretPair[];
+export interface PairIndex { readonly byLen: ReadonlyMap<number, ReadonlySet<string>> }
+export function makePairIndex(pairs: Iterable<SecretPair>): PairIndex;
+export function redactField(text: string, idx: PairIndex): string;
+export function redactFinal(text: string, idx: PairIndex): string;

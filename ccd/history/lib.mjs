@@ -1211,3 +1211,251 @@ export function producerOfCopy(rows, summaryIndex) {
   for (let i = summaryIndex + 1; i < rows.length; i += 1) if (rows[i].type === 'assistant') after.push(rows[i].model);
   return producerOf(after);
 }
+
+// ===========================================================================
+// Redaction (spec §8.3 Redaction, §6.2 "the body is redacted before
+// indexing"). Three layers — values, context, shapes — in one function the
+// FTS index (B1), the regex worker and every CLI field (B2) all call. Only
+// (length, sha256) pairs are ever kept: a value is hashed and dropped, never
+// stored, journaled or logged. D-4203
+// ===========================================================================
+
+/** ccrc's own secret-bearing files, HOME-relative: the frozen half of the
+ *  value layer's sources. The other half, every account's declared
+ *  `exec.secretsFile`, arrives at runtime from the roster (the shim's
+ *  `--secrets`), so no account list is in source. `exec.authDir` is never
+ *  named: nothing in ccrc opens it.
+ *  D-4205 D-4201 */
+export const SECRET_SOURCES = Object.freeze([
+  Object.freeze({ glob: '.cc-secrets/*' }),
+  Object.freeze({ glob: '.ccrc/*.token' }),
+  Object.freeze({ path: '.ccrc/exposure.env' }),
+  Object.freeze({ glob: '.ccrc/codex/*/runtime.env' }),
+  Object.freeze({ path: '.ccrc/ccrc.env', identifierKeysOnly: true }),
+  Object.freeze({ path: '.ccrc/agent.env', identifierKeysOnly: true }),
+  Object.freeze({ path: '.ccrc/sessions.json', sessionHashes: true }),
+]);
+
+/** A secret file's kind by its name: `*.token` its trimmed content, `*.json`
+ *  its string leaves, anything else (`*.env`, a declared `secretsFile`, which
+ *  its wrapper sources as bash) an env file. */
+export function kindOfPath(p) {
+  if (p.endsWith('.token')) return 'token';
+  if (p.endsWith('.json')) return 'json';
+  return 'env';
+}
+
+/** The identifier-name pattern of the context layer and of the env files read
+ *  for identifier keys only (upstream `PROMPT_RECALL_SENSITIVE_IDENTIFIER_PATTERN`, :23).
+ *  derived from lossless-claw src/prompt-recall.ts @ e05d8d3, MIT, see LICENSE.lossless-claw */
+export const IDENTIFIER_RE = /(?:^|[^A-Za-z0-9])(?:ACCESS_?KEY|API_?KEY|AUTH|CREDENTIALS?|DEPLOY_?KEY|KEY|PASS(?:WORD)?|PRIVATE_?KEY|SECRET|TOKEN)(?=$|[^A-Za-z0-9])/i;
+
+/** The one name the env-identifier filter loads beyond `IDENTIFIER_RE`: the
+ *  whole word `PRIVATE`. A `both` box's `ccrc.env` carries
+ *  `CCRC_VAPID_PRIVATE`, the web-push private key (`ccd/ccrc:1343-1346`),
+ *  which upstream's `PRIVATE_?KEY` never matches. Not upstream, and not used
+ *  by the context layer. D-4204 */
+const ENV_SECRET_NAME_RE = /(?:^|[^A-Za-z0-9])PRIVATE(?=$|[^A-Za-z0-9])/i;
+
+/** The shape layer (upstream `PROMPT_RECALL_SENSITIVE_VALUE_PATTERN`, :26-27).
+ *  derived from lossless-claw src/prompt-recall.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+ *  Upstream's one detection pattern split into its arms and made global for replacement, both the `-` and `_`
+ *  arms of sk|rk|pk kept; the PEM arm widened from the header line to the
+ *  whole block (a header alone would leave the key printed); plus the JWT
+ *  shape `eyJ….….…`. */
+export const SECRET_SHAPE_RES = Object.freeze([
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+  /\bAKIA[0-9A-Z]{16}\b/gi,
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{10,}\b/gi,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/gi,
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/gi,
+  /\b(?:sk|rk|pk)-[A-Za-z0-9_-]{10,}\b/gi,
+  /\b(?:sk|rk|pk)_[A-Za-z0-9_]{10,}\b/gi,
+  /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g,
+]);
+
+/** What replaces a secret. It holds no `"`, `\`, `<`, `>` or `&`, so a
+ *  `--json` string stays valid and the recall envelope's escaping is not
+ *  disturbed (§8.3). */
+export const REDACTED_MARK = '[redacted]';
+
+const ENV_LINE_RE = /^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
+
+/** One env line's value, as bash would read a simple assignment: one pair of
+ *  matching quotes stripped, else the word up to the first whitespace (which
+ *  drops a trailing `# comment`). */
+function envValue(raw) {
+  const v = raw.trim();
+  const q = v[0];
+  if ((q === '"' || q === "'") && v.length >= 2 && v.endsWith(q)) return v.slice(1, -1);
+  return v.split(/\s/)[0];
+}
+
+/** The values a secret file holds, by kind (§8.3 "What a value is"): an env
+ *  file yields each `[export ]NAME=value` line's VALUE, never its name, so a
+ *  23-char key name is never redacted; `env-identifier` yields only values
+ *  whose NAME matches `IDENTIFIER_RE` or `ENV_SECRET_NAME_RE` (`ccrc.env`,
+ *  `agent.env`); a token file its trimmed whole content; a JSON file its
+ *  string leaves. D-4206
+ *  D-4204 */
+export function extractSecretValues(text, kind) {
+  if (kind === 'token') {
+    const t = text.trim();
+    return t === '' ? [] : [t];
+  }
+  if (kind === 'json') {
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return [];
+    }
+    const out = [];
+    const stack = [parsed];
+    while (stack.length > 0) {
+      const v = stack.pop();
+      if (typeof v === 'string') { if (v !== '') out.push(v); }
+      else if (Array.isArray(v)) stack.push(...v);
+      else if (v !== null && typeof v === 'object') stack.push(...Object.values(v));
+    }
+    return out;
+  }
+  const out = [];
+  for (const line of text.split('\n')) {
+    // A blank line or a `#` comment never matches ENV_LINE_RE, which is
+    // anchored on a NAME at the line's start.
+    const t = line.replace(/\r$/, '').trimStart();
+    const m = ENV_LINE_RE.exec(t);
+    if (m === null) continue;
+    if (kind === 'env-identifier' && !IDENTIFIER_RE.test(m[1]) && !ENV_SECRET_NAME_RE.test(m[1])) continue;
+    const v = envValue(m[2]);
+    if (v !== '') out.push(v);
+  }
+  return out;
+}
+
+/** Values to (length, sha256) pairs (§8.3). Only values of `SECRET_MIN_LEN`
+ *  chars or more load. A value that is one `[A-Za-z0-9_-]+` run is one pair;
+ *  any other value can never be one run, so each of its runs of
+ *  `SECRET_SEGMENT_MIN` chars or more is a pair of its own (72 bits and up,
+ *  so a digest is no offline oracle), and a value with none counts
+ *  `unsegmentable`. D-4206 */
+export function secretPairs(values) {
+  const seen = new Map();
+  let unsegmentable = 0;
+  const add = (s) => {
+    const key = `${s.length}:${sha256Hex(s)}`;
+    if (!seen.has(key)) seen.set(key, { len: s.length, sha256: sha256Hex(s) });
+  };
+  for (const v of values) {
+    if (v.length < SECRET_MIN_LEN) continue;
+    if (/^[A-Za-z0-9_-]+$/.test(v)) { add(v); continue; }
+    const segments = (v.match(/[A-Za-z0-9_-]+/g) ?? []).filter((s) => s.length >= SECRET_SEGMENT_MIN);
+    if (segments.length === 0) { unsegmentable += 1; continue; }
+    for (const s of segments) add(s);
+  }
+  return { pairs: [...seen.values()], unsegmentable };
+}
+
+/** `~/.ccrc/sessions.json`'s records as pairs: each `idHash` is already
+ *  `sha256(token)` of a 43-char base64url session token, so it loads as a
+ *  (43, idHash) pair as is, never hashed again (§8.3, rev 3.2 review, SE3).
+ *  D-4201 */
+export function sessionHashPairs(jsonText) {
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const out = [];
+  for (const r of parsed) {
+    if (r !== null && typeof r === 'object' && typeof r.idHash === 'string' && /^[0-9a-f]{64}$/.test(r.idHash)) {
+      out.push({ len: 43, sha256: r.idHash });
+    }
+  }
+  return out;
+}
+
+/** The pairs, indexed by length, so the value layer hashes only runs whose
+ *  length some pair has. */
+export function makePairIndex(pairs) {
+  const byLen = new Map();
+  for (const p of pairs) {
+    if (!byLen.has(p.len)) byLen.set(p.len, new Set());
+    byLen.get(p.len).add(p.sha256);
+  }
+  return { byLen };
+}
+
+/** An ANSI CSI sequence (`ESC[…m` and kin). Written as the escape text, never
+ *  the raw byte (source-bytes.test.ts). */
+const ANSI_CSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+
+/** One run through all three layers, failing closed. V8 runs these patterns
+ *  by backtracking on a bounded stack, so over a run of several MiB `replace`
+ *  throws `RangeError: Maximum call stack size exceeded`: measured on Node
+ *  22.13.0 and 24.14.1, the `sk-` shape arm on a 6 MiB run and the JSON-form
+ *  context rule on an 8 MiB value, while a stored line can be LINE_MAX (16 MiB).
+ *  Escaping, it would fail the caller's chunk on every tick. A run the engine
+ *  cannot finish is replaced whole by the mark (§8.3 is fail-closed), never
+ *  printed or indexed unredacted. The catch spans every layer, not the shape
+ *  loop alone, because the JSON-form throw is layer 2's. Only a RangeError is
+ *  caught: any other throw is a defect and propagates. */
+function redactRun(segment, idx) {
+  try {
+    return redactLayers(segment, idx);
+  } catch (e) {
+    if (e instanceof RangeError) return REDACTED_MARK;
+    throw e;
+  }
+}
+
+function redactLayers(segment, idx) {
+  // Layer 1: values, by (length, sha256) of each [A-Za-z0-9_-]+ run.
+  let s = segment.replace(/[A-Za-z0-9_-]+/g, (run) => {
+    const shas = idx.byLen.get(run.length);
+    return shas !== undefined && shas.has(sha256Hex(run)) ? REDACTED_MARK : run;
+  });
+  // Layer 2: context. The value after NAME=, NAME: or "name": " when NAME is
+  // an identifier name; after a bearer header and the box-token header; and
+  // a token query parameter. NAME is bounded at 256 chars: unbounded, every
+  // word boundary inside a long run of [A-Za-z0-9_.-] rescans to the run's
+  // end, which is quadratic (a 2 MiB base64url blob measured 90.8 s, bounded
+  // 139 ms), and one large tool_result would outlive the carrier's kill.
+  s = s.replace(/"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"((?:[^"\\]|\\.)+)"/g,
+    (all, name, sep, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `"${name}"${sep}"${REDACTED_MARK}"` : all));
+  s = s.replace(/\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)(["']?)([^\s"'`,;&]+)/g,
+    (all, name, sep, quote, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `${name}${sep}${quote}${REDACTED_MARK}` : all));
+  s = s.replace(/(Authorization:[ \t]*Bearer[ \t]+)([^\s"']+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
+  s = s.replace(/(x-ccrc-mail-token:[ \t]*)([^\s"']+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
+  s = s.replace(/([?&]token=)([^&\s"'#]+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
+  // Layer 3: shapes.
+  for (const re of SECRET_SHAPE_RES) s = s.replace(re, REDACTED_MARK);
+  return s;
+}
+
+/** Redact one field's FULL raw text, before any cut, cap, escape or
+ *  serialisation (§8.3: JSON escaping glues `\n` onto the next run, and a cut
+ *  leaves a prefix no pair matches). Runs are split at ANSI CSI sequences
+ *  first, so a coloured token is still one run; the sequences themselves are
+ *  kept. D-4202 */
+export function redactField(text, idx) {
+  let out = '';
+  let last = 0;
+  ANSI_CSI_RE.lastIndex = 0;
+  for (let m = ANSI_CSI_RE.exec(text); m !== null; m = ANSI_CSI_RE.exec(text)) {
+    out += redactRun(text.slice(last, m.index), idx) + m[0];
+    last = m.index + m[0].length;
+  }
+  return out + redactRun(text.slice(last), idx);
+}
+
+/** The second belt (§8.3): the final rendered stdout, stderr or `--json`
+ *  string gets the same three layers once more. It cannot replace the field
+ *  pass (an escape letter glued to a run defeats it); it catches what a
+ *  field pass was never given. */
+export function redactFinal(text, idx) {
+  return redactField(text, idx);
+}

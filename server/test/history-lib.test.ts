@@ -30,6 +30,8 @@ import * as libPlan from '../../ccd/history/lib.mjs';
 import * as libEpoch from '../../ccd/history/lib.mjs';
 import * as libRows from '../../ccd/history/lib.mjs';
 import * as rowFx from './historyFixtures.js';
+import * as libRedact from '../../ccd/history/lib.mjs';
+import * as historyCrypto from 'node:crypto';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -1202,5 +1204,165 @@ describe('variantCauseOf, backendOf and the producer rule (spec 6.1, 6.2, DM2b p
   it('DM38b: no real assistant row after the summary is unknown', () => {
     expect(libRows.producerOfCopy([{ type: 'assistant', model: 'claude-fixture-4' }, { type: 'user', model: null }], 1)).toBe('unknown');
     expect(libRows.producerOf([])).toBe('unknown');
+  });
+});
+
+// ===========================================================================
+// Task 9: redaction's pure layers. Every secret below is minted at runtime
+// from node:crypto, and every shape fixture is assembled from parts, so the
+// public repo never holds a key-shaped literal (and a push-protection scanner
+// never sees one). The output pins (C32, C49, C59, C60) are B2's.
+// ===========================================================================
+describe('redaction: values, context and shapes (spec 8.3)', () => {
+  const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const rndHex = (bytes: number): string => historyCrypto.randomBytes(bytes).toString('hex');
+  const rndAlnum = (n: number): string => [...historyCrypto.randomBytes(n)].map((b) => ALNUM[b % ALNUM.length]).join('');
+  const idxOf = (values: string[]): libRedact.PairIndex => libRedact.makePairIndex(libRedact.secretPairs(values).pairs);
+  const M = libRedact.REDACTED_MARK;
+
+  it('a 64-hex value is redacted after a newline and inside a JSON-shaped field', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    expect(libRedact.redactField(`line one\n${tok}`, idx)).toBe(`line one\n${M}`);
+    expect(libRedact.redactField(JSON.stringify({ note: `x ${tok} y` }), idx)).not.toContain(tok);
+  });
+  it('a value outside [A-Za-z0-9_-] loses every one of its 12+-char segments wherever it is printed', () => {
+    const segs = [rndAlnum(16), rndAlnum(14), rndAlnum(12)];
+    const value = `${segs[0]}/${segs[1]}+${segs[2]}=ab`;
+    const { pairs, unsegmentable } = libRedact.secretPairs([value]);
+    expect(pairs.map((p) => p.len).sort((a, b) => a - b)).toEqual([12, 14, 16]);
+    expect(unsegmentable).toBe(0);
+    const out = libRedact.redactField(`export X=${value} and again: ${segs[1]}`, libRedact.makePairIndex(pairs));
+    for (const s of segs) expect(out).not.toContain(s);
+  });
+  it('a value with no 12-char segment counts unsegmentable; a value under 20 chars is not loaded', () => {
+    expect(libRedact.secretPairs(['aaaa/bbbb/cccc/dddd/eeee'])).toEqual({ pairs: [], unsegmentable: 1 });
+    expect(libRedact.secretPairs(['short-secret-123'])).toEqual({ pairs: [], unsegmentable: 0 });
+  });
+  it('the pair loader keeps only len and sha256, never the value', () => {
+    const tok = rndHex(32);
+    const { pairs } = libRedact.secretPairs([tok, tok]);
+    expect(pairs).toHaveLength(1);
+    expect(Object.keys(pairs[0]!).sort()).toEqual(['len', 'sha256']);
+    expect(JSON.stringify(pairs)).not.toContain(tok);
+    expect(pairs[0]!.len).toBe(64);
+  });
+  it('an env file yields values only, so a 23-char key name stays printed', () => {
+    const tok = rndHex(24);
+    const tok2 = rndAlnum(30);
+    const env = `# OLD_TOKEN=${rndAlnum(40)}\nexport CLAUDE_CODE_OAUTH_TOKEN="${tok}"\r\nPLAIN=${tok2} # trailing note\nEMPTY=\n  INDENTED='${tok}'\n`;
+    expect(libRedact.extractSecretValues(env, 'env')).toEqual([tok, tok2, tok]);
+    const idx = idxOf(libRedact.extractSecretValues(env, 'env'));
+    expect(libRedact.redactField(`CLAUDE_CODE_OAUTH_TOKEN=${tok}`, idx)).toBe(`CLAUDE_CODE_OAUTH_TOKEN=${M}`);
+    expect(libRedact.redactField('CLAUDE_CODE_OAUTH_TOKEN is the variable', idx)).toBe('CLAUDE_CODE_OAUTH_TOKEN is the variable');
+  });
+  it('an identifier-keys-only env file yields only the values of identifier-named keys', () => {
+    const tok = rndHex(32);
+    const env = `CCRC_ROLE=fleet\nCCRC_AGENT_TOKEN=${tok}\nCCRC_SERVER_URL=ws://box.invalid:7789\n`;
+    expect(libRedact.extractSecretValues(env, 'env-identifier')).toEqual([tok]);
+    expect(libRedact.extractSecretValues(env, 'env')).toEqual(['fleet', tok, 'ws://box.invalid:7789']);
+  });
+  it("an identifier-keys-only env file also yields a *_PRIVATE key's value: the web-push key a both box keeps in ccrc.env", () => {
+    const tok = rndHex(32);
+    const vapid = historyCrypto.randomBytes(32).toString('base64url');
+    const env = `CCRC_ROLE=both\nCCRC_AGENT_TOKEN=${tok}\nCCRC_VAPID_PUBLIC=${rndAlnum(87)}\nCCRC_VAPID_PRIVATE=${vapid}\nCCRC_VAPID_SUBJECT=mailto:ops@box.invalid\n`;
+    expect(libRedact.extractSecretValues(env, 'env-identifier')).toEqual([tok, vapid]);
+    const idx = idxOf(libRedact.extractSecretValues(env, 'env-identifier'));
+    expect(libRedact.redactField(`CCRC_VAPID_PRIVATE=${vapid}`, idx)).toBe(`CCRC_VAPID_PRIVATE=${M}`);
+  });
+  it('a token file yields its trimmed content; a json file its string leaves; garbage yields nothing', () => {
+    const tok = rndHex(32);
+    expect(libRedact.extractSecretValues(`  ${tok}\n`, 'token')).toEqual([tok]);
+    expect(libRedact.extractSecretValues('\n', 'token')).toEqual([]);
+    expect(libRedact.extractSecretValues('{"a":"x","b":["y",{"c":"z"}],"n":3}', 'json').sort()).toEqual(['x', 'y', 'z']);
+    expect(libRedact.extractSecretValues('{not json', 'json')).toEqual([]);
+    expect(libRedact.kindOfPath('/home/u/.ccrc/mail.token')).toBe('token');
+    expect(libRedact.kindOfPath('/home/u/.ccrc/sessions.json')).toBe('json');
+    expect(libRedact.kindOfPath('/home/u/.cc-secrets/claude-a-oauth.env')).toBe('env');
+    expect(libRedact.kindOfPath('/home/u/.config/lane/key')).toBe('env');
+  });
+  it("sessions.json's idHash loads as a (43, idHash) pair, never hashed again, and redacts the session token", () => {
+    const token = historyCrypto.randomBytes(32).toString('base64url');
+    expect(token).toHaveLength(43);
+    const idHash = historyCrypto.createHash('sha256').update(token).digest('hex');
+    const json = JSON.stringify([{ idHash, createdAt: 1, lastSeenAt: 1, generation: 1, label: 'phone' }, { idHash: 'not-a-hash' }]);
+    const pairs = libRedact.sessionHashPairs(json);
+    expect(pairs).toEqual([{ len: 43, sha256: idHash }]);
+    expect(libRedact.redactField(`cookie: ccrc_session=${token}`, libRedact.makePairIndex(pairs))).not.toContain(token);
+    expect(libRedact.sessionHashPairs('{}')).toEqual([]);
+    expect(libRedact.sessionHashPairs('nope')).toEqual([]);
+  });
+  it('a token behind an ANSI colour sequence is redacted and the sequence is kept', () => {
+    const tok = rndHex(32);
+    expect(libRedact.redactField(`\x1b[32m${tok}\x1b[0m`, idxOf([tok]))).toBe(`\x1b[32m${M}\x1b[0m`);
+  });
+  it('the context layer redacts NAME=, NAME: and "name": " values, bearer and box-token headers, and token parameters', () => {
+    const none = libRedact.makePairIndex([]);
+    expect(libRedact.redactField('DB_PASSWORD=fixture-pass-1', none)).toBe(`DB_PASSWORD=${M}`);
+    expect(libRedact.redactField('api_key: fixture-key-value', none)).toBe(`api_key: ${M}`);
+    expect(libRedact.redactField('{"password": "fixture-pass-2"}', none)).toBe(`{"password": "${M}"}`);
+    expect(libRedact.redactField('Authorization: Bearer fixtureBearerValue', none)).toBe(`Authorization: Bearer ${M}`);
+    expect(libRedact.redactField('x-ccrc-mail-token: fixturemailvalue', none)).toBe(`x-ccrc-mail-token: ${M}`);
+    expect(libRedact.redactField('-H x-ccrc-mail-token:fixturemailvalue', none)).toBe(`-H x-ccrc-mail-token:${M}`);
+    expect(libRedact.redactField('https://box.invalid/x?token=abc123&y=1', none)).toBe(`https://box.invalid/x?token=${M}&y=1`);
+    expect(libRedact.redactField('https://box.invalid/x?token=abc,def123&y=1', none)).toBe(`https://box.invalid/x?token=${M}&y=1`);
+    expect(libRedact.redactField('CCRC_ROLE=fleet and keyboard: on', none)).toBe('CCRC_ROLE=fleet and keyboard: on');
+  });
+  it('a 2 MiB run with no name in it is redacted in linear time (the context name is bounded)', () => {
+    const blob = historyCrypto.randomBytes(1536 * 1024).toString('base64url');
+    const t0 = Date.now();
+    libRedact.redactField(blob, libRedact.makePairIndex([]));
+    expect(Date.now() - t0).toBeLessThan(10_000);
+  });
+  // V8's backtrack stack overflows on a greedy pattern over a run of several
+  // MiB: the sk- shape arm throws RangeError on a 6 MiB run, the JSON-form
+  // context rule on an 8 MiB value (Node 22.13.0 and 24.14.1). LINE_MAX is past both.
+  // `head` keeps a failure's message short: a 16 MiB string in it would
+  // overflow the mutation runner's 1 MiB spawnSync buffer, which kills the
+  // vitest child (ENOBUFS, reported as an interrupt).
+  const head = (s: string): string => (s.length > 64 ? `${s.slice(0, 64)}... (${s.length} chars)` : s);
+  it('a LINE_MAX shape run the engine cannot finish fails closed: that run becomes the mark, and no RangeError escapes', () => {
+    const none = libRedact.makePairIndex([]);
+    const run = ['s', 'k-', 'A'.repeat(libRedact.LINE_MAX - 3)].join('');
+    expect(head(libRedact.redactField(run, none))).toBe(M);
+    expect(head(libRedact.redactField(`kept\x1b[0m${run}`, none))).toBe(`kept\x1b[0m${M}`);
+  });
+  it('a LINE_MAX JSON string value fails closed too: the catch spans the context layer, not the shape loop alone', () => {
+    const none = libRedact.makePairIndex([]);
+    const out = libRedact.redactField(['{"password": "', 'A'.repeat(libRedact.LINE_MAX - 16), '"}'].join(''), none);
+    expect(out.length, head(out)).toBeLessThan(64);
+    expect(out).toContain(M);
+  });
+  it('the shape layer redacts sk/rk/pk keys on both arms, JWTs, PEM blocks, AWS and GitHub token shapes', () => {
+    const none = libRedact.makePairIndex([]);
+    const shapes = [
+      ['s', 'k-proj-', rndAlnum(40)].join(''),
+      ['r', 'k_', rndAlnum(24)].join(''),
+      ['ey', 'J', rndAlnum(20), '.', rndAlnum(30), '.', rndAlnum(25)].join(''),
+      ['AK', 'IA', rndAlnum(16).toUpperCase()].join(''),
+      ['gh', 'p_', rndAlnum(36)].join(''),
+      ['github', '_pat_', rndAlnum(30)].join(''),
+      ['xo', 'xb-', rndAlnum(20)].join(''),
+    ];
+    for (const s of shapes) expect(libRedact.redactField(`before ${s} after`, none), s.slice(0, 6)).toBe(`before ${M} after`);
+    const pem = ['-----BEGIN ', 'RSA PRIVATE KEY-----\n', rndAlnum(64), '\n', rndAlnum(64), '\n-----END RSA PRIVATE KEY-----'].join('');
+    expect(libRedact.redactField(`key:\n${pem}\ndone`, none)).toBe(`key:\n${M}\ndone`);
+  });
+  it('the mark holds no JSON- or XML-special character, and the final belt applies the same layers', () => {
+    expect(M).not.toMatch(/["\\<>&]/);
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    const text = `a ${tok} b DB_PASSWORD=xyz-fixture`;
+    expect(libRedact.redactFinal(text, idx)).toBe(libRedact.redactField(text, idx));
+  });
+  it('the identifier pattern matches the upstream names and no others', () => {
+    for (const n of ['CCRC_AGENT_TOKEN', 'LITELLM_MASTER_KEY', 'api_key', 'password', 'X_SECRET', 'GH_AUTH']) expect(libRedact.IDENTIFIER_RE.test(n), n).toBe(true);
+    for (const n of ['CCRC_ROLE', 'Authorization', 'keyboard', 'monkey', 'CCRC_SERVER_URL']) expect(libRedact.IDENTIFIER_RE.test(n), n).toBe(false);
+  });
+  it('the frozen source list is exactly ccrc-owned files, and never an authDir', () => {
+    const named = libRedact.SECRET_SOURCES.map((s) => s.glob ?? s.path);
+    expect(named).toEqual(['.cc-secrets/*', '.ccrc/*.token', '.ccrc/exposure.env', '.ccrc/codex/*/runtime.env', '.ccrc/ccrc.env', '.ccrc/agent.env', '.ccrc/sessions.json']);
+    expect(JSON.stringify(libRedact.SECRET_SOURCES)).not.toMatch(/auth[_-]?dir|oauth/i);
+    expect(Object.isFrozen(libRedact.SECRET_SOURCES)).toBe(true);
   });
 });
