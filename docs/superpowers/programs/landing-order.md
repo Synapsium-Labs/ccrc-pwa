@@ -20,7 +20,8 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
-| 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror; FIRST, wave 2's residue and Task 7's preconditions | ccd, deploy | — | — | to plan; run 250 open (planned), block 3906–3915 |
+| 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | — | dispatched 2026-10-04 22:21 as run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
+| 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | to plan after wave 3 merges |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
@@ -371,6 +372,170 @@ carries it (spec §5.1, amended 2026-09-24).
     #215 lands second on ccd/ccd and the coordinator files.
   - **Deploy:** through ccrc's updater. Fleet-first was measured safe (review 241). The deny is live on the fleet
     box at its update, and refuses only a held or child session.
+- **2026-10-04 12:41 — the operator delegates Task 7 to this coordinator**: "Run task 7 when you think it's most
+  appropriate..let's continue to finishing the programme". Task 7's own text says "not the coordinator", citing
+  clause 15's "never writes rulesets or protection". This is the operator's explicit instruction in their own words,
+  so this session runs Task 7 on the operator's behalf, from its shell, and records every write and the rollback file.
+  - **The sequence it judges most appropriate:**
+    1. run 250 lands Task 7 Step 1's two code preconditions (the payload cap and the quote-dense timing pin);
+    2. ccrc's updater moves both boxes onto that build;
+    3. a trusted full CI run on `main` passes;
+    4. then Task 7, Steps 1–7, with Step 4's write backed up by `ruleset-rollback.json`.
+  - **Deployed (2026-10-04, read-only):** both boxes run v0.0.69, which carries #233, #235 and #234. The fleet
+    box's doctor shows 0 FAIL, skills 17/17, and the merge deny and the rescue policy are present in the installed
+    tree. The server box's doctor also shows 0 FAIL.
+  - **Run 250's plan** is being drafted, reviewed by three Opus lenses, and revised by a planning workflow
+    (`docs/landing-order-wave3-plan`).
+- **2026-10-04 21:20 — wave 3 planned** (#244, `docs/superpowers/plans/2026-10-04-landing-order-wave3-task7-preconditions.md`).
+  - **How it was made:** drafted on a measured prototype, reviewed by three Opus lenses (spec, replay, test
+    honesty), and all 14 findings applied.
+  - **What it covers:**
+    - Task 7's two code preconditions: `MERGE_PARSE_CAP` 2048, chosen so the costliest quote-dense shape (`"$(<)"`)
+      stays inside 25% of the 1500 ms bound, and the quote-dense timing pin;
+    - wave 2's residue: review 249 F2–F4, the `jq_regex` doctor check, and a closed-unmerged PR reading `none`;
+    - Task 7's runbook text.
+  - **Coordinator amendment at dispatch.** Over the cap, the deny matches a word-bounded `gh pr merge` against the
+    raw text instead of the two fixed substrings "gh" and "merge". Measured over two days of fleet Bash commands longer
+    than 2 KB, the substring rule matched 1,340 of 4,478, mostly prose ("through", "merged"), so a worker's long mail
+    would be refused. The word-bounded rule matched 131. Its accepted cost: an over-cap mail that quotes `gh pr merge`
+    literally is refused, with a split-or-rephrase message.
+  - **Numbers:** 3906–3915, plus 3916–3920 issued for the plan's nine slugs, the amendment and the worker's own.
+  - **Carried, with owners:**
+    - `PR_QUEUE_MAP`'s `unmeasured` gloss lacks a not-closed qualifier; landing wave 4 owns it (server).
+    - a repo-wide slicing convention for files over 600 s (ccrc-doctor, ccrc-install, ccrc-update) is a follow-up.
+- **2026-10-04 22:21 — wave 3 dispatched** (run 250 → `ccrc-pwa-still-delta`; branch `ws/still-delta` at
+  `b40f4145`; worker skill present; route Opus · high, Sonnet subagents, workflow off, compact 40; five items, one per
+  plan task).
+  - **Plans merged first:** #244 (`d9e18633`) and #245 (`f789d97d`), every required check green.
+  - **The first attempt (about 22:02) was refused `registry-unmeasurable` (`disconnected`).** ccrc's PWA-driven update
+    to v0.0.78 had restarted the fleet agent. Before any retry it was measured that nothing was spawned: no session on
+    the run, and no new worktree or registry row. So the retry could not strand a workspace.
+  - **That update ended `failed`, falsely.** `_upd_sweep` verifies each restarted supervisor in turn, and
+    `verify-service.sh` holds each for 3 s plus 5 s, so 63 units take about 8.5 minutes. `still-summit` was archived by
+    hand at 22:10:51, inside its own window, and the sweep died with "did not stay up". The fleet box is on v0.0.78
+    with every supervisor active. The server box stays on v0.0.76 until the failed row is acknowledged. Reported to
+    the operator and to the update-management coordinator.
+  - **The brief was re-dated at dispatch.** #215 merged at `b40f4145` (22:10) before it, so the overlap line now says
+    the branch already carries it and the plan's anchors in its files must be re-measured.
+- **2026-10-05 10:00 — wave 3's wave-done** (mail 3457; PR #248 at `3f9cca09`): the plan's five tasks, the
+  amendment, and 3906–3915 defined. 3916–3920 are unused.
+  - **Re-measured:** the tip matches the claim, and every required Linux check is green. The worker's reds are load
+    (each green alone) or tmp-sweep, which is red on main. The run went to `awaiting-review`, and its five items were
+    settled.
+  - **Review run 267** is dispatched to `ccrc-pwa-bright-hollow`.
+  - **Open, ruled after the review (mail 3421):** over the cap, gh's own flags between the words
+    (`gh -R o/r pr merge 42`) pass, where main denies them. That is a regression against main, so under the
+    stopping line it will be CLOSED in the fix round, with a spare. The worker proposes a linear closure: split the
+    raw text on separators, then test each segment. Review 267 costs it first.
+  - **macOS (mail 3461, from bright-river).** session-hook-merge-deny fails 20 of 71 cases on test-macos in a full
+    run on main, and 22 of 82 on #248. Every one is a merge after a heredoc or quoted substitution that is not
+    denied: the deny fails OPEN on macOS. It blocks the stable gate. Review 267 diagnoses it from the job logs, and
+    the fix round owns it.
+  - **Main moved** under the branch (#247, #249, #246). #246 edits coordinator-skill.test.ts; the review judges the
+    merged tree.
+- **2026-10-05 10:40 — review 267 reported** (mail 3504; `~/.cc-clips/ccrc-pwa-bright-hollow/review-267-3f9cca09.md`).
+  - **What it found:** six findings. All suites are green apart from one doctor case that fails under load and passes
+    alone. Every mutation row matches the worker's table. The merged tree is clean.
+  - **F1 gates Task 7. The macOS fail-open is jq 1.8, not macOS.** At session-hook.sh:3590, jq 1.8 binds `as $wp` to
+    the whole `and` chain, so `startswith(true)` errors and the deny fails open on every heredoc. Reproduced on Linux
+    with jq 1.8.1 and 1.8.2: 22/82 at the tip and 20/71 on main, the macOS counts. A one-paren prototype passes
+    82/82 on jq 1.7, 1.8.1 and 1.8.2. This fleet runs jq 1.7.1, so it is not live here; it would be on any box with
+    jq 1.8.
+  - **F2:** doctor's `jq_regex` PASSes on jq 1.8, so the runbook's PASS read overstates.
+  - **F3:** the over-cap flag shapes are a regression against main. The worker's `splits` closure is NOT linear on
+    jq 1.7 (43 s at 100 KB). A fixed-string split variant runs in 60–234 ms, catches all four shapes, and costs +12
+    over 129 over-cap matches in two days.
+  - **F4–F6 are minor:** two over-cap mutations survive; the runbook grep does not prove 2048; README and plan text
+    residue.
+  - **Not yet ruled:** this report also lacks the refute pass (the same brief omission). Mail 3505 asks for it, and
+    review 267 stays open until it arrives.
+- **2026-10-05 11:00 — review 267 ruled; fix round 1 sent** (mail 3507). The review run closed `done`, keeping its
+  workspace.
+  - **The panel** (votes in `review-267-3f9cca09-panel.md`): 18 Sonnet refuters, none died.
+    - CONFIRMED: F1, F3, F4, F5, F6.
+    - REFUTED: F2. `jq_regex` claims only that a regex engine is present, and that is true.
+    - The panel's three lenses were the reviewer's own single read, as in review 268. That is accepted for a fix
+      round only; the re-review runs the panel as written before the wave is accepted.
+  - **Rulings:**
+    - **F1 (3916):** the jq 1.8 paren fix, now, because it gates Task 7. Also a structural pin against any `as`
+      bound after a binary operator, and the jq floor named in the header.
+    - **F3 (3917):** the over-cap flag shapes are CLOSED, with the reviewer's fixed-string split (never `splits()`,
+      which is superlinear on jq 1.7), timing pins at 100 KB, and the +12 false-deny cost accepted. The bare
+      backtick stays listed.
+    - **F4:** two test cases.
+    - **F5:** the runbook reads `^MERGE_PARSE_CAP=2048$`, names the jq floor, and gains a CANARY read for Task 7: the
+      installed hook must deny a heredoc followed by `gh pr merge` in a fixture HOME. That canary, not
+      `PASS jq_regex`, is what proves the deny on a box's jq.
+    - **F6:** README's `jq_regex` row, and the plan's text brought to the shipped rule.
+  - **Numbers:** 3918–3920 stay spares.
+  - **For the stable gate:** F1's fix should also clear session-hook-merge-deny's macOS reds (bright-river's mail
+    3461), because the macOS runner's jq is 1.8.2.
+- **2026-10-05 11:05 — F3 reshaped** (the worker's question 3508, answered by 3510). Once the segment rule exists,
+  it matches every shape bash runs that MERGE_OVERCAP_RE matches. The regex is therefore redundant, and its
+  mutations can only red when composed with another.
+  - **Ruling:** RETIRE MERGE_OVERCAP_RE. The fixed-split segment rule stands alone, with a word-bounded `gh`, and
+    every single-row mutation goes red.
+  - 3915 is restated as history, superseded by 3917.
+  - The newline-separated `gh`/`pr`/`merge`, which only the regex matched, is three commands to bash, so it is
+    pinned as a pass.
+- **2026-10-05 12:08 — the split list narrowed** (the worker's question 3512, confirmed). Splitting on `( ) < >` cut a
+  flag VALUE away from the words. So `gh -R "$(git remote get-url origin)" pr merge 42`, an ordinary spelling that
+  main denies, passed over the cap.
+  - **The segment rule now splits only on `; & |` and newline,** and `merge`'s end class widens to `( ) < >`.
+  - A `;` inside a quoted flag value (`gh pr -R "a;b" merge`) is LISTED as deliberate.
+  - The worst over-cap shape costs about 600 ms through the hook at 100 KB, about 40% of the 1500 ms bound. It is
+    pinned, and stated as such.
+- **2026-10-05 15:48 — fix round 1 done** (wave-done 3535, PR #248 at `2324053a`).
+  - **CI is fully green,** both test-macos legs included: Homebrew jq 1.8.2, merge-deny 120 cases.
+  - **F1 (3916) `94459248`:** the paren, and a structural pin over 52 jq programs. Merge-deny is 120/120 under jq
+    1.7 and 1.8.2.
+  - **F3 (3917) `60c22193` and `1804eaa6`:** MERGE_OVERCAP_RE is retired. A fixed-string split on `; & |` and
+    newline, then in-order word tests, denies the four flag shapes and the six flag-value shapes. Six 100 KB timing
+    pins run at 90–384 ms.
+  - **F4:** the operator and TAB cases.
+  - **F5 `762d572a` and `5d29390c`:** the Task 7 CANARY runs the installed hook in a fixture HOME and expects a
+    deny. It was verified to deny on jq 1.7 and 1.8.2, and to catch the old hook failing open on 1.8.2.
+  - **F6:** README's `jq_regex` row, and the plan's text brought to the shipped rule (the replay is byte-identical).
+  - **Main merged** (clause 16 trigger 1, the stamp line). 3918–3920 are unused.
+  - **The worker's ledger notes**, for the review to classify:
+    - (a) any jq runtime error passes the deny. The candidate: fail CLOSED in a held or child session whose payload
+      holds `merge`.
+    - (b) doctor's `jq_regex` PASS text claims too much.
+    - (c) a NUL makes bash warn.
+  - **Re-measured:** the tip matches the claim, and the run went to `awaiting-review`.
+  - **Acceptance review 273** is dispatched to `ccrc-pwa-quiet-mesa`, with the held-out panel named.
+  - **Overlap:** delegation-broker's run 271 is cleared by this worker to edit session-hook.sh.
+- **2026-10-05 15:49 — Task 7, read through (Steps 1–7, from the branch's wave-2 plan) before it is due.** Three things gate
+  it beyond the sequence above:
+  1. **Step 5 needs five PRs bound to fleet workspaces.** The runbook was written for the operator, as five
+     `ccd ws-add`s. Coordinator clause 1 forbids this session a `ccd` act that changes fleet state.
+     - Within the contract: dispatch five one-wave proof runs, each committing a one-line doc change and opening a
+       PR. The server binds them, and reclaims them at close. The dequeue lane's mails, which the runbook says the
+       proof cannot stage, would then be measured too.
+     - Otherwise the operator makes the five.
+     - Put to the operator.
+  2. **Stop rule 4.** `allow_auto_merge` is false. If gh reaches a required queue only through the auto-merge
+     mutation, the enqueue is refused, and the proof halts for the operator (ruling 2026-09-29). It is not this
+     coordinator's setting to write.
+  3. **After Step 4, this coordinator's landing spelling becomes clause 15's queue spelling:**
+     `gh pr merge <n> --match-head-commit <sha>`, with no `--admin` and no `--squash`. Step 1's two box reads use
+     `ccrc version` on each box (read-only). No `ccrc rollout`, even `--check`.
+- **2026-10-06 04:55 — review 273 ruled; fix round 2 sent** (mail 3621). Report: `~/.cc-clips/ccrc-pwa-quiet-mesa/review-273-2324053a.md`.
+  - **The panel ran as written:** 11 confirmed, 1 refuted, nothing unexamined, no lens unverified.
+  - **The round is sound:** the suites are green under jq 1.7 and 1.8.2, every row reds, the canary behaves on both
+    jq versions, and the hook replay is byte-identical.
+  - **Rulings:**
+    - F1 (important): a tight multi-byte fixture, so a byte-offset slice reds.
+    - F2: the over-cap prose class is ACCEPTED and NAMED. THE COST sentence names any one segment holding `gh`,
+      then `pr`, then `merge` as words, a one-line JSON mail body included. The refusal also names `ccrc-api mail
+      send --json <file>` as the way to send a long mail. There is no narrowing, because a flags-only gap needs the
+      nested quantifier the rule exists to avoid.
+    - F3: absorb main (#281's README and doctor test, keeping both sides; #250's stamp), then re-gate under both jqs
+      and re-run the canary.
+    - F4: the fix round's rows go into the plan as JSON.
+    - F5 (a)–(j): text and tests.
+  - **The worker's ledger note (a), carried as an OPERATOR CANDIDATE:** today any jq runtime error passes the deny.
+    A held or child session whose payload holds `merge` could fail CLOSED instead. Not this wave's.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -423,12 +588,17 @@ preconditions are on `main`:
 - review 249's F1, a live H40 row whose payload has a terminator.
 Until then, nothing in #234 changes how a PR lands.
 
-The next run is 250, wave 3 (planned; deviation numbers 3906 to 3915, written bare).
-- **Its FIRST commit carries wave 2's residue and Task 7's preconditions:**
-  - review 249 F1–F4;
-  - the payload cap and the quote-dense timing pin;
-  - the review-241 carries: closed-unmerged reads `unmeasured`, the doctor check for jq's lookaround, and the
-    `--squash` span.
-- **Then stage 3:** `ccd-land-probe`, the read-only conflict radar.
-- If the operator would rather run Task 7 sooner, those preconditions can be a small wave of their own.
+Run 250, wave 3, is dispatched (2026-10-04 22:21, `ccrc-pwa-still-delta`; deviation numbers 3906 to 3920, written
+bare). It is the small preconditions wave:
+- review 249 F1–F4;
+- the payload cap and the quote-dense timing pin, with the coordinator's word-bounded over-cap amendment;
+- the review-241 carries: closed-unmerged reads `none`, the doctor check for jq's lookaround, and the `--squash` span;
+- Task 7's runbook text.
+
+Then, in order:
+1. ccrc's updater moves both boxes onto wave 3's build;
+2. a trusted full CI run passes on `main`;
+3. this coordinator runs Task 7 (delegated 2026-10-04 12:41).
+
+**Wave 3b (stage 3, `ccd-land-probe`)** is planned after wave 3 merges.
 - **Wave 2b** (deny `--admin` and `gh api` merges fleet-wide) is planned only on Task 7's proof result.

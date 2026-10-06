@@ -21,9 +21,9 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 |---|---|---|---|---|---|---|
 | 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | merged 2026-10-02 (`a934a59b`); run 219 closed; deploy AGENT-FIRST by the update mechanism |
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
-| 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin | **AGENT-FIRST** (ccd) | — | — | to plan |
-| 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
-| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | to plan |
+| 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
+| 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | — | planning (workflow, 2026-10-05 17:05); run 274 open (planned), block 4012–4021 |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | to plan |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -298,6 +298,153 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - **For wave 4b's priority:** on the night of 2026-10-02, Claude Code's background-shell memory reap killed work
     in three sessions, and run 237 sat idle for 15 hours. Wave 4b ships `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1`,
     so that night is measured evidence for it.
+- **2026-10-04 21:20 — wave 3 planned** (#245, `docs/superpowers/plans/2026-10-04-session-continuity-wave3-operator-choice.md`).
+  - **How it was made:** drafted on a measured prototype, reviewed by three Opus lenses, and all 16 findings applied.
+    The plan's 45 blocks replay byte-identically onto main.
+  - **Two design changes from review:**
+    - a journal floor, so the first post-deploy stop never promotes keystrokes the old ccd typed;
+    - the acknowledgement shapes the fleet actually writes, measured read-only across 6,669 transcripts.
+  - **Rulings on its open questions:**
+    - (a) the stage-4 filter is confirmed: count a fourth rescue only where a chain wait could have held it;
+    - (b) the floor's two one-time costs are accepted;
+    - (c) gpt-lane sessions are SKIPPED, keyed on `_is_anthropic_backend` like the settle;
+    - (d) a supervisor revival (`cmd_ensure` after a crash) also keeps the operator's choice, because stage 7's
+      purpose is surviving a RESTART, and a crash revival is the fleet's commonest restart;
+    - (e) `opus[1m]` losing its 1M context is accepted and listed, because the record has no context field;
+    - (f) `ccd stop` and `ws-archive` keep the choice, as planned;
+    - (g) the older unguarded `int()` calls in `--stage 4` are carried.
+  - **Numbers:** 3896–3905, plus 3921–3925 issued for the plan's nine slugs, rulings (c) and (d), and the worker's
+    own.
+- **2026-10-04 22:22 — wave 3 dispatched** (run 248 → `ccrc-pwa-still-harbor`; branch `ws/still-harbor` at
+  `b40f4145`, nothing ahead of `main` although the slug was wave 2's worker's; worker skill present; route Opus · high,
+  Sonnet subagents, workflow off, compact 40; five items, one per plan task).
+  - **Plan merged first:** #245 (`f789d97d`), every required check green.
+  - **Held 20 minutes** while ccrc's PWA-driven update to v0.0.78 restarted the fleet agent. The update ended `failed`
+    on a hand archive inside its serial verify window, not on a broken box (landing-order ledger, same date).
+  - **The brief was re-dated at dispatch.** #215 merged at `b40f4145` (22:10) before it, so the overlap line now says
+    the branch already carries it and the plan's anchors in ccd/ccd, ccd/ccrc and session-hook.test.ts must be
+    re-measured.
+- **2026-10-05 10:00 — wave 3's wave-done** (mail 3469; PR #250 at `b00849ee`): every task done.
+  - **Numbers defined:** 3896–3905 and 3921. The worker also used all four spares:
+    - 3922: the journal floor follows rotation;
+    - 3923: one transcript read per restart (`choicekept`);
+    - 3924: a lane change moves the floor;
+    - 3925: a `/model` typed before `/clear` is lost. It is listed as a known cost, with the code fix deferred.
+  - **Re-measured:** the tip matches the claim, and every required Linux check is green. The reds are load or
+    tmp-sweep, which is red on main. The run went to `awaiting-review`, and its five items were settled.
+  - **Review run 268** is dispatched to `ccrc-pwa-plain-hollow`. It was first refused by ccd's 10 GB disk floor;
+    this coordinator's three spent planning worktrees were removed (1.85 GB, all clean and pushed) and it was
+    dispatched again.
+  - **The worker's asks,** ruled after the review:
+    1. confirm 3922–3924;
+    2. defer the `/clear` fix, or require it now. The review costs the fix. ccd's own header there says "NEVER A
+       SILENT LOSS".
+- **2026-10-05 10:27 — review 268 reported** (mail 3498; `~/.cc-clips/ccrc-pwa-plain-hollow/review-268-b00849ee.md`).
+  - **What it found:** 13 findings, no blocker. Every suite is green, 16 rows are red (spec §5.7's four among them),
+    the merge onto `4100ae1c` is clean, and the residue is whole.
+  - **F1:** `_supervised_start`'s unsupervised fallbacks revive without a keep, a silent loss.
+  - **F2–F4 need rulings:** the "NEVER A SILENT LOSS" header; effort applied before model; 3925's `/clear` fix,
+    costed at about 10 lines on the supervisor tick.
+  - **Not yet ruled.** This coordinator's brief omitted the held-out panel's Lenses line, so the reviewer ran four
+    Opus lenses of its own and no Sonnet refute pass. That is a defect of the brief, not of the reviewer. Mail 3501
+    asks it to put F1–F13 through the refute pass and report again. Review 268 stays open until then, because a
+    close would reclaim the reviewer's workspace. Review 267 had the same omission and was corrected in flight
+    (mail 3500).
+- **2026-10-05 10:35 — review 268 ruled; fix round 1 sent** (mail 3503). The review run closed `done`, keeping its
+  workspace (`review-report-live`).
+  - **The panel** (votes in `review-268-b00849ee-panel.md`): 39 Sonnet refuters, three per finding, all voted.
+    - CONFIRMED: F1, F2, F3, F6, F10 (c)(d)(e), F11, F12.
+    - REFUTED: F4, F5, F7, F8, F9, F13.
+    - Recorded departure from the panel: the does-it-reproduce lens was the reviewer's own measurement (suites, 16
+      rows, citations, the merge probe) rather than a fresh agent, and the refuters named no explicit effort. It is
+      accepted for this round; the re-review runs the panel as written.
+  - **Confirmed departures:** 3922, 3923, 3924.
+  - **Rulings:**
+    - F1 (3966): the guarded keep moves into `_spawn_start`, one choke point covering `_supervised_start`'s
+      unsupervised fallbacks and ws-restore.
+    - F2 (3967): the "NEVER A SILENT LOSS" header and README's list are made true, and acknowledgement-wording drift
+      logs `unmeasured` once per keep. `--stage 7` must never read a rewording as zero.
+    - F3 (3968): model and effort are applied as one `cmd_route` call.
+    - F6 (3969): the stop-site keeps are gated on `choicekept`, and the marker is removed only after a successful kill
+      or spawn.
+    - 3925 (`/clear`) is DEFERRED to wave 4, carrying the review's `_sync_uuid` design note as advice.
+    - F10 (c)(d)(e), F11 and F12 are text.
+  - **Numbers:** 3966–3971 issued (3970–3971 spares).
+- **2026-10-05 15:34 — fix round 1 done** (wave-done 3528, PR #250 at `f6faff4c`).
+  - **The fixes, one commit each:**
+    - F1 `6db10976` (3966): the keep at `_spawn_start`'s choke point;
+    - F6 `2aed328c` (3969): stop keeps gated on `choicekept`, a failed kill unmarks, an absent tmux server proves the
+      session gone;
+    - F3 `c02b96f1` (3968): one route call;
+    - F2(b) `0a7a6579` (3967): acknowledgement drift reads as unmeasured;
+    - the prose `148178f4` and `cb8bbe6f`.
+  - **Evidence:** every row is measured red. The first full run's only red is tmp-sweep, red on main too.
+  - **Main merged** (`00f8a193`; clause 16 trigger 1, the stamp line only). The census is 182/153 and S6-R11 is
+    unchanged. 3970 and 3971 are unused.
+  - **Residuals parked:** R1 (a deleted tmux socket reads as absent and keeps a live pane marked), plus nits R2 and
+    R3.
+  - **Re-measured:** the tip matches the claim, and the run went to `awaiting-review`. Required CI was still running
+    after the push.
+  - **Acceptance review 272** is dispatched to `ccrc-pwa-amber-harbor`. Its brief names the held-out panel (three
+    fresh Opus lenses and three Sonnet refuters per finding) and asks it to classify R1.
+- **2026-10-05 17:03 — review 272 ACCEPTED wave 3; MERGED as #250 (`77f8d63a`)**, squash, at the reviewed head `f6faff4c`, every
+  required check green. Report: `~/.cc-clips/ccrc-pwa-amber-harbor/review-272-f6faff4c.md`.
+  - **The panel ran as written:** three Opus lenses and Sonnet refuters, 17 confirmed and 2 refuted, nothing
+    unexamined, no lens unverified.
+  - **The safety core holds:** all 28 rows red, spec §5.7's four among them; the census 182/153; S6-R11 unchanged;
+    the merge is the stamp only.
+  - **11 findings, all minor, carried to wave 4's FIRST commit as residue** (the precedent of landing's wave 1 and
+    workspace-lifecycle's wave 2):
+    - F1 (R1): narrow `_operator_choice_unmark`'s absent arm to tmux's "no server running", as ws-reclaim does, so a
+      deleted socket stops reading as gone.
+    - F2: recognise the `/effort` slider's own acknowledgement if a counts-only transcript census finds its
+      wording; otherwise ledger the noise in the 3967 entry.
+    - F3–F11: the plan's mutation cells that do not reproduce as written (3.30, 3.35); text-only pins on cmd_swap's
+      3969 lines; comment drift (R3 among it); the refused-command prose; the unpinned `not given` arm; the
+      ws-restore case; two red-first claims citing no commit; the `measure-continuity` key name.
+  - **The boundary:**
+    - wave 4's run 274 opened first (planned; block 4012–4021, written bare);
+    - run 248 closed `final` (`released:true`, `childReclaim:queued`).
+  - **Overlap notice** (mail 3553): landing's #248 must now absorb main (#281 in README and the doctor test; #250 on
+    ccd/ccd's stamp) in its next round, not during review 273.
+  - **Deploy:** AGENT-FIRST, through ccrc's own updater.
+- **2026-10-05 17:05 — wave 4's rulings, and its plan is drafting** (workflow wf_db90af4f-0dd, to branch
+  `docs/session-continuity-wave4-plan`).
+  - **(A)** The first commit is review 272's residue F1–F11, as ruled above.
+  - **(B)** Scope: stage 6 part one minus the spawn variable. That is the reap-class OOM count (its baseline week
+    starts at this wave's deploy), `ccd-scope-sweep` with its verdict record and doctor reader, and the
+    limit-banner harness leak.
+  - **(C) The stop ships SHADOWED.** The sweep records "would stop" and stops a scope only while
+    `$REG/scope-sweep-live` exists. Like `stall-watch-live`, nothing in the tree writes that file; the operator
+    arms it by hand.
+    - Why: it is a minute-cadence sweep that kills processes on the live fleet. The fleet's precedent
+      (`stall-watch-live`, `mail-gate-busy-shadow`) observes such a verdict before arming it. This is a named
+      departure from §5.6, and the operator may reverse it.
+  - **(D)** What it must never stop is pinned class by class: ccd's own server scope, non-pane scopes, an
+    unparseable Description, a live foreign server, a live pane, a reused pid.
+  - **(E)** 3925's `/clear` fix moves to wave 4b, beside the spawn variable. Both change what a session's next start
+    does.
+  - **(F)** The units are installed by the installer spine.
+  - **(G)** The overlap rule with #248, run 245 and run 271.
+- **2026-10-06 04:55 — wave 4's plan is ready: #288** (`1cbb1c75`, 4,604 lines, 8 tasks, 13 departure slugs).
+  - **How it was made:** four Opus lenses, none unverified; the reviser applied all 33 findings.
+  - **What the safety lens found:** no path to a stop while shadowed, while paused or in any must-never-stop class.
+    Its fixes: the cgroup and CPU sanity guard is pinned; the first-seen clock is boot-relative and bounded; an
+    unreadable socket table carries rather than reading as clear.
+  - **The verifier** replayed every anchor exactly once onto `d2bac7ae`. All 26 re-run rows went red. Three counts
+    moved with #287, as pre-flight 15 says.
+  - **Rulings on its open questions:**
+    - accepted: at most three stops per tick once armed; a point-in-time reading of inert survivors; the 120 s MCP
+      window; editing wave 3's merged plan entries in place (text only).
+    - **arming `scope-sweep-live` is the operator's,** recommended after a week of shadow verdicts that match what the
+      operator would stop by hand;
+    - the leaked test tmux server (`/tmp/tmuxtest_verify`, alive since 2026-09-14) is reported to the operator. The
+      sweep ignores it by design, and no session may touch tmux.
+  - **Numbers:** 4088–4093 issued (the last three slugs, then three spares).
+  - **Pre-deploy stage-6 reading, from the plan:** 2026-09-28 to 2026-10-05 17:00 had 40 pane-scope OOM stops, 2 of
+    them reap-class. Baseline B is read one week after this wave deploys; the deploy time is recorded here when it
+    happens.
+  - The brief and its dispatch body are ready. Run 274 dispatches when #288 merges.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -347,10 +494,16 @@ Waves 1 and 2 are merged (#230 `a934a59b`, #235 `db44b136`). Owed after their de
 - wave 2's stage-4 reading, with refused dispatches subtracted (F1 above).
 
 Wave 3 (spec stage 7: `$REG/<id>.typed`, the operator's own `/model`/`/effort` promoted to the route record, the
-alias table) is open as run 248 (planned), with deviation numbers 3896 to 3905, written bare.
-- **It is to plan.**
+alias table) is run 248, dispatched 2026-10-04 22:22 to `ccrc-pwa-still-harbor`, with deviation numbers 3896 to
+3905 and 3921 to 3925, written bare.
 - **Its plan's FIRST commit is wave 2's residue**, the list above from review 246: F1, F2, F3, F5, the minors 3–5
   and F6's restated §9 target.
 
-Waves 4 and 4b (the reap-class OOM count, the scope sweep, then the pressure-reap disable) are AGENT-FIRST.
+Wave 3 is merged (#250 `77f8d63a`). Wave 4 is run 274 (planned; deviation numbers 4012 to 4021, written bare), and
+it is to plan.
+- **Its FIRST commit is wave 3's residue,** review 272's F1–F11, ruled as above.
+- **Then the reap-class OOM count and the scope sweep.** Wave 4b, the pressure-reap disable, follows.
+- **It also owes** 3925's `/clear` code fix (review 268's F4 design note: read the outgoing transcript at the uuid
+  rotation).
+Both are AGENT-FIRST.
 2026-10-02's reaped runs argue for planning 4b early.

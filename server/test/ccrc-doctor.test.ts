@@ -3652,7 +3652,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   // and removes only the FUNCTION, so every constant the guard also checks
   // stays present — a dropped `_box_unit_env` term is the only thing that can
   // red this pin. `BUE_VAL=on` is preset AFTER sourcing ccrc (a shell
-  // assignment, never an env entry — `ccd/ccrc:2939` resets it at file scope
+  // assignment, never an env entry — `BUE_VAL=""`, the out-param block's first line above `_box_unit_env`, resets it at file scope
   // on load) in case some path through the ungoverned body reads it, but in
   // THIS harness (`PATH` pointing nowhere) it never gets the chance.
   // MEASURED (wave 9, R11-F2), with the guard's `|| ! declare -F _box_unit_env`
@@ -4157,35 +4157,70 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
 
     // Fix round 2 (D-3833, review 266 F1/F2): every row above runs under the harness's LC_ALL=C. Under a UTF-8 locale bash
     // `read`s CHARACTERS: an incomplete lead byte (0xC3) takes the NUL after it (the NUL is never seen) or the newline
-    // after it (two lines read as one). The Darwin arm now reads bytes whatever the caller's locale; these rows run it
-    // under a UTF-8 one, proved in effect first.
-    // The F2 row is DARWIN ONLY, deliberately: `unit` mode's own line loop (Linux) still reads in the caller's locale,
-    // so under UTF-8 it reads that file as ccrc.env's `on` where systemd hands the unit `off` — measured identical at
-    // b40f4145, f74f5e90 and 670d25fd. Round 2's bar forbids changing a Linux verdict, so it is reported, not fixed here.
-    /** `[label, ccrc.env, exposure file, the answer: rc 3 naming the exposure file's NUL, or the decided value, the feeders]`. */
-    const U4U: Array<[string, string, string, { rc: 3 } | { rc: 0; val: string }, Array<'darwin' | 'linux'>]> = [
-      ['F1: a lead byte right before the NUL', 'CCRC_AUTH=off\n', '# caf\xc3\0\nCCRC_AUTH=on\n', { rc: 3 }, ['darwin', 'linux']],
-      ['the NUL as the last byte, after a lead byte', 'CCRC_AUTH=off\n', 'CCRC_AUTH=on\n#\xc3\0', { rc: 3 }, ['darwin', 'linux']],
-      ['F2: a comment ending in a lone lead byte keeps its newline', 'CCRC_AUTH=on\n', '# caf\xc3\nCCRC_AUTH=off\n', { rc: 0, val: 'off' }, ['darwin']],
+    // after it (two lines read as one). The Darwin arm reads bytes whatever the caller's locale (D-3833); these rows run
+    // both feeders under a UTF-8 one, proved in effect first.
+    // Wave 11 (D-3979), three things. The F2 row is no longer Darwin-only: `unit` mode reads bytes too, since the Linux
+    // arm of `_box_unit_env` pins `LC_ALL=C` below its Darwin dispatch, so a comment ending in a lone lead byte keeps
+    // its newline on both feeders (it read ccrc.env's `on` where systemd hands the unit `off`, measured identical at
+    // b40f4145, f74f5e90, 670d25fd and main), and L1 is the same merge inside ccrc.env, a false OFF. And G1 is the input
+    // review 269 measured giving a false ARMED under the "relocated pin" mutant: the plain test's own line loop under
+    // UTF-8 reads the comment and the `unset` line as one, so it passes a file that unsets the key (Darwin rc 3, line 2);
+    // systemd ignores a line with no `=`, so Linux decides `on` from ccrc.env.
+    /** What one feeder answers: today's NUL arm, the line the plain test refuses, or a decided value and where it came from. */
+    type Want = { rc: 3; nul: true } | { rc: 3; line: number } | { rc: 0; val: string; src: 'env' | 'exp' };
+    /** `[label, ccrc.env, exposure file or null, answers per feeder]`. A feeder a row does not list is not asserted for it
+     *  (none today: every row states both). */
+    const U4U: Array<[string, string, string | null, { darwin?: Want; linux?: Want }]> = [
+      ['F1: a lead byte right before the NUL', 'CCRC_AUTH=off\n', '# caf\xc3\0\nCCRC_AUTH=on\n',
+        { darwin: { rc: 3, nul: true }, linux: { rc: 3, nul: true } }],
+      ['F1b: the NUL as the last byte, after a lead byte', 'CCRC_AUTH=off\n', 'CCRC_AUTH=on\n#\xc3\0',
+        { darwin: { rc: 3, nul: true }, linux: { rc: 3, nul: true } }],
+      ['F2: a comment ending in a lone lead byte keeps its newline', 'CCRC_AUTH=on\n', '# caf\xc3\nCCRC_AUTH=off\n',
+        { darwin: { rc: 0, val: 'off', src: 'exp' }, linux: { rc: 0, val: 'off', src: 'exp' } }],
+      ['L1: the same merge in ccrc.env, no exposure file', '# caf\xc3\nCCRC_AUTH=on\n', null,
+        { darwin: { rc: 0, val: 'on', src: 'env' }, linux: { rc: 0, val: 'on', src: 'env' } }],
+      ['G1: the plain test\'s own line loop (review 269 F1)', 'CCRC_AUTH=on\n', '# caf\xc3\nunset CCRC_AUTH\n',
+        { darwin: { rc: 3, line: 2 }, linux: { rc: 0, val: 'on', src: 'env' } }],
     ];
 
-    it('U4u: under a UTF-8 locale, a lead byte before a NUL still reads rc 3, and a comment ending in a lead byte does not swallow the next line on Darwin (D-3833; 670d25fd under UTF-8: Darwin rc 0 `on`, twice)', () => {
+    it('U4u: under a UTF-8 locale, a lead byte before a NUL still reads rc 3, and a comment ending in a lead byte does not swallow the next line on either feeder (D-3833, D-3979; main under UTF-8: Linux rc 0 `on` for F2 and rc 0 empty for L1)', () => {
       const loc = utf8Locale();
+      // `expect.soft`: every row is measured, so a red run names each one that moved (F2 and L1 together), not the first.
       const rows: UnitEnvRow[] = U4U.map(([label, env, exp]) => ({ label, env, exp, key: 'CCRC_AUTH' }));
       for (const os of ['darwin', 'linux'] as const) {
         const got = unitEnvAnswers(rows, os, loc);
-        U4U.forEach(([label, , , want, oses], i) => {
-          if (!oses.includes(os)) return;
+        U4U.forEach(([label, , , wants], i) => {
+          const want = wants[os];
+          if (want === undefined) return;
           const a = got[i]!;
           const tag = `${os} under LC_ALL=${loc}: ${label}`;
-          if (want.rc === 3) {
-            expect([a.rc, a.val, a.src], tag).toEqual([3, '', '']);
-            expect(a.why.startsWith(`${a.expPath} holds a NUL byte`), `${tag}: ${a.why}`).toBe(true);
+          if (want.rc === 3 && 'nul' in want) {
+            expect.soft([a.rc, a.val, a.src], tag).toEqual([3, '', '']);
+            expect.soft(a.why.startsWith(`${a.expPath} holds a NUL byte`), `${tag}: ${a.why}`).toBe(true);
+          } else if (want.rc === 3) {
+            expect.soft([a.rc, a.val, a.src], tag).toEqual([3, '', '']);
+            expect.soft(a.why.startsWith(`${a.expPath} line ${want.line} is not a plain NAME=value line`), `${tag}: ${a.why}`).toBe(true);
           } else {
-            expect([a.rc, a.val, a.src], tag).toEqual([0, want.val, a.expPath]);
+            expect.soft([a.rc, a.val, a.src], tag).toEqual([0, want.val, want.src === 'env' ? a.envPath : a.expPath]);
           }
         });
       }
+    });
+
+    // Wave 11 (D-3979): the placement of the Linux pin is pinned structurally, in whatever spelling. `local LC_ALL=C` must
+    // sit BELOW the Darwin dispatch: above it, it would also cover `_box_unit_env_shell`, whose own `LC_ALL=C` (D-3833)
+    // would stop being load-bearing, and T4-M31 (dropping that one) would no longer red U4u (measured). No `LC_ALL` token
+    // at all may precede the dispatch, on its own line or on the first `local` line.
+    it('U4p: `_box_unit_env` pins `local LC_ALL=C` below its Darwin dispatch and no `LC_ALL` above it, and `_box_unit_env_shell` keeps its own pin (D-3979; T4-M31)', () => {
+      const src = readFileSync(CCRC_SRC, 'utf8');
+      const m = /_box_unit_env\(\) \{([\s\S]*?)\n\}/.exec(src);
+      expect(m, '_box_unit_env must be readable by /_box_unit_env\\(\\) \\{([\\s\\S]*?)\\n\\}/').not.toBeNull();
+      const body = m![1]!;
+      const d = body.indexOf('_box_unit_env_shell "$key"; return; fi');
+      expect(d, 'the Darwin dispatch must be in _box_unit_env').toBeGreaterThan(-1);
+      expect(/\bLC_ALL\b/.test(body.slice(0, d)), 'an LC_ALL token above the Darwin dispatch would cover _box_unit_env_shell too, so T4-M31 would stop reding (D-3979)').toBe(false);
+      expect(/^  local LC_ALL=C$/m.test(body.slice(d)), 'the Linux arm must pin `local LC_ALL=C` below the dispatch (D-3979)').toBe(true);
+      expect(/_box_unit_env_shell\(\) \{[^\n]*\n  local key="\$1" v rc bad="" LC_ALL=C\n/.test(src), '_box_unit_env_shell must keep its own LC_ALL=C (T4-M31, D-3833)').toBe(true);
     });
 
     it('U4n: `_box_env_has_nul` alone, called with NO caller pinning a locale, under a UTF-8 one — it reads bytes itself, so neither arm\'s answer leans on its caller (D-3833)', () => {
@@ -4222,6 +4257,87 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
           expect(a.fix, label).toContain(a.envPath);
         }
       });
+    });
+
+    // Wave 11 R14(j) (D-3980): the launchd job sources both env files with /bin/bash under `set -a`. Assigning one of the
+    // names /bin/bash reserves ends that shell before its `exec` when POSIXLY_CORRECT has turned POSIX mode on (bash's
+    // read-only variables, five of this set in bash 3.2 (BASHOPTS arrived in 4.1) and six in 5.2; in 3.2 also
+    // BASH_ARGC, BASH_ARGV, BASH_LINENO, BASH_SOURCE, FUNCNAME and GROUPS), so the
+    // job never starts, whatever CCRC_AUTH says. The plain test refuses the fifteen as a NAME, in either file and in any
+    // order, under its own cause: the reason names the line, never the variable (A1) and calls none of them read-only (A5).
+    // D-3987 widens it to fifteen: HISTCMD and OPTIND are integer variables with no assign function, so a value that is an
+    // arithmetic error ends the job's bash before its `exec` in every bash, with no POSIX mode (review of Task 2, F1).
+    const U5_NAMES = ['POSIXLY_CORRECT', 'BASHOPTS', 'BASH_VERSINFO', 'EUID', 'PPID', 'SHELLOPTS', 'UID',
+      'BASH_ARGC', 'BASH_ARGV', 'BASH_LINENO', 'BASH_SOURCE', 'FUNCNAME', 'GROUPS', 'HISTCMD', 'OPTIND'];
+    /** Names that merely look like one of the fifteen (or are other reserved-looking names bash lets a file set). */
+    const U5_CONTROLS = ['PATH=/usr/bin', 'HOME=/x', 'LC_ALL=C.UTF-8', 'BASH_COMPAT=0', 'BASH_XTRACEFD=0', 'MY_UID=0', 'MY_OPTIND=0', 'UIDX=0', 'uid=0', 'POSIXLY_CORRECTX=1'];
+    const U5_ARITH: UnitEnvRow[] = [
+      { label: 'OPTIND=1/0', env: 'OPTIND=1/0\nCCRC_AUTH=on\n', exp: null, key: 'CCRC_AUTH' },
+      { label: 'HISTCMD=1/0', env: 'HISTCMD=1/0\nCCRC_AUTH=on\n', exp: null, key: 'CCRC_AUTH' },
+      { label: 'OPTIND=09', env: 'OPTIND=09\nCCRC_AUTH=on\n', exp: null, key: 'CCRC_AUTH' },
+      { label: 'export OPTIND="1/0"', env: 'export OPTIND="1/0"\nCCRC_AUTH=on\n', exp: null, key: 'CCRC_AUTH' },
+      { label: 'exposure HISTCMD=1+', env: 'CCRC_AUTH=on\n', exp: 'CCRC_RP_ID=x\nHISTCMD=1+\n', key: 'CCRC_AUTH' },
+    ];
+    const U5_REVIEW: UnitEnvRow = { label: 'the review\'s input', env: 'POSIXLY_CORRECT=1\n', exp: 'UID=0\nCCRC_AUTH=on\n', key: 'CCRC_AUTH' };
+
+    it('U5: on Darwin, each of the fifteen names /bin/bash reserves is rc 3 for the gate, naming the file and the line and never the variable; names that only look like one read as before (D-3980)', () => {
+      const rows: UnitEnvRow[] = [
+        ...U5_NAMES.map((n) => ({ label: n, env: `${n}=0\nCCRC_AUTH=on\n`, exp: null, key: 'CCRC_AUTH' })),
+        U5_REVIEW,
+        { label: 'order-free: the name below the key, in the exposure file', env: 'CCRC_AUTH=on\n', exp: 'CCRC_RP_ID=x\nGROUPS=0\n', key: 'CCRC_AUTH' },
+        // The review's measured arithmetic-error inputs: every value here passes the plain test's value rule, so only the NAME refuses it.
+        ...U5_ARITH,
+        ...U5_CONTROLS.map((c) => ({ label: `control: ${c}`, env: `${c}\nCCRC_AUTH=on\n`, exp: null, key: 'CCRC_AUTH' })),
+      ];
+      const got = unitEnvAnswers(rows, 'darwin');
+      const prefix = 'assigns a variable /bin/bash reserves';
+      U5_NAMES.forEach((name, i) => {
+        const a = got[i]!;
+        expect.soft([a.rc, a.val, a.src], name).toEqual([3, '', '']);
+        expect.soft(a.why.startsWith(`${a.envPath} line 1 ${prefix}`), `${name}: ${a.why}`).toBe(true);
+        expect.soft(a.why, name).not.toContain(name);
+        expect.soft(a.fix, name).not.toContain(name);
+        expect.soft(a.fix, name).toContain(`line 1 of ${a.envPath}`);
+        expect.soft(a.why + a.fix, name).not.toMatch(/read-only|readonly/i);
+      });
+      const n = U5_NAMES.length;
+      const rev = got[n]!;
+      expect.soft([rev.rc, rev.val, rev.src], 'the review\'s input').toEqual([3, '', '']);
+      expect.soft(rev.why.startsWith(`${rev.envPath} line 1 ${prefix}`), rev.why).toBe(true);
+      const ord = got[n + 1]!;
+      expect.soft([ord.rc, ord.val, ord.src], 'order-free').toEqual([3, '', '']);
+      expect.soft(ord.why.startsWith(`${ord.expPath} line 2 ${prefix}`), ord.why).toBe(true);
+      expect.soft(ord.why + ord.fix, 'order-free').not.toContain('GROUPS');
+      const arithLines = [1, 1, 1, 1, 2];
+      U5_ARITH.forEach((row, i) => {
+        const a = got[n + 2 + i]!;
+        const file = row.exp === null ? a.envPath : a.expPath;
+        expect.soft([a.rc, a.val, a.src], row.label).toEqual([3, '', '']);
+        expect.soft(a.why.startsWith(`${file} line ${arithLines[i]} ${prefix}`), `${row.label}: ${a.why}`).toBe(true);
+        expect.soft(a.why + a.fix, row.label).not.toMatch(/HISTCMD|OPTIND/);
+      });
+      U5_CONTROLS.forEach((c, i) => {
+        const a = got[n + 2 + U5_ARITH.length + i]!;
+        expect.soft([a.rc, a.val, a.src, a.why, a.fix], `control: ${c}`).toEqual([0, 'on', a.envPath, '', '']);
+      });
+    });
+
+    it('U5l: the same input with CCD_OS=linux reads `on` from the exposure file — systemd sets both as plain environment, so the platform split is data (D-3980)', () => {
+      const [a] = unitEnvAnswers([U5_REVIEW], 'linux');
+      expect([a!.rc, a!.val, a!.src]).toEqual([0, 'on', a!.expPath]);
+    });
+
+    // macOS only: the end-to-end line. The coordinator reads it on `test-macos`.
+    itDarwin('E20d: the review\'s input through `ccrc doctor` on macOS — one WARN auth, not measured, naming ccrc.env line 1, never a PASS ARMED (D-3980)', () => {
+      const home = healthy('ccrc-doctor-auth-e20d-');
+      writeCcrcEnv(home, `POSIXLY_CORRECT=1\n${readEnv(home)}`);
+      writeFileSync(expPath(home), 'UID=0\nCCRC_AUTH=on\n');
+      const r = runDoctor(home);
+      expectOneUndecidedWarn(r.stdout, envPath(home));
+      expect(authLine(r.stdout)).toContain(`${envPath(home)} line 1 `);
+      // A1 at the doctor surface: the line is named by number, never the variable.
+      expect(authLine(r.stdout)).not.toContain('POSIXLY_CORRECT');
+      expect(r.stdout).not.toMatch(/^PASS auth: .*gated/m);
     });
   });
 });
@@ -8445,7 +8561,7 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
   // BOTH files intact and removes only the FUNCTION (never `unset
   // CCRC_EXPOSURE_FILE`, which the guard tests first and would mask the
   // mutation), with `BUE_VAL=on` preset AFTER sourcing ccrc as a shell
-  // assignment (an env entry is reset at ccrc's own file scope, `:2939`) — a
+  // assignment (an env entry is reset at ccrc's own file scope (`BUE_VAL=""`'s line)) — a
   // guard missing this term reads that stale value as ARMED instead of
   // failing shut.
   it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, not a stale ARMED PASS', () => {

@@ -25,7 +25,7 @@ describe('_LC_ACTS / _LC_OUTCOMES — the closed vocabularies, bound to L0', () 
     // `expected [ …20 acts… ] to deeply equal [ …21 acts… ]`, and an act ccd
     // emits would degrade to `unknown` on a build that models it perfectly well.
     const want = LIFECYCLE_ACTS.filter((a) => a !== LC_ACT_UNKNOWN);
-    expect(want.length, 'guards the guard: an empty want passes everything').toBe(25);
+    expect(want.length, 'guards the guard: an empty want passes everything').toBe(26);
     const got = lines(h.sh('printf "%s\\n" "${_LC_ACTS[@]}"'));
     expect([...got].sort()).toEqual([...want].sort());
     expect(got, 'unknown is the READER\'s degrade, never a call site\'s choice')
@@ -65,6 +65,16 @@ describe('_LC_ACTS / _LC_OUTCOMES — the closed vocabularies, bound to L0', () 
     h.sh(`${NO_TMUX} _lc_emit reclaim done demo-quiet-basin "" verb ws-reclaim`);
     const ev = readJournal(h.home).filter((e) => e['id'] === 'demo-quiet-basin');
     expect(ev.map((e) => e['act'])).toEqual(['reclaim']);
+    expect(ev[0]!['badact']).toBeUndefined();
+  });
+
+  it('journals `expire` as ITSELF — never the unknown degrade with a badact (workspace lifecycle, wave 3)', () => {
+    // The act `ws-expire` writes (spec 2026-09-24 §5.3): an archived workspace's
+    // pin-then-teardown, seven days after its archive. Its own act, never
+    // `reclaim`'s: stage 4's crash clause reads a deliberate removal by act word.
+    h.sh(`${NO_TMUX} _lc_emit expire done demo-quiet-basin "" verb ws-expire`);
+    const ev = readJournal(h.home).filter((e) => e['id'] === 'demo-quiet-basin');
+    expect(ev.map((e) => e['act'])).toEqual(['expire']);
     expect(ev[0]!['badact']).toBeUndefined();
   });
 });

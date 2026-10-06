@@ -8,7 +8,7 @@ The coordinator ruled wave 10 as R12's script half on 2026-10-04 22:56 UTC (work
     - its registry row is purged (there is no `<id>.uuid`).
   - A pass exits 0 and prints its own `stopped on purpose:` line.
   - Every other unit and every other state fails exactly as it does today. This includes a unit seen `activating` or `failed`, and a MainPID that changed (ruling 6).
-  - Every case in `agent/test/deploy-verify.test.ts` runs on a fixture HOME, the cases that exist today included.
+  - Every case that executes `deploy/verify-service.sh` sets `HOME` to a `mkTmp` directory, the cases that exist today included; V20 runs with `HOME` unset on purpose, and the file's other spawns run other scripts (wave 11, R13e; the Global Constraint at `:134`).
 - **Task 2.** A new server test file sources `main`'s current `ccd/ccrc` without editing it. It runs `_upd_sweep` against the new script, on a fixture HOME with `systemctl` stubbed.
   - A stamped, stopped unit returns 0, and so does a purged one.
   - An unstamped one dies exactly as it does today.

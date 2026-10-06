@@ -70,10 +70,8 @@ STOP_INTERVAL="${CCRC_VERIFY_STOP_INTERVAL:-1}"
 
 # ── A DELIBERATE SUPERVISOR STOP IS NOT A CRASH (wave 10, R12) ─────────────
 # `ccrc update`'s sweep and deploy.sh's SWEEP_CMD list the active supervisors
-# ONCE, then run this script per unit. deploy.sh's SWEEP_CMD still does it
-# serially, ~8s each, and the first non-zero exit fails the run; `ccrc update`'s
-# sweep, since wave 11, runs it per unit concurrently and re-checks a crash-like
-# failure once (D-3983). Each call's own verdict is unchanged. A session stopped on purpose while that loop is
+# ONCE, then run this script per unit, serially, ~8s each, and the first
+# non-zero exit fails the run. A session stopped on purpose while that loop is
 # still walking — an archive, `ccd stop`, ws-rm, forget, reap, a child reclaim —
 # read as a crash: R12, a hand archive inside v0.0.78's fleet sweep, which
 # failed a healthy update and halted every move until an operator acked it.
@@ -109,26 +107,8 @@ STOP_INTERVAL="${CCRC_VERIFY_STOP_INTERVAL:-1}"
 # and only here (D-3946). An ABSENT registry, or no HOME, is not a purged row —
 # nothing was measured — so it fails. The scope is the unit's NAME: ccrc.service
 # and ccrc-agent.service never reach the registry, and never cost a query.
-#
-# R13(a) (wave 11, D-3976, D-3977, D-3978): the purged arm believes "purged" only of
-# a name ccd could have minted (`ccd_id_ok`), with NOTHING at <id>.uuid (a symlink,
-# dangling or not, is something), and of a unit systemd can load. `systemctl --user
-# show -p LoadState --value` answers `loaded` for every instance of the installed
-# template, a reclaimed, disabled or garbage-collected one included (measured on the
-# live user manager, systemd 255, 35 real purged ids), so it refuses only a missing
-# template, a masked unit, or a name systemd will not parse.
-
-# ccd's session-id grammar, `^[A-Za-z0-9._-]+$` (ccd/ccd's "bad session id" checks), with its alphabets written out
-# rather than as ranges — as ccd/ccrc's `_svc_real_home` writes its own — because a range is collation-dependent
-# under some UTF-8 locales and this script runs in its caller's. A leading `.` is refused too (D-3977): no id ccd mints
-# starts with one (`_ws_project_valid`, roster `ID_RE`), yet `claude-session@..service` passes the grammar and reads `loaded`.
-ccd_id_ok() {   # <id> -> 0 iff ccd could have minted it
-  local az=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ d=0123456789
-  case "$1" in ''|.*|*[!${az}${d}._-]*) return 1 ;; esac
-}
-
 stopped_on_purpose() {   # -> 0, and one stdout line, iff $UNIT is a session stopped on purpose
-  local id reg st n=0 s evidence load
+  local id reg st n=0 s evidence
   case "$UNIT" in claude-session@?*.service) ;; *) return 1 ;; esac
   id="${UNIT#claude-session@}"; id="${id%.service}"
   case "$id" in */*) return 1 ;; esac
@@ -152,16 +132,7 @@ stopped_on_purpose() {   # -> 0, and one stdout line, iff $UNIT is a session sto
       s="reads '${s:0:64}'"
     fi
     evidence="ccd's stop stamp ~/.cc-sessions/$id.stopped is present ($s)"
-  elif [ ! -e "$reg/$id.uuid" ] && [ ! -L "$reg/$id.uuid" ]; then
-    # R13(a) (wave 11, D-3976, D-3977, D-3978): "purged" is believed only of a name ccd could have minted, with nothing
-    # at all at <id>.uuid (a symlink is something), and of a unit systemd can load. `show -p LoadState` answers
-    # `loaded` for every instance of the installed template — a reclaimed, disabled, garbage-collected one included
-    # (measured on the live user manager, systemd 255, 35 real purged ids) — so it refuses only a missing template, a
-    # masked unit, or a name systemd will not parse. A never-existed id still reads as purged: unreachable, since both
-    # sweeps verify only units their own listings showed. Asked only here, so a unit whose row is kept costs no query.
-    ccd_id_ok "$id" || return 1
-    load=$(systemctl --user show -p LoadState --value "$UNIT" 2>/dev/null)
-    [ "$load" = loaded ] || return 1
+  elif [ ! -e "$reg/$id.uuid" ]; then
     evidence="its registry row is purged (no ~/.cc-sessions/$id.uuid)"
   else
     return 1
