@@ -20,9 +20,9 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
-| 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | — | #286 | acceptance review 288 on fix round 1 (`21d510f6`); run 245 (`ccrc-pwa-bright-canyon`); plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
-| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | to plan after wave 3 merges; its operator text names a pid's process (R4) |
-| 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
+| 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | #286 | merged 2026-10-06 (`77c11245`) after review 288; run 245 closed; deploy AGENT-FIRST via ccrc's updater; plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
+| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | run 290 open (planned; the run's wave 4 of 5), block 4114–4125; to plan. FIRST commit: review 288's residue. Its operator text names a pid's process (R4) |
+| 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan (the run's wave 5 of 5) |
 
 ## Decisions & deviations
 
@@ -493,6 +493,31 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **Run state:** the run went to `awaiting-review`, with its items already settled.
   - **Acceptance review 288** was dispatched to `ccrc-pwa-soft-meadow`, with the held-out panel named. #286 merges
     on its verdict.
+- **2026-10-06 08:29 — review 288 accepted wave 3; #286 merged** (`77c11245`, 08:28; review-done 3654, reviewed tip
+  `21d510f6`; report copied on receipt).
+  - **The verdict:** 33 agents, none unverified; 7 confirmed, all minor, and 3 refuted. Nothing touches what the verb
+    deletes or when. All 24 mutation rows red as named, and the forced-linux and launchctl controls are green on Linux
+    and red under Darwin semantics. Every suite is green.
+  - **Accepted at `21d510f6`, with no further round.** The verb is inert until 3b calls it, so the residue carries.
+    **Review 288's F1–F7 are 3b's FIRST commit:**
+    - F1: the CONTROL's unit half is hollow. Plant an active unit, or drop "and the unit" from its title.
+    - F2: D-3964 and the resume header say that a pane that came back is a cwd user.
+    - F3: 3964 gets its mutation row in the plan (W1, verb 2).
+    - F4: CCR-15's qualification adds "or a breadcrumb that stands but cannot be read" (D-3894), inside the :780
+      passage only. Child reclamation's coordinator is told before it is pushed (mail 3655).
+    - F5 and F6, ruled: the plan's as-built rows are CORRECTED TO THE MEASURED COUNTS (M08 ladder 17, M26 verb 3), with
+      a note that review 284 quoted 1 and 2. A measured count beats a quoted one.
+    - F7: `close_time`'s list adds U+0085, or says "among them".
+  - **Carried to 3b's operator text, beside R4:** a process that ignored the first attempt's SIGHUP (a `nohup` dev
+    server, say) holds a `worktree` resume at `in-use` on every pass until a human ends it.
+  - **Runs:** 245 advanced to `merging`, then closed final (`merged`). Its child workspace is queued for
+    reclamation. Run 290 opened FIRST, planned: 3b is the run's wave 4 of 5, and the dead-coordinator lane is wave 5.
+    Block 4114–4125 was issued, written bare.
+  - **Overlaps after the merge:** main's `ccd/ccd` moved, so #248 (landing wave 3, in acceptance review 289) and run
+    274's branch now conflict on it (merge-tree). #248 merges main after review 289's verdict, never during it. Run 274
+    merges main when it lands, by the shared-region ruling. Child reclamation's wave 6 is clear to dispatch (3655).
+  - **Deploy:** AGENT-FIRST, by ccrc's updater, never by hand. The time both boxes reach the build containing
+    `77c11245` is recorded here, and 3b's lane waits on it.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
