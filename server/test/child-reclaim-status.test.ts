@@ -345,6 +345,29 @@ describe('childReclaimStatus — the retry-promising arms answer only for a chil
       expect(childReclaimStatus(base({ ...over, fleetPaused: true }))).toEqual(wantPaused);
     });
   }
+
+  // The gate's boundary: the refused answers that promise nothing are NOT gated. A refusal with no
+  // token, or with a token this build cannot classify, still reads refused for a child that no
+  // longer stands, and so does a terminal refusal, which is settled and answers ahead of the gate.
+  const UNGATED: readonly { readonly answer: string; readonly event: Ev; readonly want: ChildReclaimStatus }[] = [
+    { answer: 'refused with no token', event: ev('refused', null),
+      want: { word: 'refused', sentence: S.refusedNoReason, at: EV_AT } },
+    { answer: 'refused with an empty token', event: ev('refused', ''),
+      want: { word: 'refused', sentence: S.refusedNoReason, at: EV_AT } },
+    { answer: 'refused with a token this build cannot classify', event: ev('refused', 'from-a-newer-ccd'),
+      want: { word: 'refused', sentence: refusalSentence('from-a-newer-ccd'), at: EV_AT } },
+    { answer: 'a terminal refusal (settled)', event: ev('refused', 'containment-unproven'),
+      want: { word: 'refused', sentence: refusalSentence('containment-unproven'), at: EV_AT } },
+  ];
+  for (const { answer, event, want } of UNGATED) {
+    for (const { shape, over: not } of NOT_STANDING) {
+      for (const fleetPaused of [false, true]) {
+        it(`${answer}, ${shape}${fleetPaused ? ', under a fleet pause' : ''} → still refused (not gated)`, () => {
+          expect(childReclaimStatus(base({ event, ...not, fleetPaused }))).toEqual(want);
+        });
+      }
+    }
+  }
 });
 
 // Past the ceiling the chip says what the attention list's failing arm says of the same line (spec

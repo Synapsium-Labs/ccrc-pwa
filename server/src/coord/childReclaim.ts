@@ -1524,9 +1524,13 @@ export interface ChildReclaimStatusInput {
  *    The failure line, the `paused` token and retry each promise that the
  *    sweep acts again, and the chip speaks for the sweep only of a child that
  *    still stands (spec §5.9). So where the gate fails, each answers nothing
- *    of its own and falls through to the row rule, like `intent`. That covers
- *    no row, a marker naming another run, and a session handed to an open
- *    run. Such an event never reaches the unclassified-token `refused` either.
+ *    of its own and falls through to the row rule, like `intent`. The gate
+ *    fails for, among others: a registry not yet listed (the window after a
+ *    restart), no row, a row with no marker or an unreadable one, a marker
+ *    naming another run, and a session handed to an open run. Such an event
+ *    never reaches the unclassified-token `refused` either. The two `refused`
+ *    answers that promise nothing (no token; a token this build cannot
+ *    classify) are not gated.
  * 5. THE ROW RULE, where the gate holds:
  *    - a review child whose reviewed run is not known to be terminal → pending,
  *      kept for the report;
