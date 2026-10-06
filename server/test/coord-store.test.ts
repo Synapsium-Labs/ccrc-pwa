@@ -13,6 +13,7 @@ import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR, MAIL_REPLAY_CEILING_ERROR,
          MAIL_RUN_CLOSED_ERROR, toRunSummary } from '../src/coord/store.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
+import { childBirthOf } from '../src/coord/childSpent.js';
 import {
   HOLD_REASON_MAX_CHARS,
   holdReason,
@@ -2555,7 +2556,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
 
   it('one mail parked against TWO displaced claimants reaches the heir once, not twice', () => {
     // THE HAZARD THIS TREE HAS NEVER HAD BEFORE. `mail_deliveries` has no unique
-    // constraint on (mailId, toId) — the only index is `mail_deliveries_due`
+    // constraint on (mailId, toId) — neither of its two indexes is unique
     // (schema.ts) — and until this arm nothing ever wrote a second delivery
     // for one mail. Two claimants is the state reclaimProgram's own comment
     // (store.ts:648-656) says is reachable.
@@ -2797,6 +2798,17 @@ describe('CoordStore: the coord feed kind', () => {
       { seq: 1, at: 10, kind: 'coord', sessionId: '', title: 'caps', body: 'workers 3 to 5', runId: null },
     ]);
   });
+
+  // Wave 8 item A: the same absence-half defect `isNotifyKind` guards against, for the eighth member
+  // `NOTIFY_KINDS` gained (M-A7) — a row would otherwise come back 'unknown' rather than 'update'.
+  it('round-trips an update feed event through the durable table', () => {
+    const s = store();
+    s.recordFeedEvent('epoch-1', { seq: 1, at: 10, kind: 'update', sessionId: '',
+      title: 'update fleet: auto update to v0.0.10', body: 'lease held', runId: null });
+    expect(s.feedEvents(10)).toEqual([
+      { seq: 1, at: 10, kind: 'update', sessionId: '', title: 'update fleet: auto update to v0.0.10', body: 'lease held', runId: null },
+    ]);
+  });
 });
 
 describe('the durable feed carries the run it is about', () => {
@@ -2902,6 +2914,39 @@ describe('CoordStore: openCoordinatorIds', () => {
 
   it('is empty on a store with no runs at all', () => {
     expect(store().openCoordinatorIds()).toEqual([]);
+  });
+});
+
+describe('CoordStore.childReclaimCoordinatorIds — the displacement-row selection is case-sensitive', () => {
+  // `reclaimProgram` writes its own displacement rows lower-case
+  // (`reclaim:<from> -> <to>`), and `childReclaimDisplacedCandidates`'s own
+  // `startsWith('reclaim:')` check is case-sensitive. An operator can write
+  // ANY text into a run's own trail by hand, so a row that merely starts with
+  // the same six letters in a different case must never be read as this
+  // writer's own — reading it that way would either add a session that never
+  // coordinated anything, or (worse) throw and stop the whole reclaim lane
+  // fleet-wide for a run event unrelated to reclamation.
+  it('an operator row `RECLAIM:x -> y` is neither added to the set nor makes the read throw', () => {
+    const s = store();
+    const r = openRun(s, { claimedBy: 'the-coordinator' }) as { id: number };
+    s.recordRunEvent(r.id, 'operator', 'RECLAIM:x -> y');
+    expect(() => s.childReclaimCoordinatorIds()).not.toThrow();
+    expect(s.childReclaimCoordinatorIds()).not.toContain('x');
+  });
+
+  it('mixed case is refused too — `Reclaim:x -> y`', () => {
+    const s = store();
+    const r = openRun(s, { claimedBy: 'the-coordinator' }) as { id: number };
+    s.recordRunEvent(r.id, 'operator', 'Reclaim:x -> y');
+    expect(() => s.childReclaimCoordinatorIds()).not.toThrow();
+    expect(s.childReclaimCoordinatorIds()).not.toContain('x');
+  });
+
+  it('the CONTROL: a genuine lower-case `reclaim:x -> y` row does yield `x`', () => {
+    const s = store();
+    const r = openRun(s, { claimedBy: 'the-coordinator' }) as { id: number };
+    s.recordRunEvent(r.id, 'operator', 'reclaim:x -> y');
+    expect(s.childReclaimCoordinatorIds()).toContain('x');
   });
 });
 
@@ -3118,7 +3163,7 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     expect(unbinds[0]!.index!).toBeGreaterThan(clearAt);
     expect(unbinds[0]!.index!).toBeLessThan(src.indexOf('\n  }\n', clearAt));
     // The one that remains sits inside bindSession — the funnel, not a caller.
-    const bindAt = src.indexOf('  bindSession(runId: number, sessionId: string)');
+    const bindAt = src.indexOf('  bindSession(runId: number, sessionId: string, bornAt?: number | null)');
     const nextMethodAt = src.indexOf('\n  setSession(', bindAt);
     expect(bindAt).toBeGreaterThan(-1);
     expect(updates[0]!.index!).toBeGreaterThan(bindAt);
@@ -3135,6 +3180,207 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     // Premise: the widened regex recognises what it forbids — it finds the
     // funnel's own statement.
     expect(updates[0]![0]).toContain('sessionId');
+  });
+
+  // Migration 16, child-reclamation spec §5.1, §5.3: the child's BIRTH is
+  // write-once PER BOUND SESSION, never a first stamp per run. `bindSession`
+  // is where the logic lives — `setSession` only forwards — so these cases
+  // drive `bindSession` directly, on the describe's own idiom above.
+  describe('sessionBornAt / sessionBornFor (migration 16) — the write-once birth', () => {
+    it('an explicit bornAt on a first bind writes it, and sessionBornFor names the bound session', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      const row = okRun(s.run(runId));
+      expect(row?.sessionBornAt).toBe(1_000);
+      expect(row?.sessionBornFor).toBe('demo-worker');
+    });
+
+    it('an explicit NULL bornAt (the adopted arm) writes null, not "unset" — and nulls sessionBornFor too, since there is no birth to attribute', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', null);
+      const row = okRun(s.run(runId));
+      expect(row?.sessionId).toBe('demo-worker');
+      expect(row?.sessionBornAt).toBeNull();
+      expect(row?.sessionBornFor).toBeNull();
+    });
+
+    it('two stamps, T1 then T2, with the bind on the second: sessionBornAt is T2, sessionBornFor stays the same session', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      s.bindSession(runId, 'demo-worker', 2_000);
+      const row = okRun(s.run(runId));
+      expect(row?.sessionBornAt).toBe(2_000);
+      expect(row?.sessionBornFor).toBe('demo-worker');
+    });
+
+    it('omitting bornAt on a SAME-session re-bind leaves both birth columns untouched', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      s.bindSession(runId, 'demo-worker');
+      const row = okRun(s.run(runId));
+      expect(row?.sessionBornAt).toBe(1_000);
+      expect(row?.sessionBornFor).toBe('demo-worker');
+    });
+
+    it('omitting bornAt on a DIFFERENT-session re-bind nulls both birth columns — a birth dated to the outgoing occupant is not the heir\'s', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      s.bindSession(runId, 'demo-heir');
+      const row = okRun(s.run(runId));
+      expect(row?.sessionId).toBe('demo-heir');
+      expect(row?.sessionBornAt).toBeNull();
+      expect(row?.sessionBornFor).toBeNull();
+    });
+
+    it('a bound session, then a direct markDispatchStarted: sessionBornAt/sessionBornFor unchanged and dispatchStartedAt moves — and childBirthOf now reads it as unplaceable (the accepted liveness cost)', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      s.markDispatchStarted(runId, 5_000);
+      const row = okRun(s.run(runId));
+      expect(row?.sessionBornAt).toBe(1_000);
+      expect(row?.sessionBornFor).toBe('demo-worker');
+      expect(row?.dispatchStartedAt).toBe(5_000);
+      // `childBirthOf` requires `sessionBornAt === dispatchStartedAt`, so a
+      // run whose dispatch was re-stamped by hand AFTER its birth — never a
+      // shape a real dispatch produces, since the fresh arm always stamps
+      // both from one measurement — now reads unplaceable rather than the
+      // birth it recorded first. This is the fail-closed cost the check
+      // accepts: the close would simply hold.
+      expect(childBirthOf({ ok: true, run: row! }, 'demo-worker')).toEqual({
+        kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth",
+      });
+    });
+
+    it('setSession forwards bornAt exactly as bindSession would — the two-argument form (the open route\'s) omits it', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.setSession(runId, 'demo-worker', 1_000);
+      expect(okRun(s.run(runId))?.sessionBornAt).toBe(1_000);
+      s.setSession(runId, 'demo-heir');
+      const row = okRun(s.run(runId));
+      expect(row?.sessionId).toBe('demo-heir');
+      expect(row?.sessionBornAt).toBeNull();
+      expect(row?.sessionBornFor).toBeNull();
+    });
+
+    it('clearSession nulls both birth columns alongside sessionId', () => {
+      // `clearSession` only writes a `planned` row (its own docstring) —
+      // `openOne` leaves the run exactly there, so no `advance` is needed.
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      const cleared = s.clearSession(runId, 42);
+      expect(cleared).toEqual({ ok: true, cleared: true });
+      const row = okRun(s.run(runId));
+      expect(row?.sessionId).toBeNull();
+      expect(row?.sessionBornAt).toBeNull();
+      expect(row?.sessionBornFor).toBeNull();
+    });
+
+    it('toRunSummary strips both birth columns off the wire, alongside coordProject and prLineage', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      const row = okRun(s.run(runId))!;
+      expect(row.sessionBornAt).toBe(1_000);
+      expect(row.sessionBornFor).toBe('demo-worker');
+      expect(toRunSummary(row)).not.toHaveProperty('sessionBornAt');
+      expect(toRunSummary(row)).not.toHaveProperty('sessionBornFor');
+    });
+
+    // A cross-build rollback across this migration can leave a stale birth on
+    // a row an OLDER build has since rebound — that build's `clearSession`/
+    // two-argument `setSession` never touch any of the three birth-adjacent
+    // columns, so a roll-forward can find `sessionId` moved on while
+    // `sessionBornAt`/`sessionBornFor` still name the outgoing occupant
+    // (a DIFFERENT id — `sessionBornFor` catches this), or find `sessionId`
+    // redrawn back to the SAME id (spec §5.5's recycled slug, extended across
+    // a rollback — `sessionBornFor` cannot see this, since the id never
+    // changed, but `dispatchStartedAt` moves on every genuine re-mint, so the
+    // `sessionBornAt === dispatchStartedAt` check catches it instead).
+    describe('childBirthOf and the cross-build rollback', () => {
+      it('the normal path: both checks agree, so the birth places', () => {
+        const s = store();
+        const runId = openOne(s);
+        // `markDispatchStarted` first, on `dispatch.ts`'s own fresh-arm order —
+        // a real bind always pairs the two stamps.
+        s.markDispatchStarted(runId, 1_000);
+        s.bindSession(runId, 'demo-s1', 1_000);
+        const row = okRun(s.run(runId))!;
+        expect(childBirthOf({ ok: true, run: row }, 'demo-s1')).toEqual({ kind: 'at', ms: 1_000 });
+      });
+
+      it('a same-session keep still places — neither column was touched', () => {
+        const s = store();
+        const runId = openOne(s);
+        s.markDispatchStarted(runId, 1_000);
+        s.bindSession(runId, 'demo-s1', 1_000);
+        s.bindSession(runId, 'demo-s1');   // omitted bornAt, same session: keep
+        const row = okRun(s.run(runId))!;
+        expect(childBirthOf({ ok: true, run: row }, 'demo-s1')).toEqual({ kind: 'at', ms: 1_000 });
+      });
+
+      it('the rollback shape: an OLD-BUILD rebind to a DIFFERENT id leaves the birth pointing at the outgoing occupant, and childBirthOf refuses it', () => {
+        const s = store();
+        const runId = openOne(s);
+        // v15 binds S1 on run R, birth T1.
+        s.bindSession(runId, 'demo-s1', 1_000);
+        // Roll back, then forward: simulate an OLDER build's rebind — it knows
+        // only `sessionId`, so it writes that column alone, exactly as
+        // `clearSession`/two-argument `setSession` did before this migration.
+        s.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run('demo-s2', runId);
+        const row = okRun(s.run(runId))!;
+        expect(row.sessionId).toBe('demo-s2');
+        // The birth columns are UNTOUCHED by the simulated old-build write —
+        // still S1's, dated T1 — which is exactly the stale pairing the guard
+        // exists to catch.
+        expect(row.sessionBornAt).toBe(1_000);
+        expect(row.sessionBornFor).toBe('demo-s1');
+        expect(childBirthOf({ ok: true, run: row }, 'demo-s2'))
+          .toEqual({ kind: 'unplaceable', detail: "the minting run's birth does not belong to its current session" });
+      });
+
+      // The redraw shape: a rollback
+      // followed by a SAME-id redraw (a recycled slug, spec §5.5, extended
+      // across a rollback) leaves `sessionBornFor` matching, since the id
+      // never changed — the `sessionBornFor` check alone cannot see it. The
+      // `sessionBornAt === dispatchStartedAt` check closes it, because every
+      // genuine re-mint — old build or new — always re-stamps
+      // `dispatchStartedAt` first (`CoordStore.markDispatchStarted`'s one
+      // call site, the fresh-spawn arm).
+      it('the redraw shape: an old-build re-mint of the SAME session id re-stamps dispatchStartedAt, and childBirthOf refuses it', () => {
+        const s = store();
+        const runId = openOne(s);
+        // v15 binds S1 at T1 — a real, paired bind.
+        s.markDispatchStarted(runId, 1_000);
+        s.bindSession(runId, 'demo-s1', 1_000);
+        // Roll back: an OLDER build's `clearSession` — `sessionId` (plus
+        // `workspace`/`branch`) alone, never the birth-adjacent columns.
+        s.db.prepare(
+          'UPDATE runs SET sessionId = NULL, workspace = NULL, branch = NULL WHERE id = ?',
+        ).run(runId);
+        // S1's workspace is fully removed and later redrawn for a DIFFERENT
+        // workspace under the SAME id (`_ws_slug_new`'s 12×12 pool, ccd/ccd) —
+        // an older build's fresh dispatch re-stamps `dispatchStartedAt` and
+        // binds `sessionId` with its own two-argument (birth-blind) write.
+        s.db.prepare('UPDATE runs SET sessionId = ?, dispatchStartedAt = ? WHERE id = ?')
+          .run('demo-s1', 2_000, runId);
+        const row = okRun(s.run(runId))!;
+        expect(row.sessionId).toBe('demo-s1');
+        expect(row.sessionBornAt).toBe(1_000);
+        expect(row.sessionBornFor).toBe('demo-s1');   // matches — the id never changed
+        expect(row.dispatchStartedAt).toBe(2_000);    // re-stamped — the re-mint is real
+        expect(childBirthOf({ ok: true, run: row }, 'demo-s1')).toEqual({
+          kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth",
+        });
+      });
+    });
   });
 });
 

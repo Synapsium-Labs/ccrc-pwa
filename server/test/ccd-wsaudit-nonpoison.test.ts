@@ -106,7 +106,7 @@ describe('the lifecycle block cannot poison wsaudit.test.ts\'s scan', () => {
       .toEqual(['attached', 'containment-unproven', 'not-a-child', 'paused', 'reap-in-progress', 'reclaim-in-progress',
         'tree-busy']);
     expect.soft(reclaimRegion(full).length, 'the region was found — an empty cut proves nothing').toBeGreaterThan(5000);
-    expect.soft(markedBlock(full, 'MIRROR-BEGIN', 'MIRROR-END'), 'the mirror block was found, and holds its one word')
+    expect.soft(markedBlock(full, 'MIRROR-BEGIN', 'MIRROR-END'), 'the mirror block was found, and holds ws-reap’s breadcrumb word')
       .toContain('"refused":"reclaim-in-progress"');
   });
 });

@@ -5,4 +5,10 @@ Type=oneshot
 ExecStart=%h/.local/bin/ccd-graph-sweep
 # budget 8 x 600s builds + probe overhead; a pass past this is wedged, not slow
 TimeoutStartSec=5400
-MemoryMax=4G
+# 6G, raised from 4G (2026-10-05). The sweep builds one tree at a time. On
+# the reference fleet a ~52k-node tree's rebuild peaked at 2.6G and 3.3G when
+# it completed, and was OOM-killed at 4G on most of the 14 kills in a week,
+# each kill costing a ~7-minute build that the next pass retried. A ceiling,
+# not a reservation: with the session slice's aggregate MemoryMax=24G
+# (app-claude-session.slice.d/limits.conf) the two caps still sum to 30G.
+MemoryMax=6G

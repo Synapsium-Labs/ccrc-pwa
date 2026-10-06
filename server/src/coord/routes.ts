@@ -11,7 +11,7 @@ import { assembleFleet } from '../fleet.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
-import { CCD_ARGV, ROUTE_CAP, capSupported, verbSupported, sweepDec } from '../ccdargv.js';
+import { CCD_ARGV, RECLAIM_PAUSE_CAP, ROUTE_CAP, capSupported, verbSupported, sweepDec } from '../ccdargv.js';
 import { escalate, demote, classRungEffortReset, EFFORT_LADDER, type Demotion, type RungCurrent, type RungTarget } from '../../../shared/routing-ladder.js';
 import { CLASSES, type ModelClass } from '../../../shared/models.js';
 import { decideCaps } from './caps.js';
@@ -25,7 +25,7 @@ import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
-import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
+import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
 import { reclaimChild, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
@@ -415,6 +415,28 @@ export function shapeHomeProject(raw: string): HomeProjectShape {
 }
 
 /**
+ * What `registerCoordRoutes` hands back to `buildServer` (workspace lifecycle spec §5.2): the coordination
+ * serialiser — this server's ONE `CoordMutex` — with the operator's abandon inside it, so a door registered OUTSIDE
+ * this file (the archive door's `{programme:'end'}`, in `server.ts`) runs on the same chokepoint and the same
+ * decision as `POST /api/runs/:id/abandon`, never a second spelling of either. `server.ts`'s archive route used to say
+ * why it held no mutex ("the change is to have `registerCoordRoutes` return its mutex"); this is that change.
+ *
+ * ONE METHOD, NOT TWO, on purpose: `closeRun` may only be called lexically inside `coordMutex.run(...)`
+ * (`dispatch-mutex-gate.test.ts`, D-46), so the abandon is handed to `fn` from INSIDE the hold rather than exported
+ * beside it — a caller can only reach it serialised.
+ */
+export interface CoordRoutesHandle {
+  /** Run `fn` as one coordination write — queued behind whichever write route's body is running, ahead of the next —
+   *  handed `closeRun`'s abandon arm exactly as the abandon route runs it, and `abandonRefusal` (close.ts): what that
+   *  arm would refuse for a run from its row alone, read without acting, so a caller that ends several runs can find
+   *  the one it cannot move before it ends the first. */
+  withAbandon<T>(coord: CoordStore, fn: (
+    abandon: (runId: number) => Promise<CloseOutcome>,
+    refusalOf: (runId: number) => Extract<CloseOutcome, { ok: false }> | null,
+  ) => Promise<T>): Promise<T>;
+}
+
+/**
  * The coordination routes. Registered from `buildServer` rather than declared
  * there, because `server.ts` is already the file whose whole discipline is not
  * holding a second copy of a contract, and six more routes inline would be six
@@ -480,12 +502,21 @@ export function registerCoordRoutes(
    * had ever held it in memory in the first place.
    */
   watcher?: FleetWatcher,
-): void {
+): CoordRoutesHandle {
   const notConfigured = (reply: FastifyReply) => reply.code(501).send({ ok: false, error: 'not-configured' });
 
   // One instance for this server (see `CoordMutex`'s own docstring) —
   // serialises the WRITE routes' bodies below: open, dispatch, close, advance.
   const coordMutex = new CoordMutex();
+
+  /** `closeRun`'s abandon arm exactly as `POST /api/runs/:id/abandon` runs it — `{intent:'abandon'}` built here and
+   *  never read off a body (D-280), `causedBy:'operator'`, CCR-15 wave 3's `childReclaim` port onto the session's own
+   *  queue — handed to `fn` INSIDE `coordMutex`. ONE spelling, two callers: that route, and the archive door's
+   *  `{programme:'end'}` through the handle this function returns. */
+  const withAbandon: CoordRoutesHandle['withAbandon'] = (coord, fn) => coordMutex.run(() => fn((runId) => closeRun(
+    { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState,
+      childReclaim: childReclaimPort(deps, coord) },
+    runId, { intent: 'abandon' }, 'operator'), (runId) => abandonRefusal(coord, runId)));
 
   // The process's ONE `LedgerLog` (the parts-B handoff): the file half of the
   // allocator's MAX(file, db) recovery, held here and handed into
@@ -1373,7 +1404,7 @@ export function registerCoordRoutes(
     // handler's first awaited read of the registry and, for a child with no PR
     // on record, a live `pr-state` round trip — a cheaper refusal is never
     // kept waiting behind it. It runs inside `coordMutex`, which is the cost:
-    // at most `pr-state`'s 20 s budget, and only for a CHILD with no PR on
+    // at most `pr-state`'s 25 s budget, and only for a CHILD with no PR on
     // record — a workspace with no marker costs one registry read. The two
     // codes are spelled here, not forwarded from the verdict: `mail-routes.
     // test.ts` requires every `RunRefuseCode` to be quoted in this directory.
@@ -1588,9 +1619,7 @@ export function registerCoordRoutes(
     const id = parseCanonicalPositiveSafeInteger(idParam);
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState, childReclaim: childReclaimPort(deps, coord) };
-    const outcome = await coordMutex.run(() => closeRun(closeDeps, id, { intent: 'abandon' }, 'operator'));
+    const outcome = await withAbandon(coord, (abandon) => abandon(id));
     return sendCloseOutcome(reply, outcome);
   });
 
@@ -2280,6 +2309,50 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, requested: body.paused });
   });
 
+  /** `POST /api/coord/reclaim-pause` — the operator's door onto
+   *  `$REG/reclaim-paused` (child-reclamation spec §5.8), the fleet-wide switch
+   *  on the AUTOMATIC reclamation of child workspaces. Body `{ state: 'on' |
+   *  'off' }` — ccd's own vocabulary, passed through, rather than the pause
+   *  route's boolean: there is no mapping here for a route to get wrong.
+   *
+   *  SESSION-GATED, AND NO BOX TOKEN — `coord-pause-route.test.ts`'s
+   *  `SESSION_ONLY`, beside `/api/coord/caps`, and deliberately NOT `UNGATED`.
+   *  The box token gates machine lanes; an operator toggling this from the phone
+   *  is not one, and gating it on the fleet's shared secret would put it behind
+   *  a key the phone does not hold. Nor is it a release valve: raising it
+   *  releases no wedge, so the release-valve argument does not apply. Armed,
+   *  it sits behind `auth/gate.ts` like every other PWA write. The
+   *  coordinator skill is exempt from naming it AND forbidden from it (`coordinator-skill.test.ts`):
+   *  a coordinator told about this door would be told how to stop or restart
+   *  the reclamation of its own children.
+   *
+   *  THE SKEW GATE IS THE CAPABILITY TOKEN, read with `capSupported` — no
+   *  evidence REFUSES. `verbSupported` would permit on an absent verb list and
+   *  send `ccd reclaim-pause` to a box whose ccd answers a usage error, which
+   *  the phone would render as a broken switch rather than an older fleet host.
+   *
+   *  NOT a guard on anything that deletes, and it says so: `ws-reclaim` reads
+   *  the file on the box, inside its lock, at the instant of deletion, and that
+   *  read is what makes the switch real. This route only moves the file.
+   *
+   *  No `coordMutex` (it writes no coordination row) and no `notConfigured` arm
+   *  (a box with no coordination database can still carry the file) — the
+   *  pause route's two reasons, unchanged. */
+  app.post('/api/coord/reclaim-pause', async (req, reply) => {
+    const body = (req.body ?? {}) as { state?: unknown };
+    if (body.state !== 'on' && body.state !== 'off') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    if (!capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)) {
+      return reply.code(501).send({ ok: false, error: 'unsupported' });
+    }
+    const res = await deps.runCcd(CCD_ARGV.reclaimPause(body.state));
+    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    // `requested`, never `paused`: the authoritative answer is the next
+    // `{type:'coord'}` frame's `reclaim` field, and the toggle settles on that.
+    return reply.code(200).send({ ok: true, requested: body.state });
+  });
+
   /** `GET`/`POST /api/coord/caps` — the two coordination caps become an
    *  OPERATOR DIAL. Before this, `CoordStore.setCaps` had no caller anywhere in
    *  `server/src`: the only way to change `maxConcurrentWorkers` or
@@ -2309,7 +2382,10 @@ export function registerCoordRoutes(
    *
    *  THE READ HALF EXISTS BECAUSE NOTHING ELSE CARRIES THESE NUMBERS (D-1209).
    *  `capsUsage` is computed server-side and reaches the PWA nowhere;
-   *  `CoordStatus` carries `pause` and `mail` and no numbers at all. Caps are
+   *  `CoordStatus` carries `pause`, `mail`, `reclaim` and `childReclaimAttention`
+   *  (child-reclamation wave 4) — the last holding `runId`/`at` numbers of its
+   *  own, but only for a child that currently needs the operator's attention,
+   *  a cached list rather than a value re-derived on every tick. Caps are
    *  deliberately NOT added to that frame: `emitCoord` states it needs no
    *  try/catch precisely because it touches no `node:sqlite`, and
    *  `dispatchedIn24h` moves with the clock, so the frame's byte-equality guard
@@ -3699,4 +3775,6 @@ export function registerCoordRoutes(
     }
     return reply.code(200).send({ ok: true, asks: read.asks });
   });
+
+  return { withAbandon };
 }

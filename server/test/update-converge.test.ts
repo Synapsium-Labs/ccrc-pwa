@@ -10,10 +10,11 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { UPDATE_LOCK_HELD_PREFIX, UPDATE_OP_DETAIL_MAX, UPDATE_SPAWN_TIMEOUT_MS, inFlightBusyDetail, isUpdateLockHeldLine, type ResOk } from '../../shared/agent-protocol.js';
-import type { NodeRole, RequestKind } from '../../shared/api.js';
+import { FLEET_SCOPE, UPDATE_GATE_CAP, type NodeRole, type RequestKind } from '../../shared/api.js';
 import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, type NodeMeasurement, type ReleaseListingRow } from '../src/coord/store.js';
+import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/updateintentlog.js';
 import { realRunner, type ExecResult, type Runner } from '../src/exec.js';
 import type { FleetState } from '../src/fleetstate.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -22,9 +23,12 @@ import type { Deps } from '../src/server.js';
 import {
   LINK_DOWN_DETAIL, LOCAL_SPAWNING_DETAIL, NO_FLEET_LINK_DETAIL, NO_LOCAL_RUNNER_DETAIL,
   dispatchViewsFor, localUpdateSpawnFor, runDispatch,
-  type ConvergeDeps, type DispatchRunResult, type LocalUpdateSpawn, type SendUpdateOp,
+  type ConvergeDeps, type ConvergeStore, type DispatchRunResult, type LocalUpdateSpawn, type SendUpdateOp,
 } from '../src/update/converge.js';
-import { AGENT_REJECTED_DETAIL, DEADLINE_DETAIL, LINK_FAILED_HOLD_PREFIX, linkFailedHoldDetail } from '../src/update/dispatch.js';
+import {
+  AGENT_REJECTED_DETAIL, DEADLINE_DETAIL, LINK_FAILED_HOLD_PREFIX, UNVERSIONED_DETAIL, linkFailedHoldDetail,
+  type MoveFeedRecord,
+} from '../src/update/dispatch.js';
 import {
   FLEET_LABEL, SERVER_LABEL, sweepInventory, sweepPlanFor, type InventoryDeps, type SweepPlan,
 } from '../src/update/inventory.js';
@@ -99,6 +103,9 @@ const sweepOnce = (store: CoordStore, m: NodeMeasurement): SweepPlan => {
 interface Harness {
   store: CoordStore; home: string; state: FleetState; deps: ConvergeDeps;
   sent: { tag: string; kind: RequestKind }[]; spawned: { cmd: string; args: string[] }[]; accepted: () => number;
+  /** Wave 8 item A: every `recordMove` call the default port received, in order — a case that needs a
+   *  different port (a throw, or a shared log with `onAccepted`) overrides `h.deps.recordMove` directly. */
+  records: MoveFeedRecord[];
 }
 
 /** A fixture coord.db with three listed stable releases, a connected link whose live agentOps names the op, a
@@ -118,14 +125,16 @@ function harness(o: {
   const send: SendUpdateOp = o.send ?? (async () => ACCEPTED);
   const run: Runner = o.run ?? (async (): Promise<ExecResult> => ({ code: 0, stdout: '', stderr: '' }));
   const recording: Runner = (cmd, args) => { spawned.push({ cmd, args }); return run(cmd, args); };
+  const records: MoveFeedRecord[] = [];
   const deps: ConvergeDeps = {
     store, role: o.role ?? 'server', ccrcDir: path.join(home, '.ccrc'), localIo: o.localIo ?? localIO,
     deadlineMs: DEADLINE,
     fleet: { state, send: (tag, kind) => { sent.push({ tag, kind }); return send(tag, kind); } },
     runLocal: o.noLocal === true ? null : spawnFromRunner(recording, home, o.boundMs),
     onAccepted: () => { accepted += 1; },
+    recordMove: (r) => { records.push(r); },
   };
-  return { store, home, state, deps, sent, spawned, accepted: () => accepted };
+  return { store, home, state, deps, sent, spawned, accepted: () => accepted, records };
 }
 
 const seedFleet = (h: Harness, tag: string | null = 'v0.0.10', over: Partial<NodeMeasurement> = {}): void => {
@@ -789,6 +798,167 @@ describe('runDispatch — a FLEET node that refused its request on provenance ho
   });
 });
 
+describe('a move the node took leaves one feed record naming its source (wave 8 item A)', () => {
+  /** A node-scoped auto intent (D-3586's cases): a FLEET-WIDE intent would also turn the server row's own auto
+   *  on, and these cases care about exactly one move. `fleetMeas`'s caps lack UPDATE_GATE_CAP — auto needs it. */
+  const seedFleetAuto = (h: Harness, target = 'v0.0.10', over: Partial<NodeMeasurement> = {}): void => {
+    const capsWithGate = ['verify', 'node-id', 'floor', 'update-json', 'detach', 'rollback', UPDATE_GATE_CAP];
+    expect(h.store.upsertNodeMeasurement(fleetMeas({ caps: capsWithGate, ...over })).ok).toBe(true);
+    const log = new UpdateIntentLog(defaultUpdateIntentLogPath(h.deps.ccrcDir));
+    expect(h.store.setIntent(FLEET_ID, { channel: 'stable', auto: 'channel' }, log, T0).ok).toBe(true);
+    expect(h.store.resolveNode(FLEET_ID, { channel: 'stable', desiredTag: target, resolveDetail: null }).ok).toBe(true);
+  };
+  /** A `ConvergeStore` over a real `CoordStore` whose `dispatchNode` alone is swapped for a `busy` refusal — the
+   *  real store cannot be made to refuse the acquire in the same synchronous stretch a dispatch run reads it in
+   *  (case d). Every other method passes straight through. */
+  const acquireRefusedStore = (base: CoordStore): ConvergeStore => ({
+    nodes: base.nodes.bind(base), releases: base.releases.bind(base), refusalsFor: base.refusalsFor.bind(base),
+    intentFor: base.intentFor.bind(base), updateEpoch: base.updateEpoch.bind(base),
+    dispatchNode: () => ({ ok: false, why: 'busy', heldBy: 'other' }),
+    releaseLease: base.releaseLease.bind(base), settleNode: base.settleNode.bind(base),
+    noteDispatchRefusal: base.noteDispatchRefusal.bind(base), noteLeaseDetail: base.noteLeaseDetail.bind(base),
+  });
+  /** A `ConvergeStore` whose `releaseLease` alone answers refused (`not-busy`), so a spawn-failed answer becomes
+   *  a `release-refused` outcome (case j). */
+  const releaseRefusedStore = (base: CoordStore): ConvergeStore => ({
+    nodes: base.nodes.bind(base), releases: base.releases.bind(base), refusalsFor: base.refusalsFor.bind(base),
+    intentFor: base.intentFor.bind(base), updateEpoch: base.updateEpoch.bind(base),
+    dispatchNode: base.dispatchNode.bind(base),
+    releaseLease: () => ({ ok: false, why: 'not-busy', state: 'idle' }),
+    settleNode: base.settleNode.bind(base),
+    noteDispatchRefusal: base.noteDispatchRefusal.bind(base), noteLeaseDetail: base.noteLeaseDetail.bind(base),
+  });
+
+  it('(a) an auto link update, accepted: exactly one record naming it auto', async () => {
+    const h = harness();
+    seedFleetAuto(h);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toMatchObject({ nodeId: FLEET_ID, result: 'accepted' });
+    expect(h.records).toHaveLength(1);
+    expect(h.records[0]!.title).toBe('update fleet: auto update to v0.0.10');
+  });
+
+  it('(b) a requested rollback: the title says requested rollback', async () => {
+    const h = harness();
+    expect(h.store.upsertNodeMeasurement(fleetMeas()).ok).toBe(true);
+    expect(h.store.requestNode(FLEET_ID, 'v0.0.8', 'rollback', T0).ok).toBe(true);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toMatchObject({ nodeId: FLEET_ID, result: 'accepted' });
+    expect(h.records).toHaveLength(1);
+    expect(h.records[0]!.title).toBe('update fleet: requested rollback to v0.0.8');
+  });
+
+  it('(c) an AUTO update from an UNVERSIONED node: the title still says auto (move.source, never move.detail)', async () => {
+    const h = harness();
+    seedFleetAuto(h, 'v0.0.9', { currentVersion: null, highestVersion: null, floorRead: 'absent' });
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toMatchObject({ nodeId: FLEET_ID, result: 'accepted' });
+    expect(h.records).toHaveLength(1);
+    expect(h.records[0]!.title).toBe('update fleet: auto update to v0.0.9');
+    expect(h.records[0]!.body).toContain(UNVERSIONED_DETAIL);
+  });
+
+  it('(d) a not-sent move and an acquire-refused one write no record', async () => {
+    const h1 = harness();
+    h1.state.connected = false;
+    seedFleet(h1);
+    const r1 = ran(await runDispatch(h1.deps, T0 + 1000));
+    expect(r1.outcome).toEqual({ nodeId: FLEET_ID, result: 'not-sent', detail: LINK_DOWN_DETAIL });
+    expect(h1.records).toEqual([]);
+
+    const h2 = harness();
+    seedFleet(h2);
+    h2.deps.store = acquireRefusedStore(h2.store);
+    const r2 = ran(await runDispatch(h2.deps, T0 + 1000));
+    expect(r2.outcome).toMatchObject({ nodeId: FLEET_ID, result: 'acquire-refused', why: 'busy' });
+    expect(h2.records).toEqual([]);
+  });
+
+  it('(e) a D-3555 transport hold: the body names the link failure', async () => {
+    const h = harness({ send: async () => { throw new Error('timeout'); } });
+    seedFleet(h);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toMatchObject({ nodeId: FLEET_ID, result: 'held' });
+    expect(h.records).toHaveLength(1);
+    expect(h.records[0]!.body).toContain('lease held: link failed mid-op');
+  });
+
+  it('(f) a spawn-failed release: the body names it released failed', async () => {
+    const h = harness({ run: async () => ({ code: 1, stdout: '', stderr: '' }) });
+    seedServer(h);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'released', to: 'failed' });
+    expect(h.records).toHaveLength(1);
+    expect(h.records[0]!.body).toContain('released failed: spawn-failed');
+  });
+
+  it('(g) a recordMove that throws never changes the run', async () => {
+    const hNull = harness();
+    hNull.deps.recordMove = null;
+    seedFleet(hNull);
+    const rNull = ran(await runDispatch(hNull.deps, T0 + 1000));
+
+    const hThrow = harness();
+    hThrow.deps.recordMove = () => { throw new Error('boom'); };
+    seedFleet(hThrow);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // Settled, never awaited bare: a mutation that drops the try/catch (M-A4) or that moves the call before the
+    // send (M-A8) makes `runDispatch` REJECT with the bare `boom`, and a bare `await` would die on it — a crash
+    // is not a pin (mutation-table discipline). Both facts are asserted SOFT, unconditionally, so neither masks
+    // the other: `settled.ok` alone fires for M-A4 (the send already ran; only the safety net is gone, so `sent`
+    // still reads 1); both `settled.ok` AND `sent` fire for M-A8 (the record — and its throw — now happen BEFORE
+    // `deps.fleet.send` is ever called, so `sent` stays empty) — that second fact is what tells the two mutants
+    // apart.
+    const settled = await runDispatch(hThrow.deps, T0 + 1000).then(
+      (r) => ({ ok: true as const, r }),
+      (e: unknown) => ({ ok: false as const, e }),
+    );
+    expect.soft(settled.ok, 'runDispatch must resolve, never reject, even when recordMove throws').toBe(true);
+    expect.soft(hThrow.sent, 'the send must already have happened by the time recordMove runs').toHaveLength(1);
+    if (!settled.ok) return; // the shape below is the genuine (non-mutant) resolution only
+
+    const rThrow = ran(settled.r);
+    expect(rThrow.outcome).toEqual(rNull.outcome);
+    expect(hThrow.store.node(FLEET_ID)).toEqual(hNull.store.node(FLEET_ID));
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toMatch(/^ccrc-server: the update move's feed record was not written/);
+  });
+
+  it('(h) onAccepted runs before recordMove, in the hold arm', async () => {
+    const h = harness();
+    seedFleet(h);
+    const order: string[] = [];
+    h.deps.onAccepted = () => { order.push('onAccepted'); };
+    h.deps.recordMove = () => { order.push('recordMove'); };
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toMatchObject({ result: 'accepted' });
+    expect(order).toEqual(['onAccepted', 'recordMove']);
+  });
+
+  it('(i) a node answering busy on every run writes zero records', async () => {
+    const h = harness({ send: async () => { throw new AgentOpError('busy', IN_FLIGHT); } });
+    seedFleet(h);
+    for (let i = 1; i <= 5; i++) {
+      const r = ran(await runDispatch(h.deps, T0 + i * 1000));
+      expect(r.outcome).toMatchObject({ result: 'released', to: 'idle' });
+      expect(h.sent).toHaveLength(i);
+    }
+    expect(h.store.node(FLEET_ID)?.updateDetail).toMatch(/^busy — /);
+    expect(h.records).toEqual([]);
+  });
+
+  it('(j) a release refused is never worded "released"', async () => {
+    const h = harness({ run: async () => ({ code: 1, stdout: '', stderr: 'boom' }) });
+    seedServer(h);
+    h.deps.store = releaseRefusedStore(h.store);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'release-refused', to: 'failed', why: 'not-busy' });
+    expect(h.records).toHaveLength(1);
+    expect(h.records[0]!.body).toContain('release refused (not-busy) — the answer was: spawn-failed');
+    expect(h.records[0]!.body).not.toContain('released ');
+  });
+});
+
 describe('dispatchViewsFor — the one builder of the dispatcher\'s input (the routes read the same views)', () => {
   it('carries every live row, its resolved auto, and only THIS node\'s refused tags', () => {
     const h = harness();
@@ -1223,5 +1393,49 @@ describe('runDispatch — a revive during the op hands the lease to the heir, an
     expect(r.outcome).toEqual({
       nodeId: FLEET_ID2, result: 'release-refused', to: 'idle', detail: `busy — ${IN_FLIGHT}`, why: 'not-busy',
     });
+  });
+});
+
+describe('runDispatch — a rollback the node is known to refuse (wave 8 item C, D-3587, D-3588)', () => {
+  /** v0.0.8's row, re-applied with its provenance bundle unlisted (`coverage: 'single'`, an upsert by tag —
+   *  `seedReleases` already planted v0.0.8/9/10, all bundled). */
+  const noBundleV8 = (store: CoordStore): void => {
+    expect(store.applyReleaseListing([{ ...rel('v0.0.8', T0 - 3000), bundleListed: false }], T0, 'single').ok).toBe(true);
+  };
+
+  it('(a) a pre-W8 standing rollback request to a no-bundle tag never sends, and the request stands (decision 7)', async () => {
+    const h = harness();
+    noBundleV8(h.store);
+    expect(h.store.upsertNodeMeasurement(fleetMeas()).ok).toBe(true);
+    expect(h.store.requestNode(FLEET_ID, 'v0.0.8', 'rollback', T0).ok).toBe(true);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toBeNull();
+    expect(h.sent).toEqual([]);
+    expect(h.spawned).toEqual([]);
+    expect(r.plan.gate.haltedBy).toEqual([]);
+    const row = h.store.node(FLEET_ID)!;
+    expect(row.updateState).toBe('idle');
+    expect(row.updateDetail).toMatch(/^no-bundle — /);
+    expect(row.requestedTag).toBe('v0.0.8');
+    expect(row.requestedKind).toBe('rollback');
+  });
+
+  it('(b) that request on the FLEET row, plus a server row with an AUTO move: the server\'s op sends in the same run', async () => {
+    const h = harness();
+    noBundleV8(h.store);
+    const capsWithGate = ['verify', 'node-id', 'floor', 'update-json', 'detach', 'rollback', UPDATE_GATE_CAP];
+    expect(h.store.upsertNodeMeasurement(fleetMeas({ caps: capsWithGate })).ok).toBe(true);
+    expect(h.store.requestNode(FLEET_ID, 'v0.0.8', 'rollback', T0).ok).toBe(true);
+    expect(h.store.upsertNodeMeasurement(serverMeas({ caps: capsWithGate })).ok).toBe(true);
+    // A fleet-wide auto intent (D-3588's exclusion applies to BOTH holds; neither may hold the server here).
+    const log = new UpdateIntentLog(defaultUpdateIntentLogPath(h.deps.ccrcDir));
+    expect(h.store.setIntent(FLEET_SCOPE, { channel: 'stable', auto: 'channel' }, log, T0).ok).toBe(true);
+    expect(h.store.resolveNode(FLEET_ID, { channel: 'stable', desiredTag: 'v0.0.10', resolveDetail: null }).ok).toBe(true);
+    expect(h.store.resolveNode(SERVER_ID, { channel: 'stable', desiredTag: 'v0.0.10', resolveDetail: null }).ok).toBe(true);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
+    expect(h.spawned).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: LAUNCHER_ARGV }]);
+    expect(h.sent).toEqual([]);   // the fleet row's own refused request is never sent over the link
+    expect(h.store.node(FLEET_ID)!.updateDetail).toMatch(/^no-bundle — /);
   });
 });

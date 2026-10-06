@@ -1,6 +1,6 @@
 import { tx } from './db.js';
 import { renderEnvelope } from './envelope.js';
-import type { CoordStore, OpenSibling, RunRow } from './store.js';
+import type { CoordStore, OpenSibling, RunRow, StallObservation } from './store.js';
 import {
   HOLD_REASON_MAX_CHARS,
   holdReason as serializeHoldReason,
@@ -55,6 +55,21 @@ export const MAIL_DISABLED_MARKER = 'mail-disabled';
  *  markers out of `/api/accounts` as candidate wrapper names, and this is not
  *  a lane kill-switch — it must not read as one there. */
 export const COORDINATOR_PAUSE_MARKER = 'coordinator-paused';
+
+/** `$REG/reclaim-paused` — the fleet-wide kill-switch on the AUTOMATIC
+ *  reclamation of child workspaces (child-reclamation spec §5.8). Written only
+ *  by `ccd reclaim-pause` (through `POST /api/coord/reclaim-pause`), read by
+ *  FOUR parties, spec §5.8's four: the watcher's frame (`emitCoord`, which
+ *  renders it); the watcher's sweep (`sweepChildReclaim`, which skips before
+ *  asking); the one executor both triggers share (`reclaimChild`, through
+ *  `childReclaimPauseRead` in `childReclaimOutcome`, which defers
+ *  `paused-at-server` after its sibling re-read and before presence or any
+ *  argv — that is the close path's skip, and the sweep's for a reclaim that
+ *  was queued before the switch went up); and — the one that matters —
+ *  `ws-reclaim` itself on the box, which refuses `paused`. Not
+ *  `-disabled`-suffixed, for `COORDINATOR_PAUSE_MARKER`'s reason: `limits.ts`
+ *  reads `<name>-disabled` as a wrapper's lane switch. */
+export const RECLAIM_PAUSE_MARKER = 'reclaim-paused';
 
 /**
  * `run_events.detail` for a dispatch whose post-resume `/clear` was refused
@@ -183,11 +198,17 @@ export const survivorOf = (s: readonly OpenSibling[]): OpenSibling | null => s[s
  * sender is still right — the question is the operator's to answer, and the
  * mail exists to let a parent answer it first — but "a route" is no longer how
  * it gets sent, so the gloss says both.
+ *
+ * WIDENED AGAIN BY THE STALL WATCH (wave 1). The watcher's stall lane is the
+ * second raiser the operator did not tap for. Its stall-check to a silent worker
+ * and its report to that run's coordinator are both operator mail, sent by
+ * `queueStallNotice` off a measured silence. The reasoning is the ask nudge's:
+ * the operator is who the watch speaks for, and no session is.
  */
 const SYSTEM_MAIL_SENDER_MAP = {
   coordinator: "the program's own coordinator session, speaking as the role",
   operator: 'the operator — either through a PWA-surface route or raised by the ' +
-    'watcher on their behalf (the ask nudge); never a session speaking for itself',
+    'watcher on their behalf (the ask nudge, the stall watch, the landing notices); never a session speaking for itself',
 } as const;
 
 export type SystemMailSender = keyof typeof SYSTEM_MAIL_SENDER_MAP;
@@ -218,7 +239,9 @@ export type SystemMailQueued =
 
 /**
  * The SERVER's OWN mail — the wave brief (dispatch), a done-claim rejection
- * mailed back (close, advance), and the program kickoff (kickoff.ts) — queued
+ * mailed back (close, advance, and the review close's `review-done-rejected`),
+ * the program kickoff (kickoff.ts), and the ask pre-emption lane's parent nudge
+ * (`watch.ts`'s `FleetWatcher.hold`) — queued
  * DIRECTLY rather than through `POST /api/mail`'s ingress. The ingress exists to
  * police attribution for a message this server did not originate (spec:136-148: a
  * box token authenticates the box, `{fromId,fromUuid}` is verified against
@@ -237,6 +260,12 @@ export type SystemMailQueued =
  * `{program: slug, wave: 0, waveOf: null}` at the call site — compiles and even
  * works, since `renderEnvelope` skips all three fields when `runId === null`, but
  * it asserts a run that does not exist. The type expresses the condition instead.
+ *
+ * ITS BODY IS `insertSystemMailTx` below (stall watch wave 1). This function is
+ * that body's dedupe plus the one transaction around it, and it behaves exactly
+ * as it did before the split. `queueStallNotice` is the body's second caller: it
+ * dedupes on a `run_events` observation row instead, and opens its own
+ * transaction, because `tx` is not re-entrant.
  */
 export function queueSystemMail(
   coord: CoordStore,
@@ -256,41 +285,121 @@ export function queueSystemMail(
   // `recordRejection` (the caller's own audit log) is unaffected: this only
   // guards the MAIL queue, never the record of the refusal itself.
   if (coord.hasOutstandingMail(m.fromId, m.runId, m.toId, m.subject)) return { queued: false };
-  let out: SystemMailQueued = { queued: false };
-  tx(coord.db, () => {
-    const inserted = coord.insertMail({ fromId: m.fromId, fromUuid: m.fromId, toId: m.toId,
-      runId: m.runId, kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
-    const delivery = coord.queueDelivery(inserted.id, m.toId, '');
-    const envelope = renderEnvelope({ id: delivery.id, fromId: m.fromId, toId: m.toId, runId: m.runId,
-      program: run?.program ?? null, wave: run?.wave ?? null, waveOf: run?.waveOf ?? null,
-      kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
-    const stamped = coord.setDeliveryEnvelope(delivery.id, envelope);
-    // Structurally impossible inside this transaction — the row was inserted
-    // six lines up and nothing else can see it. THROWN rather than ignored
-    // because `tx` rolls back on throw and rethrows: if the impossible
-    // happens, the whole mail is withdrawn rather than accepted with the
-    // placeholder envelope, which carries no `ack:` line and so names no
-    // delivery id for any recipient to ack against. The throw ESCAPES
-    // `queueSystemMail` — all five of its callers: `close.ts`'s `closeRun`,
-    // `dispatch.ts`'s `dispatchRun`, `kickoff.ts`'s `queueProgramKickoff`,
-    // `routes.ts`'s `POST /api/runs/:id/advance` handler, and `watch.ts`'s
-    // `FleetWatcher.hold` (the ask pre-emption lane's parent nudge, added
-    // after this file's other four) — deliberately:
-    // `{ queued: false }` already means "the dedupe guard suppressed it", a
-    // different and true statement this must not borrow.
-    //
-    // THAT LIST NAMES ITS CALLERS, and carries no line numbers, deliberately.
-    // It cited lines through two corrections and the second went stale inside
-    // a single wave: an edit anywhere ABOVE a call site moves it while the
-    // call itself does not change, so the cardinal rots on edits that have
-    // nothing to do with the fact being stated. The enclosing function is the
-    // property that identifies a caller; the number was only ever a way of
-    // pointing at it, and a worse one.
-    if (!stamped.ok) throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
-    out = { queued: true, mailId: inserted.id, deliveryId: delivery.id };
-  });
-  return out;
+  const q = tx(coord.db, () => insertSystemMailTx(coord, run, m));
+  return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId };
 }
+
+/**
+ * `queueSystemMail`'s BODY, extracted (stall watch wave 1) so a second caller
+ * can run it inside a transaction that also holds its own row. It inserts the
+ * mail, inserts the delivery so the delivery id exists, renders the envelope
+ * AGAINST THAT ID, and lands it (`setDeliveryEnvelope`'s docstring says why the
+ * two ids cannot be assumed to walk together). It OPENS NO TRANSACTION: `tx` is
+ * `BEGIN IMMEDIATE` and not re-entrant, so each caller holds one around it
+ * (`queueSystemMail` above, `queueStallNotice` below). It never dedupes: that is
+ * each caller's own rule.
+ */
+export function insertSystemMailTx(
+  coord: CoordStore,
+  run: Pick<RunRow, 'program' | 'wave' | 'waveOf'> | null,
+  m: { fromId: SystemMailSender; toId: string; runId: number | null;
+       kind: MailKind; subject: string; body: string },
+): { mailId: number; deliveryId: number } {
+  const inserted = coord.insertMail({ fromId: m.fromId, fromUuid: m.fromId, toId: m.toId,
+    runId: m.runId, kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
+  const delivery = coord.queueDelivery(inserted.id, m.toId, '');
+  const envelope = renderEnvelope({ id: delivery.id, fromId: m.fromId, toId: m.toId, runId: m.runId,
+    program: run?.program ?? null, wave: run?.wave ?? null, waveOf: run?.waveOf ?? null,
+    kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
+  const stamped = coord.setDeliveryEnvelope(delivery.id, envelope);
+  // Structurally impossible inside the caller's transaction — the row was
+  // inserted three lines up and nothing else can see it. THROWN rather than
+  // ignored because both callers run this under `tx`, which rolls back on
+  // throw and rethrows. If the impossible happens, the whole mail is withdrawn
+  // (and, under `queueStallNotice`, a run notice's observation row with it: a
+  // run-less notice writes none) rather than accepted with the placeholder
+  // envelope, which carries no `ack:` line and so names no delivery id to ack.
+  //
+  // The throw ESCAPES to every caller, deliberately. Two functions call this
+  // one. The first is `queueSystemMail`, and through it that function's seven
+  // callers in five files: `close.ts`'s `closeRun` and its module-private
+  // `closeReviewRun` (the review close's own rejection), `dispatch.ts`'s
+  // `dispatchRun`, `kickoff.ts`'s `queueProgramKickoff`, `routes.ts`'s
+  // `POST /api/runs/:id/advance` handler, and `watch.ts`'s `FleetWatcher.hold`
+  // (the ask pre-emption lane's parent nudge) and `FleetWatcher.sweepLanding`
+  // (the merge queue's two landing notices, landing-order wave 2, which
+  // catches the throw per row). The second is `queueStallNotice`
+  // below, the stall watch's notices, on a run or run-less. Both callers' false arms already mean
+  // "declined", a different and true statement a failure must not borrow.
+  //
+  // THAT LIST NAMES ITS CALLERS, and carries no line numbers, deliberately.
+  // It cited lines through two corrections, and the second went stale inside
+  // a single wave: an edit anywhere ABOVE a call site moves it while the call
+  // itself does not change. The enclosing function is what identifies a
+  // caller. It said "all five" for waves while `closeReviewRun` was a sixth.
+  if (!stamped.ok) throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
+  return { mailId: inserted.id, deliveryId: delivery.id };
+}
+
+/** What `queueStallNotice` did. `why` is `StallObservation`'s own refusal,
+ *  derived rather than respelled: a run notice declines exactly when its
+ *  observation row does, and a run-less one answers `duplicate` when its
+ *  subject was already sent. `eventId` is the observation row's id, and null
+ *  for a run-less notice, which writes none. */
+export type StallNoticeQueued =
+  | { queued: true; mailId: number; deliveryId: number; eventId: number | null }
+  | { queued: false; why: Extract<StallObservation, { recorded: false }>['why'] };
+
+/**
+ * The stall watch's run notice (spec 2026-09-29 §4.2): r1's stall-check to the
+ * worker and r2's report to the coordinator. It runs in ONE transaction: first
+ * the `run_events` observation row that dedupes the rung
+ * (`insertStallObservation`), then the mail from `operator`
+ * (`insertSystemMailTx`). If the mail write throws, the row rolls back with it,
+ * so a failed send never burns its rung. If the row is a duplicate or the run
+ * is gone (absent or no longer active, D-3584), no mail is written.
+ *
+ * NOT `queueSystemMail`'s dedupe. That one sees only OUTSTANDING mail, so an
+ * acked stall-check would not stop a second one, and a restart would re-send
+ * every rung. The observation row is durable, and the lane's ladder reads its
+ * rung times back from it.
+ *
+ * `run === null` is the RUN-LESS notice (stall watch wave 2, `run-less-stall-notice` (D-3640)):
+ * a session verdict about a coordinator, or about a registry row with no run
+ * (an `orphaned:` or `failed:` self-wake, or its failed rung 2), has no
+ * `run_events` row to dedupe on. Its durable dedupe is
+ * `hasMailWithSubject('operator', null, toId, subject)`, over EVERY delivery
+ * state, read INSIDE the same transaction as the insert, so the check and the
+ * write cannot be split. It holds because the subject names the episode to the
+ * day and the minute (`self-mail-subjects-carry-the-date` (D-3668)) and `mail` is never
+ * pruned. It writes no observation row: `eventId` is null, and `detail` and
+ * `at` are unused. `tx` is not re-entrant, so no caller may hold one around
+ * either arm.
+ */
+export function queueStallNotice(
+  coord: CoordStore,
+  run: Pick<RunRow, 'id' | 'program' | 'wave' | 'waveOf'> | null,
+  n: { detail: string; at: number; toId: string; kind: MailKind; subject: string; body: string },
+): StallNoticeQueued {
+  return tx(coord.db, (): StallNoticeQueued => {
+    if (run === null) {
+      if (coord.hasMailWithSubject('operator', null, n.toId, n.subject)) return { queued: false, why: 'duplicate' };
+      const q = insertSystemMailTx(coord, null, { fromId: 'operator', toId: n.toId, runId: null,
+        kind: n.kind, subject: n.subject, body: n.body });
+      return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: null };
+    }
+    const seen = coord.insertStallObservation(run.id, n.detail, n.at);
+    if (!seen.recorded) return { queued: false, why: seen.why };
+    const q = insertSystemMailTx(coord, run, { fromId: 'operator', toId: n.toId, runId: run.id,
+      kind: n.kind, subject: n.subject, body: n.body });
+    return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: seen.eventId };
+  });
+}
+
+/** The landing lane's two notice subjects live in `landing.ts` (L1: the lane's verdict spells them, and this
+ *  file holds the database handle an L1 file may not reach); re-exported so `watch.ts` and the coordinator-skill
+ *  test keep the import they always had. Spelled ONCE, there. */
+export { dequeuedSubject, mergedSubject } from './landing.js';
 
 /** The ask pre-emption lane's own nudge-mail subject prefix — the ONE source
  *  `askNudgeSubject` (the queue side) and `isAskNudgeMail` (the reader side)

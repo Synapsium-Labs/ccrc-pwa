@@ -328,11 +328,16 @@ describe.skipIf(!linux)('an answer arrives before UPDATE_OP_TIMEOUT_MS while a g
     mkdirSync(bin, { recursive: true });
     const launcher = path.join(bin, 'ccrc');
     // The fixture launcher: an escapee in its own session that inherits the pipes, then the parent hangs. NOT the real
-    // ccrc — this case is about the spawner's pipes, so the script is the smallest thing that holds them.
-    writeFileSync(launcher, `#!/bin/sh\nsetsid sh -c 'echo $$ > "$HOME/gc-pid"; exec sleep 300' &\nexec sleep 300\n`);
+    // ccrc — this case is about the spawner's pipes, so the script is the smallest thing that holds them. The escapee
+    // is started by this suite's own node with `detached: true` (libuv's setsid(); macOS has no setsid(1) — wave 9 M5,
+    // D-3810), in the FOREGROUND, before the parent hangs.
+    writeFileSync(launcher, `#!/bin/sh\n'${process.execPath}' -e 'require("child_process").spawn("sh", ["-c", "echo $$ > \\"$HOME/gc-pid\\"; exec sleep 300"], { detached: true, stdio: "inherit" }).unref()'\nexec sleep 300\n`);
     chmodSync(launcher, 0o755);
     const real = makeUpdateSpawn({ HOME: home, PATH: '/usr/bin:/bin' });
-    const BOUND_MS = 300;
+    // 2000, not 300: node now starts the escapee in the FOREGROUND before the parent hangs, and must have done so before
+    // the group kill lands (node's spawn measured 50-80 ms at load ~57). Every assertion below is relative to BOUND_MS,
+    // so none changes meaning (wave 9 M5, D-3810).
+    const BOUND_MS = 2000;
     agent = await boot(fixture, { spawnUpdate: (file, args) => real(file, args, BOUND_MS) });
     client = new TestClient(agent.port);
     await client.hello();

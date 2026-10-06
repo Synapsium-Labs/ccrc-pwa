@@ -10,6 +10,10 @@ export interface LiveState {
    *  before this field existed was chosen, so absent must NOT read as derived. */
   nameSource: string | null;
   status: string; statusUpdatedAt: number | null; version: string | null;
+  /** When this Claude Code process started, epoch ms: the live file's numeric `startedAt` (measured present on
+   *  2.1.284). Null when absent (an older build), not a number, or not finite. The turn marker's reader judges a
+   *  marker written before it as `stale` (`turnmark.ts`, worker stall watch wave 2, §5.1). */
+  startedAt: number | null;
   /** WHY a `status: 'waiting'` session is blocked, in Claude Code's own words
    *  — `'sandbox request'`, `'input needed'`, `'dialog open'`, or whatever the
    *  top dialog names itself (D-76; the bundle's own `aTw`). Null for every
@@ -26,19 +30,22 @@ export interface LiveState {
 
 /**
  * The live file's `status` → the two states ccrc shows. Claude Code writes at
- * least four: `idle`, `busy` (a model turn is in flight), `shell` (a Bash
- * tool command is running) and `waiting` (D-76 — blocked on the human, and
- * the bundle sets `working:!1` beside it). From the operator's side the
- * middle two are the same thing — Claude is working — so `idle` is the ONLY
- * value that reads as idle and everything else is busy.
+ * least four: `idle`, `busy` (the main query runs, OR a background agent or
+ * workflow task is still open), `shell` (an IDLE main loop, relabelled while a
+ * background shell or Monitor task runs — the worker stall watch design's
+ * §3.1, binary-confirmed) and `waiting` (D-76 — blocked on the human, and the
+ * bundle sets `working:!1` beside it). From the operator's side all three
+ * non-idle words mean work is still running or a human is needed, so `idle` is
+ * the ONLY value that reads as idle and everything else is busy.
  *
  * `waiting` COLLAPSES TO BUSY HERE, DELIBERATELY, and the fix for it is not
- * in this function. Two consumers read `SessionStatus` to answer "may I act
- * on this session right now" — the mail delivery gate (`watch.ts`) and the
- * per-session socket — and a human-blocked session is one both must keep
- * their hands off, exactly like a busy one. Answering `idle` here would let
- * mail inject into an open dialog. What `waiting` actually needs is the
- * ATTENTION bucket, and it reaches that
+ * in this function. Its readers are `fleet.ts`'s `assembleFleet` (the fleet
+ * card) and `liveStatus` (the interrupt route) and the per-session socket (the
+ * chat header), and none of them may paint a human-blocked session as at rest.
+ * The mail delivery gate (`watch.ts`) no longer reads this collapse: it takes
+ * the RAW word through `mailTurnIdle` (`turnidle.ts`), which delivers on `idle`
+ * and on `shell` and refuses `waiting` by its own rule. What `waiting` actually
+ * needs is the ATTENTION bucket, and it reaches that
  * through `fleet.ts`'s `dialogPending` (which reads `waitingFor`, kept above)
  * — a field, not a status word. `livestate.test.ts` pins this collapse.
  *
@@ -47,6 +54,9 @@ export interface LiveState {
  * ago" on its fleet card while its own terminal showed the spinner, made the
  * two surfaces flap out of sync as a turn alternated between streaming and
  * shelling out, and fired a "Finished — back to idle" push on every shell-out.
+ * That history is of builds before 2.1.277, which nobody read for how they
+ * wrote `shell`; in 2.1.277–2.1.284 `shell` comes only from an idle main loop
+ * (the paragraph at the top of this docstring).
  * A status we don't recognise is far likelier to be new work than new rest.
  */
 export function liveSessionStatus(status: string): SessionStatus {
@@ -113,16 +123,18 @@ export function liveStatusCoversDelegation(version: string | null): boolean {
  *
  * AND THE FOLD IS STILL RIGHT FOR MOST CALLERS, which is why `readLiveState`
  * below keeps its signature rather than being replaced. `watch.ts`'s mail gate
- * requires an AFFIRMATIVE idle (`!live || … !== 'idle'` gates the delivery and
- * moves on), so an unreadable file already fails shut there through the null.
+ * hands the null straight to `mailTurnIdle` (`turnidle.ts`), which reads it as
+ * `not-idle` and delivers only on an affirmative `idle` or `shell`, so an
+ * unreadable file already fails shut there through the null.
  * `commands.ts` wants a cwd and has a registry
  * fallback for not having one. And `fleet.ts`'s `liveStatus` answers `'idle'`
  * on this same failure ON PURPOSE: its sole consumer is the interrupt route's
  * `… === 'busy'`, which REFUSES on idle, so there the reassuring word is the
  * fail-shut one and "fail toward busy" would GRANT interrupts on a read that
  * measured nothing. Only the two DISPLAY surfaces — the fleet card and the
- * chat header — had the polarity the wrong way round, and only they take the
- * measured form.
+ * chat header — had the polarity the wrong way round, and they take the
+ * measured form. So does the stall lane (`watch.ts`'s `sweepStalls`), which
+ * must hold on `unmeasured` rather than read it as a quiet worker.
  */
 export type LiveStateRead =
   | { ok: true; state: LiveState }
@@ -171,6 +183,7 @@ export async function readLiveStateMeasured(io: FleetIO, configDir: string, pid:
         // what corrects the answer when the hook has something fresher to say.
         status: String(raw.status ?? ''),
         statusUpdatedAt: typeof raw.statusUpdatedAt === 'number' ? raw.statusUpdatedAt : null,
+        startedAt: typeof raw.startedAt === 'number' && Number.isFinite(raw.startedAt) ? raw.startedAt : null,
         version: typeof raw.version === 'string' ? raw.version : null,
         waitingFor: typeof raw.waitingFor === 'string' ? raw.waitingFor : null,
       },
@@ -180,9 +193,10 @@ export async function readLiveStateMeasured(io: FleetIO, configDir: string, pid:
 
 /**
  * The folded form, unchanged in signature and in every answer it gives: null
- * for all four conditions the measured read tells apart. Its four callers —
- * `fleet.ts`'s `liveStatus`, `commands.ts`'s cwd lookup, and both of
- * `watch.ts`'s already-fail-shut gates — are each indifferent to the
+ * for all four conditions the measured read tells apart. Its three callers —
+ * `fleet.ts`'s `liveStatus`, `commands.ts`'s cwd lookup, and `watch.ts`'s mail
+ * gate (one read, handed to `mailTurnIdle`, which fails shut on the null) —
+ * are each indifferent to the
  * distinction (see `LiveStateRead` for why, one by one), and widening them to
  * carry an arm they do not act on is the defect this task removes, one type
  * over.

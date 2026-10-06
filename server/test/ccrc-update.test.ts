@@ -32,7 +32,7 @@
 //
 // NEVER against a real $HOME; no live tmux/systemd/journal is ever reachable
 // (recorders and poisons only). No secret value is ever printed or asserted.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer as createNetServer, type AddressInfo } from 'node:net';
@@ -45,13 +45,18 @@ import {
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
-import { itLinux, itDarwin, platformContrast, python3ProgramArm } from './platformFixtures.js';
-import { installVersionedTree } from './installTreeFixture.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
+import { assertNoRealTool, CONTAINED_TOOLS } from './containedTools.js';
+import { itLinux, itDarwin, platformContrast, python3ProgramArm, IS_DARWIN } from './platformFixtures.js';
+import { installVersionedTree, keepDigest, rsyncRecorder } from './installTreeFixture.js';
 import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
 // Fix round 1 item 3 / review 155 C31: W2's OWN reader (never a hand copy),
 // the same import pattern `update-intent-cross-side.test.ts` already uses.
 import { reportFrom, type NodeFileRead } from '../src/update/inventory.js';
+import {
+  SPINE_CONTAINMENT_PROBE, spineRunCalls, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms,
+  spineSystemdRun, plantLiveShape, foreignSnapshot, stateCallsNaming,
+} from './codexLaneFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -270,13 +275,78 @@ function healthyBox(home: string): void {
     '\x7fELF\x02\x01\x01\x00not-a-real-binary-just-a-fixture-marker', { mode: 0o755 });
 }
 
-/** `ccrcEnv` (ccrc-install.test.ts), trimmed: the poisoned gh from
- *  `ghContainedEnv` (later shadowed by the doctor stub — the shadow answers,
- *  never execs), journalctl poisoned, systemctl/loginctl as RECORDERS that
- *  answer the shapes the install spine asks, npm a recorder that fabricates
- *  node_modules, rsync a recorder that execs the real binary. */
+/** Composes the source-owned Codex spine front with this target-owned update
+ * fixture's detached-run controls. `codexLaneFixture.ts` stays byte-identical
+ * to the reviewed source; the shared update suite alone owns this composition. */
+function updateSpineSystemdRun(): string {
+  const source = spineSystemdRun();
+  const failureGate = [
+    'if [ -f "$HOME/fixture-systemd-run-fail" ]; then',
+    '  IFS= read -r bad < "$HOME/fixture-systemd-run-fail"',
+    '  case " $* " in',
+    '    *" --unit=$bad "*) echo "Failed to start transient service unit: fixture refusal for $bad" >&2; exit 1 ;;',
+    '  esac',
+    'fi',
+  ].join('\n');
+  const terminalRefusal = [
+    'echo "fixture systemd-run: no fake user manager is planted in this HOME — a spine harness never starts a real transient unit" >&2',
+    'exit 97',
+  ].join('\n');
+  if (!source.includes(failureGate) || !source.endsWith(`${terminalRefusal}\n`)) {
+    throw new Error('updateSpineSystemdRun: the source spine front changed; recompose its detached-update adapter');
+  }
+  const detachedControls = [
+    'printf \'%s\\n\' "$*" >> "$HOME/systemd-run-argv"',
+    'if [ -f "$HOME/fixture-systemd-run-exec" ]; then',
+    '  [ "$1 $2 $3" = "--user --collect --quiet" ] || { echo "fixture systemd-run: unexpected argv: $*" >&2; exit 90; }',
+    '  shift 3',
+    '  setsid "$@" </dev/null >"$HOME/detached.log" 2>&1 &',
+    '  echo "$!" > "$HOME/systemd-run-exec-pid"',
+    'fi',
+    'if [ -f "$HOME/fixture-systemd-run-linger" ]; then',
+    '  sleep 20 </dev/null >/dev/null 2>&1 &',
+    '  echo "$!" > "$HOME/systemd-run-linger-pid"',
+    'fi',
+    'if [ -f "$HOME/fixture-systemd-run-exit" ]; then',
+    '  IFS= read -r code < "$HOME/fixture-systemd-run-exit"',
+    '  exit "$code"',
+    'fi',
+  ].join('\n');
+  const ordinaryDetach = [
+    'case " $* " in',
+    '  *" --unit=fixture-containment-probe.service "*)',
+    `    ${terminalRefusal.replace('\n', '; ')} ;;`,
+    'esac',
+    'exit 0',
+  ].join('\n');
+  return source
+    .replace(failureGate, `${detachedControls}\n${failureGate}`)
+    .replace(`${terminalRefusal}\n`, `${ordinaryDetach}\n`);
+}
+
+/** Wave 9 R10d (D-3819): a real-curl case lists the ONE loopback port its own listener holds (M4: its refused port 9)
+ *  in `$HOME/curl-allow-ports`, which `updateEnv`'s loopback curl front reads. Nothing else is let through. */
+function allowCurlPort(home: string, port: number): void {
+  writeFileSync(join(home, 'curl-allow-ports'), `${port}\n`);
+}
+/** What the loopback front handed to the REAL curl (one URL per line), '' when it handed none. A real-curl case
+ *  asserts this holds its URL, so a case that silently stopped reaching the real curl reds. */
+function curlFrontPassed(home: string): string {
+  const p = join(home, 'curl-front-passed');
+  return existsSync(p) ? readFileSync(p, 'utf8') : '';
+}
+
+/** `ccrcEnv` (ccrc-install.test.ts), trimmed: it starts from `ccrcContainedEnv` (wave 9 R10d, D-3818) — HOME the
+ *  fixture, the user bus pointed at two absent paths under it, and recording poisons for gh (later shadowed by the
+ *  doctor stub — the shadow answers, never execs), ssh, scp, tmux and launchctl, create-if-absent. It is a SPINE
+ *  builder, so it passes `managers: false`: it fronts its own systemctl/systemd-run below, after
+ *  `adoptPlantedSystemd`, which would rename an unmarked poison to a `.codex-*` delegate. Its curl is the LOOPBACK
+ *  front (D-3819): it execs the real curl only for `http://127.0.0.1:<port>/…` with the port listed in
+ *  `$HOME/curl-allow-ports`, which the real-curl cases write for their own listener; anything else is recorded and
+ *  refused. Then journalctl poisoned, systemctl/loginctl as RECORDERS that answer the shapes the install spine
+ *  asks, npm a recorder that fabricates node_modules, rsync a recorder that execs the real binary. */
 function updateEnv(home: string): NodeJS.ProcessEnv {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  const env = ccrcContainedEnv(home, process.env, { managers: false, curl: 'loopback' });
   const plant = (name: string, body: string): void =>
     writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });
   const poison = (name: string, says: string): void =>
@@ -295,10 +365,18 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     'case "$1" in',
     '  bootstrap) [ -f "$3" ] || { echo "fixture launchctl: no job file: $3" >&2; exit 1; };',
     '             printf \'%s\\n\' "${3##*/}" >> "$HOME/launchctl-loaded"; exit 0 ;;',
-    '  bootout|enable|disable|kickstart) exit 0 ;;',
+    '  bootout|enable|disable) exit 0 ;;',
+    // Wave 11 (R12): a kickstart zeroes that label's print counter, which
+    // `fixture-pid-churn-first.<label>` reads (see the `print` arm).
+    '  kickstart) printf \'0\\n\' > "$HOME/fx-kick.${3##*/}"; exit 0 ;;',
     '  print)',
     '    lbl="${2##*/}"',
     '    if [ -f "$HOME/launchctl-loaded" ] && grep -q "^$lbl.plist$" "$HOME/launchctl-loaded"; then',
+    // F12: `fixture-launchctl-not-running` — the job is LOADED and the manager
+    // answers (rc 0), but it is not running: what launchd prints for a job
+    // that is waiting or has exited. `_svc_is_active` reads that as "no
+    // answer", never `inactive` (only rc 113 is that).
+    '      if [ -f "$HOME/fixture-launchctl-not-running" ]; then echo "	state = waiting"; exit 0; fi',
     '      echo "	state = running"',
     // The sweep's stay-up gate samples `pid = ` twice per kicked job; a
     // stable default is a job that stayed up, `fixture-pid-churn` a crash
@@ -307,7 +385,16 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     // SESSION jobs (the sweep's subject), `fixture-main-pid-churn` the
     // ccrc/ccrc-agent jobs (the gate's), so each case measures one of them.
     '      churn=""',
-    '      case "$lbl" in app.ccrc.session.*) [ -f "$HOME/fixture-pid-churn" ] && churn=1 ;; *) [ -f "$HOME/fixture-main-pid-churn" ] && churn=1 ;; esac',
+    // Wave 11 (R12), two per-label knobs, additive: `fixture-pid-churn.<label>`
+    // churns that one job; `fixture-pid-churn-first.<label>`, holding K, churns
+    // the first K prints of that label AFTER its kickstart and answers 4242
+    // from then on (a job whose window failed and whose re-check holds).
+    '      case "$lbl" in app.ccrc.session.*) { [ -f "$HOME/fixture-pid-churn" ] || [ -f "$HOME/fixture-pid-churn.$lbl" ]; } && churn=1 ;; *) [ -f "$HOME/fixture-main-pid-churn" ] && churn=1 ;; esac',
+    '      if [ -f "$HOME/fixture-pid-churn-first.$lbl" ]; then',
+    '        k=0; n=0; IFS= read -r k < "$HOME/fixture-pid-churn-first.$lbl"; [ -f "$HOME/fx-kick.$lbl" ] && IFS= read -r n < "$HOME/fx-kick.$lbl"',
+    '        n=$((n + 1)); printf \'%s\\n\' "$n" > "$HOME/fx-kick.$lbl"',
+    '        [ "$n" -le "$k" ] && churn=1',
+    '      fi',
     '      if [ -n "$churn" ]; then',
     '        echo "	pid = $(($(wc -l < "$HOME/launchctl-calls") + 4000))"',
     '      else',
@@ -322,51 +409,61 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
   plant('plutil', '#!/bin/sh\nexit 0\n');
 
   // W4 Task 3: `--detach` re-execs through `_svc_run_detached`, whose Linux
-  // arm is `systemd-run --user --collect --quiet "$@"`. RECORDED, never real:
-  // `ghContainedEnv` above is called WITHOUT `{ systemd: true }`, so before
-  // this line a detached run would have reached this box's own user manager.
-  // Knobs are FILES, this harness's rule: `fixture-systemd-run-exit` is the
-  // job-creation answer, and `fixture-systemd-run-linger` makes the recorder
-  // leave a `sleep` behind — stdio closed so `spawnSync` does not wait on it,
-  // every OTHER descriptor inherited — which is how the "no lock fd at the
-  // spawn" pin observes a descriptor the parent must not have held.
-  // `fixture-systemd-run-exec` RUNS the handed argv, minus the three manager
-  // flags, in a session of its own (`setsid`, stdio to `detached.log`). That
-  // is what the transient unit gives the real run: a kill aimed at the
-  // parent's process group cannot reach it (§16's parent-kill fixture). It
-  // runs in the CALLER's environment, which the real unit does not, so it
-  // measures the process chain and not the environment contract.
-  plant('systemd-run', [
-    '#!/bin/sh',
-    'printf \'%s\\n\' "$*" >> "$HOME/systemd-run-argv"',
-    'if [ -f "$HOME/fixture-systemd-run-exec" ]; then',
-    '  [ "$1 $2 $3" = "--user --collect --quiet" ] || { echo "fixture systemd-run: unexpected argv: $*" >&2; exit 90; }',
-    '  shift 3',
-    '  setsid "$@" </dev/null >"$HOME/detached.log" 2>&1 &',
-    '  echo "$!" > "$HOME/systemd-run-exec-pid"',
-    'fi',
-    'if [ -f "$HOME/fixture-systemd-run-linger" ]; then',
-    '  sleep 20 </dev/null >/dev/null 2>&1 &',
-    '  echo "$!" > "$HOME/systemd-run-linger-pid"',
-    'fi',
-    'code=0; [ -f "$HOME/fixture-systemd-run-exit" ] && IFS= read -r code < "$HOME/fixture-systemd-run-exit"',
-    'exit "$code"',
-  ].join('\n') + '\n');
+  // arm is `systemd-run --user --collect --quiet "$@"`. The shared adapter
+  // retains target detached-update controls around the source-owned Codex front.
+  adoptPlantedSystemd(home);
+  plant('systemd-run', updateSpineSystemdRun());
 
   plant('systemctl', [
     '#!/bin/sh',
     'printf \'%s\\n\' "$*" >> "$HOME/systemctl-calls"',
     '[ "$1" = "--user" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
     'shift',
+    // Plan 2b-2 Task 10: the codex tiers' verbs, before this stub's own arms —
+    // its `is-active) echo active; exit 0` answers every unit active, which
+    // would read every rostered codex lane as a FOREIGN tier.
+    ...spineSystemctlArms(),
     'case "$1" in',
     '  daemon-reload) exit 0 ;;',
     '  enable) [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
+    // Plan 3a Task 6: the usage converge (`_inst_enable`) may withdraw a ccrc
+    // usage timer; recorded and answered here, never a real manager.
+    '  disable) [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
     '  restart) [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
     '  try-restart) [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
     // Task 2 (§18 "the lock closes before the sweep": "a lingering stub
     // pins the lock"): a restart that leaves a process behind, holding
     // whatever descriptor it was handed.
     '    if [ -f "$HOME/fixture-sweep-linger" ]; then sleep 30 >/dev/null 2>&1 </dev/null & echo $! > "$HOME/sweep-linger-pid"; fi',
+    // Wave 8 item B, P7/P12: a sweep whose try-restart itself fails (the
+    // spine died mid-sweep) — exit 1 before `_bak_gc` is ever reached.
+    '    if [ -f "$HOME/fixture-try-restart-fail" ]; then exit 1; fi',
+    // Wave 8 item B, P12: another ccrc holds ~/.ccrc/update.lock by the time
+    // `_bak_gc` re-takes it — the lock was released before this sweep runs
+    // (design §10), so a holder planted HERE models the race honestly. The
+    // probe is a non-blocking `flock -n <file> -c true`: it succeeds (rc 0)
+    // while the file is free and fails once the spawned holder has it,
+    // bounded so a broken probe fails the case loudly rather than hanging.
+    // Fix round 1: `-F` (--no-fork) — without it `flock FILE sleep 30` FORKS
+    // and `$!` names the flock PARENT, not the `sleep` CHILD that inherits
+    // the lock fd; killing only the parent (afterEach) orphans `sleep`,
+    // which keeps holding the lock for its own 30s regardless (a leaked
+    // process AND a stuck fixture lock for any later case in the same
+    // suite run). `-F` makes flock EXEC into `sleep` in place — one PID,
+    // and killing it releases the lock immediately.
+    '    if [ -f "$HOME/fixture-sweep-hold-lock" ]; then',
+    '      flock -F "$HOME/.ccrc/update.lock" sleep 30 </dev/null >/dev/null 2>&1 &',
+    '      echo $! > "$HOME/sweep-lock-holder-pid"',
+    '      i=0',
+    '      while flock -n "$HOME/.ccrc/update.lock" -c true >/dev/null 2>&1; do',
+    '        i=$((i + 1))',
+    '        if [ "$i" -ge 50 ]; then',
+    '          echo "fixture systemctl: the lock holder never took ~/.ccrc/update.lock" >&2',
+    '          exit 1',
+    '        fi',
+    '        sleep 0.1',
+    '      done',
+    '    fi',
     // Fix round 1 item 5 / review 155 C2 (your Q5): the interleaving probe —
     // a SECOND `ccrc update` takes the freed lock during this sweep and
     // writes its own in-flight report, foreign pid and all. `mv -f` goes
@@ -393,9 +490,24 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     '    state=""',
     '    for a in "$@"; do case "$a" in --state=*) state="${a#--state=}" ;; esac; done',
     '    case "$state" in',
-    '      "") [ -f "$HOME/fixture-sweep-units" ] && cat "$HOME/fixture-sweep-units" ;;',
+    // fix round 1 item 1 (D-3599): flag-gated failure arms for the unfiltered
+    // and `--state=active` listings — a distinctive rc plus a bus message on
+    // stderr, modelling the transient failure review 196's F1 measured.
+    '      "")',
+    '        if [ -f "$HOME/fixture-sweep-units-fail" ]; then',
+    '          echo "Failed to connect to bus: No such file or directory" >&2',
+    '          exit 93',
+    '        fi',
+    '        [ -f "$HOME/fixture-sweep-units" ] && cat "$HOME/fixture-sweep-units"',
+    '        ;;',
     '      failed) [ -f "$HOME/fixture-sweep-failed" ] && cat "$HOME/fixture-sweep-failed" ;;',
-    '      active) [ -f "$HOME/fixture-sweep-active" ] && cat "$HOME/fixture-sweep-active" ;;',
+    '      active)',
+    '        if [ -f "$HOME/fixture-sweep-active-fail" ]; then',
+    '          echo "Failed to connect to bus: No such file or directory" >&2',
+    '          exit 94',
+    '        fi',
+    '        [ -f "$HOME/fixture-sweep-active" ] && cat "$HOME/fixture-sweep-active"',
+    '        ;;',
     '      *) echo "fixture systemctl: unexpected argv: $*" >&2; exit 90 ;;',
     '    esac',
     '    exit 0 ;;',
@@ -456,8 +568,7 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
   plant('npm',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
-  plant('rsync',
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
+  plant('rsync', rsyncRecorder(RSYNC));
   // Task 1 (design §10, "update.json is written at every phase … by rename"):
   // a RECORDING mv. When the destination is `~/.ccrc/update.json` it appends
   // the SOURCE file's one line to `$HOME/update-json-writes` before the real
@@ -550,7 +661,7 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     `exec ${REAL_NODE} "$@"`,
   ].join('\n') + '\n');
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
-    'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_VERSIONS_KEEP']) delete env[k];
+    'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
   // The health gate (design §11) probes once and decides at a 0 s deadline;
@@ -569,6 +680,11 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
   writeFileSync(join(gfxPkg, 'skill.md'), '# fixture graphify skill\n');
   writeFileSync(join(gfxPkg, 'skills', 'claude', 'references', 'fixture-ref.md'), 'fixture ref\n');
   env['CCRC_GRAPHIFY_PKG'] = gfxPkg;
+  // Fix round 2 (N1): a builder-level layer too — harmless here (nothing
+  // after this point in `updateEnv` touches PATH or these two names), and
+  // `runUpdate`'s own call on the truly final env is the one that counts.
+  assertSpineFrontContained(env, home);
+  assertNoRealTool(env, home);
   return env;
 }
 
@@ -580,6 +696,22 @@ function replantDoctorStubs(home: string): void {
     chmodSync(join(home, '.local', 'bin', f), 0o755);
   }
 }
+
+describe('updateEnv: containment (wave 9 R10d)', () => {
+  it('updateEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {
+    const home = mkTmp('ccrc-update-contained-');
+    expect(() => assertNoRealTool(updateEnv(home), home)).not.toThrow();
+  });
+
+  it('updateEnv is a SPINE builder: it hands `adoptPlantedSystemd` nothing to rename — no .codex-systemctl or .codex-systemd-run delegate (wave 9 R10d)', () => {
+    // `managers: true` would plant poisons that `adoptPlantedSystemd` renames to `.codex-*` delegates the fronts forward
+    // to: every `--detach` systemd-run would answer 97. The twin of ccrc-containment.test.ts's (g), at this builder.
+    const home = mkTmp('ccrc-update-spine-');
+    updateEnv(home);
+    const bin = join(home, '.local', 'bin');
+    for (const n of ['.codex-systemctl', '.codex-systemd-run']) expect(existsSync(join(bin, n)), n).toBe(false);
+  });
+});
 
 /** A box with an OLD install on it: an old `~/ccrc` tree (with a marker file
  *  a real update must delete), an old `~/.local/bin/ccd`, the two units, and
@@ -833,6 +965,17 @@ function runUpdate(home: string, args: string[] = [],
     ...extraEnv,
   };
   replantDoctorStubs(home);
+  // Fix round 2 (N1/N5): on the FINAL merged env, immediately before the
+  // spawn. `updateEnv` plants no PRE-EXISTING fake manager for
+  // `adoptPlantedSystemd` to adopt (unlike verbEnv's/ccrcEnv's real-lane
+  // cases, where `plantSystemd` runs first) — its own `plant('systemd-run',
+  // …)`/`plant('systemctl', …)` calls are the ONLY layer that ever ran here
+  // before this round, with no structural fallback if either line were ever
+  // lost. This call is that fallback. No case in this file legitimately
+  // reaches no manager at all.
+  assertSpineFrontContained(env, home);
+  // Wave 9 R10d: and no real ssh, scp, tmux, gh, curl, launchctl, nor the real user bus (the final env).
+  assertNoRealTool(env, home);
   const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', ...args],
     { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
@@ -1241,7 +1384,10 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
   // and the assertions below measure that it did, at its own bound and not
   // before. A real `net.createServer`, NEVER a stubbed curl (modelled on the
   // never-answering-socket pin for `_upd_asset_listed`, fix round 1 item 12 /
-  // review 155 C32, below) — `updateEnv` alone, like that pin, NEVER
+  // review 155 C32, below) — `updateEnv` alone (whose curl is, since wave 9
+  // D-3819, the LOOPBACK FRONT: it execs the REAL curl only for the one port
+  // this case lists in `$HOME/curl-allow-ports`, and the case asserts the front
+  // passed its URL), like that pin, NEVER
   // `runUpdate`/`freshUpdateBox`'s own `replantDoctorStubs`, which would shadow
   // the real curl with the LOCAL-URL-only fixture shim (it never writes `-o`'s
   // destination file for a bare `http://` URL, so a run through it "fails" for
@@ -1310,11 +1456,13 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
         CCRC_RELEASE_SPEED_TIME: '1',
         CCRC_RELEASE_CONNECT_TIMEOUT: '2',
       };
+      allowCurlPort(home, host.port);
       const t0 = Date.now();
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update'],
         { env, encoding: 'utf8', timeout: 20_000 });
       const elapsedMs = Date.now() - t0;
       sent = await host.stop();
+      expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain(`http://127.0.0.1:${host.port}/`);
       expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
       // Ended by the OVERRIDDEN total bound (2 s): not before it (a stall or a
       // size bound would have ended it sooner), and not left trickling to
@@ -1357,10 +1505,12 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
         CCRC_RELEASE_CONNECT_TIMEOUT: '2',
       };
       delete env['CCRC_RELEASE_SUMS_MAX_FILESIZE'];
+      allowCurlPort(home, host.port);
       const t0 = Date.now();
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update'],
         { env, encoding: 'utf8', timeout: 25_000 });
       const elapsedMs = Date.now() - t0;
+      expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain(`http://127.0.0.1:${host.port}/`);
       expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
       // Ended by the size bound: curl 63, quickly — and the 30 s total bound
       // (set high on purpose) is nowhere near.
@@ -1388,11 +1538,15 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     }), { tag: 'v2.0.0' });
     const before = treeDigest(join(home, 'ccrc-versions', 'v1.0.0'));
     const r = runUpdate(home);
+    // FIRST, before the exit code: a run that wrote into the running version
+    // (the rsync's destination naming `~/ccrc` instead of the new version
+    // directory) dies later, at its own exit code, and this is the assertion
+    // that must name the defect (review 179 item 15).
+    expect(treeDigest(join(home, 'ccrc-versions', 'v1.0.0')),
+      'the update wrote into the version it was replacing').toEqual(before);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(lstatSync(join(home, 'ccrc')).isSymbolicLink()).toBe(true);
     expect(readlinkSync(join(home, 'ccrc'))).toBe(join(home, 'ccrc-versions', 'v2.0.0'));
-    expect(treeDigest(join(home, 'ccrc-versions', 'v1.0.0')),
-      'the update wrote into the version it was replacing').toEqual(before);
     expect(r.stdout).toMatch(/^install: tree: placed v2\.0\.0 at \$HOME\/ccrc-versions\/v2\.0\.0$/m);
     expect(r.stdout).toMatch(/^install: tree: \$HOME\/ccrc -> \$HOME\/ccrc-versions\/v2\.0\.0 \(was \$HOME\/ccrc-versions\/v1\.0\.0\) — one rename$/m);
     expect(readFileSync(join(home, 'npm-cwd'), 'utf8').trim().split('\n')[0])
@@ -1653,13 +1807,16 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     // moved". So the death is moved one step later, to `_inst_bins` — the
     // step right after `_inst_tree`, reached only once the migration has
     // already linked `~/ccrc` — with the harness's recording `mv` refusing
-    // the one destination `_inst_atomic` renames onto: `~/.local/bin/ccd`.
+    // one destination `_inst_atomic` renames onto: `~/.local/bin/ccd-account-auth`,
+    // placed on every role and both arms. (It named `~/.local/bin/ccd` until
+    // D-3696: ccd's pair is published by its own helper's `os.replace`, which
+    // no `mv` stub sees — so the lever moved to the next `_inst_atomic`.)
     const home = freshUpdateBox('ccrc-update-died-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantCoordDb(home);
     writeFileSync(join(home, '.ccrc', 'installed'), 'oldsha0000000000000000000000000000000000\n');
     packRelease(home, fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
-    writeFileSync(join(home, 'fixture-mv-fail'), '/.local/bin/ccd\n');
+    writeFileSync(join(home, 'fixture-mv-fail'), '/.local/bin/ccd-account-auth\n');
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
     expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — /m);
@@ -1736,6 +1893,10 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     const home = freshUpdateBox('ccrc-update-ordering-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantCoordDb(home);
+    // A box already on ccd's pair (D-3696): its body is the other half the
+    // backup must hold before anything is installed.
+    mkdirSync(join(home, '.local', 'libexec', 'ccrc'), { recursive: true });
+    writeFileSync(join(home, '.local', 'libexec', 'ccrc', 'ccd'), '#!/usr/bin/env bash\n# the OLD ccd body\n', { mode: 0o644 });
     packRelease(home, stubTree(home, { version: 'v2.0.0', installExit: 1 }), { tag: 'v2.0.0' });
     const r = runUpdate(home);
     expect(r.code).toBe(1);
@@ -1745,9 +1906,11 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     // uncertain bytes) …
     const snap = readFileSync(join(backup, 'coord.db'));
     expect(snap.subarray(0, 15).toString('utf8')).toBe('SQLite format 3');
-    // … the old ccd, byte for byte …
+    // … the old ccd, byte for byte — both halves of its pair …
     expect(readFileSync(join(backup, 'ccd'), 'utf8'))
       .toBe(readFileSync(join(home, '.local', 'bin', 'ccd'), 'utf8'));
+    expect(readFileSync(join(backup, 'ccd-body'), 'utf8'))
+      .toBe(readFileSync(join(home, '.local', 'libexec', 'ccrc', 'ccd'), 'utf8'));
     // … the job files this box actually has, and the dists. The NAMES are
     // per-platform (systemd units vs launchd plists) and so is the set:
     // launchd has no template unit, because there is nothing to instantiate —
@@ -2494,6 +2657,25 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(r.stdout).not.toMatch(/DEGRADED/);
   });
 
+  // G-M8 control: the pre-restart set is read from the ACTIVE column, not
+  // from "every listed unit" — a unit the unfiltered listing shows as
+  // already FAILED (never active) must not be warned about as an unverified
+  // vanish, and must not appear in the old success line's implicit claim.
+  itLinux('G1b-control: a unit already FAILED in the unfiltered listing (never active) is not warned about and does not block the old success line', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-prefailed-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'),
+      `${UNIT_LINES}claude-session@gamma.service loaded failed failed fixture supervisor\n`);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).not.toMatch(/claude-session@gamma\.service was active before try-restart/);
+    expect(r.stdout).toMatch(
+      /^update: sweep: every live claude-session@ supervisor now runs the ccd this update installed \(KillMode=process verified per unit before any restart; panes untouched\)$/m);
+  });
+
   // Fix round 1 item 5 / review 155 C2 (your Q5), narrowed by review fix
   // round 1 m2: the lock is released BEFORE the sweep (§10 requires it), so
   // a SECOND `ccrc update` can take it mid-sweep and write its own
@@ -2531,6 +2713,57 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(r.stdout).toMatch(/^update: sweep: /m);
   });
 
+  // ── wave 8 item G: the success line claims no more than was measured ────
+  // A claim of "every … now runs the ccd this update installed" is false
+  // when nothing was active before try-restart ran (there was nothing to
+  // verify), and false for a unit that WAS active before and is not seen
+  // active or failed after (this sweep did not verify it — it is named).
+
+  itLinux('G1a: NO fixture-sweep-units and no fixture-sweep-active — the pre-restart set is truly empty: the zero line, never the old success line', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-zero-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(
+      /^update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart \(KillMode=process verified before the restart; panes untouched\)$/m);
+    expect(r.stdout).not.toContain('every live claude-session@ supervisor now runs the ccd this update installed');
+    expect(r.stderr).not.toMatch(/was active before try-restart/);
+  });
+
+  itLinux('G1b: UNIT_LINES in both fixture-sweep-units and fixture-sweep-active — the old success line, byte-identical; no zero line, no new warning', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-full-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(
+      /^update: sweep: every live claude-session@ supervisor now runs the ccd this update installed \(KillMode=process verified per unit before any restart; panes untouched\)$/m);
+    expect(r.stdout).not.toContain('no claude-session@ supervisor was active when the sweep began');
+    expect(r.stderr).not.toMatch(/was active before try-restart/);
+  });
+
+  itLinux('G1d: UNIT_LINES in fixture-sweep-units, fixture-sweep-active ABSENT — both units named on stderr as unverified, but the old success line still prints', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-vanish-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).not.toContain('no claude-session@ supervisor was active when the sweep began');
+    expect(r.stderr).toMatch(
+      /^update: warning: claude-session@alpha\.service was active before try-restart and is not active after it — this sweep did not verify it\. On the box: systemctl --user status claude-session@alpha\.service$/m);
+    expect(r.stderr).toMatch(
+      /^update: warning: claude-session@beta\.service was active before try-restart and is not active after it — this sweep did not verify it\. On the box: systemctl --user status claude-session@beta\.service$/m);
+    expect(r.stdout).toMatch(
+      /^update: sweep: every live claude-session@ supervisor now runs the ccd this update installed \(KillMode=process verified per unit before any restart; panes untouched\)$/m);
+  });
+
   itLinux('with the drop-in ABSENT the sweep is REFUSED — loud, naming the drop-in — and the update still exits 0 with a degraded line', () => {
     const home = freshUpdateBox('ccrc-update-sweep-refused-');
     plantOldBox(home, { version: 'v1.0.0' });
@@ -2550,6 +2783,106 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
     expect(calls).not.toMatch(/try-restart/);
     expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
+  });
+
+  // ── fix round 1 item 1 (D-3599, review 196 F1): the sweep claims nothing ──
+  // it did not measure. (a) the unfiltered pre-sweep listing fails — the
+  // sweep REFUSES, restarting nothing, rather than print a zero line nobody
+  // measured. G1b's setup (both fixture-sweep-units/-active carry UNIT_LINES,
+  // KillMode=process drop-in present, so a successful listing would sweep
+  // clean), with ONLY the unfiltered listing failing.
+  itLinux('(a) the unfiltered pre-sweep listing fails — the sweep is REFUSED, not the old zero line: stderr names the rc, stdout is DEGRADED with no "Fix the KillMode above" and no restart, no zero line, no old success line, no restart call', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-listing-fail-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-units-fail'), '');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).toMatch(
+      /^update: sweep REFUSED — systemctl --user list-units "claude-session@\*" --plain --no-legend failed \(rc 93\), so the supervisors to be checked could not be listed\.$/m);
+    expect(r.stdout).toMatch(
+      /^update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted\. Once systemctl --user list-units 'claude-session@\*' answers, confirm KillMode=process on each unit, then restart them\.$/m);
+    expect(r.stdout).not.toContain('Fix the KillMode above');
+    expect(r.stdout).not.toContain('no claude-session@ supervisor was active when the sweep began');
+    expect(r.stdout).not.toContain('every live claude-session@ supervisor now runs the ccd this update installed');
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
+    expect(calls).not.toMatch(/try-restart/);
+    expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
+    // The refusal is the KillMode refusal's own exit code and update.json —
+    // never a new failure (review 196's ruling, item 1).
+    expect(JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>)
+      .toMatchObject({ phase: 'done', detail: null, from: 'cli' });
+  });
+
+  // (a) on the OTHER caller — a rollback by flip reaches `_upd_sweep` from
+  // `cmd_rollback` itself, not through `cmd_update`, so the refusal is pinned
+  // at that call site too (review 179 item 5's pattern, applied to D-3599).
+  itLinux('(a) on a rollback BY FLIP: the unfiltered pre-sweep listing fails and the flip\'s own sweep is REFUSED the same way — the flip itself still completes, exit 0, phase done', () => {
+    const home = freshUpdateBox('ccrc-rollback-flip-sweep-listing-fail-');
+    plantW6Box(home, 'v2.0.0', V2_SHA, 'server');
+    const kept = keptVersion(home, 'v1.0.0', V1_SHA);
+    writeFileSync(join(home, '.ccrc', 'previous'), `v1.0.0\n${V1_SHA}\n`);
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-units-fail'), '');
+    const r = rollbackRun(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(linkOf(home)).toBe(kept);
+    expect(r.stderr).toMatch(
+      /^update: sweep REFUSED — systemctl --user list-units "claude-session@\*" --plain --no-legend failed \(rc 93\), so the supervisors to be checked could not be listed\.$/m);
+    expect(r.stdout).toMatch(
+      /^update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted\. Once systemctl --user list-units 'claude-session@\*' answers, confirm KillMode=process on each unit, then restart them\.$/m);
+    expect(r.stdout).not.toContain('Fix the KillMode above');
+    expect(r.stdout).not.toContain('no claude-session@ supervisor was active when the sweep began');
+    const calls = existsSync(join(home, 'systemctl-calls')) ? readFileSync(join(home, 'systemctl-calls'), 'utf8') : '';
+    expect(calls).not.toMatch(/try-restart/);
+    expect(JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>)
+      .toMatchObject({ phase: 'done', from: 'rollback' });
+  });
+
+  // (b) the verify (`--state=active`) listing fails — DEGRADED in place of
+  // the per-unit "not active after it" warnings and the old success line;
+  // the restart itself already happened (its rc is untouched), so
+  // try-restart IS in the recording.
+  itLinux('(b) the verify listing fails after a real restart — a warning and a DEGRADED line replace the per-unit warnings and the old success line, rc stays 0', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-verify-fail-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active-fail'), '');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).toMatch(
+      /^update: warning: the post-restart set could not be listed \(systemctl --user list-units "claude-session@\*" --state=active --plain --no-legend failed, rc 94\) — no supervisor was verified\.$/m);
+    expect(r.stdout).toMatch(
+      /^update: DEGRADED: every live claude-session@ supervisor was restarted, and none of them was verified by this sweep\.$/m);
+    expect(r.stderr).not.toMatch(/was active before try-restart/);
+    expect(r.stdout).not.toContain('every live claude-session@ supervisor now runs the ccd this update installed');
+    expect(r.stdout).not.toContain('no claude-session@ supervisor was active when the sweep began');
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
+    expect(calls).toMatch(/--user try-restart claude-session@\*/);
+  });
+
+  // G1a with the verify listing ALSO failing: `before` measures truly empty
+  // (no fixture-sweep-units at all), so (b)'s fork must not fire — the zero
+  // line prints exactly as G1a's plain case does, and no DEGRADED (b) line.
+  itLinux('G1a with the verify listing failing too: still the zero line, never a (b) DEGRADED line — nothing was restarted, so nothing needed verifying', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-zero-verify-fail-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-active-fail'), '');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(
+      /^update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart \(KillMode=process verified before the restart; panes untouched\)$/m);
+    expect(r.stdout).not.toMatch(/DEGRADED/);
+    expect(r.stderr).not.toMatch(/post-restart set could not be listed/);
   });
 
   // ── The Darwin siblings: the same outcomes, launchd's vocabulary ─────────
@@ -2588,6 +2921,169 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(r.stdout).not.toMatch(/DEGRADED/);
   });
 
+  // Wave 8 item G, G1c: zero loaded session jobs (no plist planted at all —
+  // `_svc_list_sessions` enumerates nothing) give the Darwin zero line, never
+  // a false "N restarted and re-measured still up".
+  itDarwin('G1c: with NO session plist at all, the sweep kickstarts nothing and says so — never "restarted and re-measured still up"', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-darwin-zero-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(existsSync(join(home, 'launchctl-calls')) ? readFileSync(join(home, 'launchctl-calls'), 'utf8') : '')
+      .not.toMatch(/kickstart/);
+    expect(r.stdout).toMatch(
+      /^update: sweep: no loaded claude-session@ supervisor on this box, so nothing was restarted \(AbandonProcessGroup is checked per job file when there is one\)$/m);
+    expect(r.stdout).not.toContain('restarted and re-measured still up');
+    expect(r.stdout).not.toMatch(/DEGRADED/);
+  });
+
+  // G1c's direct twin — `sourcedCcrc`'s technique (CCD_OS forced after the
+  // `.`) reaches `_upd_sweep`'s Darwin arm from a Linux runner too, so this
+  // one line's mutation is measurable on every box this suite runs on, not
+  // only a macOS leg.
+  it('G1c-direct: _upd_sweep\'s Darwin arm (CCD_OS forced), zero plists — the zero line, never "restarted and re-measured still up"', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-darwin-direct-zero-');
+    const r = sourcedCcrc(home, 'CCD_OS=darwin; UPD_BACKUP_DIR="$HOME/ccrc-backups/fixture"; _upd_sweep');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(
+      /^update: sweep: no loaded claude-session@ supervisor on this box, so nothing was restarted \(AbandonProcessGroup is checked per job file when there is one\)$/m);
+    expect(r.stdout).not.toContain('restarted and re-measured still up');
+    expect(existsSync(join(home, 'launchctl-calls')) ? readFileSync(join(home, 'launchctl-calls'), 'utf8') : '')
+      .not.toMatch(/kickstart/);
+  });
+
+  // ── Wave 11 (R12), Task 7: the Darwin arm — one shared window, one re-check ──
+  // D0–D2, D4 and D6–D8 reach the arm from any runner (`sourcedCcrc` forces CCD_OS after
+  // the `.`), and D3 from a Linux runner (wave 12, R19a; D-4068); the launchctl stub is
+  // `updateEnv`'s own, and the window knobs are 0.
+  const SWEEP_D = 'CCD_OS=darwin; UPD_BACKUP_DIR="$HOME/ccrc-backups/fixture"; ';
+  const IDS3 = ['alpha', 'beta', 'gamma'];
+  const darwinBox = (prefix: string, ids: string[]): string => {
+    const home = freshUpdateBox(prefix);
+    for (const id of ids) plantSessionPlist(home, id);
+    return home;
+  };
+  const calls = (home: string): string[] => readFileSync(join(home, 'launchctl-calls'), 'utf8').split('\n').filter(Boolean);
+  const plantReport = (home: string, pid: number): string => {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const body = `{"target":"v0.0.85","phase":"resolving","startedAt":1700000000,"updatedAt":1700000001,"detail":null,"from":"auto","pid":${pid}}\n`;
+    writeFileSync(join(home, '.ccrc', 'update.json'), body);
+    return body;
+  };
+  const OWN_REPORT = 'UPD_REPORTING=1; UPD_REPORT_PID=4242; UPD_REPORT_TARGET=v0.0.85; UPD_FROM=auto; UPD_REPORT_STARTED=1; ';
+
+  it('D0: the Darwin arm\'s dies go through the guard — no bare _ccrc_die, exactly two _upd_sweep_die calls (wave 11, D-3973)', () => {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const m = /_upd_sweep\(\) \{([\s\S]*?)\n\}/.exec(src);
+    expect(m, '_upd_sweep() { … } not found in ccd/ccrc').not.toBeNull();
+    const sweep = m![1]!;
+    const d0 = sweep.indexOf('"$CCD_OS" = darwin');
+    expect(d0, '_upd_sweep lost its Darwin arm').toBeGreaterThan(-1);
+    const dEnd = sweep.indexOf('\n  fi', d0);
+    expect(dEnd, "_upd_sweep's Darwin arm never closes").toBeGreaterThan(d0);
+    const darwin = sweep.slice(d0, dEnd);
+    expect(darwin).not.toContain('_ccrc_die');
+    expect(darwin.match(/_upd_sweep_die "/g)?.length ?? 0).toBe(2);
+  });
+
+  it('D1: ONE shared window — every job is kicked, then every job is read, then every job is read again (wave 11, D-3975)', () => {
+    const home = darwinBox('ccrc-update-sweep-d1-', IDS3);
+    const r = sourcedCcrc(home, `${SWEEP_D}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toContain('3 restarted and re-measured still up');
+    expect(r.stderr).not.toContain('re-check:');
+    const all = calls(home);
+    let lastKick = -1;
+    all.forEach((l, i) => { if (l.startsWith('kickstart ')) lastKick = i; });
+    expect(lastKick, 'no kickstart was recorded').toBeGreaterThan(-1);
+    const after = all.slice(lastKick + 1);
+    expect(after.length, after.join('\n')).toBe(6);
+    expect(after.map((l) => l.replace(/^print gui\/\d+\/app\.ccrc\.session\./, '')))
+      .toEqual(['alpha', 'beta', 'gamma', 'alpha', 'beta', 'gamma']);
+    for (const l of after) expect(l).toMatch(/^print gui\/\d+\/app\.ccrc\.session\.[a-z]+$/);
+  });
+
+  it('D2: a job that churns through its re-check is named, with the counts, and no backup is promised (wave 11, D-3974)', () => {
+    const home = darwinBox('ccrc-update-sweep-d2-', IDS3);
+    writeFileSync(join(home, 'fixture-pid-churn.app.ccrc.session.beta'), 'yes\n');
+    const r = sourcedCcrc(home, `${SWEEP_D}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toContain('update: sweep: re-check: claude-session@beta.service did not stay up (pid ');
+    expect(r.stderr).toContain('update: sweep: re-check: claude-session@beta.service failed its re-check too');
+    expect(r.stderr).toContain('ccrc: sweep: 1 of 3 launchd session jobs did not stay up on a first window; a re-check failed, '
+      + '0 left un-re-checked — install complete, nothing was rolled back (first failed re-check: claude-session@beta.service, pid ');
+    expect(r.stderr).not.toContain('backup');
+    expect(r.stdout).not.toContain('restarted and re-measured still up');
+  });
+
+  const D3_BODY = (shim: string): string =>
+    `${SWEEP_D}${shim}${OWN_REPORT}_upd_sweep`;
+  const d3 = (home: string, shim: string): void => {
+    writeFileSync(join(home, 'fixture-pid-churn.app.ccrc.session.beta'), 'yes\n');
+    const plant = plantReport(home, 999999);
+    const r = sourcedCcrc(home, D3_BODY(shim));
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')).toBe(plant);
+    expect(r.stdout).toContain('update: report: skipped — ');
+  };
+  // `_upd_report_readable` reads the file's size through `_plat_size`, which under a forced
+  // CCD_OS=darwin runs BSD `stat -f %z` — a Linux runner's GNU stat refuses that and the foreign report
+  // would read as this run's own. D3 stands the platform primitive in with GNU `stat -c %s`, which BSD
+  // stat refuses in turn, so D3 is Linux-only; D3d (macOS) runs the real one (wave 12, R19a; D-4068).
+  itLinux('D3: a foreign report survives the Darwin die (GNU stat stands in for the platform size primitive) (wave 11, D-3973)', () => {
+    d3(darwinBox('ccrc-update-sweep-d3-', IDS3), '_plat_size() { stat -c %s "$@"; }; ');
+  });
+  itDarwin('D3d: a foreign report survives the Darwin die, the real _plat_size (wave 11, D-3973)', () => {
+    d3(darwinBox('ccrc-update-sweep-d3d-', IDS3), '');
+  });
+
+  it('D4: the single-unit contract the gate and _inst_enable lean on — two prints, the one-job detail (wave 11, D-3975)', () => {
+    const home = darwinBox('ccrc-update-sweep-d4-', ['alpha']);
+    const one = 'CCD_OS=darwin; _ccrc_job_stayed_up claude-session@alpha.service; echo "rc=$? detail=$CCRC_STAYED_DETAIL"';
+    const ok = sourcedCcrc(home, one);
+    expect(ok.code, ok.stderr).toBe(0);
+    expect(ok.stdout).toMatch(/^rc=0 detail=pid 4242 -> 4242 across 0s\+0s$/m);
+    expect(calls(home).filter((l) => l.startsWith('print ')).length).toBe(2);
+    writeFileSync(join(home, 'fixture-pid-churn'), 'yes\n');
+    const bad = sourcedCcrc(home, one);
+    expect(bad.code, bad.stderr).toBe(0);
+    expect(bad.stdout).toMatch(/^rc=1 detail=pid 4\d+ -> 4\d+ across 0s\+0s$/m);
+  });
+
+  it('D6: the Darwin cap keeps the facts — a 31-character id, the report detail at most 200 characters (wave 11, D-3974)', () => {
+    const id = `demo-${'x'.repeat(26)}`;
+    expect(id.length).toBe(31);
+    const home = darwinBox('ccrc-update-sweep-d6-', [id]);
+    writeFileSync(join(home, 'fixture-pid-churn'), 'yes\n');
+    plantReport(home, 4242);
+    const r = sourcedCcrc(home, `${SWEEP_D}${OWN_REPORT}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    const j = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as { phase: string; detail: string };
+    expect(j.phase).toBe('failed');
+    expect(j.detail.length).toBeLessThanOrEqual(200);
+    for (const want of ['1 of 1', 'did not stay up', 'nothing was rolled back']) expect(j.detail, want).toContain(want);
+  });
+
+  it('D7: the re-check passes a job that recovered (wave 11, D-3983)', () => {
+    const home = darwinBox('ccrc-update-sweep-d7-', IDS3);
+    writeFileSync(join(home, 'fixture-pid-churn-first.app.ccrc.session.beta'), '2\n');
+    const r = sourcedCcrc(home, `${SWEEP_D}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).toContain('re-check: claude-session@beta.service passed its re-check');
+    expect(r.stdout).toContain('3 restarted and re-measured still up');
+  });
+
+  it('D8: every job churning makes exactly ONE re-check, then the update dies (Reading 17, wave 11, D-3983)', () => {
+    const home = darwinBox('ccrc-update-sweep-d8-', IDS3);
+    writeFileSync(join(home, 'fixture-pid-churn'), 'yes\n');
+    const r = sourcedCcrc(home, `${SWEEP_D}_upd_sweep`);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr.match(/re-measuring it once more, alone/g)?.length ?? 0).toBe(1);
+    expect(r.stderr.match(/and is not re-checked/g)?.length ?? 0).toBe(2);
+    expect(r.stderr).toContain('3 of 3 launchd session jobs did not stay up on a first window; a re-check failed, 2 left un-re-checked');
+  });
+
   itDarwin('a job file missing AbandonProcessGroup REFUSES the sweep — loud on stderr, DEGRADED on stdout, and NO kickstart for ANY session', () => {
     const home = freshUpdateBox('ccrc-update-sweep-darwin-refused-');
     plantOldBox(home, { version: 'v1.0.0' });
@@ -2614,7 +3110,7 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
   });
 
-  itDarwin('a kicked supervisor whose pid did not hold across the window FAILS the update, naming the pre-update backup', () => {
+  itDarwin('a kicked supervisor whose pid did not hold across the window FAILS the update, naming how many and the first job, and no backup no path restores (wave 11, D-3974)', () => {
     const home = freshUpdateBox('ccrc-update-sweep-darwin-loop-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantSessionPlist(home, 'alpha');
@@ -2625,8 +3121,9 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     const r = runUpdate(home);
     expect(r.code, 'a supervisor that did not stay up must FAIL the update').not.toBe(0);
     expect(r.stderr).toMatch(/did not stay up/);
-    // The one line in the whole update path that points at the rollback.
-    expect(r.stderr).toMatch(/pre-update backup is complete at \S*ccrc-backups/);
+    // Wave 11 (D-3974): the facts, and no promise of a backup nothing restores from.
+    expect(r.stderr).toContain('sweep: 1 of 1 launchd session jobs');
+    expect(r.stderr).not.toContain('pre-update backup');
   });
 
   itDarwin('a session carrying the start-limit stamp is warned about and skipped — not kicked, not fatal', () => {
@@ -3829,7 +4326,9 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
         'set -uo pipefail', progLine![0], redactBlock![0], dieLine![0],
         `_upd_phase() { printf '%s|%s\\n' "$1" "$2" >> '${rec}'; }`,
         'UPD_FAIL_PREFIX=""', body,
-      ].join('\n')], { encoding: 'utf8' });
+        // Wave 9 R10d: this harness handed no env and so inherited the REAL HOME. An extracted-function harness
+        // (builtins plus date/mkdir/chmod/mv/rm only), so it is exempt from assertNoRealTool, and PATH-less on purpose.
+      ].join('\n')], { env: { HOME: home }, encoding: 'utf8' });
       return { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
     };
     let r = run('UPD_REPORTING=0; _ccrc_die before the lock');
@@ -3860,7 +4359,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(redactBlock, 'ccd/ccrc has no _upd_redact block').not.toBeNull();
     const home = mkTmp('ccrc-update-redact-unit-');
     const call = (text: string): string => {
-      const p = spawnSync('bash', ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
+      const p = spawnSync(BASH, ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
         { env: { HOME: home }, encoding: 'utf8' });
       expect(p.status, p.stderr).toBe(0);
       return p.stdout;
@@ -3893,7 +4392,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     const redactBlock = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
     expect(redactBlock, 'ccd/ccrc has no _upd_redact block').not.toBeNull();
     const callWithHome = (text: string, home: string): string => {
-      const p = spawnSync('bash', ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
+      const p = spawnSync(BASH, ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
         { env: { HOME: home }, encoding: 'utf8' });
       expect(p.status, p.stderr).toBe(0);
       return p.stdout;
@@ -3931,7 +4430,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     const redactBlock = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
     expect(redactBlock, 'ccd/ccrc has no _upd_redact block').not.toBeNull();
     const call = (text: string): string => {
-      const p = spawnSync('bash', ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
+      const p = spawnSync(BASH, ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
         { env: { HOME: '/home/u' }, encoding: 'utf8' });
       expect(p.status, p.stderr).toBe(0);
       return p.stdout;
@@ -3997,10 +4496,10 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
         ].join('\n'), { mode: 0o755 });
       }
       const env = {
-        ...process.env, HOME: home,
-        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
         CCRC_RELEASE_BASE_URL: `http://user:${secret}@127.0.0.1:1/rel`,
       };
+      assertNoRealTool(env, home);
       const args = verb === 'update' ? ['update', '--to', 'v0.0.1'] : ['rollback', '--to', 'v0.0.1', '--from', 'pwa'];
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), ...args], { env, encoding: 'utf8' });
       expect(r.stdout, `${verb} stdout`).not.toContain(secret);
@@ -4069,7 +4568,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     chmodSync(join(longHome, '.ccrc', 'floor'), 0o000);
     let r: Result;
     try {
-      const p = spawnSync('bash', ['-c', harness],
+      const p = spawnSync(BASH, ['-c', harness],
         { env: { HOME: longHome, UPD_VERSION: 'v2.0.0' }, encoding: 'utf8' });
       r = { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
     } finally {
@@ -4119,11 +4618,34 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       `_upd_phase failed "unreadable: $HOME/.ccrc/ccrc.env is not a regular file"`,
     ].join('\n');
     mkdirSync(join(home, '.ccrc'), { recursive: true });
-    const r = spawnSync('bash', ['-c', harness], { env: { HOME: home }, encoding: 'utf8' });
+    const r = spawnSync(BASH, ['-c', harness], { env: { HOME: home }, encoding: 'utf8' });
     expect(r.status, r.stderr).toBe(0);
     const rep = JSON.parse(readFileSync(jsonPath, 'utf8')) as Record<string, unknown>;
     expect(String(rep['detail']), JSON.stringify(rep)).not.toContain(home);
     expect(rep['detail']).toBe('unreadable: ~/.ccrc/ccrc.env is not a regular file');
+  });
+
+  // Wave 9 M1-M3 (D-3808): five harnesses run functions extracted from ccd/ccrc
+  // under a PATH-less env, and a bare `bash` under that env resolves macOS's
+  // /bin/bash 3.2 (no BASHPID, `\/` in a ${//} replacement). They spawn the
+  // file's resolved BASH instead. This case reads the file itself, and the
+  // needle is built from two halves so the case never matches its own text.
+  it('no bare-`bash` spawn in this file hands its child an env — a PATH-less env resolves macOS\'s /bin/bash 3.2 (wave 9 M1–M3)', () => {
+    const text = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+    const NEEDLE = ['spawnSync(', "'bash'"].join('');
+    const hits: number[] = [];
+    for (let at = text.indexOf(NEEDLE); at !== -1; at = text.indexOf(NEEDLE, at + 1)) hits.push(at);
+    for (const at of hits) {
+      const end = text.indexOf('encoding:', at);
+      const slice = text.slice(at, end === -1 ? text.length : end);
+      expect(slice.includes('env:'),
+        `ccrc-update.test.ts spawns bare bash with an env at offset ${at} — use BASH`).toBe(false);
+    }
+    // The six env-less sites: the realPath and REAL_PYTHON3 probes, writeManifest,
+    // the SHA256SUMS writer, and the two locale probes.
+    expect(hits.length,
+      `ccrc-update.test.ts has ${hits.length} bare-bash spawns, expected exactly 6 — a new one must use BASH or be counted here`)
+      .toBe(6);
   });
 });
 
@@ -4295,9 +4817,7 @@ describe('ccrc update: one update at a time (the lock)', () => {
 
   it('no flock on PATH is refused by name before anything else runs — macOS\'s sentence names brew', () => {
     const home = freshUpdateBox('ccrc-update-lock-noflock-');
-    const empty = join(home, 'empty-bin');
-    mkdirSync(empty, { recursive: true });
-    const r = runUpdate(home, [], { PATH: empty });
+    const r = runUpdate(home, [], { PATH: pathWithoutFlock(home) });
     expect(r.code).toBe(1);
     if (process.platform === 'darwin') {
       expect(r.stderr).toMatch(/^ccrc: flock is required by 'ccrc update' — it serialises updates and refuses rather than racing — and macOS does not ship it\. Install it: brew install flock\. Nothing on this box was changed$/m);
@@ -4483,6 +5003,57 @@ describe('ccrc update --detach (design §10; W4 Task 3)', () => {
     for (let until = Date.now() + 10_000; Date.now() < until
       && spawnSync('flock', ['-n', lockPath(home), 'true']).status !== 0;) await pause(50);
     expect(spawnSync('flock', ['-n', lockPath(home), 'true']).status, 'the finished run left the lock held').toBe(0);
+  }, 60_000);
+
+  // Review 179 fix round 1, item 8 (F8): a DETACHED run's floor refusal names
+  // the floor ALONE. `_upd_detach` writes `queued` before the child runs, so
+  // the child's `_upd_last_report` reads `queued` — never the `reverted` the
+  // last update left — and cannot name a restored update. (The foreground
+  // sentence, which reads the previous report before it writes anything, is
+  // pinned in the floor describe; the CONTROL here is that same sentence on an
+  // identical box.) `fixture-systemd-run-exec` runs the detached child for real.
+  itLinux('a --detach run\'s floor refusal names the floor alone: the parent\'s `queued` write replaces the report the child would read, so the "restored after its gate failed" clause never appears — and the same box, run in the foreground, does name it (review 179 item 8)', async () => {
+    const REVERTED = '{"target":"v3.0.0","phase":"reverted","startedAt":1,"updatedAt":2,"detail":"arm1: flipped back to v1.0.0; gate: fixture","from":"cli","pid":1}\n';
+    const boxBelowFloor = (prefix: string): string => {
+      const home = freshUpdateBox(prefix);
+      plantOldBox(home, { version: 'v3.0.0' });
+      writeFileSync(join(home, '.ccrc', 'floor'), 'v3.0.0\n');
+      writeFileSync(join(home, '.ccrc', 'update.json'), REVERTED);
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+      return home;
+    };
+    const RESTORED = 'the last update, to v3.0.0, failed its health gate and was restored';
+    // CONTROL: foreground, same box — the clause IS there, so its absence below
+    // is the detach's doing and not a fixture that never reads a report.
+    const fg = boxBelowFloor('ccrc-update-detach-floor-control-');
+    const c = runUpdate(fg, ['--to', 'v2.0.0']);
+    expect(c.code, `stderr: ${c.stderr}`).toBe(1);
+    expect(c.stderr).toContain(RESTORED);
+    // THE DETACHED RUN.
+    const home = boxBelowFloor('ccrc-update-detach-floor-');
+    writeFileSync(join(home, 'fixture-systemd-run-exec'), '');
+    writeFileSync(join(home, '.local', 'bin', 'ccrc'),
+      `#!/bin/sh\nexec '${BASH}' '${join(REPO, 'ccd', 'ccrc')}' "$@"\n`, { mode: 0o755 });
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases` };
+    replantDoctorStubs(home);
+    const parent = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', '--detach', '--to', 'v2.0.0'],
+      { env, encoding: 'utf8' });
+    expect(parent.status, `stderr: ${parent.stderr}\nstdout: ${parent.stdout}`).toBe(0);
+    const detachedLog = (): string => (existsSync(join(home, 'detached.log'))
+      ? readFileSync(join(home, 'detached.log'), 'utf8') : '(no detached.log)');
+    let final: Record<string, unknown> = {};
+    for (let until = Date.now() + 20_000; Date.now() < until;) {
+      try { final = report(home); } catch { final = {}; }
+      if (final['phase'] === 'failed' || final['phase'] === 'done') break;
+      await new Promise<void>((res) => setTimeout(res, 50));
+    }
+    expect(final, `the detached run never reported its refusal\n${detachedLog()}`).toMatchObject({ phase: 'failed', target: 'v2.0.0' });
+    expect(reportWrites(home)[0], '`queued` is the parent\'s write, before the child reads any report').toMatchObject({ phase: 'queued' });
+    const log = detachedLog();
+    expect(log).toContain("v2.0.0 (resolved by --to v2.0.0) is below this box's floor v3.0.0 (");
+    expect(log).toMatch(/the highest version this box completed an install of\) — moving down is a typed act: ccrc update --to v2\.0\.0 --downgrade\. Nothing on this box was changed/);
+    expect(log, 'a detached refusal must not claim a restore it never read').not.toContain(RESTORED);
   }, 60_000);
 
   itLinux('--from and every typed flag ride the detached argv in ONE fixed order, whatever order they were typed in (D-3238)', () => {
@@ -6355,8 +6926,10 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     const q = sourcedCcrc(home, 'UPD_REPORT_TARGET=v0.0.9\nUPD_FROM=pwa\n_upd_phase queued');
     expect(q.code, `stderr: ${q.stderr}`).toBe(0);
     const env = { ...updateEnv(home), CCRC_RELEASE_BASE_URL: 'http://127.0.0.1:9' };
+    allowCurlPort(home, 9);
     const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.9', '--from', 'pwa'],
       { env, encoding: 'utf8' });
+    expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain('http://127.0.0.1:9/');
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/could not ask the release host whether v0\.0\.9 exists/);
     const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
@@ -6384,7 +6957,8 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
   // Fix round 1 item 12 / review 155 C32: the pre-detach check
   // (`_upd_asset_listed`, via cmd_rollback's SHA256SUMS ask) against a
   // release host that ACCEPTS the TCP connection and never answers — a real
-  // `net.createServer` that never writes, NEVER a stubbed curl, so the REAL
+  // `net.createServer` that never writes, NEVER a stubbed curl (the loopback
+  // front, D-3819, execs the REAL curl for this one listed port), so the REAL
   // curl's own `--max-time` bound is what is measured. `CCRC_RELEASE_PROBE_
   // MAX_TIME` is overridden small so this pin finishes in a few seconds
   // rather than the production default (15s, itself well under W5's 20s
@@ -6403,10 +6977,12 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
         CCRC_RELEASE_PROBE_MAX_TIME: '2',
         CCRC_RELEASE_CONNECT_TIMEOUT: '2',
       };
+      allowCurlPort(home, port);
       const t0 = Date.now();
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.9', '--from', 'pwa'],
         { env, encoding: 'utf8', timeout: 20_000 });
       const elapsedMs = Date.now() - t0;
+      expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain(`http://127.0.0.1:${port}/`);
       expect(r.status, r.stderr).toBe(1);
       // Bounded by the OVERRIDDEN probe bound (2s), not left hanging to
       // curl's own (much longer) defaults or to this test's 20s kill.
@@ -6434,10 +7010,10 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       mkdirSync(join(home, '.local', 'bin'), { recursive: true });
       writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
       const env = {
-        ...process.env, HOME: home,
-        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
         [envVar]: badValue,
       };
+      assertNoRealTool(env, home);
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.1', '--from', 'pwa'],
         { env, encoding: 'utf8' });
       // The probe's own ceiling is the pre-detach one (W6 Task 8A); the
@@ -6467,10 +7043,10 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       mkdirSync(join(home, '.local', 'bin'), { recursive: true });
       writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
       const env = {
-        ...process.env, HOME: home,
-        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
         CCRC_RELEASE_PROBE_MAX_TIME: value,
       };
+      assertNoRealTool(env, home);
       return spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.1', '--from', 'pwa'],
         { env, encoding: 'utf8' });
     };
@@ -6503,10 +7079,10 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       mkdirSync(join(home, '.local', 'bin'), { recursive: true });
       writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
       const env = {
-        ...process.env, HOME: home,
-        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
         [envVar]: badValue,
       };
+      assertNoRealTool(env, home);
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', '--to', 'v0.0.1'],
         { env, encoding: 'utf8' });
       const what = envVar === 'CCRC_RELEASE_SPEED_LIMIT'
@@ -8609,6 +9185,9 @@ function keptVersion(home: string, name: string, sha: string, opts: { unsigned?:
   const root = installVersionedTree(home, name, { link: false, stamp: { sha, version: name } });
   if (opts.unsigned === true) writeFileSync(join(root, '.ccrc-installed'), `${sha}\nunsigned\n`);
   writeFileSync(join(root, 'ccd', 'ccrc'), KEPT_SPINE, { mode: 0o755 });
+  // The spine is part of the version's bytes: the digest is taken AFTER it is
+  // planted, through the shipped helper, so this version reads kept (D-3465).
+  keepDigest(root, home);
   return root;
 }
 
@@ -8651,6 +9230,10 @@ function onKeptV1(prefix: string): string {
   const envFile = join(home, '.ccrc', 'ccrc.env');
   writeFileSync(envFile, fileText(envFile).split('\n').filter((l) => !l.startsWith('CCRC_ROLE=')).join('\n'));
   appendFileSync(join(v1, 'ccd/ccd'), CCD_SENTINEL);
+  // The sentinel is a byte the keep never saw: re-record the digest through the
+  // shipped helper, so v1.0.0 still reads kept (D-3465) and the sentinel is
+  // what "kept" now describes.
+  keepDigest(v1, home);
   for (const f of ['curl-argv', 'update-json-writes', 'systemctl-calls']) rmSync(join(home, f), { force: true });
   return home;
 }
@@ -8702,8 +9285,8 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
     expect(fileText(join(v1, '.ccrc-stamp.json')), 'the kept stamp was rewritten').toBe(keptStamp);
     expect(fileText(join(v1, '.ccrc-installed')), 'the kept record was rewritten').toBe(keptRec);
-    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toBe(fileText(join(v1, 'ccd/ccd')));
-    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toContain(CCD_SENTINEL);
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toBe(fileText(join(v1, 'ccd/ccd')));
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toContain(CCD_SENTINEL);
     // A return is not a new baseline, and the floor never lowers.
     expect(fileText(join(home, '.ccrc', 'previous'))).toBe(`v1.0.0\n${V1_SHA}\n`);
     expect(fileText(join(home, '.ccrc', 'floor'))).toBe('v2.0.0\n');
@@ -8728,6 +9311,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     // `fixture-health-version` so that, once the kept stamp is back, /health
     // answers the box's stamp (v2.0.0) and not the release just "installed".
     writeFileSync(join(cur, 'ccd', 'ccrc'), KEPT_SPINE.replace('#!/bin/sh\n', '#!/bin/sh\nrm -f "$HOME/fixture-health-version"\n'), { mode: 0o755 });
+    keepDigest(cur, home);   // the spine is part of v2.0.0's kept bytes (D-3465)
     // The release older than wave 4: its spine writes THROUGH ~/ccrc (it
     // predates versioned installs, so `_upd_legacy_target` hands it a
     // directory of its own) and places a `ccd/ccrc` that knows neither flag
@@ -8819,7 +9403,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     // The kept spine ran FROM the running version: Task 2's `running` answer,
     // with its kept record present, so nothing was copied and no npm ci ran.
     expect(r.stdout).toMatch(/^install: tree: already running from \$HOME\/ccrc$/m);
-    expect(r.stdout).toMatch(/^install: tree: v1\.0\.0 is complete \(its kept install record is present\) — no npm ci$/m);
+    expect(r.stdout).toMatch(/^install: tree: v1\.0\.0 is kept \(its install record is present and its digest re-measures equal\) — no npm ci$/m);
     expect(r.stdout).toMatch(/^update: gate: both answers on v1\.0\.0 /m);
     expect(r.stdout).toMatch(new RegExp(`^update: REVERTED \\(arm 1\\): this box runs v1\\.0\\.0 again — \\$HOME/ccrc never left \\$HOME/ccrc-versions/v1\\.0\\.0; its own spine re-ran, no download — spine died at ${named}; gate: `, 'm'));
     expect(r.stdout).not.toMatch(/^update: arm 2|REVERTED \(arm [23]\)/m);
@@ -8837,7 +9421,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(treeDigest(join(v1, 'server', 'dist'))).toEqual(distBefore);
     expect(fileText(join(v1, 'server', 'node_modules', '.fixture-dep'))).toBe('installed\n');
     expect(existsSync(join(v1, '.ccrc-installed')), 'the running version stopped claiming completeness').toBe(true);
-    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toContain(CCD_SENTINEL);
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toContain(CCD_SENTINEL);
   }, 60_000);
 
   it('arm 1 with ~/ccrc already ON the previous version restores it IN PLACE — unit pin, the arm called directly on a FULL box: its kept stamp, its own spine, the gate once more, no download, no npm ci in the running version, that version byte-unchanged (D-3445; the end-to-end case above reaches it through cmd_update; an `_inst_tree`-marked death never gets here, D-3457)', () => {
@@ -8875,7 +9459,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     // The kept spine ran FROM the running version: Task 2's `running` answer,
     // with its kept record present, so nothing was copied and no npm ci ran.
     expect(r.stdout).toMatch(/^install: tree: already running from \$HOME\/ccrc$/m);
-    expect(r.stdout).toMatch(/^install: tree: v1\.0\.0 is complete \(its kept install record is present\) — no npm ci$/m);
+    expect(r.stdout).toMatch(/^install: tree: v1\.0\.0 is kept \(its install record is present and its digest re-measures equal\) — no npm ci$/m);
     expect(r.stdout).toMatch(/^update: gate: both answers on v1\.0\.0 /m);
     expect(r.stdout).toContain('update: REVERTED (arm 1): this box runs v1.0.0 again — $HOME/ccrc never left $HOME/ccrc-versions/v1.0.0; its own spine re-ran, no download — spine died at _inst_tree');
     expect(r.stdout).not.toMatch(/^update: arm 2|REVERTED \(arm [23]\)/m);
@@ -8890,7 +9474,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(treeDigest(join(v1, 'server', 'dist'))).toEqual(distBefore);
     expect(fileText(join(v1, 'server', 'node_modules', '.fixture-dep'))).toBe('installed\n');
     expect(existsSync(join(v1, '.ccrc-installed')), 'the running version stopped claiming completeness').toBe(true);
-    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toContain(CCD_SENTINEL);
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toContain(CCD_SENTINEL);
   }, 60_000);
 
   it('arm 1 whose kept spine COMPLETED under a failing doctor still reverts, and the report and the line say the doctor exited N — as arm 2\'s rc-3 arm does (F9; the flip stubbed to VER_SPINE_RC=3, the arm called directly)', () => {
@@ -9055,7 +9639,10 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
       { what: 'no server build', role: 'server',
         plant: (root) => rmSync(join(root, 'server', 'dist', 'server', 'src', 'index.js')), says: 'rc=2 why=no server build' },
       { what: 'a fleet box needs no server build', role: 'fleet',
-        plant: (root) => rmSync(join(root, 'server', 'dist', 'server', 'src', 'index.js')), says: 'rc=0 why=' },
+        // The build is removed BEFORE the digest is taken (D-3465): a tree
+        // that lost a file after its keep reads written through, not kept.
+        plant: (root, home) => { rmSync(join(root, 'server', 'dist', 'server', 'src', 'index.js')); keepDigest(root, home); },
+        says: 'rc=0 why=' },
       { what: 'no agent build', role: 'fleet',
         plant: (root) => rmSync(join(root, 'agent', 'dist', 'agent', 'src', 'index.js')), says: 'rc=2 why=no agent build' },
       { what: 'no kept stamp', role: 'both', plant: (root) => rmSync(join(root, '.ccrc-stamp.json')), says: 'rc=2 why=no kept stamp' },
@@ -9149,6 +9736,30 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
       }
       expect(r.stdout).not.toMatch(/DEGRADED/);
     }
+  });
+
+  // Review 179 fix round 1, item 5: a rollback by flip reaches `_upd_sweep`
+  // from `cmd_rollback` itself, not through `cmd_update` — so its preflight is
+  // pinned AT THIS CALL SITE. `withSweep` is deliberately NOT used: there is no
+  // KillMode drop-in, so the fixture's `show -p KillMode` answers systemd's
+  // control-group default, and a flip that swept anyway would kill every pane.
+  itLinux('a rollback BY FLIP\'s sweep is behind its own KillMode=process preflight at the flip call site: with KillMode resolving control-group it is REFUSED — the sentence, DEGRADED, no `--user try-restart` — and the flip itself still completes (review 179 item 5; R1 inherited, never re-argued)', () => {
+    const { home, kept } = flipBox('ccrc-rollback-flip-refused-');
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    const r = rollbackRun(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    // It IS the flip path (not the re-install path), so the call site is the flip's own.
+    expect(r.stdout).toContain('rollback: v1.0.0 is kept at $HOME/ccrc-versions/v1.0.0 — no release-host question and no download');
+    expect(linkOf(home)).toBe(kept);
+    expect(r.stderr).toMatch(/^update: sweep REFUSED — claude-session@alpha\.service resolves to KillMode=control-group/m);
+    expect(r.stdout).toMatch(/^update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted/m);
+    const c = calls(home);
+    // The preflight was asked (so the refusal is a measurement, not an absence)…
+    expect(c, c.join('\n')).toContain('--user show -p KillMode claude-session@alpha.service');
+    // …and nothing restarted a supervisor.
+    expect(c.filter((l) => /--user try-restart/.test(l)), c.join('\n')).toEqual([]);
+    expect(lastReport(home)).toMatchObject({ phase: 'done', from: 'rollback' });
   });
 
   it('an unverified kept version stays unverified: its own spine runs WITHOUT CCRC_UPDATE_VERIFIED when its kept record says unsigned — a flip never promotes it (§18 "arm 2 never silently unsigns", applied to the flip; D-3439)', () => {
@@ -9292,6 +9903,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     const home = freshUpdateBox('ccrc-rollback-flip-already-');
     const root = plantW6Box(home, 'v1.0.0', V1_SHA, 'server');
     writeFileSync(join(root, 'ccd', 'ccrc'), KEPT_SPINE, { mode: 0o755 });
+    keepDigest(root, home);   // the spine is part of the kept bytes (D-3465)
     let r = rollbackRun(home, ['--to', 'v1.0.0']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(r.stdout).toContain(`rollback: this box already runs v1.0.0 (${V1_SHA}) and that install completed — nothing to do (to reinstall it: ccrc update --to v1.0.0 --downgrade --force)`);
@@ -9411,7 +10023,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     const up = runUpdate(home);
     expect(up.code, `the move onto v2.0.0 must complete — stderr: ${up.stderr}\nstdout: ${up.stdout}`).toBe(0);
     expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v2.0.0'));
-    expect(fileText(join(home, '.local', 'bin', 'ccd')), 'v2.0.0 carries the kept sentinel — the control is broken').not.toContain(CCD_SENTINEL);
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd')), 'v2.0.0 carries the kept sentinel — the control is broken').not.toContain(CCD_SENTINEL);
     for (const f of ['curl-argv', 'update-json-writes', 'systemctl-calls']) rmSync(join(home, f), { force: true });
     writeFileSync(join(home, 'fixture-release-http'), '404\n');
     withSweep(home);
@@ -9420,8 +10032,8 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(r.stdout).toContain('rollback: v1.0.0 is kept at $HOME/ccrc-versions/v1.0.0 — no release-host question and no download');
     expect(localUrls(home)).toEqual([]);
     expect(linkOf(home)).toBe(v1);
-    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toBe(fileText(join(v1, 'ccd/ccd')));
-    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toContain(CCD_SENTINEL);
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toBe(fileText(join(v1, 'ccd/ccd')));
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toContain(CCD_SENTINEL);
     expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(keptStamp);
     expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
     expect(fileText(join(v1, '.ccrc-stamp.json')), 'the kept stamp was rewritten').toBe(keptStamp);
@@ -9471,6 +10083,8 @@ describe('ccrc update: a spine older than W6 gets a directory named for its own 
     writeFileSync(join(home, 'fixture-old-stamp.json'), shippedStamp('v1.0.0', NEW_SHA));
     writeFileSync(join(home, 'fixture-on-install'), [
       'if [ -f "$HOME/ccrc/.ccrc-installed" ]; then echo present; else echo absent; fi > "$HOME/old-spine-saw-record"',
+      // D-3465 (e): the digest goes with the record — it describes the bytes this spine is about to rewrite.
+      'if [ -f "$HOME/ccrc/.ccrc-digest" ]; then echo present; else echo absent; fi > "$HOME/old-spine-saw-digest"',
       'mkdir -p "$HOME/ccrc/server" && printf \'written by the older spine\\n\' > "$HOME/ccrc/server/WROTE-BY-OLD-SPINE"',
       'cp "$HOME/fixture-old-stamp.json" "$HOME/.ccrc/build.json"',
     ].join('\n') + '\n');
@@ -9493,12 +10107,18 @@ describe('ccrc update: a spine older than W6 gets a directory named for its own 
     expect(treeDigest(cur), 'the older spine wrote into the version it replaced').toEqual(before);
     expect(existsSync(join(v1, 'server', 'WROTE-BY-OLD-SPINE'))).toBe(true);
     expect(fileText(join(home, 'old-spine-saw-record'))).toBe('absent\n');
+    expect(fileText(join(home, 'old-spine-saw-digest')), 'the copy still carried v2.0.0\'s digest (D-3465 (e))').toBe('absent\n');
     // The copy began as v2.0.0's tree…
     expect(fileText(join(v1, 'ccd/ccd'))).toBe(fileText(join(cur, 'ccd/ccd')));
     // …and is now v1.0.0's, kept complete by cmd_update after that spine.
     expect(fileText(join(v1, '.ccrc-stamp.json'))).toBe(fileText(join(home, '.ccrc', 'build.json')));
     expect(fileText(join(v1, '.ccrc-installed'))).toBe(`${NEW_SHA}\n`);
     expect(r.stdout).toMatch(/^update: versions: kept v1\.0\.0's stamp and install record in \$HOME\/ccrc-versions\/v1\.0\.0/m);
+    // The bytes the older spine wrote were PLACED by this run (D-3465 (b)), so
+    // the keep after it records a fresh digest — the marker is inside it.
+    expect(fileText(join(v1, '.ccrc-digest'))).toMatch(/^1:[0-9a-f]{64}\n$/);
+    expect(verKeptAnswer(home, 'v1.0.0', ''), 'the copy is not kept on its fresh digest').toBe('rc=0 why=');
+    expect(existsSync(join(cur, '.ccrc-digest')), 'the running version lost its digest').toBe(true);
     expect(dotEntries(home)).toEqual([]);
     expect(lastReport(home)['phase']).toBe('done');
   });
@@ -9515,9 +10135,13 @@ describe('ccrc update: a spine older than W6 gets a directory named for its own 
     expect(r.stdout).toContain("update: tree: v1.0.0's spine predates versioned installs and writes through $HOME/ccrc — $HOME/ccrc now points at $HOME/ccrc-versions/v1.0.0 (kept) for it to write into");
     expect(linkOf(home)).toBe(v1);
     expect(fileText(join(home, 'old-spine-saw-record')), 'the older spine was handed a directory that still claimed completeness').toBe('absent\n');
+    expect(fileText(join(home, 'old-spine-saw-digest')), 'the older spine was handed a directory that still carried the digest of the bytes it rewrote (D-3465 (e))').toBe('absent\n');
     expect(existsSync(join(v1, 'server', 'WROTE-BY-OLD-SPINE'))).toBe(true);
     expect(treeDigest(cur)).toEqual(before);
     expect(fileText(join(v1, '.ccrc-installed'))).toBe(`${NEW_SHA}\n`);
+    // Kept again on a FRESH digest, because this run's legacy spine placed the bytes.
+    expect(fileText(join(v1, '.ccrc-digest'))).toMatch(/^1:[0-9a-f]{64}\n$/);
+    expect(verKeptAnswer(home, 'v1.0.0', '')).toBe('rc=0 why=');
     expect(dotEntries(home)).toEqual([]);
   });
 
@@ -9822,6 +10446,93 @@ describe('ccrc update and rollback: refused before anything moves — a ~/ccrc t
   });
 });
 
+// F4 and F12 (review 179, fix round 1 item 4): the Darwin arms a LINUX leg can
+// measure. `CCD_OS` is set from `$OSTYPE` at source time and is NOT read from
+// the environment, so every case here assigns it AFTER sourcing (`sourcedCcrc`'s
+// contract) — a whole-process run would need `OSTYPE=darwin…` instead. What is
+// real on that Linux box is only what the arm under test itself produces:
+// `updateEnv`'s python3 stub hands `import os` and the `os.replace` program to
+// the real interpreter (and RECORDS every argv it is asked, `python3-argv`),
+// so the Darwin flip really renames; other Darwin arms a forced run reaches
+// (`_plat_size`'s `stat -f %z`, `_plat_mtime`'s `stat -f %m`) are GNU `stat`'s
+// error, so no case asserts anything they produce. The `python3-argv` lines are
+// the evidence the Darwin arm ran at all: Linux flips by `mv -fT` and asks
+// python3 nothing.
+describe('the Darwin arms a Linux leg can measure: the flip gate and flip, and the loaded-not-running GC read (F4, F12)', () => {
+  // The three positive Darwin cases hand `python3 -c` to the REAL interpreter
+  // (`REAL_PYTHON3`, above), so they skip on a box with none — as the stub's
+  // `-c` arm is spread in only when one resolved. The refusal cases below stub
+  // python3 away themselves and run everywhere.
+  const PY_PROBE = '-c import os';
+  const PY_REPLACE = '-c import os, sys; os.replace(sys.argv[1], sys.argv[2])';
+  const pyCalls = (home: string): string[] => (existsSync(join(home, 'python3-argv'))
+    ? fileText(join(home, 'python3-argv')).split('\n').filter((l) => l !== '') : []);
+
+  it.skipIf(REAL_PYTHON3 === '')('_ver_can_flip answers yes on macOS when python3 runs — the positive path of the gate (the probe RAN; Linux never asks)', () => {
+    const home = freshUpdateBox('ccrc-update-darwin-canflip-');
+    const r = sourcedCcrc(home,
+      `for os in darwin linux; do ( CCD_OS=$os; rc=0; _ver_can_flip || rc=$?; printf '%s rc=%s why=[%s]\\n' "$os" "$rc" "$VER_WHY" ); done`);
+    expect(r.stdout.split('\n').filter((l) => / rc=/.test(l)), r.stderr).toEqual(['darwin rc=0 why=[]', 'linux rc=0 why=[]']);
+    expect(pyCalls(home), 'the Darwin probe did not run python3').toEqual([PY_PROBE]);
+  });
+
+  it.skipIf(REAL_PYTHON3 === '')('_ver_flip_back flips on macOS through os.replace: the link, the stamp and the record end on the kept version, and its own spine ran', () => {
+    const home = freshUpdateBox('ccrc-update-darwin-flipback-');
+    plantW6Box(home, 'v2.0.0', V2_SHA, 'server');
+    const kept = keptVersion(home, 'v1.0.0', V1_SHA);
+    const r = sourcedCcrc(home,
+      `CCD_OS=darwin; rc=0; _ver_flip_back v1.0.0 server rollback || rc=$?; printf 'rc=%s why=[%s]\\n' "$rc" "$VER_WHY"`);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('rc=')), `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toEqual(['rc=0 why=[]']);
+    expect(linkOf(home), 'the flip did not happen').toBe(kept);
+    expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(fileText(join(kept, '.ccrc-stamp.json')));
+    expect(fileText(join(home, '.ccrc', 'installed'))).toBe(fileText(join(kept, '.ccrc-installed')));
+    expect(existsSync(join(home, 'kept-spine-argv')), 'the kept spine did not run').toBe(true);
+    // The Darwin arm, not Linux's `mv -fT`: the probe, then the one rename.
+    const calls = pyCalls(home);
+    expect(calls[0]).toBe(PY_PROBE);
+    expect(calls.filter((c) => c.startsWith(`${PY_REPLACE} `)), calls.join('\n')).toHaveLength(1);
+  });
+
+  it.skipIf(REAL_PYTHON3 === '')("_upd_legacy_target's success path flips on macOS: ~/ccrc names the tag's directory, and the pointed-at version is never written", () => {
+    const home = freshUpdateBox('ccrc-update-darwin-legacy-');
+    const cur = plantW6Box(home, 'v2.0.0', V2_SHA);
+    const before = treeDigest(cur);
+    const r = sourcedCcrc(home, '_ver_layout; CCD_OS=darwin; rc=0; _upd_legacy_target v1.0.0 || rc=$?; printf "rc=%s\\n" "$rc"');
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('rc=')), `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toEqual(['rc=0']);
+    expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v1.0.0'));
+    expect(readdirSync(join(home, 'ccrc-versions')).sort()).toEqual(['v1.0.0', 'v2.0.0']);
+    expect(treeDigest(cur), 'the version this run replaces was written').toEqual(before);
+    const calls = pyCalls(home);
+    expect(calls[0]).toBe(PY_PROBE);
+    expect(calls.filter((c) => c.startsWith(PY_REPLACE))).toHaveLength(1);
+  });
+
+  // F12. The fixture-path `launchctl` stub (which `_svc_launchctl` honours off
+  // /bin and /usr/bin) has a loaded-but-not-running arm, `fixture-launchctl-not-running`:
+  // rc 0 and `state = waiting`. That is "the manager did not say", and the GC read
+  // must stop on it — `_ver_running_names` is asked DIRECTLY, because a forced-Darwin
+  // whole prune stops earlier, in `_ver_list` on `_plat_mtime`'s `stat -f %m`, and
+  // would pass for that reason. The two controls in the same run keep the arm honest:
+  // a job nobody loaded (rc 113) is `inactive` and runs nothing (rc 0), and the
+  // loaded-not-running job is the only one that stops it.
+  it('the Darwin GC read stops on a job that is loaded but not running (rc 1, "no answer") — and reads a job that is not loaded (rc 113) as stopped', () => {
+    const home = freshUpdateBox('ccrc-update-darwin-notrunning-');
+    plantW6Box(home, 'v2.0.0', V2_SHA);
+    const probe = `CCD_OS=darwin; rc=0; _ver_running_names || rc=$?; printf 'rc=%s running=[%s] why=[%s]\\n' "$rc" "\${VER_RUNNING[*]}" "$VER_WHY"`;
+    // control: nothing is loaded — launchctl answers 113, a POSITIVE "no such job"
+    let r = sourcedCcrc(home, probe);
+    expect(r.stdout, r.stderr).toBe('rc=0 running=[] why=[]\n');
+    // the job is loaded, and the manager answers, but the job is not running
+    writeFileSync(join(home, 'launchctl-loaded'), 'app.ccrc.ccrc.plist\napp.ccrc.ccrc-agent.plist\n');
+    writeFileSync(join(home, 'fixture-launchctl-not-running'), 'yes\n');
+    r = sourcedCcrc(home, probe);
+    expect(r.stdout, r.stderr).toBe('rc=1 running=[] why=[the service manager did not say whether ccrc.service is running (no answer)]\n');
+    // and `_ver_protect`, which the prune calls, stops with the same reason
+    r = sourcedCcrc(home, `CCD_OS=darwin; rc=0; _ver_protect || rc=$?; printf 'rc=%s why=[%s]\\n' "$rc" "$VER_WHY"`);
+    expect(r.stdout, r.stderr).toBe('rc=1 why=[the service manager did not say whether ccrc.service is running (no answer)]\n');
+  });
+});
+
 // ── ccrc versions, and the GC (design 2026-09-20 §11 "GC"; W6 Task 5) ────
 // Spec §18 "GC never removes a needed version", one case per guard, each with
 // its CONTROL in the same run: CCRC_VERSIONS_KEEP=0 makes every complete,
@@ -9944,16 +10655,105 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
     expect(r.stderr).toMatch(/^ccrc: unknown argument: --bogus/m);
     r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: 'three' });
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^ccrc: versions: CCRC_VERSIONS_KEEP must be a number \(got a non-numeric value\) — nothing was pruned$/m);
+    expect(r.stderr).toMatch(/^ccrc: versions: CCRC_VERSIONS_KEEP='three' is not a whole number from 0 to 9999 — nothing was pruned$/m);
     expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
     expect(existsSync(join(home, '.ccrc', 'update.lock'))).toBe(false);
     // F8: listing is exit 0 by the exit table — a bad knob WARNs and lists, verdicts unmeasured.
     r = runVersions(home, [], { CCRC_VERSIONS_KEEP: 'three' });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(r.stdout).toMatch(/^versions: WARN: CCRC_VERSIONS_KEEP is not a number — listing only; nothing would be pruned$/m);
-    expect(r.stdout).toMatch(/^ {2}\* v1\.0\.1 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a number$/m);
-    expect(r.stdout).toMatch(/^ {2}  v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a number$/m);
+    expect(r.stdout).toMatch(/^versions: WARN: CCRC_VERSIONS_KEEP='three' is not a whole number from 0 to 9999 — listing only; nothing would be pruned$/m);
+    expect(r.stdout).toMatch(/^ {2}\* v1\.0\.1 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999$/m);
+    expect(r.stdout).toMatch(/^ {2}  v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999$/m);
     expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+  });
+
+  // F6 (review 179, fix round 1 item 6): ONE bounded validator, `^[0-9]{1,4}$`, for
+  // every KEEP knob. `99999999999999999999` used to pass `^[0-9]+$`, and then
+  // `[ -le ]` / `[ -lt ]` failed with rc 2 ("integer expression expected"), so
+  // the short-circuit was skipped and every unprotected complete version was
+  // pruned — by `--prune` and by the automatic GC after a passed gate — while
+  // the plain listing called every one of them `prunable`.
+  describe('the KEEP knob is ONE bounded number: a whole number from 0 to 9999, or nothing is pruned and nothing is called prunable (F6)', () => {
+    const NAMES = ['v1.0.4', 'v1.0.3', 'v1.0.2', 'v1.0.1', 'v1.0.0'];
+    const WHY = (v: string): string => `CCRC_VERSIONS_KEEP='${v}' is not a whole number from 0 to 9999`;
+    const HUGE = '99999999999999999999';
+
+    it("the report's value is refused by the prune, the plain listing and the automatic GC — every version stays, none is called prunable", () => {
+      const home = versionedBox('ccrc-versions-keep-huge-', NAMES);
+      stopUnits(home);
+      let r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: HUGE });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stderr).toContain(`ccrc: versions: ${WHY(HUGE)} — nothing was pruned`);
+      expect(r.stdout).not.toMatch(/pruned/);
+      expect(existsSync(join(home, '.ccrc', 'update.lock')), 'refused before the lock').toBe(false);
+      expect(versionDirs(home)).toEqual([...NAMES].sort());
+      // The plain listing lists (exit 0), names the knob and value, and marks no version prunable.
+      r = runVersions(home, [], { CCRC_VERSIONS_KEEP: HUGE });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain(`versions: WARN: ${WHY(HUGE)} — listing only; nothing would be pruned`);
+      expect(r.stdout, 'a version was listed as prunable').not.toMatch(/^ {2}[ *] \S+ {2}(?:in)?complete {2}prunable/m);
+      expect(r.stdout).toMatch(/^ {4}v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999$/m);
+      expect(r.stdout).toContain('CCRC_VERSIONS_KEEP=(not a whole number from 0 to 9999)');
+      // The automatic GC keeps its contract: a WARN, rc 1 (its callers ignore it), nothing removed.
+      const a = sourcedCcrc(home, `CCRC_VERSIONS_KEEP=${HUGE}; _ver_gc update auto; echo "rc=$?"`);
+      expect(a.stdout, a.stderr).toBe(`update: versions: WARN: ${WHY(HUGE)} — nothing pruned\nrc=1\n`);
+      expect(a.stderr).toBe('');
+      expect(versionDirs(home)).toEqual([...NAMES].sort());
+    });
+
+    it('controls: 9999 is a working knob (nothing to prune beside four versions), 10000 is refused, and leading zeros are decimal', () => {
+      const home = versionedBox('ccrc-versions-keep-bounds-', NAMES);
+      stopUnits(home);
+      let r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '9999' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain('versions: nothing to prune — 4 complete version(s) beside the pointed-at one, within CCRC_VERSIONS_KEEP=9999, and none incomplete');
+      expect(versionDirs(home)).toEqual([...NAMES].sort());
+      r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '10000' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stderr).toContain(`ccrc: versions: ${WHY('10000')} — nothing was pruned`);
+      expect(versionDirs(home)).toEqual([...NAMES].sort());
+      // A leading zero is decimal, and the number is said as a number: `0008` is 8.
+      r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0008' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain('within CCRC_VERSIONS_KEEP=8, and none incomplete');
+      // `0002` is two, never octal-or-error arithmetic: the newest 2 beside the pointed-at one stay.
+      r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0002' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/v1\.0\.0 \(complete, not among the newest 2\)$/m);
+      expect(r.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/v1\.0\.1 \(complete, not among the newest 2\)$/m);
+      expect(versionDirs(home)).toEqual(['v1.0.2', 'v1.0.3', 'v1.0.4']);
+    });
+
+    it('the value in the sentence is sanitised as _upd_validate_timeout does and capped in length: no control byte, no newline, no more than 32 characters and an ellipsis', () => {
+      const home = versionedBox('ccrc-versions-keep-sane-', NAMES);
+      stopUnits(home);
+      let r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: 'a\nb\x1b[31mc' });
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toContain(`ccrc: versions: ${WHY('a?b?[31mc')} — nothing was pruned\n`);
+      r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: 'x'.repeat(200) });
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toContain(`ccrc: versions: ${WHY(`${'x'.repeat(32)}...`)} — nothing was pruned\n`);
+      expect(r.stderr).not.toContain('x'.repeat(33));
+      expect(versionDirs(home)).toEqual([...NAMES].sort());
+    });
+
+    it('belt: _ver_verdicts answers unmeasured — rc 1, nothing doomed, every verdict kept — when a numeric test ERRORS, never prune (the validator is bypassed on purpose)', () => {
+      const home = versionedBox('ccrc-versions-keep-belt-', NAMES);
+      const script = (keep: string): string => [
+        '_ver_list; declare -gA VER_PROTECT=()',
+        `rc=0; _ver_verdicts prune ${keep} 2>/dev/null || rc=$?`,
+        'printf "rc=%s doomed=[%s] why=[%s]\\n" "$rc" "${VER_DOOMED[*]}" "$VER_WHY"',
+        'for n in "${VER_NAMES[@]}"; do printf "%s=%s\\n" "$n" "${VER_VERDICT[$n]}"; done',
+      ].join('\n');
+      const bad = sourcedCcrc(home, script(HUGE));
+      expect(bad.stdout.split('\n')[0], bad.stderr)
+        .toBe('rc=1 doomed=[] why=[the keep count could not be compared (an integer expression expected) — no version is pruned on a guess]');
+      expect(bad.stdout.split('\n').slice(1, 6), bad.stderr).toEqual(NAMES.map((n) => `${n}=kept: unmeasured`));
+      // the control: the same call over a number answers, and dooms what no slot holds
+      // (nothing is protected in this call, so the pointed-at name takes the one slot)
+      const ok = sourcedCcrc(home, script('1'));
+      expect(ok.stdout.split('\n')[0], ok.stderr).toBe('rc=0 doomed=[v1.0.3 v1.0.2 v1.0.1 v1.0.0] why=[]');
+    });
   });
 
   it('a box whose ~/ccrc is still a directory: nothing is versioned, and --prune removes nothing', () => {
@@ -10125,6 +10925,37 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
     }
   });
 
+  // F3 (review 179, fix round 1 item 3): the `projection` row above plants a
+  // STALE document, the one word `_ver_protect`'s catch-all arm answers by
+  // name. `unreadable` and `malformed` are two more words with the same
+  // arm, and CLAUDE.md names folding either into `not-configured` as the
+  // forbidden shape ("stale and unreadable ... never folded"), so each is its
+  // OWN case: a loop over rows would show only the first red of a fold. The
+  // `unreadable` row is a `server` box with NO projection file — the shape
+  // no case ran end to end before this one (an absent file on a server/both
+  // box is unreadable, never `not-configured`).
+  const projectionRows: Array<[string, (h: string) => void, string]> = [
+    ['unreadable', (h) => { stopUnits(h); plantRole(h, 'server'); },
+      "the control plane's projection is unreadable (absent) — its desired tags cannot be read"],
+    ['malformed', (h) => { stopUnits(h); plantRole(h, 'server'); plantIntent(h, 'garbage\nend\n'); },
+      "the control plane's projection is malformed (not exactly nine lines) — its desired tags cannot be read"],
+  ];
+  for (const [word, plant, why] of projectionRows) {
+    itLinux(`${word === 'unreadable' ? 'an' : 'a'} ${word} projection prunes nothing, by hand and automatically — its own case, never folded into not-configured (F3)`, () => {
+      const home = versionedBox(`ccrc-versions-unmeasured-proj-${word}-`, ['v1.0.1', 'v1.0.0']);
+      plant(home);
+      const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+      expect(r.code, `${word}: ${r.stdout}${r.stderr}`).toBe(1);
+      expect(r.stdout).toMatch(new RegExp(`^versions: prune skipped — ${lit(why)}; nothing was removed$`, 'm'));
+      expect(r.stdout).toMatch(/^ {4}v1\.0\.0 {2}complete {2}kept: unmeasured$/m);
+      expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+      // The automatic GC reads the same input the same way: WARN, rc 1, nothing removed.
+      const a = sourcedCcrc(home, 'CCRC_VERSIONS_KEEP=0; _ver_gc update auto; echo "rc=$?"');
+      expect(a.stdout, a.stderr).toBe(`update: versions: WARN: nothing pruned — ${why}\nrc=1\n`);
+      expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+    });
+  }
+
   // Both platforms: `_plat_mtime` is `stat -c %Y` or `stat -f %m`, and the
   // shim below fails either spelling the same way. It is not a fifth row of
   // the itLinux table above, so the macOS leg measures it too.
@@ -10205,7 +11036,7 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
       + `exec ${REAL_RM} "$@"\n`, { mode: 0o755 });
     const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
-    expect(r.stdout).toMatch(/^versions: could not finish pruning \$HOME\/ccrc-versions\/v1\.0\.0 — it is already out of the version list; its remains are at \$HOME\/ccrc-versions\/\.pruning-v1\.0\.0\.[0-9]+, which the next prune removes$/m);
+    expect(r.stdout).toMatch(/^versions: could not finish pruning \$HOME\/ccrc-versions\/v1\.0\.0 — it is already out of the version list and out of every reader's reach \(a rename took it there; that is not a proof that nothing runs from it\); its remains are at \$HOME\/ccrc-versions\/\.pruning-v1\.0\.0\.[0-9]+, which the next prune removes first, once its KEEP knob and \$HOME\/ccrc pass the prune's own checks \(a refused knob, or a \$HOME\/ccrc that is not a link to a version here, sweeps nothing\)$/m);
     // not listed, and no directory under the version's own name
     expect(r.stdout).not.toMatch(/^ {4}v1\.0\.0 /m);
     const dirs = versionDirs(home);
@@ -10240,6 +11071,144 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
     expect(versionDirs(home)).toEqual([live, 'v1.0.1']);
     // and neither one was ever listed as a version
     expect(r.stdout).not.toMatch(/^ {4}\.pruning/m);
+  });
+
+  // F7 (review 179, fix round 1 item 7). A dead-pid `.pruning-<name>.<pid>`
+  // (the prune loop's rename target) and a dead-pid `.<tag>.incoming.<pid>`
+  // (`_upd_legacy_target`'s staging directory, which NOTHING removed) are swept
+  // ONCE per prune, right after the layout and knob checks — so before the
+  // KEEP short-circuit, the empty-doomed return and `_ver_protect`'s
+  // unmeasured return, each of which used to leave them behind. The sweep
+  // removes nothing a reader could find (a rename took each directory out of
+  // every reader's view); it is NOT a proof that nothing runs from one, which
+  // is deferred item 3's root cause and stays on the residue list.
+  describe('a dead process\'s leftover is swept once per prune, before anything can stop the prune (F7)', () => {
+    const DEAD = 999999;
+    const LIVE = process.pid;
+    const dead = [`.pruning-v0.0.1.${DEAD}`, `.v0.0.2.incoming.${DEAD}`];
+    const live = [`.pruning-v0.0.1.${LIVE}`, `.v0.0.2.incoming.${LIVE}`];
+    const plantLeft = (home: string, names: string[]): void => {
+      for (const d of names) {
+        mkdirSync(join(home, 'ccrc-versions', d, 'server'), { recursive: true });
+        writeFileSync(join(home, 'ccrc-versions', d, '.ccrc-installed'), 'x\n');
+      }
+    };
+    const removedLine = (name: string): RegExp =>
+      new RegExp(`^versions: removed \\$HOME/ccrc-versions/${lit(name)} \\(`, 'm');
+    beforeAll(() => {
+      expect(() => process.kill(DEAD, 0), 'the dead-pid fixture needs a pid nothing holds').toThrow();
+    });
+
+    it("the report's case: default KEEP, nothing to prune, a dead-pid leftover — the prune removes it (by hand and automatically), and says nothing to prune", () => {
+      const home = versionedBox('ccrc-versions-sweep-nothing-', ['v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantLeft(home, dead);
+      const r = runVersions(home, ['--prune']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      for (const d of dead) expect(r.stdout).toMatch(removedLine(d));
+      expect(r.stdout).toMatch(/^versions: nothing to prune — 1 complete version\(s\) beside the pointed-at one, within CCRC_VERSIONS_KEEP=3, and none incomplete$/m);
+      expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+      // the automatic GC sweeps too, under its own lead, and is otherwise silent
+      plantLeft(home, dead);
+      const a = sourcedCcrc(home, '_ver_gc update auto; echo "rc=$?"');
+      expect(a.stdout.split('\n').filter((l) => l !== ''), a.stderr).toEqual([
+        ...dead.map((d) => `update: versions: removed $HOME/ccrc-versions/${d} (what ${d.startsWith('.pruning') ? 'an earlier prune' : 'an earlier update'} left, already out of the version list; its process is gone)`),
+        'rc=0',
+      ]);
+      expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+    });
+
+    it('it is swept when every kept tree is protected (the empty-doomed return) and when an input cannot be measured (the unmeasured return, which still stops the prune)', () => {
+      // empty-doomed: previous protects v1.0.1, so v1.0.0 takes the one slot and nothing is doomed
+      let home = versionedBox('ccrc-versions-sweep-protected-', ['v1.0.2', 'v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantPrevious(home, `v1.0.1\n${'c'.repeat(40)}\n`);
+      plantLeft(home, dead);
+      let r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '1' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^versions: nothing to prune — every kept tree is protected or among the newest 1$/m);
+      for (const d of dead) expect(r.stdout).toMatch(removedLine(d));
+      expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1', 'v1.0.2']);
+      // unmeasured: a malformed previous stops the prune at rc 1 — after the sweep
+      home = versionedBox('ccrc-versions-sweep-unmeasured-', ['v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantPrevious(home, 'garbage\n');
+      plantLeft(home, dead);
+      r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stdout).toMatch(/^versions: prune skipped — ~\/\.ccrc\/previous is unreadable or malformed; nothing was removed$/m);
+      for (const d of dead) expect(r.stdout).toMatch(removedLine(d));
+      expect(versionDirs(home), 'the prune removed a version it could not measure').toEqual(['v1.0.0', 'v1.0.1']);
+    });
+
+    it('a leftover that cannot be removed fails the prune that could not remove it (rc 1) — through the short-circuit return too', () => {
+      const home = versionedBox('ccrc-versions-sweep-rc-', ['v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantLeft(home, [dead[0]!]);
+      writeFileSync(join(home, 'doctor-stubs', 'rm'),
+        '#!/bin/sh\n'
+        + 'for a in "$@"; do last="$a"; done\n'
+        + 'case "$last" in */ccrc-versions/.pruning-*) echo "rm: cannot remove \'$last\': fixture" >&2; exit 1 ;; esac\n'
+        + `exec ${REAL_RM} "$@"\n`, { mode: 0o755 });
+      const r = runVersions(home, ['--prune']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stdout).toContain(`versions: could not remove $HOME/ccrc-versions/${dead[0]} (what an earlier prune left, already out of the version list) — it stays out of every listing`);
+      expect(r.stdout).toMatch(/^versions: nothing to prune — /m);
+      expect(versionDirs(home)).toContain(dead[0]);
+      // and through the empty-removal-set return: previous protects v1.0.1, v1.0.0 takes the one slot
+      const p = versionedBox('ccrc-versions-sweep-rc-protected-', ['v1.0.2', 'v1.0.1', 'v1.0.0']);
+      stopUnits(p);
+      plantPrevious(p, `v1.0.1\n${'c'.repeat(40)}\n`);
+      plantLeft(p, [dead[0]!]);
+      writeFileSync(join(p, 'doctor-stubs', 'rm'), fileText(join(home, 'doctor-stubs', 'rm')), { mode: 0o755 });
+      const q = runVersions(p, ['--prune'], { CCRC_VERSIONS_KEEP: '1' });
+      expect(q.code, `stderr: ${q.stderr}\nstdout: ${q.stdout}`).toBe(1);
+      expect(q.stdout).toMatch(/^versions: nothing to prune — every kept tree is protected or among the newest 1$/m);
+      expect(versionDirs(p)).toContain(dead[0]);
+    });
+
+    it('control: a live pid is another process\'s work in flight and is never touched — beside a dead one, which goes', () => {
+      const home = versionedBox('ccrc-versions-sweep-live-', ['v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantLeft(home, [...dead, ...live]);
+      const r = runVersions(home, ['--prune']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      for (const d of dead) expect(r.stdout).toMatch(removedLine(d));
+      for (const d of live) expect(r.stdout).not.toContain(d);
+      expect(versionDirs(home)).toEqual([...live, 'v1.0.0', 'v1.0.1'].sort());
+    });
+
+    it('control: a refused knob measures nothing and sweeps nothing', () => {
+      const home = versionedBox('ccrc-versions-sweep-knob-', ['v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantLeft(home, dead);
+      const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '99999999999999999999' });
+      expect(r.code, r.stderr).toBe(1);
+      const a = sourcedCcrc(home, 'CCRC_VERSIONS_KEEP=99999999999999999999; _ver_gc update auto; echo "rc=$?"');
+      expect(a.stdout, a.stderr).toContain('rc=1');
+      expect(versionDirs(home)).toEqual([...dead, 'v1.0.0', 'v1.0.1'].sort());
+    });
+
+    it('control: a dangling ~/ccrc reads foreign — the layout check comes first, and sweeps nothing', () => {
+      const home = versionedBox('ccrc-versions-sweep-dangling-', ['v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantLeft(home, dead);
+      rmSync(join(home, 'ccrc'));
+      symlinkSync(join(home, 'ccrc-versions', 'v9.9.9'), join(home, 'ccrc'));
+      const r = runVersions(home, ['--prune']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^versions: nothing to prune — \$HOME\/ccrc is not versioned \(foreign\)$/m);
+      expect(versionDirs(home)).toEqual([...dead, 'v1.0.0', 'v1.0.1'].sort());
+    });
+
+    it('control: a list-only run never sweeps', () => {
+      const home = versionedBox('ccrc-versions-sweep-list-', ['v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantLeft(home, dead);
+      const r = runVersions(home, []);
+      expect(r.code, r.stderr).toBe(0);
+      expect(versionDirs(home)).toEqual([...dead, 'v1.0.0', 'v1.0.1'].sort());
+    });
   });
 
   it('--prune takes the update lock: a real holder refuses it at exit 1 and nothing is removed', () => {
@@ -10314,10 +11283,14 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
 // a harness that could not see a leak would say so.
 describe('ccrc: one EXIT chain — a killed writer leaves no <dest>.tmp.$$, and no per-function trap clobbers another (W6 Task 8A)', () => {
   const chainEnv = (home: string): NodeJS.ProcessEnv => {
-    const env = ghContainedEnv(home, { ...process.env, HOME: home });
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
     for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
     return env;
   };
+  it('chainEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {
+    const home = mkTmp('ccrc-exit-chain-contained-');
+    expect(() => assertNoRealTool(chainEnv(home), home)).not.toThrow();
+  });
   const run = (home: string, body: string): { code: number; stdout: string; stderr: string } => {
     const r = spawnSync(BASH, ['-c', `set --; source "${join(REPO, 'ccd', 'ccrc')}"; mkdir -p "$HOME/.ccrc"; ${body}`],
       { env: chainEnv(home), encoding: 'utf8', timeout: 30_000 });
@@ -10406,4 +11379,1564 @@ describe('ccrc: one EXIT chain — a killed writer leaves no <dest>.tmp.$$, and 
       expect(leftovers(control).length, `${name}: the harness could not see a leak`).toBe(1);
     });
   }
+});
+
+/** `_ver_kept <name> <role>` on the fixture box, sourced: `rc=<n> why=<VER_WHY>`
+ *  (D-3465: 0 kept, 1 absent, 2 incomplete or unmeasured, 3 written through). */
+function verKeptAnswer(home: string, name = 'v1.0.0', role = 'both', env: NodeJS.ProcessEnv = {}): string {
+  const r = spawnSync(BASH, ['-c',
+    '. "$1"; rc=0; _ver_kept "$2" "$3" || rc=$?; printf \'rc=%s why=%s\\n\' "$rc" "$VER_WHY"',
+    'ccrc-under-test', join(REPO, 'ccd', 'ccrc'), name, role],
+  { env: { ...updateEnv(home), ...env }, encoding: 'utf8' });
+  return r.stdout.split('\n').find((l) => l.startsWith('rc=')) ?? `no answer: ${r.stderr}`;
+}
+
+// ── F2 (review 179, fix round 1 item 2; D-3465): "kept" is a statement about
+// the version's BYTES ─────────────────────────────────────────────────────────
+// A kept version's record proves an install completed; it says nothing about
+// the tree NOW. `deploy.sh` (rsync through the link, then `stamp_build` last),
+// a pre-W6 updater run from a kept version, and arm 3's copy after a failed
+// record removal all change the bytes without voiding the record. So the kept
+// record carries a digest (`.ccrc-digest`, recipe id 1) and `_ver_kept`
+// re-measures it for every version it is asked about.
+//
+// EVERY write-through case below runs from another version, or with a non-cli
+// `--from`, or on a box whose stamp disagrees, so the `--from cli` pre-check
+// ("already runs … nothing to do") never makes it green for the wrong reason.
+describe('"kept" is a statement about the version\'s bytes: a digest in the record, re-measured by _ver_kept (review 179 F2, D-3465)', () => {
+  const keptAnswer = verKeptAnswer;
+  const HEX = 'f'.repeat(64);
+  const WRITTEN_THROUGH = /^rc=3 why=its tree is no longer the one that was kept — something wrote through it since /;
+
+  interface Row {
+    what: string;
+    plant: (root: string, home: string) => void;
+    says: string | RegExp;
+    link?: boolean;
+  }
+  const rows: Row[] = [
+    { what: 'a clean version, not pointed at', plant: () => {}, says: 'rc=0 why=' },
+    { what: 'a clean version, pointed at', plant: () => {}, says: 'rc=0 why=', link: true },
+    { what: 'a file rewritten after the keep', plant: (root) => appendFileSync(join(root, 'ccd', 'ccrc-doctor-checks'), '\n# written through\n'), says: WRITTEN_THROUGH },
+    { what: 'the same rewrite on the version ~/ccrc points at (the digest is re-measured for EVERY version)',
+      plant: (root) => appendFileSync(join(root, 'ccd', 'ccrc-doctor-checks'), '\n# written through\n'), says: WRITTEN_THROUGH, link: true },
+    { what: 'a file added after the keep', plant: (root) => writeFileSync(join(root, 'agent', 'ADDED'), 'x\n'), says: WRITTEN_THROUGH },
+    { what: 'a file removed after the keep', plant: (root) => rmSync(join(root, 'deploy', 'gen-wrappers.mjs')), says: WRITTEN_THROUGH },
+    { what: 'the executable bit cleared on ccd/ccrc (a mode is part of the bytes: recipe id 1 reads it with [ -x ], never stat)',
+      plant: (root) => {
+        expect(statSync(join(root, 'ccd', 'ccrc')).mode & 0o111, 'the fixture ccd/ccrc must carry an x bit, or this row is vacuous').not.toBe(0);
+        chmodSync(join(root, 'ccd', 'ccrc'), 0o644);
+      },
+      says: WRITTEN_THROUGH },
+    { what: 'the executable bit SET on a plain file',
+      plant: (root, home) => {
+        writeFileSync(join(root, 'shared', 'plain.txt'), 'plain\n');
+        chmodSync(join(root, 'shared', 'plain.txt'), 0o644);
+        keepDigest(root, home);
+        chmodSync(join(root, 'shared', 'plain.txt'), 0o755);
+      },
+      says: WRITTEN_THROUGH },
+    { what: 'a symlink retargeted (a link contributes its TARGET text, not what it points at)',
+      plant: (root, home) => {
+        symlinkSync('one', join(root, 'shared', 'lnk'));
+        keepDigest(root, home);
+        rmSync(join(root, 'shared', 'lnk'));
+        symlinkSync('two', join(root, 'shared', 'lnk'));
+      },
+      says: WRITTEN_THROUGH },
+    // The controls for what the digest does NOT cover.
+    { what: 'control: node_modules at any depth is not covered (npm ci output is not stable bytes)',
+      plant: (root) => {
+        mkdirSync(join(root, 'server', 'node_modules', 'pkg'), { recursive: true });
+        writeFileSync(join(root, 'server', 'node_modules', 'pkg', 'index.js'), 'x\n');
+        mkdirSync(join(root, 'node_modules'), { recursive: true });
+        writeFileSync(join(root, 'node_modules', 'top'), 'x\n');
+      },
+      says: 'rc=0 why=' },
+    { what: 'control: a .DS_Store at any depth is not covered',
+      plant: (root) => { writeFileSync(join(root, '.DS_Store'), 'x\n'); writeFileSync(join(root, 'deploy', '.DS_Store'), 'x\n'); },
+      says: 'rc=0 why=' },
+    { what: 'control: a top-level .ccrc-* name (the record files and their temps) is not covered',
+      plant: (root) => { writeFileSync(join(root, '.ccrc-installed.tmp.4242'), 'x\n'); writeFileSync(join(root, '.ccrc-other'), 'x\n'); },
+      says: 'rc=0 why=' },
+    { what: 'control: only the TOP-LEVEL .ccrc-* names are excluded — a nested one is covered',
+      plant: (root) => writeFileSync(join(root, 'deploy', '.ccrc-nested'), 'x\n'),
+      says: WRITTEN_THROUGH },
+    // Not kept, unmeasured: never folded into kept and never into written through.
+    { what: 'no digest recorded (a version kept before digests existed)',
+      plant: (root) => rmSync(join(root, '.ccrc-digest')),
+      says: 'rc=2 why=no kept digest (this version was kept before digests existed, or its keep never finished)' },
+    { what: 'a recipe id this ccrc does not know',
+      plant: (root) => writeFileSync(join(root, '.ccrc-digest'), `9:${HEX}\n`),
+      says: 'rc=2 why=its recorded digest names recipe 9, which this ccrc does not know' },
+    { what: 'a digest that does not parse',
+      plant: (root) => writeFileSync(join(root, '.ccrc-digest'), 'not a digest\n'),
+      says: 'rc=2 why=its kept digest does not parse' },
+    { what: 'a name holding a newline cannot be measured (refused, never guessed)',
+      plant: (root) => writeFileSync(join(root, 'agent', 'a\nb'), 'x\n'),
+      says: 'rc=2 why=its digest could not be measured (a path holds a newline or a backslash in a name)' },
+    { what: 'a name holding a backslash cannot be measured either',
+      plant: (root) => writeFileSync(join(root, 'agent', 'a\\b'), 'x\n'),
+      says: 'rc=2 why=its digest could not be measured (a path holds a newline or a backslash in a name)' },
+    // GNU `sha256sum` escapes a carriage return in a name exactly as it does a
+    // newline or a backslash (its line then starts with `\`), and the batched read
+    // refuses the line — by a different route than the two names above, with the
+    // same answer: unmeasured. BSD `shasum` does not escape it, so this row is Linux's.
+    ...(process.platform === 'darwin' ? [] : [{ what: 'a name holding a carriage return cannot be measured either (sha256sum escapes it, so the batched read refuses the line — a different route to the same answer)',
+      plant: (root: string) => writeFileSync(join(root, 'agent', 'a\rb'), 'x\n'),
+      says: 'rc=2 why=its digest could not be measured (a file could not be hashed)' }]),
+    { what: 'a fifo cannot be measured',
+      plant: (root) => { spawnSync('mkfifo', [join(root, 'agent', 'ff')]); },
+      says: 'rc=2 why=its digest could not be measured (an entry that is neither a regular file, a directory nor a link (agent/ff))' },
+  ];
+  it.each(rows)('_ver_kept: $what', (row) => {
+    const home = freshUpdateBox('ccrc-update-ver-digest-');
+    const root = installVersionedTree(home, 'v1.0.0', { link: row.link === true, stamp: { sha: V1_SHA, version: 'v1.0.0' } });
+    row.plant(root, home);
+    const said = keptAnswer(home);
+    if (typeof row.says === 'string') expect(said).toBe(row.says);
+    else expect(said).toMatch(row.says);
+  });
+
+  // A box with no such locale has nothing to compare against: the case is SKIPPED
+  // there, visibly, not passed.
+  const utf8 = spawnSync('bash', ['-c', 'locale -a | grep -i "^en_US.utf-\\?8$" | head -1'], { encoding: 'utf8' }).stdout.trim();
+  (utf8 === '' ? it.skip : it)('the digest is the same under LC_ALL=C and under a UTF-8 locale that collates differently (the sort is byte order, whatever the ambient locale says)', () => {
+    // The control must be able to red: under this locale `a` sorts before `B`.
+    const order = spawnSync('bash', ['-c', 'printf "B\\na\\n" | LC_ALL="$1" sort | head -1', 'x', utf8], { encoding: 'utf8' }).stdout.trim();
+    expect(order, `${utf8} does not collate a before B — this control would be vacuous`).toBe('a');
+    const home = freshUpdateBox('ccrc-update-ver-digest-locale-');
+    const root = installVersionedTree(home, 'v1.0.0', { link: false, stamp: { sha: V1_SHA, version: 'v1.0.0' } });
+    mkdirSync(join(root, 'shared', 'zz', 'a.d'), { recursive: true });
+    for (const f of ['B', 'a', 'a-b', 'ab', 'a.b', 'A', 'z z']) writeFileSync(join(root, 'shared', 'zz', f), `${f}\n`);
+    writeFileSync(join(root, 'shared', 'zz', 'a.d', 'f'), 'f\n');
+    const digestUnder = (loc: string): string => {
+      const r = spawnSync(BASH, ['-c', '. "$1"; _ver_digest_of 1 "$2" && printf "%s\\n" "$VER_DIGEST_NOW"', 'x', join(REPO, 'ccd', 'ccrc'), root],
+        { env: { ...updateEnv(home), LC_ALL: loc }, encoding: 'utf8' });
+      return r.stdout.trim();
+    };
+    const c = digestUnder('C');
+    expect(c).toMatch(/^1:[0-9a-f]{64}$/);
+    expect(digestUnder(utf8)).toBe(c);
+  });
+
+  // ── the three shapes, and the flips that must not happen ─────────────────
+  /** A W6 server box on v2.0.0 with v1.0.0 kept beside it (its spine the
+   *  recorder), `previous` naming v1.0.0, and every release-host question
+   *  answering 404 — so a rollback that FLIPS (asks nothing) and one that
+   *  falls to a re-install (asks the host, and is refused at exit 2) end in
+   *  different places. */
+  const flipBox = (prefix: string): { home: string; kept: string } => {
+    const home = freshUpdateBox(prefix);
+    plantW6Box(home, 'v2.0.0', V2_SHA, 'server');
+    const kept = keptVersion(home, 'v1.0.0', V1_SHA);
+    writeFileSync(join(home, '.ccrc', 'previous'), `v1.0.0\n${V1_SHA}\n`);
+    writeFileSync(join(home, 'fixture-release-http'), '404\n');
+    return { home, kept };
+  };
+  const expectNoFlip = (home: string, r: Result): void => {
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: rollback: v1\.0\.0 is not a published release \(its SHA256SUMS answered 404\)/m);
+    expect(r.stdout).toContain('rollback: $HOME/ccrc-versions/v1.0.0 was written through since it was kept (its tree is no longer the one that was kept');
+    expect(r.stdout).not.toMatch(/is kept at|no release-host question/);
+    expect(localUrls(home), 'the release host was not asked').toEqual([`local://${home}/releases/download/v1.0.0/SHA256SUMS`]);
+    expect(existsSync(join(home, 'kept-spine-argv')), 'the kept version\'s spine ran — a flip into a written-through tree').toBe(false);
+    expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v2.0.0'));
+  };
+
+  it('deploy.sh\'s failed-build shape — the tree written through, the stamp NOT touched: a bare rollback does not flip into it (it asks the release host as for any tag that is not kept)', () => {
+    const { home, kept } = flipBox('ccrc-fx-a-nostamp-');
+    appendFileSync(join(kept, 'server', 'dist', 'server', 'src', 'index.js'), '// a working tree, rsynced through the link\n');
+    expectNoFlip(home, rollbackRun(home));
+  });
+
+  it('_ver_flip_back is a belt of its own: called directly on a written-through kept version it refuses with rc 1 BEFORE the flip, the link, the stamp, the record and the kept spine untouched — every caller that reaches it re-asks the bytes (arm 1 and a rollback by flip)', () => {
+    const { home, kept } = flipBox('ccrc-fx-a-flipback-');
+    appendFileSync(join(kept, 'server', 'dist', 'server', 'src', 'index.js'), '// written through\n');
+    const stamp = fileText(join(home, '.ccrc', 'build.json'));
+    const record = fileText(join(home, '.ccrc', 'installed'));
+    const r = sourcedCcrc(home,
+      `rc=0; _ver_flip_back v1.0.0 server rollback || rc=$?; printf 'rc=%s why=%s\\n' "$rc" "$VER_WHY"`);
+    const said = r.stdout.split('\n').find((l) => l.startsWith('rc=')) ?? `no answer: ${r.stderr}`;
+    expect(said).toMatch(/^rc=1 why=\$HOME\/ccrc-versions\/v1\.0\.0 was written through since it was kept \(its tree is no longer the one that was kept /);
+    expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v2.0.0'));
+    expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(stamp);
+    expect(fileText(join(home, '.ccrc', 'installed'))).toBe(record);
+    expect(existsSync(join(home, 'kept-spine-argv')), 'the kept version\'s spine ran').toBe(false);
+  });
+
+  it('the pre-W6 updater\'s shape — a kept X received Y\'s bytes (a file replaced, one gone, one added) and the kept copies were never told; the box then moved away from X; `rollback --to X` from a non-cli --from does not flip', () => {
+    const { home, kept } = flipBox('ccrc-fx-a-prew6-');
+    writeFileSync(join(kept, 'server', 'dist', 'server', 'src', 'index.js'), "// Y's server\n");
+    rmSync(join(kept, 'deploy', 'gen-wrappers.mjs'));
+    writeFileSync(join(kept, 'shared', 'FROM-Y'), "Y's\n");
+    expectNoFlip(home, rollbackRun(home, ['--from', 'watchdog', '--to', 'v1.0.0']));
+  });
+
+  it('the restamped shape on the version ~/ccrc points at — deploy.sh reshaped the box stamp and the record is gone — `rollback --to` it does not flip either: the release host is asked', () => {
+    const home = freshUpdateBox('ccrc-fx-a-restamp-cheap-');
+    const root = plantW6Box(home, 'v1.0.0', V1_SHA, 'server');
+    writeFileSync(join(root, 'ccd', 'ccrc'), KEPT_SPINE, { mode: 0o755 });
+    keepDigest(root, home);
+    writeFileSync(join(root, 'agent', 'MARKER'), 'a working tree X\n');
+    writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp('v9.9.9', '9'.repeat(40)));
+    rmSync(join(home, '.ccrc', 'installed'));
+    writeFileSync(join(home, 'fixture-release-http'), '404\n');
+    const r = rollbackRun(home, ['--to', 'v1.0.0']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(r.stdout).toContain('rollback: $HOME/ccrc-versions/v1.0.0 was written through since it was kept');
+    expect(r.stdout).not.toMatch(/is kept at|no release-host question/);
+    expect(localUrls(home)).toEqual([`local://${home}/releases/download/v1.0.0/SHA256SUMS`]);
+    expect(existsSync(join(home, 'kept-spine-argv'))).toBe(false);
+  });
+
+  it('the report\'s reproduction, end to end: a restamped write-through, then `rollback --to` that version — it is NOT kept, the re-install runs (the release is fetched), the marker is GONE afterwards, and the version is kept again on a fresh digest', () => {
+    const home = onKeptV1('ccrc-fx-a-report-');
+    const v1 = join(home, 'ccrc-versions', 'v1.0.0');
+    expect(keptAnswer(home, 'v1.0.0', ''), 'the control is broken: a real update must leave v1.0.0 kept').toBe('rc=0 why=');
+    // deploy.sh's shape: a working tree through the link, the stamp reshaped,
+    // and the completed-install record gone.
+    writeFileSync(join(v1, 'agent', 'WRITTEN-THROUGH'), 'a working tree X\n');
+    writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp('v9.9.9', '9'.repeat(40)));
+    rmSync(join(home, '.ccrc', 'installed'));
+    expect(keptAnswer(home, 'v1.0.0', '')).toMatch(WRITTEN_THROUGH);
+    const r = rollbackRun(home, ['--to', 'v1.0.0']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toContain('rollback: $HOME/ccrc-versions/v1.0.0 was written through since it was kept');
+    expect(r.stdout).not.toMatch(/is kept at|no release-host question/);
+    expect(localUrls(home).some((u) => u.endsWith('/download/v1.0.0/ccrc-v1.0.0.tar.gz')), localUrls(home).join('\n')).toBe(true);
+    expect(existsSync(join(v1, 'agent', 'WRITTEN-THROUGH')), 'the marker survived: nothing was re-installed').toBe(false);
+    expect(keptAnswer(home, 'v1.0.0', '')).toBe('rc=0 why=');
+  }, 120_000);
+
+  it('a FULL gate failure whose previous version was written through does not flip back into it: arm 1 names why and arm 2 re-installs it from its release', () => {
+    const home = onKeptV1('ccrc-fx-a-arm1-');
+    const v1 = join(home, 'ccrc-versions', 'v1.0.0');
+    // The running version, written through with no restamp (deploy.sh's failed build).
+    writeFileSync(join(v1, 'agent', 'WRITTEN-THROUGH'), 'a working tree X\n');
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-health-deny'), 'v2.0.0\n');
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toContain('update: arm 1: $HOME/ccrc-versions/v1.0.0 was written through since it was kept (its tree is no longer the one that was kept');
+    expect(r.stdout).not.toMatch(/flipping back to it|REVERTED \(arm 1\)/);
+    expect(r.stdout).toMatch(/^update: arm 2: re-installing v1\.0\.0 /m);
+    expect(existsSync(join(v1, 'agent', 'WRITTEN-THROUGH')), 'arm 2 did not re-install over the written-through tree').toBe(false);
+  }, 120_000);
+
+  // ── the listing says it; GC's verdicts are exactly today's ───────────────
+  it('`ccrc versions` says `written-through` for a version whose tree is not the one that was kept — and the verdicts, the count and what --prune removes are exactly what they are for the same box with that version clean', () => {
+    const NAMES = ['v1.0.4', 'v1.0.3', 'v1.0.2', 'v1.0.1', 'v1.0.0'];
+    const box = (prefix: string, through: string[]): string => {
+      const home = freshUpdateBox(prefix);
+      NAMES.forEach((n, i) => {
+        const root = installVersionedTree(home, n, { link: i === 0, stamp: { sha: 'b'.repeat(40), version: n } });
+        const t = 1_800_000_000 - i * 100;
+        utimesSync(join(root, '.ccrc-installed'), t, t);
+        if (through.includes(n)) writeFileSync(join(root, 'agent', 'WRITTEN-THROUGH'), 'x\n');
+      });
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp('v1.0.4', 'b'.repeat(40)));
+      writeFileSync(join(home, 'fixture-unit-state'), 'inactive\n');
+      return home;
+    };
+    const versions = (home: string, args: string[] = []): Result => {
+      const env = { ...updateEnv(home), CCRC_VERSIONS_KEEP: '2' };
+      replantDoctorStubs(home);
+      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'versions', ...args], { env, encoding: 'utf8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    };
+    const clean = box('ccrc-fx-a-gc-clean-', []);
+    const dirty = box('ccrc-fx-a-gc-dirty-', ['v1.0.3', 'v1.0.2', 'v1.0.0']);
+    const cl = versions(clean);
+    const dl = versions(dirty);
+    expect(dl.code).toBe(cl.code);
+    expect(dl.stdout).toMatch(/^ {4}v1\.0\.3 {2}written-through {2}kept: newest 2$/m);
+    expect(dl.stdout).toMatch(/^ {4}v1\.0\.2 {2}written-through {2}kept: newest 2$/m);
+    expect(dl.stdout).toMatch(/^ {4}v1\.0\.0 {2}written-through {2}prunable$/m);
+    expect(dl.stdout).toMatch(/^ {2}\* v1\.0\.4 {2}complete {2}kept: pointed-at$/m);
+    // The new word never feeds a verdict: replace it, and the two listings are the same bytes.
+    expect(dl.stdout.replace(/written-through/g, 'complete')).toBe(cl.stdout);
+    const cp = versions(clean, ['--prune']);
+    const dp = versions(dirty, ['--prune']);
+    expect(dp.code).toBe(cp.code);
+    expect(dp.stdout.replace(/written-through/g, 'complete')).toBe(cp.stdout);
+    expect(readdirSync(join(dirty, 'ccrc-versions')).sort()).toEqual(readdirSync(join(clean, 'ccrc-versions')).sort());
+  }, 120_000);
+});
+
+// ── M1 (review 179 fix round 1): the listing's third word ─────────────────────
+describe('`ccrc versions` says `unmeasured` for a version kept before digests existed — not `complete` (review 179 M1, D-3465 (d))', () => {
+  it('a version with a record and no digest lists `unmeasured`; the verdicts, the count and what --prune removes are exactly what they are for the same box with that version clean', () => {
+    const NAMES = ['v1.0.4', 'v1.0.3', 'v1.0.2', 'v1.0.1', 'v1.0.0'];
+    const box = (prefix: string, predigest: string[]): string => {
+      const home = freshUpdateBox(prefix);
+      NAMES.forEach((n, i) => {
+        const root = installVersionedTree(home, n, { link: i === 0, digest: !predigest.includes(n), stamp: { sha: 'b'.repeat(40), version: n } });
+        const t = 1_800_000_000 - i * 100;
+        utimesSync(join(root, '.ccrc-installed'), t, t);
+      });
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp('v1.0.4', 'b'.repeat(40)));
+      writeFileSync(join(home, 'fixture-unit-state'), 'inactive\n');
+      return home;
+    };
+    const versions = (home: string, args: string[] = []): Result => {
+      const env = { ...updateEnv(home), CCRC_VERSIONS_KEEP: '2' };
+      replantDoctorStubs(home);
+      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'versions', ...args], { env, encoding: 'utf8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    };
+    const clean = box('ccrc-fix1-m1-clean-', []);
+    const pre = box('ccrc-fix1-m1-predigest-', ['v1.0.3', 'v1.0.0']);
+    const cl = versions(clean);
+    const pl = versions(pre);
+    expect(pl.code).toBe(cl.code);
+    expect(pl.stdout).toMatch(/^ {4}v1\.0\.3 {2}unmeasured {2}kept: newest 2$/m);
+    expect(pl.stdout).toMatch(/^ {4}v1\.0\.0 {2}unmeasured {2}prunable$/m);
+    expect(pl.stdout).toMatch(/^ {4}v1\.0\.2 {2}complete {2}kept: newest 2$/m);
+    // The word never feeds a verdict: replace it, and the two listings are the same bytes.
+    expect(pl.stdout.replace(/unmeasured/g, 'complete')).toBe(cl.stdout);
+    const cp = versions(clean, ['--prune']);
+    const pp = versions(pre, ['--prune']);
+    expect(pp.code).toBe(cp.code);
+    expect(pp.stdout.replace(/unmeasured/g, 'complete')).toBe(cp.stdout);
+    expect(readdirSync(join(pre, 'ccrc-versions')).sort()).toEqual(readdirSync(join(clean, 'ccrc-versions')).sort());
+  }, 120_000);
+});
+
+// ── F1 (review 179, fix round 1 item 1; D-3466): the killed-flip state ───────
+// A `--from cli|pwa` update from a completed, tagged install, killed between
+// `_inst_tree`'s flip and `_inst_stamp`, leaves `~/ccrc` on the NEW version,
+// the stamp on the OLD build, `previous` naming that old build, and no
+// `~/.ccrc/installed` (`cmd_update` removed it before the staged spine). C27
+// refused the watchdog's bare `rollback --from watchdog` there, and the
+// watchdog never retries. The rule (six conditions, measured by ONE function,
+// `_rollback_killed_flip_state`): C27 admits that state, and whenever
+// conditions (1) to (3) hold the rollback may only FLIP — re-measured under
+// the lock, whatever `--to` or `--from` says, detached child included.
+describe('the killed-flip state: C27 admits the one rollback a killed update needs, and only by flip (review 179 F1, D-3466)', () => {
+  /** A kept version's own `ccd/ccrc` that DECLARES its versions root — the probe
+   *  `cmd_update` reads (`^BOX_VERSIONS_ROOT=`) to tell a W6 spine from an older one.
+   *  The sh stub exits before it reaches the line; only its text matters. */
+  const KEPT_SPINE_W6 = `${KEPT_SPINE}# a W6 ccrc declares its versions root; cmd_update's own probe reads this line\nBOX_VERSIONS_ROOT="$HOME/ccrc-versions"\n`;
+  const SENTENCE = /^ccrc: rollback: ~\/\.ccrc\/previous names v1\.0\.0, but it cannot be trusted here — \$HOME\/ccrc points at \$HOME\/ccrc-versions\/v2\.0\.0 while this box's stamp reads v1\.0\.0, so the last move was made by something that does not keep the layout /m;
+  const phasesOf = (home: string): string[] => reportWrites(home).map((w) => String(w['phase']));
+
+  /** The state a killed update leaves, planted from measured facts: v1.0.0 kept
+   *  complete beside `~/ccrc -> v2.0.0` (the flip that happened), the box stamp
+   *  byte-equal to v1.0.0's kept stamp (never restamped), `previous` naming
+   *  v1.0.0, floor at v2.0.0, and NO completed-install record. */
+  function killedFlipBox(prefix: string, o: { oldSpine?: string } = {}): { home: string; v1: string; v2: string } {
+    const home = freshUpdateBox(prefix);
+    const v1 = installVersionedTree(home, 'v1.0.0', { link: false, stamp: { sha: V1_SHA, version: 'v1.0.0' } });
+    writeFileSync(join(v1, 'ccd', 'ccrc'), o.oldSpine ?? KEPT_SPINE_W6, { mode: 0o755 });
+    keepDigest(v1, home);   // the spine is part of the kept bytes (D-3465)
+    const v2 = installVersionedTree(home, 'v2.0.0', { link: true, stamp: { sha: V2_SHA, version: 'v2.0.0' } });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    copyFileSync(join(v1, '.ccrc-stamp.json'), join(home, '.ccrc', 'build.json'));
+    writeFileSync(join(home, '.ccrc', 'floor'), 'v2.0.0\n');
+    writeFileSync(join(home, '.ccrc', 'previous'), `v1.0.0\n${V1_SHA}\n`);
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n');
+    return { home, v1, v2 };
+  }
+  /** A published v1.0.0 the run COULD download — so "no re-install ran" below
+   *  measures the run's restraint, not an empty URL space. */
+  const publishV1 = (home: string): void => {
+    packRelease(home, fullTree(home, { version: 'v1.0.0', sha: V1_SHA }), { tag: 'v1.0.0', latest: false });
+  };
+  /** No re-install ran: no rsync, no npm, nothing downloaded past the
+   *  existence question (`SHA256SUMS`), no staged spine, no kept spine, and the
+   *  link where it was. */
+  const expectNoReinstall = (home: string, link: string): void => {
+    expect(existsSync(join(home, 'rsync-argv')), 'rsync ran — a re-install into a tree the units run').toBe(false);
+    expect(existsSync(join(home, 'npm-argv')), 'npm ran — a re-install into a tree the units run').toBe(false);
+    expect(localUrls(home).filter((u) => !u.endsWith('/SHA256SUMS')), 'a release was downloaded').toEqual([]);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+    expect(existsSync(join(home, 'kept-spine-argv')), "the kept version's spine ran").toBe(false);
+    expect(linkOf(home)).toBe(link);
+  };
+  /** The reason line's tail, by `_kf_remedy` (wave 9 R9-F1, D-3827, round-2 ruling R-D). It re-measures when it prints:
+   *  the hand install, only where the role is known and the version is kept complete, its own `ccd/ccrc` versioned and
+   *  (on a fleet box) its agent deps present; otherwise NO command and no recipe. */
+  const handInstall = (role: string): string =>
+    `re-installing v1.0.0 is a typed act, not a rollback's: bash ~/ccrc-versions/v1.0.0/ccd/ccrc install --role ${role} (it installs from that version's own kept directory: no download, no tree copy, no npm ci)`;
+  const NO_COMMAND = 'no safe one-line repair is known for this state, so this line names no command — nothing on this box was changed';
+  /** Refused with C27's sentence, nothing moved. `tail` is what the reason line ends in. */
+  const expectRefused = (home: string, r: Result, link: string, reason?: string, tail: string = NO_COMMAND): void => {
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(SENTENCE);
+    // The reason line, when conditions (1) to (3) held and (4)-(6) did not; none otherwise.
+    if (reason === undefined) expect(r.stderr).not.toContain('the killed-flip state does not hold');
+    else {
+      expect(r.stderr).toContain(`rollback: the killed-flip state does not hold — ${reason}`);
+      // R-B1 (as reshaped by wave 9 R9-F1): the sentence's own remedy (`--to vX.Y.Z`) meets this refusal again, so
+      // the line's tail says what the box can safely do instead — a typed hand install where it was measured safe
+      // just now, otherwise that no safe one-line repair is known. Never the in-place `update --to … --downgrade`.
+      expect(r.stderr).toContain(`${reason} — ${tail}\n`);
+      if (tail === NO_COMMAND) {
+        expect(tail, 'the no-command tail names a recipe').not.toMatch(/README|bash ~\/ccrc-versions/);
+        expect(r.stderr, 'a no-command refusal named a recipe').not.toContain('README');
+        expect(r.stderr, 'a no-command refusal named a command').not.toContain('bash ~/ccrc-versions');
+      } else {
+        expect(r.stderr, 'the hand-install refusal named a recipe').not.toContain('README');
+      }
+    }
+    expect(r.stderr, 'the in-place re-install is never advised (R9-F1)').not.toContain('ccrc update --to');
+    expect(r.stderr).toContain('Nothing on this box was changed — name the target: ccrc rollback --to vX.Y.Z');
+    expectNoReinstall(home, link);
+    expect(existsSync(join(home, '.ccrc', 'installed')) ? fileText(join(home, '.ccrc', 'installed')) : null,
+      'a refused rollback wrote the record').toBe(recordBefore.get(home) ?? null);
+  };
+  const recordBefore = new Map<string, string | null>();
+  const note = (home: string): string => {
+    recordBefore.set(home, existsSync(join(home, '.ccrc', 'installed')) ? fileText(join(home, '.ccrc', 'installed')) : null);
+    return home;
+  };
+  /** After a successful rollback by flip: link, stamp and record agree on v1.0.0. */
+  const expectAgreesOnV1 = (home: string, v1: string): void => {
+    expect(linkOf(home)).toBe(v1);
+    expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(fileText(join(v1, '.ccrc-stamp.json')));
+    expect(fileText(join(home, '.ccrc', 'installed'))).toBe(fileText(join(v1, '.ccrc-installed')));
+    expect(JSON.parse(fileText(join(home, '.ccrc', 'build.json')))).toMatchObject({ version: 'v1.0.0', sha: V1_SHA });
+    expect(fileText(join(home, '.ccrc', 'previous')), 'a rollback never rewrites previous').toBe(`v1.0.0\n${V1_SHA}\n`);
+    expect(fileText(join(home, '.ccrc', 'floor')), 'the floor never lowers').toBe('v2.0.0\n');
+  };
+
+  // ── the two positive shapes ───────────────────────────────────────────────
+  it('the killed-between-flip-and-stamp shape (planted from the measured leftovers): a bare `rollback --from watchdog` FLIPS back — link, stamp and record then agree on the old build, no release-host question, no download, no re-install', () => {
+    const { home, v1 } = killedFlipBox('ccrc-fx-b-killed-flip-');
+    writeFileSync(join(home, 'fixture-release-http'), '404\n');   // a run that asks the host is refused at exit 2
+    expect(existsSync(join(home, '.ccrc', 'installed')), 'the fixture must be the state: no record').toBe(false);
+    const r = rollbackRun(home, ['--from', 'watchdog']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).not.toContain('it cannot be trusted here');
+    expect(r.stdout).toContain('rollback: v1.0.0 is kept at $HOME/ccrc-versions/v1.0.0 — no release-host question and no download');
+    expect(r.stdout).toContain('rollback: this box runs v1.0.0 again — flipped back to $HOME/ccrc-versions/v1.0.0, no download');
+    expect(localUrls(home)).toEqual([]);
+    expectAgreesOnV1(home, v1);
+    expect(existsSync(join(home, 'kept-spine-argv')), "the kept version's own spine did not run").toBe(true);
+    expect(existsSync(join(home, 'rsync-argv'))).toBe(false);
+    expect(existsSync(join(home, 'npm-argv'))).toBe(false);
+    expect(lastReport(home)).toMatchObject({ phase: 'done', detail: 'rolled back by flip to v1.0.0', from: 'watchdog' });
+    expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'done']);
+  });
+
+  it('the same shape produced by a REAL killed update — the staged spine and its updater SIGKILLed at `_inst_stamp`, after `_inst_tree`\'s flip — then the watchdog\'s bare rollback: the state the real code leaves is the state the rule admits', () => {
+    const home = onKeptV1('ccrc-fx-b-killed-real-');
+    const v1 = join(home, 'ccrc-versions', 'v1.0.0');
+    const v2 = join(home, 'ccrc-versions', 'v2.0.0');
+    const keptStamp = fileText(join(v1, '.ccrc-stamp.json'));
+    const keptRec = fileText(join(v1, '.ccrc-installed'));
+    // v2.0.0's own spine, made to die where OOM would kill the run: at the
+    // start of `_inst_stamp`. It takes its parent (the updater) with it — a
+    // unit's cgroup kill takes both. Only the release copy is patched.
+    const tree = fullTree(home, { version: 'v2.0.0', sha: V2_SHA });
+    const spine = join(tree, 'ccd', 'ccrc');
+    const src = fileText(spine);
+    expect(src.match(/^_inst_stamp\(\) \{/gm), 'the fixture patch anchor is gone').toHaveLength(1);
+    writeFileSync(spine, src.replace(/^_inst_stamp\(\) \{/m, () => '_inst_stamp() { kill -9 "$PPID" "$$"; '));
+    rmSync(join(tree, 'MANIFEST'));
+    writeManifest(tree);
+    packRelease(home, tree, { tag: 'v2.0.0' });
+    const up = runUpdate(home, ['--from', 'cli']);
+    expect(up.code, `the update must have been killed — stdout: ${up.stdout}`).not.toBe(0);
+    // The leftovers, measured: link on the new version, the stamp still the old build's, no record.
+    expect(linkOf(home), 'the flip did not happen before the kill').toBe(v2);
+    expect(fileText(join(home, '.ccrc', 'build.json')), 'the stamp moved before the kill').toBe(keptStamp);
+    expect(existsSync(join(home, '.ccrc', 'installed')), 'the record survived').toBe(false);
+    expect(fileText(join(home, '.ccrc', 'previous')).split('\n')[0]).toBe('v1.0.0');
+    for (const f of ['curl-argv', 'update-json-writes', 'systemctl-calls', 'rsync-argv', 'npm-argv']) rmSync(join(home, f), { force: true });
+    writeFileSync(join(home, 'fixture-release-http'), '404\n');
+    const r = rollbackRun(home, ['--from', 'watchdog']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toContain('rollback: v1.0.0 is kept at $HOME/ccrc-versions/v1.0.0 — no release-host question and no download');
+    expect(localUrls(home)).toEqual([]);
+    expect(linkOf(home)).toBe(v1);
+    expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(keptStamp);
+    expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
+    expect(fileText(join(home, '.ccrc', 'previous')).split('\n')[0]).toBe('v1.0.0');
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd')), "v1.0.0's own spine re-placed its ccd body").toContain(CCD_SENTINEL);
+  }, 120_000);
+
+  it('the arm-1-then-arm-3 shape, produced by a REAL failed update (arm 1 flips back and its gate fails, ~/ccrc points at the new version again, arm 2 refuses, arm 3 restores no stamp), then a bare rollback typed by hand (`--from cli`): it flips back to the kept previous version', () => {
+    const home = onKeptV1('ccrc-fx-b-arm1-arm3-');
+    const v1 = join(home, 'ccrc-versions', 'v1.0.0');
+    const v2 = join(home, 'ccrc-versions', 'v2.0.0');
+    const keptStamp = fileText(join(v1, '.ccrc-stamp.json'));
+    const keptRec = fileText(join(v1, '.ccrc-installed'));
+    // v1.0.0 is no longer published, so arm 2 refuses and arm 3 runs.
+    rmSync(join(home, 'releases', 'download', 'v1.0.0'), { recursive: true, force: true });
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-health-deny'), 'v2.0.0\nv1.0.0\n');
+    const up = runUpdate(home);
+    expect(up.code, `stderr: ${up.stderr}\nstdout: ${up.stdout}`).toBe(4);
+    expect(up.stdout).toMatch(/^update: REVERTED \(arm 3\): /m);
+    // The leftovers, measured.
+    expect(linkOf(home), 'arm 1 leaves ~/ccrc on the new version').toBe(v2);
+    expect(existsSync(join(home, '.ccrc', 'installed')), 'arm 3 removed the record').toBe(false);
+    expect(fileText(join(home, '.ccrc', 'build.json')), 'arm 3 restores no stamp: arm 1\'s restore of v1.0.0\'s stays').toBe(keptStamp);
+    expect(fileText(join(home, '.ccrc', 'previous')).split('\n')[0]).toBe('v1.0.0');
+    // The gate answers for v1.0.0 again, and no release is asked or downloaded.
+    rmSync(join(home, 'fixture-health-deny'));
+    for (const f of ['curl-argv', 'update-json-writes', 'systemctl-calls', 'rsync-argv', 'npm-argv']) rmSync(join(home, f), { force: true });
+    writeFileSync(join(home, 'fixture-release-http'), '404\n');
+    const r = rollbackRun(home);   // bare, --from cli (the default)
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).not.toContain('it cannot be trusted here');
+    expect(r.stdout).toContain('rollback: v1.0.0 is kept at $HOME/ccrc-versions/v1.0.0 — no release-host question and no download');
+    expect(localUrls(home)).toEqual([]);
+    expect(linkOf(home)).toBe(v1);
+    expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(keptStamp);
+    expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
+  }, 120_000);
+
+  // ── the controls: each refuses with C27's sentence and runs no re-install ─
+  it('control (the pre-W4 detour): previous disagrees with the layout and the killed-flip state does NOT hold — refused, and no re-install even with the release published', () => {
+    const home = freshUpdateBox('ccrc-fx-b-prew4-');
+    plantW6Box(home, 'v1.0.0', V1_SHA, 'server');
+    writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp('v1.1.0', 'c'.repeat(40)));
+    writeFileSync(join(home, '.ccrc', 'previous'), `v2.0.0\n${V2_SHA}\n`);
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0', latest: false });
+    const r = rollbackRun(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: rollback: ~\/\.ccrc\/previous names v2\.0\.0, but it cannot be trusted here — \$HOME\/ccrc points at \$HOME\/ccrc-versions\/v1\.0\.0 while this box's stamp reads v1\.1\.0, /m);
+    expectNoReinstall(home, join(home, 'ccrc-versions', 'v1.0.0'));
+    expect(localUrls(home)).toEqual([]);
+  });
+
+  it('control (condition 2): a `deploy.sh`-shaped hot-fix — the box stamped at previous\'s tag over the newer version, with ~/.ccrc/installed PRESENT — is refused, bare from cli and from the watchdog', () => {
+    const { home, v2 } = killedFlipBox('ccrc-fx-b-deploysh-');
+    publishV1(home);
+    writeFileSync(join(home, '.ccrc', 'installed'), `${V2_SHA}\n`);   // the record deploy.sh never touched
+    note(home);
+    for (const from of [['--from', 'cli'], ['--from', 'watchdog']]) {
+      expectRefused(home, rollbackRun(home, from), v2);
+    }
+  });
+
+  it('control (condition 4): the killed-flip state whose target is NOT kept (its kept record is gone) — refused bare, and `--to` it dies under the lock with the same sentence, downloading nothing', () => {
+    const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-notkept-');
+    rmSync(join(v1, '.ccrc-installed'));
+    publishV1(home);
+    note(home);
+    const why = 'the target is not kept complete (no kept install record)';
+    expectRefused(home, rollbackRun(home), v2, why);
+    expectRefused(home, rollbackRun(home, ['--to', 'v1.0.0']), v2, why);
+    expect(lastReport(home), 'a --to run under the lock closes its report').toMatchObject({ phase: 'failed', from: 'rollback', target: 'v1.0.0' });
+  });
+
+  it('under the lock the state\'s OWN re-measurement decides the flip: a target the pre-lock read found not kept but that the locked re-measure finds kept (the world changed between the two — `_ver_kept` answers 2 once, then truthfully) is flipped to, never re-installed', () => {
+    const { home, v1 } = killedFlipBox('ccrc-fx-b-race-');
+    publishV1(home);
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env: NodeJS.ProcessEnv = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases`, CCRC_UPDATE_HEALTH_S: '0' };
+    delete env['CCRC_UPDATE_LOCK_HELD'];
+    replantDoctorStubs(home);
+    const script = [
+      '. "$1"',
+      'eval "$(declare -f _ver_kept | sed "1s/_ver_kept/_real_ver_kept/")"',
+      'n=0',
+      '_ver_kept() { n=$((n+1)); if [ "$n" -eq 1 ]; then VER_WHY="fixture: not yet"; return 2; fi; _real_ver_kept "$@"; }',
+      'cmd_rollback --to v1.0.0 --from pwa',
+    ].join('\n');
+    const r = spawnSync(BASH, ['-c', script, 'ccrc-under-test', join(REPO, 'ccd', 'ccrc')], { env, encoding: 'utf8' });
+    expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(linkOf(home)).toBe(v1);
+    expect(existsSync(join(home, 'kept-spine-argv')), "the kept version's own spine ran").toBe(true);
+    expect(existsSync(join(home, 'rsync-argv')), 'a re-install ran').toBe(false);
+    expect(existsSync(join(home, 'npm-argv')), 'a re-install ran').toBe(false);
+    expect(localUrls(home).filter((u) => !u.endsWith('/SHA256SUMS')), 'a release was downloaded').toEqual([]);
+  });
+
+  it('control (condition 4 is item 2\'s answer): the killed-flip state whose target was WRITTEN THROUGH since it was kept (deploy.sh\'s rsync through the link, the record untouched) — refused bare, and `--to` it dies under the lock: the record file alone does not make it kept', () => {
+    const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-writtenthrough-');
+    appendFileSync(join(v1, 'server', 'dist', 'server', 'src', 'index.js'), '// a working tree, rsynced through the link\n');
+    expect(verKeptAnswer(home)).toMatch(/^rc=3 why=its tree is no longer the one that was kept/);
+    publishV1(home);
+    note(home);
+    for (const args of [[], ['--to', 'v1.0.0']]) {
+      const r = rollbackRun(home, args);
+      expectRefused(home, r, v2, "the target was written through since it was kept (its tree is no longer the one that was kept — something wrote through it since (deploy.sh, an older ccrc's spine, or a restore copy))");
+    }
+  });
+
+  it('control (condition 5): the killed-flip state whose target\'s kept stamp has another sha — refused bare, and `--to` it dies under the lock', () => {
+    const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-othersha-');
+    writeFileSync(join(v1, '.ccrc-stamp.json'), `${JSON.stringify({ sha: 'e'.repeat(40), ref: 'main', builtAt: '2026-09-23T00:00:00Z', dirty: false, version: 'v1.0.0' })}\n`);
+    expect(verKeptAnswer(home), 'the control is broken: the version must still be KEPT, so only (5) refuses').toBe('rc=0 why=');
+    publishV1(home);
+    note(home);
+    const why = "the target's kept stamp is not this box's stamp (another build's sha)";
+    // `_kf_remedy` re-measures at print time: this version is still kept complete with a versioned spine, so the
+    // hand install is named (role server, from ccrc.env).
+    expectRefused(home, rollbackRun(home), v2, why, handInstall('server'));
+    expectRefused(home, rollbackRun(home, ['--to', 'v1.0.0']), v2, why, handInstall('server'));
+  });
+
+  it('control (conditions 5 and 6 together): a kept pre-W6 target whose kept stamp has another sha — refused with condition 5\'s reason, and the tail names no command (wave 9 R9-F1)', () => {
+    // `_rollback_killed_flip_state` returns at (5) before it reads (6), so the reason is (5)'s — but the spine here is
+    // pre-W6, and a hand install from it would run its `npm ci` in `~/ccrc`, the tree the units run. An implementation
+    // that trusted which condition failed would print the hand install here; `_kf_remedy` measures again.
+    const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-othersha-prew6-', { oldSpine: KEPT_SPINE });
+    writeFileSync(join(v1, '.ccrc-stamp.json'), `${JSON.stringify({ sha: 'e'.repeat(40), ref: 'main', builtAt: '2026-09-23T00:00:00Z', dirty: false, version: 'v1.0.0' })}\n`);
+    expect(verKeptAnswer(home), 'the control is broken: the version must still be KEPT, so only (5) and (6) refuse').toBe('rc=0 why=');
+    expect(verKeptAnswer(home, 'v1.0.0', 'server')).toBe('rc=0 why=');
+    publishV1(home);
+    note(home);
+    const why = "the target's kept stamp is not this box's stamp (another build's sha)";
+    expectRefused(home, rollbackRun(home), v2, why);
+    expectRefused(home, rollbackRun(home, ['--to', 'v1.0.0']), v2, why);
+  });
+
+  it('control (condition 6): the killed-flip state whose target is a KEPT pre-W6 version (its ccd/ccrc has no BOX_VERSIONS_ROOT — its own spine would `npm ci` in ~/ccrc, which the units run) — refused bare, and `--to` it dies under the lock', () => {
+    const { home, v2 } = killedFlipBox('ccrc-fx-b-prew6-', { oldSpine: KEPT_SPINE });
+    expect(verKeptAnswer(home), 'the control is broken: the version must still be KEPT, so only (6) refuses').toBe('rc=0 why=');
+    publishV1(home);
+    note(home);
+    const why = "the target's own ccd/ccrc predates versioned installs, so its spine would npm ci in the tree the units run";
+    expectRefused(home, rollbackRun(home), v2, why);
+    expectRefused(home, rollbackRun(home, ['--to', 'v1.0.0']), v2, why);
+  });
+
+  it('control (condition 1): the target is not the stamp\'s version — the stamp reads v3.0.0 over the kept v1.0.0\'s sha — refused', () => {
+    const { home, v2 } = killedFlipBox('ccrc-fx-b-target-');
+    writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp('v3.0.0', V1_SHA));
+    publishV1(home);
+    note(home);
+    const r = rollbackRun(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: rollback: ~\/\.ccrc\/previous names v1\.0\.0, but it cannot be trusted here — \$HOME\/ccrc points at \$HOME\/ccrc-versions\/v2\.0\.0 while this box's stamp reads v3\.0.0, /m);
+    expectNoReinstall(home, v2);
+  });
+
+  it('control (condition 3): ~/ccrc already names the target and its install did not complete, the target NOT kept, the release published — `rollback --to` it re-installs IN PLACE as it always did (D-3426): the run goes on to update\'s own path, never the killed-flip refusal', () => {
+    const home = freshUpdateBox('ccrc-fx-b-samename-');
+    plantW6Box(home, 'v1.0.0', V1_SHA, 'server');
+    rmSync(join(home, '.ccrc', 'installed'));
+    rmSync(join(home, 'ccrc-versions', 'v1.0.0', '.ccrc-installed'));   // not kept
+    publishV1(home);
+    const r = rollbackRun(home, ['--to', 'v1.0.0']);
+    expect(r.stderr).not.toContain('it cannot be trusted here');
+    expect(r.stderr).not.toContain('the killed-flip state');
+    expect(r.stdout).toContain('rollback: returning this box to v1.0.0 (named by --to; asked by --from cli) — update\'s own path');
+    expect(existsSync(join(home, 'rsync-argv')), 'the re-install did not run — the control proves nothing').toBe(true);
+  });
+
+  it('control (unreadable stamp): keeps today\'s behaviour — no verdict from C27, so the run proceeds (the kept version flips back)', () => {
+    const { home, v1 } = killedFlipBox('ccrc-fx-b-unreadable-');
+    writeFileSync(join(home, '.ccrc', 'build.json'), 'not json\n');
+    writeFileSync(join(home, 'fixture-release-http'), '404\n');
+    const r = rollbackRun(home);
+    expect(r.stderr).not.toContain('it cannot be trusted here');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(linkOf(home)).toBe(v1);
+  });
+
+  // PLATFORM-ONLY: --detach is Linux-only (decision 17) — the macOS answer is
+  // `itDarwin('--detach refuses on macOS by name …')` above.
+  itLinux('control (the detached child): `rollback --to v1.0.0 --detach --from pwa` in the killed-flip state with the target NOT kept — the parent hands the run on, and the CHILD (which gets `--to` and never runs C27) dies with C27\'s sentence: no rsync, no npm, nothing downloaded, the report closed `failed`', () => {
+    const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-detached-');
+    rmSync(join(v1, '.ccrc-installed'));
+    publishV1(home);
+    const parent = rollbackRun(home, ['--to', 'v1.0.0', '--detach', '--from', 'pwa']);
+    expect(parent.code, `stderr: ${parent.stderr}\nstdout: ${parent.stdout}`).toBe(0);
+    const argv = fileText(join(home, 'systemd-run-argv')).split('\n').filter((l) => l !== '');
+    expect(argv).toEqual([expect.stringMatching(/ ccrc-detach rollback --to v1\.0\.0 --from pwa$/)]);
+    expect(lastReport(home)).toMatchObject({ phase: 'queued', from: 'pwa' });
+    // The recorder does not run the child: run its argv, as the unit would.
+    const child = rollbackRun(home, ['--to', 'v1.0.0', '--from', 'pwa']);
+    expect(child.code, `stderr: ${child.stderr}\nstdout: ${child.stdout}`).toBe(1);
+    expect(child.stderr).toMatch(SENTENCE);
+    expect(child.stderr).toContain('rollback: the killed-flip state does not hold — the target is not kept complete (no kept install record)');
+    expectNoReinstall(home, v2);
+    expect(lastReport(home)).toMatchObject({ phase: 'failed', from: 'rollback', target: 'v1.0.0' });
+  });
+
+  // ── flip-only: the rule keys on the state, not on C27 having run ─────────
+  it.each([
+    ['bare, --from cli', [] as string[]],
+    ['bare, --from watchdog', ['--from', 'watchdog']],
+    ['`--to` the tag, --from pwa (C27 never runs)', ['--to', 'v1.0.0', '--from', 'pwa']],
+    ['`--to` the tag, --from cli', ['--to', 'v1.0.0']],
+  ])('flip-only: in the killed-flip state a flip that cannot be made (the one rename refused) dies with C27\'s sentence and NEVER falls through to `update --to … --downgrade`, whose re-install would rsync --delete and `npm ci` into the tree the units run — %s', (_what, args) => {
+    const { home, v2 } = killedFlipBox('ccrc-fx-b-fliponly-');
+    publishV1(home);
+    mkdirSync(join(home, 'ccrc.new'));   // `_plat_ln_swap` refuses to clear it: the flip cannot be made
+    note(home);
+    const r = rollbackRun(home, args);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(SENTENCE);
+    // The rename is what fails; the version is kept complete, so the tail is the hand install (wave 9 R9-F1).
+    expect(r.stderr).toContain(`rollback: the killed-flip state holds, so this rollback may only flip, and the flip could not be made (the one rename that points $HOME/ccrc at $HOME/ccrc-versions/v1.0.0 failed) — it does not fall back to a re-install — ${handInstall('server')}\n`);
+    expect(r.stderr, 'the in-place re-install is never advised (R9-F1)').not.toContain('ccrc update --to');
+    expect(r.stdout).not.toContain('rolling back by re-install instead');
+    expectNoReinstall(home, v2);
+    expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(false);
+    if (args.includes('--from') && args[args.indexOf('--from') + 1] !== 'cli') {
+      expect(lastReport(home)['phase'], 'the report was left non-terminal').toBe('failed');
+    }
+  });
+
+  // ── wave 9 R9-F1 (D-3827): `_kf_remedy`, the reason line's tail, over fixture version dirs ─────────────────────
+  // It decides from a measurement it takes ITSELF, when it prints — `_ver_kept` under the role it was handed, the
+  // version's own `ccd/ccrc` carrying `^BOX_VERSIONS_ROOT=`, and (a fleet box) `agent/node_modules` — never from which
+  // condition of `_rollback_killed_flip_state` failed. The role is always named: a bare `ccrc install` defaults to role
+  // `both` and never reads the recorded role, so on a fleet box it would check and install the server build.
+  describe('_kf_remedy: the hand install only where measured safe, never the in-place update, never a recipe (wave 9 R9-F1)', () => {
+    type Row = { what: string; role: string; expected: string; kept: RegExp };
+    const keptBox = (prefix: string, o: { spine?: string; agentDeps?: boolean; keep?: boolean } = {}): { home: string; v1: string } => {
+      const home = freshUpdateBox(prefix);
+      const v1 = installVersionedTree(home, 'v1.0.0', { link: false, stamp: { sha: V1_SHA, version: 'v1.0.0' } });
+      writeFileSync(join(v1, 'ccd', 'ccrc'), o.spine ?? KEPT_SPINE_W6, { mode: 0o755 });
+      if (o.agentDeps === true) mkdirSync(join(v1, 'agent', 'node_modules'), { recursive: true });
+      keepDigest(v1, home);   // the spine and the deps dir are part of the kept bytes (D-3465)
+      return { home, v1 };
+    };
+    const remedy = (home: string, role: string): { out: string; stderr: string; status: number | null } => {
+      const r = spawnSync(BASH, ['-c', '. "$1"; _kf_remedy v1.0.0 "$2"', 'ccrc-under-test', join(REPO, 'ccd', 'ccrc'), role],
+        { env: updateEnv(home), encoding: 'utf8' });
+      return { out: r.stdout, stderr: r.stderr, status: r.status };
+    };
+    const rows: Row[] = [
+      { what: 'kept complete, a versioned ccd/ccrc, role server — the hand install, naming --role server', role: 'server',
+        expected: handInstall('server'), kept: /^rc=0 why=$/ },
+      { what: 'the same under role fleet WITH agent/node_modules — the hand install, naming --role fleet', role: 'fleet',
+        expected: handInstall('fleet'), kept: /^rc=0 why=$/ },
+      { what: 'role fleet WITHOUT agent/node_modules — no command (its kept arm would run npm ci in place)', role: 'fleet',
+        expected: NO_COMMAND, kept: /^rc=0 why=$/ /* fleet without agent deps is still KEPT: only the deps term refuses */ },
+      { what: 'kept complete with a PRE-W6 ccd/ccrc — no command (its spine runs npm ci in ~/ccrc)', role: 'server',
+        expected: NO_COMMAND, kept: /^rc=0 why=$/ /* the pre-W6 spine is still KEPT: only the spine term refuses */ },
+      { what: 'WRITTEN THROUGH since it was kept (a byte appended after the digest, _ver_kept rc 3), a versioned ccd/ccrc — no command', role: 'server',
+        expected: NO_COMMAND, kept: /^rc=3 / },
+      { what: 'not kept (no directory) — no command', role: 'server', expected: NO_COMMAND, kept: /^rc=1 / },
+      { what: 'incomplete (no install record) — no command', role: 'server', expected: NO_COMMAND, kept: /^rc=2 why=no kept install record/ },
+      { what: 'an EMPTY role, the version otherwise kept complete — no command (a bare install would default to role both)', role: '',
+        expected: NO_COMMAND, kept: /^rc=0 why=$/ /* an empty role reads both: kept, yet no command */ },
+    ];
+    const setups: Array<(name: string) => { home: string; v1: string }> = [
+      (n) => keptBox(n),
+      (n) => keptBox(n, { agentDeps: true }),
+      (n) => keptBox(n),
+      (n) => keptBox(n, { spine: KEPT_SPINE }),
+      (n) => {
+        const b = keptBox(n);
+        appendFileSync(join(b.v1, 'server', 'dist', 'server', 'src', 'index.js'), '// written through after the digest\n');
+        return b;
+      },
+      (n) => {
+        const b = keptBox(n);
+        rmSync(b.v1, { recursive: true, force: true });
+        return b;
+      },
+      (n) => {
+        const b = keptBox(n);
+        rmSync(join(b.v1, '.ccrc-installed'));
+        return b;
+      },
+      (n) => keptBox(n),
+    ];
+    it.each(rows.map((row, i) => [row.what, i] as const))('_kf_remedy: %s', (_what, i) => {
+      const row = rows[i]!;
+      const { home } = setups[i]!(`ccrc-fx-b-kf-remedy-${i}-`);
+      // the control, so a row cannot pass for another reason: `_ver_kept`'s own answer for this fixture under this role
+      expect(verKeptAnswer(home, 'v1.0.0', row.role)).toMatch(row.kept);
+      const r = remedy(home, row.role);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.out).toBe(`${row.expected}\n`);
+      expect(r.out, 'the in-place re-install is never advised').not.toContain('ccrc update --to');
+      expect(r.out).not.toContain('--downgrade');
+      if (row.expected === NO_COMMAND) {
+        expect(r.out, 'a no-command row named a recipe').not.toMatch(/README|recipe/);
+        expect(r.out, 'a no-command row named a command').not.toContain('bash ~/ccrc-versions');
+      } else {
+        expect(r.out).toContain(`--role ${row.role} (`);
+        expect(r.out).not.toMatch(/README|recipe/);
+      }
+    });
+    it('_kf_remedy: `_ver_kept` writes nothing to stdout (the remedy runs it inside $(…) on the reason line)', () => {
+      const { home } = keptBox('ccrc-fx-b-kf-quiet-');
+      const r = spawnSync(BASH, ['-c', '. "$1"; _ver_kept v1.0.0 server', 'ccrc-under-test', join(REPO, 'ccd', 'ccrc')],
+        { env: updateEnv(home), encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe('');
+    });
+  });
+});
+
+describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed run, never its own (wave 8 item B)', () => {
+  // Describe-local kill list, copied as a pattern from the lock describe's
+  // `holders`/`lingerers` (never referenced — that describe's array is its
+  // own), for P12's background lock holder. Only `lingerers` (pid-file
+  // based) is used here — P12's holder is a fixture-side spawn, never a
+  // `ChildProcess` this file holds a handle to, so `holders` is dropped
+  // (fix round 1, item 4: it was declared and iterated but never pushed to).
+  const lingerers: string[] = [];
+  afterEach(() => {
+    for (const f of lingerers.splice(0)) {
+      if (!existsSync(f)) continue;
+      const pid = Number(readFileSync(f, 'utf8').trim());
+      if (!Number.isInteger(pid) || pid <= 1) continue;
+      try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
+
+  const backupRoot = (home: string): string => join(home, 'ccrc-backups');
+  /** Every timestamped dir directly under `~/ccrc-backups`, lexically sorted
+   *  (chronological for this fixed-width shape) — never a hand-made sibling. */
+  const backupDirs = (home: string): string[] => {
+    const root = backupRoot(home);
+    if (!existsSync(root)) return [];
+    return readdirSync(root).filter((d) => /^\d{8}-\d{6}$/.test(d)).sort();
+  };
+  /** Plants one timestamped dir, optionally carrying a `coord.db` snapshot
+   *  or a tree entry (`agent-dist`, one of the two names `_bak_gc` reads). */
+  const plantDir = (home: string, name: string, opts: { coordDb?: boolean; tree?: boolean } = {}): string => {
+    const dir = join(backupRoot(home), name);
+    mkdirSync(dir, { recursive: true });
+    if (opts.coordDb) writeFileSync(join(dir, 'coord.db'), 'fixture coord.db snapshot\n');
+    if (opts.tree) mkdirSync(join(dir, 'agent-dist'), { recursive: true });
+    return dir;
+  };
+  /** Bounded (3 s) wait until the box clock's own `date +%Y%m%d-%H%M%S`
+   *  reads strictly past `after`, so a dir planted next cannot land in the
+   *  same second as a setup update's own lock floor. */
+  const waitPastClock = (after: string): void => {
+    const t0 = Date.now();
+    for (;;) {
+      const now = spawnSync(REAL_DATE, ['+%Y%m%d-%H%M%S'], { encoding: 'utf8' }).stdout.trim();
+      if (now > after) return;
+      if (Date.now() - t0 > 3000) throw new Error(`timed out waiting for the box clock to pass ${after} (stuck at ${now})`);
+      spawnSync('sleep', ['0.1']);
+    }
+  };
+  /** Every case in this describe drives no `--detach` and touches neither
+   *  tmux nor gh — Step 2's blanket assertion, in one place. */
+  const assertNoExtras = (home: string): void => {
+    expect(existsSync(join(home, 'systemd-run-argv')), 'systemd-run was touched — no case here drives --detach').toBe(false);
+    expect(existsSync(join(home, 'tmux-argv')), 'the tmux recorder was touched').toBe(false);
+    expect(existsSync(join(home, 'gh-calls')), 'the gh recorder was touched').toBe(false);
+  };
+  /** `ccrc backup` (P17, B-M14b): the same runner shape as `runUpdate`, for
+   *  the ONE verb this describe otherwise never drives. */
+  const runBackup = (home: string, args: string[] = [], extraEnv: NodeJS.ProcessEnv = {}): Result => {
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), ...extraEnv };
+    replantDoctorStubs(home);
+    const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'backup', ...args], { env, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  /** `flipBox` (the rollback-by-flip describe's own), copied as a pattern —
+   *  a SYNTHETIC W6 box on v2.0.0 with v1.0.0 kept beside it, no real
+   *  `ccrc update` ever run, so no backup dir exists until this case's own
+   *  `rollbackRun`. P8b and P9 use it; P4 needs a REAL prior update (its
+   *  setup backup dirs are the point) and uses `onKeptV1` instead. */
+  const makeFlipBox = (prefix: string, opts: { unsigned?: boolean } = {}): { home: string; kept: string } => {
+    const home = freshUpdateBox(prefix);
+    plantW6Box(home, 'v2.0.0', V2_SHA, 'server');
+    const kept = keptVersion(home, 'v1.0.0', V1_SHA, { unsigned: opts.unsigned });
+    writeFileSync(join(home, '.ccrc', 'previous'), `v1.0.0\n${V1_SHA}\n`);
+    return { home, kept };
+  };
+  const withSweep = (home: string): void => {
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+  };
+
+  it('P1: the happy prune — update v1→v2 with 12 old dirs and CCRC_BACKUP_KEEP=3 keeps the newest 3 plus everything protected', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p1-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const oldDirs: string[] = [];
+    for (let d = 1; d <= 12; d++) {
+      const name = `202501${String(d).padStart(2, '0')}-000000`;
+      plantDir(home, name);
+      oldDirs.push(name);
+    }
+    plantDir(home, '20991231-235959');
+    mkdirSync(join(backupRoot(home), 'pre-flip-agent-dist'), { recursive: true });
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '3' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const backup = announcedBackupDir(r.stdout, home);
+    // KEEP counts EVERY timestamped dir, protected ones included (D-3593):
+    // of the 14 total (12 old + this run's own + the 9999 dir), KEEP=3
+    // leaves the newest 3 BY COUNT — this run's own and 9999 are two of
+    // those three by construction, so exactly ONE old dir (the newest)
+    // survives by count; the other eleven are the removal set.
+    const kept = oldDirs.slice(11);
+    const removed = oldDirs.slice(0, 11);
+    for (const name of kept) expect(existsSync(join(backupRoot(home), name)), name).toBe(true);
+    for (const name of removed) {
+      expect(existsSync(join(backupRoot(home), name)), name).toBe(false);
+      expect(r.stdout).toMatch(new RegExp(`^update: backups: pruned \\$HOME/ccrc-backups/${name}`, 'm'));
+    }
+    expect(existsSync(backup)).toBe(true);
+    expect(existsSync(join(backupRoot(home), '20991231-235959'))).toBe(true);
+    expect(existsSync(join(backupRoot(home), 'pre-flip-agent-dist'))).toBe(true);
+    expect(lastReport(home)['phase']).toBe('done');
+    assertNoExtras(home);
+  });
+
+  it('P2: KEEP=0 with no live coord.db — the newest dir holding a PLANTED coord.db survives as the earlier snapshot, and a hand-made sibling is never touched', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p2-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    plantDir(home, '20250101-000000');
+    plantDir(home, '20250102-000000', { coordDb: true });
+    plantDir(home, '20250103-000000');
+    plantDir(home, '20991231-235959');
+    mkdirSync(join(backupRoot(home), 'pre-flip-agent-dist'), { recursive: true });
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const backup = announcedBackupDir(r.stdout, home);
+    expect(existsSync(backup)).toBe(true);
+    expect(existsSync(join(backupRoot(home), '20991231-235959'))).toBe(true);
+    expect(existsSync(join(backupRoot(home), '20250102-000000')), 'the newest dir holding a coord.db').toBe(true);
+    expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(false);
+    expect(existsSync(join(backupRoot(home), '20250103-000000'))).toBe(false);
+    expect(existsSync(join(backupRoot(home), 'pre-flip-agent-dist'))).toBe(true);
+    assertNoExtras(home);
+  });
+
+  it('P2b: KEEP=0 with a LIVE coord.db — this run\'s own backup carries one, and the newest EARLIER snapshot survives too (the protected one is never picked as the extra keep)', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p2b-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    plantDir(home, '20250105-000000', { coordDb: true });
+    plantDir(home, '20250110-000000', { coordDb: true });
+    plantDir(home, '20250111-000000');
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const backup = announcedBackupDir(r.stdout, home);
+    expect(existsSync(join(backup, 'coord.db')), 'this run\'s own backup snapshot').toBe(true);
+    expect(existsSync(join(backupRoot(home), '20250110-000000'))).toBe(true);
+    expect(existsSync(join(backupRoot(home), '20250105-000000'))).toBe(false);
+    expect(existsSync(join(backupRoot(home), '20250111-000000'))).toBe(false);
+    assertNoExtras(home);
+  });
+
+  it('P3: this run\'s own backup, named BELOW its own floor by a clock step, still survives — by exact path, never by the floor comparison', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p3-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    for (let d = 1; d <= 3; d++) plantDir(home, `2019010${d}-000000`);
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(home, 'date-plan'), '20200101-000005\n20200101-000000\n');
+    writeFileSync(join(home, '.local', 'bin', 'date'), [
+      '#!/bin/sh',
+      'printf \'%s\\n\' "$1" >> "$HOME/date-calls"',
+      'if [ "$1" = "+%Y%m%d-%H%M%S" ] && [ -s "$HOME/date-plan" ]; then',
+      '  IFS= read -r v < "$HOME/date-plan"',
+      '  { tail -n +2 "$HOME/date-plan" > "$HOME/date-plan.next"; mv "$HOME/date-plan.next" "$HOME/date-plan"; } 2>/dev/null',
+      '  printf \'%s\\n\' "$v"',
+      '  exit 0',
+      'fi',
+      `exec ${REAL_DATE} "$@"`,
+    ].join('\n') + '\n', { mode: 0o755 });
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const backup = announcedBackupDir(r.stdout, home);
+    expect(backup).toBe(join(backupRoot(home), '20200101-000000'));
+    expect(existsSync(backup)).toBe(true);
+    for (let d = 1; d <= 3; d++) {
+      expect(existsSync(join(backupRoot(home), `2019010${d}-000000`)), `2019010${d}-000000`).toBe(false);
+    }
+    const calls = readFileSync(join(home, 'date-calls'), 'utf8').split('\n').filter((l) => l === '+%Y%m%d-%H%M%S');
+    expect(calls.length, 'the floor call and the backup-name call').toBeGreaterThanOrEqual(2);
+    assertNoExtras(home);
+  });
+
+  it('P4: a FLIP rollback takes no backup of its own — the setup\'s own dirs are pruned by the same rule as a planted one, its newest tree backup kept', () => {
+    const home = onKeptV1('ccrc-fx-b-p4-');
+    const setup1 = backupDirs(home);
+    expect(setup1.length, 'onKeptV1 must leave exactly one backup dir (Step 1 measurement)').toBe(1);
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0' });
+    const up = runUpdate(home);
+    expect(up.code, `the move onto v2.0.0 must complete — stderr: ${up.stderr}\nstdout: ${up.stdout}`).toBe(0);
+    for (const f of ['curl-argv', 'update-json-writes', 'systemctl-calls', 'tmux-argv', 'gh-calls']) rmSync(join(home, f), { force: true });
+    const setup2 = backupDirs(home);
+    expect(setup2.length, 'the move to v2.0.0 must leave a second backup dir').toBe(2);
+    waitPastClock(setup2[setup2.length - 1]!);
+    plantDir(home, '20250101-000000', { coordDb: true });
+    plantDir(home, '20250102-000000');
+    const r = rollbackRun(home, [], { CCRC_BACKUP_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).not.toMatch(/^update: backup:/m);   // a flip takes no backup of its own
+    expect(existsSync(join(backupRoot(home), '20250101-000000')), 'the newest earlier coord.db snapshot').toBe(true);
+    expect(existsSync(join(backupRoot(home), '20250102-000000'))).toBe(false);
+    expect(existsSync(join(backupRoot(home), setup2[1]!)), 'the newer setup dir carries the tree entry — the earlier tree backup').toBe(true);
+    expect(existsSync(join(backupRoot(home), setup2[0]!)), 'the older setup dir is not protected — nothing else keeps it').toBe(false);
+    expect(r.stdout).toMatch(new RegExp(`^rollback: backups: pruned \\$HOME/ccrc-backups/${setup2[0]}`, 'm'));
+    // Fix round 2, item 1: this case's own kept-version spine runs a REAL
+    // `cmd_install`, whose doctor pass legitimately calls tmux and gh — so
+    // "shows only what the case drove" means the EXACT bytes, not their
+    // absence. Recorders were cleared right after setup's own real updates
+    // (above), so what remains is only this run's. Measured (healthyBox's
+    // doctor-stub tmux/gh, contained): `tmux -V` and `tmux display-message
+    // -p '#{version}'`; `gh auth status --hostname github.com`.
+    expect(existsSync(join(home, 'systemd-run-argv')), 'systemd-run was touched — no case here drives --detach').toBe(false);
+    expect(readFileSync(join(home, 'tmux-argv'), 'utf8')).toBe('-V\ndisplay-message -p #{version}\n');
+    expect(readFileSync(join(home, 'gh-calls'), 'utf8')).toBe('auth status --hostname github.com\n');
+  }, 60_000);
+
+  it('P5: no prune on a failed gate (exit 4) — the parent\'s own backup and every planted dir survive', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p5-');
+    plantRestoreBox(home);
+    plantDir(home, '20250101-000000');
+    plantDir(home, '20250102-000000');
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    const backup = announcedBackupDir(r.stdout, home);
+    expect(existsSync(backup)).toBe(true);
+    expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
+    expect(existsSync(join(backupRoot(home), '20250102-000000'))).toBe(true);
+    expect(r.stdout).not.toMatch(/backups:/);
+    assertNoExtras(home);
+  });
+
+  it('P6: no prune on --no-gate — the parent\'s own backup and every planted dir survive', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p6-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    plantDir(home, '20250101-000000');
+    const r = runUpdate(home, ['--no-gate'], { CCRC_BACKUP_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const backup = announcedBackupDir(r.stdout, home);
+    expect(existsSync(backup)).toBe(true);
+    expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
+    expect(r.stdout).not.toMatch(/backups:/);
+    assertNoExtras(home);
+  });
+
+  // Fix round 2 (controller ruling): itLinux — `fixture-try-restart-fail` lives only in the systemctl stub's try-restart arm, which Darwin's launchctl sweep never reaches.
+  itLinux('P7: no prune on a sweep death — the announced backup and every planted dir survive', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p7-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-try-restart-fail'), '');
+    plantDir(home, '20250101-000000');
+    plantDir(home, '20250102-000000');
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    const backup = announcedBackupDir(r.stdout, home);
+    expect(existsSync(backup)).toBe(true);
+    expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
+    expect(existsSync(join(backupRoot(home), '20250102-000000'))).toBe(true);
+    expect(r.stdout).not.toMatch(/backups: pruned/);
+    // The sweep's own try-restart records to `systemctl-calls`, never
+    // `systemd-run-argv` (that stub is `--detach` only) — reaching the
+    // sweep does not change what this assertion checks.
+    assertNoExtras(home);
+  });
+
+  it('P8a: exit 3 (a spine that completed under a failing doctor, D-3114) still prunes', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p8a-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    rmSync(join(home, '.gitconfig'));   // forces the trailing doctor's git_email FAIL
+    packRelease(home, fullTree(home, {
+      version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000',
+    }), { tag: 'v2.0.0' });
+    plantDir(home, '20250101-000000');
+    plantDir(home, '20250102-000000');
+    // Fix round 1, item 2: KEEP=1, per the brief. KEEP counts every
+    // timestamped dir, this run's own included (D-3593): of the 3 total (2
+    // old + this run's own), KEEP=1 leaves the newest 1 by count — this
+    // run's own, dated today, by construction — so BOTH old dirs are the
+    // removal set; neither carries a coord.db or a tree entry, so nothing
+    // else protects them.
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '1' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(3);
+    const backup = announcedBackupDir(r.stdout, home);
+    expect(existsSync(backup)).toBe(true);
+    expect(r.stdout).toMatch(/^update: backups: pruned \$HOME\/ccrc-backups\/20250101-000000/m);
+    expect(r.stdout).toMatch(/^update: backups: pruned \$HOME\/ccrc-backups\/20250102-000000/m);
+    expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(false);
+    expect(existsSync(join(backupRoot(home), '20250102-000000'))).toBe(false);
+    expect(lastReport(home)['phase']).toBe('done');
+    // Fix round 2, item 1: this case stages a REAL `fullTree`, whose staged
+    // `cmd_install` runs a real doctor pass that legitimately calls tmux and
+    // gh — see P4's identical note. No separate setup update ran here
+    // (`plantOldBox` places files, it does not run `ccrc update`), so the
+    // recorders hold only this run's own calls with no clearing needed.
+    expect(existsSync(join(home, 'systemd-run-argv')), 'systemd-run was touched — no case here drives --detach').toBe(false);
+    expect(readFileSync(join(home, 'tmux-argv'), 'utf8')).toBe('-V\ndisplay-message -p #{version}\n');
+    expect(readFileSync(join(home, 'gh-calls'), 'utf8')).toBe('auth status --hostname github.com\n');
+  }, 60_000);
+
+  it('P8b: exit 3 on a rollback flip whose kept spine completed under a failing doctor (D-3461) still prunes', () => {
+    const { home } = makeFlipBox('ccrc-fx-b-p8b-');
+    writeFileSync(join(home, 'fixture-kept-spine-exit'), '1\n');
+    writeFileSync(join(home, 'fixture-kept-spine-completes'), 'yes\n');
+    withSweep(home);
+    plantDir(home, '20250101-000000');
+    plantDir(home, '20250102-000000');
+    const r = rollbackRun(home, [], { CCRC_BACKUP_KEEP: '1' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(3);
+    expect(r.stdout).toMatch(/^rollback: backups: pruned \$HOME\/ccrc-backups\/20250101-000000/m);
+    expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(false);
+    expect(existsSync(join(backupRoot(home), '20250102-000000'))).toBe(true);
+    expect(lastReport(home)['phase']).toBe('done');
+    assertNoExtras(home);
+  });
+
+  it('P9: a failed flip gate exits 1 before any prune', () => {
+    const { home } = makeFlipBox('ccrc-fx-b-p9-');
+    writeFileSync(join(home, 'fixture-health-pin'), 'v9.9.9\n');
+    withSweep(home);
+    plantDir(home, '20250101-000000');
+    const r = rollbackRun(home, [], { CCRC_BACKUP_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
+    expect(r.stdout).not.toMatch(/backups:/);
+    assertNoExtras(home);
+  });
+
+  // Fix round 1, item 3: `itLinux` alone for the platform (the suite-wide,
+  // unstated idiom), but root's skip gets its OWN branch with a title that
+  // SAYS why — root can `rm -rf` inside a 0500 directory regardless (it
+  // owns the removal, permission bits don't bind it), so this case cannot
+  // force the removal failure it measures and folding that into a bare
+  // `skipIf` would report a green "skip" with no reason visible anywhere.
+  if (process.getuid?.() === 0) {
+    it.skip('P10: a prune failure only WARNs — update.json still reads done (root bypasses the 0500 mode this case uses to force a removal failure — nothing here is measurable as root)', () => { /* stated skip only */ });
+  } else {
+    itLinux('P10: a prune failure only WARNs — update.json still reads done', () => {
+      const home = freshUpdateBox('ccrc-fx-b-p10-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      const roDir = join(backupRoot(home), '20250101-000000', 'ro');
+      mkdirSync(roDir, { recursive: true });
+      writeFileSync(join(roDir, 'f'), 'unremovable\n');
+      plantDir(home, '20250102-000000', { tree: true });
+      chmodSync(roDir, 0o500);
+      try {
+        const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '0' });
+        expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+        expect(r.stdout).toMatch(/^update: backups: WARN: could not prune \$HOME\/ccrc-backups\/20250101-000000 — every newer backup is intact$/m);
+        expect(existsSync(join(backupRoot(home), '20250101-000000', 'ro', 'f'))).toBe(true);
+        expect(lastReport(home)['phase']).toBe('done');
+        assertNoExtras(home);
+      } finally {
+        chmodSync(roDir, 0o700);
+      }
+    });
+  }
+
+  it.each([['abc'], ['10000']])('P11: a bad CCRC_BACKUP_KEEP (%s) only WARNs and prunes nothing', (bad) => {
+    const home = freshUpdateBox(`ccrc-fx-b-p11-${bad}-`);
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    plantDir(home, '20250101-000000');
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: bad });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(new RegExp(`^update: backups: WARN: CCRC_BACKUP_KEEP='${bad}' is not a whole number from 0 to 9999 — nothing pruned$`, 'm'));
+    expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
+    assertNoExtras(home);
+  });
+
+  // Fix round 2 (controller ruling): itLinux — this fixture's `fixture-sweep-hold-lock` knob lives only in the systemctl stub's try-restart arm (Darwin's launchctl sweep never reaches it), and its `flock -F` is util-linux only.
+  itLinux('P12: another ccrc holding ~/.ccrc/update.lock at prune time — skipped, nothing removed', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p12-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-hold-lock'), '');
+    plantDir(home, '20250101-000000');
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '0' });
+    lingerers.push(join(home, 'sweep-lock-holder-pid'));
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: backups: skipped — another ccrc run holds ~\/\.ccrc\/update\.lock; nothing was pruned$/m);
+    expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
+    // Reaching the sweep's try-restart records to `systemctl-calls`, never
+    // `systemd-run-argv` — see P7's note.
+    assertNoExtras(home);
+  });
+
+  it('P13: the refused (unpublished-tag) rollback prunes nothing', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p13-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantDir(home, '20250101-000000');
+    const r = rollbackRun(home, ['--to', 'v7.7.7'], { CCRC_BACKUP_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
+    expect(r.stdout).not.toMatch(/backups:/);
+    assertNoExtras(home);
+  });
+
+  it('P14: the floor sits INSIDE the removal set — both dirs at or after it survive though only the newer is kept by count', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p14-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    plantDir(home, '20991231-235958');
+    plantDir(home, '20991231-235959');
+    plantDir(home, '20250101-000000');
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '1' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(existsSync(join(backupRoot(home), '20991231-235958')), 'above the floor, saved though not kept by count').toBe(true);
+    expect(existsSync(join(backupRoot(home), '20991231-235959')), 'above the floor AND kept by count').toBe(true);
+    expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(false);
+    assertNoExtras(home);
+  });
+
+  it('P15: another run\'s tree backup (server-dist or agent-dist) is the newest-earlier kept, even at KEEP=0', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p15-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    plantDir(home, '20250103-000000', { tree: true });
+    mkdirSync(join(backupRoot(home), '20250104-000000', 'skill'), { recursive: true });
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(existsSync(join(backupRoot(home), '20250103-000000'))).toBe(true);
+    expect(existsSync(join(backupRoot(home), '20250104-000000'))).toBe(false);
+    assertNoExtras(home);
+  });
+
+  it('P16: KEEP is a COUNT of every timestamped dir of any origin, not merely the class being pruned', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p16-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const s = backupDirs(home).length;   // 0 on this fresh fixture: no setup update ran
+    const m = 1;   // Step 1 measurement: one timestamped dir per `ccrc update` on this fixture (no prior skill/hook state to re-back-up)
+    const keep = s + m + 1 + 2;
+    for (let d = 1; d <= 12; d++) plantDir(home, `202501${String(d).padStart(2, '0')}-000000`);
+    plantDir(home, '20991231-235959');
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: String(keep) });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const survivors = backupDirs(home);
+    expect(survivors, `KEEP=${keep} (s=${s} m=${m}), survivors=${JSON.stringify(survivors)}`).toHaveLength(keep);
+    expect(existsSync(join(backupRoot(home), '20250112-000000'))).toBe(true);
+    expect(existsSync(join(backupRoot(home), '20250111-000000'))).toBe(true);
+    expect(existsSync(join(backupRoot(home), '20250110-000000'))).toBe(false);
+    assertNoExtras(home);
+  });
+
+  it('P17: `ccrc backup`\'s own prune echo is byte-identical to main\'s (B-M14b control)', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p17-');
+    plantDir(home, '20250101-000000');
+    plantDir(home, '20250102-000000');
+    const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '1' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toContain(
+      `backup: pruned ${join(backupRoot(home), '20250101-000000')} (keeping the newest 1 timestamped backups; hand-made siblings are never touched)`);
+    assertNoExtras(home);
+  });
+
+  // wave 9 R10g (D-3825, D-3826): `ccrc backup`'s prune keeps what `_bak_gc` keeps — through the ONE helper
+  // `_bak_keepset` — and takes ~/.ccrc/update.lock for the prune only. Nested here so `runBackup`, `plantDir`,
+  // `backupRoot` and `assertNoExtras` are in scope; the enclosing describe has no `holders`, so this one declares its own.
+  describe('ccrc backup: the prune keeps what _bak_gc keeps, and takes the lock (wave 9 R10g)', () => {
+    const holders: ChildProcess[] = [];
+    afterEach(() => {
+      for (const h of holders.splice(0)) h.kill('SIGKILL');
+    });
+    const lockPath = (home: string): string => join(home, '.ccrc', 'update.lock');
+    /** A FRESH open and a non-blocking flock — the probe's own measurement (the lock describe's, copied as a pattern). */
+    const lockFree = (home: string): boolean =>
+      spawnSync(BASH, ['-c', 'exec 9>>"$1" && flock -n 9', '_', lockPath(home)]).status === 0;
+    const waitUntil = (cond: () => boolean, what: string): void => {
+      const t0 = Date.now();
+      while (!cond()) {
+        if (Date.now() - t0 > 10_000) throw new Error(`timed out waiting for ${what}`);
+        spawnSync('sleep', ['0.05']);
+      }
+    };
+    /** ONE process takes flock on the lock file and becomes `sleep` (exec keeps the pid and the descriptor). Returns
+     *  once a fresh probe fails. */
+    const holdLock = (home: string): ChildProcess => {
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      const h = spawn(BASH, ['-c', 'exec 9>>"$1" && flock 9 && exec sleep 30', '_', lockPath(home)], { stdio: 'ignore' });
+      holders.push(h);
+      waitUntil(() => !lockFree(home), 'the fixture holder to take the lock');
+      return h;
+    };
+    /** The directory the backup announced: `backup: <dir> (coord.db snapshot, …`. */
+    const ownDir = (r: Result): string => {
+      const m = /^backup: (\S+) \(coord\.db snapshot/m.exec(r.stdout);
+      expect(m, `no "backup: <dir>" line — stdout: ${r.stdout}\nstderr: ${r.stderr}`).not.toBeNull();
+      return m![1]!;
+    };
+    const has = (home: string, name: string): boolean => existsSync(join(backupRoot(home), name));
+
+    it('B1: CCRC_BACKUP_KEEP=0 never removes the backup it just made, and removes both planted older dirs', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b1-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      const own = ownDir(r);
+      expect(existsSync(own), `this run's own backup ${own} must survive KEEP=0`).toBe(true);
+      expect(has(home, '20250101-000000')).toBe(false);
+      expect(has(home, '20250102-000000')).toBe(false);
+      assertNoExtras(home);
+    });
+
+    it('B2: KEEP=0 keeps the newest earlier tree backup and the newest earlier coord.db snapshot, and removes an unprotected dir', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b2-');
+      mkdirSync(join(plantDir(home, '20250101-000000'), 'server-dist'), { recursive: true });
+      plantDir(home, '20250102-000000', { coordDb: true });
+      plantDir(home, '20250103-000000');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20250101-000000'), 'the newest earlier tree backup').toBe(true);
+      expect(has(home, '20250102-000000'), 'the newest earlier coord.db snapshot').toBe(true);
+      expect(has(home, '20250103-000000'), 'nothing protects the empty one').toBe(false);
+      assertNoExtras(home);
+    });
+
+    it('B3: while another process holds ~/.ccrc/update.lock the prune says so, removes nothing, and ccrc backup exits 0', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b3-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      holdLock(home);
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain('backup: prune skipped — another ccrc run holds ~/.ccrc/update.lock; nothing was pruned');
+      expect(existsSync(ownDir(r))).toBe(true);
+      expect(has(home, '20250101-000000')).toBe(true);
+      expect(has(home, '20250102-000000')).toBe(true);
+      assertNoExtras(home);
+    });
+
+    it('B4: the floor ALONE — a dir named after this run began survives KEEP=0, though it is neither its own path nor a snapshot nor a tree', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b4-');
+      plantDir(home, '20991231-235959');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20991231-235959'), 'only the floor protects it').toBe(true);
+      expect(existsSync(ownDir(r))).toBe(true);
+      assertNoExtras(home);
+    });
+
+    it('B5: with no flock on PATH the prune says so, removes nothing, and ccrc backup exits 0 (the backup was taken first)', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b5-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      // `ccrc-uninstall.test.ts`'s `pathWithout` idiom: ONE link farm of every command on the parent's PATH, except
+      // flock and every CONTAINED_TOOLS name (those resolve to the fixture's stubs and poisons in $HOME/.local/bin).
+      // `pathWithoutFlock` links nine tools and `ccrc backup` outruns them before its prune.
+      const bin = join(home, '.local', 'bin');
+      expect(existsSync(join(bin, 'flock')), 'updateEnv must plant no flock').toBe(false);
+      const farm = join(home, 'no-flock-backup-bin');
+      mkdirSync(farm);
+      const skip = new Set<string>(['flock', ...CONTAINED_TOOLS]);
+      for (const dir of (process.env['PATH'] ?? '/usr/bin:/bin').split(':')) {
+        let names: string[] = [];
+        try { names = readdirSync(dir); } catch { continue; }
+        for (const name of names) {
+          if (skip.has(name)) continue;
+          skip.add(name);
+          symlinkSync(join(dir, name), join(farm, name));
+        }
+      }
+      const env = { ...updateEnv(home), PATH: `${bin}:${farm}` };
+      assertNoRealTool(env, home);
+      expect(spawnSync(BASH, ['-c', 'command -v flock'], { env, encoding: 'utf8' }).stdout.trim(), 'no flock under this PATH').toBe('');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0', PATH: env.PATH });
+      const own = ownDir(r);   // BEFORE the skip line: a backup that died cannot pass as a prune that skipped
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain('backup: prune skipped — flock is not on PATH, so ~/.ccrc/update.lock cannot be taken; nothing was pruned');
+      expect(existsSync(own)).toBe(true);
+      expect(has(home, '20250101-000000')).toBe(true);
+      expect(has(home, '20250102-000000')).toBe(true);
+      assertNoExtras(home);
+    });
+
+    it('B8: _bak_prune called with no recorded floor prunes nothing and says why — exit 0', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b8-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      const script = ['set -uo pipefail', '. "$1"', 'UPD_BAK_FLOOR=""', 'rc=0; _bak_prune || rc=$?', 'echo "rc=$rc"'].join('\n');
+      const r = spawnSync(BASH, ['-c', script, 'floor-guard', join(REPO, 'ccd', 'ccrc')],
+        { env: { ...updateEnv(home), CCRC_BACKUP_KEEP: '0' }, encoding: 'utf8' });
+      expect(r.stdout, `stderr: ${r.stderr}`).toContain(
+        "backup: prune skipped — this run's start time was not recorded, so nothing can say which backups are its own; nothing was pruned");
+      expect(r.stdout).toContain('rc=0');
+      expect(has(home, '20250101-000000')).toBe(true);
+      expect(has(home, '20250102-000000')).toBe(true);
+    });
+
+    it('B9: with ~/.ccrc/update.lock a DIRECTORY (the lock cannot be measured) the prune says so, removes nothing, and ccrc backup exits 0', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b9-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      // `exec 9>>dir` fails, and `_ver_lock_try` answers rc 3 — the `*)` arm of `_bak_prune`'s case, which B3 (rc 1),
+      // B5 (rc 2) and B8 (no floor) do not reach. Falling through to the prune would remove both planted dirs.
+      mkdirSync(lockPath(home), { recursive: true });
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      const own = ownDir(r);   // BEFORE the skip line: a backup that died cannot pass as a prune that skipped
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain('backup: prune skipped — ~/.ccrc/update.lock could not be measured; nothing was pruned');
+      expect(existsSync(own)).toBe(true);
+      expect(has(home, '20250101-000000')).toBe(true);
+      expect(has(home, '20250102-000000')).toBe(true);
+      assertNoExtras(home);
+    });
+
+    it('B10: the clock steps BACK between the floor and the backup (an NTP step, a DST fall-back) — this run\'s own dir sorts below the floor, and its own-path guard alone keeps it at KEEP=0', () => {
+      // Fix round 1, F3 (review 265): `cmd_backup` reads the floor with `date +%Y%m%d-%H%M%S`, then `_upd_backup` names
+      // its dir with a second such call. A `date` in the fixture's own bin (first on updateEnv's PATH) answers that
+      // format with 20300101-000000 the first time and 20250601-000000 after, so the floor does NOT cover the own dir:
+      // only `[ "$d" = "$UPD_BACKUP_DIR" ] && continue` does. Every other format runs the system's date. No real clock
+      // is touched.
+      const home = freshUpdateBox('ccrc-w9-r10g-b10-');
+      plantDir(home, '20250101-000000');
+      const realDate = ['/bin/date', '/usr/bin/date'].find((p) => existsSync(p));
+      expect(realDate, 'a system date for every other format').toBeDefined();
+      const calls = join(home, 'date-ts-calls');
+      const stub = join(home, '.local', 'bin', 'date');
+      writeFileSync(stub, [
+        '#!/bin/sh',
+        'if [ "$#" -eq 1 ] && [ "$1" = "+%Y%m%d-%H%M%S" ]; then',
+        `  echo x >> '${calls}'`,
+        `  if [ "$(wc -l < '${calls}')" -eq 1 ]; then echo 20300101-000000; else echo 20250601-000000; fi`,
+        '  exit 0',
+        'fi',
+        `exec '${realDate}' "$@"`,
+        '',
+      ].join('\n'));
+      chmodSync(stub, 0o755);
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      const own = ownDir(r);
+      expect(own, 'the backup took the stepped-back second, below the floor').toBe(join(backupRoot(home), '20250601-000000'));
+      expect(readFileSync(calls, 'utf8').split('\n').filter(Boolean).length, 'the floor read, then the backup\'s name').toBeGreaterThanOrEqual(2);
+      expect(existsSync(own), `this run's own backup ${own} must survive a floor that does not cover it`).toBe(true);
+      expect(has(home, '20250101-000000'), 'the prune ran: the unprotected earlier dir went').toBe(false);
+      assertNoExtras(home);
+    });
+
+    it('_bak_gc and _bak_prune each call _bak_keepset, and [ -f "$d/coord.db" ] appears once in ccd/ccrc (one selection)', () => {
+      const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+      const body = (name: string): string => {
+        const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(src);
+        expect(m, `ccd/ccrc has no ${name}`).not.toBeNull();
+        return m![0];
+      };
+      // A CALL (a command word at the start of a line), never a mention in a comment.
+      expect(body('_bak_gc'), '_bak_gc').toMatch(/^ +_bak_keepset(\s|$)/m);
+      expect(body('_bak_prune'), '_bak_prune').toMatch(/^ +_bak_keepset(\s|$)/m);
+      expect(src.split('[ -f "$d/coord.db" ]').length - 1, 'the snapshot test is spelled once').toBe(1);
+    });
+  });
+
+  // fix round 1 item 9 (review 196 F10): a timestamp-named SYMLINK is a
+  // timestamped backup for this prune (the glob matches the name; `_bak_list`
+  // accepts it because `[ -d ]` follows a symlink to a directory) — so it is
+  // counted and REMOVED AS A LINK, and its target must survive untouched.
+  // Two link cases (a fixture dir outside ~/ccrc-backups, and onKeptV1's real
+  // kept v1.0.0 — this box carries no v0.0.50) plus a plain timestamp-named
+  // file, which is not a timestamped backup at all and must survive
+  // unpruned. CCRC_BACKUP_KEEP=0 and every planted name below the run's lock
+  // second (2025…) put both links squarely in the removal set; the plain file is
+  // never listed (`_bak_list` admits directories only); neither target
+  // holds a coord.db, server-dist or agent-dist, so neither can be chosen as
+  // the protected newest-earlier snap or tree keep. Assertions read the
+  // FILESYSTEM (lstat for the links, a content digest for their targets),
+  // never the `pruned` echo — a `rm -rf -- "$d/"` on a symlink would empty
+  // the target and still print it.
+  it('P18: a timestamp-named symlink is pruned as a link, its target untouched; a timestamp-named plain file is not a backup and survives', () => {
+    const home = onKeptV1('ccrc-fx-b-p18-');
+    const v1 = join(home, 'ccrc-versions', 'v1.0.0');
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0' });
+    const up = runUpdate(home);
+    expect(up.code, `the move onto v2.0.0 must complete — stderr: ${up.stderr}\nstdout: ${up.stdout}`).toBe(0);
+    for (const f of ['curl-argv', 'update-json-writes', 'systemctl-calls', 'tmux-argv', 'gh-calls']) rmSync(join(home, f), { force: true });
+    const outside = join(home, 'fixture-outside-backup-root');
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, 'marker.txt'), 'outside target content\n');
+    const linkToOutside = join(backupRoot(home), '20250101-000000');
+    symlinkSync(outside, linkToOutside);
+    const linkToKept = join(backupRoot(home), '20250102-000000');
+    symlinkSync(v1, linkToKept);
+    const plainFile = join(backupRoot(home), '20250103-000000');
+    writeFileSync(plainFile, 'a plain file, not a timestamped backup directory\n');
+    const outsideBefore = treeDigest(outside);
+    const keptBefore = treeDigest(v1);
+    const plainBefore = fileText(plainFile);
+    expect(Object.keys(outsideBefore).length, 'the outside fixture must carry a real file').toBeGreaterThan(0);
+    expect(Object.keys(keptBefore).length, 'the kept v1.0.0 tree must carry real files').toBeGreaterThan(0);
+    const r = rollbackRun(home, [], { CCRC_BACKUP_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const linkGone = (p: string): boolean => { try { lstatSync(p); return false; } catch { return true; } };
+    expect(linkGone(linkToOutside), 'the link to the outside target must be gone').toBe(true);
+    expect(linkGone(linkToKept), 'the link to the kept version must be gone').toBe(true);
+    expect(treeDigest(outside), 'the outside target\'s content must survive untouched').toEqual(outsideBefore);
+    expect(treeDigest(v1), 'the kept version\'s content must survive untouched').toEqual(keptBefore);
+    expect(existsSync(plainFile), 'the plain timestamp-named file is not a timestamped backup').toBe(true);
+    expect(fileText(plainFile)).toBe(plainBefore);
+  }, 60_000);   // a move onto v2.0.0 plus a rollback: 13.7-17 s alone, timed out 3 of 6 at load 30-50 (final review)
+});
+
+describe('ccrc update: the codex steps ride the staged spine (Plan 2b-2 Task 10)', () => {
+  it('the harness contains the transient-unit launcher: it resolves inside this HOME and refuses', () => {
+    const home = freshUpdateBox('ccrc-update-sdrun-contained-');
+    const r = spawnSync(BASH, ['-c', SPINE_CONTAINMENT_PROBE], { env: updateEnv(home), encoding: 'utf8' });
+    expect(r.stdout).toContain(`at=${join(home, '.local', 'bin', 'systemd-run')}\n`);
+    expect(r.stdout).toMatch(/^run-rc=97$/m);
+    expect(r.stdout).toMatch(/^env-rc=0$/m);
+    expect(spineRunCalls(home).join('\n')).toContain('--unit=fixture-containment-probe.service');
+  });
+
+  it('an update re-runs both codex steps, in spine order: the runtime before the services, the restart after them', () => {
+    // `cmd_update` runs the STAGED tree's `cmd_install` as a process
+    // (m-spine §1), so a runtime rebuild and a stale-tier restart ride every
+    // update with no `_upd_*` code at all; this is the proof that they do, and
+    // that the staged spine keeps D-3485's order.
+    const home = freshUpdateBox('ccrc-update-codex-steps-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const out = r.stdout.split('\n');
+    const at = (re: RegExp): number => out.findIndex((l) => re.test(l));
+    const runtime = at(/^install: codex runtime: none — no codex lane in the roster$/);
+    const services = at(/^install: services: /);
+    const tiers = at(/^install: codex tiers: none — no codex lane in the roster$/);
+    expect(runtime, 'the staged spine never ran _inst_codex_runtime').toBeGreaterThan(-1);
+    expect(tiers, 'the staged spine never ran _inst_codex_tiers').toBeGreaterThan(-1);
+    expect(runtime).toBeLessThan(services);
+    expect(tiers).toBeGreaterThan(services);
+    expect(spineRunCalls(home)).toEqual([]);
+  });
+});
+
+// Plan 3a Task 10 — the merge is itself an inert rollout: the REAL update onto
+// this tree, over the fleet box's live shape (codexLaneFixture's `plantLiveShape`),
+// on the box the "codex steps ride the staged spine" describe above uses.
+describe('Plan 3a Task 10 — ccrc update onto this tree over today\'s live shape', () => {
+  itLinux('a real update leaves every foreign byte and link, names no ccgpt- unit in a state-changing verb, and builds nothing', () => {
+    const home = freshUpdateBox('ccrc-update-rehearsal-live-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    plantLiveShape(home, (argv) => {
+      const env: NodeJS.ProcessEnv = { ...updateEnv(home), CCGPT_CONFIG: undefined };   // REHEARSAL_ENV's reason
+      assertSpineFrontContained(env, home);
+      assertNoRealTool(env, home);   // wave 9 R10d: a spawn of the whole ccd/ccrc passes the checker on its final env
+      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), ...argv], { env, encoding: 'utf8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    });
+    const s0 = foreignSnapshot(home);
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(foreignSnapshot(home), 'the update changed a byte, mode or link another repository owns').toEqual(s0);
+    const calls = existsSync(join(home, 'systemctl-calls'))
+      ? readFileSync(join(home, 'systemctl-calls'), 'utf8').split('\n').filter(Boolean) : [];
+    expect(stateCallsNaming(calls, /\bccgpt-/), 'a state-changing systemctl verb named a ccgpt- unit').toEqual([]);
+    expect(calls.filter((a) => /^--user enable --now ccrc-codex-usage@/.test(a)),
+      'an instance was enabled on a box with no codex lane').toEqual([]);
+    expect(spineRunCalls(home)).toEqual([]);
+    expect(existsSync(join(home, 'foreign-ccgpt-calls')), 'ccrc ran the other repository\'s launcher').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'runtime', 'codex')), 'a runtime was built').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'codex')), 'lane state was written').toBe(false);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('SKIP codex: ')), 'the staged spine\'s closing doctor')
+      .toHaveLength(1);
+  }, 120_000);
 });

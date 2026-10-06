@@ -42,7 +42,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
 });
 
 describe('TypedLabel', () => {
@@ -205,7 +205,7 @@ describe('the session header crumb', () => {
     session, status: 'idle', statusUpdatedAt: null,
     onInterrupt: () => {}, onOpenTerminal: () => {}, onBack: () => {},
     onChangeModel: () => {}, onChangeEffort: () => {}, onMoveAccount: () => {},
-    onStopSession: () => {}, onOpenHistory: () => {}, onReapWorkspace: () => {},
+    onArchive: () => {}, onRestore: () => {}, onOpenHistory: () => {}, onReapWorkspace: () => {},
   });
 
   it('types the new branch in on the crumb when a rename lands', () => {

@@ -227,10 +227,38 @@ describe('the floor (§9, decision 8)', () => {
     expect(resolveNodeIntent(input({ currentVersion: 'v0.0.8', highestVersion: 'v0.0.8', releases })).desiredTag).toBe('v0.0.10');
     const at = resolveNodeIntent(input({ currentVersion: 'v0.0.10', highestVersion: 'v0.0.10', releases }));
     expect(at.desiredTag).toBeNull();
-    expect(at.resolveDetail).toBe(RESOLVE_DETAIL.notNewerThanFloor('v0.0.10', 'v0.0.10'));
+    // Wave 8 item F1 (D-3590): at its own floor, on the newest eligible release, this is `atNewest`, not
+    // `notNewerThanFloor` — the latter stays for a demoted/yanked newest or a node above the catalogue.
+    expect(at.resolveDetail).toBe(RESOLVE_DETAIL.atNewest('v0.0.10', 'stable'));
     const above = resolveNodeIntent(input({ currentVersion: 'v0.0.11', highestVersion: 'v0.0.11', releases }));
     expect(above.desiredTag).toBeNull();
     expect(above.resolveDetail).toBe(RESOLVE_DETAIL.notNewerThanFloor('v0.0.10', 'v0.0.11'));
+  });
+
+  it('atNewest is only for a node at its OWN floor — a rollback onto the newest after a yank keeps rolledBack (wave 8 item F1, D-3590)', () => {
+    // v0.0.10 was yanked after this node rolled back to v0.0.9; the newest eligible is v0.0.9 again, current
+    // equals it, but the floor (raised by the earlier v0.0.10) is still above current — rolledBack, not atNewest.
+    const r = resolveNodeIntent(input({
+      currentVersion: 'v0.0.9', highestVersion: 'v0.0.10', releases: [rel('v0.0.10', 'stable', { yanked: true }), rel('v0.0.9')],
+    }));
+    expect(r.desiredTag).toBeNull();
+    expect(r.resolveDetail).toBe(RESOLVE_DETAIL.rolledBack('v0.0.9', 'v0.0.10'));
+  });
+
+  it("atNewest names the node's OWN channel, never the other (wave 8 item F1)", () => {
+    const dev = RESOLVE_DETAIL.atNewest('v0.0.10', 'dev');
+    expect(dev).toContain('dev');
+    expect(dev).not.toContain('stable');
+    const stable = RESOLVE_DETAIL.atNewest('v0.0.10', 'stable');
+    expect(stable).toContain('stable');
+    expect(stable).not.toContain('dev');
+  });
+
+  it('atNewest never says "up to date" or "nothing newer" — it names what was measured, "as last read" (wave 8 item F1, D-3590)', () => {
+    const s = RESOLVE_DETAIL.atNewest('v0.0.10', 'stable');
+    expect(s).not.toMatch(/up to date/i);
+    expect(s).not.toMatch(/nothing newer/i);
+    expect(s).toContain('as last read');
   });
 
   it('a demoted newest never moves the node down — NULL with the at-floor sentence (§18 "never goes below the floor")', () => {

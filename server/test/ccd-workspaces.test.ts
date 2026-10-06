@@ -120,7 +120,7 @@ describe('a partially purged registry never frees the slug', () => {
   // registry entry rather than a plausible subset.
   const FIELDS = ['archived', 'archivedreason', 'archivemanifest', 'base', 'branch',
     'compactnote', 'compactskip', 'generation', 'home', 'hookstate.json', 'lastcompact', 'lastswap',
-    'pool', 'prnumber', 'project', 'reaping', 'setup', 'started', 'uuid', 'workdir', 'workspace', 'wrapper'];
+    'pool', 'prnumber', 'project', 'reaping', 'setup', 'started', 'turn.json', 'uuid', 'workdir', 'workspace', 'wrapper'];
   /** One DOT-LEADING private compaction family, so the fixture is a full
    *  POST-D-2605 row rather than the dot-free half of one. `_ws_slug_free` now
    *  refuses on these too, and `_reg_purge` takes them in a second loop the
@@ -191,14 +191,14 @@ describe('a partially purged registry never frees the slug', () => {
     // TAUTOLOGICAL — `LAST` is derived from this same measurement, so both
     // sides move together and a mutant adding one `rm` to `_reg_purge` stayed
     // GREEN (measured). The number that can actually change is the purge's own
-    // unlink count, so that is the one pinned: 27 today, which makes this `it`
-    // run 31 real `sh()` invocations, each taking the row's stable lock — one
+    // unlink count, so that is the one pinned: 28 today, which makes this `it`
+    // run 32 real `sh()` invocations, each taking the row's stable lock — one
     // for `measureRmCalls` plus the loop's `RM_CALLS + 3`, measured by counting
     // this file's own `sh` alias for one run of this `it`, not derived.
     // IT WAS 25 UNTIL `_reg_purge` GAINED `_usage_purge "$id"` (ccd/ccd), whose
     // two unconditional `rm -f` — the usage sidecar `$REG/usage/<id>.json` and
     // its `.<id>.*.tmp` partials — take the count 25 → 27; they run mid-purge,
-    // between the `hookstate.json` unlink and the `reaping`/`archived` tail, so
+    // between the `hookstate.json`/`turn.json` unlinks (the stall watch's `turn.json` made it 27 → 28) and the `reaping`/`archived` tail, so
     // this is a claim about the TOTAL and not about which unlink goes last. The
     // function's third `rm`, `-rf` of `$REG/usage/<id>.agents`, stands behind a
     // `[[ -d ]]` no fixture here satisfies, so it does not count today and WILL
@@ -206,7 +206,7 @@ describe('a partially purged registry never frees the slug', () => {
     // lost an unlink: update the literal AND re-read this fixture's cost,
     // because it is the thing that pushed the test past vitest's 20 s default
     // and made it a load flake.
-    expect(RM_CALLS, 'the purge`s unlink count moved — this `it`s cost moved with it').toBe(27);
+    expect(RM_CALLS, 'the purge`s unlink count moved — this `it`s cost moved with it').toBe(28);
     const LAST = RM_CALLS + 2;
     const verdicts: string[] = [];
     for (let k = 0; k <= LAST; k++) {
@@ -917,6 +917,25 @@ describe('ws-rm', () => {
     // tmux for pane context; nothing else runs.
     expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
   });
+
+  // `status.showUntrackedFiles=no` hides untracked files from a plain
+  // `status --porcelain` — and under it `git worktree remove` deletes them
+  // with no --force (git 2.43). So the dirty read says `--untracked-files=all`,
+  // and the config cannot make an untracked file read clean.
+  for (const configured of [true, false]) {
+    it(`refuses an untracked-only worktree ${configured ? 'UNDER status.showUntrackedFiles=no' : '— the control, without that config'}`, () => {
+      const wt = addOne();
+      if (configured) execFileSync('git', ['-C', main(), 'config', 'status.showUntrackedFiles', 'no']);
+      fs.writeFileSync(path.join(wt, 'notes.md'), 'draft\n');
+      expect(execFileSync('git', ['-C', wt, 'status', '--porcelain'], { encoding: 'utf8' }).trim(),
+        'the CONTROL: what a plain status read says here').toBe(configured ? '' : '?? notes.md');
+      expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow(/uncommitted changes/);
+      expect(fs.readFileSync(path.join(wt, 'notes.md'), 'utf8')).toBe('draft\n');
+      expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+      expect(branches('ws/quiet-mesa')).not.toBe('');
+      expect(calls(), 'nothing is torn down').toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
+    });
+  }
 
   it('refuses an unknown id', () => {
     expect(() => sh(`${RM} cmd_ws_rm nope-nothing`)).toThrow();

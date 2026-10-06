@@ -166,7 +166,7 @@ describe('AbandonSheet — the copy and the refusals', () => {
     cleanup();
 
     const store = makeStore();
-    act(() => { store.setState({ coord: { pause: 'clear', mail: 'clear' }, coordFrameSeen: true }); });
+    act(() => { store.setState({ coord: { pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] }, coordFrameSeen: true }); });
     const coordPause = vi.fn().mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
     render(<CoordBanner store={store} coordPause={coordPause} />);
     fireEvent.click(screen.getByRole('button'));

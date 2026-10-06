@@ -7,6 +7,14 @@ import { decideAllocation } from './ledger.js';
 // policy — the house port pattern. This read exists to feed that policy and
 // nothing else, so the shape it returns is the policy's to define.
 import type { CoordPlacementStamp } from './placement.js';
+import type { LastRun } from './released.js';
+// Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
+// the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
+// reads below implement them.
+import type { StallDeliveryRow, StallMailRow, StallReadFailure, StallRunRow, StallWriteMiss } from './stall.js';
+// Type-only: ties `AUTO_CONTINUE_ARMED_LAST_ERROR` below to the send adapter's
+// own refusal word, so a rename there is a compile error here, not a silent miss.
+import type { SendResult } from '../inject/send.js';
 import type { LedgerLog } from './ledgerlog.js';
 import type { PoolEdgeLog } from './pooledgelog.js';
 import type { UpdateIntentLog } from './updateintentlog.js';
@@ -56,7 +64,7 @@ import {
   type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
-  type LifecycleGap, type LifecycleGapReason,
+  type LifecycleAct, type LifecycleGap, type LifecycleGapReason,
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState,
@@ -91,8 +99,24 @@ export interface PrLineageEntry { pr: number; branch: string; phase: string; rec
  * made, kept here for the board-placement policy to read server-side. It is
  * NOT one of the design's two wire additions, so it stays off `RunSummary`
  * and gets stripped by `toRunSummary` alongside `prLineage`.
+ *
+ * `sessionBornAt` (child-reclamation spec §5.1, §5.3): the child's BIRTH,
+ * write-once per BOUND session — `bindSession` below is the one writer of a
+ * NON-NULL birth (`clearSession` and migration 16's backfill also touch the
+ * column, both only ever to NULL or to seed it), on `coordProject`'s idiom of
+ * a server-side measurement nothing on the wire needs. `childBirthOf`
+ * (`coord/childSpent.ts`) reads it, never `dispatchStartedAt`, which keeps its
+ * own every-attempt meaning unchanged. `sessionBornFor` rides beside it: the
+ * session the birth was recorded FOR, so a cross-build rollback that rebinds
+ * `sessionId` through an older build's `clearSession`/`setSession` — which
+ * never touch either column — leaves a birth `childBirthOf` can prove is no
+ * longer this occupant's own (spec §5.3, the recycled-slug hazard extended
+ * across a rollback).
  */
-export interface RunRow extends RunSummary { prLineage: PrLineageEntry[]; coordProject: string | null }
+export interface RunRow extends RunSummary {
+  prLineage: PrLineageEntry[]; coordProject: string | null;
+  sessionBornAt: number | null; sessionBornFor: string | null;
+}
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
  *  the three consumers (`closeRun`, `FleetWatcher.sweepMerged`, the by-hand
@@ -125,9 +149,12 @@ export type { CoordPlacementStamp };
  *  server-side, and NOT one of that design's two wire additions — see
  *  `RunRow`'s own docstring. Shared by `GET /api/runs` (`coord/routes.ts`)
  *  and the `runs` WS frame's own emitter (`watch.ts`'s `emitRuns`, Task 10)
- *  rather than each holding its own copy of the strip. */
+ *  rather than each holding its own copy of the strip. Strips `sessionBornAt`
+ *  and `sessionBornFor` (migration 16) on the same idiom: server-only
+ *  measurements, never sent. */
 export const toRunSummary = (row: RunRow): RunSummary => {
-  const { prLineage: _prLineage, coordProject: _coordProject, ...summary } = row;
+  const { prLineage: _prLineage, coordProject: _coordProject, sessionBornAt: _sessionBornAt,
+          sessionBornFor: _sessionBornFor, ...summary } = row;
   return summary;
 };
 
@@ -702,8 +729,43 @@ export type OpenSiblingsResult =
   | { ok: true; siblings: OpenSibling[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
+/** `runsNamingSession`'s row — `OpenSibling` plus `sessionId` (the session
+ *  this whole read is scoped to, carried per row so a caller building
+ *  `ChildReclaimHoldCandidate`s never has to remember it separately) and
+ *  `state` (child-reclamation wave 4: unlike `OpenSibling`'s rows, which are
+ *  non-terminal by construction, these span every state, and the hold read
+ *  needs to know which ones are terminal). */
+export interface ChildReclaimNamingRow {
+  readonly id: number; readonly sessionId: string; readonly program: string;
+  readonly wave: number; readonly waveOf: number | null; readonly state: RunState;
+}
+
+export type RunsNamingSessionResult =
+  | { readonly ok: true; readonly runs: readonly ChildReclaimNamingRow[] }
+  | { readonly ok: false; readonly kind: 'run-unreadable'; readonly detail: string };
+
+/** What `insertStallObservation`/`recordStallObservation` did, said out loud
+ *  (stall watch wave 1, spec 2026-09-29 §4.2 "Durable dedupe, no migration").
+ *  NOT `recordRunEvent`'s `void`: that writer no-ops silently on an absent run,
+ *  and a stall rung must tell "already recorded" (never send it again) from "the
+ *  run is gone" (nothing left to watch) from "recorded now" (send it).
+ *  `run-gone` means the run is ABSENT or NO LONGER ACTIVE, an idle or terminal
+ *  state (D-3584 run-gone-includes-inactive): the spec's word meant absent only,
+ *  but a run that closed while the lane awaited is just as unwatchable, and a
+ *  row or mail written for it would outlive its close.
+ *  `eventId` is the row's own `run_events.id`. */
+export type StallObservation =
+  | { recorded: true; eventId: number }
+  | { recorded: false; why: StallWriteMiss };
+
 export type CoordPlacementStampsResult =
   | { ok: true; stamps: CoordPlacementStamp[] }
+  | { ok: false; kind: 'run-unreadable'; detail: string };
+
+/** `lastRunBySession`'s answer (workspace lifecycle spec §5.1): each asked session's newest run as `sessionId`,
+ *  the asked sessions a non-terminal run names as `sessionId`, and every `claimedBy` of a non-terminal run. */
+export type LastRunsResult =
+  | { ok: true; last: LastRun[]; openWorkers: string[]; openClaimants: string[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
 export type AskReadResult =
@@ -752,6 +814,8 @@ interface RunRowDb {
   briefQueued: number | null;
   clearError: string | null;
   coordProject: string | null;
+  sessionBornAt: number | null;
+  sessionBornFor: string | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -771,7 +835,8 @@ const RUN_ROW_COLUMNS =
   'r.workspace, r.branch, r.state, r.kind, CAST(r.reviews AS TEXT) AS reviewsText, r.claimedBy, ' +
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
-  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject';
+  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
+  'r.sessionBornFor';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -868,11 +933,22 @@ const OUTSTANDING_STATES_SQL = "('queued','delivered')";
  *  (D-1406). */
 const TERMINAL_DELIVERY_SQL = `('${TERMINAL_DELIVERY_STATES.join("','")}')`;
 
+/** The `lastError` the mail sweep's auto-continue arm hands `backOff` (`watch.ts`,
+ *  passing on `sendPrompt`'s refusal of the same spelling), read back by
+ *  `autoContinueHeldUntil` for the stall watch's limit hold. Typed against the
+ *  send adapter's own union, so the two cannot drift apart silently.
+ *  `mail-routes.test.ts`'s kebab scan admits the word by name, as a send
+ *  refusal passing through, the way it admits its `enter-ignored` sibling. */
+const AUTO_CONTINUE_ARMED_LAST_ERROR: Extract<Extract<SendResult, { ok: false }>['error'], 'auto-continue-armed'> =
+  'auto-continue-armed';
+
 /** The cap's predicate, NEGATIVE over everything that is not active — the idle
  *  and terminal lists, both L0, joined the way `TERMINAL_DELIVERY_SQL` is
  *  (design 2026-09-14 §7.1 as corrected by D-2803): a raw state token this build
  *  cannot name is neither idle nor terminal and so COUNTS, which is the safe
- *  direction for a cap and the reason `unknown` sits in `ACTIVE_RUN_STATES`. */
+ *  direction for a cap and the reason `unknown` sits in `ACTIVE_RUN_STATES`.
+ *  `stallCandidates` reads it too (stall watch wave 1), for the same safe
+ *  direction: an unnamed state is a candidate, and the lane's verdict holds it. */
 const INACTIVE_RUN_STATES_SQL = `('${[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES].join("','")}')`;
 /** Every "still open" predicate in this file — `runs()`, `programOpenRunCount`,
  *  `openRunsForSession`, the strands query, `advanceInner`'s `closedAt` CASE —
@@ -1312,6 +1388,81 @@ class IntentJournalFault extends Error {
   constructor(readonly why: 'journal-unreadable' | 'journal-unwritable', cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause));
   }
+}
+
+/** Every id that may be the `from` of one `reclaimProgram` row, or `null`
+ *  for a row the writer cannot have produced. The writer emits
+ *  `reclaim:<from> -> <to>` (below, `this.recordRunEvent(m.id, 'operator',
+ *  \`reclaim:${m.claimedBy} -> ${to}\`, at)`, one call per row the UPDATE just
+ *  rewrote). A row the reader cannot use makes it throw, and `run_events`
+ *  rows are never deleted, so one such row stops every automatic
+ *  reclamation for good: this must accept EVERY string the writer can emit.
+ *
+ *  Neither side has a shape it can be split on. `from` is `runs.claimedBy`
+ *  as sqlite reads it back; `POST /api/runs` checks it only with
+ *  `claimedBy.trim() === ''` and no charset guard (`shared/api.ts`'s
+ *  `isSessionIdShape` exists precisely because the route does not enforce
+ *  one), so `from` may hold whitespace, a line terminator beside other
+ *  characters, its own ` -> `, or nothing at all — `trim` keeps NUL, and
+ *  node:sqlite reads `"\u0000demo"` back truncated to `""`. `to` is the
+ *  trimmed id `reclaimRun` (`reclaim.ts`) found as `<to>.uuid` in the
+ *  registry listing: never empty, but a filename, so it may hold a space, a
+ *  tab, a line feed or a ` -> ` of its own, or start with `-> `. With an
+ *  arrow on both sides, `reclaim:<from> -> <to>` has more than one reading,
+ *  and no single split recovers `from` in every case.
+ *
+ *  So this does not pick a split. It returns the prefix before EVERY
+ *  occurrence of ` -> ` in the text after `reclaim:`, overlapping ones
+ *  included (the search resumes one character past each hit, so `a -> -> b`
+ *  yields both `a` and `a ->`). The writer's own separator is one of those
+ *  occurrences, so the true `from` is always among the prefixes, whatever
+ *  either side contains. THE COST IS OVER-PROTECTION: the extra prefixes
+ *  join the set of ids that have coordinated, so a session whose id happens
+ *  to equal one of them — `demo` beside a displaced `demo -> x`, say — is
+ *  never reclaimed automatically. That is the fail-shut direction (it can
+ *  only leave a workspace for a human to clean up), where choosing one split
+ *  could silently drop the real `from` and let the displaced coordinator's
+ *  workspace be reclaimed. A well-shaped row (`demo-a -> heir-x`) has one
+ *  occurrence and yields exactly its `from`.
+ *
+ *  `null` — which the one reader, `childReclaimCoordinatorIds`, below, turns
+ *  into a THROW rather than a silent drop — only for text that does not
+ *  start with `reclaim:` or holds no ` -> ` at all: the writer always emits
+ *  the prefix and one separator, so such a row is hand-written or a future
+ *  reword of the writer. The SQL selection below is case-SENSITIVE
+ *  (`substr(detail, 1, 8) = 'reclaim:'`, wave 4's fix — SQLite's `LIKE` is
+ *  case-insensitive for ASCII by default and would have handed this reader a
+ *  row it can never attribute, such as an operator's own `RECLAIM:x -> y`
+ *  note, which is exactly the "hand-written" case this function throws on.
+ *
+ *  THE LENGTH BOUND. A candidate longer than
+ *  `CHILD_RECLAIM_MAX_SESSION_ID_CHARS` (255) is never returned, and the
+ *  search stops at the first occurrence past that offset. Safe because a
+ *  session id is a FILENAME component — the registry holds `<id>.uuid`, and
+ *  no filesystem this runs on takes a component over 255 bytes, which no
+ *  string over 255 characters can fit in — so no longer id can ever be a
+ *  reclaimable child: dropping such a candidate can only fail to protect a
+ *  session that cannot exist. Every `from` of 255 characters or fewer is
+ *  still among the prefixes, exactly as before. Necessary because `from`
+ *  is unbounded upstream (the Fastify body limit is its only cap): a
+ *  megabyte `claimedBy` built of repeated ` -> ` yielded one prefix per
+ *  occurrence, up to a megabyte each, and every pass inserted them all into
+ *  a `Set` — seconds of synchronous event-loop stall per call, on every
+ *  sweep pass and every close. The bound makes the work per row
+ *  proportional to 255, not to the row. `null` still means "no ` -> ` at
+ *  all"; a row whose every candidate is too long parses to `[]`. */
+const CHILD_RECLAIM_MAX_SESSION_ID_CHARS = 255;
+function childReclaimDisplacedCandidates(detail: string): string[] | null {
+  const prefix = 'reclaim:';
+  if (!detail.startsWith(prefix)) return null;
+  const body = detail.slice(prefix.length);
+  const first = body.indexOf(' -> ');
+  if (first === -1) return null;
+  const out: string[] = [];
+  for (let i = first; i !== -1 && i <= CHILD_RECLAIM_MAX_SESSION_ID_CHARS; i = body.indexOf(' -> ', i + 1)) {
+    out.push(body.slice(0, i));
+  }
+  return out;
 }
 
 /**
@@ -1862,8 +2013,8 @@ export class CoordStore {
    * writer in the tree to give one `mail` row a second delivery. Nothing else
    * ever did — `queueDelivery` has exactly two other call sites and each follows
    * an `insertMail` — and `mail_deliveries` carries no unique key on
-   * `(mailId, toId)` to fall back on (`schema.ts`: the one index is
-   * `mail_deliveries_due`). So:
+   * `(mailId, toId)` to fall back on (`schema.ts`: neither of its indexes,
+   * `mail_deliveries_due` and `mail_deliveries_by_mail`, is unique). So:
    *   `GROUP BY m.id` — a program whose rows disagree about the claimant (the
    *     hand-recovered row the caller's own comment describes) puts TWO
    *     displaced ids in `displaced`, and one mail parked against both would
@@ -1916,7 +2067,7 @@ export class CoordStore {
    *     non-NULL state on every row it can select. It is `GET
    *     /api/mail?program=`'s default, non-`all`, arm.
    *
-   * On the narrower `OUTSTANDING_STATES_SQL` — eleven holders, in file order:
+   * On the narrower `OUTSTANDING_STATES_SQL` — twelve holders, in file order:
    *   `OUTSTANDING_OR_ABANDONED_SQL`'s own definition — the composed constant,
    *     no reader of its own.
    *   `cancelKickoffsTo` and `repointCoordinatorMail` — both run BEFORE this
@@ -1986,6 +2137,14 @@ export class CoordStore {
    *     alone would then be resting on `m.subject` happening to differ.
    *   `hasOutstandingPeerDuplicate` and `outstandingPeerCount` are
    *     `m.runId IS NULL`-scoped and therefore unreachable too.
+   *   `autoContinueHeldUntil` (stall watch wave 1) is a READ, never a writer:
+   *     the latest `nextAttemptAt` among one session's outstanding deliveries
+   *     held back by an armed auto-continue. A re-queued row reaches it only
+   *     after that row is itself refused by an armed auto-continue on its NEW
+   *     recipient's pane, and it is correct then too: the heir's pane really is
+   *     waiting out a limit, which is the fact the stall lane's limit hold
+   *     reads. A terminal row never counts, so an acked or parked refusal
+   *     cannot keep a worker's limit hold alive.
    *
    * BOUNDED by the role-addressed reports of ONE program that parked while its
    * coordinator was dead, at most one new row per `mail` row, and deliberately
@@ -2208,6 +2367,54 @@ export class CoordStore {
   }
 
   /**
+   * The stall watch's observation row (spec 2026-09-29 §4.2 "Durable dedupe, no
+   * migration"): one `run_events` row per rung, with `detail` the rung's
+   * `stallDetail` and `fromState = toState` = the run's current state, so
+   * `pushNewRuns` skips it as a non-transition, as it does every
+   * `recordRunEvent` row. `causedBy` is `operator`, the role the watch speaks for.
+   *
+   * NOT `recordRunEvent`: that writer returns `void` and no-ops on an absent run.
+   * This one answers `StallObservation` and refuses a second row with the same
+   * `(runId, detail)`, which is the dedupe that survives a restart: the ladder
+   * reads its rung times back from these rows, never from memory.
+   *
+   * `run-gone` covers a run that is absent or no longer active (D-3584, the
+   * comment in the body), so a close that landed after the lane's candidate read
+   * is never given a row or a mail.
+   *
+   * OPENS NO TRANSACTION, so `queueStallNotice` (`rundefs.ts`) can hold this
+   * row and its mail in ONE. `tx` is not re-entrant. A caller with no
+   * transaction of its own uses `recordStallObservation` below, so the check and
+   * the insert are never split by another writer.
+   */
+  insertStallObservation(runId: number, detail: string, at: number): StallObservation {
+    // D-3584 run-gone-includes-inactive: "gone" is absent OR no longer active. The
+    // lane awaits between `stallCandidates` and this write (the pane pid, the live
+    // file, `measureClaimant`), so a close can land in that window, and a stall mail
+    // queued after close's `cancelOutstandingDeliveries` would be delivered on a
+    // closed run (`dueDeliveries` does not filter on run state). The fragment is
+    // `stallCandidates`' own, so the candidate and the write cannot disagree about
+    // which states are live, and `unknown` still counts as active.
+    const run = this.db.prepare(
+      `SELECT state FROM runs WHERE id = ? AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
+    ).get(runId) as { state: string } | undefined;
+    if (run === undefined) return { recorded: false, why: 'run-gone' };
+    const seen = this.db.prepare('SELECT 1 AS x FROM run_events WHERE runId = ? AND detail = ? LIMIT 1').get(runId, detail);
+    if (seen !== undefined) return { recorded: false, why: 'duplicate' };
+    const res = this.db.prepare(
+      'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(runId, at, run.state, run.state, 'operator', detail);
+    return { recorded: true, eventId: Number(res.lastInsertRowid) };
+  }
+
+  /** `insertStallObservation` in exactly one transaction: the stall lane's shadow
+   *  rows and its push-only rungs (r3 and the three caps), each recorded BEFORE
+   *  it is pushed. */
+  recordStallObservation(runId: number, detail: string, at: number): StallObservation {
+    return tx(this.db, () => this.insertStallObservation(runId, detail, at));
+  }
+
+  /**
    * The WHOLE dispatch commit, as ONE transaction (D-277 (was D-B4-4)). Before this, the
    * dispatch route ran `markDispatched`, `setClearedAt` and `advance` as three
    * independent `tx()`s — the identical split `closeRun` below was created to
@@ -2417,11 +2624,39 @@ export class CoordStore {
    * later SQLite failure rolls the binding, re-issued delivery and event back
    * together (D-2505).
    */
-  bindSession(runId: number, sessionId: string): { rebound: boolean; reissued: number } {
+  bindSession(runId: number, sessionId: string, bornAt?: number | null): { rebound: boolean; reissued: number } {
     const row = this.db.prepare('SELECT sessionId FROM runs WHERE id = ?')
       .get(runId) as { sessionId: string | null } | undefined;
     const predecessor = row?.sessionId ?? null;
     this.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run(sessionId, runId);
+    // The child's BIRTH is write-once PER BOUND SESSION, never a first stamp
+    // per run (child-reclamation spec §5.1, §5.3 — `childBirthOf` reads these
+    // two columns, `coord/childSpent.ts`). An EXPLICIT `bornAt` — only the
+    // fresh-spawn dispatch arm passes one, because it alone knows whether this
+    // spawn is genuinely new or an adoption of an earlier attempt's workspace —
+    // wins outright: a real stamp writes `sessionBornFor = sessionId` beside
+    // it, and an explicit `null` (the adopted arm) writes `sessionBornFor =
+    // NULL` too — there is no birth to attribute, so nothing is attributed.
+    // Omitting the argument means this bind is not the moment of birth: a
+    // same-session re-statement leaves BOTH columns untouched (this call is
+    // outside a `tx()` on the fresh-spawn arm — see below — so the invariant
+    // `sessionId IS NULL ⇒ sessionBornAt IS NULL` is what keeps a crash
+    // between the two UPDATEs fail-closed: the predecessor there is always
+    // NULL, never a bound session whose birth this branch could leave
+    // orphaned), and an occupant change nulls both, because a birth dated to
+    // a session that no longer holds this run is not this session's birth —
+    // `sessionBornFor` is how `childBirthOf` catches a birth an OLDER build
+    // left stale across a rollback (a build that predates this column rebinds
+    // `sessionId` through `clearSession`/two-argument `setSession` without
+    // touching either). Neither statement below names `sessionId` in its SET
+    // list, so the one-writer scan above still counts exactly one write of
+    // that column per statement.
+    if (bornAt !== undefined) {
+      this.db.prepare('UPDATE runs SET sessionBornAt = ?, sessionBornFor = ? WHERE id = ?')
+        .run(bornAt, bornAt === null ? null : sessionId, runId);
+    } else if (predecessor !== sessionId) {
+      this.db.prepare('UPDATE runs SET sessionBornAt = NULL, sessionBornFor = NULL WHERE id = ?').run(runId);
+    }
     // NULL is a FIRST bind, not a re-bind, and it re-issues nothing: there is no
     // predecessor to inherit from, and every wave-1 dispatch on the box lands
     // here. The same-session case is a re-statement, not a change of occupant.
@@ -2453,7 +2688,7 @@ export class CoordStore {
    * sentence in the paragraph above is still true of what this method DOES;
    * what changed is only where the statement lives.
    */
-  setSession(runId: number, sessionId: string): { rebound: boolean; reissued: number } {
+  setSession(runId: number, sessionId: string, bornAt?: number | null): { rebound: boolean; reissued: number } {
     // Delegated, not re-implemented: `bindSession` above is the writer of this
     // column. Its answer is RETURNED, not dropped (D-2351; PR #75 review
     // round 1, store-2): the open route is a live RE-bind path — a retried open of a
@@ -2461,7 +2696,13 @@ export class CoordStore {
     // predecessor — and records what it was told on the run's trail. The
     // fresh-spawn arm (`dispatch.ts`) binds a run that names no session yet,
     // where the answer is always `{rebound:false, reissued:0}` and is ignored.
-    return this.bindSession(runId, sessionId);
+    //
+    // `bornAt` (migration 16) is forwarded as-is, undefined included:
+    // `bindSession` is where the write-once-birth logic lives, on both the
+    // explicit and the omitted arm, so this method adds nothing of its own.
+    // The open route (`routes.ts`) calls the two-argument form, never naming a
+    // birth — it re-binds an already-dispatched wave, not a fresh spawn.
+    return this.bindSession(runId, sessionId, bornAt);
   }
 
   /**
@@ -2497,8 +2738,13 @@ export class CoordStore {
       const row = this.db.prepare("SELECT sessionId FROM runs WHERE id = ? AND state = 'planned'")
         .get(runId) as { sessionId: string | null } | undefined;
       if (row === undefined || row.sessionId === null) return { ok: true as const, cleared: false };
+      // `sessionBornAt`/`sessionBornFor` clear alongside `sessionId` (migration
+      // 15): the spent occupant's birth belongs to nobody once the run names no
+      // session, and the next dispatch's fresh-spawn arm mints a fresh birth
+      // for whichever session it binds.
       this.db.prepare(
-        "UPDATE runs SET sessionId = NULL, workspace = NULL, branch = NULL WHERE id = ? AND state = 'planned'",
+        "UPDATE runs SET sessionId = NULL, workspace = NULL, branch = NULL, " +
+        "sessionBornAt = NULL, sessionBornFor = NULL WHERE id = ? AND state = 'planned'",
       ).run(runId);
       this.recordRunEvent(runId, 'coordinator', `session-unbound: ${row.sessionId} (workspace-spent #${pr})`);
       return { ok: true as const, cleared: true };
@@ -2787,6 +3033,33 @@ export class CoordStore {
   }
 
   /**
+   * "Which OPEN runs does this session COORDINATE?" — `openRunsForSession`'s question asked of the OTHER column
+   * (workspace lifecycle spec §5.2): every non-terminal run whose `claimedBy` is `claimantId`, in id order, for the
+   * archive door's `coordinator-has-open-runs` refusal and its `{programme:'end'}` act. `openCoordinatorIds` answers
+   * WHO coordinates something, as a set of ids; this answers WHICH runs, with the columns the refusal names.
+   *
+   * `openRunsForSession`'s predicate (`state NOT IN` the terminal set, so a row in a state this build cannot name
+   * counts as open) and its row (`OpenSibling`, the four integers CAST and proven, ALL-OR-FAILURE, D-2545): a partial
+   * list is how "this coordinator has no open runs" gets asserted about one that does, one step from an archive.
+   * Synchronous, like every other read on this store.
+   */
+  openRunsClaimedBy(claimantId: string): OpenSiblingsResult {
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText FROM runs ' +
+      `WHERE claimedBy = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
+    ).all(claimantId) as unknown as
+      { idText: string; program: string; waveText: string; waveOfText: string | null; reviewsText: string | null }[];
+    const runs: OpenSibling[] = [];
+    for (const r of rows) {
+      const m = measureRunNumbers(r);
+      if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
+      runs.push({ id: m.nums.id, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf });
+    }
+    return { ok: true, siblings: runs };
+  }
+
+  /**
    * "Which OPEN runs name this session?" — the question the hold file
    * structurally cannot answer, asked at three destructive decision points.
    *
@@ -2837,6 +3110,81 @@ export class CoordStore {
     return { ok: true, siblings };
   }
 
+  /** `openRunsForSession`'s shape, with its `state NOT IN …` filter REMOVED
+   *  (child-reclamation wave 4, spec §5.7's "no hold" conjunct): every run
+   *  naming `sessionId`, in ANY state, TERMINAL included. `openRunsForSession`
+   *  answers "is this workspace still claimed?" and deliberately excludes a
+   *  terminal run; the hold read needs the OPPOSITE population — a run that
+   *  has FINISHED, because only a terminal run's own claim can be what a held
+   *  child's text renders. `state` rides on every row (`openRunsForSession`'s
+   *  narrower row omits it — every row it returns is non-terminal by
+   *  construction, so its caller never needs to ask): the hold read compares
+   *  each candidate's `state` itself. ALL-OR-FAILURE, `openRunsForSession`'s
+   *  own rule: a partial candidate list is how a hold this build did write can
+   *  read as one it never wrote. */
+  runsNamingSession(sessionId: string): RunsNamingSessionResult {
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state FROM runs ' +
+      'WHERE sessionId = ? ORDER BY id',
+    ).all(sessionId) as unknown as
+      { idText: string; program: string; waveText: string; waveOfText: string | null;
+        reviewsText: string | null; state: string }[];
+    const runs: ChildReclaimNamingRow[] = [];
+    for (const r of rows) {
+      const m = measureRunNumbers(r);
+      if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
+      runs.push({ id: m.nums.id, sessionId, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf,
+        state: isRunState(r.state) ? r.state : 'unknown' });
+    }
+    return { ok: true, runs };
+  }
+
+  /**
+   * The stall watch's candidates (spec 2026-09-29 §4.2 "Candidates"): every run
+   * in an ACTIVE state that names a worker, of both kinds, with the columns the
+   * lane's verdict and its notices read. `state NOT IN ${INACTIVE_RUN_STATES_SQL}`
+   * is the dispatch cap's own predicate, reused and never respelled, so a run in
+   * `unknown`, or in a state this build cannot name, IS a candidate, and the
+   * verdict holds it rather than this read hiding it. `openRunsForSession` is not
+   * reused: its predicate also returns `planned` and idle runs, and it carries no
+   * `state`, `kind` or `dispatchedAt`.
+   *
+   * CAST AND PROVEN (D-2545's idiom, `openRunsForSession`'s shape): `id`, `wave`,
+   * `waveOf` and `reviews` through `measureRunNumbers`, so the two reads cannot
+   * disagree about the domain, and `dispatchedAt` through `persistedInt`.
+   * ALL-OR-FAILURE: one unrepresentable row refuses the whole read, and the lane
+   * holds every worker that tick. A partial list is how a silent worker would go
+   * unwatched with nothing said. The row shape is `StallRunRow`, declared by its
+   * consumer (`stall.ts`).
+   */
+  stallCandidates(): { ok: true; runs: StallRunRow[] } | { ok: false; kind: Extract<StallReadFailure, 'run-unreadable'>; detail: string } {
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, kind, state, sessionId, claimedBy, ' +
+      'CAST(dispatchedAt AS TEXT) AS dispatchedAtText, program, CAST(wave AS TEXT) AS waveText, ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, project, workspace FROM runs ' +
+      `WHERE state NOT IN ${INACTIVE_RUN_STATES_SQL} AND sessionId IS NOT NULL ORDER BY id`,
+    ).all() as unknown as
+      { idText: string; kind: string; state: string; sessionId: string; claimedBy: string | null;
+        dispatchedAtText: string | null; program: string; waveText: string; waveOfText: string | null;
+        reviewsText: string | null; project: string; workspace: string | null }[];
+    const runs: StallRunRow[] = [];
+    for (const r of rows) {
+      const nums = measureRunNumbers(r);
+      if (!nums.ok) return { ok: false, kind: 'run-unreadable', detail: nums.detail };
+      let dispatchedAt: number | null = null;
+      if (r.dispatchedAtText !== null) {
+        const at = persistedInt(r.dispatchedAtText, 'run dispatchedAt');
+        if (!at.ok) return { ok: false, kind: 'run-unreadable', detail: at.detail };
+        dispatchedAt = at.value;
+      }
+      runs.push({ id: nums.nums.id, kind: r.kind, state: r.state, sessionId: r.sessionId, claimedBy: r.claimedBy,
+        dispatchedAt, program: r.program, wave: nums.nums.wave, waveOf: nums.nums.waveOf,
+        project: r.project, workspace: r.workspace });
+    }
+    return { ok: true, runs };
+  }
+
   /** The sessions COORDINATING something live: every distinct `claimedBy` of a
    *  run this build calls non-terminal. NOT `openRunsForSession`'s question one
    *  method up — that one keys on `sessionId`, the WORKER column, which is the
@@ -2868,6 +3216,149 @@ export class CoordStore {
       'SELECT DISTINCT claimedBy FROM runs ' +
       `WHERE claimedBy IS NOT NULL AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
+  }
+
+  /** Every session EVER named `claimedBy` of any run, in ANY state — the
+   *  past-tense counterpart of `openCoordinatorIds` one method up (which
+   *  answers only LIVE coordination, `state NOT IN` the terminal set, and so
+   *  drops a claim that has since reached a terminal run). Child-workspace
+   *  reclamation (spec 2026-09-22 §1, rules 3–4: manual cleanup is reserved
+   *  for a coordinator's OWN workspace, never a sub-workspace a sweep may
+   *  act on) needs the historical question, not the live one: a child made a
+   *  programme's HEIR — the reclaim door rewrites `claimedBy` onto it — became
+   *  that programme's coordinator the moment the rewrite landed, whatever
+   *  state the run later reaches, so nothing here is excluded by state the
+   *  way `openCoordinatorIds` excludes it. A row `reclaimProgram` rewrote onto
+   *  an already-terminal run still counts: the workspace coordinated it once,
+   *  and a later close does not retroactively make that false.
+   *
+   *  UNIONED WITH THE DISPLACED SIDE too (fix, measured): a bare `SELECT
+   *  DISTINCT claimedBy` alone answers "who coordinates each programme NOW",
+   *  not "who ever has" — `reclaimProgram`'s own `UPDATE runs SET claimedBy = ?,
+   *  coordProject = ? WHERE program = ? AND claimedBy IS NOT NULL` (above)
+   *  OVERWRITES `claimedBy` on every run of a programme, terminal runs included, so
+   *  the OUTGOING coordinator's own runs no longer name it anywhere in this table
+   *  once an heir takes the chair. The only surviving trace is the `run_events` row
+   *  that move writes once per displaced run: `causedBy:'operator',
+   *  detail:'reclaim:<from> -> <to>'`. That `causedBy`+prefix pair is unique to
+   *  this writer — grepped across `server/src`: every other `recordRunEvent`/
+   *  `advanceInner` call site either uses `causedBy:'coordinator'` or passes no
+   *  `reclaim:`-shaped detail (an ordinary transition's `detail` defaults to
+   *  `null`, which no `LIKE 'reclaim:%'` ever matches) — so the WHERE clause
+   *  below reads exactly `reclaimProgram`'s own rows and nothing another
+   *  writer has ever produced.
+   *
+   *  PARSED, not compared: unlike a hold's grammar (`holdReasonVerdict`,
+   *  compared against the server's own rendering, never parsed back), nothing
+   *  else ever reads this string, so there is no server-rendered form to
+   *  compare it against — it must be parsed, by
+   *  `childReclaimDisplacedCandidates` (above the class), which returns every
+   *  reading of the row that could be its `from` — all of them join the set,
+   *  and that function states what the over-protection costs. A
+   *  `reclaim:`-prefixed row it cannot read at all (no ` -> ` in it) THROWS
+   *  rather than being silently dropped — a row this build cannot attribute
+   *  to a `from` id is a row this build cannot prove is NOT evidence of past
+   *  coordination, and excluding it silently would be the exact fail-open
+   *  this fix exists to close. The executor's own try/catch around this call turns the throw into
+   *  a `siblings-unreadable` deferral (fail shut), the same word it already
+   *  uses for an unreadable `openRunsForSession`.
+   *
+   *  WHAT "EVER" NOW COVERS: every session currently named `claimedBy` of any
+   *  run (any state), UNION every session `reclaimProgram` has ever displaced
+   *  from a programme's chair — closing the gap where a nested coordinator
+   *  dies and an heir takes over (the reclaim door requires the outgoing
+   *  claimant to measure dead or registry-absent first) and the outgoing
+   *  session's own workspace would otherwise fall back into the reclaimable
+   *  population.
+   *  RESIDUAL: a lost or rebuilt `coord.db` loses this history along with
+   *  everything else the database holds — a rebuilt `runs`/`run_events` pair
+   *  starts from nothing, so a pre-loss displacement is unrecoverable here.
+   *  That is the same class of loss every other read in this file accepts as
+   *  fail-closed rather than reconstructible; closing it is not this method's
+   *  job.
+   *
+   *  Returns the whole set, not a per-session boolean, because the reclaim
+   *  sweep reads it ONCE per pass and checks many children against it — a
+   *  per-child query issued once per child would repeat the same table scan
+   *  every pass. The close-path executor and the close decision call it once
+   *  per session and check membership the same way, so the three
+   *  `childReclaim*` consumers share ONE read instead of three spellings of
+   *  the same SELECT.
+   *
+   *  Synchronous, like every other read on this store — see
+   *  `openRunsForSession`'s own docstring for why that is not an oversight to
+   *  be wrapped. */
+  childReclaimCoordinatorIds(): ReadonlySet<string> {
+    const ids = new Set((this.db.prepare(
+      'SELECT DISTINCT claimedBy FROM runs WHERE claimedBy IS NOT NULL',
+    ).all() as { claimedBy: string }[]).map((r) => r.claimedBy));
+    // `substr(...) = 'reclaim:'`, never `LIKE 'reclaim:%'` (child-reclamation
+    // wave 4): SQLite's `LIKE` is case-insensitive for ASCII
+    // by default, so an unrelated OPERATOR note that merely starts
+    // `RECLAIM:…` would have matched the old pattern and then reached
+    // `childReclaimDisplacedCandidates`, whose own `startsWith('reclaim:')`
+    // is case-SENSITIVE — a mismatch it reads as "not this writer's row" and
+    // therefore throws on (a row this build cannot attribute to a `from`).
+    // One hand-written note in the wrong case would have broken automatic
+    // reclamation fleet-wide. `substr` selects only what the writer's own
+    // `reclaim:${…}` template can produce.
+    // `DISTINCT`: `reclaimProgram` writes one identical row per run of the
+    // programme it moves, so N runs would otherwise parse the same text N
+    // times; the candidate length bound is `childReclaimDisplacedCandidates`'s
+    // own (its docstring states why dropping a longer one is safe).
+    const displacements = this.db.prepare(
+      "SELECT DISTINCT detail FROM run_events WHERE causedBy = 'operator' AND substr(detail, 1, 8) = 'reclaim:'",
+    ).all() as { detail: string }[];
+    for (const row of displacements) {
+      const froms = childReclaimDisplacedCandidates(row.detail);
+      if (froms === null) {
+        throw new Error(`run_events carries an unparseable reclaim-displacement row: ${JSON.stringify(row.detail)}`);
+      }
+      for (const from of froms) ids.add(from);
+    }
+    return ids;
+  }
+
+  /**
+   * The run facts `FleetSession.releasedFrom` is decided from (workspace lifecycle spec §5.1), for the sessions
+   * one fleet assembly describes — ONE call per assembly, never one per row, beside `coordPlacementStamps`.
+   * That read cannot answer this: it filters to `coordProject IS NOT NULL` and carries no state.
+   * `openRunsForSession` is per-session and reserved for destructive decision points.
+   *
+   * Three statements, one synchronous call: nothing else writes `coord.db` between them. The claimant set is
+   * `openCoordinatorIds`' own read, reused rather than respelled.
+   *
+   * `id` rides CAST to TEXT and proven, ALL-OR-FAILURE (D-2545's rule, `openRunsForSession`'s): a partial list
+   * is how a session's newest run could silently read as an older, terminal one. `closedAt` is proven PER ROW
+   * instead: an unreadable close time makes that one session's `LastRun.closedAt` null, which `releasedFrom`
+   * reads as doubt, and costs no other row its answer.
+   */
+  lastRunBySession(sessionIds: readonly string[]): LastRunsResult {
+    if (sessionIds.length === 0) return { ok: true, last: [], openWorkers: [], openClaimants: [] };
+    const ph = placeholders(sessionIds.length);
+    const rows = this.db.prepare(
+      'SELECT CAST(r.id AS TEXT) AS idText, r.sessionId, r.state, r.program, p.title AS programTitle, ' +
+      'r.claimedBy, CAST(r.closedAt AS TEXT) AS closedAtText FROM runs r ' +
+      'LEFT JOIN programs p ON p.slug = r.program ' +
+      `WHERE r.id IN (SELECT MAX(id) FROM runs WHERE sessionId IN (${ph}) GROUP BY sessionId) ORDER BY r.id`,
+    ).all(...sessionIds) as unknown as {
+      idText: string; sessionId: string; state: string; program: string; programTitle: string | null;
+      claimedBy: string | null; closedAtText: string | null;
+    }[];
+    const last: LastRun[] = [];
+    for (const r of rows) {
+      const id = persistedInt(r.idText, 'run id');
+      if (!id.ok) return { ok: false, kind: 'run-unreadable', detail: id.detail };
+      const closed = r.closedAtText === null ? null : persistedInt(r.closedAtText, 'closedAt');
+      last.push({
+        sessionId: r.sessionId, runId: id.value, state: r.state, program: r.program,
+        programTitle: r.programTitle, claimedBy: r.claimedBy, closedAt: closed !== null && closed.ok ? closed.value : null,
+      });
+    }
+    const openWorkers = (this.db.prepare(
+      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
+    ).all(...sessionIds) as { sessionId: string }[]).map((r) => r.sessionId);
+    return { ok: true, last, openWorkers, openClaimants: this.openCoordinatorIds() };
   }
 
   /** `detail` joins the SELECT (fix, found in Task 9 review — D-47): `advance`
@@ -3242,6 +3733,22 @@ export class CoordStore {
       // this stays off the wire (`toRunSummary` strips it alongside
       // `prLineage`).
       coordProject: row.coordProject,
+      // The child's BIRTH (migration 16, child-reclamation spec §5.1, §5.3),
+      // read straight through on `coordProject`'s idiom directly above: a
+      // server-side measurement, `bindSession`'s one writer of a NON-NULL
+      // value, stripped off the wire by `toRunSummary` the same way. NULL
+      // means no fresh-spawn bind has ever stamped a birth for the CURRENT
+      // occupant of `sessionId` — an unbound run, an adopted spawn
+      // (deliberately unplaceable), or a predecessor's birth nulled by a
+      // later re-bind.
+      sessionBornAt: row.sessionBornAt,
+      // The session the birth above was recorded FOR (migration 16), read
+      // through on the same idiom. `childBirthOf` refuses to place a birth
+      // unless this equals `sessionId` — the guard against a cross-build
+      // rollback leaving a stale birth on a row an older build has since
+      // rebound (spec §5.3's recycled-slug hazard, extended across a
+      // rollback).
+      sessionBornFor: row.sessionBornFor,
     };
   }
 
@@ -3703,6 +4210,116 @@ export class CoordStore {
   }
 
   /**
+   * The LOWEST id of a mail on `runId` from `fromId` to `toId` (the mail's own
+   * addressee column) whose subject begins with `prefix`, or null. Stall watch
+   * wave 1: `pushNewMail`'s reply bind reads the first stall-check to a worker,
+   * so a reply older than every check is never bound. PREFIX BY `substr`, NEVER
+   * `LIKE`: `LIKE` folds ASCII case and reads `_` and `%` in the prefix as
+   * wildcards, so it would widen what counts as a check.
+   */
+  firstMailIdWithPrefix(runId: number, fromId: string, toId: string, prefix: string): number | null {
+    const row = this.db.prepare(
+      'SELECT MIN(id) AS id FROM mail WHERE runId = ? AND fromId = ? AND toId = ? ' +
+      'AND substr(subject, 1, length(?)) = ?',
+    ).get(runId, fromId, toId, prefix, prefix) as { id: number | null } | undefined;
+    return row?.id ?? null;
+  }
+
+  /**
+   * One read per stall candidate (stall watch wave 2, `one-mail-read-per-candidate` (D-3641)): every mail the lane's
+   * verdicts judge, and the delivery rows of exactly those mails, in two statements.
+   *
+   * Statement 1: the mail rows, oldest id first. A row is selected when it is on one of `runIds` (the run
+   * verdict's history, UNBOUNDED, because the ladder keys on the run's whole exchange), or when it touches the
+   * session inside the horizon: sent by it, addressed to it by the row's own `toId`, or delivered to it (a mail
+   * to the coordinator ROLE carries the role in `toId`, and the session only on its delivery row). The horizon
+   * is `at >= sinceAt` (`stall-mail-read-time-bounded` (D-3651)), and the lane passes `now - BACKLOG_HORIZON_MS`.
+   * PLANNED ON INDEXES, NEVER A TABLE SCAN (schema.ts's stall-read entry; `stall-store.test.ts` pins each plan): the
+   * run clause reads `mail_by_run`, the horizon `mail_by_at`, and both delivery reads `mail_deliveries_by_mail`. Two
+   * shapes here exist for the planner, and neither changes an answer. The delivered-to subquery is bounded by the
+   * horizon too: the outer row it selects must pass `at >= sinceAt` anyway, so the bound only lets the subquery walk
+   * `mail_by_at` instead of every delivery (there is deliberately no index led by `toId`; schema.ts says why).
+   * Statement 1 is MATERIALIZED before its ORDER BY, because this server never runs ANALYZE and the planner
+   * otherwise prefers a rowid-order scan of all of `mail` to an index read and a sort. An empty `runIds` drops the
+   * run clause rather than binding an empty list.
+   *
+   * The read is a SUPERSET of the run's mail. The lane therefore narrows the run verdict's `StallInput.mail`
+   * through L1's `stallRunMail` (`run-mail-filtered-in-l1` (D-3650)), and only the session verdicts see the whole read.
+   *
+   * Statement 2: those mails' delivery rows, oldest delivery id first. A re-queued mail has two, and the newest
+   * is the live one. Its predicate is statement 1's own, as a subquery, bound with the same values, so it binds
+   * a handful of values however long the run's history is. The two statements run back to back on this one
+   * synchronous handle with no await between them, so they see the same mail. The gate columns are SELECTED as
+   * plain values and never filter, order or group (D-792: a diagnostic is not a scheduling input). L1 decides
+   * mail-stuck from them, and `watch.ts` passes the rows through whole without naming a field
+   * (`delivery-and-deaf-facts-ride-the-mail-read` (D-3648)).
+   *
+   * Every integer is CAST and proven (D-2545), `runId` included: an off-run row's `runId` equals none of the
+   * bound ids, so it cannot be read raw the way wave 1's run-only read did. SQL NULL is decided here, at the call
+   * site, never inside `persistedInt`. ALL-OR-FAILURE: one unrepresentable value refuses the whole read, the
+   * kind names its table (`mail-unreadable` or `delivery-unreadable`), and the detail names the column and no value.
+   * `kind`, `state` and `lastGate` are the raw columns: L1 compares
+   * them with words, and an unnamed token matches none.
+   */
+  stallMailFor(sessionId: string, runIds: readonly number[], sinceAt: number): { ok: true; mail: StallMailRow[]; deliveries: StallDeliveryRow[] } | { ok: false; kind: Extract<StallReadFailure, 'mail-unreadable' | 'delivery-unreadable'>; detail: string } {
+    const onRuns = runIds.length === 0 ? '' : `runId IN (${placeholders(runIds.length)}) OR `;
+    const where = `${onRuns}((fromId = ? OR toId = ? OR id IN (SELECT mailId FROM mail_deliveries WHERE toId = ? ` +
+      'AND mailId IN (SELECT id FROM mail WHERE at >= ?))) AND at >= ?)';
+    const binds = [...runIds, sessionId, sessionId, sessionId, sinceAt, sinceAt];
+    const rows = this.db.prepare(
+      'WITH sel AS MATERIALIZED (SELECT id, CAST(id AS TEXT) AS idText, CAST(at AS TEXT) AS atText, ' +
+      `CAST(runId AS TEXT) AS runIdText, fromId, toId, kind, subject FROM mail WHERE ${where}) ` +
+      'SELECT idText, atText, runIdText, fromId, toId, kind, subject FROM sel ORDER BY id',
+    ).all(...binds) as unknown as
+      { idText: string; atText: string; runIdText: string | null; fromId: string; toId: string; kind: string; subject: string }[];
+    const mail: StallMailRow[] = [];
+    for (const r of rows) {
+      const id = persistedInt(r.idText, 'mail id');
+      if (!id.ok) return { ok: false, kind: 'mail-unreadable', detail: id.detail };
+      const at = persistedInt(r.atText, 'mail at');
+      if (!at.ok) return { ok: false, kind: 'mail-unreadable', detail: at.detail };
+      let runId: number | null = null;
+      if (r.runIdText !== null) {
+        const onRun = persistedInt(r.runIdText, 'mail runId');
+        if (!onRun.ok) return { ok: false, kind: 'mail-unreadable', detail: onRun.detail };
+        runId = onRun.value;
+      }
+      mail.push({ id: id.value, at: at.value, runId, fromId: r.fromId, toId: r.toId, kind: r.kind, subject: r.subject });
+    }
+    if (mail.length === 0) return { ok: true, mail, deliveries: [] };
+    const drows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, CAST(mailId AS TEXT) AS mailIdText, toId, state, ' +
+      'CAST(deliveredAt AS TEXT) AS deliveredAtText, CAST(ackedAt AS TEXT) AS ackedAtText, lastGate, ' +
+      'CAST(gateSince AS TEXT) AS gateSinceText, CAST(replayCount AS TEXT) AS replayCountText ' +
+      `FROM mail_deliveries WHERE mailId IN (SELECT id FROM mail WHERE ${where}) ORDER BY id`,
+    ).all(...binds) as unknown as
+      { idText: string; mailIdText: string; toId: string; state: string; deliveredAtText: string | null;
+        ackedAtText: string | null; lastGate: string | null; gateSinceText: string | null; replayCountText: string }[];
+    const nullable = (text: string | null, column: string): { ok: true; value: number | null } | { ok: false; detail: string } =>
+      text === null ? { ok: true, value: null } : persistedInt(text, column);
+    const deliveries: StallDeliveryRow[] = [];
+    for (const d of drows) {
+      const id = persistedInt(d.idText, 'delivery id');
+      if (!id.ok) return { ok: false, kind: 'delivery-unreadable', detail: id.detail };
+      const mailId = persistedInt(d.mailIdText, 'delivery mailId');
+      if (!mailId.ok) return { ok: false, kind: 'delivery-unreadable', detail: mailId.detail };
+      const deliveredAt = nullable(d.deliveredAtText, 'delivery deliveredAt');
+      if (!deliveredAt.ok) return { ok: false, kind: 'delivery-unreadable', detail: deliveredAt.detail };
+      const ackedAt = nullable(d.ackedAtText, 'delivery ackedAt');
+      if (!ackedAt.ok) return { ok: false, kind: 'delivery-unreadable', detail: ackedAt.detail };
+      const gateSince = nullable(d.gateSinceText, 'delivery gateSince');
+      if (!gateSince.ok) return { ok: false, kind: 'delivery-unreadable', detail: gateSince.detail };
+      // NOT NULL DEFAULT 0, and zero is decided here as NULL is for the nullable columns, because `persistedInt` proves a
+      // positive count (`gate-held-mail-is-not-stuck` (D-3798): coord-deaf tells a first delivery from a replay by it).
+      const replayCount = d.replayCountText === '0' ? { ok: true as const, value: 0 } : persistedInt(d.replayCountText, 'delivery replayCount');
+      if (!replayCount.ok) return { ok: false, kind: 'delivery-unreadable', detail: replayCount.detail };
+      deliveries.push({ id: id.value, mailId: mailId.value, toId: d.toId, state: d.state, deliveredAt: deliveredAt.value,
+        ackedAt: ackedAt.value, lastGate: d.lastGate, gateSince: gateSince.value, replayCount: replayCount.value });
+    }
+    return { ok: true, mail, deliveries };
+  }
+
+  /**
    * `'coordinator'` is a ROLE, not a session id (Task 7's own docstring on the
    * ingress route). With a `runId`, it is that run's own claim; with none, it
    * is the claim of the ONE active program — ambiguous (more than one active
@@ -3951,6 +4568,34 @@ export class CoordStore {
     return row !== undefined;
   }
 
+  /** Whether ANY mail with this exact (fromId, runId, toId, subject) was ever
+   *  queued — in EVERY delivery state, which is the whole difference from
+   *  `hasOutstandingMail` above. Two readers. `queueStallNotice`'s run-less arm
+   *  (stall watch wave 2, `run-less-stall-notice` (D-3640)): a session notice has no
+   *  `run_events` row to dedupe on, so this is its durable "already sent", and
+   *  its subject names the episode to the day and minute
+   *  (`self-mail-subjects-carry-the-date` (D-3668)). And `sweepLanding`'s durable
+   *  "already told" read (landing-order wave 2, which finds this method here
+   *  and adds no second copy: `has-mail-with-subject-lands-here-first` (D-3639)): its
+   *  latch is in memory, `queueSystemMail`'s dedupe sees outstanding rows only,
+   *  and a PR that stays dequeued through a fix round would otherwise be mailed
+   *  again after every server restart once its first notice was acked. `mail`
+   *  is never pruned, so this answer does not decay. `toId` is the mail row's
+   *  own, which for system mail is the resolved session id `queueSystemMail`
+   *  was handed. It reads `mail` alone and names no delivery table, so the
+   *  delivery-writer census does not see it. It answers a bare `boolean`, not
+   *  a result union, deliberately: landing-order wave 2's plan inserts this
+   *  exact method, and byte-identity with it wins over the rule that a new
+   *  store member answers a union. There is no third condition to carry
+   *  either: a failed read throws to its caller, and never folds into
+   *  `false`. */
+  hasMailWithSubject(fromId: string, runId: number | null, toId: string, subject: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 AS x FROM mail WHERE fromId = ? AND runId IS ? AND toId = ? AND subject = ? LIMIT 1',
+    ).get(fromId, runId, toId, subject);
+    return row !== undefined;
+  }
+
   /** Whether an OUTSTANDING peer mail with this exact (fromId, toId, subject)
    *  triple exists — the 409 'duplicate' probe (Build 9b wave 0, D10 hole 2).
    *  `runId IS NULL` no longer scopes it to the peer lane by construction —
@@ -4024,9 +4669,11 @@ export class CoordStore {
    * and this method never re-derives its argument — it only stores what the
    * caller already computed.
    *
-   * GUARDED. The three direct callers expand to FIVE reachable paths, all in
+   * GUARDED. The three direct callers expand to SIX reachable paths, all in
    * the same transaction as their `queueDelivery`: the mail route's send `tx`,
-   * the system-mail queue's own `tx`, `dispatchRun`'s dispatch `tx` through
+   * the system-mail queue's own `tx` and the stall watch's (`queueSystemMail`
+   * and `queueStallNotice`, each around `rundefs.ts`'s `insertSystemMailTx`),
+   * `dispatchRun`'s dispatch `tx` through
    * `markDispatched` -> `bindSession` -> `requeueAbandonedMail`,
    * `reclaimProgram`'s `tx`, and the open route's post-hold `tx` through
    * `setSession` -> `bindSession` (D-2505). `tx` is `BEGIN IMMEDIATE` over a
@@ -4328,17 +4975,40 @@ export class CoordStore {
    *  other writer of this column is: the row's recorded reason for its own
    *  terminal state should name the write that actually caused it.
    *
-   *  `countsAsAttempt` (default `true`): `false` belongs to three refusal paths
+   *  `countsAsAttempt` (default `true`): `false` belongs to four refusal paths
    *  that are not send failures. The registry-unmeasurable and tmux-unknown
-   *  branches never reach `sendPrompt`; D-2369's `auto-continue-armed` hold
-   *  reaches it but refuses before any keystroke. `attempts` is SEND-FAILURE
-   *  budget (`MAIL_MAX_ATTEMPTS`'s own docstring), so none may march toward the
-   *  same park ceiling as a prompt that was actually attempted and failed. */
+   *  branches never reach `sendPrompt`; D-2369's `auto-continue-armed` hold and
+   *  the stall watch's `turn-running` hold reach it but refuse before any
+   *  keystroke. `attempts` is SEND-FAILURE budget (`MAIL_MAX_ATTEMPTS`'s own
+   *  docstring): none may march toward the park ceiling of a failed prompt. */
   backOff(id: number, lastError: string, nextAttemptAt: number, countsAsAttempt = true): void {
     this.db.prepare(
       'UPDATE mail_deliveries SET attempts = attempts + ?, lastError = ?, nextAttemptAt = ? ' +
       `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(countsAsAttempt ? 1 : 0, lastError, nextAttemptAt, id);
+  }
+
+  /**
+   * The stall watch's hold-3 read (spec 2026-09-29 §4.2 hold 3): the LATEST
+   * `nextAttemptAt` over still-outstanding deliveries to `toId` that the mail
+   * sweep backed off because the recipient's pane had an auto-continue armed
+   * (`AUTO_CONTINUE_ARMED_LAST_ERROR`, a `backOff` reason and never a
+   * `MailGate`), or null when there is none. The lane subtracts
+   * `MAIL_ARMED_HOLD_MS` in `watch.ts`, where that constant is private, to get
+   * the hold's START; this read derives no time of its own. OUTSTANDING ONLY
+   * (`OUTSTANDING_STATES_SQL`, named in the reader walk above): an acked or
+   * parked row is not a hold on anyone. `nextAttemptAt` is CAST and proven
+   * (D-2545), so an unrepresentable value answers in words rather than
+   * throwing out of the lane.
+   */
+  autoContinueHeldUntil(toId: string): { ok: true; until: number | null } | { ok: false; kind: Extract<StallReadFailure, 'delivery-unreadable'>; detail: string } {
+    const row = this.db.prepare(
+      'SELECT CAST(MAX(nextAttemptAt) AS TEXT) AS untilText FROM mail_deliveries ' +
+      `WHERE toId = ? AND lastError = ? AND state IN ${OUTSTANDING_STATES_SQL}`,
+    ).get(toId, AUTO_CONTINUE_ARMED_LAST_ERROR) as { untilText: string | null } | undefined;
+    if (row === undefined || row.untilText === null) return { ok: true, until: null };
+    const until = persistedInt(row.untilText, 'delivery nextAttemptAt');
+    return until.ok ? { ok: true, until: until.value } : { ok: false, kind: 'delivery-unreadable', detail: until.detail };
   }
 
   /**
@@ -4486,6 +5156,18 @@ export class CoordStore {
     }));
   }
 
+  /** Whether the feed archive holds a record of this kind, about this session,
+   *  with exactly this body — `sweepLanding`'s durable "already told" read for
+   *  a removal no open run names (landing-order wave 2), whose body carries the
+   *  removal time. Bounded by `FEED_RETENTION` like every feed read: a record
+   *  pruned out of the archive reads as never recorded, and is announced again. */
+  hasFeedEvent(kind: string, sessionId: string, body: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 AS x FROM feed_events WHERE kind = ? AND sessionId = ? AND body = ? LIMIT 1',
+    ).get(kind, sessionId, body);
+    return row !== undefined;
+  }
+
   /**
    * `GET /api/feed?program=<slug>`'s reader — the events of one programme,
    * oldest-first and clamped exactly as `feedEvents` clamps its own, through
@@ -4555,17 +5237,25 @@ export class CoordStore {
    * way `project`/`workspace` are — those degrade because they have no
    * meaning without a run; `runId` itself is the fact the predicate needs
    * verbatim, null included.
+   *
+   * `runSessionId` (stall watch wave 1) is the RUN's worker, `runs.sessionId`
+   * off the same `LEFT JOIN`: null for run-less mail and for a run not yet
+   * dispatched. `pushNewMail`'s stall reply bind needs it, because a reply's own
+   * `fromId` is only a CLAIM to be the worker, and the bind checks that claim
+   * against the run. Additive: every existing reader ignores it.
    */
   mailQueuedSince(sinceId: number): { deliveryId: number; mailId: number; toId: string; fromId: string;
                                        runId: number | null; kind: string; subject: string;
-                                       project: string | null; workspace: string | null }[] {
+                                       project: string | null; workspace: string | null;
+                                       runSessionId: string | null }[] {
     return this.db.prepare(
       'SELECT d.id AS deliveryId, m.id AS mailId, d.toId, m.fromId, m.runId, m.kind, m.subject, ' +
-      'r.project, r.workspace ' +
+      'r.project, r.workspace, r.sessionId AS runSessionId ' +
       'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId LEFT JOIN runs r ON r.id = m.runId ' +
       'WHERE d.id > ? ORDER BY d.id',
     ).all(sinceId) as { deliveryId: number; mailId: number; toId: string; fromId: string; runId: number | null;
-                         kind: string; subject: string; project: string | null; workspace: string | null }[];
+                         kind: string; subject: string; project: string | null; workspace: string | null;
+                         runSessionId: string | null }[];
   }
 
   /** `run_events`'s current high-water id — same priming role as
@@ -4879,7 +5569,49 @@ export class CoordStore {
           refusal: string | null; detail: string | null; truncated: number;
           obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
         }[];
-    return rows.map((r) => ({
+    return rows.map((r) => CoordStore.reviveLifecycleRow(r));
+  }
+
+  /** One session's `create` rows ALONE, oldest-first, UNCAPPED by
+   *  `LIFECYCLE_PAGE_MAX` (child-reclamation wave 4, spec §5.1's birth fence):
+   *  a failing child's ordinary window (`lifecycleFor`, 500 rows) scrolls past
+   *  its own opening `create` in days of retried refusals, and the run-id fence
+   *  needs that row for the LIFE of the workspace, not for as long as it fits
+   *  a page. Bounded to one ACT: `lifecycle_by_session` is `(sessionId, id)`,
+   *  so this still walks every row of the session (filtering `act` after the
+   *  index narrows to the session) rather than a narrower index on `act`
+   *  itself — a cost bound on the SESSION, not the whole table, and never
+   *  the oldest `create` either, which would skip every recycled slug
+   *  (spec §5.6): `childReclaimGeneration`, this read's one caller, is what
+   *  narrows "every create this session ever had" down to the CURRENT
+   *  generation's own opening row. Same column set, same reviver, as
+   *  `lifecycleFor` — `reviveLifecycleRow` is the one definition both share. */
+  lifecycleCreatesFor(sessionId: string): MirroredLifecycleEvent[] {
+    const c = CoordStore.LC_COLS;
+    const act: LifecycleAct = 'create';
+    const rows = this.db.prepare(
+      `SELECT ${c} FROM lifecycle_events WHERE sessionId = ? AND act = ? ORDER BY id ASC`,
+    ).all(sessionId, act) as {
+      uid: string | null; gen: string; at: number | null; ingestedAt: number;
+      act: string; badact: string | null; outcome: string; badoutcome: string | null;
+      verb: string | null; sessionId: string | null; tx: string | null;
+      refusal: string | null; detail: string | null; truncated: number;
+      obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
+    }[];
+    return rows.map((r) => CoordStore.reviveLifecycleRow(r));
+  }
+
+  /** The reviver `lifecycleFor` and `lifecycleCreatesFor` share, extracted so
+   *  a column gaining a field lands in both readers or neither — never one and
+   *  not the other. Private and static: it touches no instance state. */
+  private static reviveLifecycleRow(r: {
+    uid: string | null; gen: string; at: number | null; ingestedAt: number;
+    act: string; badact: string | null; outcome: string; badoutcome: string | null;
+    verb: string | null; sessionId: string | null; tx: string | null;
+    refusal: string | null; detail: string | null; truncated: number;
+    obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
+  }): MirroredLifecycleEvent {
+    return {
       uid: r.uid, gen: r.gen, at: r.at, ingestedAt: r.ingestedAt,
       // Through the guards, never a cast — the same discipline `feedEvents`
       // gives `kind` and `programs()` gives `state`. A token a NEWER build
@@ -4904,7 +5636,25 @@ export class CoordStore {
       dec: reviveDec(jsonOrNull(r.decJson)),
       meas: reviveMeas(jsonOrNull(r.measJson)),
       raw: r.raw,
-    }));
+    };
+  }
+
+  /** Every session id the lifecycle mirror holds a `reclaim` row for
+   *  (child-reclamation wave 4, spec §5.9) — the NARROWING read before the
+   *  sweep's per-session history reads: it asks `lifecycleFor`/
+   *  `lifecycleCreatesFor` only for the listed rows in this set, so a registry
+   *  full of non-children costs one statement a sweep, not one per row. A
+   *  SUPERSET on purpose: it names ids whose only `reclaim` rows belong to an
+   *  EARLIER workspace under a recycled slug (spec §5.6), and the generation
+   *  fence (`childReclaimGeneration`) is what drops those — this method
+   *  decides nothing about generations. The act is BOUND, typed against its
+   *  union, so it is not a second hand-spelled literal. */
+  childReclaimSessionIds(): Set<string> {
+    const act: LifecycleAct = 'reclaim';
+    const rows = this.db.prepare(
+      'SELECT DISTINCT sessionId FROM lifecycle_events WHERE act = ? AND sessionId IS NOT NULL',
+    ).all(act) as { sessionId: string }[];
+    return new Set(rows.map((r) => r.sessionId));
   }
 
   /** The holes, newest-first — a timeline with a hole in it says so. */

@@ -1,5 +1,5 @@
-// QuickConfirm — the confirm-with-consequence-sentence sheet used by stop and
-// move-account flows. The consequence line does the explaining in plain
+// QuickConfirm — the confirm-with-consequence-sentence sheet used by the
+// release, forget and move-account flows. The consequence line does the explaining in plain
 // language; confirming closes the sheet (callers surface progress/failure via
 // toast). Cancel and scrim both just close.
 //

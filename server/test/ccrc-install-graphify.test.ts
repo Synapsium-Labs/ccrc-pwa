@@ -26,9 +26,10 @@ import {
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
+import { assertNoRealTool } from './containedTools.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
-import { installFixtureTree } from './installTreeFixture.js';
+import { installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -124,9 +125,11 @@ function freshBox(prefix: string): string {
 
 interface Result { code: number; stdout: string; stderr: string }
 
-/** `ccrc-install.test.ts`'s `ccrcEnv`, copied unchanged. */
+/** `ccrc-install.test.ts`'s `ccrcEnv`, copied unchanged — and, since wave 9 R10d (D-3818), starting from the same
+ *  `ccrcContainedEnv(…, { managers: true, curl: 'poison' })`: this copy has no `adoptPlantedSystemd` and no
+ *  systemd-run front, so it takes the manager poisons — its own systemctl below replaces that one. */
 function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
   const plant = (name: string, body: string): void => {
     if (omit.includes(name)) { rmSync(join(home, '.local', 'bin', name), { force: true }); return; }
     writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });
@@ -156,6 +159,9 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     '      [ "$3" = "$bad" ] && { echo "Failed to enable unit $3: fixture" >&2; exit 1; }',
     '    fi',
     '    exit 0 ;;',
+    // Plan 3a Task 6: the usage converge (`_inst_enable`) may withdraw a ccrc
+    // usage timer; recorded and answered here, never a real manager.
+    '  disable) [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
     '  restart)',
     '    [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
     '    if [ -f "$HOME/fixture-restart-fail" ]; then',
@@ -294,8 +300,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   plant('npm',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
-  plant('rsync',
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
+  plant('rsync', rsyncRecorder(RSYNC));
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
@@ -333,6 +338,8 @@ function runInstall(home: string, args: string[] = ['install'],
   for (const [name, body] of Object.entries(opts.stubs ?? {})) {
     writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });
   }
+  // Wave 9 R10d: on the FINAL env, as `ccrc-install.test.ts`'s runner does.
+  assertNoRealTool(env, home);
   const ccrc = ccrcIn(treeRoot(home));
   const r = spawnSync(BASH, [ccrc, ...args], { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
@@ -384,6 +391,13 @@ function plantFakeVenv(home: string, version = '0.9.9'): string {
     { mode: 0o755 });
   return bin;
 }
+
+describe('ccrcEnv: containment (wave 9 R10d)', () => {
+  it('ccrcEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {
+    const home = mkTmp('ccrc-graphify-contained-');
+    expect(() => assertNoRealTool(ccrcEnv(home), home)).not.toThrow();
+  });
+});
 
 describe('ccrc install: graphify engine step', () => {
   it('installs the pin into the venv and writes the stamp', () => {

@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { FAILURE_KINDS, MAIL_MAX_ATTEMPTS, SUITE_WORDS, WAVE_DONE_SUBJECT, type PrPhase } from '../../shared/api.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 import { SUBAGENT_CLASSES } from '../../shared/models.mjs';
+import { STALL_RESUMING_KINDS, STALL_WAKE_KINDS } from '../src/coord/stall.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/worker-skill');
@@ -34,7 +35,7 @@ const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
  *  first. */
 const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
-// The fifteen clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
+// The seventeen clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
 // quotes `toId:'coordinator'` — the one genuinely single-quoted literal left,
 // since clause 1 stopped quoting `'#S'` — and clause 9 carries the apostrophe in
 // `done-claim's` (its eight enum words are BACKTICKED, not single-quoted).
@@ -67,14 +68,27 @@ const CONTRACT = [
   "When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session's pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child's reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator's; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.",
   "Route your own subagents by the shape of their task, from `../ccrc-coordinator/references/routing-matrix.md`, and never let one inherit your model: name the class on every Agent or Workflow call and the effort on every Workflow `agent()` call (an Agent-tool subagent runs at your own effort) — implementation from a spec'd plan on Sonnet at high, review with judgement and adversarial verification on Opus at high, scouts and transcription-grade edits on Haiku, and Fable never as a fan-out worker. A subagent effort the brief names governs over that default.",
   "Your wave-done body opens with two signal lines the server parses, before any prose and before the fingerprint: `suite: green|red|unrun` says whether the whole suite passed on its FIRST full run after this wave's implementation was complete (red stays red however many fix rounds followed; unrun when no full run happened), and, only when a check failed, `failure: shallow|ceiling|unclear` names the kind — shallow for tests missed or a plan half-followed, ceiling for an ambiguity you could not resolve, a design flaw or a debug that survived two attempts, unclear otherwise. The suite line is never omitted.",
+  // Landing-order wave 1 (spec 2026-09-23 §5.1). The probe's exit code alone
+  // is NOT the conflict verdict: measured on git 2.43, `git merge-tree
+  // --write-tree` exits 1 for a conflict (a tree id on stdout's first line)
+  // AND for an unresolvable ref (`not something we can merge`, stdout empty),
+  // so the clause names both halves of the conflict answer and says what every
+  // other answer licenses: nothing.
+  "Absorb `origin/main` into this branch only on one of three triggers, each read after one `git fetch origin`: your own probe `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its first line (the branch conflicts; exit 0 is clean, and any other answer is unmeasured and licenses nothing); a required check on your PR is red while main passes the same tests, measured by re-running its failing test files on a clean checkout of `origin/HEAD` in scratch; or a `fix-round` mail from the coordinator names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository. The first two license at most one absorption per PR — a second occurrence before the first absorption lands is not a second license — and the third arrives on the `merging → working` edge, after which you absorb, re-gate and send a fresh `wave-done`. Absorb with `git merge` only: never a rebase, a force-push or `update-branch` by any route, including `gh api -X PUT`. Never write any repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`. Never hand-resolve a generated stamp: on a conflict in a `# ccrc:generated` line such as `ccd/ccd`'s line 2, take either side of that line only, resolve every other hunk of the file as the source it is, then run `~/.local/bin/ccrc restamp <file>`. A red that main also shows is reported once as `main-red` and left alone. Keep no local `main`: read `origin/HEAD`, fetched once.",
+  // Worker stall watch, wave 3 (spec 2026-09-29 §6.2): ASCII only, no apostrophe.
+  "End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent or workflow you launched from your main thread yourself that has not yet reported, or a structured ask. A background shell or Monitor is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn ends.",
 ];
+
+/** The absorb clause, by its own index — the one clause licensed to name
+ *  `update-branch`, and it names it to forbid it (spec §5.1 "Pins"). */
+const ABSORB = CONTRACT[15]!;
 
 /** The forbidding clause, by its own index — named once so a re-ordering of the
  *  array cannot silently point the census at the wrong sentence. */
 const FORBIDS = CONTRACT[7]!;
 
 describe('the worker skill: its contract', () => {
-  it('carries all fifteen clauses verbatim', () => {
+  it('carries all seventeen clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -158,15 +172,43 @@ describe('the worker skill: its contract', () => {
   });
 
   // Child reclamation, wave 3 (spec 2026-09-22 §6): NOT a clause — clause 8 is
-  // unchanged and the count stays fifteen — but a sentence in the reporting
+  // unchanged and the count was fifteen then, unmoved by this wave — but a sentence in the reporting
   // section, because it is the fact a worker needs at the moment it reports.
-  it('says, in its reporting section, that this workspace ends when its run closes', () => {
-    const at = skill.indexOf('**This workspace ends when its run closes.**');
+  it('says, in its reporting section, that this workspace ends when the coordinator is finished with it', () => {
+    const at = skill.indexOf('**This workspace ends when the coordinator is finished with it — usually when\nits run closes.**');
     expect(at, 'the sentence is gone').toBeGreaterThanOrEqual(0);
     expect(at, 'it moved out of the reporting section').toBeGreaterThan(skill.indexOf('## Reporting a wave-done'));
     expect(at).toBeLessThan(skill.indexOf('## When something is wrong'));
     expect(skill.slice(at).replace(/\s+/g, ' ')).toContain('committed for you as a WIP commit and attic-pinned');
     expect(skill).not.toContain('ws-reclaim');
+  });
+
+  it('names `update-branch` ONLY inside clause 16, which forbids it — counted, not absent (spec §5.1)', () => {
+    // The skill corpus is where the word is LICENSED, once, to forbid it; the
+    // executable source is where it is absent (`update-branch-absent.test.ts`).
+    // EQUALITY, as the destructive-verb census above: an extra mention anywhere
+    // else in SKILL.md is a model given a reason to consider the act.
+    // (`allow_update_branch` is spelled with underscores and is not a hit.)
+    const hits = skill.split('update-branch').length - 1;
+    const licensed = ABSORB.split('update-branch').length - 1;
+    expect(licensed, 'clause 16 no longer names update-branch to forbid it').toBe(1);
+    expect(hits, `update-branch appears ${hits}×; only clause 16 may name it`).toBe(licensed);
+  });
+
+  it('clause 16 names the probe with both halves of its conflict answer, the settings it never writes, and the regenerator', () => {
+    // A clause that said "exits 1" alone would license an absorb on a
+    // mistyped ref: git 2.43 exits 1 for `not something we can merge` too.
+    expect(ABSORB).toContain('git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD');
+    expect(ABSORB).toContain('exits 1 with a tree id on its first line');
+    expect(ABSORB).toContain('any other answer is unmeasured and licenses nothing');
+    // Spec §4's Worker row: settings writes are forbidden to the worker too.
+    expect(ABSORB).toContain('rulesets, branch protection, auto-merge setting or `allow_update_branch`');
+    // The STAMP line is taken, never the whole file: `ccd/ccd` is hand-written
+    // source carrying a stamp, and taking one side of the file would drop the
+    // other side's hunks. And the launcher by its PATH: `~/.local/bin` is not
+    // on the fleet session unit's PATH (this skill's own ccrc-api section).
+    expect(ABSORB).toContain('take either side of that line only');
+    expect(ABSORB).toContain('`~/.local/bin/ccrc restamp <file>`');
   });
 
   it('carries no references of its own — the census corpus is the whole skill (D-103)', () => {
@@ -626,5 +668,122 @@ describe('the worker skill: the routing clauses (routing slice 2)', () => {
       .toContain(`The subject is exactly \`${WAVE_DONE_SUBJECT}\``);
     expect(skill, 'the worked mail-send JSON no longer carries the exact wave-done subject')
       .toContain(`"subject":"${WAVE_DONE_SUBJECT}"`);
+  });
+
+  // The reclaim switch is the operator's alone (child-reclamation spec §5.8).
+  // ccd has no caller auth, so `ccd reclaim-pause --state on` from a session's
+  // own shell is a door the route's session gate cannot close — and the
+  // session most motivated to walk through it is the one whose workspace is
+  // about to be reclaimed. The skill names neither the verb nor the marker it
+  // writes (`reclaim-paused` contains the same token).
+  it('never names the reclaim switch — neither the route nor the bare ccd verb', () => {
+    expect(skill).not.toContain('reclaim-pause');
+  });
+});
+
+// ── Worker stall watch, wave 3 (spec 2026-09-29 §6.2) ────────────────────────
+// APPENDED at the foot. The stop clause exists for two measured stalls: S3, a
+// worker that ended its turn on a background shell that never reported, and S4,
+// one that counted an agent's interim completion as a wake. The verbatim pin
+// holds today's bytes; these rows hold the two properties through any later
+// rewording. They read SKILL.md and find the clause by its opening words, never
+// by its number, which §10 assigns at merge. The server half is `stall.ts`'s
+// kind map, whose comments cite this clause: a shell can wake a session and
+// never resumes one.
+describe('the stop clause names only wakes that wake (stall watch spec §6.2)', () => {
+  const stopClause = (): string | undefined =>
+    skill.split('\n').find((l) => /^\d+\. End a turn only on a wake you can name: /.test(l));
+
+  it('lists no background shell, Bash or Monitor among its wakes, and says a shell never is one (S3)', () => {
+    const line = stopClause();
+    expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
+    // The wake list is the first sentence after the colon.
+    const wakes = line!.slice(0, line!.indexOf('. ', line!.indexOf(': ')) + 1);
+    expect(wakes, 'the wake list lost its last member').toContain('or a structured ask.');
+    // Case-insensitive, on word boundaries: a lowercase `monitor` or `bash` is the same dead wait.
+    const named = /\b(shell|bash|monitor)\b/i.exec(wakes)?.[1];
+    expect(named, `the wake list names ${named}: the wait S3 never woke from`).toBeUndefined();
+    expect(line).toContain('A background shell or Monitor is never that wake');
+    expect(STALL_WAKE_KINDS, 'stall.ts no longer counts a shell among the kinds that can wake a session')
+      .toContain('shell');
+    expect(STALL_RESUMING_KINDS, 'stall.ts now reads a shell as resuming the session, which the clause denies')
+      .not.toContain('shell');
+  });
+
+  it('does not count an agent that may resume on its own as a wake (S4)', () => {
+    const line = stopClause();
+    expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
+    expect(line).toContain(
+      'an agent whose completion says it may resume on its own has reported, and is not that wake either');
+  });
+
+  // Stall watch wave 7 (`stop-clause-wake-list-allowlist` (D-3806)): ledger R21
+  // F1 and R17 F2. The S3 row above scans for three words, so a rewording that
+  // names a background task, job or command, or says `shells`, passes it; the
+  // S4 row pins one sentence and never reads the list. These two read the wake
+  // list itself. The first is an allowlist: every member must be a mail that
+  // asks, a structured ask, or a background kind whose words map, one for one,
+  // to `stall.ts`'s STALL_RESUMING_KINDS. The second scans the list for any
+  // form of resume, the word S4's interim completion used.
+  // Where the stopping line sits (`wake-list-split-closes-and-joins` (D-3807),
+  // review 262 F3; the rows are D-3806's). Closed: a comma; a semicolon; an `or`
+  // or `and` before a determiner (a, an, any, the, your, one, another, other,
+  // some, every, each, its); an `or` or `and` before a bare plural ("or
+  // background jobs you started"); and an `or`, `and` or `background` after a
+  // background member's kinds, which the tail anchor on the `bg` shape refuses
+  // (none of the three may follow the `you`, `that` or `which` word). So a wake
+  // joined in any of those ordinary ways must match a member shape on its own.
+  // The anchor fails closed: a legitimate `and`, `or` or `background` in that
+  // tail reds too, so a rewording of that member must avoid those three words.
+  // The list splits on every comma, so kinds inside one background member are
+  // joined by `or` or `and` only, with no determiner: "a background agent,
+  // workflow or teammate" leaves a bare "a background agent" that matches no
+  // member shape, and reds on purpose. Not closed, known evasions, and the
+  // stated line (the coordinator rules no further chasing): any text after
+  // "asks" in the mail member that the split does not cut, such as "or all
+  // background jobs", "or until a timer fires", or a capitalised determiner
+  // (the split is case-sensitive); a coordination before "asks" ("a mail or
+  // reminder you set that asks for an answer"); other joins after a background
+  // member's kinds, such as "plus" or "as well as"; a `. ` inside a member, or
+  // a new sentence after the list, because wakeMembers and the S3 row both stop
+  // at the first `. `.
+  const wakeMembers = (line: string): string[] => {
+    const colon = line.indexOf(': ');
+    const list = line.slice(colon + 2, line.indexOf('. ', colon));
+    return list.split(
+      /;\s+|,\s+(?:(?:or|and)\s+)?|\s+(?:or|and)\s+(?=(?:an?|any|the|your|one|another|other|some|every|each|its)\s)|\s+(?:or|and)\s+(?=(?:background\s+)?[a-z]+s\s+(?:you|that|which)\b)/);
+  };
+  /** The word the clause uses for each kind `stall.ts` says resumes the session on its own. */
+  const RESUMING_WORD: Record<string, string> = { subagent: 'agent', workflow: 'workflow' };
+
+  it('admits only a mail that asks, a structured ask, or a kind stall.ts says resumes the session (S3, allowlist)', () => {
+    const line = stopClause();
+    expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
+    expect(Object.keys(RESUMING_WORD).sort(),
+      'stall.ts changed the kinds that resume a session: name the word the clause uses for each, or drop it')
+      .toEqual([...STALL_RESUMING_KINDS].sort());
+    const allowed = new Set(Object.values(RESUMING_WORD));
+    const members = wakeMembers(line!);
+    expect(members.length, 'the wake list split into nothing').toBeGreaterThan(1);
+    for (const m of members) {
+      const mail = /^an? mail\b.*\basks?\b/i.test(m);
+      const ask = /^an? structured ask$/i.test(m);
+      const bg = /^an? background ((?:[a-z]+(?: or | and ))*[a-z]+) (?:you|that|which)\b(?:(?!\b(?:or|and|background)\b).)*$/i.exec(m);
+      expect([mail, ask, bg !== null].filter(Boolean).length,
+        `the wake list member "${m}" is not a mail that asks, a structured ask, or a background kind`).toBe(1);
+      for (const k of bg ? bg[1]!.split(/ or | and /) : []) {
+        expect(allowed.has(k.toLowerCase()),
+          `the wake list counts a background ${k}, which is not the clause's word for any kind stall.ts reads as resuming the session (see RESUMING_WORD)`).toBe(true);
+      }
+    }
+  });
+
+  it('names nothing that may resume on its own among its wakes (S4, scan)', () => {
+    const line = stopClause();
+    expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
+    const wakes = wakeMembers(line!).join(', ');
+    const said = /\bresum\w*/i.exec(wakes)?.[0];
+    expect(said, `the wake list says ${said}: an agent that may resume on its own has reported, and is no wake`)
+      .toBeUndefined();
   });
 });

@@ -7,8 +7,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { repoLabel, substrateFault, type RouteField } from '../../../shared/api';
-import { Button, MailStrip, QuickConfirm, Skeleton, TaskStrip, toast } from '@ccrc/ui';
+import { Button, MailStrip, Skeleton, TaskStrip, toast } from '@ccrc/ui';
 import { SwapSheet } from '../fleet/SwapSheet';
+import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
 import { accountHue, accountLabel } from '../lib/accounts';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { useKeyboardInset } from '../lib/keyboard';
@@ -82,7 +83,7 @@ export function SessionScreen({
   const [raise, setRaise] = useState(0);
   // Lifecycle surfaces behind the header's overflow menu.
   const [swapOpen, setSwapOpen] = useState(false);
-  const [stopOpen, setStopOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [picker, setPicker] = useState<'model' | 'effort' | null>(null);
   const [reapOpen, setReapOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -330,8 +331,9 @@ export function SessionScreen({
   const empty = !loading && events.length === 0 && pending.length === 0 && searchComplete && fileMeasured;
 
   // The substrate gate (spec §4): under a standing fault the console cannot
-  // SEE this session, so the two destructive controls this screen owns — the
-  // dead banner's Restart and the stop confirm — refuse rather than fire at a
+  // SEE this session, so the destructive controls this screen owns — the
+  // dead banner's Restart, the archive sheet (which re-reads it as it fires) and the header's Restore of a main
+  // checkout (the same `/ensure` request as Restart) — refuse rather than fire at a
   // pane nobody can measure. Read through `substrateFault`, never
   // `live.substrate`: the live frame is cast, not revived, so an older
   // server's row lacks the key at runtime. `faultTitle` is SessionLine's
@@ -427,22 +429,15 @@ export function SessionScreen({
     }
   };
 
-  const stopSession = async (): Promise<void> => {
-    // The gate's confirm-path half. The header's Stop menu item is already
-    // disabled under a fault, but the fleet frame updates LIVE beneath an
-    // open confirm and QuickConfirm owns its own button — so the fault is
-    // re-checked at the moment of firing, and the refusal is named (the same
-    // one string) rather than swallowed. Guarded on `faultTitle`, the one
-    // composition site, so TS ties the toast to the check without a second
-    // copy of the template.
-    if (faultTitle !== undefined) {
-      toast(faultTitle, 'error');
-      return;
-    }
+  // The header's Restore, for a session already put away (workspace lifecycle §5.2): a workspace is restored, a main
+  // checkout ensured (`restoreSession`). The header's "Stop session", its confirm and `stopSession` are gone: stop and
+  // archive are one feature, and its sheet re-checks the substrate fault at the moment it fires.
+  const restoreNow = async (): Promise<void> => {
+    if (live === null) return;
     try {
-      await api.stop(id);
+      await restoreSession(live);
     } catch (err) {
-      toast(`Couldn't stop the session — ${apiErrorText(err)}`, 'error');
+      toast(`Couldn't restore — ${apiErrorText(err)}`, 'error');
     }
   };
 
@@ -466,7 +461,8 @@ export function SessionScreen({
         onChangeEffort={changeEffort}
         queuedField={queuedField}
         onMoveAccount={() => setSwapOpen(true)}
-        onStopSession={() => setStopOpen(true)}
+        onArchive={() => setArchiveOpen(true)}
+        onRestore={() => void restoreNow()}
         onOpenHistory={() => setHistoryOpen(true)}
         onReapWorkspace={() => setReapOpen(true)}
         fallback={{ title: project, wrapper }}
@@ -641,14 +637,8 @@ export function SessionScreen({
         onClose={() => setSwapOpen(false)}
         fleet={useFleet}
       />
-      <QuickConfirm
-        open={stopOpen}
-        onClose={() => setStopOpen(false)}
-        title="Stop this session?"
-        consequence="The session goes offline until you start it again. Its conversation is kept."
-        confirmLabel="Stop session"
-        onConfirm={() => void stopSession()}
-      />
+      {/* The one Archive (workspace lifecycle §5.2). No `onStopOnly`: "Stop only" survives in the actions sheet alone. */}
+      <ArchiveSheet session={live} open={archiveOpen} onClose={() => setArchiveOpen(false)} fleet={useFleet} />
       <TerminalDrawer id={id} open={terminalOpen} onClose={() => setTerminalOpen(false)} />
       <HistoryTab id={id} open={historyOpen} onClose={() => setHistoryOpen(false)} />
       <ReapSheet

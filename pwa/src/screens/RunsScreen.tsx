@@ -39,6 +39,7 @@ import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, crossingNote, 
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
+import { ChildReclaimBanner } from '../fleet/ChildReclaimBanner';
 import { CapsControl } from '../fleet/CapsControl';
 import { coordPresence } from '../fleet/coordWords';
 import { ResumeSheet } from '../fleet/ResumeSheet';
@@ -664,6 +665,11 @@ export function RunsScreen({
           nothing until the first `{type:'coord'}` frame has arrived
           (`CoordBanner`'s own `coordFrameSeen` gate). */}
       <CoordBanner store={store} />
+
+      {/* Child-reclamation wave 4 (spec §5.8, §5.9): the reclaim switch and the
+          attention list, one row under the pause banner — `/runs` and nowhere
+          else, rendering nothing until a coord frame that carries the field. */}
+      <ChildReclaimBanner store={store} />
 
       {/* Wave 6, spec §8: the operator's dial on the two coordination caps,
           beside the pause control and on `/runs` alone. Renders nothing until

@@ -63,12 +63,18 @@ describe('Tmux', () => {
   });
 
   it('tmuxTarget applies tmux\'s own `.`/`:` -> `_` rewrite, so a dotted id still finds its session', async () => {
-    // `-s cc-w-my.site` creates `cc-w-my_site` (measured): the unrewritten
-    // anchor answers `can't find session` for a LIVE session — `gone`.
+    // `tmuxName` now creates the sanitised name and `tmuxTarget` anchors it, so
+    // the rewrite happens once, at creation; the unrewritten anchor would answer
+    // `can't find session` for a LIVE session — `gone`.
     expect(tmuxTarget('w-my.site')).toBe('=cc-w-my_site:');
     const f = fake({});
     await new Tmux(f.run).sessionVerdict('w-my.site');
     expect(f.calls[0]).toEqual(['tmux', 'has-session', '-t', '=cc-w-my_site:']);
+  });
+
+  it('tmuxTarget on a colon id and a plain id (wave 9 M8 controls)', () => {
+    expect(tmuxTarget('a:b')).toBe('=cc-a_b:');
+    expect(tmuxTarget('demo')).toBe('=cc-demo:');
   });
 });
 

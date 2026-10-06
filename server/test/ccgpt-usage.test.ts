@@ -2,12 +2,13 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createServer, type IncomingMessage, type IncomingHttpHeaders, type ServerResponse, type Server } from 'node:http';
-import { writeFileSync, mkdirSync, chmodSync, readFileSync, existsSync } from 'node:fs';
+import { writeFileSync, mkdirSync, chmodSync, readFileSync, existsSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { pythonOrSkip, runPy, runPyAsync, ccgptFile, PYSTUB_DIR } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
+import { authAsks, codexAuthDir, deviceFlowMarks, setAuthStubMode, writeAuthStub } from './codexLaneFixture.js';
 
 // Probed once at module scope — same shape as ccgpt-harness.test.ts and
 // ccgpt-proxy.test.ts (task-10-rulings.md (commit af7cc0bc) §5): a missing interpreter must be
@@ -264,13 +265,22 @@ function fullHeaders(status = 200): (req: IncomingMessage, res: ServerResponse) 
 // deadlock (D-3157) that rules `runPy` out for every case whose mock must
 // answer while the child runs.
 
+/** The stand-in Authenticator every publisher case imports (Plan 3a Task 1).
+ *  `pystub`'s one-method class answers a token and nothing else, and it stays
+ *  that minimal (`ccgpt-harness.test.ts` pins it). The publisher's unattended
+ *  guard refuses a runtime whose Authenticator lacks the two device-flow names
+ *  it overrides, so every case that reaches `get_access_token` imports this
+ *  one instead. It is written once, in token mode, and never shared with a
+ *  case that changes its mode. */
+const AUTH_STUB = ((): string => { const d = mkTmp('ccgpt-usage-authstub-'); writeAuthStub(d, d); return d; })();
+
 /** Composes the env a "happy path" or lane-scoped case passes to the
  *  publisher: the litellm stub on `PYTHONPATH`, the lane id, and the
  *  endpoint to poll. `extra` lets a caller add or override one key without
  *  hand-writing the other three. */
 function publisherEnv(id: string, endpoint: string, extra: Record<string, string> = {}): Record<string, string> {
   return {
-    PYTHONPATH: PYSTUB_DIR,
+    PYTHONPATH: AUTH_STUB,
     CCGPT_ACCOUNT_ID: id,
     CCGPT_USAGE_ENDPOINT: endpoint,
     ...extra,
@@ -441,7 +451,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     }
   });
 
-  it('task-10: refuses when lane.json is absent, naming the remedy', async () => {
+  it('task-10, settled by Plan 3a Task 8: refuses when lane.json is absent, naming the two acts that render it', async () => {
     // Deliberately no plantLane() call. A reachable endpoint IS running
     // (never contacted) so the refusal can only be explained by lane.json,
     // not by a coincidental network failure. Uses `runPyAsync`, not the
@@ -459,8 +469,10 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
       expect(r.timedOut).toBe(false);
       expect(r.status).not.toBe(0);
-      expect(r.stderr).toMatch(/lane\.json/);
-      expect(r.stderr).toMatch(/ccrc doctor --fix/);
+      expect(r.stderr).toMatch(/lane\.json does not exist; run `ccrc doctor --fix` \(no class registry yet: /);
+      // A lane with no class registry has nothing `--fix` can render from:
+      // the act that renders its lane.json then is `init`, named with THIS id.
+      expect(r.stderr).toContain(`(no class registry yet: \`ccrc models ${id} init codex\`)`);
       expect(existsSync(limitsPath(home, id))).toBe(false);
       expect(requests.length).toBe(0); // task-10 M-7 (task-10-fix-rulings.md, commit 4893935a): never contacted, measured
     } finally {
@@ -715,7 +727,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       expect(captured.headers['originator']).toBe('codex_cli_rs');
       expect(captured.headers['user-agent']).toBe('codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown');
       expect(captured.headers['session_id']).toBe('00000000-0000-0000-0000-000000000000');
-      expect(captured.headers['authorization']).toBe('Bearer stub-token-not-a-secret');
+      expect(captured.headers['authorization']).toBe('Bearer test-token-not-a-secret'); // Plan 3a Task 1: publisherEnv imports the AUTH_STUB stand-in
       expect(captured.headers['chatgpt-account-id']).toBeUndefined();
       expect((captured.body as { model?: unknown }).model).toBe(model1);
     } finally {
@@ -785,7 +797,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
   // The writer's OTHER output, through the same two real programs: haiku
   // unassigned, so lane.json carries no `probeModel` at all (the writer omits
   // it rather than choosing a fallback). The refusal must name the act that
-  // cures it. `ccrc doctor --fix` did not — no doctor arm renders lane.json,
+  // cures it. `ccrc doctor --fix` does not — its lane.json arm re-renders,
   // and a re-render would read the same null — so this pins the remedy the
   // publisher now names, and that the old one is gone. A mutation that let the
   // publisher proceed would reach a mock that answers, so `runPyAsync` keeps
@@ -811,13 +823,13 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
   });
 
   // Final review F-7: the authDir refusal named `ccrc doctor --fix`, which
-  // renders no lane.json. It now names a `ccrc models` mutation, and this case
+  // then rendered no lane.json. It now names a `ccrc models` mutation, and this case
   // proves that remedy WORKS rather than pinning its text alone: the real
   // materialiser writes the manifest, `authDir` is then stripped from it (a
   // hand edit, or a writer that predates the field), the publisher refuses,
   // one mutation through the real writer re-renders it, and the publisher then
-  // publishes. The ABSENT-file refusal and its `doctor --fix` pin above are
-  // deliberately untouched (deferred to Plan 3).
+  // publishes. The ABSENT-file refusal's remedy above is Plan 3a Task 8's:
+  // `ccrc doctor --fix`, whose lane.json arm renders a missing manifest.
   it('final review F-7: a lane.json with no authDir is refused naming a models mutation, and that mutation cures it', async () => {
     const home = mkTmp('ccgpt-usage-no-authdir-');
     const id = mintId();
@@ -1035,6 +1047,94 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       expect(row).toMatchObject({ five: 17, seven: 42 });
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  // Plan 3a Task 1 (critic #2): the publisher is an unattended oneshot. Its
+  // Authenticator may refresh a token and must never start a device sign-in.
+  // In litellm 1.101.0 that sign-in WRITES device_code_requested_at into
+  // auth.json before it prints a code and polls for 15 minutes, and no
+  // deadline can undo the write. The stand-in's device path records a mark
+  // and makes that same write, so a guard that fails reds on the mark.
+  it('Plan 3a Task 1: a token the runtime can neither use nor refresh is login-required at once — no device flow, no auth.json write, nothing published', async () => {
+    const home = mkTmp('ccgpt-usage-device-');
+    const id = mintId();
+    plantLane(home, id);
+    const stub = join(home, 'auth-stub');
+    writeAuthStub(stub, stub);
+    setAuthStubMode(stub, 'device');
+    const auth = join(home, codexAuthDir(id), 'auth.json');
+    // auth.json is compared by lstat (size, mtime, inode), never read: no test
+    // opens an OAuth file. The stand-in's device step rewrites it, longer.
+    const authStat = (): { size: number; mtimeMs: number; ino: number } => {
+      const st = lstatSync(auth);
+      return { size: st.size, mtimeMs: st.mtimeMs, ino: st.ino };
+    };
+    const before = authStat();
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url, { PYTHONPATH: stub }) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain(`ccgpt-usage: login-required: run ccrc codex login ${id} —`);
+      expect(deviceFlowMarks(stub), 'the device flow started').toEqual([]);
+      expect(authStat(), 'auth.json was written').toEqual(before);
+      expect(r.stdout + r.stderr).not.toMatch(/Enter code/);
+      expect(existsSync(limitsPath(home, id))).toBe(false);
+      expect(requests.length).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
+  // Fix round 1: on a dead refresh token litellm LOGS its own warning, the
+  // token endpoint's answer in it, before the guard refuses. The publisher's
+  // refusal must still be the first thing on its stderr (the journal line an
+  // operator reads), and the endpoint's answer must never reach it. The
+  // stand-in's handler bound sys.stderr at import.
+  it('Plan 3a Task 1 fix round 1: a dead refresh token is login-required FIRST on stderr — litellm\'s warning and the token endpoint\'s answer never reach it', async () => {
+    const home = mkTmp('ccgpt-usage-refresh-');
+    const id = mintId();
+    plantLane(home, id);
+    const stub = join(home, 'auth-stub');
+    writeAuthStub(stub, stub);
+    setAuthStubMode(stub, 'refresh-fails');
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url, { PYTHONPATH: stub }) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr.startsWith(`ccgpt-usage: login-required: run ccrc codex login ${id} — `), r.stderr).toBe(true);
+      expect(r.stderr).not.toContain('ChatGPT refresh token failed');
+      expect(r.stderr).not.toContain('stand-in-token-endpoint-body');
+      // The control: the stand-in did take its logging path.
+      expect(authAsks(stub)).toEqual(['get_access_token']);
+      expect(deviceFlowMarks(stub)).toEqual([]);
+      expect(existsSync(limitsPath(home, id))).toBe(false);
+      expect(requests.length).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
+  it('Plan 3a Task 1: a runtime whose Authenticator lacks a device-flow name the guard overrides is refused runtime-api-moved, before any token is asked', async () => {
+    const home = mkTmp('ccgpt-usage-apimoved-');
+    const id = mintId();
+    plantLane(home, id);
+    const stub = join(home, 'auth-stub');
+    writeAuthStub(stub, stub);
+    setAuthStubMode(stub, 'renamed');
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url, { PYTHONPATH: stub }) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toMatch(/ccgpt-usage: runtime-api-moved: run ccrc update — this runtime's Authenticator has no _login_device_code/);
+      expect(deviceFlowMarks(stub)).toEqual([]);
+      expect(existsSync(limitsPath(home, id))).toBe(false);
+      expect(requests.length).toBe(0);
+    } finally {
+      await close();
     }
   });
 });

@@ -75,9 +75,8 @@ describe('item 9: a SYNCHRONOUS throw from the local spawn halts; a rejected pro
   // PLATFORM-ONLY: stating only what was measured (fix round 1, review 178 F2 — the plan's own Task 4 Step 2
   // contingency). Measured `test-macos 1/2`, run 36552172708: on macOS the promise RESOLVES instead of
   // rejecting, `{ code: 1, stderr: 'could not start the launcher (ENOENT)' }`. The cause was not measured
-  // there; a plausible one is that macOS ships `/usr/bin/true`, not `/bin/true` (this case's hardcoded path),
-  // making the launcher itself the ENOENT rather than an E2BIG from `execve`'s argv limit — so a darwin arm
-  // has nothing to assert here.
+  // there (wave 9, R7b: the earlier guess about `/usr/bin/true` is dropped, it was never measured), so the case
+  // stays Linux-only.
   itLinux('premise (b): only the synchronous arm rejects — a 3 MiB single argument throws E2BIG before anything execs', async () => {
     await expect(boundedUpdateSpawn('/bin/true', ['x'.repeat(3 * 1024 * 1024)], { env: { PATH: '/nonexistent' } }))
       .rejects.toMatchObject({ code: 'E2BIG' });

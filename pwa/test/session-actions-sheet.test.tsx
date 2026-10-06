@@ -18,7 +18,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
 });
 
 /** The REAL server failure shape: runCcd routes answer 502 with `stderr` and
@@ -189,70 +189,82 @@ describe('cleanup, guarded', () => {
   });
 });
 
-describe('archive and restore (D5 rider 1)', () => {
-  it('Archive shows only for an unarchived workspace session, and POSTs /archive', async () => {
-    render(<SessionActionsSheet session={s()} open onClose={() => {}} onReap={() => {}} />);
-    fireEvent.click(screen.getByRole('button', { name: /archive workspace/i }));
-    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(
-      (c) => String(c[0]).endsWith('/demo-quiet-mesa/archive'))).toBe(true));
+describe('archive and restore (workspace lifecycle §5.2: one Archive, Restore on the fold)', () => {
+  /** The archive sheet's own confirm — its primary button, beside the actions sheet's same-named opener. */
+  const confirmArchive = async (): Promise<void> => {
+    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-primary')).not.toBeNull());
+    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-primary')!);
+  };
+  const posted = (suffix: string) => vi.mocked(fetch).mock.calls.some((c) => String(c[0]).endsWith(suffix));
+
+  it('every session offers Archive — a workspace and a main checkout alike — through the one archive sheet', async () => {
+    for (const [session, title] of [[s(), 'Archive this workspace?'],
+      [s({ id: 'claude-demo', workspace: null }), 'Archive this session?']] as const) {
+      const archive = vi.fn(async () => null);
+      renderSheet(session, { archive });
+      expect(screen.queryByRole('button', { name: 'Restore' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+      expect(await screen.findByText(title)).toBeInTheDocument();
+      await confirmArchive();
+      await waitFor(() => expect(archive).toHaveBeenCalledWith(session.id, {}));
+      cleanup();
+    }
   });
 
-  it('Restore shows only on the complement, and POSTs /restore', async () => {
-    render(<SessionActionsSheet session={s({ archivedAt: null })} open onClose={() => {}} onReap={() => {}} />);
-    expect(screen.queryByText(/restore workspace/i)).not.toBeInTheDocument();
-    cleanup();
-    render(<SessionActionsSheet session={s({ archivedAt: 1785300000 })} open onClose={() => {}} onReap={() => {}} />);
-    expect(screen.queryByText(/archive workspace/i)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /restore workspace/i }));
-    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(
-      (c) => String(c[0]).endsWith('/demo-quiet-mesa/restore'))).toBe(true));
+  it.each([
+    ['an archived workspace', s({ status: 'dead', archivedAt: 1785300000, bucket: 'archived' }), '/demo-quiet-mesa/restore'],
+    ['a stopped main checkout', s({ id: 'claude-demo', workspace: null, status: 'dead', bucket: 'dead',
+      stoppedBy: { at: 1785300000_000, surface: 'pwa' } }), '/claude-demo/ensure'],
+    ['a merged-and-archived (`cleanup`) workspace', s({ status: 'dead', archivedAt: 1785300000, bucket: 'cleanup' }),
+      '/demo-quiet-mesa/restore'],
+  ] as const)('%s offers Restore and no Archive, and Restore POSTs %s', async (_label, session, suffix) => {
+    renderSheet(session);
+    expect(screen.queryByRole('button', { name: 'Archive' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(posted(suffix)).toBe(true));
   });
 
-  it('no workspace → neither appears', () => {
-    render(<SessionActionsSheet session={s({ workspace: null, archivedAt: 1785300000 })}
-                                open onClose={() => {}} onReap={() => {}} />);
-    expect(screen.queryByText(/archive workspace/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/restore workspace/i)).not.toBeInTheDocument();
+  it.each([
+    ['a stopped workspace that is not archived — Archive again', s({ status: 'dead', bucket: 'dead',
+      stoppedBy: { at: 1785300000_000, surface: 'pwa' } })],
+    ['a crashed main checkout — dead, never stopped', s({ id: 'claude-demo', workspace: null, status: 'dead', bucket: 'dead' })],
+  ] as const)('%s offers Archive and no Restore', (_label, session) => {
+    renderSheet(session);
+    expect(screen.getByRole('button', { name: 'Archive' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Restore' })).toBeNull();
   });
 
-  it("failure toasts Couldn't archive — with ccd's own words", async () => {
-    stubFetch({ ok: false, stderr: 'not merged' });
-    render(
-      <>
-        <SessionActionsSheet session={s()} open onClose={() => {}} onReap={() => {}} />
-        <ToastHost />
-      </>,
-    );
-    fireEvent.click(screen.getByRole('button', { name: /archive workspace/i }));
-    expect(await screen.findByText(/Couldn't archive — not merged/)).toBeInTheDocument();
-  });
-
-  // Build 8 Wave 2, Task 213. `archive` is INJECTED, not module-mocked — the
-  // AbandonSheet idiom, and the reason this component gained the prop. The
-  // helper is new: this file had no render helper at all, every mount was
-  // spelled inline with `open`/`onClose`/`onReap` each time.
-  it('Archive workspace routes a 409 run-open into the sheet, never a toast', async () => {
+  it('a 409 run-open lands in the archive sheet, naming the run — never a toast', async () => {
     const archive = vi.fn().mockRejectedValue(
       new ApiError(409, { ok: false, error: 'run-open', runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }] }));
     renderSheet(workspaceSession(), { archive });
-    fireEvent.click(screen.getByRole('button', { name: 'Archive workspace' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    await confirmArchive();
     await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
     expect(screen.getByText(/run 17/)).toBeTruthy();
-    // The defect this replaces: a bare slug in a toast.
     expect(screen.queryByText(/Couldn't archive — run-open/)).toBeNull();
   });
 
-  it('any OTHER archive failure still toasts — the sheet is for run-open, not for everything', async () => {
+  it('a failure the door has no word for stays in the sheet, in ccd\'s own words', async () => {
     const archive = vi.fn().mockRejectedValue(new ApiError(502, { ok: false, stderr: 'ws-archive: busy' }));
     renderSheet(workspaceSession(), { archive });
-    fireEvent.click(screen.getByRole('button', { name: 'Archive workspace' }));
-    expect(await screen.findByText(/Couldn't archive — ws-archive: busy/)).toBeInTheDocument();
-    expect(screen.queryByText(/This workspace is claimed/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    await confirmArchive();
+    expect(await screen.findByText('ws-archive: busy')).toBeInTheDocument();
+  });
+
+  it('"Stop only" after a refusal the phone cannot fix POSTs the unchanged /stop', async () => {
+    const archive = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'worktree-gone' }));
+    renderSheet(workspaceSession(), { archive });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    await confirmArchive();
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop only' }));
+    await waitFor(() => expect(posted('/demo-quiet-mesa/stop')).toBe(true));
   });
 
   // The SAME class as this file's `swapOpen`/`holdOpen`/`releaseConfirmOpen`
-  // resets, one state later: `conflict` is a claim measured for ONE session,
-  // and FleetScreen's `openActionsFor` retargets `actionsSession` while
+  // resets, one state later: a claim is measured for ONE session, and
+  // FleetScreen's `openActionsFor` retargets `actionsSession` while
   // `actionsOpen` stays true (tap another row's ··· with this sheet up). The
   // sheet is mounted at screen level and never unmounts on close, so nothing
   // else clears it — session B's operator would be shown session A's run.
@@ -267,7 +279,8 @@ describe('archive and restore (D5 rider 1)', () => {
         <ToastHost />
       </>,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Archive workspace' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    await confirmArchive();
     await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
 
     rerender(
@@ -280,19 +293,18 @@ describe('archive and restore (D5 rider 1)', () => {
     expect(screen.queryByText(/run 17/)).toBeNull();
   });
 
-  // The OTHER half of "unconditional": `ArchiveConflictSheet` is mounted as a
+  // The OTHER half of "unconditional": the archive sheet is mounted as a
   // SIBLING of `<Sheet open={open}>`, not inside it, so a claim left set while
-  // the actions sheet closes stays on screen with nothing behind it. A reset
-  // living in the close-only effect above (`if (open) return`) would pass the
-  // retarget test and still leave this one red.
-  it('closing the door drops the claim — the conflict sheet is not gated on `open`', async () => {
+  // the actions sheet closes would stay on screen with nothing behind it.
+  it('closing the door drops the claim — the archive sheet is gated on `open` too', async () => {
     const archive = vi.fn().mockRejectedValue(
       new ApiError(409, { ok: false, error: 'run-open', runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }] }));
     const session = workspaceSession();
     const props = { session, onClose: () => {}, onReap: () => {}, archive };
     const { rerender } = render(
       <><SessionActionsSheet {...props} open /><ToastHost /></>);
-    fireEvent.click(screen.getByRole('button', { name: 'Archive workspace' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    await confirmArchive();
     await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
 
     rerender(<><SessionActionsSheet {...props} open={false} /><ToastHost /></>);
@@ -562,6 +574,35 @@ describe('the substrate gate — destructive affordances refuse a session nobody
     expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/ensure'))).toBe(false);
   });
 
+  it('Restore on a faulted stopped main checkout is disabled and never posts /ensure', () => {
+    render(<SessionActionsSheet
+      session={faulted({ id: 'claude-demo', workspace: null, status: 'dead', bucket: 'dead',
+        stoppedBy: { at: 1785300000_000, surface: 'pwa' } })} {...sheetProps} />);
+    const btn = screen.getByRole('button', { name: 'Restore' });
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('title')).toContain('x');
+    expect(btn.getAttribute('title')).toMatch(/tmux unreachable/);
+    fireEvent.click(btn);
+    expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/ensure'))).toBe(false);
+  });
+
+  // The fleet frame is live under the open sheets, so the handler re-reads the fault when it fires. Here the row object
+  // gains the fault AFTER the render, so the button is still enabled (no re-render) and only the fire-time check refuses.
+  it('Stop only re-checks the fault when it fires: it toasts the refusal and never posts /stop', async () => {
+    const archive = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'worktree-gone' }));
+    const session = s({ workspace: 'quiet-basin', archivedAt: null });
+    renderSheet(session, { archive });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-primary')).not.toBeNull());
+    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-primary')!);
+    const stop = await screen.findByRole('button', { name: 'Stop only' });
+    expect(stop).toBeEnabled();
+    (session as { substrate: FleetSession['substrate'] }).substrate = { at: 1, text: 'x' };
+    fireEvent.click(stop);
+    expect(await screen.findByText(/Couldn't stop — tmux unreachable — x/)).toBeInTheDocument();
+    expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/stop'))).toBe(false);
+  });
+
   it('Swap account is disabled and the swap sheet never opens', () => {
     render(<SessionActionsSheet session={faulted()} {...sheetProps} />);
     const btn = screen.getByRole('button', { name: /swap account/i });
@@ -571,10 +612,10 @@ describe('the substrate gate — destructive affordances refuse a session nobody
     expect(screen.queryByText('Move to another account')).not.toBeInTheDocument();
   });
 
-  it('Archive workspace is disabled and the injected archive spy never fires', () => {
+  it('Archive is disabled and the injected archive spy never fires', () => {
     const archive = vi.fn();
     renderSheet(faulted(), { archive });
-    const btn = screen.getByRole('button', { name: /archive workspace/i });
+    const btn = screen.getByRole('button', { name: 'Archive' });
     expect(btn).toBeDisabled();
     expect(btn.getAttribute('title')).toContain('x');
     fireEvent.click(btn);

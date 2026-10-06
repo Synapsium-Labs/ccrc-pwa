@@ -20,9 +20,9 @@ import {
   type KillProbeOutcome, type ResOk, type UpdateReportRead, type UpdateSpawnResult,
 } from '../../../shared/agent-protocol.js';
 import {
-  classifyOpAnswer, deadlineDetail, deadlineExpired, dispatchRefusalDetail, leaseHolder, linkFailedDeadlineDetail, parseReportOrigin,
+  classifyOpAnswer, deadlineDetail, deadlineExpired, dispatchRefusalDetail, leaseHolder, linkFailedDeadlineDetail, moveFeedRecord, parseReportOrigin,
   planDispatch,
-  type DispatchMove, type DispatchNodeView, type DispatchPlan, type OpAnswer, type ReportOrigin,
+  type DispatchMove, type DispatchNodeView, type DispatchPlan, type MoveFeedRecord, type OpAnswer, type ReportOrigin,
 } from './dispatch.js';
 import { resolveNodeIntent } from './resolve.js';
 import { resolveInputFor } from './project.js';
@@ -72,6 +72,11 @@ export interface ConvergeDeps {
   runLocal: LocalUpdateSpawn | null;
   /** FleetWatcher.triggerInventory: an accepted move is re-measured at once, never believed. */
   onAccepted: () => void;
+  /** Wave 8 item A: writes a move's audit row (`moveFeedRecord`) where the operator reads it; `watch.ts` binds the
+   *  feed. REQUIRED and nullable, `runLocal`'s idiom, so every caller decides; `null` records nothing. Called at most
+   *  once per move that took a lease, AFTER the answer's lease write and after `onAccepted`, synchronously; a throw
+   *  is caught here. */
+  recordMove: ((r: MoveFeedRecord) => void) | null;
 }
 
 export const NO_FLEET_LINK_DETAIL = 'disconnected — no fleet link is wired on this server; the request stands';
@@ -324,6 +329,20 @@ export async function runDispatch(deps: ConvergeDeps, now: number): Promise<Disp
   // heir. Read and written with no await between. No holder (settled, or dropped by a no-revive supersede, R2): the id
   // acquired, whose own guards name what happened.
   const holder = leaseHolder(store.nodes(), view.row.label, now) ?? move.nodeId;
+  // Wave 8 item A: the move's audit row, AFTER the answer's lease write below (and after onAccepted's inventory
+  // trigger in the hold arm), in this same synchronous stretch — nothing is added between the acquire and the send
+  // (D-3377). It can never change the run: a port that throws is warned about, and the outcome stands.
+  const recorded = (outcome: Extract<MoveOutcome, { result: 'accepted' | 'held' | 'released' | 'release-refused' }>): DispatchRunResult => {
+    if (deps.recordMove !== null) {
+      try {
+        const rec = moveFeedRecord(move, view.row.label, outcome);
+        if (rec !== null) deps.recordMove(rec);
+      } catch (e) {
+        console.warn(`ccrc-server: the update move's feed record was not written (${e instanceof Error ? e.message : String(e)}) — the move stands; its audit row is lost`);
+      }
+    }
+    return done(outcome);
+  };
   if (action.kind === 'hold') {
     // D-3413: the bound's arms B/D carry the node's words; D-3555: a link failure after the hand-off
     // carries the server's. Either is written on the lease this run acquired (`now`, its identity); a refused note
@@ -332,11 +351,11 @@ export async function runDispatch(deps: ConvergeDeps, now: number): Promise<Disp
       store.noteLeaseDetail(holder, action.detail, now);
     }
     deps.onAccepted();
-    return done({ nodeId: holder, result: answer.kind === 'transport' ? 'held' : 'accepted', detail: action.detail });
+    return recorded({ nodeId: holder, result: answer.kind === 'transport' ? 'held' : 'accepted', detail: action.detail });
   }
   const released = store.releaseLease(holder, action.to, action.detail, now);
   if (!released.ok) {
-    return done({ nodeId: holder, result: 'release-refused', to: action.to, detail: action.detail, why: released.why });
+    return recorded({ nodeId: holder, result: 'release-refused', to: action.to, detail: action.detail, why: released.why });
   }
-  return done({ nodeId: holder, result: 'released', to: action.to, detail: action.detail });
+  return recorded({ nodeId: holder, result: 'released', to: action.to, detail: action.detail });
 }

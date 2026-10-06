@@ -1129,6 +1129,108 @@ export const MIGRATIONS: readonly string[] = [
   CREATE TABLE update_epoch (id INTEGER PRIMARY KEY CHECK (id = 1), epoch INTEGER NOT NULL, issuedAt INTEGER NOT NULL);
   INSERT INTO update_epoch (id, epoch, issuedAt) VALUES (1, 0, 0);
   `,
+  // ── 15: user_version 14 -> 15 ───────────────────────────────────────────
+  // Indexes for the stall watch's per-candidate mail read, `CoordStore.stallMailFor` (worker stall watch wave 5).
+  // That read runs once per stall candidate per sweep on the server's one synchronous handle, and before this entry
+  // both of its statements planned `SCAN mail` and `SCAN mail_deliveries` (EXPLAIN QUERY PLAN, measured), so every
+  // sweep's cost grew with the whole mail history, which is never pruned.
+  //
+  // THREE INDEXES, AND `mail_deliveries(toId)` IS NOT ONE OF THEM. The review that found the scan proposed
+  // `mail_deliveries(mailId)` and `mail_deliveries(toId)`. Measured: an index led by `toId` takes over every
+  // delivery read that filters `toId = ? AND state IN ('queued','delivered')`, because this server never runs
+  // ANALYZE and the planner rates one equality above a two-value IN. On a 20 000-mail fixture whose busiest
+  // recipient held half the deliveries, the peer-duplicate and peer-quota probes went from about 0.01 ms to about
+  // 14 ms and `outstandingMailFor` from about 0.7 ms to about 33 ms. The read's delivered-to arm is bounded through
+  // `mail_by_at` instead (`store.ts`, `stallMailFor`), so it needs no `toId` index. `stall-store.test.ts`'s plan rows
+  // pin that those reads still use `mail_deliveries_due`.
+  //
+  // `mail_by_run` serves the read's run clause (and `hasMailWithSubject`, every per-run mail statement, and the
+  // health read's join); `mail_by_at` its horizon; `mail_deliveries_by_mail` its delivery statement. `mail` is
+  // append-only and `mail_deliveries.mailId` is never rewritten, so the write cost is one b-tree insert per row.
+  // `IF NOT EXISTS`, so a database where an operator made one of these by hand still starts.
+  //
+  // MIGRATIONS[0..13] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry
+  // never runs. THIS ENTRY IS SLOT 15 AS WRITTEN, measured against origin/main at the wave's first step; an open
+  // branch held `user_version 14 -> 15` too, and whichever merges second moves up (entry 12 records the last branch
+  // that lost this race). RE-MEASURE immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE INDEX IF NOT EXISTS mail_by_run ON mail(runId);
+  CREATE INDEX IF NOT EXISTS mail_by_at ON mail(at);
+  CREATE INDEX IF NOT EXISTS mail_deliveries_by_mail ON mail_deliveries(mailId);
+  `,
+  // ── 16: user_version 15 -> 16 ─────────────────────────────────────────────
+  // Child reclamation (design 2026-09-22 §5.1, §5.3): `runs.sessionBornAt`, the
+  // child's BIRTH — write-once per BOUND session, never a first stamp per run.
+  // `dispatchStartedAt` (migration 5) keeps its every-attempt meaning: it
+  // moves on every fresh-spawn dispatch attempt, retries included, and the
+  // spawn-in-flight render still reads it unchanged. `sessionBornAt` answers a
+  // narrower question — "when was THIS occupant's tenancy of this workspace
+  // minted" — and `childBirthOf` (`coord/childSpent.ts`) moves onto this
+  // column in the same task that adds it, so every PR row a child's branch has
+  // ever carried is placed against the SESSION's own birth, not against
+  // whichever attempt most recently touched `dispatchStartedAt`.
+  //
+  // `runs.sessionBornFor` — a cross-build rollback can leave a stale birth on
+  // a row, which is why this column rides beside `sessionBornAt` — names the
+  // session the birth was recorded FOR. This build's `CoordStore.bindSession`
+  // is the only writer that keeps both columns honest across a rebind; an
+  // OLDER build's `clearSession`/two-argument `setSession` unbind or rebind
+  // `sessionId` without touching either, so a roll-forward after a
+  // roll-back-then-forward across this migration can leave a row whose
+  // `sessionId` has moved on while its birth still names the PREVIOUS
+  // occupant. `childBirthOf` refuses to place a birth unless `sessionBornFor`
+  // still equals the row's own `sessionId`, so that stale pairing reads as
+  // unplaceable rather than as a too-early date on the new occupant.
+  // `childBirthOf` ALSO requires `sessionBornAt` to equal `dispatchStartedAt`
+  // (migration 5) — the `sessionBornFor` check alone cannot see a rollback
+  // followed by a SAME-id redraw (a recycled slug, spec §5.5, extended across
+  // a rollback: the id never changes, so `sessionBornFor` still matches), but
+  // every genuine re-mint re-stamps `dispatchStartedAt` first, so a birth
+  // still dated to an earlier occupant no longer agrees with it either. Both
+  // columns have no migration of their own — this slot has never shipped, so
+  // they are edited in place rather than adding a slot 17 for a fix to a slot
+  // nothing has run yet.
+  //
+  // The backfill dates every row that already carries a bound session to the
+  // ONLY birth this build has ever recorded for it — `dispatchStartedAt` —
+  // with `sessionBornFor` set to that same row's own `sessionId` (never a
+  // second read: the row already carries both). Setting `sessionBornAt` FROM
+  // `dispatchStartedAt` also means the equality check above is trivially
+  // satisfied for every backfilled row — no separate write is needed. ONE
+  // exception: a row whose `run_events` trail carries a `spawn-adopted:` event bound to an
+  // EARLIER attempt's workspace, never this session's own mint (`dispatch.ts`'s
+  // fresh arm: an adopted winner binds with a NULL birth, because the
+  // workspace it adopted may be an earlier attempt's, and a backfilled guess
+  // would date it to the wrong attempt). An unbound row (`sessionId IS NULL`)
+  // is left NULL by the `WHERE` clause alone, matching a run nothing has ever
+  // dispatched. The exclusion OVER-REACHES in one narrow, fail-closed way,
+  // accepted rather than special-cased: a row whose CURRENT occupant is a
+  // clean re-dispatch — `clearSession` unbound the adopted occupant, then a
+  // fresh `ws-add` bound a new one — still carries the OLD `spawn-adopted:`
+  // event on its trail from the earlier occupant, so the backfill leaves it
+  // NULL too, even though the current occupant's own mint was clean. A row in
+  // that shape reaches `sessionBornAt`/`childBirthOf`'s live write path on its
+  // NEXT dispatch regardless, since `bindSession` — not the backfill — is
+  // this build's own ongoing writer; the backfill only ever dates history the
+  // live path has not yet had a chance to.
+  //
+  // MIGRATIONS[0..14] are frozen: `db.ts:182` iterates from the live
+  // `user_version`, so an edit to an applied entry never runs.
+  //
+  // THIS ENTRY WAS SLOT 15 WHEN IT WAS WRITTEN. #237 (the stall watch's mail
+  // indexes) merged first and took `user_version 14 -> 15`, so this one moved
+  // up a slot at merge time rather than sharing an index: two entries at one
+  // `user_version` is a migration that never runs on a db that has already
+  // passed that version. Nothing else about it changed.
+  `
+  ALTER TABLE runs ADD COLUMN sessionBornAt INTEGER;
+  ALTER TABLE runs ADD COLUMN sessionBornFor TEXT;
+  UPDATE runs SET sessionBornAt = dispatchStartedAt, sessionBornFor = sessionId
+    WHERE sessionId IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM run_events e WHERE e.runId = runs.id AND e.detail LIKE 'spawn-adopted:%');
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -49,7 +49,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   branch: 'ws/clear-cove', ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'working', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
 });
 
 const makeStore = (): FleetStore => createFleetStore({
@@ -506,7 +506,7 @@ describe('the coord banner mounts on /runs (Task 11, spec §4.2)', () => {
     act(() => {
       store.setState({
         conn: 'down', // also exercises the offline banner, so both can be ordered
-        coord: { pause: 'clear', mail: 'clear' },
+        coord: { pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] },
         coordFrameSeen: true,
       });
     });
@@ -529,7 +529,7 @@ describe('the coord banner mounts on /runs (Task 11, spec §4.2)', () => {
   // pins its behaviour and would stay green if the line were dropped.
   it('renders .caps-control after .coord-banner once its own read lands', async () => {
     const store = makeStore();
-    act(() => { store.setState({ coord: { pause: 'clear', mail: 'clear' }, coordFrameSeen: true }); });
+    act(() => { store.setState({ coord: { pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] }, coordFrameSeen: true }); });
     const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })}
       loadCaps={async () => ({ caps: { maxConcurrentWorkers: 3, maxSessionsPerDay: 12 },
                                usage: { running: 1, dispatchedIn24h: 4 } })} />);

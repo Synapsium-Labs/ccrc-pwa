@@ -15,6 +15,7 @@
 // bar is "a reasonable person adding a fourth copy in the ordinary way is
 // stopped before review", not "unforgeable".
 import { describe, it, expect, beforeAll } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +24,7 @@ import {
   ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS, UPDATE_CHANNELS, UPDATE_STATES, UPDATE_PHASES, INSTALL_STATES, PROVENANCE_STATES, AUTO_MODES, NOTIFY_MODES, REQUEST_KINDS, STAMP_READS, NODE_ROLES, NODE_OSES, TAG_FILE_READS,
   SPAWN_VERDICTS,
 } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS } from '../../shared/api.js';
 import { PROVIDER_IDS } from '../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
@@ -1409,6 +1411,11 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
       // W6 Task 2: `_ver_keep_state` copies the stamp into the version
       // directory it describes — a reader, through one local.
       'local from_stamp="$BOX_STAMP_FILE"',
+      // D-3465 (d), review 179 I1: `_inst_stamp_unname` removes the box's stamp
+      // after a refused kept-stamp fallback on a run that moved `~/ccrc` onto a
+      // version the stamp does not name (re-review N1) — a writer, through one
+      // local (`_inst_stamp`'s `dest=` idiom below).
+      'local krc="${1:-}" dest="$BOX_STAMP_FILE" what="it could not be read, so it cannot be shown to name a version this box is on" sname=""',
       'mkdir -p "${BOX_STAMP_FILE%/*}" || _ccrc_die "cannot create ${BOX_STAMP_FILE%/*}"',
       '_inst_atomic "$shipped" "$BOX_STAMP_FILE" 644',
       'local src sha ref dirty version vfield tmp why rc=0 dest="$BOX_STAMP_FILE"',
@@ -1537,6 +1544,12 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // that tells "moved, unhealthy" (exit 3) from "died" (exit 1).
       'rm -f "$BOX_INSTALLED_FILE"',
       'if [ -f "$BOX_INSTALLED_FILE" ]; then',
+      // `_rollback_killed_flip_state` (D-3466), condition (2): nothing at all is
+      // at the record's path — `[ ! -e ] && [ ! -L ]`, so a dangling link or a
+      // FIFO counts as something. One of six conditions, and the only reader of
+      // the record's ABSENCE for a rollback; the record has five removers, so
+      // absence alone proves nothing (the entry names them).
+      '{ [ ! -e "$BOX_INSTALLED_FILE" ] && [ ! -L "$BOX_INSTALLED_FILE" ]; } || return 1',
       // cmd_rollback (D-3285, final review B3(i), then a re-review clause):
       // a read-only convergence check — the running stamp's version and sha
       // against the completed-install record — before any network call or
@@ -1798,9 +1811,17 @@ describe('the model files, and who reads each one', () => {
     // and only one of them is in this repo to be pinned.
     expect(holdersOf('.handoff/litellm-config.yaml')).toEqual(['ccd/ccrc']);
     const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
+    // D-3482: the helper grew a codex-lane arm (an id argument),
+    // so the one spelling is now its no-argument line — still one line, and
+    // still inside `_models_litellm_path`, which the second pin binds.
     expect(code.filter((l) => l.includes('.handoff/litellm-config.yaml'))).toEqual([
-      '_models_litellm_path()     { printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"; }',
+      '  printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"',
     ]);
+    const helper = /^_models_litellm_path\(\) \{[^\n]*\n([\s\S]*?)\n\}$/m
+      .exec(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8'));
+    expect(helper, 'ccd/ccrc still defines _models_litellm_path as a block').toBeTruthy();
+    expect(helper![1]!.split('\n'))
+      .toContain('  printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"');
   });
 
   it('the ownership whitelist is read by exactly one thing in this repo', () => {
@@ -2269,7 +2290,7 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     // split. So the expected shape here is a NAMED LIST rather than one file —
     // and any new holder still fails.
     //
-    // Two of the four are not marker literals at all: `'mail-disabled'` is also
+    // Two of the five are refusal codes, not marker literals: `'mail-disabled'` is also
     // a `RunRefuseCode` member, so `shared/api.ts` (the vocabulary) and
     // `coord/dispatch.ts` (the refusal that uses it) spell the same characters
     // for a different reason. Listing them here is the honest shape — a scan
@@ -2277,7 +2298,7 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'mail-disabled'")).map(rel).sort();
     expect(holders).toEqual([
       'server/src/coord/dispatch.ts',   // the refusal CODE
-      'server/src/coord/rundefs.ts',    // the marker literal (definition)
+      'server/src/coord/rundefs.ts', 'server/src/coord/stall.ts', // the marker literal (definition); stall.ts: the hold named for the marker it honours
       'server/src/watch.ts',            // the marker literal (module-local, on purpose)
       'shared/api.ts',                  // the refusal-code vocabulary
     ]);
@@ -2294,6 +2315,25 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     // satisfy a regex, which is a contortion, not a guard. The `\b` anchors keep
     // it from matching a longer name that merely contains this one.
     expect(src).toMatch(/import \{[^}]*\bCOORDINATOR_PAUSE_MARKER\b[^}]*\} from '\.\/coord\/rundefs\.js'/);
+  });
+});
+
+// — Child-reclamation wave 4: the reclaim switch's file name —
+describe("child-reclamation wave 4 — one 'reclaim-paused' literal", () => {
+  it("'reclaim-paused' is a literal in exactly one source file", () => {
+    // `RECLAIM_PAUSE_MARKER` (`server/src/coord/rundefs.ts`) is the ONE
+    // definition. A second literal is how the banner and the sweep would come
+    // to disagree about what "paused" means — one reading a name the other
+    // never checks, with the deleting side the one that is wrong.
+    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'reclaim-paused'")).map(rel);
+    expect(holders).toEqual(['server/src/coord/rundefs.ts']);
+  });
+
+  it('watch.ts reaches the reclaim marker through the shared constant, never a copy', () => {
+    // Not just "no second literal" — that is satisfied by deleting the reader.
+    const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'utf8');
+    expect(src).toContain('names.includes(RECLAIM_PAUSE_MARKER)');
+    expect(src).toMatch(/import \{[^}]*\bRECLAIM_PAUSE_MARKER\b[^}]*\} from '\.\/coord\/rundefs\.js'/);
   });
 });
 
@@ -3101,6 +3141,50 @@ describe('graphify — one pin, one census path', () => {
   });
 });
 
+// — Plan 2b-2 Task 3 (D-3487): the Codex runtime's LiteLLM requirement —
+describe('the Codex runtime — one LiteLLM requirement, in one file', () => {
+  // `graphify`'s two rows above, for the second venv this tree builds: the
+  // requirement (extra, floor and ceiling in ONE string) lives in
+  // `ccd/ccgpt-runtime`, and every other reader reads the STAMP a passing
+  // build writes. The third row exists because the first two cannot see the
+  // files most likely to grow a second copy: `isBash` rejects every dotted
+  // name, so a `litellm==` in `ccd/ccgpt-usage.py`, `shared/litellm.mjs` or a
+  // `deploy/*.yaml` scores no hit in `holdersOf` at all (runtime-probe HR13).
+  it("the requirement literal 'litellm[proxy]' lives in exactly one bash file, ccd/ccgpt-runtime", () => {
+    expect(holdersOf('litellm[proxy]')).toEqual(['ccd/ccgpt-runtime']);
+  });
+
+  it('LITELLM_REQUIREMENT is assigned in exactly one bash file, ccd/ccgpt-runtime', () => {
+    const holders = BASH.filter((f) =>
+      codeLines(f).some((l) => /^\s*LITELLM_REQUIREMENT=/.test(l))).map(rel).sort();
+    expect(holders).toEqual(['ccd/ccgpt-runtime']);
+  });
+
+  it('no other file under ccd, deploy, shared or install.sh — of ANY type — spells a litellm version spec', () => {
+    // EVERY line, comments included: this is a literal-absence pin, and prose
+    // naming a version is the first draft of a second pin. `--others
+    // --exclude-standard` as well as the index, so a new file is seen before
+    // it is staged — a gate over the index alone cannot see an uncommitted
+    // definition. It refuses to answer when git cannot list the tree.
+    const r = spawnSync('git', ['-C', ccrcRoot, 'ls-files', '-z', '--cached', '--others', '--exclude-standard',
+      '--', 'ccd', 'deploy', 'shared', 'install.sh'], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    const files = [...new Set(r.stdout.split('\0').filter(Boolean))].sort();
+    // The floor: a scan over too few files passes everything, and these five
+    // are the ones this row exists to see — three of them dotted.
+    expect(files.length).toBeGreaterThan(50);
+    for (const f of ['ccd/ccgpt-runtime', 'ccd/ccgpt-proxy.py', 'ccd/ccgpt-usage.py', 'shared/litellm.mjs', 'install.sh']) {
+      expect(files, f).toContain(f);
+    }
+    const SPEC = /\blitellm\[|\blitellm\s*(?:===|==|~=|>=|<=|!=|<|>)\s*\d/;
+    const holders = files.filter((f) => {
+      const p = path.join(ccrcRoot, f);
+      return existsSync(p) && statSync(p).isFile() && SPEC.test(readFileSync(p, 'utf8'));
+    });
+    expect(holders).toEqual(['ccd/ccgpt-runtime']);
+  });
+});
+
 describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTree', () => {
   // The same shape as "extraction finding — one path to the ccd script"
   // above, applied to a copy that was made for a stated reason and copied
@@ -3894,7 +3978,7 @@ describe('the update op — its refusal words and its launcher are declared once
 // ── Programme wave 5 (design 2026-09-20 §9/§10): the dispatcher's words and order ──
 // APPENDED after the file's last line: `session-hook.test.ts`'s citation audit
 // cites this file by line, so nothing above may move (R13). No import is
-// added either — the eleven words are stated here as a LITERAL, on purpose (the
+// added either — the twelve words are stated here as a LITERAL, on purpose (the
 // opposite of W2's `SQL_VOCABS`, which imports its arrays): `update-dispatch.test.ts` holds L0's array equal to
 // this same list, and the fingerprint below must find shared/api.ts's array,
 // so a word added on one side alone reds one of the two.
@@ -3908,7 +3992,7 @@ describe('the update op — its refusal words and its launcher are declared once
 describe('the dispatcher refusal words and the dispatch order are declared once, in L0 (programme wave 5)', () => {
   const WORDS = [
     'unknown-tag', 'not-newer', 'refused-by-node', 'stamp-unread', 'floor-unread', 'no-detach-cap',
-    'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet',
+    'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet', 'no-bundle',
   ];
   const alt = `(?:${WORDS.map((w) => w.replace(/-/g, '\\-')).join('|')})`;
   const item = `\\s*['"]${alt}['"]\\s*`;
@@ -3943,5 +4027,288 @@ describe('the dispatcher refusal words and the dispatch order are declared once,
 
   it('no source across the four roots spells a second list of the words — shared/api.ts holds the one', () => {
     expect(ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+  });
+});
+
+// WORKER STALL WATCH, WAVE 1 (design 2026-09-29 §4.2, "Spelled once"). APPENDED, not nested, for the reason stated
+// at this file's other appended describes: `session-hook.test.ts`'s citation audit cites this file by line.
+// The needles are anchored on BOTH sides by the same quote, single or double, for three reasons:
+// - `stall-check:` must not be found inside `re stall-check:`;
+// - `review-done` must not be found inside the review-rejection subject `close.ts` spells;
+// - `stall` must not be found inside `stall-shadow`.
+// KNOWN WIDTH: a copy written in backticks, or as the head of a longer template, is not seen. Backticks are left out
+// ON PURPOSE: docstrings name these prefixes in backticks, and a pin that fired on a comment would be a false red.
+describe('the stall watch spells its prefixes, its detail heads and the review-done subject once (design 2026-09-29 §4.2)', () => {
+  const quoted = (needle: string): RegExp => {
+    const escaped = needle.replace(/[.*+?^$()|[\]\\{}]/g, (c) => `\\${c}`);
+    return new RegExp(`(['"])${escaped}\\1`);
+  };
+  const ONE_HOME: ReadonlyArray<readonly [string, string]> = [
+    ['stall-check:', 'server/src/coord/stall.ts'],
+    ['re stall-check:', 'server/src/coord/stall.ts'],
+    ['re stall-check: waiting', 'server/src/coord/stall.ts'],
+    ['stall:', 'server/src/coord/stall.ts'],
+    ['wait:', 'server/src/coord/stall.ts'],
+    ['stall', 'server/src/coord/stall.ts'],
+    ['stall-shadow', 'server/src/coord/stall.ts'],
+    ['review-done', 'shared/api.ts'],
+  ];
+
+  it('CONTROL: a quote-anchored needle finds either quote, and never a longer sibling or a backticked mention', () => {
+    expect(quoted('stall-check:').test(`x = 're stall-check:'`)).toBe(false);
+    expect(quoted('re stall-check:').test(`x = 're stall-check: waiting'`)).toBe(false);
+    expect(quoted('review-done').test(`subject: 'review-done-rejected'`)).toBe(false);
+    expect(quoted('stall').test(`'stall-shadow'`)).toBe(false);
+    expect(quoted('stall-check:').test(`"stall-check:"`)).toBe(true);
+    expect(quoted('stall-check:').test(`'stall-check:'`)).toBe(true);
+    expect(quoted('stall-check:').test(`'stall-check:"`)).toBe(false);
+    expect(quoted('wait:').test('a docstring naming `wait:`')).toBe(false);
+  });
+
+  for (const [needle, home] of ONE_HOME) {
+    it(`'${needle}' is a quoted literal in exactly one source file, ${home}`, () => {
+      const re = quoted(needle);
+      const holders = ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel);
+      expect(holders).toEqual([home]);
+    });
+  }
+});
+
+// ── Worker stall watch, wave 1 (spec 2026-09-29 §9.14 and §4.2 "Spelled once").
+// APPENDED after the last describe, never nested above it: session-hook.test.ts's
+// citation audit cites this file by line, so nothing above this point may move.
+
+/** Comment LINES removed — the filter the setDeliveryEnvelope describe keeps
+ *  block-local as `codeOnly` (hoisting it would move this file's cited lines,
+ *  so the two stall describes below share this appended copy) — so a sentence
+ *  ABOUT a name is never counted as spelling it. */
+const stallCodeText = (t: string): string =>
+  t.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
+const stallCode = (f: string): string => stallCodeText(readFileSync(f, 'utf8'));
+
+describe('worker stall watch: the four operator-switch markers have no writer in the tree (spec §9.14)', () => {
+  // Each marker is touched and removed BY HAND in the fleet box's
+  // `~/.cc-sessions` — the `mail-disabled` precedent, whose own no-writer
+  // claim nothing pins. So the only code that may spell one is the pure
+  // module that READS it, in two halves: no non-comment line of shell (ccd/,
+  // deploy/, install.sh — `holdersOf` above) names it at all, and across the
+  // four TS roots exactly one file names it on a code line — its definer,
+  // which reaches no `node:` module and so cannot write a file. A template
+  // (`${reg}/stall-watch-live`) is seen: the TS half scans the bare name on
+  // code lines, not a quoted literal. KNOWN WIDTH: a name assembled from pieces
+  // (`'stall-watch-' + w`) is not seen; the bar is the ordinary copy.
+  const MARKERS: [string, string][] = [
+    ['mail-gate-strict', 'server/src/turnidle.ts'],
+    ['stall-watch-disabled', 'server/src/coord/stall.ts'],
+    ['stall-watch-live', 'server/src/coord/stall.ts'],
+    ['stall-watch-escalate', 'server/src/coord/stall.ts'],
+  ];
+
+  it('CONTROL: both corpora were walked, and the filter keeps code and drops prose', () => {
+    expect(BASH.length).toBeGreaterThan(10);
+    expect(ALL.length).toBeGreaterThan(100);
+    expect(stallCodeText("  // touch stall-watch-live\n   * stall-watch-live\n/* stall-watch-live */\nconst m = `${reg}/stall-watch-live`;"))
+      .toBe('const m = `${reg}/stall-watch-live`;');
+  });
+
+  it.each(MARKERS)('%s: no shell line names it, and its one TS holder is its definer (%s)', (name, definer) => {
+    expect(holdersOf(name), `${name}: a line of shell names it — a writer, or a reader this design never had`).toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(name)).map(rel).sort(),
+      `${name}: spelled on a code line outside ${definer}`).toEqual([definer]);
+    expect(stallCode(path.join(ccrcRoot, definer)), `${definer} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+});
+
+describe('worker stall watch: the wave-done subject is spelled once (spec §4.2 "Whose turn it is")', () => {
+  // `WAVE_DONE_SUBJECT` is L0's, and the stall ball rule compares it by
+  // EQUALITY — so a second literal is a second rule. Task 4's appended pins
+  // already hold the five prefixes, the detail heads and `REVIEW_DONE_SUBJECT`;
+  // this row adds the one done subject that predates the watch.
+  // QUOTE-ANCHORED at both ends for '…' and "…" — so `'re stall-check:'` never
+  // counts as a copy of `'stall-check:'`, nor close.ts's `'review-done-rejected'`
+  // as `'review-done'` — and at the open for a template, whose tail is
+  // interpolated. Code lines only: prose names `wave-done` in backticks all
+  // over the coord ring, and a sentence is not a definition. KNOWN WIDTH: a
+  // literal assembled from pieces is not seen.
+  const LITERALS: [string, string][] = [
+    ['wave-done', 'shared/api.ts'],
+  ];
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const spelling = (lit: string): RegExp => new RegExp(`'${esc(lit)}'|"${esc(lit)}"|\`${esc(lit)}`);
+
+  it('CONTROL: the anchor tells a constant from its longer neighbours', () => {
+    expect(spelling('stall-check:').test("const P = 're stall-check:';")).toBe(false);
+    expect(spelling('re stall-check:').test("const P = 're stall-check: waiting';")).toBe(false);
+    expect(spelling('review-done').test("subject: 'review-done-rejected'")).toBe(false);
+    expect(spelling('wave-done').test('const S = "wave-done";')).toBe(true);
+    expect(spelling('stall:').test('const d = `stall:${arm}`;')).toBe(true);
+  });
+
+  it.each(LITERALS)("'%s' is spelled on a code line in %s alone", (lit, home) => {
+    expect(ALL.filter((f) => spelling(lit).test(stallCode(f))).map(rel).sort(), `a second '${lit}'`).toEqual([home]);
+  });
+});
+
+describe('the archive door\'s refusal codes are spelled once, in L0 (workspace lifecycle wave 2)', () => {
+  // `ARCHIVE_REFUSALS` (spec §5.2) is the one declaration; the server sends `ARCHIVE_REFUSALS.<name>` and the PWA
+  // compares against it. `run-open` was a bare literal written twice in `server.ts` and once in
+  // `ArchiveConflictSheet.tsx` before this wave. Code lines only (`stallCode`): prose names the codes in backticks.
+  // Two OTHER vocabularies share spellings, and each is excused here by name rather than by widening the scan:
+  //   - `server/src/wsaudit.ts` keys its sentences by ccd's AUDIT verdict words, two of which ccd also dies with
+  //     in `cmd_ws_archive` (`session-busy`, `status-unknown`) — the audit's seam, not the door's;
+  //   - `className="run-open"` is the runs board's row button (D-287), a CSS identity — excluded by the pattern.
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const literal = (code: string): RegExp => new RegExp(`(?<!className=)(['"\`])${esc(code)}\\1`);
+  const AUDIT_WORDS = new Set(['session-busy', 'status-unknown']);
+
+  it('CONTROL: the pattern sees a quoted code and passes over a class name and a longer word', () => {
+    expect(literal('run-open').test("error: 'run-open',")).toBe(true);
+    expect(literal('run-open').test('className="run-open"')).toBe(false);
+    expect(literal('worktree-gone').test("'worktree-gone-later'")).toBe(false);
+    expect(ALL.filter((f) => literal('coordinator-has-open-runs').test(stallCode(f))).map(rel))
+      .toEqual(['shared/api.ts']);
+  });
+
+  // The codes as test DATA, bound to the declaration by the first case: a scan driven by `Object.values` alone would
+  // scan nothing, and stay green, on a tree where the declaration is gone.
+  const CODES = ['run-open', 'session-busy', 'coordinator-has-open-runs', 'programme-partly-ended', 'worktree-gone',
+    'status-unknown', 'manifest-unbuildable'];
+
+  it('scans every code the declaration holds', () => {
+    expect(Object.values(ARCHIVE_REFUSALS ?? {}).sort()).toEqual([...CODES].sort());
+  });
+
+  it.each(CODES)("'%s' is a code-line literal in shared/api.ts alone", (code) => {
+    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : ['shared/api.ts'];
+    expect(ALL.filter((f) => literal(code).test(stallCode(f))).map(rel).sort(), `a second '${code}'`).toEqual(want);
+  });
+});
+
+// WORKER STALL WATCH, WAVE 2 (design 2026-09-29 §5.2). APPENDED after the last describe, for the reason the wave-1
+// blocks above state: `session-hook.test.ts`'s citation audit cites this file by line. The two self-wake prefixes
+// join the spelled-once set: a second quoted copy is a second classifier (`stallMailClass`'s `self-wake`) in waiting.
+// The needle is quote-anchored at both ends, as ONE_HOME's is, so the update lane's `failed: deadline` prose and a
+// backticked docstring mention are not copies. KNOWN WIDTH: a copy in backticks, or at the head of a longer
+// literal, is not seen.
+describe('the stall watch spells its wave-2 self-wake prefixes once (design 2026-09-29 §5.2)', () => {
+  const quotedW2 = (needle: string): RegExp => {
+    const escaped = needle.replace(/[.*+?^$()|[\]\\{}]/g, (c) => `\\${c}`);
+    return new RegExp(`(['"])${escaped}\\1`);
+  };
+  const ONE_HOME_W2: ReadonlyArray<readonly [string, string]> = [
+    ['orphaned:', 'server/src/coord/stall.ts'],
+    ['failed:', 'server/src/coord/stall.ts'],
+  ];
+
+  it('CONTROL: the needle finds a bare quoted prefix in either quote, never a longer literal or a backticked mention', () => {
+    expect(quotedW2('failed:').test(`x = 'failed:'`)).toBe(true);
+    expect(quotedW2('failed:').test(`x = "failed:"`)).toBe(true);
+    expect(quotedW2('failed:').test(`detail: 'failed: deadline'`)).toBe(false);
+    expect(quotedW2('orphaned:').test('a docstring naming `orphaned:`')).toBe(false);
+  });
+
+  for (const [needle, home] of ONE_HOME_W2) {
+    it(`'${needle}' is a quoted literal in exactly one source file, ${home}`, () => {
+      const holders = ALL.filter((f) => quotedW2(needle).test(readFileSync(f, 'utf8'))).map(rel);
+      expect(holders).toEqual([home]);
+    });
+  }
+});
+
+describe('worker stall watch wave 2: the three new operator-switch markers have no writer in the tree (spec §5)', () => {
+  // Wave 1's describe above, for the three markers wave 2 adds. It is appended, never merged into that one, because
+  // this file is cited by line. SUBSTRING CAVEAT: both halves match with `includes`, and `mail-gate-busy` is a
+  // substring of `mail-gate-busy-shadow`, so the `mail-gate-busy` row counts every holder of EITHER spelling: a
+  // superset. That is sound only while both are spelled in `turnidle.ts` alone (planning departure
+  // `gate-markers-spelled-in-turnidle-only` (D-3607)), and the CONTROL row states the superset so nobody reads the row as more.
+  // `stall-watch-live` is not a substring of `stall-watch-w2-live`, so wave 1's row is untouched by this one.
+  const MARKERS: [string, string][] = [
+    ['stall-watch-w2-live', 'server/src/coord/stall.ts'],
+    ['mail-gate-busy-shadow', 'server/src/turnidle.ts'],
+    ['mail-gate-busy', 'server/src/turnidle.ts'],
+  ];
+
+  it('CONTROL: the match is a substring — a line spelling mail-gate-busy-shadow also holds mail-gate-busy, never the reverse', async () => {
+    expect(stallCodeText("export const MAIL_GATE_BUSY_SHADOW_MARKER = 'mail-gate-busy-shadow';").includes('mail-gate-busy')).toBe(true);
+    expect(stallCodeText("export const MAIL_GATE_BUSY_MARKER = 'mail-gate-busy';").includes('mail-gate-busy-shadow')).toBe(false);
+    // From the SHIPPED names, never two literals (a literal against a literal can never fail): of every operator-switch
+    // marker the two describes pin, the one pair where a name holds another is the busy pair the caveat names. Imported
+    // here, not at the head of the file, because this file is cited by line.
+    const { STALL_MARKERS } = await import('../src/coord/stall.js');
+    const gate = await import('../src/turnidle.js');
+    const names: string[] = [...STALL_MARKERS, gate.MAIL_GATE_STRICT_MARKER, gate.MAIL_GATE_BUSY_MARKER, gate.MAIL_GATE_BUSY_SHADOW_MARKER];
+    expect(names.flatMap((a) => names.filter((b) => a !== b && a.includes(b)).map((b) => `${a} holds ${b}`)))
+      .toEqual([`${gate.MAIL_GATE_BUSY_SHADOW_MARKER} holds ${gate.MAIL_GATE_BUSY_MARKER}`]);
+  });
+
+  it.each(MARKERS)('%s: no shell line names it, and its one TS holder is its definer (%s)', (name, definer) => {
+    expect(holdersOf(name), `${name}: a line of shell names it — a writer, or a reader this design never had`).toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(name)).map(rel).sort(),
+      `${name}: spelled on a code line outside ${definer}`).toEqual([definer]);
+    expect(stallCode(path.join(ccrcRoot, definer)), `${definer} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+});
+
+describe('worker stall watch wave 2: the self-wake prefixes are spelled once (spec §5.2)', () => {
+  // `STALL_ORPHANED_PREFIX` and `STALL_FAILED_PREFIX`: `stallMailClass` reads an `operator` mail whose subject starts
+  // with either as `self-wake` (recorded, never pushed), so a second literal is a second rule. The anchor is the
+  // wave-done describe's, restated because that one's helpers are scoped to its own describe. QUOTE-ANCHORED, and at
+  // the open for a template; code lines only. KNOWN WIDTH: a literal assembled from pieces is not seen.
+  const LITERALS: [string, string][] = [
+    ['orphaned:', 'server/src/coord/stall.ts'],
+    ['failed:', 'server/src/coord/stall.ts'],
+  ];
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const spelling = (lit: string): RegExp => new RegExp(`'${esc(lit)}'|"${esc(lit)}"|\`${esc(lit)}`);
+
+  it('CONTROL: the anchor sees a constant and a template head, and not a longer neighbour', () => {
+    expect(spelling('failed:').test("export const STALL_FAILED_PREFIX = 'failed:';")).toBe(true);
+    expect(spelling('orphaned:').test('const s = `orphaned: ${n} background task(s)`;')).toBe(true);
+    expect(spelling('failed:').test("const d = 'failed: provenance:';")).toBe(false);
+    expect(spelling('failed:').test("const t = 'not failed:';")).toBe(false);
+  });
+
+  it.each(LITERALS)("'%s' is spelled on a code line in %s alone", (lit, home) => {
+    expect(ALL.filter((f) => spelling(lit).test(stallCode(f))).map(rel).sort(), `a second '${lit}'`).toEqual([home]);
+  });
+});
+
+describe('one releasedFromOf (workspace lifecycle wave 1)', () => {
+  // `FleetSession.releasedFrom` has ONE reader, `releasedFromOf` in `shared/api.ts`. The live `fleet` frame is
+  // CAST, not revived, so a raw property read anywhere else meets `undefined` from a server older than the field,
+  // where the accessor answers `null` — the two-readers drift this suite exists to forbid. Comment LINES are
+  // blanked first (the field is NAMED in prose across the tree), line by line — `blankComments`' shape above. A
+  // block-comment regex is NOT safe here: a `/*` inside a string or a `//` line (`server.ts`'s `.cc-limits/*.json`)
+  // opens a "comment" that swallows hundreds of lines of real code, the `/ws/fleet` handler among them (measured).
+  const code = (f: string): string => readFileSync(f, 'utf8')
+    .split('\n').map((l) => (/^\s*(\*|\/\*|\/\/)/.test(l) ? '' : l)).join('\n');
+  const READ = /\.releasedFrom\b/;
+
+  it('is read as a property in exactly one file, and that file is shared/api.ts', () => {
+    expect(ALL.filter((f) => READ.test(code(f))).map(rel)).toEqual(['shared/api.ts']);
+  });
+
+  it('the scan sees the one read it licenses (a blanker that ate code would pass the pin above vacuously)', () => {
+    expect(code(path.join(ccrcRoot, 'shared', 'api.ts'))).toMatch(/return s\.releasedFrom \?\? null;/);
+  });
+});
+
+describe('worker stall watch wave 5: the largest epoch a Date holds is spelled once', () => {
+  // The turn marker's reader bounds every epoch by it (`marker-epochs-bounded` (D-3662)) and the watch's formatter
+  // refuses a value past it (`stallIso`). Two literals are two bounds that can drift apart; the reader's bound is
+  // only a guarantee for the formatter while they are the same number. Code lines only, so a sentence about it is
+  // not a second spelling.
+  const SPELLING = /\b8\.64e15\b|\b8_?640_?000_?000_?000_?000\b/;
+
+  it('CONTROL: the pattern sees both spellings of the number, and not a neighbour', () => {
+    expect(SPELLING.test('export const STALL_EPOCH_MAX = 8.64e15;')).toBe(true);
+    expect(SPELLING.test('const M = 8_640_000_000_000_000;')).toBe(true);
+    expect(SPELLING.test('const M = 8.64e14;')).toBe(false);
+  });
+
+  it('is spelled on a code line in server/src/coord/stall.ts alone', () => {
+    expect(ALL.filter((f) => SPELLING.test(stallCode(f))).map(rel).sort(), 'a second spelling').toEqual(['server/src/coord/stall.ts']);
   });
 });

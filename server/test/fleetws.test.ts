@@ -916,7 +916,7 @@ describe('fleet REST + WS', () => {
       // the wire order every client relies on is hello, fleet, runs, coord.
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'clear', mail: 'clear' });
+      expect(frame.coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] });
       ws.close();
     });
 
@@ -946,7 +946,7 @@ describe('fleet REST + WS', () => {
       await watcher.tick();
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'set', mail: 'clear' });
+      expect(frame.coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] });
       ws.close();
     });
 
@@ -955,11 +955,29 @@ describe('fleet REST + WS', () => {
       const { ws, next, watcher } = await connect();
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
-      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'set' });
+      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'set', reclaim: 'clear', childReclaimAttention: [] });
 
       marker('coordinator-paused');
       await watcher.tick();
-      expect((await next()).coord).toEqual({ pause: 'set', mail: 'set' });
+      expect((await next()).coord).toEqual({ pause: 'set', mail: 'set', reclaim: 'clear', childReclaimAttention: [] });
+      ws.close();
+    });
+
+    it('reports set for reclaim-paused, independently of the other two markers', async () => {
+      // Child-reclamation wave 4 (spec §5.8): the third marker off the SAME
+      // listing. Independence is the property — a reclaim pause is not a
+      // dispatch pause, and the phone must not read one as the other.
+      marker('reclaim-paused');
+      const { ws, next, watcher } = await connect();
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).coord).toEqual(
+        { pause: 'clear', mail: 'clear', reclaim: 'set', childReclaimAttention: [] });
+
+      marker('coordinator-paused');
+      await watcher.tick();
+      expect((await next()).coord).toEqual(
+        { pause: 'set', mail: 'clear', reclaim: 'set', childReclaimAttention: [] });
       ws.close();
     });
 
@@ -974,7 +992,7 @@ describe('fleet REST + WS', () => {
       await watcher.tick();
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable' });
+      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [] });
       ws.close();
     });
 
@@ -989,20 +1007,20 @@ describe('fleet REST + WS', () => {
       const { ws, next, watcher } = await connect({ io: flaky });
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
-      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'clear' });
+      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] });
 
       listable = false;
       await watcher.tick();     // this tick returns early — and still reports
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable' });
+      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [] });
 
       // And nothing ELSE was broadcast on that tick: the fail-shut return still
       // skips the fleet snapshot, exactly as it did before this frame existed.
       listable = true;
       marker('coordinator-paused');
       await watcher.tick();
-      expect((await next()).coord).toEqual({ pause: 'set', mail: 'clear' });
+      expect((await next()).coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] });
       ws.close();
     });
 

@@ -514,10 +514,10 @@ describe('local-loss refusals', () => {
     const { wt } = squashMovedBase();
     const NOIGN = `git() { [[ "$*" == *"--ignored=matching"* ]] && return 128; command git "$@"; };`;
     expect(refusal(wt, NOIGN).verdict).toBe('tree-unreadable');
-    // The pattern ENDS at `status --porcelain`, so it fails the tree read and
-    // neither `worktree list --porcelain` nor `--ignored=matching` (same form the
-    // Task 2 test uses).
-    const NOSTAT = `git() { [[ "$*" == *"status --porcelain" ]] && return 128; command git "$@"; };`;
+    // The pattern ENDS at `status --porcelain --untracked-files=all` (the tree
+    // read's own argv), so it fails that read and neither `worktree list
+    // --porcelain` nor `--ignored=matching`.
+    const NOSTAT = `git() { [[ "$*" == *"status --porcelain --untracked-files=all" ]] && return 128; command git "$@"; };`;
     expect(refusal(wt, NOSTAT).verdict).toBe('tree-unreadable');
     // And the collector's own EXIT-CODE check. This USED to be unreachable —
     // the two patterns above failed `_ws_ignored_digest` as well, its

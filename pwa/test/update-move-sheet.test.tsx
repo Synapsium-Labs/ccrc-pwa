@@ -17,7 +17,7 @@ import { ApiError, api, apiErrorText, moveSkipText, updateErrorText } from '../s
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { ToastHost } from '@ccrc/ui';
-import { planMove, type MoveIntent, type PlannedMove } from '../src/fleet/movePlan';
+import { planMove, rollbackHowText, type MoveIntent, type PlannedMove } from '../src/fleet/movePlan';
 import {
   MOVE_NOTHING_REQUESTED_TEXT, MOVE_REST_TEXT, MOVE_UNREADABLE_TEXT, MoveSendError, UpdateMoveSheet, sendMove,
 } from '../src/fleet/UpdateMoveSheet';
@@ -155,6 +155,22 @@ describe('UpdateMoveSheet — what it names', () => {
     const list = screen.getByRole('list', { name: LIST });
     expect(list.querySelector('b, img')).toBeNull();
     expect(lines()).toEqual([`1. ${LABEL} (fleet) v0.0.9 → v0.0.10`]);
+  });
+
+  it('a rollback plan — fleet or node — says how a rollback happens; an update plan does not (wave 8 item F3)', () => {
+    mount(plan(DOWN));
+    expect(screen.getByText(rollbackHowText('v0.0.8'))).toHaveClass('qc-consequence');
+    cleanup();
+    mount(plan({ scope: 'node', direction: 'rollback', nodeId: FLEET_ID, to: 'v0.0.8' }));
+    expect(screen.getByText(rollbackHowText('v0.0.8'))).toHaveClass('qc-consequence');
+    cleanup();
+    mount(plan(UP));
+    expect(screen.queryByText(rollbackHowText('v0.0.10'))).toBeNull();
+  });
+
+  it('an empty rollback plan says nothing to move and not how a rollback happens (wave 8 item F3)', () => {
+    mount(plan(DOWN, [node({ current: stamp('v0.0.8') })]));
+    expect(screen.queryByText(rollbackHowText('v0.0.8'))).toBeNull();
   });
 });
 
