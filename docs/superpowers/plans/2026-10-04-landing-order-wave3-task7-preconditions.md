@@ -228,7 +228,7 @@ task, and each test has a mutation row that reds it.
 | `server/test/ccd-pr-queue.test.ts` | the closed case (13 → 14) | 3 |
 | `ccd/ccrc-doctor-checks` | `jq_regex` in the table after `jq`; `_check_jq_regex` after `_check_jq` | 3 |
 | `server/test/ccrc-doctor.test.ts` | the `jq_regex` describe, five cases (633 → 638) | 3 |
-| `server/test/ccrc-install.test.ts` | `BASE_LIVE_SHAPE`: one `"jq_regex": "PASS"` line in each of its three doctor maps, re-measured by Plan 3a Task 10 Step 3's procedure (303 at Task 3's tree, unchanged; 313 at the tip, after main grew the file) | 3 |
+| `server/test/ccrc-install.test.ts` | `BASE_LIVE_SHAPE`: one `"jq_regex": "PASS"` line in each of its three doctor maps, re-measured by Plan 3a Task 10 Step 3's procedure (303 at Task 3's tree, unchanged; 315 at the tip, after main grew the file) | 3 |
 | `server/test/coordinator-skill.test.ts` | one assertion on "gives one of four answers." (156, unchanged at Task 3's tree; 160 at the tip, measured) | 3 |
 | `README.md` | the doctor table's `jq_regex` row and the `server`-role box's SKIP clause (ruled in fix round 1: review 267 F6, coordinator mail 3507) | fix round 1 |
 | `docs/superpowers/plans/2026-09-24-landing-order-wave2-native-queue.md` | the H20, H21, H39 and H40 rows (Task 2), the review-lens size line (Task 3), Task 7 Step 1's preconditions paragraph (Task 4) — text only | 2, 3, 4 |
@@ -1991,7 +1991,7 @@ done
 ```
 
 Expected: `123`, `78`, `160`, `14`, `3`, `18`, `28`, `99`, `54`, `13`, `3`, `2`, `54`, `30`; `1 passed | 229 skipped
-(230)`; `6 passed | 307 skipped (313)`; `335 passed (335)` (~135 s).
+(230)`; `6 passed | 309 skipped (315)`; `335 passed (335)` (~135 s).
 
 Then every row of Tasks 1–3, re-run on the branch tip, is red. The per-task tables above give each row's red at its own
 task's tree; on the tip (merge-deny 123 cases, sync-advisory 78, coordinator-skill 160, measured at fix round 2's second commit)
