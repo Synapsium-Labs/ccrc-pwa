@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=bc51a6faa789a0d5c266991a1d69a20814a648f0f269707d5b70e83d41ad2a5c
+# ccrc:generated 1 sha256=ab6ce972c0cfd0274577e35422d17370a162bec093cfee67e6f7d4d4db6c9f7b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29445,7 +29445,9 @@ _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token,
   # lose its uncommitted edits to the `--force` removal. That resume asks the
   # `in-use` cwd probe alone (`_ws_expire_cwd_users`) before the tail re-runs —
   # `in-use`, retryable, or unmeasured, and never a kill; the pane and the unit
-  # stay the tail's to kill. At `artifacts`, and at `branch` after a `present`
+  # stay the tail's to kill — save that a pane which came back runs a shell
+  # whose cwd is the standing tree, so it is itself a cwd user and refuses
+  # `in-use` here, never killed (review 288, F2). At `artifacts`, and at `branch` after a `present`
   # tombstone, the tree is gone and nothing more is asked. The field is read as
   # `_ws_tomb_str` answers it: a tombstone that cannot be read is unmeasured,
   # and anything but the word `present` — absent, or a value ccd never writes —

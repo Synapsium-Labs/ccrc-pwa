@@ -84,11 +84,12 @@ def close_time(text):
     CAST to text, read as a number, is a positive safe integer — anything else (NULL, zero, a negative, a fraction, a
     word) is doubt, None. The SAME answer for every text CAST makes of an INTEGER or REAL value, and for ASCII decimal
     TEXT; `_` is refused because Python's float() reads `1_000` and JavaScript's Number() does not. Divergences are left,
-    stated, each measured: a hand-written TEXT value in JavaScript's own radix spellings (`0x10`, `0b1`, `0o7`) is a
+    stated, each measured, among them: a hand-written TEXT value in JavaScript's own radix spellings (`0x10`, `0b1`, `0o7`) is a
     number to the server and doubt here; Arabic-Indic digits (U+0661 and its row) and fullwidth digits (U+FF11 and its
     row) are an int here (float() reads any Unicode decimal digit) and NaN, so doubt, on the server; a leading U+FEFF
-    (the byte-order mark) is None here (float() does not strip it) and the number on the server (Number() does). No
-    writer produces any of them (the server writes closedAt as an integer)."""
+    (the byte-order mark) is None here (float() does not strip it) and the number on the server (Number() does); a
+    leading U+0085 (NEL) is the reverse: float() strips it, so `'\\x8512'` is 12 here, and Number() does not, so it is
+    NaN, doubt, on the server (review 288, F7). No writer produces any of them (the server writes closedAt as an integer)."""
     if text is None or '_' in text:
         return None
     try:

@@ -409,7 +409,12 @@ describe('a crash at each phase resumes through the `expire:` breadcrumb — and
     const a = makeArchived(h);
     interrupted(a, 'worktree');
     plantTmux(h, { sessions: [`cc-${EXP_ID}`] });
-    const r = expireVerb(h, resumeToken('worktree'));
+    // BOTH halves are planted (review 288, F1): a pane, and a unit that answers `active` until the tail's own
+    // unsupervise has run. A resume that asked the unit at `worktree` would refuse `live`; the tail stops it, and its
+    // re-measure then reads it stopped.
+    const r = expireVerb(h, resumeToken('worktree'), {
+      pre: '_svc_is_active() { if grep -q "^unsupervise" "$HOME/ccd-calls" 2>/dev/null; then printf inactive; else printf active; fi; };',
+    });
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(tmuxSessions(h), 'the tail killed the pane').toEqual([]);
     expired(a);
