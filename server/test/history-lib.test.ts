@@ -234,6 +234,14 @@ describe('canonical JSON and the digests (spec §6.1, §6.5, §9.14)', () => {
     expect(canonicalJson([undefined])).toBe('[null]');
   });
 
+  it('walks a body nested 100,000 levels deep without a stack overflow (D-4304)', () => {
+    const depth = 100_000;
+    const text = `${'{"a":['.repeat(depth)}1${']}'.repeat(depth)}`;
+    const body = JSON.parse(text);
+    expect(canonicalJson(body)).toBe(text);
+    expect(blobShaOfBody(body).length).toBe(32);
+  });
+
   it('one body is one address however its keys arrived', () => {
     expect(blobShaOfBody({ a: 1, b: [1, 2] }).equals(blobShaOfBody({ b: [1, 2], a: 1 }))).toBe(true);
     expect(blobShaOfBody({ a: 1 }).equals(blobShaOfBody({ a: 2 }))).toBe(false);

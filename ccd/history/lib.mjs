@@ -298,13 +298,42 @@ export function historyPaths(home) {
  *  DM8). Arrays keep their order; primitives are JSON.stringify's; a key whose
  *  value is `undefined` is dropped, as JSON.stringify drops it. */
 export function canonicalJson(value) {
-  if (value === null || typeof value !== 'object') {
-    const s = JSON.stringify(value);
+  const leaf = (v) => {
+    const s = JSON.stringify(v);
     return s === undefined ? 'null' : s;
+  };
+  if (value === null || typeof value !== 'object') return leaf(value);
+  // D-4304 (canonical-json-iterative): an explicit stack, not recursion. A
+  // model-written tool input nested ~3,000 levels deep is valid JSON that
+  // JSON.parse reads at any depth, and a recursive walk threw RangeError on it.
+  const open = (v) => {
+    const isArr = Array.isArray(v);
+    return { v, isArr, keys: isArr ? null : Object.keys(v).filter((k) => v[k] !== undefined).sort(), i: 0, parts: [], prefix: '' };
+  };
+  const stack = [open(value)];
+  for (;;) {
+    const f = stack[stack.length - 1];
+    const n = f.isArr ? f.v.length : f.keys.length;
+    if (f.i < n) {
+      const key = f.isArr ? null : f.keys[f.i];
+      const child = f.isArr ? f.v[f.i] : f.v[key];
+      f.i += 1;
+      const prefix = key === null ? '' : `${JSON.stringify(key)}:`;
+      if (child === null || typeof child !== 'object') {
+        f.parts.push(`${prefix}${leaf(child)}`);
+      } else {
+        const g = open(child);
+        g.prefix = prefix;
+        stack.push(g);
+      }
+      continue;
+    }
+    const text = f.isArr ? `[${f.parts.join(',')}]` : `{${f.parts.join(',')}}`;
+    stack.pop();
+    if (stack.length === 0) return text;
+    const parent = stack[stack.length - 1];
+    parent.parts.push(`${f.prefix}${text}`);
   }
-  if (Array.isArray(value)) return `[${value.map((v) => canonicalJson(v)).join(',')}]`;
-  const keys = Object.keys(value).filter((k) => value[k] !== undefined).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(',')}}`;
 }
 
 export function sha256Bytes(data) {
