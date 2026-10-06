@@ -44,6 +44,14 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 05:48 — workspace-lifecycle amends one CCR-15 text (mail 3632; answered in 3633).**
+  - **The finding.** WL's review 284 found that #286 falsifies the spec's "Not changed, deliberately" sentence
+    (about :780). #286 ships ws-reap's `expire-in-progress` refusal and a spawn-path refusal that covers ws-restore.
+  - **WL's fix (their D-3965).** bright-canyon names the two refusals there, points at WL's §5.3, and makes the
+    same edit in the contract if it carries the claim.
+  - **No contention.** #290 edits the spec only at §1 (about :39) and §5.5 step 2 (about :371 to :395), and leaves
+    the contract alone. The hunks are disjoint, so the second lander merges main and keeps both, the rule agreed in
+    3622.
 - **2026-10-06 05:41 — wave 5's wave-done re-measured (mail 3627, PR #290 at `e79b1da7`); numbers assigned; review
   run 285 opened.**
   - **The claim holds.**
