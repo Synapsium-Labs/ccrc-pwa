@@ -630,8 +630,8 @@ const childReclaimPresenceWithin = (entry: ChildReclaimSweepEntry, now: ChildRec
  *  extends the episode. An unlicensed presence answer keeps
  *  `presenceHeldSince`, or sets it to its arrival, except that a request sent
  *  as the lease's holder whose answer does not extend the episode clears it:
- *  the holder forfeits. A licensed one clears it. `firstDeferredAt` is stamped
- *  once, from `ask.at.wallMs`. Every other stamp is `ask.at.monoMs`.
+ *  the holder forfeits. A licensed one clears it. `firstDeferredAt` (stamped once) and `lastPresenceWallAt`
+ *  are `ask.at.wallMs`; `lastPresenceDeferredAt`, `lastAskedAt`, `lastFailedAt` and `refusedAt` are `ask.at.monoMs`.
  *
  *  `lastDeferWhy` is the deferral's own word after a deferral and null after
  *  every other outcome, a rejection (written as `failed`) among them: the

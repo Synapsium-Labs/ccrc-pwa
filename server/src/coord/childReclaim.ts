@@ -1296,10 +1296,11 @@ export function childReclaimFeedSkips(o: Exclude<ChildReclaimOutcome, { kind: 'g
 }
 
 /**
- * ONE explicit feed row per outcome (spec §5.9). Explicit because it does not
- * come for free: a reclaim on an already-closed run is an observation, not a
- * transition, and the run-event lane skips observations — a design that
- * assumed a row would have delivered none. `kind: 'run'`, recorded and NEVER
+ * One explicit feed row per outcome `childReclaimFeedSkips` does not skip
+ * (spec §5.9). Explicit because it does not come for free: a reclaim on an
+ * already-closed run is an observation, not a transition, and the run-event
+ * lane skips observations — a design that assumed a row would have delivered
+ * none. `kind: 'run'`, recorded and NEVER
  * pushed (the operator's ruling: every reclaim lands in the feed; no push per
  * reap). The `POST /api/coord/caps` pattern exactly: a missing log degrades
  * the record and never the act, `recordFeedEvent` throws synchronously and is
@@ -1429,7 +1430,7 @@ export type ChildReclaimEvent = Pick<MirroredLifecycleEvent, 'act' | 'outcome' |
 
 /**
  * What the registry says of a run's session, as the watcher last listed it.
- * FOUR answers, because the chip treats "never listed" and "listed, no row"
+ * FIVE answers, because the chip treats "never listed" and "listed, no row"
  * differently from a row, and a row's `ChildMark` is itself three-way (spec
  * §5.1). None of them folds into another.
  */
@@ -1682,9 +1683,9 @@ export function withChildReclaim(runs: readonly RunSummary[], src: ChildReclaimS
       childReclaim: childReclaimStatus({
         run, event, row,
         sessionHasOpenRun: sid !== null && open.has(sid),
-        // `typeof`, not `!== null`: a row from an older server omits `reviews`,
-        // and absence means a work run, the only kind it knew. A reviewed run
-        // ABSENT from this list is not known terminal, so it keeps the child.
+        // `reviews` names the work run a review run reads, and is null on a work
+        // run, which reviews nothing. A reviewed run ABSENT from this list is
+        // not known terminal, so it keeps the child.
         reviewedRunNotTerminal: typeof run.reviews === 'number' && !terminalRunIds.has(run.reviews),
         fleetPaused: src.fleetPaused,
         deferredSince: entry?.firstDeferredAt ?? null,

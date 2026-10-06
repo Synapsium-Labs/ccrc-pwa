@@ -3271,8 +3271,12 @@ export class CoordStore {
    *    already-terminal runs that began then, after their `closedAt`.
    *
    *  The parsers' extra readings over-protect, which is the fail-shut
-   *  direction. An unparseable row THROWS. An id absent from the map has never
-   *  held a chair. The residual is unchanged: a lost or rebuilt `coord.db`
+   *  direction. An unparseable row THROWS. `reclaimProgram` is the only
+   *  writer of a `causedBy = 'operator'` row whose detail starts `reclaim:`
+   *  (the stall lane's operator rows start `stall:` or `stall-shadow:`, and
+   *  `closeRun`'s carry a NULL detail), so an unparseable such row — which
+   *  throws, and so keeps every child — can come from no other writer in this
+   *  tree. An id absent from the map has never held a chair. The residual is unchanged: a lost or rebuilt `coord.db`
    *  loses this history, and every minting run with it.
    *
    *  Synchronous, like every other read on this store — see

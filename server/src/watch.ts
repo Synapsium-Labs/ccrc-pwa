@@ -770,10 +770,10 @@ export class FleetWatcher {
    *  a restart loses it, and losing it can only DELAY a reclaim (two passes
    *  rebuild eligibility, the ceiling clock restarts) or retry a failing one
    *  sooner, which ccd's re-proof on the box makes safe — never cause one.
-   *  Its decision clocks are this process's monotonic clock; only
-   *  `firstDeferredAt` is an epoch (`ChildReclaimSweepEntry`). An entry
-   *  describes one workspace generation, and a new birth replaces it with a
-   *  first sighting. */
+   *  Its decision clocks are this process's monotonic clock; `firstDeferredAt`
+   *  and `lastPresenceWallAt` are wall-clock epoch ms and `bornAt` is ccd's
+   *  clock, compared for equality only (`ChildReclaimSweepEntry`). An entry
+   *  describes one workspace generation; a new birth replaces it with a first sighting. */
   private childReclaimSweepState = new Map<string, ChildReclaimSweepEntry>();
   /** Children whose reclaim this lane has asked for and not heard back on. A
    *  pass never asks a child already in this set twice: the executor can hold
@@ -1567,9 +1567,9 @@ export class FleetWatcher {
   /** The sweep's in-memory state, read-only (child-reclamation wave 4) — what
    *  wave 5's run chip reads to tell `deferred` from `pending`. Empty after a
    *  restart, by design: see `childReclaimSweepState`'s own docstring. Its
-   *  `firstDeferredAt` is wall-clock epoch ms, the one field a reader outside
-   *  the lane may read as a time. Every other clock in the entry is this
-   *  process's monotonic clock and means nothing outside it. */
+   *  `firstDeferredAt` is wall-clock epoch ms, the one field a reader outside the lane may
+   *  read as a time. `lastPresenceWallAt` (wall clock) and `bornAt` (ccd's clock, compared for
+   *  equality only) are the lane's own; every other clock in it is this process's monotonic clock. */
   currentChildReclaimDefers(): ReadonlyMap<string, ChildReclaimSweepEntry> {
     return this.childReclaimSweepState;
   }
