@@ -556,6 +556,8 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Run state:** the run went to `awaiting-review`, with its items already settled.
   - **Acceptance review 289** is opened, and its brief names the held-out panel. Its dispatch was refused `cap-daily`
     (24 of 24 in the rolling day). It dispatches when run 266's dispatch ages out at 07:47.
+  - **2026-10-06 07:49 — review 289 dispatched** to `ccrc-pwa-bright-summit`. The tip was re-read first and is still
+    `6850f261`.
   - **Merge order with #286:** whichever acceptance lands first merges first. The second merges main and
     re-stamps `ccd/ccd`, by the shared-region ruling.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
