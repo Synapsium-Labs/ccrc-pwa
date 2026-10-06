@@ -940,6 +940,15 @@ export const childReclaimFailingSentence = (word: string | null): string =>
   + 'While automatic reclamation is running, ccrc retries it, backing off in between. '
   + `The last failure: ${word ?? 'ccd recorded no reason.'}`;
 
+/** The last failure's word that `childReclaimFailingSentence` carries, derived
+ *  ONCE for both of its callers: the attention list's failing arm, and the run
+ *  chip past the ceiling (spec §5.9). So the banner and the chip say the same
+ *  thing of one line. The journal word comes first (`lcRefusalWord`) and the
+ *  server's lookup second. Null only when ccd journaled no token: an empty
+ *  token is a token here, read through the lookup like any other. */
+export const childReclaimFailingWord = (refusal: string | null, sentenceFor: (token: string) => string): string | null =>
+  refusal === null ? null : (lcRefusalWord(refusal) ?? sentenceFor(refusal));
+
 export interface ChildReclaimAttentionInput {
   readonly latest: readonly ChildReclaimJournalRow[];
   /** Every registry row this read listed → its minting run id, or null when
@@ -989,7 +998,7 @@ export function childReclaimAttention(i: ChildReclaimAttentionInput): ChildRecla
         at: row.at,
       });
     } else if (childReclaimFailingPastCeiling(row, i.nowMs)) {
-      const word = row.refusal === null ? null : (lcRefusalWord(row.refusal) ?? i.sentenceFor(row.refusal));
+      const word = childReclaimFailingWord(row.refusal, i.sentenceFor);
       out.push({
         kind: 'failing', sessionId: row.sessionId, runId, token: row.refusal ?? '', sentence: childReclaimFailingSentence(word),
         // Since when: the start of the run of failures, not its latest line.

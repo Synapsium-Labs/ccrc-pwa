@@ -262,6 +262,7 @@ describe('GET /api/runs composes the reclaim chip (wave 5, spec §5.9)', () => {
   it('a pre-lock refused line reads deferred with its journal word, never refused', async () => {
     const h = await harness();
     const id = closedRun(h.coord, SID);
+    markedAs(h.watcher, id);
     const at = Date.now() - 60_000;
     journal(h.coord, [
       { at: T_CREATE, act: 'create', outcome: 'done', id: SID },
@@ -270,11 +271,16 @@ describe('GET /api/runs composes the reclaim chip (wave 5, spec §5.9)', () => {
     expect(chipOf(await getRuns(h.app), id)).toEqual({
       word: 'deferred', sentence: lcRefusalWord('flock-unavailable'), at,
     });
+    // The same line on a child that no longer stands as this run's promises no retry, and is
+    // never refused either: the row rule's silence (spec §5.9).
+    markedAs(h.watcher, id + 99);
+    expect(chipOf(await getRuns(h.app), id)).toBeNull();
   });
 
   it('a failure run past the ceiling reads the attention list’s own sentence', async () => {
     const h = await harness();
     const id = closedRun(h.coord, SID);
+    markedAs(h.watcher, id);
     journal(h.coord, [
       { at: T_CREATE, act: 'create', outcome: 'done', id: SID },
       { at: T_CLOSE + 5_000, act: 'reclaim', outcome: 'failed', refusal: 'pin-failed', id: SID },

@@ -10,8 +10,9 @@ import { refusalSentence } from '../wsaudit.js';
 import { CHILD_BIRTH_SKEW_MS, type ChildSpentVerdict } from './childSpent.js';
 import {
   CHILD_RECLAIM_PRE_LOCK_TOKEN, CHILD_RECLAIM_SKIP, childReclaimCoordinated, childReclaimFailingPastCeiling,
-  childReclaimFailingSentence, childReclaimFailureLine, childReclaimJournalRow, type ChildReclaimFeedQuiet,
-  type ChildReclaimKeptAttention, type ChildReclaimPreLockToken, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
+  childReclaimFailingSentence, childReclaimFailingWord, childReclaimFailureLine, childReclaimJournalRow,
+  type ChildReclaimFeedQuiet, type ChildReclaimKeptAttention, type ChildReclaimPreLockToken, type ChildReclaimSweepSkip,
+  type ChildReclaimSweepVerdict,
 } from '../childReclaimSweep.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
@@ -1355,7 +1356,9 @@ export function recordChildReclaimKeptFeed(
 // THE ONE DERIVATION. `GET /api/runs` composes `RunSummary.childReclaim` through
 // `withChildReclaim` and nothing else decides a word. Every sentence is the
 // server's: a journal token's comes from `childReclaimTokenSentence` (the two
-// server maps in their one documented order); a sweep verdict's comes from
+// server maps in their one documented order), or, past the failure ceiling,
+// from the attention list's own `childReclaimFailingWord`, which reads the
+// same two in the same order; a sweep verdict's comes from
 // `CHILD_RECLAIM_SKIP`, the table every surface reads (spec §5.9); the words
 // that have neither have theirs below. The generation fence, the latest-event
 // pick and the token-kind lookup are wave 4's exports above, each the
@@ -1502,16 +1505,22 @@ export interface ChildReclaimStatusInput {
  *    (a person's hold, or a coordinator's chair, outlasts a failure).
  * 4. THE REMAINING EVENTS:
  *    - a FAILURE LINE (`childReclaimFailureLine`: `failed`, or a refusal with
- *      one of the two pre-lock tokens) → deferred, in the attention list's own
- *      sentence once its run has lasted the ceiling;
+ *      one of the two pre-lock tokens), where the gate holds → deferred, in
+ *      the attention list's own sentence once its run has lasted the ceiling;
  *    - refused with no token → refused;
- *    - the `paused` token → paused;
- *    - retry → deferred;
+ *    - the `paused` token, where the gate holds → paused;
+ *    - retry, where the gate holds → deferred;
  *    - a token this build cannot classify → refused, through
  *      `refusalSentence`'s fallback;
  *    - `intent` / `unknown` (an act with no recorded end, an attempt in flight
  *      or one that died mid-way) → the row rule, because a registry row still
  *      carrying this run's marker is evidence the workspace is still there.
+ *    The failure line, the `paused` token and retry each promise that the
+ *    sweep acts again, and the chip speaks for the sweep only of a child that
+ *    still stands (spec §5.9). So where the gate fails, each answers nothing
+ *    of its own and falls through to the row rule, like `intent`. That covers
+ *    no row, a marker naming another run, and a session handed to an open
+ *    run. Such an event never reaches the unclassified-token `refused` either.
  * 5. THE ROW RULE, where the gate holds:
  *    - a review child whose reviewed run is not known to be terminal → pending,
  *      kept for the report;
@@ -1520,9 +1529,10 @@ export interface ChildReclaimStatusInput {
  *    - an eligible verdict, or an ordinary skip → pending;
  *    - no verdict yet → pending, with its own sentence and never the eligible
  *      one.
- *    Anything short of the gate says nothing. An unreadable marker, or one
- *    naming another run (a recycled slug, or the hand-over wave's own row),
- *    cannot be said to be this run's.
+ *    Anything short of the gate says nothing, whatever rule 4's failure,
+ *    `paused` or retry event said. An unreadable marker, or one naming another
+ *    run (a recycled slug, or the hand-over wave's own row), cannot be said to
+ *    be this run's.
  *
  * THE SWITCH replaces every answer that promises the sweep will act on its own
  * (pending, and every deferred) with `CHILD_RECLAIM_SWITCH_PAUSED`, and nothing
@@ -1561,22 +1571,33 @@ export function childReclaimStatus(input: ChildReclaimStatusInput): ChildReclaim
   if (event !== null) {
     // A FAILURE LINE (spec §5.9): `failed`, or a refusal with one of the two pre-lock tokens, which
     // the executor and the sweep retry. The SAME predicate the attention list's failing arm reads.
-    if (childReclaimFailureLine(event)) {
-      const word = token === null ? null : childReclaimTokenSentence(token);
+    // It promises the sweep acts again, and so do the `paused` and retry arms below. All three
+    // answer only for a child that still stands as this run's (`marked`, the row rule's gate; spec
+    // §5.9). Any other child falls through to the row rule. That includes a pre-lock refusal, which
+    // never reaches the refused arm.
+    const failureLine = childReclaimFailureLine(event);
+    if (failureLine && marked) {
       if (input.journalFailingSince !== null) {
-        return waiting({ word: 'deferred', sentence: childReclaimFailingSentence(word), at: input.journalFailingSince });
+        // The attention list's own sentence, its word from the list's own derivation, so an empty
+        // token reads here as it reads there.
+        const listed = childReclaimFailingWord(event.refusal, refusalSentence);
+        return waiting({ word: 'deferred', sentence: childReclaimFailingSentence(listed), at: input.journalFailingSince });
       }
+      const word = token === null ? null : childReclaimTokenSentence(token);
       return waiting({ word: 'deferred', sentence: word ?? CHILD_RECLAIM_STATUS_SENTENCE.failed, at: event.at });
     }
-    if (event.outcome === 'refused') {
+    if (!failureLine && event.outcome === 'refused') {
       if (token === null) {
         return { word: 'refused', sentence: CHILD_RECLAIM_STATUS_SENTENCE.refusedNoReason, at: event.at };
       }
-      if (token === PAUSED_TOKEN) return { word: 'paused', sentence: childReclaimTokenSentence(token), at: event.at };
-      if (kind === 'retry') return waiting({ word: 'deferred', sentence: childReclaimTokenSentence(token), at: event.at });
+      const retryable = token === PAUSED_TOKEN || kind === 'retry';
+      if (retryable && marked) {
+        if (token === PAUSED_TOKEN) return { word: 'paused', sentence: childReclaimTokenSentence(token), at: event.at };
+        return waiting({ word: 'deferred', sentence: childReclaimTokenSentence(token), at: event.at });
+      }
       // A token this build was never compiled to know (`kind` null) and not a pre-lock token:
       // refused, through `refusalSentence`'s fallback naming it (spec §5.9).
-      return { word: 'refused', sentence: childReclaimTokenSentence(token), at: event.at };
+      if (!retryable) return { word: 'refused', sentence: childReclaimTokenSentence(token), at: event.at };
     }
     // `intent` / `unknown`: an act with no recorded end, newer than any outcome in this
     // generation. An older attempt's answer is not this one's: fall through to the row rule.

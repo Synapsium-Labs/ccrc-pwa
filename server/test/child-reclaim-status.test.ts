@@ -14,10 +14,11 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   CHILD_RECLAIM_STATUS_SENTENCE, CHILD_RECLAIM_TOKEN_KIND, childReclaimSessions,
-  childReclaimStatus, withChildReclaim, type ChildReclaimSources, type ChildReclaimStatusInput,
+  childReclaimStatus, childReclaimTokenKind, withChildReclaim, type ChildReclaimSources, type ChildReclaimStatusInput,
 } from '../src/coord/childReclaim.js';
 import {
-  CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_SKIP, childReclaimFailingSentence, childReclaimFirstSighting,
+  CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_SKIP, childReclaimAttention, childReclaimFailingSentence,
+  childReclaimFirstSighting,
   type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
 } from '../src/childReclaimSweep.js';
 import { refusalSentence } from '../src/wsaudit.js';
@@ -291,6 +292,77 @@ describe('childReclaimStatus — every mapping row (wave 5, spec §5.7–§5.9)'
     const all = Object.values(S);
     expect(all.every((s) => s.length > 0)).toBe(true);
     expect(new Set(all).size).toBe(all.length);
+  });
+});
+
+// Step 4's failure-line, `paused`-token and retry arms each promise that the sweep acts again, and
+// the sweep's word is about "a child that still stands" (spec §5.9). So each answers only where the
+// row rule's gate holds. A child with no registry row, a marker naming another run, or a session
+// handed to an open run falls through to the row rule's silence. It never gets a promised retry,
+// and never the unclassified-token `refused` that sits below these arms. Each arm is checked under
+// the switch too, because the switch must not bring an answer back.
+describe('childReclaimStatus — the retry-promising arms answer only for a child that still stands (spec §5.9)', () => {
+  const ARMS: readonly { readonly arm: string; readonly over: Partial<ChildReclaimStatusInput>;
+    readonly want: ChildReclaimStatus; readonly wantPaused: ChildReclaimStatus }[] = [
+    { arm: 'the failure-line arm (failed pin-failed)', over: { event: ev('failed', 'pin-failed') },
+      want: deferredWith(lcRefusalWord('pin-failed')!, EV_AT), wantPaused: switchPaused },
+    // A pre-lock refusal is a failure line whose token no kind classifies: falling out of the
+    // failure arm into the refused arm below would read it as the unclassified `refused`.
+    { arm: 'the failure-line arm (a pre-lock refusal, flock-unavailable)', over: { event: ev('refused', 'flock-unavailable') },
+      want: deferredWith(lcRefusalWord('flock-unavailable')!, EV_AT), wantPaused: switchPaused },
+    { arm: 'the failure-line arm past the ceiling', over: { event: ev('failed', 'pin-failed'), journalFailingSince: AT },
+      want: deferredWith(childReclaimFailingSentence(lcRefusalWord('pin-failed')), AT), wantPaused: switchPaused },
+    { arm: 'the paused-token arm', over: { event: ev('refused', 'paused') },
+      want: { word: 'paused', sentence: refusalSentence('paused'), at: EV_AT },
+      wantPaused: { word: 'paused', sentence: refusalSentence('paused'), at: EV_AT } },
+    { arm: 'the retry arm (held)', over: { event: ev('refused', 'held') },
+      want: deferredWith(refusalSentence('held'), EV_AT), wantPaused: switchPaused },
+  ];
+  const NOT_STANDING: readonly { readonly shape: string; readonly over: Partial<ChildReclaimStatusInput> }[] = [
+    { shape: 'no registry row', over: { row: { kind: 'absent' } } },
+    { shape: 'the marker names another run (a recycled slug)', over: { row: { kind: 'row', child: { kind: 'child', runId: RUN + 1 } } } },
+    { shape: 'another run is open on the session (a hand-over)', over: { sessionHasOpenRun: true } },
+  ];
+  const cases = ARMS.flatMap(({ arm, over }) => NOT_STANDING.flatMap(({ shape, over: not }) =>
+    [false, true].map((fleetPaused) => ({
+      name: `${arm}, ${shape}${fleetPaused ? ', under a fleet pause' : ''} → nothing`,
+      input: base({ ...over, ...not, fleetPaused }),
+    }))));
+
+  it('covers every arm against every shape of a child that no longer stands, with and without the switch', () => {
+    expect(cases).toHaveLength(ARMS.length * NOT_STANDING.length * 2);
+  });
+
+  for (const { name, input } of cases) {
+    it(name, () => {
+      expect(childReclaimStatus(input)).toBeNull();
+    });
+  }
+
+  for (const { arm, over, want, wantPaused } of ARMS) {
+    it(`${arm}, the marked child that still stands → its own answer (control)`, () => {
+      expect(childReclaimStatus(base(over))).toEqual(want);
+      expect(childReclaimStatus(base({ ...over, fleetPaused: true }))).toEqual(wantPaused);
+    });
+  }
+});
+
+// Past the ceiling the chip says what the attention list's failing arm says of the same line (spec
+// §5.9): the expectation is the LIST's own answer, so the two cannot drift apart by hand.
+describe('childReclaimStatus — past the ceiling, the attention list’s own failing sentence (spec §5.9)', () => {
+  const nowMs = AT + CHILD_RECLAIM_DEFER_CEILING_MS;
+  const LINES: readonly (readonly [string, string | null])[] = [
+    ['failed', ''], ['failed', null], ['failed', 'pin-failed'], ['failed', 'state-changed'],
+    ['failed', 'from-a-newer-ccd'], ['refused', 'flock-unavailable'],
+  ];
+  it.each(LINES)('%s %j → the list’s sentence for the same row, dated from the run’s start', (outcome, refusal) => {
+    const listed = childReclaimAttention({
+      latest: [{ sessionId: SID, outcome, refusal, at: EV_AT, failingSince: AT }],
+      live: new Map([[SID, RUN]]), kindOf: childReclaimTokenKind, sentenceFor: refusalSentence, nowMs,
+    });
+    expect(listed.map((a) => a.kind)).toEqual(['failing']);
+    expect(childReclaimStatus(base({ event: ev(outcome, refusal), journalFailingSince: AT })))
+      .toEqual({ word: 'deferred', sentence: listed[0]!.sentence, at: AT });
   });
 });
 
