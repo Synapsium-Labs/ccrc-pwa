@@ -59,6 +59,9 @@ import {
   // `mail-routes.test.ts`'s scanner to arbitrate". Imported, never retyped.
   isPositiveDecimalSafeInteger,
   parseArmEventDetail,
+  // The coordination fence's two instants (`childReclaimCoordinatorClaims`) are
+  // read in their canonical spelling only.
+  parseCanonicalPositiveSafeInteger,
   parseRouteEventDetail,
   parseWaveDoneSignals,
   PROGRAM_KICKOFF_SUBJECT,
@@ -3255,9 +3258,11 @@ export class CoordStore {
    *    `programOpenRunCount`'s predicate, copied, so `'unknown'` counts as open.
    *  - `'unplaced'` when none is open but a claim carries no readable instant:
    *    a terminal run with no `closedAt`, as a reconstructed or legacy row has,
-   *    or a `closedAt` or displacement `at` that does not read as a positive
-   *    safe integer (CAST and proven, `lastRunBySession`'s idiom, because the
-   *    schema is not STRICT).
+   *    or a `closedAt` or displacement `at` that is not the canonical decimal
+   *    spelling of a positive safe integer (CAST to TEXT, because the schema is
+   *    not STRICT, then `parseCanonicalPositiveSafeInteger`, never `Number()`:
+   *    `Number()` reads a TEXT `0x10` as 16, an instant before any workspace's
+   *    birth, which would let the fence call a coordinator "not coordinated").
    *  - Otherwise, the greatest of: each terminal run's `closedAt` that names it
    *    today; and the `at` of every `reclaim:` displacement row naming it on
    *    EITHER side. The `from` side (`childReclaimDisplacedCandidates`) is a
@@ -3283,18 +3288,20 @@ export class CoordStore {
       if (had === undefined || c === 'open' || c === 'unplaced') { claims.set(id, c); return; }
       if (had !== 'unplaced' && c > had) claims.set(id, c);
     };
-    // The runs read. `closedAt` rides CAST to TEXT and is proven by
-    // `persistedInt` (`lastRunBySession`'s measured idiom): the schema is not
-    // STRICT, and SQLite ranks TEXT above INTEGER, so a raw read could hand
-    // this fold a string or a fraction.
+    // The runs read. `closedAt` rides CAST to TEXT and is parsed by
+    // `parseCanonicalPositiveSafeInteger`: the schema is not STRICT, and SQLite
+    // ranks TEXT above INTEGER, so a raw read could hand this fold a string or
+    // a fraction. Canonical only, never `persistedInt`'s `Number()`: that reads
+    // a hex, binary or exponent spelling as an instant no writer wrote (`0x10`
+    // is 16, before any birth: fail-OPEN), where `'unplaced'` keeps the child.
     const runs = this.db.prepare(
       `SELECT claimedBy, CASE WHEN state NOT IN ${TERMINAL_RUN_STATES_SQL} THEN 1 ELSE 0 END AS open, ` +
       'CAST(closedAt AS TEXT) AS closedAtText FROM runs WHERE claimedBy IS NOT NULL',
     ).all() as { claimedBy: string; open: number; closedAtText: string | null }[];
     for (const r of runs) {
       if (r.open === 1) { note(r.claimedBy, 'open'); continue; }
-      const closed = r.closedAtText === null ? null : persistedInt(r.closedAtText, 'closedAt');
-      note(r.claimedBy, closed !== null && closed.ok ? closed.value : 'unplaced');
+      const closed = r.closedAtText === null ? null : parseCanonicalPositiveSafeInteger(r.closedAtText);
+      note(r.claimedBy, closed ?? 'unplaced');
     }
     // The displacement read. `substr(...) = 'reclaim:'`, never `LIKE
     // 'reclaim:%'` (child-reclamation wave 4): SQLite's `LIKE` is
@@ -3321,8 +3328,9 @@ export class CoordStore {
       if (froms === null || heirs === null) {
         throw new Error(`run_events carries an unparseable reclaim-displacement row: ${JSON.stringify(row.detail)}`);
       }
-      const at = row.atText === null ? null : persistedInt(row.atText, 'run_events at');
-      const instant: ChildReclaimCoordinatorClaim = at !== null && at.ok ? at.value : 'unplaced';
+      // Parsed canonically, for the runs read's reason above.
+      const at = row.atText === null ? null : parseCanonicalPositiveSafeInteger(row.atText);
+      const instant: ChildReclaimCoordinatorClaim = at ?? 'unplaced';
       for (const id of froms) note(id, instant);
       for (const id of heirs) note(id, instant);
     }

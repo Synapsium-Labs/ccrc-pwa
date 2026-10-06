@@ -3046,6 +3046,30 @@ describe('CoordStore.childReclaimCoordinatorClaims — the latest instant per id
     expect(claims.get('Y')).toBe('unplaced');
   });
 
+  // A non-canonical TEXT stamp. `Number()` reads `0x10` as 16 and `0b1` as 1 —
+  // instants before any workspace's birth, so a fold that took them would call
+  // the coordinator "not coordinated" (fail-open). The canonical parse leaves
+  // them unplaced, which keeps the child.
+  it('(i) a closedAt in a non-canonical spelling (0x10, 0b1) is unplaced — alone, and beside a run closed at 5 000', () => {
+    const s = store();
+    closed(s, 'X', '0x10');
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('unplaced');
+    closed(s, 'X', 5_000);
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('unplaced');
+    closed(s, 'Z', '0b1');
+    expect(s.childReclaimCoordinatorClaims().get('Z')).toBe('unplaced');
+  });
+
+  it('(j) a `reclaim:` row whose at is a non-canonical spelling (0x20) leaves both its sides unplaced', () => {
+    const s = store();
+    const r = closed(s, 'X', 1_000);
+    expect(s.reclaimProgram(r.id, 'Y', 2_000, null)).toMatchObject({ ok: true });
+    s.db.prepare("UPDATE run_events SET at = '0x20' WHERE substr(detail, 1, 8) = 'reclaim:'").run();
+    const claims = s.childReclaimCoordinatorClaims();
+    expect(claims.get('X')).toBe('unplaced');
+    expect(claims.get('Y')).toBe('unplaced');
+  });
+
   it('an id no run names and no displacement names is absent from the map', () => {
     const s = store();
     closed(s, 'X', 1_000);
