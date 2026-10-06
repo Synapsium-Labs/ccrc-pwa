@@ -372,7 +372,7 @@ bash -n ccd/ccd
 cd server
 ./node_modules/.bin/vitest run test/ccd-child-reclaim-ladder.test.ts test/ccd-child-reclaim-audit.test.ts
 ./node_modules/.bin/vitest run test/ccd-child-reclaim-verb.test.ts \
-  -t 'absent-suffix|removed ancestor alias|locked recomputation|fresh final ownership|resumed final ownership|defer-expired|liveness independent|repairing the alias'
+  -t 'absent-suffix|removed ancestor alias|locked recomputation|fresh final ownership|resumed final ownership|defer-expired|liveness independent|re-pointed alias'
 ```
 
 Expected: PASS, including the seam cases already recorded RED in Task 3.
@@ -462,7 +462,7 @@ For any control that actually reclaims, use a fresh fixture; do not reuse a fixt
 
 ```bash
 ./node_modules/.bin/vitest run test/ccd-child-reclaim-verb.test.ts \
-  -t 'absent-suffix|removed ancestor alias|locked recomputation|fresh final ownership|resumed final ownership|defer-expired|liveness independent|repairing the alias'
+  -t 'absent-suffix|removed ancestor alias|locked recomputation|fresh final ownership|resumed final ownership|defer-expired|liveness independent|re-pointed alias'
 ```
 
 Expected: every safety case that depends on rejecting projection FAILS at its named assertion because the resolver-only consumer still trusts rc 0; the complete-existing and subject-R19 controls PASS. A syntax/import failure is not evidence. Record each failing case and assertion, then execute Task 2.
@@ -471,7 +471,7 @@ Expected: every safety case that depends on rejecting projection FAILS at its na
 
 ```bash
 ./node_modules/.bin/vitest run test/ccd-child-reclaim-verb.test.ts \
-  -t 'absent-suffix|removed ancestor alias|locked recomputation|fresh final ownership|resumed final ownership|defer-expired|liveness independent|repairing the alias'
+  -t 'absent-suffix|removed ancestor alias|locked recomputation|fresh final ownership|resumed final ownership|defer-expired|liveness independent|re-pointed alias'
 ./node_modules/.bin/vitest run \
   test/ccd-child-reclaim-ladder.test.ts \
   test/ccd-child-reclaim-audit.test.ts \

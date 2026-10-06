@@ -137,6 +137,48 @@ describe('stage 4 rows count what their names say (TZ=UTC, hand-built log)', () 
   });
 });
 
+// §9's stage-4 target, restated (review 246's F6): no FOURTH rescue inside an
+// hour that no chain wait preceded. A nonzero raw 4+ count can be the chain wait
+// working as designed — three rescues at t0, t0+10 and t0+20 min, and a fourth
+// at t0+55 after a full chain wait still lands inside the hour of the first —
+// so the target row counts only a fourth LANDED rescue the chain wait could have
+// held (a dated block not past its five-hour reset's grace) with no `kind=chain`
+// entry between the third and the fourth. The raw count is still reported.
+describe('the restated target: a fourth landed rescue in an hour that no chain wait preceded', () => {
+  const R = utc('2026-09-20 14:00:00');
+  type Four = { chain?: boolean; chainFirst?: boolean; refuseSecond?: boolean; undated?: boolean; pastReset?: boolean; reset?: string; times?: string[] };
+  const four = (sid: string, opts: Four = {}): string[] => {
+    const out: string[] = [];
+    const chain = `rescuewait ${sid}: kind=chain on claude reset=${R}`;
+    if (opts.chainFirst) out.push(`2026-09-20 09:50:00 ${chain}`);
+    (opts.times ?? ['10:00', '10:10', '10:20', '10:55']).forEach((m, i) => {
+      const reset = opts.reset ?? (opts.pastReset ? utc('2026-09-20 09:00:00') : R);
+      const tok = opts.undated ? '' : ` via=transcript reset=${reset} type=five_hour row=${utc(`2026-09-20 ${m}:00`) - 30}`;
+      if (i === 3 && opts.chain) out.push(`2026-09-20 10:25:00 ${chain}`);
+      out.push(`2026-09-20 ${m}:00 auto-rescue ${sid}: claude (blocked) -> claude-a [home=claude]${tok}`);
+      if (!(i === 1 && opts.refuseSecond)) out.push(`2026-09-20 ${m}:30 swap ${sid}: claude -> claude-a (uuid u)`);
+    });
+    return out;
+  };
+
+  it('counts u1 and u7 only: u2 chain-waited, u3\'s second swap was refused, u4\'s blocks were undated, u5\'s reset had passed, u6\'s fourth fell outside the hour, u7\'s only chain wait came before its first rescue — and the raw row counts six', () => {
+    const log = path.join(h.home, 'f6-swap.log');
+    fs.writeFileSync(log, [...four('u1'), ...four('u2', { chain: true }), ...four('u3', { refuseSecond: true }),
+      ...four('u4', { undated: true }), ...four('u5', { pastReset: true }),
+      ...four('u6', { times: ['10:00', '10:10', '10:20', '11:05'] }), ...four('u7', { chainFirst: true })].join('\n') + '\n');
+    const r = run(h.home, ['--swap-log', log], { TZ: 'UTC' });
+    expect(r.sessions_with_an_unchained_4th_rescue_in_an_hour).toBe(2);
+    expect(r.sessions_with_4plus_rescues_in_an_hour, 'the raw count, reported').toBe(6);
+  });
+
+  it('a forged reset= is no date: neither a word nor 5000 digits stops the read, and neither is counted', () => {
+    const log = path.join(h.home, 'forged-swap.log');
+    fs.writeFileSync(log, [...four('f1', { reset: 'abc' }), ...four('f2', { reset: '9'.repeat(5000) }), ...four('u1')].join('\n') + '\n');
+    const r = run(h.home, ['--swap-log', log], { TZ: 'UTC' });
+    expect(r.sessions_with_an_unchained_4th_rescue_in_an_hour).toBe(1);
+  });
+});
+
 describe('each regex is bound to the line the real ccd writes', () => {
   const ID = 'claude-demo';
   const seedSession = (at: number, row: Record<string, unknown>): void => {
@@ -161,7 +203,9 @@ describe('each regex is bound to the line the real ccd writes', () => {
     const t = Math.floor(Date.now() / 1000);
     seedSession(t - 5, { quotaLimits: { status: 'rejected', resetsAt: t + 9000, rateLimitType: 'five_hour' } });
     h.sh(`${stubs('❯ ', 'claude-a')} HARD_BLOCK_TYPE=five_hour; HARD_BLOCK_RESET=${t + 300}; _rescuewait_open ${ID} claude near`, env(t));
-    h.sh(`${stubs('❯ ', 'claude-a')} _auto_swap_check ${ID}`, env(t));   // closes the near wait as a swap, and logs the rescue
+    h.sh(`${stubs('❯ ', 'claude-a')} _auto_swap_check ${ID}`, env(t));   // logs the rescue; the near wait stays open
+    const SWAP = 'systemctl() { :; }; launchctl() { :; }; tmux() { :; }; sleep() { :; };';
+    h.sh(`${SWAP} CCD_SWAP_AUTO=1 cmd_swap ${ID} claude-a`, { TMUX: '' });   // the landing closes it as a swap
     h.sh(`_carried_in_note ${ID} pane ${t - 100} ${t}`);
     const r = run(h.home);                                                // the DEFAULT log: <home>/.cc-sessions/swap.log
     expect(r.rescues).toBe(1);

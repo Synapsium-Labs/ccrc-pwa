@@ -82,6 +82,22 @@ describe('_ws_gc_scan', () => {
     expect(find(scan(), 'quiet-mesa')!.state).toBe('dirty');
   });
 
+  // `status.showUntrackedFiles=no` hides untracked files from a plain
+  // `status --porcelain` — and under it `git worktree remove` deletes them
+  // with no --force (git 2.43). So `_ws_gc_dirty` says `--untracked-files=all`,
+  // and the config cannot make an untracked file read clean.
+  for (const configured of [true, false]) {
+    it(`counts an untracked file as dirty ${configured ? 'UNDER status.showUntrackedFiles=no' : '— the control, without that config'}`, () => {
+      const main = h.makeRepo('demo');
+      const wt = addWs('demo', 'quiet-mesa');
+      if (configured) h.git(main, 'config', 'status.showUntrackedFiles', 'no');
+      fs.writeFileSync(path.join(wt, 'notes.md'), 'draft\n');
+      expect(h.git(wt, 'status', '--porcelain'), 'the CONTROL: what a plain status read says here')
+        .toBe(configured ? '' : '?? notes.md');
+      expect(find(scan(), 'quiet-mesa')!.state).toBe('dirty');
+    });
+  }
+
   it('classifies a worktree with no registry entry as an orphan', () => {
     h.makeRepo('demo');
     addOrphan('demo', 'still-cove');
@@ -380,6 +396,22 @@ describe('ws-gc --prune', () => {
     expect(fs.existsSync(wt)).toBe(true);
     expect(fs.readFileSync(path.join(wt, 'scratch.txt'), 'utf8')).toBe('unsaved\n');
   });
+
+  // The same config, on the prune: an orphan holding an untracked file is
+  // reported as holding uncommitted changes and left whole.
+  for (const configured of [true, false]) {
+    it(`leaves an orphan holding an untracked file ${configured ? 'UNDER status.showUntrackedFiles=no' : '— the control, without that config'}, and says why`, () => {
+      const main = h.makeRepo('demo');
+      const wt = addOrphan('demo', 'still-cove');
+      if (configured) h.git(main, 'config', 'status.showUntrackedFiles', 'no');
+      fs.writeFileSync(path.join(wt, 'notes.md'), 'draft\n');
+      expect(h.git(wt, 'status', '--porcelain'), 'the CONTROL: what a plain status read says here')
+        .toBe(configured ? '' : '?? notes.md');
+      expect(prune()).toContain('uncommitted');
+      expect(fs.readFileSync(path.join(wt, 'notes.md'), 'utf8')).toBe('draft\n');
+      expect(h.git(main, 'branch', '--list', 'ws/still-cove')).toContain('ws/still-cove');
+    });
+  }
 
   /* ── F1: the gate was INVERTED for the detached HEAD ──────────────────────
    *

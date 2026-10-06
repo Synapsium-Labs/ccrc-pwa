@@ -18,7 +18,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { CODEX } from './fixtures/modelCases.js';
+import { CODEX, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
+import { codexAuthDir } from './codexLaneFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -94,6 +95,38 @@ const settingsOf = (suffix: string): { env: Record<string, string> } =>
 const writeCatalogue = (id: string, cat: unknown = CODEX): void => {
   fs.mkdirSync(path.join(home, '.ccrc', 'models'), { recursive: true });
   fs.writeFileSync(path.join(home, '.ccrc', 'models', `${id}.json`), JSON.stringify(cat));
+};
+
+/** This file's third ROSTER row, an EXTERNAL row, read by position rather than
+ *  spelled, so no added line names a roster id outside Plan 3a's fixture
+ *  vocabulary (ruling R13). */
+const LEGACY_EXTERNAL_ID = ROSTER.accounts[2]!.id;
+
+/** Plan 3a Task 2 (operator ruling Z3, D-3706): `init codex` no longer CREATES
+ *  a codex registry on a row that is not exec.kind "codex", and this file's
+ *  external rows are the live Codex lanes' kind before their flip. A case
+ *  that needs such a row WITH a codex registry is the live shape, a registry
+ *  that predates the refusal, which the refusal leaves untouched. So it is
+ *  planted in `init codex`'s own bytes (`SEEDED_REGISTRY_BYTES`), 0600 as
+ *  `writeRegistry` writes it, and the op's own `materialise` then writes what
+ *  `init` writes after them. */
+function plantCodex(id: string): void {
+  fs.mkdirSync(path.join(home, '.ccrc', 'models'), { recursive: true });
+  fs.writeFileSync(regPath(id), SEEDED_REGISTRY_BYTES, { mode: 0o600 });
+  const m = op('materialise', '--file', rosterPath(), '--id', id);
+  expect(m.code, m.stdout + m.stderr).toBe(0);
+}
+
+/** One `exec.kind: "codex"` row, the one kind on which Z3 still lets `init
+ *  codex` CREATE a registry. A case whose SUBJECT is init's own write
+ *  (`writeRegistry`: its tmp-and-rename, its bytes, its mode) creates on this
+ *  row, or makes a `compatible` create, never through `plantCodex`, which
+ *  writes the file itself and so cannot measure that write (Plan 3a Task 2,
+ *  fix round 1). Pure-parse ports: nothing here connects to one. */
+const CODEX_ROW = {
+  id: 'codex-a', label: 'codex-a', configDirSuffix: '.claude-codex-a',
+  exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir: codexAuthDir('codex-a') },
+  homeAble: false, telemetry: 'codex',
 };
 
 // The ownership whitelist (§5, §11) and a probe's `--endpoints` answer.
@@ -177,10 +210,18 @@ describe('the roster read', () => {
     // content comparison alone stayed green with that write live; mtime
     // moves on every `writeFileSync` regardless of content and is what
     // actually catches it.
+    //
+    // Plan 3a Task 2, fix round 1: `init`'s own CREATE stays on this list.
+    // Since Z3 it cannot create a codex registry on the external row the
+    // mutations below run on, which `plantCodex` therefore provides, so the
+    // create runs on a codex-kind row the roster carries for it.
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
     const before = fs.readFileSync(rosterPath(), 'utf8');
     const mtimeBefore = fs.statSync(rosterPath()).mtimeMs;
+    const created = op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    expect(created.body['created'], created.stderr).toBe(true);
     writeCatalogue('gpt');
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
     op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'fable', '--model', 'gpt-6-astra');
     op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'haiku');
     op('set-effort', '--file', rosterPath(), '--id', 'gpt', '--class', 'sonnet', '--level', 'xhigh');
@@ -230,7 +271,7 @@ describe('lanes', () => {
     // the general op path's early `cat.err` gate), so the registry has to be
     // seeded FIRST, with no catalogue file present yet, and the catalogue
     // corrupted afterwards.
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
     fs.writeFileSync(path.join(home, '.ccrc', 'models', 'gpt.json'), '{"probe":"gemini"}');
     const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
     const row = lanes.find((l) => l['id'] === 'gpt')!;
@@ -280,7 +321,7 @@ describe('show', () => {
 
   it('summarises the catalogue rather than shipping it', () => {
     writeCatalogue('gpt');
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
     const r = op('show', '--file', rosterPath(), '--id', 'gpt');
     expect(r.body['catalogue']).toEqual({ fetchedAt: CODEX.fetchedAt, stale: false, count: 9 });
     expect((r.body['derived'] as { unclassified: string[] }).unclassified)
@@ -314,7 +355,7 @@ describe('show', () => {
 
   it('names the settings keys that have drifted from the registry (§11)', () => {
     writeCatalogue('gpt');
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
     const p = path.join(home, '.claude-gpt', 'settings.json');
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
     j.env.ANTHROPIC_DEFAULT_OPUS_MODEL = 'gpt-5.5';
@@ -328,7 +369,7 @@ describe('show', () => {
 
   it('reports NO drift right after a materialise, and none on a lane with no registry', () => {
     writeCatalogue('gpt');
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
     expect(op('show', '--file', rosterPath(), '--id', 'gpt').body['settingsDrift']).toEqual([]);
     expect(op('show', '--file', rosterPath(), '--id', 'router').body['settingsDrift']).toEqual([]);
   });
@@ -340,7 +381,7 @@ describe('show', () => {
     // every class reads as unavailable regardless of what the registry itself
     // assigns, and there is no settings.json to compare it against.
     writeCatalogue('gpt');
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
     fs.writeFileSync(regPath('ghost'), fs.readFileSync(regPath('gpt'), 'utf8'));
     const r = op('show', '--file', rosterPath(), '--id', 'ghost');
     expect(r.code).toBe(0);
@@ -351,34 +392,71 @@ describe('show', () => {
 });
 
 describe('init (§10, §13.1)', () => {
-  it('seeds today\'s gpt registry for probe codex', () => {
-    const r = op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+  // Plan 3a Task 2 (operator ruling Z3, D-3706): a codex registry is CREATED
+  // on an `exec.kind: "codex"` row only, so the two creation cases run on one
+  // (`CODEX_ROW`, module scope). Their claims are unchanged, read off the
+  // `SEEDED` fixture rather than retyped; the first also binds the bytes every
+  // planted registry carries.
+  it('seeds today\'s codex registry, byte for byte, on a codex-kind lane', () => {
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+    const r = op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
     expect(r.code).toBe(0);
     expect(r.body['created']).toBe(true);
-    expect(registryOf('gpt')).toEqual({
-      probe: 'codex',
-      classes: { haiku: 'gpt-5.6-luna', sonnet: 'gpt-5.6-terra', opus: 'gpt-5.6-sol', fable: null },
-      subagent: 'sonnet',
-      discovery: 'catalogue',
-      effort: { haiku: 'high', sonnet: 'high', opus: 'max', fable: 'max' },
-    });
+    expect(registryOf('codex-a')).toEqual(SEEDED);
+    // What `plantCodex` (above) and `ccrc-models.test.ts`' `seedCodex` write
+    // for a lane whose registry predates the refusal: these same bytes.
+    expect(fs.readFileSync(regPath('codex-a'), 'utf8')).toBe(SEEDED_REGISTRY_BYTES);
   });
 
   it('materialises on success: the env block, the three-column TSV and the effort file', () => {
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
-    const s = settingsOf('.claude-gpt');
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+    op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    const { haiku, sonnet, opus } = SEEDED.classes;
+    const s = settingsOf('.claude-codex-a');
     expect(s.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('ccrc-unavailable-fable');
-    expect(s.env.ANTHROPIC_MODEL).toBe('gpt-5.6-sol');
+    expect(s.env.ANTHROPIC_MODEL).toBe(opus);
     expect(s.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('sonnet');
-    expect(fs.readFileSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'), 'utf8'))
-      .toBe('haiku\tgpt-5.6-luna\tassigned\nsonnet\tgpt-5.6-terra\tassigned\n'
-        + 'opus\tgpt-5.6-sol\tassigned\nfable\t\tunassigned\n');
-    expect(JSON.parse(fs.readFileSync(path.join(home, '.ccrc', 'models', 'gpt.effort.json'), 'utf8')))
-      .toEqual({ byModel: { 'gpt-5.6-luna': 'high', 'gpt-5.6-terra': 'high', 'gpt-5.6-sol': 'max' } });
+    expect(fs.readFileSync(path.join(home, '.ccrc', 'models', 'codex-a.classes.tsv'), 'utf8'))
+      .toBe(`haiku\t${haiku}\tassigned\nsonnet\t${sonnet}\tassigned\n`
+        + `opus\t${opus}\tassigned\nfable\t\tunassigned\n`);
+    expect(JSON.parse(fs.readFileSync(path.join(home, '.ccrc', 'models', 'codex-a.effort.json'), 'utf8')))
+      .toEqual({ byModel: { [haiku!]: 'high', [sonnet!]: 'high', [opus!]: 'max' } });
+  });
+
+  // Z3's refusal, on every row that is not codex-kind. The live Codex lanes'
+  // shape first (`ext-a`); `ext-b` drops its provider, and `gen-a` is the
+  // other kind a registry can sit on. Together they say the gate is the row's
+  // KIND, never its telemetry or its provider.
+  it.each([
+    ['ext-a', { exec: { kind: 'external', provider: 'openai' }, telemetry: 'codex' }],
+    ['ext-b', { exec: { kind: 'external' }, telemetry: 'codex' }],
+    ['gen-a', { exec: { kind: 'generated' }, telemetry: 'none' }],
+  ])('refuses to CREATE a codex registry on %s, a row that is not exec.kind codex, by name, and writes nothing (Z3)', (id, shape) => {
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts,
+      { id, label: id, configDirSuffix: `.claude-${id}`, homeAble: false, ...shape }] });
+    writeCatalogue(id);
+    const r = op('init', '--file', rosterPath(), '--id', id, '--probe', 'codex');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('codex-registry-needs-codex-lane');
+    expect(String(r.body['detail'])).toContain('Flip the lane to "codex" first (Plan 3b)');
+    expect(String(r.body['detail'])).toContain('Nothing was written.');
+    expect(r.stderr).toMatch(new RegExp(`^models-op: account "${id}" is not a codex-kind lane`, 'm'));
+    for (const f of [`${id}.classes.json`, `${id}.classes.tsv`, `${id}.effort.json`]) {
+      expect(fs.existsSync(path.join(home, '.ccrc', 'models', f)), f).toBe(false);
+    }
+    expect(fs.existsSync(path.join(home, `.claude-${id}`))).toBe(false);
+  });
+
+  it('every other probe kind is still created on an external row (Z3 refuses codex alone)', () => {
+    const r = op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'compatible',
+      '--base-url', 'https://compatible.example.invalid');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['created']).toBe(true);
+    expect(registryOf('router')['probe']).toBe('compatible');
   });
 
   it('is idempotent — a second init changes nothing and says so', () => {
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
     const before = fs.readFileSync(regPath('gpt'), 'utf8');
     const r = op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
     expect(r.code).toBe(0);
@@ -387,7 +465,7 @@ describe('init (§10, §13.1)', () => {
   });
 
   it('refuses to CHANGE the probe kind of a registry that exists', () => {
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
     const r = op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'openrouter');
     expect(r.code).toBe(1);
     expect(r.body['error']).toBe('probe-declared');
@@ -443,7 +521,7 @@ describe('init (§10, §13.1)', () => {
 describe('set-class', () => {
   beforeEach(() => {
     writeCatalogue('gpt');
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
   });
 
   it('assigns a class and re-materialises', () => {
@@ -618,7 +696,7 @@ describe('set-class', () => {
 describe('set-subagent (§10, ruling 5c)', () => {
   beforeEach(() => {
     writeCatalogue('gpt');
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
   });
 
   it('moves CLAUDE_CODE_SUBAGENT_MODEL to the named class\'s alias', () => {
@@ -676,7 +754,7 @@ describe('a legacy subagent: opus/fable already on disk (fix round 2A, N1)', () 
   // the parse gate lets run.
   beforeEach(() => {
     writeCatalogue('gpt');
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
     // Hand-edit past every verb's own validation, the way a registry written
     // under the earlier contract would already be on disk.
     const p = regPath('gpt');
@@ -724,7 +802,7 @@ describe('a legacy subagent: opus/fable already on disk (fix round 2A, N1)', () 
 describe('set-effort', () => {
   beforeEach(() => {
     writeCatalogue('gpt');
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
   });
 
   it('sets a level the catalogue offers, and it reaches the effort file', () => {
@@ -806,7 +884,7 @@ describe('discovery (§10) — the set discovery and classification operate on',
 });
 
 describe('discovery scope transitions (Fix round 1, Finding 2 — ruling 2026-09-08, spec §10)', () => {
-  beforeEach(() => { op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex'); });
+  beforeEach(() => { plantCodex(LEGACY_EXTERNAL_ID); });
 
   it('add on a "catalogue" scope CONVERTS it to an explicit list of every classed id plus the new one', () => {
     const r = op('discovery', '--file', rosterPath(), '--id', 'gpt', '--action', 'add', '--model', 'gpt-5.5');
@@ -859,7 +937,7 @@ describe('the ownership whitelist gates on the LANE, not the flag (Fix round 1, 
   });
 
   it('--endpoints on a non-openrouter probe is a usage error, not a silently-ignored flag', () => {
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
     const r = op('discovery', '--file', rosterPath(), '--id', 'gpt', '--action', 'add', '--model', 'gpt-5.5',
       '--endpoints', '/nonexistent/endpoints.json');
     expect(r.code).toBe(2);
@@ -909,15 +987,23 @@ describe('the ownership whitelist at discovery-add (§5, §11)', () => {
 });
 
 describe('the registry write', () => {
+  // Plan 3a Task 2, fix round 1: this describe's SUBJECT is `writeRegistry`,
+  // init's own write, so each case CREATES through `init` on a row Z3 allows,
+  // a codex-kind row (`CODEX_ROW`) or a `compatible` create, and never plants
+  // the file through `plantCodex`, which would measure the fixture's write.
   it('is atomic — no temp file survives a success', () => {
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+    const r = op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    expect(r.body['created'], r.stderr).toBe(true);
     expect(fs.readdirSync(path.join(home, '.ccrc', 'models')).sort())
-      .toEqual(['gpt.classes.json', 'gpt.classes.tsv', 'gpt.effort.json']);
+      .toEqual(['codex-a.classes.json', 'codex-a.classes.tsv', 'codex-a.effort.json']);
   });
 
   it('keeps 2-space indent and a trailing newline', () => {
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
-    const text = fs.readFileSync(regPath('gpt'), 'utf8');
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+    const r = op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    expect(r.body['created'], r.stderr).toBe(true);
+    const text = fs.readFileSync(regPath('codex-a'), 'utf8');
     expect(text.endsWith('}\n')).toBe(true);
     expect(text).toContain('\n  "classes": {');
   });
@@ -936,8 +1022,10 @@ describe('the registry write', () => {
   it('is 0600 — a compatible lane\'s registry names its endpoint', () => {
     const prevUmask = process.umask(0o022);
     try {
-      op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
-      expect(fs.statSync(regPath('gpt')).mode & 0o777).toBe(0o600);
+      const r = op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'compatible',
+        '--base-url', 'https://compatible.example.invalid');
+      expect(r.body['created'], r.stderr).toBe(true);
+      expect(fs.statSync(regPath('router')).mode & 0o777).toBe(0o600);
     } finally {
       process.umask(prevUmask);
     }
@@ -945,7 +1033,7 @@ describe('the registry write', () => {
 
   it('re-VALIDATES before writing: a mutation that would break the registry writes nothing', () => {
     writeCatalogue('gpt');
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
     const before = fs.readFileSync(regPath('gpt'), 'utf8');
     const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus', '--model', 'has space');
     expect(r.code).toBe(1);
@@ -955,7 +1043,7 @@ describe('the registry write', () => {
 
 describe('materialise', () => {
   it('rewrites the three generated files from the registry and the catalogue', () => {
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
     fs.rmSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'));
     // Fix round 1 (review): the seeded opus, gpt-5.6-sol, has catalogue
     // context 272000 — clamped TO the 200000 ceiling — so a mutant that
@@ -1008,7 +1096,7 @@ describe('materialise', () => {
   it('the TSV and the effort file both land at 0600 (C8)', () => {
     const prevUmask = process.umask(0o022);
     try {
-      op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+      plantCodex(LEGACY_EXTERNAL_ID);
       expect(fs.statSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv')).mode & 0o777).toBe(0o600);
       expect(fs.statSync(path.join(home, '.ccrc', 'models', 'gpt.effort.json')).mode & 0o777).toBe(0o600);
     } finally {
@@ -1026,7 +1114,7 @@ describe('materialise', () => {
   // `ccrc install`, so a lane wedged on this could accumulate one stray 0600
   // file an hour forever.
   it('a failed materialise unlinks its own tmp, run repeatedly', () => {
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
     writeCatalogue('gpt');
     const tsvPath = path.join(home, '.ccrc', 'models', 'gpt.classes.tsv');
     fs.rmSync(tsvPath, { force: true });
@@ -1076,15 +1164,17 @@ describe('materialise', () => {
   //
   // This exercises `deploy/models-op.mjs`'s OWN two tmp sites (the TSV and
   // the effort file) on every round, but NOT `shared/modelenv.mjs`'s
-  // `mergeSettingsEnv` — `op('init', …)` above already materialises the
-  // settings block once, so every later round's six calls compute the SAME
-  // env, `mergeSettingsEnv`'s `!changed && existed` short-circuit returns
+  // `mergeSettingsEnv` — this case's `plantCodex(…)` setup (its own
+  // `materialise` step, since Plan 3a Task 2 no longer runs `init` here)
+  // already materialises the settings block once, so every later round's
+  // six calls compute the SAME env, `mergeSettingsEnv`'s
+  // `!changed && existed` short-circuit returns
   // before it ever reaches its own tmp write, and 120 calls prove nothing
   // about that site. Deleting settings.json before each round removes
   // `existed`, so the short-circuit cannot fire and every round's six calls
   // race a genuine concurrent write there too.
   it('N concurrent materialise calls on the same lane all succeed (C7)', async () => {
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
     writeCatalogue('gpt');
     const settingsPath = path.join(home, '.claude-gpt', 'settings.json');
     const rounds = 20;
@@ -1196,7 +1286,7 @@ describe('lane.json (spec §5.4) — the codex lane manifest', () => {
     // `router` is `external` carrying a CODEX registry, as today's live Codex
     // lanes are (the next case adds their provider and telemetry). It has no
     // auth dir or ports to write, and nothing may guess them.
-    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'codex');
+    plantCodex('router');
     const r = op('materialise', '--file', rosterPath(), '--id', 'router');
     expect(r.code).toBe(0);
     expect((r.body['wrote'] as Record<string, unknown>)['lane']).toBeNull();
@@ -1207,7 +1297,7 @@ describe('lane.json (spec §5.4) — the codex lane manifest', () => {
     // A gate on `telemetry === 'codex'` or on `exec.provider === 'openai'`
     // passes the `router` case above and would write THIS row a manifest with no
     // authDir and no ports — `JSON.stringify` drops the undefined fields.
-    op('init', '--file', rosterPath(), '--id', 'codex-b', '--probe', 'codex');
+    plantCodex('codex-b');
     const r = op('materialise', '--file', rosterPath(), '--id', 'codex-b');
     expect(r.code).toBe(0);
     expect((r.body['wrote'] as Record<string, unknown>)['lane']).toBeNull();
@@ -1260,7 +1350,7 @@ describe('lane.json (spec §5.4) — the codex lane manifest', () => {
   it('the same move on a lane with no manifest carries no such remedy', () => {
     // Control, the other way: `router` has no lane.json and no publisher
     // reading one, so nothing about its usage publication just changed.
-    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'codex');
+    plantCodex('router');
     const haiku = String(classesOf('router')['haiku']);
     const r = op('set-class', '--file', rosterPath(), '--id', 'router', '--class', 'sonnet', '--model', haiku);
     expect(r.code).toBe(0);
@@ -1309,6 +1399,94 @@ describe('lane.json (spec §5.4) — the codex lane manifest', () => {
       expect(r.code, JSON.stringify(r.body)).toBe(0);
       expect(laneOf()['probeModel']).toBe('gpt-x-mini');
     });
+
+  // ── Plan 3a Task 4: `materialise --check true` (ruling R7) ────────────────
+  // `ccrc doctor`'s `_check_codex` asks this whether lane.json has gone stale
+  // against the REGISTRY, which `_codex_lane_json_state`'s roster-only compare
+  // cannot see. Every case proves the check WROTE NOTHING, by bytes AND by
+  // mtime (a rewrite of identical bytes still moves the mtime), because a
+  // check that cured what it measured would turn doctor into a writer.
+  const stateOf = (): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const d of [path.join(home, '.ccrc', 'codex'), laneDir(), path.join(home, '.ccrc', 'models')]) {
+      if (!fs.existsSync(d)) continue;
+      out[`${d}/`] = String(fs.statSync(d).mtimeMs);
+      for (const n of fs.readdirSync(d)) {
+        const p = path.join(d, n);
+        if (fs.statSync(p).isFile()) out[p] = `${fs.statSync(p).mtimeMs}:${fs.readFileSync(p, 'utf8')}`;
+      }
+    }
+    return out;
+  };
+  const check = (id = 'codex-a', value = 'true'): Result =>
+    op('materialise', '--file', rosterPath(), '--id', id, '--check', value);
+  const laneChanged = (r: Result): unknown => (r.body['changed'] as Record<string, unknown>)['lane'];
+
+  it('--check true on a converged codex lane: every file unchanged, and nothing written', () => {
+    expect(op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex').code).toBe(0);
+    const before = stateOf();
+    const r = check();
+    expect(r.code, JSON.stringify(r.body)).toBe(0);
+    expect(r.body).toEqual({ ok: true, op: 'materialise', id: 'codex-a', check: true,
+      changed: { lane: false, classes: false, effort: false } });
+    expect(stateOf()).toEqual(before);
+  });
+
+  it('--check true after the registry moves on disk: lane.json is changed, and still holds the OLD bytes', () => {
+    op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    const old = fs.readFileSync(lanePath(), 'utf8');
+    reclassifyHaiku('gpt-x-mini');
+    const before = stateOf();
+    const r = check();
+    expect(r.code, JSON.stringify(r.body)).toBe(0);
+    expect(laneChanged(r)).toBe(true);
+    expect(stateOf()).toEqual(before);
+    expect(fs.readFileSync(lanePath(), 'utf8')).toBe(old);
+    // Control: the WRITE form cures it, and the check then answers unchanged.
+    expect(op('materialise', '--file', rosterPath(), '--id', 'codex-a').code).toBe(0);
+    expect(laneChanged(check())).toBe(false);
+  });
+
+  it('--check true after a roster port edit is changed; with the lane directory gone it is changed and the directory is NOT recreated', () => {
+    op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts,
+      { ...CODEX_LANE, exec: { ...CODEX_LANE.exec, proxyPort: 45020 } }, CODEX_EXTERNAL] });
+    expect(laneChanged(check())).toBe(true);
+    fs.rmSync(path.join(home, '.ccrc', 'codex'), { recursive: true, force: true });
+    const r = check();
+    expect(r.code, JSON.stringify(r.body)).toBe(0);
+    expect(laneChanged(r)).toBe(true);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'codex'))).toBe(false);
+  });
+
+  it('--check true answers lane: null on a lane with no manifest, and changed: null on a lane with no registry', () => {
+    // `router` is `external` and carries a codex registry that ALREADY EXISTS,
+    // as the live first lane's does. It is planted by hand, never through
+    // `init codex`, which ruling Z3 refuses on an external row: a registry
+    // that already exists is the one shape Z3 leaves alone.
+    fs.mkdirSync(path.dirname(regPath('router')), { recursive: true });
+    fs.writeFileSync(regPath('router'), `${JSON.stringify({ probe: 'codex',
+      classes: { haiku: null, sonnet: null, opus: null, fable: null }, subagent: 'sonnet', discovery: 'catalogue' }, null, 2)}\n`);
+    const r = check('router');
+    expect(r.code, JSON.stringify(r.body)).toBe(0);
+    expect(laneChanged(r)).toBeNull();
+    const none = check('codex-a');
+    expect(none.code, JSON.stringify(none.body)).toBe(0);
+    expect(none.body['changed']).toBeNull();
+    expect(fs.existsSync(path.join(home, '.ccrc', 'codex'))).toBe(false);
+  });
+
+  it('--check with any value but "true" is refused at exit 2 and writes nothing — a typo never falls through to the write', () => {
+    op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    reclassifyHaiku('gpt-x-mini');
+    const before = stateOf();
+    for (const v of ['yes', 'TRUE', '1']) {
+      const r = check('codex-a', v);
+      expect(r.code, v).toBe(2);
+      expect(r.body['error'], v).toBe('bad-argv');
+    }
+    expect(stateOf()).toEqual(before);
+  });
 });
 
 // minor: the check-only/`--commit true` two-phase protocol (Task 10 fix
@@ -1325,7 +1503,7 @@ describe('litellm (§6.3) — the two-phase check-then-commit protocol', () => {
 
   beforeEach(() => {
     writeCatalogue('gpt');
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
   });
 
   it('without --commit is CHECK-ONLY: reports changed:true and writes NOTHING at --out', () => {
@@ -1353,7 +1531,7 @@ describe('litellm (§6.3) — the two-phase check-then-commit protocol', () => {
 describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
   beforeEach(() => {
     writeCatalogue('gpt');
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    plantCodex(LEGACY_EXTERNAL_ID);
   });
 
   it('removes all four model-registry files, in order, and clears exactly the eight env keys', () => {
@@ -1361,7 +1539,8 @@ describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
     j.env.DISABLE_TELEMETRY = '1';
     fs.writeFileSync(p, JSON.stringify(j, null, 2));
-    // The beforeEach's `init` ran against a written catalogue, so the eighth
+    // The beforeEach's `plantCodex` (its `materialise` step, which Plan 3a
+    // Task 2 put where `init` was) ran against a written catalogue, so the eighth
     // key is live before `rm` runs — this is the case that shows `rm` reaps
     // it too, not just the seven keys that predate the §6.1 amendment. The
     // default model's catalogue context (272000) is capped at 200000 (§6.1,
@@ -1463,4 +1642,95 @@ describe('the account-id guard applies to every op, not just rm (C6)', () => {
     expect(r.code).toBe(1);
     expect(r.body['error']).toBe('bad-account-id');
   });
+});
+
+// ── Plan 3a final fix wave (MF-2): a FIFO at a lane file is never a block ───
+// F2, D-2380's class, in this op's own readers. `readFileSync` opens BY NAME
+// with no regard for TYPE: a FIFO with no writer, at a path one of these
+// readers names, blocks INSIDE the open, so no `catch` ever runs. `ccrc
+// doctor`'s `_check_codex` (`_dr_cx_lane`) and `--fix`'s `_fix_codex` call
+// this op with no deadline of their own, so one planted FIFO used to hang the
+// whole operator-facing doctor. Each reader now type-tests first
+// (`readRegular`), and a non-regular file gets that read's EXISTING
+// unreadable answer. Every spawn is bounded (`timeout`, ruling F8): pre-fix,
+// the child blocks, is ended at the bound, and `signal` reds the case rather
+// than the suite. The bound signals the DIRECT child, which is the process
+// that blocks: this op spawns nothing.
+describe('a FIFO at a lane file\'s path is that read\'s unreadable answer, never a block (MF-2, F2)', () => {
+  const BOUND_MS = 10_000;
+  const settingsPath = (): string => path.join(home, CODEX_ROW.configDirSuffix, 'settings.json');
+  const fifo = (p: string): void => {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.rmSync(p, { force: true });
+    expect(spawnSync('mkfifo', [p]).status, `mkfifo ${p}`).toBe(0);
+  };
+  /** `op`, bounded. A child ended at the bound has printed nothing, so the
+   *  signal is asserted BEFORE the body is parsed. */
+  const bounded = (...args: string[]): Result => {
+    const r = spawnSync(process.execPath, [OP, ...args],
+      { env: { ...process.env, HOME: home }, encoding: 'utf8', timeout: BOUND_MS });
+    expect(r.signal, `models-op ${args[0]} did not exit by itself: it blocked on the FIFO and was ended at the ${BOUND_MS / 1000} s bound`).toBeNull();
+    const stdout = r.stdout ?? '';
+    return { code: r.status ?? -1, body: JSON.parse(stdout.split('\n')[0]!), stderr: r.stderr ?? '', stdout };
+  };
+  const init = (): void => {
+    const r = op('init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+  };
+
+  beforeEach(() => { seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] }); });
+
+  it('show with a FIFO catalogue answers catalogue-unreadable', () => {
+    init();
+    fifo(path.join(home, '.ccrc', 'models', `${CODEX_ROW.id}.json`));
+    const r = bounded('show', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.body['error']).toBe('catalogue-unreadable');
+    expect(r.body['detail']).toMatch(/not a regular file/);
+  }, 20_000);
+
+  it('show with a FIFO registry answers registry-unreadable', () => {
+    fifo(regPath(CODEX_ROW.id));
+    const r = bounded('show', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.body['error']).toBe('registry-unreadable');
+    expect(r.body['detail']).toMatch(/not a regular file/);
+  }, 20_000);
+
+  it('show with a FIFO settings.json keeps today\'s answer for an unreadable one: every key missing', () => {
+    init();
+    fs.rmSync(settingsPath());
+    // The control: the ABSENT file's answer, which the catch-all already gives.
+    const absent = op('show', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(absent.code, absent.stdout).toBe(0);
+    expect((absent.body['settingsDrift'] as string[]).length).toBeGreaterThan(0);
+    fifo(settingsPath());
+    const r = bounded('show', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.body['settingsDrift']).toEqual(absent.body['settingsDrift']);
+  }, 20_000);
+
+  it('materialise --check true with a FIFO <id>.classes.tsv answers materialise-unreadable, and writes nothing', () => {
+    init();
+    const tsv = path.join(home, '.ccrc', 'models', `${CODEX_ROW.id}.classes.tsv`);
+    fifo(tsv);
+    const r = bounded('materialise', '--file', rosterPath(), '--id', CODEX_ROW.id, '--check', 'true');
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.body['error']).toBe('materialise-unreadable');
+    expect(r.body['detail']).toMatch(/exists and could not be read: not a regular file\. Nothing was written\.$/);
+    expect(fs.statSync(tsv).isFIFO(), 'the check replaced the FIFO it measured').toBe(true);
+  }, 20_000);
+
+  it('litellm without --commit, with a FIFO --out, reads no previous rendering: changed:true, and writes nothing', () => {
+    init();
+    writeCatalogue(CODEX_ROW.id);
+    const out = path.join(home, '.handoff', 'litellm-config.yaml');
+    fifo(out);
+    const r = bounded('litellm', '--file', rosterPath(), '--id', CODEX_ROW.id,
+      '--template', path.join(REPO, 'deploy', 'litellm-config.template.yaml'), '--out', out);
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.body['changed']).toBe(true);
+    expect(fs.statSync(out).isFIFO(), 'the check-only call wrote at --out').toBe(true);
+    expect(fs.existsSync(`${out}.prev`)).toBe(false);
+  }, 20_000);
 });

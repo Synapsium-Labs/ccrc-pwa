@@ -13,7 +13,7 @@ import type {
   CoordinatorState, LiveWordRead, StallActivation, StallArm, StallArming, StallHold, StallInput, StallMailRow, StallMode,
   StallNotice, StallR3Cause, StallRunRow, StallSubject, StallVerdict, StallWorker,
 } from '../src/coord/stall.js';
-import { RUN_TRANSITIONS, REVIEW_RUN_TRANSITIONS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT } from '../../shared/api.js';
+import { MAIL_REPLAY_MS, RUN_TRANSITIONS, REVIEW_RUN_TRANSITIONS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT } from '../../shared/api.js';
 import { STALL_FAILED_PREFIX, STALL_ORPHANED_PREFIX } from '../src/coord/stall.js';
 import type { StallW2Facts } from '../src/coord/stall.js';
 
@@ -162,27 +162,27 @@ describe('stallVerdict order: first match wins (spec §10, wave-1 subset)', () =
     expect(v({ worker: workerAt({ autoContinueHeldAt: NOW - AUTO_CONTINUE_RECENT_MS }) })).toEqual(r1(RUN67_DISPATCHED));
   });
 
-  it('5 before 6: a limit-locked worker holds limit under the coordinator ball', () => {
+  it('5 before 9: a limit-locked worker holds limit under the coordinator ball', () => {
     expect(v({ mail: QUESTION, worker: workerAt({ limits: { five: 100, seven: 10 } }) })).toEqual(hold('limit'));
   });
 
-  it('6 before 7: the coordinator ball answers none while the worker reads busy', () => {
+  it('9 before 10: the coordinator ball answers none while the worker reads busy', () => {
     expect(v({ mail: QUESTION, worker: workerAt({ live: liveWord('busy', NOW - H) }) })).toEqual(NONE);
   });
 
-  it('6: under the coordinator ball below the cap the verdict is none, not a hold', () => {
+  it('9: under the coordinator ball below the cap the verdict is none, not a hold', () => {
     expect(v({ mail: QUESTION })).toEqual(NONE);
   });
 
-  it('7: busy holds busy', () => {
+  it('10: busy holds busy', () => {
     expect(v({ worker: workerAt({ live: liveWord('busy', NOW - 5 * H) }) })).toEqual(hold('busy'));
   });
 
-  it.each(['', 'thinking'])('7: the word %j holds unmeasured', (word) => {
+  it.each(['', 'thinking'])('10: the word %j holds unmeasured', (word) => {
     expect(v({ worker: workerAt({ live: liveWord(word, NOW - 5 * H) }) })).toEqual(hold('unmeasured'));
   });
 
-  it('7: below STALL_QUIET_MS the verdict is none; at it, r1', () => {
+  it('10: below STALL_QUIET_MS the verdict is none; at it, r1', () => {
     expect(v({ worker: workerAt({ live: liveWord('idle', NOW - STALL_QUIET_MS + 1) }) })).toEqual(NONE);
     expect(v({ worker: workerAt({ live: liveWord('idle', NOW - STALL_QUIET_MS) }) })).toEqual(r1(RUN67_DISPATCHED));
   });
@@ -265,7 +265,7 @@ describe('holds 2a and 2b: a question holds uncapped, a dialog with no ask is ca
   it('a Fable-consent menu with no ask draws exactly one dialog-cap push at 2 h', () => {
     const worker = workerAt({ live: liveWord('waiting', A) });
     expect(v(worker, A + STALL_QUIET_MS - 1)).toEqual(hold('dialog'));
-    expect(v(worker, A + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', K));
+    expect(v(worker, A + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', A));   // keyed on the dialog's live stamp (`dialog-cap-keyed-on-the-dialog` (D-3799))
     expect(v(worker, A + 5 * H, [notice('live', 'dialog-cap', 1, K, A + STALL_QUIET_MS + 20_000)])).toEqual(hold('dialog'));
   });
 
@@ -682,7 +682,7 @@ describe('shadow-rung-accounting: arming mid-episode sends the pending rung once
   });
 });
 
-describe('the three caps fire once per episode', () => {
+describe('the three caps fire once: the limit and coord-ball caps per episode, the dialog cap per dialog (D-3799)', () => {
   const K = RUN67_DISPATCHED;
   const since = t('2026-09-27T00:00:00Z');
   const limited = (over: Partial<PresentWorker> = {}) =>
@@ -703,7 +703,7 @@ describe('the three caps fire once per episode', () => {
   });
   it('dialog-cap: once at STALL_QUIET_MS under hold 2b, then hold dialog', () => {
     const worker = workerAt({ live: liveWord('waiting', since) });
-    expect(stallVerdict(stallInput({ worker }), since + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', K));
+    expect(stallVerdict(stallInput({ worker }), since + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', since));
     const n = [notice('live', 'dialog-cap', 1, K, since + STALL_QUIET_MS + 20_000)];
     expect(stallVerdict(stallInput({ worker, notices: n }), since + 9 * H)).toEqual(hold('dialog'));
   });
@@ -824,7 +824,7 @@ function w2Input(over: Over = {}, facts: Partial<StallW2Facts> = {}): StallInput
   return { ...stallInput(over), w2: w2(facts) };
 }
 function delivery(id: number, mailId: number, toId: string, over: Partial<StallDeliveryRow> = {}): StallDeliveryRow {
-  return { id, mailId, toId, state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null, ...over };
+  return { id, mailId, toId, state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null, replayCount: 0, ...over };
 }
 const vw = (over: Over = {}, facts: Partial<StallW2Facts> = {}, at = NOW): StallVerdict => stallVerdict(w2Input(over, facts), at);
 
@@ -1014,9 +1014,9 @@ describe('wave 2: coord-deaf (§5.2, §10 step 9)', () => {
 
   it('9: a question to the coordinator unacked COORD_DEAF_MS pushes coord-deaf once, keyed on the mail', () => {
     expect(cv([Q], [QD])).toEqual(w2Push('coord-deaf', 4001));
-    expect(cv([Q], [QD], {}, Q_AT + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));
-    expect(cv([Q], [QD], {}, Q_AT + COORD_DEAF_MS - 1)).toEqual(NONE);
-    expect(cv([{ ...Q, at: NOW - 59 * MIN }], [QD])).toEqual(NONE);
+    expect(cv([Q], [QD], {}, Q_AT + MIN + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));   // an hour from its first delivery (`gate-held-mail-is-not-stuck` (D-3798))
+    expect(cv([Q], [QD], {}, Q_AT + MIN + COORD_DEAF_MS - 1)).toEqual(NONE);
+    expect(cv([Q], [{ ...QD, deliveredAt: NOW - 59 * MIN }])).toEqual(NONE);
     expect(cv([Q], [QD], { notices: [notice('live', 'coord-deaf', 1, 4001, NOW - MIN)] })).toEqual(NONE);
   });
 
@@ -1233,7 +1233,7 @@ describe('wave 2: mail-disabled holds every mail rung that would send (lane-hono
 
   it('md: the caps still push', () => {
     expect(stallVerdict(stallInput({ arming: MD, worker: workerAt({ live: liveWord('waiting', NOW - 3 * H) }) }), NOW))
-      .toEqual(capOf('dialog-cap', RUN67_DISPATCHED));
+      .toEqual(capOf('dialog-cap', NOW - 3 * H));
   });
 
   it('md: a wave-2 dead notice to the claimant holds; to the operator it pushes; in the dark it stands', () => {
@@ -1317,7 +1317,7 @@ describe('wave 2: the approval envelope and the cause words', () => {
     const primary: Partial<StallRunRow> = { dispatchedAt: A - 5 * H };
     const worker = workerAt({ live: liveWord('waiting', A), hookAsk: { kind: 'approval', at: A } });
     expect(stallVerdict(stallInput({ primary, worker }), A + H)).toEqual(hold('dialog'));
-    expect(stallVerdict(stallInput({ primary, worker }), A + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', A - 5 * H));
+    expect(stallVerdict(stallInput({ primary, worker }), A + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', A));
   });
 
   it('the wave-2 causes are declared for the coord kebab scan', () => {
@@ -1414,7 +1414,7 @@ describe('wave 2: coord-deaf reads the worker\'s own ball-passing mail, by its n
   });
 
   it('the newest delivery row judges the mail, in either row order: older acked, newer unacked past the limit is deaf', () => {
-    const rows = [older({ state: 'acked', ackedAt: Q_AT + 2 * MIN }), newer({ state: 'delivered' })];
+    const rows = [older({ state: 'acked', ackedAt: Q_AT + 2 * MIN }), newer({ state: 'delivered', deliveredAt: NOW - COORD_DEAF_MS })];
     expect(cv([Q], rows)).toEqual(w2Push('coord-deaf', 4001));
     expect(cv([Q], [...rows].reverse())).toEqual(w2Push('coord-deaf', 4001));
   });
@@ -1573,11 +1573,11 @@ describe('E4 (run 187): a send-back after 8 h 53 m at awaiting-review starts the
     expect(stallFacts(e4({ mail: [...MAIL, BRIEF, wd] })).episodeKeyMs).toBe(wd.at);
   });
 
-  it('the dialog cap (2b) keeps today\'s clock and key: a dialog up through the review is pushed on the first sweep after the advance', () => {
+  it('the dialog cap (2b) keeps today\'s clock, keyed on the dialog\'s own stamp: a dialog up through the review is pushed on the first sweep after the advance', () => {
     // Coordinator ruling: the caps measure the pane or the account, not the worker's silence, and a dialog that blocked
-    // the pane through the review still blocks the fix-round brief. Keyed on #2811, so its text's span stays true.
+    // the pane through the review still blocks the fix-round brief. Keyed on its live stamp (`dialog-cap-keyed-on-the-dialog` (D-3799)), which no send-back moves.
     const menu = (activation: StallActivation): StallInput => e4({ worker: workerAt({ live: liveWord('waiting', E4.stop) }), activation });
-    expect(stallVerdict(menu(reactivated(E4.react)), E4.fire)).toEqual(capOf('dialog-cap', E4.w2811));
+    expect(stallVerdict(menu(reactivated(E4.react)), E4.fire)).toEqual(capOf('dialog-cap', E4.stop));
     expect(stallVerdict(menu(reactivated(E4.react)), E4.fire)).toEqual(stallVerdict(menu({ kind: 'none' }), E4.fire));
   });
 
@@ -1589,11 +1589,11 @@ describe('E4 (run 187): a send-back after 8 h 53 m at awaiting-review starts the
     expect(stallVerdict(limited(reactivated(late)), late + 4_000)).toEqual(stallVerdict(limited({ kind: 'none' }), late + 4_000));
   });
 
-  it('the dialog cap stays once per episode across a send-back: a push recorded before the advance holds it', () => {
-    // (D-3788) The caps dedupe on `capKeyMs`, the pre-advance key; keying the dedupe on the episode key would re-push.
+  it('the dialog cap stays once per dialog across a send-back: a push recorded before the advance holds it', () => {
+    // `dialog-cap-keyed-on-the-dialog` (D-3799): any push written since the dialog's stamp is this dialog's, whatever its key.
     const menu = e4({ worker: workerAt({ live: liveWord('waiting', E4.stop) }) });
     const pushed = [notice('live', 'dialog-cap', 1, E4.w2811, E4.react - 60_000)];
-    expect(stallVerdict(menu, E4.fire)).toEqual(capOf('dialog-cap', E4.w2811));   // CONTROL: no push recorded
+    expect(stallVerdict(menu, E4.fire)).toEqual(capOf('dialog-cap', E4.stop));   // CONTROL: no push recorded
     expect(stallVerdict({ ...menu, notices: pushed }, E4.fire)).toEqual(hold('dialog'));
   });
 
@@ -1714,5 +1714,228 @@ describe('coord-ball-restarts-on-reactivation: the coordinator\'s 30 h runs from
     const input = { ...ballInput(reactivated(REACT)), mail: [mailRow(2909, DONE, WORKER, 'coordinator', 'status', WAVE_DONE_SUBJECT, 199), resume] };
     expect(stallVerdict(input, REACT + COORD_BALL_CAP_MS)).toEqual(NONE);
     expect(stallVerdict(input, resume.at + COORD_BALL_CAP_MS)).toEqual(capOf('coord-ball', resume.at));
+  });
+});
+
+// ── fix-round-alias-reaches-the-ball (D-3797): mail to the role `worker` on the subject's run is mail to the worker ──
+// The mail route stores the toId the sender wrote, and the coordinator skill addresses the worker as `toId: 'worker'`
+// with the run's id; `resolveWorker(runId)` resolved it to this session. Measured (live coord.db, 2026-10-03): 12 of the
+// 23 role mails since 2026-09-25 landed on a coordinator ball, fix rounds and answers alike.
+describe('fix-round-alias-reaches-the-ball (D-3797): the role worker on the subject\'s run is mail to the worker', () => {
+  const D = t('2026-09-10T08:00:00Z');
+  const primary: Partial<StallRunRow> = { id: 31, dispatchedAt: D };
+  const facts = (mail: StallMailRow[]) => stallFacts(stallInput({ primary, mail, worker: workerAt({ live: liveWord('idle', D + 5 * H) }) }));
+  const own = mailRow(3001, D + H, WORKER, 'coordinator', 'status', WAVE_DONE_SUBJECT, 31);
+
+  it('CONTROL: after the worker\'s wave-done the ball is the coordinator\'s', () => {
+    expect(facts([own])).toMatchObject({ ball: 'coordinator', inboundLast: null, lastExchangeAt: D + H });
+  });
+
+  it('a fix-round addressed to the role worker on the run hands the ball back, and is the newest mail to it', () => {
+    const fix = mailRow(3007, D + 3 * H, COORD, 'worker', 'status', 'fix-round', 31);
+    expect(facts([own, fix])).toMatchObject({
+      ball: 'worker', inboundLast: fix, workerLast: own, episodeKeyMs: D + H, capKeyMs: D + H, lastExchangeAt: D + 3 * H,
+    });
+  });
+
+  it('an answer to the role worker after the worker\'s question hands the ball back', () => {
+    const q = mailRow(3001, D + H, WORKER, 'coordinator', 'question', 'which base?', 31);
+    const ans = mailRow(3002, D + 2 * H, COORD, 'worker', 'answer', 'use base B', 31);
+    expect(facts([q])).toMatchObject({ ball: 'coordinator' });
+    expect(facts([q, ans])).toMatchObject({ ball: 'worker', inboundLast: ans, lastExchangeAt: D + 2 * H });
+  });
+
+  it('the role worker on a run that is not the subject\'s is not the worker\'s, and neither is run-less mail to the role', () => {
+    const foreign = mailRow(3008, D + 3 * H, COORD, 'worker', 'status', 'fix-round', 99);
+    const runless: StallMailRow = { ...mailRow(3009, D + 3 * H, COORD, 'worker', 'status', 'fix-round', 31), runId: null };
+    expect(facts([own, foreign])).toMatchObject({ ball: 'coordinator', inboundLast: null, lastExchangeAt: D + H });
+    expect(facts([own, runless])).toMatchObject({ ball: 'coordinator', inboundLast: null, lastExchangeAt: D + H });
+  });
+
+  it('a coordinator wait: addressed to the role worker keeps the ball with the coordinator and moves the key', () => {
+    const status = mailRow(3001, D + H, WORKER, 'coordinator', 'status', 'Task 2 pushed', 31);
+    const wait = mailRow(3006, D + 3 * H, COORD, 'worker', 'status', `${STALL_WAIT_PREFIX} CI on #201`, 31);
+    expect(facts([status, wait])).toMatchObject({ ball: 'coordinator', episodeKeyMs: D + 3 * H, capKeyMs: D + 3 * H });
+  });
+
+  it('run 238\'s shape: a fix round to the role worker after a wave-done and a send-back draws r1 two hours after the brief', () => {
+    const react = D + 9 * H;
+    const fix = mailRow(3010, react + 30_000, COORD, 'worker', 'status', 'fix-round', 31);
+    const input = (mail: StallMailRow[]): StallInput => stallInput({
+      primary, mail, worker: workerAt({ live: liveWord('idle', D + H + 5 * MIN) }), activation: { kind: 'reactivated', at: react },
+    });
+    expect(stallVerdict(input([own, fix]), react + 30_000 + STALL_QUIET_MS - 1)).toEqual(NONE);
+    expect(stallVerdict(input([own, fix]), react + 30_000 + STALL_QUIET_MS)).toEqual(r1(react));
+    expect(stallVerdict(input([own]), react + 30_000 + STALL_QUIET_MS), 'CONTROL: with no brief the ball stays the coordinator\'s').toEqual(NONE);
+    // The marker ladder reads the same facts: under the w2 marker, from the worker's Stop, r1 falls due at the same time.
+    const marked: StallInput = { ...input([own, fix]), arming: W2_LIVE, w2: w2({ mark: markOf({ at: D + H + 5 * MIN, turnAt: D + H, stopAt: D + H + 5 * MIN }) }) };
+    expect(stallVerdict(marked, react + 30_000 + STALL_QUIET_MS)).toEqual(r1(react));
+  });
+
+  // review-256-pins (D-3804): the multi-run subject, which no row above covered. `stallToWorker`'s run test must accept
+  // role mail on ANY subject run, as session-id mail always counted on any of them.
+  it('role mail on a non-primary run of a multi-run subject is the worker\'s', () => {
+    const second = runRow({ id: 32, dispatchedAt: D });
+    const multi = (mail: StallMailRow[]) => stallFacts(stallInput({
+      primary, runs: [runRow(primary), second], mail, worker: workerAt({ live: liveWord('idle', D + 5 * H) }),
+    }));
+    const fix = mailRow(3011, D + 3 * H, COORD, 'worker', 'status', 'fix-round', 32);
+    expect(multi([own, fix])).toMatchObject({ ball: 'worker', inboundLast: fix, lastExchangeAt: D + 3 * H });
+    const foreign = mailRow(3012, D + 3 * H, COORD, 'worker', 'status', 'fix-round', 99);
+    expect(multi([own, foreign]), 'CONTROL: a run that is none of the subject\'s still is not').toMatchObject({ ball: 'coordinator', inboundLast: null });
+  });
+});
+
+// ── gate-held-mail-is-not-stuck (D-3798): coord-deaf runs from the delivery the coordinator could hear ─────────────────
+// `sweepMail` re-stamps `deliveredAt` on every replay (`markDelivered`, then `bumpReplayCount`), every MAIL_REPLAY_MS
+// while the row stays unacked, so only a first delivery (`replayCount` 0) dates the hearing. A replayed row was first
+// delivered at least MAIL_REPLAY_MS per replay before its newest stamp, and never before its queue time, so it is timed from
+// `max(queue, deliveredAt − replayCount × MAIL_REPLAY_MS)` (`replayed-deaf-from-first-delivery-estimate` (D-3803)). A mail still queued behind the gate is bounded at DELEGATE_CAP_MS + COORD_DEAF_MS from its queue time (a row parked before delivery is no gate hold, and is timed from its queue): a
+// coordinator held in a running turn has no other arm (its mail-stuck needs a finished turn; no frozen arm watches it).
+describe('coord-deaf is timed from the delivery the coordinator could hear (gate-held-mail-is-not-stuck (D-3798))', () => {
+  const cvd = (mail: StallMailRow[], deliveries: StallDeliveryRow[], at = NOW): StallVerdict => vw({ arming: W2_LIVE, mail }, { deliveries }, at);
+  const held: StallDeliveryRow = { ...QD, state: 'queued', deliveredAt: null };
+  const BOUND = DELEGATE_CAP_MS + COORD_DEAF_MS;
+
+  it('deaf is timed from the first delivery: queued 62 min ago and delivered 30 s ago is not deaf (the review\'s S4)', () => {
+    const q62 = { ...Q, at: NOW - 62 * MIN };
+    expect(cvd([q62], [{ ...QD, deliveredAt: NOW - 30_000 }])).toEqual(NONE);
+    expect(cvd([q62], [{ ...QD, deliveredAt: NOW - COORD_DEAF_MS + 1 }])).toEqual(NONE);
+    expect(cvd([q62], [{ ...QD, deliveredAt: NOW - COORD_DEAF_MS }])).toEqual(w2Push('coord-deaf', 4001));
+  });
+
+  it('a replayed delivery is timed from its first-delivery estimate, not from its newest deliveredAt (which every replay re-stamps) and not from the queue (D-3803)', () => {
+    const replayed: StallDeliveryRow = { ...QD, deliveredAt: NOW - 5 * MIN, replayCount: 5 };
+    const EST = NOW - 5 * MIN - 5 * MAIL_REPLAY_MS;   // deliveredAt − replayCount × MAIL_REPLAY_MS = NOW − 55 min, after the queue (NOW − 61 min)
+    expect(cvd([Q], [replayed]), 'queued 61 min ago, estimated first delivery 55 min ago, re-stamped 5 min ago').toEqual(NONE);
+    expect(cvd([Q], [replayed], EST + COORD_DEAF_MS - 1)).toEqual(NONE);
+    expect(cvd([Q], [replayed], EST + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));
+    expect(cvd([Q], [{ ...replayed, replayCount: 0 }]), 'CONTROL: a first delivery 5 min ago is not yet deaf').toEqual(NONE);
+  });
+
+  it('an undelivered ball-passing mail is deaf from DELEGATE_CAP_MS + COORD_DEAF_MS after it was queued: the bound for a coordinator held in a running turn', () => {
+    expect(cvd([{ ...Q, at: NOW - 2 * H }], [held]), 'the S4 shape: held two hours behind the gate').toEqual(NONE);
+    expect(cvd([{ ...Q, at: NOW - BOUND + 1 }], [held])).toEqual(NONE);
+    expect(cvd([{ ...Q, at: NOW - BOUND }], [held])).toEqual(w2Push('coord-deaf', 4001));
+    expect(cvd([Q], [{ ...held, state: 'rejected' }]), 'a row parked before delivery (enter-ignored, the attempt ceiling) is no gate hold: timed from its queue').toEqual(w2Push('coord-deaf', 4001));
+  });
+
+  it('past 30 h the coord-ball cap still fires: on a mail with no delivery row, and after coord-deaf on one the gate still holds', () => {
+    const old = mailRow(4001, NOW - COORD_BALL_CAP_MS, WORKER, 'coordinator', 'question', 'which base?');
+    const oldHeld = delivery(9101, 4001, COORD);   // queued, never delivered
+    expect(cvd([old], [])).toEqual(capOf('coord-ball', old.at));
+    expect(cvd([old], [oldHeld])).toEqual(w2Push('coord-deaf', 4001));
+    const deaf = notice('live', 'coord-deaf', 1, 4001, old.at + BOUND);
+    expect(vw({ arming: W2_LIVE, mail: [old], notices: [deaf] }, { deliveries: [oldHeld] })).toEqual(capOf('coord-ball', old.at));
+  });
+
+  // replayed-deaf-from-first-delivery-estimate (D-3803): a replayed row is timed from its first delivery, ESTIMATED as
+  // `deliveredAt − replayCount × MAIL_REPLAY_MS` (each replay lands at least MAIL_REPLAY_MS after the previous stamp, so the
+  // estimate is never early), and never from before the queue.
+  describe('a replayed delivery is timed from its first-delivery estimate (replayed-deaf-from-first-delivery-estimate (D-3803))', () => {
+    // Queued 70 min ago, held 55 min behind the gate, first delivered 15 min ago, replayed once 5 min ago.
+    const q70 = { ...Q, at: NOW - 70 * MIN };
+    const once: StallDeliveryRow = { ...QD, deliveredAt: NOW - 5 * MIN, replayCount: 1 };
+    const FIRST = NOW - 5 * MIN - MAIL_REPLAY_MS;
+
+    it('a mail held 50 min or more, delivered and replayed once, is not deaf at its first replay', () => {
+      expect(FIRST, 'CONTROL: the first delivery 15 min ago').toBe(NOW - 15 * MIN);
+      expect(cvd([q70], [once]), 'queued 70 min ago, but the coordinator could hear it only 15 min ago').toEqual(NONE);
+      expect(cvd([q70], [{ ...once, replayCount: 0 }]), 'CONTROL: the same row as a first delivery 5 min ago').toEqual(NONE);
+    });
+
+    it('it reads deaf once COORD_DEAF_MS has passed since the estimate, and not 1 ms before', () => {
+      expect(cvd([q70], [once], FIRST + COORD_DEAF_MS - 1)).toEqual(NONE);
+      expect(cvd([q70], [once], FIRST + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));
+      const twice: StallDeliveryRow = { ...once, deliveredAt: NOW - 5 * MIN + MAIL_REPLAY_MS, replayCount: 2 };
+      expect(cvd([q70], [twice], FIRST + COORD_DEAF_MS - 1), 'a second replay moves the stamp, not the estimate').toEqual(NONE);
+      expect(cvd([q70], [twice], FIRST + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));
+    });
+
+    // Unreachable by serial replays (five replays need 50 min or more after the first delivery); a valid L1 input that pins the defensive floor.
+    it('the estimate never precedes the queue: a row whose estimate falls before it is timed from the queue', () => {
+      const q20 = { ...Q, at: NOW - 20 * MIN };
+      const many: StallDeliveryRow = { ...QD, deliveredAt: NOW - MIN, replayCount: 5 };   // estimate NOW − 51 min, before the queue
+      expect(many.deliveredAt! - many.replayCount * MAIL_REPLAY_MS).toBeLessThan(q20.at);
+      expect(cvd([q20], [many], q20.at + COORD_DEAF_MS - 1)).toEqual(NONE);
+      expect(cvd([q20], [many], q20.at + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));
+    });
+  });
+});
+
+// ── dialog-cap-keyed-on-the-dialog (D-3799): one dialog-cap push per dialog, keyed on its live stamp ─────────────────
+// Run 174 (live coord.db, 2026-10-03): one dialog-cap row on the episode key (#2837), written 2026-10-02T18:50:16Z, and a
+// second permission prompt standing since 19:38:19Z with no row possible. Run 67: a row on its episode key written
+// 03:15:12Z, after its 01:14:44Z stamp.
+describe('dialog-cap-keyed-on-the-dialog (D-3799): the dialog cap is pushed once per dialog, not once per mail episode', () => {
+  const K = t('2026-09-30T22:48:29.848Z');   // run 174's episode key: the worker's last run mail
+  const D1 = t('2026-10-02T16:40:00Z');      // chosen: the first dialog's live stamp
+  const D2 = t('2026-10-02T19:38:19.419Z');  // run 174's second dialog: the stamp its live file carries
+  const own = mailRow(2837, K, WORKER, 'coordinator', 'status', 'Task 5 pushed', 174);
+  const first = notice('live', 'dialog-cap', 1, K, t('2026-10-02T18:50:16.434Z'));   // the one row run 174 has
+  const menu = (since: number, notices: StallNotice[] = [], over: Partial<PresentWorker> = {}): StallInput => stallInput({
+    primary: { id: 174, dispatchedAt: K - 48 * H }, mail: [own], notices,
+    worker: workerAt({ live: liveWord('waiting', since), ...over }),
+  });
+
+  it('the first dialog is pushed on its own live stamp at 2 h', () => {
+    expect(stallVerdict(menu(D1), D1 + STALL_QUIET_MS - 1)).toEqual(hold('dialog'));
+    expect(stallVerdict(menu(D1), D1 + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', D1));
+  });
+
+  it('a second dialog in the same mail episode gets its own push, once (run 174)', () => {
+    expect(stallVerdict(menu(D2, [first]), D2 + STALL_QUIET_MS - 1)).toEqual(hold('dialog'));
+    expect(stallVerdict(menu(D2, [first]), D2 + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', D2));
+    const second = notice('live', 'dialog-cap', 1, D2, D2 + STALL_QUIET_MS + 20_000);
+    expect(stallVerdict(menu(D2, [first, second]), D2 + 16 * H)).toEqual(hold('dialog'));
+  });
+
+  it('a row on the episode key written after the live stamp reported this dialog: no second push at the re-key (run 67 at deploy)', () => {
+    const K67 = t('2026-10-03T01:00:24.353Z');   // run 67's episode key: mail 3299
+    const S67 = t('2026-10-03T01:14:44.433Z');   // its live stamp: waiting since
+    const row = notice('shadow', 'dialog-cap', 1, K67, t('2026-10-03T03:15:12.508Z'));   // written by the build before this one
+    const input = (notices: StallNotice[]): StallInput => stallInput({
+      primary: { dispatchedAt: K67 - 5 * H }, mail: [mailRow(3299, K67, WORKER, 'coordinator', 'status', 'Task 3 pushed')],
+      notices, arming: SHADOW, worker: workerAt({ live: liveWord('waiting', S67) }),
+    });
+    expect(stallVerdict(input([row]), S67 + 11 * H)).toEqual(hold('dialog'));
+    expect(stallVerdict(input([]), S67 + 11 * H), 'CONTROL: with no row the dialog is pushed on its stamp').toEqual(capOf('dialog-cap', S67));
+    // rungDoneAt's standing rule, per row: armed since, the shadow row no longer stands, so the dialog is pushed live once.
+    expect(stallVerdict({ ...input([row]), arming: ARMED }, S67 + 11 * H), 'armed since the shadow row').toEqual(capOf('dialog-cap', S67));
+  });
+
+  it('the same-stretch boundary: an episode-key row written AT the stamp holds, one a millisecond before it does not', () => {
+    const rowAt = (at: number): StallInput => menu(D2, [notice('live', 'dialog-cap', 1, K, at)]);
+    expect(stallVerdict(rowAt(D2), D2 + STALL_QUIET_MS)).toEqual(hold('dialog'));
+    expect(stallVerdict(rowAt(D2 - 1), D2 + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', D2));
+  });
+
+  it('a send-back and an inbound brief move neither key: the dialog standing through them keeps its one push (R7, D-3788)', () => {
+    const pushed = notice('live', 'dialog-cap', 1, D2, D2 + STALL_QUIET_MS + 20_000);
+    const brief = mailRow(2900, D2 + 3 * H, COORD, WORKER, 'status', 'fix-round', 174);
+    const back = stallInput({
+      primary: { id: 174, dispatchedAt: K - 48 * H }, mail: [own, brief], notices: [pushed],
+      worker: workerAt({ live: liveWord('waiting', D2) }), activation: { kind: 'reactivated', at: D2 + 3 * H - 30_000 },
+    });
+    expect(stallVerdict(back, D2 + 6 * H)).toEqual(hold('dialog'));
+  });
+
+  it('the key never reads the hookstate time, which every later hook event restamps while the prompt stands', () => {
+    expect(stallVerdict(menu(D2, [first], { hookAsk: { kind: 'approval', at: D2 + 15_000 } }), D2 + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', D2));
+    const pushed = notice('live', 'dialog-cap', 1, D2, D2 + STALL_QUIET_MS + 20_000);
+    expect(stallVerdict(menu(D2, [first, pushed], { hookAsk: { kind: 'approval', at: D2 + 75_000 } }), D2 + 5 * H)).toEqual(hold('dialog'));
+  });
+
+  it('a coordinator wait: to the role worker while the dialog stands moves the key, and the dialog keeps its one push', () => {
+    // Task 1 lets an alias `wait:` move capKeyMs past the live stamp, and the wait is inbound mail, so it restarts the cap's
+    // quiet too. Two hours on, a per-key check finds no row on the new key and pushes the same dialog again.
+    const pushed = notice('live', 'dialog-cap', 1, D2, D2 + STALL_QUIET_MS + 20_000);
+    const wait = mailRow(2901, D2 + 3 * H, COORD, 'worker', 'status', `${STALL_WAIT_PREFIX} CI`, 174);
+    const input = stallInput({
+      primary: { id: 174, dispatchedAt: K - 48 * H }, mail: [own, wait], notices: [pushed],
+      worker: workerAt({ live: liveWord('waiting', D2) }),
+    });
+    expect(stallFacts(input).capKeyMs, 'CONTROL: the wait moved the cap key past the stamp').toBe(D2 + 3 * H);
+    expect(stallVerdict(input, D2 + 6 * H)).toEqual(hold('dialog'));
   });
 });

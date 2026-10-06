@@ -18,11 +18,18 @@
 # `SHELLOPTS`/`BASHOPTS`/`CDPATH`/`GLOBIGNORE`. It is a startup boundary, not a
 # privilege change, and not a sandbox.
 #
-# WHAT IS PROTECTED, EXACTLY (the body re-classifies the same shapes, and a test
-# runs one table against both):
+# WHAT IS PROTECTED (the body re-classifies the exact shapes — plus whatever an
+# inherited `nocasematch` folds — and a test runs one table against both):
 #   ws-reclaim <any tail>                         — the body's parser owns the tail
 #   ws-audit --session <value> --reclaim [--defer-expired] — the token skeleton;
 #     <value> is any string here, and the body still validates it as a session id
+# Each of those tokens is matched WITHOUT CASE, a deliberate superset: an inherited
+# `nocasematch` folds the body's own entry guard and dispatcher (in a UTF-8 locale
+# beyond ASCII: `İ` folds to `i`), so a case variant must start protected too,
+# where `bash -p` drops that option and the body compares exactly again. An ASCII
+# character is compared without case and any other character stands for any one
+# character, counted in code points and in bytes, so no locale's fold escapes it.
+# Protecting more than the body would is harmless: it only starts under `-p`.
 # Every other argv is ORDINARY: the same Bash >= 4.4 scan, no `-p`, and the
 # payload started with the environment this Python inherited, changed only by
 # what Python's own startup adds before this file runs (D-3701): `LC_CTYPE` for
@@ -117,11 +124,25 @@ def refuse(cls, detail):
     os._exit(REFUSED_RC)
 
 
+def folds_to(token, word):
+    # True when `token` may BE `word` (lower-case ASCII) under a case-insensitive
+    # match in any locale the body could inherit. An ASCII character compares
+    # without case; any other character is a wildcard for one character of
+    # `word`. Counted twice: in code points, as a multibyte locale reads the
+    # token (U+0130 folds to `i` there, measured on bash 5.2 in C.UTF-8), and in
+    # bytes, as a single-byte locale does.
+    for units in (token, os.fsencode(token).decode('latin-1')):
+        if len(units) == len(word) and all(ord(u) > 127 or u.lower() == w for u, w in zip(units, word)):
+            return True
+    return False
+
+
 def is_protected(argv):
-    if argv[:1] == ['ws-reclaim']:
+    # CASE-INSENSITIVE, A SUPERSET ON PURPOSE — see WHAT IS PROTECTED above.
+    if argv[:1] and folds_to(argv[0], 'ws-reclaim'):
         return True
-    return (len(argv) in (4, 5) and argv[0] == 'ws-audit' and argv[1] == '--session'
-            and argv[3] == '--reclaim' and (len(argv) == 4 or argv[4] == '--defer-expired'))
+    return (len(argv) in (4, 5) and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session')
+            and folds_to(argv[3], '--reclaim') and (len(argv) == 4 or folds_to(argv[4], '--defer-expired')))
 
 
 def body_path():
