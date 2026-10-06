@@ -32,7 +32,7 @@ numbers; the spec wave each one implements is named beside it.
 | 8 | — (live audit) | the live audit's residue: a move's source on record (A), backups pruned after a completed run (B), no one-tap rollback a node will refuse (C), doctor reads the armed gate (D), Settings wording (F), two box lines (G); E dropped by ruling | server + node | — | **MERGED** `5b1c58a8` (PR #219, 2026-10-01 01:49:28 UTC, run 182 done; released as v0.0.53 at 01:50:31). The merged tree is byte-identical to the tested tip `2555b082`, with `main` unmoved at `1f9fa22d` and every Linux leg green. Scoped review 203 met none of the bar's classes; its five prose findings are residue R11. Auto installed it on both boxes by 02:24 UTC. Was: **Fix round 1 done** 2026-10-01 at `2555b082` (7 commits; reserve number 3599 spent, bare: its definition is on the worker branch); scoped review run 203 dispatched under the committed bar; after it, #219 merges. Was: **Fix round 1 sent** 2026-09-30 22:50 UTC (`rulings-run182-fix1.md`) on review 196 at `1eb9b011`: F1 (item G's zero line over a failed listing) is a behaviour defect the delta introduced, so the bar gives the one round, with reserve number 3599 for the fail-closed sweep (bare: its definition goes on the worker branch); a scoped review follows, then #219 merges. Was: **Wave-done** 2026-09-30 21:10 UTC at `1eb9b011` (PR #219, 5/5 items). Its one merge of `main` at `1f9fa22d` hand-resolved two conflicts, both end-of-file appends, by keeping both sides (measured by remerge-diff). No reserve number was spent, and `DEP-move-record-kind` did not fire, so it is withdrawn unminted. Review run 196 is dispatched under the bar committed before it. Its merge reaches both boxes by auto within about 35 min. Was: **DISPATCHED** 2026-09-30 12:22 UTC to `ccrc-pwa-soft-ridge` (run 182); plan `8e73f825` (13 departures defined in it, one contingent by slug; a five-number reserve named in the brief). |
 | 9 | — (stable readiness) | this programme's 12 macOS reds (harness, the Linux-only control, the escapee, the rsync recorder, the Darwin missing-deps block), tmux names sanitised at creation (M8, live), structural containment of the ccrc builders (R10d, R9-F8), doctor's auth reader models the unit's feeder (R10a, R10e), `ccrc backup`'s prune takes the lock (R10g), a prose batch | fleet-first | — | **MERGED** `00f8a193` (PR #251, 2026-10-05 11:10:12 UTC, run 223 done; released as v0.0.84 at 11:11:17). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `0491a823` onto `main` at `b5593725`. That `main` differs from the one CI tested (`4100ae1c9`) only by #252's one plan file, which touches none of this wave's files. Every Linux leg was green, and the macOS acceptance was met. Scoped review 269 met neither class of the round-2 bar; its four minors are residue R14(g–j). It reaches neither box until the operator acks the failed v0.0.78 fleet row. Was: **Fix round 2 done** 2026-10-05 at `0491a823` (mail 3491; one commit on `670d25fd`, 4 files; reserve number 3833 spent, defined in the plan on the worker branch; `main` not merged, `git merge-tree` onto `4100ae1c9` clean). Every Linux leg of CI run 37290717097 is green, and the macOS acceptance is met on its `test-macos` legs. Scoped review run 269 dispatched 10:28 UTC to `ccrc-pwa-swift-prairie` once the work volume read 10.48 GB, under the round-2 bar in the rulings; after it, #251 merges. Was: **Fix round 2 (the last) sent** 2026-10-05 08:50 UTC (mail 3490, `rulings-run223-fix2.md`) on scoped review 266 at `670d25fd`: F1, the Darwin NUL test missing a NUL under a UTF-8 locale, is round 1's scoped class 2, so it goes back, with reserve number 3833 for the Darwin arm's C-locale pin (bare: its definition goes on the worker branch); a scoped review follows under the bar in the rulings, then #251 merges. Was: **Fix round 1 done** 2026-10-05 at `670d25fd` (mail 3485; one commit on `f74f5e90`, 7 files; reserve number 3832 spent, defined in the plan on the worker branch; `main` not merged, `git merge-tree` onto `4100ae1c9` clean). Scoped review run 266 dispatched 07:47 UTC to `ccrc-pwa-plain-prairie`, under the bar in the rulings; after it, #251 merges. Was: **Fix round 1 sent** 2026-10-05 (mail 3480, `rulings-run223-fix1.md`) on review 265 at `f74f5e90`: F1, a Darwin false ARMED on a NUL byte, is the bar's class 2, so the bar gives the one round, with reserve number 3832 for it (bare: its definition goes on the worker branch); a scoped review follows under the bar committed in the rulings, then #251 merges. Was: **Wave-done** 2026-10-05 05:51 UTC (mail 3473) at `f74f5e90` (PR #251, 7/7 items; reserve number 3831 spent, defined in the plan on the worker branch). The held-out review follows, under the bar committed before it. Was: **DISPATCHED** 2026-10-04 12:46 UTC to `ccrc-pwa-amber-harbor` (run 223), the brief brought up to date with `main` `59a435f0`. Was: **PLANNED** 2026-10-02 14:20 UTC; plan `e52f9859` (23 departures defined in it; a five-number reserve named in the brief). Its merge reaches both boxes by auto within about 35 min. The stable gate also needs the GPT lane's 45 macOS reds fixed by that programme. |
 | 10 | — (R12, script half) | `deploy/verify-service.sh` tells a deliberate supervisor stop (settled `inactive` + `.stopped` stamp or a purged row) from a crash, so a serial sweep verify stops failing healthy updates; tests on fixture HOMEs; a cross-version case against `main`'s sweep | fleet-first (the move INTO it runs the old sweep with the new script) | — | **MERGED** `a6daa9cf` (PR #247, 2026-10-05 03:19:04 UTC, run 261 done; released as v0.0.80 at 03:19:51). The merged tree is byte-identical to the tested tip, `main` was unmoved at `b40f4145`, and every Linux leg is green. Review 263 met no bar class; residue R13. It reaches neither box until the operator acks the failed v0.0.78 fleet row. The first move after the ack goes straight to the newest release, so it runs v0.0.78's sweep with this script. Was: **Wave-done** 2026-10-05 02:18 UTC (mail 3446) at `a9a1cef8` (PR #247, 3/3 items; reserve number 3950 spent, defined in the plan on the worker branch). Review run 263 was dispatched to `ccrc-pwa-clear-meadow` at 02:42:59 UTC, under the bar committed before it. Was: **DISPATCHED** 2026-10-05 00:05 UTC to `ccrc-pwa-keen-harbor` (run 261). Was: **PLANNED** 2026-10-04 23:59 UTC (run 261); plan `e60d7174` (D-3946..D-3949 defined; a five-number reserve, numbers 3950 to 3954, named in the brief). Was: **SCOPED** 22:56 UTC (`wf_790a5b99-8ca`); runs beside wave 9, no shared file. |
-| 11 | — (R12, sweep half) | `_upd_sweep`: one shared verify window by concurrent per-unit calls, the die's report-ownership guard and wording, no die in a subshell, the Darwin arm | fleet-first | — | **DISPATCHED** 2026-10-05 16:04 UTC to `ccrc-pwa-clear-meadow` (run 270). Plan `966ffe9f`, 9 tasks; it defines D-3972 to D-3984, and the five-number reserve, numbers 3987 to 3991, is named in the brief. Was: **Run 270 open, planned** 2026-10-05 11:10 UTC, opened before run 223 closed so the programme keeps an open run; to plan, with R13, R14 and R14(f) first. Was: **SCOPED** 2026-10-04 22:56 UTC; after wave 9 merges (`ccd/ccrc`). The 10-02 wave-10 deferrals move to wave 12. |
+| 11 | — (R12, sweep half) | `_upd_sweep`: one shared verify window by concurrent per-unit calls, the die's report-ownership guard and wording, no die in a subshell, the Darwin arm | fleet-first | — | **IN REVIEW** 2026-10-06 01:29 UTC: wave-done at `33f4eaaa`, PR #287, `main` `d12b5aba` merged in as `9b3ba1fa`; reserve numbers 3987 and 3988 spent (bare: their definitions are on the worker branch); the bar is committed in the 01:29 entry. Was: **DISPATCHED** 2026-10-05 16:04 UTC to `ccrc-pwa-clear-meadow` (run 270). Plan `966ffe9f`, 9 tasks; it defines D-3972 to D-3984, and the five-number reserve, numbers 3987 to 3991, is named in the brief. Was: **Run 270 open, planned** 2026-10-05 11:10 UTC, opened before run 223 closed so the programme keeps an open run; to plan, with R13, R14 and R14(f) first. Was: **SCOPED** 2026-10-04 22:56 UTC; after wave 9 merges (`ccd/ccrc`). The 10-02 wave-10 deferrals move to wave 12. |
 | — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
 
 **Order.** 2 → {3, 4} → {5, 6} → rollout. Waves 3 and 4 touch disjoint files (PWA + notifier vs `ccd/ccrc` +
@@ -1816,6 +1816,62 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **For `stable`:** this programme's macOS reds are fixed on `main`. The promotion still waits on the GPT lane's
     reds and landing-order's merge-deny cases, and on a green `full-suite` on the commit.
 
+- **2026-10-06 01:29 UTC: wave 11's wave-done (mail 3610), re-measured, and the bar committed BEFORE its review.**
+  - **The claim:** PR #287 at `33f4eaaa`, re-measured.
+    - It is open, not draft and mergeable. Its head equals the fingerprint and the workspace's local tip.
+    - It has 19 commits, all with the noreply author and committer. One is a merge: `origin/main` `d12b5aba` merged in
+      as `9b3ba1fa`, per the 21:50 ruling.
+    - The range against `main` is 17 files, +4036/−326.
+    - Run 270 moved `dispatched` → `working` → `awaiting-review`. The direct move was refused `bad-transition`.
+  - **What the worker reports:**
+    - `suite: red`, `failure: unclear`. The first full sequence of shards had four file reds: `boot` (a long TMPDIR
+      socket path), `session-hook` (a known load flake), `ccrc-install` (an `afterAll` timeout at load 28–37) and
+      `tmp-sweep` (the known fleet-box `CLAUDE_CONFIG_DIR` case). Each was green in isolation, and none is in a file
+      this branch touches.
+    - Every gate file is green. `ccrc-update` 502 and `ccrc-doctor` 670 ran as `-t` parts summing to `vitest list`.
+      `tsc` exits 0.
+    - The scope check prints only `README.md`, the ruled exception (5729 → 5732 lines).
+    - Reserve numbers 3987 and 3988 are spent. 3989, 3990 and 3991 are written nowhere.
+    - A terminal Ctrl-C is a group SIGINT, which the base already died on within 0.01 s. That closes the 3575
+      question: the fix stands for the shell-alone shape and the launch-loop leak.
+  - **CI is the arbiter for the four reds:** full run 37399068946 (`mode=full`; the PR's selection was not readable
+    through the API) and PR run 37398985082. Both were in progress at 01:29.
+  - **Bar for the merge.** The held-out review (clause 14) must find NO confirmed finding of these classes:
+    1. **The new sweep's verdict is wrong.** On either platform, it fails an update where every unit stays up, or
+       where every stop is one the script passes on purpose. Or a crashed, crash-looping, restarting or never-started
+       unit passes it, through the window or the re-check.
+    2. **The re-check is not the operator's.** For example: a non-crash-like failure is re-checked; a unit gets more
+       than one re-check; re-checks continue past the first that failed; or a unit with no recorded result passes
+       without a verify of its own. The ruling is "Re-check once" (D-3983, Readings 17–18).
+    3. **A pairing is unprotected.** `main`'s frozen `_upd_sweep` with the new script returns non-zero for a stamped
+       or purged deliberate stop, or zero for a crash; that is the move INTO this wave. Or the new sweep with an
+       older script (S10 or S0) fails a healthy unit or passes a crash.
+    4. **The purged arm passes a crashed, crash-looping or never-started unit, or reads a registry other than the
+       fixture's.**
+    5. **Doctor says ARMED where the gate is off.** That is, where the unit (Linux) or the launchd job (Darwin) leaves
+       the gate off, in any locale. Or a Linux verdict that `main` decides correctly changes to a wrong one.
+    6. **A process or a file is left that the ruled residue does not cover.** A verify job outlives its sweep or
+       test in a shape other than R17's (TERM to the group in the fork window; the foreground calls). Or a test reads
+       or writes outside its fixture HOME, or a real tool can run.
+    7. **An out-of-scope write.** That means any file outside the plan's File structure other than README's one
+       ruled sentence, and any write to `ccd/ccd`, `deploy/systemd` or a unit.
+    8. **A wrong deviation number.** That is, one undefined or unissued, or any definition beyond D-3972 to D-3984
+       and reserve numbers 3987 and 3988.
+
+    Also, every Linux leg of full run 37399068946 must be green, or each red must be shown to be a known flake by
+    an isolated re-run on CI. The macOS legs gate no merge; I read the cases the wave-done lists myself, and they
+    gate the stable promotion.
+  - **The rounds:** one bar-class finding gets one fix round, and then a scoped review. A coverage or prose finding
+    is fixed in that round if one runs, and otherwise becomes residue.
+  - **The worker's seven residue items, ruled now so the review does not resend them:**
+    - Item 1 is R17 as ruled, with one prose point: number 3988's sentence "a stale pid is never signalled"
+      overclaims a microsecond window.
+    - Item 3 is a false operator sentence, which predates this wave but meets D-3984 here. It is the "is FAILED —
+      try-restart skipped it and this sweep did not verify it" warning for a unit that this wave then verifies.
+    - Both of those are coverage or prose: fixed in a fix round if one runs, otherwise wave 12.
+    - Items 2 (pre-existing in the script: an unsearchable registry, and `_reg_purge`'s order), 4 (Darwin), 5
+      (wording), 6 (mutation bookkeeping) and 7 (the W21 bound) go to wave 12 as R18.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
@@ -1971,6 +2027,28 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
       is read-only and ends by itself in about 8 s.
     - **Do not retry a TERM trap in the launcher.** It was measured and rejected: the jobs briefly inherit its
       handler, and a TERM to the shell alone then leaked 18 of 36 runs.
+- **R18 (wave 11, run 270's wave-done residue; for wave 12).**
+  - (a) Pre-existing in `deploy/verify-service.sh`, from the Task 5 review:
+    - An unsearchable `~/.cc-sessions`, with no x bit, makes `[ -e ]` and `[ -L ]` fail with EACCES, so a kept row
+      reads as purged. One fix is to test `[ -x "$reg" ]` beside `[ -d "$reg" ]`.
+    - `_reg_purge` deletes `.stopped` before `.uuid`, so a verify that lands between the two reads an unstamped stop,
+      and a deliberate stop fails. The new sweep's re-check covers it; the OLD sweep, on the move into wave 11, does
+      not.
+  - (b) Darwin:
+    - An INT to the sweep shell alone during the shared window is swallowed while bash waits out the foreground
+      `sleep`. A group INT, which is what Ctrl-C sends, aborts within 1 s.
+    - `_ccrc_job_stayed_up` passes vacuously when it is given no arguments. Every caller guards against that.
+  - (c) Wording:
+    - README's sentence should say that the crash-shaped verify applies to units active before the restart, and that
+      "one shared window" holds for 128 units or fewer, given a scratch dir.
+    - D-3977 begins a sentence in lowercase, and one comment line in `ccrc-doctor.test.ts` is too long.
+    - The plan says "five helpers", but there are six.
+  - (d) Mutation bookkeeping:
+    - T5-6 under-lists its red set, and T7-1's respelling is coarse.
+    - The rows added in the wave (T4-7, T6-INT2 to INT5, T2-6 and T2-7) are recorded only in the worker's reports.
+    - Removing the pgid filter's "TERMed group" exception reds nothing.
+  - (e) Item 1's prose point and item 3's false warning, from the 01:29 entry, land here unless a fix round takes
+    them.
 ## Next-wave brief
 
 **Wave 2 (run 128) — dispatched 2026-09-23.** The brief as sent is the plan's path and sha, tasks 1–15, execution
