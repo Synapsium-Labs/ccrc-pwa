@@ -4631,3 +4631,44 @@ describe('docs page URLs and the API URL builder are declared once, in shared/do
     expect(ALL.filter((f) => HEADER_LITERAL.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
   });
 });
+
+// Docs W1 final review (minors-triage MT-1): Task 1's sections and grammar predicates, its ref spec and its two
+// types, declared once in shared/docs.ts (the plan's pattern 2 for each type or function name). W2's L1 query parser
+// and W5's link code call these; a second `isDocsRelPath` (a regex alone, without the category, byte and depth
+// checks) would pass every grammar pin while the TS-to-python parity measured a copy no server ran. APPENDED after
+// the file's last line: `session-hook.test.ts`'s citation audit cites this file by line.
+describe('docs sections, grammar predicates and ref spec are declared once, in shared/docs.ts (docs W1, Task 1)', () => {
+  const TYPES = ['DocSectionSlug', 'DocsRefSpec'] as const;
+  const FUNCTIONS = [
+    'isDocsSection', 'docRepoPath', 'isDocsProject', 'isDocsBareRef', 'isDocsQualifiedRef', 'isDocsCommit',
+    'isDocsRelPath', 'isDocsFingerprint', 'isDocsMaxBytes', 'parseDocsRef', 'docsRefText',
+  ] as const;
+  // Section H's shapes: a type by `type <Name> =` or `interface <Name>`, a function by `function <name>` or a
+  // `const|let|var <name>` binding (an arrow copy), `export`/`declare` optional.
+  const TYPE_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  const FN_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:function\\s+${name}\\b|(?:const|let|var)\\s+${name}\\b)`, 'm');
+
+  it('CONTROL: the patterns see a declaration, a local copy and an arrow copy, and not an import, a call or another name', () => {
+    expect(TYPE_DEF('DocsRefSpec').test("export type DocsRefSpec = { kind: 'bare'; name: string };")).toBe(true);
+    expect(TYPE_DEF('DocSectionSlug').test("type DocSectionSlug = 'specs';"), 'an un-exported local type').toBe(true);
+    expect(TYPE_DEF('DocsRefSpec').test("import {\n  type DocsRefSpec,\n} from '../../../shared/docs.js';"), 'an import specifier').toBe(false);
+    expect(FN_DEF('isDocsRelPath').test('export function isDocsRelPath(s: string): boolean {')).toBe(true);
+    expect(FN_DEF('isDocsRelPath').test('const isDocsRelPath = (s: string): boolean => /^x$/.test(s);'), 'an arrow copy').toBe(true);
+    expect(FN_DEF('isDocsRelPath').test("import { isDocsRelPath } from '../../../shared/docs.js';"), 'an import').toBe(false);
+    expect(FN_DEF('isDocsRelPath').test('  if (!isDocsRelPath(p)) return null;'), 'a call').toBe(false);
+    expect(FN_DEF('isDocsSection').test('export function isDocsSectionSlug('), 'another name').toBe(false);
+  });
+
+  for (const name of TYPES) {
+    it(`declares the type ${name} exactly once, in shared/docs.ts`, () => {
+      expect(ALL.filter((f) => TYPE_DEF(name).test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
+    });
+  }
+  for (const name of FUNCTIONS) {
+    it(`defines ${name} exactly once, in shared/docs.ts`, () => {
+      expect(ALL.filter((f) => FN_DEF(name).test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
+    });
+  }
+});
