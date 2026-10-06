@@ -26,7 +26,7 @@ import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
-import { reclaimChild, type ChildReclaimRequest } from './childReclaim.js';
+import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
 import { queueSystemMail } from './rundefs.js';
@@ -40,7 +40,7 @@ import {
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
   FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isSessionIdShape, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
-  type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
+  type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
 } from '../../../shared/api.js';
 
@@ -2500,6 +2500,49 @@ export function registerCoordRoutes(
   });
 
   /**
+   * Child-reclamation wave 5 (spec §5.9): each row's `childReclaim`, composed
+   * over the rows `GET /api/runs` already read. The DECISION is
+   * `childReclaimStatus`'s. This closure wires its inputs and owns one degrade.
+   *
+   * COST, measured at planning: at most ONE statement (`childReclaimEvents`,
+   * skipped when nothing on the board is terminal). The registry answer, the
+   * sweep's defers and verdicts, and the fleet-wide switch are the watcher's
+   * in-memory copies of what the 2 s tick already measured, never a
+   * `readRegistry` or a marker read here. There are no ccd calls.
+   *
+   * THE DEGRADE. A failed mirror read ships the board with every chip at the
+   * store's `null`, which renders nothing, and logs once per request. It is not
+   * D-2545's all-or-failure: that rule protects the run rows themselves, and a
+   * chip that could not be read is not a reason to hide the runs.
+   */
+  const composeChildReclaim = (summaries: RunSummary[]): RunSummary[] => {
+    const coord = deps.coord;
+    if (!coord) return summaries;
+    const sessions = childReclaimSessions(summaries);
+    let events: ReadonlyMap<string, readonly MirroredLifecycleEvent[]>;
+    try {
+      events = sessions.length === 0 ? new Map() : coord.childReclaimEvents(sessions);
+    } catch (err) {
+      console.warn('ccrc-server: GET /api/runs could not read the lifecycle mirror for the reclaim chip ' +
+        `(${err instanceof Error ? err.message : String(err)}) — the board ships without it`);
+      return summaries;
+    }
+    return withChildReclaim(summaries, {
+      events,
+      marks: watcher?.currentChildMarks() ?? null,
+      defers: watcher?.currentChildReclaimDefers() ?? new Map(),
+      // The sweep's last verdicts (spec §5.9). `null` is "no judging pass", which the chip reads as
+      // not judged yet, never as eligible. Never defaulted to a map.
+      verdicts: watcher?.currentChildReclaimVerdicts() ?? null,
+      // Wave 4's switch as the tick last measured it (spec §5.8). Only a
+      // SET marker pauses the chip: `unmeasurable` and "never measured" claim
+      // no switch this read did not see.
+      fleetPaused: watcher?.currentCoord()?.reclaim === 'set',
+      nowMs: Date.now(),
+    });
+  };
+
+  /**
    * `GET /api/runs?closed=1` — cold start, and the archive of finished runs
    * (spec:225-227). Strips `prLineage` and `coordProject` on the way out
    * (`toRunSummary`).
@@ -2582,7 +2625,7 @@ export function registerCoordRoutes(
       return reply.code(503).send({ ok: false, error: 'runs-unreadable', detail: read.detail });
     }
     const summaries: RunSummary[] = read.runs.map(toRunSummary);
-    return { runs: summaries };
+    return { runs: composeChildReclaim(summaries) };
   });
 
   /** Routing spec 2026-09-14 §6 — the run's speed and quality signals. READ,
