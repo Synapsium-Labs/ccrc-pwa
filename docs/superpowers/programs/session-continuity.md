@@ -500,7 +500,7 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - **The landing round was sent** (mail 3758; run 274 is back at `working`):
     - merge main, keeping both sides of `ccrc-install.test.ts` and `single-definition.test.ts`, then re-stamp;
     - the text and one-byte fixes F2 (qualified), F3, F4, F6–F9;
-    - one clause in D-4020 naming F1's (a)–(c) and F5.
+    - one clause in 4020's entry naming F1's (a)–(c) and F5.
   - **Rulings:**
     - F2 is accepted as 4092's cost. A scope with a child cgroup is never stopped, even live, and the text says so.
     - F6: the worker's in-plan definitions were sanctioned by the brief, so the plan's three sentences were stale.
