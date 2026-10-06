@@ -451,6 +451,7 @@ describe.skipIf(!LINUX)('rig.sh wait_run_quiet (cleanup_run waits out a process 
       const r = spawnSync('bash', ['-c', `( sleep 1; : > "$GO" ) &\n${cleanupScript('RUN_R=$ROOT')}`], { encoding: 'utf8', env: env({ GO: go, ROOT: root, RUN_QUIET_S: '8' }), timeout: 60_000 });
       expect(r.status, r.stderr).toBe(0);
       expect(await gone(holder.pid!)).toBe(true);
+      expect(fs.existsSync(mark), 'the holder was killed, not waited for: it never wrote its marker').toBe(true);
       expect(fs.readFileSync(mark, 'utf8').trim(), 'the root was removed under a process still holding it').toBe('present');
       expect(fs.existsSync(root), 'and once the process was gone, the root was removed').toBe(false);
     }, 60_000);
@@ -504,13 +505,13 @@ describe('rig.sh reap, sockets and scenario text', () => {
     } finally { fs.rmSync(tmuxTmp, { recursive: true, force: true }); }
   }, 60_000);
 
-  it('cleanup_run removes its own tmux socket file after the server is killed, and only that one (F10g)', () => {
+  it('cleanup_run\'s rm removes its own socket file, and only that one: a neighbour\'s and `default` stay (F10g)', () => {
     const tmuxTmp = fs.mkdtempSync('/tmp/dlgt-');
     try {
       const dir = path.join(tmuxTmp, `tmux-${os.userInfo().uid}`);
       fs.mkdirSync(dir);
-      // A stale socket stands in for a server that kill-server could not reach (or that died with its socket): the `rm` is
-      // the only thing that can take it away. A neighbour's socket and `default` are never named.
+      // No server runs here: the files are stale sockets, and the directory is 0775, which tmux refuses before it connects.
+      // So kill-server reaches nothing and the `rm` is the only thing that can take the file away.
       for (const n of ['dlg4242', 'dlg4243', 'default']) staleSocket(dir, n);
       const env: NodeJS.ProcessEnv = { ...process.env, HOME: mkTmp('ccrc-dlg-home-'), TMUX_TMPDIR: tmuxTmp };
       delete env.TMUX;
@@ -912,6 +913,12 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
       'smb://$share/mnt/vol/client', '//~/srv/acme', '//:4000/srv/acme', '//\\share\\x', 'x //!y', 'x //=y', 'x //(y', 'x //|y', 'x //?y', 'x //#y', 'x //*y', 'x //+y', 'x //&y', 'x //^y', 'x //{y', 'x //éy']) {
       expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'someone-else', 'evil.example', 'srv/acme', 'vol/client');
     }
+    // I4: a RUN of slashes is judged where it ends (the lookbehind leaves `/` out on purpose), so a host that starts outside a
+    // name class behind three or four slashes is just as residue; adding `/` to the lookbehind would let all of these through
+    for (const leak of ['http:///[fd00::abcd]:8080/home/someone-else/x', 'http:///@evil.example/home/someone-else/x', '///~/srv/acme', 'file:///%65vil.example/home/someone-else',
+      'x ////[::1]:4000/srv/acme', '///:4000/srv/acme']) {
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'someone-else', 'evil.example', 'srv/acme');
+    }
     // and a `//` INSIDE a path or a word (preceded by a name character, `.`, `_`, `-` or `~`) is a join artefact, not a host position
     for (const fine of ['a // b', 'x //', '// x', 'x //\ny', 'a //, b', '"//"', '(//)', '<//>', '///', 'x //; y', 'a //\ty', "'//'", '`//`', '[//]', '{//}',
       '/rig//[x]', '/rig//~x', 'a//@b', 'a.//(b)', 'a_//%b', 'a-//$b', 'a~//|b']) {
@@ -938,9 +945,24 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
 
   it('fails closed on a JSON-escaped slash: a payload string holding a literal backslash-slash spelling of a foreign path (F2b)', () => {
     // These are the characters backslash, slash — in the capture file they read `\\/srv\\/acme`.
-    for (const leak of ['\\/srv\\/acme', 'x \\/mnt\\/vol-0000\\/client']) {
+    // `x\/srv\/acme` (a name character before the backslash) is the shape ONLY ABS's own scan of the raw string refuses: once
+    // the escape is decoded to `x/srv/acme` the `/srv` follows a name character and reads as a relative path
+    for (const leak of ['\\/srv\\/acme', 'x \\/mnt\\/vol-0000\\/client', 'x\\/srv\\/acme']) {
       expect(leak).toContain('\\/');
       expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'srv', 'vol-0000');
+    }
+  });
+
+  // N1: a JSON-escaped slash is decoded like `\uXXXX` and `%2F`, so a `//` host written `\/\/` is scanned as the `//` it is. ABS
+  // cannot start a segment at `[` or `@`, so only the decoded spelling shows the host of a path-less URL.
+  it('scans the decoded spelling of a JSON-escaped slash: `http:\\/\\/[fd00::abcd]:8080` and `http:\\/\\/@evil.example` are residue (N1)', () => {
+    for (const leak of ['http:\\/\\/[fd00::abcd]:8080', 'http:\\/\\/@evil.example', 'http:\\/\\/%65vil.example', 'smb:\\/\\/$share', 'x \\/\\/~', 'http:\\/\\/rig:4000']) {
+      expect(leak).toContain('\\/');
+      expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'evil.example', 'fd00');
+    }
+    for (const fine of ['a \\/\\/ b', 'x \\/\\/', 'a \\/\\/\\/', '\\/\\/']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
     }
   });
 
@@ -1189,6 +1211,26 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(fs.readdirSync(base)).toEqual(['fix']); // no temp sibling is left behind
   });
 
+  // N2: a version directory that is a symbolic link is refused (lstat, not stat), before any version moves. Followed, a link
+  // onto another filesystem half-moves (EXDEV on the second rename) and a link on this one writes outside the fixtures directory.
+  it('refuses a symbolic link where a version directory would go, before any version moves: to a directory and dangling (N2)', () => {
+    const shapes: Array<[string, (out: string, base: string) => void]> = [
+      ['a link to a directory', (out, base) => { fs.mkdirSync(path.join(base, 'target')); fs.rmdirSync(path.join(out, '2.1.999')); fs.symlinkSync(path.join(base, 'target'), path.join(out, '2.1.999')); }],
+      ['a dangling link', (out, base) => { fs.rmdirSync(path.join(out, '2.1.999')); fs.symlinkSync(path.join(base, 'no-such-target'), path.join(out, '2.1.999')); }],
+    ];
+    for (const [name, plant] of shapes) {
+      const { r, out, base } = halfMove(plant);
+      expect(r.status, name).toBe(1);
+      expect(r.stderr, name).toBe('sanitize: 2.1.999 in the fixtures directory is a symbolic link\n');
+      expect(r.stderr, name).not.toContain(base);
+      expect(r.stdout, name).toBe('');
+      expect(fs.readdirSync(out), name).toEqual(['2.1.999']);
+      expect(fs.lstatSync(path.join(out, '2.1.999')).isSymbolicLink(), name).toBe(true);
+      if (name === 'a link to a directory') expect(fs.readdirSync(path.join(base, 'target')), 'the link target received nothing').toEqual([]);
+      expect(fs.readdirSync(base).sort(), name).toEqual(name === 'a link to a directory' ? ['fix', 'target'] : ['fix']); // and no temp sibling is left behind
+    }
+  });
+
   it.skipIf(isRoot)('a version directory that exists but cannot be written is refused before any version moves (M2)', () => {
     const { r, base } = halfMove((out) => fs.chmodSync(path.join(out, '2.1.999'), 0o555), (out) => fs.chmodSync(path.join(out, '2.1.999'), 0o755));
     expect(r.status).toBe(1);
@@ -1435,10 +1477,17 @@ describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
     const code = fs.readFileSync(RIGSH, 'utf8').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     return { templates: noteTemplates(code), sites: (code.match(/\bnote\b(?!\()/g) ?? []).length };
   };
+  /** The non-comment rig.sh lines that name the notes file and are not one of its two known touches: `note()`'s own definition (the one
+   *  writer) and collect's `cp` of it into the bundle. A note written there by any other route (a printf, an echo, a tee) would reach
+   *  the fixtures without passing the `note "…"` census, so it is a line to decide on here. */
+  const strayNoteWriters = (): string[] => fs.readFileSync(RIGSH, 'utf8').split('\n')
+    .filter((l) => !/^\s*#/.test(l) && /\/notes\b/.test(l))
+    .filter((l) => !/^note\(\) \{ printf '%s\\n' "\$\*" >> "\$RUN_R\/notes"; \}$/.test(l)
+      && !/^\s*if \[\[ -f \$RUN_R\/notes \]\]; then cp "\$RUN_R\/notes" "\$O\/notes"; else : > "\$O\/notes"; fi$/.test(l));
   /** One template as rig.sh would print it. Every expansion in a note is decided here; one this does not know throws. */
   function concreteNote(template: string, v: { waitLabels?: string; probeLabels?: string; dialog?: string; verb?: string } = {}): string {
     const known: Record<string, string> = {
-      'jq -c .waitLabels <<<"$step"': v.waitLabels ?? '["x"]',
+      'jq -c .waitLabels <<<"$step"': v.waitLabels ?? '["x","y"]',
       'jq -c .probeLabels <<<"$step"': v.probeLabels ?? '["r1-resumed"]',
       'jq -r .answerDialog <<<"$step"': v.dialog ?? 'Background work is running',
     };
@@ -1459,7 +1508,11 @@ describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
   // The collection-time lists below must never throw (a throw would fail the whole file at collection): a note this test cannot read is
   // left out of them, and the first row, which does not catch, is the one that goes red naming it.
   const scanned = ((): string[] => { try { return rigNoteScan().templates; } catch { return []; } })();
-  const readable = (ts: string[]): string[] => ts.flatMap((t) => { try { return [concreteNote(t)]; } catch { return []; } });
+  // The scenarios wait on one label or on two, so a waitLabels note is fed BOTH shapes (a note that names no labels comes out once).
+  const LABEL_SHAPES = ['["x"]', '["x","y"]'];
+  const readable = (ts: string[]): string[] => [...new Set(ts.flatMap((t) => LABEL_SHAPES.flatMap((waitLabels) => {
+    try { return [concreteNote(t, { waitLabels })]; } catch { return []; }
+  })))];
   const failureNotes = readable(scanned.filter((t) => !isOutcome(t)));
   const outcomeNotes = readable(scanned.filter(isOutcome));
   const outcomeTemplates = scanned.filter(isOutcome);
@@ -1472,6 +1525,7 @@ describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
     expect(templates.filter(isOutcome).map((t) => t.split(' ')[0]), 'the outcomes').toEqual(['probe', 'dialog']);
     expect(templates.filter((t) => !isOutcome(t)), 'a new note needs a decision here: an outcome joins isOutcome, a failure joins build-matrix.mjs\'s FAIL_NOTE').toHaveLength(6);
     expect(new Set(concrete).size, 'no two calls write the same note').toBe(concrete.length);
+    expect(strayNoteWriters(), 'the notes file is written by note() alone: any other line that names it is a note this census cannot see').toEqual([]);
   });
 
   it('the scanner reads a quoted string inside a $(…), an escaped quote and the end of a call, and refuses a call that goes on', () => {
@@ -1501,8 +1555,10 @@ describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
   });
 
   it.each(failureNotes.map((n) => [n]))('FAIL_NOTE is anchored: %j quoted inside a dialog\'s text or a probe\'s label does not make the run unmeasured', (failure) => {
-    const [probe, dialog] = ['probe ', 'dialog answered: '].map((p) => outcomeTemplates.find((t) => t.startsWith(p)) as string);
-    const notes = [concreteNote(probe, { probeLabels: JSON.stringify([failure]) }), concreteNote(dialog, { dialog: failure })];
+    const [probe, dialog] = ['probe ', 'dialog answered: '].map((p) => outcomeTemplates.find((t) => t.startsWith(p)));
+    expect(probe, 'rig.sh writes a probe note').toBeDefined();
+    expect(dialog, 'rig.sh writes a dialog note').toBeDefined();
+    const notes = [concreteNote(probe as string, { probeLabels: JSON.stringify([failure]) }), concreteNote(dialog as string, { dialog: failure })];
     // the dialog carries the failure note verbatim; the probe carries it as a JSON label, which is what rig.sh's `jq -c` prints
     expect(notes[0], 'the probe carries it as a label').toContain(JSON.stringify(failure));
     expect(notes[1], 'the dialog carries it as its text').toContain(failure);

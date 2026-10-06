@@ -18,8 +18,8 @@
 //     follows is accepted only as the end of the URL or a `/`-path scanned like any absolute path: `http://127.0.0.1:4000/srv/x`,
 //     `http://127.0.0.1@host/x`, `http://127.0.0.1:abc`, `http://127.0.0.1?x`, `http://rig@host/x` and `//rig/home/x` are
 //     residue, a bare `http://127.0.0.1:4000` is not;
-//   - and a munged foreign path (`-mnt-…`, `-home-…`), and any of these in a `\uXXXX`- or `%2F`-escaped spelling (both the
-//     string and its decoded form are scanned).
+//   - and a munged foreign path (`-mnt-…`, `-home-…`), and any of these in a `\uXXXX`-, `%2F`- or `\/`-escaped spelling (both
+//     the string and its decoded form are scanned).
 // KNOWN LIMITS: base64 (or any other encoding) of residue is not decoded and not chased. A `/` glued after a name
 // character is read as part of a RELATIVE path and not scanned (`x/srv/acme`, a scheme-less `127.0.0.1:4000/home/x`).
 // Any finding exits 1 naming the bundle and a JSON pointer. A pointer prints a key as TEXT only when the key is
@@ -28,8 +28,9 @@
 // key included, prints as `#<index>`, never its text. A bundle
 // that cannot be read as a bundle (bad version directory, no `root` file, bad scenario name) is a finding too, and
 // NOTHING is written: fixtures are built in a sibling of <fixtures-dir>, EVERY destination is checked before the first
-// file is moved (a directory or a link where a fixture file would go, and a destination directory that exists but cannot
-// be written, refuse the run with nothing moved), and the files move in only once all of them passed.
+// file is moved (a directory or a link where a fixture file would go, a symbolic link where a version directory would go,
+// and a destination directory that exists but cannot be written, refuse the run with nothing moved), and the files move in
+// only once all of them passed.
 // An exception prints one fixed line (never its message, which names a raw path) and exits 1.
 // Usage: node sanitize.mjs <raw-root> <fixtures-dir>
 import fs from 'node:fs';
@@ -142,8 +143,9 @@ const ALLOWED_TOP = new Set(['rig', 'usr', 'bin']);
 const ALLOWED_HOST = new Set(['127.0.0.1']);
 // A path segment of `..` walks out of whatever allowed top precedes it (`/rig/../srv/x`, `../../srv/x`).
 const DOTDOT = /(^|\/)\.\.(\/|$)/;
-// The escaped spellings of `/` and of any character a JSON string may carry as `\uXXXX`, and percent-encoded `/`.
-const decode = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16))).replace(/%2[Ff]/g, '/');
+// The escaped spellings of `/` and of any character a JSON string may carry as `\uXXXX`, percent-encoded `/`, and a JSON-escaped
+// slash `\/` (N1: `http:\/\/[fd00::abcd]:8080` shows its `//` host only once decoded).
+const decode = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16))).replace(/%2[Ff]/g, '/').replace(/\\\//g, '/');
 // Characters that END a URL or a word, so nothing is hidden behind them: whitespace, a quote, a backtick, a closer `)` `]`
 // `}`, `<`, `>`, `,` and `;`. `.`, `:`, `?`, `#`, `@`, `\`, `~`, `%`, `=`, `+` and the rest can CONTINUE one, so they are not here.
 const END_CHARS = '\\s"\'`)\\]}<>,;';
@@ -220,6 +222,9 @@ const scan = (v, ptr, where, findings) => {
 };
 
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+// A path that IS a symbolic link (lstat, not stat: a dangling link is one too). A path it cannot look at is not judged here:
+// the checks that follow it look at the same path and throw to the fixed-line catch below, before anything moves.
+const isLink = (p) => { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } };
 // A directory this process may write into (a regular user's 0555 directory is not). Any failure to write is "not writable":
 // the run refuses with a fixed line before anything moves.
 const writable = (p) => { try { fs.accessSync(p, fs.constants.W_OK); return true; } catch { return false; } };
@@ -260,6 +265,9 @@ function main() {
     if (fs.existsSync(out) && !isDir(out)) { process.stderr.write('sanitize: the fixtures path exists and is not a directory\n'); return 1; }
     for (const v of fs.readdirSync(tmp)) {
       const dest = path.join(out, v);
+      // A version directory that is a symbolic link is refused (N2): followed, a link onto another filesystem half-moves
+      // (EXDEV on the second rename) and a link on this one writes outside the fixtures directory.
+      if (isLink(dest)) { process.stderr.write(`sanitize: ${v} in the fixtures directory is a symbolic link\n`); return 1; }
       if (fs.existsSync(dest) && !isDir(dest)) { process.stderr.write(`sanitize: ${v} exists in the fixtures directory and is not a directory\n`); return 1; }
       // A destination directory that exists but cannot be written would fail the rename AFTER the earlier versions moved in (M2):
       // the version directory itself, and the fixtures directory when this version's directory has to be created in it.
