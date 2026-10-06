@@ -573,6 +573,20 @@ carries it (spec §5.1, amended 2026-09-24).
   - **F5, the stale PR #248 body, is the coordinator's.** I re-write it from the plan's Task 5 text before merging.
   - **ccrc-history** (quiet-ridge's runs 293 and 302) edits README, the doctor checks and deploy.sh. It has consent
     (3750); the second lander merges main.
+- **2026-10-06 23:31 — the landing round is done at `cf0170e7`** (wave-done 3771). It merged main twice, because main moved
+  during the first re-gate: `b27fabc15`, then `8d85c7cf4`. Each time only the stamp conflicted, with README's SKIP
+  sentence kept both ways. The text fixes F1–F4 and F6 landed. The re-gate on `cf0170e7` was all green on the first
+  run: canary deny/deny on jq 1.7 and 1.8.2, fail-open on 3f9cca09 under 1.8.2. The four required checks are green.
+  The round's own commits are text only (verified).
+  - **Main moved a THIRD time** (#299, `1bb88d5e`, the coordinator's merge). #248 conflicts on ccd/ccd's stamp line
+    ONLY (merge-tree). Clause 16 allows one absorb per conflict, so a **merge-only round** names #248 NEXT TO LAND
+    (mail 3772): merge, re-stamp, and a narrow re-gate. CI is the arbiter for the doctor and install files #299
+    changed. Nothing else of this coordinator's that touches ccd/ccd merges before #248.
+  - **F5 is done:** #248's description was re-written from the plan's Task 5 text, with the jq 1.8 fix and the
+    canary added, through the REST API, because `gh pr edit` fails on GitHub's retired classic-projects field. The
+    retired regex and "gh's flags pass unparsed" are gone from it.
+  - **Lesson for ccd/ccd waves:** every merge to main that changes ccd/ccd re-conflicts every open ccd/ccd PR on the
+    generated stamp line. Land them one at a time, each with a merge-only round just before its merge.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
