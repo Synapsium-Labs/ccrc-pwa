@@ -23,7 +23,7 @@ import {
 } from '../src/childReclaimSweep.js';
 import { refusalSentence } from '../src/wsaudit.js';
 import {
-  RUN_STATES, TERMINAL_RUN_STATES, lcRefusalWord, type ChildMark, type ChildReclaimStatus,
+  CHILD_RECLAIM_KEPT_WORDS, RUN_STATES, TERMINAL_RUN_STATES, lcRefusalWord, type ChildMark, type ChildReclaimStatus,
   type MirroredLifecycleEvent, type RunState, type RunSummary,
 } from '../../shared/api.js';
 
@@ -563,15 +563,31 @@ describe('withChildReclaim — the composer GET /api/runs calls', () => {
   });
 
   it('reads a coordinating verdict as refused, with the kept sentence', () => {
-    const verdicts = new Map<string, ChildReclaimSweepVerdict>([[SID, { eligible: false, why: 'coordinating' }]]);
+    const verdicts = new Map<string, ChildReclaimSweepVerdict>([[SID, { eligible: false, why: 'coordinating', runId: RUN }]]);
     expect(withChildReclaim([run({})], src({ verdicts }))[0]!.childReclaim)
       .toEqual(kept(CHILD_RECLAIM_SKIP.coordinating.sentence));
   });
 
   it('reads a kept verdict through a fleet pause: the switch never replaces it', () => {
-    const verdicts = new Map<string, ChildReclaimSweepVerdict>([[SID, { eligible: false, why: 'coordinating' }]]);
+    const verdicts = new Map<string, ChildReclaimSweepVerdict>([[SID, { eligible: false, why: 'coordinating', runId: RUN }]]);
     expect(withChildReclaim([run({})], src({ verdicts, fleetPaused: true }))[0]!.childReclaim)
       .toEqual(kept(CHILD_RECLAIM_SKIP.coordinating.sentence));
+  });
+
+  // Spec §5.6 (slugs recycle), §5.9: a kept verdict is the workspace's it was judged on, and it carries
+  // the run that workspace's marker named. A pass that judged nothing keeps it while the registry moves
+  // on, so a recycled slug's next workspace, marked by THIS run, can meet the old workspace's verdict.
+  // It is no verdict for this run: the chip reads not-judged-yet (the switch's word under the switch),
+  // never the old workspace's kept word.
+  describe('a kept verdict judged under another run’s marker is no verdict for this run', () => {
+    it.each(CHILD_RECLAIM_KEPT_WORDS)('%s, judged under the previous run: not judged yet; under this run: kept', (why) => {
+      const under = (runId: number) => new Map<string, ChildReclaimSweepVerdict>([[SID, { eligible: false, why, runId }]]);
+      expect(withChildReclaim([run({})], src({ verdicts: under(RUN - 1) }))[0]!.childReclaim).toEqual(unjudged);
+      expect(withChildReclaim([run({})], src({ verdicts: under(RUN - 1), fleetPaused: true }))[0]!.childReclaim)
+        .toEqual(switchPaused);
+      expect(withChildReclaim([run({})], src({ verdicts: under(RUN) }))[0]!.childReclaim)
+        .toEqual(kept(CHILD_RECLAIM_SKIP[why].sentence));
+    });
   });
 
   it('reads a retired hold’s verdict (an ordinary skip carrying its release) as the ordinary pending', () => {

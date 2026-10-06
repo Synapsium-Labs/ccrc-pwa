@@ -836,16 +836,23 @@ export class FleetWatcher {
    *  (`reclaim-paused` raised, a reclaim capability missing, the mirror or coordination read
    *  failed) — the same places the sweep state is cleared — reduces it to its KEPT verdicts
    *  (`childReclaimKeptVerdicts`, L1): the attention list keeps listing those, so the chip keeps
-   *  saying them. `null` until this process's first judging pass. IN MEMORY ONLY. Replaced
+   *  saying them. Each kept verdict carries the run its marker named, and both surfaces read it
+   *  only while the marker still names that run: a recycled slug's next workspace is not the old
+   *  one's (spec §5.6). `null` until this process's first judging pass. IN MEMORY ONLY. Replaced
    *  whole, never mutated. Read by the run chip, through `currentChildReclaimVerdicts()`, and by
    *  the attention list's one write: its kept arm, and the failing items it withholds for a held
    *  child. */
   private childReclaimJudged: ReadonlyMap<string, ChildReclaimSweepVerdict> | null = null;
   /** Which kept words this process has fed for which child: one `child reclaim kept` feed row per
-   *  child, per word, per process (spec §5.9); pruned when the registry stops listing the child, so
-   *  a later workspace under a recycled id is a new child. IN MEMORY ONLY: a restart feeds each
-   *  kept child once more. */
-  private childReclaimKeptReported = new Map<string, Set<ChildReclaimKeptWord>>();
+   *  child, per word, per process (spec §5.9). A child is a session id under ONE marker's run: an
+   *  item whose run differs from the one recorded is a recycled slug's next workspace (spec §5.6),
+   *  a new child, and starts a new set, whether or not any pass between saw the id unlisted. Pruned
+   *  on every pass whose mirror read succeeds, a paused one included: an id that pass's listing no
+   *  longer carries is dropped. A pass whose mirror read fails returns before the prune, and prunes
+   *  nothing. What neither the key nor the prune tells apart is the same run minting the same slug
+   *  again with no pruning pass between. IN MEMORY ONLY: a restart feeds each kept child once more. */
+  private childReclaimKeptReported =
+    new Map<string, { readonly runId: number; readonly words: Set<ChildReclaimKeptWord> }>();
   /** The seventh lane's clock — the journal mirror. `sweepLifecycle` below
    *  carries the lane's own docstring; this is only the clock field, same
    *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
@@ -1580,7 +1587,8 @@ export class FleetWatcher {
    *  - `null` is "no verdict yet" for every child: no judging pass since this process started.
    *  - A map is the last judging pass's verdicts, or — after a pass that judged nothing (the
    *    switch, a missing capability, a failed read) — that pass's KEPT verdicts alone. An id absent
-   *    from it has no verdict yet.
+   *    from it has no verdict yet. A kept verdict carries the run its marker named, and says
+   *    nothing of any other run (spec §5.6).
    *  Neither is "eligible". Read-only; replaced whole. */
   currentChildReclaimVerdicts(): ReadonlyMap<string, ChildReclaimSweepVerdict> | null {
     return this.childReclaimJudged;
@@ -3211,8 +3219,9 @@ export class FleetWatcher {
     }
     const live = new Map<string, number | null>(
       records.map((r): [string, number | null] => [r.id, r.child.kind === 'child' ? r.child.runId : null]));
-    // A kept word is fed once per child per process, and "per child" ends with the registry row: a
-    // later workspace under a recycled id is a new child (spec §5.9).
+    // A kept word is fed once per child per process, and "per child" ends with the registry row (spec
+    // §5.9). A row still listed under a marker naming another run is a new child too: the feed below
+    // keys the run (spec §5.6).
     for (const id of [...this.childReclaimKeptReported.keys()]) if (!live.has(id)) this.childReclaimKeptReported.delete(id);
     // The mirror arms; the list itself is written once, by `childReclaimPublishAttention`. No executor
     // answer ever writes it (spec §5.9 — see the `.then` below).
@@ -3457,10 +3466,13 @@ export class FleetWatcher {
     // The list's second publish, and the kept feed row: judging passes only, so a paused or capability-less
     // pass lists what it kept and writes nothing (spec §5.9). Recorded, never pushed.
     for (const a of this.childReclaimPublishAttention(mirrorArms, live)) {
-      const words = this.childReclaimKeptReported.get(a.sessionId) ?? new Set<ChildReclaimKeptWord>();
+      // An item's run is its marker's: a run other than the one fed for is a recycled slug's next
+      // workspace, a new child (spec §5.6).
+      const fed = this.childReclaimKeptReported.get(a.sessionId);
+      const words = fed !== undefined && fed.runId === a.runId ? fed.words : new Set<ChildReclaimKeptWord>();
       if (words.has(a.word)) continue;
       words.add(a.word);
-      this.childReclaimKeptReported.set(a.sessionId, words);
+      this.childReclaimKeptReported.set(a.sessionId, { runId: a.runId, words });
       recordChildReclaimKeptFeed({ coord, notifyLog: this.deps.notifyLog }, a);
     }
 
@@ -3669,8 +3681,9 @@ export class FleetWatcher {
 
   /** THE ONE WRITE of the attention list (spec §5.9): the mirror arms this pass derived, then the kept
    *  arm from the verdicts as they stand (the last judging pass's, or its kept verdicts alone), filtered
-   *  to this listing, with no failing item for a child whose recorded verdict is `held`. L1 decides
-   *  every item; this method only assigns. Returns the kept items it listed, for the feed row. */
+   *  to this listing and to the verdicts judged under the run its marker names, with no failing item for
+   *  a child whose recorded verdict is `held`. L1 decides every item; this method only assigns. Returns
+   *  the kept items it listed, for the feed row. */
   private childReclaimPublishAttention(mirrorArms: readonly ChildReclaimJournalAttention[],
     live: ReadonlyMap<string, number | null>): ChildReclaimKeptAttention[] {
     const verdicts = this.childReclaimJudged ?? new Map<string, ChildReclaimSweepVerdict>();

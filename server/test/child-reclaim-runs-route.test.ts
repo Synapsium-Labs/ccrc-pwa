@@ -241,7 +241,7 @@ describe('GET /api/runs composes the reclaim chip (wave 5, spec §5.9)', () => {
     const h = await harness();
     const id = closedRun(h.coord, SID);
     markedAs(h.watcher, id);
-    judgedAs(h.watcher, { eligible: false, why: 'coordinating' });
+    judgedAs(h.watcher, { eligible: false, why: 'coordinating', runId: id });
     const kept = { word: 'refused', sentence: CHILD_RECLAIM_SKIP.coordinating.sentence, at: null };
     expect(chipOf(await getRuns(h.app), id)).toEqual(kept);
     // A pass that judged nothing keeps its kept verdicts: the switch never replaces this answer.

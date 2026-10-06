@@ -36,7 +36,8 @@ import {
 import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
 import { childReclaimTokenKind } from '../src/coord/childReclaim.js';
 import {
-  CHILD_RECLAIM_KEPT_WORDS, LC_REFUSAL_WORD, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isLcRefusalToken,
+  CHILD_RECLAIM_KEPT_WORDS, LC_REFUSAL_WORD, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isChildReclaimKeptWord,
+  isLcRefusalToken,
   type ChildReclaimAttention, type ChildReclaimKeptWord, type LifecycleAct, type LifecycleOutcome,
   type MirroredLifecycleEvent,
 } from '../../shared/api.js';
@@ -109,6 +110,30 @@ describe('childReclaimSweepVerdict', () => {
       .toEqual({ eligible: true, runId: 7 });
   });
 
+  // Spec §5.6 (slugs recycle) and §5.9: a KEPT verdict outlives a pass that judged nothing, so it
+  // carries the run its marker named when it was judged. A surface reads it only for that run, and a
+  // recycled slug's next workspace, marked by another run, is never read as the old one's. Every
+  // kept word is reached after the marker reads as a child, so the run is always known.
+  it('every KEPT verdict carries the run its marker names; a doubt, held or ordinary one carries none', () => {
+    const marker = { kind: 'child', runId: 12 } as const;
+    const kept: readonly (readonly [ChildReclaimKeptWord, Partial<ChildReclaimSweepInput>])[] = [
+      ['not-a-workspace', { workspace: null }],
+      ['minting-run-absent', { mintingRun: { ok: true, run: null } }],
+      ['child-birth-unplaced', { childBornAt: null }],
+      ['minting-run-postdates-child', { mintingRun: { ok: true, run: { state: 'done', sessionId: 'demo-a',
+        dispatchStartedAt: null, openedAt: NOW - 3_600_000 + SKEW + 1 } } }],
+      ['reviewed-run-absent', { reviewedRun: { kind: 'absent' } }],
+      ['coordinating', { coordinatorClaim: 'open' }],
+    ];
+    expect(kept.map(([w]) => w).sort()).toEqual([...CHILD_RECLAIM_KEPT_WORDS].sort());
+    for (const [why, over] of kept) {
+      expect(skip({ ...over, child: marker }), why).toEqual({ eligible: false, why, runId: 12 });
+    }
+    expect(skip({ child: marker, held: { kind: 'held', reason: 'kept by hand' } })).toEqual({ eligible: false, why: 'held' });
+    expect(skip({ child: marker, identityMeasured: false })).toEqual({ eligible: false, why: 'identity-unmeasured' });
+    expect(skip({ child: marker, siblings: { ok: true, open: 1 } })).toEqual({ eligible: false, why: 'siblings-open' });
+  });
+
   it('a row with no marker is not a child — and nothing is inferred from anything else', () => {
     expect(skip({ child: { kind: 'none' } })).toEqual({ eligible: false, why: 'not-a-child' });
   });
@@ -126,7 +151,7 @@ describe('childReclaimSweepVerdict', () => {
   });
 
   it('a workspace-less row is not a workspace — defence in depth, ccd\'s own rung 1 refuses it too', () => {
-    expect(skip({ workspace: null })).toEqual({ eligible: false, why: 'not-a-workspace' });
+    expect(skip({ workspace: null })).toEqual({ eligible: false, why: 'not-a-workspace', runId: 7 });
   });
 
   it('a held child (unaccounted for) is never eligible — a hold claims the workspace, whatever the reason reads', () => {
@@ -149,14 +174,14 @@ describe('childReclaimSweepVerdict', () => {
   });
 
   it('a minting run ABSENT from the database is NEVER eligible — the amended rule', () => {
-    expect(skip({ mintingRun: { ok: true, run: null } })).toEqual({ eligible: false, why: 'minting-run-absent' });
+    expect(skip({ mintingRun: { ok: true, run: null } })).toEqual({ eligible: false, why: 'minting-run-absent', runId: 7 });
   });
 
   it('an absent minting run wins over an accounted hold too', () => {
     expect(skip({ mintingRun: { ok: true, run: null },
       held: { kind: 'program', reason: 'program:demo wave:2/3 run:7', program: 'demo', accountedRunId: 7,
         open: { ok: true, count: 0 } } }))
-      .toEqual({ eligible: false, why: 'minting-run-absent' });
+      .toEqual({ eligible: false, why: 'minting-run-absent', runId: 7 });
   });
 
   it('a lost database makes EVERY child absent at once, and not one of them is eligible', () => {
@@ -197,7 +222,7 @@ describe('childReclaimSweepVerdict', () => {
   });
 
   it('a child whose own birth this read could not place is doubt, and doubt waits', () => {
-    expect(skip({ childBornAt: null })).toEqual({ eligible: false, why: 'child-birth-unplaced' });
+    expect(skip({ childBornAt: null })).toEqual({ eligible: false, why: 'child-birth-unplaced', runId: 7 });
   });
 
   it('a minting run opened after the child\'s birth (plus the skew) cannot be the run that minted it', () => {
@@ -206,7 +231,7 @@ describe('childReclaimSweepVerdict', () => {
     // Exactly at the skew: still placeable.
     expect(opened(NOW - 3_600_000 + SKEW)).toEqual({ eligible: true, runId: 7 });
     // One millisecond past it: doubt.
-    expect(opened(NOW - 3_600_000 + SKEW + 1)).toEqual({ eligible: false, why: 'minting-run-postdates-child' });
+    expect(opened(NOW - 3_600_000 + SKEW + 1)).toEqual({ eligible: false, why: 'minting-run-postdates-child', runId: 7 });
   });
 
   it('an unreadable sibling list is INELIGIBLE, never "none"', () => {
@@ -218,15 +243,15 @@ describe('childReclaimSweepVerdict', () => {
   });
 
   it('a child that is coordinating a run (an open claim) is never reclaimed automatically', () => {
-    expect(skip({ coordinatorClaim: 'open' })).toEqual({ eligible: false, why: 'coordinating' });
+    expect(skip({ coordinatorClaim: 'open' })).toEqual({ eligible: false, why: 'coordinating', runId: 7 });
   });
 
   // K2 — the verdict reads the claim through the ONE fence (spec §1 rule 4;
   // spec §5.6: slugs recycle), fenced to `childBornAt` (BORN here) less the
   // skew the caller passes (`skewMs`, SKEW here).
   it('K2: the verdict fences a claim to this generation — open keeps, the skew boundary keeps, one ms before it is eligible', () => {
-    expect(skip({ coordinatorClaim: 'open' })).toEqual({ eligible: false, why: 'coordinating' });
-    expect(skip({ coordinatorClaim: BORN - SKEW })).toEqual({ eligible: false, why: 'coordinating' });
+    expect(skip({ coordinatorClaim: 'open' })).toEqual({ eligible: false, why: 'coordinating', runId: 7 });
+    expect(skip({ coordinatorClaim: BORN - SKEW })).toEqual({ eligible: false, why: 'coordinating', runId: 7 });
     expect(skip({ coordinatorClaim: BORN - SKEW - 1 })).toEqual({ eligible: true, runId: 7 });
   });
 
@@ -247,7 +272,7 @@ describe('childReclaimSweepVerdict', () => {
   });
 
   it('a reviewed run that is absent or unreadable keeps the review child — doubt waits', () => {
-    expect(skip({ reviewedRun: { kind: 'absent' } })).toEqual({ eligible: false, why: 'reviewed-run-absent' });
+    expect(skip({ reviewedRun: { kind: 'absent' } })).toEqual({ eligible: false, why: 'reviewed-run-absent', runId: 7 });
     expect(skip({ reviewedRun: { kind: 'unreadable', detail: 'run-unreadable' } }))
       .toEqual({ eligible: false, why: 'reviewed-run-unreadable' });
   });
@@ -302,7 +327,7 @@ describe('childReclaimSweepVerdict', () => {
 
     it('retired, but this child has coordinated — the coordinating conjunct still rules', () => {
       expect(skip({ held: { ...accounted, open: { ok: true, count: 0 } }, coordinatorClaim: 'open' }))
-        .toEqual({ eligible: false, why: 'coordinating' });
+        .toEqual({ eligible: false, why: 'coordinating', runId: 7 });
     });
 
     it('the birth fence rules BEFORE the hold is even considered — a postdating minting run under a still-open, accounted programme answers the fence\'s own word', () => {
@@ -313,7 +338,7 @@ describe('childReclaimSweepVerdict', () => {
         childBornAt: NOW - 3_600_000,
         mintingRun: { ok: true, run: { state: 'done', sessionId: 'demo-a', dispatchStartedAt: null,
           openedAt: NOW - 3_600_000 + SKEW + 1 } },
-      })).toEqual({ eligible: false, why: 'minting-run-postdates-child' });
+      })).toEqual({ eligible: false, why: 'minting-run-postdates-child', runId: 7 });
     });
   });
 });
@@ -1312,8 +1337,8 @@ describe('CHILD_RECLAIM_SKIP — every skip word classed exactly once, with its 
 describe('childReclaimKeptVerdicts — what a pass that judged nothing keeps (spec §5.9)', () => {
   it('(p1) keeps exactly the kept words, with their verdicts', () => {
     const release = { reason: 'program:demo wave:2/3 run:7', program: 'demo', accountedRunId: 7 };
-    const a: ChildReclaimSweepVerdict = { eligible: false, why: 'coordinating' };
-    const e: ChildReclaimSweepVerdict = { eligible: false, why: 'minting-run-absent' };
+    const a: ChildReclaimSweepVerdict = { eligible: false, why: 'coordinating', runId: 7 };
+    const e: ChildReclaimSweepVerdict = { eligible: false, why: 'minting-run-absent', runId: 9 };
     const verdicts = new Map<string, ChildReclaimSweepVerdict>([
       ['a', a],
       ['b', { eligible: true, runId: 7 }],
@@ -1443,8 +1468,10 @@ describe('a pre-lock refusal is a failure line, never a terminal refusal (spec �
 // unlisted by the failing arm. Pure: every input is an argument.
 describe('the attention list\'s kept arm (spec §5.9)', () => {
   const ELIGIBLE: ChildReclaimSweepVerdict = { eligible: true, runId: 7 };
-  const skipped = (why: Exclude<ChildReclaimSweepSkip, 'hold-retired'>): ChildReclaimSweepVerdict =>
-    ({ eligible: false, why });
+  /** A skip as the verdict records it: a kept word carries the run its marker named (run 7 unless told
+   *  otherwise); no other word carries one. */
+  const skipped = (why: Exclude<ChildReclaimSweepSkip, 'hold-retired'>, runId = 7): ChildReclaimSweepVerdict =>
+    (isChildReclaimKeptWord(why) ? { eligible: false, why, runId } : { eligible: false, why });
   const verdictsOf = (rows: readonly (readonly [string, ChildReclaimSweepVerdict])[]) =>
     new Map<string, ChildReclaimSweepVerdict>(rows);
   /** Every id listed as a child of run 7 unless told otherwise. */
@@ -1498,9 +1525,21 @@ describe('the attention list\'s kept arm (spec §5.9)', () => {
   });
 
   it('(iii) an item carries the run id the listing\'s own marker names, not any other', () => {
-    const verdicts = verdictsOf([['a', skipped('minting-run-absent')]]);
+    const verdicts = verdictsOf([['a', skipped('minting-run-absent', 9999)]]);
     expect(childReclaimKeptItems({ verdicts, live: listed(['a'], 9999), mirrorArms: [] }))
       .toEqual([keptFor('a', 'minting-run-absent', 9999)]);
+  });
+
+  // Spec §5.6 (slugs recycle), §5.9: a kept verdict is the workspace's it was judged on. A listing whose
+  // marker names another run is a recycled slug's next workspace, which the next judging pass judges
+  // afresh; until then the old word is listed for neither run. A pass that judged nothing keeps the
+  // old verdict, which is how one meets a newer listing.
+  it('(iii) a kept verdict judged under another run than the listing\'s marker names lists nothing', () => {
+    const verdicts = verdictsOf([['a', skipped('coordinating', 7)], ['b', skipped('minting-run-absent', 9999)]]);
+    expect(childReclaimKeptItems({ verdicts, live: listed(['a', 'b'], 8), mirrorArms: [] })).toEqual([]);
+    expect(childReclaimKeptItems({
+      verdicts, live: new Map<string, number | null>([['a', 8], ['b', 9999]]), mirrorArms: [],
+    })).toEqual([keptFor('b', 'minting-run-absent', 9999)]);
   });
 
   it('(iv) more than five children answering one kept word collapse into ONE line that names them', () => {

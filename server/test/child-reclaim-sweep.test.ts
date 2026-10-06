@@ -29,7 +29,7 @@ import { Bus } from '../src/bus.js';
 import { FleetWatcher, CHILD_RECLAIM_MAX_IN_FLIGHT, CHILD_RECLAIM_STALL_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/watch.js';
 import { readRegistry } from '../src/registry.js';
 import { loadConfig } from '../src/config.js';
-import { CoordStore } from '../src/coord/store.js';
+import { CoordStore, toRunSummary } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { parseJournalLine } from '../src/coord/journalparse.js';
 import { ACTOR_FLAGS_CAP, CCD_ARGV, RECLAIM_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
@@ -37,15 +37,15 @@ import { refusalSentence } from '../src/wsaudit.js';
 import { NotifyLog } from '../src/notifylog.js';
 import {
   CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_SKIP, childReclaimBackoffMs, childReclaimFailingSentence,
-  childReclaimJournalRow, childReclaimKeptManySentence,
+  childReclaimJournalRow, childReclaimKeptManySentence, type ChildReclaimSweepVerdict,
 } from '../src/childReclaimSweep.js';
 import {
-  CHILD_RECLAIM_FEED_QUIET_NONE, CHILD_RECLAIM_TOKEN_KIND, childReclaimBornAt, childReclaimGeneration, childReclaimHasCoordinated,
-  childReclaimLatest,
-  childReclaimTokenKind, type ChildReclaimOutcome, type ChildReclaimRequest,
+  CHILD_RECLAIM_FEED_QUIET_NONE, CHILD_RECLAIM_STATUS_SENTENCE, CHILD_RECLAIM_TOKEN_KIND, childReclaimBornAt,
+  childReclaimGeneration, childReclaimHasCoordinated, childReclaimLatest, childReclaimSessions,
+  childReclaimTokenKind, withChildReclaim, type ChildReclaimOutcome, type ChildReclaimRequest,
 } from '../src/coord/childReclaim.js';
 import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
-import { SPAWN_STALL_MS, holdReason, lcRefusalWord } from '../../shared/api.js';
+import { SPAWN_STALL_MS, holdReason, lcRefusalWord, type ChildReclaimStatus } from '../../shared/api.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -2197,17 +2197,16 @@ describe('S2: seeded rows at the lane — every licence rests on a continuous ep
 // reads as eligible.
 describe('currentChildReclaimVerdicts — the sweep\'s verdicts, visible (wave 5)', () => {
   /** The three children: demo-a coordinating, demo-b finished (eligible), demo-c under a person's hold.
-   *  Returns demo-b's minting run id. */
-  const three = (f: ReturnType<typeof fixture>): number => {
-    coordinatingChild(f);
+   *  Returns demo-b's minting run id, and the coordinating verdict demo-a's marker is judged under. */
+  const three = (f: ReturnType<typeof fixture>): { runId: number; COORDINATING: ChildReclaimSweepVerdict } => {
+    const keptRun = coordinatingChild(f);
     const runId = finishedChild(f, 'demo-b');
     const r = f.openRun();
     f.abandon(r);
     f.plant('demo-c', { child: String(r.id), hold: 'kept by hand' });
-    return runId;
+    return { runId, COORDINATING: { eligible: false, why: 'coordinating', runId: keptRun } };
   };
   const verdicts = (f: ReturnType<typeof fixture>) => f.watcher.currentChildReclaimVerdicts();
-  const COORDINATING = { eligible: false, why: 'coordinating' };
   const HELD = { eligible: false, why: 'held' };
 
   it('(i) is null before any pass — no verdict yet, for every child', () => {
@@ -2218,7 +2217,7 @@ describe('currentChildReclaimVerdicts — the sweep\'s verdicts, visible (wave 5
 
   it('(ii) after one pass, each marked child carries the verdict the loop reached', async () => {
     const f = fixture();
-    const runId = three(f);
+    const { runId, COORDINATING } = three(f);
     await f.pass();
     const v = verdicts(f);
     expect(v?.get('demo-b')).toEqual({ eligible: true, runId });
@@ -2228,7 +2227,7 @@ describe('currentChildReclaimVerdicts — the sweep\'s verdicts, visible (wave 5
 
   it('(iii) a pause keeps the kept verdicts, and only them; a box without the capability never judged', async () => {
     const f = fixture();
-    const runId = three(f);
+    const { runId, COORDINATING } = three(f);
     await f.pass();
     expect(verdicts(f)?.get('demo-b'), 'judged once').toEqual({ eligible: true, runId });
     writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
@@ -2252,7 +2251,7 @@ describe('currentChildReclaimVerdicts — the sweep\'s verdicts, visible (wave 5
 
   it('(iv) a failed read reduces the same way: the kept verdict stays, the others go', async () => {
     const f = fixture();
-    const runId = three(f);
+    const { runId, COORDINATING } = three(f);
     await f.pass();
     expect(verdicts(f)?.get('demo-b'), 'judged once').toEqual({ eligible: true, runId });
     f.next();
@@ -2357,17 +2356,21 @@ describe('the attention list\'s kept arm — the sweep\'s kept verdicts, listed 
   it('(vi) the row is per WORD too: a child kept for a second word is fed once for it', async () => {
     const { home, notifyLog } = await feedFixture();
     const f = fixture({ home, notifyLog });
-    coordinatingChild(f);
+    const runId = coordinatingChild(f);
     await f.pass();
     expect(keptRows(f)).toHaveLength(1);
-    writeFileSync(path.join(f.reg, 'demo-a.child'), '9999');  // now its marker names a run the database does not hold
+    // The SAME marker, now read as naming a run opened after the workspace was created: a second kept word
+    // for the same child (a marker naming another run would be another child, fed afresh for that reason).
+    f.coord.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(f.now() + CHILD_BIRTH_SKEW_MS + 1, runId);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     f.next(); await f.pass();
     await f.watcher.tick();
-    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a')).toEqual({ eligible: false, why: 'minting-run-absent' });
+    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a'))
+      .toEqual({ eligible: false, why: 'minting-run-postdates-child', runId });
     expect(attentionLabels(f)).toEqual(['kept:demo-a']);
     expect(keptRows(f).map((e) => e.body)).toEqual([
       expect.stringContaining(CHILD_RECLAIM_SKIP.coordinating.sentence),
-      expect.stringContaining(CHILD_RECLAIM_SKIP['minting-run-absent'].sentence),
+      expect.stringContaining(CHILD_RECLAIM_SKIP['minting-run-postdates-child'].sentence),
     ]);
     f.next(); await f.pass();
     expect(keptRows(f), 'a word already fed was fed again').toHaveLength(2);
@@ -2383,7 +2386,7 @@ describe('the attention list\'s kept arm — the sweep\'s kept verdicts, listed 
     writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
     f.next(); await f.pass();
     await f.watcher.tick();
-    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a')).toEqual({ eligible: false, why: 'coordinating' });
+    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a')).toEqual({ eligible: false, why: 'coordinating', runId });
     expect(attention(f), 'a pause erased the kept item').toEqual([keptItem('demo-a', runId)]);
     expect(keptRows(f)).toHaveLength(1);
     rmSync(path.join(f.reg, 'reclaim-paused'));
@@ -2535,7 +2538,8 @@ describe('the attention list\'s kept arm — the sweep\'s kept verdicts, listed 
     const at = f.now();
     f.next(); await f.pass();
     await f.watcher.tick();
-    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a'), 'the kept verdict was retained').toEqual({ eligible: false, why: 'coordinating' });
+    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a'), 'the kept verdict was retained')
+      .toEqual({ eligible: false, why: 'coordinating', runId });
     expect(attention(f)).toEqual([{
       kind: 'terminal', sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at,
     }]);
@@ -2562,6 +2566,161 @@ describe('the attention list\'s kept arm — the sweep\'s kept verdicts, listed 
     expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-b')).toEqual({ eligible: false, why: 'minting-run-open' });
     expect(attentionLabels(f)).toEqual([]);
     expect(keptRows(f)).toEqual([]);
+  });
+});
+
+// A recycled slug's next workspace is a new child (spec §5.6, §5.9). A kept verdict outlives a pass that
+// judged nothing, and the 2 s tick lists the registry between passes, so the chip and the attention list
+// can meet an old workspace's kept verdict beside a newer listing whose marker names another run. Each
+// kept verdict carries the run its marker named when it was judged: the chip reads it only for that run,
+// the list only while the listing's marker still names it, and the kept feed row is once per child per
+// word, a child being an id under one marker's run. Display only: none of this reaches a decision
+// (`child-reclaim-verdict-readers.test.ts`).
+describe('a recycled slug’s next workspace never shows the old workspace’s kept word (wave 5)', () => {
+  const S = CHILD_RECLAIM_STATUS_SENTENCE;
+  const KEPT_CHIP: ChildReclaimStatus = { word: 'refused', sentence: CHILD_RECLAIM_SKIP.coordinating.sentence, at: null };
+  /** `GET /api/runs`' chip for one closed run, composed from the store's row and the REAL watcher's
+   *  in-memory reads, the four sources `composeChildReclaim` hands `withChildReclaim`
+   *  (`child-reclaim-runs-route.test.ts` pins that wiring). */
+  const chipOf = (f: ReturnType<typeof fixture>, runId: number): ChildReclaimStatus | null => {
+    const read = f.coord.run(runId);
+    if (!read.ok || read.run === null) throw new Error(`run ${runId} unreadable`);
+    const summary = toRunSummary(read.run);
+    return withChildReclaim([summary], {
+      events: f.coord.childReclaimEvents(childReclaimSessions([summary])),
+      marks: f.watcher.currentChildMarks(),
+      defers: f.watcher.currentChildReclaimDefers(),
+      verdicts: f.watcher.currentChildReclaimVerdicts(),
+      fleetPaused: f.watcher.currentCoord()?.reclaim === 'set',
+      nowMs: f.now(),
+    })[0]!.childReclaim;
+  };
+  /** A child minted by a run DISPATCHED onto it and then closed `done`, so the run's row carries the
+   *  session and the `closedAt` a chip needs. `coordinated`: the child also held a coordinator's chair at
+   *  its own creation (`coordinatingChild`'s shape), so it is kept as `coordinating`. Returns the run id. */
+  const mintedChild = (f: ReturnType<typeof fixture>, id: string, coordinated: boolean): number => {
+    const r = f.openRun();
+    f.plant(id, { child: String(r.id) });
+    f.coord.dispatchRun({ runId: r.id, sessionId: id, workspace: id.slice('demo-'.length), branch: `ws/${id}`,
+      resumed: false, clearedAt: null, items: [] });
+    if (coordinated) {
+      const chair = { program: `chair-${id}-${r.id}` };
+      const c = f.coord.openRun({ ...chair, title: chair.program, project: 'demo', wave: 1, waveOf: null, claimedBy: id });
+      if (!('id' in c)) throw new Error(`chair refused: ${JSON.stringify(c)}`);
+      f.abandon({ id: c.id, program: chair.program });
+    }
+    f.advance(1_000);
+    const closed = f.coord.closeRun({ runId: r.id, finalState: 'done', causedBy: 'coordinator', handoffCommit: null,
+      program: r.program, viaClosing: true });
+    if (!closed.ok) throw new Error(`close refused: ${JSON.stringify(closed)}`);
+    return r.id;
+  };
+  /** The slug recycled: every `<id>.*` registry file removed, then a NEW workspace minted under the same id by
+   *  a NEW run, born past the coordination fence's skew so the old chair is not the new workspace's. The wall
+   *  clock alone steps that far, so the monotonic throttle still holds the next pass back and a tick lists the
+   *  new row with no pass between. Returns the new run's id. */
+  const recycle = (f: ReturnType<typeof fixture>, id: string): number => {
+    for (const n of readdirSync(f.reg)) if (n.startsWith(`${id}.`)) rmSync(path.join(f.reg, n));
+    f.wallStep(2 * CHILD_BIRTH_SKEW_MS);
+    return mintedChild(f, id, false);
+  };
+  const verdictOf = (f: ReturnType<typeof fixture>, id: string) => f.watcher.currentChildReclaimVerdicts()?.get(id);
+
+  it('recycled while the switch stands: neither the new run’s chip nor the attention list reads the old kept word, and the first judging pass after judges afresh', async () => {
+    const f = fixture();
+    const runA = mintedChild(f, 'demo-a', true);
+    await f.pass();
+    await f.watcher.tick();
+    expect(verdictOf(f, 'demo-a')).toEqual({ eligible: false, why: 'coordinating', runId: runA });
+    expect(chipOf(f, runA)).toEqual(KEPT_CHIP);
+    expect(attentionLabels(f)).toEqual(['kept:demo-a']);
+    writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
+    const runB = recycle(f, 'demo-a');
+    f.next(); await f.pass();                                  // judges nothing: keeps the kept verdicts as they stand
+    await f.watcher.tick();
+    expect(f.watcher.currentChildMarks()?.get('demo-a')).toEqual({ kind: 'child', runId: runB });
+    expect(verdictOf(f, 'demo-a'), 'the old workspace’s kept verdict must still stand, or this case is vacuous')
+      .toEqual({ eligible: false, why: 'coordinating', runId: runA });
+    expect(chipOf(f, runB), 'the new run’s chip read the old workspace’s kept word')
+      .toEqual({ word: 'paused', sentence: S.fleetPaused, at: null });
+    expect(chipOf(f, runA), 'the old run’s marker is gone').toBeNull();
+    expect(attentionLabels(f), 'the old workspace’s kept verdict was listed against the new marker').toEqual([]);
+    f.next(); await f.pass();                                  // however long the switch stands
+    await f.watcher.tick();
+    expect(chipOf(f, runB)).toEqual({ word: 'paused', sentence: S.fleetPaused, at: null });
+    expect(attentionLabels(f)).toEqual([]);
+    rmSync(path.join(f.reg, 'reclaim-paused'));
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(verdictOf(f, 'demo-a')).toEqual({ eligible: true, runId: runB });
+    expect(chipOf(f, runB)).toEqual({ word: 'pending', sentence: S.pending, at: null });
+    expect(attentionLabels(f)).toEqual([]);
+  });
+
+  it('recycled with no switch: the new run’s chip never reads the old kept word, even before the next pass', async () => {
+    const f = fixture();
+    const runA = mintedChild(f, 'demo-a', true);
+    await f.pass();
+    await f.watcher.tick();
+    expect(chipOf(f, runA)).toEqual(KEPT_CHIP);
+    const runB = recycle(f, 'demo-a');
+    await f.watcher.tick();                                    // the tick lists the new row; the throttle holds the pass
+    expect(f.watcher.currentChildMarks()?.get('demo-a')).toEqual({ kind: 'child', runId: runB });
+    expect(verdictOf(f, 'demo-a'), 'no pass may have judged the new row yet, or this case is vacuous')
+      .toEqual({ eligible: false, why: 'coordinating', runId: runA });
+    expect(chipOf(f, runB), 'the new run’s chip read the old workspace’s kept word')
+      .toEqual({ word: 'pending', sentence: S.unjudged, at: null });
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(verdictOf(f, 'demo-a')).toEqual({ eligible: true, runId: runB });
+    expect(chipOf(f, runB)).toEqual({ word: 'pending', sentence: S.pending, at: null });
+    expect(attentionLabels(f)).toEqual([]);
+  });
+
+  describe('the kept feed row: once per child per word, a child being an id under one marker’s run', () => {
+    const KEPT_TITLE = 'child reclaim kept';
+    const feedFixture = async () => {
+      const home = mkTmp('ccrc-child-reclaim-sweep-recycled-');
+      const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+      await notifyLog.load();
+      return fixture({ home, notifyLog });
+    };
+    const keptRuns = (f: ReturnType<typeof fixture>) =>
+      f.coord.feedEvents(50).filter((e) => e.title === KEPT_TITLE).map((e) => e.runId);
+    const unplant = (f: ReturnType<typeof fixture>, id: string): void => {
+      for (const n of readdirSync(f.reg)) if (n.startsWith(`${id}.`)) rmSync(path.join(f.reg, n));
+    };
+
+    it('an id re-minted under another run between two passes, the registry never ceasing to list it, is fed again', async () => {
+      const f = await feedFixture();
+      f.plant('demo-a', { child: '9999' });                   // its run is not in the database: minting-run-absent, kept
+      await f.pass();
+      expect(keptRuns(f)).toEqual([9999]);
+      unplant(f, 'demo-a');
+      f.plant('demo-a', { child: '9998' });                   // the same word, a new workspace under another run
+      f.next(); await f.pass();
+      await f.watcher.tick();
+      expect(attentionLabels(f)).toEqual(['kept:demo-a']);
+      expect(keptRuns(f), 'the re-minted id was not fed as a new child').toEqual([9999, 9998]);
+      f.next(); await f.pass();
+      expect(keptRuns(f), 'the new child was fed twice').toEqual([9999, 9998]);
+    });
+
+    it('an id re-minted under another run across a pass whose mirror read failed is fed again', async () => {
+      const f = await feedFixture();
+      f.plant('demo-a', { child: '9999' });
+      await f.pass();
+      expect(keptRuns(f)).toEqual([9999]);
+      unplant(f, 'demo-a');
+      f.next();
+      const spy = vi.spyOn(f.coord, 'childReclaimSessionIds').mockImplementation(() => { throw new Error('mirror unreadable'); });
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await f.pass();                                          // the one pass that lists no demo-a returns before it prunes
+      spy.mockRestore();
+      f.plant('demo-a', { child: '9998' });
+      f.next(); await f.pass();
+      expect(keptRuns(f), 'the re-minted id was not fed as a new child').toEqual([9999, 9998]);
+    });
   });
 });
 

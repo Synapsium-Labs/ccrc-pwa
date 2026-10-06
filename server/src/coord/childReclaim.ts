@@ -11,8 +11,8 @@ import { CHILD_BIRTH_SKEW_MS, type ChildSpentVerdict } from './childSpent.js';
 import {
   CHILD_RECLAIM_PRE_LOCK_TOKEN, CHILD_RECLAIM_SKIP, childReclaimCoordinated, childReclaimFailingPastCeiling,
   childReclaimFailingSentence, childReclaimFailingWord, childReclaimFailureLine, childReclaimJournalRow,
-  type ChildReclaimFeedQuiet, type ChildReclaimKeptAttention, type ChildReclaimPreLockToken, type ChildReclaimSweepSkip,
-  type ChildReclaimSweepVerdict,
+  isChildReclaimKeptVerdict, type ChildReclaimFeedQuiet, type ChildReclaimKeptAttention, type ChildReclaimPreLockToken,
+  type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
 } from '../childReclaimSweep.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
@@ -1451,7 +1451,9 @@ export type ChildReclaimRowView =
 /** The sweep's last verdict for this child, as the chip reads it (spec §5.9). `unjudged`: the
  *  watcher holds no verdict for this row. Either no judging pass has run since the server started,
  *  or the last one did not judge this row, or a pass that judged nothing (the switch, a missing
- *  capability, a failed read) dropped it because it was not a kept word. NEVER read as `eligible`. */
+ *  capability, a failed read) dropped it because it was not a kept word, or it is a kept word judged
+ *  under another run's marker: a recycled slug's earlier workspace (spec §5.6). NEVER read as
+ *  `eligible`. */
 export type ChildReclaimChipVerdict =
   | { readonly kind: 'unjudged' }
   | { readonly kind: 'eligible' }
@@ -1479,7 +1481,8 @@ export interface ChildReclaimStatusInput {
    *  (`firstDeferredAt`), or null when it holds no defer. Never the
    *  presence-only clock that drives the ceiling. */
   readonly deferredSince: number | null;
-  /** The sweep's last recorded verdict for this child, or `unjudged` when the watcher holds none (spec §5.9). */
+  /** The sweep's last recorded verdict for this child, or `unjudged` when the watcher holds none for this
+   *  run (spec §5.9). */
   readonly verdict: ChildReclaimChipVerdict;
   /** The sweep's in-memory entry is in a run of failed attempts (`consecutiveFailures > 0`). */
   readonly sweepFailing: boolean;
@@ -1656,7 +1659,8 @@ export interface ChildReclaimSources {
    *  deferring. */
   readonly defers: ReadonlyMap<string, { readonly firstDeferredAt: number | null; readonly consecutiveFailures: number }>;
   /** `FleetWatcher.currentChildReclaimVerdicts()`: null is "no judging pass since this process
-   *  started", never an empty map; an id absent from a map was not judged. */
+   *  started", never an empty map; an id absent from a map was not judged. A kept verdict carries the
+   *  run its marker named, and is read only for that run. */
   readonly verdicts: ReadonlyMap<string, ChildReclaimSweepVerdict> | null;
   /** Wave 4's fleet-wide switch as the watcher last measured it
    *  (`currentCoord()?.reclaim === 'set'`). `unmeasurable` and "never
@@ -1707,7 +1711,13 @@ export function withChildReclaim(runs: readonly RunSummary[], src: ChildReclaimS
     const row: ChildReclaimRowView = src.marks === null
       ? { kind: 'unmeasured' }
       : mark === undefined ? { kind: 'absent' } : { kind: 'row', child: mark };
-    const judged = sid === null || src.verdicts === null ? undefined : src.verdicts.get(sid);
+    const recorded = sid === null || src.verdicts === null ? undefined : src.verdicts.get(sid);
+    // A KEPT verdict is the word of the workspace it was judged on, and a pass that judged nothing keeps
+    // it while the registry moves on. A marker naming THIS run beside a kept verdict judged under another
+    // is a recycled slug's next workspace (spec §5.6): no verdict yet, never the old workspace's word
+    // (spec §5.9).
+    const judged = recorded !== undefined && isChildReclaimKeptVerdict(recorded) && recorded.runId !== run.id
+      ? undefined : recorded;
     const entry = sid === null ? undefined : src.defers.get(sid);
     return {
       ...run,

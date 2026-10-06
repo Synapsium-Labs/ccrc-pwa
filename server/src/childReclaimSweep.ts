@@ -385,11 +385,27 @@ export type ChildReclaimSweepSkip =
   | 'minting-run-unreadable' | 'minting-run-open' | 'dispatch-in-flight'
   | 'review-report-live' | 'reviewed-run-unreadable' | 'siblings-unreadable' | 'siblings-open';
 
+/** One pass's verdict on one marked child. `runId` is the run the child's marker named when it was
+ *  judged, carried by the three shapes that need it: an eligible verdict and a retired hold, for the
+ *  request and the release job; and a KEPT word, which outlives a pass that judged nothing (spec §5.9)
+ *  and so can meet a newer registry listing. A slug recycles under another run (spec §5.6), so a
+ *  surface reads a kept verdict only for the run it carries (`isChildReclaimKeptVerdict`). Display only:
+ *  no decision reads a kept verdict's `runId`. Every kept word is reached after the marker reads as a
+ *  child, so the run is always known. */
 export type ChildReclaimSweepVerdict =
   | { readonly eligible: true; readonly runId: number }
   | { readonly eligible: false; readonly why: 'hold-retired'; readonly runId: number;
       readonly release: ChildReclaimHoldRelease }
-  | { readonly eligible: false; readonly why: Exclude<ChildReclaimSweepSkip, 'hold-retired'> };
+  | { readonly eligible: false; readonly why: ChildReclaimKeptWord; readonly runId: number }
+  | { readonly eligible: false; readonly why: Exclude<ChildReclaimSweepSkip, 'hold-retired' | ChildReclaimKeptWord> };
+
+/** A verdict that answers a KEPT word, with the run its marker named when it was judged. */
+export type ChildReclaimKeptVerdict = Extract<ChildReclaimSweepVerdict, { readonly why: ChildReclaimKeptWord }>;
+
+/** Does this verdict answer a kept word (spec §5.9)? The one test the kept reduction, the attention
+ *  list's kept arm and the run chip's composer read a kept verdict through. */
+export const isChildReclaimKeptVerdict = (v: ChildReclaimSweepVerdict): v is ChildReclaimKeptVerdict =>
+  !v.eligible && isChildReclaimKeptWord(v.why);
 
 /** How one skip word reads on the surfaces (spec §5.9). `ordinary` carries no sentence: the chip's
  *  own planned rows answer for it. The other three classes carry the sentence the server composes. */
@@ -498,7 +514,7 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
   if (i.child.kind === 'none') return { eligible: false, why: 'not-a-child' };
   if (i.child.kind === 'unreadable') return { eligible: false, why: 'marker-unreadable' };
   if (!i.identityMeasured) return { eligible: false, why: 'identity-unmeasured' };
-  if (i.workspace === null) return { eligible: false, why: 'not-a-workspace' };
+  if (i.workspace === null) return { eligible: false, why: 'not-a-workspace', runId: i.child.runId };
   if (i.held.kind === 'held') return { eligible: false, why: 'held' };
   if (i.held.kind === 'unmeasured') return { eligible: false, why: 'hold-unmeasured' };
   if (i.terminal) return { eligible: false, why: 'terminal-refusal' };
@@ -508,7 +524,7 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
   // rebuilt coordination database makes every child's run absent at once, the
   // live ones included. The orphans the first draft reached through absence
   // are reached through the branch below instead.
-  if (run === null) return { eligible: false, why: 'minting-run-absent' };
+  if (run === null) return { eligible: false, why: 'minting-run-absent', runId: i.child.runId };
   if (!isTerminalRunState(run.state)) {
     // A live minting run keeps its child unless it provably moved on to a
     // DIFFERENT one — which is what a re-dispatched run that bound the child it
@@ -536,8 +552,10 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
   // Reaching it needs the new database to count up to that id inside those
   // two minutes of the child's birth, so it is negligible in practice; it is
   // the fence's only fail-open direction.
-  if (i.childBornAt === null) return { eligible: false, why: 'child-birth-unplaced' };
-  if (run.openedAt > i.childBornAt + i.skewMs) return { eligible: false, why: 'minting-run-postdates-child' };
+  if (i.childBornAt === null) return { eligible: false, why: 'child-birth-unplaced', runId: i.child.runId };
+  if (run.openedAt > i.childBornAt + i.skewMs) {
+    return { eligible: false, why: 'minting-run-postdates-child', runId: i.child.runId };
+  }
   // A hold this build proved belongs to one of this child's own runs (spec
   // §5.7): it protects while that run is not yet terminal — the orphan branch
   // above never releases a hold — and while its programme still has an open
@@ -556,7 +574,7 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
   // word for the same condition. Absent or unreadable is doubt, and doubt waits.
   switch (i.reviewedRun.kind) {
     case 'not-a-review': break;
-    case 'absent': return { eligible: false, why: 'reviewed-run-absent' };
+    case 'absent': return { eligible: false, why: 'reviewed-run-absent', runId: i.child.runId };
     case 'unreadable': return { eligible: false, why: 'reviewed-run-unreadable' };
     case 'run':
       if (!isTerminalRunState(i.reviewedRun.state)) return { eligible: false, why: 'review-report-live' };
@@ -571,7 +589,7 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
   // ended before this workspace existed belongs to an earlier workspace under
   // the same slug (spec §5.6), destroyed before ws-add could create this one.
   if (childReclaimCoordinated(i.coordinatorClaim, () => i.childBornAt, i.skewMs)) {
-    return { eligible: false, why: 'coordinating' };
+    return { eligible: false, why: 'coordinating', runId: i.child.runId };
   }
   if (i.held.kind === 'program') {
     return { eligible: false, why: 'hold-retired', runId: i.child.runId,
@@ -583,11 +601,13 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
 /** The verdicts a pass that judged nothing keeps (spec §5.9): the KEPT words only. Each ends only by
  *  a person's act or a restored coordination database, so a raised switch, a missing capability or a
  *  failed read does not make it untrue, and the attention list keeps listing it. Every other verdict
- *  is dropped: after such a pass it reads "no verdict yet", never eligible. */
+ *  is dropped: after such a pass it reads "no verdict yet", never eligible. A kept verdict keeps the
+ *  run it was judged under, so it stays the word of that workspace alone while the registry moves on
+ *  (spec §5.6): the surfaces read it only for that run. */
 export function childReclaimKeptVerdicts(
   verdicts: ReadonlyMap<string, ChildReclaimSweepVerdict>,
 ): ReadonlyMap<string, ChildReclaimSweepVerdict> {
-  return new Map([...verdicts].filter(([, v]) => !v.eligible && isChildReclaimKeptWord(v.why)));
+  return new Map([...verdicts].filter(([, v]) => isChildReclaimKeptVerdict(v)));
 }
 
 /** The executor's outcome, as far as this memory needs it. STRUCTURAL:
@@ -1021,8 +1041,11 @@ const childReclaimBySession = (a: { readonly sessionId: string }, b: { readonly 
 
 /** The attention list's kept arm (spec §5.9): one item per recorded verdict that is not eligible and
  *  answers a KEPT word, for a row this listing still carries as a child (`live` → the marker's run id,
- *  null when the row is no longer a child) and that has no `terminal` item, because ccd's own terminal
- *  word outranks the sweep's, as on the chip. Doubt words, `held` and the ordinary words never reach it.
+ *  null when the row is no longer a child) whose marker still names the run the verdict was judged
+ *  under, and that has no `terminal` item, because ccd's own terminal word outranks the sweep's, as on
+ *  the chip. A marker naming another run is a recycled slug's next workspace (spec §5.6): the old
+ *  workspace's kept verdict, which a pass that judged nothing keeps, is not listed for it, and the
+ *  next judging pass judges it afresh. Doubt words, `held` and the ordinary words never reach it.
  *  The sentence is the sweep table's, so the banner and the chip say the same thing. Ordered by session
  *  id. Pure and deterministic: the coord frame's byte-equality guard emits once per change. */
 export function childReclaimKeptItems(i: {
@@ -1033,9 +1056,10 @@ export function childReclaimKeptItems(i: {
   const terminal = new Set(i.mirrorArms.filter((a) => a.kind === 'terminal').map((a) => a.sessionId));
   const out: ChildReclaimKeptAttention[] = [];
   for (const [sessionId, v] of i.verdicts) {
-    if (v.eligible || !isChildReclaimKeptWord(v.why)) continue;
+    if (!isChildReclaimKeptVerdict(v)) continue;
     const runId = i.live.get(sessionId);
     if (typeof runId !== 'number') continue;
+    if (v.runId !== runId) continue;
     if (terminal.has(sessionId)) continue;
     out.push({ kind: 'kept', sessionId, runId, word: v.why, sentence: CHILD_RECLAIM_SKIP[v.why].sentence });
   }
