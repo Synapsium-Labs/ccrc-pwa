@@ -2184,6 +2184,15 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
+  itLinux('ccd-scope-sweep lands beside it too (the pane-scope sweep) — every role, but not Darwin', () => {
+    // Mirrors the reaper's case above: its only runner is a systemd timer and it
+    // reads /proc and cgroups. Its UNIT and ENABLE are role-gated (server skips both).
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-scope-sweep');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-scope-sweep')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
   it('the launcher is BYTE FOR BYTE what deploy.sh generates', () => {
     // THE AGREEMENT PIN. The launcher now has two generators — `deploy.sh`'s
     // `install_ccrc_shim` for a box reached over ssh, and `_inst_shim` for a
@@ -4162,6 +4171,9 @@ const UNIT_FILES: Array<[string, string]> = [
   // Claude Code sessions, so it has no /tmp/claude-<uid> to reap.
   ['ccd-tmp-sweep.service', 'deploy/systemd/ccd-tmp-sweep.service'],
   ['ccd-tmp-sweep.timer', 'deploy/systemd/ccd-tmp-sweep.timer'],
+  // The pane-scope sweep: ROLE-GATED on the reaper's terms — a server box runs no pane scopes.
+  ['ccd-scope-sweep.service', 'deploy/systemd/ccd-scope-sweep.service'],
+  ['ccd-scope-sweep.timer', 'deploy/systemd/ccd-scope-sweep.timer'],
   // W4a Task 9 (design §11): the server-role watchdog's pair — ROLE-GATED the
   // OTHER way round from the pairs above: `_inst_units` places it on `server`
   // and `both` (this list's role) and never on `fleet`, whose node the
@@ -4465,6 +4477,7 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // The temp-dir reaper's timer, on the same gate and the same
       // degrade-rather-than-die idiom as the two sweeps above it.
       '--user enable --now ccd-tmp-sweep.timer',
+      '--user enable --now ccd-scope-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       // spec 2026-09-07 §C: a FOURTH enable, role-gated exactly as the sweep's
       // and degrading rather than dying for the same reason.
@@ -4977,7 +4990,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // mutation site for its line too (spec §18 "the puller is installed
         // where its timer looks").
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
-           'ccd-pool-sync', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
+           'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
            'ccd-usage-sweep.py', 'ccrc', 'graphify', ...GPT_LANE_BINS].sort());
   });
 
@@ -6025,6 +6038,8 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(argv).toContain('--user enable --now ccrc-models.timer');
     // Fleet is the role that runs sessions, so the temp-dir reaper arms here.
     expect(argv).toContain('--user enable --now ccd-tmp-sweep.timer');
+    // and the pane-scope sweep, on the reaper's gate.
+    expect(argv).toContain('--user enable --now ccd-scope-sweep.timer');
     // Ruling T4-R1: and the pool-sync timer, which enables on THIS ROLE ONLY
     // — the role whose install wrote the `~/.ccrc/agent.env` the binary
     // refuses without. `--role both` and `--role server` below assert the
@@ -6122,6 +6137,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccd-graph-sweep.timer',
       '--user enable --now ccd-usage-sweep.timer',
       '--user enable --now ccd-tmp-sweep.timer',
+      '--user enable --now ccd-scope-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
       '--user enable --now ccrc-models.timer',
@@ -6152,7 +6168,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
         || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
-        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccrc-codex-usage@')) continue;
+        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccrc-codex-usage@')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -6170,6 +6186,9 @@ describe('ccrc install --role: the refusals and the default', () => {
     // The temp-dir reaper: a server box runs no sessions, so no temp dir to reap.
     expect(existsSync(unitDir(home, 'ccd-tmp-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-tmp-sweep.timer'))).toBe(false);
+    // The pane-scope sweep: a server box runs no pane scopes.
+    expect(existsSync(unitDir(home, 'ccd-scope-sweep.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-scope-sweep.timer'))).toBe(false);
     // Ruling T4-R1: the pool-sync pair is gated OUT here too — but on a
     // NARROWER gate than the four pairs above it. Those are `!= server`;
     // this one is `= fleet`, because `both` gets no agent.env either. A
@@ -6191,6 +6210,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccgpt-usage');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-codex-usage');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-tmp-sweep');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-scope-sweep');
     // W4a Task 9: the watchdog is the SERVER's — its pair landed through the
     // UNIT_FILES loop above (not skipped there), and its timer is enabled.
     expect(systemctlCalls(home).map((c) => c.argv)).toContain('--user enable --now ccrc-update-watchdog.timer');

@@ -4516,7 +4516,7 @@ list them all; the coordinator issues the three past the block):
   decided by the scope's own `cgroup.procs` against every process on the box: a child of one of its processes that it
   does not hold is elsewhere (a per-child cgroup-path comparison can never differ for a child it holds, which a first
   draft's row proved green). Rows 3.27, 3.28.
-- `scope-sweep-installed-like-the-tmp-reaper` — spec §7 names the units, `deploy.sh`, the install spine and
+- **D-4019** `scope-sweep-installed-like-the-tmp-reaper` — spec §7 names the units, `deploy.sh`, the install spine and
   `deploy-verify`; the plan also gates the units and the enable off `--role server` (a server box runs no pane
   scope), declares the record in `shared/lifecycle.ts` and the binary in `TOOLCHAIN_EXECUTABLES`, takes no `flock` (a
   oneshot never runs twice at once; a manual run beside the timer can only issue a stop twice), and sets
