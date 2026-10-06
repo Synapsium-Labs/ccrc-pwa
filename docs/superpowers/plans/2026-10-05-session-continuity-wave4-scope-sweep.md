@@ -4477,8 +4477,8 @@ in the same act as the wave's acceptance; a worker never calls the allocator (wo
 while executing is named in the wave-done mail by a new slug. A session that cannot reach the coordinator writes
 `D-TBD-<slug>` in its report and nowhere in a committed file.
 
-Departures from the spec that this plan makes, each measured above — **fifteen, against a block of ten** — the thirteen planned (4012–4021,
-4088–4090) plus two found while executing (4091, 4092) (the brief: list them all; the coordinator issues the three past the block):
+Departures from the spec that this plan makes, each measured above — **sixteen, against a block of ten** — the thirteen planned (4012–4021,
+4088–4090) plus three found while executing (4091, 4092, 4093) (the brief: list them all; the coordinator issues the three past the block):
 
 - **D-4012** `scope-sweep-stop-shadowed` — the coordinator's safety ruling (C): spec §5.6 has the sweep STOP an inert scope; this
   wave records it `would-stop` and issues the stop only while `$REG/scope-sweep-live` exists, a file nothing in the
@@ -4556,6 +4556,12 @@ Departures from the spec that this plan makes, each measured above — **fifteen
   under a mutation (the plan review's replay lens). The forking bound moves to `ccdWsHelpers.ts` as `BOUNDED` and both
   FIFO cases use it; the pin bounds its own run from outside, so a broken harness reds instead of hanging. Rows
   6.1–6.5.
+- **D-4093** `merge-block-keeps-one-stamp-line` — the plan's two gated merge blocks (Task 1 Step 0, Task 8 Step 1)
+  resolve `ccd/ccd`'s line-2 stamp conflict with `sed -i '2,6d'`, which deletes BOTH stamp lines with the markers, so
+  `ccrc restamp` refuses ("carries no ccrc:generated marker") and the merge stays open without printing STOP. Task 8's
+  merge of `origin/main` 77c11245a kept this side's stamp line (worker clause 16: take either side of that line only)
+  and re-stamped — `bash -n` clean, no marker left, no other hunk touched. The block's fix is `sed -i '2d;4,6d'`
+  (keep line 3, one stamp). Found by Task 8.
 
 ---
 
