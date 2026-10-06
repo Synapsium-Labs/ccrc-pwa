@@ -42,7 +42,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # The engines floor itself (>=22.13.0, node:sqlite) — read from the
+          # The engines floor itself (>=22.16.0: node:sqlite, then FTS5) — read from the
           # one place it is declared (server/test/node-floor.test.ts).
           node-version-file: server/package.json
           cache: npm
