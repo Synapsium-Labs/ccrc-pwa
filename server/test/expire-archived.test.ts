@@ -118,6 +118,12 @@ describe('the one executor', () => {
     expect(s.verbs()).toEqual(['ws-audit']);
   });
 
+  it('an expirable audit whose expiresAt is not an instant is a changed state: deferred, ws-expire never composed', async () => {
+    const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK, expiresAt: null }) }, verb: { code: 0, stdout: expiredDoc } } });
+    expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'deferred', why: 'state-changed' });
+    expect(s.verbs()).toEqual(['ws-audit']);
+  });
+
   it('an audit exit 1 is a failure, its document never spent', async () => {
     const s = await rig({ script: { audit: { code: 1, stdout: auditDoc('unmeasured') } } });
     expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'failed' });
