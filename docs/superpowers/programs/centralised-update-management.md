@@ -35,7 +35,7 @@ numbers; the spec wave each one implements is named beside it.
 | 11 | — (R12, sweep half) | `_upd_sweep`: one shared verify window by concurrent per-unit calls, the die's report-ownership guard and wording, no die in a subshell, the Darwin arm | fleet-first | — | **MERGED** `d2bac7ae` (PR #287, run 270 done) 2026-10-06 02:37 UTC, released as v0.0.92 (dev). The merged tree is byte-identical to the tested tip `33f4eaaa` (`main` unmoved at `d12b5aba`, every Linux leg green). Review 281 met none of the bar's eight classes; its four findings and D3's macOS red go to R19, before stable. Was: **IN REVIEW** 2026-10-06 01:29 UTC: wave-done at `33f4eaaa`, PR #287, `main` `d12b5aba` merged in as `9b3ba1fa`; reserve numbers 3987 and 3988 spent (bare: their definitions are on the worker branch); the bar is committed in the 01:29 entry; review run 281 dispatched 01:32 UTC to `ccrc-pwa-amber-cove` (the held-out panel plus five wave lenses). Was: **DISPATCHED** 2026-10-05 16:04 UTC to `ccrc-pwa-clear-meadow` (run 270). Plan `966ffe9f`, 9 tasks; it defines D-3972 to D-3984, and the five-number reserve, numbers 3987 to 3991, is named in the brief. Was: **Run 270 open, planned** 2026-10-05 11:10 UTC, opened before run 223 closed so the programme keeps an open run; to plan, with R13, R14 and R14(f) first. Was: **SCOPED** 2026-10-04 22:56 UTC; after wave 9 merges (`ccd/ccrc`). The 10-02 wave-10 deferrals move to wave 12. |
 | 12 | — (wave 11's test and prose residue) | before stable: R19 (D3's GNU-only shim, F1's unpinnable filter, F2's W20 prose, F3's NEW+S10 pin, F4's S0 naming); R18(c)–(e) prose. No shipped runtime code changes | none (tests and docs) | — | **MERGED** `9221416a` (PR #291, run 282 done) 2026-10-06 06:40 UTC. The merged tree `a6c85f7c` equals `merge-tree`'s, and every branch file is byte-identical to the tested tip `7b0a5454` (`main` had moved by docs only, to `21f536a5`). Review 286 met none of the bar's seven classes; `server 4/5`'s cleanup-hook timeout re-ran green. Was: **IN REVIEW** 2026-10-06 05:57 UTC: wave-done at `7b0a5454`, PR #291; reserve number 4072 spent (bare: defined on the worker branch); the bar is in the 05:57 entry; review run 286 dispatched 05:59 UTC to `ccrc-pwa-warm-ridge` (the held-out panel plus two lenses: pins and fixtures, the truth of the prose). Was: **DISPATCHED** 2026-10-06 04:37 UTC to `ccrc-pwa-soft-delta` (run 282; 5 items; route Opus·high / Sonnet / workflow off / compact 40). Was: **Run 282 open, planned** 2026-10-06 02:38 UTC, opened before run 270 closed. Deviation block 4068 to 4087 (bare until defined). Scoped 02:45 UTC; plan `04c977cb` + `bc495fed` (drafted by workflow `wf_a11d694f-c70`: prototype, attack, revise; readings ruled 04:35). 5 tasks; it defines D-4068 to D-4071, and the reserve is numbers 4072 to 4076 (Reading 8's ruling spends 4072). |
 | 13 | — (security + CI) | R16: the box token leaves `curl`'s argv in `ccd/ccrc-api` and `deploy/notify.sh` (`-K -` with a stdin `header = …` config, the idiom `ccd-pool-sync` and `ccd-update-sync` ship), and the test curl front admits exactly that; R20: the CI cleanup-hook timeout and wave 12's As-built bullet | fleet-first (the client and the hook reach every home through the install spine) | — | **MERGED** `8b0547b4` (PR #295, 2026-10-06 16:03:00 UTC, run 287 done). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `77cf2367` onto `main` at `b3b5a73e` (`154cbb2c`), and `main` did not move after the review. Every Linux leg was green; the only macOS red was landing-order's. Scoped review 297 met none of the round's five classes; its five coverage and prose findings are residue R23. Was: **FIX ROUND 1 DONE** 2026-10-06 13:01 UTC at `77cf2367` (mail 3698; one commit on `ee5dd409`, 3 files, the round's only; no number spent; `main` not merged, `merge-tree` onto `b3b5a73e` clean; every Linux leg green on PR run 37465993934 and full run 37465994132). Scoped review run 297 dispatched 15:34 UTC to `ccrc-pwa-plain-cove`, after waiting out the fleet-wide daily cap (24 of 24). Both runs' only macOS red is landing-order's `session-hook-merge-deny`. After the review, #295 merges. Was: **FIX ROUND 1 SENT** 2026-10-06 12:27 UTC (mail 3690, `rulings-run287-fix1.md`) on review 294 at `ee5dd409`. Its F1, the test curl front failing open when grep cannot run, meets the bar's class 3 as written, so the bar gives the one round. A scoped review follows under the bar in the rulings, then #295 merges. Was: **IN REVIEW** 2026-10-06 11:34 UTC: wave-done at `ee5dd409`, PR #295; reserve number 4096 spent (bare: defined on the worker branch); the bar is in the 11:34 entry; review run 294 dispatched 11:35 UTC to `ccrc-pwa-quiet-harbor` (the held-out panel plus two lenses: token exposure and the front's parser; delivery, compatibility and the cleanup). Was: **DISPATCHED** 2026-10-06 10:01 UTC to `ccrc-pwa-still-ridge` (run 287; 6 items; route Opus·high / Sonnet / workflow off / compact 40; held 20 min by the fleet-wide daily cap, 24 of 24). Was: **Run 287 open, planned** 2026-10-06 06:41 UTC; re-scoped 07:07 UTC to R16 + R20 (scoping workflow `wf_286a790a-7fa`). Deviation block 4094 to 4113 (bare until defined). Plan `31f24eac` (workflow `wf_3aff815b-3ef`; readings ruled 09:30): 6 tasks; it defines D-4094 and D-4095, and the reserve is numbers 4096 to 4100 (Reading 4 spends 4096). |
-| 14 | — (R15, PWA) | the home screen shows a halt and offers Ack in place; **Update all** says why it skipped; the skew banner drops the stale `ccrc rollout` advice | server (PWA bundle) | — | **IN REVIEW** 2026-10-06 22:18 UTC: wave-done at `3f5f382c`, PR #309 (12 commits, 23 files, exactly File structure's); reserve numbers 4270 and 4271 spent (bare: defined on the worker branch); the bar is in the 22:18 entry; review run 307 dispatched 22:20 UTC to `ccrc-pwa-brisk-meadow` (the held-out panel plus two lenses: state truth and the dispatcher; what the operator sees). Was: **DISPATCHED** 2026-10-06 19:57 UTC to `ccrc-pwa-amber-harbor` (run 299; 7 items; route Opus·high / Sonnet / workflow off / compact 40), after the operator reviewed the plan ("looks good", 19:55). Was: **Planned; the shape ruled.** Plan `053cf1cb5` (workflow `wf_f9c94b88-140`; 7 tasks; it defines D-4266 to D-4269, and the reserve is numbers 4270 to 4274). The operator saw the designs and ruled "all recommended" at 2026-10-06 19:00 UTC. Was: **Run 299 open, planned** 2026-10-06 16:03 UTC, opened before run 287 closed. Deviation block 4266 to 4285 (bare until defined). |
+| 14 | — (R15, PWA) | the home screen shows a halt and offers Ack in place; **Update all** says why it skipped; the skew banner drops the stale `ccrc rollout` advice | server (PWA bundle) | — | **FIX ROUND 1 SENT** 2026-10-06 22:48 UTC (mail 3770, `rulings-run299-fix1.md`) on review 307 at `3f5f382c`. Its F1, an Ack sent twice against one lease after a lost answer, meets the bar's class 2 as written, so the bar gives the one round. A scoped review follows, then #309 merges. Was: **IN REVIEW** 2026-10-06 22:18 UTC: wave-done at `3f5f382c`, PR #309 (12 commits, 23 files, exactly File structure's); reserve numbers 4270 and 4271 spent (bare: defined on the worker branch); the bar is in the 22:18 entry; review run 307 dispatched 22:20 UTC to `ccrc-pwa-brisk-meadow` (the held-out panel plus two lenses: state truth and the dispatcher; what the operator sees). Was: **DISPATCHED** 2026-10-06 19:57 UTC to `ccrc-pwa-amber-harbor` (run 299; 7 items; route Opus·high / Sonnet / workflow off / compact 40), after the operator reviewed the plan ("looks good", 19:55). Was: **Planned; the shape ruled.** Plan `053cf1cb5` (workflow `wf_f9c94b88-140`; 7 tasks; it defines D-4266 to D-4269, and the reserve is numbers 4270 to 4274). The operator saw the designs and ruled "all recommended" at 2026-10-06 19:00 UTC. Was: **Run 299 open, planned** 2026-10-06 16:03 UTC, opened before run 287 closed. Deviation block 4266 to 4285 (bare until defined). |
 | 15 | — (`ccd/ccd`) | `--no-reload` for `_svc_enable`, alone | fleet-first | — | **Planned; dispatch held on three claims.** Plan `527296ffc` (workflow `wf_f9c94b88-140`; 2 tasks; it defines D-4286, and the reserve is numbers 4287 to 4291). It waits until claims 1057 (`ccd/ccd`), 1058 (`macos-platform.test.ts`) and 1055 (`ccd/ccrc`) have ended (Reading 7). Was: **Run 300 open, planned** 2026-10-06 16:07 UTC. Deviation block 4286 to 4295 (bare until defined). To plan. `ccd/ccd` is unclaimed, but open PRs #299, #301 and #303 also edit it, so whichever lands later rebases and restamps. |
 | 16 | — (sweep accounting) | `ccrc-api` placed by the install spine (wave 13's Reading 1(a): a `_inst_bins` line, its census pin, README's sentence); item 3's false "is FAILED" warning, the unit `activating` before the restart (Reading 9), the shipped stale-pid comment, the pgid clause's comment | fleet-first, an attended first move | — | gated on claim 1046 (`ccd/ccrc`, README) and on the operator's Reading 9 ruling |
 | 17 | — (verify script, Darwin helper) | R18(a) (unsearchable registry; `_reg_purge`'s order), R18(b), R10j | fleet-first, an attended first move | — | gated on claim 1046 |
@@ -2394,6 +2394,45 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     renders the screen at phone width in both themes, checks accessibility and contrast, and compares every approved
     string character for character.
 
+- **2026-10-06 22:47 UTC: review 307 closed (wave 14 at `3f5f382c`); the one fix round sent, by the committed bar.**
+  - **Evidence:** the report and the review-done mail (3769) are copied under `.superpowers/w14-evidence/`. The run
+    closed `done`, its reviewer held (`review-report-live`).
+  - **The panel:** 39 agents, none dead, no unverified lens, nothing unexamined. Six findings survived.
+    - **Class 1:** the dispatcher's answers at the base and the tip are byte-identical over 2,681,778 inputs. Three
+      mutations proved the probe sensitive.
+    - **Class 6:** all 16 approved strings match character for character, and contrast is ALL 636 PASS.
+    - **Every named suite is green.**
+  - **F1 is class 2, so the bar gives one round.**
+    - **The input:** an ack commits, its response is lost (a fetch rejection or a proxy 5xx), and the re-poll fails.
+    - **The result:** `sendAck` reads `refused`, the row re-arms against the same lease, and a second tap re-acks the
+      now-idle row, clearing `requestedTag` and the refusals.
+    - **The panel split:** two copies kept 2–1, two refuted 3–0 on the plan's "a refusal re-arms".
+    - **Ruled:** a refusal is an answer the server gave; no answer is not a refusal. As with wave 13's F1, the class
+      names no precondition.
+    - **The rule:** re-arm at once only on a 4xx refusal. A clean 200 holds as now. Any other ending holds until a
+      successful read taken after the tap; it re-arms only if that read still shows the same lease. No new string.
+      Reserve number 4272 is spent only if D-4267's text must change.
+  - **Fixed in the round, because it runs:**
+    - F2, class 7: the lease-key pin changes `target` and `startedAt` together, so cases for each alone are added.
+    - F3: the Acked button's accessible name follows its visible label, a WCAG 2.5.3 fix. The approved visible
+      strings do not change.
+    - F4 and F5: comments.
+    - F6: a fixture's shape.
+  - **Not in the round:** residue R26.
+  - **CI on `3f5f382c`:** every Linux leg of both runs is green. The macOS reds are not this branch's:
+    `session-hook-merge-deny` (20, landing-order's) on full `test-macos` 2/4, and `ccd-docs-tree` (2, the native Docs
+    reader's, #301) on 4/4.
+  - **The round's bar** is at the end of the rulings file. Its six classes:
+    1. a double Ack on any ending;
+    2. an Ack stranded after a fresh read with the same lease, or re-armed on a read that is not fresh;
+    3. a regression, or a changed approved string;
+    4. a pin that cannot red;
+    5. an edit outside scope;
+    6. a wrong number.
+
+    Every Linux leg of the round's full run must also be green.
+  - **Routing:** unchanged.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
@@ -2621,6 +2660,13 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   - (b) The wave-11 plan's wrong `:21947 / cmd_ensure` anchor.
   - (c) The two platform-block comments: `ccd/ccd:881` says "no start", and `ccd/ccd:866` with `ccd/ccrc:895` says "the
     same call minus the start". They should say the call links the unit without reloading the manager.
+- **R26 (wave 14, review 307 and wave-done 3760; for the next PWA wave).**
+  - (a) Focus drops to `<body>` when the focused Ack disables on a hold.
+  - (b) `server/src/update/resolve.ts:236`'s `autoGateBlockers` spells `!n.caps.includes(UPDATE_GATE_CAP)` inline;
+    it could call `carriesUpdateGate`. This is pre-existing.
+  - (c) The `PROVENANCE_DETAIL_PREFIX` docstring in `pwa/src/lib/api.ts`.
+  - (d) Extra untagged inventory nodes push the skew arm to `cli`. That is the safe direction; say it in the arm's
+    comment.
 ## Next-wave brief
 
 **Wave 2 (run 128) — dispatched 2026-09-23.** The brief as sent is the plan's path and sha, tasks 1–15, execution
