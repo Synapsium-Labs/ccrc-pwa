@@ -8129,12 +8129,12 @@ _acct_live() {   # <id>
 # fail closed: an unreadable field may be the one that names the lane, so a
 # partial census must never be presented as complete.
 ACCT_ROW_FIELDS=()
-_acct_row_fields_on() {   # <id> -> "<sid>:<field>" entries in ACCT_ROW_FIELDS
-  local id="$1" f="" sid="" field="" value="" had_nullglob=0
+_acct_row_fields_on() {   # <id> [<what-was-written>] -> "<sid>:<field>" entries in ACCT_ROW_FIELDS
+  local id="$1" f="" sid="" field="" value="" had_nullglob=0 stands="${2:-Nothing was removed.}"
   ACCT_ROW_FIELDS=()
   [ ! -e "$_SVC_REG" ] && return 0
   { [ -d "$_SVC_REG" ] && [ -r "$_SVC_REG" ] && [ -x "$_SVC_REG" ]; } \
-    || _acct_refuse 1 registry-unreadable "$_SVC_REG cannot be listed and entered, so this removal cannot prove which registry fields name account $id. Nothing was removed."
+    || _acct_refuse 1 registry-unreadable "$_SVC_REG cannot be listed and entered, so this removal cannot prove which registry fields name account $id. $stands"
   shopt -q nullglob && had_nullglob=1
   shopt -s nullglob
   for f in "$_SVC_REG"/*.uuid; do
@@ -8146,7 +8146,7 @@ _acct_row_fields_on() {   # <id> -> "<sid>:<field>" entries in ACCT_ROW_FIELDS
         [ "$value" = "$id" ] && ACCT_ROW_FIELDS+=("$sid:$field")
       elif [ -e "$f" ] || [ -L "$f" ]; then
         [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
-        _acct_refuse 1 registry-unreadable "$f exists and cannot be read, so this removal cannot prove whether it names account $id. Nothing was removed."
+        _acct_refuse 1 registry-unreadable "$f exists and cannot be read, so this removal cannot prove whether it names account $id. $stands"
       fi
     done
   done
@@ -8425,11 +8425,14 @@ _acct_unprovision() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
 # (D-4050): ccd's placements never take the placement lock this verb holds
 # (ccd/ccd's "A RE-READ, NOT A LOCK"), so a session can land on the lane during
 # the wait, and the census taken before it no longer says what the tier stop,
-# the rehome and the home sweep act on.
-_acct_remove_census() {   # <id> <clause>
+# the rehome and the home sweep act on. <after-wait> is given only when this run
+# disabled the usage timer before waiting: it then ends the registry census's
+# refusals too, and rides to node's `refuse-live` as `--stands`, so each names it.
+_acct_remove_census() {   # <id> <clause> [<after-wait>]
   local sid
   local -a live_args=(--id "$1")
-  _acct_row_fields_on "$1"
+  [ -z "${3:-}" ] || live_args+=(--stands "$3")
+  _acct_row_fields_on "$1" "${3:-}"
   _acct_live "$1"
   [ "$ACCT_LIVE_MEASURED" = true ] \
     || _acct_refuse 1 live-unmeasured "$ACCT_LIVE_WHY, and the registry has at least one row on $1, so this removal cannot prove the lane has no live pane. $2"
@@ -8512,7 +8515,7 @@ _acct_remove() {
   _acct_remove_usage "$id" "$stands"; [ -z "$ACCT_USAGE_REMOVED" ] || { removed+=("$ACCT_USAGE_REMOVED"); usage_note=" ccrc's usage timer for $id was disabled; 'ccrc install' enables it again for a lane that is still codex."; }; [ -z "$ACCT_USAGE_STEP" ] || operator_steps+=("$ACCT_USAGE_STEP"); [ -z "$ACCT_USAGE_WAIT_STEP" ] || operator_steps+=("$ACCT_USAGE_WAIT_STEP")
   if [ -n "$ACCT_USAGE_WAITED" ]; then
     stands="Nothing was written."; [ -z "$ACCT_USAGE_REMOVED" ] || stands="Nothing else was written.$usage_note"
-    _acct_remove_census "$id" "$stands"
+    _acct_remove_census "$id" "$stands" "${ACCT_USAGE_REMOVED:+$stands}"
   fi
 
   # A CODEX LANE'S TIERS ARE STOPPED HERE: BEFORE THE FIRST REGISTRY MOVE,
@@ -9859,14 +9862,19 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
 # roster-invalid:` or `missing-dependency:` line is already on stderr, its rc
 # is returned, and the probe never runs. Never "not codex": that arm hands an
 # exec.kind "codex" row to the external fetch, whose token directory has a
-# default, which is another lane's (D-3706's class).
-_models_probe_codex_env() {   # <accountId> -> 0; _codex_row's rc for a codex row that does not validate; the lane library's rc for a roster that cannot say
+# default, which is another lane's (D-3706's class). NO ROSTER FILE AT ALL
+# (rc 3, the final review's residual round) is refused too, `roster-absent` with
+# the install remedy, for the same reason: here "not codex" is that fetch.
+_models_probe_codex_env() {   # <accountId> -> 0; _codex_row's rc for a codex row that does not validate; the lane library's rc for a roster that cannot say; 1, roster-absent, for no roster file
   local kind=0
   _models_litellm_codex "$1" || kind=$?
   case "$kind" in
     0) ;;
     1) unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
        return 0 ;;
+    3) unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
+       _codex_say roster-absent "\$HOME/.ccrc/accounts.json does not exist, so whether lane $1 is exec.kind \"codex\" cannot be told, and its probe does not run: a codex lane taken for an external one would be fetched with the external path's default token directory, another lane's. Run 'ccrc install' — it seeds one and never overwrites an existing one."
+       return "$MODELS_CODEX_UNTOLD_RC" ;;
     *) unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
        return "$MODELS_CODEX_UNTOLD_RC" ;;
   esac
@@ -10140,9 +10148,14 @@ _models_litellm_stop_blocked() {   # -> rc 0 and one clause on stdout iff the ex
 # `exec.kind == "codex"` read off ~/.ccrc/accounts.json by the lane library's
 # ONE reader of that question (`_codex_lanes`) — never accounts.sh's
 # CCRC_CODEX_BACKEND, which is keyed on `telemetry` and names today's EXTERNAL
-# live lanes. THREE answers, never two:
+# live lanes. FOUR answers, never two:
 #   - 0: the row is codex-kind;
 #   - 1: the roster was read, and the row is not;
+#   - 3: there is no roster file at all (not a dangling link): nothing was read,
+#     and nothing is undecidable either, so it is its own answer. Only the
+#     dispatcher may read it as "not codex", because its external arm's own read
+#     then refuses `roster-absent` ("run ccrc install"); the probe seam refuses
+#     it, because there "not codex" means the external fetch (D-3706's class);
 #   - 2: the roster cannot say: `_codex_lanes` rc 1 (`roster-invalid`) or rc 2
 #     (`missing-dependency`); any other non-zero reads `roster-invalid`, the
 #     library's word for a roster it could not read. The library's own
@@ -10157,12 +10170,12 @@ _models_litellm_stop_blocked() {   # -> rc 0 and one clause on stdout iff the ex
 # own shell, so the two names reach them.
 MODELS_CODEX_UNTOLD=''
 MODELS_CODEX_UNTOLD_RC=0
-_models_litellm_codex() {   # <accountId> -> 0 codex, 1 not codex, 2 the roster cannot say (above)
+_models_litellm_codex() {   # <accountId> -> 0 codex, 1 not codex, 2 the roster cannot say, 3 no roster file (above)
   local ids rc=0 roster
   MODELS_CODEX_UNTOLD=''; MODELS_CODEX_UNTOLD_RC=0
-  # D-4046: an ABSENT roster is not undecidable, it answers 1: with no roster no row can be codex, and the external
-  # arm's own read then refuses `roster-absent` with its own remedy. A dangling link still goes to `_codex_lanes`.
-  roster="$(_models_roster_path)"; { [ -e "$roster" ] || [ -L "$roster" ]; } || return 1
+  # D-4046: an ABSENT roster is its own answer, 3, never 2 (undecidable) and never 1 (not codex): each reader decides.
+  # A dangling link is there and cannot be read, so it still goes to `_codex_lanes` and answers 2.
+  roster="$(_models_roster_path)"; { [ -e "$roster" ] || [ -L "$roster" ]; } || { MODELS_CODEX_UNTOLD=roster-absent; MODELS_CODEX_UNTOLD_RC=1; return 3; }
   ids="$(_codex_lanes)" || rc=$?
   if [ "$rc" -ne 0 ]; then
     MODELS_CODEX_UNTOLD_RC="$rc"
@@ -10472,6 +10485,7 @@ _models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's 
   case "$kind" in
     0) _models_litellm_lane "$1"; return $? ;;
     1) ;;
+    3) ;;   # no roster file: the external arm's own read refuses `roster-absent` (D-4046)
     *) if [ "$MODELS_CODEX_UNTOLD" = missing-dependency ]; then
          _models_refuse missing-dependency 1 "jq is not on PATH (the lane library's ccrc codex: missing-dependency line says so), so whether lane $1 is exec.kind \"codex\" cannot be told, and neither LiteLLM arm was taken: a codex lane's model list never goes to the box-global file, and an external lane's is never rendered as a codex one. Install jq, then re-run this command. Nothing was written and nothing was stopped."
        fi

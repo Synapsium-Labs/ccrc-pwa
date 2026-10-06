@@ -6381,6 +6381,9 @@ describe('ccrc account remove', () => {
     const r = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '30' });
     expect(r.code, r.stderr).toBe(1);
     expect(oneObject(r)).toMatchObject({ error: 'live-sessions', live: ['orchard-api'] });
+    // Residual round (R-1): node's envelope carries the timer this run disabled, through refuse-live's `--stands`.
+    expect(String(oneObject(r)['detail']), 'the live-sessions refusal says nothing of the timer this run disabled').toBe(
+      'ext-a has 1 live session(s) — stop or swap each one first. Nothing else was written. ccrc\'s usage timer for ext-a was disabled; \'ccrc install\' enables it again for a lane that is still codex.');
     expect(r.stderr).toMatch(/^ccrc account remove: ccrc's usage poll ccrc-codex-usage@ext-a\.service is running \(active\); /m);
     expect(usageSvcCalls(home), 'the wait did not end on the second read').toEqual(Array(2).fill(`--user is-active ${SVC} row=present roster=named`));
     expect(readFileSync(roster, 'utf8'), 'the roster was dropped under a live session').toBe(rosterBefore);
@@ -6391,6 +6394,71 @@ describe('ccrc account remove', () => {
     expect(existsSync(join(home, '.local', 'bin', 'ext-a'))).toBe(true);
     expect(lexists(link), 'the timer is withdrawn before the wait, as before').toBe(false);
     expect(existsSync(join(home, 'systemctl-poison'))).toBe(false);
+  });
+
+  // Residual round (R-1): …and a run that disabled nothing claims nothing — the envelope keeps node's own sentence.
+  itSystemd('Plan 3b Task A3: a session placed during the wait, with the timer already disabled, is refused live-sessions in node\'s own words', () => {
+    const home = box('ccrc-account-remove-usage-placed-no-disable-');
+    const { ctl } = seedUsageWait(home, ['active', 'inactive'], { enabled: false, onFirstRead: PLACED_DURING_WAIT });
+    plantTmux(home, ['cc-orchard-api']);
+    const r = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '30' });
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j).toMatchObject({ error: 'live-sessions', live: ['orchard-api'] });
+    expect(String(j['detail']), 'a run that disabled no timer added a clause').toBe('ext-a has 1 live session(s) — stop or swap each one first');
+    expect(usageCtlCalls(home), 'a timer that was not enabled was disabled').toEqual([]);
+  });
+
+  // Residual round (JC3): the post-wait census's FIRST refusal, a registry field that exists and cannot be read,
+  // says what this run wrote. It is a directory where `.wrapper` belongs, so no uid can read it as a file.
+  itSystemd('Plan 3b Task A3: a registry field that turns unreadable during the wait refuses registry-unreadable after it, naming the timer this run disabled', () => {
+    const home = box('ccrc-account-remove-usage-recensus-unreadable-');
+    const { row, ctl } = seedUsageWait(home, ['active', 'inactive'], {
+      onFirstRead: 'r="$HOME/.cc-sessions"; mkdir -p "$r"; printf u-1234 > "$r/orchard-api.uuid"; mkdir "$r/orchard-api.wrapper"' });
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const r = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '30' });
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('registry-unreadable');
+    const d = String(j['detail']);
+    expect(d.endsWith('so this removal cannot prove whether it names account ext-a. Nothing else was written. ccrc\'s usage timer for ext-a was disabled; \'ccrc install\' enables it again for a lane that is still codex.'), d).toBe(true);
+    expect(readFileSync(roster, 'utf8')).toBe(rosterBefore);
+    expect(existsSync(row)).toBe(true);
+  });
+
+  // Residual round (R-3): the re-census is BEFORE the tier stop, on the lane kind that has tiers. A real stand-in
+  // LiteLLM runs as this lane's tier (C2's shape: the pid file names it, the poison manager makes the stop the
+  // nohup arm), and a session is placed on the lane during the wait. The refusal must leave that tier running.
+  it.skipIf(!PY3 || process.platform === 'darwin')('Plan 3b Task A3: on a codex lane, a session placed during the wait refuses the removal before any tier stop — the tier still runs', async () => {
+    const home = box('ccrc-account-remove-usage-placed-codex-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const state = plantLaneState(home, lane);
+    const { link } = plantCodexUsage(home, lane.id, { row: false });
+    const ctl = plantUsageCtl(home, { svc: ['active', 'inactive'], onFirstRead:
+      `r="$HOME/.cc-sessions"; mkdir -p "$r"; printf u-1234 > "$r/orchard-api.uuid"; printf ${lane.id} > "$r/orchard-api.wrapper"` });
+    plantTmux(home, ['cc-orchard-api']);
+    const tier = await spawnOwnLitellm(home, lane);
+    try {
+      writeFileSync(join(home, '.ccrc', 'codex', lane.id, 'litellm.pid'), `${tier}\n`, { mode: 0o600 });
+      const roster = join(home, '.ccrc', 'accounts.json');
+      const rosterBefore = readFileSync(roster, 'utf8');
+      const r = run(home, ['account', 'remove', '--id', lane.id], '', { PATH: `${ctl}:${env(home)['PATH'] ?? ''}`, CCRC_ACCT_USAGE_WAIT_S: '30' });
+      expect(r.code, r.stderr).toBe(1);
+      expect(oneObject(r)).toMatchObject({ error: 'live-sessions', live: ['orchard-api'] });
+      expect(usageSvcCalls(home)).toEqual(Array(2).fill(`--user is-active ccrc-codex-usage@${lane.id}.service row=absent roster=named`));
+      await new Promise((res) => setTimeout(res, 1000));   // a stop the removal made would have ended the tier by now
+      expect(alive(tier), 'the removal stopped the lane\'s tier under a session placed during the wait').toBe(true);
+      expect(readFileSync(join(home, '.ccrc', 'codex', lane.id, 'litellm.pid'), 'utf8')).toBe(`${tier}\n`);
+      const poison = existsSync(join(home, 'systemctl-poison')) ? readFileSync(join(home, 'systemctl-poison'), 'utf8') : '';
+      expect(poison, 'a systemctl stop of the lane\'s tiers was asked').not.toMatch(/\bstop\b.*ccgpt-codex-a-/);
+      expect(readFileSync(roster, 'utf8')).toBe(rosterBefore);
+      for (const f of state.laneOnly) expect(existsSync(f), `${f} was reaped`).toBe(true);
+      expect(lexists(link), 'the timer is withdrawn before the wait').toBe(false);
+    } finally { await killLaneProcesses(home); }
   });
 
   // The re-census's own two clauses: after the wait, "Nothing was written." is false of a timer this run disabled.

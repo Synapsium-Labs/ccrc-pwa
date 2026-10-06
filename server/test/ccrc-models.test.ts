@@ -1524,6 +1524,18 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
       expect(r.stdout, 'the probe ran').toBe('');
     });
 
+  // Residual round (R-2): an ABSENT roster is "not codex" only at the dispatcher, whose external arm then refuses
+  // roster-absent. At THIS seam it would hand a would-be codex lane to the external fetch and its default token
+  // directory (D-3706's class), so it is refused, in the remedy's own word, and the probe never runs.
+  it('an ABSENT roster at the probe-input seam is refused roster-absent with its remedy — never "not codex", and the probe never runs (Plan 3b Task A1)', async () => {
+    home = await codexBox(['codex-a']);
+    fs.rmSync(join(home, '.ccrc', 'accounts.json'));
+    const r = sourced('_models_run_probe codex-a env', []);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc codex: roster-absent: \$HOME\/\.ccrc\/accounts\.json does not exist, so whether lane codex-a is exec\.kind "codex" cannot be told, and its probe does not run: .* Run 'ccrc install' — it seeds one and never overwrites an existing one\.$/m);
+    expect(r.stdout, 'the probe ran').toBe('');
+  });
+
   it('the REAL lane library over a roster it cannot read: its own roster-invalid sentence reaches the caller, rc 1, and the probe never runs (Plan 3b Task A1)', async () => {
     home = await codexBox(['codex-a']);
     fs.writeFileSync(join(home, '.ccrc', 'accounts.json'), '{"version":1,"accounts":{}}\n');
