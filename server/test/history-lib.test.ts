@@ -1085,8 +1085,8 @@ describe('boundaryOf: compact_boundary metadata, every absent field NULL and nam
     expect(b!.allUuids).toBe(null);
     expect([...b!.missing].sort()).toEqual(['allUuids', 'anchorUuid', 'durationMs', 'headUuid', 'tailUuid']);
   });
-  it('a kept list with any non-string element is NULL and named in missing, exactly as an absent one (Review Focus 1)', () => {
-    for (const allUuids of [[1, 2], ['u1', 2]]) {
+  it('a kept list with any element that is not a non-empty string is NULL and named in missing, exactly as an absent one (Review Focus 1)', () => {
+    for (const allUuids of [[1, 2], ['u1', 2], ['u1', '']]) {
       const b = libRows.boundaryOf(rowFx.boundaryRow({ ...base, allUuids: allUuids as unknown as string[] }));
       expect(b!.allUuids).toBe(null);
       expect(b!.missing).toEqual(['allUuids']);
