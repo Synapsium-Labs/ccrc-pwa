@@ -27,10 +27,10 @@
 // it. The sheet cannot know before the tap what will keep it, so
 // `abandonConsequence` says what happens WHEN nothing does and never that it
 // will; it branches on the workspace's child mark, read only through
-// `childMarkOf` (`runWords.ts`), by `abandonChildOf`. The abandon door is ungated against the box
-// token (D-282; the route's UNGATED note, `server/src/coord/routes.ts`); its
-// reaching that destructive act is inside the single-user trust model:
-// recorded, not changed.
+// `childMarkOf` (`runWords.ts`), by `abandonChildOf`. The abandon door is
+// ungated against the box token (D-282; the route's UNGATED note,
+// `server/src/coord/routes.ts`); its reaching that destructive act is inside
+// the single-user trust model: recorded, not changed.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isRunState, type FleetSession, type RunSummary } from '../../../shared/api';
@@ -160,7 +160,7 @@ export function abandonConsequence(
     case 'not-child':
       return `Abandon run ${run.id} — ${ws}? A release destroys nothing: the worktree survives, the record stays.`;
     case 'child':
-      return `Abandon run ${run.id} — ${ws}? ${ws} is a child workspace, so the server reclaims it when nothing keeps it: its commits and uncommitted work (not ignored or secret-shaped files) are pinned in the attic and its transcripts kept, then its session is stopped and its worktree, branch and clips are removed.`;
+      return `Abandon run ${run.id} — ${ws}? ${ws} is a child workspace, so the server reclaims it when nothing keeps it: its commits and uncommitted work (not ignored or secret-shaped files) are pinned in the attic and its transcripts kept, then its session is stopped, its worktree, branch, clips and temp root are removed, and its registry row is purged.`;
     case 'unknown':
       return `Abandon run ${run.id} — ${ws}? This board cannot tell whether ${ws} is a child workspace. If it is, the server reclaims it when nothing keeps it, pinning its commits and uncommitted work (not ignored or secret-shaped files) in the attic first; if not, a release destroys nothing.`;
   }

@@ -11,6 +11,8 @@
 // two-tap flow and the row-control structural pins — a control that only
 // ever exists in its own isolated test file ships missing the moment
 // someone drops the line from `RunsScreen`.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { ChildMark, CoordCapsView, FleetSession } from '../../shared/api';
 import { useState } from 'react';
@@ -61,7 +63,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 // source's own pieces. The not-a-child one is the sentence the sheet shipped
 // before it learned about children, byte for byte.
 const NOT_CHILD = 'Abandon run 3 — clear-cove? A release destroys nothing: the worktree survives, the record stays.';
-const CHILD = 'Abandon run 3 — clear-cove? clear-cove is a child workspace, so the server reclaims it when nothing keeps it: its commits and uncommitted work (not ignored or secret-shaped files) are pinned in the attic and its transcripts kept, then its session is stopped and its worktree, branch and clips are removed.';
+const CHILD = 'Abandon run 3 — clear-cove? clear-cove is a child workspace, so the server reclaims it when nothing keeps it: its commits and uncommitted work (not ignored or secret-shaped files) are pinned in the attic and its transcripts kept, then its session is stopped, its worktree, branch, clips and temp root are removed, and its registry row is purged.';
 const UNKNOWN = 'Abandon run 3 — clear-cove? This board cannot tell whether clear-cove is a child workspace. If it is, the server reclaims it when nothing keeps it, pinning its commits and uncommitted work (not ignored or secret-shaped files) in the attic first; if not, a release destroys nothing.';
 const NO_SESSION = 'Abandon run 3? It holds no workspace of its own, so it has none to release or reclaim.';
 
@@ -256,6 +258,68 @@ describe('AbandonSheet — what the confirm line says about a child workspace', 
       expect(screen.getByText(NO_SESSION)).toBeInTheDocument();
     },
   );
+});
+
+// Each sentence pinned by ITS OWN words, written here as literals — not by equality
+// with CHILD / NOT_CHILD / UNKNOWN / NO_SESSION above, which are edited together
+// with the source and so agree with it however the copy drifts (measured: "pinned in
+// the attic" -> "pinned in the archive" in both stayed green). Two reads per phrase:
+// the RENDERED sentence has it, and so does the SOURCE of `abandonConsequence` —
+// read as text, and cut to that function so the header comment, which names some of
+// these phrases, cannot stand in for the sentence.
+const SHEET_SOURCE = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'AbandonSheet.tsx'), 'utf8');
+const CONSEQUENCE_SOURCE = ((): string => {
+  const from = SHEET_SOURCE.indexOf('export function abandonConsequence(');
+  return from < 0 ? '' : SHEET_SOURCE.slice(from, SHEET_SOURCE.indexOf('\n}\n', from));
+})();
+
+/** The words no sentence of the sheet may carry: the phone never archives, the
+ *  refusal copy ('failed', 'does not recognise') belongs to a refusal, and the
+ *  'still claimed' toast to a release a sibling blocked. */
+const NEVER_IN_THE_SHEET = [/archive/i, /failed/i, /does not recognise/i, /still claimed/i];
+
+const bareRun = (): RunSummary => run({ sessionId: null, workspace: null, state: 'planned' });
+const SENTENCES: ReadonlyArray<{
+  name: string; run: () => RunSummary; child: 'child' | 'not-child' | 'unknown';
+  says: readonly string[]; never: readonly RegExp[];
+}> = [
+  { name: 'child', run, child: 'child',
+    says: ['is a child workspace', 'when nothing keeps it', 'pinned in the attic', 'transcripts kept',
+      'session is stopped', 'temp root', 'are removed', 'registry row', 'is purged'],
+    // It reclaims: the worktree does NOT survive.
+    never: [/destroys nothing/i, /survives/i, /record stays/i] },
+  { name: 'not-child', run, child: 'not-child',
+    says: ['A release destroys nothing', 'worktree survives', 'record stays'],
+    never: [/attic/i, /removed/i, /purged/i, /reclaims/i, /transcripts/i] },
+  { name: 'no-session', run: bareRun, child: 'child',
+    says: ['holds no workspace of its own', 'none to release or reclaim'],
+    never: [/attic/i, /removed/i, /purged/i, /survives/i, /child workspace/i] },
+  { name: 'unknown', run, child: 'unknown',
+    says: ['cannot tell whether', 'is a child workspace', 'when nothing keeps it', 'in the attic first',
+      'a release destroys nothing'],
+    never: [/removed/i, /purged/i, /survives/i] },
+];
+
+describe.each(SENTENCES)('AbandonSheet — the $name sentence, pinned by its own words', (s) => {
+  it('renders every phrase it is known by, and each is in the source of abandonConsequence', () => {
+    expect(CONSEQUENCE_SOURCE).toContain("case 'child':");
+    render(<AbandonSheet run={s.run()} workspaceChild={s.child} onClose={() => {}} />);
+    const line = document.querySelector('.qc-consequence')?.textContent ?? '';
+    expect(line.length).toBeGreaterThan(0);
+    for (const phrase of s.says) {
+      expect(line, `rendered: ${phrase}`).toContain(phrase);
+      expect(CONSEQUENCE_SOURCE, `source: ${phrase}`).toContain(phrase);
+    }
+  });
+
+  it('carries no word that belongs to another sentence, to a refusal or to an archive', () => {
+    render(<AbandonSheet run={s.run()} workspaceChild={s.child} onClose={() => {}} />);
+    const line = document.querySelector('.qc-consequence')?.textContent ?? '';
+    const sheet = document.querySelector('.abandon-sheet')?.textContent ?? '';
+    expect(line.length).toBeGreaterThan(0);
+    for (const word of s.never) expect(line, String(word)).not.toMatch(word);
+    for (const word of NEVER_IN_THE_SHEET) expect(sheet, String(word)).not.toMatch(word);
+  });
 });
 
 // Build 8 Wave 2, Task 214. Until now the sheet DISCARDED the resolution: an
