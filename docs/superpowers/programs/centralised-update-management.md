@@ -1084,6 +1084,20 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         running since about 15:02, that copies the session temp tree and the worker temp tree from the root disk onto
         the volume. That is an operator migration, not a ccrc process. It was reported to the operator with the rate
         (about 100G/h), because if the sources outsize what is left, every worktree on the volume runs out of space.
+    - **2026-10-06 03:06 UTC — v0.0.92 (#287, wave 11) published at 02:38 and auto-converged unattended. This was the
+      move INTO wave 11.** v0.0.87 to v0.0.91 had converged the same way, with no anomaly, by 02:38.
+      - **Fleet box:** `installing` at 02:55:36, `restarting` at 02:56:37, `done` at 03:02:41. The gate passed at
+        02:56:30.
+        - The sweep was v0.0.91's OLD serial `_upd_sweep`, running v0.0.92's new `verify-service.sh`. It finished at
+          03:02:36, with no "stopped on purpose" line and no "did not stay up".
+        - 44 supervisors are active now.
+      - **Server box:** `done` at 03:03:42. `/health` answers v0.0.92.
+      - **The server's inventory row** read `pending`/`incomplete` at 03:03:48 and 03:04:04. It was settled by
+        03:06:42, the usual post-restart lag over two readings.
+      - **Publish to converged:** 28 min.
+      - **What runs from here:** every later move runs wave 11's NEW sweep, as does any rollback by flip.
+      - STATUS: fleet and server v0.0.92, newest v0.0.92, backups fleet 123M/server 532M, disk free fleet 216G/work
+        volume 90G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
