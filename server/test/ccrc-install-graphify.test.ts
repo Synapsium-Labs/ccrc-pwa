@@ -25,11 +25,18 @@ import {
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkTmp } from './tmpHelpers.js';
+import { mkTmp, pendingTmpFixtures, removeTmpFixturesAfterEachTest, skipIfPreviousCaseFilteredOut } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
 import { installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
+
+// Every case's HOME is removed when that case ends, not left for the file's
+// one `afterAll` (41 dirs, 564 MB, 6.4 s of a 20 s hook budget, measured):
+// every `mkTmp` here is inside a test and no test reads another's HOME
+// (tmpHelpers' `removeTmpFixturesAfterEachTest` names the conditions). The
+// LAST describe in this file is the guard.
+removeTmpFixturesAfterEachTest();
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -2075,5 +2082,23 @@ describe('ccrc install: ~/.local/bin/graphify converges onto the pinned venv (R3
     rmSync(link(home), { force: true });
     runInstall(home, ['install', '--role', 'server']);
     expect(existsSync(link(home)), 'a server box runs no graphify').toBe(false);
+  });
+});
+
+// The guard for `removeTmpFixturesAfterEachTest()` above. LAST, so that in a
+// whole-file run it also witnesses everything the file made: without the
+// opt-in every HOME above is still pending here.
+describe('fixture cleanup: a case\'s HOME goes when the case ends, so the file\'s afterAll is bounded', () => {
+  let made = '';
+  it('a fixture HOME is pending while its case runs', () => {
+    made = mkTmp('ccrc-graphify-cleanup-probe-');
+    expect(pendingTmpFixtures()).toContain(made);
+  });
+
+  it('… and once that case has ended it is gone, and the afterAll\'s list holds nothing', (ctx) => {
+    if (made === '') skipIfPreviousCaseFilteredOut(ctx);
+    expect(made, 'the first case never ran — this one would be vacuous').not.toBe('');
+    expect(existsSync(made), 'the previous case\'s HOME outlived its case').toBe(false);
+    expect(pendingTmpFixtures(), 'fixtures waiting for the afterAll').toEqual([]);
   });
 });

@@ -44,7 +44,7 @@ import {
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkTmp, pendingTmpFixtures, removeTmpFixturesAfterEachTest } from './tmpHelpers.js';
+import { mkTmp, pendingTmpFixtures, removeTmpFixturesAfterEachTest, skipIfPreviousCaseFilteredOut } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool, CONTAINED_TOOLS } from './containedTools.js';
 import { itLinux, itDarwin, platformContrast, python3ProgramArm, IS_DARWIN } from './platformFixtures.js';
@@ -12963,7 +12963,8 @@ describe('fixture cleanup: a case\'s HOME goes when the case ends, so the file\'
     expect(pendingTmpFixtures()).toContain(made);
   });
 
-  it('… and once that case has ended it is gone from disk and from the afterAll\'s list, which holds nothing', () => {
+  it('… and once that case has ended it is gone from disk and from the afterAll\'s list, which holds nothing', (ctx) => {
+    if (made === '') skipIfPreviousCaseFilteredOut(ctx);   // a `-t` that picked this case alone
     expect(made, 'the first case never ran — this one would be vacuous').not.toBe('');
     expect(existsSync(made), 'the previous case\'s HOME outlived its case').toBe(false);
     // NOTHING pending: this file makes no fixture outside a test, so the final
