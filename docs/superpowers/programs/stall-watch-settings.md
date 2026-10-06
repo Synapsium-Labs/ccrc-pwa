@@ -84,6 +84,12 @@ time.
     second merges current `main` (never rebases), resolves only structural adjacency, and re-runs `single-definition`,
     `typecheck-tests`, the `session-hook` citation cases and `deviation-refs`. A same-sentence edit still returns for
     a coordinator ruling under R5 rather than being resolved mechanically.
+- **R8 (2026-10-06 11:54)**, the one cap retry reached the rolling daily gate.
+  - The retry first confirmed run 295 was still planned, run 260's overlapping claims were still live, and
+    `origin/main` `b3b5a73ed` still carried 16 migrations. Dispatch was then refused `cap-daily`, with `limit: 24`
+    and `used: 24`.
+  - The server again spawned and held nothing; run 295 remains planned with no workspace, branch or queued brief.
+    Do not poll, retry again, open another run or alter routing. Resume from this run after the rolling budget ages out.
 
 ## Carried constraints (reviewers get these)
 
