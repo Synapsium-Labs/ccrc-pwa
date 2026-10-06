@@ -366,6 +366,62 @@ describe('the delegation block (delegation broker wave 1)', () => {
     expect(r.stdout).not.toContain('sentinel_secret_key');
   });
 
+  it('prints a hostile or over-long top-level key of an Agent or Workflow input or response as (unprintable), never the key', () => {
+    // No digit in any of these keys, and each is far under 50 wide: the id-map collapse stays out
+    // of the way, so only the KEY test (`seg`, through `topKeys`) can keep these names out.
+    const pathKey = '/srv/acme/rig-path-key';
+    const spaceKey = 'rig space key';
+    const longKey = 'rigLongKey'.repeat(5);
+    cap('PreToolUse', 1, 'sid-sentinel-0001', leaky('PreToolUse', {
+      tool_name: 'Agent',
+      tool_input: { [pathKey]: 'SENTINEL-tool-value', description: 'x' },
+      tool_response: { [spaceKey]: 'SENTINEL-response-value', status: 'x' },
+    }));
+    cap('PostToolUse', 2, 'sid-sentinel-0001', leaky('PostToolUse', {
+      tool_name: 'Workflow',
+      tool_input: { script: 'x' },
+      tool_response: { [longKey]: 'SENTINEL-response-value' },
+    }));
+    const r = reduceRaw([dir]);
+    expect(r.status, r.stderr).toBe(0);
+    for (const raw of [pathKey, spaceKey, longKey, 'srv/acme', 'space key']) expect(r.stdout, raw).not.toContain(raw);
+    const calls = (JSON.parse(r.stdout) as { delegation: { calls: Record<string, Call> } }).delegation.calls;
+    // Control: the clean sibling keys of the same objects DID print, so the walk ran over them.
+    expect(calls['PreToolUse:Agent']?.inputKeys).toEqual([['(unprintable)', 'description']]);
+    expect(calls['PreToolUse:Agent']?.responseKeys).toEqual([['(unprintable)', 'status']]);
+    expect(calls['PostToolUse:Workflow']?.inputKeys).toEqual([['script']]);
+    expect(calls['PostToolUse:Workflow']?.responseKeys).toEqual([['(unprintable)']]);
+  });
+
+  it('prints an id-keyed or over-wide Agent or Workflow input or response as the single (map) token, never a key', () => {
+    // Each of the three response keys passes the KEY test on its own, so only the collapse
+    // (`asMap(names, false)`, through `topKeys`) keeps them out of the output. `toolu_rig…` is id-shaped.
+    const idMap = { toolu_rig000123: { a: 1 }, toolu_rig000124: { a: 1 }, toolu_rig000125: { a: 1 } };
+    // Letters only (alpha), never a digit: this one pins the WIDTH bound alone, 51 keys.
+    const wide = Object.fromEntries(Array.from({ length: 51 }, (_, i) => [`w${alpha(i)}`, i]));
+    cap('PostToolUse', 1, 'sid-sentinel-0001', leaky('PostToolUse', {
+      tool_name: 'Agent',
+      tool_input: wide,
+      tool_response: idMap,
+    }));
+    cap('PostToolUse', 2, 'sid-sentinel-0001', leaky('PostToolUse', {
+      tool_name: 'Workflow',
+      tool_input: { script: 'x', args: 1 },
+      tool_response: { mixed_key: 1, id7: 2 },
+    }));
+    const r = reduceRaw([dir]);
+    expect(r.status, r.stderr).toBe(0);
+    for (const raw of ['toolu_rig000123', 'toolu_rig000124', 'toolu_rig000125', 'waa', 'wbz', 'id7', 'mixed_key']) {
+      expect(r.stdout, raw).not.toContain(raw);
+    }
+    const calls = (JSON.parse(r.stdout) as { delegation: { calls: Record<string, Call> } }).delegation.calls;
+    expect(calls['PostToolUse:Agent']?.inputKeys).toEqual([['(map)']]);
+    expect(calls['PostToolUse:Agent']?.responseKeys).toEqual([['(map)']]);
+    // A single digit-bearing key collapses the whole object; the clean input beside it still lists its keys.
+    expect(calls['PostToolUse:Workflow']?.inputKeys).toEqual([['args', 'script']]);
+    expect(calls['PostToolUse:Workflow']?.responseKeys).toEqual([['(map)']]);
+  });
+
   it('counts an isolation value outside worktree and remote as other, without printing it', () => {
     cap('PreToolUse', 1, 'sid-sentinel-0001', leaky('PreToolUse', {
       tool_name: 'Task', tool_input: { isolation: 'SENTINEL-tool-value' },
@@ -420,6 +476,25 @@ describe('the delegation block (delegation broker wave 1)', () => {
       expect(r.status, bad.join(' ')).toBe(2);
       expect(r.stdout).toBe('');
       expect(r.stderr.trim().split('\n')).toHaveLength(1);
+    }
+  });
+
+  it('refuses a --root whose path is the filesystem root (=/, =//, =///) with exit 2, and still accepts an ordinary root', () => {
+    // `=/` normalises to an empty path, and with `/` as the root every cwd would be classified
+    // `other`, a root that measures nothing and says so in no way.
+    cap('PreToolUse', 1, null, leaky('PreToolUse', { cwd: '/srv/acme/x' }));
+    for (const bad of ['fs=/', 'fs=//', 'fs=///']) {
+      const r = reduceRaw([dir, '--root', bad]);
+      expect(r.status, bad).toBe(2);
+      expect(r.stdout, bad).toBe('');
+      expect(r.stderr.trim().split('\n'), bad).toHaveLength(1);
+      expect(r.stderr, bad).toContain('usage: node deploy/hook-capture-reduce.mjs');
+    }
+    // A root of `/` beside a good one refuses the whole call, not just that argument.
+    expect(reduceRaw([dir, '--root', 'repo=/srv/acme', '--root', 'fs=/']).status).toBe(2);
+    // Control: an ordinary root, with or without a trailing slash, is accepted and classifies below it.
+    for (const ok of ['fs=/srv/acme', 'fs=/srv/acme/']) {
+      expect(dlgOf(['--root', ok]).sequence.map((e) => e.cwd), ok).toEqual(['fs/*']);
     }
   });
 });
