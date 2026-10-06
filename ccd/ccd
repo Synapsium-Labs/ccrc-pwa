@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=68bfaffa7f4aabeb3f8d4c9c401a1c3ba7b6ee6a95c07899030b96abd9a69efd
+# ccrc:generated 1 sha256=08f951d5b0510089c5c40a890f7b6f13d363dd7c143451466d94904798ae7438
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -27972,6 +27972,267 @@ if not isinstance(v, list):
     sys.exit(1)
 sys.stdout.write(str(len(v)))
 ' "$1" 2>/dev/null
+}
+
+# ── who uses a path: the in-use probe (child reclamation wave 6, spec §5.6) ──
+# THE SEAM, as `_ws_expire_proc_root` is the expiry probe's: a test names a fake
+# process table, and the box answers /proc.
+_ws_path_users_proc_root() { printf '%s' /proc; }
+WS_PATH_USERS_SCAN_S=10   # bound on the ONE python3 walk of the process table (healthy: well under a second)
+_WS_PATH_USERS_PIDS=''
+_WS_PATH_USERS_WHY=''
+_ws_path_users() {   # path -> 0 when no process of this uid uses it; 1 when one does (_WS_PATH_USERS_PIDS:
+  #                     their pids, space-separated, each once; _WS_PATH_USERS_WHY: what each uses);
+  #                     2 unmeasured (_WS_PATH_USERS_WHY says why) — never "nobody"
+  # WHO USES A PATH, asked of a temp root before ccd removes it. MEASURED
+  # 2026-10-04: a reclaim tail removed `~/.cc-tmp/<id>` while the killed pane's
+  # processes still ran with `TMPDIR=<leaf>`, and one of them re-created the
+  # leaf 3.7 s after `reclaim done`. Asking tmux whether its session is gone
+  # never asks whether the pane's processes have exited; this does.
+  # A PROCESS USES THE PATH when it is of THIS uid (any of the four ids its
+  # `status` names) and: its environment's `TMPDIR` equals the path or lies
+  # under it — a STRING test, so the leaf need not exist, which is exactly how
+  # one is re-created; or its working directory, or any file it holds open, is
+  # at the path or under it. "Under" is the path followed by `/`: a sibling
+  # `<path>2` is not under it. TWO SPELLINGS are compared: the path as given
+  # (how `_child_tmpdir` composes TMPDIR) and its physical one — the parent
+  # resolved, the LEAF NOT FOLLOWED (a cwd or fd link never goes through a link).
+  # THE EXPIRY PROBE'S DISCIPLINE (`_ws_expire_cwd_users`, which this neither
+  # edits nor calls): unmeasured is never "nobody". A table that cannot be
+  # listed, a listing without ccd's own pid, a `status` that does not parse, a
+  # walk that outruns `WS_PATH_USERS_SCAN_S`, python3 missing: unmeasured. A
+  # process is skipped only on PROOF it vanished (ENOENT/ESRCH) — and proof
+  # that ONE process vanished is no proof about the processes it left:
+  # - THE WALK IS A FIXED POINT, NEVER ONE SNAPSHOT. A process that forks its
+  #   successor and exits between the listing and its own read leaves a child
+  #   no listing held (measured: such a chain read "nobody" 40 of 40 on a
+  #   single pass). So the table is listed again until a listing names no pid
+  #   this walk has not read, and the first user found ends it. A table that
+  #   never stops minting new pids inside `WS_PATH_USERS_SCAN_S` is
+  #   unmeasured, never "nobody"; a pid reused inside one walk is not read
+  #   twice (a stated residual).
+  # - A THREAD-GROUP LEADER THAT EXITED BEFORE ITS THREADS (`pthread_exit`
+  #   from main: State Z, Threads > 1) shows a vanished cwd while its other
+  #   threads still run with its environment, cwd and fds. A leader whose own
+  #   entries read as vanished is asked through `task/<tid>`, and a thread
+  #   entry unreadable for any reason but vanishing is unmeasured. A thread
+  #   already in exit (gone, or PF_EXITING in its `stat` flags) IS vanishing:
+  #   its memory is released, so its environ answers EACCES (measured: 10 of
+  #   30 walks of a busy box met one), and reading that as unmeasured would
+  #   keep temp roots for nothing.
+  # THE LIMIT, STATED: an entry this uid may not read — EACCES, a NON-DUMPABLE
+  # process of this uid (ssh-agent, a setuid exec, anything that called
+  # prctl(PR_SET_DUMPABLE, 0)) — is NOT SEEN, as in the expiry probe, and
+  # neither is any process of another uid. Refusing on them would keep every
+  # temp root for ever on a box that runs an ssh-agent. Two more are not seen.
+  # An environment is the one the process was exec'd with, so a TMPDIR it set
+  # after its exec is not read. And a cwd or fd reached through ANOTHER MOUNT
+  # of the same directory reads that mount's spelling, which neither compared
+  # spelling names: `$HOME/.cc-tmp` is a bind mount on the fleet box, and its
+  # device is mounted whole elsewhere. The TMPDIR arm compares ccd's own
+  # spelling, the one `_child_tmpdir` composes, so the pane's own processes
+  # are seen through it.
+  # WHAT IS NOT A USER: ccd's own process (`$$`, `$BASHPID`), the scan's own
+  # chain (the python3 and every process between it and ccd) and any child of
+  # those. ccd's ANCESTORS are users like any other.
+  # DARWIN ANSWERS UNMEASURED: ccd reads no process environment there.
+  local p="$1" name parent preal phys rc root out pid what pth n=0 shown='' pids='' me=$$ sub=$BASHPID
+  _WS_PATH_USERS_PIDS=''; _WS_PATH_USERS_WHY=''
+  _ws_reclaim_plain_path "$p" \
+    || { _WS_PATH_USERS_WHY="$p is not one plain absolute path, so who uses it was never asked"; return 2; }
+  if [[ "$CCD_OS" == darwin ]]; then
+    _WS_PATH_USERS_WHY="this box is Darwin, where ccd reads no process environment, so who uses $p was never asked"
+    return 2
+  fi
+  name="${p##*/}"; parent="${p%/*}"; [[ -n "$parent" ]] || parent=/
+  _ws_reclaim_absent "$parent"; rc=$?
+  (( rc != 2 )) || { _WS_PATH_USERS_WHY="$_WS_ABSENT_WHY — who uses $p was never asked"; return 2; }
+  if (( rc == 0 )); then
+    phys="$p"   # nothing stands above the leaf: no cwd or fd can be in it; TMPDIR is a string
+  else
+    preal=$(cd -- "$parent" >/dev/null 2>&1 && pwd -P) \
+      || { _WS_PATH_USERS_WHY="the directory $parent that holds $p cannot be resolved, so who uses $p was never asked"; return 2; }
+    phys="${preal%/}/$name"
+  fi
+  root=$(_ws_path_users_proc_root)
+  out=$(_plat_timeout "$WS_PATH_USERS_SCAN_S" env LC_ALL=C.UTF-8 python3 -c '
+import os, sys
+root, lit, phys, me, sub = sys.argv[1:6]
+uid = os.getuid()
+VANISHED = (FileNotFoundError, ProcessLookupError)
+def under(p):
+    return any(p == b or p.startswith(b + "/") for b in (lit, phys))
+def status(pid):
+    # (ppid, uids), or None ONLY on proof the process is gone; anything else is unmeasured
+    try:
+        with open("%s/%s/status" % (root, pid), "rb") as fh:
+            raw = fh.read().decode("utf-8", "replace")
+    except VANISHED:
+        return None
+    ppid = uids = None
+    for line in raw.split("\n"):
+        if line.startswith("PPid:"):
+            v = line[5:].strip()
+            if v.isascii() and v.isdigit():
+                ppid = v
+        elif line.startswith("Uid:"):
+            f = line[4:].split()
+            if len(f) == 4 and all(x.isascii() and x.isdigit() for x in f):
+                uids = {int(x) for x in f}
+    if ppid is None or uids is None:
+        sys.exit(3)
+    return ppid, uids
+def uses(base):
+    # what of the path the entries under <base> show (a process, or one of
+    # its threads); None ONLY on proof they vanished mid-read
+    found = []
+    try:
+        with open(base + "/environ", "rb") as fh:
+            env = fh.read()
+        for kv in env.split(b"\0"):
+            if kv.startswith(b"TMPDIR=") and under(os.fsdecode(kv[7:])):
+                found.append(("tmpdir", os.fsdecode(kv[7:])))
+    except VANISHED:
+        return None
+    except PermissionError:
+        pass
+    try:
+        c = os.readlink(base + "/cwd")
+        if under(c):
+            found.append(("cwd", c))
+    except VANISHED:
+        return None
+    except PermissionError:
+        pass
+    try:
+        fds = os.listdir(base + "/fd")
+    except VANISHED:
+        return None
+    except PermissionError:
+        fds = []
+    for n in fds:
+        try:
+            t = os.readlink(base + "/fd/" + n)
+        except (FileNotFoundError, PermissionError):
+            continue
+        if under(t):
+            found.append(("fd", t))
+    return found
+def uses_of(pid):
+    # what of the path process <pid> uses; None ONLY on proof it is gone
+    found = uses("%s/%s" % (root, pid))
+    if found is not None:
+        return found
+    # A LEADER THAT EXITED is not a process that exited: its other threads
+    # keep the environment, cwd and fds its own entries no longer show
+    # (measured: State Z, Threads 2, cwd ENOENT, environ and fd EACCES).
+    try:
+        tids = [t for t in os.listdir("%s/%s/task" % (root, pid)) if t != pid]
+    except VANISHED:
+        return None
+    except PermissionError:
+        sys.exit(3)
+    found = []
+    for t in tids:
+        tb = "%s/%s/task/%s" % (root, pid, t)
+        # a thread entry unreadable for any reason but vanishing is UNMEASURED
+        try:
+            with open(tb + "/environ", "rb"):
+                pass
+            os.readlink(tb + "/cwd")
+            os.listdir(tb + "/fd")
+        except VANISHED:
+            continue
+        except PermissionError:
+            if exiting(tb):
+                continue
+            sys.exit(3)
+        found.extend(uses(tb) or [])
+    return found
+def exiting(base):
+    # True ONLY on proof the task is going: gone, or PF_EXITING (0x4) in the
+    # flags field of its stat. A thread in exit has released its memory, so
+    # its environ answers EACCES (measured: 10 of 30 walks of a busy box met
+    # one, State R, PF_EXITING set). Anything else is unmeasured.
+    try:
+        with open(base + "/stat", "rb") as fh:
+            raw = fh.read().decode("ascii", "replace")
+    except VANISHED:
+        return True
+    except PermissionError:
+        sys.exit(3)
+    f = raw[raw.rfind(")") + 2:].split()
+    if len(f) < 7 or not (f[6].isascii() and f[6].isdigit()):
+        sys.exit(3)
+    return (int(f[6]) & 4) != 0
+def scan():
+    try:
+        names = [n for n in os.listdir(root) if n.isascii() and n.isdigit()]
+    except OSError:
+        sys.exit(3)
+    if me not in names:
+        sys.exit(3)
+    own = {me, sub}
+    cur = str(os.getpid())
+    for _ in range(64):
+        own.add(cur)
+        st = status(cur)
+        if st is None or st[0] in (me, sub, "0", "1"):
+            break
+        cur = st[0]
+    # NOT ONE SNAPSHOT: a process made after the listing by one that then
+    # exited before it was read is in no listing yet (measured: a chain that
+    # forks its successor and exits read "nobody" 40 of 40 on one pass). So
+    # the table is listed again until a listing names no pid this walk has
+    # not read; the first user ends it. WS_PATH_USERS_SCAN_S bounds the whole
+    # walk (124: unmeasured, never nobody).
+    seen, todo, hit = set(), names, False
+    while todo and not hit:
+        for pid in todo:
+            seen.add(pid)
+            if pid in own:
+                continue
+            st = status(pid)
+            if st is None:
+                continue
+            ppid, uids = st
+            if uid not in uids or ppid in own:
+                continue
+            for what, p in uses_of(pid) or []:
+                hit = True
+                clean = p.replace("\t", "?").replace("\n", "?")
+                sys.stdout.buffer.write(os.fsencode("%s\t%s\t%s\n" % (pid, what, clean)))
+        if not hit:
+            try:
+                todo = [n for n in os.listdir(root) if n.isascii() and n.isdigit() and n not in seen]
+            except OSError:
+                sys.exit(3)
+try:
+    scan()
+except Exception:
+    sys.exit(3)
+' "$root" "$p" "$phys" "$me" "$sub" 2>/dev/null); rc=$?
+  if (( rc == 124 )); then
+    _WS_PATH_USERS_WHY="the walk of $root did not finish within ${WS_PATH_USERS_SCAN_S}s, so who uses $p was never asked"
+    return 2
+  fi
+  (( rc == 0 )) \
+    || { _WS_PATH_USERS_WHY="the processes of this box could not be measured ($root, exit $rc), so who uses $p was never asked"; return 2; }
+  [[ -n "$out" ]] || return 0
+  while IFS=$'\t' read -r pid what pth; do
+    [[ -n "$pid" ]] || continue
+    case " $pids " in *" $pid "*) : ;; *) pids+="${pids:+ }$pid" ;; esac
+    n=$(( n + 1 ))
+    (( n <= 5 )) || continue
+    case "$what" in
+      tmpdir) shown+="${shown:+, }process $pid carries TMPDIR=$pth" ;;
+      cwd)    shown+="${shown:+, }process $pid has its working directory at $pth" ;;
+      *)      shown+="${shown:+, }process $pid holds $pth open" ;;
+    esac
+  done <<< "$out"
+  (( n <= 5 )) || shown+=", and $(( n - 5 )) more"
+  _WS_PATH_USERS_PIDS="$pids"; _WS_PATH_USERS_WHY="$shown"
+  return 1
 }
 
 _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|'') — the journalled
