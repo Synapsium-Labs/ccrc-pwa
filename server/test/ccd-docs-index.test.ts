@@ -1178,7 +1178,11 @@ rdVitest.describe('docs discovery: every repository shape of spec section 2 (h),
                      ceiling=H.ceiling_of(${rdQ(part)}), stdin=(${rdQ(oldBlob)} + '\n').encode(), soft=True)
       out([r.rc, r.out.decode()])
     `));
-    rdVitest.expect(got).toEqual([128, '']);
+    // The two answers git gives a lazy fetch it may not make, and nothing else: git 2.43 exits 128 with an empty
+    // stdout; git 2.55 (CI's runner image) prints `<oid> missing` with rc 0. The helper's show path reads both:
+    // show_object_type's `words == [oid, 'missing']` is None, and its rc != 0 raises git-failed; read_committed's
+    // `cat-file blob` re-asks batch-check on rc 128. What decides this row is the pack count below, either way.
+    rdVitest.expect([[128, ''], [0, `${oldBlob} missing\n`]]).toContainEqual(got);
     rdVitest.expect(rdPacks(part)).toBe(before);
     // CONTROL: without GIT_NO_LAZY_FETCH the same read reaches origin and writes a pack.
     const plain = rdCp.spawnSync('git', ['-C', part, 'cat-file', '--batch-check'],
