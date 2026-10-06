@@ -171,7 +171,11 @@ _ss_stat() {   # pid -> TICKS[pid], PARENT[pid]; rc 1 unreadable. Fork-free: it 
   PARENT[$1]=${f[1]}; TICKS[$1]=${f[19]}
   return 0
 }
-_ss_age() { echo $(( UP - TICKS[$1] / TCK )); }          # seconds; the caller ran _ss_stat
+_ss_age() {                                              # seconds; the caller ran _ss_stat. A process forked after this tick's
+  local a=$(( UP - TICKS[$1] / TCK ))                     # /proc/uptime read starts "in the future": clamp at 0, because the doctor's
+  (( a < 0 )) && a=0                                      # reader takes only non-negative ages and a -1 would also read as youngest's "none yet"
+  echo "$a"
+}
 _ss_comm() { local c; { IFS= read -r c < "$PROC/$1/comm"; } 2>/dev/null || return 1; printf '%s' "$c"; }
 
 # ── ccd's tmux server and its live panes ──────────────────────────────────────
@@ -318,6 +322,7 @@ while read -r u _; do
     [[ -n "${MINE[${PARENT[$q]}]+x}" && -z "${MINE[$q]+x}" ]] && elsewhere=1
   done
   born=$(( mono / 1000000 ))     # the scope's own start, seconds since boot
+  sage=$(( UP - born )); (( sage < 0 )) && sage=0   # a scope started after this tick's uptime read: 0, never a negative the doctor cannot read
   first=${FIRST[$u]:-} cpu0=${CPU0[$u]:-}
   if [[ -z "$first" ]] || (( first < born || first > UP )); then first=$UP cpu0=$cpu; fi   # a clock it cannot believe starts now
   why=()
@@ -337,7 +342,7 @@ while read -r u _; do
     if systemctl --user stop --no-block "$u" 2>/dev/null; then verdict=stopped; else verdict=stop-failed; fi
   fi
   w="${why[*]:-none}" pl="${procs[*]}"
-  OUT+=("dead $u first=$first cpu0=$cpu0 verdict=$verdict why=${w// /,} server=$state procs=${#procs[@]} mem=$mem sockets=$socks youngest=$youngest oldest=$oldest age=$(( UP - born )) pids=${pl// /,}")
+  OUT+=("dead $u first=$first cpu0=$cpu0 verdict=$verdict why=${w// /,} server=$state procs=${#procs[@]} mem=$mem sockets=$socks youngest=$youngest oldest=$oldest age=$sage pids=${pl// /,}")
   if [[ -z "${PREV[$u]+x}" ]]; then SAID+=("scope-sweep: $u is dead, its server $state, ${#procs[@]} process(es): first seen now")
   elif [[ "$verdict" != report && "$verdict" != "${PREVV[$u]:-}" ]]; then SAID+=("scope-sweep: $u $verdict — dead $(( (UP - first) / 60 )) min, ${#procs[@]} process(es), its CPU unmoved, no socket, nothing elsewhere")
   fi

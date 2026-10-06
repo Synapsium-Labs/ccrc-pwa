@@ -11915,7 +11915,7 @@ describeLinux('ccrc doctor: scope-sweep', () => {
 
   it('PASSes on a fresh record with nothing in it, and says the mode it ran in', () => {
     const home = healthy('ccrc-doctor-scope-sweep-pass-');
-    expect(lineFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^PASS scope-sweep: no dead pane scope, and no process older than a day in a live one \(the sweep's record, \d+s old, mode shadow\)$/);
+    expect(lineFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^PASS scope-sweep: no dead pane scope the sweep could measure, and no process older than a day in a live one \(the sweep's record, \d+s old, mode shadow\)$/);
   });
 
   it('WARNS with every dead scope: how long dead, the scope\'s and its oldest process\'s age, pids, memory, sockets and verdict', () => {

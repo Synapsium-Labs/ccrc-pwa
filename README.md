@@ -4911,7 +4911,7 @@ Unix socket, and none is the parent of a process in another cgroup (and no live 
 its processes: none exists yet). A value it cannot measure — a process in another network namespace, a
 process on the box whose parent cannot be read, a tmux that does not answer for a scope whose server still
 runs — skips the scope for that tick, its previous line carried; a scope seen live starts its clock again.
-So is a scope whose cgroup holds any child cgroup, or whose cgroup directory cannot be read and searched: a stop
+Such a scope is also unmeasurable, and so is one whose cgroup holds any child cgroup or whose cgroup directory cannot be read and searched: a stop
 kills the whole cgroup subtree and the predicates read only the scope's own `cgroup.procs`, so such a scope is
 carried, never stopped (`scope-sweep-child-cgroups-are-unmeasurable`); a record's `first=` or `cpu0=` outside the
 bounds the sweep writes is not believed, and the clock starts again.

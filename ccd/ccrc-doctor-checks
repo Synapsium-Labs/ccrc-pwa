@@ -6724,7 +6724,9 @@ _check_scope-sweep() {
   done < "$rec"
   (( bad )) && found+=("$bad line(s) it cannot read")
   if [ "${#found[@]}" -eq 0 ]; then
-    _dr_pass scope-sweep "no dead pane scope, and no process older than a day in a live one (the sweep's record, ${age}s old, mode $mode)"
+    # "the sweep could measure": a dead scope it could NEVER measure (never seen measurable) gets no line in the record, so an
+    # unqualified "no dead pane scope" could be false.
+    _dr_pass scope-sweep "no dead pane scope the sweep could measure, and no process older than a day in a live one (the sweep's record, ${age}s old, mode $mode)"
     return 0
   fi
   local detail="" x

@@ -4477,8 +4477,8 @@ in the same act as the wave's acceptance; a worker never calls the allocator (wo
 while executing is named in the wave-done mail by a new slug. A session that cannot reach the coordinator writes
 `D-TBD-<slug>` in its report and nowhere in a committed file.
 
-Departures from the spec that this plan makes, each measured above — **thirteen, against a block of ten** (the brief:
-list them all; the coordinator issues the three past the block):
+Departures from the spec that this plan makes, each measured above — **fifteen, against a block of ten** — the thirteen planned (4012–4021,
+4088–4090) plus two found while executing (4091, 4092) (the brief: list them all; the coordinator issues the three past the block):
 
 - **D-4012** `scope-sweep-stop-shadowed` — the coordinator's safety ruling (C): spec §5.6 has the sweep STOP an inert scope; this
   wave records it `would-stop` and issues the stop only while `$REG/scope-sweep-live` exists, a file nothing in the
@@ -4521,7 +4521,8 @@ list them all; the coordinator issues the three past the block):
   move itself in), so a scope with any child cgroup is unmeasurable and its line is carried; with it, four hardenings of
   the same rule found by the same review: the record's `first=`/`cpu0=` bounded, no leading-zero pid in the Description,
   an fd link that exists but cannot be read is unmeasurable, and the parent walk capped at 64 hops. Found by Task 3's
-  review. Rows 3.54–3.58.
+  review. Round 2 adds the fifth: a cgroup directory that cannot be read and searched is also unmeasurable (a scope's
+  owner can chmod it to hide a child cgroup from the sweep). Rows 3.54–3.59.
 - **D-4019** `scope-sweep-installed-like-the-tmp-reaper` — spec §7 names the units, `deploy.sh`, the install spine and
   `deploy-verify`; the plan also gates the units and the enable off `--role server` (a server box runs no pane
   scope), declares the record in `shared/lifecycle.ts` and the binary in `TOOLCHAIN_EXECUTABLES`, takes no `flock` (a

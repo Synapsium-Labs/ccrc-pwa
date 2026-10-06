@@ -183,6 +183,20 @@ describe('the stop is shadowed: recorded `would-stop` until the operator arms sc
     expect(fs.existsSync(path.join(fx.base, 'calls')), 'not even a list-units').toBe(false);
     expect(fs.readFileSync(STATE(), 'utf8')).toBe(before);
   });
+
+  // A scope that started after this tick's /proc/uptime read (or a process forked after it) would age negative; doctor's
+  // reader takes `age=${N}`, non-negative only, and would count the whole dead line unreadable. The writer clamps at 0.
+  it('a scope (and a process) that started after the tick\'s uptime read: its ages clamp at 0, never a negative the doctor cannot read', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    proc(3002, { age: -3, ppid: 3001, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001, 3002], bornAgo: -2 });
+    expect(run().code).toBe(0);
+    const line = fs.readFileSync(STATE(), 'utf8').split('\n').find((l) => l.startsWith(`dead ${u} `))!;
+    expect(line).toMatch(/ youngest=0 /);
+    expect(line).toMatch(/ oldest=\d+ /);
+    expect(line).toMatch(/ age=0 /);
+    expect(line).not.toMatch(/=-/);
+  });
 });
 
 // ── EACH PREDICATE ──────────────────────────────────────────────────────────
