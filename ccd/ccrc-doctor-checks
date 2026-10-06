@@ -6029,7 +6029,7 @@ _check_codex() {
         return 1 ;;
     esac
   fi
-  # Plan 3b Task A5: a lane-state root that EXISTS (or is a link) and cannot
+  # Plan 3b Task A5, D-4052: a lane-state root that EXISTS (or is a link) and cannot
   # be listed — a directory this user cannot read and search, or anything
   # that is not a directory — is UNMEASURED. The glob below matches nothing
   # either way (measured: a mode-000 directory, a regular file, a dangling
@@ -6068,7 +6068,7 @@ _check_codex() {
   local -a DRX_CLASS=() DRX_WHAT=() DRX_FIX=() DRX_OK=() bad=()
   local -A owner=()
   local DRX_RUNTIME='' DRX_LANE_WORDS='' DRX_TIER_WORDS='' models=1 p
-  local DRX_LIVE=0 DRX_UNASKED=0 DRX_UNASKED_SID=''
+  local DRX_LIVE=0 DRX_UNASKED=0 DRX_UNASKED_SID='' DRX_UNREADABLE=0 DRX_UNREADABLE_SID=''
   local DR_CODEX_USAGE_PAIR=present DR_CODEX_USAGE_BOX_NOTE='' DR_CODEX_USAGE_NOTE=''
   if [ "${#lanes[@]}" -gt 0 ]; then
     _dr_cx_bins
@@ -6393,7 +6393,7 @@ CODEX_LANE_BINS=(ccgpt-proxy.py ccgpt-usage.py ccgpt-runtime ccrc-codex)
 _dr_cx_bins() {
   local tree="$BOX_TREE_DIR/ccd" bin="$HOME/.local/bin" name have_cmp=1
   local -a notree=() missing=() drift=() uncompared=()
-  # Plan 3b Task A5: no `cmp` costs the BYTE compare only. A file missing
+  # Plan 3b Task A5, D-4052: no `cmp` costs the BYTE compare only. A file missing
   # from the shipped tree or from ~/.local/bin, or not executable, is a fact
   # `cmp` plays no part in, and is FAILed by name whatever PATH holds; the
   # early return this replaced swallowed it, and with it the only FAIL that
@@ -6598,7 +6598,7 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
 #     tier that died after a start that wrote stays down until the next
 #     start, D-3716).
 _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
-  local id="$1" tier q word own lq=3 sq=3
+  local id="$1" tier q word own lq=3 sq=3 unread='' refix=''
   local -a words=()
   for tier in $CODEX_TIERS; do
     CX_LISTEN_WHY=''
@@ -6653,8 +6653,9 @@ _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
       _dr_cx_warn "$id's LiteLLM tier is not running while $DRX_LIVE live session(s) run on this lane, so every turn they send fails at the gateway — a tier that died after its start stays down until the next start" \
         "start it: ccrc codex start $id (every session launch runs the same start)"
     elif [ "$DRX_UNASKED" -gt 0 ]; then
-      _dr_cx_warn "$id's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked ($DRX_UNASKED unanswered) — unmeasured, not idle" \
-        "ask by hand${DRX_UNASKED_SID:+ ($(_svc_status_hint "claude-session@$DRX_UNASKED_SID.service"))}; if one is live, start the lane: ccrc codex start $id"
+      [ "$DRX_UNREADABLE" -eq 0 ] || { unread="; $DRX_UNREADABLE of them: \$HOME/.cc-sessions/$DRX_UNREADABLE_SID.wrapper cannot be read by this user, so which lane that session runs on is unknown"; refix="read or fix that file's mode (ccd writes it), and "; }
+      _dr_cx_warn "$id's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked ($DRX_UNASKED unanswered) — unmeasured, not idle$unread" \
+        "${refix}ask by hand${DRX_UNASKED_SID:+ ($(_svc_status_hint "claude-session@$DRX_UNASKED_SID.service"))}; if one is live, start the lane: ccrc codex start $id"
     fi
   fi
   if [ "$lq:$sq" = 1:1 ]; then
@@ -6671,18 +6672,18 @@ _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
 # and NOT ASKED (the manager printed no word), which is never folded into
 # not-live. `[ -f ]` first, so a FIFO planted at a `.wrapper` path is never
 # opened (D-2380's class).
-# AN UNREADABLE `.wrapper` IS NOT ANOTHER LANE'S (Plan 3b Task A5): it is a
-# session that may be on this lane, counted into DRX_UNASKED (the "could not
-# tell" word), never into DRX_LIVE and never skipped. Whether it was READ is
-# the redirection's answer, not `read`'s: ccd writes the field with
-# `printf '%s'` (`_reg_set`), no trailing newline, so `read` returns 1 on
-# every real wrapper while still setting `w`. Spelled POSITIVE on purpose:
+# AN UNREADABLE `.wrapper` IS NOT ANOTHER LANE'S (Plan 3b Task A5, D-4052): it is a
+# session that may be on this lane, counted into DRX_UNASKED (the "could not tell" word),
+# never into DRX_LIVE and never skipped, and named apart in DRX_UNREADABLE(_SID): its remedy
+# is the file's mode, never the manager (D-4052). Whether it was READ is the redirection's
+# answer, not `read`'s: ccd writes the field with `printf '%s'` (`_reg_set`), no trailing
+# newline, so `read` returns 1 on every real wrapper while still setting `w`. Spelled POSITIVE on purpose:
 # under bash 5.2 `if ! { …; } 2>/dev/null < f` takes the readable branch when
 # the open fails (measured), and `2>/dev/null` sits before the `<` so bash's
 # own "Permission denied" never reaches doctor's output.
-_dr_cx_sessions() {   # <id> — sets DRX_LIVE, DRX_UNASKED, DRX_UNASKED_SID
+_dr_cx_sessions() {   # <id> — sets DRX_LIVE, DRX_UNASKED, DRX_UNASKED_SID, DRX_UNREADABLE, DRX_UNREADABLE_SID
   local id="$1" reg="$HOME/.cc-sessions" wf w sid
-  DRX_LIVE=0; DRX_UNASKED=0; DRX_UNASKED_SID=''
+  DRX_LIVE=0; DRX_UNASKED=0; DRX_UNASKED_SID=''; DRX_UNREADABLE=0; DRX_UNREADABLE_SID=''
   [ -d "$reg" ] || return 0
   if [ ! -r "$reg" ] || [ ! -x "$reg" ]; then DRX_UNASKED=1; return 0; fi
   for wf in "$reg"/*.wrapper; do
@@ -6692,7 +6693,7 @@ _dr_cx_sessions() {   # <id> — sets DRX_LIVE, DRX_UNASKED, DRX_UNASKED_SID
     if { IFS= read -r w || :; } 2>/dev/null < "$wf"; then
       [ "$w" = "$id" ] || continue
     else
-      DRX_UNASKED=$((DRX_UNASKED + 1)); [ -n "$DRX_UNASKED_SID" ] || DRX_UNASKED_SID="$sid"
+      DRX_UNASKED=$((DRX_UNASKED + 1)); DRX_UNREADABLE=$((DRX_UNREADABLE + 1)); [ -n "$DRX_UNREADABLE_SID" ] || DRX_UNREADABLE_SID="$sid"
       continue
     fi
     case "$(_svc_is_active "claude-session@$sid.service")" in

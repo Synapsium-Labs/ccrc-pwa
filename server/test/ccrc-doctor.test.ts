@@ -10845,9 +10845,13 @@ describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stal
       writeFileSync(join(home, 'fixture-unit-claude-session@proj-b.service'), 'active\n');
       const r = runDoctor(home);
       expect(r.stdout, r.stdout).not.toMatch(/live session\(s\) run on this lane/);
-      const re = /^WARN codex: codex-a's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked \(1 unanswered\) — unmeasured, not idle$/m;
+      // Final-review fix wave (MF5, D-4052): still counted unanswered (the verdict is the same WARN), but named apart.
+      // The manager was never the cause, so its status hint is not the remedy; the file's mode is.
+      const re = /^WARN codex: codex-a's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked \(1 unanswered\) — unmeasured, not idle; 1 of them: \$HOME\/\.cc-sessions\/proj-b\.wrapper cannot be read by this user, so which lane that session runs on is unknown$/m;
       expect(r.stdout, r.stdout).toMatch(re);
-      expect(remedyAfter(r.stdout, re)).toBe('  remedy: ask by hand (systemctl --user status claude-session@proj-b.service); if one is live, start the lane: ccrc codex start codex-a');
+      expect(r.stdout).toContain('proj-b.wrapper cannot be read');
+      expect(remedyAfter(r.stdout, re)).toBe('  remedy: read or fix that file\'s mode (ccd writes it), and ask by hand; if one is live, start the lane: ccrc codex start codex-a');
+      expect(r.stdout, 'an unreadable .wrapper sent the operator to the manager').not.toContain('claude-session@proj-b');
       // STDERR, not stdout: `cmd_doctor` captures only a check's stdout, so bash's
       // own open-failure line (printed when `2>/dev/null` comes AFTER the `<`,
       // measured) reaches the real stderr, which `runDoctor` returns apart.
