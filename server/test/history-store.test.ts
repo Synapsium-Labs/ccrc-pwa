@@ -428,6 +428,23 @@ describe('store.mjs: the binding', () => {
     expect(fs.readdirSync(P.dbDir).sort()).toEqual(['history.db', 'notes.txt']);
   });
 
+  it('removeStaleTemps answers [] for an absent db/ only; an unlistable db/ throws instead of reading as nothing stale (D-4305)', () => {
+    const h = home();
+    expect(removeStaleTemps(h)).toEqual([]);
+    if (process.getuid?.() === 0) return; // root bypasses mode 0o100, so db/ cannot be made unlistable as uid 0
+    const P = historyPaths(h);
+    fs.mkdirSync(P.dbDir, { recursive: true });
+    fs.writeFileSync(path.join(P.dbDir, '.history.db.restore.1700000000000'), 'x');
+    fs.chmodSync(P.dbDir, 0o100); // search but no read: readdir fails EACCES, the temp inside is out of sight
+    try {
+      expect(() => removeStaleTemps(h)).toThrow(/EACCES/);
+    } finally {
+      fs.chmodSync(P.dbDir, 0o700);
+    }
+    expect(fs.existsSync(path.join(P.dbDir, '.history.db.restore.1700000000000'))).toBe(true);
+    expect(removeStaleTemps(h)).toEqual(['.history.db.restore.1700000000000']);
+  });
+
   it('syncWriterMirror: meta.writer follows store.writer, and an absent file changes nothing', () => {
     const h = home();
     createStore(h);

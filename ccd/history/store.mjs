@@ -513,12 +513,22 @@ export function measureStoreFacts(home, role) {
  *  and a restore's `.history.db.restore.<…>`, each WITH its `-wal`, `-shm` and
  *  `-journal`. SQLite pairs a WAL with its database by NAME, so a temp is never
  *  reopened: the pass that holds the lock removes every one, sidecars
- *  together, and returns the names it removed. */
+ *  together, and returns the names it removed. `[]` means ONLY "no stale temp":
+ *  an absent db/ (ENOENT) answers it, and any other readdir failure (EACCES,
+ *  EIO, ENOTDIR) propagates, because folding "could not look" into "nothing
+ *  stale" would let restore temps (each possibly a full store copy) pile up
+ *  unseen. The pass fails loudly and doctor's tick freshness reports it.
+ *  D-4305 (history-stale-temps-unlistable-is-loud) */
 const TEMP_RE = /^(history\.db\.new\.|\.history\.db\.restore\.)/;
 export function removeStaleTemps(home) {
   const P = historyPaths(home);
   let names;
-  try { names = readdirSync(P.dbDir); } catch { return []; }
+  try {
+    names = readdirSync(P.dbDir);
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return [];
+    throw e;
+  }
   const removed = [];
   for (const n of names.sort()) {
     if (!TEMP_RE.test(n)) continue;
