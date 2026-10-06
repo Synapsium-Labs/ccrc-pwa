@@ -440,6 +440,7 @@ export interface DocsFailureContext {
   why?: string;
   head?: Sha;
   now?: 'absent' | 'present';
+  /** ref-locked: a number is the lock's age in ms; null, the lock already went; ABSENT, ccd could not measure it. */
   lockAgeMs?: number | null;
   rc?: number;
   stderrHead?: string;
