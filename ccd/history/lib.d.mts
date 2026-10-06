@@ -115,3 +115,32 @@ export function parentId(childIds: readonly string[]): string;
 export function eventKey(drainingFileName: string, ordinal: number): string;
 export function blobShaOfBody(body: unknown): Buffer;
 export function blobShaOfBytes(bytes: Uint8Array): Buffer;
+
+export interface SpoolKeySet { readonly required: readonly string[]; readonly optional: readonly string[] }
+export const SPOOL_KEYS: Readonly<Record<SpoolEvent, SpoolKeySet>>;
+/** A parsed spool line: `v` is 1, `ev` a SPOOL_EVENTS member, `id` passes idOk,
+ *  and only its event's declared keys are present. */
+export interface SpoolRecord {
+  readonly v: 1; readonly ev: SpoolEvent; readonly id: string;
+  readonly sid?: string; readonly src?: SpoolSource; readonly reg?: string; readonly trig?: 'manual' | 'auto';
+  readonly gen?: string; readonly ts?: number; readonly cmd?: string; readonly rc?: number; readonly ms?: number;
+  readonly arm?: string; readonly leaf?: string;
+}
+export type SpoolReject = 'too-long' | 'json' | 'not-object' | 'keys' | 'value' | 'bad-id';
+export function splitSpoolText(text: string): Array<{ ordinal: number; raw: string }>;
+export function parseSpoolLine(raw: string): { ok: true; rec: SpoolRecord } | { ok: false; why: SpoolReject };
+
+export const JOURNAL_V: 1;
+export type ConfirmBy = 'reg' | 'observed' | 'held-match' | 'later-tick' | 'location';
+export const CONFIRM_BY: readonly ConfirmBy[];
+export type GenerationVia = 'line' | 'registry' | 'absent' | 'unreadable';
+export const GENERATION_VIA: readonly GenerationVia[];
+export function drainingNameOk(name: unknown): boolean;
+/** A record's own fields — everything but `v`, `k` and `t`. */
+export type JournalFields = Readonly<Record<string, unknown>>;
+export interface JournalRecord { readonly v: 1; readonly k: JournalKind; readonly t: number; readonly [field: string]: unknown }
+export type JournalRead =
+  | { kind: 'record'; rec: JournalRecord }
+  | { kind: 'malformed' } | { kind: 'unknown' } | { kind: 'newer' };
+export function parseJournalRecord(line: string): JournalRead;
+export function journalRecord(kind: JournalKind, t: number, fields: JournalFields): string;

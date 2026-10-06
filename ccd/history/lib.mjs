@@ -358,3 +358,185 @@ export function blobShaOfBody(body) {
 export function blobShaOfBytes(bytes) {
   return sha256Bytes(bytes);
 }
+
+// ── the spool line (§5.1, §9.2 step 1; S5, S14, S17) ──────────────────────
+// D-4176: every writer appends `\n<json>\n`, so a short
+// write leaves a partial line the next append cannot fuse with; an EMPTY line
+// takes no ordinal, so a fenced file and an unfenced one give one set of keys.
+// D-4175: `reg` rides startup and resume
+// lines only. D-4173: `src` is one of SPOOL_SOURCES, so a
+// `fork` source is a value rejection. D-4177: no key carries summary text or a
+// hash of it. The `recall` (B2's CLI) and `steer` (W3's
+// hook) key sets are plan-chosen; B1 drains them for the counters (O52).
+// `sid` is optional on Stop and PostCompact only. A SessionStart line exists to
+// declare an epoch's cc_session_uuid, so its `sid` is REQUIRED: one without
+// `sid` answers `keys` and one with a non-UUID `sid` answers `value`, both by
+// design; a writer with no lowercase-UUID sid emits no SessionStart line.
+const keySet = (required, optional) => Object.freeze({ required: Object.freeze(required), optional: Object.freeze(optional) });
+export const SPOOL_KEYS = Object.freeze({
+  Stop: keySet(['v', 'ev', 'id'], ['sid', 'gen', 'ts']),
+  PostCompact: keySet(['v', 'ev', 'id'], ['sid', 'trig', 'gen', 'ts']),
+  SessionStart: keySet(['v', 'ev', 'id', 'sid', 'src'], ['reg', 'gen', 'ts']),
+  recall: keySet(['v', 'ev', 'id', 'cmd', 'rc', 'ms'], ['gen', 'ts', 'arm']),
+  steer: keySet(['v', 'ev', 'id', 'sid', 'leaf'], ['gen', 'ts']),
+});
+
+const isUuid = (x) => typeof x === 'string' && UUID_RE.test(x);
+const isMs = (x) => Number.isSafeInteger(x) && x >= 0;
+const isPos = (x) => Number.isSafeInteger(x) && x > 0;
+/** Every value a spool line may carry, by key. `id` is not here: a bad id is
+ *  its own answer (`bad-id`), never folded into `value`. */
+const SPOOL_VALUE = Object.freeze({
+  v: (x) => x === 1,
+  ev: (x) => typeof x === 'string' && Object.hasOwn(SPOOL_KEYS, x),
+  sid: isUuid,
+  reg: isUuid,
+  gen: isUuid,
+  src: (x) => SPOOL_SOURCES.includes(x),
+  trig: (x) => x === 'manual' || x === 'auto',
+  ts: isPos,
+  cmd: (x) => typeof x === 'string' && /^[a-z-]{1,32}$/.test(x),
+  rc: (x) => Number.isSafeInteger(x) && x >= 0 && x <= 255,
+  ms: isMs,
+  arm: (x) => typeof x === 'string' && /^[a-z]{1,16}$/.test(x),
+  leaf: (x) => x === '' || (typeof x === 'string' && /^L[0-9a-f]{20}$/.test(x)),
+});
+
+/** A spool file's lines with their ordinals: 1-based in file order, EMPTY
+ *  lines skipped without taking one (S17). A last fragment with no `\n` is
+ *  still a line — a partial one, which parseSpoolLine rejects. */
+export function splitSpoolText(text) {
+  const out = [];
+  let ordinal = 0;
+  for (const raw of String(text).split('\n')) {
+    if (raw === '') continue;
+    ordinal += 1;
+    out.push({ ordinal, raw });
+  }
+  return out;
+}
+
+/** One spool line, judged before anything reads it (S5): at most
+ *  SPOOL_LINE_MAX bytes, one JSON object, exactly a declared key set, every
+ *  value in its grammar. Any same-user process can write to `spool/`, so only
+ *  a line that passes is ever journaled or drained. Checked in this order, and
+ *  each failure answers its own word: too-long, json, not-object, keys (a
+ *  missing or undeclared key, `reg` off a startup/resume line, no `ev`), then
+ *  bad-id, then value. */
+export function parseSpoolLine(raw) {
+  if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > SPOOL_LINE_MAX) return { ok: false, why: 'too-long' };
+  let o;
+  try {
+    o = JSON.parse(raw);
+  } catch {
+    return { ok: false, why: 'json' };
+  }
+  if (o === null || typeof o !== 'object' || Array.isArray(o)) return { ok: false, why: 'not-object' };
+  if (!Object.hasOwn(o, 'ev')) return { ok: false, why: 'keys' };
+  if (!SPOOL_VALUE.ev(o.ev)) return { ok: false, why: 'value' };
+  const set = SPOOL_KEYS[o.ev];
+  const keys = Object.keys(o);
+  if (!set.required.every((k) => Object.hasOwn(o, k))) return { ok: false, why: 'keys' };
+  if (!keys.every((k) => set.required.includes(k) || set.optional.includes(k))) return { ok: false, why: 'keys' };
+  if (Object.hasOwn(o, 'reg') && o.src !== 'startup' && o.src !== 'resume') return { ok: false, why: 'keys' };
+  if (!idOk(o.id)) return { ok: false, why: 'bad-id' };
+  for (const k of keys) {
+    if (k !== 'id' && !SPOOL_VALUE[k](o[k])) return { ok: false, why: 'value' };
+  }
+  return { ok: true, rec: o };
+}
+
+// ── the journal's records (§9.14) ─────────────────────────────────────────
+// D-4174: a `spool` record holds a line that passed
+// parseSpoolLine, as its parsed object; nothing else reaches the journal. Every
+// change to a record's shape bumps JOURNAL_V, so an older build reading a newer
+// journal answers `newer` and skips, never throws (§9.14, unknown records).
+export const JOURNAL_V = 1;
+/** How an epoch was confirmed (§6.1): its own `reg`, the `.uuid` observed at
+ *  the rename, the first match recorded while held, a later tick, or (a clear
+ *  epoch only) its transcript's location. */
+export const CONFIRM_BY = Object.freeze(['reg', 'observed', 'held-match', 'later-tick', 'location']);
+/** Where a line's generation came from (§6.1): its own `gen`, the registry's
+ *  `.generation`, or neither — absent and unreadable never folded. */
+export const GENERATION_VIA = Object.freeze(['line', 'registry', 'absent', 'unreadable']);
+
+/** `.draining/<id>.<tickms>.<pid>.jsonl`, one name of at most 255 bytes whose
+ *  id passes idOk; the id is everything before the last three dot-parts. The
+ *  ONE spelling of this grammar: the sweep's draining-name parser gates on it
+ *  first, so a name refused here is never listed, journaled or drained. */
+export function drainingNameOk(name) {
+  if (typeof name !== 'string' || Buffer.byteLength(name, 'utf8') > 255) return false;
+  const m = /^(.+)\.([0-9]{1,16})\.([0-9]{1,10})\.jsonl$/.exec(name);
+  return m !== null && idOk(m[1]);
+}
+
+const isGen = (x) => x === '' || isUuid(x);
+const oneOf = (list) => (x) => list.includes(x);
+const shape = (required, optional = {}) => Object.freeze({ required: Object.freeze(required), optional: Object.freeze(optional) });
+const RECORD_SHAPES = Object.freeze({
+  head: shape({ store_id: isUuid, month: (x) => typeof x === 'string' && /^[0-9]{4}-(0[1-9]|1[0-2])$/.test(x), writer: (x) => typeof x === 'string' && WRITER_RE.test(x) }),
+  file: shape({ name: drainingNameOk }),
+  spool: shape({ ord: isPos, rec: (x) => x !== null && typeof x === 'object' && !Array.isArray(x) && parseSpoolLine(JSON.stringify(x)).ok }),
+  redact: shape({ len: isPos, sha256: (x) => typeof x === 'string' && /^[0-9a-f]{64}$/.test(x) }),
+  tick: shape({ lag_ms: (x) => x === null || isMs(x) }),
+});
+const VERDICT_BASE = Object.freeze({ event_key: (x) => x === 'none' || (typeof x === 'string' && /^[0-9a-f]{64}$/.test(x)), kind: oneOf(JOURNAL_VERDICTS) });
+const VERDICT_SHAPES = Object.freeze({
+  family: shape({ ccrc_id: idOk, generation: isGen, project: (x) => typeof x === 'string', first_seen_ms: isMs }),
+  'epoch-confirmed': shape({ ccrc_id: idOk, generation: isGen, cc_session_uuid: isUuid, cause: oneOf(EPOCH_CAUSES), declared_by: oneOf(DECLARED_BY), by: oneOf(CONFIRM_BY) }),
+  'epoch-unconfirmed': shape({ ccrc_id: idOk, generation: isGen, cc_session_uuid: isUuid, superseded: (x) => typeof x === 'boolean' }),
+  'epoch-chained': shape({ ccrc_id: idOk, generation: isGen, cc_session_uuid: isUuid, cause: (x) => x === 'clear' }),
+  'generation-joined': shape({ ccrc_id: idOk, generation: isGen, via: oneOf(GENERATION_VIA) }),
+  rekeyed: shape({ ccrc_id: idOk, generation: isUuid }),
+  mapping: shape({ ccrc_id: idOk, generation: isGen, cc_session_uuid: isUuid, declared_by: oneOf(DECLARED_BY) }, { path: (x) => typeof x === 'string' && x.length > 0 }),
+  bind: shape({ bind: oneOf(BIND_KINDS), writer: (x) => typeof x === 'string' && WRITER_RE.test(x) }),
+  drained: shape({ file: drainingNameOk }),
+});
+
+/** Exactly the declared fields beyond `v`, `k`, `t`: none missing, none extra,
+ *  each value in its grammar. */
+function fieldsOk(o, base, s) {
+  const req = { ...base, ...s.required };
+  for (const [k, ok] of Object.entries(req)) if (!Object.hasOwn(o, k) || !ok(o[k])) return false;
+  for (const k of Object.keys(o)) {
+    if (k === 'v' || k === 'k' || k === 't' || Object.hasOwn(req, k)) continue;
+    if (!Object.hasOwn(s.optional, k) || !s.optional[k](o[k])) return false;
+  }
+  return true;
+}
+
+/** One journal line, read by replay and the sweep's audit: `record` (with the
+ *  parsed object), `malformed` (bad JSON, a torn line, a wrong field), `unknown`
+ *  (a `k` outside JOURNAL_KINDS, or a verdict kind outside JOURNAL_VERDICTS),
+ *  or `newer` (a `v` above JOURNAL_V). The four are never folded (O56). */
+export function parseJournalRecord(line) {
+  let o;
+  try {
+    o = JSON.parse(line);
+  } catch {
+    return { kind: 'malformed' };
+  }
+  if (o === null || typeof o !== 'object' || Array.isArray(o)) return { kind: 'malformed' };
+  if (!Number.isSafeInteger(o.v) || o.v < 1) return { kind: 'malformed' };
+  if (o.v > JOURNAL_V) return { kind: 'newer' };
+  if (typeof o.k !== 'string') return { kind: 'malformed' };
+  if (!JOURNAL_KINDS.includes(o.k)) return { kind: 'unknown' };
+  if (!isMs(o.t)) return { kind: 'malformed' };
+  if (o.k === 'verdict') {
+    if (typeof o.kind !== 'string') return { kind: 'malformed' };
+    if (!JOURNAL_VERDICTS.includes(o.kind)) return { kind: 'unknown' };
+    return fieldsOk(o, VERDICT_BASE, VERDICT_SHAPES[o.kind]) ? { kind: 'record', rec: o } : { kind: 'malformed' };
+  }
+  return fieldsOk(o, {}, RECORD_SHAPES[o.k]) ? { kind: 'record', rec: o } : { kind: 'malformed' };
+}
+
+/** One journal line, WITHOUT its `\n`: `{"v":1,"k":<kind>,"t":<t>,…fields}`.
+ *  It is built only if parseJournalRecord would read it back as a record, so
+ *  the writer can never append a line its own reader skips. */
+export function journalRecord(kind, t, fields) {
+  if (!JOURNAL_KINDS.includes(kind)) throw new TypeError(`journalRecord: ${JSON.stringify(kind)} is not a JOURNAL_KINDS member`);
+  const line = JSON.stringify({ v: JOURNAL_V, k: kind, t, ...fields });
+  const back = parseJournalRecord(line);
+  if (back.kind !== 'record') throw new TypeError(`journalRecord: a ${kind} record with these fields reads back as ${back.kind}`);
+  return line;
+}

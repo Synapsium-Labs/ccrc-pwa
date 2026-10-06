@@ -22,6 +22,10 @@ import {
 import {
   canonicalJson, sha256Hex, sha256Bytes, digestText, leafId, parentId, eventKey, blobShaOfBody, blobShaOfBytes,
 } from '../../ccd/history/lib.mjs';
+import {
+  SPOOL_KEYS, SPOOL_LINE_MAX, JOURNAL_V, CONFIRM_BY, GENERATION_VIA, splitSpoolText, parseSpoolLine, drainingNameOk,
+  parseJournalRecord, journalRecord,
+} from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -301,5 +305,221 @@ describe('DM8: ids and the canonical hash do not move with the locale', () => {
     expect(tr.canon).toBe('{"I":2,"a":5,"i":1,"nested":{"İ":[1,{"Z":2,"z":1}]},"İ":4,"ı":3}');
     expect(tr.leaf).toBe(c.leaf);
     expect(tr.key).toBe(c.key);
+  });
+});
+
+// ── the spool grammar (spec §5.1, §9.2 step 1; S5, S14, S17, C66's spool half) ─
+const U1 = '0189abcd-1234-5678-9abc-0123456789ab';
+const U2 = '0189abcd-1234-5678-9abc-0123456789ac';
+const G1 = '0189abcd-1234-5678-9abc-0123456789ad';
+const line = (o: object): string => JSON.stringify(o);
+
+describe('SPOOL_KEYS: one key set per spool event', () => {
+  it('names exactly SPOOL_EVENTS, with disjoint required and optional keys', () => {
+    expect(Object.keys(SPOOL_KEYS).sort()).toEqual([...SPOOL_EVENTS].sort());
+    for (const [ev, set] of Object.entries(SPOOL_KEYS)) {
+      for (const k of set.required) expect(set.optional, `${ev}: ${k} is both`).not.toContain(k);
+      for (const k of ['v', 'ev', 'id']) expect(set.required, `${ev} must require ${k}`).toContain(k);
+      expect(Object.isFrozen(set) && Object.isFrozen(set.required) && Object.isFrozen(set.optional)).toBe(true);
+    }
+    // D-4177: no key carries summary text or its hash.
+    for (const set of Object.values(SPOOL_KEYS)) {
+      for (const k of [...set.required, ...set.optional]) expect(k).not.toMatch(/summary|text|transcript|path/i);
+    }
+  });
+});
+
+describe('splitSpoolText: empty lines take no ordinal (S17)', () => {
+  it('a fenced file and an unfenced one give the same ordinals and the same event keys', () => {
+    const a = line({ v: 1, ev: 'Stop', id: 'demo-quiet-basin' });
+    const b = line({ v: 1, ev: 'SessionStart', id: 'demo-quiet-basin', sid: U2, src: 'clear' });
+    const fenced = splitSpoolText(`\n${a}\n\n${b}\n`);
+    const bare = splitSpoolText(`${a}\n${b}\n`);
+    expect(fenced).toEqual([{ ordinal: 1, raw: a }, { ordinal: 2, raw: b }]);
+    expect(fenced).toEqual(bare);
+    const name = 'demo-quiet-basin.1700000000000.4242.jsonl';
+    expect(fenced.map((l) => eventKey(name, l.ordinal))).toEqual(bare.map((l) => eventKey(name, l.ordinal)));
+  });
+
+  it('a partial line left by a short write is one rejected line, and the fenced line after it still parses', () => {
+    const clear = line({ v: 1, ev: 'SessionStart', id: 'demo-quiet-basin', sid: U2, src: 'clear' });
+    const got = splitSpoolText(`\n{"v":1,"ev":"Sto\n${clear}\n`);
+    expect(got.map((l) => l.ordinal)).toEqual([1, 2]);
+    expect(parseSpoolLine(got[0]!.raw)).toEqual({ ok: false, why: 'json' });
+    expect(parseSpoolLine(got[1]!.raw).ok).toBe(true);
+  });
+
+  it('a last fragment with no newline is still returned, as a line', () => {
+    expect(splitSpoolText('{"v":1}\n{"v"')).toEqual([{ ordinal: 1, raw: '{"v":1}' }, { ordinal: 2, raw: '{"v"' }]);
+    expect(splitSpoolText('')).toEqual([]);
+    expect(splitSpoolText('\n\n')).toEqual([]);
+  });
+});
+
+describe('parseSpoolLine: the S5 key set and value grammar', () => {
+  it.each([
+    ['a bare Stop', { v: 1, ev: 'Stop', id: 'demo-quiet-basin' }],
+    ['a full Stop', { v: 1, ev: 'Stop', id: 'demo-quiet-basin', sid: U1, gen: G1, ts: 1700000000123 }],
+    ['PostCompact with trig', { v: 1, ev: 'PostCompact', id: 'a.b.c', sid: U1, trig: 'manual' }],
+    ['SessionStart(startup) with reg', { v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'startup', reg: U1, gen: G1 }],
+    ['SessionStart(resume) without reg', { v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'resume' }],
+    ['SessionStart(clear)', { v: 1, ev: 'SessionStart', id: 'x', sid: U2, src: 'clear', ts: 1 }],
+    ['recall', { v: 1, ev: 'recall', id: 'x', cmd: 'grep', rc: 3, ms: 41, gen: G1, arm: 'control' }],
+    ['steer with no leaf yet', { v: 1, ev: 'steer', id: 'x', sid: U1, leaf: '' }],
+    ['steer with a leaf', { v: 1, ev: 'steer', id: 'x', sid: U1, leaf: `L${'a'.repeat(20)}` }],
+  ])('accepts %s', (_what, o) => {
+    expect(parseSpoolLine(line(o))).toEqual({ ok: true, rec: o });
+  });
+
+  it.each([
+    ['not JSON', 'nope', 'json'],
+    ['an array', '[1]', 'not-object'],
+    ['null', 'null', 'not-object'],
+    ['no ev', line({ v: 1, id: 'x' }), 'keys'],
+    ['an unknown ev', line({ v: 1, ev: 'Fork', id: 'x' }), 'value'],
+    ['SessionStart without src (S14)', line({ v: 1, ev: 'SessionStart', id: 'x', sid: U1 }), 'keys'],
+    ['SessionStart(fork) (S14, Q16)', line({ v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'fork' }), 'value'],
+    ['SessionStart(compact) (S14)', line({ v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'compact' }), 'value'],
+    ['reg on a clear line', line({ v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'clear', reg: U1 }), 'keys'],
+    ['an undeclared key', line({ v: 1, ev: 'Stop', id: 'x', summary: 'hi' }), 'keys'],
+    ['id ".." (C66)', line({ v: 1, ev: 'Stop', id: '..' }), 'bad-id'],
+    ['id "a/b" (C66)', line({ v: 1, ev: 'Stop', id: 'a/b' }), 'bad-id'],
+    ['a 225-char id (C66)', line({ v: 1, ev: 'Stop', id: 'a'.repeat(SPOOL_ID_MAX + 1) }), 'bad-id'],
+    ['v 2', line({ v: 2, ev: 'Stop', id: 'x' }), 'value'],
+    ['a sid that is not a uuid', line({ v: 1, ev: 'Stop', id: 'x', sid: 'uuid-1' }), 'value'],
+    ['an uppercase uuid', line({ v: 1, ev: 'Stop', id: 'x', gen: G1.toUpperCase() }), 'value'],
+    ['trig "x"', line({ v: 1, ev: 'PostCompact', id: 'x', trig: 'x' }), 'value'],
+    ['ts 0', line({ v: 1, ev: 'Stop', id: 'x', ts: 0 }), 'value'],
+    ['ts 1.5', line({ v: 1, ev: 'Stop', id: 'x', ts: 1.5 }), 'value'],
+    ['rc 256', line({ v: 1, ev: 'recall', id: 'x', cmd: 'grep', rc: 256, ms: 1 }), 'value'],
+    ['a leaf of the wrong shape', line({ v: 1, ev: 'steer', id: 'x', sid: U1, leaf: `N${'a'.repeat(20)}` }), 'value'],
+  ])('refuses %s', (_what, raw, why) => {
+    expect(parseSpoolLine(raw)).toEqual({ ok: false, why });
+  });
+
+  it('S5: a 50 KB summary inside a line is too-long, judged before it is parsed', () => {
+    expect(parseSpoolLine(line({ v: 1, ev: 'PostCompact', id: 'x', summary: 's'.repeat(50 * 1024) }))).toEqual({ ok: false, why: 'too-long' });
+  });
+
+  it('the bound is UTF-8 bytes, not characters, and SPOOL_LINE_MAX itself is admitted', () => {
+    const head = '{"v":1,"ev":"Stop","id":"x"';
+    const at = `${head}${' '.repeat(SPOOL_LINE_MAX - head.length - 1)}}`;
+    expect(Buffer.byteLength(at)).toBe(SPOOL_LINE_MAX);
+    expect(parseSpoolLine(at).ok).toBe(true);
+    expect(parseSpoolLine(`${head}${' '.repeat(SPOOL_LINE_MAX - head.length)}}`)).toEqual({ ok: false, why: 'too-long' });
+    // 602 characters, 1,202 bytes: a character count would have parsed it.
+    expect(parseSpoolLine(`"${'ı'.repeat(600)}"`)).toEqual({ ok: false, why: 'too-long' });
+  });
+
+  it('S5: the largest SessionStart line the hook can write — a 224-char id, every field — fits', () => {
+    const o = { v: 1, ev: 'SessionStart', id: 'a'.repeat(SPOOL_ID_MAX), sid: U1, src: 'startup', reg: U1, gen: G1, ts: 9_999_999_999_999 };
+    expect(Buffer.byteLength(line(o))).toBeLessThan(SPOOL_LINE_MAX);
+    expect(parseSpoolLine(line(o)).ok).toBe(true);
+  });
+});
+
+describe('drainingNameOk: the draining file names the journal records', () => {
+  it.each([
+    ['demo-quiet-basin.1700000000000.4242.jsonl', true],
+    ['a.b.c.1700000000000.4242.jsonl', true],
+    [`${'a'.repeat(SPOOL_ID_MAX)}.1700000000000.4242.jsonl`, true],
+    ['...1700000000000.4242.jsonl', false],
+    ['x.1700000000000.jsonl', false],
+    ['x.1700000000000.4242.json', false],
+    ['a/b.1.2.jsonl', false],
+  ])('%s -> %s', (name, ok) => {
+    expect(drainingNameOk(name)).toBe(ok);
+  });
+
+  it('refuses a name over 255 bytes even when its id passes', () => {
+    const name = `${'a'.repeat(SPOOL_ID_MAX)}.1700000000000000.4294967295.jsonl`;
+    expect(Buffer.byteLength(name)).toBeGreaterThan(255);
+    expect(drainingNameOk(name)).toBe(false);
+  });
+});
+
+// O56's parseJournalRecord half (IV4): the four answers are four, in-process,
+// on lib.mjs alone.
+describe('parseJournalRecord: record, malformed, unknown, newer (O56)', () => {
+  const NAME = 'demo-quiet-basin.1700000000000.4242.jsonl';
+  const KEY = 'a'.repeat(64);
+
+  it('the four answers', () => {
+    const rec = { v: 1, k: 'tick', t: 1700000000000, lag_ms: 120 };
+    expect(parseJournalRecord(JSON.stringify(rec))).toEqual({ kind: 'record', rec });
+    expect(parseJournalRecord('{"v":1,"k":"tick","t":17')).toEqual({ kind: 'malformed' });
+    expect(parseJournalRecord(JSON.stringify({ v: 1, k: 'gossip', t: 1 }))).toEqual({ kind: 'unknown' });
+    expect(parseJournalRecord(JSON.stringify({ v: 2, k: 'tick', t: 1, lag_ms: 1 }))).toEqual({ kind: 'newer' });
+  });
+
+  it('a verdict kind outside JOURNAL_VERDICTS is unknown; a non-string kind is malformed', () => {
+    expect(parseJournalRecord(JSON.stringify({ v: 1, k: 'verdict', t: 1, event_key: 'none', kind: 'promoted' }))).toEqual({ kind: 'unknown' });
+    expect(parseJournalRecord(JSON.stringify({ v: 1, k: 'verdict', t: 1, event_key: 'none', kind: 7 }))).toEqual({ kind: 'malformed' });
+  });
+
+  it.each([
+    ['head', { store_id: U1, month: '2026-10', writer: '0a1b2c3d' }],
+    ['file', { name: NAME }],
+    ['spool', { ord: 1, rec: { v: 1, ev: 'SessionStart', id: 'demo-quiet-basin', sid: U1, src: 'startup', reg: U1 } }],
+    ['redact', { len: 43, sha256: KEY }],
+    ['tick', { lag_ms: null }],
+  ])('reads a well-formed %s record back as a record', (k, fields) => {
+    const l = journalRecord(k as 'head', 1700000000000, fields);
+    expect(l).toBe(JSON.stringify({ v: 1, k, t: 1700000000000, ...fields }));
+    expect(parseJournalRecord(l).kind).toBe('record');
+  });
+
+  it.each([
+    ['family', { event_key: 'none', kind: 'family', ccrc_id: 'demo-quiet-basin', generation: G1, project: 'orchard-api', first_seen_ms: 1 }],
+    ['epoch-confirmed', { event_key: KEY, kind: 'epoch-confirmed', ccrc_id: 'x', generation: '', cc_session_uuid: U1, cause: 'startup', declared_by: 'hook', by: 'reg' }],
+    ['epoch-unconfirmed', { event_key: KEY, kind: 'epoch-unconfirmed', ccrc_id: 'x', generation: G1, cc_session_uuid: U1, superseded: true }],
+    ['epoch-chained', { event_key: KEY, kind: 'epoch-chained', ccrc_id: 'x', generation: G1, cc_session_uuid: U2, cause: 'clear' }],
+    ['generation-joined', { event_key: KEY, kind: 'generation-joined', ccrc_id: 'x', generation: '', via: 'unreadable' }],
+    ['rekeyed', { event_key: 'none', kind: 'rekeyed', ccrc_id: 'x', generation: G1 }],
+    ['mapping', { event_key: 'none', kind: 'mapping', ccrc_id: 'x', generation: G1, cc_session_uuid: U1, declared_by: 'operator', path: '/home/u/.claude-a/projects/p/u.jsonl' }],
+    ['mapping without a path', { event_key: 'none', kind: 'mapping', ccrc_id: 'x', generation: G1, cc_session_uuid: U1, declared_by: 'registry' }],
+    ['bind', { event_key: 'none', kind: 'bind', bind: 'adopt', writer: '0a1b2c3d' }],
+    ['drained', { event_key: 'none', kind: 'drained', file: NAME }],
+  ])('reads a well-formed %s verdict back as a record', (_what, fields) => {
+    expect(parseJournalRecord(journalRecord('verdict', 5, fields)).kind).toBe('record');
+  });
+
+  it.each([
+    ['an extra field', JSON.stringify({ v: 1, k: 'tick', t: 1, lag_ms: 1, text: 'x' })],
+    ['a missing field', JSON.stringify({ v: 1, k: 'head', t: 1, store_id: U1, month: '2026-10' })],
+    ['month 13', JSON.stringify({ v: 1, k: 'head', t: 1, store_id: U1, month: '2026-13', writer: '0a1b2c3d' })],
+    ['a negative time', JSON.stringify({ v: 1, k: 'tick', t: -1, lag_ms: 1 })],
+    ['v 0', JSON.stringify({ v: 0, k: 'tick', t: 1, lag_ms: 1 })],
+    ['a spool rec that fails the grammar', JSON.stringify({ v: 1, k: 'spool', t: 1, ord: 1, rec: { v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'fork' } })],
+    ['a spool rec with a bad id', JSON.stringify({ v: 1, k: 'spool', t: 1, ord: 1, rec: { v: 1, ev: 'Stop', id: '..' } })],
+    ['a chained epoch whose cause is not clear', JSON.stringify({ v: 1, k: 'verdict', t: 1, event_key: KEY, kind: 'epoch-chained', ccrc_id: 'x', generation: '', cc_session_uuid: U1, cause: 'resume' })],
+    ['a rekey to the empty generation', JSON.stringify({ v: 1, k: 'verdict', t: 1, event_key: 'none', kind: 'rekeyed', ccrc_id: 'x', generation: '' })],
+    ['an event key that is not 64 hex', JSON.stringify({ v: 1, k: 'verdict', t: 1, event_key: 'abc', kind: 'drained', file: NAME })],
+    ['a file record naming a path', JSON.stringify({ v: 1, k: 'file', t: 1, name: '../x.1.2.jsonl' })],
+  ])('refuses %s as malformed', (_what, l) => {
+    expect(parseJournalRecord(l)).toEqual({ kind: 'malformed' });
+  });
+
+  it('CONFIRM_BY and GENERATION_VIA are frozen; JOURNAL_V is 1', () => {
+    expect(JOURNAL_V).toBe(1);
+    expect(Object.isFrozen(CONFIRM_BY) && Object.isFrozen(GENERATION_VIA)).toBe(true);
+    expect([...GENERATION_VIA]).toEqual(['line', 'registry', 'absent', 'unreadable']);
+  });
+});
+
+describe('journalRecord: the writer can never append a line its own reader skips', () => {
+  it('refuses a kind outside JOURNAL_KINDS', () => {
+    expect(() => journalRecord('gossip' as 'tick', 1, {})).toThrow(/JOURNAL_KINDS/);
+  });
+
+  it('refuses fields that would read back as anything but a record', () => {
+    expect(() => journalRecord('tick', 1, { lag_ms: 'soon' })).toThrow(/reads back as malformed/);
+    expect(() => journalRecord('verdict', 1, { event_key: 'none', kind: 'promoted' })).toThrow(/reads back as unknown/);
+    expect(() => journalRecord('tick', 1, { lag_ms: 1, v: 2 })).toThrow(/reads back as newer/);
+  });
+
+  it('puts v, k and t first, then the fields in the order given', () => {
+    expect(journalRecord('redact', 7, { len: 43, sha256: 'b'.repeat(64) }))
+      .toBe(`{"v":1,"k":"redact","t":7,"len":43,"sha256":"${'b'.repeat(64)}"}`);
   });
 });
