@@ -111,12 +111,15 @@ export interface ChildReclaimAsk {
  *  spacing measured on 2026-10-05. One lease, from its first ask to the next
  *  lease's first ask, takes at most the ceiling plus two pass spacings plus a
  *  presence answer's and a reclaim's latency: about 18.6 minutes there. And
- *  the k-th presence-held child in the ask order is licensed within k times
- *  (the ceiling + twice the gap bound + the lane's stall bound), k × 28
- *  minutes: the worst case while a pass plus a presence answer stays within
- *  the gap bound, an answer settles before the next pass, no wall-clock step
- *  or suspend falls in the lease, and this memory is not cleared. A breach of
- *  any of those forfeits the lease and fails closed. */
+ *  the k-th presence-held child in the ask order, with nothing else ahead, is
+ *  licensed within k times (the ceiling + twice the gap bound + the lane's
+ *  stall bound), k × 28 minutes. Each due child ahead of it that is not
+ *  presence-held (a new sighting, or one returning from a backoff or a
+ *  refusal) adds at most the stall bound plus the gap bound, about 10.5
+ *  minutes more. Those are the worst cases while a pass plus a presence
+ *  answer stays within the gap bound, an answer settles before the next pass,
+ *  no wall-clock step or suspend falls in the lease, and this memory is not
+ *  cleared. A breach of any of those forfeits the lease and fails closed. */
 export interface ChildReclaimSweepEntry {
   /** When this child was first sighted eligible (monotonic). */
   readonly firstEligibleAt: number;
@@ -425,16 +428,19 @@ export type ChildReclaimSkipRow =
  *  - `kept`: a standing answer, read from what the coordination database, the registry and the
  *    lifecycle mirror hold, never from a read that failed, so no raised switch, missing capability
  *    or failed read ends it, and automatic reclamation does not take the child while it stands.
- *    It ends when what it was read from changes: a person removes the workspace or its marker, or
- *    restores or rebuilds the coordination database (a rebuilt one's new runs come to reach the
- *    marker's run id); or the child's birth, which the words at and past the birth fence depend
- *    on and which every judging pass places afresh, moves with no person acting. A recycled
+ *    Its ground ends when what it was read from changes: a person removes the workspace or its
+ *    marker, or restores or rebuilds the coordination database (a rebuilt one's new runs come to
+ *    reach the marker's run id); or the child's birth, which the words at and past the birth fence
+ *    depend on and which every judging pass places afresh, moves with no person acting. A recycled
  *    slug's newer `create`, mirrored late or dated ahead of the server's clock, can end
  *    `coordinating` or `minting-run-postdates-child` that way and leave the child eligible. The
- *    next judging pass judges it afresh. The chip reads `refused`, which the fleet-wide switch
- *    never replaces; the banner lists the child. Each sentence but `not-a-workspace`'s ends with
- *    the same phrase, and the two minting-run words say, directly before it, that a rebuilt
- *    database may have left workers running.
+ *    next judging pass judges it afresh. A hold that no run of the child's own accounts for
+ *    (`held`, or `hold-unmeasured`) answers ahead of every kept word but `not-a-workspace`, and an
+ *    open run naming the session (`siblings-open`) answers ahead of `coordinating`: each replaces
+ *    the kept word while it stands, and neither leads to eligibility. The chip reads `refused`,
+ *    which the fleet-wide switch never replaces; the banner lists the child. Each sentence but
+ *    `not-a-workspace`'s ends with the same phrase, and the two minting-run words say, directly
+ *    before it, that a rebuilt database may have left workers running.
  *  - `doubt`: a read that failed, or one that placed no birth for the child
  *    (`child-birth-unplaced`: the mirror holds no dated creation of the workspace), so the sweep
  *    left the child alone and reads again next pass. The chip reads `deferred`, which the switch
@@ -639,14 +645,16 @@ export type ChildReclaimSweepOutcome =
  *  inclusive, each gap read as the larger of the monotonic and the wall-clock
  *  difference. The lease holder (`childReclaimAskOrder`) is asked on every
  *  pass it is due, so its gap is one pass spacing plus its answer's latency.
- *  Passes were measured 51–80 s apart on 2026-10-05 (median 68 s), and an
- *  audit answers in seconds, so the margin is about 60 s. A slow tick, a slow
- *  answer, a forward wall-clock step or a suspended box can push a gap past
- *  it. The episode then restarts, the licence is withheld and the holder
- *  forfeits the lease, which fails closed and costs that child its place in
- *  line. A child that does not hold the lease is asked only when the order
- *  reaches it, usually later than that, so its episode restarts until it
- *  holds the lease. The bound is this multiplier times the interval the
+ *  Passes are at least 60 s apart, because the watcher's monotonic throttle
+ *  refuses an earlier one, and were measured 60–80 s apart on 2026-10-05; the
+ *  51.5 s figure seen that day was the spacing of `ws-reclaim` intents, not
+ *  of passes. An audit answers in seconds, so the margin is about 60 s. A
+ *  slow tick, a slow answer, a forward wall-clock step or a suspended box can
+ *  push a gap past it. The episode then restarts, the licence is withheld and
+ *  the holder forfeits the lease, which fails closed and costs that child its
+ *  place in line. A child that does not hold the lease is asked only when the
+ *  order reaches it, usually later than that, so its episode restarts until
+ *  it holds the lease. The bound is this multiplier times the interval the
  *  caller hands in, never a constant of its own. */
 const CHILD_RECLAIM_PRESENCE_GAP_PASSES = 2.5;
 
