@@ -34,3 +34,22 @@ fs.promises.statfs = async function statfs(p, opts) {
   return fixed ? answer(Number(fixed[1]), Number(fixed[2])) : answer(4 * 2 ** 40, 8 * 2 ** 40);
 };
 syncBuiltinESMExports();
+
+// ── Task 19: an answer that changes during the pass (§9.3, BK17: the probe before each chunk) ─────────────────
+// HISTORY_TEST_STATFS_AFTER=<n>:<bavail>:<size>: the first <n> statfs calls answer as HISTORY_TEST_STATFS says;
+// every later call answers <bavail> bytes free of a <size>-byte filesystem. A scheduled pass probes once before it
+// opens the DB, so n=1 lets the pass start and puts every per-chunk probe below the floor.
+{
+  const afterF19 = /^([0-9]+):([0-9]+):([0-9]+)$/.exec(process.env.HISTORY_TEST_STATFS_AFTER ?? '');
+  if (afterF19) {
+    const innerF19 = fs.promises.statfs;
+    let callsF19 = 0;
+    fs.promises.statfs = async function statfsAfterF19(p, opts) {
+      callsF19 += 1;
+      if (callsF19 <= Number(afterF19[1])) return innerF19(p, opts);
+      await real(p, opts);
+      return answer(Number(afterF19[2]), Number(afterF19[3]));
+    };
+    syncBuiltinESMExports();
+  }
+}

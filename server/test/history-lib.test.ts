@@ -1661,3 +1661,56 @@ describe('passOutcome: the word and exit of a pass that does not tick', () => {
     expect(() => passOutcome('ok')).toThrow(/not a pass word/);
   });
 });
+
+describe('lib: ingest row helpers (plan task 19)', () => {
+  it('toolUsesOf reads id, name and a string command; toolResultIdsOf reads tool_use_id', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const content = [
+      { type: 'text', text: 'x' },
+      { type: 'tool_use', id: 'toolu_01', name: 'Bash', input: { command: 'ccrc history grep x' } },
+      { type: 'tool_use', id: 'toolu_02', name: 'Read', input: { file_path: '/home/u/tree/a.md' } },
+      { type: 'tool_use', name: 'NoId', input: {} },
+    ];
+    expect(lib.toolUsesOf(content)).toEqual([
+      { id: 'toolu_01', name: 'Bash', command: 'ccrc history grep x' },
+      { id: 'toolu_02', name: 'Read' },
+    ]);
+    expect(lib.toolUsesOf('a string body')).toEqual([]);
+    expect(lib.toolResultIdsOf([{ type: 'tool_result', tool_use_id: 'toolu_01', content: 'ok' }, { type: 'text', text: 'y' }]))
+      .toEqual(['toolu_01']);
+    expect(lib.toolResultIdsOf(null)).toEqual([]);
+  });
+  it('rawRowKey is "x" + 32 hex of digestText(ccrc-raw/v1, [transcript, sha]), never a line ordinal', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const { createHash } = await import('node:crypto');
+    const t = '6f1c2e3a-0b4d-4c5e-8f60-718293a4b5c6';
+    const sha = 'ab'.repeat(32);
+    const want = `x${createHash('sha256').update(['ccrc-raw/v1', t, sha].join('\0')).digest('hex').slice(0, 32)}`;
+    expect(lib.rawRowKey(t, sha)).toBe(want);
+    expect(lib.rawRowKey(t, sha)).toMatch(/^x[0-9a-f]{32}$/);
+    expect(lib.rawRowKey(t, 'cd'.repeat(32))).not.toBe(want);
+  });
+  it('launchFactsOf keeps cwd and gitBranch only when they are strings', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.launchFactsOf({ cwd: '/home/u/tree', gitBranch: 'main' })).toEqual({ cwd: '/home/u/tree', gitBranch: 'main' });
+    expect(lib.launchFactsOf({ cwd: 7, gitBranch: null })).toEqual({ cwd: null, gitBranch: null });
+    expect(lib.launchFactsOf(null)).toEqual({ cwd: null, gitBranch: null });
+  });
+  it('withinBudget honours injected limits and defaults to the run budget', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.withinBudget({ elapsedMs: 0, bytes: 0 })).toBe(true);
+    expect(lib.withinBudget({ elapsedMs: lib.RUN_BUDGET_MS, bytes: 0 })).toBe(false);
+    expect(lib.withinBudget({ elapsedMs: 0, bytes: lib.RUN_BUDGET_BYTES })).toBe(false);
+    expect(lib.withinBudget({ elapsedMs: 10, bytes: 10, maxMs: 11, maxBytes: 11 })).toBe(true);
+    expect(lib.withinBudget({ elapsedMs: 10, bytes: 11, maxMs: 11, maxBytes: 11 })).toBe(false);
+  });
+  it('raw-only rows are harness provenance in the raw-only parse state, and the row types are the four with a body rule', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.RAW_ROW).toEqual({ type: '', provenance: 'harness', parseState: 'raw-only' });
+    expect(lib.PARSE_STATE).toEqual({ ok: 'ok', rawOnly: 'raw-only' });
+    expect(lib.PROVENANCE).toContain(lib.RAW_ROW.provenance);
+    expect(lib.SEARCHABLE_PROVENANCE).not.toContain(lib.RAW_ROW.provenance);
+    expect(lib.ROW_TYPES).toEqual(['user', 'assistant', 'system', 'attachment']);
+    expect(Object.isFrozen(lib.ROW_TYPES) && Object.isFrozen(lib.RAW_ROW) && Object.isFrozen(lib.PARSE_STATE)).toBe(true);
+  });
+});

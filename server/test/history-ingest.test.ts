@@ -13,8 +13,12 @@ import fs from 'node:fs';
 import type { BigIntStats } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createHash } from 'node:crypto';
+import { brotliCompressSync, brotliDecompressSync, constants as zc } from 'node:zlib';
 import type { DatabaseSync } from 'node:sqlite';
-import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, SWEEP, type HistoryBox } from './historyHelpers.js';
+import { DEFAULT_TEST_ROSTER } from './helpers.js';
+import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, plantSession, counters, SWEEP, type HistoryBox } from './historyHelpers.js';
+import { boundaryRow } from './historyFixtures.js';
 import { createStore, openWriter, closeWriter } from '../../ccd/history/store.mjs';
 import { historyPaths, sha256Hex } from '../../ccd/history/lib.mjs';
 
@@ -393,8 +397,552 @@ describe('the tick discovers and binds, as the box runs it (spec §9.2 steps 2-3
     transcriptAt(box.homes[1]!, 'demo', U1, row('r1'));
     expect(runSweep(box, ['--roster-unreadable']).code).toBe(0);
     const rows = (): unknown[] => { const db = openStoreRO(box); try { return db.prepare('SELECT file_id FROM ingest_files').all(); } finally { db.close(); } };
+    // The scan clock itself (plan task 19): ingest discovers through knownUuids on every tick, so the file rows alone
+    // no longer show whether the unreadable pass left the scan due. meta scan_ms does.
+    const mark = (): string | null => {
+      const db = openStoreRO(box);
+      try { return (db.prepare("SELECT v FROM meta WHERE k = 'scan_ms'").get() as { v: string } | undefined)?.v ?? null; } finally { db.close(); }
+    };
     expect(rows()).toEqual([]);
+    expect(mark()).toBeNull();
     expect(runSweep(box).code).toBe(0);
     expect(rows()).toHaveLength(1);
+    expect(mark()).not.toBeNull();
+  });
+});
+
+// ---- ingest fixtures shared by plan tasks 19–23 --------------------------------------------------
+// Every row is synthetic and spelled out: real Claude Code 2.1.289 field NAMES (type, uuid,
+// parentUuid, timestamp, message.{role,model,content}, requestId, cwd, gitBranch), invented
+// values. Spawned cases run the real sweep through runSweep: a child on process.execPath, the
+// statfs preload set to 'plenty', the tmux poison, a scrubbed env. In-process cases import
+// sweep.mjs and pass every home explicitly, so no case here can reach the operator's ~/.ccrc.
+interface IxBudget { startMs: number; bytes: number; now: () => number; maxMs: number; maxBytes: number; chunkBytes: number }
+interface IxIds { storeId: string; writer: string }
+type IxFloorWord = 'ok' | 'low-disk' | 'unsettled';
+interface IxCtx {
+  home: string; homes: string[]; nowMs: number; ids: IxIds;
+  historyOff: () => boolean; prepareLines: (...args: never[]) => unknown; floorProbe: () => Promise<IxFloorWord>;
+  [extra: string]: unknown;
+}
+interface IxFileResult {
+  fileId: number; size: number; bytes: number; atEof: boolean; offset: number;
+  newEntries: number; minNewTsMs: number | null; crashed?: boolean; tornAt?: number; floor?: IxFloorWord;
+}
+interface IxTickResult { busy: boolean; bytes: number; newEntries: number; minNewTsMs: number | null; paused: boolean }
+interface IxSweep {
+  newBudget(now?: () => number, limits?: { maxMs?: number; maxBytes?: number; chunkBytes?: number }): IxBudget;
+  makeIngestCtx(home: string, homes: string[], nowMs: number, ids: IxIds, floorProbe?: () => Promise<IxFloorWord>): IxCtx;
+  ingestPath(db: DatabaseSync, ctx: IxCtx, f: { path: string; uuid: string; home: string }, b: IxBudget): Promise<IxFileResult | null>;
+  ingestTick(db: DatabaseSync, ctx: IxCtx, b: IxBudget): Promise<IxTickResult>;
+}
+type IxRow = Record<string, unknown>;
+
+const IX = (() => {
+  const U = '6f1c2e3a-0b4d-4c5e-8f60-718293a4b5c6';
+  const U2 = '7a2d3f4b-1c5e-4d6f-9a71-8293a4b5c6d7';
+  const U3 = '8b3e4a5c-2d6f-4e7a-8b82-93a4b5c6d7e8';
+  const G = '0189abcd-1234-4678-9abc-0123456789ab';
+  const ID = 'claude-demo';
+  const SLUG = '-home-u-tree';
+  const uuidN = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const ts = (n: number): string => new Date(Date.UTC(2026, 9, 5, 10, 0, 0) + n * 1000).toISOString();
+  const tsMs = (n: number): number => Date.UTC(2026, 9, 5, 10, 0, 0) + n * 1000;
+  const user = (uuid: string, parent: string | null, content: unknown, n: number, extra: IxRow = {}): IxRow => ({
+    parentUuid: parent, isSidechain: false, userType: 'external', cwd: '/home/u/tree', sessionId: U,
+    version: '2.1.289', gitBranch: 'main', type: 'user', message: { role: 'user', content }, uuid, timestamp: ts(n), ...extra,
+  });
+  const assistant = (uuid: string, parent: string | null, content: unknown[], n: number, model = 'claude-opus-4-1'): IxRow => ({
+    parentUuid: parent, isSidechain: false, cwd: '/home/u/tree', sessionId: U, version: '2.1.289', gitBranch: 'main',
+    type: 'assistant', message: { id: `msg_${uuid.slice(-8)}`, type: 'message', role: 'assistant', model, content },
+    requestId: `req_${uuid.slice(-8)}`, uuid, timestamp: ts(n),
+  });
+  const jsonl = (rows: (IxRow | string)[]): string => rows.map((r) => `${typeof r === 'string' ? r : JSON.stringify(r)}\n`).join('');
+  /** `n` pseudo-random words (a fixed LCG, so every run writes the same bytes). */
+  const words = (n: number, seed = 7): string => {
+    const W = ['alpha', 'beta', 'gamma', 'delta', 'sweep', 'cursor', 'journal', 'blob', 'entry', 'family', 'zeta', 'omega'];
+    let x = seed; let s = '';
+    for (let i = 0; i < n; i += 1) { x = (x * 1103515245 + 12345) % 2147483648; s += `${W[x % W.length]}${i % 17 === 16 ? '\n' : ' '}`; }
+    return s;
+  };
+  const plantCopy = (home: string, uuid: string, text: string, slug = SLUG): string => {
+    const dir = path.join(home, 'projects', slug);
+    fs.mkdirSync(dir, { recursive: true });
+    const p = path.join(dir, `${uuid}.jsonl`);
+    fs.writeFileSync(p, text);
+    return p;
+  };
+  /** A fleet-role box whose registry names one session, `claude-demo` on uuid U. */
+  const newBox = (prefix: string, roster?: unknown): HistoryBox => {
+    const box = makeHistoryBox(prefix, roster === undefined ? { role: 'fleet' } : { role: 'fleet', roster });
+    plantSession(box, ID, { uuid: U, generation: G, project: 'demo', workdir: '/home/u/tree' });
+    return box;
+  };
+  /** Two scheduled passes: the first may only create the store; the second certainly ingests. */
+  const sweepTwice = (box: HistoryBox, opts?: Parameters<typeof runSweep>[2]): void => {
+    for (let i = 0; i < 2; i += 1) {
+      const r = runSweep(box, [], opts);
+      expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    }
+  };
+  const count = (db: DatabaseSync, table: string, where = ''): number =>
+    (db.prepare(`SELECT count(*) AS n FROM ${table}${where === '' ? '' : ` WHERE ${where}`}`).get() as { n: number }).n;
+  const blobsHold = (db: DatabaseSync, needle: string): boolean =>
+    (db.prepare('SELECT z FROM blobs WHERE z IS NOT NULL').all() as { z: Uint8Array }[])
+      .some((b) => brotliDecompressSync(b.z).toString('utf8').includes(needle));
+  /** Every TEXT value of every ordinary table (FTS5 tables and their shadows excluded) that holds `needle`. */
+  const textColumnsHold = (db: DatabaseSync, needle: string): string[] => {
+    const hits: string[] = [];
+    const tables = (db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as { name: string; sql: string }[])
+      .filter((t) => !/^CREATE VIRTUAL TABLE/i.test(t.sql) && !/_fts_/.test(t.name));
+    for (const t of tables) {
+      const cols = (db.prepare(`PRAGMA table_info("${t.name}")`).all() as { name: string }[]).map((c) => c.name);
+      const st = db.prepare(`SELECT ${cols.map((c) => `"${c}"`).join(', ')} FROM "${t.name}"`);
+      st.setReadBigInts(true);
+      for (const row of st.all() as Record<string, unknown>[]) {
+        for (const c of cols) { const v = row[c]; if (typeof v === 'string' && v.includes(needle)) hits.push(`${t.name}.${c}`); }
+      }
+    }
+    return hits;
+  };
+  let apiP: Promise<{ sweep: IxSweep; store: typeof import('../../ccd/history/store.mjs'); lib: typeof import('../../ccd/history/lib.mjs') }> | null = null;
+  const api = () => (apiP ??= (async () => ({
+    sweep: (await import('../../ccd/history/sweep.mjs')) as unknown as IxSweep,
+    store: await import('../../ccd/history/store.mjs'),
+    lib: await import('../../ccd/history/lib.mjs'),
+  }))());
+  /** A real store in the box, created and opened in THIS process (in-process cases only). */
+  const openFixtureStore = async (box: HistoryBox): Promise<{ db: DatabaseSync; ids: IxIds }> => {
+    const { store, lib } = await api();
+    const ids = store.createStore(box.home);
+    return { db: store.openWriter(lib.historyPaths(box.home).dbFile), ids };
+  };
+  const cursorOf = (db: DatabaseSync, fileId: number): number =>
+    (db.prepare('SELECT offset FROM ingest_files WHERE file_id = ?').get(fileId) as { offset: number }).offset;
+  return { U, U2, U3, G, ID, SLUG, uuidN, ts, tsMs, user, assistant, jsonl, words, plantCopy, newBox, sweepTwice, count, blobsHold, textColumnsHold, api, openFixtureStore, cursorOf };
+})();
+
+describe('history ingest: chunk writes through the real sweep (plan task 19)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+
+  it('DM1: six homes holding one transcript give one entry per uuid and six memberships each', () => {
+    const SIX = { ...DEFAULT_TEST_ROSTER, accounts: [...DEFAULT_TEST_ROSTER.accounts, {
+      id: 'claude-e', label: 'claude-e', configDirSuffix: '.claude-e', exec: { kind: 'generated' },
+      homeAble: true, hue: 'amber', telemetry: 'anthropic',
+    }] };
+    const box = IX.newBox('ccrc-hist-dm1-', SIX);
+    expect(box.homes).toHaveLength(6);
+    const rows = [
+      IX.user(IX.uuidN(1), null, 'first prompt', 1),
+      IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'text', text: 'first answer' }], 2),
+      IX.user(IX.uuidN(3), IX.uuidN(2), 'second prompt', 3),
+    ];
+    for (const h of box.homes) IX.plantCopy(h, IX.U, IX.jsonl(rows));
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      expect(IX.count(db, 'entries')).toBe(3);
+      expect(IX.count(db, 'ingest_files')).toBe(6);
+      const per = (db.prepare(`SELECT e.uuid AS uuid, count(m.file_id) AS n FROM entries e
+        JOIN memberships m ON m.entry_id = e.entry_id GROUP BY e.uuid ORDER BY e.uuid`).all() as { uuid: string; n: number }[])
+        .map((r) => ({ uuid: r.uuid, n: r.n }));
+      expect(per).toEqual([1, 2, 3].map((i) => ({ uuid: IX.uuidN(i), n: 6 })));
+    } finally { db.close(); }
+  });
+
+  it('DM2: one uuid with two bodies in one copy gives one entry and two variants', () => {
+    const box = IX.newBox('ccrc-hist-dm2-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'body one', 1),
+      IX.user(IX.uuidN(1), null, 'body two', 1),
+    ]));
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      expect(IX.count(db, 'entries')).toBe(1);
+      expect(IX.count(db, 'entry_variants')).toBe(2);
+      expect(IX.count(db, 'memberships')).toBe(1);
+      expect(counters(box)['variants_unknown']).toBe(1);
+    } finally { db.close(); }
+  });
+
+  it('DM2b (store half): an empty-text gateway copy against the sanitised "..." copy is ccd-sanitize; any other difference is unknown', () => {
+    const box = IX.newBox('ccrc-hist-dm2b-');
+    const copy = (fill: string, last: string): string => IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'question', 1),
+      IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'text', text: fill }, { type: 'tool_use', id: 'toolu_01', name: 'Read', input: { file_path: '/home/u/tree/a.md' } }], 2, 'gpt-5'),
+      IX.assistant(IX.uuidN(3), IX.uuidN(2), [{ type: 'text', text: last }], 3, 'gpt-5'),
+    ]);
+    IX.plantCopy(box.homes[3]!, IX.U, copy('', 'foo'));     // the gateway home's copy
+    IX.plantCopy(box.homes[0]!, IX.U, copy('...', 'bar'));  // the Anthropic home's copy, sanitised by ccd on the carry
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      const v = (db.prepare(`SELECT e.uuid AS uuid, v.cause AS cause FROM entry_variants v
+        JOIN entries e ON e.entry_id = v.entry_id ORDER BY e.uuid, v.blob_id`).all() as { uuid: string; cause: string }[])
+        .map((r) => ({ uuid: r.uuid, cause: r.cause }));
+      expect(v).toEqual([
+        { uuid: IX.uuidN(2), cause: 'ccd-sanitize' }, { uuid: IX.uuidN(2), cause: 'ccd-sanitize' },
+        { uuid: IX.uuidN(3), cause: 'unknown' }, { uuid: IX.uuidN(3), cause: 'unknown' },
+      ]);
+      const c = counters(box);
+      expect(c['variants_sanitize']).toBe(1);
+      expect(c['variants_unknown']).toBe(1);
+    } finally { db.close(); }
+  });
+
+  it('DM3: 335 identical prompts with distinct uuids give 335 entries and one blob', () => {
+    const box = IX.newBox('ccrc-hist-dm3-');
+    const rows: IxRow[] = [];
+    for (let i = 1; i <= 335; i += 1) rows.push(IX.user(IX.uuidN(i), i === 1 ? null : IX.uuidN(i - 1), 'run the tests', i));
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(rows));
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      expect(IX.count(db, 'entries')).toBe(335);
+      expect((db.prepare('SELECT count(DISTINCT blob_id) AS n FROM entries').get() as { n: number }).n).toBe(1);
+      expect(IX.count(db, 'blobs')).toBe(1);
+    } finally { db.close(); }
+  });
+
+  it('DM12: a thinking or redacted_thinking sentinel is in no decompressed blob', () => {
+    const box = IX.newBox('ccrc-hist-dm12-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'think about it', 1),
+      IX.assistant(IX.uuidN(2), IX.uuidN(1), [
+        { type: 'thinking', thinking: 'zq-thinking-sentinel', signature: 'c2lnbmF0dXJl' },
+        { type: 'redacted_thinking', data: 'zq-redacted-sentinel' },
+        { type: 'text', text: 'zq visible answer' },
+      ], 2),
+    ]));
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      expect(IX.blobsHold(db, 'zq visible answer')).toBe(true);     // CONTROL: the scan reads real bodies
+      expect(IX.blobsHold(db, 'zq-thinking-sentinel')).toBe(false);
+      expect(IX.blobsHold(db, 'zq-redacted-sentinel')).toBe(false);
+    } finally { db.close(); }
+  });
+
+  it('DM13 (store half): a uuid-less bridge-session row is stored nowhere and counted by type', () => {
+    const ACCT = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
+    const box = IX.newBox('ccrc-hist-dm13-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'hello', 1),
+      { type: 'bridge-session', sessionId: IX.U, accountUuid: ACCT, organizationUuid: 'b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e', timestamp: IX.ts(2) },
+      IX.user(IX.uuidN(3), IX.uuidN(1), 'after the bridge row', 3),
+    ]));
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      expect(IX.count(db, 'entries')).toBe(2);                         // CONTROL: the rows around it landed
+      expect(IX.count(db, 'entries', "type = 'bridge-session'")).toBe(0);
+      expect(IX.blobsHold(db, ACCT)).toBe(false);
+      expect(IX.textColumnsHold(db, ACCT)).toEqual([]);
+      expect(counters(box)['uuidless:bridge-session']).toBe(1);
+    } finally { db.close(); }
+  });
+
+  it('DM24: an unknown row type with a uuid is stored, provenance harness, and counted', () => {
+    const box = IX.newBox('ccrc-hist-dm24-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'hello', 1),
+      { type: 'zq-mystery', uuid: IX.uuidN(2), parentUuid: IX.uuidN(1), timestamp: IX.ts(2), payload: 'zq mystery body' },
+    ]));
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      const r = db.prepare('SELECT type, provenance FROM entries WHERE uuid = ?').get(IX.uuidN(2)) as { type: string; provenance: string };
+      expect({ type: r.type, provenance: r.provenance }).toEqual({ type: 'zq-mystery', provenance: 'harness' });
+      expect(counters(box)['unknown_type']).toBe(1);
+    } finally { db.close(); }
+  });
+
+  it('DM34: a malformed line stores the closed code json-parse, and no fragment of it in any TEXT column', () => {
+    const box = IX.newBox('ccrc-hist-dm34-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'hello', 1),
+      `{"type":"user","uuid":"${IX.uuidN(2)}","message": zqfragmentsentinel}`,
+      IX.user(IX.uuidN(3), IX.uuidN(1), 'after the bad line', 3),
+    ]));
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      expect((db.prepare('SELECT last_error_code AS c FROM ingest_files').get() as { c: string }).c).toBe('json-parse');
+      // 'zqfrag', not the whole sentinel: V8's JSON.parse message quotes only about ten characters around the
+      // fault (`…"message": zqfragment"…`), so a leaked message holds this prefix and never the full word.
+      expect(IX.textColumnsHold(db, 'zqfrag')).toEqual([]);
+      expect(IX.count(db, 'entries', "parse_state = 'raw-only'")).toBe(1);
+      expect(IX.count(db, 'entries', `uuid = '${IX.uuidN(3)}'`)).toBe(1);   // the cursor went past it
+    } finally { db.close(); }
+  });
+
+  it('DM38 (store half): an assistant row keeps message.model verbatim, <synthetic> included; a user row stores NULL', () => {
+    const box = IX.newBox('ccrc-hist-dm38-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'hello', 1),
+      IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'text', text: 'hi' }], 2, 'claude-opus-4-1'),
+      IX.assistant(IX.uuidN(3), IX.uuidN(2), [{ type: 'text', text: 'No response requested.' }], 3, '<synthetic>'),
+    ]));
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      const m = (db.prepare('SELECT uuid, model FROM entries ORDER BY uuid').all() as { uuid: string; model: string | null }[])
+        .map((r) => r.model);
+      expect(m).toEqual([null, 'claude-opus-4-1', '<synthetic>']);
+    } finally { db.close(); }
+  });
+
+  it('boundaries, api_block_index and the epoch launch facts: ord per transcript, the kept uuids as a blob, a missing field counted', () => {
+    const box = IX.newBox('ccrc-hist-bnd-');
+    // Two rows of ONE API response share a requestId (Claude Code writes a multi-block reply as several rows).
+    const block = (uuid: string, parent: string, text: string, n: number): IxRow =>
+      ({ ...IX.assistant(uuid, parent, [{ type: 'text', text }], n), requestId: 'req_shared01' });
+    const kept = [IX.uuidN(1), IX.uuidN(2)];
+    const seg = { headUuid: IX.uuidN(1), anchorUuid: IX.uuidN(2), tailUuid: IX.uuidN(3), allUuids: kept };
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'first prompt', 1),
+      block(IX.uuidN(2), IX.uuidN(1), 'block zero', 2),
+      block(IX.uuidN(3), IX.uuidN(2), 'block one', 3),
+      boundaryRow({ uuid: IX.uuidN(4), parentUuid: IX.uuidN(3), ts: IX.ts(4), trigger: 'manual', ...seg }),
+      boundaryRow({ uuid: IX.uuidN(5), parentUuid: IX.uuidN(4), ts: IX.ts(5), trigger: 'auto', ...seg, omit: ['preservedSegment'] }),
+    ]));
+    IX.sweepTwice(box);   // the scan's registry backfill chains U's epoch before the first chunk is written
+    const db = openStoreRO(box);
+    try {
+      const b = db.prepare(`SELECT e.uuid AS uuid, b.ord AS ord, b.trigger AS trigger, b.head_uuid AS head, b.kept_blob_id AS kept
+        FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id ORDER BY b.ord`).all() as
+        { uuid: string; ord: number; trigger: string; head: string | null; kept: number | null }[];
+      expect(b.map((r) => ({ uuid: r.uuid, ord: r.ord, trigger: r.trigger, head: r.head }))).toEqual([
+        { uuid: IX.uuidN(4), ord: 1, trigger: 'manual', head: IX.uuidN(1) },
+        { uuid: IX.uuidN(5), ord: 2, trigger: 'auto', head: null },
+      ]);
+      const z = (db.prepare('SELECT z FROM blobs WHERE blob_id = ?').get(b[0]!.kept) as { z: Uint8Array }).z;
+      expect(JSON.parse(brotliDecompressSync(z).toString('utf8'))).toEqual(kept);
+      expect(b[1]!.kept).toBe(b[0]!.kept);                                  // one blob for one kept list
+      expect(counters(box)['boundary_field_missing']).toBe(1);               // only the boundary missing its segment
+      const idx = (db.prepare("SELECT api_block_index AS i FROM entries WHERE request_id = 'req_shared01' ORDER BY uuid").all() as { i: number }[])
+        .map((r) => r.i);
+      expect(idx).toEqual([0, 1]);
+      const ep = db.prepare('SELECT started_ms, cwd, git_branch FROM epochs WHERE cc_session_uuid = ?').get(IX.U) as
+        { started_ms: number | null; cwd: string | null; git_branch: string | null };
+      expect({ started: ep.started_ms, cwd: ep.cwd, branch: ep.git_branch }).toEqual({ started: IX.tsMs(1), cwd: '/home/u/tree', branch: 'main' });
+    } finally { db.close(); }
+  });
+
+  it('§9.3 (BK17): a disk that fills after the pass began stops ingest at the next chunk, counted capture_paused_low_disk', () => {
+    const box = IX.newBox('ccrc-hist-floor-spawn-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'held by the floor', 1)]));
+    // The pass's own probe, the first statfs call, sees plenty (so planRun runs); every later call, the per-chunk
+    // probe, sees 1 byte free of a 1 TiB filesystem (Step 12's preload block).
+    IX.sweepTwice(box, { env: { HISTORY_TEST_STATFS_AFTER: `1:1:${2 ** 40}` } });
+    const db = openStoreRO(box);
+    try {
+      expect(IX.count(db, 'entries')).toBe(0);
+      expect(IX.count(db, 'ingest_files', '"offset" > 0')).toBe(0);
+      expect(counters(box)['capture_paused_low_disk']).toBe(2);              // once per pass
+    } finally { db.close(); }
+  });
+
+  it('O21: every blob is codec br5, its sha is sha256 of its bytes, and its z is the quality-5 output byte for byte', () => {
+    const box = IX.newBox('ccrc-hist-o21-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'write me a long answer', 1),
+      IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'text', text: IX.words(8000) }], 2),
+    ]));
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      const rows = db.prepare('SELECT codec, sha256, z, raw_len FROM blobs').all() as { codec: string; sha256: Uint8Array; z: Uint8Array; raw_len: number }[];
+      expect(rows.length).toBeGreaterThanOrEqual(2);
+      for (const b of rows) {
+        expect(b.codec).toBe('br5');
+        const raw = brotliDecompressSync(b.z);
+        expect(raw.length).toBe(b.raw_len);
+        expect(createHash('sha256').update(raw).digest().equals(Buffer.from(b.sha256))).toBe(true);
+        const q5 = brotliCompressSync(raw, { params: { [zc.BROTLI_PARAM_QUALITY]: 5, [zc.BROTLI_PARAM_SIZE_HINT]: raw.length } });
+        expect(q5.equals(Buffer.from(b.z)), 'stored z is not the quality-5 output').toBe(true);
+      }
+    } finally { db.close(); }
+  });
+
+  it('O11: with history-off present the pass writes nothing: history.db and its WAL keep their mtimes', () => {
+    const box = IX.newBox('ccrc-hist-o11-');
+    const p = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'before the switch', 1)]));
+    IX.sweepTwice(box);
+    const dbFile = path.join(box.root, 'db', 'history.db');
+    const stamp = (): number[] => [dbFile, `${dbFile}-wal`].map((f) => (fs.existsSync(f) ? fs.statSync(f).mtimeMs : -1));
+    const before = stamp();
+    fs.writeFileSync(path.join(box.home, '.ccrc', 'history-off'), '');
+    fs.appendFileSync(p, IX.jsonl([IX.user(IX.uuidN(2), IX.uuidN(1), 'after the switch', 2)]));
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    expect(stamp()).toEqual(before);
+    const db = openStoreRO(box);
+    try { expect(IX.count(db, 'entries')).toBe(1); } finally { db.close(); }
+  });
+});
+
+describe('history ingest: chunk writes in-process (plan task 19)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  let S: IxSweep;
+  let lib: typeof import('../../ccd/history/lib.mjs');
+  beforeAll(async () => { ({ sweep: S, lib } = await IX.api()); });
+  const parentOf = (db: DatabaseSync, uuid: string): string | null =>
+    (db.prepare('SELECT parent_uuid AS p FROM entries WHERE uuid = ?').get(uuid) as { p: string | null }).p;
+
+  it('DM4: structure comes from the copy with the larger mtime_ns; the older copy read second never overwrites it', async () => {
+    const run = async (order: 'newer-first' | 'older-first'): Promise<string | null> => {
+      const box = IX.newBox(`ccrc-hist-dm4-${order}-`);
+      const text = (parent: string): string => IX.jsonl([IX.user(IX.uuidN(1), null, 'p', 1), IX.user(IX.uuidN(2), parent, 'q', 2)]);
+      const older = IX.plantCopy(box.homes[0]!, IX.U, text('aaaaaaaa-0000-4000-8000-000000000001'));
+      const newer = IX.plantCopy(box.homes[1]!, IX.U, text('bbbbbbbb-0000-4000-8000-000000000002'));
+      fs.utimesSync(older, new Date('2026-10-01T00:00:00Z'), new Date('2026-10-01T00:00:00Z'));
+      fs.utimesSync(newer, new Date('2026-10-02T00:00:00Z'), new Date('2026-10-02T00:00:00Z'));
+      const { db, ids } = await IX.openFixtureStore(box);
+      try {
+        const ctx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+        const files = [{ path: newer, uuid: IX.U, home: box.homes[1]! }, { path: older, uuid: IX.U, home: box.homes[0]! }];
+        for (const f of order === 'newer-first' ? files : files.reverse()) await S.ingestPath(db, ctx, f, S.newBudget());
+        expect(IX.count(db, 'entries')).toBe(2);
+        expect(IX.count(db, 'entry_variants')).toBe(0);   // the bodies are equal: only structure differs
+        return parentOf(db, IX.uuidN(2));
+      } finally { db.close(); }
+    };
+    expect(await run('newer-first')).toBe('bbbbbbbb-0000-4000-8000-000000000002');
+    expect(await run('older-first')).toBe('bbbbbbbb-0000-4000-8000-000000000002');
+  });
+
+  it('O1: a throw injected after the entry insert leaves no row of that chunk and the cursor where it was', async () => {
+    const box = IX.newBox('ccrc-hist-o1-');
+    const p = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), IX.user(IX.uuidN(2), IX.uuidN(1), 'two', 2)]));
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      // A connection whose memberships insert throws: the entry insert before it has already run
+      // inside the chunk's transaction when it does. An in-process injected dependency, not a seam.
+      const failing = new Proxy(db, {
+        get(target, key) {
+          if (key === 'prepare') {
+            return (sql: string) => (/^\s*INSERT INTO memberships/.test(sql)
+              ? { run: () => { throw new Error('injected: after the entry insert'); } }
+              : target.prepare(sql));
+          }
+          const v = Reflect.get(target, key, target) as unknown;
+          return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+        },
+      });
+      const ctx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+      await expect(S.ingestPath(failing, ctx, { path: p, uuid: IX.U, home: box.homes[0]! }, S.newBudget())).rejects.toThrow(/injected/);
+      expect(IX.count(db, 'entries')).toBe(0);
+      expect(IX.count(db, 'blobs')).toBe(0);
+      expect((db.prepare('SELECT offset FROM ingest_files').get() as { offset: number }).offset).toBe(0);
+    } finally { db.close(); }
+  });
+
+  it('O2: a file gone before its read, a parser-module throw, and a half-written last line each leave the cursor unchanged', async () => {
+    const box = IX.newBox('ccrc-hist-o2-');
+    const first = IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1)]);
+    const p = IX.plantCopy(box.homes[0]!, IX.U, `${first}{"type":"user","uuid":"${IX.uuidN(2)}","mess`);
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const ctx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+      const f = { path: p, uuid: IX.U, home: box.homes[0]! };
+      // (c) the half-written last line: ingested up to the last '\n', never past it
+      const r1 = await S.ingestPath(db, ctx, f, S.newBudget());
+      expect(r1!.offset).toBe(Buffer.byteLength(first));
+      expect(r1!.atEof).toBe(false);
+      expect(IX.count(db, 'entries')).toBe(1);
+      fs.appendFileSync(p, `age":{"role":"user","content":"two"},"timestamp":"${IX.ts(2)}"}\n`);
+      // (b) a parser-module throw: counted, the cursor held, the code recorded
+      const crashing = { ...ctx, prepareLines: (): never => { throw new Error('parser bug'); } };
+      const r2 = await S.ingestPath(db, crashing, f, S.newBudget());
+      expect(r2!.crashed).toBe(true);
+      expect(IX.cursorOf(db, r2!.fileId)).toBe(Buffer.byteLength(first));
+      expect((db.prepare('SELECT n FROM counters WHERE name = ?').get('parser_crash') as { n: number }).n).toBe(1);
+      expect((db.prepare('SELECT last_error_code AS c FROM ingest_files').get() as { c: string }).c).toBe('parser-crash');
+      // (a) the file is gone before the next read: skipped, counted, the cursor untouched, and its row, which no
+      // path names any more, is `gone` (Task 20 counts only live rows behind)
+      fs.rmSync(p);
+      expect(await S.ingestPath(db, ctx, f, S.newBudget())).toBeNull();
+      expect(IX.cursorOf(db, r2!.fileId)).toBe(Buffer.byteLength(first));
+      expect((db.prepare('SELECT n FROM counters WHERE name = ?').get('file_missing') as { n: number }).n).toBe(1);
+      expect((db.prepare('SELECT status FROM ingest_files WHERE file_id = ?').get(r2!.fileId) as { status: string }).status).toBe('gone');
+    } finally { db.close(); }
+  });
+
+  it('O2b: a malformed line and a line over LINE_MAX are stored raw-only, byte for byte, and the cursor goes past both', async () => {
+    const box = IX.newBox('ccrc-hist-o2b-');
+    const bad = '{"type":"user","uuid": not json';
+    const long = `{"pad":"${'a'.repeat(lib.LINE_MAX + 16)}"}`;
+    const text = IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), bad, long, IX.user(IX.uuidN(4), IX.uuidN(1), 'after both', 4)]);
+    const p = IX.plantCopy(box.homes[0]!, IX.U, text);
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const r = await S.ingestPath(db, S.makeIngestCtx(box.home, box.homes, Date.now(), ids), { path: p, uuid: IX.U, home: box.homes[0]! }, S.newBudget());
+      expect(r!.atEof).toBe(true);
+      expect(r!.offset).toBe(Buffer.byteLength(text));
+      expect(IX.count(db, 'entries', `uuid = '${IX.uuidN(4)}'`)).toBe(1);
+      // D-4237: a membership's `line` is the line's BYTE OFFSET, not a line number.
+      const lastAt = Buffer.byteLength(text.slice(0, text.lastIndexOf(`{"parentUuid"`)));
+      expect((db.prepare(`SELECT m.line AS line FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+        WHERE e.uuid = ?`).get(IX.uuidN(4)) as { line: number }).line).toBe(lastAt);
+      const raws = db.prepare(`SELECT e.uuid AS uuid, b.z AS z FROM entries e JOIN blobs b ON b.blob_id = e.blob_id
+        WHERE e.parse_state = 'raw-only' ORDER BY e.entry_id`).all() as { uuid: string; z: Uint8Array }[];
+      expect(raws.map((x) => brotliDecompressSync(x.z).toString('utf8'))).toEqual([bad, long]);
+      for (const x of raws) expect(x.uuid).toMatch(/^x[0-9a-f]{32}$/);
+      expect((db.prepare('SELECT n FROM counters WHERE name = ?').get('raw_only') as { n: number }).n).toBe(2);
+    } finally {
+      db.close();
+      fs.rmSync(box.home, { recursive: true, force: true });   // a 16 MiB line: never left for the file's afterAll alone
+    }
+  }, 120_000);
+
+  it('O11: history-off created between two chunks stops the second chunk', async () => {
+    const box = IX.newBox('ccrc-hist-o11b-');
+    const rows: IxRow[] = [];
+    for (let i = 1; i <= 40; i += 1) rows.push(IX.user(IX.uuidN(i), i === 1 ? null : IX.uuidN(i - 1), IX.words(40, i), i));
+    const p = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(rows));
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const ctx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+      const realOff = ctx.historyOff;
+      let calls = 0;
+      // The real probe of the real file, which this wrapper creates when ingestFile asks for the
+      // second time — that is, between chunk 1's commit and chunk 2's read.
+      ctx.historyOff = () => {
+        calls += 1;
+        if (calls === 2) fs.writeFileSync(path.join(box.home, '.ccrc', 'history-off'), '');
+        return realOff();
+      };
+      const r = await S.ingestPath(db, ctx, { path: p, uuid: IX.U, home: box.homes[0]! }, S.newBudget(Date.now, { chunkBytes: 4096 }));
+      expect(r!.atEof).toBe(false);
+      const n = IX.count(db, 'entries');
+      expect(n).toBeGreaterThan(0);
+      expect(n).toBeLessThan(40);
+      expect(IX.cursorOf(db, r!.fileId)).toBe(r!.offset);
+    } finally { db.close(); }
+  });
+
+  it('§9.3 (BK17): the free-space floor is probed before every chunk; below it the file stops, counted once, the cursor at the last chunk', async () => {
+    const box = IX.newBox('ccrc-hist-floor-');
+    const rows: IxRow[] = [];
+    for (let i = 1; i <= 40; i += 1) rows.push(IX.user(IX.uuidN(i), i === 1 ? null : IX.uuidN(i - 1), IX.words(40, i), i));
+    const p = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(rows));
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      let probes = 0;
+      // An injected probe, as `tick` injects the real one: the floor holds for chunk 1, then the disk fills.
+      const ctx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids,
+        async () => { probes += 1; return probes === 1 ? 'ok' : 'low-disk'; });
+      const r = await S.ingestPath(db, ctx, { path: p, uuid: IX.U, home: box.homes[0]! }, S.newBudget(Date.now, { chunkBytes: 4096 }));
+      expect(probes).toBe(2);
+      expect(r!.atEof).toBe(false);
+      expect(r!.floor).toBe('low-disk');
+      const n = IX.count(db, 'entries');
+      expect(n).toBeGreaterThan(0);
+      expect(n).toBeLessThan(40);
+      expect(IX.cursorOf(db, r!.fileId)).toBe(r!.offset);
+      expect((db.prepare('SELECT n FROM counters WHERE name = ?').get('capture_paused_low_disk') as { n: number }).n).toBe(1);
+    } finally { db.close(); }
   });
 });

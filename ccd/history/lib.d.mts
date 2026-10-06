@@ -175,7 +175,7 @@ export interface MigrationInputs {
   boundS: number | null; copyBps: number | null; attempts: number; heavy: boolean;
 }
 export function planMigration(i: MigrationInputs): MigrationVerdict;
-export function withinBudget(i: { elapsedMs: number; bytes: number }): boolean;
+export function withinBudget(i: { elapsedMs: number; bytes: number; maxMs?: number; maxBytes?: number }): boolean;
 export type FreeProbe = { state: 'ok'; bytes: number; fsSize: number } | { state: 'unsettled' } | { state: 'threw' };
 export interface RunInputs {
   historyOff: boolean; store: StoreOpenVerdict; free: FreeProbe; sizeBytes: number; capGb: number;
@@ -279,3 +279,13 @@ export function retentionLowered(homeRetentionDays: Readonly<Record<string, numb
 export interface SchemaVersionAdded { readonly heavy: boolean; readonly tables: Readonly<Record<string, readonly string[]>> }
 export const SCHEMA_ADDED: Readonly<Record<number, SchemaVersionAdded>>;
 export function passOutcome(word: string): { word: string; exit: number };
+export const ROW_TYPES: readonly ['user', 'assistant', 'system', 'attachment'];
+export const PARSE_STATE: Readonly<{ ok: 'ok'; rawOnly: 'raw-only' }>;
+export const RAW_ROW: Readonly<{ type: ''; provenance: 'harness'; parseState: 'raw-only' }>;
+export const PROV_VERSION: 1;
+export function newSha256(): import('node:crypto').Hash;
+export interface ToolUse { id: string; name: string; command?: string }
+export function toolUsesOf(content: unknown): ToolUse[];
+export function toolResultIdsOf(content: unknown): string[];
+export function rawRowKey(ccSessionUuid: string, rawShaHex: string): string;
+export function launchFactsOf(row: unknown): { cwd: string | null; gitBranch: string | null };

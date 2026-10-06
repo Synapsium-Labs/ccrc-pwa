@@ -19,14 +19,16 @@
 import { DatabaseSync } from 'node:sqlite';
 import {
   chmodSync, closeSync, constants as FS, existsSync, fchmodSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
-  readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeSync,
+  readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { brotliCompressSync, brotliDecompressSync, constants as Z } from 'node:zlib';
-import { BUSY_TIMEOUT_MS, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, UUID_RE, WRITER_RE, historyPaths } from './lib.mjs';
+import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress } from 'node:zlib';
+import { BUSY_TIMEOUT_MS, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, UUID_RE, WRITER_RE, historyPaths, newSha256 } from './lib.mjs';
 
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
 export const CODEC = 'br5';
+/** Brotli quality for every blob (§6.2, RV6: the node default is 11). Spelled once: brotli() and compressFdRange() both read it. */
+export const BR_QUALITY = 5;
 
 /** A refusal with its word: the caller prints the word, never the message. */
 export class StoreError extends Error {
@@ -311,7 +313,7 @@ export function withTx(db, sync, fn) {
  *  Recorded as `CODEC`. */
 export function brotli(buf) {
   return brotliCompressSync(buf, {
-    params: { [Z.BROTLI_PARAM_QUALITY]: 5, [Z.BROTLI_PARAM_SIZE_HINT]: buf.length },
+    params: { [Z.BROTLI_PARAM_QUALITY]: BR_QUALITY, [Z.BROTLI_PARAM_SIZE_HINT]: buf.length },
   });
 }
 
@@ -744,4 +746,35 @@ export function runMigration(db, home, i) {
   });
   rmSync(attemptMarker(home, n), { force: true });
   return { snapshot, copyBps };
+}
+
+/** One read when streaming a range: big enough to keep the compressor busy, small enough that
+ *  the stream never holds more than a few of them. */
+const RANGE_PIECE = 1 << 20;
+
+/** A byte range of an open file, sha256-hashed and Brotli-compressed (BR_QUALITY, codec `br5`) in
+ *  one streaming pass, so a line longer than LINE_MAX, or a sidecar over SIDECAR_WHOLE_MAX, is
+ *  captured without ever being held whole (§9.2 step 4: "streamed through createBrotliCompress and
+ *  a streaming sha256 rather than refused"). Returns null when the file ends before `end`, because
+ *  it shrank under the read: the caller holds its cursor and tries again next tick. */
+export async function compressFdRange(fd, start, end) {
+  const hash = newSha256();
+  const enc = createBrotliCompress({
+    params: { [Z.BROTLI_PARAM_QUALITY]: BR_QUALITY, [Z.BROTLI_PARAM_SIZE_HINT]: end - start },
+  });
+  const out = [];
+  enc.on('data', (c) => { out.push(c); });
+  const finished = new Promise((resolve, reject) => { enc.once('end', resolve); enc.once('error', reject); });
+  for (let pos = start; pos < end;) {
+    const piece = Buffer.allocUnsafe(Math.min(RANGE_PIECE, end - pos));
+    const n = readSync(fd, piece, 0, piece.length, pos);
+    if (n === 0) { enc.destroy(); return null; }
+    const chunk = n === piece.length ? piece : piece.subarray(0, n);
+    hash.update(chunk);
+    if (!enc.write(chunk)) await new Promise((resolve) => { enc.once('drain', resolve); });
+    pos += n;
+  }
+  enc.end();
+  await finished;
+  return { sha: hash.digest(), z: Buffer.concat(out), rawLen: end - start };
 }

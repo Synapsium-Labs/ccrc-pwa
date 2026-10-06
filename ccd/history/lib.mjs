@@ -743,8 +743,8 @@ export function planMigration(i) {
 }
 
 /** One wall-clock and byte budget per run, never reset per file (§9.2 step 7). */
-export function withinBudget({ elapsedMs, bytes }) {
-  return elapsedMs < RUN_BUDGET_MS && bytes < RUN_BUDGET_BYTES;
+export function withinBudget({ elapsedMs, bytes, maxMs = RUN_BUDGET_MS, maxBytes = RUN_BUDGET_BYTES }) {
+  return elapsedMs < maxMs && bytes < maxBytes;
 }
 
 function haltRun(arm, holdWord) {
@@ -1765,4 +1765,74 @@ export function passOutcome(word) {
       if (PASS_WORDS.includes(word)) return { word, exit: EXIT.DB };
       throw new Error(`passOutcome: '${word}' is not a pass word`);
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Row-shape helpers the ingest needs (§9.2 step 4; plan task 19). Pure: the sweep reads files,
+// these read the parsed rows it hands them.
+// ---------------------------------------------------------------------------------------------
+
+/** The row types `blobBodyOf` has a rule for (§6.2 "What a blob holds"). A stored row of any
+ *  other type is kept, provenance `harness`, and counted `unknown_type` (§6.5, DM24). */
+export const ROW_TYPES = Object.freeze(['user', 'assistant', 'system', 'attachment']);
+
+/** `entries.parse_state`, by name: a row parsed into its columns, or a line stored raw (malformed,
+ *  not an object, or longer than LINE_MAX), which never fails or wedges its file (§9.2 step 4).
+ *  DERIVED from Task 3's ENTRY_PARSE_STATES, the one spelling of the two words (O14). */
+export const PARSE_STATE = Object.freeze({ ok: ENTRY_PARSE_STATES[0], rawOnly: ENTRY_PARSE_STATES[1] });
+
+/** The columns of a raw-only row: no type of its own, `harness` provenance (never searchable,
+ *  §6.2), and the raw-only parse state. */
+export const RAW_ROW = Object.freeze({ type: '', provenance: 'harness', parseState: PARSE_STATE.rawOnly });
+
+/** `entries.prov_version`: the version of the provenance rules a row was classified under, so a
+ *  change to `provenanceOf` can find the rows it has not re-read (§6.2, §11 L9). */
+export const PROV_VERSION = 1;
+
+/** A streaming sha256, for the adapter that hashes what it never holds whole (store.mjs's
+ *  compressFdRange). lib is the ring's node:crypto importer, so the hash comes from here. */
+export function newSha256() {
+  return createHash('sha256');
+}
+
+/** The tool_use blocks of a content array (an assistant row's blob body): id, name, and the
+ *  command when `input.command` is a string — what provenanceOf's recall-echo rule reads. */
+export function toolUsesOf(content) {
+  if (!Array.isArray(content)) return [];
+  const out = [];
+  for (const b of content) {
+    if (b === null || typeof b !== 'object' || b.type !== 'tool_use' || typeof b.id !== 'string') continue;
+    const u = { id: b.id, name: typeof b.name === 'string' ? b.name : '' };
+    if (b.input !== null && typeof b.input === 'object' && typeof b.input.command === 'string') u.command = b.input.command;
+    out.push(u);
+  }
+  return out;
+}
+
+/** The `tool_use_id`s that a content array's tool_result blocks answer. */
+export function toolResultIdsOf(content) {
+  if (!Array.isArray(content)) return [];
+  const out = [];
+  for (const b of content) {
+    if (b !== null && typeof b === 'object' && b.type === 'tool_result' && typeof b.tool_use_id === 'string') out.push(b.tool_use_id);
+  }
+  return out;
+}
+
+/** The row key of a line stored raw-only. It carries no uuid of its own, so it is keyed by its
+ *  transcript and the sha256 of its bytes (§6.10 item 2's `'x' + 32 hex` form, domain
+ *  `ccrc-raw/v1`), never by a line ordinal: two identical malformed lines in one transcript are
+ *  one row with one membership per copy. */
+export function rawRowKey(ccSessionUuid, rawShaHex) {
+  return `x${digestText('ccrc-raw/v1', [ccSessionUuid, rawShaHex]).slice(0, 32)}`;
+}
+
+/** An epoch's launch facts, kept once from its first uuid row (§2: `cwd` and `gitBranch` once per
+ *  epoch; §6.2 `epochs`). */
+export function launchFactsOf(row) {
+  const o = row !== null && typeof row === 'object' ? row : {};
+  return {
+    cwd: typeof o.cwd === 'string' ? o.cwd : null,
+    gitBranch: typeof o.gitBranch === 'string' ? o.gitBranch : null,
+  };
 }

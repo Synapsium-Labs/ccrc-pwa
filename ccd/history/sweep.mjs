@@ -36,11 +36,16 @@ import {
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
   UUID_RE, WRITER_RE, drainingNameOk, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
   passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText,
+  CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
+  boundaryOf, provenanceOf, variantCauseOf, canonicalJson, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
+  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf,
 } from './lib.mjs';
 import {
   StoreError, bump, closeWriter, createStore, dropPending, finishPending, getMeta, measureStoreFacts, openReader,
   openWriter, readAttempts, removeStaleTemps, setMeta, syncWriterMirror, userVersion, withTx,
+  CODEC, brotli, unbrotli, compressFdRange,
 } from './store.mjs';
+import { isBoundaryLine } from '../compact-card.mjs';
 
 const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] --secrets <file...> -- <home...>';
 
@@ -1351,6 +1356,8 @@ export function discoverAndPlan(db, c, uuids) {
  * @property {string[]} [hints]  set by the drain: sids of this tick's fresh spool lines
  * @property {object[]} [planned]  set by Task 18's discovery step: the files bound this tick (Task 19's ingest
  *   discovers and binds per path instead, and leaves it unset)
+ * @property {boolean} ingest  planRun's verdict: false under a cap or floor pause (Task 19)
+ * @property {object} budget  the run's ONE budget, newBudget(now), spent by every step that reads the disk (Task 19)
  */
 /** The bound store's tick (§9.2), handed an open writer connection. Steps are
  *  added here in §9.2's order by the tasks that ship them; what it runs now:
@@ -1384,7 +1391,12 @@ export async function tick(db, ctx) {
   // Steps 2-3, discovery and the plan. The tick examines hinted confirmed sids, files left short of their end, and
   // at the scan every known uuid, across the rostered homes; each admitted file is bound to its cursor row by
   // identity. An unreadable roster skips discovery and leaves the scan due for the next readable pass (§9.2 step 2).
-  ctx.planned = ctx.rosterUnreadable ? [] : discoverAndPlan(db, ctx, examineUuids(db, ctx.home, ctx.hints ?? [], scan));
+  // Steps 2-5 (Task 19): discover, admit and bind (Task 18's admitFile and bindFile, inside ingestPath), then
+  // stream and write in chunks, under the run's ONE budget. Discovery and binding happen ONCE per tick, here;
+  // an unreadable roster discovers nothing, as Task 18's line did (§9.2 step 2). The ingest probes the
+  // free-space floor on db/ before every chunk (§9.3, BK17).
+  const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir));
+  if (ctx.ingest && !ctx.rosterUnreadable) await ingestTick(db, ictx, ctx.budget);
   if (scan && !ctx.rosterUnreadable) markScan(db, ctx.now());
   // <<< history tick steps
   mkdirSync(ctx.paths.spool, { recursive: true, mode: 0o700 });
@@ -1515,7 +1527,7 @@ export async function runPass(argv, deps = {}) {
       }
       await tick(db, {
         home, paths: P, parsed, plan, free, now,
-        ids, homes: parsed.homes, rosterUnreadable: parsed.rosterUnreadable, out,
+        ids, homes: parsed.homes, rosterUnreadable: parsed.rosterUnreadable, out, ingest: plan.ingest, budget: newBudget(now),
       });
     } finally {
       closeWriter(db);
@@ -1535,6 +1547,495 @@ async function main() {
     process.stderr.write(`history-sweep: internal error: ${e && e.message ? e.message : String(e)}\n`);
     return EXIT.INTERNAL;
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Ingest: stream, parse and write in chunks (§9.2 steps 4-5; plan task 19).
+//
+// Parsing and compression happen OUTSIDE any transaction. Each chunk is ONE `BEGIN IMMEDIATE`
+// (synchronous NORMAL: its sources persist) carrying its blobs, entries, memberships, variants,
+// boundaries and — in the same transaction — the cursor, so any throw rolls the chunk back and a
+// partially ingested file is a normal state (history-ingest-by-cursor, D-4236). An integer that can pass
+// 2^53 (mtime_ns, struct_rank_ns, birth_ns) is written as a BigInt and compared in SQL, never read
+// back: node:sqlite throws a RangeError on such a value unless a statement opts into BigInt reads
+// (measured, 22.16.0).
+// ---------------------------------------------------------------------------------------------
+
+/** How far the tool_use pairing walks up `parentUuid` in the store when the tool_use was written
+ *  in an earlier tick. A bound on work, not a rule: parallel tool calls put a few rows between
+ *  a tool_use and its result. */
+const PAIR_WALK_HOPS = 16;
+/** The read size when scanning past LINE_MAX for an over-long line's end. */
+const SCAN_PIECE = 1 << 20;
+
+/** One run's budget (§9.2 step 7): made ONCE when a tick starts and threaded through every file
+ *  and step, never reset per file (O5). `limits` default to lib's RUN_BUDGET_MS, RUN_BUDGET_BYTES
+ *  and CHUNK_BYTES. An in-process test passes smaller ones: an injected dependency, never an
+ *  environment variable (history-test-seams-not-env). */
+export function newBudget(now = Date.now, limits = {}) {
+  return {
+    startMs: now(), bytes: 0, now,
+    maxMs: limits.maxMs ?? RUN_BUDGET_MS,
+    maxBytes: limits.maxBytes ?? RUN_BUDGET_BYTES,
+    chunkBytes: limits.chunkBytes ?? CHUNK_BYTES,
+  };
+}
+
+/** Whether the run may start another chunk or file: lib's verdict on this budget. */
+export function budgetLeft(budget) {
+  return withinBudget({ elapsedMs: budget.now() - budget.startMs, bytes: budget.bytes, maxMs: budget.maxMs, maxBytes: budget.maxBytes });
+}
+
+/** Up to `n` bytes at `pos`, fewer only at end-of-file. */
+function readAt(fd, pos, n) {
+  const buf = Buffer.allocUnsafe(n);
+  let got = 0;
+  while (got < n) {
+    const k = readSync(fd, buf, got, n - got, pos + got);
+    if (k === 0) break;
+    got += k;
+  }
+  return got === n ? buf : buf.subarray(0, got);
+}
+
+/** The complete lines in up to `want` bytes from `offset`, never past the last '\n', so a line
+ *  Claude Code is still writing is never consumed (O2). When no '\n' lies within `want` bytes the
+ *  read widens to LINE_MAX for that one line. A line longer than LINE_MAX is reported as
+ *  `overLong` (its start) and is never read into memory: compressFdRange takes it. */
+export function readLines(fd, offset, size, want) {
+  const avail = size - offset;
+  if (avail <= 0) return { lines: [], next: offset, overLong: null };
+  let buf = readAt(fd, offset, Math.min(want, avail));
+  let end = buf.lastIndexOf(0x0a);
+  if (end < 0 && buf.length < avail) {
+    buf = readAt(fd, offset, Math.min(LINE_MAX, avail));
+    end = buf.indexOf(0x0a);
+    if (end < 0) return { lines: [], next: offset, overLong: buf.length < avail ? offset : null };
+  }
+  if (end < 0) return { lines: [], next: offset, overLong: null };
+  const lines = [];
+  for (let start = 0; start <= end;) {
+    const nl = buf.indexOf(0x0a, start);
+    lines.push({ at: offset + start, bytes: buf.subarray(start, nl) });
+    start = nl + 1;
+  }
+  return { lines, next: offset + end + 1, overLong: null };
+}
+
+/** The '\n' that ends the over-long line starting at `start` (no '\n' lies in its first LINE_MAX
+ *  bytes), or null while it is still being written. */
+function findLineEnd(fd, start, size) {
+  for (let pos = start + LINE_MAX; pos < size;) {
+    const piece = readAt(fd, pos, Math.min(SCAN_PIECE, size - pos));
+    if (piece.length === 0) return null;
+    const nl = piece.indexOf(0x0a);
+    if (nl >= 0) return pos + nl;
+    pos += piece.length;
+  }
+  return null;
+}
+
+const ENTRY_UPSERT = `INSERT INTO entries (uuid, transcript_pk, type, subtype, role, model, parent_uuid,
+    ts_ms, request_id, api_block_index, msg_id, source_tool_use_id, tool_name, is_compact_summary,
+    provenance, prov_version, parse_state, struct_rank_ns, struct_file_id, blob_id)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(uuid) DO UPDATE SET type = excluded.type, subtype = excluded.subtype, role = excluded.role,
+    model = excluded.model, parent_uuid = excluded.parent_uuid, ts_ms = excluded.ts_ms,
+    request_id = excluded.request_id, api_block_index = excluded.api_block_index, msg_id = excluded.msg_id,
+    source_tool_use_id = excluded.source_tool_use_id, tool_name = excluded.tool_name,
+    is_compact_summary = excluded.is_compact_summary, provenance = excluded.provenance,
+    prov_version = excluded.prov_version, parse_state = excluded.parse_state,
+    struct_rank_ns = excluded.struct_rank_ns, struct_file_id = excluded.struct_file_id
+  WHERE excluded.struct_rank_ns > entries.struct_rank_ns
+     OR (excluded.struct_rank_ns = entries.struct_rank_ns AND excluded.struct_file_id > entries.struct_file_id)`;
+
+const INGEST_STMTS = new WeakMap();
+/** The ingest's prepared statements, one set per connection. Each names its columns. */
+function stmts(db) {
+  let s = INGEST_STMTS.get(db);
+  if (s !== undefined) return s;
+  s = {
+    blobId: db.prepare('SELECT blob_id, fts_indexed FROM blobs WHERE sha256 = ?'),
+    blobIns: db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?) ON CONFLICT(sha256) DO NOTHING'),
+    blobZ: db.prepare('SELECT z FROM blobs WHERE blob_id = ?'),
+    entrySel: db.prepare('SELECT entry_id, blob_id FROM entries WHERE uuid = ?'),
+    entryUpsert: db.prepare(ENTRY_UPSERT),
+    // D-4237: memberships.line is the line's BYTE OFFSET in the file, not a line number (a cursor resumes at an
+    // offset and v1 keeps no line count). min() keeps the first position on a re-scan after a shrink and for a
+    // duplicate uuid in one file.
+    membership: db.prepare(`INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)
+      ON CONFLICT(file_id, entry_id) DO UPDATE SET line = min(memberships.line, excluded.line)`),
+    variantHas: db.prepare('SELECT 1 AS hit FROM entry_variants WHERE entry_id = ? AND blob_id = ?'),
+    variantIns: db.prepare(`INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms, cause)
+      VALUES (?, ?, ?, ?, ?) ON CONFLICT(entry_id, blob_id) DO NOTHING`),
+    firstFile: db.prepare('SELECT min(file_id) AS f FROM memberships WHERE entry_id = ?'),
+    boundaryIns: db.prepare(`INSERT INTO boundaries (entry_id, transcript_pk, ord, trigger, head_uuid,
+        anchor_uuid, tail_uuid, kept_blob_id, pre_tokens, post_tokens, duration_ms)
+      VALUES (?, ?, (SELECT coalesce(max(ord), 0) + 1 FROM boundaries WHERE transcript_pk = ?), ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(entry_id) DO NOTHING`),
+    epochFacts: db.prepare(`UPDATE epochs SET started_ms = ?, cwd = ?, git_branch = ?, cwd_real = ?
+      WHERE cc_session_uuid = ? AND started_ms IS NULL AND cwd IS NULL AND git_branch IS NULL`),
+    cursor: db.prepare(`UPDATE ingest_files SET offset = ?, tail_sha256 = ?, size = ?, mtime_ns = ?,
+        last_error_code = coalesce(?, last_error_code), last_error_offset = coalesce(?, last_error_offset)
+      WHERE file_id = ?`),
+    crash: db.prepare('UPDATE ingest_files SET last_error_code = ?, last_error_offset = ? WHERE file_id = ?'),
+    pairSel: db.prepare(`SELECT e.parent_uuid AS parent_uuid, b.z AS z FROM entries e
+      JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?`),
+    pathRow: db.prepare('SELECT file_id FROM file_paths WHERE path = ?'),
+    rowPaths: db.prepare('SELECT path FROM file_paths WHERE file_id = ?'),
+    markGone: db.prepare("UPDATE ingest_files SET status = 'gone' WHERE file_id = ? AND source_key = '' AND status = 'live'"),
+  };
+  INGEST_STMTS.set(db, s);
+  return s;
+}
+
+/** A stored body, parsed; null for a tombstone or a body that is not JSON. */
+function storedBody(s, blobId) {
+  const r = s.blobZ.get(blobId);
+  if (r === undefined || r.z === null) return null;
+  try { return JSON.parse(unbrotli(r.z).toString('utf8')); } catch { return null; }
+}
+
+/** The tool_use a tool_result answers, when it was written in an earlier tick: walked up the
+ *  stored `parentUuid` chain, PAIR_WALK_HOPS at most. null when not found. provenanceOf then
+ *  classifies the result as plain `tool`, the searchable side. */
+function pairedFromStore(db, toolUseId, parentUuid) {
+  const s = stmts(db);
+  let uuid = parentUuid;
+  for (let hop = 0; hop < PAIR_WALK_HOPS && typeof uuid === 'string'; hop += 1) {
+    const r = s.pairSel.get(uuid);
+    if (r === undefined) return null;
+    if (r.z !== null) {
+      try {
+        const u = toolUsesOf(JSON.parse(unbrotli(r.z).toString('utf8'))).find((x) => x.id === toolUseId);
+        if (u !== undefined) return u;
+      } catch { /* a raw-only body pairs nothing */ }
+    }
+    uuid = r.parent_uuid;
+  }
+  return null;
+}
+
+/** A row's 0-based position among the rows of the same `requestId` read in this pass of this file: one API
+ *  response written as several rows (Task 8's `apiBlockIndex`, entries.api_block_index). null for a row with
+ *  no requestId. Counted in `st`, so a response split across two ticks restarts at 0 in the second read: the
+ *  column orders blocks within a read, and the uuid stays the row's identity. */
+function nextBlockIndex(st, row) {
+  const rid = typeof row.requestId === 'string' ? row.requestId : null;
+  if (rid === null) return null;
+  const i = st.blockIdx.get(rid) ?? 0;
+  st.blockIdx.set(rid, i + 1);
+  return i;
+}
+
+/** A line kept raw-only: keyed by its transcript and bytes, its blob the bytes themselves. */
+function rawRowOf(st, at, bytes, code) {
+  const sha = blobShaOfBytes(bytes);
+  return { kind: 'raw', at, key: rawRowKey(st.ccUuid, sha.toString('hex')), sha, bytes, z: null, rawLen: bytes.length, code };
+}
+
+/** Lines → prepared rows, OUTSIDE any transaction (§9.2 step 4). `st` is the per-file state
+ *  ingestFile keeps across this file's chunks: the connection, the transcript's uuid, the
+ *  tool_use pairs seen so far, and whether the file's first stored row is still to come.
+ *  JSON.parse failures and non-objects become raw-only rows here. ANY OTHER THROW is the
+ *  parser's own bug and propagates: ingestFile counts it parser_crash and holds the cursor (O2).
+ *  Only ERROR_CODES words are recorded, never an error's message (DM34). */
+export function prepareLines(lines, ctx, st) {
+  const rows = [];
+  const counts = new Map();
+  const add = (name) => { counts.set(name, (counts.get(name) ?? 0) + 1); };
+  let rawError = null;
+  let first = null;
+  for (const { at, bytes } of lines) {
+    if (bytes.length === 0) continue;   // an empty line is no row and takes no position
+    const text = bytes.toString('utf8');
+    let row;
+    try { row = JSON.parse(text); } catch {
+      rows.push(rawRowOf(st, at, bytes, 'json-parse')); add('raw_only'); rawError = { code: 'json-parse', at };
+      continue;
+    }
+    if (row === null || typeof row !== 'object' || Array.isArray(row)) {
+      rows.push(rawRowOf(st, at, bytes, 'not-object')); add('raw_only'); rawError = { code: 'not-object', at };
+      continue;
+    }
+    if (!isStoredRow(row)) { add(`uuidless:${uuidlessTypeOf(row)}`); continue; }   // history-uuidless-rows-not-stored, D-4199
+    const body = blobBodyOf(row);
+    for (const u of toolUsesOf(body)) st.toolUses.set(u.id, u);
+    const answers = toolResultIdsOf(body);
+    const paired = answers.length === 0 ? null
+      : (st.toolUses.get(answers[0]) ?? pairedFromStore(st.db, answers[0], row.parentUuid));
+    const isBoundary = text.includes('"compact_boundary"') && ctx.isBoundaryLine(text);
+    const entry = entryOf(row, { apiBlockIndex: nextBlockIndex(st, row) });
+    if (!ROW_TYPES.includes(entry.type)) add('unknown_type');
+    // sha256 over the canonical JSON: blobShaOfBody's rule, computed once on the string this
+    // chunk compresses (O21 asserts every stored sha equals sha256 of the blob's bytes).
+    const json = canonicalJson(body);
+    const boundary = isBoundary ? boundaryOf(row) : null;
+    let kept = null;
+    if (boundary !== null && boundary.allUuids !== null) {
+      const keptJson = canonicalJson(boundary.allUuids);
+      kept = { sha: sha256Bytes(keptJson), json: keptJson };
+    }
+    rows.push({ kind: 'row', at, entry, provenance: provenanceOf(row, { pairedToolUse: paired }), sha: sha256Bytes(json), json, boundary, kept });
+    if (st.firstPending) {
+      st.firstPending = false;
+      const f = launchFactsOf(row);
+      let cwdReal = null;
+      if (f.cwd !== null) { try { cwdReal = realpathSync(f.cwd); } catch { add('cwd_unresolved'); } }
+      first = { startedMs: entry.tsMs, cwd: f.cwd, gitBranch: f.gitBranch, cwdReal };
+    }
+  }
+  return { rows, counts, rawError, first };
+}
+
+/** Every blob the chunk needs and the store lacks, compressed now, outside the transaction. A
+ *  body already stored, in the store or earlier in this chunk, is never compressed again (DM3). */
+function compressMissing(db, rows) {
+  const s = stmts(db);
+  const blobs = new Map();
+  const need = (sha, make) => {
+    const hex = sha.toString('hex');
+    if (blobs.has(hex)) return;
+    if (s.blobId.get(sha) !== undefined) { blobs.set(hex, { sha, z: null, rawLen: 0 }); return; }
+    blobs.set(hex, { sha, ...make() });
+  };
+  const fromJson = (json) => () => { const b = Buffer.from(json, 'utf8'); return { z: brotli(b), rawLen: b.length }; };
+  for (const r of rows) {
+    if (r.kind === 'raw') {
+      need(r.sha, () => (r.z !== null ? { z: r.z, rawLen: r.rawLen } : { z: brotli(r.bytes), rawLen: r.bytes.length }));
+      continue;
+    }
+    need(r.sha, fromJson(r.json));
+    if (r.kept !== null) need(r.kept.sha, fromJson(r.kept.json));
+  }
+  return blobs;
+}
+
+/** One chunk, ONE transaction (§9.2 step 5). It writes: blobs, insert-or-ignore by sha; entries,
+ *  by the newest-rank upsert (history-structure-newest-rank, D-4238, DM4); memberships; variants with
+ *  their cause (history-variant-cause, D-4200, DM2/DM2b); boundaries; the epoch's first-row facts; the
+ *  counters; and THE CURSOR with its tail sha, so a throw anywhere leaves no row of the chunk and
+ *  the cursor where it was (O1). `entries.blob_id` keeps the first body seen. Each further
+ *  distinct body is a variant row, and the first body gets one too once a second appears.
+ *  Returns how many entries were new, and the oldest timestamp among them. */
+export function writeChunk(db, chunk) {
+  const s = stmts(db);
+  return withTx(db, 'NORMAL', () => {
+    const blobIds = new Map();
+    for (const [hex, b] of chunk.blobs) {
+      if (b.z !== null) s.blobIns.run(b.sha, CODEC, b.z, b.rawLen);   // D-4211: codec br5, Brotli quality 5
+      blobIds.set(hex, s.blobId.get(b.sha).blob_id);
+    }
+    const counts = new Map(chunk.counts);
+    const add = (name) => { counts.set(name, (counts.get(name) ?? 0) + 1); };
+    let newEntries = 0;
+    let minNewTsMs = null;
+    for (const r of chunk.rows) {
+      const blobId = blobIds.get(r.sha.toString('hex'));
+      const e = r.kind === 'row' ? r.entry : null;
+      const uuid = e !== null ? e.uuid : r.key;
+      const before = s.entrySel.get(uuid);
+      const info = s.entryUpsert.run(uuid, chunk.transcriptPk,
+        e !== null ? e.type : RAW_ROW.type, e?.subtype ?? null, e?.role ?? null, e?.model ?? null,   // D-4198: the producing model, verbatim
+        e?.parentUuid ?? null, e?.tsMs ?? null, e?.requestId ?? null, e?.apiBlockIndex ?? null,
+        e?.msgId ?? null, e?.sourceToolUseId ?? null, e?.toolName ?? null, e?.isCompactSummary ?? 0,
+        e !== null ? r.provenance : RAW_ROW.provenance, PROV_VERSION,
+        e !== null ? PARSE_STATE.ok : RAW_ROW.parseState,
+        chunk.rankNs, chunk.fileId, blobId);
+      const entryId = before !== undefined ? before.entry_id : Number(info.lastInsertRowid);
+      if (before === undefined) {
+        newEntries += 1;
+        if (e !== null && e.tsMs !== null) minNewTsMs = minNewTsMs === null ? e.tsMs : Math.min(minNewTsMs, e.tsMs);
+      } else if (e !== null && before.blob_id !== blobId && s.variantHas.get(entryId, blobId) === undefined) {
+        const cause = variantCauseOf(storedBody(s, before.blob_id), JSON.parse(r.json));
+        const firstFile = s.firstFile.get(entryId).f ?? chunk.fileId;
+        s.variantIns.run(entryId, before.blob_id, firstFile, chunk.nowMs, cause);
+        s.variantIns.run(entryId, blobId, chunk.fileId, chunk.nowMs, cause);
+        add(`variants_${cause.replace(/^ccd-/, '')}`);
+      }
+      s.membership.run(chunk.fileId, entryId, r.at);   // r.at is a byte offset (D-4237)
+      if (r.kind === 'row' && r.boundary !== null) {
+        const b = r.boundary;
+        const keptId = r.kept === null ? null : blobIds.get(r.kept.sha.toString('hex'));
+        const bi = s.boundaryIns.run(entryId, chunk.transcriptPk, chunk.transcriptPk, b.trigger, b.headUuid,
+          b.anchorUuid, b.tailUuid, keptId, b.preTokens, b.postTokens, b.durationMs);
+        if (bi.changes === 1 && b.missing.length > 0) add('boundary_field_missing');
+      }
+    }
+    if (chunk.first !== null) {
+      const f = chunk.first;
+      s.epochFacts.run(f.startedMs, f.cwd, f.gitBranch, f.cwdReal, chunk.ccUuid);
+    }
+    s.cursor.run(chunk.cursor.offset, chunk.cursor.tailSha, chunk.size, chunk.mtimeNs,
+      chunk.rawError?.code ?? null, chunk.rawError?.at ?? null, chunk.fileId);
+    for (const [name, n] of counts) bump(db, name, n);
+    return { newEntries, minNewTsMs };
+  });
+}
+
+/** The parser's own throw: counted, the closed code recorded, the cursor held (O2, §9.10). */
+function recordParserCrash(db, fileId, at) {
+  withTx(db, 'NORMAL', () => {
+    stmts(db).crash.run('parser-crash', at, fileId);
+    bump(db, 'parser_crash');
+  });
+}
+
+/** The free-space floor stopped a run: counted once, where it stopped (§9.3 "Below the threshold"). */
+function countFloorPause(db) {
+  withTx(db, 'NORMAL', () => { bump(db, 'capture_paused_low_disk'); });
+}
+
+/** One file from its cursor, chunk by chunk, until end-of-file, the budget, history-off, the
+ *  free-space floor or a line still being written stops it (§9.2 steps 4-5, 7; §9.3). A malformed
+ *  or over-long line never wedges the file (O2b); the parser's own bug holds the cursor (O2). A
+ *  stop at a tail with no '\n' yet reports `tornAt` (Task 20 reads it); a stop at the floor
+ *  reports the probe's word as `floor`. */
+export async function ingestFile(db, ctx, file, budget) {
+  const st = { db, ccUuid: file.ccUuid, toolUses: new Map(), blockIdx: new Map(), firstPending: file.offset === 0 };
+  let offset = file.offset;
+  let bytes = 0;
+  let newEntries = 0;
+  let minNewTsMs = null;
+  const done = (atEof, extra = {}) => ({ bytes, atEof, offset, newEntries, minNewTsMs, ...extra });
+  while (offset < file.size) {
+    if (!budgetLeft(budget) || ctx.historyOff()) return done(false);
+    // §9.3 (BK17): the floor is probed before EACH chunk, not only when the pass began. Below it the
+    // cursor holds where the last chunk left it, as at the pass's start; an unsettled probe stops too,
+    // uncounted (the next pass's own probe answers store-unreachable).
+    const floor = await ctx.floorProbe();
+    if (floor !== 'ok') {
+      if (floor === 'low-disk') countFloorPause(db);
+      return done(false, { floor });
+    }
+    const r = readLines(file.fd, offset, file.size, budget.chunkBytes);
+    let rows; let counts = new Map(); let rawError = null; let first = null; let next; let tailSha;
+    if (r.overLong !== null) {
+      const end = findLineEnd(file.fd, offset, file.size);
+      if (end === null) return done(false, { tornAt: offset });   // the over-long line is still being written
+      const c = await compressFdRange(file.fd, offset, end);
+      if (c === null) return done(false);              // the file shrank under the read: next tick
+      rows = [{ kind: 'raw', at: offset, key: rawRowKey(file.ccUuid, c.sha.toString('hex')), sha: c.sha, z: c.z, rawLen: c.rawLen, code: 'line-too-long' }];
+      counts.set('raw_only', 1);
+      rawError = { code: 'line-too-long', at: offset };
+      next = end + 1;
+      tailSha = c.sha;
+    } else if (r.lines.length === 0) {
+      return done(false, { tornAt: offset });           // an unterminated tail: wait for its '\n'
+    } else {
+      let prep;
+      try { prep = ctx.prepareLines(r.lines, ctx, st); } catch {
+        recordParserCrash(db, file.fileId, offset);
+        return done(false, { crashed: true });
+      }
+      ({ rows, counts, rawError, first } = prep);
+      next = r.next;
+      tailSha = sha256Bytes(r.lines[r.lines.length - 1].bytes);
+    }
+    const w = writeChunk(db, {
+      fileId: file.fileId, transcriptPk: file.transcriptPk, ccUuid: file.ccUuid, rankNs: file.mtimeNs,
+      nowMs: ctx.nowMs, rows, blobs: compressMissing(db, rows), counts, rawError, first,
+      cursor: { offset: next, tailSha }, size: file.size, mtimeNs: file.mtimeNs,
+    });
+    bytes += next - offset;
+    budget.bytes += next - offset;
+    offset = next;
+    newEntries += w.newEntries;
+    if (w.minNewTsMs !== null) minNewTsMs = minNewTsMs === null ? w.minNewTsMs : Math.min(minNewTsMs, w.minNewTsMs);
+  }
+  return done(true);
+}
+
+/** The counter each admission refusal folds into (§6.5 `non_regular`; §9.10 a missing file). */
+const ADMISSION_COUNTERS = Object.freeze({ missing: 'file_missing', non_regular: 'non_regular', 'outside-roots': 'non_regular', unreadable: 'file_unreadable' });
+function countAdmission(db, why) {
+  withTx(db, 'NORMAL', () => { bump(db, ADMISSION_COUNTERS[why] ?? 'file_unreadable'); });
+}
+
+/** A path admission answered `missing` for (§9.10 "File missing": skipped, counted, cursor untouched).
+ *  Once NONE of the paths of the row it was bound to exists, that row is `gone`: it is no longer
+ *  counted behind and no longer re-read every tick only to be counted missing again (Task 20). A
+ *  row with another path still on disk stays live. Examination makes a gone row live again (Task
+ *  20's recordExamined), so a file that reappears resumes at its cursor. */
+function markGoneIfPathless(db, path) {
+  const s = stmts(db);
+  const b = s.pathRow.get(path);
+  if (b === undefined) return;
+  if (s.rowPaths.all(b.file_id).some((r) => existsSync(r.path))) return;
+  withTx(db, 'NORMAL', () => { s.markGone.run(b.file_id); });
+}
+
+/** One discovered transcript path for this tick: admission (O_NOFOLLOW, a regular file under a
+ *  rostered projects/ root), identity (bindFile: resume, rescan, retire or skip), then ingestFile
+ *  from the cursor. null when the file was not admitted or was skipped. A busy database throws,
+ *  and ingestTick ends the tick on it. `minNewTsMs` is reported only for a file bound as
+ *  `resume`: a first read or a rescan captures rows that may have waited for days before this
+ *  store knew the file, which is discovery, not capture lag (Task 20's ticks.lag_ms). */
+export async function ingestPath(db, ctx, f, budget) {
+  const a = admitFile(f.path, f.home, ctx.homes, ctx.home);
+  if (!a.ok) {
+    countAdmission(db, a.why);
+    if (a.why === 'missing') markGoneIfPathless(db, f.path);
+    return null;
+  }
+  try {
+    const st = fstatSync(a.fd, { bigint: true });
+    const size = Number(st.size);
+    // Task 18's one head-sha function and its bindFile signature (the plan's integration contract 2): the
+    // bind reads the cursor's tail proof through `fd` and keys a retire on the tick's `nowMs`.
+    const bound = bindFile(db, { path: f.path, uuid: f.uuid, fd: a.fd, st: a.st, headSha: headShaOf(a.fd, size) }, ctx.nowMs);
+    if (bound.action === 'skip') return null;
+    const r = await ingestFile(db, ctx, {
+      fileId: bound.fileId, transcriptPk: bound.transcriptPk, ccUuid: f.uuid, fd: a.fd,
+      size, mtimeNs: st.mtimeNs, offset: bound.action === 'resume' ? bound.offset : 0,
+    }, budget);
+    return { fileId: bound.fileId, size, mtimeNs: st.mtimeNs, ...r, minNewTsMs: bound.action === 'resume' ? r.minNewTsMs : null };
+  } finally {
+    closeSync(a.fd);
+  }
+}
+
+/** The ingest context's default floor probe: the floor always holds. An in-process caller therefore
+ *  never reads the free space of the box running it; `tick` passes the real probe. */
+const FLOOR_ALWAYS_OK = async () => 'ok';
+
+/** The free-space probe `tick` hands the ingest (§9.3, BK17): `statfs` on `dir` (db/, a link
+ *  followed) under STATFS_DEADLINE_MS. `ok` at or above floorThreshold; `low-disk` below it or when
+ *  the probe threw, as planRun reads a pass's own probe (§9.10's failure table: "below the floor, or
+ *  `statfs` throws" is one row); `unsettled` when it never answered. */
+export function floorProbeFor(dir, statfs) {
+  return async () => {
+    const f = await statfsWithDeadline(dir, STATFS_DEADLINE_MS, statfs);
+    if (f.state === 'unsettled') return 'unsettled';
+    return f.state === 'ok' && f.bytes >= floorThreshold(f.fsSize) ? 'ok' : 'low-disk';
+  };
+}
+
+/** What every ingest step reads: this pass's home and rostered homes, the tick's start, the
+ *  binding's ids, and the injected parts a test may replace in-process: the boundary test from
+ *  compact-card.mjs, the history-off probe, the parser, the free-space floor probe. */
+export function makeIngestCtx(home, homes, nowMs, ids, floorProbe = FLOOR_ALWAYS_OK) {
+  const off = historyPaths(home).off;
+  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe };
+}
+
+/** One tick's ingest (§9.2 steps 2-5): every transcript of every known uuid, in discovery order,
+ *  under the run's one budget. history-off ends it between files as it does between chunks; the
+ *  free-space floor ends the run's ingest (`paused`). */
+export async function ingestTick(db, ctx, budget) {
+  let bytes = 0;
+  let newEntries = 0;
+  let minNewTsMs = null;
+  for (const f of discoverTranscripts(ctx.homes, knownUuids(db, ctx.home))) {
+    if (!budgetLeft(budget) || ctx.historyOff()) break;
+    const r = await ingestPath(db, ctx, f, budget);
+    if (r === null) continue;
+    bytes += r.bytes;
+    newEntries += r.newEntries;
+    if (r.minNewTsMs !== null) minNewTsMs = minNewTsMs === null ? r.minNewTsMs : Math.min(minNewTsMs, r.minNewTsMs);
+    if (r.floor !== undefined) return { busy: false, bytes, newEntries, minNewTsMs, paused: true };
+  }
+  return { busy: false, bytes, newEntries, minNewTsMs, paused: false };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
