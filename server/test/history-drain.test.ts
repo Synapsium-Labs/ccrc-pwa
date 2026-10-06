@@ -145,6 +145,20 @@ describe('the journal file: head, month, writer token, modes, torn tail (spec §
     expect(fs.readdirSync(journalDir(box.home, ids.storeId)), 'the killed pass\'s temp was not removed').toEqual([path.basename(f)]);
   });
 
+  it('a kill between a month file\'s link and its temp\'s unlink leaves a temp that the next append removes; the month file is intact (D-4308)', () => {
+    const r = drive(box, appendCall(box, ids, [tickRec(T)], T),
+      { env: { NODE_OPTIONS: `--import ${pathToFileURL(PRELOADS.faults).href}`, HISTORY_TEST_KILL: 'linkSync:.tmp:1:after' } });
+    expect(r.signal, r.stderr).toBe('SIGKILL');
+    const f = SW.journalFilePath(box.home, ids.storeId, ids.writer, '2026-10');
+    expect(fs.existsSync(f), 'the link did not land').toBe(true);
+    expect(fs.readdirSync(journalDir(box.home, ids.storeId)).filter((n) => n.endsWith('.tmp')), 'the kill left no temp link').toHaveLength(1);
+    SW.appendJournal(box.home, ids, [tickRec(T + 1)], T + 1);
+    expect(fs.readdirSync(journalDir(box.home, ids.storeId)), 'the killed pass\'s temp link survived an append to the existing month file').toEqual([path.basename(f)]);
+    const lines = fs.readFileSync(f, 'utf8').split('\n');
+    expect(JSON.parse(lines[0]!)).toMatchObject({ k: 'head', store_id: ids.storeId, month: '2026-10' });
+    expect(lines.slice(1)).toEqual([tickRec(T + 1), '']);
+  });
+
   it('an append cut short by ENOSPC throws JournalError; the next append starts on a fresh line, and both survive', () => {
     const r1 = tickRec(T); const r2 = tickRec(T + 1); const r3 = tickRec(T + 2);
     SW.appendJournal(box.home, ids, [r1], T);

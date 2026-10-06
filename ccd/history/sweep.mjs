@@ -169,6 +169,16 @@ export function fsyncDir(dir) {
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
+/** Remove this month's and this writer's month-file temps (`.<month>.<writer>.jsonl.<pid>.tmp`), never another
+ *  writer's or month's. A kill between createMonthFile's link() and its unlink() leaves one that is a hard link to
+ *  the LIVE month file: it shares the inode, grows with every append and outlives any later removal of the month
+ *  file. */
+function removeStaleMonthTemps(dir, ids, month) {
+  for (const n of readdirSync(dir)) {
+    if (n.startsWith(`.${month}.${ids.writer}.jsonl.`) && n.endsWith('.tmp')) unlinkSync(`${dir}/${n}`);
+  }
+}
+
 /** A month file is born holding its `head` (rev 3.2 review, DI14):
  *  - the head goes into a fsynced temp;
  *  - the temp is link()ed to the month's name;
@@ -177,9 +187,7 @@ export function fsyncDir(dir) {
  *  pass is removed first. Its name starts with a dot and ends in `.tmp`, so nothing that lists `*.jsonl` ever reads
  *  it. */
 function createMonthFile(dir, file, ids, month, nowMs) {
-  for (const n of readdirSync(dir)) {
-    if (n.startsWith(`.${month}.${ids.writer}.jsonl.`) && n.endsWith('.tmp')) unlinkSync(`${dir}/${n}`);
-  }
+  removeStaleMonthTemps(dir, ids, month);
   const tmp = `${dir}/.${month}.${ids.writer}.jsonl.${process.pid}.tmp`;
   const fd = openSync(tmp, 'wx', 0o600);
   try {
@@ -208,6 +216,11 @@ export function appendJournal(home, ids, lines, nowMs) {
   const dir = `${historyPaths(home).journalDir}/${ids.storeId}`;
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // D-4308 (history-journal-temp-swept-every-append): swept on EVERY append, before the existence check, not only
+    // when the month file is first created. A kill between createMonthFile's link and its unlink leaves the month
+    // file in place with a temp link to it, which the creation-only sweep never reached. One readdir per call;
+    // appendJournal is the batch entry point (callers hand it a whole block).
+    removeStaleMonthTemps(dir, ids, month);
     if (!existsSync(file)) createMonthFile(dir, file, ids, month, nowMs);
     const fd = openSync(file, 'a+', 0o600);
     try {
