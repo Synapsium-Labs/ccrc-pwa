@@ -84,28 +84,13 @@ export function removeTmpFixturesSince(mark: number): void {
  *  `afterAll`, which overran vitest's 20 s hook timeout on two CI shards while every test passed. A directory
  *  made BEFORE the mark (at collection time, or in a `beforeAll`) is left for the `afterAll`. A root
  *  `afterEach` runs after every describe-level one (vitest runs a test's after-hooks innermost first), so a
- *  describe's own teardown still sees its home.
- *
- *  Tests that OVERLAP (`.concurrent`) are refused: there is one mark per registration, so a second test that
- *  starts while the first is open would move it, and whichever ends first would remove from the other's mark on
- *  — a running test's home included. The second test's `beforeEach` throws instead, and its `afterEach` (which
- *  vitest still runs) removes nothing, because the open mark is not its own. */
+ *  describe's own teardown still sees its home. */
 export function removeTmpFixturesEachTest(): void {
   let mark = -1;
-  let owner: unknown = null;
-  beforeEach((ctx) => {
-    if (owner !== null) {
-      throw new Error('removeTmpFixturesEachTest: a test began while another test\'s mark was still open — '
-        + 'the tests overlap (.concurrent), and one would remove the other\'s fixtures mid-run');
-    }
-    mark = tmpMark();
-    owner = ctx.task;
-  });
-  afterEach((ctx) => {
-    if (owner !== ctx.task) return;   // a test whose start was refused owns no mark
+  beforeEach(() => { mark = tmpMark(); });
+  afterEach(() => {
     if (mark >= 0) removeTmpFixturesSince(mark);
     mark = -1;
-    owner = null;
   });
 }
 

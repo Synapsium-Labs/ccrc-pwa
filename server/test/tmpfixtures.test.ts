@@ -6,7 +6,6 @@
 import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 import {
   mkTmp, removeTmpFixtures, removeTmpFixturesSince, removeTmpFixturesEachTest, tmpMark,
 } from './tmpHelpers.js';
@@ -132,22 +131,16 @@ describe('removeTmpFixturesEachTest (R20a)', () => {
     expect(src.filter((l) => l === 'removeTmpFixturesEachTest();'),
       `${file} must call removeTmpFixturesEachTest() once, unindented`).toHaveLength(1);
   });
-});
 
-// LAST: tests that overlap are refused. One mark per registration means a second test starting while the first is
-// open would move it, and the first to end would remove from the other's mark on — a running test's home with it.
-// B's beforeEach must throw (hence `.fails`), and A, which owns the mark, keeps its home for its whole run.
-describe.concurrent('removeTmpFixturesEachTest — overlapping tests are refused', () => {
-  removeTmpFixturesEachTest();
-
-  it('A: its home survives B starting, and B ending, while A runs', async () => {
-    const home = mkTmp('ccrc-tmpfix-overlap-a-');
-    await sleep(300);
-    expect(existsSync(home), 'A\'s home was removed while A was running').toBe(true);
-  });
-
-  it.fails('B: starts while A is still open — its beforeEach refuses', async () => {
-    mkTmp('ccrc-tmpfix-overlap-b-');
-    await sleep(50);
+  // ONE MARK PER REGISTRATION, so an opted-in file must never run its tests concurrently: a second test starting
+  // while the first is open would move the mark, and whichever ended first would remove from the other's mark on —
+  // a running test's home included. Refused here, by reading the file, rather than at run time: a runtime refusal
+  // keyed on a still-open mark would also fire after any describe-level afterEach threw (vitest then skips the root
+  // afterEach that closes the mark) and turn one red into a red for every later test in the file.
+  it.each(['ccrc-update.test.ts', 'ccrc-install-graphify.test.ts'])('%s runs no test concurrently', (file) => {
+    const code = readFileSync(path.join(__dirname, file), 'utf8').split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+    expect(code.filter((l) => /\.concurrent\b|concurrent:\s*true/.test(l)),
+      `${file} opts in to removeTmpFixturesEachTest(), whose one mark cannot serve overlapping tests`).toEqual([]);
   });
 });
