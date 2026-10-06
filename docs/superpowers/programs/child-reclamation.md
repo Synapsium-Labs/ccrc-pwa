@@ -46,6 +46,40 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 18:40 — R47's pre-landing line for the operator (`r40-pre-landing-class-list`), measured read-only on
+  the fleet box before #290 lands.**
+  - **What R40 moves.** Of the 29 marked children, `ccrc-pwa-brisk-meadow` is the only one any run names
+    `claimedBy`. Its eight runs (10, 12, 14, 16, 18, 19, 28 and 30) are all `done`, the last closed 2026-09-04 14:53.
+    Its current birth is 2026-09-26 09:09 (run 171's dispatch). So it **would move**, and it is the only one. No other
+    child needs telling. Not listed: the API cannot read displacement rows.
+  - **The widening.** Once the server box converges, R39 and R40 widen what reaches the destructive path, with no
+    capability gate.
+  - **F6's residual, as measured.** None of git's 15 local environment variables (`git rev-parse --local-env-vars`)
+    appears by name in the user manager's environment, in any `ccrc*` unit, or in the running agent's environment.
+  - **The operator's stop.** `reclaim-pause`, on the Runs screen.
+  - **The PR body.** It names `ccrc-pwa-brisk-meadow` and `reclaim-pause` and asks for no hand rollout.
+- **2026-10-06 18:40 — review 303 closed (`done`, released); wave 5 is accepted at `9aa20cb2b` with no fix round.**
+  - **The report.** 3734, archived as `reviews/review-303-9aa20cb2.md`. The panel ran 28 agents, and none died. It
+    found 4 confirmed findings, all record-only, with no shipped-behaviour defect and no broken shipped prose.
+  - **SAFETY.**
+    - F4's cross-run window is closed: the reviewer's own probe is red on `e79b1da7` and under both mutations, and
+      green at the tip.
+    - F1's gate and F2's run key change no decision (R41 holds).
+    - F11 makes no child eligible.
+  - **The rulings** (`reviews/review-303-rulings.md`):
+    - G1 (the docstring's "PLACES") and G4 (spec §5.7's "Each is kept") go to wave 6's Task 13, as additions in its
+      brief.
+    - G2: the record's true count is 18. The widening mutation reds 18, not 24, because the six terminal-refusal cases
+      answer before `marked`. The plan is not edited.
+    - G3 is ruled as contract §13 R62.
+    - X1 (a queued licensed request reaching the same run's re-minted workspace; SAFETY class) and X3 (the
+      hold-retired memory keyed by id) are pre-existing since wave 4. They go to wave 7's pre-flight as R63.
+  - **CI on #290.** Server shard 1/5 failed on `ccrc-sweep-window` W21, a centralised-update test that came in with
+    the merge of main. The failed jobs are re-running. #290 lands only on a green `test (server)`.
+  - **Overlap.** Run 302 (ccrc-history wave 2) claims `ccd/ccrc` and `README.md`, both of which wave 6 edits. The R56
+    rule is proposed to `ccrc-pwa-quiet-ridge` (3736, corrected in 3737).
+  - **quiet-river.** It has been `not-idle` since 08:35, with 3657, 3666 and five other mails still queued. Its
+    wave 3b (run 290) is still `planned`, so R56 alone governs that overlap.
 - **2026-10-06 17:16 — run 260's fix round 1 is verified; scoped review run 303 is opened (wave-done 3728).**
   - **The claim.** `ws/quiet-meadow` at `9aa20cb2b` is PR #290's head, and the PR is open. It contains the merge
     `19441194b` of `77c11245a`, and `git merge-tree` against today's main (`4db20aa17`) is clean.

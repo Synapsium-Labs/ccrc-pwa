@@ -1508,3 +1508,21 @@ Code citations are to `77c11245`. They are hints, so locate code by content.
       That makes the answer doubt (R60).
     - It never compares the birth with the minting run's dispatch. That comparison would fold every truly
       postdating run into doubt and empty `minting-run-postdates-child` of its meaning.
+- **R62 — three stated residuals of fix round 1 (review 303's G3).** "Left as ruled" in number 3939's definition is true
+  from this ruling on.
+  - A recycled slug's non-kept verdicts (held, doubt, eligible), and its old sweep entry's defer fields, carry no run. So
+    they can show on the new run's chip for at most one pass. This is display-only.
+  - Under a persistent mirror-read failure, the published attention list keeps its last items until a pass publishes
+    again. This is display-only.
+  - A same-run re-mint of the same slug is not told apart. That is number 3940's window, as its definition states it.
+- **R63 — two pre-existing recycled-slug paths go to wave 7's pre-flight (review 303's X1 and X3).** Neither came in
+  with wave 5, and each answers the same on wave 4's code.
+  - **X1, SAFETY class.** A licensed request already queued (`deferExpired`) can reach the SAME run's re-minted
+    workspace. The executor re-proves the request against the marker's run id alone, and presence is skipped under
+    `deferExpired`.
+    - The direction: the executor re-proves a licensed request against the generation it was judged under (birth
+      and marker run). A licence never crosses a generation.
+  - **X3.** The hold-retired memory is keyed by session id, so a slug recycled inside one pass gap queues `ws-release`
+    one pass early. `releaseRetiredChildHold` still re-proves its six facts.
+    - The direction: key it by generation.
+  - Wave 7's SAFETY lens covers both, beside R57's recycled-slug proof and R61's closure.
