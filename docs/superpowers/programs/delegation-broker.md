@@ -18,8 +18,8 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **in review (fix round 2)** — wave-done verified 2026-10-06 17:22 UTC at `3efb0ac37` (9 versions, 126 cells); review run 304 dispatched 2026-10-06 18:47 UTC (`ccrc-pwa-clear-meadow`) |
-| 2 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | wave 1's matrix and its real-lane cross-check | — | to plan once wave 1's measurement section is complete |
+| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
+| 2 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | wave 1's matrix and its real-lane cross-check | — | **run 306 open** (`planned`) since 2026-10-06 20:20 UTC; its plan comes first (Next-wave brief) |
 | 3 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 2 | — | to plan |
 | 4 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 3 | — | to plan |
 | 5 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 4 | — | to plan |
@@ -484,6 +484,39 @@ Pending: the coordinator runs it after wave 1 merges, per the plan's "After the 
     `answerDialog` for a dialog that never appears (Workflow is granted by `permissions.allow`), and the new
     failure arm would have marked every workflow capture unmeasured. The worker replaced the step with an
     equal sleep and pinned that with a data-derived row. Accepted, subject to review 304.
+- **2026-10-06 — review 304's verdict (`ccrc-pwa-clear-meadow`, at `3efb0ac37`):** 13 findings (2 important, 11
+  minor), all from 23 confirmed raw findings, with no lens unverified.
+  - All 18 of review 296's findings landed as ruled. The workflow sleep changes no measured cell.
+  - The 28 new fixtures re-sanitise byte-identically, and `matrix.json` re-derives byte-identically.
+  - Public content: 0 hits.
+  - Both important findings predate the round and are claim errors, not data errors: F1, the `..` claim against
+    `DOTDOT`; F2, Q5 compaction called measured.
+- **2026-10-06 — wave 1 accepted with residue; #284 merged as `22b4eabda`.**
+  - The review is clean of blockers, and every required CI leg is green; `full-suite` and `test-macos 2/2` are macOS
+    reds, which gate nothing by ruling.
+  - #284 landed second, after child-reclamation wave 5 (#290). On the overlap rule's step 2 I made one
+    substitution: clause 15 allows an absorb only on a measured conflict, and the merge-tree was clean. So I measured
+    that exact merged tree in a scratch snapshot with its own `npm ci` (`session-hook.test.ts` 335/335,
+    `typecheck-tests` 12/12) instead of having the worker merge `main`. Reported to calm-mesa (mail 3755).
+  - Wave 2's run (306) was opened before run 271 closed, so the programme never had zero open runs. This amends the
+    planning-shape entry above: a wave's run may open before its plan exists, but it is never dispatched until its
+    plan is written and approved.
+  - Review 304's residue, ruled for wave 2's plan:
+    - F1: narrow the claim. A `..` that is not at the string's start or after `/` is a known limit, pinned by a row.
+      Widening `DOTDOT` would red 18 historical strings in fixtures whose versions are no longer installed.
+    - F2: the compaction gap gets its own deviation number, and the plan header and "Versions covered" say Q5
+      compaction is unmeasured.
+    - F3: date each mutation count by the commit it was taken at, and drop "every count matches".
+    - F4: a known limit plus a pinning row.
+    - F5: an empty `--scan` argument is refused with the usage exit 2, plus a row.
+    - F6: word the `--scan` index promise as the code behaves.
+    - F7: `rig.sh run` refuses a missing binary with exit 2, plus a row.
+    - F8: an unreadable meta gets its own marker, and the header's self-contradiction goes.
+    - F9: `--home` is resolved like `--repo`, plus a row.
+    - F10: distinct markers for an unreadable worktree directory and `CLAUDE_BASE`.
+    - F11: an amendment slug for the `workflowPhase` contradiction.
+    - F12: one re-capture script, because every wave now begins with a re-capture.
+    - F13: the wording fix.
 - **2026-10-05 — the parent incarnation field is already in the tree** (spec §5.1, §8.1 item 10): `$REG/<id>.generation`
   (D-2605) is never rewritten once present. The hook also sees it as `CCRC_SESSION_GENERATION`, but ccd does not set
   that on every spawn path, so later waves read the file. Wave 1 records this from source. **Corrected after review
@@ -520,9 +553,24 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
 
 ## Next-wave brief
 
-**Wave 1 — measurement.** Plan: `docs/superpowers/plans/2026-10-05-delegation-broker-wave1-measurement.md`, read at
-the sha the brief names. A fresh child workspace from `main`. Deploy class: the hook and installer change reach the
-fleet through `ccrc update`; everything else is tests and fixtures. One PR. After the merge, the coordinator runs the
-plan's real-lane cross-check (two lanes, `-hookcap` sessions) and writes its reduced tables into the measurement
-matrix section above, with the corpus's. Dispatch preconditions: the plan is on `main`; one active-run slot; the
-daily dispatch cap has room.
+**Wave 2 — observe (report-only).** Run 306 is open and not dispatched. In order:
+
+1. **The real-lane cross-check** (wave 1's plan, "After the merge"). This is the coordinator's job, once the release
+   carrying #284 reaches the fleet box through `ccrc update`. Rolling the fleet out is the operator's act, never this
+   session's. Use two `-hookcap` lanes, the lowest and the highest Claude Code version then running. Write their
+   reduced tables into the measurement matrix section, vetting Workflow key names before they are committed (they
+   can be agent names).
+2. **Re-read the lane versions, and capture any version the corpus lacks** (carried constraint): 2.1.292 was on 4
+   of 15 lanes at 19:13 UTC on 2026-10-06. Fold that into wave 2's first task, using F12's one re-capture script.
+3. **Write wave 2's plan** from the measured fields only:
+   - The spool, ingestion and cursors, the one `delegation_*` migration, the census extension, correlation and
+     reconciliation (report-only), the coordinator-intent route, and coordinator clause 17.
+   - Its first tasks are review 304's residue, as ruled above.
+   - It carries the spool-line constraint: a listing of about 3.9 KB nearly fills the 4 KiB line.
+   - Check the plan's format before writing it. The operator's global instructions now prefer HTML plans, so
+     confirm whether `deviation-refs`, the ledger floor seed and the ledger sweep read a `.html` plan; if they read
+     Markdown only, ask the operator first.
+   - The plan goes to the operator for review before run 306 dispatches.
+
+Deploy class: fleet first, then server; skills. Dispatch preconditions: the plan is on `main`, a slot under the
+fleet's daily dispatch cap, and the cross-check's tables in the matrix section.
