@@ -4550,7 +4550,7 @@ list them all; the coordinator issues the three past the block):
   items 2 and 3 without it, so the reap is still on while baseline B is counted, and wave 4b ships it after that
   week. Rev 8 amends §5.6 item 1, §10's "first part" and §11 item 4 (Task 7). §9's pressure-kill metric goes with it
   ("Carried").
-- `timed-harness-shared-with-auto-compact` — spec §5.6 item 3 names the limit-banner harness; `ccd-auto-compact.test.ts`
+- **D-4090** `timed-harness-shared-with-auto-compact` — spec §5.6 item 3 names the limit-banner harness; `ccd-auto-compact.test.ts`
   carried the same `alarm shift; exec @ARGV` bound around `_transcript_last_turn_ts`'s FIFO guard, with the same leak
   under a mutation (the plan review's replay lens). The forking bound moves to `ccdWsHelpers.ts` as `BOUNDED` and both
   FIFO cases use it; the pin bounds its own run from outside, so a broken harness reds instead of hanging. Rows
