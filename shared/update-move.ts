@@ -6,9 +6,10 @@
 // to say WHO halts the fleet, and whether the console can move a node at all, before the operator taps. A
 // PWA-local copy would be a second spelling of the dispatcher's own rule that nothing forces to agree with it. So
 // the rule moved here, and `dispatch.ts` calls it: `isHalting` delegates to `isHaltingUpdate`; `moveRefusal`'s
-// `no-detach-cap`, `no-update-gate` and `agent-predates-update-op` clauses ask the three predicates below; and
-// `autoPermits` (the auto clause of `intendedMove` and the fleet hold) moved here whole. Every caller keeps its
-// path, because `dispatch.ts` re-exports DETACH_CAP and autoPermits.
+// `no-detach-cap`, `no-update-gate` and `agent-predates-update-op` clauses ask the three predicates below;
+// `autoPermits` (the auto clause of `intendedMove` and the fleet hold) moved here whole; and `currentOf`'s unread
+// rule asks `stampUnread` (D-4270). Every caller keeps its path, because `dispatch.ts` re-exports DETACH_CAP and
+// autoPermits.
 //
 // NOT HERE: `server/src/coord/store.ts`'s SQL (`haltingRowSql`) and JS (`rowHalts`) forms of the halt. They are
 // the store's own notion and are pinned equal to `isHalting` by `update-store-nodes.test.ts`.

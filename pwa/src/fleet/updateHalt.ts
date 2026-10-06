@@ -75,7 +75,8 @@ export function consoleCanMove(n: NodeWire): boolean {
 }
 
 /** AUTO moves this node by itself: the console can move it, its ccrc carries the health gate auto requires
- *  (`no-update-gate`), auto permits its resolved channel, and the resolver gave it a tag to move to. */
+ *  (`no-update-gate`), its stamp read a release tag or no version at all (`stamp-unread`, D-4270), auto permits its
+ *  resolved channel, and the resolver gave it a tag to move to. */
 export function autoWouldMove(n: NodeWire, auto: AutoMode): boolean {
   if (!consoleCanMove(n) || !carriesUpdateGate(n.caps)) return false;
   // moveRefusal's stamp-unread (D-4270): the resolver can give a node whose stamp did not read a tag, which the

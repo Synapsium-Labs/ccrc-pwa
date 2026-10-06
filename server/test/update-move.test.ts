@@ -1,5 +1,6 @@
 // shared/update-move.ts (centralised-update programme wave 14, R15; D-4266) — the dispatcher's halt rule, its three
-// capability clauses and autoPermits, moved to L0 so the PWA's halt banner and skew advice ask the SAME predicates.
+// capability clauses, autoPermits and moveRefusal's stamp-unread rule (D-4270), moved to L0 so the PWA's halt banner
+// and skew advice ask the SAME predicates.
 // These cases pin the L0 rules, that dispatch.ts answers through them rather than through a copy, and (the census at
 // the end) that each is declared once.
 import { readFileSync, readdirSync, statSync } from 'node:fs';

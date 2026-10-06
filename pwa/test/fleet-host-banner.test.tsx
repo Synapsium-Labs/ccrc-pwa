@@ -274,7 +274,8 @@ describe('FleetHostBanner', () => {
 describe('FleetHostBanner — the skew arm\'s remedy (R15(c))', () => {
   const skewed = health({ connected: true, downSince: null, roster: 'agreed', build: 'skewed' });
   const movable = (role: 'fleet' | 'server', current: BuildInfo): NodeWire =>
-    ({ ...inventoryNode(role, current), caps: ['detach', 'update-gate'], agentOps: role === 'fleet' ? ['update'] : null, desiredTag: 'v0.0.9' });
+    ({ ...inventoryNode(role, current), caps: ['detach', 'update-gate'], agentOps: role === 'fleet' ? ['update'] : null,
+      desiredTag: current.version === 'v0.0.9' ? null : 'v0.0.9' });
   const autoOn: UpdateIntentWire[] = [{ scope: '*', channel: 'stable', pinnedTag: null, auto: 'stable', notify: 'off', setAt: 1, setBy: 'pwa' }];
   const msg = (): string => document.querySelector('.fleet-host-banner-msg')?.textContent ?? '';
 
@@ -297,8 +298,8 @@ describe('FleetHostBanner — the skew arm\'s remedy (R15(c))', () => {
   });
 
   it('a halt with auto on but a box auto would not move (no update-gate): the halt, then the terminal', () => {
-    const fleet = { ...movable('fleet', FLEET_V7), update: { state: 'failed' as const, target: 'v0.0.9', startedAt: 1, detail: 'x' } };
-    render(<FleetHostBanner health={skewed} nodes={[fleet, { ...movable('server', SERVER_V9), caps: ['detach'] }]} intent={autoOn} />);
+    const fleet = { ...movable('fleet', FLEET_V7), caps: ['detach'], update: { state: 'failed' as const, target: 'v0.0.9', startedAt: 1, detail: 'x' } };
+    render(<FleetHostBanner health={skewed} nodes={[fleet, movable('server', SERVER_V9)]} intent={autoOn} />);
     expect(msg()).toContain('tap Ack on it in the halt banner, then run ccrc rollout');
     expect(msg()).not.toMatch(/auto-install/i);
   });
@@ -315,7 +316,7 @@ describe('FleetHostBanner — the skew arm\'s remedy (R15(c))', () => {
     const off: UpdateIntentWire[] = [{ ...autoOn[0]!, auto: 'off' }];
     const { rerender } = render(<FleetHostBanner health={skewed} nodes={[movable('fleet', FLEET_V7), movable('server', SERVER_V9)]} intent={off} />);
     expect(msg()).toContain(cli);
-    rerender(<FleetHostBanner health={skewed} nodes={[movable('fleet', FLEET_V7), inventoryNode('server', SERVER_V9)]} intent={autoOn} />);
+    rerender(<FleetHostBanner health={skewed} nodes={[{ ...inventoryNode('fleet', FLEET_V7), desiredTag: 'v0.0.9' }, movable('server', SERVER_V9)]} intent={autoOn} />);
     expect(msg()).toContain(cli);
     rerender(<FleetHostBanner health={skewed} nodes={[movable('fleet', FLEET_V7), movable('server', SERVER_V9)]} />);
     expect(msg()).toContain(cli);
