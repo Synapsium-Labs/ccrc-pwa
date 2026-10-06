@@ -3208,12 +3208,17 @@ export class FleetWatcher {
       // FAIL SHUT: a failed read proves nothing about which children are
       // terminal or which have coordinated in their own generation. So this
       // pass decides nothing, and publishes no attention list: the last one
-      // stands. It drops the twice-observed memory, so no child acts on the
-      // strength of a pass that measured nothing. And it reduces the recorded
-      // verdicts to the kept ones (`childReclaimKeptVerdicts`), so until the
-      // next judging pass the chip holds no verdict for any other child: a
-      // held or doubt child's reads "no verdict yet", where it gave its hold
-      // or doubt sentence.
+      // stands. It drops the sweep state (`childReclaimSweepState`, the
+      // twice-observed memory), so no child acts on the strength of a pass
+      // that measured nothing. That state is also the chip's defer source, so
+      // a deferring or failing child's chip loses its defer sentence, which
+      // returns only once the sweep asks again and the child defers or fails
+      // again. And it reduces the recorded verdicts to the kept ones
+      // (`childReclaimKeptVerdicts`), so until the next judging pass the chip
+      // holds no verdict for any other child: where nothing else answers (a
+      // journal event, a review child, or the switch, which already reads
+      // `paused`), a held or doubt child's reads "no verdict yet", where it
+      // gave its hold or doubt sentence.
       if (this.childReclaimJudged !== null) this.childReclaimJudged = childReclaimKeptVerdicts(this.childReclaimJudged);
       console.warn(`ccrc-server: sweepChildReclaim could not read the lifecycle mirror or the coordination history (${err instanceof Error ? err.message : String(err)}) — no reclaim decisions this pass`);
       this.childReclaimSweepState.clear();
