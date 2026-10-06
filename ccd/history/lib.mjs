@@ -1264,12 +1264,12 @@ const ENV_SECRET_NAME_RE = /(?:^|[^A-Za-z0-9])PRIVATE(?=$|[^A-Za-z0-9])/i;
  *  derived from lossless-claw src/prompt-recall.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
  *  Upstream's one detection pattern split into its arms and made global for replacement, both the `-` and `_`
  *  arms of sk|rk|pk kept; the PEM arm widened from the header line to the
- *  whole block (a header alone would leave the key printed); plus the JWT
- *  shape `eyJ….….…`. This list holds every arm that is a plain regex, all
- *  linear-time on any input (audited, D-4306). The JWT arm is NOT in it: as a
- *  regex it backtracks quadratically on a long run of dotless `eyJ` starts,
- *  so `redactJwtShapes` finds the same matches by a linear scan and
- *  `redactLayers` applies it after this list. D-4306 (history-redaction-shapes-linear) */
+ *  whole block (a header alone would leave the key printed). This list holds
+ *  upstream's arms only, every one a plain regex and linear-time on any input
+ *  (audited, D-4306). The JWT shape `eyJ….….…` (not upstream) is NOT in it:
+ *  as a regex it backtracks quadratically on a long run of dotless `eyJ`
+ *  starts, so the linear `redactJwtShapes` finds the same matches by a scan
+ *  and `redactLayers` applies it after this list. D-4306 (history-redaction-shapes-linear) */
 export const SECRET_SHAPE_RES = Object.freeze([
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
   /\bAKIA[0-9A-Z]{16}\b/gi,

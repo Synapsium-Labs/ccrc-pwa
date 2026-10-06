@@ -29,7 +29,7 @@ ours: ccd/history/lib.mjs
 upstream: src/prompt-recall.ts
 commit: e05d8d3
 upstream-sha256: 8267a6480b02386789b8213fecdfbedd4fd47d39a0dae1083a4d0eda2a069c7b
-changed: IDENTIFIER_RE is PROMPT_RECALL_SENSITIVE_IDENTIFIER_PATTERN (:23-24) verbatim; SECRET_SHAPE_RES is PROMPT_RECALL_SENSITIVE_VALUE_PATTERN (:26-27) split into its arms, each made global for replacement, both the - and _ arms of sk|rk|pk kept, the PEM arm widened from the header line to the whole block, and a JWT shape added (not upstream)
+changed: IDENTIFIER_RE is PROMPT_RECALL_SENSITIVE_IDENTIFIER_PATTERN (:23-24) verbatim; SECRET_SHAPE_RES is PROMPT_RECALL_SENSITIVE_VALUE_PATTERN (:26-27) split into its arms, each made global for replacement, both the - and _ arms of sk|rk|pk kept, the PEM arm widened from the header line to the whole block; the JWT shape (not upstream, eyJ then two more dot-separated parts) is not in the list but applied after it by the linear redactJwtShapes (D-4306)
 
 item: writer connection pragmas (V6)
 ours: ccd/history/store.mjs
