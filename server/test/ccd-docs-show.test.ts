@@ -755,7 +755,11 @@ t17v.describe('docs-show draft pin (docs W1b Task 17, spec §2 (e) DraftPin)', (
     /** A `worktree list` that answered nothing usable: label, the word, the canned `Spawned` fields, and context. */
     const LIST_CASES: [string, string, string, Record<string, string>][] = [
       ['an expired list', 'git-timeout', 'rc=None, out=b"", err=b"", timed_out=True, overflow=False', {}],
-      ['an overflowing list', 'git-failed', 'rc=None, out=b"x" * 16, err=b"", timed_out=False, overflow=True', {}],
+      ['an overflowing list', 'git-failed', 'rc=None, out=b"x" * 16, err=b"", timed_out=False, overflow=True',
+        { detail: 'stdout over the runner cap' }],
+      // Sys.spawn sets overflow after git may already have exited 0 (R16-7, R16-8): truncated stdout must never reach parse_worktrees.
+      ['an rc-0 overflowing list', 'git-failed', 'rc=0, out=b"worktree /x", err=b"", timed_out=False, overflow=True',
+        { detail: 'stdout over the runner cap' }],
       ['a list cut mid-record', 'git-failed', 'rc=0, out=b"worktree /x", err=b"", timed_out=False, overflow=False',
         { detail: 'malformed' }],
     ];
