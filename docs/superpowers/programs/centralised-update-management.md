@@ -1104,6 +1104,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - **What runs from here:** every later move runs wave 11's NEW sweep, as does any rollback by flip.
       - STATUS: fleet and server v0.0.92, newest v0.0.92, backups fleet 123M/server 532M, disk free fleet 216G/work
         volume 90G/server 33G, no anomalies.
+    - **2026-10-06 07:10 UTC — v0.0.94 (docs, #288/#289) and v0.0.95 (#291, wave 12) auto-converged unattended.**
+      The v0.0.94 move was the first run of wave 11's NEW sweep: about 48 supervisors in 23 s, with no re-check (the
+      06:41 entry). v0.0.95 followed it. No action was taken.
+      - STATUS: fleet and server v0.0.95, newest v0.0.95, backups fleet 134M/server 539M, disk free fleet 218G/work
+        volume 77G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
