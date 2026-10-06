@@ -20,7 +20,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
-| 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | — | #286 | fix round 1 (review 284: core accepted, minor findings; mail 3631); run 245 (`ccrc-pwa-bright-canyon`); plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
+| 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | — | #286 | acceptance review 288 on fix round 1 (`21d510f6`); run 245 (`ccrc-pwa-bright-canyon`); plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
 | 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | to plan after wave 3 merges; its operator text names a pid's process (R4) |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
@@ -478,6 +478,21 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     `pr-state` lines; run 245 has the RECLAIM/EXPIRE region and the spawn paths' refusal; run 274 has wave 3's
     operator-choice section, then what its plan names. The second to land merges main, re-stamps and re-runs the
     citation cases, cite-remeasure and the `_reg_get` census. A worker whose edit must leave its region asks first.
+- **2026-10-06 07:24 — fix round 1 done at `21d510f6`** (wave-done 3649; four commits on `3373287e`; no merge of main).
+  - **What landed:**
+    - R1: the Linux-only cases force Linux, and the live-unit row stubs launchd.
+    - R2 → 3964: the `worktree` resume asks the `in-use` probe and never kills. A pane that came back counts as a
+      cwd user.
+    - P4 → 3965: one hunk in CCR-15's passage. The contract carries no such sentence.
+    - The text fixes P1–P3 and P5–P8, and R3's precondition row.
+  - **Re-measured:**
+    - The tip matches the claim, and the four required checks are green (CI 37424981281).
+    - #286 still merges clean onto `9221416a`.
+    - All six of review 284's macOS reds are gone. test-macos 1/2's one red is main's `ccrc-update` D3 case
+      (wave 11). probe-macos's platform-hazards red is main's. Neither gates.
+  - **Run state:** the run went to `awaiting-review`, with its items already settled.
+  - **Acceptance review 288** was dispatched to `ccrc-pwa-soft-meadow`, with the held-out panel named. #286 merges
+    on its verdict.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
