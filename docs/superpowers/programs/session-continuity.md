@@ -22,7 +22,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | merged 2026-10-02 (`a934a59b`); run 219 closed; deploy AGENT-FIRST by the update mechanism |
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
-| 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | acceptance review 305 on `34cfe5ee`; run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
+| 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | accepted (review 305); landing round (merge main + text, 3758); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
 | 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | to plan |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
@@ -491,6 +491,25 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     - the per-task minors.
   - **ccrc-history's runs 293 and 302** are cleared to edit README, the doctor checks, deploy.sh and the other paths
     in their own regions, while 274's claim 1046 stands (3750).
+- **2026-10-06 21:53 — review 305 ACCEPTED wave 4** (review-done 3757, reviewed tip `34cfe5ee`; report copied on receipt).
+  - **The verdict:** 39 agents, none unverified; 9 confirmed (one important) and 3 refuted. All 30 mutation rows are
+    red, covering every never-stop class (4092's child cgroup included), the shadow gate and the paused file, three per
+    tick, the unmeasurable carry, the forged-record bounds, 4091, the doctor bounds and the harness group kill.
+  - **No path to a stop while shadowed or paused:** there is one read of `scope-sweep-live` and one stop call. The
+    readings reproduce: 16 stops / 0 reap-class, and 40 / 2. Departures 4091, 4092 and 4093 are confirmed.
+  - **The landing round was sent** (mail 3758; run 274 is back at `working`):
+    - merge main, keeping both sides of `ccrc-install.test.ts` and `single-definition.test.ts`, then re-stamp;
+    - the text and one-byte fixes F2 (qualified), F3, F4, F6–F9;
+    - one clause in D-4020 naming F1's (a)–(c) and F5.
+  - **Rulings:**
+    - F2 is accepted as 4092's cost. A scope with a child cgroup is never stopped, even live, and the text says so.
+    - F6: the worker's in-plan definitions were sanctioned by the brief, so the plan's three sentences were stale.
+  - **CARRIED to wave 4b's FIRST commit:**
+    - F1(a): a line doctor cannot read answers through the "cannot read" WARN with its rewrite remedy, never the
+      dead-scope stop remedy;
+    - doctor's PASS line, qualified for a carried live scope.
+    These sit beside the worker's residue (I1, `s6_inert`'s staleness, the zombie, the paused log line, baseline B's
+    non-zero check).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
