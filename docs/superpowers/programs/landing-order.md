@@ -539,6 +539,25 @@ carries it (spec §5.1, amended 2026-09-24).
 - **2026-10-06 07:02 — `ccd/ccd` shared by region** (mail 3648, for the record). Run 250's claim 1043 keeps the stamp and
   its `pr-state` lines. Runs 245 and 274 edit their own regions of `ccd/ccd` without a claim. The second to land
   merges main and re-stamps. Fix round 2 is unchanged.
+- **2026-10-06 07:27 — fix round 2 done at `6850f261`** (wave-done 3650; three commits, plus a merge of main at
+  `21f536a5`; no new number, 3918–3920 unused).
+  - **What landed:**
+    - F1: the tight multi-byte fixture; row MB reds 1 of 123 on jq 1.7 and on 1.8.2.
+    - F2: THE COST sentence names the accepted class, and the refusal names `ccrc-api mail send --json <file>`;
+      row F2P reds 3.
+    - F3: main merged; README and the doctor test keep both sides; only the stamp line was resolved by hand.
+    - F4: the rows are in the plan as JSON.
+    - F5 (a)–(j): text corrections.
+    - Claim 1043 released.
+  - **Re-measured:**
+    - The tip matches the claim, and the four required checks are green (CI 37427142508).
+    - #248 merges clean onto `9221416a` (#291).
+    - The canary denies on the merged hook under jq 1.7 and 1.8.2.
+  - **Run state:** the run went to `awaiting-review`, with its items already settled.
+  - **Acceptance review 289** is opened, and its brief names the held-out panel. Its dispatch was refused `cap-daily`
+    (24 of 24 in the rolling day). It dispatches when run 266's dispatch ages out at 07:47.
+  - **Merge order with #286:** whichever acceptance lands first merges first. The second merges main and
+    re-stamps `ccd/ccd`, by the shared-region ruling.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
