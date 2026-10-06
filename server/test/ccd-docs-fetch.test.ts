@@ -287,6 +287,11 @@ describe('docs-fetch classifier (row 42; R6: measured on git 2.43 under LC_ALL=C
       + 'fatal: fsck error in packed object\nfatal: fetch-pack: invalid index-pack output\n';
     const LOCK = "error: cannot lock ref 'refs/remotes/origin/main': Unable to create '/r/.git/refs/remotes/origin/main.lock': File exists.\n";
     const DIRFILE = "error: cannot lock ref 'refs/remotes/origin/foo/bar': 'refs/remotes/origin/foo' exists; cannot create 'refs/remotes/origin/foo/bar'\n";
+    // The lab case below's stderr on git 2.55.0, measured in a container under the docs argv and LC_ALL=C.
+    const DIRFILE_255 = 'warning: fetch normally indicates which branches had a forced update,\n'
+      + "but that check has been disabled; to re-enable, use '--show-forced-updates'\n"
+      + "flag or run 'git config fetch.showForcedUpdates true'\n"
+      + "error: some local refs could not be updated; try running\n 'git remote prune origin' to remove any old, conflicting branches\n";
     const CASES: [string, number | null, string, boolean, string | null][] = [
       ['rc 0', 0, '', false, null],
       ['rc 0 with the forced-update warning', 0, 'warning: fetch normally indicates which branches had a forced update,\n', false, null],
@@ -308,6 +313,8 @@ describe('docs-fetch classifier (row 42; R6: measured on git 2.43 under LC_ALL=C
       // A directory/file conflict says "cannot lock ref" too, but no other process holds anything: only a prune
       // cures it, so it is not the retried word. Measured on git 2.43.0 (see the lab case below).
       ['a ref directory/file conflict is not a lock', 1, DIRFILE, false, 'fetch-failed'],
+      // git 2.55.0 (CI's runner image) prints no per-ref line for the same conflict, only the summary.
+      ['a ref directory/file conflict, git 2.55 wording, is not a lock', 1, DIRFILE_255, false, 'fetch-failed'],
       ['lock evidence alone is not a lock', 1, "fatal: Unable to create '/r/.git/index.lock': File exists.\n", false, 'fetch-failed'],
       ['a lock that cannot be created for another reason', 1,
         "error: cannot lock ref 'refs/remotes/origin/main': Unable to create '/r/.git/refs/remotes/origin/main.lock': Permission denied\n",
@@ -329,7 +336,9 @@ describe('docs-fetch classifier (row 42; R6: measured on git 2.43 under LC_ALL=C
   it('a stale ref where a remote branch needs a directory answers fetch-failed with git\'s own message, never ref-locked (lab)', () => {
     // refs/remotes/origin/foo is a stale ref (the remote branch was deleted); the remote now has foo/bar. git cannot
     // create the directory refs/remotes/origin/foo/, says "cannot lock ref", and --no-prune never removes the stale
-    // ref, so a retry cannot succeed. Measured on git 2.43.0: rc 1, no lock file is involved.
+    // ref, so a retry cannot succeed. Measured on git 2.43.0: rc 1, no lock file is involved. git 2.55.0 (CI's runner
+    // image) also answers rc 1, but drops the per-ref "cannot lock ref ... exists; cannot create" line and keeps only
+    // the summary and its prune hint; the classification is the same on both.
     const main = h.makeRepo('demo');
     const tip = rev(main, 'refs/remotes/origin/main');
     h.git(main, 'update-ref', 'refs/remotes/origin/foo', tip);
@@ -337,7 +346,15 @@ describe('docs-fetch classifier (row 42; R6: measured on git 2.43 under LC_ALL=C
     const a = fetchDocs('demo', 'foo/bar');
     expect(a).toMatchObject({ ok: false, failure: 'fetch-failed', branch: 'foo/bar', rc: 1 });
     expect(a, 'not the transient word').not.toHaveProperty('lockAgeMs');
-    expect(String(a['detail'])).toContain("'refs/remotes/origin/foo' exists; cannot create");
+    // git's own message, in either version's form: the summary and its prune hint always; a per-ref line, when
+    // git prints one (2.43 does, 2.55 does not), is the directory/file form and never lock-file evidence.
+    const detail = String(a['detail']);
+    expect(detail).toContain('error: some local refs could not be updated; try running');
+    expect(detail).toContain("'git remote prune origin'");
+    if (detail.includes('cannot lock ref')) {
+      expect(detail).toContain("'refs/remotes/origin/foo' exists; cannot create");
+    }
+    expect(detail, 'no lock-file evidence').not.toMatch(/\.lock': File exists/);
     expect(readStampFile(stampFile(main, 'foo/bar')), 'a failed attempt is still stamped').toMatchObject({
       lastOutcome: 'fetch-failed' });
   });
