@@ -553,3 +553,550 @@ describe('docs-show committed: guards the cases above leave open (G8: each goes 
     expect(o.picked).toBe('utf8');
   });
 });
+
+// ── docs W1b Task 17: docs-show, the DRAFT pin ──────────────────────────────────────────────────────────────
+// Spec 2026-10-01 §2 (e) DraftPin steps 1-7 and §2 (f) "Worktree"; rows 27, 28, 37 and 38, and the show halves
+// of rows 35, 55 and 56. The end-to-end cases list the draft through the shipped `docs-tree` first, so the pin a
+// show carries is one a listing handed out. Units import the helper and answer the same argv through `H.run`,
+// for what a fixture HOME cannot stage: a swapped stat, a foreign uid, a commit landing mid-read, a leaf that
+// grows after its fstat, a canned `worktree list`, and a FIFO whose open must not be able to hang a spawn the
+// suite cannot kill. This block is APPENDED below the file's own imports, so every import is namespaced under a
+// `t17` name no other block binds: an import may sit anywhere at module top level, but a name bound twice is a
+// SyntaxError.
+import * as t17v from 'vitest';
+import * as t17cp from 'node:child_process';
+import * as t17crypto from 'node:crypto';
+import * as t17fs from 'node:fs';
+import * as t17path from 'node:path';
+import * as t17ws from './ccdWsHelpers.js';
+import * as t17docs from './ccdDocsHelpers.js';
+import * as t17py from './docsHelperPy.js';
+import * as t17shared from '../../shared/docs.js';
+
+t17v.describe('docs-show draft pin (docs W1b Task 17, spec §2 (e) DraftPin)', () => {
+  const { describe, it, expect, beforeEach, afterEach } = t17v;
+  type Answer = Record<string, unknown>;
+  interface Pin { head: string; fp: string }
+  interface Listed extends Pin { worktree: string; tree: Answer }
+  const SPECS = 'docs/superpowers/specs';
+
+  let ph: t17ws.CcdHarness;
+  beforeEach(() => { ph = t17ws.makeCcdHarness('ccd-docs-'); });
+  afterEach(() => { ph.cleanup(); });
+
+  /** A python body written indented inside this block, moved to column 0. */
+  const py = (s: string): string => {
+    const lines = s.split('\n');
+    while (lines.length > 0 && (lines[0] ?? '').trim() === '') lines.shift();
+    const pad = Math.min(...lines.filter((l) => l.trim() !== '').map((l) => l.length - l.trimStart().length));
+    return lines.map((l) => l.slice(pad)).join('\n') + '\n';
+  };
+  const sha = (b: string | Buffer): string => t17crypto.createHash('sha256').update(b).digest('hex');
+
+  /** `demo` with one committed doc, pushed, and its holder W: a worktree on `ws/a` at main's tip, under HOME's
+   *  worktrees root, which is where ws-add puts one. */
+  const holder = (): { main: string; wt: string } => {
+    const main = t17docs.docsRepo(ph, 'demo');
+    const wt = t17path.join(ph.home, 'worktrees', 'demo', 'a');
+    t17fs.mkdirSync(t17path.dirname(wt), { recursive: true });
+    ph.git(main, 'worktree', 'add', '-q', '-b', 'ws/a', wt);
+    return { main, wt };
+  };
+  const draftPath = (wt: string, rel: string): string => t17path.join(wt, SPECS, rel);
+  const writeDraft = (wt: string, rel: string, body: string | Buffer): string => {
+    const p = draftPath(wt, rel);
+    t17fs.mkdirSync(t17path.dirname(p), { recursive: true });
+    t17fs.writeFileSync(p, body);
+    return p;
+  };
+
+  /** The ref view of `ws/a` through the shipped dispatcher, and the pin it hands out for specs/<rel>: the
+   *  holder's record HEAD and that draft's fp. */
+  const listedPin = (rel: string): Listed => {
+    const tree = t17docs.parseOneLine(t17docs.runCcdDocs(ph, ['docs-tree', '--project', 'demo', '--ref', 'refs/heads/ws/a']));
+    expect(tree).toMatchObject({ ok: true, drafts: { state: 'holder', branch: 'ws/a', baseEqual: true } });
+    const drafts = tree['drafts'] as { worktree: { path: string; head: string } };
+    const entry = (tree['entries'] as { section: string; path: string; draft: { fp: string | null } | null }[])
+      .find((e) => e.section === 'specs' && e.path === rel);
+    const fp = entry?.draft?.fp ?? null;
+    expect(fp, `specs/${rel} is listed with a draft fp`).toMatch(/^[0-9a-f]{64}$/);
+    return { head: drafts.worktree.head, fp: fp as string, worktree: drafts.worktree.path, tree };
+  };
+
+  /** The draft argv: exactly the 14 tokens `docs-v1` names. `--max-bytes` defaults to the Markdown class cap. */
+  const showArgs = (rel: string, pin: Pin, max: string = String(t17shared.DOCS_MAX_DOC_BYTES)): string[] => [
+    'docs-show', '--project', 'demo', '--draft-branch', 'ws/a', '--head', pin.head,
+    '--section', 'specs', '--path', rel, '--fingerprint', pin.fp, '--max-bytes', max];
+  const showRun = (rel: string, pin: Pin, max?: string, env: NodeJS.ProcessEnv = {}): t17docs.DocsRun =>
+    t17docs.runCcdDocs(ph, showArgs(rel, pin, max), env);
+  const show = (rel: string, pin: Pin, max?: string, env: NodeJS.ProcessEnv = {}): Answer =>
+    t17docs.parseOneLine(showRun(rel, pin, max, env));
+
+  /** A refusal that tells the caller nothing about the bytes at the path: no hash, no size, no content field,
+   *  and neither the bytes nor their sha256 anywhere on stdout. */
+  const silentAbout = (r: t17docs.DocsRun, bytes: string): void => {
+    const o = t17docs.parseOneLine(r);
+    for (const k of ['sha256', 'fp', 'size', 'text', 'b64']) expect(o, `the refusal carries ${k}`).not.toHaveProperty(k);
+    expect(r.stdout).not.toContain(bytes.trim());
+    expect(r.stdout).not.toContain(sha(bytes));
+  };
+
+  /** The helper, imported, answering a show `args` (as `showArgs` builds it) through `H.run`, after `body`
+   *  (python, top level) has swapped whatever it swaps. The unit's python is the spawn's DIRECT child, so its
+   *  `timeoutMs` kills the very process a blocked syscall sits in; a dispatcher run's python is a grandchild
+   *  that holds the stdout pipe open, which `spawnSync` cannot return before. `answer` is null unless the unit
+   *  exited 0 with one line. */
+  const unitShow = (args: string[], body: string, timeoutMs = 60_000): { code: number; answer: Answer | null; stderr: string } => {
+    const argv = [args[0], t17path.join(ph.home, 'projects'), t17path.join(ph.home, 'worktrees'),
+      t17path.join(ph.home, '.cc-sessions'), ...args.slice(1)];
+    const prelude = py(`
+      import json, os, stat
+      ARGV = ${JSON.stringify(argv)}
+      BaseSys = type(H.SYS)
+      class St(object):
+          """A stat result with some fields replaced; every field the helper reads is copied."""
+          def __init__(self, st, **over):
+              for k in ('st_mode', 'st_ino', 'st_dev', 'st_nlink', 'st_uid', 'st_gid', 'st_size',
+                        'st_atime_ns', 'st_mtime_ns', 'st_ctime_ns'):
+                  setattr(self, k, over.get(k, getattr(st, k)))
+      def show():
+          return json.loads(H.run(ARGV).decode('utf-8'))
+    `);
+    const r = t17py.runDocsUnit(ph.home, prelude + body + 'out(show())\n', { timeoutMs });
+    const lines = r.stdout.split('\n').filter((l) => l !== '');
+    const answer = r.code === 0 && lines.length === 1 ? JSON.parse(lines[0] as string) as Answer : null;
+    return { code: r.code, answer, stderr: r.stderr };
+  };
+
+  describe('row 38: a listed draft round-trips, and each way its pin goes stale has its own word', () => {
+    it('tree then show serves the draft bytes: size, sha256 and fp are the listed fp, and the pin echoes back', () => {
+      const { wt } = holder();
+      const body = '# New draft\n\nnot committed yet\n';
+      writeDraft(wt, 'new.md', body);
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
+      writeDraft(wt, 'img.png', png);
+      const pin = listedPin('new.md');
+      expect(pin.fp).toBe(sha(body));
+      const o = show('new.md', pin);
+      expect(o).toMatchObject({
+        v: 1, verb: 'docs-show', ok: true, source: 'draft', section: 'specs', path: 'new.md',
+        size: Buffer.byteLength(body), sha256: pin.fp, fp: pin.fp, encoding: 'utf8', text: body,
+        worktree: pin.worktree, branch: 'ws/a', head: pin.head,
+      });
+      for (const k of ['commit', 'blob', 'mode', 'onRef']) expect(o, `a draft answer carries ${k}`).not.toHaveProperty(k);
+      // Bytes that are not text travel as base64, through the same encoder the committed pin uses.
+      const img = show('img.png', { head: pin.head, fp: listedPin('img.png').fp }, String(t17shared.DOCS_MAX_IMAGE_BYTES));
+      expect(img).toMatchObject({ ok: true, source: 'draft', encoding: 'base64', size: png.length, sha256: sha(png) });
+      expect(Buffer.from(String(img['b64']), 'base64').equals(png)).toBe(true);
+    });
+
+    it('an edit after the listing is draft-changed {now:present}, naming neither the new hash nor the new size', () => {
+      const { wt } = holder();
+      writeDraft(wt, 'new.md', '# v1\n');
+      const pin = listedPin('new.md');
+      const edited = '# v2, rewritten after the listing\n';
+      writeDraft(wt, 'new.md', edited);
+      const r = showRun('new.md', pin);
+      expect(t17docs.parseOneLine(r)).toMatchObject({ ok: false, failure: 'draft-changed', now: 'present' });
+      silentAbout(r, edited);
+    });
+
+    it('a draft deleted after the listing is draft-changed {now:absent}', () => {
+      const { wt } = holder();
+      writeDraft(wt, 'new.md', '# soon gone\n');
+      const pin = listedPin('new.md');
+      t17fs.rmSync(draftPath(wt, 'new.md'));
+      expect(show('new.md', pin)).toMatchObject({ ok: false, failure: 'draft-changed', now: 'absent' });
+    });
+
+    it('a commit in W is worktree-moved {head}, decided from the record before any byte is read', () => {
+      const { wt } = holder();
+      writeDraft(wt, 'new.md', '# committed next\n');
+      const pin = listedPin('new.md');
+      ph.git(wt, 'add', '--', `${SPECS}/new.md`);
+      ph.git(wt, 'commit', '-q', '-m', 'commit the draft');
+      // ...and edit it again: were the record HEAD not checked BEFORE the walk (step 2), this would answer
+      // draft-changed from the hash, and only the HEAD check after the read could still tell the two apart.
+      writeDraft(wt, 'new.md', '# edited after its commit\n');
+      expect(show('new.md', pin)).toMatchObject({ ok: false, failure: 'worktree-moved', head: ph.git(wt, 'rev-parse', 'HEAD') });
+    });
+
+    it('W switched off the branch is worktree-gone; switched back, the same pin is served again', () => {
+      const { wt } = holder();
+      writeDraft(wt, 'new.md', '# on ws/a\n');
+      const pin = listedPin('new.md');
+      ph.git(wt, 'switch', '-q', '-c', 'ws/b');
+      expect(show('new.md', pin)).toMatchObject({ ok: false, failure: 'worktree-gone' });
+      // CONTROL: the untracked draft rode the switch unchanged, so the refusal above was the branch, not the pin.
+      ph.git(wt, 'switch', '-q', 'ws/a');
+      expect(show('new.md', pin)).toMatchObject({ ok: true, fp: pin.fp });
+    });
+
+    it('`worktree remove` is worktree-gone', () => {
+      const { main, wt } = holder();
+      writeDraft(wt, 'new.md', '# removed with W\n');
+      const pin = listedPin('new.md');
+      ph.git(main, 'worktree', 'remove', '--force', wt);
+      expect(show('new.md', pin)).toMatchObject({ ok: false, failure: 'worktree-gone' });
+    });
+
+    it('a failing `worktree list` is git-failed {step:worktree-list}, never folded into worktree-gone', () => {
+      const { wt } = holder();
+      writeDraft(wt, 'new.md', '# listed\n');
+      const pin = listedPin('new.md');
+      const rec = t17docs.plantGitRecorder(ph.home, { failWhen: ['worktree list'] });
+      expect(show('new.md', pin)).toMatchObject({
+        ok: false, failure: 'git-failed', step: 'worktree-list', rc: 128, stderrHead: 'git recorder: planted failure',
+      });
+      // The recorder saw the list it failed: a recorder that saw nothing would make the line above vacuous.
+      expect(rec.calls().some((c) => c.argv.join(' ').includes('worktree list'))).toBe(true);
+    });
+
+    /** A `worktree list` that answered nothing usable: label, the word, the canned `Spawned` fields, and context. */
+    const LIST_CASES: [string, string, string, Record<string, string>][] = [
+      ['an expired list', 'git-timeout', 'rc=None, out=b"", err=b"", timed_out=True, overflow=False', {}],
+      ['an overflowing list', 'git-failed', 'rc=None, out=b"x" * 16, err=b"", timed_out=False, overflow=True', {}],
+      ['a list cut mid-record', 'git-failed', 'rc=0, out=b"worktree /x", err=b"", timed_out=False, overflow=False',
+        { detail: 'malformed' }],
+    ];
+    it.each(LIST_CASES)('%s is %s {step:worktree-list}, never worktree-gone', (_label, word, spawned, extra) => {
+      const { wt } = holder();
+      writeDraft(wt, 'new.md', '# listed\n');
+      const pin = listedPin('new.md');
+      const u = unitShow(showArgs('new.md', pin), py(`
+        class CannedList(BaseSys):
+            def spawn(self, argv, *a, **k):
+                if 'worktree' in argv:
+                    return H.Spawned(${spawned})
+                return BaseSys.spawn(self, argv, *a, **k)
+        H.SYS = CannedList()
+      `));
+      expect(u.answer).toMatchObject({ ok: false, failure: word, step: 'worktree-list', ...extra });
+    });
+
+    it('two holders are ambiguous-worktree {candidates}, and neither is read', () => {
+      const { main, wt } = holder();
+      writeDraft(wt, 'new.md', '# one of two holders\n');
+      const pin = listedPin('new.md');
+      const second = t17path.join(ph.home, 'scratch', 'second');
+      t17fs.mkdirSync(t17path.dirname(second), { recursive: true });
+      ph.git(main, 'worktree', 'add', '-q', '--force', second, 'ws/a');
+      const r = showRun('new.md', pin);
+      const o = t17docs.parseOneLine(r);
+      expect(o).toMatchObject({ ok: false, failure: 'ambiguous-worktree' });
+      expect([...(o['candidates'] as string[])].sort()).toEqual([pin.worktree, t17fs.realpathSync(second)].sort());
+      expect(r.stdout).not.toContain('one of two holders');
+    });
+
+    it('the size is held to min(--max-bytes, the ceiling) from fstat, before any read', () => {
+      const { wt } = holder();
+      const body = '0123456789abcdef\n';
+      writeDraft(wt, 'big.md', body);
+      const pin = listedPin('big.md');
+      expect(show('big.md', pin, '16')).toMatchObject({ ok: false, failure: 'too-large', size: 17, cap: 16 });
+      expect(show('big.md', pin, undefined, { CCD_DOCS_MAX_FILE_BYTES: '10' }))
+        .toMatchObject({ ok: false, failure: 'too-large', size: 17, cap: 10 });
+      // CONTROL: within both bounds the same pin is served.
+      expect(show('big.md', pin, '17')).toMatchObject({ ok: true, size: 17, text: body });
+    });
+
+    it('a --head of the other object format is bad-commit, and nothing in M or W is enumerated', () => {
+      const { wt } = holder();
+      writeDraft(wt, 'new.md', '# sha1 repo\n');
+      const pin = listedPin('new.md');
+      const rec = t17docs.plantGitRecorder(ph.home);
+      expect(show('new.md', { head: 'a'.repeat(64), fp: pin.fp })).toMatchObject({ ok: false, failure: 'bad-commit' });
+      // CONTROL: the recorder is live (discovery ran through it); the list never did.
+      expect(rec.calls().length).toBeGreaterThan(0);
+      expect(rec.calls().some((c) => c.argv.join(' ').includes('worktree list'))).toBe(false);
+    });
+  });
+
+  describe('row 37: the fp is a content hash, never stat data (MM2)', () => {
+    it('a same-size rewrite with its mtime restored (os.utime, to the nanosecond) is draft-changed', () => {
+      const { wt } = holder();
+      const p = writeDraft(wt, 'tick.md', 'AAAAAAAAAAAA\n');
+      const pin = listedPin('tick.md');
+      expect(show('tick.md', pin)).toMatchObject({ ok: true, fp: pin.fp });
+      const stat = t17py.unitJson<{ same: boolean }>(ph.home, py(`
+        import os
+        p = ${JSON.stringify(p)}
+        st = os.stat(p)
+        with open(p, 'r+b') as f:
+            f.write(b'BBBBBBBBBBBB' + bytes([10]))
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+        now = os.stat(p)
+        out({'same': (now.st_size, now.st_mtime_ns, now.st_ino) == (st.st_size, st.st_mtime_ns, st.st_ino)})
+      `));
+      // CONTROL: size, mtime_ns and inode are what they were, so a stat fingerprint would call this unchanged.
+      expect(stat.same).toBe(true);
+      const r = showRun('tick.md', pin);
+      expect(t17docs.parseOneLine(r)).toMatchObject({ ok: false, failure: 'draft-changed', now: 'present' });
+      silentAbout(r, 'BBBBBBBBBBBB\n');
+    });
+  });
+
+  describe('row 35, show half: an ignored file is never served, whatever fp is offered', () => {
+    it('a gitignored doc with a fabricated fp is draft-changed, with no bytes and no hash on stdout', () => {
+      const { wt } = holder();
+      t17fs.writeFileSync(t17path.join(wt, '.gitignore'), `${SPECS}/secret.md\n`);
+      const secret = 'IGNORED-SECRET-35 never listed\n';
+      writeDraft(wt, 'secret.md', secret);
+      writeDraft(wt, 'visible.md', '# visible\n');
+      const listed = listedPin('visible.md');
+      // CONTROL: the listing that hands out fps never names the ignored file, so no caller can hold its fp.
+      expect((listed.tree['entries'] as { path: string }[]).map((e) => e.path)).not.toContain('secret.md');
+      const r = showRun('secret.md', { head: listed.head, fp: 'f'.repeat(64) });
+      expect(t17docs.parseOneLine(r)).toMatchObject({ ok: false, failure: 'draft-changed', now: 'present' });
+      silentAbout(r, secret);
+    });
+  });
+
+  describe('rows 27 and 28: the walk follows no link, and a FIFO cannot hang it', () => {
+    it('an untracked symlink is not-a-file {symlink}, a symlinked directory symlink-in-path; the sentinel never shows', () => {
+      const { wt } = holder();
+      const outside = t17path.join(ph.home, 'outside');
+      t17fs.mkdirSync(outside, { recursive: true });
+      const sentinel = 'SENTINEL-27 outside the tree\n';
+      t17fs.writeFileSync(t17path.join(outside, 'sentinel.md'), sentinel);
+      t17fs.mkdirSync(t17path.join(wt, SPECS), { recursive: true });
+      t17fs.symlinkSync(t17path.join(outside, 'sentinel.md'), draftPath(wt, 'link.md'));
+      t17fs.symlinkSync(outside, draftPath(wt, 'sub'));
+      // CONTROL: both links resolve to the sentinel, so following either one would serve it.
+      expect(t17fs.readFileSync(draftPath(wt, 'link.md'), 'utf8')).toBe(sentinel);
+      expect(t17fs.readFileSync(draftPath(wt, 'sub/sentinel.md'), 'utf8')).toBe(sentinel);
+      // The sentinel's OWN sha256 as the fp: even the right hash buys nothing through a link.
+      const pin = { head: ph.git(wt, 'rev-parse', 'HEAD'), fp: sha(sentinel) };
+      const leaf = showRun('link.md', pin);
+      expect(t17docs.parseOneLine(leaf)).toMatchObject({ ok: false, failure: 'not-a-file', kind: 'symlink' });
+      const mid = showRun('sub/sentinel.md', pin);
+      expect(t17docs.parseOneLine(mid)).toMatchObject({ ok: false, failure: 'symlink-in-path' });
+      for (const r of [leaf, mid]) expect(r.stdout).not.toContain('SENTINEL-27');
+    });
+
+    it('an untracked FIFO is not-a-file {special} within 5 s (the open is O_NONBLOCK)', () => {
+      const { wt } = holder();
+      const fifo = draftPath(wt, 'pipe.md');
+      t17fs.mkdirSync(t17path.dirname(fifo), { recursive: true });
+      t17cp.execFileSync('mkfifo', [fifo]);
+      expect(t17fs.lstatSync(fifo).isFIFO()).toBe(true);
+      const args = showArgs('pipe.md', { head: ph.git(wt, 'rev-parse', 'HEAD'), fp: 'a'.repeat(64) });
+      const t0 = Date.now();
+      const u = unitShow(args, '', 5_000);
+      expect(u.code, `the unit did not answer within 5 s: ${u.stderr}`).toBe(0);
+      expect(Date.now() - t0).toBeLessThan(5_000);
+      expect(u.answer).toMatchObject({ ok: false, failure: 'not-a-file', kind: 'special' });
+      // The shipped dispatcher answers the same; it runs only once the bounded unit proved the open cannot block.
+      expect(t17docs.parseOneLine(t17docs.runCcdDocs(ph, args))).toMatchObject({ ok: false, failure: 'not-a-file', kind: 'special' });
+    });
+  });
+
+  describe('row 56, show half: the leaf identity checks run on every show', () => {
+    it('a listed draft re-linked as a hard link is not-a-file {hardlink}; without the nlink check it would serve', () => {
+      const { wt } = holder();
+      const sentinelPath = t17path.join(ph.home, 'sentinel-56.txt');
+      const bytes = 'SENTINEL-56 outside the tree\n';
+      t17fs.writeFileSync(sentinelPath, bytes);
+      writeDraft(wt, 'hl.md', bytes);
+      const pin = listedPin('hl.md');
+      t17fs.rmSync(draftPath(wt, 'hl.md'));
+      t17fs.linkSync(sentinelPath, draftPath(wt, 'hl.md'));
+      const r = showRun('hl.md', pin);
+      expect(t17docs.parseOneLine(r)).toMatchObject({ ok: false, failure: 'not-a-file', kind: 'hardlink' });
+      expect(r.stdout).not.toContain('SENTINEL-56');
+      // CONTROL: the same show with leaf_kind told nlink is 1 serves the sentinel. Its bytes hash to the listed
+      // fp, so the leaf check is the only thing standing between this pin and a file outside the tree.
+      const u = unitShow(showArgs('hl.md', pin), py(`
+        _leaf_kind = H.leaf_kind
+        H.leaf_kind = lambda st_mode, st_nlink, st_uid, st_dev, w_dev, euid: _leaf_kind(st_mode, 1, st_uid, st_dev, w_dev, euid)
+      `));
+      expect(u.answer).toMatchObject({ ok: true, text: bytes, fp: pin.fp });
+    });
+  });
+
+  describe('row 55, show half: holder trust runs again on every show', () => {
+    /** H.SYS answering W's directory fstat with `field` moved by one: the fd the walk would start from is then
+     *  not the directory `stat(W)` measured (st_dev, st_ino), or not this user's (st_uid). */
+    const shifted = (field: string): string => py(`
+      class Shifted(BaseSys):
+          def fstat(self, fd):
+              st = BaseSys.fstat(self, fd)
+              if stat.S_ISDIR(st.st_mode):
+                  return St(st, ${field}=st.${field} + 1)
+              return st
+      H.SYS = Shifted()
+    `);
+
+    it.each([
+      ['st_ino', 'identity-changed'],
+      ['st_dev', 'identity-changed'],
+      ['st_uid', 'foreign-owner'],
+    ])('W\'s fd answering another %s is untrusted-worktree {why:%s}', (field, why) => {
+      const { wt } = holder();
+      writeDraft(wt, 'new.md', '# trusted?\n');
+      const pin = listedPin('new.md');
+      // CONTROL: the helper with H.SYS untouched serves this very pin.
+      expect(unitShow(showArgs('new.md', pin), '').answer).toMatchObject({ ok: true, fp: pin.fp });
+      expect(unitShow(showArgs('new.md', pin), shifted(field)).answer)
+        .toMatchObject({ ok: false, failure: 'untrusted-worktree', why });
+    });
+  });
+
+  describe('the read itself: one bounded read, fstat again, the hash, then HEAD again', () => {
+    it.each(['st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns'])(
+      'a leaf whose fstat after the read answers another %s is draft-changed, though its bytes hash to F', (field) => {
+        const { wt } = holder();
+        writeDraft(wt, 'new.md', '# read once\n');
+        const pin = listedPin('new.md');
+        const u = unitShow(showArgs('new.md', pin), py(`
+          class Restat(BaseSys):
+              reads = 0
+              def read(self, fd, n):
+                  Restat.reads += 1
+                  return BaseSys.read(self, fd, n)
+              def fstat(self, fd):
+                  st = BaseSys.fstat(self, fd)
+                  if Restat.reads and stat.S_ISREG(st.st_mode):
+                      return St(st, ${field}=st.${field} + 1)
+                  return st
+          H.SYS = Restat()
+        `));
+        expect(u.answer).toMatchObject({ ok: false, failure: 'draft-changed', now: 'present' });
+      });
+
+    it('a leaf that grew after its fstat is draft-changed: size + 1 bytes are asked for, so the growth is seen', () => {
+      const { wt } = holder();
+      writeDraft(wt, 'new.md', '# then it grew\n');
+      const pin = listedPin('new.md');
+      const u = unitShow(showArgs('new.md', pin), py(`
+        class Grew(BaseSys):
+            grown = False
+            def read(self, fd, n):
+                b = BaseSys.read(self, fd, n)
+                if b == b'' and not Grew.grown:
+                    Grew.grown = True
+                    return b'+'
+                return b
+        H.SYS = Grew()
+      `));
+      expect(u.answer).toMatchObject({ ok: false, failure: 'draft-changed', now: 'present' });
+    });
+
+    it('a commit landing in W during the read is worktree-moved {head}: HEAD is verified again after the hash', () => {
+      const { wt } = holder();
+      writeDraft(wt, 'new.md', '# read while W moves\n');
+      const pin = listedPin('new.md');
+      const u = unitShow(showArgs('new.md', pin), py(`
+        import subprocess
+        class CommitMidRead(BaseSys):
+            done = False
+            def read(self, fd, n):
+                b = BaseSys.read(self, fd, n)
+                if not CommitMidRead.done:
+                    CommitMidRead.done = True
+                    subprocess.run(['git', '-C', ${JSON.stringify(wt)}, '-c', 'user.name=T', '-c', 'user.email=t@x',
+                                    'commit', '-q', '--allow-empty', '-m', 'mid-read'], check=True)
+                return b
+        H.SYS = CommitMidRead()
+      `));
+      const moved = ph.git(wt, 'rev-parse', 'HEAD');
+      expect(moved).not.toBe(pin.head);
+      expect(u.answer).toMatchObject({ ok: false, failure: 'worktree-moved', head: moved });
+    });
+
+    it('a leaf the walk cannot open (EACCES) is unreadable-path {errno}', () => {
+      const { wt } = holder();
+      writeDraft(wt, 'new.md', '# denied\n');
+      const pin = listedPin('new.md');
+      const u = unitShow(showArgs('new.md', pin), py(`
+        import errno
+        class Denied(BaseSys):
+            def open(self, path, flags, dir_fd=None):
+                if dir_fd is not None and not flags & os.O_DIRECTORY:
+                    raise PermissionError(errno.EACCES, 'Permission denied (planted)')
+                return BaseSys.open(self, path, flags, dir_fd=dir_fd)
+        H.SYS = Denied()
+      `));
+      expect(u.answer).toMatchObject({ ok: false, failure: 'unreadable-path', errno: 'EACCES' });
+    });
+  });
+
+  // Controller ruling T17: three spec refinements the brief claims pinned, each with its own case. The units
+  // swap H.SYS.spawn for a canned answer to ONE git call (matched by its argv shape), so the real code path
+  // above it, `_pin_trust` and `read_draft`, is what answers.
+  describe('refinements 2-4: an undecidable trust check, a failing HEAD re-check, a read that raises', () => {
+    /** H.SYS answering the one git call whose argv satisfies `match` (python, over `argv`) with `spawned`. */
+    const canned = (match: string, spawned: string): string => py(`
+      class CannedGit(BaseSys):
+          def spawn(self, argv, *a, **k):
+              if ${match}:
+                  return H.Spawned(${spawned})
+              return BaseSys.spawn(self, argv, *a, **k)
+      H.SYS = CannedGit()
+    `);
+    // trust_holder's own rev-parse is the only one asking for --show-toplevel without --git-dir (discovery's has both).
+    const TRUST_CALL = "'--show-toplevel' in argv and '--git-dir' not in argv";
+    // Step 6's HEAD re-check is the only rev-parse carrying --verify.
+    const HEAD_CALL = "'rev-parse' in argv and '--verify' in argv";
+
+    const listed = (): Pin => {
+      const { wt } = holder();
+      writeDraft(wt, 'new.md', '# pinned\n');
+      return listedPin('new.md');
+    };
+
+    it.each([
+      ['an expired trust check', 'git-timeout', 'rc=None, out=b"", err=b"", timed_out=True, overflow=False',
+        { failure: 'git-timeout', step: 'worktree-list' }],
+      ['a trust check that exits non-zero', 'git-failed', 'rc=128, out=b"", err=b"fatal: planted", timed_out=False, overflow=False',
+        { failure: 'git-failed', step: 'worktree-list', detail: 'rev-parse rc 128: fatal: planted' }],
+    ])('%s is %s at worktree-list, never untrusted-worktree and never a pass', (_label, _word, spawned, want) => {
+      const pin = listed();
+      const u = unitShow(showArgs('new.md', pin), canned(TRUST_CALL, spawned));
+      expect(u.answer).toMatchObject({ ok: false, ...want });
+      expect(u.answer).not.toHaveProperty('why');
+    });
+
+    it.each([
+      ['an expired HEAD re-check', 'git-timeout', 'rc=None, out=b"", err=b"", timed_out=True, overflow=False',
+        { failure: 'git-timeout', step: 'rev-parse' }],
+      ['a HEAD re-check that exits non-zero', 'git-failed', 'rc=128, out=b"", err=b"fatal: planted", timed_out=False, overflow=False',
+        { failure: 'git-failed', step: 'rev-parse', rc: 128, stderrHead: 'fatal: planted' }],
+    ])('%s is %s at rev-parse, never worktree-moved, and never serves the bytes', (_label, _word, spawned, want) => {
+      const pin = listed();
+      const u = unitShow(showArgs('new.md', pin), canned(HEAD_CALL, spawned));
+      expect(u.answer).toMatchObject({ ok: false, ...want });
+      for (const k of ['text', 'b64', 'sha256', 'head']) expect(u.answer).not.toHaveProperty(k);
+    });
+
+    it.each([
+      ['the bounded read', py(`
+        import errno
+        class ReadFails(BaseSys):
+            def read(self, fd, n):
+                if stat.S_ISREG(BaseSys.fstat(self, fd).st_mode):
+                    raise OSError(errno.EIO, 'Input/output error (planted)')
+                return BaseSys.read(self, fd, n)
+        H.SYS = ReadFails()
+      `)],
+      ['the fstat after the read', py(`
+        import errno
+        class RestatFails(BaseSys):
+            reads = 0
+            def read(self, fd, n):
+                RestatFails.reads += 1
+                return BaseSys.read(self, fd, n)
+            def fstat(self, fd):
+                if RestatFails.reads:
+                    raise OSError(errno.EIO, 'Input/output error (planted)')
+                return BaseSys.fstat(self, fd)
+        H.SYS = RestatFails()
+      `)],
+    ])('an OSError from %s is unreadable-path {errno}', (_label, body) => {
+      const pin = listed();
+      const u = unitShow(showArgs('new.md', pin), body);
+      expect(u.answer).toMatchObject({ ok: false, failure: 'unreadable-path', errno: 'EIO' });
+      for (const k of ['text', 'b64', 'sha256']) expect(u.answer).not.toHaveProperty(k);
+    });
+  });
+});

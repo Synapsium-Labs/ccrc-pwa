@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=07dc2c6e4792a5a74cd2560156cf40a4e97d24004a66d9fe95a22c58484bfbee
+# ccrc:generated 1 sha256=e58798f239b5909a56efb43af706cfbc82ca78d691109003bdc9891f72dd6b4c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31063,6 +31063,163 @@ def verb_tree(ctx, a):
             'freshness': freshness(ctx, repo, ref, url)}
 
 # ===== docs: show =====
+# docs-show, the DRAFT pin (spec 2026-10-01 section 2 (e) DraftPin, with the
+# worktree walk of section 2 (f)). A DraftPin is never cached and no listing is
+# trusted: every show re-enumerates Bd's holder in M by the (d) rule, re-runs
+# all four holder trust checks on that record, walks the leaf from the trusted
+# directory fd, and serves only bytes whose sha256 is the caller's F. That hash
+# is the read capability. A caller can hold a matching F only from a listing,
+# and listings come from status, which never names an ignored file. So no stat
+# data stands in for it (mtime ticks about once a millisecond here, MM2), and
+# no draft-changed ever says what the bytes now hash to or how many there are:
+# withholding both keeps a guessed path from becoming a hash oracle.
+# Imported again here so this section reads on its own; a repeated import is a no-op.
+import hashlib
+
+# The object-id length of each object format: --head must be the repo's own.
+PIN_OID_HEX = {'sha1': 40, 'sha256': 64}
+# The fstat fields one read must leave unchanged (section 2 (e) step 4).
+PIN_STABLE_FIELDS = ('st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+# walk_leaf's refusals that answer not-a-file {kind}. Each other kind it names
+# has a word of its own in _pin_leaf; a kind outside both is a contract break,
+# which run() answers helper-failed.
+PIN_NOT_A_FILE_KINDS = ('symlink', 'file-in-path', 'special', 'hardlink', 'foreign-owner', 'other-device')
+
+
+def _pin_git(cwd, args, dl):
+    """One docs-show git call in cwd under the show bound -> its stdout. It is
+    soft, so this section names what failed: an expiry is git-timeout {step};
+    a non-zero exit is git-failed {step, rc, stderrHead}, and a stdout past
+    the runner's cap git-failed {step}. The step is git_step's word for the
+    call, so a failed `worktree list` is git-failed {step:'worktree-list'}."""
+    args = list(args)
+    step = git_step(args)
+    sp = docs_git(cwd, args, call_s=CALL_S['show'], dl=dl, ceiling=ceiling_of(cwd), soft=True)
+    if sp.timed_out:
+        raise fail('git-timeout', step=step)
+    if sp.overflow:
+        raise fail('git-failed', step=step, detail='stdout over the runner cap')
+    if sp.rc != 0:
+        raise fail('git-failed', step=step, rc=sp.rc, stderrHead=stderr_head(sp.err))
+    return sp.out
+
+
+def _pin_holder(ctx, repo, bd, dl):
+    """Step 1, enumeration: the ONE record in M that holds refs/heads/<bd>,
+    by the (d) rule (parse_worktrees, then find_holders). A list that failed,
+    timed out, overflowed or cannot be read whole is git-failed or
+    git-timeout {step:'worktree-list'}, never zero holders. No holder (W
+    switched branch, was removed, or is left prunable or missing) is
+    worktree-gone; two or more are ambiguous-worktree {candidates}, and
+    neither is ever picked."""
+    out = _pin_git(repo.path, ('worktree', 'list', '--porcelain', '-z'), dl)
+    try:
+        records = parse_worktrees(out)
+    except ValueError:
+        records = []
+    if not records:
+        raise fail('git-failed', step='worktree-list', detail='malformed')
+    holders = find_holders(ctx, records, bd)[0]
+    if not holders:
+        raise fail('worktree-gone')
+    if len(holders) > 1:
+        raise fail('ambiguous-worktree', candidates=[r['path'] for r in holders])
+    return holders[0]
+
+
+def _pin_trust(repo, rec, dl):
+    """Step 1, trust: all four holder trust checks (trust_holder) on the
+    record just enumerated -> Trusted, whose fd the caller closes. A failed
+    check is untrusted-worktree {why}, identity-changed included. A check
+    trust_holder could not decide is git-timeout or git-failed at the step it
+    names (worktree-list), never a pass."""
+    t = trust_holder(repo, rec, dl)
+    if isinstance(t, Trusted):
+        return t
+    if t[0] == 'untrusted':
+        raise fail('untrusted-worktree', why=t[1])
+    if t[2] == 'timeout':
+        raise fail('git-timeout', step=t[1])
+    raise fail('git-failed', step=t[1], detail=t[2])
+
+
+def _pin_leaf(trusted, rel):
+    """Step 3: walk_leaf from the trusted directory fd -> (fd, st) of a
+    regular file that passed every leaf check; the caller closes fd. In a
+    pinned read an absent leaf, or an absent directory on the way to it, is
+    draft-changed {now:'absent'}. Every other refusal answers as section 2
+    (f)'s worktree table does, and no byte of it is read."""
+    fd, kind, err, st = walk_leaf(trusted.fd, rel, trusted.dev)
+    if fd is not None:
+        return fd, st
+    if kind == 'absent':
+        raise fail('draft-changed', now='absent')
+    if kind == 'symlink-in-path':
+        raise fail('symlink-in-path')
+    if kind == 'unreadable':
+        raise fail('unreadable-path', errno=err)
+    if kind in PIN_NOT_A_FILE_KINDS:
+        raise fail('not-a-file', kind=kind)
+    raise ValueError('walk_leaf answered a kind docs-show does not map: %r' % (kind,))
+
+
+def read_draft(ctx, repo, a, dl):
+    """A DraftPin's bytes, checked in section 2 (e)'s order -> (data, trusted).
+    trusted is the holder's Trusted with its fd already closed (fd None); its
+    path is the worktree the answer names.
+    1. Re-enumerate Bd's holder in M, and re-run holder trust on that record.
+    2. The record's HEAD must be --head, else worktree-moved {head}.
+    3. Walk to the leaf. The size its fstat gives must be within
+       min(N, file_ceiling()), else too-large {size, cap}, before any read.
+    4. Read size + 1 bytes, then fstat again: the read must give exactly size
+       bytes, and ino, size, mtime_ns and ctime_ns must be unchanged.
+    5. sha256 must be F, else draft-changed {now:'present'}.
+    6. HEAD again, by rev-parse in W: a change is worktree-moved {head}.
+    Steps 4 and 5 fail with the same draft-changed, carrying no hash and no
+    size: the bytes are not the ones F names, and the answer never says what
+    they are instead."""
+    trusted = _pin_trust(repo, _pin_holder(ctx, repo, a.branch, dl), dl)
+    leaf = None
+    try:
+        if trusted.head != a.head:
+            raise fail('worktree-moved', head=trusted.head)
+        leaf, st = _pin_leaf(trusted, SECTIONS[a.section] + '/' + a.path)
+        cap = min(a.max_bytes, file_ceiling())
+        if st.st_size > cap:
+            raise fail('too-large', size=st.st_size, cap=cap)
+        try:
+            data = _draft_read(leaf, st.st_size + 1)
+            now = SYS.fstat(leaf)
+        except OSError as e:
+            raise fail('unreadable-path', errno=_walk_errno(e.errno))
+        if len(data) != st.st_size or any(getattr(now, k) != getattr(st, k) for k in PIN_STABLE_FIELDS):
+            raise fail('draft-changed', now='present')
+        if hashlib.sha256(data).hexdigest() != a.fp:
+            raise fail('draft-changed', now='present')
+        head = _pin_git(trusted.path, DRAFT_HEAD_ARGS, dl).decode('ascii', 'replace').strip()
+        if head != a.head:
+            raise fail('worktree-moved', head=head)
+    finally:
+        if leaf is not None:
+            SYS.close(leaf)
+        SYS.close(trusted.fd)
+    return data, trusted._replace(fd=None)
+
+
+def show_draft(ctx, repo, a, dl):
+    """docs-show's draft branch -> DocsShowOk's body {source:'draft', section,
+    path, size, sha256, encoding, text|b64, worktree, branch, head, fp}, where
+    fp is sha256: the bytes served are exactly the bytes that hashed to F. A
+    --head of the other object format is bad-commit, before anything in M or W
+    is enumerated. run() puts the line through guard_show."""
+    if len(a.head) != PIN_OID_HEX.get(repo.object_format):
+        raise fail('bad-commit')
+    data, trusted = read_draft(ctx, repo, a, dl)
+    fp = hashlib.sha256(data).hexdigest()
+    return encode_show(data, {'source': 'draft', 'section': a.section, 'path': a.path,
+                              'size': len(data), 'sha256': fp, 'worktree': trusted.path,
+                              'branch': a.branch, 'head': a.head, 'fp': fp})
+
 # docs-show, the COMMITTED pin (spec 2026-10-01 section 2 (e) CommittedPin and
 # its provenance, section 2 (f) Committed and Encoding, section 2 (b)'s final
 # show guard, section 6.1 --max-bytes). Every byte served is named by the
@@ -31262,7 +31419,7 @@ def verb_show(ctx, a):
     dl = Deadline(HELPER_DEADLINE_S[ctx.verb])
     repo = discover(ctx, a.project, dl)
     if isinstance(a, ShowDraftArgs):
-        raise NotImplementedError('docs-show draft')
+        return show_draft(ctx, repo, a, dl)
     if len(a.commit) != SHOW_OID_HEX.get(repo.object_format):
         raise fail('bad-commit')
     data, blob, mode = read_committed(repo, a, dl)
