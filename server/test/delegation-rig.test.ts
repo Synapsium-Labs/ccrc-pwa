@@ -1133,6 +1133,17 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     for (const leak of [' /srv/acme', '=/srv/acme', ':/srv/acme', '"/srv/acme"', '(/srv/acme)', '@/srv/acme']) expectNamed(leakRun({ note: leak }), NOTE, 'srv/acme');
   }, 60_000);
 
+  // Review 296 m2: the one exception to "a `/` after any other character is scanned" is the `/` of a COMPLETE closing tag `</name>` (ABS's
+  // negative lookahead): a tag, not a path. It hides one bare segment at most. Pinned as declared; the first row of this block pins that
+  // a foreign path INSIDE tags still fails closed.
+  it('a complete closing tag `</name>` is a tag, not a path (declared limit, not a guarantee): `x </srv> y` passes, `</srv/x>` and `</srv.corp>` do not (m2)', () => {
+    for (const fine of ['x </srv> y', '</srv>', '%3C%2Fsrv%3E']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+    for (const leak of ['x </srv/x> y', '</srv.corp>', 'x </srv y', 'x /srv> y']) expectNamed(leakRun({ note: leak }), NOTE, 'srv');
+  });
+
   it.skipIf(USER.length < 4)('scans the decoded spelling of an escaped string: \\uXXXX and %2F', () => {
     const esc = (w: string): string => [...w].map((c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`).join('');
     for (const leak of ['\\u002fsrv\\u002fx', '{"p":"\\u002fsrv\\u002fx"}', 'x %2Fsrv%2Fx', `x-${esc(USER)}-y`, '\\u002e\\u002e\\u002fx']) {
@@ -1183,10 +1194,23 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     for (const leak of ['path=%2Fhome%2Fx', '%2Fhome%2Fsomeone-else%2Facme']) expectNamed(leakRun({ note: leak }), NOTE, 'someone-else', 'acme');
   });
 
-  it('a double-encoded spelling is NOT chased: `%252F` is `%2F` after the one decode (declared single-decode limit, not a guarantee) (F1)', () => {
-    for (const fine of ['%252Fhome%252Fsomeone-else', 'cat%20%252Fhome%252Fx']) {
+  // The decode is ONE pass per kind in the fixed order `\uXXXX` -> `%XX` -> `\/` (review 296 m1). An escape is chased only where an EARLIER
+  // pass produces a LATER kind (the next row); the same kind twice, and a later kind producing an earlier one, are not chased.
+  it('a double-encoded spelling is NOT chased: `%252F` reads `%2F`, `\\u005Cu002F` reads `\\u002F`, `%5Cu002F` reads `\\u002F` (declared limit, not a guarantee) (F1, m1)', () => {
+    for (const fine of [
+      '%252Fhome%252Fsomeone-else', 'cat%20%252Fhome%252Fx', // the percent kind twice
+      'cat \\u005Cu002Fhome\\u005Cu002Fsomeone-else\\u005Cu002Facme', // the \u kind twice: `\` is a backslash, then `u002F` follows it
+      'cat %5Cu002Fhome%5Cu002Fsomeone-else%5Cu002Facme', // a percent escape producing a \u escape: a later pass producing an earlier kind
+    ]) {
+      expect(fine).toMatch(/%25|\\u005C|%5C/);
       const r = leakRun({ note: fine });
       expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+  });
+
+  it('an escape IS chased where an earlier pass produces a later kind: `\\u0025` then `2F`, and `%5C%2F` then a `\\/` pass (m1)', () => {
+    for (const leak of ['x \\u00252Fhome\\u00252Fsomeone-else', 'http:%5C%2F%5C%2F[fd00::abcd]:8080']) {
+      expectNamed(leakRun({ note: leak }), NOTE, 'someone-else', 'fd00');
     }
   });
 
@@ -1407,8 +1431,16 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(r.stdout).toBe('');
   });
 
-  it('refuses missing arguments with exit 2', () => {
-    expect(spawnSync(process.execPath, [SANITIZE], { encoding: 'utf8' }).status).toBe(2);
+  it('refuses missing arguments with exit 2, and a surplus one, and an empty one (m4)', () => {
+    const run = (...a: string[]): number | null => spawnSync(process.execPath, [SANITIZE, ...a], { encoding: 'utf8' }).status;
+    const raw = mkTmp('ccrc-dlg-raw.');
+    const out = path.join(mkTmp('ccrc-dlg-fix-'), 'fix');
+    expect(run()).toBe(2);
+    expect(run(raw), 'ONE argument').toBe(2);
+    expect(run(raw, out, 'extra'), 'THREE arguments').toBe(2);
+    expect(run('', out), 'an empty raw root').toBe(2);
+    expect(run(raw, ''), 'an empty fixtures directory').toBe(2);
+    expect(fs.existsSync(out), 'nothing was written').toBe(false);
   });
 
   // F9 (review 296): `--scan <fixtures-dir>` applies the sanitiser's OWN scan (the same residue() over every string value and every
@@ -1427,8 +1459,9 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     const own = v !== null && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v).length : 0;
     return kids.reduce((a: { strings: number; keys: number }, k) => { const c = jsonCount(k); return { strings: a.strings + c.strings, keys: a.keys + c.keys }; }, { strings: 0, keys: own });
   };
-  /** A temp fixtures directory holding a copy of one COMMITTED fixture (the newest version's agent-plain), after `plant` changed it. */
-  const plantedCorpus = (plant: (f: Record<string, any>) => void): { base: string; dir: string; where: string; f: Record<string, any> } => {
+  /** A temp fixtures directory holding a copy of one COMMITTED fixture (the newest version's agent-plain), after `plant` changed it.
+   *  `where` is how `--scan` names that file: `<version>/#<index>`, never its name (m3). */
+  const plantedCorpus = (plant: (f: Record<string, any>) => void): { base: string; dir: string; v: string; where: string; f: Record<string, any> } => {
     const versions = fs.readdirSync(CORPUS).filter((n) => /^[0-9]+\.[0-9]+\.[0-9]+$/.test(n)).sort();
     const v = versions[versions.length - 1] as string;
     const f = JSON.parse(fs.readFileSync(path.join(CORPUS, v, 'agent-plain.json'), 'utf8')) as Record<string, any>;
@@ -1437,7 +1470,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     const dir = path.join(base, 'fix');
     fs.mkdirSync(path.join(dir, v), { recursive: true });
     fs.writeFileSync(path.join(dir, v, 'agent-plain.json'), `${JSON.stringify(f, null, 1)}\n`);
-    return { base, dir, where: `${v}/agent-plain.json`, f };
+    return { base, dir, v, where: `${v}/#0`, f };
   };
 
   it('--scan of an unplanted copy of a committed fixture is clean, writes nothing, and reports what it read: its strings and keys, counted independently (F9)', () => {
@@ -1476,7 +1509,8 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     fs.writeFileSync(path.join(dir, 'matrix.json'), JSON.stringify(m));
     const r = scanRun('--scan', dir);
     expect(r.status).toBe(1);
-    expect(r.stderr).toBe('sanitize: residue in matrix.json /scenarios/0\n');
+    expect(r.stderr).toBe('sanitize: residue in #0 /scenarios/0\n');
+    expect(r.stderr).not.toContain('matrix');
   });
 
   it('--scan fails closed on a fixture file that is not JSON: a finding, not a skipped file (F9)', () => {
@@ -1485,8 +1519,10 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     fs.writeFileSync(path.join(dir, v, 'broken.json'), '{"notes": ["/opt/acme/x"');
     const r = scanRun('--scan', dir);
     expect(r.status).toBe(1);
-    expect(r.stderr).toBe(`sanitize: residue in ${v}/broken.json (unreadable JSON)\n`);
+    // sorted: agent-plain.json (#0), broken.json (#1): the unreadable file is named by index, never by its name (m3)
+    expect(r.stderr).toBe(`sanitize: residue in ${v}/#1 (unreadable JSON)\n`);
     expect(r.stderr).not.toContain('acme');
+    expect(r.stderr).not.toContain('broken');
   });
 
   it('--scan fails closed on a directory that is not a version and on a fixture file whose name is not a name: named by index, never by text (F9)', () => {
@@ -1501,6 +1537,25 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(r.stderr).toContain(`sanitize: residue in ${v}/#0 (fixture file name)\n`);
     expect(r.stderr).not.toContain('latest');
     expect(r.stderr).not.toContain('Bad_Name');
+  });
+
+  // Review 296 m3: `main` refuses a scenario name on `!NAME.test(s) || residue(s)`; `--scan` judges a fixture file's name the same way, so a
+  // name that fits NAME's shape but carries residue is a finding named by index, and the file's body is not read (as `main` does not
+  // read a refused bundle).
+  it('--scan refuses a fixture file whose name passes the shape test but carries residue, named by index and never by its text (m3)', () => {
+    const { dir, v } = plantedCorpus(() => {});
+    fs.renameSync(path.join(dir, v, 'agent-plain.json'), path.join(dir, v, '-home-someone-else.json'));
+    expect(path.basename('-home-someone-else.json', '.json')).toMatch(/^[a-z0-9-]{1,40}$/);
+    const clean = scanRun('--scan', dir);
+    expect(clean.status).toBe(1);
+    expect(clean.stderr).toBe(`sanitize: residue in ${v}/#0 (fixture file name)\n`);
+    expect(clean.stderr).not.toContain('someone-else');
+    // with residue in the body as well, the name is still the ONE finding: the body of a refused name is not scanned or printed
+    const planted = plantedCorpus((f) => { f.events[0].payload.cwd = 'x /opt/acme/x'; });
+    fs.renameSync(path.join(planted.dir, v, 'agent-plain.json'), path.join(planted.dir, v, '-home-someone-else.json'));
+    const both = scanRun('--scan', planted.dir);
+    expect(both.status).toBe(1);
+    expect(both.stderr).toBe(`sanitize: residue in ${v}/#0 (fixture file name)\n`);
   });
 
   it('--scan of a directory with nothing to scan fails (a mistyped path must not pass): exit 1, one fixed line (F9)', () => {
@@ -1800,7 +1855,7 @@ describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
 
   // The cost of that else arm, pinned (review C1). An answerDialog step is a promise that its dialog appears: one whose dialog never shows
   // writes a failure note, and every later capture of its scenario builds unmeasured. Four wf-* scenarios once carried a step for a dialog
-  // the rig's `Workflow` grant never lets appear (44 of 44 committed workflow fixtures held no answered note). Derived from the committed
+  // the rig's `Workflow` grant never lets appear (no committed workflow fixture held an answered note). Derived from the committed
   // scenarios and fixtures, over every version directory the corpus has: no list of versions or scenarios here, and the answered note is
   // rig.sh's own `dialog answered: …` template filled with the step's own text.
   it('a scenario carries an answerDialog step only if EVERY committed fixture of it holds that dialog\'s answered note, and interrupt-exit\'s step is answered in every version (C1)', () => {

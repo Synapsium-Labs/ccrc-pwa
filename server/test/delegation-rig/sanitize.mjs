@@ -23,12 +23,15 @@
 //   - and any of these in an escaped spelling: `\uXXXX`, EVERY percent escape `%XX` (two hex digits, either case: `cat%20%2Fhome…`,
 //     `http%3A%2F%2Fsrv.corp%2Fx`) and `\/`, each decoded in ONE pass (both the string and its decoded form are scanned).
 // KNOWN LIMITS (each is pinned by a row that reds when the limit closes, so closing one means rewriting its line here):
-//   - base64 (or any other encoding) of residue is not decoded and not chased, and neither is an escape of an escape of the SAME kind:
-//     the decode is one pass per kind, so `%252F` reads `%2F` afterwards and no further.
+//   - base64 (or any other encoding) of residue is not decoded and not chased. The decode is ONE pass per kind, in the fixed order
+//     `\uXXXX`, `%XX`, `\/`, so an escape is chased only where an earlier pass produces a later kind (`%` then `2F`;
+//     `%5C%2F`). Anything else is not: the same kind twice (`%252F` reads `%2F` afterwards, `\u002F` reads `/`), and a
+//     later kind producing an earlier one (`%5Cu002F` reads `/`).
 //   - A `/` glued straight after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (ABS's lookbehind; a `/` after a `/` is a run
 //     of slashes, read where it ends). So `x/srv/acme`, `1/srv/acme`, `./srv/acme`, `a_/srv/acme`, `a-/srv/acme`, a home-anchored
 //     `~/srv/acme` and a scheme-less `127.0.0.1:4000/home/x` all pass. A `/` after ANY other character (a space, `=`, `:`, a quote, a
-//     bracket, `@`...) is scanned.
+//     bracket, `@`...) is scanned, except the `/` of a COMPLETE closing tag `</name>` (`<`, `/`, a plain name, `>`): `x </srv> y`
+//     passes, because that is a tag and not a path (it hides one bare segment at most: `</srv/x>` and `</srv.corp>` are residue).
 //   - MUNGED_FOREIGN is a DENYLIST of tops, not a class: a munged foreign path is caught only when its top is one of `home mnt tmp
 //     srv opt var root Users private proc` (case-sensitive), so `-data-…`, `-media-…` and `-Home-…` pass. Inside an allowed `/rig`
 //     path it is the only check on a munged spelling.
@@ -44,6 +47,8 @@
 // An exception prints one fixed line (never its message, which names a raw path) and exits 1.
 // `--scan <fixtures-dir>` writes nothing and runs that same scan over the COMMITTED corpus (every `*.json` in the directory and in
 // its version directories: the fixtures and matrix.json), so a fixture committed with residue in it is found; see `scanCorpus`.
+// It names a file by `<version>/#<index>` (or `#<index>`), never by its name, and refuses a file name by the test `main` applies
+// to a scenario name: the NAME shape AND no residue in it.
 // Usage: node sanitize.mjs <raw-root> <fixtures-dir>
 //        node sanitize.mjs --scan <fixtures-dir>
 import fs from 'node:fs';
@@ -323,18 +328,21 @@ function main() {
 // `<dir>/<version>/*.json` and runs the SAME `scan` over each one -- `residue()` on every string value and every key, the
 // same pointers -- that `main` runs over a bundle, so a fixture committed with residue in it is found by the scan that would
 // have refused it. It writes nothing. A fixture file that is not JSON, a directory that is not a version and a file whose
-// name is not a name are findings (named by index, never by text), and so is a directory with no JSON file in it at all:
-// a mistyped path must not pass as a clean corpus.
+// name is not a name (`main`'s own test for a scenario name: the NAME shape AND no residue in it) are findings, and so is a
+// directory with no JSON file in it at all: a mistyped path must not pass as a clean corpus. EVERY finding names a file by
+// `<version>/#<index>` (or `#<index>` for the top directory), never by its name: the index is its place in the sorted `*.json`
+// list of its directory, and a version directory is named only after VERSION's digits-and-dots shape has passed.
 function scanCorpus(dir) {
   const findings = [];
   const tally = { files: 0, strings: 0, keys: 0 };
   const jsonIn = (d) => fs.readdirSync(d).sort().filter((n) => n.endsWith('.json') && isFile(path.join(d, n)));
   const readAll = (d, names, prefix) => names.forEach((n, i) => {
-    if (!NAME.test(n.slice(0, -'.json'.length))) { findings.push(`${prefix}#${i} (fixture file name)`); return; }
+    const base = n.slice(0, -'.json'.length);
+    if (!NAME.test(base) || residue(base)) { findings.push(`${prefix}#${i} (fixture file name)`); return; }
     let f;
-    try { f = JSON.parse(fs.readFileSync(path.join(d, n), 'utf8')); } catch { findings.push(`${prefix}${n} (unreadable JSON)`); return; }
+    try { f = JSON.parse(fs.readFileSync(path.join(d, n), 'utf8')); } catch { findings.push(`${prefix}#${i} (unreadable JSON)`); return; }
     tally.files += 1;
-    scan(f, '', `${prefix}${n}`, findings, tally);
+    scan(f, '', `${prefix}#${i}`, findings, tally);
   });
   readAll(dir, jsonIn(dir), '');
   fs.readdirSync(dir).sort().filter((n) => isDir(path.join(dir, n))).forEach((v, vi) => {
