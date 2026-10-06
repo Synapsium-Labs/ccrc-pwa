@@ -153,7 +153,14 @@ describe('deploy/notify.sh carries the token the way the server expects it', () 
     // green in every suite today — the server accepts the tokenless POST as
     // `legacy`, so the defect surfaces one deploy later, as a silent total
     // loss of swap notices, the moment the tolerance is removed.
-    expect(notifySh).toContain('${tok:+-H "x-ccrc-mail-token: $tok"}');
+    //
+    // R16 (centralised-update wave 13): the header now rides curl's STDIN as a
+    // `-K -` config line, never argv, so the pin is on the guarded config line
+    // and the `-K -` beside the curl it feeds. `notify-addr.test.ts` RUNS the
+    // script and pins the same thing by what curl was handed.
+    expect(notifySh).toContain(`{ [ -n "$tok" ] && printf 'header = "x-ccrc-mail-token: %s"\\n' "$tok"; } |\n`
+      + 'curl -fsS -m 5 -X POST "$BASE/api/notify" -K - \\\n');
+    expect(notifySh, 'the token is back on curl\'s argv').not.toMatch(/-H\s+"x-ccrc-mail-token/);
   });
 
   it('skips blank and #-comment lines, then strips ALL whitespace from the value line', () => {

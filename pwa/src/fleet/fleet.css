@@ -996,6 +996,7 @@
 .sess-line--active .sess-ask-state,
 .sess-line--active .sess-unmeasured,
 .sess-line--active .sess-substrate,
+.sess-line--active .sess-child,
 /* Task 6: .sess-repo paints --ink-tertiary of its own — it sits inside
    `.sess-open` on the row's FIRST line, beside the label, not inside
    `.sess-meta` like the cells above, but the same rule applies: a child's
@@ -1466,6 +1467,22 @@
    achromatic group above — see that rule's comment for the ratios this
    costs while a cell is not. */
 .sess-substrate {
+  color: var(--ink-tertiary);
+  flex: none;
+}
+
+/* Child-reclamation wave 5: which run minted this workspace, on a child's
+   fleet line. .sess-substrate's shape: ink-tertiary, fixed
+   words, `flex: none`, never truncated, so the hold reason beside it stays
+   the row's one shrinkable cell. It is a rule of its OWN, not a second
+   selector on the rule above, because that rule's key is grandfathered in
+   the contrast gate's uncovered census and renaming it would read as a new
+   blind spot. Its own `color` takes it out of .sess-meta's
+   inheritance, so it is also named in .sess-line--active's achromatic group,
+   which answers the selected row. The unselected row's ground is the project
+   card: design/audit.mjs's INHERITED_GROUNDS entry for this rule is what makes
+   that pair MEASURED rather than a new entry in the uncovered census. */
+.sess-child {
   color: var(--ink-tertiary);
   flex: none;
 }
@@ -2619,6 +2636,30 @@ button.proj-card-pool::before {
 
 .run-row .run-resumed {
   font-size: var(--text-2xs); color: var(--ink-tertiary);
+}
+/* Child-reclamation wave 5 (spec §5.9): what became of a finished run's CHILD
+   workspace. Scoped under `.run-row`, which is self-grounded (background and
+   colour both set), so these inherit the recovered ground `.run-row .run-kind`
+   does: no new token pair for design/contrast-check.mjs to price. The chip takes
+   `--ink-secondary` like `.run-kind`, and its glyph `--ink-tertiary` like every
+   glyph on this row. A refusal is told apart by its WORD and its glyph, never
+   by a hue. Its sentence gets its own wrapped line in the amber `.run-warn`
+   already prices (`--status-attention-text`), because a terminal refusal is the
+   one word here the operator may need to read in full. NO --glow, NO animation,
+   NO box-shadow: runs are not living panes (`fleet-css.test.ts`). */
+.run-row .run-child-reclaim {
+  display: inline-flex; align-items: baseline; gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--text-2xs);
+  color: var(--ink-secondary);
+}
+.run-row .run-child-reclaim-glyph { color: var(--ink-tertiary); }
+.run-row .run-child-reclaim-sentence {
+  flex: 1 0 100%;
+  min-width: 0;
+  padding-bottom: var(--sp-1);
+  font-size: var(--text-2xs);
+  color: var(--status-attention-text);
 }
 /* Task 12, spec §4.3, D-287: a SIBLING of `.run-open` inside `.run-row`'s
    own `<li>`, never a descendant of it — see RunsScreen.tsx's own comment on

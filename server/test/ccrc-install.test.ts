@@ -96,6 +96,20 @@ import {
   stateCallsNaming, liveShapeRefreshes, foreignCcgptCalls, foreignProbeCalls, assertForeignFront, FOREIGN_MARK,
   withForeignProxyRunning, type ForeignEntry, type RefreshObservation, type StubRc, type LanePorts,
 } from './codexLaneFixture.js';
+import { docsProbeProgram } from './docsHelperPy.js';
+import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
+
+/** The two python3 invocations ccd's Docs front makes when the closing
+ *  doctor's `docs` check runs the installed ccd (Docs W1a): the floor probe,
+ *  read off the shipped ccd/ccd so it is never re-typed, and the ready line
+ *  the doctor suite's own stub prints. The `python3` stub below embeds both
+ *  in single quotes, so a quote or a newline in either is refused here,
+ *  before a stub that parses differently is ever written. */
+const DOCS_PROBE = docsProbeProgram();
+const DOCS_READY_LINE = JSON.stringify(DOCS_INDEX_READY);
+if (/['\n]/.test(DOCS_PROBE + DOCS_READY_LINE)) {
+  throw new Error('the docs probe or the ready line holds a quote or a newline; the python3 stub cannot embed it');
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -704,9 +718,15 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // leg dies at its preflight); any other `-c` falls through to the
     // refusal below, which is this stub's contract.
     ...python3ProgramArm(PYTHON3),
+    // ccd's Docs front, reached by the closing doctor's `docs` check through the
+    // INSTALLED ccd (Docs W1a): the 3.8 floor probe passes, and the helper
+    // prints the canned ready answer. Canned rather than forwarded to the real
+    // python3, so the install stays hermetic and reads no projects root.
+    `[ "$1" = -c ] && [ "$2" = '${DOCS_PROBE}' ] && exit 0`,
+    `[ "$1" = /dev/fd/3 ] && [ "$2" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
-  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   // `verify-service.sh`'s own knobs, at the values its header says a test uses:
   // the production defaults sleep 3 + 5 seconds per call, and `_inst_enable`
   // makes one call per install. Zeroed here rather than per test, for the
@@ -8174,13 +8194,20 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  `origin/main` (`$SCRATCH/t10-base`). RE-MEASURED when doctor gained its
  *  `timeout` check, by Step 3's case on a disposable copy of that tree: the
  *  three maps each gained `"timeout": "PASS"` and nothing else moved — every
- *  other class, both codes and both refreshes equal. RE-MEASURED again when
- *  doctor gained its `model-default` check, the same way, on a disposable
+ *  other class, both codes and both refreshes equal. RE-MEASURED again on the merge of
+ *  `origin/main` into native Docs W1, when doctor gained its `docs` check, by the same
+ *  case on a disposable copy of the merged tree: the three maps each gained
+ *  `"docs": "PASS"` and nothing else moved (`codex: SKIP`, which the measurement
+ *  also prints, stays out: the live cases spread it over this golden). RE-MEASURED
+ *  again when doctor gained its `model-default` check, the same way, on a disposable
  *  `git archive` copy of `36438851d`'s tree (the commit that added the check,
- *  on `b3b5a73ed`): the three maps each gained
- *  `"model-default": "PASS"` and nothing else moved (`codex` measured `SKIP`
- *  in all three, which these maps leave out by design — see the first case).
- *  It is a golden: nothing re-measures
+ *  on `b3b5a73ed`): the three maps each gained `"model-default": "PASS"` and
+ *  nothing else moved. RE-MEASURED once more on that branch's merge of
+ *  `origin/main` (`b27fabc15`), which carries both checks, by the same case on a
+ *  disposable `git archive` copy of the merged tree (`git write-tree` of the
+ *  resolved index): exactly `origin/main`'s three maps plus `"model-default":
+ *  "PASS"` in each — both codes 0, both refreshes equal, `codex` `SKIP` in all
+ *  three. It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
  *  base, never hand-edited (it held on the final fix wave's merge of
@@ -8206,6 +8233,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "config": "PASS",
         "credentials": "SKIP",
         "disk": "PASS",
+        "docs": "PASS",
         "exposure": "SKIP",
         "fleet": "SKIP",
         "flock": "PASS",
@@ -8252,6 +8280,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "config": "PASS",
         "credentials": "SKIP",
         "disk": "PASS",
+        "docs": "PASS",
         "exposure": "SKIP",
         "fleet": "SKIP",
         "flock": "PASS",
@@ -8368,6 +8397,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "config": "PASS",
       "credentials": "SKIP",
       "disk": "PASS",
+      "docs": "PASS",
       "exposure": "SKIP",
       "fleet": "SKIP",
       "flock": "PASS",
