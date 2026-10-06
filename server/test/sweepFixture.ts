@@ -41,8 +41,13 @@ export const CCRC_SRC = join(REPO, 'ccd', 'ccrc');
 export const VERIFY_SRC = join(REPO, 'deploy', 'verify-service.sh');
 /** The frozen pre-wave-11 `_upd_sweep` (v0.0.60 through v0.0.84), sourced after `ccd/ccrc` and redefining it. */
 export const FROZEN_SWEEP = join(here, 'fixtures', 'upd-sweep-pre-wave11.bash');
-/** S0, the verify script as wave 10 shipped it, byte for byte (its fixture file lands with the window file, Task 6). */
+/** S0, the verify script every release through v0.0.79 ships (one digest from v0.0.1, measured) — the PRE-wave-10
+ *  script, with no deliberate-stop classifier — byte for byte (`git show v0.0.79:deploy/verify-service.sh`; wave 12,
+ *  R19e, which corrects the "as wave 10 shipped it" this line said). */
 export const FROZEN_VERIFY_S0 = join(here, 'fixtures', 'verify-service-pre-wave10.sh');
+/** S10, the verify script as v0.0.80 through v0.0.91 ship it — wave 10's, with the classifier and none of wave 11's
+ *  purged-arm guards — byte for byte (`git show v0.0.91:deploy/verify-service.sh`; wave 12, R19d, D-4069). */
+export const FROZEN_VERIFY_S10 = join(here, 'fixtures', 'verify-service-pre-wave11.sh');
 
 /** What gets a poison planted by `makeBox`. `gh` is not here: `ghContainedEnv` plants it. */
 export const POISONS: readonly string[] =
@@ -55,12 +60,15 @@ export const CONTAINED: readonly string[] = [
 
 /** One planted unit. `active` and `mainPid` are answered one per call, the last repeating, across EVERY call of
  *  that unit (the first verify's and the re-check's alike). `loadState` answers `show -p LoadState --value`
- *  (default `loaded`; `''` prints nothing and exits 1). `listed`: `'active'` = in the pre-restart AND the
- *  `--state=active` listing (the default); `'crash:<word>'` = in the pre-restart listing as active, and in the
- *  `--state=activating,failed` listing as `<word>`; `'gone'` = in the pre-restart listing only. */
+ *  (default `loaded`; `''` prints nothing and exits 1). `listed` is the POST-restart listings: `'active'` = in the
+ *  `--state=active` listing (the default); `'crash:<word>'` = in the `--state=activating,failed` listing as `<word>`;
+ *  `'gone'` = in neither. `preRestart` is the PRE-restart listing (`list-units claude-session@*`, which the sweep
+ *  reads its `before` set from): the unit's ACTIVE word there (default `'active'`), or `null` for a unit that listing
+ *  does not show at all (wave 12, R19b, D-4070: a unit that was NOT active before the restart). */
 export interface UnitPlant {
   unit: string; active: string[]; mainPid: string[]; loadState?: string;
   listed?: 'active' | `crash:${string}` | 'gone';
+  preRestart?: string | null;
 }
 
 /** A unit's Nth `is-active` call waits, polling every 0.1 s for at most `boundTenths`, until `until` holds; then it
@@ -224,16 +232,19 @@ export function makeBox(o: BoxOpts): Box {
   const fx = join(home, 'fx');
   mkdirSync(fx, { recursive: true });
   const row = (u: string, word: string, sub: string): string => `${u} loaded ${word} ${sub} x`;
+  const subOf = (word: string): string =>
+    (word === 'active' ? 'running' : word === 'failed' ? 'failed' : word === 'inactive' ? 'dead' : 'auto-restart');
   const all: string[] = [];
   const active: string[] = [];
   const crash: string[] = [];
   for (const p of o.units) {
-    all.push(row(p.unit, 'active', 'running'));
+    const pre = p.preRestart === undefined ? 'active' : p.preRestart;
+    if (pre !== null) all.push(row(p.unit, pre, subOf(pre)));
     const listed = p.listed ?? 'active';
     if (listed === 'active') active.push(row(p.unit, 'active', 'running'));
     else if (listed !== 'gone') {
       const word = listed.slice('crash:'.length);
-      crash.push(row(p.unit, word, word === 'failed' ? 'failed' : 'auto-restart'));
+      crash.push(row(p.unit, word, subOf(word)));
     }
     if (p.active.length > 0) writeFileSync(join(fx, `${p.unit}.active`), p.active.join('\n') + '\n');
     if (p.mainPid.length > 0) writeFileSync(join(fx, `${p.unit}.pid`), p.mainPid.join('\n') + '\n');

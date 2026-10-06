@@ -4261,7 +4261,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
 
     // Wave 11 R14(j) (D-3980): the launchd job sources both env files with /bin/bash under `set -a`. Assigning one of the
     // names /bin/bash reserves ends that shell before its `exec` when POSIXLY_CORRECT has turned POSIX mode on (bash's
-    // read-only variables, five of this set in bash 3.2 (BASHOPTS arrived in 4.1) and six in 5.2; in 3.2 also BASH_ARGC, BASH_ARGV, BASH_LINENO, BASH_SOURCE, FUNCNAME and GROUPS), so the
+    // read-only variables, five of this set in bash 3.2 (BASHOPTS arrived in 4.1) and six in 5.2; in 3.2 also
+    // BASH_ARGC, BASH_ARGV, BASH_LINENO, BASH_SOURCE, FUNCNAME and GROUPS), so the
     // job never starts, whatever CCRC_AUTH says. The plain test refuses the fifteen as a NAME, in either file and in any
     // order, under its own cause: the reason names the line, never the variable (A1) and calls none of them read-only (A5).
     // D-3987 widens it to fifteen: HISTCMD and OPTIND are integer variables with no assign function, so a value that is an

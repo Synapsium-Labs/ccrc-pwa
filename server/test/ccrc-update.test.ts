@@ -2954,8 +2954,9 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
   });
 
   // ── Wave 11 (R12), Task 7: the Darwin arm — one shared window, one re-check ──
-  // D0–D4 and D6–D8 reach the arm from any runner (`sourcedCcrc` forces CCD_OS after
-  // the `.`), the launchctl stub is `updateEnv`'s own, and the window knobs are 0.
+  // D0–D2, D4 and D6–D8 reach the arm from any runner (`sourcedCcrc` forces CCD_OS after
+  // the `.`), and D3 from a Linux runner (wave 12, R19a; D-4068); the launchctl stub is
+  // `updateEnv`'s own, and the window knobs are 0.
   const SWEEP_D = 'CCD_OS=darwin; UPD_BACKUP_DIR="$HOME/ccrc-backups/fixture"; ';
   const IDS3 = ['alpha', 'beta', 'gamma'];
   const darwinBox = (prefix: string, ids: string[]): string => {
@@ -3028,8 +3029,9 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
   };
   // `_upd_report_readable` reads the file's size through `_plat_size`, which under a forced
   // CCD_OS=darwin runs BSD `stat -f %z` — a Linux runner's GNU stat refuses that and the foreign report
-  // would read as this run's own. D3 stands the platform primitive in; D3d (macOS) runs the real one.
-  it('D3: a foreign report survives the Darwin die (the platform size primitive stood in on this runner) (wave 11, D-3973)', () => {
+  // would read as this run's own. D3 stands the platform primitive in with GNU `stat -c %s`, which BSD
+  // stat refuses in turn, so D3 is Linux-only; D3d (macOS) runs the real one (wave 12, R19a; D-4068).
+  itLinux('D3: a foreign report survives the Darwin die (GNU stat stands in for the platform size primitive) (wave 11, D-3973)', () => {
     d3(darwinBox('ccrc-update-sweep-d3-', IDS3), '_plat_size() { stat -c %s "$@"; }; ');
   });
   itDarwin('D3d: a foreign report survives the Darwin die, the real _plat_size (wave 11, D-3973)', () => {

@@ -793,8 +793,11 @@ the staged tree (role-aware, atomic, seed-once files untouched, every rostered h
 tree in a version directory of its own and flips `~/ccrc` to it — Versioned installs, below; it mints `~/.ccrc/node-id`
 once, rewrites `~/.ccrc/ccrc-caps` with what this install can do, and raises the floor last); the health gate (below);
 the supervisor sweep behind its mandatory `KillMode=process` preflight, each restarted supervisor then held to the
-stay-up check (`deploy/verify-service.sh` on Linux), all of them in one shared window — a unit the post-restart listing
-shows `activating` or `failed` is verified too — and a crash-like first failure gets ONE re-check, alone: it fails the
+stay-up check (`deploy/verify-service.sh` on Linux), all of them in one shared window (on Linux: for up to
+`CCRC_SWEEP_VERIFY_JOBS` units, default 128, given a scratch directory; more take one window per chunk, and with no
+scratch directory each unit is verified alone, in turn) — a unit that was active before the restart and that the
+post-restart listing shows `activating` or `failed` is verified too — and a crash-like first failure gets ONE
+re-check, alone: it fails the
 run (exit 1, reported `failed` unless a newer update owns the report) only if that fails too, and the re-checks stop at
 the first that fails; macOS runs the same window and re-check in-process, with no stop-on-purpose classifier. On Linux a
 session stopped on purpose while the sweep walks (its unit settled `inactive` with ccd's
