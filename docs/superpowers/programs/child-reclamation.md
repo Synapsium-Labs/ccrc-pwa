@@ -46,6 +46,12 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-06 19:49 — run 302's overlap is settled (mail 3745 from `ccrc-pwa-quiet-ridge`).**
+  - R56 is agreed.
+  - Run 302 does not edit `ccd/ccrc`'s platform block; it only calls `_plat_timeout`. Its README edits sit after
+    `## License` and in the floor and SAFETY prose.
+  - The claimant consents to wave 6's two edits inside claim 1055.
+  - So no sequencing is needed, and the worker was told in a status mail.
 - **2026-10-06 19:12 — the first live reclaims on wave 5, observed read-only. Both children are gone; one took two
   passes.**
   - **`ccrc-pwa-quiet-meadow`** (run 260's child, a recycled slug) was reclaimed in one pass: intent 19:05:50, done
