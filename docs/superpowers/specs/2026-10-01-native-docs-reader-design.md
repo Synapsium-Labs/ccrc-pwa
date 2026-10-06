@@ -824,7 +824,7 @@ The class is L0 `contentClass(path)` (§5.1): one of `markdown`, `raster`, `svg`
    - The two fsck settings make git refuse a malformed object rather than write it into a store that live sessions share.
    - `--no-write-fetch-head` keeps a worker's `FETCH_HEAD` untouched (sheet B §9).
    - `+` matches git's default refspec, so a force-pushed `ws/*` branch does not stay stale.
-   - Only one ref moves per call. There is no `set-head` and no prune. The explicit refspec alone does not make that true (D-4163): git also maps the fetched ref through every configured `remote.origin.fetch` line, so a `+refs/heads/*:refs/heads/*` line would force-move the local branch. The empty `--refmap=` drops those mappings, and `followRemoteHEAD=never` stops a git >= 2.48 creating `refs/remotes/origin/HEAD` (2.43 ignores the key).
+   - Only one ref moves per call. There is no `set-head` and no prune. The explicit refspec alone does not make that true (D-4163): git also maps the fetched ref through every configured `remote.origin.fetch` line, so a `+refs/heads/*:refs/heads/*` line would force-move the local branch. The empty `--refmap=` drops those mappings, and `followRemoteHEAD=never` is there to stop git creating `refs/remotes/origin/HEAD`: documented for git >= 2.48, unmeasured here (git 2.43).
 7. **Classify**, with `LC_ALL=C` stderr. The four rc/message pairs are measured; whether a translated locale would change them is UNMEASURED, because the box has only C locales.
 
    | Result | Word |

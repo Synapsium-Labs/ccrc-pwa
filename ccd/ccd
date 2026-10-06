@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1aea1332ee579aa34ca34a7b86f2f045a44ac2c3af586007b751dd8a5d2fd1e6
+# ccrc:generated 1 sha256=3e90aeb94e68dc05edfe259d173d2f1c7ac100a266c0493630e21e4a3c395438
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32991,8 +32991,8 @@ FETCH_ARGV_HEAD=('-c','gc.auto=0','-c','maintenance.auto=false','-c','fetch.writ
 # to the fetched ref as an opportunistic mapping (a `+refs/heads/*:refs/heads/*`
 # line in M's config force-moves the LOCAL branch; a second namespace line
 # moves refs/remotes/<it>/<b>), so the one explicit refspec is the only map.
-# followRemoteHEAD=never stops a git >= 2.48 creating refs/remotes/origin/HEAD
-# on an explicit-dst fetch (no set-head); git 2.43 ignores the unknown key.
+# followRemoteHEAD=never: that it stops refs/remotes/origin/HEAD being created on an
+# explicit-dst fetch (no set-head) is documented for git >= 2.48, unmeasured here (git 2.43).
 # Both pass the runner deliberately: --refmap= is not a NEVER_FLAGS prefix and
 # remote.origin.followremotehead is not a PINNED_KEYS key. The leading `+`
 # matches git's default refspec, so a force-pushed ws/* branch does not stay
