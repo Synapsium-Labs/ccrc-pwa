@@ -135,6 +135,7 @@ export type ConfirmBy = 'reg' | 'observed' | 'held-match' | 'later-tick' | 'loca
 export const CONFIRM_BY: readonly ConfirmBy[];
 export type GenerationVia = 'line' | 'registry' | 'absent' | 'unreadable';
 export const GENERATION_VIA: readonly GenerationVia[];
+export const DRAINING_NAME_MAX: 253;
 export function drainingNameOk(name: unknown): boolean;
 /** A record's own fields — everything but `v`, `k` and `t`. */
 export type JournalFields = Readonly<Record<string, unknown>>;

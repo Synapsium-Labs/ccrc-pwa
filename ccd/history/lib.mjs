@@ -460,12 +460,19 @@ export const CONFIRM_BY = Object.freeze(['reg', 'observed', 'held-match', 'later
  *  `.generation`, or neither — absent and unreadable never folded. */
 export const GENERATION_VIA = Object.freeze(['line', 'registry', 'absent', 'unreadable']);
 
-/** `.draining/<id>.<tickms>.<pid>.jsonl`, one name of at most 255 bytes whose
- *  id passes idOk; the id is everything before the last three dot-parts. The
- *  ONE spelling of this grammar: the sweep's draining-name parser gates on it
- *  first, so a name refused here is never listed, journaled or drained. */
+/** D-4303 (draining-name-253): the longest draining name whose sidecar temp,
+ *  `<name minus .jsonl>.obs.tmp` (two bytes longer than the name), still fits a
+ *  255-byte NAME_MAX. A 254- or 255-byte name would make the sidecar's temp
+ *  open throw ENAMETOOLONG on every pass, so it is refused here, not admitted. */
+export const DRAINING_NAME_MAX = 253;
+
+/** `.draining/<id>.<tickms>.<pid>.jsonl`, one name of at most DRAINING_NAME_MAX
+ *  (253) bytes whose id passes idOk; the id is everything before the last three
+ *  dot-parts. The ONE spelling of this grammar: the sweep's draining-name parser
+ *  gates on it first, so a name refused here is never listed, journaled or
+ *  drained. The sweep's own renames reach 252 bytes at most (D-4303). */
 export function drainingNameOk(name) {
-  if (typeof name !== 'string' || Buffer.byteLength(name, 'utf8') > 255) return false;
+  if (typeof name !== 'string' || Buffer.byteLength(name, 'utf8') > DRAINING_NAME_MAX) return false;
   const m = /^(.+)\.([0-9]{1,16})\.([0-9]{1,10})\.jsonl$/.exec(name);
   return m !== null && idOk(m[1]);
 }

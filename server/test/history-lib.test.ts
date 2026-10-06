@@ -23,7 +23,7 @@ import {
   canonicalJson, sha256Hex, sha256Bytes, digestText, leafId, parentId, eventKey, blobShaOfBody, blobShaOfBytes,
 } from '../../ccd/history/lib.mjs';
 import {
-  SPOOL_KEYS, SPOOL_LINE_MAX, JOURNAL_V, CONFIRM_BY, GENERATION_VIA, splitSpoolText, parseSpoolLine, drainingNameOk,
+  SPOOL_KEYS, SPOOL_LINE_MAX, DRAINING_NAME_MAX, JOURNAL_V, CONFIRM_BY, GENERATION_VIA, splitSpoolText, parseSpoolLine, drainingNameOk,
   parseJournalRecord, journalRecord,
 } from '../../ccd/history/lib.mjs';
 
@@ -435,6 +435,30 @@ describe('drainingNameOk: the draining file names the journal records', () => {
     const name = `${'a'.repeat(SPOOL_ID_MAX)}.1700000000000000.4294967295.jsonl`;
     expect(Buffer.byteLength(name)).toBeGreaterThan(255);
     expect(drainingNameOk(name)).toBe(false);
+  });
+
+  // D-4303 (draining-name-253): a name's sidecar temp is the name plus two
+  // bytes, so 253 is the longest admitted name whose `.obs.tmp` fits NAME_MAX.
+  it('admits 253 bytes and refuses 254 and 255: the sidecar temp must fit 255 D-4303', () => {
+    const at = (idLen: number) => `${'a'.repeat(idLen)}.1700000000000.4294967295.jsonl`;
+    expect(DRAINING_NAME_MAX).toBe(253);
+    expect(Buffer.byteLength(at(222))).toBe(253);
+    expect(Buffer.byteLength(at(223))).toBe(254);
+    expect(Buffer.byteLength(at(224))).toBe(255);
+    expect(drainingNameOk(at(222))).toBe(true);
+    expect(drainingNameOk(at(223))).toBe(false);
+    expect(drainingNameOk(at(224))).toBe(false);
+    // the temp of the longest admitted name fits; the temp of the first refused one does not
+    const temp = (n: string) => Buffer.byteLength(`${n.slice(0, -'.jsonl'.length)}.obs.tmp`);
+    expect(temp(at(222))).toBeLessThanOrEqual(255);
+    expect(temp(at(223))).toBeGreaterThan(255);
+  });
+
+  it('the longest name the sweep itself renames to (224-char id, 13-digit tick, 7-digit pid) is admitted D-4303', () => {
+    const name = `${'a'.repeat(SPOOL_ID_MAX)}.1791244261576.1234567.jsonl`;
+    expect(Buffer.byteLength(name)).toBe(252);
+    expect(Buffer.byteLength(name)).toBeLessThanOrEqual(DRAINING_NAME_MAX);
+    expect(drainingNameOk(name)).toBe(true);
   });
 });
 
