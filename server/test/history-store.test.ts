@@ -428,10 +428,14 @@ describe('store.mjs: the binding', () => {
     expect(fs.readdirSync(P.dbDir).sort()).toEqual(['history.db', 'notes.txt']);
   });
 
-  it('removeStaleTemps answers [] for an absent db/ only; an unlistable db/ throws instead of reading as nothing stale (D-4305)', () => {
+  it('removeStaleTemps answers [] for an absent db/ (ENOENT), and removes nothing there (D-4305)', () => {
     const h = home();
     expect(removeStaleTemps(h)).toEqual([]);
-    if (process.getuid?.() === 0) return; // root bypasses mode 0o100, so db/ cannot be made unlistable as uid 0
+  });
+
+  // Root bypasses mode 0o100, so db/ cannot be made unlistable as uid 0.
+  it.skipIf(process.getuid?.() === 0)('an unlistable db/ throws instead of reading as nothing stale (D-4305)', () => {
+    const h = home();
     const P = historyPaths(h);
     fs.mkdirSync(P.dbDir, { recursive: true });
     fs.writeFileSync(path.join(P.dbDir, '.history.db.restore.1700000000000'), 'x');
