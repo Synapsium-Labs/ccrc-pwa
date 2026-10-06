@@ -535,7 +535,9 @@ accepting transcript loss.
      Claude Code's native adopt record, naming a background shell handed "to the next wake", if the stage-2 spike
      makes native handoff primary; the stage-3 launch record carries run and agent ids, never a pid, so under
      manifest-primary, and before stage 3, no record exists and that predicate is satisfied. A predicate it cannot
-     measure skips that scope for the tick and records nothing new; a scope seen live drops its entry.
+     measure skips that scope for the tick and records nothing new; a scope seen live drops its entry, except one
+     carried for a child cgroup or for the parent-walk hop cap, which keeps its previous line even live and gets
+     no `old` listing (a scope with a child cgroup is never stopped).
    - **The stop ships SHADOWED** (the coordinator's safety ruling at wave 4's planning): a scope that passes every
      predicate is recorded `would-stop`, and the stop is issued only while `$REG/scope-sweep-live` exists. Nothing
      in the tree writes that file — the operator arms it by hand after reading the shadow verdicts, as with

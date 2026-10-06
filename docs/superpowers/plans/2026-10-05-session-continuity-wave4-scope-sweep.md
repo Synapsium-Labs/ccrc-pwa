@@ -22,8 +22,9 @@
 >    spawn variable — item 2 (the sweep, its record and its doctor reader), item 3 (the limit-banner harness) — plus §9's
 >    reap-class count, with the coordinator's safety ruling: **the stop ships SHADOWED**. Task 8 is the whole branch, the
 >    PR and the AGENT-FIRST deploy.
-> 3. **Deviation numbers are the coordinator's.** The block issued for this wave's WORKER is 4012 to 4021, written bare;
->    this plan defines none. Departures are named below as slugs only.
+> 3. **Deviation numbers are the coordinator's, defined in the plan by the worker.** The block issued for this wave's WORKER is 4012 to 4021, written bare;
+>    as the coordinator's brief directed, the worker defined each departure in this plan's `## Deviations found`, in the
+>    commit that made the change (4012 to 4021, then 4088 to 4090 and the three found while executing, 4091 to 4093).
 > 4. **Not in this wave** (the coordinator's rulings B and E): `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the
 >    spawn environment (wave 4b, after the baseline week this wave's deploy starts — so the spec's "ships first" is
 >    amended in rev 8, departure `pressure-reap-variable-ships-after-baseline-b`) with §9's pressure-kill metric that
@@ -143,8 +144,9 @@ implicitly include this section.
   so `repoint-readme.py` is never run. Measured on the prototype after Task 1 and after Task 7: `147 / 197 / 55 / 35`,
   every `ENTERED`/`LEFT` empty.
 - **The `_reg_get` census does not move:** no task adds a `_reg_get` call (`grep -v '^[[:space:]]*#' ccd/ccd | grep -o
-  '_reg_get "' | wc -l` → `182`, `grep -v '^[[:space:]]*#' ccd/ccd | grep -c '_reg_get "'` → `153`, at `d12b5aba0`
-  and on the tip; `ccd-reg-get-census.test.ts` green).
+  '_reg_get "' | wc -l` → `192`, `grep -v '^[[:space:]]*#' ccd/ccd | grep -c '_reg_get "'` → `162`, at the base
+  `77c11245a` and on the tip before the merge of `origin/main` 8d85c7cf4, which carries one `_reg_get` call of its own
+  (`193` / `163` on `origin/main` and on the merged tree: the census equals main's); `ccd-reg-get-census.test.ts` green).
 - **Locate code by CONTENT.** Line numbers are "at `d12b5aba0`" and are hints, never addresses. Every edit below is an
   "In `<file>`, find:" block whose anchor matches exactly once on `origin/main` at `d12b5aba0` at its turn.
 - **Shell state does not survive between Bash calls.** Every block that names `$SCRATCH` sets it itself
@@ -152,8 +154,9 @@ implicitly include this section.
 - **Branch discipline:** commit on this workspace's own branch only; never a separate feature branch. One commit per
   task. **Commit trailers:** end every commit message with the attribution line your own session is given.
 - **No hostnames, IPs, tailnet names, docserver URLs or account names** in a committed file (`topology-clean.test.ts`).
-- **`## Deviations found` numbers are ISSUED, never chosen.** Write no `D-<number>` token for a departure; name it by
-  its slug in the wave-done mail, and the coordinator defines it from 4012 to 4021.
+- **`## Deviations found` numbers are ISSUED, never chosen.** The worker defined each departure in `## Deviations found`
+  under the number the coordinator issued (4012 to 4021, then 4088 to 4090 and 4091 to 4093), in the commit that made the
+  change, as the coordinator's brief directed; it also names the slug in the wave-done mail, and never calls the allocator.
 - **OVERLAP — who lands second merges.** Landing-order wave 3 (#248) edits `ccd/ccd`'s pr-state lines,
   `ccd/session-hook.sh`, `ccd/ccrc-doctor-checks` and `server/test/ccrc-doctor.test.ts`; workspace-lifecycle wave 3
   (run 245) edits `ccd/ccd`'s RECLAIM/EXPIRE regions and the spawn paths; delegation-broker's run 271 edits
@@ -468,7 +471,7 @@ elif ! git -c merge.conflictStyle=merge merge --no-edit origin/main; then
      && sed -n 2p ccd/ccd | grep -q '^<<<<<<< ' && sed -n 4p ccd/ccd | grep -q '^=======$' \
      && sed -n 6p ccd/ccd | grep -q '^>>>>>>> ' \
      && sed -n 3p ccd/ccd | grep -q '^# ccrc:generated 1 sha256=' && sed -n 5p ccd/ccd | grep -q '^# ccrc:generated 1 sha256='; then
-    sed -i '2,6d' ccd/ccd && ~/.local/bin/ccrc restamp ccd/ccd
+    sed -i '2d;4,6d' ccd/ccd && ~/.local/bin/ccrc restamp ccd/ccd
     git add ccd/ccd && git commit --no-edit && echo 'merged: the stamp hunk resolved by re-stamping'
   else
     echo 'STOP: a conflict other than the ccd/ccd stamp line — report it'; git merge --abort
@@ -4302,7 +4305,7 @@ elif git -c merge.conflictStyle=merge merge --no-edit origin/main; then
 elif [ "$(git diff --name-only --diff-filter=U)" = ccd/ccd ] && [ "$(grep -c '^<<<<<<< ' ccd/ccd)" = 1 ] \
      && sed -n 2p ccd/ccd | grep -q '^<<<<<<< ' && sed -n 4p ccd/ccd | grep -q '^=======$' \
      && sed -n 6p ccd/ccd | grep -q '^>>>>>>> '; then
-  sed -i '2,6d' ccd/ccd && ~/.local/bin/ccrc restamp ccd/ccd && bash -n ccd/ccd \
+  sed -i '2d;4,6d' ccd/ccd && ~/.local/bin/ccrc restamp ccd/ccd && bash -n ccd/ccd \
     && ! grep -qE '^(<<<<<<< |=======$|>>>>>>> )' ccd/ccd \
     && git add ccd/ccd && git commit --no-edit && echo 'merged: the stamp resolved by re-stamping'
 else
@@ -4472,9 +4475,10 @@ predicate (satisfied by construction until a record exists).
 
 ## Deviations found
 
-Numbers are ISSUED, never chosen: the coordinator defines each departure below from the worker's block, 4012 to 4021,
-in the same act as the wave's acceptance; a worker never calls the allocator (worker clause 11). A departure found
-while executing is named in the wave-done mail by a new slug. A session that cannot reach the coordinator writes
+Numbers are ISSUED, never chosen: the worker defined each departure below under the number the coordinator issued
+(4012 to 4021, 4088 to 4090, and 4091 to 4093 for the three found while executing), in the commit that made the change,
+as the coordinator's brief directed; a worker never calls the allocator (worker clause 11). A departure found
+while executing is also named in the wave-done mail by its slug. A session that cannot reach the coordinator writes
 `D-TBD-<slug>` in its report and nowhere in a committed file.
 
 Departures from the spec that this plan makes, each measured above — **sixteen, against a block of ten** — the thirteen planned (4012–4021,
@@ -4533,7 +4537,12 @@ Departures from the spec that this plan makes, each measured above — **sixteen
   record a SKIP (a fresh install's first tick is two minutes away) and a paused sweep a SKIP (never a stale WARN),
   warns on a record older than 300 s, prints each dead scope's age on the record's own clock with the scope's and its
   oldest process's age and its pids, and gives the record's path a test seam (`CCRC_SCOPE_SWEEP_STATE`) so no test
-  reads a real box's. `BASE_LIVE_SHAPE` gains `"scope-sweep": "SKIP"` in its three maps. Rows 5.1–5.10.
+  reads a real box's. `BASE_LIVE_SHAPE` gains `"scope-sweep": "SKIP"` in its three maps. Rows 5.1–5.10. Four things the
+  review of the wave named sit inside this contract and take no number of their own: the reader's every arithmetic regex is
+  bounded (a leading zero or a 20-digit run would abort the check inside `$( … )`), `CCRC_SCOPE_SWEEP_STALE_S` falls back
+  to 300 when it is not a number, a line under a good header that matches neither shape is counted as unreadable and
+  never dropped (its remedy wording is carried to wave 4b), and `ccrc-doctor-graphify.test.ts`'s doctor environment gains
+  the `CCRC_SCOPE_SWEEP_STATE` seam so that suite never reads a real box's record.
 - **D-4021** `stage-six-maps-scopes-through-ccd-spawns` — §9 names B but not its instrument. The plan reads the user journal (one
   read-only `journalctl --user` run on two indexed field matches — the instrument's header said it runs nothing but
   read-only opens — or `--journal FILE`, a new flag and `ctx` key the carried "one shape" constraint did not list), maps

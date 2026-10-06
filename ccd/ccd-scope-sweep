@@ -73,7 +73,10 @@
 # /proc entry or a /proc/net table it cannot read) SKIPS that scope for the tick
 # and records nothing new: the scope's previous verdict line is carried
 # unchanged, and the other scopes are judged as usual. A scope seen LIVE drops
-# its entry, so its clock starts again from zero the next time it dies.
+# its entry, so its clock starts again from zero the next time it dies. THE
+# EXCEPTION: a scope carried for a child cgroup (it is checked before liveness
+# is decided) or for the parent-walk hop cap keeps its line even when it is
+# live, and gets no `old` listing; a scope with a child cgroup is never stopped.
 #
 # THE CLOCK is boot-relative: `first=` is /proc/uptime's seconds when the scope
 # was first seen dead, so a wall-clock step (NTP, a manual `date`) moves no
@@ -266,7 +269,12 @@ while read -r u _; do
   for d in "$CGROOT$cg"/*; do [ -d "$d" ] && { kids=1; break; }; done
   shopt -u dotglob nullglob
   (( kids == 0 )) || { _ss_carry; continue; }
-  # WHOSE SERVER: by pid, comm, and a start EARLIER than the scope's (microseconds since boot, both)
+  # WHOSE SERVER: by pid, comm, and a start EARLIER than the scope's. THE TWO CLOCKS DIFFER: the server's start is /proc
+  # starttime in ticks since boot (CLOCK_BOOTTIME, which counts suspended time), the scope's `mono` is systemd's
+  # ActiveEnterTimestampMonotonic (CLOCK_MONOTONIC, which does not). After a suspend an OLDER server can therefore read as
+  # `reused`: reported, never stopped, so it fails safe. On a box that suspends, suspended time also counts toward the
+  # six-hour clock and the youngest-process age below, both boot-relative; the other predicates (CPU unmoved, sockets,
+  # elsewhere) still hold. The fleet host does not suspend.
   if [[ ! -e "$PROC/$server" ]]; then state=gone
   else
     _ss_stat "$server" || { _ss_carry; continue; }
@@ -321,7 +329,7 @@ while read -r u _; do
   for q in "${!PARENT[@]}"; do   # a child of one of its processes that its cgroup.procs does not hold lives in another cgroup
     [[ -n "${MINE[${PARENT[$q]}]+x}" && -z "${MINE[$q]+x}" ]] && elsewhere=1
   done
-  born=$(( mono / 1000000 ))     # the scope's own start, seconds since boot
+  born=$(( mono / 1000000 ))     # the scope's own start, seconds on the MONOTONIC clock (see WHOSE SERVER above); UP is BOOTTIME, so after a suspend born/sage skew, failing safe
   sage=$(( UP - born )); (( sage < 0 )) && sage=0   # a scope started after this tick's uptime read: 0, never a negative the doctor cannot read
   first=${FIRST[$u]:-} cpu0=${CPU0[$u]:-}
   if [[ -z "$first" ]] || (( first < born || first > UP )); then first=$UP cpu0=$cpu; fi   # a clock it cannot believe starts now
