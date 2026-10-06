@@ -42,8 +42,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # The engines floor itself (>=22.13.0, node:sqlite) — read from the
-          # one place it is declared (server/test/node-floor.test.ts).
+          # The newest Node satisfying the engines range in server/package.json; the floor
+          # itself is declared in the three package.json files and pinned by node-floor.test.ts.
           node-version-file: server/package.json
           cache: npm
           cache-dependency-path: |

@@ -25,18 +25,11 @@ import {
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkTmp, pendingTmpFixtures, removeTmpFixturesAfterEachTest, skipIfPreviousCaseFilteredOut } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
 import { installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
-
-// Every case's HOME is removed when that case ends, not left for the file's
-// one `afterAll` (41 dirs, 564 MB, 6.4 s of a 20 s hook budget, measured):
-// every `mkTmp` here is inside a test and no test reads another's HOME
-// (tmpHelpers' `removeTmpFixturesAfterEachTest` names the conditions). The
-// LAST describe in this file is the guard.
-removeTmpFixturesAfterEachTest();
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -2085,20 +2078,10 @@ describe('ccrc install: ~/.local/bin/graphify converges onto the pinned venv (R3
   });
 });
 
-// The guard for `removeTmpFixturesAfterEachTest()` above. LAST, so that in a
-// whole-file run it also witnesses everything the file made: without the
-// opt-in every HOME above is still pending here.
-describe('fixture cleanup: a case\'s HOME goes when the case ends, so the file\'s afterAll is bounded', () => {
-  let made = '';
-  it('a fixture HOME is pending while its case runs', () => {
-    made = mkTmp('ccrc-graphify-cleanup-probe-');
-    expect(pendingTmpFixtures()).toContain(made);
-  });
-
-  it('… and once that case has ended it is gone, and the afterAll\'s list holds nothing', (ctx) => {
-    if (made === '') skipIfPreviousCaseFilteredOut(ctx);
-    expect(made, 'the first case never ran — this one would be vacuous').not.toBe('');
-    expect(existsSync(made), 'the previous case\'s HOME outlived its case').toBe(false);
-    expect(pendingTmpFixtures(), 'fixtures waiting for the afterAll').toEqual([]);
-  });
-});
+// R20a's opt-in (tmpHelpers' `removeTmpFixturesEachTest`), for the same reason as `ccrc-update.test.ts`: every
+// `mkTmp` in this file is inside a test, no test reads another's home and none registers an `onTestFinished`, so
+// each test's homes can go when it ends. Its one `afterAll` was otherwise left 41 homes, 584 MB and about 15,900
+// entries, measured at 6.4 s on a loaded dev box and at 0.65 s on a re-run at load ~50: an end-of-file removal's
+// cost swings tenfold with load and how cold the metadata has gone, not with the bytes alone. At the END of the
+// file so no line above moves.
+removeTmpFixturesEachTest();

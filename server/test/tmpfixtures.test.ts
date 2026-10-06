@@ -3,10 +3,13 @@
 // leaked 140 directories and a mutation sweep runs the suite 50-120 times,
 // which is how /tmp reached 47k directories and 1.4 GiB once, and 7,830 again
 // five weeks later.
-import { describe, it, expect } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { setTimeout as sleep } from 'node:timers/promises';
+import {
+  mkTmp, removeTmpFixtures, removeTmpFixturesSince, removeTmpFixturesEachTest, tmpMark,
+} from './tmpHelpers.js';
 
 describe('mkTmp', () => {
   it('remembers every directory it made, and removes them with their contents', () => {
@@ -53,5 +56,98 @@ describe('mkTmp', () => {
       .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
     expect(src.split('afterAll(removeTmpFixtures);').length - 1,
       'exactly one afterAll registration in tmpHelpers.ts').toBe(1);
+  });
+});
+
+// R20a (centralised-update wave 13): a file whose one end-of-file sweep is too big for one hook removes each
+// test's homes after that test instead. `ccrc-update.test.ts` is that file: its `afterAll` overran vitest's 20 s
+// hook timeout on CI shards at 670d25fd and 7b0a5454 while every test passed.
+describe('removeTmpFixturesSince (R20a)', () => {
+  it('removes what was made from the mark on, forgets it, and leaves what came before for the afterAll', () => {
+    const before = mkTmp('ccrc-tmpfix-since-');
+    const mark = tmpMark();
+    const b = mkTmp('ccrc-tmpfix-since-');
+    const c = mkTmp('ccrc-tmpfix-since-');
+    writeFileSync(path.join(b, 'fixture.txt'), 'not empty\n');
+    removeTmpFixturesSince(mark);
+    expect(existsSync(b) || existsSync(c), 'a directory made after the mark survived').toBe(false);
+    expect(existsSync(before), 'a directory made BEFORE the mark was removed').toBe(true);
+    expect(tmpMark()).toBe(mark);
+    // Forgotten, as `removeTmpFixtures` forgets: a directory put back at that path survives both sweeps.
+    mkdirSync(b);
+    removeTmpFixturesSince(mark);
+    removeTmpFixtures();
+    expect(existsSync(b), 'the cleaner re-removed a path it had already cleaned').toBe(true);
+    expect(existsSync(before)).toBe(false);
+    rmSync(b, { recursive: true, force: true });
+  });
+
+  // Root removes what it likes, so a refusal cannot be planted; CI and the dev box run unprivileged.
+  it.skipIf(process.getuid?.() === 0)('keeps a directory whose removal fails, for the afterAll to remove or fail on loudly', () => {
+    const mark = tmpMark();
+    const d = mkTmp('ccrc-tmpfix-since-keep-');
+    const locked = path.join(d, 'locked');
+    mkdirSync(path.join(locked, 'inner'), { recursive: true });
+    chmodSync(locked, 0o500);   // `inner` cannot be unlinked: rmSync throws EACCES
+    try {
+      expect(() => removeTmpFixturesSince(mark)).not.toThrow();
+      expect(existsSync(d)).toBe(true);
+      expect(tmpMark(), 'the failed directory was forgotten unremoved').toBe(mark + 1);
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+    removeTmpFixtures();
+    expect(existsSync(d), 'the kept directory was not removed by the end-of-file sweep').toBe(false);
+  });
+});
+
+describe('removeTmpFixturesEachTest (R20a)', () => {
+  let fromBeforeAll = '';
+  let fromFirst = '';
+  beforeAll(() => { fromBeforeAll = mkTmp('ccrc-tmpfix-each-all-'); });
+  // Registered on THIS describe here; `ccrc-update.test.ts` calls it at its top level, on the root suite.
+  removeTmpFixturesEachTest();
+
+  describe('an inner describe with its own teardown', () => {
+    afterEach(() => {
+      // The holder/lingerer kills in ccrc-update.test.ts are describe-level afterEach hooks that still need the
+      // home: an outer afterEach must run after them.
+      expect(existsSync(fromFirst), 'the test\'s home was removed before an inner afterEach ran').toBe(true);
+    });
+    it('makes a home inside the test', () => {
+      fromFirst = mkTmp('ccrc-tmpfix-each-');
+      writeFileSync(path.join(fromFirst, 'fixture.txt'), 'not empty\n');
+      expect(existsSync(fromBeforeAll)).toBe(true);
+    });
+  });
+
+  it('the previous test\'s home is gone, and the beforeAll\'s is not', () => {
+    expect(fromFirst).not.toBe('');
+    expect(existsSync(fromFirst), 'a home made inside a test outlived it').toBe(false);
+    expect(existsSync(fromBeforeAll), 'a home made in a beforeAll was removed after one test').toBe(true);
+  });
+
+  it.each(['ccrc-update.test.ts', 'ccrc-install-graphify.test.ts'])('%s opts in, at its top level, outside any comment', (file) => {
+    const src = readFileSync(path.join(__dirname, file), 'utf8').split('\n');
+    expect(src.filter((l) => l === 'removeTmpFixturesEachTest();'),
+      `${file} must call removeTmpFixturesEachTest() once, unindented`).toHaveLength(1);
+  });
+});
+
+// LAST: tests that overlap are refused. One mark per registration means a second test starting while the first is
+// open would move it, and the first to end would remove from the other's mark on — a running test's home with it.
+// B's beforeEach must throw (hence `.fails`), and A, which owns the mark, keeps its home for its whole run.
+describe.concurrent('removeTmpFixturesEachTest — overlapping tests are refused', () => {
+  removeTmpFixturesEachTest();
+
+  it('A: its home survives B starting, and B ending, while A runs', async () => {
+    const home = mkTmp('ccrc-tmpfix-overlap-a-');
+    await sleep(300);
+    expect(existsSync(home), 'A\'s home was removed while A was running').toBe(true);
+  });
+
+  it.fails('B: starts while A is still open — its beforeEach refuses', async () => {
+    mkTmp('ccrc-tmpfix-overlap-b-');
+    await sleep(50);
   });
 });

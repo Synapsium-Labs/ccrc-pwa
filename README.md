@@ -6,7 +6,7 @@
 Run it on your own box. Drive twenty agents from your phone.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](#license)
-[![Node](https://img.shields.io/badge/node-%E2%89%A522.13-339933.svg?logo=node.js&logoColor=white)](#requirements)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522.16-339933.svg?logo=node.js&logoColor=white)](#requirements)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-one%20box-8b5cf6.svg)](#quickstart)
 [![No telemetry](https://img.shields.io/badge/telemetry-none-64748b.svg)](#privacy)
 [![PWA](https://img.shields.io/badge/PWA-installable-f59e0b.svg)](#quickstart)
@@ -167,9 +167,9 @@ Download it, or use `bash <(curl -fsSL …)`.
 
 ## Requirements
 
-- **Node ≥ 22.13.0** — not negotiable, and not a style choice: the coordination database
-  is `node:sqlite`, which is flagged below that. All three packages declare the same floor
-  and a test pins it.
+- **Node ≥ 22.16.0** — not negotiable, and not a style choice: the coordination database
+  is `node:sqlite` (flagged below 22.13), and ccrc history needs its FTS5 (absent below 22.16).
+  All three packages declare the same floor and a test pins it.
 - **git**, **tmux**, **bash**, **curl**, **rsync**, **diff** — `ccrc install` refuses by
   name without `rsync` (it places the tree) or `diff` (every skill installer compares
   with it). **`openssl`** only mints the box and agent tokens by hand (`openssl rand -hex 32`).
@@ -3999,7 +3999,7 @@ held by the very kill-switch the operator just raised.
 **The reclaim sweep, and how to stop it.** Besides the close path, the server
 runs an automatic sweep (once a minute) that reclaims CHILD workspaces through
 `ccd ws-reclaim` — only a child whose minting run is terminal, or has bound a
-different session, with no other open run, no hold and no coordination history
+different session, with no other open run, no hold and no coordination since its workspace was created
 (a review child also waits until the run it reviewed is terminal), asked on two
 consecutive passes and at most one at a time, and only while the fleet `ccd`
 advertises both `reclaim-v1` and `reclaim-pause-v1` (**A child is not a reap**,
@@ -4015,8 +4015,8 @@ hold, a human's included, keeps the child. The sweep's switch is
 `ccd reclaim-pause --state on` on the fleet host; `--state off` lowers it. While
 it stands the sweep and the close path ask for nothing, and `ws-reclaim` itself
 refuses `paused` on the box. The same row lists the children that need a
-human's eye: each standing under a terminal refusal, and each whose reclaim
-has kept failing for 15 minutes.
+human's eye: each under a terminal refusal, each whose reclaim has kept failing
+for 15 minutes, and each the sweep keeps for a person while its reason stands.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
@@ -4707,8 +4707,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7688-7690`), each with an operator sentence of its own at `:7730`,
-`:7738` and `:7751`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7812-7814`), each with an operator sentence of its own at `:7854`,
+`:7862` and `:7875`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -4924,7 +4924,7 @@ you need to reason about one.*
 
 ## Architecture
 
-- `server/` — Node ≥22.13.0 (`engines.node`; `node:sqlite` needs it unflagged,
+- `server/` — Node ≥22.16.0 (`engines.node`; `node:sqlite` needs 22.13 unflagged and 22.16 for FTS5,
   and `server/test/node-floor.test.ts` pins both the declaration and the
   import) + Fastify (TS ESM). One process, systemd user unit
   `ccrc.service` (a launchd agent on macOS), bound to one interface only
@@ -4949,7 +4949,7 @@ you need to reason about one.*
   WS client talking to `agent/` on the fleet host instead (see "Remote fleet
   mode" above). Either way the whole thing is unit-testable off-box against
   fixtures.
-- `agent/` — Node ≥22.13.0 (same `engines.node` floor as `server/`; the three
+- `agent/` — Node ≥22.16.0 (same `engines.node` floor as `server/`; the three
   packages must agree — `node-floor.test.ts` — though `node:sqlite` itself is
   server-only) WS service (TS ESM) that runs ON the fleet host and
   exposes a small, whitelisted exec/file/tail/pty surface over a bearer-token
@@ -5421,7 +5421,7 @@ npm run build                            # server/agent: tsc → dist/; pwa: tsc
 ```
 
 The server suite executes the real `ccd`, `ccrc` and hook scripts against fixture `$HOME`s, so the
-machine needs what a fleet box needs: Node ≥ 22.13.0, `bash` 4.4 or newer, `tmux`, `git`, `jq`,
+machine needs what a fleet box needs: Node ≥ 22.16.0, `bash` 4.4 or newer, `tmux`, `git`, `jq`,
 `python3` and `flock`, plus `strace` on Linux (`ci-trace-run.test.ts` runs the real one and fails
 loudly without it; macOS skips that file). On macOS: `brew install bash tmux flock jq coreutils`
 (`coreutils` supplies `gtimeout`). Run one file with
@@ -5443,9 +5443,9 @@ serves the PWA through Vite with `/api` and `/ws` proxied to `127.0.0.1:7788`.
 `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`). A **pull request** runs the server
 tests its change can affect — `.github/ci/select-tests.mjs` chooses them from a traced dependency map,
 sharded behind the required `test (server)` summary, which also needs `typecheck (server)` — while
-`test (agent)` and `test (pwa)` (vitest, then `tsc --noEmit`) and `build-pwa` run in full; `test-macos`
+`test (agent)` and `test (pwa)` (vitest, then `tsc --noEmit`), `build-pwa` and `node-floor` (the floor test on exactly the `engines.node` version) run in full; `test-macos`
 runs the same selection and `probe-macos` a fixed probe; neither blocks a pull request, but
-`full-suite` needs `test-macos`, so a red macOS leg blocks a promotion to `stable`. A change under
+`full-suite` needs `test-macos` and `node-floor`, so a red macOS or floor leg blocks a promotion to `stable`. A change under
 `.github/` or `server/scripts/`, to a `package.json` or lockfile, a `vitest.*config.*`, a
 `tsconfig*.json`, `.gitattributes` or `.npmrc`, a symlink, a path the map's own baseline reads, or a
 missing map runs the whole server suite instead. A **merge-queue** run (`merge_group`) runs what a

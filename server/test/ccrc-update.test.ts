@@ -44,7 +44,7 @@ import {
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkTmp, pendingTmpFixtures, removeTmpFixturesAfterEachTest, skipIfPreviousCaseFilteredOut } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool, CONTAINED_TOOLS } from './containedTools.js';
 import { itLinux, itDarwin, platformContrast, python3ProgramArm, IS_DARWIN } from './platformFixtures.js';
@@ -57,13 +57,20 @@ import {
   SPINE_CONTAINMENT_PROBE, spineRunCalls, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms,
   spineSystemdRun, plantLiveShape, foreignSnapshot, stateCallsNaming,
 } from './codexLaneFixture.js';
+import { docsProbeProgram } from './docsHelperPy.js';
+import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
 
-// Every case's HOME is removed when that case ends, not at the end of the file:
-// ~650 of them (2.5 GB, ~100k entries) left for the one `afterAll` overran its
-// 20s hook budget on CI with every test green (tmpHelpers'
-// `removeTmpFixturesAfterEachTest` carries the measurement). The LAST describe
-// in this file is the guard.
-removeTmpFixturesAfterEachTest();
+/** The two python3 invocations ccd's Docs front makes when the closing
+ *  doctor's `docs` check runs the installed ccd (Docs W1a): the floor probe,
+ *  read off the shipped ccd/ccd so it is never re-typed, and the ready line
+ *  the doctor suite's own stub prints. The `python3` stub below embeds both
+ *  in single quotes, so a quote or a newline in either is refused here,
+ *  before a stub that parses differently is ever written. */
+const DOCS_PROBE = docsProbeProgram();
+const DOCS_READY_LINE = JSON.stringify(DOCS_INDEX_READY);
+if (/['\n]/.test(DOCS_PROBE + DOCS_READY_LINE)) {
+  throw new Error('the docs probe or the ready line holds a quote or a newline; the python3 stub cannot embed it');
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -628,6 +635,12 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     // preflight probe (`import os`) go to the real interpreter; every other
     // `-c` is refused below, like any other unexpected argv.
     ...python3ProgramArm(REAL_PYTHON3),
+    // ccd's Docs front, reached by the closing doctor's `docs` check through the
+    // INSTALLED ccd (Docs W1a): the 3.8 floor probe passes, and the helper
+    // prints the canned ready answer. Canned rather than forwarded to the real
+    // python3, so the install stays hermetic and reads no projects root.
+    `[ "$1" = -c ] && [ "$2" = '${DOCS_PROBE}' ] && exit 0`,
+    `[ "$1" = /dev/fd/3 ] && [ "$2" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
   // The verifier seam (design §5): `ccrc update` runs the INSTALLED tree's
@@ -667,7 +680,7 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     'esac',
     `exec ${REAL_NODE} "$@"`,
   ].join('\n') + '\n');
-  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT',
     'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
@@ -12948,28 +12961,9 @@ describe('Plan 3a Task 10 — ccrc update onto this tree over today\'s live shap
   }, 120_000);
 });
 
-// The guard for `removeTmpFixturesAfterEachTest()` at the top of this file.
-// LAST, so that in a whole-file run it also witnesses everything the file
-// made: with the per-test removal gone, every HOME above is still pending
-// here (~650 of them, the volume that timed the `afterAll` out), and with it
-// in place nothing is. Two cases, because the removal happens BETWEEN them —
-// `-t` on this describe's name is enough to run the guard on its own.
-describe('fixture cleanup: a case\'s HOME goes when the case ends, so the file\'s afterAll is bounded', () => {
-  let made = '';
-  it('a real update box is made, and is pending, while its case runs', () => {
-    made = freshUpdateBox('ccrc-update-cleanup-probe-');
-    plantOldBox(made, { version: 'v1.0.0' });
-    expect(existsSync(join(made, 'ccrc')), 'the probe box was never planted').toBe(true);
-    expect(pendingTmpFixtures()).toContain(made);
-  });
-
-  it('… and once that case has ended it is gone from disk and from the afterAll\'s list, which holds nothing', (ctx) => {
-    if (made === '') skipIfPreviousCaseFilteredOut(ctx);   // a `-t` that picked this case alone
-    expect(made, 'the first case never ran — this one would be vacuous').not.toBe('');
-    expect(existsSync(made), 'the previous case\'s HOME outlived its case').toBe(false);
-    // NOTHING pending: this file makes no fixture outside a test, so the final
-    // hook has nothing left to remove. A deliberate collection-time or
-    // `beforeAll` fixture would be listed here by name — never by raising a count.
-    expect(pendingTmpFixtures(), 'fixtures waiting for the afterAll').toEqual([]);
-  });
-});
+// R20a (centralised-update wave 13): each test's fixture homes go in a root `afterEach`, not all at once in the
+// file's `afterAll`. Measured at 9221416a: the three parts of this file leave 648 homes, about 99,700 entries and
+// 2.47 GB to that one hook, which overran vitest's 20 s hook timeout on CI shards at 670d25fd and 7b0a5454. It sits
+// at the END of the file so no line above moves: a top-level hook registers on the root suite wherever it is
+// written, because vitest collects the whole file before it runs a test.
+removeTmpFixturesEachTest();
