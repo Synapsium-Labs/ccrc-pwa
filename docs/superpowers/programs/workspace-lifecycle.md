@@ -518,6 +518,37 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     merges main when it lands, by the shared-region ruling. Child reclamation's wave 6 is clear to dispatch (3655).
   - **Deploy:** AGENT-FIRST, by ccrc's updater, never by hand. The time both boxes reach the build containing
     `77c11245` is recorded here, and 3b's lane waits on it.
+- **2026-10-06 08:33 — wave 3b planning started** (workflow wf_45bc20c3-008: Opus drafter, four Opus lenses for spec,
+  deletion safety, replay and test honesty, an Opus reviser and a Sonnet replay verifier). The plan goes to branch
+  `docs/workspace-lifecycle-wave3b-plan`. The coordinator's rulings for it:
+  - **(A) The first commit** is review 288's F1–F7, as the 08:29 entry rules them.
+  - **(B) The precondition** is closing 3893's return-verb race. No interleaving may let an expiry act on a row that a
+    return verb (start, enable, ensure, swap or ws-restore) has passed its reap gate for. The worker either holds the
+    gate across the journal line or clears the archive inside it, whichever is smaller, measured. A test forces the
+    interleaving.
+  - **(C) The server never types the threshold.** `ws-audit --expire` gains `expiresAt`, on `expirable` and on
+    `not-expired`, and sets `archivedAt` on `not-expired` too. An absent key is no evidence, so the lane composes
+    nothing for that row. The deploy is therefore AGENT-FIRST (ccd), then server and pwa.
+  - **(D) The lane** is `archivedExpiryVerdict` in its own L1 file, plus a second population in the reclaim sweep
+    with its own map, clocks, feed and attention entries, invisible to wave 5's chip. It audits, then calls the verb
+    with the audit's token. It acts only on `capSupported(EXPIRE_CAP)`. It tells box words from composition errors.
+    Its word map is held equal to ccd's. It composes at most one `ws-expire` per tick, fleet-wide.
+  - **(E) The lane ships SHADOWED.** Until `$REG/expire-lane-live` exists, it audits and records "would expire" but
+    never composes the verb. That file has no writer in the tree, which is pinned beside `stall-watch-live` and
+    `scope-sweep-live`. `reclaim-paused` stops everything. The reason: 29 of today's 30 archived rows on the fleet
+    box are past seven days (review 284's R4 measurement), so the first armed pass faces that backlog. **Arming is
+    the operator's.**
+  - **(F) The switch and the words.** `reclaim-paused` is the one cleanup switch, and the banner label widens. CCR-15's
+    §6 item 1 text touches only its `reclaim-paused` passages; child reclamation's coordinator is told before the
+    push. The rest are coordinator clause 3's move with its verbatim pin, README, wave-lifecycle §6 and the confirm
+    copy. None of this text lands before the live arm.
+  - **(G) Operator text.** A standing `in-use` is expected. After bounded passes it becomes an attention entry that
+    names the pid, its comm and the path. It never says "end the pid" without naming the process. The lane never kills.
+  - **(H) Carried items taken:** the 409 detail; the 404 fold; FM7; the door's `already archived` reading; ws-reap's
+    fresh arm on an unreadable breadcrumb; ws-gc's advisory lines. **Not taken:** ws-reclaim's word for an `expire:`
+    breadcrumb (both readings are retries).
+  - **(I) Overlap.** #290 (child reclamation wave 5) edits the sweep and banner files, so the plan is re-verified on
+    main after #290 merges, before dispatch. `ccd/ccd` is shared by region.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
