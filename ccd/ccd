@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c90255d7a5f4c67e5cdb37529811044e5d6db8a844391df1fa535735892c2cda
+# ccrc:generated 1 sha256=baae6a1b17880c44e0a18e916ca1462261875e82507b0e62094513fc7b4c5efc
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -30900,8 +30900,167 @@ def draft_phase(ctx, repo, bd, ref, blobs, dl, call_s=None, stdout_cap=GIT_STDOU
     return ph._replace(main=e.main)
 
 # ===== docs: tree =====
+# docs-tree (spec 2026-10-01 section 2 (b) DocsTreeOk, (e) "Snapshot", (g) "The
+# signal docs-tree reports"). One call does everything, in the snapshot's
+# order: resolve the served commit C, list the four sections at C, then take
+# the holder snapshot of the draft branch Bd = ref.name, bracketed by its own
+# HEAD checks. The draft phase runs in BOTH views: in the default view its
+# facts feed only the PWA's hint, in a ref view they overlay iff baseEqual,
+# and ccd decides neither. mainCheckout is the first record of the draft
+# phase's own `worktree list`, so one call enumerates worktrees once. The
+# answer leaves through run()'s guard_listing, as docs-index's does.
+import os
+import stat
+
+# Where a row sorts: its section's place in SECTIONS, then its path's bytes.
+TREE_SECTION_ORDER = dict((slug, i) for i, slug in enumerate(SECTIONS))
+# The HEAD git prints in a worktree record whose branch is unborn.
+TREE_UNBORN_HEADS = frozenset(('0' * 40, '0' * 64))
+
+
+def tree_short_branch(refname):
+    """A branch refname as the wire's short name: refs/heads/<b> gives <b>,
+    and None (a detached HEAD) stays None."""
+    if refname is None:
+        return None
+    if refname.startswith(REF_HEADS):
+        return refname[len(REF_HEADS):]
+    return refname
+
+
+def tree_head_of_m(repo, dl):
+    """M's own (head, branch refname or None), for when the draft phase's
+    `worktree list` gave no record. One `rev-parse --verify` and one
+    `symbolic-ref -q` in M. A rev-parse that cannot verify HEAD (an unborn
+    branch says `Needed a single revision`) is repo-unreadable; symbolic-ref
+    rc 1 is a detached HEAD; any other symbolic-ref answer is repo-unreadable."""
+    r = ref_git(repo, ['rev-parse', '--verify', '--end-of-options', 'HEAD'], dl)
+    head = r.out.decode('ascii', 'replace').strip()
+    if r.rc != 0 or not valid_sha(head):
+        raise fail('repo-unreadable', step='main-checkout', stderrHead=stderr_head(r.err))
+    s = ref_git(repo, ['symbolic-ref', '-q', 'HEAD'], dl)
+    if s.rc == 1:
+        return head, None
+    if s.rc != 0:
+        raise fail('repo-unreadable', step='main-checkout', stderrHead=stderr_head(s.err))
+    return head, s.out.decode('utf-8', 'surrogateescape').rstrip('\n')
+
+
+def tree_main_checkout(repo, rec, dl):
+    """DocsTreeOk.mainCheckout {path, branch, head}. head and branch come from
+    rec, the first record of the draft phase's `worktree list`, which is
+    always M's own; when that list failed (rec None, and drafts is then
+    unreadable {step:'worktree-list'}) M answers for itself through
+    tree_head_of_m. path is M's toplevel, never the record's path: git names
+    a --separate-git-dir checkout's first record by its git dir (measured on
+    git 2.43.0). An unborn HEAD in M answers repo-unreadable
+    {step:'main-checkout'}, because mainCheckout.head is a commit; a branch
+    name that is not strict UTF-8 does too, because the wire carries strict
+    UTF-8 only."""
+    if rec is None:
+        head, refname = tree_head_of_m(repo, dl)
+    else:
+        head, refname = rec.get('head'), rec.get('branch')
+    if head is None or head in TREE_UNBORN_HEADS or not valid_sha(head):
+        raise fail('repo-unreadable', step='main-checkout', detail='HEAD names no commit')
+    branch = tree_short_branch(refname)
+    if branch is not None:
+        try:
+            branch.encode('utf-8')
+        except UnicodeEncodeError:
+            raise fail('repo-unreadable', step='main-checkout', detail='the branch name is not UTF-8')
+    return {'path': SYS.realpath(repo.toplevel), 'branch': branch, 'head': head}
+
+
+def tree_entries(entries, rows):
+    """The committed listing with the draft phase's rows laid on it. A row,
+    keyed (section, rel), becomes its committed entry's `draft`; a row with
+    no committed entry at C (untracked, added, or a path C does not hold) is
+    an entry of its own with committed null. The order is SECTIONS order,
+    then the path's UTF-8 bytes: git's own order for the committed rows, so a
+    draft-only row falls where a listing of the worktree would put it."""
+    merged = []
+    seen = set()
+    for e in entries:
+        key = (e['section'], e['path'])
+        seen.add(key)
+        if key in rows:
+            e = dict(e)
+            e['draft'] = rows[key]
+        merged.append(e)
+    for key in rows:
+        if key not in seen:
+            merged.append({'section': key[0], 'path': key[1], 'committed': None, 'draft': rows[key]})
+    merged.sort(key=lambda e: (TREE_SECTION_ORDER[e['section']], e['path'].encode('utf-8')))
+    return merged
+
+
+def tree_unlisted(committed, drafts):
+    """DocsTreeOk.unlisted: the committed listing's {count, byReason} plus the
+    draft-only paths the rel grammar refused, which the draft phase counts by
+    the same four reasons (a committed path is counted by the listing alone).
+    byReason keeps list_committed's reason order and its nonzero-only rule."""
+    by_reason = {}
+    for reason in LS_UNLISTED_REASONS:
+        n = committed['byReason'].get(reason, 0) + drafts.get(reason, 0)
+        if n:
+            by_reason[reason] = n
+    return {'count': sum(by_reason.values()), 'byReason': by_reason}
+
+
+def tree_fetch_head(repo):
+    """freshness.fetchHead: {ageMs, bytes} from an lstat of
+    <git_dir>/FETCH_HEAD, or None. Diagnostic only: a failed fetch truncates
+    FETCH_HEAD, so it lies in both directions (sheet B section 9). An lstat,
+    never a stat: a FETCH_HEAD that is a symlink, a FIFO or a directory is
+    not git's file, so it is None and is never followed. An mtime ahead of
+    the fleet clock reads as age 0, as a stamp's does."""
+    try:
+        st = SYS.lstat(os.path.join(repo.git_dir, 'FETCH_HEAD'))
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode):
+        return None
+    return {'ageMs': max(0, SYS.now_ms() - st.st_mtime_ns // 1000000), 'bytes': st.st_size}
+
+
+def freshness(ctx, repo, ref, url):
+    """DocsTreeOk.freshness. url is remote.origin.url, None when it is unset:
+    then remote and trackedRef are null. trackedRef is the ref a docs-fetch
+    of ref.name moves. stamp is docs-fetch's stamp for ref.name in this
+    repository (stamp_for, which refuses a file naming another branch), as
+    ages on the fleet clock, or null. fetchHead is tree_fetch_head's. Facts
+    only: whether a refresh is due is the server's to decide (L1)."""
+    name = ref['name']
+    st = stamp_for(ctx.reg, repo.key, name)
+    return {'remote': 'origin' if url is not None else None,
+            'trackedRef': REF_ORIGIN + name if url is not None else None,
+            'stamp': stamp_ages(st, SYS.now_ms()) if st is not None else None,
+            'fetchHead': tree_fetch_head(repo)}
+
+
 def verb_tree(ctx, a):
-    raise NotImplementedError('docs-tree')
+    """docs-tree --project P [--ref R]: DocsTreeOk's body; run() adds the
+    envelope and sends the line through guard_listing. A failure before the
+    listing (unresolved-ref, ref-not-commit, no-default-branch) is the whole
+    answer, so it carries no entries; the draft phase never fails the tree."""
+    dl = Deadline(HELPER_DEADLINE_S['docs-tree'])
+    repo = discover(ctx, a.project, dl)
+    ref = resolve(repo, a.ref, dl)
+    sections, entries, unlisted, blobs = list_committed(repo, ref['commit'], dl)
+    ph = draft_phase(ctx, repo, ref['name'], ref, blobs, dl)
+    main_checkout = tree_main_checkout(repo, ph.main, dl)
+    url = origin_url(repo, dl)
+    return {'project': a.project,
+            'repo': {'key': repo.key, 'objectFormat': repo.object_format, 'shallow': repo.shallow},
+            'github': github_of(url),
+            'ref': ref,
+            'mainCheckout': main_checkout,
+            'sections': sections,
+            'entries': tree_entries(entries, ph.rows),
+            'unlisted': tree_unlisted(unlisted, ph.unlisted),
+            'drafts': ph.facts,
+            'freshness': freshness(ctx, repo, ref, url)}
 
 # ===== docs: show =====
 def verb_show(ctx, a):

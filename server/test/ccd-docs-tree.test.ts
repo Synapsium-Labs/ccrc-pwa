@@ -2758,3 +2758,574 @@ describe('docs draft snapshot guards (docs W1a Task 14, G8)', () => {
     ]);
   }, 120000);
 });
+
+// ---- docs W1a Task 15: docs-tree assembled, end to end through the dispatcher ----
+// Spec 2026-10-01 section 2: (b) DocsTreeOk, (e) "Snapshot", (g) "The signal docs-tree reports", rows 11, 12,
+// 16, 20, 23 and 64, and M6.8. Every case runs the SHIPPED verb, `bash ccd/ccd docs-tree ...`, in this file's
+// fixture HOME `h`: the units above pin each phase precisely, and this block pins that the verb assembles them in
+// the snapshot's order and that the line the agent would relay says what the units say. Fixture git runs through
+// `h.git` (the real binary, the fixture identity), never the PATH recorder, so the recorder sees only the helper.
+// The imports carry a `t15` alias because this block is appended below the file's own imports.
+import * as t15fs from 'node:fs';
+import * as t15path from 'node:path';
+import { createHash as t15createHash } from 'node:crypto';
+import { execFileSync as t15execFile } from 'node:child_process';
+import {
+  commitOn as t15commitOn, docsRepo as t15docsRepo, parseOneLine as t15parse,
+  plantGitRecorder as t15recorder, runCcdDocs as t15runCcd,
+} from './ccdDocsHelpers.js';
+import { unitJson as t15unitJson } from './docsHelperPy.js';
+import {
+  DOCS_MAX_ENTRIES as T15_MAX_ENTRIES, DOCS_MAX_LISTING_WIRE_BYTES as T15_MAX_WIRE_BYTES,
+} from '../../shared/docs.js';
+
+const T15_SPECS = 'docs/superpowers/specs';
+const T15_PLANS = 'docs/superpowers/plans';
+/** demo's committed docs: two specs and a plan; product-design and conventions are absent at C. */
+const T15_FILES: Record<string, string> = {
+  [`${T15_SPECS}/a.md`]: '# A\n',
+  [`${T15_SPECS}/b.md`]: '# B\n',
+  [`${T15_PLANS}/p.md`]: '# P\n',
+};
+/** The holder on ws/a: one modified spec and one untracked spec. */
+const T15_WT_A = '# A, edited in ws/a\n';
+const T15_WT_NEW = '# New in ws/a\n';
+/** The main checkout, on main: two modified docs and one untracked doc in a section absent at C. */
+const T15_MAIN_B = '# B, edited on main\n';
+const T15_MAIN_P = '# P, edited on main\n';
+const T15_MAIN_C = '# C, new on main\n';
+/** Subcommands a read verb must never run (row 16); `worktree` is allowed only as `worktree list`. */
+const T15_FORBIDDEN = ['fetch', 'remote', 'gc', 'maintenance', 'update-ref', 'checkout', 'show', 'diff', 'archive'];
+
+interface T15Entry {
+  section: string; path: string;
+  committed: { kind: string; blob: string; size: number | null } | null;
+  draft: Record<string, unknown> | null;
+}
+interface T15Stamp { okAgeMs: number | null; attemptAgeMs: number; lastOutcome: string; okCommit: string | null }
+interface T15Freshness {
+  remote: string | null; trackedRef: string | null; stamp: T15Stamp | null;
+  fetchHead: { ageMs: number; bytes: number } | null;
+}
+type T15Answer = Record<string, unknown> & {
+  ok: boolean; ref: Record<string, unknown>; mainCheckout: Record<string, unknown>; entries: T15Entry[];
+  drafts: Record<string, unknown>; freshness: T15Freshness;
+};
+
+const t15sha = (b: string): string => t15createHash('sha256').update(b).digest('hex');
+/** A draft row for a regular file the snapshot read whole, as `status` classified it. */
+const t15row = (state: string, body: string): Record<string, unknown> =>
+  ({ state, kind: 'file', size: Buffer.byteLength(body), fp: t15sha(body), trust: 'status' });
+const t15write = (dir: string, rel: string, body: string): void => {
+  t15fs.mkdirSync(t15path.dirname(t15path.join(dir, rel)), { recursive: true });
+  t15fs.writeFileSync(t15path.join(dir, rel), body);
+};
+const t15key = (e: T15Entry): string => `${e.section}:${e.path}`;
+/** The entries that carry a draft, as `<section>:<path>` -> the draft facts. */
+const t15drafted = (t: T15Answer): Record<string, unknown> =>
+  Object.fromEntries(t.entries.filter((e) => e.draft !== null).map((e) => [t15key(e), e.draft]));
+
+/** `ccd docs-tree --project demo [args]` through the dispatcher: rc 0 and exactly one line, parsed. */
+function t15tree(args: string[] = [], env: NodeJS.ProcessEnv = {}): T15Answer {
+  return t15parse(t15runCcd(h, ['docs-tree', '--project', 'demo', ...args], env)) as T15Answer;
+}
+
+/** A recorded git argv with the runner's global options (`--no-pager`, `--no-optional-locks`, `-c k=v`,
+ *  `-C dir`, and the draft phase's filter `-c` flags) stripped: the subcommand and its arguments. */
+function t15sub(argv: string[]): string[] {
+  let i = 0;
+  while (i < argv.length) {
+    const a = argv[i];
+    if (a === '-c' || a === '-C') i += 2;
+    else if (a === '--no-pager' || a === '--no-optional-locks') i += 1;
+    else break;
+  }
+  return argv.slice(i);
+}
+
+/** Every entry under `dir`, by path relative to it, as `ino:mtimeNs:size` from an lstat. Two equal snapshots
+ *  mean nothing under `dir` was created, removed, renamed or written in between. */
+function t15snapshot(dir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (rel: string): void => {
+    const st = t15fs.lstatSync(t15path.join(dir, rel), { bigint: true });
+    out[rel] = `${st.ino}:${st.mtimeNs}:${st.size}`;
+    if (st.isDirectory()) {
+      for (const n of t15fs.readdirSync(t15path.join(dir, rel)).sort()) walk(rel === '' ? n : `${rel}/${n}`);
+    }
+  };
+  walk('');
+  return out;
+}
+
+/** demo with T15_FILES committed on main and pushed; a holder on ws/a at `$HOME/worktrees/demo/a` (ws-add's
+ *  shape) with 2 drafts; and the main checkout, on main, with 3 dirty docs. No FETCH_HEAD anywhere. */
+function t15fixture(): { main: string; wt: string } {
+  const main = t15docsRepo(h, 'demo', T15_FILES);
+  const wt = t15path.join(h.home, 'worktrees', 'demo', 'a');
+  h.git(main, 'worktree', 'add', '-q', '-b', 'ws/a', wt);
+  t15write(wt, `${T15_SPECS}/a.md`, T15_WT_A);
+  t15write(wt, `${T15_SPECS}/new.md`, T15_WT_NEW);
+  t15write(main, `${T15_SPECS}/b.md`, T15_MAIN_B);
+  t15write(main, `${T15_PLANS}/p.md`, T15_MAIN_P);
+  t15write(main, 'docs/conventions/c.md', T15_MAIN_C);
+  t15fs.rmSync(t15path.join(main, '.git', 'FETCH_HEAD'), { force: true });
+  return { main, wt };
+}
+
+/** docs-fetch's stamp path for `branch` in demo, computed by the SHIPPED helper's own `stamp_path` over the
+ *  repository `discover` finds, so this file holds no second copy of the layout. */
+function t15stampPath(branch: string): string {
+  return t15unitJson<string>(h.home, [
+    'import os',
+    "HOME = os.environ['HOME']",
+    "ctx = H.Ctx(verb='docs-tree', root=os.path.join(HOME, 'projects'), worktrees=os.path.join(HOME, 'worktrees'),",
+    "            reg=os.path.join(HOME, '.cc-sessions'), t0=0)",
+    "repo = H.discover(ctx, 'demo', H.Deadline(12))",
+    `out(H.stamp_path(ctx.reg, repo.key, ${JSON.stringify(branch)}))`,
+  ].join('\n'));
+}
+
+describe('docs-tree end to end (docs W1a Task 15)', () => {
+  describe('the snapshot in both views (section 2 (d), (e))', () => {
+    it('default view: origin/main is served, and the main checkout holding main gives n=3 drafted entries (the facts behind the hint)', () => {
+      const { main } = t15fixture();
+      const real = t15fs.realpathSync(main);
+      const head = h.git(main, 'rev-parse', 'HEAD');
+      const t = t15tree();
+      expect(t, JSON.stringify(t)).toMatchObject({
+        v: 1, verb: 'docs-tree', ok: true, project: 'demo',
+        repo: { objectFormat: 'sha1', shallow: false }, github: { state: 'none' },
+      });
+      expect((t['repo'] as { key: string }).key).toMatch(/^[0-9a-f]{32}$/);
+      expect(t.ref).toMatchObject({
+        requested: null, served: 'refs/remotes/origin/main', name: 'main', side: 'origin', commit: head,
+        via: 'default:origin-head', relation: 'equal',
+      });
+      expect(t.mainCheckout).toEqual({ path: real, branch: 'main', head });
+      expect(t['sections']).toEqual([
+        { slug: 'specs', path: 'docs/superpowers/specs', state: 'present', count: 2 },
+        { slug: 'plans', path: 'docs/superpowers/plans', state: 'present', count: 1 },
+        { slug: 'product-design', path: 'docs/product-design', state: 'absent', count: 0 },
+        { slug: 'conventions', path: 'docs/conventions', state: 'absent', count: 0 },
+      ]);
+      expect(t.drafts).toEqual({
+        state: 'holder', branch: 'main', worktree: { path: real, head, class: 'main' },
+        baseEqual: true, base: null, caveats: [], opaque: [],
+      });
+      // Committed rows in SECTIONS order, the draft-only row where a listing puts it; ws/a's drafts are not
+      // main's, so none of them is here.
+      expect(t.entries.map(t15key)).toEqual(['specs:a.md', 'specs:b.md', 'plans:p.md', 'conventions:c.md']);
+      expect(t15drafted(t)).toEqual({
+        'specs:b.md': t15row('modified', T15_MAIN_B),
+        'plans:p.md': t15row('modified', T15_MAIN_P),
+        'conventions:c.md': t15row('untracked', T15_MAIN_C),
+      });
+      expect(t.entries.find((e) => t15key(e) === 'conventions:c.md')!.committed).toBeNull();
+      expect(t.entries.find((e) => t15key(e) === 'specs:b.md')!.committed)
+        .toEqual({ kind: 'file', blob: h.git(main, 'rev-parse', `HEAD:${T15_SPECS}/b.md`), size: 4 });
+      expect(t['unlisted']).toEqual({ count: 0, byReason: {} });
+      expect(t.freshness).toEqual({ remote: 'origin', trackedRef: 'refs/remotes/origin/main', stamp: null, fetchHead: null });
+    });
+
+    it('ref view --ref refs/heads/ws/a: the workspace holder overlays with baseEqual true, and mainCheckout is still M', () => {
+      const { main, wt } = t15fixture();
+      const head = h.git(wt, 'rev-parse', 'HEAD');
+      const t = t15tree(['--ref', 'refs/heads/ws/a']);
+      expect(t, JSON.stringify(t)).toMatchObject({ ok: true });
+      expect(t.ref).toMatchObject({
+        requested: 'refs/heads/ws/a', served: 'refs/heads/ws/a', name: 'ws/a', side: 'local', commit: head,
+        via: 'qualified', relation: 'local-only', counterpart: null,
+      });
+      expect(t.drafts).toEqual({
+        state: 'holder', branch: 'ws/a', worktree: { path: t15fs.realpathSync(wt), head, class: 'workspace' },
+        baseEqual: true, base: null, caveats: [], opaque: [],
+      });
+      expect(t15drafted(t)).toEqual({
+        'specs:a.md': t15row('modified', T15_WT_A),
+        'specs:new.md': t15row('untracked', T15_WT_NEW),
+      });
+      // The draft-only row sorts into its section, by path bytes, not after every committed row.
+      expect(t.entries.map(t15key)).toEqual(['specs:a.md', 'specs:b.md', 'specs:new.md', 'plans:p.md']);
+      expect(t.mainCheckout).toEqual({ path: t15fs.realpathSync(main), branch: 'main', head: h.git(main, 'rev-parse', 'HEAD') });
+      expect(t.freshness).toMatchObject({ remote: 'origin', trackedRef: 'refs/remotes/origin/ws/a' });
+    });
+
+    it('local behind: --ref ws/a serves origin, and the holder reports baseEqual false with its base counts', () => {
+      const { main, wt } = t15fixture();
+      h.git(main, 'push', '-q', 'origin', 'ws/a');
+      const local = h.git(main, 'rev-parse', 'refs/heads/ws/a');
+      const ahead = t15commitOn(h, main, local, 'origin moved on');
+      h.git(main, 'update-ref', 'refs/remotes/origin/ws/a', ahead);
+      const t = t15tree(['--ref', 'ws/a']);
+      expect(t, JSON.stringify(t)).toMatchObject({ ok: true });
+      expect(t.ref).toMatchObject({
+        requested: 'ws/a', served: 'refs/remotes/origin/ws/a', name: 'ws/a', side: 'origin', commit: ahead,
+        via: 'origin', relation: 'local-behind',
+        counterpart: { ref: 'refs/heads/ws/a', commit: local, ahead: 1, behind: 0, count: 'measured' },
+      });
+      expect(t.drafts).toEqual({
+        state: 'holder', branch: 'ws/a', worktree: { path: t15fs.realpathSync(wt), head: local, class: 'workspace' },
+        baseEqual: false, base: { ahead: 0, behind: 1, count: 'measured' }, caveats: [], opaque: [],
+      });
+      // Facts only: the drafts are still reported; whether they overlay is entryView's call, not ccd's.
+      expect(Object.keys(t15drafted(t))).toEqual(['specs:a.md', 'specs:new.md']);
+    });
+  });
+
+  it('unlisted sums the listing\'s refusals and the draft phase\'s, and neither refused name is listed', () => {
+    // U+200B (Cf) in a committed name, U+202E (Cf) in an untracked one: both are unsafe-char.
+    const main = t15docsRepo(h, 'demo', { ...T15_FILES, [`${T15_SPECS}/zw​.md`]: '# committed, refused\n' });
+    t15write(main, `${T15_SPECS}/rtl‮.md`, '# untracked, refused\n');
+    const t = t15tree();
+    expect(t, JSON.stringify(t)).toMatchObject({ ok: true, drafts: { state: 'holder' } });
+    expect(t['unlisted']).toEqual({ count: 2, byReason: { 'unsafe-char': 2 } });
+    expect(t.entries.map(t15key)).toEqual(['specs:a.md', 'specs:b.md', 'plans:p.md']);
+  });
+
+  it('github names the origin\'s GitHub slug, read once from remote.origin.url', () => {
+    const main = h.makeGhRepo('demo', 'example-org/example-repo');
+    const t = t15tree();
+    expect(t, JSON.stringify(t)).toMatchObject({
+      ok: true, github: { state: 'named', slug: 'example-org/example-repo' },
+      ref: { served: 'refs/remotes/origin/main', commit: h.git(main, 'rev-parse', 'HEAD') },
+      freshness: { remote: 'origin', trackedRef: 'refs/remotes/origin/main' },
+    });
+  });
+
+  describe('mainCheckout: the first worktree record, or M itself when the list failed', () => {
+    it('a --separate-git-dir checkout: path is the checkout, though git names its first record by the git dir', () => {
+      const main = t15path.join(h.home, 'projects', 'demo');
+      const sep = t15path.join(h.home, 'demo-git-dir');
+      h.git(h.home, 'init', '-q', '-b', 'main', `--separate-git-dir=${sep}`, main);
+      t15write(main, `${T15_SPECS}/a.md`, '# A\n');
+      h.git(main, 'add', '-A');
+      h.git(main, 'commit', '-q', '-m', 'docs');
+      // CONTROL: the record's path is the git dir, so a mainCheckout that copied it would name no checkout.
+      expect(h.git(main, 'worktree', 'list', '--porcelain').split('\n')[0]).toBe(`worktree ${t15fs.realpathSync(sep)}`);
+      const t = t15tree();
+      expect(t, JSON.stringify(t)).toMatchObject({ ok: true, ref: { served: 'refs/heads/main', via: 'default:local-main' } });
+      expect(t.mainCheckout).toEqual({ path: t15fs.realpathSync(main), branch: 'main', head: h.git(main, 'rev-parse', 'HEAD') });
+    });
+
+    it('worktree list fails: drafts is unreadable {step:worktree-list}, and M answers for itself (rev-parse, symbolic-ref)', () => {
+      const main = t15docsRepo(h, 'demo', T15_FILES);
+      h.git(main, 'checkout', '-q', '-b', 'feat/x');
+      const rec = t15recorder(h.home, { failWhen: ['worktree list'] });
+      const t = t15tree();
+      expect(t, JSON.stringify(t)).toMatchObject({
+        ok: true, drafts: { state: 'unreadable', branch: 'main', worktree: null, step: 'worktree-list' },
+      });
+      expect(t.mainCheckout).toEqual({ path: t15fs.realpathSync(main), branch: 'feat/x', head: h.git(main, 'rev-parse', 'HEAD') });
+      const subs = rec.calls().map((c) => t15sub(c.argv));
+      expect(subs).toContainEqual(['rev-parse', '--verify', '--end-of-options', 'HEAD']);
+      expect(subs).toContainEqual(['symbolic-ref', '-q', 'HEAD']);
+      // The committed listing still answers in full beside the degraded draft phase.
+      expect(t.entries.map(t15key)).toEqual(['specs:a.md', 'specs:b.md', 'plans:p.md']);
+    });
+
+    it('an unborn HEAD in M answers repo-unreadable {step:main-checkout}: mainCheckout.head is a commit', () => {
+      t15docsRepo(h, 'seed', T15_FILES);
+      const main = t15path.join(h.home, 'projects', 'demo');
+      h.git(h.home, 'init', '-q', '-b', 'main', main);
+      h.git(main, 'remote', 'add', 'origin', t15path.join(h.home, 'origins', 'seed.git'));
+      h.git(main, 'fetch', '-q', 'origin');
+      h.git(main, 'remote', 'set-head', 'origin', '-a');
+      // CONTROL: origin/main resolves, so the refusal is M's HEAD and not the ref.
+      expect(h.git(main, 'rev-parse', 'refs/remotes/origin/main')).toMatch(/^[0-9a-f]{40}$/);
+      const t = t15tree();
+      expect(t).toMatchObject({ v: 1, verb: 'docs-tree', ok: false, failure: 'repo-unreadable', step: 'main-checkout' });
+      expect(t).not.toHaveProperty('entries');
+    });
+  });
+
+  describe('refs end to end (rows 20 and 23)', () => {
+    it('row 20: with the main checkout on feat/x the default view still serves origin/main, and lists nothing of feat/x', () => {
+      const main = t15docsRepo(h, 'demo', T15_FILES);
+      const served = h.git(main, 'rev-parse', 'refs/remotes/origin/main');
+      h.git(main, 'checkout', '-q', '-b', 'feat/x');
+      t15write(main, `${T15_SPECS}/x.md`, '# X, only on feat/x\n');
+      h.git(main, 'add', '-A');
+      h.git(main, 'commit', '-q', '-m', 'feat/x only');
+      const head = h.git(main, 'rev-parse', 'HEAD');
+      const t = t15tree();
+      expect(t, JSON.stringify(t)).toMatchObject({ ok: true });
+      expect(t.ref).toMatchObject({ served: 'refs/remotes/origin/main', name: 'main', commit: served, via: 'default:origin-head' });
+      expect(t.mainCheckout).toEqual({ path: t15fs.realpathSync(main), branch: 'feat/x', head });
+      expect(t.entries.map(t15key)).toEqual(['specs:a.md', 'specs:b.md', 'plans:p.md']);
+      // Nobody holds main now, so the default view's draft facts are none.
+      expect(t.drafts).toEqual({ state: 'none', branch: 'main', skipped: [] });
+    });
+
+    it('row 23: an unresolved ref answers ok:false with no listing at all, and suggests origin/<b>', () => {
+      const main = t15docsRepo(h, 'demo', T15_FILES);
+      h.git(main, 'update-ref', 'refs/remotes/origin/feat', h.git(main, 'rev-parse', 'HEAD'));
+      const rec = t15recorder(h.home);
+      const t = t15tree(['--ref', 'origin/feat']);
+      expect(t).toMatchObject({ v: 1, verb: 'docs-tree', ok: false, failure: 'unresolved-ref', suggest: 'refs/remotes/origin/feat' });
+      expect(t['tried']).toEqual([
+        { ref: 'refs/heads/origin/feat', result: 'absent' },
+        { ref: 'refs/remotes/origin/origin/feat', result: 'absent' },
+      ]);
+      for (const k of ['entries', 'sections', 'drafts', 'mainCheckout', 'freshness']) expect(t).not.toHaveProperty(k);
+      // Never a listing: no ls-tree ran, and no draft phase either.
+      const subs = rec.calls().map((c) => t15sub(c.argv));
+      expect(subs.length).toBeGreaterThan(0);
+      expect(subs.filter((s) => ['ls-tree', 'worktree', 'status', 'ls-files'].includes(s[0] ?? ''))).toEqual([]);
+    });
+  });
+
+  describe('git hygiene end to end (rows 11, 12, 16 and 64)', () => {
+    it('row 11: GIT_DIR and GIT_CONFIG_PARAMETERS aimed at a decoy in the run env change nothing; demo is what is listed', () => {
+      const main = t15docsRepo(h, 'demo', T15_FILES);
+      const decoy = t15path.join(h.home, 'decoy');
+      h.git(h.home, 'init', '-q', '-b', 'main', decoy);
+      t15write(decoy, `${T15_SPECS}/decoy.md`, '# decoy\n');
+      h.git(decoy, 'add', '-A');
+      h.git(decoy, 'commit', '-q', '-m', 'decoy');
+      const hostile = {
+        GIT_DIR: t15path.join(decoy, '.git'),
+        GIT_CONFIG_PARAMETERS: "'remote.origin.url=https://github.com/example-org/decoy'",
+      };
+      // CONTROL: under that env a plain git in demo reads the decoy, so the scrub is what the case below measures.
+      expect(t15execFile('git', ['-C', main, 'ls-tree', '-r', '--name-only', 'HEAD'],
+        { encoding: 'utf8', env: { ...process.env, HOME: h.home, ...hostile } })).toContain('decoy.md');
+      const rec = t15recorder(h.home);
+      const t = t15tree([], hostile);
+      expect(t, JSON.stringify(t)).toMatchObject({
+        ok: true, github: { state: 'none' }, ref: { commit: h.git(main, 'rev-parse', 'refs/remotes/origin/main') },
+      });
+      expect(t.entries.map(t15key)).toEqual(['specs:a.md', 'specs:b.md', 'plans:p.md']);
+      const calls = rec.calls();
+      expect(calls.length).toBeGreaterThan(0);
+      for (const c of calls) {
+        expect(c.env, c.argv.join(' ')).not.toHaveProperty('GIT_DIR');
+        expect(c.env, c.argv.join(' ')).not.toHaveProperty('GIT_CONFIG_PARAMETERS');
+      }
+    });
+
+    it('row 12: docs-tree on a holder with a touched doc writes nothing under .git, the index included (ctl: a plain status rewrites it)', () => {
+      const main = t15docsRepo(h, 'demo', T15_FILES);
+      // Stat-dirty, same bytes: exactly what an opportunistic index refresh would rewrite.
+      const later = Math.floor(Date.now() / 1000) + 5;
+      t15fs.utimesSync(t15path.join(main, T15_SPECS, 'a.md'), later, later);
+      const gitDir = t15path.join(main, '.git');
+      const index = t15path.join(gitDir, 'index');
+      const before = t15snapshot(gitDir);
+      const ix = t15fs.statSync(index, { bigint: true });
+      const t = t15tree();
+      expect(t, JSON.stringify(t)).toMatchObject({ ok: true, drafts: { state: 'holder', worktree: { class: 'main' } } });
+      expect(t15drafted(t)).toEqual({});
+      const ix2 = t15fs.statSync(index, { bigint: true });
+      expect([ix2.ino, ix2.mtimeNs]).toEqual([ix.ino, ix.mtimeNs]);
+      expect(t15snapshot(gitDir)).toEqual(before);
+      // CONTROL: the same status without --no-optional-locks takes the lock and writes a new index.
+      h.git(main, 'status');
+      expect(t15fs.statSync(index, { bigint: true }).ino).not.toBe(ix.ino);
+    });
+
+    it('rows 16 and 64: in both views the recorder sees no forbidden subcommand, and status ran with --no-ahead-behind', () => {
+      t15fixture();
+      const rec = t15recorder(h.home);
+      for (const args of [[], ['--ref', 'refs/heads/ws/a']]) {
+        rec.reset();
+        const t = t15tree(args);
+        expect(t, JSON.stringify(t)).toMatchObject({ ok: true, drafts: { state: 'holder' } });
+        const calls = rec.calls().map((c) => c.argv);
+        const subs = calls.map(t15sub);
+        // The scan covered a whole verb: a listing and a holder snapshot ran.
+        expect(subs.filter((s) => s[0] === 'ls-tree')).toHaveLength(1);
+        expect(subs.filter((s) => s[0] === 'worktree')).toEqual([['worktree', 'list', '--porcelain', '-z']]);
+        const status = subs.filter((s) => s[0] === 'status');
+        expect(status.length).toBeGreaterThan(0);
+        for (const s of status) expect(s).toContain('--no-ahead-behind');
+        for (const s of subs) expect(T15_FORBIDDEN, s.join(' ')).not.toContain(s[0]);
+        for (const argv of calls) {
+          // Row 12's mechanism on every call the verb made: the read runner's prefix, --no-optional-locks included.
+          expect(argv.slice(0, 2), argv.join(' ')).toEqual(['--no-pager', '--no-optional-locks']);
+          expect(argv.filter((x) => x.startsWith('--textconv') || x.startsWith('--filters')), argv.join(' ')).toEqual([]);
+        }
+      }
+    });
+  });
+
+  describe('the freshness signal (section 2 (g))', () => {
+    it('with no origin: remote and trackedRef are null, and the local default branch is served', () => {
+      const main = t15docsRepo(h, 'demo', T15_FILES);
+      h.git(main, 'remote', 'remove', 'origin');
+      t15fs.rmSync(t15path.join(main, '.git', 'FETCH_HEAD'), { force: true });
+      const t = t15tree();
+      expect(t, JSON.stringify(t)).toMatchObject({ ok: true, github: { state: 'none' } });
+      expect(t.ref).toMatchObject({ served: 'refs/heads/main', side: 'local', via: 'default:local-main' });
+      expect(t.freshness).toEqual({ remote: null, trackedRef: null, stamp: null, fetchHead: null });
+    });
+
+    it('a planted stamp gives ages on the fleet clock, FETCH_HEAD gives {ageMs, bytes}, and a stamp naming another branch is none', () => {
+      const main = t15docsRepo(h, 'demo', T15_FILES);
+      const okCommit = h.git(main, 'rev-parse', 'refs/remotes/origin/main');
+      const stampFile = t15stampPath('main');
+      const t0 = Date.now();
+      const attemptMs = t0 - 5000;
+      const okMs = t0 - 7000;
+      t15fs.mkdirSync(t15path.dirname(stampFile), { recursive: true });
+      t15fs.writeFileSync(stampFile, JSON.stringify({ v: 1, branch: 'main', attemptMs, lastOutcome: 'ok', okMs, okCommit }));
+      const fetchHead = t15path.join(main, '.git', 'FETCH_HEAD');
+      const fetchHeadBody = `${okCommit}\t\tbranch 'main' of example-origin\n`;
+      t15fs.writeFileSync(fetchHead, fetchHeadBody);
+      const fetchHeadS = Math.floor(t0 / 1000) - 30;
+      t15fs.utimesSync(fetchHead, fetchHeadS, fetchHeadS);
+      const t = t15tree();
+      const t1 = Date.now();
+      expect(t, JSON.stringify(t)).toMatchObject({ ok: true });
+      const f = t.freshness;
+      expect(f).toMatchObject({ remote: 'origin', trackedRef: 'refs/remotes/origin/main' });
+      expect(f.stamp).toMatchObject({ lastOutcome: 'ok', okCommit });
+      // ccd's clock read lies between t0 and t1, so each age lies between its two bounds.
+      expect(f.stamp!.attemptAgeMs).toBeGreaterThanOrEqual(t0 - attemptMs);
+      expect(f.stamp!.attemptAgeMs).toBeLessThanOrEqual(t1 - attemptMs);
+      expect(f.stamp!.okAgeMs!).toBeGreaterThanOrEqual(t0 - okMs);
+      expect(f.stamp!.okAgeMs!).toBeLessThanOrEqual(t1 - okMs);
+      expect(f.fetchHead).toMatchObject({ bytes: Buffer.byteLength(fetchHeadBody) });
+      expect(f.fetchHead!.ageMs).toBeGreaterThanOrEqual(t0 - fetchHeadS * 1000);
+      expect(f.fetchHead!.ageMs).toBeLessThanOrEqual(t1 - fetchHeadS * 1000);
+      // The same path holding another branch's stamp is not main's stamp.
+      t15fs.writeFileSync(stampFile, JSON.stringify({ v: 1, branch: 'other', attemptMs, lastOutcome: 'ok', okMs, okCommit }));
+      expect(t15tree().freshness.stamp).toBeNull();
+    });
+
+    it('a FETCH_HEAD that is a symlink is not git\'s file: fetchHead is null and the link is never followed', () => {
+      const main = t15docsRepo(h, 'demo', T15_FILES);
+      const target = t15path.join(h.home, 'not-a-fetch-head');
+      t15fs.writeFileSync(target, 'seven b');
+      const fetchHead = t15path.join(main, '.git', 'FETCH_HEAD');
+      t15fs.rmSync(fetchHead, { force: true });
+      t15fs.symlinkSync(target, fetchHead);
+      const t = t15tree();
+      expect(t, JSON.stringify(t)).toMatchObject({ ok: true });
+      expect(t.freshness.fetchHead).toBeNull();
+    });
+  });
+
+  it('M6.8: about 1000 committed docs with ~1000-byte paths frame past 1 MiB, under the entry cap: too-many-entries {count, bytes}', () => {
+    const main = h.makeRepo('demo');
+    const dir = `${T15_SPECS}/${'a'.repeat(250)}/${'b'.repeat(250)}/${'c'.repeat(250)}`;
+    for (let i = 0; i < 1000; i += 1) t15write(main, `${dir}/${String(i).padStart(4, '0')}${'d'.repeat(240)}.md`, `${i}\n`);
+    h.git(main, 'add', '-A');
+    h.git(main, 'commit', '-q', '-m', 'long paths');
+    h.git(main, 'push', '-q', 'origin', 'main');
+    const t = t15tree();
+    expect(t).toMatchObject({ v: 1, verb: 'docs-tree', ok: false, failure: 'too-many-entries', count: 1000 });
+    expect(t).not.toHaveProperty('entries');
+    expect(t['count'] as number).toBeLessThanOrEqual(T15_MAX_ENTRIES);
+    expect(t['bytes'] as number).toBeGreaterThan(T15_MAX_WIRE_BYTES);
+  });
+});
+
+// ---- docs W1a Task 15: the guards the brief's "Decided here" list names (controller ruling T15, G8) ----
+// Each case below goes red when ONE named line of `verb_tree`'s section is deleted: the guard it pins is quoted in
+// its title. They reuse the block above's helpers; the ones that need a python object call the SHIPPED helper as a
+// module (`unitJson`), and the rest run the shipped verb through the dispatcher.
+describe('docs-tree end to end: the guards of "Decided here" (docs W1a Task 15)', () => {
+  /** `H.tree_main_checkout(repo, <rec>, dl)` over demo, answered as `{word, ctx}` for a Fail or `{ok}`. */
+  function t15mainCheckout(rec: string): { word?: string; ctx?: Record<string, unknown>; ok?: Record<string, unknown> } {
+    return t15unitJson(h.home, [
+      'import os',
+      "HOME = os.environ['HOME']",
+      "ctx = H.Ctx(verb='docs-tree', root=os.path.join(HOME, 'projects'), worktrees=os.path.join(HOME, 'worktrees'),",
+      "            reg=os.path.join(HOME, '.cc-sessions'), t0=0)",
+      "repo = H.discover(ctx, 'demo', H.Deadline(12))",
+      'try:',
+      `    out({'ok': H.tree_main_checkout(repo, ${rec}, H.Deadline(12))})`,
+      'except H.Fail as f:',
+      "    out({'word': f.word, 'ctx': f.ctx})",
+    ].join('\n'));
+  }
+
+  it('a branch name that is not strict UTF-8 answers repo-unreadable {step:main-checkout}: the wire is strict UTF-8', () => {
+    t15docsRepo(h, 'demo', T15_FILES);
+    // `\\udcff` is python's escape: what surrogateescape makes of a lone 0xff byte in a branch name.
+    const a = t15mainCheckout("{'head': '1' * 40, 'branch': 'refs/heads/feat/\\udcff'}");
+    expect(a).toEqual({ word: 'repo-unreadable', ctx: { step: 'main-checkout', detail: 'the branch name is not UTF-8' } });
+    // CONTROL: the same record with a UTF-8 name answers a mainCheckout.
+    expect(t15mainCheckout("{'head': '1' * 40, 'branch': 'refs/heads/feat/x'}").ok).toMatchObject({ branch: 'feat/x', head: '1'.repeat(40) });
+  });
+
+  it('a detached HEAD in M answers mainCheckout.branch null, not a refname and not a failure', () => {
+    const main = t15docsRepo(h, 'demo', T15_FILES);
+    h.git(main, 'checkout', '-q', '--detach');
+    const head = h.git(main, 'rev-parse', 'HEAD');
+    const t = t15tree();
+    expect(t, JSON.stringify(t)).toMatchObject({ ok: true });
+    expect(t.mainCheckout).toEqual({ path: t15fs.realpathSync(main), branch: null, head });
+  });
+
+  it('symbolic-ref answering rc 128 (not 1) with the list failed is repo-unreadable {step:main-checkout}', () => {
+    const main = t15docsRepo(h, 'demo', T15_FILES);
+    t15recorder(h.home, { failWhen: ['worktree list', 'symbolic-ref -q HEAD'] });
+    const t = t15tree();
+    expect(t).toMatchObject({ v: 1, verb: 'docs-tree', ok: false, failure: 'repo-unreadable', step: 'main-checkout' });
+    expect(t['stderrHead']).toContain('planted failure');
+    expect(t).not.toHaveProperty('entries');
+    // CONTROL: the same repository, with only the list failing, answers (rc 0 from symbolic-ref).
+    t15recorder(h.home, { failWhen: ['worktree list'] });
+    expect(t15tree().mainCheckout).toEqual({ path: t15fs.realpathSync(main), branch: 'main', head: h.git(main, 'rev-parse', 'HEAD') });
+  });
+
+  it('an unborn HEAD in M with the list failed is refused by tree_head_of_m itself (rev-parse rc, with stderrHead)', () => {
+    t15docsRepo(h, 'seed', T15_FILES);
+    const main = t15path.join(h.home, 'projects', 'demo');
+    h.git(h.home, 'init', '-q', '-b', 'main', main);
+    h.git(main, 'remote', 'add', 'origin', t15path.join(h.home, 'origins', 'seed.git'));
+    h.git(main, 'fetch', '-q', 'origin');
+    h.git(main, 'remote', 'set-head', 'origin', '-a');
+    t15recorder(h.home, { failWhen: ['worktree list'] });
+    const t = t15tree();
+    expect(t).toMatchObject({ v: 1, verb: 'docs-tree', ok: false, failure: 'repo-unreadable', step: 'main-checkout' });
+    // rev-parse's own refusal carries its stderr; tree_main_checkout's later unborn check carries `detail` instead,
+    // so the two refusals are told apart and the first one cannot be deleted unseen.
+    expect(t).toHaveProperty('stderrHead');
+    expect(t).not.toHaveProperty('detail');
+  });
+
+  it('a FETCH_HEAD whose mtime is ahead of the fleet clock reads as age 0, never negative', () => {
+    const main = t15docsRepo(h, 'demo', T15_FILES);
+    const fetchHead = t15path.join(main, '.git', 'FETCH_HEAD');
+    t15fs.writeFileSync(fetchHead, 'abc\n');
+    const ahead = Math.floor(Date.now() / 1000) + 3600;
+    t15fs.utimesSync(fetchHead, ahead, ahead);
+    const t = t15tree();
+    expect(t, JSON.stringify(t)).toMatchObject({ ok: true });
+    expect(t.freshness.fetchHead).toEqual({ ageMs: 0, bytes: 4 });
+  });
+
+  it('a FIFO or a directory at FETCH_HEAD is not git\'s file: fetchHead is null, and the verb does not hang on the FIFO', () => {
+    const main = t15docsRepo(h, 'demo', T15_FILES);
+    const fetchHead = t15path.join(main, '.git', 'FETCH_HEAD');
+    t15fs.rmSync(fetchHead, { force: true });
+    t15execFile('mkfifo', [fetchHead]);
+    expect(t15fs.lstatSync(fetchHead).isFIFO()).toBe(true);
+    const viaFifo = t15tree();
+    expect(viaFifo, JSON.stringify(viaFifo)).toMatchObject({ ok: true });
+    expect(viaFifo.freshness.fetchHead).toBeNull();
+    t15fs.rmSync(fetchHead, { force: true });
+    t15fs.mkdirSync(fetchHead);
+    const viaDir = t15tree();
+    expect(viaDir, JSON.stringify(viaDir)).toMatchObject({ ok: true });
+    expect(viaDir.freshness.fetchHead).toBeNull();
+  });
+
+  it('a stamp is reported while remote is null: facts only, the origin\'s absence does not hide it', () => {
+    const main = t15docsRepo(h, 'demo', T15_FILES);
+    const okCommit = h.git(main, 'rev-parse', 'refs/heads/main');
+    h.git(main, 'remote', 'remove', 'origin');
+    t15fs.rmSync(t15path.join(main, '.git', 'FETCH_HEAD'), { force: true });
+    const stampFile = t15stampPath('main');
+    const now = Date.now();
+    t15fs.mkdirSync(t15path.dirname(stampFile), { recursive: true });
+    t15fs.writeFileSync(stampFile, JSON.stringify({ v: 1, branch: 'main', attemptMs: now - 5000, lastOutcome: 'ok', okMs: now - 7000, okCommit }));
+    const t = t15tree();
+    expect(t, JSON.stringify(t)).toMatchObject({ ok: true });
+    expect(t.freshness).toMatchObject({ remote: null, trackedRef: null, fetchHead: null });
+    expect(t.freshness.stamp).toMatchObject({ lastOutcome: 'ok', okCommit });
+  });
+});
