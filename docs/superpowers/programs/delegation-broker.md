@@ -27,7 +27,7 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
 | 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; CCR-15 wave 4's sweep (merged #215, live) | — | to plan |
 
-## Measurement matrix (wave 1 fills this section)
+## Measurement matrix (filled by wave 1; wave 2's close-out added the real-lane cross-check)
 
 Wave 1's answers to spec §8.1, per Claude Code version, read from the committed corpus
 (`server/test/fixtures/delegation/matrix.json`, derived by `server/test/delegation-rig/build-matrix.mjs` from 140
@@ -64,11 +64,13 @@ The corpus comes from four captures, and `matrix.json` re-derives byte-identical
 - fix round 2's 28 cells, 2.1.290 and 2.1.291 × 14 scenarios, captured 2026-10-06 14:20–14:41 UTC with the rig at
   `e47f3689f` (a git-archive snapshot), sanitised by the sanitiser at `858caf47d` and committed in `158bc2227`. Of
   the versions installed when that capture started (2.1.285–2.1.291), it ran the two the corpus lacked; a later
-  version is wave 2's first step (D-4004). Fix round 2's rig changes were not in the snapshot the runs used (the
-  git-archive snapshot of `e47f3689f` above) and change none of them: `claude_pid` resolves the versions directory
-  to its own spelling on a box whose HOME is physical, as the capture box's is, and the workflow scenarios'
-  `answerDialog "Run a dynamic workflow"` step, since replaced by a 10 s sleep (D-4058), waited out its 10 s timeout
-  and pressed nothing: no dialog showed, and 36 of 36 workflow fixtures carry no `dialog answered:` note.
+  version was to be the observe stage's first step (then wave 2, wave 3 since the 2026-10-07 renumbering; D-4004), and
+  the close-out (run 306) ran it instead, as the fourth capture below says. Fix round 2's rig changes were not in the
+  snapshot the runs used (the git-archive snapshot of `e47f3689f` above) and change none of them: `claude_pid`
+  resolves the versions directory to its own spelling on a box whose HOME is physical, as the capture box's is, and
+  the workflow scenarios' `answerDialog "Run a dynamic workflow"` step, since replaced by a 10 s sleep (D-4058),
+  waited out its 10 s timeout and pressed nothing: no dialog showed, and 36 of 36 workflow fixtures carry no
+  `dialog answered:` note.
 - the 2.1.292 capture's 14 cells, 2.1.292 × 14 scenarios, captured 2026-10-07 10:11:46–10:20:55 UTC with
   `recapture.sh --missing` at commit `ccf0167b9` (a git-archive snapshot), sanitised by the sanitiser at that commit
   and committed in `3cad0d2cd`. It ran the version the corpus lacked of those installed when it started (2.1.285,
@@ -166,7 +168,7 @@ the eleven Agent and Workflow scenarios. Each item holds on all nine versions un
 - **`workflowPhase` is a measured rig-vs-box difference.** Spec §3.1 says a Workflow worker's meta carries
   `workflowPhase`. No Workflow meta in the corpus does (0 of 63), while on the fleet box 8 of the census's 15 `wf_*`
   records with a found meta list it among their meta keys (`this-repo` 7, `project-1` 1, `project-2` 0). The
-  real-lane cross-check checks it.
+  real-lane cross-check has run, and found it on neither lane (amendment `workflow-phase-is-not-always-written`).
 - **Q5 compact is a measurement LIMIT, not "never fired".** The hook exits for a `compact` SessionStart before its
   capture arm (`ccd/session-hook.sh:2905`). That is the stall-watch exclusion its arm comment documents at
   `:2919-2922`. Compaction shows only as PreCompact/PostCompact, which carried the pre-compaction session id, and the
@@ -220,11 +222,11 @@ the eleven Agent and Workflow scenarios. Each item holds on all nine versions un
 
 ### Hook-side costs (Q8)
 
-This is a bash micro-benchmark of the operations, not of the wave-2 hook (`q8-spool-cost-is-a-micro-benchmark`,
-D-4000). It ran on 2026-10-05 against the repository with the most admin records, `project-1`'s main checkout,
-which held 185 records at the start and at the end of the run (181 at the census). The load average was
-25.06 / 22.22 / 23.77 at the start and 25.78 / 22.41 / 23.83 at the end, on 16 CPUs. Nothing in the repository was
-written; the append went to a scratch file outside it, removed after.
+This is a bash micro-benchmark of the operations, not of the observe stage's hook (wave 3 since the 2026-10-07
+renumbering; `q8-spool-cost-is-a-micro-benchmark`, D-4000). It ran on 2026-10-05 against the repository with the
+most admin records, `project-1`'s main checkout, which held 185 records at the start and at the end of the run (181
+at the census). The load average was 25.06 / 22.22 / 23.77 at the start and 25.78 / 22.41 / 23.83 at the end, on 16
+CPUs. Nothing in the repository was written; the append went to a scratch file outside it, removed after.
 
 | Operation (1000 iterations, 3 repeats) | seconds per 1000 | per operation |
 |---|---|---|
@@ -301,8 +303,9 @@ working directory of the meta's parent (the munged project directory the meta si
 
 Across the 122 records with a found meta: `ccd-workspace` 49, `main-checkout` 10, `other` 59 and `mixed` 4.
 **Assuming every `ccd-workspace`-class parent is a ccd session** (unmeasured: the class is a path prefix), the
-non-ccd share is bounded only to between 0 and 73 of 122 (about 60%), and `project-1` carries 62 of the 73. Wave 2's
-spool answers Q9 exactly: a tree whose parent wrote no spool line had a non-ccd parent.
+non-ccd share is bounded only to between 0 and 73 of 122 (about 60%), and `project-1` carries 62 of the 73. The
+observe stage's spool (wave 3 since the 2026-10-07 renumbering) answers Q9 exactly: a tree whose parent wrote no spool
+line had a non-ccd parent.
 
 **Q10, from source** (`incarnation-is-the-row-generation`, D-3996). Cited by content against `origin/main`
 `77c11245a` (`git show 77c11245a:ccd/ccd`), the newest `main` when this was written, because `main`'s lines are the
@@ -326,8 +329,8 @@ where #301 added five `caps` lines, sit five lines lower there (`:10452`, `:2187
 - The file can be absent on a LIVE row: ccd's own comments quote a 2026-09-17 measurement of 31 of 34 live rows
   without it (`:20780`, `:22068`).
 
-**So wave 2 reads the FILE, not the variable, and an ABSENT or INVALID file is an UNMEASURED incarnation, never a
-changed one.**
+**So the observe stage (wave 3 since the 2026-10-07 renumbering) reads the FILE, not the variable, and an ABSENT or
+INVALID file is an UNMEASURED incarnation, never a changed one.**
 
 ### Amendments the measurement forces
 
@@ -366,15 +369,16 @@ the exception.
   read from the pane on 2.1.280 and 2.1.289 only: interrupt-exit) or is SIGKILLed
   (parent-kill; wf-iso-resume's hung worker) leaves its tree, unchanged included, with a SubagentStart and no
   SubagentStop or notification; the quitting parent's SessionEnd says nothing about its agent. Under the ephemeral
-  rule such a tree is never due unless the parent is proved dead, so wave 2 must name what ends it (interrupt-exit,
-  parent-kill, wf-iso-resume) — spec §5.11 clocks and terminal evidence, §5.2 execution.
+  rule such a tree is never due unless the parent is proved dead, so the observe stage (wave 3 since the 2026-10-07
+  renumbering) must name what ends it (interrupt-exit, parent-kill, wf-iso-resume) — spec §5.11 clocks and terminal
+  evidence, §5.2 execution.
 - `workflow-worker-not-rerun-after-restart` — after a parent SIGKILL and `--resume`, the hung isolated worker did not
   re-run within the probe window, and its record stayed. "A paused workflow is not ended" must not wait on a resume
   the corpus never saw (wf-iso-resume, probe missed on all nine) — spec §5.11, §5.12 restart.
 - `compact-sessionstart-is-not-captured` — the hook exits for a `compact` SessionStart before capture, and compaction
-  showed no id change in PreCompact/PostCompact. "Rotates on compaction" is unmeasured, and wave 2's spool line for
-  that SessionStart must be written inside its arm before the exit (clear-compact-resume) — spec §3 `_sync_uuid` row,
-  §5.2, §5.3.
+  showed no id change in PreCompact/PostCompact. "Rotates on compaction" is unmeasured, and the observe stage's spool
+  line (wave 3 since the 2026-10-07 renumbering) for that SessionStart must be written inside its arm before the exit
+  (clear-compact-resume) — spec §3 `_sync_uuid` row, §5.2, §5.3.
 - `compaction-fires-an-unpaired-subagentstop` — `/compact` emits a SubagentStop with an agent id, an empty agent
   type, and no SubagentStart or launch, so a SubagentStop alone never opens an activity (clear-compact-resume) —
   spec §5.2 activity, §5.3.
@@ -522,6 +526,10 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
 
 ## Decisions & deviations
 
+Entries dated before 2026-10-07 use the six-wave numbering and are kept as written: "wave 2" in them is the observe
+stage, wave 3 since the 2026-10-07 renumbering, and each later number there is one lower than today's. Run 306 was
+opened as that stage's run and is now the close-out's.
+
 - **2026-10-01 to 2026-10-04 — the operator's rulings during design** (spec §2): route 1 (a delegation broker plus
   reconciliation); ephemeral workers render as activity under their parent; durable work outside `runs dispatch` is
   auto-adopted and guided; coordinator identity is explicit intent plus inferred escalation; nesting lasts until
@@ -643,6 +651,11 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
   - Review 304's residue, ruled for wave 2's plan:
     - F1: narrow the claim. A `..` that is not at the string's start or after `/` is a known limit, pinned by a row.
       Widening `DOTDOT` would red 18 historical strings in fixtures whose versions are no longer installed.
+      [Corrected 2026-10-07, review 318 F5: the corpus now holds 20 such strings in 10 files (` ../raw-wt`, two to a
+      file; `grep -rhoF ' ../raw-wt'` over the committed fixtures, as the plan's D-4007 counts), 18 in 9 files before
+      2.1.292's capture added two. At this ruling only 4 of the 18 were in versions no longer installed (2.1.280 and
+      2.1.281, per the lane read of 2026-10-06 14:58 UTC in this ledger as merged in `22b4eabda`); 2.1.288 is not
+      installed as of 2026-10-07, which makes six of the 20, as D-4007 states.]
     - F2: the compaction gap gets its own deviation number, and the plan header and "Versions covered" say Q5
       compaction is unmeasured.
     - F3: date each mutation count by the commit it was taken at, and drop "every count matches".
@@ -700,9 +713,10 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
 - **The corpus must cover every Claude Code version the fleet runs before a wave depends on a hook field** (spec
   §8.1). Lanes update often, so each such wave begins by re-reading the lane versions and capturing any the
   corpus lacks with the rig's recapture steps.
-- **Wave 2's spool line (review 296):** on the largest repo the worktree-name listing alone is about 3.9 KB, which
-  nearly fills spec §5.3's 4 KiB line. Wave 2's line design must measure that case: the listing is the optional
-  field that gets dropped, and the worst case is about 8.5 ms per call.
+- **The observe stage's spool line (review 296; wave 3 since the 2026-10-07 renumbering):** on the largest repo the
+  worktree-name listing alone is about 3.9 KB, which nearly fills spec §5.3's 4 KiB line. The observe stage's line
+  design must measure that case: the listing is the optional field that gets dropped, and the worst case is about
+  8.5 ms per call.
 
 ## Next-wave brief
 

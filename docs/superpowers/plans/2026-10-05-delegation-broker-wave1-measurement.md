@@ -3043,6 +3043,16 @@ git commit -m "docs(delegation-broker): the wave-1 measurement matrix and its am
 
 Each row was given in its task; this is the index the wave-done reports against.
 
+**Wave numbers in this plan (the 2026-10-07 renumbering, #313).** The programme was six waves and is now seven: the
+measurement close-out (run 306) is wave 2, and the observe stage, which was wave 2, is wave 3, so the old waves 3 to 6
+are now 4 to 7. A "wave 2" here means the close-out where the passage is marked as its own: the "Wave 2 close-out
+(review 304)" and "Wave 2 fix round (review 318)" sub-tables below, any passage that cites review 304 or review 318,
+and "Wave 2 (run 306)", "wave 2's close-out", "wave 2's tree", "Corrected in wave 2", "Extended in wave 2", "reworded
+in wave 2" and "Wave 2 captured" under "Deviations found". Every other "wave 2" in this plan was written before
+2026-10-07 and means the observe stage, now wave 3, and every other "wave 3" to "wave 6" there is one lower than
+today's number. Those passages stay as the dated snapshots they are; a sentence that could be read either way says
+which.
+
 | Task | Rows | Guards |
 |---|---|---|
 | 1 | T1-M1 … T1-M6 | SessionEnd registered; its arm present; inert: no hookstate (T1-M3) and no marker (T1-M6); declared under `set -u`; no Worktree* registration |
@@ -3319,6 +3329,8 @@ wave that ships each verb or route. `WorktreeCreate` / `WorktreeRemove` are neve
 
 Numbers are minted at run-open; the worker writes each issued number beside its slug, in this section, in its
 first commit (allocate and define in the same act), and cites only those. Each slug names what it departs from.
+A "wave 2" below means the close-out (run 306) where the passage is marked as its own, and the observe stage (now
+wave 3) where it is not; see the numbering note at the top of "Mutation table".
 
 - **D-3992** — `sessionend-registered-in-stage-1` — spec §7's table ships hooks in stage 2. Measuring `SessionEnd` (§8.1 Q6)
   needs it registered, and its arm is inert outside a `-hookcap` session (Task 1's rows), so registering it now
@@ -3353,6 +3365,12 @@ first commit (allocate and define in the same act), and cites only those. Each s
   of stub steps, the five "stops at …" rows, "a real run makes the raw root, runs the five steps in the printed order on it …"
   and "end to end over the REAL sanitiser and matrix builder …") and, in the `(review 304 F7)` describe, "which versions all
   runs" and "rig.sh versions".
+  Two follow-ups, ruled 2026-10-07 (review 318, the coordinator's fix-round mail) as tooling follow-ups and not part of
+  that fix round: `recapture.sh` exits 0 when single runs failed (`cmd_all` logs `failed rc=` and still writes `.done`;
+  a failed run that leaves a bundle builds `unmeasured` cells, and `--missing`, which keys on the version directory
+  existing, then skips that version), and `rig.sh versions` reads an unreadable versions directory as none installed
+  (it still fails closed: recapture exits 2). The observe stage's plan (wave 3) closes both before a later capture
+  relies on `--missing`; until then an unmeasured cell is not coverage.
 - **D-4000** — `q8-spool-cost-is-a-micro-benchmark` — the spool append's cost against the hook budget is measured as a bash
   micro-benchmark of the same operations; the hook itself is wave 2's, and its own timing pin lands there.
 - **D-4001** — `q9-parent-class-is-a-proxy` — §8.1 Q9 (the share of trees whose parent is not a ccd session) cannot be read
@@ -3397,13 +3415,14 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   root's removal and removes its socket file, and `reap` removes stale `dlg<pid>` sockets.
   Fix round 2 captured 2.1.290 and 2.1.291 with the rig as it stood (`e47f3689f`): no adaptation was needed, and each
   version's labels and notes equal 2.1.289's on all 14 scenarios. The capture ran only the versions installed when it
-  started (2.1.285 to 2.1.291, two of them new to the corpus); a version installed later is wave 2's first step.
-  Wave 2 captured 2.1.292 with the rig as it stood at `ccf0167b9` (`recapture.sh --missing`, 2026-10-07
-  10:11:46–10:20:55 UTC; the capture's `rig.sh`, scenarios, mock and `ccd/` are those of the snapshot, and the rig
-  directory at `e8a096253` differs from it in `sanitize.mjs` alone): no adaptation was needed, and its labels and notes
-  equal 2.1.291's on all 14 scenarios. The labels equal as sets: a fixture lists them in the order they were reached and
-  the matrix sorts them, and interrupt-exit's two hang labels were reached `sub-hang` first, as on 2.1.285 to 2.1.288
-  (2.1.280, 2.1.281 and 2.1.289 to 2.1.291 have `main-hang` first); the notes are the same two as before
+  started (2.1.285 to 2.1.291, two of them new to the corpus); a version installed later was to be the observe stage's
+  first step (then wave 2, now wave 3), and the close-out took it instead.
+  Wave 2's close-out (run 306) captured 2.1.292 with the rig as it stood at `ccf0167b9` (`recapture.sh --missing`,
+  2026-10-07 10:11:46–10:20:55 UTC; the capture's `rig.sh`, scenarios, mock and `ccd/` are those of the snapshot, and
+  the rig directory at `e8a096253` differs from it in `sanitize.mjs` alone): no adaptation was needed, and its labels
+  and notes equal 2.1.291's on all 14 scenarios. The labels equal as sets: a fixture lists them in the order they were
+  reached and the matrix sorts them, and interrupt-exit's two hang labels were reached `sub-hang` first, as on 2.1.285
+  to 2.1.288 (2.1.280, 2.1.281 and 2.1.289 to 2.1.291 have `main-hang` first); the notes are the same two as before
   (`dialog answered: Background work is running` on interrupt-exit, `probe ["r1-resumed"]: not reached` on
   wf-iso-resume) and nothing else. The capture ran only the version the corpus lacked of those installed when it started
   (2.1.285, 2.1.286, 2.1.287, 2.1.289, 2.1.290, 2.1.291, 2.1.292), which was 2.1.292 alone; a version installed later
@@ -3413,10 +3432,10 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   `main-done` regex could not match; it gained `|^$`, and because that alone could end a step before the subagent's
   last reply (a false "worktree left" for Q6), the four Agent scenarios wait on `["sub-done","main-done"]`.
   Widened by Task 9 (the corpus): measured on every captured version (2.1.280, .281, .285, .286, .287, .288, .289,
-  and .290 and .291 from fix round 2's capture, and .292 from wave 2's), in the rig every Agent call launches in the
-  background (`async_launched`), whether the mock set
-  `run_in_background` false (six scenarios) or true (agent-iso-bg), and the key never appears in PreToolUse input;
-  a foreground Agent call is unmeasured.
+  and .290 and .291 from fix round 2's capture, and .292 from the close-out's (wave 2's, run 306)), in the rig every
+  Agent call launches in the background (`async_launched`), whether the mock set `run_in_background` false (six
+  scenarios) or true (agent-iso-bg), and the key never appears in PreToolUse input; a foreground Agent call is
+  unmeasured.
 - **D-4006** — `rig-guard-hardening-from-review` (Task 4 review): `reap` skips a `ccrc-dlg-rig.*` entry that is a symlink
   or not owned by the user before it resolves anything (roots now live in the shared `/tmp`); `setup` guards the
   PHYSICAL root as well as its spelling; `check-scenario` refuses an `answerDialog` or `type` that is not a one-line
@@ -3433,6 +3452,12 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   <missing-version>` carried on with an empty pane command, waited out `waitReady`'s 60 s and landed an `unmeasured` bundle.
   The six "run refuses … (F7)" rows and "run asks about the binary first and the scenario second …" pin it; `launch_cmd`'s
   check stays, for `relaunch`.
+  Found in passing in the same task (review 304 F7; recorded here by review 318 F4): `cmd_all`'s failed-run line now
+  reads `$?` into `rc` before the `$(basename …)` command substitution resets it, where it printed `rc=0` for every
+  failure. The row is "a failed run is reported with its rc and does not stop the sweep, and .done is still written"
+  (the old order: 1 red, `e56a9e0ef`; the "F7 (found in passing)" line of the "Wave 2 close-out" sub-table). The
+  shipped `cmd_all` departs in this way from Task 4's listing earlier in this plan, which still shows the old order
+  (`"$?"` after the substitution); that code block is left as written.
 - **D-4007** — `sanitize-leak-shapes-closed` (Task 5 and its review): the plan's T5-M3 row SURVIVED its own mutation
   (measured 0 red; the `(key)` finding is pushed by index whatever `seg` is) and now uses residue-bearing keys so it
   bites; and the plan's allowlist let residue through that a leak probe found — a `:`-joined path (the `ABS` lookbehind
@@ -3647,7 +3672,10 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
     when its stat fails, baseAgreesFirstLog null when logs/HEAD cannot be read, and an unreadable gitdir reads as an absent one …"
     (skipped as root) pins all three, and the EISDIR row above pins `baseAgreesFirstLog` and `gitdir` as root, so closing any of
     them on purpose is a visible edit. (`HEAD` folds too, the other way round: an absent one reads `head: 'unreadable'`, which
-    is no "nothing there" value, so it stays out of the list.) For the coordinator to rule.
+    is no "nothing there" value, so it stays out of the list.) Ruled 2026-10-07 (review 318, the coordinator's fix-round
+    mail): the three folds are accepted as named, pinned known limits within D-4008, and no new number is issued. The
+    observe stage (wave 3) treats each fold's value (`locked` false, `baseAgreesFirstLog` null, an unreadable `gitdir`
+    read as absent) as no positive cleanup or adoption evidence.
   - Each guard arm's mutation, its rows and its red count are in the "Wave 2 close-out" sub-table of the mutation table (Task `8`).
 - **D-4009** — `matrix-unmeasured-arms-and-pins` (Task 7 review): the plan's builder counted an event with an
   unparseable payload in `events` but derived every question field without it, so a lost `SubagentStart` read as a
@@ -3836,9 +3864,9 @@ Fix round 2 (review 296; 4066–4067, the last two of fix round 1's block):
   after the answered dialog, went from 5 s to 15 s (`fc2dd5ee9`), so that the stop of the background task, the
   parent's exit and its SessionEnd hook complete before the run is collected.
 
-Wave 2 close-out (run 306; the block 4364–4373, issued 2026-10-07). Text written before 2026-10-07 counts the observe
-stage as wave 2; since the 2026-10-07 renumbering (#313) it is wave 3, and "wave 2" in this group and in the "Wave 2
-close-out" sub-table means this close-out (run 306); the old text stays a dated snapshot:
+Wave 2 close-out (run 306; the block 4364–4373, issued 2026-10-07). "Wave 2" is this close-out, as the numbering note
+at the top of "Mutation table" says; the observe stage was wave 2 in text written before 2026-10-07 and has been wave 3
+since the 2026-10-07 renumbering (#313), and that old text stays a dated snapshot:
 
 - **D-4364** — `compaction-is-unmeasured` (review 304 F2): departs from spec §8.1's Q5, "how a session's Claude session
   id changes across `/clear`, compaction, resume and account swaps"
