@@ -317,6 +317,45 @@ time.
     docs-reader suites (`ccd-docs-index`, `ccd-docs-tree`) that this wave does not touch, and they gate nothing.
   - The fleet box reported v0.0.119 (`7f7bf4afc`, wave 1) at 19:30, so the updater has moved it. The server box's
     `/health` stays unverified here: it is reachable only by raw HTTP, which this session does not use.
+- **R24 (2026-10-07 20:27)**, review 330 is accepted, and wave 2 goes back for one fix round.
+  - Review run 330 (`ccrc-pwa-quiet-mesa`, mail 3926) reviewed `505ffbff4` with the held-out panel. The reproduce
+    lens came back empty, so the reviewer re-ran it with a checked list: 32 claims, 30 reproduced. Nine findings were
+    confirmed, one was refuted 2/3, and the reviewer added F10 from the whole-branch pass. By lens: correctness 4
+    (F1 important, F2-F4 minor), spec 4 (F5-F8), reproduce 1 (F9), whole-branch 1 (F10). Every suite is green, the
+    citation instrument reads `7 passed | 328 skipped (335)`, lane discipline holds, and `merge-tree` is clean
+    against `main`, `ws/amber-river` and `ws/soft-delta`. The close accepted `{reviewedTip, report}`, and the report
+    is copied to `w2-review-330-report.md`.
+  - F1 (important): a write that never got an answer toasts `UNCONFIRMED_TEXT`, "Saved — …". This is the plan's
+    operator question 2, now rated important. Ruling: give that arm its own honest line, which does not say "Saved"
+    and says the change was not confirmed; the re-read that follows is unchanged. The line goes in wave 1's L0
+    stall-watch block, now that run 291 has released claim 1070. The 2xx-but-unreadable arm keeps `UNCONFIRMED_TEXT`.
+    The operator sees the wording before the merge and may overrule it.
+  - F10, wire-guard tolerance: dropping a present but malformed `next` or `filesExceed`, and rendering the rest, is
+    accepted. A skewed or buggy server's malformed optional block should cost only that block, as a malformed
+    `counts` element already does under §13, not blank the whole section. Since §13 says a failed read, this is a
+    numbered departure, `malformed-optional-block-is-dropped`. Its number comes from this programme's wave 2
+    reserve: it is named to the worker by mail, defined in the W2 plan's Deviations section and cited at the guard
+    in this fix round, and not written here until that definition is on `main`. The malformed-`fallback` arm stays
+    as §13 has it: the whole answer fails.
+  - F5 and F6: the ledger's record suffices. Item 5 is behaviour-neutral scope this coordinator declared (R20,
+    R21), not a spec departure. README :967's "push bell" applies the operator's 2026-10-05 directive. No plan entry
+    is added for either.
+  - Fixed in the round: F2 (keep the defensive branch, and retitle its test as an off-wire shape that cites
+    D-4037), F3 (a stored quiet time equal to the built-in selects the built-in option), F4 (qualify the section
+    header, and break the `SettingsScreen` import cycle if no pinned citation moves), F7 (the README pin's header
+    docstring, and the D-4036 entry's "Pinned by" text in the W2 plan, amended by this ruling), F8 (cite
+    `notifications-label-says-push (D-4036)` at the label), F9 (a refusal detail never renders blank). The worker's
+    question is approved: `coord-db`'s slot-17 row matches `CREATE TABLE stall_settings`, so a later legitimate
+    `ALTER` does not trip it.
+  - The six departure slugs. `quiet-range-bounds-the-select`, `unanswered-write-reads-unconfirmed`,
+    `quiet-select-shows-no-unanswered-value` and `readme-section-sentence-pinned-to-l0` implement the spec in forms
+    it does not spell out, and need no number. `levelSource-kept-per-spec-9` is no departure. The tolerant half of
+    `malformed-fallback-refuses-the-answer` becomes `malformed-optional-block-is-dropped`, numbered above.
+  - Residue that stands: the README pin's own copy of the PWA device-word list, `quietText` duplicating the
+    server's `stallQuietWords`, the spec's touch-only wording ("never the tap", "stops a finger"), and the
+    commit-subject slip on `1a728b248` (the panel refuted it 2/3).
+  - Next: run 322 back to `working`, then a `fix-round` mail. The fix round ends in a fresh wave-done, a new review
+    run for the new tip, and then the operator's merge decision.
 
 ## Carried constraints (reviewers get these)
 
