@@ -274,8 +274,8 @@ operator resolves it. A later, higher-rung answer that disagrees with an existin
    rate through the per-session transcript resolver), never passed to rungs 3–4. The name only routes;
    it never links.
 3. **The subagent's own path.** An event emitted from inside a subagent of S whose `cwd` or
-   `worktreePath` equals the canonical path, with that `agentId` claimed by no other session. An event
-   is inside a subagent only once its `agentId` belongs to an activity a qualifying join has
+   `worktreePath` equals the canonical path, with its `agentId` claimed by no other session. An event
+   is inside a subagent only once its `agentId` belongs to an activity of S that a qualifying join has
    established (§5.2: an Agent launch response, a SubagentStart or an agent meta naming it). A
    non-empty `agentId` alone is retained evidence, not placement, and no reader decides it by whether
    `agent_type` is present (amended 2026-10-07, ledger amendment
