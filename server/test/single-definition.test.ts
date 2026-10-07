@@ -4991,3 +4991,43 @@ describe('ccrc history: process.env is read by name, from a four-name allow-list
     expect(seen.filter(([, n]) => !ALLOWED.includes(n)).map(([f, n]) => `${f}: ${n}`)).toEqual([]);
   });
 });
+
+// Task 36G item 2 (Task 34's O13): the `.mjs` arm above looks for a switch's PATH TEXT (`/history-off`), and
+// the sanctioned spelling in `.mjs` is symbolic — `SWITCHES.off`, or the `off`/`cap` field of a `historyPaths(...)`
+// result (`P.off`) — which carries no `/name` at all, so `writeFileSync(P.off, '')` is invisible to it. This arm
+// reads the symbols instead. KNOWN WIDTH: an alias of an alias (`const x = P.off; unlinkSync(x)`) is not seen.
+describe('ccrc history: no .mjs writes a switch through its symbolic spelling (spec 2026-10-05 §9.11 O13)', () => {
+  /** The verb list of the O13 describe's `writes()` for `.mjs`, restated (that one is closed over its describe). */
+  const VERB = /\b(?:writeFile|appendFile|rename|unlink|rm|rmdir|mkdir|copyFile|cp|symlink|link|truncate|open)(?:Sync)?\s*\(/;
+  /** `historyPaths` has two switch fields, `off` and `cap`; every other SWITCHES key is named alongside. */
+  const symbolic = (keys: readonly string[]): RegExp =>
+    new RegExp(`SWITCHES\\.|\\.(?:off|cap|${keys.join('|')})\\b`);
+  const writesSymbolically = (line: string, keys: readonly string[]): boolean => {
+    const m = VERB.exec(line);
+    return m !== null && symbolic(keys).test(line.slice(m.index + m[0].length));
+  };
+  const KEYS = ['maxGb', 'steerOff', 'steerLivePrefix', 'steerOnDir', 'headlessOn'] as const;
+
+  it('CONTROL: the classifier sees a write through P.off, a historyPaths(...) field and SWITCHES., and not a read', () => {
+    expect(writesSymbolically("writeFileSync(P.off, '')", KEYS)).toBe(true);
+    expect(writesSymbolically("existsSync(P.off)", KEYS)).toBe(false);
+    expect(writesSymbolically("unlinkSync(historyPaths(home).cap);", KEYS)).toBe(true);
+    expect(writesSymbolically("fs.writeFileSync(join(home, SWITCHES.maxGb), '9')", KEYS)).toBe(true);
+    expect(writesSymbolically("mkdirSync(`${home}/${SWITCHES.steerOnDir}`, { recursive: true })", KEYS)).toBe(true);
+    expect(writesSymbolically("rmSync(c.paths.headlessOn)", KEYS)).toBe(true);
+    expect(writesSymbolically("if (existsSync(P.off)) return 0;", KEYS)).toBe(false);
+    expect(writesSymbolically("const cap = capOf(capText(P.cap));", KEYS)).toBe(false);
+  });
+
+  it('SWITCHES keys named here are exactly lib.mjs\'s, so a key added there is not unwatched', async () => {
+    const lib = (await import('../../ccd/history/lib.mjs')) as unknown as { SWITCHES: Record<string, string> };
+    expect(Object.keys(lib.SWITCHES).sort()).toEqual(['off', ...KEYS].sort());
+  });
+
+  it('no line of any .mjs under ccd/, deploy/ or shared/ pairs a write verb with a switch symbol', () => {
+    expect(ALL_MJS.map(rel)).toContain('ccd/history/sweep.mjs');
+    const hits = ALL_MJS.flatMap((f) => stallCode(f).split('\n')
+      .filter((l) => writesSymbolically(l, KEYS)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(hits, 'a switch is touched and removed by hand (§9.7): a .mjs write through SWITCHES or historyPaths is a writer').toEqual([]);
+  });
+});
