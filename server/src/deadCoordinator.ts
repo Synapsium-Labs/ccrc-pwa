@@ -84,10 +84,10 @@ export interface DeadCoordinatorJournalRow {
 
 /** What the mirror says about one claimant since its LAST SUCCESSFUL START. FOUR answers, never folded:
  *  `quiet` (it has history, none of it deliberate since that start — `started` says whether a successful spawn is in
- *  it at all), `deliberate` (the newest such act), `no-history` (the mirror holds no row for it AT ALL) and `unreadable`
+ *  it at all; `failedSpawn` says the horizon held a `spawn` row and none of them succeeded — started, and never ran), `deliberate` (the newest such act), `no-history` (the mirror holds no row for it AT ALL) and `unreadable`
  *  (the read failed, or the journal cannot be trusted to hold every act since that start — never "no history"). */
 export type DeadCoordinatorJournal =
-  | { readonly kind: 'quiet'; readonly started: boolean }
+  | { readonly kind: 'quiet'; readonly started: boolean; readonly failedSpawn?: true }
   | { readonly kind: 'deliberate'; readonly act: LifecycleAct; readonly at: number | null }
   | { readonly kind: 'no-history' }
   | { readonly kind: 'unreadable'; readonly detail: string };
@@ -182,6 +182,9 @@ export function deadCoordinatorJournal(
     const r = rows[i]!;
     if (isDeliberate(r)) return { kind: 'deliberate', act: r.act, at: r.at };
   }
+  // No successful spawn, but a spawn row that did not succeed: ccd marks a session started BEFORE it spawns, so a heir
+  // whose first start failed reads `orphan` though it never ran. A horizon with no spawn row at all says nothing.
+  if (start === null && rows.some((r) => r.act === 'spawn')) return { kind: 'quiet', started: false, failedSpawn: true };
   return { kind: 'quiet', started: start !== null };
 }
 
@@ -210,7 +213,8 @@ export type DeadCoordinatorCrash =
  *  - an ABSENT row with no history at all is unmeasured: listed, never acted on;
  *  - a NEVER-STARTED row with no successful spawn in the journal never ran, so it cannot have crashed — an heir the
  *    operator reclaimed a programme onto and has not started yet reads exactly so: unmeasured, listed, never acted on
- *    (the departure `never-started-without-a-spawn-is-unmeasured`).
+ *    (the departure `never-started-without-a-spawn-is-unmeasured`); so is ANY dead cause whose journal holds a spawn that
+ *    failed and none that succeeded (`failedSpawn`) — started and never ran. No spawn row at all stays a crash.
  */
 export function deadCoordinatorCrash(m: ClaimantReading, j: DeadCoordinatorJournal): DeadCoordinatorCrash {
   if (m.state === 'alive') return { kind: 'alive', why: m.why };
@@ -223,6 +227,9 @@ export function deadCoordinatorCrash(m: ClaimantReading, j: DeadCoordinatorJourn
   }
   if (m.cause === 'never-started' && !(j.kind === 'quiet' && j.started)) {
     return { kind: 'unmeasured', why: 'it never started — the journal holds no successful spawn for it' };
+  }
+  if (j.kind === 'quiet' && !j.started && j.failedSpawn === true) {
+    return { kind: 'unmeasured', why: 'it was started and never ran — the journal holds only failed spawns' };
   }
   return { kind: 'crashed', cause: m.cause };
 }

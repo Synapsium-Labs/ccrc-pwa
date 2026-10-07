@@ -80,7 +80,9 @@ describe('the journal clause — one reader, four answers', () => {
     expect(deadCoordinatorJournal([], false, trust({ untrusted: 'the lifecycle mirror is stale' })).kind, 'not even no-history').toBe('unreadable');
     // A gap in a generation OLDER than the last start lost only lines from before it.
     expect(deadCoordinatorJournal(after, true, trust({ gapGens: [OLDER_GEN] }))).toEqual({ kind: 'quiet', started: true });
-    for (const g of [GEN, NEWER_GEN, 'lifecycle.unplaceable.jsonl']) {
+    // `journal-x.ndjson` is the REAL shape of an unplaceable name (`journal-<mid>.ndjson`) and SHORT: by `compareGenerations`'s
+    // length-first order it would sort before any start, so only the digits guard keeps it from reading "older than the start".
+    for (const g of [GEN, NEWER_GEN, 'lifecycle.unplaceable.jsonl', 'journal-x.ndjson', 'journal-1a.ndjson']) {
       expect(deadCoordinatorJournal(after, true, trust({ gapGens: [g] })).kind, g).toBe('unreadable');
     }
     expect(deadCoordinatorJournal([row('hold')], true, trust({ gapGens: [OLDER_GEN] })).kind, 'no start bounds the loss').toBe('unreadable');
@@ -91,6 +93,13 @@ describe('the journal clause — one reader, four answers', () => {
     expect(deadCoordinatorJournal(after, true, trust({ lastWriteErrorAt: NOW + 5_000 })).kind).toBe('unreadable');
     expect(deadCoordinatorJournal(after, true, trust({ lastWriteErrorAt: 'unknown' })).kind).toBe('unreadable');
     expect(deadCoordinatorJournal([row('hold')], true, trust({ lastWriteErrorAt: NOW - 86_400_000 })).kind).toBe('unreadable');
+  });
+
+  it('a horizon whose only spawn rows FAILED says so — `failedSpawn`; a horizon with no spawn row at all does not', () => {
+    expect(deadCoordinatorJournal([row('start'), spawned(1)], true, T)).toEqual({ kind: 'quiet', started: false, failedSpawn: true });
+    expect(deadCoordinatorJournal([row('start'), row('spawn', { raw: 'not json' })], true, T)).toEqual({ kind: 'quiet', started: false, failedSpawn: true });
+    expect(deadCoordinatorJournal([row('start'), row('ensure')], true, T), 'no spawn row at all').toEqual({ kind: 'quiet', started: false });
+    expect(deadCoordinatorJournal([spawned(1), spawned(0)], true, T), 'a later success wins').toEqual({ kind: 'quiet', started: true });
   });
 
   it('every act the clause reads is one of L0’s — ccd’s own and the we-do-not-know `unknown`', () => {
@@ -122,6 +131,16 @@ describe('a crash, and only a crash (spec §5.4)', () => {
       ['a deliberate act since the last start', dead('orphan'), { kind: 'deliberate', act: 'stop', at: NOW }, 'deliberate'],
       ['an expired row', dead('absent'), { kind: 'deliberate', act: 'expire', at: NOW }, 'deliberate'],
     ];
+    // A session whose FIRST start failed reads `orphan` (ccd marks it started before it spawns) — it was started and
+    // never ran, so it cannot have crashed. A horizon with NO spawn row at all stays crashed: a coordinator started
+    // before the mirror existed must remain reachable.
+    const failed: DeadCoordinatorJournal = { kind: 'quiet', started: false, failedSpawn: true };
+    cases.push(
+      ['orphan whose journal holds only a failed spawn: started and never ran', dead('orphan'), failed, 'unmeasured'],
+      ['absent whose journal holds only a failed spawn', dead('absent'), failed, 'unmeasured'],
+      ['never-started whose journal holds only a failed spawn', dead('never-started'), failed, 'unmeasured'],
+      ['orphan after a successful spawn is still a crash even if an earlier spawn failed', dead('orphan'), quiet, 'crashed'],
+    );
     for (const [name, m, j, kind] of cases) expect(deadCoordinatorCrash(m, j).kind, name).toBe(kind);
     expect(deadCoordinatorCrash(dead('never-started'), quiet)).toEqual({ kind: 'crashed', cause: 'never-started' });
   });
