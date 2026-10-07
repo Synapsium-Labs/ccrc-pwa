@@ -1,10 +1,12 @@
 // Settings screen (route `/settings`, centralised update management W3 —
-// design 2026-09-20 §13). Two sections and no more — Updates (the channel,
+// design 2026-09-20 §13). Three sections and no more — Updates (the channel,
 // auto-install, *Check now*, the catalogue line, the release list, the node
 // inventory) and Notifications (the bell, release notifications, the
-// unarmed-exposure banner) — both shipped in this file, below the header
+// unarmed-exposure banner), both shipped in this file, below the header
 // (Tasks 7–10 of the W3 plan; fix rounds 1–2 widened several of their
-// guards in place — see the plan's `## Deviations found`, D-3315/D-3316).
+// guards in place — see the plan's `## Deviations found`, D-3315/D-3316);
+// and Stall watch (stall watch settings, design 2026-10-05 §13), which lives
+// in its own file, `StallWatchSection.tsx`, with its own read.
 //
 // The AccountsScreen skeleton, class for class (`.settings-screen/-head/-back/
 // -title`, fleet.css): a back chevron that returns to the fleet, then the <h1>.
@@ -19,6 +21,7 @@ import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
 import { NotificationBell } from '../fleet/NotificationBell';
+import { StallWatchSection } from './StallWatchSection';
 import { isManagedNode, planMove, rollbackBlockers, type MoveIntent, type PlannedMove, type RollbackBlocker } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
 import { ACK_UNREADABLE_TEXT, canAck, sendAck } from '../fleet/updateAck';
@@ -541,7 +544,7 @@ function NodeList({ nodes, releases, now, catalogueLastOkAt, onAcked, onMove }: 
 
 // ── Notifications (spec §13 item 2, §12's unarmed banner; programme wave 3 Task 10) ──
 // Two things live here, and one thing deliberately does not:
-//   * The PHONE-PUSH toggle is the literal <NotificationBell/> — the same
+//   * The PUSH toggle is the literal <NotificationBell/> — the same
 //     component the fleet header mounts, with its four subscribe outcomes
 //     (NotificationBell.tsx:29-47). This file imports none of lib/push's
 //     lifecycle calls and spells none of those outcomes; a second copy of the
@@ -637,7 +640,7 @@ function NotificationsSection({ view, reload }: { view: UpdatesView | null; relo
       {supported ? (
         <div className="settings-bell-row">
           <NotificationBell />
-          <span>Phone notifications for this browser</span>
+          <span>Push notifications for this browser</span>
         </div>
       ) : (
         <p className="settings-note">This browser cannot receive Web Push.</p>
@@ -664,8 +667,10 @@ function NotificationsSection({ view, reload }: { view: UpdatesView | null; relo
 }
 
 export function SettingsScreen(): ReactNode {
-  // ONE poll and ONE clock for the whole screen: every section reads the same
-  // answer (Tasks 7–10), so two sections can never disagree about the fleet.
+  // ONE /api/updates poll and ONE clock for the Updates and Notifications
+  // sections: both read the same answer (Tasks 7–10), so they can never
+  // disagree about the fleet. The Stall watch section reads its own endpoint
+  // through its own hook (useStallWatchView, design 2026-10-05 §13).
   const poll = useUpdatesView();
   const now = useNow(30_000);
   return (
@@ -679,6 +684,7 @@ export function SettingsScreen(): ReactNode {
       <UnarmedExposureBanner />
       <UpdatesSection poll={poll} now={now} />
       <NotificationsSection view={poll.view} reload={poll.reload} />
+      <StallWatchSection />
     </div>
   );
 }

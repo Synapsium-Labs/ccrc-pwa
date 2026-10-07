@@ -31,6 +31,20 @@ import { useFleetStore } from '../src/stores/fleet';
 import { ApiError, api, apiErrorText, updateErrorText } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
 import { declValue, ruleIn } from './cssRule';
+import type {
+  StallHeld, StallWatchEffective, StallWatchStages, StallWatchView, StallWriteEffect,
+} from '../../shared/api';
+import * as L0 from '../../shared/api';
+import {
+  STALL_BUSY_GATE_OFF_TEXT, STALL_BUSY_GATE_TEXT, STALL_CONFIRM_TEXT, STALL_FALLBACK_TEXT, STALL_FILES_EXCEED_TEXT,
+  STALL_FOLLOW_LABEL, STALL_HAZARD_TEXT, STALL_HELD_REASON, STALL_HELD_TEXT, STALL_LEVELS, STALL_LEVEL_TEXT,
+  STALL_NEXT_TEXT, STALL_NOT_AVAILABLE_TEXT, STALL_NOTICE_TEXT, STALL_QUIET_NOTE, STALL_RUNLESS_FOOTNOTE,
+  STALL_SECTION_TEXT, STALL_SOURCE_TEXT, STALL_STAGE_TEXT, STALL_STORED_TEXT,
+} from '../../shared/api';
+import {
+  fillStallText, quietChoices, quietText, stallConfirmLines, stallConfirmTitle, stallCountLine, stallNextLines,
+  stallNowLines,
+} from '../src/screens/StallWatchSection';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
 
@@ -1768,7 +1782,7 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
     const bell = await within(section).findByRole('button', { name: 'Notifications off' });
     expect(bell).toHaveClass('bell');
     expect(bell).toHaveAttribute('aria-pressed', 'false');
-    expect(within(section).getByText('Phone notifications for this browser')).toBeInTheDocument();
+    expect(within(section).getByText('Push notifications for this browser')).toBeInTheDocument();
     expect(within(section).queryByText('This browser cannot receive Web Push.')).toBeNull();
   });
 
@@ -1892,5 +1906,678 @@ describe('SettingsScreen — a malformed /api/updates element does not blank the
     expect(within(region).getByText('server')).toBeInTheDocument();
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
+  });
+});
+
+// ── The Stall watch section (stall watch settings, design 2026-10-05 §13; programme stall-watch-settings W2
+// Task 3). The section reads its own endpoint through its own hook (`useStallWatchView`), so every case here spies
+// `api.stallWatch` and `api.setStallWatch` and leaves `/api/updates` pending. The pure helpers are unit-tested first
+// (P3b, P3d, P9–P12, M6, M24); the rendered section after (P1, P1b, P2, P3, P3c, P5); the source scans last (P6, P9).
+
+const SW_H = 3_600_000;
+const swStages = (over: Partial<StallWatchStages> = {}): StallWatchStages => ({
+  runs: true, checks: true, alerts: false, busyDelivery: false, busyGate: true, wave2: false, ...over,
+});
+const swHeld = (over: Partial<StallHeld> = {}): StallHeld => ({
+  watchOff: false, mailOff: false, gateStrict: false, wave2HeldByStrict: false, ...over,
+});
+type SwMeasured = Extract<StallWatchEffective, { measured: true }>;
+const swEffective = (over: Partial<SwMeasured> = {}): SwMeasured => ({
+  measured: true, level: 'check', files: 'check', source: 'files', stages: swStages(), held: swHeld(),
+  next: { kind: 'step', level: 'alert', waitsOn: ['alerts'] }, filesExceed: false, ...over,
+});
+const swView = (over: Partial<StallWatchView> = {}): StallWatchView => ({
+  chosen: { level: 'follow', quietMs: 'default', updatedAt: 1_000, stored: 'row' },
+  effective: swEffective(),
+  quiet: {
+    effectiveMs: 2 * SW_H, builtInMs: 2 * SW_H, minMs: SW_H / 2, maxMs: 12 * SW_H, stepMs: SW_H / 2,
+    source: 'default',
+  },
+  notices: {
+    ok: true, since: 0, windowMs: 48 * SW_H,
+    counts: [
+      { row: 'checks', sent: 1, shadow: 2 }, { row: 'wakes', sent: 0, shadow: 0 },
+      { row: 'reports', sent: 0, shadow: 3 }, { row: 'pushes', sent: 4, shadow: 0 },
+    ],
+  },
+  fallback: null,
+  ...over,
+});
+const swChosen = (over: Partial<StallWatchView['chosen']>): StallWatchView['chosen'] =>
+  ({ ...swView().chosen, ...over });
+/** A running watch with every confirm stage off: Log only, the busy gate off. */
+const SW_LOG = swStages({ checks: false, busyGate: false });
+type SwEffect = Extract<StallWriteEffect, { measured: true }>;
+const swEffect = (over: Partial<SwEffect> = {}): SwEffect => ({
+  measured: true, turnsOn: [], turnsOff: [], leavesWave2: false, heldByBox: false, quietLowered: false,
+  filesExceed: false, before: SW_LOG, after: SW_LOG, quietMs: { before: 2 * SW_H, after: 2 * SW_H }, mailOff: false,
+  ...over,
+});
+const swConfirm = (effect: StallWriteEffect, effectKey: string): ApiError =>
+  new ApiError(409, { ok: false, error: 'confirm-required', effect, effectKey });
+const swTexts = (v: StallWatchView): string[] => stallNowLines(v).map((l) => l.text);
+const swTurnsOn = (stage: keyof typeof STALL_STAGE_TEXT): string => {
+  const { name, gate } = STALL_STAGE_TEXT[stage];
+  return gate === null
+    ? fillStallText(STALL_CONFIRM_TEXT.turnsOnFree, { name })
+    : fillStallText(STALL_CONFIRM_TEXT.turnsOn, { name, gate });
+};
+const swValue = (ms: number): { value: string } => ({ value: quietText(ms) });
+
+describe('SettingsScreen — stall watch: helpers (stall-watch-settings W2 Task 3)', () => {
+  it('fillStallText fills each named slot, leaves a slot it was not given, and reads a $ in a value literally', () => {
+    expect(fillStallText('{a} and {b}', { a: 'x', b: 'y' })).toBe('x and y');
+    expect(fillStallText('{a} and {b}', { a: 'x' })).toBe('x and {b}');
+    expect(fillStallText(STALL_CONFIRM_TEXT.refused, { detail: 'costs $& and $1' }))
+      .toBe('Nothing was changed: costs $& and $1');
+  });
+
+  it('quietText writes a span in hours and minutes, the shape the spec shows ("30 min to 12 h", "Last 48 h")', () => {
+    expect(quietText(SW_H / 2)).toBe('30 min');
+    expect(quietText(2 * SW_H)).toBe('2 h');
+    expect(quietText(1.5 * SW_H)).toBe('1 h 30 min');
+    expect(quietText(48 * SW_H)).toBe('48 h');
+  });
+
+  it('quietChoices: the built-in first, then every step from min to max except the built-in, which appears once', () => {
+    const choices = quietChoices(swView());
+    expect(choices[0]).toEqual({ value: 'default', label: 'Built-in (2 h)' });
+    const steps = choices.slice(1).map((c) => c.value);
+    expect(steps).toHaveLength(23);
+    expect(steps[0]).toBe(SW_H / 2);
+    expect(steps[steps.length - 1]).toBe(12 * SW_H);
+    expect(steps).not.toContain(2 * SW_H);
+    expect(choices.filter((c) => c.label === '2 h' || c.label.includes('(2 h)'))).toHaveLength(1);
+    expect(choices.find((c) => c.value === 1.5 * SW_H)?.label).toBe('1 h 30 min');
+  });
+
+  it('the Now block: the effective level, its does text, and the busy gate in its two parts (busy-shadow)', () => {
+    const v = swView();
+    expect(stallNowLines(v)[0]).toEqual({ text: STALL_LEVEL_TEXT.check.label, tone: 'head' });
+    expect(swTexts(v)).toContain(STALL_LEVEL_TEXT.check.does);
+    expect(swTexts(v)).toContain(`${STALL_BUSY_GATE_TEXT.holds} ${STALL_BUSY_GATE_TEXT.logs}`);
+    expect(swTexts(v)).toContain(STALL_SOURCE_TEXT.files);
+    const deliver = swView({ effective: swEffective({ level: 'deliver', files: 'deliver',
+      stages: swStages({ alerts: true, busyDelivery: true }) }) });
+    expect(swTexts(deliver)).toContain(STALL_BUSY_GATE_TEXT.holds);
+    expect(swTexts(deliver).some((t) => t.includes(STALL_BUSY_GATE_TEXT.logs))).toBe(false);
+  });
+
+  it('custom reads "Custom", then the names of the stages that are on', () => {
+    const v = swView({ effective: swEffective({ level: 'custom', files: 'custom',
+      stages: swStages({ runs: false, checks: false, busyGate: true, busyDelivery: true }), next: { kind: 'none' } }) });
+    expect(stallNowLines(v)[0]).toEqual({ text: STALL_SECTION_TEXT.custom, tone: 'head' });
+    expect(swTexts(v)).toContain(`${STALL_STAGE_TEXT.busyDelivery.name}, ${STALL_STAGE_TEXT.busyGate.name}`);
+  });
+
+  it('P9: the busy-gate-off note shows for a files-read level without the gate, and only for that cause', () => {
+    // A fresh install: the files read Log only, with the busy gate off.
+    const fresh = swView({ effective: swEffective({ level: 'log', files: 'log', stages: SW_LOG }) });
+    expect(swTexts(fresh)).toContain(STALL_BUSY_GATE_OFF_TEXT);
+    // A chosen level under strict: the ladder sets the gate, and the strict held line says why it is off.
+    const strict = swView({
+      chosen: swChosen({ level: 'check' }),
+      effective: swEffective({ source: 'chosen', stages: swStages({ busyGate: false }), held: swHeld({ gateStrict: true }) }),
+    });
+    expect(swTexts(strict)).not.toContain(STALL_BUSY_GATE_OFF_TEXT);
+    // Files read Check over the busy-shadow file with mail switched off: the gate reads off because mail is off.
+    const mailOff = swView({ effective: swEffective({ stages: swStages({ busyGate: false }), held: swHeld({ mailOff: true }) }) });
+    expect(swTexts(mailOff)).not.toContain(STALL_BUSY_GATE_OFF_TEXT);
+    expect(swTexts(mailOff)).toContain(STALL_HELD_TEXT.mailOff);
+    // Custom and a stopped watch name no busy-gate cause either.
+    const custom = swView({ effective: swEffective({ level: 'custom', stages: swStages({ busyGate: false, alerts: true }) }) });
+    expect(swTexts(custom)).not.toContain(STALL_BUSY_GATE_OFF_TEXT);
+    const stopped = swView({ effective: swEffective({ level: 'off', files: 'off', stages: swStages({ runs: false, checks: false, busyGate: false }) }) });
+    expect(swTexts(stopped)).not.toContain(STALL_BUSY_GATE_OFF_TEXT);
+  });
+
+  it('P10: a held source names the chosen level and the reason, never "Chosen here"', () => {
+    const strict = swView({
+      chosen: swChosen({ level: 'deliver' }),
+      effective: swEffective({ level: 'alert', source: 'held', stages: swStages({ alerts: true, busyGate: false }),
+        held: swHeld({ gateStrict: true }), next: { kind: 'none' } }),
+    });
+    expect(swTexts(strict)).toContain(
+      `Chosen: ${STALL_LEVEL_TEXT.deliver.label}, held back by the fleet box (${STALL_HELD_REASON.gateStrict})`);
+    expect(swTexts(strict)).not.toContain(STALL_SOURCE_TEXT.chosen);
+    const kill = swView({
+      chosen: swChosen({ level: 'all' }),
+      effective: swEffective({ level: 'off', source: 'held', stages: swStages({ runs: false, checks: false, busyGate: false }),
+        held: swHeld({ watchOff: true }), next: { kind: 'none' } }),
+    });
+    expect(swTexts(kill)).toContain(
+      fillStallText(STALL_SOURCE_TEXT.held, { label: STALL_LEVEL_TEXT.all.label, reason: STALL_HELD_REASON.watchOff }));
+    const chosen = swView({ chosen: swChosen({ level: 'check' }), effective: swEffective({ source: 'chosen' }) });
+    expect(swTexts(chosen)).toContain(STALL_SOURCE_TEXT.chosen);
+  });
+
+  it('one line per held flag, in StallHeld order', () => {
+    const v = swView({ effective: swEffective({ source: 'held', held: swHeld({ watchOff: true, mailOff: true, gateStrict: true, wave2HeldByStrict: true }) }),
+      chosen: swChosen({ level: 'all' }) });
+    const held = swTexts(v).filter((t) => (Object.values(STALL_HELD_TEXT) as string[]).includes(t));
+    expect(held).toEqual([STALL_HELD_TEXT.watchOff, STALL_HELD_TEXT.mailOff, STALL_HELD_TEXT.gateStrict,
+      STALL_HELD_TEXT.wave2HeldByStrict]);
+  });
+
+  it('M24: the hazard line shows for alerts and the further checks without busy delivery, and not under mail off', () => {
+    const hazard = swEffective({ level: 'custom', stages: swStages({ alerts: true, wave2: true, busyDelivery: false }) });
+    expect(swTexts(swView({ effective: hazard }))).toContain(STALL_HAZARD_TEXT);
+    expect(stallNowLines(swView({ effective: hazard })).find((l) => l.text === STALL_HAZARD_TEXT)?.tone).toBe('warn');
+    const delivered = swEffective({ level: 'all', stages: swStages({ alerts: true, wave2: true, busyDelivery: true }) });
+    expect(swTexts(swView({ effective: delivered }))).not.toContain(STALL_HAZARD_TEXT);
+    const mailOff = { ...hazard, held: swHeld({ mailOff: true }) };
+    expect(swTexts(swView({ effective: mailOff }))).not.toContain(STALL_HAZARD_TEXT);
+  });
+
+  it('P11: the files-exceed line follows effective.filesExceed, and nothing else', () => {
+    const chosen = swChosen({ level: 'log' });
+    expect(swTexts(swView({ chosen, effective: swEffective({ source: 'chosen', filesExceed: true }) })))
+      .toContain(STALL_FILES_EXCEED_TEXT);
+    expect(swTexts(swView({ chosen, effective: swEffective({ source: 'chosen', filesExceed: false }) })))
+      .not.toContain(STALL_FILES_EXCEED_TEXT);
+    const unstated = swEffective({ source: 'chosen' });
+    delete unstated.filesExceed;
+    expect(swTexts(swView({ chosen, effective: unstated }))).not.toContain(STALL_FILES_EXCEED_TEXT);
+  });
+
+  it('P12: exactly one stored line whenever the stored row does not apply whole, and the fallback line', () => {
+    const stored = (chosen: StallWatchView['chosen']): string[] =>
+      swTexts(swView({ chosen })).filter((t) => (Object.values(STALL_STORED_TEXT) as string[]).includes(t));
+    const none = { level: 'unreadable', quietMs: 'unreadable', updatedAt: null } as const;
+    expect(stored(swChosen({ ...none, stored: 'absent' }))).toEqual([STALL_STORED_TEXT.absent]);
+    expect(stored(swChosen({ ...none, stored: 'unreadable' }))).toEqual([STALL_STORED_TEXT.unreadable]);
+    expect(stored(swChosen({ level: 'unreadable', quietMs: 'unreadable' }))).toEqual([STALL_STORED_TEXT.both]);
+    expect(stored(swChosen({ level: 'unreadable', quietMs: SW_H }))).toEqual([STALL_STORED_TEXT.level]);
+    expect(stored(swChosen({ level: 'check', quietMs: 'unreadable' }))).toEqual([STALL_STORED_TEXT.quiet]);
+    expect(stored(swChosen({ level: 'check', quietMs: SW_H }))).toEqual([]);
+    const fallback = swView({ fallback: { at: 5, reason: 'the resolver threw' } });
+    expect(swTexts(fallback)).toContain(fillStallText(STALL_FALLBACK_TEXT, { reason: 'the resolver threw' }));
+    expect(swTexts(swView()).some((t) => t.startsWith('Your choice is not being applied'))).toBe(false);
+  });
+
+  it('M6: an unmeasured reading is "Unknown", never Off — and the chosen values still show', () => {
+    const v = swView({ effective: { measured: false }, chosen: swChosen({ stored: 'unreadable', level: 'unreadable',
+      quietMs: 'unreadable', updatedAt: null }) });
+    expect(stallNowLines(v)[0]).toEqual({ text: STALL_SECTION_TEXT.unknown, tone: 'head' });
+    expect(swTexts(v)).not.toContain(STALL_LEVEL_TEXT.off.label);
+    expect(swTexts(v)).toContain(STALL_STORED_TEXT.unreadable);
+    expect(stallNextLines(v.effective)).toBeNull();
+  });
+
+  it('P10: the Next step renders from the wire — none and a missing next show nothing, an empty waitsOn no gates', () => {
+    expect(stallNextLines(swEffective({ next: { kind: 'none' } }))).toBeNull();
+    const unstated = swEffective();
+    delete unstated.next;
+    expect(stallNextLines(unstated)).toBeNull();
+    expect(stallNextLines(swEffective({ next: { kind: 'top' } }))).toEqual({ lead: STALL_NEXT_TEXT.top, waitsOn: [] });
+    expect(stallNextLines(swEffective({ next: { kind: 'step', level: 'alert', waitsOn: [] } })))
+      .toEqual({ lead: `${STALL_NEXT_TEXT.lead} ${STALL_LEVEL_TEXT.alert.label}.`, waitsOn: [] });
+    expect(stallNextLines(swEffective({ next: { kind: 'step', level: 'all', waitsOn: ['busyDelivery', 'wave2'] } })))
+      .toEqual({ lead: `${STALL_NEXT_TEXT.lead} ${STALL_LEVEL_TEXT.all.label}.`,
+        waitsOn: [STALL_STAGE_TEXT.busyDelivery.gate, STALL_STAGE_TEXT.wave2.gate] });
+  });
+
+  it('stallCountLine: "<label> — <sent> sent · <shadow> shadow"', () => {
+    expect(stallCountLine({ row: 'reports', sent: 0, shadow: 3 }))
+      .toBe(`${STALL_NOTICE_TEXT.reports} — 0 sent · 3 shadow`);
+  });
+
+  it('stallConfirmTitle: a level, Follow, a quiet time, and the built-in', () => {
+    expect(stallConfirmTitle({ level: 'alert' }, 2 * SW_H)).toBe(`Set the stall watch to ${STALL_LEVEL_TEXT.alert.label}?`);
+    expect(stallConfirmTitle({ level: 'follow' }, 2 * SW_H)).toBe(`${STALL_FOLLOW_LABEL}?`);
+    expect(stallConfirmTitle({ quietMs: SW_H / 2 }, 2 * SW_H)).toBe('Set the quiet time to 30 min?');
+    expect(stallConfirmTitle({ quietMs: 'default' }, 2 * SW_H)).toBe('Set the quiet time to 2 h (built-in)?');
+  });
+
+  it('M6: the unmeasured effect gives the one unknown line', () => {
+    expect(stallConfirmLines({ measured: false }, { level: 'all' }, 2 * SW_H)).toEqual([STALL_CONFIRM_TEXT.unknown]);
+  });
+
+  it('P3b: Off over a busy file says busy delivery comes back, never the generic turn-on line', () => {
+    const off = swStages({ runs: false, checks: false, busyGate: false });
+    const lines = stallConfirmLines(swEffect({
+      turnsOn: ['busyDelivery'], turnsOff: ['checks'],
+      before: swStages({ busyDelivery: false, busyGate: true }), after: { ...off, busyDelivery: true, busyGate: true },
+    }), { level: 'off' }, 2 * SW_H);
+    expect(lines).toContain("Busy delivery turns back on: the fleet box's files arm it.");
+    expect(lines).not.toContain(swTurnsOn('busyDelivery'));
+    expect(lines).toEqual([
+      STALL_LEVEL_TEXT.off.does,
+      "Busy delivery turns back on: the fleet box's files arm it.",
+      STALL_STAGE_TEXT.checks.stops,
+      STALL_CONFIRM_TEXT.dueMail,
+    ]);
+  });
+
+  it('the order: does, turn-ons, stops, the held line, what falls due, the quiet lines, the files-exceed line', () => {
+    const lines = stallConfirmLines(swEffect({
+      turnsOn: ['checks', 'alerts'], turnsOff: ['busyGate'], leavesWave2: false, filesExceed: true,
+      before: swStages({ checks: true, alerts: false }), after: swStages({ checks: true, alerts: true, busyGate: false }),
+      heldByBox: false, quietLowered: true, quietMs: { before: 2 * SW_H, after: SW_H },
+    }), { level: 'alert' }, 2 * SW_H);
+    expect(lines).toEqual([
+      STALL_LEVEL_TEXT.alert.does,
+      swTurnsOn('checks'),
+      swTurnsOn('alerts'),
+      STALL_STAGE_TEXT.busyGate.stops,
+      STALL_CONFIRM_TEXT.due,
+      fillStallText(STALL_CONFIRM_TEXT.quietDue, swValue(SW_H)),
+      fillStallText(STALL_CONFIRM_TEXT.quietRepeat, swValue(SW_H)),
+      fillStallText(STALL_CONFIRM_TEXT.quietDialogs, swValue(SW_H)),
+      STALL_FILES_EXCEED_TEXT,
+    ]);
+  });
+
+  it('the busy gate turning on takes the free line; Follow shows no does text', () => {
+    const lines = stallConfirmLines(swEffect({ turnsOn: ['busyGate'], after: swStages({ checks: false, busyGate: true }) }),
+      { level: 'follow' }, 2 * SW_H);
+    expect(lines).toEqual([fillStallText(STALL_CONFIRM_TEXT.turnsOnFree, { name: STALL_STAGE_TEXT.busyGate.name })]);
+  });
+
+  it('leaving the further checks shows the wave2 stops line once, from either reading', () => {
+    const fromUnheld = stallConfirmLines(swEffect({ leavesWave2: true }), { level: 'check' }, 2 * SW_H);
+    expect(fromUnheld.filter((l) => l === STALL_STAGE_TEXT.wave2.stops)).toHaveLength(1);
+    const resolved = stallConfirmLines(swEffect({ turnsOff: ['wave2'], leavesWave2: true }), { level: 'check' }, 2 * SW_H);
+    expect(resolved.filter((l) => l === STALL_STAGE_TEXT.wave2.stops)).toHaveLength(1);
+  });
+
+  it('P3d: busy delivery alone makes mail due, never a recorded notice', () => {
+    const lines = stallConfirmLines(swEffect({ turnsOn: ['busyDelivery'],
+      before: swStages(), after: swStages({ busyDelivery: true }) }), { level: 'deliver' }, 2 * SW_H);
+    expect(lines).toContain(STALL_CONFIRM_TEXT.dueMail);
+    expect(lines).not.toContain(STALL_CONFIRM_TEXT.due);
+  });
+
+  it('P3d: checks from a running watch are due; from Off, dueFromOff', () => {
+    const running = stallConfirmLines(swEffect({ turnsOn: ['checks'], after: swStages({ busyGate: false }) }),
+      { level: 'check' }, 2 * SW_H);
+    expect(running).toContain(STALL_CONFIRM_TEXT.due);
+    expect(running).not.toContain(STALL_CONFIRM_TEXT.dueFromOff);
+    const fromOff = stallConfirmLines(swEffect({ turnsOn: ['checks'],
+      before: swStages({ runs: false, checks: false, busyGate: false }), after: swStages({ busyGate: false }) }),
+    { level: 'check' }, 2 * SW_H);
+    expect(fromOff).toContain(STALL_CONFIRM_TEXT.dueFromOff);
+    expect(fromOff).not.toContain(STALL_CONFIRM_TEXT.due);
+  });
+
+  it('P3d: a lowered quiet time is worded by what runs after the write: off, Log, Check, Everything; dialogs with alerts', () => {
+    const lower = (after: StallWatchStages): string[] => stallConfirmLines(swEffect({
+      before: after, after, quietLowered: true, quietMs: { before: 2 * SW_H, after: SW_H },
+    }), { quietMs: SW_H }, 2 * SW_H);
+    const v = swValue(SW_H);
+    expect(lower(swStages({ runs: false, checks: false, busyGate: false })))
+      .toEqual([STALL_CONFIRM_TEXT.quietOff]);
+    expect(lower(SW_LOG)).toEqual([fillStallText(STALL_CONFIRM_TEXT.quietRecorded, v)]);
+    expect(lower(swStages())).toEqual([fillStallText(STALL_CONFIRM_TEXT.quietDue, v),
+      fillStallText(STALL_CONFIRM_TEXT.quietRepeat, v)]);
+    expect(lower(swStages({ alerts: true, busyDelivery: true, wave2: true }))).toEqual([
+      fillStallText(STALL_CONFIRM_TEXT.quietDueAll, v), fillStallText(STALL_CONFIRM_TEXT.quietDialogs, v)]);
+    expect(lower(swStages({ alerts: true }))).toEqual([fillStallText(STALL_CONFIRM_TEXT.quietDue, v),
+      fillStallText(STALL_CONFIRM_TEXT.quietRepeat, v), fillStallText(STALL_CONFIRM_TEXT.quietDialogs, v)]);
+  });
+
+  it('P3d: a quiet time raised but still below the built-in repeats the check note, with no due line', () => {
+    const lines = stallConfirmLines(swEffect({ before: swStages(), after: swStages(), quietLowered: true,
+      quietMs: { before: SW_H / 2, after: SW_H } }), { quietMs: SW_H }, 2 * SW_H);
+    expect(lines).toEqual([fillStallText(STALL_CONFIRM_TEXT.quietRepeat, swValue(SW_H))]);
+  });
+
+  it('P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not', () => {
+    const v = swValue(SW_H);
+    const checkToAlert = stallConfirmLines(swEffect({ mailOff: true, turnsOn: ['alerts'],
+      before: swStages(), after: swStages({ alerts: true }) }), { level: 'alert' }, 2 * SW_H);
+    expect(checkToAlert).toContain(STALL_CONFIRM_TEXT.dueMailOff);
+    expect(checkToAlert).not.toContain(STALL_CONFIRM_TEXT.due);
+    const logToCheck = stallConfirmLines(swEffect({ mailOff: true, turnsOn: ['checks'],
+      after: swStages({ busyGate: false }) }), { level: 'check' }, 2 * SW_H);
+    expect(logToCheck).toContain(STALL_CONFIRM_TEXT.dueMailOffHeld);
+    expect(logToCheck).not.toContain(STALL_CONFIRM_TEXT.due);
+    const busy = stallConfirmLines(swEffect({ mailOff: true, turnsOn: ['busyDelivery'],
+      before: swStages(), after: swStages({ busyDelivery: true }) }), { level: 'deliver' }, 2 * SW_H);
+    expect(busy).toContain(STALL_CONFIRM_TEXT.dueMailBack);
+    expect(busy).not.toContain(STALL_CONFIRM_TEXT.dueMail);
+    const lower = (after: StallWatchStages): string[] => stallConfirmLines(swEffect({ mailOff: true,
+      before: after, after, quietLowered: true, quietMs: { before: 2 * SW_H, after: SW_H } }), { quietMs: SW_H }, 2 * SW_H);
+    expect(lower(swStages())).toEqual([fillStallText(STALL_CONFIRM_TEXT.quietDueMailOff, v),
+      fillStallText(STALL_CONFIRM_TEXT.quietRepeatMailOff, v)]);
+    expect(lower(swStages({ alerts: true, busyDelivery: true, wave2: true }))).toEqual([
+      fillStallText(STALL_CONFIRM_TEXT.quietDueAllMailOff, v), fillStallText(STALL_CONFIRM_TEXT.quietDialogs, v)]);
+    expect(lower(SW_LOG)).toEqual([fillStallText(STALL_CONFIRM_TEXT.quietRecorded, v)]);
+  });
+
+  it('P3d: stages held by the kill switch take their turn-on lines and the held line — no backOn, nothing due', () => {
+    const off = swStages({ runs: false, checks: false, busyGate: false });
+    const lines = stallConfirmLines(swEffect({ turnsOn: ['alerts', 'busyDelivery', 'wave2'], heldByBox: true,
+      before: off, after: off }), { level: 'all' }, 2 * SW_H);
+    expect(lines).toEqual([
+      STALL_LEVEL_TEXT.all.does,
+      swTurnsOn('alerts'),
+      swTurnsOn('busyDelivery'),
+      swTurnsOn('wave2'),
+      STALL_CONFIRM_TEXT.heldByBox,
+    ]);
+  });
+});
+
+describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)', () => {
+  afterEach(() => { Reflect.deleteProperty(document, 'visibilityState'); });
+
+  // `hidden: true`: an open sheet marks the page behind it aria-hidden, and these cases read the radios under it.
+  const section = (): HTMLElement =>
+    screen.getByRole('heading', { name: STALL_SECTION_TEXT.title, hidden: true }).closest('section')!;
+  const levelGroup = (): Promise<HTMLElement> => within(section()).findByRole('group', { name: STALL_SECTION_TEXT.level });
+  const mount = async (first: StallWatchView): Promise<{ read: ReturnType<typeof vi.spyOn> }> => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    const read = vi.spyOn(api, 'stallWatch').mockResolvedValue(first);
+    render(<><ToastHost /><SettingsScreen /></>);
+    await levelGroup();
+    return { read };
+  };
+  const repoll = async (): Promise<void> => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+  };
+  const radio = (name: string): HTMLElement => within(section()).getByRole('radio', { name, hidden: true });
+
+  it('is the third section, after Notifications, titled Stall watch', async () => {
+    await mount(swView());
+    const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+    expect(headings).toEqual(['Updates', 'Notifications', STALL_SECTION_TEXT.title]);
+  });
+
+  it('P1: pending is a skeleton, a failed first read says so, and a view renders — three states, never folded', async () => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'stallWatch').mockReturnValue(new Promise(() => {}));
+    render(<SettingsScreen />);
+    expect(within(section()).getByRole('status', { name: 'Loading' })).toBeInTheDocument();
+    expect(within(section()).queryByText(STALL_SECTION_TEXT.unread)).toBeNull();
+    cleanup();
+    vi.spyOn(api, 'stallWatch').mockRejectedValue(new ApiError(500, { error: 'Internal Server Error' }));
+    render(<SettingsScreen />);
+    expect(await within(section()).findByText(STALL_SECTION_TEXT.unread)).toBeInTheDocument();
+    expect(within(section()).queryByRole('status', { name: 'Loading' })).toBeNull();
+    expect(within(section()).queryByRole('radio')).toBeNull();
+  });
+
+  it('P1: a later failed read keeps the landed view and adds the stale line', async () => {
+    const { read } = await mount(swView());
+    read.mockRejectedValue(new ApiError(500, { error: 'Internal Server Error' }));
+    await repoll();
+    expect(await within(section()).findByText(STALL_SECTION_TEXT.stale)).toBeInTheDocument();
+    expect(radio(`${STALL_FOLLOW_LABEL} (they say: ${STALL_LEVEL_TEXT.check.label})`)).toBeChecked();
+  });
+
+  it('P1b: a 404 not-found after a landed view replaces the whole body — no Now block, no radio checked', async () => {
+    const { read } = await mount(swView({ chosen: swChosen({ level: 'off' }), effective: swEffective({
+      level: 'off', source: 'chosen', stages: swStages({ runs: false, checks: false, busyGate: false }) }) }));
+    expect(radio(STALL_LEVEL_TEXT.off.label)).toBeChecked();
+    read.mockRejectedValue(new ApiError(404, { error: 'not-found' }));
+    await repoll();
+    expect(await within(section()).findByText(STALL_NOT_AVAILABLE_TEXT)).toBeInTheDocument();
+    expect(within(section()).queryByRole('radio')).toBeNull();
+    expect(within(section()).queryByText(STALL_SOURCE_TEXT.chosen)).toBeNull();
+    expect(within(section()).queryByText(STALL_LEVEL_TEXT.off.does)).toBeNull();
+  });
+
+  it('P1b: a 501 not-configured first read is the not-available text, not the unread line', async () => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'stallWatch').mockRejectedValue(new ApiError(501, { ok: false, error: 'not-configured' }));
+    render(<SettingsScreen />);
+    expect(await within(section()).findByText(STALL_NOT_AVAILABLE_TEXT)).toBeInTheDocument();
+    expect(within(section()).queryByText(STALL_SECTION_TEXT.unread)).toBeNull();
+  });
+
+  it('renders the Now block, the Next step, the quiet time and the counts from the view', async () => {
+    await mount(swView());
+    const s = section();
+    expect(within(s).getByText(STALL_LEVEL_TEXT.check.label, { selector: 'p' })).toBeInTheDocument();
+    expect(within(s).getByText(STALL_SOURCE_TEXT.files)).toBeInTheDocument();
+    expect(within(s).getByText(`${STALL_NEXT_TEXT.lead} ${STALL_LEVEL_TEXT.alert.label}.`)).toBeInTheDocument();
+    expect(within(s).getByText(STALL_NEXT_TEXT.waitsOn)).toBeInTheDocument();
+    expect(within(s).getByText(STALL_STAGE_TEXT.alerts.gate)).toBeInTheDocument();
+    expect(within(s).getByText('2 h (built-in)')).toBeInTheDocument();
+    expect(within(s).getByText('30 min to 12 h')).toBeInTheDocument();
+    expect(within(s).getByText(STALL_QUIET_NOTE)).toBeInTheDocument();
+    expect(within(s).getByText('Last 48 h')).toBeInTheDocument();
+    expect(within(s).getByText(`${STALL_NOTICE_TEXT.checks} — 1 sent · 2 shadow`)).toBeInTheDocument();
+    expect(within(s).getByText(`${STALL_NOTICE_TEXT.pushes} — 4 sent · 0 shadow`)).toBeInTheDocument();
+    const select = within(s).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet });
+    expect((select as HTMLSelectElement).value).toBe('default');
+    expect(within(select).getAllByRole('option')).toHaveLength(24);
+  });
+
+  it('P10: next.kind none shows no Next step, and a step with an empty waitsOn shows no "Waits on:"', async () => {
+    const { read } = await mount(swView({ effective: swEffective({ next: { kind: 'none' } }) }));
+    expect(within(section()).queryByText(/^Next step:/)).toBeNull();
+    expect(within(section()).queryByText(STALL_NEXT_TEXT.top)).toBeNull();
+    read.mockResolvedValue(swView({ effective: swEffective({ next: { kind: 'step', level: 'alert', waitsOn: [] } }) }));
+    await repoll();
+    await within(section()).findByText(`${STALL_NEXT_TEXT.lead} ${STALL_LEVEL_TEXT.alert.label}.`);
+    expect(within(section()).queryByText(STALL_NEXT_TEXT.waitsOn)).toBeNull();
+  });
+
+  it('M6: an unmeasured reading renders "Unknown" and "they say: unknown", and no level is read as Off', async () => {
+    await mount(swView({ effective: { measured: false }, chosen: swChosen({ level: 'alert' }) }));
+    expect(within(section()).getByText(STALL_SECTION_TEXT.unknown)).toBeInTheDocument();
+    expect(radio(`${STALL_FOLLOW_LABEL} (${STALL_SECTION_TEXT.theySayUnknown})`)).not.toBeChecked();
+    expect(radio(STALL_LEVEL_TEXT.alert.label)).toBeChecked();
+    expect(within(section()).queryByText(STALL_LEVEL_TEXT.off.does)).toBeNull();
+  });
+
+  it('an absent or unreadable stored level checks no radio, and the quiet select shows no built-in it does not hold', async () => {
+    await mount(swView({ chosen: swChosen({ level: 'unreadable', quietMs: 'unreadable', updatedAt: null, stored: 'absent' }) }));
+    for (const r of within(section()).getAllByRole('radio')) expect(r).not.toBeChecked();
+    expect(within(section()).getByText(STALL_STORED_TEXT.absent)).toBeInTheDocument();
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+    expect(select.value).toBe('');
+  });
+
+  it('P5: the run-less footnote is always shown — zero counts, and counts that could not be read', async () => {
+    const zero = swView({ notices: { ok: true, since: 0, windowMs: 48 * SW_H, counts: (['checks', 'wakes', 'reports', 'pushes'] as const)
+      .map((row) => ({ row, sent: 0, shadow: 0 })) } });
+    const { read } = await mount(zero);
+    expect(within(section()).getByText(STALL_RUNLESS_FOOTNOTE)).toBeInTheDocument();
+    read.mockResolvedValue(swView({ notices: { ok: false } }));
+    await repoll();
+    expect(await within(section()).findByText(STALL_SECTION_TEXT.countsFailed)).toBeInTheDocument();
+    expect(within(section()).getByText(STALL_RUNLESS_FOOTNOTE)).toBeInTheDocument();
+    expect(within(section()).queryByText('Last 48 h')).toBeNull();
+  });
+
+  it('P3: a write answered 2xx at once sends only the field moved, opens no sheet, and settles the reply', async () => {
+    const { read } = await mount(swView());
+    const write = vi.spyOn(api, 'setStallWatch').mockResolvedValue(
+      swView({ chosen: swChosen({ level: 'log' }), effective: swEffective({ source: 'chosen', level: 'log', stages: SW_LOG }) }));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    await waitFor(() => expect(radio(STALL_LEVEL_TEXT.log.label)).toBeChecked());
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith({ level: 'log' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('P3: the quiet select writes { quietMs } alone, and "Built-in" writes default', async () => {
+    await mount(swView({ chosen: swChosen({ quietMs: SW_H }), quiet: { ...swView().quiet, effectiveMs: SW_H, source: 'chosen' } }));
+    expect(within(section()).getByText('1 h (chosen here)')).toBeInTheDocument();
+    const write = vi.spyOn(api, 'setStallWatch').mockResolvedValue(swView());
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet });
+    expect((select as HTMLSelectElement).value).toBe(String(SW_H));
+    fireEvent.change(select, { target: { value: 'default' } });
+    await waitFor(() => expect(write).toHaveBeenCalledWith({ quietMs: 'default' }));
+    await waitFor(() => expect((select as HTMLSelectElement).value).toBe('default'));
+  });
+
+  it('P3: a 409 opens the sheet from its effect; Cancel sends nothing more and leaves the stored choice checked', async () => {
+    await mount(swView());
+    const write = vi.spyOn(api, 'setStallWatch').mockRejectedValue(swConfirm(swEffect({ turnsOn: ['alerts'],
+      before: swStages(), after: swStages({ alerts: true }) }), 'key-1'));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.alert.label));
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText(`Set the stall watch to ${STALL_LEVEL_TEXT.alert.label}?`)).toBeInTheDocument();
+    expect(within(sheet).getByText(swTurnsOn('alerts'))).toBeInTheDocument();
+    expect(within(sheet).getByText(STALL_CONFIRM_TEXT.due)).toBeInTheDocument();
+    expect(radio(STALL_LEVEL_TEXT.alert.label)).toBeDisabled();
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(radio(`${STALL_FOLLOW_LABEL} (they say: ${STALL_LEVEL_TEXT.check.label})`)).toBeChecked();
+    expect(radio(STALL_LEVEL_TEXT.alert.label)).not.toBeChecked();
+    expect(radio(STALL_LEVEL_TEXT.alert.label)).toBeEnabled();
+  });
+
+  it('P3: Set re-POSTs the same body with confirm equal to effectKey, and the 2xx settles', async () => {
+    await mount(swView());
+    const write = vi.spyOn(api, 'setStallWatch')
+      .mockRejectedValueOnce(swConfirm(swEffect({ turnsOn: ['alerts'], before: swStages(), after: swStages({ alerts: true }) }), 'key-1'))
+      .mockResolvedValueOnce(swView({ chosen: swChosen({ level: 'alert' }),
+        effective: swEffective({ level: 'alert', source: 'chosen', stages: swStages({ alerts: true }) }) }));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.alert.label));
+    const sheet = await screen.findByRole('dialog');
+    fireEvent.click(within(sheet).getByRole('button', { name: STALL_CONFIRM_TEXT.confirm }));
+    await waitFor(() => expect(radio(STALL_LEVEL_TEXT.alert.label)).toBeChecked());
+    expect(write).toHaveBeenNthCalledWith(1, { level: 'alert' });
+    expect(write).toHaveBeenNthCalledWith(2, { level: 'alert', confirm: 'key-1' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key', async () => {
+    await mount(swView());
+    const write = vi.spyOn(api, 'setStallWatch')
+      .mockRejectedValueOnce(swConfirm(swEffect({ turnsOn: ['alerts'], before: swStages(), after: swStages({ alerts: true }) }), 'key-1'))
+      .mockRejectedValueOnce(swConfirm(swEffect({ turnsOn: ['alerts'], before: swStages(), after: swStages({ alerts: true }),
+        filesExceed: true }), 'key-2'))
+      .mockResolvedValueOnce(swView({ chosen: swChosen({ level: 'alert' }),
+        effective: swEffective({ level: 'alert', source: 'chosen', stages: swStages({ alerts: true }) }) }));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.alert.label));
+    const first = await screen.findByRole('dialog');
+    expect(within(first).queryByText(STALL_FILES_EXCEED_TEXT)).toBeNull();
+    fireEvent.click(within(first).getByRole('button', { name: STALL_CONFIRM_TEXT.confirm }));
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(2));
+    const fresh = await screen.findByRole('dialog');
+    expect(await within(fresh).findByText(STALL_FILES_EXCEED_TEXT)).toBeInTheDocument();
+    fireEvent.click(within(fresh).getByRole('button', { name: STALL_CONFIRM_TEXT.confirm }));
+    await waitFor(() => expect(radio(STALL_LEVEL_TEXT.alert.label)).toBeChecked());
+    expect(write).toHaveBeenNthCalledWith(2, { level: 'alert', confirm: 'key-1' });
+    expect(write).toHaveBeenNthCalledWith(3, { level: 'alert', confirm: 'key-2' });
+  });
+
+  it('P2: a refused write toasts the server\'s detail, re-reads, and leaves the stored radio checked', async () => {
+    const { read } = await mount(swView());
+    vi.spyOn(api, 'setStallWatch').mockRejectedValue(
+      new ApiError(400, { ok: false, error: 'bad-request', detail: 'quietMs must be a 30-minute step' }));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.all.label));
+    expect(await screen.findByText('Nothing was changed: quietMs must be a 30-minute step')).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(radio(STALL_LEVEL_TEXT.all.label)).not.toBeChecked();
+    expect(radio(`${STALL_FOLLOW_LABEL} (they say: ${STALL_LEVEL_TEXT.check.label})`)).toBeChecked();
+  });
+
+  it('an unreadable 2xx says the write may have landed and re-reads; it installs nothing', async () => {
+    const { read } = await mount(swView());
+    vi.spyOn(api, 'setStallWatch').mockResolvedValue('unreadable');
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(radio(STALL_LEVEL_TEXT.log.label)).not.toBeChecked();
+  });
+
+  it('a 2xx body that fails the wire guard is the same unconfirmed outcome', async () => {
+    const { read } = await mount(swView());
+    vi.spyOn(api, 'setStallWatch').mockResolvedValue({ chosen: 'nope' } as unknown as StallWatchView);
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  });
+
+  it('a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads', async () => {
+    const { read } = await mount(swView());
+    vi.spyOn(api, 'setStallWatch').mockRejectedValue(new TypeError('Failed to fetch'));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/^Nothing was changed/)).toBeNull();
+    expect(radio(STALL_LEVEL_TEXT.log.label)).not.toBeChecked();
+  });
+
+  it('P2: a 500 toasts the cause the server named in its message, and re-reads', async () => {
+    const { read } = await mount(swView());
+    const cause = 'stall settings unreadable, nothing written: disk gone';
+    vi.spyOn(api, 'setStallWatch').mockRejectedValue(
+      new ApiError(500, { statusCode: 500, error: 'Internal Server Error', message: cause }));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    expect(await screen.findByText(`Nothing was changed: ${cause}`)).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  });
+
+  it('P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap', async () => {
+    const { read } = await mount(swView({ chosen: swChosen({ quietMs: SW_H }),
+      quiet: { ...swView().quiet, effectiveMs: SW_H, source: 'chosen' } }));
+    const write = vi.spyOn(api, 'setStallWatch')
+      .mockRejectedValueOnce(swConfirm(swEffect({ quietLowered: true, quietMs: { before: SW_H, after: SW_H / 2 } }), 'key-q'))
+      .mockRejectedValueOnce(new ApiError(400, { ok: false, error: 'bad-request', detail: 'quietMs must be a 30-minute step' }));
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: String(SW_H / 2) } });
+    const sheet = await screen.findByRole('dialog');
+    expect(select.value).toBe(String(SW_H));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(select.value).toBe(String(SW_H));
+    fireEvent.change(select, { target: { value: String(3 * SW_H) } });
+    expect(await screen.findByText('Nothing was changed: quietMs must be a 30-minute step')).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(select.value).toBe(String(SW_H));
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+
+  it('P3: the controls are locked while a write is in flight: a second choice sends nothing, and the answer unlocks them', async () => {
+    await mount(swView());
+    const flight = Promise.withResolvers<StallWatchView>();
+    const write = vi.spyOn(api, 'setStallWatch').mockReturnValue(flight.promise);
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet });
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    for (const r of within(section()).getAllByRole('radio')) expect(r).toBeDisabled();
+    expect(select).toBeDisabled();
+    fireEvent.change(select, { target: { value: String(SW_H) } });
+    fireEvent.click(radio(STALL_LEVEL_TEXT.all.label));
+    expect(write).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      flight.resolve(swView({ chosen: swChosen({ level: 'log' }),
+        effective: swEffective({ source: 'chosen', level: 'log', stages: SW_LOG }) }));
+      await flight.promise;
+    });
+    await waitFor(() => expect(radio(STALL_LEVEL_TEXT.log.label)).toBeChecked());
+    expect(radio(STALL_LEVEL_TEXT.all.label)).toBeEnabled();
+    expect(select).toBeEnabled();
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SettingsScreen — stall watch: source scans (P6, P9)', () => {
+  const sectionSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'StallWatchSection.tsx'), 'utf8');
+  const hookSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'useStallWatchView.ts'), 'utf8');
+  const DEVICE_WORD = /\b(phones?|mobiles?|desktops?|tablets?|laptops?|iphones?|ipads?|android|touchscreens?|handsets?)\b/i;
+  const DEVICE_BRANCH = /matchMedia|useMediaQuery|userAgent|maxTouchPoints|ontouchstart|pointer:\s*coarse|innerWidth/;
+  const l0Strings = (v: unknown): string[] =>
+    typeof v === 'string' ? [v] : typeof v === 'object' && v !== null ? Object.values(v).flatMap(l0Strings) : [];
+
+  it('P6: the section and its hook have no device branch and no device word', () => {
+    for (const [name, src] of [['StallWatchSection.tsx', sectionSrc], ['useStallWatchView.ts', hookSrc]]) {
+      expect(src, name).not.toMatch(DEVICE_BRANCH);
+      expect(src, name).not.toMatch(DEVICE_WORD);
+    }
+  });
+
+  it('P6: no L0 STALL_* string names a device, and the Notifications row says push', () => {
+    const strings = Object.entries(L0).filter(([k]) => k.startsWith('STALL_')).flatMap(([, v]) => l0Strings(v));
+    expect(strings.length).toBeGreaterThan(80);
+    for (const s of strings) expect(s).not.toMatch(DEVICE_WORD);
+    const screenSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'SettingsScreen.tsx'), 'utf8');
+    expect(screenSrc).toContain('<span>Push notifications for this browser</span>');
+    expect(screenSrc).not.toMatch(/Phone notifications/);
+  });
+
+  it('P9: the section spells no level id — every level reaches it from L0', () => {
+    for (const level of STALL_LEVELS) expect(sectionSrc).not.toMatch(new RegExp(`['"\`]${level}['"\`]`));
+    expect(sectionSrc).toMatch(/STALL_LEVELS\.map/);
   });
 });
