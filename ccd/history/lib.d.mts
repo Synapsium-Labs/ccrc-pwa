@@ -363,6 +363,7 @@ export interface HealthInputs {
   readonly retentionUnmeasured: readonly string[];
   readonly journalGrowth30d: number;
   readonly journalSkipped: number;
+  readonly blobUndecodable: number;
   readonly exportSegmentNewer: readonly string[];
   readonly exportSegmentMissing: number;
   readonly journalUnwritable: boolean;
@@ -380,6 +381,7 @@ export const HEALTH_META: Readonly<{
   exportSegmentNewer: 'export_segment_newer';
   exportSegmentMissing: 'export_segment_missing';
 }>;
+export const HEALTH_COUNTERS: Readonly<{ blobUndecodable: 'blob_undecodable' }>;
 export const HEALTH_REMEDIES: Readonly<Record<string, string>>;
 export function modeWantOf(rel: string, kind: 'dir' | 'file'): '0600' | '0700' | null;
 export function modesWrongOf(entries: readonly ModeEntry[]): ModeWrong[];

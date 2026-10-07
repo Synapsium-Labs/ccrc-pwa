@@ -598,6 +598,7 @@ function healthInputsOf(env, x, nowMs) {
     retentionUnmeasured: (env.retention && env.retention.unmeasured) ?? [],
     journalGrowth30d: (env.journal && env.journal.growth_30d_bytes) ?? 0,
     journalSkipped: (env.journal && env.journal.skipped) ?? 0,
+    blobUndecodable: Number((env.counters && env.counters[healthLib.HEALTH_COUNTERS.blobUndecodable]) ?? 0),
     exportSegmentNewer: x.exportSegmentNewer,
     exportSegmentMissing: x.exportSegmentMissing,
     extrasUnmeasured: x.unmeasured,

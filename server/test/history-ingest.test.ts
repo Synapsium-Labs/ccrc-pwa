@@ -21,7 +21,7 @@ import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, plantSession, counters, journalRecords, spoolLine, readTxlog, writes, SWEEP, PRELOADS, type HistoryBox } from './historyHelpers.js';
 import { boundaryRow } from './historyFixtures.js';
 import { createStore, openWriter, closeWriter } from '../../ccd/history/store.mjs';
-import { historyPaths, sha256Hex } from '../../ccd/history/lib.mjs';
+import { historyPaths, sha256Hex, HEALTH_COUNTERS } from '../../ccd/history/lib.mjs';
 
 skipOnDarwin();
 
@@ -1748,7 +1748,7 @@ describe('history ingest: sidecars (plan task 21)', () => {
 interface IxSweep {
   ftsPrepare(db: DatabaseSync, nowMs: number): { state: string; tables: boolean };
   deriveFts(db: DatabaseSync, ctx: IxCtx, budget: IxBudget): Promise<void>;
-  ftsTextOfBlob(z: Uint8Array, isSidecar: boolean, pairIdx: unknown): Promise<{ text: string; decoded: number }>;
+  ftsTextOfBlob(z: Uint8Array, isSidecar: boolean, pairIdx: unknown): Promise<{ text: string; decoded: number; undecodable: false } | { text: null; decoded: number; undecodable: true }>;
 }
 interface IxSweep {
   secretsStep(db: DatabaseSync, ctx: IxCtx, secretFiles: string[]): { pairIdx: unknown; newValues: string[]; values: string[] };
@@ -2453,11 +2453,14 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       const raw = body();
       const idx = lib.makePairIndex([]);
       const r = await S.ftsTextOfBlob(q5(raw), true, idx);
+      if (r.text === null) throw new Error('the blob did not decode');
+      expect(r.undecodable).toBe(false);
       expect(r.decoded).toBeLessThan(BOUND + 128 * 1024);
       expect(r.text).toBe(lib.sidecarIndexText(raw.subarray(0, BOUND), idx));
       expect(r.text).toContain('zqhead');
       expect(r.text).not.toContain('zqtail');
       const e = await S.ftsTextOfBlob(q5(Buffer.from(JSON.stringify('an entry body'))), false, idx);
+      expect(e.undecodable).toBe(false);
       expect(e.text).toBe('an entry body');
     });
 
@@ -2541,6 +2544,7 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       const tok = hex(24); const skTail = hex(20);
       const idx = lib.makePairIndex(lib.secretPairs([tok]).pairs);
       const r = await S.ftsTextOfBlob(q5(jsonSidecar(tok, skShape(skTail))), true, idx);
+      if (r.text === null) throw new Error('the blob did not decode');
       expect(r.text.includes(tok.slice(0, 12))).toBe(false);
       expect(r.text.includes(skTail.slice(0, 12))).toBe(false);
       expect(r.text).toContain('zqhead');
@@ -2560,6 +2564,134 @@ describe('history ingest: the FTS index (plan task 23)', () => {
         expect(matches(db, 'zqend')).toBe(1);
         expect(ftsBytes(db).includes(tok.slice(0, 12))).toBe(false);
       } finally { db.close(); }
+    });
+  });
+  describe('D-4346 (history-permanent-failures-classified): a stored blob that does not decode is passed over, never thrown', () => {
+    const q5 = (b: Buffer): Buffer => brotliCompressSync(b, { params: { [zc.BROTLI_PARAM_QUALITY]: 5 } });
+    const counterOf = (db: DatabaseSync, name: string): number | undefined => (db.prepare('SELECT n FROM counters WHERE name = ?').get(name) as { n: number } | undefined)?.n;
+    const BAD = Buffer.from('zq-not-brotli');
+    const sideDir = (box: HistoryBox): string => {
+      const dir = path.join(box.homes[0]!, 'projects', IX.SLUG, IX.U, 'tool-results');
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    };
+
+    it('ftsTextOfBlob answers undecodable for garbage, truncated and empty bytes, in both arms, and never rejects', async () => {
+      const { sweep: S } = await IX.api();
+      const idx = (await IX.api()).lib.makePairIndex([]);
+      const small = q5(Buffer.from(JSON.stringify('an entry body')));
+      for (const isSidecar of [true, false]) {
+        for (const z of [BAD, small.subarray(0, Math.floor(small.length / 2)), Buffer.alloc(0)]) {
+          await expect(S.ftsTextOfBlob(z, isSidecar, idx), `${isSidecar} ${z.length}`).resolves.toEqual({ text: null, decoded: 0, undecodable: true });
+        }
+      }
+      await expect(S.ftsTextOfBlob(small, false, idx)).resolves.toEqual({ text: 'an entry body', decoded: 15, undecodable: false });   // CONTROL
+    });
+
+    it('the backfill passes an undecodable body blob and an undecodable sidecar blob over, counts each once, and indexes the rest in the same run', async () => {
+      const { sweep: S, lib } = await IX.api();
+      const box = IX.newBox('ccrc-hist-undec-bf-');
+      try {
+        IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqentry words', 1)]));
+        const dir = sideDir(box);
+        for (const n of ['a', 'b', 'c']) fs.writeFileSync(path.join(dir, `${n}.txt`), `zqside${n} ${IX.words(200, n.charCodeAt(0))}\n`);
+        const { db, ids } = await IX.openFixtureStore(box);
+        try {
+          await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());   // no FTS this tick: nothing indexed
+          const total = IX.count(db, 'blobs');
+          expect(total).toBeGreaterThanOrEqual(4);
+          const entryBlob = (db.prepare('SELECT blob_id AS id FROM entries').get() as { id: number }).id;
+          const sideBlob = (db.prepare("SELECT blob_id AS id FROM sidecars WHERE name = 'a.txt'").get() as { id: number }).id;
+          for (const id of [entryBlob, sideBlob]) db.prepare('UPDATE blobs SET z = ? WHERE blob_id = ?').run(BAD, id);
+          const ctx = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 120_000, ids);
+          ctx.fts = S.ftsPrepare(db, ctx.nowMs).tables;
+          ctx.pairIdx = lib.makePairIndex([]);
+          await S.deriveFts(db, ctx, S.newBudget());
+          expect(metaV(db, 'fts')).toBe('ready');
+          expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(2);
+          expect(IX.count(db, 'blobs', `fts_indexed = 0 AND blob_id IN (${entryBlob}, ${sideBlob})`)).toBe(2);
+          expect(IX.count(db, 'blobs', 'fts_indexed = 1')).toBe(total - 2);
+          expect(matches(db, 'zqsideb')).toBe(1);
+          expect(matches(db, 'zqsidea')).toBe(0);
+          expect(matches(db, 'zqentry')).toBe(0);
+          await S.deriveFts(db, ctx, S.newBudget());
+          expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(2);   // a second pass does not recount
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    });
+
+    it('a late pair whose only indexed blob no longer decodes: the pass exits 0, the row is deleted, the value is not MATCHable, the mark advances, counted once', () => {
+      const box = IX.newBox('ccrc-hist-undec-late-');
+      const tok = hex(24); const tok2 = hex(24);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+      fs.writeFileSync(path.join(sideDir(box), 'out.txt'), `zqhead\n${tok}\n${tok2}\nzqend\n`);
+      IX.sweepTwice(box);
+      let db = openStoreRO(box);
+      let ticksBefore = 0;
+      try { expect(matches(db, `"${tok}"`)).toBe(1); ticksBefore = IX.count(db, 'ticks'); } finally { db.close(); }   // CONTROL: indexed in clear, the pair is not known yet
+      const w = openWriter(historyPaths(box.home).dbFile);
+      try { w.prepare('UPDATE blobs SET z = ? WHERE blob_id = (SELECT blob_id FROM sidecars)').run(BAD); } finally { closeWriter(w); }
+      secretFile(box, 'side.env', `ZQ_SIDE_VALUE=${tok}\n`);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(matches(db, `"${tok}"`)).toBe(0);
+        expect(ftsBytes(db).includes(tok.slice(0, 12))).toBe(false);
+        expect(counters(box)[HEALTH_COUNTERS.blobUndecodable]).toBe(1);
+        expect(metaV(db, 'fts_reindex_rid')).toBe(String(maxRid(db)));
+        expect(IX.count(db, 'ticks')).toBe(ticksBefore + 1);
+      } finally { db.close(); }
+      const again = runSweep(box);
+      expect(again.code, again.stderr).toBe(0);
+      expect(counters(box)[HEALTH_COUNTERS.blobUndecodable]).toBe(1);
+      // 3b: a second late pair the same undecodable blob holds: nothing is recounted, and the mark advances.
+      secretFile(box, 'side2.env', `ZQ_SIDE_TWO=${tok2}\n`);
+      const r2 = runSweep(box);
+      expect(r2.code, r2.stderr).toBe(0);
+      expect(counters(box)[HEALTH_COUNTERS.blobUndecodable]).toBe(1);
+      db = openStoreRO(box);
+      try { expect(metaV(db, 'fts_reindex_rid')).toBe(String(maxRid(db))); } finally { db.close(); }
+    });
+
+    it('a late pair glued to a letter in an entry whose blob no longer decodes is reached only by the re-derivation, which deletes the row and never skips it (D-4344, D-4346)', () => {
+      const box = IX.newBox('ccrc-hist-undec-glued-');
+      const v = `zqc${hex(12)}3`;
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note é${v} end`, 1)]));
+      IX.sweepTwice(box);
+      let db = openStoreRO(box);
+      try { expect(matches(db, '"ezqc"*')).toBe(1); } finally { db.close(); }   // CONTROL: the glued term is indexed
+      const w = openWriter(historyPaths(box.home).dbFile);
+      try { w.prepare('UPDATE blobs SET z = ? WHERE blob_id = (SELECT blob_id FROM entries WHERE uuid = ?)').run(BAD, IX.uuidN(1)); } finally { closeWriter(w); }
+      secretFile(box, 'c.env', `ZQ_C_VALUE=${v}\n`);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(matches(db, '"ezqc"*')).toBe(0);
+        expect(ftsBytes(db).includes(v.slice(3, 15))).toBe(false);
+        expect(counters(box)[HEALTH_COUNTERS.blobUndecodable]).toBe(1);
+        expect(metaV(db, 'fts_reindex_rid')).toBe(String(maxRid(db)));
+      } finally { db.close(); }
+      const again = runSweep(box);
+      expect(again.code, again.stderr).toBe(0);
+      expect(counters(box)[HEALTH_COUNTERS.blobUndecodable]).toBe(1);
+    });
+
+    it('census: every decompression of a stored blob in sweep.mjs is guarded, and only ftsTextOfBlob decodes for the index', () => {
+      const lines = fs.readFileSync(SWEEP, 'utf8').split('\n');
+      const hits: Array<{ fn: string; line: string; prev: string }> = [];
+      lines.forEach((line, i) => {
+        if (!/\bunbrotli(?:Prefix)?\(/.test(line)) return;
+        const tr = line.trim();
+        if (tr.startsWith('*') || tr.startsWith('/*') || tr.startsWith('//')) return;
+        let fn = '';
+        for (let j = i; j >= 0; j -= 1) { const m = /^(?:export )?(?:async )?function (\w+)/.exec(lines[j]!); if (m) { fn = m[1]!; break; } }
+        hits.push({ fn, line, prev: lines[i - 1] ?? '' });
+      });
+      expect([...new Set(hits.map((h) => h.fn))].sort()).toEqual(['ftsTextOfBlob', 'pairedFromStore', 'storedBody', 'toolResultCandidates']);
+      for (const h of hits) expect(/\btry\b/.test(h.line) || /\btry\b/.test(h.prev), h.line).toBe(true);
+      expect(hits.filter((h) => h.fn === 'ftsTextOfBlob')).toHaveLength(2);   // CONTROL
     });
   });
 });

@@ -43,7 +43,7 @@ import {
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
-  SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, redactForIndex,
+  SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, redactForIndex, HEALTH_COUNTERS,
   makeProbeIndex, parseRederiveState, formatRederiveState, rederivePlan, REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
   REASONS, WRITING_FORMS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker,
   HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
@@ -3160,19 +3160,25 @@ function ftsStmts(db) {
   return f;
 }
 
+/** What ftsTextOfBlob answers for a blob whose stored bytes do not decode (D-4346, history-permanent-failures-classified). */
+const UNDECODABLE = Object.freeze({ text: null, decoded: 0, undecodable: true });
 /** A stored blob's index text, and how many bytes were decoded to make it (D-4312, history-sidecar-redact-before-cut).
  *  A sidecar's is `sidecarIndexText` (lib: redacted over a window, then cut) of a BOUNDED prefix of
  *  its body, at most SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN bytes of output, never the whole
  *  decompressed blob (O20's RSS bound). A body's plain text is small and decompressed whole
- *  (D-4195, history-fts-body-plain-text); one that does not parse indexes nothing. It is never
- *  thrown: the index is derived, and the blob stays. */
+ *  (D-4195, history-fts-body-plain-text). A blob whose stored bytes do not decode (any throw of its decompress
+ *  call, which depends on those bytes alone) answers `undecodable: true` with `text: null` and is never thrown; a
+ *  body that decodes but does not parse indexes nothing (`text: ''`, `undecodable: false`). D-4346
+ *  (history-permanent-failures-classified). */
 export async function ftsTextOfBlob(z, isSidecar, pairIdx) {
   if (isSidecar) {
-    const p = await unbrotliPrefix(z, SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN);
-    return { text: sidecarIndexText(p.bytes, pairIdx), decoded: p.decoded };
+    let p;
+    try { p = await unbrotliPrefix(z, SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN); } catch { return UNDECODABLE; }
+    return { text: sidecarIndexText(p.bytes, pairIdx), decoded: p.decoded, undecodable: false };
   }
-  const bytes = unbrotli(z);
-  try { return { text: ftsTextOf(parseStoredJson(bytes), 'entry'), decoded: bytes.length }; } catch { return { text: '', decoded: bytes.length }; }
+  let bytes;
+  try { bytes = unbrotli(z); } catch { return UNDECODABLE; }
+  try { return { text: ftsTextOf(parseStoredJson(bytes), 'entry'), decoded: bytes.length, undecodable: false }; } catch { return { text: '', decoded: bytes.length, undecodable: false }; }
 }
 
 /** Index text is computed outside any transaction (a sidecar's decompression is async) and written
@@ -3238,10 +3244,12 @@ export async function deriveFts(db, ctx, budget) {
     const last = batch.length < BACKFILL_BATCH;
     let group = [];
     let chars = 0;
+    let undecodable = 0;   // blobs of this batch passed over undecoded, counted in the commit that moves the cursor past them (D-4346)
     let reached = cursor;   // the last blob of this batch taken, indexed or skipped
     const commit = (done) => {
       withTx(db, 'NORMAL', () => {
         for (const g of group) indexBlob(db, g.id, g.text, ctx.pairIdx);
+        if (undecodable > 0) bump(db, HEALTH_COUNTERS.blobUndecodable, undecodable);
         cursor = reached;
         if (done) {
           d.done.run(ctx.nowMs, String(cursor), FTS_STEP, 1);
@@ -3252,16 +3260,18 @@ export async function deriveFts(db, ctx, budget) {
       });
       group = [];
       chars = 0;
+      undecodable = 0;
     };
     for (const b of batch) {
       if (!budgetLeft(budget)) { if (reached !== cursor) commit(false); return; }
       const z = d.blobZ.get(b.blob_id)?.z;
       if (z === undefined || z === null) { reached = b.blob_id; continue; }
-      const { text } = await ftsTextOfBlob(z, b.is_sidecar === 1, ctx.pairIdx);
+      const t = await ftsTextOfBlob(z, b.is_sidecar === 1, ctx.pairIdx);
       budget.bytes += b.zlen;
       reached = b.blob_id;
-      group.push({ id: b.blob_id, text });
-      chars += text.length;
+      if (t.undecodable) { undecodable += 1; continue; }   // D-4346 (history-permanent-failures-classified): passed over, its fts_indexed left 0
+      group.push({ id: b.blob_id, text: t.text });
+      chars += t.text.length;
       if (chars >= FTS_GROUP_CHARS) commit(false);
     }
     commit(last);
@@ -3309,10 +3319,13 @@ export async function reindexForValues(db, ctx, values) {
   let chars = 0;
   const commit = () => {
     withTx(db, 'NORMAL', () => {
+      let bad = 0;
       for (const g of group) {
-        f.del.run(g.id);
+        const removed = Number(f.del.run(g.id).changes);
+        if (g.undecodable && removed > 0) bad += 1;   // counted once: the row is gone, so no later re-index counts it again (D-4346)
         if (g.text !== null) f.ins.run(g.id, redactForIndex(g.text, ctx.pairIdx));
       }
+      if (bad > 0) bump(db, HEALTH_COUNTERS.blobUndecodable, bad);
       if (ids.size > 0) d.pending.run(MERGE_STEP, 1);
     });
     group = [];
@@ -3320,9 +3333,11 @@ export async function reindexForValues(db, ctx, values) {
   };
   for (const id of rows) {
     const b = d.blobForFts.get(id);
-    // A tombstone keeps no index row.
-    const text = b === undefined || b.z === null ? null : (await ftsTextOfBlob(b.z, b.is_sidecar === 1, ctx.pairIdx)).text;
-    group.push({ id, text });
+    // A tombstone keeps no index row; nor does a blob whose bytes no longer decode (D-4346, history-permanent-failures-classified).
+    const t = b === undefined || b.z === null ? null : await ftsTextOfBlob(b.z, b.is_sidecar === 1, ctx.pairIdx);
+    const undecodable = t !== null && t.undecodable;
+    const text = t === null || undecodable ? null : t.text;
+    group.push({ id, text, undecodable });
     chars += text === null ? 0 : text.length;
     if (chars >= FTS_GROUP_CHARS) commit();
   }
@@ -3365,10 +3380,13 @@ export async function rederiveFts(db, ctx, budget) {
   let chars = 0;
   const commit = (completed) => {
     withTx(db, 'NORMAL', () => {
+      let bad = 0;
       for (const g of group) {
-        f.del.run(g.id);
+        const removed = Number(f.del.run(g.id).changes);
+        if (g.undecodable === true && removed > 0) bad += 1;   // counted once: the row is gone, so no later generation counts it again (D-4346)
         if (g.text !== null) f.ins.run(g.id, g.text);
       }
+      if (bad > 0) bump(db, HEALTH_COUNTERS.blobUndecodable, bad);
       if (group.length > 0) d.pending.run(MERGE_STEP, 1);
       setMeta(db, REDERIVE_META, formatRederiveState({ ...plan, cursor }));
       if (completed) setMeta(db, REINDEX_META, String(plan.target));
@@ -3387,9 +3405,15 @@ export async function rederiveFts(db, ctx, budget) {
         reindexed += 1;
       } else {
         idx.probe.hits = 0;
-        const { text } = await ftsTextOfBlob(row.z, row.is_sidecar === 1, idx);
-        const final = redactForIndex(text, idx);
-        if (idx.probe.hits > 0) { group.push({ id: b.blob_id, text: final }); chars += final.length; reindexed += 1; }
+        const t = await ftsTextOfBlob(row.z, row.is_sidecar === 1, idx);
+        if (t.undecodable) {
+          // D-4346 (history-permanent-failures-classified): never skipped; its row cannot be shown free of an owed pair, so it is deleted and none inserted.
+          group.push({ id: b.blob_id, text: null, undecodable: true });
+          reindexed += 1;
+        } else {
+          const final = redactForIndex(t.text, idx);
+          if (idx.probe.hits > 0) { group.push({ id: b.blob_id, text: final }); chars += final.length; reindexed += 1; }
+        }
       }
       const zlen = b.zlen ?? 0;
       slice.bytes += zlen;

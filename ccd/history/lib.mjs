@@ -231,7 +231,7 @@ export const PASS_WORDS = Object.freeze([
  *  spec names in prose: `first-tick-pending`, `tick-stale`, `lag-high`,
  *  `at-cap`, `capture-paused-low-disk`, `mode-wrong`, `schema-newer`,
  *  `cap-malformed`, `cap-near`, `breaker-open`, `roster-unreadable`,
- *  `root-is-symlink`, `fts-unavailable`, `status-unreadable`. */
+ *  `root-is-symlink`, `fts-unavailable`, `status-unreadable`, D-4346's `blob-undecodable`. */
 const healthRows = (cls, words) => words.map((w) => [w, cls]);
 const healthEntries = [
   // D-4168: within the shim's grace with no tick yet, doctor answers PASS, not §9.6 step 3's WARN.
@@ -240,7 +240,7 @@ const healthEntries = [
     'off', 'recovering', 'op-running', 'catching-up', 'lag-unmeasured', 'fts-unavailable', 'cap-malformed',
     'redact-source-unreadable', 'cap-near', 'breaker-open', 'roster-unreadable', 'root-is-symlink',
     'export-due', 'export-paused-low-disk', 'retention-unmeasured', 'retention-lowered',
-    'export-segment-missing', 'journal-record-skipped', 'journal-growth',
+    'export-segment-missing', 'journal-record-skipped', 'journal-growth', 'blob-undecodable',
   ]),
   ...healthRows('fail', [
     'tick-stale', 'lag-high', 'at-cap', 'capture-paused-low-disk', 'mode-wrong', 'schema-newer',
@@ -2274,6 +2274,10 @@ export const HEALTH_META = Object.freeze({
   exportSegmentMissing: 'export_segment_missing',
 });
 
+/** Counters `status` reads for a health word, spelled once for the writer (sweep.mjs), the reader (cli.mjs) and the
+ *  doctor fixtures that plant them. D-4346 (history-permanent-failures-classified). */
+export const HEALTH_COUNTERS = Object.freeze({ blobUndecodable: 'blob_undecodable' });
+
 const MODE_CHECKED_FILE_ROOTS = Object.freeze(['db', 'card', 'steer', 'journal', 'export']);
 
 /** The mode §9.6 wants for one entry under ~/.ccrc/history, by its
@@ -2363,6 +2367,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'export-segment-missing': 'carry the export directory from the box the store came from, or let the rows export again',
   'journal-record-skipped': `none needed if the journal came from a newer build; otherwise ccrc history doctor --repair arrives with W1-B2, and until then read the sweep: ${SWEEP_LOG}`,
   'journal-growth': `read the sweep: ${SWEEP_LOG}; the journal grows faster than twice its estimate`,
+  'blob-undecodable': `the store's copy of that text is damaged (storage corruption) and nothing repairs it in place: keep ~/.ccrc/history as it is; ccrc history doctor --repair, which detects storage corruption, arrives with W1-B2`,
 });
 
 const minutesOf = (ms) => Math.round(ms / 60_000);
@@ -2542,5 +2547,7 @@ export function deriveHealth(h) {
   if (h.journalGrowth30d > JOURNAL_GROWTH_BYTES) {
     warn.push(item('journal-growth', `the journal grew ${h.journalGrowth30d} bytes in 30 days (over ${JOURNAL_GROWTH_BYTES})`));
   }
+  // D-4346 (history-permanent-failures-classified): a stored blob whose bytes no longer decode was passed over, counted once.
+  if (h.blobUndecodable > 0) warn.push(item('blob-undecodable', `${h.blobUndecodable} stored blob(s) did not decode, so their text is out of search and cannot be read back`));
   return result();
 }

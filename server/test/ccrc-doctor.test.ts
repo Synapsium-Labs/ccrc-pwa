@@ -1246,7 +1246,7 @@ import { markGenerated } from '../../shared/mark.mjs';
 import { createServer, type Socket } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
 import { createStore } from '../../ccd/history/store.mjs';
-import { HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, deriveHealth } from '../../ccd/history/lib.mjs';
+import { HEALTH_COUNTERS, HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, deriveHealth } from '../../ccd/history/lib.mjs';
 import { PRELOADS, preloadOptions } from './historyHelpers.js';
 
 /** python3, or null. `plantFakeRuntime`'s interpreter hands `ccgpt-runtime
@@ -13448,6 +13448,7 @@ describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, 
     { word: 'journal-record-skipped', cls: 'WARN',
       plant: (home) => withStore(home, metaOnFreshTick('journal_skipped', '4')),
       names: () => ['4'] },
+    { word: 'blob-undecodable', cls: 'WARN', plant: (home) => withStore(home, (db) => { freshTick(db); db.prepare('INSERT INTO counters (name, n) VALUES (?, ?)').run(HEALTH_COUNTERS.blobUndecodable, 2); }), names: () => ['2'] },
     { word: 'export-segment-newer', cls: 'FAIL',
       plant: (home) => withStore(home, metaOnFreshTick(HEALTH_META.exportSegmentNewer, JSON.stringify(['7.0a1b2c3d.db']))),
       names: () => ['7.0a1b2c3d.db'] },
@@ -13648,7 +13649,7 @@ describe('ccrc doctor: history — the relay (O15: every word, and the one rule 
     migration: 'none', userVersion: 1, codeVersion: 1, historyOff: false, recovering: null, op: null,
     bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false, redactUnreadable: [],
     breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0, exportWriterLive: false,
-    exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [], journalGrowth30d: 0, journalSkipped: 0,
+    exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [], journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0,
     exportSegmentNewer: [], exportSegmentMissing: 0, journalUnwritable: false,
     dbPath: '/home/u/.ccrc/history/db', freeBytes: null, thresholdBytes: null, copyBps: null, backupsDb: [],
     journalStoreDirs: [], extrasUnmeasured: [],

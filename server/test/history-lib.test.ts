@@ -2324,7 +2324,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
     redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0,
     exportWriterLive: false, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
-    journalGrowth30d: 0, journalSkipped: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
+    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
     thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
     ...o,
@@ -2377,12 +2377,19 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     ['export-segment-missing', 'warn', { exportSegmentMissing: 2 }],
     ['journal-record-skipped', 'warn', { journalSkipped: 4 }],
     ['journal-growth', 'warn', { journalGrowth30d: 41_943_041 }],
+    ['blob-undecodable', 'warn', { blobUndecodable: 2 }],
   ];
 
   it('the healthy baseline is PASS ok, with nothing to warn or fail', () => {
     expect(healthLib.deriveHealth(base())).toEqual({ pass: 'ok', warn: [], fail: [] });
     // Exit 9 judges nothing: doctor's relay SKIPs on it (Task 32).
     expect(healthLib.deriveHealth(base({ exit: 9 }))).toEqual({ pass: null, warn: [], fail: [] });
+  });
+
+  it('blob-undecodable names how many stored blobs did not decode, and its remedy says the damage is storage corruption (D-4346)', () => {
+    const i = healthLib.deriveHealth(base({ blobUndecodable: 2 })).warn.find((x) => x.word === 'blob-undecodable');
+    expect(i?.detail).toContain('2 stored blob(s)');
+    expect(i?.remedy).toContain('storage corruption');
   });
 
   it('HEALTH_WORDS gains ok as a pass word, beside first-tick-pending', () => {
