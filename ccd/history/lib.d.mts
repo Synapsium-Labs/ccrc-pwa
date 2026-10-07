@@ -391,6 +391,7 @@ export const HEALTH_META: Readonly<{
   exportSegmentMissing: 'export_segment_missing';
 }>;
 export const HEALTH_COUNTERS: Readonly<{ blobUndecodable: 'blob_undecodable'; drainRejected: 'drain_rejected' }>;
+export const RETENTION_STATE_META: 'retention_state:';
 export const SQLITE_CODES: Readonly<{
   BUSY: 5; LOCKED: 6; TOOBIG: 18; CONSTRAINT: 19; MISMATCH: 20; CONSTRAINT_CHECK: 275; CONSTRAINT_NOTNULL: 1299;
   CONSTRAINT_PRIMARYKEY: 1555; CONSTRAINT_UNIQUE: 2067; CONSTRAINT_ROWID: 2579; CONSTRAINT_DATATYPE: 3091;

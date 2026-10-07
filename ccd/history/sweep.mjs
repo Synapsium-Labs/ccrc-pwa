@@ -43,7 +43,7 @@ import {
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
-  SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, redactForIndex, HEALTH_COUNTERS,
+  SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, redactForIndex, HEALTH_COUNTERS, RETENTION_STATE_META,
   makeProbeIndex, parseRederiveState, formatRederiveState, rederivePlan, REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
   REASONS, WRITING_FORMS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker,
   HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
@@ -4132,7 +4132,7 @@ export function retentionCensus(db, homes, managedList) {
     const r = HARNESS_TABLE['claude-code'].retention({ home: readable(join(h, 'settings.json')), managed, lastDays: last });
     if (r.state === 'unmeasured') bump(db, 'retention_unmeasured');
     else setMeta(db, `retention:${h}`, String(r.days));
-    setMeta(db, `retention_state:${h}`, r.state);
+    setMeta(db, RETENTION_STATE_META + h, r.state);
     days[h] = r.days;
   }
   const values = Object.values(days);
@@ -4396,11 +4396,27 @@ export function journalAudit(db, ctx, nowMs) {
   return true;
 }
 
+/** §9.15 judges a ROSTERED home (review 316 F13): a `retention_state:<home>` whose home is not in this pass's roster is
+ *  removed, since no pass can measure it again and status would name it unmeasured for ever. `retention:<home>`, the
+ *  last measured days, is kept: a home that rejoins keeps its last value, as D-4210 keeps an unreadable one's. The
+ *  caller passes a READABLE roster only. Returns the homes removed. */
+export function reconcileRetentionState(db, homes) {
+  const rostered = new Set(homes);
+  const gone = db.prepare('SELECT k FROM meta').all().map((r) => String(r.k))
+    .filter((k) => k.startsWith(RETENTION_STATE_META) && !rostered.has(k.slice(RETENTION_STATE_META.length)));
+  if (gone.length > 0) withTx(db, 'NORMAL', () => { const del = db.prepare('DELETE FROM meta WHERE k = ?'); for (const k of gone) del.run(k); });
+  return gone.map((k) => k.slice(RETENTION_STATE_META.length));
+}
+
 /** The periodic census, run by every scheduled pass after its tick (a pause included: it only reads and
- *  counts). An unreadable roster skips it (§9.2 step 2). A census in progress continues every pass until
- *  complete; a new one starts once SCAN_INTERVAL_MS has passed since the last start. */
+ *  counts). An unreadable roster skips it (§9.2 step 2); a readable one first removes the retention verdict of every
+ *  home that left it (F13). A census in progress continues every pass until complete; a new one starts once
+ *  SCAN_INTERVAL_MS has passed since the last start. */
 export function periodicCensus(db, ctx) {
-  if (ctx.homes.length === 0) return;
+  // §9.2 step 2: an UNREADABLE roster knows no home, so it skips the census and removes nothing (F13: unreadable is not empty).
+  if (ctx.rosterUnreadable) return;
+  reconcileRetentionState(db, ctx.homes);   // every pass, so a home that left stops WARNing at the next pass
+  if (ctx.homes.length === 0) return;       // a readable roster with no home: nothing to measure or count
   const nowMs = ctx.now();
   const last = Number(getMeta(db, 'census_ms') ?? 0);
   if (nowMs - last >= SCAN_INTERVAL_MS && stepCursorGet(db, 'export-census') === null) {

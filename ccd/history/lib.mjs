@@ -2365,6 +2365,11 @@ export const HEALTH_META = Object.freeze({
  *  doctor fixtures that plant them. D-4346 (history-permanent-failures-classified). */
 export const HEALTH_COUNTERS = Object.freeze({ blobUndecodable: 'blob_undecodable', drainRejected: 'drain_rejected' });
 
+/** The meta key prefix of each rostered home's retention verdict, `retention_state:<home>` (§9.15): the census writes it,
+ *  reconcileRetentionState removes it for a home that left the roster (review 316 F13), and status reads it (cli.mjs
+ *  `retention.unmeasured`). Spelled once, here. */
+export const RETENTION_STATE_META = 'retention_state:';
+
 const MODE_CHECKED_FILE_ROOTS = Object.freeze(['db', 'card', 'steer', 'journal', 'export']);
 
 /** The mode §9.6 wants for one entry under ~/.ccrc/history, by its

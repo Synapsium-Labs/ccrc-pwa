@@ -36,7 +36,7 @@ import { pathToFileURL } from 'node:url';
 import {
   EXIT, COVERAGE, SCHEMA_VERSION, UUID_RE, HARNESSES, CLI_STAT_DEADLINE_MS,
   historyPaths, readBoxEnvValue, decideCliStore, CONTROL_FILE_MAX, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
-  decideStatusReadFailure,
+  decideStatusReadFailure, RETENTION_STATE_META,
 } from './lib.mjs';
 import { StoreError, measureStoreFacts, openReader, userVersion, measuredSize, probeFts5, readBounded } from './store.mjs';
 // The health block's own imports (task 28). Namespace imports, so this block
@@ -272,8 +272,8 @@ function readStore(env, P, nowMs) {
     ex.first_deletion_ms = num('first_deletion_ms');
     env.retention.lowered = parseJsonOr(meta.get('retention_lowered'), null);
     env.retention.unmeasured = [...meta]
-      .filter(([k, v]) => k.startsWith('retention_state:') && v === 'unmeasured')
-      .map(([k]) => k.slice('retention_state:'.length))
+      .filter(([k, v]) => k.startsWith(RETENTION_STATE_META) && v === 'unmeasured')
+      .map(([k]) => k.slice(RETENTION_STATE_META.length))
       .sort();
     const unreadable = parseJsonOr(meta.get('redact_unreadable'), []);
     env.redact_unreadable = Array.isArray(unreadable) ? unreadable.filter((x) => typeof x === 'string') : [];

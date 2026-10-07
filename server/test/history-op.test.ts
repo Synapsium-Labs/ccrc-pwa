@@ -21,7 +21,7 @@ import { WRITING_FORMS, CARRIER_KILL_S, journalRecord, floorThreshold, historyPa
 import { createStore, openWriter, closeWriter, getMeta } from '../../ccd/history/store.mjs';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, preloadOptions, plantSession, plantTranscript, spoolLine, openStoreRO,
-  counters, journalRecords, PRELOADS, PASS_DRIVER, readTxlog, writes, type TxEv, type HistoryBox, type DriverDeps,
+  counters, journalRecords, PRELOADS, PASS_DRIVER, CLI, readTxlog, writes, type TxEv, type HistoryBox, type DriverDeps,
 } from './historyHelpers.js';
 
 beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
@@ -978,6 +978,34 @@ describe('O38: the export\'s due rule (B1 half)', () => {
     expect(metaOf(box, `retention:${h}`), 'a home never measured records no value').toBeNull();
     expect(metaOf(box, `retention_state:${h}`)).toBe('unmeasured');
     expect(metaOf(box, 'retention_min')).toBe('30');
+  });
+
+  it('RF5b F13: a home that leaves the roster stops being retention-unmeasured at the next pass; an unreadable roster removes nothing; an empty readable roster removes every one', () => {
+    const { box, MS, settings } = censusBox('ccrc-hist-rf5b13-');
+    const A = box.homes.find((x) => x.endsWith('.claude-a'))!;
+    settings(A, '{');
+    census(box, MS, 1);
+    expect(metaOf(box, 'retention_state:' + A)).toBe('unmeasured');
+    expect(metaOf(box, 'retention:' + A)).toBe('180');
+    // CONTROL for the guard: an unreadable roster knows no home, so it skips the census and removes nothing.
+    const control = runDriver({ ...box, homes: [] }, { offsetMs: 32 * MIN, managedSettings: MS }, ['--roster-unreadable']);
+    expect(control.code, control.stderr).toBe(0);
+    expect(metaOf(box, 'retention_state:' + A), 'an unreadable roster is not an empty one').toBe('unmeasured');
+    // A readable roster without A: A's verdict goes, its last measured days stay, and status stops naming it.
+    const gone = runDriver({ ...box, homes: box.homes.filter((h) => h !== A) }, { offsetMs: 33 * MIN, managedSettings: MS });
+    expect(gone.code, gone.stderr).toBe(0);
+    expect(metaOf(box, 'retention_state:' + A)).toBeNull();
+    expect(metaOf(box, 'retention:' + A), 'the last measured days are kept for a home that rejoins').toBe('180');
+    const st = spawnSync(process.execPath, ['--no-warnings', CLI, 'status', '--json'], {
+      cwd: box.home, encoding: 'utf8',
+      env: { ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions([PRELOADS.statfs]) },
+    });
+    const env = JSON.parse(st.stdout.trim().split('\n').at(-1)!) as { retention: { unmeasured: string[] } };
+    expect(env.retention.unmeasured).toEqual([]);
+    // A readable, EMPTY roster is not an unreadable one: it removes every verdict.
+    const empty = runDriver({ ...box, homes: [] }, { offsetMs: 34 * MIN, managedSettings: MS });
+    expect(empty.code, empty.stderr).toBe(0);
+    expect(q(box, "SELECT k FROM meta WHERE k LIKE 'retention\\_state:%' ESCAPE '\\'")).toEqual([]);
   });
 
   it('a managed-settings file with 90 under homes of 180 gives 90, and a managed-settings.d/ drop-in with 60 gives 60', () => {
