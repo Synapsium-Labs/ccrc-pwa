@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `505ffbff4`; review run 330 dispatched (R23) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `7253060da` after fix round 1; review run 333 waits at the cap (R25) |
 
 ## Decisions & deviations
 
@@ -356,6 +356,25 @@ time.
     commit-subject slip on `1a728b248` (the panel refuted it 2/3).
   - Next: run 322 back to `working`, then a `fix-round` mail. The fix round ends in a fresh wave-done, a new review
     run for the new tip, and then the operator's merge decision.
+- **R25 (2026-10-07 21:33)**, fix round 1's wave-done is verified, and its review waits at the cap.
+  - Mail 3933 claims `7253060da`. Re-measured: `origin/ws/calm-basin`, the workspace `HEAD` and PR #322's head all
+    read `7253060da`, the workspace is clean, and the PR is open. The nine commits since `505ffbff4` touch ten files.
+    `server/src` is unchanged, the one `shared/api.ts` hunk is a new key inside wave 1's stall-watch block, and
+    `merge-tree` against `origin/main` (`8c446eab0`) is clean. The server took the fingerprint, and run 322 is
+    `awaiting-review`. Every required CI check on run 37687688296 is green; the macOS legs were still running and
+    gate nothing. The child's evidence is copied to `w2-fix1-child-evidence/`.
+  - F1's line, for the operator before the merge: "Not confirmed — the server did not answer; the screen will
+    re-check." Operator question 2 now covers only the 2xx-but-unreadable arm's "Saved —".
+  - The worker also corrected the plan's prose on two candidate entries, a residue bullet and operator question 2,
+    to match what ships, and offered to revert it. It is kept, because a plan that describes the old behaviour would
+    mislead. The review checks only whether the corrections are accurate.
+  - The worker's three observations go to the review. One is caused by R24's shape for F3: with 7 200 000 stored,
+    the built-in option is already selected, so resetting to `default` takes two changes. The other two: the
+    device-word scan does not read `settingsText.ts`, and `coord-db` matches one spelling of the DDL.
+  - Review run 333 is open (planned) for the new tip. Its brief is `w2-fix1-review-brief.md`: the held-out panel on
+    `505ffbff4..<tip>`, R24's nine items, the whole-wave properties, the suites and the citation instrument. The
+    rolling daily cap reads 24 of 24, and its next age-out is 22:20:17 (run 307), so one session-only wake at 22:21
+    sends the payload once.
 
 ## Carried constraints (reviewers get these)
 
