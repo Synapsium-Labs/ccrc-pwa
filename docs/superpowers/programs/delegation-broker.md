@@ -526,12 +526,12 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
   `agent_id` that the meta join makes eligible (review 324 F3, F4). The observe stage's parser (wave 3) must not use
   the presence of `agent_type` to decide whether an event qualifies — spec §5.2 activity id, §5.3, §5.4 rung 3 (a
   non-empty `agent_id` does not by itself place an event inside a subagent).
-  A second shipped reader already places an event by a raw non-empty `agent_id`: the hook's turn-marker classifier
-  (`paid` in `ccd/session-hook.sh`) skips the main-thread marker write for such an event, so each phantom PreToolUse
+  A second reader, already shipped, places an event by a raw non-empty `agent_id`: the hook's turn-marker classifier
+  (`paid` in `ccd/session-hook.sh`) skips the main-thread marker write for such an event, so each such PreToolUse
   above was dropped from its turn marker as a subagent's. No harm was measured, because earlier main-thread events
-  had already marked both turns `working` (review 324 F10). Wave 3 resolves that reader against this contract with a
-  red-first phantom-main-thread case and without assuming `agent_type`, after its first-commit `-t "$TMUX_PANE"`
-  correction unless its approved plan proves the two must be one atomic change.
+  had already marked both turns `working` (review 324 F10). Wave 3 must resolve that reader against this contract
+  with a red-first phantom-main-thread case and without assuming `agent_type`, after its first-commit
+  `-t "$TMUX_PANE"` correction unless its approved plan proves the two must be one atomic change.
 
 ## Decisions & deviations
 
