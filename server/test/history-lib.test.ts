@@ -2206,6 +2206,34 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     for (const w of want) expect(healthLib.HEALTH_REMEDIES[w]!.length, w).toBeGreaterThan(0);
   });
 
+  // FR3-d (final review C11): B1's `ccrc history` answers `status` only, so a remedy doctor relays must name an action a B1 build has.
+  it('no remedy sends the operator to a ccrc history verb this build refuses, unless it says the verb arrives with W1-B2 (FR3-d)', () => {
+    const texts: Array<[string, string]> = Object.entries(healthLib.HEALTH_REMEDIES).map(([w, t]) => [`static ${w}`, t]);
+    const dynamic: Array<Partial<healthLib.HealthInputs>> = [
+      ...WORD_CASES.map(([, , o]) => o),
+      ...(['store-missing', 'store-unbound', 'store-recoverable', 'store-zero-byte', 'store-schema-missing'] as const).flatMap((reason) =>
+        [{ exit: 5, reason }, { exit: 5, reason, backupsDb: ['20261001T000000Z.db'], journalStoreDirs: ['0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e'] }]),
+      { sizeBytes: 41 * 2 ** 30 }, { capturePause: 'at-cap', sizeBytes: 50 * 2 ** 30 },
+    ];
+    for (const o of dynamic) {
+      const r = healthLib.deriveHealth(base(o));
+      for (const i of [...r.warn, ...r.fail]) texts.push([`derived ${i.word}`, i.remedy]);
+    }
+    let named = 0;
+    for (const [what, text] of texts) {
+      const verbs = text.match(/ccrc history (?:doctor --[a-z]+|prune)/g) ?? [];
+      named += verbs.length;
+      if (verbs.length > 0) expect(text, `${what} names ${verbs.join(', ')} without saying it arrives with W1-B2`).toMatch(/arrives? with W1-B2/);
+      expect(text, `${what} names the export writer's update as the action`).not.toMatch(/update (?:this box )?to a build with the export writer/);
+    }
+    expect(named, 'the scan found no verb to check: the pin would pass on anything').toBeGreaterThan(5);
+  });
+  it('export-overdue tells the operator what a B1 build can do: keep the store and raise cleanupPeriodDays (FR3-d)', () => {
+    const r = healthLib.HEALTH_REMEDIES['export-overdue']!;
+    expect(r).toContain('cleanupPeriodDays');
+    expect(r).toContain('W1-B4');
+  });
+
   it('the off remedy names the switch through SWITCHES, the one spelling (O13)', () => {
     const r = healthLib.deriveHealth(base({ historyOff: true }));
     expect(r.warn.find((i) => i.word === 'off')!.remedy).toContain(healthLib.SWITCHES.off);
@@ -2334,7 +2362,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
   it('store-missing names --restore with the backup db/backups holds, and --rebuild', () => {
     const r = healthLib.deriveHealth(base({ exit: 5, reason: 'store-missing', backupsDb: ['20261001T000000Z.db'] }));
     expect(r.fail[0]!.remedy).toContain('ccrc history doctor --restore 20261001T000000Z.db');
-    expect(r.fail[0]!.remedy).toContain('ccrc history doctor --rebuild');
+    expect(r.fail[0]!.remedy).toContain('--rebuild');
   });
   it('mode-wrong names each path and its chmod', () => {
     const r = healthLib.deriveHealth(base({ modesWrong: [{ path: '/data/history-db', want: '0700', got: '0755' }] }));
@@ -2344,6 +2372,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
   it('migration-needs-op names its estimate and ccrc history doctor --migrate; migration-refused names the filesystem and the room', () => {
     const op = healthLib.deriveHealth(base({ migration: 'snapshot-needs-op', sizeBytes: 50_000_000_000, copyBps: 10_000_000 }));
     expect(op.fail[0]!.detail).toContain('5000 s');
+    expect(op.fail[0]!.remedy).toContain('ccd-history-sweep --op migrate');
     expect(op.fail[0]!.remedy).toContain('ccrc history doctor --migrate');
     const room = healthLib.deriveHealth(base({ migration: 'refuse-low-disk', sizeBytes: 1_000, thresholdBytes: 9_000, freeBytes: 500 }));
     expect(room.fail[0]!.detail).toContain('/home/u/.ccrc/history/db');

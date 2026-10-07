@@ -2135,7 +2135,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'lag-unmeasured': 'none needed: lag is measured once every file has reached its end once',
   'tick-stale': `read the sweep: ${SWEEP_LOG}, and systemctl --user status ccd-history-sweep.timer`,
   'lag-high': `read the sweep: ${SWEEP_LOG}; a backlog drains within each run's budget, a stuck file shows the same lag every tick`,
-  'at-cap': 'raise the cap (an integer, in GB), or free space with ccrc history prune',
+  'at-cap': 'raise the cap (an integer, in GB); ccrc history prune, which frees space, arrives with W1-B2',
   'capture-paused-low-disk': 'free space on the store\'s filesystem; capture resumes by itself above the floor',
   'mode-wrong': 'chmod each named path to the mode it wants',
   'schema-newer': 'update this box to the build that wrote the store (ccrc update); this build still reads what it knows',
@@ -2143,33 +2143,33 @@ export const HEALTH_REMEDIES = Object.freeze({
   'store-unmeasured': 'make store.id, store.id.pending, store.writer and the DB under ~/.ccrc/history readable by this user; nothing is created, adopted or restored meanwhile',
   'recovery-stalled': `read the sweep: ${SWEEP_LOG}`,
   'store-root-dangling': `mount the volume behind ~/${STORE_DB_REL}, or remove the dangling link so the next tick stores on the home filesystem`,
-  'store-missing': 'restore a backup (ccrc history doctor --restore <file>), or rebuild from the journal (ccrc history doctor --rebuild)',
+  'store-missing': `ccrc history doctor --restore and --rebuild arrive with W1-B2; until then capture stays held, and a backup under ~/${STORE_DB_REL}/backups can be copied to history.db by hand`,
   'store-mismatch': 'this DB belongs to another store (its meta.store_id is not store.id): put the right DB back, or move this one aside',
-  'store-unbound': `if the store is this box's, bind it: ccrc history doctor --adopt; if it is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside`,
+  'store-unbound': `if the store is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place: ccrc history doctor --adopt, which binds it, arrives with W1-B2 and capture stays held until then`,
   'store-unreachable': `the store's filesystem did not answer: check the mount behind ~/${STORE_DB_REL}`,
-  'store-recoverable': 'restore (ccrc history doctor --restore <file>) or rebuild (ccrc history doctor --rebuild) from what was found, or move that evidence aside to start a new store',
+  'store-recoverable': 'ccrc history doctor --restore and --rebuild, which recover from what was found, arrive with W1-B2: keep that evidence until then, or move it aside to start a new store',
   'store-wal-orphaned': 'move history.db-wal and history.db-shm (and any history.db) aside together; then let the next tick create a store, or restore one',
-  'store-zero-byte': 'the DB was truncated: move it aside, then restore (ccrc history doctor --restore <file>) or rebuild (ccrc history doctor --rebuild)',
-  'store-schema-missing': 'the DB has no meta.store_id, so it is not a history store this build can bind: move all three DB files aside together, then restore (ccrc history doctor --restore <file>) or rebuild (ccrc history doctor --rebuild)',
+  'store-zero-byte': `the DB was truncated: move it aside (keep it); ccrc history doctor --restore and --rebuild arrive with W1-B2, and until then a backup under ~/${STORE_DB_REL}/backups can be copied to history.db by hand`,
+  'store-schema-missing': `the DB has no meta.store_id, so it is not a history store this build can bind: move all three DB files aside together (keep them); ccrc history doctor --restore and --rebuild arrive with W1-B2, and until then a backup under ~/${STORE_DB_REL}/backups can be copied to history.db by hand`,
   'migration-refused': 'free space on the store\'s filesystem: the pre-migration snapshot needs a store\'s size above the floor',
-  'migration-needs-op': 'run the migration by hand, under no carrier timeout: ccrc history doctor --migrate',
+  'migration-needs-op': 'run the migration by hand, under no carrier timeout: ~/.local/bin/ccd-history-sweep --op migrate (ccrc history doctor --migrate arrives with W1-B2)',
   'journal-unwritable': 'free space on the home filesystem, or make ~/.ccrc/history/journal writable: drained spool files are held until the journal append succeeds',
   'export-segment-newer': 'update this box to the build that wrote the segment (ccrc update)',
-  'export-overdue': 'take a backup now (ccrc history doctor --backup), and update to a build with the export writer (W1-B4): the store may be the only copy of this text',
+  'export-overdue': 'the store may be the only copy of this text: keep ~/.ccrc/history (never --purge-history), and raise cleanupPeriodDays in each home\'s settings.json (or the managed settings) so Claude Code keeps transcripts until the export writer ships (W1-B4)',
   'status-unreadable': `run ccrc history status --json by hand, and read the sweep: ${SWEEP_LOG}`,
   'fts-unavailable': 'none needed for capture; run Node >= 22.16.0 for FTS5 search',
   'cap-malformed': `write a positive integer (GB) into the cap file, or remove it for the default of ${CAP_DEFAULT_GB}`,
   'redact-source-unreadable': 'make the named secret files readable by this user; a value never yet seen in them goes unredacted meanwhile',
-  'cap-near': 'raise the cap, or free space with ccrc history prune, before capture pauses at it',
+  'cap-near': 'raise the cap before capture pauses at it; ccrc history prune, which frees space, arrives with W1-B2',
   'breaker-open': `none needed: the breaker closes by itself; read the sweep for why it opened: ${SWEEP_LOG}`,
   'roster-unreadable': 'make ~/.ccrc/accounts.sh readable (ccrc install regenerates it)',
   'root-is-symlink': 'make ~/.ccrc/history a real 0700 directory: only its db/ may be a link',
-  'export-due': 'update this box to a build with the export writer (W1-B4); until then the text stays on disk until its retention passes',
+  'export-due': 'the export writer arrives with W1-B4: until then the text stays on disk until its retention passes, and raising cleanupPeriodDays in each home\'s settings.json keeps transcripts longer',
   'export-paused-low-disk': 'free space on the home filesystem',
   'retention-unmeasured': 'make cleanupPeriodDays readable in the named homes\' settings.json',
   'retention-lowered': 'set cleanupPeriodDays in the named home\'s settings.json to at least the others\' value',
   'export-segment-missing': 'carry the export directory from the box the store came from, or let the rows export again',
-  'journal-record-skipped': 'none needed if the journal came from a newer build; otherwise ccrc history doctor --repair',
+  'journal-record-skipped': `none needed if the journal came from a newer build; otherwise ccrc history doctor --repair arrives with W1-B2, and until then read the sweep: ${SWEEP_LOG}`,
   'journal-growth': `read the sweep: ${SWEEP_LOG}; the journal grows faster than twice its estimate`,
 });
 
@@ -2184,9 +2184,9 @@ function evidenceOf(h) {
 function remedyFor(word, h) {
   switch (word) {
     case 'at-cap':
-      return `raise the cap in ${h.capFile} (an integer, in GB), or free space with ccrc history prune; capture resumes below the cap`;
+      return `raise the cap in ${h.capFile} (an integer, in GB); capture resumes below the cap (ccrc history prune, which frees space, arrives with W1-B2)`;
     case 'cap-near':
-      return `raise the cap in ${h.capFile} (an integer, in GB), or free space with ccrc history prune, before capture pauses at it`;
+      return `raise the cap in ${h.capFile} (an integer, in GB) before capture pauses at it (ccrc history prune, which frees space, arrives with W1-B2)`;
     case 'cap-malformed':
       return `write a positive integer (GB) into ${h.capFile}, or remove the file for the default of ${CAP_DEFAULT_GB}`;
     case 'capture-paused-low-disk':
@@ -2197,12 +2197,12 @@ function remedyFor(word, h) {
       return `mount the volume behind ${h.dbPath}, or remove the dangling link ~/${STORE_DB_REL} so the next tick stores on the home filesystem`;
     case 'store-missing':
       return h.backupsDb.length > 0
-        ? `restore a backup: ccrc history doctor --restore ${h.backupsDb[0]} (db/backups holds ${h.backupsDb.join(', ')}), or rebuild from the journal: ccrc history doctor --rebuild`
-        : 'rebuild from the journal: ccrc history doctor --rebuild';
+        ? `ccrc history doctor --restore ${h.backupsDb[0]} and --rebuild arrive with W1-B2 (db/backups holds ${h.backupsDb.join(', ')}); until then capture stays held, and a backup there can be copied to history.db by hand`
+        : 'ccrc history doctor --rebuild, which rebuilds from the journal, arrives with W1-B2; until then capture stays held';
     case 'store-unbound':
-      return `if store ${h.storeId ?? '(unknown)'} is this box's, bind it: ccrc history doctor --adopt; if it is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside`;
+      return `if store ${h.storeId ?? '(unknown)'} is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place: ccrc history doctor --adopt, which binds it, arrives with W1-B2 and capture stays held until then`;
     case 'store-recoverable':
-      return `restore (ccrc history doctor --restore <file>) or rebuild (ccrc history doctor --rebuild) from ${evidenceOf(h)}; or move that evidence aside to start a new store`;
+      return `ccrc history doctor --restore and --rebuild, which recover from ${evidenceOf(h)}, arrive with W1-B2: keep that evidence until then, or move it aside to start a new store`;
     case 'migration-refused':
       return h.thresholdBytes !== null && h.sizeBytes !== null
         ? `free space on the filesystem holding ${h.dbPath} until more than ${h.thresholdBytes + h.sizeBytes} bytes are free (the snapshot needs the store's size above the floor)`
