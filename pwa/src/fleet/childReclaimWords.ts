@@ -18,13 +18,16 @@ import { isMarkerState, type ChildReclaimAttention, type MarkerState } from '../
  *  is `'not paused'`) — and a stale box reveals itself through the tap's own
  *  inline 501, not through this word overclaiming what is running. */
 export const CHILD_RECLAIM_MARKER_WORD: Record<MarkerState, string> = {
-  clear: 'reclaim not paused',
-  set: 'child reclaim paused',
+  // THE FLEET'S ONE CLEANUP SWITCH since workspace lifecycle wave 3b (that
+  // design's §5.3 and §6 item 1): `reclaim-paused` stops child reclamation AND
+  // the expiry of archived workspaces, so the words name the cleanup.
+  clear: 'cleanup not paused',
+  set: 'cleanup paused',
   // Names no cause. Two producers reach this word: the server's own
   // `unmeasurable` (its registry did not list) and `childReclaimMarker`'s
   // degrade arm for a value this build does not recognise — where the
   // registry DID list and a newer server said something this row cannot read.
-  unmeasurable: 'reclaim switch unreadable',
+  unmeasurable: 'cleanup switch unreadable',
 };
 
 export const CHILD_RECLAIM_MARKER_GLYPH: Record<MarkerState, string> = {

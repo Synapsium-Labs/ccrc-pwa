@@ -927,7 +927,7 @@ directly instead, with no `review-report-live` deferral. Either way, the
 reviewer is reclaimed only after the run it reviewed has closed. Nothing
 changes in how you read or cite the report (SKILL.md step 6). Your own
 workspace, and any workspace dispatch did not mint, is never reclaimed — it
-stays until a human cleans it up.
+stays until a human cleans it up, or — when it carries no child marker — until the server cleans it up seven days after it is archived, once the operator has armed the server’s expiry lane (until then the lane only records what it would expire).
 
 ## What happened to a workspace that is gone
 

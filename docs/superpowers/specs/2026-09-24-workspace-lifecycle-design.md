@@ -437,6 +437,31 @@ and the README and `wave-lifecycle.md` §6 text above are wave 3b's, planned aft
   existing `meas.archivedAt`; `ws-audit --expire` prints a document of its own (`session`, `mode`, `archivedAt`,
   `alive`, `exists`, `reaping`, `sensitive`, `resume` when resuming, `verdict`, `detail`, `token` when it mints one).
 
+**As wave 3b builds the lane** (amended with its plan, `docs/superpowers/plans/2026-10-06-workspace-lifecycle-wave3b-expiry-lane.md`;
+each item is a departure named there).
+- **The words carry the arming condition** (the coordinator's ruling). README, `wave-lifecycle.md` §6 and coordinator
+  clause 3 say that an archived workspace is cleaned up seven days after its archive once the operator has armed the
+  lane, and that until then the lane only records what it would expire, so they are true before and after the arming.
+  The PWA's archive-confirm copy says what an armed fleet does; whether to hedge it until then is the operator's.
+- **The lane ships shadowed** (the coordinator's safety ruling, the scope sweep's precedent). Until `$REG/expire-lane-live`
+  exists — touched by the operator by hand on the fleet box; nothing in the tree writes it — a due workspace is audited
+  and recorded ("would expire", a feed row and an attention entry naming its archive, its expiry instant and how many
+  secret-shaped files would be dropped), and `ws-expire` is never composed. `reclaim-paused` stops the lane entirely,
+  shadow included. Armed, at most one `ws-expire` is composed per sweep pass, fleet-wide.
+- **The threshold is ccd's.** `ws-audit --expire`'s document gains `expiresAt` (`archivedAt + WS_EXPIRE_AFTER_S`), on
+  `expirable` and on `not-expired` alike, and `archivedAt` is set on `not-expired` too. The lane reads the instant through
+  one reader, audits a row once per archive to learn it, and composes nothing for a document without the key (an older
+  ccd). An `in-use` refusal's document also names each process: its pid, its command and its working directory.
+- **A sibling pass, not a branch.** The lane runs beside `sweepChildReclaim` on the same tick, cadence and switch, with its
+  own memory, verdict, executor, feed rows and attention list, so neither lane's early return silences the other.
+- **A return clears the archive inside its gate** (3893's residual, closed before the lane composes the verb): `start`,
+  `enable`, `ensure` and `swap` unarchive an archived row while they hold the reap lock, journaled `unarchive` under the
+  verb's name, so an expiry that takes the lock next refuses `not-archived`. Holding the lock across the journal instead
+  was measured and refused: a supervised start spawns its pane from the unit's own process, which would refuse against it.
+- **A standing `in-use` is expected.** It is asked again every pass and, after a few, listed with the pid, its command
+  and its path; the text never tells an operator to end a pid without naming what it is (the fleet's own tmux server is
+  also a `tmux: server`). The lane never kills.
+
 ### 5.4 Stage 4 — the dead-coordinator lane (L4)
 
 **The verdict is widened, not re-derived.** `measureClaimant` returns `{state, why}`, and the lifecycle word lives
@@ -516,8 +541,11 @@ agent frame in remote mode.
   `interrupt` and `programme`, and its answer's `archived`, `stopped` and `ended`. There is no `FLEET_PROTO` bump.
 - **CCR-15 texts this spec amends.** Each is amended when this spec's wave lands, after the CCR-15 wave that wrote
   it has merged:
-  1. `reclaim-paused` "and nothing else" becomes the cleanup switch (§5.3).
-  2. Coordinator clause 3's closing sentence (§5.3).
+  1. `reclaim-paused` "and nothing else" becomes the cleanup switch (§5.3). Amended by this design’s wave 3b: CCR-15's
+     §5.8 now says the pause stops the expiry of archived workspaces too.
+  2. Coordinator clause 3's closing sentence (§5.3). Amended by this design’s wave 3b: the clause, README and
+     `wave-lifecycle.md` §6 say the server cleans an archived workspace up seven days after its archive once the
+     operator has armed the lane, and that until then the lane only records what it would expire.
   3. Spec §5.9 "No child ever appears in the reap or archive sheets". A person may now archive a child by hand, and
      "Archive all" skips children (§5.1).
   4. Wave 3's "exactly ONE addition" to `ws-reap`'s resume fork: the `expire:` arm is a second (§5.3). Amended by
