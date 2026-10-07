@@ -10,6 +10,7 @@ import { ChildReclaimBanner } from '../src/fleet/ChildReclaimBanner';
 import {
   CHILD_RECLAIM_MARKER_GLYPH, CHILD_RECLAIM_MARKER_WORD, childReclaimAttentionOf, childReclaimMarker,
 } from '../src/fleet/childReclaimWords';
+import { EXPIRY_KIND_WORD, expiryAttentionOf } from '../src/fleet/expiryWords';
 import { COORD_CONFIRM_MS } from '../src/fleet/coordWords';
 import { ApiError, COORD_UNSUPPORTED_TEXT } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
@@ -70,7 +71,7 @@ describe('the reclaim row', () => {
     const glyph = document.querySelector('.child-reclaim-glyph');
     expect(glyph?.textContent).toBe(CHILD_RECLAIM_MARKER_GLYPH.set);
     expect(glyph).toHaveAttribute('aria-hidden', 'true');
-    expect(screen.getByRole('button', { name: 'Resume reclaim' })).toHaveClass('child-reclaim-toggle');
+    expect(screen.getByRole('button', { name: 'Resume cleanup' })).toHaveClass('child-reclaim-toggle');
   });
 
   it('degrades a MarkerState from a newer build to unmeasurable, never a blank cell', () => {
@@ -84,7 +85,7 @@ describe('the reclaim row', () => {
   // read (above) and a registry that did not list at all, so it names
   // neither cause.
   it("the 'unmeasurable' word blames no cause — it also covers a value the registry did list", () => {
-    expect(CHILD_RECLAIM_MARKER_WORD.unmeasurable).toBe('reclaim switch unreadable');
+    expect(CHILD_RECLAIM_MARKER_WORD.unmeasurable).toBe('cleanup switch unreadable');
     expect(CHILD_RECLAIM_MARKER_WORD.unmeasurable).not.toMatch(/registry/i);
   });
 
@@ -95,7 +96,7 @@ describe('the reclaim row', () => {
   // capability-less box's honesty comes from the tap's own inline 501, not
   // from this word overclaiming what the frame cannot back.
   it("the 'clear' word claims only the switch's state — never that reclamation is running", () => {
-    expect(CHILD_RECLAIM_MARKER_WORD.clear).toBe('reclaim not paused');
+    expect(CHILD_RECLAIM_MARKER_WORD.clear).toBe('cleanup not paused');
     expect(CHILD_RECLAIM_MARKER_WORD.clear).not.toMatch(/reclaimed when|runs close|is running/i);
   });
 
@@ -104,7 +105,7 @@ describe('the reclaim row', () => {
     seen(store, coord({ reclaim: 'clear' }));
     const childReclaimPause = vi.fn(() => new Promise<void>(() => {}));
     render(<ChildReclaimBanner store={store} childReclaimPause={childReclaimPause} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Pause reclaim' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pause cleanup' }));
     expect(childReclaimPause).toHaveBeenCalledWith('on');
     expect(await screen.findByText('pausing…')).toBeInTheDocument();
     expect(screen.getByText(CHILD_RECLAIM_MARKER_WORD.clear)).toBeInTheDocument();
@@ -115,7 +116,7 @@ describe('the reclaim row', () => {
     seen(store, coord({ reclaim: 'set' }));
     const childReclaimPause = vi.fn(() => new Promise<void>(() => {}));
     render(<ChildReclaimBanner store={store} childReclaimPause={childReclaimPause} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Resume reclaim' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume cleanup' }));
     expect(childReclaimPause).toHaveBeenCalledWith('off');
   });
 
@@ -126,7 +127,7 @@ describe('the reclaim row', () => {
     seen(store, coord({ reclaim: 'set' }));
     const childReclaimPause = vi.fn(() => new Promise<void>(() => {}));
     render(<ChildReclaimBanner store={store} childReclaimPause={childReclaimPause} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Resume reclaim' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume cleanup' }));
     expect(childReclaimPause).toHaveBeenCalledWith('off');
     expect(await screen.findByText('resuming…')).toBeInTheDocument();
     expect(screen.getByText(CHILD_RECLAIM_MARKER_WORD.set)).toBeInTheDocument();
@@ -159,7 +160,7 @@ describe('the reclaim row', () => {
     seen(store, { ...coord(), reclaim: 'quarantined' });
     expect(screen.getByText('pausing…')).toBeInTheDocument();
     seen(store, coord({ reclaim: 'set' }));
-    expect(await screen.findByText('Resume reclaim')).toBeInTheDocument();
+    expect(await screen.findByText('Resume cleanup')).toBeInTheDocument();
     expect(screen.getByText(CHILD_RECLAIM_MARKER_WORD.set)).toBeInTheDocument();
   });
 
@@ -505,5 +506,55 @@ describe('the collapsed kept line', () => {
     // A member wrong in only its sessionId is dropped alone.
     const oneBadId = { ...good, members: [{ sessionId: 7, runId: 1 }, ...good.members] };
     expect(childReclaimAttentionOf({ childReclaimAttention: [oneBadId] })).toEqual([good]);
+  });
+});
+
+// WORKSPACE LIFECYCLE WAVE 3b (spec 2026-09-24 §5.3, §6 item 1): `reclaim-paused` is the fleet's ONE cleanup switch —
+// it stops child reclamation AND the expiry of archived workspaces — so the row's words name the cleanup, not the
+// children alone, and the expiry lane's own list renders in the same row, under the children's, from its own field.
+describe('the one cleanup switch (wave 3b)', () => {
+  it('its words name the cleanup — set, clear and unreadable alike', () => {
+    expect(CHILD_RECLAIM_MARKER_WORD).toEqual({
+      clear: 'cleanup not paused', set: 'cleanup paused', unmeasurable: 'cleanup switch unreadable' });
+    const store = makeStore();
+    seen(store, coord({ reclaim: 'clear' }));
+    render(<ChildReclaimBanner store={store} />);
+    expect(screen.getByRole('button', { name: 'Pause cleanup' })).toBeInTheDocument();
+  });
+
+  it('lists the archived workspaces the expiry lane reports, under the children, each with the server’s sentence', () => {
+    const store = makeStore();
+    seen(store, { ...coord({ childReclaimAttention: [item()] }), expiryAttention: [
+      { sessionId: 'ccrc-pwa-brisk-mesa', kind: 'in-use', archivedAt: 1, expiresAt: 2, at: 3,
+        sentence: 'kept: process 3453108 (“tmux: server”) in /w/brisk-mesa has its working directory in this archived workspace' },
+      { sessionId: 'ccrc-pwa-old-dune', kind: 'would-expire', archivedAt: 1, expiresAt: 2, at: 4,
+        sentence: 'would be cleaned up now: the cleanup is not armed (shadow), so nothing was deleted.' },
+    ] });
+    render(<ChildReclaimBanner store={store} />);
+    const list = screen.getByRole('list', { name: 'archived workspaces the cleanup is reporting' });
+    expect(list.textContent).toContain(`${EXPIRY_KIND_WORD['in-use']} · ccrc-pwa-brisk-mesa`);
+    expect(list.textContent).toContain('process 3453108 (“tmux: server”)');
+    expect(list.textContent).toContain(`${EXPIRY_KIND_WORD['would-expire']} · ccrc-pwa-old-dune`);
+    expect(list.querySelectorAll('button, a'), 'a report, never a tap').toHaveLength(0);
+    // The children's list is its own, and holds no expiry.
+    const children = screen.getByRole('list', { name: 'children reclamation could not clean up' });
+    expect(children.textContent).not.toContain('brisk-mesa');
+  });
+
+  it('the one reader: an absent field reads as no items, a malformed member is dropped alone, an unknown kind is "reported"', () => {
+    expect(expiryAttentionOf(coord())).toEqual([]);
+    expect(expiryAttentionOf({ expiryAttention: [{ sessionId: 'a', kind: 'held', sentence: 's' }, { sessionId: 7 }] }))
+      .toEqual([{ sessionId: 'a', kind: 'held', sentence: 's' }]);
+    const store = makeStore();
+    seen(store, { ...coord(), expiryAttention: [{ sessionId: 'x', kind: 'newer-kind', sentence: 's' }] });
+    render(<ChildReclaimBanner store={store} />);
+    expect(screen.getByRole('list', { name: 'archived workspaces the cleanup is reporting' }).textContent).toContain('reported · x');
+  });
+
+  it('renders no expiry list when there is nothing to report', () => {
+    const store = makeStore();
+    seen(store, { ...coord(), expiryAttention: [] });
+    render(<ChildReclaimBanner store={store} />);
+    expect(screen.queryByRole('list', { name: 'archived workspaces the cleanup is reporting' })).toBeNull();
   });
 });

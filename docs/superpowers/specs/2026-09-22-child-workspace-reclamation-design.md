@@ -648,7 +648,9 @@ evaluated only by the server fails open into deletion when the pause lands mid-f
 snapshot is one tick stale, or when a crashed reclaim resumes. ccd already states this rule for its own
 destructive verb: every guard is evaluated on the box, at the instant of deletion.
 
-Default: running. Pausing stops reclamation fleet-wide and nothing else; unpausing drains what queued.
+Default: running. Pausing stops reclamation fleet-wide, and — since workspace lifecycle wave 3b — the expiry of archived
+workspaces too: it is the fleet's one cleanup switch (`2026-09-24-workspace-lifecycle-design.md` §5.3). Nothing else;
+unpausing drains what queued.
 
 ### 5.9 What the operator sees
 
@@ -803,7 +805,7 @@ without the marker is simply not a child, which is the same fallback the pre-pol
 refusals, the audit-token ceremony, and every PWA surface that drives them. (Qualified by workspace lifecycle's
 wave 3, which adds two refusals of its own: `ws-reap` refuses `expire-in-progress` when the breadcrumb starts
 `expire:`, beside its `reclaim:` mirror, and `ws-restore` refuses `in-progress` under its lock when an `expire:`
-breadcrumb stands. Their grants and every other refusal stand. See
+breadcrumb stands, or a breadcrumb that stands but cannot be read. Their grants and every other refusal stand. See
 `2026-09-24-workspace-lifecycle-design.md` §5.3.)
 
 ---

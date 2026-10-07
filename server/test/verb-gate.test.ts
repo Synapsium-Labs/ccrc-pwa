@@ -90,9 +90,12 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
  * argv. `reclaim-pause` (wave 4): its route gates on
  * `capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)` alone. For both, a box
  * that echoes the token necessarily dispatches the verb, so `route`'s
- * argument above holds for each of them unchanged.
+ * argument above holds for each of them unchanged. `ws-expire` (workspace
+ * lifecycle wave 3b): the expiry executor composes it only behind
+ * `capSupported(deps.fleetState, EXPIRE_CAP)`, asked again in the act's own
+ * scope (`coord/expireArchived.ts`), and the same argument holds.
  */
-const CAP_GATED_VERBS: ReadonlySet<string> = new Set(['route', 'ws-reclaim', 'reclaim-pause']);
+const CAP_GATED_VERBS: ReadonlySet<string> = new Set(['route', 'ws-reclaim', 'reclaim-pause', 'ws-expire']);
 
 /**
  * Args that make each `CCD_ARGV` entry build without throwing, keyed by

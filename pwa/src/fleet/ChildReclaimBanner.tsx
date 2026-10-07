@@ -30,6 +30,7 @@ import {
   CHILD_RECLAIM_MARKER_GLYPH, CHILD_RECLAIM_MARKER_WORD, childReclaimAttentionOf, childReclaimMarker,
 } from './childReclaimWords';
 import { inlinePauseError } from './CoordBanner';
+import { ExpiryAttention } from './ExpiryAttention';
 import { api, apiErrorText } from '../lib/api';
 import { toast } from '../components/Toast';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -117,7 +118,7 @@ export function ChildReclaimBanner({
     phase === 'pausing' ? 'pausing…'
     : phase === 'resuming' ? 'resuming…'
     : phase === 'unconfirmed' ? 'unconfirmed — check /runs'
-    : marker === 'set' ? 'Resume reclaim' : 'Pause reclaim';
+    : marker === 'set' ? 'Resume cleanup' : 'Pause cleanup';
 
   return (
     <div className="child-reclaim-banner">
@@ -152,6 +153,9 @@ export function ChildReclaimBanner({
           ))}
         </ul>
       )}
+      {/* Workspace lifecycle wave 3b: the expiry lane's own list, under the children's — the same switch stops both
+          lanes, and the two lists stay two (child reclamation's run chip never reads this one). */}
+      <ExpiryAttention coord={coord} />
     </div>
   );
 }

@@ -2831,6 +2831,9 @@ describe('Archive all in the Released fold (workspace lifecycle spec §5.1)', ()
     fireEvent.click(screen.getByRole('button', { name: 'Archive all 2 released workspaces in alpha' }));
     expect(archive).not.toHaveBeenCalled();                       // the confirm comes first
     expect(await screen.findByText(/2 of them still have a live pane, which is stopped/)).toBeInTheDocument();
+    // Every archive starts the seven days (workspace lifecycle spec §5.2, §11 item 2): the bulk confirm promises no
+    // more than the single one does (wave 3b).
+    expect(screen.getByText(/Restore brings any of them back for 7 days; after that they are cleaned up\./)).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Archive 2' }));
     await waitFor(() => expect(archive).toHaveBeenCalledTimes(2));
     expect(archive.mock.calls).toEqual([['a-one'], ['a-two']]);
@@ -2935,5 +2938,93 @@ describe('Update all on the fleet screen (programme wave 5)', () => {
     await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
     expect(apply).toHaveBeenCalledWith({ all: true, tag: 'v0.0.9' });
     await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
+  });
+});
+
+// ── centralised-update programme wave 14, R15: the halt on the home screen ───
+// The operator's 2026-10-05 12:12 screenshot: two banners, neither naming the halt, and the only Ack in Settings.
+// On the real screen, with the screen's ONE poll: the halt banner names the failed node and acks it in place, Update
+// all is disabled with its reason, the skew banner points at the halt, and the Ack re-polls the screen.
+describe('the halt on the fleet screen (programme wave 14, R15)', () => {
+  const FLEET = '0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10';
+  const SERVER = '5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93';
+  const rowOf = (nodeId: string, role: 'fleet' | 'server', version: string, update: NodeWire['update']): NodeWire => ({
+    nodeId, role, label: role, os: 'linux',
+    current: { sha: (role === 'fleet' ? 'b' : 'c').repeat(40), ref: 'main', builtAt: '2026-10-05T12:00:00Z', dirty: false, version },
+    stampRead: 'ok', installState: 'complete', provenance: 'verified',
+    caps: ['detach', 'update-gate', 'rollback'], agentOps: role === 'server' ? null : ['update'], highestVersion: version, previousVersion: null,
+    measuredAt: Date.now() - MIN, reachable: true, unreachableSince: null,
+    channel: 'stable', desiredTag: role === 'server' ? null : 'v0.0.84', resolveDetail: null,
+    request: null, report: null, update,
+  });
+  const halted = (): UpdatesView => ({
+    catalogue: { lastOkAt: Date.now() - 4 * MIN, lastError: null },
+    releases: [],
+    nodes: [
+      rowOf(FLEET, 'fleet', 'v0.0.78', { state: 'failed', target: 'v0.0.84', startedAt: Date.now() - 10 * MIN, detail: 'gate: unit not up' }),
+      rowOf(SERVER, 'server', 'v0.0.84', { state: 'idle', target: 'v0.0.84', startedAt: null, detail: 'done: v0.0.84' }),
+    ],
+    intent: [{ scope: '*', channel: 'stable', pinnedTag: null, auto: 'stable', notify: 'off', setAt: 1, setBy: 'pwa' }],
+  });
+
+  it('names the halt, disables Update all with its reason, points the skew banner at it, and acks in place', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null, roster: 'agreed', build: 'skewed' });
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(halted());
+    const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: halted().nodes[0]! });
+    render(<FleetScreen store={makeStore()} />);
+    const ackButton = await screen.findByRole('button', { name: 'Ack fleet' });
+    expect(document.querySelector('.halt-banner-node-text')?.textContent).toBe('fleet: failed (last tried v0.0.84) — gate: unit not up');
+    expect(screen.getByRole('button', { name: 'Update all' })).toBeDisabled();
+    await waitFor(() => expect(screen.getByText(/run different builds/i)).toHaveTextContent('Nothing moves until fleet is acknowledged — tap Ack on it in the halt banner; auto-install then moves the lagging box.'));
+    expect(document.body.textContent).not.toContain('ccrc rollout');
+    // The banners' order on the screen: the sticky host banner, then the halt, then the release line.
+    const order = [...document.querySelectorAll('.fleet-host-banner, .halt-banner, .update-banner')].map((e) => e.className);
+    expect(order).toEqual(['fleet-host-banner fleet-host-banner--warn', 'halt-banner', 'update-banner']);
+    expect(updates, 'one poll for the whole screen').toHaveBeenCalledTimes(1);
+    fireEvent.click(ackButton);
+    await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
+    expect(ack.mock.calls).toEqual([[FLEET]]);
+  });
+
+  it('after the ack, with auto on, the skew banner points at the console\'s own move — the screen hands it the intent', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null, roster: 'agreed', build: 'skewed' });
+    const acked = halted();
+    acked.nodes[0] = { ...acked.nodes[0]!, update: { state: 'idle', target: 'v0.0.84', startedAt: null, detail: 'acknowledged by the operator' } };
+    vi.spyOn(api, 'updates').mockResolvedValue(acked);
+    render(<FleetScreen store={makeStore()} />);
+    await waitFor(() => expect(screen.getByText(/run different builds/i))
+      .toHaveTextContent('Auto-install is on and the console can move the lagging box — follow the move in Settings.'));
+    expect(document.querySelector('.halt-banner')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Update all' })).not.toBeDisabled();
+  });
+
+  it('an Ack with no answer holds through a failed re-poll and re-arms on the next good read of the same lease', async () => {
+    // `until`, not `waitFor`: an earlier case in this file leaves `setInterval` as a fake-clock wrapper (measured:
+    // `String(setInterval)` reads `clock[method].apply`, and `vi.useRealTimers()` does not clear it), and `waitFor`
+    // polls on `setInterval`, so it would check once and never again. `setTimeout` is real.
+    const until = async (check: () => void): Promise<void> => {
+      for (let i = 0; i < 100; i++) {
+        try { check(); return; } catch { /* not yet */ }
+        await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      }
+      check();
+    };
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null, roster: 'agreed', build: 'skewed' });
+    // `halted()` builds a NEW object per call, so each good read is a fresh view; the failed re-poll keeps the last one.
+    const updates = vi.spyOn(api, 'updates')
+      .mockImplementationOnce(() => Promise.resolve(halted()))
+      .mockImplementationOnce(() => Promise.reject(new Error('offline')))
+      .mockImplementation(() => Promise.resolve(halted()));
+    const ack = vi.spyOn(api, 'ackUpdateNode').mockRejectedValue(new TypeError('Failed to fetch'));
+    render(<FleetScreen store={makeStore()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Ack fleet' }));
+    await until(() => expect(updates).toHaveBeenCalledTimes(2));
+    await until(() => expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeDisabled());
+    expect(ack).toHaveBeenCalledTimes(1);
+    // The third read, through the hook's own door: the page becoming visible.
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    await until(() => expect(updates).toHaveBeenCalledTimes(3));
+    await until(() => expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled());
   });
 });

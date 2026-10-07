@@ -3421,3 +3421,54 @@ button.proj-card-pool::before {
   font-size: var(--text-sm);
   color: var(--status-dead-text);
 }
+
+/* HaltBanner (centralised-update programme wave 14, R15(a)): the home screen's halt, with each halting node's Ack
+   in place. Self-grounded on the attention pair the fleet-host banner's warn arms and .substrate-banner already use
+   (--status-attention-text on --status-attention-tint, both solid, floored at 4.5 by design/contrast-check.mjs), so
+   no new colour pairing and no inherited ground; the children set no colour of their own. The Ack is the shared
+   .btn-primary, which paints itself; the override below is layout only, as .update-banner-actions' is. No margin:
+   it is a child of the .fleet column, whose padding is the gutter and whose gap is the spacing. Not sticky: the
+   fleet-host banner owns the sticky slot. */
+.halt-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  border: 1px solid var(--status-attention);
+  border-radius: var(--r-md);
+  background: var(--status-attention-tint);
+  color: var(--status-attention-text);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+}
+.halt-banner-msg {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.halt-banner-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* One row per halting node: its line, then its Ack. The row wraps at phone width, so a long detail pushes the
+   button onto its own line rather than squeezing it below the tap floor. */
+.halt-banner-node {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+.halt-banner-node-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* The shared button is a full-width sheet button (primitives.css); here it sizes to its label and keeps its
+   --tap-min height. */
+.halt-banner-node .btn-primary {
+  flex: none;
+  width: auto;
+  padding: 0 var(--sp-3);
+}
