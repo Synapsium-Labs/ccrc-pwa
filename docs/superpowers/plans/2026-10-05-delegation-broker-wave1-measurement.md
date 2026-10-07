@@ -3163,9 +3163,10 @@ task A's review).
 | 8 | F13 | a symlink is never a directory | the DANGLING, DIRECTORY-symlink, VALID-symlink and KNOWN LIMIT rows (4 red, written at `0d38a6549`) |
 | 8 | F13 | a valid symlink to a file is followed, as git follows it | "follows a loose ref that is a VALID symlink, as git does …" (a symlink refused: 1 red, written at `0d38a6549`) |
 
-**Wave 2 close-out (review 304).** Every guard arm this wave added or touched, each measured red by deleting that arm
-alone in a scratch snapshot (`git archive` of the commit with `server/node_modules` linked); each count counts rows red,
-not assertions. Each line is dated by the commit it names and counted over the rows its own task chose, so no one sha or
+**Wave 2 close-out (review 304).** Every guard arm this wave added or touched has either a red-capable row or a
+recorded equivalence argument (the "arms with no row" line below). An arm with a row was measured red by deleting that
+arm alone in a scratch snapshot (`git archive` of the commit with `server/node_modules` linked); each count counts rows
+red, not assertions. Each line is dated by the commit it names and counted over the rows its own task chose, so no one sha or
 filter governs the table: task A's lines (`A`, the rig scripts) are dated `e56a9e0ef` and count the rows whose names carry
 `(review 304 F7)` or `(review 304 F12 …)` (`vitest run test/delegation-rig.test.ts -t 'F7|F12'`); task B's lines (`5`, the
 sanitiser) are dated `c51428ae8` and `b93dc9894` and count over `test/delegation-rig.test.ts`, whose rows include ones
@@ -3241,9 +3242,10 @@ Later close-out tasks append their lines here.
 | 8 | F10 | `text` folds an unreadable file to `null` for every read but CLAUDE_BASE (`gitdir`, `HEAD`, `logs/HEAD`, `packed-refs`): the convenience read over `textMeasured` | "reads a gitdir, HEAD, logs/HEAD or packed-refs that is a DIRECTORY (EISDIR) as an unreadable one, and still answers …" (EISDIR fails for root too, so this row runs as root) and the KNOWN LIMIT row (the fold removed, so the UNREADABLE symbol reaches a `.trim()`, a regex or a `.split` and the census dies on a TypeError: 2 red; before the EISDIR row existed only the KNOWN LIMIT row, which skips as root, reddened), `b0b0c78db` |
 | 8 | F10 | the known limit: three reads still fold a failure, `locked`, `baseAgreesFirstLog` and `gitdir` (the header names them; a pin, not a guard) | "KNOWN LIMIT: locked reads false when its stat fails, baseAgreesFirstLog null when logs/HEAD cannot be read, and an unreadable gitdir reads as an absent one …" (skipped as root) and, root-proof, "reads a gitdir, HEAD, logs/HEAD or packed-refs that is a DIRECTORY (EISDIR) …"; closing each makes a visible edit: `locked` made three-valued: 1 red (the KNOWN LIMIT row); `baseAgreesFirstLog` answering 'unmeasured' for an unreadable `logs/HEAD`: 2 red (both rows); an unreadable `gitdir` answering `worktreeDir: 'unreadable'`: 2 red (both rows), `b0b0c78db` |
 
-**Wave 2 fix round (review 318).** Every guard arm the fix round added or touched, each measured red by deleting or
-mutating that arm alone in a scratch snapshot (`git archive` of the commit named, with `server/node_modules` linked);
-each count counts rows red over `test/delegation-rig.test.ts`, not assertions; the review 324 lines are appended to this
+**Wave 2 fix round (review 318).** Every guard arm the fix round added or touched has either a red-capable row or a
+recorded equivalence argument (the two EQUIVALENT mutants below stay at 0 red). An arm with a row was measured red by
+deleting or mutating that arm alone in a scratch snapshot (`git archive` of the commit named, with `server/node_modules`
+linked); each count counts rows red over `test/delegation-rig.test.ts`, not assertions; the review 324 lines are appended to this
 table too, and a count on an older line is the one measured at its own sha, so it does not count a row added after that
 sha. Task 5's lines name the seven rows the fix round
 added by a short name; each title is "--scan …" and ends "(review 318 F2)", and they sit together after "--scan
@@ -3375,6 +3377,11 @@ A "wave 2" below means the close-out (run 306) where the passage is marked as th
   (recapture, given no version or `--missing`, still fails closed with exit 2; `rig.sh all <raw>` called directly with
   no version list captures nothing, writes `.done` and exits 0). The observe stage's plan (wave 3) closes both before
   a later capture relies on `--missing`; until then an unmeasured cell is not coverage.
+  A third, ruled 2026-10-07 (review 324): `recapture.sh`'s closing cleanup hint (`rm -rf %s`) prints the raw root
+  unescaped, so with a spaced `TMPDIR` the line, pasted, removes other paths and leaves the root. Wave 3 escapes it
+  before any later capture relies on it, red-first. The obvious `%q` change reds two existing rows, not one: the spaced
+  real-run row, which asserts the unescaped text, and the `--dry-run` row, whose `<raw>` placeholder `%q` turns into
+  `\<raw\>`; that fix updates and proves both. `recapture.sh` is not edited in the fix round for review 324.
 - **D-4000** — `q8-spool-cost-is-a-micro-benchmark` — the spool append's cost against the hook budget is measured as a bash
   micro-benchmark of the same operations; the hook itself is wave 2's, and its own timing pin lands there.
 - **D-4001** — `q9-parent-class-is-a-proxy` — §8.1 Q9 (the share of trees whose parent is not a ccd session) cannot be read
@@ -3871,12 +3878,13 @@ Wave 2 close-out (run 306; the block 4364–4373, issued 2026-10-07). "Wave 2" i
 at the top of "Mutation table" says; the observe stage was wave 2 in text written before 2026-10-07 and has been wave 3
 since the 2026-10-07 renumbering (#313), and that old text stays a dated snapshot:
 
-- **D-4364** — `compaction-is-unmeasured` (review 304 F2): departs from spec §8.1's Q5, "how a session's Claude session
-  id changes across `/clear`, compaction, resume and account swaps"
-  (`docs/superpowers/specs/2026-10-04-delegation-broker-design.md:558`), and so from §7's stage-1 gate, "every §8.1 row
-  filled for every version on the fleet" (`:536`): the rig compacts a session (clear-compact-resume) but never measures
-  how the id changes across compaction. The hook exits in its SessionStart arm for a `compact` source before the
-  capture arm (`ccd/session-hook.sh:2905`; the stall-watch exclusion its capture-arm comment documents,
+- **D-4364** — `compaction-is-unmeasured` (review 304 F2): departs from the spec's §8.1 (Measurement matrix, stage 1),
+  question 5 of "It must answer, per version", "how a session's Claude session id changes across `/clear`, compaction,
+  resume and account swaps" (`docs/superpowers/specs/2026-10-04-delegation-broker-design.md`), and so from §7's
+  (Rollout) stage-1 gate, the `1 Measure` row's "Gate to leave it" cell, "every §8.1 row filled for every version on the
+  fleet": the rig compacts a session (clear-compact-resume) but never measures how the id changes across compaction.
+  The hook exits in its SessionStart arm for a `compact` source before the capture arm
+  (`ccd/session-hook.sh:2905`; the stall-watch exclusion its capture-arm comment documents,
   `:2920-2922`), so a `compact` SessionStart is never captured. Compaction shows only as PreCompact and PostCompact,
   which carried the pre-compaction session id, and the rig's resume by that id continued under it (clear-compact-resume,
   on every version in the corpus, all ten, 2.1.280 to 2.1.292: no fixture holds a `compact` SessionStart, each
