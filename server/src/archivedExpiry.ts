@@ -367,10 +367,17 @@ export const archivedExpiryEntryFor = (prev: ArchivedExpiryEntry | undefined, ar
  *  (a refusal ccd answered before it read the stamp: an interrupted ws-reap's breadcrumb, `reap-in-progress`), taught
  *  nothing either, and it is not asked again every pass: it climbs the failure ladder and is REPORTED, so a row the
  *  lane cannot learn is on the attention list — the shadow record is the operator's arming evidence — and never takes a
- *  learn slot each pass (review 313, parked item 1). A `gone` word is a return, which the next pass drops unreported. */
+ *  learn slot each pass (review 313, parked item 1). A `gone` word is a return, which the next pass drops unreported.
+ *  A document with NO `expiresAt` key is an older ccd's (the current one prints the key on every expire audit, and the
+ *  breadcrumb's carries `null`), even when it names no archive — an older ccd prints `archivedAt` only past its seven-day
+ *  age check — so it is no evidence, never a failure: only an upgrade of the box fixes it. */
 export function archivedExpiryLearned(entry: ArchivedExpiryEntry, read: ExpireAuditRead, nowMs: number, passMs: number): ArchivedExpiryEntry {
   if (read.kind === 'document' && read.archivedAt === null && read.verdict.kind === 'refused'
     && EXPIRE_TOKEN_KIND[read.verdict.token] === 'gone') return { ...entry, nextAskAt: nowMs + passMs };
+  if (read.kind === 'document' && read.expiresAt.kind === 'absent') {
+    return { ...entry, failures: 0, failingSince: null, nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS,
+      report: { kind: 'no-evidence', at: nowMs } };
+  }
   if (read.kind === 'unreadable' || read.archivedAt === null) {
     const why = read.kind === 'unreadable' ? read.detail : `ws-audit --expire read no archive (${read.verdict.kind === 'refused'
       ? `${read.verdict.token}${read.verdict.detail === '' ? '' : `: ${read.verdict.detail}`}` : 'expirable'})`;

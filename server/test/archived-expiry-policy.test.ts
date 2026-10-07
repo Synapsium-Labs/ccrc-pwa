@@ -237,6 +237,20 @@ describe('the lane’s memory of one row', () => {
       'an audit of a DIFFERENT archive teaches nothing').toMatchObject({ expiresAt: null, nextAskAt: NOW + PASS });
   });
 
+  it('an older ccd’s not-expired audit of a young archive (archivedAt null, no expiresAt key) is no evidence, not a failure', () => {
+    // That ccd prints archivedAt only after its seven-day age check, and prints no expiresAt at all: the document is
+    // told apart from the reap-in-progress breadcrumb (expiresAt: null) by the ABSENT key, and only an upgrade fixes it.
+    const e = archivedExpiryEntry(1_789_000_000);
+    const young = parseExpireAudit(ID, true, JSON.stringify({ session: ID, mode: 'expire', archivedAt: null, sensitive: [],
+      verdict: 'not-expired', detail: 'archived 3600 seconds ago; 7 days are required' }));
+    const r = archivedExpiryLearned(e, young, NOW, PASS);
+    expect(r).toMatchObject({ expiresAt: null, failures: 0, failingSince: null, nextAskAt: NOW + EXPIRE_NO_EVIDENCE_RETRY_MS,
+      report: { kind: 'no-evidence', at: NOW } });
+    const failing = archivedExpiryLearned(e, { kind: 'unreadable', detail: 'x' }, NOW, PASS);
+    expect(archivedExpiryLearned(failing, young, NOW + 2 * PASS, PASS), 'a failure run before it is cleared')
+      .toMatchObject({ failures: 0, failingSince: null, report: { kind: 'no-evidence' } });
+  });
+
   it('a learn audit that cannot be read, or that read NO archive, backs off and is REPORTED (review 313, parked item 1)', () => {
     // Such a row was asked again every pass, with no backoff and no attention entry — invisible in the shadow record,
     // which is the operator's arming evidence. It now climbs the failure ladder, and the list says why.
