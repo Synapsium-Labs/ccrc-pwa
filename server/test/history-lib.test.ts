@@ -2333,24 +2333,31 @@ describe('redactForIndex: every JSON-escape reading before every index, kept onl
   });
   it('a deep backslash-u-005c chain in front of a large body costs no more redactions than the bound allows (review 316 M2)', () => {
     // A chain of 64 levels never reaches a fixpoint within INDEX_UNESCAPE_PASSES, and the body does not shrink, so
-    // every decode re-redacts the whole body: the bound, not the input, is what is timed. The two timings are
-    // interleaved and each kept at its minimum, so a load spike cannot land on one side only.
-    const body = 'word '.repeat(1 << 18);
+    // every decode re-redacts the whole body: the bound, not the input, is what is counted. The count is of full
+    // redactions, not of time (fix round 1, F1: a wall-clock ratio measured 20.4x, 28.1x and 36.0x under bursty
+    // load). The value layer asks the index once per run, and the body is RUNS runs of length 4 and nothing else is
+    // that length, so the asks of that length divided by RUNS are the redactions performed. The body holds no escape
+    // introducer, so redactField is one redaction per call.
+    const RUNS = 1 << 12;
+    const body = 'word '.repeat(RUNS);
     const s = `${BS}${'u005c'.repeat(64)}n ${body}`;
-    let tOne = Infinity;
-    let tIndex = Infinity;
-    for (let round = 0; round < 3; round += 1) {
-      let t0 = performance.now();
-      libRows.redactField(s, idx);
-      tOne = Math.min(tOne, performance.now() - t0);
-      t0 = performance.now();
-      const out = libRows.redactForIndex(s, idx);
-      tIndex = Math.min(tIndex, performance.now() - t0);
-      expect(out === `${M} ${body}`).toBe(true);
-    }
-    // 8 decodes and the first redaction are 9 full redactions (measured 5-12x one); 20x leaves room for a loaded
-    // box, and 32 passes measure 29-43x.
-    expect(tIndex).toBeLessThan(20 * tOne);
+    const countingIdx = (): { idx: libRows.PairIndex; asks: () => number } => {
+      let asks = 0;
+      const byLen = new Map<number, { has(sha256: string): boolean }>();
+      byLen.get = (len: number) => {
+        if (len === 4) asks += 1;
+        return undefined;
+      };
+      return { idx: { byLen }, asks: () => asks };
+    };
+    const one = countingIdx();
+    libRows.redactField(s, one.idx);
+    expect(one.asks(), 'CONTROL: one redaction asks once per body run').toBe(RUNS);
+    const many = countingIdx();
+    // an empty pair set redacts no value, so the chain never reaches a mark and the decodes run to the bound
+    expect(libRows.redactForIndex(s, many.idx) === `${M} ${body}`).toBe(true);
+    // The bound is written out here on purpose: derived from the constant, a raise of it would raise the assertion too.
+    expect(many.asks()).toBe((8 + 1) * RUNS);
   }, 60_000);
 });
 
