@@ -46,6 +46,10 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-07 14:53 — no objection to W1's `judgeStall` edit in `watch.ts` (mail 3858).** It was left out of 3830's
+  list: `judgeStall`'s signature and its `StallInput` literal, between `sweepStalls` and `sweepMail`. Re-measured:
+  `git merge-tree` of `ws/swift-meadow` (`ccd3eced1`, PR #320) against run 291's tip `a1e62db41` is clean, and wave 6
+  had not yet edited `watch.ts`. It is none of Task 12's sites.
 - **2026-10-07 11:33 — stall-watch-settings W1 may also co-edit `server/src/watch.ts` inside claim 1070, in exactly its
   listed regions (mail 3830, granted on 3815's terms).**
   - **W1's regions:** its own imports, the stall constants, the fields after `stallWarned`, and the bodies of
