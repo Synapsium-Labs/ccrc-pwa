@@ -1395,8 +1395,9 @@ describe('coord.db: migration 16 — runs.sessionBornAt / runs.sessionBornFor (c
 });
 
 describe('coord.db: stall_settings and run_events_by_at (stall watch settings W1, design 2026-10-05 §8)', () => {
-  /** This entry's slot, found by its DDL and never hard-coded (the stall mail indexes' rule above): whichever of two
-   *  branches holding one slot merges second moves up, and that renumber must not have to edit a line here. */
+  /** This entry's slot, found by the bare name `stall_settings` (the first entry that spells it) and never hard-coded
+   *  (the stall mail indexes' rule above): whichever of two branches holding one slot merges second moves up, and that
+   *  renumber must not have to edit a line here. */
   const SLOT = MIGRATIONS.findIndex((m) => m.includes('stall_settings')) + 1;
   const NAMES = ['run_events_by_at', 'stall_settings'];
   const objectNames = (db: DatabaseSync): string[] =>
@@ -1425,7 +1426,7 @@ describe('coord.db: stall_settings and run_events_by_at (stall watch settings W1
     // `SLOT` is found by `stall_settings`, so no entry before it can contain that name: a slice scan could not red for
     // it. A COUNT can: a second entry spelling it, an earlier one included, is a name amended into a frozen entry.
     expect(MIGRATIONS.filter((m) => m.includes('stall_settings')).length,
-      'stall_settings appears in more than one entry: a name of this entry was amended into another one').toBe(1);
+      'stall_settings appears in more than one entry: either its name was amended into another entry, or a later migration legitimately touches the stall_settings table, and then this count must be updated').toBe(1);
     expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => m.includes('run_events_by_at')),
       'run_events_by_at was amended into a frozen entry').toBe(false);
   });

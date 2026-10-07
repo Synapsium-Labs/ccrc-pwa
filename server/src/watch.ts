@@ -4204,8 +4204,8 @@ export class FleetWatcher {
         }
       }
     } catch (err) {
-      // A throw outside the per-subject catches (a listing's `includes`, `stallSubjects`, `pruneStallMemory`) would reach
-      // the tick's silent `.catch`, and the lane would die every minute with no trace. One line per bad sweep instead.
+      // A throw outside the per-subject catches (a listing's `includes`, `stallSubjects`, `stallCoordinatorSubjects`, `pruneStallMemory`)
+      // would reach the tick's silent `.catch`, and the lane would die every minute with no trace. One line per bad sweep instead.
       console.warn(`ccrc-server: stall-watch sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
     } finally {
       // A judged sweep is stamped when it ENDS, its error path included, so the next start measures only unobserved time.

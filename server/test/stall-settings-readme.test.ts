@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { STALL_FOLLOW_LABEL, STALL_LEVELS, STALL_LEVEL_TEXT, STALL_SECTION_TEXT } from '../../shared/api.js';
+import { STALL_CONFIRM_TEXT, STALL_FOLLOW_LABEL, STALL_LEVELS, STALL_LEVEL_TEXT, STALL_SECTION_TEXT } from '../../shared/api.js';
 import { STALL_NOTICE_WINDOW_MS, STALL_QUIET_MAX_MS, STALL_QUIET_MIN_MS, STALL_QUIET_STEP_MS } from '../src/coord/stallsettings.js';
 import { STALL_QUIET_MS } from '../src/coord/stall.js';
 
@@ -75,7 +75,14 @@ describe("README's Settings paragraph names the Stall watch section (design 2026
     expect(s).toContain(`last ${duration(STALL_NOTICE_WINDOW_MS)}`);
   });
 
-  it('names no device, as the section itself names none (§2, 2026-10-05)', () => {
-    expect(stallSentences()).not.toMatch(DEVICE_WORD);
+  it("names the section's two controls and the confirm button by their shipped labels", () => {
+    const s = stallSentences();
+    expect(s, 'the level control label').toContain(`**${STALL_SECTION_TEXT.level}**`);
+    expect(s, 'the quiet time control label').toContain(`**${STALL_SECTION_TEXT.quiet}**`);
+    expect(s, 'the confirm sheet button label').toContain(`**${STALL_CONFIRM_TEXT.confirm}**`);
+  });
+
+  it('the Settings paragraph names no device, as the section itself names none (§2, 2026-10-05)', () => {
+    expect(settingsParagraph()).not.toMatch(DEVICE_WORD);
   });
 });

@@ -333,7 +333,7 @@ describe('sweepStalls: gating', () => {
     expect(reads).toEqual([]);
   });
 
-  it('a throw outside the per-subject catch (the arming read) resolves, warns ONCE, and frees the in-flight flag', async () => {
+  it("a throw outside the per-subject catch (a listing's `includes`) resolves, warns ONCE, and frees the in-flight flag", async () => {
     // The tick calls `sweepStalls(...).catch(() => {})`, so a throw that escaped the lane would kill it every
     // minute with no trace. The lane's own outer catch is what leaves one line behind.
     const { coord, w } = await rig();
@@ -2252,6 +2252,7 @@ describe('sweepStalls: the stall-watch settings (stall watch settings §9)', () 
 
   it('the catch arm answers the files-only reading, the one `stallBoxArmingOf` gives, and the built-in quiet time (M5e)', async () => {
     const [KILL_FILE] = STALL_MARKERS as unknown as [string];
+    expect(stallArmingOf([KILL_FILE]).disabled, 'premise: the kill file is STALL_MARKERS[0]').toBe(true);
     const listings: [string, readonly string[]][] = [
       ['none', []],
       ['strict', [MAIL_GATE_STRICT_MARKER]],
