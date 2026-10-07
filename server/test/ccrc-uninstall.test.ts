@@ -2401,8 +2401,12 @@ describeLinux('ccrc uninstall: the codex lanes on a real lane (Plan 2b-2 Task 11
 // store never rides the update backup (O45).
 describe('ccrc uninstall --purge and the history store (history spec §9.5, O42, O45)', () => {
   const STORE_ID = '5f0c2d3e-8a1b-4c2d-9e3f-0a1b2c3d4e5f';
-  /** spec §10.1: the operator's own session must not reach the verb. */
-  const SCRUB: NodeJS.ProcessEnv = { CLAUDECODE: '', CLAUDE_CONFIG_DIR: '', TMUX: '', TMUX_PANE: '' };
+  /** spec §10.1: the operator's own session must not reach the verb; every
+   *  inherited CCRC_RECALL_* is blanked too (the global test-isolation constraint). */
+  const SCRUB: NodeJS.ProcessEnv = {
+    CLAUDECODE: '', CLAUDE_CONFIG_DIR: '', TMUX: '', TMUX_PANE: '',
+    ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_')).map((k) => [k, ''])),
+  };
   const KEPT_LINE = 'kept: ~/.ccrc/history (verbatim session text, including any secrets sessions printed; --purge --purge-history removes it)';
   /** The DB-side names a store owns, the writer's temps and their sidecars
    *  included — what `STORE_FILES`' globs must match inside a linked target. */
