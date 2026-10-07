@@ -1505,13 +1505,16 @@ This note amends; it edits no earlier text.
   - Two interrupted children whose trees the tail removed release each other through the breadcrumb arm.
   - Two hand-deleted children of one repository release each other through the git-record arm.
   - These still hold: an unreadable `worktrees/` or `gitdir`, two admin entries naming one tree, a locked
-    record, a gone parent or one reached through a link, an interrupted expiry's breadcrumb, and a lifecycle
-    `create` row alone.
+    record, a gone parent or one reached through a link (on the git-record arm; the breadcrumb arm places such
+    a row by its literal spelling, below), an interrupted expiry's breadcrumb, and a lifecycle `create` row
+    alone.
   - R54's "only corroborates" is built as "never an input".
   - A breadcrumb-arm row is placed by its literal spelling. The ladder header's "compared exactly as a
-    `complete` row is" holds for the git-record arm only: a breadcrumb-arm row spelled through a link or `/./`
-    is compared as text (wave 6 draft ruling OPEN3). That is bounded. The leaf is proven absent,
-    `_ws_reclaim_owned` asks again at the tail, and a re-created tree resolves `complete` and holds.
+    `complete` row is" holds for the git-record arm only: a breadcrumb-arm row spelled through a link is
+    compared as text (the coordinator's ruling that such a row is placed by its literal spelling). A spelling
+    with a `.` or `..` component, a trailing `/` or a `//` is refused before either arm, so such a row holds
+    and is never compared as text. That is bounded. The leaf is proven absent, `_ws_reclaim_owned` asks again
+    at the tail, and a re-created tree resolves `complete` and holds.
   - The moved-tree refusal reuses `containment-unproven`, whose copy only approximates that case.
 - **R54.** The breadcrumb arm also proves that no admin entry names the tree, asked of the git-record arm's own
   reader. Git's list silently omits a record whose `gitdir` it cannot read, so its "no record" alone would read an
@@ -1523,16 +1526,17 @@ This note amends; it edits no earlier text.
   - The probe's walk is bounded by `WS_PATH_USERS_SCAN_S=10`, and an expired walk is unmeasured.
   - The `done` row and the three purge-failure rows carry `meas.tmpRootKept` (`in-use`, `unmeasured` or
     `refused`) and `meas.clipsKept` (`unmeasured` or `refused`), each omitted when nothing was kept.
-  - A kept reason is one line of printable ASCII, cut at 300 bytes. A longer or non-ASCII reason grows at the
-    journal's encoder until the whole `meas` object is dropped.
+  - Each kept reason is cut at 300 bytes of printable ASCII and marked with a trailing "…". Uncapped, a long
+    or non-ASCII reason would grow at the journal's encoder until the whole `meas` object were dropped.
   - A clips leaf is kept and recorded the same way as a temp root.
   - A same-uid process the kernel will not let ccd read, or another uid's process, is skipped as a stated
     limit, as the expiry probe does.
   - The helper refuses the whole directory leaf while an entry stays unreadable, so nothing is removed in
     part.
-  - The helper also refuses a directory leaf that is a mount point, comparing its device with the root's before
-    any chmod or rm, and it never uses a root that resolves to nothing or to `/`. It sets the leaf's own owner
-    bits before entering it.
+  - The helper also refuses a directory leaf whose device is not its root's (a mount of another file system at
+    the leaf), comparing the two before any chmod or rm. A same-file-system bind mount at the leaf carries the
+    root's device and is not seen. The helper never uses a root that resolves to nothing or to `/`, and it sets
+    the leaf's own owner bits before entering it.
   - On Darwin the helper removes with `rm -rfx`.
 - **R50.**
   - `run` joins the staleness test.
@@ -1555,15 +1559,16 @@ This note amends; it edits no earlier text.
     else.
   - A step-5 read failure is the new `failed` token `branch-unmeasured`.
   - The consent binds the branch's state in both directions. A pin that reads the branch in a different state
-    from the in-lock recomputation refuses `state-changed` before the tombstone, journaled as a `failed` line.
+    from the in-lock recomputation stops `state-changed` before the tombstone, journaled as a `failed` line.
   - A token minted before the fleet box converged, and spent after it, answers `state-changed` once, on both
     verbs.
 - **R55.** `CoordStatus.childReclaimDoneAt` is omitted, never null, while unmeasured. Only a `child` mark
   leaving the listing resets the mirror's clock, and only a reclaim `done` row raises the value.
 - **Carried residuals:** spec §7 item 6 holds the stated list. Wave 6 also measured these, in plain words:
   - **Temp root.**
-    - A same-file-system bind mount INSIDE the leaf is crossed by `rm --one-file-system`. A mount AT the leaf is
-      refused, because the device is compared with the root's before any chmod or rm.
+    - The helper's device check and `rm --one-file-system` compare `st_dev` alone. A mount of another file
+      system at the leaf is refused, because its device differs from the root's, compared before any chmod or
+      rm. A same-file-system bind mount at the leaf is not seen, as inside it, where `rm` crosses it.
     - A mount made at the leaf after that check, during the permission pass, is not seen.
     - The owner-bits chmod dereferences its operand. This is bounded to this uid's own files and owner bits.
     - A probe answering in-use over an ABSENT leaf records nothing, and leaves any witness beside the
@@ -1581,7 +1586,7 @@ This note amends; it edits no earlier text.
     - A tip that MOVES while the branch stays present, between the in-lock recomputation and the pin, is still
       taken over. The compare-and-swap at the pinned tip bounds it.
     - `ws-expire` keeps the recomputation-to-pin branch-state window, because `_ws_expire_locked` is
-      workspace-lifecycle's.
+      workspace-lifecycle's. A branch created in that window is still adopted at its pinned tip there.
     - On a git older than 2.43, a resume whose branch is already gone reads `unmeasured` at step 5 on every
       retry.
   - **Gone directory.**

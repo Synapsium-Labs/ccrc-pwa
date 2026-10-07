@@ -370,7 +370,10 @@ Two limits follow, and both are stated so neither is discovered later:
   unreadable record is never read as no record. No checkout inside the child may resolve its git directory to
   the admin directory a recovered row named. That refusal reuses `containment-unproven`, whose sentence
   describes such a moved tree only approximately. The recovery creates nothing, prunes nothing and purges no
-  row.
+  row. Only the git-record arm needs the parent to resolve complete. The breadcrumb arm places the row by its
+  literal spelling, so a row whose parent is gone or reached through a link is released there once its leaf is
+  proven absent. A spelling with a `.` or `..` component, a trailing `/` or a `//` is refused before either
+  arm, and such a row holds.
 - **A `complete` resolution places the spelling as it reads now, not the session.** An alias re-pointed after a
   session entered through it resolves complete and outside, and so does a spelling through a bind mount. Both are
   pre-existing and left to a follow-up (D-3735).
@@ -419,21 +422,22 @@ Refusing keeps one rule at one rung instead of a conditional two places must agr
    everything the child's and each nested checkout's own git directory names, is kept reachable from
    `refs/ccrc/attic/<id>/reflogs`. A pin that cannot be taken fails the reclaim as `pin-failed` while nothing
    is destroyed. Whether the branch exists is read three ways, by `git show-ref --exists`: present, absent,
-   or a read that did not run. Only a proven absence goes ahead with no tip: HEAD, the WIP commit and every
-   reflog and per-worktree ref commit are pinned as above, and the tail then deletes no branch. A read that
-   did not run stops the reclaim: the audit answers unmeasured, and at the tail's branch step it fails
-   `branch-unmeasured` with the row and the breadcrumb kept. A git older than 2.43 has no `--exists`: there a
-   branch that resolves still reads present and anything else reads unmeasured, so such a box (Apple's git
-   2.39, for one) reclaims a standing branch as before and never reclaims a gone one. A branch that
-   reappears after the tombstone is `branch-moved`. The consent binds the branch's state in both
-   directions: a branch the pin reads in a different state (present or absent) from the one the in-lock
-   recomputation read stops the act before the tombstone as `state-changed`, journaled as a `failed` line,
-   with nothing destroyed. A worktree whose HEAD is still symbolic to a branch proven gone stays
-   `pin-failed`, because the WIP commit needs a HEAD. A
-   nested checkout of a different repository cannot be pinned here, so each run of this phase proves it again
-   by rung 9's predicate, and a failure there is a pin that cannot be taken. A HEAD that has drifted onto
-   another branch keeps that branch: it is recorded, and the tail deletes only the child's own. The tail runs
-   this whole phase again as its settle once the pane is dead; every pin is idempotent.
+   or a read that did not run. Every arm takes this one read in one act: the ladder's two tip reads, the pin,
+   the vanished arm's pin read, and the tail's step 5. Only a proven absence goes ahead with no tip: HEAD,
+   the WIP commit and every reflog and per-worktree ref commit are pinned as above, and the tail then
+   deletes no branch. A read that did not run stops the reclaim: the audit answers unmeasured, and at the
+   tail's branch step it fails `branch-unmeasured` with the row and the breadcrumb kept. A git older than
+   2.43 has no `--exists`: there a branch that resolves still reads present and anything else reads
+   unmeasured, so such a box (Apple's git 2.39, for one) reclaims a standing branch as before and never
+   reclaims a gone one. A branch that reappears after the tombstone is `branch-moved`. The consent binds the
+   branch's state in both directions: a branch the pin reads in a different state (present or absent) from
+   the one the in-lock recomputation read stops the act before the tombstone as `state-changed`, journaled
+   as a `failed` line, with nothing destroyed. A worktree whose HEAD is still symbolic to a branch proven
+   gone stays `pin-failed`, because the WIP commit needs a HEAD. A nested checkout of a different repository
+   cannot be pinned here, so each run of this phase proves it again by rung 9's predicate, and a failure
+   there is a pin that cannot be taken. A HEAD that has drifted onto another branch keeps that branch: it is
+   recorded, and the tail deletes only the child's own. The tail runs this whole phase again as its settle
+   once the pane is dead; every pin is idempotent.
 4. The tombstone is written **before the first destructive act**, recording the branch, the tip, the WIP
    commit sha, the attic refs, the secret-shaped paths that were dropped, the containment verdict and the
    residue measurement. It is the one document that outlives the workspace.
@@ -477,26 +481,29 @@ into a routine one.
 **What the tail removes, and what it keeps (wave 6).** A pane's processes can outlive `tmux
 kill-session`, and one that carries `TMPDIR=<leaf>` can recreate the temp root after the tail removed it.
 Measured: a reclaimed child's leaf came back 3.7 s after `reclaim done`. So after the kill the tail waits,
-at most 15 s, until no process of this uid uses the temp root, and asks once more at the instant of removal.
+for up to 15 s, until no process of this uid uses the temp root, and asks once more at the instant of removal.
 The wait also ends after one ask more than four per second of its bound, so a clock stepped backwards cannot
 lengthen it without limit. The bound is on the clock between asks, and each ask's own walk is bounded at 10 s,
-so measured at worst the tail spends about 35 to 41 s here. A process uses the temp root when its `TMPDIR` is at or under the leaf, its working
-directory is there, or it holds a file there open. A process of another uid, or a same-uid process the kernel
-will not let ccd read, is skipped, as a stated limit. A probe that could not look answers unmeasured, never
-"nobody". The clips and temp-root leaves go through one removal helper. It:
+so measured at worst the tail spends about 35 to 41 s here. A process uses the temp root when its `TMPDIR` is
+at or under the leaf, its working directory is there, or it holds a file there open. A process of another
+uid, or a same-uid process the kernel will not let ccd read, is skipped, as a stated limit. A probe that
+could not look answers unmeasured, never "nobody". The clips and temp-root leaves go through one removal
+helper. It:
 - validates the id, resolves the root physically, and never uses a root that resolves to nothing or to `/`;
 - unlinks a link or file leaf without following it;
-- takes a directory leaf only when it is a real directory this uid owns that is not a mount point (its device
-  is compared with the root's before anything is changed), at exactly root/id (and at the expected device and
-  inode when a caller names them);
+- takes a directory leaf only when it is a real directory this uid owns, at exactly root/id (and at the
+  expected device and inode when a caller names them), and whose device is its root's: a mount of another
+  file system at the leaf is refused before anything is changed, and a same-file-system bind mount at it is
+  not seen, as inside it (§7);
 - sets the leaf's own owner bits so a mode-000 leaf can be entered, normalises the permissions beneath it,
   and removes it without crossing a file-system boundary, reading every exit code;
 - proves the leaf absent.
 
 It answers removed, refused with a reason, or unmeasured. A temp root still in use, or unmeasured, when the
 wait ends, and a leaf the helper refuses or cannot measure, is kept with its witness. The act completes,
-and its `done` row records what was kept and why, in one line of printable ASCII cut at 300 bytes. That is
-not a refusal. The worktree's removal is unchanged, but for the wait. Every deleting git call the tail makes
+and its `done` row records what was kept and why. Each kept reason is cut at 300 bytes of printable ASCII
+and marked with a trailing "…". That is not a refusal. What the worktree removal deletes is unchanged. Every
+deleting git call the tail makes
 runs under the reclaim's git containment: the worktree removal, `update-ref -d` and the branch delete. So
 the repository's hooks and its fsmonitor never run while it deletes. That containment first drops an
 inherited `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG` and `GIT_CONFIG_COUNT`, so its own `core.hooksPath`,
@@ -798,10 +805,12 @@ and two when the server's argv carries a malformed token or run id beside a vali
 (`token-malformed` and `run-id-malformed`). ccd records them as refusals, but the server retries them, so
 every surface reads them as failures and never as settled refusals. Only those four are read that way, by
 name; a refusal ccd later journals the same way is classified when it is added, never
-inherited. ccd also journals two failures as `failed`. The first is a probe that could not measure
+inherited. ccd also journals three failures as `failed`. The first is a probe that could not measure
 (`probe-unmeasured`), from the locked recomputation and from `ws-audit --reclaim`, told apart by the line's
 verb; it is the one audit-time line that is not a terminal refusal. The second is a tail that could not read
-whether the branch still exists (`branch-unmeasured`). Seven dies stay unjournaled: the usage die and
+whether the branch still exists (`branch-unmeasured`). The third is a pin that read the branch in a different
+state from the in-lock recomputation (`state-changed`, §5.5), which stops the act before the tombstone.
+Seven dies stay unjournaled: the usage die and
 the four `--actor`/`--reason` checks run before any id is bound, a malformed session id binds no
 trustworthy id, and the journal's encoder is the `python3` whose absence the last reports.
 It is a *report*, not a tap: nothing waits on it, and ignoring it costs disk rather than correctness. It
@@ -943,9 +952,10 @@ approved on a narrow one.
      collects. The tail's wait covers the temp root only.
    - On Darwin every directory temp root a tail meets is kept (§5.2). A link or file leaf is unlinked, as before.
    - Removal compares devices only. So `rm --one-file-system` does cross a bind mount of the SAME file system
-     nested inside a leaf, and only root can make one. A mount AT the leaf is refused, because the leaf's device
-     is compared with the root's before anything is changed; a mount made there after that check, during the
-     permission pass, is not seen.
+     nested inside a leaf, and only root can make one. A mount of another file system at the leaf is refused,
+     because the leaf's device is compared with the root's before anything is changed; a same-file-system bind
+     mount at it is not seen, as inside it, and neither is a mount made there after that check, during the
+     permission pass.
    - The removal helper's checks are not atomic with its `rm`. A same-uid rename of another directory onto
      `<root>/<id>` between the two is removed with it. Wave 7's quarantine rename closes this for the
      collector. The owner-bits `chmod` that lets the helper enter a mode-000 leaf dereferences its operand,
@@ -963,7 +973,7 @@ approved on a narrow one.
    - A branch whose tip moves while it stays present, between the in-lock recomputation and the pin, is still
      taken over at its pinned tip; the delete's compare-and-swap at that tip bounds it. `ws-expire` keeps the
      recomputation-to-pin window for the branch's state too, because its locked recomputation is workspace
-     lifecycle's.
+     lifecycle's, so a branch created in that window is still adopted at its pinned tip there.
    - A dangling-symlink loose ref that shadows a packed entry reads absent. The branch is then left, never
      deleted: a leak, not a loss.
    - A symbolic registry branch reads unmeasured and is never deleted through. Every branch delete in the tail

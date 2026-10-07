@@ -207,7 +207,7 @@ export const childReclaimFirstSighting = (
  *  unbinds the run, the next dispatch's ws-add draws the same slug, and the run then leaves that binding
  *  (abandoned, or bound to yet another workspace past `planned`). The next pass must also come before
  *  the mirror PLACES the new `create`: a `create` that carries no clock, or one dated ahead of the
- *  server's, does not place it. A pass in between that reads the run with no session, with this
+ *  server's, is not placed. A pass in between that reads the run with no session, with this
  *  one, or inside the spawn stall, or that lists no row for the slug, deletes the entry.
  *
  *  A SECOND, SAME-RUN ROUTE is not this function's to close: a licensed request (one sent with
