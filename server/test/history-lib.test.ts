@@ -1747,6 +1747,10 @@ describe('lib: linkSidecar (plan task 21)', () => {
     const lib = await import('../../ccd/history/lib.mjs');
     expect(lib.SIDECAR_WHOLE_MAX).toBe(67_108_864);
   });
+  it('SIDECAR_MAX_BYTES is twice the largest sidecar measured (D-4310)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.SIDECAR_MAX_BYTES).toBe(2 * lib.SIDECAR_WHOLE_MAX);
+  });
 });
 
 describe('lib: secretKindOf (plan task 22)', () => {

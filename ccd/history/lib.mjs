@@ -1856,8 +1856,14 @@ export function lagOfTick({ tickStartMs, newEntries, minNewTsMs }) {
 
 /** The largest sidecar read whole (§9.2 step 4). Of 103,068 sidecars on the reference box the
  *  largest was exactly 67,108,864 bytes (M, review). A larger one is streamed through Brotli
- *  and a streaming sha256 rather than refused, so no sidecar is too large to capture. */
+ *  and a streaming sha256 rather than refused, up to SIDECAR_MAX_BYTES (D-4310). */
 export const SIDECAR_WHOLE_MAX = 67108864;
+
+/** The largest sidecar captured at all (D-4310, history-sidecar-size-cap): twice the largest measured
+ *  (SIDECAR_WHOLE_MAX). A larger one is decided from its stat, never opened, and counted
+ *  `sidecar_too_large`, because the streamed arm holds the whole compressed blob in memory and one
+ *  oversized file would OOM every pass under the carrier's MemoryMax. */
+export const SIDECAR_MAX_BYTES = 134217728;
 
 /** The entry a sidecar belongs to (§9.2 step 4; history-sidecar-ingest-rules, D-4239): the tool_result
  *  whose text names the file; else the one answering the tool_use whose id is the `toolu_…` name

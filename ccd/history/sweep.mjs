@@ -38,7 +38,7 @@ import {
   passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText,
   CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
-  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, linkSidecar, ftsTextOf,
+  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, sessionHashPairs, makePairIndex, secretKindOf,
   SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, ftsPhrase, redactField,
 } from './lib.mjs';
@@ -2614,7 +2614,12 @@ function toolResultCandidates(db, transcriptPk, cache) {
   return out;
 }
 
+function countSidecarTooLarge(db) {
+  withTx(db, 'NORMAL', () => { bump(db, 'sidecar_too_large'); });
+}
+
 /** One sidecar file (§9.2 step 4).
+ *  - A file over SIDECAR_MAX_BYTES is counted `sidecar_too_large` from its stat and never opened (D-4310).
  *  - An unchanged (size, mtime_ns) is skipped before any open (DM47).
  *  - Otherwise it is admitted like a transcript (O_NOFOLLOW, a regular file under a rostered
  *    projects/ root).
@@ -2629,6 +2634,10 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
   let ls;
   try { ls = lstatSync(s.path, { bigint: true }); } catch { countAdmission(db, 'missing'); return null; }
   if (!ls.isFile()) { countAdmission(db, 'non_regular'); return null; }
+  // D-4310 (history-sidecar-size-cap): over the cap it is decided from the stat alone, before any open or read. No
+  // sidecar_seen row can mark it (blob_id is NOT NULL and the schema does not change), so it is counted once per pass
+  // that walks it, not once per tick for ever and never read at all.
+  if (ls.size > BigInt(SIDECAR_MAX_BYTES)) { countSidecarTooLarge(db); return null; }
   if (q.seenSame.get(s.path, ls.size, ls.mtimeNs) !== undefined) return { bytes: 0 };
   const floor = await ctx.floorProbe();
   if (floor !== 'ok') {
@@ -2640,6 +2649,7 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
   try {
     const st = fstatSync(a.fd, { bigint: true });
     const size = Number(st.size);
+    if (size > SIDECAR_MAX_BYTES) { countSidecarTooLarge(db); return null; }   // grew between the lstat and the open (D-4310)
     let sha;
     let head;
     let z = null;

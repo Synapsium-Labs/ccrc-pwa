@@ -1534,6 +1534,55 @@ describe('history ingest: sidecars (plan task 21)', () => {
       fs.rmSync(box.home, { recursive: true, force: true });   // two 64 MiB sidecars plus their store: never left for afterAll alone
     }
   }, 300_000);
+
+  describe('SIDECAR_MAX_BYTES (D-4310, history-sidecar-size-cap)', () => {
+    /** A sidecar of `size` bytes that holds no data on disk: ftruncate leaves a hole. */
+    const sparse = (p: string, size: number): void => {
+      const fd = fs.openSync(p, 'w');
+      try { fs.ftruncateSync(fd, size); } finally { fs.closeSync(fd); }
+    };
+    const CAP = 134_217_728;
+    it('one byte over the cap is counted and never read: no blob, no sidecar_seen mark, the tick still completes with its ticks row', async () => {
+      const { sweep: S } = await IX.api();
+      const box = IX.newBox('ccrc-hist-dm47i-');
+      try {
+        IX.plantCopy(box.homes[0]!, IX.U, linkRows());
+        sparse(path.join(sideDir(box.homes[0]!), 'huge.bin'), CAP + 1);
+        fs.chmodSync(path.join(sideDir(box.homes[0]!), 'huge.bin'), 0o000);   // decided from the stat alone: an open would be counted unreadable instead
+        fs.writeFileSync(path.join(sideDir(box.homes[0]!), 'b7k2q9z1x.txt'), 'the big output body\n');   // a sidecar after it in the same tick is still taken
+        const { db, ids } = await IX.openFixtureStore(box);
+        try {
+          const ctx = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids);
+          const t0 = Date.now();
+          const tick = await S.ingestTick(db, ctx, S.newBudget());
+          S.recordTick(db, ctx, tick);
+          expect(Date.now() - t0).toBeLessThan(20_000);      // a mutated run that read the hole would compress 128 MiB of zeros
+          expect(tick.paused).toBe(false);
+          expect(counterOf(db, 'sidecar_too_large')).toBe(1);
+          expect(counterOf(db, 'file_unreadable')).toBeUndefined();
+          expect(sidecarRows(db)).toEqual([{ name: 'b7k2q9z1x.txt', uuid: IX.uuidN(3) }]);
+          expect(IX.count(db, 'sidecar_seen')).toBe(1);
+          expect(IX.count(db, 'ticks')).toBe(1);
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    }, 120_000);
+
+    it('exactly at the cap it is captured as before (streamed, byte for byte)', async () => {
+      const { sweep: S } = await IX.api();
+      const box = IX.newBox('ccrc-hist-dm47j-');
+      try {
+        IX.plantCopy(box.homes[0]!, IX.U, linkRows());
+        sparse(path.join(sideDir(box.homes[0]!), 'atcap.bin'), CAP);
+        const { db, ids } = await IX.openFixtureStore(box);
+        try {
+          await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());
+          expect(counterOf(db, 'sidecar_too_large')).toBeUndefined();
+          const r = db.prepare(`SELECT b.raw_len AS len FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id WHERE s.name = 'atcap.bin'`).get() as { len: number } | undefined;
+          expect(r?.len).toBe(CAP);
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    }, 300_000);
+  });
 });
 
 interface IxSweep {
