@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9797fa193216c86a484d72b76cac07e86ca70b41a3cf4a9c88586fcc6a5997b1
+# ccrc:generated 1 sha256=ce4dec04f354fde4f9a8f929b53488c6c4e1827cf720de348bfea2c777f5ee9f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19541,7 +19541,8 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # ANSI bold or backticks removed (`Set model to Opus 5.5 …`, `Set effort level to
 # high …`, `Ultracode on …`); a picker row Claude Code marks `(default)` is the
 # `default` class. A command with no
-# acknowledgement after it changed nothing and is never read, nor is a row a
+# acknowledgement after it changed nothing and is never promoted — though, when it
+# is the newest of its kind, it is said as `unmeasured` (below) — nor is a row a
 # subagent wrote, nor a user turn that carries anything besides the envelope (a
 # human quoting it). A `/model` value maps to the record's class vocabulary
 # through the alias table — `ROUTE_CLASSES` itself (`opus`, `sonnet`, `haiku`,
@@ -19553,7 +19554,8 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # NEVER A FAILURE IN THE STOP PATH; the silent cases are named below and listed in
 # README (the stage-7 subsection). Every path is rc 0 and the stop goes on exactly
 # as before. Silent where nothing was lost: no registry row, no transcript, no
-# command, a non-Anthropic lane (skipped), a value already held, a field newer than the keystroke. Logged as
+# command, a non-Anthropic lane (skipped), a value already held, a field newer than the keystroke (asked
+# FIRST, so an out-of-vocabulary or unacknowledged command older than its field is not logged either). Logged as
 # `operator-choice <id>: …` where the operator's choice may be lost: a value
 # outside the vocabulary or one the record's own checks refuse (`cmd_route` runs
 # in a subshell, so its `die` ends only that) — the record unchanged — and
@@ -19564,15 +19566,18 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # lost without a line in a few cases, each named in README: a command within
 # TYPED_MATCH_WINDOW after a rotated-out keystroke, a round trip through a
 # non-Anthropic lane, a /clear, an unrostered source account, a deploy-transition
-# /model whose journal a `route --apply` keystroke opened first, and a route field
-# whose mtime cannot be read.
+# /model whose journal a `route --apply` keystroke opened first, a route field
+# whose mtime cannot be read, and an INTERRUPTED stop (one that died between its
+# keep, which leaves the marker, and its kill: the pane survives marked, so its
+# next stop or revival does not read again).
 #
 # ONE READ PER RESTART. Every call leaves `$REG/<id>.choicekept`, and every
 # `_spawn_start` removes it, so the marker means "a keep ran since the last
 # spawn": `_spawn_start`'s keep — the one choke point of every spawn — runs only
 # without it, so a revival (an unsupervised one too) reads while the spawn a
 # stop's keep already read for (a swap's landing, `ccd start` after `ccd stop`,
-# a refusal's restart) does not read — and log — a second time.
+# `ws-restore` after `ws-archive`, a refusal's restart) does not read — and log —
+# a second time.
 #
 # THE RECORD WINS WHEN IT IS NEWER. A field written after the keystroke — the
 # PWA's picker, a coordinator's route, this function's own last promotion — is
@@ -19625,11 +19630,11 @@ _model_class_of() {   # /model value -> the record's class word | rc 1 outside t
   _model_family_class "$v"
 }
 
-_operator_choice_keep() {   # id — before a stop that a spawn follows: the operator's own /model and /effort, written to the route record (§5.7). Always 0.
-  local id="$1" f typed why="" out kind val at n field want fm shown
+_operator_choice_keep() {   # id — before a stop that a spawn follows, and at every spawn (`_spawn_start`, unless a stop's keep already read): the operator's own /model and /effort, written to the route record (§5.7). Always 0.
+  local id="$1" f typed why="" out kind val at n field want fm shown drift=0
   local -a sets=() kinds=()
   [[ -f "$REG/$id.uuid" ]] || return 0
-  _reg_set "$id" choicekept "$(date +%s)" 2>/dev/null || true   # a keep ran since the last spawn: the supervised spawn that follows a stop's keep does not read again (cmd_ensure, §5.7)
+  _reg_set "$id" choicekept "$(date +%s)" 2>/dev/null || true   # a keep ran since the last spawn: the supervised spawn that follows a stop's keep does not read again (`_spawn_start`, §5.7)
   _is_anthropic_backend "$(_reg_get "$id" wrapper)" || return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7)
   typed=$(_reg_get "$id" typed)
   if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then
@@ -19690,7 +19695,7 @@ for i, line in enumerate(lines):
     if not ack:
         given = tags.get("args", "").strip().lower()
         if not any(k == kind and (not given or v == given) and abs(t - at) <= window for t, k, v in rows):
-            unack[kind] = True
+            unack[kind] = at
         continue
     named = (ack.group(1) or ack.group(2) or "").strip()
     if kind == "model" and named.endswith("(default)"):
@@ -19699,19 +19704,28 @@ for i, line in enumerate(lines):
     if any(k == kind and v == val.lower() and abs(t - at) <= window for t, k, v in rows):
         continue
     newest[kind] = (val, at)
-    unack[kind] = False
+    unack[kind] = None
 for kind, (val, at) in sorted(newest.items()):
     print(kind, val if SAFE.fullmatch(val) else "?", at, len(val.encode()))
-if any(unack.values()):
-    print("drift x 0 0")
+for kind, at in sorted(unack.items()):
+    if at is not None:
+        print("drift-" + kind, "x", at, 0)
 ' "$typed" "$TYPED_MATCH_WINDOW" 2>/dev/null) || { _operator_choice_say "$id" "unmeasured (the transcript reader failed)"; return 0; }
   while read -r kind val at n; do
     [[ "$at" =~ ^[0-9]+$ ]] || continue
     case "$kind" in
-      model)  field=class;  want=$(_model_class_of "$val") || want="" ;;
-      effort) field=effort; want="${val,,}"; _route_word_in "$want" "$ROUTE_EFFORTS" || want="" ;;
-      drift)  _operator_choice_say "$id" "unmeasured (a /model or /effort command with no acknowledgement this ccd recognises)"; continue ;;
-      *)      continue ;;
+      model|drift-model)   field=class ;;
+      effort|drift-effort) field=effort ;;
+      *)                   continue ;;
+    esac
+    if [[ -e "$REG/$id.$field" ]]; then   # THE RECORD WINS WHEN IT IS NEWER, asked FIRST: a command older than its field is neither written nor logged (review 272 F6)
+      fm=$(_plat_mtime "$REG/$id.$field" 2>/dev/null) && [[ "$fm" =~ ^[0-9]+$ ]] || continue
+      (( 10#$fm >= 10#$at )) && continue
+    fi
+    case "$kind" in
+      drift-*) (( drift++ )) || _operator_choice_say "$id" "unmeasured (a /model or /effort command with no acknowledgement this ccd recognises)"; continue ;;   # once per keep, both kinds or one
+      model)   want=$(_model_class_of "$val") || want="" ;;
+      effort)  want="${val,,}"; _route_word_in "$want" "$ROUTE_EFFORTS" || want="" ;;
     esac
     if [[ -z "$want" ]]; then
       shown="$val"; [[ "$val" == "?" ]] && shown="(${n//[^0-9]/} bytes, not one token)"
@@ -19719,10 +19733,6 @@ if any(unack.values()):
       continue
     fi
     [[ "$(_route_peek "$id" "$field")" == "$want" ]] && continue
-    if [[ -e "$REG/$id.$field" ]]; then
-      fm=$(_plat_mtime "$REG/$id.$field" 2>/dev/null) && [[ "$fm" =~ ^[0-9]+$ ]] || continue
-      (( 10#$fm >= 10#$at )) && continue
-    fi
     sets+=(--set "$field=$want"); kinds+=("$kind:$want")   # collected: the pair is checked ONCE, in one call below
   done <<<"$out"
   if (( ${#kinds[@]} )); then   # ONE call for the pair: `cmd_route` checks class against effort on the merged sets, so a haiku record that takes /model opus AND /effort high keeps both (a call per field refused the effort first)
@@ -19733,7 +19743,7 @@ if any(unack.values()):
 }
 
 _operator_choice_unmark() {   # id — after a stop's pane kill FAILED: the marker means "Claude Code is not running here", so it stays only when the session is proven gone; a live or unmeasurable one is unmarked and its next revival reads. Always 0. (§5.7)
-  _session_probe "$1" 2>/dev/null; [[ "$PROBE_VERDICT" == gone || "$PROBE_SUBSTRATE" == absent ]] || rm -f "$REG/$1.choicekept" 2>/dev/null   # no tmux server means no pane: the session is dead whatever the verdict says
+  _session_probe "$1" 2>/dev/null; [[ "$PROBE_VERDICT" == gone || "${PROBE_DETAIL:-}" == *"no server running"* ]] || rm -f "$REG/$1.choicekept" 2>/dev/null   # tmux's own "no server running" means no pane: the session is dead whatever the verdict says. Read from PROBE_DETAIL as ws-reclaim reads it, never PROBE_SUBSTRATE: a MISSING socket is not proof, since a server may still run with its socket deleted (review 272 F1)
   return 0
 }
 

@@ -4757,3 +4757,32 @@ describe('docs sections, grammar predicates and ref spec are declared once, in s
     });
   }
 });
+
+// SESSION-CONTINUITY WAVE 4 (spec §5.6, the coordinator's safety ruling). APPENDED, for the reason the stall-watch
+// blocks above state: `session-hook.test.ts`'s citation audit cites this file by line.
+describe('the pane-scope sweep: its arming file has no writer in the tree', () => {
+  // `scope-sweep-live` arms `ccd-scope-sweep`'s stop: without it every inert scope is only recorded `would-stop`.
+  // Like `stall-watch-live` the operator touches and removes it by hand, so the ONE line of shell that may name
+  // it is the sweep's own read, no TypeScript names it at all, and no other file under ccd/ or deploy/ does on a
+  // code line. KNOWN WIDTH: a name assembled from pieces is not seen; the bar is the ordinary copy.
+  it('scope-sweep-live: one shell holder, ccd/ccd-scope-sweep, whose one line is a read; no TS holder', () => {
+    expect(holdersOf('scope-sweep-live'), 'a line of shell other than the sweep names it — a writer in waiting').toEqual(['ccd/ccd-scope-sweep']);
+    expect(codeLines(path.join(ccrcRoot, 'ccd', 'ccd-scope-sweep')).filter((l) => l.includes('scope-sweep-live')))
+      .toEqual(['[ -e "$REG/scope-sweep-live" ] && MODE=live']);
+    expect(ALL.filter((f) => stallCode(f).includes('scope-sweep-live')).map(rel)).toEqual([]);
+  });
+
+  // A writer need not be shell: every OTHER file under ccd/ and deploy/ — Python, .mjs, a unit file's
+  // `ExecStartPre=` — is read on its non-comment lines too (`#`, `//`, `*` and `/*` lines dropped; Markdown,
+  // which is prose, skipped).
+  const nonShell = (dir: string): string[] => readdirSync(dir).flatMap((e) => {
+    const p = path.join(dir, e);
+    return statSync(p).isDirectory() ? nonShell(p) : (BASH.includes(p) || p.endsWith('.md') ? [] : [p]);
+  });
+  it('scope-sweep-live: no other file under ccd/ or deploy/ names it on a code line — no Python, .mjs or unit-file writer', () => {
+    const others = bashRoots.flatMap(nonShell);
+    expect(others.length, 'the walk reached the non-shell files').toBeGreaterThan(40);
+    expect(others.filter((f) => readFileSync(f, 'utf8').split('\n')
+      .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes('scope-sweep-live'))).map(rel)).toEqual([]);
+  });
+});
