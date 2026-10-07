@@ -2566,6 +2566,29 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **So stable now waits on:** D-2661 (account-connections), `ccd-docs-tree` (the native Docs reader), and then a
     green `full-suite` on a `main` commit. The promotion is the operator's call.
 
+- **2026-10-07 09:45 UTC: the fleet box's client relinked, under the operator's go ("happy for you to do what's
+  necessary"); the argv leak measured closed.**
+  - **The act (D-4094's remedy):**
+    - `~/.local/bin/ccrc-api` was the 2026-09-17 regular-file copy. It still put the token on curl's argv with `-H`.
+    - It is now a symlink to `~/ccrc/ccd/ccrc-api`, which is the release tree's wave-13 client: `-K -` and `set +x`.
+    - The swap was atomic: a symlink at a temporary name, then `mv -T`. So no session call could find the file
+      missing.
+    - The old file is kept in the coordinator's scratchpad for rollback.
+    - `whoami` and `mail list` answered through the new link at once.
+  - **Measured closed:** a `/proc/*/cmdline` scan over 496 passes, during 40 real client calls and the fleet's own
+    traffic, saw 386 `curl` processes. None carried the header on argv.
+    - A first scan reported 6 hits. They were the scanner itself, whose own command line held the pattern text. The
+      rescan builds the pattern from pieces and excludes itself.
+  - **The other sender:** `~/.cc-sessions/notify.sh` was placed by the 2026-10-06 16:19 release with `-K -`, and it has
+    no `-H` token line.
+  - **No other copy** of the client was found under the home.
+  - **Exposure:** `/proc` is mounted without `hidepid`, but the box has one login account, and its one container runs in
+    its own pid namespace. So the argv was readable only to this account's own processes. The open question for
+    rotation is copies of the value written down: transcripts, scrollback and logs.
+  - **The rotation:** the server reads the token once, at boot (`server/src/index.ts`). A rotation is a new value in
+    `deploy/ccrc-mail.token`, placed at the fleet box's `~/.cc-secrets/ccrc-mail.token` and the server box's
+    `~/.ccrc/mail.token`, then a server restart. The release lane never touches it. Proposed to the operator, not done.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
