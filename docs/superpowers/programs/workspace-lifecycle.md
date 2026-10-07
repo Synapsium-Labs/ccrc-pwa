@@ -813,6 +813,15 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - Released/Archived fold disjointness rests on `released.ts` alone, and `inReleasedFold` could add
     `!inArchivedFold` (FM7).
   Wave 3 rewrites the archive's end of life, so its plan takes these up or rules them out.
+- **`ws-expire` has no recompute-to-pin branch-state check** (CCR-15's coordinator, mail 3939, 10-07, item 8 of
+  wave 6's X2 list; not carried by wave 6). `_ws_expire_locked` recomputes the fingerprint inside the lock
+  (`_ws_expire_fork`), then pins without re-reading the branch. So within that window:
+  - a branch deleted there proceeds as absent, where the merge base gave `pin-failed`;
+  - a branch created there is adopted at the pin's tip, into the attic, so nothing is lost.
+  - **Ruled:** a follow-up after CCR-15 wave 6 (#326) lands, reusing its three-way branch read and its
+    `state-changed` stop. Not run 314's: it edits ccd/ccd, which run 314 does not, and wave 6 holds that region.
+  - **Not an arming blocker** while it stays narrow and attic-preserving. Wave 6's reviewer is asked whether wave 6
+    widened or narrowed it; calm-mesa forwards the answer, and a "widened" re-opens this ruling.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`, `~/.cc-limits`
   or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec whitelist; never print
   secret contents.
