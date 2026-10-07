@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e738510bd296f43540206764b95960a99e565ada0e3a2472be4d05605bbaa0c7
+# ccrc:generated 1 sha256=abad72c9356cc00f929e0253dc9ecebd897119f6f2579119716ac32bcf0b6af5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19955,8 +19955,14 @@ _route_readback() {   # id -> 0 iff it recorded the pending class as already run
   # FIRST, for both witnesses.
   #
   # THE SIDECAR ANSWERS ONLY WHEN IT IS A FRESH READING OF THIS PANE AFTER THE
-  # STAMP NAMING A MODEL, and then its word is final: a pane rendering another
-  # class is not overruled by an older acknowledgement. Every other sidecar —
+  # STAMP NAMING A MODEL, and then its word is final against an OLDER
+  # acknowledgement: a pane rendering another class is not overruled by one. A
+  # NEWER one is another matter (review finding 2, #303's race): a `/model
+  # sonnet` acknowledged after the render, whose own render was missed (a
+  # status-line command that timed out on a loaded box), leaves a fresh reading
+  # of the class the pane LEFT. So a would-be positive — and only that, which
+  # is what keeps the read off the ordinary tick — asks the transcript first
+  # (`_route_readback_overruled`). Every other sidecar —
   # absent, unreadable, malformed, stale, older than the stamp, another
   # session's, no model — cannot answer, and the transcript is asked
   # (`_route_readback_transcript`, whose header holds its rules). A STALE
@@ -20010,6 +20016,7 @@ _route_readback() {   # id -> 0 iff it recorded the pending class as already run
   if [[ "$ts" =~ ^[0-9]+$ && "$uuid" == "$mine" && "$model" != - ]] && (( 10#$ts > 10#$stamp )); then
     if (( now - 10#$ts <= ROUTE_READBACK_FRESH )); then   # the sidecar answers
       [[ "$(_model_family_class "$model")" == "$cls" ]] || return 1
+      _route_readback_overruled "$id" "$cls" "$ts" && return 1   # …unless the transcript holds a NEWER /model it never rendered
       why="sidecar model $model, effort $effort, $((now - 10#$ts))s old"
     else
       lts="$ts"; lmodel="$model"   # a stale reading of this process: an older acknowledgement must agree with it
@@ -20025,6 +20032,32 @@ _route_readback() {   # id -> 0 iff it recorded the pending class as already run
   echo "$(date '+%F %T') route-readback $id: class=$cls already running ($why) — recorded applied, nothing typed" >> "$REG/swap.log"
   _route_apply_pending "$id" && return 1
   return 0
+}
+
+_route_readback_overruled() {   # id class sidecar-ts -> 0 iff the transcript holds a /model at or after the sidecar's reading that names another class, or that may have (unacked, `/fast`)
+  # THE FRESH SIDECAR'S ONE CHECK, read only on its would-be positive. "At or
+  # after", not "after": an acknowledgement of another class in the reading's
+  # own second cannot have preceded a render that still named the class, so the
+  # render came first. An undatable command (`strict`'s `x 0`) may be newer
+  # too. A transcript that cannot be named, found, read or parsed is NO
+  # counter-evidence, and the sidecar stands as it did before this check: its
+  # reading is the stronger witness, and this only ever takes a positive away.
+  # A refusal is not kept — the next tick asks again while the reading stays
+  # fresh, which bounds it at ROUTE_READBACK_FRESH; a transcript last written
+  # before the reading cannot hold a newer row, and is not read at all.
+  local id="$1" cls="$2" ts="$3" f m out kind word at shown
+  f=$(_transcript_path "$id") || return 1
+  [[ -f "$f" && -r "$f" ]] || return 1
+  m=$(_plat_mtime "$f" 2>/dev/null) && [[ "$m" =~ ^[0-9]+$ ]] && (( 10#$m >= 10#$ts )) || return 1
+  out=$(_operator_choice_read "$f" "0 since" "$ROUTE_READBACK_TAIL" strict) || return 1
+  while read -r kind word at shown; do
+    [[ "$at" =~ ^[0-9]+$ ]] || continue
+    case "$kind" in
+      drift-model) (( 10#$at == 0 || 10#$at >= 10#$ts )) && return 0 ;;
+      ran-model)   (( 10#$at >= 10#$ts )) && [[ "$(_model_class_of "$word")" != "$cls" ]] && return 0 ;;
+    esac
+  done <<< "$out"
+  return 1
 }
 
 _route_readback_transcript() {   # id class stamp later-ts later-model -> ONE line: a verdict word, of which only `matched <ack-epoch> <born> <shown>` counts. Always 0.

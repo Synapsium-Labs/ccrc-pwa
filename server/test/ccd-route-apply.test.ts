@@ -1485,6 +1485,36 @@ describe('the read-back\'s second witness — the transcript\'s own acknowledged
     expect(reads()).toBe(0);
   });
 
+  it('a FRESH sidecar of the class is overruled by a NEWER acknowledgement naming another class: the render that switch caused was missed', () => {
+    // Review finding 2 (#303's race): rendered opus at now-60, then `/model sonnet` acknowledged at now-30
+    // whose own render never landed (a status-line command timed out on a loaded box).
+    const R = nowS() - 60;
+    sidecarAt(R, 'claude-opus-5-5');
+    const p = writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5')), cmd(R + 30, 'model', 'sonnet'), ack(R + 30, SESSION('Sonnet 5'))]);
+    tick();
+    unchanged();
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5')), cmd(R, 'model', 'sonnet'), ack(R, SESSION('Sonnet 5'))]);
+    tick();
+    unchanged();   // in the reading's own second: the render that still named opus came first
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5')), cmd(R + 30, 'fast'), ack(R + 30, 'Fast mode ON · model set to `Opus 5.6`')]);
+    tick();
+    unchanged();   // a newer /fast may have changed it
+    expect(reads(), 'each would-be positive asked the transcript').toBe(3);
+    fs.writeFileSync(p, `${[cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5')), cmd(R - 30, 'model', 'sonnet'), ack(R - 30, SESSION('Sonnet 5'))].join('\n')}\n`);
+    fs.utimesSync(p, R - 10, R - 10);
+    tick();
+    expect(reads(), 'a transcript last written before the reading holds nothing newer: not read').toBe(3);
+    expect(h.reg(ID, 'routeapplied'), 'and the fresh reading answers').toBe('class=opus');
+  });
+
+  it('control: an acknowledgement of another class OLDER than the fresh reading does not overrule it', () => {
+    sidecarAt(nowS() - 60, 'claude-opus-5-5');
+    writeTranscript([cmd(nowS() - 120, 'model', 'sonnet'), ack(nowS() - 120, SESSION('Sonnet 5'))]);
+    tick();
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
+    expect(readbackLines()).toEqual([expect.stringContaining('(sidecar model claude-opus-5-5')]);
+  });
+
   it('`default` never reads back, not even on an acknowledgement whose own word is the Default row\'s', () => {
     h.sh(`_reg_set ${ID} class default`); stampAt(STAMP);
     fs.rmSync(usageFile());
