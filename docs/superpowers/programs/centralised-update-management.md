@@ -2594,6 +2594,24 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     `deploy/ccrc-mail.token`, placed at the fleet box's `~/.cc-secrets/ccrc-mail.token` and the server box's
     `~/.ccrc/mail.token`, then a server restart. The release lane never touches it. Proposed to the operator, not done.
 
+- **2026-10-07 10:44 UTC: operator ruling: no hand rotation. The box token's rotation waits for an automated feature.**
+  - **The operator's words:** "Surely this should be an automated ccrc feature that is handled without intervention",
+    then "we can wait for the feature".
+  - **Why it is manual today, measured:**
+    - The value is made by hand into the gitignored `deploy/ccrc-mail.token`. Only `deploy.sh`'s `ship_secret` places
+      it, by copy and `chmod`.
+    - `ccrc install` mints and places neither box copy: it excludes the file. It asks for the agent link token by hand.
+    - The server reads the token once at boot and accepts exactly one value (`server/src/index.ts:57`). So a change is
+      a restart, with a 401 window until the fleet copy matches.
+    - The agent cannot write `~/.cc-secrets`, so the server cannot push the fleet copy.
+  - **Why waiting is acceptable:** the 35 transcript copies sit in homes that only this box's one login account can
+    read, and that account already reads the token file. What the copies add is the value having been sent as model
+    context, and any backup of those homes.
+  - **Next:** a design (brainstorming, then an HTML spec for the operator's review) for an automated lifecycle of the
+    box token, and of the agent link token. Its scope: minted by the server at install, rotated on a schedule and on a
+    trigger, an overlap window, a reload without restart, and a fleet-side pull. Its first rotation retires the leaked
+    value. Where it runs (this programme or its own) is decided with the spec.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
