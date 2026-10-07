@@ -1507,9 +1507,18 @@ function redactJwtShapes(s) {
   return s.replace(/[A-Za-z0-9_.-]+/g, redactJwtRun);
 }
 
-/** An ANSI CSI sequence (`ESC[…m` and kin). Written as the escape text, never
- *  the raw byte (source-bytes.test.ts). */
-const ANSI_CSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+/** REDACTED_MARK as regex source (D-4307: no sequence ever takes a mark's first character). */
+const MARK_RE_SRC = REDACTED_MARK.replace(/[[\]\\^$.|?*+(){}]/g, '\\$&');
+/** An ANSI escape sequence (D-4307, amended by review 316 F1): an ECMA-48 CSI, `ESC [` or the 8-bit 0x9B, with any
+ *  parameter bytes 0x30-0x3F and intermediate bytes 0x20-0x2F before one final byte 0x40-0x7E; or any other
+ *  `ESC`-introduced sequence, intermediate bytes then one final byte 0x30-0x7E (`ESC(B`, `ESC7`, `ESC_`). The CSI's
+ *  `[` and every final byte are never the first character of a redaction mark, so a mark the raw pass wrote after an
+ *  escape is never split. Linear (D-4306): each arm is disjoint classes in sequence and each lookahead is a
+ *  fixed-length literal, so a failed start costs its own bytes once. Written as escape text, never the raw byte
+ *  (source-bytes.test.ts). */
+const ANSI_ESCAPE_RE = new RegExp(`(?:\\x1b(?!${MARK_RE_SRC})\\[|\\x9b)[0-?]*[ -/]*(?!${MARK_RE_SRC})[@-~]|\\x1b[ -/]*(?!${MARK_RE_SRC})[0-~]`, 'g');
+/** A field holding neither byte has no escape sequence and takes the plain path. */
+const ESCAPE_INTRODUCER_RE = /[\x1b\x9b]/;
 
 /** One run through all three layers, failing closed. V8 runs these patterns
  *  by backtracking on a bounded stack, so over a run of several MiB `replace`
@@ -1560,39 +1569,54 @@ function redactLayers(segment, idx) {
 
 /** Redact one field's FULL raw text, before any cut, cap, escape or
  *  serialisation (§8.3: JSON escaping glues `\n` onto the next run, and a cut
- *  leaves a prefix no pair matches). Runs are split at ANSI CSI sequences
- *  first, so a coloured token is still one run; the sequences themselves are
- *  kept. D-4202
+ *  leaves a prefix no pair matches). Runs are split at ANSI escape sequences
+ *  (`ANSI_ESCAPE_RE`: every ECMA-48 CSI, 7-bit or 8-bit, and every other
+ *  `ESC`-introduced sequence) first, so a coloured token is still one run; the
+ *  sequences themselves are kept. D-4202
  *
- *  A token coloured in PART (`grep --color=always`, a word-diff, a
- *  highlighter) is split across fragments, and no layer sees it whole. So a
- *  field that holds a CSI sequence gets a second pass: the per-fragment result
- *  `A`, its CSI sequences removed (`P`, accumulated from the fragments
- *  themselves, never by re-matching CSI in `A`), run through the layers once
- *  more (`C`). `C === P` means the joined text holds nothing new, and `A` is
- *  returned with its colours; otherwise `C` is returned, the sequences dropped
- *  from that one field's output (presentation only, the stored blob stays
- *  verbatim) and the result the union of both passes' redactions. A field
- *  with no CSI sequence takes the per-fragment path alone, at no extra cost.
- *  D-4307 (history-redaction-csi-joined-belt) */
+ *  A field holding an escape introducer is read three ways and the union of
+ *  their redactions is returned. The RAW reading redacts the text whole, the
+ *  sequence bytes being ordinary text: it catches a value whose first
+ *  character a sequence would take for its final byte (`ESC[` then `abc...`
+ *  reads as `ESC[a` + `bc...` to the other two). The PER-FRAGMENT reading
+ *  splits the raw reading's output at the sequences and redacts each
+ *  fragment, so a token coloured in WHOLE is one run. A token coloured in PART
+ *  (`grep --color=always`, a word-diff, a highlighter) is split across
+ *  fragments, and no layer sees it whole, so the JOINED reading takes the
+ *  per-fragment result `A`, its sequences removed (`P`, accumulated from the
+ *  fragments themselves, never by re-matching an escape in `A`), and runs the
+ *  layers once more (`C`). `C === P` means the joined text holds nothing new,
+ *  and `A` is returned with its colours; otherwise `C` is returned, the
+ *  sequences dropped from that one field's output (presentation only, the
+ *  stored blob stays verbatim). A field with no escape introducer takes the
+ *  plain path alone, at no extra cost.
+ *
+ *  The mark rule: the raw reading may leave a mark after `ESC`, after
+ *  `ESC[1;`, after `ESC(` or after the 8-bit introducer, and a sequence match
+ *  over that text would read the mark's `[` as a CSI opener or as a final
+ *  byte and split the mark. `ANSI_ESCAPE_RE` therefore never takes a mark's
+ *  first character as an opener or a final byte.
+ *  D-4307 (history-redaction-csi-joined-belt, amended: review 316 F1) */
 export function redactField(text, idx) {
+  if (!ESCAPE_INTRODUCER_RE.test(text)) return redactRun(text, idx);
+  const raw = redactRun(text, idx);
   let out = '';
   let plain = '';
   let last = 0;
   let sawCsi = false;
-  ANSI_CSI_RE.lastIndex = 0;
-  for (let m = ANSI_CSI_RE.exec(text); m !== null; m = ANSI_CSI_RE.exec(text)) {
-    const frag = redactRun(text.slice(last, m.index), idx);
+  ANSI_ESCAPE_RE.lastIndex = 0;
+  for (let m = ANSI_ESCAPE_RE.exec(raw); m !== null; m = ANSI_ESCAPE_RE.exec(raw)) {
+    const frag = redactRun(raw.slice(last, m.index), idx);
     out += frag + m[0];
     plain += frag;
     last = m.index + m[0].length;
     sawCsi = true;
   }
-  const tail = redactRun(text.slice(last), idx);
+  const tail = redactRun(raw.slice(last), idx);
   const perFragment = out + tail;
   if (!sawCsi) return perFragment;
-  // `plain` is accumulated from the fragments, never rebuilt by re-matching CSI in `perFragment`: a redaction can
-  // create a CSI shape (a bare ESC before `[redacted]` reads as `ESC[r...`), and a re-strip would eat the mark.
+  // `plain` is accumulated from the fragments, never rebuilt by re-matching an escape in `perFragment`: a redaction can
+  // create an escape shape (a bare ESC before `[redacted]` reads as `ESC[r...`), and a re-strip would eat the mark.
   plain += tail;
   const joined = redactRun(plain, idx);
   return joined === plain ? perFragment : joined;

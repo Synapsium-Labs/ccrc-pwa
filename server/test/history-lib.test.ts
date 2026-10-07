@@ -1573,11 +1573,61 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     expect(out).toBe(`\x1b${M} ${M}`);
     expect(out.split(M)).toHaveLength(3);
   });
-  it('a field with no CSI sequence takes the per-fragment path alone (a bare ESC is not a CSI)', () => {
+  it('a bare ESC before a known value, and a lone ESC before text, leave the value redacted and the rest as it came', () => {
     const tok = rndHex(32);
     const idx = idxOf([tok]);
     expect(libRedact.redactField(`\x1b${tok}\x1b`, idx)).toBe(`\x1b${M}\x1b`);
     expect(libRedact.redactField('no secret \x1b here', idx)).toBe('no secret \x1b here');
+  });
+  it('F1: a CSI whose parameters hold \':\', \'<\', \'=\' or \'>\' is a CSI: the value after it is redacted and the colours kept', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    expect(libRedact.redactField(`\x1b[38:5:196m${tok}\x1b[0m`, idx)).toBe(`\x1b[38:5:196m${M}\x1b[0m`);
+    expect(libRedact.redactField(`\x1b[<5m${tok}`, idx)).toBe(`\x1b[<5m${M}`);
+    expect(libRedact.redactField(`\x1b[=1m${tok}`, idx)).toBe(`\x1b[=1m${M}`);
+    expect(libRedact.redactField(`\x1b[>4;2m${tok}`, idx)).toBe(`\x1b[>4;2m${M}`);
+  });
+  it('F1: an 8-bit CSI (U+009B) is a CSI', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    expect(libRedact.redactField(`\u009b31m${tok}\u009b0m`, idx)).toBe(`\u009b31m${M}\u009b0m`);
+  });
+  it('F1: a two-byte escape does not glue its final byte onto the value after it', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    expect(libRedact.redactField(`\x1b(B${tok}`, idx)).toBe(`\x1b(B${M}`);
+    expect(libRedact.redactField(`\x1b7${tok}\x1b8`, idx)).toBe(`\x1b7${M}\x1b8`);
+    expect(libRedact.redactField(`\x1b_${tok}\x1b\\`, idx)).toBe(`\x1b_${M}\x1b\\`);
+  });
+  it('F1: a value whose first character a sequence would take as its final byte is redacted (the raw reading)', () => {
+    const v = 'a' + rndHex(16);
+    const idx = idxOf([v]);
+    expect(libRedact.redactField(`\x1b[${v} end`, idx)).toBe(`\x1b[${M} end`);
+    expect(libRedact.redactField(`\x1b${v}`, idx)).toBe(`\x1b${M}`);
+  });
+  it('F1: a redaction mark is never the [ or the final byte of a sequence, so the joined belt keeps it whole', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    const split = ['s', 'k-ant', '\x1b[m', '-api03-', 'x'.repeat(40)].join('');
+    expect(libRedact.redactField(`\x1b[1;${tok} \x1b[31m${split}`, idx)).toBe(`1;${M} ${M}`);
+    expect(libRedact.redactField(`\x1b(${tok} \x1b[31m${split}`, idx)).toBe(`\x1b(${M} ${M}`);
+    expect(libRedact.redactField(`\u009b${tok} \x1b[31m${split}`, idx)).toBe(`\u009b${M} ${M}`);
+  });
+  it('F1: escape recognition stays linear', () => {
+    const none = libRedact.makePairIndex([]);
+    for (const s of [
+      '\x1b[' + '0'.repeat(1 << 18),
+      '\x1b['.repeat(1 << 17),
+      '\u009b' + ':'.repeat(1 << 18),
+      '\x1b('.repeat(1 << 17),
+      '\x1b[' + ' '.repeat(1 << 18),
+      ('\x1b' + ' '.repeat(64)).repeat(1 << 12),
+    ]) {
+      const t0 = Date.now();
+      const out = libRedact.redactField(s, none);
+      expect(Date.now() - t0, s.slice(0, 8)).toBeLessThan(LINEAR_MS);
+      expect(out === s).toBe(true);
+    }
   });
   it('the mark holds no JSON- or XML-special character, and the final belt applies the same layers', () => {
     expect(M).not.toMatch(/["\\<>&]/);
