@@ -3338,13 +3338,22 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   Fix round 2 captured 2.1.290 and 2.1.291 with the rig as it stood (`e47f3689f`): no adaptation was needed, and each
   version's labels and notes equal 2.1.289's on all 14 scenarios. The capture ran only the versions installed when it
   started (2.1.285 to 2.1.291, two of them new to the corpus); a version installed later is wave 2's first step.
+  Wave 2 captured 2.1.292 with the rig as it stood at `ccf0167b9` (`recapture.sh --missing`, 2026-10-07 10:11:46–10:20:55
+  UTC; the capture's `rig.sh`, scenarios, mock and `ccd/` are those of the snapshot, and the rig directory here differs
+  from it in `sanitize.mjs` alone): no adaptation was needed, and its labels and notes equal 2.1.291's on all 14
+  scenarios. The labels equal as sets: a fixture lists them in the order they were reached and the matrix sorts them,
+  and interrupt-exit's two hang labels were reached `sub-hang` first, as on 2.1.285 to 2.1.288 (2.1.289 to 2.1.291 have
+  `main-hang` first); the notes are the same two as before (`dialog answered: Background work is running` on
+  interrupt-exit, `probe ["r1-resumed"]: not reached` on wf-iso-resume) and nothing else. The capture ran only the
+  version the corpus lacked of those installed when it started (2.1.285, 2.1.286, 2.1.287, 2.1.289, 2.1.290, 2.1.291,
+  2.1.292), which was 2.1.292 alone; a version installed later waits for the next such capture.
 - **D-4005** — `scenario-agent-wait-covers-sub-done` (Task 4): on 2.1.289 the Agent call runs in the background even
   with `run_in_background: false` and its result reaches the main loop only inside a reminder-only turn, so the plan's
   `main-done` regex could not match; it gained `|^$`, and because that alone could end a step before the subagent's
   last reply (a false "worktree left" for Q6), the four Agent scenarios wait on `["sub-done","main-done"]`.
   Widened by Task 9 (the corpus): measured on every captured version (2.1.280, .281, .285, .286, .287, .288, .289,
-  and .290 and .291 from fix round 2's capture), in the rig every Agent call launches in the background
-  (`async_launched`), whether the mock set
+  and .290 and .291 from fix round 2's capture, and .292 from wave 2's), in the rig every Agent call launches in the
+  background (`async_launched`), whether the mock set
   `run_in_background` false (six scenarios) or true (agent-iso-bg), and the key never appears in PreToolUse input;
   a foreground Agent call is unmeasured.
 - **D-4006** — `rig-guard-hardening-from-review` (Task 4 review): `reap` skips a `ccrc-dlg-rig.*` entry that is a symlink
