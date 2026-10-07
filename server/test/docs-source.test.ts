@@ -638,20 +638,27 @@ function bodyOf(lines: readonly string[], decl: RegExp): [number, number] | null
   return end === -1 ? null : [start, end];
 }
 
-/**
- * Every `.killed` / `.signal` PROPERTY READ across the docs adapter's files and `lifecycle.ts`, held to refinement (g):
- * `CcdResult`'s two halves have ONE reader, `ccdEnding`, so they are never interpreted twice where the readings could
- * drift apart. Allowed: any read inside `ccdEnding`'s body; inside `ccd()`'s body exactly `CCD_PIN`'s four, off `r`
- * (the Runner's `ExecResult`, read to BUILD the `CcdResult`, not a `CcdResult`); and `ending.signal`, the reader's own
- * `CcdEnding` output. Every other read is named as `file:line: receiver.prop`. A comment, a string, a type member and
- * an object-literal key (`killed:`) are not property reads, and are blanked or never match, because the rule is about
- * who interprets a measured result and a declaration interprets nothing. The floor (at least one of each read inside
- * `ccdEnding`) and the `ccd()` pin (exactly the four) are also reported as problems, so the scan cannot pass on nothing.
- */
 /** `ccd()`'s two lines, `killed: r.killed === undefined ? UNMEASURED : r.killed` and the same for `signal`: each reads
  *  its half twice (the absence test, then the value), so four reads, sorted. A fifth, or a missing one, reds. */
 const CCD_PIN = ['r.killed', 'r.killed', 'r.signal', 'r.signal'] as const;
 
+/**
+ * Every `.killed` / `.signal` PROPERTY READ across the docs adapter's files and `lifecycle.ts`, held to refinement (g):
+ * `CcdResult`'s two halves have ONE reader, `ccdEnding`, so they are never interpreted twice where the readings could
+ * drift apart. Allowed: any read inside `ccdEnding`'s body; inside `ccd()`'s body exactly `CCD_PIN`'s four, off `r`
+ * (the Runner's `ExecResult`, read to BUILD the `CcdResult`, not a `CcdResult`); and exactly one `ending.signal` in
+ * `docs/ccdsource.ts` alone, the reader's own `CcdEnding` output, and only while that file binds `ending` once, as
+ * `const ending = ccdEnding(`, and never assigns it again (otherwise every `ending.signal` read is a problem). Every
+ * other read is named as `file:line: receiver.prop`; `res.k`, `res!.k` and `(res).k` all name receiver `res`. A comment,
+ * a string, a type member and an object-literal key (`killed:`) are not property reads, and are blanked or never
+ * match, because the rule is about who interprets a measured result and a declaration interprets nothing. The floor
+ * (at least one of each read inside `ccdEnding`) and the `ccd()` pin (exactly the four) are also reported as problems,
+ * so the scan cannot pass on nothing.
+ *
+ * DELIBERATELY NOT CAUGHT: bracket access (`res['killed']`), destructuring (`const { killed } = res`), and a `.killed`
+ * inside a template literal whose quote or `//` confuses the blanker. A text guard stops at the ordinary spellings,
+ * and these are named here instead of chased.
+ */
 function oneReaderProblems(files: readonly { name: string; text: string }[]): string[] {
   const problems: string[] = [];
   const inEnding = { killed: 0, signal: 0 };
@@ -664,15 +671,28 @@ function oneReaderProblems(files: readonly { name: string; text: string }[]): st
     const ccdBody = name.endsWith('lifecycle.ts') ? bodyOf(lines, /^export (?:async )?function ccd\(/) : null;
     sawEnding ||= ending !== null;
     sawCcd ||= ccdBody !== null;
+    // `ending.signal` is the reader's output only in ccdsource.ts, bound once by ccdEnding( and never reassigned.
+    const isAdapter = name.endsWith('docs/ccdsource.ts');
+    const bindings = lines.filter((l) => /\b(?:const|let|var)\s+ending\b/.test(l));
+    const assigns = lines.filter((l) => /(?<![\w$.])ending\s*=(?![=>])/.test(l));
+    const endingBound = isAdapter && bindings.length === 1 && /\bconst ending = ccdEnding\(/.test(bindings[0]!) && assigns.length === 1;
+    const endingReads: string[] = [];
     lines.forEach((l, n) => {
-      for (const m of l.matchAll(/([A-Za-z_$][\w$]*)\s*\??\.\s*(killed|signal)\b/g)) {
-        const [, receiver, prop] = m as unknown as [string, string, 'killed' | 'signal'];
+      for (const m of l.matchAll(/(?:\(\s*([A-Za-z_$][\w$]*)\s*\)|([A-Za-z_$][\w$]*)\s*!?|(\)))\s*\??\.\s*(killed|signal)\b/g)) {
+        const receiver = m[1] ?? m[2] ?? m[3]!;
+        const prop = m[4] as 'killed' | 'signal';
         if (ending && n >= ending[0] && n <= ending[1]) { inEnding[prop]++; continue; }
         if (ccdBody && n >= ccdBody[0] && n <= ccdBody[1] && receiver === 'r') { inCcd.push(`${receiver}.${prop}`); continue; }
-        if (receiver === 'ending' && prop === 'signal') continue;
+        if (receiver === 'ending' && prop === 'signal' && endingBound) { endingReads.push(`${name}:${n + 1}`); continue; }
         problems.push(`${name}:${n + 1}: ${receiver}.${prop}`);
       }
     });
+    if (isAdapter && endingBound && endingReads.length !== 1) {
+      problems.push(`pin: ${name} reads ending.signal ${endingReads.length} times, wanted exactly 1`);
+    }
+    if (isAdapter && !endingBound) {
+      problems.push(`${name}: ending must be bound once, by const ending = ccdEnding(, and never reassigned`);
+    }
   }
   if (!sawEnding) problems.push('lifecycle.ts: no ccdEnding body found');
   if (!sawCcd) problems.push('lifecycle.ts: no ccd() body found');
@@ -712,6 +732,39 @@ describe('refinement (g): killed and signal have one reader, ccdEnding', () => {
     expect(oneReaderProblems(files)).toEqual([`src/docs/ccdsource.ts:${line}: res.killed`]);
   });
 
+  it('CONTROL: a non-null assertion and a parenthesised receiver are readers too', () => {
+    for (const [spelling, receiver] of [['res!.killed', 'res.killed'], ['(res).signal', 'res.signal']] as const) {
+      const planted = `  if (${spelling}) return fail('ccd-timeout');`;
+      const files = withPlanted('src/docs/ccdsource.ts', CLASSIFY_ANCHOR, planted);
+      const line = files.find((f) => f.name === 'src/docs/ccdsource.ts')!.text.split('\n').findIndex((l) => l === planted) + 1;
+      expect(oneReaderProblems(files)).toEqual([`src/docs/ccdsource.ts:${line}: ${receiver}`]);
+    }
+  });
+
+  it('CONTROL: an `ending` rebound to a CcdResult in classify() loses the allowance, and every ending.signal read is named', () => {
+    const planted = '  { const ending = res; if (ending.signal) return fail(\'ccd-killed\'); }';
+    const files = withPlanted('src/docs/ccdsource.ts', CLASSIFY_ANCHOR, planted);
+    const text = files.find((f) => f.name === 'src/docs/ccdsource.ts')!.text.split('\n');
+    const plantedLine = text.findIndex((l) => l === planted) + 1;
+    const realLine = text.findIndex((l) => l.includes("ending.signal })")) + 1;
+    expect(oneReaderProblems(files)).toEqual([
+      `src/docs/ccdsource.ts:${plantedLine}: ending.signal`,
+      `src/docs/ccdsource.ts:${realLine}: ending.signal`,
+      'src/docs/ccdsource.ts: ending must be bound once, by const ending = ccdEnding(, and never reassigned',
+    ]);
+  });
+
+  it('CONTROL: a second ending.signal read in the adapter reds the exactly-one pin', () => {
+    const files = withPlanted('src/docs/ccdsource.ts', "  if (ending.kind === 'deadline')", '  const s2 = ending.signal;');
+    expect(oneReaderProblems(files)).toEqual(['pin: src/docs/ccdsource.ts reads ending.signal 2 times, wanted exactly 1']);
+  });
+
+  it('CONTROL: ending.signal outside ccdsource.ts is a reader', () => {
+    const files = withPlanted('src/docs/policy.ts', 'export ', '  const s = ending.signal;');
+    const line = files.find((f) => f.name === 'src/docs/policy.ts')!.text.split('\n').findIndex((l) => l === '  const s = ending.signal;') + 1;
+    expect(oneReaderProblems(files)).toEqual([`src/docs/policy.ts:${line}: ending.signal`]);
+  });
+
   it('CONTROL: a third read planted inside ccd() reds the ccd() pin', () => {
     const files = withPlanted('src/lifecycle.ts', '  return {\n    ok: r.code === 0', '  const k = r.killed;');
     expect(oneReaderProblems(files)).toEqual(['pin: ccd() reads [r.killed, r.killed, r.killed, r.signal, r.signal] off its ExecResult, wanted exactly [r.killed, r.killed, r.signal, r.signal]']);
@@ -734,6 +787,7 @@ describe('refinement (g): killed and signal have one reader, ccdEnding', () => {
       '     res.killed */',
       "  const msg = 'res.killed and res.signal';",
       '  const key = { killed: false, signal: null };',
+      '  type T = { killed: boolean; signal: string | null };',
     ].join('\n');
     expect(oneReaderProblems(withPlanted('src/docs/ccdsource.ts', CLASSIFY_ANCHOR, planted))).toEqual([]);
   });
