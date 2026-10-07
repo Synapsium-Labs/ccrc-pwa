@@ -280,6 +280,13 @@ time.
   - Deploy verification is pending: this fleet box still reported v0.0.118 at 16:20. Once the updater moves the
     boxes, the read-only checks are the server's `/health` version (a server that answers has applied migration 17,
     since a failed migration refuses to start) and the fleet box's `ccrc version`.
+- **R21 (2026-10-07 16:22)**, wave 2's residue co-edit is confirmed.
+  - Run 291's coordinator answered yes in mail 3872, for exactly mail 3871's lines on `7f7bf4afc`: `shared/api.ts`
+    :9251 inside wave 1's block, and `watch.ts`'s `StallResolution` (:215-218), `sweepStalls`' outer catch comment
+    (:4207-4208), and `stallResolveNow`'s docstring and two returns (:4219-4251). It measured run 291's tip
+    `9bdcb0d2a`, which now carries its Task 12, as clean in `merge-tree` against `main`, with no hunk near those lines.
+  - Mail 3874 tells the worker that this confirmation licenses those lines, so item 5 runs without a stop. Any
+    other line in either file is a stop-and-report.
 
 ## Carried constraints (reviewers get these)
 
@@ -313,7 +320,7 @@ time.
 - **Wave 2:** run 322, `docs/superpowers/plans/2026-10-05-stall-watch-settings-w2-pwa.md`, all four tasks plus wave
   1's review residue, on the fresh child `ccrc-pwa-calm-basin`. Its brief is
   `.superpowers/sdd/stall-watch-settings/w2-wave-brief.md` (R20).
-  - Item 5 touches `shared/api.ts` and `watch.ts` only after run 291's coordinator consents (mail 3871) and this
-    coordinator confirms, or after claim 1070 releases.
+  - Item 5 touches `shared/api.ts` and `watch.ts` only in the lines run 291's coordinator consented to (mail 3872),
+    as confirmed in R21 (mail 3874).
   - At wave-done: re-measure, advance, then a review run with the held-out panel. The merge is the operator's call.
     Wave 2 is the last wave, so its close carries `final:true`.
