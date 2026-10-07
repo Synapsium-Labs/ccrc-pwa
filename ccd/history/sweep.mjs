@@ -27,7 +27,7 @@
 // test-only preload, never a variable this file reads (§10.1 "Seams").
 import fs, {
   chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readdirSync,
-  readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
+  readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -4242,11 +4242,66 @@ export function exportCensus(db, nowMs, budget) {
 /** The verdict kinds that chain or map an epoch: each epochs row needs one (§9.14, W1-j). */
 const EPOCH_VERDICT_KINDS = new Set(['epoch-confirmed', 'epoch-chained', 'mapping']);
 
+/** The journal audit reads a month file this many bytes at a time, asking the run's wall clock before each read (review 316 F17),
+ *  and buffers at most this much of one line: a longer line is no record journalRecord writes (a spool record carries one parsed
+ *  line of at most SPOOL_LINE_MAX bytes; a verdict ids, a uuid and at most one path), so it is counted in journal_skipped, once,
+ *  and never held whole. */
+export const AUDIT_READ_BYTES = 1 << 20;
+
+/** The lines of the open file `fd`, in order, read AUDIT_READ_BYTES at a time into ONE reused buffer. `inBudget()` is asked before
+ *  EVERY read and a no ends the walk at once (false). `onLine(buf)` gets each `\n`-terminated line without its `\n`, and at EOF a
+ *  non-empty unterminated last piece, as `split('\n')` gave; `onLine` must consume its buffer before returning, because the
+ *  buffer is a view of the reused read buffer or a copy joined from pieces. A line that spans reads is kept as copied pieces. A
+ *  line whose running total passes AUDIT_READ_BYTES is reported as `onLine(null)` exactly once, its pieces dropped, and the rest of
+ *  it discarded up to its `\n` (`over`): it is never buffered. true at EOF. */
+function auditLines(fd, inBudget, onLine) {
+  const buf = Buffer.allocUnsafe(AUDIT_READ_BYTES);
+  let pieces = [];
+  let have = 0;
+  let over = false;
+  let pos = 0;
+  for (;;) {
+    if (!inBudget()) return false;
+    const n = readSync(fd, buf, 0, AUDIT_READ_BYTES, pos);
+    if (n === 0) break;
+    pos += n;
+    const chunk = buf.subarray(0, n);   // indexOf must never see the stale tail of a shorter read
+    let from = 0;
+    while (from < n) {
+      const nl = chunk.indexOf(10, from);
+      const end = nl === -1 ? n : nl;
+      if (!over) {
+        have += end - from;
+        if (have > AUDIT_READ_BYTES) {
+          onLine(null);
+          over = true;
+          pieces = [];
+          have = 0;
+        } else if (nl !== -1 && pieces.length === 0) {
+          have = 0;
+          onLine(chunk.subarray(from, end));    // a whole line inside this read: no copy
+        } else {
+          pieces.push(Buffer.from(chunk.subarray(from, end)));   // copied: buf is reused by the next read
+          if (nl !== -1) { const line = Buffer.concat(pieces); pieces = []; have = 0; onLine(line); }
+        }
+      }
+      if (nl === -1) break;
+      over = false;                          // an over-long line ends at its \n
+      from = nl + 1;
+    }
+  }
+  if (!over && pieces.length > 0) onLine(Buffer.concat(pieces));
+  return true;
+}
+
 /** The journal audit (§9.2 step 2, W1-j; rev 3.2 review, DI8): every spool_receipts row has its `spool`
  *  record, every family and every chained epoch its `verdict`, every redact_hashes row its `redact` record.
- *  Incremental by rowid from the ('journal-audit', 1) cursor; whole-file reads of this store's journal, one month
- *  file at a time (journal/<store_id>/ only — another store's directory is never read), bounded by the run's wall
- *  clock. A month file that cannot be read counts `journal_audit_unreadable` and ends the audit unfinished.
+ *  Incremental by rowid from the ('journal-audit', 1) cursor; this store's journal, one month file at a time
+ *  (journal/<store_id>/ only — another store's directory is never read), read AUDIT_READ_BYTES at a time, the run's wall
+ *  clock asked before every read, so one large month cannot carry the audit past its budget (F17); a month file is opened
+ *  O_NOFOLLOW|O_NONBLOCK and must be a regular file, else journal_audit_unreadable. An audit cut short leaves its cursor
+ *  where it was and starts again from the first month at the next census, as before. A month file that cannot be read
+ *  counts `journal_audit_unreadable` and ends the audit unfinished.
  *  Skipped while journal_outbox holds rows (their verdicts are still in flight). Folds journal_missing_*
  *  and records journal_skipped (malformed or unknown lines seen) and journal_growth_30d (bytes appended in
  *  the trailing 30 days). Returns true when it ran to the end. */
@@ -4273,30 +4328,38 @@ export function journalAudit(db, ctx, nowMs) {
   const since = nowMs - 30 * DAY_MS;
   let skipped = 0;
   let growth = 0;
+  const inBudget = () => withinBudget({ elapsedMs: ctx.budget.now() - ctx.budget.startMs, bytes: 0, maxMs: ctx.budget.maxMs });
   for (const f of files) {
-    if (!withinBudget({ elapsedMs: ctx.budget.now() - ctx.budget.startMs, bytes: 0, maxMs: ctx.budget.maxMs })) return false;
-    let text;
+    let fd = null;
     try {
-      text = readFileSync(join(dir, f), 'utf8');
-    } catch {
+      // D-4347 (history-planted-entries-never-wedge): a month file is opened as appendJournal opens the live one, O_NOFOLLOW with its type judged on the descriptor, and here nonblocking too, so a FIFO or a link with a month file's name counts journal_audit_unreadable and is never waited on (review 316 F10, F17).
+      fd = openSync(join(dir, f), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      if (!fstatSync(fd).isFile()) { bump(db, 'journal_audit_unreadable'); return false; }
+      let draining = null;
+      const finished = auditLines(fd, inBudget, (b) => {
+        if (b === null) { skipped += 1; return; }
+        if (b.length === 0) return;
+        const line = b.toString('utf8');
+        const p = parseJournalRecord(line);
+        if (p.kind !== 'record') { skipped += 1; return; }
+        const rec = p.rec;
+        if (rec.t >= since) growth += b.length + 1;
+        if (rec.k === 'file') draining = rec.name;
+        else if (rec.k === 'spool' && draining !== null) want.spool.delete(eventKey(draining, rec.ord));
+        else if (rec.k === 'redact') want.redact.delete(`${rec.len}\0${rec.sha256}`);
+        else if (rec.k === 'verdict' && rec.kind === 'family') want.family.delete(`${rec.ccrc_id}\0${rec.generation}`);
+        else if (rec.k === 'verdict' && EPOCH_VERDICT_KINDS.has(rec.kind)) want.epoch.delete(`${rec.ccrc_id}\0${rec.cc_session_uuid}`);
+      });
+      if (!finished) return false;
+    } catch (e) {
+      if (!isFsError(e)) throw e;
       // Named, not swallowed (Task 26F item 6): a persistently unreadable month file would otherwise stop every audit
       // with no sign of why, journal_audit_ms merely going stale. periodicCensus ignores the answer, so this counter is
       // the reason.
       bump(db, 'journal_audit_unreadable');
       return false;
-    }
-    let draining = null;
-    for (const line of text.split('\n')) {
-      if (line === '') continue;
-      const p = parseJournalRecord(line);
-      if (p.kind !== 'record') { skipped += 1; continue; }
-      const rec = p.rec;
-      if (rec.t >= since) growth += Buffer.byteLength(line) + 1;
-      if (rec.k === 'file') draining = rec.name;
-      else if (rec.k === 'spool' && draining !== null) want.spool.delete(eventKey(draining, rec.ord));
-      else if (rec.k === 'redact') want.redact.delete(`${rec.len}\0${rec.sha256}`);
-      else if (rec.k === 'verdict' && rec.kind === 'family') want.family.delete(`${rec.ccrc_id}\0${rec.generation}`);
-      else if (rec.k === 'verdict' && EPOCH_VERDICT_KINDS.has(rec.kind)) want.epoch.delete(`${rec.ccrc_id}\0${rec.cc_session_uuid}`);
+    } finally {
+      if (fd !== null) closeSync(fd);
     }
   }
   if (want.spool.size > 0) bump(db, 'journal_missing_spool', want.spool.size);

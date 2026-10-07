@@ -15,8 +15,10 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { syncBuiltinESMExports } from 'node:module';
 import * as pty from 'node-pty';
-import { WRITING_FORMS, CARRIER_KILL_S, journalRecord, floorThreshold } from '../../ccd/history/lib.mjs';
+import { WRITING_FORMS, CARRIER_KILL_S, journalRecord, floorThreshold, historyPaths } from '../../ccd/history/lib.mjs';
+import { createStore, openWriter, closeWriter, getMeta } from '../../ccd/history/store.mjs';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, preloadOptions, plantSession, plantTranscript, spoolLine, openStoreRO,
   counters, journalRecords, PRELOADS, readTxlog, writes, type TxEv, type HistoryBox,
@@ -989,6 +991,76 @@ describe('W1-j and O34: the journal audit', () => {
     expect(countOf(box, 'journal_outbox'), 'CONTROL: the next flush empties it').toBe(0);
     expect(Number(metaOf(box, 'journal_audit_ms')), 'and the audit runs').toBeGreaterThan(Number(before));
   });
+
+  // RF5a F17 (review 316): the audit reads a month file in pieces and asks its budget inside the file. In-process, the
+  // sweep's journalAudit called directly on a fixture store, so the clock and the reads are the test's to count.
+  type AuditSweep = {
+    journalAudit(db: DatabaseSync, ctx: unknown, nowMs: number): boolean;
+    newBudget(now: () => number, limits?: { maxMs?: number }): unknown;
+    AUDIT_READ_BYTES: number;
+  };
+  function auditFixture(prefix: string, body: (SWA: AuditSweep, db: DatabaseSync, ctx: (budget: unknown) => unknown, month: string, dir: string) => Promise<void>): Promise<void> {
+    const box = makeHistoryBox(prefix, { role: 'fleet' });
+    const ids = createStore(box.home) as { storeId: string; writer: string };
+    const hp = historyPaths(box.home);
+    const db = openWriter(hp.dbFile) as DatabaseSync;
+    const dir = path.join(hp.journalDir, ids.storeId);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const month = path.join(dir, `${new Date().toISOString().slice(0, 7)}.${ids.writer}.jsonl`);
+    const ctx = (budget: unknown): unknown => ({ ids, paths: hp, budget });
+    return (async () => {
+      const SWA = (await import('../../ccd/history/sweep.mjs')) as unknown as AuditSweep;
+      try { await body(SWA, db, ctx, month, dir); } finally { closeWriter(db); }
+    })();
+  }
+  const tickLine = journalRecord('tick', Date.now(), { lag_ms: null }) + '\n';
+
+  it('RF5a F17: a month larger than what is left of the budget stops the audit INSIDE the file, unfinished', async () => {
+    await auditFixture('ccrc-hist-rf5a-17a-', async (SWA, db, ctx, month) => {
+      fs.writeFileSync(month, tickLine.repeat(Math.ceil((8 * 1024 * 1024) / tickLine.length)), { mode: 0o600 });
+      let t = 0;
+      const now = (): number => (t += 1000);
+      const budget = SWA.newBudget(now, { maxMs: 5000 });
+      expect(SWA.journalAudit(db, ctx(budget), Date.now())).toBe(false);
+      expect(getMeta(db, 'journal_audit_ms'), 'an unfinished audit leaves its clock where it was').toBeNull();
+      expect(t / 1000, 'the budget was asked between reads, not once per file').toBeGreaterThan(2);
+    });
+  });
+
+  it('RF5a F17: a month is read in pieces of at most AUDIT_READ_BYTES, never whole, and an over-long line is skipped once', async () => {
+    await auditFixture('ccrc-hist-rf5a-17b-', async (SWA, db, ctx, month, dir) => {
+      fs.writeFileSync(month, 'x'.repeat(3 * SWA.AUDIT_READ_BYTES + 17) + '\n' + '{"v":1,"k":\n' + tickLine, { mode: 0o600 });
+      const under = (p: unknown): boolean => typeof p === 'string' && (p === dir || p.startsWith(dir + path.sep));
+      const realRead = fs.readSync;
+      const realReadFile = fs.readFileSync;
+      let maxRead = 0;
+      let wholeReads = 0;
+      (fs as { readSync: unknown }).readSync = function readSync(fd: number, ...rest: unknown[]): number {
+        let target = '';
+        try { target = fs.readlinkSync(`/proc/self/fd/${fd}`); } catch { /* not a file descriptor of ours */ }
+        if (under(target)) maxRead = Math.max(maxRead, Number(rest[2]));
+        return (realRead as (...a: unknown[]) => number)(fd, ...rest);
+      };
+      (fs as { readFileSync: unknown }).readFileSync = function readFileSync(p: unknown, ...rest: unknown[]): unknown {
+        if (under(p)) wholeReads += 1;
+        return (realReadFile as (...a: unknown[]) => unknown)(p, ...rest);
+      };
+      syncBuiltinESMExports();
+      let done: boolean;
+      try {
+        done = SWA.journalAudit(db, ctx(SWA.newBudget(Date.now)), Date.now());
+      } finally {
+        (fs as { readSync: unknown }).readSync = realRead;
+        (fs as { readFileSync: unknown }).readFileSync = realReadFile;
+        syncBuiltinESMExports();
+      }
+      expect(done).toBe(true);
+      expect(getMeta(db, 'journal_skipped'), 'the over-long line once, the torn line once: reading went on past the over-long line').toBe('2');
+      expect(wholeReads, 'no whole-file read of a journal month').toBe(0);
+      expect(maxRead, 'CONTROL: the month file was read through readSync').toBeGreaterThan(0);
+      expect(maxRead, 'no read asks for more than AUDIT_READ_BYTES').toBeLessThanOrEqual(SWA.AUDIT_READ_BYTES);
+    });
+  });
 });
 
 describe('W1-j / §9.2 step 2: an unreadable roster skips the census', () => {
@@ -1224,5 +1296,16 @@ describe('Task 26F item 6: the journal audit says when it cannot read a month fi
     expect(r.code, r.stderr).toBe(0);
     expect(counter(box, 'journal_audit_unreadable')).toBe(1);
     expect(metaOf(box, 'journal_audit_ms'), 'the audit did not complete, so its clock is not advanced').toBe(before);
+  });
+
+  it('a FIFO with a month file\'s name never blocks the audit: journal_audit_unreadable counts, exit 0 (review 316 F10, F17)', () => {
+    const box = boundBox('ccrc-hist-26f6b-');
+    const dir = path.join(paths(box).journal, fs.readFileSync(paths(box).storeId, 'utf8').trim());
+    fs.mkdirSync(dir, { recursive: true });
+    const mk = spawnSync('mkfifo', [path.join(dir, '2020-01.00000000.jsonl')]);
+    expect(mk.status, 'CONTROL: the FIFO was made').toBe(0);
+    const r = runDriver(box, { offsetMs: 31 * MIN, managedSettings: [] }, [], { timeoutMs: 30_000 });
+    expect(r.code, r.stderr).toBe(0);
+    expect(counter(box, 'journal_audit_unreadable')).toBe(1);
   });
 });
