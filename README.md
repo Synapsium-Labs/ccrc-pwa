@@ -3137,10 +3137,12 @@ what it cannot.
    and it is never optimistic: a tap shows `pausing…`/`resuming…` and settles
    only on the next `{type:'coord'}` frame, rendering `unconfirmed — check
    /runs` if none arrives. Before the first frame it renders **nothing** —
-   an unmeasured marker must not read as "running". The reclaim row beneath it
-   keeps the same discipline for `$REG/reclaim-paused` (`POST
-   /api/coord/reclaim-pause`) and lists the children reclamation could not
-   clean up (**The reclaim sweep, and how to stop it**, below).
+   an unmeasured marker must not read as "running". The cleanup row beneath it
+   keeps the same discipline for `$REG/reclaim-paused`, the fleet's one cleanup
+   switch (`POST /api/coord/reclaim-pause`), and lists the children reclamation
+   could not clean up (**The reclaim sweep, and how to stop it**, below) and the
+   archived workspaces the expiry lane reports (the expiry lane, further
+   below).
 2. **Abandon a wedged run.** Two taps, naming the run and its workspace.
    It **releases** the hold; it never archives, and there is no archive
    control anywhere on the sheet. A CHILD goes further: an abandon finishes
@@ -3464,6 +3466,25 @@ Archived rules from `coord.db` and `state-cache.json`, read-only: the rows it fi
 of the server, and set against what the wire marked), archived workspaces older than seven days, returns from
 archive, and archive acts per day.
 
+**Archived workspaces are cleaned up after seven days** (workspace lifecycle spec §5.3). An archived workspace that no
+open run names, as worker or as coordinator, that no open review still needs, that carries no child marker and no hold,
+is cleaned up by the server seven days after its archive once the operator has armed the lane with
+`$REG/expire-lane-live`; until then the lane only records what it would expire. The cleanup is
+`ccd ws-audit --session <id> --expire`, then `ccd ws-expire` with that audit's token, which pins everything git knows
+under `refs/ccrc/attic/<id>/` (`ccd ws-attic --session <id>` lists it), keeps the transcripts, records every dropped
+ignored or secret-shaped file and every clip, and removes the unit, pane, worktree, branch, clips and registry row. The
+seven days are ccd's own `WS_EXPIRE_AFTER_S`: the audit's document carries `expiresAt`, and the server never types the
+threshold. Restore, start, ensure, swap and Revive all bring an archived workspace back before then, and a workspace
+archived again starts a new week. **The lane ships shadowed**: until the operator touches `$REG/expire-lane-live` on the
+fleet box by hand (nothing in this tree writes it), each due workspace is audited and recorded — a feed row and an
+entry in the cleanup row on `/runs` saying it would expire, with what would be dropped — and `ws-expire` is never
+composed. Armed, at most one expiry runs per sweep pass, fleet-wide. `$REG/reclaim-paused` is the fleet’s one cleanup switch: raised (the cleanup row's toggle on
+`/runs`, or `ccd reclaim-pause --state on`), it stops child reclamation and this lane alike, shadow included. A
+workspace someone is viewing is left alone for as long as they are; one a process is working in (a forgotten dev
+server, a tmux or fsmonitor daemon) is refused `in-use` on every pass and, after a few, listed with the process's id,
+its command and its path. The lane never kills: find out what the process is first — the fleet's own tmux server is
+also a `tmux: server`. A workspace held past its seven days is listed, never touched.
+
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in
 an ACTIVE state — `dispatched`, `working`, `unknown` — and not merely
@@ -3604,14 +3625,16 @@ except a secret-shaped file, which is never committed and is deleted with the
 tree — before it deletes anything, and re-proves its token on the box inside
 the reap lock; the server composes it and no session runs it. The
 coordinator's clause 3 still excludes every reap, and a coordinator's own
-workspace is still cleaned up by a human. Before anything is deleted the
+workspace is still cleaned up by a human — or, when it carries no child marker, by the server seven days after it is
+archived, once the operator has armed the expiry lane with `$REG/expire-lane-live` (until then the lane only records
+what it would expire). Before anything is deleted the
 server re-reads the marker and asks that no open run still names the workspace,
 that its session has never coordinated a run, that `$REG/reclaim-paused` is not
 raised and that nobody is viewing it in the PWA; the box then defers rather than
 act on a pane a terminal is attached to, a hold, `$REG/reclaim-paused` (raised
-and lowered by `ccd reclaim-pause --state on|off` — from the reclaim row on
+and lowered by `ccd reclaim-pause --state on|off` — from the cleanup row on
 `/runs` through `POST /api/coord/reclaim-pause`, or on the fleet host — it
-pauses every reclamation fleet-wide), a git operation in progress, a lock, or
+pauses every reclamation and every expiry fleet-wide), a git operation in progress, a lock, or
 a token gone stale, and refuses outright what waiting will not change — not a
 child, containment unproven, a directory git does not record as a worktree.
 Every outcome but `gone` is a feed row naming its condition, and pinned work
@@ -4029,11 +4052,11 @@ claim of the child's own finished run — its wave claim
 consecutive pass that finds the child's minting run terminal, the programme the
 hold names without an open run, and every other condition above met. Any other
 hold, a human's included, keeps the child. The sweep's switch is
-`$REG/reclaim-paused`: tap the reclaim row on
+`$REG/reclaim-paused`, the fleet's one cleanup switch: tap the cleanup row on
 `/runs` (`POST /api/coord/reclaim-pause`, session-gated, no box token), or run
 `ccd reclaim-pause --state on` on the fleet host; `--state off` lowers it. While
-it stands the sweep and the close path ask for nothing, and `ws-reclaim` itself
-refuses `paused` on the box. The same row lists the children that need a
+it stands the sweep and the close path ask for nothing, `ws-reclaim` itself
+refuses `paused` on the box, and the expiry of archived workspaces stops too. The same row lists the children that need a
 human's eye: each under a terminal refusal, each whose reclaim has kept failing
 for 15 minutes, and each the sweep keeps for a person while its reason stands.
 
@@ -4726,8 +4749,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7812-7814`), each with an operator sentence of its own at `:7854`,
-`:7862` and `:7875`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7833-7835`), each with an operator sentence of its own at `:7875`,
+`:7883` and `:7896`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5126,7 +5149,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-reclaim …` | the server's removal of a CHILD workspace a run minted — never run by hand or by a session |
 | `ws-rm [--reason <text>] <id>` · `ws-gc [--prune]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it) |
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
-| `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the child-reclaim pause (`$REG/reclaim-paused`); tag / untag a project's pool |
+| `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation and the expiry of archived workspaces); tag / untag a project's pool |
 | `pr-open --session <id> …` · `pr-state --session <id>\|--project <p>` | open the workspace's PR — the one PR write; read PR state |
 | `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane, on the box (the agent grants no `account-pane`) |
 | `caps` · `version` | the verbs this copy implements; this box's build stamp |

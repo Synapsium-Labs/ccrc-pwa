@@ -2831,6 +2831,9 @@ describe('Archive all in the Released fold (workspace lifecycle spec §5.1)', ()
     fireEvent.click(screen.getByRole('button', { name: 'Archive all 2 released workspaces in alpha' }));
     expect(archive).not.toHaveBeenCalled();                       // the confirm comes first
     expect(await screen.findByText(/2 of them still have a live pane, which is stopped/)).toBeInTheDocument();
+    // Every archive starts the seven days (workspace lifecycle spec §5.2, §11 item 2): the bulk confirm promises no
+    // more than the single one does (wave 3b).
+    expect(screen.getByText(/Restore brings any of them back for 7 days; after that they are cleaned up\./)).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Archive 2' }));
     await waitFor(() => expect(archive).toHaveBeenCalledTimes(2));
     expect(archive.mock.calls).toEqual([['a-one'], ['a-two']]);

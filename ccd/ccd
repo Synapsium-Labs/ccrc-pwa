@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2a9ace2343789d86f2e577a5a2076ad66fe813ea6c4ddc8712bbde236ab5ffa7
+# ccrc:generated 1 sha256=31635e789dd5a75e314704b787eea897420ba4ca08d94e9051b5f3a0d7d654d5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3134,10 +3134,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 193
-# invocations across 163 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 195
+# invocations across 165 non-comment lines.
 #
-# THE LAST MOVE WAS the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# THE LAST MOVE WAS the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -13948,7 +13948,7 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
 
 _ws_reap_locked() {   # token id — everything the reap lock serialises
   local token="$1" id="$2"
-  local resumed; resumed=$(_reg_get "$id" reaping)
+  local resumed; resumed=$(_reg_get "$id" reaping); ! _ws_reap_crumb_unread "$id" "$resumed" || return 0   # WS-REAP'S MIRROR
   if [[ -n "$resumed" ]]; then
     [[ "$resumed" != reclaim:* && "$resumed" != expire:* ]] || { _ws_reclaim_mirror "$id" "$resumed"; return 0; }   # see "WS-REAP'S MIRROR", below the RECLAIM region
     # Resume: the tombstone written at (b) is what distinguishes "the user
@@ -15686,11 +15686,11 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         _gc_declined "git refused to remove $p"
       fi ;;
     archived)
-      # Archived is the STAGING for a confirmed deletion, not a queue a sweep
-      # drains. No timer, no grace window, no "reclaim opens in 11 days".
-      _gc_declined "$p is archived — remove it with the workspace sheet, never on a timer" ;;
+      # Archived is never ws-gc's to drain: Restore brings it back, and the
+      # server's ws-expire cleans it up seven days after its archive, once the lane is armed (wave 3b).
+      _gc_declined "$p is archived — never ws-gc's: Restore brings it back, and once the expiry lane is armed the server cleans it up seven days after its archive" ;;
     reaping)
-      _gc_declined "$p is mid-cleanup (breadcrumb: $(_reg_get "$project-$slug" reaping)) — re-run ccd ws-reap to finish it" ;;
+      _gc_declined "$p is mid-cleanup (breadcrumb: $(_reg_get "$project-$slug" reaping)) — the verb that left it finishes it: ccd ws-reap its own, the server an expire: or reclaim: one" ;;
     dirty)
       _gc_declined "$p is dirty — never removed, at any flag" ;;
     tree-unreadable)
@@ -20799,10 +20799,10 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # and unsupervised the unit, so nothing reaches here by drifting; something
   # asked for this session back.
   #
-  # `cmd_ws_restore` clears the stamp BEFORE it calls this function, so the
-  # deliberate way back never trips this arm. It fires only on the paths that
-  # had no opinion at all — start, ensure, swap, and the two unsupervised
-  # fallbacks in `_supervised_start`.
+  # `cmd_ws_restore` clears the stamp BEFORE it calls this function, and so,
+  # since wave 3b, does the return verbs' gate (`_ws_expire_refuse_return`),
+  # inside the reap lock. This arm is the backstop: a box with no util-linux
+  # flock (whose gate takes no lock), and any spawn path that never met it.
   # A RETURN DURING AN EXPIRY REFUSES, here, where every spawn path meets
   # (`_ws_expire_spawn_gate`, the EXPIRE region, says which paths and why).
   _ws_expire_spawn_gate "$id" || die "$_WS_EXPIRE_SPAWN_WHY"
@@ -22135,7 +22135,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     echo "ccd: warn: $id lives on $wrapper, which is not in project '$project''s pool '${pps#named }' — the auto-swapper relocates it at the next idle boundary" >&2
   fi
 
-  _ws_expire_refuse_return "$id"   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
+  _ws_expire_refuse_return "$id" start   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
   if _alive "$id"; then
     # M5's shape, reachable from a keyboard: a live pane whose unit was never enabled, or was
     # disabled without `--now` some other way. A bare `ccd start` staying a pure no-op here is
@@ -22338,7 +22338,7 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   # argument without asking what a hostile string does once it lands.
   local id="${1:?usage: ccd ensure <id>}"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id' (run ccd start first)"
-  _ws_expire_refuse_return "$id"   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
+  _ws_expire_refuse_return "$id" ensure   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
   if _alive "$id"; then
     # A LIVE PANE IS NOT NECESSARILY A SUPERVISED ONE, and this early return used
     # to treat the two as the same thing. `_resupervise_live` is the one place
@@ -24738,7 +24738,7 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   local id="${1:?usage: ccd swap [--force] [--cross-pool] <id> <target-wrapper>}" target="${2:?usage: ccd swap [--force] [--cross-pool] <id> <target-wrapper>}"
   _is_valid_wrapper "$target" || die "unknown wrapper '$target' (valid: ${CCRC_ACCOUNTS[*]})"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
-  _ws_expire_refuse_return "$id"   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
+  _ws_expire_refuse_return "$id" swap   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
   local cur; cur=$(_reg_get "$id" wrapper)
   [[ "$target" != "$cur" ]] || die "'$id' is already on $cur"
   [[ -x "$WRAPPER_DIR/$target" ]] || die "wrapper missing: $WRAPPER_DIR/$target"
@@ -25172,7 +25172,7 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # `start` line; this one records that boot-persistence was asked for. No
   # shared tx: tx is for one intent/outcome PAIR, never for a call tree, and
   # folding these would report one act where two happened.
-  _ws_expire_refuse_return "$id"   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
+  _ws_expire_refuse_return "$id" enable   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
   _lc_done enable "$id" ""
   cmd_start ${cross:+--cross-pool} "${route[@]}" "$@" || return $?
   echo "enabled boot-persistence for $id"
@@ -29136,6 +29136,7 @@ _ws_expire_archived() {   # id -> 0 with EXPIRE_ARCHIVED_AT = the archive epoch,
   arch=$(_reg_get "$id" archived)
   _ws_expire_epoch_ok "$arch" \
     || { _ws_reclaim_unmeasured "the archive stamp at $f cannot be read as an epoch (it reads '$arch')"; return 1; }
+  EXPIRE_STAMP_AT="$arch"   # the archive AS READ, old enough or not: the audit's `archivedAt` and `expiresAt` (wave 3b)
   now=$(_ws_expire_now) && _ws_expire_epoch_ok "$now" \
     || { _ws_reclaim_unmeasured "the clock could not be read, so the archive's age was never measured"; return 1; }
   (( now - arch >= WS_EXPIRE_AFTER_S )) \
@@ -29276,7 +29277,7 @@ _ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working dir
   # nothing: unmeasured, never "nobody". (lsof's exit status is not read: it
   # exits 1 over any one process it could not inspect, and a listing that holds
   # ccd is a listing.)
-  local id="$1" workdir="$2" rc leaf parent preal wt me=$$ sub=$BASHPID mode=proc root='' listing='' out pid pth n=0 shown=''
+  local id="$1" workdir="$2" rc leaf parent preal wt me=$$ sub=$BASHPID mode=proc root='' listing='' out line shown=''
   _ws_reclaim_plain_path "$workdir" \
     || { _ws_reclaim_unmeasured "$workdir is not one plain absolute path, so whether a process works inside it was never asked"; return 1; }
   _ws_reclaim_absent "$workdir"; rc=$?
@@ -29295,7 +29296,7 @@ _ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working dir
   fi
   root=$(_ws_expire_proc_root)
   out=$(LC_ALL=C.UTF-8 python3 -c '
-import os, subprocess, sys
+import json, os, re, subprocess, sys
 mode, wt, me, sub, root = sys.argv[1:6]
 mine = {me, sub, str(os.getpid())}
 def inside(p):
@@ -29327,6 +29328,28 @@ def ppid_of(pid):
     except ProcessLookupError:
         return None
     sys.exit(3)
+def comm_of(pid):
+    # WHAT IT IS, for the operator text (wave 3b, ruling G of its coordinator):
+    # the fleet tmux server is a `tmux: server` too, so a pid is never
+    # named without its command. DESCRIPTIVE ONLY: a command that cannot be read
+    # is "" and changes no verdict. Its bytes are kept as read (surrogateescape),
+    # save the one newline the kernel or ps ends it with.
+    try:
+        if mode == "proc":
+            with open("%s/%s/comm" % (root, pid), "rb") as fh:
+                raw = fh.read()
+        else:
+            raw = subprocess.run(["ps", "-o", "comm=", "-p", pid], capture_output=True).stdout
+    except Exception:
+        return ""
+    if raw.endswith(b"\n"):
+        raw = raw[:-1]
+    return raw.decode("utf-8", "surrogateescape")
+def say(s):
+    # the detail sentence is ONE line: a control character in a path or a
+    # command is written there as its escape (the record keeps the bytes)
+    return "".join(c if c.isprintable() else ascii(c)[1:-1] for c in s)
+PID = re.compile("[0-9]+")
 def scan():
     cwds = []
     if mode == "proc":
@@ -29350,13 +29373,30 @@ def scan():
                 cwds.append((cur, line[1:]))
     if me not in [c[0] for c in cwds]:
         sys.exit(3)
+    users = []
     for pid, p in cwds:
+        if not PID.fullmatch(pid):
+            sys.exit(3)   # a pid that is not ASCII digits: no listing to trust
         if pid in mine or not inside(p):
             continue
         pp = ppid_of(pid)
         if pp is None or pp in mine:
             continue
-        sys.stdout.buffer.write(os.fsencode("%s\t%s\n" % (pid, p)))
+        users.append((pid, p))
+    if not users:
+        return
+    # THE RECORDS ARE JSON HERE, never in the shell (wave 3b, a security ruling
+    # of its coordinator): one json.dumps line per process, at most five, the
+    # pid an integer and every string as read; then one "#" line, the detail
+    # sentence. json.dumps escapes every control character, so a newline in a
+    # path or a command can never start a second record.
+    shown = []
+    for pid, p in users[:5]:
+        c = comm_of(pid)
+        sys.stdout.write(json.dumps({"pid": int(pid), "comm": c, "cwd": p}) + "\n")
+        shown.append("process %s%s has its working directory at %s" % (pid, " (%s)" % say(c) if c else "", say(p)))
+    more = ", and %d more" % (len(users) - 5) if len(users) > 5 else ""
+    sys.stdout.write("#" + ", ".join(shown) + more + "\n")
 try:
     scan()
 except Exception:
@@ -29365,11 +29405,15 @@ except Exception:
   (( rc == 0 )) \
     || { _ws_reclaim_unmeasured "the processes of this box could not be measured ($( [[ "$mode" == lsof ]] && echo lsof || echo "$root" )), so whether one works inside $workdir was never asked"; return 1; }
   [[ -n "$out" ]] || return 0
-  while IFS=$'\t' read -r pid pth; do
-    n=$(( n + 1 ))
-    (( n > 5 )) || shown+="${shown:+, }process $pid has its working directory at $pth"
+  # The python printed each record ALREADY JSON (`{...}`, at most five) and one
+  # `#` line, the detail sentence: a record is kept exactly as printed — this
+  # shell never splices a field into JSON (wave 3b, a security ruling).
+  while IFS= read -r line; do
+    case "$line" in
+      '{'*) EXPIRE_IN_USE+=("$line") ;;
+      '#'*) shown="${line#\#}" ;;
+    esac
   done <<< "$out"
-  (( n <= 5 )) || shown+=", and $(( n - 5 )) more"
   _reap_refuse in-use "$shown — an archived workspace somebody is working in is never expired"
 }
 
@@ -29455,7 +29499,9 @@ _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token,
   # lose its uncommitted edits to the `--force` removal. That resume asks the
   # `in-use` cwd probe alone (`_ws_expire_cwd_users`) before the tail re-runs —
   # `in-use`, retryable, or unmeasured, and never a kill; the pane and the unit
-  # stay the tail's to kill. At `artifacts`, and at `branch` after a `present`
+  # stay the tail's to kill — save that a pane which came back runs a shell
+  # whose cwd is the standing tree, so it is itself a cwd user and refuses
+  # `in-use` here, never killed (review 288, F2). At `artifacts`, and at `branch` after a `present`
   # tombstone, the tree is gone and nothing more is asked. The field is read as
   # `_ws_tomb_str` answers it: a tombstone that cannot be read is unmeasured,
   # and anything but the word `present` — absent, or a value ccd never writes —
@@ -29506,7 +29552,7 @@ _ws_expire_fork() {   # id -> the flavour fork, run ONCE, contained — the one 
 
 _ws_expire_fork_contained() {   # `_ws_expire_fork`'s body, run under `_ws_reclaim_contained` — call that
   local id="$1" rbc
-  RECLAIM_RESUME_PHASE=""
+  RECLAIM_RESUME_PHASE=""; EXPIRE_STAMP_AT=""; EXPIRE_IN_USE=()
   rbc=$(_reg_get "$id" reaping)
   # An `expire:` breadcrumb resumes THIS verb; a `reclaim:` one is ws-reclaim's
   # and any other is ws-reap's — an expiry never finishes another verb's work,
@@ -29681,10 +29727,21 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
     (( first )) || sens+=","; first=0; sens+="$(_json_str "$s")"
   done
   sens+="]"
-  printf '{"session":%s,"mode":"expire","archivedAt":%s,"alive":%s,"exists":%s,"reaping":%s,"sensitive":%s,' \
-    "$(_json_str "$id")" "$( _ws_expire_epoch_ok "$EXPIRE_ARCHIVED_AT" && echo "$EXPIRE_ARCHIVED_AT" || echo null)" \
+  # `archivedAt` is the archive AS READ — on `not-expired` too — and `expiresAt`
+  # is the instant it becomes expirable, `archivedAt + WS_EXPIRE_AFTER_S`, from
+  # the ONE definition above: the server reads the threshold here and never
+  # types its own (wave 3b; the kill rule raises this constant and nothing
+  # else). Both null when no archive could be read as an epoch.
+  local stamp=null expires=null
+  if _ws_expire_epoch_ok "$EXPIRE_STAMP_AT"; then stamp="$EXPIRE_STAMP_AT"; expires=$(( EXPIRE_STAMP_AT + WS_EXPIRE_AFTER_S )); fi
+  printf '{"session":%s,"mode":"expire","archivedAt":%s,"expiresAt":%s,"alive":%s,"exists":%s,"reaping":%s,"sensitive":%s,' \
+    "$(_json_str "$id")" "$stamp" "$expires" \
     "$aliveflag" "$exists" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)" "$sens"
   [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
+  # WHO IS IN IT (an `in-use` refusal only): pid, command and cwd, at most five.
+  if [[ "$REAP_VERDICT" == in-use && ${#EXPIRE_IN_USE[@]} -gt 0 ]]; then
+    local IFS=,; printf '"inUse":[%s],' "${EXPIRE_IN_USE[*]}"; unset IFS
+  fi
   if [[ "$REAP_VERDICT" == expirable ]]; then
     # spelled through `_json_str`, never the literal verdict shape the refusal harvests read
     printf '"verdict":%s,"detail":"","token":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_TOKEN")"
@@ -29769,9 +29826,10 @@ _ws_expire_breadcrumb_why() {   # id -> rc 0 with the refusal sentence on stdout
   printf '%s is being expired — an interrupted ws-expire stopped at its %s step; bringing it back now would return a workspace whose teardown has begun' "$1" "'${rbc#expire:}'"
 }
 
-_ws_expire_refuse_return() {   # id -> returns 0 when nothing refuses a return; else DIES with the sentence. It
-  #                                dies on an `expire:` breadcrumb, on a breadcrumb that stands but cannot be read
-  #                                (an ARCHIVED row only) and on a held reap lock (an ARCHIVED row only)
+_ws_expire_refuse_return() {   # id verb -> returns 0 when nothing refuses a return; else DIES with the sentence.
+  #                                It dies on an `expire:` breadcrumb, on a breadcrumb that stands but cannot be
+  #                                read (an ARCHIVED row only) and on a held reap lock (an ARCHIVED row only); on an
+  #                                archived row it CLEARS THE ARCHIVE before it lets the lock go (3893, closed)
   # THE RETURN VERBS' OWN REFUSAL, asked by `cmd_start`, `cmd_ensure`, `cmd_swap`
   # and `cmd_enable` BEFORE they journal their act or write a field: a return that a
   # breadcrumb refuses must leave no `start`/`ensure`/`swap`/`enable` row behind.
@@ -29786,17 +29844,39 @@ _ws_expire_refuse_return() {   # id -> returns 0 when nothing refuses a return; 
   # `_spawn_start`'s gate is the backstop under all of them. It IS that gate,
   # asked early and let go at once: the breadcrumb after a crash, and the reap
   # lock while an expiry (or a reap, or a restore) of an archived row holds it.
-  # A RESIDUAL, DISCLOSED (3893; carried to wave 3b). The gate is taken and
-  # RELEASED here, before the verb's own journal line, so an expiry that wins the
-  # lock inside that gap leaves the refused return journaled as `done`, and a
-  # minutes-long `swap` can write registry fields onto a purged row. No pane
-  # returns — `_spawn_start`'s backstop refuses, holding the lock across the
-  # unarchive — and nothing is lost: the pin precedes every delete. Closing it
-  # holds the lock across the journal, or clears the archive at the verb: a
-  # behaviour change to four verbs, beyond this wave.
+  # 3893, CLOSED (workspace lifecycle wave 3b, before its lane composes the
+  # verb). The gate used to be taken and RELEASED here, before the verb's own
+  # journal line, so an expiry that won the lock inside that gap tore the row
+  # down while the return went on to journal itself `done`, and a minutes-long
+  # `swap` wrote registry fields onto the purged row. Now the RETURN CLEARS THE
+  # ARCHIVE INSIDE THE GATE, while it holds the reap lock — as `_spawn_start`
+  # clears it, and journaled as `unarchive` under this verb's name — so an
+  # expiry that takes the lock next finds the row `not-archived` and refuses,
+  # touching nothing. On the attempt, as `cmd_start` and `cmd_ensure` clear the
+  # stop stamp: a return that then fails for another reason leaves a stopped,
+  # UNARCHIVED workspace at the top of its card, whose seven days start again
+  # only when it is archived again. Holding the lock across the journal instead
+  # was measured and refused: an `ensure` of a supervised row, and a `swap`,
+  # spawn the pane from the UNIT's own process, whose gate would then refuse
+  # against the lock this process still held (the departure
+  # `return-clears-the-archive-inside-the-gate`). A box with no flock takes no
+  # lock here and so clears nothing — and runs no expiry either
+  # (`cmd_ws_expire` refuses there); `_spawn_start` clears it as before.
   _ws_expire_spawn_gate "$1" || die "$_WS_EXPIRE_SPAWN_WHY"
+  if [[ -n "$_WS_EXPIRE_SPAWN_FD" && -f "$REG/$1.archived" ]]; then
+    local archreason; archreason=$(_reg_get "$1" archivedreason)
+    _lc_done unarchive "$1" "" verb "${2:-return}" meas.mode return \
+      meas.archivedAt "$(_reg_get "$1" archived)" meas.archivedReason "$archreason"
+    _ws_unarchive "$1"
+  fi
   _ws_expire_spawn_release
+  _ws_expire_return_gap "$1"
 }
+
+# THE SEAM AFTER THE GATE: nothing on the box. A test redefines it to force an
+# expiry into the exact gap 3893 named — between a return's gate and its
+# journal line — and proves the expiry finds nothing to take.
+_ws_expire_return_gap() { :; }
 
 # EXPIRE-V1. `cmd_caps` echoes it: this box has `ws-audit --expire`,
 # `ws-expire`, the `expire` journal act, the `expire:` breadcrumb with ws-reap's
@@ -29818,6 +29898,21 @@ _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` or
   fi
   printf '{"refused":"reclaim-in-progress","detail":%s,"paths":[]}\n' \
     "$(_json_str "an interrupted reclamation of $1 stopped at its '${2#reclaim:}' step — ws-reap never finishes another verb's work")"
+}
+
+_ws_reap_crumb_unread() {   # id breadcrumb-as-read -> rc 0, having printed ws-reap's refusal, when an ARCHIVED row's
+  #                              `.reaping` stands but reads as nothing; rc 1 otherwise (ws-reap goes on as it did)
+  # WS-REAP NEVER TAKES ITS FRESH ARM OVER A BREADCRUMB IT CANNOT READ (workspace
+  # lifecycle wave 3b, the carried row). Its mirror is keyed on a READABLE
+  # `expire:`/`reclaim:` prefix, so an unreadable `.reaping` used to fall through
+  # to the fresh arm — on an archived row, where an interrupted expiry leaves
+  # `.archived` standing beside its breadcrumb. It refuses with ws-reap's own word
+  # for a breadcrumb it cannot place, as the spawn gate and ws-expire's fork read
+  # such a file (doubt). A row that is not archived is not asked: ws-reap's own
+  # `not-archived` answers it.
+  [[ -z "$2" && -f "$REG/$1.archived" ]] && [[ -e "$REG/$1.reaping" || -L "$REG/$1.reaping" ]] || return 1
+  printf '{"refused":"reaping-phase-unknown","detail":%s,"paths":[]}\n' \
+    "$(_json_str "a breadcrumb stands at $REG/$1.reaping but cannot be read — which verb left it, and where, is unknown, so ws-reap never takes its fresh arm over it")"
 }
 
 # WS-REAP'S MIRROR (spec 2026-09-22 §5.6; carried constraint 5). The one line

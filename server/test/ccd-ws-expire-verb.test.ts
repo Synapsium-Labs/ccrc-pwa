@@ -409,7 +409,12 @@ describe('a crash at each phase resumes through the `expire:` breadcrumb — and
     const a = makeArchived(h);
     interrupted(a, 'worktree');
     plantTmux(h, { sessions: [`cc-${EXP_ID}`] });
-    const r = expireVerb(h, resumeToken('worktree'));
+    // BOTH halves are planted (review 288, F1): a pane, and a unit that answers `active` until the tail's own
+    // unsupervise has run. A resume that asked the unit at `worktree` would refuse `live`; the tail stops it, and its
+    // re-measure then reads it stopped.
+    const r = expireVerb(h, resumeToken('worktree'), {
+      pre: '_svc_is_active() { if grep -q "^unsupervise" "$HOME/ccd-calls" 2>/dev/null; then printf inactive; else printf active; fi; };',
+    });
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(tmuxSessions(h), 'the tail killed the pane').toEqual([]);
     expired(a);
@@ -508,6 +513,29 @@ describe('the flavour fork: no verb finishes another verb’s interrupted work',
     fs.writeFileSync(reg('reaping'), 'worktree');
     expect(refusedWith(expireVerb(h, 'f'.repeat(64)))).toBe('reap-in-progress');
     intact(a);
+  }, 90_000);
+
+  // Wave 3b, the carried row: ws-reap's mirror is keyed on a READABLE `expire:`/`reclaim:` prefix, so a `.reaping` that
+  // stands but reads as nothing used to fall through to ws-reap's FRESH arm — on an archived row, where an interrupted
+  // expiry leaves exactly that. It refuses `reaping-phase-unknown` now (ws-reap's own word for a breadcrumb it cannot
+  // place), before it reads anything else; the spawn gate and ws-expire's own fork already read such a file as doubt.
+  it('ws-reap meets a breadcrumb that stands but cannot be read on an ARCHIVED row: reaping-phase-unknown, never the fresh arm', () => {
+    const a = makeArchived(h);
+    fs.mkdirSync(reg('reaping'));
+    const r = h.run(`${EXP_STUBS} cmd_ws_reap --expect ${'f'.repeat(64)} --session ${EXP_ID}`);
+    expect(refusedWith(r)).toBe('reaping-phase-unknown');
+    expect(JSON.parse(r.stdout).detail).toContain('cannot be read');
+    intact(a);
+  }, 90_000);
+
+  it('the CONTROL: on a row that is NOT archived the guard is not asked — ws-reap answers as it always did', () => {
+    const a = makeArchived(h);
+    fs.rmSync(reg('archived'));
+    fs.mkdirSync(reg('reaping'));
+    const r = h.run(`${EXP_STUBS} cmd_ws_reap --expect ${'f'.repeat(64)} --session ${EXP_ID}`);
+    expect(refusedWith(r)).not.toBe('reaping-phase-unknown');
+    expect(refusedWith(r)).toBe('not-archived');
+    expect(fs.existsSync(a.wt)).toBe(true);
   }, 90_000);
 
   it('a breadcrumb that stands but cannot be read is a failure to measure: exit 1, probe-unmeasured, nothing touched', () => {

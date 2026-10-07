@@ -4733,3 +4733,56 @@ describe('the pane-scope sweep: its arming file has no writer in the tree', () =
       .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes('scope-sweep-live'))).map(rel)).toEqual([]);
   });
 });
+
+// WORKSPACE LIFECYCLE WAVE 3b (spec 2026-09-24 §5.3, the coordinator's safety ruling (E)). APPENDED, for the reason
+// the stall-watch blocks above state: `session-hook.test.ts`'s citation audit cites this file by line. The expiry lane
+// SHIPS SHADOWED: until `$REG/expire-lane-live` exists it audits and records "would expire" and never composes
+// `ws-expire`. The file is the operator's to touch BY HAND on the fleet box, beside `stall-watch-live` above — so no
+// line of shell names it (a writer, or a reader the design never had), and its one TS holder is its definer, an L1
+// file that reaches no `node:` module and so cannot write it.
+describe('workspace lifecycle wave 3b: the expiry lane’s live switch has no writer in the tree', () => {
+  const NAME = 'expire-lane-live';
+  const DEFINER = 'server/src/archivedExpiry.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  // THE WIDER WRITER: a file that imports the switch's ONE spelling, `EXPIRE_LANE_LIVE_MARKER`, and holds an `io` could
+  // write it without ever spelling its name. So the files whose code names the constant are pinned, and none of them
+  // may reach a write — the executor reads the registry listing and nothing else. KNOWN WIDTH, stated: a write through
+  // a helper defined in another file is not seen; the bar is the ordinary call.
+  it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('EXPIRE_LANE_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual([DEFINER, 'server/src/coord/expireArchived.ts']);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
+// THE THRESHOLD IS NEVER TYPED BY THE SERVER (the coordinator's ruling (C), wave 3b): ccd's `ws-audit --expire`
+// document carries `expiresAt` (`archivedAt + WS_EXPIRE_AFTER_S`), and the server reads it through ONE reader. Both
+// halves pinned: no seven-day literal in the server or the PWA beside the one that is not an expiry (`limits.ts`'s
+// usage window), and the audit document is parsed in one place and its `expiresAt` key read in one file. KNOWN WIDTH:
+// a reader spelling `doc.expiresAt` on a raw document is not seen — the raw document reaches the server only through
+// `parseExpireAudit`, whose one caller is pinned.
+describe('workspace lifecycle wave 3b: the expiry threshold is ccd’s, read through one reader', () => {
+  const SEVEN_DAYS = /\b604_?800\b|\b7\s*\*\s*86_?400\b|\b7\s*\*\s*24\s*\*\s*60\b/;
+  const lane = ALL.filter((f) => /^(server|pwa)\/src\//.test(rel(f)));
+
+  it('no seven-day literal in server/src or pwa/src, but the usage window’s', () => {
+    expect(SEVEN_DAYS.test('const S = 7 * 86_400;'), 'CONTROL').toBe(true);
+    expect(lane.filter((f) => SEVEN_DAYS.test(stallCode(f))).map(rel).sort()).toEqual(['server/src/limits.ts']);
+  });
+
+  it('the audit document is parsed in one place, and its `expiresAt` key is read in one file', () => {
+    expect(ALL.filter((f) => /\bparseExpireAudit\s*\(/.test(stallCode(f))).map(rel).sort())
+      .toEqual(['server/src/archivedExpiry.ts', 'server/src/coord/expireArchived.ts']);
+    expect(ALL.filter((f) => /['"]expiresAt['"]/.test(stallCode(f))).map(rel).sort()).toEqual(['server/src/archivedExpiry.ts']);
+  });
+});

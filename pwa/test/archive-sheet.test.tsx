@@ -52,7 +52,7 @@ describe('the confirm reads by case', () => {
     const onArchived = vi.fn();
     const { onClose } = mount(s(), { archive, onArchived });
     expect(screen.getByText('Archive this workspace?')).toBeInTheDocument();
-    expect(screen.getByText('It goes offline and folds into Archived. Restore brings it back.')).toBeInTheDocument();
+    expect(screen.getByText('It goes offline and folds into Archived. Restore brings it back for 7 days; after that it is cleaned up.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(archive).toHaveBeenCalledWith('demo-amber', {});

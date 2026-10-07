@@ -492,6 +492,17 @@ describe('rung 5 on Darwin — a cwd under the worktree, asked of lsof', () => {
     }
   }, 90_000);
 
+  // A PID THAT IS NOT ASCII DIGITS (the coordinator's security ruling, binding on wave 3b): the in-use record's pid is
+  // an integer the probe's python writes, so a listing that names anything else — here Arabic-Indic digits, which
+  // python's int() would quietly read as 12 — measured nothing: unmeasured, never a record. `ps` answers a parent, so
+  // only the pid's own shape can refuse it.
+  it('a listed pid that is not ASCII digits is UNMEASURED — never read as a number', () => {
+    const { wt } = makeArchived(h);
+    const r = expireEvalOf(h, { pre: lsof(listing('١٢', fs.realpathSync(wt))) + withPs(binDir('ps-one', 'echo 1')) });
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+  }, 60_000);
+
   it('lsof not on PATH is found at the fallback (/usr/sbin on macOS); found nowhere it is unmeasured', () => {
     const { wt } = makeArchived(h);
     const s = holdCwd(wt);
