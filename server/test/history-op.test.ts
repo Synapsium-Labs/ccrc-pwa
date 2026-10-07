@@ -1428,6 +1428,32 @@ describe('FR2-c: the {"rc":…} line is printed last on EVERY path, including a 
     expect(fs.existsSync(path.join(paths(box).root, 'op')), 'no op marker is left').toBe(false);
   });
 
+  // FU3 (M24), D-4347's named residual: a non-empty directory at `op` is kept (removeEntry never recurses), so every
+  // applying --op pass fails loudly at its marker write until the operator removes it; a dry --op import writes no
+  // marker, and scheduled passes are unaffected.
+  it('a non-empty directory at op: every applying --op pass (migrate, import --apply) fails loudly at the marker write (rc 1, EISDIR naming op); a dry --op import and a scheduled pass still exit 0', () => {
+    const box = boundBox('ccrc-hist-fu3op-');
+    const op = path.join(paths(box).root, 'op');
+    fs.mkdirSync(op);
+    fs.writeFileSync(path.join(op, 'keep'), '');
+    const s = runSweep(box);
+    expect(s.code, s.stderr).toBe(0);
+    const dry = runSweep(box, ['--op', 'import']);
+    expect(dry.code, dry.stderr).toBe(0);
+    for (const args of [['--op', 'migrate'], ['--op', 'import', '--apply']]) {
+      const r = runSweep(box, args);
+      expect(r.code, `${args.join(' ')}: ${r.stderr}`).toBe(1);
+      expect(r.stderr).toMatch(/internal error: EISDIR: .*rename '.*\/history\/op\.tmp\.[0-9]+' -> '.*\/history\/op'/);
+      expect(rcLines(r.stdout), r.stdout).toEqual(['{"rc":1}']);
+      expect(lastLine(r.stdout)).toBe('{"rc":1}');
+    }
+    expect(fs.readdirSync(paths(box).root).filter((n) => n.startsWith('op.tmp.')), 'no marker temp is left').toEqual([]);
+    expect(fs.existsSync(path.join(op, 'keep'))).toBe(true);
+    fs.rmSync(op, { recursive: true });
+    const ok = runSweep(box, ['--op', 'migrate']);
+    expect(ok.code, ok.stderr).toBe(0);
+  });
+
   it('a throw from the dry run (an evidence query failing on a malformed store) ends stdout with one {"rc":1}', () => {
     const box = boundBox('ccrc-hist-fr2c2-');
     const db = new DatabaseSync(paths(box).db);
