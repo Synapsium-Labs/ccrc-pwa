@@ -22,8 +22,9 @@
 >    spawn variable — item 2 (the sweep, its record and its doctor reader), item 3 (the limit-banner harness) — plus §9's
 >    reap-class count, with the coordinator's safety ruling: **the stop ships SHADOWED**. Task 8 is the whole branch, the
 >    PR and the AGENT-FIRST deploy.
-> 3. **Deviation numbers are the coordinator's.** The block issued for this wave's WORKER is 4012 to 4021, written bare;
->    this plan defines none. Departures are named below as slugs only.
+> 3. **Deviation numbers are the coordinator's, defined in the plan by the worker.** The block issued for this wave's WORKER is 4012 to 4021, written bare;
+>    as the coordinator's brief directed, the worker defined each departure in this plan's `## Deviations found`, in the
+>    commit that made the change (4012 to 4021, then 4088 to 4090 and the three found while executing, 4091 to 4093).
 > 4. **Not in this wave** (the coordinator's rulings B and E): `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the
 >    spawn environment (wave 4b, after the baseline week this wave's deploy starts — so the spec's "ships first" is
 >    amended in rev 8, departure `pressure-reap-variable-ships-after-baseline-b`) with §9's pressure-kill metric that
@@ -143,8 +144,9 @@ implicitly include this section.
   so `repoint-readme.py` is never run. Measured on the prototype after Task 1 and after Task 7: `147 / 197 / 55 / 35`,
   every `ENTERED`/`LEFT` empty.
 - **The `_reg_get` census does not move:** no task adds a `_reg_get` call (`grep -v '^[[:space:]]*#' ccd/ccd | grep -o
-  '_reg_get "' | wc -l` → `182`, `grep -v '^[[:space:]]*#' ccd/ccd | grep -c '_reg_get "'` → `153`, at `d12b5aba0`
-  and on the tip; `ccd-reg-get-census.test.ts` green).
+  '_reg_get "' | wc -l` → `192`, `grep -v '^[[:space:]]*#' ccd/ccd | grep -c '_reg_get "'` → `162`, at the base
+  `77c11245a` and on the tip before the merge of `origin/main` 8d85c7cf4, which carries one `_reg_get` call of its own
+  (`193` / `163` on `origin/main` and on the merged tree: the census equals main's); `ccd-reg-get-census.test.ts` green).
 - **Locate code by CONTENT.** Line numbers are "at `d12b5aba0`" and are hints, never addresses. Every edit below is an
   "In `<file>`, find:" block whose anchor matches exactly once on `origin/main` at `d12b5aba0` at its turn.
 - **Shell state does not survive between Bash calls.** Every block that names `$SCRATCH` sets it itself
@@ -152,8 +154,9 @@ implicitly include this section.
 - **Branch discipline:** commit on this workspace's own branch only; never a separate feature branch. One commit per
   task. **Commit trailers:** end every commit message with the attribution line your own session is given.
 - **No hostnames, IPs, tailnet names, docserver URLs or account names** in a committed file (`topology-clean.test.ts`).
-- **`## Deviations found` numbers are ISSUED, never chosen.** Write no `D-<number>` token for a departure; name it by
-  its slug in the wave-done mail, and the coordinator defines it from 4012 to 4021.
+- **`## Deviations found` numbers are ISSUED, never chosen.** The worker defined each departure in `## Deviations found`
+  under the number the coordinator issued (4012 to 4021, then 4088 to 4090 and 4091 to 4093), in the commit that made the
+  change, as the coordinator's brief directed; it also names the slug in the wave-done mail, and never calls the allocator.
 - **OVERLAP — who lands second merges.** Landing-order wave 3 (#248) edits `ccd/ccd`'s pr-state lines,
   `ccd/session-hook.sh`, `ccd/ccrc-doctor-checks` and `server/test/ccrc-doctor.test.ts`; workspace-lifecycle wave 3
   (run 245) edits `ccd/ccd`'s RECLAIM/EXPIRE regions and the spawn paths; delegation-broker's run 271 edits
@@ -468,7 +471,7 @@ elif ! git -c merge.conflictStyle=merge merge --no-edit origin/main; then
      && sed -n 2p ccd/ccd | grep -q '^<<<<<<< ' && sed -n 4p ccd/ccd | grep -q '^=======$' \
      && sed -n 6p ccd/ccd | grep -q '^>>>>>>> ' \
      && sed -n 3p ccd/ccd | grep -q '^# ccrc:generated 1 sha256=' && sed -n 5p ccd/ccd | grep -q '^# ccrc:generated 1 sha256='; then
-    sed -i '2,6d' ccd/ccd && ~/.local/bin/ccrc restamp ccd/ccd
+    sed -i '2d;4,6d' ccd/ccd && ~/.local/bin/ccrc restamp ccd/ccd
     git add ccd/ccd && git commit --no-edit && echo 'merged: the stamp hunk resolved by re-stamping'
   else
     echo 'STOP: a conflict other than the ccd/ccd stamp line — report it'; git merge --abort
@@ -4302,7 +4305,7 @@ elif git -c merge.conflictStyle=merge merge --no-edit origin/main; then
 elif [ "$(git diff --name-only --diff-filter=U)" = ccd/ccd ] && [ "$(grep -c '^<<<<<<< ' ccd/ccd)" = 1 ] \
      && sed -n 2p ccd/ccd | grep -q '^<<<<<<< ' && sed -n 4p ccd/ccd | grep -q '^=======$' \
      && sed -n 6p ccd/ccd | grep -q '^>>>>>>> '; then
-  sed -i '2,6d' ccd/ccd && ~/.local/bin/ccrc restamp ccd/ccd && bash -n ccd/ccd \
+  sed -i '2d;4,6d' ccd/ccd && ~/.local/bin/ccrc restamp ccd/ccd && bash -n ccd/ccd \
     && ! grep -qE '^(<<<<<<< |=======$|>>>>>>> )' ccd/ccd \
     && git add ccd/ccd && git commit --no-edit && echo 'merged: the stamp resolved by re-stamping'
 else
@@ -4472,82 +4475,102 @@ predicate (satisfied by construction until a record exists).
 
 ## Deviations found
 
-Numbers are ISSUED, never chosen: the coordinator defines each departure below from the worker's block, 4012 to 4021,
-in the same act as the wave's acceptance; a worker never calls the allocator (worker clause 11). A departure found
-while executing is named in the wave-done mail by a new slug. A session that cannot reach the coordinator writes
+Numbers are ISSUED, never chosen: the worker defined each departure below under the number the coordinator issued
+(4012 to 4021, 4088 to 4090, and 4091 to 4093 for the three found while executing), in the commit that made the change,
+as the coordinator's brief directed; a worker never calls the allocator (worker clause 11). A departure found
+while executing is also named in the wave-done mail by its slug. A session that cannot reach the coordinator writes
 `D-TBD-<slug>` in its report and nowhere in a committed file.
 
-Departures from the spec that this plan makes, each measured above — **thirteen, against a block of ten** (the brief:
-list them all; the coordinator issues the three past the block):
+Departures from the spec that this plan makes, each measured above — **sixteen, against a block of ten** — the thirteen planned (4012–4021,
+4088–4090) plus three found while executing (4091, 4092, 4093) (the brief: list them all; the coordinator issues the three past the block):
 
-- `scope-sweep-stop-shadowed` — the coordinator's safety ruling (C): spec §5.6 has the sweep STOP an inert scope; this
+- **D-4012** `scope-sweep-stop-shadowed` — the coordinator's safety ruling (C): spec §5.6 has the sweep STOP an inert scope; this
   wave records it `would-stop` and issues the stop only while `$REG/scope-sweep-live` exists, a file nothing in the
   tree writes (pinned by `single-definition.test.ts`'s appended describe — shell, and every other file under `ccd/` and
   `deploy/`: rows 3.48–3.50), with `$REG/scope-sweep-paused` still stopping everything, the shadow record included.
   Carried into §5.6's text (Task 7). Rows 3.1–3.3, 3.48–3.50.
-- `scope-sweep-stops-at-most-three-a-tick` — spec §5.6 stops every inert scope "at the first tick"; armed, this sweep
+- **D-4013** `scope-sweep-stops-at-most-three-a-tick` — spec §5.6 stops every inert scope "at the first tick"; armed, this sweep
   stops at most `SCOPE_SWEEP_MAX_STOPS` (3) in one tick and records the rest `held` for the next, so the first armed
   tick after a shadow week — or a misjudgment the shadow week missed — costs three scopes a minute, not every inert
   scope at once (the plan review's safety lens). Carried into §5.6's text. Row 3.4.
-- `scope-sweep-recycled-server-reported` — spec §5.6 checks the server "by pid, comm and a start time earlier than the
+- **D-4014** `scope-sweep-recycled-server-reported` — spec §5.6 checks the server "by pid, comm and a start time earlier than the
   scope's, against pid reuse" but says nothing of the scope whose check FAILS. Ruling D says never stop it; the plan
   records it dead with `server=reused`, `verdict=report`, `why=server-pid-reused`, so doctor lists it rather than
   hiding a scope whose server is certainly gone. The comparison is in ticks against monotonic microseconds, because the
   server and its first pane start in the same second (Pre-flight 5; its own case). Rows 3.12–3.14.
-- `scope-sweep-unmeasurable-carries-the-old-line` — §5.6's "skips that scope for the tick and records nothing" is read
+- **D-4015** `scope-sweep-unmeasurable-carries-the-old-line` — §5.6's "skips that scope for the tick and records nothing" is read
   as: the scope's previous verdict line is carried UNCHANGED (its first-seen clock and `cpu0` kept), a scope never seen
   before gets no line, and the tick goes on to the next scope; dropping the line would restart a six-hour clock on
   every unreadable tick. "Cannot measure" is read wide (Task 3's list): a failed `show`, a foreign or empty
   `ControlGroup`, an unreported CPU or start time, a silent tmux for a scope whose server still runs, a process in
   another network namespace, an unreadable `/proc/net` table, and any process on the box whose stat it cannot read.
   Rows 3.7, 3.8, 3.10, 3.29–3.44, 3.51, 3.53.
-- `scope-sweep-ccds-server-is-the-default-socket` — "ccd's current server" is the server `tmux list-panes -a` answers
+- **D-4016** `scope-sweep-ccds-server-is-the-default-socket` — "ccd's current server" is the server `tmux list-panes -a` answers
   from on the default socket, as ccd's own `tmux` calls address it; a scope of a live server tmux did not name is
   another server's and is dropped, and when tmux answers nothing (no server, a deleted socket, no tmux) a scope whose
   server still runs is UNMEASURABLE — its line carried — while the scopes of a server that no longer runs are judged.
   A wedged server is bounded by the unit's `TimeoutStartSec=45`, the script having no `timeout` (macos-platform's
   scan). Rows 3.9–3.11.
-- `scope-sweep-mcp-servers-are-startup-children` — §5.6 lists "every process older than a day in a live pane scope,
+- **D-4017** `scope-sweep-mcp-servers-are-startup-children` — §5.6 lists "every process older than a day in a live pane scope,
   other than the pane's own process and its Claude Code's MCP servers" without saying how an MCP server is told apart.
   The plan's reading: a direct child of the pane's process started within `SCOPE_SWEEP_MCP_SEC` (120 s) of it, and that
   child's descendants; a background shell started later is listed. The list is the sweep's record's (`old` lines), so
   doctor reads it rather than deriving it. Rows 3.46, 3.47, 5.5.
-- `scope-sweep-children-elsewhere-by-cgroup-procs` — §5.6's "no process is the parent of one in another cgroup" is
+- **D-4018** `scope-sweep-children-elsewhere-by-cgroup-procs` — §5.6's "no process is the parent of one in another cgroup" is
   decided by the scope's own `cgroup.procs` against every process on the box: a child of one of its processes that it
   does not hold is elsewhere (a per-child cgroup-path comparison can never differ for a child it holds, which a first
   draft's row proved green). Rows 3.27, 3.28.
-- `scope-sweep-installed-like-the-tmp-reaper` — spec §7 names the units, `deploy.sh`, the install spine and
+- **D-4092** `scope-sweep-child-cgroups-are-unmeasurable` — spec §5.6's predicates read the scope's processes, but a stop
+  kills the scope's whole cgroup subtree and that subtree is user-writable (a pane process can `mkdir` a child cgroup and
+  move itself in), so a scope with any child cgroup is unmeasurable and its line is carried; with it, four hardenings of
+  the same rule found by the same review: the record's `first=`/`cpu0=` bounded, no leading-zero pid in the Description,
+  an fd link that exists but cannot be read is unmeasurable, and the parent walk capped at 64 hops. Found by Task 3's
+  review. Round 2 adds the fifth: a cgroup directory that cannot be read and searched is also unmeasurable (a scope's
+  owner can chmod it to hide a child cgroup from the sweep). Rows 3.54–3.59.
+- **D-4019** `scope-sweep-installed-like-the-tmp-reaper` — spec §7 names the units, `deploy.sh`, the install spine and
   `deploy-verify`; the plan also gates the units and the enable off `--role server` (a server box runs no pane
   scope), declares the record in `shared/lifecycle.ts` and the binary in `TOOLCHAIN_EXECUTABLES`, takes no `flock` (a
   oneshot never runs twice at once; a manual run beside the timer can only issue a stop twice), and sets
   `TimeoutStartSec=45`, `MemoryMax=256M`, `OnActiveSec=2min`. Rows 4.1–4.13.
-- `doctor-scope-sweep-reads-record-and-known` — §5.6 has doctor read the record; the plan also puts the timer in
+- **D-4020** `doctor-scope-sweep-reads-record-and-known` — §5.6 has doctor read the record; the plan also puts the timer in
   `services`' `known` (a reboot empties the record, so only `known` sees a timer that never ran again), makes a missing
   record a SKIP (a fresh install's first tick is two minutes away) and a paused sweep a SKIP (never a stale WARN),
   warns on a record older than 300 s, prints each dead scope's age on the record's own clock with the scope's and its
   oldest process's age and its pids, and gives the record's path a test seam (`CCRC_SCOPE_SWEEP_STATE`) so no test
-  reads a real box's. `BASE_LIVE_SHAPE` gains `"scope-sweep": "SKIP"` in its three maps. Rows 5.1–5.10.
-- `stage-six-maps-scopes-through-ccd-spawns` — §9 names B but not its instrument. The plan reads the user journal (one
+  reads a real box's. `BASE_LIVE_SHAPE` gains `"scope-sweep": "SKIP"` in its three maps. Rows 5.1–5.10. Four things the
+  review of the wave named sit inside this contract and take no number of their own: the reader's every arithmetic regex is
+  bounded (a leading zero or a 20-digit run would abort the check inside `$( … )`), `CCRC_SCOPE_SWEEP_STALE_S` falls back
+  to 300 when it is not a number, a line under a good header that matches neither shape is counted as unreadable and
+  never dropped (its remedy wording is carried to wave 4b), and `ccrc-doctor-graphify.test.ts`'s doctor environment gains
+  the `CCRC_SCOPE_SWEEP_STATE` seam so that suite never reads a real box's record.
+- **D-4021** `stage-six-maps-scopes-through-ccd-spawns` — §9 names B but not its instrument. The plan reads the user journal (one
   read-only `journalctl --user` run on two indexed field matches — the instrument's header said it runs nothing but
   read-only opens — or `--journal FILE`, a new flag and `ctx` key the carried "one shape" constraint did not list), maps
   a scope to the one session whose ccd `spawn` event landed within ten seconds AFTER the scope's start (else
   `unmapped`), and reads idle and the live shell from that session's current transcript (a `/clear` since the stop
   reads as idle with no shell: named). Rows 2.1–2.9.
-- `inert-survivors-counted-while-shadowed` — §9's stage-6 row has "dead ccd scopes that pass the inert test yet survive
+- **D-4091** `stage-six-spawn-claimed-by-one-scope` — The plan mapped a scope to the one session whose spawn event landed in the ten seconds after its start, and checked that window from the scope's side only. ccd does not log every spawn (`_spawn_settle` writes `_lc_done spawn` only when the rc changed or the previous spawn is more than 300 s old), so a same-rc respawn within five minutes has no event, and its scope's window can hold another session's spawn: the stop was charged to the wrong session. The fix adds the reverse check — the chosen spawn must have exactly one scope start in the ten seconds before it, else the stop is `unmapped` (`two scopes started before one spawn`); its named cost is that both scopes' stops go unmapped, never guessed. Found by Task 2's review.
+- **D-4088** `inert-survivors-counted-while-shadowed` — §9's stage-6 row has "dead ccd scopes that pass the inert test yet survive
   a day", target 0. With the stop shadowed (ruling C) every inert scope survives by design, so the count is REPORTED —
   read by `--stage 6` off the verdict record at the reading (the record keeps no history), `would-stop`/`held`/
   `stop-failed` lines first seen dead a day or more before its tick — and rev 8 says the target of 0 applies once the
   operator arms the stop. Rows 2.10–2.12.
-- `pressure-reap-variable-ships-after-baseline-b` — the coordinator's ruling B: spec §5.6 item 1 ships the variable
+- **D-4089** `pressure-reap-variable-ships-after-baseline-b` — the coordinator's ruling B: spec §5.6 item 1 ships the variable
   "from stage 6's first deploy", and §11 item 4 says it "ships first (§10)"; this wave — stage 6's first deploy — ships
   items 2 and 3 without it, so the reap is still on while baseline B is counted, and wave 4b ships it after that
   week. Rev 8 amends §5.6 item 1, §10's "first part" and §11 item 4 (Task 7). §9's pressure-kill metric goes with it
   ("Carried").
-- `timed-harness-shared-with-auto-compact` — spec §5.6 item 3 names the limit-banner harness; `ccd-auto-compact.test.ts`
+- **D-4090** `timed-harness-shared-with-auto-compact` — spec §5.6 item 3 names the limit-banner harness; `ccd-auto-compact.test.ts`
   carried the same `alarm shift; exec @ARGV` bound around `_transcript_last_turn_ts`'s FIFO guard, with the same leak
   under a mutation (the plan review's replay lens). The forking bound moves to `ccdWsHelpers.ts` as `BOUNDED` and both
   FIFO cases use it; the pin bounds its own run from outside, so a broken harness reds instead of hanging. Rows
   6.1–6.5.
+- **D-4093** `merge-block-keeps-one-stamp-line` — the plan's two gated merge blocks (Task 1 Step 0, Task 8 Step 1)
+  resolve `ccd/ccd`'s line-2 stamp conflict with `sed -i '2,6d'`, which deletes BOTH stamp lines with the markers, so
+  `ccrc restamp` refuses ("carries no ccrc:generated marker") and the merge stays open without printing STOP. Task 8's
+  merge of `origin/main` 77c11245a kept this side's stamp line (worker clause 16: take either side of that line only)
+  and re-stamped — `bash -n` clean, no marker left, no other hunk touched. The block's fix is `sed -i '2d;4,6d'`
+  (keep line 3, one stamp). Found by Task 8.
 
 ---
 

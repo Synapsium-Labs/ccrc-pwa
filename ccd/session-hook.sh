@@ -2767,7 +2767,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 { read -r event; read -r psid; read -r paid; } < <(jq -r 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); (.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(alpha or (. >= 48 and . <= 57) or . == 95 or . == 45)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end)' <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write
 [[ -n "$event" ]] || exit 0
 
-state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" bgk="" bgi="" err="" hts="" msid=""
+state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" bgk="" bgi="" err="" hts="" msid="" sessend=""
 case "$event" in
   UserPromptSubmit) state="working" ;;
   PostToolUse)
@@ -2911,6 +2911,7 @@ case "$event" in
     # Its regexes (and StopFailure's) feed the marker alone, and the program emits its three lines only together: a jq built without Oniguruma leaves bg -1 / err "", never a count without its kinds, and never the hookstate (the payload parse above is regex-free).
     { read -r bg; read -r bgk; read -r bgi; } < <(jq -r '(if (.background_tasks|type) == "array" then .background_tasks else null end) as $a | [(if $a == null then -1 else ($a|length) end), ([$a[]? | objects | .type | strings | ascii_downcase | gsub(" "; "-") | gsub("[^a-z_-]"; "") | select(length > 0)] | join(",")), ([$a[]? | objects | .id | strings | select(test("^[A-Za-z0-9_-]{1,64}\\z"))] | .[0:8] | join(","))] | .[]' <<<"$payload" 2>/dev/null) ;;
   StopFailure) stopfail=1; err=$(jq -r '(.error // "") | tostring | gsub("[^a-z_]"; "") | .[0:64]' <<<"$payload" 2>/dev/null) ;;
+  SessionEnd) sessend=1 ;;   # delegation broker §5.3: a termination HINT only — captured below in a -hookcap session, otherwise inert (no hookstate, no marker)
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
   *) exit 0 ;;
 esac
@@ -3021,8 +3022,8 @@ if [[ -z "$paid" && -e "$REG/$id.generation" ]]; then
 fi
 # StopFailure (§5.1) leaves hookstate.json alone and prints nothing: its arm raised
 # the flag and read `err` for the marker above (stopfailure-sets-a-flag (D-3611)), and nothing
-# below may run for it.
-[[ -n "$stopfail" ]] && exit 0
+# below may run for it. SessionEnd is a termination hint, captured above in a -hookcap session and otherwise inert.
+[[ -n "$stopfail$sessend" ]] && exit 0
 
 f="$REG/$id.hookstate.json"
 # Prior subagent set survives state transitions; a corrupt file reads as [].
@@ -3503,6 +3504,101 @@ fi
 # incomplete heredoc ends the strip there (one cut, kept raw), and a
 # heredoc's rest-of-line is stripped without a second heredoc (a `<<a <<a`
 # line once recursed once per `<<`: 15 s and 2.9 GB at 36 KB, measured).
+# THE PAYLOAD CAP (landing-order wave 3): a command longer than
+# MERGE_PARSE_CAP bytes (UTF-8, as jq's `utf8bytelength` counts them) is never
+# parsed: neither the strip nor GH_MERGE_RE reads it. The strip's cost grows
+# with the quoted spans and substitutions it reads, and a hook that times out
+# or a jq killed for memory fails this deny OPEN (above), so an unbounded
+# command was a way past it. Over the cap the program asks the RAW command one
+# question, with a fixed-string segment rule (`ocwords`): split the command on
+# each of `;` `&` `|` and the newline, the separators between COMMANDS, and in
+# any one segment find `gh` (not preceded by a letter, digit or `_`, and
+# followed by a blank), then `pr` as a word (a blank before it, a blank or the
+# segment's end after it), then `merge` as a word that a blank, the end of the
+# segment, a backtick, `(`, `)`, `<` or `>` ends (that end class is `merge`'s
+# alone), each searched for after the one before (one leftmost match each, so
+# linear). The redirections and parentheses do not split: a gh flag's value may
+# hold them (`gh -R $(echo o/r) pr merge`, `gh -R o/r<x pr merge`), and a merge
+# is still a merge there.
+# gh's own flags may stand between the words (`gh -R o/r pr merge`, `gh pr -R
+# o/r merge`), which main's full parse refuses (landing-order wave 3's fix
+# round, review 267 F3). Yes: the arm reads it as a merge it could not
+# parse, and a held or child session is DENIED with a reason that names the
+# length and the cap and tells it to split the command or rephrase it (a long
+# PR body or mail goes in a file the Write tool writes, passed by path); a
+# landing is the operator's, from their own shell. No: it passes unparsed.
+# The split is `split` on a FIXED string, never `splits`: `splits` is a
+# regex-global walk, measured superlinear on jq 1.7 (43-52 s at 100 KB of
+# `;`, 14 s at 100 KB of `gh;`), and a hook that times out fails this deny
+# OPEN. A `contains("gh") and contains("merge")` prefilter, whole and per
+# segment, keeps the word tests off nearly every segment. Three of the six
+# 100 KB pins (`;` only, `gh;` repeated, newlines only) never reach the
+# split, since the whole-command prefilter is false for each, so the `splits`
+# timings above describe a rule without the prefilter; the structural
+# `splits(` ban and mutation row SP are what guard it. Measured through
+# the whole hook at 100 KB, on jq 1.7 and 1.8.2: 90 to 320 ms on `;`, `gh;`,
+# `gh pr merged;`, newlines and `gh merge `; the costliest measured, `gh
+# merge;` and `merge gh pr;` repeated (many segments that pass the prefilter),
+# reached 343 to 384 ms at load ~15. That is about 20% of the sync-advisory
+# 1500 ms bound idle (~250 to 380 ms at 100 KB, measured), not the parse's
+# quarter above; a review measured ~600 ms (~40%) once. The cost is linear in
+# the length, so the bound is crossed at ~450 to 500 KB at the idle slope. The
+# word rule, not two bare substrings, because `gh` is inside "though" and
+# "high" and `merge` inside "merged": the two substrings matched 1,340 of
+# 4,478 over-cap fleet commands in one two-day window, mostly prose. The
+# in-order search slices by `match` offsets, which jq 1.7 and 1.8 count in
+# codepoints (measured correct after é and an emoji); jq 1.6 is unverified.
+# Only where the deny already applies: a session with no wave hold and no
+# child marker is never refused, under the cap or over it. THE VALUE IS
+# MEASURED: the largest round size at which the worst quote-dense shape
+# measured costs about a quarter of `session-hook-sync-advisory.test.ts`'s
+# 1500 ms whole-hook bound. That shape is a run of quoted substitutions that
+# each hold a quote or a `<` (`"$(<)"` repeated), one nested strip per span:
+# ~350 ms of CPU at 2048 bytes and ~650 ms at 4096 (bare `"`: ~125 and
+# ~190 ms), measured on the fleet box at load ~18.
+# THE COST, said: a held or child session's over-cap command is refused when any
+# ONE segment (the text between `;` `&` `|` and newlines) names `gh`, then `pr`,
+# then `merge` as words, prose included: a one-line JSON mail body (its `\n`
+# escapes keep it one segment), a trailing `# comment`, a PR body that quotes or
+# merely mentions them in that order. It stays refused until it is split,
+# rephrased, or moved into a file. The coordinator accepted it (ruling 3510): of
+# 3,537 over-cap fleet commands in another two-day window, the segment rule
+# refuses at most 12 more than a word-bounded three-word match would (that count
+# measured the three word tests unordered; the in-order search is stricter). No
+# narrowing: letting only gh's flags stand between the words would need a
+# repeated group, the nested quantifier this rule exists to avoid. The backtick
+# is a STRICTER OVER-CAP READING, NOT A CLOSURE: a bare `` `gh pr merge` `` is
+# refused over the cap because the end class holds a backtick, while legacy
+# backticks still pass under the cap (listed above). WHAT PASSES OVER THE CAP,
+# said, each measured through this hook, held, padded past the cap: `bash -c "gh
+# pr merge"` and `eval "gh pr merge"` (the closing quote is not in the end
+# class; `bash -c "gh pr merge 42"` is refused), quoting inside a word (`g"h" pr
+# merge`, `gh p""r merge`), a variable (`x=gh; $x pr merge`), an alias, a
+# separator inside a quoted flag value or inside a substitution that holds `;`
+# `&` `|` or a newline (`gh pr -R "a;b" merge 42`), and a NUL next to a word
+# (`gh pr merge\0 42`, which passes over the cap and is denied under it; bash
+# strips NUL from command text and Node refuses it in spawn arguments).
+# `gh<newline>pr<newline>merge` passes too, rightly: bash reads three
+# commands. Three classes pass under the cap too, so they are not regressions
+# of it: a backslash-newline continuation between the words (`gh pr
+# \<newline> merge 42`, measured held, under the cap), a redirection glued
+# between the command words (`gh pr>x merge 42`, `gh>x pr merge 42`;
+# GH_MERGE_RE needs a blank before `pr` and `merge`), and a backslash-newline
+# straight after `merge` (`gh pr merge\<newline> 42`).
+# Classified, not closed (the stopping line, ruled 2026-10-03).
+# The cap also BOUNDS every superlinear walk above: the strip and GH_MERGE_RE
+# never read more than MERGE_PARSE_CAP bytes, so the 36-200 KB timings above
+# are what the cap prevents, not what a command costs.
+# The cap needs jq 1.6 or later (utf8bytelength): on an older jq the whole
+# program fails to compile, and the deny fails OPEN at every length, as with
+# no Oniguruma (above).
+# The deny's jq floor is 1.6, and it is tested on jq 1.7 and 1.8. jq 1.8 binds
+# `E as $x` to the whole binary chain left of it where 1.7 binds the nearest
+# term, so every `as` in these programs that follows a binary operator is
+# parenthesised on its own, and the merge-deny suite pins that structurally;
+# before that, a jq 1.8 box failed this deny open on every command holding a
+# heredoc.
+MERGE_PARSE_CAP=2048
 GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+pr([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+merge([[:space:];&|()<>]|$)'
 MERGE_STRIP_JQ='
 def SQ: $q + "[^" + $q + "]*" + $q;
@@ -3543,25 +3639,44 @@ def qs($h):
       | (.r | qs(false)) as $rest
       | ((.b | contains("\n")) and (if .d == "-" then $last | sub("^\\t+"; "") else $last end) == (.w // .w2)
          and ($rest | contains("\"") or contains($q) or contains("`") | not)
-         and ((.w // .w2) + ")") as $wp | (.d == "-") as $dash
-             | .b | split("\n") | any(if $dash then sub("^\\t+"; "") else . end | startswith($wp)) | not) as $done
+         and (((.w // .w2) + ")") as $wp | (.d == "-") as $dash
+             | .b | split("\n") | any(if $dash then sub("^\\t+"; "") else . end | startswith($wp)) | not)) as $done
       | if $done | not then null else "<<" + $rest + "\n" + (if .x == "" and .q == null then .b | subs else "" end) end end
     elif startswith("$((") or startswith("((") or startswith("$[") or startswith("$$") then .
     else "" end) end;
-if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end'
+def ocsegs: reduce (";", "&", "|", "\n") as $s ([.]; map(split($s)) | add);
+def ocafter($re): . as $s | [match($re)] | if length == 0 then empty else $s[.[0].offset + .[0].length:] end;
+def ocmerge: ocafter("(^|[^A-Za-z0-9_])gh(?=\\s)") | ocafter("\\spr(?=\\s|$)") | ocafter("\\smerge($|[\\s`()<>])");
+def ocwords: contains("gh") and contains("merge")
+  and any(ocsegs[] | select(contains("gh") and contains("merge")) | ocmerge; true);
+def capped(f): (.tool_input.command // "") as $c
+  | if ($c | type) == "string" and ($c | utf8bytelength) > $cap
+    then (if ($c | ocwords) then "!\($c | utf8bytelength)" else "" end)
+    else "=" + f end;
+capped(if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end)'
 if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
-  mcmd=$(jq -r --arg q "'" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mcmd=""
-  if [[ -n "$mcmd" && "$mcmd" =~ $GH_MERGE_RE ]]; then
+  mout=$(jq -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mout=""
+  mcmd="" mover=""
+  case "$mout" in
+    '='*) mcmd=${mout#=} ;;
+    '!'*) mover=${mout#!} ;;
+  esac
+  if [[ -n "$mover" ]] || [[ -n "$mcmd" && "$mcmd" =~ $GH_MERGE_RE ]]; then
     mwhy=""
     if _ct_read "$REG/$id.hold" && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then
       mwhy="this workspace's hold reads \`$CT_V\` — a programme wave's session"
     elif [[ -e "$REG/$id.child" ]]; then
       mwhy="this workspace carries the child marker — a dispatched child, whose run has let it go"
     fi
-    if [[ -n "$mwhy" ]]; then
+    if [[ -n "$mwhy" && -n "$mover" ]]; then
+      mreason="ccrc: this command is $mover bytes, over the merge deny's $MERGE_PARSE_CAP-byte parse cap, and its raw text reads as a \`gh … pr … merge\` command, so the deny cannot read whether it runs one; $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
+      mreason+=" Split it into commands of at most $MERGE_PARSE_CAP bytes, or rephrase it so its text does not read as a \`gh … pr … merge\` command (prose that names gh, pr and merge in that order reads as one, a mail or PR body that quotes it included): write a long mail body to a file with the Write tool and send it with \`ccrc-api mail send --json <file>\`, which keeps the command short, or a long PR body to a file for \`gh pr create --body-file <file>\`. A landing is the operator's, from their own shell."
+    elif [[ -n "$mwhy" ]]; then
       mreason="ccrc: $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
       mreason+=" Report wave-done to your coordinator; it lands the PR."
+    fi
+    if [[ -n "$mwhy" ]]; then
       pre_json=$(_hook_deny_json "$mreason") || pre_json=""
     fi
   fi

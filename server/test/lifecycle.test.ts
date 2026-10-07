@@ -1015,6 +1015,16 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.collector).toContain('ccd-tmp-sweep');
     expect(c!.root).toContain('claude-<uid>');
   });
+  it('declares the pane-scope sweep\'s verdict record, a rolling class its own writer rewrites', () => {
+    // Session-continuity wave 4: `ccd-scope-sweep` keeps one record in the
+    // runtime dir, and `ccrc doctor` reads it. An unassigned artifact class is a
+    // defect (policy §1.2), so it is declared the day it ships.
+    const c = LIFECYCLE.find((x) => x.name === 'scope-sweep-verdicts');
+    expect(c, 'shared/lifecycle.ts declares no scope-sweep-verdicts class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd-scope-sweep']);
+    expect(c!.root).toBe('$XDG_RUNTIME_DIR/ccd-scope-sweep.state');
+  });
   it('declares project-pool-tag, and it is a collector-less class with an operator ruling', () => {
     // `docs/superpowers/specs/2026-08-11-artifact-lifecycle-policy.md` §1.2
     // makes an unassigned artifact class a defect, and this one has NO

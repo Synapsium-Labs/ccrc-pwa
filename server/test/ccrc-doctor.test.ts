@@ -924,6 +924,9 @@ function doctorEnv(home: string): NodeJS.ProcessEnv {
     CCRC_CGROUP_ROOT: join(home, 'fixture-cgroup'),
     CCRC_PROC_ROOT: join(home, 'fixture-proc'),
     CCRC_SCOPE_SETTLE_SEC: '1',
+    // `_check_scope-sweep` reads the sweep's verdict record from the runtime dir;
+    // a test must never read a real box's, so the record is a fixture file.
+    CCRC_SCOPE_SWEEP_STATE: join(home, 'fixture-scope-sweep.state'),
   };
 }
 
@@ -1050,6 +1053,8 @@ function healthy(prefix: string): string {
   // A pane scope with nothing parked: `_check_scopes` PASSes, and returns
   // WITHOUT settling, so the healthy fixture costs no extra second.
   plantScope(home, { procs: [4101, 4102] });
+  // The pane-scope sweep's verdict record, fresh and empty: `scope-sweep` PASSes.
+  writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=${Math.floor(Date.now() / 1000)} up=8640000 mode=shadow\n`);
   // tmux answers its versions, client and server agreeing — a healthy box is
   // one where every check PASSES (see the fleet note below), and tmux_skew
   // measures a version pair, not a presence.
@@ -1467,8 +1472,13 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  (`_check_codex`'s empty-set SKIP). `healthyCodexBox()` is the fixture
  *  where it answers. Measured the same way: deleting this `+ 1` reds the
  *  summary and count pins that read this constant (Plan 3a Task 4's
- *  mutation row). */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 1 : 0) + 4;
+ *  mutation row).
+ *
+ *  RAISED BY ONE ON macOS ONLY (session-continuity wave 4): `scope-sweep` SKIPs
+ *  there, as `scopes` does — pane scopes are a Linux mechanism. On Linux
+ *  `healthy()` plants a fresh verdict record, so it PASSes and this count is
+ *  unchanged there. */
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 4;
 
 // ── the table itself ──────────────────────────────────────────────────────
 
@@ -1622,6 +1632,67 @@ describe('ccrc doctor: the binaries a fleet box needs', () => {
   });
 });
 
+// ── jq_regex: the regex engine the session hook's merge deny runs on ──────
+
+describe('ccrc doctor: jq_regex — a jq without lookaround fails the merge deny open, and says so', () => {
+  /** A jq that answers the lookbehind probe as `answer` says and runs the real
+   *  jq for everything else, so every other check that reads JSON is
+   *  untouched. `rmSync` first: `healthy()` links the REAL jq here, and a write
+   *  through that symlink would land on the box's own binary. */
+  const lookbehindJq = (home: string, answer: string): void => {
+    unstub(home, 'jq');
+    stub(home, 'jq', `case "$*" in *'(?<!b)a'*) ${answer} ;; esac\nexec ${shq(realPath('jq'))} "$@"`);
+  };
+
+  it('passes on a jq that matches a lookbehind, naming the binary', () => {
+    const home = healthy('ccrc-doctor-jqre-ok-');
+    const line = lineFor(runDoctor(home).stdout, 'jq_regex');
+    expect(line).toMatch(/^PASS jq_regex: /);
+    expect(line, 'the PASS line does not name the jq it measured').toContain(`${join(home, 'stub-bin', 'jq')} matches a lookbehind`);
+  });
+
+  it('FAILs, with a remedy, on a jq built without Oniguruma — the deny would read no command', () => {
+    const home = healthy('ccrc-doctor-jqre-noonig-');
+    // jq 1.7 built without Oniguruma answers every regex builtin with this
+    // error and exit 5 (its src/builtin.c, the `#else` arm of f_match).
+    lookbehindJq(home, "echo 'jq: error (at <unknown>): jq was compiled without ONIGURUMA regex library. match/test/sub and related functions are not available.' >&2; exit 5");
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL jq_regex: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('FAILS OPEN');
+    expect(lines[i]).toContain('rc 5');
+    expect(lines[i]).toContain('compiled without ONIGURUMA');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: install a jq built with Oniguruma/);
+    expect(r.code).toBe(1);
+    // The presence check still passes: jq is there, its regex is not.
+    expect(lineFor(r.stdout, 'jq')).toMatch(/^PASS jq: /);
+  });
+
+  it('FAILs when the probe answers anything but true — a lookbehind that does not match', () => {
+    const home = healthy('ccrc-doctor-jqre-false-');
+    lookbehindJq(home, 'echo false; exit 0');
+    expect(lineFor(runDoctor(home).stdout, 'jq_regex')).toMatch(/^FAIL jq_regex: .*answered 'false', rc 0/);
+  });
+
+  it('skips on a server-role box — no session hook runs there', () => {
+    const home = healthy('ccrc-doctor-jqre-server-');
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    lookbehindJq(home, 'exit 5');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP jq_regex: this box records CCRC_ROLE=server/m);
+    expect(lineFor(r.stdout, 'jq_regex')).toBeUndefined();
+  });
+
+  it('skips with no jq on PATH — presence is the jq check\'s FAIL, not this one\'s', () => {
+    const home = healthy('ccrc-doctor-jqre-nojq-');
+    unstub(home, 'jq');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP jq_regex: jq is not on PATH/m);
+    expect(r.stdout).toMatch(/^FAIL jq: not on PATH/m);
+  });
+});
+
 // ── timeout: the bound the session hook and the status line put on tmux ──
 // `ccd/session-hook.sh` and `ccd/statusline-command.sh` ask tmux one question
 // each, bounded by `timeout` or `gtimeout`, and with neither on PATH they SKIP
@@ -1683,6 +1754,345 @@ describe('ccrc doctor: timeout', () => {
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/^SKIP timeout: this box records CCRC_ROLE=server, so it hosts no sessions/m);
     expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) timeout:/m);
+  });
+});
+
+// ── model-default: an Anthropic lane whose settings.json defaults to Fable ──
+// Claude Code's `/model <name>` saves `model` into the account home's
+// settings.json, and ccd composes `--model` only from a routing record whose
+// class is set and is not `default` — so every other spawn on that lane (no
+// record, class `default`, a worker whose run names no class) starts on what
+// that key says. ccrc's routing never chooses Fable itself; this check is how
+// a stray `/model fable` on a lane becomes visible. Most cases source the
+// checks file and call the one function (fast, and the subject is the
+// function's verdict); the table wiring and the server-role SKIP — which
+// needs `ccrc`'s `BOX_ENV_FILE` — go through `ccrc doctor` end to end.
+// Imported HERE for the reason the codex fixtures' import above gives: ES
+// modules hoist it, and lines above this point are cited by number.
+import { familyClassOf } from '../../shared/models.mjs';
+
+describe('ccrc doctor: model-default', () => {
+  // Two Anthropic lanes and one codex lane: the codex lane's `fable` alias
+  // names a GPT model (ANTHROPIC_DEFAULT_FABLE_MODEL), so it is not the subject.
+  const MD_ROSTER = { version: 1, accounts: [
+    { id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'claude-a', label: 'claude-a', configDirSuffix: '.claude-a',
+      exec: { kind: 'generated', secretsFile: '.cc-secrets/claude-a-oauth.env' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    { id: 'cx', label: 'cx', configDirSuffix: '.claude-cx',
+      exec: { kind: 'codex', provider: 'openai', proxyPort: 41001, litellmPort: 41002, authDir: codexAuthDir('cx') },
+      homeAble: false, telemetry: 'codex' },
+  ] };
+  /** A home with the projection and a real `node` (behind the `--version`
+   *  stub every doctor fixture uses) on an otherwise-empty contained PATH. */
+  const mdHome = (prefix: string): string => {
+    const home = mkTmp(prefix);
+    stubNode(home, 'v22.20.0');
+    seedAccountsSh(home, MD_ROSTER);
+    return home;
+  };
+  const settings = (home: string, suffix: string, body: unknown): string => {
+    const d = join(home, suffix);
+    mkdirSync(d, { recursive: true });
+    const p = join(d, 'settings.json');
+    writeFileSync(p, typeof body === 'string' ? body : JSON.stringify(body, null, 2));
+    return p;
+  };
+  /** `_check_model-default` alone, sourced the way the launchd routing case
+   *  sources `_check_routing`. */
+  const runCheck = (home: string): { code: number; out: string } => {
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(CHECKS_SRC)}; _check_model-default`],
+      { encoding: 'utf8', env: { HOME: home, PATH: containedPath(home), LC_ALL: 'C' } });
+    return { code: r.status ?? -1, out: r.stdout ?? '' };
+  };
+  const verdicts = (out: string): string[] => out.split('\n').filter((l) => /^(PASS|WARN|FAIL|SKIP) model-default: /.test(l));
+  const FABLE_LEAD = /^WARN model-default: an Anthropic lane's settings\.json defaults the model to Fable: /;
+
+  it('WARNs on `model: "fable"` through `ccrc doctor` itself, naming the lane, the consequence and the remedy — never a FAIL', () => {
+    const home = healthy('ccrc-doctor-mdef-alias-');
+    seedAccountsSh(home, MD_ROSTER);
+    settings(home, '.claude-a', { model: 'fable' });
+    const r = runDoctor(home);
+    const line = lineFor(r.stdout, 'model-default');
+    expect(line, r.stdout).toMatch(FABLE_LEAD);
+    expect(line).toContain('Fable: claude-a (model=fable) — ');
+    expect(line).toContain('a session there with no routing record, or class `default`, starts on Fable (a dispatched worker whose run names no class included)');
+    expect(r.stdout).toMatch(/^WARN model-default: .*\n {2}remedy: in that lane's settings\.json set `model` to Opus or remove it .*a `\/model` typed with a name saves the account default, while `s` in the \/model picker is session-only$/m);
+    expect(r.stdout).not.toMatch(/^FAIL model-default:/m);
+  });
+
+  it('WARNs on `fable[1m]` and on a full Fable id — the alias with its suffix, and the dash-token rule', () => {
+    const home = mdHome('ccrc-doctor-mdef-ids-');
+    settings(home, '.claude', { model: 'fable[1m]' });
+    settings(home, '.claude-a', { model: 'claude-fable-5-1' });
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toHaveLength(1);
+    expect(verdicts(r.out)[0]).toMatch(FABLE_LEAD);
+    expect(verdicts(r.out)[0]).toContain('Fable: claude (model=fable[1m]), claude-a (model=claude-fable-5-1) — ');
+  });
+
+  it('WARNs on env.ANTHROPIC_MODEL naming Fable — it outranks `model` — and PASSes when it outranks a Fable `model`', () => {
+    const home = mdHome('ccrc-doctor-mdef-env-');
+    settings(home, '.claude-a', { model: 'opus', env: { ANTHROPIC_MODEL: 'claude-fable-5-1' } });
+    const r = runCheck(home);
+    expect(verdicts(r.out)).toEqual([expect.stringMatching(FABLE_LEAD)]);
+    expect(r.out).toContain('Fable: claude-a (env.ANTHROPIC_MODEL=claude-fable-5-1) — ');
+    // The precedence the other way round: the env key decides, so the stale
+    // `model` underneath it starts nothing.
+    const back = mdHome('ccrc-doctor-mdef-env-back-');
+    settings(back, '.claude-a', { model: 'fable', env: { ANTHROPIC_MODEL: 'opus' } });
+    expect(verdicts(runCheck(back).out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+    // An EMPTY env value is no value — the `model` beneath it is what runs.
+    const empty = mdHome('ccrc-doctor-mdef-env-empty-');
+    settings(empty, '.claude-a', { model: 'fable', env: { ANTHROPIC_MODEL: '' } });
+    expect(runCheck(empty).out).toContain('Fable: claude-a (model=fable) — ');
+  });
+
+  it('PASSes on `opus`, on an absent key and on an absent file, naming how many lanes it measured', () => {
+    const home = mdHome('ccrc-doctor-mdef-pass-');
+    settings(home, '.claude', { model: 'opus' });
+    settings(home, '.claude-a', { env: { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' } });
+    const r = runCheck(home);
+    expect(r.code).toBe(0);
+    expect(verdicts(r.out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+    const bare = mdHome('ccrc-doctor-mdef-nofile-');
+    expect(verdicts(runCheck(bare).out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+  });
+
+  it('ignores a codex lane whose `model` is `fable` — the alias names a GPT slot there', () => {
+    const home = mdHome('ccrc-doctor-mdef-codex-');
+    settings(home, '.claude-cx', { model: 'fable' });
+    expect(verdicts(runCheck(home).out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+  });
+
+  it('agrees with familyClassOf id for id: a Fable verdict exactly when the alias is `fable` or the family is fable', () => {
+    const corpus = ['fable', 'fable[1m]', 'FABLE', 'Fable[1m]', 'fable-ish', 'xfable', 'claude-fable-5-1', 'claude-fable-5-1[1m]',
+      'claude-fable-opus-hybrid-1', 'claude-opus-fable-x-1', 'claude-opus-5-5', 'claude-sonnet-5', 'opus', 'opus[1m]',
+      'default', 'claude-fable', 'CLAUDE-FABLE-5-1', 'anthropic/claude-fable-5-1', 'us.anthropic.claude-fable-5-1-v1:0', ''];
+    const home = mdHome('ccrc-doctor-mdef-agree-');
+    const dir = join(home, 'corpus');
+    mkdirSync(dir);
+    corpus.forEach((id, i) => writeFileSync(join(dir, `${i}.json`), JSON.stringify({ model: id })));
+    const r = spawnSync(BASH, ['-c', [
+      `set -uo pipefail; . ${shq(CHECKS_SRC)}; mkdir -p "$HOME/.claude-a"`,
+      `for i in $(seq 0 ${corpus.length - 1}); do cp "$HOME/corpus/$i.json" "$HOME/.claude-a/settings.json"; _check_model-default >/dev/null; echo "$?"; done`,
+    ].join('\n')], { encoding: 'utf8', env: { HOME: home, PATH: `${containedPath(home)}:/usr/bin:/bin`, LC_ALL: 'C' } });
+    const got = (r.stdout ?? '').trim().split('\n');
+    expect(got, r.stderr).toHaveLength(corpus.length);
+    corpus.forEach((id, i) => {
+      const fable = id.replace(/\[1m\]$/, '').toLowerCase() === 'fable' || familyClassOf(id) === 'fable';
+      expect(got[i], JSON.stringify(id)).toBe(fable ? '2' : '0');
+    });
+  });
+
+  it('SKIPs on a server-role box — it hosts no sessions', () => {
+    const home = healthy('ccrc-doctor-mdef-server-');
+    seedAccountsSh(home, MD_ROSTER);
+    settings(home, '.claude-a', { model: 'fable' });
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP model-default: this box records CCRC_ROLE=server, so it hosts no sessions/m);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) model-default:/m);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('WARNs UNMEASURED — never PASSes — on a settings.json it cannot read, naming the errno', () => {
+    const home = mdHome('ccrc-doctor-mdef-unread-');
+    const p = settings(home, '.claude-a', { model: 'opus' });
+    chmodSync(p, 0o000);
+    try {
+      const r = runCheck(home);
+      expect(r.code).toBe(2);
+      expect(verdicts(r.out)).toEqual([
+        'WARN model-default: unmeasured: settings.json is present but could not be read for: claude-a (EACCES), so whether it defaults the model to Fable is unknown',
+      ]);
+      expect(r.out).toContain('or its mode/ownership (chmod u+r <home>/settings.json)');
+    } finally {
+      chmodSync(p, 0o600);
+    }
+  });
+
+  it('WARNs UNMEASURED on invalid JSON and on JSON that is not an object — its own line, not the unreadable one', () => {
+    const home = mdHome('ccrc-doctor-mdef-badjson-');
+    settings(home, '.claude', '{"model": "fable",');
+    settings(home, '.claude-a', '["fable"]');
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toEqual([
+      'WARN model-default: unmeasured: settings.json is not a JSON object for: claude, claude-a, so whether it defaults the model to Fable is unknown',
+    ]);
+    expect(r.out).toContain('remedy: repair that lane\'s settings.json so it parses as a JSON object');
+  });
+
+  it('WARNs UNMEASURED when the reader exits with a code it does not define — never PASSes on it', () => {
+    const home = mdHome('ccrc-doctor-mdef-weird-');
+    settings(home, '.claude-a', { model: 'fable' });
+    stub(home, 'node',
+      `if [ "$1" = "--version" ]; then echo 'v22.20.0'; exit 0; fi\n`
+      + 'case "$*" in *CCRC_DOCTOR_SETTINGS*) exit 9 ;; esac\n'
+      + `exec '${process.execPath}' "$@"`);
+    const r = runCheck(home);
+    expect(verdicts(r.out)).toEqual([expect.stringMatching(/^WARN model-default: unmeasured: the settings reader \(node\) failed for: claude-a \(exit 9\)/)]);
+  });
+
+  it('a Fable lane and an unmeasured lane each get their own WARN, and no PASS', () => {
+    const home = mdHome('ccrc-doctor-mdef-mixed-');
+    settings(home, '.claude', { model: 'fable' });
+    settings(home, '.claude-a', 'not json');
+    const v = verdicts(runCheck(home).out);
+    expect(v).toHaveLength(2);
+    expect(v[0]).toMatch(FABLE_LEAD);
+    expect(v[1]).toMatch(/^WARN model-default: unmeasured: settings\.json is not a JSON object for: claude-a,/);
+  });
+
+  it('WARNs when the projection predates CCRC_ANTHROPIC_BACKEND, and PASSes vacuously with no projection at all', () => {
+    const home = mdHome('ccrc-doctor-mdef-stale-sh-');
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), 'CCRC_ACCOUNTS=(claude)\n');
+    expect(verdicts(runCheck(home).out)).toEqual([expect.stringMatching(/^WARN model-default: could not read the roster projection .*predates CCRC_ANTHROPIC_BACKEND/)]);
+    rmSync(join(home, '.ccrc', 'accounts.sh'));
+    expect(verdicts(runCheck(home).out)).toEqual([expect.stringMatching(/^PASS model-default: 0 Anthropic lane\(s\): no roster projection/)]);
+  });
+
+  // ── review fixes (lane A) ──
+  /** One exit code per `model` value, through the one function — the
+   *  agreement case's loop. */
+  const exitsFor = (prefix: string, bodies: unknown[]): string[] => {
+    const home = mdHome(prefix);
+    const dir = join(home, 'corpus');
+    mkdirSync(dir);
+    bodies.forEach((b, i) => writeFileSync(join(dir, `${i}.json`), JSON.stringify(b)));
+    const r = spawnSync(BASH, ['-c', [
+      `set -uo pipefail; . ${shq(CHECKS_SRC)}; mkdir -p "$HOME/.claude-a"`,
+      `for i in $(seq 0 ${bodies.length - 1}); do cp "$HOME/corpus/$i.json" "$HOME/.claude-a/settings.json"; _check_model-default >/dev/null; echo "$?"; done`,
+    ].join('\n')], { encoding: 'utf8', env: { HOME: home, PATH: `${containedPath(home)}:/usr/bin:/bin`, LC_ALL: 'C' } });
+    const got = (r.stdout ?? '').trim().split('\n');
+    expect(got, r.stderr).toHaveLength(bodies.length);
+    return got;
+  };
+
+  it('normalises the value as Claude Code\'s own resolver does — trimmed, case-folded, `[1m]` stripped in any case — and counts `best`', () => {
+    // The expectations are Claude Code 2.1.291's `xt`: `e.trim()`, then
+    // `toLowerCase()`, then `[1m]` stripped by `/(\[1m\])+$/i` and re-trimmed,
+    // then the alias switch, whose `best` arm resolves to the Fable default on
+    // an entitled lane. A full id is NOT case-folded there (`-fable-` stays
+    // case-sensitive, as `familyClassOf` is).
+    const table: Array<[string, '2' | '0']> = [
+      ['best', '2'], ['Best', '2'], [' best ', '2'], ['best[1m]', '2'],
+      [' fable', '2'], ['fable ', '2'], ['FABLE[1M]', '2'], ['fable[1M]', '2'], ['fable [1m]', '2'],
+      ['opus', '0'], [' opus ', '0'], ['OPUS[1M]', '0'], ['bestx', '0'], ['best-of', '0'], ['fable[2m]', '0'],
+      ['CLAUDE-FABLE-5-1', '0'],
+    ];
+    const got = exitsFor('ccrc-doctor-mdef-resolver-', table.map(([m]) => ({ model: m })));
+    table.forEach(([m, want], i) => expect(got[i], JSON.stringify(m)).toBe(want));
+    // `best` is Fable only where the account is entitled to it — said so.
+    const home = mdHome('ccrc-doctor-mdef-best-');
+    settings(home, '.claude-a', { model: 'best' });
+    expect(runCheck(home).out).toContain('Fable: claude-a (model=best, which resolves to Fable when the account is entitled to it) — ');
+  });
+
+  it('reads env.ANTHROPIC_DEFAULT_MODEL as the lowest rung — only when neither env.ANTHROPIC_MODEL nor `model` names a model', () => {
+    const got = exitsFor('ccrc-doctor-mdef-defrung-', [
+      { env: { ANTHROPIC_DEFAULT_MODEL: 'fable' } },
+      { model: '', env: { ANTHROPIC_DEFAULT_MODEL: 'claude-fable-5-1' } },
+      { model: 'opus', env: { ANTHROPIC_DEFAULT_MODEL: 'fable' } },
+      { env: { ANTHROPIC_MODEL: 'opus', ANTHROPIC_DEFAULT_MODEL: 'fable' } },
+      { env: { ANTHROPIC_DEFAULT_MODEL: 'opus' } },
+    ]);
+    expect(got).toEqual(['2', '2', '0', '0', '0']);
+    const home = mdHome('ccrc-doctor-mdef-defrung-line-');
+    settings(home, '.claude-a', { env: { ANTHROPIC_DEFAULT_MODEL: 'fable' } });
+    expect(runCheck(home).out).toContain('Fable: claude-a (env.ANTHROPIC_DEFAULT_MODEL=fable) — ');
+  });
+
+  it('follows an alias through the lane\'s own ANTHROPIC_DEFAULT_<ALIAS>_MODEL remap to a Fable id', () => {
+    const got = exitsFor('ccrc-doctor-mdef-remap-', [
+      { model: 'opus', env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-fable-5-1' } },
+      { model: 'Sonnet[1m]', env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-fable-5-1' } },
+      { env: { ANTHROPIC_DEFAULT_MODEL: 'opus', ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-fable-5-1' } },
+      { model: 'opus', env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5-5' } },
+      { model: 'opus', env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-fable-5-1' } },
+    ]);
+    expect(got).toEqual(['2', '2', '2', '0', '0']);
+    const home = mdHome('ccrc-doctor-mdef-remap-line-');
+    settings(home, '.claude-a', { model: 'opus', env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-fable-5-1' } });
+    expect(runCheck(home).out).toContain('Fable: claude-a (model=opus, via env.ANTHROPIC_DEFAULT_OPUS_MODEL=claude-fable-5-1) — ');
+  });
+
+  it('masks a Fable-class value that is not a plain id — no raw settings.json bytes reach the terminal', () => {
+    const home = mdHome('ccrc-doctor-mdef-mask-');
+    settings(home, '.claude', { model: 'claude-fable-5-1\u001b[31mRED' });
+    settings(home, '.claude-a', { model: 'us.anthropic.claude-fable-5-1-v1:0' });
+    const r = runCheck(home);
+    expect(r.out).toContain('Fable: claude (model=<a Fable-class id>), claude-a (model=<a Fable-class id>) — ');
+    expect(r.out).not.toContain('\u001b');
+  });
+
+  it('a dangling settings.json symlink and a directory in its place are "present but could not be read", with a remedy that fits them', () => {
+    const home = mdHome('ccrc-doctor-mdef-dangle-');
+    mkdirSync(join(home, '.claude-a'), { recursive: true });
+    symlinkSync(join(home, 'nowhere.json'), join(home, '.claude-a', 'settings.json'));
+    mkdirSync(join(home, '.claude', 'settings.json'), { recursive: true });
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toEqual([
+      'WARN model-default: unmeasured: settings.json is present but could not be read for: claude (EISDIR), claude-a (ENOENT, a symlink whose target is missing), so whether it defaults the model to Fable is unknown',
+    ]);
+    expect(r.out).toContain('remedy: fix or remove it — a symlink whose target is missing, a directory in its place, or its mode/ownership (chmod u+r <home>/settings.json)');
+    expect(r.out).not.toContain('exists but could not be read');
+  });
+
+  it('a reader (node) that fails is its own WARN, pointing at node — not an unreadable file with a chmod remedy', () => {
+    const home = mdHome('ccrc-doctor-mdef-nodefail-');
+    settings(home, '.claude-a', { model: 'opus' });
+    stub(home, 'node',
+      `if [ "$1" = "--version" ]; then echo 'v22.20.0'; exit 0; fi\n`
+      + 'case "$*" in *CCRC_DOCTOR_SETTINGS*) echo boom >&2; exit 1 ;; esac\n'
+      + `exec '${process.execPath}' "$@"`);
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toEqual([
+      'WARN model-default: unmeasured: the settings reader (node) failed for: claude-a (exit 1), so whether its settings.json defaults the model to Fable is unknown',
+    ]);
+    expect(r.out).toContain('remedy: check that node runs (node -e 0) — see the \'node\' check above — then re-run ccrc doctor');
+    expect(r.out).not.toContain('chmod');
+  });
+
+  it('a lane the projection gives no config dir is UNMEASURED, never counted as measured', () => {
+    const home = mdHome('ccrc-doctor-mdef-nodir-');
+    appendFileSync(join(home, '.ccrc', 'accounts.sh'), 'CCRC_ANTHROPIC_BACKEND+=(ghost)\n');
+    const r = runCheck(home);
+    expect(r.code).toBe(2);
+    expect(verdicts(r.out)).toEqual([
+      'WARN model-default: unmeasured: the roster projection names no config dir for: ghost, so whether its settings.json defaults the model to Fable is unknown',
+    ]);
+  });
+
+  it('a projection that prints, or exits part-way, never leaks onto doctor output nor yields a lane or a PASS', () => {
+    const home = mdHome('ccrc-doctor-mdef-leak-');
+    const sh = join(home, '.ccrc', 'accounts.sh');
+    writeFileSync(sh, `echo SIDE-EFFECT-PRINTED\n${readFileSync(sh, 'utf8')}`);
+    const printed = runCheck(home);
+    expect(printed.out).not.toContain('SIDE-EFFECT-PRINTED');
+    expect(verdicts(printed.out)).toEqual(['PASS model-default: 2 Anthropic lane(s): no settings.json defaults the model to Fable']);
+    const cut = mdHome('ccrc-doctor-mdef-cut-');
+    const csh = join(cut, '.ccrc', 'accounts.sh');
+    writeFileSync(csh, `echo SIDE-EFFECT-PRINTED; exit 0\n${readFileSync(csh, 'utf8')}`);
+    const r = runCheck(cut);
+    expect(r.out).not.toContain('SIDE-EFFECT-PRINTED');
+    expect(verdicts(r.out)).toEqual([expect.stringMatching(/^WARN model-default: could not read the roster projection /)]);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('WARNs UNMEASURED — never the vacuous PASS — on a projection that exists but cannot be read', () => {
+    const home = mdHome('ccrc-doctor-mdef-unread-sh-');
+    settings(home, '.claude-a', { model: 'fable' });
+    const sh = join(home, '.ccrc', 'accounts.sh');
+    chmodSync(sh, 0o000);
+    try {
+      const r = runCheck(home);
+      expect(r.code).toBe(2);
+      expect(verdicts(r.out)).toEqual([expect.stringMatching(/^WARN model-default: could not read the roster projection at \$HOME\/\.ccrc\/accounts\.sh/)]);
+    } finally {
+      chmodSync(sh, 0o600);
+    }
   });
 });
 
@@ -12451,5 +12861,153 @@ describeCodex('ccrc doctor --fix: codex, on a real doctor run (Plan 3a Task 8)',
     expect(second).toMatch(/^FAIL codex: /m);
     expect(second).toMatch(/^ {2}remedy: .*ccrc codex login codex-a/m);
     expect(existsSync(auth), '--fix created the authDir').toBe(false);
+  });
+});
+
+// ── scope-sweep (session-continuity wave 4) ─────────────────────────────────
+// `_check_scope-sweep` READS the sweep's verdict record and never re-derives it:
+// every unit below is absent from the fixture's own `systemctl list-units`, so a
+// check that asked the box instead of the record would list none of them.
+describeLinux('ccrc doctor: scope-sweep', () => {
+  const now = (): number => Math.floor(Date.now() / 1000);
+  const UP = 100 * 86400;   // the sweep's boot-relative clock at the record's tick: `first=` is read against it
+  const record = (home: string, lines: string[], ago = 0, mode = 'shadow'): void => {
+    writeFileSync(join(home, 'fixture-scope-sweep.state'), [`# ccd-scope-sweep v1 tick=${now() - ago} up=${UP} mode=${mode}`, ...lines].join('\n') + '\n');
+  };
+  const DEAD = 'tmux-spawn-00000001-0000-4000-8000-000000000000.scope';
+  const LIVE = 'tmux-spawn-00000002-0000-4000-8000-000000000000.scope';
+
+  it('PASSes on a fresh record with nothing in it, and says the mode it ran in', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-pass-');
+    expect(lineFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^PASS scope-sweep: no dead pane scope the sweep could measure, and no process older than a day in a live one \(the sweep's record, \d+s old, mode shadow\)$/);
+  });
+
+  it('WARNS with every dead scope: how long dead, the scope\'s and its oldest process\'s age, pids, memory, sockets and verdict', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-dead-');
+    record(home, [`dead ${DEAD} first=${UP - 7 * 3600} cpu0=7 verdict=would-stop why=none server=gone procs=3 mem=${20 * 2 ** 20} sockets=0 youngest=90000 oldest=${27 * 86400} age=${28 * 86400} pids=1,2,3`]);
+    const out = runDoctor(home).stdout.split('\n');
+    const i = out.findIndex((l) => l.startsWith('WARN scope-sweep: '));
+    expect(i, out.join('\n')).toBeGreaterThan(-1);
+    expect(out[i]).toContain(`${DEAD} dead 420 min, the scope 672 h old, its oldest process 648 h: 3 process(es) (pids 1,2,3), 20 MiB, 0 socket(s), its server gone, would-stop (none)`);
+    expect(out[i]).toContain('(mode shadow)');
+    expect(out[i + 1]).toMatch(/^ {2}remedy: read each before acting: /);
+  });
+
+  it('SKIPs while the operator has paused the sweep — never a stale record\'s WARN', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-paused-');
+    record(home, [], 3600);                                        // the paused sweep rewrote nothing for an hour
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'scope-sweep-paused'), '');
+    expect(anyVerdictFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^SKIP scope-sweep: paused by the operator /);
+  });
+
+  it('SKIPs on a server-role box: it runs no pane scope and no sweep', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-server-');
+    record(home, [`dead ${DEAD} first=${UP - 7 * 3600} cpu0=7 verdict=would-stop why=none server=gone procs=3 mem=1 sockets=0 youngest=90000 oldest=90000 age=90000 pids=1,2,3`]);
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    expect(anyVerdictFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^SKIP scope-sweep: this box records CCRC_ROLE=server/);
+  });
+
+  it('WARNS with every process older than a day in a live pane scope', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-old-');
+    record(home, [`old ${LIVE} pid=4242 age=${3 * 86400} comm=bash`]);
+    expect(lineFor(runDoctor(home).stdout, 'scope-sweep')).toContain(`${LIVE} live: pid 4242 (bash) running 72 h`);
+  });
+
+  it('WARNS when the record is stale: the sweep has stopped running', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-stale-');
+    record(home, [], 600);
+    expect(lineFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^WARN scope-sweep: the verdict record is \d+s old/);
+  });
+
+  it('WARNS on a record that is not a v1 record', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-garbled-');
+    writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v2 tick=${now()} up=${UP} mode=shadow\ndead something\n`);   // a later format this doctor cannot read
+    expect(lineFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^WARN scope-sweep: the verdict record at .* is unreadable or not a v1 record/);
+  });
+
+  it('SKIPs with no record: not installed, or not yet run since its timer was armed or the box booted', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-absent-');
+    rmSync(join(home, 'fixture-scope-sweep.state'));
+    expect(anyVerdictFor(runDoctor(home).stdout, 'scope-sweep')).toMatch(/^SKIP scope-sweep: no verdict record at /);
+  });
+
+  // ── fix round 1 (Task 5 review): a garbled record is a WARN, never a FAIL ──────────────
+  // A leading zero is an octal error in `$(( ))`, which aborts the check inside its `$( … )` and
+  // makes doctor FAIL it ("printed no verdict line"); an unbounded digit run wraps the arithmetic.
+  const DEADLINE = (o: Record<string, string> = {}): string => {
+    const f = { first: String(UP - 7 * 3600), oldest: '90000', age: '90000', mem: '1', ...o };
+    return `dead ${DEAD} first=${f.first} cpu0=7 verdict=would-stop why=none server=gone procs=3 mem=${f.mem} sockets=0 youngest=90000 oldest=${f.oldest} age=${f.age} pids=1,2,3`;
+  };
+  const noFail = (out: string): void => { expect(out).not.toMatch(/^FAIL scope-sweep/m); expect(out).not.toContain('printed no verdict line'); };
+
+  it('a header with a leading-zero tick is not a v1 record: WARN, never an octal abort and FAIL', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-octal-tick-');
+    writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=0${now()} up=${UP} mode=shadow\n`);
+    const out = runDoctor(home).stdout;
+    noFail(out);
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: the verdict record at .* is unreadable or not a v1 record/);
+  });
+
+  it('a 20-digit tick is not a v1 record: WARN — never a wrapped age that PASSes a stale record as fresh', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-wide-tick-');
+    writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=${'9'.repeat(20)} up=${UP} mode=shadow\n`);
+    const out = runDoctor(home).stdout;
+    noFail(out);
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: the verdict record at .* is unreadable or not a v1 record/);
+  });
+
+  it('a dead line with a leading-zero number is named as a line it cannot read: WARN, never FAIL', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-octal-line-');
+    record(home, [DEADLINE({ first: '08' }), `old ${LIVE} pid=4242 age=0${3 * 86400} comm=bash`]);
+    const out = runDoctor(home).stdout;
+    noFail(out);
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: .*2 line\(s\) it cannot read/);
+  });
+
+  it('a dead scope whose processes could not be measured (oldest=-1) is listed, not dropped', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-oldest-minus-');
+    record(home, [DEADLINE({ oldest: '-1' })]);
+    const out = runDoctor(home).stdout;
+    noFail(out);
+    expect(lineFor(out, 'scope-sweep')).toContain(`${DEAD} dead 420 min`);
+    expect(lineFor(out, 'scope-sweep')).not.toContain('cannot read');
+  });
+
+  it('a garbage line under a good header is a WARN — an all-unparseable record never PASSes', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-garbage-');
+    record(home, ['this is not a record line']);
+    const out = runDoctor(home).stdout;
+    expect(out).not.toMatch(/^PASS scope-sweep/m);
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: .*1 line\(s\) it cannot read/);
+  });
+
+  it('CCRC_SCOPE_SWEEP_STALE_S that is not a number falls back to 300 s: neither an abort nor a disabled check', () => {
+    const home = healthy('ccrc-doctor-scope-sweep-stale-nan-');
+    record(home, [], 600);
+    const stale = runDoctor(home, ['doctor'], { CCRC_SCOPE_SWEEP_STALE_S: 'abc' }).stdout;
+    noFail(stale);
+    expect(lineFor(stale, 'scope-sweep')).toMatch(/^WARN scope-sweep: the verdict record is \d+s old/);
+    record(home, [], 10);
+    expect(lineFor(runDoctor(home, ['doctor'], { CCRC_SCOPE_SWEEP_STALE_S: 'abc' }).stdout, 'scope-sweep')).toMatch(/^PASS scope-sweep: /);
+  });
+
+  it('services: an installed, stopped ccd-scope-sweep.timer WARNS — a reboot empties the record, so only `known` sees it', () => {
+    const home = healthy('ccrc-doctor-services-scope-sweep-timer-');
+    writeUnitFile(home, 'ccd-scope-sweep.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-scope-sweep.timer'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccd-scope-sweep.timer is installed but inactive');
+    expect(lines[i]).toContain('no dead pane scope is recorded or collected');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccd-scope-sweep\.timer$/);
+  });
+
+  it('services: an active ccd-scope-sweep.timer is named among the PASSes', () => {
+    const home = healthy('ccrc-doctor-services-scope-sweep-timer-ok-');
+    writeUnitFile(home, 'ccd-scope-sweep.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-scope-sweep.timer'), 'active\n');
+    expect(lineFor(runDoctor(home).stdout, 'services')).toContain('ccd-scope-sweep.timer is active');
   });
 });

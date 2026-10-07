@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=3e90aeb94e68dc05edfe259d173d2f1c7ac100a266c0493630e21e4a3c395438
+# ccrc:generated 1 sha256=2a9ace2343789d86f2e577a5a2076ad66fe813ea6c4ddc8712bbde236ab5ffa7
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1592,7 +1592,7 @@ ROUTE_NOTE_FLOOR=1800           # seconds between route-reject / route-refuse / 
                                 # both bound the same load — the 5s supervisor tick across ~20 sessions
                                 # writing into the one `$REG/swap.log` a human reads — and each is free
                                 # to move without the other. Neither reads the other's constant.
-ROUTE_ACK_WAIT=5                # seconds `_route_ack_wait` polls the pane (one `sleep 1` per poll) for
+ROUTE_ACK_WAIT=5                # seconds each acknowledgement wait polls the pane (one `sleep 1` per poll) for
                                 # Claude Code's own acknowledgement of a session-only `/effort` or
                                 # `/model`. The keystrokes land in under a second on a live pane; this
                                 # is the budget for a TUI mid-repaint, not for a session to become idle
@@ -3134,10 +3134,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 192
-# invocations across 162 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 193
+# invocations across 163 non-comment lines.
 #
-# THE LAST MOVE WAS the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before it the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# THE LAST MOVE WAS the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -18648,7 +18648,7 @@ _route_note() {   # id reason [detail] — record why the applier declined this 
   # argues at length there: `$REG/<id>.routeskip` is the MARKER (`<epoch>
   # <reason>`, rewritten the moment the reason CHANGES, removed by
   # `_route_note_clear`) and `$REG/<id>.routenote` is the log floor's ANCHOR (a
-  # bare epoch, never cleared). Without that split a reason that FLAPS — an
+  # bare epoch, cleared by `_route_readback` and reaped with the row by `_reg_purge`). Without that split a reason that FLAPS — an
   # overlay hiding the statusline for one tick, a turn starting between two
   # ticks — defeats the floor completely and writes a swap.log line every 5s.
   #
@@ -18978,30 +18978,6 @@ _route_retry_ok() {   # id -> 0 iff the applier may type this tick (controller r
   return 1
 }
 
-_route_ack_wait() {   # tmuxname regex [rows] -> 0 iff the pane shows the acknowledgement inside the window
-  # THE READ-BACK IS THE MEASUREMENT. A `send-keys` that returns 0 proves tmux
-  # accepted the bytes and nothing more — the TUI may have been mid-repaint, a
-  # dialog may have eaten them, the slash command may have been refused outright
-  # (`Ultracode needs dynamic workflows enabled`, measured verbatim on a lane
-  # launched with `{"enableWorkflows":false}`). So nothing is recorded applied
-  # until Claude Code says so in its own words, and a silent pane is
-  # `apply-unconfirmed` rather than a lie in the registry.
-  #
-  # `rows` BOUNDS THE READ TO THE BOTTOM OF THE PANE, and it is half of binding
-  # an acknowledgement to the act that earned it (final review finding 3). A
-  # whole-pane grep also matches a banner far up the scrollback — the defect
-  # `_pane_for_keystroke`'s own header argues at length, one seam over — so a
-  # caller that KNOWS where its acknowledgement renders says so. The default
-  # `+1` is `tail`'s "from the first line", i.e. the whole visible pane, byte
-  # for byte what every caller got before this parameter existed.
-  local t="$1" re="$2" rows="${3:-+1}" i
-  for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
-    tmux capture-pane -t "$t" -p 2>/dev/null | tail -n "$rows" | grep -qE "$re" && return 0
-    sleep 1
-  done
-  return 1
-}
-
 _pane_prompt_box_showing() {   # pane text -> 0 iff the prompt box is up, the statusline row directly under its bottom border
   # THE IDLE TUI, AND NEVER A DIALOG — the bash twin of the server's
   # `promptBoxShowing` (statusline.ts). Measured on 128 real 2.1.280 captures,
@@ -19059,7 +19035,7 @@ _pane_effort_ack() {   # pane text -> the LOWEST `⎿  Set effort level to …`/
 }
 
 _route_effort_ack_wait() {   # tmuxname level -> 0 iff the pane acknowledges THIS session-only level, with its dialogs closed
-  # BOUND TO THE ACT, the half `_route_ack_wait`'s `rows` could not give the
+  # BOUND TO THE ACT, the half a bottom-rows window could not give the
   # two effort acks, which grepped the whole pane: an OLDER `ultracode … this
   # session only` line still on screen confirmed a fresh apply while the
   # slider or the confirmation it raised was still open (measured on real
@@ -19072,8 +19048,8 @@ _route_effort_ack_wait() {   # tmuxname level -> 0 iff the pane acknowledges THI
   # apply whose keys never landed (review round 1). Ultracode shows as
   # `xhigh` there. A home without the ccrc statusline row never confirms, and
   # the bounded retry (`_route_try_bump`) gives up — fail-safe, not a lie.
-  local t="$1" level="$2" shown="$2" i pane
-  [[ "$level" == ultracode ]] && shown=xhigh
+  local t="$1" level="$2" shown i pane
+  shown=$(_route_effort_shown "$level")
   for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
     pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
     if _pane_prompt_box_showing "$pane" \
@@ -19184,10 +19160,20 @@ _route_picker_rows() {   # pane -> one row per line: <n>\t<cursor 0|1>\t<label>\
   # The cursor row carries `❯`. Splitting on the FIRST double space rather than a
   # greedy match is deliberate: a description may itself contain single spaces
   # and a greedy label would swallow all of it.
+  #
+  # A SCROLL MARKER IS A ROW, NOT A CURSOR. A picker with more rows than its
+  # window shows (the window is about half the rows the pane has to spare, so
+  # a 24-row pane shows three to five) draws `↓` in the pointer column of its
+  # last visible row and `↑` on its first — `↓ 3. Fable` in the 2.1.280
+  # capture `server/test/fixtures/panes/cc280-model-fullscreen-100x24.txt`.
+  # The row is still a row the cursor can reach with a counted delta; read
+  # without the marker it vanished, and a target on it answered
+  # `no-picker-row`. A row hidden past the marker (`… +3 models`) is not on
+  # the pane at all and stays unlisted.
   local line n cur rest label desc
   while IFS= read -r line; do
-    [[ "$line" =~ ^[[:space:]]*(❯[[:space:]]*)?([0-9]+)\.[[:space:]]+(.*)$ ]] || continue
-    cur=0; [[ -n "${BASH_REMATCH[1]}" ]] && cur=1
+    [[ "$line" =~ ^[[:space:]]*(❯|↑|↓)?[[:space:]]*([0-9]+)\.[[:space:]]+(.*)$ ]] || continue
+    cur=0; [[ "${BASH_REMATCH[1]}" == ❯ ]] && cur=1
     n="${BASH_REMATCH[2]}"; rest="${BASH_REMATCH[3]}"
     label="${rest%%  *}"
     if [[ "$label" == "$rest" ]]; then desc=""; else desc="${rest#*  }"; fi
@@ -19230,12 +19216,195 @@ _route_ack_subject() {   # label desc want -> stdout the ERE naming the model th
   # bind to, and that ONE row keeps the loose subject rather than failing shut
   # on every `class=default` apply. An unbindable acknowledgement is stated
   # here, not silently narrowed into a refusal.
-  local label="$1" desc="$2" want="$3" model=""
+  #
+  # …AND THAT FORM CAN CARRY A ` · ` OF ITS OWN. A lane billed per token prices
+  # every row, the Default row included: `Use the default model (currently Opus
+  # 5.5) · $4/$20 per Mtok` (measured 2026-10-06 on 2.1.285–2.1.291, an API-key
+  # lane; the bundled source builds it as that sentence plus the tier's price,
+  # and gives a subscription lane the `Opus 5.5 · Best for …` form instead). The
+  # ` · ` split then took the sentence for a model name, the bind demanded it,
+  # and the acknowledgement — `Set model to Opus 5.5 (default) for this session
+  # only` — never carried it: every `class=default` apply on such a lane was
+  # `apply-unconfirmed`. The sentence is the no-model form whatever follows it.
+  #
+  # …BUT IT NAMES ITS MODEL ALL THE SAME, and the outcome carries it (review
+  # finding 2): `(currently Opus 5.5)` on the row, `Yes, switch to Opus 5.5
+  # (default)` on the cache dialog and `Set model to Opus 5.5 (default) for this
+  # session only` as the outcome (measured, `cc291-model-default-*`). So the
+  # `(currently X)` is read with its parentheses BALANCED — 2.1.280 draws
+  # `(currently Opus 5.5 (1M context))` — and the row binds `X (default)`. The
+  # loose `.*` is left only to a Default row that names no model at all (a
+  # `(currently …` cut by a wrap, a row with no description), and
+  # `_route_model_ack_wait` never presses Enter on a dialog for that subject.
+  #
+  # THE SUBJECT IS MATCHED WHOLE (review finding 4): the caller anchors it at
+  # both ends, so `(Opus|Opus 5\.5)` no longer binds `Opus 4.1` or `Opus 5.5 (1M
+  # context)`. A row read with a label and no description (the shapes this
+  # tree's own fixtures draw) keeps its old reach — the label, then optionally
+  # more words — rather than demanding an outcome nobody measured for it.
+  local label="$1" desc="$2" want="$3" model="" cur="" rest c i depth=0
   [[ "$desc" == *" · "* ]] && model="${desc%% · *}"
-  if [[ -n "$model" ]]; then printf '(%s|%s)' "$(_route_re_quote "$label")" "$(_route_re_quote "$model")"
-  elif [[ -n "$label" && "$want" != Default ]]; then _route_re_quote "$label"
+  [[ "$model" == "Use the default model ("* ]] && model=""
+  if [[ "$want" == Default && "$desc" == "Use the default model (currently "* ]]; then
+    rest="${desc#Use the default model (currently }"
+    for ((i = 0; i < ${#rest}; i++)); do
+      c="${rest:i:1}"
+      if [[ "$c" == "(" ]]; then depth=$((depth + 1))
+      elif [[ "$c" == ")" ]]; then
+        (( depth == 0 )) && { cur="${rest:0:i}"; break; }
+        depth=$((depth - 1))
+      fi
+    done
+  fi
+  if [[ -n "$cur" ]]; then printf '%s \\(default\\)' "$(_route_re_quote "$cur")"
+  elif [[ -n "$model" ]]; then
+    printf '(%s|%s)' "$(_route_re_quote "$label")" "$(_route_re_quote "$model")"
+    [[ "$want" == Default ]] && printf '( \\(default\\))?'
+  elif [[ -n "$label" && "$want" != Default ]]; then printf '%s( .+)?' "$(_route_re_quote "$label")"
   else printf '.*'
   fi
+  return 0
+}
+
+_pane_model_state() {   # pane -> `picker` | `dialog [<its cursor row>]` | `ack <outcome>` | `none`: the LOWEST of the /model flow's three shapes
+  # ONE READING OF THE THREE SHAPES THE /model FLOW DRAWS, and the LOWEST is the
+  # pane's current one: a picker or a dialog only ever renders below everything
+  # the conversation has printed, and an older outcome line stays on screen above
+  # a newer one. Measured 2026-10-06 on Claude Code 2.1.285, 2.1.288 and 2.1.291
+  # (private tmux server, fixture home, mock API, 80x24 to 220x50):
+  #   • the picker opens under its own title line, `Select model`, its rows
+  #     between that title and its footer (`… s to use this session only · Esc
+  #     to cancel`);
+  #   • `s` on a row whose model is not the current one raises `Switch model?`
+  #     whenever the conversation has turns — "This conversation is cached for
+  #     the current model. Switching to <X> means the full history gets re-read
+  #     on your next message" — with its cursor on `❯ 1. Yes, switch to <X>`;
+  #   • the outcome prints as a `⎿` line under the echoed `❯ /model`, above the
+  #     prompt box: `⎿  Set model to <X> for this session only`. The bundled
+  #     source's other outcome prefix, `Kept model as <X>`, is a cancel's; it
+  #     was not measured here (Escape on the picker's own dialog returned to the
+  #     picker), and it is read as an outcome so that it supersedes an older
+  #     `Set model to` line rather than letting it stand as the latest word.
+  # THE PROMPT BOX IS NO BOUND HERE. On a pane whose conversation fills it, the
+  # box, the `👤` row and the mode row stay drawn UNDER the open picker and
+  # under the dialog (measured at 120x30 and 220x50 on all three versions), so
+  # `_pane_prompt_box_showing` answers 0 with either open.
+  #
+  # ONLY THE CACHE DIALOG REPORTS A CURSOR ROW. The same component raises
+  # `Switch model?` for a PreModelSwitch hook, carrying the hook's reason in
+  # place of the cache sentence (read in the bundled source, not measured):
+  # that confirmation is the account owner's gate, never ccd's to press, so it
+  # reads `dialog` with nothing after it and nothing answers it.
+  # THE SUBTITLE IS WHAT TELLS THEM APART, never the sentence (review finding
+  # 3): the hook's reason is the hook author's text and may quote the cache
+  # sentence. The 2.1.291 bundle picks the subtitle from the one condition —
+  # `A PreModelSwitch hook asked you to confirm` for a hook, `Your next response
+  # will be slower and use more tokens` for the cache — so the cache form is the
+  # one whose FIRST line under the title is that subtitle (measured), carrying
+  # the sentence, with no hook subtitle anywhere in the block.
+  printf '%s\n' "$1" | LC_ALL=C awk '
+    { t = $0; gsub(/^[ \t]+|[ \t]+$/, "", t) }
+    t == "Select model"  { kind = "picker"; text = ""; next }
+    t == "Switch model?" { kind = "dialog"; text = ""; cache = 0; subt = 0; hook = 0; first = 1; next }
+    index(t, "⎿") == 1 {
+      a = t; sub(/^⎿[ \t]+/, "", a)
+      if (index(a, "Set model to ") == 1 || index(a, "Kept model as ") == 1) { kind = "ack"; text = a }
+      next }
+    kind == "dialog" && first && t != "" { first = 0; if (t == "Your next response will be slower and use more tokens") subt = 1 }
+    kind == "dialog" && index(t, "A PreModelSwitch hook asked you to confirm") { hook = 1; text = "" }
+    kind == "dialog" && index(t, "is cached for the current model") { cache = 1 }
+    kind == "dialog" && cache && subt && !hook && t ~ /^❯[ \t]*[0-9]+\./ { text = t }
+    END { if (kind == "") print "none"; else print kind (text != "" ? " " text : "") }'
+}
+
+_pane_model_picker() {   # pane -> the OPEN picker's lines, title to footer, or nothing when the pane's model state is not `picker`
+  # THE WHOLE CAPTURE, NEVER ITS LAST TWELVE ROWS. The window this replaces was
+  # `tail -12`, and on the fleet it answered `no-picker-row (…, the capture
+  # carries no cursor row)` with the picker open. Measured 2026-10-06 on
+  # 2.1.285–2.1.291, three shapes put the cursor row outside it:
+  #   • a conversation shorter than the pane — a fresh or resumed session: the
+  #     picker renders under it near the TOP and every row below its footer is
+  #     blank (220x50: the last twelve rows of the capture were all empty);
+  #   • a conversation that fills the pane: the box, `👤` and mode rows stay
+  #     drawn under the picker (`_pane_model_state`), so at 220x50 only its LAST
+  #     row was inside the window, wherever the cursor stood;
+  #   • a narrow pane: every description wraps onto a second row (80 and 100
+  #     columns), and a picker can carry more rows than the five the rig's lane
+  #     lists (six in the 2.1.280 capture `cc280-model-fullscreen-100.txt`), so
+  #     at 80x24 row 1 sat fourteen rows up.
+  # So the block is found by its own TITLE — the last `Select model`, which is
+  # the open picker because nothing renders below an open picker but the prompt
+  # chrome — and runs to its footer. A pane whose LOWEST model shape is not a
+  # picker (an outcome line printed after a quoted picker, a dialog) has none.
+  [[ "$(_pane_model_state "$1")" == picker ]] || return 0
+  printf '%s\n' "$1" | LC_ALL=C awk '
+    { t = $0; gsub(/^[ \t]+|[ \t]+$/, "", t) }
+    t == "Select model" { n = 0; open = 1 }
+    open { buf[++n] = $0; if (index(t, "Esc to cancel")) open = 0 }
+    END { for (i = 1; i <= n; i++) print buf[i] }'
+}
+
+_route_model_ack_wait() {   # id subject-ERE -> 0 iff the pane's LATEST model outcome is THIS row's session-only switch
+  # THE READ-BACK IS THE MEASUREMENT. A `send-keys` that returns 0 proves tmux
+  # accepted the bytes and nothing more — the TUI may have been mid-repaint, a
+  # dialog may have eaten them. So nothing is recorded applied until Claude Code
+  # says so in its own words, and a silent pane is `apply-unconfirmed` rather
+  # than a lie in the registry.
+  #
+  # TWO BINDINGS, ON ONE CAPTURE: the outcome is the LOWEST model shape on the
+  # pane (`_pane_model_state` answers `ack …` only when no picker or dialog is
+  # drawn below it, and a later `Kept model as …` supersedes an older `Set
+  # model to …`), and it names the row `s` was pressed on
+  # (`_route_ack_subject`). Together they stop a stale `Set model to …` further
+  # up the pane confirming a change that never happened (final review finding
+  # 3) — which the bottom-twelve-rows window this replaces approximated and
+  # could not hold: the outcome renders under the echoed `❯ /model`, ABOVE the
+  # prompt box, nineteen rows from the bottom of a 220x50 pane once the picker
+  # closed (measured 2026-10-06).
+  #
+  # THE CACHE DIALOG IS ANSWERED HERE, ONCE. Unanswered, no outcome ever came,
+  # and the Escape after it cancelled the switch — back to the picker, not the
+  # prompt. Enter goes only to a dialog that is the lowest shape on the pane,
+  # carries the cache sentence, and whose cursor row is `1. Yes, switch to` the
+  # model this row selects — never to a picker, where Enter is "set as
+  # default", the form that SAVES the model into the lane's settings.json.
+  # Both patterns hold the subject WHOLE, anchored at its end (review finding
+  # 4), and the loose `.*` a Default row naming no model keeps answers no
+  # dialog at all (review finding 2): an Enter bound to nothing is an Enter on
+  # whatever model `s` happened to land on.
+  local id="$1" subj="$2" t i st answered=0
+  t=$(_tmux_t "$id")
+  for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
+    st=$(_pane_model_state "$(tmux capture-pane -t "$t" -p 2>/dev/null)")
+    case "$st" in
+      "ack "*)
+        printf '%s\n' "${st#ack }" | grep -qE "^Set model to ($subj) for this session only\$" && return 0 ;;
+      "dialog "*)
+        if [[ "$answered" == 0 && "$subj" != '.*' ]] && printf '%s\n' "${st#dialog }" | grep -qE "^❯[[:space:]]*1\.[[:space:]]+Yes, switch to ($subj)\$"; then
+          tmux send-keys -t "$t" Enter; answered=1
+        fi ;;
+    esac
+    sleep 1
+  done
+  return 1
+}
+
+_route_model_close() {   # id — `_route_escape`, and ONE more only while the picker or its dialog is still the lowest shape on the pane
+  # ESCAPE ON THE CACHE DIALOG LANDS ON THE PICKER, not the prompt (measured
+  # 2026-10-06, 2.1.291: the picker is drawn again, its cursor on the current
+  # model's row).
+  # One key therefore closed the dialog and left the picker standing — whose
+  # `❯ N.` cursor row `_idle_for_keystroke` reads as an idle prompt, and on a
+  # full pane the box and `👤` row are drawn under it too — so the next
+  # keystroke anyone sent landed in a menu (S4-R9's hazard). The state is read
+  # again and the second Escape is sent only when a picker or dialog is still
+  # the lowest thing drawn: never a loop, never a blind second key at a prompt.
+  local t st
+  _route_escape "$1"
+  t=$(_tmux_t "$1")
+  st=$(_pane_model_state "$(tmux capture-pane -t "$t" -p 2>/dev/null)")
+  [[ "$st" == picker || "$st" == dialog* ]] && _route_escape "$1"
+  return 0
 }
 
 _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2 no picker row
@@ -19259,10 +19428,34 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
   # live change TO fable is a RELAUNCH, not a keystroke. Escape out, answer 2,
   # and let the tick record it and the settle apply it.
   # The ID, not the tmux name — `_route_type_effort`'s note, same reason.
-  local id="$1" cls="$2" w="$3" t rows n cur label desc want target=0 curs=0 i tlabel="" tdesc=""
+  #
+  # THE PICKER IS READ OFF THE WHOLE CAPTURE (`_pane_model_picker`), and the
+  # capture is retaken for up to ROUTE_ACK_WAIT polls until the picker is the
+  # lowest thing on the pane: on a loaded box one second after Enter is not
+  # always enough for it to draw, and a capture taken before it did used to
+  # answer `no-picker-row` while the picker opened behind the Escape.
+  #
+  # …AND ONLY A PICKER `/model` OPENED COUNTS (review finding 1). A picker
+  # QUOTED on the pane — a reply or a tool output showing one, which this
+  # repo's own sessions print — is a `Select model` title like any other, and
+  # with nothing drawn under it but the prompt chrome it is the lowest shape
+  # before anything is typed. The wait then broke on the quote and took its
+  # rows, cursor and delta for the real picker's. So the pane is captured
+  # ONCE BEFORE `/model`, and a picker block identical to the one already on
+  # screen then is not the one this act opened: the wait goes on, and a quote
+  # that stays the only picker answers `no-picker-row`.
+  local id="$1" cls="$2" w="$3" t pane="" picker="" base rows n cur label desc want target=0 curs=0 exact=0 i tlabel="" tdesc=""
   t=$(_tmux_t "$id")
+  base=$(_pane_model_picker "$(tmux capture-pane -t "$t" -p 2>/dev/null)")
   tmux send-keys -t "$t" -l "/model"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
-  rows=$(_route_picker_rows "$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -12)")
+  for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
+    pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
+    picker=$(_pane_model_picker "$pane")
+    [[ -n "$picker" && "$picker" != "$base" ]] && break
+    picker=""
+    sleep 1
+  done
+  rows=$(_route_picker_rows "$picker")
   if [[ "$cls" == default || -z "$cls" ]]; then want="Default"; else want="${cls^}"; fi
   while IFS=$'\t' read -r n cur label desc; do
     [[ -n "$n" ]] || continue
@@ -19270,21 +19463,28 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
     # THE ROW'S OWN WORDS ARE KEPT, not just its number: `_route_ack_subject`
     # binds the acknowledgement to the model this row selects, and the loop
     # variables hold the LAST row read by the time it is asked.
+    # A LABEL THAT IS THE CLASS WORD EXACTLY WINS, then the FIRST row whose label
+    # starts with it (review finding 5): 2.1.280 lists `4. Sonnet` and `5. Sonnet
+    # 5 (1M context)`, and the last first-word match moved `class=sonnet` to the
+    # 1M variant.
     if [[ "$want" == Default ]] || _is_anthropic_backend "$w"; then
-      [[ "${label%% *}" == "$want" ]] && { target="$n"; tlabel="$label"; tdesc="$desc"; }
+      if [[ "$exact" == 0 && "$label" == "$want" ]]; then exact=1; target="$n"; tlabel="$label"; tdesc="$desc"
+      elif [[ "$target" == 0 && "${label%% *}" == "$want" ]]; then target="$n"; tlabel="$label"; tdesc="$desc"; fi
     else
       [[ "$desc" == *"Custom $want model"* ]] && { target="$n"; tlabel="$label"; tdesc="$desc"; }
     fi
   done <<< "$rows"
-  # TWO SENTENCES, ONE SLUG — `status-unreadable`'s shape one seam over. "This
-  # picker lists no row for the class" and "this capture carries no cursor row at
-  # all" send an operator to different places, and the remedy for both is the
-  # same (leave it to the settle), so they share the word and differ in the
-  # detail the swap.log line carries.
+  # THREE SENTENCES, ONE SLUG — `status-unreadable`'s shape one seam over. "This
+  # picker lists no row for the class", "this picker carries no cursor row" and
+  # "no picker was drawn at all" send an operator to different places, and the
+  # remedy for all three is the same (leave it to the settle), so they share the
+  # word and differ in the detail the swap.log line carries.
   if [[ "$target" == 0 || "$curs" == 0 ]]; then
-    _route_escape "$id"
+    _route_model_close "$id"
     KS_WHY=no-picker-row
-    if [[ "$curs" == 0 ]]; then KS_DETAIL="class=$cls, the capture carries no cursor row"
+    if [[ -z "$picker" && -n "$base" ]]; then KS_DETAIL="class=$cls, the capture carries no model picker but the one on the pane before /model"
+    elif [[ -z "$picker" ]]; then KS_DETAIL="class=$cls, the capture carries no model picker"
+    elif [[ "$curs" == 0 ]]; then KS_DETAIL="class=$cls, the capture carries no cursor row"
     else KS_DETAIL="class=$cls"; fi
     return 2
   fi
@@ -19294,13 +19494,13 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
     for ((i = target; i < curs; i++)); do tmux send-keys -t "$t" Up; sleep 1; done
   fi
   tmux send-keys -t "$t" -l "s"; sleep 1
-  # THE SUBJECT IS THE ROW'S, AND THE READ IS THE PICKER'S OWN WINDOW — the same
-  # twelve rows this function captured the picker from, because the
-  # acknowledgement renders where the picker stood, above the prompt. The two
-  # together are what stop a stale `Set model to …` further up the pane
-  # confirming a change that never happened (final review finding 3).
-  _route_ack_wait "$t" "Set model to $(_route_ack_subject "$tlabel" "$tdesc" "$want").*for this session only" 12 && return 0
-  _route_escape "$id"; return 1
+  # THE SUBJECT IS THE ROW'S, AND THE OUTCOME IS THE PANE'S LATEST WORD ON ITS
+  # MODEL (`_route_model_ack_wait`, which also answers the cache dialog `s`
+  # raises on every live session) — together what stop a stale `Set model to …`
+  # further up the pane confirming a change that never happened (final review
+  # finding 3).
+  _route_model_ack_wait "$id" "$(_route_ack_subject "$tlabel" "$tdesc" "$want")" && return 0
+  _route_model_close "$id"; return 1
 }
 
 # ── THE OPERATOR'S CHOICE SURVIVES A RESTART (session-continuity spec §5.7) ──
@@ -19341,7 +19541,8 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # ANSI bold or backticks removed (`Set model to Opus 5.5 …`, `Set effort level to
 # high …`, `Ultracode on …`); a picker row Claude Code marks `(default)` is the
 # `default` class. A command with no
-# acknowledgement after it changed nothing and is never read, nor is a row a
+# acknowledgement after it changed nothing and is never promoted — though, when it
+# is the newest of its kind, it is said as `unmeasured` (below) — nor is a row a
 # subagent wrote, nor a user turn that carries anything besides the envelope (a
 # human quoting it). A `/model` value maps to the record's class vocabulary
 # through the alias table — `ROUTE_CLASSES` itself (`opus`, `sonnet`, `haiku`,
@@ -19353,7 +19554,8 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # NEVER A FAILURE IN THE STOP PATH; the silent cases are named below and listed in
 # README (the stage-7 subsection). Every path is rc 0 and the stop goes on exactly
 # as before. Silent where nothing was lost: no registry row, no transcript, no
-# command, a non-Anthropic lane (skipped), a value already held, a field newer than the keystroke. Logged as
+# command, a non-Anthropic lane (skipped), a value already held, a field newer than the keystroke (asked
+# FIRST, so an out-of-vocabulary or unacknowledged command older than its field is not logged either). Logged as
 # `operator-choice <id>: …` where the operator's choice may be lost: a value
 # outside the vocabulary or one the record's own checks refuse (`cmd_route` runs
 # in a subshell, so its `die` ends only that) — the record unchanged — and
@@ -19364,15 +19566,18 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # lost without a line in a few cases, each named in README: a command within
 # TYPED_MATCH_WINDOW after a rotated-out keystroke, a round trip through a
 # non-Anthropic lane, a /clear, an unrostered source account, a deploy-transition
-# /model whose journal a `route --apply` keystroke opened first, and a route field
-# whose mtime cannot be read.
+# /model whose journal a `route --apply` keystroke opened first, a route field
+# whose mtime cannot be read, and an INTERRUPTED stop (one that died between its
+# keep, which leaves the marker, and its kill: the pane survives marked, so its
+# next stop or revival does not read again).
 #
 # ONE READ PER RESTART. Every call leaves `$REG/<id>.choicekept`, and every
 # `_spawn_start` removes it, so the marker means "a keep ran since the last
 # spawn": `_spawn_start`'s keep — the one choke point of every spawn — runs only
 # without it, so a revival (an unsupervised one too) reads while the spawn a
 # stop's keep already read for (a swap's landing, `ccd start` after `ccd stop`,
-# a refusal's restart) does not read — and log — a second time.
+# `ws-restore` after `ws-archive`, a refusal's restart) does not read — and log —
+# a second time.
 #
 # THE RECORD WINS WHEN IT IS NEWER. A field written after the keystroke — the
 # PWA's picker, a coordinator's route, this function's own last promotion — is
@@ -19425,11 +19630,11 @@ _model_class_of() {   # /model value -> the record's class word | rc 1 outside t
   _model_family_class "$v"
 }
 
-_operator_choice_keep() {   # id — before a stop that a spawn follows: the operator's own /model and /effort, written to the route record (§5.7). Always 0.
-  local id="$1" f typed why="" out kind val at n field want fm shown
+_operator_choice_keep() {   # id — before a stop that a spawn follows, and at every spawn (`_spawn_start`, unless a stop's keep already read): the operator's own /model and /effort, written to the route record (§5.7). Always 0.
+  local id="$1" f typed why="" out kind val at n field want fm shown drift=0
   local -a sets=() kinds=()
   [[ -f "$REG/$id.uuid" ]] || return 0
-  _reg_set "$id" choicekept "$(date +%s)" 2>/dev/null || true   # a keep ran since the last spawn: the supervised spawn that follows a stop's keep does not read again (cmd_ensure, §5.7)
+  _reg_set "$id" choicekept "$(date +%s)" 2>/dev/null || true   # a keep ran since the last spawn: the supervised spawn that follows a stop's keep does not read again (`_spawn_start`, §5.7)
   _is_anthropic_backend "$(_reg_get "$id" wrapper)" || return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7)
   typed=$(_reg_get "$id" typed)
   if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then
@@ -19490,7 +19695,7 @@ for i, line in enumerate(lines):
     if not ack:
         given = tags.get("args", "").strip().lower()
         if not any(k == kind and (not given or v == given) and abs(t - at) <= window for t, k, v in rows):
-            unack[kind] = True
+            unack[kind] = at
         continue
     named = (ack.group(1) or ack.group(2) or "").strip()
     if kind == "model" and named.endswith("(default)"):
@@ -19499,19 +19704,28 @@ for i, line in enumerate(lines):
     if any(k == kind and v == val.lower() and abs(t - at) <= window for t, k, v in rows):
         continue
     newest[kind] = (val, at)
-    unack[kind] = False
+    unack[kind] = None
 for kind, (val, at) in sorted(newest.items()):
     print(kind, val if SAFE.fullmatch(val) else "?", at, len(val.encode()))
-if any(unack.values()):
-    print("drift x 0 0")
+for kind, at in sorted(unack.items()):
+    if at is not None:
+        print("drift-" + kind, "x", at, 0)
 ' "$typed" "$TYPED_MATCH_WINDOW" 2>/dev/null) || { _operator_choice_say "$id" "unmeasured (the transcript reader failed)"; return 0; }
   while read -r kind val at n; do
     [[ "$at" =~ ^[0-9]+$ ]] || continue
     case "$kind" in
-      model)  field=class;  want=$(_model_class_of "$val") || want="" ;;
-      effort) field=effort; want="${val,,}"; _route_word_in "$want" "$ROUTE_EFFORTS" || want="" ;;
-      drift)  _operator_choice_say "$id" "unmeasured (a /model or /effort command with no acknowledgement this ccd recognises)"; continue ;;
-      *)      continue ;;
+      model|drift-model)   field=class ;;
+      effort|drift-effort) field=effort ;;
+      *)                   continue ;;
+    esac
+    if [[ -e "$REG/$id.$field" ]]; then   # THE RECORD WINS WHEN IT IS NEWER, asked FIRST: a command older than its field is neither written nor logged (review 272 F6)
+      fm=$(_plat_mtime "$REG/$id.$field" 2>/dev/null) && [[ "$fm" =~ ^[0-9]+$ ]] || continue
+      (( 10#$fm >= 10#$at )) && continue
+    fi
+    case "$kind" in
+      drift-*) (( drift++ )) || _operator_choice_say "$id" "unmeasured (a /model or /effort command with no acknowledgement this ccd recognises)"; continue ;;   # once per keep, both kinds or one
+      model)   want=$(_model_class_of "$val") || want="" ;;
+      effort)  want="${val,,}"; _route_word_in "$want" "$ROUTE_EFFORTS" || want="" ;;
     esac
     if [[ -z "$want" ]]; then
       shown="$val"; [[ "$val" == "?" ]] && shown="(${n//[^0-9]/} bytes, not one token)"
@@ -19519,10 +19733,6 @@ if any(unack.values()):
       continue
     fi
     [[ "$(_route_peek "$id" "$field")" == "$want" ]] && continue
-    if [[ -e "$REG/$id.$field" ]]; then
-      fm=$(_plat_mtime "$REG/$id.$field" 2>/dev/null) && [[ "$fm" =~ ^[0-9]+$ ]] || continue
-      (( 10#$fm >= 10#$at )) && continue
-    fi
     sets+=(--set "$field=$want"); kinds+=("$kind:$want")   # collected: the pair is checked ONCE, in one call below
   done <<<"$out"
   if (( ${#kinds[@]} )); then   # ONE call for the pair: `cmd_route` checks class against effort on the merged sets, so a haiku record that takes /model opus AND /effort high keeps both (a call per field refused the effort first)
@@ -19533,7 +19743,7 @@ if any(unack.values()):
 }
 
 _operator_choice_unmark() {   # id — after a stop's pane kill FAILED: the marker means "Claude Code is not running here", so it stays only when the session is proven gone; a live or unmeasurable one is unmarked and its next revival reads. Always 0. (§5.7)
-  _session_probe "$1" 2>/dev/null; [[ "$PROBE_VERDICT" == gone || "$PROBE_SUBSTRATE" == absent ]] || rm -f "$REG/$1.choicekept" 2>/dev/null   # no tmux server means no pane: the session is dead whatever the verdict says
+  _session_probe "$1" 2>/dev/null; [[ "$PROBE_VERDICT" == gone || "${PROBE_DETAIL:-}" == *"no server running"* ]] || rm -f "$REG/$1.choicekept" 2>/dev/null   # tmux's own "no server running" means no pane: the session is dead whatever the verdict says. Read from PROBE_DETAIL as ws-reclaim reads it, never PROBE_SUBSTRATE: a MISSING socket is not proof, since a server may still run with its socket deleted (review 272 F1)
   return 0
 }
 
@@ -19600,26 +19810,158 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
   return 0
 }
 
+# ── THE READ-BACK: a class the pane already runs is recorded, never typed ────
+# `routeapplied` is written from what ccd COMPOSED or saw ACKNOWLEDGED, so a
+# model that changed any other way — the operator's own `/model opus` typed in
+# the pane — leaves the record's class pending against a pane already running
+# it. Measured on the fleet 2026-10-05: after three refused applies and a manual
+# `/model opus`, ccd logged `apply-gave-up (class=opus after 3 attempts)` every
+# ROUTE_NOTE_FLOOR, indefinitely, for a pane whose own status line read Opus.
+# The status-line hook's usage sidecar (`$REG/usage/<id>.json`, written on every
+# render — routing spec §6) names the model the pane is running, so the tick
+# asks it first.
+ROUTE_READBACK_FRESH=1800   # seconds a usage sidecar stays a reading of the live pane: `USAGE_FRESH_S` (server/src/usage.ts), past which the fleet row calls it stale — an agreement test reds on drift
+
+_route_effort_shown() {   # level -> the word the status line, and so the usage sidecar, shows for it
+  # ONE SPELLING OF A MEASURED FACT (2.1.280): `ultracode` shows as `xhigh` —
+  # it is xhigh plus dynamic workflow orchestration, and the status line's
+  # `effort.level` names only the level. `_route_effort_ack_wait` reads the
+  # `🤖` segment through it.
+  [[ "$1" == ultracode ]] && { printf 'xhigh'; return 0; }
+  printf '%s' "$1"
+}
+
+_usage_sidecar_read() {   # id -> ONE line: absent | unreadable | malformed | reading <ts> <model|-> <effort|-> <uuid|->. Always 0.
+  # FOUR ANSWERS, NEVER ONE NULL — `readUsageMeasured`'s (server/src/usage.ts),
+  # in bash. A sidecar that is not there, one that is there and cannot be read
+  # (not a regular file, no read permission — never `cat` on a FIFO), and one
+  # that was read and is not a reading (not a JSON object, no numeric `ts`: a
+  # row that cannot be aged cannot be called fresh) are three conditions with
+  # three remedies, and none of them is "the pane runs nothing". Freshness is
+  # the CALLER's question, asked of the `ts` this answers.
+  #
+  # FIELDS BY KEY, NOT BY POSITION — over THE HOOK'S OWN SHAPE ONLY: one flat
+  # `jq -c` object of scalars (statusline-command.sh), whose string values
+  # escape every `"`, so there `"<key>":` preceded by `{` or `,` occurs only as
+  # a real key. The file is writable by anything running as the fleet's one
+  # user, though, and a body that a JSON parser would read differently — a
+  # nested object, a key given twice (the regex takes the first, the server's
+  # `JSON.parse` the last) — is `malformed` rather than a reading the two
+  # readers disagree on (review finding 8). A model id outside a conservative
+  # charset, or a null one, is `-`; so is an effort that is not one lower-case
+  # word, and a `uuid` that is not a session id's hex-and-dashes.
+  local f="$REG/usage/$1.json" body ts="" model=- effort=- uuid=- k
+  local re_ts='[{,]"ts":([0-9]{1,12})[,}]' re_model='[{,]"model":"([A-Za-z0-9._:/@-]{1,128}(\[1m\])?)"' re_eff='[{,]"effort":"([a-z]{1,16})"'
+  local re_uuid='[{,]"uuid":"([0-9A-Fa-f-]{1,64})"'
+  [[ -e "$f" || -L "$f" ]] || { echo absent; return 0; }
+  [[ -f "$f" && -r "$f" ]] || { echo unreadable; return 0; }
+  body=$(head -c 4096 -- "$f" 2>/dev/null) || { echo unreadable; return 0; }
+  [[ "$body" =~ ^[[:space:]]*\{.*\}[[:space:]]*$ && "$body" =~ $re_ts ]] || { echo malformed; return 0; }
+  ts="${BASH_REMATCH[1]}"
+  [[ "${body#*\{}" == *"{"* ]] && { echo malformed; return 0; }
+  for k in ts model effort uuid; do
+    [[ "$body" == *"\"$k\":"*"\"$k\":"* ]] && { echo malformed; return 0; }
+  done
+  [[ "$body" =~ $re_model ]] && model="${BASH_REMATCH[1]}"
+  [[ "$body" =~ $re_eff ]] && effort="${BASH_REMATCH[1]}"
+  [[ "$body" =~ $re_uuid ]] && uuid="${BASH_REMATCH[1]}"
+  echo "reading $ts $model $effort $uuid"
+}
+
+_route_readback() {   # id -> 0 iff it recorded the pending class as already running and nothing is pending now; 1 the tick goes on
+  # A READING COUNTS ONLY WHEN IT IS OF THIS PANE, NOW. Each of these is its own
+  # condition and none of them counts: no reading (`_usage_sidecar_read`'s
+  # absent / unreadable / malformed); a reading older than ROUTE_READBACK_FRESH
+  # (the sidecar is written on every RENDER, and an idle pane renders nothing,
+  # so an old reading is an old fact); a reading older than the `routeapplied`
+  # stamp — every spawn rewrites that stamp before the pane starts, so a reading
+  # from before it is the previous process's, and a stamp whose time cannot be
+  # read leaves the reading unplaced; and a model whose family is not the
+  # pending class. `default` never reads back: no model id is the lane's
+  # default, so that class waits for the picker's own acknowledgement.
+  #
+  # "OLDER THAN" IS HELD TO THE SECOND, NOT ACROSS IT (review finding 7): the
+  # sidecar's `ts` is `date +%s` and the stamp a whole-second mtime, so a
+  # reading from the stamp's own second cannot be told from the previous
+  # process's last render, and it must be strictly later. The stamp is
+  # whatever last wrote `routeapplied` — a spawn, an acknowledged apply, a
+  # read-back, the seed — which is stricter than "the last spawn", and safe:
+  # it costs one more render.
+  #
+  # A READING OF ANOTHER CLAUDE IS NOT THIS PANE'S (review finding 10). The
+  # hook names the file after the tmux SESSION, so a second interactive
+  # `claude` in a split of `cc-<id>` writes here too; the reading counts only
+  # when its `uuid` is the one `_sync_uuid` mirrored into the registry this
+  # same tick, before this runs.
+  #
+  # EFFORT NEVER READS BACK (review finding 6). The sidecar's `effort` is the
+  # status line's `effort.level`, which is the MODEL'S DEFAULT when no level
+  # was set: a session spawned with none, asked for the level its model
+  # happens to default to, would be recorded as carrying a session-only effort
+  # nothing ever typed — and the next class change, which keeps a TYPED
+  # session-only effort (D-2811) and lets a default follow the new model,
+  # would leave the record naming a level the pane no longer runs, with
+  # nothing pending to correct it. The tick types the effort as it always did.
+  #
+  # WHAT IT CLEARS, and why `routenote` too, which `_route_note_clear` keeps on
+  # purpose: that anchor floors a STANDING refusal so a flapping reason cannot
+  # defeat the floor. Here the refusal is resolved, not declining — nothing is
+  # pending for this field any more — so the next refusal is about a new
+  # condition and is said at once. The retry counter goes for the reason
+  # `_route_tries_clear` gives (a further attempt means something again), and
+  # the marker because `apply-gave-up` read as current is a lie.
+  #
+  # ONE LINE in swap.log says what was recorded and on what reading. `--apply`
+  # never reaches this: the operator's verb types (`cmd_route`).
+  local id="$1" want cls rd ts model effort uuid now stamp got="" mine
+  want=$(_route_wanted "$id"); cls="${want%% *}"
+  rd=$(_usage_sidecar_read "$id")
+  [[ "$rd" == "reading "* ]] || return 1
+  read -r _ ts model effort uuid <<< "$rd"
+  now=$(date +%s)
+  [[ "$ts" =~ ^[0-9]+$ && $((now - 10#$ts)) -le "$ROUTE_READBACK_FRESH" ]] || return 1
+  stamp=$(_plat_mtime "$REG/$id.routeapplied" 2>/dev/null) || return 1
+  [[ "$stamp" =~ ^[0-9]+$ && 10#$ts -gt 10#$stamp ]] || return 1
+  mine=$(_reg_get "$id" uuid 2>/dev/null)
+  [[ "$uuid" != - && -n "$mine" && "$uuid" == "$mine" ]] || return 1
+  if [[ -n "$cls" && "$cls" != "$(_route_applied_get "$id" class)" ]]; then
+    [[ "$model" != - && "$(_model_family_class "$model")" == "$cls" ]] || return 1
+    _route_applied_set "$id" class "$cls"; got="class=$cls"
+  fi
+  [[ -n "$got" ]] || return 1
+  _route_tries_clear "$id"; _route_note_clear "$id"; rm -f -- "$REG/$id.routenote"
+  echo "$(date '+%F %T') route-readback $id: $got already running (sidecar model $model, effort $effort, $((now - 10#$ts))s old) — recorded applied, nothing typed" >> "$REG/swap.log"
+  _route_apply_pending "$id" && return 1
+  return 0
+}
+
 _route_apply_check() {   # id — the supervise tick's applier. Always 0: a tick never fails the loop.
   # CHEAP WHEN NOTHING IS PENDING, which is the steady state of every session on
   # the fleet. The registry comparison comes FIRST and returns before any tmux
   # call at all; only a genuinely pending field pays a pane read.
   #
-  # FIVE GATES, IN THIS ORDER, and the order is the whole design:
+  # SIX GATES, IN THIS ORDER, and the order is the whole design:
   #   1. nothing pending — clear the marker AND the retry counter, return.
   #   2. a record with no `routeapplied` file at all — SEED it from the served
   #      values and type nothing (S4-R8): the record predates the applier and the
   #      pane is already running what its last settle composed.
-  #   3. the bounded retry (S4-R7) — a field that has been refused by the pane
+  #   3. the read-back (`_route_readback`) — a pending class the pane's own
+  #      fresh usage sidecar says it already runs is recorded applied and its
+  #      counters cleared, with no keystroke. BEFORE the bounded retry on
+  #      purpose: a field that gave up is exactly the one a human then fixes by
+  #      hand, and the gate below would otherwise say `apply-gave-up` about it
+  #      for ever.
+  #   4. the bounded retry (S4-R7) — a field that has been refused by the pane
   #      `ROUTE_RETRY_MAX` times, or refused inside `ROUTE_RETRY_BACKOFF`, does
   #      not get typed again this tick. This is BEFORE the pane read on purpose:
   #      a session that has given up should not even be captured.
-  #   4. the compactor's own keystroke (final review finding 5) — this tick may
+  #   5. the compactor's own keystroke (final review finding 5) — this tick may
   #      have sent `/compact` into this pane moments ago, on the line above this
   #      one, and the idle predicate's inputs both LAG that keystroke.
-  #   5. the idle predicate, whose refusals are notes and never attempts.
+  #   6. the idle predicate, whose refusals are notes and never attempts.
   _route_apply_pending "$1" || { _route_note_clear "$1"; _route_tries_clear "$1"; return 0; }
   _route_apply_seed "$1" && return 0
+  _route_readback "$1" && return 0
   _route_retry_ok "$1" || return 0
   _route_compact_settling "$1" && { _route_note "$1" "$KS_WHY" "$KS_DETAIL"; return 0; }
   _pane_for_keystroke "$1" || { _route_note "$1" "$KS_WHY" "$KS_DETAIL"; return 0; }
@@ -29688,8 +30030,11 @@ _authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the
 #               — GitHub does not re-enqueue after a failed group
 #   landed      the PR is MERGED and its last queue act is the add (the queue merged it)
 #   none        measured, and none of the above — including "this workspace has
-#               no bound PR", and a PR that never met the queue
+#               no bound PR", a PR that never met the queue, and a CLOSED PR
+#               that never merged: it is in neither window, but its own line
+#               already says `phase: closed`, and a closed PR is in no queue
 #   unmeasured  the call did not answer, or the bound PR is outside both windows
+#               and is not closed
 # plus `queueAt`, the ISO timestamp of that last act, only when it has one and
 # only when it is shaped like a timestamp. `--session` never makes this call and
 # never carries the key: its absence is the OLDER-build answer, which a reader
@@ -29800,6 +30145,8 @@ def word(line):
         return 'none', None
     f = FACTS.get(num)
     if f is None:
+        if line.get('phase') == 'closed':
+            return 'none', None
         return 'unmeasured', None
     state, entry, act, at = f
     if state == 'OPEN' and entry:
