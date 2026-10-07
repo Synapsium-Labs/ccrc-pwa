@@ -3881,14 +3881,27 @@ export interface ExpiryAttention {
  *  shown in the same banner row as the reclaim switch.
  *
  *  ADDITIVE on the wire (no `FLEET_PROTO` bump): a frame from a server that
- *  predates `reclaim`/`childReclaimAttention` omits both, and the PWA's ONE
- *  reader per field (`pwa/src/fleet/childReclaimWords.ts`) renders exactly
- *  what it rendered before. */
+ *  predates `reclaim`/`childReclaimAttention` omits both, a server older than
+ *  wave 6 omits `childReclaimDoneAt`, and the PWA's ONE reader per field
+ *  (`pwa/src/fleet/childReclaimWords.ts`) renders exactly what it rendered
+ *  before. */
 export interface CoordStatus {
   pause: MarkerState;
   mail: MarkerState;
   reclaim: MarkerState;
   childReclaimAttention: readonly ChildReclaimAttention[];
+  /** Child-reclamation wave 6 (spec §5.9): the `at` (ccd's clock, epoch ms)
+   *  of the newest `reclaim`/`done` journal row the server's mirror has
+   *  COMMITTED. It is a trigger and nothing renders it: the board re-reads its
+   *  archive once each time this value CHANGES while a finished row's reclaim
+   *  chip is unsettled, because the vanish re-read races the journal.
+   *
+   *  OPTIONAL, ADDITIVE, absence permits. It is OMITTED, never null, while
+   *  the server has committed none, which is always the case right after a
+   *  restart because the value lives in memory and only ever rises. A server
+   *  older than this field omits it too. The PWA's ONE reader is
+   *  `childReclaimDoneAtOf` (`pwa/src/fleet/childReclaimWords.ts`). */
+  childReclaimDoneAt?: number;
   /** The expiry lane's own list (wave 3b). OPTIONAL on the wire: an older server omits it, and the PWA's one reader
    *  (`pwa/src/fleet/expiryWords.ts`) reads absence as no items. */
   expiryAttention?: readonly ExpiryAttention[];

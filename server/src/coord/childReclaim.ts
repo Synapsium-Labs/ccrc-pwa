@@ -1628,6 +1628,25 @@ export function childReclaimStatus(input: ChildReclaimStatusInput): ChildReclaim
     at: null });
 }
 
+/**
+ * Child-reclamation wave 6 (spec §5.9): did a CHILD leave the registry
+ * listing between two LISTED ticks? A child's row is purged by its reclaim, and
+ * ccd journals the reclaim's `done` only after that purge, so the watcher answers
+ * a `true` by resetting the journal mirror's clock. The mirror then sweeps on
+ * that same tick instead of up to `LC_SWEEP_MS` later.
+ *
+ * Only a `child` mark counts. A row marked `none` is no child, and an
+ * `unreadable` one is not known to be a child. `prev` null is the first listing
+ * this process has made: there is nothing to compare, so nothing left.
+ */
+export function childMarkLeftListing(
+  prev: ReadonlyMap<string, ChildMark> | null, next: ReadonlyMap<string, ChildMark>,
+): boolean {
+  if (prev === null) return false;
+  for (const [id, mark] of prev) if (mark.kind === 'child' && !next.has(id)) return true;
+  return false;
+}
+
 /** The sessions whose mirror rows a board needs: terminal rows that carry both a
  *  session and a `closedAt`, each once. A row without `closedAt` (a
  *  reconstructed one) has no generation to fence, so nothing is asked for it. */

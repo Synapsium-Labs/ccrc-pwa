@@ -82,7 +82,7 @@ import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
-  childReclaimBornAt, childReclaimGeneration, childReclaimLatest, childReclaimTokenKind, reclaimChild,
+  childMarkLeftListing, childReclaimBornAt, childReclaimGeneration, childReclaimLatest, childReclaimTokenKind, reclaimChild,
   recordChildReclaimKeptFeed, releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
   type ChildReclaimReleaseRequest, type ChildReclaimRequest,
 } from './coord/childReclaim.js';
@@ -1595,6 +1595,13 @@ export class FleetWatcher {
     return this.childMarks;
   }
 
+  /** Child-reclamation wave 6 (spec §5.9): the journal mirror's newest
+   *  committed reclaim end, or null when no mirror exists yet or it has
+   *  committed none. In memory; read by `emitCoord` alone. */
+  currentChildReclaimDoneAt(): number | null {
+    return this.mirror?.childReclaimDoneAt() ?? null;
+  }
+
   /** The sweep's in-memory state, read-only (child-reclamation wave 4) — what
    *  wave 5's run chip reads to tell `deferred` from `pending`. Empty after a
    *  restart, by design: see `childReclaimSweepState`'s own docstring. Its
@@ -1759,7 +1766,16 @@ export class FleetWatcher {
       const records = registryRead.records;
       // Wave 5: the reclaim chip's registry answer, off THIS listing. Never a
       // second read; see `childMarks`.
-      this.childMarks = new Map(records.map((r) => [r.id, r.child] as const));
+      const childMarks = new Map(records.map((r) => [r.id, r.child] as const));
+      // Wave 6 (spec §5.9): a child that left the listing was, almost
+      // always, just reclaimed, and ccd journals the reclaim's end AFTER the
+      // purge. Reset the mirror's clock, so the `sweepLifecycle` dispatch below
+      // sweeps on THIS tick, and the coord frame's `childReclaimDoneAt` usually
+      // moves one tick later. An assignment, never an await: the tick's order
+      // and its timing are unchanged. Only on a LISTED tick, below the fail-shut
+      // return: an unlistable registry proves no child gone.
+      if (childMarkLeftListing(this.childMarks, childMarks)) this.lastLifecycleSweep = 0;
+      this.childMarks = childMarks;
       // hook states FIRST, dialogs second — the order is load-bearing and there
       // is a test on it. `detectDialogs` composes the ask push, and the actions
       // it attaches come from `this.hookStates`; with the old ordering that map
@@ -2151,15 +2167,26 @@ export class FleetWatcher {
    *  array scan, a `JSON.stringify` and a `bus.emit`, and the bus's own
    *  listeners are the two socket writers `emitRuns` already trusts. The
    *  attention list is a cached field, not a read: this method still touches
-   *  no `node:sqlite` and no I/O. */
+   *  no `node:sqlite` and no I/O.
+   *
+   *  Wave 6: it also carries the mirror's newest committed reclaim end
+   *  (childReclaimDoneAt), omitted while there is none; the byte-equality guard
+   *  re-emits the frame on the tick after it changes. */
   private emitCoord(names: readonly string[] | null): void {
-    const status: CoordStatus = names === null
+    const base: CoordStatus = names === null
       ? { pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable',
           childReclaimAttention: this.childReclaimAttentionList, expiryAttention: this.expiryAttentionList }
       : { pause: names.includes(COORDINATOR_PAUSE_MARKER) ? 'set' : 'clear',
           mail: names.includes(MAIL_DISABLED_MARKER) ? 'set' : 'clear',
           reclaim: names.includes(RECLAIM_PAUSE_MARKER) ? 'set' : 'clear',
           childReclaimAttention: this.childReclaimAttentionList, expiryAttention: this.expiryAttentionList };
+    // Wave 6 (spec §5.9): the mirror's newest committed reclaim end, on BOTH
+    // arms, because it is the mirror's measurement and not the listing's.
+    // OMITTED, never null, while there is none: absence is the one meaning
+    // the PWA's reader gives it, whether the server restarted or predates the
+    // field. Still no I/O and no `node:sqlite`: it is an in-memory field.
+    const doneAt = this.currentChildReclaimDoneAt();
+    const status: CoordStatus = doneAt === null ? base : { ...base, childReclaimDoneAt: doneAt };
     const json = JSON.stringify(status);
     if (json === this.lastCoordJson) return;
     this.lastCoordJson = json;
