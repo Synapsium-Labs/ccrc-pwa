@@ -19,9 +19,14 @@
 // - `killed` and `signal` are read through `ccdEnding` (`lifecycle.ts`) alone: one reader for the two halves.
 // - A server-made string carrying ccd's untrusted text (`cause`, `stderrHead`, check 7's `word`) is redacted BEFORE it
 //   is cut to 512 bytes, so a cut cannot split a secret past the redactor and no such string rides in unbounded.
+// - A show answer is held to the bytes it encodes and to the pin it was asked for (check 8), and every answer that
+//   reaches check 9 is held to its job's declared wire bound.
+// - ONE EXIT: every failure body leaves through `settle`, which runs the redactor a second time over each of its string
+//   leaves but `failure`, at any depth (refinement (k)). An ok answer is never rewritten.
 // Inherited from W1's ledger, carried and not fixed here: MT-2 (ccd cuts its own stderr before it redacts, so nothing
 // here can recover a secret that cut split) and SEC-3 (an externally killed helper orphans git's process group; this
 // wave's lever is the runner budget invariant that `docs-budget.test.ts` holds, so the agent never kills ccd first).
+import { createHash } from 'node:crypto';
 import { CCD_ARGV, DOCS_CAP, capSupported } from '../ccdargv.js';
 import { ccdEnding, type CcdResult, type CcdRunner } from '../lifecycle.js';
 import type { FleetState } from '../fleetstate.js';
@@ -30,6 +35,7 @@ import {
   type DocPin, type DocsFailure, type DocsFailureBody, type DocsFetchOk, type DocsIndexOk, type DocsRefSpec,
   type DocsShowOk, type DocsTreeOk, type DocsVerb,
 } from '../../../shared/docs.js';
+import { LISTING_JOB, type DocsJob } from './policy.js';
 import type { DocsFetchRun, DocsFetcher, DocsReader, DocsShowAsk, DocsShowRead } from './ports.js';
 
 /** What both adapters are built from. `fleetState` is the server's live fleet state, read at each call (the server
@@ -57,6 +63,11 @@ const CCD_WORDS: ReadonlySet<string> = new Set(DOCS_CCD_FAILURES);
 /** The three envelope keys a ccd failure line carries and a failure body does not (refinement (j)). */
 const ENVELOPE_ONLY_KEYS: ReadonlySet<string> = new Set(['v', 'verb', 'elapsedMs']);
 
+/** The three words a committed show answer's `onRef` may carry (section 3.5), keyed by the L0 type, so a word added
+ *  there is a compile error here until it is listed. An answer without one, or with any other, is `{why:'schema'}`. */
+const ON_REF_WORDS: Readonly<Record<NonNullable<DocsShowOk['onRef']>, true>> =
+  { contains: true, 'not-contained': true, unmeasured: true };
+
 /** A read call, one arm per argv shape `readDocs` builds. `ref: null` is the default view (no `--ref`). */
 type DocsReadCall =
   | { verb: 'docs-index' }
@@ -66,9 +77,14 @@ type DocsReadCall =
 /** What a gated executor hands back: the run's raw result, or the gate's own failure body. */
 type DocsRan = { ok: true; res: CcdResult } | DocsFailureBody;
 
-/** A classified answer: ccd's ok line as parsed (its shape is the verb's ok type; only the envelope was checked), or
- *  the failure body. */
+/** A line that passed checks 6 and 7, as parsed: ccd's ok line (its shape is the verb's ok type; only the envelope
+ *  was checked) or ccd's failure line carrying a word of ccd's set, told apart by the line's own `ok`. Or the
+ *  failure body an earlier check made. */
 type DocsLine = { ok: true; line: Readonly<Record<string, unknown>> } | DocsFailureBody;
+
+/** What one port operation checks of ccd's ok line beyond the envelope, and what it answers: check 8 and the decoded
+ *  bytes for a show (`checkShow`), the line as the verb's ok type for the others. */
+type DocsAccept<T extends { ok: true }> = (line: Readonly<Record<string, unknown>>) => T | DocsFailureBody;
 
 /** A failure body the adapter makes itself, with that word's context. */
 function fail(failure: DocsFailure, context: Omit<DocsFailureBody, 'ok' | 'failure'> = {}): DocsFailureBody {
@@ -140,8 +156,12 @@ async function fetchDocs(deps: CcdDocsDeps, project: string, branch: string | nu
  * 5. Not ok, empty stdout: `ccd-fault {stderrHead}` (a `die`, an old ccd's usage line, ENOENT). No `code`: the
  *    `CcdResult` carries none, and absent means unmeasured (refinement (f)).
  * 6-7. `parseLine`.
+ * 8. An ok line goes through `accept` (for a show, `checkShow`); a failure there wins over check 9.
+ * 9. Every answer that reached here, an ok line that passed check 8 or a ccd failure line, is held to `job.wire`
+ *    (`checkBound`). A body that checks 1-7 made never reaches it: the first match wins.
  */
-function classify(verb: DocsVerb, res: CcdResult): DocsLine {
+function classify<T extends { ok: true }>(verb: DocsVerb, res: CcdResult, job: DocsJob, accept: DocsAccept<T>):
+  T | DocsFailureBody {
   const ending = ccdEnding(res);
   if (ending.kind === 'unmeasured' && !res.ok && res.stdout === '') {
     if (res.stderr === AGENT_EXEC_REFUSAL) return fail('not-granted');
@@ -152,7 +172,22 @@ function classify(verb: DocsVerb, res: CcdResult): DocsLine {
   if (ending.kind === 'signal') return fail('ccd-killed', { signal: ending.signal });
   if (!res.ok && res.stdout !== '') return fail('answer-overflow');
   if (!res.ok) return fail('ccd-fault', { stderrHead: stderrHeadOf(res.stderr) });
-  return parseLine(verb, res.stdout);
+  const read = parseLine(verb, res.stdout);
+  if (!read.ok) return read;
+  if (read.line.ok !== true) return checkBound(ccdFailureBody(read.line), res.stdout, job);
+  const accepted = accept(read.line);
+  return accepted.ok ? checkBound(accepted, res.stdout, job) : accepted;
+}
+
+/** Check 9 (section 6.2): a stdout over the job's declared wire bound is `malformed-answer {why:'oversize'}`, logged
+ *  once. The framed bound is ccd's own contract, pinned by ccd's tests; this is the server's backstop for a ccd that
+ *  broke it. `>`, never `>=`: an answer of exactly `job.wire` bytes is within its bound. */
+function checkBound<A>(answer: A, stdout: string, job: DocsJob): A | DocsFailureBody {
+  if (Buffer.byteLength(stdout) > job.wire) {
+    console.warn('ccrc-server: docs answer over its declared bound');
+    return fail('malformed-answer', { why: 'oversize' });
+  }
+  return answer;
 }
 
 /**
@@ -161,7 +196,7 @@ function classify(verb: DocsVerb, res: CcdResult): DocsLine {
  *    as `''` and fails there): otherwise `malformed-answer {why:'parse'}`. The text is an object, `v` is 1, `verb` is
  *    the verb asked, `ok` is a boolean, and a failure line's `failure` is a string: otherwise `{why:'schema'}`.
  * 7. A word outside ccd's set (a server-only word included) is `unknown-failure {word}`, the word via `stderrHeadOf`;
- *    a ccd word is `ccdFailureBody`.
+ *    a line carrying a ccd word is handed back as parsed, for check 9 and then `ccdFailureBody` (`classify`).
  */
 function parseLine(verb: DocsVerb, stdout: string): DocsLine {
   if (stdout.indexOf('\n') !== stdout.length - 1) return fail('malformed-answer', { why: 'parse' });
@@ -177,7 +212,7 @@ function parseLine(verb: DocsVerb, stdout: string): DocsLine {
   if (line.ok) return { ok: true, line };
   if (typeof line.failure !== 'string') return fail('malformed-answer', { why: 'schema' });
   if (!CCD_WORDS.has(line.failure)) return fail('unknown-failure', { word: stderrHeadOf(line.failure) });
-  return ccdFailureBody(line);
+  return { ok: true, line };
 }
 
 /** A ccd failure line as a failure body (refinement (j)): exactly `v`, `verb` and `elapsedMs` dropped, every other key
@@ -196,41 +231,91 @@ function decodeShowBytes(ans: DocsShowOk): { ok: true; bytes: Uint8Array } | Doc
   return fail('malformed-answer', { why: 'schema' });
 }
 
-/** The read port over ccd. Bound to the node whose `CcdRunner` it holds; `index`'s `at` names that node. */
+/** Check 8's word: `malformed-answer` with the named `why`. */
+function showFault(why: 'integrity' | 'pin' | 'schema'): DocsFailureBody {
+  return fail('malformed-answer', { why });
+}
+
+/**
+ * Check 8 (show only), over an ok answer that passed checks 1-7, in this order; the first match wins.
+ * - The bytes, decoded once (`decodeShowBytes`): an encoding naming no field it carries is `{why:'schema'}`.
+ * - Integrity, `{why:'integrity'}`: a base64 answer is canonical (its bytes re-encode to exactly `b64`, so no missing
+ *   padding, stray character or stray bits ride along), the bytes are `size` long, and their sha256 is `sha256`.
+ * - Pins, `{why:'pin'}`: `source` is the request's mode, and the answer echoes `section` and `path`; for a draft pin
+ *   `branch`, `head` and `fp`, with `fp` equal to `sha256`; for a committed pin `commit`, and `blob` equal to the
+ *   listing's when the server holds one (`ask.listedBlob`, whose `null` means only that it holds none).
+ * - A committed answer's `onRef` is one of `ON_REF_WORDS`: absent or any other value is `{why:'schema'}`.
+ */
+function checkShow(ans: DocsShowOk, pin: DocPin, ask: DocsShowAsk): { ok: true; bytes: Uint8Array } | DocsFailureBody {
+  const decoded = decodeShowBytes(ans);
+  if (!decoded.ok) return decoded;
+  const bytes = decoded.bytes;
+  if (ans.encoding === 'base64' && Buffer.from(bytes).toString('base64') !== ans.b64) return showFault('integrity');
+  if (bytes.length !== ans.size) return showFault('integrity');
+  if (createHash('sha256').update(bytes).digest('hex') !== ans.sha256) return showFault('integrity');
+  if (ans.source !== pin.kind || ans.section !== pin.section || ans.path !== pin.path) return showFault('pin');
+  if (pin.kind === 'draft') {
+    if (ans.branch !== pin.branch || ans.head !== pin.head || ans.fp !== pin.fp) return showFault('pin');
+    return ans.fp === ans.sha256 ? { ok: true, bytes } : showFault('pin');
+  }
+  if (ans.commit !== pin.commit) return showFault('pin');
+  if (ask.listedBlob !== null && ans.blob !== ask.listedBlob) return showFault('pin');
+  if (!Object.hasOwn(ON_REF_WORDS, ans.onRef ?? '')) return showFault('schema');
+  return { ok: true, bytes };
+}
+
+/** `v` with every string leaf passed through the redactor: arrays and plain objects are rebuilt (`Object.fromEntries`
+ *  defines each key as an own property), numbers, booleans and `null` are kept as they are. */
+function redactLeaves(v: unknown): unknown {
+  if (typeof v === 'string') return redactDocsText(v);
+  if (Array.isArray(v)) return v.map(redactLeaves);
+  if (typeof v === 'object' && v !== null) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, redactLeaves(x)]));
+  return v;
+}
+
+/**
+ * The second redaction pass (section 2 (b) "One redactor", refinement (k)): a new body whose every string leaf but
+ * `failure` has been through `redactDocsText`, at any depth (`candidates`, `tried`), server-made bodies included. ccd
+ * ran the same rules over what it derived from stderr; this pass covers whatever it missed or did not derive from
+ * stderr, and changes nothing already redacted (the redactor is idempotent). Absent stays absent, `null` stays `null`.
+ */
+function redactBody(body: DocsFailureBody): DocsFailureBody {
+  const out = Object.fromEntries(Object.entries(body).map(([key, v]) => [key, key === 'failure' ? v : redactLeaves(v)]));
+  return out as unknown as DocsFailureBody;
+}
+
+/**
+ * THE ONE EXIT of every port operation: the gate's body, or checks 1-9 over the run (`classify`), with any failure
+ * body, whatever made it, through `redactBody`. An ok answer is returned exactly as checked, never rewritten.
+ */
+function settle<T extends { ok: true }>(ran: DocsRan, verb: DocsVerb, job: DocsJob, accept: DocsAccept<T>):
+  T | DocsFailureBody {
+  const out = ran.ok ? classify(verb, ran.res, job, accept) : ran;
+  return out.ok ? out : redactBody(out);
+}
+
+/** The read port over ccd. Bound to the node whose `CcdRunner` it holds; `index`'s `at` names that node. A listing
+ *  answer is held to `LISTING_JOB`, a show answer to its own `ask.job` (check 9). */
 export function ccdDocsReader(deps: CcdDocsDeps): DocsReader {
   return {
-    index: async () => {
-      const ran = await readDocs(deps, { verb: 'docs-index' });
-      if (!ran.ok) return ran;
-      const read = classify('docs-index', ran.res);
-      return read.ok ? { ok: true, answer: read.line as unknown as DocsIndexOk } : read;
-    },
-    tree: async (src, ref) => {
-      const ran = await readDocs(deps, { verb: 'docs-tree', project: src.project, ref });
-      if (!ran.ok) return ran;
-      const read = classify('docs-tree', ran.res);
-      return read.ok ? { ok: true, answer: read.line as unknown as DocsTreeOk } : read;
-    },
-    show: async (src, pin, ask): Promise<DocsShowRead> => {
-      const ran = await readDocs(deps, { verb: 'docs-show', project: src.project, pin, ask });
-      if (!ran.ok) return ran;
-      const read = classify('docs-show', ran.res);
-      if (!read.ok) return read;
-      const answer = read.line as unknown as DocsShowOk;
-      const decoded = decodeShowBytes(answer);
-      return decoded.ok ? { ok: true, answer, bytes: decoded.bytes } : decoded;
-    },
+    index: async () => settle(await readDocs(deps, { verb: 'docs-index' }), 'docs-index', LISTING_JOB,
+      (line) => ({ ok: true, answer: line as unknown as DocsIndexOk })),
+    tree: async (src, ref) => settle(await readDocs(deps, { verb: 'docs-tree', project: src.project, ref }), 'docs-tree',
+      LISTING_JOB, (line) => ({ ok: true, answer: line as unknown as DocsTreeOk })),
+    show: async (src, pin, ask): Promise<DocsShowRead> => settle(
+      await readDocs(deps, { verb: 'docs-show', project: src.project, pin, ask }), 'docs-show', ask.job, (line) => {
+        const answer = line as unknown as DocsShowOk;
+        const shown = checkShow(answer, pin, ask);
+        return shown.ok ? { ok: true, answer, bytes: shown.bytes } : shown;
+      }),
   };
 }
 
-/** The fetch port over ccd: the one docs operation that writes, built apart from the reader (section 2 (g)'s wall 1). */
+/** The fetch port over ccd: the one docs operation that writes, built apart from the reader (section 2 (g)'s wall 1).
+ *  Its answer is under 1 KiB, held to `LISTING_JOB` (refinement (e): the spec names no fetch job). */
 export function ccdDocsFetcher(deps: CcdDocsDeps): DocsFetcher {
   return {
-    fetch: async (src, branch): Promise<DocsFetchRun> => {
-      const ran = await fetchDocs(deps, src.project, branch);
-      if (!ran.ok) return ran;
-      const read = classify('docs-fetch', ran.res);
-      return read.ok ? { ok: true, answer: read.line as unknown as DocsFetchOk } : read;
-    },
+    fetch: async (src, branch): Promise<DocsFetchRun> => settle(await fetchDocs(deps, src.project, branch), 'docs-fetch',
+      LISTING_JOB, (line) => ({ ok: true, answer: line as unknown as DocsFetchOk })),
   };
 }

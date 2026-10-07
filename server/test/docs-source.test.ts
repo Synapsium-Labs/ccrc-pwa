@@ -15,7 +15,7 @@
  * cannot recover a secret that cut split) and SEC-3 (an externally killed helper orphans git's process group; this
  * wave's lever is `docs-budget.test.ts`'s invariant).
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -25,7 +25,7 @@ import { ccdRunner, type CcdResult, type CcdRunner } from '../src/lifecycle.js';
 import { UNMEASURED, realRunner } from '../src/exec.js';
 import type { CcrcConfig } from '../src/config.js';
 import { ccdDocsFetcher, ccdDocsReader, type CcdDocsDeps } from '../src/docs/ccdsource.js';
-import { docsShowPlan } from '../src/docs/policy.js';
+import { LISTING_JOB, docsShowPlan } from '../src/docs/policy.js';
 import type { DocsShowAsk } from '../src/docs/ports.js';
 import type { DocPin, DocsFailureBody } from '../../shared/docs.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -342,5 +342,207 @@ describe('the real local runner, measured on this node (row 46, Q4)', () => {
   it('a ccdBin that does not exist is ccd-fault', async () => {
     const out = (await stubReader(null).tree(SRC, null)) as DocsFailureBody;
     expect(out.failure).toBe('ccd-fault');
+  });
+});
+
+// ---- Task 7: check 8 (show integrity and pins), check 9 (the wire bound), the second redaction pass ----
+
+/** One show call through a recorder answering `stdout` verbatim, with `ask` (default `ASK`). */
+async function showRaw(pin: DocPin, stdout: string, ask: DocsShowAsk = ASK): Promise<Answer> {
+  return ccdDocsReader({ runCcd: recorder(res({ stdout })).run, fleetState: READY }).show(SRC, pin, ask);
+}
+/** The body `malformed-answer {why}`. */
+const malformed = (why: string): Answer => ({ ok: false, failure: 'malformed-answer', why } as Answer);
+/** A base64 show answer for `pin`: `showOk`'s fields, with `b64` in place of `text`. */
+function b64Ok(pin: DocPin, b64: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+  const answer = showOk(pin, { encoding: 'base64', b64, ...over });
+  delete answer.text;
+  return answer;
+}
+const B64 = TEXT_BYTES.toString('base64'); // 'IyBhCg==': canonical, with two padding characters
+
+describe('check 8: show integrity, pins and onRef (row 46, spec section 2 (b))', () => {
+  /** A draft pin whose fp is not the sha256 of `TEXT`'s bytes. */
+  const DRAFT_F: DocPin = { kind: 'draft', branch: 'ws/a', head: SHA, section: 'specs', path: 'a.md', fp: 'f'.repeat(64) };
+
+  it('a canonical base64 committed answer is ok, carrying its decoded bytes', async () => {
+    const answer = b64Ok(COMMITTED, B64);
+    expect(await showRaw(COMMITTED, line(answer))).toEqual({ ok: true, answer, bytes: TEXT_BYTES });
+  });
+
+  const ROWS: readonly (readonly [string, DocPin, Record<string, unknown>, 'integrity' | 'pin' | 'schema'])[] = [
+    ['a tampered sha256', COMMITTED, showOk(COMMITTED, { sha256: 'b'.repeat(64) }), 'integrity'],
+    ['a size one over the bytes', COMMITTED, showOk(COMMITTED, { size: TEXT_BYTES.length + 1 }), 'integrity'],
+    ['a size one under the bytes', DRAFT, showOk(DRAFT, { size: TEXT_BYTES.length - 1 }), 'integrity'],
+    ['base64 without its padding', COMMITTED, b64Ok(COMMITTED, B64.replace(/=+$/, '')), 'integrity'],
+    ['base64 with a stray character', COMMITTED, b64Ok(COMMITTED, `${B64.slice(0, 4)}*${B64.slice(4)}`), 'integrity'],
+    ['base64 with stray bits in its last character', COMMITTED, b64Ok(COMMITTED, B64.replace('Cg==', 'Ch==')), 'integrity'],
+    ['a commit that is not the pin', COMMITTED, showOk(COMMITTED, { commit: 'b'.repeat(40) }), 'pin'],
+    ['a section that is not the pin', COMMITTED, showOk(COMMITTED, { section: 'plans' }), 'pin'],
+    ['a path that is not the pin', COMMITTED, showOk(COMMITTED, { path: 'b.md' }), 'pin'],
+    ["source 'draft' answering a committed pin", COMMITTED, showOk(COMMITTED, { source: 'draft' }), 'pin'],
+    ["source 'committed' answering a draft pin", DRAFT, showOk(DRAFT, { source: 'committed' }), 'pin'],
+    ['a draft branch that is not the pin', DRAFT, showOk(DRAFT, { branch: 'ws/b' }), 'pin'],
+    ['a draft head that is not the pin', DRAFT, showOk(DRAFT, { head: 'b'.repeat(40) }), 'pin'],
+    ['a draft fp that is its sha256 but not the pin', DRAFT_F, showOk(DRAFT_F, { fp: DRAFT_FP }), 'pin'],
+    ['a committed answer without onRef', COMMITTED, showOk(COMMITTED, { onRef: undefined }), 'schema'],
+    ["a committed answer with onRef 'maybe'", COMMITTED, showOk(COMMITTED, { onRef: 'maybe' }), 'schema'],
+  ];
+
+  it.each(ROWS)('%s: malformed-answer {why}', async (_label, pin, answer, why) => {
+    expect(await showRaw(pin, line(answer))).toEqual(malformed(why));
+  });
+
+  it('a draft whose fp echoes its pin but is not its sha256: pin', async () => {
+    expect(await showRaw(DRAFT_F, line(showOk(DRAFT_F)))).toEqual(malformed('pin'));
+  });
+
+  it("a committed blob is held to the listing's when the server holds one, and to nothing when it holds none", async () => {
+    const answer = showOk(COMMITTED); // blob 'c' x 40
+    expect(await showRaw(COMMITTED, line(answer), { ...ASK, listedBlob: 'b'.repeat(40) })).toEqual(malformed('pin'));
+    expect(await showRaw(COMMITTED, line(answer), { ...ASK, listedBlob: 'c'.repeat(40) }))
+      .toEqual({ ok: true, answer, bytes: TEXT_BYTES });
+    expect(await showRaw(COMMITTED, line(answer), { ...ASK, listedBlob: null }))
+      .toEqual({ ok: true, answer, bytes: TEXT_BYTES });
+  });
+
+  it.each(['contains', 'not-contained', 'unmeasured'])("onRef '%s' is ok", async (onRef) => {
+    const answer = showOk(COMMITTED, { onRef });
+    expect(await showRaw(COMMITTED, line(answer))).toEqual({ ok: true, answer, bytes: TEXT_BYTES });
+  });
+});
+
+/** `console.warn` spied and silenced for one call: the call's answer and every warn call's arguments. */
+async function watchingWarn(run: () => Promise<Answer>): Promise<{ out: Answer; warned: unknown[][] }> {
+  const spy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    const out = await run();
+    return { out, warned: spy.mock.calls.map((args) => [...args]) };
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** `o` as one answer line of exactly `bytes` bytes, padded through a `pad` key (ccd's keys ride through verbatim). */
+function lineOf(o: Record<string, unknown>, bytes: number): string {
+  const bare = Buffer.byteLength(line({ ...o, pad: '' }));
+  const out = line({ ...o, pad: 'x'.repeat(bytes - bare) });
+  expect(Buffer.byteLength(out)).toBe(bytes);
+  return out;
+}
+
+describe("check 9: the job's declared wire bound (row 46, M6.5, spec section 6.2)", () => {
+  const WARN = 'ccrc-server: docs answer over its declared bound';
+  const INDEX_OK = { v: 1, verb: 'docs-index', ok: true, elapsedMs: 5, unlisted: 0, duplicates: [], projects: [] };
+  const FETCH_OK = {
+    v: 1, verb: 'docs-fetch', ok: true, elapsedMs: 7, branch: 'main', trackedRef: 'refs/remotes/origin/main',
+    defaultVia: 'origin/HEAD', before: null, after: SHA, moved: 'unchanged', stamp: 'written',
+  };
+  const runWith = (stdout: string): CcdDocsDeps => ({ runCcd: recorder(res({ stdout })).run, fleetState: READY });
+  const LISTINGS: readonly (readonly [string, Record<string, unknown>, (d: CcdDocsDeps) => Promise<Answer>])[] = [
+    ['index', INDEX_OK, (d) => ccdDocsReader(d).index({ node: 'n' })],
+    ['tree', TREE_OK, (d) => ccdDocsReader(d).tree(SRC, null)],
+    ['fetch', FETCH_OK, (d) => ccdDocsFetcher(d).fetch(SRC, null)],
+  ];
+
+  it('a show answer of exactly ask.job.wire bytes passes; one byte over is oversize, logged once', async () => {
+    const answer = showOk(COMMITTED);
+    const stdout = line(answer);
+    const wire = (n: number): DocsShowAsk => ({ ...ASK, job: { raw: PLAN.job.raw, wire: n } });
+    const at = await watchingWarn(() => showRaw(COMMITTED, stdout, wire(Buffer.byteLength(stdout))));
+    expect(at.out).toEqual({ ok: true, answer, bytes: TEXT_BYTES });
+    expect(at.warned).toEqual([]);
+    const over = await watchingWarn(() => showRaw(COMMITTED, stdout, wire(Buffer.byteLength(stdout) - 1)));
+    expect(over.out).toEqual(malformed('oversize'));
+    expect(over.warned).toEqual([[WARN]]);
+  });
+
+  it.each(LISTINGS)('%s: an ok answer of exactly LISTING_JOB.wire bytes passes; one byte over is oversize, logged once',
+    async (_name, ok, call) => {
+      const at = await watchingWarn(() => call(runWith(lineOf(ok, LISTING_JOB.wire))));
+      expect(at.out.ok).toBe(true);
+      expect(at.warned).toEqual([]);
+      const over = await watchingWarn(() => call(runWith(lineOf(ok, LISTING_JOB.wire + 1))));
+      expect(over.out).toEqual(malformed('oversize'));
+      expect(over.warned).toEqual([[WARN]]);
+    });
+
+  it('a ccd failure line one byte over the bound is oversize too; at the bound it is carried', async () => {
+    const failure = { v: 1, verb: 'docs-tree', ok: false, elapsedMs: 9, failure: 'git-failed', step: 'cat-file', rc: 128 };
+    const at = await watchingWarn(() => treeWith(res({ stdout: lineOf(failure, LISTING_JOB.wire) })));
+    expect((at.out as DocsFailureBody).failure).toBe('git-failed');
+    expect(at.warned).toEqual([]);
+    const over = await watchingWarn(() => treeWith(res({ stdout: lineOf(failure, LISTING_JOB.wire + 1) })));
+    expect(over.out).toEqual(malformed('oversize'));
+    expect(over.warned).toEqual([[WARN]]);
+  });
+
+  it('check 8 wins over check 9: a tampered sha256 one byte over its bound is integrity, and nothing is logged', async () => {
+    const stdout = line(showOk(COMMITTED, { sha256: 'b'.repeat(64) }));
+    const ask: DocsShowAsk = { ...ASK, job: { raw: PLAN.job.raw, wire: Buffer.byteLength(stdout) - 1 } };
+    const out = await watchingWarn(() => showRaw(COMMITTED, stdout, ask));
+    expect(out.out).toEqual(malformed('integrity'));
+    expect(out.warned).toEqual([]);
+  });
+
+  it('check 7 wins over check 9: an unknown word over the bound stays unknown-failure, and nothing is logged', async () => {
+    const unknown = { v: 1, verb: 'docs-tree', ok: false, elapsedMs: 9, failure: 'no-such-word' };
+    const out = await watchingWarn(() => treeWith(res({ stdout: lineOf(unknown, LISTING_JOB.wire + 1) })));
+    expect(out.out).toEqual({ ok: false, failure: 'unknown-failure', word: 'no-such-word' });
+    expect(out.warned).toEqual([]);
+  });
+});
+
+describe('the second redaction pass: every string leaf of a failure body but failure (row 62, L3 half)', () => {
+  const failLine = (verb: string, failure: string, ctx: Record<string, unknown>): string =>
+    line({ v: 1, verb, ok: false, elapsedMs: 9, failure, ...ctx });
+  /** One call of the port operation that runs `verb`, through a recorder answering `stdout`. */
+  const callVerb = (verb: string, stdout: string): Promise<Answer> => {
+    const deps: CcdDocsDeps = { runCcd: recorder(res({ stdout })).run, fleetState: READY };
+    if (verb === 'docs-fetch') return ccdDocsFetcher(deps).fetch(SRC, null);
+    if (verb === 'docs-show') return ccdDocsReader(deps).show(SRC, COMMITTED, ASK);
+    return ccdDocsReader(deps).tree(SRC, null);
+  };
+  const TOKEN = `gho_${'A'.repeat(24)}`;
+
+  const PLANTED: readonly (readonly [string, string, string, Record<string, unknown>, Record<string, unknown>])[] = [
+    ['git-failed, in stderrHead and detail', 'docs-tree', 'git-failed',
+      { step: 'cat-file', rc: 128, stderrHead: 'fatal: https://u:tok@example.invalid/x', detail: 'GET /?access_token=abc&x=1' },
+      { step: 'cat-file', rc: 128, stderrHead: 'fatal: https://***@example.invalid/x', detail: 'GET /?access_token=***&x=1' }],
+    ['fetch-transport, an Authorization line in detail', 'docs-fetch', 'fetch-transport',
+      { detail: 'fetching\nAuthorization: Bearer x\ndone' },
+      { detail: 'fetching\nAuthorization: ***\ndone' }],
+    ['linked-worktree, a gho_ token in owner', 'docs-tree', 'linked-worktree',
+      { owner: `/w/${TOKEN}`, branch: 'main' },
+      { owner: '/w/gho_***', branch: 'main' }],
+    ['ambiguous-worktree, a token inside a candidates entry', 'docs-show', 'ambiguous-worktree',
+      { candidates: ['/w/a?token=abc', '/w/b'] },
+      { candidates: ['/w/a?token=***', '/w/b'] }],
+    ['unresolved-ref, a token inside a tried entry', 'docs-tree', 'unresolved-ref',
+      { tried: [{ ref: 'refs/heads/a?token=abc', result: 'absent' }], suggest: 'main' },
+      { tried: [{ ref: 'refs/heads/a?token=***', result: 'absent' }], suggest: 'main' }],
+  ];
+
+  it.each(PLANTED)('a planted unredacted ccd line, %s: redacted, failure untouched', async (_label, verb, failure, sent, want) => {
+    expect(await callVerb(verb, failLine(verb, failure, sent))).toStrictEqual({ ok: false, failure, ...want });
+  });
+
+  it('a server-made body carrying an untrusted string is redacted: unknown-failure {word}', async () => {
+    expect(await treeWith(res({ stdout: failLine('docs-tree', 'x?token=abc', {}) })))
+      .toStrictEqual({ ok: false, failure: 'unknown-failure', word: 'x?token=***' });
+  });
+
+  it('idempotent: a line ccd already redacted comes back unchanged', async () => {
+    const ctx = {
+      step: 'fetch', rc: 128, stderrHead: 'fatal: https://***@example.invalid/x',
+      detail: 'GET /?access_token=***&x=1\nAuthorization: ***', owner: '/w/gho_***',
+    };
+    expect(await treeWith(res({ stdout: failLine('docs-tree', 'git-failed', ctx) })))
+      .toStrictEqual({ ok: false, failure: 'git-failed', ...ctx });
+  });
+
+  it('an ok answer is never rewritten: a tree entry path holding ?token=abc comes back as ccd sent it', async () => {
+    const tree = { ...TREE_OK, entries: [{ path: 'a?token=abc.md' }] };
+    expect(await treeWith(res({ stdout: line(tree) }))).toStrictEqual({ ok: true, answer: tree });
   });
 });
