@@ -46,6 +46,15 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-07 10:03 — stall-watch-settings W1 (run 295) may co-edit `shared/api.ts` inside claim 1070 by appending at
+  its end (mail 3813, granted).**
+  - **The grant.** W1 appends one block at the very end and changes no line above it. Claim 1070 stands, and wave 6
+    changes nothing. The second lander resolves structural adjacency only, and a same-sentence collision comes back
+    to both coordinators.
+  - **Measured on run 291's tip `e5effb842`.** Wave 6's `shared/api.ts` edits are all interior (`CoordStatus`,
+    `LcRefusalToken` and `LC_REFUSAL_WORD`, `LifecycleMeas`), so an end-append shifts none of them or README's anchors.
+  - **Not granted.** `server/src/watch.ts` is not in the grant. W1 asks again at its Task 5.
+  - amber-river was told.
 - **2026-10-07 08:55 — wave 6 progress (mail 3801; confirmed in 3802).**
   - **Done so far.** Tasks 0 to 6 are committed on `ws/amber-river`, each past its task review. Task 6 reproduced the
     swift-hollow race red, then closed it.
