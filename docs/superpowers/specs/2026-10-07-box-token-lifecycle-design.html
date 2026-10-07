@@ -14,6 +14,8 @@
   R2 plain HTTP, R3 boot recovery, R4 interval) everywhere they bear, and records the auto-install restore of 11:21.
   Revision 4 (same day) carries ruling R5 of about 13:55 UTC, which amends R1: there is no window marker of any kind;
   every rotation trigger holds only on the mechanical conditions of 9.2.
+  Revision 5 (same day): the operator APPROVED the spec at about 15:23 UTC and closed the last three open items
+  (15:23 and 15:30); the Waiting on you box is empty.
 -->
 <html lang="en">
 <head>
@@ -89,7 +91,7 @@ ol.steps li{margin:4px 0}
 <p class="sub">How ccrc mints, hands out, rotates and checks its box token with no human after install, and how the
 first rotation retires the value that leaked into transcripts.</p>
 <div class="meta">
-  <span>Spec</span><span>2026-10-07</span><span class="status">Draft, revision 4</span>
+  <span>Spec</span><span>2026-10-07</span><span class="status">Approved 2026-10-07, revision 5</span>
   <span>Owner: operator</span><span>Linear: none</span>
   <span>Programme: <code>box-token-lifecycle</code> (proposed)</span>
   <span>Related: <code>docs/superpowers/programs/centralised-update-management.md</code> (ledger, branch, at 3be16c28b; merges before or with this spec)</span>
@@ -137,7 +139,8 @@ retires once wave 1 has landed and the gate (§9.2) opens. A plain-http
 install rotates and shows its transport. A server-written <code>mail.token</code> found unusable at boot is recovered
 from a sibling the server wrote (4.2.1); a hand-made one still refuses. Wave 2's schedule is weekly.</li>
 <li><b>Check:</b> the failure table (§6), the security analysis (§7), the first-rotation gate (§9) and the
-"Waiting on you" box, which now holds only wave 2's agent link token and two small operator acts.</li>
+"Waiting on you" box, which is now empty: the operator approved the spec at about 15:23 UTC and closed its last three
+items at 15:23 and 15:30.</li>
 </ul>
 <div class="legend"><span><span class="f m">measured</span> how is said</span><span><span class="f s">sourced</span> path:line</span>
 <span><span class="f j">judgement</span> a proposal</span><span><span class="f a">agreed</span> an operator ruling</span></div>
@@ -790,9 +793,10 @@ turns the check FAIL or WARN (R2, 12:40). <span class="f a">agreed</span></li>
 <span class="f a">agreed</span> Every state that will be a FAIL or WARN once armed (held, failed, a pending value past
 its deadline, a rotation owed but not started, <code>proof-unmeasured</code>) reports SKIP with its reason word, never
 PASS, and a test pins that. <span class="f j">judgement</span></li>
-<li><b>Arming:</b> the FAIL and WARN arms are compiled in, but wave 1 cannot reach them. A later PR switches them on:
-wave 2's first PR, or a wave-1 follow-up. The coordinator dispatches it only after recording the GPT-lane B4 gates as
-closed, or after the lane coordinator accepts <code>box-token</code> by name. There is no flag file, because a flag
+<li><b>Arming:</b> the FAIL and WARN arms are compiled in, but wave 1 cannot reach them. A later PR switches them on, and it
+must land before the weekly schedule ships: wave 2's first PR at the latest, or a wave-1 follow-up. The coordinator
+dispatches it only after recording the GPT-lane B4 gates as closed; no acceptance by name is sought (operator, about
+15:30: wave 1's only unattended rotation is the first, which the coordinator proves directly, §10.3). There is no flag file, because a flag
 nobody writes is a hand step. Until then, G4 rests on the console card, its banner, and server log lines.
 <span class="f j">judgement</span></li>
 </ul>
@@ -1104,7 +1108,7 @@ mechanical only, and there is no window marker (R1 as amended by R5).</figcaptio
 <thead><tr><th>Wave</th><th>Ships</th><th>Retires</th></tr></thead><tbody>
 <tr><td>1, PR A</td><td>Boot mint, boot recovery and the retired digests; the holder and accept-set check; server files and state; policy (with <code>claimVerdict</code>), the driver on its own timer, and the mechanical first-rotation gate; boot recovery for server-written files (4.2.1); the claim door, the rotate route, their census sets, the seventh gate reason and every pin that moves (4.6); the <code>/api/notify</code> tolerance removal with its <code>gate.ts</code> and <code>routes.ts</code> text; the <code>both</code>-box writer (4.10); the <code>token-sync</code> op with its argv template, bounds and spawn port; <code>box-token-generation</code> in <code>NODE_FILES</code>.</td><td>The single-value, read-once server; the notify tolerance.</td></tr>
 <tr><td>1, PR B</td><td><code>ccrc token sync</code> and <code>ccrc token probe</code> (<code>ccd/ccrc-token-sync</code>) and the <code>token-sync</code> cap word; doctor <code>box-token</code> (PASS/SKIP only); the Settings card and "Rotate now"; <code>deploy.sh</code> stops shipping the token; the <code>.example</code>'s comment; <code>notify.sh</code> <code>set +x</code>; the README lines in 4.1's <code>deploy.sh</code> row.</td><td><code>ship_secret</code>; <code>deploy/ccrc-mail.token</code> as a source (the operator deletes it once; the digests already make it harmless); the hand mint at install.</td></tr>
-<tr><td>1, follow-up</td><td>Doctor's <code>box-token</code> FAIL and WARN arms switched on (or in wave 2's first PR), dispatched once the GPT-lane B4 gates are recorded closed, or once the check is accepted by name.</td><td>The PASS/SKIP-only interim.</td></tr>
+<tr><td>1, follow-up</td><td>Doctor's <code>box-token</code> FAIL and WARN arms switched on, before the weekly schedule ships (wave 2's first PR at the latest), dispatched once the GPT-lane B4 gates are recorded closed (operator, about 15:30).</td><td>The PASS/SKIP-only interim.</td></tr>
 <tr><td>2</td><td>The schedule, <b>weekly</b> (7 days; R4, 12:40, <span class="f a">agreed</span>), held exactly as the first rotation is: only by the mechanical conditions of 9.2, an update in flight included, never by <code>auto</code> and never by a window marker (§5 step 1; R5). The agent link token: dual-accept at <code>hello</code>, a constant-time compare, a ccrc-owned file; <code>agent.env</code> and <code>ccrc.env</code> stay operator-owned. The next agent token is never authenticated by the agent token alone. The brief's "switch without a restart" and "read as a second <code>EnvironmentFile</code>" conflict, because an <code>EnvironmentFile</code> reaches a process only at unit start (<code>agent/src/index.ts:12-16</code>; <code>server/src/index.ts:117-123</code>): this is in Waiting on you. A 4401 close becomes a distinct, logged client state, and install-time pairing goes. <span class="f j">judgement</span> on the last two.</td><td>The hand-made agent token; the plain <code>!==</code>; the silent 4401 loop; the tty pairing.</td></tr>
 <tr><td>3</td><td>A token per box, stored on the server as sha256 hashes (the session-token precedent), so a leak is limited to one box and the server can attribute each call. It lifts the single-fleet-node invariant.</td><td>The one shared value.</td></tr>
 <tr><td>Later</td><td>A leak scan as a rotation trigger; feeding retired digests to ccrc-history's redaction; an audit of box-token lane use during the exposure.</td><td>—</td></tr>
@@ -1260,7 +1264,8 @@ agreed. At about 13:55 the operator amended R1 (R5, "Drop the marker"), and the 
 <tr><td>Timings</td><td>§5.1</td><td>Code 60 s, op 50 s, grace 5 min (1 h hard bound), confirm deadline 5 min, backoff 1 min to 1 h, FAIL after 3.</td><td>proposed</td></tr>
 <tr><td>Plain-<code>http</code> installs</td><td>Refuse (<code>insecure-url</code>); allow on a private address; allow and warn</td><td>"Rotate, show the transport": rotate, and show <code>transport http</code> in doctor and the console; never refuse. On such an install every client already sends the box token in the clear every 60 s (<code>ccd/ccrc-api:207</code>; <code>deploy/notify.sh:57-60, 84-86</code>), so refusing the claim would protect nothing and leave the leak unretired. Operator, about 12:40 (R2).</td><td>agreed</td></tr>
 <tr><td>Boot recovery</td><td>Refuse an unusable <code>mail.token</code> (the brief); recover a server-written one from its siblings</td><td>"Recover, for server files": a <code>mail.token</code> with no usable value, proved server-written by its write record, is recovered from the recorded promotion's pending file or else <code>mail-previous.token</code>, each proved the same way, with a warning; a hand-made file still refuses boot (4.2.1). Operator, about 12:40 (R3); the proof and order are <span class="f j">judgement</span>.</td><td>agreed</td></tr>
-<tr><td>Wave 2 agent token delivery</td><td>A second <code>EnvironmentFile</code> (the brief); a ccrc-owned file read at each <code>hello</code></td><td>The brief's two clauses conflict; question in Waiting on you.</td><td>open</td></tr>
+<tr><td>Wave 2 agent token delivery</td><td>A second <code>EnvironmentFile</code> (the brief); a ccrc-owned file read at each <code>hello</code></td><td>Both processes read a ccrc-owned 0600 file at each <code>hello</code>, the <code>EnvironmentFile</code> only seeds it, and the next agent token travels by the same code-then-HTTPS claim. Operator, about 15:23.</td><td>agreed</td></tr>
+<tr><td>Doctor FAIL arms in wave 1</td><td>On early (lane accepts by name); on in wave 1 with grace periods if the lane gate has closed; off in wave 1</td><td>Off in wave 1 (PASS or SKIP only); on before the weekly schedule ships. Wave 1's only unattended rotation is the first, which the coordinator proves directly (§10.3). Operator, about 15:30.</td><td>agreed</td></tr>
 <tr><td>Wave 2 interval</td><td>—</td><td>Weekly (7 days), declared once in L0. Operator, about 12:40 (R4).</td><td>agreed</td></tr>
 </tbody></table></div>
 
@@ -1290,18 +1295,19 @@ off.</li>
 <li><b>Boot recovery, "Recover, for server files" (about 12:40, R3).</b> A server-written <code>mail.token</code> with no
 usable value is recovered from a sibling the server wrote, with a warning; a hand-made one still refuses boot (4.2.1).</li>
 <li><b>Interval (about 12:40, R4).</b> Wave 2's automatic schedule is weekly, 7 days.</li>
+<li><b>Spec approved (about 15:23 UTC):</b> "spec reads right to me".</li>
+<li><b>Wave 2's agent token (about 15:23):</b> both processes read a ccrc-owned 0600 file at each <code>hello</code>, the
+<code>EnvironmentFile</code> only seeds it, and the next agent token travels by the same code-then-HTTPS claim, so it is
+never authenticated by the agent token alone.</li>
+<li><b>The gitignored <code>deploy/ccrc-mail.token</code> (about 15:23):</b> deleted once the first rotation is proved;
+cleanup, not a gate.</li>
+<li><b>Doctor FAIL arms (about 15:30):</b> off in wave 1 (PASS or SKIP only), and on before the weekly schedule ships,
+in wave 2's first PR at the latest. No acceptance by name is sought.</li>
 <li><b>Update setting (recorded fact).</b> Auto-install was restored to "Every release on my channel" (<code>dev</code>)
 at about 11:21 UTC, after the GPT-lane window's Step 20; the fleet box is on v0.0.118 (9.2).</li>
 </ul></div>
 <div class="box w"><h3>Waiting on you</h3><ul>
-<li><b>Wave 2's agent token:</b> "switch without a restart" and "a second <code>EnvironmentFile</code>" cannot both
-hold. <b>Recommendation:</b> both processes read a ccrc-owned 0600 file at each <code>hello</code>, and the
-<code>EnvironmentFile</code> only seeds it. The next agent token travels by the same code-then-HTTPS claim, so it is
-never authenticated by the agent token alone.</li>
-<li>Delete your gitignored <code>deploy/ccrc-mail.token</code> once the first rotation is proved. It is cleanup, not a
-gate.</li>
-<li>If you want doctor's <code>box-token</code> FAIL arms on before the lane's B4 gates close, accept the check by
-name. Optional.</li>
+<li>Nothing. Every decision is taken (operator, about 15:23 and 15:30 UTC).</li>
 </ul></div>
 <div class="box l"><h3>Later</h3><ul>
 <li>A leak scan as a rotation trigger.</li>
@@ -1321,8 +1327,8 @@ copies its source. Revision 2 applies three review lenses (security; constraints
 rollout, operations and coordination). It keeps every operator ruling as briefed; where a lens found one unsafe as
 written, it raised a question in Waiting on you. Revision 3 carries the operator's answers of about 12:40 UTC (R1 to
 R4) into every section they bear on. Revision 4 carries R5 of about 13:55 UTC, which amends R1: the window marker is
-gone, and every rotation holds only on the mechanical conditions. Any deviation number the plan needs is issued at
-run-open.</p>
+gone, and every rotation holds only on the mechanical conditions. Revision 5 records the operator's approval (about 15:23
+UTC) and the last three items closed at 15:23 and 15:30. Any deviation number the plan needs is issued at run-open.</p>
 </main>
 <script type="module">
   const blocks = [...document.querySelectorAll('pre.mermaid')];
