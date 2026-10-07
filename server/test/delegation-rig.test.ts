@@ -487,6 +487,284 @@ describe('rig.sh run and all take only a version that is installed (review 304 F
   });
 });
 
+const RECAPTURE = path.join(RIG, 'recapture.sh');
+
+/** A scratch copy of the tree recapture.sh finds from its own location: the script itself; a rig.sh that answers `versions`
+ *  with the REAL rig.sh (so "installed" is the rig's own answer) and logs `all` instead of running it; a sanitiser and a matrix
+ *  builder that log their argv; a corpus of empty version directories. Whatever a row runs for real, it writes only under `dir`. */
+function recaptureTree(corpus: string[] = ['2.1.290', '2.1.291']): { dir: string; rig: string; fix: string; scen: string; script: string; log: string } {
+  const dir = mkTmp('ccrc-dlg-rc-');
+  const rig = path.join(dir, 'server/test/delegation-rig');
+  const fix = path.join(dir, 'server/test/fixtures/delegation');
+  const scen = path.join(rig, 'scenarios');
+  fs.mkdirSync(scen, { recursive: true });
+  for (const v of corpus) fs.mkdirSync(path.join(fix, v), { recursive: true });
+  fs.copyFileSync(RECAPTURE, path.join(rig, 'recapture.sh'));
+  const put = (name: string, text: string): void => { fs.writeFileSync(path.join(rig, name), text); fs.chmodSync(path.join(rig, name), 0o755); };
+  put('rig.sh', [
+    '#!/usr/bin/env bash',
+    'case ${1-} in',
+    '  versions) shift; exec bash "$REAL_RIG" versions "$@" ;;',
+    '  all)      shift; raw=$1; shift; printf "all %s\\n" "$raw $*" >> "$LOG"',
+    '            echo "stdout line from all"; echo "stderr line from all" >&2',
+    '            [[ ${STUB_ALL_RC:-0} == 0 ]] || exit "$STUB_ALL_RC"',
+    '            [[ -z ${STAGED-} ]] || cp -R "$STAGED/." "$raw/"',
+    '            [[ -n ${STUB_NO_DONE-} ]] || echo 2026-01-01T00:00:00Z > "$raw/.done" ;;',
+    'esac', '',
+  ].join('\n'));
+  const logger = (tag: string, rcVar: string, scanVar = ''): string => [
+    "import fs from 'node:fs';", 'const a = process.argv.slice(2);',
+    `fs.appendFileSync(process.env.LOG, \`${tag} \${a.join(' ')}\\n\`);`,
+    `process.exit(Number((${scanVar ? `a[0] === '--scan' ? process.env.${scanVar} : ` : ''}process.env.${rcVar}) || 0));`, '',
+  ].join('\n');
+  put('sanitize.mjs', logger('sanitize', 'STUB_SANITIZE_RC', 'STUB_SCAN_RC'));
+  put('build-matrix.mjs', logger('matrix', 'STUB_MATRIX_RC'));
+  return { dir, rig, fix, scen, script: path.join(rig, 'recapture.sh'), log: path.join(dir, 'log') };
+}
+type Tree = ReturnType<typeof recaptureTree>;
+
+/** Every path under `dir` (files and directories), sorted: what a run left behind. */
+function treeListing(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string): void => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); out.push(f); if (e.isDirectory()) walk(f); } };
+  walk(dir);
+  return out.sort();
+}
+
+describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', () => {
+  /** HOME, TMPDIR and the stubs' log for one run of the tree's script. */
+  const ctx = (t: Tree, entries: Array<[string, number]>) => ({ home: versionsHome(entries), tmp: mkTmp('ccrc-dlg-tmp-'), t });
+  const recapture = (c: ReturnType<typeof ctx>, args: string[], env: NodeJS.ProcessEnv = {}, cwd?: string) => {
+    const r = spawnSync('bash', [c.t.script, ...args], { encoding: 'utf8', timeout: 60_000, ...(cwd ? { cwd } : {}),
+      env: { ...process.env, HOME: c.home, TMPDIR: c.tmp, LOG: c.t.log, REAL_RIG: RIGSH, ...env } });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  const stepLines = (stdout: string): string[] => stdout.split('\n').filter((l) => /^ {2}\d+\. /.test(l));
+  const logLines = (t: Tree): string[] => (fs.existsSync(t.log) ? fs.readFileSync(t.log, 'utf8').split('\n').filter(Boolean) : []);
+  /** The five steps as the script prints them for `vs`, `<raw>` standing for the raw root. */
+  const FIVE = (t: Tree, vs: string[]): string[] => [
+    `  1. RAW=$(mktemp -d "\${TMPDIR:-/tmp}/ccrc-dlg-raw.XXXXXX") && { printf "# started %s\\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; printf "%s\\n" ${vs.join(' ')}; } > <raw>/versions-at-start`,
+    `  2. bash ${t.rig}/rig.sh all <raw> ${vs.join(' ')} 2>&1 | tee <raw>/all.log && [[ -e <raw>/.done ]]`,
+    `  3. node ${t.rig}/sanitize.mjs <raw> ${t.fix}`,
+    `  4. node ${t.rig}/build-matrix.mjs ${t.fix} ${t.scen} --write`,
+    `  5. node ${t.rig}/sanitize.mjs --scan ${t.fix}`,
+  ];
+  // 2.1.290 and 2.1.291 are in the tree's corpus; 2.1.999 and the rest are not. 2.1.998 is not executable; the last two are no versions.
+  const ENTRIES: Array<[string, number]> = [['2.1.290', 0o755], ['2.1.999', 0o755], ['2.1.9', 0o755], ['10.0.0', 0o755], ['2.1.998', 0o644], ['current', 0o755], ['2.1.9x', 0o755]];
+  const FEW: Array<[string, number]> = [['2.1.290', 0o755], ['2.1.999', 0o755], ['2.1.998', 0o644], ['current', 0o755]];
+
+  it('is an executable bash script, and names the committed corpus and the rig\'s scenarios directory as its own', () => {
+    const text = fs.readFileSync(RECAPTURE, 'utf8');
+    expect(text.startsWith('#!/usr/bin/env bash\n')).toBe(true);
+    expect(text).toContain('\nset -euo pipefail\n');
+    expect(fs.statSync(RECAPTURE).mode & 0o111, 'executable by someone').not.toBe(0);
+    expect(text).toContain('\nFIX=$TREE/server/test/fixtures/delegation\n');
+    expect(text).toContain('\nSCEN=$HERE/scenarios\n');
+    expect(fs.existsSync(path.join(TREE, 'server/test/fixtures/delegation/matrix.json')), 'the corpus is where the script says').toBe(true);
+    expect(fs.existsSync(path.join(RIG, 'scenarios')), 'the scenarios are where the script says').toBe(true);
+  });
+
+  it('--dry-run, no version named: every installed, version-shaped, executable entry in numeric order, then the five steps in order, each naming the directories it acts on', () => {
+    const t = recaptureTree();
+    const r = recapture(ctx(t, ENTRIES), ['--dry-run']);
+    expect(r.status, r.stderr).toBe(0);
+    const out = r.stdout.split('\n');
+    expect(out.slice(0, 4)).toEqual([
+      'recapture: dry run: nothing is made and nothing is run',
+      'recapture: 4 version(s), as installed now: 2.1.9 2.1.290 2.1.999 10.0.0',
+      `recapture: fixtures dir:  ${t.fix}`,
+      `recapture: scenarios dir: ${t.scen}`,
+    ]);
+    expect(stepLines(r.stdout)).toEqual(FIVE(t, ['2.1.9', '2.1.290', '2.1.999', '10.0.0']));
+    expect(out.slice(-3)).toEqual([
+      'recapture: raw root: <raw>',
+      'recapture: it holds UNSANITISED bundles: never commit it, never copy it off the box, remove it by hand once nothing needs it: rm -rf <raw>',
+      '',
+    ]);
+  }, 60_000);
+
+  it('--dry-run --missing selects the installed versions the corpus has no directory for: 2.1.999, and not 2.1.290', () => {
+    const t = recaptureTree();
+    const r = recapture(ctx(t, FEW), ['--dry-run', '--missing']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain('recapture: 1 version(s), as installed now: 2.1.999\n');
+    expect(stepLines(r.stdout)).toEqual(FIVE(t, ['2.1.999']));
+    expect(r.stdout, 'a version the corpus holds is not named anywhere').not.toContain('2.1.290');
+  }, 60_000);
+
+  it('--missing with every installed version already in the corpus says so, exits 0 and makes nothing, dry run or not', () => {
+    const t = recaptureTree();
+    const before = treeListing(t.dir);
+    for (const args of [['--dry-run', '--missing'], ['--missing']]) {
+      const c = ctx(t, [['2.1.290', 0o755], ['2.1.291', 0o755]]);
+      const r = recapture(c, args);
+      expect.soft(r.status, `${args.join(' ')}: ${r.stderr}`).toBe(0);
+      expect.soft(r.stdout, args.join(' ')).toBe('recapture: the corpus already covers every installed version (2.1.290 2.1.291); nothing to capture\n');
+      expect.soft(fs.readdirSync(c.tmp), `${args.join(' ')}: no raw root`).toEqual([]);
+      expect.soft(logLines(t), `${args.join(' ')}: nothing ran`).toEqual([]);
+      expect.soft(treeListing(t.dir), `${args.join(' ')}: the tree is as it was`).toEqual(before);
+    }
+  }, 60_000);
+
+  it('--dry-run with versions named selects exactly those: a named version already in the corpus too, in numeric order, each once', () => {
+    const t = recaptureTree();
+    const one = recapture(ctx(t, ENTRIES), ['--dry-run', '2.1.999']);
+    expect.soft(one.status, one.stderr).toBe(0);
+    expect.soft(one.stdout).toContain('recapture: 1 version(s), as installed now: 2.1.999\n');
+    expect.soft(stepLines(one.stdout)).toEqual(FIVE(t, ['2.1.999']));
+    const many = recapture(ctx(t, ENTRIES), ['--dry-run', '2.1.999', '2.1.290', '2.1.999']);
+    expect.soft(many.status, many.stderr).toBe(0);
+    expect.soft(stepLines(many.stdout)).toEqual(FIVE(t, ['2.1.290', '2.1.999']));
+  }, 60_000);
+
+  const REFUSED: Array<[string, string[], string]> = [   // [what, the arguments, the text the refusal must carry]
+    ['a version that is not installed', ['2.1.5'], "'2.1.5' is not an installed Claude Code version"],
+    ['a version whose entry is not executable', ['2.1.998'], "'2.1.998' is not an installed Claude Code version"],
+    ['a malformed version (an executable entry of that name exists)', ['2.1.9x'], "'2.1.9x' is not an installed Claude Code version"],
+    ['the first bad version among good ones', ['2.1.999', '2.1.5', '2.1.998'], "'2.1.5' is not an installed Claude Code version"],
+    ['--missing together with a version', ['--missing', '2.1.999'], '--missing and named versions do not mix'],
+    ['an option it does not know', ['--bogus'], "unknown option '--bogus'"],
+  ];
+  for (const [what, args, text] of REFUSED) {
+    for (const dry of [true, false]) {
+      it(`${dry ? '--dry-run ' : ''}${args.join(' ')} (${what}): exit 2, the refusal named, and nothing made or run`, () => {
+        const t = recaptureTree();
+        const c = ctx(t, ENTRIES);
+        const before = treeListing(t.dir);
+        const r = recapture(c, [...(dry ? ['--dry-run'] : []), ...args]);
+        expect.soft(r.status, r.stderr).toBe(2);
+        expect.soft(r.stderr).toContain(text);
+        expect.soft(r.stderr, 'rig.sh\'s refusal stops this script; it is not read as "nothing installed"').not.toContain('no Claude Code version is installed');
+        expect.soft(r.stdout).toBe('');
+        expect.soft(fs.readdirSync(c.tmp), 'no raw root').toEqual([]);
+        expect.soft(logLines(t), 'nothing ran').toEqual([]);
+        expect.soft(treeListing(t.dir), 'the tree is as it was').toEqual(before);
+      }, 60_000);
+    }
+  }
+
+  it('with no Claude Code version installed it refuses, exit 2, and makes nothing', () => {
+    const t = recaptureTree();
+    const c = ctx(t, [['2.1.998', 0o644], ['current', 0o755]]);
+    const r = recapture(c, []);
+    expect.soft(r.status, r.stderr).toBe(2);
+    expect.soft(r.stderr).toContain('no Claude Code version is installed to capture');
+    expect.soft(fs.readdirSync(c.tmp)).toEqual([]);
+    expect.soft(logLines(t)).toEqual([]);
+  }, 60_000);
+
+  it('--dry-run makes nothing and runs nothing: TMPDIR stays empty, the tree is unchanged, no step ran', () => {
+    const t = recaptureTree();
+    const c = ctx(t, ENTRIES);
+    const before = treeListing(t.dir);
+    const r = recapture(c, ['--dry-run']);
+    expect.soft(r.status, r.stderr).toBe(0);
+    expect.soft(fs.readdirSync(c.tmp), 'no raw root').toEqual([]);
+    expect.soft(treeListing(t.dir), 'the tree is as it was').toEqual(before);
+    expect.soft(logLines(t), 'no step ran').toEqual([]);
+  }, 60_000);
+
+  it('a real run makes the raw root, runs the five steps in the printed order on it, never deletes it, and ends by naming it', () => {
+    const t = recaptureTree();
+    const c = ctx(t, ENTRIES);
+    const dry = recapture(c, ['--dry-run', '2.1.999', '2.1.9']);
+    const r = recapture(c, ['2.1.999', '2.1.9']);
+    expect(r.status, r.stderr).toBe(0);
+    const made = fs.readdirSync(c.tmp);
+    expect(made, 'exactly one raw root, nothing else in TMPDIR').toHaveLength(1);
+    const raw = path.join(c.tmp, made[0] as string);
+    expect(path.basename(raw)).toMatch(/^ccrc-dlg-raw\.[A-Za-z0-9]{6}$/);
+    expect(fs.statSync(raw).mode & 0o777, 'mktemp -d: 0700').toBe(0o700);
+    // the steps ran on that root, with the versions it recorded, in order, each with its directories
+    expect(logLines(t).map((l) => l.split(raw).join('<raw>'))).toEqual([
+      'all <raw> 2.1.9 2.1.999',
+      `sanitize <raw> ${t.fix}`,
+      `matrix ${t.fix} ${t.scen} --write`,
+      `sanitize --scan ${t.fix}`,
+    ]);
+    // the very list a dry run prints is the list that ran, and the root's path is told as soon as it exists
+    expect(stepLines(r.stdout)).toEqual(stepLines(dry.stdout));
+    const out = r.stdout.split('\n');
+    expect(out.indexOf(`recapture: raw root: ${raw}`), 'told right after step 1, before step 2').toBe(out.findIndex((l) => l.startsWith('  1. ')) + 1);
+    expect(out.slice(-3)).toEqual([
+      `recapture: raw root: ${raw}`,
+      `recapture: it holds UNSANITISED bundles: never commit it, never copy it off the box, remove it by hand once nothing needs it: rm -rf ${raw}`,
+      '',
+    ]);
+    // the raw root's own record: the start time, then the versions, one per line; and the capture's output, both streams
+    expect(fs.readFileSync(path.join(raw, 'versions-at-start'), 'utf8')).toMatch(/^# started \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n2\.1\.9\n2\.1\.999\n$/);
+    expect(fs.readFileSync(path.join(raw, 'all.log'), 'utf8')).toBe('stdout line from all\nstderr line from all\n');
+    expect(r.stdout, 'the capture\'s output reaches the operator too').toContain('stdout line from all\n');
+    expect(fs.existsSync(path.join(raw, '.done')), 'the raw root and what it holds are still there').toBe(true);
+  }, 60_000);
+
+  const kinds = (t: Tree): string[] => logLines(t).map((l) => (l.startsWith('sanitize --scan') ? 'scan' : (l.split(' ')[0] as string)));
+  const FAILS: Array<[string, NodeJS.ProcessEnv, number, string[], string]> = [   // [what, env, the script's exit, the steps that ran, the failure it reports]
+    ['rig.sh all failing with its own status', { STUB_ALL_RC: '2' }, 2, ['all'], 'step 2 failed (exit 2)'],
+    ['rig.sh all finishing without its .done', { STUB_NO_DONE: '1' }, 1, ['all'], 'step 2 failed (exit 1)'],
+    ['the sanitiser refusing (it fails closed), whatever its status', { STUB_SANITIZE_RC: '3' }, 3, ['all', 'sanitize'], 'step 3 failed (exit 3)'],
+    ['the matrix builder failing', { STUB_MATRIX_RC: '4' }, 4, ['all', 'sanitize', 'matrix'], 'step 4 failed (exit 4)'],
+    ['the corpus scan finding residue', { STUB_SCAN_RC: '5' }, 5, ['all', 'sanitize', 'matrix', 'scan'], 'step 5 failed (exit 5)'],
+  ];
+  for (const [what, env, code, ran, failed] of FAILS) {
+    it(`stops at ${what}: exit ${code}, the later steps not run, the raw root kept and named`, () => {
+      const t = recaptureTree();
+      const c = ctx(t, ENTRIES);
+      const r = recapture(c, ['2.1.999'], env);
+      expect.soft(r.status, r.stderr).toBe(code);
+      expect.soft(kinds(t), 'the steps that ran').toEqual(ran);
+      const made = fs.readdirSync(c.tmp);
+      expect.soft(made, 'the raw root is kept').toHaveLength(1);
+      const raw = path.join(c.tmp, made[0] as string);
+      expect.soft(r.stderr).toContain(failed);
+      expect.soft(r.stderr).toContain(`recapture: the raw root ${raw} is kept; it holds UNSANITISED bundles`);
+    }, 60_000);
+  }
+
+  it('a failure before the raw root exists (no usable TMPDIR) stops at step 1 and names no root', () => {
+    const t = recaptureTree();
+    const c = ctx(t, ENTRIES);
+    const r = recapture(c, ['2.1.999'], { TMPDIR: path.join(c.tmp, 'no-such-dir') });
+    expect.soft(r.status, r.stderr).not.toBe(0);
+    expect.soft(r.stderr).toContain(`step 1 failed (exit ${r.status})`);
+    expect.soft(r.stderr).not.toContain('is kept');
+    expect.soft(logLines(t), 'nothing ran').toEqual([]);
+  }, 60_000);
+
+  it('end to end over the REAL sanitiser and matrix builder: the capture\'s bundle becomes a fixture, matrix.json is rebuilt to hold it, and the corpus scan passes', () => {
+    const t = recaptureTree([]);
+    for (const n of ['sanitize.mjs', 'build-matrix.mjs']) fs.copyFileSync(path.join(RIG, n), path.join(t.rig, n));   // the real ones over the logging stubs
+    fs.cpSync(path.join(RIG, 'scenarios'), t.scen, { recursive: true });
+    const ROOT = '/tmp/ccrc-dlg-rig.Zz99Yy';
+    const staged = mkTmp('ccrc-dlg-stage-');   // what rig.sh all would have left in the raw root: one bundle, the run root spelled in it
+    rawBundle(staged, ROOT, '2.1.999', 'agent-plain', [
+      ['SessionStart', 10, { hook_event_name: 'SessionStart', session_id: 's', cwd: `${ROOT}/repo`, transcript_path: `${ROOT}/fixhome/cfg/projects/${ROOT.replace(/[^A-Za-z0-9]/g, '-')}-repo/s.jsonl` }],
+      ['Stop', 20, { hook_event_name: 'Stop', session_id: 's' }],
+    ]);
+    const c = ctx(t, [['2.1.999', 0o755]]);
+    const r = recapture(c, ['--missing'], { STAGED: staged });
+    expect(r.status, r.stderr).toBe(0);
+    const fixture = JSON.parse(fs.readFileSync(path.join(t.fix, '2.1.999', 'agent-plain.json'), 'utf8'));
+    expect(fixture).toMatchObject({ v: 1, version: '2.1.999', scenario: 'agent-plain' });
+    expect(fixture.events[0].payload.cwd, 'the run root became /rig').toBe('/rig/repo');
+    const matrix = JSON.parse(fs.readFileSync(path.join(t.fix, 'matrix.json'), 'utf8'));
+    expect(matrix.versions).toEqual(['2.1.999']);
+    expect(r.stdout).toContain('sanitize: scanned 2 file(s)');
+    expect(r.stdout).toContain('no residue');
+    expect(fs.existsSync(path.join(c.tmp, fs.readdirSync(c.tmp)[0] as string, '2.1.999/agent-plain/version')), 'the raw root is kept').toBe(true);
+  }, 60_000);
+
+  it('resolves every path from its own location, never from the caller\'s directory', () => {
+    const t = recaptureTree();
+    const c = ctx(t, ENTRIES);
+    const elsewhere = mkTmp('ccrc-dlg-cwd-');
+    const r = recapture(c, ['--dry-run', '2.1.999'], {}, elsewhere);
+    expect(r.status, r.stderr).toBe(0);
+    expect(stepLines(r.stdout)).toEqual(FIVE(t, ['2.1.999']));
+    expect(r.stdout).toContain(`recapture: fixtures dir:  ${t.fix}\n`);
+  }, 60_000);
+});
+
 /** Set every mtime under `root` (files, symlinks, then directories, children first) to `when`. */
 function ageTree(root: string, when: Date): void {
   for (const e of fs.readdirSync(root, { withFileTypes: true })) {
