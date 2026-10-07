@@ -24,7 +24,6 @@ import type { MailTurnMode } from '../turnidle.js';
  * - the resolver both sweeps and the view call, and the readers the view composes;
  * - the write path the POST composes: the body's decision, the projection of the row a write leaves, the write's
  *   effect, the confirm and its key, and the feed body; and the notice counts by role.
-```
  *
  * No marker name is spelled here. The box arming composes `stall.ts`'s `stallArmingOf` and `turnidle.ts`'s
  * `mailTurnModeOf`, each of which spells its own names, and `mail-disabled` arrives as a boolean the caller measured
