@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5dd3d641374a3e7553a0030b28a0fa4fc3fab943ee48bafad623e99ea1a80a22
+# ccrc:generated 1 sha256=3ca23032358e42c39eb47cb9bd861e1666540102c52b7fa345a226c49b9e1c38
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28397,13 +28397,22 @@ _ws_reclaim_tmproot_quiet() {   # path -> `_ws_path_users`' LAST answer (0/1/2),
   #                                or `_ws_reclaim_tmproot_wait_s` seconds have passed
   # Asked every quarter second. ON DARWIN the probe answers unmeasured without
   # looking, so it is asked ONCE: waiting cannot change that answer.
-  local p="$1" bound end rc
+  # TWO ENDS, and the first one reached ends it: the wall clock, and a count
+  # of `bound * 4 + 1` asks. The clock alone is not a bound: it is
+  # `EPOCHREALTIME`, so a clock stepped backwards would lengthen the wait
+  # without limit. The count never shortens a wait the clock would allow:
+  # every ask after the first follows a quarter-second sleep, so by the last
+  # one counted the bound has already passed.
+  local p="$1" bound end rc n=0 max
   bound=$(_ws_reclaim_tmproot_wait_s)
+  max=$(( bound * 4 + 1 ))
   end=$(( $(_plat_epoch_ms) + bound * 1000 ))
   while :; do
     _ws_path_users "$p"; rc=$?
     (( rc != 0 )) || return 0
     [[ "$CCD_OS" != darwin ]] || return "$rc"
+    n=$(( n + 1 ))
+    (( n < max )) || return "$rc"
     (( $(_plat_epoch_ms) < end )) || return "$rc"
     sleep 0.25
   done
@@ -28875,6 +28884,11 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # only for a real directory), and unlinking it touches nothing it names: it
   # is never kept for its users, on any platform (spec §5.6; wave 3's
   # recycled-slug rule), so the probe is not asked of it.
+  # THE WINDOW, STATED: this shape test and `_ws_leaf_remove`'s own are two
+  # looks, not one. A link or file leaf that a writer replaces with a
+  # directory between them is removed as a directory, with no probe asked at
+  # that instant — the same-uid check-then-act window the helper's header
+  # states for its own checks (the single-user trust model).
   if [[ -L "$HOME/.cc-tmp/$id" || ( -e "$HOME/.cc-tmp/$id" && ! -d "$HOME/.cc-tmp/$id" ) ]]; then
     tmpq=0
   else

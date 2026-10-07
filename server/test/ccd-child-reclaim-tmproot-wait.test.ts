@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf, measOf } from './lifecycleHelpers.js';
-import { CHILD_BRANCH, CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
+import { CHILD_BRANCH, CHILD_ID, CHILD_RUN, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
 import { EXP_ID, expireToken, expireVerb, makeArchived } from './wsExpireFixture.js';
 import { holdProc, type Held } from './pathUsersFixture.js';
@@ -32,7 +32,8 @@ const probes = (): string[] => h.calls().filter((l) => l.startsWith('probe'));
 
 describe('the bound: at most 15 s, and the override can only LOWER it', () => {
   it.each([
-    [undefined, '15'], ['3', '3'], ['0', '0'], ['007', '7'], ['15', '15'],
+    // '010' and '08' pin the `10#`: read as octal, '010' is 8 and '08' is no number at all.
+    [undefined, '15'], ['3', '3'], ['0', '0'], ['010', '10'], ['08', '8'], ['15', '15'],
     ['16', '15'], ['99', '15'], ['abc', '15'], ['', '15'], ['-1', '15'],
   ] as const)('CCD_RECLAIM_TMPROOT_WAIT_S=%s -> %s', (v, want) => {
     const set = v === undefined ? 'unset CCD_RECLAIM_TMPROOT_WAIT_S;' : `CCD_RECLAIM_TMPROOT_WAIT_S='${v}';`;
@@ -65,6 +66,47 @@ describe('_ws_reclaim_tmproot_quiet — asked until nobody, or the bound', () =>
     expect(probes()).toHaveLength(1);
     expect(Date.now() - t0, 'it did not sit out the bound').toBeLessThan(4_000);
   }, 60_000);
+
+  /** Runs the wait on a 1 s bound with a probe that answers 1 forever (after `delay`, when given), and
+   *  answers its rc and its own elapsed time, measured in the shell around the one call. */
+  const neverLeaves = (opts: { delay?: string; pre?: string } = {}): { rc: string; ms: number } => {
+    const out = h.sh(`CCD_OS=linux; CCD_RECLAIM_TMPROOT_WAIT_S=1; ${opts.pre ?? ''}`
+      + ` _ws_path_users() { echo probe >> "$HOME/ccd-calls"; ${opts.delay ? `sleep ${opts.delay};` : ''} return 1; };`
+      + ' t0=$EPOCHREALTIME; _ws_reclaim_tmproot_quiet "$HOME/.cc-tmp/x"; rc=$?; t1=$EPOCHREALTIME;'
+      + ' printf \'%s %s\' "$rc" "$(( (${t1/[.,]/} - ${t0/[.,]/}) / 1000 ))"');
+    const [rc = '', ms = ''] = out.split(' ');
+    return { rc, ms: Number(ms) };
+  };
+
+  it('a user that never leaves: the wait sits out its bound, and overruns it by no more than one sleep', () => {
+    const { rc, ms } = neverLeaves();
+    expect(rc).toBe('1');
+    expect(ms, 'it sat out the bound').toBeGreaterThanOrEqual(1_000);
+    expect(ms, 'never past the bound by more than a sleep (and slack)').toBeLessThan(1_000 + 250 + 1_500);
+    expect(probes().length, 'asked more than once').toBeGreaterThanOrEqual(2);
+    expect(probes().length, 'at most bound*4+1 asks').toBeLessThanOrEqual(5);
+  }, 60_000);
+
+  it('the CLOCK ends the wait: a probe that takes 0.3 s is asked fewer than bound*4+1 times', () => {
+    // Each ask and its sleep take at least 0.55 s, so a 1 s bound admits three asks at most. Only a
+    // wait the clock does not end reaches the count's fifth.
+    const { rc, ms } = neverLeaves({ delay: '0.3' });
+    expect(rc).toBe('1');
+    expect(ms, 'it sat out the bound').toBeGreaterThanOrEqual(1_000);
+    expect(probes().length, 'the clock, not the count, ended it').toBeLessThanOrEqual(4);
+  }, 60_000);
+
+  it('a clock that never advances cannot hold the wait: it ends after bound*4+1 asks', () => {
+    // `_plat_epoch_ms` stands still. After 40 reads it jumps ahead, and says so, so that a wait the
+    // count does not end still ends, and the case reds instead of hanging.
+    const FROZEN = '_plat_epoch_ms() { echo x >> "$HOME/clock-reads";'
+      + ' if (( $(wc -l < "$HOME/clock-reads") > 40 )); then echo clock-escape >> "$HOME/ccd-calls"; printf 9999999999999;'
+      + ' else printf 1000000000000; fi; };';
+    const { rc } = neverLeaves({ pre: FROZEN });
+    expect(rc).toBe('1');
+    expect(h.calls(), 'the count ended it, not the escape').not.toContain('clock-escape');
+    expect(probes()).toHaveLength(5);
+  }, 60_000);
 });
 
 describe('the tail', () => {
@@ -80,10 +122,30 @@ describe('the tail', () => {
     expect(fs.existsSync(leafOf(CHILD_ID)), 'nobody: the helper removed it').toBe(false);
   }, 90_000);
 
-  it('a probe that answers UNMEASURED keeps the temp root; the act completes and says why', () => {
+  /** A probe's reason its own cleaning lets through (it cleans C0 and DEL in a path, never bytes 0x80-0xFF,
+   *  and caps nothing): a tab, a byte 0xFF, and 400 more of those. Raw, each 0xFF reaches the encoder as
+   *  U+FFFD, six bytes of `\ufffd`, and the row outgrows the journal's line cap. */
+  const dirtyWhy = (head: string): string =>
+    `_WS_PATH_USERS_WHY="${head}"$'\\t\\xff'"$(printf '\\xff%.0s' {1..400})"`;
+  /** The kept reason on the done row: ONE short clean line, and the row keeps its `meas`. */
+  const cleanReason = (done: Record<string, unknown>, word: string): string => {
+    expect(done['truncated'], 'the row was never cut down to fit').toBeUndefined();
+    expect(measOf(done)['childOf'], 'the row keeps its meas').toBe(String(CHILD_RUN));
+    expect(measOf(done)['tip'], 'the row keeps its meas').toMatch(/^[0-9a-f]{40}$/);
+    const detail = String(done['detail']);
+    const head = `temp root ${leafOf(CHILD_ID)} kept (${word}): `;
+    expect(detail.startsWith(head), detail).toBe(true);
+    const why = detail.slice(head.length);
+    expect(why.endsWith('…'), 'a cut is marked').toBe(true);
+    expect(why.slice(0, -1), 'printable ASCII only').toMatch(/^[ -~]*$/);
+    expect(Buffer.byteLength(why.slice(0, -1), 'utf8'), 'cut at 300 bytes').toBeLessThanOrEqual(300);
+    return why;
+  };
+
+  it('a probe that answers UNMEASURED keeps the temp root; the act completes and says why, as one short clean line', () => {
     const c = makeChild(h);
     fs.mkdirSync(path.join(leafOf(CHILD_ID), 'cdk.out'), { recursive: true });
-    const pre = "CCD_RECLAIM_TMPROOT_WAIT_S=1; _ws_path_users() { _WS_PATH_USERS_PIDS=''; _WS_PATH_USERS_WHY='stub: not measured'; return 2; };";
+    const pre = `CCD_RECLAIM_TMPROOT_WAIT_S=1; _ws_path_users() { _WS_PATH_USERS_PIDS=''; ${dirtyWhy('stub: not measured')}; return 2; };`;
     const r = childReclaimVerb(h, evalOf(h).token, { pre });
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
@@ -92,6 +154,46 @@ describe('the tail', () => {
     const done = doneOf('reclaim');
     expect(measOf(done)['tmpRootKept']).toBe('unmeasured');
     expect(String(done['detail'])).toContain('stub: not measured');
+    const why = cleanReason(done, 'unmeasured');
+    expect(why.startsWith('stub: not measured??'), why).toBe(true);
+  }, 90_000);
+
+  it('a probe that answers IN USE keeps the temp root; its reason reaches the row as one short clean line', () => {
+    makeChild(h);
+    fs.mkdirSync(path.join(leafOf(CHILD_ID), 'cdk.out'), { recursive: true });
+    const pre = `CCD_RECLAIM_TMPROOT_WAIT_S=0; _ws_path_users() { _WS_PATH_USERS_PIDS=4242; ${dirtyWhy('stub: in use')}; return 1; };`;
+    const r = childReclaimVerb(h, evalOf(h).token, { pre });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
+    expect(fs.existsSync(path.join(leafOf(CHILD_ID), 'cdk.out')), 'kept').toBe(true);
+    const done = doneOf('reclaim');
+    expect(measOf(done)['tmpRootKept']).toBe('in-use');
+    const why = cleanReason(done, 'in-use');
+    expect(why.startsWith('still in use after the bounded wait - stub: in use??'), why).toBe(true);
+  }, 90_000);
+
+  it('a clock that never advances cannot hold the tail: the wait ends after bound*4+1 asks, and the temp root is kept', () => {
+    makeChild(h);
+    fs.mkdirSync(leafOf(CHILD_ID), { recursive: true });
+    // The clock stands still for the WAIT alone; every other reader gets the real one. After 40 reads
+    // it jumps ahead, and says so, so that a wait the count does not end still ends, and the case reds.
+    const pre = 'CCD_RECLAIM_TMPROOT_WAIT_S=1;'
+      + ' eval "_t_epoch_real()$(declare -f _plat_epoch_ms | tail -n +2)";'
+      + ' _plat_epoch_ms() { [[ "${FUNCNAME[1]}" == _ws_reclaim_tmproot_quiet ]] || { _t_epoch_real; return; };'
+      + ' echo x >> "$HOME/clock-reads";'
+      + ' if (( $(wc -l < "$HOME/clock-reads") > 40 )); then echo clock-escape >> "$HOME/ccd-calls"; printf 9999999999999;'
+      + ' else printf 1000000000000; fi; };'
+      + ' _ws_path_users() { echo "probe ${FUNCNAME[1]}" >> "$HOME/ccd-calls";'
+      + " _WS_PATH_USERS_PIDS=4242; _WS_PATH_USERS_WHY='stub: in use'; return 1; };";
+    const r = childReclaimVerb(h, evalOf(h).token, { pre });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
+    expect(h.calls(), 'the count ended the wait, not the escape').not.toContain('clock-escape');
+    expect(probes().filter((l) => l === 'probe _ws_reclaim_tmproot_quiet'), 'bound*4+1 asks (Darwin: one)')
+      .toHaveLength(LINUX ? 5 : 1);
+    expect(probes().filter((l) => l === 'probe _ws_reclaim_tail'), 'step (6) asked once more').toHaveLength(1);
+    expect(fs.existsSync(leafOf(CHILD_ID)), 'kept').toBe(true);
+    expect(measOf(doneOf('reclaim'))['tmpRootKept']).toBe('in-use');
   }, 90_000);
 
   it.each(['link', 'file'] as const)('a %s leaf is no one’s temp root: never kept for its users — unlinked on every platform, its target untouched', (shape) => {
@@ -165,10 +267,24 @@ describe.skipIf(!LINUX)('real stragglers (Linux /proc)', () => {
     fs.mkdirSync(leaf, { recursive: true });
     fs.writeFileSync(path.join(leaf, 'scratch'), 'kept');
     const s = hold({ cwd: h.home, tmpdir: leaf });
-    const t0 = Date.now();
-    const r = childReclaimVerb(h, evalOf(h).token, { pre: 'CCD_RECLAIM_TMPROOT_WAIT_S=2;' });
-    expect(Date.now() - t0, 'the tail sat out its bound').toBeGreaterThanOrEqual(2_000);
+    // The WAIT is timed, never the verb (which alone takes longer than the bound): the real probe is
+    // wrapped, and each ask logs its caller and the clock as it starts and as it ends.
+    const TIMED = 'eval "_t_path_users_real()$(declare -f _ws_path_users | tail -n +2)";'
+      + ' _ws_path_users() { local r; echo "probe-start ${FUNCNAME[1]} $(_plat_epoch_ms)" >> "$HOME/ccd-calls";'
+      + ' _t_path_users_real "$@"; r=$?; echo "probe-end ${FUNCNAME[1]} $(_plat_epoch_ms)" >> "$HOME/ccd-calls"; return $r; };';
+    const r = childReclaimVerb(h, evalOf(h).token, { pre: `CCD_RECLAIM_TMPROOT_WAIT_S=2; ${TIMED}` });
     expect(r.code, r.stdout + r.stderr).toBe(0);
+    const asks = probes().map((l) => { const [kind = '', fn = '', t = ''] = l.split(' '); return { kind, fn, t: Number(t) }; });
+    const at = (fn: string, kind: string): number[] => asks.filter((e) => e.fn === fn && e.kind === kind).map((e) => e.t);
+    const qS = at('_ws_reclaim_tmproot_quiet', 'probe-start');
+    const qE = at('_ws_reclaim_tmproot_quiet', 'probe-end');
+    const step6 = at('_ws_reclaim_tail', 'probe-start');
+    expect(qS.length, 'the tail waited: it asked from the wait').toBeGreaterThanOrEqual(1);
+    expect(qE.at(-1)! - qS[0]!, 'the wait sat out its bound').toBeGreaterThanOrEqual(2_000 - 200);
+    expect(qS.at(-1)! - qS[0]!, 'no ask of the wait began past the bound (and one sleep, and slack)')
+      .toBeLessThan(2_000 + 250 + 1_500);
+    expect(step6, 'step (6) asked once more').toHaveLength(1);
+    expect(step6[0]!, 'after the wait').toBeGreaterThanOrEqual(qE.at(-1)!);
     expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
     expect(fs.existsSync(c.wt), 'worktree').toBe(false);
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'branch').toBe('');
