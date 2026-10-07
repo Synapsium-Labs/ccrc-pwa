@@ -22,7 +22,7 @@ removed on 2026-09-10 was not.
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **deployed** v0.0.33 (`1ffdf947`, merged 2026-09-28 16:14 UTC, rolled out 16:16–16:21, fleet box first, rc 0; run 148 on `plain-summit`; reviews 170, 171, 172). Live: run 148's close reclaimed `plain-summit` in 10 s |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 | **done** — accepted by convergence review run 258 on `f8f0af9a`; merged as `b40f4145` 2026-10-04 22:10; release v0.0.79 |
 | 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | #290 | **deployed** v0.0.105 (`b27fabc15`, merged 2026-10-06 18:50; both boxes current by 19:04, through the updater); run 260 closed 19:05; reviews 285 and 303 (scoped, after fix round 1: no defect) |
-| 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | — | **dispatched** 2026-10-06 18:51 — run 291 → `ccrc-pwa-amber-river`; its 24-number block (listed singly in the brief below); plan `2026-10-06-child-reclamation-wave6-reclaim-repairs.md` (planSha `26e3318b`) + contract §12, with review 303's Task 13 additions |
+| 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **in review** — run 291 (`ccrc-pwa-amber-river`) wave-done verified 2026-10-07 21:57 at `8c0f2cd94`; departures numbered in the 21:57 decision; review run follows |
 | 7 | the temp-root collector verb, inert (R57): audit + token, destructive verb, cap token, agent grant, entry guard; witness-matched, slug-free, unused, idle 24 h, twice observed | **AGENT-FIRST** | — | **to plan**: its own run, block and pre-flight |
 | 8 | the collector's server lane (R58), after workspace-lifecycle wave 3b merges and the fleet advertises wave 7's token; SAFETY and SECURITY lenses | server | — | **to plan** |
 
@@ -46,6 +46,27 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-07 21:57 — wave 6's wave-done (3938) is verified; run 291 is at `awaiting-review`; the departures are
+  numbered.**
+  - **The claim, re-measured.** `ws/amber-river` at `8c0f2cd94` is PR #326's head, and the PR is open. The branch
+    carries #290 and one merge of main (`4e4d47bea`, after #312). `git merge-tree` against main `3c33d3218` is clean.
+    CI is running.
+  - **The run.** `advance` moved run 291 through `working` to `awaiting-review`. Its 15 items are settled done.
+  - **The suite.** `red`, failure `shallow`:
+    - two static-scan breaks, both fixed on the branch;
+    - `tmp-sweep` FAILS CLOSED, red on main;
+    - load flakes green in isolation (`boot`, `ccrc-codex`, `ccd-spawn-split`, `session-hook`);
+    - agent 465 and pwa 3446, green.
+  - **Numbers.** The worker named 37 slugs. Each substantive departure has its own number: 4126 and 4127 (ruled at
+    dispatch), and 4128, 4129, 4130, 4131, 4132, 4133, 4134, 4135 and 4136 (fail-closed additions). Each task's
+    plan-text corrections share one number: 4137, 4138, 4139, 4140, 4141, 4142, 4143, 4144, 4145, 4146 and 4147.
+    4148 and 4149 are reserve. The table is `ccr15-evidence-archive/wave6-done/deviation-numbers.md`. Each number is
+    defined in the plan at the fix round.
+  - **For workspace-lifecycle (X2, item 8).** `_ws_expire_locked` has no recompute-to-pin branch-state check, so
+    `ws-expire` keeps that window in both directions. This goes to quiet-river.
+  - **Two wave-3 defects found by wave 6's reviews** go to wave 7's pre-flight:
+    - rung 8 reads git's silent omission of an unreadable gitdir or `worktrees/` as "no record";
+    - the ladder's `_WS_NORMALISE_WHY` refusal detail is uncapped.
 - **2026-10-07 16:47 — the operator's fleet disk cleanup reaches CCR-15 (ops notice 3890; no reply wanted).**
   - **What it did here.** It removed reclaim-row-placement-safety's review scratch and run 174's
     `swift-hollow` scratch directory. It hand-ran `ws-expire` on four archived, unmarked
