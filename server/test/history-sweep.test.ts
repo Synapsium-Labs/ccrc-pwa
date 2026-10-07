@@ -276,6 +276,25 @@ describe('the sweep: skeleton, store open and refusals, and the shim', () => {
     expect(counters(box)['store_creation_completed']).toBe(1);
   });
 
+  it('D-4301 (DM17 through the pass): a finish-pending store at a newer schema is refused before the pending rename: marker left, nothing written', () => {
+    const box = makeHistoryBox('ccrc-history-sweep-');
+    const P = historyPaths(box.home);
+    const child = createKilledAt(box, 'renameSync:store.id.pending:2');
+    expect(child.signal, String(child.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.storeId)).toBe(false);
+    const raw = new DatabaseSync(P.dbFile);
+    raw.exec('PRAGMA user_version = 2');
+    raw.close();
+    const pending = fs.readFileSync(P.pending, 'utf8');
+    const mtime = mtimeNs(P.dbFile);
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(5);
+    expect(lines(r.stdout)).toEqual(['history-sweep: schema-newer']);
+    expect(fs.existsSync(P.storeId), 'finishPending waits for the peek').toBe(false);
+    expect(fs.readFileSync(P.pending, 'utf8')).toBe(pending);
+    expect(mtimeNs(P.dbFile)).toBe(mtime);
+  });
+
   it('history-off: the shim ends a scheduled pass silently, and sweep.mjs itself says off — neither creates a store', () => {
     const box = makeHistoryBox('ccrc-history-sweep-');
     fs.writeFileSync(historyPaths(box.home).off, '');

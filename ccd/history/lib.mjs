@@ -49,6 +49,9 @@ const REASON_ROWS = [
     'probe-failed', 'store-zero-byte', 'store-schema-missing', 'store-root-dangling', 'store-missing',
     'store-mismatch', 'store-unbound', 'store-unreachable', 'store-unmeasured', 'store-recoverable',
     'store-wal-orphaned', 'store-not-wal', 'migration-pending',
+    // `schema-newer` (Task 24): the newer-schema refusal of a WRITING pass — a scheduled pass prints it and exits 5,
+    // and an `--op import` relays it; the CLI never needs it, because it reads a newer store (G9). Plan-chosen word.
+    'schema-newer',
   ]],
   [EXIT.FTS_UNAVAILABLE, ['fts5-absent', 'fts-pending']],
 ];
@@ -184,7 +187,7 @@ export const PASS_WORDS = Object.freeze([
   'store-create-refused-role', 'store-unreachable', 'journal-unwritable', 'store-recoverable',
   'store-wal-orphaned', 'store-missing', 'store-mismatch', 'store-unbound', 'store-unmeasured',
   'store-root-dangling', 'store-zero-byte', 'store-schema-missing', 'store-not-wal', 'schema-newer', 'migration-refused',
-  'migration-needs-op', 'held', 'off',
+  'migration-needs-op', 'held', 'off', 'migrated',
 ]);
 /** Every durability word `status --json` reports and doctor's `_check_history`
  *  prints (§9.6, O14), with its class. Plan-chosen spellings of conditions the
@@ -1759,6 +1762,7 @@ export function passOutcome(word) {
     case 'store-unreachable':
     case 'journal-unwritable':
       return { word, exit: EXIT.OK };
+    case 'migrated':             // a pass that migrated did its whole work (Task 24)
     case 'migration-refused':
     case 'migration-needs-op':   // waits on the operator, but doctor carries it, not the exit
       return { word, exit: EXIT.OK };

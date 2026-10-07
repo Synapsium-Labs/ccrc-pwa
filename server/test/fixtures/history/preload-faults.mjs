@@ -160,3 +160,49 @@ import { DatabaseSync as DatabaseSyncF23 } from 'node:sqlite';
     };
   }
 }
+
+// ── Task 24: statement-level kills (DM42, O34) ──────────────────────────────────────────────────
+// HISTORY_TEST_KILL_SQL=<substring>: when a prepared statement whose SQL contains <substring> runs
+//   (run, get or all), first write the 7 bytes `partial` to its first string argument that names a path
+//   under HOME — the file an interrupted VACUUM INTO had begun — then SIGKILL this process.
+// HISTORY_TEST_KILL_AFTER_COMMIT=<synchronous>:<nth>: SIGKILL right AFTER the nth COMMIT that ran under
+//   PRAGMA synchronous = <synchronous> (2 = FULL): a crash between a durable commit and its next step.
+// Both patch DatabaseSync.prototype, so every connection the target opens is covered; withTx issues
+// BEGIN IMMEDIATE and COMMIT through exec, as server/src/coord/db.ts:245-257's tx does.
+import fsK24 from 'node:fs';
+import { DatabaseSync as DatabaseSyncK24 } from 'node:sqlite';
+{
+  const killSql = process.env.HISTORY_TEST_KILL_SQL ?? '';
+  const [afterSync, afterNth] = (process.env.HISTORY_TEST_KILL_AFTER_COMMIT ?? '').split(':');
+  const proto = DatabaseSyncK24.prototype;
+  const realPrepare = proto.prepare;
+  const realExec = proto.exec;
+  const home = process.env.HOME ?? '\0';
+  if (killSql !== '') {
+    proto.prepare = function prepareK24(sql) {
+      const st = realPrepare.call(this, sql);
+      if (!String(sql).includes(killSql)) return st;
+      for (const m of ['run', 'get', 'all']) {
+        st[m] = (...args) => {
+          const target = args.find((a) => typeof a === 'string' && a.startsWith(`${home}/`));
+          if (target !== undefined) fsK24.writeFileSync(target, 'partial');
+          process.kill(process.pid, 'SIGKILL');
+        };
+      }
+      return st;
+    };
+  }
+  if (afterSync) {
+    let seen = 0;
+    proto.exec = function execK24(sql) {
+      const commit = /^\s*COMMIT\b/i.test(String(sql));
+      const sync = commit ? realPrepare.call(this, 'PRAGMA synchronous').get().synchronous : null;
+      const r = realExec.call(this, sql);
+      if (commit && String(sync) === afterSync) {
+        seen += 1;
+        if (seen === Number(afterNth)) process.kill(process.pid, 'SIGKILL');
+      }
+      return r;
+    };
+  }
+}

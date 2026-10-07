@@ -29,10 +29,10 @@ import fs, {
   readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  CARRIER_KILL_S, EXIT, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
+  CARRIER_KILL_S, EXIT, SCHEMA_ADDED, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
   UUID_RE, WRITER_RE, drainingNameOk, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
   passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText,
@@ -43,8 +43,9 @@ import {
   SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, ftsPhrase, redactField,
 } from './lib.mjs';
 import {
-  StoreError, bump, closeWriter, createStore, dropPending, finishPending, getMeta, measureStoreFacts, openReader,
-  openWriter, readAttempts, removeStaleTemps, setMeta, syncWriterMirror, userVersion, withTx,
+  MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
+  measureStoreFacts, measuredSize, openReader, openWriter, readAttempts, removeStaleTemps, runMigration, setMeta,
+  syncWriterMirror, userVersion, withTx,
   CODEC, brotli, unbrotli, compressFdRange, probeFts5, createFtsTables,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
@@ -94,33 +95,6 @@ export async function statfsWithDeadline(p, ms, statfs = (q) => fs.promises.stat
   } finally {
     clearTimeout(timer);
   }
-}
-
-/** The role this box records, read as doctor's `_check_skills` reads it: a
- *  regular readable file, one key, `_box_env_value`'s rules (readBoxEnvValue,
- *  pinned to it by O53). Absent or unreadable is "not server", as there. A
- *  server box never gets a store, even from a shim a re-role left behind
- *  (D-4222, D-4183). */
-function recordedRole(ccrcEnv) {
-  let text;
-  try {
-    if (!statSync(ccrcEnv).isFile()) return '';
-    text = readFileSync(ccrcEnv, 'utf8');
-  } catch {
-    return '';
-  }
-  const r = readBoxEnvValue(text, 'CCRC_ROLE');
-  return r.found ? r.value : '';
-}
-
-/** What the probe runs on: db/ itself when it exists (a link is followed by
- *  statfs), else the nearest existing ancestor — the filesystem a first
- *  creation will put db/ on. Every path here is on the home filesystem. */
-function probeTarget(P, home) {
-  for (const d of [P.dbDir, P.root, `${home}/.ccrc`, home]) {
-    try { lstatSync(d); return d; } catch { /* the next one up */ }
-  }
-  return home;
 }
 
 /** The cap file's text, or null when absent. An unreadable file is the empty
@@ -1414,6 +1388,14 @@ export async function tick(db, ctx) {
   // an unreadable roster discovers nothing, as Task 18's line did (§9.2 step 2). The ingest probes the
   // free-space floor on db/ before every chunk (§9.3, BK17).
   // §9.2 steps 2-5 and 7: one budget for the run; a busy store ends the tick (O22).
+  // §9.2 / §9.3 (Task 24): under a cap or floor pause ONLY ingest pauses — the drain above, the
+  // confirmations and the tick row below still run, so epoch confirmation stays timely and the lag
+  // series has no hole. The re-index above and the merge steps below run under any pause: a learned
+  // pair's re-index obligation is durable (meta fts_reindex_rid), so a tick that cannot index leaves it
+  // to the next tick that can, and a merge step frees space rather than takes it. The FTS backfill is
+  // held with ingest, and when Task 19's per-chunk floor stopped this run's ingest (ing.paused): it
+  // grows db/, which a store at its cap or a volume at its floor must not take
+  // (D-4242).
   const ing = ctx.ingest && !ctx.rosterUnreadable ? await ingestTick(db, ictx, ctx.budget) : null;
   if (ing !== null && ing.busy) return;   // the write lock is another's: nothing more this tick
   // §6.2 epochs: launch facts an epoch chained after its transcript's first chunk missed (plan task 20).
@@ -1434,141 +1416,362 @@ export async function tick(db, ctx) {
   if (ctx.parsed.rosterUnreadable) bump(db, 'roster_unreadable');
 }
 
-/** One pass. Resolves to its exit code (§13's EXIT; a scheduled pass's 0/5 from
- *  `passOutcome`). The home is `deps.home` when a caller injects one (an
- *  in-process test passes its fixture HOME), else $HOME — this file's one read
- *  of the environment — and it must be an absolute path, or nothing is swept
- *  and the pass exits 1 (integration contract 4). */
+// ── THE PASS (Task 24) ────────────────────────────────────────────────────────────────────────────
+// One composition for the run, the pause and the hold (spec §9.2 "The order of a tick", §9.3, §9.14
+// "Holds", §6.11; D-4224, slug history-tick-order). A scheduled pass decides in this order, and an earlier
+// answer ends it:
+//   history-off (§9.7) → the recorded role (§6.9) → the free-space probe, which is ALSO the
+//   reachability probe and therefore runs before anything stats the volume (§9.3; slug
+//   history-store-unreachable) → the binding (decideStoreOpen) → stale temps → create / finish /
+//   open → a newer schema, refused with NO write (G9, DM17) → WAL (store-not-wal, §6.2) → the outbox,
+//   first and outside the budget (§9.14) → the migration verdict (§6.11) → planRun's arm: migrate,
+//   hold, or run with its cap or floor pause → the tick.
+// "The journal half runs whenever the drain cannot" (§9.2; D-4231, slug history-journal-observation-sidecar):
+// every hold renames, observes and journals the spool with the two names read from store.id and
+// store.writer ON THE HOME FILESYSTEM, never from meta (DI5; D-4220, slug history-store-writer-file), so a held
+// startup line keeps the registry facts of its rename (O46). Under a cap or floor PAUSE only ingest
+// stops; the drain and its journal append still run, so epoch confirmation stays timely (§9.2).
+
+/** Bytes of a file, trimmed, or null when it cannot be read. */
+function readTrimmed(p) {
+  try { return readFileSync(p, 'utf8').trim(); } catch { return null; }
+}
+
+/** A directory's entry names, or [] when it cannot be listed. */
+function listNames(dir) {
+  try { return readdirSync(dir); } catch { return []; }
+}
+
+/** The journal's two names, read ONLY from the home filesystem (§9.14, DI5): store.id and store.writer.
+ *  Either missing or off its grammar → null, and the journal half then observes only (§9.10 "Writer token"). */
+export function idsFromFiles(P) {
+  const storeId = readTrimmed(P.storeId);
+  const writer = readTrimmed(P.writer);
+  if (storeId === null || !UUID_RE.test(storeId) || writer === null || !WRITER_RE.test(writer)) return null;
+  return { storeId, writer };
+}
+
+/** CCRC_ROLE exactly as doctor's _check_skills reads it (ccd/ccrc-doctor-checks:3016): a regular, readable
+ *  file, one key, readBoxEnvValue's rules (pinned to _box_env_value by O53). Anything else is '' (not
+ *  server), as an absent key is. */
+export function readRole(P) {
+  let text;
+  try {
+    if (!statSync(P.ccrcEnv).isFile()) return '';
+    text = readFileSync(P.ccrcEnv, 'utf8');
+  } catch { return ''; }
+  const r = readBoxEnvValue(text, 'CCRC_ROLE');
+  return r.found ? r.value : '';
+}
+
+/** Where the free-space probe looks: db/ when the name exists (a dangling link included, whose probe
+ *  then throws and pauses while decideStoreOpen names the refusal), else the nearest existing ancestor,
+ *  so a first install measures the filesystem db/ is about to be made on. */
+export function probePath(P, home) {
+  for (const p of [P.dbDir, P.root, join(home, '.ccrc'), home]) {
+    try { lstatSync(p); return p; } catch { /* the next ancestor */ }
+  }
+  return home;
+}
+
+/** The stored user_version through a read-only handle: a newer store is refused before the writer's open,
+ *  which would set WAL and touch meta (G9, DM17: "no write"). */
+export function peekVersion(dbFile) {
+  const ro = openReader(dbFile);
+  try { return userVersion(ro); } finally { ro.close(); }
+}
+
+/** One counter's value, 0 when it has never been bumped. */
+export function counterOf(db, name) {
+  const row = db.prepare('SELECT n FROM counters WHERE name = ?').get(name);
+  return row === undefined ? 0 : row.n;
+}
+
+/** A scheduled pass's exit for a hold word: 5 for a refusal that waits on the OPERATOR (a binding refusal, a
+ *  newer schema, a store that will not take WAL), 0 for a hold that waits on the world (an unreachable volume,
+ *  a migration held for room or time, a writer token still to come). The rule is lib's passOutcome (Task 14,
+ *  L1), never a second list here: this L4 file only applies it. */
+export function holdExit(word) {
+  return passOutcome(word).exit;
+}
+
+/** The journal half (§9.2), its failure made a value: true when the append or its fsync failed. The
+ *  held files stay in .draining/ with their sidecars either way; nothing is lost. */
+export function runJournalHalf(home, ids, now) {
+  try {
+    // Task 16's journalHalf reports a failed append as `journalFailed` (it stops journaling and holds the
+    // rest); it throws a JournalError only from a step outside that loop. Both are a failure here.
+    return journalHalf(home, ids, now()).journalFailed === true;
+  } catch (e) {
+    if (e instanceof JournalError) return true;
+    throw e;
+  }
+}
+
+/** A hold: the journal half, the word, and its exit. Under a hold no DB is open, so nothing is counted
+ *  (IV2): the word on stdout is the pass's whole record, and journal-unwritable joins it when the append
+ *  failed too (§9.10 "Journal append"). */
+export function holdPass(home, P, word, now, out) {
+  const unwritable = runJournalHalf(home, idsFromFiles(P), now);
+  out(`history-sweep: ${word}`);
+  if (unwritable) out('history-sweep: journal-unwritable');
+  return holdExit(word);
+}
+
+/** The journal half's outcome on a pass that HAS a DB open (a migration hold, the migrate arm): a failed append
+ *  is counted and recorded exactly as the tick's own (§9.10 "Journal append": journal_write_failed +1, doctor
+ *  FAIL through meta journal_unwritable), so a hold for room — when ENOSPC on the journal is likeliest — is never
+ *  silent to doctor. IV2's "nothing is counted" is for the holds with no DB open (holdPass). */
+export function noteJournalHalf(db, unwritable, now, out) {
+  if (unwritable) {
+    bump(db, 'journal_write_failed');
+    setMeta(db, 'journal_unwritable', String(now()));
+    out('history-sweep: journal-unwritable');
+  } else {
+    setMeta(db, 'journal_unwritable', '');
+  }
+}
+
+/** The store open a scheduled and an --op pass share (§6.2, §6.9): the binding verdict, stale temps,
+ *  creation, the version peek, the pending finish and WAL. It writes nothing but stale-temp removal, and
+ *  creates only on `create`, before the peek says this build may; the pending finish waits for it (a newer
+ *  store with a pending marker is refused with the marker left and nothing written: DM17, D-4301
+ *  history-newer-store-refused-before-finish-pending). It answers {word} for every refusal. */
+export function openStore(home, P, role, deps) {
+  const facts = measureStoreFacts(home, role);
+  let verdict = decideStoreOpen(facts);
+  if (verdict.act === 'refuse') return { word: verdict.word };
+  // removeStaleTemps propagates any readdir failure but an absent db/ (D-4305): the pass fails loudly, never folded.
+  removeStaleTemps(home);
+  if (verdict.act === 'drop-pending-create') {
+    dropPending(home);
+    verdict = { act: 'create' };
+  }
+  if (verdict.act === 'create') createStore(home);
+  const code = (deps.migrations ?? MIGRATIONS).length;
+  let stored;
+  try {
+    stored = peekVersion(P.dbFile);
+  } catch (e) {
+    if (e instanceof StoreError) return { word: e.word };
+    throw e;
+  }
+  if (stored > code) return { word: 'schema-newer' };
+  if (verdict.act === 'finish-pending') finishPending(home);
+  let db;
+  try {
+    db = openWriter(P.dbFile);
+  } catch (e) {
+    if (e instanceof StoreError) return { word: e.word };
+    throw e;
+  }
+  if (verdict.act === 'finish-pending') bump(db, 'store_creation_completed');
+  syncWriterMirror(db, home);
+  return { db, stored, code, ids: idsFromFiles(P) };
+}
+
+/** First, the outbox (§9.14): rows a crash left are appended and fsynced before anything else, outside
+ *  the budget. A failed append keeps them for the next pass and is counted, never thrown. */
+export function flushFirst(db, home, ids, now) {
+  try {
+    flushOutbox(db, home, ids, now());
+    return true;
+  } catch (e) {
+    if (!(e instanceof JournalError)) throw e;
+    bump(db, 'journal_write_failed');
+    return false;
+  }
+}
+
+/** planMigration's inputs, measured (§6.11; D-4182 history-pre-migration-snapshot, D-4180 history-migrate-verb): the stored and code versions, this pass's free space and the
+ *  floor's threshold, the store's size, the pass's wall-clock bound (CARRIER_KILL_S for a scheduled pass,
+ *  null for --op migrate, which runs under no carrier), the last full copy's rate (meta copy_bps), the
+ *  interrupted attempts, and whether any pending version is heavy. An unmeasured free space admits no
+ *  copy: freeBytes 0 against an unreachable threshold answers refuse-low-disk. */
+export function migrationVerdict(db, home, P, o) {
+  if (o.stored === o.code) return 'none';
+  let heavy = false;
+  for (let v = o.stored + 1; v <= o.code; v += 1) if (o.schemaAdded[v]?.heavy === true) heavy = true;
+  const bps = Number(getMeta(db, 'copy_bps'));
+  const measured = o.free.state === 'ok';
+  return planMigration({
+    stored: o.stored,
+    code: o.code,
+    freeBytes: measured ? o.free.bytes : 0,
+    thresholdBytes: measured ? floorThreshold(o.free.fsSize) : Number.MAX_SAFE_INTEGER,
+    sizeBytes: o.sizeBytes,
+    boundS: o.boundS,
+    copyBps: Number.isFinite(bps) && bps > 0 ? bps : null,
+    attempts: readAttempts(home, o.code),
+    heavy,
+  });
+}
+
+/** §9.10 "Mode drift" (O23): every store FILE found other than 0600 — the DB with its -wal and -shm (through
+ *  db/'s link), backups/*, journal/<store_id>/* — is chmodded back and counted mode_drift. A symlink is
+ *  never followed into a chmod. Directories are never chmodded here: a directory other than 0700, db/'s
+ *  link target included, is doctor's FAIL to name through status (§9.3, §9.6), because a mode the
+ *  operator set on a volume is not this writer's to undo. */
+export function fixModes(db, P) {
+  const files = [P.dbFile, P.wal, P.shm];
+  for (const n of listNames(P.backups)) files.push(join(P.backups, n));
+  for (const s of listNames(P.journalDir)) for (const n of listNames(join(P.journalDir, s))) files.push(join(P.journalDir, s, n));
+  let fixed = 0;
+  for (const f of files) {
+    let st;
+    try { st = lstatSync(f); } catch { continue; }
+    if (!st.isFile() || (st.mode & 0o777) === 0o600) continue;
+    try {
+      chmodSync(f, 0o600);
+      fixed += 1;
+    } catch { /* left for doctor's mode check */ }
+  }
+  if (fixed > 0) bump(db, 'mode_drift', fixed);
+  return fixed;
+}
+
+/** The context every tick step receives (Tasks 14–23 read these names; Task 26's census too). `pause` is
+ *  planRun's ('at-cap' | 'low-disk' | null) and `ingest` its verdict on whether this pass may ingest;
+ *  `budget` is the ONE run budget, Task 19's newBudget, never reset per file (§9.2 step 7). `parsed` stays
+ *  for Task 14's own tick lines (`ctx.parsed.rosterUnreadable`, `ctx.parsed.secrets`). */
+export function passCtx(o) {
+  return {
+    home: o.home,
+    paths: o.P,
+    parsed: o.parsed,
+    ids: o.ids,
+    now: o.now,
+    out: o.out,
+    deps: o.deps,
+    homes: o.parsed.homes,
+    secretFiles: o.parsed.secrets,
+    rosterUnreadable: o.parsed.rosterUnreadable,
+    pause: o.pause,
+    ingest: o.ingest,
+    budget: newBudget(o.now),
+  };
+}
+
+/** One scheduled pass (no --op). Returns its exit: 0 for a run, a pause or a hold; 5 for a refusal. */
+export async function scheduledPass(parsed, deps, out) {
+  const home = deps.home;
+  const P = historyPaths(home);
+  const now = deps.now ?? Date.now;
+  if (existsSync(P.off)) {
+    out('history-sweep: off');
+    return EXIT.OK;
+  }
+  const role = readRole(P);
+  if (role === 'server') {
+    out('history-sweep: store-create-refused-role');
+    return EXIT.OK;
+  }
+  // D-4179 (history-free-space-floor): the ONE probe before the tick. deps.statfs is Task 14's in-process seam; undefined leaves statfsWithDeadline's own default.
+  const free = await statfsWithDeadline(probePath(P, home), STATFS_DEADLINE_MS, deps.statfs);
+  if (free.state === 'unsettled') return holdPass(home, P, 'store-unreachable', now, out);
+  const opened = openStore(home, P, role, deps);
+  if ('word' in opened) return holdPass(home, P, opened.word, now, out);
+  const { db, stored, code, ids } = opened;
+  try {
+    if (ids === null) {
+      // §9.10 "Writer token": the DB opens but store.writer cannot name a journal file, so nothing may be
+      // drained (journal first) — the journal half observes only, until a binding writes the token.
+      runJournalHalf(home, null, now);
+      out('history-sweep: held');
+      return EXIT.OK;
+    }
+    const failedAtStart = counterOf(db, 'journal_write_failed');
+    flushFirst(db, home, ids, now);
+    clearDoneMarkers(home, stored);
+    const sizeBytes = (deps.measureSize ?? measuredSize)(db, P.dbFile);
+    const migration = migrationVerdict(db, home, P, {
+      stored, code, free, sizeBytes, boundS: CARRIER_KILL_S, schemaAdded: deps.schemaAdded ?? SCHEMA_ADDED,
+    });
+    // D-4166 (history-cap-file): the cap is the operator file. capText (Task 14): an unreadable cap file is '' — malformed, so the default applies AND doctor WARNs (§9.3).
+    const cap = capOf(capText(P.cap));
+    const run = planRun({ historyOff: false, store: { act: 'open' }, free, sizeBytes, capGb: cap.gb, migration, recovering: false });
+    if (run.arm === 'migrate') {
+      // §6.11: a pass that migrates does nothing else but the journal half; the drain resumes next tick
+      // against a store at this build's version.
+      runMigration(db, home, { verdict: migration, from: stored, to: code, migrations: deps.migrations ?? MIGRATIONS });
+      setMeta(db, 'migration', 'none');
+      const unwritable = runJournalHalf(home, ids, now);
+      out('history-sweep: migrated');
+      noteJournalHalf(db, unwritable, now, out);
+      return EXIT.OK;
+    }
+    if (run.arm !== 'run') {
+      // A migration refused for room or escalated as too long (§6.11): unlike at the cap the DRAIN stops
+      // too, because the writer never writes a store at an older version (§9.2). Counted on the open DB.
+      if (migration === 'refuse-low-disk') bump(db, 'migration_refused_low_disk');
+      if (migration === 'snapshot-needs-op') bump(db, 'migration_needs_op');
+      setMeta(db, 'migration', migration);
+      const word = run.holdWord ?? 'held';
+      const unwritable = runJournalHalf(home, ids, now);
+      out(`history-sweep: ${word}`);
+      noteJournalHalf(db, unwritable, now, out);
+      return holdExit(word);
+    }
+    setMeta(db, 'migration', migration);
+    setMeta(db, 'capture_pause', run.pause ?? '');
+    if (run.pause === 'at-cap') bump(db, 'capture_paused_at_cap');
+    if (run.pause === 'low-disk') bump(db, 'capture_paused_low_disk');
+    fixModes(db, P);
+    const ctx = passCtx({ home, P, ids, parsed, now, out, deps, pause: run.pause, ingest: run.ingest });
+    let busy = false;
+    try {
+      await tick(db, ctx);
+    } catch (e) {
+      // SQLITE_BUSY past busy_timeout (Task 20's isBusy) ends the tick: every step committed its own
+      // transaction, so nothing committed is lost, and the next tick retries (§9.10, O22). The tick's own last
+      // journal append (its `tick` record) failing ends the tick too; the drain's per-file failures were
+      // counted where they happened (Task 16). Nothing here is lost.
+      if (isBusy(e)) busy = true;
+      else {
+        if (!(e instanceof JournalError)) throw e;
+        bump(db, 'journal_write_failed');
+      }
+    }
+    // A tick that met the lock ends the pass's writing too: each write below would wait out busy_timeout again
+    // and then throw out of the pass, which O22 rules is the tick's end, not a failed pass. A lock met only here
+    // (an ingest that returned busy rather than throwing) ends them the same way, through the catch.
+    if (busy) return EXIT.OK;
+    try {
+      setMeta(db, 'journal_unwritable', counterOf(db, 'journal_write_failed') > failedAtStart ? String(now()) : '');
+    } catch (e) {
+      if (!isBusy(e)) throw e;
+    }
+    return EXIT.OK;
+  } finally {
+    closeWriter(db);
+  }
+}
+
+/** The sweep's entry: argv as the shim passes it. Task 25 replaces the --op line with the --op pass. The
+ *  home is `deps.home` when a caller injects one (in-process tests), else $HOME, and it must be absolute:
+ *  Task 14's rule, kept, so no caller reaches a relative or empty home (integration contract 4). The umask is
+ *  set for the pass and restored after it, as Task 14 did, so an in-process caller keeps its own. */
 export async function runPass(argv, deps = {}) {
   const home = deps.home ?? process.env.HOME;
   if (typeof home !== 'string' || !home.startsWith('/')) {
     process.stderr.write('history-sweep: HOME is not an absolute path; nothing was swept\n');
     return EXIT.INTERNAL;
   }
+  deps = { ...deps, home };
   const out = deps.out ?? ((line) => { process.stdout.write(`${line}\n`); });
-  const now = deps.now ?? Date.now;
-  const statfs = deps.statfs ?? ((p) => fs.promises.statfs(p));
   const prevUmask = process.umask(0o077);
   try {
     const parsed = parseSweepArgv(argv);
     if ('error' in parsed) {
+      // Task 14's one spelling of the argv grammar; its argv case pins `usage: sweep.mjs`.
       process.stderr.write(`history-sweep: ${USAGE}\n`);
-      return 2;
+      return EXIT.REFUSED;
     }
     if (parsed.op !== null) {
-      // The --op verbs arrive with their gate (§8.4; D-4181,
-      // D-4221); until a verb is wired, an op pass is
-      // refused whole, before it reads or writes anything.
-      out(JSON.stringify({ rc: 2, reason: 'bad-args' }));
-      return 2;
+      out(JSON.stringify({ rc: EXIT.REFUSED, reason: 'bad-args' }));
+      return EXIT.REFUSED;
     }
-    const P = historyPaths(home);
-    const say = (word) => { const o = passOutcome(word); out(`history-sweep: ${o.word}`); return o.exit; };
-
-    // history-off first (§9.2): before the role, before any probe, before the DB.
-    if (existsSync(P.off)) return say('off');
-    const role = recordedRole(P.ccrcEnv);
-
-    const free = await statfsWithDeadline(probeTarget(P, home), STATFS_DEADLINE_MS, statfs);
-    // A probe that never settled leaves db/ unmeasurable without risking a
-    // read that blocks for good on the dead volume: the pass ends here, with no
-    // DB opened (§9.3, O28) — doctor reads the same condition from the CLI.
-    // This is the pass's ONE statfs before its first ingest chunk; Task 19's
-    // HISTORY_TEST_STATFS_AFTER=1:… case counts on exactly one.
-    if (free.state === 'unsettled') return say('store-unreachable');
-
-    const facts = measureStoreFacts(home, role);
-    const store = decideStoreOpen(facts);
-    if (store.act !== 'refuse') removeStaleTemps(home);
-
-    let sizeBytes = 0;
-    let migration = 'none';
-    if (store.act === 'open' || store.act === 'finish-pending') {
-      sizeBytes = statSync(P.dbFile).size + (existsSync(P.wal) ? statSync(P.wal).size : 0);
-      let r;
-      try {
-        r = openReader(P.dbFile);
-      } catch (e) {
-        if (e instanceof StoreError) return say(e.word);
-        throw e;
-      }
-      let stored;
-      let copyBps = null;
-      try {
-        stored = userVersion(r);
-        const bps = Number(getMeta(r, 'copy_bps'));
-        if (Number.isFinite(bps) && bps > 0) copyBps = bps;
-      } finally {
-        r.close();
-      }
-      const fsSize = free.state === 'ok' ? free.fsSize : 0;
-      migration = planMigration({
-        stored, code: SCHEMA_VERSION, freeBytes: free.state === 'ok' ? free.bytes : 0,
-        thresholdBytes: floorThreshold(fsSize), sizeBytes, boundS: CARRIER_KILL_S, copyBps,
-        attempts: readAttempts(home, SCHEMA_VERSION), heavy: SCHEMA_ADDED[SCHEMA_VERSION]?.heavy ?? false,
-      });
-    }
-    const plan = planRun({
-      historyOff: false, store, free, sizeBytes, capGb: capOf(capText(P.cap)).gb, migration, recovering: false,
-    });
-    if (plan.arm !== 'run') {
-      // The journal half (§9.2): whenever the drain cannot run, rename, observe and, when store.id and
-      // store.writer both read, journal each spool file. Each file is held in .draining/ for the drain that
-      // follows the hold. Never on a server box, which spools nothing (§6.9); history-off never reaches here.
-      if (plan.holdWord !== 'store-create-refused-role') {
-        // store.id and store.writer as measured: both must be readable values of their grammars (StoreFacts).
-        const holdIds = facts.storeId.state === 'value' && facts.writer.state === 'value'
-          ? { storeId: facts.storeId.value, writer: facts.writer.value } : null;
-        const half = journalHalf(home, holdIds, now());
-        if (half.journalFailed) out('history-sweep: journal-unwritable');
-      }
-      return say(plan.arm === 'hold' ? plan.holdWord : 'held');
-    }
-
-    let finished = false;
-    if (store.act === 'drop-pending-create') dropPending(home);
-    if (store.act === 'create' || store.act === 'drop-pending-create') createStore(home);
-    if (store.act === 'finish-pending') { finishPending(home); finished = true; }
-
-    let db;
-    try {
-      db = openWriter(P.dbFile);
-    } catch (e) {
-      if (e instanceof StoreError) return say(e.word);
-      throw e;
-    }
-    try {
-      if (finished) bump(db, 'store_creation_completed');
-      syncWriterMirror(db, home);
-      // The journal's two names, read from the home filesystem AFTER the create/finish step, never from meta
-      // (§9.14; D-4220, slug history-store-writer-file). `facts` cannot supply them: it was measured before
-      // finishPending, when only store.id.pending held the id, so on the finish-pending arm it names no store.
-      const token = (p, re) => {
-        try { const v = readFileSync(p, 'utf8').trim(); return re.test(v) ? v : null; } catch { return null; }
-      };
-      const sid = token(P.storeId, UUID_RE);
-      const writer = token(P.writer, WRITER_RE);
-      const ids = sid !== null && writer !== null ? { storeId: sid, writer } : null;
-      if (ids === null) {
-        // store.writer (or store.id) cannot be read after the binding step, so no journal file can be named and
-        // nothing may be drained: journal first (§9.2). The journal half observes only, as for an unbound store,
-        // until a binding writes the token. Nothing is counted: this is a hold, not a failed append.
-        journalHalf(home, null, now());
-        return say('held');
-      }
-      try {
-        await tick(db, {
-          home, paths: P, parsed, plan, free, now,
-          ids, homes: parsed.homes, rosterUnreadable: parsed.rosterUnreadable, out, ingest: plan.ingest, budget: newBudget(now),
-        });
-      } catch (e) {
-        // §9.10: another connection held the write lock past busy_timeout. The tick ends; the next tick retries.
-        if (!isBusy(e)) throw e;
-      }
-    } finally {
-      closeWriter(db);
-    }
-    return 0;
+    return await scheduledPass(parsed, deps, out);
   } finally {
     process.umask(prevUmask);
   }
@@ -2850,18 +3053,15 @@ export function mergeSteps(db, ctx, budget) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
-  // The entry guard is ALWAYS the LAST statement of sweep.mjs, and nothing in
-  // this file awaits at top level. main() runs while this module is still
-  // evaluating (its synchronous part runs at the call), so a module-level
-  // const declared below this guard would still be uninitialised when the
-  // pass reads it: every block a later task adds to this file is inserted
-  // ABOVE this guard, never appended after it.
-  // The code is set as process.exitCode, and process.exit() then ends the
-  // process with it, never a drained event loop: an unsettled statfs keeps a
-  // threadpool request alive, and the pass must end at its deadline, not when
-  // the volume answers (O28). main() turns a throw into exit 1 itself; the
-  // .catch is the backstop for a rejection it could not report.
+  // The entry guard is ALWAYS the LAST statement of sweep.mjs, and nothing in this file awaits at top level.
+  // main() runs while this module is still evaluating (its synchronous part runs at the call), so a
+  // module-level const declared below this guard would still be uninitialised when the pass reads it: every
+  // block a later task adds to this file is inserted ABOVE this guard, never appended after it.
+  // The code is set as process.exitCode, and process.exit() then ends the process with it, never a drained
+  // event loop: an unsettled statfs keeps a threadpool request alive, and the pass must end at its deadline,
+  // not when the volume answers (O28). Writing '' first lets a piped stdout flush before the exit. main()
+  // turns a throw into exit 1 itself; the .catch is the backstop for a rejection it could not report.
   main()
-    .then((code) => { process.exitCode = code; process.exit(); })
+    .then((code) => { process.exitCode = code; process.stdout.write('', () => process.exit()); })
     .catch(() => { process.exitCode = EXIT.INTERNAL; process.exit(); });
 }

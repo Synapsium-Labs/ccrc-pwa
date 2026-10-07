@@ -226,3 +226,40 @@ export function journalRecords(box: HistoryBox): Array<Record<string, unknown>> 
   }
   return out;
 }
+
+// ── Task 24: the run-pass driver (injected deps; sweep.mjs reads no seam itself) ──────────────────
+/** The test-only driver that runs sweep.mjs's runPass in a child with injected deps. */
+export const PASS_DRIVER = path.join(REPO, 'server', 'test', 'fixtures', 'history', 'run-pass.mjs');
+/** What the driver injects. offsetMs/stepMs: the pass clock (Date.now() + offset + k·step on the k-th read);
+ *  sizeBytes: the store's measured size; extraMigrations: SQL appended to MIGRATIONS as v2, v3, …
+ *  (heavy: the versions marked heavy); managedSettings: the managed-settings list the census reads. */
+export interface DriverDeps {
+  offsetMs?: number; stepMs?: number; sizeBytes?: number;
+  extraMigrations?: string[]; heavy?: number[]; managedSettings?: string[];
+}
+export interface DriverResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }
+/** NODE_OPTIONS for these preloads, each as a file URL (Task 14's childEnv rule): NODE_OPTIONS splits on
+ *  whitespace, so a raw path with a space in it would split the option. */
+export function preloadOptions(paths: readonly string[]): string {
+  return paths.map((p) => `--import ${pathToFileURL(p).href}`).join(' ');
+}
+/** One pass through the driver, argv shaped as the shim shapes it (`<args> --secrets -- <homes>`), the
+ *  statfs preload always first (free space is the preload's answer, never this box's disk). */
+export function runDriver(box: HistoryBox, deps: DriverDeps, args: string[] = [],
+  opts: { preloads?: string[]; env?: Record<string, string>; timeoutMs?: number } = {}): DriverResult {
+  const preloads = opts.preloads ?? [PRELOADS.statfs];
+  const r = spawnSync(process.execPath, ['--no-warnings', PASS_DRIVER, ...args, '--secrets', '--', ...box.homes], {
+    cwd: box.home,
+    encoding: 'utf8',
+    // Task 14's cap (module-local SPAWN_TIMEOUT_MS): a hung pass fails its one case instead of wedging the
+    // worker, and SIGTERM keeps a hang apart from a fault preload's planned SIGKILL.
+    timeout: opts.timeoutMs ?? SPAWN_TIMEOUT_MS,
+    killSignal: 'SIGTERM',
+    env: {
+      ...box.env, HISTORY_TEST_STATFS: 'plenty', ...opts.env,
+      NODE_OPTIONS: preloadOptions(preloads),
+      HISTORY_TEST_DEPS: JSON.stringify(deps),
+    },
+  });
+  return { code: r.status, signal: r.signal, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
