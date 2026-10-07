@@ -46,6 +46,24 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-07 16:47 — the operator's fleet disk cleanup reaches CCR-15 (ops notice 3890; no reply wanted).**
+  - **What it did here.** It removed reclaim-row-placement-safety's review scratch and run 174's
+    `swift-hollow` scratch directory. It hand-ran `ws-expire` on four archived, unmarked
+    workspaces of this programme's era: `amber-summit`, `keen-hollow`, `plain-ridge` and `warm-hollow`. Their attic
+    refs and tombstones are kept.
+    - It also removed `expoAI-assistant-calm-mesa`'s `node_modules` and its `~/.cc-tmp` leaf, keeping the worktree.
+    - Nothing of this session's was touched.
+  - **`expoAI-assistant-calm-mesa`'s reclaim loop, measured.**
+    - 249 attempts since 10-05 14:04, every one `pin-failed` ("refs/heads/ws/calm-mesa does not resolve — there is no
+      branch tip to pin").
+    - It is paced at one attempt every 15.5 min, about 190 journal rows a day. That is harmless, and it ends when wave
+      6's gone-branch pin deploys.
+    - **Ruling: R59 stands.** No session recreates the branch. The notice's suggestion, recreating `ws/calm-mesa` at
+      `af784dbff290`, remains the operator's own option to end it sooner.
+  - **Carried to wave 7's pre-flight.** A deterministic per-child failure, such as `pin-failed` on a missing branch,
+    retries for ever at the sweep's pacing. Whether a persistent failure should back off further, or stop journaling
+    each repeat, is a question for that pre-flight.
+  - **The `rescue/B9-*` branches** in the home repo are kept. They are additive and cost nothing.
 - **2026-10-07 16:18 — stall-watch-settings W1 merged (#320, `7f7bf4afc`). Its wave 2 (run 322) is granted
   comment and residue edits to W1's own lines inside claim 1070 (mail 3871, on 3815's terms).**
   - **The lines granted.** `shared/api.ts` :9251, inside W1's appended block. In `watch.ts`: `StallResolution`,
@@ -1735,6 +1753,7 @@ Then dispatch one fresh child:
 wave's run closes, each with its own block, plan and pre-flight. Wave 7 inherits: a kept clips leaf with no collector;
 whole-second `btime`; the recycled-slug quarantine proof; the witness writer's temp-file residue; the intermittent
 macOS `purge-refused` in the symbolic-ref reflogs case (decision 12:31); the closure of `kept-word-ends-on-late-birth`
-(R61, decision 12:39). Wave 8 waits for
+(R61, decision 12:39); X1 and X3 (R63); a persistent per-child failure's endless paced retry (decision 2026-10-07
+16:47). Wave 8 waits for
 workspace-lifecycle wave 3b and for the fleet's `ccd caps` to advertise wave 7's token. The path-identity follow-up
 programme comes after wave 8.
