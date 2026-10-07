@@ -21,6 +21,7 @@ import {
   chmodSync, closeSync, constants as FS, existsSync, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
   readdirSync, readSync, renameSync, rmdirSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
+import { dirname } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
 import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, UUID_RE, WRITER_RE, historyPaths, newSha256 } from './lib.mjs';
@@ -428,6 +429,18 @@ function fsyncDir(dir) {
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
+/** An `mkdir -p` whose every new entry survives a power loss: each directory that gained an entry is fsynced, its parents
+ *  top-down (the one that existed first, then each new one but the last). Answers true when it created anything, and
+ *  fsyncs nothing when the directory already existed (review 316 F23). */
+export function mkdirDurable(dir, mode = 0o700) {
+  const first = mkdirSync(dir, { recursive: true, mode });
+  if (first === undefined) return false;
+  const chain = [];
+  for (let d = dir; ; d = dirname(d)) { chain.unshift(dirname(d)); if (d === first || dirname(d) === d) break; }
+  for (const p of chain) fsyncDir(p);
+  return true;
+}
+
 /** A type-aware removal of a name the sweep owns (D-4347, history-planted-entries-never-wedge): a file, link or FIFO is
  *  unlinked (a link's target is untouched), an EMPTY directory is rmdir'd, and a non-empty directory is left in place and
  *  reported, never recursed into. Never recursive, because a directory a same-user process planted may hold content the
@@ -725,7 +738,7 @@ export function removeStaleMigrationTemps(home) {
  *  is written before store.id.pending). */
 export function createStore(home) {
   const P = historyPaths(home);
-  mkdirSync(P.dbDir, { recursive: true, mode: 0o700 });
+  mkdirDurable(P.dbDir);
   chmodSync(P.root, 0o700);
   if (lstatSync(P.dbDir).isDirectory()) chmodSync(P.dbDir, 0o700);
 
@@ -875,7 +888,7 @@ export function runMigration(db, home, i) {
   }
   const P = historyPaths(home);
   const n = i.to;
-  mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+  mkdirDurable(P.backups);
   const tmp = `${P.backups}/.pre-v${n}.db.tmp`;
   const snapshot = `${P.backups}/pre-v${n}.db`;
   removeEntry(tmp);

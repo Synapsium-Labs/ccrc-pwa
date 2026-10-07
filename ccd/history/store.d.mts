@@ -30,6 +30,7 @@ export function writeFileAtomic(path: string, text: string, mode?: number): void
 export type BoundedRead = { state: 'absent' } | { state: 'unreadable' } | { state: 'over-cap' } | { state: 'value'; value: string };
 export function readBounded(path: string, max: number, follow: boolean): BoundedRead;
 export function removeStaleAtomicTemps(home: string): string[];
+export function mkdirDurable(dir: string, mode?: number): boolean;
 export function removeEntry(path: string): 'removed' | 'absent' | 'kept-dir';
 export function peekStoreId(dbPath: string): Presence<string>;
 export function measureStoreFacts(home: string, role: string): StoreFacts;

@@ -15,13 +15,14 @@ import { syncBuiltinESMExports } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { brotliCompressSync, constants as Z } from 'node:zlib';
 import { mkTmp } from './tmpHelpers.js';
+import { recordDirFsyncs } from './historyHelpers.js';
 import { MAX_INTERRUPTED_ATTEMPTS, SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths } from '../../ccd/history/lib.mjs';
 import {
   CODEC, MIGRATIONS, StoreError, openWriter, openReader, userVersion, probeFts5, withTx, brotli, unbrotli,
   measuredSize, getMeta, setMeta, bump, closeWriter, schemaOf,
   mintStoreId, mintWriter, writeFileAtomic, peekStoreId, measureStoreFacts, removeStaleTemps, removeStaleMigrationTemps, createStore,
   finishPending, dropPending, syncWriterMirror,
-  readAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry, readBounded, removeStaleAtomicTemps,
+  readAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
 } from '../../ccd/history/store.mjs';
 
 /** A delete-mode (rollback-journal) v1 store built by hand, the shape a
@@ -324,6 +325,21 @@ describe('store.mjs: the binding', () => {
     expect(fs.existsSync(path.join(P.root, 'store.writer.tmpx'))).toBe(true);
     expect(fs.existsSync(path.join(P.backups, 'pre-v2.db.tmp.5'))).toBe(true);
     expect(fs.existsSync(path.join(P.backups, '.pre-v2.attempt.tmp.99'))).toBe(false);
+  });
+
+  it('mkdirDurable fsyncs every parent that gained an entry, top-down, and nothing when the directory exists (review 316 F23)', () => {
+    const base = home();
+    const first = recordDirFsyncs(() => mkdirDurable(`${base}/a/b/c`));
+    expect(first.out).toBe(true);
+    expect(first.dirs).toEqual([base, `${base}/a`, `${base}/a/b`]);
+    const again = recordDirFsyncs(() => mkdirDurable(`${base}/a/b/c`));
+    expect(again.out).toBe(false);
+    expect(again.dirs).toEqual([]);
+  });
+
+  it('createStore fsyncs the directory that gained ~/.ccrc and the root (review 316 F23)', () => {
+    const h = home();
+    expect(recordDirFsyncs(() => createStore(h)).dirs.slice(0, 3)).toEqual([h, `${h}/.ccrc`, historyPaths(h).root]);
   });
 
   it('createStore: §6.2 sequence end to end — binding files, modes, WAL, v1, and an `open` verdict after', () => {
@@ -646,6 +662,16 @@ describe('store.mjs: the migration executor', () => {
     }
     expect(userVersion(db)).toBe(1);
     expect(fs.existsSync(historyPaths(h).backups)).toBe(false);
+    closeWriter(db);
+  });
+
+  it('runMigration fsyncs db/ when it creates backups/ (review 316 F23)', () => {
+    const { h, db } = bound();
+    const P = historyPaths(h);
+    expect(fs.existsSync(P.backups)).toBe(false);
+    const { dirs } = recordDirFsyncs(() => runMigration(db, h, { verdict: 'snapshot-then-migrate', from: 1, to: 2, migrations: TEST_MIGRATIONS }));
+    expect(dirs.indexOf(P.dbDir)).toBeGreaterThanOrEqual(0);
+    expect(dirs.indexOf(P.dbDir)).toBeLessThan(dirs.indexOf(P.backups));
     closeWriter(db);
   });
 

@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
-import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, PRELOADS, SWEEP, type HistoryBox } from './historyHelpers.js';
+import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, PRELOADS, SWEEP, recordDirFsyncs, type HistoryBox } from './historyHelpers.js';
 import { createStore, openWriter, closeWriter } from '../../ccd/history/store.mjs';
 import { journalRecord, historyPaths, eventKey, DRAINING_NAME_MAX, SPOOL_FILE_MAX, SPOOL_FILE_LINES_MAX } from '../../ccd/history/lib.mjs';
 
@@ -95,6 +95,21 @@ describe('the journal file: head, month, writer token, modes, torn tail (spec §
     const lines = fs.readFileSync(f, 'utf8').split('\n');
     expect(JSON.parse(lines[0]!)).toEqual({ v: 1, k: 'head', t: T, store_id: ids.storeId, month: '2026-10', writer: ids.writer });
     expect(lines.slice(1)).toEqual([tickRec(T), '']);
+  });
+
+  it('the first append fsyncs the root and journal/ that gained its directories (review 316 F23)', () => {
+    const fbox = makeHistoryBox('ccrc-hist-f23j-', { role: 'fleet' });
+    const fids = createStore(fbox.home);
+    expect(fs.existsSync(hist(fbox.home, 'journal'))).toBe(false);
+    expect(recordDirFsyncs(() => SW.appendJournal(fbox.home, fids, [tickRec(T)], T)).dirs.slice(0, 3))
+      .toEqual([hist(fbox.home), hist(fbox.home, 'journal'), hist(fbox.home, 'journal', fids.storeId)]);
+  });
+
+  it('ensureSpoolDirs fsyncs the root and spool/ when it creates them (review 316 F23)', () => {
+    const fbox = makeHistoryBox('ccrc-hist-f23s-', { role: 'fleet' });
+    createStore(fbox.home);
+    expect(fs.existsSync(hist(fbox.home, 'spool'))).toBe(false);
+    expect(recordDirFsyncs(() => SW.ensureSpoolDirs(fbox.home)).dirs).toEqual([hist(fbox.home), hist(fbox.home, 'spool')]);
   });
 
   it('an append after a UTC month boundary opens a new file with its own head; the old file is untouched', () => {
@@ -729,6 +744,17 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       expect(runSweep(box).code).toBe(0);                                // a healthy tick counts it and moves it
       expect(counters(box)['spool_oversize']).toBe(1);
       expect(fs.existsSync(ASIDE(OVER))).toBe(true);
+    });
+
+    it('the oversize directory a set-aside creates is fsynced into .draining/ (review 316 F23)', () => {
+      sparse(path.join(DRAIN(box.home), OVER), SPOOL_FILE_MAX + 1);
+      const db = openWriter(historyPaths(box.home).dbFile);
+      try {
+        const { out, dirs } = recordDirFsyncs(() => SW.setAsideOversize(db, box.home, OVER));
+        expect(out).toBe(true);
+        expect(dirs).toContain(DRAIN(box.home));
+        expect(fs.existsSync(ASIDE(OVER))).toBe(true);
+      } finally { closeWriter(db); }
     });
 
     it('a file at exactly SPOOL_FILE_MAX is still drained: its valid line is received, its one huge line is rejected', () => {

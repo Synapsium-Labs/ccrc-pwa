@@ -16,6 +16,7 @@
 // which is put on PATH right behind the poisons.
 import { beforeEach } from 'vitest';
 import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -276,3 +277,30 @@ export function readTxlog(file: string): TxEv[] {
   return evs;
 }
 export const writes = (e: TxEv, re: RegExp): boolean => e.kind === 'tx' && e.writes.some((w) => re.test(w));
+
+/** Run `fn` in this process and answer the directories it fsynced, in order (review 316 F23). Wraps `fs.openSync`
+ *  (fd -> path), `fs.closeSync` (forgets the fd) and `fs.fsyncSync` (records the fd's path when it is a directory), and
+ *  makes the named ESM imports of the history modules see them; all three are restored in `finally`. */
+export function recordDirFsyncs<T>(fn: () => T): { out: T; dirs: string[] } {
+  const realOpen = fs.openSync; const realClose = fs.closeSync; const realFsync = fs.fsyncSync;
+  const open = new Map<number, string>();
+  const dirs: string[] = [];
+  fs.openSync = ((p: fs.PathLike, ...rest: unknown[]) => {
+    const fd = (realOpen as (...a: unknown[]) => number)(p, ...rest);
+    open.set(fd, String(p));
+    return fd;
+  }) as typeof fs.openSync;
+  fs.closeSync = ((fd: number) => { open.delete(fd); return realClose(fd); }) as typeof fs.closeSync;
+  fs.fsyncSync = ((fd: number) => {
+    const p = open.get(fd);
+    if (p !== undefined && fs.fstatSync(fd).isDirectory()) dirs.push(p);
+    return realFsync(fd);
+  }) as typeof fs.fsyncSync;
+  syncBuiltinESMExports();
+  try {
+    return { out: fn(), dirs };
+  } finally {
+    fs.openSync = realOpen; fs.closeSync = realClose; fs.fsyncSync = realFsync;
+    syncBuiltinESMExports();
+  }
+}

@@ -26,7 +26,7 @@
 // allow-list single-definition.test.ts pins; tests reach every fault through a
 // test-only preload, never a variable this file reads (§10.1 "Seams").
 import fs, {
-  chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync,
+  chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readdirSync,
   readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -51,7 +51,7 @@ import {
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
   measureStoreFacts, measuredSize, openReader, openWriter, readAttempts, removeStaleMigrationTemps, removeStaleTemps, runMigration, setMeta,
-  syncWriterMirror, userVersion, withTx, writeFileAtomic, removeEntry, readBounded, removeStaleAtomicTemps,
+  syncWriterMirror, userVersion, withTx, writeFileAtomic, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
   CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
@@ -208,7 +208,7 @@ export function appendJournal(home, ids, lines, nowMs) {
   if (lines.length === 0) return;
   const dir = `${historyPaths(home).journalDir}/${ids.storeId}`;
   try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    mkdirDurable(dir);
     // D-4308 (history-journal-temp-swept-every-append): swept on EVERY append, before the existence check, not only
     // when the month file is first created. A kill between createMonthFile's link and its unlink leaves the month
     // file in place with a temp link to it, which the creation-only sweep never reached. One readdir per call;
@@ -439,7 +439,7 @@ export function ensureSpoolDirs(home) {
   try { st = lstatSync(P.draining); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
   // D-4347 (history-planted-entries-never-wedge): a file, link or FIFO at `.draining` is unlinked (a link's target is untouched), or mkdir fails EEXIST every pass.
   if (st !== null && !st.isDirectory()) { removeEntry(P.draining); stray = true; }
-  mkdirSync(P.draining, { recursive: true, mode: 0o700 });
+  mkdirDurable(P.draining);
   return stray;
 }
 
@@ -546,7 +546,7 @@ function moveAside(dir, from, name) {
     let ds = null;
     try { ds = lstatSync(dir); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
     if (ds !== null && !ds.isDirectory()) { removeEntry(dir); stray = true; }
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    mkdirDurable(dir);
     renameSync(`${from}/${name}`, `${dir}/${name}`);
     return { moved: true, stray };
   } catch {
@@ -1651,7 +1651,7 @@ export async function tick(db, ctx) {
   recordTick(db, ictx, ing);
   if (scan && !ctx.rosterUnreadable) markScan(db, ctx.now());
   // <<< history tick steps
-  mkdirSync(ctx.paths.spool, { recursive: true, mode: 0o700 });
+  mkdirDurable(ctx.paths.spool);
   if (ctx.parsed.rosterUnreadable) bump(db, 'roster_unreadable');
 }
 
