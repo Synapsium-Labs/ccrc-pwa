@@ -446,7 +446,9 @@ each item is a departure named there).
 - **The words carry the arming condition** (the coordinator's ruling). README, `wave-lifecycle.md` §6 and coordinator
   clause 3 say that an archived workspace is cleaned up seven days after its archive once the operator has armed the
   lane, and that until then the lane only records what it would expire, so they are true before and after the arming.
-  The PWA's archive-confirm copy says what an armed fleet does; whether to hedge it until then is the operator's.
+  The PWA's archive-confirm copy said what an armed fleet does until wave 4 hedged it the same way (review 313,
+  parked item 2, the operator's ruling): "Restore brings it back; once automatic cleanup is on, it is cleaned up
+  seven days after its archive", and Archive all's "…each is cleaned up seven days after its archive".
 - **The lane ships shadowed** (the coordinator's safety ruling, the scope sweep's precedent). Until `$REG/expire-lane-live`
   exists — touched by the operator by hand on the fleet box; nothing in the tree writes it — a due workspace is audited
   and recorded ("would expire", a feed row and an attention entry naming its archive, its expiry instant and how many

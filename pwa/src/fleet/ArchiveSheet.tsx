@@ -221,7 +221,7 @@ export function ArchiveSheet({
     case 'confirm':
       title = workspace ? 'Archive this workspace?' : 'Archive this session?';
       body = <p className="qc-consequence">{workspace
-        ? 'It goes offline and folds into Archived. Restore brings it back for 7 days; after that it is cleaned up.'
+        ? 'It goes offline and folds into Archived. Restore brings it back; once automatic cleanup is on, it is cleaned up seven days after its archive.'
         : 'It goes offline and folds into Archived. Restore starts it again. It is never deleted.'}</p>;
       primary = { label: 'Archive', next: consent };
       break;
