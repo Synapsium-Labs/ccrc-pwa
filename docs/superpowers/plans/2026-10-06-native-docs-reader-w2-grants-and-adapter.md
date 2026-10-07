@@ -7804,3 +7804,10 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 ```json
 []
 ```
+
+## Deviations found
+
+- **D-4374 (2026-10-07)** — the docs cap gate lives in two adapter functions, not "inside the one adapter function" (spec §2 (a)). `readDocs` (index, tree, both shows, one `switch`) and `fetchDocs` each carry §2 (a)'s two gate lines literally, because `verb-gate.test.ts` reads the nearest enclosing function of every `CCD_ARGV.docs*(` call for a literal `capSupported(` (a shared gate helper would read as ungated) and §2 (g)'s wall 1 keeps the fetch path apart from the reader. Refinement (c); Task 6.
+- **D-4375 (2026-10-07)** — each port operation's failure arm is the whole `DocsFailureBody`, not a per-operation union, and `index` takes `DocsNodeId {node}`, not `DocsSourceId` (spec §1). ccd's per-verb word set is not a checked contract (check 7 tests membership in the ccd set only), so a narrower static union would claim what the adapter cannot measure, and docs-index is project-less. Refinement (d); Task 6.
+- **D-4376 (2026-10-07)** — `ccd-fault` carries `stderrHead` but no `code` (spec §2 (b) check 5 names `ccd-fault {code, stderrHead}`). `CcdResult` carries `ok`, not the exit code, and widening it would change `ccd()`'s output under existing `toEqual` pins; the adapter never invents a code (absent means unmeasured, never `1`). Refinement (f); Task 6.
+- **D-4377 (2026-10-07)** — `server/src/lifecycle.ts`, outside §7.7's W2 row, gains `CcdEnding` and `ccdEnding`, and `cutShort` is re-expressed through it with identical answers, so `killed` and `signal` keep one reader for the adapter's check 1 and `cutShort` alike. Check 1 is read through it as `ending unmeasured && !ok && stdout === ''` (the transport catch's shape), not §2 (b) check 1's "killed and signal both UNMEASURED": an ok answer whose halves are unmeasured proceeds to parsing, a failed answer that carries stdout passes check 1, and the half-measured `(killed:false, signal:UNMEASURED)` shape, which has no producer, reads as check 1. Refinement (g); Task 6.

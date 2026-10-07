@@ -39,10 +39,33 @@ export async function ccd(run: Runner, cfg: CcrcConfig, args: CcdArgv): Promise<
   };
 }
 
+/** How one ccd call ENDED, as its two kill halves together say (docs W2, refinement (g)):
+ *  - `deadline`: the runner's own deadline fired (`killed === true`), whatever `signal` says;
+ *  - `signal`: a MEASURED, non-null signal ended the child without the deadline — an operator, an OOM reaper,
+ *    systemd stopping the unit;
+ *  - `unmeasured`: nobody measured the signal half (an older agent, the transport catch path);
+ *  - `exited`: a measured `signal: null` — the child exited by itself, with whatever code `ok` reports.
+ *  Four kinds, never folded: a caller that needs fewer (`cutShort`) folds them itself. */
+export type CcdEnding = { kind: 'unmeasured' } | { kind: 'deadline' } | { kind: 'signal'; signal: string } | { kind: 'exited' };
+
+/** THE SINGLE READER of `CcdResult`'s `killed` and `signal` (wire discipline): `cutShort` below and the docs
+ *  adapter (`docs/ccdsource.ts`) both read the two halves through here, so they are never interpreted twice in two
+ *  places that could drift apart. `cutShort`'s docstring argues each arm; the order is its order.
+ *
+ *  The token trap `cutShort` names applies here first: `UNMEASURED` is itself a string, so the signal half is
+ *  compared with the token BEFORE it is read as a signal name, never tested by its javascript type. */
+export function ccdEnding(r: CcdResult): CcdEnding {
+  if (r.killed === true) return { kind: 'deadline' };
+  if (r.signal === UNMEASURED) return { kind: 'unmeasured' };
+  if (r.signal !== null) return { kind: 'signal', signal: r.signal };
+  return { kind: 'exited' };
+}
+
 /** "THIS CALL'S CHILD WAS CUT SHORT" — the single fact §1.5's adoption gate
- *  rests on, and (wire discipline) the SINGLE READER of `killed` and `signal`,
- *  so the two halves of one measurement are never interpreted twice in two
- *  places that could drift apart.
+ *  rests on. It reads `killed` and `signal` through {@link ccdEnding}, their
+ *  single reader (wire discipline), so the two halves of one measurement are
+ *  never interpreted twice in two places that could drift apart: `deadline`
+ *  and `signal` are `true`, `unmeasured` is `UNMEASURED`, `exited` is `false`.
  *
  *  Neither half implies the other. `killed` is true only when the runner's own
  *  deadline fired; an EXTERNAL kill (operator, OOM reaper, systemd stopping the
@@ -77,11 +100,9 @@ export async function ccd(run: Runner, cfg: CcrcConfig, args: CcdArgv): Promise<
  *  and adopts a workspace on a dropped socket. That is the exact class of bug the
  *  token was introduced to close, arriving through the token itself. */
 export function cutShort(r: CcdResult): boolean | Unmeasured {
-  const signalMeasured = r.signal !== UNMEASURED;
-  if (r.killed === true) return true;
-  if (signalMeasured && r.signal !== null) return true;
-  if (!signalMeasured) return UNMEASURED;
-  return false;
+  const ending = ccdEnding(r);
+  if (ending.kind === 'unmeasured') return UNMEASURED;
+  return ending.kind !== 'exited';
 }
 
 /** The single ccd capability `Deps` carries in place of a raw `Runner`. */

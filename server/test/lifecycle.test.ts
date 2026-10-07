@@ -7,7 +7,7 @@ import { buildServer } from '../src/server.js';
 import { loadConfig, type CcrcConfig } from '../src/config.js';
 import { Tmux, UNMEASURED, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
-import { ccd, ccdRunner, cutShort, listProjects, type CcdResult } from '../src/lifecycle.js';
+import { ccd, ccdEnding, ccdRunner, cutShort, listProjects, type CcdEnding, type CcdResult } from '../src/lifecycle.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
 import { readLocalCcdCaps } from '../src/localcaps.js';
 import { KeyedQueue } from '../src/inject/queue.js';
@@ -1045,5 +1045,39 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.ruling).toContain('ccd project-pool');
     expect(c!.ruling).toContain('pools-stale');
     expect(c!.root).toContain('pools/');
+  });
+});
+
+describe('docs W2 — ccdEnding: the single reader of killed and signal, and cutShort read through it', () => {
+  const r = (killed: CcdResult['killed'], signal: CcdResult['signal']): CcdResult =>
+    ({ ok: false, stdout: '', stderr: '', killed, signal });
+  const U = UNMEASURED;
+  // Every (killed, signal) cell, killed in {true, false, UNMEASURED} by signal in {null, SIGKILL, SIGTERM, UNMEASURED}.
+  // The UNMEASURED signal column is the token trap: `UNMEASURED` is a string, so a reader that tests the signal by
+  // its javascript type reads the token as a signal name.
+  const TABLE: readonly (readonly [CcdResult['killed'], CcdResult['signal'], CcdEnding])[] = [
+    [true, null, { kind: 'deadline' }],
+    [true, 'SIGKILL', { kind: 'deadline' }],
+    [true, 'SIGTERM', { kind: 'deadline' }],
+    [true, U, { kind: 'deadline' }],
+    [false, null, { kind: 'exited' }],
+    [false, 'SIGKILL', { kind: 'signal', signal: 'SIGKILL' }],
+    [false, 'SIGTERM', { kind: 'signal', signal: 'SIGTERM' }],
+    [false, U, { kind: 'unmeasured' }],
+    [U, null, { kind: 'exited' }],
+    [U, 'SIGKILL', { kind: 'signal', signal: 'SIGKILL' }],
+    [U, 'SIGTERM', { kind: 'signal', signal: 'SIGTERM' }],
+    [U, U, { kind: 'unmeasured' }],
+  ];
+
+  it.each(TABLE)('killed %s, signal %s ends as %j', (killed, signal, want) => {
+    expect(ccdEnding(r(killed, signal))).toEqual(want);
+  });
+
+  it('cutShort answers what the ending says, cell for cell: deadline and signal adopt, unmeasured is UNMEASURED', () => {
+    for (const [killed, signal, ending] of TABLE) {
+      const want = ending.kind === 'unmeasured' ? UNMEASURED : ending.kind !== 'exited';
+      expect(cutShort(r(killed, signal)), `killed ${String(killed)}, signal ${String(signal)}`).toBe(want);
+    }
   });
 });

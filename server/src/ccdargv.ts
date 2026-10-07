@@ -862,6 +862,18 @@ export const RECLAIM_PAUSE_CAP = 'reclaim-pause-v1';
  *  it in this build — wave 3b's lane does, before its first audit. */
 export const EXPIRE_CAP = 'expire-v1';
 
+/** The `ccd caps` token that says this box has the native Docs reader (spec 2026-10-01 section 2 (a), docs W2):
+ *  `docs-index`, `docs-tree`, `docs-show` and `docs-fetch` at exactly the argv the `docs*` builders above emit — one
+ *  ccd inode. Spelled ONCE in `server/src`; ccd's `echo docs-v1` and `ccd-archive.test.ts`'s
+ *  `KNOWN_CAPABILITY_TOKENS` are the other two spellings, held equal by that test's `toContain`.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`, and NEVER ALONE. The docs adapter's gate
+ *  (`docs/ccdsource.ts`) is a tri-state: a `ccdVerbs` of `null`, or a list without the token `caps` (an agent whose
+ *  boot read of `ccd caps` failed seeds `[]`), measured nothing and answers `caps-unknown`; only a list that DID
+ *  come from `ccd caps` and lacks this token answers `unsupported` (section 7.1's skew table, C1). `capSupported`
+ *  alone folds the first into the second, and the two have different remedies. */
+export const DOCS_CAP = 'docs-v1';
+
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
  * in the same `ccd caps` list `verbSupported` reads, naming a FLAG on an
