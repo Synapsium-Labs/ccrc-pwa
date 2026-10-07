@@ -2324,7 +2324,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
     redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0,
     exportWriterLive: false, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
-    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
+    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
     thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
     ...o,
@@ -2378,6 +2378,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     ['journal-record-skipped', 'warn', { journalSkipped: 4 }],
     ['journal-growth', 'warn', { journalGrowth30d: 41_943_041 }],
     ['blob-undecodable', 'warn', { blobUndecodable: 2 }],
+    ['drain-rejected', 'warn', { drainRejected: 3 }],
   ];
 
   it('the healthy baseline is PASS ok, with nothing to warn or fail', () => {
@@ -2667,5 +2668,21 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     expect(healthLib.journalHeldTooLong(null, NOW)).toBe(false);
     expect(healthLib.journalHeldTooLong(NOW - healthLib.TICK_STALE_MS, NOW)).toBe(false);
     expect(healthLib.journalHeldTooLong(NOW - healthLib.TICK_STALE_MS - 1, NOW)).toBe(true);
+  });
+});
+
+describe('decideDrainFailure (D-4346, history-permanent-failures-classified)', () => {
+  const TABLE: Array<['defer' | 'reject' | 'fail', unknown[]]> = [
+    ['defer', [5, 261, 517, 773, 6, 262, 518]],
+    ['reject', [18, 19, 20, 275, 1299, 1555, 2067, 2579, 3091]],
+    ['fail', [1811, 787, 531, 1043, 2323, 2835, 13, 11, 266, 1034, 26, 8, 1, 14, 7, 17, undefined, null, '5', 5.5]],
+  ];
+  it.each(TABLE.flatMap(([arm, codes]) => codes.map((c) => [arm, c] as const)))('%s: %s', (arm, code) => {
+    expect(healthLib.decideDrainFailure(code)).toBe(arm);
+    expect(healthLib.DRAIN_FAILURE_ARMS).toContain(healthLib.decideDrainFailure(code));
+  });
+  it('SQLITE_CODES is frozen, and DRAIN_FAILURE_ARMS is the three answers', () => {
+    expect(Object.isFrozen(healthLib.SQLITE_CODES)).toBe(true);
+    expect([...healthLib.DRAIN_FAILURE_ARMS]).toEqual(['defer', 'reject', 'fail']);
   });
 });

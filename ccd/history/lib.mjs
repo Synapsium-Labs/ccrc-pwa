@@ -217,6 +217,35 @@ export const JOURNAL_VERDICTS = Object.freeze([
 ]);
 export const BIND_KINDS = Object.freeze(['adopt', 'restore', 'rebuild']);
 export const MIGRATION_VERDICTS = Object.freeze(['none', 'refuse-newer', 'refuse-low-disk', 'snapshot-needs-op', 'snapshot-then-migrate']);
+/** SQLite result codes the sweep decides on, spelled once. node:sqlite's `errcode` is the EXTENDED code; its low byte is
+ *  the primary. D-4346 (history-permanent-failures-classified). */
+export const SQLITE_CODES = Object.freeze({
+  BUSY: 5, LOCKED: 6, TOOBIG: 18, CONSTRAINT: 19, MISMATCH: 20,
+  CONSTRAINT_CHECK: 275, CONSTRAINT_NOTNULL: 1299, CONSTRAINT_PRIMARYKEY: 1555, CONSTRAINT_UNIQUE: 2067,
+  CONSTRAINT_ROWID: 2579, CONSTRAINT_DATATYPE: 3091,
+});
+/** What the drain does with one file's failed transaction (D-4346). */
+export const DRAIN_FAILURE_ARMS = Object.freeze(['defer', 'reject', 'fail']);
+/** The exact extended codes by which the store refused a file's own row values; every other constraint (a foreign key, a
+ *  trigger, a commit hook, a virtual table) names something outside the file. */
+const DRAIN_REJECT_CODES = Object.freeze([
+  SQLITE_CODES.TOOBIG, SQLITE_CODES.CONSTRAINT, SQLITE_CODES.MISMATCH, SQLITE_CODES.CONSTRAINT_CHECK,
+  SQLITE_CODES.CONSTRAINT_NOTNULL, SQLITE_CODES.CONSTRAINT_PRIMARYKEY, SQLITE_CODES.CONSTRAINT_UNIQUE,
+  SQLITE_CODES.CONSTRAINT_ROWID, SQLITE_CODES.CONSTRAINT_DATATYPE,
+]);
+/** What the drain does with one file's failed transaction, from the extended result code of its SQLite error
+ *  (D-4346, history-permanent-failures-classified). Pure: sweep.mjs only executes the answer.
+ *  - 'defer': the store is busy (BUSY or LOCKED, any extended code), so the file and every later one wait in order, as before.
+ *  - 'reject': the store refused the file's own rows; the already-journaled file is set aside and the drain goes on.
+ *  - 'fail': the store itself failed (FULL, I/O, corruption, a foreign schema object, a foreign key) or no code was given;
+ *    the tick ends with the error, as ingest's SQLite errors do (D-4340). */
+export function decideDrainFailure(errcode) {
+  if (typeof errcode !== 'number' || !Number.isInteger(errcode)) return 'fail';
+  const primary = errcode & 0xff;
+  if (primary === SQLITE_CODES.BUSY || primary === SQLITE_CODES.LOCKED) return 'defer';
+  if (DRAIN_REJECT_CODES.includes(errcode)) return 'reject';
+  return 'fail';
+}
 /** The one word a scheduled pass prints as `history-sweep: <word>` when it
  *  ends without a tick (§5.3: no DB is open to count it in). Plan-chosen
  *  where the spec names the condition only: `schema-newer`, `held`. */
@@ -231,7 +260,7 @@ export const PASS_WORDS = Object.freeze([
  *  spec names in prose: `first-tick-pending`, `tick-stale`, `lag-high`,
  *  `at-cap`, `capture-paused-low-disk`, `mode-wrong`, `schema-newer`,
  *  `cap-malformed`, `cap-near`, `breaker-open`, `roster-unreadable`,
- *  `root-is-symlink`, `fts-unavailable`, `status-unreadable`, D-4346's `blob-undecodable`. */
+ *  `root-is-symlink`, `fts-unavailable`, `status-unreadable`, D-4346's `blob-undecodable` and `drain-rejected`. */
 const healthRows = (cls, words) => words.map((w) => [w, cls]);
 const healthEntries = [
   // D-4168: within the shim's grace with no tick yet, doctor answers PASS, not §9.6 step 3's WARN.
@@ -241,6 +270,7 @@ const healthEntries = [
     'redact-source-unreadable', 'cap-near', 'breaker-open', 'roster-unreadable', 'root-is-symlink',
     'export-due', 'export-paused-low-disk', 'retention-unmeasured', 'retention-lowered',
     'export-segment-missing', 'journal-record-skipped', 'journal-growth', 'blob-undecodable',
+    'drain-rejected',
   ]),
   ...healthRows('fail', [
     'tick-stale', 'lag-high', 'at-cap', 'capture-paused-low-disk', 'mode-wrong', 'schema-newer',
@@ -2276,7 +2306,7 @@ export const HEALTH_META = Object.freeze({
 
 /** Counters `status` reads for a health word, spelled once for the writer (sweep.mjs), the reader (cli.mjs) and the
  *  doctor fixtures that plant them. D-4346 (history-permanent-failures-classified). */
-export const HEALTH_COUNTERS = Object.freeze({ blobUndecodable: 'blob_undecodable' });
+export const HEALTH_COUNTERS = Object.freeze({ blobUndecodable: 'blob_undecodable', drainRejected: 'drain_rejected' });
 
 const MODE_CHECKED_FILE_ROOTS = Object.freeze(['db', 'card', 'steer', 'journal', 'export']);
 
@@ -2368,6 +2398,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'journal-record-skipped': `none needed if the journal came from a newer build; otherwise ccrc history doctor --repair arrives with W1-B2, and until then read the sweep: ${SWEEP_LOG}`,
   'journal-growth': `read the sweep: ${SWEEP_LOG}; the journal grows faster than twice its estimate`,
   'blob-undecodable': `the store's copy of that text is damaged (storage corruption) and nothing repairs it in place: keep ~/.ccrc/history as it is; ccrc history doctor --repair, which detects storage corruption, arrives with W1-B2`,
+  'drain-rejected': `the files are kept in ~/.ccrc/history/spool/.draining/rejected/ and their lines in the journal, and nothing in this build drains them again; the refusal is in the sweep's log: ${SWEEP_LOG}`,
 });
 
 const minutesOf = (ms) => Math.round(ms / 60_000);
@@ -2549,5 +2580,7 @@ export function deriveHealth(h) {
   }
   // D-4346 (history-permanent-failures-classified): a stored blob whose bytes no longer decode was passed over, counted once.
   if (h.blobUndecodable > 0) warn.push(item('blob-undecodable', `${h.blobUndecodable} stored blob(s) did not decode, so their text is out of search and cannot be read back`));
+  // D-4346 (history-permanent-failures-classified): a spool file the store refused was set aside, counted once.
+  if (h.drainRejected > 0) warn.push(item('drain-rejected', `${h.drainRejected} spool file(s) were set aside in .draining/rejected/ because the store refused their rows`));
   return result();
 }

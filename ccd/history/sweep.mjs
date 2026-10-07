@@ -39,7 +39,7 @@ import {
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
   UUID_RE, WRITER_RE, drainingNameOk, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
   passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
-  CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
+  SQLITE_CODES, decideDrainFailure, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
@@ -500,6 +500,10 @@ export function readDrainingText(path) {
   }
 }
 
+/** The two sibling directories of `.draining/` that `setAside` moves a file into (D-4337, D-4346); `listDraining` lists neither. */
+const OVERSIZE_DIR = 'oversize';
+const REJECTED_DIR = 'rejected';
+
 /** Decide a draining file's oversize from its lstat BEFORE any open (D-4337, history-spool-file-size-cap): true when it
  *  is a regular file over SPOOL_FILE_MAX, which `setAside` has then moved aside or left for the next tick to count; the
  *  caller never journals it. False for a file that is not oversize, a link or a FIFO, which are not this function's. */
@@ -508,7 +512,7 @@ export function setAsideOversize(db, home, name) {
   let st;
   try { st = lstatSync(`${P.draining}/${name}`); } catch (e) { if (e && e.code === 'ENOENT') return false; throw e; }
   if (!st.isFile() || st.size <= SPOOL_FILE_MAX) return false;
-  return setAside(db, home, name, 'spool_oversize');
+  return setAside(db, home, name, OVERSIZE_DIR, 'spool_oversize');
 }
 
 /** Set a draining file aside (D-4337, history-spool-file-size-cap): moved into the sibling directory
@@ -520,13 +524,15 @@ export function setAsideOversize(db, home, name) {
  *  bumped in a committed transaction FIRST and the file moved after, so a crash between the two may count a file twice and
  *  can never lose the count; a count that cannot commit, or a move that fails, leaves the file where it is for the next
  *  tick (recounted then: once per tick while the failure lasts, never a thrown tick). A name that is not a directory at
- *  `oversize` is removed and counted `non_regular`. True on every path: the caller never journals the file. */
-export function setAside(db, home, name, counter) {
+ *  `oversize` is removed and counted `non_regular`. True on every path: the caller never journals the file.
+ *  `sub` is OVERSIZE_DIR (counted spool_oversize or spool_overlines, D-4337) or REJECTED_DIR (counted drain_rejected,
+ *  D-4346, history-permanent-failures-classified). */
+export function setAside(db, home, name, sub, counter) {
   const P = historyPaths(home);
   try {
     withTx(db, 'NORMAL', () => bump(db, counter));
   } catch { return true; }   // uncounted, so unmoved: the next tick meets it again and counts it then
-  const dir = `${P.draining}/oversize`;
+  const dir = `${P.draining}/${sub}`;
   try {
     // A name that is not a directory (a stray same-user writer's file, link or FIFO) is removed and counted, as a
     // planted link in .draining/ is; mkdir would otherwise fail EEXIST on every tick.
@@ -544,6 +550,12 @@ export function setAside(db, home, name, counter) {
   unlinkIfPresent(`${P.draining}/${sidecarName(name)}`);
   return true;
 }
+
+/** Set aside a draining file the store refused (D-4346, history-permanent-failures-classified). The file was journaled
+ *  before its drain transaction ran, so its lines are in the journal and nothing is lost; it is moved into
+ *  `.draining/rejected/`, which `listDraining` never lists, and counted `drain_rejected` before the move. A move that
+ *  fails leaves it for the next tick, which recounts it. Only files the store refused for their own rows go here. */
+export function setAsideRejected(db, home, name) { setAside(db, home, name, REJECTED_DIR, HEALTH_COUNTERS.drainRejected); }
 
 
 /** The lines that pass parseSpoolLine AND name the file's own id. Only those are journaled and drained (slug
@@ -721,8 +733,10 @@ export function journalHalf(home, ids, nowMs) {
 
 /** Step 1 with an open store: every draining file in journaling order, each journaled then drained; then this tick's
  *  renames. Returns the sids of the fresh lines (discovery's hints).
- *  - A journal failure stops here, and so does a commit that fails (busy, or the injected test seam). The rest wait,
- *    in order, so no id's later file drains before its earlier one.
+ *  - A journal failure stops here, and so does a busy or locked commit (the rest wait, in order, so no id's later file
+ *    drains before its earlier one); a commit the store refused for the file's own rows sets that journaled file aside
+ *    into `.draining/rejected/` and the drain goes on; any other SQLite failure ends the tick (D-4346,
+ *    history-permanent-failures-classified).
  *  - A link or FIFO planted in .draining/ is removed and counted. */
 export function drainSpool(db, c) {
   const tickMs = c.now();
@@ -742,7 +756,7 @@ export function drainSpool(db, c) {
         continue;
       }
       if (e && e.code === 'SPOOL_OVERLINES') {   // D-4337's line arm: decided by readDrainingText's count, never by a stat
-        setAside(db, c.home, name, 'spool_overlines');
+        setAside(db, c.home, name, OVERSIZE_DIR, 'spool_overlines');
         continue;
       }
       if (e && (e.code === 'ELOOP' || e.code === 'NON_REGULAR')) {
@@ -760,8 +774,17 @@ export function drainSpool(db, c) {
       hints.push(...drainFile(db, c, name, j.obs, j.text).hints);
     } catch (e) {
       if (e instanceof JournalError) { countOutside(db, 'journal_write_failed'); failedCounted = true; break; }
-      if (e && e.code === 'ERR_SQLITE_ERROR') { countOutside(db, 'drain_deferred'); break; }
-      throw e;
+      if (e && e.code === 'ERR_SQLITE_ERROR') {
+        // D-4346 (history-permanent-failures-classified): lib decides from the result code, never every SQLite error as a busy commit.
+        const arm = decideDrainFailure(e.errcode);
+        if (arm === 'defer') { countOutside(db, 'drain_deferred'); break; }
+        if (arm === 'reject') {
+          process.stderr.write(`history-sweep: drain-rejected: ${name}: ${e.message}\n`);
+          setAsideRejected(db, c.home, name);
+          continue;
+        }
+      }
+      throw e;   // 'fail': the store itself failed; the tick ends with it, as ingest's SQLite errors do (D-4340)
     }
   }
   // D-4338 (history-sidecar-write-failure-holds): a failed observation of this tick's renames is the same hold,
@@ -2435,7 +2458,7 @@ const SCAN_META = 'scan_discover_ms';
 /** SQLITE_BUSY (5) and its extended codes: another connection held the write lock past
  *  busy_timeout. The tick ends and is retried next tick (§9.10). */
 export function isBusy(e) {
-  return e !== null && typeof e === 'object' && typeof e.errcode === 'number' && (e.errcode & 0xff) === 5;
+  return e !== null && typeof e === 'object' && typeof e.errcode === 'number' && (e.errcode & 0xff) === SQLITE_CODES.BUSY;
 }
 
 /** A tail with no '\n' in a file nobody has written for this long is not a line still being

@@ -47,8 +47,9 @@ syncBuiltinESMExports();
 //                                  observed BEFORE it runs, so commit:<n> kills with that transaction still open.
 //   HISTORY_TEST_ENOSPC=<substr>   the first Buffer write to a file whose path holds <substr> writes half of
 //                                  itself, then throws ENOSPC
-//   HISTORY_TEST_FAIL_COMMIT=<n>   the n-th COMMIT under synchronous=FULL throws instead of committing. The error
-//                                  carries code ERR_SQLITE_ERROR, as node:sqlite's own errors do.
+//   HISTORY_TEST_FAIL_COMMIT=<n>[:<errcode>]   the n-th COMMIT under synchronous=FULL throws instead of committing.
+//                                  The error carries code ERR_SQLITE_ERROR, as node:sqlite's own errors do; `:<errcode>`
+//                                  adds node:sqlite's extended `errcode` (D-4346), none given leaves it off.
 // Events:
 //   journal-open <name>            an open under /journal/
 //   journal-write <name>           a write of a journal *.jsonl
@@ -69,7 +70,8 @@ const hfPrev = {
 const hfRecordFile = process.env.HISTORY_TEST_RECORD ?? '';
 const [hfKillEvent = '', hfKillNth = ''] = (process.env.HISTORY_TEST_KILL_AT ?? '').split(':');
 const hfEnospcPath = process.env.HISTORY_TEST_ENOSPC ?? '';
-const hfFailCommitNth = Number(process.env.HISTORY_TEST_FAIL_COMMIT ?? '0');
+const [hfFailCommitText = '0', hfFailCommitCode] = (process.env.HISTORY_TEST_FAIL_COMMIT ?? '0').split(':');
+const hfFailCommitNth = Number(hfFailCommitText);
 const hfSeen = new Map();
 const hfFdPath = new Map();
 let hfEnospcSpent = false;
@@ -127,7 +129,11 @@ HfDatabaseSync.prototype.exec = function exec(sql) {
     const sync = this.prepare('PRAGMA synchronous').get().synchronous;
     if (sync === 2) {
       hfFullCommits += 1;
-      if (hfFullCommits === hfFailCommitNth) throw Object.assign(new Error('injected commit failure'), { code: 'ERR_SQLITE_ERROR' });
+      if (hfFullCommits === hfFailCommitNth) {
+        throw hfFailCommitCode === undefined
+          ? Object.assign(new Error('injected commit failure'), { code: 'ERR_SQLITE_ERROR' })
+          : Object.assign(new Error('injected commit failure'), { code: 'ERR_SQLITE_ERROR', errcode: Number(hfFailCommitCode), errstr: 'injected' });
+      }
     }
     hfNote('commit', `sync=${sync}`);
   }

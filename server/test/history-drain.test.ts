@@ -249,11 +249,13 @@ describe('a tick flushes the outbox first (spec §9.2 "First, the outbox"), as t
 
 // ── Task 16: the two-phase drain ────────────────────────────────────────────────────────────────────────
 const ID = 'claude-a-demo';
+const ID2 = 'claude-a-other';
 const u = (n: number): string => `${n.toString(16).padStart(8, '0')}-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
 const U0 = u(0x10); const U1 = u(0x11); const U2 = u(0x12); const U3 = u(0x13); const U5 = u(0x15); const U9 = u(0x19);
 const G1 = u(0xa1); const G2 = u(0xa2);
 const SPOOL = (home: string): string => hist(home, 'spool');
 const DRAIN = (home: string): string => hist(home, 'spool', '.draining');
+const REJECTED = (home: string): string => path.join(DRAIN(home), 'rejected');
 /** One spool line exactly as the hook appends it: fenced, `\n<json>\n` (§5.1). A string is planted as is. */
 const spool = (home: string, id: string, rec: Record<string, unknown> | string): void => {
   fs.mkdirSync(SPOOL(home), { recursive: true });
@@ -448,11 +450,92 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
     spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
     expect(runSweep(box).code).toBe(0);
     const [name] = drainingNames(box.home);
-    const r = runSweep(box, [], faults({ HISTORY_TEST_FAIL_COMMIT: '1' }));
+    const r = runSweep(box, [], faults({ HISTORY_TEST_FAIL_COMMIT: '1:5' }));   // 5: SQLITE_BUSY, a busy commit
     expect(r.code, r.stderr).toBe(0);
     expect(drainingNames(box.home)).toEqual([name]);
     expect(receipts(box)).toEqual([]);
     expect(counters(box)['drain_deferred']).toBe(1);
+    expect(runSweep(box).code).toBe(0);
+    expect(receipts(box)).toHaveLength(1);
+    expect(drainingNames(box.home)).toEqual([]);
+    expect(fileBlocks(journalOf(box.home, ids.storeId)).filter((b) => b.name === name)).toHaveLength(1);
+  });
+
+  // D-4346 (history-permanent-failures-classified): a drain failure is decided by its SQLite result code.
+  /** Both ids spooled before ONE rename pass, so they share a tick and pid, and the first id lists first. */
+  const twoDraining = (): [string, string] => {
+    spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+    spool(box.home, ID2, { v: 1, ev: 'Stop', id: ID2 });
+    expect(runSweep(box).code).toBe(0);
+    const n = drainingNames(box.home);
+    expect(n).toHaveLength(2);
+    return [n[0]!, n[1]!];
+  };
+
+  it.each([['locked', '1:6'], ['busy-snapshot', '1:517']])('a %s commit defers like a busy one: the file stays, drain_deferred counts, exit 0, and the next pass drains it', (_what, code) => {
+    spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+    expect(runSweep(box).code).toBe(0);
+    const [name] = drainingNames(box.home);
+    const r = runSweep(box, [], faults({ HISTORY_TEST_FAIL_COMMIT: code }));
+    expect(r.code, r.stderr).toBe(0);
+    expect(drainingNames(box.home)).toEqual([name]);
+    expect(receipts(box)).toEqual([]);
+    expect(counters(box)['drain_deferred']).toBe(1);
+    expect(runSweep(box).code).toBe(0);
+    expect(receipts(box)).toHaveLength(1);
+    expect(drainingNames(box.home)).toEqual([]);
+    expect(fileBlocks(journalOf(box.home, ids.storeId)).filter((b) => b.name === name)).toHaveLength(1);
+  });
+
+  it.each([['UNIQUE', '1:2067'], ['NOT NULL', '1:1299'], ['MISMATCH', '1:20']])('a commit the store refused for the file\'s own rows (%s) sets that file aside into .draining/rejected/, counted once, and the next file drains in the same tick', (_what, code) => {
+    const [first, second] = twoDraining();
+    const r = runSweep(box, [], faults({ HISTORY_TEST_FAIL_COMMIT: code }));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toContain(`history-sweep: drain-rejected: ${first}: injected commit failure`);
+    expect(fs.existsSync(path.join(REJECTED(box.home), first))).toBe(true);
+    expect(fs.existsSync(path.join(DRAIN(box.home), first.replace(/\.jsonl$/, '.obs')))).toBe(false);
+    expect(fs.statSync(REJECTED(box.home)).mode & 0o777).toBe(0o700);
+    expect(counters(box)['drain_rejected']).toBe(1);
+    expect(counters(box)['drain_deferred']).toBeUndefined();
+    expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(second, 1)]);
+    const names = fileBlocks(journalOf(box.home, ids.storeId)).map((b) => b.name);
+    expect(names).toContain(first);   // journal first: nothing lost
+    expect(names).toContain(second);
+    expect(drainingNames(box.home)).toEqual([]);
+    expect(runSweep(box).code).toBe(0);
+    expect(counters(box)['drain_rejected']).toBe(1);
+  });
+
+  it('a foreign trigger\'s RAISE (1811) fails the pass loudly: exit 1, its message on stderr, both files kept and journaled once, nothing deferred or rejected; dropping it drains both', () => {
+    const [first, second] = twoDraining();
+    const w = openWriter(historyPaths(box.home).dbFile);
+    try { w.exec("CREATE TRIGGER fixture_refuse BEFORE INSERT ON spool_receipts BEGIN SELECT RAISE(ABORT, 'fixture-planted-trigger'); END"); } finally { closeWriter(w); }
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/internal error: fixture-planted-trigger/);   // node's message is the RAISE text
+    expect(drainingNames(box.home)).toEqual([first, second].sort());
+    expect(counters(box)['drain_deferred']).toBeUndefined();
+    expect(counters(box)['drain_rejected']).toBeUndefined();
+    expect(fs.existsSync(REJECTED(box.home))).toBe(false);
+    const w2 = openWriter(historyPaths(box.home).dbFile);
+    try { w2.exec('DROP TRIGGER fixture_refuse'); } finally { closeWriter(w2); }
+    expect(runSweep(box).code).toBe(0);
+    expect(drainingNames(box.home)).toEqual([]);
+    expect(receipts(box).map((x) => x.event_key).sort()).toEqual([eventKey(first, 1), eventKey(second, 1)].sort());
+    const blocks = fileBlocks(journalOf(box.home, ids.storeId));
+    for (const n of [first, second]) expect(blocks.filter((b) => b.name === n), n).toHaveLength(1);
+  });
+
+  it.each([['full disk', '1:13'], ['corrupt', '1:11'], ['I/O', '1:266'], ['no result code', '1']])('an injected %s commit failure fails the pass (exit 1) and keeps the file for the next pass', (_what, code) => {
+    spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+    expect(runSweep(box).code).toBe(0);
+    const [name] = drainingNames(box.home);
+    const r = runSweep(box, [], faults({ HISTORY_TEST_FAIL_COMMIT: code }));
+    expect(r.code, r.stderr).toBe(1);
+    expect(drainingNames(box.home)).toEqual([name]);
+    expect(receipts(box)).toEqual([]);
+    expect(counters(box)['drain_deferred']).toBeUndefined();
+    expect(counters(box)['drain_rejected']).toBeUndefined();
     expect(runSweep(box).code).toBe(0);
     expect(receipts(box)).toHaveLength(1);
     expect(drainingNames(box.home)).toEqual([]);
