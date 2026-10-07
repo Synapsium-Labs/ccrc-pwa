@@ -1,0 +1,324 @@
+// history-cli.test.ts — W1-B1 Task 27: `ccrc history status`
+// (spec docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md §8.1–§8.4, §6.9, §5.1's dispatch).
+// Pins S13, S15, C28, C36 (its status rows), C45 (the status --json half), O29; and the review focus on
+// status's cost (no scan of entries, blobs or memberships; under 2 s on a seeded store).
+//
+// The CLI runs as the box runs it: a child on process.execPath with --no-warnings (node:sqlite's
+// ExperimentalWarning stays off stderr), HOME a fixture from historyHelpers' makeHistoryBox (tmux, gh, ssh, the
+// managers and curl poisoned; CLAUDECODE, TMUX, TMUX_PANE and CCRC_RECALL_* scrubbed), and the statfs preload
+// deciding free space. CLI tests skip on darwin (O24) except §8.3's Darwin row, which runs natively there.
+import { describe, it, expect, beforeEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
+import { makeHistoryBox, runSweep, preloadOptions, PRELOADS, CLI, REPO, type HistoryBox } from './historyHelpers.js';
+
+const U9 = '99999999-9999-4999-8999-999999999999';
+const ID = 'claude-a-demo';
+const G1 = '0189abcd-1234-4678-9abc-0123456789ab';
+const CCRC = path.join(REPO, 'ccd', 'ccrc');
+
+interface Envelope {
+  v: number; exit: number; reason?: string; store_id: string | null; coverage: string; role: string;
+  user_version: number | null; code_version: number; migration: string; lag: number | 'unmeasured';
+  indexed_through_ms: number | null; last_tick_ms: number | null; bytes_behind_last3: number[];
+  size_bytes: number | null; cap_gb: number; cap_file: string; cap_malformed: boolean; capture_pause: string;
+  free_bytes: number | null; threshold_bytes: number | null; fts: string | null; snapshot_bytes: number | null;
+  journal: { bytes: number; newest_month: string | null; outbox: number; growth_30d_bytes: number; skipped: number; unwritable: boolean; other_store_dirs: string[] };
+  export: Record<string, { horizon_days: number | null; retention_days: number | null; due_blobs: number; overdue_blobs: number; segments: number }>;
+  recovering: { step: string; cursor: string } | null; op: { verb: string; pid: number; alive: boolean; start_ms: number } | null;
+  history_off: boolean; shim_mtime_ms: number | null; counters: Record<string, number>;
+  health: { pass: string | null; warn: unknown[]; fail: unknown[] };
+}
+interface StatusRun { code: number | null; env: Envelope; stdout: string; stderr: string; ms: number }
+
+/** `status --json` exactly as doctor runs it (§9.6), on the statfs preload; extra preloads and env per case. */
+function status(box: HistoryBox, opts: { preloads?: string[]; env?: Record<string, string>; args?: string[] } = {}): StatusRun {
+  const preloads = opts.preloads ?? [PRELOADS.statfs];
+  const t0 = Date.now();
+  const r = spawnSync(process.execPath, ['--no-warnings', CLI, ...(opts.args ?? ['status', '--json'])], {
+    cwd: box.home, encoding: 'utf8',
+    env: { ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions(preloads), ...opts.env },
+  });
+  const ms = Date.now() - t0;
+  const line = (r.stdout ?? '').trim().split('\n').at(-1) ?? '';
+  let env = {} as Envelope;
+  try { env = JSON.parse(line) as Envelope; } catch { /* a human-format or failed run: the case reads stdout */ }
+  return { code: r.status, env, stdout: r.stdout ?? '', stderr: r.stderr ?? '', ms };
+}
+const hist = (box: HistoryBox, ...p: string[]): string => path.join(box.home, '.ccrc', 'history', ...p);
+const dbFile = (box: HistoryBox): string => hist(box, 'db', 'history.db');
+function boundBox(prefix: string): HistoryBox {
+  const box = makeHistoryBox(prefix, { role: 'fleet', shim: true });
+  const r = runSweep(box);
+  expect(r.code, r.stderr).toBe(0);
+  return box;
+}
+const storeIdOf = (box: HistoryBox): string => fs.readFileSync(hist(box, 'store.id'), 'utf8').trim();
+const metaStoreId = (box: HistoryBox): string => {
+  const db = new DatabaseSync(dbFile(box), { readOnly: true });
+  try { return (db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get() as { v: string }).v; } finally { db.close(); }
+};
+/** C45: every envelope, whatever its exit, carries store_id and coverage=this-box. */
+function expectIdentity(env: Envelope): void {
+  expect(Object.keys(env)).toContain('store_id');
+  expect(env.coverage).toBe('this-box');
+}
+
+describe('C36, the Darwin row: native on macOS', () => {
+  it.runIf(process.platform === 'darwin')('on macOS status answers 9 before anything else', () => {
+    const box = makeHistoryBox('ccrc-hist-cli-darwin-', { role: 'fleet', shim: true });
+    const r = status(box);
+    expect(r.code).toBe(9);
+    expect(r.env.exit).toBe(9);
+    expectIdentity(r.env);
+  });
+});
+
+describe('ccrc history status (Linux)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+
+  it('C28 + C45: a box verb, identity-free — exit 0 with no TMUX_PANE on a bound store, and no spool line written', () => {
+    const box = boundBox('ccrc-hist-cli-c28-');
+    expect(box.env['TMUX_PANE'], 'the fixture env carries no pane').toBeUndefined();
+    const spool = hist(box, 'spool');
+    const before = fs.readdirSync(spool).sort();
+    const r = status(box);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.env.exit).toBe(0);
+    expect(r.env.reason).toBeUndefined();
+    expect(r.env.store_id).toBe(storeIdOf(box));
+    expectIdentity(r.env);
+    expect(fs.readdirSync(spool).sort(), 'status writes no counter line (slug history-box-verbs-no-counter-line)').toEqual(before);
+    expect(r.stderr, '--no-warnings keeps node:sqlite\'s ExperimentalWarning off stderr').toBe('');
+  });
+
+  it('C36: the no-store table, row by row, through status --json', () => {
+    // a server role recorded, with a stale shim, store.id and DB all present → 9
+    const server = boundBox('ccrc-hist-cli-c36a-');
+    fs.writeFileSync(path.join(server.home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\n');
+    const s = status(server);
+    expect(s.code).toBe(9);
+    expectIdentity(s.env);
+    // no shim, no store.id, no DB → 9 (never installed)
+    const bare = makeHistoryBox('ccrc-hist-cli-c36b-', { role: 'fleet', shim: false });
+    expect(status(bare).code).toBe(9);
+    // the shim only → 6 (the first tick has not created the store)
+    const shimOnly = makeHistoryBox('ccrc-hist-cli-c36c-', { role: 'fleet', shim: true });
+    const six = status(shimOnly);
+    expect(six.code).toBe(6);
+    expect(six.env.reason, 'exit 6 has one meaning and carries no reason').toBeUndefined();
+    expectIdentity(six.env);
+    // the same with a journal/<uuid>/ directory → 5 store-recoverable
+    fs.mkdirSync(hist(shimOnly, 'journal', U9), { recursive: true });
+    const rec = status(shimOnly);
+    expect([rec.code, rec.env.reason]).toEqual([5, 'store-recoverable']);
+    // the same with a leftover history.db-wal instead → 5 store-wal-orphaned
+    const wal = makeHistoryBox('ccrc-hist-cli-c36d-', { role: 'fleet', shim: true });
+    fs.mkdirSync(hist(wal, 'db'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(hist(wal, 'db', 'history.db-wal'), '');
+    const w = status(wal);
+    expect([w.code, w.env.reason]).toEqual([5, 'store-wal-orphaned']);
+    // store.id without a DB → 5 store-missing, naming the store
+    const missing = boundBox('ccrc-hist-cli-c36e-');
+    for (const f of ['history.db', 'history.db-wal', 'history.db-shm']) fs.rmSync(hist(missing, 'db', f), { force: true });
+    const m = status(missing);
+    expect([m.code, m.env.reason]).toEqual([5, 'store-missing']);
+    expect(m.env.store_id).toBe(storeIdOf(missing));
+    // a 0-byte store → 5 store-zero-byte
+    const zero = boundBox('ccrc-hist-cli-c36f-');
+    for (const f of ['history.db-wal', 'history.db-shm']) fs.rmSync(hist(zero, 'db', f), { force: true });
+    fs.truncateSync(dbFile(zero), 0);
+    const z = status(zero);
+    expect([z.code, z.env.reason]).toEqual([5, 'store-zero-byte']);
+    expect(fs.statSync(dbFile(zero)).size, 'never opened empty, never written').toBe(0);
+  });
+
+  it('S13: a DB with no store.id and no matching pending marker — the sweep refuses with no write, status exits 5 store-unbound naming meta.store_id', () => {
+    const box = boundBox('ccrc-hist-cli-s13-');
+    const id = metaStoreId(box);
+    fs.rmSync(hist(box, 'store.id'));
+    const mtime = fs.statSync(dbFile(box)).mtimeMs;
+    const r = runSweep(box);
+    expect(r.code).toBe(5);
+    expect(r.stdout).toMatch(/^history-sweep: store-unbound$/m);
+    expect(fs.existsSync(hist(box, 'store.id')), 'the sweep never adopts').toBe(false);
+    expect(fs.statSync(dbFile(box)).mtimeMs).toBe(mtime);
+    const s = status(box);
+    expect([s.code, s.env.reason]).toEqual([5, 'store-unbound']);
+    expect(s.env.store_id, 'the --adopt remedy needs no sqlite3').toBe(id);
+  });
+
+  it('S15: no store.id and no DB, but evidence a store existed — the sweep creates nothing and status names the same word', () => {
+    const cases: [string, (b: HistoryBox) => void, string][] = [
+      ['a journal/<uuid>/ directory', (b) => fs.mkdirSync(hist(b, 'journal', U9), { recursive: true }), 'store-recoverable'],
+      ['a regular db/backups/x.db', (b) => { fs.mkdirSync(hist(b, 'db', 'backups'), { recursive: true }); fs.writeFileSync(hist(b, 'db', 'backups', 'x.db'), 'x'); }, 'store-recoverable'],
+      ['a leftover history.db-wal', (b) => { fs.mkdirSync(hist(b, 'db'), { recursive: true }); fs.writeFileSync(hist(b, 'db', 'history.db-wal'), ''); }, 'store-wal-orphaned'],
+    ];
+    for (const [what, plant, word] of cases) {
+      const box = makeHistoryBox('ccrc-hist-cli-s15-', { role: 'fleet', shim: true });
+      plant(box);
+      const r = runSweep(box);
+      expect(r.code, what).toBe(5);
+      expect(r.stdout, what).toMatch(new RegExp(`^history-sweep: ${word}$`, 'm'));
+      expect(fs.existsSync(dbFile(box)), what).toBe(false);
+      expect(fs.existsSync(hist(box, 'store.id')), what).toBe(false);
+      const s = status(box);
+      expect([s.code, s.env.reason], what).toEqual([5, word]);
+    }
+    const fresh = makeHistoryBox('ccrc-hist-cli-s15-none-', { role: 'fleet', shim: true });
+    expect(runSweep(fresh).code, 'with none of them, a first install creates the store').toBe(0);
+    expect(fs.existsSync(dbFile(fresh))).toBe(true);
+    expect(status(fresh).code).toBe(0);
+  });
+
+  it('O29: an interrupted install wedges nothing — the pending case opens on the next tick, the unbound case stays 5', () => {
+    const pending = boundBox('ccrc-hist-cli-o29a-');
+    fs.renameSync(hist(pending, 'store.id'), hist(pending, 'store.id.pending'));   // killed between link() and the rename
+    expect(status(pending).code, 'store.id.pending matches: the writer finishes it').toBe(6);
+    expect(runSweep(pending).code).toBe(0);
+    expect(fs.readFileSync(hist(pending, 'store.id'), 'utf8').trim()).toBe(metaStoreId(pending));
+    const done = status(pending);
+    expect(done.code).toBe(0);
+    expect(done.env.counters['store_creation_completed']).toBe(1);
+    const unbound = boundBox('ccrc-hist-cli-o29b-');
+    fs.rmSync(hist(unbound, 'store.id'));
+    expect(status(unbound).code).toBe(5);
+    expect(runSweep(unbound).code).toBe(5);
+    expect(status(unbound).code).toBe(5);
+  });
+
+  it('a stat that never settles answers 5 store-unreachable inside the 2 s bound, without opening the DB', () => {
+    const box = boundBox('ccrc-hist-cli-unreach-');
+    const r = status(box, { preloads: [PRELOADS.statfs], env: { HISTORY_TEST_STAT_HANG: 'history.db' } });
+    expect([r.code, r.env.reason]).toEqual([5, 'store-unreachable']);
+    expect(r.env.store_id).toBe(storeIdOf(box));
+    expect(r.ms, 'CLI_STAT_DEADLINE_MS is 2000; the process exits explicitly past a pinned thread').toBeLessThan(10_000);
+  });
+
+  it('a bound store that is not in WAL mode answers 5 store-not-wal with its store_id', () => {
+    const box = boundBox('ccrc-hist-cli-notwal-');
+    const db = new DatabaseSync(dbFile(box));
+    db.exec('PRAGMA journal_mode = DELETE');
+    db.close();
+    const r = status(box);
+    expect([r.code, r.env.reason]).toEqual([5, 'store-not-wal']);
+    expect(r.env.store_id).toBe(storeIdOf(box));
+  });
+
+  it('an unreadable store.writer is a binding read that failed: 5 store-unmeasured with its store_id, never a healthy 0 (§5.3 "Binding reads")', () => {
+    const box = boundBox('ccrc-hist-cli-writer-');
+    fs.writeFileSync(hist(box, 'store.writer'), 'not a writer token\n');   // off WRITER_RE: measured unreadable
+    const r = status(box);
+    expect([r.code, r.env.reason]).toEqual([5, 'store-unmeasured']);
+    expect(r.env.store_id).toBe(storeIdOf(box));
+  });
+
+  it('an unreadable cap file reads malformed, as the sweep reads it: the default applies and doctor can WARN', () => {
+    const box = boundBox('ccrc-hist-cli-capdir-');
+    fs.mkdirSync(path.join(box.home, '.ccrc', 'history-max-gb'));     // present, but no read of it succeeds
+    const r = status(box);
+    expect(r.code, r.stderr).toBe(0);
+    expect([r.env.cap_gb, r.env.cap_malformed]).toEqual([50, true]);
+  });
+
+  it('the envelope reports the durability state (§8.4 status): versions, migration, ticks, journal, cap, op, switch', () => {
+    const box = boundBox('ccrc-hist-cli-env-');
+    expect(runSweep(box).code).toBe(0);                       // a second tick: one more ticks row
+    fs.writeFileSync(path.join(box.home, '.ccrc', 'history-max-gb'), 'abc\n');
+    const dead = spawnSync(process.execPath, ['-e', '']).pid!;  // a pid that has already exited
+    fs.writeFileSync(hist(box, 'op'), `import ${dead} 1700000000000\n`);
+    fs.writeFileSync(path.join(box.home, '.ccrc', 'history-off'), '');
+    const r = status(box);
+    expect(r.code, r.stderr).toBe(0);
+    const e = r.env;
+    expect(e.v).toBe(1);
+    expect([e.user_version, e.code_version, e.migration]).toEqual([1, 1, 'none']);
+    expect(typeof e.last_tick_ms).toBe('number');
+    expect(e.bytes_behind_last3.length).toBeGreaterThanOrEqual(1);
+    expect(e.bytes_behind_last3.length).toBeLessThanOrEqual(3);
+    expect(e.size_bytes).toBeGreaterThan(0);
+    expect([e.cap_gb, e.cap_malformed]).toEqual([50, true]);
+    expect(e.cap_file.endsWith(path.join('.ccrc', 'history-max-gb')), 'doctor names the file from here (O13)').toBe(true);
+    expect(e.free_bytes).toBeGreaterThan(0);
+    expect(e.threshold_bytes).toBeGreaterThan(0);
+    expect(['ready', 'fts-pending', 'fts5-absent']).toContain(e.fts);
+    expect(e.journal.newest_month).toMatch(/^[0-9]{4}-[0-9]{2}$/);
+    expect(e.journal.bytes).toBeGreaterThan(0);
+    expect(e.journal.outbox).toBe(0);
+    expect(e.journal.other_store_dirs).toEqual([]);
+    expect(e.op).toEqual({ verb: 'import', pid: dead, alive: false, start_ms: 1700000000000 });
+    expect(e.history_off).toBe(true);
+    expect(typeof e.shim_mtime_ms).toBe('number');
+    expect(e.recovering).toBeNull();
+    expect(Object.keys(e.export)).toEqual(['claude-code']);
+    expect(e.health).toEqual({ pass: null, warn: [], fail: [] });
+  });
+
+  it('another store\'s journal directory beside this one is listed, never read as this store\'s', () => {
+    const box = boundBox('ccrc-hist-cli-other-');
+    fs.mkdirSync(hist(box, 'journal', U9), { recursive: true });
+    expect(status(box).env.journal.other_store_dirs).toEqual([U9]);
+  });
+
+  it('the human form leads with the header line §8.3 names', () => {
+    const box = boundBox('ccrc-hist-cli-human-');
+    const r = status(box, { args: ['status'] });
+    expect(r.code).toBe(0);
+    expect(r.stdout.split('\n')[0]).toMatch(new RegExp(`^scope=box coverage=this-box store=${storeIdOf(box)} indexed-through=\\S+ lag=\\S+$`));
+  });
+
+  it('every other verb is bad-args in W1-B1, with a usage line, and --json carries the reason', () => {
+    const box = boundBox('ccrc-hist-cli-bad-');
+    const plain = status(box, { args: ['grep', 'x'] });
+    expect(plain.code).toBe(2);
+    expect(plain.stderr).toMatch(/^usage: ccrc history status \[--json\]/m);
+    const json = status(box, { args: ['describe', 'L0', '--json'] });
+    expect([json.code, json.env.reason]).toEqual([2, 'bad-args']);
+    expectIdentity(json.env);
+    expect(status(box, { args: [] }).code).toBe(2);
+  });
+
+  it('the ccrc dispatch line reaches cli.mjs: `ccrc history status --json` answers as the module does, `ccrc history` alone is bad-args', () => {
+    const box = boundBox('ccrc-hist-cli-dispatch-');
+    const env = { ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions([PRELOADS.statfs]) };
+    const via = spawnSync('bash', [CCRC, 'history', 'status', '--json'], { cwd: box.home, env, encoding: 'utf8' });
+    expect(via.status, via.stderr).toBe(0);
+    expect((JSON.parse(via.stdout.trim()) as Envelope).store_id).toBe(storeIdOf(box));
+    const none = spawnSync('bash', [CCRC, 'history'], { cwd: box.home, env, encoding: 'utf8' });
+    expect(none.status).toBe(2);
+  });
+
+  it('cost: on 200k entries and 10k ticks status answers in under 2 s and none of its statements scans entries, blobs or memberships', () => {
+    const box = boundBox('ccrc-hist-cli-cost-');
+    const db = new DatabaseSync(dbFile(box));
+    db.exec('BEGIN');
+    const blob = db.prepare("INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, 'br5', ?, 1)").run(Buffer.alloc(32, 7), Buffer.from([0]));
+    const tr = db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)').run(U9);
+    const ent = db.prepare("INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id) VALUES (?, ?, 'user', 'operator', 1, 0, 0, ?)");
+    for (let i = 0; i < 200_000; i += 1) ent.run(`seed-${i}`, tr.lastInsertRowid, blob.lastInsertRowid);
+    const tick = db.prepare('INSERT INTO ticks (ts_ms, lag_ms, bytes, files_behind, bytes_behind) VALUES (?, 0, 0, 0, 0)');
+    for (let i = 0; i < 10_000; i += 1) tick.run(Date.now() - (10_000 - i) * 120_000);
+    db.exec('COMMIT');
+    db.close();
+    const r = status(box);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.ms).toBeLessThan(2000);
+    // Every statement status prepares, read from the module itself (a child: importing it here would set
+    // this worker's umask), through EXPLAIN QUERY PLAN against the seeded store.
+    const sql = spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e',
+      `const m = await import(${JSON.stringify(pathToFileURL(CLI).href)}); process.stdout.write(JSON.stringify(m.STATUS_SQL));`],
+    { encoding: 'utf8' });
+    expect(sql.status, sql.stderr).toBe(0);
+    const statements = Object.values(JSON.parse(sql.stdout) as Record<string, string>);
+    expect(statements.length, 'a scan over no statements proves nothing').toBeGreaterThanOrEqual(5);
+    const ro = new DatabaseSync(dbFile(box), { readOnly: true });
+    try {
+      const plan = (s: string): string => (ro.prepare(`EXPLAIN QUERY PLAN ${s}`).all() as { detail: string }[]).map((x) => x.detail).join(' | ');
+      expect(plan('SELECT count(*) FROM entries'), 'CONTROL: the matcher sees a scan when there is one').toMatch(/\bSCAN entries\b/);
+      for (const s of statements) expect(plan(s), s).not.toMatch(/\bSCAN (entries|blobs|memberships)\b/);
+    } finally { ro.close(); }
+  });
+});

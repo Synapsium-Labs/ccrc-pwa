@@ -81,3 +81,17 @@ import { syncBuiltinESMExports as syncM26 } from 'node:module';
     syncM26();
   }
 }
+
+// ── Task 27: a stat that never settles (the CLI's 2 s reachability bound, §8.1) ──────────────────────
+// HISTORY_TEST_STAT_HANG=<substring>: fs.promises.stat of any path containing <substring> returns a promise
+// that never settles — a dead volume as the CLI's asynchronous stat meets it. Everything else stats normally.
+import fsS27 from 'node:fs';
+import { syncBuiltinESMExports as syncS27 } from 'node:module';
+{
+  const hang = process.env.HISTORY_TEST_STAT_HANG ?? '';
+  if (hang !== '') {
+    const realStat = fsS27.promises.stat;
+    fsS27.promises.stat = (p, ...rest) => (String(p).includes(hang) ? new Promise(() => {}) : realStat(p, ...rest));
+    syncS27();
+  }
+}

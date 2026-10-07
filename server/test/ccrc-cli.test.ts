@@ -211,9 +211,14 @@ describe('ccrc: dispatch and usage', () => {
     // which runs a Codex lane's two tiers. Placed after `models` because it is the
     // lane's other half: models says what the lane routes, codex runs it. Same
     // split as every verb above: `server/test/ccrc-codex.test.ts` owns what it does.
+    //
+    // `history` joined it in the ccrc-history programme's W1-B1 (spec 2026-10-05 §5.1) — the one
+    // dispatch line that execs ccd/history/cli.mjs. It joins the line in place, last, and gets no row
+    // of its own in the usage body: every line of that body sits above ccd/ccrc's corpus cut and is
+    // cited by number elsewhere. `server/test/history-cli.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|restamp\|version\|watchdog\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|restamp\|version\|watchdog\|history\}/);
     expect(r.stdout).toMatch(/^ {2}codex {5}run a Codex lane's two tiers/m);
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);

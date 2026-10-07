@@ -2008,7 +2008,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|logs|passwd|expose|restamp|version|watchdog}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|logs|passwd|expose|restamp|version|watchdog|history}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -23816,6 +23816,7 @@ case "$VERB" in
   expose)  cmd_expose "$@" ;;
   restamp) cmd_restamp "$@" ;;
   watchdog) cmd_watchdog "$@" ;;
+  history) exec node --no-warnings "$CCRC_HERE/history/cli.mjs" "$@" ;;
   *) _ccrc_usage_die "$VERB" ;;
 esac
 
