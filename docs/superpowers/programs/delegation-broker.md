@@ -428,7 +428,7 @@ out as a capture directory. A lane is named by its version; the registry rows of
 | Workflow: SubagentStart against the parent's Stop | before the Stop; the rig's cell has it after — order variance, not a new kind | before the Stop; as 2.1.286 |
 | Main thread before the Workflow call | — | a ToolSearch call (input keys `max_results`, `query`) loads the Workflow tool first (`toolsearch-may-precede-a-workflow-call`) |
 | Unpaired SubagentStop (no SubagentStart, empty agent type, `cwd` `scratch`) | 3, one after each of the parent's 3 Stops; the rig shows one only during `/compact` (`post-turn-subagentstop-is-unpaired`) | 2, one after each of 2 Stops |
-| Event key sets (per event, every field path) | the rig's, plus `scratchpad_dir` on every event (`real-payloads-carry-scratchpad-dir`) | the rig's, plus `scratchpad_dir`, minus Stop's `background_tasks.[].agent_type` (no Stop fell while the agent ran; see the "launch's ids" row), plus the main-thread ToolSearch call's input keys |
+| Event key sets (per event, every field path) | the rig's, plus `scratchpad_dir` on every event (`real-payloads-carry-scratchpad-dir`) | the rig's, plus `scratchpad_dir`, minus Stop's `background_tasks.[].agent_type` (no Stop fell while the agent ran; see the "Agent: the launch's ids" row), plus the main-thread ToolSearch call's input keys |
 | `cwd` labels | main `scratch`, subagent `worktrees/*`, as the rig | same |
 | Session ids | one (`s1`) for every event of the turn, as the rig | same, except the SessionEnd below |
 | SessionEnd at `ccd stop` | none captured under this lane's id; its SessionEnd (reason `other`) was filed under the 2.1.292 lane's id (`teardown-hook-event-names-another-session`) | its own: none captured anywhere; the one under its id is 2.1.286's |
@@ -474,10 +474,11 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
   (`ccd/session-hook.sh:2760`). Measured on a private tmux server: once a pane's session is killed, that query answers
   another live session, and with `-t "$TMUX_PANE"` it answers nothing. So a hook event fired during teardown is
   attributed to whichever session tmux picks. Only SessionEnd was seen at teardown here (two idle lanes), and
-  SessionEnd writes no hookstate, so here only a capture was misfiled. Whether an event that writes hookstate (Stop,
-  StopFailure) or the subagent set (SubagentStop) can fire after the pane's session is gone is unmeasured, and it
-  would be filed under another session the same way. Wave 3's spool must resolve the pane exactly (and drop an event
-  it cannot), or a stop-time SessionEnd lands on another session — spec §5.3 SessionEnd row, §5.1 parent key.
+  SessionEnd writes no hookstate, so here only a capture was misfiled. Whether an event that writes hookstate (Stop),
+  the turn marker (StopFailure) or the subagent set (SubagentStop) can fire after the pane's session is gone is
+  unmeasured, and it would be filed under another session the same way. Wave 3's spool must resolve the pane exactly
+  (and drop an event it cannot), or a stop-time SessionEnd lands on another session — spec §5.3 SessionEnd row, §5.1
+  parent key.
 
 ## Decisions & deviations
 
