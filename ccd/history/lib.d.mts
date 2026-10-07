@@ -252,6 +252,7 @@ export const REDACTED_MARK: '[redacted]';
 export function extractSecretValues(text: string, kind: 'env' | 'env-identifier' | 'token' | 'json'): string[];
 export interface SecretPair { len: number; sha256: string }
 export function secretPairs(values: readonly string[]): { pairs: SecretPair[]; unsegmentable: number };
+export function secretUnits(value: string): string[];
 export function sessionHashPairs(jsonText: string): SecretPair[];
 export interface PairIndex { readonly byLen: ReadonlyMap<number, ReadonlySet<string>> }
 export function makePairIndex(pairs: Iterable<SecretPair>): PairIndex;

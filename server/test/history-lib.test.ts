@@ -1254,6 +1254,16 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     expect(libRedact.secretPairs(['aaaa/bbbb/cccc/dddd/eeee'])).toEqual({ pairs: [], unsegmentable: 1 });
     expect(libRedact.secretPairs(['short-secret-123'])).toEqual({ pairs: [], unsegmentable: 0 });
   });
+  it('D-4311: secretUnits answers the texts secretPairs registers a pair for, one rule', () => {
+    const segs = [rndAlnum(16), rndAlnum(14), rndAlnum(12)];
+    const tok = rndHex(32);
+    expect(libRedact.secretUnits(tok)).toEqual([tok]);
+    expect(libRedact.secretUnits(`${segs[0]}/${segs[1]}+${segs[2]}=ab`)).toEqual(segs);
+    expect(libRedact.secretUnits('aaaa/bbbb/cccc/dddd/eeee')).toEqual([]);
+    expect(libRedact.secretUnits('short-secret-123')).toEqual([]);
+    const mixed = `${segs[0]}/${segs[1]}+${segs[2]}=ab`;
+    expect(libRedact.secretPairs([mixed]).pairs.map((p) => p.len)).toEqual(libRedact.secretUnits(mixed).map((u) => u.length));
+  });
   it('the pair loader keeps only len and sha256, never the value', () => {
     const tok = rndHex(32);
     const { pairs } = libRedact.secretPairs([tok, tok]);

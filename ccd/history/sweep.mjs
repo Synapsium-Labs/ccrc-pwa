@@ -39,7 +39,7 @@ import {
   CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
-  SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, sessionHashPairs, makePairIndex, secretKindOf,
+  SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
   SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, ftsPhrase, redactField,
 } from './lib.mjs';
 import {
@@ -1368,7 +1368,7 @@ export async function tick(db, ctx) {
   // §9.1 the probe at every open, then §6.2: every pair whose re-index is still owed (a pair learned this tick, or
   // one a dead pass committed) re-indexes before any FTS insert. Its values are every value this tick loaded.
   ictx.fts = ftsPrepare(db, ictx.nowMs).tables;
-  reindexForValues(db, ictx, secrets.values);
+  reindexForValues(db, ictx, secrets.values, secrets.complete);
   // Step 1, the drain: journal first, then the FULL drain transaction, then its verdicts, then the unlink (§9.14).
   // runPass never ticks without both binding names: a missing store.writer is a hold there (§9.10 "Writer token").
   ctx.hints = drainSpool(db, ctx);
@@ -2841,8 +2841,9 @@ export function recordPairs(db, home, ids, pairs, nowMs) {
  *  migration verdict. It returns this tick's redaction index (every pair ever recorded), the values
  *  whose pairs are new this tick (`newValues`), and every value this tick loaded (`values`), which
  *  task 23's re-index reads against its durable mark, so a pair committed by a pass that died
- *  before its re-index is still re-indexed by the next. The caller drops the values when the tick
- *  ends. */
+ *  before its re-index is still re-indexed by the next. `complete` is false when a source was
+ *  unreadable, so the values may be missing one a pair was learned from (D-4311). The caller drops
+ *  the values when the tick ends. */
 export function secretsStep(db, ctx, secretFiles) {
   const loaded = loadSecrets(ctx.home, secretFiles);
   const fresh = new Set(recordPairs(db, ctx.home, ctx.ids, loaded.pairs, ctx.nowMs).map((p) => `${p.len}:${p.sha256}`));
@@ -2853,7 +2854,8 @@ export function secretsStep(db, ctx, secretFiles) {
     setMeta(db, 'redact_unreadable', JSON.stringify(loaded.unreadable));
   });
   const all = secretStmts(db).allPairs.all().map((r) => ({ len: r.len, sha256: Buffer.from(r.sha256).toString('hex') }));
-  return { pairIdx: makePairIndex(all), newValues, values: loaded.values };
+  // `complete`: every source was read this tick, so `values` names every value any pair could have come from (D-4311).
+  return { pairIdx: makePairIndex(all), newValues, values: loaded.values, complete: loaded.unreadable.length === 0 };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3017,14 +3019,21 @@ export function resetFtsPending(db) {
 /** The re-index a learned pair owes the index (D-4245, history-redaction-reindex-merge, SE4), made DURABLE.
  *  Meta `fts_reindex_rid` is the highest redact_hashes rowid whose re-index has committed. `values`
  *  is every secret value this tick loaded; each whose pair lies above the mark has its blobs found
- *  by a QUOTED-PHRASE match, which FTS5 tokenises as the index did. In one transaction, each such
- *  blob's row is deleted and re-inserted with the now-complete index, merge steps are registered to
- *  purge the deleted bytes, and the mark advances to the top rowid. So a pass that died between
+ *  by QUOTED-PHRASE matches, which FTS5 tokenises as the index did, one per UNIT redaction matches by
+ *  (`secretUnits`: the value when it is one run, else each of its 12+-char segments), so a blob that
+ *  holds only a segment is found too. In one transaction, each such blob's row is deleted and
+ *  re-inserted with the now-complete index, merge steps are registered to purge the deleted bytes,
+ *  and, only when `complete`, the mark advances to the top rowid. So a pass that died between
  *  committing a pair and re-indexing it, or a tick with no FTS, leaves the obligation to the next
- *  tick that has FTS rather than losing it. A pair with no loadable value (sessions.json's hash
- *  pairs, or a source removed since) is passed over by the mark. Values are never written anywhere.
+ *  tick that has FTS rather than losing it.
+ *  `complete` is the secrets step's: false while a source stayed unreadable, because the value an
+ *  owed pair came from may be in it, and the mark must not pass an obligation this tick could not
+ *  serve. Each such tick re-searches the owed values (a value already re-indexed matches nothing, so
+ *  the standing cost is phrase lookups) until a tick reads every source. When it does, a pair with
+ *  no loadable value (sessions.json's hash pairs, or a source removed since) is passed over by the
+ *  mark. Values are never written anywhere. D-4311 (history-reindex-by-units-and-complete-loads).
  *  Returns how many blobs were re-indexed. */
-export function reindexForValues(db, ctx, values) {
+export function reindexForValues(db, ctx, values, complete) {
   if (ctx.fts !== true) return 0;
   const d = derivStmts(db);
   const mark = Number(getMeta(db, REINDEX_META) ?? 0);
@@ -3034,7 +3043,8 @@ export function reindexForValues(db, ctx, values) {
     .some((p) => (d.pairRid.get(p.len, Buffer.from(p.sha256, 'hex'))?.rid ?? 0) > mark));
   const f = ftsStmts(db);
   const ids = new Set();
-  for (const v of owed) for (const r of f.match.all(ftsPhrase(v))) ids.add(Number(r.rowid));
+  for (const v of owed) for (const unit of secretUnits(v)) for (const r of f.match.all(ftsPhrase(unit))) ids.add(Number(r.rowid));
+  if (ids.size === 0 && complete !== true) return 0;
   withTx(db, 'NORMAL', () => {
     for (const id of ids) {
       f.del.run(id);
@@ -3043,7 +3053,7 @@ export function reindexForValues(db, ctx, values) {
       f.ins.run(id, redactField(ftsTextOfBlob(b.z, b.is_sidecar === 1), ctx.pairIdx));
     }
     if (ids.size > 0) d.pending.run(MERGE_STEP, 1);
-    setMeta(db, REINDEX_META, String(top));
+    if (complete === true) setMeta(db, REINDEX_META, String(top));
   });
   return ids.size;
 }

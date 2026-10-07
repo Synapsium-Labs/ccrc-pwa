@@ -1361,12 +1361,22 @@ export function secretPairs(values) {
   };
   for (const v of values) {
     if (v.length < SECRET_MIN_LEN) continue;
-    if (/^[A-Za-z0-9_-]+$/.test(v)) { add(v); continue; }
-    const segments = (v.match(/[A-Za-z0-9_-]+/g) ?? []).filter((s) => s.length >= SECRET_SEGMENT_MIN);
-    if (segments.length === 0) { unsegmentable += 1; continue; }
-    for (const s of segments) add(s);
+    const units = secretUnits(v);
+    if (units.length === 0) { unsegmentable += 1; continue; }
+    for (const s of units) add(s);
   }
   return { pairs: [...seen.values()], unsegmentable };
+}
+
+/** The texts `secretPairs` registers a pair for, for one value: the value itself when it is one
+ *  `[A-Za-z0-9_-]+` run, else each of its runs of `SECRET_SEGMENT_MIN` chars or more. Empty for a
+ *  value under `SECRET_MIN_LEN`, or one with no such run. This is the one place the segment rule
+ *  lives: the late-pair re-index searches the index by each unit, because redaction matches by
+ *  unit, never by the whole value (D-4311, history-reindex-by-units-and-complete-loads). */
+export function secretUnits(value) {
+  if (value.length < SECRET_MIN_LEN) return [];
+  if (/^[A-Za-z0-9_-]+$/.test(value)) return [value];
+  return (value.match(/[A-Za-z0-9_-]+/g) ?? []).filter((s) => s.length >= SECRET_SEGMENT_MIN);
 }
 
 /** `~/.ccrc/sessions.json`'s records as pairs: each `idHash` is already

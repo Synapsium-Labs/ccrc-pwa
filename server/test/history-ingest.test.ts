@@ -1929,4 +1929,65 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       expect(metaV(db, 'fts')).toBe('ready');
     } finally { db.close(); }
   });
+
+  it('D-4311 (S4): a blob indexed holding only one SEGMENT of a later-learned value is found by that segment and re-indexed', () => {
+    const box = IX.newBox('ccrc-hist-seg-');
+    const seg = `zqc${hex(8)}`;
+    const value = `AAAA+zqb${hex(8)}/${seg}=`;       // not one [A-Za-z0-9_-] run: redaction registers each 12+ char run as its own pair
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note ${seg} end`, 1)]));
+    IX.sweepTwice(box);
+    let db = openStoreRO(box);
+    try {
+      expect(matches(db, `"${seg.slice(0, 6)}"*`)).toBe(1);        // CONTROL: indexed in clear, the pair is not known yet
+      expect(ftsBytes(db).includes(seg.slice(4, 14))).toBe(true);
+    } finally { db.close(); }
+    secretFile(box, 'part.env', `ZQ_PART_VALUE=${value}\n`);
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    db = openStoreRO(box);
+    try {
+      expect(matches(db, `"${seg.slice(0, 6)}"*`)).toBe(0);
+      expect(ftsBytes(db).includes(seg.slice(4, 14))).toBe(false);
+      expect(matches(db, 'note')).toBe(1);                          // the row is still indexed, redacted
+      expect(IX.blobsHold(db, seg)).toBe(true);
+    } finally { db.close(); }
+  });
+
+  it('D-4311 (S5): a tick whose secret source is unreadable does not advance the re-index mark; the next readable tick re-indexes and advances it', async () => {
+    const box = IX.newBox('ccrc-hist-s5-');
+    const value = `zqx-${hex(10)}_${hex(10)}`;
+    const tail = value.slice(value.indexOf('_') + 1);
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note ${value} end`, 1)]));
+    IX.sweepTwice(box);                                      // indexed in clear: the pair is not known yet
+    secretFile(box, 'late.env', `ZQ_LATE_VALUE=${value}\n`);
+    const { sweep: S, store, lib } = await IX.api();
+    const P = lib.historyPaths(box.home);
+    const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+    const w = store.openWriter(P.dbFile);
+    try {
+      expect(S.secretsStep(w, S.makeIngestCtx(box.home, box.homes, Date.now(), ids), []).newValues).toEqual([value]);   // the dead pass: pair committed, never re-indexed
+    } finally { w.close(); }
+    const file = path.join(box.home, '.cc-secrets', 'late.env');
+    fs.chmodSync(file, 0o000);                               // the source the value lives in is now unreadable
+    try {
+      const r1 = runSweep(box);
+      expect(r1.code, r1.stderr).toBe(0);
+      let db = openStoreRO(box);
+      try {
+        expect(counters(box)['redact_source_unreadable']).toBeGreaterThan(0);
+        expect(matches(db, `"${tail.slice(0, 6)}"*`)).toBe(1);   // nothing could be re-indexed: the value is not loadable
+        expect(Number(metaV(db, 'fts_reindex_rid') ?? 0))
+          .toBeLessThan((db.prepare('SELECT max(rowid) AS r FROM redact_hashes').get() as { r: number }).r);   // the obligation stands
+      } finally { db.close(); }
+    } finally { fs.chmodSync(file, 0o600); }
+    const r2 = runSweep(box);
+    expect(r2.code, r2.stderr).toBe(0);
+    const db = openStoreRO(box);
+    try {
+      expect(matches(db, `"${tail.slice(0, 6)}"*`)).toBe(0);
+      expect(ftsBytes(db).includes(tail.slice(4, 16))).toBe(false);
+      expect(metaV(db, 'fts_reindex_rid'))
+        .toBe(String((db.prepare('SELECT max(rowid) AS r FROM redact_hashes').get() as { r: number }).r));
+    } finally { db.close(); }
+  });
 });
