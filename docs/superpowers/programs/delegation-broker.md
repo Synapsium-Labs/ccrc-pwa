@@ -54,11 +54,11 @@ The corpus comes from three captures, and `matrix.json` re-derives byte-identica
 - fix round 2's 28 cells, 2.1.290 and 2.1.291 × 14 scenarios, captured 2026-10-06 14:20–14:41 UTC with the rig at
   `e47f3689f` (a git-archive snapshot), sanitised by the sanitiser at `858caf47d` and committed in `158bc2227`. Of
   the versions installed when that capture started (2.1.285–2.1.291), it ran the two the corpus lacked; a later
-  version is wave 2's first step (D-4004). Fix round 2's rig changes came after these runs and change none of them:
-  `claude_pid` resolves the versions directory to its own spelling on a box whose HOME is physical, as the capture
-  box's is, and the workflow scenarios' `answerDialog "Run a dynamic workflow"` step, since replaced by a 10 s sleep
-  (D-4058), waited out its 10 s timeout and pressed nothing: no dialog showed, and 36 of 36 workflow fixtures carry no
-  `dialog answered:` note.
+  version is wave 2's first step (D-4004). Fix round 2's rig changes were not in the snapshot the runs used (the
+  git-archive snapshot of `e47f3689f` above) and change none of them: `claude_pid` resolves the versions directory
+  to its own spelling on a box whose HOME is physical, as the capture box's is, and the workflow scenarios'
+  `answerDialog "Run a dynamic workflow"` step, since replaced by a 10 s sleep (D-4058), waited out its 10 s timeout
+  and pressed nothing: no dialog showed, and 36 of 36 workflow fixtures carry no `dialog answered:` note.
 
 The fleet's installed lanes, re-read read-only at 2026-10-06 14:58 UTC (each lane's last update result, its
 `version_to`; no lane pinned), run 2.1.286 (two lanes), 2.1.289 (one), 2.1.290 (six) and 2.1.291 (six): 15 lanes.
