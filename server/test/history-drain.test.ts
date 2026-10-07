@@ -1208,6 +1208,31 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
         expect(counters(box)['non_regular']).toBe(1);
       });
     });
+
+    // M16: tidyDraining's live-sidecar 'other' arm and listDraining's ENOTDIR answer, each red when its guard is deleted.
+    it.each([['a FIFO'], ['a symlink']])('%s at a live file\'s sidecar name is removed and counted non_regular, never sidecar_malformed; the file drains (M16)', (kind) => {
+      writeRegular();
+      const obs = path.join(DRAIN(box.home), `${ID}.900.1.obs`);
+      if (kind === 'a FIFO') expect(spawnSync('mkfifo', [obs]).status).toBe(0);
+      else fs.symlinkSync(path.join(box.home, 'nowhere'), obs);
+      const r = runSweep(box, [], { timeoutMs: 30_000 });
+      expect(r.code, `${r.signal} ${r.stderr}`).toBe(0);
+      expect(counters(box)['non_regular']).toBe(1);
+      expect(counters(box)['sidecar_malformed']).toBeUndefined();
+      expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(`${ID}.900.1.jsonl`, 1)]);
+    });
+
+    it('a regular file at spool/.draining under a hold with no spool file: the hold pass exits 5, never an ENOTDIR internal error (M16)', () => {
+      fs.rmSync(DRAIN(box.home), { recursive: true });
+      fs.writeFileSync(DRAIN(box.home), 'stray');
+      const aside = path.join(box.home, 'aside');
+      moveDb(box, hist(box.home, 'db'), aside);
+      try {
+        const r = runSweep(box);
+        expect(r.code, r.stderr).toBe(5);
+        expect(r.stderr).not.toMatch(/internal error/);
+      } finally { moveDb(box, aside, hist(box.home, 'db')); }
+    });
   });
 
   it('while a file is held, a startup sid the observation did not name is recorded the first time .uuid names it', () => {
