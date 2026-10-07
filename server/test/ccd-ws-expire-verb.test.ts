@@ -534,6 +534,7 @@ describe('the flavour fork: no verb finishes another verb’s interrupted work',
     fs.mkdirSync(reg('reaping'));
     const r = h.run(`${EXP_STUBS} cmd_ws_reap --expect ${'f'.repeat(64)} --session ${EXP_ID}`);
     expect(refusedWith(r)).not.toBe('reaping-phase-unknown');
+    expect(refusedWith(r)).toBe('not-archived');
     expect(fs.existsSync(a.wt)).toBe(true);
   }, 90_000);
 

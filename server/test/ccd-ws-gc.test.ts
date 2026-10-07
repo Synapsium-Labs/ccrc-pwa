@@ -1276,13 +1276,14 @@ describe('archived and reaping workspaces', () => {
   // timer" — false once the server expires it seven days after its archive. Reworded in place, line for line.
   it('an `expire:` or `reclaim:` breadcrumb is not ws-reap’s to finish — the decline says whose it is', () => {
     h.makeRepo('demo');
-    addWs('demo', 'quiet-mesa');
+    const wt = addWs('demo', 'quiet-mesa');
     for (const crumb of ['expire:worktree', 'reclaim:worktree']) {
       h.sh(`_reg_set demo-quiet-mesa reaping ${crumb}`);
       const out = h.sh(`${ARCH} cmd_ws_gc --prune`);
       expect(out).toMatch(/declined .*quiet-mesa is mid-cleanup/);
       expect(out).toContain('the verb that left it finishes it');
       expect(out).not.toContain('re-run ccd ws-reap to finish it');
+      expect(fs.existsSync(wt)).toBe(true);
     }
   });
 
