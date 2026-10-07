@@ -42,7 +42,7 @@ interface Sweep {
   journalHalf(home: string, ids: Ids | null, nowMs: number): { held: string[]; journalFailed: boolean };
   readDrainingText(path: string): { text: string; bytes: number };
   setAsideOversize(db: DatabaseSync, home: string, name: string): boolean;
-  tidyDraining(home: string): { nonRegular: number; malformed: number };
+  tidyDraining(home: string, tickMs: number, pid: number): { nonRegular: number; malformed: number; displaced: string[]; kept: string[] };
   ensureSpoolDirs(home: string): boolean;
   renameSpoolFiles(home: string, tickMs: number, pid: number): string[];
 }
@@ -929,7 +929,18 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
   // D-4347 (history-planted-entries-never-wedge): a planted or leftover entry at one of the sweep's own names in
   // .draining/ or the journal never wedges, blocks or redirects a pass (review 316 F8, F9, F20).
   describe('a planted entry in .draining/ never wedges the drain (review 316 F8, F9, F20; D-4347)', () => {
-    const PLANTED = (name: string, ...rest: string[]): string => path.join(DRAIN(box.home), 'planted', name, ...rest);
+    const PL = (): string => path.join(DRAIN(box.home), 'planted');
+    /** The drain areas under .draining/planted/: one `<tickMs>.<pid>` directory per drain that set something aside (FU3). */
+    const areas = (): string[] => (fs.existsSync(PL()) ? fs.readdirSync(PL()).sort() : []);
+    /** Every area's copy of `name` (and `rest` under it) that exists. */
+    const plantedHits = (name: string, ...rest: string[]): string[] =>
+      areas().map((a) => path.join(PL(), a, name, ...rest)).filter((p) => fs.existsSync(p));
+    /** The one area's copy of `name`; it must be in exactly one area. */
+    const PLANTED = (name: string, ...rest: string[]): string => {
+      const hits = plantedHits(name, ...rest);
+      expect(hits, `${name} is in exactly one area`).toHaveLength(1);
+      return hits[0]!;
+    };
     const regularFile = (): string => path.join(DRAIN(box.home), `${ID}.900.1.jsonl`);
     const writeRegular = (): void => { fs.writeFileSync(regularFile(), `\n${JSON.stringify({ v: 1, ev: 'Stop', id: ID })}\n`); };
 
@@ -938,7 +949,8 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
       expect(runSweep(box).code).toBe(0);
       expect(runSweep(box).code).toBe(0);
-      expect(fs.statSync(path.join(DRAIN(box.home), 'planted', `${ID}.900.1.jsonl`)).isDirectory()).toBe(true);
+      expect(fs.statSync(PLANTED(`${ID}.900.1.jsonl`)).isDirectory()).toBe(true);
+      expect(areas()).toEqual([expect.stringMatching(/^[0-9]+\.[0-9]+$/)]);
       expect(fs.existsSync(path.join(DRAIN(box.home), 'rejected')), 'a planted entry never touches D-4346\'s directory').toBe(false);
       expect(counters(box)['non_regular']).toBe(1);
       expect(receipts(box)).toHaveLength(1);
@@ -1089,6 +1101,112 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       expect(fs.readdirSync(DRAIN(box.home))).toEqual([]);
       expect(counters(box)['non_regular']).toBeUndefined();
       expect(counters(box)['sidecar_malformed']).toBeUndefined();
+    });
+
+    // FU3 (NR-RF4a, M17): a set-aside never collides, a directory that cannot be moved costs at most its own
+    // draining file, and one left at a draining name is counted once and skipped.
+    const stopLine = (id: string): string => `\n${JSON.stringify({ v: 1, ev: 'Stop', id })}\n`;
+    const plantDir = (name: string, file: string): string => {
+      const d = path.join(DRAIN(box.home), name);
+      fs.mkdirSync(d);
+      fs.writeFileSync(path.join(d, file), '');
+      return d;
+    };
+
+    it('a directory planted again at a sidecar name it held before goes into a new area; nothing holds (FU3, NR-RF4a)', () => {
+      writeRegular();
+      plantDir(`${ID}.900.1.obs`, 'keep');
+      const r1 = runSweep(box);
+      expect(r1.code, r1.stderr).toBe(0);
+      writeRegular();                                              // the same draining name again
+      plantDir(`${ID}.900.1.obs`, 'keep2');                        // and the same sidecar name, already in planted/
+      fs.writeFileSync(path.join(DRAIN(box.home), `${ID2}.902.1.jsonl`), stopLine(ID2));
+      const r2 = runSweep(box);
+      expect(r2.code, r2.stderr).toBe(0);
+      expect(counters(box)['journal_write_failed']).toBeUndefined();   // at e0c14f811: 1, and both files held
+      expect(counters(box)['non_regular']).toBe(2);
+      expect(counters(box)['spool_displaced']).toBeUndefined();   // one shared area would have displaced the second file
+      expect(journalOf(box.home, ids.storeId).filter((x) => x['k'] === 'file' && x['name'] === `${ID}.900.1.jsonl`), 'journaled on both drains').toHaveLength(2);
+      expect(drainingNames(box.home)).toEqual([]);
+      expect(receipts(box).map((x) => x.event_key).sort()).toEqual([eventKey(`${ID}.900.1.jsonl`, 1), eventKey(`${ID2}.902.1.jsonl`, 1)].sort());
+      expect(areas()).toHaveLength(2);
+      expect(PLANTED(`${ID}.900.1.obs`, 'keep')).not.toBe(PLANTED(`${ID}.900.1.obs`, 'keep2'));
+    });
+
+    it('a regular file at .draining/planted is removed and counted non_regular, and a planted directory is still set aside (FU3)', () => {
+      fs.writeFileSync(PL(), 'stray');
+      fs.mkdirSync(path.join(DRAIN(box.home), `${ID}.900.1.jsonl`));
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      expect(counters(box)['non_regular']).toBe(2);
+      expect(fs.statSync(PLANTED(`${ID}.900.1.jsonl`)).isDirectory()).toBe(true);
+    });
+
+    // Moving a directory to another parent needs write permission on the directory itself (its `..`); root bypasses that.
+    describe.skipIf(process.getuid?.() === 0)('a directory that cannot be moved (FU3)', () => {
+      it.each([['.obs'], ['.obs.tmp']])('a non-empty 0500 directory at the sidecar name %s displaces only its own file: set aside unjournaled with its bytes, counted spool_displaced, and a later file drains', (suffix) => {
+        writeRegular();
+        fs.writeFileSync(path.join(DRAIN(box.home), `${ID2}.902.1.jsonl`), stopLine(ID2));
+        const d = plantDir(`${ID}.900.1${suffix}`, 'keep');
+        fs.chmodSync(d, 0o500);
+        try {
+          const r = runSweep(box);
+          expect(r.code, r.stderr).toBe(0);
+          expect(r.stderr).toContain(`history-sweep: spool-displaced: ${ID}.900.1.jsonl\n`);
+          expect(counters(box)['journal_write_failed']).toBeUndefined();   // at e0c14f811: 1, and the later file held too
+          expect(counters(box)['spool_displaced']).toBe(1);
+          expect(counters(box)['non_regular']).toBe(1);
+          expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(`${ID2}.902.1.jsonl`, 1)]);
+          expect(drainingNames(box.home)).toEqual([]);
+          expect(fs.readFileSync(PLANTED(`${ID}.900.1.jsonl`), 'utf8')).toBe(stopLine(ID));   // its bytes kept
+          expect(journalOf(box.home, ids.storeId).filter((x) => x['k'] === 'file').map((x) => x['name'])).toEqual([`${ID2}.902.1.jsonl`]);
+          const r2 = runSweep(box);                                  // the directory stays, now at an orphan name
+          expect(r2.code, r2.stderr).toBe(0);
+          expect(counters(box)['non_regular']).toBe(2);              // counted once on each drain that meets it
+          expect(counters(box)['spool_displaced']).toBe(1);
+          expect(fs.statSync(d).isDirectory()).toBe(true);
+          expect(areas().filter((a) => fs.readdirSync(path.join(PL(), a)).length === 0), 'a failed move leaves no empty area').toEqual([]);
+        } finally { fs.chmodSync(d, 0o700); }
+      });
+
+      it.each([['.obs'], ['.obs.tmp']])('an EMPTY 0500 directory at the sidecar name %s is removed and its file drains', (suffix) => {
+        writeRegular();
+        const d = path.join(DRAIN(box.home), `${ID}.900.1${suffix}`);
+        fs.mkdirSync(d, { mode: 0o500 });
+        fs.chmodSync(d, 0o500);
+        const r = runSweep(box);
+        expect(r.code, r.stderr).toBe(0);
+        expect(fs.existsSync(d)).toBe(false);
+        expect(counters(box)['journal_write_failed']).toBeUndefined();   // at e0c14f811 for .obs: 1, the file held
+        expect(counters(box)['spool_displaced']).toBeUndefined();
+        expect(counters(box)['non_regular']).toBe(1);
+        expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(`${ID}.900.1.jsonl`, 1)]);
+      });
+
+      it('a non-empty 0500 directory at a draining name is counted once per drain and never observed (M17)', () => {
+        const d = plantDir(`${ID}.900.1.jsonl`, 'keep');
+        fs.chmodSync(d, 0o500);
+        try {
+          for (const n of [1, 2]) {
+            const r = runSweep(box);
+            expect(r.code, r.stderr).toBe(0);
+            expect(counters(box)['non_regular'], `after drain ${n}`).toBe(n);   // at e0c14f811: 2, then 4
+            expect(fs.existsSync(path.join(DRAIN(box.home), `${ID}.900.1.obs`))).toBe(false);
+          }
+          expect(fs.statSync(d).isDirectory()).toBe(true);
+          expect(areas().filter((a) => fs.readdirSync(path.join(PL(), a)).length === 0), 'a failed move leaves no empty area').toEqual([]);
+        } finally { fs.chmodSync(d, 0o700); }
+      });
+
+      it('an EMPTY 0500 directory at a draining name is removed, counted once', () => {
+        const d = path.join(DRAIN(box.home), `${ID}.900.1.jsonl`);
+        fs.mkdirSync(d);
+        fs.chmodSync(d, 0o500);
+        const r = runSweep(box);
+        expect(r.code, r.stderr).toBe(0);
+        expect(fs.existsSync(d)).toBe(false);
+        expect(counters(box)['non_regular']).toBe(1);
+      });
     });
   });
 

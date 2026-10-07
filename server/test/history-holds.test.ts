@@ -604,7 +604,7 @@ describe('FR2-a (D-4338): a failed sidecar write is the journal hold, never a fa
     expect(r.stderr).not.toMatch(/internal error/);
     expect(r.stdout).toMatch(/^history-sweep: journal-unwritable$/m);
     expect(draining(box)).toHaveLength(1);
-    const s = runSweep(box); expect(s.code, s.stderr).toBe(0); expect(draining(box)).toEqual([]); expect(counter(box, 'non_regular')).toBe(1); expect(fs.existsSync(path.join(paths(box).draining, 'planted', `${side}.tmp`, 'keep'))).toBe(true);
+    const s = runSweep(box); expect(s.code, s.stderr).toBe(0); expect(draining(box)).toEqual([]); expect(counter(box, 'non_regular')).toBe(1); const pl = path.join(paths(box).draining, 'planted'); expect(fs.readdirSync(pl).filter((a) => fs.existsSync(path.join(pl, a, `${side}.tmp`, 'keep')))).toHaveLength(1);
   }, 30_000);
 
   it('a hold pass (store-unreachable): the sidecar failing prints journal-unwritable and exits 0, the file held', () => {

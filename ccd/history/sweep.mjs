@@ -531,7 +531,8 @@ export function readDrainingText(path) {
 /** The two sibling directories of `.draining/` that `setAside` moves a file into (D-4337, D-4346); `listDraining` lists neither. */
 const OVERSIZE_DIR = 'oversize';
 const REJECTED_DIR = 'rejected';
-/** The sibling `.draining/planted/` that `tidyDraining` moves a planted directory into (D-4347); `listDraining` never lists it. */
+/** The sibling `.draining/planted/` that `tidyDraining` moves a planted directory into, one area per drain,
+ *  `planted/<tickMs>.<pid>/` (D-4347 (history-planted-entries-never-wedge)); `listDraining` never lists it. */
 const PLANTED_DIR = 'planted';
 
 /** Decide a draining file's oversize from its lstat BEFORE any open (D-4337, history-spool-file-size-cap): true when it
@@ -551,15 +552,23 @@ export function setAsideOversize(db, home, name) {
 function moveAside(dir, from, name) {
   let stray = false;
   try {
-    let ds = null;
-    try { ds = lstatSync(dir); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
-    if (ds !== null && !ds.isDirectory()) { removeEntry(dir); stray = true; }
+    stray = clearNonDirectory(dir);
     mkdirDurable(dir);
     renameSync(`${from}/${name}`, `${dir}/${name}`);
     return { moved: true, stray };
   } catch {
     return { moved: false, stray };
   }
+}
+
+/** True when an entry that is not a directory stood at `dir` and was removed (a stray same-user writer's file, link or
+ *  FIFO), so a mkdir at or under `dir` never fails EEXIST or ENOTDIR on every tick. Throws what lstat or removeEntry throw. */
+function clearNonDirectory(dir) {
+  let ds;
+  try { ds = lstatSync(dir); } catch (e) { if (e && e.code === 'ENOENT') return false; throw e; }
+  if (ds.isDirectory()) return false;
+  removeEntry(dir);
+  return true;
 }
 
 /** Set a draining file aside (D-4337, history-spool-file-size-cap): moved into the sibling directory
@@ -764,20 +773,31 @@ export function journalHalf(home, ids, nowMs) {
   return { held, journalFailed };
 }
 
-/** Tidy `spool/.draining/` before a drain lists it (D-4347, history-planted-entries-never-wedge). Returns what it
- *  counted: `nonRegular` entries and `malformed` sidecars (the caller bumps the counters; `journalHalf` never calls this,
- *  because no DB holds a counter there, IV2).
- *  - Loop 1, the draining names: a regular file is live and stays. A directory is moved whole into `.draining/planted/` (never
- *    recursed into, never deleted: a same-user process may have left content, or a mount, there); any other non-regular
- *    entry is removed. Both count `non_regular`.
- *  - Loop 2, the observation sidecars and their temps: a directory is moved into `planted/` and counted. A sidecar temp, or a
- *    sidecar whose draining file is not a live regular file, is the sweep's own debris and is removed uncounted (F20). Any
- *    other non-regular entry is removed and counted `non_regular`; a sidecar of a live file that fails `observationOk` is
- *    removed and counted `sidecar_malformed`, and the next `observe` re-observes it (F9).
+/** Tidy `spool/.draining/` before a drain lists it (D-4347 (history-planted-entries-never-wedge)). Returns what it
+ *  counted, `nonRegular` entries and `malformed` sidecars (the caller bumps the counters; `journalHalf` never calls this,
+ *  because no DB holds a counter there, IV2), the draining files it `displaced`, and the draining names it `kept`.
+ *  - A directory is moved whole into this drain's own area, `.draining/planted/<tickMs>.<pid>/` (never recursed into,
+ *    never deleted: a same-user process may have left content, or a mount, there). The area is new for each drain, so a
+ *    name planted again never meets the one set aside before, and the name itself is unchanged (NAME_MAX, D-4303). One
+ *    that cannot be moved (a 0500 directory, whose `..` a move must rewrite; a mount point) is rmdir'd when it is empty
+ *    and not a mount point, and otherwise left in place.
+ *  - Loop 1, the draining names: a regular file is live and stays. A directory is set aside as above; any other
+ *    non-regular entry is removed. Each counts `non_regular` once per drain that meets it, and one left in place is
+ *    `kept`: the drain skips it, so no sidecar is written for it (M17).
+ *  - Loop 2, the observation sidecars and their temps: a directory is set aside as above and counted. One left at a live
+ *    file's sidecar or sidecar-temp name would fail every sidecar write of that file (the rename onto it EISDIR, the
+ *    O_EXCL open EEXIST), D-4338's hold, so the live file itself is moved into the area instead: `displaced`, never
+ *    journaled by this drain (a hold pass may have journaled it already), its bytes kept, so one planted entry costs
+ *    only that file's lines. Any other entry at a sidecar-temp name, or at the sidecar name of a file that is not
+ *    live, is the sweep's own debris and is removed uncounted (F20). Any other non-regular entry at a live file's
+ *    sidecar name is removed and counted `non_regular`; a sidecar of a live file that fails `observationOk` is removed
+ *    and counted `sidecar_malformed`, and the next `observe` re-observes it (F9).
+ *  - A non-directory at `.draining/planted` or at the area is removed and counted `non_regular` when a set-aside needs it.
+ *  - An area a failed move left empty is removed at the end, so an entry met on every drain leaves no empty area behind.
  *  A step that fails is left for the next drain. */
-export function tidyDraining(home) {
+export function tidyDraining(home, tickMs, pid) {
   const P = historyPaths(home);
-  const out = { nonRegular: 0, malformed: 0 };
+  const out = { nonRegular: 0, malformed: 0, displaced: [], kept: [] };
   let names;
   try { names = readdirSync(P.draining); } catch (e) { if (e && e.code === 'ENOENT') return out; throw e; }
   const typeOf = (n) => {
@@ -785,35 +805,61 @@ export function tidyDraining(home) {
     try { st = lstatSync(`${P.draining}/${n}`); } catch (e) { if (e && e.code === 'ENOENT') return 'gone'; throw e; }
     return st.isFile() ? 'file' : st.isDirectory() ? 'dir' : 'other';
   };
-  const setAsidePlanted = (n) => { const m = moveAside(`${P.draining}/${PLANTED_DIR}`, P.draining, n); if (m.stray) out.nonRegular += 1; };
+  const plantedRoot = `${P.draining}/${PLANTED_DIR}`;
+  const area = `${plantedRoot}/${tickMs}.${pid}`;
+  let planting = false;
+  // Move `n` into this drain's area; true when it moved. Never throws.
+  const plant = (n) => {
+    if (!planting) {
+      planting = true;
+      try { if (clearNonDirectory(plantedRoot)) out.nonRegular += 1; } catch { return false; }
+    }
+    const m = moveAside(area, P.draining, n);
+    if (m.stray) out.nonRegular += 1;
+    return m.moved;
+  };
+  // Set the directory `n` aside, or remove it when it cannot be moved and is empty; true when nothing stands at `n` now.
+  const plantOrRemove = (n) => {
+    if (plant(n)) return true;
+    try { return removeEntry(`${P.draining}/${n}`) !== 'kept-dir'; } catch { return false; }
+  };
   const live = new Set();
   for (const n of names) {                                   // loop 1: draining names
     if (parseDrainingName(n) === null) continue;
-    try {
-      const t = typeOf(n);
-      if (t === 'file') { live.add(n); continue; }
-      if (t === 'gone') continue;
-      out.nonRegular += 1;
-      if (t === 'dir') setAsidePlanted(n); else removeEntry(`${P.draining}/${n}`);
-    } catch { /* left for the next drain; the drain loop's non-regular branch backs this */ }
+    let t;
+    try { t = typeOf(n); } catch { continue; }               // left for the next drain; the drain loop's non-regular branch backs this
+    if (t === 'file') { live.add(n); continue; }
+    if (t === 'gone') continue;
+    out.nonRegular += 1;
+    let cleared = false;
+    if (t === 'dir') cleared = plantOrRemove(n);
+    else { try { removeEntry(`${P.draining}/${n}`); cleared = true; } catch { /* kept: met again next drain */ } }
+    if (!cleared) out.kept.push(n);
   }
   for (const n of names) {                                   // loop 2: sidecars and sidecar temps
     const stem = n.endsWith('.obs.tmp') ? n.slice(0, -'.obs.tmp'.length) : n.endsWith('.obs') ? n.slice(0, -'.obs'.length) : null;
     if (stem === null || !drainingNameOk(`${stem}.jsonl`)) continue;
     const p = `${P.draining}/${n}`;
+    const file = `${stem}.jsonl`;
     try {
       const t = typeOf(n);
       if (t === 'gone') continue;
-      if (t === 'dir') { out.nonRegular += 1; setAsidePlanted(n); continue; }
-      // D-4347: a sidecar temp is always stale at a drain's start (writeSidecar renames it within one call, under the lock),
-      // and a sidecar whose draining file is not a live regular file is an orphan (a kill between the file's removal or
-      // move and its sidecar's); `listDraining` lists only `*.jsonl`, so nothing else would ever remove either. Both are the
-      // sweep's own debris: removed uncounted.
-      if (n.endsWith('.obs.tmp') || !live.has(`${stem}.jsonl`)) { removeEntry(p); continue; }
+      if (t === 'dir') {
+        out.nonRegular += 1;
+        if (!plantOrRemove(n) && live.has(file) && plant(file)) { live.delete(file); out.displaced.push(file); }
+        continue;
+      }
+      // D-4347 (history-planted-entries-never-wedge): a sidecar temp is always stale at a drain's start (writeSidecar
+      // renames it within one call, under the lock), and a sidecar whose draining file is not a live regular file is an
+      // orphan (a kill between the file's removal or move and its sidecar's, or a file this drain displaced);
+      // `listDraining` lists only `*.jsonl`, so nothing else would ever remove either. Both are the sweep's own debris:
+      // removed uncounted.
+      if (n.endsWith('.obs.tmp') || !live.has(file)) { removeEntry(p); continue; }
       if (t === 'other') { out.nonRegular += 1; removeEntry(p); continue; }
       if (readSidecar(p) === null) { removeEntry(p); out.malformed += 1; }
     } catch { /* left for the next drain */ }
   }
+  if (planting) { try { removeEntry(area); } catch { /* an area left behind is met by the next set-aside's own area */ } }
   return out;
 }
 
@@ -823,16 +869,23 @@ export function tidyDraining(home) {
  *    drains before its earlier one); a commit the store refused for the file's own rows sets that journaled file aside
  *    into `.draining/rejected/` and the drain goes on; any other SQLite failure ends the tick (D-4346,
  *    history-permanent-failures-classified).
- *  - A link or FIFO planted in .draining/ is removed and counted. */
+ *  - A link or FIFO planted in .draining/ is removed and counted. A draining name tidyDraining `kept` is skipped, and a
+ *    file it `displaced` is counted `spool_displaced` and named on stderr (D-4347 (history-planted-entries-never-wedge)). */
 export function drainSpool(db, c) {
   const tickMs = c.now();
   if (ensureSpoolDirs(c.home)) countOutside(db, 'non_regular');
-  const t = tidyDraining(c.home);
+  const t = tidyDraining(c.home, tickMs, process.pid);
   if (t.nonRegular > 0) countOutside(db, 'non_regular', t.nonRegular);
   if (t.malformed > 0) countOutside(db, 'sidecar_malformed', t.malformed);
+  if (t.displaced.length > 0) {
+    countOutside(db, 'spool_displaced', t.displaced.length);
+    for (const n of t.displaced) process.stderr.write(`history-sweep: spool-displaced: ${n}\n`);
+  }
+  const kept = new Set(t.kept);
   const hints = [];
   let failedCounted = false;
   for (const name of listDraining(c.home)) {
+    if (kept.has(name)) continue;   // D-4347 (history-planted-entries-never-wedge): counted once by tidyDraining, never observed (M17)
     // D-4337 (history-spool-file-size-cap): an oversize file is decided from its stat and never opened.
     if (setAsideOversize(db, c.home, name)) continue;
     let j;
