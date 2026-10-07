@@ -3007,7 +3007,7 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
 /** The sidecars of the given uuids whose transcript copies are all caught up. A sidecar is linked
  *  by the text of a tool_result the store already holds, so one taken early would stay unlinked
  *  for good. Bounded by the run's budget; `complete` is false when the budget, history-off or the
- *  free-space floor cut it short, and `paused` says it was the floor. */
+ *  free-space floor cut it short, and `paused` says it was the floor; `floor` names the probe's word when the floor stopped it. */
 export async function ingestSidecars(db, ctx, budget, uuids) {
   const due = [...uuids].filter((u) => !notCaughtUp(db, ctx.homes, u));
   const found = discoverSidecars(ctx.homes, due);
@@ -3033,7 +3033,7 @@ export async function ingestSidecars(db, ctx, budget, uuids) {
     }
     if (r === null) continue;
     bytes += r.bytes;
-    if (r.floor !== undefined) return { bytes, complete: false, paused: true, ...(unreadable ? { unreadable } : {}) };
+    if (r.floor !== undefined) return { bytes, complete: false, paused: true, floor: r.floor, ...(unreadable ? { unreadable } : {}) };
   }
   return { bytes, complete: true, paused: false, ...(unreadable ? { unreadable } : {}) };
 }
@@ -3768,11 +3768,24 @@ export async function importRoom(db, ctx) {
   return null;
 }
 
+/** importRoom's answer counted and said as a scheduled pass counts a pause (§9.3); true when the import must stop. */
+async function importPaused(db, ctx, say) {
+  const pause = await importRoom(db, ctx);
+  if (pause === null) return false;
+  if (pause === 'at-cap') bump(db, 'capture_paused_at_cap');
+  if (pause === 'capture-paused-low-disk') bump(db, 'capture_paused_low_disk');
+  say(pause);
+  return true;
+}
+
+/** The word a floor stop inside a window is said with: ingestFile/ingestSidecar counted low-disk where it stopped; an unsettled probe is counted nowhere (§9.3). */
+const floorStopWord = (floor) => (floor === 'low-disk' ? 'capture-paused-low-disk' : 'store-unreachable');
+
 /** One file, ingested by cursor with no run budget (§9.2 "Backfill"). This is Task 19's `ingestPath`
  *  (admission, Task 18's `bindFile`, then `ingestFile` from the cursor), called again with a FRESH budget
  *  until the file reaches end-of-file or stops advancing (an unterminated last line, a parser crash). Before
- *  each call `importRoom` re-measures the cap and the floor: a pause is counted as a scheduled pass counts it,
- *  said on stdout, and answers 'paused', its cursor held for the scheduled ticks (§9.3). Within a call the
+ *  each call `importRoom` re-measures the cap and the floor (through `importPaused`, which counts a pause as a
+ *  scheduled pass counts it and says it on stdout): the file answers 'paused', its cursor held for the scheduled ticks (§9.3). Within a call the
  *  floor is probed again before EVERY chunk (§9.3, BK17): the ingest context carries `floorProbeFor(P.dbDir)`,
  *  so Task 19's `ingestFile` stops the file at the chunk that meets the floor, counts a `low-disk` stop there,
  *  and reports the probe's word as `floor`; this function then only says so and answers 'paused', so the stop
@@ -3785,24 +3798,36 @@ export async function importFile(db, ctx, filePath, uuid) {
   const home = homeOfPath(filePath, ctx.homes) ?? '';
   const say = (word) => ctx.out(`history-sweep: ${word}: ingest stopped at ${filePath}; the scheduled ticks resume it by cursor`);
   for (;;) {
-    const pause = await importRoom(db, ctx);
-    if (pause !== null) {
-      if (pause === 'at-cap') bump(db, 'capture_paused_at_cap');
-      if (pause === 'capture-paused-low-disk') bump(db, 'capture_paused_low_disk');
-      say(pause);
-      return 'paused';
-    }
+    if (await importPaused(db, ctx, say)) return 'paused';
     // Task 19's per-chunk floor probe, on db/ (a link followed), through the same in-process seam importRoom uses.
     const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir, ctx.deps.statfs));
     const r = await ingestPath(db, ictx, { path: filePath, uuid, home }, newBudget(ctx.now));
     if (r === null) return 'refused';
     if (runJournalHalf(ctx.home, ctx.ids, ctx.now)) throw new JournalError('append-failed');
     if (r.floor !== undefined) {
-      // ingestFile counted a low-disk stop where it stopped; an unsettled probe is counted nowhere (§9.3).
-      say(r.floor === 'low-disk' ? 'capture-paused-low-disk' : 'store-unreachable');
+      say(floorStopWord(r.floor));
       return 'paused';
     }
     if (r.atEof || r.bytes === 0) return 'done';
+  }
+}
+
+/** The mapped transcripts' sidecars (§9.2 "Backfill": "with their sidecars"; D-4240), taken after their transcripts
+ *  by Task 21's ingestSidecars, called again with a FRESH budget while it reports incomplete, as importFile calls
+ *  ingestPath: the sidecar_seen marks are its cursor, so a later window skips what an earlier one took. importRoom
+ *  re-measures the cap and the floor before each window; inside a window each sidecar's own floor probe runs
+ *  (ingestSidecar). The journal half runs between windows (D-4232). A window that took nothing and is still
+ *  incomplete (history-off, or a budget spent on nothing) ends it. Answers 'done' or 'paused'. */
+async function importSidecars(db, ctx, uuids) {
+  if (uuids.length === 0) return 'done';
+  const say = (word) => ctx.out(`history-sweep: ${word}: sidecar ingest stopped; the scheduled ticks take the rest`);
+  for (;;) {
+    if (await importPaused(db, ctx, say)) return 'paused';
+    const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir, ctx.deps.statfs));
+    const r = await ingestSidecars(db, ictx, newBudget(ctx.now), uuids);
+    if (runJournalHalf(ctx.home, ctx.ids, ctx.now)) throw new JournalError('append-failed');
+    if (r.paused) { say(floorStopWord(r.floor)); return 'paused'; }
+    if (r.complete || r.bytes === 0) return 'done';
   }
 }
 
@@ -3828,7 +3853,7 @@ function importDryRun(P, homes, args, out) {
 }
 
 /** `import --apply` and `import --session <id> --file <path> --apply` (§8.4): map from evidence, one verdict
- *  at a time, then ingest the mapped files one at a time by cursor; list the unmapped, never ingest them. Only
+ *  at a time, then ingest the mapped files one at a time by cursor, then their sidecars (§9.2 "with their sidecars"); list the unmapped, never ingest them. Only
  *  evidence that names a transcript found under the rostered homes is mapped — the dry run's `mapped` lines,
  *  exactly. A pause at the cap or the floor (importFile) ends the ingest, not the pass: the mappings stand. */
 async function importApply(db, ctx, P, args) {
@@ -3849,6 +3874,7 @@ async function importApply(db, ctx, P, args) {
       return { rc: EXIT.REFUSED, reason: 'uuid-claimed' };
     }
     ends.push(await importFile(db, ctx, args.file, uuid));
+    if (ends[ends.length - 1] === 'done') await importSidecars(db, ctx, [uuid]);
   } else {
     const ev = importEvidence(db, P);
     const all = transcriptsUnder(ctx.homes);
@@ -3859,12 +3885,15 @@ async function importApply(db, ctx, P, args) {
       mapped.add(t.uuid);
       commitMapping(db, ctx, { uuid: t.uuid, id: e.id, declaredBy: e.declaredBy, path: e.path });
     }
+    const done = new Set();
     for (const t of all) {
       if (!ev.has(t.uuid)) continue;
       const end = await importFile(db, ctx, t.path, t.uuid);
       ends.push(end);
+      if (end === 'done') done.add(t.uuid);
       if (end === 'paused') break;
     }
+    if (!ends.includes('paused') && done.size > 0) await importSidecars(db, ctx, [...done]);
     for (const t of all) if (!ev.has(t.uuid)) ctx.out(`unmapped ${t.path}`);
   }
   // §9.1: these blobs were written with fts_indexed = 0, and a completed ('fts', 1) backfill never looks again

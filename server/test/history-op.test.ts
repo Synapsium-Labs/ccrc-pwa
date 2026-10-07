@@ -366,6 +366,76 @@ describe('C42: import maps from evidence only', () => {
   });
 });
 
+describe('RF5a F15: --op import --apply takes the mapped transcripts\' sidecars (§9.2 "with their sidecars")', () => {
+  const E1 = 'a0000000-0000-4000-8000-0000000000e1';
+  const SIDE = 'b7k2q9z1x.txt';
+  const toolRow = {
+    type: 'user', uuid: E1, parentUuid: null, sessionId: U1, cwd: '/home/u/tree/demo', timestamp: iso(0),
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01AAA', content: 'Output too large. Full output saved to: /home/u/x/tool-results/b7k2q9z1x.txt' }] },
+  };
+  /** A mapped transcript with its sidecar, and an UNMAPPED one (U3) laid out the same way. */
+  function fixture(prefix: string): { box: HistoryBox; file: string; sidecar: string; strayCar: string } {
+    const box = boundBox(prefix);
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    const file = plantTranscript(box, 'claude-a', SLUG, U1, [toolRow]);
+    const sidecar = path.join(path.dirname(file), U1, 'tool-results', SIDE);
+    fs.mkdirSync(path.dirname(sidecar), { recursive: true });
+    fs.writeFileSync(sidecar, 'the big output body\n');
+    const stray = plantTranscript(box, 'claude-a', SLUG, U3, [userRow('a0000000-0000-4000-8000-0000000000e2', 'no evidence names me', iso(0), U3)]);
+    const strayCar = path.join(path.dirname(stray), U3, 'tool-results', 'unmapped01.txt');
+    fs.mkdirSync(path.dirname(strayCar), { recursive: true });
+    fs.writeFileSync(strayCar, 'never read\n');
+    return { box, file, sidecar, strayCar };
+  }
+  const linked = (box: HistoryBox) => q<{ name: string; uuid: string }>(box, 'SELECT s.name AS name, e.uuid AS uuid FROM sidecars s LEFT JOIN entries e ON e.entry_id = s.entry_id');
+
+  it('evidence form: the sidecar is captured, linked to its tool_result row, and marked seen; an unmapped transcript\'s sidecar is never read', () => {
+    const { box, sidecar, strayCar } = fixture('ccrc-hist-rf5a-a-');
+    const r = runShim(box, ['--op', 'import', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lastResult(r.stdout)).toEqual({ rc: 0 });
+    expect(linked(box)).toEqual([{ name: SIDE, uuid: E1 }]);
+    expect(q(box, 'SELECT path FROM sidecar_seen')).toEqual([{ path: sidecar }]);
+    expect(q<{ path: string }>(box, 'SELECT path FROM sidecar_seen').map((x) => x.path)).not.toContain(strayCar);
+  });
+
+  it('operator form: --session --file takes that transcript\'s sidecar too', async () => {
+    const { box, file, sidecar } = fixture('ccrc-hist-rf5a-b-');
+    const out = await shimPty(box, ['--op', 'import', '--session', ID, '--file', file, '--apply']);
+    expect(lastResult(out.out)).toEqual({ rc: 0 });
+    expect(linked(box)).toEqual([{ name: SIDE, uuid: E1 }]);
+    expect(q(box, 'SELECT path FROM sidecar_seen')).toEqual([{ path: sidecar }]);
+  });
+
+  it('a floor met inside the sidecar window stops it there: the transcript stands, the sidecar waits, said once, counted once', () => {
+    const { box } = fixture('ccrc-hist-rf5a-c-');
+    const before = counter(box, 'capture_paused_low_disk');
+    // statfs calls, in order: the pass's probe (1), importRoom before the transcript (2), the transcript's one per-chunk
+    // probe (3), importRoom before the sidecar window (4); the 5th is the sidecar's own floor probe inside ingestSidecar.
+    const r = runShim(box, ['--op', 'import', '--apply'], { env: { HISTORY_TEST_STATFS_AFTER: `4:1:${2 ** 40}` } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(lastResult(r.stdout)).toEqual({ rc: 0 });
+    expect(countOf(box, 'entries'), 'the transcript stands').toBe(1);
+    expect(countOf(box, 'sidecars'), 'the sidecar waits').toBe(0);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('history-sweep: capture-paused-low-disk: sidecar ingest stopped')), 'said once').toHaveLength(1);
+    expect(counter(box, 'capture_paused_low_disk') - before, 'counted where it stopped, never twice').toBe(1);
+  });
+
+  it('the cap re-measured before the sidecar window stops it: at-cap said once, counted once', () => {
+    const { box } = fixture('ccrc-hist-rf5a-d-');
+    fs.writeFileSync(path.join(box.home, '.ccrc', 'history-max-gb'), '1\n');
+    const before = counter(box, 'capture_paused_at_cap');
+    // importFile's importRoom measures 1 KiB; the sidecar window's measures 2 GiB.
+    const r = runDriver(box, { sizeBytesSeq: [1024, 2 * 1024 ** 3] }, ['--op', 'import', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lastResult(r.stdout)).toEqual({ rc: 0 });
+    expect(countOf(box, 'entries')).toBe(1);
+    expect(countOf(box, 'sidecars')).toBe(0);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('history-sweep: at-cap: sidecar ingest stopped')), 'said once').toHaveLength(1);
+    expect(counter(box, 'capture_paused_at_cap') - before).toBe(1);
+  });
+});
+
 describe('DM35: only regular files under a rostered projects/ root', () => {
   it('a symlinked sidecar name is never ingested and counts non_regular', () => {
     const box = boundBox('ccrc-hist-dm35a-');

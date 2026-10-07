@@ -236,6 +236,8 @@ export const PASS_DRIVER = path.join(REPO, 'server', 'test', 'fixtures', 'histor
  *  (heavy: the versions marked heavy); managedSettings: the managed-settings list the census reads. */
 export interface DriverDeps {
   offsetMs?: number; stepMs?: number; sizeBytes?: number;
+  /** The k-th measureSize call answers sizeBytesSeq[k]; the last value stands after that (RF5a F15). */
+  sizeBytesSeq?: number[];
   extraMigrations?: string[]; heavy?: number[]; managedSettings?: string[];
 }
 export interface DriverResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }

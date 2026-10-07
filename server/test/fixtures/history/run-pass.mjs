@@ -7,6 +7,8 @@
 // HISTORY_TEST_DEPS is one JSON object:
 //   offsetMs, stepMs   the pass clock: Date.now() + offsetMs + k * stepMs on its k-th read (k from 0)
 //   sizeBytes          the store's measured size, whatever the file holds (the cap's seam, O10)
+//   sizeBytesSeq       the k-th measureSize call answers sizeBytesSeq[k], and the last value stands after that (RF5a F15: a size
+//                      that grows between an import's windows)
 //   extraMigrations    SQL appended to MIGRATIONS as v2, v3, ... (the migration seam, DM42/DM43)
 //   heavy              the versions among those that SCHEMA_ADDED marks heavy
 //   managedSettings    the managed-settings list the census reads instead of /etc (Task 26)
@@ -34,6 +36,7 @@ if (Array.isArray(spec.extraMigrations) && spec.extraMigrations.length > 0) {
   deps.schemaAdded = added;
 }
 if (typeof spec.sizeBytes === 'number') deps.measureSize = () => spec.sizeBytes;
+if (Array.isArray(spec.sizeBytesSeq)) { let k = 0; deps.measureSize = () => spec.sizeBytesSeq[Math.min(k++, spec.sizeBytesSeq.length - 1)]; }
 if (Array.isArray(spec.managedSettings)) deps.managedSettings = spec.managedSettings;
 const code = await runPass(process.argv.slice(2), deps);
 // An explicit exit, never a drained loop: an unsettled statfs (the 'hang' seam) pins a libuv thread.
