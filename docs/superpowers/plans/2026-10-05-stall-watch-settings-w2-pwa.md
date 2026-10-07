@@ -3622,7 +3622,8 @@ and the coordinator assigns its number.
   - **Cost if wrong:**
     - One label, and one moved test line.
     - README ≈951 said "the phone-push bell for this browser" when this number was written. The final-fix round
-      rewrote it to "push bell" and pinned the whole paragraph (above), so no README line names a device now.
+      rewrote it to "push bell" and pinned the whole paragraph (above), so no line of README's Settings paragraph names a
+      device now.
 - **D-4042** — `malformed-optional-block-is-dropped` (Task 1)
   - **Departs from:** spec §13's wire guard (≈:1211–1213), which drops only malformed `counts` elements and reads a
     MISSING `next`, `filesExceed` or `fallback` as not stated. Anything else is a failed read.
@@ -3664,11 +3665,13 @@ Each is pinned, and the plan takes no number for any of them:
   neighbouring drop of a malformed `next` or `filesExceed` is a numbered departure of its own
   (`malformed-optional-block-is-dropped`, above).
 - `unanswered-write-reads-unconfirmed` (Tasks 1 and 3). A rejection that is not an `ApiError` (a network failure,
-  after which the POST may have landed) reads as `unconfirmed`: the section toasts `UNCONFIRMED_TEXT` and re-reads,
-  as §15's "A write's reply cannot be read" row does for an unreadable 2xx, and never says "Nothing was changed" (G18,
-  X48, X60).
+  after which the POST may have landed) reads as `unconfirmed`: the section toasts `STALL_CONFIRM_TEXT.unanswered`
+  ("Not confirmed — …", added by fix round 1, F1) and re-reads, and never says "Nothing was changed" (G18, X48, X60).
+  The 2xx-unreadable arm, which §15's "A write's reply cannot be read" row words, keeps `UNCONFIRMED_TEXT` and re-reads
+  too. X48 and X60 are retargeted to the network arm's new line.
 - `quiet-select-shows-no-unanswered-value` (Task 3). A stored quiet time the list does not hold selects one empty,
-  hidden, disabled option (X38).
+  hidden, disabled option (X38). The one stored value that is not "unanswered" is a quiet time equal to the built-in,
+  as a number (fix round 1, F3): it selects the built-in option, since the list omits that step.
 - `readme-section-sentence-pinned-to-l0` (Task 4). A new server test file the spec does not name.
 
 ## Residue settled by this plan
@@ -3720,10 +3723,11 @@ From spec §20, each settled where the task names it:
   - A network failure is not a refusal at all: it reads `unconfirmed` (below).
   - No new L0 string.
 - **A write whose answer never arrived** (the plan review; §15's "A write's reply cannot be read" row). A rejection
-  that is not an `ApiError` may have stored the write, so it gives `toast(UNCONFIRMED_TEXT)` and a re-read, never
-  "Nothing was changed". W1 provides no L0 text for it and W2 adds none, so the PWA's existing `UNCONFIRMED_TEXT` is
-  used, the text §13 step 3 and §15 already prescribe for an answer that could not be read. Pinned by G18, X48 and
-  X60.
+  that is not an `ApiError` may have stored the write, so it gives a toast and a re-read, never "Nothing was changed".
+  Fix round 1 (F1) gave the network arm its own L0 line, `STALL_CONFIRM_TEXT.unanswered` ("Not confirmed — the server
+  did not answer; the screen will re-check."), so the line shown here is no longer `UNCONFIRMED_TEXT`. That text stays
+  the 2xx-unreadable arm's, the text §13 step 3 and §15 prescribe for an answer that could not be read. Pinned by G18,
+  X48 and X60.
 - **"An absent row sends `chosen.level` `'unreadable'`, so no radio is checked"** (Task 3). The section checks a radio
   only on `chosen.level === value`. Pinned by the `stored: 'absent'` render row ("an absent or unreadable stored level
   checks no radio…"), which also shows the absent stored line.
@@ -3752,8 +3756,10 @@ Neither blocks the wave; each is the operator's to rule on, and the wave-done ma
   §18's README edit list (the third-section sentence only). Rewording it to "the push bell for this browser" would
   carry the 2026-10-05 "no device distinction" directive into README.
 - **`UNCONFIRMED_TEXT` for a write whose answer never arrived.** Its lead word, "Saved —", overstates a request that
-  may never have left; the re-read that follows shows what was stored within one answer. A text that says only "could
-  not be confirmed" would need an L0 or PWA string that neither wave adds today.
+  may never have left; the re-read that follows shows what was stored within one answer. (Settled for the network arm
+  by fix round 1, F1: it now toasts `STALL_CONFIRM_TEXT.unanswered`, which says only "Not confirmed". The question
+  stands for the 2xx-unreadable arm, which keeps `UNCONFIRMED_TEXT`.) A text that says only "could not be confirmed"
+  would need an L0 or PWA string that neither wave adds today.
 
 ## If this PR is overtaken before it merges
 

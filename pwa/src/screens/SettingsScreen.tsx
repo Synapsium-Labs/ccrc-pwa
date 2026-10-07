@@ -343,7 +343,7 @@ export const MACOS_UNMANAGED_TEXT = 'macOS: not centrally managed';
 export { ACK_UNREADABLE_TEXT, canAck };
 // UNCONFIRMED_TEXT is defined in ./settingsText so the Stall watch section can import it without a cycle back to this
 // screen; re-exported here so this screen's callers and tests keep their import, and so the spec's citation of this
-// file (§13 step 3, ≈:72) still points at a line that names it.
+// file (§13 step 3) still resolves to the re-export here.
 export { UNCONFIRMED_TEXT };
 
 export function currentText(n: NodeWire): string {
