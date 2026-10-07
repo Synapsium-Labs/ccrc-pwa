@@ -2216,7 +2216,7 @@ describe('SettingsScreen — stall watch: helpers (stall-watch-settings W2 Task 
       fillStallText(STALL_CONFIRM_TEXT.quietRepeat, v), fillStallText(STALL_CONFIRM_TEXT.quietDialogs, v)]);
   });
 
-  it('P3d: a quiet time raised but still below the built-in repeats the check note, with no due line', () => {
+  it('P3d: an off-wire shape the server cannot send (quietLowered true with a quiet time raised, D-4037 quiet-raise-asks-nothing) still below the built-in repeats the check note, with no due line', () => {
     const lines = stallConfirmLines(swEffect({ before: swStages(), after: swStages(), quietLowered: true,
       quietMs: { before: SW_H / 2, after: SW_H } }), { quietMs: SW_H }, 2 * SW_H);
     expect(lines).toEqual([fillStallText(STALL_CONFIRM_TEXT.quietRepeat, swValue(SW_H))]);

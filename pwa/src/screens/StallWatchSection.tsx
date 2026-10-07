@@ -214,6 +214,8 @@ export function stallConfirmLines(effect: StallWriteEffect, request: StallWatchR
   if (effect.quietLowered) {
     const slots = { value: quietText(effect.quietMs.after) };
     const repeat = fillStallText(mailOff ? STALL_CONFIRM_TEXT.quietRepeatMailOff : STALL_CONFIRM_TEXT.quietRepeat, slots);
+    // Always true for an effect the server built (`quiet-raise-asks-nothing` (D-4037): `quietLowered` means
+    // strictly lower); kept for an off-wire shape.
     if (effect.quietMs.after < effect.quietMs.before) {
       if (!after.runs) lines.push(STALL_CONFIRM_TEXT.quietOff);
       else if (!after.checks) lines.push(fillStallText(STALL_CONFIRM_TEXT.quietRecorded, slots));
