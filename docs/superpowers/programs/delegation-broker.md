@@ -528,9 +528,9 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
   nothing of it is hashed (review 324 F3, F4). The id is selected once, at open, and never changes: it is part of the
   checkpointed applied state, reconstruction restores it verbatim and never re-selects it from the journal left after
   pruning, pruning cannot pass an identity event before a checkpoint holds its id, and a bare occurrence pruned
-  before any qualifying join is durably applied never becomes one (review 328 F1; spec §5.2, §5.12). The observe stage's parser (wave 3) must not use the presence of
-  `agent_type` to decide whether an event qualifies — spec §5.2 activity id, §5.3, §5.4 rung 3 (a non-empty
-  `agent_id` does not by itself place an event inside a subagent).
+  before any qualifying join is durably applied never becomes one (review 328 F1; spec §5.2, §5.12). The observe
+  stage's parser (wave 3) must not use the presence of `agent_type` to decide whether an event qualifies — spec §5.2
+  activity id, §5.3, §5.4 rung 3 (a non-empty `agent_id` does not by itself place an event inside a subagent).
   A second reader, already shipped, places an event by a raw non-empty `agent_id`: the hook's turn-marker classifier
   (`paid` in `ccd/session-hook.sh`) skips the main-thread marker write for such an event, so each such PreToolUse
   above was dropped from its turn marker as a subagent's. No harm was measured, because earlier main-thread events
@@ -752,11 +752,11 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     Until these close, an unmeasured cell is not coverage.
   - D-4008's three folds, `locked` (false when its stat fails), `baseAgreesFirstLog` (null when `logs/HEAD` cannot be
     read) and an unreadable `gitdir` (read as absent), are no positive cleanup or adoption evidence.
-  - An activity id is selected once, at open, and is restored, never re-hashed. Whichever wave builds the journal's
-    checkpoint, pruning and reconstruction keeps each selected id in the checkpointed applied state, restores it
-    verbatim, derives one only for an activity the checkpoint does not hold, and prunes no event before a durable
-    checkpoint covers it and no identity event before a checkpoint holds its id (spec §5.2, §5.12 and §8.4's row;
-    amendment `tool-agent-id-alone-is-unjoined-evidence`, review 328 F1).
+  - An activity id is selected once, at open; a checkpointed id is restored, never re-hashed after pruning. Whichever
+    wave builds the journal's checkpoint, pruning and reconstruction keeps each selected id in the checkpointed
+    applied state, restores it verbatim, derives one only for an activity the checkpoint does not hold, and prunes no
+    event before a durable checkpoint covers it and no identity event before a durable checkpoint holds its id (spec
+    §5.2, §5.12 and §8.4's row; amendment `tool-agent-id-alone-is-unjoined-evidence`, review 328 F1).
   - All eight real-lane amendment slugs carry into wave 3: `agent-input-keys-are-the-callers`,
     `post-turn-subagentstop-is-unpaired`, `real-payloads-carry-scratchpad-dir`,
     `toolsearch-may-precede-a-workflow-call`, `parent-stop-does-not-bound-workflow-start`,

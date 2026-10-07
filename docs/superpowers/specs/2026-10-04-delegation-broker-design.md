@@ -184,8 +184,9 @@ fleet state lives under the dotless `$REG/delegation/` — never `lifecycle`.
 
 **Activity id** = server-computed hash of (parent id, parent incarnation, source kind, upstream id, the
 journal id of the first event that named it), selected once, when the activity opens, and immutable
-thereafter: replay restores it and never re-selects it (below). Upstream ids: `agent_id`; workflow run
-id + worker index; `tool_use_id` where present. Display names are metadata only.
+thereafter: replay restores a checkpointed id verbatim and never re-selects it after pruning (below).
+Upstream ids: `agent_id`; workflow run id + worker index; `tool_use_id` where present. Display names
+are metadata only.
 For a workflow run id + worker index or a `tool_use_id`, that journal component stays the journal id of
 the first event naming the upstream id. For an activity keyed by `agent_id`, the activity opens only
 once a QUALIFYING join for that id is known: an Agent launch response, a SubagentStart, or a positive
@@ -203,13 +204,14 @@ may itself be the earliest event the activity id hashes. No reader decides this 
 `agent_type` is present (amended 2026-10-07 from the real-lane cross-check and reviews 318 and 324:
 ledger amendment `tool-agent-id-alone-is-unjoined-evidence`).
 The selected id is part of checkpointed applied state (§5.12). Reconstruction restores a checkpointed
-activity id verbatim and never re-selects an identity event for that activity from whatever journal
-suffix remains after pruning. It derives an id by the rule above only for an activity the checkpoint
-does not hold, and then picks the event chosen at open, because pruning cannot pass that event before a
-checkpoint holds the id. A bare `agent_id` occurrence pruned before any qualifying join for that id is
-durably applied is no longer retained evidence and can never later become the identity event. If a
-qualifying join is applied while it is retained, the activity opens and may select it, and the selected
-id is checkpointed before pruning can pass it (amended 2026-10-07, review 328 F1).
+activity id verbatim and never re-selects an identity event (the event whose journal id the activity
+id hashes) for that activity from whatever journal suffix remains after pruning. It derives an id by
+the rule above only for an activity the checkpoint does not hold, and then picks the event chosen at
+open, because pruning cannot pass that event before a durable checkpoint holds the id. A bare
+`agent_id` occurrence pruned before any qualifying join for that id is durably applied is no longer
+retained evidence and can never later become the identity event. If a qualifying join is applied while
+it is retained, the activity opens and may select it, and the selected id is in a durable checkpoint
+before pruning can pass it (amended 2026-10-07, review 328 F1).
 
 **Lease id** = a server-minted UUID plus a generation. Server-side identity: (project, admin record,
 creation base, canonical path). Box-side fingerprint (computed by the verbs, never by the server): git
@@ -512,16 +514,17 @@ hooks never delete; no session invokes these verbs and no skill names them.
   of the checkpointed applied state. Reconstruction restores a checkpointed activity id verbatim; it
   never re-selects an identity event for that activity from whatever journal suffix remains after
   pruning, and it derives an id by §5.2's rule only for an activity the checkpoint does not hold. A
-  minted identity crosses compaction in the checkpoint, not by keeping every identity event forever. A
+  minted identity survives pruning in the checkpoint, not by keeping every identity event forever. A
   meta read is never journalled, has no writer and is never hashed (§5.2), so neither restoring nor
   deriving an id reads one as an event (amended 2026-10-07, review 328 F1).
-- **Retention:** the journal keeps ≥ 30 days (that floor is proposed) and never drops an event an open
-  lease or lineage edge references. Pruning may not pass an accepted event until a durable checkpoint
-  covers every activity, lease and lineage projection applied through that event; an activity that
-  opens on an older retained event (a bare `agent_id` occurrence, §5.2) has its selected id
-  checkpointed before pruning can pass that event. A bare `agent_id` occurrence pruned before any
-  qualifying join for that id is durably applied is no longer retained evidence and never becomes an
-  identity event (amended 2026-10-07, review 328 F1).
+- **Retention (proposed):** the journal keeps ≥ 30 days and never drops an event an open lease or
+  lineage edge references.
+- **Pruning (amended 2026-10-07, review 328 F1):** whatever the retention, pruning may not pass an
+  accepted event until a durable checkpoint covers every activity, lease and lineage projection applied
+  through that event; an activity whose identity event precedes its opening (for example a bare
+  `agent_id` occurrence, §5.2) has its selected id in a durable checkpoint before pruning can pass that
+  event. A bare `agent_id` occurrence pruned before any qualifying join for that id is durably applied
+  is no longer retained evidence and never becomes an identity event.
 
 ### 5.13 Compatibility and mixed versions
 
@@ -654,7 +657,7 @@ measured cell records the failing test and `N failed | M passed`.
 | a vanished bucket before the cursor marks `unmeasured`; a torn line is not ingested | skip each check |
 | an event whose `sessionId` differs from its spool directory is rejected | accept it |
 | replay keeps lease id and generation | bump on replay |
-| replay restores a checkpointed activity id verbatim; pruning passes no event before a checkpoint covers it, nor an activity's identity event before a checkpoint holds its id | re-select the identity event on replay; prune past the checkpoint (one row each) |
+| replay restores a checkpointed activity id verbatim; pruning passes no event before a durable checkpoint covers it, nor an activity's identity event before a durable checkpoint holds its id | re-select the identity event on replay; prune past the checkpoint; release an activity's older identity event once a checkpoint covers it by position but before one holds its id, one row each |
 | only the journal creates a lease; a carrier alone is never cleanup-eligible | recover a lease from a carrier |
 | `ws-lease-mark`: atomic, generation-strict, flocked, both-direction containment, no symlink, no locked tree, root under the projects root, refuses registry rows | one row per refusal |
 | promotion: claimant attribution, `transferring` stales tokens, dirty or active refuses, `.child` only via dispatch | one row each |
