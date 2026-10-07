@@ -45,7 +45,7 @@ import {
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
   SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, redactField,
   REASONS, WRITING_FORMS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker,
-  HARNESS_TABLE, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
+  HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
 } from './lib.mjs';
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -3766,22 +3766,18 @@ export function exportCensus(db, nowMs, budget) {
     state.last = ids[ids.length - 1].blob_id;
     stepCursorSet(db, 'export-census', state);
   }
-  // W1-k: the oldest unexported row, its due date by the row clock, and the file clock's first deletion date.
+  // W1-k: the oldest unexported row, and the two dates lib's exportDates decides from it and the measured files.
   const oldest = db.prepare('SELECT min(ts_ms) AS m FROM entries WHERE exported_ms IS NULL').get().m;
-  let firstDeletion = null;
-  for (const list of files.values()) {
-    for (const f of list) {
-      if (!f.present) continue;
-      const at = f.mtimeMs + (state.homeDays[f.home ?? minHome] ?? minDays) * DAY_MS;
-      if (firstDeletion === null || at < firstDeletion) firstDeletion = at;
-    }
-  }
+  const dates = exportDates({
+    homeRetentionDays: state.homeDays, oldestRowMs: oldest,
+    files: [...files.values()].flat().map((f) => ({ home: f.home ?? minHome, mtimeMs: f.mtimeMs, present: f.present })),
+  });
   setMeta(db, 'export_due', String(state.due));
   setMeta(db, 'export_overdue', String(state.overdue));
   setMeta(db, 'export_census_ms', String(nowMs));
   setMeta(db, 'oldest_row_ms', oldest === null ? '' : String(oldest));
-  setMeta(db, 'first_due_ms', oldest === null ? '' : String(oldest + horizonDays * DAY_MS));
-  setMeta(db, 'first_deletion_ms', firstDeletion === null ? '' : String(Math.round(firstDeletion)));
+  setMeta(db, 'first_due_ms', dates.firstDueMs === null ? '' : String(dates.firstDueMs));
+  setMeta(db, 'first_deletion_ms', dates.firstDeletionMs === null ? '' : String(dates.firstDeletionMs));
   stepCursorDone(db, 'export-census', null, nowMs);
   return true;
 }

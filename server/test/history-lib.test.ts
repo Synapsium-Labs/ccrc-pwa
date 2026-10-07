@@ -1643,6 +1643,28 @@ describe('planExport and retentionLowered: what is due, what is overdue (spec 9.
     expect(r.due).toEqual(['b-gone', 'b-past', 'b-fresh']);
     expect(r.overdue).toEqual(['b-gone', 'b-past']);
   });
+  it('exportDates (Task 26F item 7): the row clock\'s first due date and the file clock\'s first deletion date, one definition with planExport', () => {
+    const lowered = { ...homes, '/home/u/.claude-c': 30 };
+    const files = [file('/home/u/.claude-a', 10), file('/home/u/.claude-c', 5), file('/home/u/.claude-b', 400, false)];
+    // the 400-day file is gone: it has no deletion date. The 5-day file in the 30-day home goes at +25 days, the 10-day one in a 180-day home at +170.
+    const d = libExport.exportDates({ homeRetentionDays: lowered, oldestRowMs: NOW - 160 * DAY, files });
+    expect(d.firstDeletionMs).toBe(NOW + 25 * DAY);
+    expect(d.firstDueMs, 'the shortest retention (30) less the margin gives a horizon of 0').toBe(NOW - 160 * DAY);
+    const long = libExport.exportDates({ homeRetentionDays: homes, oldestRowMs: NOW - 160 * DAY, files: [files[0]!] });
+    expect(long).toEqual({ firstDueMs: NOW - 160 * DAY + 150 * DAY, firstDeletionMs: NOW + 170 * DAY });
+    // the same rule planExport reads: a file whose date has passed is overdue there, and its date is before now here
+    const gone = libExport.exportDates({ homeRetentionDays: homes, oldestRowMs: null, files: [file('/home/u/.claude-a', 181)] });
+    expect(gone.firstDeletionMs).toBe(NOW - 1 * DAY);
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [{ key: 'b', referrers: [ref(170, [file('/home/u/.claude-a', 181)])] }] }).overdue).toEqual(['b']);
+  });
+  it('exportDates: no present file or no unexported row is null, never zero; a fractional mtime rounds; a home never measured is 30 days', () => {
+    expect(libExport.exportDates({ homeRetentionDays: homes, oldestRowMs: null, files: [] })).toEqual({ firstDueMs: null, firstDeletionMs: null });
+    expect(libExport.exportDates({ homeRetentionDays: homes, oldestRowMs: 5, files: [file('/home/u/.claude-a', 3, false)] }).firstDeletionMs).toBeNull();
+    const frac = libExport.exportDates({ homeRetentionDays: homes, oldestRowMs: null, files: [{ home: '/home/u/.claude-a', mtimeMs: 1000.6, present: true }] });
+    expect(frac.firstDeletionMs).toBe(1001 + 180 * DAY);
+    const unknown = libExport.exportDates({ homeRetentionDays: homes, oldestRowMs: null, files: [{ home: '/home/u/.claude-z', mtimeMs: 0, present: true }] });
+    expect(unknown.firstDeletionMs, 'planExport\'s own fallback').toBe(30 * DAY);
+  });
   it('a file clock reads its own home: a file in a 30-day home is past its date sooner', () => {
     const lowered = { ...homes, '/home/u/.claude-c': 30 };
     const inShort = { key: 'b-short', referrers: [ref(40, [file('/home/u/.claude-c', 31)])] };

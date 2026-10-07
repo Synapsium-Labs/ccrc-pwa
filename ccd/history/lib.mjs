@@ -1705,13 +1705,36 @@ export function planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_R
     const isDue = blob.referrers.every((r) => referrerAgeMs(r, nowMs) > exportHorizonDays(reducer(r, homeRetentionDays)) * EXPORT_DAY_MS);
     if (!isDue) continue;
     due.push(blob.key);
-    const gone = blob.referrers.every((r) => r.files.every((f) => {
-      const days = homeRetentionDays[f.home] ?? CLAUDE_CODE_DEFAULT_RETENTION_DAYS;
-      return !f.present || f.mtimeMs + days * EXPORT_DAY_MS < nowMs;
-    }));
+    const gone = blob.referrers.every((r) => r.files.every((f) => !f.present || fileDeletionMs(f, homeRetentionDays) < nowMs));
     if (gone) overdue.push(blob.key);
   }
   return { horizonDays: exportHorizonDays(shortestRetention(homeRetentionDays)), due, overdue };
+}
+
+/** The file clock (§9.15): when Claude Code's own cleanup deletes a holding file, its mtime plus ITS home's
+ *  retention (the default for a home never measured). The one definition of that rule: `planExport`'s overdue test
+ *  and `exportDates` both read it. */
+function fileDeletionMs(f, homeRetentionDays) {
+  return f.mtimeMs + (homeRetentionDays[f.home] ?? CLAUDE_CODE_DEFAULT_RETENTION_DAYS) * EXPORT_DAY_MS;
+}
+
+/** The census's W1-k dates (§9.15), decided here so the sweep only delivers them (Task 26F item 7):
+ *  - `firstDueMs`: the oldest unexported row's due date by the ROW clock, its ts plus the horizon (the shortest
+ *    retention over the homes, less the margin); null when no row is unexported (`oldestRowMs` null).
+ *  - `firstDeletionMs`: the earliest deletion date by the FILE clock over the files still present, rounded to a
+ *    whole millisecond; null when none is present. A file that is gone has no deletion date: it is already lost.
+ *  `files` is every holding file the census measured, each already assigned its home. */
+export function exportDates({ homeRetentionDays, oldestRowMs, files }) {
+  let first = null;
+  for (const f of files) {
+    if (!f.present) continue;
+    const at = fileDeletionMs(f, homeRetentionDays);
+    if (first === null || at < first) first = at;
+  }
+  return {
+    firstDueMs: oldestRowMs === null ? null : oldestRowMs + exportHorizonDays(shortestRetention(homeRetentionDays)) * EXPORT_DAY_MS,
+    firstDeletionMs: first === null ? null : Math.round(first),
+  };
 }
 
 /** Doctor's `retention-lowered` input (§9.15): when the homes disagree, the

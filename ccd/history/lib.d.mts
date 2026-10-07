@@ -277,6 +277,9 @@ export function planExport(i: {
   nowMs: number; homeRetentionDays: Readonly<Record<string, number>>;
   blobs: readonly { key: string; referrers: readonly ExportCandidate[] }[]; reducer?: ExportReducer;
 }): { horizonDays: number; due: string[]; overdue: string[] };
+export function exportDates(i: {
+  homeRetentionDays: Readonly<Record<string, number>>; oldestRowMs: number | null; files: readonly ExportFile[];
+}): { firstDueMs: number | null; firstDeletionMs: number | null };
 export function retentionLowered(homeRetentionDays: Readonly<Record<string, number>>): null | { home: string; days: number; othersMin: number };
 
 export interface SchemaVersionAdded { readonly heavy: boolean; readonly tables: Readonly<Record<string, readonly string[]>> }
