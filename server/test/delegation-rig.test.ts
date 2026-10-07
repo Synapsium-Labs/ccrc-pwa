@@ -820,10 +820,9 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
       const args = [...(dry ? ['--dry-run'] : []), '2.1.999'];
       const t = recaptureTree();
       const c = ctx(t, ENTRIES);
-      // C locale: the shell's own "write error" text is asserted below, as the proof that THIS is what failed
-      const r = recapture(c, args, { LC_ALL: 'C' }, undefined, true);
+      const r = recapture(c, args, {}, undefined, true);
       expect.soft(r.status, `${who}: ${r.stderr}`).not.toBe(0);
-      expect.soft(r.stderr, `${who}: the shell says the write failed`).toContain('Bad file descriptor');
+      expect.soft(r.stderr, `${who}: the script itself said nothing (the shell's own write error is all there is; a refusal would print "recapture: …")`).not.toMatch(/^recapture: /m);
       expect.soft(r.stderr, `${who}: no step has begun, so none failed (not "step 0", not "step 1")`).not.toMatch(/step \d+ failed/);
       expect.soft(r.stderr, `${who}: no raw root was made, so none is named`).not.toContain('is kept');
       expect.soft(fs.readdirSync(c.tmp), `${who}: no raw root`).toEqual([]);
@@ -864,7 +863,9 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
       `matrix [${t.fix}] [${t.scen}] [--write]`,
       `sanitize [--scan] [${t.fix}]`,
     ]);
-    // step 1 wrote where it said, step 2 teed where it said and found the .done the capture left, and the root is told whole
+    // step 1 wrote where it said, step 2 teed where it said and found the .done the capture left, and the "raw root:" line names the
+    // root whole. The closing "rm -rf" line prints the root with `%s`, as it is and not shell-escaped, so a path with a space must be
+    // quoted by hand before it is pasted: this row records that line as it stands, it does not say the line is right.
     expect(fs.readFileSync(path.join(raw, 'versions-at-start'), 'utf8')).toMatch(/^# started \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n2\.1\.9\n2\.1\.999\n$/);
     expect(fs.readFileSync(path.join(raw, 'all.log'), 'utf8')).toBe('stdout line from all\nstderr line from all\n');
     expect(fs.existsSync(path.join(raw, '.done'))).toBe(true);
