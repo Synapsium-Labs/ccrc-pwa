@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f5319fff75e2d5c32140990deac4d671c6a18d519c8fe45b8f078fef8f8b6248
+# ccrc:generated 1 sha256=a669e7df1373f2d40364ffe477b3541c0e39c0428e32e07212714713759aadbe
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28273,19 +28273,28 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   #   anything is looked at.
   # - THE ROOT is resolved physically (`pwd -P`): it MAY be a link or a mount
   #   (`$HOME/.cc-tmp` is a bind mount on the fleet box). A root that is gone,
-  #   PROVEN, holds no leaf: 0.
+  #   PROVEN, holds no leaf: 0. A root that resolves to nothing or to `/` is
+  #   never used (the leaf would be `/<id>`): 2. ccd never passes one.
   # - A LINK OR FILE LEAF is unlinked with `rm -f --`, never followed: `-L` is
   #   asked first, so a link's target, wherever it points, is untouched. Such a
   #   leaf is what `_child_tmpdir`'s rc 2 leaves in place; kept, a recycled
   #   slug would meet it on every spawn.
   # - A DIRECTORY LEAF goes only when it is this uid's own (`_ws_leaf_uid`,
   #   `ls -dn`, never follows it), its dev:ino is the one the caller recorded
-  #   (when the caller names one), and its physical path is exactly
-  #   `<root>/<id>`. Asking that path means entering the leaf, so the leaf's
-  #   OWN owner bits are set first (`find -P … -maxdepth 0 -user`: this uid's
-  #   own directory, never through a link, owner bits only): a mode-000 leaf
-  #   would otherwise be kept for ever, never reached by the pass below. It is
-  #   normalised next
+  #   (when the caller names one), it is not a mount point, and its physical
+  #   path is exactly `<root>/<id>`. A LEAF WHOSE DEVICE IS NOT ITS
+  #   ROOT'S is a mount point, and is refused before anything is touched:
+  #   `--one-file-system` measures from its own argument, so a mount AT the
+  #   leaf (a session's own FUSE or sshfs mount in its TMPDIR) would be emptied
+  #   before its rmdir failed. (A bind mount of the root's OWN file system
+  #   carries the root's device, and is not seen: the limit stated below.)
+  #   Asking the physical path means entering the
+  #   leaf, so the leaf's OWN owner bits are set first (`find -P … -maxdepth 0
+  #   -user … -exec chmod … {} +`: find never follows a link, though the chmod
+  #   it runs dereferences its operand; bounded to this uid's own directory and
+  #   to owner bits; `{} +`, because with `\;` find answers 0 over a chmod that
+  #   failed): a mode-000 leaf would otherwise be kept for ever, never reached
+  #   by the pass below. It is normalised next
   #   (`_ws_reclaim_normalise`: an entry that stays unreadable REFUSES the whole
   #   leaf rather than leave a partial tree; a pass that could not run is
   #   unmeasured), then removed NEVER ACROSS A FILE-SYSTEM BOUNDARY
@@ -28303,10 +28312,10 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   #   first line of `find`'s or `rm`'s stderr. A caller that journals it passes
   #   it through `_ws_leaf_why_line` first.
   # - THE CHECKS ARE NOT ATOMIC WITH THE REMOVAL: a same-uid rename onto
-  #   `<root>/<id>` between them and the `rm` is removed with it (the
-  #   single-user trust model). Wave 7's collector closes this with a
-  #   quarantine rename.
-  local root="$1" id="$2" want="${3-}" rroot leaf me owner lreal have err rc
+  #   `<root>/<id>` between them and the owner-bits `chmod` or the `rm` is
+  #   chmodded or removed with it (the single-user trust model). Wave 7's
+  #   collector closes this with a quarantine rename.
+  local root="$1" id="$2" want="${3-}" rroot leaf me owner lreal have ldev rdev err rc
   _WS_LEAF_WHY=''
   if ! [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || [[ "$id" == . || "$id" == .. ]]; then
     _WS_LEAF_WHY="'$id' is not a session id ccd mints, so nothing under $root was touched"; return 1
@@ -28316,6 +28325,7 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_ABSENT_WHY — whether $id stands under it was never asked"; return 2; }
   rroot=$(cd -- "$root" >/dev/null 2>&1 && pwd -P) \
     || { _WS_LEAF_WHY="$root cannot be resolved, so whether $id stands under it was never asked"; return 2; }
+  [[ -n "$rroot" && "$rroot" != / ]] || { _WS_LEAF_WHY="$root resolved to an unusable path"; return 2; }
   leaf="${rroot%/}/$id"
   if [[ -L "$leaf" || ( -e "$leaf" && ! -d "$leaf" ) ]]; then
     err=$(rm -f -- "$leaf" 2>&1) \
@@ -28331,7 +28341,11 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
       [[ "$have" == "$want" ]] \
         || { _WS_LEAF_WHY="$leaf is $have, not the $want its record names — a leaf that is not the recorded one is never removed"; return 1; }
     fi
-    find -P "$leaf" -maxdepth 0 -type d -user "$me" ! -perm -u=rwx -exec chmod u+rwx {} \; 2>/dev/null \
+    ldev=$(_plat_devino "$leaf" 2>/dev/null) && rdev=$(_plat_devino "$rroot" 2>/dev/null) \
+      || { _WS_LEAF_WHY="the device of $leaf or of $rroot could not be read, so whether it is a mount point was never asked"; return 2; }
+    [[ "${ldev%%:*}" == "${rdev%%:*}" ]] \
+      || { _WS_LEAF_WHY="$leaf is a mount point (device ${ldev%%:*}, not its root's ${rdev%%:*}) — ccd never removes a mount"; return 1; }
+    find -P "$leaf" -maxdepth 0 -type d -user "$me" ! -perm -u=rwx -exec chmod u+rwx {} + 2>/dev/null \
       || { _WS_LEAF_WHY="the owner bits of $leaf could not be set, so nothing under it was removed"; return 2; }
     lreal=$(cd -- "$leaf" >/dev/null 2>&1 && pwd -P) \
       || { _WS_LEAF_WHY="$leaf cannot be entered, so where it resolves was never asked"; return 2; }
@@ -28350,17 +28364,18 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_ABSENT_WHY — that $leaf is gone was never proven"; return 2; }
   return 0
 }
-_ws_leaf_why_line() {   # text -> ONE short line a journal row can carry: every C0 control byte and DEL
-  #                          reads "?", and it is cut at 300 bytes, the cut marked "…"
+_ws_leaf_why_line() {   # text -> ONE short line a journal row can carry: printable ASCII only (every
+  #                          other byte reads "?", ccd's own "—" reads "-"), cut at 300 bytes, the cut marked "…"
   # `_WS_LEAF_WHY` can carry a name the session chose (the permission pass's
   # `$left`) and a line of stderr. Raw, a newline splits the sentence a person
-  # reads, and a long, control-laden name grows six-fold at the encoder's
-  # `\u00XX` escapes: past the journal's line cap the encoder drops the WHOLE
+  # reads, and a long name grows six-fold at the encoder: a control byte
+  # becomes `\u00XX`, and a byte 0x80-0xFF (no UTF-8 of its own) becomes
+  # U+FFFD, `\ufffd`. Past the journal's line cap the encoder drops the WHOLE
   # `meas` object (`childOf`, `branch`, `tip`, both kept keys) to fit. So the
   # tail journals this line, never the raw reason. A `tr` or `head` that fails
   # leaves the line short or empty — never longer, never less clean.
   local t c
-  t=$(printf '%s' "$1" | LC_ALL=C tr '\001-\037\177' '?')
+  t=$(printf '%s' "${1//—/-}" | LC_ALL=C tr '\001-\037\177-\377' '?')
   c=$(printf '%s' "$t" | LC_ALL=C head -c 300)
   [[ "$c" == "$t" ]] || c+='…'
   printf '%s' "$c"

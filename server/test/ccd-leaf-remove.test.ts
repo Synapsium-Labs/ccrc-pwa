@@ -159,6 +159,31 @@ describe('_ws_leaf_remove — refused: rc 1, nothing removed', () => {
     expect(fs.existsSync(path.join(leafOf(), 'x'))).toBe(true);
   }, 60_000);
 
+  it('a dev:ino that is not the leaf’s is refused BEFORE its owner bits are touched — a mode-000 leaf stays 000', () => {
+    fs.mkdirSync(path.join(leafOf(), 'x'), { recursive: true });
+    fs.chmodSync(leafOf(), 0o000);
+    let a: Answer; let mode: number;
+    try { a = remove(rootOf(), ID, { devino: '1:1' }); mode = fs.statSync(leafOf()).mode & 0o777; }
+    finally { fs.chmodSync(leafOf(), 0o755); }
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('not the 1:1');
+    expect(mode.toString(8), 'the leaf’s own mode, untouched').toBe('0');
+  }, 60_000);
+
+  it('a leaf that is a MOUNT POINT — its device is not its root’s — is refused before anything is touched', () => {
+    // rm's `--one-file-system` measures from its OWN argument: a mount AT the leaf would be emptied first.
+    fs.mkdirSync(path.join(leafOf(), 'x'), { recursive: true });
+    fs.chmodSync(leafOf(), 0o500);
+    const pre = `_plat_devino() { case "$1" in */${ID}) echo 77:1 ;; *) echo 88:2 ;; esac; };`;
+    let a: Answer; let mode: number;
+    try { a = remove(rootOf(), ID, { pre }); mode = fs.statSync(leafOf()).mode & 0o777; }
+    finally { fs.chmodSync(leafOf(), 0o755); }
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('is a mount point');
+    expect(mode.toString(8), 'the leaf’s own mode, untouched').toBe('500');
+    expect(fs.existsSync(path.join(leafOf(), 'x'))).toBe(true);
+  }, 60_000);
+
   it('an entry still unreadable after the permission pass refuses the WHOLE leaf — no partial rm', () => {
     fs.mkdirSync(path.join(leafOf(), 'x'), { recursive: true });
     const a = remove(rootOf(), ID, { pre: "_ws_reclaim_normalise() { _WS_NORMALISE_WHY='stub: x is still unreadable'; return 1; };" });
@@ -225,6 +250,14 @@ describe('_ws_leaf_remove — unmeasured: rc 2, every exit code read', () => {
     expect(fs.readFileSync(rootOf(), 'utf8')).toBe('a file where the root should be');
   }, 60_000);
 
+  it('a root that resolves to `/` is never used — the leaf would be `/<id>`: unmeasured, nothing touched', () => {
+    fs.symlinkSync('/', rootOf());
+    const a = remove(rootOf(), ID);
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toContain('resolved to an unusable path');
+    expect(fs.readlinkSync(rootOf()), 'the root link stands').toBe('/');
+  }, 60_000);
+
   it.skipIf(ROOT_USER)('a mode-000 root holding the leaf cannot be resolved: unmeasured, and the leaf stands', () => {
     fs.mkdirSync(path.join(leafOf(), 'x'), { recursive: true });
     fs.chmodSync(rootOf(), 0o000);
@@ -284,6 +317,47 @@ describe('_ws_leaf_remove — unmeasured: rc 2, every exit code read', () => {
     expect(a.why).toContain('the identity of');
     expect(fs.existsSync(path.join(leafOf(), 'x'))).toBe(true);
   }, 60_000);
+
+  it('a device that cannot be read is unmeasured — whether the leaf is a mount point was never asked', () => {
+    fs.mkdirSync(path.join(leafOf(), 'x'), { recursive: true });
+    const a = remove(rootOf(), ID, { pre: '_plat_devino() { return 1; };' });
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toContain('whether it is a mount point was never asked');
+    expect(fs.existsSync(path.join(leafOf(), 'x'))).toBe(true);
+  }, 60_000);
+
+  it('a chmod that FAILS on the leaf’s own owner bits is unmeasured, for that reason — at mode 000, 0300 and 0500 alike', () => {
+    // A BINARY first on PATH, inside the fixture HOME: `find -exec` runs what PATH names, and no
+    // shell function can shadow it. `{} +` is what carries its failure into find's own exit code.
+    const bin = path.join(h.home, 'fakebin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'chmod'), '#!/bin/sh\necho "chmod: refused by the fixture" >&2\nexit 1\n', { mode: 0o755 });
+    // Every mode is asked before anything is asserted, so a red names all three answers at once.
+    const seen = [0o000, 0o300, 0o500].map((mode) => {
+      fs.mkdirSync(path.join(leafOf(), 'x'), { recursive: true });
+      fs.chmodSync(leafOf(), mode);
+      let a: Answer;
+      try { a = remove(rootOf(), ID, { pre: `PATH="${bin}:$PATH";` }); } finally { fs.chmodSync(leafOf(), 0o755); }
+      const stood = fs.existsSync(path.join(leafOf(), 'x'));
+      fs.rmSync(leafOf(), { recursive: true });
+      return `${mode.toString(8)}: rc ${a.rc}, ${a.why.includes('owner bits') ? 'owner bits' : a.why}, ${stood ? 'stands' : 'GONE'}`;
+    });
+    expect(seen).toEqual(['0: rc 2, owner bits, stands', '300: rc 2, owner bits, stands', '500: rc 2, owner bits, stands']);
+  }, 60_000);
+
+  it.skipIf(ROOT_USER)('the owner-bits pass re-asks the OWNER itself: a leaf this uid does not own keeps its mode', () => {
+    // Both answers say 999999, so the owner check passes; the pass's own `-user` is what refuses the chmod.
+    fs.mkdirSync(path.join(leafOf(), 'x'), { recursive: true });
+    fs.chmodSync(leafOf(), 0o000);
+    let a: Answer; let mode: number;
+    try {
+      a = remove(rootOf(), ID, { pre: 'id() { echo 999999; }; _ws_leaf_uid() { echo 999999; };' });
+      mode = fs.statSync(leafOf()).mode & 0o777;
+    } finally { if (fs.existsSync(leafOf())) fs.chmodSync(leafOf(), 0o755); }
+    expect(a.rc, a.why).toBe('2');
+    expect(mode.toString(8), 'the leaf’s own mode, untouched').toBe('0');
+    expect(fs.existsSync(path.join(leafOf(), 'x'))).toBe(true);
+  }, 60_000);
 });
 
 /** The clips leaf (only) reads as another uid's. */
@@ -316,6 +390,7 @@ describe('the tail removes both leaves through the helper — and KEEPS, and say
     const done = events.find((e) => e['outcome'] === 'done')!;
     expect(measOf(done)['clipsKept']).toBe('refused');
     expect(String(done['detail'])).toContain('belongs to uid 999999');
+    expect(String(done['detail']), 'the dash reads "-", not "???"').toContain(' - ccd never removes a directory it does not own');
   }, 90_000);
 
   it('an rm that fails on the clips leaf: kept, `unmeasured`, rm’s words in the detail', () => {
@@ -419,12 +494,14 @@ describe('the tail removes both leaves through the helper — and KEEPS, and say
 
   // Linux only, for the reason above. The TEMP ROOT, because the ladder's own
   // permission pass reads the clips directory first and refuses an unreadable one.
-  it.skipIf(process.platform === 'darwin')('a kept leaf’s reason reaches the done row as ONE short line — control bytes read "?", cut at 300 bytes — and the row keeps its meas', () => {
+  it.skipIf(process.platform === 'darwin')('a kept leaf’s reason reaches the done row as ONE short line — every byte outside printable ASCII reads "?", cut at 300 bytes — and the row keeps its meas', () => {
     makeChild(h);
     const tmp = path.join(h.home, '.cc-tmp', CHILD_ID);
-    // A name the SESSION chose: long, and laden with every kind of control byte.
-    const name = `evil${'\t\n\x1b\x7f\x01'.repeat(40)}`;
-    fs.mkdirSync(path.join(tmp, name, name), { recursive: true });
+    // A name the SESSION chose: long, laden with every kind of control byte, and with bytes 0x80-0xFF
+    // that are no UTF-8 (each would reach the encoder as U+FFFD, six bytes of `\ufffd`).
+    const name = Buffer.concat([Buffer.from('evil\t\n\x1b\x7f\x01'), Buffer.alloc(120, 0x80), Buffer.alloc(120, 0xff)]);
+    const deep = Buffer.concat([Buffer.from(`${tmp}/`), name, Buffer.from('/'), name]);
+    fs.mkdirSync(deep, { recursive: true });
     // The permission pass names what it could not fix by its raw path, as `_ws_reclaim_normalise` does;
     // every other tree (the worktree's and the clips directory's, at the ladder) gets the real pass. The
     // leaf is matched by its last two components: the harness HOME itself may sit under a `.cc-tmp`.
@@ -435,7 +512,7 @@ describe('the tail removes both leaves through the helper — and KEEPS, and say
     const r = childReclaimVerb(h, evalOf(h).token, { pre });
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
-    expect(fs.existsSync(path.join(tmp, name, name)), 'the temp root is kept').toBe(true);
+    expect(fs.existsSync(deep), 'the temp root is kept').toBe(true);
     const done = eventsOf(h.home, 'reclaim').find((e) => e['outcome'] === 'done')!;
     expect(done['truncated'], 'the row was never cut down to fit').toBeUndefined();
     expect(measOf(done)['tmpRootKept']).toBe('refused');
@@ -448,6 +525,7 @@ describe('the tail removes both leaves through the helper — and KEEPS, and say
     const why = detail.slice(head.length);
     expect(why).toContain(`${fs.realpathSync(tmp)}/evil?????`);
     expect(why.endsWith('…'), 'a cut is marked').toBe(true);
+    expect(why.slice(0, -1), 'printable ASCII only').toMatch(/^[\x20-\x7e]*$/);
     expect(Buffer.byteLength(why.slice(0, -1), 'utf8')).toBeLessThanOrEqual(300);
   }, 90_000);
 });
