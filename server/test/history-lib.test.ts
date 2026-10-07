@@ -1094,6 +1094,18 @@ describe('isStoredRow, blobBodyOf and entryOf: what is stored and how (spec 2, 6
     expect(libRows.entryOf({ ...rowFx.userRow({ uuid: 'u-4', ts: T0, text: 'x' }), message: { role: 'user', model: 'claude-fixture-4', content: 'x' } }).model).toBe(null);
     expect(libRows.entryOf(rowFx.assistantRow({ uuid: 'a-2', ts: T0, text: 'x', model: '<synthetic>' })).model).toBe('<synthetic>');
   });
+  it('FR2-e (D-4341): a row timestamp is stored only as a safe integer within the JS Date range, 0 <= ms <= 8.64e15; anything else is NULL, and ordinary values are unchanged', () => {
+    const tsOf = (timestamp: unknown): number | null => libRows.entryOf({ uuid: 't-1', type: 'user', timestamp }).tsMs;
+    for (const bad of [2 ** 60, -(2 ** 60), 1e17, -1e17, 9.1e15, 8.64e15 + 1, -1, -0.5 - 1, Infinity, -Infinity, NaN, '+275761-09-13T00:00:00.001Z', '0000-01-01T00:00:00Z', '1969-12-31T23:59:59Z']) {
+      expect(tsOf(bad), String(bad)).toBe(null);
+    }
+    expect(tsOf(8.64e15), 'the Date range\'s own end').toBe(8.64e15);
+    expect(tsOf(0)).toBe(0);
+    expect(Object.is(tsOf(-0.5), 0), 'a truncated -0.5 is 0, never -0').toBe(true);
+    expect(tsOf(1_791_000_000_123.9), 'a numeric ms truncates, as before').toBe(1_791_000_000_123);
+    expect(tsOf('2026-10-01T10:00:00.000Z')).toBe(Date.UTC(2026, 9, 1, 10, 0, 0));
+    expect(tsOf('+275760-09-13T00:00:00.000Z'), 'the last instant Date.parse reads').toBe(8.64e15);
+  });
   it('entryOf reads the tool name, the producing tool, the summary flag and a missing timestamp as NULL', () => {
     expect(libRows.entryOf(rowFx.toolUseRow({ uuid: 'a-3', ts: T0, toolUseId: 'toolu_01', name: 'Bash', input: { command: 'ls' } })).toolName).toBe('Bash');
     expect(libRows.entryOf(rowFx.toolResultRow({ uuid: 'u-3', ts: T0, toolUseId: 'toolu_01', content: 'out', sourceToolUseID: 'toolu_01' })).sourceToolUseId).toBe('toolu_01');

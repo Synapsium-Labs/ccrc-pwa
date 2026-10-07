@@ -980,13 +980,22 @@ function rowObject(v) {
 function rowString(v) {
   return typeof v === 'string' ? v : null;
 }
+/** The last instant a JS Date holds, in ms: the top of the window a row's timestamp may be stored in. */
+const ROW_TS_MAX_MS = 8.64e15;
+
 /** A row's `timestamp` (ISO-8601 in every row Claude Code writes) as epoch
- *  ms; null when absent or unparseable, never 0 and never "now". */
+ *  ms; null when absent, unparseable or outside 0 <= ms <= ROW_TS_MAX_MS, never 0 and never "now". A number
+ *  is truncated to whole ms first.
+ *  D-4341 (history-row-ts-safe-range): the window is the one place a row's time is made a stored integer. A numeric
+ *  `timestamp` of 1e17 or -2^60 used to pass (any finite number did) and was bound as a double, which SQLite's INTEGER
+ *  affinity stores past 2^53, and node:sqlite cannot read such an integer back: every plain read of it throws, so
+ *  the census, `min(ts_ms)` and `status` failed every pass for good. A value outside the window is "no timestamp". */
 function rowTsMs(v) {
-  if (typeof v === 'number') return Number.isFinite(v) ? Math.trunc(v) : null;
-  if (typeof v !== 'string') return null;
-  const ms = Date.parse(v);
-  return Number.isFinite(ms) ? ms : null;
+  let ms;
+  if (typeof v === 'number') ms = Math.trunc(v);
+  else if (typeof v === 'string') ms = Date.parse(v);
+  else return null;
+  return Number.isSafeInteger(ms) && ms >= 0 && ms <= ROW_TS_MAX_MS ? ms + 0 : null;   // + 0: a truncated -0.5 is 0, never -0
 }
 
 /** G13: a row with no uuid is metadata (33.5-36% of rows), and some such rows

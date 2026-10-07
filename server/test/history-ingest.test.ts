@@ -2310,3 +2310,26 @@ describe('FR2-d (D-4340): a read error on one admitted file is that file\'s, nev
     } finally { db.close(); }
   });
 });
+
+describe('FR2-e (D-4341): a numeric row timestamp beyond the Date range is NULL, never a wedge', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+
+  it.each([[-(2 ** 60), 'negative'], [2 ** 60, 'positive']])('a row stamped %s (%s): stored with ts_ms NULL, and every pass, census included, exits 0', (stamp) => {
+    const box = IX.newBox('ccrc-hist-fr2e-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      { ...IX.user(IX.uuidN(1), null, 'odd clock', 1), timestamp: stamp },
+      IX.user(IX.uuidN(2), IX.uuidN(1), 'ordinary clock', 2),
+    ]));
+    for (let i = 0; i < 4; i += 1) {
+      const r = runSweep(box);
+      expect(r.code, `pass ${i}: ${r.stderr}`).toBe(0);
+    }
+    const db = openStoreRO(box);
+    try {
+      expect(db.prepare('SELECT uuid, ts_ms FROM entries ORDER BY uuid').all()).toEqual([
+        { uuid: IX.uuidN(1), ts_ms: null },
+        { uuid: IX.uuidN(2), ts_ms: IX.tsMs(2) },
+      ]);
+    } finally { db.close(); }
+  });
+});
