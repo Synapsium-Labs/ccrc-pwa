@@ -28,27 +28,31 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 ## Measurement matrix (wave 1 fills this section)
 
 Wave 1's answers to spec §8.1, per Claude Code version, read from the committed corpus
-(`server/test/fixtures/delegation/matrix.json`, derived by `server/test/delegation-rig/build-matrix.mjs` from 126
+(`server/test/fixtures/delegation/matrix.json`, derived by `server/test/delegation-rig/build-matrix.mjs` from 140
 synthetic rig captures: mock API, fixture HOME, fixture repo). The on-box census names projects by label only, and
 the hook-side costs are below. After wave 1 merges, the coordinator adds the real-lane cross-check (two lanes, D-3995)
 under its own heading. Until that is here, nothing in waves 2–6 may depend on a hook field (spec §8.1).
 
 **Versions covered:** 2.1.280, 2.1.281, 2.1.285, 2.1.286, 2.1.287, 2.1.288, 2.1.289, 2.1.290, 2.1.291 and 2.1.292, each
-with 14 scenarios, and all 140 cells are `measured`. The prose counts below the table ("99 of 99", "126 of 126", "on
-all nine", …) are over the nine versions 2.1.280–2.1.291 they were measured on; 2.1.292's cells were compared answer
-by answer with them and match on every answer the table reads. Measured means measured **within the rig**: two of
-§8.1's situations are reached only through a proxy (`oom-and-account-swap-are-proxies`, D-4066), and one is not reached
-at all (`compaction-is-unmeasured`, D-4364):
+with 14 scenarios, and all 140 cells are `measured`. The corpus counts in the prose below the table, in "What the
+table cannot show" and the amendments ("99 of 99", "126 of 126", "on all nine", …), are over the nine versions
+2.1.280–2.1.291 they were measured on; 2.1.292's cells were compared answer by answer with them and match on every
+answer the table reads. The Q8 hook costs and the on-box census numbers are not counts over versions. Measured means
+measured **within the rig**: two of §8.1's situations are reached only through a proxy
+(`oom-and-account-swap-are-proxies`, D-4066), and one is reached but not answered, because the rig compacts a session
+but never captures the `compact` SessionStart (`compaction-is-unmeasured`, D-4364):
 - **Parent crash is a SIGKILL of the parent's Claude Code process** (`kill9` in parent-kill, wf-iso-resume and
   clear-compact-resume). It is the rig's proxy for §8.1's OOM column. A cgroup OOM kill of the pane's scope can take
   the whole process tree, not the parent alone; whether it does is the unit's OOM policy (an assumption about the
   box's systemd and cgroup settings, not measured here), and that case is unmeasured.
 - **The account swap is a config-dir swap.** swap-resume's `swapConfig` copies the fixture config dir to a second
   one under the same fixture HOME, with the same mock auth, and resumes there. It is not a swap between accounts.
-- **Q5's compaction is unmeasured.** The hook exits for a `compact` SessionStart before its capture arm, so no fixture
-  holds one. Compaction shows only as PreCompact and PostCompact, which carried the pre-compaction session id in all ten
-  versions' clear-compact-resume, and the rig's resume by that id continued under it. So "rotates on compaction" is not
-  answered by this corpus; the amendment `compact-sessionstart-is-not-captured` names what wave 2's spool must do.
+- **Q5's compaction is unmeasured.** The rig does compact a session (clear-compact-resume), but the hook exits for a
+  `compact` SessionStart before its capture arm, so no fixture holds one. Compaction shows only as PreCompact and
+  PostCompact, which carried the pre-compaction session id in all ten versions' clear-compact-resume, and the rig's
+  resume by that id continued under it. So "rotates on compaction" is not answered by this corpus; the amendment
+  `compact-sessionstart-is-not-captured` names what the observe stage's spool (spec §7 stage 2; wave 3 since the
+  2026-10-07 renumbering) must do.
 
 The corpus comes from four captures, and `matrix.json` re-derives byte-identically from it:
 - the first capture's 91 cells: its seven versions, 2.1.280 to 2.1.289 above, every scenario but interrupt-exit;
@@ -65,9 +69,9 @@ The corpus comes from four captures, and `matrix.json` re-derives byte-identical
   `recapture.sh --missing` at commit `ccf0167b9` (a git-archive snapshot), sanitised by the sanitiser at that commit
   and committed in `3cad0d2cd`. It ran the version the corpus lacked of those installed when it started (2.1.285,
   2.1.286, 2.1.287, 2.1.289, 2.1.290, 2.1.291, 2.1.292). Its run printed no `failed` line and every cell is
-  `measured`; the only notes are the two the earlier versions carry. This tree's sanitiser, run over the same raw root
-  afterwards, writes the same 14 files byte for byte (its wording and `--scan` changed since `ccf0167b9`, its output
-  did not).
+  `measured`; the only notes are the two the earlier versions carry. The sanitiser at `e8a096253`, run over the same raw
+  root afterwards, writes the same 14 files byte for byte (its wording and `--scan` changed since `ccf0167b9`, its
+  output did not).
 
 The fleet's installed lanes, re-read read-only at 2026-10-07 12:38 UTC (each lane's last update result, its
 `version_to`; no pin file under the versions directory), run 2.1.286 (one lane), 2.1.289 (one), 2.1.290 (five), 2.1.291
@@ -92,7 +96,7 @@ before relying on one.
 Status is read first: an unmeasured cell would print `unmeasured`, and none did. Inside a measured cell, "—" means
 not observed. Session ids appear as ordinals (`s1`, `s2`), never as values. A run's notes are outcomes here, never
 failures: the only notes in the corpus are `probe ["r1-resumed"]: not reached` (wf-iso-resume) and
-`dialog answered: Background work is running` (interrupt-exit), each on all nine versions, and no fixture carries a
+`dialog answered: Background work is running` (interrupt-exit), each on all ten versions, and no fixture carries a
 failure note. Each row names the scenario it reads.
 
 | Question (scenario) | 2.1.280 | 2.1.281 | 2.1.285 | 2.1.286 | 2.1.287 | 2.1.288 | 2.1.289 | 2.1.290 | 2.1.291 | 2.1.292 |

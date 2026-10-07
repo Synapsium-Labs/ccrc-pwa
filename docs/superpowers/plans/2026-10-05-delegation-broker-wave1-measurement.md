@@ -3093,21 +3093,30 @@ guard that cannot have a row says so); the wave-done reports the cells.
 in a scratch copy. The counts are the implementers', over the filter each task ran (the sanitiser's: its block and the
 corpus row), unless a row names another run, and each is the count AT THE COMMIT it was taken at: a guard's row set
 grows as later rows land, so the same mutation re-measured at a later commit can red more rows. Each task's reviewer
-re-measured them, task A's follow-up arms (`12f7c4aac`) included: its re-review ran 26 mutations of its own. Review 304
-re-ran the counts at `3efb0ac37`. All reproduced exactly except five, which came out higher and never lower (the old
-`%2F`-only decode 6 to 7, the closing-tag lookahead 8 to 9, `--scan`'s scan call 6 to 7, pointer findings named by text
-4 to 5, every lstat failure null 1 to 2), and the F11 block-wide counts, which are dated by their row counts (73 rows
-at `858caf47d`, 77 at `3efb0ac37`). Each of the five cells below gives both numbers and names the extra row, and the F11
-cell gives both row counts; the dated number of each of the five was re-run at its dated commit in wave 2's close-out,
-and the F11 counts were re-run at `858caf47d`. A commit
-beside a count means one of two things. "at X" is a commit the count was measured at, by the cell's own words or by a
-re-run. "written at X" is only the commit whose plan text first carried the count: the implementer's own run may be a
-task commit earlier, and what is established is what the plan says and when. No count here is re-measured on wave 2's
-tree. Two counts carry no reviewer's re-run, and their rows say so: the residue-bearing-key arm's and the implementer's base64 decode (task A's
-review measured both with mutations of its own). Two rows are the controller's measurements: Task 8's ENOTDIR fold
-(re-run by the write-up's reviewer: 1 red of 27) and the `--scan` file index row (first `a4d1da74f`, hardened after the write-up's
-re-review 2 to plant every fixture of a version; its counts are in its row). From `12f7c4aac` every known limit the sanitiser's header declares is pinned by a row that reds when the
-limit closes (at `858caf47d` the `\u` half of the one-pass limit was not: 0 red, task A's review).
+re-measured them, task A's follow-up arms (`12f7c4aac`) included: its re-review ran 26 mutations of its own.
+
+Review 304 re-measured the rows at `3efb0ac37`. Every count its report lists reproduced exactly except five, which came
+out higher and never lower (the old `%2F`-only decode 6 to 7, the closing-tag lookahead 8 to 9, `--scan`'s scan call 6
+to 7, pointer findings named by text 4 to 5, every lstat failure null 1 to 2), and the F11 block-wide counts, which
+read differently because they are dated by their row counts (73 rows at `858caf47d`, 77 at `3efb0ac37`: a letter 39, a
+digit 40 and `.` 3 where the plan has 37, 38 and 2). Its report lists no re-run of three figures: the 14 that task A's
+review found a broader base64 decode to red, and the two taken at `858caf47d` (the `\u` half's 0, and the first two m4
+deletions reddening nothing), which no later tree reproduces. Each of the five cells below gives both numbers and names
+the extra row, and the F11 cell gives both row counts. The dated number of each of the five was re-run at its dated
+commit in wave 2's close-out, and the F11 counts were re-run at `858caf47d`.
+
+A commit beside a count means one of two things. "at X" is a commit the count was measured at, by the cell's own words
+or by a re-run. "written at X" is only the commit whose plan text first carried the count: the implementer's own run
+may be a task commit earlier, and what is established is what the plan says and when. No count here is re-measured on
+wave 2's tree.
+
+Two counts carry no task reviewer's re-run in fix round 2, and their rows say so: the residue-bearing-key arm's and the
+implementer's base64 decode (task A's review measured both with mutations of its own, and review 304 reproduced both:
+3 and 1). Two rows are the controller's measurements: Task 8's ENOTDIR fold (re-run by the write-up's reviewer: 1 red
+of 27) and the `--scan` file index row (first `a4d1da74f`, hardened after the write-up's re-review 2 to plant every
+fixture of a version; its counts are in its row). From `12f7c4aac` every known limit the sanitiser's header declares is
+pinned by a row that reds when the limit closes (at `858caf47d` the `\u` half of the one-pass limit was not: 0 red,
+task A's review).
 
 | Task | Finding | Guard | Row |
 |---|---|---|---|
@@ -3119,7 +3128,7 @@ limit closes (at `858caf47d` the `\u` half of the one-pass limit was not: 0 red,
 | 4 | F10 | `claude_pid` compares against the physically resolved versions directory, keeps the spelling when it cannot resolve it, and still compares (D-4006) | "claude_pid finds the Claude Code process when HOME is spelled through a symlink … (F10)", Linux-only: 1 red each for the unresolved comparison, the fallback widened to empty, and the comparison deleted (written at `0d38a6549`) |
 | 5 | F1 | every `%XX` is decoded (D-4007) | the three "a percent-escaped spelling of %s is residue as a value …" rows, "the same percent-escaped string as a KEY …", "decodes every `%XX`, in either case …" and "the user's name with its first letter percent-escaped …" (the old `%2F`-only decode: 6 red at `0d38a6549`, where it was written; 7 at `12f7c4aac` and at `3efb0ac37`, review 304: the extra red is "an escape IS chased where an earlier pass produces a later kind …", the row `12f7c4aac` added after the count was written) |
 | 5 | F1 | the decode never throws | "what the percent decode leaves alone passes …" (a `decodeURIComponent` decode: 1 red, written at `0d38a6549`) |
-| 5 | F1 | one decode pass per kind: the percent kind twice is not chased (a known limit) | "a double-encoded spelling is NOT chased …" (the percent pass applied twice: 1 red, written at `0d38a6549`) |
+| 5 | F1 | one decode pass per kind: the percent kind twice is not chased (a known limit) | "a double-encoded spelling is NOT chased …" (the percent pass applied twice: 1 red, written at `c532060ee`; at `0d38a6549` the plan read "the decode applied twice: 1 red", the whole decode) |
 | 5 | F1 (task A review m1) | the `\u` kind twice is not chased (a known limit) | "a double-encoded spelling is NOT chased …" (a second `\u` pass appended: 1 red, from `12f7c4aac`; 0 at `858caf47d`) |
 | 5 | F1 (task A review m1) | the pass order `\uXXXX`, `%XX`, `\/` (a later kind producing an earlier one is not chased; an earlier one producing a later one is) | "a double-encoded spelling is NOT chased …" and "an escape IS chased where an earlier pass produces a later kind …" (the `%` pass moved before the `\u` pass: 2 red); "an escape IS chased …" (the `\/` pass moved before the `%` pass: 1 red) (both written at `c532060ee`) |
 | 5 | F11 (task A review m2) | a complete closing tag `</name>` is a tag, not a path (a known limit; D-4010's exemption) | "a complete closing tag `</name>` is a tag, not a path (declared limit, not a guarantee) …", "reads a closing tag as a tag, not a path …", the unplanted `--scan` control, both planted-value `--scan` rows, the planted-KEY and not-JSON `--scan` rows and the corpus row (the lookahead deleted from `ABS`: 8 red, since the committed fixtures hold closing tags, at `12f7c4aac` and at `c532060ee`, where it was written; 9 at `3efb0ac37`, review 304: the extra red is the `--scan` file-index row, which `a4d1da74f` added and `00fd9df34` reworked) |
@@ -3338,15 +3347,16 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   Fix round 2 captured 2.1.290 and 2.1.291 with the rig as it stood (`e47f3689f`): no adaptation was needed, and each
   version's labels and notes equal 2.1.289's on all 14 scenarios. The capture ran only the versions installed when it
   started (2.1.285 to 2.1.291, two of them new to the corpus); a version installed later is wave 2's first step.
-  Wave 2 captured 2.1.292 with the rig as it stood at `ccf0167b9` (`recapture.sh --missing`, 2026-10-07 10:11:46–10:20:55
-  UTC; the capture's `rig.sh`, scenarios, mock and `ccd/` are those of the snapshot, and the rig directory here differs
-  from it in `sanitize.mjs` alone): no adaptation was needed, and its labels and notes equal 2.1.291's on all 14
-  scenarios. The labels equal as sets: a fixture lists them in the order they were reached and the matrix sorts them,
-  and interrupt-exit's two hang labels were reached `sub-hang` first, as on 2.1.285 to 2.1.288 (2.1.289 to 2.1.291 have
-  `main-hang` first); the notes are the same two as before (`dialog answered: Background work is running` on
-  interrupt-exit, `probe ["r1-resumed"]: not reached` on wf-iso-resume) and nothing else. The capture ran only the
-  version the corpus lacked of those installed when it started (2.1.285, 2.1.286, 2.1.287, 2.1.289, 2.1.290, 2.1.291,
-  2.1.292), which was 2.1.292 alone; a version installed later waits for the next such capture.
+  Wave 2 captured 2.1.292 with the rig as it stood at `ccf0167b9` (`recapture.sh --missing`, 2026-10-07
+  10:11:46–10:20:55 UTC; the capture's `rig.sh`, scenarios, mock and `ccd/` are those of the snapshot, and the rig
+  directory at `e8a096253` differs from it in `sanitize.mjs` alone): no adaptation was needed, and its labels and notes
+  equal 2.1.291's on all 14 scenarios. The labels equal as sets: a fixture lists them in the order they were reached and
+  the matrix sorts them, and interrupt-exit's two hang labels were reached `sub-hang` first, as on 2.1.285 to 2.1.288
+  (2.1.280, 2.1.281 and 2.1.289 to 2.1.291 have `main-hang` first); the notes are the same two as before
+  (`dialog answered: Background work is running` on interrupt-exit, `probe ["r1-resumed"]: not reached` on
+  wf-iso-resume) and nothing else. The capture ran only the version the corpus lacked of those installed when it started
+  (2.1.285, 2.1.286, 2.1.287, 2.1.289, 2.1.290, 2.1.291, 2.1.292), which was 2.1.292 alone; a version installed later
+  waits for the next such capture.
 - **D-4005** — `scenario-agent-wait-covers-sub-done` (Task 4): on 2.1.289 the Agent call runs in the background even
   with `run_in_background: false` and its result reaches the main loop only inside a reminder-only turn, so the plan's
   `main-done` regex could not match; it gained `|^$`, and because that alone could end a step before the subagent's
@@ -3481,15 +3491,17 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
     (`../srv/x`, `/rig/../srv/x`, `cd ../../srv/x`). A `..` after a space, `=` or a quote (`x ../srv/acme`,
     `x=../srv/acme`, `"../srv/acme"` inside a longer string, `x ..`) is a KNOWN LIMIT, and since the `/` behind it
     follows a `.` (F11's glued slash) the path after it is not scanned either. The committed corpus holds such
-    strings: raw-worktree's own ` ../raw-wt`, the rig's relative path to its own raw worktree, 18 of them in 9 files
-    (`grep -rhoF ' ../raw-wt'` over the corpus, measured at `c51428ae8`). `DOTDOT` is not widened: that would red every one of
-    the 18, two to a file in each version's `raw-worktree.json` (9 files, one per version, 2.1.280 to 2.1.291), installed
-    versions included. A re-capture could respell the installed ones, but not the four in 2.1.280 and 2.1.281, which are
-    no longer installed. "a `..` that is not at the start of the string or right after a `/` is not scanned (declared
-    limit, not a guarantee) … (review 304 F1)" passes `x ../srv/acme`, `x=../srv/acme`, `cmd ../raw-wt`, `x ..` and
-    `x "../srv/acme" y`, refuses `../srv/acme` and `cd ../../srv/acme`, and asserts that the corpus does hold the
-    ` ../raw-wt` spelling; the block's "fails closed on a `..` path segment …" row is retitled "… at the string's
-    start or right after a `/`, however the path before it reads (review 304 F1)", its assertions unchanged.
+    strings: raw-worktree's own ` ../raw-wt`, the rig's relative path to its own raw worktree, 20 of them in 10 files
+    (`grep -rhoF ' ../raw-wt'` over the corpus: 18 in 9 files measured at `c51428ae8`, 20 in 10 once `3cad0d2cd` added
+    2.1.292's). `DOTDOT` is not widened: that would red every one of the 20, two to a file in each version's
+    `raw-worktree.json` (10 files, one per version, 2.1.280 to 2.1.292), installed versions included. A re-capture could
+    respell the installed ones, but not the six in 2.1.280, 2.1.281 and 2.1.288, which are not installed now (the
+    ledger's lane read of 2026-10-07 12:38 UTC). "a `..` that is not at the start of the string or right after a `/` is
+    not scanned (declared limit, not a guarantee) … (review 304 F1)" passes `x ../srv/acme`, `x=../srv/acme`,
+    `cmd ../raw-wt`, `x ..` and `x "../srv/acme" y`, refuses `../srv/acme` and `cd ../../srv/acme`, and asserts that the
+    corpus does hold the ` ../raw-wt` spelling; the block's "fails closed on a `..` path segment …" row is retitled "…
+    at the string's start or right after a `/`, however the path before it reads (review 304 F1)", its assertions
+    unchanged.
   - **F4: a first segment that starts outside `[A-Za-z0-9._-]` is not scanned.** `ABS` is a `/` followed by that class,
     so `x /~someone-else/acme`, `"/~someone-else/acme"`, `cd /~someone-else/acme && ls`, `x /@scope/srv/acme`,
     `x /$HOME/srv/acme`, `x /+x/srv/acme`, `x /=x/srv/acme` and `x /%7Esomeone-else/acme` pass, and `x /srv/acme` does
@@ -3773,17 +3785,19 @@ Wave 2 close-out (run 306; the block 4364–4373, issued 2026-10-07):
 
 - **D-4364** — `compaction-is-unmeasured` (review 304 F2): departs from spec §8.1's Q5, "how a session's Claude session
   id changes across `/clear`, compaction, resume and account swaps"
-  (`docs/superpowers/specs/2026-10-04-delegation-broker-design.md:557-558`), and so from §7's stage-1 gate, "every §8.1 row filled for every version on the fleet" (`:536`): the rig never
-  measures how the id changes across compaction. The hook exits in its SessionStart arm for a `compact` source before
-  the capture arm (`ccd/session-hook.sh:2905`; the stall-watch exclusion its capture-arm comment documents, `:2920-2922`),
-  so a `compact` SessionStart is never captured. Compaction shows only as PreCompact and PostCompact, which carried the
-  pre-compaction session id, and the rig's resume by that id continued under it (clear-compact-resume, on all nine
-  versions: no fixture holds a `compact` SessionStart, each PreCompact and PostCompact carries the id of the session
-  that `/clear` began, and the `resume` SessionStart carries the same id). So "rotates on compaction" is unmeasured,
-  and the ledger's amendment `compact-sessionstart-is-not-captured` names what wave 2's spool must do about it: write
-  its line inside the arm, before the exit. As D-3997 numbers the five-hour pause and D-4066 the two proxies, a §8.1
-  situation the corpus cannot reach carries a number; the plan header and the ledger's "Versions covered" now say that
-  Q5's compaction is unmeasured.
+  (`docs/superpowers/specs/2026-10-04-delegation-broker-design.md:558`), and so from §7's stage-1 gate, "every §8.1 row
+  filled for every version on the fleet" (`:536`): the rig compacts a session (clear-compact-resume) but never measures
+  how the id changes across compaction. The hook exits in its SessionStart arm for a `compact` source before the
+  capture arm (`ccd/session-hook.sh:2905`; the stall-watch exclusion its capture-arm comment documents,
+  `:2920-2922`), so a `compact` SessionStart is never captured. Compaction shows only as PreCompact and PostCompact,
+  which carried the pre-compaction session id, and the rig's resume by that id continued under it (clear-compact-resume,
+  on every version in the corpus, all ten, 2.1.280 to 2.1.292: no fixture holds a `compact` SessionStart, each
+  PreCompact and PostCompact carries the id of the session that `/clear` began, and the `resume` SessionStart carries
+  the same id). So "rotates on compaction" is unmeasured, and the ledger's amendment
+  `compact-sessionstart-is-not-captured` names what the observe stage's spool (spec §7 stage 2; wave 3 since the
+  2026-10-07 renumbering) must do about it: write its line inside the arm, before the exit. As D-3997 numbers the
+  five-hour pause and D-4066 the two proxies, a §8.1 situation the corpus does not answer carries a number; the plan
+  header and the ledger's "Versions covered" now say that Q5's compaction is unmeasured.
 
 ## Self-review (record)
 
