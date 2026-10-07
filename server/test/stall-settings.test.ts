@@ -12,16 +12,18 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { STALL_LEVELS, STALL_LEVEL_TEXT, STALL_STAGES, STALL_STAGE_TEXT, STALL_STORED_STATES, isStallLevelChoice } from '../../shared/api.js';
-import type { StallLevel, StallLevelChoice, StallStored } from '../../shared/api.js';
+import { STALL_FOLLOW_LABEL, STALL_LEVELS, STALL_LEVEL_TEXT, STALL_NOTICE_TEXT, STALL_STAGES, STALL_STAGE_TEXT, STALL_STORED_STATES, isStallLevelChoice } from '../../shared/api.js';
+import type { StallLevel, StallLevelChoice, StallStored, StallWriteEffect } from '../../shared/api.js';
 import type { ReadFailure } from '../../shared/agent-protocol.js';
 import {
   STALL_LADDER, STALL_NOTICE_WINDOW_MS, STALL_QUIET_MAX_MS, STALL_QUIET_MIN_MS, STALL_QUIET_STEP_MS,
-  armedStages, isStallQuietMs, isStallSettingsKebab, parseStallSettings, resolveStallWatch, stallBoxArmingOf,
-  stallFilesExceed, stallLevelOf, stallNextStep, stallStages, stallUnheldBoxOf,
+  armedStages, decideStallSettings, isStallQuietMs, isStallSettingsKebab, parseStallSettings, resolveStallWatch,
+  stallBoxArmingOf, stallEffectKey, stallFilesExceed, stallLevelOf, stallNeedsConfirm, stallNextStep, stallNoticeCounts,
+  stallPatchIsNoOp, stallSettingsAfter, stallSettingsChange, stallStages, stallUnheldBoxOf, stallWriteEffect,
 } from '../src/coord/stallsettings.js';
-import type { StallBoxArming, StallSettingsParsed, StallSettingsRead } from '../src/coord/stallsettings.js';
-import { STALL_MARKERS, STALL_QUIET_MS, stallArmingOf } from '../src/coord/stall.js';
+import type { StallBoxArming, StallSettingsParsed, StallSettingsPatch, StallSettingsRead } from '../src/coord/stallsettings.js';
+import { STALL_ARMS, STALL_MARKERS, STALL_QUIET_MS, rungRecipient, stallArmHasRung, stallArmingOf, stallDetail } from '../src/coord/stall.js';
+import type { StallArm } from '../src/coord/stall.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER, mailTurnModeOf } from '../src/turnidle.js';
 import { MAIL_DISABLED_MARKER } from '../src/coord/rundefs.js';
 
@@ -462,6 +464,330 @@ describe('M28 (L1 half): files-exceed compares the sending stages only', () => {
     const b = box(LIVE, SHADOW);
     const r = resolveStallWatch(b, chosen('check'));
     expect(stallFilesExceed(b, { ...r, arming: { ...r.arming, mailMode: 'shell' } })).toBe(false);
+  });
+});
+
+// ── the write path: decide, the projection, the effect and its key, the feed change ──────────────────────────────
+
+describe('decideStallSettings: refuses, never clamps (§10 step 2; the decide halves of M10, M11b and M14)', () => {
+  const refused = (body: unknown): string => {
+    const d = decideStallSettings(body);
+    if (d.ok) throw new Error(`accepted ${JSON.stringify(body)}`);
+    return d.detail;
+  };
+  it('a body that is not an object is refused', () => {
+    for (const b of [null, undefined, 'log', 3, [], ['level']]) expect(refused(b), String(b)).toBe('body must be an object');
+  });
+  it('M14: an unknown key is refused and named in the detail, even beside a valid field (departure unknown-keys-refused)', () => {
+    expect(refused({ level: 'check', quietTime: 3 * H })).toBe('unknown key quietTime: a write names only level, quietMs and confirm');
+    expect(refused({ foo: 1 })).toContain('foo');
+    expect(refused(JSON.parse('{"__proto__": 1, "level": "log"}'))).toContain('__proto__');
+  });
+  it('M14: a body naming neither level nor quietMs is refused, a confirm alone included', () => {
+    expect(refused({})).toBe('at least one of level or quietMs must be given');
+    expect(refused({ confirm: '0badc0de' })).toBe('at least one of level or quietMs must be given');
+  });
+  it('M11b: a level that is not a StallLevelChoice is refused, the prototype names included', () => {
+    for (const v of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'custom', 'Follow', '', 3, null]) {
+      expect(refused({ level: v }), String(v)).toBe('level must be follow or one of off, log, check, alert, deliver, all');
+    }
+  });
+  it('M10: a quiet time off the range or off the step is refused, naming the field, the range and the step', () => {
+    for (const v of [29 * MIN, 45 * MIN, 12 * H + 30 * MIN, 0, 1_800_000.5, '1800000', null, 'built-in', 1_800_000n]) {
+      expect(refused({ quietMs: v }), String(v))
+        .toBe("quietMs must be 'default' or a whole number of milliseconds from 1800000 to 43200000 in steps of 1800000");
+    }
+  });
+  it('M10: the bounds and every step between are accepted exactly as sent; default is the built-in', () => {
+    for (let v = STALL_QUIET_MIN_MS; v <= STALL_QUIET_MAX_MS; v += STALL_QUIET_STEP_MS) {
+      expect(decideStallSettings({ quietMs: v }), String(v)).toEqual({ ok: true, patch: { quiet: { kind: 'set', ms: v } }, confirm: null });
+    }
+    expect(decideStallSettings({ quietMs: 'default' })).toEqual({ ok: true, patch: { quiet: { kind: 'default' } }, confirm: null });
+  });
+  it('a confirm must be a string; it passes through, and reads null when the body carries none', () => {
+    expect(refused({ level: 'log', confirm: 1 })).toBe('confirm must be a string');
+    expect(refused({ level: 'log', confirm: null })).toBe('confirm must be a string');
+    expect(decideStallSettings({ level: 'all', quietMs: 'default', confirm: '0badc0de' }))
+      .toEqual({ ok: true, patch: { level: 'all', quiet: { kind: 'default' } }, confirm: '0badc0de' });
+    for (const level of ['follow', ...STALL_LEVELS]) {
+      expect(decideStallSettings({ level }), level).toEqual({ ok: true, patch: { level }, confirm: null });
+    }
+  });
+});
+
+const AT = 1_790_000_100_000;
+
+describe('stallSettingsAfter: the read the store\'s write will leave (§8; the L1 half of M12d)', () => {
+  it('an absent row takes the insert arm: the seed, overridden by the named fields, stamped at the write', () => {
+    expect(stallSettingsAfter({ kind: 'absent' }, { quiet: { kind: 'set', ms: 3 * H } }, AT)).toEqual(rowRead('follow', 3 * H, AT));
+    expect(stallSettingsAfter({ kind: 'absent' }, { level: 'check' }, AT)).toEqual(rowRead('check', null, AT));
+    expect(stallSettingsAfter({ kind: 'absent' }, { level: 'follow', quiet: { kind: 'default' } }, AT)).toEqual(rowRead('follow', null, AT));
+  });
+  it('a row takes the update arm: the named fields over the stored ones, the other kept as stored, unreadable included', () => {
+    expect(stallSettingsAfter(rowRead('constructor', 1_800_000n, 5), { quiet: { kind: 'default' } }, AT)).toEqual(rowRead('constructor', null, AT));
+    expect(stallSettingsAfter(rowRead('all', 45 * MIN, 5), { level: 'log' }, AT)).toEqual(rowRead('log', 45 * MIN, AT));
+    expect(stallSettingsAfter(rowRead('all', 45 * MIN, 5), { level: 'off', quiet: { kind: 'set', ms: 12 * H } }, AT)).toEqual(rowRead('off', 12 * H, AT));
+  });
+  it('a no-op leaves the read as it is, updatedAt included; a stored bigint quiet time compares as a number', () => {
+    const before = rowRead('check', 3_600_000n, 5);
+    expect(stallSettingsAfter(before, { level: 'check', quiet: { kind: 'set', ms: H } }, AT)).toBe(before);
+    const seed = rowRead('follow', null, 0);
+    expect(stallSettingsAfter(seed, { level: 'follow', quiet: { kind: 'default' } }, AT)).toBe(seed);
+    expect(stallSettingsAfter(seed, { quiet: { kind: 'default' } }, AT)).toBe(seed);
+  });
+  it('an unreadable read is returned unchanged: nothing is written over it', () => {
+    const u: StallSettingsRead = { kind: 'unreadable', detail: 'no such table: stall_settings' };
+    expect(stallSettingsAfter(u, { level: 'all' }, AT)).toBe(u);
+  });
+  it('stallPatchIsNoOp compares the named fields only, after the bigint conversion, with NULL for default', () => {
+    const row = { level: 'check', quietMs: 3_600_000n, updatedAt: 5 };
+    expect(stallPatchIsNoOp(row, { level: 'check' })).toBe(true);
+    expect(stallPatchIsNoOp(row, { quiet: { kind: 'set', ms: H } })).toBe(true);
+    expect(stallPatchIsNoOp(row, { level: 'check', quiet: { kind: 'set', ms: H } })).toBe(true);
+    expect(stallPatchIsNoOp(row, { quiet: { kind: 'default' } })).toBe(false);
+    expect(stallPatchIsNoOp(row, { level: 'follow' })).toBe(false);
+    expect(stallPatchIsNoOp(row, { quiet: { kind: 'set', ms: 2 * H } })).toBe(false);
+    expect(stallPatchIsNoOp({ level: 'follow', quietMs: null, updatedAt: 0 }, { quiet: { kind: 'default' } })).toBe(true);
+    expect(stallPatchIsNoOp({ level: 'toString', quietMs: 'x', updatedAt: 0 }, { level: 'log' })).toBe(false);
+  });
+});
+
+/** The effect of writing `patch` over `before` on the box `names` lists, composed as the route composes it (§10 step 4). */
+const effectOf = (names: string[], before: StallSettingsRead, patch: StallSettingsPatch) =>
+  stallWriteEffect(box(...names), stallUnheldBoxOf(names), before, stallSettingsAfter(before, patch, AT));
+const STAGES_OFF = { runs: true, checks: false, alerts: false, busyDelivery: false, busyGate: false, wave2: false };
+
+describe('M26: stallWriteEffect and stallNeedsConfirm, the server deciding the confirm (§10)', () => {
+  it('a stage turning on: Follow on today\'s fleet to Everything, the whole effect', () => {
+    const e = effectOf([LIVE, SHADOW], rowRead('follow'), { level: 'all' });
+    expect(e).toEqual({
+      measured: true, turnsOn: ['alerts', 'busyDelivery', 'wave2'], turnsOff: [], leavesWave2: false, heldByBox: false,
+      quietLowered: false, filesExceed: false,
+      before: { ...STAGES_OFF, checks: true, busyGate: true },
+      after: { runs: true, checks: true, alerts: true, busyDelivery: true, busyGate: true, wave2: true },
+      quietMs: { before: STALL_QUIET_MS, after: STALL_QUIET_MS }, mailOff: false,
+    });
+    expect(stallNeedsConfirm(e)).toBe(true);
+  });
+  it('the busy gate turning on counts: Follow over a box with no files to Check', () => {
+    const e = effectOf([], rowRead('follow'), { level: 'check' });
+    expect(e.turnsOn).toEqual(['checks', 'busyGate']);
+    expect(stallNeedsConfirm(e)).toBe(true);
+    expect(stallNeedsConfirm(effectOf([], rowRead('follow'), { level: 'log' }))).toBe(true);
+  });
+  it('leaving the further checks: Everything to Alert stops busy delivery and the further checks', () => {
+    const e = effectOf([], rowRead('all'), { level: 'alert' });
+    expect([e.turnsOn, e.turnsOff, e.leavesWave2, e.heldByBox]).toEqual([[], ['busyDelivery', 'wave2'], true, false]);
+    expect(stallNeedsConfirm(e)).toBe(true);
+  });
+  it('a quiet time brought below the current one needs one; a raise does not, even below the built-in (departure quiet-raise-asks-nothing)', () => {
+    const lower = effectOf([], rowRead('check', 4 * H), { quiet: { kind: 'set', ms: 3 * H } });
+    expect([lower.quietLowered, lower.quietMs]).toEqual([true, { before: 4 * H, after: 3 * H }]);
+    expect(stallNeedsConfirm(lower)).toBe(true);
+    const underBuiltIn = effectOf([], rowRead('check', 30 * MIN), { quiet: { kind: 'set', ms: H } });
+    expect([underBuiltIn.quietLowered, stallNeedsConfirm(underBuiltIn)], 'a raise that stays below the built-in').toEqual([false, false]);
+    expect(effectOf([], rowRead('check'), { quiet: { kind: 'set', ms: H } }).quietLowered).toBe(true);
+    const raise = effectOf([], rowRead('check', 3 * H), { quiet: { kind: 'set', ms: 4 * H } });
+    expect([raise.quietLowered, stallNeedsConfirm(raise)]).toEqual([false, false]);
+    expect(effectOf([], rowRead('check', 30 * MIN), { quiet: { kind: 'set', ms: 30 * MIN } }).quietLowered, 'the same value').toBe(false);
+    expect(effectOf([], rowRead('check', 30 * MIN), { quiet: { kind: 'default' } }).quietLowered, 'back to the built-in').toBe(false);
+  });
+  it('an absent row with the files at Check and a write of all: measured against the files', () => {
+    const e = effectOf([LIVE, SHADOW], { kind: 'absent' }, { level: 'all' });
+    expect(e.turnsOn).toEqual(['alerts', 'busyDelivery', 'wave2']);
+    expect(stallNeedsConfirm(e)).toBe(true);
+  });
+  it('a stored all with an unreadable quiet time and a quiet write of 3 h: the stored level comes into force', () => {
+    const e = effectOf([LIVE, SHADOW], rowRead('all', 45 * MIN), { quiet: { kind: 'set', ms: 3 * H } });
+    expect([e.turnsOn, e.quietLowered]).toEqual([['alerts', 'busyDelivery', 'wave2'], false]);
+    expect(stallNeedsConfirm(e)).toBe(true);
+  });
+  it('an unreadable level with a stored 30 min and a write of Follow: the stored quiet time comes into force', () => {
+    const e = effectOf([LIVE, SHADOW], rowRead('constructor', 30 * MIN), { level: 'follow' });
+    expect([e.turnsOn, e.quietLowered, e.quietMs]).toEqual([[], true, { before: STALL_QUIET_MS, after: 30 * MIN }]);
+    expect(stallNeedsConfirm(e)).toBe(true);
+  });
+  it('mail-disabled is ignored for the diff: Alert to Deliver turns busy delivery on, and mailOff is reported', () => {
+    const e = effectOf([MAIL_OFF], rowRead('alert'), { level: 'deliver' });
+    expect([e.turnsOn, e.heldByBox, e.mailOff]).toEqual([['busyDelivery'], false, true]);
+    expect(e.after.busyDelivery, 'the resolved reading with mail off read as on').toBe(true);
+    expect(stallNeedsConfirm(e)).toBe(true);
+  });
+  it('the kill file with Check chosen and a write of all: confirmed through the unheld reading, heldByBox', () => {
+    const e = effectOf([KILL, LIVE, SHADOW], rowRead('check'), { level: 'all' });
+    expect([e.turnsOn, e.turnsOff, e.heldByBox]).toEqual([['alerts', 'busyDelivery', 'wave2'], [], true]);
+    expect(e.before).toEqual(e.after);
+    expect(stallNeedsConfirm(e)).toBe(true);
+  });
+  it('strict with Alert chosen and a write of deliver: busy delivery turns on through the unheld reading, heldByBox', () => {
+    const e = effectOf([STRICT], rowRead('alert'), { level: 'deliver' });
+    expect([e.turnsOn, e.turnsOff, e.heldByBox]).toEqual([['busyDelivery'], [], true]);
+    expect(stallNeedsConfirm(e)).toBe(true);
+  });
+  it('leaving the further checks under the kill file is held too: leavesWave2 from the unheld reading alone', () => {
+    const e = effectOf([KILL], rowRead('all'), { level: 'alert' });
+    expect([e.turnsOn, e.turnsOff, e.leavesWave2, e.heldByBox]).toEqual([[], [], true, true]);
+    expect(stallNeedsConfirm(e)).toBe(true);
+  });
+  it('neither needs one: a pure lowering, and Deliver to Alert over a box busy-shadow file', () => {
+    const lower = effectOf([], rowRead('alert'), { level: 'check' });
+    expect([lower.turnsOn, lower.turnsOff, lower.leavesWave2, lower.quietLowered]).toEqual([[], ['alerts'], false, false]);
+    expect(stallNeedsConfirm(lower)).toBe(false);
+    const deliver = effectOf([SHADOW], rowRead('deliver'), { level: 'alert' });
+    expect([deliver.turnsOn, deliver.turnsOff]).toEqual([[], ['busyDelivery']]);
+    expect(stallNeedsConfirm(deliver)).toBe(false);
+  });
+  it('Off over a box busy file hands busy delivery back: it turns on in the resolved reading with the watch off (§15)', () => {
+    const e = effectOf([LIVE, BUSY], rowRead('check'), { level: 'off' });
+    expect([e.turnsOn, e.turnsOff, e.heldByBox, e.after.runs]).toEqual([['busyDelivery'], ['checks'], false, false]);
+  });
+  it('a level below Deliver over busy files armed by hand stops busy delivery; turnsOff is in §5.1 order (§20)', () => {
+    const e = effectOf([LIVE, BUSY], rowRead('follow'), { level: 'alert' });
+    expect([e.turnsOn, e.turnsOff]).toEqual([['alerts'], ['busyDelivery']]);
+    const down = effectOf([LIVE, ESCALATE, BUSY], rowRead('follow'), { level: 'log' });
+    expect(down.turnsOff).toEqual(['checks', 'alerts', 'busyDelivery']);
+  });
+  it('M28 (the effect\'s after state): filesExceed is read over the resolution the write leaves', () => {
+    expect(effectOf([LIVE, ESCALATE], rowRead('follow'), { level: 'check' }).filesExceed).toBe(true);
+    expect(effectOf([LIVE, SHADOW], rowRead('follow'), { level: 'deliver' }).filesExceed).toBe(false);
+    expect(effectOf([LIVE, ESCALATE], rowRead('check'), { level: 'follow' }).filesExceed).toBe(false);
+  });
+  it('the unmeasured effect always needs the confirm', () => {
+    expect(stallNeedsConfirm({ measured: false })).toBe(true);
+  });
+});
+
+describe('the L1 half of M27: stallEffectKey ties the confirm to the effect and the row', () => {
+  /** A reference FNV-1a, 32-bit, over UTF-16 code units, written apart from the shipped one; its CONTROL row pins
+   *  the published test vectors. */
+  const fnv = (s: string): string => {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return h.toString(16).padStart(8, '0');
+  };
+  const effect = () => effectOf([LIVE, SHADOW], rowRead('follow'), { level: 'all' });
+  it('CONTROL: the reference hash answers the published FNV-1a vectors', () => {
+    expect([fnv(''), fnv('a'), fnv('foobar')]).toEqual(['811c9dc5', 'e40c292c', 'bf9cf968']);
+  });
+  it('is eight hex characters of FNV-1a over the effect\'s JSON and the before-row\'s updatedAt', () => {
+    const e = effect();
+    expect(stallEffectKey(e, 5)).toMatch(/^[0-9a-f]{8}$/);
+    expect(stallEffectKey(e, 5)).toBe(fnv(`${JSON.stringify(e)}@5`));
+    expect(stallEffectKey({ measured: false }, null)).toBe(fnv('{"measured":false}@none'));
+  });
+  it('a write between the 409 and the re-POST changes the key even when the effect reads the same', () => {
+    const e = effect();
+    expect(stallEffectKey(e, 5)).not.toBe(stallEffectKey(e, 6));
+    expect(stallEffectKey(e, null)).not.toBe(stallEffectKey(e, 0));
+    expect(stallEffectKey(e, 5)).toBe(stallEffectKey(effect(), 5));
+  });
+  it('a different effect gives a different key over the same row', () => {
+    const e = effect();
+    const other: StallWriteEffect = effectOf([LIVE, SHADOW], rowRead('follow'), { level: 'deliver' });
+    expect(stallEffectKey(other, 5)).not.toBe(stallEffectKey(e, 5));
+  });
+});
+
+describe('stallSettingsChange: the feed body, level and quiet time only, from L0 labels (§10 step 6)', () => {
+  const after = (level: unknown, quietMs: unknown = null) => rowRead(level, quietMs, AT);
+  it('names both fields when both change', () => {
+    expect(stallSettingsChange(rowRead('follow'), after('check', 3 * H)))
+      .toBe("level: Follow the fleet box's files → Check silent workers; quiet time: 2 h (built-in) → 3 h");
+    expect(STALL_FOLLOW_LABEL).toBe("Follow the fleet box's files");
+  });
+  it('names only what changed, and formats half hours', () => {
+    expect(stallSettingsChange(rowRead('check', 3 * H), after('check', 150 * MIN))).toBe('quiet time: 3 h → 2 h 30 min');
+    expect(stallSettingsChange(rowRead('check', 3 * H), after('check', 30 * MIN))).toBe('quiet time: 3 h → 30 min');
+    expect(stallSettingsChange(rowRead('check', 3 * H), after('all', 3 * H))).toBe('level: Check silent workers → Everything');
+  });
+  it('a no-op is null: updatedAt alone never counts, and a bigint meets its number', () => {
+    expect(stallSettingsChange(rowRead('check', 3 * H, 5), after('check', 3 * H))).toBeNull();
+    expect(stallSettingsChange(rowRead('check', 10_800_000n, 5n), after('check', 3 * H))).toBeNull();
+    expect(stallSettingsChange(rowRead('follow', null, 0), rowRead('follow', null, 0))).toBeNull();
+  });
+  it('M15b: a non-row before is named, never undefined: a lost row restored by a quiet-only write', () => {
+    expect(stallSettingsChange({ kind: 'absent' }, stallSettingsAfter({ kind: 'absent' }, { quiet: { kind: 'set', ms: 3 * H } }, AT)))
+      .toBe("level: no stored choice → Follow the fleet box's files; quiet time: no stored choice → 3 h");
+  });
+  it('an unreadable stored field is named as unreadable', () => {
+    expect(stallSettingsChange(rowRead('constructor', 3 * H), after('all', 3 * H))).toBe('level: unreadable stored level → Everything');
+    expect(stallSettingsChange(rowRead('all', 45 * MIN), after('all', null))).toBe('quiet time: unreadable stored quiet time → 2 h (built-in)');
+    expect(stallSettingsChange({ kind: 'unreadable', detail: 'x' }, after('off')))
+      .toBe('level: unreadable stored level → Off; quiet time: unreadable stored quiet time → 2 h (built-in)');
+  });
+  it('never prints undefined, null or NaN over every level, quiet time and before kind', () => {
+    const befores: StallSettingsRead[] = [{ kind: 'absent' }, { kind: 'unreadable', detail: 'x' }, rowRead('toString', 1.5)];
+    for (const b of befores) {
+      for (const level of ['follow', ...STALL_LEVELS]) {
+        for (const q of [null, 30 * MIN, 12 * H]) {
+          const body = stallSettingsChange(b, after(level, q));
+          expect(body, `${b.kind} ${level} ${String(q)}`).not.toBeNull();
+          expect(body!).not.toMatch(/undefined|null|NaN|\[object/);
+        }
+      }
+    }
+  });
+});
+
+describe('M17 and M17b: stallNoticeCounts tallies by role, live and shadow apart, skipping what it cannot name', () => {
+  /** The spec's role table (§11), written out by hand, apart from the shipped derivation. */
+  const ROLE: Record<StallArm, readonly (keyof typeof STALL_NOTICE_TEXT)[]> = {
+    quiet: ['checks', 'reports', 'pushes'],
+    'limit-cap': ['pushes'], 'dialog-cap': ['pushes'], 'coord-ball': ['pushes'],
+    'coord-deaf': ['pushes'], 'mail-stuck': ['pushes'], 'marker-unreadable': ['pushes'],
+    'orphan-d': ['wakes', 'pushes'],
+    'orphan-e': ['wakes'],
+    failed: ['wakes', 'reports'],
+    frozen: ['reports'], dead: ['reports'],
+  };
+  const row = (mode: 'live' | 'shadow', arm: StallArm, rung: 1 | 2 | 3, key = 7) => ({ at: AT, detail: stallDetail(mode, arm, rung, key) });
+  const zero = Object.keys(STALL_NOTICE_TEXT).map((r) => ({ row: r, sent: 0, shadow: 0 }));
+  it('no rows: the four rows in L0 key order, zeros included', () => {
+    expect(stallNoticeCounts([])).toEqual(zero);
+    expect(zero.map((z) => z.row)).toEqual(['checks', 'wakes', 'reports', 'pushes']);
+  });
+  it('the spec examples: quiet rung 1 is checks, orphan E rung 1 wakes, frozen rung 1 reports, dialog cap pushes', () => {
+    const counts = stallNoticeCounts([row('live', 'quiet', 1), row('shadow', 'quiet', 1), row('shadow', 'quiet', 1, 8),
+      row('live', 'orphan-e', 1), row('shadow', 'frozen', 1), row('live', 'dialog-cap', 1)]);
+    expect(counts).toEqual([
+      { row: 'checks', sent: 1, shadow: 2 }, { row: 'wakes', sent: 1, shadow: 0 },
+      { row: 'reports', sent: 0, shadow: 1 }, { row: 'pushes', sent: 1, shadow: 0 },
+    ]);
+  });
+  it('every rung of every arm lands in its role\'s row, in its mode\'s column', () => {
+    expect(Object.keys(ROLE).sort()).toEqual([...STALL_ARMS].sort());
+    for (const arm of STALL_ARMS) {
+      ROLE[arm].forEach((role, i) => {
+        const rung = (i + 1) as 1 | 2 | 3;
+        for (const mode of ['live', 'shadow'] as const) {
+          const got = stallNoticeCounts([row(mode, arm, rung)]);
+          const want = zero.map((z) => z.row === role ? { ...z, [mode === 'live' ? 'sent' : 'shadow']: 1 } : z);
+          expect(got, `${mode} ${arm} ${rung}`).toEqual(want);
+        }
+      });
+    }
+  });
+  it('a row that is not a stall detail of this build is skipped: transitions, routing, malformed, null', () => {
+    const three = stallDetail('live', 'quiet', 1, 5).split(':').slice(0, 3).join(':');
+    const rows = [{ at: AT, detail: 'dispatched->working' }, { at: AT, detail: null }, { at: AT, detail: three },
+      { at: AT, detail: `${three}:x` }, { at: AT, detail: stallDetail('live', 'quiet', 1, 5).replace('quiet', 'quieter') }];
+    expect(stallNoticeCounts(rows)).toEqual(zero);
+  });
+  it('M17b: a rung the arm lacks is skipped, never thrown on', () => {
+    const planted = [row('live', 'dialog-cap', 2), row('shadow', 'orphan-e', 3), row('live', 'frozen', 2)];
+    expect(() => stallNoticeCounts(planted)).not.toThrow();
+    expect(stallNoticeCounts([...planted, row('live', 'dialog-cap', 1)])).toEqual(zero.map((z) => z.row === 'pushes' ? { ...z, sent: 1 } : z));
+  });
+  it('stallArmHasRung is total, and answers exactly where rungRecipient does not throw', () => {
+    for (const arm of STALL_ARMS) {
+      for (const rung of [1, 2, 3] as const) {
+        let throws = false;
+        try { rungRecipient(arm, rung); } catch { throws = true; }
+        expect(stallArmHasRung(arm, rung), `${arm} ${rung}`).toBe(!throws);
+        expect(stallArmHasRung(arm, rung), `${arm} ${rung}`).toBe(ROLE[arm][rung - 1] !== undefined);
+      }
+    }
+    expect([stallArmHasRung('dialog-cap', 2), stallArmHasRung('quiet', 3), stallArmHasRung('orphan-d', 2)]).toEqual([false, true, true]);
   });
 });
 

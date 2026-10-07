@@ -1,7 +1,12 @@
-import { STALL_LEVELS, STALL_STAGES, isStallLevelChoice } from '../../../shared/api.js';
-import type { StallHeld, StallLevel, StallNextStep, StallStage, StallStored, StallWatchStages } from '../../../shared/api.js';
-import { STALL_QUIET_MS, stallArmingOf } from './stall.js';
-import type { StallArming } from './stall.js';
+import {
+  STALL_FOLLOW_LABEL, STALL_LEVELS, STALL_LEVEL_TEXT, STALL_NOTICE_TEXT, STALL_SECTION_TEXT, STALL_STAGES, isStallLevelChoice,
+} from '../../../shared/api.js';
+import type {
+  StallHeld, StallLevel, StallLevelChoice, StallNextStep, StallNoticeCount, StallStage, StallStored, StallWatchRequest,
+  StallWatchStages, StallWriteEffect,
+} from '../../../shared/api.js';
+import { STALL_QUIET_MS, parseStallDetail, rungRecipient, stallArmHasRung, stallArmingOf } from './stall.js';
+import type { StallArming, StallRecipient } from './stall.js';
 import { mailTurnModeOf, mailTurnReadsMark } from '../turnidle.js';
 import type { MailTurnMode } from '../turnidle.js';
 /**
@@ -16,7 +21,10 @@ import type { MailTurnMode } from '../turnidle.js';
  * - `isStallQuietMs`, the one validity predicate for the write and the read (L0's `isStallLevelChoice` is the level's);
  * - the settings row's port (`StallSettingsRow`, `StallSettingsRead`), declared BY THE CONSUMER as `stall.ts` declares
  *   `StallRunRow`; `store.ts` implements it, and `parseStallSettings` decides what every stored value means;
- * - the resolver both sweeps and the view call, and the readers the view composes.
+ * - the resolver both sweeps and the view call, and the readers the view composes;
+ * - the write path the POST composes: the body's decision, the projection of the row a write leaves, the write's
+ *   effect, the confirm and its key, and the feed body; and the notice counts by role.
+```
  *
  * No marker name is spelled here. The box arming composes `stall.ts`'s `stallArmingOf` and `turnidle.ts`'s
  * `mailTurnModeOf`, each of which spells its own names, and `mail-disabled` arrives as a boolean the caller measured
@@ -271,6 +279,226 @@ export function stallFilesExceed(box: StallArming, resolved: StallResolved): boo
   const files = armedStages(box);
   const now = armedStages(resolved.arming);
   return STALL_SENDING_STAGES.some((s) => files[s] && !now[s]);
+}
+
+// ── the write path ───────────────────────────────────────────────────────────────────────────────────────────────
+
+/** What a write asks the store to change. An omitted field keeps its stored value; `quiet` `default` is SQL `NULL`,
+ *  the built-in. The store takes it as decided and validates nothing (the `setCaps` division of labour). */
+export interface StallSettingsPatch {
+  readonly level?: StallLevelChoice;
+  readonly quiet?: { readonly kind: 'default' } | { readonly kind: 'set'; readonly ms: number };
+}
+/** The POST body, decided: the patch and the confirm key it carried (`null` when it carried none), or a refusal whose
+ *  detail names the field. Two shapes, never one nullable field. */
+export type StallSettingsDecision =
+  | { readonly ok: true; readonly patch: StallSettingsPatch; readonly confirm: string | null }
+  | { readonly ok: false; readonly detail: string };
+
+/** The keys a write may name, each a `StallWatchRequest` field, enumerated once. */
+const STALL_REQUEST_KEYS = ['level', 'quietMs', 'confirm'] as const satisfies readonly (keyof StallWatchRequest)[];
+const listed = (words: readonly string[]): string =>
+  words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+
+/** §10 step 2. Refuses, never clamps: a body that is not an object; an unknown key, named, so a newer page sending a
+ *  knob this server lacks hears that it was not applied (departure `unknown-keys-refused` (D-4029), the update-intent
+ *  rule over the caps one); a body naming neither field; a level that is not a `StallLevelChoice`; a quiet time that is
+ *  neither `'default'` nor whole 30-minute steps in range (`isStallQuietMs`, departure `quiet-half-hour-steps`
+ *  (D-4026)); a confirm that is not a string. */
+export function decideStallSettings(body: unknown): StallSettingsDecision {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return { ok: false, detail: 'body must be an object' };
+  const o = body as Record<string, unknown>;
+  for (const k of Object.keys(o)) {
+    if (!(STALL_REQUEST_KEYS as readonly string[]).includes(k)) {
+      return { ok: false, detail: `unknown key ${k}: a write names only ${listed(STALL_REQUEST_KEYS)}` };
+    }
+  }
+  const has = (k: (typeof STALL_REQUEST_KEYS)[number]): boolean => Object.prototype.hasOwnProperty.call(o, k);
+  if (!has('level') && !has('quietMs')) return { ok: false, detail: 'at least one of level or quietMs must be given' };
+  const patch: { level?: StallLevelChoice; quiet?: StallSettingsPatch['quiet'] } = {};
+  if (has('level')) {
+    const level = o.level;
+    if (!isStallLevelChoice(level)) return { ok: false, detail: `level must be follow or one of ${STALL_LEVELS.join(', ')}` };
+    patch.level = level;
+  }
+  if (has('quietMs')) {
+    const q = o.quietMs;
+    if (q === 'default') patch.quiet = { kind: 'default' };
+    else if (isStallQuietMs(q)) patch.quiet = { kind: 'set', ms: q };
+    else {
+      return { ok: false,
+        detail: `quietMs must be 'default' or a whole number of milliseconds from ${STALL_QUIET_MIN_MS} to ${STALL_QUIET_MAX_MS} in steps of ${STALL_QUIET_STEP_MS}` };
+    }
+  }
+  const confirm = o.confirm;
+  if (has('confirm') && typeof confirm !== 'string') return { ok: false, detail: 'confirm must be a string' };
+  return { ok: true, patch, confirm: typeof confirm === 'string' ? confirm : null };
+}
+
+/** The migration's seed: today's behaviour. The insert arm of the store's write starts from it. */
+export const STALL_SETTINGS_SEED = { level: 'follow', quietMs: null } as const;
+
+/** Whether a patch changes nothing in a stored row: every named field already equals its stored value, the level
+ *  token as stored and the quiet time after the parse's `bigint` conversion, with SQL `NULL` for `default`. A plain
+ *  `===` against a stored `bigint` never matches, so the conversion is not optional. The store's no-op skip and the
+ *  projection below both ask this (departure `no-op-write-records-no-feed-event` (D-4031)). */
+export function stallPatchIsNoOp(row: StallSettingsRow, patch: StallSettingsPatch): boolean {
+  const levelSame = patch.level === undefined || row.level === patch.level;
+  const quietSame = patch.quiet === undefined
+    || (patch.quiet.kind === 'default' ? row.quietMs === null : fromStore(row.quietMs) === patch.quiet.ms);
+  return levelSame && quietSame;
+}
+
+/** The read the store's write will leave (§8), so the route can measure what a write does before it writes:
+ *  - an unreadable read is returned as it is, because nothing is written over it;
+ *  - a row the patch does not change is returned as it is, `updatedAt` included (the no-op skip);
+ *  - an absent row takes the insert arm: the seed, overridden by the named fields;
+ *  - a row takes the update arm: the named fields over the stored ones, the other kept as stored, an unreadable
+ *    value included, so a quiet-only write leaves an unreadable level unreadable.
+ *  Both written arms stamp `updatedAt` with the write's `at`. */
+export function stallSettingsAfter(before: StallSettingsRead, patch: StallSettingsPatch, at: number): StallSettingsRead {
+  if (before.kind === 'unreadable') return before;
+  if (before.kind === 'row' && stallPatchIsNoOp(before.row, patch)) return before;
+  const base: StallSettingsRow = before.kind === 'row' ? before.row : { ...STALL_SETTINGS_SEED, updatedAt: at };
+  return {
+    kind: 'row',
+    row: {
+      level: patch.level ?? base.level,
+      quietMs: patch.quiet === undefined ? base.quietMs : patch.quiet.kind === 'default' ? null : patch.quiet.ms,
+      updatedAt: at,
+    },
+  };
+}
+
+/** A measured write effect: what the route computes once the registry listed. */
+export type StallMeasuredEffect = Extract<StallWriteEffect, { readonly measured: true }>;
+
+/** What a write does (§10; departures `server-decides-the-confirm` (D-4033) and `confirm-on-stage-diff` (D-4034)).
+ *  Each read is parsed and resolved against the same box, so each side gets the whole-row fallback. Stages are
+ *  compared through `armedStages`, so `mail-disabled` never enters the diff (a stored choice arms its stages for the
+ *  moment mail returns), and in two readings: the resolved one, and the unheld one, against `unheld` (no kill file, no
+ *  strict gate, mail on), so a stage the fleet box holds is confirmed when the write arms it, not when the hold lifts.
+ *  - `turnsOn`: off before and on after in either reading; `turnsOff`: on before and off after in the resolved one;
+ *    both in §5.1's order.
+ *  - `leavesWave2`: the further checks on before and off after, in either reading.
+ *  - `heldByBox`: a stage in `turnsOn`, or `leavesWave2`, comes from the unheld reading alone.
+ *  - `quietLowered`: the effective quiet time after the write is strictly lower than the one before. A raise never
+ *    sets it, even one that stays below the built-in (departure `quiet-raise-asks-nothing` (D-4037)).
+ *  - `filesExceed`: over the resolution the write leaves. */
+export function stallWriteEffect(box: StallBoxArming, unheld: StallBoxArming, beforeRead: StallSettingsRead, afterRead: StallSettingsRead): StallMeasuredEffect {
+  const beforeSettings = parseStallSettings(beforeRead);
+  const afterSettings = parseStallSettings(afterRead);
+  const was = resolveStallWatch(box, beforeSettings);
+  const now = resolveStallWatch(box, afterSettings);
+  const before = armedStages(was.arming);
+  const after = armedStages(now.arming);
+  const freeBefore = armedStages(resolveStallWatch(unheld, beforeSettings).arming);
+  const freeAfter = armedStages(resolveStallWatch(unheld, afterSettings).arming);
+  const onNow = (s: StallStage): boolean => !before[s] && after[s];
+  const turnsOn = STALL_STAGES.filter((s) => onNow(s) || (!freeBefore[s] && freeAfter[s]));
+  const turnsOff = STALL_STAGES.filter((s) => before[s] && !after[s]);
+  const leavesNow = before.wave2 && !after.wave2;
+  const leavesWave2 = leavesNow || (freeBefore.wave2 && !freeAfter.wave2);
+  const heldByBox = turnsOn.some((s) => !onNow(s)) || (leavesWave2 && !leavesNow);
+  const quietLowered = now.quietMs < was.quietMs;
+  return {
+    measured: true,
+    turnsOn,
+    turnsOff,
+    leavesWave2,
+    heldByBox,
+    quietLowered,
+    filesExceed: stallFilesExceed(box, now),
+    before,
+    after,
+    quietMs: { before: was.quietMs, after: now.quietMs },
+    mailOff: box.mailDisabled,
+  };
+}
+
+/** Whether a write needs the operator's confirm: always for the unmeasured effect; otherwise exactly when a stage
+ *  turns on in either reading, the further checks are left, or the quiet time is brought lower. A pure lowering of
+ *  the level needs none. */
+export function stallNeedsConfirm(effect: StallWriteEffect): boolean {
+  if (!effect.measured) return true;
+  return effect.turnsOn.length > 0 || effect.leavesWave2 || effect.quietLowered;
+}
+
+/** The confirm key: eight hex characters of a 32-bit FNV-1a over the effect's JSON and the before-row's `updatedAt`
+ *  (`none` when it parsed `null`), in plain JavaScript, so no `node:crypto`. The builders return literals, so the key
+ *  order is fixed. A staleness check, not a credential: the session gate guards the door. Because `updatedAt` is in
+ *  it, a write between the 409 and the re-POST fails the match even when the effect reads the same. */
+export function stallEffectKey(effect: StallWriteEffect, updatedAt: number | null): string {
+  const s = `${JSON.stringify(effect)}@${updatedAt === null ? 'none' : String(updatedAt)}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+/** A quiet time as the feed body writes it: `30 min`, `2 h`, `2 h 30 min`. */
+function stallQuietWords(ms: number): string {
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.round((ms % 3_600_000) / 60_000);
+  return h === 0 ? `${m} min` : m === 0 ? `${h} h` : `${h} h ${m} min`;
+}
+function stallLevelChangeWords(p: StallSettingsParsed): string {
+  if (p.level.kind === 'follow') return STALL_FOLLOW_LABEL;
+  if (p.level.kind === 'chosen') return STALL_LEVEL_TEXT[p.level.level].label;
+  return p.stored === 'absent' ? 'no stored choice' : 'unreadable stored level';
+}
+function stallQuietChangeWords(p: StallSettingsParsed): string {
+  if (p.quiet.kind === 'default') return STALL_SECTION_TEXT.builtIn.replace('{value}', stallQuietWords(STALL_QUIET_MS));
+  if (p.quiet.kind === 'set') return stallQuietWords(p.quiet.ms);
+  return p.stored === 'absent' ? 'no stored choice' : 'unreadable stored quiet time';
+}
+
+/** The feed body for a write (§10 step 6), or `null` when the level and the quiet time read the same before and
+ *  after; `updatedAt` never counts, so a no-op records nothing (D-4031). It names only what changed, with the L0
+ *  labels, and names a `before` that was not a readable row explicitly, so a write that restores a lost row is
+ *  recorded and never prints `undefined`. The route appends the actor. */
+export function stallSettingsChange(before: StallSettingsRead, after: StallSettingsRead): string | null {
+  const was = parseStallSettings(before);
+  const now = parseStallSettings(after);
+  const parts: string[] = [];
+  const levelWas = stallLevelChangeWords(was);
+  const levelNow = stallLevelChangeWords(now);
+  if (levelWas !== levelNow) parts.push(`level: ${levelWas} → ${levelNow}`);
+  const quietWas = stallQuietChangeWords(was);
+  const quietNow = stallQuietChangeWords(now);
+  if (quietWas !== quietNow) parts.push(`quiet time: ${quietWas} → ${quietNow}`);
+  return parts.length === 0 ? null : parts.join('; ');
+}
+
+// ── the notice counts ────────────────────────────────────────────────────────────────────────────────────────────
+
+/** One `run_events` row as the count reads it (§11): the store returns the window's rows and spells no detail head;
+ *  the classification happens here, in L1. */
+export interface StallObservationRow { readonly at: number; readonly detail: string | null }
+type StallNoticeRow = StallNoticeCount['row'];
+/** The four rows, in L0 key order, derived. */
+const STALL_NOTICE_ROWS = Object.keys(STALL_NOTICE_TEXT) as StallNoticeRow[];
+/** Each rung's row from its table recipient, with one arm named: `quiet` rung 1, the checks the kill rule reads. The
+ *  observation records no recipient and the verdict can override the table, so no row claims a recipient (departure
+ *  `counts-by-role` (D-4027)). */
+const STALL_ROLE_ROW: Readonly<Record<StallRecipient, StallNoticeRow>> = { worker: 'wakes', coordinator: 'reports', operator: 'pushes' };
+
+/** The notice counts by role, live (`sent`) and shadow apart, over rows the store already windowed. A row that is not
+ *  exactly a stall detail of this build is skipped, and so is a rung its arm does not have (`stallArmHasRung` asks
+ *  before `rungRecipient` would throw). Always the four rows, zeros included, in L0 key order. */
+export function stallNoticeCounts(rows: readonly StallObservationRow[]): StallNoticeCount[] {
+  const sent = new Map<StallNoticeRow, number>();
+  const shadow = new Map<StallNoticeRow, number>();
+  for (const r of rows) {
+    const n = parseStallDetail(r.detail);
+    if (n === null || !stallArmHasRung(n.arm, n.rung)) continue;
+    const row = n.arm === 'quiet' && n.rung === 1 ? 'checks' : STALL_ROLE_ROW[rungRecipient(n.arm, n.rung)];
+    const column = n.mode === 'live' ? sent : shadow;
+    column.set(row, (column.get(row) ?? 0) + 1);
+  }
+  return STALL_NOTICE_ROWS.map((row) => ({ row, sent: sent.get(row) ?? 0, shadow: shadow.get(row) ?? 0 }));
 }
 
 // ── the kebab words ──────────────────────────────────────────────────────────────────────────────────────────────

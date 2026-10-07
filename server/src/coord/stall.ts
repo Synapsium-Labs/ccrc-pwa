@@ -747,6 +747,14 @@ export function rungRecipient(arm: StallArm, rung: 1 | 2 | 3): StallRecipient {
   return to;
 }
 
+/** Whether an arm has that rung at all: total and never throwing, over the same table, for a reader whose pair did
+ *  not come from a verdict. `parseStallDetail` checks the arm and a rung of 1 to 3, not that the arm has that rung,
+ *  so a newer build's row read after a rollback, or a hand edit, can name a pair `rungRecipient` throws on. The
+ *  notice counts ask this first (stall-watch settings, design 2026-10-05 §11). */
+export function stallArmHasRung(arm: StallArm, rung: 1 | 2 | 3): boolean {
+  return STALL_RUNG_RECIPIENTS[arm][rung - 1] !== undefined;
+}
+
 /** Planning departure D-3572 shadow-rung-accounting. A rung is DONE when a live row exists for it, or when a
  *  shadow row exists and the rung's delivery is still shadow under the current markers, so arming
  *  mid-episode sends the pending rung once. Its time is its EARLIEST LIVE row when one exists, else its
