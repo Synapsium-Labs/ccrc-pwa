@@ -160,6 +160,15 @@ time.
   - Task 6 cannot be split around `CLAUDE.md`: `box-token-census.test.ts` checks the session-gated-writes sentence
     against the new route in the same commit. The worker finishes Task 5 and stops before Task 6 until mail 3831 is
     answered or claim 1072 is released.
+- **R15 (2026-10-07 12:09)**, Tasks 6 and 7 proceed under the docs co-edit, and no contested path remains.
+  - Run 302's coordinator answered yes in mail 3836, for exactly W1's listed regions. It says run 302's one remaining
+    pre-PR change touches neither file.
+  - Checked against the merged W1 plan: Task 7's nine README edits sit in the mail-gate paragraph (strict's runbook
+    included), the stall-watch paragraph and the wave-2 runbook, about :3903-4352 on `282e79e44`. Its `CLAUDE.md`
+    edits sit at :257, about :280 (Task 6) and :304 on. The prototype's `CLAUDE.md`:10 size-claim hunk is stale:
+    the plan edits no size claim, because #283 already made it.
+  - Mail 3837 gives the worker those limits and run 302's untouchable regions, and lets Tasks 6 and 7 follow Task 5
+    without a further stop. The second landing re-runs the README citation instrument.
 
 ## Carried constraints (reviewers get these)
 
