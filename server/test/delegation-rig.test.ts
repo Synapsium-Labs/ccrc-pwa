@@ -490,6 +490,7 @@ describe('rig.sh run and all take only a version that is installed (review 304 F
       const bare = ask(mkTmp('ccrc-dlg-home-'));
       expect.soft(bare.status, bare.stderr).toBe(0);
       expect.soft(bare.stdout).toBe('');
+      expect.soft(bare.stderr, 'a missing versions directory is "none installed", not an error to print').toBe('');
     }, 60_000);
   });
 });
@@ -709,11 +710,11 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
 
   const kinds = (t: Tree): string[] => logLines(t).map((l) => (l.startsWith('sanitize --scan') ? 'scan' : (l.split(' ')[0] as string)));
   const FAILS: Array<[string, NodeJS.ProcessEnv, number, string[], string]> = [   // [what, env, the script's exit, the steps that ran, the failure it reports]
-    ['rig.sh all failing with its own status', { STUB_ALL_RC: '2' }, 2, ['all'], 'step 2 failed (exit 2)'],
-    ['rig.sh all finishing without its .done', { STUB_NO_DONE: '1' }, 1, ['all'], 'step 2 failed (exit 1)'],
-    ['the sanitiser refusing (it fails closed), whatever its status', { STUB_SANITIZE_RC: '3' }, 3, ['all', 'sanitize'], 'step 3 failed (exit 3)'],
-    ['the matrix builder failing', { STUB_MATRIX_RC: '4' }, 4, ['all', 'sanitize', 'matrix'], 'step 4 failed (exit 4)'],
-    ['the corpus scan finding residue', { STUB_SCAN_RC: '5' }, 5, ['all', 'sanitize', 'matrix', 'scan'], 'step 5 failed (exit 5)'],
+    ['rig.sh all failing with its own status', { STUB_ALL_RC: '2' }, 2, ['all'], 'step 2 failed (exit 2): capture every version against every scenario (rig.sh all; its .done must exist)'],
+    ['rig.sh all finishing without its .done', { STUB_NO_DONE: '1' }, 1, ['all'], 'step 2 failed (exit 1): capture every version against every scenario (rig.sh all; its .done must exist)'],
+    ['the sanitiser refusing (it fails closed), whatever its status', { STUB_SANITIZE_RC: '3' }, 3, ['all', 'sanitize'], 'step 3 failed (exit 3): sanitise the raw bundles into the corpus (fails closed on any residue)'],
+    ['the matrix builder failing', { STUB_MATRIX_RC: '4' }, 4, ['all', 'sanitize', 'matrix'], 'step 4 failed (exit 4): rebuild matrix.json from the corpus'],
+    ['the corpus scan finding residue', { STUB_SCAN_RC: '5' }, 5, ['all', 'sanitize', 'matrix', 'scan'], 'step 5 failed (exit 5): scan the committed corpus for residue'],
   ];
   for (const [what, env, code, ran, failed] of FAILS) {
     it(`stops at ${what}: exit ${code}, the later steps not run, the raw root kept and named`, () => {
@@ -735,7 +736,7 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
     const c = ctx(t, ENTRIES);
     const r = recapture(c, ['2.1.999'], { TMPDIR: path.join(c.tmp, 'no-such-dir') });
     expect.soft(r.status, r.stderr).not.toBe(0);
-    expect.soft(r.stderr).toContain(`step 1 failed (exit ${r.status})`);
+    expect.soft(r.stderr).toContain(`step 1 failed (exit ${r.status}): make the raw root and record the versions and the start time`);
     expect.soft(r.stderr).not.toContain('is kept');
     expect.soft(logLines(t), 'nothing ran').toEqual([]);
   }, 60_000);
@@ -761,6 +762,20 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
     expect(r.stdout).toContain('sanitize: scanned 2 file(s)');
     expect(r.stdout).toContain('no residue');
     expect(fs.existsSync(path.join(c.tmp, fs.readdirSync(c.tmp)[0] as string, '2.1.999/agent-plain/version')), 'the raw root is kept').toBe(true);
+  }, 60_000);
+
+  it('--dry-run needs no tmux, no node and no mock: it runs with a PATH of bash, ls, sort, uniq and dirname alone', () => {
+    const t = recaptureTree();
+    const c = ctx(t, ENTRIES);
+    const bin = mkTmp('ccrc-dlg-bin-');
+    const found = spawnSync('sh', ['-c', 'for t in bash ls sort uniq dirname; do command -v "$t"; done'], { encoding: 'utf8' }).stdout.trim().split('\n');
+    expect(found, 'the five tools are on this box').toHaveLength(5);
+    for (const f of found) fs.symlinkSync(f, path.join(bin, path.basename(f)));
+    const r = spawnSync(path.join(bin, 'bash'), [t.script, '--dry-run', '2.1.999'], { encoding: 'utf8', timeout: 60_000,
+      env: { PATH: bin, HOME: c.home, TMPDIR: c.tmp, LOG: t.log, REAL_RIG: RIGSH } });
+    expect.soft(r.status, r.stderr).toBe(0);
+    expect.soft(stepLines(r.stdout)).toEqual(FIVE(t, ['2.1.999']));
+    expect.soft(r.stderr).toBe('');
   }, 60_000);
 
   it('resolves every path from its own location, never from the caller\'s directory', () => {

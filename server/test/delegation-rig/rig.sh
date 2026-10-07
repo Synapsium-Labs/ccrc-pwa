@@ -72,7 +72,7 @@ pick_versions() {
   VERS=()
   if (( $# )); then
     for v in "$@"; do need_version "$v"; done
-    mapfile -t VERS < <(printf '%s\n' "$@" | sort -t. -k1,1n -k2,2n -k3,3n | uniq)
+    while IFS= read -r v; do VERS+=("$v"); done < <(printf '%s\n' "$@" | sort -t. -k1,1n -k2,2n -k3,3n | uniq)
   else
     while IFS= read -r v; do
       if version_ok "$v"; then VERS+=("$v"); fi
