@@ -2230,7 +2230,7 @@ export function deriveHealth(h) {
   const b = h.bytesBehindLast3;
   const catching = tickFresh && b.length === CATCHING_UP_TICKS && b.every((v, i) => i === 0 || b[i - 1] > v);
   if (catching) warn.push(item('catching-up', `the backlog is falling: ${b[b.length - 1]} bytes behind, from ${b[0]} ${CATCHING_UP_TICKS} ticks ago`));
-  const lagUnmeasured = h.lagS === null && tickAge !== null && tickAge < TICK_STALE_MS;
+  const lagUnmeasured = h.lagS === null && tickFresh;
   if (lagUnmeasured) warn.push(item('lag-unmeasured', 'lag is unmeasured: not every file has reached its end once yet'));
   const stateHeld = h.historyOff || (h.recovering !== null && tickFresh) || opLive || catching || lagUnmeasured;
 

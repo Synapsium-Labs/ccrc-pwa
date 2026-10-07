@@ -2111,6 +2111,14 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     const past = healthLib.deriveHealth(base({ bytesBehindLast3: [300, 200, 100], lastTickMs: NOW - healthLib.TICK_STALE_MS - 1 }));
     expect(words(past, 'fail')).toEqual(['tick-stale']);
   });
+  it('an unmeasured lag shares that inclusive bound: lag-unmeasured is held and warned exactly at TICK_STALE_MS, tick-stale one millisecond past it (D-4314)', () => {
+    const at = healthLib.deriveHealth(base({ lagS: null, lastTickMs: NOW - healthLib.TICK_STALE_MS }));
+    expect(words(at, 'warn')).toContain('lag-unmeasured');
+    expect(words(at, 'fail')).toEqual([]);
+    const past = healthLib.deriveHealth(base({ lagS: null, lastTickMs: NOW - healthLib.TICK_STALE_MS - 1 }));
+    expect(words(past, 'warn')).not.toContain('lag-unmeasured');
+    expect(words(past, 'fail')).toEqual(['tick-stale']);
+  });
   it('a held state with no tick at all is the tick-stale FAIL too: nothing ran to hold the verdict (D-4314)', () => {
     const none = healthLib.deriveHealth(base({ recovering: { ...RECOVER, cursorUnmovedTicks: 2 }, lastTickMs: null, shimMtimeMs: NOW - 60 * MIN }));
     expect(words(none, 'fail')).toContain('tick-stale');
