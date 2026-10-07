@@ -453,6 +453,33 @@ describe('store.mjs: the binding', () => {
     expect(removeStaleMigrationTemps(home())).toEqual({ removed: [], bytes: 0 });
   });
 
+  // Root bypasses mode 0o100, so backups/ cannot be made unlistable as uid 0.
+  it.skipIf(process.getuid?.() === 0)('removeStaleMigrationTemps answers no credit, and does not throw, for an unlistable backups/ (D-4339 round 1)', () => {
+    const h = home();
+    createStore(h);
+    const P = historyPaths(h);
+    fs.mkdirSync(P.backups, { recursive: true });
+    fs.writeFileSync(path.join(P.backups, '.pre-v2.db.tmp'), Buffer.alloc(40, 0x61));
+    fs.chmodSync(P.backups, 0o100);
+    try {
+      expect(removeStaleMigrationTemps(h)).toEqual({ removed: [], bytes: 0 });
+    } finally {
+      fs.chmodSync(P.backups, 0o700);
+    }
+    expect(fs.existsSync(path.join(P.backups, '.pre-v2.db.tmp')), 'the temp it could not see is still there').toBe(true);
+  });
+
+  it('removeStaleMigrationTemps does not throw for a directory planted under a temp name, credits nothing for it, and still removes the others (D-4339 round 1)', () => {
+    const h = home();
+    createStore(h);
+    const P = historyPaths(h);
+    fs.mkdirSync(path.join(P.backups, '.pre-v2.db.tmp'), { recursive: true });
+    fs.writeFileSync(path.join(P.backups, '.pre-v2.db.tmp', 'inner'), 'x');
+    fs.writeFileSync(path.join(P.backups, '.pre-v3.db.tmp'), Buffer.alloc(9, 0x61));
+    expect(removeStaleMigrationTemps(h)).toEqual({ removed: ['.pre-v3.db.tmp'], bytes: 9 });
+    expect(fs.existsSync(path.join(P.backups, '.pre-v2.db.tmp', 'inner'))).toBe(true);
+  });
+
   // Root bypasses mode 0o100, so db/ cannot be made unlistable as uid 0.
   it.skipIf(process.getuid?.() === 0)('an unlistable db/ throws instead of reading as nothing stale (D-4305)', () => {
     const h = home();

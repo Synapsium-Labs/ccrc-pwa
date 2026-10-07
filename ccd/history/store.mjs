@@ -589,27 +589,32 @@ const MIGRATION_TEMP_RE = /^\.pre-v[0-9]+\.db\.tmp(-journal)?$/;
  *  (D-4339, history-migration-temp-precleaned). Run by the pass that holds the lock, BEFORE the room check that
  *  decides whether a migration may start, so a partial copy never counts against the very check that would let
  *  the next copy replace it: the bytes it held are returned as `bytes`, which the caller adds to the free space it
- *  measured earlier in the pass. An absent backups/ answers nothing stale; any other readdir failure propagates, as
- *  removeStaleTemps' does (D-4305), because "could not look" is not "nothing stale". */
+ *  measured earlier in the pass. It credits only what it MEASURED and removed, and never throws for a filesystem
+ *  condition: an absent or unlistable backups/ (a mode the operator set, EIO, ESTALE) and a temp that cannot be
+ *  measured or removed (a directory planted under its name) answer no credit for it, so a pass with nothing to
+ *  migrate still captures; `runMigration`'s own step 1 stays the guard when a migration IS admitted. Unlike
+ *  removeStaleTemps (D-4305), where an unlistable db/ means the store is unusable, an unlistable backups/ blocks
+ *  only a migration (D-4339 round 1, history-migration-temp-precleaned). */
 export function removeStaleMigrationTemps(home) {
   const dir = historyPaths(home).backups;
   let names;
   try {
     names = readdirSync(dir);
-  } catch (e) {
-    if (e && e.code === 'ENOENT') return { removed: [], bytes: 0 };
-    throw e;
+  } catch {
+    return { removed: [], bytes: 0 };
   }
   const removed = [];
   let bytes = 0;
   for (const n of names.sort()) {
     if (!MIGRATION_TEMP_RE.test(n)) continue;
-    let st = null;
-    try { st = lstatSync(`${dir}/${n}`); } catch (e) { if (!(e && e.code === 'ENOENT')) throw e; }
-    if (st === null) continue;
-    rmSync(`${dir}/${n}`, { force: true });
-    if (st.isFile()) bytes += st.size;
-    removed.push(n);
+    try {
+      const st = lstatSync(`${dir}/${n}`);
+      rmSync(`${dir}/${n}`, { force: true });
+      if (st.isFile()) bytes += st.size;
+      removed.push(n);
+    } catch {
+      continue;                                                   // gone, or not ours to remove: no credit for it
+    }
   }
   return { removed, bytes };
 }

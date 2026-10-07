@@ -2309,6 +2309,24 @@ describe('FR2-d (D-4340): a read error on one admitted file is that file\'s, nev
       expect(IX.count(db, 'sidecars'), 'the next tick retried it').toBe(2);
     } finally { db.close(); }
   });
+
+  it('a programming error on a sidecar is not swallowed: a thrown TypeError out of the sidecar read still leaves the tick (D-4340)', async () => {
+    const box = IX.newBox('ccrc-hist-fr2d4-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+    const bad = path.join(sideDir(box.homes[0]!, IX.U), 'a-bad.txt');
+    fs.writeFileSync(bad, 'a body\n');
+    const { db, ids } = await IX.openFixtureStore(box);
+    const realRead = fs.readSync;
+    try {
+      (fs as { readSync: unknown }).readSync = function readSync(fd: number, ...rest: unknown[]): number {
+        if (fs.readlinkSync(`/proc/self/fd/${fd}`) === bad) throw new TypeError('a bug, not the disk');
+        return (realRead as (...a: unknown[]) => number)(fd, ...rest);
+      };
+      syncBuiltinESMExports();
+      await expect(S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget())).rejects.toThrow(TypeError);
+      expect(counterOf(db, 'file_unreadable')).toBeUndefined();
+    } finally { (fs as { readSync: unknown }).readSync = realRead; syncBuiltinESMExports(); db.close(); }
+  });
 });
 
 describe('FR2-e (D-4341): a numeric row timestamp beyond the Date range is NULL, never a wedge', () => {

@@ -675,4 +675,30 @@ describe('FR2-b (D-4339): a stale pre-migration temp is removed before the room 
     expect(fs.existsSync(a) || fs.existsSync(b)).toBe(false);
     expect(keep.every((f) => fs.existsSync(f)), 'a finished snapshot, an attempt marker and an operator backup are not temps').toBe(true);
   });
+
+  // Root bypasses mode 0o100, so backups/ cannot be made unlistable as uid 0.
+  it.skipIf(process.getuid?.() === 0)('an unlistable backups/ on a store at the code version: the scheduled pass exits 0 and ingests (no new crash loop)', () => {
+    const box = boundBox('ccrc-hist-fr2b4-');
+    fs.mkdirSync(paths(box).backups, { recursive: true, mode: 0o700 });
+    fs.chmodSync(paths(box).backups, 0o100);
+    spoolLine(box, ID, startup(U1, { reg: U1 }));
+    try {
+      for (let i = 0; i < 2; i += 1) {
+        const r = runSweep(box);
+        expect(r.code, `pass ${i}: ${r.stderr}`).toBe(0);
+        expect(r.stderr).not.toMatch(/internal error/);
+      }
+      expect(epochsOf(box), 'the pass captured').toEqual([{ cc_session_uuid: U1, cause: 'startup', seq: 1 }]);
+    } finally { fs.chmodSync(paths(box).backups, 0o700); }
+  });
+
+  it('a directory planted under a temp name on a store at the code version: the scheduled pass exits 0', () => {
+    const box = boundBox('ccrc-hist-fr2b5-');
+    const d = path.join(paths(box).backups, '.pre-v2.db.tmp');
+    fs.mkdirSync(d, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(d, 'inner'), 'x');
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).not.toMatch(/internal error/);
+  });
 });
