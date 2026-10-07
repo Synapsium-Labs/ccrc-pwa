@@ -18,9 +18,9 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | ccd reads docs: `shared/docs.ts`, `docs-index`/`docs-tree`/`docs-show`/`docs-fetch` and the embedded helper, the doctor's `docs` check | #301 | **merged** 2026-10-06 (`f03d83304`). Executed in the coordinator's session (subagent-driven, 19 tasks, per-task reviews, a six-lens final review, one fix round), not as a run |
-| 2 | grants and adapter: agent grants, `DOCS_CAP` and builders, runner budgets, `server/src/docs/{policy,ports,ccdsource}.ts`, the docs ring guard | — | plan written 2026-10-06; dispatch after this ledger PR merges and the operator approves the plan |
+| 2 | grants and adapter: agent grants, `DOCS_CAP` and builders, runner budgets, `server/src/docs/{policy,ports,ccdsource}.ts`, the docs ring guard | — | plan approved by the operator 2026-10-07 and merged in #306 (`a17e14bc0`). **Run 315** opened 2026-10-07 (wave 2/7). **Dispatched** 2026-10-07 10:39 UTC to a fresh child. Task 2 waits until claim 1073 ends or the claim agreement is confirmed (Decisions, 2026-10-07) |
 | 3 | routes: `server/src/docs/{routes,hooks,lane,cache}.ts`, registration, dark rollout, R1/R2 | — | after W2 |
-| 4 | PWA foundation: markdown extraction, `RenderBoundary`, chat hardening (U3), `docs-sw` | — | parallel-eligible now. Its doctor-file edit waits on the holder of that file's claim |
+| 4 | PWA foundation: markdown extraction, `RenderBoundary`, chat hardening (U3), `docs-sw` | — | parallel-eligible now. Its `ccd/ccrc-doctor-checks` edit waits on whichever claim holds that file (claim 1072, run 302, on 2026-10-07) |
 | 5 | Docs screen, plus Share and Export (see Decisions, 2026-10-06) | — | after W3 and W4 |
 | 6 | mockups | — | after W5 |
 | 7 | docs and release | — | after W6 |
@@ -47,7 +47,19 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
   The tests are now version-tolerant, measured under 2.43 and 2.55, with no product change.
 - **2026-10-06: W2 plan.** Its header lists refinements (a) to (s). Refinements (c), (d), (f) and (g) contradict the spec's text. They are defined as deviations in W2's Task 6 with the first four numbers of the block this coordinator issues at run-open.
 - **2026-10-06: sharing (operator).** Fold a Share action and a self-contained Export into W5/W6. Share is the native share sheet or copy-link, carrying the GitHub permalink at the served commit. Export is a single HTML file with inlined images and scripts off. Expiring share links come later, as their own designed wave with a threat model. The design is being settled; the spec amendment follows.
-- **2026-10-06: plan format.** Plans in this programme stay Markdown: `deviation-refs` and the ledger floor read `*.md` only, and the SDD task extraction reads Markdown headings. This awaits the operator's confirmation against the global HTML preference dated 2026-10-06.
+- **2026-10-07: drafts in Share and Export (operator), option (b).** In a view with drafts, Export may include them under a visible "Draft, not committed" banner naming the base commit. Share always sends the committed permalink, with a warning that drafts are not included.
+- **2026-10-07: U5 (operator).** Draft the private report for the pre-existing route defect. The draft stays outside tracked text until the fix ships.
+- **2026-10-07: plan format (operator).** Plans stay Markdown, in this programme and every other. The HTML preference of 2026-10-06 is for specs, whose architecture decisions and diagrams engineers approve. An amendment to this programme's existing `.md` spec stays Markdown.
+- **2026-10-07: W2 approved and opened.** The operator approved the W2 plan, and #306 merged it with this ledger (`a17e14bc0`). Run 315 opened for wave 2/7, with no `sessionId`, so a fresh child is minted. The allocator issued numbers **4374 to 4387** for it. They are written bare here until a plan defines them, because the floor guard reds any `D-` token above the highest defined number:
+  - Task 6 Step 6 defines 4374 (refinement c), 4375 (d), 4376 (f) and 4377 (g).
+  - 4378 to 4387 serve departures found while executing and in fix rounds. The worker takes them in order and lists each in its wave-done. A departure that changes behaviour the spec states goes to the coordinator as a question first.
+- **2026-10-07: R1 (coordinator).** The W2 worker pushes its branch and opens the wave's one PR after Task 9, replacing the plan's "No task pushes or opens a PR" and "Push, PR and merge are the coordinator's". CI runs git 2.55 and the fleet box 2.43, and W1 met three version differences only in CI, so CI must run while the review reads. The merge stays the coordinator's, after the review.
+- **2026-10-07: W2 drift, measured.** Applying the plan's whole prototype diff to `main` at `a17e14bc0` moved exactly two Find blocks; every other hunk applies, some at offsets of up to 13 lines:
+  - `verb-gate.test.ts`'s `CAP_GATED_VERBS` gained `'ws-expire'` (#312). The set becomes the plan's set plus `'ws-expire'`.
+  - `single-definition.test.ts`'s tail grew (#312, #299). Task 8 appends after the real last line.
+
+  The brief rules both as mechanical re-anchors.
+- **2026-10-07: claim overlap with run 302.** Claim 1073 (programme `ccrc-history`, wave 2 B1) holds `server/test/single-definition.test.ts` and `server/test/lifecycle.test.ts`. B1 only appends at the end of both; W2 appends at the end of both and edits one line in place in each (the archive door pin's `want` line, and the `../src/lifecycle.js` import). The coordinator proposed a scoped agreement to run 302's coordinator in mail 3812: each side edits only its own lines, and the second to merge takes `main` and keeps both blocks. Run 302's coordinator was busy, so W2 was dispatched before the reply. Task 1 edits neither file. Before Task 2 the worker claims the two files again, and edits them only once claim 1073 has ended or the coordinator has confirmed the agreement by mail.
 
 ## Carried constraints (reviewers get these)
 
@@ -65,9 +77,13 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
   - the lockAgeMs prose in the spec;
   - docs-shared's claim about two refinements;
   - the dropped clause "git 2.43 ignores the key".
+  - README's doctor table has no row for W1's `docs` check, and its server-role SKIP sentence (the D-3111 list ending "`timeout` and `model-default`") does not name `docs`, although `_check_docs` SKIPs on a `CCRC_ROLE=server` box (reported by another session in mail 3818, 2026-10-07; README is under another programme's claim, so W7 places it).
 - **U5:** the private vulnerability report is not filed yet. The spec's one-line mention is public since #301.
 
-## Next-wave brief (W2)
+## Next-wave brief (W2), as dispatched to run 315
+
+The bullets below were the plan. The brief as sent adds R1, the measured drift, the claim gate and the issued block (Decisions, 2026-10-07). W3's brief is written once W2 is accepted.
+
 
 - **Plan:** `docs/superpowers/plans/2026-10-06-native-docs-reader-w2-grants-and-adapter.md`, Tasks 1-9.
 - **Base:** `main` containing W1's `f03d83304`. The plan's numbers were measured at W1's tip, so counts that include pre-existing tests may differ. What binds is the new cases behaving as written.
