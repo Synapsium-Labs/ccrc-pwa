@@ -105,17 +105,21 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
     expect(await screen.findByText(ACK_UNREADABLE_TEXT)).toBeInTheDocument();
     await waitFor(() => expect(first.onAcked).toHaveBeenCalledTimes(1));
-    const held = screen.getByRole('button', { name: 'Ack fleet' });
+    const held = screen.getByRole('button', { name: 'Acked fleet' });
     expect(held, 'an unreadable answer may have cleared the row: it stays down until a poll shows a new lease').toBeDisabled();
     expect(held).toHaveTextContent('Acked');
     cleanup();
     const busy = new ApiError(409, { ok: false, error: 'busy' });
-    vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(busy);
+    vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(busy).mockResolvedValue({ ok: true, node: node() });
     const second = mount(view([failed()]));
     fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
     expect(await screen.findByText(updateErrorText(busy))).toBeInTheDocument();
     await waitFor(() => expect(second.onAcked).toHaveBeenCalledTimes(1));
     expect(screen.getByRole('button', { name: 'Ack fleet' }), 'a refused ack re-arms the button').not.toBeDisabled();
+    // ... and a second tap goes out: a refusal is an answer the server gave, so nothing is in doubt.
+    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    await waitFor(() => expect(second.onAcked).toHaveBeenCalledTimes(2));
+    expect(api.ackUpdateNode, 'the unreadable tap, the refused tap, and the tap after the re-arm').toHaveBeenCalledTimes(3);
   });
 
   it('after a clean 200 the row stays down until a poll shows a different lease — a second tap sends nothing', async () => {
@@ -124,7 +128,7 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
     const { rerender } = render(<><ToastHost /><HaltBanner updates={view([failed()])} onAcked={onAcked} /></>);
     fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
-    const button = screen.getByRole('button', { name: 'Ack fleet' });
+    const button = screen.getByRole('button', { name: 'Acked fleet' });
     expect(button).toBeDisabled();
     expect(button).toHaveTextContent('Acked');
     fireEvent.click(button);
@@ -165,7 +169,7 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
     expect(settingsSrc).toMatch(/void sendAck\(n\.nodeId\)/);
     expect(bannerSrc).toMatch(/import \{ canAck, sendAck \} from '\.\/updateAck';/);
     // The gate is canAck on every row, though a halting row passes it by construction: no behaviour can red for it.
-    expect(bannerSrc).toContain('disabled={!canAck(n, releases) || acking || acked}');
+    expect(bannerSrc).toContain('disabled={!canAck(n, releases) || acking || held}');
     expect(bannerSrc).toContain('void sendAck(n.nodeId).then(');
     expect(bannerSrc).not.toMatch(/SETTLED_UPDATE_STATES|ackUpdateNode/);
   });
@@ -173,11 +177,154 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
   it('sendAck never rejects, so a caller\'s finally always re-polls; it answers how the Ack ended', async () => {
     render(<ToastHost />);
     vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new Error('offline'));
+    await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('unanswered'); });
+    vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('unanswered'); });
+    vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(502, { ok: false, error: 'bad gateway' }));
+    await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('unanswered'); });
+    vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'busy' }));
+    await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('refused'); });
+    vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(400, { ok: false, error: 'bad request' }));
     await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('refused'); });
     vi.spyOn(api, 'ackUpdateNode').mockResolvedValueOnce('unreadable');
     await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('unreadable'); });
     vi.spyOn(api, 'ackUpdateNode').mockResolvedValueOnce({ ok: true, node: node() });
     await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('acked'); });
+  });
+});
+
+// Review 307 F1 (D-4272): the Ack re-arms at once only on an answer the server gave. A request with no answer may
+// have committed, so the row holds until a FRESH successful read (a new view object; a failed read keeps the old one).
+const leaseOf = (over: Partial<NonNullable<NodeWire['update']>> = {}): NodeWire =>
+  failed({ update: { state: 'failed', target: 'v0.0.84', startedAt: 1, detail: 'gate: unit not up', ...over } });
+const renderWith = (v: UpdatesView, onAcked: () => void) => {
+  const ui = (x: UpdatesView) => <><ToastHost /><HaltBanner updates={x} onAcked={onAcked} /></>;
+  const r = render(ui(v));
+  return { rerender: (x: UpdatesView) => r.rerender(ui(x)) };
+};
+const NO_ANSWER: ReadonlyArray<readonly [string, () => unknown]> = [
+  ['a fetch TypeError', () => new TypeError('Failed to fetch')],
+  ['a proxy 502', () => new ApiError(502, { ok: false, error: 'bad gateway' })],
+  ['a proxy 504', () => new ApiError(504, { ok: false, error: 'gateway timeout' })],
+  ['a timeout rejection', () => new DOMException('The operation timed out.', 'TimeoutError')],
+];
+
+describe('HaltBanner — an Ack with no answer holds until a fresh read (D-4272)', () => {
+  it.each(NO_ANSWER)('%s holds through a kept view: Ack, disabled, one POST, today\'s toast', async (_n, make) => {
+    const err = make();
+    const ack = vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(err);
+    const onAcked = vi.fn();
+    const v1 = view([failed()]);
+    const { rerender } = renderWith(v1, onAcked);
+    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(updateErrorText(err))).toBeInTheDocument();
+    rerender(v1); // the re-poll failed: the hook keeps the very same object
+    const held = screen.getByRole('button', { name: 'Ack fleet' });
+    expect(held).toBeDisabled();
+    expect(held, 'no 2xx was seen: it does not say Acked').toHaveTextContent(/^Ack$/);
+    fireEvent.click(held);
+    expect(ack).toHaveBeenCalledTimes(1);
+  });
+
+  it('a fresh read with the same lease re-arms, and a tap sends a second POST', async () => {
+    const ack = vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    ack.mockResolvedValueOnce({ ok: true, node: node() });
+    const onAcked = vi.fn();
+    const v1 = view([failed()]);
+    const { rerender } = renderWith(v1, onAcked);
+    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+    rerender(v1);
+    expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeDisabled();
+    rerender(view([failed()])); // a NEW object: a successful read landed, and the lease did not change
+    const again = screen.getByRole('button', { name: 'Ack fleet' });
+    expect(again).not.toBeDisabled();
+    expect(again).toHaveTextContent(/^Ack$/);
+    fireEvent.click(again);
+    await waitFor(() => expect(ack).toHaveBeenCalledTimes(2));
+  });
+
+  it('a fresh read with a new lease follows it: the button is armed for that lease', async () => {
+    vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(504, { ok: false, error: 'gateway timeout' }));
+    const onAcked = vi.fn();
+    const v1 = view([failed()]);
+    const { rerender } = renderWith(v1, onAcked);
+    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+    rerender(view([leaseOf({ startedAt: 2 })]));
+    expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
+  });
+
+  it('an unreadable answer holds through a kept view, and releases on a fresh read with the same lease', async () => {
+    vi.spyOn(api, 'ackUpdateNode').mockResolvedValueOnce('unreadable');
+    const onAcked = vi.fn();
+    const v1 = view([failed()]);
+    const { rerender } = renderWith(v1, onAcked);
+    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+    rerender(v1);
+    expect(screen.getByRole('button', { name: 'Acked fleet' }), 'a 2xx was seen: it says Acked').toBeDisabled();
+    rerender(view([failed()]));
+    const again = screen.getByRole('button', { name: 'Ack fleet' });
+    expect(again).not.toBeDisabled();
+    expect(again).toHaveTextContent(/^Ack$/);
+  });
+
+  it('a read that lands WHILE the POST is in flight does not release: the snapshot is taken at the outcome', async () => {
+    let reject!: (e: unknown) => void;
+    const ack = vi.spyOn(api, 'ackUpdateNode').mockImplementationOnce(() => new Promise((_res, rej) => { reject = rej; }));
+    const onAcked = vi.fn();
+    const { rerender } = renderWith(view([failed()]), onAcked);
+    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    const midFlight = view([failed()]); // a poll answered while the POST was out; it may predate the commit
+    rerender(midFlight);
+    await act(async () => { reject(new TypeError('Failed to fetch')); });
+    await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+    rerender(midFlight);
+    expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    expect(ack).toHaveBeenCalledTimes(1);
+    rerender(view([failed()]));
+    expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
+  });
+});
+
+describe('HaltBanner — the accessible name follows the visible label (review 307 F3)', () => {
+  it('Ack fleet / Ack before the tap, Acked fleet / Acked after a clean 200', async () => {
+    vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
+    const { onAcked } = mount(view([failed()]));
+    const before = screen.getByRole('button', { name: 'Ack fleet' });
+    expect(before).toHaveTextContent(/^Ack$/);
+    fireEvent.click(before);
+    await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+    const after = screen.getByRole('button', { name: 'Acked fleet' });
+    expect(after).toHaveTextContent(/^Acked$/);
+    expect(screen.queryByRole('button', { name: 'Ack fleet' })).toBeNull();
+  });
+});
+
+describe('HaltBanner — each field of the lease key re-arms a held row (review 307 F2)', () => {
+  const heldAfter200 = async () => {
+    vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
+    const onAcked = vi.fn();
+    const { rerender } = renderWith(view([failed()]), onAcked);
+    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'Acked fleet' })).toBeDisabled();
+    return rerender;
+  };
+
+  it('only startedAt changes (auto retried the same tag and failed alike): a new lease', async () => {
+    const rerender = await heldAfter200();
+    rerender(view([leaseOf({ startedAt: 2 })]));
+    expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
+  });
+
+  it('only target changes: a new lease', async () => {
+    const rerender = await heldAfter200();
+    rerender(view([leaseOf({ target: 'v0.0.85' })]));
+    expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
   });
 });
 

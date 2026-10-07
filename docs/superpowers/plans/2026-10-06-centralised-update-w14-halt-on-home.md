@@ -221,7 +221,17 @@ These are departures from R15 as ruled, from the brief's "PWA wave", or from wha
   - **Found:** the plan's `autoArm` asked only the nodes that carry a `desiredTag`. A lagging box with none — rolled back past the newest release (the resolver's `rolledBack`), or hand-placed off the release lane (no version, no floor) — beside a leading box that has one answered `auto`. Auto then moves the LEADING box and the skew widens. A pin below the leader answered `auto` too, and the skew stays. Each made the sentence false, against Reading 6 as ruled ("only where the dispatcher's own auto path would move every lagging node").
   - **Now:** `endTag` (the tag the resolver gave the node, else the release tag it runs, else null) must be one release tag across every node, as well as the plan's conditions. Each of these cases now falls back to the terminal verbs. No operator-visible string changes. `fleet-host-banner`'s R15(c) `movable` fixture now gives a lagging node the leading build's tag (`v0.0.9`) and a node already on it NULL, as a real converged row has. Its two cases about a node auto or the console cannot move now put that node on the LAGGING side. `update-halt`'s converged-node case gives its converged node the tag it runs.
 
-The worker's reserve: numbers 4272 to 4274, written bare until defined (4270 and 4271 are spent above).
+- **D-4272** — *The halt banner's Ack re-arms at once only on a refusal the server gave (an `ApiError` 4xx). An answer that could not be read, or no answer at all (a fetch rejection, any 5xx, a timeout), holds the row until a successful read taken after the outcome; `sendAck` gains a fourth outcome word, `unanswered`. (Worker reserve; coordinator fix round 1, review 307 F1.)*
+  - **Ruled:** the coordinator, on review 307's F1, which meets bar class 2: "an Ack that can be sent twice against one lease". A refusal is an answer the server gave; a request with no answer is not a refusal.
+  - **Shipped (`3f5f382c`):** `sendAck` mapped every rejection to `refused`, and the row re-armed on it. When the ack committed but its response was lost (a fetch TypeError, a proxy 502/504) and the re-poll failed too, the view kept the same lease, the button re-armed, and a second tap acked the now-idle row again, clearing its request and its refusals. That was measured twice by review 307.
+  - **Now:**
+    - `AckOutcome` is `acked | unreadable | refused | unanswered`. `refused` is a 4xx `ApiError`; `unanswered` is any other rejection. The toasts are unchanged.
+    - The halt banner holds a clean 200 until a poll shows a different lease, as before.
+    - It holds `unreadable` and `unanswered` until a fresh successful read: the view object differs from the one present when the outcome arrived (a failed read keeps the object; the hook's newest-issued guard drops a read issued before the re-poll). If that read still shows the same lease, it re-arms; otherwise the row follows the read.
+    - `Acked` shows only after a 2xx. An `unanswered` hold shows `Ack`, disabled. The button's accessible name follows its visible label (`Ack <label>` / `Acked <label>`, review 307 F3).
+    - The Settings row still ignores the outcome.
+
+The worker's reserve: numbers 4273 to 4274, written bare until defined (4270, 4271 and 4272 are spent above).
 
 ## File structure
 

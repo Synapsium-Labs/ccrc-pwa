@@ -6,7 +6,10 @@
 // ONE Ack: the gate is `canAck` and the tap is `sendAck` (updateAck.ts), the very pair the Settings row calls, so
 // the two buttons cannot disagree about one row. A halting row is settled `failed`/`reverted`, so `canAck` is true
 // for it (halt-banner.test.tsx pins that over every state the halt rule names). It is still the one gate, never a
-// halt-only copy. After a clean 200 the row stays down until a poll shows a different lease (`leaseKey`).
+// halt-only copy. What the row does after a tap follows how the Ack ended (D-4272): a clean 200 holds it until a poll
+// shows a different lease (`leaseKey`); an unreadable answer, or no answer at all (a rejection, a 5xx, a timeout),
+// holds it until a FRESH successful read taken after the outcome, and then re-arms if that read still shows the same
+// lease; a 4xx refusal re-arms it at once.
 // The route stays the authority: a row
 // that went busy since the poll answers 409 `busy`, said as a toast, and the screen re-polls either way.
 //
@@ -14,7 +17,7 @@
 // poll). It renders nothing while there is no view, or no halting node. Its own class, `.halt-banner`: attention
 // amber like the skew warning, but not sticky, because the fleet-host banner owns the sticky slot. role="status"
 // like every banner on this screen, so tests find it by class.
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { NodeWire, ReleaseWire, UpdatesView } from '../../../shared/api';
 import { canAck, sendAck } from './updateAck';
@@ -24,23 +27,41 @@ import './fleet.css';
 /** The banner's lead sentence. */
 export const HALT_LEAD_TEXT = 'Updates are halted — nothing moves on any node until each one below is acknowledged.';
 
-/** The lease an Ack was sent against. The row stays down while the view still shows THAT lease: between a clean 200
- *  and the poll that drops the row (longer when a poll fails, since the hook keeps the last good view), a second
- *  tap would reach ackNode again, which acks an idle row too and clears whatever request was written since. A new
- *  failure is a new lease, so it re-arms the button. */
+/** The lease an Ack was sent against, as one string over every field of the lease (state, target, startedAt, detail).
+ *  A clean 200 holds the row down while the view still shows THAT lease: between the 200 and the poll that drops the
+ *  row (longer when a poll fails, since the hook keeps the last good view), a second tap would reach ackNode again,
+ *  which acks an idle row too and clears whatever request was written since. A new failure is a new lease, so it
+ *  re-arms the button, and any one field changing makes a new one (auto retrying the same tag and failing alike moves
+ *  only `startedAt`). An unreadable answer or no answer holds on the view's identity instead (D-4272, below). */
 const leaseKey = (n: NodeWire): string => JSON.stringify(n.update ?? null);
 
-function HaltRow({ node: n, releases, onAcked }: {
-  node: NodeWire; releases: readonly ReleaseWire[]; onAcked: () => void;
+/** What a tap left behind (D-4272). A clean 200 holds until a poll shows a different lease. An outcome the screen
+ *  cannot vouch for (`unreadable`, or `unanswered`: a rejection, a 5xx, a timeout) holds until a FRESH successful
+ *  read: `seen` is the view object present when the outcome arrived, and every good read hands the screen a new
+ *  object while a failed read keeps the old one. A 4xx refusal leaves no hold. */
+type Hold =
+  | { kind: 'acked'; lease: string }
+  | { kind: 'pending'; lease: string; seen: UpdatesView; said: 'unreadable' | 'unanswered' };
+
+function HaltRow({ node: n, releases, view, onAcked }: {
+  node: NodeWire; releases: readonly ReleaseWire[]; view: UpdatesView; onAcked: () => void;
 }): ReactNode {
   const [acking, setAcking] = useState(false);
-  const [ackedLease, setAckedLease] = useState<string | null>(null);
-  const acked = ackedLease !== null && ackedLease === leaseKey(n);
+  const [hold, setHold] = useState<Hold | null>(null);
+  // The outcome callback reads the view as it stands WHEN THE OUTCOME ARRIVES, not as it stood at the tap: a poll that
+  // landed while the POST was in flight may have been served before the ack committed.
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const held = hold !== null && (hold.kind === 'acked' ? hold.lease === leaseKey(n) : view === hold.seen);
+  const shownAcked = held && (hold.kind === 'acked' || hold.said === 'unreadable');
+  const label = shownAcked ? 'Acked' : 'Ack';
   const ack = (): void => {
     const sentAgainst = leaseKey(n);
     setAcking(true);
     void sendAck(n.nodeId).then((outcome) => {
-      if (outcome !== 'refused') setAckedLease(sentAgainst);
+      if (outcome === 'acked') setHold({ kind: 'acked', lease: sentAgainst });
+      else if (outcome === 'refused') setHold(null);
+      else setHold({ kind: 'pending', lease: sentAgainst, seen: viewRef.current, said: outcome });
     }).finally(() => {
       setAcking(false);
       onAcked();
@@ -52,11 +73,11 @@ function HaltRow({ node: n, releases, onAcked }: {
       <button
         type="button"
         className="btn-primary"
-        aria-label={`Ack ${n.label}`}
-        disabled={!canAck(n, releases) || acking || acked}
+        aria-label={`${label} ${n.label}`}
+        disabled={!canAck(n, releases) || acking || held}
         onClick={ack}
       >
-        {acked ? 'Acked' : 'Ack'}
+        {label}
       </button>
     </li>
   );
@@ -72,7 +93,7 @@ export function HaltBanner({ updates: view, onAcked }: { updates: UpdatesView | 
     <div className="halt-banner" role="status">
       <span className="halt-banner-msg">{HALT_LEAD_TEXT}</span>
       <ul className="halt-banner-list" aria-label="Halted nodes">
-        {halting.map((n) => <HaltRow key={n.nodeId} node={n} releases={releases} onAcked={onAcked} />)}
+        {halting.map((n) => <HaltRow key={n.nodeId} node={n} releases={releases} view={view} onAcked={onAcked} />)}
       </ul>
     </div>
   );

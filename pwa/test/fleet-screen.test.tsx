@@ -2951,7 +2951,7 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     stampRead: 'ok', installState: 'complete', provenance: 'verified',
     caps: ['detach', 'update-gate', 'rollback'], agentOps: role === 'server' ? null : ['update'], highestVersion: version, previousVersion: null,
     measuredAt: Date.now() - MIN, reachable: true, unreachableSince: null,
-    channel: 'stable', desiredTag: 'v0.0.84', resolveDetail: null,
+    channel: 'stable', desiredTag: role === 'server' ? null : 'v0.0.84', resolveDetail: null,
     request: null, report: null, update,
   });
   const halted = (): UpdatesView => ({
@@ -2993,5 +2993,35 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
       .toHaveTextContent('Auto-install is on and the console can move the lagging box — follow the move in Settings.'));
     expect(document.querySelector('.halt-banner')).toBeNull();
     expect(screen.getByRole('button', { name: 'Update all' })).not.toBeDisabled();
+  });
+
+  it('an Ack with no answer holds through a failed re-poll and re-arms on the next good read of the same lease', async () => {
+    // `until`, not `waitFor`: an earlier case in this file leaves `setInterval` as a fake-clock wrapper (measured:
+    // `String(setInterval)` reads `clock[method].apply`, and `vi.useRealTimers()` does not clear it), and `waitFor`
+    // polls on `setInterval`, so it would check once and never again. `setTimeout` is real.
+    const until = async (check: () => void): Promise<void> => {
+      for (let i = 0; i < 100; i++) {
+        try { check(); return; } catch { /* not yet */ }
+        await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      }
+      check();
+    };
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null, roster: 'agreed', build: 'skewed' });
+    // `halted()` builds a NEW object per call, so each good read is a fresh view; the failed re-poll keeps the last one.
+    const updates = vi.spyOn(api, 'updates')
+      .mockImplementationOnce(() => Promise.resolve(halted()))
+      .mockImplementationOnce(() => Promise.reject(new Error('offline')))
+      .mockImplementation(() => Promise.resolve(halted()));
+    const ack = vi.spyOn(api, 'ackUpdateNode').mockRejectedValue(new TypeError('Failed to fetch'));
+    render(<FleetScreen store={makeStore()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Ack fleet' }));
+    await until(() => expect(updates).toHaveBeenCalledTimes(2));
+    await until(() => expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeDisabled());
+    expect(ack).toHaveBeenCalledTimes(1);
+    // The third read, through the hook's own door: the page becoming visible.
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    await until(() => expect(updates).toHaveBeenCalledTimes(3));
+    await until(() => expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled());
   });
 });
