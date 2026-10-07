@@ -2141,4 +2141,78 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
     });
   });
+  describe('D-4336 (history-sidecar-index-text-unescaped, FR1-a): a JSON-format sidecar is indexed from its unescaped text', () => {
+    const q5 = (b: Buffer): Buffer => brotliCompressSync(b, { params: { [zc.BROTLI_PARAM_QUALITY]: 5 } });
+    const sideFile = (box: HistoryBox, name: string): string => {
+      const dir = path.join(box.homes[0]!, 'projects', IX.SLUG, IX.U, 'tool-results');
+      fs.mkdirSync(dir, { recursive: true });
+      return path.join(dir, name);
+    };
+    const skShape = (tail: string): string => `${['sk', 'ant', 'api03'].join('-')}-${tail}`;
+    const jsonSidecar = (tok: string, sk: string): Buffer =>
+      Buffer.from(JSON.stringify([{ type: 'text', text: `zqhead\n${tok}\nzqmid\t${sk}\nzqend` }]));
+
+    it('ingest arm: a value after a newline escape and an sk- shape after a tab escape never reach the index; the words around them do', () => {
+      const box = IX.newBox('ccrc-hist-fr1a-');
+      const tok = hex(24); const skTail = hex(20);
+      secretFile(box, 'side.env', `ZQ_SIDE_VALUE=${tok}\n`);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+      fs.writeFileSync(sideFile(box, 'out.json'), jsonSidecar(tok, skShape(skTail)));
+      IX.sweepTwice(box);
+      const db = openStoreRO(box);
+      try {
+        expect(matches(db, 'zqhead')).toBe(1);
+        expect(matches(db, 'zqmid')).toBe(1);                          // CONTROL: the escapes are undone, so the next run is its own word
+        expect(matches(db, 'zqend')).toBe(1);
+        expect(ftsBytes(db).includes(tok.slice(0, 12))).toBe(false);
+        expect(ftsBytes(db).includes(skTail.slice(0, 12))).toBe(false);
+        expect(IX.blobsHold(db, tok)).toBe(true);                      // the blob keeps its bytes verbatim
+      } finally { db.close(); }
+    });
+
+    it('re-index arm: a value learned after the sidecar was indexed is found by its phrase and purged', () => {
+      const box = IX.newBox('ccrc-hist-fr1a-r-');
+      const tok = hex(24);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+      fs.writeFileSync(sideFile(box, 'out.json'), jsonSidecar(tok, skShape(hex(20))));
+      IX.sweepTwice(box);
+      let db = openStoreRO(box);
+      try { expect(matches(db, `"${tok}"`)).toBe(1); } finally { db.close(); }   // CONTROL: indexed in clear, the pair is not known yet
+      secretFile(box, 'side.env', `ZQ_SIDE_VALUE=${tok}\n`);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(matches(db, `"${tok}"`)).toBe(0);
+        expect(ftsBytes(db).includes(tok.slice(0, 12))).toBe(false);
+        expect(matches(db, 'zqhead')).toBe(1);
+      } finally { db.close(); }
+    });
+
+    it('backfill and re-index text arm (ftsTextOfBlob): a stored JSON sidecar blob gives text with neither secret in it', async () => {
+      const { sweep: S, lib } = await IX.api();
+      const tok = hex(24); const skTail = hex(20);
+      const idx = lib.makePairIndex(lib.secretPairs([tok]).pairs);
+      const r = await S.ftsTextOfBlob(q5(jsonSidecar(tok, skShape(skTail))), true, idx);
+      expect(r.text.includes(tok.slice(0, 12))).toBe(false);
+      expect(r.text.includes(skTail.slice(0, 12))).toBe(false);
+      expect(r.text).toContain('zqhead');
+      expect(r.text).toContain('zqend');
+    });
+
+    it('a plain-text sidecar indexes as before', () => {
+      const box = IX.newBox('ccrc-hist-fr1a-p-');
+      const tok = hex(24);
+      secretFile(box, 'side.env', `ZQ_SIDE_VALUE=${tok}\n`);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+      fs.writeFileSync(sideFile(box, 'out.txt'), `zqhead\n${tok}\nzqend\n`);
+      IX.sweepTwice(box);
+      const db = openStoreRO(box);
+      try {
+        expect(matches(db, 'zqhead')).toBe(1);
+        expect(matches(db, 'zqend')).toBe(1);
+        expect(ftsBytes(db).includes(tok.slice(0, 12))).toBe(false);
+      } finally { db.close(); }
+    });
+  });
 });

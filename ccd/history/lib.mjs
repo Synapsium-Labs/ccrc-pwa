@@ -1574,11 +1574,25 @@ export function redactField(text, idx) {
   return joined === plain ? perFragment : joined;
 }
 
+const JSON_ESCAPE_RE = /\\(?:([nrtbf"\\/])|u([0-9a-fA-F]{4}))/g;
+const JSON_ESCAPE_CHAR = Object.freeze({ n: '\n', r: '\r', t: '\t', b: '\b', f: '\f', '"': '"', '\\': '\\', '/': '/' });
+
+/** A sidecar's text with its JSON string escapes undone (D-4336, history-sidecar-index-text-unescaped; spec §6.2,
+ *  §8.3: the index never holds text redaction would remove). Claude Code writes `tool-results/*.json` too, and
+ *  inside a JSON string every line break is the two characters backslash and `n`, which glue an `n` onto the next
+ *  run and defeat the pair layer and the `\b`-anchored shapes. One left-to-right pass, so an escaped backslash
+ *  followed by `n` stays a backslash and an `n`, never re-read. A malformed or truncated escape is left as written.
+ *  The decoded text is search-only (the blob is stored verbatim), so this is applied to every sidecar. */
+function unescapeJsonText(text) {
+  if (!text.includes('\\')) return text;
+  return text.replace(JSON_ESCAPE_RE, (_m, c, u) => (c !== undefined ? JSON_ESCAPE_CHAR[c] : String.fromCharCode(parseInt(u, 16))));
+}
+
 /** A sidecar's index text (§6.2, §8.3; D-4312, history-sidecar-redact-before-cut): the first
  *  `SIDECAR_FTS_BYTES` bytes of its REDACTED text. At most `SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN`
- *  bytes are decoded and redacted whole, and only then is the result cut to `SIDECAR_FTS_BYTES`
- *  UTF-8 bytes (a cut multi-byte character dropped). A secret that straddles the cut was matched
- *  whole in the window, so no prefix of it reaches the index; a PEM block that starts before the
+ *  bytes are decoded, their JSON string escapes undone (D-4336) and the result redacted whole, and only then cut
+ *  to `SIDECAR_FTS_BYTES` UTF-8 bytes (a cut multi-byte character dropped). A secret that straddles the cut was
+ *  matched whole in the window, so no prefix of it reaches the index; a PEM block that starts before the
  *  cut matches to the window's end. When a cut happened (the redacted text ran past the cut, or
  *  `bytes` filled the window, so more of the file may follow) and it fell inside a
  *  `[A-Za-z0-9_-]` run, that trailing partial run is dropped, because a run cut in half is a
@@ -1591,6 +1605,7 @@ export function sidecarIndexText(bytes, idx) {
   let text = new TextDecoder('utf-8').decode(part);
   // The window cut inside a multi-byte character decodes to one U+FFFD; drop it.
   if (windowCut) text = text.replace(/\uFFFD$/, '');
+  text = unescapeJsonText(text);
   if (idx !== null) text = redactField(text, idx);
   const enc = new TextEncoder().encode(text);
   const runByte = (b) => (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a) || b === 0x5f || b === 0x2d;

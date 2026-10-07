@@ -1903,6 +1903,60 @@ describe('sidecarIndexText: redact the window, then cut (D-4312, spec 8.3)', () 
 });
 
 // ===========================================================================
+// FR1-a (D-4336, history-sidecar-index-text-unescaped): a JSON-format sidecar (`tool-results/*.json`) is indexed from
+// its text with the JSON string escapes undone, so an escape letter (`n` of a backslash-n) cannot glue onto the
+// secret behind it and defeat the pair layer and the `\b`-anchored shapes (spec 6.2, 8.3; RV3, SE1).
+// ===========================================================================
+describe('sidecarIndexText: JSON string escapes are undone before redaction (D-4336, FR1-a)', () => {
+  const rndHex = (bytes: number): string => historyCrypto.randomBytes(bytes).toString('hex');
+  const idxOf = (values: string[]): libRows.PairIndex => libRows.makePairIndex(libRows.secretPairs(values).pairs);
+  const BS = String.fromCharCode(92);
+  const ghp = (): string => `${['gh', 'p'].join('')}_${rndHex(18)}`;
+  const skAnt = (): string => `${['sk', 'ant', 'api03'].join('-')}-${rndHex(20)}`;
+
+  it('a JSON array sidecar: a shape and a known value after a newline escape are redacted, none of them verbatim', () => {
+    const g = ghp(); const k = skAnt(); const v = `fixtureNotARealTokenValue${rndHex(8)}`;
+    const json = JSON.stringify([{ type: 'text', text: `output:\n${g}\n${k}\n${v}\nend` }]);
+    expect(json.includes(`${BS}n${g}`), 'CONTROL: the raw bytes glue the escape letter onto the secret').toBe(true);
+    const out = libRows.sidecarIndexText(Buffer.from(json), idxOf([v]));
+    expect(out.includes(g.slice(4))).toBe(false);
+    expect(out.includes(k.slice(-20))).toBe(false);
+    expect(out.includes(v.slice(0, 16))).toBe(false);
+    expect(out.match(/\[redacted\]/g)?.length).toBe(3);
+    expect(out.includes('output:') && out.includes('end')).toBe(true);
+  });
+  it('a shape after a tab escape, and a value after a carriage-return or quote or backslash escape, are redacted', () => {
+    const k = skAnt(); const v = `fixtureNotARealTokenValue${rndHex(8)}`;
+    for (const sep of ['\t', '\r', '"', '\\', '/', '\b', '\f']) {
+      const out = libRows.sidecarIndexText(Buffer.from(JSON.stringify({ text: `a${sep}${k}${sep}${v}` })), idxOf([v]));
+      expect(out.includes(k.slice(-20)), JSON.stringify(sep)).toBe(false);
+      expect(out.includes(v.slice(0, 16)), JSON.stringify(sep)).toBe(false);
+    }
+  });
+  it('an escaped ANSI sequence (a unicode escape of ESC) is read as the CSI it encodes, so the CSI belt strips around the secret', () => {
+    const v = `fixtureNotARealTokenValue${rndHex(8)}`;
+    const half = Math.floor(v.length / 2);
+    const json = JSON.stringify({ text: `${v.slice(0, half)}\u001b[31m${v.slice(half)}` });
+    expect(json.includes(`${BS}u001b`)).toBe(true);
+    const out = libRows.sidecarIndexText(Buffer.from(json), idxOf([v]));
+    expect(out.includes(v.slice(0, 12))).toBe(false);
+    expect(out.includes(v.slice(half, half + 12))).toBe(false);
+  });
+  it('the escapes decode to their characters; a surrogate pair rejoins; a malformed escape is left as written', () => {
+    const idx = libRows.makePairIndex([]);
+    const dec = (s: string): string => libRows.sidecarIndexText(Buffer.from(s), idx);
+    expect(dec(`a${BS}nb${BS}tc${BS}rd${BS}"e${BS}${BS}f${BS}/g`)).toBe('a\nb\tc\rd"e\\f/g');
+    expect(dec(`${BS}u0041${BS}u00e9 ${BS}ud83d${BS}ude00`)).toBe('Aé \u{1F600}');
+    expect(dec(`x${BS}u12 y${BS}q z${BS}`)).toBe(`x${BS}u12 y${BS}q z${BS}`);
+    expect(dec(`${BS}${BS}n`)).toBe(`${BS}n`);                       // an escaped backslash, then a literal n: one pass, never re-read
+  });
+  it('a plain-text sidecar with no escapes indexes exactly as before', () => {
+    const t = ghp();
+    expect(libRows.sidecarIndexText(Buffer.from(`line one\nline two ${t}\n`), idxOf([]))).toBe(`line one\nline two ${libRows.REDACTED_MARK}\n`);
+  });
+});
+
+// ===========================================================================
 // Task 25 review round 1 (F1): the op marker's one grammar, `<verb> <pid> <start_ms>` (§9.6 op-running). Task 28's
 // status reads it through this parser, and a pass's stale-marker sweep decides on its null.
 // ===========================================================================
