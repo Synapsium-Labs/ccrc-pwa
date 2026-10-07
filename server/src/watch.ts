@@ -4204,8 +4204,8 @@ export class FleetWatcher {
         }
       }
     } catch (err) {
-      // A throw outside the per-subject catches (`stallArmingOf`, `stallSubjects`) would reach the tick's silent
-      // `.catch`, and the lane would die every minute with no trace. One line per bad sweep instead.
+      // A throw outside the per-subject catches (a listing's `includes`, `stallSubjects`, `pruneStallMemory`) would reach
+      // the tick's silent `.catch`, and the lane would die every minute with no trace. One line per bad sweep instead.
       console.warn(`ccrc-server: stall-watch sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
     } finally {
       // A judged sweep is stamped when it ENDS, its error path included, so the next start measures only unobserved time.
@@ -4217,8 +4217,12 @@ export class FleetWatcher {
   /**
    * The stall-watch settings, resolved once for one sweep over that sweep's own listing (stall watch settings §9):
    * the box arming (`stallBoxArmingOf`), the stored row (`store.stallSettings()`), its parse and the one resolver, then
-   * the warn latch and the boot trace (§8). Both sweeps call it and nothing else reads the row, so the two cannot
-   * read it differently.
+   * the warn latch and the boot trace (§8). Of the sweeps, `sweepStalls` and `sweepMail` both call it and neither reads
+   * the row any other way, so the two cannot read it differently. Three readers stand outside them: the GET view
+   * (`stallWatchView`, `coord/routes.ts`) composes the same reading in parallel, calling `store.stallSettings()`,
+   * `parseStallSettings` and `resolveStallWatch` itself; the POST handler reads the row to measure a write's effect;
+   * and `CoordStore.setStallSettings` reads it again inside the write. The view agrees with the sweeps by calling the
+   * same L1 parse and resolver over the same row, not by calling this method.
    *
    * It NEVER THROWS. `sweepMail` runs under `void this.sweepMail().catch(() => {})`, so a throw here would stop all
    * mail delivery fleet-wide with no line. On any throw (a store, parse or resolver bug, or a fault in the latch or

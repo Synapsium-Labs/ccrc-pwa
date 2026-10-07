@@ -1422,8 +1422,12 @@ describe('coord.db: stall_settings and run_events_by_at (stall watch settings W1
 
   it('is its own entry, after every entry main carried when it was written', () => {
     expect(SLOT, 'no MIGRATIONS entry creates stall_settings').toBeGreaterThanOrEqual(17);
-    expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => NAMES.some((n) => m.includes(n))),
-      'a name of this entry was amended into a frozen one').toBe(false);
+    // `SLOT` is found by `stall_settings`, so no entry before it can contain that name: a slice scan could not red for
+    // it. A COUNT can: a second entry spelling it, an earlier one included, is a name amended into a frozen entry.
+    expect(MIGRATIONS.filter((m) => m.includes('stall_settings')).length,
+      'stall_settings appears in more than one entry: a name of this entry was amended into another one').toBe(1);
+    expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => m.includes('run_events_by_at')),
+      'run_events_by_at was amended into a frozen entry').toBe(false);
   });
 
   it('the entry alone adds exactly stall_settings and run_events_by_at, and seeds one follow/NULL row', () => {

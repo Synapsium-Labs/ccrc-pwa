@@ -9249,8 +9249,9 @@ export const MAIL_REPLAY_MS = 600_000;
 // the compaction card cite this file by line, and an insertion above them moves every anchor under it. Every string
 // the Settings page's Stall watch section shows is one of the constants below, and no other file spells one. A
 // `{name}` slot is filled by the PWA's one helper, `fillStallText`. No text spells a registry marker name, a rung
-// code, a wave number or a duration: the durations live in code alone, and the window reaches the counts heading
-// from the wire. The ladder's flag and mail-mode columns are L1's (`STALL_LADDER`, `server/src/coord/stallsettings.ts`),
+// code or a wave number; the level `does` and stage `stops` and `gate` texts (`stall-settings.test.ts` pins them)
+// spell no duration, and `unread` below does name one. The counts heading takes its window from the wire. The ladder's
+// flag and mail-mode columns are L1's (`STALL_LADDER`, `server/src/coord/stallsettings.ts`),
 // keyed by the same `StallLevel`, so a level added to one Record and not the other is a compile error.
 
 /** The six ladder levels, in ladder order, each with its label and what it does (§5). Each includes the ones below it
