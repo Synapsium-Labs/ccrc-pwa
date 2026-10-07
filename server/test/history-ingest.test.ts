@@ -436,6 +436,7 @@ interface IxSweep {
   makeIngestCtx(home: string, homes: string[], nowMs: number, ids: IxIds, floorProbe?: () => Promise<IxFloorWord>): IxCtx;
   ingestPath(db: DatabaseSync, ctx: IxCtx, f: { path: string; uuid: string; home: string }, b: IxBudget): Promise<IxFileResult | null>;
   ingestTick(db: DatabaseSync, ctx: IxCtx, b: IxBudget): Promise<IxTickResult>;
+  ingestSidecars(db: DatabaseSync, ctx: IxCtx, b: IxBudget, uuids: Iterable<string>): Promise<{ bytes: number; complete: boolean; paused: boolean }>;
 }
 type IxRow = Record<string, unknown>;
 
@@ -1324,4 +1325,213 @@ describe('history ingest: budget, backlog and the ticks row (plan task 20)', () 
       expect(factsOf(IX.U2)).toEqual({ startedMs: IX.tsMs(21), cwd: '/home/u/tree', branch: 'main' });   // the other still got its facts
     } finally { (fs as { readSync: unknown }).readSync = realRead; syncBuiltinESMExports(); db.close(); }
   });
+});
+
+describe('history ingest: sidecars (plan task 21)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const sideDir = (home: string, uuid = IX.U): string => {
+    const d = path.join(home, 'projects', IX.SLUG, uuid, 'tool-results');
+    fs.mkdirSync(d, { recursive: true });
+    return d;
+  };
+  /** The transcript the linkage cases share: a Bash result whose text names one file, a Read result whose id names another. */
+  const linkRows = (): string => IX.jsonl([
+    IX.user(IX.uuidN(1), null, 'go', 1),
+    IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'tool_use', id: 'toolu_01AAA', name: 'Bash', input: { command: 'make big-output' } }], 2),
+    IX.user(IX.uuidN(3), IX.uuidN(2), [{ type: 'tool_result', tool_use_id: 'toolu_01AAA', content: 'Output too large. Full output saved to: /home/u/x/tool-results/b7k2q9z1x.txt' }], 3),
+    IX.assistant(IX.uuidN(4), IX.uuidN(3), [{ type: 'tool_use', id: 'toolu_01BBB', name: 'Read', input: { file_path: '/home/u/tree/a.png' } }], 4),
+    IX.user(IX.uuidN(5), IX.uuidN(4), [{ type: 'tool_result', tool_use_id: 'toolu_01BBB', content: 'short' }], 5),
+  ]);
+  const sidecarRows = (db: DatabaseSync): { name: string; uuid: string | null }[] =>
+    (db.prepare(`SELECT s.name AS name, e.uuid AS uuid FROM sidecars s LEFT JOIN entries e ON e.entry_id = s.entry_id
+      ORDER BY s.name, s.blob_id`).all() as { name: string; uuid: string | null }[]).map((r) => ({ name: r.name, uuid: r.uuid }));
+  const counterOf = (db: DatabaseSync, name: string): number | undefined =>
+    (db.prepare('SELECT n FROM counters WHERE name = ?').get(name) as { n: number } | undefined)?.n;
+
+  it('DM47: sidecars under every home are captured, linked by name or toolu_ id; differing copies sit side by side; an unnamed one is counted', () => {
+    const box = IX.newBox('ccrc-hist-dm47-');
+    IX.plantCopy(box.homes[0]!, IX.U, linkRows());
+    fs.writeFileSync(path.join(sideDir(box.homes[0]!), 'b7k2q9z1x.txt'), 'the big output body\n');
+    fs.writeFileSync(path.join(sideDir(box.homes[1]!), 'toolu_01BBB.json'), '{"image":"zq"}\n');   // a home with no <uuid>.jsonl
+    fs.writeFileSync(path.join(sideDir(box.homes[0]!), 'same.txt'), 'copy in home zero\n');
+    fs.writeFileSync(path.join(sideDir(box.homes[1]!), 'same.txt'), 'copy in home one\n');
+    fs.writeFileSync(path.join(sideDir(box.homes[0]!), 'zz-orphan.txt'), 'nobody names me\n');
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      expect(sidecarRows(db)).toEqual([
+        { name: 'b7k2q9z1x.txt', uuid: IX.uuidN(3) },
+        { name: 'same.txt', uuid: null }, { name: 'same.txt', uuid: null },
+        { name: 'toolu_01BBB.json', uuid: IX.uuidN(5) },
+        { name: 'zz-orphan.txt', uuid: null },
+      ]);
+      expect(IX.blobsHold(db, 'copy in home zero')).toBe(true);
+      expect(IX.blobsHold(db, 'copy in home one')).toBe(true);
+      expect(counters(box)['sidecar_unlinked']).toBe(3);
+    } finally { db.close(); }
+  });
+
+  it('DM47: a changed (size, mtime_ns) is re-hashed into a new row beside the old; an unchanged one is never re-read', () => {
+    const box = IX.newBox('ccrc-hist-dm47b-');
+    IX.plantCopy(box.homes[0]!, IX.U, linkRows());
+    const zero = path.join(sideDir(box.homes[0]!), 'same.txt');
+    const one = path.join(sideDir(box.homes[1]!), 'same.txt');
+    fs.writeFileSync(zero, 'copy in home zero\n');
+    fs.writeFileSync(one, 'copy in home one\n');
+    IX.sweepTwice(box);
+    fs.appendFileSync(zero, 'and a second line\n');   // a changed size: re-hashed
+    fs.chmodSync(one, 0o000);                         // unchanged (size, mtime_ns): opening it now would fail
+    fs.mkdirSync(path.join(box.root, 'spool'), { recursive: true });
+    spoolLine(box, IX.ID, { v: 1, ev: 'Stop', id: IX.ID });   // the hint that re-examines this uuid next pass
+    const r = runSweep(box);
+    fs.chmodSync(one, 0o644);
+    expect(r.code, r.stderr).toBe(0);
+    const db = openStoreRO(box);
+    try {
+      expect(sidecarRows(db).filter((x) => x.name === 'same.txt')).toHaveLength(3);
+      expect(IX.blobsHold(db, 'and a second line')).toBe(true);
+      expect(counters(box)['file_unreadable']).toBeUndefined();
+    } finally { db.close(); }
+  });
+
+  it('a transcript still behind defers its sidecars, so a sidecar named by a row not yet read is linked once its copy is caught up', async () => {
+    const { sweep: S } = await IX.api();
+    const box = IX.newBox('ccrc-hist-dm47c-');
+    const head = IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'go', 1),
+      IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'tool_use', id: 'toolu_01CCC', name: 'Bash', input: { command: 'make late' } }], 2),
+    ]);
+    const naming = JSON.stringify(IX.user(IX.uuidN(3), IX.uuidN(2), [{ type: 'tool_result', tool_use_id: 'toolu_01CCC', content: 'saved to: /home/u/x/tool-results/late01.txt' }], 3));
+    const p = IX.plantCopy(box.homes[0]!, IX.U, `${head}${naming.slice(0, 40)}`);   // the naming row is still being written
+    fs.writeFileSync(path.join(sideDir(box.homes[0]!), 'late01.txt'), 'late body\n');
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());
+      expect(IX.count(db, 'sidecars')).toBe(0);
+      fs.appendFileSync(p, `${naming.slice(40)}\n`);
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids), S.newBudget());
+      expect(sidecarRows(db)).toEqual([{ name: 'late01.txt', uuid: IX.uuidN(3) }]);
+    } finally { db.close(); }
+  });
+
+  it('a copy that can never catch up (deleted while still short) does not hold its uuid\'s sidecars back', async () => {
+    const { sweep: S } = await IX.api();
+    const box = IX.newBox('ccrc-hist-dm47e-');
+    const p = IX.plantCopy(box.homes[0]!, IX.U, linkRows());
+    fs.writeFileSync(path.join(sideDir(box.homes[0]!), 'b7k2q9z1x.txt'), 'the big output body\n');
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      // one line read, then the budget: the copy is short of its end
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget(Date.now, { maxBytes: 1, chunkBytes: 64 }));
+      expect(IX.count(db, 'sidecars')).toBe(0);
+      fs.rmSync(p);
+      // its row is gone now (Task 19), and nothing will ever catch it up: the sidecar is taken, unlinked, because the
+      // row that names it was never read
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids), S.newBudget());
+      expect(sidecarRows(db)).toEqual([{ name: 'b7k2q9z1x.txt', uuid: null }]);
+    } finally { db.close(); }
+  });
+
+  it('a copy whose home left the roster does not hold its uuid\'s sidecars back (D-4309: caught up counts only rows a rostered home still holds)', async () => {
+    const { sweep: S } = await IX.api();
+    const box = IX.newBox('ccrc-hist-dm47f-');
+    IX.plantCopy(box.homes[0]!, IX.U, linkRows());
+    fs.writeFileSync(path.join(sideDir(box.homes[1]!), 'b7k2q9z1x.txt'), 'the big output body\n');
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      // home 0's copy is read one line deep, then the budget: it is short and a path under home 0 names it
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget(Date.now, { maxBytes: 1, chunkBytes: 64 }));
+      // a scan later (past the 30 min interval), home 0 unrostered: nothing a rostered home holds is short, so the sidecar under home 1 is taken
+      const rest = box.homes.slice(1);
+      await S.ingestTick(db, S.makeIngestCtx(box.home, rest, IX.tsMs(0) + 60_000 + 2_000_000, ids), S.newBudget());
+      expect(sidecarRows(db)).toEqual([{ name: 'b7k2q9z1x.txt', uuid: null }]);
+    } finally { db.close(); }
+  });
+
+  it('sidecar floor (par 9.3, BK17): below the floor a sidecar is not read, the stop is counted once and reported paused, the next ok tick takes it', async () => {
+    const { sweep: S } = await IX.api();
+    const box = IX.newBox('ccrc-hist-dm47g-');
+    IX.plantCopy(box.homes[0]!, IX.U, linkRows());
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const at = (k: number): number => IX.tsMs(0) + 60_000 + k * 2_000_000;   // each tick is past the 30 min scan interval
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, at(0), ids), S.newBudget());   // the transcript is caught up, no sidecar yet
+      fs.writeFileSync(path.join(sideDir(box.homes[0]!), 'b7k2q9z1x.txt'), 'the big output body\n');
+      const low = await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, at(1), ids, async () => 'low-disk'), S.newBudget());
+      expect(low.paused).toBe(true);
+      expect(IX.count(db, 'sidecars')).toBe(0);
+      expect(IX.count(db, 'sidecar_seen')).toBe(0);              // a file the floor stopped is never marked seen
+      expect(counterOf(db, 'capture_paused_low_disk')).toBe(1);   // the caught-up transcript never probes: this is the sidecar's own stop
+      // a sidecar half the floor cut short leaves the scan unmarked, so the next tick scans (and takes the sidecar) again
+      expect((db.prepare("SELECT v FROM meta WHERE k = 'scan_discover_ms'").get() as { v: string }).v).toBe(String(at(0)));
+      const unsettled = await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, at(2), ids, async () => 'unsettled'), S.newBudget());
+      expect(unsettled.paused).toBe(true);
+      expect(counterOf(db, 'capture_paused_low_disk')).toBe(1);   // an unsettled probe is uncounted
+      const ok = await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, at(3), ids), S.newBudget());
+      expect(ok.paused).toBe(false);
+      expect(sidecarRows(db)).toEqual([{ name: 'b7k2q9z1x.txt', uuid: IX.uuidN(3) }]);
+    } finally { db.close(); }
+  });
+
+  it('ingestSidecars stops, unpaused and incomplete, when history is switched off or the run budget is spent', async () => {
+    const { sweep: S } = await IX.api();
+    const box = IX.newBox('ccrc-hist-dm47h-');
+    IX.plantCopy(box.homes[0]!, IX.U, linkRows());
+    fs.writeFileSync(path.join(sideDir(box.homes[0]!), 'b7k2q9z1x.txt'), 'the big output body\n');
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());   // transcript in, sidecar not yet: sidecar_seen empty
+      db.exec('DELETE FROM sidecars; DELETE FROM sidecar_seen');
+      const off = { ...S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids), historyOff: () => true };
+      expect(await S.ingestSidecars(db, off, S.newBudget(), [IX.U])).toEqual({ bytes: 0, complete: false, paused: false });
+      const spent = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids);
+      expect(await S.ingestSidecars(db, spent, S.newBudget(Date.now, { maxBytes: 0 }), [IX.U])).toEqual({ bytes: 0, complete: false, paused: false });
+      expect(IX.count(db, 'sidecars')).toBe(0);
+      expect(await S.ingestSidecars(db, spent, S.newBudget(), [IX.U])).toMatchObject({ complete: true, paused: false });
+      expect(IX.count(db, 'sidecars')).toBe(1);
+    } finally { db.close(); }
+  });
+
+  it('DM47: a 64 MiB sidecar is read whole and a larger one streamed, both byte for byte, with peak RSS under O20\'s bound', () => {
+    const box = IX.newBox('ccrc-hist-dm47d-');
+    try {
+      IX.plantCopy(box.homes[0]!, IX.U, linkRows());
+      const write = (p: string, size: number): Buffer => {
+        const fd = fs.openSync(p, 'w');
+        const hash = createHash('sha256');
+        try {
+          for (let at = 0, k = 1; at < size; k += 1) {
+            const piece = Buffer.from(IX.words(4000, k)).subarray(0, size - at);
+            fs.writeSync(fd, piece);
+            hash.update(piece);
+            at += piece.length;
+          }
+        } finally { fs.closeSync(fd); }
+        return hash.digest();
+      };
+      const dir = sideDir(box.homes[0]!);
+      const whole = write(path.join(dir, 'whole64.txt'), 67_108_864);
+      const streamed = write(path.join(dir, 'streamed.txt'), 67_108_864 + 4096);
+      let peak = 0;
+      for (let pass = 0; pass < 2; pass += 1) {
+        const r = runSweep(box, [], { preloads: [IX_RSS_PRELOAD] });
+        expect(r.code, r.stderr).toBe(0);
+        peak = Math.max(peak, Number(/history-test-maxrss-kib=(\d+)/.exec(r.stderr)?.[1] ?? 'NaN'));
+      }
+      const db = openStoreRO(box);
+      try {
+        const got = (name: string): { sha: Buffer; len: number } => {
+          const r = db.prepare(`SELECT b.sha256 AS sha, b.raw_len AS len FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id
+            WHERE s.name = ?`).get(name) as { sha: Uint8Array; len: number };
+          return { sha: Buffer.from(r.sha), len: r.len };
+        };
+        expect(got('whole64.txt')).toEqual({ sha: whole, len: 67_108_864 });
+        expect(got('streamed.txt')).toEqual({ sha: streamed, len: 67_108_864 + 4096 });
+      } finally { db.close(); }
+      console.log(`DM47 peak RSS ${peak} KiB on ${process.version}`);
+      expect(peak).toBeLessThan(IX_RSS_BOUND_KIB);
+    } finally {
+      fs.rmSync(box.home, { recursive: true, force: true });   // two 64 MiB sidecars plus their store: never left for afterAll alone
+    }
+  }, 300_000);
 });

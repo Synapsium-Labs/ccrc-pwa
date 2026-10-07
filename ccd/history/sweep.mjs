@@ -38,7 +38,7 @@ import {
   passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText,
   CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
-  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick,
+  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, linkSidecar, ftsTextOf,
 } from './lib.mjs';
 import {
   StoreError, bump, closeWriter, createStore, dropPending, finishPending, getMeta, measureStoreFacts, openReader,
@@ -2177,13 +2177,16 @@ function recordExamined(db, ctx, examined, scanDone) {
   });
 }
 
-/** One tick's ingest (§9.2 steps 2-5, 7; slug history-ingest-by-cursor, D-4236): the candidates in
- *  candidateFiles' order, under the run's ONE budget, which is never reset per file (O5). A busy database ends the tick with no partial
- *  chunk (O22): every chunk is its own transaction, and the one that met the lock never began. The
- *  free-space floor (Task 19's per-chunk probe) ends the run's ingest: `paused`. */
+/** One tick's ingest (§9.2 steps 2-5, 7; slug history-ingest-by-cursor, D-4236): the candidate
+ *  transcripts in candidateFiles' order, then the caught-up uuids' sidecars (task 21), under the
+ *  run's ONE budget, which is never reset per file (O5). A busy database ends the tick with no
+ *  partial chunk (O22): every chunk is its own transaction, and the one that met the lock never
+ *  began. The free-space floor (Task 19's per-chunk probe, and a sidecar's own) ends the run's
+ *  ingest, transcripts or sidecars: `paused`. The scan is marked done only when both halves
+ *  examined everything. */
 export async function ingestTick(db, ctx, budget) {
   const scan = ingestScanDue(db, ctx.nowMs);
-  const { files } = candidateFiles(db, ctx, scan);
+  const { files, uuids } = candidateFiles(db, ctx, scan);
   const examined = [];
   let bytes = 0;
   let newEntries = 0;
@@ -2201,7 +2204,14 @@ export async function ingestTick(db, ctx, budget) {
       if (r.minNewTsMs !== null) minNewTsMs = minNewTsMs === null ? r.minNewTsMs : Math.min(minNewTsMs, r.minNewTsMs);
       if (r.floor !== undefined) { paused = true; complete = false; break; }
     }
-    recordExamined(db, ctx, examined, scan && complete);
+    recordExamined(db, ctx, examined, false);
+    if (complete) {
+      const side = await ingestSidecars(db, ctx, budget, uuids);
+      bytes += side.bytes;
+      complete = side.complete;
+      paused = side.paused;
+    }
+    if (scan && complete) recordExamined(db, ctx, [], true);
   } catch (e) {
     if (!isBusy(e)) throw e;
     return { busy: true, bytes, newEntries, minNewTsMs, paused };
@@ -2284,6 +2294,166 @@ export function recordTick(db, ctx, ing) {
     if (!(e instanceof JournalError)) throw e;
     withTx(db, 'NORMAL', () => { bump(db, 'journal_write_failed'); });
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sidecars: <home>/projects/*/<uuid>/tool-results/* under EVERY rostered home, including homes that
+// hold no <uuid>.jsonl, because _swap_carry_sidecars merges those trees between homes (§9.2 step 2,
+// FE6; plan task 21; slug history-sidecar-ingest-rules, D-4239; slug history-sidecars-ingested, D-4240).
+// A sidecar's blob is the file's bytes. A copy that differs is a row beside the other, never over it,
+// and an unchanged (size, mtime_ns) is never read again.
+// ---------------------------------------------------------------------------------------------
+
+const SIDE_STMTS = new WeakMap();
+function sideStmts(db) {
+  let q = SIDE_STMTS.get(db);
+  if (q !== undefined) return q;
+  q = {
+    seenSame: db.prepare('SELECT 1 AS hit FROM sidecar_seen WHERE path = ? AND size = ? AND mtime_ns = ?'),
+    seenUpsert: db.prepare(`INSERT INTO sidecar_seen (path, size, mtime_ns, blob_id) VALUES (?, ?, ?, ?)
+      ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime_ns = excluded.mtime_ns, blob_id = excluded.blob_id`),
+    sidecarIns: db.prepare(`INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms)
+      VALUES (?, ?, ?, ?, ?) ON CONFLICT(transcript_pk, name, blob_id) DO NOTHING`),
+    // Not caught up as Task 20 counts behind: a live row a path still names, short of its measured size (or never
+    // measured). One row per (file, path), for notCaughtUp to filter by rostered home, as behindStats does.
+    notCaughtUp: db.prepare(`SELECT f.file_id AS fileId, p.path AS path FROM ingest_files f
+      JOIN transcripts t ON t.transcript_pk = f.transcript_pk JOIN file_paths p ON p.file_id = f.file_id
+      WHERE t.cc_session_uuid = ?
+        AND f.source_key = '' AND f.status = 'live' AND (f.size IS NULL OR f.size > f.offset)`),
+    toolResults: db.prepare(`SELECT e.entry_id AS entry_id, b.z AS z FROM entries e JOIN blobs b ON b.blob_id = e.blob_id
+      WHERE e.transcript_pk = ? AND e.type = 'user' AND b.z IS NOT NULL ORDER BY e.entry_id`),
+  };
+  SIDE_STMTS.set(db, q);
+  return q;
+}
+
+/** Whether a copy of this uuid's transcript is still short of its measured size, counted as behindStats
+ *  counts it: a live row a path under a rostered home's `projects/` still names. A row whose every path sits
+ *  under a home that has left the roster is never read again, so it cannot hold the uuid's sidecars back for
+ *  good (D-4309, slug history-behind-rostered-homes, the second site of the predicate). No homes at all is an
+ *  unreadable roster: nothing then says a path is un-rostered, so every path counts. */
+function notCaughtUp(db, homes, uuid) {
+  for (const r of sideStmts(db).notCaughtUp.all(uuid)) {
+    if (homes.length === 0 || homes.some((h) => r.path.startsWith(`${h}/projects/`))) return true;
+  }
+  return false;
+}
+
+/** Every sidecar file of the given uuids, under every rostered home, in a stable order. Each
+ *  `projects/<slug>/` is listed once and only its entries named by a wanted uuid are opened, as
+ *  discoverTranscripts does: at a scan tick `uuids` is every known uuid, and one readdir per
+ *  (home, project, uuid) would be millions of misses. Dot-names are skipped: they are temporaries,
+ *  never Claude Code's own names. */
+export function discoverSidecars(homes, uuids) {
+  const want = new Set(uuids);
+  const out = [];
+  if (want.size === 0) return out;
+  for (const home of homes) {
+    let projects;
+    try { projects = readdirSync(`${home}/projects`).sort(); } catch { continue; }
+    for (const proj of projects) {
+      let entries;
+      try { entries = readdirSync(`${home}/projects/${proj}`).sort(); } catch { continue; }
+      for (const uuid of entries) {
+        if (!want.has(uuid)) continue;
+        const dir = `${home}/projects/${proj}/${uuid}/tool-results`;
+        let names;
+        try { names = readdirSync(dir).sort(); } catch { continue; }
+        for (const name of names) if (!name.startsWith('.')) out.push({ path: `${dir}/${name}`, uuid, home, name });
+      }
+    }
+  }
+  return out;
+}
+
+/** The transcript's tool_result rows, each as {entryId, text, toolUseIds}, built once per tick
+ *  per transcript (the `cache`). linkSidecar decides from them. */
+function toolResultCandidates(db, transcriptPk, cache) {
+  const hit = cache.get(transcriptPk);
+  if (hit !== undefined) return hit;
+  const out = [];
+  for (const r of sideStmts(db).toolResults.all(transcriptPk)) {
+    let body;
+    try { body = JSON.parse(unbrotli(r.z).toString('utf8')); } catch { continue; }
+    const toolUseIds = toolResultIdsOf(body);
+    if (toolUseIds.length > 0) out.push({ entryId: r.entry_id, text: ftsTextOf(body, 'entry'), toolUseIds });
+  }
+  cache.set(transcriptPk, out);
+  return out;
+}
+
+/** One sidecar file (§9.2 step 4).
+ *  - An unchanged (size, mtime_ns) is skipped before any open (DM47).
+ *  - Otherwise it is admitted like a transcript (O_NOFOLLOW, a regular file under a rostered
+ *    projects/ root).
+ *  - It is read whole up to SIDECAR_WHOLE_MAX, else streamed through compressFdRange.
+ *  - It is hashed and stored as a blob of its bytes, and linked by linkSidecar.
+ *  - The `sidecars` row and the `sidecar_seen` mark commit in one transaction.
+ *  - A file that has to be read is one ingest unit for §9.3's floor: the probe runs before it, as
+ *    before an ingest chunk, and anything but `ok` stops the run's sidecars (`floor`).
+ *  Returns null when the file was not taken. */
+export async function ingestSidecar(db, ctx, s, budget, cache) {
+  const q = sideStmts(db);
+  let ls;
+  try { ls = lstatSync(s.path, { bigint: true }); } catch { countAdmission(db, 'missing'); return null; }
+  if (!ls.isFile()) { countAdmission(db, 'non_regular'); return null; }
+  if (q.seenSame.get(s.path, ls.size, ls.mtimeNs) !== undefined) return { bytes: 0 };
+  const floor = await ctx.floorProbe();
+  if (floor !== 'ok') {
+    if (floor === 'low-disk') countFloorPause(db);
+    return { bytes: 0, floor };
+  }
+  const a = admitFile(s.path, s.home, ctx.homes, ctx.home);
+  if (!a.ok) { countAdmission(db, a.why); return null; }
+  try {
+    const st = fstatSync(a.fd, { bigint: true });
+    const size = Number(st.size);
+    let sha;
+    let z = null;
+    if (size <= SIDECAR_WHOLE_MAX) {
+      const buf = readAt(a.fd, 0, size);
+      if (buf.length < size) return null;                 // it shrank under the read: next tick
+      sha = blobShaOfBytes(buf);
+      if (stmts(db).blobId.get(sha) === undefined) z = brotli(buf);
+    } else {
+      const c = await compressFdRange(a.fd, 0, size);
+      if (c === null) return null;
+      sha = c.sha;
+      if (stmts(db).blobId.get(sha) === undefined) z = c.z;
+    }
+    // Task 18's ensureTranscript expects its caller's transaction (bindFile's); here it gets its own.
+    const transcriptPk = withTx(db, 'NORMAL', () => ensureTranscript(db, s.uuid));
+    const entryId = linkSidecar(s.name, toolResultCandidates(db, transcriptPk, cache));
+    withTx(db, 'NORMAL', () => {
+      if (z !== null) stmts(db).blobIns.run(sha, CODEC, z, size);
+      const blobId = stmts(db).blobId.get(sha).blob_id;
+      const ins = q.sidecarIns.run(transcriptPk, s.name, blobId, entryId, ctx.nowMs);
+      if (ins.changes === 1 && entryId === null) bump(db, 'sidecar_unlinked');
+      q.seenUpsert.run(s.path, st.size, st.mtimeNs, blobId);
+    });
+    budget.bytes += size;
+    return { bytes: size };
+  } finally {
+    closeSync(a.fd);
+  }
+}
+
+/** The sidecars of the given uuids whose transcript copies are all caught up. A sidecar is linked
+ *  by the text of a tool_result the store already holds, so one taken early would stay unlinked
+ *  for good. Bounded by the run's budget; `complete` is false when the budget, history-off or the
+ *  free-space floor cut it short, and `paused` says it was the floor. */
+export async function ingestSidecars(db, ctx, budget, uuids) {
+  const due = [...uuids].filter((u) => !notCaughtUp(db, ctx.homes, u));
+  const cache = new Map();
+  let bytes = 0;
+  for (const s of discoverSidecars(ctx.homes, due)) {
+    if (!budgetLeft(budget) || ctx.historyOff()) return { bytes, complete: false, paused: false };
+    const r = await ingestSidecar(db, ctx, s, budget, cache);
+    if (r === null) continue;
+    bytes += r.bytes;
+    if (r.floor !== undefined) return { bytes, complete: false, paused: true };
+  }
+  return { bytes, complete: true, paused: false };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {

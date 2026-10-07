@@ -1729,3 +1729,22 @@ describe('lib: lagOfTick (plan task 20)', () => {
     expect(lib.LINE_MAX).toBe(16 * 1024 * 1024);
   });
 });
+
+describe('lib: linkSidecar (plan task 21)', () => {
+  const C = [
+    { entryId: 3, text: 'Output too large. Full output saved to: /home/u/x/tool-results/b7k2q9z1x.txt', toolUseIds: ['toolu_01AAA'] },
+    { entryId: 5, text: 'short', toolUseIds: ['toolu_01BBB'] },
+  ];
+  it('links by the tool_result text that names the file first, then by a toolu_ name, else null', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.linkSidecar('b7k2q9z1x.txt', C)).toBe(3);
+    expect(lib.linkSidecar('toolu_01BBB.json', C)).toBe(5);
+    expect(lib.linkSidecar('toolu_01BBB', C)).toBe(5);
+    expect(lib.linkSidecar('zz-orphan.txt', C)).toBeNull();
+    expect(lib.linkSidecar('toolu_01AAA.txt', [{ entryId: 9, text: 'names toolu_01AAA.txt', toolUseIds: [] }, ...C])).toBe(9);
+  });
+  it('SIDECAR_WHOLE_MAX is the 64 MiB cap the reference box measured', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.SIDECAR_WHOLE_MAX).toBe(67_108_864);
+  });
+});

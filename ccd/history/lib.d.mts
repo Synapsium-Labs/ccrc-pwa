@@ -290,3 +290,5 @@ export function toolResultIdsOf(content: unknown): string[];
 export function rawRowKey(ccSessionUuid: string, rawShaHex: string): string;
 export function launchFactsOf(row: unknown): { cwd: string | null; gitBranch: string | null };
 export function lagOfTick(i: { tickStartMs: number; newEntries: number; minNewTsMs: number | null }): number | null;
+export const SIDECAR_WHOLE_MAX: 67108864;
+export function linkSidecar(name: string, candidates: ReadonlyArray<{ entryId: number; text: string; toolUseIds: readonly string[] }>): number | null;

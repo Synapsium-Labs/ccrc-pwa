@@ -1849,3 +1849,22 @@ export function lagOfTick({ tickStartMs, newEntries, minNewTsMs }) {
   if (minNewTsMs === null) return null;
   return Math.max(0, tickStartMs - minNewTsMs);
 }
+
+/** The largest sidecar read whole (§9.2 step 4). Of 103,068 sidecars on the reference box the
+ *  largest was exactly 67,108,864 bytes (M, review). A larger one is streamed through Brotli
+ *  and a streaming sha256 rather than refused, so no sidecar is too large to capture. */
+export const SIDECAR_WHOLE_MAX = 67108864;
+
+/** The entry a sidecar belongs to (§9.2 step 4; history-sidecar-ingest-rules, D-4239): the tool_result
+ *  whose text names the file; else the one answering the tool_use whose id is the `toolu_…` name
+ *  (any extension dropped); else null, which is counted `sidecar_unlinked`. An unlinked sidecar is
+ *  still stored, and still found through its transcript. Candidates come in entry order; the
+ *  first match wins. */
+export function linkSidecar(name, candidates) {
+  for (const c of candidates) if (c.text.includes(name)) return c.entryId;
+  const stem = name.replace(/\.[^.]*$/, '');
+  if (stem.startsWith('toolu_')) {
+    for (const c of candidates) if (c.toolUseIds.includes(stem)) return c.entryId;
+  }
+  return null;
+}
