@@ -34,7 +34,7 @@ Re-capture (on a box with the binaries; takes hours, runs in the foreground) is 
 versions are resolved ONCE, when the script starts — "installed" is `rig.sh versions`, which `rig.sh all` shares — so a
 version installed during the capture waits for the next one; a version that is not `x.y.z` or not installed refuses the
 whole run, exit 2, before anything is made. The script then runs, in order, what this section used to be written out as
-(`<versions>` is the list it resolved, `$RAW` the raw root it made; `--dry-run` prints exactly this list):
+(`<versions>` is the list it resolved, `$RAW` the raw root it made; `--dry-run` prints the same steps, in order):
 
     RAW=$(mktemp -d "${TMPDIR:-/tmp}/ccrc-dlg-raw.XXXXXX")      # with <versions>, one per line, and the UTC start time in $RAW/versions-at-start
     bash server/test/delegation-rig/rig.sh all "$RAW" <versions> 2>&1 | tee "$RAW/all.log"     # and $RAW/.done must exist after it

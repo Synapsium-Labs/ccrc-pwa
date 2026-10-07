@@ -499,9 +499,11 @@ const RECAPTURE = path.join(RIG, 'recapture.sh');
 
 /** A scratch copy of the tree recapture.sh finds from its own location: the script itself; a rig.sh that answers `versions`
  *  with the REAL rig.sh (so "installed" is the rig's own answer) and logs `all` instead of running it; a sanitiser and a matrix
- *  builder that log their argv; a corpus of empty version directories. Whatever a row runs for real, it writes only under `dir`. */
-function recaptureTree(corpus: string[] = ['2.1.290', '2.1.291']): { dir: string; rig: string; fix: string; scen: string; script: string; log: string } {
-  const dir = mkTmp('ccrc-dlg-rc-');
+ *  builder that log their argv (to `log`, joined by spaces, and to `log.argv`, one bracketed word per argument, so a path split
+ *  at a space shows); a corpus of empty version directories. `prefix` names `dir`, so a row can give the tree a path with a
+ *  space in it. Whatever a row runs for real, it writes only under `dir`. */
+function recaptureTree(corpus: string[] = ['2.1.290', '2.1.291'], prefix = 'ccrc-dlg-rc-'): { dir: string; rig: string; fix: string; scen: string; script: string; log: string } {
+  const dir = mkTmp(prefix);
   const rig = path.join(dir, 'server/test/delegation-rig');
   const fix = path.join(dir, 'server/test/fixtures/delegation');
   const scen = path.join(rig, 'scenarios');
@@ -514,6 +516,7 @@ function recaptureTree(corpus: string[] = ['2.1.290', '2.1.291']): { dir: string
     'case ${1-} in',
     '  versions) shift; exec bash "$REAL_RIG" versions "$@" ;;',
     '  all)      shift; raw=$1; shift; printf "all %s\\n" "$raw $*" >> "$LOG"',
+    '            { printf all; printf " [%s]" "$raw" "$@"; echo; } >> "$LOG.argv"',   // one bracket pair per argument: a path split at a space shows
     '            echo "stdout line from all"; echo "stderr line from all" >&2',
     '            [[ ${STUB_ALL_RC:-0} == 0 ]] || exit "$STUB_ALL_RC"',
     '            [[ -z ${STAGED-} ]] || cp -R "$STAGED/." "$raw/"',
@@ -523,6 +526,7 @@ function recaptureTree(corpus: string[] = ['2.1.290', '2.1.291']): { dir: string
   const logger = (tag: string, rcVar: string, scanVar = ''): string => [
     "import fs from 'node:fs';", 'const a = process.argv.slice(2);',
     `fs.appendFileSync(process.env.LOG, \`${tag} \${a.join(' ')}\\n\`);`,
+    `fs.appendFileSync(process.env.LOG + '.argv', \`${tag}\${a.map((x) => \` [\${x}]\`).join('')}\\n\`);`,   // the same, one bracket pair per argument
     `process.exit(Number((${scanVar ? `a[0] === '--scan' ? process.env.${scanVar} : ` : ''}process.env.${rcVar}) || 0));`, '',
   ].join('\n');
   put('sanitize.mjs', logger('sanitize', 'STUB_SANITIZE_RC', 'STUB_SCAN_RC'));
@@ -540,23 +544,35 @@ function treeListing(dir: string): string[] {
 }
 
 describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', () => {
-  /** HOME, TMPDIR and the stubs' log for one run of the tree's script. */
-  const ctx = (t: Tree, entries: Array<[string, number]>) => ({ home: versionsHome(entries), tmp: mkTmp('ccrc-dlg-tmp-'), t });
-  const recapture = (c: ReturnType<typeof ctx>, args: string[], env: NodeJS.ProcessEnv = {}, cwd?: string) => {
-    const r = spawnSync('bash', [c.t.script, ...args], { encoding: 'utf8', timeout: 60_000, ...(cwd ? { cwd } : {}),
+  /** HOME, TMPDIR and the stubs' log for one run of the tree's script. `tmpPrefix` names TMPDIR, so a row can give it a space. */
+  const ctx = (t: Tree, entries: Array<[string, number]>, tmpPrefix = 'ccrc-dlg-tmp-') => ({ home: versionsHome(entries), tmp: mkTmp(tmpPrefix), t });
+  /** `closedStdout`: the script runs with its standard output CLOSED (`exec 1>&-`, then the script), not redirected to a file
+   *  or to /dev/null, which is what Node's own `stdio: 'ignore'` would open: a write to it fails with EBADF. */
+  const recapture = (c: ReturnType<typeof ctx>, args: string[], env: NodeJS.ProcessEnv = {}, cwd?: string, closedStdout = false) => {
+    const argv = closedStdout ? ['-c', 'exec 1>&-; exec bash "$0" "$@"', c.t.script, ...args] : [c.t.script, ...args];
+    const r = spawnSync('bash', argv, { encoding: 'utf8', timeout: 60_000, ...(cwd ? { cwd } : {}),
       env: { ...process.env, HOME: c.home, TMPDIR: c.tmp, LOG: c.t.log, REAL_RIG: RIGSH, ...env } });
     return { status: r.status, stdout: r.stdout, stderr: r.stderr };
   };
   const stepLines = (stdout: string): string[] => stdout.split('\n').filter((l) => /^ {2}\d+\. /.test(l));
   const logLines = (t: Tree): string[] => (fs.existsSync(t.log) ? fs.readFileSync(t.log, 'utf8').split('\n').filter(Boolean) : []);
-  /** The five steps as the script prints them for `vs`, `<raw>` standing for the raw root. */
-  const FIVE = (t: Tree, vs: string[]): string[] => [
+  /** What each step was handed, one bracketed word per argument (`[a b]` is ONE argument that carries a space). */
+  const argvLines = (t: Tree): string[] => (fs.existsSync(`${t.log}.argv`) ? fs.readFileSync(`${t.log}.argv`, 'utf8').split('\n').filter(Boolean) : []);
+  /** The five steps as the script prints them for `vs`, `<raw>` standing for the raw root. `q` spells a path the way the script
+   *  does: as it is (a tree whose path has nothing in it for `printf %q` to escape) or as bash's own `%q` spells it. */
+  const FIVE = (t: Tree, vs: string[], q: (p: string) => string = (p) => p): string[] => [
     `  1. RAW=$(mktemp -d "\${TMPDIR:-/tmp}/ccrc-dlg-raw.XXXXXX") && { printf "# started %s\\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; printf "%s\\n" ${vs.join(' ')}; } > <raw>/versions-at-start`,
-    `  2. bash ${t.rig}/rig.sh all <raw> ${vs.join(' ')} 2>&1 | tee <raw>/all.log && [[ -e <raw>/.done ]]`,
-    `  3. node ${t.rig}/sanitize.mjs <raw> ${t.fix}`,
-    `  4. node ${t.rig}/build-matrix.mjs ${t.fix} ${t.scen} --write`,
-    `  5. node ${t.rig}/sanitize.mjs --scan ${t.fix}`,
+    `  2. bash ${q(`${t.rig}/rig.sh`)} all <raw> ${vs.join(' ')} 2>&1 | tee <raw>/all.log && [[ -e <raw>/.done ]]`,
+    `  3. node ${q(`${t.rig}/sanitize.mjs`)} <raw> ${q(t.fix)}`,
+    `  4. node ${q(`${t.rig}/build-matrix.mjs`)} ${q(t.fix)} ${q(t.scen)} --write`,
+    `  5. node ${q(`${t.rig}/sanitize.mjs`)} --scan ${q(t.fix)}`,
   ];
+  /** bash's own `printf %q` of a path: the oracle for what the dry run must print for a path that needs escaping. */
+  const bashQ = (p: string): string => spawnSync('bash', ['-c', 'printf %q "$1"', '_', p], { encoding: 'utf8' }).stdout;
+  // The prefixes of a tree and of a TMPDIR whose paths carry a space (review 318 F3): `HERE`, `RIG`, `FIX` and `SCEN` carry
+  // the first, the raw root the second.
+  const SPACED_TREE = 'ccrc-dlg-rc my tree-';
+  const SPACED_TMP = 'ccrc-dlg-tmp my dir-';
   // 2.1.290 and 2.1.291 are in the tree's corpus; 2.1.999 and the rest are not. 2.1.998 is not executable; the last two are no versions.
   const ENTRIES: Array<[string, number]> = [['2.1.290', 0o755], ['2.1.999', 0o755], ['2.1.9', 0o755], ['10.0.0', 0o755], ['2.1.998', 0o644], ['current', 0o755], ['2.1.9x', 0o755]];
   const FEW: Array<[string, number]> = [['2.1.290', 0o755], ['2.1.999', 0o755], ['2.1.998', 0o644], ['current', 0o755]];
@@ -741,8 +757,9 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
     expect.soft(logLines(t), 'nothing ran').toEqual([]);
   }, 60_000);
 
-  it('end to end over the REAL sanitiser and matrix builder: the capture\'s bundle becomes a fixture, matrix.json is rebuilt to hold it, and the corpus scan passes', () => {
-    const t = recaptureTree([]);
+  /** The end-to-end run, over a tree named `treePrefix` and a TMPDIR named `tmpPrefix`: the REAL sanitiser and matrix builder. */
+  const endToEnd = (treePrefix: string, tmpPrefix: string): void => {
+    const t = recaptureTree([], treePrefix);
     for (const n of ['sanitize.mjs', 'build-matrix.mjs']) fs.copyFileSync(path.join(RIG, n), path.join(t.rig, n));   // the real ones over the logging stubs
     fs.cpSync(path.join(RIG, 'scenarios'), t.scen, { recursive: true });
     const ROOT = '/tmp/ccrc-dlg-rig.Zz99Yy';
@@ -751,7 +768,7 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
       ['SessionStart', 10, { hook_event_name: 'SessionStart', session_id: 's', cwd: `${ROOT}/repo`, transcript_path: `${ROOT}/fixhome/cfg/projects/${ROOT.replace(/[^A-Za-z0-9]/g, '-')}-repo/s.jsonl` }],
       ['Stop', 20, { hook_event_name: 'Stop', session_id: 's' }],
     ]);
-    const c = ctx(t, [['2.1.999', 0o755]]);
+    const c = ctx(t, [['2.1.999', 0o755]], tmpPrefix);
     const r = recapture(c, ['--missing'], { STAGED: staged });
     expect(r.status, r.stderr).toBe(0);
     const fixture = JSON.parse(fs.readFileSync(path.join(t.fix, '2.1.999', 'agent-plain.json'), 'utf8'));
@@ -762,6 +779,13 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
     expect(r.stdout).toContain('sanitize: scanned 2 file(s)');
     expect(r.stdout).toContain('no residue');
     expect(fs.existsSync(path.join(c.tmp, fs.readdirSync(c.tmp)[0] as string, '2.1.999/agent-plain/version')), 'the raw root is kept').toBe(true);
+  };
+  it('end to end over the REAL sanitiser and matrix builder: the capture\'s bundle becomes a fixture, matrix.json is rebuilt to hold it, and the corpus scan passes', () => {
+    endToEnd('ccrc-dlg-rc-', 'ccrc-dlg-tmp-');
+  }, 60_000);
+
+  it('end to end over the REAL sanitiser and matrix builder, in a tree and a TMPDIR whose paths carry a space: the bundle still becomes a fixture, and the scan passes (review 318 F3)', () => {
+    endToEnd(SPACED_TREE, SPACED_TMP);
   }, 60_000);
 
   it('--dry-run needs no tmux, no node and no mock: it runs with a PATH of bash, ls, sort, uniq and dirname alone', () => {
@@ -786,6 +810,67 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
     expect(r.status, r.stderr).toBe(0);
     expect(stepLines(r.stdout)).toEqual(FIVE(t, ['2.1.999']));
     expect(r.stdout).toContain(`recapture: fixtures dir:  ${t.fix}\n`);
+  }, 60_000);
+
+  // review 318 F3: the arms the rows above could not see. The first is the one failure that can meet the EXIT trap before a
+  // step has begun; the others run over a path with a space in it, which the quoting of every path the script hands a step is for.
+  it('with stdout CLOSED before step 1 it fails and names no step and no raw root: nothing had begun, so no step "failed" (review 318 F3)', () => {
+    for (const dry of [true, false]) {
+      const who = dry ? '--dry-run' : 'a real run';
+      const args = [...(dry ? ['--dry-run'] : []), '2.1.999'];
+      const t = recaptureTree();
+      const c = ctx(t, ENTRIES);
+      // C locale: the shell's own "write error" text is asserted below, as the proof that THIS is what failed
+      const r = recapture(c, args, { LC_ALL: 'C' }, undefined, true);
+      expect.soft(r.status, `${who}: ${r.stderr}`).not.toBe(0);
+      expect.soft(r.stderr, `${who}: the shell says the write failed`).toContain('Bad file descriptor');
+      expect.soft(r.stderr, `${who}: no step has begun, so none failed (not "step 0", not "step 1")`).not.toMatch(/step \d+ failed/);
+      expect.soft(r.stderr, `${who}: no raw root was made, so none is named`).not.toContain('is kept');
+      expect.soft(fs.readdirSync(c.tmp), `${who}: no raw root`).toEqual([]);
+      expect.soft(logLines(t), `${who}: nothing ran`).toEqual([]);
+      // the control: the same arguments with stdout open succeed, so it is the closed stdout that failed above
+      const open = recapture(ctx(recaptureTree(), ENTRIES), args);
+      expect.soft(open.status, `${who}, stdout open: ${open.stderr}`).toBe(0);
+    }
+  }, 60_000);
+
+  it('--dry-run over a tree whose own path carries a space prints each step\'s paths %q-escaped, and the header\'s paths as they are (review 318 F3)', () => {
+    const t = recaptureTree(undefined, SPACED_TREE);
+    expect(t.dir, 'the tree\'s own path carries a space').toContain(' ');
+    const r = recapture(ctx(t, ENTRIES), ['--dry-run', '2.1.999']);
+    expect.soft(r.status, r.stderr).toBe(0);
+    expect.soft(r.stderr).toBe('');
+    expect.soft(stepLines(r.stdout)).toEqual(FIVE(t, ['2.1.999'], bashQ));
+    expect.soft(stepLines(r.stdout).join('\n'), 'the escape is a backslash before each space').toContain('ccrc-dlg-rc\\ my\\ tree-');
+    expect.soft(r.stdout, 'the header prints the same paths with %s, unescaped').toContain(`recapture: fixtures dir:  ${t.fix}\nrecapture: scenarios dir: ${t.scen}\n`);
+  }, 60_000);
+
+  it('a real run over a tree and a TMPDIR whose paths carry a space hands every step its paths whole, the raw root\'s too (review 318 F3)', () => {
+    const t = recaptureTree(undefined, SPACED_TREE);
+    const c = ctx(t, ENTRIES, SPACED_TMP);
+    expect(t.dir, 'the tree\'s own path carries a space').toContain(' ');
+    expect(c.tmp, 'TMPDIR carries a space').toContain(' ');
+    const r = recapture(c, ['2.1.999', '2.1.9']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr, 'a clean run says nothing on stderr').toBe('');
+    const made = fs.readdirSync(c.tmp);
+    expect(made, 'exactly one raw root, nothing else in TMPDIR').toHaveLength(1);
+    const raw = path.join(c.tmp, made[0] as string);
+    expect(raw, 'the raw root\'s path carries the space').toContain(' ');
+    // one bracketed word per argument: a path the script split at its space would show as two
+    expect(argvLines(t).map((l) => l.split(raw).join('<raw>'))).toEqual([
+      'all [<raw>] [2.1.9] [2.1.999]',
+      `sanitize [<raw>] [${t.fix}]`,
+      `matrix [${t.fix}] [${t.scen}] [--write]`,
+      `sanitize [--scan] [${t.fix}]`,
+    ]);
+    // step 1 wrote where it said, step 2 teed where it said and found the .done the capture left, and the root is told whole
+    expect(fs.readFileSync(path.join(raw, 'versions-at-start'), 'utf8')).toMatch(/^# started \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n2\.1\.9\n2\.1\.999\n$/);
+    expect(fs.readFileSync(path.join(raw, 'all.log'), 'utf8')).toBe('stdout line from all\nstderr line from all\n');
+    expect(fs.existsSync(path.join(raw, '.done'))).toBe(true);
+    expect(r.stdout).toContain(`recapture: raw root: ${raw}\n`);
+    expect(r.stdout).toContain(`rm -rf ${raw}\n`);
+    expect(fs.readdirSync(c.tmp), 'nothing but the raw root is in TMPDIR, and no directory was made by splitting its path').toEqual(made);
   }, 60_000);
 });
 
