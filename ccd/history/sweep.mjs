@@ -496,19 +496,27 @@ export function readDrainingText(path) {
 }
 
 /** Set a draining file over SPOOL_FILE_MAX aside (D-4337, history-spool-file-size-cap), decided from its lstat BEFORE
- *  any open: renamed within .draining/ to `<name>.oversize`, which `listDraining` never lists, so it is never journaled,
- *  drained or unlinked by the sweep (the operator removes it). Its observation sidecar, which nothing lists once the
- *  `.jsonl` is gone, is removed. True when the file was set aside; the caller counts `spool_oversize` then, and the
- *  rename is the durable mark that makes that count once per file. A link or a FIFO is not this function's: false. */
-export function setAsideOversize(home, name) {
+ *  any open: moved into the sibling directory `.draining/oversize/` (0700, made on demand, the same filesystem, the name
+ *  unchanged at its at-most-253 bytes, which a `<name>.oversize` rename would push past the 255-byte NAME_MAX), which
+ *  `listDraining` never lists, so it is never journaled, drained or unlinked by the sweep (the operator removes it). Its
+ *  observation sidecar, which nothing lists once the `.jsonl` is gone, is removed. `spool_oversize` is bumped in a
+ *  committed transaction FIRST and the file moved after, so a crash between the two may count a file twice and can never
+ *  lose the count; a count that cannot commit leaves the file where it is for the next tick. True when the file is
+ *  oversize (set aside, or left for the next tick to count): the caller never journals it. False for a file that is
+ *  not oversize, a link or a FIFO, which are not this function's. */
+export function setAsideOversize(db, home, name) {
   const P = historyPaths(home);
   let st;
   try { st = lstatSync(`${P.draining}/${name}`); } catch (e) { if (e && e.code === 'ENOENT') return false; throw e; }
   if (!st.isFile() || st.size <= SPOOL_FILE_MAX) return false;
   try {
-    renameSync(`${P.draining}/${name}`, `${P.draining}/${name}.oversize`);
+    withTx(db, 'NORMAL', () => bump(db, 'spool_oversize'));
+  } catch { return true; }   // uncounted, so unmoved: the next tick meets it again and counts it then
+  try {
+    mkdirSync(`${P.draining}/oversize`, { recursive: true, mode: 0o700 });
+    renameSync(`${P.draining}/${name}`, `${P.draining}/oversize/${name}`);
   } catch (e) {
-    if (e && e.code === 'ENOENT') return false;
+    if (e && e.code === 'ENOENT') return true;
     throw e;
   }
   unlinkIfPresent(`${P.draining}/${sidecarName(name)}`);
@@ -700,14 +708,14 @@ export function drainSpool(db, c) {
   let failedCounted = false;
   for (const name of listDraining(c.home)) {
     // D-4337 (history-spool-file-size-cap): an oversize file is decided from its stat and never opened.
-    if (setAsideOversize(c.home, name)) { countOutside(db, 'spool_oversize'); continue; }
+    if (setAsideOversize(db, c.home, name)) continue;
     let j;
     try {
       j = journalFile(c.home, c.ids, name, c.now());
     } catch (e) {
       if (e instanceof JournalError) { countOutside(db, 'journal_write_failed'); failedCounted = true; break; }
       if (e && e.code === 'SPOOL_OVERSIZE') {   // it grew between the stat and the read
-        if (setAsideOversize(c.home, name)) countOutside(db, 'spool_oversize');
+        setAsideOversize(db, c.home, name);
         continue;
       }
       if (e && (e.code === 'ELOOP' || e.code === 'NON_REGULAR')) {

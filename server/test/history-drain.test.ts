@@ -40,6 +40,7 @@ interface Sweep {
   drainSpool(db: DatabaseSync, c: TickCtx): string[];
   journalHalf(home: string, ids: Ids | null, nowMs: number): { held: string[]; journalFailed: boolean };
   readDrainingText(path: string): { text: string; bytes: number };
+  setAsideOversize(db: DatabaseSync, home: string, name: string): boolean;
 }
 let SW: Sweep;
 beforeAll(async () => { SW = (await import('../../ccd/history/sweep.mjs')) as unknown as Sweep; });
@@ -554,15 +555,16 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
     };
     const ticksIn = (): number => journalOf(box.home, ids.storeId).filter((x) => x['k'] === 'tick').length;
     const OVER = `${ID}.900.1.jsonl`;
+    const ASIDE = (name: string): string => path.join(DRAIN(box.home), 'oversize', name);   // D-4337: the set-aside directory
 
-    it('is renamed aside to <name>.oversize, counted once, never journaled or drained; the tick row is recorded and other files drain', () => {
+    it('is moved aside into .draining/oversize/, counted once, never journaled or drained; the tick row is recorded and other files drain', () => {
       sparse(path.join(DRAIN(box.home), OVER), SPOOL_FILE_MAX + 1);
       spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
       const before = ticksIn();
       const r1 = runSweep(box);                                          // the oversize file is met before this tick renames the spool file
       expect(r1.code, r1.stderr).toBe(0);
       expect(fs.existsSync(path.join(DRAIN(box.home), OVER))).toBe(false);
-      expect(fs.statSync(path.join(DRAIN(box.home), `${OVER}.oversize`)).size).toBe(SPOOL_FILE_MAX + 1);   // kept, untouched
+      expect(fs.statSync(ASIDE(OVER)).size).toBe(SPOOL_FILE_MAX + 1);   // kept, untouched
       expect(counters(box)['spool_oversize']).toBe(1);
       const [name] = drainingNames(box.home);
       expect(name).not.toBe(OVER);
@@ -570,10 +572,43 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       expect(r2.code, r2.stderr).toBe(0);
       expect(counters(box)['spool_oversize'], 'counted once per file, not per tick').toBe(1);
       expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(name!, 1)]);   // the other file drained normally
-      expect(fs.existsSync(path.join(DRAIN(box.home), `${OVER}.oversize`))).toBe(true);
+      expect(fs.existsSync(ASIDE(OVER))).toBe(true);
       expect(fileBlocks(journalOf(box.home, ids.storeId)).map((b) => b.name)).toEqual([name]);   // the oversize name is never journaled
       expect(ticksIn() - before).toBe(2);
       expect(drainingNames(box.home)).toEqual([]);
+    });
+
+    it('a 252-byte draining name (D-4303) over the cap is set aside under its own name and counted: a <name>.oversize spelling would overflow NAME_MAX and wedge every tick', () => {
+      const LONG = 'a'.repeat(224);
+      const n = SW.drainingName(LONG, 1_791_244_261_576, 4_194_304);
+      expect(Buffer.byteLength(n)).toBe(252);
+      expect(Buffer.byteLength(`${n}.oversize`), 'CONTROL: the old spelling is over NAME_MAX').toBeGreaterThan(255);
+      sparse(path.join(DRAIN(box.home), n), SPOOL_FILE_MAX + 1);
+      spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+      const before = ticksIn();
+      const r1 = runSweep(box);
+      expect(r1.code, r1.stderr).toBe(0);
+      expect(counters(box)['spool_oversize']).toBe(1);
+      expect(fs.statSync(ASIDE(n)).size).toBe(SPOOL_FILE_MAX + 1);
+      expect(fs.existsSync(path.join(DRAIN(box.home), n))).toBe(false);
+      expect(fs.statSync(path.join(DRAIN(box.home), 'oversize')).mode & 0o777).toBe(0o700);
+      const r2 = runSweep(box);
+      expect(r2.code, r2.stderr).toBe(0);
+      expect(counters(box)['spool_oversize'], 'counted once per file, not per tick').toBe(1);
+      expect(ticksIn() - before).toBe(2);
+      expect(receipts(box)).toHaveLength(1);                             // the other file drained: the tick completed
+    });
+
+    it('the count is committed before the move: a count that cannot commit leaves the file in place for the next tick, counted nowhere', () => {
+      const f = path.join(DRAIN(box.home), OVER);
+      sparse(f, SPOOL_FILE_MAX + 1);
+      const db = { prepare: () => { throw new Error('busy'); }, exec: () => { throw new Error('busy'); } } as unknown as DatabaseSync;
+      expect(SW.setAsideOversize(db, box.home, OVER)).toBe(true);        // oversize: never journaled
+      expect(fs.existsSync(f), 'unmoved').toBe(true);
+      expect(fs.existsSync(ASIDE(OVER))).toBe(false);
+      expect(runSweep(box).code).toBe(0);                                // a healthy tick counts it and moves it
+      expect(counters(box)['spool_oversize']).toBe(1);
+      expect(fs.existsSync(ASIDE(OVER))).toBe(true);
     });
 
     it('a file at exactly SPOOL_FILE_MAX is still drained: its valid line is received, its one huge line is rejected', () => {
@@ -593,7 +628,8 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       expect(counters(box)['spool_oversize']).toBeUndefined();
       expect(runSweep(box).code).toBe(0);
       expect(counters(box)['spool_oversize']).toBe(1);
-      expect(fs.readdirSync(DRAIN(box.home))).toEqual([`${name!}.oversize`]);   // its observation sidecar went with it
+      expect(fs.readdirSync(DRAIN(box.home))).toEqual(['oversize']);   // its observation sidecar went with it
+      expect(fs.readdirSync(path.join(DRAIN(box.home), 'oversize'))).toEqual([name!]);
       expect(receipts(box)).toEqual([]);
     });
 
@@ -608,7 +644,7 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       moveDb(box, aside, hist(box.home, 'db'));
       expect(runSweep(box).code).toBe(0);
       expect(counters(box)['spool_oversize']).toBe(1);
-      expect(fs.existsSync(path.join(DRAIN(box.home), `${OVER}.oversize`))).toBe(true);
+      expect(fs.existsSync(ASIDE(OVER))).toBe(true);
     });
 
     it('is decided from its stat before any open: an oversize file the sweep could not even open is still set aside', () => {
@@ -618,7 +654,7 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       const r = runSweep(box);
       expect(r.code, r.stderr).toBe(0);
       expect(counters(box)['spool_oversize']).toBe(1);
-      expect(fs.existsSync(`${f}.oversize`)).toBe(true);
+      expect(fs.existsSync(ASIDE(OVER))).toBe(true);
     });
 
     it('readDrainingText refuses it from the descriptor\'s size, before reading a byte', () => {

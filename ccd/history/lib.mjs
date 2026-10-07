@@ -116,8 +116,8 @@ export const SWITCHES = Object.freeze({
 
 // ── constants (each *chosen* in the spec unless it says measured) ─────────
 export const SPOOL_LINE_MAX = 1024;                 // bytes, one spool line without its fence
-/** A draining spool file over this is never read, journaled or drained (D-4337, history-spool-file-size-cap): it is renamed
- *  aside to `<name>.oversize` and counted `spool_oversize`. A hook line is at most SPOOL_LINE_MAX bytes and a file is
+/** A draining spool file over this is never read, journaled or drained (D-4337, history-spool-file-size-cap): it is moved
+ *  aside into `.draining/oversize/` and counted `spool_oversize`. A hook line is at most SPOOL_LINE_MAX bytes and a file is
  *  renamed every tick, so a legitimate one stays far under it. */
 export const SPOOL_FILE_MAX = 67108864;             // 64 MiB
 export const SPOOL_ID_MAX = 224;                    // `.draining/<id>.<ms>.<pid>.jsonl` fits 255
