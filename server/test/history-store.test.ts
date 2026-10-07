@@ -550,8 +550,34 @@ describe('store.mjs: the binding', () => {
     fs.mkdirSync(path.join(P.backups, '.pre-v2.db.tmp'), { recursive: true });
     fs.writeFileSync(path.join(P.backups, '.pre-v2.db.tmp', 'inner'), 'x');
     fs.writeFileSync(path.join(P.backups, '.pre-v3.db.tmp'), Buffer.alloc(9, 0x61));
-    expect(removeStaleMigrationTemps(h)).toEqual({ removed: ['.pre-v3.db.tmp'], bytes: 9 });
+    fs.mkdirSync(path.join(P.backups, '.pre-v4.db.tmp'));                    // an EMPTY directory is removed, with no credit (review 316 F22)
+    expect(removeStaleMigrationTemps(h)).toEqual({ removed: ['.pre-v3.db.tmp', '.pre-v4.db.tmp'], bytes: 9 });
     expect(fs.existsSync(path.join(P.backups, '.pre-v2.db.tmp', 'inner'))).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'darwin')('removeStaleTemps removes an empty directory at a writer temp name, keeps a non-empty one, and never throws (review 316 F22)', () => {
+    const h = home();
+    createStore(h);
+    const P = historyPaths(h);
+    fs.mkdirSync(path.join(P.dbDir, 'history.db.new.77'));
+    fs.mkdirSync(path.join(P.dbDir, '.history.db.restore.1'));
+    fs.writeFileSync(path.join(P.dbDir, '.history.db.restore.1', 'inner'), 'x');
+    expect(spawnSync('mkfifo', [path.join(P.dbDir, 'history.db.new.78-wal')]).status).toBe(0);
+    expect(removeStaleTemps(h)).toEqual(['history.db.new.77', 'history.db.new.78-wal']);
+    expect(fs.readFileSync(path.join(P.dbDir, '.history.db.restore.1', 'inner'), 'utf8')).toBe('x');
+  });
+
+  it('clearDoneMarkers never throws on a directory at a marker name (review 316 F22)', () => {
+    const h = home();
+    createStore(h);
+    const P = historyPaths(h);
+    fs.mkdirSync(path.join(P.backups, '.pre-v1.attempt'), { recursive: true });
+    expect(clearDoneMarkers(h, 1)).toEqual(['.pre-v1.attempt']);
+    expect(fs.existsSync(path.join(P.backups, '.pre-v1.attempt'))).toBe(false);
+    fs.mkdirSync(path.join(P.backups, '.pre-v1.attempt'));
+    fs.writeFileSync(path.join(P.backups, '.pre-v1.attempt', 'inner'), 'x');
+    expect(clearDoneMarkers(h, 1)).toEqual([]);
+    expect(fs.existsSync(path.join(P.backups, '.pre-v1.attempt', 'inner'))).toBe(true);
   });
 
   // Root bypasses mode 0o100, so db/ cannot be made unlistable as uid 0.

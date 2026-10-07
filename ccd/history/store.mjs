@@ -19,7 +19,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import {
   chmodSync, closeSync, constants as FS, existsSync, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
-  readdirSync, readSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeSync,
+  readdirSync, readSync, renameSync, rmdirSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
@@ -639,6 +639,9 @@ export function measureStoreFacts(home, role) {
  *  EIO, ENOTDIR) propagates, because folding "could not look" into "nothing
  *  stale" would let restore temps (each possibly a full store copy) pile up
  *  unseen. The pass fails loudly and doctor's tick freshness reports it.
+ *  A name is removed BY TYPE (`removeEntry`): a file, link or FIFO is unlinked and an empty directory rmdir'd; a
+ *  non-empty directory planted at the name is kept, not listed, and blocks nothing, because the names carry a pid or a
+ *  timestamp a later pass never reuses (review 316 F22).
  *  D-4305 (history-stale-temps-unlistable-is-loud) */
 const TEMP_RE = /^(history\.db\.new\.|\.history\.db\.restore\.)/;
 export function removeStaleTemps(home) {
@@ -653,8 +656,7 @@ export function removeStaleTemps(home) {
   const removed = [];
   for (const n of names.sort()) {
     if (!TEMP_RE.test(n)) continue;
-    rmSync(`${P.dbDir}/${n}`, { force: true });
-    removed.push(n);
+    if (removeEntry(`${P.dbDir}/${n}`) === 'removed') removed.push(n);   // a non-empty directory at the name is kept (review 316 F22)
   }
   return removed;
 }
@@ -670,7 +672,7 @@ const MIGRATION_TEMP_RE = /^\.pre-v[0-9]+\.db\.tmp(-journal)?$/;
  *  the next copy replace it: the bytes it held are returned as `bytes`, which the caller adds to the free space it
  *  measured earlier in the pass. It credits only what it MEASURED and removed, and never throws for a filesystem
  *  condition: an absent or unlistable backups/ (a mode the operator set, EIO, ESTALE) and a temp that cannot be
- *  measured or removed (a directory planted under its name) answer no credit for it, so a pass with nothing to
+ *  measured or removed (a non-empty directory planted under its name; an empty one is removed, review 316 F22) answer no credit for it, so a pass with nothing to
  *  migrate still captures; `runMigration`'s own step 1 stays the guard when a migration IS admitted. Unlike
  *  removeStaleTemps (D-4305), where an unlistable db/ means the store is unusable, an unlistable backups/ blocks
  *  only a migration (D-4339 round 1, history-migration-temp-precleaned). */
@@ -688,7 +690,7 @@ export function removeStaleMigrationTemps(home) {
     if (!MIGRATION_TEMP_RE.test(n)) continue;
     try {
       const st = lstatSync(`${dir}/${n}`);
-      rmSync(`${dir}/${n}`, { force: true });
+      if (removeEntry(`${dir}/${n}`) !== 'removed') continue;     // a non-empty directory is kept: no credit, not listed
       if (st.isFile()) bytes += st.size;
       removed.push(n);
     } catch {
@@ -779,7 +781,7 @@ export function finishPending(home) {
  *  linked; it is removed so the next `createStore` mints afresh. */
 export function dropPending(home) {
   const P = historyPaths(home);
-  rmSync(P.pending, { force: true });
+  removeEntry(P.pending);
   fsyncDir(P.root);
 }
 
@@ -821,8 +823,7 @@ export function clearDoneMarkers(home, version) {
   for (const n of names.sort()) {
     const m = /^\.pre-v([0-9]+)\.attempt$/.exec(n);
     if (!m || Number(m[1]) > version) continue;
-    rmSync(`${dir}/${n}`, { force: true });
-    removed.push(n);
+    if (removeEntry(`${dir}/${n}`) === 'removed') removed.push(n);
   }
   return removed;
 }
@@ -877,8 +878,8 @@ export function runMigration(db, home, i) {
   mkdirSync(P.backups, { recursive: true, mode: 0o700 });
   const tmp = `${P.backups}/.pre-v${n}.db.tmp`;
   const snapshot = `${P.backups}/pre-v${n}.db`;
-  rmSync(tmp, { force: true });
-  rmSync(`${tmp}-journal`, { force: true });
+  removeEntry(tmp);
+  removeEntry(`${tmp}-journal`);
   writeFileAtomic(attemptMarker(home, n), `${readAttempts(home, n) + 1}\n`);
 
   const t0 = process.hrtime.bigint();
@@ -892,7 +893,7 @@ export function runMigration(db, home, i) {
   fsyncDir(P.backups);
   for (const name of readdirSync(P.backups)) {
     const m = /^pre-v([0-9]+)\.db$/.exec(name);
-    if (m && Number(m[1]) < n) rmSync(`${P.backups}/${name}`, { force: true });
+    if (m && Number(m[1]) < n) removeEntry(`${P.backups}/${name}`);
   }
 
   const copyBps = Math.max(1, Math.round(size / Math.max(seconds, 0.001)));
@@ -903,7 +904,7 @@ export function runMigration(db, home, i) {
     setMeta(db, 'copy_bps', copyBps);
     db.exec(`PRAGMA user_version = ${i.to}`);
   });
-  rmSync(attemptMarker(home, n), { force: true });
+  removeEntry(attemptMarker(home, n));
   return { snapshot, copyBps };
 }
 

@@ -225,6 +225,22 @@ describe('the sweep: skeleton, store open and refusals, and the shim', () => {
     expect(fs.existsSync(path.join(P.root, 'op.tmp.4242'))).toBe(false);
   });
 
+  it('a directory at a writer temp or marker name never fails a pass (review 316 F22)', () => {
+    const box = makeHistoryBox('ccrc-history-sweep-');
+    const P = historyPaths(box.home);
+    expect(runSweep(box).code).toBe(0);
+    const tempDir = path.join(P.dbDir, 'history.db.new.77');
+    const markerDir = path.join(P.backups, '.pre-v1.attempt');
+    fs.mkdirSync(tempDir);
+    fs.mkdirSync(markerDir, { recursive: true });
+    for (let i = 0; i < 2; i += 1) {
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+    }
+    expect(fs.existsSync(tempDir)).toBe(false);
+    expect(fs.existsSync(markerDir)).toBe(false);
+  });
+
   it('S7: a dangling db/ link is refused, and nothing is created through or beside it', () => {
     const box = makeHistoryBox('ccrc-history-sweep-');
     const P = historyPaths(box.home);

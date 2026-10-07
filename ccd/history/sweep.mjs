@@ -27,7 +27,7 @@
 // test-only preload, never a variable this file reads (§10.1 "Seams").
 import fs, {
   chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync,
-  readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeSync,
+  readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -4015,7 +4015,7 @@ async function opPass(parsed, deps, out) {
     // answers the throws that precede this try).
     return opThrowResult(e, result);
   } finally {
-    rmSync(P.op, { force: true });
+    removeEntry(P.op);
     closeWriter(db);
   }
 }
