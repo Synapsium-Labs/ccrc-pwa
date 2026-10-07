@@ -427,22 +427,34 @@ function rosterReadable(file) {
 }
 
 /** The observedMs of the oldest observation sidecar in spool/.draining whose
- *  records never reached the journal (`journaled` still null); null when there
- *  is none. A MEASUREMENT only: lib.mjs's journalHeldTooLong decides whether
- *  it is a hold (§9.6 `journal-unwritable`). Read only while a bound store
- *  exists: a hold with no binding never reaches here (exit 5 answers first). */
+ *  records never reached the journal (`journaled` still null), and whether the
+ *  directory or a sidecar could not be read. `oldest` is null when there is no
+ *  such sidecar (an ABSENT directory or file is "no held file"); `unreadable`
+ *  is true when a read failed for any other reason, so deriveHealth is told the
+ *  input is unmeasured and never judges it healthy (the no-overloaded-null
+ *  rule: absent and unreadable are not one null). A MEASUREMENT only: lib.mjs's
+ *  journalHeldTooLong decides whether `oldest` is a hold (§9.6
+ *  `journal-unwritable`). Read only while a bound store exists: a hold with no
+ *  binding never reaches here (exit 5 answers first). */
 function oldestUnjournaledMs(p) {
+  const absent = (e) => e !== null && typeof e === 'object' && e.code === 'ENOENT';
   let names;
-  try { names = healthFs.readdirSync(p.draining); } catch { return null; }
+  try { names = healthFs.readdirSync(p.draining); } catch (e) { return { oldest: null, unreadable: !absent(e) }; }
   let oldest = null;
+  let unreadable = false;
   for (const n of names) {
     if (!n.endsWith('.obs')) continue;
+    let text;
+    try { text = healthFs.readFileSync(healthPath.join(p.draining, n), 'utf8'); } catch (e) {
+      if (!absent(e)) unreadable = true;           // ENOENT: the sweep unlinked it between the listing and the read
+      continue;
+    }
     let o;
-    try { o = JSON.parse(healthFs.readFileSync(healthPath.join(p.draining, n), 'utf8')); } catch { continue; }
+    try { o = JSON.parse(text); } catch { continue; }   // content the sweep's own reader also skips (not a read failure)
     if (o !== null && typeof o === 'object' && o.journaled === null && typeof o.observedMs === 'number'
       && (oldest === null || o.observedMs < oldest)) oldest = o.observedMs;
   }
-  return oldest;
+  return { oldest, unreadable };
 }
 
 /** Regular `*.db` files directly in db/backups/, for store-missing's remedy. */
@@ -477,26 +489,30 @@ const listOf = (v) => {
  *  keeps. Both statements are STATUS_SQL's, so task 27's cost pin covers
  *  them. The ticks, the recovery step, journal_skipped and redact_unreadable
  *  are the envelope's own readings: healthInputsOf takes them from it, so
- *  status never reads one fact twice or spells it two ways. */
+ *  status never reads one fact twice or spells it two ways. A reading that
+ *  throws is named in `unmeasured` (Task 28F: absent is not unreadable). */
 function readStoreExtras(p, nowMs) {
-  const x = { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null };
+  const x = { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null, unmeasured: [] };
   let db;
-  try { db = healthStore.openReader(p.dbFile); } catch { return x; }
+  try { db = healthStore.openReader(p.dbFile); } catch { x.unmeasured.push('store'); return x; }
+  // Each reading is its own try: one that fails is named in `unmeasured` and keeps its default, which
+  // deriveHealth is told is NOT a measurement (it answers `status-unreadable`), never a healthy value.
+  const read = (name, fn) => {
+    try { fn(); } catch { x.unmeasured.push(name); }
+  };
   try {
     const meta = (k) => {
       const r = db.prepare(STATUS_SQL.metaKey).get(k);
       return r === undefined ? null : String(r.v);
     };
-    x.breakerOpen = Number(db.prepare(STATUS_SQL.breaker).get(nowMs).n) > 0;
-    x.recoverUnmovedTicks = intOf(meta(healthLib.HEALTH_META.recoverUnmovedTicks));
-    x.exportSegmentNewer = listOf(meta(healthLib.HEALTH_META.exportSegmentNewer));
-    x.exportSegmentMissing = intOf(meta(healthLib.HEALTH_META.exportSegmentMissing));
-    const bps = intOf(meta('copy_bps'));                                // task 13's executor
-    x.copyBps = bps > 0 ? bps : null;
-  } catch {
-    // The status read above opened this store a moment ago: a read that
-    // fails now leaves these defaults, and deriveHealth judges what WAS
-    // measured — the envelope's own exit already speaks for the store.
+    read('breaker', () => { x.breakerOpen = Number(db.prepare(STATUS_SQL.breaker).get(nowMs).n) > 0; });
+    read(healthLib.HEALTH_META.recoverUnmovedTicks, () => { x.recoverUnmovedTicks = intOf(meta(healthLib.HEALTH_META.recoverUnmovedTicks)); });
+    read(healthLib.HEALTH_META.exportSegmentNewer, () => { x.exportSegmentNewer = listOf(meta(healthLib.HEALTH_META.exportSegmentNewer)); });
+    read(healthLib.HEALTH_META.exportSegmentMissing, () => { x.exportSegmentMissing = intOf(meta(healthLib.HEALTH_META.exportSegmentMissing)); });
+    read('copy_bps', () => {                                            // task 13's executor
+      const bps = intOf(meta('copy_bps'));
+      x.copyBps = bps > 0 ? bps : null;
+    });
   } finally {
     db.close();
   }
@@ -515,14 +531,16 @@ async function readHealthExtras(home, env, nowMs) {
   } catch { dbPath = p.dbDir; }
   const store = env.exit === healthLib.EXIT.OK
     ? readStoreExtras(p, nowMs)
-    : { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null };
+    : { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null, unmeasured: [] };
+  const held = env.exit === healthLib.EXIT.OK ? oldestUnjournaledMs(p) : { oldest: null, unreadable: false };
+  if (held.unreadable) store.unmeasured.push('spool/.draining');
   return {
     ...store,
     modesWrong: healthLib.modesWrongOf(measureModeEntries(p, unreachable || env.reason === 'store-root-dangling')),
     rootIsSymlink,
     dbPath,
     rosterUnreadable: !rosterReadable(p.accountsSh),
-    journalUnwritable: env.exit === healthLib.EXIT.OK && healthLib.journalHeldTooLong(oldestUnjournaledMs(p), nowMs),
+    journalUnwritable: healthLib.journalHeldTooLong(held.oldest, nowMs),
     backupsDb: unreachable ? [] : backupsOf(p.backups),
     storeDevice: unreachable || env.exit === healthLib.EXIT.NO_STORE ? null : await storeDeviceOf(p.dbDir),
   };
@@ -573,6 +591,7 @@ function healthInputsOf(env, x, nowMs) {
     journalSkipped: (env.journal && env.journal.skipped) ?? 0,
     exportSegmentNewer: x.exportSegmentNewer,
     exportSegmentMissing: x.exportSegmentMissing,
+    extrasUnmeasured: x.unmeasured,
     // Two measurements of one condition, either enough: the sweep's own record of a failed append on a
     // DB-open pass (Task 24's meta `journal_unwritable`, carried as `journal.unwritable` by Task 27), and
     // its consequence on disk, a held file never journaled (oldestUnjournaledMs, judged by lib.mjs's

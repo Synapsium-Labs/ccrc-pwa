@@ -354,6 +354,8 @@ export interface HealthInputs {
   readonly copyBps: number | null;
   readonly backupsDb: readonly string[];
   readonly journalStoreDirs: readonly string[];
+  /** What status could not read (Task 28F): each name is an input that kept its default and was NOT measured. */
+  readonly extrasUnmeasured: readonly string[];
 }
 export const HEALTH_META: Readonly<{
   recoverUnmovedTicks: 'recover_unmoved_ticks';

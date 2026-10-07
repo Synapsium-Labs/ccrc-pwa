@@ -1945,7 +1945,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     exportWriterLive: false, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
     journalGrowth30d: 0, journalSkipped: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
-    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [],
+    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
     ...o,
   });
   const words = (r: healthLib.HealthResult, cls: 'warn' | 'fail'): string[] => r[cls].map((i) => i.word);
@@ -2118,6 +2118,20 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
   it('off and a live op marker stay held with a 3 h old tick: neither is tick evidence (D-4314)', () => {
     expect(words(healthLib.deriveHealth(base({ historyOff: true, lastTickMs: NOW - 180 * MIN })), 'fail')).toEqual([]);
     expect(words(healthLib.deriveHealth(base({ op: { verb: 'backup', pid: 4242, alive: true }, lastTickMs: NOW - 180 * MIN })), 'fail')).toEqual([]);
+  });
+  // Task 28F item 3: an input status could not read is not a healthy input (the no-overloaded-null rule).
+  it('an extras read that failed is FAIL status-unreadable naming what could not be read, beside whatever else was measured', () => {
+    const r = healthLib.deriveHealth(base({ extrasUnmeasured: ['breaker', 'spool/.draining'], capMalformed: true }));
+    expect(words(r, 'fail')).toEqual(['status-unreadable']);
+    const item = r.fail[0]!;
+    expect(item.detail).toContain('breaker');
+    expect(item.detail).toContain('spool/.draining');
+    expect(item.remedy).toBe(healthLib.HEALTH_REMEDIES['status-unreadable']);
+    expect(words(r, 'warn')).toEqual(['cap-malformed']);
+    expect(r.pass).toBeNull();
+  });
+  it('nothing unmeasured adds no status-unreadable', () => {
+    expect(words(healthLib.deriveHealth(base({ extrasUnmeasured: [] })), 'fail')).toEqual([]);
   });
   it('lag unmeasured with a tick younger than 10 min is WARN lag-unmeasured; with a stale tick it is the stale-tick FAIL', () => {
     expect(words(healthLib.deriveHealth(base({ lagS: null, lastTickMs: NOW - 2 * MIN })), 'warn')).toContain('lag-unmeasured');

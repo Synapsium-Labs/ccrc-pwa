@@ -2260,6 +2260,11 @@ export function deriveHealth(h) {
     const est = Math.ceil((h.sizeBytes ?? 0) / (h.copyBps ?? DEFAULT_COPY_BPS));
     fail.push(item('migration-needs-op', `a migration to v${h.codeVersion} needs a copy of about ${est} s, too long for a scheduled pass`));
   }
+  // Task 28F: an input status could not read kept its healthy default; it is named here and never judged healthy
+  // (the no-overloaded-null rule). An existing word, so no HEALTH_WORDS entry is added.
+  if (h.extrasUnmeasured.length > 0) {
+    fail.push(item('status-unreadable', `status could not read ${h.extrasUnmeasured.join(', ')}; the checks that depend on it were not judged`));
+  }
   if (h.journalUnwritable) fail.push(item('journal-unwritable', 'the journal cannot be appended: drained spool files are held in spool/.draining'));
   if (h.exportSegmentNewer.length > 0) fail.push(item('export-segment-newer', `export segment(s) ${h.exportSegmentNewer.join(', ')} are in a newer format than this build reads`));
   // D-4207 (history-export-due-escalates): the overdue FAIL on measured source loss, and export-due below.

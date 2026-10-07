@@ -402,6 +402,38 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     expect(wordsOf(env!['health']['fail'])).not.toContain('tick-stale');
   });
 
+  // Task 28F item 3: a failed extras read is unmeasured, never a healthy default. The smallest seam: the breaker
+  // table the envelope never reads, so the status read itself still succeeds (exit 0) and only the extras fail.
+  it('a store whose breaker table cannot be read is FAIL status-unreadable naming it, with exit still 0', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-extras-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const db = healthStore.openWriter(dbFile(box));
+    try { db.exec('DROP TABLE breaker'); } finally { healthStore.closeWriter(db); }
+    const { code, env } = statusOf(box);
+    expect(code).toBe(0);
+    const fail = env!['health']['fail'] as Array<{ word: string; detail: string }>;
+    expect(wordsOf(fail)).toEqual(['status-unreadable']);
+    expect(fail[0]!.detail).toContain('breaker');
+    expect(env!['health']['pass']).toBeNull();
+  });
+
+  it('an unreadable spool/.draining is FAIL status-unreadable; an absent one is no held file, still PASS ok', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-draining-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const draining = healthPath.join(box.home, '.ccrc', 'history', 'spool', '.draining');
+    healthFs.rmSync(draining, { recursive: true, force: true });
+    expect(healthFs.existsSync(draining)).toBe(false);
+    expect(statusOf(box).env!['health']['pass']).toBe('ok');
+    // A regular file where the directory belongs: readdir answers ENOTDIR, which is unreadable, not absent.
+    healthFs.mkdirSync(healthPath.dirname(draining), { recursive: true, mode: 0o700 });
+    healthFs.writeFileSync(draining, '', { mode: 0o600 });
+    const fail = statusOf(box).env!['health']['fail'] as Array<{ word: string; detail: string }>;
+    expect(wordsOf(fail)).toEqual(['status-unreadable']);
+    expect(fail[0]!.detail).toContain('spool/.draining');
+  });
+
   it('db/ linked to a 0755 target FAILs mode-wrong naming the TARGET and its chmod; a 0700 target passes; the link\'s own mode is never read', () => {
     const box = healthHh.makeHistoryBox('ccrc-history-health-modes-', { role: 'fleet', shim: true });
     ageFile(shimOf(box), 60 * 60_000);
