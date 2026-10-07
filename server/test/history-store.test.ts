@@ -571,15 +571,17 @@ describe('store.mjs: the binding', () => {
     expect(fs.existsSync(path.join(P.backups, '.pre-v2.db.tmp', 'inner'))).toBe(true);
   });
 
-  it.skipIf(process.platform === 'darwin')('removeStaleTemps removes an empty directory at a writer temp name, keeps a non-empty one, and never throws (review 316 F22)', () => {
+  // M23: only the FIFO row is Linux-only; the directory rows run on every platform.
+  it('removeStaleTemps removes an empty directory at a writer temp name, keeps a non-empty one, and never throws (review 316 F22)', () => {
     const h = home();
     createStore(h);
     const P = historyPaths(h);
+    const fifo = process.platform !== 'darwin';
     fs.mkdirSync(path.join(P.dbDir, 'history.db.new.77'));
     fs.mkdirSync(path.join(P.dbDir, '.history.db.restore.1'));
     fs.writeFileSync(path.join(P.dbDir, '.history.db.restore.1', 'inner'), 'x');
-    expect(spawnSync('mkfifo', [path.join(P.dbDir, 'history.db.new.78-wal')]).status).toBe(0);
-    expect(removeStaleTemps(h)).toEqual(['history.db.new.77', 'history.db.new.78-wal']);
+    if (fifo) expect(spawnSync('mkfifo', [path.join(P.dbDir, 'history.db.new.78-wal')]).status).toBe(0);
+    expect(removeStaleTemps(h)).toEqual(fifo ? ['history.db.new.77', 'history.db.new.78-wal'] : ['history.db.new.77']);
     expect(fs.readFileSync(path.join(P.dbDir, '.history.db.restore.1', 'inner'), 'utf8')).toBe('x');
   });
 
