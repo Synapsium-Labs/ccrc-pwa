@@ -1021,3 +1021,29 @@ describe('Task 26F items 3 and 4: the two refusals an --op import used to answer
     expect(countOf(box, 'entries')).toBe(1);
   }, 90_000);
 });
+
+describe('Task 26F item 5: a throw inside runOpPass still ends stdout with one {"rc":…} line', () => {
+  const rcLines = (stdout: string): string[] => stdout.split('\n').filter((l) => l.startsWith('{"rc"'));
+
+  it('a StoreError out of the verb (a migration that drops a table) answers exit 1 with its result line, and leaves the store as it was', () => {
+    const box = boundBox('ccrc-hist-26f5a-');
+    const r = runDriver(box, { extraMigrations: ['DROP TABLE counters'] }, ['--op', 'migrate']);
+    expect(r.code, r.stderr).toBe(1);
+    expect(rcLines(r.stdout), r.stdout).toEqual(['{"rc":1}']);
+    expect(r.stdout.trimEnd().split('\n').pop()).toBe('{"rc":1}');
+    expect(versionOf(paths(box).db), 'the failed migration rolled back').toBe(1);
+    expect(fs.existsSync(path.join(paths(box).root, 'op')), 'no op marker is left').toBe(false);
+  });
+
+  it('a SQLite error out of the verb (an injected commit failure) is logged to stderr and answers exit 1 with its result line', () => {
+    const box = boundBox('ccrc-hist-26f5b-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000000f9', 'commit fails', iso(0))]);
+    const r = runSweep(box, ['--op', 'import', '--apply'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_FAIL_COMMIT: '1' } });
+    expect(r.code, r.stderr).toBe(1);
+    expect(rcLines(r.stdout), r.stdout).toEqual(['{"rc":1}']);
+    expect(r.stdout.trimEnd().split('\n').pop()).toBe('{"rc":1}');
+    expect(r.stderr).toContain('injected commit failure');
+    expect(fs.existsSync(path.join(paths(box).root, 'op')), 'no op marker is left').toBe(false);
+  });
+});

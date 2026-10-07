@@ -3574,9 +3574,17 @@ export async function runOpPass(parsed, deps, out) {
     }
     return result(r.rc, r.reason);
   } catch (e) {
-    if (!(e instanceof JournalError)) throw e;
-    bump(db, 'journal_write_failed');
-    out('history-sweep: journal-unwritable');
+    if (e instanceof JournalError) {
+      bump(db, 'journal_write_failed');
+      out('history-sweep: journal-unwritable');
+      return result(EXIT.INTERNAL);
+    }
+    // The pass's contract is ONE {"rc":…} line, printed LAST, on every path (Task 26F item 5): the CLI relays it, so a
+    // throw that reached main()'s own catch ended stdout with no line at all. A StoreError whose word REASONS knows
+    // answers that word's exit with the word; any other throw is exit 1 with no word. Its message goes to stderr
+    // first, as main() would have printed it.
+    process.stderr.write(`history-sweep: internal error: ${e && e.message ? e.message : String(e)}\n`);
+    if (e instanceof StoreError && Object.hasOwn(REASONS, e.word)) return result(REASONS[e.word], e.word);
     return result(EXIT.INTERNAL);
   } finally {
     rmSync(P.op, { force: true });
