@@ -853,7 +853,7 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
     expect(r.status, r.stderr).toBe(0);
     expect(r.stderr, 'a clean run says nothing on stderr').toBe('');
     const made = fs.readdirSync(c.tmp);
-    expect(made, 'exactly one raw root, nothing else in TMPDIR').toHaveLength(1);
+    expect(made, 'exactly one raw root, nothing else in TMPDIR: no directory was made by splitting its path').toHaveLength(1);
     const raw = path.join(c.tmp, made[0] as string);
     expect(raw, 'the raw root\'s path carries the space').toContain(' ');
     // one bracketed word per argument: a path the script split at its space would show as two
@@ -871,7 +871,6 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
     expect(fs.existsSync(path.join(raw, '.done'))).toBe(true);
     expect(r.stdout).toContain(`recapture: raw root: ${raw}\n`);
     expect(r.stdout).toContain(`rm -rf ${raw}\n`);
-    expect(fs.readdirSync(c.tmp), 'nothing but the raw root is in TMPDIR, and no directory was made by splitting its path').toEqual(made);
   }, 60_000);
 });
 
@@ -2366,6 +2365,37 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     // sorted by code unit: agent-plain, é (E9), BOM-x (FEFF), U+FFFD (FFFD); the directories: 2.1.999, then the BOM-led one
     expect(r.stderr).toBe('sanitize: residue in 2.1.999/#1 (fixture file name)\nsanitize: residue in 2.1.999/#2 (fixture file name)\nsanitize: residue in 2.1.999/#3 (fixture file name)\nsanitize: residue in #1 (version directory name)\n');
     expect(r.stderr).not.toContain('not UTF-8');
+  });
+
+  // Review 324 F7: every bad name above begins with an invalid LEAD byte (0xff to 0xfb), which a decoder throws on even in `{ stream: true }`
+  // mode, so no row told a decoder that keeps no state from one that does. In stream mode a name that ENDS in a truncated multibyte
+  // sequence does not throw: the decoder holds the tail back and answers the name as valid, and the held bytes then join the next name's
+  // leading continuation bytes. Here `zz.json\xe2\x82` (two bytes of a three-byte sequence) is listed straight before `\xac.json`; joined,
+  // `e2 82 ac` is U+20AC, so the mutant answers "zz.json" and "\u{20AC}.json", two valid names that are no file on disk, and the scan
+  // passes with rc 0 over residue it never read. A `decode` call without `{ stream: true }` flushes the decoder, so each name is judged alone.
+  it('--scan decodes each entry name on its own: a name ending in a truncated multibyte sequence, listed before a continuation-led one, is a finding and so is that one (review 324 F7)', (ctx) => {
+    const { dir, vdir } = oneVersion();
+    const truncated = badAt(vdir, [0x7a, 0x7a, 0x2e, 0x6a, 0x73, 0x6f, 0x6e, 0xe2, 0x82]);   // zz.json + the first two bytes of E2 82 AC
+    const continuation = badAt(vdir, [0xac, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]);                // \xac.json: begins with the byte that would complete it
+    mustMake(ctx, () => {
+      fs.writeFileSync(truncated, residueBody());
+      fs.writeFileSync(continuation, residueBody());
+    });
+    // the mutant joins the two only when the listing hands them over in this order; the shipped code does not care, so say what the order is
+    const listed = fs.readdirSync(vdir, { encoding: 'buffer' });
+    const at = (full: Buffer): number => listed.findIndex((n) => Buffer.concat([Buffer.from(`${vdir}/`), n]).equals(full));
+    expect(at(truncated), 'the truncated name is listed').toBeGreaterThanOrEqual(0);
+    expect(at(continuation), 'the truncated name is listed straight before the continuation-led one').toBe(at(truncated) + 1);
+    const r = scanRunBytes(dir);
+    expect(r.status, 'the residue behind both names is never read, and neither name passes').toBe(1);
+    expect(r.stderr.toString(), 'both are findings, by index, in byte order').toBe(`sanitize: residue in 2.1.999/#0 ${NOT_UTF8}\nsanitize: residue in 2.1.999/#1 ${NOT_UTF8}\n`);
+    expect(r.stdout.toString()).toBe('');
+    noNameBytes(r);
+    for (const out of [r.stdout, r.stderr]) {
+      for (const b of [0xe2, 0x82, 0xac]) expect(out.includes(b), `no 0x${b.toString(16)} byte`).toBe(false);
+      expect(out.includes(Buffer.from('zz.json')), 'no decoded name').toBe(false);
+      expect(out.includes(Buffer.from('\u{20AC}')), 'no joined decode').toBe(false);
+    }
   });
 
   it('--scan of a directory with nothing to scan fails (a mistyped path must not pass): exit 1, one fixed line (F9)', () => {
