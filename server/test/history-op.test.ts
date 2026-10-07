@@ -16,7 +16,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import * as pty from 'node-pty';
-import { WRITING_FORMS, CARRIER_KILL_S } from '../../ccd/history/lib.mjs';
+import { WRITING_FORMS, CARRIER_KILL_S, journalRecord } from '../../ccd/history/lib.mjs';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, preloadOptions, plantSession, plantTranscript, spoolLine, openStoreRO,
   counters, journalRecords, PRELOADS, type HistoryBox,
@@ -636,5 +636,253 @@ describe('the op marker (§9.6)', () => {
     const r = runSweep(box);
     expect(r.code, r.stderr).toBe(0);
     expect(fs.readFileSync(opFile(box), 'utf8'), 'a live pid\'s marker is another pass\'s, and stands').toBe(live);
+  });
+});
+
+// ── Task 26: the periodic census (§9.2 step 2, §9.15, W1-j, W1-k) ─────────────────────────────────
+
+describe('O38: the export\'s due rule (B1 half)', () => {
+  const OLD = 'a0000000-0000-4000-8000-0000000006a1';
+  /** A box whose every rostered home keeps 180 days, holding six distinct blobs whose ages are chosen
+   *  around the horizons this pin walks: 150 (180), 60 (90), 30 (60) and 0 (30). The NULL-ts row lives in
+   *  a second transcript whose file is 170 days old. The managed-settings list is the fixture's own. */
+  function censusBox(prefix: string): { box: HistoryBox; MS: string[]; settings: (h: string, body: string) => void; nullFile: string; mainFile: string } {
+    const box = makeHistoryBox(prefix, { role: 'fleet', shim: true });
+    const settings = (h: string, body: string): void => { fs.writeFileSync(path.join(h, 'settings.json'), body); };
+    for (const h of box.homes) settings(h, JSON.stringify({ cleanupPeriodDays: 180 }));
+    const etc = path.join(box.home, 'etc-claude-code');
+    fs.mkdirSync(path.join(etc, 'managed-settings.d'), { recursive: true });
+    const MS = [path.join(etc, 'managed-settings.json'), path.join(etc, 'managed-settings.d')];
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    plantSession(box, 'claude-noclock', { uuid: U2, generation: G1, project: 'demo' });
+    const mainFile = plantTranscript(box, 'claude', SLUG, U1, [
+      userRow(OLD, 'old only', iso(160 * DAY)),
+      userRow('a0000000-0000-4000-8000-0000000006a2', 'mid only', iso(100 * DAY)),
+      userRow('a0000000-0000-4000-8000-0000000006a3', 'near only', iso(45 * DAY)),
+      userRow('a0000000-0000-4000-8000-0000000006a4', 'young only', iso(10 * DAY)),
+      userRow('a0000000-0000-4000-8000-0000000006a5', 'shared words', iso(160 * DAY)),
+      userRow('a0000000-0000-4000-8000-0000000006a6', 'shared words', iso(10 * DAY)),
+    ]);
+    // A row with no `timestamp` at all: its ts_ms is NULL, so its age is its newest holding file's mtime.
+    const noClock = { type: 'user', uuid: 'a0000000-0000-4000-8000-0000000006a7', parentUuid: null, sessionId: U2, cwd: '/home/u/tree/demo', message: { role: 'user', content: 'no clock' } };
+    const nullFile = plantTranscript(box, 'claude', SLUG, U2, [noClock]);
+    const past = new Date(Date.now() - 170 * DAY);
+    fs.utimesSync(nullFile, past, past);
+    const r = runDriver(box, { managedSettings: MS });
+    expect(r.code, r.stderr).toBe(0);
+    expect(countOf(box, 'entries'), 'every row ingested by the first pass').toBe(7);
+    return { box, MS, settings, nullFile, mainFile };
+  }
+  /** One census, k periodic intervals on, so SCAN_INTERVAL_MS has passed since the last. */
+  function census(box: HistoryBox, MS: string[], k: number): void {
+    const r = runDriver(box, { offsetMs: k * 31 * MIN, managedSettings: MS });
+    expect(r.code, r.stderr).toBe(0);
+  }
+  const due = (box: HistoryBox): number => Number(metaOf(box, 'export_due'));
+
+  it('180 everywhere: horizon 150, so the old blob and the NULL-ts blob aged by its 170-day file are due, and nothing younger', () => {
+    const { box } = censusBox('ccrc-hist-o38a-');
+    expect(metaOf(box, 'retention_min')).toBe('180');
+    expect(due(box)).toBe(2);
+    expect(metaOf(box, 'export_overdue')).toBe('0');
+  });
+
+  it('a home without the key: 30, horizon 0, everything due, and retention-lowered names that home', () => {
+    const { box, MS, settings } = censusBox('ccrc-hist-o38b-');
+    const lowered = box.homes.find((h) => h.endsWith('.claude-a'))!;
+    settings(lowered, '{}');
+    census(box, MS, 1);
+    expect(metaOf(box, 'retention_min')).toBe('30');
+    expect(due(box)).toBe(6);
+    expect(JSON.parse(metaOf(box, 'retention_lowered')!)).toEqual({ home: lowered, days: 30, othersMin: 180 });
+    settings(lowered, JSON.stringify({ cleanupPeriodDays: 180 }));
+    census(box, MS, 2);
+    expect(due(box)).toBe(2);
+    expect(metaOf(box, 'retention_lowered')).toBe('');
+  });
+
+  it('0, "x" or unparseable on a home last measured 180: retention_unmeasured counts, the home stays 180, no blob becomes due', () => {
+    const { box, MS, settings } = censusBox('ccrc-hist-o38c-');
+    const h = box.homes.find((x) => x.endsWith('.claude-a'))!;
+    const before = counter(box, 'retention_unmeasured');
+    let k = 1;
+    for (const body of [JSON.stringify({ cleanupPeriodDays: 0 }), JSON.stringify({ cleanupPeriodDays: 'x' }), '{']) {
+      settings(h, body);
+      census(box, MS, k);
+      k += 1;
+      expect(metaOf(box, `retention:${h}`), body).toBe('180');
+      expect(metaOf(box, `retention_state:${h}`), body).toBe('unmeasured');
+      expect(due(box), body).toBe(2);
+    }
+    expect(counter(box, 'retention_unmeasured') - before).toBe(3);
+  });
+
+  it('the same on a home never measured: it counts as 30', () => {
+    const box = makeHistoryBox('ccrc-hist-o38d-', { role: 'fleet', shim: true });
+    const etc = path.join(box.home, 'etc-claude-code');
+    const MS = [path.join(etc, 'managed-settings.json'), path.join(etc, 'managed-settings.d')];
+    for (const h of box.homes) fs.writeFileSync(path.join(h, 'settings.json'), h.endsWith('.claude-a') ? '{' : JSON.stringify({ cleanupPeriodDays: 180 }));
+    expect(runDriver(box, { managedSettings: MS }).code).toBe(0);
+    const h = box.homes.find((x) => x.endsWith('.claude-a'))!;
+    expect(metaOf(box, `retention:${h}`), 'a home never measured records no value').toBeNull();
+    expect(metaOf(box, `retention_state:${h}`)).toBe('unmeasured');
+    expect(metaOf(box, 'retention_min')).toBe('30');
+  });
+
+  it('a managed-settings file with 90 under homes of 180 gives 90, and a managed-settings.d/ drop-in with 60 gives 60', () => {
+    const { box, MS } = censusBox('ccrc-hist-o38e-');
+    fs.writeFileSync(MS[0]!, JSON.stringify({ cleanupPeriodDays: 90 }));
+    census(box, MS, 1);
+    expect(metaOf(box, 'retention_min')).toBe('90');
+    expect(due(box), 'horizon 60: old, mid and the NULL-ts blob').toBe(3);
+    fs.writeFileSync(path.join(MS[1]!, '50-short.json'), JSON.stringify({ cleanupPeriodDays: 60 }));
+    census(box, MS, 2);
+    expect(metaOf(box, 'retention_min')).toBe('60');
+    expect(due(box), 'horizon 30: and near too').toBe(4);
+  });
+
+  it('a blob with an old and a younger referrer is not due; a NULL-ts row ages by its newest holding file', () => {
+    const { box, MS, nullFile } = censusBox('ccrc-hist-o38f-');
+    expect(due(box), 'the shared blob is not among the two').toBe(2);
+    const now = new Date();
+    fs.utimesSync(nullFile, now, now);
+    census(box, MS, 1);
+    expect(due(box), 'with a fresh file the NULL-ts row is young').toBe(1);
+  });
+
+  it('overdue by the file clock: a due blob whose holding file is gone, or past its mtime plus its home\'s retention, FAILs; fresh files never', () => {
+    const { box, MS, nullFile, mainFile } = censusBox('ccrc-hist-o38g-');
+    expect(metaOf(box, 'export_overdue'), 'due by the row clock, its files fresh').toBe('0');
+    fs.rmSync(mainFile);
+    census(box, MS, 1);
+    expect(metaOf(box, 'export_overdue'), 'the old blob\'s only file is gone').toBe('1');
+    const past = new Date(Date.now() - 200 * DAY);
+    fs.utimesSync(nullFile, past, past);
+    census(box, MS, 2);
+    expect(metaOf(box, 'export_overdue'), 'and the NULL-ts blob\'s file is past 200 > 180 days').toBe('2');
+  });
+
+  it('W1-k: the census records the oldest row, its row-clock due date and the file clock\'s first deletion date', () => {
+    const { box } = censusBox('ccrc-hist-o38h-');
+    const oldest = Number(metaOf(box, 'oldest_row_ms'));
+    expect(Math.abs(oldest - (Date.now() - 160 * DAY))).toBeLessThan(10 * MIN);
+    expect(Number(metaOf(box, 'first_due_ms')) - oldest).toBe(150 * DAY);
+    const firstDeletion = Number(metaOf(box, 'first_deletion_ms'));
+    expect(Math.abs(firstDeletion - (Date.now() + 10 * DAY)), 'the 170-day file plus 180 days').toBeLessThan(10 * MIN);
+  });
+});
+
+describe('W1-j and O34: the journal audit', () => {
+  function auditBox(prefix: string, withSecret: boolean): HistoryBox {
+    const box = makeHistoryBox(prefix, { role: 'fleet', shim: true });
+    if (withSecret) {
+      const token = createHash('sha256').update('ccrc fixture audit secret, synthetic').digest('hex');
+      fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true });
+      fs.writeFileSync(path.join(box.home, '.cc-secrets', 'claude-a-oauth.env'), `CLAUDE_CODE_OAUTH_TOKEN=${token}\n`, { mode: 0o600 });
+    }
+    expect(runDriver(box, { managedSettings: [] }).code).toBe(0);           // creates the store; first census
+    plantSession(box, ID, { generation: G1, project: 'demo' });
+    spoolLine(box, ID, startup(U1, { reg: U1 }));
+    expect(runDriver(box, { offsetMs: MIN, managedSettings: [] }).code).toBe(0);       // renamed
+    expect(runDriver(box, { offsetMs: 2 * MIN, managedSettings: [] }).code).toBe(0);   // drained: a family, an epoch, a receipt
+    expect(countOf(box, 'spool_receipts')).toBe(1);
+    return box;
+  }
+  const monthFiles = (box: HistoryBox): string[] => {
+    const dir = path.join(paths(box).journal, fs.readFileSync(paths(box).storeId, 'utf8').trim());
+    return names(dir).filter((n) => n.endsWith('.jsonl')).map((n) => path.join(dir, n));
+  };
+
+  it('a complete journal: every receipt, family, epoch and redaction pair has its record — all three missing counters 0', () => {
+    const box = auditBox('ccrc-hist-audit-a-', true);
+    expect(countOf(box, 'redact_hashes'), 'a pair to audit').toBeGreaterThan(0);
+    expect(runDriver(box, { offsetMs: 31 * MIN, managedSettings: [] }).code).toBe(0);
+    expect(metaOf(box, 'journal_audit_ms')).toMatch(/^[0-9]+$/);
+    expect(counter(box, 'journal_missing_spool')).toBe(0);
+    expect(counter(box, 'journal_missing_verdict')).toBe(0);
+    expect(counter(box, 'journal_missing_redact')).toBe(0);
+    expect(metaOf(box, 'journal_skipped')).toBe('0');
+    expect(Number(metaOf(box, 'journal_growth_30d'))).toBeGreaterThan(0);
+  });
+
+  it('a receipt whose spool record is gone counts journal_missing_spool, once', () => {
+    const box = auditBox('ccrc-hist-audit-b-', false);
+    for (const f of monthFiles(box)) {
+      const kept = fs.readFileSync(f, 'utf8').split('\n').filter((l) => !l.includes('"k":"spool"')).join('\n');
+      fs.writeFileSync(f, kept);
+    }
+    expect(runDriver(box, { offsetMs: 31 * MIN, managedSettings: [] }).code).toBe(0);
+    expect(counter(box, 'journal_missing_spool')).toBe(1);
+    expect(counter(box, 'journal_missing_verdict')).toBe(0);
+    expect(runDriver(box, { offsetMs: 62 * MIN, managedSettings: [] }).code).toBe(0);
+    expect(counter(box, 'journal_missing_spool'), 'an audited row is never recounted').toBe(1);
+  });
+
+  it('a malformed journal line is skipped and named in journal_skipped', () => {
+    const box = auditBox('ccrc-hist-audit-c-', false);
+    fs.appendFileSync(monthFiles(box)[0]!, '{"v":1,"k":\n');
+    expect(runDriver(box, { offsetMs: 31 * MIN, managedSettings: [] }).code).toBe(0);
+    expect(metaOf(box, 'journal_skipped')).toBe('1');
+  });
+
+  it('no census inside SCAN_INTERVAL_MS: a pass 10 minutes on audits nothing new', () => {
+    const box = auditBox('ccrc-hist-audit-d-', false);
+    expect(metaOf(box, 'journal_audit_ms'), 'the creating pass audited an empty store').toMatch(/^[0-9]+$/);
+    const at = metaOf(box, 'journal_audit_ms');
+    expect(runDriver(box, { offsetMs: 10 * MIN, managedSettings: [] }).code).toBe(0);
+    expect(metaOf(box, 'journal_audit_ms')).toBe(at);
+  });
+
+  it('verdicts still in the outbox are not missing: an audit pass whose journal cannot be appended skips, and runs once the outbox empties', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();   // root writes into a 0500 directory regardless of its mode (Task 15's rule)
+    const box = auditBox('ccrc-hist-audit-e-', false);
+    for (const f of monthFiles(box)) {
+      const kept = fs.readFileSync(f, 'utf8').split('\n').filter((l) => !l.includes('"k":"verdict"')).join('\n');
+      fs.writeFileSync(f, kept);
+    }
+    const before = metaOf(box, 'journal_audit_ms');
+    expect(before, 'the creating pass audited an empty store').toMatch(/^[0-9]+$/);
+    const db = new DatabaseSync(paths(box).db);
+    try {
+      db.prepare('INSERT INTO journal_outbox (rec) VALUES (?)').run(journalRecord('verdict', Date.now(), { event_key: 'none', kind: 'drained', file: 'x.1.1.jsonl' }));
+    } finally { db.close(); }
+    // The pass clock is read into NEXT month, so its flush must create a new month file; a 0500 store directory
+    // refuses that (fixModes never chmods a directory, so the refusal stands), while the old month files stay
+    // readable for the audit. A chmod of the month file itself would be undone by the pass's fixModes.
+    const dir = path.dirname(monthFiles(box)[0]!);
+    const nowD = new Date();
+    const nextMonth = Date.UTC(nowD.getUTCFullYear(), nowD.getUTCMonth() + 1, 1);
+    const offset = nextMonth - Date.now() + 31 * MIN;
+    fs.chmodSync(dir, 0o500);
+    try {
+      const skipped = runDriver(box, { offsetMs: offset, managedSettings: [] });
+      expect(skipped.code, skipped.stderr).toBe(0);
+      expect(countOf(box, 'journal_outbox'), 'the flush could not append, so the row waits').toBe(1);
+      expect(counter(box, 'journal_write_failed'), 'the refusal was counted').toBeGreaterThan(0);
+      expect(counter(box, 'journal_missing_verdict'), 'an in-flight verdict is not a missing one').toBe(0);
+      expect(metaOf(box, 'journal_audit_ms'), 'the audit skipped').toBe(before);
+    } finally {
+      fs.chmodSync(dir, 0o700);
+    }
+    expect(runDriver(box, { offsetMs: offset + 31 * MIN, managedSettings: [] }).code).toBe(0);
+    expect(countOf(box, 'journal_outbox'), 'CONTROL: the next flush empties it').toBe(0);
+    expect(Number(metaOf(box, 'journal_audit_ms')), 'and the audit runs').toBeGreaterThan(Number(before));
+  });
+});
+
+describe('W1-j / §9.2 step 2: an unreadable roster skips the census', () => {
+  it('a pass with --roster-unreadable and no homes records no retention, no census and no export count; a readable pass then does', () => {
+    const box = makeHistoryBox('ccrc-hist-o38-roster-', { role: 'fleet', shim: true });
+    const r = runSweep(box, ['--roster-unreadable'], { homes: [] });
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.existsSync(paths(box).db), 'the store is still created under an unreadable roster').toBe(true);
+    expect(metaOf(box, 'census_ms')).toBeNull();
+    expect(metaOf(box, 'retention_min')).toBeNull();
+    expect(metaOf(box, 'export_census_ms')).toBeNull();
+    expect(q<{ n: number }>(box, 'SELECT count(*) AS n FROM derivation_state WHERE step = ?', 'export-census')[0]!.n).toBe(0);
+    const ok = runDriver(box, { offsetMs: 31 * MIN, managedSettings: [] });
+    expect(ok.code, ok.stderr).toBe(0);
+    expect(metaOf(box, 'census_ms'), 'CONTROL: a readable roster runs it').toMatch(/^[0-9]+$/);
+    expect(metaOf(box, 'retention_min')).toBe('30');
   });
 });

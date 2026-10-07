@@ -45,6 +45,7 @@ import {
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
   SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, redactField,
   REASONS, WRITING_FORMS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker,
+  HARNESS_TABLE, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
 } from './lib.mjs';
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -1742,6 +1743,7 @@ export async function scheduledPass(parsed, deps, out) {
     // (an ingest that returned busy rather than throwing) ends them the same way, through the catch.
     if (busy) return EXIT.OK;
     try {
+      periodicCensus(db, ctx);
       setMeta(db, 'journal_unwritable', counterOf(db, 'journal_write_failed') > failedAtStart ? String(now()) : '');
     } catch (e) {
       if (!isBusy(e)) throw e;
@@ -3539,6 +3541,277 @@ export async function runOpPass(parsed, deps, out) {
     rmSync(P.op, { force: true });
     closeWriter(db);
   }
+}
+
+// ── THE PERIODIC CENSUS (Task 26) ─────────────────────────────────────────────────────────────────
+// Every SCAN_INTERVAL_MS the pass re-reads each rostered home's retention, starts a census of the export's
+// due and overdue blobs, and audits the journal (§9.2 step 2). It ships in W1-B1, before the export itself
+// (W1-B4), so doctor can see the gap (§9.15 "The gap guard"): `export-due` WARNs from the first due blob,
+// `export-overdue` FAILs on measured source loss (slug history-export-due-escalates). Due-ness is the
+// ruled rule through lib.mjs's planExport and its default reducer, the shortest retention over the rostered
+// homes (Q15 is open; a yes swaps one reducer, never this input). Only the sweep parses the journal (§9.14).
+// Departures carried here: D-4207 (history-export-due-escalates: the overdue count on measured source loss),
+// D-4208 (history-export-row-age-early: a NULL-ts row ages by its newest holding file), D-4209
+// (history-harness-seam-named: retention through HARNESS_TABLE), D-4210 (history-retention-read-from-settings:
+// each home's settings.json plus the managed settings, an unreadable home keeping its last value).
+
+const DAY_MS = 86_400_000;
+const EXPORT_CENSUS_CHUNK = 2000;
+
+/** The managed-settings sources Claude Code reads on Linux (§9.15, M from the 2.1.289 bundle): the file, and
+ *  every *.json in the drop-in directory beside it (an entry ending `.d`). Tests inject their own list
+ *  through deps.managedSettings — an in-process dependency, never an env var (slug history-test-seams-not-env). */
+export const MANAGED_SETTINGS = Object.freeze(['/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-settings.d']);
+
+/** A file as lib.mjs's Readable: absent, unreadable, or its text. Never folded (IV5). */
+function readable(p) {
+  try {
+    return { state: 'text', text: readFileSync(p, 'utf8') };
+  } catch (e) {
+    return e !== null && typeof e === 'object' && e.code === 'ENOENT' ? { state: 'absent' } : { state: 'unreadable' };
+  }
+}
+
+/** Every managed-settings source as a Readable, a drop-in directory expanded to its *.json files (sorted). */
+function managedReadables(list) {
+  const out = [];
+  for (const p of list) {
+    if (!p.endsWith('.d')) { out.push(readable(p)); continue; }
+    let entries;
+    try {
+      entries = readdirSync(p).filter((n) => n.endsWith('.json')).sort();
+    } catch (e) {
+      if (!(e !== null && typeof e === 'object' && e.code === 'ENOENT')) out.push({ state: 'unreadable' });
+      continue;
+    }
+    for (const n of entries) out.push(readable(join(p, n)));
+  }
+  return out;
+}
+
+/** §9.15 "The horizon, per source harness": each rostered home's retention through HARNESS_TABLE's
+ *  claude-code reader. A measured value is kept per home in meta; an unreadable file or a value that is not a
+ *  positive integer is `retention_unmeasured`, and that home keeps its LAST measured value — 30 only when it
+ *  was never measured (BK9, RC6) — so one failed read never makes a blob due early. Returns home → days. */
+export function retentionCensus(db, homes, managedList) {
+  const managed = managedReadables(managedList);
+  const days = {};
+  for (const h of homes) {
+    const lastRaw = getMeta(db, `retention:${h}`);
+    const last = lastRaw !== null && /^[1-9][0-9]*$/.test(lastRaw) ? Number(lastRaw) : null;
+    const r = HARNESS_TABLE['claude-code'].retention({ home: readable(join(h, 'settings.json')), managed, lastDays: last });
+    if (r.state === 'unmeasured') bump(db, 'retention_unmeasured');
+    else setMeta(db, `retention:${h}`, String(r.days));
+    setMeta(db, `retention_state:${h}`, r.state);
+    days[h] = r.days;
+  }
+  const values = Object.values(days);
+  setMeta(db, 'retention_min', values.length > 0 ? String(Math.min(...values)) : '');
+  const lowered = retentionLowered(days);
+  setMeta(db, 'retention_lowered', lowered === null ? '' : JSON.stringify(lowered));
+  return days;
+}
+
+/** A derivation step's JSON cursor (derivation_state), or null when none is in progress. */
+function stepCursorGet(db, step) {
+  const row = db.prepare('SELECT cursor FROM derivation_state WHERE step = ? AND version = 1').get(step);
+  if (row === undefined || row.cursor === null) return null;
+  try { return JSON.parse(row.cursor); } catch { return null; }
+}
+function stepCursorSet(db, step, state) {
+  db.prepare('INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES (?, 1, ?, NULL) '
+    + 'ON CONFLICT (step, version) DO UPDATE SET cursor = excluded.cursor, completed_ms = NULL').run(step, JSON.stringify(state));
+}
+function stepCursorDone(db, step, state, nowMs) {
+  db.prepare('INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES (?, 1, ?, ?) '
+    + 'ON CONFLICT (step, version) DO UPDATE SET cursor = excluded.cursor, completed_ms = excluded.completed_ms')
+    .run(step, state === null ? null : JSON.stringify(state), nowMs);
+}
+
+/** Every holding file the census needs, measured ONCE per pass: per transcript, its files' homes,
+ *  presence and mtime — planExport's file clock. A referrer's holding files are its TRANSCRIPT's files, not
+ *  its own copies through memberships (D-4248,
+ *  history-export-holding-files-by-transcript: it can err early or late; the per-row set is W1-B4's). A retired or exported row is a file known gone (§9.2, §9.15); a recorded
+ *  mtime stands in for a file that no longer stats. ns columns are divided in SQL, so no value past 2^53
+ *  reaches JavaScript. */
+function transcriptFiles(db, homes) {
+  const byTranscript = new Map();
+  const st = db.prepare('SELECT f.transcript_pk, f.source_key, f.mtime_ns / 1000000 AS mtime_ms, p.path '
+    + 'FROM ingest_files f LEFT JOIN file_paths p ON p.file_id = f.file_id');
+  for (const r of st.iterate()) {
+    let present = false;
+    let mtimeMs = r.mtime_ms ?? 0;
+    if (r.path !== null && r.source_key === '') {
+      try {
+        const s = statSync(r.path);
+        present = s.isFile();
+        mtimeMs = s.mtimeMs;
+      } catch { present = false; }
+    }
+    const files = byTranscript.get(r.transcript_pk) ?? [];
+    files.push({ home: r.path === null ? null : homeOfPath(r.path, homes), mtimeMs, present });
+    byTranscript.set(r.transcript_pk, files);
+  }
+  return byTranscript;
+}
+
+/** The candidate blobs of one chunk: unexported, unpruned, past the cursor, with at least one referrer old
+ *  enough to be due — or with NULL ts_ms, which here is NEVER "never old" (§9.15: the opposite of prune's
+ *  rule, so its holding file's mtime decides). A blob is due only when EVERY referrer is, which planExport
+ *  decides; this is only the prefilter. The partial index blobs_unexported serves the outer scan. */
+const EXPORT_CANDIDATES_SQL = 'SELECT b.blob_id FROM blobs b WHERE b.exported_ms IS NULL AND b.z IS NOT NULL AND b.blob_id > ? AND ('
+  + 'EXISTS (SELECT 1 FROM entries e WHERE e.blob_id = b.blob_id AND (e.ts_ms IS NULL OR e.ts_ms < ?)) '
+  + 'OR EXISTS (SELECT 1 FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id WHERE v.blob_id = b.blob_id AND (e.ts_ms IS NULL OR e.ts_ms < ?)) '
+  + 'OR EXISTS (SELECT 1 FROM sidecars s LEFT JOIN entries e ON e.entry_id = s.entry_id WHERE s.blob_id = b.blob_id AND (e.ts_ms IS NULL OR e.ts_ms < ?)) '
+  + 'OR EXISTS (SELECT 1 FROM boundaries d JOIN entries e ON e.entry_id = d.entry_id WHERE d.kept_blob_id = b.blob_id AND (e.ts_ms IS NULL OR e.ts_ms < ?))'
+  + ') ORDER BY b.blob_id LIMIT ?';
+/** The referrers of every blob in one chunk's id range, each with its blob, its age and its transcript (§9.15
+ *  "A blob is due"): entries, entry_variants and sidecars aging by their entry, and boundaries.kept_blob_id
+ *  aging by its boundary's entry. Read ONCE per chunk over the chunk's [first, last] blob ids, never once per
+ *  blob: only entries has an index led by its blob column (entries_blob), so a per-blob statement would scan
+ *  entry_variants, sidecars and boundaries for every candidate. Rows of a blob in the range that is not a
+ *  candidate are dropped in JavaScript. */
+const EXPORT_REFERRERS_SQL = 'SELECT e.blob_id AS blob_id, e.ts_ms AS ts_ms, e.transcript_pk AS transcript_pk FROM entries e WHERE e.blob_id BETWEEN ? AND ? '
+  + 'UNION ALL SELECT v.blob_id, e.ts_ms, e.transcript_pk FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id WHERE v.blob_id BETWEEN ? AND ? '
+  + 'UNION ALL SELECT s.blob_id, e.ts_ms, s.transcript_pk FROM sidecars s LEFT JOIN entries e ON e.entry_id = s.entry_id WHERE s.blob_id BETWEEN ? AND ? '
+  + 'UNION ALL SELECT d.kept_blob_id, e.ts_ms, e.transcript_pk FROM boundaries d JOIN entries e ON e.entry_id = d.entry_id WHERE d.kept_blob_id BETWEEN ? AND ?';
+
+/** The export census (§9.15, W1-k): from the ('export-census', 1) cursor, in chunks, within the run budget,
+ *  count the due blobs and, among them, the overdue ones; on completion record them with the W1-k dates.
+ *  Returns true when complete (or when no census is in progress). */
+export function exportCensus(db, nowMs, budget) {
+  const state = stepCursorGet(db, 'export-census');
+  if (state === null) return true;
+  const homes = Object.keys(state.homeDays);
+  const minDays = Math.min(...Object.values(state.homeDays));
+  const minHome = homes.find((h) => state.homeDays[h] === minDays);
+  const horizonDays = exportHorizonDays(minDays);
+  const cutoff = nowMs - horizonDays * DAY_MS;
+  const files = transcriptFiles(db, homes);
+  const candidates = db.prepare(EXPORT_CANDIDATES_SQL);
+  const referrers = db.prepare(EXPORT_REFERRERS_SQL);
+  for (;;) {
+    if (!budgetLeft(budget)) {
+      stepCursorSet(db, 'export-census', state);
+      return false;
+    }
+    const ids = candidates.all(state.last, cutoff, cutoff, cutoff, cutoff, EXPORT_CENSUS_CHUNK);
+    if (ids.length === 0) break;
+    const lo = ids[0].blob_id;
+    const hi = ids[ids.length - 1].blob_id;
+    const wanted = new Set(ids.map((r) => r.blob_id));
+    const byBlob = new Map();
+    for (const r of referrers.iterate(lo, hi, lo, hi, lo, hi, lo, hi)) {
+      if (!wanted.has(r.blob_id)) continue;
+      const list = byBlob.get(r.blob_id) ?? [];
+      list.push({
+        tsMs: r.ts_ms,
+        files: (files.get(r.transcript_pk) ?? []).map((f) => ({ home: f.home ?? minHome, mtimeMs: f.mtimeMs, present: f.present })),
+      });
+      byBlob.set(r.blob_id, list);
+    }
+    const blobs = ids.map(({ blob_id: id }) => ({ key: String(id), referrers: byBlob.get(id) ?? [] }));
+    const plan = planExport({ nowMs, homeRetentionDays: state.homeDays, blobs });
+    state.due += plan.due.length;
+    state.overdue += plan.overdue.length;
+    state.last = ids[ids.length - 1].blob_id;
+    stepCursorSet(db, 'export-census', state);
+  }
+  // W1-k: the oldest unexported row, its due date by the row clock, and the file clock's first deletion date.
+  const oldest = db.prepare('SELECT min(ts_ms) AS m FROM entries WHERE exported_ms IS NULL').get().m;
+  let firstDeletion = null;
+  for (const list of files.values()) {
+    for (const f of list) {
+      if (!f.present) continue;
+      const at = f.mtimeMs + (state.homeDays[f.home ?? minHome] ?? minDays) * DAY_MS;
+      if (firstDeletion === null || at < firstDeletion) firstDeletion = at;
+    }
+  }
+  setMeta(db, 'export_due', String(state.due));
+  setMeta(db, 'export_overdue', String(state.overdue));
+  setMeta(db, 'export_census_ms', String(nowMs));
+  setMeta(db, 'oldest_row_ms', oldest === null ? '' : String(oldest));
+  setMeta(db, 'first_due_ms', oldest === null ? '' : String(oldest + horizonDays * DAY_MS));
+  setMeta(db, 'first_deletion_ms', firstDeletion === null ? '' : String(Math.round(firstDeletion)));
+  stepCursorDone(db, 'export-census', null, nowMs);
+  return true;
+}
+
+/** The verdict kinds that chain or map an epoch: each epochs row needs one (§9.14, W1-j). */
+const EPOCH_VERDICT_KINDS = new Set(['epoch-confirmed', 'epoch-chained', 'mapping']);
+
+/** The journal audit (§9.2 step 2, W1-j; rev 3.2 review, DI8): every spool_receipts row has its `spool`
+ *  record, every family and every chained epoch its `verdict`, every redact_hashes row its `redact` record.
+ *  Incremental by rowid from the ('journal-audit', 1) cursor; one streaming read of this store's journal
+ *  (journal/<store_id>/ only — another store's directory is never read), bounded by the run's wall clock.
+ *  Skipped while journal_outbox holds rows (their verdicts are still in flight). Folds journal_missing_*
+ *  and records journal_skipped (malformed or unknown lines seen) and journal_growth_30d (bytes appended in
+ *  the trailing 30 days). Returns true when it ran to the end. */
+export function journalAudit(db, ctx, nowMs) {
+  // unreachable from periodicCensus: scheduledPass answers 'held' before the tick when ids is null (Task 24); this
+  // narrows ctx.ids for the dereference below, so it has no pin of its own (Task 24's held-before-tick case covers it).
+  if (ctx.ids === null) return false;
+  // Pinned by 'verdicts still in the outbox are not missing' (history-op.test.ts): a tick whose journal append failed
+  // leaves its verdicts queued, and an audit run over them would count each one as journal_missing_verdict.
+  if (db.prepare('SELECT count(*) AS n FROM journal_outbox').get().n > 0) return false;
+  const cur = stepCursorGet(db, 'journal-audit') ?? { receipts: 0, sessions: 0, epochs: 0, redact: 0 };
+  const next = { ...cur };
+  const want = { spool: new Set(), family: new Set(), epoch: new Set(), redact: new Set() };
+  const sReceipts = db.prepare('SELECT rowid AS rid, event_key FROM spool_receipts WHERE rowid > ? ORDER BY rowid');
+  for (const r of sReceipts.iterate(cur.receipts)) { want.spool.add(r.event_key); next.receipts = r.rid; }
+  const sSessions = db.prepare('SELECT session_pk AS rid, ccrc_id, generation FROM sessions WHERE session_pk > ? ORDER BY session_pk');
+  for (const r of sSessions.iterate(cur.sessions)) { want.family.add(`${r.ccrc_id}\0${r.generation}`); next.sessions = r.rid; }
+  const sEpochs = db.prepare('SELECT e.rowid AS rid, s.ccrc_id, e.cc_session_uuid FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE e.rowid > ? ORDER BY e.rowid');
+  for (const r of sEpochs.iterate(cur.epochs)) { want.epoch.add(`${r.ccrc_id}\0${r.cc_session_uuid}`); next.epochs = r.rid; }
+  const sRedact = db.prepare('SELECT rowid AS rid, len, sha256 FROM redact_hashes WHERE rowid > ? ORDER BY rowid');
+  for (const r of sRedact.iterate(cur.redact)) { want.redact.add(`${r.len}\0${Buffer.from(r.sha256).toString('hex')}`); next.redact = r.rid; }
+  const dir = join(ctx.paths.journalDir, ctx.ids.storeId);
+  const files = listNames(dir).filter((n) => /^[0-9]{4}-[0-9]{2}\.[0-9a-f]{8}\.jsonl$/.test(n)).sort();
+  const since = nowMs - 30 * DAY_MS;
+  let skipped = 0;
+  let growth = 0;
+  for (const f of files) {
+    if (!withinBudget({ elapsedMs: ctx.budget.now() - ctx.budget.startMs, bytes: 0, maxMs: ctx.budget.maxMs })) return false;
+    let text;
+    try { text = readFileSync(join(dir, f), 'utf8'); } catch { return false; }
+    let draining = null;
+    for (const line of text.split('\n')) {
+      if (line === '') continue;
+      const p = parseJournalRecord(line);
+      if (p.kind !== 'record') { skipped += 1; continue; }
+      const rec = p.rec;
+      if (rec.t >= since) growth += Buffer.byteLength(line) + 1;
+      if (rec.k === 'file') draining = rec.name;
+      else if (rec.k === 'spool' && draining !== null) want.spool.delete(eventKey(draining, rec.ord));
+      else if (rec.k === 'redact') want.redact.delete(`${rec.len}\0${rec.sha256}`);
+      else if (rec.k === 'verdict' && rec.kind === 'family') want.family.delete(`${rec.ccrc_id}\0${rec.generation}`);
+      else if (rec.k === 'verdict' && EPOCH_VERDICT_KINDS.has(rec.kind)) want.epoch.delete(`${rec.ccrc_id}\0${rec.cc_session_uuid}`);
+    }
+  }
+  if (want.spool.size > 0) bump(db, 'journal_missing_spool', want.spool.size);
+  if (want.family.size + want.epoch.size > 0) bump(db, 'journal_missing_verdict', want.family.size + want.epoch.size);
+  if (want.redact.size > 0) bump(db, 'journal_missing_redact', want.redact.size);
+  stepCursorDone(db, 'journal-audit', next, nowMs);
+  setMeta(db, 'journal_audit_ms', String(nowMs));
+  setMeta(db, 'journal_skipped', String(skipped));
+  setMeta(db, 'journal_growth_30d', String(growth));
+  return true;
+}
+
+/** The periodic census, run by every scheduled pass after its tick (a pause included: it only reads and
+ *  counts). An unreadable roster skips it (§9.2 step 2). A census in progress continues every pass until
+ *  complete; a new one starts once SCAN_INTERVAL_MS has passed since the last start. */
+export function periodicCensus(db, ctx) {
+  if (ctx.homes.length === 0) return;
+  const nowMs = ctx.now();
+  const last = Number(getMeta(db, 'census_ms') ?? 0);
+  if (nowMs - last >= SCAN_INTERVAL_MS && stepCursorGet(db, 'export-census') === null) {
+    const homeDays = retentionCensus(db, ctx.homes, ctx.deps.managedSettings ?? MANAGED_SETTINGS);
+    stepCursorSet(db, 'export-census', { last: 0, due: 0, overdue: 0, homeDays, startMs: nowMs });
+    setMeta(db, 'census_ms', String(nowMs));
+    journalAudit(db, ctx, nowMs);
+  }
+  exportCensus(db, nowMs, ctx.budget);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
