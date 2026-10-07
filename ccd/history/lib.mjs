@@ -2220,13 +2220,19 @@ export function deriveHealth(h) {
   }
   const opLive = h.op !== null && h.op.alive === true;
   if (opLive) warn.push(item('op-running', `an operator pass (${h.op.verb}, pid ${h.op.pid}) holds the sweep lock; no tick runs meanwhile`));
-  const b = h.bytesBehindLast3;
-  const catching = b.length === CATCHING_UP_TICKS && b.every((v, i) => i === 0 || b[i - 1] > v);
-  if (catching) warn.push(item('catching-up', `the backlog is falling: ${b[b.length - 1]} bytes behind, from ${b[0]} ${CATCHING_UP_TICKS} ticks ago`));
+  // D-4314 (history-doctor-states-need-a-fresh-tick): catching-up and recovering hold the freshness FAILs only
+  // while the last tick is fresh. Their evidence (the last three ticks rows; recover_unmoved_ticks, which grows
+  // only while ticks run) stops changing when the sweep dies, so a timer dead mid-backfill would read as a WARN
+  // for ever (§9.6 step 4; FE3: a RUNNING sweep in catch-up is not stale). `off` and `op-running` are an
+  // operator switch and a live marker, not tick evidence, so they hold regardless.
   const tickAge = h.lastTickMs === null ? null : h.nowMs - h.lastTickMs;
+  const tickFresh = tickAge !== null && tickAge <= TICK_STALE_MS;
+  const b = h.bytesBehindLast3;
+  const catching = tickFresh && b.length === CATCHING_UP_TICKS && b.every((v, i) => i === 0 || b[i - 1] > v);
+  if (catching) warn.push(item('catching-up', `the backlog is falling: ${b[b.length - 1]} bytes behind, from ${b[0]} ${CATCHING_UP_TICKS} ticks ago`));
   const lagUnmeasured = h.lagS === null && tickAge !== null && tickAge < TICK_STALE_MS;
   if (lagUnmeasured) warn.push(item('lag-unmeasured', 'lag is unmeasured: not every file has reached its end once yet'));
-  const stateHeld = h.historyOff || h.recovering !== null || opLive || catching || lagUnmeasured;
+  const stateHeld = h.historyOff || (h.recovering !== null && tickFresh) || opLive || catching || lagUnmeasured;
 
   // 4. the FAILs.
   if (!stateHeld) {

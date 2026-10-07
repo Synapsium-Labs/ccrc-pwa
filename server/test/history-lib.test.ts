@@ -2090,6 +2090,35 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     expect(words(flat, 'warn')).not.toContain('catching-up');
     expect(words(flat, 'fail')).toContain('lag-high');
   });
+  // D-4314 (history-doctor-states-need-a-fresh-tick): catching-up and recovering are held states only while the
+  // sweep is RUNNING; their evidence (the last three ticks rows, recover_unmoved_ticks) stops changing when it dies.
+  it('a falling backlog or a moving recovery step holds the freshness FAILs only under a fresh tick; a 3 h old tick is the tick-stale FAIL (D-4314)', () => {
+    const fallingFresh = healthLib.deriveHealth(base({ bytesBehindLast3: [300, 200, 100], lagS: 7200, lastTickMs: NOW - 2 * MIN }));
+    expect(words(fallingFresh, 'warn')).toContain('catching-up');
+    expect(words(fallingFresh, 'fail')).toEqual([]);
+    const fallingDead = healthLib.deriveHealth(base({ bytesBehindLast3: [300, 200, 100], lagS: 7200, lastTickMs: NOW - 180 * MIN }));
+    expect(words(fallingDead, 'fail')).toContain('tick-stale');
+    expect(words(fallingDead, 'warn')).not.toContain('catching-up');
+    const recoveringFresh = healthLib.deriveHealth(base({ recovering: { ...RECOVER, cursorUnmovedTicks: 2 }, lastTickMs: NOW - 2 * MIN }));
+    expect(words(recoveringFresh, 'warn')).toContain('recovering');
+    expect(words(recoveringFresh, 'fail')).toEqual([]);
+    const recoveringDead = healthLib.deriveHealth(base({ recovering: { ...RECOVER, cursorUnmovedTicks: 2 }, lastTickMs: NOW - 180 * MIN }));
+    expect(words(recoveringDead, 'fail')).toContain('tick-stale');
+  });
+  it('the fresh-tick bound is TICK_STALE_MS inclusive: a catching-up sweep exactly at it is held, one millisecond past it is stale (D-4314)', () => {
+    const at = healthLib.deriveHealth(base({ bytesBehindLast3: [300, 200, 100], lastTickMs: NOW - healthLib.TICK_STALE_MS }));
+    expect(words(at, 'fail')).toEqual([]);
+    const past = healthLib.deriveHealth(base({ bytesBehindLast3: [300, 200, 100], lastTickMs: NOW - healthLib.TICK_STALE_MS - 1 }));
+    expect(words(past, 'fail')).toEqual(['tick-stale']);
+  });
+  it('a held state with no tick at all is the tick-stale FAIL too: nothing ran to hold the verdict (D-4314)', () => {
+    const none = healthLib.deriveHealth(base({ recovering: { ...RECOVER, cursorUnmovedTicks: 2 }, lastTickMs: null, shimMtimeMs: NOW - 60 * MIN }));
+    expect(words(none, 'fail')).toContain('tick-stale');
+  });
+  it('off and a live op marker stay held with a 3 h old tick: neither is tick evidence (D-4314)', () => {
+    expect(words(healthLib.deriveHealth(base({ historyOff: true, lastTickMs: NOW - 180 * MIN })), 'fail')).toEqual([]);
+    expect(words(healthLib.deriveHealth(base({ op: { verb: 'backup', pid: 4242, alive: true }, lastTickMs: NOW - 180 * MIN })), 'fail')).toEqual([]);
+  });
   it('lag unmeasured with a tick younger than 10 min is WARN lag-unmeasured; with a stale tick it is the stale-tick FAIL', () => {
     expect(words(healthLib.deriveHealth(base({ lagS: null, lastTickMs: NOW - 2 * MIN })), 'warn')).toContain('lag-unmeasured');
     const stale = healthLib.deriveHealth(base({ lagS: null, lastTickMs: NOW - 12 * MIN }));
@@ -2097,7 +2126,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     expect(words(stale, 'fail')).toContain('tick-stale');
   });
   it('a recovery step is WARN recovering; unmoved for 15 ticks it is FAIL recovery-stalled; held by the floor or the off-switch it stays a WARN', () => {
-    const moving = healthLib.deriveHealth(base({ recovering: { ...RECOVER, cursorUnmovedTicks: 14 }, lastTickMs: NOW - 30 * MIN }));
+    const moving = healthLib.deriveHealth(base({ recovering: { ...RECOVER, cursorUnmovedTicks: 14 }, lastTickMs: NOW - 2 * MIN }));
     expect(words(moving, 'warn')).toContain('recovering');
     expect(words(moving, 'fail')).toEqual([]);
     expect(words(healthLib.deriveHealth(base({ recovering: { ...RECOVER, cursorUnmovedTicks: 15 } })), 'fail')).toContain('recovery-stalled');
