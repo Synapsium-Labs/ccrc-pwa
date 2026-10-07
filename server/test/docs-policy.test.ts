@@ -571,3 +571,210 @@ describe('own keys only (the guard behind every parsed value)', () => {
     expect(parseDocsApiQuery('tree', inherited)).toStrictEqual({ ok: true, req: { route: 'tree', ref: null } });
   });
 });
+
+// ===== Task 4: read-lane admission, wire estimates, cache-control and the response-header verdict =====
+// M6.1 (`laneAdmit`, section 6.3's four clauses), M6.4 (a wire estimate reads server facts only, section 6.2),
+// section 6.6's browser-cache table (`cacheControlFor`) and section 5.3's onSend hook as an L1 verdict
+// (`docsSendPolicy`, refinement (m)). The lane constants are refinement (l)'s; their derived inequalities
+// (`showWire(class cap) <= DOCS_LANE_BYTES`, `DOCS_LANE_QUEUE >= DOCS_MAX_IMAGES_PER_PAGE + 2`) are Task 5's
+// `docs-budget.test.ts`. Every expected number and string below is written out from the spec, never read back from
+// `policy.ts`; the four L0 response headers are read from `shared/docs.ts`, their one home.
+//
+// Imports sit here for Task 3's reason: no line above this block moves.
+import {
+  DOCS_CACHE_IMMUTABLE, DOCS_CACHE_NO_STORE, DOCS_JSON_CONTENT_TYPE, DOCS_LANE_BYTES, DOCS_LANE_EXECS,
+  DOCS_LANE_LARGE_RAW, DOCS_LANE_MAX_WAIT_MS, DOCS_LANE_QUEUE, LISTING_JOB, cacheControlFor, docsSendPolicy,
+  docsShowPlan, laneAdmit, showRawBound, showWire,
+  type DocsJob, type DocsSendVerdict, type LaneLoad,
+} from '../src/docs/policy.js';
+import {
+  DOCS_ALLOWED_CONTENT_TYPES, DOCS_CLASS_CAP, DOCS_RESPONSE_HEADERS, type DocContentClass,
+} from '../../shared/docs.js';
+
+/** `policy.ts`'s text, for the two source pins below (a constant's own literal, the class-cap lookup). */
+const T4_POLICY_SRC = readFileSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'docs', 'policy.ts'), 'utf8');
+
+describe('the read-lane constants (refinement (l), section 6.3)', () => {
+  it('each has the value the spec gives it', () => {
+    expect(DOCS_LANE_EXECS).toBe(2);
+    expect(DOCS_LANE_BYTES).toBe(3145728);
+    expect(DOCS_LANE_LARGE_RAW).toBe(1048576);
+    expect(DOCS_LANE_QUEUE).toBe(32);
+    expect(DOCS_LANE_MAX_WAIT_MS).toBe(10000);
+  });
+
+  it('each is its own integer literal, never an alias of a neighbour that holds the same number', () => {
+    // DOCS_LANE_LARGE_RAW equals DOCS_MAX_LISTING_WIRE_BYTES today; tying them would let a listing-bound change move
+    // the lane's large-answer threshold (W1's rule for the caps in shared/docs.ts, section (B)).
+    const lines = T4_POLICY_SRC.split('\n');
+    for (const line of [
+      'export const DOCS_LANE_EXECS = 2;',
+      'export const DOCS_LANE_BYTES = 3145728;',
+      'export const DOCS_LANE_LARGE_RAW = 1048576;',
+      'export const DOCS_LANE_QUEUE = 32;',
+      'export const DOCS_LANE_MAX_WAIT_MS = 10000;',
+    ]) expect(lines, line).toContain(line);
+  });
+});
+
+describe("laneAdmit (M6.1): section 6.3's four clauses, in order", () => {
+  const load = (execs: number, bytes: number, large: number): LaneLoad => ({ execs, bytes, large });
+  const job = (raw: number, wire: number): DocsJob => ({ raw, wire });
+
+  it.each([
+    ['an idle lane admits one job over the byte budget and over the large threshold', load(0, 0, 0),
+      job(4194304, 5657944), true],
+    ['one exec in flight admits a small job (the control for the next row)', load(1, 0, 0), job(1, 65540), true],
+    ['execs at DOCS_LANE_EXECS refuse', load(2, 0, 0), job(1, 65540), false],
+    ['execs past DOCS_LANE_EXECS refuse', load(3, 0, 0), job(1, 65540), false],
+    ['bytes plus wire exactly at DOCS_LANE_BYTES admit', load(1, 3145728 - 65540, 0), job(1, 65540), true],
+    ['bytes plus wire one byte over DOCS_LANE_BYTES refuse', load(1, 3145728 - 65539, 0), job(1, 65540), false],
+    ['a second answer over 1 MiB refuses', load(1, 0, 1), job(1048577, 1463640), false],
+    ['an answer of exactly 1 MiB beside a large one admits (over, not at)', load(1, 0, 1), job(1048576, 1463640), true],
+    ['a large answer with no large one running admits', load(1, 0, 0), job(1048577, 1463640), true],
+  ] as const)('%s', (_what, l, j, want) => {
+    expect(laneAdmit(l, j)).toBe(want);
+  });
+});
+
+describe('wire estimates read server facts only (M6.4, section 6.2)', () => {
+  it.each([
+    ['an unknown size is the class cap', 2097152, undefined, 2097152],
+    ['a listed size lowers it', 2097152, 100, 100],
+    ['a listed size of 0 is a fact, not an unknown', 2097152, 0, 0],
+    ['a listed size over the cap never raises it', 2097152, 5000000, 2097152],
+    ['a listed size equal to the cap is the cap', 2097152, 2097152, 2097152],
+  ] as const)('showRawBound: %s', (_what, cap, size, want) => {
+    expect(showRawBound(cap, size)).toBe(want);
+  });
+
+  it.each([
+    [0, 65536], [1, 65540], [3, 65540], [4, 65544], [1000, 66872], [1048576, 1463640], [2097152, 2861740],
+    [4194304, 5657944],
+  ] as const)('showWire(%i) = %i: 4 * ceil(raw / 3) plus the 64 KiB envelope', (raw, wire) => {
+    expect(showWire(raw)).toBe(wire);
+  });
+
+  it('LISTING_JOB is the framed listing bound on both sides, and frozen: one shared object, never a caller\'s', () => {
+    expect(LISTING_JOB).toStrictEqual({ raw: 1048576, wire: 1048576 });
+    expect(Object.isFrozen(LISTING_JOB)).toBe(true);
+  });
+
+  it.each([
+    ['a.md', undefined, { cls: 'markdown', maxBytes: 2097152, job: { raw: 2097152, wire: 2861740 } }],
+    ['a.png', 1000, { cls: 'raster', maxBytes: 2097152, job: { raw: 1000, wire: 66872 } }],
+    ['dir/b.svg', 5000000, { cls: 'svg', maxBytes: 2097152, job: { raw: 2097152, wire: 2861740 } }],
+    ['a.html', 0, { cls: 'html', maxBytes: 2097152, job: { raw: 0, wire: 65536 } }],
+    ['a.json', 3, { cls: 'text', maxBytes: 2097152, job: { raw: 3, wire: 65540 } }],
+    ['a.pdf', undefined, { cls: 'other', maxBytes: 2097152, job: { raw: 2097152, wire: 2861740 } }],
+  ] as const)('docsShowPlan(%j, %j)', (p, size, want) => {
+    expect(docsShowPlan(p, size)).toStrictEqual(want);
+  });
+
+  it("docsShowPlan's --max-bytes is the path's class cap, for every class", () => {
+    const byClass: readonly (readonly [string, DocContentClass])[] = [
+      ['a.md', 'markdown'], ['a.png', 'raster'], ['a.svg', 'svg'], ['a.html', 'html'], ['a.txt', 'text'],
+      ['a.pdf', 'other'],
+    ];
+    for (const [p, cls] of byClass) expect(docsShowPlan(p, undefined).maxBytes, p).toBe(DOCS_CLASS_CAP[cls]);
+  });
+
+  it('reads the cap through DOCS_CLASS_CAP[cls]: the class caps are equal today, so no value tells them apart', () => {
+    expect(T4_POLICY_SRC.split('\n')).toContain('  const maxBytes = DOCS_CLASS_CAP[cls];');
+  });
+
+  it('a size sent by the client never reaches an estimate: the query refuses it, and a parsed pin carries none', () => {
+    expect(parseDocsApiQuery('file', form(`${COMMITTED_Q}&size=1`))).toStrictEqual(badQuery('unknown', 'size'));
+    expect(parseDocsApiQuery('file', form(`${COMMITTED_Q}&maxBytes=1`))).toStrictEqual(badQuery('unknown', 'maxBytes'));
+    const parsed = parseDocsApiQuery('file', form(COMMITTED_Q));
+    if (!parsed.ok || parsed.req.route !== 'file') throw new Error('the complete committed pin did not parse');
+    expect(Object.keys(parsed.req.pin).sort()).toEqual(['commit', 'kind', 'path', 'section', 'servedRef']);
+    expect(docsShowPlan(parsed.req.pin.path, undefined).job).toStrictEqual({ raw: 2097152, wire: 2861740 });
+  });
+});
+
+describe("cacheControlFor (section 6.6, section 5.2): immutable only for a committed pin's raster", () => {
+  it('the two values are the spec strings', () => {
+    expect(DOCS_CACHE_IMMUTABLE).toBe('private, max-age=31536000, immutable');
+    expect(DOCS_CACHE_NO_STORE).toBe('no-store');
+  });
+
+  it.each([
+    ['committed', 'raster', 'private, max-age=31536000, immutable'],
+    ['committed', 'markdown', 'no-store'],
+    ['committed', 'svg', 'no-store'],
+    ['committed', 'html', 'no-store'],
+    ['committed', 'text', 'no-store'],
+    ['committed', 'other', 'no-store'],
+    ['draft', 'raster', 'no-store'],
+    ['draft', 'markdown', 'no-store'],
+    ['draft', 'svg', 'no-store'],
+    ['draft', 'html', 'no-store'],
+    ['draft', 'text', 'no-store'],
+    ['draft', 'other', 'no-store'],
+  ] as const)('a %s pin of class %s: %s', (kind, cls, want) => {
+    expect(cacheControlFor(kind === 'committed' ? COMMITTED_PIN : DRAFT_PIN, cls)).toBe(want);
+  });
+});
+
+describe("docsSendPolicy (section 5.3's onSend hook as an L1 verdict, refinement (m))", () => {
+  const H: Readonly<Record<string, string>> = DOCS_RESPONSE_HEADERS;
+  const NO_STORE = { ...H, 'cache-control': 'no-store' };
+  const IMMUTABLE = 'private, max-age=31536000, immutable';
+  const JSON_CT = 'application/json; charset=utf-8';
+
+  it('the JSON content type is the spec string, and an allowed one (the refusal answers in it)', () => {
+    expect(DOCS_JSON_CONTENT_TYPE).toBe('application/json; charset=utf-8');
+    expect(DOCS_ALLOWED_CONTENT_TYPES).toContain(DOCS_JSON_CONTENT_TYPE);
+  });
+
+  it.each([
+    ['a 200 JSON answer with no cache-control gets no-store', 200, JSON_CT, undefined, NO_STORE],
+    ['a 200 JSON answer whose route set no-store keeps it (no override)', 200, JSON_CT, 'no-store', H],
+    ['a 200 committed PNG keeps its immutable header', 200, 'image/png', IMMUTABLE, H],
+    ['a 200 JPEG keeps its header', 200, 'image/jpeg', IMMUTABLE, H],
+    ['a 200 GIF keeps its header', 200, 'image/gif', IMMUTABLE, H],
+    ['a 200 WebP keeps its header', 200, 'image/webp', IMMUTABLE, H],
+    ['a 200 PNG with no cache-control gets no-store', 200, 'image/png', undefined, NO_STORE],
+    ['a 404 failure is no-store even when immutable was set', 404, JSON_CT, IMMUTABLE, NO_STORE],
+    ["the gate's 401 gets no-store", 401, JSON_CT, undefined, NO_STORE],
+    ['a 403 foreign-request gets no-store over a set value', 403, JSON_CT, 'no-store', NO_STORE],
+    ['a 503 docs-busy gets no-store', 503, JSON_CT, undefined, NO_STORE],
+    ['any status but 200 is no-store: a 206 PNG', 206, 'image/png', IMMUTABLE, NO_STORE],
+  ] as const)('%s', (_what, status, ct, cc, headers) => {
+    expect(docsSendPolicy(status, ct, cc)).toStrictEqual({ kind: 'pass', headers });
+  });
+
+  const refused = (contentType: string): DocsSendVerdict => ({
+    kind: 'refuse',
+    status: 500,
+    headers: { ...H, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+    remove: ['content-length', 'content-disposition'],
+    body: { ok: false, failure: 'response-type-refused' },
+    contentType,
+  });
+
+  it.each([
+    'text/html', 'text/html; charset=utf-8', 'image/svg+xml', 'application/xml', 'text/xml', 'text/plain',
+    'application/octet-stream', 'application/json', 'application/json; charset=UTF-8', 'image/PNG', '',
+  ])('content type %j is refused: 500 response-type-refused, whatever the status', (ct) => {
+    expect(docsSendPolicy(200, ct, undefined)).toStrictEqual(refused(ct));
+    expect(docsSendPolicy(404, ct, IMMUTABLE)).toStrictEqual(refused(ct));
+  });
+
+  it('a refused content type is carried cut to 80 characters, the length the log line quotes', () => {
+    expect(docsSendPolicy(200, 'x'.repeat(200), undefined)).toStrictEqual(refused('x'.repeat(80)));
+  });
+
+  it('never writes into the L0 table, and answers a fresh header object each time', () => {
+    const a = docsSendPolicy(404, JSON_CT, undefined);
+    const b = docsSendPolicy(404, JSON_CT, undefined);
+    expect(Object.keys(DOCS_RESPONSE_HEADERS).sort()).toEqual([
+      'content-security-policy', 'cross-origin-resource-policy', 'referrer-policy', 'x-content-type-options',
+    ]);
+    if (a.kind !== 'pass' || b.kind !== 'pass') throw new Error('a JSON 404 was refused');
+    expect(a.headers).not.toBe(b.headers);
+    expect(a.headers).not.toBe(DOCS_RESPONSE_HEADERS);
+  });
+});
