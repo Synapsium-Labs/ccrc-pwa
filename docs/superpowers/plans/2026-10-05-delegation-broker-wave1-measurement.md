@@ -3163,10 +3163,10 @@ task A's review).
 | 8 | F13 | a symlink is never a directory | the DANGLING, DIRECTORY-symlink, VALID-symlink and KNOWN LIMIT rows (4 red, written at `0d38a6549`) |
 | 8 | F13 | a valid symlink to a file is followed, as git follows it | "follows a loose ref that is a VALID symlink, as git does …" (a symlink refused: 1 red, written at `0d38a6549`) |
 
-**Wave 2 close-out (review 304).** Every guard arm this wave added or touched has either a red-capable row or a
-recorded equivalence argument (the "arms with no row" line below). An arm with a row was measured red by deleting that
-arm alone in a scratch snapshot (`git archive` of the commit with `server/node_modules` linked); each count counts rows
-red, not assertions. Each line is dated by the commit it names and counted over the rows its own task chose, so no one sha or
+**Wave 2 close-out (review 304).** Every guard arm this wave added or touched has either a red-capable row or a recorded
+equivalence argument (the "arms with no row" line below). An arm with a row was measured red by deleting that arm alone
+in a scratch snapshot (`git archive` of the commit with `server/node_modules` linked); each count counts rows red, not
+assertions. Each line is dated by the commit it names and counted over the rows its own task chose, so no one sha or
 filter governs the table: task A's lines (`A`, the rig scripts) are dated `e56a9e0ef` and count the rows whose names carry
 `(review 304 F7)` or `(review 304 F12 …)` (`vitest run test/delegation-rig.test.ts -t 'F7|F12'`); task B's lines (`5`, the
 sanitiser) are dated `c51428ae8` and `b93dc9894` and count over `test/delegation-rig.test.ts`, whose rows include ones
@@ -3245,9 +3245,9 @@ Later close-out tasks append their lines here.
 **Wave 2 fix round (review 318).** Every guard arm the fix round added or touched has either a red-capable row or a
 recorded equivalence argument (the two EQUIVALENT mutants below stay at 0 red). An arm with a row was measured red by
 deleting or mutating that arm alone in a scratch snapshot (`git archive` of the commit named, with `server/node_modules`
-linked); each count counts rows red over `test/delegation-rig.test.ts`, not assertions; the review 324 lines are appended to this
-table too, and a count on an older line is the one measured at its own sha, so it does not count a row added after that
-sha. Task 5's review-318 lines name the seven rows review 318's fix round
+linked); each count counts rows red over `test/delegation-rig.test.ts`, not assertions; the review 324 lines are
+appended to this table too, and a count on an older line is the one measured at its own sha, so it does not count a row
+added after that sha. Task 5's review-318 lines name the seven rows review 318's fix round
 added by a short name; each title is "--scan …" and ends "(review 318 F2)", and they sit together after "--scan
 refuses a fixture file whose name passes the shape test but carries residue …": the **version-file** row ("… fails closed
 on a file inside a version directory whose name is not valid UTF-8 …"), the **version-dir** row ("… fails closed on a
@@ -3380,8 +3380,9 @@ A "wave 2" below means the close-out (run 306) where the passage is marked as th
   A third, ruled 2026-10-07 (review 324): `recapture.sh`'s closing cleanup hint (`rm -rf %s`) prints the raw root
   unescaped, so with a spaced `TMPDIR` the line, pasted, removes other paths and leaves the root. Wave 3 escapes it
   before any later capture relies on it, red-first. The obvious `%q` change reds two existing rows, not one: the spaced
-  real-run row, which asserts the unescaped text, and the `--dry-run` row, whose `<raw>` placeholder `%q` turns into
-  `\<raw\>`; that fix updates and proves both. `recapture.sh` is not edited in the fix round for review 324.
+  real-run row, which asserts the unescaped text, and the "--dry-run, no version named …" row, whose `<raw>`
+  placeholder `%q` turns into `\<raw\>`; that fix updates and proves both. `recapture.sh` is not edited in the fix
+  round for review 324.
 - **D-4000** — `q8-spool-cost-is-a-micro-benchmark` — the spool append's cost against the hook budget is measured as a bash
   micro-benchmark of the same operations; the hook itself is wave 2's, and its own timing pin lands there.
 - **D-4001** — `q9-parent-class-is-a-proxy` — §8.1 Q9 (the share of trees whose parent is not a ccd session) cannot be read
@@ -3883,9 +3884,10 @@ since the 2026-10-07 renumbering (#313), and that old text stays a dated snapsho
   resume and account swaps" (`docs/superpowers/specs/2026-10-04-delegation-broker-design.md`), and so from §7's
   (Rollout) stage-1 gate, the `1 Measure` row's "Gate to leave it" cell, "every §8.1 row filled for every version on the
   fleet": the rig compacts a session (clear-compact-resume) but never measures how the id changes across compaction.
-  The hook exits in its SessionStart arm for a `compact` source before the capture arm
-  (`ccd/session-hook.sh:2905`; the stall-watch exclusion its capture-arm comment documents,
-  `:2920-2922`), so a `compact` SessionStart is never captured. Compaction shows only as PreCompact and PostCompact,
+  The hook exits in its SessionStart arm for a `compact` source before the capture arm (`ccd/session-hook.sh`, the
+  arm's `[[ "$src" == compact ]] && exit 0`; the stall-watch exclusion the capture arm's comment documents, "all but
+  SessionStart `compact`, which exits in its arm"), so a `compact` SessionStart is never captured. Compaction shows
+  only as PreCompact and PostCompact,
   which carried the pre-compaction session id, and the rig's resume by that id continued under it (clear-compact-resume,
   on every version in the corpus, all ten, 2.1.280 to 2.1.292: no fixture holds a `compact` SessionStart, each
   PreCompact and PostCompact carries the id of the session that `/clear` began, and the `resume` SessionStart carries

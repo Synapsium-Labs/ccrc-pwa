@@ -729,7 +729,7 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
   worktree-name listing alone is about 3.9 KB, which nearly fills spec §5.3's 4 KiB line. The observe stage's line
   design must measure that case: the listing is the optional field that gets dropped, and the worst case is about
   8.5 ms per call.
-- **What wave 2's cross-check (run 306, reviews 318 and 324) hands to wave 3's plan.** Its evidence is in the
+- **What wave 2 (run 306, reviews 318 and 324) hands to wave 3's plan.** Its evidence is in the
   "Real-lane cross-check" section and the plan's D-numbers named below; a wave 3 plan reads these before it names a
   task:
   - Wave 3's first implementation commit is the red-first `tmux display-message -p -t "$TMUX_PANE" '#S'` ownership
@@ -740,12 +740,13 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     both turns `working`. Wave 3 must resolve that reader against the qualifying-join contract with a red-first
     phantom-main-thread case and without assuming `agent_type`, after the first-commit correction above unless its
     approved plan proves the two must be one atomic change (amendment `tool-agent-id-alone-is-unjoined-evidence`).
-  - Three re-capture tooling obligations close before any later capture relies on `--missing` (D-3999 in wave 1's
-    plan): `recapture.sh` exits 0 when single runs failed; `rig.sh versions` reads an unreadable versions directory as
-    none installed; and `recapture.sh`'s closing cleanup hint prints the raw root unescaped, so it is escaped before
-    any later capture relies on it. The obvious `%q` change reds two existing rows, the spaced real-run row and the
-    `--dry-run` row, whose `<raw>` placeholder `%q` turns into `\<raw\>`, so the red-first fix updates and proves both,
-    not one. Until these close, an unmeasured cell is not coverage.
+  - Wave 3 closes three re-capture tooling obligations before any later capture relies on `--missing` (D-3999 in
+    wave 1's plan): `recapture.sh` exits 0 when single runs failed; `rig.sh versions` reads an unreadable versions
+    directory as none installed; and `recapture.sh`'s closing cleanup hint prints the raw root unescaped, so it is
+    escaped before any later capture relies on it. The obvious `%q` change reds two existing rows, the spaced real-run
+    row ("a real run over a tree and a TMPDIR whose paths carry a space …") and the "--dry-run, no version named …"
+    row, whose `<raw>` placeholder `%q` turns into `\<raw\>`, so the red-first fix updates and proves both, not one.
+    Until these close, an unmeasured cell is not coverage.
   - D-4008's three folds, `locked` (false when its stat fails), `baseAgreesFirstLog` (null when `logs/HEAD` cannot be
     read) and an unreadable `gitdir` (read as absent), are no positive cleanup or adoption evidence.
   - All eight real-lane amendment slugs carry into wave 3: `agent-input-keys-are-the-callers`,
@@ -769,7 +770,7 @@ One PR from a fresh child. A review run on the held-out panel follows.
 - Its contents: the spool, ingestion and cursors, the one `delegation_*` migration, the census extension, correlation
   and reconciliation (report-only), the coordinator-intent route, and coordinator clause 17.
 - It carries the spool-line constraint: a listing of about 3.9 KB nearly fills the 4 KiB line.
-- Its plan starts from the carried constraints above, which the cross-check's two review rounds added: the first
+- Its plan starts from the carried constraints above, which wave 2's two review rounds added: the first
   implementation commit (the red-first `-t "$TMUX_PANE"` ownership correction); the turn-marker `paid` reader's
   phantom-main-thread case; the three re-capture tooling obligations, closed before any capture relies on
   `--missing` (D-3999); D-4008's three folds as no positive cleanup or adoption evidence; and the eight real-lane
