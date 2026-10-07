@@ -108,6 +108,9 @@ describe('childReclaimDoneHighWater — the mirror’s one decision (pure)', () 
       ev(A, 'reclaim', 'refused', T + 9), ev(A, 'reclaim', 'failed', T + 8),
       ev(A, 'reclaim', 'intent', T + 12), ev(B, 'reap', 'done', T + 11),
       ev(B, 'create', 'done', T + 13), ev(B, 'reclaim', 'done', null),
+      // The sibling act that shares the tail: an expiry's `done` is not a reclaim's, and the board would otherwise
+      // re-read the archive on every expiry end.
+      ev(B, 'expire', 'done', T + 14),
     ))).toBe(T + 4);
   });
 

@@ -302,6 +302,24 @@ describe('the breadcrumb arm', () => {
     held(evalOf(h), SIB, 'a breadcrumb over a record only git’s list names');
     fs.writeFileSync(gitdir, `${s.wt}/.git\n`);
     placed(evalOf(h), 'the CONTROL: respelled, the git arm places it');
+    // AN ADMIN ENTRY THAT NAMES THE TREE WHILE GIT'S LIST DOES NOT (spec §5.5): the reader of the entries takes the
+    // FIRST line of a `gitdir` file, but git lists its whole text as the path — a two-line file, `<w>/.git` and then
+    // `extra`, prints `worktree <w>/.git` and an `extra` line (measured, git 2.43), and the list's exact match finds
+    // no record at `<w>`. So the arm's "git keeps no record" is true of the list and false of the entry, and only
+    // its `gitdir:` loop keeps the hold. This runs as root too: nothing here is a permission.
+    fs.writeFileSync(gitdir, `${s.wt}/.git\nextra\n`);
+    expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the CONTROL: git lists the record under another path')
+      .toContain(`worktree ${s.wt}/.git\nextra\n`);
+    expect(stanza(c.main, s.wt), 'the CONTROL: so git’s list has no stanza at the row’s path').toBe('');
+    expect(h.sh(`_ws_reclaim_record "${c.main}" "${s.wt}"; printf '%s' "$?"`),
+      'the CONTROL: the record reader answers "no record" — the loop alone sees the entry').toBe('1');
+    const logged = h.sh(`_WS_LOGS=(); _ws_reclaim_log_of "${c.main}" tree "${s.wt}" 0; printf '%s\\n' "$?" "\${_WS_LOGS[@]}"`).split('\n');
+    expect(logged[0], 'the CONTROL: the entry reader found the entry and answered rc 0').toBe('0');
+    expect(logged.filter((l) => l.startsWith('gitdir:')), 'the CONTROL: and names the admin directory')
+      .toEqual([`gitdir:${s.admin}`]);
+    held(evalOf(h), SIB, 'a breadcrumb over an admin entry git’s list cannot match');
+    fs.writeFileSync(gitdir, `${s.wt}/.git\n`);
+    placed(evalOf(h), 'the CONTROL: one line again, the git arm places it');
     // NEVER READ AS "NO RECORD" (spec §5.5): git's list exits 0 and silently OMITS a record whose `gitdir` it cannot
     // read, and every linked record when `worktrees/` cannot be listed — the breadcrumb's "git keeps no record" there
     // would be a record nobody read. Both shapes hold.

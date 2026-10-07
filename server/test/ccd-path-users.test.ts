@@ -274,11 +274,17 @@ describe('a FAKE process table — the cases a live box cannot be made to produc
     expect(a.why).toContain('could not be measured');
   }, 60_000);
 
-  it('every C0 control byte and DEL in a path a user uses reaches the answer as `?`, not only a tab or a newline', () => {
+  it('every C0 control byte and DEL in a path a user uses reaches the answer as `?` — a tab and a newline included — and a space or a non-ASCII byte passes', () => {
+    // The value carries \001 \033 \r \177 \037, then a TAB and a NEWLINE, then a FORGED probe row (`4243<TAB>cwd<TAB>/etc/...`),
+    // then a space and the two bytes of one non-ASCII character. The bash reader splits the walk's output on tabs and
+    // newlines, so a tab or a newline left in a path would be read as the walk's own row separator: the forged row would
+    // reach the answer as a SECOND process, with a path outside the leaf. Only `?` for every C0 byte and DEL, a tab and
+    // a newline too, keeps it ONE row; a space and a non-ASCII character are not controls and stay as they are.
     const a = ask(leafOf(), `${FAKE} _fpp 4242 1 "$(id -u)";`
-      + ` printf 'TMPDIR=%s/a\\001b\\033c\\rd\\177e\\037f\\0' "${leafOf()}" > "$HOME/fp/4242/environ";`);
+      + ` printf 'TMPDIR=%s/a\\001b\\033c\\rd\\177e\\037f\\tg\\n4243\\tcwd\\t/etc/forged a\\303\\251b\\0' "${leafOf()}" > "$HOME/fp/4242/environ";`);
     expect(a.rc, a.why).toBe('1');
-    expect(a.why).toContain(`process 4242 carries TMPDIR=${leafOf()}/a?b?c?d?e?f`);
+    expect(a.why, 'one row, one process: no forged second row, and the controls read `?`').toBe(
+      `process 4242 carries TMPDIR=${leafOf()}/a?b?c?d?e?f?g?4243?cwd?/etc/forged a\u00e9b`);
     expect(a.why).not.toMatch(/[\x00-\x1f\x7f]/);
   }, 60_000);
 

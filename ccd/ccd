@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=4d5e38ca74f03b2b8b0323bf9ec0db9ffa253229ad73cb1408ac4af094c3a5d1
+# ccrc:generated 1 sha256=2e35e41c31527da859c4d4193a2696834763ca7b7a60275b4f0c8d9d193eb468
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29049,8 +29049,8 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   #   slug would meet it on every spawn.
   # - A DIRECTORY LEAF goes only when it is this uid's own (`_ws_leaf_uid`,
   #   `ls -dn`, never follows it), its dev:ino is the one the caller recorded
-  #   (when the caller names one), it is not a mount point, and its physical
-  #   path is exactly `<root>/<id>`. A LEAF WHOSE DEVICE IS NOT ITS
+  #   (when the caller names one), it is not a mount of another file system, and
+  #   its physical path is exactly `<root>/<id>`. A LEAF WHOSE DEVICE IS NOT ITS
   #   ROOT'S is a mount point, and is refused before anything is touched:
   #   `--one-file-system` measures from its own argument, so a mount AT the
   #   leaf (a session's own FUSE or sshfs mount in its TMPDIR) would be emptied
@@ -29188,8 +29188,9 @@ _ws_leaf_why_line() {   # text -> ONE short line a journal row can carry: printa
 }
 
 # ── the tail's bounded wait for the pane's processes (child reclamation wave 6, spec §5.6) ──
-WS_RECLAIM_TMPROOT_WAIT_S=15   # the longest the reclaim/expiry tail waits, after its kill, for the pane's processes
-#                                to stop using the temp root. Never more than 15 (spec §5.6).
+WS_RECLAIM_TMPROOT_WAIT_S=15   # the bound on the CLOCK between the asks the reclaim/expiry tail makes, after its kill,
+#                                of whether the pane's processes still use the temp root: never more than 15
+#                                (spec §5.6). Not a bound on the wait's wall time: see `_ws_reclaim_tmproot_quiet`.
 _ws_reclaim_tmproot_wait_s() {   # -> the bound, whole seconds: WS_RECLAIM_TMPROOT_WAIT_S, or
   #                                 CCD_RECLAIM_TMPROOT_WAIT_S when that is a whole number BELOW it
   # THE OVERRIDE ONLY LOWERS — a test's knob, so a case need not sit out 15 s.
@@ -29200,7 +29201,7 @@ _ws_reclaim_tmproot_wait_s() {   # -> the bound, whole seconds: WS_RECLAIM_TMPRO
   printf '%s' "$b"
 }
 _ws_reclaim_tmproot_quiet() {   # path -> `_ws_path_users`' LAST answer (0/1/2), asked until it says nobody
-  #                                or `_ws_reclaim_tmproot_wait_s` seconds have passed
+  #                                or `_ws_reclaim_tmproot_wait_s` seconds have passed on the clock between asks
   # Asked every quarter second. ON DARWIN the probe answers unmeasured without
   # looking, so it is asked ONCE: waiting cannot change that answer.
   # TWO ENDS, and the first one reached ends it: the wall clock, and a count
@@ -29209,6 +29210,20 @@ _ws_reclaim_tmproot_quiet() {   # path -> `_ws_path_users`' LAST answer (0/1/2),
   # without limit. The count never shortens a wait the clock would allow:
   # every ask after the first follows a quarter-second sleep, so by the last
   # one counted the bound has already passed.
+  # WHAT THE BOUND BOUNDS, STATED (spec §5.6): the clock between asks, never
+  # the wait's wall time. An ask that begins just inside the bound still runs
+  # its whole walk, which `WS_PATH_USERS_SCAN_S` (10 s) bounds, plus
+  # `_plat_timeout`'s kill grace (3 s) when the walk ignores TERM. So on a
+  # working clock the worst case is the bound, plus that one walk, plus the
+  # tail's own ask at step (6): about 35 s, or 41 s when both walks ignore TERM
+  # and run to the end of their grace. With a clock frozen or running
+  # backwards only the count ends the loop, and when every walk also runs out
+  # its bound that is `(bound * 4 + 1) * (WS_PATH_USERS_SCAN_S + 0.25)`
+  # seconds, about 625 s: past the 240 s budget a remote caller allows. THAT IS
+  # SAFE, and is stated rather than prevented: a remote kill at the budget
+  # lands in this wait, which runs BEFORE the tombstone is read and before
+  # anything is deleted, and the breadcrumb the caller wrote already resumes
+  # the tail on the next attempt.
   local p="$1" bound end rc n=0 max
   bound=$(_ws_reclaim_tmproot_wait_s)
   max=$(( bound * 4 + 1 ))
@@ -29349,12 +29364,14 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # gone, but its processes need not be: MEASURED 2026-10-04, a straggler with
   # `TMPDIR=<leaf>` re-created a child's temp root 3.7 s after `reclaim done`.
   # So the tail asks `_ws_path_users` of the temp root until it answers
-  # nobody, for at most `_ws_reclaim_tmproot_wait_s` seconds, BEFORE anything
-  # further is deleted: the worktree's removal below runs after this wait and
-  # is otherwise unchanged (a writer into a removed worktree path after the
-  # bound is a stated residual). Not a gate: step (6) asks again at the
-  # instant of removal, and in use or unmeasured there, the temp root is KEPT
-  # and said, and the act still completes.
+  # nobody, or `_ws_reclaim_tmproot_wait_s` seconds have passed on the clock
+  # between asks (the wall time can be longer, and `_ws_reclaim_tmproot_quiet`
+  # states how much), BEFORE anything further is deleted: the worktree's
+  # removal below runs after this wait and is otherwise unchanged (a writer
+  # into a removed worktree path after the bound is a stated residual). Not a
+  # gate: step (6) asks again at the instant of removal, and in use or
+  # unmeasured there, the temp root is KEPT and said, and the act still
+  # completes.
   _ws_reclaim_tmproot_quiet "$HOME/.cc-tmp/$id" || :   # its answer is re-asked at step (6)
   # THE TOMBSTONE IS THE ONE SOURCE for what this tail deletes, fresh and
   # resumed alike: the fresh arm wrote it a moment ago, the resumed arm finds

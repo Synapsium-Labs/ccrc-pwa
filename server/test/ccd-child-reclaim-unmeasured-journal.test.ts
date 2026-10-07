@@ -117,9 +117,12 @@ describe('wave 5’s reader takes both lines as failures, worded by the journal 
 });
 
 describe('its word is true of both arms', () => {
-  it('says nothing was removed and the next attempt starts over, and never calls itself a refusal or promises anything intact', () => {
+  it('says THIS attempt started and removed nothing, and the next one starts over, and never calls itself a refusal or promises anything intact', () => {
     const w = LC_REFUSAL_WORD['probe-unmeasured'];
-    expect(w).toMatch(/nothing was removed/);
+    // Scoped to the attempt: a resumed arm's earlier attempt may already have removed something, so the
+    // unscoped "nothing was removed" would be false there.
+    expect(w).toMatch(/this attempt started nothing and removed nothing/);
+    expect(w).not.toMatch(/nothing was (started|removed)/);
     expect(w).toMatch(/from the start/);
     expect(w).not.toMatch(/refus/i);
     expect(w).not.toMatch(/intact/);
