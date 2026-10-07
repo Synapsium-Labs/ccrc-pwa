@@ -213,6 +213,43 @@ describe('ccrc history status (Linux)', () => {
     expect(r.env.store_id).toBe(storeIdOf(box));
   });
 
+  it('RF5b F11: a bound store missing a table status reads answers ONE envelope, exit 5 store-read-failed with its store_id; doctor reads status-unreadable', () => {
+    const box = boundBox('ccrc-hist-cli-rf5b11a-');
+    const db = new DatabaseSync(dbFile(box));
+    db.exec('DROP TABLE counters');
+    db.close();
+    const r = status(box);
+    expect(r.code).toBe(5);
+    expect(r.stdout.trim().split('\n')).toHaveLength(1);
+    expect(r.env.exit).toBe(5);
+    expect(r.env.reason).toBe('store-read-failed');
+    expect(r.env.store_id).toBe(storeIdOf(box));
+    expectIdentity(r.env);
+    expect(r.env.health.fail).toEqual([expect.objectContaining({ word: 'status-unreadable', detail: expect.stringContaining('store-read-failed') })]);
+    expect(r.stderr).toContain('no such table: counters');
+  });
+
+  it('RF5b F11: a v1 column status names gone (ticks.bytes_behind dropped) answers the same exit 5 store-read-failed', () => {
+    const box = boundBox('ccrc-hist-cli-rf5b11b-');
+    const db = new DatabaseSync(dbFile(box));
+    db.exec('ALTER TABLE ticks DROP COLUMN bytes_behind');
+    db.close();
+    const r = status(box);
+    expect([r.code, r.env.exit, r.env.reason]).toEqual([5, 5, 'store-read-failed']);
+    expect(r.stdout.trim().split('\n')).toHaveLength(1);
+    expect(r.stderr).toContain('no such column');
+  });
+
+  it('RF5b F11: the human form of a failed status read names exit 5 store-read-failed', () => {
+    const box = boundBox('ccrc-hist-cli-rf5b11c-');
+    const db = new DatabaseSync(dbFile(box));
+    db.exec('DROP TABLE counters');
+    db.close();
+    const r = status(box, { args: ['status'] });
+    expect(r.code).toBe(5);
+    expect(r.stdout).toContain('exit 5 store-read-failed');
+  });
+
   it('an unreadable store.writer is a binding read that failed: 5 store-unmeasured with its store_id, never a healthy 0 (§5.3 "Binding reads")', () => {
     const box = boundBox('ccrc-hist-cli-writer-');
     fs.writeFileSync(hist(box, 'store.writer'), 'not a writer token\n');   // off WRITER_RE: measured unreadable

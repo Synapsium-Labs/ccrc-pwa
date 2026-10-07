@@ -34,7 +34,7 @@ export const EXIT = Object.freeze({
 // Exits 2, 4, 5 and 7 carry words that are distinct by design; 3, 6, 8 and 9
 // each have one meaning and carry none. Plan-chosen spellings of conditions
 // the spec names only in prose: `bad-args`, `regex-syntax`, `regex-refused`,
-// `project-unreadable`, `store-zero-byte`, `store-schema-missing`.
+// `project-unreadable`, `store-zero-byte`, `store-schema-missing`, `store-read-failed`.
 const REASON_ROWS = [
   [EXIT.REFUSED, [
     'bad-args', 'regex-syntax', 'regex-refused', 'regex-timeout', 'cross-project', 'out-of-scope',
@@ -56,6 +56,9 @@ const REASON_ROWS = [
     // `schema-newer` (Task 24): the newer-schema refusal of a WRITING pass — a scheduled pass prints it and exits 5,
     // and an `--op import` relays it; the CLI never needs it, because it reads a newer store (G9). Plan-chosen word.
     'schema-newer',
+    // `store-read-failed` (Task RF5b, review 316 F11; D-4171): status's read of a store the binding read admitted threw an
+    // SQLite error — a v1 table or column it names is missing, a corrupt file, an I/O error. Plan-chosen word.
+    'store-read-failed',
   ]],
   [EXIT.FTS_UNAVAILABLE, ['fts5-absent', 'fts-pending']],
 ];
@@ -847,6 +850,16 @@ export function decideStatusRead({ userVersion, journalMode, recordedMigration }
     : (MIGRATION_VERDICTS.includes(recordedMigration) ? recordedMigration : 'none');
   if (journalMode !== 'wal') return { exit: REASONS['store-not-wal'], reason: 'store-not-wal', migration };
   return { exit: EXIT.OK, migration };
+}
+
+/** §8.3 (review 316 F11; D-4171): what `status` answers when its read of a store the binding read admitted throws.
+ *  `storeWord` is a StoreError's word (the reader's open refused: the DB went missing, 0 bytes or unmeasured since it
+ *  was measured), else null; `sqliteError` says SQLite raised it. Answers {exit: 5, reason}, or null for a throw
+ *  that is neither — a defect the caller lets escape as exit 1. Three answers, never folded. */
+export function decideStatusReadFailure({ storeWord, sqliteError }) {
+  if (storeWord !== null && REASONS[storeWord] === EXIT.DB) return { exit: EXIT.DB, reason: storeWord };
+  if (sqliteError) return { exit: REASONS['store-read-failed'], reason: 'store-read-failed' };
+  return null;
 }
 
 /** The one size-aware copy preflight (§6.11): free space must EXCEED the

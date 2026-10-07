@@ -36,8 +36,9 @@ import { pathToFileURL } from 'node:url';
 import {
   EXIT, COVERAGE, SCHEMA_VERSION, UUID_RE, HARNESSES, CLI_STAT_DEADLINE_MS,
   historyPaths, readBoxEnvValue, decideCliStore, CONTROL_FILE_MAX, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
+  decideStatusReadFailure,
 } from './lib.mjs';
-import { measureStoreFacts, openReader, userVersion, measuredSize, probeFts5, readBounded } from './store.mjs';
+import { StoreError, measureStoreFacts, openReader, userVersion, measuredSize, probeFts5, readBounded } from './store.mjs';
 // The health block's own imports (task 28). Namespace imports, so this block
 // binds no name the status code above already imported.
 import * as healthLib from './lib.mjs';
@@ -282,6 +283,23 @@ function readStore(env, P, nowMs) {
   }
 }
 
+/** readStore with its failure made an answer (§8.3: ONE envelope, exit 5, for a DB or schema error). The throw is
+ *  MEASURED here (a StoreError's word; SQLite's ERR_SQLITE_ERROR) and lib's decideStatusReadFailure decides; the
+ *  error's message goes to stderr. Anything else is a defect in this file and stays exit 1 (review 316 F11). */
+function readStoreAnswered(env, P, nowMs) {
+  try {
+    readStore(env, P, nowMs);
+  } catch (e) {
+    const d = decideStatusReadFailure({
+      storeWord: e instanceof StoreError ? e.word : null,
+      sqliteError: e !== null && typeof e === 'object' && e.code === 'ERR_SQLITE_ERROR',
+    });
+    if (d === null) throw e;
+    process.stderr.write(`ccrc history: ${d.reason}: ${e.message}\n`);
+    decided(env, d);
+  }
+}
+
 /** `status --json`'s envelope (§8.3, §8.4). The no-store answer is §8.3's table in its own order: Darwin,
  *  the recorded role, the 2 s reachability stat, then every presence input measured (an unreadable one is
  *  store-unmeasured, never absent). */
@@ -307,7 +325,7 @@ export async function statusEnvelope(home, nowMs) {
   const d = decideCliStore({ ...facts, darwin, statSettled: true, shim: presence(P.shim) });
   await freeSpace(env, P);
   env.snapshot_bytes = snapshotBytes(P);
-  if (d.read) readStore(env, P, nowMs);
+  if (d.read) readStoreAnswered(env, P, nowMs);
   else decided(env, d);
   journalFacts(env, P);
   return env;

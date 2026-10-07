@@ -762,6 +762,19 @@ describe('decideStatusRead: the measured store read answers one verdict, in lib 
     expect(read({ userVersion: libPlan.SCHEMA_VERSION + 1, journalMode: 'delete' }))
       .toEqual({ exit: libPlan.EXIT.DB, reason: 'store-not-wal', migration: 'refuse-newer' });
   });
+  // RF5b F11 (D-4171): what status answers when its read of an admitted store throws. Three answers, never folded.
+  it.each([
+    [{ storeWord: 'store-missing', sqliteError: false }, { exit: 5, reason: 'store-missing' }],
+    [{ storeWord: 'bad-args', sqliteError: false }, null],   // an exit-2 word is never an exit-5 answer
+    [{ storeWord: null, sqliteError: true }, { exit: 5, reason: 'store-read-failed' }],
+    [{ storeWord: null, sqliteError: false }, null],
+  ])('decideStatusReadFailure(%j) answers %j', (facts, want) => {
+    expect(libPlan.decideStatusReadFailure(facts)).toEqual(want);
+  });
+  it('store-read-failed is an exit-5 REASONS word and no HEALTH_WORDS member (deriveHealth reads it as status-unreadable)', () => {
+    expect(libPlan.REASONS['store-read-failed']).toBe(libPlan.EXIT.DB);
+    expect((libPlan.HEALTH_WORDS as Readonly<Record<string, string>>)['store-read-failed']).toBeUndefined();
+  });
 });
 
 describe('planCopy and planMigration: the migration verdict is L1 (DM41, DM43 pure table)', () => {
@@ -2607,6 +2620,12 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     expect(item.remedy).toBe(healthLib.HEALTH_REMEDIES['status-unreadable']);
     expect(words(r, 'warn')).toEqual(['cap-malformed']);
     expect(r.pass).toBeNull();
+  });
+  it('RF5b F11: an exit-5 store-read-failed is FAIL status-unreadable naming the reason, and no other fail', () => {
+    const r = healthLib.deriveHealth(base({ exit: 5, reason: 'store-read-failed' }));
+    expect(r.fail).toHaveLength(1);
+    expect(r.fail[0]!.word).toBe('status-unreadable');
+    expect(r.fail[0]!.detail).toContain('exit 5 (store-read-failed)');
   });
   it('nothing unmeasured adds no status-unreadable', () => {
     expect(words(healthLib.deriveHealth(base({ extrasUnmeasured: [] })), 'fail')).toEqual([]);
