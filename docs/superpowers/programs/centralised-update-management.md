@@ -2629,6 +2629,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **Design consequence:** a fleet pull authenticated by the current token would hand each replacement to whoever
     holds the leaked value. The first rotation would then retire nothing. The handout needs another credential.
 
+- **2026-10-07 11:06 UTC: operator, re-deciding after the correction: "build the feature instead of manual rotation".**
+  The leaked value stays live until the feature's first rotation. Design is under way (brainstorming, then an HTML spec
+  for the operator's review). Its first wave is to be the smallest one that can retire the leaked value safely.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
