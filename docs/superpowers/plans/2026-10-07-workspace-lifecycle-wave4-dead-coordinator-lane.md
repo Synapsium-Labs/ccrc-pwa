@@ -4,13 +4,13 @@
 
 **Goal:** Two things, in this order. FIRST, close review 313's residue on the expiry lane — its three ARMING BLOCKERS among it — so the operator can arm `$REG/expire-lane-live` on evidence that is true: a learn audit that cannot be read is backed off and listed (and learn slots go in `nextAskAt` order), a failure the box says will not resume stops at once instead of an hour later, an ineligible sighting clears every report a row holds, a refusal of another archive is a row that moved, the held sentence names its instant, and the records the review found wrong are corrected. THEN build spec stage 4, the DEAD-COORDINATOR LANE: a coordinator that CRASHED (`orphan`, `absent`, or `never-started` after a spawn that succeeded, with no deliberate act since its last successful spawn in a journal the lane can TRUST to hold one — the lifecycle mirror current, no gap it recorded since that spawn, no journal line ccd could not write) and has stayed dead an hour — counted from a durable `coord.db` anchor, raised by the supervisor stamp, and seen on two passes in a row — has its open runs closed `failed` through `closeRun`'s abandon arm with `causedBy: 'sweep'`, on the coordination serialiser. The arm re-measures the claimant IMMEDIATELY BEFORE each run's fleet act and again after it, before the commit, and commits only while `claimedBy` still names it (compare-and-set); CCR-15's reclaim port is wired as the abandon route wires it. A circuit breaker holds the WHOLE lane when two or more coordinators are first measured crashed within ten minutes of each other, or the pass meets a fleet-wide doubt (tmux not answering, or none of two or more claimants measurable); it remembers its members through a pass that cannot measure them. The lane SHIPS SHADOWED: until the operator touches `$REG/dead-coordinator-lane-live` by hand it measures, anchors, trips its breaker and records "would end programme <slug> (<n> runs)" for EVERY due coordinator as a feed row and an attention entry, and never reaches the abandon arm. `$REG/reclaim-paused` stops it entirely.
 
-**Architecture:** The residue (Tasks 1–5) edits the 3b lane where it lives: `server/src/archivedExpiry.ts` (L1: `archivedExpiryLearned`, `archivedExpirySighted`, `archivedExpiryNextEntry`, the outcome type, the sentences), `server/src/coord/expireArchived.ts` (the executor's archive check and its `resumable` mapping), `sweepArchivedExpiry` in `server/src/watch.ts` (the learn order), the coordinator skill's clause 3 and its two pins, the 3b plan's and the spec's records, and the PWA's two archive confirms (Task 5, droppable). The lane (Tasks 6–13) is the expiry lane's shape, a THIRD sibling pass on the child lane's tick: one L1 file, `server/src/deadCoordinator.ts` (the dead-cause union the reclaim verdict carries, the ONE journal reader and the journal's trust, the crash classification, the anchor and its gap rule, the hour, the breaker and its memory, the act's typed stop, the lane's memory, the words, the vocabulary guard, the live marker's one spelling), the reclaim ladder widened in ONE place (`ClaimantVerdict`'s dead arm gains `cause`, `coord/reclaim.ts`), the store's half (`dead_claimants`, migration 17 — a new table and nothing else; `deadAnchors`/`setDeadAnchor`/`deleteDeadAnchor`; `deadCoordinatorJournalRows`; `lifecycleGapGens`; and `closeRun`'s `expectClaimedBy` compare-and-set inside its transaction), `closeRun`'s third attribution word and its sweep guard — the re-measure before and after the fleet act and the compare-and-set's first half on a fresh read (`coord/close.ts`, `SweepCloseGuard`), the serialiser's sweep handle (`CoordRoutesHandle.withSweepAbandon`, `coord/routes.ts`), the one executor and the journal-trust adapter (`server/src/coord/endDeadCoordinator.ts`), the lane (`sweepDeadCoordinators` in `watch.ts`, handed the handle by `buildServer`), the wire (`DeadCoordinatorAttention`, `CoordStatus.deadCoordinatorAttention`, optional and additive — no `FLEET_PROTO` bump), the PWA's one reader and its list in the cleanup row, the words (README, the coordinator's `resume.md`, the lifecycle spec's §5.4 and §6 item 5, CCR-15 §5.8, the build-4 design's `causedBy` sentence) with their pins, and spec §9's stage-4 rows in `deploy/measure-workspace-lifecycle.py`.
+**Architecture:** The residue (Tasks 1–5) edits the 3b lane where it lives: `server/src/archivedExpiry.ts` (L1: `archivedExpiryLearned`, `archivedExpirySighted`, `archivedExpiryNextEntry`, the outcome type, the sentences), `server/src/coord/expireArchived.ts` (the executor's archive check and its `resumable` mapping), `sweepArchivedExpiry` in `server/src/watch.ts` (the learn order), the coordinator skill's clause 3 and its two pins, the 3b plan's and the spec's records, and the PWA's two archive confirms (Task 5, droppable). The lane (Tasks 6–13) is the expiry lane's shape, a THIRD sibling pass on the child lane's tick: one L1 file, `server/src/deadCoordinator.ts` (the dead-cause union the reclaim verdict carries, the ONE journal reader and the journal's trust, the crash classification, the anchor and its gap rule, the hour, the breaker and its memory, the act's typed stop, the lane's memory, the words, the vocabulary guard, the live marker's one spelling), the reclaim ladder widened in ONE place (`ClaimantVerdict`'s dead arm gains `cause`, `coord/reclaim.ts`), the store's half (`dead_claimants`, migration 18 — a new table and nothing else; `deadAnchors`/`setDeadAnchor`/`deleteDeadAnchor`; `deadCoordinatorJournalRows`; `lifecycleGapGens`; and `closeRun`'s `expectClaimedBy` compare-and-set inside its transaction), `closeRun`'s third attribution word and its sweep guard — the re-measure before and after the fleet act and the compare-and-set's first half on a fresh read (`coord/close.ts`, `SweepCloseGuard`), the serialiser's sweep handle (`CoordRoutesHandle.withSweepAbandon`, `coord/routes.ts`), the one executor and the journal-trust adapter (`server/src/coord/endDeadCoordinator.ts`), the lane (`sweepDeadCoordinators` in `watch.ts`, handed the handle by `buildServer`), the wire (`DeadCoordinatorAttention`, `CoordStatus.deadCoordinatorAttention`, optional and additive — no `FLEET_PROTO` bump), the PWA's one reader and its list in the cleanup row, the words (README, the coordinator's `resume.md`, the lifecycle spec's §5.4 and §6 item 5, CCR-15 §5.8, the build-4 design's `causedBy` sentence) with their pins, and spec §9's stage-4 rows in `deploy/measure-workspace-lifecycle.py`.
 
 **Tech Stack:** TypeScript (server, pwa, L0 `shared/`), `node:sqlite`, vitest 4, React 19, Fastify. No `ccd/ccd` edit in this wave.
 
 **Spec:** `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md` — §5.4 whole (the lane), §5.3's "As wave 3b builds the lane" list, §6 items 5 and 6 and the Landing-order bullet, §8's stage-4 failure modes, §9's stage-4 row, §10 item 5, §11. The 3b plan (`docs/superpowers/plans/2026-10-06-workspace-lifecycle-wave3b-expiry-lane.md`) — its Deviations found, rows T3.5 and T7.2, and the lane it built. Review 313's report (the coordinator's evidence copy, `.superpowers/sdd/coordinator-evidence/run290/review-313-3990aaad.md`: F1–F7, O1, O2 and the four parked items) and the 3b worker's SDD ledger beside it. The programme ledger (`docs/superpowers/programs/workspace-lifecycle.md`), its 2026-10-07 06:01 entry (this wave's residue ruling) and its Next-wave brief. The reclaim verdict and door (`server/src/coord/reclaim.ts`, D-1145's note on the THIRD consumer), the abandon door, `closeRun`'s abandon arm (`coord/close.ts`), the serialiser `registerCoordRoutes` returns (`coord/routes.ts`), the lifecycle mirror (ccd's `_LC_ACTS`, `lifecycle_events`, `journalparse.ts`), `coord.db`'s migrations (`coord/schema.ts`, `db.ts`'s rule 3), the stall watch's coordinator arms (`coord/stall.ts`) and the landing lane (`coord/landing.ts`, `sweepLanding`). Sibling plans whose shape this one copies: the 3b plan and `docs/superpowers/plans/2026-09-22-child-reclamation-wave4-sweep-and-switch.md`.
 
-> **Departure numbers — TWENTY slugs for a block of SIXTEEN.** The plan names twenty departures by SLUG under `## Deviations found`; it defines no number. The run's issued block is **4348–4363**, sixteen numbers: the worker writes them bare, in the order `## Deviations found` lists the slugs, each in the entry that defines it, in the commit of the first task that makes the change. The review of this plan added four departures (`journal-loss-reads-as-unmeasured`, `never-started-without-a-spawn-is-unmeasured`, `breaker-remembers-its-cluster`, `the-sweep-re-measures-inside-the-arm`), so the block runs out four short: the worker writes the slugs it has no number for as `D-TBD-<slug>` and reports them for a second block (worker clause 11) — never a guessed number. If the coordinator strikes Task 5 (the archive-confirm copy) from the brief, its slug is not written and three are short. A departure found while executing is reported, never typed.
+> **Departure numbers — twenty slugs, twenty numbers.** The plan names twenty departures by SLUG under `## Deviations found`; it defines no number. The run's brief issues the numbers for all twenty slugs (the coordinator issued a second block of four after the plan's review added four departures): the worker writes them bare, in the order `## Deviations found` lists the slugs, each in the entry that defines it, in the commit of the first task that makes the change — never a guessed number. If the operator strikes Task 5 (the archive-confirm copy) before merge, its slug is not written and its number is reported unused. A departure found while executing is reported, never typed.
 
 ## The coordinator's rulings this plan builds (binding; they win over the spec and over the plan's own preferences)
 
@@ -19,7 +19,7 @@
 - **(C) The verdict is widened, not re-derived** (Task 7): `ClaimantVerdict`'s dead arm gains `cause` in ONE place, `measureClaimant`'s own ladder; the reclaim door and the stall watch ignore it; no consumer re-splits the prose `why`.
 - **(D) A crash and only a crash** (Tasks 6, 10, 11): the journal reader is ONE function; an unreadable journal is unmeasured, never "no history" — and so is one the lane cannot TRUST to hold every deliberate act: the mirror `unavailable`, a gap it recorded in a generation not older than the claimant's last successful spawn, a journal line ccd counted as unwritten after it (Pre-flight finding 14); a mirror not swept since a restart, or `stale`, makes a pass decide nothing at all. An absent row with no history is unmeasured (listed, never acted on), and so is a `never-started` row with no successful spawn; `stopped` is never; `restarting` is alive; `unmeasurable` is never dead. Pinned at L1, at the executor's re-measure and at the lane.
 - **(E) The hour is durable** (Tasks 6, 8, 11): `dead_claimants` keyed by claimant, written on a crashed pass, deleted on any other answer; the anchor is `max(firstDeadAt, .supervised)` with an absent, unparseable or future stamp ignored; act at an hour AND two crashed passes. The migration keeps a rollback bootable — measured (Pre-flight finding 2).
-- **(F) The circuit breaker** (Tasks 6, 11): two or more claimants first measured crashed within ten minutes, or a fleet-wide doubt on the pass — tmux not answering for any claimant, whatever the count, or none of two or more measurable — act on NONE and raise ONE item naming them, and ONE feed row per trip. It REMEMBERS its members at their first-dead instants and releases one only on evidence (alive, stopped, deliberate) or when it leaves the population, so a member's transient doubt does not dissolve the cluster; it resumes when they fall under the threshold; tests red when it, its memory or its fleet-wide arm is deleted; evaluated in shadow too. The operator's clear is the SMALLEST act the box-token census allows: the doors that already exist (revive, reclaim, abandon), no new route (Open question 1).
+- **(F) The circuit breaker** (Tasks 6, 11): two or more claimants first measured crashed within ten minutes, or a fleet-wide doubt on the pass — tmux not answering for any claimant, whatever the count, or none of two or more measurable — act on NONE and raise ONE item naming them, and ONE feed row per trip. It REMEMBERS its members at their first-dead instants and releases one only on evidence (alive, stopped, deliberate) or when it leaves the population, so a member's transient doubt does not dissolve the cluster; it resumes when they fall under the threshold; tests red when it, its memory or its fleet-wide arm is deleted; evaluated in shadow too. The operator's clear is the SMALLEST act the box-token census allows: the doors that already exist (revive, reclaim, abandon), no new route; a one-tap clear door is carried (the coordinator's ruling, 2026-10-07).
 - **(G) No successor** (Tasks 8, 9, 10): the act runs on the serialiser; the claimant is re-measured INSIDE the abandon arm, immediately before EACH run's fleet act and again after it, before the commit; the commit is a compare-and-set on `claimedBy`, checked on a fresh read before the fleet act and again inside the store transaction; any answer but a crash ends the whole act and, being evidence, resets the anchor. A compare-and-set cannot see a revive of the SAME id (`ccd ensure` takes no mutex and rewrites no `claimedBy`), so the forced-interleaving test the ruling asks for is that revive — a same-id revive after the lane measured, which the in-arm re-measure stops before anything is composed — and it reds when the re-measure is removed (T9.8, T10.1); the successor test stays, as the second wall against a `claimedBy` writer outside the serialiser (none exists in this build). The residual, stated: a revive inside the last re-measure's round trip (Pre-flight finding 16).
 - **(H) The act** (Tasks 9, 10, 11): the abandon arm with `causedBy: 'sweep'` (additive; no `FLEET_PROTO` bump), the reclaim port wired as the abandon route wires it; runs the arm cannot move are listed and not retried beyond the backoff, and an act that THROWS backs off too; ONE feed row per ended programme in the spec's words, with its first-dead instant — and a programme the act closed only part of is never announced as ended. Landing treats a sweep close as an operator abandon — measured, and pinned through the watcher's own `sweepLanding` (Pre-flight finding 4). The `causedBy` vocabulary text is amended where it is written (Pre-flight finding 5).
 - **(I) Relations** (Tasks 11, 13): the stall watch notifies — r3 `coordinator-dead` and, once its wave-2 arms are armed, `coord-deaf`, one push per stalled worker, each naming the coordinator — and this lane acts and NEVER pushes: its rows are records of that incident, keyed by the same claimant id (Pre-flight finding 9). A sibling pass at the child lane's cadence, measuring the distinct claimants of non-terminal runs, with its own memory and attention list. Spec §9's stage-4 rows are measured (Task 13).
@@ -29,7 +29,7 @@
 
 Copied from `CLAUDE.md`, the spec, the 3b plan and the ledger where the value matters. Every task's requirements include this section.
 
-- **Base.** Every block was generated from a prototype built stage by stage (each task's test stage, then its source stage) on **`origin/main` `9b0742089`** (#312, wave 3b merged) and REVISED, after the plan's four-lens review, stage by stage on **`282e79e44`** (`origin/main` as this plan was revised: four docs-only commits over `9b0742089` — the delegation-broker ledger and its wave-2 note, the native-docs-reader ledger and W2 plan, and that programme's W2 dispatch — none in a file this plan touches). The plan's blocks were replayed whole onto `9b0742089`, `a17e14bc0` and `282e79e44`: every block matches EXACTLY ONCE at its turn on all three, and the replayed files are byte-identical to the prototype's. Every count below was measured on that prototype, one file per process, `--maxWorkers=1`, in the foreground, `TMPDIR` on the volume outside every checkout, `CCD_DISK_FLOOR_GB=1`, at load averages between 9 and 50 (other workers' suites). **Whole-file denominators are base-relative**: compare the FAILED count and the failing TITLES a step names. If a Find block is absent or not unique on your base, `main` moved under it: stop and report rather than improvise an anchor. `## Re-measure at dispatch` lists every block in a file another in-flight wave edits.
+- **Base.** Every block was generated from a prototype built stage by stage (each task's test stage, then its source stage) on **`origin/main` `9b0742089`** (#312, wave 3b merged), REVISED after the plan's four-lens review stage by stage on `282e79e44`, and RE-BASED stage by stage onto **`7f7bf4afc`** — `origin/main` after #320 (stall-watch-settings wave 1) merged. #320 took coord.db's migration slot 17 and `mail-routes.test.ts`'s fourteenth vocabulary union, and narrowed `coord-db.test.ts`'s migration-14 case to its own tables, so this plan's migration is slot 18, its union the fifteenth, and its migration-14 edit is gone; the re-base kept both sides everywhere else. The plan's blocks were replayed whole onto `7f7bf4afc`: every block matches EXACTLY ONCE at its turn, and the replayed files are byte-identical to the prototype's. Every red and green count below was measured on the RE-BASED prototype, every stage; the mutation rows of Tasks 6 and 8, and row T4.1 (`coordinator-skill.test.ts` gained a case in #320), were re-measured there too; the other tasks' rows were measured on the revised prototype over `282e79e44` — #320 changed none of their test files, and each row's edit was re-checked to occur exactly once on the re-based tree. One file per process, `--maxWorkers=1`, in the foreground, `TMPDIR` on the volume outside every checkout, `CCD_DISK_FLOOR_GB=1`, at load averages between 9 and 50 (other workers' suites). **Whole-file denominators are base-relative**: compare the FAILED count and the failing TITLES a step names. If a Find block is absent or not unique on your base, `main` moved under it: stop and report rather than improvise an anchor. `## Re-measure at dispatch` lists every block in a file another in-flight wave edits.
 - **Deploy class: SERVER + PWA + the FLEET box's skill spine, through ccrc's own updater; nobody moves a box by hand.** No `ccd/ccd` edit and no agent edit — but Task 4 (coordinator clause 3) and Task 13 (`references/resume.md`) change the coordinator skill, which reaches a coordinator's home ONLY through `ccrc update`'s install spine on the fleet box (a server-role box converges no skills — CLAUDE.md's deploy section): both boxes move, the fleet box first, as `ccrc rollout` does by default, and doctor's `skills` check says when every home has the shipped text. The coord.db migration (Task 8) runs at the server's boot. The deploy note has the order, the arming, and what the first armed pass faces.
 - **SAFETY — sacred.** Never run a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`, `~/.cc-limits` or `claude-session@*.service` directly; never print a secret file's contents; `gh` stays off the exec whitelist. **This wave's lane ENDS PROGRAMMES: it closes another coordinator's runs `failed`, and through CCR-15's port gets their children reclaimed — a worker mid-turn loses its turn.** In every test the lane runs against a fixture `coord.db`, a fixture registry and a scripted tmux and `runCcd`; nothing reaches the live server, agent, registry or store; no test calls the live server's run, mail or abandon routes. Never touch `$REG/dead-coordinator-lane-live` (or `$REG/expire-lane-live`) on a box: arming is the operator's.
 - **Fixture HOMEs only.** The lane's tests build on `testDeps` and a fixture HOME (`mkTmp`), as `archived-expiry-lane.test.ts` does; the store's on a temp `coord.db`; the executor's and `sweep-close`'s on the real `closeRun` over a fixture store with a recording `runCcd`.
@@ -41,10 +41,10 @@ Copied from `CLAUDE.md`, the spec, the 3b plan and the ledger where the value ma
 
   Measured: `5 passed | 330 skipped (335)` at the end of every task; Task 6's source stage before its README repair is the one red (`2 failed | 3 passed | 330 skipped (335)`: `CITATION DEBT` and `README HAS ITS OWN CENSUS`). No literal in `session-hook.test.ts` changes.
 - **Rings and wire.** `server/src/deadCoordinator.ts` is L1: it imports `shared/api.ts` alone, types only (Task 6 pins that). `coord/reclaim.ts` takes the cause type from it. `coord/endDeadCoordinator.ts` is the executor (L3, `coord/expireArchived.ts`'s shape); `watch.ts` (L4) gathers and applies, deciding nothing. `CoordStatus.deadCoordinatorAttention` is ADDITIVE and OPTIONAL, read by ONE PWA reader that reads absence as no items; no `FLEET_PROTO` bump. `causedBy: 'sweep'` is additive on the free-text `run_events.causedBy` column.
-- **The migration slot.** Task 8 appends `MIGRATIONS[16]`, banner `17: user_version 16 -> 17`, measured free on `origin/main` (16 banners) and on every remote head at planning — but **stall-watch-settings W1's merged plan also writes `user_version 16 -> 17`** (its dispatch is held). Whichever merges second moves up a slot and re-measures (`git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'`) before its PR and before merge; the moved entry changes its banner, its comment's slot sentence, and every `toBe(17)` this plan writes (`coord-db.test.ts` twice, `asks-store.test.ts` once).
+- **The migration slot.** Task 8 appends `MIGRATIONS[17]`, banner `18: user_version 17 -> 18`. The plan was drafted at slot 17; **stall-watch-settings W1 merged first (#320) and took `user_version 16 -> 17`** (`stall_settings`), so the entry moved up a slot, as entry 12 did before it — measured free on `origin/main` `7f7bf4afc` (17 banners) and on every remote head at the re-base (none holds an eighteenth; the three heads at seventeen carry #320's own entry). Re-measure before the PR and before merge (`git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'` prints 17); if another branch takes 18 first, this entry moves again, and the move changes its banner, its comment's slot sentence, `COORD_SCHEMA_VERSION`'s pins (`coord-db.test.ts`: the `derives to 18` case's two `toBe(18)` and the migration-11 case's one; `asks-store.test.ts`: one), the `migration 18` words in `store.ts`'s comment and `dead-coordinator-store.test.ts`, and nothing in `coord-db.test.ts`'s own `dead_claimants` describe, which finds its slot by its DDL (main's rule, #320's `stall_settings` case).
 - **Mutation-table discipline.** Every new guard ships with a row that reds when the guard is deleted or mutated — measured on this plan's prototype at the task's own source stage, never guessed. Each task ends with its table: the exact edit (`⏎` marks a line break inside the text), the command and the measured red. Restore every edit before the commit.
 - **Branch discipline.** Commit on this workspace's own branch, one commit per task, never a separate feature branch. Identity is the repository's noreply address; do not change git config. Before each push: `git log --format='%an <%ae>' origin/main..HEAD | sort -u`.
-- **Deviation numbers.** Twenty departures, by slug; the issued block is 4348–4363, sixteen numbers, and the four without one are written `D-TBD-<slug>` and reported (the callout above). No `D-<n>` token is written for a new number in any code comment, test title or doc this plan touches: the comments name the departure's SLUG where they need one. Task 4 edits two ledger entries of the 3b plan; `deviation-refs.test.ts` reads every plan's column-0 entry lines — this plan's blocks included — so the one entry whose subject changes is edited by a FRAGMENT block that never quotes its line whole (How to read the blocks).
+- **Deviation numbers.** Twenty departures, by slug; the brief issues the numbers for all twenty (the callout above). No `D-<n>` token is written for a new number in any code comment, test title or doc this plan touches: the comments name the departure's SLUG where they need one. Task 4 edits two ledger entries of the 3b plan; `deviation-refs.test.ts` reads every plan's column-0 entry lines — this plan's blocks included — so the one entry whose subject changes is edited by a FRAGMENT block that never quotes its line whole (How to read the blocks).
 - **No hostnames, IPs, tailnet names or docserver URLs** anywhere in the diff (`topology-clean.test.ts`).
 - **Overlap (ruling J).** Child reclamation wave 6 (run 291, `ws/amber-river`, unmerged and not on the remote, so its file list is its plan's) edits `shared/api.ts`, `README.md`, `watch.ts`, `journalparse.ts`, `mirror.ts` and the CCR-15 spec among the files this plan touches or reads; ccrc-history (run 302, claims 1065/1066/1068; measured with `git diff --name-only origin/main...origin/ws/soft-delta` at `6a6987532`) edits `README.md`, `CLAUDE.md`, `deploy/deploy.sh` (row T13.3's anchor), `shared/lifecycle.ts`, `single-definition.test.ts`, `lifecycle.test.ts` and `session-hook.test.ts` among them — not `coord/db.ts`; centralised-update W15 (run 300) may take `server/src/update/*`, which this plan does not touch. This plan does not edit `ccd/ccd`; if a run that does lands first, nothing here re-stamps. Whichever of these lands second runs `git merge origin/main` (never a rebase), keeps both sides, re-points README's purge-token anchors by content, re-runs the five citation cases and `cite-remeasure`, and re-runs this plan's suites. `## Re-measure at dispatch` names every shared block.
 
@@ -61,7 +61,7 @@ The inputs a reviewer looking for a programme ended that should not have been me
 7. **No successor, and no revived coordinator, is failed.** The re-measure INSIDE the arm, before each fleet act and again before each commit, ends the act on a revive of the SAME id — which no compare-and-set can see; the compare-and-set refuses a successor before the fleet act and again inside the commit (Task 9: `THE RE-MEASURE, before …`, `… after the fleet act …`, both compare-and-set halves; Task 10: `THE FORCED INTERLEAVING (ruling G) …`, `a revive DURING the fleet act …`). The residual is a revive inside the last re-measure's round trip (Pre-flight finding 16).
 8. **The breaker.** Two dead together end nothing, in shadow and live; one pass that cannot measure a member does not dissolve the cluster; tmux not answering trips it whatever the count; one revived, the other ends (Task 6; Task 11).
 9. **One at a time, and never every pass.** Armed, at most one claimant per pass, the longest dead first; one pass at a time; a thrown act backs off (Task 11).
-10. **The migration keeps a rollback bootable.** Migration 17 is a new table and nothing else; `main`'s own `db.ts` booted on it (Pre-flight finding 2); the slot is contested with stall-watch-settings W1 and re-measured before merge (Global Constraints; Task 8's rows T8.5 and T8.6).
+10. **The migration keeps a rollback bootable.** Migration 18 is a new table and nothing else; `main`'s own `db.ts` booted on it (Pre-flight finding 2); it moved up from slot 17 when stall-watch-settings W1 (#320) merged first, and the slot is re-measured before the PR and before merge (Global Constraints; Task 8's rows T8.5 and T8.6).
 11. **The attribution.** Every run event, feed row and audit of the act says `sweep`, never `operator`; landing reads a sweep-failed run exactly as an operator abandon, pinned through `sweepLanding` itself (Task 9: the first case, `THE LANE ITSELF …`, row T9.11).
 12. **The residue's blockers** — what the operator's arming of the EXPIRY lane rests on: an unlearnable row is listed and does not starve the rest (Task 1), a non-resumable failure is reported at once and never retried (Task 2), and the shadow record follows the row (Task 3).
 
@@ -74,9 +74,9 @@ The inputs a reviewer looking for a programme ended that should not have been me
 | `server/src/archivedExpiry.ts` (`archivedExpirySighted`, the held sentence), `server/src/coord/expireArchived.ts` (the archive check before a refusal), `server/src/ccdargv.ts` (`wsExpire`'s doc); the three tests and `server/test/single-definition.test.ts` (the lane's prose pin) | 3 | F1, F2, F3, F4 |
 | `ccd/coordinator-skill/SKILL.md` (clause 3), the 3b plan (two entries, two rows), the lifecycle spec (§5.3's "The lane", §6 item 6); `server/test/coordinator-skill.test.ts`, `server/test/expiry-lane-prose.test.ts` | 4 | F5, F6, F7, O1, O2, parked item 3 |
 | `pwa/src/fleet/ArchiveSheet.tsx`, `pwa/src/screens/FleetScreen.tsx`, the lifecycle spec (§5.3's words item); `pwa/test/archive-sheet.test.tsx`, `pwa/test/fleet-screen.test.tsx` | 5 | parked item 2, DROPPABLE: the archive confirms hedged until armed |
-| `server/src/deadCoordinator.ts` (new, L1), `shared/api.ts` (`DeadCoordinatorAttention`, `CoordStatus.deadCoordinatorAttention`), `README.md` (four anchors, by content); `server/test/dead-coordinator-policy.test.ts` (new), `server/test/mail-routes.test.ts` (the fourteenth union) | 6 | the lane's decisions |
+| `server/src/deadCoordinator.ts` (new, L1), `shared/api.ts` (`DeadCoordinatorAttention`, `CoordStatus.deadCoordinatorAttention`), `README.md` (four anchors, by content); `server/test/dead-coordinator-policy.test.ts` (new), `server/test/mail-routes.test.ts` (the fifteenth union) | 6 | the lane's decisions |
 | `server/src/coord/reclaim.ts` (`ClaimantVerdict`); `server/test/coord-reclaim.test.ts` | 7 | the verdict widened |
-| `server/src/coord/schema.ts` (migration 17), `server/src/coord/store.ts` (the anchor, the journal read, `lifecycleGapGens`, `closeRun`'s compare-and-set, `AdvanceResult`); `server/test/dead-coordinator-store.test.ts` (new), `server/test/coord-db.test.ts`, `server/test/asks-store.test.ts` | 8 | the store's half |
+| `server/src/coord/schema.ts` (migration 18), `server/src/coord/store.ts` (the anchor, the journal read, `lifecycleGapGens`, `closeRun`'s compare-and-set, `AdvanceResult`); `server/test/dead-coordinator-store.test.ts` (new), `server/test/coord-db.test.ts`, `server/test/asks-store.test.ts` | 8 | the store's half |
 | `server/src/coord/close.ts` (`CloseCause`, `SweepCloseGuard`, the sweep's signature, the in-arm re-measure before and after the fleet act, the first compare-and-set half), `server/src/coord/routes.ts` (`withSweepAbandon`, `sendCloseOutcome`); `server/test/sweep-close.test.ts` (new) | 9 | the sweep's abandon and its handle; landing's reading pinned through `sweepLanding` |
 | `server/src/coord/endDeadCoordinator.ts` (new); `server/test/end-dead-coordinator.test.ts` (new) | 10 | the one executor, its re-measure, the journal-trust adapter and its feed rows |
 | `server/src/watch.ts` (`sweepDeadCoordinators`, its memory, the coord frame, the tick dispatch), `server/src/server.ts` (the handle to the watcher); `server/test/dead-coordinator-lane.test.ts` (new), `server/test/fleetws.test.ts` | 11 | the lane, shadowed, one pass and one claimant at a time |
@@ -84,21 +84,21 @@ The inputs a reviewer looking for a programme ended that should not have been me
 | `README.md`, `ccd/coordinator-skill/references/resume.md`, the lifecycle spec (§5.4's "As wave 4 builds the lane", §6 item 5), the CCR-15 spec (§5.8), the build-4 design (`causedBy`'s sentence), `deploy/measure-workspace-lifecycle.py` (spec §9's stage-4 rows); `server/test/dead-coordinator-prose.test.ts` (new), `server/test/expiry-lane-prose.test.ts`, `server/test/single-definition.test.ts` (the no-writer pins), `server/test/measure-workspace-lifecycle.test.ts` | 13 | the words, the arming condition in the coordinator's runbook, the switch widened wherever it names what it stops, and the measurement |
 | — | 14 | the whole branch, and the PR |
 
-**Not modified, deliberately:** `ccd/ccd` and every ccd suite (the lane reads ccd's journal and registry; nothing on the box changes); `sweepChildReclaim`, `childReclaimSweep.ts`, `coord/childReclaim.ts` (the reclaim port is called as the abandon route calls it); `coord/stall.ts` (the stall watch keeps its r3 `coordinator-dead` and `coord-deaf` pushes and their text — the lane never pushes, ruling (I), Pre-flight finding 9); `coord/landing.ts` and `sweepLanding` (they key on open runs, never on `causedBy` — pinned in Task 9, not changed); `coord/mirror.ts` and `coord/mirrorplan.ts` (the lane reads the mirror's health through the watcher's existing `lifecycleHealth()`, its gaps through one new store read); `coord/routes.ts`'s doors and `auth/gate.ts` (no route is added: `box-token-census` and `coord-pause-route`'s `SESSION_ONLY`/`UNGATED` sets are unchanged); `CLAUDE.md` (its box-token census sentence names no door this wave adds); the worker and reviewer skills; `journalparse.ts` (the `meas.rc` degrade it pins stays; Pre-flight finding 1).
+**Not modified, deliberately:** `ccd/ccd` and every ccd suite (the lane reads ccd's journal and registry; nothing on the box changes); `sweepChildReclaim`, `childReclaimSweep.ts`, `coord/childReclaim.ts` (the reclaim port is called as the abandon route calls it); `coord/stall.ts` and `coord/stallsettings.ts` (the stall watch keeps its r3 `coordinator-dead` and `coord-deaf` pushes, their text and #320's one resolution of their arming — the lane never pushes, ruling (I), Pre-flight finding 9); `coord/landing.ts` and `sweepLanding` (they key on open runs, never on `causedBy` — pinned in Task 9, not changed); `coord/mirror.ts` and `coord/mirrorplan.ts` (the lane reads the mirror's health through the watcher's existing `lifecycleHealth()`, its gaps through one new store read); `coord/routes.ts`'s doors and `auth/gate.ts` (no route is added: `box-token-census` and `coord-pause-route`'s `SESSION_ONLY`/`UNGATED` sets are unchanged — #320 added the session-only `/api/coord/stall-watch` pair to them, and this plan adds nothing); `CLAUDE.md` (its box-token census sentence names no door this wave adds); the worker and reviewer skills; `journalparse.ts` (the `meas.rc` degrade it pins stays; Pre-flight finding 1).
 
 ## Pre-flight findings (measured while planning; not departures unless they say so)
 
-Measured on the prototype over `9b0742089`, each task applied stage by stage, every named suite run at every stage.
+Measured on the prototype over `9b0742089`, each task applied stage by stage, every named suite run at every stage — and, where #320 could move a finding, re-measured on the re-based prototype over `7f7bf4afc` (findings 2, 3, 7 and 9 say so).
 
 1. **The mirror's `meas.rc` is null on every real line.** ccd's encoder (`_lc_json`, `ccd/ccd`) writes every `meas.<key>` value as a STRING (`meas[k[5:]] = v`, the argv's own text), and `journalparse.ts`'s `n()` keeps only a JSON number — `journalparse.test.ts`'s own case pins that `rc: '0'` degrades to `null`. So "the newest `spawn` row whose `rc` is 0" cannot be read from the typed field: the clause reads the `spawn` line's own bytes (`raw`, the mirror's verbatim column), strictly — `"0"` is a start; a line that does not parse, a missing `rc` or any other value proves none, and then every row in the horizon counts (the departure `the-last-start-is-read-off-the-spawn-line`). Why a successful spawn at all: `cmd_start` and `cmd_ensure` journal `start`/`ensure` at the TOP of the verb, before any pane exists ("The OUTCOME is not asserted here", `cmd_start`'s own comment), and `_reg_claim`'s `claim` line is written on the supervised branch "exactly when the unit never comes up" — so neither tells a revive that worked from one that failed. Only `_spawn_settle`'s `spawn` line carries an rc. A typed `rc: 0` still counts, so a later parser fix changes nothing here. ONE MORE MEASURED LIMIT: `_spawn_settle` journals `spawn` only on a CHANGE — a different rc, or more than 300 s since the previous spawn (`(( _lc_now - _lc_prev_at > 300 ))`, `ccd/ccd`), the registry's `spawn` field being rewritten every time. So a coordinator stopped and revived successfully within five minutes of its previous successful spawn writes no new `spawn` line; if it later crashes, the clause still finds the stop after the old spawn and answers `deliberate`, and the coordinator is never ended and never listed. That fails SAFE (no programme is ended), and it is a coverage hole, carried out of this wave (reading the registry's `spawn` field as the start when it is newer than the newest journaled spawn would close it).
-2. **A rolled-back build boots on migration 17 — measured against `origin/main`'s own code.** The prototype wrote a `coord.db` at `user_version 17` holding a run and an anchor; `origin/main`'s `db.ts` and `store.ts` (an export of `9b0742089`, `COORD_SCHEMA_VERSION` 16) then opened it: `openCoordDb` took rule 3 — it warned `coord.db is at schema 17, this build knows 16 — reading it as-is and migrating nothing (a rollback may only refuse to migrate, never to read)` — read the run back, opened a second run (`openRun` → `{ id: 2, state: 'planned' }`), left `user_version` at 17 and the anchor row untouched. Rolled forward, the prototype read the anchor back as written. That is the shape chosen: a NEW TABLE and nothing else — no column on a table an older build writes (an `ALTER TABLE runs ADD COLUMN … NOT NULL` would break an older build's `INSERT INTO runs`), so the update watchdog can roll a server box back and it boots. What a rollback cannot do is keep the anchors current, so a row it leaves is an episode nobody measured: `lastDeadAt` rides beside `firstDeadAt`, and an episode whose last crashed pass is more than ten minutes old restarts (the departure `dead-anchor-restarts-after-an-unobserved-gap`).
-3. **The migration slot.** `origin/main` holds sixteen banners; no remote head at planning held a seventeenth; stall-watch-settings W1's merged plan (`2026-10-05-stall-watch-settings-w1-server.md`, Precondition 3) also takes `16 -> 17` and its dispatch is held. Global Constraints says who moves.
+2. **A rolled-back build boots on migration 18 — measured against `origin/main`'s own code.** The re-based prototype wrote a `coord.db` at `user_version 18` holding a run and an anchor; `origin/main`'s `db.ts` and `store.ts` (an export of `7f7bf4afc`, `COORD_SCHEMA_VERSION` 17) then opened it: `openCoordDb` took rule 3 — it warned `coord.db is at schema 18, this build knows 17 — reading it as-is and migrating nothing (a rollback may only refuse to migrate, never to read)` — read the run back, opened a second run (`openRun` → `{ id: 2, state: 'planned' }`), read its own stall-watch settings row (`stallSettings()` → `kind: 'row'`, level `follow`), left `user_version` at 18 and the anchor row untouched. Rolled forward, the prototype read the anchor back as written and both runs. (The same probe at slot 17 against `9b0742089`'s build, `COORD_SCHEMA_VERSION` 16, measured the same while planning.) That is the shape chosen: a NEW TABLE and nothing else — no column on a table an older build writes (an `ALTER TABLE runs ADD COLUMN … NOT NULL` would break an older build's `INSERT INTO runs`), so the update watchdog can roll a server box back and it boots. What a rollback cannot do is keep the anchors current, so a row it leaves is an episode nobody measured: `lastDeadAt` rides beside `firstDeadAt`, and an episode whose last crashed pass is more than ten minutes old restarts (the departure `dead-anchor-restarts-after-an-unobserved-gap`).
+3. **The migration slot.** `origin/main` (`7f7bf4afc`) holds seventeen banners: stall-watch-settings W1 (#320, `2026-10-05-stall-watch-settings-w1-server.md`) merged first and took `16 -> 17` (`stall_settings` and `run_events_by_at`), so this plan's entry, drafted at 17, is `17 -> 18`. Measured at the re-base over every remote head: none holds an eighteenth banner, and the three at seventeen (`ws/calm-basin`, `ws/plain-hollow`, `ws/swift-meadow`) carry #320's entry. Global Constraints says who moves next time.
 4. **Landing never reads `causedBy`.** `coord/landing.ts` and `sweepLanding` decide on the workspace's surviving OPEN run (`openRunsForSession` → `survivorOf`) and its coordinator (`resolveCoordinator`); the word appears in neither (`grep -n causedBy server/src/coord/landing.ts server/src/watch.ts` finds nothing in the landing lane). So a run the sweep failed already reads as one the operator abandoned. Task 9 pins it: the same facts and the same verdict, whoever failed the run. The other `causedBy` readers: `run_events` is free text; `RoutingEvent.causedBy` is a `string`; the reclaim trail keys on `causedBy = 'operator' AND detail LIKE 'reclaim:%'`, which a sweep row never matches; the stall watch's notices parse `detail`, not `causedBy`.
 5. **CCR-15's texts name no `causedBy` vocabulary.** Spec §6 item 5 asks that "CCR-15's spec text naming causedBy's vocabulary" be amended; measured, neither `2026-09-22-child-workspace-reclamation-design.md` nor `child-reclamation-contract.md` spells `causedBy`. The set is written in the build-4 design (`2026-08-11-build4-conversation-and-controls-design.md`, "run events already carry `causedBy ∈ {'coordinator','operator',<session id>}`") and in `close.ts`. Task 13 amends that sentence and §6 item 5 says why (the departure `caused-by-vocabulary-lives-in-the-build4-design`).
 6. **Which box's registry arms the lane.** The server reads `$REG` through its `FleetIO`: `index.ts` hands `CCRC_FLEET=remote` the agent's `fleet.io` (the FLEET box's `~/.cc-sessions`) and local mode `localIO` (the server's own). `$REG/dead-coordinator-lane-live` and `$REG/reclaim-paused` are read from that listing — on the live fleet, the fleet box. README says so (Task 13).
-7. **A new tick lane is seen by every test that ticks a watcher.** An open run whose claimant has NO registry row and no journal history is listed `unmeasured` (spec: "listed, never acted on"), and that list rides the coord frame — so `fleetws.test.ts`'s three `runs`-frame cases, whose run is claimed by an id nothing registers, saw an extra `coord` frame. Each now registers its claimant (Task 11), and the coord-frame cases gain the field. Measured over all 35 server files that construct a `FleetWatcher`: those two edits are the only ones needed.
+7. **A new tick lane is seen by every test that ticks a watcher.** An open run whose claimant has NO registry row and no journal history is listed `unmeasured` (spec: "listed, never acted on"), and that list rides the coord frame — so `fleetws.test.ts`'s three `runs`-frame cases, whose run is claimed by an id nothing registers, saw an extra `coord` frame. Each now registers its claimant (Task 11), and the coord-frame cases gain the field. Measured over every server file that constructs a `FleetWatcher` — 36 on the re-based tree, `main`'s 34 and this plan's two new ones; #320 added none: those two edits are the only ones needed.
 8. **Test doubles of the watcher.** `lifecycle.test.ts` hands `buildServer` a structural stand-in watcher with no `useCoordSerialiser`; the call is optional (`watcher?.useCoordSerialiser?.(…)`), so a double with no lane is not handed one (seven cases red without it, measured).
-9. **The relation to the stall watch — measured, and not "one push".** Two of the stall watch's arms notify the operator about a dead coordinator, both PER WORKER and both through its operator-push gate (`stall-watch-live` AND `stall-watch-escalate`, `coord/stall.ts`'s `stallNotifyDelivery`): r3 `coordinator-dead` — r2 measures the claimant with the same `measureClaimant` and, when it reads dead, r3 pushes once per stalled worker episode, "Reclaim the run: POST /api/runs/<id>/reclaim" (`stall.ts`, `case 'coordinator-dead'`) — and `coord-deaf`, which pushes "⚠ coordinator deaf" for each worker whose ball-passing mail to its coordinator sat unacked `COORD_DEAF_MS` (one hour), WITHOUT measuring the coordinator; `coord-deaf` is a wave-2 arm, so it records shadow only until `stall-watch-w2-live` exists (`STALL_ARM_WAVE`). So a dead coordinator with N stalled workers produces up to N r3 pushes and, once the wave-2 arms are armed, up to N `coord-deaf` pushes — each naming its worker's workspace and the coordinator. This lane adds NONE: its rows are feed records (`log.record`, never `pushOne`) and attention entries keyed by the same claimant id, and they name the claimant as the stall watch's pushes do, so they read as the same incident's outcome rather than a second incident. The remedy text differs on purpose: r3 names the reclaim door (the operator's move inside the hour); the lane's entry says what an armed lane does after it. Once an armed lane closes the runs, the stall watch has no open run to watch. Task 11 pins "never pushes" (the departure `the-dead-coordinator-lane-never-pushes`, row T11.20); README and spec §5.4 say how the two relate (Task 13).
+9. **The relation to the stall watch — measured, and not "one push".** Two of the stall watch's arms notify the operator about a dead coordinator, both PER WORKER and both through its operator-push gate, `coord/stall.ts`'s `stallNotifyDelivery` — the arming's `live` AND `escalate`. Since #320 that arming is ONE resolution, `resolveStallWatch` (`coord/stallsettings.ts`), read by both sweeps: under Follow (the seeded default) the fleet box's files decide it as before (`stall-watch-live` AND `stall-watch-escalate`); a level chosen in Settings (`POST /api/coord/stall-watch`, session-only) decides the flags instead — Alert and the two levels above it push, Off, Log only and Check silent workers do not — and the kill file `stall-watch-disabled` still returns the files wholesale. r3 `coordinator-dead` — r2 measures the claimant with the same `measureClaimant` and, when it reads dead, r3 pushes once per stalled worker episode, "Reclaim the run: POST /api/runs/<id>/reclaim" (`stall.ts`, `case 'coordinator-dead'`) — and `coord-deaf`, which pushes "⚠ coordinator deaf" for each worker whose ball-passing mail to its coordinator sat unacked `COORD_DEAF_MS` (one hour), WITHOUT measuring the coordinator; `coord-deaf` is a wave-2 arm, so it records shadow only until the resolved arming's `w2Live` is on (`STALL_ARM_WAVE`): `stall-watch-w2-live` under Follow, or the level Everything chosen in Settings — which a strict mail gate holds off. So a dead coordinator with N stalled workers produces up to N r3 pushes while the resolved arming pushes and, once the wave-2 arms are armed, up to N `coord-deaf` pushes — each naming its worker's workspace and the coordinator. This lane adds NONE, and no stall-watch setting — file or chosen level — arms, silences or reaches it: its rows are feed records (`log.record`, never `pushOne`) and attention entries keyed by the same claimant id, and they name the claimant as the stall watch's pushes do, so they read as the same incident's outcome rather than a second incident. The remedy text differs on purpose: r3 names the reclaim door (the operator's move inside the hour); the lane's entry says what an armed lane does after it. Once an armed lane closes the runs, the stall watch has no open run to watch. Task 11 pins "never pushes" (the departure `the-dead-coordinator-lane-never-pushes`, row T11.20); README and spec §5.4 say how the two relate (Task 13).
 10. **Time in the lane's tests walks.** Because a gap of more than ten minutes between crashed passes restarts the episode, the lane's tests step the clock nine minutes a pass across the hour, as a live lane's minute passes would.
 11. **The seven-day prose pin (F3), measured before deciding.** A prose pattern (`(seven|7)[ -]days?`, case-blind) over every code line of `server/src` and `pwa/src` holds FIVE files: `wsaudit.ts` (ccd's own `not-expired` and `child` sentences, rendered verbatim), `watch.ts` and `coord/schema.ts` (the deviation ledger's unrelated seven-day stale window), and the PWA's two archive confirms (the operator's copy — Task 5 rewords them, and they keep "seven days after its archive"). A tree-wide pin would be an allowlist of five; so it is scoped to the lane's own two files, where a period in a sentence is the defect F3 was (Task 3).
 12. **The breaker's first trip is likely the first deploy.** Every coordinator crashed before the deploy gets its anchor on the first pass, so two or more of them trip the breaker at once — which is what the breaker is for: they are listed, nothing is ended, and the operator revives, reclaims or abandons them before arming. Not measured on the fleet (this plan calls no live route and reads no live store); the shadow list on `/runs` is that measurement (the deploy note).
@@ -110,7 +110,7 @@ Measured on the prototype over `9b0742089`, each task applied stage by stage, ev
 
 ## How to read the blocks
 
-Each edit is a block headed by an HTML comment. A **replace** (`<!-- replay: replace <path> -->`) names its file (an `In <path>, find:` line), shows the text to find — whole lines, occurring EXACTLY ONCE in the file at that point of the plan (earlier blocks already applied), and unique even as a raw substring — and the text that replaces it. A **create** (`<!-- replay: create <path> -->`) shows a whole new file. A **fragment** (`<!-- replay: fragment <path> -->`, one in this plan, Task 4) shows a PART of one line, occurring exactly once in the file, and the text that replaces that part: used where the whole line is a column-0 ledger entry whose subject changes, which `deviation-refs.test.ts` would read in this plan's own blocks as a second definition of the number. A block's text is the lines between its fences and ends with a newline (a fragment's, without one). Apply the blocks in the order given: Step 1 of each task holds its test edits (the red stage), Step 3 its source edits (the green stage), Step 5 its taxes where it has them. The replay check applied exactly these 134 blocks to `9b0742089`, to `a17e14bc0` and to `282e79e44`, each in one pass, and reproduced the prototype's tree byte for byte in every file the plan touches (47 files).
+Each edit is a block headed by an HTML comment. A **replace** (`<!-- replay: replace <path> -->`) names its file (an `In <path>, find:` line), shows the text to find — whole lines, occurring EXACTLY ONCE in the file at that point of the plan (earlier blocks already applied), and unique even as a raw substring — and the text that replaces it. A **create** (`<!-- replay: create <path> -->`) shows a whole new file. A **fragment** (`<!-- replay: fragment <path> -->`, one in this plan, Task 4) shows a PART of one line, occurring exactly once in the file, and the text that replaces that part: used where the whole line is a column-0 ledger entry whose subject changes, which `deviation-refs.test.ts` would read in this plan's own blocks as a second definition of the number. A block's text is the lines between its fences and ends with a newline (a fragment's, without one). Apply the blocks in the order given: Step 1 of each task holds its test edits (the red stage), Step 3 its source edits (the green stage), Step 5 its taxes where it has them. The replay check applied exactly these 134 blocks to `7f7bf4afc` in one pass and reproduced the re-based prototype's tree byte for byte in every file the plan touches (47 files).
 
 ---
 
@@ -978,7 +978,7 @@ Replace with:
 ( cd server && ./node_modules/.bin/vitest run test/expiry-lane-prose.test.ts --maxWorkers=1 )
 ```
 
-Measured: `coordinator-skill.test.ts`: `1 failed | 159 passed (160)` — × carries all sixteen clauses verbatim; `expiry-lane-prose.test.ts`: `2 failed | 6 passed (8)` — × clause 3 says it too: the cleanup follows the archive once the operator has armed the lane — never for a child; × the lifecycle design §5.3 records the shadowed lane, and §6 item 1 as amended
+Measured: `coordinator-skill.test.ts`: `1 failed | 160 passed (161)` — × carries all sixteen clauses verbatim; `expiry-lane-prose.test.ts`: `2 failed | 6 passed (8)` — × clause 3 says it too: the cleanup follows the archive once the operator has armed the lane — never for a child; × the lifecycle design §5.3 records the shadowed lane, and §6 item 1 as amended
 
 - [ ] **Step 3: The texts.** The fragment block is the one edit of 4124's entry.
 
@@ -1110,13 +1110,13 @@ git fetch origin main
 ( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts --maxWorkers=1 )
 ```
 
-Measured: `coordinator-skill.test.ts`: `160 passed (160)`; `expiry-lane-prose.test.ts`: `8 passed (8)`; `ws-expire-prose.test.ts`: `7 passed (7)`; `child-reclaim-prose.test.ts`: `4 passed (4)`; `deviation-refs.test.ts`: `31 passed (31)`
+Measured: `coordinator-skill.test.ts`: `161 passed (161)`; `expiry-lane-prose.test.ts`: `8 passed (8)`; `ws-expire-prose.test.ts`: `7 passed (7)`; `child-reclaim-prose.test.ts`: `4 passed (4)`; `deviation-refs.test.ts`: `31 passed (31)`
 
 - [ ] **Step 5: Mutation check, then commit.** The 3b plan's rows and entries are records; clause 3 and the §5.3 residue item are the pinned texts.
 
 | # | Edit (restore after) | Measured red |
 |---|---|---|
-| T4.1 | `ccd/coordinator-skill/SKILL.md`: `this session’s own workspace is cleaned up by a human, or — when it carries no child marker — by the server seven days after it is archived` → `this session’s own workspace is cleaned up by a human, or by the server seven days after it is archived` | `coordinator-skill.test.ts`: `1 failed \| 159 passed (160)` — carries all sixteen clauses verbatim<br>`expiry-lane-prose.test.ts`: `1 failed \| 7 passed (8)` — clause 3 says it too: the cleanup follows the archive once the operator has armed the lane — never for a child |
+| T4.1 | `ccd/coordinator-skill/SKILL.md`: `this session’s own workspace is cleaned up by a human, or — when it carries no child marker — by the server seven days after it is archived` → `this session’s own workspace is cleaned up by a human, or by the server seven days after it is archived` | `coordinator-skill.test.ts`: `1 failed \| 160 passed (161)` — carries all sixteen clauses verbatim<br>`expiry-lane-prose.test.ts`: `1 failed \| 7 passed (8)` — clause 3 says it too: the cleanup follows the archive once the operator has armed the lane — never for a child |
 | T4.2 | `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md`: `- **Review 313's residue, closed by wave 4** (each a departure named in the wave-4 plan,` → `- **Wave 4's residue** (each a departure named in the wave-4 plan,` | `expiry-lane-prose.test.ts`: `1 failed \| 7 passed (8)` — the lifecycle design §5.3 records the shadowed lane, and §6 item 1 as amended |
 
 ```bash
@@ -1141,7 +1141,7 @@ MSG
 
 ### Task 5 (DROPPABLE): The archive confirms say what is true before and after arming (review 313, parked item 2)
 
-> **The coordinator strikes this task from the brief if the operator rules to keep the current promise** ("Restore brings it back for 7 days; after that it is cleaned up"). It is self-contained: no later task reads its files, and its departure slug (`archive-confirm-hedged-until-armed`) is then not written.
+> **Task 5 STAYS in the plan** (the coordinator's ruling, 2026-10-07), self-contained and droppable: the operator may still strike it before merge, keeping the current promise ("Restore brings it back for 7 days; after that it is cleaned up"). No later task reads its files; if it is struck, its departure slug (`archive-confirm-hedged-until-armed`) is not written.
 
 **Model routing:** `sonnet`, effort `medium`.
 
@@ -1267,7 +1267,7 @@ MSG
 
 **Model routing:** `opus`, effort `high` — the decisions an act that ends programmes rests on.
 
-**Files:** create `server/src/deadCoordinator.ts`; modify `shared/api.ts` (`DeadCoordinatorAttention`, `CoordStatus.deadCoordinatorAttention`), `README.md` (four anchors, BY CONTENT); create `server/test/dead-coordinator-policy.test.ts`; modify `server/test/mail-routes.test.ts` (the fourteenth union).
+**Files:** create `server/src/deadCoordinator.ts`; modify `shared/api.ts` (`DeadCoordinatorAttention`, `CoordStatus.deadCoordinatorAttention`), `README.md` (four anchors, BY CONTENT); create `server/test/dead-coordinator-policy.test.ts`; modify `server/test/mail-routes.test.ts` (the fifteenth union, appended after #320's stall-watch settings union, the fourteenth).
 
 **Interfaces (Produces):**
 - `DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live'` — its one spelling in `server/src`.
@@ -1279,7 +1279,7 @@ MSG
 - `deadCoordinatorBreaker(crashed, held, unmeasurable, measured, fleetDoubt, now)` → `{ tripped: false } | { tripped: true, why, claimants, since, members, detail? }` — `held` and `members` are its memory; `deadCoordinatorBreakerKey`, `deadCoordinatorBreakerFeedRow`.
 - `DeadCoordinatorStop` (`remeasured | switch | successor`, typed so the lane never re-splits prose), `DeadCoordinatorActOutcome` (`ended` with `programmes`, `open`, `stuck`, `stoppedBy` | `would-end | paused-at-server | store-unreadable`), `DeadCoordinatorEntry`, `deadCoordinatorEntry()`, `deadCoordinatorSighted` (a crashed pass ends an `unmeasured` report), `deadCoordinatorNextEntry` (a stopped act forgets its passes), `deadCoordinatorThrew` (a thrown act backs off), `deadCoordinatorBackoffMs`, `deadCoordinatorOutcomeKey`.
 - `deadCoordinatorFeedRows(id, outcome, since)` (ONE per programme, the spec's words, `dead since <instant>`; a partly ended programme says so), `deadCoordinatorReportSentence`, `deadCoordinatorBreakerSentence`, `deadCoordinatorAttention(entries, breaker)` (the breaker's item first).
-- `CLAIMANT_CHANGED = 'claimant-changed'`, `SWEEP_STOPPED = 'sweep-stopped'` and `isDeadCoordinatorKebab` (derived from the Records) — `mail-routes.test.ts`'s fourteenth union.
+- `CLAIMANT_CHANGED = 'claimant-changed'`, `SWEEP_STOPPED = 'sweep-stopped'` and `isDeadCoordinatorKebab` (derived from the Records) — `mail-routes.test.ts`'s fifteenth union.
 - L0: `DeadCoordinatorAttention { kind: 'would-end' | 'unmeasured' | 'stuck' | 'breaker'; claimants; sentence; at }`; `CoordStatus.deadCoordinatorAttention?` (optional).
 
 - [ ] **Step 1: The tests (red).** The new file cannot be imported yet, so the whole file — and `mail-routes.test.ts`, which imports the guard — is red at collection.
@@ -1625,13 +1625,13 @@ describe('L1', () => {
 In `server/test/mail-routes.test.ts`, find:
 
 ````ts
-import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
+import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
 ````
 
 Replace with:
 
 ````ts
-import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
+import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
 import { isDeadCoordinatorKebab } from '../src/deadCoordinator.js';
 ````
 
@@ -1639,22 +1639,22 @@ import { isDeadCoordinatorKebab } from '../src/deadCoordinator.js';
 In `server/test/mail-routes.test.ts`, find:
 
 ````ts
-        || isArchivedExpiryKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word or expiry word`).toBe(true);
+        || isStallSettingsKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word or stall-watch settings word`).toBe(true);
 ````
 
 Replace with:
 
 ````ts
-        || isArchivedExpiryKebab(tok)
-        // WORKSPACE LIFECYCLE WAVE 4: the FOURTEENTH union, checked together and never merged, on the standing rule
+        || isStallSettingsKebab(tok)
+        // WORKSPACE LIFECYCLE WAVE 4: the FIFTEENTH union, checked together and never merged, on the standing rule
         // `enter-ignored` above states. `coord/endDeadCoordinator.ts` (the dead-coordinator lane's one executor) spells
         // its outcome and report kinds, and `coord/close.ts` and `coord/store.ts` spell the compare-and-set refusal
         // `claimant-changed`. None is a mail rejection or a run refusal — no route answers with one; they ride the lane's
         // memory and the feed. Admitted through the exported guard, derived from `deadCoordinator.ts`'s Records, never
         // NOT_CODES, for the reason every union above gives.
         || isDeadCoordinatorKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word or dead-coordinator word`).toBe(true);
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word or dead-coordinator word`).toBe(true);
 ````
 
 
@@ -2309,7 +2309,7 @@ grep -n "^  | 'purge-refused'\|^  | 'purge-incomplete'\|^  | 'purge-mechanism-ab
 grep -n "^  'purge-refused':\|^  'purge-incomplete':\|^  'purge-mechanism-absent':" shared/api.ts
 ```
 
-On `9b0742089` with this plan's insertion they read `7849`, `7850`, `7851` and `7891`, `7899`, `7912` (from `7833-7835`, `:7875`, `:7883`, `:7896`). The README sentence `(`shared/api.ts:<first>-<last>`), each with an operator sentence of its own at `:<a>`, `:<b>` and `:<c>`` takes those numbers — the edit is in Step 3's blocks as measured there; if your base differs, write the numbers the two greps print. Then:
+On `9b0742089` with this plan's insertion they read `7849`, `7850`, `7851` and `7891`, `7899`, `7912` (from `7833-7835`, `:7875`, `:7883`, `:7896`) — and the same on `7f7bf4afc`, measured: #320 appended its L0 block at the end of the file, below every anchor. The README sentence `(`shared/api.ts:<first>-<last>`), each with an operator sentence of its own at `:<a>`, `:<b>` and `:<c>`` takes those numbers — the edit is in Step 3's blocks as measured there; if your base differs, write the numbers the two greps print. Then:
 
 ```bash
 ( cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts --maxWorkers=1 -t 'CITATION DEBT|README HAS ITS OWN CENSUS|LOCATION INDEXES|ROW PASS|RANGE BOUND' )
@@ -2530,7 +2530,7 @@ Replace with:
 ( cd server && ./node_modules/.bin/vitest run test/stall-sweep.test.ts --maxWorkers=1 )
 ```
 
-Measured: `coord-reclaim.test.ts`: `32 passed (32)`; `reclaim-route.test.ts`: `17 passed (17)`; `stall-sweep.test.ts`: `109 passed (109)`
+Measured: `coord-reclaim.test.ts`: `32 passed (32)`; `reclaim-route.test.ts`: `17 passed (17)`; `stall-sweep.test.ts`: `117 passed (117)`
 
 - [ ] **Step 5: Mutation check, then commit.**
 
@@ -2557,11 +2557,11 @@ MSG
 
 ---
 
-### Task 8: The store's half — the durable anchor (migration 17), the journal clause's one read, and the compare-and-set inside the close
+### Task 8: The store's half — the durable anchor (migration 18), the journal clause's one read, and the compare-and-set inside the close
 
 **Model routing:** `opus`, effort `high` — a migration and a transaction.
 
-**Files:** `server/src/coord/schema.ts` (`MIGRATIONS[16]`), `server/src/coord/store.ts`; create `server/test/dead-coordinator-store.test.ts`; modify `server/test/coord-db.test.ts`, `server/test/asks-store.test.ts`.
+**Files:** `server/src/coord/schema.ts` (`MIGRATIONS[17]`), `server/src/coord/store.ts`; create `server/test/dead-coordinator-store.test.ts`; modify `server/test/coord-db.test.ts`, `server/test/asks-store.test.ts`.
 
 **Interfaces (Produces):**
 - `dead_claimants (claimantId TEXT NOT NULL PRIMARY KEY, firstDeadAt INTEGER NOT NULL, lastDeadAt INTEGER NOT NULL)` — a new table and nothing else (Pre-flight finding 2).
@@ -2570,66 +2570,89 @@ MSG
 - `CoordStore.lifecycleGapGens(): string[]` — every generation the mirror recorded lost bytes in, distinct, one statement, never limited (the journal trust's read; a failing read throws, and the lane trusts nothing).
 - `CoordStore.closeRun({ …, expectClaimedBy? })` — when given, the transaction reads the run's `claimedBy` first and answers `{ ok: false, error: 'claimant-changed', claimedBy }` writing NOTHING when it differs; `AdvanceResult` gains that arm.
 
-- [ ] **Step 1: The tests (red).** `coord-db.test.ts`'s migration-14 case excludes the later table from its "exactly the five" set (a table a later entry adds is not that entry's).
+- [ ] **Step 1: The tests (red).** `coord-db.test.ts`'s migration-14 case needs no edit: #320 narrowed it to its own five tables. The new `dead_claimants` describe finds its migration's slot by its DDL (main's rule since #320), so a later renumber edits no line of it; each of its two cases opens with a floor (`SLOT >= 18`), which is its red before Step 3.
 
 <!-- replay: replace server/test/asks-store.test.ts -->
 In `server/test/asks-store.test.ts`, find:
 
 ````ts
-    // §5.3). None touches the asks table. This pin only needs the CURRENT
-    // total — it asserts "no migration after the one this test knows about
-    // has changed the asks table's columns", not anything about any of the six.
-    expect(COORD_SCHEMA_VERSION).toBe(16);
+    // SEVEN migrations have landed since this test's own version: MIGRATIONS[10]
 ````
 
 Replace with:
 
 ````ts
-    // §5.3), and MIGRATIONS[16] (`dead_claimants`, workspace lifecycle §5.4).
-    // None touches the asks table. This pin only needs the CURRENT
-    // total — it asserts "no migration after the one this test knows about
-    // has changed the asks table's columns", not anything about any of the seven.
+    // EIGHT migrations have landed since this test's own version: MIGRATIONS[10]
+````
+
+<!-- replay: replace server/test/asks-store.test.ts -->
+In `server/test/asks-store.test.ts`, find:
+
+````ts
+    // §5.3) and MIGRATIONS[16] (`stall_settings` and `run_events_by_at`, stall
+    // watch settings §8). None touches the asks table. This pin only needs the
+    // CURRENT total — it asserts "no migration after the one this test knows
+    // about has changed the asks table's columns", not anything about any of
+    // the seven.
     expect(COORD_SCHEMA_VERSION).toBe(17);
 ````
 
-<!-- replay: replace server/test/coord-db.test.ts -->
-In `server/test/coord-db.test.ts`, find:
+Replace with:
 
 ````ts
-  it('COORD_SCHEMA_VERSION derives to 16 — never hand-edited beside a growing array', () => {
+    // §5.3), MIGRATIONS[16] (`stall_settings` and `run_events_by_at`, stall
+    // watch settings §8) and MIGRATIONS[17] (`dead_claimants`, workspace
+    // lifecycle §5.4). None touches the asks table. This pin only needs the
+    // CURRENT total — it asserts "no migration after the one this test knows
+    // about has changed the asks table's columns", not anything about any of
+    // the eight.
+    expect(COORD_SCHEMA_VERSION).toBe(18);
 ````
 
-Replace with:
+<!-- replay: replace server/test/coord-db.test.ts -->
+In `server/test/coord-db.test.ts`, find:
 
 ````ts
   it('COORD_SCHEMA_VERSION derives to 17 — never hand-edited beside a growing array', () => {
+    // Bumped to 17 by seven migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
+````
+
+Replace with:
+
+````ts
+  it('COORD_SCHEMA_VERSION derives to 18 — never hand-edited beside a growing array', () => {
+    // Bumped to 18 by eight migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
 ````
 
 <!-- replay: replace server/test/coord-db.test.ts -->
 In `server/test/coord-db.test.ts`, find:
 
 ````ts
-    // §5.3).
-    expect(COORD_SCHEMA_VERSION).toBe(16);
-    expect(MIGRATIONS.length).toBe(16);
-````
-
-Replace with:
-
-````ts
-    // §5.3); 17 by MIGRATIONS[16] (dead_claimants, workspace lifecycle spec §5.4).
+    // §5.3) and MIGRATIONS[16] (stall_settings and run_events_by_at — stall
+    // watch settings design 2026-10-05 §8).
     expect(COORD_SCHEMA_VERSION).toBe(17);
     expect(MIGRATIONS.length).toBe(17);
 ````
 
+Replace with:
+
+````ts
+    // §5.3), MIGRATIONS[16] (stall_settings and run_events_by_at — stall
+    // watch settings design 2026-10-05 §8) and MIGRATIONS[17] (dead_claimants,
+    // workspace lifecycle spec §5.4).
+    expect(COORD_SCHEMA_VERSION).toBe(18);
+    expect(MIGRATIONS.length).toBe(18);
+````
+
 <!-- replay: replace server/test/coord-db.test.ts -->
 In `server/test/coord-db.test.ts`, find:
 
 ````ts
-    // 16 since MIGRATIONS[14] (the stall read's indexes) and MIGRATIONS[15]
-    // (runs.sessionBornAt/sessionBornFor, child-reclamation spec §5.1, §5.3);
-    // the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(16);
+    // 17 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
+    // (runs.sessionBornAt/sessionBornFor, child-reclamation spec §5.1, §5.3)
+    // and MIGRATIONS[16] (stall_settings and run_events_by_at, stall watch
+    // settings §8); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(17);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
 ````
@@ -2637,57 +2660,50 @@ In `server/test/coord-db.test.ts`, find:
 Replace with:
 
 ````ts
-    // 17 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
+    // 18 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
     // (runs.sessionBornAt/sessionBornFor, child-reclamation spec §5.1, §5.3)
-    // and MIGRATIONS[16] (dead_claimants); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(17);
+    // MIGRATIONS[16] (stall_settings and run_events_by_at, stall watch
+    // settings §8) and MIGRATIONS[17] (dead_claimants); the migration above is
+    // still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(18);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
   });
 });
 
-describe('coord.db: migration 17 — dead_claimants, the dead-coordinator lane’s durable anchor (workspace lifecycle §5.4)', () => {
+describe('coord.db: dead_claimants, the dead-coordinator lane’s durable anchor (workspace lifecycle §5.4)', () => {
+  /** This entry's slot, found by its DDL and never hard-coded (the rule the stall-watch settings entry's case states):
+   *  whichever of two branches holding one slot merges second moves up, and that renumber must not edit a line here. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('dead_claimants')) + 1;
   interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
   it('a NEW TABLE and nothing else: three columns, the claimant its key — no column on an older build’s tables', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates dead_claimants').toBeGreaterThanOrEqual(18);
     const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
     const cols = (db.prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('dead_claimants')").all() as unknown as ColumnInfo[])
       .map((c) => [c.name, c.type, c.notnull, c.pk]);
     expect(cols).toEqual([['claimantId', 'TEXT', 1, 1], ['firstDeadAt', 'INTEGER', 1, 0], ['lastDeadAt', 'INTEGER', 1, 0]]);
-    expect(MIGRATIONS[16]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and alters nothing')
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and alters nothing')
       .toMatch(/^CREATE TABLE dead_claimants \([^;]*\);$/);
     db.close();
   });
 
-  it('reaches a database ALREADY at user_version 16 and leaves every existing row as it was', () => {
+  it('reaches a database ALREADY at the version before it and leaves every existing row as it was', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates dead_claimants').toBeGreaterThanOrEqual(18);
     const p = dbPathIn(mkTmp('ccrc-coord-'));
     mkdirSync(path.dirname(p), { recursive: true });
     const raw = new DatabaseSync(p);
     tx(raw, () => {
-      for (let v = 0; v < 16; v++) raw.exec(MIGRATIONS[v]!);
-      raw.exec('PRAGMA user_version = 16');
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
       raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
       raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
     });
     raw.close();
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(17);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT count(*) AS n FROM dead_claimants').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
-````
-
-<!-- replay: replace server/test/coord-db.test.ts -->
-In `server/test/coord-db.test.ts`, find:
-
-````ts
-    const added = tableNames(db).filter((t) => !had.includes(t)).sort();
-````
-
-Replace with:
-
-````ts
-    // A table a LATER entry adds is not this entry's: `dead_claimants` is migration 17's (workspace lifecycle §5.4).
-    const added = tableNames(db).filter((t) => !had.includes(t) && t !== 'dead_claimants').sort();
 ````
 
 <!-- replay: create server/test/dead-coordinator-store.test.ts -->
@@ -2695,7 +2711,7 @@ Create `server/test/dead-coordinator-store.test.ts`:
 
 ````ts
 // The dead-coordinator lane's STORE half (workspace lifecycle spec 2026-09-24 §5.4, wave 4): the durable first-dead
-// anchor (`dead_claimants`, migration 17 — "the hour is the lane's own observation, made durable"), the journal
+// anchor (`dead_claimants`, migration 18 — "the hour is the lane's own observation, made durable"), the journal
 // clause's ONE read of the lifecycle mirror, and `closeRun`'s compare-and-set: the transaction commits only while
 // `claimedBy` still names the crashed id.
 import { describe, it, expect } from 'vitest';
@@ -2712,7 +2728,7 @@ let seq = 0;
 const line = (id: string, act: string, outcome: string, over: Record<string, unknown> = {}): JournalRow =>
   parseJournalLine(JSON.stringify({ v: 1, uid: `w4dc.1.${++seq}`, at: T + seq, act, outcome, id, dec: { surface: 'none' }, ...over }));
 
-describe('the durable first-dead anchor (migration 17)', () => {
+describe('the durable first-dead anchor (migration 18)', () => {
   it('starts empty; a row is written, moved and deleted by the claimant id', () => {
     const s = new CoordStore(openCoordDb(dbPath()));
     expect(s.deadAnchors()).toEqual({ ok: true, anchors: new Map() });
@@ -2828,7 +2844,7 @@ describe('closeRun’s compare-and-set — commits only while claimedBy names th
 ( cd server && ./node_modules/.bin/vitest run test/dead-coordinator-store.test.ts --maxWorkers=1 )
 ```
 
-Measured: `coord-db.test.ts`: `4 failed | 66 passed (70)` — × COORD_SCHEMA_VERSION derives to 17 — never hand-edited beside a growing array; × reaches a database ALREADY at user_version 10 and reads every existing row as a work run; × a NEW TABLE and nothing else: three columns, the claimant its key — no column on an older build’s tables; × reaches a database ALREADY at user_version 16 and leaves every existing row as it was; `asks-store.test.ts`: `1 failed | 27 passed (28)` — × the cross-repo columns added at schema version 10 are still present at the current version; `dead-coordinator-store.test.ts`: `7 failed | 2 passed (9)` — × starts empty; a row is written, moved and deleted by the claimant id; × survives a reopen — the hour is durable across a restart; × a row whose integers this process cannot represent fails the WHOLE read — never a partial map; × answers every asked id: the clause’s acts oldest first, and whether the mirror holds ANY row for it; × asks nothing of an empty list; × names EVERY generation the mirror recorded lost bytes in, once each, unlimited — the journal trust’s read; × a successor took the programme: claimant-changed, and NOTHING moved — no state, no event, no cancelled mail — the two CAS cases that expect a commit are green by design (a store that ignores the field also commits).
+Measured: `coord-db.test.ts`: `4 failed | 69 passed (73)` — × COORD_SCHEMA_VERSION derives to 18 — never hand-edited beside a growing array; × reaches a database ALREADY at user_version 10 and reads every existing row as a work run; × a NEW TABLE and nothing else: three columns, the claimant its key — no column on an older build’s tables; × reaches a database ALREADY at the version before it and leaves every existing row as it was; `asks-store.test.ts`: `1 failed | 27 passed (28)` — × the cross-repo columns added at schema version 10 are still present at the current version; `dead-coordinator-store.test.ts`: `7 failed | 2 passed (9)` — × starts empty; a row is written, moved and deleted by the claimant id; × survives a reopen — the hour is durable across a restart; × a row whose integers this process cannot represent fails the WHOLE read — never a partial map; × answers every asked id: the clause’s acts oldest first, and whether the mirror holds ANY row for it; × asks nothing of an empty list; × names EVERY generation the mirror recorded lost bytes in, once each, unlimited — the journal trust’s read; × a successor took the programme: claimant-changed, and NOTHING moved — no state, no event, no cancelled mail — the two CAS cases that expect a commit are green by design (a store that ignores the field also commits).
 
 - [ ] **Step 3: The source.**
 
@@ -2844,7 +2860,7 @@ Replace with:
 
 ````ts
   `,
-  // ── 17: user_version 16 -> 17 ─────────────────────────────────────────────
+  // ── 18: user_version 17 -> 18 ─────────────────────────────────────────────
   // The dead-coordinator lane's DURABLE first-dead anchor (workspace lifecycle spec 2026-09-24 §5.4, "The hour is the
   // lane's own observation, made durable"): one row per claimant the lane last measured CRASHED — `firstDeadAt`, the
   // first pass of the episode, and `lastDeadAt`, the latest — written on a crashed pass and deleted on any alive,
@@ -2854,7 +2870,7 @@ Replace with:
   //
   // A NEW TABLE AND NOTHING ELSE, and that is the choice that keeps a ROLLBACK bootable — `ccrc-update-watchdog` can
   // roll a server box back with no human in the loop. MEASURED against `origin/main`'s own `db.ts` (wave 4's plan,
-  // Pre-flight): an older build opening a file at `user_version 17` takes rule 3 — it warns, reads as-is, migrates
+  // Pre-flight): an older build opening a file at `user_version 18` takes rule 3 — it warns, reads as-is, migrates
   // nothing, and its runs, mail, claims and ledger reads and writes work unchanged, because it never names this table
   // and every read names its columns. An `ALTER TABLE runs ADD COLUMN … NOT NULL` would have been the dangerous shape:
   // an older build's `INSERT INTO runs` names no such column. What the older build cannot do is keep the anchors, so
@@ -2862,10 +2878,10 @@ Replace with:
   // the lane restarts an episode whose last crashed pass is older than `DEAD_COORDINATOR_GAP_MS` (the departure
   // `dead-anchor-restarts-after-an-unobserved-gap`).
   //
-  // MIGRATIONS[0..15] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry never
-  // runs. THIS ENTRY IS SLOT 17 AS WRITTEN, measured against origin/main at planning; stall-watch-settings W1's merged
-  // plan also writes `user_version 16 -> 17`, and whichever merges second moves up (entry 12 records the last branch
-  // that lost this race). RE-MEASURE immediately before the PR and before merge:
+  // MIGRATIONS[0..16] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry never
+  // runs. THIS ENTRY WAS SLOT 17 WHEN ITS PLAN WAS WRITTEN. Stall-watch-settings W1 (#320) merged first and took
+  // `user_version 16 -> 17`, so this one moved up a slot rather than sharing an index, as entry 12 did before it.
+  // RE-MEASURE immediately before the PR and before merge:
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
@@ -2946,7 +2962,7 @@ Replace with:
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
   }
 
-  /** The dead-coordinator lane's durable anchors (`dead_claimants`, migration 17; workspace lifecycle spec §5.4) —
+  /** The dead-coordinator lane's durable anchors (`dead_claimants`, migration 18; workspace lifecycle spec §5.4) —
    *  EVERY row, one statement. Both integers ride CAST to TEXT and are proven, ALL-OR-FAILURE (D-2545's rule): an
    *  anchor misread is how an hour gets counted that nobody measured, so one bad row fails the read and the lane acts
    *  on nothing that pass. */
@@ -3043,7 +3059,7 @@ Replace with:
 ( cd server && ./node_modules/.bin/vitest run test/update-writer-groups.test.ts --maxWorkers=1 )
 ```
 
-Measured: `coord-db.test.ts`: `70 passed (70)`; `asks-store.test.ts`: `28 passed (28)`; `dead-coordinator-store.test.ts`: `9 passed (9)`; `update-writer-groups.test.ts`: `20 passed (20)`
+Measured: `coord-db.test.ts`: `73 passed (73)`; `asks-store.test.ts`: `28 passed (28)`; `dead-coordinator-store.test.ts`: `9 passed (9)`; `update-writer-groups.test.ts`: `20 passed (20)`
 
 - [ ] **Step 5: Mutation check, then commit.** Row T8.6 is the shape refused: a column on `runs` in the same migration reds the one-table pin.
 
@@ -3053,8 +3069,8 @@ Measured: `coord-db.test.ts`: `70 passed (70)`; `asks-store.test.ts`: `28 passed
 | T8.2 | `server/src/coord/store.ts`: `      if (!first.ok) return { ok: false, detail: first.detail };` → `      if (!first.ok) continue;` | `dead-coordinator-store.test.ts`: `1 failed \| 8 passed (9)` — a row whose integers this process cannot represent fails the WHOLE read — never a partial map |
 | T8.3 | `server/src/coord/store.ts`: `    for (const r of any) { const e = out.get(r.sessionId); if (e !== undefined) e.hasHistory = true; } ⏎ ` → (removed) | `dead-coordinator-store.test.ts`: `1 failed \| 8 passed (9)` — answers every asked id: the clause’s acts oldest first, and whether the mirror holds ANY row for it |
 | T8.4 | `server/src/coord/store.ts`: ``      `WHERE sessionId IN (${placeholders(ids.length)}) AND act IN (${placeholders(DEAD_COORDINATOR_JOURNAL_ACTS.length)}) ` + ⏎       'ORDER BY sessionId, id', ⏎     ).all(...ids, ...DEAD_COORDINATOR_JOURNAL_ACTS)`` → ``      `WHERE sessionId IN (${placeholders(ids.length)}) ` + ⏎       'ORDER BY sessionId, id', ⏎     ).all(...ids)`` | `dead-coordinator-store.test.ts`: `1 failed \| 8 passed (9)` — answers every asked id: the clause’s acts oldest first, and whether the mirror holds ANY row for it |
-| T8.5 | `server/src/coord/schema.ts`: `  CREATE TABLE dead_claimants (claimantId TEXT NOT NULL PRIMARY KEY, firstDeadAt INTEGER NOT NULL, lastDeadAt INTEGER NOT NULL);` → `  CREATE TABLE dead_claimants (claimantId TEXT, firstDeadAt INTEGER NOT NULL, lastDeadAt INTEGER NOT NULL);` | `coord-db.test.ts`: `1 failed \| 69 passed (70)` — a NEW TABLE and nothing else: three columns, the claimant its key — no column on an older build’s tables<br>`dead-coordinator-store.test.ts`: `3 failed \| 6 passed (9)` — starts empty; a row is written, moved and deleted by the claimant id; survives a reopen — the hour is durable across a restart; a row whose integers this process cannot represent fails the WHOLE read — never a partial map |
-| T8.6 | `server/src/coord/schema.ts`: `  CREATE TABLE dead_claimants (claimantId TEXT NOT NULL PRIMARY KEY, firstDeadAt INTEGER NOT NULL, lastDeadAt INTEGER NOT NULL);` → `  CREATE TABLE dead_claimants (claimantId TEXT NOT NULL PRIMARY KEY, firstDeadAt INTEGER NOT NULL, lastDeadAt INTEGER NOT NULL); ⏎   ALTER TABLE runs ADD COLUMN deadSince INTEGER;` | `coord-db.test.ts`: `1 failed \| 69 passed (70)` — a NEW TABLE and nothing else: three columns, the claimant its key — no column on an older build’s tables |
+| T8.5 | `server/src/coord/schema.ts`: `  CREATE TABLE dead_claimants (claimantId TEXT NOT NULL PRIMARY KEY, firstDeadAt INTEGER NOT NULL, lastDeadAt INTEGER NOT NULL);` → `  CREATE TABLE dead_claimants (claimantId TEXT, firstDeadAt INTEGER NOT NULL, lastDeadAt INTEGER NOT NULL);` | `coord-db.test.ts`: `1 failed \| 72 passed (73)` — a NEW TABLE and nothing else: three columns, the claimant its key — no column on an older build’s tables<br>`dead-coordinator-store.test.ts`: `3 failed \| 6 passed (9)` — starts empty; a row is written, moved and deleted by the claimant id; survives a reopen — the hour is durable across a restart; a row whose integers this process cannot represent fails the WHOLE read — never a partial map |
+| T8.6 | `server/src/coord/schema.ts`: `  CREATE TABLE dead_claimants (claimantId TEXT NOT NULL PRIMARY KEY, firstDeadAt INTEGER NOT NULL, lastDeadAt INTEGER NOT NULL);` → `  CREATE TABLE dead_claimants (claimantId TEXT NOT NULL PRIMARY KEY, firstDeadAt INTEGER NOT NULL, lastDeadAt INTEGER NOT NULL); ⏎   ALTER TABLE runs ADD COLUMN deadSince INTEGER;` | `coord-db.test.ts`: `1 failed \| 72 passed (73)` — a NEW TABLE and nothing else: three columns, the claimant its key — no column on an older build’s tables |
 | T8.7 | `server/src/coord/store.ts`: `    return (this.db.prepare('SELECT DISTINCT gen FROM lifecycle_gaps').all() as { gen: string }[]).map((r) => r.gen);` → `    return (this.db.prepare('SELECT DISTINCT gen FROM lifecycle_gaps ORDER BY id DESC LIMIT 1').all() as { gen: string }[]).map((r) => r.gen);` | `dead-coordinator-store.test.ts`: `1 failed \| 8 passed (9)` — names EVERY generation the mirror recorded lost bytes in, once each, unlimited — the journal trust’s read |
 | T8.8 | `server/src/coord/store.ts`: `at: ev.at, gen: ev.gen, dec:` → `at: ev.at, gen: '', dec:` | `dead-coordinator-store.test.ts`: `1 failed \| 8 passed (9)` — answers every asked id: the clause’s acts oldest first, and whether the mirror holds ANY row for it |
 
@@ -3064,7 +3080,7 @@ git add server/src/coord/schema.ts server/src/coord/store.ts server/test/dead-co
 git commit -m "$(cat <<'MSG'
 feat(coord): the dead-coordinator anchor, the journal read, the close's compare-and-set
 
-Migration 17 adds dead_claimants and nothing else, so a rolled-back build
+Migration 18 adds dead_claimants and nothing else, so a rolled-back build
 boots on it (measured against main's own db.ts). The anchors are read
 all-or-failure. The journal clause's one read answers the clause's acts, their
 generations and whether the mirror holds any history; the gap read names every
@@ -5307,7 +5323,7 @@ Replace with:
 ( cd server && ./node_modules/.bin/tsc --noEmit -p . )
 ```
 
-Measured: `dead-coordinator-lane.test.ts`: `23 passed (23)`; `fleetws.test.ts`: `54 passed (54)`; `lifecycle.test.ts`: `52 passed (52)`; `archived-expiry-lane.test.ts`: `27 passed (27)`; `child-reclaim-sweep.test.ts`: `177 passed (177)`; `tsc` rc 0. All 35 server files that construct a `FleetWatcher` were re-run on this stage as drafted, each green; on the revised prototype they ran again inside Task 14's full server run, each green.
+Measured: `dead-coordinator-lane.test.ts`: `23 passed (23)`; `fleetws.test.ts`: `54 passed (54)`; `lifecycle.test.ts`: `52 passed (52)`; `archived-expiry-lane.test.ts`: `27 passed (27)`; `child-reclaim-sweep.test.ts`: `177 passed (177)`; `tsc` rc 0. Every server file that constructs a `FleetWatcher` (36 on the re-based tree: `main`'s 34 and this plan's two) was re-run as drafted, inside Task 14's full server run on the revised prototype, and again on the re-based prototype's final tree — each green.
 
 - [ ] **Step 5: Mutation check, then commit.** Row T11.1 is ruling (F)'s red: the breaker deleted at the lane; T11.13 and T11.14 its memory and its fleet-wide arm. Rows T11.23–T11.30 repeat edits of Tasks 6 and 10 against this lane's tests — the reds only the lane can show (the review asked that they be listed): T11.23 is T6.12's edit, T11.24 T6.24's, T11.25 T6.26's, T11.26 T6.28's, T11.27–T11.29 the trust adapter's three arms, T11.30 T10.5's.
 
@@ -6185,7 +6201,7 @@ Replace with:
 ( cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts --maxWorkers=1 )
 ```
 
-Measured: `dead-coordinator-prose.test.ts`: `7 passed (7)`; `expiry-lane-prose.test.ts`: `8 passed (8)`; `single-definition.test.ts`: `409 passed (409)`; `readme-holds.test.ts`: `17 passed (17)`; `topology-clean.test.ts`: `55 passed (55)`; `session-hook.test.ts `-t CITATION DEBT|README HAS ITS OWN CENSUS|LOCATION INDEXES|ROW PASS|RANGE BOUND``: `5 passed | 330 skipped (335)`; `measure-workspace-lifecycle.test.ts`: `13 passed (13)`; `coordinator-skill.test.ts`: `160 passed (160)`; also `child-reclaim-prose` `4 passed (4)`, `ws-expire-prose` `7 passed (7)`.
+Measured: `dead-coordinator-prose.test.ts`: `7 passed (7)`; `expiry-lane-prose.test.ts`: `8 passed (8)`; `single-definition.test.ts`: `409 passed (409)`; `readme-holds.test.ts`: `17 passed (17)`; `topology-clean.test.ts`: `55 passed (55)`; `session-hook.test.ts `-t CITATION DEBT|README HAS ITS OWN CENSUS|LOCATION INDEXES|ROW PASS|RANGE BOUND``: `5 passed | 330 skipped (335)`; `measure-workspace-lifecycle.test.ts`: `13 passed (13)`; `coordinator-skill.test.ts`: `161 passed (161)`; also `child-reclaim-prose` `4 passed (4)`, `ws-expire-prose` `7 passed (7)`.
 
 - [ ] **Step 5: Mutation check, then commit.**
 
@@ -6230,7 +6246,7 @@ MSG
 
 **Model routing:** `sonnet`, effort `medium` — measurement and reporting; any red that is not a named flake goes back to its task.
 
-- [ ] **Step 1: Merge `main`, and re-measure what a merge can move.** `git fetch origin main && git merge origin/main` (never a rebase). If `shared/api.ts`, `README.md`, `watch.ts`, `single-definition.test.ts`, `lifecycle.test.ts`, `schema.ts` or `store.ts` merged with anything — child reclamation wave 6, ccrc-history and stall-watch-settings W1 are planned against them — keep both sides, re-point README's purge-token anchors by content (Task 6 Step 5's greps), re-measure the migration slot (Global Constraints), re-run the five citation cases and `cite-remeasure`, and re-run `single-definition`, `typecheck-tests` and `deviation-refs`.
+- [ ] **Step 1: Merge `main`, and re-measure what a merge can move.** `git fetch origin main && git merge origin/main` (never a rebase). If `shared/api.ts`, `README.md`, `watch.ts`, `single-definition.test.ts`, `lifecycle.test.ts`, `schema.ts` or `store.ts` merged with anything — child reclamation wave 6 and ccrc-history are planned against them; stall-watch-settings W1 already merged (#320) and this plan is re-based on it — keep both sides, re-point README's purge-token anchors by content (Task 6 Step 5's greps), re-measure the migration slot (Global Constraints), re-run the five citation cases and `cite-remeasure`, and re-run `single-definition`, `typecheck-tests` and `deviation-refs`.
 
 - [ ] **Step 2: The repo-wide guards**, each its own process:
 
@@ -6253,17 +6269,17 @@ git fetch origin main
 grep -rn "dead-coordinator-lane-live" server/src pwa/src ccd deploy install.sh
 ```
 
-Measured on the prototype's final tree (`typecheck-tests` needs `agent/` and `pwa/` modules installed):
+Measured on the RE-BASED prototype's final tree, over `7f7bf4afc` (`typecheck-tests` needs `agent/` and `pwa/` modules installed):
 
-- `single-definition`: `409 passed (409)` (base-relative: 406 on `9b0742089`; this plan appends three cases — one in Task 3, two in Task 13)
+- `single-definition`: `409 passed (409)` (base-relative: `406 passed (406)` on `7f7bf4afc`, measured, as on `9b0742089`; this plan appends three cases — one in Task 3, two in Task 13)
 - `modelenv-single-writer`: `7 passed (7)`
-- `box-token-census`: `23 passed (23)` — no route moves; the lane is no door
+- `box-token-census`: `23 passed (23)`, as on `7f7bf4afc` (measured) — no route moves; the lane is no door. `coord-pause-route` (its `SESSION_ONLY`/`UNGATED` sets, which #320 widened with `/api/coord/stall-watch`): `20 passed (20)`
 - `routing-references`: `11 passed (11)`
 - `typecheck-tests`: `12 passed (12)`
 - `ccd-workspaces`: `81 passed (81)`
 - `ownership`: `14 passed (14)`
 - `ccd-die-containment`: `12 passed (12)`
-- `coordinator-skill`: `160 passed (160)` (clause 3 and `references/resume.md` both moved)
+- `coordinator-skill`: `161 passed (161)`, as on `7f7bf4afc` (measured; #320 added one case) — clause 3 and `references/resume.md` both moved
 - `ccd-reg-get-census`: `3 passed (3)` (no ccd edit: the census is untouched)
 - `topology-clean`: `55 passed (55)`
 - `deviation-refs`: `31 passed (31)` with THIS PLAN in the tree, after `git fetch origin main` — it defines no number, and its only column-0 entry line (3b's `expiry-lane-ships-shadowed`, Task 4's anchor) is quoted with its subject unchanged; `dtbd`: `1 passed (1)`
@@ -6280,7 +6296,11 @@ for k in $(seq 1 24); do ( cd server && ./node_modules/.bin/vitest run --shard=$
 ( cd pwa && ./node_modules/.bin/tsc --noEmit -p . )
 ```
 
-Measured on the prototype's final tree (535 server test files: `main`'s 529 and this plan's six new ones):
+Measured as follows (539 server test files on the re-based tree: `main`'s 533 and this plan's six new ones; 535 on the revised tree over `282e79e44`):
+
+**On the RE-BASED prototype's final tree (over `7f7bf4afc`)**, the files #320 or this plan's re-base could move were re-run, each in its own process: every server test file #320 changed or added (17), every one that constructs a `FleetWatcher` (36), and every one that builds the server or registers the coordination routes (`buildServer`, `registerCoordRoutes`) — 96 files, 95 run and all green, one left out: `ccrc-doctor` names `buildServer` only in comments, shells `ccrc`, which neither #320 nor this plan touches, and outruns a call whole (it ran by its describes in the full run below). Among them, #320's own suites: `stall-settings` `114 passed (114)`, `stall-settings-route` `38 passed (38)`, `stall-settings-store` `40 passed (40)`, `stall-settings-prose` `15 passed (15)`, `stall-sweep` `117 passed (117)`, `mail-sweep` `115 passed (115)`, `stall-verdict` `309 passed (309)`, `stall-session` `98 passed (98)`, `stall-backoff` `33 passed (33)`, `auth-gate` `160 passed (160)`, `coord-pause-route` `20 passed (20)`, `reviewer-skill` `15 passed (15)`, `worker-skill` `52 passed (52)`, `coord-db` `73 passed (73)`, `asks-store` `28 passed (28)`, `mail-routes` `59 passed (59)`, `coordinator-skill` `161 passed (161)`. `server` and `pwa` `tsc --noEmit -p .`: rc 0. #320 changed no `agent/` or `pwa/` file.
+
+**The whole-suite run below was measured on the REVISED prototype over `282e79e44`** (before #320), and is not repeated on the re-based tree:
 
 Measured on the REVISED prototype's final tree (the review's revision touches `server/src` and server tests, README, the lifecycle spec, the coordinator's `resume.md` and the §9 instrument — no `agent/`, `pwa/` or `shared/` file):
 
@@ -6304,11 +6324,11 @@ Known reds that are not this wave's: session-hook's "skips a scratch slug" under
 
 ## Re-measure at dispatch (ruling J)
 
-This plan was drafted on `origin/main` `9b0742089` and replayed whole onto `a17e14bc0` and `282e79e44`. The in-flight runs whose files it shares, and what to re-check when one of them lands first — every block below must still match exactly once at its turn, or be re-anchored BY CONTENT (never by a line delta):
+This plan was drafted on `origin/main` `9b0742089`, revised on `282e79e44`, and re-based onto `7f7bf4afc` (#320 merged), where every block was replayed whole. The in-flight runs whose files it shares, and what to re-check when one of them lands first — every block below must still match exactly once at its turn, or be re-anchored BY CONTENT (never by a line delta):
 
 - **Child reclamation wave 6** (run 291, `ws/amber-river`): `shared/api.ts` (89 references in its plan, among them `LifecycleMeas`'s two new keys and README's purge-token anchors), `README.md`, `server/src/watch.ts` (its lane's region), `server/src/coord/journalparse.ts` and `mirror.ts`, the CCR-15 spec. Overlap with this plan: Task 6's `shared/api.ts` insertion and README anchor repair (whichever lands second re-runs Task 6 Step 5's greps), Task 1's and Task 11's `watch.ts` blocks, Task 13's README and CCR-15 §5.8 blocks. Its `LifecycleMeas` keys do not touch `rc`, which this plan reads off the raw line anyway.
 - **ccrc-history** (run 302; `git diff --name-only origin/main...origin/ws/soft-delta` at `6a6987532`): among this plan's files, `README.md`, `CLAUDE.md`, `deploy/deploy.sh`, `shared/lifecycle.ts`, `server/test/single-definition.test.ts`, `server/test/lifecycle.test.ts` and `server/test/session-hook.test.ts` — not `coord/db.ts`. Overlap: Task 13's README blocks and both appended `single-definition` describes (Task 3, Task 13: append after whatever stands at the end of the file, keeping the no-writer describes adjacent), Task 6's README anchor sentence, and row T13.3's anchor in `deploy/deploy.sh` (`prune_backups || echo …`, untouched by that branch today — re-check the row's Find before running it).
-- **Stall-watch-settings W1** (plan merged, dispatch held): migration slot 17 (Global Constraints).
+- **Stall-watch-settings W1** — MERGED as #320 before the re-base: it took migration slot 17 (this plan's moved to 18) and `mail-routes.test.ts`'s fourteenth union (this plan's is the fifteenth, its Find anchored on #320's text); `schema.ts`, `coord-db.test.ts` and `asks-store.test.ts` carry the slot move (Global Constraints). Its other files among this plan's — `shared/api.ts` (appended at the end), `README.md`, `watch.ts`, `coord/routes.ts`, `store.ts` and `coordinator-skill.test.ts` — merged with this plan's edits without a conflict, and every block was regenerated on the merged text.
 - **Centralised-update W15** (run 300): `server/src/update/*` — no block of this plan.
 - **The coordinator skill** (Task 4's clause 3, Task 13's `references/resume.md`): any run that edits the coordinator corpus re-runs `coordinator-skill.test.ts` and `dead-coordinator-prose.test.ts` after the merge.
 
@@ -6359,64 +6379,69 @@ The blocks in the shared files, by task and the first line of their Find:
 
 ## Deploy note
 
-**SERVER + PWA + the FLEET box's skill spine, through ccrc's own updater; nobody moves a box by hand** (the operator's 2026-09-30 ruling). Both boxes move — the fleet box first, `ccrc rollout`'s default — because coordinator clause 3 (Task 4) and `references/resume.md` (Task 13) reach a coordinator's home only through `ccrc update`'s install spine on the fleet box; a server-only update leaves every home on the old text, and doctor's `skills` check (`ccrc doctor --fix` cures it) is how to see the new text has landed. No `ccd/ccd` change: the fleet box's ccd is untouched, and nothing in this wave needs a newer one. The server's first boot on this build runs migration 17 (one `CREATE TABLE`, measured to leave a rollback bootable — Pre-flight finding 2).
+**SERVER + PWA + the FLEET box's skill spine, through ccrc's own updater; nobody moves a box by hand** (the operator's 2026-09-30 ruling). Both boxes move — the fleet box first, `ccrc rollout`'s default — because coordinator clause 3 (Task 4) and `references/resume.md` (Task 13) reach a coordinator's home only through `ccrc update`'s install spine on the fleet box; a server-only update leaves every home on the old text, and doctor's `skills` check (`ccrc doctor --fix` cures it) is how to see the new text has landed. No `ccd/ccd` change: the fleet box's ccd is untouched, and nothing in this wave needs a newer one. The server's first boot on this build runs migration 18 (one `CREATE TABLE`, measured to leave a rollback bootable — Pre-flight finding 2).
 
 **What changes on deploy, for every operator, before anything is armed:**
 - The expiry lane (still shadowed until `$REG/expire-lane-live`): an archived workspace whose expiry cannot be learned is listed ("its expiry could not be learned — …") and backed off; a non-resumable failure is listed at once and not retried; a `would-expire` or `in-use` entry goes when the workspace stops being eligible; the held sentence names its instant.
 - Coordinator clause 3 says a child-marked workspace is never the expiry's, and the coordinator's resume runbook says what an armed dead-coordinator lane does to a programme whose coordinator stays dead (both reach each home through the fleet box's install spine).
 - If Task 5 shipped: both archive confirms say the workspace is cleaned up seven days after its archive "once automatic cleanup is on".
 - **The dead-coordinator lane runs SHADOWED.** Each 60-second pass it measures the distinct claimants of open runs (a registry listing, ~27 field reads and one tmux call each — an agent frame in remote mode), reads the journal's trust (the mirror's health, one gap read, and one `stat` only while ccd has counted journal write failures), keeps a durable first-dead anchor for each crashed one, and after an hour and two passes RECORDS "would end programme <slug> (<n> runs)" for EVERY due coordinator — a feed row carrying its first-dead instant and an entry in the cleanup row on `/runs`. Nothing is closed. A run's events never read `sweep` until it is armed.
-- **Coordinators listed `unmeasured` are expected.** One whose journal the server cannot trust — the mirror `unavailable`, a gap the mirror recorded since its last successful spawn, a journal line ccd could not write after it — is listed and never acted on, as are one with no registry row and no history and one that never started. If the fleet's journal has gaps, older coordinators may sit on this list for good; the operator reclaims or abandons them by hand. While the mirror has not swept since the restart, or is `stale` (`/api/fleet/health`'s `lifecycle`), the lane decides nothing and says so in the server log.
+- **Coordinators listed `unmeasured` are expected.** One whose journal the server cannot trust — the mirror `unavailable`, a gap the mirror recorded since its last successful spawn, a journal line ccd could not write after it — is listed and never acted on, as are one with no registry row and no history and one that never started. The journal-gap trade is ACCEPTED for this wave (the coordinator's ruling, 2026-10-07): a coordinator whose last successful spawn is not newer than a recorded gap stays unmeasured — listed, never ended — until its next successful spawn; the operator reclaims or abandons it by hand. Whether a gap should stop counting after some age is carried, for a decision with shadow evidence. While the mirror has not swept since the restart, or is `stale` (`/api/fleet/health`'s `lifecycle`), the lane decides nothing and says so in the server log.
 - **The breaker's likely first trip.** Every coordinator that was already crashed at deploy is anchored on the first pass, so if two or more were, they trip the breaker together: one entry names them, one feed row records the trip, and the lane ends nothing until fewer than two remain (Pre-flight finding 12). A tmux that does not answer trips it too. That is the list to work through before arming: revive each, reclaim its programme (`POST /api/runs/:id/reclaim`), or abandon its runs (`POST /api/runs/:id/abandon`).
 
 **Arming is the operator's, by hand, in the registry the server reads** — the fleet box's `~/.cc-sessions` when the server runs `CCRC_FLEET=remote` (Pre-flight finding 6); nothing in the tree writes the file (Task 13's pin). Read the shadow's `would-end` entries and the breaker on `/runs` first, then `touch ~/.cc-sessions/dead-coordinator-lane-live`; `rm` it to return to shadow — the executor reads it again inside the serialiser, nearest the act. `reclaim-paused` (the cleanup row's toggle) stops this lane entirely, armed or not, with child reclamation and the expiry lane. Measure after convergence: `/health` reports the merge's tag on the server box and `ccrc version` on the fleet box; `ccrc doctor` shows no FAIL lines and its `skills` check is green on every home; the cleanup row shows the lane's entries; the server log has no `sweepDeadCoordinators could not read` line; `python3 deploy/measure-workspace-lifecycle.py` prints the `dead_coordinator_*` rows (zero ended while shadowed).
 
 **Arming the EXPIRY lane** stays the operator's separate act, and its blockers (a)–(b) from the 2026-10-07 06:01 entry are this wave's Tasks 1–3 and Task 5: arm it only after this wave is merged and deployed.
 
+**Arming order — the coordinator's recommendation (2026-10-07); arming stays the operator's act.** The expiry lane first, once this wave's residue blockers are deployed and its shadow list has been read; the dead-coordinator lane only after its own shadow list and any breaker trip have been worked through.
+
 ## Deviations found
 
-Named by slug — TWENTY, for a block of SIXTEEN (4348–4363): the worker writes the first sixteen bare, in this order, in the entry as it defines it (`- **D-<n>** `<slug>` (Task k) — …`), in the commit of the first task that makes the change, and writes the remaining four as `D-TBD-<slug>`, reporting them for a second block (worker clause 11; the callout at the top). Every one reaches the spec by its effect: the residue's through §5.3's "Review 313's residue, closed by wave 4" item (Task 4) and its words item (Task 5), the lane's through §5.4's "As wave 4 builds the lane" (Task 13) — one short sentence each, no number spelled there.
+Named by slug — twenty, and the brief issues the numbers for all twenty: the worker writes them bare, in this order, in the entry as it defines it (`- **D-<n>** `<slug>` (Task k) — …`), in the commit of the first task that makes the change (the callout at the top). Every one reaches the spec by its effect: the residue's through §5.3's "Review 313's residue, closed by wave 4" item (Task 4) and its words item (Task 5), the lane's through §5.4's "As wave 4 builds the lane" (Task 13) — one short sentence each, no number spelled there.
 
 - `unlearnable-row-backs-off-is-reported-and-yields-its-slot` (Task 1) — review 313's parked item 1, ruled an arming blocker: a learn audit that cannot be read, or that read no archive and is not a return, climbs the failure ladder and is listed at once; learn slots go in `nextAskAt` order (stable, so ties keep registry order). The 3b lane retried such a row every pass with no backoff and no entry, and gave slots in registry order.
 - `non-resumable-expiry-failure-stops-at-once` (Task 2) — parked item 4, an arming blocker: `ArchivedExpiryOutcome.failed` carries `resumable`; `false` is listed at once and never asked again for that archive; a composition error's sentence stops promising a retry.
 - `ineligible-sighting-ends-every-row-report` (Task 3) — F1, an arming blocker: an ineligible verdict clears `would-expire` and `in-use` (and the in-use run) as well as `held`; the box's own verdicts stand.
 - `refusal-from-another-archive-is-a-moved-row` (Task 3) — F2: an audit whose `archivedAt` is set and is not the queued archive defers `state-changed` before any refusal is classified.
 - `held-sentence-names-the-instant` (Task 3) — F3: the held sentence names `due <instant>`, never a period, and the lane's own two files are pinned against seven-day prose (the tree-wide prose pin was measured and declined: five holders, Pre-flight finding 11).
-- `archive-confirm-hedged-until-armed` (Task 5, DROPPABLE) — parked item 2: both confirms say the cleanup follows "once automatic cleanup is on". Not written if the coordinator strikes Task 5.
+- `archive-confirm-hedged-until-armed` (Task 5, DROPPABLE) — parked item 2: both confirms say the cleanup follows "once automatic cleanup is on". Not written if the operator strikes Task 5 before merge.
 - `dead-coordinator-lane-ships-shadowed` (Tasks 10, 11, 13) — the coordinator's safety ruling (B), which §5.4 did not have: until `$REG/dead-coordinator-lane-live` exists (the operator's, by hand; no writer in the tree) the lane measures, anchors, trips its breaker and records "would end programme <slug> (<n> runs)" for every due coordinator, and never reaches the abandon arm or the reclaim port; the executor reads the file inside the serialiser and again inside the arm before each run; `reclaim-paused` stops it entirely, shadow included; the coordinator's resume runbook states the condition in words.
 - `the-last-start-is-read-off-the-spawn-line` (Task 6) — the clause's "last successful start" is the newest `spawn` line recording rc 0, read off the line's own bytes because the mirror's typed `meas.rc` is null on every real line (Pre-flight finding 1); a line that proves no start leaves every row in the horizon counting; ccd's change-only spawn line is a stated, fail-safe hole.
 - `journal-doubt-reads-as-deliberate` (Task 6) — §5.4 lists the deliberate acts; an act this build cannot name (`unknown`) and an `unsupervise` whose surface cannot be read count as deliberate too, so doubt in the journal never reads as a crash.
-- `journal-loss-reads-as-unmeasured` (Tasks 6, 8, 10, 11) — §5.4's "an unreadable journal is unmeasured" is widened to a journal that may have LOST the act: the mirror `unavailable`, a gap recorded in a generation not older than the claimant's last successful spawn, or a journal line ccd counted as unwritten after it, each makes the claimant unmeasured (listed, never acted on); a mirror not swept since a restart, or `stale`, makes the pass decide nothing (Pre-flight finding 14).
+- `journal-loss-reads-as-unmeasured` (Tasks 6, 8, 10, 11) — §5.4's "an unreadable journal is unmeasured" is widened to a journal that may have LOST the act: the mirror `unavailable`, a gap recorded in a generation not older than the claimant's last successful spawn, or a journal line ccd counted as unwritten after it, each makes the claimant unmeasured (listed, never acted on); a mirror not swept since a restart, or `stale`, makes the pass decide nothing (Pre-flight finding 14). The trade is accepted for this wave: such a coordinator stays unmeasured until its next successful spawn.
 - `never-started-without-a-spawn-is-unmeasured` (Task 6) — §5.4 counts `never-started` as a crash; a `never-started` row with no successful spawn in the journal never ran, so it is unmeasured — an heir the operator reclaimed a programme onto and has not started yet reads exactly so, and the lane would otherwise end that programme an hour later.
 - `dead-anchor-restarts-after-an-unobserved-gap` (Tasks 6, 8, 11) — §5.4's anchor is `firstDeadAt` alone; `dead_claimants` also keeps `lastDeadAt`, and an episode whose last crashed pass is more than ten minutes old (a server down, an older build after a rollback) restarts at the pass that measures it. The table is a new table and nothing else, measured to keep a rollback bootable (Pre-flight finding 2).
 - `breaker-holds-the-whole-lane` (Tasks 6, 11) — while the breaker stands the lane acts on NO claimant, not only on the ones it names.
 - `breaker-remembers-its-cluster` (Tasks 6, 11) — §5.4's breaker is evaluated per pass; this one keeps its members at their first-dead instants and releases a member only on evidence (alive, stopped, a deliberate act) or when it leaves the population, so a member's one unmeasurable pass — which deletes its anchor under ruling (E) — never dissolves the cluster. "Fleet-wide" is what the pass measured: tmux not answering for any claimant trips it whatever the count; a registry that will not list stops the tick before the lane runs (Pre-flight finding 15).
-- `breaker-clears-through-the-existing-doors` (Tasks 6, 11) — §5.4's "the operator clears it" is the operator reviving, reclaiming or abandoning the named claimants, after which they fall under the threshold; no new route (box-token census unchanged). Open question 1 asks whether a one-tap clear is wanted.
+- `breaker-clears-through-the-existing-doors` (Tasks 6, 11) — §5.4's "the operator clears it" is the operator reviving, reclaiming or abandoning the named claimants, after which they fall under the threshold; no new route (box-token census unchanged). A one-tap clear door is carried.
 - `one-dead-coordinator-per-pass` (Task 11) — ARMED, at most one claimant is acted on per pass, the longest dead first; §5.4 is silent, and the expiry lane's one-act-per-pass is the precedent. In SHADOW every due claimant is recorded, so the list the operator arms on hides none.
 - `the-sweep-re-measures-inside-the-arm` (Tasks 9, 10) — §5.4 re-measures "immediately before EACH run's close" and leans on the compare-and-set for "no successor"; a compare-and-set cannot see a revive of the SAME id, so the abandon arm itself re-measures (`SweepCloseGuard.stillCrashed`) immediately before the fleet act and again after it, before the commit, and a re-measure that is not a crash deletes the anchor as a pass's would. The residual, stated: a revive inside the second re-measure's round trip (Pre-flight finding 16).
 - `dead-coordinator-attention-from-lane-memory` (Tasks 6, 11) — the attention list (would-end, unmeasured, stuck, the breaker) is derived from the lane's in-memory entries and its last breaker, rebuilt over the passes after a restart; it can delay an act and never cause one. Its own list on the wire, never another lane's. The breaker's trips and every act's first-dead instant ARE durable — feed rows, which spec §9's instrument reads (Pre-flight finding 17).
 - `the-dead-coordinator-lane-never-pushes` (Task 11) — its rows are feed records and list entries; the stall watch's per-worker pushes — r3 `coordinator-dead`, and `coord-deaf` once its wave-2 arms are armed — are the notifications about a dead coordinator (Pre-flight finding 9).
 - `caused-by-vocabulary-lives-in-the-build4-design` (Task 13) — §6 item 5 names CCR-15's text; measured, CCR-15's texts spell no `causedBy` vocabulary, so the sentence amended is the build-4 design's, and §6 item 5 says so (Pre-flight finding 5).
 
-Not departures, and named so nobody hunts for a number: F4 (a stale doc line), F5/F6/F7/O1/O2 (records corrected to what shipped or was measured), parked item 3 (clause 3's child marker, which §6 and `wave-lifecycle.md` §6 already said), the `causedBy: 'sweep'` word and the `claimant-changed` refusal (spec §5.4's own), the `sweep-stopped` refusal (the re-measure's word, spec §5.4's "an alive answer at any point ends the whole act"), a thrown act's backoff (§5.4's "not retried beyond the lane's backoff"), a partly ended programme's feed row (§5.4's row is for an ENDED programme; one the act closed only part of is not), the README and CCR-15 §5.8 passages widened to name the lane (spec §5.3's "the switch"), spec §9's stage-4 rows (§9's own), and `mail-routes.test.ts`'s fourteenth union (the lane's own vocabulary, admitted as every earlier union was).
+Not departures, and named so nobody hunts for a number: F4 (a stale doc line), F5/F6/F7/O1/O2 (records corrected to what shipped or was measured), parked item 3 (clause 3's child marker, which §6 and `wave-lifecycle.md` §6 already said), the `causedBy: 'sweep'` word and the `claimant-changed` refusal (spec §5.4's own), the `sweep-stopped` refusal (the re-measure's word, spec §5.4's "an alive answer at any point ends the whole act"), a thrown act's backoff (§5.4's "not retried beyond the lane's backoff"), a partly ended programme's feed row (§5.4's row is for an ENDED programme; one the act closed only part of is not), the README and CCR-15 §5.8 passages widened to name the lane (spec §5.3's "the switch"), spec §9's stage-4 rows (§9's own), and `mail-routes.test.ts`'s fifteenth union (the lane's own vocabulary, admitted as every earlier union was).
 
 ## Carried out of this wave (recorded in the programme ledger)
 
 | Follow-up | Owner | Why not here |
 |---|---|---|
-| A one-tap "clear the breaker" door | the operator (Open question 1) | the existing doors already clear it; a new route is a box-token census change and a CLAUDE.md sentence |
+| A one-tap "clear the breaker" door | carried (the coordinator's ruling, 2026-10-07) | not this wave: the breaker clears through the existing doors |
 | `journalparse.ts`'s numeric `meas` keys read ccd's decimal strings | a follow-up, if the operator wants the typed field | its degrade is pinned there on purpose; this lane reads the raw line and a typed 0 still counts, so a fix changes nothing here |
 | ccd's change-only `spawn` line hides a quick successful revive (Pre-flight finding 1) | a follow-up, if the coverage matters | fails safe (the coordinator is never ended); reading the registry's `spawn` field as the start when it is newer than the newest journaled spawn would close it |
 | The residual window of a same-id revive inside the arm's last re-measure (Pre-flight finding 16) | stated, not closed | closing it needs a lock `ccd ensure` would honour, which this wave's no-ccd-change scope excludes |
 | A fleet-wide registry failure raises no attention item (the tick stops before the lane runs) | a follow-up if wanted | the fleet health already reports an unlistable registry, and no pass acts |
+| Whether a recorded journal gap stops counting after some age | carried, for a decision with shadow evidence | the trade is accepted for this wave (the coordinator's ruling, 2026-10-07): a coordinator whose last successful spawn is not newer than a recorded gap stays unmeasured — listed, never ended — until its next successful spawn |
 | The breaker's clear and the would-end list survive a restart | a follow-up if wanted | the departure `dead-coordinator-attention-from-lane-memory`; a restart re-trips or re-lists within two passes |
 | Wave 2's three operator questions (the PR sheet's "Archive now", the remote-mode worktree check, L5's sentence) | stay open with the operator | unchanged by this wave |
-| The expiry lane's arming items (c) the first armed pass's backlog and (d) brisk-mesa's tmux server | the operator, at arming | the 06:01 entry's; not code |
+| The expiry lane's arming items (c) the first armed pass's backlog and (d) brisk-mesa's tmux server | the operator, at arming | the 06:01 entry's; not code. Measured fact (2026-10-07): the operator expired 15 archived workspaces BY HAND (`CCD_EXPIRE_BY_HAND=1`, `--surface cli --actor operator`; 8 ccrc-pwa, 7 expoAI-assistant; 0 refused; `residueBytes` 0 on all) — the server composed none; `ccrc-pwa-brisk-mesa` stays archived until the operator ends a stray tmux test server holding it |
 
-## Open questions for the operator
+## Open questions — ruled (the coordinator, 2026-10-07 19:30 UTC)
 
-1. **The breaker's clear.** This plan clears it through the doors that exist: revive the named coordinators, reclaim their programmes, or abandon their runs — after which they fall under the threshold and the lane resumes (or has nothing left to end). No new route, so the box-token census and CLAUDE.md's census sentence do not move. Do you also want a one-tap "I have looked; let the lane end them" door? It would be a new session-gated route in `SESSION_ONLY`, with `box-token-census.test.ts` updated in both directions and CLAUDE.md's sentence widened — a wave of its own.
-2. **Arming order.** The expiry lane's blockers close in this wave's first commits; the dead-coordinator lane ships shadowed in the same deploy. Arm them separately — the expiry lane first, once you have read its shadow list, then this lane after its shadow list (and any breaker) has been worked through?
-3. **Task 5's copy** (review 313's parked item 2) is in the brief as droppable: keep the current promise ("…for 7 days; after that it is cleaned up"), or ship the hedge?
-4. **Four more departure numbers.** The plan's review added four departures, so twenty slugs meet a block of sixteen: will you issue a second block of four (three if Task 5 is struck), or should the worker fold any of them?
-5. **A journal with gaps keeps coordinators unmeasured for good.** The lane now refuses to read "no deliberate act" off a journal that recorded a gap since a coordinator's last successful spawn (Pre-flight finding 14). If the fleet's mirror carries gaps — its `lifecycle.gaps` count on `/api/fleet/health` says — the shadow list will show such coordinators as `unmeasured` rather than `would-end`, and an armed lane will never end their programmes. Is that the trade you want, or should a gap older than some age stop counting?
+The five questions this plan asked are ruled; each ruling is applied where the plan names it.
+
+1. **The breaker's clear.** Not this wave. The breaker clears through the existing doors — revive the named coordinators, reclaim their programmes, or abandon their runs (the departure `breaker-clears-through-the-existing-doors`). A one-tap clear door is carried.
+2. **Arming order** (the deploy note states it as the coordinator's recommendation; arming stays the operator's act): the expiry lane first, once this wave's residue blockers are deployed and its shadow list has been read; the dead-coordinator lane only after its own shadow list and any breaker trip have been worked through.
+3. **Task 5's copy** STAYS in the plan, self-contained and droppable; the operator may still strike it before merge.
+4. **Departure numbers.** The coordinator issued a second block of four: the brief issues the numbers for all twenty slugs. The plan writes no number.
+5. **The journal-gap trade** is ACCEPTED for this wave: a coordinator whose last successful spawn is not newer than a recorded gap stays unmeasured (listed, never ended) until its next successful spawn; whether a gap should stop counting after some age is carried, for a decision with shadow evidence.
