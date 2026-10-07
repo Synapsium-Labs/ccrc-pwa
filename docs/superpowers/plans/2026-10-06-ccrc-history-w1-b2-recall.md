@@ -18,7 +18,7 @@ Sessions gain recall that works without the card (the card is B3). B2 leaves B4 
 **Architecture:** Everything is fleet-side: no wire, server, PWA, `ccd/ccd` or coord.db change. The one hook edit is Task 34's: `fork` joins the spool block's source whitelist in `ccd/session-hook.sh`, in place, and no hook line moves.
 
 *Rings, by imports:*
-- `ccd/history/lib.mjs` (L1, `node:crypto` only) gains every new decision: `decideScope`, identity/harness/generation/recall-off decisions, id resolution and display prefixes, pasted-line ids, the FTS sanitiser, the regex guards, sort/snippet/cap/envelope/escaping, explorers, the block parser and native gist, the span rule, fan-in and rollups, the read-verb and op-verb argument grammars, `decideOpDoor`, `decideBind`, `decideRelay`, `planReplay`/`replayStep`, recovery phases and cursor, the FK diff, FTS shadow health. In place, B1's spool and epoch vocabularies gain `fork` (Task 34), and B1's export due rule gains `EXPORT_REDUCERS.perCopy` as its default and `dueTranscriptKeys` (Task 35).
+- `ccd/history/lib.mjs` (L1, `node:crypto` only) gains every new decision: `decideScope`, identity/harness/generation/recall-off decisions, id resolution and display prefixes, pasted-line ids, the FTS sanitiser, the regex guards, sort/snippet/cap/envelope/escaping, explorers, the block parser and native gist, the span rule, fan-in and rollups, the read-verb and op-verb argument grammars, `decideOpDoor`, `decideBind`, `decideRelay`, `planReplay`/`replayStep`, recovery phases and cursor, the FK diff, FTS shadow health. In place, B1's `SPOOL_SOURCES`, `parseSpoolLine`'s `reg` rule and `decideEpochLine` admit `fork` (Task 34); `EPOCH_CAUSES` already holds it (B1's ⟦D:history-epoch-causes-widened-for-rollback⟧), so it and the comment of B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ are left as they are. B1's export due rule gains `EXPORT_REDUCERS.perCopy` as its default and `dueTranscriptKeys` (Task 35).
 - `ccd/history/store.mjs` (L3, the sole `node:sqlite` importer) gains: the derivation step helpers (`getStep`/`setStep`), the lineage range CTE, the prune batches, the backup writer, the binding sequences (`adoptStore`, `stageRestore`/`commitRestore`/`abortRestore`, `createStore` with a bind option), integrity/FK/FTS measurement, and `blobPlainText`.
 - New L4 modules:
   - `derive.mjs`: node derivation inside the tick (leaves, parents per holding copy and epoch, node indexes, `nodes_fts`, recorded parser crashes, reparse, late-pair gist re-derivation). It imports `../compact-card.mjs` and injects `HEADING_RE`, `fencedRanges` and `mineTokens` into lib.
@@ -28,7 +28,7 @@ Sessions gain recall that works without the card (the card is B3). B2 leaves B4 
   - the tick wiring: `deriveNodes` after `deriveFts`, and the recovery step in the B2 slot after the secrets and before the drain;
   - the `recover` arm in `scheduledPass`, which measures `recovering`;
   - the recovery step and its replay applicators;
-  - the `runOpPass` restructure into dispatch tables, with the binding verbs handed to `bindingPass` before `openStore`, and the authoritative `recovering` refusal measured before both (RB6, with RB12-RB14's exemptions);
+  - the restructure of B1's `opPass` (the `--op` pass's body, called through B1's exported `runOpPass` wrapper, which stays as it is with `opThrowResult`) into dispatch tables, with the binding verbs handed to `bindingPass` before `openStore`, and the authoritative `recovering` refusal measured before both (RB6, with RB12-RB14's exemptions);
   - the new `--op` verbs;
   - `mergeFamily` re-pointing nodes;
   - recall-echo indexing;
@@ -79,7 +79,7 @@ B4 inserts its export phases into the phase table, between `apply` and `reindex`
 
 **Operator rulings (2026-10-07; spec §15.1 and §15.3, rev 3.4; binding).** Every question this plan once followed a default for is ruled, and so is the prune departure it raised:
 - **Q15 YES: the per-copy due rule** → **Task 35**. A row is due when, for every file holding a copy of it, that file's mtime plus its own home's retention, minus 30 days, has passed (a file gone from disk has passed; a row with no holding file on record is due at once); a blob is due when its rows are. `EXPORT_REDUCERS.perCopy` becomes the default wherever the due rule is computed: `planExport` (B1's signature), the census's due counts and W1-k dates, and so doctor's `export-due`, `export-overdue` and `retention-lowered` arms; B4's pass reads the same default (its ruling RD1). B1's per-row file set stays (⟦D:history-export-holding-files-by-transcript⟧). The `retention-lowered` WARN stays, as a reminder rather than a gate. `deploy/measure-history.py` computes no due date, so it needs no edit (Task 35 measures that).
-- **Q16 YES: SessionStart(fork) is spooled** → **Task 34**. `fork` joins the hook's source whitelist in place (no hook line moves, so no S6-R11 census change), `SPOOL_SOURCES`, `parseSpoolLine`'s `reg` rule and `EPOCH_CAUSES`; a fork confirms exactly as resume does, a fork whose sid is already an epoch confirms that epoch (as DM18c), a fresh sid chains a `fork` epoch, and the parent's copied rows follow the per-copy span rule. No migration (`epochs.cause` is TEXT with no CHECK). The rollback edge is named: a build rolled back to B1 reads a `fork` journal record as malformed and skips it, and a `fork` candidate still waiting stalls its pass until the node moves forward or the candidate's 7 days pass, unless B1 lists `fork` in `EPOCH_CAUSES` (Task 34's choices). B1 ships without it (⟦D:history-fork-not-spooled⟧); Task 34 reverses that (⟦D:history-fork-spooled⟧). Task 25's replay applies fork records unchanged, which Task 34's rebuild case pins.
+- **Q16 YES: SessionStart(fork) is spooled** → **Task 34**. `fork` joins the hook's source whitelist in place (no hook line moves, so no S6-R11 census change), `SPOOL_SOURCES`, `parseSpoolLine`'s `reg` rule and `decideEpochLine` (B1's `EPOCH_CAUSES` already lists `fork`, B1's ⟦D:history-epoch-causes-widened-for-rollback⟧, so a rolled-back build reads a fork verdict as valid and only a spooled fork line is rejected); a fork confirms exactly as resume does, a fork whose sid is already an epoch confirms that epoch (as DM18c), a fresh sid chains a `fork` epoch, and the parent's copied rows follow the per-copy span rule. No migration (`epochs.cause` is TEXT with no CHECK). The rollback edge is named, and B1 has half-closed it: B1 merged with `fork` in `EPOCH_CAUSES` (B1's ⟦D:history-epoch-causes-widened-for-rollback⟧, ⟦D:history-epoch-causes-widened-for-rollback⟧, Task 34's choices), so a build rolled back to B1 reads a `fork` journal record and a waiting `fork` candidate's verdict as valid; only a spooled `fork` line, outside its `SPOOL_SOURCES`, is rejected. B1 ships without a fork SPOOL source (⟦D:history-fork-not-spooled⟧); Task 34 reverses that (⟦D:history-fork-spooled⟧). Task 25's replay applies fork records unchanged, which Task 34's rebuild case pins.
 - **Q17 as recommended**: B1's kept-line wording, the close line naming `--purge-history`, and the decommission runbook's confirmation. B2 makes no uninstall wording change beyond the skill tree and installer (Task 32).
 - **Q18 YES, a W2 matter**: before W2's window opens, the W2 open record carries the smallest passing point uptake computed from B1 and B3's data. No W1 task, and none here.
 - **Q19 NO, not in W1**: no hand-mapping mode. `import --session <id> --file <path> --apply` stays the one operator mapping (its CLI door is Task 19).
@@ -172,7 +172,7 @@ B4 inserts its export phases into the phase table, between `apply` and `reindex`
 - **The `--op` dispatch contract (fixed at assembly; Tasks 19–28 all follow it).**
   - `OP_DRY_RUNS[op](c)`, `c = { home, P, parsed, args, deps, out, now }`, answers `{ rc, reason? }`.
   - `OP_HANDLERS[op](c)`, `c = { db, ctx, P, args, opened, free }`, answers `{ rc, reason? }` (awaited).
-  - The RB6 refusal comes first: after the role check, the lock-take journal half and the statfs probe, `runOpPass` reads store.mjs's `recoverStepAt(P.dbFile)` (Task 19) and, on `open`, refuses through `decideOpGate` with `recovering: true` and the facts RB13 and RB14 read: `storedVersionAt(P.dbFile)`, the code's version and `store.id`'s presence.
+  - The RB6 refusal comes first: after the role check, the lock-take journal half and the statfs probe, B1's `opPass` (called through its exported `runOpPass` wrapper) reads store.mjs's `recoverStepAt(P.dbFile)` (Task 19) and, on `open`, refuses through `decideOpGate` with `recovering: true` and the facts RB13 and RB14 read: `storedVersionAt(P.dbFile)`, the code's version and `store.id`'s presence.
   - The binding verbs go to `bindingPass(home, P, op, args, deps, out)` (Task 26) before `openStore`; Task 26 replaces Task 19's empty `BINDING_PASSES` table with that call. `restoreArm` and `rebuildArm` reuse Task 26's `bindFactsOf(home, role, deps, extra)` and `finishBind(home, P, role, deps, out, now)`.
 - **Store sequences.**
   - prune: the floor is 30 days; dry run by default; bounded `BEGIN IMMEDIATE` batches; sets `z=NULL` and `pruned_ms` only when every referrer is older than the cutoff (a NULL time is never old); never touches `nodes.summary_blob_id` or `boundaries.kept_blob_id`; deletes the `blobs_fts` rows; runs `PRAGMA incremental_vacuum`; never touches the journal or the export, and never decides by a source file's absence.
@@ -249,12 +249,12 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 
 | Path | Action | Responsibility | Ring | Task(s) |
 |---|---|---|---|---|
-| `ccd/history/lib.mjs` | modify | B2's pure decisions and vocabularies, appended after B1's health block: scope, identity, harness, generation and recall-off decisions; id resolution and display prefixes; pasted-line ids; the FTS sanitiser, regex detector and guard, prefilter, sort, snippet, time bounds; envelope and escaping, cap, header and lag, the read `--json` envelope, cursor codec, relay; explorers, cost rows, the expand-body pick; `EXPAND_LABEL`, the block parser and statuses, native gist and topics, refs, directive flag, summary-row selection; the span rule, leaf-id fork rule, fan-in, rollups, readiness, `pickHoldingCopy`, `forkCounts`; the read-verb whitelist (`READ_OPTIONS`, `parseReadArgs`), grep and describe value grammars; op-verb grammar, operator door, `parseDuration`, backup and restore names, `decideBind` (adopt's newer-schema refusal included, RB17), `decideReparse`; recovery phases and cursor, journal-file order, `replayStep`/`planReplay`, unmoved-tick rule, FK diff, FTS shadow health; `selectColumns`, `VERB_TABLES`, `INDEXED_PROVENANCE`, `FTS_STEP`, `SCOPE_FAMILIES_JSON_MAX` (11), `paneReadWanted` (19), `FTS_REBUILD_STEP` (23). Edited in place: `REASON_ROWS` (`repair-refused`, `backup-refused`, `recovering`), `decideOpGate` (RB6's `recovering` row, with the module-private `recoveryExempt` for RB12-RB14), `PARSE_STATUS` (`parse-failed`), B1's `paneNameFor` caller moves to `paneReadWanted` (sweep), and Task 12's `decideGrepIndex` gains `rebuilding` (23); B1's `SPOOL_SOURCES`, `EPOCH_CAUSES`, `parseSpoolLine`'s `reg` rule and `decideEpochLine` admit `fork` (34); B1's export block: `EXPORT_REDUCERS.perCopy` (the default), `shortestHome` answering a due time, `planExport`'s due test, `exportDates` over holders, `dueTranscriptKeys`, and `deriveHealth`'s `retention-lowered` detail (35) | L1 policy (`node:crypto` only) | 1–8, 10–12, 15–17, 19, 23, 34, 35 |
-| `ccd/history/lib.d.mts` | modify | hand-written declarations for every B2 lib export, each declared once; `OpGateReason`, `decideOpGate`'s env, `PARSE_STATUS` and `decideGrepIndex`'s input edited in place; `SpoolSource`, `EpochCause` and `decideEpochLine`'s `line.src` gain `fork` (34); `EXPORT_REDUCERS`, `ExportReducer`'s doc and `exportDates` in place, `dueTranscriptKeys` added (35) | types | 1–8, 10–12, 15–17, 19, 23, 34, 35 |
+| `ccd/history/lib.mjs` | modify | B2's pure decisions and vocabularies, appended after B1's health block: scope, identity, harness, generation and recall-off decisions; id resolution and display prefixes; pasted-line ids; the FTS sanitiser, regex detector and guard, prefilter, sort, snippet, time bounds; envelope and escaping, cap, header and lag, the read `--json` envelope, cursor codec, relay; explorers, cost rows, the expand-body pick; `EXPAND_LABEL`, the block parser and statuses, native gist and topics, refs, directive flag, summary-row selection; the span rule, leaf-id fork rule, fan-in, rollups, readiness, `pickHoldingCopy`, `forkCounts`; the read-verb whitelist (`READ_OPTIONS`, `parseReadArgs`), grep and describe value grammars; op-verb grammar, operator door, `parseDuration`, backup and restore names, `decideBind` (adopt's newer-schema refusal included, RB17), `decideReparse`; recovery phases and cursor, journal-file order, `replayStep`/`planReplay`, unmoved-tick rule, FK diff, FTS shadow health; `selectColumns`, `VERB_TABLES`, `INDEXED_PROVENANCE`, `FTS_STEP`, `SCOPE_FAMILIES_JSON_MAX` (11), `paneReadWanted` (19), `FTS_REBUILD_STEP` (23). Edited in place: `REASON_ROWS` (`repair-refused`, `backup-refused`, `recovering`), `decideOpGate` (RB6's `recovering` row, with the module-private `recoveryExempt` for RB12-RB14), `PARSE_STATUS` (`parse-failed`), B1's `paneNameFor` caller moves to `paneReadWanted` (sweep), and Task 12's `decideGrepIndex` gains `rebuilding` (23); B1's `SPOOL_SOURCES`, `parseSpoolLine`'s `reg` rule and `decideEpochLine` admit `fork`, and `EPOCH_CAUSES` (already holding `fork`, B1's ⟦D:history-epoch-causes-widened-for-rollback⟧) is left as it is, with the comment of B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ (34); B1's export block: `EXPORT_REDUCERS.perCopy` (the default), `shortestHome` answering a due time, `planExport`'s due test, `exportDates` over holders, `dueTranscriptKeys`, and `deriveHealth`'s `retention-lowered` detail (35) | L1 policy (`node:crypto` only) | 1–8, 10–12, 15–17, 19, 23, 34, 35 |
+| `ccd/history/lib.d.mts` | modify | hand-written declarations for every B2 lib export, each declared once; `OpGateReason`, `decideOpGate`'s env, `PARSE_STATUS` and `decideGrepIndex`'s input edited in place; `SpoolSource` and `decideEpochLine`'s `line.src` gain `fork` (34; B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ already put it in `EpochCause`); `EXPORT_REDUCERS`, `ExportReducer`'s doc and `exportDates` in place, `dueTranscriptKeys` added (35) | types | 1–8, 10–12, 15–17, 19, 23, 34, 35 |
 | `ccd/history/store.mjs` | modify | `getStep`/`setStep`; the lineage range CTE (P7), `childrenOf`, `parentOf`; `blobPlainText`; prune candidates, batches and `incrementalVacuum`; `writeBackup`; `integrityCheck`, `foreignKeyRows`, `ftsMeasure`, `dropFtsTables`; `adoptStore`, `stageRestore`, `commitRestore`, `abortRestore`; `createStore(home, opts?)` with a bind option (additive); `recoverStepAt` (RB6's read-only probe of an open `recover` step); `storedVersionAt` (the stored `user_version`, read-only, for RB13 and RB17) | L3 adapter (`node:sqlite`, `node:fs`, `node:zlib`) | 8, 9, 12, 19, 20, 22–24 |
 | `ccd/history/store.d.mts` | modify | declarations for the new store exports, each declared once | types | 8, 9, 12, 19, 20, 22–24 |
 | `ccd/history/derive.mjs` | create | node derivation inside the tick: `nodeToolkit`; node indexes; `deriveLeaves` (holding copy, readiness, summary row, direction read back from the source line, receipt gate, native gist, topics and refs, leaf ids, counters, parser crashes recorded as `parse-failed` leaves or `leaf-crashed` markers); `deriveParents` (fan-in per holding copy and epoch); `indexNodesFts`; `refreshLeaf` (records a parser throw `parse-failed`), `rerollParents`, `reparseTargets`, `reparseLeaves`, `clearLeafCrashes`; `redactNodeFields`, `reparseFailClosed`, `rederiveGistsFor` | L4 delivery (imports lib, store, `../compact-card.mjs`, `node:fs`) | 8, 9, 21, 29 |
-| `ccd/history/sweep.mjs` | modify | tick wiring (`deriveNodes`, the recovery slot); `scheduledPass` measures `recovering` and runs the recover arm; `recoveryStep`, `recoverPass`, `RECOVER_EXECUTORS` and the replay applicators; the `runOpPass` restructure (`OP_DRY_RUNS`, `OP_HANDLERS`, `bindingPass`, per-verb version guard); the RB6 `recovering` refusal in `runOpPass`, with RB13's and RB14's facts; `--op` prune, reparse, repair, backup, adopt, restore and rebuild; `mergeFamily` re-points nodes; recall-echo index predicate; `recall_off_stale` counted at drain; `reindexForValues` calls the gist re-derivation; `recordHeldMatches` takes fork lines, and three epoch doc comments name fork (34); the export census's header comment, `EXPORT_CANDIDATES_SQL`, `EXPORT_HOLDERS_SQL` and `exportCensus` (35) | L4 delivery | 8, 9, 11, 12, 19–23, 25–29, 34, 35 |
+| `ccd/history/sweep.mjs` | modify | tick wiring (`deriveNodes`, the recovery slot); `scheduledPass` measures `recovering` and runs the recover arm; `recoveryStep`, `recoverPass`, `RECOVER_EXECUTORS` and the replay applicators; the restructure of B1's `opPass`, behind its unchanged `runOpPass` wrapper and `opThrowResult` (`OP_DRY_RUNS`, `OP_HANDLERS`, `bindingPass`, per-verb version guard); the RB6 `recovering` refusal in `opPass`, with RB13's and RB14's facts; `--op` prune, reparse, repair, backup, adopt, restore and rebuild; `mergeFamily` re-points nodes; recall-echo index predicate; `recall_off_stale` counted at drain; `reindexForValues` calls the gist re-derivation; `recordHeldMatches` takes fork lines, and three epoch doc comments name fork (34); the export census's header comment, `EXPORT_CANDIDATES_SQL`, `EXPORT_HOLDERS_SQL` and `exportCensus` (35) | L4 delivery | 8, 9, 11, 12, 19–23, 25–29, 34, 35 |
 | `ccd/session-hook.sh` | modify | in the `history-spool` block: `fork` in the SessionStart source whitelist, and four comment lines reworded, each in place; no line added or removed (citation corpus, S6-R11 census unchanged) | bash hook | 34 |
 | `ccd/history/cli.mjs` | modify | verb dispatcher: `parseReadArgs` and help; `measureReach` (extracted from B1's status helpers); bounded tmux identity, harness check, recall-off honour and preflight; `readContext`; `READ_RUNNERS`, `emitResult`, `redactFinal`; the fenced `ev:"recall"` counter line; the operator door (`OP_OF_VERB`, `runOpVerb`, relay); bare `doctor` | L4 delivery | 10–12, 15, 16, 18, 19 (26–28, 30 check only) |
 | `ccd/history/recall.mjs` | create | the read-verb executors over a `ReadContext`: `runTree`, `grepVerb`/`runGrep`, `runRegex`, `describeVerb`/`runDescribe`, `expandVerb`/`runExpand`; version-aware selects; `pendingFor`; `indexGate` reads the open `FTS_REBUILD_STEP` row (23, in place) | L4 delivery (imports lib, store, `node:child_process`) | 10–18, 23 |
@@ -289,7 +289,7 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 | `server/test/historyHelpers.ts` | modify | exported `runCli`, `withPane`, `sleepyTmux`, `seedFamily`, `stubShim`, `holdLock`, journal and recovery fixture helpers | test helper (no describe) | 10, 19, 25 |
 | `server/test/historyFixtures.ts` | modify | builders: summary text, steered blocks, compaction sequences | test helper (no describe) | 4, 5 |
 | `server/test/fixtures/history/preload-faults.mjs` | modify | appended test-only knobs with unique binding names: throw-on-SQL substring, a throw on one blob's read (21), FK-violating insert and a committed FK plant (23), integrity text | test fixture | 21, 23, 25 |
-| `server/test/fixtures/history/run-pass.mjs` | modify | `DriverDeps` gains `budgetMs`, `budgetBytes` and `chunkBytes` | test fixture | 25 |
+| `server/test/fixtures/history/run-pass.mjs` | modify | `HISTORY_TEST_DEPS` gains `budgetMs`, `budgetBytes` and `chunkBytes`, handed to sweep.mjs as `deps.budget`; the matching optional fields join `DriverDeps` in `historyHelpers.ts` | test fixture | 25 |
 | `server/test/single-definition.test.ts` | modify | in place, in B1's end-appended describes: `PENDING_EMITTERS` drops recall; the O13 corpus gains the skill; O14 `VOCABS` gains B2's vocabularies (36); appended: the hook's SessionStart whitelist bound to `SPOOL_SOURCES` (34) | test (cited by line; end region only) | 11, 31, 34, 36 |
 | `server/test/license.test.ts` | modify | the sidecar sha and PATHSPEC pins cover every `LICENSE.lossless-claw`; the README substring list gains the skill sidecar | test | 31 |
 | `server/test/lifecycle.test.ts` | modify | `HISTORY_LANDED` becomes `['B1','B2']`; one `declares history-backups` case | test | 22 |
@@ -302,6 +302,8 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 | `agent/test/deploy-verify.test.ts` | modify | the roster-reader ordering list gains the history skill run line | test (agent package) | 32 |
 | `server/test/ws-expire-prose.test.ts` | modify | the `SKILLS` scan gains `ccd/history-skill` | test | 31 |
 | `server/test/ccrc-api-closed.test.ts` | modify | the skill-dir scan gains `ccd/history-skill` | test | 31 |
+| `server/test/expiry-lane-prose.test.ts` | modify | the `expire-lane-live` skill scan gains `ccd/history-skill` | test | 31 |
+| `server/test/auth-passkey.test.ts` | modify | `THE SWEEP`'s skill corpora gain `history-skill` | test | 31 |
 
 ---
 
@@ -2404,10 +2406,10 @@ describe('costRow and pickExpandBody (spec 8.4 describe, 6.1 variants)', () => {
 - [ ] **Step 4: Run them and see them fail.** In the foreground with a timeout of at least 600000 ms:
 
 ```bash
-(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'recall envelope|cap, the counts|header and the lag|read --json envelope|the cursor|decideRelay|the explorers|costRow and pickExpandBody')
+(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'recall envelope|cap, the counts|header and the lag|read --json envelope|the cursor: opaque|decideRelay|the explorers|costRow and pickExpandBody')
 ```
 
-Expected (measured): `Tests  36 failed | 1 passed`, the rest of the file skipped, with `TypeError: escapeXmlAttr is not a function` and the same for `recallEnvelope`, `capOutput`, `shownLine`, `snippetLine`, `nextLine`, `headerLine`, `scopeLag`, `readEnvelope`, `encodeCursor`, `decideRelay`, `stripReadPrefix`, `exploreKindOf`, `explore`, `costRow` and `pickExpandBody`. The one pass is `exits 0, 1, 3, 6, 8 and 9 carry none, and a value outside EXIT is refused`, whose every call expects a `TypeError` and gets one from the missing export; it reds for real in Step 11's `8.3: a reason on an exit that carries none` row.
+Expected (measured on the B1 base with Tasks 1-2 in place): `Tests  36 failed | 1 passed | 573 skipped (610)`, the rest of the file skipped. The filter term is `the cursor: opaque`, not `the cursor`: the bare term also matches B1's passing `planFileRead … a file shorter than the cursor, or a different tail sha, rescans` (2 passed). The failures carry `TypeError: escapeXmlAttr is not a function` and the same for `recallEnvelope`, `capOutput`, `shownLine`, `snippetLine`, `nextLine`, `headerLine`, `scopeLag`, `readEnvelope`, `encodeCursor`, `decideRelay`, `stripReadPrefix`, `exploreKindOf`, `explore`, `costRow` and `pickExpandBody`. The one pass is `exits 0, 1, 3, 6, 8 and 9 carry none, and a value outside EXIT is refused`, whose every call expects a `TypeError` and gets one from the missing export; it reds for real in Step 11's `8.3: a reason on an exit that carries none` row.
 
 - [ ] **Step 5: Implement the output primitives.** Append to the end of `ccd/history/lib.mjs`:
 
@@ -3075,14 +3077,14 @@ cat > .superpowers/sdd/history-w1-b2/scratch/mutants-task3.json <<'MUT_EOF'
   "name": "8.4: recalled text carried in a cursor",
   "file": "ccd/history/lib.mjs",
   "test": "test/history-lib.test.ts",
-  "filter": "the cursor",
+  "filter": "the cursor: opaque",
   "edits": [{ "anchor": "  if (typeof v === 'string') return CURSOR_TEXT_RE.test(v);", "replacement": "  if (typeof v === 'string') return true;" }]
  },
  {
   "name": "8.4: another verb's cursor accepted",
   "file": "ccd/history/lib.mjs",
   "test": "test/history-lib.test.ts",
-  "filter": "the cursor",
+  "filter": "the cursor: opaque",
   "edits": [{ "anchor": "  return cursorShapeOk(c) && c.resource === resource ? c : null;", "replacement": "  return cursorShapeOk(c) ? c : null;" }]
  },
  {
@@ -4984,7 +4986,7 @@ describe('parentRollup: a parent is deterministic and rebuildable from its child
 (cd server && ./node_modules/.bin/vitest run test/history-parser.test.ts -t 'planSpans|DM6|decideLeafId|leafReady|planFanIn|parentRollup')
 ```
 
-Expected: FAIL. The cases fail with `TypeError: libSpan.planSpans is not a function`, and the same for `decideLeafId`, `eofAfterBoundary`, `leafReady`, `planFanIn`, `parentRollup` and `firstSentence`. `FAN_IN is the plugin's tested 8 and 4` fails with `expected undefined to deeply equal { leaf: 8, condensed: 4 }`. The `DM5 CONTROL` case passes: it reads only Step 1's fixture and B1's `boundaryOf`.
+Expected: FAIL, measured `Tests  26 failed | 2 passed`. The cases fail with `TypeError: planSpans is not a function` (vitest prints the bare name, without the `libSpan.` alias), and the same for `decideLeafId`, `eofAfterBoundary`, `leafReady`, `planFanIn`, `parentRollup` and `firstSentence`. `FAN_IN is the plugin's tested 8 and 4` fails with `expected undefined to deeply equal { leaf: 8, condensed: 4 }`. The `DM5 CONTROL` case passes: it reads only Step 1's fixture and B1's `boundaryOf`. So does `a width under 2 is a programming error`, which expects a `TypeError` and gets one from the missing export.
 
 - [ ] **Step 5: Implement them.** Append to the end of `ccd/history/lib.mjs`:
 
@@ -5492,14 +5494,15 @@ describe('decideOpGate while a recovery step is registered: every writing form b
     expect(libOps.decideOpGate(null, recovering, false, 'cc-demo-quiet-basin')).toEqual({ ok: true });
   });
   it("RB13: migrate is refused only while the stored user_version equals the code's; an older or a newer store passes; an unmeasured version keeps the refusal", () => {
-    const at = (storedVersion: libOps.Presence<number> | undefined, codeVersion: number | undefined = 2) => ({ ...recovering, storedVersion, codeVersion });
+    // codeVersion null builds an env with NO codeVersion key ("not measured"); undefined would select the default 2.
+    const at = (storedVersion: libOps.Presence<number> | undefined, codeVersion: number | null = 2) => ({ ...recovering, storedVersion, ...(codeVersion === null ? {} : { codeVersion }) });
     expect(libOps.decideOpGate('migrate', at(ver(2)), true, null), 'stored = code').toEqual(refusedRecovering);
     expect(libOps.decideOpGate('migrate', at(ver(1)), true, null), 'a restored older backup').toEqual({ ok: true });
     expect(libOps.decideOpGate('migrate', at(ver(3)), true, null), 'newer: openStore answers it, not this row').toEqual({ ok: true });
     for (const sv of [unreadable, absent, undefined]) {
       expect(libOps.decideOpGate('migrate', at(sv), true, null), `storedVersion ${JSON.stringify(sv)}`).toEqual(refusedRecovering);
     }
-    expect(libOps.decideOpGate('migrate', at(ver(1), undefined), true, null), 'no code version measured').toEqual(refusedRecovering);
+    expect(libOps.decideOpGate('migrate', at(ver(1), null), true, null), 'no code version measured').toEqual(refusedRecovering);
     // The version facts exempt migrate alone.
     for (const f of REFUSED.filter((x) => x !== 'migrate')) expect(libOps.decideOpGate(f, at(ver(1)), true, null), f).toEqual(refusedRecovering);
   });
@@ -5623,7 +5626,7 @@ describe('parseDuration, backupNameOf and restoreNameOk (spec 6.6, 8.4; P15)', (
     for (const s of ['0d', '-5d', '5', '', 'd', '1.5d', 'ninety days']) expect(libOps.parseDuration(s), s).toBeNull();
     expect(libOps.PRUNE_FLOOR_DAYS).toBe(30);
   });
-  it("backupNameOf is the UTC second, the form doctor's remedy text names, and restoreNameOk accepts it", () => {
+  it('backupNameOf is the UTC second (`YYYYMMDDTHHMMSSZ.db`, §8.4), and restoreNameOk accepts it', () => {
     expect(libOps.backupNameOf(Date.parse('2026-10-01T00:00:00.000Z'))).toBe('20261001T000000Z.db');
     expect(libOps.backupNameOf(Date.parse('2026-12-31T23:59:59.999Z'))).toBe('20261231T235959Z.db');
     expect(libOps.restoreNameOk(libOps.backupNameOf(Date.now()))).toBe(true);
@@ -5826,7 +5829,7 @@ describe('decideReparse: the preflight limits (spec 8.4, 11 L8; DM21, C62 pure h
 Expected: FAIL.
   - The REASONS case fails with `expected undefined to be 2`; the HEALTH_WORDS case passes (B1's words).
   - The recovery cases fail: B1's `decideOpGate` reads no `recovering`, so `import-apply` answers `{ ok: true }` where `{ ok: false, rc: 2, reason: 'recovering' }` is expected. The RB13 case fails the same way at its first, stored-equals-code row, and the RB14 case at its first refused `storeId`. Its CONTROL, bumps and absent-recovering cases pass on B1's gate alone.
-  - The others fail with `TypeError: libOps.parseOpVerbArgs is not a function`, and the same for `parseDuration`, `backupNameOf`, `decideOpDoor`, `decideBind` and `decideReparse`.
+  - The others fail with `TypeError: parseOpVerbArgs is not a function` (vitest prints the bare name, without the `libOps.` alias), and the same for `parseDuration`, `backupNameOf`, `decideOpDoor`, `decideBind` and `decideReparse`.
 
 - [ ] **Step 4: Add the three reason words and the recovery row in place.** In `ccd/history/lib.mjs`:
   1. In `REASON_ROWS`, directly above the row's opening line `  [EXIT.REFUSED, [`, insert:
@@ -5891,7 +5894,7 @@ grep -c "return refuseGate('recovering');" ccd/history/lib.mjs                  
 grep -c '^function recoveryExempt(op, env) {$' ccd/history/lib.mjs                        # 1
 ```
 
-  The `EXIT.REFUSED` row now holds 31 words, and `REFUSALS` derives all three new ones. B1's pins over `REASON_ROWS` are its code set (`[2, 4, 5, 7]`) and `REFUSALS`' derivation, and its `decideOpGate` cases build their `env` with no `recovering` key: none of them moves, and Step 8 runs them all. If B1's merged suite holds a pin that counts the row's words, update it in this commit, never by deleting it. `recoveryExempt` is module-private, like `refuseGate`: lib.d.mts declares neither.
+  The `EXIT.REFUSED` row now holds 33 words (B1's 30, which include `'roster-unreadable'` and `'uuid-claimed'` from B1's ⟦D:history-import-refusal-words⟧, plus these three), and `REFUSALS` derives all three new ones. B1's pins over `REASON_ROWS` are its code set (`[2, 4, 5, 7]`) and `REFUSALS`' derivation, and its `decideOpGate` cases build their `env` with no `recovering` key: none of them moves, and Step 8 runs them all. If B1's merged suite holds a pin that counts the row's words, update it in this commit, never by deleting it. `recoveryExempt` is module-private, like `refuseGate`: lib.d.mts declares neither.
 
 - [ ] **Step 5: Implement the decisions.** Append to the end of `ccd/history/lib.mjs`:
 
@@ -6044,8 +6047,8 @@ export function parseDuration(input) {
 /** `prune --older-than` under this many days is refused `older-than-floor` (§6.6, *chosen*). */
 export const PRUNE_FLOOR_DAYS = 30;
 
-/** doctor --backup's file name for the UTC second `nowMs` (§8.4): `YYYYMMDDTHHMMSSZ.db`, the form doctor's
- *  store-missing remedy names. ⟦D:history-backup-preflight-and-rename⟧ */
+/** doctor --backup's file name for the UTC second `nowMs` (§8.4): `YYYYMMDDTHHMMSSZ.db`, the form `--op backup`
+ *  publishes under db/backups/ and `doctor --restore` takes. ⟦D:history-backup-preflight-and-rename⟧ */
 export function backupNameOf(nowMs) {
   if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new TypeError(`backupNameOf: a time in ms, got ${String(nowMs)}`);
   const iso = new Date(nowMs).toISOString();
@@ -6792,7 +6795,7 @@ describe('FTS self-heal checks: ftsTablesHealthy over per-table shadows (spec 8.
 (cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'RecoverCursor|orderJournalFiles|planReplay|replayStep|indexRecord|nextUnmovedTicks|diffForeignKeys|FTS self-heal')
 ```
 
-Expected: FAIL. The cases fail with `TypeError: libReplay.parseRecoverCursor is not a function`, and the same for `orderJournalFiles`, `planReplay`, `replayStep`, `indexRecord`, `nextUnmovedTicks` and `diffForeignKeys`. The RECOVER_PHASES and FTS cases fail on `undefined` (`Cannot read properties of undefined`).
+Expected: FAIL. The cases fail with `TypeError: parseRecoverCursor is not a function` (vitest prints the bare name, without the `libReplay.` alias), and the same for `orderJournalFiles`, `planReplay`, `replayStep`, `indexRecord`, `nextUnmovedTicks` and `diffForeignKeys`. The RECOVER_PHASES case fails with `TypeError: RECOVER_PHASES is not iterable`; the per-table-shadow FTS case with `TypeError: Cannot read properties of undefined (reading 'blobs_fts')`, and the missing-table FTS case with `TypeError: ftsTablesHealthy is not a function`.
 
 - [ ] **Step 4: Implement them.** Append to the end of `ccd/history/lib.mjs`:
 
@@ -8798,12 +8801,12 @@ pairIdx: makePairIndex([]), fts: false, admitFile, budgetLeft, isBusy };
 ```
 
      Add this sentence to the end of its doc comment: `admitFile, budgetLeft and isBusy are this module's own, handed to derive.mjs, which imports nothing of the sweep (W1-B2 Task 8).`
-  3. In `tick`, directly below the line `  if (ctx.ingest && !(ing !== null && ing.paused)) deriveFts(db, ictx, ctx.budget);`, add:
+  3. In `tick` (B1's `export async function tick`), directly below the line `  if (ctx.ingest && !(ing !== null && ing.paused)) await deriveFts(db, ictx, ctx.budget);` (B1's `deriveFts` is async, so B1 awaits it), add:
 
 ```js
   // Derive, nodes (W1-B2 Task 8): leaves from the boundaries stored so far, under the FTS backfill's gate, because a
   // node grows db/ (§9.3), and after it, so a new node's nodes_fts row is written in a tick whose tables exist.
-  // ⟦D:history-tick-order⟧
+  // deriveNodes is synchronous, so it is not awaited. ⟦D:history-tick-order⟧
   if (ctx.ingest && !(ing !== null && ing.paused)) deriveNodes(db, ictx, ctx.budget);
 ```
 
@@ -9513,6 +9516,10 @@ v9.describe('DM26: parents by fan-in, never across an epoch, only over final lea
     const acct2 = Object.keys(two.accountHome)[0]!;
     const T1 = 'd26c1000-1111-4111-8111-111111111111';
     const T2 = 'd26c2000-2222-4222-8222-222222222222';
+    // B1 renames a spool line at the END of a tick and drains it at the NEXT (sweep.mjs's listDraining loop, then
+    // renameAndObserve), and the first tick also runs the registry scan, which books a planted .uuid as an 'import'
+    // epoch. So the box is primed first: that tick spends the scan, and epoch 1 is the hook's 'startup'.
+    v9.expect(h9.runSweep(two).code).toBe(0);   // prime: spends the first tick's registry scan, so epoch 1 is the hook's 'startup'
     h9.plantSession(two, ID9, { uuid: T1, project: 'demo' });
     h9.plantTranscript(two, acct2, '-home-u-tree-demo', T1, cycles9('d26c1a00', T1, 4, T0_9));
     h9.spoolLine(two, ID9, { v: 1, ev: 'SessionStart', id: ID9, sid: T1, src: 'startup', reg: T1 });
@@ -9522,7 +9529,7 @@ v9.describe('DM26: parents by fan-in, never across an epoch, only over final lea
     // a LATER tick confirms it ('later-tick'), and only then do its leaves appear, in that epoch (review focus 4).
     h9.plantTranscript(two, acct2, '-home-u-tree-demo', T2, cycles9('d26c2a00', T2, 4, T0_9 + 3_600_000));
     h9.spoolLine(two, ID9, { v: 1, ev: 'SessionStart', id: ID9, sid: T2, src: 'clear' });
-    v9.expect(h9.runSweep(two).code).toBe(0);
+    for (let i = 0; i < 2; i += 1) v9.expect(h9.runSweep(two).code).toBe(0);   // tick N renames the /clear line, tick N+1 drains it and chains the unconfirmed epoch
     const early = h9.openStoreRO(two);
     try {
       const ep = early.prepare('SELECT seq, confirmed_ms FROM epochs ORDER BY seq').all() as { seq: number; confirmed_ms: number | null }[];
@@ -9532,6 +9539,7 @@ v9.describe('DM26: parents by fan-in, never across an epoch, only over final lea
       early.close();
     }
     h9.plantSession(two, ID9, { uuid: T2 });
+    h9.spoolLine(two, ID9, { v: 1, ev: 'Stop', id: ID9 });   // a renamed line for the id hints its confirmed epochs and .uuid at ingest; without one, T2 waits for the 30-minute scan
     for (let i = 0; i < 3; i += 1) v9.expect(h9.runSweep(two).code).toBe(0);
     const db2 = h9.openStoreRO(two);
     try {
@@ -10180,13 +10188,18 @@ export interface SeedSpec {
 }
 
 /** One family, captured as the box captures one:
+ *  - one priming sweep first, which spends the first tick's registry scan so the epoch is the hook's 'startup' and
+ *    not the scan's 'import' (B1's scanDue is true while meta scan_ms is null; registryBackfill books a planted .uuid);
  *  - its registry fields;
  *  - its transcript, under the roster's first account unless `accountId` names another;
- *  - a SessionStart(startup) line whose `reg` is the uuid, so the drain confirms it at once (§6.1);
- *  - sweep ticks until one leaves the transcript at end-of-file.
+ *  - a SessionStart(startup) line whose `reg` is the uuid; B1 drains it one tick after renaming it, so the epoch
+ *    appears on the second sweep (§6.1);
+ *  - sweep ticks until one leaves the transcript at end-of-file AND its epoch confirmed.
  *  A string `generation` is written to the registry and carried on the line; null writes none (a gen-less line).
  *  Throws when four ticks do not get there: a seed that stops short would make every case built on it vacuous. */
 export function seedFamily(box: HistoryBox, f: SeedSpec): { uuid: string; transcript: string } {
+  const prime = runSweep(box);
+  if (prime.code !== 0) throw new Error(`seedFamily(${f.id}): the priming sweep exited ${String(prime.code)}: ${prime.stderr}${prime.stdout}`);
   plantSession(box, f.id, {
     uuid: f.uuid, project: f.project,
     ...(f.generation === undefined ? {} : { generation: f.generation }),
@@ -10210,7 +10223,10 @@ function atEndOfFile(box: HistoryBox, uuid: string): boolean {
   try {
     const row = db.prepare("SELECT count(*) AS n FROM ingest_files f JOIN transcripts t ON t.transcript_pk = f.transcript_pk WHERE t.cc_session_uuid = ? AND f.source_key = '' AND f.eof_ms IS NOT NULL")
       .get(uuid) as { n: number };
-    return Number(row.n) > 0;
+    // B1 reaches the transcript's EOF through hintedUuids in the tick that RENAMES the line, but drains the line (and so
+    // books the family and its epoch) only in the next: EOF alone would return before the family exists.
+    const ep = db.prepare('SELECT count(*) AS n FROM epochs WHERE cc_session_uuid = ? AND confirmed_ms IS NOT NULL').get(uuid) as { n: number };
+    return Number(row.n) > 0 && Number(ep.n) > 0;
   } finally {
     db.close();
   }
@@ -10552,7 +10568,7 @@ describe('the read verbs: identity, §8.3\'s table, the read-only handle, the fa
     expect(nodeIds, 'one parent and its eight leaves, derived before the re-key').toHaveLength(9);
     plantSession(box, ID, { generation: G1 });
     spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: TA, src: 'resume', reg: TA });
-    expect(runSweep(box).code).toBe(0);
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);   // tick N renames the resume line, tick N+1 drains it and re-keys
     expect(counters(box)['family_rekeyed']).toBe(1);
     const r = treeJson(box);
     expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
@@ -11823,7 +11839,7 @@ describe('the read verbs: --session, --project, --workspace, lag, the counter li
     expect(Object.keys(rec).sort()).toEqual(['cmd', 'ev', 'gen', 'id', 'ms', 'rc', 'ts', 'v']);
     expect(rec).toMatchObject({ v: 1, ev: 'recall', id: ID, gen: G1, cmd: 'tree', rc: 0 });
     expect(text).not.toContain('depth');
-    expect(runSweep(box).code).toBe(0);
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);   // tick N renames the counter line, tick N+1 drains it
     expect(recallRows11(box)).toEqual([{ ccrc_id: ID, generation: G1, verb: 'tree', rc: 0, arm: null }]);
     fs.writeFileSync(path.join(box.home, '.ccrc', 'history-off'), '');
     expect(runCli(box, ['tree'], { env: withPane(box, ID) }).code, 'the CLI still reads under the switch').toBe(0);
@@ -11854,12 +11870,14 @@ describe('the read verbs: --session, --project, --workspace, lag, the counter li
     const off = treeJson(box);
     expect(answer(off)).toEqual([8, undefined]);
     expect(off.json?.['coverage']).toBe('this-box');
-    expect(runSweep(box).code).toBe(0);
+    // Two ticks per CLI line (tick N renames it, tick N+1 drains it), so each line is drained while recall-off/<id>
+    // still holds the content this step set: the drain-time stale check reads that file.
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
     expect(recallRows11(box).map((x) => [x.verb, x.rc])).toEqual([['tree', 8]]);
     expect(counters(box)['recall_off_stale'] ?? 0).toBe(0);
     fs.writeFileSync(hist(box, 'recall-off', ID), G4_11);   // the id's generation changed: the file is stale
     expect(treeJson(box).code).toBe(0);
-    expect(runSweep(box).code).toBe(0);
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
     expect(recallRows11(box).map((x) => x.rc)).toEqual([8, 0]);
     expect(counters(box)['recall_off_stale']).toBe(1);
   }, HEAVY);
@@ -12192,7 +12210,7 @@ function scopeJson(rc) {
 }
 ```
 
-- [ ] **Step 7: Count a stale recall-off at the drain, in sweep.mjs.** Add `decideRecallOff, recallOffPath` to sweep.mjs's existing `./lib.mjs` import clause, adding only absent names. Directly above `applyEventLine`'s doc comment (`/** What one fresh receipt does besides being received.`), insert:
+- [ ] **Step 7: Count a stale recall-off at the drain, in sweep.mjs.** Add `decideRecallOff, recallOffPath` to sweep.mjs's existing `./lib.mjs` import clause, adding only absent names. Directly above `applyEventLine`'s doc comment (B1's opens `/** What one fresh receipt does besides being received (slug history-event-tables-v1`; it has no period after "received"), insert:
 
 ```js
 /** `recall-off/<id>` as a Presence, read bounded: the file holds one generation (§9.7). ENOENT is absent; any
@@ -12393,12 +12411,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Files:**
 - Modify: `ccd/history/lib.mjs`. Append a section `── grep: arguments and the index gate (W1-B2 Task 12)` at the END of the file, after the sections earlier B2 tasks appended (lib.mjs has no entry guard).
 - Modify: `ccd/history/lib.d.mts`. Append the declarations of Step 3, each declared once.
-- Modify: `ccd/history/store.mjs`. Append `blobPlainText` at the END of the file (store.mjs has no guard), and merge `ftsTextOf` into its existing `from './lib.mjs'` import clause.
-- Modify: `ccd/history/store.d.mts`. Append one declaration.
-- Modify: `ccd/history/sweep.mjs` (B1-created; anchors by content). Four in-place edits inside B1 Task 23's FTS block and `prepareLines`, and the import lines. Nothing is inserted below the entry guard.
+- Modify: `ccd/history/store.mjs`. Append `blobPlainText` at the END of the file (store.mjs has no guard), and merge `SIDECAR_WHOLE_MAX`, `ftsTextOf` and `sidecarIndexText` into its existing `from './lib.mjs'` import clause.
+- Modify: `ccd/history/store.d.mts`. Append one declaration, and add `PairIndex` to its `import type` line from `./lib.mjs`.
+- Modify: `ccd/history/sweep.mjs` (B1-created; anchors by content). Four in-place edits inside B1 Task 23's FTS block (`FTS_STEP`, `ftsStmts` and `deriveFts`, `ftsPrepare`) and `prepareLines`, and the lib import line. B1's `ftsTextOfBlob` is not edited. Nothing is inserted below the entry guard.
 - Modify: `ccd/history/recall.mjs` (created by Task 10). Append the grep block of Step 9 at the END of the file (recall.mjs has no guard), and merge the names it uses into recall.mjs's existing import lines.
 - Modify: `ccd/history/cli.mjs` (B1-created, made a verb dispatcher by Task 10). Add the `grep` entry to Task 10's `READ_RUNNERS` literal (Step 10), and merge `grepVerb` into the recall import. The code goes ABOVE the entry guard, like everything in this file.
-- Modify (in place): `server/test/history-ingest.test.ts`, B1 Task 23's case `DM28 and DM32 (store halves)`.
+- Modify (in place): `server/test/history-ingest.test.ts`, B1 Task 23's case `DM28 and DM32 (store halves)`, and one case added directly below it in the same describe (a store B1 backfilled).
 - Test: `server/test/history-lib.test.ts` (append one describe, and one namespace import line at the top).
 - Test: `server/test/history-recall.test.ts` (created by Task 10; append this task's helper object and four describes, the import lines of Step 6, and the file's one `removeTmpFixturesEachTest()` call).
 
@@ -12412,9 +12430,9 @@ No `.github/workflows/ci.yml` edit: this task creates no new `history-*.test.ts`
   - Task 9 (store): `lineageEntries(db, nodeId): { entryId, ord, nodeId }[]`.
   - Task 10: lib `selectColumns(version, table, cols, schema?)` and `READ_OPTIONS`; recall.mjs `ReadContext` and `VerbResult`; cli.mjs's verb table, `readContext(home, verb, opts)` and the renderer that prints a `VerbResult`; historyHelpers `runCli`, `withPane`, `seedFamily`.
   - Task 11: the header line, printed by the CLI above a read verb's blocks.
-  - B1 lib: `EXIT`, `REASONS`, `PROVENANCE`, `SEARCHABLE_PROVENANCE`, `redactField`, `ftsTextOf`, `makePairIndex`, `historyPaths`, `SCHEMA_ADDED`.
-  - B1 store: `probeFts5`, `unbrotli`, `openReader`, `userVersion`.
-  - B1 sweep (Task 23): `prepareLines`, `ftsStmts`, `deriveFts`, `ftsTextOfBlob` and the module const `FTS_STEP`.
+  - B1 lib: `EXIT`, `REASONS`, `PROVENANCE`, `SEARCHABLE_PROVENANCE`, `redactField`, `ftsTextOf`, `sidecarIndexText(bytes, idx)` (redacts its window, then cuts; B1's ⟦D:history-sidecar-redact-before-cut⟧), `SIDECAR_WHOLE_MAX`, `makePairIndex`, `historyPaths`, `SCHEMA_ADDED`.
+  - B1 store: `probeFts5`, `unbrotli`, `openReader`, `userVersion`, `getMeta`, `setMeta`.
+  - B1 sweep (Task 23): `prepareLines`, `ftsStmts`, `deriveFts`, `ftsPrepare` (and its file-private `derivStmts`) and the module const `FTS_STEP`. B1's `ftsTextOfBlob` is exported and async, takes `(z, isSidecar, pairIdx)` and answers `{ text, decoded }`; this task leaves it as it is.
   - B1 helpers: `makeHistoryBox`, `runSweep`, `plantSession`, `plantTranscript`, `spoolLine`, `openStoreRO`, `PRELOADS` (`statfs`, `faults`), and the preload word `HISTORY_TEST_FTS_PROBE=absent|throw` (B1 Task 23's block in `preload-faults.mjs`).
   - The CLI contract this task relies on, from Task 10's renderer (`emitResult`): it prints a `VerbResult`'s `header ?? <the scope header>`, then each of `blocks`, then `shownLine(shown, total)`, then `nextLine(next)` when `next` is not null, then `hint: ${hint}` when `hint` is present, all through `redactFinal`. `--json` goes through `readEnvelope` with the result's `shown`. So every `VerbResult` here carries `shown` (0 on a refusal), and `hint` is the hint's TEXT, never prefixed `hint: `. A verb returns `header: null`, and the CLI prints Task 11's header itself.
 - Produces:
@@ -12425,13 +12443,13 @@ No `.github/workflows/ci.yml` edit: this task creates no new `history-*.test.ts`
     - `export function decideGrepIndex(i: { probe: 'present' | 'absent' | 'threw'; table: boolean; completed: boolean }): GrepIndexVerdict`. Task 23 widens this input in place with `rebuilding: boolean` (7 `fts-pending` while a `doctor --repair` rebuild row is open), and edits `indexGate` in place to read that row by lib's `FTS_REBUILD_STEP` (IN-2). Task 12 writes neither, so the two never collide.
     - `export interface GrepArgs { words: string[]; regex: string | null; role: string | null; tool: string | null; sinceMs: number | null; beforeMs: number | null; node: string | null; sort: 'recency' | 'relevance' | 'hybrid'; limit: number; cursor: string | null; includeRecall: boolean; json: boolean }`
     - `export function parseGrepArgs(argv: readonly string[], nowMs: number): { ok: true; args: GrepArgs } | { ok: false; reason: 'bad-args' }`
-  - store.mjs: `export function blobPlainText(z: Uint8Array, isSidecar: boolean): string`
+  - store.mjs: `export function blobPlainText(z: Uint8Array, isSidecar: boolean, idx: PairIndex | null, rawLen: number): string`. A sidecar's text comes back redacted with `idx` before its cut, through lib's `sidecarIndexText`; a body's comes back unredacted, for the caller's `redactField`; a sidecar whose `rawLen` passes `SIDECAR_WHOLE_MAX` is not decompressed and gives `''`. Every caller selects `raw_len` with `z`.
   - recall.mjs:
     - `export function runGrep(rc: ReadContext, a: GrepArgs, deps?: { cap?: number; budgetMs?: number; spawn?: typeof spawnSync }): VerbResult`. Task 12 uses no dep; Task 13 reads `cap`, Task 14 reads `budgetMs` and `spawn`.
     - `export function resolveNodeInScope(rc: ReadContext, wanted: string): { ok: true; id: string } | { ok: false; result: VerbResult }`. Task 15 reuses it.
     - `export function grepVerb(rc: ReadContext, argv: readonly string[]): VerbResult`: cli.mjs's `READ_RUNNERS.grep`, which runs `parseGrepArgs` over the verb's argv, then `runGrep` (Step 10).
     - Module-private helpers that Tasks 13 to 15 reuse by name: `FRAME_RESERVE`, `versioned`, `bindFor`, `referrerSql`, `rankedSql`, `countSql`, `GREP_FILTER`, `FTS_MATCH`, `indexGate`, `refusal`, `notFound`, `hintLine`, `scopeArgs`, `iso`, `nodeEntries`, `grepParams`, `rankedAndCounted`, `blobOf`, `hitSnippet`, `hitLine`, `hitItem`, `renderHits`.
-  - sweep.mjs: the inline indexing and the FTS backfill index a blob that any `INDEXED_PROVENANCE` row (or a sidecar) references. sweep's private `ftsTextOfBlob` delegates to `blobPlainText`.
+  - sweep.mjs: the inline indexing and the FTS backfill index a blob that any `INDEXED_PROVENANCE` row (or a sidecar) references. `ftsPrepare` records the set in meta `fts_provenance` and re-opens a backfill completed under another set once, from cursor `'0'`, so a store B1 backfilled gains its old recall echoes. B1's `ftsTextOfBlob` is unchanged.
   - history-recall.test.ts: a module-level helper object `GRX` (ids, uuids, times, row builders, in-process `ReadContext`, a prepare spy), reused by Tasks 13 to 15.
 
 **Spec:**
@@ -12439,7 +12457,8 @@ No `.github/workflows/ci.yml` edit: this task creates no new `history-*.test.ts`
 - Pins: C7, C9, C26, C27; the CLI halves of DM28, DM30, DM32 and DM46.
 - Departures:
   - ⟦D:history-fts-probe-read-only⟧ ⟦D:history-fts-body-plain-text⟧ ⟦D:history-recall-echo-by-structure⟧ ⟦D:history-scope-on-every-verb⟧ ⟦D:history-clear-epoch-confirmed⟧
-  - ⟦D:history-recall-echo-indexed⟧ (NEW). §6.2 indexes a blob that a *searchable* row references, and §8.4 says recall echoes are found with `--include-recall`. Both hold only if the echo's blob is in the index while default search filters it out at query time. So the sweep indexes `INDEXED_PROVENANCE`, and `--include-recall` is a query filter. B1's DM28 store-half case changes from `echo: 0` to `echo: 1` in the same commit, and gains an assertion that the row stays classed `recall-echo`.
+  - ⟦D:history-recall-echo-indexed⟧ (NEW). §6.2 indexes a blob that a *searchable* row references, and §8.4 says recall echoes are found with `--include-recall`. Both hold only if the echo's blob is in the index while default search filters it out at query time. So the sweep indexes `INDEXED_PROVENANCE`, and `--include-recall` is a query filter. B1's DM28 store-half case changes from `echo: 0` to `echo: 1` in the same commit, and gains an assertion that the row stays classed `recall-echo`. A store whose ('fts', 1) backfill completed under B1 is re-opened once, from cursor `'0'`, by the first B2 tick (meta `fts_provenance` records the set a backfill ran under), so the echoes B1 ingested are indexed too.
+  - ⟦D:history-read-skips-oversize-sidecar⟧ (NEW). §8.4 has grep's snippet and the regex child read a sidecar's 512 KB index window. The read verbs take it synchronously from `blobPlainText`, which decompresses a blob whole (B1's bounded `unbrotliPrefix` is async), so a sidecar whose `raw_len` passes `SIDECAR_WHOLE_MAX` (64 MiB, the largest measured; B1 captures up to `SIDECAR_MAX_BYTES`) is not decompressed by a read verb: its grep hit shows an empty snippet and `--regex` does not scan it, while plain grep still finds it through the index the sweep built. Expand holds the same bound (Task 16).
   - ⟦D:history-grep-pending-until-backfilled⟧ (NEW). §9.1 checks only that `blobs_fts` exists. This gate also answers 7 `fts-pending` while derivation `('fts', 1)` has not completed. A re-opened backfill (B1's `resetFtsPending` after a tick that could not index) leaves text unindexed, so a 3 then would claim "not found here" for text the store holds. That is the overloaded value §8.3 forbids. The gate reads `derivation_state`, never `meta.fts`, which a sweep whose probe failed may have written. Task 12 reads the backfill's own row; Task 23 adds the open `doctor --repair` rebuild row (`FTS_REBUILD_STEP`), which keeps grep at 7 while a resumable rebuild refills the recreated tables and ('fts', 1) stays complete (IN-2).
 
 **Choices** (also in open_issues):
@@ -13120,28 +13139,82 @@ with:
 
 If B1's merged case formats these two statements differently, make the same change to its merged text: `echo` moves to the indexed object with the value 1, and the provenance count line is added.
 
+Directly below that case's closing `});`, in the same describe (it reuses the describe's `matches` and `metaV`, and the file's `openWriter`, `closeWriter` and `historyPaths` imports), add:
+
+```ts
+  it('history-recall-echo-indexed on a store B1 backfilled: the first B2 tick re-opens the completed backfill once, from 0, and indexes the old echo', () => {
+    const box = IX.newBox('ccrc-hist-echo-b1-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'zqopener words', 1),
+      IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'tool_use', id: 'toolu_01RB', name: 'Bash', input: { command: 'ccrc history grep zqasked' } }], 2),
+      IX.user(IX.uuidN(3), IX.uuidN(2), [{ type: 'tool_result', tool_use_id: 'toolu_01RB', content: 'zqoldecho words' }], 3),
+    ]));
+    IX.sweepTwice(box);
+    // The store as B1 leaves it: the echo's blob unindexed, the ('fts', 1) backfill complete, no meta fts_provenance.
+    const w = openWriter(historyPaths(box.home).dbFile);
+    try {
+      const echo = (w.prepare("SELECT blob_id FROM entries WHERE provenance = 'recall-echo'").get() as { blob_id: number }).blob_id;
+      w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(echo);
+      w.prepare('UPDATE blobs SET fts_indexed = 0 WHERE blob_id = ?').run(echo);
+      w.prepare("DELETE FROM meta WHERE k = 'fts_provenance'").run();
+    } finally { closeWriter(w); }
+    const doneAt = (db: DatabaseSync): number | null =>
+      (db.prepare("SELECT completed_ms FROM derivation_state WHERE step = 'fts' AND version = 1").get() as { completed_ms: number | null }).completed_ms;
+    let db = openStoreRO(box);
+    try {
+      expect(matches(db, 'zqoldecho'), 'CONTROL: the echo is out of the index, as B1 left it').toBe(0);
+      expect(doneAt(db), 'CONTROL: the backfill is complete').not.toBeNull();
+    } finally { db.close(); }
+    expect(runSweep(box).code).toBe(0);
+    let first: number | null;
+    db = openStoreRO(box);
+    try {
+      expect(matches(db, 'zqoldecho'), 'the re-opened backfill indexed the old echo').toBe(1);
+      expect(matches(db, 'zqopener'), 'and kept what was indexed').toBe(1);
+      expect(metaV(db, 'fts_provenance')).toBe('operator,model,tool,recall-echo');
+      expect(metaV(db, 'fts')).toBe('ready');
+      first = doneAt(db);
+      expect(first).not.toBeNull();
+    } finally { db.close(); }
+    expect(runSweep(box).code).toBe(0);
+    db = openStoreRO(box);
+    try {
+      expect(doneAt(db), 'once only: a tick on a recorded set re-opens nothing').toBe(first);
+    } finally { db.close(); }
+  });
+```
+
 - [ ] **Step 7: Run them and see them fail.**
   - Commands, from the repo root, in the foreground with a timeout of at least 600000 ms:
     - `(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'W1-B2 task 12')`
-    - `(cd server && ./node_modules/.bin/vitest run test/history-ingest.test.ts -t 'DM28 and DM32')`
+    - `(cd server && ./node_modules/.bin/vitest run test/history-ingest.test.ts -t 'DM28 and DM32|store B1 backfilled')`
   - Expected:
     - Every CLI case reds at its first exit-code assertion. Task 10's placeholder answers `grep` with exit 2 `bad-args`, so the messages read `expected 2 to be +0`, `expected 2 to be 3` or `expected [ 2, 'bad-args' ] to deeply equal [ 5, 'probe-failed' ]`. The two echo cases pass their CONTROL lines first (the backfill case's `fts_indexed` CONTROL is 0 either way), then red at `expected 2 to be 3` on the default grep.
     - The in-process cases fail with `TypeError: recall.runGrep is not a function`.
     - The ingest case fails on `expected { …, echo: 0 } to deeply equal { …, echo: 1 }`.
+    - The B1-backfilled-store case passes both CONTROLs, then fails at `the re-opened backfill indexed the old echo: expected +0 to be 1`: B1's `deriveFts` returns at once for a completed backfill.
 
 - [ ] **Step 8: Index recall echoes, move FTS_STEP, and add blobPlainText.**
 
-In `ccd/history/store.mjs`, add `ftsTextOf` to the existing `from './lib.mjs'` import clause, keeping the names sorted as that clause has them. Then append to the END of the file:
+In `ccd/history/store.mjs`, add `SIDECAR_WHOLE_MAX`, `ftsTextOf` and `sidecarIndexText` to the existing `from './lib.mjs'` import clause (B1's reads `import { BUSY_TIMEOUT_MS, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, UUID_RE, WRITER_RE, historyPaths, newSha256 } from './lib.mjs';`), keeping the names sorted as that clause has them. Then append to the END of the file:
 
 ```js
-/** A stored blob's plain text: the text the FTS index holds for it (§6.2 "FTS indexing"). That is a sidecar's
- *  first SIDECAR_FTS_BYTES, or a body's extracted text (text blocks, tool_use input string leaves, tool_result
- *  text; never the JSON). A body that does not parse gives '': the index is derived, and the blob stays
- *  verbatim. The caller redacts the result before any cut (history-redaction-before-cut). One spelling for the
- *  sweep's index, grep's snippets, the regex child and describe (W1-B2 Task 12). */
-export function blobPlainText(z, isSidecar) {
+/** A stored blob's plain text for the READ verbs: grep's snippets, the regex child and describe (W1-B2 Task 12). It is
+ *  the text the FTS index holds for the blob (§6.2 "FTS indexing"), by lib's two rules:
+ *  - a sidecar's is lib's sidecarIndexText over its decoded body with the pair index `idx`: the first
+ *    SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN bytes redacted raw, unescaped and redacted again, and only THEN cut to
+ *    SIDECAR_FTS_BYTES (B1's ⟦D:history-sidecar-redact-before-cut⟧, history-sidecar-redact-before-cut), so a secret straddling the cut leaves no
+ *    prefix. It comes back already redacted;
+ *  - a body's is its extracted text (text blocks, tool_use input string leaves, tool_result text; never the JSON),
+ *    UNREDACTED: the caller runs redactField on it before any cut (history-redaction-before-cut). One that does not
+ *    parse gives '': the index is derived, and the blob stays verbatim.
+ *  This call is synchronous, so it decompresses a blob whole; B1's bounded unbrotliPrefix is async. A sidecar whose
+ *  recorded `rawLen` (blobs.raw_len, read with z) passes SIDECAR_WHOLE_MAX is therefore never decompressed here and
+ *  gives '', the bound expand holds too (⟦D:history-read-skips-oversize-sidecar⟧). The sweep's own index keeps B1's
+ *  async `ftsTextOfBlob`, which reads any sidecar's window through unbrotliPrefix. */
+export function blobPlainText(z, isSidecar, idx, rawLen) {
+  if (isSidecar) return rawLen <= SIDECAR_WHOLE_MAX ? sidecarIndexText(unbrotli(z), idx) : '';
   const bytes = unbrotli(z);
-  if (isSidecar) return ftsTextOf(bytes, 'sidecar');
   try {
     return ftsTextOf(JSON.parse(bytes.toString('utf8')), 'entry');
   } catch {
@@ -13150,36 +13223,73 @@ export function blobPlainText(z, isSidecar) {
 }
 ```
 
-Append to `ccd/history/store.d.mts`:
+Append to `ccd/history/store.d.mts`, and add `PairIndex` to its existing `import type { … } from './lib.mjs';` line (B1's reads `import type { MigrationVerdict, Presence, StoreFacts } from './lib.mjs';`):
 
 ```ts
-export function blobPlainText(z: Uint8Array, isSidecar: boolean): string;
+export function blobPlainText(z: Uint8Array, isSidecar: boolean, idx: PairIndex | null, rawLen: number): string;
 ```
 
-In `ccd/history/sweep.mjs`, make these edits in place. Every anchor is B1 Task 23 text, found by content:
-1. **The imports.** Add `INDEXED_PROVENANCE` and `FTS_STEP` to the `from './lib.mjs'` import clause, and `blobPlainText` to the `from './store.mjs'` clause.
+In `ccd/history/sweep.mjs`, make these edits in place. Every anchor is B1 Task 23 text, found by content. B1's `ftsTextOfBlob` (exported, async, `(z, isSidecar, pairIdx)`, answering `{ text, decoded }`, reading a sidecar through `unbrotliPrefix`) is NOT edited: B1's `deriveFts` and `reindexForValues` read its `.text`, and B1's `T23-a` cases in history-ingest.test.ts (B1's ⟦D:history-sidecar-redact-before-cut⟧) pin its bound and its shape.
+1. **The imports.** Add `INDEXED_PROVENANCE` and `FTS_STEP` to the `from './lib.mjs'` import clause. Nothing joins the `from './store.mjs'` clause: the sweep does not call `blobPlainText`, and B1 already imports `getMeta` and `setMeta`.
 2. **`FTS_STEP`.** In the FTS block, delete the line `const FTS_STEP = 'fts';`. The imported one replaces it, so every use of `FTS_STEP` in sweep.mjs is unchanged.
-3. **`prepareLines`.** Replace the two lines
+3. **`prepareLines`.** B1's merged text is three lines, not B1's plan's two (B1 added the sentence citing its ⟦D:history-recall-echo-by-structure⟧; here, as in the B1 file, the placeholder stands for B1's issued number, which the file spells `D-` and digits). Find the code line `    const ftsText = ctx.fts === true && SEARCHABLE_PROVENANCE.includes(provenance) ? ftsTextOf(body, 'entry') : null;` and replace it together with the two comment lines directly above it,
 
    ```js
-       // The index text, only for a searchable row and only when this tick may index (§6.2).
+       // The index text, only for a searchable row and only when this tick may index (§6.2). A recall echo is
+       // classified by the paired tool_use in provenanceOf, never by its text (⟦D:history-recall-echo-by-structure⟧, history-recall-echo-by-structure).
        const ftsText = ctx.fts === true && SEARCHABLE_PROVENANCE.includes(provenance) ? ftsTextOf(body, 'entry') : null;
    ```
 
    with
 
    ```js
-       // The index text, only for an indexed row (the searchable three, and recall echoes, which only
-       // `grep --include-recall` reads: history-recall-echo-indexed) and only when this tick may index (§6.2).
+       // The index text, only for an indexed row (the searchable three, and recall echoes, which only `grep --include-recall`
+       // reads: history-recall-echo-indexed) and only when this tick may index (§6.2). A recall echo is classified by the
+       // paired tool_use in provenanceOf, never by its text (⟦D:history-recall-echo-by-structure⟧, history-recall-echo-by-structure).
        const ftsText = ctx.fts === true && INDEXED_PROVENANCE.includes(provenance) ? ftsTextOf(body, 'entry') : null;
    ```
 
 4. **`ftsStmts` and `deriveFts`.**
    - In `ftsStmts`, change `const ph = SEARCHABLE_PROVENANCE.map(() => '?').join(', ');` to `const ph = INDEXED_PROVENANCE.map(() => '?').join(', ');`.
    - In `deriveFts`, change `f.backfill.all(cursor, ...SEARCHABLE_PROVENANCE, ...SEARCHABLE_PROVENANCE, BACKFILL_BATCH)` to `f.backfill.all(cursor, ...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE, BACKFILL_BATCH)`.
-5. **`ftsTextOfBlob`.** Replace its body with `return blobPlainText(z, isSidecar);`. Keep its doc comment, and add the sentence `Delegates to store.mjs blobPlainText, the one spelling (W1-B2 Task 12).` to it.
+5. **`ftsPrepare`: a store B1 backfilled is re-opened once.** B1's `deriveFts` returns at once for a completed ('fts', 1) backfill, and only `resetFtsPending` re-opens it (keeping its cursor). So on a store whose backfill completed under B1, every recall-echo blob B1 ingested stays `fts_indexed = 0` for good, and `grep --include-recall` would find only echoes ingested after B2 is installed. In `ftsPrepare`'s `probe === 'present'` branch, replace
 
-Then run `grep -n 'SEARCHABLE_PROVENANCE' ccd/history/sweep.mjs`. When the import clause is the only line left, drop `SEARCHABLE_PROVENANCE` from that clause.
+   ```js
+       const row = d.sel.get(FTS_STEP, 1);
+       if (row === undefined) {
+         withTx(db, 'NORMAL', () => {
+           createFtsTables(db);
+           d.ins.run(FTS_STEP, 1, '0');
+         });
+       }
+   ```
+
+   with
+
+   ```js
+       let row = d.sel.get(FTS_STEP, 1);
+       if (row === undefined) {
+         withTx(db, 'NORMAL', () => {
+           createFtsTables(db);
+           d.ins.run(FTS_STEP, 1, '0');
+           setMeta(db, 'fts_provenance', INDEXED_PROVENANCE.join(','));
+         });
+       } else if (getMeta(db, 'fts_provenance') !== INDEXED_PROVENANCE.join(',')) {
+         // W1-B2 Task 12 (history-recall-echo-indexed): a backfill run under another provenance set (B1's searchable
+         // three; meta fts_provenance absent) is re-opened ONCE, from cursor '0', in the transaction that records the set.
+         // It visits only blobs still at fts_indexed = 0 (its backfill statement's test), so nothing indexed is read
+         // again; B1's resetFtsPending keeps its cursor, which would miss every older echo blob.
+         withTx(db, 'NORMAL', () => {
+           db.prepare("UPDATE derivation_state SET completed_ms = NULL, cursor = '0' WHERE step = ? AND version = ?").run(FTS_STEP, 1);
+           setMeta(db, 'fts_provenance', INDEXED_PROVENANCE.join(','));
+         });
+         row = d.sel.get(FTS_STEP, 1);
+       }
+   ```
+
+   B1's next line, `    state = row !== undefined && row.completed_ms !== null ? 'ready' : 'fts-pending';`, stays exactly as it is (Task 23 edits it by that text); it now reads the re-opened row, so the tick writes `fts-pending` until `deriveFts` completes the step again, and grep's index gate answers 7 meanwhile (⟦D:history-grep-pending-until-backfilled⟧).
+
+Then run `grep -n 'SEARCHABLE_PROVENANCE' ccd/history/sweep.mjs`. When the import clause is the only line left, drop `SEARCHABLE_PROVENANCE` from that clause. Check: `grep -c "setMeta(db, 'fts_provenance', INDEXED_PROVENANCE.join(','));" ccd/history/sweep.mjs` prints `2`, and `grep -c '^export async function ftsTextOfBlob(z, isSidecar, pairIdx) {$' ccd/history/sweep.mjs` prints `1` (B1's, unchanged).
 
 - [ ] **Step 9: Implement grep's FTS path in `ccd/history/recall.mjs`.**
 
@@ -13380,19 +13490,21 @@ function indexGate(rc) {
   return decideGrepIndex({ probe, table, completed: row !== undefined && row.completed_ms !== null });
 }
 
-/** A blob's z and pruned time. */
+/** A blob's z, its recorded size (blobPlainText's sidecar bound) and pruned time. */
 function blobOf(rc, blobId) {
-  return rc.db.prepare(`SELECT ${selectColumns(rc.version, 'blobs', ['z', 'pruned_ms'], rc.schema)} FROM blobs WHERE blob_id = ?`).get(blobId);
+  return rc.db.prepare(`SELECT ${selectColumns(rc.version, 'blobs', ['z', 'raw_len', 'pruned_ms'], rc.schema)} FROM blobs WHERE blob_id = ?`).get(blobId);
 }
 
-/** One hit's snippet (§8.3, P9, P12). The blob's whole plain text is REDACTED first, then cut to the window
- *  around the earliest term, made one line and cut to SNIPPET_MAX by Task 3's snippetLine (surrogate-safe). Redaction comes before every cut, so no
- *  window edge can leave a secret's prefix (history-redaction-before-cut). */
+/** One hit's snippet (§8.3, P9, P12). The blob's plain text is REDACTED first, then cut to the window around the
+ *  earliest term, made one line and cut to SNIPPET_MAX by Task 3's snippetLine (surrogate-safe). Redaction comes
+ *  before every cut, so no window edge can leave a secret's prefix (history-redaction-before-cut): a sidecar's text
+ *  is redacted inside blobPlainText, before its own 512 KB cut, and the outer redactField covers a body's text (and
+ *  re-checks a sidecar's). */
 function hitSnippet(rc, hit, terms) {
   const b = blobOf(rc, hit.blob_id);
   if (b === undefined) return '';
   if (b.z === null) return `content pruned on ${b.pruned_ms === null ? '?' : new Date(b.pruned_ms).toISOString().slice(0, 10)}`;
-  const text = redactField(blobPlainText(b.z, hit.via === 'sidecar'), rc.pairIdx);
+  const text = redactField(blobPlainText(b.z, hit.via === 'sidecar', rc.pairIdx, Number(b.raw_len)), rc.pairIdx);
   return snippetLine(snippetWindow(text, terms).replace(/\s+/g, ' '));
 }
 
@@ -13498,6 +13610,7 @@ console.log(at.length === 1 && below.length === 1 && below[0] === "}" && tla.len
   - Expected:
     - All green, Task 10's and Task 11's cases included.
     - The four new describes pass: 10 cases, then 2 (the index gate), then 2 (the echo writers), then 3 (C27 and DM46's two halves).
+    - In history-ingest.test.ts, the edited DM28 case and the B1-backfilled-store case pass, and B1's `T23-a` cases over `ftsTextOfBlob` (B1's ⟦D:history-sidecar-redact-before-cut⟧) are unchanged and green.
     - tsc is clean.
     - `grep -c 'SELECT \*' ccd/history/recall.mjs` prints `0`.
 
@@ -13552,7 +13665,10 @@ console.log(at.length === 1 && below.length === 1 && below[0] === "}" && tla.len
        - Edit: in `rankedAndCounted`, delete the line `if (/no such table: (?:main\.)?blobs_fts\b/.test(String(e && e.message))) return { result: refusal('fts-pending') };`.
        - Filter: `repair racing`.
        - Red: `Error: no such table: blobs_fts` thrown out of `runGrep`.
-  - After the last restore, re-run Step 11's first command and see it green.
+    9. **A store B1 backfilled is re-opened once.** This row runs history-ingest.test.ts: `(cd server && ./node_modules/.bin/vitest run test/history-ingest.test.ts -t 'store B1 backfilled')`.
+       - Edit: in `sweep.mjs`'s `ftsPrepare`, change `} else if (getMeta(db, 'fts_provenance') !== INDEXED_PROVENANCE.join(',')) {` to `} else if (false) {`.
+       - Red: `the re-opened backfill indexed the old echo: expected +0 to be 1`.
+  - After the last restore, re-run Step 11's first two commands and see them green.
 
 - [ ] **Step 13: Commit.**
 
@@ -14084,7 +14200,7 @@ git commit -m "feat(history): grep output grouped under covering leaves with a l
 - Consumes:
   - Task 2 (lib): `guardRegex(pattern)` (answers `{ ok: true; source }` or `{ ok: false; why: 'too-long' | 'nested' | 'invalid' }`), `regexPrefilter(pattern)` (an exact-token FTS5 MATCH text such as `"word"`, never a prefix query, or null for a full in-scope scan), `REGEX_BUDGET_MS`, `REGEX_MAX_LEN`.
   - Tasks 12 and 13 (recall.mjs): `runGrep`, `refusal`, `notFound`, `grepKey`, `cursorPos`, `STALE_CURSOR`, `indexGate`, `nodeEntries`, `grepParams`, `rankedAndCounted` (it binds only the parameters a statement holds, so `:blobs` replaces `:q`), `renderHits`.
-  - Task 12: store `blobPlainText(z, isSidecar)`; in history-recall.test.ts, `GRX`, `GrepMod`, `GrepDeps`, `CliRun`.
+  - Task 12: store `blobPlainText(z, isSidecar, idx, rawLen)` (a sidecar's text redacted with `idx` before its cut; `''` for a sidecar whose `rawLen` passes `SIDECAR_WHOLE_MAX`); in history-recall.test.ts, `GRX`, `GrepMod`, `GrepDeps`, `CliRun`.
   - B1 lib: `makePairIndex(pairs)`, `redactField(text, idx)`, `historyPaths`, `EXIT`. B1 store: `openReader(dbPath)`.
   - The type `PairIndex = { byLen: ReadonlyMap<number, ReadonlySet<string>> }` (B1 Task 9).
 - Produces:
@@ -14105,11 +14221,11 @@ git commit -m "feat(history): grep output grouped under covering leaves with a l
 **Choices** (also in open_issues):
 - **`--regex` passes the same index gate as plain grep.** Exit 7 means one thing for every grep form, and the prefilter needs the index.
 - **One match per blob.** The child reports each blob's first match, cut to 200 characters; it seeds the hit's snippet window.
-- **A sidecar is matched over its first 512 KB**, the window plain grep indexes (DM29), through `blobPlainText`.
+- **A sidecar is matched over its first 512 KB**, the window plain grep indexes (DM29), through `blobPlainText`, which redacts that window before its cut. One past `SIDECAR_WHOLE_MAX` is not decompressed and not scanned (⟦D:history-read-skips-oversize-sidecar⟧).
 - **Regex hits are newest first.** They have no rank.
 - **The child scans the in-scope blobs by provenance.** The parent then applies `--role`, `--tool`, `--since`, `--before` and `--node` to the referrers.
 - **The pattern takes no flags.** It is case-sensitive, as JavaScript's default is.
-- **The child runs its candidate statement ONCE.** One `iterate()` steps the rows lazily; that is the spec's "paged `iterate()`" (§8.4, and the module table's `regex-worker.mjs` row). A loop that re-runs the statement per 64-blob page (`blob_id > :after … LIMIT 64`) re-materialises the whole candidate union every page. That is quadratic: measured on Node 24.14.1 with B1's indexes, 5.3 s of SQL alone for 20,000 in-scope entries, against 181 ms for one iteration. Nothing would be left of the 5 s budget for the scan itself. The ordered statement names blob ids only, so its sorter never carries a compressed body. Each body is read by a second held statement, `SELECT z FROM blobs WHERE blob_id = ?`: measured 0.85 s for 20,000 blobs of 20 KB with flat memory, against 1.6 s and a temp-file spill when `b.z` rides the sort.
+- **The child runs its candidate statement ONCE.** One `iterate()` steps the rows lazily; that is the spec's "paged `iterate()`" (§8.4, and the module table's `regex-worker.mjs` row). A loop that re-runs the statement per 64-blob page (`blob_id > :after … LIMIT 64`) re-materialises the whole candidate union every page. That is quadratic: measured on Node 24.14.1 with B1's indexes, 5.3 s of SQL alone for 20,000 in-scope entries, against 181 ms for one iteration. Nothing would be left of the 5 s budget for the scan itself. The ordered statement names blob ids only, so its sorter never carries a compressed body. Each body is read by a second held statement, `SELECT z, raw_len FROM blobs WHERE blob_id = ?` (`raw_len` is `blobPlainText`'s sidecar bound): measured, with `z` alone, 0.85 s for 20,000 blobs of 20 KB with flat memory, against 1.6 s and a temp-file spill when `b.z` rides the sort.
 
 - [ ] **Step 1: Write the failing tests.** Append to the END of `server/test/history-recall.test.ts`:
 
@@ -14236,9 +14352,11 @@ Create `ccd/history/regex-worker.mjs`:
 //    body by its key;
 //  - HOLDS both statements until it exits (§9.1, CT9: Node 22.15.1 finalises an unreferenced statement mid-iterate
 //    when the GC runs, M; the floor is 22.16.0, and the hold costs nothing);
-//  - matches the pattern against each blob's plain text AFTER redactField with the parent's pair index, so a
+//  - matches the pattern against each blob's plain text AFTER redaction with the parent's pair index, so a
 //    secret known to the store is never a regex hit (§6.2, DM31). It is the text plain grep indexes: a sidecar's first
-//    512 KB (DM29);
+//    512 KB (DM29), redacted inside blobPlainText before that cut (B1's sidecarIndexText), and a body's text through
+//    redactField. A sidecar whose raw_len passes SIDECAR_WHOLE_MAX is not decompressed, so it is not scanned
+//    (⟦D:history-read-skips-oversize-sidecar⟧);
 //  - prints one JSON line per matching blob, {blob_id, match}, then {done, scanned, matched}.
 // It reads no environment variable and trusts only its job. Every column it names exists at schema v1, and
 // migrations are additive (§6.11), so it needs no version-aware select.
@@ -14251,8 +14369,8 @@ import { blobPlainText, openReader } from './store.mjs';
 const HELD = [];
 /** A match is reported cut to this many characters: it only seeds the parent's snippet window. */
 const MATCH_MAX = 200;
-/** One candidate's compressed body, by its key. */
-const BODY_SQL = 'SELECT z FROM blobs WHERE blob_id = ?';
+/** One candidate's compressed body and its recorded size (blobPlainText's sidecar bound), by its key. */
+const BODY_SQL = 'SELECT z, raw_len FROM blobs WHERE blob_id = ?';
 
 /** The in-scope candidate blobs in blob_id order, ids only, each with a stored body (z not pruned): those an in-scope
  *  entry of a listed provenance references (its first body or a variant), and those an in-scope sidecar holds when
@@ -14293,9 +14411,10 @@ export function scanRegexJob(job) {
     let scanned = 0;
     for (const row of stmt.iterate(base)) {
       scanned += 1;
-      const z = bodyOf.get(row.blob_id)?.z;
+      const body = bodyOf.get(row.blob_id);
+      const z = body?.z;
       if (z === undefined || z === null) continue;
-      const m = re.exec(redactField(blobPlainText(z, row.is_sidecar === 1), idx));
+      const m = re.exec(redactField(blobPlainText(z, row.is_sidecar === 1, idx, Number(body.raw_len)), idx));
       if (m !== null) matches.push({ blob_id: row.blob_id, match: m[0].slice(0, MATCH_MAX) });
     }
     return { matches, scanned };
@@ -14468,7 +14587,7 @@ Expect no `node --check` output, `:0` twice, no `process.env` line, and `guard l
        - Filter: `C8b`.
        - Red: `expected [ 3, undefined ] to deeply equal [ 2, 'regex-timeout' ]`.
     3. **The child matches redacted text.**
-       - Edit: in `regex-worker.mjs`'s `scanRegexJob`, change `re.exec(redactField(blobPlainText(z, row.is_sidecar === 1), idx))` to `re.exec(blobPlainText(z, row.is_sidecar === 1))`.
+       - Edit: in `regex-worker.mjs`'s `scanRegexJob`, change `re.exec(redactField(blobPlainText(z, row.is_sidecar === 1, idx, Number(body.raw_len)), idx))` to `re.exec(blobPlainText(z, row.is_sidecar === 1, null, Number(body.raw_len)))` (no redaction on either arm: a sidecar's `idx` null redacts nothing in lib's `sidecarIndexText`).
        - Filter: `redacted text`.
        - Red: `expected +0 to be 3`.
     4. **The child steps to the end of the candidates.**
@@ -15050,9 +15169,9 @@ function producerOfNode(rc, n) {
 /** A node's native summary as REDACTED plain text, or null for a node with none (a raw leaf, a condensed node). */
 function summaryOf(rc, n) {
   if (n.summary_blob_id === null) return null;
-  const b = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'blobs', ['z'], rc.schema)} FROM blobs WHERE blob_id = ?`).get(n.summary_blob_id);
+  const b = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'blobs', ['z', 'raw_len'], rc.schema)} FROM blobs WHERE blob_id = ?`).get(n.summary_blob_id);
   if (b === undefined || b.z === null) return null;
-  return redactField(blobPlainText(b.z, false), rc.pairIdx);
+  return redactField(blobPlainText(b.z, false, rc.pairIdx, Number(b.raw_len)), rc.pairIdx);
 }
 
 /** `end`, moved off the middle of a surrogate pair: when the character at `end` is a pair's low half, back one, or,
@@ -17749,7 +17868,7 @@ git diff --quiet ccd/history/recall.mjs ccd/history/cli.mjs || git add ccd/histo
 git commit -m "test(history): output redaction across every verb — C32, C33, C49, C59, C60, DM31 (W1-B2)"
 ```
 
-### Task 19: The operator door: CLI verbs to --op forms, decideOpDoor, the CLI half of decideOpGate, spawning the shim with streamed stdout and the relay; bare doctor; import and doctor --migrate doors; runOpPass restructured into dispatch tables with a binding arm
+### Task 19: The operator door: CLI verbs to --op forms, decideOpDoor, the CLI half of decideOpGate, spawning the shim with streamed stdout and the relay; bare doctor; import and doctor --migrate doors; B1's opPass (behind its runOpPass wrapper) restructured into dispatch tables with a binding arm
 
 **Files:**
 - Modify: `ccd/history/lib.mjs`. Append a section `── the operator door's pane read (W1-B2 Task 19)` at the END of the file: `paneReadWanted`, the one rule both doors read a pane by. lib.d.mts gains its declaration.
@@ -17758,7 +17877,7 @@ git commit -m "test(history): output redaction across every verb — C32, C33, C
   - Add `parseOpVerbArgs`, `BIND_KINDS` and `paneReadWanted` to the named imports of sweep.mjs's existing `from './lib.mjs'` import, and `recoverStepAt`, `storedVersionAt`, `measureStoreFacts` and `MIGRATIONS` to its existing `from './store.mjs'` import. Merge them into those clauses and add only what each does not already hold (B1's `openStore` already reads `measureStoreFacts` and `MIGRATIONS`).
   - In B1's `paneNameFor`, replace its first three body lines (the form check, the pane read, the pane-grammar check) with the pane read and one call to lib's `paneReadWanted` (Step 4(d)); its bounded tmux read is unchanged.
   - Replace the `OP_VERBS` declaration and `parseOpArgs` (each with its doc comment) with this task's tables and `parseOpArgs`.
-  - Replace `runOpPass` (its doc comment `/** One --op pass: see the block comment above. */` and the function) wholesale.
+  - Replace B1's `opPass` wholesale: the undocumented, non-exported `async function opPass(parsed, deps, out) {` through its closing brace, the body of the `--op` pass. B1's `opThrowResult` (doc comment `/** What an --op pass answers for a throw (Task 26F item 5)`) and its exported wrapper `runOpPass` (doc comment opening `/** One --op pass: see the block comment above. The pass's contract is ONE {"rc":…} line, printed LAST, on EVERY`) stay byte-for-byte as they are: the wrapper answers one `{"rc":…}` line for a throw that leaves `opPass` before its try opens (B1's FR2-c).
 - Modify: `ccd/history/cli.mjs`.
   - Add three import lines at the end of its import block, each under a name no other task uses.
   - Insert the operator-door section above the entry guard.
@@ -17778,6 +17897,7 @@ git commit -m "test(history): output redaction across every verb — C32, C33, C
   - B1 store: `openReader(dbPath)`, `userVersion(db)` and the module-private `dbFileState(dbPath)`, which `recoverStepAt` and `storedVersionAt` call in the same module; `measureStoreFacts(home, role)` and `MIGRATIONS`, which the sweep half reads.
   - B1 sweep:
     - `importDryRun`, `importApply`, `migrateOp`, `paneNameFor`, `writeOpMarker`, `runJournalHalf`, `flushFirst`, `flushOutbox`, `openStore`;
+    - `opThrowResult(e, result)` and the exported wrapper `runOpPass(parsed, deps, out)`, both unchanged: the wrapper calls the module-private `opPass` this task rewrites, and answers one `{"rc":…}` line for a throw that leaves it before its try (B1's FR2-c); `opPass`'s own catch answers every non-`JournalError` throw through `opThrowResult` (B1 Task 26F item 5). node:path's `resolve`, already imported by B1;
     - `idsFromFiles`, `readRole`, `probePath`, `statfsWithDeadline`, `passCtx`, `clearDoneMarkers`, `JournalError`, `bump`, `closeWriter`, `loadSecrets`.
   - B1 cli: `statusWithHealth`, `formatHealth`, the private `readTrimmed(p)`, and the namespace imports `healthLib` (lib.mjs) and `healthFs` (node:fs) from Task 28.
   - Task 10 (cli): `measureReach(home)`, `tmuxSession(pane)`, `main` (which routes an unknown verb to `unknownVerb`), and `USAGE`. Task 10 loads `loadSecrets` with `await import('./sweep.mjs')` rather than statically; this task does the same in `operatorMain`, which makes it the SECOND cli→sweep import site (readContext's is the first). The header's Rings note and Task 10's Interfaces note name both sites.
@@ -17795,7 +17915,7 @@ git commit -m "test(history): output redaction across every verb — C32, C33, C
 - Produces, in sweep.mjs (module-private, above the guard):
   - `OP_VERBS` (unchanged members), `BINDING_OPS`, `OP_NEEDS_CODE_VERSION`, `OP_DRY_RUNS`, `OP_HANDLERS`, and an empty `BINDING_PASSES` (Task 26 replaces it and its branch with `bindingPass`).
   - `export function parseOpArgs(op, args)` keeps its export name, now answering lib's grammar.
-  - `runOpPass`'s RB6 half: the authoritative `recovering` refusal, `{ rc: 2, reason: 'recovering' }`, measured by `recoverStepAt` after the lock-take journal half and the statfs probe, before the binding branch and `openStore`. With it go the facts RB13 and RB14 read: `storedVersion` (`storedVersionAt`), `codeVersion` (`(deps.migrations ?? MIGRATIONS).length`, as `openStore` counts it) and `storeId` (`measureStoreFacts(home, role).storeId`).
+  - `opPass`'s RB6 half (reached through B1's unchanged `runOpPass` wrapper): the authoritative `recovering` refusal, `{ rc: 2, reason: 'recovering' }`, measured by `recoverStepAt` after the lock-take journal half and the statfs probe, before the binding branch and `openStore`. With it go the facts RB13 and RB14 read: `storedVersion` (`storedVersionAt`), `codeVersion` (`(deps.migrations ?? MIGRATIONS).length`, as `openStore` counts it) and `storeId` (`measureStoreFacts(home, role).storeId`).
 - Produces, in cli.mjs: `runOpVerb`'s RB6 pre-check carries the same three facts: `storedVersionAt`, lib's `SCHEMA_VERSION`, and `reach.facts.storeId` as `measureReach` read it.
 - Produces, in historyHelpers.ts:
   - `export function stubShim(box: HistoryBox, script: { stdout: string; exit: number }): void`
@@ -17821,9 +17941,15 @@ Choices this task makes:
   - `OP_HANDLERS` runs a writing verb on the store `openStore` opened.
   - `BINDING_PASSES` is the place adopt, restore and rebuild run, BEFORE `openStore`. It is empty here, so they answer `bad-args`. Task 26 replaces the table and its branch with one call to `bindingPass(home, P, op, args, deps, out)`, which Tasks 26–28 fill.
   - A verb in `OP_VERBS` with no entry for its path answers `bad-args`. `migration-pending` now guards `OP_NEEDS_CODE_VERSION` (import, prune, reparse, repair), not import alone.
+- **B1's merged `--op` behaviours survive the split** (B1's code differs from B1's plan text here; read at the base). The rewritten `opPass` keeps:
+  - the relative `--file` resolved ONCE against the operator's cwd, before admission, binding and journaling (B1 Task 26F item 2). Lib's `parseOpVerbArgs` cannot resolve a path, and it freezes its args, so `opPass` copies them with the resolved `file`; its `idOk` `bad-id` and `<uuid>.jsonl` checks are B1's own, moved into lib;
+  - `--roster-unreadable` refused exit 2 `roster-unreadable` twice (B1's ⟦D:history-import-refusal-words⟧, slug `history-import-refusal-words`): an import dry run before `OP_DRY_RUNS`' dispatch, and an import `--apply` after the `ids === null` check and before `writeOpMarker`, bumping `roster_unreadable`. Both are guarded on `import`, so prune's and reparse's dry runs, which need no roster, still answer;
+  - every non-`JournalError` throw inside the try answered through `opThrowResult(e, result)`: one `{"rc":…}` line, a `StoreError` word mapped to its exit (B1 Task 26F item 5);
+  - `migrate` meeting `schema-newer` answered `migrate-refused`.
+  - The exported `runOpPass` wrapper and `opThrowResult` are not edited. B1's `history-op.test.ts` describes `Task 26F item 2`, `Task 26F items 3 and 4`, `Task 26F item 5` and `FR2-c` are the guard: Step 6 runs them, and they must stay green.
 - **The door's facts come from B1's measurements.** Darwin, role, shim, `store.id` and the DB come from `measureReach` (Task 10's extraction of B1's status helpers), through Task 10's `cliFactsOf`. The store's presence is decided by Task 6's `decideOpDoor` over those facts (`store.id` and the DB, through B1's `decideCliStore`), never from whether the history root exists. No third copy of either is written. So a shim-less box with a store answers `writer-absent`, and one whose store root dangles or whose stat does not settle answers exit 5 `store-root-dangling` or `store-unreachable` at the door, as `status` would.
 - **RB6 is measured in both halves; the sweep's is authoritative.**
-  - The sweep half: after the role check, the lock-take journal half and the statfs probe, `runOpPass` reads `recoverStepAt(P.dbFile)` and, on `open`, runs `decideOpGate` again with `recovering: true` and the three facts RB13 and RB14 read (`storedVersion`, `codeVersion`, `storeId`), before the binding branch and `openStore`. adopt on a bound store is therefore refused before `bindingPass`, and no refused form writes the op marker, flushes the outbox or opens the writer.
+  - The sweep half: after the role check, the lock-take journal half and the statfs probe, `opPass` reads `recoverStepAt(P.dbFile)` and, on `open`, runs `decideOpGate` again with `recovering: true` and the three facts RB13 and RB14 read (`storedVersion`, `codeVersion`, `storeId`), before the binding branch and `openStore`. adopt on a bound store is therefore refused before `bindingPass`, and no refused form writes the op marker, flushes the outbox or opens the writer.
   - Why after the journal half, not before it: B1's own store-state refusal (`store-unreachable`) already comes after it, and journaling arriving spool lines is exactly what a recovering store's scheduled pass does too (O44); it moves no cursor. With no spool line pending, a refused form writes nothing at all, which the cases below and Task 25's measure.
   - The second gate call runs only when a step is open, so with none registered the sweep's gate stays B1's single line, which Task 30's C64 mutant removes. The three facts are measured only then, too.
   - The CLI half pre-checks the same way, but only behind `measureReach`'s settled 2 s stat, so a refused form spawns nothing. An unsettled stat, or an answer other than `open`, leaves the call to the sweep. Its facts are `storedVersionAt` on the same file, lib's `SCHEMA_VERSION`, and the `store.id` presence `measureReach` already read, so it never refuses a form the sweep would let through.
@@ -18427,11 +18553,11 @@ const OP_HANDLERS = Object.freeze({
 });
 
 /** The binding verbs' place, run in place of openStore and a handler. Empty in this task, so adopt, restore and
- *  rebuild answer bad-args; W1-B2 Task 26 replaces this table and its branch in runOpPass with one call to
+ *  rebuild answer bad-args; W1-B2 Task 26 replaces this table and its branch in opPass with one call to
  *  bindingPass, which Tasks 26–28 fill. */
 const BINDING_PASSES = Object.freeze({});
 
-/** B1's name, kept: a verb's arguments by lib's one grammar (parseOpVerbArgs), or null when refused. runOpPass
+/** B1's name, kept: a verb's arguments by lib's one grammar (parseOpVerbArgs), or null when refused. opPass
  *  reads parseOpVerbArgs itself, for the refusal's word. */
 export function parseOpArgs(op, args) {
   if (!OP_VERBS.has(op)) return null;
@@ -18440,11 +18566,12 @@ export function parseOpArgs(op, args) {
 }
 ```
 
-Replace `runOpPass`, from its doc comment `/** One --op pass: see the block comment above. */` through its closing brace, with:
+Leave B1's `opThrowResult` and its exported wrapper `runOpPass` (the function under the doc comment that opens `/** One --op pass: see the block comment above. The pass's contract is ONE {"rc":…} line, printed LAST, on EVERY`) exactly as they are. Replace the function the wrapper calls, from the line `async function opPass(parsed, deps, out) {` through its closing brace (B1 gives it no doc comment), with:
 
 ```js
-/** One --op pass: see the block comment above (B1 Task 25), as W1-B2 Task 19 split it into tables. */
-export async function runOpPass(parsed, deps, out) {
+/** The body of one --op pass (B1 Task 25), as W1-B2 Task 19 split it into tables. Reached only through B1's
+ *  runOpPass wrapper, which answers the throws that leave this function before its try opens (B1's FR2-c). */
+async function opPass(parsed, deps, out) {
   const home = deps.home;
   const P = historyPaths(home);
   const now = deps.now ?? Date.now;
@@ -18454,7 +18581,11 @@ export async function runOpPass(parsed, deps, out) {
   };
   const verdict = OP_VERBS.has(parsed.op) ? parseOpVerbArgs(parsed.op, parsed.opArgs) : { ok: false, reason: 'bad-args' };
   if (!verdict.ok) return result(EXIT.REFUSED, verdict.reason);
-  const args = verdict.args;
+  // Resolved ONCE against the operator's cwd (B1 Task 26F item 2): admission, the file's binding and the journal's
+  // mapping verdict then all see one absolute path. Left as typed, a relative path was admitted by its cwd-relative
+  // spelling but stored verbatim, giving the file a second path row and a path replay cannot resolve. parseOpVerbArgs
+  // freezes its args (and already checked the `<uuid>.jsonl` basename, which resolving does not change), so copy.
+  const args = typeof verdict.args.file === 'string' ? { ...verdict.args, file: resolve(verdict.args.file) } : verdict.args;
   const form = formOf(parsed.op, parsed.opArgs);
   // The gate's inputs, read once: RB6's second call below reuses them, so tmux is read at most once per pass.
   const gateEnv = { claudecode: (process.env.CLAUDECODE ?? '') !== '', historyOff: existsSync(P.off) };
@@ -18466,6 +18597,14 @@ export async function runOpPass(parsed, deps, out) {
   if (role === 'server') {
     out('history-sweep: store-create-refused-role');
     return result(EXIT.NO_STORE);
+  }
+  if (form === null && parsed.op === 'import' && parsed.rosterUnreadable) {
+    // B1's ⟦D:history-import-refusal-words⟧ (history-import-refusal-words): an unreadable roster is no homes, so there is nothing to list or
+    // admit; reading it as an empty roster answered "nothing to import" and exit 0. A dry run writes nothing at all
+    // (§8.4), so it cannot count the condition; --apply does (below). Import only: prune's and reparse's dry runs
+    // need no roster.
+    out('history-sweep: accounts.sh could not be read, so no home is known; nothing listed');
+    return result(EXIT.REFUSED, 'roster-unreadable');
   }
   if (form === null) {
     const dry = OP_DRY_RUNS[parsed.op];
@@ -18518,6 +18657,14 @@ export async function runOpPass(parsed, deps, out) {
       out('history-sweep: store.writer cannot be read, so nothing this pass decides could be journaled');
       return result(EXIT.DB, 'store-unmeasured');
     }
+    if (parsed.op === 'import' && parsed.rosterUnreadable) {
+      // B1's ⟦D:history-import-refusal-words⟧ (history-import-refusal-words): counted and refused before any listing or admission, every import
+      // form (the operator's --session --file would otherwise fail admission as outside-roots and count non_regular).
+      // The other verbs do not need the roster.
+      bump(db, 'roster_unreadable');
+      out('history-sweep: accounts.sh could not be read, so no home is known; nothing imported');
+      return result(EXIT.REFUSED, 'roster-unreadable');
+    }
     writeOpMarker(P, parsed.op, now());
     if (!flushFirst(db, home, ids, now)) {
       out('history-sweep: journal-unwritable');
@@ -18533,10 +18680,15 @@ export async function runOpPass(parsed, deps, out) {
     }
     return result(r.rc, r.reason);
   } catch (e) {
-    if (!(e instanceof JournalError)) throw e;
-    bump(db, 'journal_write_failed');
-    out('history-sweep: journal-unwritable');
-    return result(EXIT.INTERNAL);
+    if (e instanceof JournalError) {
+      bump(db, 'journal_write_failed');
+      out('history-sweep: journal-unwritable');
+      return result(EXIT.INTERNAL);
+    }
+    // The pass's contract is ONE {"rc":…} line, printed LAST, on every path (B1 Task 26F item 5): the CLI relays it,
+    // so a throw that reached main()'s own catch ended stdout with no line at all (B1's opThrowResult; the runOpPass
+    // wrapper answers the throws that precede this try).
+    return opThrowResult(e, result);
   } finally {
     rmSync(P.op, { force: true });
     closeWriter(db);
@@ -18550,6 +18702,8 @@ Check the placement:
 - `grep -c 'import.meta.url === pathToFileURL' ccd/history/sweep.mjs`. Expected: `1`.
 - `sed -n "$(grep -n 'import.meta.url === pathToFileURL' ccd/history/sweep.mjs | cut -d: -f1),\$p" ccd/history/sweep.mjs`. Expected: the guard block only.
 - `grep -nE '^(await|(const|let|var) [^=]+= *await)\b' ccd/history/sweep.mjs`. Expected: no output.
+- `grep -cE '^export async function runOpPass\(|^async function opPass\(|^function opThrowResult\(' ccd/history/sweep.mjs`. Expected: `3` (B1's wrapper and `opThrowResult` kept, one `opPass`).
+- `grep -cE "return opThrowResult\(e, result\);|resolve\(verdict.args.file\)|'roster-unreadable'\);" ccd/history/sweep.mjs`. Expected: `4` (the catch, the one resolve, and the two roster refusals). `grep -c 'args.file = resolve(' ccd/history/sweep.mjs`. Expected: `0` (B1's in-place mutation went with B1's body; lib's args are frozen).
 
 - [ ] **Step 5: Write the operator door in cli.mjs.**
 
@@ -18753,6 +18907,7 @@ Run:
 
 Expected: all green.
 - B1's `--op import` and `--op migrate` cases are unchanged by the tables.
+- B1's `history-op.test.ts` describes `Task 26F item 2: a relative --file is resolved once, …`, `Task 26F items 3 and 4: the two refusals an --op import used to answer rc 0 …`, `Task 26F item 5: a throw inside runOpPass still ends stdout with one {"rc":…} line` and `FR2-c: the {"rc":…} line is printed last on EVERY path, …` stay green: they pin the resolve, both `roster-unreadable` refusals, the `opThrowResult` catch and the unchanged wrapper. Dropping any of the four from `opPass` turns its describe red (`(cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'Task 26F item|FR2-c')`).
 - B1's `--op prune` → `bad-args` case stays green: prune joins `OP_VERBS` in Task 20, which switches that case.
 - B1's C64 rows in `history-op.test.ts` (`needs-tty`, `irreversible-in-pane`) run through `paneNameFor` after its in-place edit, so they are its regression check: same answers, one rule.
 - No store holds a recovery step in any B1 case, so `recoverStepAt` answers `none` there, no recovery fact is measured, and nothing changes.
@@ -18776,7 +18931,7 @@ grep -c 'door removed (mutant)' ccd/history/cli.mjs; rm_ 'no-store table'; cp "$
 # (d) migration-pending guards no verb
 sed -i 's/^    if (OP_NEEDS_CODE_VERSION.has(parsed.op) && opened.stored !== opened.code) return result(EXIT.DB, .migration-pending.);$/    \/\/ version guard removed (mutant)/' ccd/history/sweep.mjs
 grep -c 'version guard removed (mutant)' ccd/history/sweep.mjs; rm_ 'migration-pending refuses'; cp "$SCRATCH/sweep.mjs.orig" ccd/history/sweep.mjs
-# (e) RB6's sweep half disabled: runOpPass never refuses recovering (Tasks 20-23 re-apply this mutant for their rows)
+# (e) RB6's sweep half disabled: opPass never refuses recovering (Tasks 20-23 re-apply this mutant for their rows)
 sed -i 's/^  if (recoverStepAt(P.dbFile) === .open.) {$/  if (false) { \/\/ RB6 sweep half removed (mutant)/' ccd/history/sweep.mjs
 grep -c 'RB6 sweep half removed (mutant)' ccd/history/sweep.mjs; rm_ 'RB6'; cp "$SCRATCH/sweep.mjs.orig" ccd/history/sweep.mjs
 # (f) RB6's CLI half disabled: the CLI spawns a form the sweep then refuses
@@ -19691,7 +19846,7 @@ The choices above cite Node 24.14.1. The node-floor CI leg runs history-store.te
 - Consumes:
   - Task 6 (lib): `decideReparse({ targets, prunedSpans }): { ok: true } | { ok: false; reason: 'reparse-too-many' | 'span-pruned' }`; `parseOpVerbArgs`'s `{ op: 'reparse'; node: string | null; session: string | null; apply: boolean }` arm (a `--node` is a full 20-hex id; `--node` and `--session` are exclusive).
   - B1 lib: `REPARSE_MAX_TARGETS` (500), `EXIT`; `leafId` is only the subject of Step 6's DM7 mutant.
-  - Task 8 (derive.mjs, same module, module-private): `stmts`, `nodeToolkit`, `holdingCopy`, `copyPlan`, `textOf`, `indexNode`, and `leafFields(db, ictx, kit, s, copy, b, pick, id, sessionPk, sources, budget)`, the field computation `deriveOne` and this task's `refreshLeaf` share; `LEAF_STEP` (the `('leaves', NODE_PARSER_VERSION)` low-water cursor); and RB5's two records (IN-4, ⟦D:history-parser-crash-recorded⟧): a leaf whose derivation threw is written with status `parse-failed` (kind `raw_leaf`, gist NULL, no refs), and a boundary that threw before its leaf id was known gets the marker `(LEAF_CRASHED_STEP, <its boundary entry_id>)`, where `const LEAF_CRASHED_STEP = 'leaf-crashed';` sits beside `LEAF_STEP`; `todo` and `firstTodo` skip a marked boundary, so the cursor passes it and no tick retries it. B1 store.mjs (already imported by derive.mjs): `bump`, `getStep`, `setStep`, `withTx`. B1 sweep.mjs: `makeIngestCtx`'s `isBusy` (Task 8 puts it on the ingest context).
+  - Task 8 (derive.mjs, same module, module-private): `stmts`, `nodeToolkit`, `holdingCopy`, `copyPlan`, `textOf`, `indexNode`, and `leafFields(db, ictx, kit, s, copy, b, pick, id, sessionPk, sources, budget)`, the field computation `deriveOne` and this task's `refreshLeaf` share; `LEAF_STEP` (the `('leaves', NODE_PARSER_VERSION)` low-water cursor); and RB5's two records (IN-4, ⟦D:history-parser-crash-recorded⟧): a leaf whose derivation threw is written with status `parse-failed` (kind `raw_leaf`, gist NULL, no refs), and a boundary that threw before its leaf id was known gets the marker `(LEAF_CRASHED_STEP, <its boundary entry_id>)`, where `const LEAF_CRASHED_STEP = 'leaf-crashed';` sits beside `LEAF_STEP`; `todo` and `firstTodo` skip a marked boundary, so the cursor passes it and no tick retries it. B1 store.mjs (already imported by derive.mjs): `bump`, `withTx`. B2 store.mjs (Tasks 7 and 8; already imported by derive.mjs): `getStep`, `setStep`; B1 has neither (B1 keeps its derivation steps in sweep.mjs's file-private `derivStmts`), so a grep of B1 for them finds nothing. B1 sweep.mjs: `makeIngestCtx`'s `isBusy` (Task 8 puts it on the ingest context).
   - Task 9 (derive.mjs, same module): `rerollParents(db, ictx, nodeIds): number`, which re-rolls every condensed node above the given nodes from its children with lib's `parentRollup`, ids kept, `nodes_fts` rows replaced when `ictx.fts`; it answers how many parents it rewrote. It is idempotent: re-rolling a parent whose children did not change rewrites the same fields.
   - Task 19 (sweep.mjs): `OP_VERBS`, `OP_DRY_RUNS`, `OP_HANDLERS` and their hook shapes (Task 20's Consumes); Task 20's file-local `dryRunReader(home, P, out)`; RB6's `recovering` refusal (Task 20's Consumes).
   - B1 sweep.mjs: `makeIngestCtx`, `secretsStep`, `ftsPrepare`.
@@ -19723,9 +19878,12 @@ Append to `server/test/fixtures/history/preload-faults.mjs` the RB5 seam (a deri
 
 ```js
 // ── W1-B2 Task 21: a derive throw for one blob (RB5) ─────────────────────────────────────────────
-// HISTORY_TEST_THROW_BLOB=<blob_id>: every prepared `SELECT z FROM blobs WHERE blob_id = ?` (derive.mjs's blob read,
-//   Task 8's stmts().blobZ) throws from `get` when bound to <blob_id>, on every call: a leaf whose derivation reads
-//   that blob throws a plain Error, which is not busy. Other blobs read as before.
+// HISTORY_TEST_THROW_BLOB=<blob_id>: a prepared `SELECT z FROM blobs WHERE blob_id = ?` (derive.mjs's blob read,
+//   Task 8's stmts().blobZ) throws from `get` when bound to <blob_id> and CALLED FROM derive.mjs, on every call: a
+//   leaf whose derivation reads that blob throws a plain Error, which is not busy. Other blobs read as before.
+//   The same SQL text is also B1's, in sweep.mjs (INGEST_STMTS' blobZ, which storedBody reads for tool pairing, and
+//   derivStmts' blobZ, which the FTS backfill reads), so the stub checks its caller's stack: the seam is for derive.mjs
+//   (an `--op reparse` pass, or a tick's derivation) and never makes B1's readers throw for that blob.
 // It patches DatabaseSync.prototype.prepare on top of whatever an earlier block installed.
 import { DatabaseSync as DatabaseSyncR21 } from 'node:sqlite';
 {
@@ -19738,7 +19896,9 @@ import { DatabaseSync as DatabaseSyncR21 } from 'node:sqlite';
       if (String(sql) === 'SELECT z FROM blobs WHERE blob_id = ?') {
         const realGetR21 = st.get.bind(st);
         st.get = (...args) => {
-          if (String(args[0]) === throwBlobR21) throw new Error(`preload-faults: HISTORY_TEST_THROW_BLOB ${throwBlobR21}`);
+          if (String(args[0]) === throwBlobR21 && String(new Error().stack).includes('/ccd/history/derive.mjs')) {
+            throw new Error(`preload-faults: HISTORY_TEST_THROW_BLOB ${throwBlobR21}`);
+          }
           return realGetR21(...args);
         };
       }
@@ -20682,6 +20842,7 @@ and lands B2 in the O17 table. Pins C35, C51, C52 and RB6's backup row."
 - Modify: `ccd/history/sweep.mjs` (B1-created):
   - insert the repair block ABOVE the entry guard;
   - in place, B1 Task 23's `ftsPrepare`: one line (meta `fts` reads `ready` only while no rebuild is open);
+  - in place, B1 Task 23's `deriveFts`: one line, its completion's `setMeta(db, 'fts', 'ready');`, the other writer of that word (same rule);
   - in place: the `OP_VERBS` line gains `'repair'`; Task 19's `OP_HANDLERS` literal gains a `repair` member (repair has no dry run);
   - in place: merge `integrityCheck`, `foreignKeyRows`, `ftsMeasure`, `dropFtsTables` and `setStep` into the existing `from './store.mjs'` import; `diffForeignKeys`, `ftsTablesHealthy`, `INDEXED_PROVENANCE` and `FTS_REBUILD_STEP` into the `from './lib.mjs'` import; `indexNodesFts` and `NODES_FTS_STEP` into the `from './derive.mjs'` import.
 - Modify: `ccd/history/PROVENANCE`: append one six-field entry (P24's drop sequence, `ours: ccd/history/store.mjs`).
@@ -20697,7 +20858,7 @@ and lands B2 in the O17 table. Pins C35, C51, C52 and RB6's backup row."
   - Task 8 (store.mjs): `setStep(db, step, version, cursor, completedMs?)`.
   - Task 9 (derive.mjs): `indexNodesFts(db, ictx, budget): number` — indexes nodes past its `('nodes-fts', 1)` cursor (the last indexed `nodes.rowid`, as a decimal string) into `nodes_fts`, within the budget, answering how many it indexed, 0 when none is left; and `NODES_FTS_STEP` = `'nodes-fts'`, that step's one spelling (not in the skeleton's Task 9 produces list; listed in this part's interface changes).
   - Task 19 (sweep.mjs): `OP_VERBS`, `OP_HANDLERS` and its hook shape; `OP_NEEDS_CODE_VERSION` holding `'repair'` (a store at another version answers 5 `migration-pending` before this runs).
-  - B1 sweep.mjs: `ftsPrepare`, `indexBlob`, `mergeSteps`, `secretsStep`, `makeIngestCtx`, `newBudget`, `budgetLeft`, `runJournalHalf`, `JournalError`, and the file-private `ftsStmts` (`del`), `derivStmts` (`sel`, `pending`), `ftsTextOfBlob` and `MERGE_STEP` (all B1 Task 23). B1 store.mjs: `createFtsTables`, `withTx`, `setMeta`.
+  - B1 sweep.mjs: `ftsPrepare`, `deriveFts`, `indexBlob(db, blobId, text, pairIdx)` (it redacts `text`, a string), `mergeSteps`, `secretsStep`, `makeIngestCtx`, `newBudget`, `budgetLeft`, `runJournalHalf`, `JournalError`, the file-private `ftsStmts` (`del`), `derivStmts` (`sel`, `pending`, `blobZ`), `MERGE_STEP` and `FTS_GROUP_CHARS` (4 MiB), and the EXPORTED, ASYNC `ftsTextOfBlob(z, isSidecar, pairIdx): Promise<{ text: string; decoded: number }>` (all B1 Task 23; B1's ⟦D:history-sidecar-redact-before-cut⟧ made it async and bounded a sidecar's read through `unbrotliPrefix`). B1 store.mjs: `createFtsTables`, `withTx`, `setMeta`.
   - Task 10 (helpers): `runCli`, `withPane`, `seedFamily`. Task 20's `maint*` helpers, `maintRecovering` included. B1 preloads: `HISTORY_TEST_KILL_SQL`. RB6's `recovering` refusal (Task 20's Consumes).
 - Produces:
   - lib.mjs: `export const FTS_REBUILD_STEP = 'fts-rebuild'`, the rebuild's derivation step, spelled once (IN-2); `decideGrepIndex(i: { probe; table; completed; rebuilding?: boolean })`, where an open rebuild answers 7 `fts-pending` after the probe's two words.
@@ -20705,8 +20866,8 @@ and lands B2 in the O17 table. Pins C35, C51, C52 and RB6's backup row."
   - store.mjs: `integrityCheck(db): string[]`, `foreignKeyRows(db): FkRow[]`, `ftsMeasure(db): { tables: Set<string>; columns: Record<string, string[]> }`, `dropFtsTables(db): void`.
   - sweep.mjs:
     - `openFtsRebuild(db): null | { version: number; state: { phase: string; blobId: number; baseline: FkRow[] | null } }`;
-    - `ftsRebuildJob(db, ictx, i: { stepVersion: number; budget: object; baseline?: FkRow[] | null }): { done: boolean; refused: null | { at: 'chunk' } | { at: 'completion'; rows: FkRow[] } }`. `at: 'chunk'` is a chunk whose COMMIT failed on a foreign-key violation (rolled back); `at: 'completion'` is the baseline diff at completion (the completion rolled back, the step left open). Task 29's recovery reindex phase starts it with no baseline and reads `done` only;
-    - `repairOp(db, ctx): { rc: number; reason?: string }`; `OP_VERBS` gains `'repair'`; derivation step `(FTS_REBUILD_STEP, <start ms>)`.
+    - `async ftsRebuildJob(db, ictx, i: { stepVersion: number; budget: object; baseline?: FkRow[] | null }): Promise<{ done: boolean; refused: null | { at: 'chunk' } | { at: 'completion'; rows: FkRow[] } }>`. It is async because B1's `ftsTextOfBlob` is: each chunk's texts are computed before its transaction opens. `at: 'chunk'` is a chunk whose COMMIT failed on a foreign-key violation (rolled back); `at: 'completion'` is the baseline diff at completion (the completion rolled back, the step left open). Task 29's recovery reindex phase starts it with no baseline, awaits it and reads `done` only;
+    - `async repairOp(db, ctx): Promise<{ rc: number; reason?: string }>` (Task 19's `opPass` awaits every handler); `OP_VERBS` gains `'repair'`; derivation step `(FTS_REBUILD_STEP, <start ms>)`.
   - preload-faults.mjs: `HISTORY_TEST_FK_INJECT=<substring>`, `HISTORY_TEST_FK_PLANT=<substring>`, `HISTORY_TEST_INTEGRITY=<text>` (test-only; nothing under `ccd/` reads them).
 
 **Spec:** §8.4 "`doctor --repair`" (integrity_check; a foreign_key_check baseline diff that refuses on NEW violations, P21; the FTS self-heal as a resumable job), §6.2 (indexed text is redacted plain text; merge steps purge deleted bytes), §9.1 (grep's exit 7 while the index is not ready), §9.14 (a registered recovery step), §11 P21 P24, B1 Task 23's two named residuals (a blob before the backfill cursor; a session token indexed before its record). Pins: C61; review focus 5's repair race; RB6's repair row; RB7. Departures: ⟦D:history-redaction-reindex-merge⟧, ⟦D:history-fts-tables-by-derivation⟧, ⟦D:history-reasons-repair-backup⟧ (NEW, Task 6's slug: `repair-refused`), ⟦D:history-repair-rebuilds-fts-whole⟧ (NEW: an index that holds a term indexed before its redaction pair was learned cannot be cleaned row by row — a `sessions.json` pair has no value to phrase-search — so the self-heal always drops and rebuilds both tables, healthy or not, and reports which ones P24's checks found damaged), ⟦D:history-grep-pending-until-backfilled⟧ (Task 12's slug, widened here: grep also answers 7 `fts-pending` while an `(FTS_REBUILD_STEP, *)` row is open), ⟦D:history-ops-refused-while-recovering⟧ (NEW, RB6; defined by Task 6; Task 19 places the refusal).
@@ -20715,7 +20876,7 @@ Choices this task makes (each is in the PR body's open issues):
 - **`foreign_key_check` twice per job (RB7):** once as the baseline, before the first chunk, saved in the step's cursor JSON so a resumed repair diffs against the original; and once at completion, in the completion's own transaction, so a new violation rolls the completion back. Never per chunk: a whole-store check per 2048-blob chunk would make the repair's cost grow with the store's square. The writer runs with foreign keys ON, so inside a chunk a new violation can only come deferred, and a deferred one fails that chunk's COMMIT (errcode 787, `FOREIGN KEY constraint failed`); withTx rolls it back and the job answers `refused` (`at: 'chunk'`) rather than an internal error.
 - **The first chunk carries the drop.** Dropping and recreating both tables, resetting the nodes_fts backfill, setting meta `fts` to `fts-pending` and registering the step all commit with the first batch, so a first chunk whose COMMIT fails leaves the old index exactly as it was ("nothing repaired").
 - **A completion refused by the baseline diff leaves the rebuild open.** The rebuilt index has committed, chunk by chunk; only the completion rolls back. The step stays open, meta `fts` stays `fts-pending` and grep answers 7, and every rerun refuses again against the ORIGINAL baseline until the violation is removed, or the operator runs `doctor --restore` or `doctor --rebuild`.
-- **A killed repair is resumed by running it again**, never by the ticks. While the rebuild is open, `ftsPrepare` keeps meta `fts` at `fts-pending` on every tick, and grep's index gate reads the open step itself (IN-2), so grep answers exit 7 at every phase; the ticks' own inline indexing and merge steps keep working against the new tables.
+- **A killed repair is resumed by running it again**, never by the ticks. While the rebuild is open, `ftsPrepare` keeps meta `fts` at `fts-pending` on every tick, and so does B1's other writer of `ready`, `deriveFts`'s completion (a ('fts', 1) backfill re-opened by `resetFtsPending` or by Task 12's provenance re-open can complete during an open rebuild), and grep's index gate reads the open step itself (IN-2), so grep answers exit 7 at every phase; the ticks' own inline indexing and merge steps keep working against the new tables.
 - **Resuming keeps the original baseline** (stored in the step's cursor JSON); a cursor that does not parse restarts the job with a freshly measured one.
 - **FTS5 absent:** integrity runs and the foreign-key rows are counted and reported; the pass says there is no index to heal and exits 0 (there is no rebuild for a baseline to guard).
 - **Measured on Node 24.14.1** (the node-floor leg re-runs every case below on 22.16.0): a DROP and re-CREATE of an FTS5 table inside a transaction rolls back cleanly, and a read-only connection sees the old table until the COMMIT; deleting a rowid a contentless table never held is a no-op; inserting an existing rowid is NOT refused (the terms merge), which is why every rebuild insert deletes first; node:sqlite's defensive mode refuses to drop a live table's shadow by name (`table blobs_fts_idx may not be dropped`), so a damaged-shadow state cannot be planted from a test; a deferred foreign-key violation makes `COMMIT` throw an Error with `code` `ERR_SQLITE_ERROR`, `errcode` 787 and message `FOREIGN KEY constraint failed` and leaves the transaction open, so the explicit ROLLBACK withTx runs undoes it (the same on 22.16.0, measured); a violation committed outside any transaction with foreign keys off does not fail a later transaction's COMMIT, deferred or not.
@@ -21104,6 +21265,14 @@ describe('doctor --repair: integrity, the foreign-key baseline, the resumable FT
     expect(rebuilds(box).map((x) => x.completed_ms), 'the rebuild is open').toEqual([null]);
     expect(runSweep(box).code).toBe(0);                          // a scheduled tick between two repair passes
     expect(maintMeta(box, 'fts'), 'the tick keeps the index pending while a rebuild is open').toBe('fts-pending');
+    // B1's other writer of `ready` is deriveFts' completion: a ('fts', 1) backfill re-opened while the rebuild is open
+    // (B1's resetFtsPending re-opens it so) completes in the next tick, and must leave the index pending too.
+    const reopen = new DatabaseSync(historyPaths(box.home).dbFile);
+    try {
+      reopen.prepare("UPDATE derivation_state SET completed_ms = NULL WHERE step = 'fts' AND version = 1").run();
+    } finally { reopen.close(); }
+    expect(runSweep(box).code).toBe(0);
+    expect(maintMeta(box, 'fts'), 'a backfill completing under an open rebuild keeps the index pending').toBe('fts-pending');
     const pane = withPane(box, MAINT_ID);
     const mid = runCli(box, ['grep', 'zebrafish', '--json'], { env: pane });
     expect(mid.code, mid.stderr).toBe(7);
@@ -21161,6 +21330,20 @@ with
 
 (`openFtsRebuild` is a function declaration in the block below, so it is defined by the time any pass calls `ftsPrepare`.)
 
+In B1 Task 23's `deriveFts`, inside its `commit` closure's `if (done) {` branch, replace the line
+
+```js
+          setMeta(db, 'fts', 'ready');
+```
+
+with
+
+```js
+          if (openFtsRebuild(db) === null) setMeta(db, 'fts', 'ready');   // W1-B2 Task 23: never ready under an open rebuild
+```
+
+It is B1's only literal writer of `ready`; `ftsPrepare` writes its computed `state`. Check: `grep -c "setMeta(db, 'fts', 'ready')" ccd/history/sweep.mjs` prints `1` before and after the edit, and `grep -c "if (openFtsRebuild(db) === null) setMeta(db, 'fts', 'ready');" ccd/history/sweep.mjs` prints `1` after it.
+
 Replace the `OP_VERBS` line (Task 22 left it as `const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup']);`) with:
 
 ```js
@@ -21170,7 +21353,7 @@ const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup', 're
 In Task 19's `OP_HANDLERS` object literal, add after Task 22's `backup` member:
 
 ```js
-  repair: (c) => repairOp(c.db, c.ctx),
+  repair: (c) => repairOp(c.db, c.ctx),   // a Promise: opPass awaits every handler
 ```
 
 Insert this block ABOVE the entry guard, below Task 22's backup block:
@@ -21245,14 +21428,20 @@ export function openFtsRebuild(db) {
  *  - with a baseline (FkRow[]) in its state, the completion runs diffForeignKeys inside its own transaction, and
  *    a new violation rolls the completion back (the step stays open, meta fts stays fts-pending) and answers
  *    `refused: { at: 'completion', rows }`.
+ *  Each blob's index text is B1's ftsTextOfBlob (async: a sidecar's window is read through unbrotliPrefix, and
+ *  redacted before its cut), so a chunk's texts are computed BEFORE its transaction opens, as B1's deriveFts does:
+ *  an await inside withTx's callback would let the COMMIT run first. As in B1's backfill (B1's ⟦D:history-sidecar-redact-before-cut⟧), the pick
+ *  selects ids and compressed sizes only, each `z` is fetched one at a time and charged to the budget by its
+ *  compressed size, and a chunk stops taking blobs once its text reaches B1's FTS_GROUP_CHARS, so a chunk never
+ *  holds a batch's bodies or 2048 sidecar windows.
  *  `i.baseline` is used only when the job starts. Answers { done, refused }. */
-export function ftsRebuildJob(db, ictx, i) {
+export async function ftsRebuildJob(db, ictx, i) {
   const open = openFtsRebuild(db);
   const version = open?.version ?? i.stepVersion;
   let st = open?.state ?? { phase: 'start', blobId: 0, baseline: i.baseline ?? null };
   if (st.phase === 'start' && st.baseline === null && i.baseline != null) st = { ...st, baseline: i.baseline };
   const ph = INDEXED_PROVENANCE.map(() => '?').join(', ');
-  const pick = db.prepare(`SELECT b.blob_id AS blob_id, b.z AS z,
+  const pick = db.prepare(`SELECT b.blob_id AS blob_id, length(b.z) AS zlen,
       EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = b.blob_id) AS is_sidecar
     FROM blobs b
     WHERE b.blob_id > ? AND b.z IS NOT NULL
@@ -21275,6 +21464,18 @@ export function ftsRebuildJob(db, ictx, i) {
         const from = starting ? 0 : st.blobId;
         const batch = pick.all(from, ...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE, REBUILD_BATCH);
         const baseline = st.baseline;
+        // The texts first, outside any transaction (B1's ftsTextOfBlob is async); one z at a time.
+        const texts = [];
+        let chars = 0;
+        for (const b of batch) {
+          const z = derivStmts(db).blobZ.get(b.blob_id)?.z;
+          const text = z === undefined || z === null ? null : (await ftsTextOfBlob(z, b.is_sidecar === 1, ictx.pairIdx)).text;
+          texts.push({ id: Number(b.blob_id), text });
+          i.budget.bytes += Number(b.zlen);
+          chars += text === null ? 0 : text.length;
+          if (chars >= FTS_GROUP_CHARS) break;
+        }
+        const whole = texts.length === batch.length;
         st = withTx(db, 'NORMAL', () => {
           if (starting) {
             dropFtsTables(db);
@@ -21284,13 +21485,12 @@ export function ftsRebuildJob(db, ictx, i) {
           }
           const f = ftsStmts(db);
           let last = from;
-          for (const b of batch) {
-            last = Number(b.blob_id);
+          for (const t of texts) {
+            last = t.id;
             f.del.run(last);
-            indexBlob(db, last, ftsTextOfBlob(b.z, b.is_sidecar === 1), ictx.pairIdx);
-            i.budget.bytes += b.z.length;
+            if (t.text !== null) indexBlob(db, last, t.text, ictx.pairIdx);
           }
-          const next = { phase: batch.length < REBUILD_BATCH ? 'nodes' : 'blobs', blobId: last, baseline };
+          const next = { phase: whole && batch.length < REBUILD_BATCH ? 'nodes' : 'blobs', blobId: last, baseline };
           save.run(FTS_REBUILD_STEP, version, JSON.stringify(next));
           return next;
         });
@@ -21330,7 +21530,7 @@ export function ftsRebuildJob(db, ictx, i) {
  *  rebuild in budget-bounded rounds with the journal half between them, then ftsPrepare to set meta fts back to
  *  ready. The pair index is this pass's full one (B1's secretsStep: every pair ever recorded plus the frozen list
  *  and the shim's --secrets), so no value known now is ever a term. */
-export function repairOp(db, ctx) {
+export async function repairOp(db, ctx) {
   const problems = integrityCheck(db);
   if (problems.length !== 1 || problems[0] !== 'ok') {
     for (const p of problems.slice(0, 5)) ctx.out(`history-sweep: integrity_check: ${p}`);
@@ -21356,7 +21556,7 @@ export function repairOp(db, ctx) {
     ctx.out(`history-sweep: repair: resuming the index rebuild started ${new Date(open.version).toISOString()} at its ${open.state.phase} phase`);
   }
   for (;;) {
-    const r = ftsRebuildJob(db, ictx, { stepVersion: ictx.nowMs, budget: newBudget(ctx.now), baseline });
+    const r = await ftsRebuildJob(db, ictx, { stepVersion: ictx.nowMs, budget: newBudget(ctx.now), baseline });
     if (r.refused !== null && r.refused.at === 'chunk') {
       ctx.out(`history-sweep: repair-refused: a rebuild chunk would have committed a foreign-key violation (FOREIGN KEY constraint failed at COMMIT); that chunk was rolled back, and ${openFtsRebuild(db) === null
         ? 'nothing was rebuilt: the old index stands'
@@ -21403,6 +21603,7 @@ From the repository root, `SCRATCH="$PWD/.superpowers/sdd/history-w1-b2/scratch"
 - The completion diff (RB7). Delete the line `        check(finished);`. Run `-t 'refused repair-refused at completion'`. Expected: red — the completion commits over the new violation (`expected 0 to be 2`).
 - The integrity guard. Replace `  if (problems.length !== 1 || problems[0] !== 'ok') {` with `  if (false) {`. Run `-t 'integrity_check that is not ok'`. Expected: red (`expected +0 to be 2`).
 - The pending state across a tick. In `ftsPrepare`, replace ` && openFtsRebuild(db) === null ? 'ready'` with ` ? 'ready'`. Run `-t 'killed at its merge phase'`. Expected: red at `the tick keeps the index pending while a rebuild is open` (`expected 'ready' to be 'fts-pending'`).
+- The pending state across a backfill's completion. In `deriveFts`, replace `if (openFtsRebuild(db) === null) setMeta(db, 'fts', 'ready');` with `setMeta(db, 'fts', 'ready');`. Run `-t 'killed at its merge phase'`. Expected: red at `a backfill completing under an open rebuild keeps the index pending` (`expected 'ready' to be 'fts-pending'`).
 - The grep gate's rebuild term, lib half (IN-2). In `ccd/history/lib.mjs` replace `  if (!table || !completed || rebuilding) return` with `  if (!table || !completed) return`. Run `(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'FTS_REBUILD_STEP')`. Expected: red (`expected { ok: true } to deeply equal { ok: false, exit: 7, reason: 'fts-pending' }`). Restore lib.mjs.
 - The grep gate's rebuild term, read half (IN-2). In `ccd/history/recall.mjs` run `sed -i 's/^  const rebuilding = table && rc.db.prepare(/  const rebuilding = false \&\& rc.db.prepare(/' ccd/history/recall.mjs`; `grep -c 'const rebuilding = false' ccd/history/recall.mjs` prints `1`. Run `-t 'killed at its merge phase'`. Expected: red at the mid-repair grep (`expected 0 to be 7`): zebrafish is already re-indexed, and only the open step says the index is partial. Restore recall.mjs.
 - The whole rebuild. Delete the line `            dropFtsTables(db);`. Run `-t 'baseline and passes'`. Expected: red at `a whole rebuild leaves no term the store does not hold` (`expected 1 to be 0`): `CREATE … IF NOT EXISTS` keeps the old table and its stale term.
@@ -21808,7 +22009,7 @@ describe('store.mjs: the binding verbs\' sequences (W1-B2 Task 24)', () => {
 (cd server && ./node_modules/.bin/vitest run test/history-store.test.ts -t 'binding verbs')
 ```
 
-Expected: every case of `store.mjs: the binding verbs' sequences (W1-B2 Task 24)` is red, and B1's 30 cases are not selected.
+Expected: every case of `store.mjs: the binding verbs' sequences (W1-B2 Task 24)` is red, and B1's 40 cases are not selected (vitest reports them skipped).
 - The adopt and restore cases red on a missing function: `TypeError: adoptStore is not a function`, or the same for `stageRestore`.
 - The adopt and restore kill cases red at their first assertion, `expected null to be 'SIGKILL'`. Their children import store.mjs as a namespace (`import * as S`), so a missing export is a runtime `TypeError: S.adoptStore is not a function` (or `S.stageRestore`) in `stderr`, and the child exits 1 unkilled.
 - The `createStore` cases, the two rebuild kill cases included, red on `expected '<a minted uuid>' to be '<S1>'` or on the marker B1's sequence always writes (`expected true to be false`), because B1's `createStore` ignores its second argument.
@@ -22148,7 +22349,7 @@ grep -c '^export interface StagedRestore' ccd/history/store.d.mts               
 (cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit)
 ```
 
-Expected: every case of the file is green: B1's 30, any that B2 Tasks 9, 20, 22 and 23 have added, and this task's 9. tsc prints nothing.
+Expected: every case of the file is green: B1's 40 (37 as uid 0, where three `it.skipIf` cases skip), any that B2 Tasks 9, 20, 22 and 23 have added, and this task's 9. tsc prints nothing.
 
 - [ ] **Step 8: Measure every new guard red, then green.** Each block copies `store.mjs` aside, makes one asserted replacement, runs the one case red, and restores the file with `cp`. Run them from the repository root.
 
@@ -22296,7 +22497,7 @@ kill seam."
 **Files:**
 - Modify: `ccd/history/sweep.mjs` (B1-created; B2 Tasks 8–23 also extend it). Every anchor is by name or by an exact B1 line. Every new block goes ABOVE the entry guard `if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {` (R1).
   - Its import statements gain the names Step 6's script prints.
-  - Insert one section directly above `export async function tick(db, ctx) {`.
+  - Insert one section above the `/**` that opens `What one tick of a bound, open store carries` (immediately before `tick`'s two docblocks: B1's `@typedef {object} TickCtx` block and `tick`'s own doc comment, which sit directly above `export async function tick(db, ctx) {` with no blank line between them).
   - In `scheduledPass`, replace one line and insert one block.
   - In `passCtx`, replace one line.
 - Modify: `server/test/historyHelpers.ts` (B1-created):
@@ -23115,7 +23316,7 @@ Expected: all 10 cases are red. Quoted reds are measured, not contractual.
 
 Then confirm the CI pin is green: `(cd server && ./node_modules/.bin/vitest run test/ci-pipeline.test.ts -t 'node-floor leg runs every history test file')`.
 
-- [ ] **Step 4: Write the recovery section of `ccd/history/sweep.mjs`.** Insert this section directly above the line `export async function tick(db, ctx) {`. That keeps it above the entry guard, which stays the file's last statement:
+- [ ] **Step 4: Write the recovery section of `ccd/history/sweep.mjs`.** Insert this section above the `/**` that opens `What one tick of a bound, open store carries` (immediately before `tick`'s two docblocks), never directly above `export async function tick(db, ctx) {`: B1 puts the `@typedef {object} TickCtx` block and `tick`'s own doc comment directly above that line, so a section inserted there would take `tick`'s doc comment as its own. The line before the insert point is the blank line after the function above it (B1's `discoverAndPlan`); end the section with a blank line. That keeps it above the entry guard, which stays the file's last statement:
 
 ```js
 // ── The recovery step (spec §9.14 "Recovery: one step for --restore and --rebuild"; §9.2; W1-B2) ──────────────
@@ -23732,7 +23933,9 @@ export async function recoverPass(db, ctx, failedAtStart) {
     const secrets = secretsStep(db, ictx, ctx.parsed.secrets);
     ictx.pairIdx = secrets.pairIdx;
     ictx.fts = ftsPrepare(db, ictx.nowMs).tables;
-    reindexForValues(db, ictx, secrets.values);
+    // B1's reindexForValues is async and takes the load's `complete` flag (B1's ⟦D:history-reindex-by-units-and-complete-loads⟧: the durable mark advances only
+    // on a complete load), as B1's own tick calls it; un-awaited, the pass would close the writer under it.
+    await reindexForValues(db, ictx, secrets.values, secrets.complete);
     let r = { moved: false, done: false, held: true };
     if (ctx.pause === 'low-disk') bump(db, 'capture_paused_low_disk');
     else r = await recoveryStep(db, ctx);
@@ -23824,7 +24027,8 @@ want = {
     'node:fs': ['closeSync', 'constants', 'existsSync', 'fstatSync', 'openSync', 'readSync', 'readdirSync'],
 }
 for mod, names in want.items():
-    m = re.search(r"import \{([^}]*)\} from '" + re.escape(mod) + r"';", s)
+    # B1's node:fs import carries a default binding before its braces (`import fs, {`), so one is allowed.
+    m = re.search(r"import (?:[A-Za-z_$][\w$]*,\s*)?\{([^}]*)\} from '" + re.escape(mod) + r"';", s)
     assert m, f'no named import from {mod}'
     have = {n.strip().split(' as ')[-1] for n in m.group(1).split(',') if n.strip()}
     missing = [n for n in names if n not in have]
@@ -24141,8 +24345,8 @@ registered, and the executor's agreement with lib planReplay."
 **Files:**
 - Modify: `ccd/history/sweep.mjs` (B1-created; Tasks 19 and 25 extend it):
   - its import statements gain the names Step 5's script prints;
-  - insert one section directly above `export async function tick(db, ctx) {`, after Task 25's recovery section;
-  - in `runOpPass`, add one branch;
+  - insert one section after Task 25's recovery section and above the `/**` that opens `What one tick of a bound, open store carries` (immediately before `tick`'s two docblocks, never between them and `tick`);
+  - in `opPass` (Task 19's rewrite of B1's module-private pass body; B1's exported `runOpPass` wrapper is not touched), add one branch;
   - in `const OP_VERBS = new Set([…]);`, add one member.
 - Check, and modify only if the entry is missing: `ccd/history/cli.mjs`'s `OP_OF_VERB` literal (Task 19). Task 19 already maps `doctor --adopt` to the `adopt` op.
 - Test: `server/test/history-recover.test.ts` (Task 25 created it):
@@ -24155,7 +24359,7 @@ registered, and the executor's agreement with lib planReplay."
   - Task 6 (`lib.mjs`): `decideBind('adopt', f: BindFacts): { ok: true; storeId: string } | { ok: false; rc: 2 | 5; reason: string; detail: string }`. `BindFacts` is `StoreFacts` plus `codeVersion`, `storedVersion`, `storeIdArg`, `journalDirs` and `backup`. Its adopt arm decides the newer-schema refusal (RB17): `storedVersion` above `codeVersion` is rc 2 `adopt-refused`, with the detail `history.db is schema <n>; this build knows <m>: adopt it with the build that wrote it`, and a `storedVersion` that is not a value is rc 5 `store-unmeasured`.
   - Task 24 (`store.mjs`): `adoptStore(home, { nowMs }): { storeId: string; writer: string }`.
   - Task 19 (`store.mjs`): `storedVersionAt(dbFile): Presence<number>`, history.db's own user_version on a read-only handle.
-  - Task 19 (`sweep.mjs`, `runOpPass`):
+  - Task 19 (`sweep.mjs`, `opPass`, reached through B1's `runOpPass` wrapper):
     - its locals `home`, `P`, `deps`, `out`, `parsed`, `args` (the op's parsed `OpArgs`) and `result(rc, reason)`;
     - `const BINDING_OPS = new Set(BIND_KINDS)`;
     - `OP_VERBS`;
@@ -24170,7 +24374,7 @@ registered, and the executor's agreement with lib planReplay."
   - `export async function bindingPass(home: string, P: HistoryPaths, op: string, args: OpArgs, deps: SweepDeps, out: (line: string) => void): Promise<{ rc: number; reason?: string }>`. It dispatches `adopt` to `adoptArm`. Tasks 27 and 28 put their own dispatch lines (`restore`, `rebuild`) first in its body. Any other op answers `{ rc: 2, reason: 'bad-args' }`.
   - `export async function adoptArm(home, P, args, deps, out): Promise<{ rc: number; reason?: string }>`.
   - Module-private `bindFactsOf(home, role, deps, extra = {}): BindFacts` and `finishBind(home, P, role, deps, out, now): { rc: number; reason?: string }`. `bindFactsOf` measures `storedVersion` with Task 19's `storedVersionAt`, after `measureStoreFacts` (whose `-wal`/`-shm` reads must come before any read-only open). `finishBind` opens the store, flushes the bind record and runs the release journal half. Tasks 27 and 28 reuse both.
-  - `runOpPass` calls `bindingPass` for every `BINDING_OPS` member, under the lock, after the gate, and BEFORE `openStore`.
+  - `opPass` calls `bindingPass` for every `BINDING_OPS` member, under the lock, after the gate, and BEFORE `openStore`.
   - `OP_VERBS` gains `'adopt'`.
   - Output lines, before the last `{"rc":…}` line:
     - `history-sweep: <reason>: <detail>` on a refusal;
@@ -24371,7 +24575,7 @@ The newer-schema case is red the same way, at its `lastRc` (`bad-args` where `ad
 
 Quoted reds are measured, not contractual.
 
-- [ ] **Step 3: Write the binding section of `ccd/history/sweep.mjs`.** Insert it directly above the line `export async function tick(db, ctx) {`, after Task 25's recovery section:
+- [ ] **Step 3: Write the binding section of `ccd/history/sweep.mjs`.** Insert it directly after Task 25's recovery section and above the `/**` that opens `What one tick of a bound, open store carries` (immediately before `tick`'s two docblocks; never between them and `export async function tick(db, ctx) {`, which would detach `tick`'s doc comment), ending it with a blank line:
 
 ```js
 // ── The binding verbs: doctor --adopt here; --restore and --rebuild from W1-B2 Tasks 27 and 28 (spec §8.4) ──────
@@ -24495,9 +24699,9 @@ export async function bindingPass(home, P, op, args, deps, out) {
 }
 ```
 
-- [ ] **Step 4: Call it from `runOpPass`, and admit the verb.**
+- [ ] **Step 4: Call it from `opPass`, and admit the verb.**
 - In `const OP_VERBS = new Set([…]);`, add the member `'adopt'` as the set's last member.
-- In `runOpPass`, the binding verbs run before `openStore`. Task 19 left a branch for them, directly above `  const handler = OP_HANDLERS[parsed.op];`, after the lock-take journal half, the statfs check that answers `store-unreachable` and RB6's `recoverStepAt(P.dbFile) === 'open'` re-run of the gate:
+- In `opPass` (Task 19's body; B1's exported `runOpPass` wrapper only calls it and is not edited), the binding verbs run before `openStore`. Task 19 left a branch for them, directly above `  const handler = OP_HANDLERS[parsed.op];`, after the lock-take journal half, the statfs check that answers `store-unreachable` and RB6's `recoverStepAt(P.dbFile) === 'open'` re-run of the gate:
 
 ```js
   if (BINDING_OPS.has(parsed.op)) {
@@ -24519,7 +24723,7 @@ export async function bindingPass(home, P, op, args, deps, out) {
   }
 ```
 
-`args` is `runOpPass`'s parsed `OpArgs`, the value its `parseOpVerbArgs` check produced (Task 19 names it `args`).
+`args` is `opPass`'s parsed `OpArgs`, the value its `parseOpVerbArgs` check produced (Task 19 names it `args`).
 
 - The CLI door: run `grep -n "'--adopt'" ccd/history/cli.mjs`. It must show the entry Task 19 wrote in `OP_OF_VERB`, which maps `doctor --adopt` to the `adopt` op with no argument. If it prints nothing, add the entry `'--adopt': 'adopt',` to that object literal, directly below its `'--migrate'` entry.
 
@@ -24549,7 +24753,8 @@ want = {
     'node:fs': ['rmSync'],
 }
 for mod, names in want.items():
-    m = re.search(r"import \{([^}]*)\} from '" + re.escape(mod) + r"';", s)
+    # B1's node:fs import carries a default binding before its braces (`import fs, {`), so one is allowed.
+    m = re.search(r"import (?:[A-Za-z_$][\w$]*,\s*)?\{([^}]*)\} from '" + re.escape(mod) + r"';", s)
     assert m, f'no named import from {mod}'
     have = {n.strip().split(' as ')[-1] for n in m.group(1).split(',') if n.strip()}
     missing = [n for n in names if n not in have]
@@ -26120,7 +26325,7 @@ git commit -m "feat(history): doctor --rebuild from store.id, agreeing journal h
 **Files:**
 - Modify: `ccd/history/derive.mjs` (B2 Task 8 created it; Tasks 9 and 21 extend it; it has no entry guard). Append one block holding `redactNodeFields`, `reparseFailClosed` and `rederiveGistsFor` at the end of the file.
 - Modify: `ccd/history/sweep.mjs`:
-  - In `reindexForValues` (B1 Task 23), add one call directly below its line `  for (const v of owed) for (const r of f.match.all(ftsPhrase(v))) ids.add(Number(r.rowid));`.
+  - In `reindexForValues` (B1 Task 23; B1's `export async function reindexForValues(db, ctx, values, complete)`), add one call directly below its line `  for (const v of owed) for (const unit of secretUnits(v)) for (const r of f.match.all(ftsPhrase(unit))) ids.add(Number(r.rowid));` (B1's ⟦D:history-reindex-by-units-and-complete-loads⟧ searches by unit) and above its line `  if (ids.size === 0 && complete !== true) return 0;`.
   - Insert one block holding `RECOVER_NODE_BATCH`, `RECOVER_NODES_CURSOR_RE`, `RECOVER_REBUILT_STEP`, `recoverPairIdx`, `openRecoverVersion`, `recoverNodesBatch` and `recoverReindex`, directly above the entry guard and below Task 28's block.
   - Replace the body of Task 25's placeholder executor `recoverReindexChunk` so it adapts `recoverReindex` to Task 25's executor contract. The `RECOVER_EXECUTORS` literal itself is unchanged.
   - Add any missing import names (Step 5).
@@ -26132,17 +26337,18 @@ git commit -m "feat(history): doctor --rebuild from store.id, agreeing journal h
   - Task 9 (`derive.mjs`): `rerollParents(db, ictx, nodeIds: readonly string[]): number`, and the module-private `topicsOfColumn(text): string[]` (a node's `topics` column as a list, JSON or one per line).
   - Task 8: `ictx.isBusy(e)` and `ictx.budgetLeft(budget)` (makeIngestCtx's object), and B1's `parser_crash` counter, which `deriveLeaves` bumps for a derive throw that is not busy.
   - Task 23 (`sweep.mjs`):
-    - `ftsRebuildJob(db, ictx, { stepVersion: number; budget: object; baseline?: FkRow[] | null }): { done: boolean; refused: null | { at: 'chunk' } | { at: 'completion'; rows: FkRow[] } }` (RB7's shape: a chunk whose COMMIT failed a foreign-key check, or the completion's baseline diff; started with no baseline, the completion diff never refuses). It is the resumable FTS self-heal: in its first chunk both FTS tables are dropped and recreated, then every blob is re-indexed from blob_id 0 with the full pair index, `nodes_fts` is rebuilt from `nodes`, and merge steps run until `('fts-merge', 1)` completes; only then does it answer `done`. It answers `done: false` with `refused: null` only when its budget ran out. It RESUMES the newest open rebuild of ANY version (`openFtsRebuild`), ignoring `stepVersion` when one is open. It opens its own transactions.
+    - `async ftsRebuildJob(db, ictx, { stepVersion: number; budget: object; baseline?: FkRow[] | null }): Promise<{ done: boolean; refused: null | { at: 'chunk' } | { at: 'completion'; rows: FkRow[] } }>` (awaited; RB7's shape: a chunk whose COMMIT failed a foreign-key check, or the completion's baseline diff; started with no baseline, the completion diff never refuses). It is the resumable FTS self-heal: in its first chunk both FTS tables are dropped and recreated, then every blob is re-indexed from blob_id 0 with the full pair index, `nodes_fts` is rebuilt from `nodes`, and merge steps run until `('fts-merge', 1)` completes; only then does it answer `done`. It answers `done: false` with `refused: null` only when its budget ran out. It RESUMES the newest open rebuild of ANY version (`openFtsRebuild`), ignoring `stepVersion` when one is open. It opens its own transactions.
     - `openFtsRebuild(db): null | { version: number; state: object }`;
     - lib's `FTS_REBUILD_STEP` (`'fts-rebuild'`), the rebuild step's one spelling, which Task 23 moves into lib.
   - Task 25 (`sweep.mjs`):
     - `RECOVER_EXECUTORS`, a frozen map from phase name to executor, whose `reindex` entry is the placeholder `recoverReindexChunk(db, run, cursor)`;
     - the parsed cursor `RecoverCursor` (Task 7: `{ phase, file, offset, blobId, pairsAdded }`), whose `pairsAdded` is set when the index pass inserted a redact pair the store lacked.
     - the executor contract: `(db, run, cursor) => { cursor, moved, phaseDone }`, or a Promise of it, called by `recoveryStep` outside any transaction. `run.ectx` carries `home`, `paths`, `ids`, `now`, `homes`, `out`, `deps` and `replay: true`; `run.budget` is the run budget. An answer of `{ moved: false, phaseDone: false }` ends the step for this pass (Task 25's `recoveryStep`); a throw is rolled back, counted `recover_chunk_failed` and ends it too.
-    - This task's `recoverReindex(db, ctx, cur, budget) => { cur, done, moved }` keeps its own shape; `recoverReindexChunk` adapts it (Step 5).
+    - This task's `recoverReindex(db, ctx, cur, budget) => Promise<{ cur, done, moved }>` keeps its own shape; `recoverReindexChunk`, now async, adapts it (Step 5).
   - Task 8 (`store.mjs`): `getStep(db, step, version): { cursor: string | null; completedMs: number | null } | null` and `setStep(db, step, version, cursor, completedMs?)`.
   - B1:
-    - `sweep.mjs`: `reindexForValues(db, ctx, values)`, `makeIngestCtx(home, homes, nowMs, ids, floorProbe?)`, `budgetLeft(budget)`.
+    - `sweep.mjs`: `export async function reindexForValues(db, ctx, values, complete)` (four parameters, async, answering the re-indexed blob count; it searches each value by UNIT, `secretUnits(v)`, B1's ⟦D:history-reindex-by-units-and-complete-loads⟧), `makeIngestCtx(home, homes, nowMs, ids, floorProbe?)`, `budgetLeft(budget)`.
+    - `lib.mjs`: `secretUnits(value)` (B1's ⟦D:history-reindex-by-units-and-complete-loads⟧: the value itself when it is one `[A-Za-z0-9_-]+` run, else each run of 12 or more characters), which `rederiveGistsFor` searches by, as `reindexForValues` does.
     - `lib.mjs`: `makePairIndex`, `redactField`, `ftsPhrase`, `REDACTED_MARK`.
     - `store.mjs`: `withTx`, `bump`.
   - Task 27 and 28's `rr*` test helpers; Task 25's faults-preload knob `HISTORY_TEST_THROW_SQL=<substring>`.
@@ -26152,7 +26358,7 @@ git commit -m "feat(history): doctor --rebuild from store.id, agreeing journal h
     - `export function reparseFailClosed(db, ictx, nodeIds: readonly string[]): number`. `refreshLeaf` per leaf, then one `rerollParents` when any changed (an `'updated'` or a `'failed'` answer: Task 21's refreshLeaf records a parser throw inside `leafFields` itself, writing the leaf `parse-failed`). A throw that escapes `refreshLeaf` (not busy) is counted `parser_crash` and skipped, and the caller's `redactNodeFields` rewrites it; nothing retries either on a later pass. Answers how many leaves changed.
     - `export function rederiveGistsFor(db, ictx, values: readonly string[]): number`.
   - `sweep.mjs`:
-    - `export function recoverReindex(db, ctx, cur, budget): { cur; done: boolean; moved: boolean }`. It answers `moved: false` with `done: false` only when the run budget was spent before it did any work;
+    - `export async function recoverReindex(db, ctx, cur, budget): Promise<{ cur; done: boolean; moved: boolean }>` (async: it awaits Task 23's `ftsRebuildJob`). It answers `moved: false` with `done: false` only when the run budget was spent before it did any work;
     - module-private `RECOVER_NODE_BATCH = 64`, `RECOVER_NODES_CURSOR_RE`, `RECOVER_REBUILT_STEP = 'recover-merge'`, `recoverPairIdx(db)`, `openRecoverVersion(db)`, `recoverNodesBatch(db, rctx, version)`;
     - two derivation rows per recovery: `('recover-nodes', <recover version>)`, with cursor `leaves:<rowid>` or `condensed:<rowid>`, and `('recover-merge', <recover version>)`, completed once the FTS rebuild (its merge steps included) completed for this step. Status never reads either.
     - Before its rebuild starts, any OTHER open `('fts-rebuild', v)` row (a repair the restored file carried) is deleted, so `ftsRebuildJob` starts this step's own rebuild from blob 0 rather than resume a job whose earlier blobs were indexed without the replayed pairs.
@@ -26437,6 +26643,9 @@ export function reparseFailClosed(db, ictx, nodeIds) {
 /** The nodes whose gist, topics or refs hold one of `values`, re-derived with ictx.pairIdx (§6.2).
  *  - They are found by a QUOTED-PHRASE match on nodes_fts (ftsPhrase), which FTS5 tokenises as the index did. A bare
  *    MATCH of a value holding '-' is a syntax error ("no such column", measured on 22.16.0).
+ *  - Each value is searched by UNIT (lib's secretUnits: the value when it is one run, else each of its 12+-char
+ *    runs), as B1's reindexForValues searches blobs_fts (B1's ⟦D:history-reindex-by-units-and-complete-loads⟧): redaction matches by unit, so a node holding
+ *    only one segment of a multi-run value is found too.
  *  - A leaf whose summary is still stored is re-derived (reparseFailClosed: same id, parents re-rolled, a throw
  *    counted and skipped). Every node found, re-derived or not, is then rewritten through redactNodeFields.
  *  - reindexForValues calls this BEFORE it advances its mark, so a pass that dies between the two does both again on
@@ -26450,11 +26659,13 @@ export function rederiveGistsFor(db, ictx, values) {
   const reparse = new Set();
   const rewrite = new Set();
   for (const v of values) {
-    for (const r of match.all(ftsPhrase(v))) {
-      const n = nodeAt.get(r.rid);
-      if (n === undefined) continue;
-      if (n.kind !== 'condensed' && n.readable === 1) reparse.add(n.node_id);
-      else rewrite.add(n.node_id);
+    for (const unit of secretUnits(v)) {
+      for (const r of match.all(ftsPhrase(unit))) {
+        const n = nodeAt.get(r.rid);
+        if (n === undefined) continue;
+        if (n.kind !== 'condensed' && n.readable === 1) reparse.add(n.node_id);
+        else rewrite.add(n.node_id);
+      }
     }
   }
   const leaves = [...reparse].sort();
@@ -26469,10 +26680,10 @@ export function rederiveGistsFor(db, ictx, values) {
 }
 ```
 
-  - `derive.mjs` imports: add `redactField` and `ftsPhrase` to its `./lib.mjs` import, and `withTx` and `bump` to its `./store.mjs` import, each only if missing (Task 8's `deriveLeaves` already uses both). `refreshLeaf` (Task 21), `rerollParents` and `topicsOfColumn` (Task 9) are this module's own.
+  - `derive.mjs` imports: add `redactField`, `ftsPhrase` and `secretUnits` to its `./lib.mjs` import, and `withTx` and `bump` to its `./store.mjs` import, each only if missing (Task 8's `deriveLeaves` already uses both). `refreshLeaf` (Task 21), `rerollParents` and `topicsOfColumn` (Task 9) are this module's own.
 
 - [ ] **Step 5: Call it from `reindexForValues`, and write the recovery reindex phase.**
-  - In `ccd/history/sweep.mjs`, in `reindexForValues`, insert directly below the line `  for (const v of owed) for (const r of f.match.all(ftsPhrase(v))) ids.add(Number(r.rowid));`:
+  - In `ccd/history/sweep.mjs`, in `reindexForValues` (B1's is `export async function reindexForValues(db, ctx, values, complete)`), insert directly below the line `  for (const v of owed) for (const unit of secretUnits(v)) for (const r of f.match.all(ftsPhrase(unit))) ids.add(Number(r.rowid));` and above the line `  if (ids.size === 0 && complete !== true) return 0;` (`ctx` and `owed` are in scope there):
 
 ```js
   // §6.2 (SE4): the gists, topics and refs that hold a newly learned value are re-derived BEFORE the mark below
@@ -26565,8 +26776,9 @@ function recoverNodesBatch(db, rctx, version) {
  *  Each sub-step keeps its own derivation row and opens its own transactions, so this must run outside any
  *  transaction, and those cursors commit after each batch (⟦D:history-reindex-subcursor-idempotent⟧). Its progress
  *  lives in those rows, so it returns the recovery cursor unchanged. B4 inserts its export phases before this one
- *  in Task 25's phase table. */
-export function recoverReindex(db, ctx, cur, budget) {
+ *  in Task 25's phase table. It is async because Task 23's ftsRebuildJob is (B1's ftsTextOfBlob is async), and it
+ *  awaits that job between, never inside, its sub-steps' transactions. */
+export async function recoverReindex(db, ctx, cur, budget) {
   if (db.isTransaction) throw new Error('recoverReindex: called inside a transaction; each sub-step opens its own');
   if (cur.pairsAdded !== true) return { cur, done: true, moved: true };
   const version = openRecoverVersion(db);
@@ -26586,7 +26798,7 @@ export function recoverReindex(db, ctx, cur, budget) {
           db.prepare('DELETE FROM derivation_state WHERE step = ? AND completed_ms IS NULL AND version <> ?').run(FTS_REBUILD_STEP, version);
         });
       }
-      const rebuilt = ftsRebuildJob(db, rctx, { stepVersion: version, budget: b });
+      const rebuilt = await ftsRebuildJob(db, rctx, { stepVersion: version, budget: b });
       if (rebuilt.refused !== null) {
         const why = rebuilt.refused.at === 'completion'
           ? `${rebuilt.refused.rows.length} new foreign-key violation(s) at completion`
@@ -26611,9 +26823,9 @@ export function recoverReindex(db, ctx, cur, budget) {
  *  derivation rows, so the recovery cursor comes back unchanged; `done` ends the phase. recoverReindex answers
  *  `{ moved: false, done: false }` only when the run budget was spent before it did any work; recoveryStep ends the
  *  step for this pass on that answer (Task 25's contract, and its budget check before every chunk), so it is never
- *  called again in a spin. */
-function recoverReindexChunk(db, run, cursor) {
-  const r = recoverReindex(db, run.ectx, cursor, run.budget);
+ *  called again in a spin. It answers a Promise, which recoveryStep awaits (Task 25's executor contract). */
+async function recoverReindexChunk(db, run, cursor) {
+  const r = await recoverReindex(db, run.ectx, cursor, run.budget);
   return { cursor: r.cur, moved: r.moved, phaseDone: r.done };
 }
 ```
@@ -26625,7 +26837,7 @@ function recoverReindexChunk(db, run, cursor) {
   - Check the files:
 
 ```bash
-grep -c '^export function recoverReindex(' ccd/history/sweep.mjs      # expect 1
+grep -c '^export async function recoverReindex(' ccd/history/sweep.mjs   # expect 1
 grep -c 'rederiveGistsFor(db, ctx, owed);' ccd/history/sweep.mjs       # expect 1
 grep -c '^export function rederiveGistsFor(' ccd/history/derive.mjs    # expect 1
 grep -c '^export function reparseFailClosed(' ccd/history/derive.mjs   # expect 1
@@ -26676,13 +26888,13 @@ cp "$SCRATCH/sweep.mjs.orig" ccd/history/sweep.mjs
 SCRATCH="$(git rev-parse --show-toplevel)/.superpowers/sdd/history-w1-b2/scratch"; mkdir -p "$SCRATCH"
 cp ccd/history/derive.mjs "$SCRATCH/derive.mjs.orig"
 # M2 — O47's second CONTROL: the node lookup made with a bare MATCH.
-grep -c '^    for (const r of match.all(ftsPhrase(v))) {$' ccd/history/derive.mjs   # expect 1
-sed -i 's/^    for (const r of match.all(ftsPhrase(v))) {$/    for (const r of match.all(v)) {/' ccd/history/derive.mjs
+grep -c '^      for (const r of match.all(ftsPhrase(unit))) {$' ccd/history/derive.mjs   # expect 1
+sed -i 's/^      for (const r of match.all(ftsPhrase(unit))) {$/      for (const r of match.all(unit)) {/' ccd/history/derive.mjs
 (cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'a value holding - and _')
 cp "$SCRATCH/derive.mjs.orig" ccd/history/derive.mjs
 ```
 
-  - M2 expected: red. The pass that learns the value throws `no such column`, so `rrTickUntil` fails with `expected 1 to be +0` on the pass's exit code.
+  - M2 expected: red. The value holding `-` and `_` is one `[A-Za-z0-9_-]+` run, so `secretUnits` answers it whole; the pass that learns it throws `no such column`, so `rrTickUntil` fails with `expected 1 to be +0` on the pass's exit code.
 
 ```bash
 SCRATCH="$(git rev-parse --show-toplevel)/.superpowers/sdd/history-w1-b2/scratch"; mkdir -p "$SCRATCH"
@@ -26761,7 +26973,7 @@ git commit -m "feat(history): redaction through recovery: reindex phase over nod
 - Test: `server/test/history-maint.test.ts` (Task 19 created it; Tasks 20-23 appended to it).
   - Append one import block after the file's last import statement.
   - Append the `gt` helpers and the describe `'C64: every writing form, both doors (W1-B2 Task 30)'` at the end of the file.
-- Modify only if a row of the table is red for a gate reason: `ccd/history/cli.mjs` (`runOpVerb`, Task 19) and `ccd/history/sweep.mjs` (`runOpPass`). Step 4 says what the fix may be.
+- Modify only if a row of the table is red for a gate reason: `ccd/history/cli.mjs` (`runOpVerb`, Task 19) and `ccd/history/sweep.mjs` (`opPass`, Task 19's body behind B1's `runOpPass` wrapper). Step 4 says what the fix may be.
 
 **Interfaces:**
 - Consumes:
@@ -26782,7 +26994,7 @@ git commit -m "feat(history): redaction through recovery: reindex phase over nod
 **Spec:**
 - §8.4 "Speed bumps, labelled as such" and "They are decided once and executed twice".
 - §5.1, the published direct door.
-- §9.6, the remedy texts that name B2's verbs.
+- §9.6, the remedy texts that name B2's verbs. Measured at B1's merged tip: `HEALTH_REMEDIES` spells `prune`, `doctor --restore`, `doctor --adopt`, `doctor --migrate`, `doctor --repair` and `status --json` as whole commands; `--rebuild` appears only inside `doctor --restore and --rebuild arrive with W1-B2 …`, `--backup` nowhere, and no `<file>`. The remedies' "arrive with W1-B2" wording (lib.mjs's `HEALTH_REMEDIES` and `remedyFor`, and B1's pins over them) is not rewritten by this plan; that is an open issue for the PR body, not a gate fix. This task's case therefore adds `doctor --backup` and `doctor --rebuild` to the commands it drives, and gives the bare `doctor --restore` a backup name.
 - §10.1: the TTY gate has no seam, so these cases run under node-pty.
 - Pin: **C64** (the CLI door for every form, and the direct door for B2's forms), with a row per form for the `recovering` refusal. The two `recall-off` forms are W2's verb (C66 and C67 cover their B2 preflight), so their rows join this table in W2.
 - Departures:
@@ -27072,14 +27284,21 @@ describe('C64: every writing form, both doors (W1-B2 Task 30)', () => {
     for (const text of Object.values(gtLib.HEALTH_REMEDIES)) {
       for (const m of text.matchAll(/ccrc history ([a-z][a-z-]*(?: --[a-z][a-z-]*(?: <file>)?)*)/g)) found.add(m[1]!);
     }
-    expect([...found], 'CONTROL: the remedies name the B2 operator verbs').toEqual(expect.arrayContaining([
-      'prune', 'doctor --adopt', 'doctor --backup', 'doctor --migrate', 'doctor --rebuild', 'doctor --repair', 'doctor --restore <file>',
+    // Measured on B1's merged texts, under this regex: prune, doctor --restore, doctor --adopt, doctor --migrate,
+    // status --json and doctor --repair. B1 names --rebuild only inside "doctor --restore and --rebuild …" (the regex
+    // stops at " and") and --backup nowhere, and spells no `<file>`: a file-bearing restore text is built by
+    // remedyFor, not held in HEALTH_REMEDIES.
+    expect([...found], 'CONTROL: the remedies name the operator verbs B1 spells').toEqual(expect.arrayContaining([
+      'prune', 'doctor --adopt', 'doctor --migrate', 'doctor --repair', 'doctor --restore',
     ]));
+    for (const extra of ['doctor --backup', 'doctor --rebuild']) found.add(extra);   // B1's texts name them only inside prose, or not at all
     for (const cmd of found) {
-      // `<file>` is the bare backups name B1 Task 28's remedy test pins. A bare `prune` names the verb; the operator
+      // `<file>` is the bare backups name B1 Task 28's remedy test pins; a bare `doctor --restore` gets it too, or the
+      // argument grammar would answer bad-args before the gate. A bare `prune` names the verb; the operator
       // adds the age (the floor is 30 days) and --apply. Without --apply it is a dry run, which passes every bump, so
       // the row could not reach apply-in-session; CLAUDECODE is decided before the TTY bump.
       const args = cmd.split(' ').map((a) => (a === '<file>' ? GT_BACKUP : a));
+      if (cmd === 'doctor --restore') args.push(GT_BACKUP);
       if (args[0] === 'prune' && args.length === 1) args.push('--older-than', '30d', '--apply');
       if (args[0] === 'status') {
         const s = gtH.runCli(box, [...args.filter((a) => a !== '--json'), '--json']);
@@ -27105,7 +27324,7 @@ describe('C64: every writing form, both doors (W1-B2 Task 30)', () => {
 - [ ] **Step 4: If a row is red, the fix is a gate fix, never a weaker test.**
   - `decideOpGate` (B1, `lib.mjs`) is the only decider. Both doors call it on the same `formOf(op, args)`:
     - the CLI in `runOpVerb`, before it spawns the shim (Task 19);
-    - the sweep in `runOpPass`, before the binding hook and before `openStore` (B1 Task 25).
+    - the sweep in `opPass` (behind B1's `runOpPass` wrapper), before the binding hook and before `openStore` (B1 Task 25, split by Task 19).
   - So a red row names one of these:
     - a door that does not call it;
     - a door that calls it after something that writes (for example the lock-take journal half, or an op marker);
@@ -27115,7 +27334,7 @@ describe('C64: every writing form, both doors (W1-B2 Task 30)', () => {
   - A row that answers a precondition word before a bump word (for example `restore-refused` before `apply-in-session`) means the door parsed a precondition before the gate. Only the argument grammar may come before the gate: `parseOpVerbArgs` (Task 6) answers `bad-args`, `bad-id`, `older-than-floor` and `restore-refused` for a bad name, and this table's arguments are valid.
 
 - [ ] **Step 5: Mutations, each measured red, then restored: the gate runs in the sweep, not only in the CLI (C64's CONTROL), and so does its `recovering` input.** Run every block from the repository root, and never use `git stash`.
-  - Both mutants rewrite every CALL of `decideOpGate` in `sweep.mjs` (`decideOpGate(`; the import line names it without a parenthesis), so they hold however many times Task 19's `runOpPass` calls it: once before the role check, and again once the recovering probe has measured.
+  - Both mutants rewrite every CALL of `decideOpGate` in `sweep.mjs` (`decideOpGate(`; the import line names it without a parenthesis), so they hold however many times Task 19's `opPass` calls it: once before the role check, and again once the recovering probe has measured.
 
 ```bash
 SCRATCH="$(git rev-parse --show-toplevel)/.superpowers/sdd/history-w1-b2/scratch"; mkdir -p "$SCRATCH"
@@ -27188,6 +27407,7 @@ git commit -m "test(history): C64, every writing form through the CLI and the di
 - Modify: `.github/workflows/ci.yml`. In the `node-floor` job's `Test` step, add one heredoc line directly above the closing `          EOF`. B1 Task 36 and B2 Tasks 4, 8, 10, 19 and 25 add lines to the same heredoc.
 - Modify: `server/test/ws-expire-prose.test.ts:19` (f7e51156f) `const SKILLS = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill'];`, edited in place.
 - Modify: `server/test/ccrc-api-closed.test.ts:16` (f7e51156f) `  for (const dir of ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill']) {`, edited in place.
+- Modify: `server/test/expiry-lane-prose.test.ts` `    const skills = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill'];` and `server/test/auth-passkey.test.ts`'s `THE SWEEP` corpora (`path.join(root, 'reviewer-skill')];`), each edited in place, by content (both exist at B1's merged tip).
 - Test: `server/test/history-skill.test.ts`, `server/test/license.test.ts`, `server/test/single-definition.test.ts`, `server/test/ci-pipeline.test.ts`.
 
 **Interfaces:**
@@ -27214,7 +27434,7 @@ git commit -m "test(history): C64, every writing form through the CLI and the di
   - ⟦D:history-coverage-this-box⟧ (the §9 sentence)
   - ⟦D:history-reasons-by-exit⟧
   - ⟦D:history-license-sidecars-generalised⟧ (NEW). B1's sha256 and PATHSPEC cases read the one path `ccd/history/LICENSE.lossless-claw`. The skill brings the second sidecar §12 names, so both cases walk every sidecar under `ccd/`. The walk stays under `ccd/`: `server/test/` holds none, by §12's rev 3.3 exception, which a case of its own pins.
-  - ⟦D:history-skill-joins-skill-scans⟧ (NEW). §8.5 names neither scan. The two standing skill-corpus scans, which forbid `ws-expire` and forbid running `curl` in a code block, list the three skill directories by hand, so the fourth directory is added to both.
+  - ⟦D:history-skill-joins-skill-scans⟧ (NEW). §8.5 names none of these scans. The four standing skill-corpus scans, which forbid `ws-expire`, forbid running `curl` in a code block, forbid naming `expire-lane-live`, and require every `/api/` path a skill names to be reachable, list the three skill directories by hand, so the fourth directory is added to all four.
 
 - [ ] **Step 1: Write the failing license pins.** All edits go in `server/test/license.test.ts`, inside B1's appended block.
   - Directly above the line `interface ProvenanceEntry { item: string; ours: string; upstream: string; commit: string; sha: string; changed: string }`, insert:
@@ -27802,16 +28022,20 @@ Expected: all green. `history-skill.test.ts` shows 14 passed on Linux; on darwin
 
 Expected: green. That includes the new CONTROL and all six `it.each` rows. The skill names no `/history-off`, `/history-max-gb`, `/history-steer-off`, `/history-steer-live`, `/steer-on` or `/headless-on`, so the holders lists are unchanged.
 
-- [ ] **Step 12: Add the skill to the two standing skill-corpus scans** (⟦D:history-skill-joins-skill-scans⟧).
+- [ ] **Step 12: Add the skill to the four standing skill-corpus scans** (⟦D:history-skill-joins-skill-scans⟧). Each lists the three skill directories by hand; at B1's merged tip there are four such scans, not two. Anchor each by its quoted content.
   - `server/test/ws-expire-prose.test.ts:19` (f7e51156f): replace `const SKILLS = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill'];` with `const SKILLS = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill', 'ccd/history-skill'];`.
   - `server/test/ccrc-api-closed.test.ts:16` (f7e51156f): replace `  for (const dir of ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill']) {` with `  for (const dir of ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill', 'ccd/history-skill']) {`.
+  - `server/test/expiry-lane-prose.test.ts` (no skill file may name `expire-lane-live`): replace `    const skills = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill'];` with `    const skills = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill', 'ccd/history-skill'];`.
+  - `server/test/auth-passkey.test.ts`, the case `THE SWEEP: every /api/ path either skill corpus names is reachable by its own credential`: replace its two lines
+    `    const corpora = [path.join(root, 'coordinator-skill'), path.join(root, 'worker-skill'),` and `      path.join(root, 'reviewer-skill')];` with `    const corpora = [path.join(root, 'coordinator-skill'), path.join(root, 'worker-skill'),` and `      path.join(root, 'reviewer-skill'), path.join(root, 'history-skill')];`.
   - Run:
 
 ```bash
-(cd server && ./node_modules/.bin/vitest run test/ws-expire-prose.test.ts test/ccrc-api-closed.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ws-expire-prose.test.ts test/ccrc-api-closed.test.ts test/expiry-lane-prose.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/auth-passkey.test.ts -t 'THE SWEEP')
 ```
 
-Expected: green. The history skill names no `ws-expire`, runs no `curl` in its one indented block, and calls no `ccrc-api` command, so the closed route list is unchanged.
+Expected: green. The history skill names no `ws-expire` and no `expire-lane-live`, runs no `curl` in its one indented block, calls no `ccrc-api` command and names no `/api/` path, so the closed route list is unchanged. The scans' emptiness guards (`> 3` files, and the passkey sweep's own) stay satisfied.
 
 - [ ] **Step 13: Mutation pins: each guard goes red when deleted, then green again.** From the repo root:
 
@@ -27869,7 +28093,8 @@ Expected: no output, exit 0.
 ```bash
 git add ccd/history-skill/SKILL.md ccd/history-skill/LICENSE.lossless-claw ccd/history/PROVENANCE \
   server/test/history-skill.test.ts server/test/license.test.ts server/test/single-definition.test.ts \
-  server/test/ws-expire-prose.test.ts server/test/ccrc-api-closed.test.ts README.md .github/workflows/ci.yml
+  server/test/ws-expire-prose.test.ts server/test/ccrc-api-closed.test.ts server/test/expiry-lane-prose.test.ts \
+  server/test/auth-passkey.test.ts README.md .github/workflows/ci.yml
 git commit -m "feat(history): the ccrc-history skill with its MIT sidecar, PROVENANCE V7 and the C16 exit pins"
 ```
 
@@ -28642,12 +28867,14 @@ git commit -m "feat(history): install the ccrc-history skill into every rostered
 ### Task 33: README's history section, its in-place prose repairs, and CLAUDE.md's README-size figure
 
 **Files:**
-- Modify: `README.md`. Line numbers are measured at f7e51156f. B1 edits README only by appending its third-party paragraph at the end (Task 31 rewrote it in place), so these numbers hold at the B2 base. Re-anchor by the quoted text anyway.
-  - `:463` (in place);
-  - a timer-table row after `:481`;
-  - `:515` (in place);
-  - `:565` (in place);
-  - a doctor-table row after `:581`;
+- Modify: `README.md`. Line numbers are measured at f7e51156f and do NOT hold at the B2 base: B1's merged commits edited README at (B1-tip numbering) `:171` (FTS5 needs Node 22.16), `:494` (a sentence after the timer table naming `ccd-history-sweep.timer`, final review FR3), `:1104` (uninstall preserves `~/.ccrc/history`) and `:5069` (the helper list names `ccd-history-sweep`), besides its third-party paragraph, and main's own merges moved lines too (B1's tip has 5833 lines). Re-anchor every edit by its quoted text; the B1-tip line is given beside each where it was measured.
+  - `:450` (in place; B1 tip `:450`);
+  - `:463` (in place; B1 tip `:463`);
+  - a timer-table row after `:481` (B1 tip `:481`);
+  - the sentence after the timer table that B1 added (B1 tip `:494`), in place: its `ccd-history-sweep.timer` clause moves into the new row;
+  - `:515` (in place; B1 tip `:516`);
+  - the server-role SKIP list's last line (B1 tip `:566`), in place;
+  - a doctor-table row after `:581` (B1 tip `:584`);
   - `:1103-1104` (in place);
   - `:1316` (in place);
   - `:3040` (in place);
@@ -28664,12 +28891,12 @@ git commit -m "feat(history): install the ccrc-history skill into every rostered
 **Spec:**
 - §10.5 "Edited files" assigns B2 the README history section ("with the verbs and the skill") and CLAUDE.md's re-measured README figure. §9.5 (macOS answers 9). §6.9 (coverage).
 - Departures:
-  - ⟦D:history-readme-tables-name-the-sweep⟧ (NEW). §10.5 assigns README's edits by PR and names neither table. B1 ships the `ccd-history-sweep.timer` and doctor's `history` check without a row in README's timer table, doctor table or server-role SKIP list, so B2 adds the two rows and the one word with its section.
+  - ⟦D:history-readme-tables-name-the-sweep⟧ (NEW). §10.5 assigns README's edits by PR and names neither table. B1 ships the `ccd-history-sweep.timer` and doctor's `history` check without a row in README's timer table, doctor table or server-role SKIP list; it names the timer only in one sentence after the timer table ("outside the table", B1's final review FR3). So B2 adds the two rows and the one word with its section, and moves that sentence's clause into the timer row, keeping its warning that the store holds what a session printed, secrets included.
   - ⟦D:history-skill-literal-path⟧ (the section spells the literal path).
   - ⟦D:history-coverage-this-box⟧.
   - B2 adds no CLAUDE.md SAFETY line. B1 Task 36's bullet already names `ccrc history … --apply` and the binding forms.
 
-- [ ] **Step 1: Measure the base.** Run `wc -l < README.md` and note the count as `B`. At f7e51156f plus B1's nine lines it is `5744`. Run `sed -n 10p CLAUDE.md` and note the `N` in `` `README.md` (~N lines) ``. At f7e51156f it is `5700`.
+- [ ] **Step 1: Measure the base.** Run `wc -l < README.md` and note the count as `B`. Run `sed -n 10p CLAUDE.md` and note the `N` in `` `README.md` (~N lines) ``. Both are measured here, at the B2 base, and never copied from this plan: at B1's merged tip (`6a6987532`) they were `B = 5833` and `N = 5800` (B1's commit already moved CLAUDE.md's figure from `~5700` to `~5800`), and main moves on after it.
 
 - [ ] **Step 2: Insert the history section.** The last line of `### Memory guardrails (Linux)` (`:4916`) reads exactly:
 
@@ -28741,7 +28968,19 @@ the journal, and until the sweep has replayed it every other writing verb refuse
     Directly after it, insert:
 
 ```markdown
-| `ccd-history-sweep.timer` | fleet, both | 2 min | copies every rostered home's transcripts into the store `ccrc history` reads ("Session history", below) | `~/.ccrc/history-off` |
+| `ccd-history-sweep.timer` | fleet, both | 2 min | copies every rostered home's transcripts verbatim, secrets a session printed included, into the store `ccrc history` reads ("Session history", below) | `~/.ccrc/history-off` |
+```
+
+  - B1 names the same timer in prose, in the paragraph directly after the table (B1 tip `:494`), on a line that reads whole:
+
+```markdown
+carries on. A `stable` build can predate some of these units; `ccrc version` says what a box runs. Also running on `fleet` and `both` boxes, outside the table: `ccd-history-sweep.timer` (every 2 min), which copies session text verbatim, secrets a session printed included, into `~/.ccrc/history`; its pause file is `~/.ccrc/history-off`.
+```
+
+    With the row in the table that sentence is false ("outside the table") and repeats the row, so replace the line, in place (one line for one, no line added or removed), with:
+
+```markdown
+carries on. A `stable` build can predate some of these units; `ccrc version` says what a box runs.
 ```
 
   - The doctor table's graphify row (`:581`) reads:
@@ -28756,17 +28995,27 @@ the journal, and until the sweep has replayed it every other writing verb refuse
 | `history` | on a `fleet` or `both` box with the history sweep installed (SKIP elsewhere): the last tick and the index lag, the cap and free space, the journal, the export's due and overdue counts and a recovery in progress, each WARN and FAIL with its remedy, all read from `ccrc history status --json` |
 ```
 
-  - The server-role SKIP sentence ends on `:565`, a line whose whole text is the first block below. It follows the line that lists `skills`, `accounts`, `pools` and the rest. Replace it with the second block:
+  - The server-role SKIP sentence ends on a line (B1 tip `:566`; `:565` at f7e51156f, where it was worded differently) whose whole text is the first block below. It follows the line that lists `skills`, `accounts`, `pools` and the rest. Replace it, in place and still one line, with the second block:
 
 ```markdown
-and `timeout`.
+`timeout`, `model-default`, and `jq_regex` (no session hook runs there).
 ```
 
 ```markdown
-`history` and `timeout`.
+`timeout`, `model-default`, `history`, and `jq_regex` (no session hook runs there).
 ```
 
 - [ ] **Step 4: Repair the sentences that become false, in place.** Each pair below is the old line, then its replacement. Every replacement changes words on its own line and adds no line.
+  - `:450` (B1 tip; the same fact as `:463`, stated a paragraph earlier):
+
+```markdown
+for the pinned graph engine and on `diff`, which all four skill installers need. Everything else is
+```
+
+```markdown
+for the pinned graph engine and on `diff`, which all five skill installers need. Everything else is
+```
+
   - `:463`:
 
 ```markdown
@@ -28838,9 +29087,9 @@ and its MIT notice, `LICENSE.lossless-claw`, is copied into every home beside it
 ```
 
 - [ ] **Step 5: Re-measure CLAUDE.md's README figure.** Run `n=$(wc -l < README.md); echo "$n"`.
-  - It must print `B + 54`: 48 for the section with its leading blank line, 2 for the table rows, and 4 for the skills paragraph. On the f7e51156f-plus-B1 base that is `5798`. Any other number means an insertion or an in-place repair added or dropped a line. Fix the edit, never the expectation.
-  - Compute `echo $(( (n + 50) / 100 * 100 ))`. That prints `5800` on that base.
-  - If the result differs from the `N` read in Step 1, change that number in place on `CLAUDE.md:10`. That is one line, and nothing else on it changes. On that base, `(~5700 lines)` becomes `(~5800 lines)`. If the result equals `N`, leave `CLAUDE.md` untouched.
+  - It must print `B + 54`: 48 for the section with its leading blank line, 2 for the table rows, and 4 for the skills paragraph (the `:450`, `:494` and SKIP-line edits are in place). Measured on B1's merged tip, `B = 5833`, so that is `5887`; use the `B` Step 1 measured. Any other number means an insertion or an in-place repair added or dropped a line. Fix the edit, never the expectation.
+  - Compute `echo $(( (n + 50) / 100 * 100 ))`. On B1's tip that prints `5900`.
+  - If the result differs from the `N` read in Step 1, change that number in place on `CLAUDE.md:10`. That is one line, and nothing else on it changes. On B1's tip, `(~5800 lines)` becomes `(~5900 lines)`. If the result equals `N`, leave `CLAUDE.md` untouched. The figures here are examples measured at B1's tip, never values to copy.
 
 - [ ] **Step 6: Run every suite that reads README or CLAUDE.md, and the census.** Foreground, timeout of at least 600000 ms:
 
@@ -28863,12 +29112,12 @@ git commit -m "docs(history): README's ccrc history section, the timer and docto
 
 If `CLAUDE.md` did not change in Step 5, `git add` stages nothing for it, and the commit carries README alone.
 
-### Task 34: SessionStart(fork) is spooled (ruled Q16): `fork` joins the hook's source whitelist in place, `SPOOL_SOURCES` and `EPOCH_CAUSES`; a fork line confirms as a resume line does, at the drain, at a later tick, through a held match and in replay; S11, S14 and DM48
+### Task 34: SessionStart(fork) is spooled (ruled Q16): `fork` joins the hook's source whitelist in place and `SPOOL_SOURCES` (B1's `EPOCH_CAUSES` already holds it); a fork line confirms as a resume line does, at the drain, at a later tick, through a held match and in replay; S11, S14 and DM48
 
 **Files:**
 - Modify: `ccd/session-hook.sh` (citation corpus; B1 added the block). Inside the `# >>> history-spool (spec 2026-10-05 §5.1)` block, ONE code line and FOUR comment lines, each replaced in place by exactly one line. No line is added or removed, so no line below moves and the S6-R11 census is not re-run (spec §10.5's citation-corpus row). Step 6 measures both.
-- Modify: `ccd/history/lib.mjs` (B1-created), in place by content: the `SPOOL_SOURCES` and `EPOCH_CAUSES` declarations and the doc line above them; the comment above `SPOOL_KEYS`; one doc phrase and one line of `parseSpoolLine`; one doc line and one line of `decideEpochLine`.
-- Modify: `ccd/history/lib.d.mts` (B1-created), in place: `SpoolSource`, `EpochCause` and `decideEpochLine`'s `line.src`.
+- Modify: `ccd/history/lib.mjs` (B1-created), in place by content: the `SPOOL_SOURCES` declaration and the doc line above it (the two-line comment of B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ and its `EPOCH_CAUSES` declaration, which already holds `fork`, sit directly below and are not touched); the comment above `SPOOL_KEYS`; one doc phrase and one line of `parseSpoolLine`; one doc line and one line of `decideEpochLine`.
+- Modify: `ccd/history/lib.d.mts` (B1-created), in place: `SpoolSource` and `decideEpochLine`'s `line.src` (B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ already put `fork` in `EpochCause`).
 - Modify: `ccd/history/sweep.mjs` (B1-created), in place by content: `recordHeldMatches`' source filter and its doc line; one doc line each of `applyEpochLine`, `confirmCandidates` and `registryBackfill`. No function is added.
 - Modify: `server/test/history-lib.test.ts` (B1-created): four in-place edits of B1's cases (one of them adds two table rows), one import line, one appended describe.
 - Modify: `server/test/session-hook.test.ts` (citation corpus): B1's end-appended cases S11 (`x"y, fork, or absent`) and S14 (`compact) and (fork) write no line`), each rewritten in place inside B1's spool describe. No import line, and nothing above B1's history describe moves.
@@ -28888,7 +29137,7 @@ If `CLAUDE.md` did not change in Step 5, `git add` stages nothing for it, and th
   - Task 8 (`derive.mjs`): a boundary's leaf takes its epoch from the boundary's own transcript (`b.cc_uuid`) and its span from the copy that holds it, through `copyRows`, which marks a row as a boundary by joining `boundaries` on its entry whatever transcript first claimed it. So a fork's copy of the parent's boundary starts the fork's next span, and that leaf's id hashes the fork's sid. Step 3's span case pins that path across two transcripts.
   - Task 25 (`sweep.mjs`): `replayVerdict` applies an `epoch-confirmed` record with the cause it carries, and `replayEpochLine` asks `decideEpochLine` about a line with no verdict. Neither enumerates a source or a cause, so a fork record replays with no edit to Task 25's code; Step 3's rebuild case pins that.
   - Task 10 (`recall.mjs`): `runTree` prints `epoch <seq> <cause> …` from the stored cause, so a fork epoch reads `epoch 2 fork …`. No read verb filters a cause, and no B2 code outside Task 25's two applicators reads a spool source (measured on this plan's code: no `cause ===`, `cause IN`, `SPOOL_SOURCES` or `src ===` test beyond them).
-- Produces: no new export. `SPOOL_SOURCES` becomes `['startup', 'resume', 'clear', 'fork']` and `EPOCH_CAUSES` `['startup', 'resume', 'clear', 'import', 'fork']`; `parseSpoolLine` accepts a fork line with or without `reg`; `decideEpochLine` answers a fork line as it answers a resume line.
+- Produces: no new export. `SPOOL_SOURCES` becomes `['startup', 'resume', 'clear', 'fork']`; `EPOCH_CAUSES` stays B1's `['startup', 'resume', 'clear', 'import', 'fork']` (B1's ⟦D:history-epoch-causes-widened-for-rollback⟧); `parseSpoolLine` accepts a fork line with or without `reg`; `decideEpochLine` answers a fork line as it answers a resume line.
 
 **Spec:** §5.1 ("Events"; `src`; `reg` "from W1-B2 on SessionStart(fork) lines too"), §6.1 ("`cause='fork'` lines confirm exactly as resume lines do", "A fork whose sid is already an epoch", "A fresh sid", "The parent's copied rows", "No migration", "The rollback edge", "Backfill"), §6.10's fork row, §9.2 and §9.14 (the drain, the held-file re-read and replay treat a fork line as a resume line), §10.5 (B2's fork bullet; the citation-corpus row), §14 risk 24, §15.1 and §15.3 Q16. Pins: **DM48**; **S11** and **S14** in their fork-spooled form, with S14's CONTROL (a hook whitelist or a `SPOOL_SOURCES` without `fork` goes red).
 - Departures:
@@ -28901,11 +29150,11 @@ If `CLAUDE.md` did not change in Step 5, `git add` stages nothing for it, and th
 Choices this task makes (each is in the PR body's choices):
 - **The resume path, not a new arm.** `decideEpochLine` admits `fork` beside `startup` and `resume`. B1's `applyEpochLine`, `chainEpoch` and `confirmCandidates` read the cause from the line, so they need no code change. A fork whose sid the family already holds (Claude Code's same-id arm, or a sid a registry scan chained first as `import`) is confirmed by `chainEpoch`'s existing-uuid arm: no second epoch, and the first cause stands (§6.1, "the first claim stands").
 - **One filter in the sweep.** `recordHeldMatches` is the only B1 code that lists the confirmable sources itself; it gains `fork` in place.
-- **The rollback edge is named, not tested.** A B1 build is not in this tree. It has three parts on a B1 whose `EPOCH_CAUSES` lacks `fork`, as B1's plan ships it:
+- **The rollback edge is named, not tested.** A B1 build is not in this tree. It had three parts on a B1 whose `EPOCH_CAUSES` lacked `fork`, as B1's plan text shipped it; B1's MERGED code holds `fork` there (B1's ⟦D:history-epoch-causes-widened-for-rollback⟧, the ruling below), so on the real base only the spooled-line part remains:
   - **Journaled fork verdicts.** A build rolled back to B1 validates journal verdicts with its own `oneOf(EPOCH_CAUSES)`, so it reads a journaled fork verdict as `malformed`: skipped, counted `journal_line_malformed` (doctor WARN `journal-record-skipped`), never applied. Moving forward again replays the record.
   - **Spooled fork lines.** Its drain rejects a spooled fork line still in `spool/` (`spool_line_rejected`), and that fork falls back to B1's registry backfill.
   - **A waiting fork candidate stalls the pass.** A fork line that no evidence confirmed at the drain is stored as an `epoch_candidates` row with cause `fork` (B1's `applyEpochLine`, unchanged), and the row survives the rollback. Once `.uuid` names its sid within the 7-day window, B1's `confirmCandidates` takes the startup and resume path and builds an `epoch-confirmed` verdict carrying `cause: 'fork'`. B1's `journalRecord` reads every record it writes back through `oneOf(EPOCH_CAUSES)` and throws a `TypeError` on it. `verdictTx` catches only `JournalError`, so the transaction rolls back, the candidate stays, and the pass exits 1 at every tick before registry backfill and ingest; doctor FAILs `tick-stale`. It ends when the node moves forward again (B2's first tick confirms the candidate), when the candidate passes its 7 days (the drop verdict carries no cause), or when `.uuid` moves to another sid. Capture is delayed, not lost: the transcripts stay on disk and ingest catches up. The stall lasts at most 7 days from the line's journaling. The update watchdog rolls back with no operator, so no runbook step can prevent it. Measured by the review on B1's own `sweep.mjs` and `store.mjs` in a scratch HOME: three ticks, three throws, the candidate kept.
-  - **Ruled (coordinator, 2026-10-07): B1 widens `EPOCH_CAUSES` alone to hold `fork` before it merges**, leaving its `SPOOL_SOURCES` and the hook without it, so B1 still spools no fork (B1's departure slug `history-epoch-causes-widened-for-rollback`). On the merged base, therefore, only the spooled-line part of the edge remains, and any Step 1 or Step 3 expectation that reds only because `EPOCH_CAUSES` lacks `fork` is already green: record it as such in the task's report rather than forcing a red, and keep every other red. The rest of this bullet holds either way. A rolled-back build then reads fork verdicts as valid and confirms a fork candidate cleanly, and only the spooled-line part remains. Step 5(a) replaces B1's `EPOCH_CAUSES` line either way. The `EPOCH_CAUSES` doc comment, the PR body and spec §6.1 name all three parts. No migration exists to test: `epochs.cause` is TEXT with no CHECK in schema v1.
+  - **Ruled (coordinator, 2026-10-07): B1 widens `EPOCH_CAUSES` alone to hold `fork` before it merges**, leaving its `SPOOL_SOURCES` and the hook without it, so B1 still spools no fork (B1's departure slug `history-epoch-causes-widened-for-rollback`, issued as B1's ⟦D:history-epoch-causes-widened-for-rollback⟧; B1's lib.mjs carries it as a two-line comment between `SPOOL_SOURCES` and `EPOCH_CAUSES`). On the merged base, therefore, only the spooled-line part of the edge remains, and any Step 1 or Step 3 expectation that reds only because `EPOCH_CAUSES` lacks `fork` is already green: record it as "already green on the B1 base" in the task's report rather than forcing a red, and keep every other red. A rolled-back build reads fork verdicts as valid and confirms a fork candidate cleanly. Step 5(a) therefore anchors on `SPOOL_SOURCES` and its doc line alone and leaves B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ comment and `EPOCH_CAUSES` line byte-for-byte: B2 has nothing to change there. The `SPOOL_SOURCES` doc comment, the PR body and spec §6.1 name the edge as it stands on the merged base, with B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ widening that closed its other two parts. No migration exists to test: `epochs.cause` is TEXT with no CHECK in schema v1.
 - **The hook's comments are reworded in place.** Beside the new whitelist, a comment saying fork writes nothing would be false. Each reworded line stays one line, so nothing moves.
 
 - [ ] **Step 1: Write the failing pure tests.** In `server/test/history-lib.test.ts`:
@@ -29010,7 +29259,7 @@ Run, in the foreground with a timeout of at least 600000 ms:
 (cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'fork|SPOOL_SOURCES|accepts|refuses|spool set')
 ```
 
-Expected: red. The subset case fails `expected [ 'startup', 'resume', 'clear' ] to deeply equal [ …, 'fork' ]`. Of the two new `accepts` rows, the one with `reg` fails on `{ ok: false, why: 'keys' }` (B1 refuses `reg` off a startup or resume line before it checks a value), and the one without fails on `{ ok: false, why: 'value' }`. The appended describe fails every case (B1's `decideEpochLine` throws its `TypeError` on a fork line). The rewritten `refuses` rows and the `compact` throw case are green already. These reds were read off B1's code at plan time; record the reds the run actually prints in the task report.
+Expected: red. The subset case fails `expected [ 'startup', 'resume', 'clear' ] to deeply equal [ …, 'fork' ]`. Of the two new `accepts` rows, the one with `reg` fails on `{ ok: false, why: 'keys' }` (B1 refuses `reg` off a startup or resume line before it checks a value), and the one without fails on `{ ok: false, why: 'value' }`. The appended describe fails every case: its first at `expect([...libFork.SPOOL_SOURCES]).toContain('fork')`, the `parseSpoolLine` case on B1's refusals, the `decideEpochLine` case on B1's `TypeError` for a fork line, and the journal case at its fork SPOOL record (B1's grammar rejects `src: 'fork'`, so the record reads `malformed`). The rewritten `refuses` rows and the `compact` throw case are green already. Already green on the B1 base, and recorded so in the task report rather than forced red: every assertion that reads `EPOCH_CAUSES` alone, because B1 merged with `fork` in it (B1's ⟦D:history-epoch-causes-widened-for-rollback⟧). That is the first case's `expect([...libFork.EPOCH_CAUSES]).toContain('fork')` and the journal case's fork `epoch-confirmed` verdict (B1's `journalRecord` accepts it); each of those two cases still reds at its `SPOOL_SOURCES` or spool-record assertion. These reds were read off B1's code; record the reds the run actually prints in the task report.
 
 - [ ] **Step 2: Rewrite B1's S11 and S14 hook cases.** In `server/test/session-hook.test.ts`, inside B1's describe `'history spool: the hook enqueues one fenced, text-free line (spec §5.1)'`, replace the whole case that opens
 
@@ -29313,7 +29562,7 @@ Run, in the foreground:
 (cd server && ./node_modules/.bin/vitest run test/history-derive.test.ts -t 'DM48')
 ```
 
-Expected: red. Every DM48 drain case fails. lib refuses each fork line (`keys`: every one here carries `reg`, which B1 refuses off a startup or resume line), so the drain counts `spool_line_rejected`. Most cases then find no fork epoch or candidate (`expected [] to deeply equal [ { seq: 1, … cause: 'fork' … } ]`). The same-id and scan-first cases end in the same state whether the fork line was confirmed in place or dropped, so they go red only at their `spool_line_rejected` assertion (`expected 1 to be 0`). The held case fails at `heldMatches`, because no fork line passes the grammar, and the box case fails with one epoch. The rebuild case throws `rrTickUntil: not done after 8 passes`. The derive span case fails at its fork-epoch CONTROL (`expected [] to deeply equal [ 'fork' ]`). These reds were read off B1's code at plan time; record the reds the run actually prints in the task report.
+Expected: red. Every DM48 drain case fails. lib refuses each fork line (`keys`: every one here carries `reg`, which B1 refuses off a startup or resume line), so the drain counts `spool_line_rejected`. Most cases then find no fork epoch or candidate (`expected [] to deeply equal [ { seq: 1, … cause: 'fork' … } ]`). The same-id and scan-first cases end in the same state whether the fork line was confirmed in place or dropped, so they go red only at their `spool_line_rejected` assertion (`expected 1 to be 0`). The held case fails at `heldMatches`, because no fork line passes the grammar, and the box case fails with one epoch. The rebuild case throws `rrTickUntil: not done after 8 passes`. The derive span case fails at its fork-epoch CONTROL (`expected [] to deeply equal [ 'fork' ]`). Every one of these reds comes from B1's spool grammar (`SPOOL_SOURCES` and the `reg` rule), none from `EPOCH_CAUSES`, which B1 merged with `fork` in it (B1's ⟦D:history-epoch-causes-widened-for-rollback⟧), so none of them is already green on the B1 base. These reds were read off B1's code; record the reds the run actually prints in the task report.
 
 - [ ] **Step 4: Write the failing whitelist binding.** Append at the very end of `server/test/single-definition.test.ts`:
 
@@ -29342,32 +29591,36 @@ Run `(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts
 
 - [ ] **Step 5: Admit `fork` in lib.** In `ccd/history/lib.mjs`, by content. Below, ⟦D:…⟧ stands for the number B1 issued for that slug, which the file spells `D-` and digits; ⟦D:history-fork-spooled⟧ is this plan's own, as minted.
 
-(a) Replace
+(a) `SPOOL_SOURCES` alone, anchored on its own two lines. B1's merged lib.mjs does NOT hold `SPOOL_SOURCES` and `EPOCH_CAUSES` on adjacent lines: B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ put a two-line comment between them, and its `EPOCH_CAUSES` already lists `fork`. The block there reads, at B1's tip:
 
 ```js
 /** The SessionStart sources that spool (ruled Q2; fork is outside, Q16). */
 export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear']);
-export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import']);
+/** ⟦D:history-epoch-causes-widened-for-rollback⟧ (history-epoch-causes-widened-for-rollback): 'fork' is vocabulary only. B1 still spools no fork (⟦D:history-fork-not-spooled⟧);
+ *  W1-B2 does (Q16), and a box rolled back from B2 can hold a fork candidate whose verdict this build must read back. */
+export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import', 'fork']);
+```
+
+(As everywhere in this step, ⟦D:…⟧ stands for the number B1 issued for that slug, spelled in the file as `D-` and digits.) B2 needs no change to `EPOCH_CAUSES`, so the two-line comment of B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ (B1's citation, kept as history) and its declaration stay byte-for-byte as they are. Replace ONLY the first two lines,
+
+```js
+/** The SessionStart sources that spool (ruled Q2; fork is outside, Q16). */
+export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear']);
 ```
 
 with
 
 ```js
 /** The SessionStart sources that spool (ruled Q2), and `fork` from W1-B2 (ruled Q16, ⟦D:history-fork-spooled⟧,
- *  reversing ⟦D:history-fork-not-spooled⟧). */
+ *  reversing ⟦D:history-fork-not-spooled⟧). A fork epoch needs no migration: `epochs.cause` is TEXT with no CHECK
+ *  in schema v1, and EPOCH_CAUSES (below) has held `fork` since W1-B1 (⟦D:history-epoch-causes-widened-for-rollback⟧).
+ *  THE ROLLBACK EDGE (§6.1): a W1-B1 build's drain rejects a spooled fork line (spool_line_rejected), and that fork
+ *  falls back to its registry backfill. Because W1-B1 merged with `fork` in EPOCH_CAUSES, a rolled-back build reads a
+ *  fork epoch's journal record and a waiting fork candidate's verdict as valid; only this spool-line part remains. */
 export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear', 'fork']);
-/** An epoch's cause (§6.1): the SessionStart source that declared it, or `import` for a registry, journal or
- *  operator mapping. `fork` (W1-B2) needs no migration: `epochs.cause` is TEXT with no CHECK in schema v1. THE
- *  ROLLBACK EDGE, on a W1-B1 build whose own list lacks `fork`: it reads a fork epoch's journal record as malformed
- *  (skipped, counted journal_line_malformed, never applied; moving forward again replays it); its drain rejects a
- *  spooled fork line (spool_line_rejected); and a fork candidate still waiting in epoch_candidates, once `.uuid` names
- *  it within 7 days, makes its confirmCandidates throw at journalRecord's read-back, so every pass exits 1 before
- *  backfill and ingest (doctor FAIL tick-stale) until the node moves forward again or the candidate's 7 days pass.
- *  Capture is delayed, never lost. A W1-B1 build whose list already holds `fork` has only the spool-line part. */
-export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import', 'fork']);
 ```
 
-If the merged B1 already lists `fork` in `EPOCH_CAUSES` (the rollback-edge choice above), the third line of the anchor reads `export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import', 'fork']);`: replace the three lines all the same. The result is the block above either way.
+Check that `EPOCH_CAUSES` and its comment were not touched: `grep -c "^export const EPOCH_CAUSES = Object.freeze(\['startup', 'resume', 'clear', 'import', 'fork'\]);$" ccd/history/lib.mjs` prints `1`, and `grep -c '(history-epoch-causes-widened-for-rollback): .fork. is vocabulary only' ccd/history/lib.mjs` prints `1`, both before and after this edit.
 
 (b) In the comment block above `const keySet = (required, optional) =>`, replace the three lines
 
@@ -29421,7 +29674,7 @@ with
   if (line.src !== 'startup' && line.src !== 'resume' && line.src !== 'fork') {
 ```
 
-(e) In `ccd/history/lib.d.mts`, replace `export type SpoolSource = 'startup' | 'resume' | 'clear';` with `export type SpoolSource = 'startup' | 'resume' | 'clear' | 'fork';`, replace `export type EpochCause = 'startup' | 'resume' | 'clear' | 'import';` with `export type EpochCause = 'startup' | 'resume' | 'clear' | 'import' | 'fork';`, and in `decideEpochLine`'s declaration replace `line: { src: 'startup' | 'resume' | 'clear'; sid: string; reg?: string }` with `line: { src: SpoolSource; sid: string; reg?: string }`.
+(e) In `ccd/history/lib.d.mts`, two edits: replace `export type SpoolSource = 'startup' | 'resume' | 'clear';` with `export type SpoolSource = 'startup' | 'resume' | 'clear' | 'fork';`, and in `decideEpochLine`'s declaration replace `line: { src: 'startup' | 'resume' | 'clear'; sid: string; reg?: string }` with `line: { src: SpoolSource; sid: string; reg?: string }`. `EpochCause` is not edited: B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ already made it `export type EpochCause = 'startup' | 'resume' | 'clear' | 'import' | 'fork';` (check: `grep -c "^export type EpochCause = 'startup' | 'resume' | 'clear' | 'import' | 'fork';$" ccd/history/lib.d.mts` prints `1`).
 
 Check that each anchor matched once and nothing else names the three sources as a closed list:
 
@@ -29519,7 +29772,7 @@ Expected: `SAME-LINE-COUNT`; `NO LINE MOVED` (every hunk replaces N lines at lin
 (cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit)
 ```
 
-Expected: every run green; `tsc` prints nothing. B1's DM18c, DM19, DM19b and DM46 cases in `history-drain` are unchanged and green; so is B1's O14 describe, whose `EPOCH_CAUSES` row checks one declaration, now of five members.
+Expected: every run green; `tsc` prints nothing. B1's DM18c, DM19, DM19b and DM46 cases in `history-drain` are unchanged and green; so is B1's O14 describe, whose `EPOCH_CAUSES` row checks one declaration, of five members since B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ and not edited here.
 
 - [ ] **Step 9: Mutations.** Measure each guard red, then green, with the mutation runner Task 1 Step 1 writes (if `.superpowers/sdd/history-w1-b2/scratch/mutate.mjs` is gone, write it again from Task 1 Step 1, byte for byte). From the repository root:
 
@@ -29572,7 +29825,7 @@ Run it in the foreground with a timeout of at least 600000 ms. Expected: every r
 - the two S14 CONTROLs: S14's fourth line reads no `fork` (`[ 4, undefined ]`), or there is no fourth line;
 - the binding: `expected [ 'clear', 'resume', 'startup' ] to deeply equal [ 'clear', 'fork', 'resume', 'startup' ]`;
 - S11's `reg` row: the fork line with `reg` parses as `keys`, so `a!.rec` is null;
-- `EPOCH_CAUSES` without fork: the fork `epoch-confirmed` verdict parses as `malformed` (B1's rollback edge, measured on this build);
+- `EPOCH_CAUSES` without fork: the fork `epoch-confirmed` verdict parses as `malformed` (the rollback edge B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ closed, measured on this build; the mutant's anchor is B1's own unchanged line);
 - `decideEpochLine` refusing fork: the drain throws its `TypeError`, and every DM48 case reds;
 - the first DM48 CONTROL: the foreign-sid case finds an epoch where it expects a `fork` candidate;
 - the second DM48 CONTROL: the second epoch's INSERT meets `UNIQUE (session_pk, cc_session_uuid)`, the schema's own refusal of a second epoch, and the drain does not throw: B1's `drainSpool` counts the `ERR_SQLITE_ERROR` as `drain_deferred` and rolls the whole file back. The same-id and scan-first cases both red at `drain_deferred` (`expected 1 to be 0`); without that assertion the same-id case would still red, with no epoch at all (its startup line rolled back with the fork line), but the scan-first case would stay green, its `import` epoch unchanged;
@@ -29603,8 +29856,8 @@ git add ccd/session-hook.sh ccd/history/lib.mjs ccd/history/lib.d.mts ccd/histor
 git commit -m "feat(history): SessionStart(fork) is spooled and confirms as a resume line does (W1-B2, ruled Q16)
 
 The hook's source whitelist gains fork in place (no hook line moves); SPOOL_SOURCES,
-parseSpoolLine's reg rule, EPOCH_CAUSES and decideEpochLine admit it, and the held-file
-re-read takes it. A fork whose sid is already an epoch confirms that epoch; a fresh
+parseSpoolLine's reg rule and decideEpochLine admit it (EPOCH_CAUSES has held it since
+W1-B1), and the held-file re-read takes it. A fork whose sid is already an epoch confirms that epoch; a fresh
 sid chains a fork epoch; replay applies fork records unchanged.
 Pins DM48, and S11 and S14 in their fork-spooled form."
 ```
@@ -30618,7 +30871,7 @@ git diff --quiet -- .github/workflows/ci.yml && echo restored
 (cd server && ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts test/ccrc-uninstall.test.ts test/ccrc-account.test.ts)
 (cd server && ./node_modules/.bin/vitest run test/ccrc-install.test.ts)
 (cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts)
-(cd server && ./node_modules/.bin/vitest run test/ws-expire-prose.test.ts test/ccrc-api-closed.test.ts test/pools-prose.test.ts test/oss-metadata.test.ts test/topology-clean.test.ts test/readme-roster-mirror.test.ts test/readme-holds.test.ts test/crossrepo-prose.test.ts test/child-reclaim-prose.test.ts test/box-token-census.test.ts test/coordinator-skill.test.ts test/worker-skill.test.ts test/reviewer-skill.test.ts test/compact-card.test.ts test/compact-card-ship.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ws-expire-prose.test.ts test/ccrc-api-closed.test.ts test/expiry-lane-prose.test.ts test/auth-passkey.test.ts test/pools-prose.test.ts test/oss-metadata.test.ts test/topology-clean.test.ts test/readme-roster-mirror.test.ts test/readme-holds.test.ts test/crossrepo-prose.test.ts test/child-reclaim-prose.test.ts test/box-token-census.test.ts test/coordinator-skill.test.ts test/worker-skill.test.ts test/reviewer-skill.test.ts test/compact-card.test.ts test/compact-card-ship.test.ts)
 (cd server && ./node_modules/.bin/vitest run test/ccrc-install-graphify.test.ts test/install-worker-skill.test.ts test/install-reviewer-skill.test.ts test/install-coordinator-skill.test.ts)
 (cd agent && ./node_modules/.bin/vitest run test/deploy-verify.test.ts)
 ```
@@ -30722,8 +30975,11 @@ C64's CLI door and the direct door of B2's forms, C65-C68.
    outside any `cc-` pane, as §10.7 describes. Families, epochs and receipts must equal the live store's by
    O35's columns, or each difference must be named.
 5. **The rollback edge, before any rollback of a node to a B1 release.** From this PR on, a node journals
-   `fork` epochs, spools `fork` lines and may hold a `fork` candidate in `epoch_candidates`. On a B1 release
-   whose `EPOCH_CAUSES` lacks `fork` (spec §6.1, "The rollback edge"; no migration is involved):
+   `fork` epochs, spools `fork` lines and may hold a `fork` candidate in `epoch_candidates`. B1 merged with `fork`
+   in `EPOCH_CAUSES` alone (B1's departure `history-epoch-causes-widened-for-rollback`; its spool set and hook stay
+   without it), so a rollback to a B1 release has only the spool-line part below; the other two parts held only on
+   a B1 whose `EPOCH_CAUSES` lacked `fork`, as B1's plan text first shipped it (spec §6.1, "The rollback edge";
+   no migration is involved):
    - a journaled fork verdict reads as malformed (skipped, counted `journal_line_malformed`, doctor WARN
      `journal-record-skipped`), and moving forward again replays it;
    - a spooled fork line still in `spool/` is rejected (`spool_line_rejected`), and that fork falls back to B1's
@@ -30733,8 +30989,8 @@ C64's CLI door and the direct door of B2's forms, C65-C68.
      exits 1 before backfill and ingest (doctor FAIL `tick-stale`). It ends when the node moves forward again
      (B2's first tick confirms the candidate) or when the candidate's 7 days pass; capture is delayed, never
      lost. The update watchdog rolls back with no operator, so this cannot be prevented by a runbook step.
-   If B1 was merged with `fork` in `EPOCH_CAUSES` alone (the coordinator's option: B1's spool set and hook stay
-   without it), a rollback has only the spool-line part.
+   B1 was merged that way (the coordinator's option, taken), so on the real base a rollback has only the
+   spool-line part.
 
 ### Operator rulings (2026-10-07; spec §15.1 and §15.3, rev 3.4)
 
@@ -30881,7 +31137,11 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-fts-body-plain-text⟧ (Task 12): The FTS body is extracted plain text (§6.2). B1-defined.
 - ⟦D:history-recall-echo-by-structure⟧ (Task 12): Recall echoes are classified by the paired `tool_use`, never by text (§6.2). B1-defined.
 - ⟦D:history-clear-epoch-confirmed⟧ (Task 12): A clear epoch is chained at drain unconfirmed and enters scope only when `.uuid` or its first row's `cwd` against the observed `.workdir` confirms it (§6.1; rev 3.2 review, SE5). B1-defined.
-- ⟦D:history-recall-echo-indexed⟧ (Task 12): NEW departure (no spec §16 row). B1 indexes only the searchable provenances, so `--include-recall` could never match an echo; recall-echo blobs are indexed too and filtered out of default grep at query time.
+- ⟦D:history-recall-echo-indexed⟧ (Task 12): NEW departure (no spec §16 row). B1 indexes only the searchable provenances, so `--include-recall` could never match an echo; recall-echo blobs are indexed too and filtered out of default grep at query time. A store whose backfill completed under B1 is re-opened once, from cursor 0 (meta `fts_provenance`), so B1's echoes are indexed too.
+- ⟦D:history-read-skips-oversize-sidecar⟧ (Tasks 12, 14): NEW departure (no spec §16 row). The read verbs take a sidecar's 512 KB window synchronously (`blobPlainText`, which decompresses whole; B1's bounded `unbrotliPrefix` is async), so a sidecar whose `raw_len` passes `SIDECAR_WHOLE_MAX` is not decompressed by a read verb: its grep hit shows no snippet and `--regex` does not scan it, while plain grep still finds it through the sweep's index (§8.4, DM29).
+- ⟦D:history-sidecar-redact-before-cut⟧ (Tasks 12, 14, 23): A sidecar's index text is its first SIDECAR_FTS_BYTES after redacting a 64 KiB-larger window decoded from a bounded prefix of its blob, with a trailing partial run dropped, and the FTS backfill fetches and charges blobs one at a time (§8.3). B1-defined; B2's `blobPlainText` reads a sidecar through the same `sidecarIndexText`, and Task 23's rebuild fetches each `z` one at a time as B1's backfill does.
+- ⟦D:history-reindex-by-units-and-complete-loads⟧ (Tasks 25, 29): The late-pair re-index searches each unit a value registers (the whole run, or each 12+-char segment) as its own phrase, and its durable mark advances only on a tick whose secret load read every source. B1-defined; Task 25's recovery pass passes `complete` as B1's tick does, and Task 29's gist re-derivation searches by the same units.
+- ⟦D:history-import-refusal-words⟧ (Task 19): `--op import` answers exit 2 `roster-unreadable` when the shim passed `--roster-unreadable` (counted by `--apply`, before any listing or admission; the dry run refuses with no count) and `uuid-claimed` for an operator mapping of a uuid another family holds (§8.4). B1-defined; Task 19's rewritten `opPass` keeps both roster refusals, guarded on `import`.
 - ⟦D:history-grep-pending-until-backfilled⟧ (Tasks 12, 23): NEW departure (no spec §16 row). §9.1 checks only that `blobs_fts` exists; grep also answers 7 `fts-pending` while derivation `('fts', 1)` has not completed, and while a `doctor --repair` rebuild (`FTS_REBUILD_STEP`) is open, so a re-opened backfill or a rebuild never answers a false exit 3 for text the store holds.
 - ⟦D:history-test-seams-not-env⟧ (Tasks 14, 25): Test seams are in-process or a test-only preload; every `process.env` read in `ccd/history/*.mjs` is in one frozen allow-list; the TTY gate is driven by a real pty (§10.1; rev 3.2 review, FE5, SE13). B1-defined.
 - ⟦D:history-row-model⟧ (Task 15): `entries.model` keeps an assistant row's `message.model`; the backend is derived at read time (§6.2; Q8). B1-defined.
@@ -30918,9 +31178,10 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-redaction-fail-closed-node-rewrite⟧ (Task 29): NEW departure (no spec §16 row). A leaf whose summary is pruned, a raw leaf and a condensed node cannot be re-derived from text, so when a pair is learned their stored gist, topics and refs are rewritten through `redactField` instead. A leaf whose re-derivation throws is rewritten the same way and counted `parser_crash`, never retried by the next pass (coordinator ruling RB5).
 - ⟦D:history-reindex-subcursor-idempotent⟧ (Task 29): NEW departure (no spec §16 row). The recovery step's reindex phase re-derives node fields through `refreshLeaf`, `redactNodeFields` and `ftsRebuildJob`, which each commit their own transactions, so its sub-cursors commit after each batch, not inside it; a kill re-runs at most one batch of idempotent re-derivation, and §9.14's same-transaction cursor still holds for the replay phases.
 - ⟦D:history-license-sidecars-generalised⟧ (Task 31): NEW departure (no spec §16 row). B1's license pins hard-code `ccd/history`'s sidecar; they now cover every `LICENSE.lossless-claw` under `ccd/`, as §12 asks once the skill directory carries one; `server/test/` holds none, since §12's rev 3.3 exception (RB15) makes `history-skill.test.ts`'s verbatim pins no copy, and a case pins that.
-- ⟦D:history-skill-joins-skill-scans⟧ (Task 31): NEW departure (no spec §16 row). §8.5 names neither standing skill-corpus scan (no `ws-expire`, no raw HTTP); both list the skill directories by hand, so the fourth directory is added to both.
+- ⟦D:history-skill-joins-skill-scans⟧ (Task 31): NEW departure (no spec §16 row). §8.5 names none of the four standing skill-corpus scans (no `ws-expire`, no raw HTTP, no `expire-lane-live`, every named `/api/` path reachable); all four list the skill directories by hand, so the fourth directory is added to each.
 - ⟦D:history-readme-tables-name-the-sweep⟧ (Task 33): NEW departure (no spec §16 row). §10.5 assigns README's edits by PR and names neither table; B1 ships the sweep timer and doctor's `history` check without rows, so B2 adds the timer-table row, the doctor-table row and the server-role SKIP word.
-- ⟦D:history-fork-spooled⟧ (Task 34): SessionStart(fork) writes a spool line from W1-B2: `fork` joins the hook's source whitelist in place (no hook line moves, no S6-R11 census change), `SPOOL_SOURCES` and `EPOCH_CAUSES`; the line carries `src` and `reg` and confirms exactly as resume does; a fork whose sid is already an epoch confirms that epoch, a fresh sid chains a `fork` epoch, and copied rows follow the per-copy span rule; no migration, and a build rolled back to B1 skips a `fork` journal record as malformed and, while a fork candidate waits, stalls the pass (§5.1, §6.1, §9.14, §14 risk 24; DM48; ruled Q16, rev 3.4; reverses `history-fork-not-spooled`).
+- ⟦D:history-fork-spooled⟧ (Task 34): SessionStart(fork) writes a spool line from W1-B2: `fork` joins the hook's source whitelist in place (no hook line moves, no S6-R11 census change) and `SPOOL_SOURCES` (B1's `EPOCH_CAUSES` already holds it, `history-epoch-causes-widened-for-rollback`); the line carries `src` and `reg` and confirms exactly as resume does; a fork whose sid is already an epoch confirms that epoch, a fresh sid chains a `fork` epoch, and copied rows follow the per-copy span rule; no migration, and a build rolled back to B1 rejects a spooled `fork` line, while B1's widened `EPOCH_CAUSES` lets it read `fork` journal records and confirm a waiting fork candidate (§5.1, §6.1, §9.14, §14 risk 24; DM48; ruled Q16, rev 3.4; reverses `history-fork-not-spooled`).
+- ⟦D:history-epoch-causes-widened-for-rollback⟧ (Tasks 34, 36): W1-B1 merged with `fork` in `EPOCH_CAUSES` (and `EpochCause`) alone, vocabulary only, so a build rolled back from W1-B2 reads a fork verdict and a fork candidate back; only a spooled fork line remains outside it (§6.1 "The rollback edge"; coordinator ruling 2026-10-07). B1-defined; Task 34 leaves its comment and declaration as they are.
 - ⟦D:history-fork-not-spooled⟧ (Task 34): SessionStart(fork) writes no spool line, within Q2's ruled set; a fork's uuid enters by registry backfill; every SessionStart line carries `src` (§5.1; rev 3.2 review, CT7; Q16). B1-defined; reversed by Task 34 (ruled Q16), except that every SessionStart line still carries `src`.
 - ⟦D:history-spool-start-not-compact⟧ (Task 34): Spool on SessionStart(startup|resume|clear), not compact (G6; ruled Q2); from W1-B2 on SessionStart(fork) too (ruled Q16, `history-fork-spooled`). B1-defined.
 - ⟦D:history-spool-line-carries-registry-uuid⟧ (Task 34): SessionStart(startup|resume) lines, and from W1-B2 SessionStart(fork) lines (ruled Q16), carry `reg`, the hook's builtin read of `.uuid`, and confirm when it equals their sid (§5.1, §6.1; rev 3.2 review, CT6). B1-defined.

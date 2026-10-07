@@ -1901,7 +1901,9 @@ function passC(box: HistoryBox): void {
   const r = runSweep(box);
   expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
 }
-/** B2's settle: the pass that makes the store, the pass whose drain confirms each epoch, and one more. */
+/** B2's settle: pass 1 makes the store, runs the first registry scan (each registry-named session gets a confirmed
+ *  `import` epoch and its transcript is ingested and derived in that tick) and renames the spool; pass 2 drains the
+ *  SessionStart lines; pass 3 is one more. Rows planted BEFORE a boundary leave the store empty of nodes through pass 1. */
 function settleC(box: HistoryBox): void {
   for (let i = 0; i < 3; i += 1) passC(box);
 }
@@ -3030,13 +3032,20 @@ describe("card delivery is measured from the transcript's SessionStart attachmen
     const [A, UA] = ['card-wait-a', sidC(0xe4)];
     const [B, UB] = ['card-wait-b', sidC(0xe5)];
     const [C, UC] = ['card-wait-c', sidC(0xe6)];
-    // A: compacted a minute ago, no attachment yet, a few rows after the boundary: its window is open.
+    // A: compacted a minute ago, no attachment yet, a few rows after the boundary: its window is open. A is planted
+    // BEFORE its boundary: B1's first pass is a registry scan that maps every registry-named session (a confirmed
+    // `import` epoch) and ingests its transcript in that same tick, and the derivation after the ingest mints a leaf
+    // for any boundary already stored, so a transcript planted whole would have its leaf before the measure's first
+    // pass, and the cursor would start past it.
     const sa = compactionSequence({ n: 1, trigger: 'manual', seed: 0xe4, sessionId: UA, startMs: Date.now() - 60_000 });
-    const pa = plantC(box, A, UA, sa.rows);
+    const pa = plantC(box, A, UA, sa.rows.slice(0, cutBefore(sa, 0)));
     settleC(box);
+    expect(measureCursor(box), "the first pass started at the empty store's top").toBe('0');
+    appendRows(pa, sa.rows.slice(cutBefore(sa, 0)));
+    pokeC(box, A);
     const [leafA] = leavesC(box, UA);
     expect(leafA).toBe(libCard.leafId(A, UA, firstUuidC(sa)));
-    expect(measureCursor(box), "the first pass started at the empty store's top, and A's open window holds it").toBe('0');
+    expect(measureCursor(box), "A's open window holds it").toBe('0');
     // B: served, but derived after A.
     const sb = compactionSequence({ n: 1, trigger: 'manual', seed: 0xe5, sessionId: UB, startMs: T0C });
     const pb = plantC(box, B, UB, sb.rows.slice(0, cutBefore(sb, 0)));
@@ -3813,7 +3822,7 @@ grep -c 'history-scope' ccd/session-hook.sh
 grep -cxF 'unset CS_SCOPE' ccd/session-hook.sh
 awk '/^case "\$event" in$/{c=NR} c && !e && /^esac$/{e=NR} END{print (c && e) ? "case " c " esac " e : "NO CASE/ESAC"}' ccd/session-hook.sh
 grep -cF 'history/scope/$id" && ! -L' ccd/session-hook.sh
-grep -c '^out=$(jq -cn' ccd/session-hook.sh
+grep -c '^out=\$(jq -cn' ccd/session-hook.sh
 ```
 
 Expected: `1`, `1`, `1`, `1`, `0`, `0`, then `case <n> esac <m>`, the event case's first and last lines, both above the `_hook_compact_pre` call (`case 2771 esac 2916` at f7e51156f), then `0`, then `1` (the hookstate compose, `:3591` at f7e51156f; its `|| exit 0`, the 64 KB cap's and the write's two follow it). Any other answer means a base this task was not written against: stop and report it to the coordinator.
@@ -5571,8 +5580,8 @@ before. Builtin tests, the event first; census unmoved."
 
 **Interfaces:**
 - Consumes:
-  - from B1's end-appended block: `HISTORY_DIR`, `HISTORY_MJS`, `DECL_CORPUS`, `declares` and the O14 `it.each(VOCABS)` row `'%s is declared in ccd/history/lib.mjs and in no other .mjs, exported, and frozen'`;
-  - from the file's module scope: `ccrcRoot`, `codeLines(f)` (a bash file's lines that are not comments), `path`;
+  - from B1's end-appended O14 describe: only its `it.each(VOCABS)` row `'%s is declared in ccd/history/lib.mjs and in no other .mjs, exported, and frozen'`, which re-runs over the widened `VOCABS`. That describe stays the sole consumer of `DECL_CORPUS` and `declares`, which are local to its callback (`:4924-4925` at B1's head), so the appended describe cannot see them and does not use them; nor does it use the module-scope `HISTORY_DIR` (`:4793`) or `HISTORY_MJS` (`:4808`);
+  - from the file's module scope: `ccrcRoot` (`:32`), `codeLines(f)` (`:1327`; a bash file's lines that are not comments), `path`. These are the new describe's only dependencies;
   - from `ccd/history/lib.mjs`, by dynamic import:
     - B1: `CARD_PREFIX` (`'History: '`) and `HISTORY_ROOT_REL` (`'.ccrc/history'`);
     - B2: `RECALL_OFF_DIR` (`'recall-off'`);

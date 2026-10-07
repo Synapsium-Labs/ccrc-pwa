@@ -104,7 +104,7 @@ B4 adds no schema migration (v1 already has `exported_ms` and `exported_seg`), n
 - **Seams and switches.** Test seams are in-process (`ctx.deps.statfs` receives the path; `ctx.deps.exportPageRows` pages Task 5's selection; Task 7's in-process patches of `node:fs` and, for RD3's busy cases, of the `exec` of the test's own writer connection) or test-only preloads. Shipped code reads no new env var, flag or file to arm one, and the `process.env` allow-list stays `HOME`, `TMUX_PANE`, `CLAUDECODE` and `CCRC_SESSION_GENERATION`. `sweep.mjs` never spells `/history-off` (O13 exact holders): history-off is read through the existing `ctx.paths.off`.
 - **No `historyPaths` key.** B3 adds `scope` and `card` to `historyPaths`, and B3 and B4 merge in either order. B4 builds `${historyPaths(home).root}/${EXPORT_DIR}/${storeId}`, B2's `RECALL_OFF_DIR` precedent.
 - **B2 rulings that bind.** Add no `WRITING_FORMS` entry, so RB6's `GT_FORMS` and the recovering-forms CONTROLs stay green and no new op is refused `recovering`. Prune stays gated on reachability only (ruled by the operator, rev 3.4; no longer provisional) and B4 does not touch it. Display prefixes are untouched. The export pass never runs on the recover arm: `recoverPass` never calls `tick`.
-- **Tests.** Run from `server/` with `./node_modules/.bin/vitest run test/<f>.test.ts`, in the FOREGROUND, with a timeout of at least 600000 ms; never bare `npx`. Use fixture HOMEs only (`makeHistoryBox`, `mkTmp`), with `tmux`, `claude` and `gh` poisoned and `CLAUDECODE`, `CLAUDE_CONFIG_DIR`, `TMUX`, `TMUX_PANE` and `CCRC_RECALL_*` scrubbed (B1's helpers do this). Sweep and store tests skip on darwin; lib tests run there. Every guard is pinned red-first: watch the test fail on the unguarded code, then measure the mutant red after the guard lands, with scratch copies under `.superpowers/sdd/history-w1-b4/scratch` and never `git stash`. The new `history-export.test.ts` joins `ci.yml`'s node-floor heredoc in the same commit; `ci-pipeline` derives the list from `server/test`. CLAUDE.md's load flakes are re-run in isolation before a red is called a break.
+- **Tests.** Run from `server/` with `./node_modules/.bin/vitest run test/<f>.test.ts`, in the FOREGROUND, with a timeout of at least 600000 ms; never bare `npx`. Use fixture HOMEs only (`makeHistoryBox`, `mkTmp`), with `tmux`, `claude` and `gh` poisoned and `CLAUDECODE`, `CLAUDE_CONFIG_DIR`, `TMUX`, `TMUX_PANE` and `CCRC_RECALL_*` scrubbed (B1's helpers do this). Sweep tests skip on darwin (`skipOnDarwin()`, or the `beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); })` spelling O24 also accepts); lib and store tests run there, so Task 4's cases in history-store.test.ts must pass on macOS. They use only node:fs, node:sqlite, a plain-node child (under the fault preload, as B1's own store cases do) and `/bin/sh` for the umask. Every guard is pinned red-first: watch the test fail on the unguarded code, then measure the mutant red after the guard lands, with scratch copies under `.superpowers/sdd/history-w1-b4/scratch` and never `git stash`. The new `history-export.test.ts` joins `ci.yml`'s node-floor heredoc in the same commit; `ci-pipeline` derives the list from `server/test`. CLAUDE.md's load flakes are re-run in isolation before a red is called a break.
 - **Citation corpus.** B4 edits none of `ccd/session-hook.sh`, `ccd/ccrc`, `ccd/ccd`, `deploy/deploy.sh` or `server/test/session-hook.test.ts`. `single-definition.test.ts` gets only in-place edits inside B1/B2's end-appended blocks, and no import line. README edits are in place and add no `file.ext:N` token. CLAUDE.md's `README.md (~N lines)` figure is re-measured only if README's line count moves (`pools-prose`: within 100). `ccrc-doctor.test.ts` is cited by line from other tests (`:66`, `:70`, `:195` and `:884` at f7e51156f), so its edits stay in place inside the history describes, which B1 appended below all four.
 - **Deviations.** Never write a deviation number. A departure carries `⟦D:<slug>⟧` with a spec §16 slug, or a NEW kebab slug marked NEW with a one-line why; "Deviations found" lists each. The coordinator mints the numbers. Read existing `D-N` refs in source comments as history and never delete them.
 - **Public repo.** No hostnames, usernames, account, wrapper or home names, real pool names, session ids, IPs or docserver URLs in plan text, fixtures, commits or the PR body. Fixtures are synthetic, in the `/home/u/tree` style.
@@ -4097,7 +4097,7 @@ The `sed` must print exactly the guard, from its `if (process.argv[1] …` line 
 node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit
 ```
 
-Expected: every case green; tsc prints nothing. Nothing in the tick calls `exportPass` yet (Task 6 wires it), so the earlier files are unchanged by this task; they run here because the block shares their module. `single-definition`'s O13 and O14 stay green: sweep.mjs spells no `/history-off` (it reads `ctx.paths.off`) and declares no lib vocabulary. A red `history-ingest` case named in CLAUDE.md's load-flake list is re-run alone before it is called a break.
+Expected: every case green; tsc prints nothing. Nothing in the tick calls `exportPass` yet (Task 6 wires it), so the earlier files are unchanged by this task; they run here because the block shares their module. `single-definition`'s O13 and O14 stay green: sweep.mjs spells no `/history-off` (it reads `ctx.paths.off`) and declares no lib vocabulary. A red case in a file CLAUDE.md lists as a load flake (`ccd-ws-gc`, `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`, `ccd-bounded-reads`) is re-run alone before it is called a break; `history-ingest` is not on that list, so a red there is a break until an isolated re-run says otherwise.
 
 - [ ] **Step 8: Mutations — each new guard reds its case.** From the repository root, once:
 
@@ -5349,13 +5349,13 @@ git commit -m "feat(history): export marks that move — a late variant or a lat
   - `emptyEnvelope`: one line after `        oldest_row_ms: null, first_due_ms: null, first_deletion_ms: null,`;
   - `readStore`: five lines after `    ex.first_deletion_ms = num('first_deletion_ms');`;
   - `healthInputsOf`: its two placeholder lines `exportWriterLive: false, …// B4 sets it with the export writer` and `exportPausedLowDisk: false, …// B4 sets it with the export writer` are replaced by four;
-  - one helper function, `segmentCount`, inserted directly above `export async function statusWithHealth(`.
-- Modify: `server/test/history-lib.test.ts` (B1-created). In place: B1 Task 28's `base()` literal inside the describe `'deriveHealth: every §9.6 rule as a word with its class, detail and remedy (task 28)'`, its line `    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [],`. Append one describe at the end of the file. No import line is added: B1 Task 28's namespace import `healthLib` covers every name used.
+  - one helper function, `segmentCount`, inserted directly above `statusWithHealth`'s doc comment (``/** `statusEnvelope` with its `health` filled and the store's device named. */``), so that comment stays on `export async function statusWithHealth(`.
+- Modify: `server/test/history-lib.test.ts` (B1-created). In place: B1 Task 28's `base()` literal inside the describe `'deriveHealth: every §9.6 rule as a word with its class, detail and remedy (task 28)'`, its line `    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],` (B1 Task 28F's `extrasUnmeasured` already ends it). Append one describe at the end of the file. No import line is added: B1 Task 28's namespace import `healthLib` covers every name used.
 - Modify: `server/test/history-export.test.ts` (Task 5 creates it). Add one import block directly after the file's last import statement; append two describes at the end.
 - Modify: `server/test/ccrc-doctor.test.ts`. The file is pre-existing (main-ro f7e51156f); the history describes it edits are B1 Task 32's end-appended ones, anchored by content. Other tests cite this file by line at `:66`, `:70`, `:195` and `:884` (measured at f7e51156f: `ccrc-install.test.ts`, `pool-name-parity.test.ts` and two in `ccrc-account.test.ts`); every edit here is far below all four, inside B1's history describes, which B1 appended at the end of the file:
   - in `describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, O37, O41, O55, DM43)', …)`'s `STATES` table: the three-line row whose `name` is `'O41: a due blob WARNs export-due, naming the count, and FAILs nothing while none is overdue'` is replaced; two rows are inserted after the two-line row whose `name` is `'O41: an overdue blob FAILs export-overdue'`;
   - in the same describe, one `it` is inserted after the `it` titled `'O41: nothing due and nothing overdue: neither export word'`;
-  - in `describe('ccrc doctor: history — the relay (O15: every word, and the one rule no fixture can plant)', …)`, the `cleanInputs` literal's line `    journalStoreDirs: [],` gains two fields on the same line.
+  - in `describe('ccrc doctor: history — the relay (O15: every word, and the one rule no fixture can plant)', …)`, the `cleanInputs` literal's line `    journalStoreDirs: [], extrasUnmeasured: [],` (B1 Task 28F's field already on it) gains two fields on the same line.
 - Not edited: `server/test/history-cli.test.ts`. B1 Task 28 put `base()` and every pure `deriveHealth` case in `history-lib.test.ts` (namespace `healthLib`); `history-cli.test.ts` holds no `HealthInputs` literal and is only re-run here (its STATUS_SQL cost pin), never edited.
 
 **Interfaces:**
@@ -5387,16 +5387,16 @@ git commit -m "feat(history): export marks that move — a late variant or a lat
 - A stale pass outranks a wait in the one `export-due` item; the paused export keeps its own `export-paused-low-disk` WARN beside it, and `export-due`'s remedy then names the room first.
 - `segments`/`segment_bytes` read `null` on a listing that throws, so status never reports an unlistable export as empty.
 
-- [ ] **Step 1: Write the failing pure tests.** In `server/test/history-lib.test.ts`, inside the describe `'deriveHealth: every §9.6 rule as a word with its class, detail and remedy (task 28)'`, replace the one line of its `base` literal
+- [ ] **Step 1: Write the failing pure tests.** In `server/test/history-lib.test.ts`, inside the describe `'deriveHealth: every §9.6 rule as a word with its class, detail and remedy (task 28)'`, replace the one line of its `base` literal (B1 Task 28F's `extrasUnmeasured: [],` already ends it, so the two new fields follow that one)
 
 ```ts
-    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [],
+    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
 ```
 
 with
 
 ```ts
-    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], exportLastPassMs: null, exportDueOldestMs: null,
+    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [], exportLastPassMs: null, exportDueOldestMs: null,
 ```
 
 Then append at the end of the file:
@@ -5423,7 +5423,7 @@ describe('deriveHealth, W1-B4: with the export writer live, export-due waits for
     exportWriterLive: true, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
     journalGrowth30d: 0, journalSkipped: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
-    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [],
+    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
     exportLastPassMs: NOW - 10 * MIN, exportDueOldestMs: NOW - 90 * MIN,
     ...o,
   });
@@ -5581,21 +5581,21 @@ git grep -n 'exportWriterLive:' -- server/test
 
 Expected:
 - `history-lib.test.ts` green, B1 Task 28's describe included: its `['export-due', 'warn', { exportDue: 12 }]` row and its `'a B1 build WARNs export-due from the first due blob…'` case hold, because `base()` keeps `exportWriterLive: false`.
-- `git grep` lists every `HealthInputs` literal under `server/test`: Task 28's `base` and this task's `live` in `history-lib.test.ts`, and `cleanInputs` in `ccrc-doctor.test.ts`. Each must carry the two new fields; Step 5 adds them to `cleanInputs`. Any other literal the grep prints (one a later B2 or B4 task added) gains `exportLastPassMs: null, exportDueOldestMs: null` on its `journalStoreDirs` line the same way.
+- `git grep` lists every `HealthInputs` literal under `server/test`: Task 28's `base` and this task's `live` in `history-lib.test.ts`, and `cleanInputs` in `ccrc-doctor.test.ts`. Each must carry the two new fields; Step 5 adds them to `cleanInputs`. Any other literal the grep prints (one a later B2 or B4 task added) gains `exportLastPassMs: null, exportDueOldestMs: null` on its `journalStoreDirs` line, after that line's `extrasUnmeasured: [],`, the same way.
 - tsc: red on `cleanInputs` only (`Property 'exportLastPassMs' is missing`) until Step 5; after Step 5, no output.
 
 - [ ] **Step 5: Write the failing delivery tests.** Three files.
 
-(a) `server/test/ccrc-doctor.test.ts`, in the relay describe's `cleanInputs`, replace the one line
+(a) `server/test/ccrc-doctor.test.ts`, in the relay describe's `cleanInputs`, replace the one line (its last; B1 Task 28F's `extrasUnmeasured: [],` already ends it)
 
 ```ts
-    journalStoreDirs: [],
+    journalStoreDirs: [], extrasUnmeasured: [],
 ```
 
 with
 
 ```ts
-    journalStoreDirs: [], exportLastPassMs: null, exportDueOldestMs: null,
+    journalStoreDirs: [], extrasUnmeasured: [], exportLastPassMs: null, exportDueOldestMs: null,
 ```
 
 (b) `server/test/ccrc-doctor.test.ts`, in the `STATES` table of `'ccrc doctor: history — a real store, state by state …'`, replace the three lines
@@ -5905,7 +5905,7 @@ with
     exportDueOldestMs: typeof exp.due_oldest_ms === 'number' ? exp.due_oldest_ms : null,
 ```
 
-Insert directly above the line `export async function statusWithHealth(home, nowMs) {`:
+Insert directly above `statusWithHealth`'s own doc comment, the line ``/** `statusEnvelope` with its `health` filled and the store's device named. */`` (B1's cli.mjs puts it on the line before `export async function statusWithHealth(home, nowMs) {`), followed by one blank line, so each function keeps its own doc comment:
 
 ```js
 /** W1-B4 Task 9: the export's segments under `dir`, by name and size (store.mjs listSegments), never opened. A
@@ -5915,7 +5915,10 @@ function segmentCount(dir) {
   try { list = healthStore.listSegments(dir); } catch { return { n: null, bytes: null }; }
   return { n: list.length, bytes: list.reduce((sum, s) => sum + s.bytes, 0) };
 }
+
 ```
+
+The result reads, in order: `segmentCount`'s doc comment, `function segmentCount(dir) {` … `}`, a blank line, ``/** `statusEnvelope` with its `health` filled and the store's device named. */``, `export async function statusWithHealth(home, nowMs) {`.
 
 Then check the placement and the guards, from the repository root:
 
