@@ -41,3 +41,5 @@ export function runMigration(db: DatabaseSync, home: string, i: {
 }): { snapshot: string; copyBps: number };
 export const BR_QUALITY: 5;
 export function compressFdRange(fd: number, start: number, end: number): Promise<{ sha: Buffer; z: Buffer; rawLen: number } | null>;
+export const FTS_DDL: readonly string[];
+export function createFtsTables(db: import('node:sqlite').DatabaseSync): void;

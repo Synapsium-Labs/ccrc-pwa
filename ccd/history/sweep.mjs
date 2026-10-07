@@ -40,11 +40,12 @@ import {
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, linkSidecar, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, sessionHashPairs, makePairIndex, secretKindOf,
+  SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, ftsPhrase, redactField,
 } from './lib.mjs';
 import {
   StoreError, bump, closeWriter, createStore, dropPending, finishPending, getMeta, measureStoreFacts, openReader,
   openWriter, readAttempts, removeStaleTemps, setMeta, syncWriterMirror, userVersion, withTx,
-  CODEC, brotli, unbrotli, compressFdRange,
+  CODEC, brotli, unbrotli, compressFdRange, probeFts5, createFtsTables,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 
@@ -1390,6 +1391,10 @@ export async function tick(db, ctx) {
   // §9.2 "Then the secrets": every pair committed and journaled before any drain or FTS insert.
   const secrets = secretsStep(db, ictx, ctx.parsed.secrets);
   ictx.pairIdx = secrets.pairIdx;
+  // §9.1 the probe at every open, then §6.2: every pair whose re-index is still owed (a pair learned this tick, or
+  // one a dead pass committed) re-indexes before any FTS insert. Its values are every value this tick loaded.
+  ictx.fts = ftsPrepare(db, ictx.nowMs).tables;
+  reindexForValues(db, ictx, secrets.values);
   // Step 1, the drain: journal first, then the FULL drain transaction, then its verdicts, then the unlink (§9.14).
   // runPass never ticks without both binding names: a missing store.writer is a hold there (§9.10 "Writer token").
   ctx.hints = drainSpool(db, ctx);
@@ -1413,6 +1418,14 @@ export async function tick(db, ctx) {
   if (ing !== null && ing.busy) return;   // the write lock is another's: nothing more this tick
   // §6.2 epochs: launch facts an epoch chained after its transcript's first chunk missed (plan task 20).
   if (ing !== null) backfillEpochFacts(db, ictx);
+  // Blobs this tick wrote but could not index (no FTS this tick) re-open the completed backfill.
+  if (ing !== null && ing.bytes > 0 && ictx.fts !== true) resetFtsPending(db);
+  // §9.1 derivation ('fts', 1)'s backfill, within what is left of the ONE budget. It grows db/, so a cap or floor
+  // pause, or the per-chunk floor that stopped this run's ingest, holds it (D-4242).
+  if (ctx.ingest && !(ing !== null && ing.paused)) deriveFts(db, ictx, ctx.budget);
+  // §6.2's merge steps run under any pause (§9.2: only ingest pauses): they purge a late pair's deleted bytes and
+  // free space rather than take it.
+  mergeSteps(db, ictx, ctx.budget);
   // §9.2 step 6: the tick's row and journal record. A paused ingest records an unmeasured lag.
   recordTick(db, ictx, ing);
   if (scan && !ctx.rosterUnreadable) markScan(db, ctx.now());
@@ -1799,7 +1812,11 @@ export function prepareLines(lines, ctx, st) {
       const keptJson = canonicalJson(boundary.allUuids);
       kept = { sha: sha256Bytes(keptJson), json: keptJson };
     }
-    rows.push({ kind: 'row', at, entry, provenance: provenanceOf(row, { pairedToolUse: paired }), sha: sha256Bytes(json), json, boundary, kept });
+    const provenance = provenanceOf(row, { pairedToolUse: paired });
+    // The index text, only for a searchable row and only when this tick may index (§6.2). A recall echo is
+    // classified by the paired tool_use in provenanceOf, never by its text (D-4197, history-recall-echo-by-structure).
+    const ftsText = ctx.fts === true && SEARCHABLE_PROVENANCE.includes(provenance) ? ftsTextOf(body, 'entry') : null;
+    rows.push({ kind: 'row', at, entry, provenance, sha: sha256Bytes(json), json, boundary, kept, ftsText });
     if (st.firstPending) {
       st.firstPending = false;
       const f = launchFactsOf(row);
@@ -1877,6 +1894,10 @@ export function writeChunk(db, chunk) {
         add(`variants_${cause.replace(/^ccd-/, '')}`);
       }
       s.membership.run(chunk.fileId, entryId, r.at);   // r.at is a byte offset (D-4237)
+      if (chunk.pairIdx !== null && r.kind === 'row' && r.ftsText !== null) {
+        const b = s.blobId.get(r.sha);
+        if (b.fts_indexed === 0) indexBlob(db, b.blob_id, r.ftsText, chunk.pairIdx);
+      }
       if (r.kind === 'row' && r.boundary !== null) {
         const b = r.boundary;
         const keptId = r.kept === null ? null : blobIds.get(r.kept.sha.toString('hex'));
@@ -1957,7 +1978,7 @@ export async function ingestFile(db, ctx, file, budget) {
     }
     const w = writeChunk(db, {
       fileId: file.fileId, transcriptPk: file.transcriptPk, ccUuid: file.ccUuid, rankNs: file.mtimeNs,
-      nowMs: ctx.nowMs, rows, blobs: compressMissing(db, rows), counts, rawError, first,
+      nowMs: ctx.nowMs, rows, blobs: compressMissing(db, rows), counts, rawError, first, pairIdx: ctx.fts === true ? ctx.pairIdx : null,
       cursor: { offset: next, tailSha }, size: file.size, mtimeNs: file.mtimeNs,
     });
     bytes += next - offset;
@@ -2037,10 +2058,11 @@ export function floorProbeFor(dir, statfs) {
 /** What every ingest step reads: this pass's home and rostered homes, the tick's start, the
  *  binding's ids, and the injected parts a test may replace in-process: the boundary test from
  *  compact-card.mjs, the history-off probe, the parser, the free-space floor probe. pairIdx is this tick's
- *  redaction index; secretsStep's answer replaces the empty default. */
+ *  redaction index; secretsStep's answer replaces the empty default. fts says whether this tick may index
+ *  (ftsPrepare's tables). */
 export function makeIngestCtx(home, homes, nowMs, ids, floorProbe = FLOOR_ALWAYS_OK) {
   const off = historyPaths(home).off;
-  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe, pairIdx: makePairIndex([]) };
+  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe, pairIdx: makePairIndex([]), fts: false };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2416,16 +2438,19 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
     const st = fstatSync(a.fd, { bigint: true });
     const size = Number(st.size);
     let sha;
+    let head;
     let z = null;
     if (size <= SIDECAR_WHOLE_MAX) {
       const buf = readAt(a.fd, 0, size);
       if (buf.length < size) return null;                 // it shrank under the read: next tick
       sha = blobShaOfBytes(buf);
+      head = buf;
       if (stmts(db).blobId.get(sha) === undefined) z = brotli(buf);
     } else {
       const c = await compressFdRange(a.fd, 0, size);
       if (c === null) return null;
       sha = c.sha;
+      head = readAt(a.fd, 0, SIDECAR_FTS_BYTES);
       if (stmts(db).blobId.get(sha) === undefined) z = c.z;
     }
     // Task 18's ensureTranscript expects its caller's transaction (bindFile's); here it gets its own.
@@ -2437,6 +2462,7 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
       const ins = q.sidecarIns.run(transcriptPk, s.name, blobId, entryId, ctx.nowMs);
       if (ins.changes === 1 && entryId === null) bump(db, 'sidecar_unlinked');
       q.seenUpsert.run(s.path, st.size, st.mtimeNs, blobId);
+      if (ctx.fts === true && stmts(db).blobId.get(sha).fts_indexed === 0) indexBlob(db, blobId, ftsTextOf(head, 'sidecar'), ctx.pairIdx);
     });
     budget.bytes += size;
     return { bytes: size };
@@ -2610,6 +2636,217 @@ export function secretsStep(db, ctx, secretFiles) {
   });
   const all = secretStmts(db).allPairs.all().map((r) => ({ len: r.len, sha256: Buffer.from(r.sha256).toString('hex') }));
   return { pairIdx: makePairIndex(all), newValues, values: loaded.values };
+}
+
+// ---------------------------------------------------------------------------------------------
+// The FTS index (§6.2 "FTS indexing", §9.1; plan task 23). The index is derived and blobs stay
+// verbatim. Its body is extracted plain text (never JSON), redacted by redactField before it is a
+// term, and only for blobs that a row of searchable provenance references. A pair learned after
+// its text was indexed is re-indexed by quoted phrase before any FTS insert of that tick, and the
+// obligation outlives the pass that learned it (meta fts_reindex_rid). The bytes a contentless
+// delete leaves in blobs_fts_data are purged by bounded merge steps; a whole-table 'optimize'
+// never runs in a scheduled pass.
+// ---------------------------------------------------------------------------------------------
+
+const FTS_STEP = 'fts';
+const MERGE_STEP = 'fts-merge';
+/** meta key: the highest redact_hashes rowid whose re-index has committed. */
+const REINDEX_META = 'fts_reindex_rid';
+/** Pages per merge step. Negative: FTS5 merges every b-tree level, including a single segment
+ *  holding a deleted term (measured, 22.16.0); a positive N merges only levels holding usermerge
+ *  segments. */
+const MERGE_PAGES = 64;
+/** Blobs per backfill transaction. */
+const BACKFILL_BATCH = 256;
+
+const DERIV_STMTS = new WeakMap();
+function derivStmts(db) {
+  let d = DERIV_STMTS.get(db);
+  if (d !== undefined) return d;
+  d = {
+    sel: db.prepare('SELECT cursor, completed_ms FROM derivation_state WHERE step = ? AND version = ?'),
+    ins: db.prepare('INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES (?, ?, ?, NULL) ON CONFLICT(step, version) DO NOTHING'),
+    cursor: db.prepare('UPDATE derivation_state SET cursor = ? WHERE step = ? AND version = ?'),
+    done: db.prepare('UPDATE derivation_state SET completed_ms = ?, cursor = ? WHERE step = ? AND version = ?'),
+    pending: db.prepare(`INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES (?, ?, NULL, NULL)
+      ON CONFLICT(step, version) DO UPDATE SET completed_ms = NULL`),
+    reopen: db.prepare('UPDATE derivation_state SET completed_ms = NULL WHERE step = ? AND version = ? AND completed_ms IS NOT NULL'),
+    blobForFts: db.prepare(`SELECT z, EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = blobs.blob_id) AS is_sidecar
+      FROM blobs WHERE blob_id = ?`),
+    pairTop: db.prepare('SELECT max(rowid) AS rid FROM redact_hashes'),
+    pairRid: db.prepare('SELECT rowid AS rid FROM redact_hashes WHERE len = ? AND sha256 = ?'),
+  };
+  DERIV_STMTS.set(db, d);
+  return d;
+}
+
+const FTS_STMTS = new WeakMap();
+/** Statements over the FTS tables. These are prepared only once ftsPrepare has made the tables:
+ *  node:sqlite refuses to prepare against a table that does not exist. */
+function ftsStmts(db) {
+  let f = FTS_STMTS.get(db);
+  if (f !== undefined) return f;
+  const ph = SEARCHABLE_PROVENANCE.map(() => '?').join(', ');
+  f = {
+    ins: db.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)'),
+    del: db.prepare('DELETE FROM blobs_fts WHERE rowid = ?'),
+    mark: db.prepare('UPDATE blobs SET fts_indexed = 1 WHERE blob_id = ?'),
+    match: db.prepare('SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH ?'),
+    merge: db.prepare("INSERT INTO blobs_fts (blobs_fts, rank) VALUES ('merge', ?)"),
+    total: db.prepare('SELECT total_changes() AS n'),
+    backfill: db.prepare(`SELECT b.blob_id AS blob_id, b.z AS z,
+        EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = b.blob_id) AS is_sidecar
+      FROM blobs b
+      WHERE b.blob_id > ? AND b.fts_indexed = 0 AND b.z IS NOT NULL
+        AND (EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = b.blob_id)
+          OR EXISTS (SELECT 1 FROM entries e WHERE e.blob_id = b.blob_id AND e.provenance IN (${ph}))
+          OR EXISTS (SELECT 1 FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id
+                     WHERE v.blob_id = b.blob_id AND e.provenance IN (${ph})))
+      ORDER BY b.blob_id LIMIT ?`),
+  };
+  FTS_STMTS.set(db, f);
+  return f;
+}
+
+/** A stored blob's index text: a sidecar's first SIDECAR_FTS_BYTES, or a body's plain text
+ *  (D-4195, history-fts-body-plain-text). A body
+ *  that does not parse indexes nothing. It is never thrown: the index is derived, and the blob
+ *  stays. */
+function ftsTextOfBlob(z, isSidecar) {
+  const bytes = unbrotli(z);
+  if (isSidecar) return ftsTextOf(bytes, 'sidecar');
+  try { return ftsTextOf(JSON.parse(bytes.toString('utf8')), 'entry'); } catch { return ''; }
+}
+
+/** At a tick's start: the read-only probe (history-fts-probe-read-only), and, the first time it
+ *  answers present, derivation ('fts', 1)'s first act, the two tables
+ *  (D-4215, history-fts-tables-by-derivation). The probe is read-only (D-4214, history-fts-probe-read-only).
+ *  - Absent: capture continues with no FTS (fts5-absent).
+ *  - A throw of the probe itself: probe-failed, never folded into absent.
+ *  - Writes meta `fts` (status reads it). `tables` says whether this tick may index. */
+export function ftsPrepare(db, nowMs) {
+  let probe;
+  try { probe = probeFts5(db); } catch { probe = 'probe-failed'; }
+  const d = derivStmts(db);
+  let state;
+  if (probe === 'present') {
+    const row = d.sel.get(FTS_STEP, 1);
+    if (row === undefined) {
+      withTx(db, 'NORMAL', () => {
+        createFtsTables(db);
+        d.ins.run(FTS_STEP, 1, '0');
+      });
+    }
+    state = row !== undefined && row.completed_ms !== null ? 'ready' : 'fts-pending';
+  } else {
+    state = probe === 'absent' ? 'fts5-absent' : 'probe-failed';
+  }
+  withTx(db, 'NORMAL', () => { setMeta(db, 'fts', state); });
+  return { state, tables: probe === 'present' };
+}
+
+/** One blob into the index, inside the caller's transaction: its text REDACTED first
+ *  (D-4243, history-fts-indexes-redacted-text; a secret known now is never a term, a prefix or an index
+ *  byte), rowid = blob_id, and the blob marked indexed. */
+export function indexBlob(db, blobId, text, pairIdx) {
+  const f = ftsStmts(db);
+  f.ins.run(blobId, redactField(text, pairIdx));
+  f.mark.run(blobId);
+}
+
+/** Derivation ('fts', 1)'s backfill (§9.1). Every blob still unindexed that a searchable row (or a
+ *  sidecar) references is indexed in BACKFILL_BATCH transactions from a cursor, within the run's
+ *  budget. When none is left the step completes and meta `fts` reads ready. Under a cap or floor pause the
+ *  tick does not call it (D-4242, history-fts-backfill-pauses-with-ingest). The EXISTS probes below search
+ *  schema v1's referrer indexes (D-4217, history-referrer-indexes). */
+export function deriveFts(db, ctx, budget) {
+  if (ctx.fts !== true) return;
+  const d = derivStmts(db);
+  const row = d.sel.get(FTS_STEP, 1);
+  if (row === undefined || row.completed_ms !== null) return;
+  const f = ftsStmts(db);
+  let cursor = Number(row.cursor ?? 0);
+  while (budgetLeft(budget)) {
+    const batch = f.backfill.all(cursor, ...SEARCHABLE_PROVENANCE, ...SEARCHABLE_PROVENANCE, BACKFILL_BATCH);
+    const last = batch.length < BACKFILL_BATCH;
+    withTx(db, 'NORMAL', () => {
+      for (const b of batch) {
+        indexBlob(db, b.blob_id, ftsTextOfBlob(b.z, b.is_sidecar === 1), ctx.pairIdx);
+        cursor = b.blob_id;
+        budget.bytes += b.z.length;
+      }
+      if (last) {
+        d.done.run(ctx.nowMs, String(cursor), FTS_STEP, 1);
+        setMeta(db, 'fts', 'ready');
+      } else {
+        d.cursor.run(String(cursor), FTS_STEP, 1);
+      }
+    });
+    if (last) return;
+  }
+}
+
+/** Re-open a completed ('fts', 1) backfill, keeping its cursor. Called when blobs were written that
+ *  could not be indexed: by a tick whose probe answered fts5-absent or probe-failed while the tables
+ *  exist, or by an `--op import --apply` pass, whose ingest context never indexes (Task 25). The
+ *  next tick that has FTS backfills them through its full pair index. Blob ids only grow, so every
+ *  such new blob lies past the cursor. A store whose tables were never made has no row to re-open:
+ *  their first creation backfills from 0. */
+export function resetFtsPending(db) {
+  withTx(db, 'NORMAL', () => { derivStmts(db).reopen.run(FTS_STEP, 1); });
+}
+
+/** The re-index a learned pair owes the index (D-4245, history-redaction-reindex-merge, SE4), made DURABLE.
+ *  Meta `fts_reindex_rid` is the highest redact_hashes rowid whose re-index has committed. `values`
+ *  is every secret value this tick loaded; each whose pair lies above the mark has its blobs found
+ *  by a QUOTED-PHRASE match, which FTS5 tokenises as the index did. In one transaction, each such
+ *  blob's row is deleted and re-inserted with the now-complete index, merge steps are registered to
+ *  purge the deleted bytes, and the mark advances to the top rowid. So a pass that died between
+ *  committing a pair and re-indexing it, or a tick with no FTS, leaves the obligation to the next
+ *  tick that has FTS rather than losing it. A pair with no loadable value (sessions.json's hash
+ *  pairs, or a source removed since) is passed over by the mark. Values are never written anywhere.
+ *  Returns how many blobs were re-indexed. */
+export function reindexForValues(db, ctx, values) {
+  if (ctx.fts !== true) return 0;
+  const d = derivStmts(db);
+  const mark = Number(getMeta(db, REINDEX_META) ?? 0);
+  const top = d.pairTop.get().rid ?? 0;
+  if (top <= mark) return 0;
+  const owed = values.filter((v) => secretPairs([v]).pairs
+    .some((p) => (d.pairRid.get(p.len, Buffer.from(p.sha256, 'hex'))?.rid ?? 0) > mark));
+  const f = ftsStmts(db);
+  const ids = new Set();
+  for (const v of owed) for (const r of f.match.all(ftsPhrase(v))) ids.add(Number(r.rowid));
+  withTx(db, 'NORMAL', () => {
+    for (const id of ids) {
+      f.del.run(id);
+      const b = d.blobForFts.get(id);
+      if (b === undefined || b.z === null) continue;   // a tombstone keeps no index row
+      f.ins.run(id, redactField(ftsTextOfBlob(b.z, b.is_sidecar === 1), ctx.pairIdx));
+    }
+    if (ids.size > 0) d.pending.run(MERGE_STEP, 1);
+    setMeta(db, REINDEX_META, String(top));
+  });
+  return ids.size;
+}
+
+/** Bounded FTS5 merge steps (§6.2), from derivation_state ('fts-merge', 1), within the run's
+ *  budget, until FTS5 reports nothing left to merge: a total_changes() delta under 2. Only then
+ *  does the guarantee on the index's bytes hold. */
+export function mergeSteps(db, ctx, budget) {
+  if (ctx.fts !== true) return;
+  const d = derivStmts(db);
+  const row = d.sel.get(MERGE_STEP, 1);
+  if (row === undefined || row.completed_ms !== null) return;
+  const f = ftsStmts(db);
+  while (budgetLeft(budget)) {
+    const before = f.total.get().n;
+    withTx(db, 'NORMAL', () => { f.merge.run(-MERGE_PAGES); });
+    if (f.total.get().n - before < 2) {
+      withTx(db, 'NORMAL', () => { d.done.run(ctx.nowMs, null, MERGE_STEP, 1); });
+      return;
+    }
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {

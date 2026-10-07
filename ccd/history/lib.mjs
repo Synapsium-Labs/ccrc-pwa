@@ -1880,3 +1880,10 @@ export function secretKindOf(source, path) {
   if (source !== null && source.identifierKeysOnly === true) return 'env-identifier';
   return kindOfPath(path);
 }
+
+/** A value as ONE FTS5 quoted phrase, which FTS5 tokenises exactly as the index did. A bare MATCH
+ *  of a value holding `-` is a syntax error ("no such column", M, 22.16.0; §6.2, SE4). An embedded
+ *  `"` is doubled, FTS5's own escape. */
+export function ftsPhrase(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
+}

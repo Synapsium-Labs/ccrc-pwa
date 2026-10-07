@@ -1761,3 +1761,11 @@ describe('lib: secretKindOf (plan task 22)', () => {
     expect(lib.secretKindOf(null, '/home/u/.ccrc/extra.json')).toBe('json');
   });
 });
+
+describe('lib: ftsPhrase (plan task 23)', () => {
+  it('quotes a value as one FTS5 phrase and doubles an embedded quote', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.ftsPhrase('zqv-0123_4567')).toBe('"zqv-0123_4567"');
+    expect(lib.ftsPhrase('a"b')).toBe('"a""b"');
+  });
+});

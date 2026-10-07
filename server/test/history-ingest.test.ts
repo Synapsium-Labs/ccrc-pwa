@@ -18,7 +18,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as zc } from 'node:zlib';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
-import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, plantSession, counters, journalRecords, spoolLine, SWEEP, type HistoryBox } from './historyHelpers.js';
+import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, plantSession, counters, journalRecords, spoolLine, SWEEP, PRELOADS, type HistoryBox } from './historyHelpers.js';
 import { boundaryRow } from './historyFixtures.js';
 import { createStore, openWriter, closeWriter } from '../../ccd/history/store.mjs';
 import { historyPaths, sha256Hex } from '../../ccd/history/lib.mjs';
@@ -1657,5 +1657,203 @@ describe('history ingest: secrets per tick (plan task 22)', () => {
       expect(pairsIn(db)).toContain(`64:${sha(value)}`);
     } finally { db.close(); }
     expect(counters(box)['redact_source_unreadable']).toBe(6);   // three paths, two ticks
+  });
+});
+
+describe('history ingest: the FTS index (plan task 23)', () => {
+  // D-4246 (history-w1b-three-prs): these pins are the store halves; their `grep` halves are B2's.
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const hex = (n: number): string => randomBytes(n).toString('hex');
+  const metaV = (db: DatabaseSync, k: string): string | undefined =>
+    (db.prepare('SELECT v FROM meta WHERE k = ?').get(k) as { v: string } | undefined)?.v;
+  const matches = (db: DatabaseSync, q: string): number =>
+    (db.prepare('SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH ?').get(q) as { n: number }).n;
+  /** The index's own bytes: every FTS5 data block, as latin1. */
+  const ftsBytes = (db: DatabaseSync): string =>
+    (db.prepare('SELECT block FROM blobs_fts_data').all() as { block: Uint8Array }[]).map((r) => Buffer.from(r.block).toString('latin1')).join('');
+  const secretFile = (box: HistoryBox, name: string, body: string): void => {
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(box.home, '.cc-secrets', name), body, { mode: 0o600 });
+  };
+  const hint = (box: HistoryBox): void => {
+    fs.mkdirSync(path.join(box.root, 'spool'), { recursive: true });
+    spoolLine(box, IX.ID, { v: 1, ev: 'Stop', id: IX.ID });
+  };
+
+  it('O9 (store half): a probe answering absent leaves no FTS tables and capture continues; a throw is probe-failed; flipped, derivation creates and backfills', () => {
+    const box = IX.newBox('ccrc-hist-o9-');
+    const p = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqalpha before the probe', 1)]));
+    const absent = { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_FTS_PROBE: 'absent' } };
+    IX.sweepTwice(box, absent);
+    fs.appendFileSync(p, IX.jsonl([IX.user(IX.uuidN(2), IX.uuidN(1), 'zqbravo while absent', 2)]));
+    hint(box);
+    expect(runSweep(box, [], absent).code).toBe(0);
+    let db = openStoreRO(box);
+    try {
+      expect(IX.count(db, 'sqlite_master', "name IN ('blobs_fts', 'nodes_fts')")).toBe(0);
+      expect(metaV(db, 'fts')).toBe('fts5-absent');
+      expect(IX.count(db, 'entries')).toBe(2);              // the new message was still captured
+      expect(IX.count(db, 'blobs', 'fts_indexed = 1')).toBe(0);
+    } finally { db.close(); }
+    expect(runSweep(box, [], { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_FTS_PROBE: 'throw' } }).code).toBe(0);
+    db = openStoreRO(box);
+    try { expect(metaV(db, 'fts')).toBe('probe-failed'); } finally { db.close(); }   // never folded into absent
+    expect(runSweep(box).code).toBe(0);                     // no seam: FTS5 is present on this interpreter (>= 22.16)
+    db = openStoreRO(box);
+    try {
+      expect(IX.count(db, 'sqlite_master', "name IN ('blobs_fts', 'nodes_fts')")).toBe(2);
+      expect(metaV(db, 'fts')).toBe('ready');
+      expect(IX.count(db, 'blobs', 'fts_indexed = 1')).toBe(2);
+      expect(matches(db, 'zqalpha')).toBe(1);
+      expect(matches(db, 'zqbravo')).toBe(1);
+    } finally { db.close(); }
+  });
+
+  it('DM28 and DM32 (store halves): summary, harness and recall-echo text is not indexed; operator, model and tool text is, a cat of <ccrc-recall included', () => {
+    const box = IX.newBox('ccrc-hist-dm28-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'zqoperator words', 1),
+      IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'text', text: 'zqmodel words' }], 2),
+      { type: 'system', subtype: 'informational', level: 'info', content: 'zqharness words', uuid: IX.uuidN(3), parentUuid: IX.uuidN(2), timestamp: IX.ts(3) },
+      // An isMeta user row: harness provenance with a string body, which ftsTextOf would index, so the provenance
+      // gate is the only thing keeping it out (an attachment's object body yields no text either way).
+      IX.user(IX.uuidN(4), IX.uuidN(3), 'zqmeta words', 4, { isMeta: true }),
+      IX.user(IX.uuidN(5), IX.uuidN(4), 'zqsummary words', 5, { isCompactSummary: true }),
+      IX.assistant(IX.uuidN(6), IX.uuidN(5), [{ type: 'tool_use', id: 'toolu_01RE', name: 'Bash', input: { command: 'ccrc history grep zqasked' } }], 6),
+      IX.user(IX.uuidN(7), IX.uuidN(6), [{ type: 'tool_result', tool_use_id: 'toolu_01RE', content: 'zqecho words' }], 7),
+      IX.assistant(IX.uuidN(8), IX.uuidN(7), [{ type: 'tool_use', id: 'toolu_01CT', name: 'Bash', input: { command: 'cat notes.md' } }], 8),
+      IX.user(IX.uuidN(9), IX.uuidN(8), [{ type: 'tool_result', tool_use_id: 'toolu_01CT', content: 'zqtool words <ccrc-recall id="L0123456789abcdef0123"> zqcatbody' }], 9),
+    ]));
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      expect({ operator: matches(db, 'zqoperator'), model: matches(db, 'zqmodel'), tool: matches(db, 'zqtool'), cat: matches(db, 'zqcatbody') })
+        .toEqual({ operator: 1, model: 1, tool: 1, cat: 1 });
+      expect({ harness: matches(db, 'zqharness'), meta: matches(db, 'zqmeta'), summary: matches(db, 'zqsummary'), echo: matches(db, 'zqecho') })
+        .toEqual({ harness: 0, meta: 0, summary: 0, echo: 0 });
+    } finally { db.close(); }
+  });
+
+  it('DM29 (store half): a sidecar indexes its first 512 KB only; the text past it stays in the blob', () => {
+    const box = IX.newBox('ccrc-hist-dm29-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+    const dir = path.join(box.homes[0]!, 'projects', IX.SLUG, IX.U, 'tool-results');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'big.txt'), `zqhead ${'x '.repeat(300_000)} zqtail\n`);
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      expect(matches(db, 'zqhead')).toBe(1);
+      expect(matches(db, 'zqtail')).toBe(0);
+      expect(IX.blobsHold(db, 'zqtail')).toBe(true);
+    } finally { db.close(); }
+  });
+
+  it('DM30 and DM13 (FTS clauses): the body is plain text, never JSON keys; a uuid-less row is no term', () => {
+    const box = IX.newBox('ccrc-hist-dm30-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, [{ type: 'text', text: 'zqfirst line\nzqsecond word' }], 1),
+      { type: 'bridge-session', sessionId: IX.U, accountUuid: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', timestamp: IX.ts(2) },
+    ]));
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      expect(matches(db, 'zqsecond')).toBe(1);
+      expect(matches(db, 'type')).toBe(0);
+      expect(matches(db, 'text')).toBe(0);
+      expect(matches(db, '"a1b2c3d4"')).toBe(0);
+    } finally { db.close(); }
+  });
+
+  it('DM31 (store half): a token known before its text is indexed is no term, no prefix and no index byte, and its blob keeps it', () => {
+    const box = IX.newBox('ccrc-hist-dm31-');
+    const token = hex(32);
+    secretFile(box, 'fixture.env', `ZQ_FIXTURE_TOKEN=${token}\n`);
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `the key is ${token} ok`, 1)]));
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      expect(matches(db, 'key')).toBe(1);                   // CONTROL: the row itself is indexed
+      expect(matches(db, `"${token.slice(0, 6)}"*`)).toBe(0);
+      expect(ftsBytes(db).includes(token.slice(16, 32))).toBe(false);
+      expect(IX.blobsHold(db, token)).toBe(true);
+    } finally { db.close(); }
+  });
+
+  it('a value learned after its text was indexed is re-indexed by quoted phrase, then purged from the index bytes by merge steps', () => {
+    const box = IX.newBox('ccrc-hist-late-');
+    const value = `zqv-${hex(10)}_${hex(10)}`;          // '-' and '_': a bare MATCH of it is a syntax error
+    const tail = value.slice(value.indexOf('_') + 1);
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note ${value} end`, 1)]));
+    IX.sweepTwice(box);
+    let db = openStoreRO(box);
+    try {
+      expect(matches(db, `"${tail.slice(0, 6)}"*`)).toBe(1);   // CONTROL: indexed in clear before the pair is known
+      expect(ftsBytes(db).includes(tail.slice(4, 16))).toBe(true);
+    } finally { db.close(); }
+    secretFile(box, 'late.env', `ZQ_LATE_VALUE=${value}\n`);
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    db = openStoreRO(box);
+    try {
+      expect(matches(db, `"${tail.slice(0, 6)}"*`)).toBe(0);
+      expect(matches(db, 'note')).toBe(1);                  // the row is still indexed, redacted
+      expect(ftsBytes(db).includes(tail.slice(4, 16))).toBe(false);
+      expect(IX.blobsHold(db, value)).toBe(true);
+      expect((db.prepare("SELECT completed_ms AS c FROM derivation_state WHERE step = 'fts-merge' AND version = 1").get() as { c: number | null }).c)
+        .not.toBeNull();
+    } finally { db.close(); }
+  });
+
+  it('a pair committed by a pass that died before its re-index is re-indexed by the next pass: the obligation is durable', async () => {
+    const box = IX.newBox('ccrc-hist-reidx-');
+    const value = `zqw-${hex(10)}_${hex(10)}`;
+    const tail = value.slice(value.indexOf('_') + 1);
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note ${value} end`, 1)]));
+    IX.sweepTwice(box);                                      // indexed in clear: the pair is not known yet
+    secretFile(box, 'late.env', `ZQ_LATE_VALUE=${value}\n`);
+    // The dead pass, in-process: the tick's secrets step learns the pair, commits it under FULL and journals it, and
+    // the process ends before reindexForValues runs.
+    const { sweep: S, store, lib } = await IX.api();
+    const P = lib.historyPaths(box.home);
+    const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+    const w = store.openWriter(P.dbFile);
+    try {
+      expect(S.secretsStep(w, S.makeIngestCtx(box.home, box.homes, Date.now(), ids), []).newValues).toEqual([value]);
+    } finally { w.close(); }
+    let db = openStoreRO(box);
+    try { expect(matches(db, `"${tail.slice(0, 6)}"*`)).toBe(1); } finally { db.close(); }   // CONTROL: still a term
+    const r = runSweep(box);                                 // the pair is known now: it is new to no one
+    expect(r.code, r.stderr).toBe(0);
+    db = openStoreRO(box);
+    try {
+      expect(matches(db, `"${tail.slice(0, 6)}"*`)).toBe(0);
+      expect(ftsBytes(db).includes(tail.slice(4, 16))).toBe(false);
+      expect(metaV(db, 'fts_reindex_rid'))
+        .toBe(String((db.prepare('SELECT max(rowid) AS r FROM redact_hashes').get() as { r: number }).r));   // the mark caught up
+    } finally { db.close(); }
+  });
+
+  it('blobs captured while the probe failed are indexed once FTS is back: the completed backfill re-opens', () => {
+    const box = IX.newBox('ccrc-hist-fts-reopen-');
+    const p = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqalpha indexed at once', 1)]));
+    IX.sweepTwice(box);
+    let db = openStoreRO(box);
+    try { expect(metaV(db, 'fts')).toBe('ready'); } finally { db.close(); }   // the tables exist and the backfill is complete
+    fs.appendFileSync(p, IX.jsonl([IX.user(IX.uuidN(2), IX.uuidN(1), 'zqcharlie while the probe fails', 2)]));
+    hint(box);
+    expect(runSweep(box, [], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_FTS_PROBE: 'throw' } }).code).toBe(0);
+    db = openStoreRO(box);
+    try {
+      expect(IX.count(db, 'entries')).toBe(2);              // captured
+      expect(metaV(db, 'fts')).toBe('probe-failed');
+      expect(matches(db, 'zqcharlie')).toBe(0);             // not indexed: this tick could not
+    } finally { db.close(); }
+    expect(runSweep(box).code).toBe(0);                     // no seam: FTS is back
+    db = openStoreRO(box);
+    try {
+      expect(matches(db, 'zqcharlie')).toBe(1);
+      expect(metaV(db, 'fts')).toBe('ready');
+    } finally { db.close(); }
   });
 });

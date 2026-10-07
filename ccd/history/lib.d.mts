@@ -293,3 +293,4 @@ export function lagOfTick(i: { tickStartMs: number; newEntries: number; minNewTs
 export const SIDECAR_WHOLE_MAX: 67108864;
 export function linkSidecar(name: string, candidates: ReadonlyArray<{ entryId: number; text: string; toolUseIds: readonly string[] }>): number | null;
 export function secretKindOf(source: object | null, path: string): 'sessions' | 'env-identifier' | 'env' | 'token' | 'json';
+export function ftsPhrase(value: string): string;

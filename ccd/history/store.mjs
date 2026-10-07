@@ -778,3 +778,17 @@ export async function compressFdRange(fd, start, end) {
   await finished;
   return { sha: hash.digest(), z: Buffer.concat(out), rawLen: end - start };
 }
+
+/** The two FTS5 tables. They are NOT in schema v1 (RV2; history-fts-tables-by-derivation):
+ *  derivation step ('fts', 1) runs these only after the writer's read-only probe answered present.
+ *  blobs_fts is contentless, with rowid = blob_id and contentless_delete, so a late redaction pair
+ *  can delete one row. */
+export const FTS_DDL = Object.freeze([
+  "CREATE VIRTUAL TABLE IF NOT EXISTS blobs_fts USING fts5(body, content='', contentless_delete=1, tokenize='porter unicode61')",
+  "CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(gist, topics, refs, tokenize='porter unicode61')",
+]);
+
+/** Run FTS_DDL; the caller holds the transaction. */
+export function createFtsTables(db) {
+  for (const sql of FTS_DDL) db.exec(sql);
+}

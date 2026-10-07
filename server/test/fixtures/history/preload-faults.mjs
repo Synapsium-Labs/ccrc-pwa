@@ -140,3 +140,23 @@ HfStatementSync.prototype.run = function run(...args) {
 };
 hfSyncBuiltins();
 // <<< history fault recorder
+
+// ── Task 23: the FTS5 probe's answer (O9) ─────────────────────────────────────────────────────────
+// HISTORY_TEST_FTS_PROBE=absent: the read-only probe's statement (`… pragma_module_list WHERE name='fts5'`,
+//   store.mjs probeFts5, Task 11) finds no row, as on a node:sqlite built without FTS5.
+// HISTORY_TEST_FTS_PROBE=throw: preparing the probe's statement throws, the `probe-failed` arm.
+// Only the probe's SQL is touched; every other statement, the FTS tables' own included, runs for real, so
+// flipping the variable off lets the next pass create and backfill the tables (O9).
+import { DatabaseSync as DatabaseSyncF23 } from 'node:sqlite';
+{
+  const modeF23 = process.env.HISTORY_TEST_FTS_PROBE ?? '';
+  if (modeF23 === 'absent' || modeF23 === 'throw') {
+    const protoF23 = DatabaseSyncF23.prototype;
+    const realPrepareF23 = protoF23.prepare;
+    protoF23.prepare = function prepareF23(sql) {
+      if (!/pragma_module_list/i.test(String(sql))) return realPrepareF23.call(this, sql);
+      if (modeF23 === 'throw') throw new Error('the fts5 probe failed (test preload)');
+      return { get: () => undefined, all: () => [], iterate: function* iterateF23() {}, run: () => ({ changes: 0, lastInsertRowid: 0 }) };
+    };
+  }
+}
