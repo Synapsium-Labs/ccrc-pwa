@@ -162,6 +162,10 @@ describe('check 1: the transport catch, both halves unmeasured (row 46, R14)', (
     expect(await treeWith(transport('disconnected'))).toEqual({ ok: false, failure: 'link-failed', cause: 'disconnected' });
   });
 
+  it('the cause is cut to 512 bytes (refinement (f): redacted and cut the same way as stderr)', async () => {
+    expect(await treeWith(transport('x'.repeat(2048)))).toEqual({ ok: false, failure: 'link-failed', cause: 'x'.repeat(512) });
+  });
+
   it('the cause is redacted', async () => {
     expect(await treeWith(transport('connect https://u:tok@example.invalid/x')))
       .toEqual({ ok: false, failure: 'link-failed', cause: 'connect https://***@example.invalid/x' });
