@@ -1037,20 +1037,27 @@ function firstUuidRowCwdOf(fd) {
 /** For the location rule (§6.1): the first uuid row's cwd of this uuid's transcript, across the rostered homes, read
  *  only through admission (O_NOFOLLOW, O_NONBLOCK, a regular file under a rostered root). Only that first row is
  *  read: until the epoch confirms, nothing else of the file is (SE5). A read that throws on an admitted file skips
- *  that file, as Task 17's did; it never fails the tick (D-4298, slug history-first-row-read-error-skips-file). */
-export function firstUuidRowCwd(homes, userHome, uuid) {
-  for (const f of discoverTranscripts(homes, [uuid])) {
+ *  that file, as Task 17's did; it never fails the tick (D-4298, slug history-first-row-read-error-skips-file).
+ *  `cache` is the tick's newFirstRowCache (F16); null walks per lookup. */
+export function firstUuidRowCwd(homes, userHome, uuid, cache = null) {
+  if (cache !== null && cache.cwd.has(uuid)) return cache.cwd.get(uuid);
+  const files = cache === null ? discoverTranscripts(homes, [uuid]) : indexedTranscripts(cache, homes, uuid);
+  for (const f of files) {
     const a = admitFile(f.path, f.home, homes, userHome);
     if (!a.ok) continue;
     try {
       const cwd = firstUuidRowCwdOf(a.fd);
-      if (cwd !== undefined) return cwd;
+      if (cwd !== undefined) {
+        if (cache !== null) cache.cwd.set(uuid, cwd);
+        return cwd;
+      }
     } catch {
       continue;   // a read that fails on an admitted file: this file cannot place the epoch, the next may (Task 17's rule kept)
     } finally {
       closeSync(a.fd);
     }
   }
+  // nothing admitted and read: never remembered, so the next lookup this tick asks again (D-4298, D-4340: unreadable is not absent)
   return null;
 }
 
@@ -1058,7 +1065,7 @@ export function firstUuidRowCwd(homes, userHome, uuid) {
  *  both realpaths when both resolve, otherwise the verbatim strings (§6.1; D-4191, slug history-epoch-cwd-real). */
 function locationConfirms(c, uuid, workdir) {
   if (workdir.state !== 'value') return false;
-  const cwd = firstUuidRowCwd(c.homes, c.home, uuid);
+  const cwd = firstUuidRowCwd(c.homes, c.home, uuid, c.firstRows ?? null);
   if (cwd === null) return false;
   return locationMatches({ cwd, cwdReal: realOrNull(cwd), workdir, workdirReal: realOrNull(workdir.value) });
 }
@@ -1353,12 +1360,11 @@ export function admitFile(p, home, homes, userHome) {
   }
 }
 
-/** `<home>/projects/*\/<uuid>.jsonl` for every wanted uuid, across the rostered homes the shim passed. Paths come
- *  from directory entries, never from a uuid spliced into a path. A home with no projects/ is skipped silently. */
-export function discoverTranscripts(homes, uuids) {
-  const want = new Set(uuids);
-  const out = [];
-  if (want.size === 0) return out;
+/** Every `<home>/projects/<slug>/<name>.jsonl` under the rostered homes, in ONE order (homes as given, slugs and names
+ *  sorted): take({path, uuid, home}) for each, uuid the name's stem. A projects/ or slug directory that cannot be listed
+ *  is skipped, as discoverTranscripts always skipped it. discoverTranscripts and the location rule's per-tick index
+ *  both walk through it (review 316 F16). */
+function walkTranscripts(homes, take) {
   for (const home of homes) {
     let slugs;
     try { slugs = readdirSync(`${home}/projects`).sort(); } catch { continue; }
@@ -1367,12 +1373,38 @@ export function discoverTranscripts(homes, uuids) {
       try { names = readdirSync(`${home}/projects/${slug}`).sort(); } catch { continue; }
       for (const n of names) {
         if (!n.endsWith('.jsonl')) continue;
-        const uuid = n.slice(0, -'.jsonl'.length);
-        if (want.has(uuid)) out.push({ path: `${home}/projects/${slug}/${n}`, uuid, home });
+        take({ path: `${home}/projects/${slug}/${n}`, uuid: n.slice(0, -'.jsonl'.length), home });
       }
     }
   }
+}
+
+/** `<home>/projects/*\/<uuid>.jsonl` for every wanted uuid, across the rostered homes the shim passed. Paths come
+ *  from directory entries, never from a uuid spliced into a path. A home with no projects/ is skipped silently. */
+export function discoverTranscripts(homes, uuids) {
+  const want = new Set(uuids);
+  const out = [];
+  if (want.size === 0) return out;
+  walkTranscripts(homes, (t) => { if (want.has(t.uuid)) out.push(t); });
   return out;
+}
+
+/** The location rule's memory for ONE tick (review 316 F16): `index`, every `<stem>.jsonl` under the rostered homes by
+ *  stem, from one walk made at the tick's first lookup; `cwd`, each uuid's first-row cwd once an ADMITTED file was
+ *  READ. tick() makes a fresh one before the drain; a caller with none walks per lookup, as before. */
+export function newFirstRowCache() { return { index: null, cwd: new Map() }; }
+
+/** This uuid's transcripts from the tick's one walk. A miss is "not seen this tick", never "absent": the only
+ *  consequence is a clear epoch left unconfirmed with its candidate row, which confirmClear tries again next tick with
+ *  a fresh walk (§6.1, D-4189). Re-walking per miss would bring back F16's cost whenever one directory is unlistable,
+ *  and it would see no more than the walk did: that directory fails the same way. */
+function indexedTranscripts(cache, homes, uuid) {
+  if (cache.index === null) {
+    const index = new Map();
+    walkTranscripts(homes, (t) => { const l = index.get(t.uuid); if (l === undefined) index.set(t.uuid, [t]); else l.push(t); });
+    cache.index = index;
+  }
+  return cache.index.get(uuid) ?? [];
 }
 
 /** The uuids the periodic scan resolves: every confirmed epoch's, and every `$REG/*.uuid` of the UUID grammar. An
@@ -1578,6 +1610,7 @@ export function discoverAndPlan(db, c, uuids) {
  * @property {boolean} rosterUnreadable  the shim passed --roster-unreadable
  * @property {(line: string) => void} out  the outcome-line printer (deps.out ?? one console.log line)
  * @property {string[]} [hints]  set by the drain: sids of this tick's fresh spool lines
+ * @property {object} [firstRows]  set by tick: the location rule's per-tick memory (newFirstRowCache, review 316 F16)
  * @property {object[]} [planned]  set by Task 18's discovery step: the files bound this tick (Task 19's ingest
  *   discovers and binds per path instead, and leaves it unset)
  * @property {boolean} ingest  planRun's verdict: false under a cap or floor pause (Task 19)
@@ -1617,6 +1650,8 @@ export async function tick(db, ctx) {
   await rederiveFts(db, ictx, ctx.budget);
   // Step 1, the drain: journal first, then the FULL drain transaction, then its verdicts, then the unlink (§9.14).
   // runPass never ticks without both binding names: a missing store.writer is a hold there (§9.10 "Writer token").
+  // F16: one transcript index and one first-row memory per tick, shared by the drain's location rule and the candidates' (confirmClear) below
+  ctx.firstRows = newFirstRowCache();
   ctx.hints = drainSpool(db, ctx);
   // Then the candidates: startup and resume lines awaiting `.uuid`, and clear epochs awaiting `.uuid` or their
   // location. Each is decided in its own FULL transaction and flushed right after (§9.2 step 1, §6.1).

@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
@@ -21,7 +22,7 @@ skipOnDarwin();
 type Ids = { storeId: string; writer: string };
 type TickCtx = {
   home: string; ids: Ids | null; now: () => number; homes: string[]; rosterUnreadable: boolean;
-  out: (line: string) => void; hints?: string[];
+  out: (line: string) => void; hints?: string[]; firstRows?: unknown;
 };
 /** The slice of sweep.mjs these tests call. It grows task by task; every member is a real export. */
 interface Sweep {
@@ -1174,6 +1175,9 @@ interface SweepEpochs {
   ensureFamily(db: DatabaseSync, ccrcId: string, generation: string, project: string, nowMs: number):
     { sessionPk: number; created: boolean; generation: string };
   scanDue(db: DatabaseSync, nowMs: number): boolean;
+  tick(db: DatabaseSync, ctx: unknown): Promise<void>;
+  passCtx(o: Record<string, unknown>): TickCtx;
+  newFirstRowCache(): unknown;
 }
 let EP: SweepEpochs;
 beforeAll(async () => { EP = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepEpochs; });
@@ -1487,6 +1491,100 @@ describe('epochs and families, decided at drain (spec §6.1, §9.2 step 1, §9.1
     SW.drainSpool(db, c);
     expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid])).toEqual([[1, U0], [2, U1]]);
     expect(verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'epoch-confirmed').map((v) => v['by'])).toEqual(['observed', 'observed']);
+  });
+
+  // ── RF5b F16: the location rule's per-tick walk and first-row memory (review 316) ─────────────────────────
+  /** Replaces node:fs members for one body, as history-ingest.test.ts's D-4298 case does: syncBuiltinESMExports() carries
+   *  each replacement to sweep.mjs's named imports, and the finally restores them. `wrap` gets the real function. */
+  const patchedFs = async <T,>(wrap: Record<string, (real: (...a: unknown[]) => unknown) => (...a: unknown[]) => unknown>, body: () => Promise<T> | T): Promise<T> => {
+    const live = fs as unknown as Record<string, unknown>;
+    const real: Record<string, unknown> = {};
+    for (const k of Object.keys(wrap)) { real[k] = live[k]; live[k] = wrap[k]!(real[k] as (...a: unknown[]) => unknown); }
+    syncBuiltinESMExports();
+    try { return await body(); } finally { for (const k of Object.keys(wrap)) live[k] = real[k]; syncBuiltinESMExports(); }
+  };
+  const clearsOf = (n: number, gen: string = G1): Array<Record<string, unknown>> => Array.from({ length: n }, (_, i) => start(ID, u(0x100 + i), 'clear', { gen }));
+  const tickCtx = (): TickCtx => EP.passCtx({
+    home: box.home, P: historyPaths(box.home), ids, parsed: { homes: box.homes, secrets: [], rosterUnreadable: false },
+    now: () => clock.ms, out: () => undefined, deps: {}, pause: null, ingest: false,
+  });
+
+  it('RF5b F16: a tick\'s location rule walks each rostered projects/ once, however many clear lines and candidates it decides', async () => {
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1); setReg(box, ID, 'workdir', path.join(box.home, 'work', 'x'));
+    for (const h of box.homes) for (let i = 0; i < 20; i++) fs.mkdirSync(path.join(h, 'projects', `slug-${i}`), { recursive: true });
+    for (const rec of clearsOf(40)) spool(box.home, ID, rec);
+    const ctx = tickCtx();
+    await EP.tick(db, ctx);                                           // renames and observes
+    clock.ms += 60_000;
+    let walks = 0;
+    await patchedFs({ readdirSync: (real) => (p, ...rest) => { if (String(p).endsWith('/projects')) walks += 1; return real(p, ...rest); } },
+      () => EP.tick(db, ctx));                                        // journals, drains 40 clear lines, then decides 40 candidates
+    expect(candidatesOf(db), 'the 40 clear epochs are waiting candidates: each lookup found no transcript').toHaveLength(40);
+    expect(walks).toBe(box.homes.length);
+  });
+
+  it('RF5b F16: an admitted first row is read once per tick by uuid', async () => {
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1); setReg(box, ID, 'workdir', path.join(box.home, 'work', 'x'));
+    const file = transcriptIn(box.homes[0]!, 'x', U1, firstRows('/home/u/elsewhere'));   // a cwd that differs: nothing confirms
+    for (let i = 0; i < 5; i++) spool(box.home, ID, start(ID, U1, 'clear', { gen: G1 }));
+    SW.drainSpool(db, c); clock.ms += 1000;                           // the rename and observation
+    c.firstRows = EP.newFirstRowCache();
+    let opens = 0;
+    await patchedFs({ openSync: (real) => (p, ...rest) => { if (String(p) === file) opens += 1; return real(p, ...rest); } }, () => {
+      SW.drainSpool(db, c);                                           // 5 clear lines for one uuid
+      clock.ms += 60_000;
+      EP.confirmCandidates(db, c);                                    // and its waiting candidate
+    });
+    expect(candidatesOf(db).map((k) => k.cc_session_uuid)).toEqual([U1]);
+    expect(opens).toBe(1);
+  });
+
+  it('RF5b F16 (D-4298 kept): a first-row read that fails is not remembered: the next lookup this tick reads again and confirms by location', async () => {
+    const work = path.join(box.home, 'work', 'x'); fs.mkdirSync(work, { recursive: true });
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1); setReg(box, ID, 'workdir', work);
+    const file = transcriptIn(box.homes[0]!, 'x', U1, firstRows(work));
+    spool(box.home, ID, start(ID, U1, 'clear', { gen: G1 }));
+    spool(box.home, ID, start(ID, U1, 'clear', { gen: G1 }));
+    SW.drainSpool(db, c); clock.ms += 1000;
+    c.firstRows = EP.newFirstRowCache();
+    const eio = Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO', errno: -5, syscall: 'read' });
+    let faulted = 0;
+    await patchedFs({ readSync: (real) => (fd, ...rest) => {
+      if (faulted === 0 && fs.readlinkSync(`/proc/self/fd/${String(fd)}`) === file) { faulted += 1; throw eio; }
+      return real(fd, ...rest);
+    } }, () => { SW.drainSpool(db, c); });
+    expect(faulted, 'the fault never fired').toBe(1);
+    expect(epochsOf(db, ID, G1)).toEqual([expect.objectContaining({ cc_session_uuid: U1, cause: 'clear', confirmed_ms: expect.any(Number) })]);
+    expect(verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'epoch-confirmed'))
+      .toEqual([expect.objectContaining({ cc_session_uuid: U1, by: 'location' })]);
+  });
+
+  it('RF5b F16: a walk that could not list a directory misses only that tick: the next tick\'s fresh walk confirms by location, nothing dropped or counted', async () => {
+    const work = path.join(box.home, 'work', 'x'); fs.mkdirSync(work, { recursive: true });
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1); setReg(box, ID, 'workdir', work);
+    transcriptIn(box.homes[0]!, 'x', U1, firstRows(work));
+    spool(box.home, ID, start(ID, U1, 'clear', { gen: G1 }));
+    const ctx = tickCtx();
+    await EP.tick(db, ctx);                                           // renames and observes
+    clock.ms += 60_000;
+    const eio = Object.assign(new Error('EIO'), { code: 'EIO', errno: -5, syscall: 'scandir' });
+    let faulted = 0;
+    const slugDir = `${box.homes[0]}/projects/x`;
+    await patchedFs({ readdirSync: (real) => (p, ...rest) => {
+      if (faulted === 0 && String(p) === slugDir) { faulted += 1; throw eio; }
+      return real(p, ...rest);
+    } }, async () => {
+      await EP.tick(db, ctx);                                         // its walk skips projects/x: the clear epoch waits
+      clock.ms += 60_000;
+      await EP.tick(db, ctx);                                         // a FRESH walk finds it
+    });
+    expect(faulted, 'the fault never fired').toBe(1);
+    // the tick's registry scan also maps .uuid (U9) as an import epoch: only U1's clear epoch is under test
+    expect(epochsOf(db, ID, G1).filter((e) => e.cc_session_uuid === U1)).toEqual([expect.objectContaining({ cause: 'clear', confirmed_ms: expect.any(Number) })]);
+    expect(verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'epoch-confirmed' && v['cc_session_uuid'] === U1))
+      .toEqual([expect.objectContaining({ by: 'location' })]);
+    expect(counterOf(db, 'epoch_unconfirmed')).toBe(0);
+    expect(candidatesOf(db)).toEqual([]);
   });
 });
 
