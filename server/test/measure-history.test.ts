@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
@@ -224,6 +224,36 @@ describe('measure-history.py: read-only, and a missing input is refused, never c
     const w = measure(['--db', f.db, '--families', f.families]);
     expect(w.code).toBe(2);
     expect(w.stderr).toContain('--families needs --window-start and --window-end');
+  });
+});
+
+describe('measure-history.py: the store path is percent-encoded into its read-only URI (FR1-d)', () => {
+  /** A copy of a planted store under a directory whose name holds characters a SQLite URI reads as syntax. */
+  const oddStore = (dirName: string): { db: string; dir: string; root: string } => {
+    const f = plantedStore();
+    const root = mkTmp('ccrc-measure-history-uri-');
+    const dir = path.join(root, dirName);
+    mkdirSync(dir);
+    const db = path.join(dir, 'h.db');
+    copyFileSync(f.db, db);
+    return { db, dir, root };
+  };
+  const OPEN = (db: string): string => [
+    'import importlib.util, sqlite3, sys',
+    "spec = importlib.util.spec_from_file_location('mh', sys.argv[1]); mh = importlib.util.module_from_spec(spec); spec.loader.exec_module(mh)",
+    'c = mh.open_db(sys.argv[2])',
+    "try:\n    c.execute('CREATE TABLE zq_written (x)')\n    print('WROTE')\nexcept sqlite3.OperationalError as e:\n    print('READONLY', e)",
+    "print(c.execute('SELECT count(*) FROM counters').fetchone()[0] >= 0)",
+  ].join('\n') + `\n# ${db}`;
+
+  it.each(['d#x', 'd?x', 'd%23x', 'd x'])('a store under %j opens read-only: a write through the connection fails and nothing is created beside it', (dirName) => {
+    const o = oddStore(dirName);
+    const r = spawnSync('python3', ['-I', '-c', OPEN(o.db), SCRIPT, o.db], { encoding: 'utf8', env: { ...scrubbedEnv(process.env), PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
+    expect(r.stderr).toBe('');
+    expect(r.stdout.split('\n')[0]).toMatch(/^READONLY /);
+    expect(r.stdout.split('\n')[1]).toBe('True');
+    expect(readdirSync(o.root), 'a stray file where the URI parser cut the path').toEqual([dirName]);
+    expect(report(['--db', o.db]).user_version).toBeGreaterThan(0);
   });
 });
 

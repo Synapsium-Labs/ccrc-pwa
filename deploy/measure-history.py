@@ -48,7 +48,7 @@ The bootstrap that turns this into the gate is the W2 driver's, not this file's.
 
 Exit 0 measured; 2 an input missing or unreadable.
 """
-import argparse, json, os, sqlite3, sys, time
+import argparse, json, os, sqlite3, sys, time, urllib.parse
 
 WEEK_MS = 7 * 86_400_000
 K = 10   # the window: the first K assistant entries after a main boundary's summary row (ruled Q14)
@@ -72,7 +72,9 @@ def open_db(path):
     if not os.path.isfile(path):
         fail(f'no history store at {path}')
     try:
-        return sqlite3.connect(f'file:{path}?mode=ro', uri=True)
+        # The path is percent-encoded: SQLite reads a bare `#` as the start of the URI's fragment and a `?` as its query,
+        # which silently drops `mode=ro` and opens (creating it, read-write) a file the isfile check above never saw.
+        return sqlite3.connect('file:' + urllib.parse.quote(os.path.abspath(path)) + '?mode=ro', uri=True)
     except sqlite3.Error as e:
         fail(f'cannot open {path} read-only: {e}')
 
