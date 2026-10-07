@@ -295,6 +295,13 @@ describe('stallWriteRefusal — a confirm to show, a refusal whose detail is nev
     expect(stallWriteRefusal(new ApiError(502, 'Bad Gateway'))).toEqual({ kind: 'refused', detail: 'request failed (502)' });
   });
 
+  it('never leaves the refusal detail blank: a body whose only text is empty or whitespace names the HTTP status', () => {
+    expect(stallWriteRefusal(new ApiError(400, { error: '' })), 'an empty error code').toEqual({ kind: 'refused', detail: 'HTTP 400' });
+    expect(stallWriteRefusal(new ApiError(503, { error: '   ' })), 'a whitespace-only error code').toEqual({ kind: 'refused', detail: 'HTTP 503' });
+    expect(stallWriteRefusal(new ApiError(422, { error: '', detail: '', message: ' ' })), 'every slot blank')
+      .toEqual({ kind: 'refused', detail: 'HTTP 422' });
+  });
+
   it('reads a rejection that is not an ApiError as unconfirmed, never a refusal: the POST may have landed', () => {
     expect(stallWriteRefusal(new TypeError('Failed to fetch'))).toEqual({ kind: 'unconfirmed' });
     expect(stallWriteRefusal(new Error('aborted'))).toEqual({ kind: 'unconfirmed' });

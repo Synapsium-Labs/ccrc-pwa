@@ -180,9 +180,10 @@ const nonBlank = (v: unknown): string | null => (typeof v === 'string' && v.trim
  * A confirm needs BOTH the 409 status and a body `asStallConfirm` reads, as not-configured needs both its status and
  * its code. Every other `ApiError` is a refusal: the server answered, so nothing was written. Its detail is the first
  * non-blank of the server's own `detail` (a 400 naming an unknown key), the body's `message` (Fastify's 500 carries the
- * cause the route threw there, such as a stored row that cannot be read), and the error's own text through
- * `apiErrorText` (a `confirm-required` body that does not read, a non-JSON body), so the refusal line never renders
- * with an empty slot.
+ * cause the route threw there, such as a stored row that cannot be read), the error's own text through
+ * `apiErrorText` (a `confirm-required` body that does not read, a non-JSON body), and last the HTTP status (an
+ * `{ error: '' }` body leaves that text empty), so the refusal line never renders with an empty slot. The status
+ * text is not an L0 line: it fills the server-answer detail slot, not section copy.
  *
  * A rejection that is not an `ApiError` is a network failure, and the POST may have left before it: the write may
  * have landed. It is `unconfirmed`, never a refusal, so the section never says "Nothing was changed" about it.
@@ -192,7 +193,10 @@ export function stallWriteRefusal(err: unknown): StallWriteRefusal {
   const confirm = err.status === 409 ? asStallConfirm(err.body) : null;
   if (confirm !== null) return { kind: 'confirm', confirm };
   const body = isObject(err.body) ? err.body : {};
-  return { kind: 'refused', detail: nonBlank(body.detail) ?? nonBlank(body.message) ?? apiErrorText(err) };
+  return {
+    kind: 'refused',
+    detail: nonBlank(body.detail) ?? nonBlank(body.message) ?? nonBlank(apiErrorText(err)) ?? `HTTP ${err.status}`,
+  };
 }
 
 /** The two answers that mean "not available on this server", each status with its own code: 501 `not-configured` (no
