@@ -218,11 +218,47 @@ time.
     deployment is verified read-only afterwards: the migration applied, the seed still `follow`, and
     `GET /api/coord/stall-watch` answering.
   - After the merge, wave 2's run opens before run 295 closes.
+- **R19 (2026-10-07 16:15)**, review 319 is accepted, and wave 1 is ready to merge.
+  - Review run 319 (`ccrc-pwa-bright-hollow`, mail 3870) reviewed `ccd3eced1` with the held-out panel: 30 agents, 0
+    errors. The reproduce lens first came back empty, so the reviewer re-ran it with a checked list: 28 claims, 26
+    reproduce. Five minor findings survived the refute pass: correctness 3 (F1-F3), spec 1 (F4) and reproduce 1
+    (F5). None is critical or important. The whole-branch pass found nothing: inert on deploy, layering,
+    never-throwing, the session-only censuses, slot 17 free, no hunk in run 291's or run 302's regions, and
+    `merge-tree` clean against both and against `origin/main`. The close accepted `{reviewedTip, report}`: `done`,
+    `released`. The report is copied to `.superpowers/sdd/stall-watch-settings/w1-review-319-report.md`.
+  - F4: none of the plan's five unnumbered candidates needs a number, because none departs from behaviour the spec
+    prescribes.
+    - The derived `StallStored` keeps the `absent`/`unreadable` pair defined once (`single-definition`).
+    - `stallSettingsAfter`'s `at` keeps L1 free of a clock.
+    - `stallBoxHeld` is the L1 reader the spec's files-only Follow reading needs.
+    - The prose suite is an added guard.
+    - The M16b pin lives beside the route whose SQL it scans, and still goes red as §14 asks (M16b-1, M16b-2 and
+      M16b-3 measured). §14 names the guard and its mutation; the file it lives in is the plan's choice.
+  - The worker's three slugs (`kebab-union-fourteenth`, `t6-gate-numeral-red-order`, `t6-m16b3-two-reds`) are
+    plan-hint drift. The reviewer re-measured M16-9 and M16b-3, and none needs a number.
+  - Residue, parked and carried to wave 2's brief as one declared item: F1 (the L0 text block's header overstates
+    its duration rule), F2 (the unread `StallResolution.levelSource`), F3 (a `coord-db` message that misnames its
+    red), F5 (`stallResolveNow`'s "nothing else reads the row") and the worker's parked plan-mandated duplication.
+    Each is behaviour-neutral. If wave 2 cannot take their paths, they ride a small follow-up after both land.
+  - The README, `CLAUDE.md` and the parent spec say "chosen in Settings" before wave 2 builds the section. Accepted,
+    because the plan prescribes this prose and each sentence names `POST /api/coord/stall-watch`. Until wave 2
+    deploys, a choice can be made only through that session-gated door. Wave 2 is dispatched right after this merge.
+    Promoting a wave-1-only build to `stable` is the operator's call; the coordinator advises against it until wave 2
+    merges.
+  - The README citation instrument reads `15 passed | 320 skipped (335)` at both the base and the tip, so the wave
+    did not move it. The carried `7 passed | 328 skipped` was stale: `main` gained citation rows after the plan was
+    measured. The worker's wave-done repeated that figure, and it does not reproduce. The carried constraint below
+    now says "unchanged by a wave", as measured.
+  - R18's bar is met. The review leaves no critical or important finding open. PR #320's head is the verified
+    `handoffCommit` `ccd3eced1`, and its required checks pass. The failing checks are `test-macos` 1/2 and 2/2 only,
+    and macOS legs gate nothing. `origin/main` `282e79e44` still carries 16 migrations, so slot 17 is free. Run 291's
+    wave 6 has not landed. `main` requires no merge queue.
 
 ## Carried constraints (reviewers get these)
 
 - Mutation-table discipline: every guard ships with a row measured red when it is removed, before and after.
-- The README citation instrument stays at `7 passed | 328 skipped`; README and `CLAUDE.md` edits are made in place.
+- The README citation instrument (`session-hook.test.ts -t 'census|citation'`) is unchanged by a wave: it read
+  `15 passed | 320 skipped (335)` at `58de9f969` (R19). README and `CLAUDE.md` edits are made in place.
 - `stall.ts` and `stallsettings.ts` stay L1: pure, and spelling no marker name. No marker gains a writer
   (`single-definition.test.ts`).
 - The migration slot is measured, never assumed: 17 at `77f8d63a5`. Slots are a cross-branch namespace; whichever
