@@ -1607,7 +1607,8 @@ function dropTrailingRun(s) {
 /** A sidecar's index text (§6.2, §8.3; D-4312, history-sidecar-redact-before-cut): the first
  *  `SIDECAR_FTS_BYTES` bytes of its REDACTED text. At most `SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN`
  *  bytes are decoded, their JSON string escapes undone (D-4336) and the result redacted whole, and only then cut
- *  to `SIDECAR_FTS_BYTES` UTF-8 bytes (a cut multi-byte character dropped). A secret that straddles the cut was
+ *  to `SIDECAR_FTS_BYTES` UTF-8 bytes, or, when the raw window was filled, to at most the redacted text's length
+ *  minus `SIDECAR_REDACT_MARGIN` (an unescape shrinks the text, FR1 round 1) (a cut multi-byte character dropped). A secret that straddles the cut was
  *  matched whole in the window, so no prefix of it reaches the index; a PEM block that starts before the
  *  cut matches to the window's end. When a cut happened (the redacted text ran past the cut, or
  *  `bytes` filled the window, so more of the file may follow) and it fell inside a
@@ -1624,12 +1625,16 @@ export function sidecarIndexText(bytes, idx) {
   text = unescapeJsonText(text);
   if (idx !== null) text = redactField(text, idx);
   const enc = new TextEncoder().encode(text);
-  if (enc.length > SIDECAR_FTS_BYTES) {
-    let out = new TextDecoder('utf-8').decode(enc.subarray(0, SIDECAR_FTS_BYTES)).replace(/\uFFFD$/, '');
-    if (isRunByte(enc[SIDECAR_FTS_BYTES - 1]) && isRunByte(enc[SIDECAR_FTS_BYTES])) out = dropTrailingRun(out);
+  // The window is raw bytes but `text` is the unescaped, redacted text, which an escape-dense JSON sidecar shrinks
+  // by a byte per escape. A full window is the only case that can end in a secret redaction saw a prefix of, so the
+  // cut keeps SIDECAR_REDACT_MARGIN bytes of redacted text behind it: min(cut, length - margin) (D-4336, D-4312;
+  // FR1 round 1 F1: a JWT straddling the raw window end leaked its header and payload past a cut that sat inside it).
+  const cutAt = windowCut ? Math.max(0, Math.min(SIDECAR_FTS_BYTES, enc.length - SIDECAR_REDACT_MARGIN)) : SIDECAR_FTS_BYTES;
+  if (enc.length > cutAt) {
+    let out = new TextDecoder('utf-8').decode(enc.subarray(0, cutAt)).replace(/\uFFFD$/, '');
+    if (cutAt > 0 && isRunByte(enc[cutAt - 1]) && isRunByte(enc[cutAt])) out = dropTrailingRun(out);
     return out;
   }
-  if (windowCut && enc.length > 0 && isRunByte(enc[enc.length - 1])) return dropTrailingRun(text);
   return text;
 }
 

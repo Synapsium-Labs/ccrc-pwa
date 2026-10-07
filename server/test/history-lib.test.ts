@@ -1956,6 +1956,43 @@ describe('sidecarIndexText: JSON string escapes are undone before redaction (D-4
   });
 });
 
+// FR1 round 1 F1 (D-4336, D-4312): the window is measured in RAW bytes but the cut runs on the unescaped text, which an
+// escape-dense JSON sidecar shrinks by a byte per escape. The cut must keep SIDECAR_REDACT_MARGIN bytes of redacted text
+// behind it whenever the raw window was filled, or a secret straddling the raw window end (redaction saw only a prefix of
+// it) lands in the index.
+describe('sidecarIndexText: an escape-dense window keeps its redaction margin (D-4336, D-4312, FR1 round 1)', () => {
+  const BS = String.fromCharCode(92);
+  const W = libRows.SIDECAR_FTS_BYTES + libRows.SIDECAR_REDACT_MARGIN;
+  const HEADER = 'eyJhbGciOiJIUzI1NiJ9';
+  const PAYLOAD = 'eyJzdWIiOiJ1c2VyMTIzNDU2In0';
+  const jwtWhole = (sig: string): string => `${HEADER}.${PAYLOAD}.${sig}`;
+  it.each([0, 1, 3])('a JWT whose raw window end falls %i characters into its signature leaves no header or payload in the index', (into) => {
+    // an odd `into` makes rawBefore odd: pad one raw byte so the escape count stays whole
+    const jwtHead = `${HEADER}.${PAYLOAD}.`;
+    const pad = (W - jwtHead.length - into) % 2 === 0 ? '' : ' ';
+    const rawBefore = W - jwtHead.length - into - pad.length;
+    const bytes = Buffer.from(`${pad}${`${BS}n`.repeat(rawBefore / 2)}${jwtWhole('abcDEF123_-xyzQRSTUV')}${BS}n tail`);
+    expect(bytes.subarray(0, W).toString('latin1').endsWith(`${jwtHead}${'abcDEF123_-xyzQRSTUV'.slice(0, into)}`), 'CONTROL: the raw window ends inside the signature').toBe(true);
+    const out = libRows.sidecarIndexText(bytes, libRows.makePairIndex([]));
+    expect(out.includes(HEADER)).toBe(false);
+    expect(out.includes(PAYLOAD)).toBe(false);
+    expect(Buffer.byteLength(out)).toBeLessThanOrEqual(libRows.SIDECAR_FTS_BYTES);
+  });
+  it('the same JWT behind plain spaces (no shrink) leaves nothing either, and a full window of plain text still indexes its whole cut', () => {
+    const jwtHead = `${HEADER}.${PAYLOAD}.`;
+    const bytes = Buffer.from(`${' '.repeat(W - jwtHead.length - 1)}${jwtWhole('abcDEF123_-xyzQRSTUV')} tail`);
+    const out = libRows.sidecarIndexText(bytes, libRows.makePairIndex([]));
+    expect(out.includes(HEADER)).toBe(false);
+    expect(Buffer.byteLength(out)).toBe(libRows.SIDECAR_FTS_BYTES);
+  });
+  it('an unescaped text that kept the full margin still indexes SIDECAR_FTS_BYTES; one that kept less is cut that much earlier', () => {
+    const small = Buffer.from(`${BS}n`.repeat(W / 2));   // W raw bytes, W/2 text bytes: nothing but newlines
+    const out = libRows.sidecarIndexText(small, libRows.makePairIndex([]));
+    expect(Buffer.byteLength(out)).toBe(W / 2 - libRows.SIDECAR_REDACT_MARGIN);
+    expect(libRows.sidecarIndexText(Buffer.from(`${BS}n`.repeat(libRows.SIDECAR_REDACT_MARGIN / 4)), libRows.makePairIndex([])).length).toBe(libRows.SIDECAR_REDACT_MARGIN / 4);   // under the window: whole
+  });
+});
+
 // ===========================================================================
 // FR1-b (D-4312): the trailing-run drop is a backward scan. The unanchored `[A-Za-z0-9_-]+$` it replaced is quadratic in
 // the length of an EARLIER run (measured at the final review: 1.8 s at 40,000 characters, 6.9 s at 80,000, about
@@ -1965,9 +2002,15 @@ describe('sidecarIndexText: the trailing-run drop is linear (D-4312, FR1-b)', ()
   const N = libRows.SIDECAR_FTS_BYTES;
   const W = N + libRows.SIDECAR_REDACT_MARGIN;
   const idx = (): libRows.PairIndex => libRows.makePairIndex([]);
-  // The window is filled with two-byte escapes that read as one character, so the text is shorter than the cut and the
-  // window-full arm (not the over-the-cut arm) decides the drop. The expected tails were computed with the regex.
-  const escapePad = (tail: string): Buffer => Buffer.from(`${String.raw`\n`.repeat((W - tail.length) / 2)}${tail}`);
+  // The window is filled with two-byte escapes that read as one character, so the text is shorter than the window and,
+  // the raw window being full, is cut at L - SIDECAR_REDACT_MARGIN, inside its tail ( FR1 round 1 F1: the cut
+  // keeps the margin). The tail's last `pad` bytes are spaces. The expected results were computed with the regex.
+  const M = libRows.SIDECAR_REDACT_MARGIN;
+  const escapePad = (tail: string, pad: number): { bytes: Buffer; lead: number } => {
+    const n = (W - tail.length - pad) / 2;
+    expect(Number.isInteger(n)).toBe(true);
+    return { bytes: Buffer.from(`${String.raw`\n`.repeat(n)}${tail}${' '.repeat(pad)}`), lead: n };
+  };
 
   it('a long early run, a separator and a long run across the cut finishes in well under a second (the regex took seconds; this takes about 10 ms)', () => {
     const k = 80_000;                                    // the regex measured 6.9 s here
@@ -1998,17 +2041,15 @@ describe('sidecarIndexText: the trailing-run drop is linear (D-4312, FR1-b)', ()
     const cutAllRun = libRows.sidecarIndexText(Buffer.concat([Buffer.from('x '), Buffer.alloc(N, 0x41), Buffer.from('BBBB')]), idx());
     expect(cutAllRun).toBe('x ');
     expect(libRows.sidecarIndexText(Buffer.alloc(W, 0x41), idx())).toBe('');   // a window that is one run, all of it dropped
-    const a = libRows.sidecarIndexText(escapePad('ab cd-ef'), idx());
-    expect(a.length).toBe(294911);
-    expect(a.endsWith('\n\n\nab ')).toBe(true);
-    const b = libRows.sidecarIndexText(escapePad('ab cd '), idx());
-    expect(b.length).toBe(294915);
-    expect(b.endsWith('ab cd ')).toBe(true);
-    const c = libRows.sidecarIndexText(escapePad('AAAA'), idx());
-    expect(c.length).toBe(294910);
-    expect(c.endsWith('\n\n\n\n\n\n')).toBe(true);
-    const d = libRows.sidecarIndexText(escapePad('_-_'.padEnd(4, ' ')), idx());
-    expect(d.endsWith('_-_ ')).toBe(true);
+    // window-full arm: the cut sits M bytes before the text's end, `cut` bytes into the tail
+    const a = escapePad('ab cd-ef', M - 2);               // cut after 'ab cd-': the partial run 'cd-' is dropped
+    expect(libRows.sidecarIndexText(a.bytes, idx())).toBe(`${'\n'.repeat(a.lead)}ab `);
+    const b = escapePad('ab cd e', M - 1);                // cut after 'ab cd ': between runs, nothing to drop
+    expect(libRows.sidecarIndexText(b.bytes, idx())).toBe(`${'\n'.repeat(b.lead)}ab cd `);
+    const c = escapePad('AAAAAA', M - 2);                 // cut after 'AAAA': the whole run, all of it dropped
+    expect(libRows.sidecarIndexText(c.bytes, idx())).toBe('\n'.repeat(c.lead));
+    const d = escapePad('_-_ x', M - 1);                  // cut after '_-_ ': ends in a space, nothing to drop
+    expect(libRows.sidecarIndexText(d.bytes, idx())).toBe(`${'\n'.repeat(d.lead)}_-_ `);
   });
 });
 
