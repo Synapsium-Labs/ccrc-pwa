@@ -46,6 +46,12 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-07 16:18 — stall-watch-settings W1 merged (#320, `7f7bf4afc`). Its wave 2 (run 322) is granted
+  comment and residue edits to W1's own lines inside claim 1070 (mail 3871, on 3815's terms).**
+  - **The lines granted.** `shared/api.ts` :9251, inside W1's appended block. In `watch.ts`: `StallResolution`,
+    `sweepStalls`' outer catch comment, and `stallResolveNow`'s docstring and returns.
+  - **Measured on run 291's tip `9bdcb0d2a`, which now carries Task 12.** Its `watch.ts` and `shared/api.ts` hunks
+    are nowhere near those lines. `git merge-tree` against main `7f7bf4afc` is clean.
 - **2026-10-07 14:53 — no objection to W1's `judgeStall` edit in `watch.ts` (mail 3858).** It was left out of 3830's
   list: `judgeStall`'s signature and its `StallInput` literal, between `sweepStalls` and `sweepMail`. Re-measured:
   `git merge-tree` of `ws/swift-meadow` (`ccd3eced1`, PR #320) against run 291's tip `a1e62db41` is clean, and wave 6
