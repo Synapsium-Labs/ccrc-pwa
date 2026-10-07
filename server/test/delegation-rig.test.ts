@@ -416,7 +416,7 @@ describe('rig.sh run and all take only a version that is installed (review 304 F
       const raw = path.join(dir, 'raw');
       const log = path.join(dir, 'log');
       const script = ['set -euo pipefail', rigText('REAL_HOME', 'VERSIONS', 'VERSION_RE'), `HERE=${sq(dir)}`, `TREE=${sq(path.join(dir, 'tree'))}`,
-        'cmd_reap() { printf "reap\\n" >> "$LOG"; }', rigText('die', 'guard_out', 'version_ok', 'VERS', 'pick_versions', 'cmd_all'), 'cmd_all "$@"'].join('\n');
+        'cmd_reap() { printf "reap\\n" >> "$LOG"; }', rigText('die', 'guard_out', 'version_ok', 'need_version', 'VERS', 'pick_versions', 'cmd_all'), 'cmd_all "$@"'].join('\n');
       const r = spawnSync('bash', ['-c', script, stub, raw, ...args], { encoding: 'utf8', env: { ...process.env, HOME: home, LOG: log, RAW: raw, STUB_FAIL: failFor }, timeout: 60_000 });
       const lines = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean) : [];
       const doneFile = path.join(raw, '.done');

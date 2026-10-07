@@ -62,6 +62,7 @@ run_base() {
 guard_sock() { [[ ${1-} =~ $SOCK_RE ]]; }
 # An installed Claude Code version: x.y.z-shaped (it names a file under $VERSIONS, so no `..` and no `/`) and executable there.
 version_ok() { [[ ${1-} =~ $VERSION_RE && -x $VERSIONS/${1-} ]]; }
+need_version() { version_ok "${1-}" || die "'${1-}' is not an installed Claude Code version under $VERSIONS (x.y.z, executable)"; }
 # The versions one capture covers, into VERS: numeric order, each once. None named = every installed one. Named ones are ALL
 # checked first and the first bad one refused. Call it in the MAIN shell, never inside $( ) or < <( ): a `die` there ends only
 # that subshell (review 304 F7 was exactly that), so `rig.sh versions` and cmd_all call it directly.
@@ -70,7 +71,7 @@ pick_versions() {
   local v
   VERS=()
   if (( $# )); then
-    for v in "$@"; do version_ok "$v" || die "'$v' is not an installed Claude Code version under $VERSIONS (x.y.z, executable)"; done
+    for v in "$@"; do need_version "$v"; done
     mapfile -t VERS < <(printf '%s\n' "$@" | sort -t. -k1,1n -k2,2n -k3,3n | uniq)
   else
     while IFS= read -r v; do
@@ -366,7 +367,7 @@ cmd_run() {
   VER=${1-}; SCEN=${2-}; OUT_DIR=${3-}
   [[ -n $VER && -n $OUT_DIR ]] || die "usage: rig.sh run <version> <scenario.json> <out-dir>"
   # Before anything is made: a missing binary otherwise runs on with an empty pane command and lands an `unmeasured` bundle.
-  version_ok "$VER" || die "'$VER' is not an installed Claude Code version under $VERSIONS (x.y.z, executable)"
+  need_version "$VER"
   check_scenario "$SCEN" || die "scenario '$SCEN' is malformed (rig.sh check-scenario names the rule)"
   guard_out "$OUT_DIR" || die "refusing out-dir '$OUT_DIR': it must not be inside the source tree"
   local made phys
