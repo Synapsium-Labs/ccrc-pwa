@@ -3791,8 +3791,9 @@ const EPOCH_VERDICT_KINDS = new Set(['epoch-confirmed', 'epoch-chained', 'mappin
 
 /** The journal audit (§9.2 step 2, W1-j; rev 3.2 review, DI8): every spool_receipts row has its `spool`
  *  record, every family and every chained epoch its `verdict`, every redact_hashes row its `redact` record.
- *  Incremental by rowid from the ('journal-audit', 1) cursor; one streaming read of this store's journal
- *  (journal/<store_id>/ only — another store's directory is never read), bounded by the run's wall clock.
+ *  Incremental by rowid from the ('journal-audit', 1) cursor; whole-file reads of this store's journal, one month
+ *  file at a time (journal/<store_id>/ only — another store's directory is never read), bounded by the run's wall
+ *  clock. A month file that cannot be read counts `journal_audit_unreadable` and ends the audit unfinished.
  *  Skipped while journal_outbox holds rows (their verdicts are still in flight). Folds journal_missing_*
  *  and records journal_skipped (malformed or unknown lines seen) and journal_growth_30d (bytes appended in
  *  the trailing 30 days). Returns true when it ran to the end. */
@@ -3822,7 +3823,15 @@ export function journalAudit(db, ctx, nowMs) {
   for (const f of files) {
     if (!withinBudget({ elapsedMs: ctx.budget.now() - ctx.budget.startMs, bytes: 0, maxMs: ctx.budget.maxMs })) return false;
     let text;
-    try { text = readFileSync(join(dir, f), 'utf8'); } catch { return false; }
+    try {
+      text = readFileSync(join(dir, f), 'utf8');
+    } catch {
+      // Named, not swallowed (Task 26F item 6): a persistently unreadable month file would otherwise stop every audit
+      // with no sign of why, journal_audit_ms merely going stale. periodicCensus ignores the answer, so this counter is
+      // the reason.
+      bump(db, 'journal_audit_unreadable');
+      return false;
+    }
     let draining = null;
     for (const line of text.split('\n')) {
       if (line === '') continue;

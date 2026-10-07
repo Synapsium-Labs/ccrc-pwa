@@ -1047,3 +1047,20 @@ describe('Task 26F item 5: a throw inside runOpPass still ends stdout with one {
     expect(fs.existsSync(path.join(paths(box).root, 'op')), 'no op marker is left').toBe(false);
   });
 });
+
+describe('Task 26F item 6: the journal audit says when it cannot read a month file', () => {
+  it('an unreadable month file counts journal_audit_unreadable, the pass still exits 0, and journal_audit_ms stays at its last good value', () => {
+    const box = boundBox('ccrc-hist-26f6-');
+    const dir = path.join(paths(box).journal, fs.readFileSync(paths(box).storeId, 'utf8').trim());
+    // A DIRECTORY with a month file's name: unreadable as root or not, and (unlike a chmod of the file, which every pass's
+    // fixModes undoes) nothing a pass repairs.
+    fs.mkdirSync(path.join(dir, '2020-01.00000000.jsonl'), { recursive: true });
+    const before = metaOf(box, 'journal_audit_ms');
+    expect(before, 'CONTROL: the creating pass audited an empty store').toMatch(/^[0-9]+$/);
+    expect(counter(box, 'journal_audit_unreadable')).toBe(0);
+    const r = runDriver(box, { offsetMs: 31 * MIN, managedSettings: [] });
+    expect(r.code, r.stderr).toBe(0);
+    expect(counter(box, 'journal_audit_unreadable')).toBe(1);
+    expect(metaOf(box, 'journal_audit_ms'), 'the audit did not complete, so its clock is not advanced').toBe(before);
+  });
+});
