@@ -23,8 +23,8 @@ time.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | run 295 `awaiting-review` at `ccd3eced1`; review run 319 dispatched (R17) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README | server (it serves the PWA) | — | planned; dispatched after wave 1 merges |
+| 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | — | run 322 dispatched 2026-10-07 to `ccrc-pwa-calm-basin` (R20) |
 
 ## Decisions & deviations
 
@@ -253,6 +253,33 @@ time.
     `handoffCommit` `ccd3eced1`, and its required checks pass. The failing checks are `test-macos` 1/2 and 2/2 only,
     and macOS legs gate nothing. `origin/main` `282e79e44` still carries 16 migrations, so slot 17 is free. Run 291's
     wave 6 has not landed. `main` requires no merge queue.
+- **R20 (2026-10-07 16:20)**, wave 1 is merged and closed, and wave 2 is dispatched.
+  - Run 295 advanced to `merging` on its fingerprint. PR #320 merged at 16:15:45 as `7f7bf4afc`, with
+    `--admin --squash --match-head-commit ccd3eced1` and a subject without the title's number range. `main` now
+    carries 17 migrations, and the release lane published prerelease v0.0.119 at 16:16:47. Nothing was rolled out by
+    hand.
+  - Wave 2's run 322 opened before run 295 closed, without a `sessionId`, because wave 1's child was spent. Run 295's
+    close needs `final` as a boolean: `{fingerprint, final:false}` answered `done`, `released`, `childReclaim` queued.
+    The first try omitted `final` and was refused `bad-request` with no detail. Its evidence was copied first (R17).
+  - Routing for wave 2 stays R4's, on wave 1's evidence: suite green on the first full run, the final review clean,
+    and the seven-task chain fit one context.
+  - Wave 2 declares five items: its plan's four tasks, then wave 1's review residue. R19's residue is narrowed to
+    F1, F2, F3 and F5, the stale `stallArmingOf` comment in `sweepStalls`, and an equality pin for
+    `stallResolveNow`'s fallback arming, as wave 1's final review suggested. The plan-mandated duplications stand as
+    accepted residue: the view's double `effective` literal (D-4038), the third feed-row block in `routes.ts`, and
+    `stallFaultReason`'s copy.
+  - The residue touches `shared/api.ts` and `watch.ts`, still under run 291's claim 1070, in wave 1's own lines only.
+    Mail 3871 asks run 291's coordinator for that co-edit. Item 5 runs last, and the worker waits for this
+    coordinator's confirmation before it touches either file.
+  - The plan's operator questions. (1) README :967's "the phone-push bell for this browser" becomes "the push bell for
+    this browser": the operator's 2026-10-05 directive (no device distinction) already rules it. (2)
+    `UNCONFIRMED_TEXT`'s "Saved —" is left as it is and put to the operator.
+  - Run 322 was dispatched once to `ccrc-pwa-calm-basin` (`adopted` false, `skillState` present, 0 of 5 items).
+    `ws/calm-basin` sits at `7f7bf4afc`, 0 commits ahead or behind, and the registry shows R4's route, compact 40 and
+    the hold `program:stall-watch-settings wave:2/2 run:322`. Daily usage stood at 21 of 24, with 5 active runs.
+  - Deploy verification is pending: this fleet box still reported v0.0.118 at 16:20. Once the updater moves the
+    boxes, the read-only checks are the server's `/health` version (a server that answers has applied migration 17,
+    since a failed migration refuses to start) and the fleet box's `ccrc version`.
 
 ## Carried constraints (reviewers get these)
 
@@ -282,5 +309,11 @@ time.
     re-measure it immediately before dispatch and again before merge.
   - Execution: `superpowers:subagent-driven-development` with `superpowers:test-driven-development`, with routing per
     R4.
-- **Wave 2:** `docs/superpowers/plans/2026-10-05-stall-watch-settings-w2-pwa.md`, dispatched after wave 1's PR is
-  proven merged.
+  - Done: merged as `7f7bf4afc` (#320), and run 295 closed (R20).
+- **Wave 2:** run 322, `docs/superpowers/plans/2026-10-05-stall-watch-settings-w2-pwa.md`, all four tasks plus wave
+  1's review residue, on the fresh child `ccrc-pwa-calm-basin`. Its brief is
+  `.superpowers/sdd/stall-watch-settings/w2-wave-brief.md` (R20).
+  - Item 5 touches `shared/api.ts` and `watch.ts` only after run 291's coordinator consents (mail 3871) and this
+    coordinator confirms, or after claim 1070 releases.
+  - At wave-done: re-measure, advance, then a review run with the held-out panel. The merge is the operator's call.
+    Wave 2 is the last wave, so its close carries `final:true`.
