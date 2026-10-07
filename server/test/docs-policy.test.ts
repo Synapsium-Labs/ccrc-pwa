@@ -555,3 +555,19 @@ describe('docsProvenance: section 3.8\'s three clauses, in order (refinement (o)
     expect(docsProvenance(bag)).toStrictEqual({ ok: true });
   });
 });
+
+// ===== Task 3 fix round 1: the own-key guard (G8) =====
+// `own` is the one reader of a parsed value, and its `Object.hasOwn` guard is what makes an inherited name no key.
+// The tree route checks `Object.hasOwn(query, 'ref')` itself before it reads, so these two cases reach the guard on
+// the paths that rely on `own` alone: the refresh body's `ref` and `reason`, and the repeated-key scan.
+describe('own keys only (the guard behind every parsed value)', () => {
+  it('a refresh body whose ref and reason are inherited has neither: ref is the first missing key', () => {
+    const inherited = Object.create({ ref: null, reason: 'auto' }) as Record<string, unknown>;
+    expect(parseDocsRefreshBody(inherited)).toStrictEqual(badQuery('body', 'ref'));
+  });
+
+  it('a tree query whose ref is inherited as an array is not a repeated key: it parses as the default view', () => {
+    const inherited = Object.create({ ref: ['a', 'b'] }) as Record<string, unknown>;
+    expect(parseDocsApiQuery('tree', inherited)).toStrictEqual({ ok: true, req: { route: 'tree', ref: null } });
+  });
+});
