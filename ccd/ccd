@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f0dbf64235cdfc124b1b246f416e8b1ba61e30b2e3d1547e1206f2f5ffa27018
+# ccrc:generated 1 sha256=4d5e38ca74f03b2b8b0323bf9ec0db9ffa253229ad73cb1408ac4af094c3a5d1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5025,7 +5025,7 @@ _lc_fail() {   # act id tx token detail [k v]... — an act that STARTED and bro
   # before anything irreversible, a failure after. `cmd_ws_rm`'s
   # `git worktree remove` die at ccd:3906 is a FAILURE — the session
   # is already stopped when it fires — and calling it a refusal would say
-  # nothing was touched, which is false.
+  # nothing was touched, which is false. A probe that ran before any act and could not measure fails too (spec §5.9).
   local a="${1-}" i="${2-}" t="${3-}" tok="${4-}" msg="${5-}"; shift 5 2>/dev/null || :
   _lc_emit "$a" failed "$i" "$t" refusal "$tok" detail "$msg" "$@"
 }
@@ -26197,7 +26197,9 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # placement basis, `recorded`, beside `complete`, for a row whose workdir is
   # GONE (`absent-suffix`). `_ws_reclaim_recorded` says what counts as
   # evidence and what it never does; on it, the row is placed by the path it
-  # names and compared exactly as a `complete` row is, so a recovered row at,
+  # names and compared exactly as a `complete` row is (the git-record arm; the
+  # breadcrumb arm's spelling is compared as text, bounded by the leaf's proven
+  # absence and by `_ws_reclaim_owned`'s ask at the tail), so a recovered row at,
   # inside or through the child still refuses. Anything short of it is
   # collected as a row that cannot be placed, as before. A record says where a
   # tree WAS, not that it is gone rather than moved, so the admin directory
@@ -29814,8 +29816,8 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
     || die "usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>]"
   local token=$2 childof=$4 id=$6
   # THE SESSION ID IS VALIDATED FIRST (spec §5.9). The two checks after it
-  # journal their refusal against `$id`, so `$id` must already be a shape ccrc
-  # mints. Seven dies stay unjournaled, each for its reason:
+  # journal their refusal against `$id`, so `$id` must already be a registry-safe
+  # charset (no `/`). Seven dies stay unjournaled, each for its reason:
   #   - the usage die and the four --actor/--reason checks above, because no
   #     id is bound yet;
   #   - a malformed session id, because it is no id to journal against;

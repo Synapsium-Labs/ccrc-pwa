@@ -3329,7 +3329,9 @@ export class FleetWatcher {
     // refusal found at AUDIT time: wave 3's `cmd_ws_audit --reclaim` journals
     // exactly the terminal verdicts (`verb ws-audit`), so the mirror holds
     // them as it holds `ws-reclaim`'s. A retryable verdict found there is
-    // journaled nowhere and needs no exclusion — it is retried by design.
+    // journaled nowhere and needs no exclusion — it is retried by design. Its
+    // unmeasured answer is journaled now, as a `failed` line (spec §5.9), which
+    // the TERMINAL set never reads.
     // Between the executor's `refused` answer and the mirror lane's ingest
     // (`LC_SWEEP_MS`) the child's entry is KEPT, not forgotten:
     // `childReclaimNextEntry` stamps its `refusedAt`, and `childReclaimDue`

@@ -46,8 +46,8 @@ absolutely: three conditions — two where proceeding would destroy work **nobod
 ccd cannot tell the directory is the child's at all — refuse instead of proceeding. They are argued at §5.5
 and bounded at §7. They are not all that the automatic path keeps for a person: it also keeps a child
 under any other terminal refusal (`branch-elsewhere` among them), each child the sweep's kept verdicts name
-(§5.9), and, until wave 6, a child whose reclaim fails past the ceiling for good, such as `pin-failed` with
-its branch already gone. Each is reported (§5.9).
+(§5.9), and a child whose reclaim fails past the ceiling for good, such as `pin-failed` with its HEAD still
+on a branch that is already gone. Each is reported (§5.9).
 
 ---
 
@@ -212,6 +212,25 @@ about two collectors on one filesystem does not apply. The price is stated: a ch
 refusal (§5.5) keeps its temp root, which the hourly sweep would otherwise have collected once the session
 died. That child is itself uncollected and already on the attention item, so nothing new goes unreported.
 
+**The positive witness.** Each time `_child_tmpdir` hands a child its temp root, ccd records one line at
+`$REG/tmproots/<id>`: `v=1`, the id, the run, and the leaf's device, inode, birth time (`-` where the
+filesystem keeps none), owning uid and the time, taken by `stat` right after the leaf's mkdir and chmod. It is
+written, by a temp file moved into place, only when it is absent or unparseable, or its device, inode, birth
+time or run no longer match, so a recycled slug's new child overwrites it on its first spawn. A failed write
+never fails the spawn. The registry subdirectory has no leading dot, as `pools/` has none: no registry glob
+sees it, a row's purge leaves it standing, and a slug whose only trace is its witness reads free. A
+`tmproots/` that is itself a link is never followed, by the writer, the reader or the remover. It dies
+only after the removal helper (§5.6) has proven its leaf absent. A leaf whose identity no longer matches its
+witness, which is what a storage migration does to every leaf, is never collected; it is the operator's.
+Identity on the box is attribution: any process of this uid can write the file, so the binding narrows a
+forgery to a directory ccd itself made, and it is not a wall. Nothing collects by the witness until waves
+7 and 8 (§8).
+
+**Darwin keeps its temp roots.** Whether a process still uses a temp root is read from `/proc`, which
+Darwin lacks, so there that probe answers unmeasured and every reclaim and expiry tail keeps the temp root
+directory, recorded as kept (§5.6); a link or file leaf is unlinked there as before. The collector is
+Linux-first too. A Darwin box's `~/.cc-tmp` therefore grows by one leaf per child until a person clears it.
+
 **The residue probe.** After a reclaim, the lane measures what the child left outside the worktree and its
 temp root and records the total. Rule 2's claim is thereby *bounded and observable*: containment covers
 writers that respect `TMPDIR`; writers that hardcode `/tmp`, or write to `~/.cache`, `~/.npm`, a docker
@@ -341,6 +360,17 @@ Two limits follow, and both are stated so neither is discovered later:
   only once the row is purged after its session has ended, or a link on its path is restored to its original
   target, and then a later attempt has to run (D-3734). A directory created where a link stood ends it unsafely,
   because that re-points the spelling (D-3735).
+  Since wave 6 a row whose directory is gone also stops holding on positive evidence alone, by one of two
+  arms: git's own record of that worktree, exactly one, marked prunable, with the leaf the only absent
+  component and the parent resolving complete to its literal spelling; or the row's own interrupted reap or
+  reclaim, whose breadcrumb phase is past the worktree's removal, whose tombstone is the row's own and, for
+  a reclaim, says ccd removed a present tree, and which git no longer records: the arm also proves that no
+  admin entry names the tree, so a `worktrees/` or a `gitdir` that cannot be read keeps the hold. An
+  interrupted expiry's breadcrumb is not such evidence, a lifecycle `create` row never decides, and an
+  unreadable record is never read as no record. No checkout inside the child may resolve its git directory to
+  the admin directory a recovered row named. That refusal reuses `containment-unproven`, whose sentence
+  describes such a moved tree only approximately. The recovery creates nothing, prunes nothing and purges no
+  row.
 - **A `complete` resolution places the spelling as it reads now, not the session.** An alias re-pointed after a
   session entered through it resolves complete and outside, and so does a spelling through a bind mount. Both are
   pre-existing and left to a follow-up (D-3735).
@@ -382,13 +412,24 @@ Refusing keeps one rule at one rung instead of a conditional two places must agr
    identity, under the reclaim's git containment, and it is still the only place in ccd that writes a commit.
 3. Attic pins are taken under `refs/ccrc/attic/<id>/`, and none is optional: the in-progress operation heads
    (`REBASE_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `ORIG_HEAD`) where present; HEAD; the WIP commit, by its
-   id; each nested same-repository checkout's operation heads, HEAD and WIP commit; the branch tip, which is
-   required because it is the commit the tail deletes the branch at and, on a detached or drifted tree,
-   nothing else pins it; and every stash attributed to the branch. Then every commit the child's own reflogs
-   name (its HEAD's, its branch's, and each nested checkout's and nested branch's), and everything the
-   child's and each nested checkout's own git directory names, is kept reachable from
+   id; each nested same-repository checkout's operation heads, HEAD and WIP commit; the branch tip when the
+   branch exists, which is then required because it is the commit the tail deletes the branch at and, on a
+   detached or drifted tree, nothing else pins it; and every stash attributed to the branch. Then every commit
+   the child's own reflogs name (its HEAD's, its branch's, and each nested checkout's and nested branch's), and
+   everything the child's and each nested checkout's own git directory names, is kept reachable from
    `refs/ccrc/attic/<id>/reflogs`. A pin that cannot be taken fails the reclaim as `pin-failed` while nothing
-   is destroyed, and a branch that does not resolve is one, because it leaves the tail no tip to delete at. A
+   is destroyed. Whether the branch exists is read three ways, by `git show-ref --exists`: present, absent,
+   or a read that did not run. Only a proven absence goes ahead with no tip: HEAD, the WIP commit and every
+   reflog and per-worktree ref commit are pinned as above, and the tail then deletes no branch. A read that
+   did not run stops the reclaim: the audit answers unmeasured, and at the tail's branch step it fails
+   `branch-unmeasured` with the row and the breadcrumb kept. A git older than 2.43 has no `--exists`: there a
+   branch that resolves still reads present and anything else reads unmeasured, so such a box (Apple's git
+   2.39, for one) reclaims a standing branch as before and never reclaims a gone one. A branch that
+   reappears after the tombstone is `branch-moved`. The consent binds the branch's state in both
+   directions: a branch the pin reads in a different state (present or absent) from the one the in-lock
+   recomputation read stops the act before the tombstone as `state-changed`, journaled as a `failed` line,
+   with nothing destroyed. A worktree whose HEAD is still symbolic to a branch proven gone stays
+   `pin-failed`, because the WIP commit needs a HEAD. A
    nested checkout of a different repository cannot be pinned here, so each run of this phase proves it again
    by rung 9's predicate, and a failure there is a pin that cannot be taken. A HEAD that has drifted onto
    another branch keeps that branch: it is recorded, and the tail deletes only the child's own. The tail runs
@@ -432,6 +473,37 @@ the box reports success, the **server** cancels the child's outstanding mail del
 a purged registry row is what ends such a delivery today, on a horizon of tens of minutes, and this design
 raises purge from a rare human ceremony to once per child, which would turn a bounded slug-recycling hazard
 into a routine one.
+
+**What the tail removes, and what it keeps (wave 6).** A pane's processes can outlive `tmux
+kill-session`, and one that carries `TMPDIR=<leaf>` can recreate the temp root after the tail removed it.
+Measured: a reclaimed child's leaf came back 3.7 s after `reclaim done`. So after the kill the tail waits,
+at most 15 s, until no process of this uid uses the temp root, and asks once more at the instant of removal.
+The wait also ends after one ask more than four per second of its bound, so a clock stepped backwards cannot
+lengthen it without limit. The bound is on the clock between asks, and each ask's own walk is bounded at 10 s,
+so measured at worst the tail spends about 35 to 41 s here. A process uses the temp root when its `TMPDIR` is at or under the leaf, its working
+directory is there, or it holds a file there open. A process of another uid, or a same-uid process the kernel
+will not let ccd read, is skipped, as a stated limit. A probe that could not look answers unmeasured, never
+"nobody". The clips and temp-root leaves go through one removal helper. It:
+- validates the id, resolves the root physically, and never uses a root that resolves to nothing or to `/`;
+- unlinks a link or file leaf without following it;
+- takes a directory leaf only when it is a real directory this uid owns that is not a mount point (its device
+  is compared with the root's before anything is changed), at exactly root/id (and at the expected device and
+  inode when a caller names them);
+- sets the leaf's own owner bits so a mode-000 leaf can be entered, normalises the permissions beneath it,
+  and removes it without crossing a file-system boundary, reading every exit code;
+- proves the leaf absent.
+
+It answers removed, refused with a reason, or unmeasured. A temp root still in use, or unmeasured, when the
+wait ends, and a leaf the helper refuses or cannot measure, is kept with its witness. The act completes,
+and its `done` row records what was kept and why, in one line of printable ASCII cut at 300 bytes. That is
+not a refusal. The worktree's removal is unchanged, but for the wait. Every deleting git call the tail makes
+runs under the reclaim's git containment: the worktree removal, `update-ref -d` and the branch delete. So
+the repository's hooks and its fsmonitor never run while it deletes. That containment first drops an
+inherited `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG` and `GIT_CONFIG_COUNT`, so its own `core.hooksPath`,
+`core.fsmonitor` and `status.showUntrackedFiles` pins are the only entries. Whatever selects the global or
+system config file (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM`, and `HOME` or
+`XDG_CONFIG_HOME`) names this uid's own files and sits below the pins' command-line precedence; it stays a
+stated residual (§7). `ws-expire` runs the same tail.
 
 ### 5.7 When reclaim happens
 
@@ -525,12 +597,14 @@ So the sweep's subject is **the marker**, which already holds the minting run id
 **A minting run absent from the database makes a child ineligible**, not eligible. The first draft of this
 section said the opposite, and it fails open in the one case that matters: a lost or rebuilt coordination
 database makes *every* child's run absent at once, the live ones included. Absence is logged and
-skipped; the orphans that motivated it are reached through the bullet above instead. Two more answers keep
-a child for the same reason. Run ids restart when the database is rebuilt, so a minting run that opened
+skipped; the orphans that motivated it are reached through the bullet above instead. Two more answers leave
+a child alone for the same reason. Run ids restart when the database is rebuilt, so a minting run that opened
 more than 120 seconds after the child was created (the dated `create` row opening its current generation
 in the lifecycle journal) cannot be the run that made it; a fleet box whose clock runs behind the server's
 gives the same answer. And a child whose creation the journal does not date cannot be matched to its run
-at all. Each is kept, never reclaimed automatically, and reported (§5.9).
+at all. The first of these two is kept, never reclaimed automatically, and reported (§5.9). The second,
+`child-birth-unplaced`, is doubt, not a keep: the sweep looks for the creation again on its next pass, and
+the child reads `deferred` meanwhile (§5.9).
 
 **A programme's own hold ends with the programme.** The close holds a child it cannot prove finished
 (§5.3), and no later close decides a child an earlier run minted, so "no hold" alone would keep such a
@@ -676,7 +750,13 @@ lookup keyed by the refusal token, never respelled at the surface — **and the 
 PWA-reachable refusal words and the server's audit sentences are held disjoint by a test today, and several
 of this verb's tokens share names with the audit's. So the server composes the sentence and ships it with
 the status; the PWA renders what it is given and maps no token itself. A reclaimed child's row stops
-offering to open its session, which no longer exists.
+offering to open its session, which no longer exists. The board re-reads the run archive when a finished
+child leaves the fleet frame. It re-reads again whenever the newest reclaim `done` the server's journal
+mirror has ingested changes, while some finished row's chip is still unsettled; that value rides the
+coordination frame and is omitted until there is one. A child leaving the registry listing also brings
+the mirror's next sweep forward, and the tick does not wait for it. Each re-read follows one measured fact,
+so it is not a polling cadence. A board mounted after its child left, whose first read lands between the
+registry purge and the journal's `done`, keeps a null chip until its next load.
 
 **The chip says why the sweep leaves a child alone.** The sweep keeps each marked child's last verdict in
 memory. A reclaim that happened, ccd's word that the session is already gone, and a terminal refusal ccd
@@ -702,7 +782,7 @@ answer must not promise a retry the sweep will not make.
   the one that says it is waiting to be reclaimed, and the switch turns it to `paused`. That is every child
   after a restart until the first judging pass, and every child but the kept ones after a pass that judged
   nothing (the switch raised, a capability missing, a read failed).
-- The two lock refusals the attention item reads as failures (below) read `deferred` on the chip too.
+- The four pre-lock refusals the attention item reads as failures (below) read `deferred` on the chip too.
 
 There is no sixth word: the chip keeps its five.
 
@@ -712,11 +792,18 @@ Archive (workspace lifecycle §5.2), so a child can be archived like any workspa
 
 **One fleet-level attention item** collects children under a terminal refusal, children whose reclaim
 has kept failing past the defer ceiling (retries back off in between), and children the sweep keeps for a
-person, with each one's sentence. A failure includes the two refusals ccd journals when it cannot take the
-reclaim's lock, `flock-unavailable` and `lock-unopenable`: ccd records them as refusals, but the server
-retries them, so every surface reads them as failures and never as settled refusals. Only those two are
-read that way, by name; a refusal ccd later journals the same way is classified when it is added, never
-inherited.
+person, with each one's sentence. A failure includes the four refusals ccd journals before it takes the
+reclaim's lock. Two are written when it cannot take the lock (`flock-unavailable` and `lock-unopenable`),
+and two when the server's argv carries a malformed token or run id beside a valid session id
+(`token-malformed` and `run-id-malformed`). ccd records them as refusals, but the server retries them, so
+every surface reads them as failures and never as settled refusals. Only those four are read that way, by
+name; a refusal ccd later journals the same way is classified when it is added, never
+inherited. ccd also journals two failures as `failed`. The first is a probe that could not measure
+(`probe-unmeasured`), from the locked recomputation and from `ws-audit --reclaim`, told apart by the line's
+verb; it is the one audit-time line that is not a terminal refusal. The second is a tail that could not read
+whether the branch still exists (`branch-unmeasured`). Seven dies stay unjournaled: the usage die and
+the four `--actor`/`--reason` checks run before any id is bound, a malformed session id binds no
+trustworthy id, and the journal's encoder is the `python3` whose absence the last reports.
 It is a *report*, not a tap: nothing waits on it, and ignoring it costs disk rather than correctness. It
 lives in the reclaim row of the Runs screen's banner, beside the pause toggle, carried on the coordination
 frame. On every sweep pass its terminal and failing children are
@@ -825,8 +912,8 @@ approved on a narrow one.
    ruling applied honestly: it overrides conditions where the work is visible and can be pinned, not
    conditions where proceeding means silent loss. The automatic path also keeps, for a person, and
    reports: a child under any other terminal refusal (`branch-elsewhere` among them, §5.5); each child the
-   sweep's kept verdicts name (§5.9); and, until wave 6, a child whose reclaim fails past the ceiling for
-   good, such as `pin-failed` with its branch already gone.
+   sweep's kept verdicts name (§5.9); and a child whose reclaim fails past the ceiling for good,
+   such as `pin-failed` with its HEAD still on a branch that is already gone.
 3. **Rule 4 has one exception, and it is a report.** The attention item asks nothing of the human and
    nothing waits on it.
 4. **The pre-policy stock is out of scope.** Every workspace that exists when wave 1 ships carries no
@@ -836,6 +923,53 @@ approved on a narrow one.
 5. **The box is not a wall.** Identity on the fleet is attribution. The two-authority gate raises the bar on
    the automated path — the path with no human in it — and does not prevent a session with a shell from
    running ccd directly.
+6. **Wave 6 carries these residuals, stated rather than discovered.**
+   - The manifest and PR-phase branch reads, and the tail's reads of a nested checkout's branch, keep their
+     two-way read: an unreadable ref there still reads as no branch. They sit outside the reclaim's branch arms.
+   - A stash made on no branch is attributed to the child by its ancestry from the branch, so with the branch
+     proven absent no such stash is attributed or pinned. It stays in `refs/stash` and is never deleted.
+   - A witness binds birth time in whole seconds. A leaf removed and recreated within one second on the same
+     inode matches its witness. The collector's recycled-slug proof (wave 7) owns this.
+   - A clips leaf the helper refuses or cannot measure is kept, recorded, and collected by nothing yet. Wave 7's
+     pre-flight owns it.
+   - A board mounted after its child left, whose first read lands between the registry purge and the
+     journal's `done`, keeps a null chip until its next load.
+   - A ccd that dies between the registry purge and the journal's `done` leaves a null chip and no attention
+     item. A fix would read the tombstone, never reorder ccd.
+   - Whatever selects git's global or system config file (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
+     `GIT_CONFIG_NOSYSTEM`, and `HOME` or `XDG_CONFIG_HOME`) names this uid's own files and sits below the
+     pins' command-line precedence, so it passes through the reclaim's git containment.
+   - A straggler that writes into the removed worktree's path recreates a directory there that nothing
+     collects. The tail's wait covers the temp root only.
+   - On Darwin every directory temp root a tail meets is kept (§5.2). A link or file leaf is unlinked, as before.
+   - Removal compares devices only. So `rm --one-file-system` does cross a bind mount of the SAME file system
+     nested inside a leaf, and only root can make one. A mount AT the leaf is refused, because the leaf's device
+     is compared with the root's before anything is changed; a mount made there after that check, during the
+     permission pass, is not seen.
+   - The removal helper's checks are not atomic with its `rm`. A same-uid rename of another directory onto
+     `<root>/<id>` between the two is removed with it. Wave 7's quarantine rename closes this for the
+     collector. The owner-bits `chmod` that lets the helper enter a mode-000 leaf dereferences its operand,
+     bounded to this uid's own files and their owner bits.
+   - The in-use probe reads each process's environment as exec'd, so a TMPDIR set after exec is not seen.
+     - A cwd or fd reached through another mount of the same directory has a spelling neither of its compared
+       spellings names. `~/.cc-tmp` is a bind mount on the fleet box, and the TMPDIR arm compares ccd's own
+       spelling.
+     - A pid reused within one walk is read once.
+     - A process table whose churn outlasts the walk's time limit reads unmeasured, never nobody.
+     - Same-uid non-dumpable processes and other uids' processes are not read.
+   - On a git older than 2.43, a reclaim resumed after its own branch delete, whose branch is already gone,
+     reads `branch-unmeasured` at the tail's branch step on every retry until the branch is recreated. The fleet
+     runs 2.43.
+   - A branch whose tip moves while it stays present, between the in-lock recomputation and the pin, is still
+     taken over at its pinned tip; the delete's compare-and-swap at that tip bounds it. `ws-expire` keeps the
+     recomputation-to-pin window for the branch's state too, because its locked recomputation is workspace
+     lifecycle's.
+   - A dangling-symlink loose ref that shadows a packed entry reads absent. The branch is then left, never
+     deleted: a leak, not a loss.
+   - A symbolic registry branch reads unmeasured and is never deleted through. Every branch delete in the tail
+     is `update-ref -d --no-deref`.
+   - The test harness's git spawns keep the runner's own `HOME` git config.
+   - A witness writer's interrupted temp file (`$REG/tmproots/.<id>.*.tmp`) is reaped by nothing.
 
 ---
 
@@ -852,12 +986,15 @@ unbindable — without any destructive verb existing yet.
 | 3 | both | `ws-audit --reclaim` and the token; `ws-reclaim` and its ladder; its own tail arm and breadcrumb; close's fourth act; delivery cancellation after a successful reclaim | **rules 1 and 2**: a child is gone after its final close, its temp root with it, its work in the attic |
 | 4 | both | the sweep lane; `reclaim-pause` and its route and toggle; the attention item | **rule 4**: an orphaned child is reclaimed with no human act; the switch stops it from a phone |
 | 5 | server + pwa | the run-row chip and its sentences; the sweep's verdicts on the chip and the attention item; feed rows that do not repeat; the presence lease and its bound; "has coordinated" fenced to the workspace's current generation | the operator can read what became of a child, and why the sweep keeps one; a presence-held child is licensed within the stated bound |
-| 6 | both | the collector for a child temp root that a human verb orphaned; ccd journaling the failures the lifecycle mirror never sees; the pin for a child whose branch is already gone; recovery from a registry row whose directory is gone; git's local environment dropped inside the reclaim's containment | an orphaned temp root is collected with no human act; a child whose branch is gone is reclaimed rather than failing |
+| 6 | both (agent first) | what `ws-reclaim` deletes, repaired: after the kill the tail waits, bounded, until no process uses the temp root, removes it through one removal helper or keeps it and records why; the temp root's positive witness; the tail's deleting git calls contained, and git's inherited config dropped inside the containment; ccd journaling the failures the lifecycle mirror never saw; the pin for a child whose branch is already gone; recovery from a registry row whose directory is gone; the board's second re-read trigger | a child whose branch is gone is reclaimed rather than failing; a reclaimed child's temp root does not come back; a gone row no longer holds the children it cannot reach; an unmeasured probe and an id-tied pre-lock die each leave a journal line |
+| 7 | agent (inert) | the collector verb for a witnessed child temp root that a human verb or a kept tail left behind: its audit and token, its capability token and agent grant | the fleet's `ccd caps` advertises the collector's token, and nothing composes it yet |
+| 8 | server | the collector's lane in the sweep, under `reclaim-pause` and the sweep's pacing | an orphaned temp root is collected with no human act |
 
 Wave 3 built the destructive verb, and it is the one to review hardest. Every later wave that changes what
 reaches a destructive act is reviewed for safety too: wave 4's sweep is its first automatic caller, wave 5's
 lease and coordination fence change when a wait licenses `--defer-expired` and which children may be taken,
-and wave 6's collector is a second destructive path. Delivery cancellation rides with wave 3 rather than with
+wave 6 changes what the existing verb deletes and keeps, and wave 7's collector is a second destructive
+path, which wave 8's lane is the first to call. Delivery cancellation rides with wave 3 rather than with
 the sweep, because §5.6 makes it part of the act: shipping reclaim-on-close without it would run the
 slug-recycling hazard at the new, higher rate for as long as wave 4 took to land.
 

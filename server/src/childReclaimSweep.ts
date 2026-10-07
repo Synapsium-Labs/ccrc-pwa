@@ -103,7 +103,7 @@ export interface ChildReclaimAsk {
  *  be worse than absent"). The entry describes ONE workspace generation, by
  *  two keys, its birth (`bornAt`) and the run its marker names
  *  (`markerRunId`): a slug minted again is a new child, sighted afresh
- *  (`childReclaimSameGeneration` states the one window the two keys leave).
+ *  (`childReclaimSameGeneration` states the windows the two keys leave).
  *
  *  THE BOUND (spec §5.7) is three figures, never run together. From its
  *  lease's first ask, the holder is licensed within the ceiling plus one pass
@@ -200,14 +200,22 @@ export const childReclaimFirstSighting = (
  *  licence-ripe presence episode license a request to the new one; a marker naming a different run
  *  ends the old generation there. A null birth never matches.
  *
- *  THE ONE WINDOW LEFT is one run minting the same slug twice, with no pass between to forget the old
+ *  A FIRST WINDOW LEFT is one run minting the same slug twice, with no pass between to forget the old
  *  entry. The old workspace must have been eligible while its run could still mint: `planned`, bound to
  *  another session past the spawn stall. Then, before the next pass, the old row is removed by anything
  *  but this lane's own reclaim (whose answer forgets the entry), a dispatch finds that session spent and
  *  unbinds the run, the next dispatch's ws-add draws the same slug, and the run then leaves that binding
  *  (abandoned, or bound to yet another workspace past `planned`). The next pass must also come before
- *  the mirror holds the new `create`. A pass in between that reads the run with no session, with this
- *  one, or inside the spawn stall, or that lists no row for the slug, deletes the entry. */
+ *  the mirror PLACES the new `create`: a `create` that carries no clock, or one dated ahead of the
+ *  server's, does not place it. A pass in between that reads the run with no session, with this
+ *  one, or inside the spawn stall, or that lists no row for the slug, deletes the entry.
+ *
+ *  A SECOND, SAME-RUN ROUTE is not this function's to close: a licensed request (one sent with
+ *  `--defer-expired`, because the old workspace's presence episode ran past its ceiling, spec §5.7) that
+ *  is still queued behind other work on the session's queue when the same run mints the slug again. The
+ *  executor re-reads the marker against the request's own run when the job reaches the front, so a
+ *  marker naming that same run passes, and the new workspace is asked about on the old one's licence.
+ *  Nothing in the entry can see it, because the request is already out. Carried to wave 7. */
 export const childReclaimSameGeneration = (
   entry: ChildReclaimSweepEntry, bornAt: number | null, markerRunId: number,
 ): boolean => entry.bornAt !== null && entry.bornAt === bornAt && entry.markerRunId === markerRunId;

@@ -4800,7 +4800,7 @@ plan's job.
   of racing it — the remedy is to re-run from a `PATH` where `flock` resolves — while a row with NO generation
   purges exactly as it did before, because no hook on it ever held one. `ws-reclaim`, a server-composed verb,
   reaches `_reg_purge` only as its last step, so every refusal it gets back — `purge-mechanism-absent` among
-  them — is reported after the worktree, branch, clips and temp root are already gone, never as an up-front
+  them — is reported once the worktree and branch are gone and the clips and temp root gone or kept, never as an up-front
   refusal. `ws-add`, `ws-restore` and `ws-reap` keep the fail-closed refusals they already shipped.
 - **Silence, and the kill-switch.** Every arm is silent by contract: a missing `flock`, an absent helper,
   an expired eight-second helper deadline or lock contention is a MISSED MEASUREMENT — no journal line —

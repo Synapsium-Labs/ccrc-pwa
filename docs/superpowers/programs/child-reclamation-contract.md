@@ -1483,3 +1483,121 @@ Code citations are to `77c11245`. They are hints, so locate code by content.
   - **`expoAI-assistant-calm-mesa`** (branch proven absent; HEAD and every reflog commit on `origin/main`; clean
     tree) reclaims on its own once wave 6's gone-branch pin is live. Until then the operator may recreate the branch
     at HEAD to reclaim it sooner.
+
+### §12 as built (wave 6, run 291)
+
+Where wave 6's code and its draft rulings narrowed or spelled out R48–R59, sections 1–11 now read as follows.
+This note amends; it edits no earlier text.
+
+- **R5′.** Audit-time journaling is terminal-only, with one exception (R52). `ws-audit --reclaim`'s unmeasured
+  answer writes one `failed` `probe-unmeasured` line with verb `ws-audit`. The locked recomputation writes the
+  same word with verb `ws-reclaim`. `ws-expire`'s own unmeasured answer stays unjournaled: it is
+  workspace-lifecycle's region.
+- **R43.**
+  - "Exactly these two tokens, by name" now names four: `flock-unavailable`, `lock-unopenable`,
+    `token-malformed` and `run-id-malformed`, each in `CHILD_RECLAIM_PRE_LOCK_TOKEN` and its die pattern.
+  - "The failures the mirror never sees" are now the usage die, the four `--actor`/`--reason` checks, a
+    malformed session id, and `python3` unavailable. Each stays unjournaled for its stated reason.
+  - `probe-unmeasured` and `branch-unmeasured` are `failed` lines, read as failure lines with no
+    classification. The server's `CHILD_RECLAIM_PROBE_UNMEASURED` is typed `satisfies LcRefusalToken`.
+  - `die "bad run id"` was reclaim's alone, so the sanctioned unjournaled set narrows by one.
+- **R31's stated cost.** A row whose directory is gone now holds only while neither arm of R54 places it.
+  - Two interrupted children whose trees the tail removed release each other through the breadcrumb arm.
+  - Two hand-deleted children of one repository release each other through the git-record arm.
+  - These still hold: an unreadable `worktrees/` or `gitdir`, two admin entries naming one tree, a locked
+    record, a gone parent or one reached through a link, an interrupted expiry's breadcrumb, and a lifecycle
+    `create` row alone.
+  - R54's "only corroborates" is built as "never an input".
+  - A breadcrumb-arm row is placed by its literal spelling. The ladder header's "compared exactly as a
+    `complete` row is" holds for the git-record arm only: a breadcrumb-arm row spelled through a link or `/./`
+    is compared as text (wave 6 draft ruling OPEN3). That is bounded. The leaf is proven absent,
+    `_ws_reclaim_owned` asks again at the tail, and a re-created tree resolves `complete` and holds.
+  - The moved-tree refusal reuses `containment-unproven`, whose copy only approximates that case.
+- **R54.** The breadcrumb arm also proves that no admin entry names the tree, asked of the git-record arm's own
+  reader. Git's list silently omits a record whose `gitdir` it cannot read, so its "no record" alone would read an
+  unreadable record as none. An unreadable `gitdir` or `worktrees/` therefore keeps the hold.
+- **R49.**
+  - The bound is `WS_RECLAIM_TMPROOT_WAIT_S=15`, lowered only by `CCD_RECLAIM_TMPROOT_WAIT_S`.
+  - The wait also ends after `bound*4+1` asks, whichever comes first. The clock alone is not a bound when it steps
+    backwards.
+  - The probe's walk is bounded by `WS_PATH_USERS_SCAN_S=10`, and an expired walk is unmeasured.
+  - The `done` row and the three purge-failure rows carry `meas.tmpRootKept` (`in-use`, `unmeasured` or
+    `refused`) and `meas.clipsKept` (`unmeasured` or `refused`), each omitted when nothing was kept.
+  - A kept reason is one line of printable ASCII, cut at 300 bytes. A longer or non-ASCII reason grows at the
+    journal's encoder until the whole `meas` object is dropped.
+  - A clips leaf is kept and recorded the same way as a temp root.
+  - A same-uid process the kernel will not let ccd read, or another uid's process, is skipped as a stated
+    limit, as the expiry probe does.
+  - The helper refuses the whole directory leaf while an entry stays unreadable, so nothing is removed in
+    part.
+  - The helper also refuses a directory leaf that is a mount point, comparing its device with the root's before
+    any chmod or rm, and it never uses a root that resolves to nothing or to `/`. It sets the leaf's own owner
+    bits before entering it.
+  - On Darwin the helper removes with `rm -rfx`.
+- **R50.**
+  - `run` joins the staleness test.
+  - An unparseable witness is stale and is rewritten.
+  - `uid=` is recorded only after the owner test proves the leaf is this uid's.
+  - A dot-leading id is refused.
+  - A `$REG/tmproots` that is itself a link is never followed: the writer refuses it, the reader answers 2, and
+    the remover warns and leaves what it reaches.
+  - Birth time comes from `_plat_btime`, in the platform block of both `ccd/ccd` and `ccd/ccrc`.
+  - The tail passes no expected device and inode, because the row and the marker prove identity there.
+- **R51.** The harness strip is `inheritedEnv()` (`server/test/gitEnvStrip.ts`). It is applied at every
+  `process.env` spread, and at every option-less git spawn in the reclaim and expire fixtures. Whatever selects
+  git's global or system config file (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM`, and
+  `HOME` or `XDG_CONFIG_HOME`) names this uid's own files and sits below the pins' command-line precedence, so it
+  stays the stated residual R51 names.
+- **R53.**
+  - The token's absence input is spelled `branchState=present|absent`, because a second `branch=` line would
+    collide with a branch named `absent`. An unmeasured read mints no token.
+  - On old git, the positive fallback reads present for a branch that resolves, and unmeasured for anything
+    else.
+  - A step-5 read failure is the new `failed` token `branch-unmeasured`.
+  - The consent binds the branch's state in both directions. A pin that reads the branch in a different state
+    from the in-lock recomputation refuses `state-changed` before the tombstone, journaled as a `failed` line.
+  - A token minted before the fleet box converged, and spent after it, answers `state-changed` once, on both
+    verbs.
+- **R55.** `CoordStatus.childReclaimDoneAt` is omitted, never null, while unmeasured. Only a `child` mark
+  leaving the listing resets the mirror's clock, and only a reclaim `done` row raises the value.
+- **Carried residuals:** spec §7 item 6 holds the stated list. Wave 6 also measured these, in plain words:
+  - **Temp root.**
+    - A same-file-system bind mount INSIDE the leaf is crossed by `rm --one-file-system`. A mount AT the leaf is
+      refused, because the device is compared with the root's before any chmod or rm.
+    - A mount made at the leaf after that check, during the permission pass, is not seen.
+    - The owner-bits chmod dereferences its operand. This is bounded to this uid's own files and owner bits.
+    - A probe answering in-use over an ABSENT leaf records nothing, and leaves any witness beside the
+      proven-absent leaf. A user that outlives the bound can re-create the leaf after `done`, which leaves a leaf
+      with no witness: a leak, never a loss.
+    - With no birth time (`btime=-`), a witness binds dev and ino alone. Wave 7 must not take such a witness on
+      dev and ino alone, and must treat the reader's rc 2 as "offer to the operator, never take".
+    - A writer killed between its `printf` and its `mv` leaves a dot-leading temp file in `tmproots/`.
+    - Nothing collects a kept clips leaf. That is carried to wave 7's pre-flight.
+  - **The wait.** It ends by the clock or after `bound*4+1` asks. Under a frozen clock with every walk timing
+    out, it can reach about 10 minutes. That is past the 240 s remote budget, but a remote kill lands in the wait,
+    before any deletion, and the breadcrumb resumes. The measured worst case with a working clock is about 35 to
+    41 s.
+  - **Branch.**
+    - A tip that MOVES while the branch stays present, between the in-lock recomputation and the pin, is still
+      taken over. The compare-and-swap at the pinned tip bounds it.
+    - `ws-expire` keeps the recomputation-to-pin branch-state window, because `_ws_expire_locked` is
+      workspace-lifecycle's.
+    - On a git older than 2.43, a resume whose branch is already gone reads `unmeasured` at step 5 on every
+      retry.
+  - **Gone directory.**
+    - A stray non-directory entry under `<common>/worktrees/` holds every recovered row of that repository. It
+      fails closed, and its reason reads "cannot be searched".
+    - Rung 8 (the child's OWN record) still reads git's silent omission as "no record". This is wave-3 code,
+      carried.
+  - **Journal.**
+    - The entry regex admits `.`, `..` and dot-leading session ids. This is pre-existing. Such an id is only a
+      JSON field in the journal, and every path site refuses it.
+    - A later wave may adopt a no-dot-leading rule at the `ws-reclaim` and `ws-expire` entry.
+  - **Board.**
+    - An older `done` `at` arriving after a newer one moves nothing.
+    - A `purge-incomplete` reclaim journals `failed`, not `done`.
+    - A reset sweep that lands between the purge and the `done` can delay that `done`'s ingest by up to 5 s.
+    - In each of these the chip settles on the next board load.
+  - **The wave-3 ladder.** The raw `_WS_NORMALISE_WHY` refusal detail, a session-chosen filename, is uncapped.
+    An over-cap refusal row falls to the encoder's fallback and loses `detail`, `verb` and `dec.*`. Carried; not
+    this wave's code.
