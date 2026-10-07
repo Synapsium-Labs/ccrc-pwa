@@ -12,6 +12,8 @@
   Revision 2 (same day) applies three review lenses: security, constraints/census/rings, rollout/operations.
   Revision 3 (same day) carries the operator's rulings of about 12:40 UTC on the "Waiting on you" box (R1 hold rule,
   R2 plain HTTP, R3 boot recovery, R4 interval) everywhere they bear, and records the auto-install restore of 11:21.
+  Revision 4 (same day) carries ruling R5 of about 13:55 UTC, which amends R1: there is no window marker of any kind;
+  every rotation trigger holds only on the mechanical conditions of 9.2.
 -->
 <html lang="en">
 <head>
@@ -87,7 +89,7 @@ ol.steps li{margin:4px 0}
 <p class="sub">How ccrc mints, hands out, rotates and checks its box token with no human after install, and how the
 first rotation retires the value that leaked into transcripts.</p>
 <div class="meta">
-  <span>Spec</span><span>2026-10-07</span><span class="status">Draft, revision 3</span>
+  <span>Spec</span><span>2026-10-07</span><span class="status">Draft, revision 4</span>
   <span>Owner: operator</span><span>Linear: none</span>
   <span>Programme: <code>box-token-lifecycle</code> (proposed)</span>
   <span>Related: <code>docs/superpowers/programs/centralised-update-management.md</code> (ledger, branch, at 3be16c28b; merges before or with this spec)</span>
@@ -126,10 +128,12 @@ gets a <b>new</b> generation, never the current value again. Retired values are 
 <code>deploy.sh</code> cannot bring the leaked value back.</li>
 <li><b>Wave 1 is the smallest change that retires the leak</b> (two PRs). Wave 2 adds the schedule and rotates the
 agent link token; wave 3 gives each box its own token, stored as hashes.</li>
-<li><b>The operator ruled on the open questions at 12:40.</b> Automatic rotations hold only on an explicit window
-marker, <code>$REG/token-rotation-held</code>, a file with no writer in the tree (the <code>mail-disabled</code>
-precedent), and while an update is in flight. <code>auto=off</code> never holds a rotation, and "Rotate now" never holds
-on the marker or on auto. So the leaked value retires once wave 1 has landed and the gate (§9.2) opens. A plain-http
+<li><b>The operator ruled on the open questions at 12:40, and amended the hold rule at about 13:55 (R5).</b> There is
+no window marker. Every rotation, automatic or "Rotate now", holds only on the mechanical conditions of 9.2: an update
+in flight, a fleet agent or <code>ccrc</code> without the op, one fleet row, and the like. <code>auto=off</code> never
+holds a rotation. A rotation is invisible to every reader (no 401 window, no restart, the old value accepted until the
+fleet confirms, no new doctor WARN in wave 1), so a lane window has nothing to protect from it. So the leaked value
+retires once wave 1 has landed and the gate (§9.2) opens. A plain-http
 install rotates and shows its transport. A server-written <code>mail.token</code> found unusable at boot is recovered
 from a sibling the server wrote (4.2.1); a hand-made one still refuses. Wave 2's schedule is weekly.</li>
 <li><b>Check:</b> the failure table (§6), the security analysis (§7), the first-rotation gate (§9) and the
@@ -157,9 +161,13 @@ sections of the brief was answered "Looks right".</p>
 <p><b>About 12:40</b>, answering revision 2's "Waiting on you" box: hold rule "Explicit window marker" (R1); plain HTTP
 "Rotate, show the transport" (R2); boot recovery "Recover, for server files" (R3); wave 2's automatic schedule weekly,
 7 days (R4).</p>
+<p><b>13:28</b>, on the model auto-advance design, which has no operator-window mechanism either: "if I've set up
+auto-install why pause it? If I don't want auto-install I'll just switch it off".</p>
+<p><b>About 13:55</b>, amending R1 (R5): "Drop the marker". No window marker of any kind holds a token rotation; the
+shared marker proposed for both designs is off.</p>
 </blockquote>
 <p><span class="f a">agreed</span> Sources: the approved design brief; ledger (branch) lines 2597-2635; the operator's
-answers of about 12:40 UTC.</p>
+answers of about 12:40 UTC, and the rulings of 13:28 and about 13:55 UTC.</p>
 
 <h3>1.2 What is manual today, and why (ranked)</h3>
 <div class="tablewrap"><table>
@@ -246,8 +254,8 @@ box, <code>ccrc install</code> and the <code>deploy.sh</code> fallback all get a
 <span class="f a">agreed</span> Narrowed by this revision <span class="f j">judgement</span>: the agent link token's
 pairing (typed at a tty on the fleet install, pasted into the server's <code>ccrc.env</code>,
 <code>ccd/ccrc:12893-12935</code>) stays one install-time step until wave 2, because it cannot travel over the link it
-secures. Rotation needs no human: automatic rotations hold only on an explicit window marker that a lane runbook
-sets and removes (R1, 12:40), never on <code>auto=off</code>, so the seeded default rotates.
+secures. Rotation needs no human: every rotation holds only on the mechanical conditions of 9.2 (R1 as amended by R5,
+about 13:55), never on a window marker and never on <code>auto=off</code>, so the seeded default rotates once the release is on both boxes.
 <span class="f a">agreed</span></td></tr>
 <tr><td>G2 Retire the leaked value first</td><td>Wave 1 is the smallest change that can retire it safely; the schedule,
 the agent link token and per-box tokens follow. <span class="f a">agreed</span></td></tr>
@@ -407,10 +415,10 @@ authenticates its own replacement; the agent reads and writes no secret file.</f
 <thead><tr><th>Piece</th><th>Files that change</th><th>Ring</th><th>Red-first test home</th></tr></thead><tbody>
 <tr><td>Boot mint, boot recovery and holder wiring</td><td><code>server/src/index.ts</code> (its no-token warning at <code>:58-62</code> is rewritten: it now fires only when the mint itself failed)</td><td>L5</td><td><code>server/test/token-boot.test.ts</code> (new)</td></tr>
 <tr><td>Accept-set check, holder type, boot read of auxiliary files</td><td><code>server/src/coord/token.ts</code>; <code>server/src/server.ts:307</code> (the <code>Deps</code> field's type only); <code>server/src/coord/routes.ts:555-556</code> (the <code>legacy</code> detail's "(that is /api/notify only)" goes)</td><td>L3 (imports <code>node:fs</code>, <code>node:crypto</code>)</td><td><code>server/test/coord-token.test.ts</code> (extended)</td></tr>
-<tr><td>Rotation policy: preconditions, the next step, timings, <code>claimVerdict</code>, and the window marker's one spelling, <code>TOKEN_ROTATION_HOLD_MARKER = 'token-rotation-held'</code>, read by <code>rotationHoldOf(names)</code> over a registry listing (§5 step 1)</td><td><code>server/src/token/policy.ts</code> (new, imports nothing but L0); <code>README.md</code> names the marker beside <code>mail-disabled</code>'s paragraph (<code>README.md:4034</code>)</td><td>L1</td><td><code>server/test/token-policy.test.ts</code> (new); <code>server/test/single-definition.test.ts</code> (a new no-writer describe, appended; §8)</td></tr>
+<tr><td>Rotation policy: preconditions (the mechanical gate of 9.2, one verdict for every trigger), the next step, timings and <code>claimVerdict</code></td><td><code>server/src/token/policy.ts</code> (new, imports nothing but L0)</td><td>L1</td><td><code>server/test/token-policy.test.ts</code> (new)</td></tr>
 <tr><td>Token store port and its failure contract</td><td><code>server/src/token/ports.ts</code> (new, declared by the driver, its consumer)</td><td>L2</td><td>covered by the adapter's tests</td></tr>
 <tr><td>File adapter: atomic, fsynced 0600 writes; measured reads that keep absent, unusable and placeholder apart; every path derived from <code>dirname(cfg.mailTokenPath)</code> (<code>server/src/config.ts:504</code>, so <code>CCRC_MAIL_TOKEN_PATH</code> moves them all)</td><td><code>server/src/token/files.ts</code> (new; <code>fs/promises</code>)</td><td>L3</td><td><code>server/test/token-files.test.ts</code> (new)</td></tr>
-<tr><td>Driver: mint, send the op, promote, grace, retry; one rotation in flight at a time</td><td><code>server/src/token/driver.ts</code> (new) with its <b>own</b> 60 s timer, registered from <code>server/src/index.ts</code>, not a lane in <code>server/src/watch.ts</code> (a file other in-flight runs edit). It reads the fleet's generation from the inventory sweep through a callback. Each tick it lists the registry once (<code>io.readdir(cfg.registryDir)</code>, <code>server/src/config.ts:474</code>) and hands the names to <code>rotationHoldOf</code>; it never spells the marker or its constant.</td><td>L4 (owns timers, decides nothing: asks policy)</td><td><code>server/test/token-rotation-e2e.test.ts</code> (new)</td></tr>
+<tr><td>Driver: mint, send the op, promote, grace, retry; one rotation in flight at a time</td><td><code>server/src/token/driver.ts</code> (new) with its <b>own</b> 60 s timer, registered from <code>server/src/index.ts</code>, not a lane in <code>server/src/watch.ts</code> (a file other in-flight runs edit). It reads the fleet's generation from the inventory sweep through a callback. It reads nothing in the fleet registry.</td><td>L4 (owns timers, decides nothing: asks policy)</td><td><code>server/test/token-rotation-e2e.test.ts</code> (new)</td></tr>
 <tr><td>Claim door and rotate route</td><td><code>server/src/token/routes.ts</code> (new, a <b>fourth</b> route-registering file), registered from <code>server/src/server.ts</code>. The handler parses, calls <code>claimVerdict</code> and replies; it decides nothing.</td><td>L4</td><td><code>server/test/token-claim-route.test.ts</code> (new); <code>box-token-census.test.ts</code>; <code>auth-gate.test.ts</code>; every pin listed in 4.6</td></tr>
 <tr><td>Op words, frozen argv, code shape, op bounds, wire types</td><td><code>shared/agent-protocol.ts</code> (<code>TOKEN_SYNC_SPAWN_TIMEOUT_MS</code>, <code>TOKEN_SYNC_OP_TIMEOUT_MS</code>, <code>CLAIM_CODE_TTL_MS</code> beside <code>UPDATE_OP_TIMEOUT_MS</code> at <code>:428-440</code>); <code>shared/api.ts</code> (additive fields on the update inventory's node row)</td><td>L0 (imports nothing)</td><td><code>agent/test/token-sync-op.test.ts</code> (new)</td></tr>
 <tr><td>Agent op handler and spawn port</td><td><code>agent/src/server.ts</code> (<code>ReqRefusal.refuse</code> at <code>:736</code> widens beyond <code>'bad-tag' | 'bad-kind'</code> to take <code>bad-code</code>); <code>agent/CLAUDE.md:54</code> (the update op is no longer "the ONE wire-triggered spawn outside the exec whitelist")</td><td>agent delivery</td><td><code>agent/test/token-sync-op.test.ts</code> (new); <code>agent/test/update-op.test.ts:397</code> (ops list moves)</td></tr>
@@ -732,8 +740,8 @@ instead and leave the census no file of its own to watch. <span class="f j">judg
 <li><b>Rotate route:</b> <code>POST /api/token/rotate</code> is session-only, never a box-token write (decision 15's
 reasoning, <code>docs/superpowers/specs/2026-09-20-centralised-update-management-design.md:108-110</code>).
 <span class="f a">agreed</span> It joins the rotation already running and answers that rotation's state, and it starts
-at most one rotation a minute. It is never held by the window marker or by <code>auto</code> (R1, 12:40), only by the
-mechanical conditions of 9.2. With <code>CCRC_AUTH</code> dark it is reachable by anyone who can reach the server, like
+at most one rotation a minute. It is never held by <code>auto</code>, only by the mechanical conditions of 9.2, the
+same ones that hold an automatic trigger (R1 as amended by R5); an update in flight holds it too. With <code>CCRC_AUTH</code> dark it is reachable by anyone who can reach the server, like
 every PWA write today; armed, it sits behind the passkey and the origin check. <span class="f j">judgement</span></li>
 <li><b>CLAUDE.md:</b> the coordination bullet gains one sentence naming both routes. It goes <b>after</b> the bullet's
 "What does need saying here" split, so the lanes-clause check (<code>box-token-census.test.ts:607-653</code>) never
@@ -750,13 +758,11 @@ passkey session. A banner appears after repeated failure. <span class="f a">agre
 <p><b>The transport</b> is shown as a plain word, <code>https</code> or <code>http</code>, taken from the <code>transport</code> field of
 the last <code>token-sync</code> op result (4.4); a plain-<code>http</code> install says "transport: http (unencrypted)" on the card and still rotates (R2,
 12:40). <span class="f a">agreed</span></p>
-<p><b>Held reasons, as the card words them</b> <span class="f j">judgement</span> on the wording: "automatic rotations
-held: rotation window marker set"; "automatic rotations held: the registry cannot be listed"; "held: an update is in
-flight on &lt;node&gt;"; and the mechanical ones of 9.2 ("fleet agent predates token-sync", a stale client, and so on).
-The first two say "automatic" because "Rotate now" ignores them (R1, 12:40). The card never prints the marker's file
-name: <code>pwa/src</code> is one of the roots that single-definition's no-writer pin scans (§8). It renders the hold
-word that the server sends, and its help text points at the README. A node whose auto reads <code>off</code> is shown
-as that node's update setting, never as a rotation hold.</p>
+<p><b>Held reasons, as the card words them</b> <span class="f j">judgement</span> on the wording: only the mechanical
+conditions of 9.2, which hold "Rotate now" and the automatic triggers alike: "held: an update is in flight on
+&lt;node&gt;", "held: fleet agent predates token-sync", a stale client, and so on (R1 as amended by R5). It renders the
+hold word that the server sends. A node whose auto reads <code>off</code> is shown as that node's update setting, and may
+be named as the likely cause of "release not yet on &lt;node&gt;", but is never a hold reason of its own.</p>
 <p><span class="f j">judgement</span> on transport: the data rides <code>GET /api/updates</code>
 (<code>server/src/update/routes.ts:580</code>), which is session-only, not <code>EXEMPT</code>, and consults no box
 token (<code>box-token-census.test.ts</code>'s <code>UPDATE_DOORS</code> pins that). The fleet node's row carries its
@@ -774,8 +780,7 @@ box must not cover it): <code>mail.token</code> present, mode 0600, and extracta
 check and is never printed, as in <code>_check_auth</code> (<code>ccd/ccrc-doctor-checks:1305-1316</code>). Also:
 <code>box-token.json</code> readable; age, last rotation and phase; whether a rotation is owed; whether the fleet's
 confirmed generation equals the current one; the count of retired values presented; the hold word, if any, and the
-last boot recovery (4.2.1). The hold word is read from <code>box-token.json</code>, never by naming the marker file,
-because no line of shell may name it (§8).</li>
+last boot recovery (4.2.1). The hold word is read from <code>box-token.json</code>.</li>
 <li><b>Fleet arm</b> (on <code>fleet</code> and <code>both</code>): <code>~/.cc-secrets/ccrc-mail.token</code> present,
 0600 and extractable; the generation file present; the last <code>token-sync.json</code> report with its proof word
 and transport. A plain transport is printed on the line as <code>transport http</code>, for information: it never
@@ -848,18 +853,19 @@ it over the agent link. Until then the old value stays current, and nothing the 
 <li><b>Trigger:</b> one of three. First, <code>rotationOwed</code> is set: when the hand-made value is adopted (this
 retires the leaked value), or when a forward rotation is owed (a fleet box that is behind, a lost result past its
 deadline, a retired value written back). Second, "Rotate now". Third, in wave 2, the schedule, weekly (R4, 12:40).
-<b>The hold rule</b> (R1, 12:40, "Explicit window marker"): the <b>automatic</b> triggers, the first and the third,
-hold only while (a) the window marker <code>$REG/token-rotation-held</code> stands, or (b) an update is in flight on
-either box. <code>$REG</code> is the fleet registry, <code>~/.cc-sessions</code> (<code>cfg.registryDir</code>,
-<code>server/src/config.ts:474</code>). The marker has no writer in the tree. A lane runbook <code>touch</code>es it
-beside its auto-install pause and removes it beside the restore, exactly as an operator does with
-<code>mail-disabled</code>. The read follows that precedent: the registry is <b>listed</b>, never statted, and a listing
-that fails holds the automatic triggers, fail-shut, because "can't tell" must not read as "absent"
-(<code>server/src/watch.ts:507-526</code>, <code>:4878-4879</code>; <code>server/src/coord/dispatch.ts:450-465</code>).
-<code>auto=off</code>, the seeded default (<code>server/src/coord/schema.ts:1127</code>), <b>never</b> holds a rotation.
-"Rotate now" is the operator's own act: it never holds on the marker or on auto. It still waits on the mechanical
-conditions of 9.2, without which no rotation can complete. <span class="f a">agreed</span> One rotation is in flight at
-a time, and a second trigger joins it.</li>
+<b>The hold rule</b> (R1 as amended by R5, about 13:55, "Drop the marker"): there is <b>no window marker</b> of any
+kind. The automatic triggers, the first and the third, hold only on the mechanical conditions of 9.2: an update in
+flight on either box, a fleet agent that lacks the op or a <code>ccrc</code> that lacks the verb, the probe or caps
+conditions, more or fewer than one fleet row, and so on. <code>auto=off</code>, the seeded default
+(<code>server/src/coord/schema.ts:1127</code>), <b>never</b> holds a rotation. "Rotate now" is the operator's own act
+and waits on the same mechanical conditions, an update in flight included, without which no rotation can complete.
+<span class="f a">agreed</span> <b>Why no window needs a marker</b> <span class="f j">judgement</span>: a rotation is
+designed to be invisible to every reader. There is no 401 window (G3), no restart (the holder is mutated in place,
+4.2), the old value is accepted until the fleet confirms a later one, and wave 1 adds no new doctor WARN (4.8). So a
+lane window has nothing to protect from a rotation, and no session or runbook has to write into the fleet registry,
+which sessions are forbidden to touch. The operator's 13:28 words on the model auto-advance design apply here too: "if
+I've set up auto-install why pause it? If I don't want auto-install I'll just switch it off". One rotation is in flight
+at a time, and a second trigger joins it.</li>
 <li>The driver mints generation G with a random id, writes <code>mail-pending-G.token</code>, and the check starts
 accepting it.</li>
 <li>It sends <code>token-sync</code> with a one-time code, with <code>TOKEN_SYNC_OP_TIMEOUT_MS</code> as the request
@@ -889,7 +895,7 @@ sequenceDiagram
   participant S as Fleet: ccrc token sync
   participant C as Server: claim door
   participant L as Server: a box-token lane
-  D-&gt;&gt;D: gate open (ops, caps or probe, no update in flight, one fleet row, and for an automatic trigger no window marker)
+  D-&gt;&gt;D: gate open (ops, caps or probe, no update in flight, one fleet row), the same for every trigger
   D-&gt;&gt;H: mint G with a random id, write mail-pending-G.token, accept current and G
   D-&gt;&gt;A: token-sync op with a one-time code, TTL 60 s
   A-&gt;&gt;S: spawn the frozen argv, minimal env, code on stdin
@@ -907,7 +913,8 @@ sequenceDiagram
 </pre>
 <figcaption><span class="fno">Figure 4.</span> One rotation. The value crosses only the HTTPS claim, or plain http on
 an install that has no TLS, where the console and doctor show the transport; the agent link carries the code and the
-result. The gate never reads <code>auto</code>, and "Rotate now" skips the window marker.</figcaption></figure>
+result. The gate is mechanical only and the same for every trigger: it never reads <code>auto</code>, and there is
+no window marker (R5).</figcaption></figure>
 <div class="tools" data-for="f-seq"></div>
 
 <figure class="card" id="f-state"><pre class="mermaid">
@@ -973,9 +980,7 @@ brief's; the rest were found in the code and in review.</p>
 <tr><td>Server rolled back to a pre-feature build</td><td>—</td><td>It reads <code>mail.token</code>, the current value, which the fleet holds after any completed rotation; it ignores the new files</td><td>Works. In the seconds between the fleet's write and the promotion, the fleet would hold a value the old build refuses until the feature build returns. Rotation never starts while an update is in flight, which shrinks this window to a rollback started during those seconds. <span class="f j">judgement</span></td></tr>
 <tr><td>Fleet rolled back to a pre-feature build</td><td>Ops and caps lose <code>token-sync</code></td><td>Its file keeps the current value, and its old readers read it unchanged; no rotation until it returns</td><td>Automatic.</td></tr>
 <tr><td>An update in flight on either box</td><td>The node's <code>update.json</code> phase in the inventory</td><td>Gate holds</td><td>Next tick.</td></tr>
-<tr><td>The window marker <code>$REG/token-rotation-held</code> stands</td><td>The driver's registry listing, each tick</td><td>Automatic triggers hold (first rotation, schedule), named "rotation window marker set"; "Rotate now" still runs</td><td>When the runbook (or the operator) removes it: the next tick. <span class="f a">agreed</span> (R1, 12:40)</td></tr>
-<tr><td>The registry cannot be listed</td><td>The listing answers <code>null</code></td><td>Automatic triggers hold, fail-shut, as <code>mail-disabled</code>'s readers do (<code>server/src/watch.ts:4878-4879</code>); "Rotate now" still runs</td><td>Next tick. <span class="f j">judgement</span></td></tr>
-<tr><td>Fleet auto-install paused (<code>auto=off</code>), including the seeded default</td><td>The resolved intent (<code>server/src/update/resolve.ts:26</code>)</td><td><b>No hold.</b> The gate never reads <code>auto</code>. It only delays a new release's landing, which the stamp condition of 9.2 already measures.</td><td>Nothing to recover. <span class="f a">agreed</span> (R1, 12:40)</td></tr>
+<tr><td>Fleet auto-install paused (<code>auto=off</code>), including the seeded default</td><td>The resolved intent (<code>server/src/update/resolve.ts:26</code>)</td><td><b>No hold.</b> The gate never reads <code>auto</code>. It only delays a new release's landing, which the stamp condition of 9.2 already measures.</td><td>Nothing to recover. <span class="f a">agreed</span> (R1 as amended by R5)</td></tr>
 <tr><td>Stale <code>ccrc-api</code> on the fleet</td><td><code>stale-client</code></td><td>A named hold; nothing claimed; the old value stays</td><td>Clears when the client is replaced: W16 places it, or a <code>deploy.sh</code> run ships the wave-13 copy.</td></tr>
 <tr><td>Plain-<code>http</code> server address</td><td>The report records <code>transport http</code></td><td>Rotate, never refuse; doctor and the console show <code>transport http</code></td><td>Nothing to recover. <span class="f a">agreed</span> (R2, 12:40)</td></tr>
 <tr><td>Flooding the claim door</td><td>Miss budget, miss count</td><td>Misses past the budget answer 429; a live code is still served; no code is burned; one capped alert</td><td>Nothing to recover: the fleet's claim still succeeds.</td></tr>
@@ -1026,8 +1031,7 @@ visibly, but never retire the fleet's working value.</td></tr>
 <tr><td>Anyone on the internet</td><td>Reach the claim door and send junk.</td><td>Guess a 256-bit code. Deny a live claim:
 the budget charges misses only. Learn whether a rotation is under way: refusals share one shape.</td></tr>
 <tr><td>A process on the fleet box (same user)</td><td>Read the token file, as today. Write the non-secret generation
-file. Create the window marker and so hold automatic rotations, as it can create <code>mail-disabled</code> today; the
-console names the hold, and "Rotate now" is unaffected.</td><td>Confirm a value by writing that file: a confirmation needs the issued id, read after the hand-out. Such a
+file.</td><td>Confirm a value by writing that file: a confirmation needs the issued id, read after the hand-out. Such a
 process can already read the token itself (non-goal).</td></tr>
 </tbody></table></div>
 <h3>7.1 What is logged, and what is never printed</h3>
@@ -1058,7 +1062,6 @@ proves it.</p>
 <tr><td>Census pins</td><td>The 27 lanes are unchanged. <code>CODE_DOORS</code> and <code>TOKEN_DOORS</code> are added and checked in both directions; <code>UNGATED</code>, <code>SESSION_ONLY</code> and <code>UPDATE_DOORS</code> are unchanged. Every route-count and lane-source pin listed in 4.6 moves in the same change, and the order-pinned lane paragraph keeps its numbers.</td><td><code>box-token-census.test.ts</code>; <code>coord-pause-route.test.ts:178-221</code>; <code>auth-gate.test.ts</code> (4.6)</td></tr>
 <tr><td>Wire additive-only, no <code>FLEET_PROTO</code> bump</td><td>A new op and a new <code>ready.ops</code> word; the op result's additive <code>transport</code> field; additive fields on the update inventory's node row; one reader each (<code>readReadyOps</code> for the word, the inventory's generation reader). An older peer's absence grants nothing.</td><td><code>agent/test/token-sync-op.test.ts</code></td></tr>
 <tr><td>Single definition</td><td>The op word, the error words, the argv template, the claim path, the code shape, the op bounds and wave 2's weekly interval are declared once in L0; the shell spellings in <code>ccd/ccrc-token-sync</code> are pinned against them.</td><td><code>server/test/single-definition.test.ts</code></td></tr>
-<tr><td>An operator switch has no writer in the tree</td><td><code>token-rotation-held</code> joins single-definition's no-writer pins in a new describe, appended because that file is cited by line. It follows the stall-watch markers' describe (<code>server/test/single-definition.test.ts:4094-4126</code>) and <code>expire-lane-live</code>'s (<code>:4743-4766</code>). No line of shell names it. Its one TS holder on a code line is its definer, <code>server/src/token/policy.ts</code>, which reaches no <code>node:</code> module. And, as in <code>expire-lane-live</code>'s wider-writer check, the only file that names its constant is the definer, because the driver hands its listing to <code>rotationHoldOf</code>. The PWA and doctor therefore render a hold word, never the file name. <code>mail-disabled</code> itself has no such pin: <code>:4096-4097</code> says its no-writer claim is one "nothing pins". So the precedent followed is the stall markers' pin, applied to a marker read the <code>mail-disabled</code> way.</td><td><code>server/test/single-definition.test.ts</code> (new describe)</td></tr>
 <tr><td>No new ccd verbs for coordination mutation; <code>EXEC_COMMANDS = ['tmux','ccd']</code></td><td>The fleet side is a <code>ccrc</code> verb spawned by an op, like the update op; no ccd change; the exec lists are untouched.</td><td><code>agent/test/update-op.test.ts:436</code> and its twin</td></tr>
 <tr><td><code>coord.db</code> synchronous, migrations refuse rather than open empty</td><td>Not touched. Server state is in files, and the fleet's measured generation lives in the driver's memory, fed by the sweep, not in a new <code>nodes</code> column (<code>server/src/coord/schema.ts:1085-1112</code> has none). So no <code>user_version</code> migration is needed. <span class="f j">judgement</span></td><td>—</td></tr>
 <tr><td>No secret in the agent's read grant</td><td>Only <code>box-token-generation</code> joins <code>NODE_FILES</code>, and it holds an id. The "eight" pins move with it (4.1).</td><td><code>agent/test/whitelist.test.ts:148-168</code></td></tr>
@@ -1073,18 +1076,18 @@ proves it.</p>
 <!-- ================================================================ 9 -->
 <section id="s-rollout"><h2><span class="sno">9</span>Rollout and coordination</h2>
 <p class="intro">The feature is its own programme, coordinated by the centralised-update coordinator. It rides the
-normal release lane, and its first rotation starts by itself once the gate below opens, and holds inside a lane window once that lane's runbook sets the window marker (9.3).
+normal release lane, and its first rotation starts by itself once the mechanical gate below opens (9.2).
 <span class="f a">agreed</span> Two things the code cannot settle decide when that happens: when the wave-1 releases
-land, which follows the operator's update setting (9.2), and the claims on shared files (9.3). Whether a window is open
-is not one of them: a lane runbook says so with the window marker (R1, 12:40).</p>
+land, which follows the operator's update setting (9.2), and the claims on shared files (9.3). Whether a lane window is
+open is not one of them: a rotation is invisible to a window's gates, so nothing marks one (R1 as amended by R5).</p>
 
 <figure class="card" id="f-rollout"><pre class="mermaid">
 flowchart LR
   W1A["Wave 1, PR A&lt;br/&gt;server, both-box writer, agent op"] --&gt; W1B["Wave 1, PR B&lt;br/&gt;token sync, doctor, console, deploy.sh"]
   W1B --&gt; LAND["both boxes land the release&lt;br/&gt;through the updater:&lt;br/&gt;auto on a channel that carries it,&lt;br/&gt;or an apply tap"]
   LAND --&gt; G{"first-rotation gate&lt;br/&gt;never reads auto"}
-  G -- "every condition holds,&lt;br/&gt;no window marker" --&gt; R1["first rotation&lt;br/&gt;retires the leaked value"]
-  G -- "any fails, or the marker stands" --&gt; WAIT["hold, name the blocker,&lt;br/&gt;re-check each tick"] --&gt; G
+  G -- "every mechanical&lt;br/&gt;condition holds" --&gt; R1["first rotation&lt;br/&gt;retires the leaked value"]
+  G -- "any mechanical&lt;br/&gt;condition fails" --&gt; WAIT["hold, name the blocker,&lt;br/&gt;re-check each tick"] --&gt; G
   R1 --&gt; PROOF["proof: the server records the retired&lt;br/&gt;value refused; the probe answers 401"]
   PROOF --&gt; ARM["doctor FAIL arms on,&lt;br/&gt;once the lane gates close"]
   ARM --&gt; W2["Wave 2&lt;br/&gt;schedule and agent link token"]
@@ -1092,57 +1095,56 @@ flowchart LR
   W3 --&gt; LATER["Later&lt;br/&gt;leak scan as a trigger"]
 </pre>
 <figcaption><span class="fno">Figure 6.</span> Rollout. Nothing in it is a hand act by a session: the boxes move by the
-updater's own landing (ruling 2026-09-30), and the rotation starts itself. The only hand act that can hold it is a
-lane runbook's window marker (R1, 12:40).</figcaption></figure>
+updater's own landing (ruling 2026-09-30), and the rotation starts itself. No hand act holds it: the gate is
+mechanical only, and there is no window marker (R1 as amended by R5).</figcaption></figure>
 <div class="tools" data-for="f-rollout"></div>
 
 <h3>9.1 The waves</h3>
 <div class="tablewrap"><table>
 <thead><tr><th>Wave</th><th>Ships</th><th>Retires</th></tr></thead><tbody>
-<tr><td>1, PR A</td><td>Boot mint, boot recovery and the retired digests; the holder and accept-set check; server files and state; policy (with <code>claimVerdict</code> and the window marker's one spelling), the driver on its own timer, and the first-rotation gate; the marker's no-writer describe in <code>single-definition.test.ts</code>; boot recovery for server-written files (4.2.1); the claim door, the rotate route, their census sets, the seventh gate reason and every pin that moves (4.6); the <code>/api/notify</code> tolerance removal with its <code>gate.ts</code> and <code>routes.ts</code> text; the <code>both</code>-box writer (4.10); the <code>token-sync</code> op with its argv template, bounds and spawn port; <code>box-token-generation</code> in <code>NODE_FILES</code>.</td><td>The single-value, read-once server; the notify tolerance.</td></tr>
-<tr><td>1, PR B</td><td><code>ccrc token sync</code> and <code>ccrc token probe</code> (<code>ccd/ccrc-token-sync</code>) and the <code>token-sync</code> cap word; doctor <code>box-token</code> (PASS/SKIP only); the Settings card and "Rotate now"; <code>deploy.sh</code> stops shipping the token; the <code>.example</code>'s comment; <code>notify.sh</code> <code>set +x</code>; README, which names the window marker beside <code>mail-disabled</code>.</td><td><code>ship_secret</code>; <code>deploy/ccrc-mail.token</code> as a source (the operator deletes it once; the digests already make it harmless); the hand mint at install.</td></tr>
+<tr><td>1, PR A</td><td>Boot mint, boot recovery and the retired digests; the holder and accept-set check; server files and state; policy (with <code>claimVerdict</code>), the driver on its own timer, and the mechanical first-rotation gate; boot recovery for server-written files (4.2.1); the claim door, the rotate route, their census sets, the seventh gate reason and every pin that moves (4.6); the <code>/api/notify</code> tolerance removal with its <code>gate.ts</code> and <code>routes.ts</code> text; the <code>both</code>-box writer (4.10); the <code>token-sync</code> op with its argv template, bounds and spawn port; <code>box-token-generation</code> in <code>NODE_FILES</code>.</td><td>The single-value, read-once server; the notify tolerance.</td></tr>
+<tr><td>1, PR B</td><td><code>ccrc token sync</code> and <code>ccrc token probe</code> (<code>ccd/ccrc-token-sync</code>) and the <code>token-sync</code> cap word; doctor <code>box-token</code> (PASS/SKIP only); the Settings card and "Rotate now"; <code>deploy.sh</code> stops shipping the token; the <code>.example</code>'s comment; <code>notify.sh</code> <code>set +x</code>; the README lines in 4.1's <code>deploy.sh</code> row.</td><td><code>ship_secret</code>; <code>deploy/ccrc-mail.token</code> as a source (the operator deletes it once; the digests already make it harmless); the hand mint at install.</td></tr>
 <tr><td>1, follow-up</td><td>Doctor's <code>box-token</code> FAIL and WARN arms switched on (or in wave 2's first PR), dispatched once the GPT-lane B4 gates are recorded closed, or once the check is accepted by name.</td><td>The PASS/SKIP-only interim.</td></tr>
-<tr><td>2</td><td>The schedule, <b>weekly</b> (7 days; R4, 12:40, <span class="f a">agreed</span>), held exactly as the first rotation is: by the window marker and by an update in flight, never by <code>auto</code> (§5 step 1). The agent link token: dual-accept at <code>hello</code>, a constant-time compare, a ccrc-owned file; <code>agent.env</code> and <code>ccrc.env</code> stay operator-owned. The next agent token is never authenticated by the agent token alone. The brief's "switch without a restart" and "read as a second <code>EnvironmentFile</code>" conflict, because an <code>EnvironmentFile</code> reaches a process only at unit start (<code>agent/src/index.ts:12-16</code>; <code>server/src/index.ts:117-123</code>): this is in Waiting on you. A 4401 close becomes a distinct, logged client state, and install-time pairing goes. <span class="f j">judgement</span> on the last two.</td><td>The hand-made agent token; the plain <code>!==</code>; the silent 4401 loop; the tty pairing.</td></tr>
+<tr><td>2</td><td>The schedule, <b>weekly</b> (7 days; R4, 12:40, <span class="f a">agreed</span>), held exactly as the first rotation is: only by the mechanical conditions of 9.2, an update in flight included, never by <code>auto</code> and never by a window marker (§5 step 1; R5). The agent link token: dual-accept at <code>hello</code>, a constant-time compare, a ccrc-owned file; <code>agent.env</code> and <code>ccrc.env</code> stay operator-owned. The next agent token is never authenticated by the agent token alone. The brief's "switch without a restart" and "read as a second <code>EnvironmentFile</code>" conflict, because an <code>EnvironmentFile</code> reaches a process only at unit start (<code>agent/src/index.ts:12-16</code>; <code>server/src/index.ts:117-123</code>): this is in Waiting on you. A 4401 close becomes a distinct, logged client state, and install-time pairing goes. <span class="f j">judgement</span> on the last two.</td><td>The hand-made agent token; the plain <code>!==</code>; the silent 4401 loop; the tty pairing.</td></tr>
 <tr><td>3</td><td>A token per box, stored on the server as sha256 hashes (the session-token precedent), so a leak is limited to one box and the server can attribute each call. It lifts the single-fleet-node invariant.</td><td>The one shared value.</td></tr>
 <tr><td>Later</td><td>A leak scan as a rotation trigger; feeding retired digests to ccrc-history's redaction; an audit of box-token lane use during the exposure.</td><td>—</td></tr>
 </tbody></table></div>
 <p><span class="f j">judgement</span> Run wave 1 as two runs (1a for PR A, 1b for PR B), so that PR A, which spans
 server, shared and agent, does not sit open behind PR B's claims.</p>
 
-<h3>9.2 The first-rotation gate</h3>
-<p>The gate applies to every rotation. The last column says which conditions also hold "Rotate now": every mechanical
-condition does, because without it no rotation can complete; the window marker never does (R1, 12:40).
-<code>auto</code> is not a condition at all.</p>
+<h3>9.2 The rotation gate</h3>
+<p>The gate applies to every rotation, and every condition below is mechanical: without it no rotation can complete.
+So each one holds an automatic trigger and "Rotate now" alike, which the last column records. There is no window
+marker (R1 as amended by R5, about 13:55), and <code>auto</code> is not a condition at all.</p>
 <div class="tablewrap"><table>
 <thead><tr><th>Condition</th><th>Measured by</th><th>Holds "Rotate now"?</th></tr></thead><tbody>
 <tr><td>The server runs the feature build</td><td>Itself.</td><td>Yes</td></tr>
 <tr><td>The fleet agent advertises the op (remote fleet only)</td><td><code>nodes.agentOps</code> carries <code>token-sync</code> (<code>server/src/coord/schema.ts:1092</code>).</td><td>Yes</td></tr>
 <tr><td>The fleet's <code>ccrc</code> has the verb</td><td>The node's caps carry <code>token-sync</code> (<code>nodes.caps</code>, <code>server/src/coord/schema.ts:1091</code>). On a node with no caps file (<code>deploy.sh</code> never writes one), the op's own probe stands in, and a missing verb is a named hold.</td><td>Yes</td></tr>
 <tr><td>A <code>both</code>-role box</td><td>The role is recorded as <code>both</code> and <code>cfg.fleetMode</code> is local. There is no agent and no link condition (<code>agentOps</code> is NULL by design); the server's own caps carry <code>token-sync</code>, and the driver writes both files.</td><td>Yes</td></tr>
-<tr><td>No window marker (automatic triggers only)</td><td>The driver's registry listing: <code>$REG/token-rotation-held</code> absent, and the listing itself answered (a failed listing holds, fail-shut). The marker has no writer in the tree; a lane runbook sets it beside its auto-install pause, which is what keeps an automatic rotation out of a GPT-lane window (the window pauses auto-install fleet-wide, D-4054). <span class="f a">agreed</span> (R1, 12:40)</td><td><b>No</b></td></tr>
 <tr><td>No update in flight on either box</td><td>Each node's report phase.</td><td>Yes: it waits, and says so <span class="f j">judgement</span></td></tr>
 <tr><td>The release has reached both boxes</td><td>The node's stamp. Under <code>auto</code> <code>stable</code>, only after the wave-1 releases are promoted, which needs a green full-suite; under <code>channel</code>, the node's own channel. The console names "release not yet on &lt;node&gt;" and, when that node's <code>auto</code> reads <code>off</code>, adds the setting as the likely cause. That is information, not a hold: the seeded <code>'off'</code> (<code>server/src/coord/schema.ts:1127</code>, "nothing unattended", <code>:1001-1002</code>) never holds a rotation.</td><td>Yes</td></tr>
 <tr><td>The client is not stale</td><td><code>stale-client</code>, judged by content (4.5 step 3), a named hold learned from the op. On this fleet it has been satisfied since the 2026-10-07 relink (ledger (branch) 2570-2577).</td><td>Yes</td></tr>
 <tr><td>Exactly one reachable fleet node, its id measured, the link up</td><td>Inventory; <code>ready</code>.</td><td>Yes</td></tr>
 </tbody></table></div>
 <p>The gate's code has <code>autoGateBlockers</code>'s shape: a pure function over node rows that names each blocker
-(<code>server/src/update/resolve.ts:234</code>), with the registry names as one more input and the trigger kind
-(automatic, or "Rotate now") as another. The console shows the blockers while it holds. <span class="f j">judgement</span></p>
+(<code>server/src/update/resolve.ts:234</code>). The trigger kind is not an input, because every trigger meets the
+same gate, and the gate reads nothing in the fleet registry. The console shows the blockers while it holds. <span class="f j">judgement</span></p>
 <p><b>What this means today.</b> Wave 1 lands through the updater, whose scheduler does nothing while <code>auto</code>
 reads <code>off</code> (a PWA apply tap still works; plan 3b R-O6). The operator restored auto-install to "Every release
 on my channel" (<code>auto</code> <code>channel</code>, on <code>dev</code>) at about 11:21 UTC, after the GPT-lane
-window's Step 20, and the fleet box is on v0.0.118. So each wave-1 release lands as it is published. The first rotation
-no longer depends on that setting: once the release is on both boxes and the mechanical conditions hold, it starts by
-itself unless a runbook has set the marker.</p>
+window's Step 20, and the fleet box is on v0.0.118. So each wave-1 release lands as it is published. The rotation gate
+no longer reads that setting: once the release is on both boxes and the mechanical conditions hold, it starts by
+itself. Landing the release still follows the setting.</p>
 
 <h3>9.3 Coordination with other work</h3>
 <div class="tablewrap"><table>
 <thead><tr><th>Work</th><th>Overlap</th><th>Rule</th></tr></thead><tbody>
-<tr><td>GPT-lane Part B (another coordinator's live runbook)</td><td>A lane window pauses fleet auto-install, records the prior <code>auto</code> and restores it afterwards (plan 3b R-O6). A B4 soak gate STOPs on a doctor check that WARNs but did not in its baseline, and STOPs when auto reads <code>off</code>; each gate needs one auto-update landing (R-S1; B4 criteria 4 and 7). So the soak itself needs auto on; only a cutover window needs it off. A rotation that broke the fleet copy would make <code>ccd-pool-sync</code> stale (blocking parking swaps) and <code>ccd-update-sync</code> stale (hiding the pause).</td><td>Automatic rotations hold on the window marker, not on <code>auto=off</code> (R1, 12:40). <b>A note to that
-lane's coordinator, not a change to its plan:</b> its runbook should <code>touch $REG/token-rotation-held</code> beside
-the step that pauses auto-install, and remove it beside the step that restores it. Until the runbook does, a lane window
-is kept free of an automatic rotation only by the update-in-flight check, and a window with no update running is not
-covered. New doctor checks ship PASS/SKIP only until the gates close or are accepted by name. No token-feature landing inside a window. A token check never reads <code>ccrc-models.service</code>'s Z4 failure as a token fault. B6's <code>ccrc-api ledger allocate</code> needs no special handling: grace covers an in-flight call.</td></tr>
+<tr><td>GPT-lane Part B (another coordinator's live runbook)</td><td>A lane window pauses fleet auto-install, records the prior <code>auto</code> and restores it afterwards (plan 3b R-O6). A B4 soak gate STOPs on a doctor check that WARNs but did not in its baseline, and STOPs when auto reads <code>off</code>; each gate needs one auto-update landing (R-S1; B4 criteria 4 and 7). So the soak itself needs auto on; only a cutover window needs it off. A rotation that broke the fleet copy would make <code>ccd-pool-sync</code> stale (blocking parking swaps) and <code>ccd-update-sync</code> stale (hiding the pause).</td><td>Automatic rotations hold only on the mechanical conditions of 9.2, never on <code>auto=off</code> or a lane
+window (R1 as amended by R5). <b>No action is needed from the lane: the rotation is invisible to its gates.</b> It
+opens no 401 window, restarts nothing, keeps the old value accepted until the fleet confirms a later one, so
+<code>ccd-pool-sync</code> and <code>ccd-update-sync</code> never see a refused value, and wave 1 adds no new doctor
+WARN. An update in flight still holds a rotation. New doctor checks ship PASS/SKIP only until the gates close or are accepted by name. A lane window already pauses auto-install, so the wave-1 releases land inside one only by an operator's apply tap; nothing in the design needs a window kept clear of a rotation. A token check never reads <code>ccrc-models.service</code>'s Z4 failure as a token fault. B6's <code>ccrc-api ledger allocate</code> needs no special handling: grace covers an in-flight call.</td></tr>
 <tr><td>Claims on shared files (<code>ccd/ccrc</code>, <code>ccd/ccrc-doctor-checks</code>, <code>shared/api.ts</code>, <code>shared/agent-protocol.ts</code>, <code>agent/src/server.ts</code>, the census tests; ccrc-history W2, centralised-update W15-W18, child-reclamation and others in flight)</td><td>Both PRs edit files that other runs hold.</td><td>At dispatch, the coordinator reads <code>GET /api/claims</code> for every path of PR A and PR B; the retirement date depends on those claims being released. Moving the driver off <code>watch.ts</code> and the verb's body into its own file shrinks the overlap (4.1).</td></tr>
 <tr><td>Centralised-update W16 (<code>_inst_bins ccrc-api</code>, D-4094)</td><td>The stale-client hazard</td><td>The content test (4.5 step 3) is the guard before W16 and stays as a belt after it.</td></tr>
 <tr><td>Delegation-broker W3 and later</td><td>Adds box-token lanes, which changes the census counts and the order-pinned gate prose</td><td>Whichever lands second rebases its counts. PR A changes the reasons list and the route-file pins, not the lane count.</td></tr>
@@ -1177,9 +1179,8 @@ shipped probe confirms it without printing it.</p>
 <tr><td>Never printing the value</td><td>Across a whole rotation, the fixture value, the code and their sha256 hex (patterns built from pieces) appear in none of: stdout, stderr, warnings, the op result, report files, doctor output, recorded curl argv, and the environment.</td><td><code>token-rotation-e2e.test.ts</code>; <code>ccrc-token-sync.test.ts</code></td></tr>
 <tr><td>Promotion only on fleet confirmation</td><td>Presenting the pending value over HTTP never promotes it. An op result for a request that is not outstanding confirms nothing, and neither does a generation read that names an id never issued or was measured before the hand-out.</td><td><code>token-policy.test.ts</code></td></tr>
 <tr><td>Retirement needs presentation</td><td>The previous value is retired only once grace has passed and the new current value has been presented, or at the hard bound, where a FAIL names it.</td><td><code>token-policy.test.ts</code></td></tr>
-<tr><td>Gate holds</td><td>Each condition of 9.2 alone holds the rotation and names itself. A <code>both</code>-role box rotates with <code>agentOps</code> NULL.</td><td><code>token-policy.test.ts</code></td></tr>
-<tr><td>The hold rule (R1)</td><td><b>The gate opens with the seeded <code>auto=off</code> row and no marker</b>: an automatic trigger rotates. With <code>token-rotation-held</code> in the listing, the automatic triggers (rotation owed, schedule) hold as "rotation window marker set", while "Rotate now" still rotates. A failed listing (<code>null</code>) holds the automatic triggers and not "Rotate now". "Rotate now" ignores <code>auto=off</code>. Making the gate read <code>auto</code>, or making "Rotate now" read the marker, turns it red.</td><td><code>token-policy.test.ts</code></td></tr>
-<tr><td>The marker has no writer</td><td>No line of shell names <code>token-rotation-held</code>; its one TS holder on a code line is <code>server/src/token/policy.ts</code>, which reaches no <code>node:</code> module; the only file naming <code>TOKEN_ROTATION_HOLD_MARKER</code> is that definer. Adding a <code>touch</code> of it to a shell file under <code>ccd/</code> or <code>deploy/</code>, or spelling the name in <code>pwa/src</code>, turns it red (measured as a mutation, then reverted).</td><td><code>single-definition.test.ts</code> (new describe, appended)</td></tr>
+<tr><td>Gate holds</td><td>Each condition of 9.2 alone holds the rotation and names itself, for an automatic trigger and for "Rotate now" alike. A <code>both</code>-role box rotates with <code>agentOps</code> NULL.</td><td><code>token-policy.test.ts</code></td></tr>
+<tr><td>The hold rule (R1 as amended by R5)</td><td><b>The gate opens with the seeded <code>auto=off</code> row</b>: an automatic trigger rotates, and so does "Rotate now". An update in flight holds both. The gate's verdict is the same for an automatic trigger and for "Rotate now" over the same node rows. Making the gate read <code>auto</code>, or giving one trigger kind a hold the other lacks, turns it red.</td><td><code>token-policy.test.ts</code></td></tr>
 <tr><td>Plain transport (R2)</td><td>A <code>CCRC_SERVER_URL</code> of <code>ws://</code> rotates: the claim goes over <code>http://</code>, the report records <code>transport http</code>, the doctor line prints it and stays PASS, and no refusal word exists for it.</td><td><code>ccrc-token-sync.test.ts</code>; <code>doctor-box-token.test.ts</code></td></tr>
 <tr><td>Recorded role only</td><td>A fixture HOME with no <code>CCRC_ROLE</code> and a planted fleet file: the file is untouched. The same with <code>agent.env</code> present: untouched.</td><td><code>token-boot.test.ts</code></td></tr>
 <tr><td>Boot mint, refusals and recovery</td><td>Absent: 64 hex minted at 0600. Present but unusable and hand-made, and the placeholder: boot still refuses. Unusable and proved server-written, with a qualifying sibling: recovered and warned (the cases of 4.2.1). The mint fails: the server boots unconfigured and retries. Value files with no state: accepted, with a forward rotation owed. <code>mail.token</code> absent with history: recovered, not minted.</td><td><code>token-boot.test.ts</code></td></tr>
@@ -1211,7 +1212,7 @@ named hold, and nothing changes. A <code>both</code> box with no fleet file keep
 <p>The coordinator measures, and prints status codes and words only:</p>
 <ol class="steps">
 <li>The gate's conditions, read from the inventory and the console: the fleet node shows <code>token-sync</code> in caps
-and ops, no window marker stands, no update is in flight. Auto-install's setting is not a condition.</li>
+and ops, and no update is in flight. Auto-install's setting is not a condition, and there is no window marker.</li>
 <li>The rotation completed: the console and server doctor show a later generation, phase idle after grace, and the
 fleet's confirmed generation equal to it; fleet doctor <code>box-token</code> reports PASS.</li>
 <li><b>The server's own proof:</b> at retirement, the driver runs the check with the retiring value and records
@@ -1233,7 +1234,7 @@ refuse it.</li>
 <section id="s-decisions"><h2><span class="sno">11</span>Decisions</h2>
 <p class="intro">The operator's rulings are agreed, and this spec does not reopen them. Revision 2 raised four
 questions in Waiting on you; the operator answered them at about 12:40 (R1 to R4), and their rows below now read
-agreed. The rest are proposals this spec makes, each with its reason.</p>
+agreed. At about 13:55 the operator amended R1 (R5, "Drop the marker"), and the rotation-hold row reads that. The rest are proposals this spec makes, each with its reason.</p>
 <div class="tablewrap"><table>
 <thead><tr><th>Decision</th><th>Options</th><th>Chosen, and why</th><th>Status</th></tr></thead><tbody>
 <tr><td>Who mints</td><td>Operator; install spine; server at boot</td><td>Server at boot: one rule covers install, <code>deploy.sh</code> and a fresh box.</td><td>agreed</td></tr>
@@ -1242,7 +1243,7 @@ agreed. The rest are proposals this spec makes, each with its reason.</p>
 <tr><td>Fleet file ownership</td><td>Stays the operator's; ccrc owns it</td><td>ccrc owns <code>~/.cc-secrets/ccrc-mail.token</code>; <code>agent.env</code> and <code>ccrc.env</code> stay the operator's.</td><td>agreed</td></tr>
 <tr><td>Where it runs</td><td>A centralised-update wave; its own programme</td><td>Its own programme, coordinated by the centralised-update coordinator.</td><td>agreed</td></tr>
 <tr><td><code>/api/notify</code> tolerance</td><td>Keep; remove</td><td>Remove both arms. <code>token.ts:207-215</code> schedules the removal of <code>legacy</code> only and says <code>unconfigured</code> "has no such removal date"; its reason (a box never told a secret) no longer exists once the server mints at boot.</td><td>agreed</td></tr>
-<tr><td>Rotation hold</td><td>While <code>auto=off</code> (the brief); on an explicit window marker</td><td>The explicit window marker <code>$REG/token-rotation-held</code>, with no writer in the tree (the <code>mail-disabled</code> precedent: listed, fail-shut), set by a lane runbook beside its pause, plus the update-in-flight check. It holds the automatic triggers only. <code>auto=off</code>, the seeded default included, never holds a rotation; "Rotate now" never holds on the marker or on auto. Operator, about 12:40 (R1).</td><td>agreed</td></tr>
+<tr><td>Rotation hold</td><td>While <code>auto=off</code> (the brief); on an explicit window marker (R1, about 12:40); on the mechanical conditions only (R5)</td><td>The mechanical conditions of 9.2 only (an update in flight, the fleet agent lacking the op or its <code>ccrc</code> the verb, the probe or caps conditions, one fleet row, and so on), for the automatic triggers and "Rotate now" alike. No window marker of any kind. <code>auto=off</code>, the seeded default included, never holds a rotation. A rotation is invisible to every reader (no 401 window, no restart, the old value accepted until the fleet confirms, no new doctor WARN in wave 1), so a lane window has nothing to protect from it. Operator, about 12:40 (R1), amended about 13:55 (R5, "Drop the marker").</td><td>agreed</td></tr>
 <tr><td>Promotion signal</td><td>Seeing the new value presented over HTTP; the fleet's confirmation over the agent link</td><td>The agent link only, because an HTTP presentation could come from whoever claimed a code. Retiring the previous value also needs the new one presented at least once (necessary, not sufficient).</td><td>proposed</td></tr>
 <tr><td>Fleet generation reading</td><td>A <code>NODE_FILES</code> name; an additive <code>ready</code> field</td><td><code>NODE_FILES</code>: the inventory already reads that set every minute, lstat-gated and size-capped, with no wire change. The id is random (64 bits); the reading lives in the driver's memory; there is one reader with three words.</td><td>proposed</td></tr>
 <tr><td>A fleet box that is behind</td><td>Hand it the current value again; a forward rotation</td><td>A forward rotation: the door then only ever answers Staged values, and a won race never yields a current one.</td><td>proposed</td></tr>
@@ -1277,10 +1278,13 @@ agreed. The rest are proposals this spec makes, each with its reason.</p>
 <li><code>deploy.sh</code> stops shipping the token; a <code>both</code> box writes both files.</li>
 <li>New doctor checks PASS/SKIP only while lane gates are open.</li>
 <li>Own programme, coordinated by the centralised-update coordinator.</li>
-<li><b>Hold rule, "Explicit window marker" (about 12:40, R1).</b> Automatic rotations (first rotation, schedule) hold only
-on <code>$REG/token-rotation-held</code>, a marker with no writer in the tree, read the way <code>mail-disabled</code>
-is read (listed, fail-shut), plus the update-in-flight check. <code>auto=off</code> never holds a rotation; "Rotate now"
-never holds on the marker or on auto (§5 step 1, 9.2).</li>
+<li><b>Hold rule, R1 (about 12:40) as amended by R5 (about 13:55), "Drop the marker".</b> There is no window marker
+of any kind. Automatic rotations (first rotation, wave 2's weekly schedule) hold only on the mechanical conditions: an
+update in flight, the fleet agent lacking the op or capability, the probe or caps conditions, one fleet row, and so on.
+<code>auto=off</code> never holds a rotation. "Rotate now" waits only on the same mechanical conditions, an update in
+flight included (§5 step 1, 9.2). Context, 13:28, on the model auto-advance design: "if I've set up auto-install why
+pause it? If I don't want auto-install I'll just switch it off"; so the shared marker proposed for both designs is
+off.</li>
 <li><b>Plain HTTP, "Rotate, show the transport" (about 12:40, R2).</b> Never refuse; doctor and the console show
 <code>transport http</code> (4.5, 4.7, 4.8).</li>
 <li><b>Boot recovery, "Recover, for server files" (about 12:40, R3).</b> A server-written <code>mail.token</code> with no
@@ -1316,7 +1320,8 @@ now <code>:140-146</code>).</li>
 copies its source. Revision 2 applies three review lenses (security; constraints, census, rings, wire and tests;
 rollout, operations and coordination). It keeps every operator ruling as briefed; where a lens found one unsafe as
 written, it raised a question in Waiting on you. Revision 3 carries the operator's answers of about 12:40 UTC (R1 to
-R4) into every section they bear on. Any deviation number the plan needs is issued at
+R4) into every section they bear on. Revision 4 carries R5 of about 13:55 UTC, which amends R1: the window marker is
+gone, and every rotation holds only on the mechanical conditions. Any deviation number the plan needs is issued at
 run-open.</p>
 </main>
 <script type="module">
