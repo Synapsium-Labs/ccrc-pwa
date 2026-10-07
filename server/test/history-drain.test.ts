@@ -14,7 +14,7 @@ import { pathToFileURL } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
 import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, PRELOADS, SWEEP, type HistoryBox } from './historyHelpers.js';
 import { createStore, openWriter, closeWriter } from '../../ccd/history/store.mjs';
-import { journalRecord, historyPaths, eventKey, DRAINING_NAME_MAX } from '../../ccd/history/lib.mjs';
+import { journalRecord, historyPaths, eventKey, DRAINING_NAME_MAX, SPOOL_FILE_MAX } from '../../ccd/history/lib.mjs';
 
 skipOnDarwin();
 
@@ -39,6 +39,7 @@ interface Sweep {
   listDraining(home: string): string[];
   drainSpool(db: DatabaseSync, c: TickCtx): string[];
   journalHalf(home: string, ids: Ids | null, nowMs: number): { held: string[]; journalFailed: boolean };
+  readDrainingText(path: string): { text: string; bytes: number };
 }
 let SW: Sweep;
 beforeAll(async () => { SW = (await import('../../ccd/history/sweep.mjs')) as unknown as Sweep; });
@@ -543,6 +544,90 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
     expect(fs.readdirSync(DRAIN(box.home))).toEqual([]);
     expect(counters(box)['non_regular']).toBe(1);
     expect(receipts(box)).toEqual([]);
+  });
+
+  // D-4337 (history-spool-file-size-cap, FR1-c): a draining file over SPOOL_FILE_MAX is decided from its stat and never read.
+  describe('an oversized draining file (D-4337)', () => {
+    const sparse = (file: string, size: number, head = ''): void => {
+      fs.writeFileSync(file, head, { mode: 0o600 });
+      fs.truncateSync(file, size);                                      // a hole: no disk, no read cost
+    };
+    const ticksIn = (): number => journalOf(box.home, ids.storeId).filter((x) => x['k'] === 'tick').length;
+    const OVER = `${ID}.900.1.jsonl`;
+
+    it('is renamed aside to <name>.oversize, counted once, never journaled or drained; the tick row is recorded and other files drain', () => {
+      sparse(path.join(DRAIN(box.home), OVER), SPOOL_FILE_MAX + 1);
+      spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+      const before = ticksIn();
+      const r1 = runSweep(box);                                          // the oversize file is met before this tick renames the spool file
+      expect(r1.code, r1.stderr).toBe(0);
+      expect(fs.existsSync(path.join(DRAIN(box.home), OVER))).toBe(false);
+      expect(fs.statSync(path.join(DRAIN(box.home), `${OVER}.oversize`)).size).toBe(SPOOL_FILE_MAX + 1);   // kept, untouched
+      expect(counters(box)['spool_oversize']).toBe(1);
+      const [name] = drainingNames(box.home);
+      expect(name).not.toBe(OVER);
+      const r2 = runSweep(box);
+      expect(r2.code, r2.stderr).toBe(0);
+      expect(counters(box)['spool_oversize'], 'counted once per file, not per tick').toBe(1);
+      expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(name!, 1)]);   // the other file drained normally
+      expect(fs.existsSync(path.join(DRAIN(box.home), `${OVER}.oversize`))).toBe(true);
+      expect(fileBlocks(journalOf(box.home, ids.storeId)).map((b) => b.name)).toEqual([name]);   // the oversize name is never journaled
+      expect(ticksIn() - before).toBe(2);
+      expect(drainingNames(box.home)).toEqual([]);
+    });
+
+    it('a file at exactly SPOOL_FILE_MAX is still drained: its valid line is received, its one huge line is rejected', () => {
+      sparse(path.join(DRAIN(box.home), OVER), SPOOL_FILE_MAX, `\n${JSON.stringify({ v: 1, ev: 'Stop', id: ID })}\n`);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      expect(counters(box)['spool_oversize']).toBeUndefined();
+      expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(OVER, 1)]);
+      expect(drainingNames(box.home)).toEqual([]);
+    });
+
+    it('a spool/ file over the cap is renamed into .draining/ like any other and set aside at the next tick', () => {
+      sparse(hist(box.home, 'spool', `${ID}.jsonl`), SPOOL_FILE_MAX + 4096);
+      expect(runSweep(box).code).toBe(0);
+      const [name] = drainingNames(box.home);
+      expect(name).toMatch(new RegExp(`^${ID}\\.\\d+\\.\\d+\\.jsonl$`));
+      expect(counters(box)['spool_oversize']).toBeUndefined();
+      expect(runSweep(box).code).toBe(0);
+      expect(counters(box)['spool_oversize']).toBe(1);
+      expect(fs.readdirSync(DRAIN(box.home))).toEqual([`${name!}.oversize`]);   // its observation sidecar went with it
+      expect(receipts(box)).toEqual([]);
+    });
+
+    it('under a hold the journal half never reads it (no crash, nothing journaled); the drain sets it aside and counts it when the hold ends', () => {
+      sparse(path.join(DRAIN(box.home), OVER), SPOOL_FILE_MAX + 1);
+      const aside = path.join(box.home, 'aside');
+      moveDb(box, hist(box.home, 'db'), aside);
+      const held = runSweep(box);
+      expect(held.code, held.stderr).toBe(5);
+      expect(drainingNames(box.home)).toEqual([OVER]);
+      expect(fileBlocks(journalOf(box.home, ids.storeId))).toEqual([]);
+      moveDb(box, aside, hist(box.home, 'db'));
+      expect(runSweep(box).code).toBe(0);
+      expect(counters(box)['spool_oversize']).toBe(1);
+      expect(fs.existsSync(path.join(DRAIN(box.home), `${OVER}.oversize`))).toBe(true);
+    });
+
+    it('is decided from its stat before any open: an oversize file the sweep could not even open is still set aside', () => {
+      const f = path.join(DRAIN(box.home), OVER);
+      sparse(f, SPOOL_FILE_MAX + 1);
+      fs.chmodSync(f, 0o000);                                            // an open(2) would fail EACCES
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      expect(counters(box)['spool_oversize']).toBe(1);
+      expect(fs.existsSync(`${f}.oversize`)).toBe(true);
+    });
+
+    it('readDrainingText refuses it from the descriptor\'s size, before reading a byte', () => {
+      const f = path.join(box.home, 'big.jsonl');
+      sparse(f, SPOOL_FILE_MAX + 1);
+      expect(() => SW.readDrainingText(f)).toThrow(expect.objectContaining({ code: 'SPOOL_OVERSIZE' }));
+      sparse(f, 10);
+      expect(SW.readDrainingText(f).bytes).toBe(10);
+    });
   });
 
   it('while a file is held, a startup sid the observation did not name is recorded the first time .uuid names it', () => {

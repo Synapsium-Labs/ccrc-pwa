@@ -26,6 +26,7 @@ export const SWITCHES: Readonly<{
 }>;
 
 export const SPOOL_LINE_MAX: number;
+export const SPOOL_FILE_MAX: number;
 export const SPOOL_ID_MAX: number;
 export const STATFS_DEADLINE_MS: number;
 export const CLI_STAT_DEADLINE_MS: number;
