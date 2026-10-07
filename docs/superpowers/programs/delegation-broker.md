@@ -395,7 +395,82 @@ the exception.
 
 ### Real-lane cross-check
 
-Pending: the coordinator runs it after wave 1 merges, per the plan's "After the merge" steps.
+Run 2026-10-07 by wave 2's worker (run 306), under wave 1's plan "After the merge" standing rules: two fresh `-hookcap`
+scratch sessions started with `ccd start` and stopped with `ccd stop`, driven by one mail each, each in a scratch git
+repository with one commit, outside the projects root. Lanes: the lowest and the highest Claude Code version the fleet
+ran at 08:55 UTC, **2.1.286** and **2.1.292** (D-3995). Every lane's `settings.json` registered `SessionEnd` (15 of 15),
+on ccrc v0.0.114. The mail asked for one `Agent` call with `isolation: "worktree"` whose subagent commits one file, then
+one `Workflow` with one `{ isolation: 'worktree' }` agent doing the same, then "done". No lane stopped at a permission
+dialog, none declined, and both did all three steps. Only reduced output is here: `deploy/hook-capture-reduce.mjs` over
+each capture (`--root scratch=<repo> --root worktrees=<repo>/.claude/worktrees`), `deploy/delegation-census.mjs` over
+each scratch repository with the lane's config dir as `--home`, and booleans computed on the box. The rig side is the
+same reducer run over the corpus's `agent-iso-changed` and `wf-iso` fixtures for the same version, their events written
+out as a capture directory. A lane is named by its version; the registry rows of both scratch ids stay for the operator.
+
+**Table 1: real lane against the rig's cells for the same version.**
+
+| check | 2.1.286 | 2.1.292 |
+|---|---|---|
+| Agent: PreToolUse input keys | `description`, `isolation`, `prompt` — the rig's mock also sends `subagent_type` (`agent-input-keys-are-the-callers`) | same as 2.1.286 |
+| Agent: isolation token | `worktree` 1, as the rig | `worktree` 1, as the rig |
+| Agent: launch PostToolUse response keys | `agentId`, `canReadOutputFile`, `description`, `isAsync`, `outputFile`, `prompt`, `resolvedModel`, `status` — as the rig; `status` `async_launched`, `isAsync` true | same keys and values |
+| Agent: SubagentStart against the launch PostToolUse | SubagentStart first, as the rig | launch first; the rig's cell has SubagentStart first — both orders are already measured (`activity-keyed-by-agent-id-not-arrival`) |
+| Agent: subagent events | its tool events carry `agent_id` and `cwd` `worktrees/*`, then SubagentStop (its transcript names the agent), as the rig | same |
+| Agent: the launch's ids | the response `agentId` is the SubagentStart `agent_id`; that SubagentStart's `prompt_id` is the launch PreToolUse's; a task notification carries the launch's `tool_use_id`; the parent's Stop `background_tasks` lists the agent id — all true | the first three true; no Stop fell while the agent ran, so `background_tasks` never listed it |
+| Workflow: PreToolUse input keys / isolation in `tool_input` | `script` / absent, as the rig | same |
+| Workflow: launch response keys | `runId`, `scriptPath`, `status`, `summary`, `taskId`, `taskType`, `transcriptDir`, `workflowName` — as the rig (vetted: none is an agent or label name); `status` `async_launched` | same |
+| Workflow: the launch's ids | `runId` names the `wf_<run>-<n>` admin record; SubagentStart `prompt_id` = launch's; notification carries `tool_use_id`; Stop `background_tasks` lists `taskId` — all true | all true |
+| Workflow: SubagentStart against the parent's Stop | before the Stop; the rig's cell has it after — order variance, not a new kind | before the Stop; as 2.1.286 |
+| Main thread before the Workflow call | — | a ToolSearch call (input keys `max_results`, `query`) loads the Workflow tool first (`toolsearch-may-precede-a-workflow-call`) |
+| Unpaired SubagentStop (no SubagentStart, empty agent type, `cwd` `scratch`) | 3, one after each of the parent's 3 Stops; the rig shows one only during `/compact` (`post-turn-subagentstop-is-unpaired`) | 2, one after each of 2 Stops |
+| Event key sets (per event, every field path) | the rig's, plus `scratchpad_dir` on every event (`real-payloads-carry-scratchpad-dir`) | same |
+| `cwd` labels | main `scratch`, subagent `worktrees/*`, as the rig | same |
+| Session ids | one (`s1`) for every event of the turn, as the rig | same, except the SessionEnd below |
+| SessionEnd at `ccd stop` | none captured under this lane's id; its SessionEnd (reason `other`) was filed under the 2.1.292 lane's id (`teardown-hook-event-names-another-session`) | its own: none captured anywhere; the one under its id is 2.1.286's |
+
+**Table 2: the census of each scratch repository, before and after `ccd stop` (identical both times).**
+
+| record | 2.1.286 | 2.1.292 | the rig, same version |
+|---|---|---|---|
+| Agent record: meta keys | `agentType`, `description`, `requestNonInteractive`, `requestShape`, `spawnDepth`, `spawnedWithWorktree`, `toolUseId`, `worktreeBranch`, `worktreePath` | the same nine | the same nine |
+| Workflow record: meta keys | `agentType`, `description`, `requestNonInteractive`, `requestShape`, `spawnDepth`, `spawnedWithWorktree`, `worktreePath` | the same seven | the same seven |
+| `worktreePath` equals the record's tree | yes, both records | yes, both | yes |
+| `CLAUDE_BASE` | present, equals the first `logs/HEAD` line, both records | the same | the same |
+| HEAD / moved from base / locked | `ref:` / yes / no, both records | the same | the same |
+| `workflowPhase` | absent | absent | absent (0 of 63 rig Workflow metas before this wave's capture, 0 in 2.1.292's) |
+
+What this confirms, on these two lanes: `delegation-posttooluse-is-a-launch` (all four launches `async_launched`),
+`launch-response-names-the-upstream-id` (every join true), `run-end-is-a-task-notification`,
+`workflow-isolation-is-in-the-script` and `activity-keyed-by-agent-id-not-arrival` (both orders, one per lane). Not
+exercised here, so still rig-only: `agent-meta-loses-worktree-fields-on-removal` (both trees were changed and stayed),
+`orphaned-agent-tree-is-locked` and whether its lock outlives the process (no agent was orphaned),
+`sessionend-on-clear-is-a-rotation`, and every Q5 and Q7 situation.
+
+Amendments the cross-check forces (each a difference from the rig; `slug — sentence — spec §`):
+- `agent-input-keys-are-the-callers` — the Agent `tool_input` key set is whatever the calling model sends: both real
+  lanes omitted `subagent_type`, which the rig's mock always sends. Nothing may require it — spec §5.3 PreToolUse row.
+- `post-turn-subagentstop-is-unpaired` — on both lanes a SubagentStop with an agent id, an empty agent type, no
+  SubagentStart and no launch followed every one of the parent's Stops (5 of 5); the rig showed one only during
+  `/compact`. This widens `compaction-fires-an-unpaired-subagentstop`: a SubagentStop alone never opens an activity,
+  and it is routine, not rare — spec §5.2 activity, §5.3.
+- `real-payloads-carry-scratchpad-dir` — every real event carries `scratchpad_dir`, a path, which no rig payload does
+  (its cause is unmeasured: the rig's fixture HOME and mock API do not produce it). The spool's allowlist must drop it,
+  like `cwd` and `transcript_path` — spec §5.3 envelope.
+- `toolsearch-may-precede-a-workflow-call` — the 2.1.292 lane loaded the Workflow tool with a main-thread ToolSearch
+  before calling it; the 2.1.286 lane did not. Whether that follows the version or the lane's tool set is unmeasured.
+  A ToolSearch is not a delegation event and opens nothing — spec §5.3 PreToolUse row.
+- `workflow-phase-is-not-always-written` (review 304 F11) — spec §3.1 says an isolated Workflow worker's meta carries
+  `workflowPhase`. Neither real lane's Workflow meta has it, nor any of the corpus's, while 8 of the on-box census's 15
+  found `wf_*` metas list it. What decides whether it is written is unmeasured (a workflow that declares phases is
+  the candidate), so nothing may need it — spec §3.1, §5.4 rung 2.
+- `teardown-hook-event-names-another-session` — `ccd stop` of the 2.1.286 lane fired its SessionEnd (reason `other`)
+  and the hook filed it under the 2.1.292 lane's id; the 2.1.292 lane's own stop-time SessionEnd was captured nowhere.
+  The hook resolves its session with `tmux display-message -p '#S'` and no `-t "$TMUX_PANE"`
+  (`ccd/session-hook.sh:2760`). Measured on a private tmux server: once a pane's session is killed, that query answers
+  another live session, and with `-t "$TMUX_PANE"` it answers nothing. So a hook event fired during teardown is
+  attributed to whichever session tmux picks. SessionEnd writes no hookstate, so today only a capture is misfiled;
+  wave 3's spool must resolve the pane exactly (and drop an event it cannot), or a stop-time SessionEnd lands on
+  another session — spec §5.3 SessionEnd row, §5.1 parent key.
 
 ## Decisions & deviations
 
