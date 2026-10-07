@@ -12,6 +12,10 @@ import type { LastRun } from './released.js';
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
 import type { StallDeliveryRow, StallMailRow, StallReadFailure, StallRunRow, StallWriteMiss } from './stall.js';
+// Stall watch settings (design 2026-10-05 §8, §11): the settings row's port and the notice-count row are declared by
+// their consumer, the L1 `stallsettings.ts`; the insert arm starts from its seed, and the no-op skip asks its compare.
+import { STALL_SETTINGS_SEED, stallPatchIsNoOp } from './stallsettings.js';
+import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from './stallsettings.js';
 // The coordination fence's claim shape is declared by its CONSUMER, the L1
 // sweep file's `childReclaimCoordinated` (the same port rule as above); the
 // read below implements it.
@@ -868,6 +872,25 @@ const persistedInt = (text: string, column: string): PersistedInt => {
   return isPositiveDecimalSafeInteger(value)
     ? { ok: true, value }
     : { ok: false, detail: `${column} is not a positive safe integer` };
+};
+
+/** `setStallSettings`' answer: written, with the read before and the read after (equal on a no-op), or a conflict
+ *  carrying the read it found and wrote nothing over. */
+export type StallSettingsWrite =
+  | { kind: 'written'; before: StallSettingsRead; after: StallSettingsRead }
+  | { kind: 'conflict'; before: StallSettingsRead };
+
+/** `stallObservationsSince`' answer: the window's rows, or a read that failed, with its detail. */
+export type StallObservationsRead = { ok: true; rows: StallObservationRow[] } | { ok: false; detail: string };
+
+/** Whether two settings reads are the same state, compared as read, before any parse, so a `bigint` meets a `bigint`:
+ *  the same kind and, for a row, the same three values, `updatedAt` included. Two unreadable reads are the same
+ *  kind; `setStallSettings` throws on its own unreadable read before it asks. */
+const sameStallSettingsRead = (a: StallSettingsRead, b: StallSettingsRead): boolean => {
+  if (a.kind === 'row' && b.kind === 'row') {
+    return a.row.level === b.row.level && a.row.quietMs === b.row.quietMs && a.row.updatedAt === b.row.updatedAt;
+  }
+  return a.kind === b.kind;
 };
 
 /** The four persisted integers every run-shaped read carries, proven. */
@@ -4111,6 +4134,89 @@ export class CoordStore {
       'SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND dispatchedAt > ?',
     ).get(now - 24 * 3600_000) as { c: number }).c;
     return { running, dispatchedIn24h };
+  }
+
+  // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
+
+  /** The settings row, every value as read: a row, no row, or a read that failed, three words and never one `null`.
+   *  The statement is prepared AND run inside the `try`, so a missing table or a driver throw is `unreadable` with the
+   *  driver's detail, never a throw. `setReadBigInts(true)`: without it an oversize INTEGER makes `.get()` throw
+   *  `ERR_OUT_OF_RANGE`, so one bad field would cost every field's own state; with it, that field arrives as a `bigint`
+   *  and only it parses unreadable (measured on node 22.13.0 and 24.14.1). Nothing is decided here:
+   *  `parseStallSettings` (L1) decides what each value means, `updatedAt` included. */
+  stallSettings(): StallSettingsRead {
+    try {
+      const st = this.db.prepare('SELECT level, quietMs, updatedAt FROM stall_settings WHERE id = 1');
+      st.setReadBigInts(true);
+      const r = st.get() as { level: unknown; quietMs: unknown; updatedAt: unknown } | undefined;
+      return r === undefined ? { kind: 'absent' } : { kind: 'row', row: { level: r.level, quietMs: r.quietMs, updatedAt: r.updatedAt } };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The settings write, in ONE `tx()`: read, compare, write, read again. It validates nothing; the route has decided
+   *  (the `setCaps` division of labour).
+   *  - A read that is itself unreadable takes neither arm: the store cannot tell an insert from an update, so it
+   *    THROWS inside the `tx()`, which rolls back. The route refuses on its own unreadable read first; this is the
+   *    second guard.
+   *  - It writes only over the row the route measured: a read that differs from `expected` (another kind, or any of a
+   *    row's three values as read, `updatedAt` included, since a hand edit need not move it) writes nothing and answers
+   *    `conflict` with the read it found (departure `server-decides-the-confirm` (D-4033)).
+   *  - A lost row takes the insert arm: `STALL_SETTINGS_SEED`, overridden only by the named fields.
+   *  - A patch that changes nothing in a stored row (`stallPatchIsNoOp`, after the `bigint` conversion) runs no
+   *    `UPDATE`, so `updatedAt` stays and `before` is `after` (departure `no-op-write-records-no-feed-event` (D-4031)).
+   *  - Otherwise the update arm sets only the named fields and `updatedAt`, so a quiet-only write keeps a stored level
+   *    as it is, an unreadable one included.
+   *  `stallSettingsAfter` (L1) is the projection of these arms; `stall-settings-store.test.ts` pins that they agree. */
+  setStallSettings(patch: StallSettingsPatch, at: number, expected: StallSettingsRead): StallSettingsWrite {
+    return tx(this.db, () => {
+      const before = this.stallSettings();
+      if (before.kind === 'unreadable') throw new Error(`stall settings unreadable inside the write: ${before.detail}`);
+      if (!sameStallSettingsRead(before, expected)) return { kind: 'conflict', before };
+      const quietMs = (q: NonNullable<StallSettingsPatch['quiet']>): number | null => (q.kind === 'default' ? null : q.ms);
+      if (before.kind === 'absent') {
+        this.db.prepare('INSERT INTO stall_settings (id, level, quietMs, updatedAt) VALUES (1, ?, ?, ?)').run(
+          patch.level ?? STALL_SETTINGS_SEED.level,
+          patch.quiet === undefined ? STALL_SETTINGS_SEED.quietMs : quietMs(patch.quiet),
+          at,
+        );
+      } else if (stallPatchIsNoOp(before.row, patch)) {
+        return { kind: 'written', before, after: before };
+      } else {
+        const sets: string[] = [];
+        const binds: (string | number | null)[] = [];
+        if (patch.level !== undefined) { sets.push('level = ?'); binds.push(patch.level); }
+        if (patch.quiet !== undefined) { sets.push('quietMs = ?'); binds.push(quietMs(patch.quiet)); }
+        sets.push('updatedAt = ?');
+        binds.push(at);
+        this.db.prepare(`UPDATE stall_settings SET ${sets.join(', ')} WHERE id = 1`).run(...binds);
+      }
+      return { kind: 'written', before, after: this.stallSettings() };
+    });
+  }
+
+  /** The notice-count read (§11): every `run_events` row at or after `since`, unordered (the counts are order-free,
+   *  and an `ORDER BY id` would invite a rowid scan on a database that never sees ANALYZE). It plans a SEARCH on
+   *  `run_events_by_at`, which `stall-settings-store.test.ts` pins. It spells no detail head: L1's
+   *  `stallNoticeCounts` classifies (`mail-stuck-decided-in-l1`'s discipline). `at` is CAST and proven (D-2545's
+   *  idiom), ALL-OR-FAILURE, the detail naming the column and no value; `detail` is CAST so a hand-edited non-text
+   *  value arrives as its text, which no stall detail matches. A thrown statement is `{ ok: false }`, never a throw. */
+  stallObservationsSince(since: number): StallObservationsRead {
+    try {
+      const rows = this.db.prepare(
+        'SELECT CAST(at AS TEXT) AS atText, CAST(detail AS TEXT) AS detail FROM run_events WHERE at >= ?',
+      ).all(since) as unknown as { atText: string; detail: string | null }[];
+      const out: StallObservationRow[] = [];
+      for (const r of rows) {
+        const at = persistedInt(r.atText, 'run_events at');
+        if (!at.ok) return { ok: false, detail: at.detail };
+        out.push({ at: at.value, detail: r.detail });
+      }
+      return { ok: true, rows: out };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   // ── work items ─────────────────────────────────────────────────────────────
