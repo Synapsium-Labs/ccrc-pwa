@@ -660,18 +660,19 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 16 — never hand-edited beside a growing array', () => {
-    // Bumped to 16 by six migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
+  it('COORD_SCHEMA_VERSION derives to 17 — never hand-edited beside a growing array', () => {
+    // Bumped to 17 by seven migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
     // design 2026-09-14 §5.1), MIGRATIONS[11] (runs.coordProject, board
     // placement wave 1 Task 1), MIGRATIONS[12] (pool_edges/pool_epoch,
     // account-pool membership wave 1 Task 6), MIGRATIONS[13] (releases,
     // node_release_refusals, nodes, update_intent, update_epoch — centralised
     // update management W2 Task 3), MIGRATIONS[14] (the stall mail read's
-    // indexes, worker stall watch wave 5) and MIGRATIONS[15]
+    // indexes, worker stall watch wave 5), MIGRATIONS[15]
     // (runs.sessionBornAt / runs.sessionBornFor — child-reclamation spec §5.1,
-    // §5.3).
-    expect(COORD_SCHEMA_VERSION).toBe(16);
-    expect(MIGRATIONS.length).toBe(16);
+    // §5.3) and MIGRATIONS[16] (stall_settings and run_events_by_at — stall
+    // watch settings design 2026-10-05 §8).
+    expect(COORD_SCHEMA_VERSION).toBe(17);
+    expect(MIGRATIONS.length).toBe(17);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -726,10 +727,11 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION);
-    // 16 since MIGRATIONS[14] (the stall read's indexes) and MIGRATIONS[15]
-    // (runs.sessionBornAt/sessionBornFor, child-reclamation spec §5.1, §5.3);
-    // the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(16);
+    // 17 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
+    // (runs.sessionBornAt/sessionBornFor, child-reclamation spec §5.1, §5.3)
+    // and MIGRATIONS[16] (stall_settings and run_events_by_at, stall watch
+    // settings §8); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(17);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -1016,7 +1018,9 @@ describe('coord.db: migration 14 — the update control plane (design 2026-09-20
     // The reached version is COORD_SCHEMA_VERSION, never a hardcoded 14: the
     // next entry appended after this one must not have to edit this case.
     expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
-    const added = tableNames(db).filter((t) => !had.includes(t)).sort();
+    // Narrowed to this entry's own tables, as the fresh-database case below already is: a later entry's table
+    // (stall_settings, MIGRATIONS[16]) joins the whole diff from 13, and must not have to edit this case.
+    const added = tableNames(db).filter((t) => !had.includes(t) && UPDATE_TABLES.includes(t)).sort();
     expect(added).toEqual(UPDATE_TABLES);
     db.close();
   });
@@ -1227,7 +1231,9 @@ describe('coord.db: the stall mail read\'s indexes (worker stall watch wave 5)',
     expect(had.filter((n) => INDEXES.includes(n)), 'the plant already has one').toEqual([]);
     const db = openCoordDb(p);
     expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
-    expect(indexNames(db).filter((n) => !had.includes(n)).sort()).toEqual(INDEXES);
+    // Narrowed to this entry's own indexes: a later entry's index (run_events_by_at, MIGRATIONS[16]) joins the
+    // whole diff from SLOT - 1, and must not have to edit this case.
+    expect(indexNames(db).filter((n) => !had.includes(n) && INDEXES.includes(n)).sort()).toEqual(INDEXES);
     expect(db.prepare('SELECT count(*) AS c FROM mail').get()).toEqual({ c: 1 });
     expect(db.prepare('SELECT count(*) AS c FROM mail_deliveries').get()).toEqual({ c: 1 });
     db.close();
@@ -1385,5 +1391,60 @@ describe('coord.db: migration 16 — runs.sessionBornAt / runs.sessionBornFor (c
         .get('demo-adopted-elsewhere')).toEqual({ sessionBornAt: null, sessionBornFor: null });
       db.close();
     });
+  });
+});
+
+describe('coord.db: stall_settings and run_events_by_at (stall watch settings W1, design 2026-10-05 §8)', () => {
+  /** This entry's slot, found by its DDL and never hard-coded (the stall mail indexes' rule above): whichever of two
+   *  branches holding one slot merges second moves up, and that renumber must not have to edit a line here. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('stall_settings')) + 1;
+  const NAMES = ['run_events_by_at', 'stall_settings'];
+  const objectNames = (db: DatabaseSync): string[] =>
+    (db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'").all() as
+      { name: string }[]).map((r) => r.name);
+  /** A database at exactly the version before this entry, carrying one run and one run event. */
+  const plantedBefore = (prefix: string): string => {
+    const p = dbPathIn(mkTmp(prefix));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) " +
+               "VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+      raw.exec("INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) " +
+               "VALUES (1, 5, 'working', 'working', 'operator', 'x')");
+    });
+    raw.close();
+    return p;
+  };
+
+  it('is its own entry, after every entry main carried when it was written', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates stall_settings').toBeGreaterThanOrEqual(17);
+    expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => NAMES.some((n) => m.includes(n))),
+      'a name of this entry was amended into a frozen one').toBe(false);
+  });
+
+  it('the entry alone adds exactly stall_settings and run_events_by_at, and seeds one follow/NULL row', () => {
+    // The entry's own diff, applied raw, so a later entry never edits this case.
+    const p = plantedBefore('ccrc-mig-stallsettings-');
+    const raw = new DatabaseSync(p);
+    const had = objectNames(raw);
+    raw.exec(MIGRATIONS[SLOT - 1]!);
+    expect(objectNames(raw).filter((n) => !had.includes(n)).sort()).toEqual(NAMES);
+    expect(raw.prepare('SELECT id, level, quietMs, updatedAt FROM stall_settings').all())
+      .toEqual([{ id: 1, level: 'follow', quietMs: null, updatedAt: 0 }]);
+    raw.close();
+  });
+
+  it('openCoordDb reaches a database ALREADY at the version before it, seeds the row and keeps its rows', () => {
+    const db = openCoordDb(plantedBefore('ccrc-mig-stallsettings-open-'));
+    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
+    expect(objectNames(db)).toEqual(expect.arrayContaining(NAMES));
+    expect(db.prepare('SELECT id, level, quietMs, updatedAt FROM stall_settings').all())
+      .toEqual([{ id: 1, level: 'follow', quietMs: null, updatedAt: 0 }]);
+    expect(db.prepare('SELECT runId, at, detail FROM run_events').all()).toEqual([{ runId: 1, at: 5, detail: 'x' }]);
+    db.close();
   });
 });
