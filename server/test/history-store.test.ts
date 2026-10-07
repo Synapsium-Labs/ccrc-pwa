@@ -45,6 +45,14 @@ const wordOf = (fn: () => unknown): string => {
 };
 
 describe('store.mjs: open, schema v1, pragmas', () => {
+  it('the code\'s schema version is one number: MIGRATIONS.length === SCHEMA_VERSION === the highest SCHEMA_ADDED key', () => {
+    const highest = Math.max(...Object.keys(SCHEMA_ADDED).map(Number));
+    expect(MIGRATIONS.length).toBe(SCHEMA_VERSION);
+    expect(SCHEMA_VERSION).toBe(highest);
+    // Every version from 1 to the code's has an entry and a migration: no gap a bump could hide behind.
+    for (let v = 1; v <= SCHEMA_VERSION; v++) expect(Object.keys(SCHEMA_ADDED), `SCHEMA_ADDED lacks v${v}`).toContain(String(v));
+  });
+
   it('MIGRATIONS[0] is the whole v1 schema, and SCHEMA_ADDED[1] names its every table and column in order', () => {
     const db = new DatabaseSync(v1Store(mkTmp('ccrc-history-store-')));
     const schema = schemaOf(db);

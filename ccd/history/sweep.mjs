@@ -35,7 +35,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { isatty } from 'node:tty';
 import { pathToFileURL } from 'node:url';
 import {
-  CARRIER_KILL_S, EXIT, SPOOL_FILE_MAX, SCHEMA_ADDED, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
+  CARRIER_KILL_S, EXIT, SPOOL_FILE_MAX, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
   UUID_RE, WRITER_RE, drainingNameOk, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
   passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText,
@@ -1640,7 +1640,7 @@ export function openStore(home, P, role, deps) {
     verdict = { act: 'create' };
   }
   if (verdict.act === 'create') createStore(home);
-  const code = (deps.migrations ?? MIGRATIONS).length;
+  const code = deps.migrations === undefined ? SCHEMA_VERSION : deps.migrations.length;
   let stored;
   try {
     stored = peekVersion(P.dbFile);

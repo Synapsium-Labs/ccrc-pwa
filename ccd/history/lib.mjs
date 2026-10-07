@@ -145,7 +145,7 @@ export const SECRET_MIN_LEN = 20;
 export const SECRET_SEGMENT_MIN = 12;
 export const DEFAULT_COPY_BPS = 10_000_000;
 export const MAX_INTERRUPTED_ATTEMPTS = 2;
-export const SCHEMA_VERSION = 1;
+// SCHEMA_VERSION is derived from SCHEMA_ADDED (below): the code's schema version is spelled once.
 export const BUSY_TIMEOUT_MS = 30_000;
 export const SHIM_GRACE_MS = 4 * 60 * 1000;         // two timer periods of the shim's mtime (§9.6)
 export const TICK_STALE_MS = 10 * 60 * 1000;
@@ -1871,6 +1871,12 @@ export const SCHEMA_ADDED = Object.freeze({
     }),
   }),
 });
+
+/** The schema version this code writes and reads: SCHEMA_ADDED's highest key,
+ *  so a store's creation stamp, the writer's verdicts and the CLI's reads agree
+ *  by construction. history-store.test.ts holds `MIGRATIONS.length` (the
+ *  migrations the writer can run) equal to it. */
+export const SCHEMA_VERSION = Math.max(...Object.keys(SCHEMA_ADDED).map(Number));
 
 /** What a pass that does NOT run its tick prints and exits with (§5.3, §9.10;
  *  rev 3.2 review, IV2): `history-sweep: <word>` and an exit code.
