@@ -39,7 +39,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
   writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync, existsSync, cpSync,
-  openSync, writeSync, ftruncateSync, closeSync, copyFileSync, utimesSync, appendFileSync, readdirSync, lstatSync, readlinkSync, statSync,
+  openSync, writeSync, ftruncateSync, closeSync, copyFileSync, utimesSync, appendFileSync, readdirSync, lstatSync, readlinkSync, statSync, renameSync, truncateSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,6 +108,11 @@ function installCcrc(home: string): void {
   for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh']) {
     symlinkSync(join(REPO, 'ccd', n), join(ccd, n));
   }
+  // The history CLI (spec 2026-10-05 §9.6): `_check_history` runs `node "$CCRC_HERE/history/cli.mjs" status --json`.
+  // A LINK, like the skill trees and unlike the auth helpers: node resolves a module's imports from its REAL path,
+  // and this module's imports (`./lib.mjs`, `./store.mjs`) sit beside it in the checkout, as they do in a box's
+  // tree (`_inst_tree` rsyncs `ccd/` whole).
+  symlinkSync(join(REPO, 'ccd', 'history'), join(ccd, 'history'));
   // ── the `auth` check's two artifacts (Task 9) ──────────────────────────
   // `_check_auth` measures `~/.ccrc/auth.scrypt` by running
   // `deploy/gen-auth-hash.mjs --check`, which imports the compiled reader out
@@ -1239,6 +1244,10 @@ import { pythonOrSkip } from './ccgptHarness.js';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
 import { markGenerated } from '../../shared/mark.mjs';
 import { createServer, type Socket } from 'node:net';
+import { DatabaseSync } from 'node:sqlite';
+import { createStore } from '../../ccd/history/store.mjs';
+import { HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, deriveHealth } from '../../ccd/history/lib.mjs';
+import { PRELOADS, preloadOptions } from './historyHelpers.js';
 
 /** python3, or null. `plantFakeRuntime`'s interpreter hands `ccgpt-runtime
  *  check`'s stamp read and probe hash to a real python3, so without one every
@@ -1477,8 +1486,18 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  RAISED BY ONE ON macOS ONLY (session-continuity wave 4): `scope-sweep` SKIPs
  *  there, as `scopes` does — pane scopes are a Linux mechanism. On Linux
  *  `healthy()` plants a fresh verdict record, so it PASSes and this count is
- *  unchanged there. */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 4;
+ *  unchanged there.
+ *
+ *  RAISED BY ONE AGAIN (ccrc history W1-B1, spec 2026-10-05 §9.6): `history`
+ *  SKIPs on every platform — `healthy()` places no
+ *  `~/.local/bin/ccd-history-sweep`, which is the check's gate (the shim, not
+ *  the timer file), so this "healthy" box never installed the sweep.
+ *  `historyBox()` and `relayBox()` at the end of this file are the fixtures
+ *  where it answers. Measured the same way: deleting this `+ 1` reds the two
+ *  pins that read the skip count directly, `counts BOTH lines in the summary`
+ *  (`expected 5 to be 4`) and `prints a summary count LAST, and it adds up to
+ *  the table` (`expected 41 to be 42`). */
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 5;
 
 // ── the table itself ──────────────────────────────────────────────────────
 
@@ -5132,7 +5151,7 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     const home = healthy('ccrc-doctor-server-skips-');
     writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
     const r = runDoctor(home);
-    for (const name of ['wrappers', 'accounts', 'memory', 'routing', 'pools', 'skills']) {
+    for (const name of ['wrappers', 'accounts', 'memory', 'routing', 'pools', 'skills', 'history']) {
       expect(r.stdout).toMatch(new RegExp(`^SKIP ${name}: this box records CCRC_ROLE=server, so it hosts no sessions`, 'm'));
       expect(r.stdout, `${name} still printed a verdict on a server-role box`).not.toMatch(new RegExp(`^(PASS|WARN|FAIL) ${name}:`, 'm'));
     }
@@ -13009,5 +13028,651 @@ describeLinux('ccrc doctor: scope-sweep', () => {
     writeUnitFile(home, 'ccd-scope-sweep.timer');
     writeFileSync(join(home, 'fixture-unit-ccd-scope-sweep.timer'), 'active\n');
     expect(lineFor(runDoctor(home).stdout, 'services')).toContain('ccd-scope-sweep.timer is active');
+  });
+});
+
+// ── services: the history sweep's timer (spec 2026-10-05 §9.6) ─────────────
+describe('ccrc doctor: services knows about the history sweep timer', () => {
+  // `ccd-history-sweep.timer` joins `known`, the DIRECT design (the timer's own state), while `_check_history`
+  // below measures the EFFECT: the store's last tick, whatever carries the sweep.
+  itLinux('warns — with its OWN consequence — when the history timer is installed and stopped', () => {
+    const home = healthy('ccrc-doctor-services-history-timer-');
+    writeUnitFile(home, 'ccd-history-sweep.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-history-sweep.timer'), 'inactive\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccd-history-sweep.timer is installed but inactive');
+    expect(lines[i]).toContain('session text is not being captured into the history store');
+    expect(lines[i]).not.toContain('the job it fires is not running');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccd-history-sweep\.timer$/);
+    expect(r.code).toBe(0);
+  });
+
+  itLinux('names it in the PASS line when it is installed and running', () => {
+    const home = healthy('ccrc-doctor-services-history-timer-ok-');
+    writeUnitFile(home, 'ccd-history-sweep.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-history-sweep.timer'), 'active\n');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).toContain('ccd-history-sweep.timer is active');
+  });
+
+  it('a box without the unit is never asked about it — no count moves', () => {
+    const home = healthy('ccrc-doctor-services-history-timer-absent-');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).not.toContain('ccd-history-sweep');
+  });
+});
+
+// ── history: the session-history store (spec 2026-10-05 §9.6) ──────────────
+// `_check_history` gates on the box's role and on the shim, then RELAYS `ccrc history status --json`'s `health`
+// block. It decides nothing about the store (`deriveHealth`, `ccd/history/lib.mjs`, does). Three kinds of case:
+// the GATES and the STORE STATES go through the real CLI, against a store `store.mjs`'s own `createStore` made
+// and then planted with the rows and files each state consists of (most of their producers are the sweep's, and
+// some ship after B1 — B2's recovery step, B4's segment checks; the rows are planted here exactly as each
+// producer writes them, so the CLI's reading of them is under test too). The RELAY goes through a `node` that
+// answers status from a fixture file, once per word `HEALTH_WORDS` declares, and once per `deriveHealth` rule
+// whose input no fixture can make (D-4259). Pins O15, O41 (doctor half), O55, and O28's,
+// O37's and DM43's doctor clauses.
+
+const HISTORY_SHIM_SRC = join(REPO, 'ccd', 'ccd-history-sweep');
+const historyRoot = (home: string): string => join(home, '.ccrc', 'history');
+const historyDbDir = (home: string): string => join(historyRoot(home), 'db');
+const historyDb = (home: string): string => join(historyDbDir(home), 'history.db');
+
+/** The shim where `_inst_atomic` puts it — a copy, 0755 — its mtime `ageS` seconds ago. `_inst_atomic` copies
+ *  without `-p`, so a real shim's mtime is its install time, which is what the grace counts from. */
+function plantHistoryShim(home: string, ageS: number): void {
+  const p = join(home, '.local', 'bin', 'ccd-history-sweep');
+  mkdirSync(path.dirname(p), { recursive: true });
+  copyFileSync(HISTORY_SHIM_SRC, p);
+  chmodSync(p, 0o755);
+  const t = new Date(Date.now() - ageS * 1000);
+  utimesSync(p, t, t);
+}
+
+/** What every history case adds to the env: the statfs preload answering "plenty" (a box's real free space never
+ *  decides a test, spec §10.1; since task 26 it also hides `/etc/claude-code`, so a host's managed settings never
+ *  decide one either), passed as a file URL through `preloadOptions`, and a 20 s bound for the CLI, which a loaded
+ *  box can need where `doctorEnv` gives tmux and gh 5 s. */
+function historyEnv(over: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return { NODE_OPTIONS: preloadOptions([PRELOADS.statfs]), HISTORY_TEST_STATFS: 'plenty', CCRC_DOCTOR_GH_TIMEOUT: '20', ...over };
+}
+
+/** `_check_history` alone, as `cmd_doctor` runs it: `ccrc` sourced first (its `CCRC_HERE`, `BOX_ENV_FILE`,
+ *  `_box_env_value`, `_plat_timeout`), then the check table, both through the fixture's
+ *  `<home>/ccrc/ccd` links, so `$CCRC_HERE/history/cli.mjs` is the fixture tree's. One check is one node run where
+ *  `runDoctor` runs forty checks; the cases about counting go through `runDoctor`. */
+function runHistoryCheck(home: string, extraEnv: NodeJS.ProcessEnv = {}): Result {
+  const ccd = join(home, 'ccrc', 'ccd');
+  const r = spawnSync(BASH, ['-c',
+    `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _check_history`],
+  { env: { ...doctorEnv(home), ...historyEnv(), ...extraEnv }, encoding: 'utf8' });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** A box an hour past its install (the shim's grace long over) holding a store that `createStore` made, through
+ *  the store's own first-creation sequence. */
+function historyBox(prefix: string): { home: string; storeId: string } {
+  const home = healthy(prefix);
+  plantHistoryShim(home, 3600);
+  // the sweep's shim sources accounts.sh; an absent one is WARN roster-unreadable, which is a rule of its own
+  // (`healthy()` writes none — no other check here needs a roster)
+  seedAccountsSh(home);
+  return { home, storeId: createStore(home).storeId };
+}
+
+function withStore(home: string, fn: (db: DatabaseSync) => void): void {
+  const db = new DatabaseSync(historyDb(home));
+  try { fn(db); } finally { db.close(); }
+}
+
+const setHistoryMeta = (db: DatabaseSync, k: string, v: string): void => {
+  db.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v').run(k, v);
+};
+
+/** One `ticks` row (§6.2's columns; the row the sweep's `recordTick` writes), `agoS` seconds old. Rows go in
+ *  oldest first, as ticks happen. */
+const addTick = (db: DatabaseSync, t: { agoS: number; lagMs: number | null; filesBehind: number; bytesBehind: number }): void => {
+  db.prepare('INSERT INTO ticks (ts_ms, lag_ms, bytes, files_behind, bytes_behind) VALUES (?, ?, 0, ?, ?)')
+    .run(Date.now() - t.agoS * 1000, t.lagMs, t.filesBehind, t.bytesBehind);
+};
+
+/** The store ticked 30 s ago, is caught up and capture is unpaused: the baseline every store-state case below
+ *  breaks one thing of. */
+const freshTick = (db: DatabaseSync): void => {
+  addTick(db, { agoS: 30, lagMs: 0, filesBehind: 0, bytesBehind: 0 });
+  setHistoryMeta(db, 'last_zero_behind_ms', String(Date.now() - 30_000));
+  setHistoryMeta(db, 'capture_pause', '');
+};
+
+/** The census's three numbers, as the sweep's periodic scan leaves them (task 26's meta keys). */
+const setExport = (db: DatabaseSync, due: number, overdue: number): void => {
+  setHistoryMeta(db, 'export_due', String(due));
+  setHistoryMeta(db, 'export_overdue', String(overdue));
+  setHistoryMeta(db, 'export_census_ms', String(Date.now() - 60_000));
+};
+
+/** `db/` moved onto a "volume" and linked back: the operator's §9.3 steps, with the target at `mode`. */
+function linkDbTo(home: string, mode: number): string {
+  const target = join(home, 'vol', 'history-db');
+  mkdirSync(join(home, 'vol'), { recursive: true });
+  renameSync(historyDbDir(home), target);
+  chmodSync(target, mode);
+  symlinkSync(target, historyDbDir(home));
+  return target;
+}
+
+/** The dead-volume seam for the store's DB: Task 27's word on Task 14's statfs preload. With
+ *  `HISTORY_TEST_STAT_HANG=/history.db`, `fs.promises.stat` of the DB never settles, which is a dead volume as
+ *  the CLI's 2 s reachability probe meets it. One seam for the CLI's tests and doctor's, never a second preload. */
+const statHangEnv = (): NodeJS.ProcessEnv => ({ NODE_OPTIONS: preloadOptions([PRELOADS.statfs]), HISTORY_TEST_STAT_HANG: '/history.db' });
+
+const historyLines = (out: string): string[] => out.split('\n').filter((l) => /^(PASS|WARN|FAIL|SKIP) history: /.test(l));
+/** The line after the first line starting with `prefix`: a non-PASS verdict's remedy. */
+const lineAfter = (out: string, prefix: string): string => {
+  const lines = out.split('\n');
+  const i = lines.findIndex((l) => l.startsWith(prefix));
+  return i < 0 ? '' : (lines[i + 1] ?? '');
+};
+
+describe('ccrc doctor: history — the gates (O15)', () => {
+  it('a box that records CCRC_ROLE=server SKIPs on its role even with a shim a re-role left, and the CLI there answers exit 9', () => {
+    const home = healthy('ccrc-doctor-history-server-');
+    plantHistoryShim(home, 3600);
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    const r = runDoctor(home, ['doctor'], historyEnv());
+    expect(historyLines(r.stdout)).toEqual([
+      'SKIP history: this box records CCRC_ROLE=server, so it hosts no sessions and keeps no history store',
+    ]);
+    const cli = spawnSync(process.execPath, ['--no-warnings', join(home, 'ccrc', 'ccd', 'history', 'cli.mjs'), 'status', '--json'],
+      { env: { ...doctorEnv(home), ...historyEnv() }, encoding: 'utf8' });
+    expect(cli.status, cli.stderr).toBe(9);
+    expect(existsSync(historyRoot(home)), 'status on a server box made a history directory').toBe(false);
+  });
+
+  it('a box with no shim SKIPs: the shim is the gate', () => {
+    const home = healthy('ccrc-doctor-history-no-shim-');
+    const r = runHistoryCheck(home);
+    expect(historyLines(r.stdout)).toHaveLength(1);
+    expect(historyLines(r.stdout)[0]).toMatch(/^SKIP history: no ccd-history-sweep at .*\/\.local\/bin\/ccd-history-sweep — /);
+    // A SKIP names no remedy, so it never names the installer's command: the env-less fleet-role case asserts a
+    // shim-less fleet box's whole doctor output never says `ccrc install`, and this line prints there.
+    expect(historyLines(r.stdout)[0]).not.toMatch(/ccrc install/);
+    expect(r.code).toBe(3);
+  });
+
+  itLinux('a fleet box with the shim and NO timer unit file is measured, never skipped: a container carrier has no unit file', () => {
+    const home = healthy('ccrc-doctor-history-no-timer-');
+    writeCcrcEnv(home, ['CCRC_ROLE=fleet', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    plantHistoryShim(home, 0);
+    expect(existsSync(join(unitDirOf(home), unitFileOf('ccd-history-sweep.timer')))).toBe(false);
+    const r = runHistoryCheck(home);
+    expect(historyLines(r.stdout), r.stderr).toHaveLength(1);
+    expect(historyLines(r.stdout)[0]).toMatch(/^PASS history: first-tick-pending: store none yet: /);
+    expect(r.code).toBe(0);
+  });
+
+  itLinux('within the shim\'s grace, with no store and no tick, a whole doctor run PASSes first-tick-pending and FAILs nothing (D-4168)', () => {
+    const home = healthy('ccrc-doctor-history-grace-');
+    plantHistoryShim(home, 0);
+    const r = runDoctor(home, ['doctor'], historyEnv());
+    expect(lineFor(r.stdout, 'history'), r.stdout).toMatch(/^PASS history: first-tick-pending: /);
+    // the check is a VERDICT now, so this healthy box skips one check fewer than `healthy()` alone
+    expect(r.stdout).toMatch(new RegExp(
+      `^summary: \\d+ checks \\(${HEALTHY_SKIPS - 1} skipped\\), \\d+ verdicts — \\d+ passed, 0 warned, 0 failed$`, 'm'));
+    expect(r.code).toBe(0);
+  });
+
+  itLinux('past the grace with no store at all, it FAILs tick-stale: a sweep that never ran is not a fresh install', () => {
+    const home = healthy('ccrc-doctor-history-never-ticked-');
+    plantHistoryShim(home, 600);
+    const r = runHistoryCheck(home);
+    expect(historyLines(r.stdout)[0], r.stdout).toMatch(/^FAIL history: tick-stale: store /);
+    expect(lineAfter(r.stdout, 'FAIL history: tick-stale: ')).toMatch(/^ {2}remedy: \S/);
+    expect(r.code).toBe(1);
+  });
+
+  itLinux('a store with no tick yet: PASS first-tick-pending inside the grace, FAIL tick-stale past it', () => {
+    const fresh = healthy('ccrc-doctor-history-store-no-tick-fresh-');
+    plantHistoryShim(fresh, 0);
+    const id = createStore(fresh).storeId;
+    const a = runHistoryCheck(fresh);
+    expect(historyLines(a.stdout)[0], a.stdout).toMatch(new RegExp(`^PASS history: first-tick-pending: store ${id}: `));
+    const old = historyBox('ccrc-doctor-history-store-no-tick-old-');
+    const b = runHistoryCheck(old.home);
+    expect(historyLines(b.stdout)[0], b.stdout).toMatch(new RegExp(`^FAIL history: tick-stale: store ${old.storeId}`));
+  });
+
+  it('sourced without ccrc, it says so rather than guessing', () => {
+    const nowhere = join(REPO, 'no-such-home-for-check-history');
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(CHECKS_SRC)}; _check_history`],
+      { encoding: 'utf8', env: { HOME: nowhere, PATH: nowhere, LC_ALL: 'C' } });
+    expect(r.stdout).toMatch(/^FAIL history: ccrc's own config reader is not loaded/m);
+    expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
+    expect(r.status).toBe(1);
+  });
+});
+
+describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, O37, O41, O55, DM43)', () => {
+  it('a caught-up store PASSes ok, naming its id, its last tick, its lag and whether it shares the root filesystem', () => {
+    const { home, storeId } = historyBox('ccrc-doctor-history-ok-');
+    withStore(home, freshTick);
+    const r = runHistoryCheck(home);
+    expect(historyLines(r.stdout), `${r.stdout}\n${r.stderr}`).toHaveLength(1);
+    const line = historyLines(r.stdout)[0]!;
+    // `ok` is task 28's pass word for a store with nothing to report; status's human form prints `health: PASS ok`
+    expect(line).toMatch(new RegExp(`^PASS history: ok: store ${storeId}: last tick \\d+s ago, lag `));
+    expect(line).toMatch(/; the store is on (the root filesystem|a filesystem of its own, not the root's)$/);
+    expect(r.code).toBe(0);
+  });
+
+  /** One planted state: what to break, the word and class the check must print, and what the line or its remedy
+   *  must also name. `plant` may return extra env for the CLI. */
+  interface StateCase {
+    name?: string;
+    word: string;
+    cls: 'FAIL' | 'WARN';
+    plant: (home: string) => NodeJS.ProcessEnv | void;
+    names?: (home: string, storeId: string) => string[];
+    remedyNames?: (home: string) => string[];
+    absent?: string[];
+  }
+  const tickAgo = (agoS: number): ((db: DatabaseSync) => void) => (db) => {
+    addTick(db, { agoS, lagMs: 0, filesBehind: 0, bytesBehind: 0 });
+    setHistoryMeta(db, 'last_zero_behind_ms', String(Date.now() - agoS * 1000));
+    setHistoryMeta(db, 'capture_pause', '');
+  };
+  /** An unfinished recovery step on a fresh tick, as B2's producer will leave it and task 28's `readStoreExtras`
+   *  reads it: a `derivation_state` row for step `recover` with no `completed_ms`, and the meta count of ticks its
+   *  cursor has sat still. */
+  const recoverStep = (unmoved: number): ((db: DatabaseSync) => void) => (db) => {
+    freshTick(db);
+    db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', 1, 'journal:120', NULL)").run();
+    setHistoryMeta(db, HEALTH_META.recoverUnmovedTicks, String(unmoved));
+  };
+  /** One meta key on a fresh tick: the record a producer keeps for status to read. */
+  const metaOnFreshTick = (k: string, v: string): ((db: DatabaseSync) => void) => (db) => {
+    freshTick(db);
+    setHistoryMeta(db, k, v);
+  };
+  const STATES: StateCase[] = [
+    // §8.3's store-open refusals, each from the files that make it
+    { word: 'store-unbound', cls: 'FAIL', plant: (home) => { rmSync(join(historyRoot(home), 'store.id')); },
+      names: (_h, id) => [id], remedyNames: () => ['--adopt'] },
+    { word: 'store-missing', cls: 'FAIL',
+      plant: (home) => { for (const s of ['', '-wal', '-shm']) rmSync(`${historyDb(home)}${s}`, { force: true }); },
+      remedyNames: () => ['--rebuild'] },
+    { word: 'store-mismatch', cls: 'FAIL',
+      plant: (home) => { writeFileSync(join(historyRoot(home), 'store.id'), '00000000-0000-4000-8000-000000000000\n', { mode: 0o600 }); } },
+    { word: 'store-zero-byte', cls: 'FAIL', plant: (home) => { truncateSync(historyDb(home), 0); } },
+    { word: 'store-recoverable', cls: 'FAIL', plant: (home) => {
+      rmSync(historyDbDir(home), { recursive: true });
+      rmSync(join(historyRoot(home), 'store.id'));
+      mkdirSync(join(historyRoot(home), 'journal', '00000000-0000-4000-8000-0000000000aa'), { recursive: true, mode: 0o700 });
+    } },
+    { word: 'store-wal-orphaned', cls: 'FAIL', plant: (home) => {
+      rmSync(historyDb(home));
+      rmSync(join(historyRoot(home), 'store.id'));
+      writeFileSync(`${historyDb(home)}-wal`, '', { mode: 0o600 });
+    } },
+    { word: 'store-root-dangling', cls: 'FAIL', plant: (home) => {
+      rmSync(historyDbDir(home), { recursive: true });
+      symlinkSync(join(home, 'vol-gone', 'history-db'), historyDbDir(home));
+    } },
+    // O28: a store on a dead volume answers within the CLI's own deadline, and doctor names it
+    { word: 'store-unreachable', cls: 'FAIL',
+      plant: () => statHangEnv() },
+    // the two refusals task 27's own cases plant: a store.writer that is not a writer token is a binding read that
+    // failed (§5.3 "Binding reads"; content, not a mode, so a root-run suite meets it too), and a bound store out
+    // of WAL mode is store-not-wal (§6.2). Both answer exit 5 with the store's id.
+    { word: 'store-unmeasured', cls: 'FAIL',
+      plant: (home) => { writeFileSync(join(historyRoot(home), 'store.writer'), 'not a writer token\n'); },
+      names: (_h, id) => [id], remedyNames: () => ['store.writer', 'readable by this user'] },
+    { word: 'store-not-wal', cls: 'FAIL',
+      plant: (home) => withStore(home, (db) => { db.exec('PRAGMA journal_mode = DELETE'); }),
+      names: (_h, id) => [id], remedyNames: () => ['WAL mode'] },
+    // fts-unavailable: the CLI's own FTS5 probe answers "absent" through task 23's HISTORY_TEST_FTS_PROBE knob of
+    // the faults preload (O9's seam), the same kind of plant as store-unreachable's dead volume above
+    { word: 'fts-unavailable', cls: 'WARN',
+      plant: (home) => {
+        withStore(home, freshTick);
+        return { NODE_OPTIONS: preloadOptions([PRELOADS.statfs, PRELOADS.faults]), HISTORY_TEST_FTS_PROBE: 'absent' };
+      },
+      names: () => ['fts5-absent'], remedyNames: () => ['Node >= 22.16.0'], absent: ['FAIL history: '] },
+    // the states in which no fresh tick is expected (D-4251), each beside its pair
+    { name: 'off: history-off with no tick for an hour is a WARN, never the stale-tick FAIL', word: 'off', cls: 'WARN',
+      plant: (home) => { withStore(home, tickAgo(3600)); writeFileSync(join(home, '.ccrc', 'history-off'), ''); },
+      absent: ['FAIL history: tick-stale'] },
+    { name: 'op-running: a live op marker with no tick for 40 min is a WARN', word: 'op-running', cls: 'WARN',
+      plant: (home) => {
+        withStore(home, tickAgo(2400));
+        writeFileSync(join(historyRoot(home), 'op'), `prune ${process.pid} ${Date.now() - 2_400_000}\n`, { mode: 0o600 });
+      },
+      absent: ['FAIL history: tick-stale'] },
+    { name: 'tick-stale: a dead pid\'s op marker holds nothing back', word: 'tick-stale', cls: 'FAIL',
+      plant: (home) => {
+        const dead = spawnSync(process.execPath, ['-e', '0']).pid;
+        withStore(home, tickAgo(2400));
+        writeFileSync(join(historyRoot(home), 'op'), `prune ${dead} ${Date.now() - 2_400_000}\n`, { mode: 0o600 });
+      } },
+    { name: 'catching-up: bytes behind falling across three ticks is a WARN, never the lag FAIL', word: 'catching-up', cls: 'WARN',
+      plant: (home) => withStore(home, (db) => {
+        for (const [agoS, b] of [[90, 3000], [60, 2000], [30, 1000]] as const) {
+          addTick(db, { agoS, lagMs: 7_200_000, filesBehind: 2, bytesBehind: b });
+        }
+        setHistoryMeta(db, 'last_zero_behind_ms', String(Date.now() - 7_200_000));
+        setHistoryMeta(db, 'capture_pause', '');
+      }),
+      absent: ['FAIL history: lag-high'] },
+    { name: 'lag-high: the same lag with bytes behind flat is the FAIL', word: 'lag-high', cls: 'FAIL',
+      plant: (home) => withStore(home, (db) => {
+        for (const agoS of [90, 60, 30]) addTick(db, { agoS, lagMs: 7_200_000, filesBehind: 2, bytesBehind: 1000 });
+        setHistoryMeta(db, 'last_zero_behind_ms', String(Date.now() - 7_200_000));
+        setHistoryMeta(db, 'capture_pause', '');
+      }) },
+    { name: 'lag-unmeasured: a fresh tick with no measured lag is a WARN and nothing FAILs', word: 'lag-unmeasured', cls: 'WARN',
+      plant: (home) => withStore(home, (db) => {
+        addTick(db, { agoS: 30, lagMs: null, filesBehind: 1, bytesBehind: 500 });
+        setHistoryMeta(db, 'capture_pause', '');
+      }),
+      absent: ['FAIL history: '] },
+    { name: 'tick-stale: the last tick 20 minutes ago', word: 'tick-stale', cls: 'FAIL', plant: (home) => withStore(home, tickAgo(1200)) },
+    // O10's and O19's doctor clauses: the pauses the sweep recorded
+    { word: 'at-cap', cls: 'FAIL', plant: (home) => withStore(home, (db) => { freshTick(db); setHistoryMeta(db, 'capture_pause', 'at-cap'); }) },
+    { word: 'capture-paused-low-disk', cls: 'FAIL',
+      plant: (home) => withStore(home, (db) => { freshTick(db); setHistoryMeta(db, 'capture_pause', 'low-disk'); }) },
+    // modes (§9.3), and O55: a linked db/ is measured at its target, never at the link
+    { word: 'mode-wrong', cls: 'FAIL', plant: (home) => { withStore(home, freshTick); chmodSync(historyDb(home), 0o644); },
+      names: (home) => [historyDb(home)] },
+    { name: 'O55: a linked db/ whose TARGET is 0755 FAILs, naming the target and the chmod', word: 'mode-wrong', cls: 'FAIL',
+      plant: (home) => { withStore(home, freshTick); linkDbTo(home, 0o755); },
+      names: (home) => [join(home, 'vol', 'history-db')],
+      remedyNames: (home) => ['chmod', join(home, 'vol', 'history-db')] },
+    { word: 'root-is-symlink', cls: 'WARN', plant: (home) => {
+      withStore(home, freshTick);
+      const t = join(home, 'vol', 'history-root');
+      mkdirSync(join(home, 'vol'), { recursive: true });
+      renameSync(historyRoot(home), t);
+      symlinkSync(t, historyRoot(home));
+    } },
+    { word: 'cap-malformed', cls: 'WARN',
+      plant: (home) => { withStore(home, freshTick); writeFileSync(join(home, '.ccrc', 'history-max-gb'), 'lots\n'); },
+      names: (home) => [join(home, '.ccrc', 'history-max-gb')] },
+    { word: 'schema-newer', cls: 'FAIL', plant: (home) => withStore(home, (db) => { freshTick(db); db.exec('PRAGMA user_version = 2'); }) },
+    // O41, the doctor half: the gap guard fires on the census's counts, never on a date
+    { name: 'O41: a due blob WARNs export-due, naming the count, and FAILs nothing while none is overdue', word: 'export-due', cls: 'WARN',
+      plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 0); }),
+      names: () => ['3'], absent: ['FAIL history: export-overdue'] },
+    { name: 'O41: an overdue blob FAILs export-overdue', word: 'export-overdue', cls: 'FAIL',
+      plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 2); }) },
+    { word: 'retention-lowered', cls: 'WARN',
+      plant: (home) => withStore(home, (db) => {
+        freshTick(db);
+        setHistoryMeta(db, 'retention_lowered', JSON.stringify({ home: join(home, '.acct-b'), days: 30, othersMin: 180 }));
+      }),
+      names: (home) => [join(home, '.acct-b'), '30', '180'] },
+    { word: 'journal-growth', cls: 'WARN',
+      plant: (home) => withStore(home, (db) => { freshTick(db); setHistoryMeta(db, 'journal_growth_30d', String(50 * 1024 * 1024)); }) },
+    // O15: the rules whose producer ships later, or that this fixture never runs, planted as the rows, meta and
+    // files that producer leaves, so the CLI's reading of them is measured too — never fed to the relay by hand
+    { name: 'recovering: an unfinished recovery step whose cursor moved lately is a WARN, and nothing FAILs', word: 'recovering', cls: 'WARN',
+      plant: (home) => withStore(home, recoverStep(2)),
+      names: () => ['journal:120'], absent: ['FAIL history: '] },
+    { name: 'recovery-stalled: the same step, its cursor still for RECOVERY_STALL_TICKS ticks, FAILs', word: 'recovery-stalled', cls: 'FAIL',
+      plant: (home) => withStore(home, recoverStep(RECOVERY_STALL_TICKS)),
+      names: () => [String(RECOVERY_STALL_TICKS), 'journal:120'], absent: ['WARN history: recovering: '] },
+    { word: 'breaker-open', cls: 'WARN',
+      plant: (home) => withStore(home, (db) => {
+        freshTick(db);
+        db.prepare('INSERT INTO breaker (key, consecutive_fail, open_until_ms) VALUES (?, ?, ?)').run('fixture-file', 3, Date.now() + 600_000);
+      }),
+      absent: ['FAIL history: '] },
+    { name: 'DM43: a migration too long for a scheduled pass FAILs migration-needs-op, its remedy the --migrate verb', word: 'migration-needs-op', cls: 'FAIL',
+      plant: (home) => withStore(home, metaOnFreshTick('migration', 'snapshot-needs-op')),
+      remedyNames: () => ['ccrc history doctor --migrate'] },
+    { name: 'migration-refused: a migration refused for room FAILs, its remedy a measured byte count', word: 'migration-refused', cls: 'FAIL',
+      plant: (home) => withStore(home, metaOnFreshTick('migration', 'refuse-low-disk')),
+      remedyNames: () => ['free space'], absent: ['undefined', 'NaN bytes'] },
+    { name: 'O37: a journal append the sweep recorded as failed FAILs journal-unwritable', word: 'journal-unwritable', cls: 'FAIL',
+      plant: (home) => withStore(home, metaOnFreshTick('journal_unwritable', String(Date.now() - 30_000))) },
+    { word: 'redact-source-unreadable', cls: 'WARN',
+      plant: (home) => withStore(home, metaOnFreshTick('redact_unreadable', JSON.stringify([join(home, '.cc-secrets', 'fixture.env')]))),
+      names: (home) => [join(home, '.cc-secrets', 'fixture.env')], remedyNames: (home) => [join(home, '.cc-secrets', 'fixture.env')] },
+    { word: 'retention-unmeasured', cls: 'WARN',
+      plant: (home) => withStore(home, metaOnFreshTick(`retention_state:${join(home, '.acct-b')}`, 'unmeasured')),
+      names: (home) => [join(home, '.acct-b')] },
+    { word: 'journal-record-skipped', cls: 'WARN',
+      plant: (home) => withStore(home, metaOnFreshTick('journal_skipped', '4')),
+      names: () => ['4'] },
+    { word: 'export-segment-newer', cls: 'FAIL',
+      plant: (home) => withStore(home, metaOnFreshTick(HEALTH_META.exportSegmentNewer, JSON.stringify(['7.0a1b2c3d.db']))),
+      names: () => ['7.0a1b2c3d.db'] },
+    { word: 'export-segment-missing', cls: 'WARN',
+      plant: (home) => withStore(home, metaOnFreshTick(HEALTH_META.exportSegmentMissing, '2')),
+      names: () => ['2'] },
+    { name: 'roster-unreadable: a box whose accounts.sh is gone WARNs — the sweep\'s shim sources it', word: 'roster-unreadable', cls: 'WARN',
+      plant: (home) => { withStore(home, freshTick); rmSync(join(home, '.ccrc', 'accounts.sh')); },
+      absent: ['FAIL history: '] },
+  ];
+
+  it.each(STATES.map((c) => [c.name ?? c.word, c] as [string, StateCase]))('%s', (_name, c) => {
+    const { home, storeId } = historyBox(`ccrc-doctor-history-${c.word}-`);
+    const env = c.plant(home) ?? {};
+    const r = runHistoryCheck(home, env);
+    const prefix = `${c.cls} history: ${c.word}: store `;
+    const line = historyLines(r.stdout).find((l) => l.startsWith(prefix));
+    expect(line, `no "${prefix}" line\n${r.stdout}\n${r.stderr}`).toBeDefined();
+    expect(lineAfter(r.stdout, prefix)).toMatch(/^ {2}remedy: \S/);
+    // a number is looked for with the store id and the HOME taken out, so a digit inside either never satisfies it
+    const bare = line!.replaceAll(storeId, '').replaceAll(home, '');
+    for (const n of c.names?.(home, storeId) ?? []) {
+      if (/^\d+$/.test(n)) expect(bare).toMatch(new RegExp(`\\b${n}\\b`));
+      else expect(line).toContain(n);
+    }
+    for (const n of c.remedyNames?.(home) ?? []) expect(lineAfter(r.stdout, prefix)).toContain(n);
+    for (const a of c.absent ?? []) expect(r.stdout, `${a} printed beside ${c.word}`).not.toContain(a);
+    expect(r.code).toBe(historyLines(r.stdout).some((l) => l.startsWith('FAIL ')) ? 1 : 2);
+  });
+
+  it('O55: a linked db/ whose target is 0700 PASSes — the link\'s own mode (a symlink always reads 777) is never read', () => {
+    const { home, storeId } = historyBox('ccrc-doctor-history-link-0700-');
+    withStore(home, freshTick);
+    linkDbTo(home, 0o700);
+    const r = runHistoryCheck(home);
+    expect(historyLines(r.stdout), r.stdout).toHaveLength(1);
+    expect(historyLines(r.stdout)[0]).toMatch(new RegExp(`^PASS history: ok: store ${storeId}: `));
+  });
+
+  it('O41: nothing due and nothing overdue: neither export word', () => {
+    const { home } = historyBox('ccrc-doctor-history-export-none-');
+    withStore(home, (db) => { freshTick(db); setExport(db, 0, 0); });
+    const r = runHistoryCheck(home);
+    expect(r.stdout).not.toMatch(/^(WARN|FAIL) history: export-(due|overdue): /m);
+    expect(r.code).toBe(0);
+  });
+});
+
+describe('ccrc doctor: history — the relay (O15: every word, and the one rule no fixture can plant)', () => {
+  const SID = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+
+  /** `node` that answers `ccrc history status --json` from `<home>/fixture-history-status` with exit `rc`, and,
+   *  while `<home>/fixture-history-hang` is a FIFO, never answers at all. Every other call goes to the real
+   *  interpreter, as `stubNode` does. Shell builtins only: this fixture's PATH holds no system directory. */
+  function stubHistoryStatus(home: string, body: string, rc = 0): void {
+    writeFileSync(join(home, 'fixture-history-status'), body);
+    stub(home, 'node', [
+      `if [ "$1" = "--version" ]; then echo 'v22.20.0'; exit 0; fi`,
+      'case "$*" in',
+      '  *history/cli.mjs*)',
+      '    if [ -p "$HOME/fixture-history-hang" ]; then exec 3<>"$HOME/fixture-history-hang"; read -r x <&3; fi',
+      '    while IFS= read -r l || [ -n "$l" ]; do printf \'%s\\n\' "$l"; done < "$HOME/fixture-history-status"',
+      `    exit ${rc} ;;`,
+      'esac',
+      `exec '${process.execPath}' "$@"`,
+    ].join('\n'));
+  }
+  const envelope = (health: unknown, over: Record<string, unknown> = {}): string =>
+    `${JSON.stringify({ v: 1, exit: 0, store_id: SID, coverage: 'this-box', last_tick_ms: Date.now() - 30_000, lag: 12, health, ...over })}\n`;
+  const item = (word: string): { word: string; detail: string; remedy: string } =>
+    ({ word, detail: `store ${SID}: fixture finding for ${word}`, remedy: `fixture remedy for ${word}` });
+  const relayBox = (prefix: string): string => {
+    const home = healthy(prefix);
+    plantHistoryShim(home, 3600);
+    return home;
+  };
+
+  const NON_PASS = Object.entries(HEALTH_WORDS).filter(([, c]) => c !== 'pass') as Array<[string, 'warn' | 'fail']>;
+
+  it('CONTROL: HEALTH_WORDS declares the words this relay is asked about', () => {
+    expect(NON_PASS.length).toBeGreaterThan(30);
+    expect(Object.entries(HEALTH_WORDS).filter(([, c]) => c === 'pass').map(([w]) => w)).toContain('first-tick-pending');
+  });
+
+  it.each(NON_PASS)('%s (%s) is printed in its own class, with its remedy on the next line', (word, cls) => {
+    const home = relayBox(`ccrc-doctor-history-relay-${word}-`);
+    stubHistoryStatus(home, envelope(cls === 'fail'
+      ? { pass: null, warn: [], fail: [item(word)] }
+      : { pass: null, warn: [item(word)], fail: [] }));
+    const r = runHistoryCheck(home);
+    const C = cls.toUpperCase();
+    expect(historyLines(r.stdout), r.stderr).toEqual([`${C} history: ${word}: store ${SID}: fixture finding for ${word}`]);
+    expect(lineAfter(r.stdout, `${C} history: `)).toBe(`  remedy: fixture remedy for ${word}`);
+    expect(r.code).toBe(cls === 'fail' ? 1 : 2);
+  });
+
+  it('a FAIL and a WARN in one report: both lines, the FAIL first, each with its remedy, and the check returns the FAIL', () => {
+    const home = relayBox('ccrc-doctor-history-relay-two-');
+    stubHistoryStatus(home, envelope({ pass: null, warn: [item('cap-near')], fail: [item('tick-stale')] }));
+    const r = runHistoryCheck(home);
+    expect(r.stdout.split('\n').filter(Boolean)).toEqual([
+      `FAIL history: tick-stale: store ${SID}: fixture finding for tick-stale`, '  remedy: fixture remedy for tick-stale',
+      `WARN history: cap-near: store ${SID}: fixture finding for cap-near`, '  remedy: fixture remedy for cap-near',
+    ]);
+    expect(r.code).toBe(1);
+  });
+
+  it('the grace word PASSes, naming the store and its facts', () => {
+    const home = relayBox('ccrc-doctor-history-relay-grace-');
+    stubHistoryStatus(home, envelope({ pass: 'first-tick-pending', warn: [], fail: [] }));
+    const r = runHistoryCheck(home);
+    expect(historyLines(r.stdout)).toHaveLength(1);
+    expect(historyLines(r.stdout)[0]).toMatch(new RegExp(`^PASS history: first-tick-pending: store ${SID}: last tick \\d+s ago, lag 12s; `));
+    expect(r.code).toBe(0);
+  });
+
+  it('an empty report PASSes with no word, and a store with no db/ yet says its filesystem was not measured', () => {
+    const home = relayBox('ccrc-doctor-history-relay-clean-');
+    stubHistoryStatus(home, envelope({ pass: null, warn: [], fail: [] }));
+    const r = runHistoryCheck(home);
+    expect(historyLines(r.stdout)).toEqual([expect.stringMatching(
+      new RegExp(`^PASS history: store ${SID}: last tick \\d+s ago, lag 12s; its filesystem was not measured$`))]);
+  });
+
+  it('status that prints nothing readable FAILs status-unreadable, naming its exit code', () => {
+    const home = relayBox('ccrc-doctor-history-relay-garbage-');
+    stubHistoryStatus(home, 'not json at all\n', 1);
+    const r = runHistoryCheck(home);
+    expect(historyLines(r.stdout)).toEqual([
+      'FAIL history: status-unreadable: ccrc history status --json exited 1 and printed nothing this check can read as a health report',
+    ]);
+    expect(lineAfter(r.stdout, 'FAIL history: status-unreadable: ')).toMatch(/^ {2}remedy: run it by hand to see why: node --no-warnings \S+\/history\/cli\.mjs status; /);
+    expect(r.code).toBe(1);
+  });
+
+  it('a report without a health block, or carrying a word the check cannot vouch for, is unreadable too — no word is relayed', () => {
+    const home = relayBox('ccrc-doctor-history-relay-shape-');
+    for (const body of [
+      envelope(undefined),
+      envelope({ pass: null, warn: [], fail: [{ word: 'Not A Word', detail: 'x', remedy: 'y' }] }),
+      envelope({ pass: null, warn: [{ word: 'cap-near', detail: 7, remedy: 'y' }], fail: [] }),
+    ]) {
+      stubHistoryStatus(home, body);
+      const r = runHistoryCheck(home);
+      expect(historyLines(r.stdout), body).toHaveLength(1);
+      expect(historyLines(r.stdout)[0]).toMatch(/^FAIL history: status-unreadable: /);
+    }
+  });
+
+  it('a status that never answers FAILs within the bound, naming it — never a hung doctor', () => {
+    const home = relayBox('ccrc-doctor-history-relay-hang-');
+    stubHistoryStatus(home, envelope({ pass: null, warn: [], fail: [] }));
+    const made = spawnSync('mkfifo', [join(home, 'fixture-history-hang')], { encoding: 'utf8' });
+    expect(made.status, made.stderr).toBe(0);
+    const t0 = Date.now();
+    const r = runHistoryCheck(home, { CCRC_DOCTOR_GH_TIMEOUT: '2' });
+    expect(Date.now() - t0, 'the check waited out more than its bound').toBeLessThan(15_000);
+    expect(historyLines(r.stdout)).toEqual([
+      'FAIL history: status-unreadable: ccrc history status --json did not answer within 2s — a store on a hung filesystem blocks every stat on it',
+    ]);
+    expect(r.code).toBe(1);
+  });
+
+  it('exit 9 with nothing to report SKIPs; any other non-zero exit with nothing to report FAILs status-unreadable', () => {
+    const home = relayBox('ccrc-doctor-history-relay-exit-');
+    stubHistoryStatus(home, envelope({ pass: null, warn: [], fail: [] }, { exit: 9, store_id: null }), 9);
+    const a = runHistoryCheck(home);
+    expect(historyLines(a.stdout)).toEqual(['SKIP history: ccrc history status answers exit 9: this box keeps no history store']);
+    expect(a.code).toBe(3);
+    stubHistoryStatus(home, envelope({ pass: null, warn: [], fail: [] }, { exit: 5, reason: 'store-mismatch' }), 5);
+    const b = runHistoryCheck(home);
+    expect(historyLines(b.stdout)).toEqual([
+      'FAIL history: status-unreadable: ccrc history status --json exited 5 (store-mismatch) and reported no health verdict',
+    ]);
+  });
+
+  it('with no jq on PATH it WARNs and points at the jq check', () => {
+    const home = relayBox('ccrc-doctor-history-relay-nojq-');
+    stubHistoryStatus(home, envelope({ pass: null, warn: [], fail: [] }));
+    unstub(home, 'jq');
+    const r = runHistoryCheck(home);
+    expect(historyLines(r.stdout)).toEqual([
+      "WARN history: jq is not on PATH, so ccrc history status --json could not be read — see the 'jq' check above",
+    ]);
+    expect(r.code).toBe(2);
+  });
+
+  // The one rule whose input no fixture can make (D-4259, its ledger text corrected by D-4302): cap-near needs a store whose
+  // measured size (page_count × page_size, plus its -wal) is within CAP_WARN_PCT of a cap of at least 1 GB, so
+  // hundreds of MB of real pages. It is answered by the REAL `deriveHealth` and relayed: the word, the class and
+  // the remedy text it computes all reach the doctor line. Every other rule, store-not-wal, store-unmeasured and
+  // fts-unavailable included, is planted above and read through the real CLI.
+  // `cleanInputs` is task 28's whole `HealthInputs`, its seven added fields and Task 28F's `extrasUnmeasured` included, so tsc holds it to
+  // `lib.d.mts` and no remedy reads an absent field.
+  const cleanInputs = (now: number): Parameters<typeof deriveHealth>[0] => ({
+    nowMs: now, storeId: SID, exit: 0, reason: null, shimMtimeMs: now - 3_600_000, lastTickMs: now - 30_000, lagS: 30,
+    sizeBytes: 1_048_576, capGb: 50, capMalformed: false, capFile: '/home/u/.ccrc/history-max-gb', capturePause: '',
+    migration: 'none', userVersion: 1, codeVersion: 1, historyOff: false, recovering: null, op: null,
+    bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false, redactUnreadable: [],
+    breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0, exportWriterLive: false,
+    exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [], journalGrowth30d: 0, journalSkipped: 0,
+    exportSegmentNewer: [], exportSegmentMissing: 0, journalUnwritable: false,
+    dbPath: '/home/u/.ccrc/history/db', freeBytes: null, thresholdBytes: null, copyBps: null, backupsDb: [],
+    journalStoreDirs: [], extrasUnmeasured: [],
+  });
+
+  it('CONTROL: deriveHealth answers the clean inputs with PASS ok and nothing to report', () => {
+    expect(deriveHealth(cleanInputs(Date.now()))).toEqual({ pass: 'ok', warn: [], fail: [] });
+  });
+
+  const DERIVED: Array<[string, 'WARN' | 'FAIL', Partial<Parameters<typeof deriveHealth>[0]>, string]> = [
+    ['cap-near', 'WARN', { sizeBytes: 43 * 2 ** 30 }, '/home/u/.ccrc/history-max-gb'],
+  ];
+
+  it.each(DERIVED)('%s, as deriveHealth answers it, reaches the doctor as %s with its own remedy', (word, cls, over, remedy) => {
+    const home = relayBox(`ccrc-doctor-history-derived-${word}-`);
+    const report = deriveHealth({ ...cleanInputs(Date.now()), ...over });
+    const own = [...report.fail, ...report.warn].find((i) => i.word === word);
+    expect(own, JSON.stringify(report)).toBeDefined();
+    expect(own!.remedy).toContain(remedy);   // the word's own remedy, never a fallback
+    stubHistoryStatus(home, envelope(report));
+    const r = runHistoryCheck(home);
+    const prefix = `${cls} history: ${word}: store ${SID}: `;
+    expect(historyLines(r.stdout).find((l) => l.startsWith(prefix)), r.stdout).toBeDefined();
+    expect(lineAfter(r.stdout, prefix)).toBe(`  remedy: ${own!.remedy}`);
+    expect(r.stdout).not.toMatch(/undefined|NaN/);
   });
 });

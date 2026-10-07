@@ -5357,6 +5357,11 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // …and the gate check really RAN and really found the box uncredentialed:
     // `0 warned` must not be reachable by the check having vanished.
     expect(r.stdout).toMatch(/^PASS auth: no passphrase file at .*nothing is gated/m);
+    // …and `history` (spec 2026-10-05 §9.6) is among the checks that PASSed, on its grace word: the shim landed
+    // seconds ago and no sweep has ticked. A WARN there would turn every fresh install yellow again
+    // (D-4168). macOS places no shim, so the check SKIPs there.
+    if (process.platform === 'darwin') expect(r.stdout).toMatch(/^SKIP history: /m);
+    else expect(r.stdout).toMatch(/^PASS history: first-tick-pending: /m);
   });
 
   it('writes ~/.ccrc/installed LAST, naming the stamped sha — and a spine that dies before its end leaves none', () => {
@@ -8268,6 +8273,10 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  three. RE-MEASURED once more when doctor gained `scope-sweep` (session-continuity
  *  wave 4): the three maps each gained `"scope-sweep": "SKIP"` (the fixture's
  *  runtime dir holds no verdict record) and nothing else moved.
+ *  RE-MEASURED again when doctor gained its `history` check (spec 2026-10-05
+ *  §9.6): the three maps each gained `"history": "PASS"` (`first-tick-pending`:
+ *  the shim landed seconds before, and no sweep has ticked) and nothing else
+ *  moved.
  *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
@@ -8304,6 +8313,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "git_email": "PASS",
         "graphify": "PASS",
         "graphify-path": "PASS",
+        "history": "PASS",
         "jq": "PASS",
         "jq_regex": "PASS",
         "linger": "PASS",
@@ -8353,6 +8363,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "git_email": "PASS",
         "graphify": "PASS",
         "graphify-path": "PASS",
+        "history": "PASS",
         "jq": "PASS",
         "jq_regex": "PASS",
         "linger": "PASS",
@@ -8472,6 +8483,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "git_email": "PASS",
       "graphify": "PASS",
       "graphify-path": "PASS",
+      "history": "PASS",
       "jq": "PASS",
       "jq_regex": "PASS",
       "linger": "PASS",
