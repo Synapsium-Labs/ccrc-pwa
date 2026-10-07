@@ -23,7 +23,7 @@ time.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | run 295 (`ccrc-pwa-swift-meadow`): seven tasks implemented; wave-done pending CI (R16) |
+| 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | run 295 `awaiting-review` at `ccd3eced1`; review run 319 dispatched (R17) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README | server (it serves the PWA) | — | planned; dispatched after wave 1 merges |
 
 ## Decisions & deviations
@@ -183,6 +183,25 @@ time.
     literal list but inside none of wave 6's four sites, and the plan requires them. Accepted. The omission was in
     this coordinator's list in mail 3830, not in the worker's reading. Mail 3858 tells run 291's coordinator so, and
     `git merge-tree` against `ws/amber-river` at `899e4f12a` is clean.
+- **R17 (2026-10-07 15:11)**, wave 1's wave-done is verified, and review run 319 is dispatched.
+  - Mail 3861 is the wave-done, with fingerprint `ccd3eced1b17` (tip and handoff commit) and PR #320 `open`. It is
+    copied to `.superpowers/sdd/stall-watch-settings/w1-wave-done.md`, and the worker's SDD workspace (`progress.md`
+    and every `mut-*.out`) to `w1-child-evidence/`, before any reclaim.
+  - Re-measured: the origin tip, the worker's checkout and PR #320's head all read `ccd3eced1`; the tree is clean and
+    the PR mergeable. Run 295 advanced to `working`, then to `awaiting-review`, on the worker's fingerprint
+    unchanged; the server's own re-measurement accepted it.
+  - The suite signal reads `green`, and it is accepted. On full run 37639105813 every Linux leg is green, and the one
+    red is `test-macos` 4/4 (two rows of `ccd-docs-tree.test.ts`, a file this wave does not touch, green on Linux in
+    isolation). macOS legs gate nothing. PR #320's own required `test (server)` is green.
+  - Review run 319 opened with the programme's own title, so the programme keeps its name. It was dispatched once to
+    `ccrc-pwa-bright-hollow` (`skillState` present) with route `class=opus effort=high subagent=sonnet workflow=on`
+    and compact 40, so the reviewer can run the panel as a Workflow. The brief
+    (`.superpowers/sdd/stall-watch-settings/w1-review-brief.md`) names the held-out panel, the whole-branch pass
+    (deploy inertness, layering, never-throwing resolution, the censuses, slot 17, the three co-edit regions and the
+    worker's three departure slugs), every suite, the carried constraints and the fifteen ledgered numbers. The
+    report goes to the reviewer's `~/.cc-clips/`, per reviewer clause 7.
+  - The worker's three items for ruling wait for the review report: (a) the parked plan-mandated duplication, (b) the
+    docs saying "Settings" before wave 2 builds the section, and (c) the migration slot re-measured before merge.
 
 ## Carried constraints (reviewers get these)
 
