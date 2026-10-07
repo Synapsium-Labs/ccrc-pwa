@@ -3061,7 +3061,7 @@ if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" ]] && (( ${#id} <= 224 )); th
   esac
   if [[ -n "$_hs" ]]; then
     _hs+=",\"id\":\"$id\""
-    # `$psid` is only cleaned to [A-Za-z0-9_-] at :2767, and the drain's grammar wants a lowercase UUID.
+    # `$psid` is only cleaned to [A-Za-z0-9_-] at :2767, and the drain's grammar wants a lowercase UUID. `trig` is PostCompact's alone D-4315.
     # On Stop and PostCompact a non-UUID sid is left out and the line stands without it, never written
     # wrong. A SessionStart line exists to declare its epoch's sid, so lib.mjs SPOOL_KEYS requires one:
     # its arm above writes nothing at all without a lowercase-UUID sid, so this test is always true there.
@@ -3073,14 +3073,14 @@ if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" ]] && (( ${#id} <= 224 )); th
         _hs+=",\"reg\":\"$CT_V\""
       fi
     fi
-    case "${trig:-}" in manual|auto) _hs+=",\"trig\":\"$trig\"" ;; esac
+    [[ "$event" == PostCompact ]] && case "${trig:-}" in manual|auto) _hs+=",\"trig\":\"$trig\"" ;; esac
     _hs_g="${CCRC_SESSION_GENERATION:-}"
     [[ "$_hs_g" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && _hs+=",\"gen\":\"$_hs_g\""
     # `_hook_epoch_ms`'s parameter-expansion form, inline (that function forks
     # `date` when EPOCHREALTIME is unset). Either decimal point, since the
-    # locale formats it; a value that is not `<1-13 digits, no leading 0>[.,]<digits>`
-    # writes no `ts`, and the drain stamps the receive time instead.
-    if [[ "${EPOCHREALTIME:-}" =~ ^[1-9][0-9]{0,12}[.,][0-9]*$ ]]; then
+    # locale formats it; a value that is not `<1-12 digits, no leading 0>[.,]<digits>`
+    # writes no `ts`, and the drain stamps the receive time instead D-4315.
+    if [[ "${EPOCHREALTIME:-}" =~ ^[1-9][0-9]{0,11}[.,][0-9]*$ ]]; then
       _hs_s="${EPOCHREALTIME%%[.,]*}" _hs_f="${EPOCHREALTIME#*[.,]}000"
       _hs+=",\"ts\":${_hs_s}${_hs_f:0:3}"
     fi

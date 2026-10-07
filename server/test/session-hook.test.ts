@@ -10447,4 +10447,46 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     }
     expect(hh.counters(box)['spool_line_rejected']).toBe(1);
   });
+
+  // ── Task 36G item 1 (D-4315): the block writes only fields its event's grammar admits ──
+  it('an inherited trig in the hook environment writes no trig on Stop or SessionStart, and the drain accepts both lines (D-4315)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, trig: 'manual' });
+    run({ hook_event_name: 'SessionStart', source: 'startup', session_id: SID }, { ...SCRUB, trig: 'manual' });
+    const lines = await parsed();
+    expect(lines.map((l) => l.rec?.['ev'] ?? null), 'the drain refused a line whole').toEqual(['Stop', 'SessionStart']);
+    for (const l of lines) {
+      expect(lib.parseSpoolLine(l.raw), l.raw).toMatchObject({ ok: true });
+      expect(l.rec, l.raw).not.toHaveProperty('trig');
+    }
+  });
+
+  it('CONTROL: a PostCompact still writes its trig, from the payload and not the environment (D-4315)', async () => {
+    plantSpool();
+    run({ hook_event_name: 'PostCompact', trigger: 'auto', compact_summary: 'a summary', session_id: SID }, { ...SCRUB, trig: 'manual' });
+    expect((await parsed())[0]!.rec).toMatchObject({ ev: 'PostCompact', trig: 'auto' });
+  });
+
+  it.each([
+    ['thirteen-digit seconds, dot', '9999999999999.500'],
+    ['thirteen-digit seconds, comma', '9007199254741,000'],
+    ['thirteen-digit seconds, the smallest', '1000000000000.000'],
+  ] as const)('an EPOCHREALTIME of %s writes the line without ts, which the drain accepts (D-4315)', async (_what, value) => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    runFull({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: epochEnv(value) });
+    const [l] = await parsed();
+    expect(l!.rec, 'the drain refused the line').not.toBeNull();
+    expect(lib.parseSpoolLine(l!.raw)).toMatchObject({ ok: true });
+    expect(l!.rec).not.toHaveProperty('ts');
+  });
+
+  it('CONTROL: twelve-digit seconds, the widest admitted, write a ts that is a safe integer in ms (D-4315)', async () => {
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: epochEnv('999999999999.999') });
+    const ts = (await parsed())[0]!.rec!['ts'];
+    expect(ts).toBe(999999999999999);
+    expect(Number.isSafeInteger(ts)).toBe(true);
+  });
 });
