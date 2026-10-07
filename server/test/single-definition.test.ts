@@ -4733,3 +4733,243 @@ describe('the pane-scope sweep: its arming file has no writer in the tree', () =
       .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes('scope-sweep-live'))).map(rel)).toEqual([]);
   });
 });
+
+// CCRC HISTORY (spec 2026-10-05 §9.11 O13, O14; §10.1 Seams). APPENDED after the last describe, for the reason
+// the blocks above state: session-hook.test.ts's citation audit cites this file by line, so no import line is
+// added at the head either — the history modules are imported dynamically inside each case.
+const HISTORY_DIR = path.join(ccrcRoot, 'ccd', 'history');
+/** Every `.mjs` under a root: never a `.d.mts` (a type mirror declares types, it defines nothing), and the
+ *  `__`-prefixed mutants and node_modules skipped — the MODELS_CORPUS walk, restated because that one is scoped
+ *  to its own describe. */
+const mjsUnder = (dir: string): string[] => {
+  const out: string[] = [];
+  if (!existsSync(dir)) return out;
+  for (const e of readdirSync(dir)) {
+    if (e.startsWith('__') || e === 'node_modules') continue;
+    const p = path.join(dir, e);
+    if (statSync(p).isDirectory()) { out.push(...mjsUnder(p)); continue; }
+    if (/\.mjs$/.test(p)) out.push(p);
+  }
+  return out;
+};
+const HISTORY_MJS = mjsUnder(HISTORY_DIR);
+/** Any `.mjs` a writer could live in: ccd/ (compact-card and history), deploy/, shared/. */
+const ALL_MJS = [...new Set([...mjsUnder(path.join(ccrcRoot, 'ccd')), ...mjsUnder(path.join(ccrcRoot, 'deploy')),
+  ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
+
+describe('ccrc history: the operator switches have readers only (spec 2026-10-05 §9.11 O13)', () => {
+  // Each switch is touched and removed BY HAND (§9.7): no line of shell or .mjs may write one. `lib.mjs`'s
+  // SWITCHES is the one sanctioned definer (the stall-watch MARKERS precedent above); the hook and the shim read
+  // `history-off` with a bash test. `_uninst_purge` spells its kept set as the globs `history` and `history-*`
+  // and doctor names the cap file from `status --json`, so neither is a holder. B2 adds the skill's files to
+  // this corpus with the skill. KNOWN WIDTH: a name assembled from pieces is not seen.
+  const HOLDERS: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ['history-off', ['ccd/ccd-history-sweep', 'ccd/history/lib.mjs', 'ccd/session-hook.sh']],
+    ['history-steer-off', ['ccd/history/lib.mjs']],
+    ['history-steer-live', ['ccd/history/lib.mjs']],
+    ['history-max-gb', ['ccd/history/lib.mjs']],
+    ['steer-on', ['ccd/history/lib.mjs']],
+    ['headless-on', ['ccd/history/lib.mjs']],
+  ];
+  const CORPUS = [...new Set([...BASH, ...ALL_MJS])];
+  /** A switch is a PATH, so a line names one only as `/<name>`. The bare words are vocabulary, not files: the
+   *  exit-2 reason `history-off` (REASONS, Task 3; decideOpGate's refusal, Task 6) names the CONDITION, and
+   *  lib.mjs spells it as a reason word, never as the file. */
+  const needle = (name: string): string => `/${name}`;
+  /** A file's code lines, comment lines dropped in either language. */
+  const code = (f: string): string[] => (BASH.includes(f) ? codeLines(f) : stallCode(f).split('\n'));
+  /** A line READS a switch when it tests or reads the path. */
+  const READ = /\[\[?\s+!?\s*-[efrs]\s|\b(?:existsSync|readFileSync|statSync|lstatSync)\s*\(/;
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  /** A line WRITES the switch when a redirection, a file-changing command or a writing fs call targets it. */
+  const writes = (line: string, lang: 'bash' | 'mjs', name: string): boolean => {
+    const n = esc(name);
+    if (lang === 'mjs') {
+      return new RegExp(`\\b(?:writeFile|appendFile|rename|unlink|rm|rmdir|mkdir|copyFile|cp|symlink|link|truncate|open)(?:Sync)?\\s*\\([^;]*${n}`).test(line);
+    }
+    const l = line.replace(/\d?>\s*\/dev\/null|>&\d/g, '');
+    return new RegExp(`>{1,2}\\s*["']?[^\\s"'<>|;&]*${n}`).test(l)
+      || new RegExp(`(?:^|[\\s;&|({])(?:touch|mv|cp|ln|rm|rmdir|mkdir|install|tee|truncate)\\s[^;&|]*${n}`).test(l);
+  };
+  /** lib.mjs's SWITCHES declaration: its first line through the line that closes it. */
+  const switchesBlock = (): string[] => {
+    const lines = stallCode(path.join(HISTORY_DIR, 'lib.mjs')).split('\n');
+    const at = lines.findIndex((l) => /\bconst SWITCHES\s*=/.test(l));
+    expect(at, 'ccd/history/lib.mjs declares no SWITCHES').toBeGreaterThan(-1);
+    let end = at;
+    while (end < lines.length - 1 && !/\}\s*\)\s*;?\s*$/.test(lines[end]!)) end += 1;
+    return lines.slice(at, end + 1);
+  };
+
+  it('CONTROL: both corpora were walked, and the classifiers see a read, a write and neither', () => {
+    expect(BASH.map(rel)).toEqual(expect.arrayContaining(['ccd/ccd-history-sweep', 'ccd/session-hook.sh']));
+    expect(ALL_MJS.map(rel)).toContain('ccd/history/lib.mjs');
+    expect(READ.test('[ -e "$HOME/.ccrc/history-off" ] && exit 0')).toBe(true);
+    expect(READ.test('[[ ! -e "$HOME/.ccrc/history-off" ]] || _hs=x')).toBe(true);
+    expect(READ.test('if (existsSync(p.off)) return 0;')).toBe(true);
+    expect(writes('touch "$HOME/.ccrc/history-off"', 'bash', 'history-off')).toBe(true);
+    expect(writes(': > "$HOME/.ccrc/history-off"', 'bash', 'history-off')).toBe(true);
+    expect(writes('rm -f -- "$HOME/.ccrc/history-max-gb"', 'bash', 'history-max-gb')).toBe(true);
+    expect(writes('[ -e "$HOME/.ccrc/history-off" ] 2>/dev/null', 'bash', 'history-off')).toBe(false);
+    expect(writes('[[ -e "$HOME/.ccrc/history-off" ]] || { printf x >> "$spool"; }', 'bash', 'history-off')).toBe(false);
+    expect(writes("writeFileSync(home + '/.ccrc/history-off', '')", 'mjs', 'history-off')).toBe(true);
+    expect(writes("if (existsSync(home + '/.ccrc/history-off')) return;", 'mjs', 'history-off')).toBe(false);
+    // The reason word is not the file: REASON_ROWS' `'history-off'` names no switch path.
+    expect("'irreversible-in-pane', 'history-off', 'span-pruned',".includes(needle('history-off'))).toBe(false);
+    expect('[ -e "$HOME/.ccrc/history-off" ] && exit 0'.includes(needle('history-off'))).toBe(true);
+  });
+
+  it('SWITCHES names every switch, so the rows below compare against a real definer', () => {
+    const block = switchesBlock().join('\n');
+    for (const [name] of HOLDERS) expect(block, `SWITCHES does not name ${name}`).toContain(name);
+  });
+
+  it.each(HOLDERS)('%s: named on a code line only by its declaration and its readers %j, and never written', (name, want) => {
+    const holders = CORPUS.filter((f) => code(f).some((l) => l.includes(needle(name)))).map(rel).sort();
+    expect(holders, `${name}: a new line names it — a writer, or a reader this design does not list`).toEqual([...want].sort());
+    const block = switchesBlock();
+    for (const f of CORPUS.filter((x) => want.includes(rel(x)))) {
+      const naming = code(f).filter((l) => l.includes(needle(name)));
+      if (rel(f) === 'ccd/history/lib.mjs') {
+        expect(naming.filter((l) => !block.includes(l)), `${name}: lib.mjs names it outside SWITCHES`).toEqual([]);
+        continue;
+      }
+      const lang = BASH.includes(f) ? 'bash' : 'mjs';
+      for (const l of naming) {
+        expect(READ.test(l), `${rel(f)}: \`${l.trim()}\` names ${name} and reads nothing`).toBe(true);
+        expect(writes(l, lang, name), `${rel(f)}: \`${l.trim()}\` WRITES ${name}`).toBe(false);
+      }
+    }
+  });
+});
+describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound to its uses (spec 2026-10-05 §9.11 O14)', () => {
+  const LIB = path.join(HISTORY_DIR, 'lib.mjs');
+  const VOCABS = ['NODE_KINDS', 'PARSE_STATUS', 'PROVENANCE', 'SPOOL_EVENTS', 'EPOCH_CAUSES', 'REFUSALS', 'ERROR_CODES',
+    'COVERAGE', 'SCOPE_SOURCES', 'VARIANT_CAUSES', 'BACKENDS', 'HARNESS_TABLE', 'HARNESSES', 'JOURNAL_KINDS',
+    'JOURNAL_VERDICTS', 'BIND_KINDS', 'MIGRATION_VERDICTS', 'HEALTH_WORDS', 'REASONS', 'WRITING_FORMS', 'STORE_FILES',
+    'PASS_WORDS', 'CARD_PREFIX', 'SWITCHES', 'EXIT'] as const;
+  /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
+   *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
+  const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
+  const declares = (name: string): RegExp => new RegExp(`(?:^|[\\s;])(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`);
+  /** The `"ev":"…"` literals a bash file writes, and the `ev: '…'` keys a `.mjs` file builds. */
+  const EV_BASH = /"ev":"([A-Za-z]+)"/g;
+  const EV_MJS = /\bev\s*:\s*['"`]([A-Za-z]+)['"`]/g;
+  /** SPOOL_EVENTS members whose emitter ships in a later PR. A member found emitted while listed here reds, so
+   *  the PR that adds the emitter removes its line. */
+  const PENDING_EMITTERS: Record<string, string> = { recall: 'B2 (cli.mjs read verbs)', steer: 'W3 (the steering hook)' };
+  type Lib = Record<string, unknown>;
+  const lib = async (): Promise<Lib> => (await import('../../ccd/history/lib.mjs')) as unknown as Lib;
+
+  it('CONTROL: the corpus holds the four history modules, and the declaration pattern sees a declaration and nothing else', () => {
+    expect(HISTORY_MJS.map(rel).sort()).toEqual(expect.arrayContaining(
+      ['ccd/history/cli.mjs', 'ccd/history/lib.mjs', 'ccd/history/store.mjs', 'ccd/history/sweep.mjs']));
+    expect(declares('BACKENDS').test("export const BACKENDS = Object.freeze(['anthropic', 'other', 'unknown']);")).toBe(true);
+    expect(declares('BACKENDS').test('const BACKENDS = x;')).toBe(true);
+    expect(declares('BACKENDS').test('if (BACKENDS.includes(b)) return b;')).toBe(false);
+    expect(declares('BACKENDS').test("const { BACKENDS } = await import('./lib.mjs');")).toBe(false);
+    expect(declares('EXIT').test('export const EXIT_CODES = 1;')).toBe(false);
+  });
+
+  it.each(VOCABS)('%s is declared in ccd/history/lib.mjs and in no other .mjs, exported, and frozen', async (name) => {
+    expect(DECL_CORPUS.filter((f) => stallCode(f).split('\n').some((l) => declares(name).test(l))).map(rel).sort(),
+      `${name}: a second declaration`).toEqual(['ccd/history/lib.mjs']);
+    const v = (await lib())[name];
+    expect(v, `${name} is not exported`).toBeDefined();
+    if (typeof v === 'object' && v !== null) expect(Object.isFrozen(v), `${name} is not frozen`).toBe(true);
+  });
+
+  it('REFUSALS is REASONS\' exit-2 keys and HARNESSES is HARNESS_TABLE\'s keys, each derived, never declared apart', async () => {
+    const l = await lib();
+    const reasons = l['REASONS'] as Record<string, number>;
+    const exits = Object.values(l['EXIT'] as Record<string, number>);
+    for (const [w, x] of Object.entries(reasons)) expect(exits, `REASONS.${w} = ${x} is not an EXIT value`).toContain(x);
+    expect([...(l['REFUSALS'] as readonly string[])].sort())
+      .toEqual(Object.keys(reasons).filter((k) => reasons[k] === 2).sort());
+    expect([...(l['HARNESSES'] as readonly string[])]).toEqual(Object.keys(l['HARNESS_TABLE'] as object));
+    const src = stallCode(LIB).split('\n');
+    expect(src.find((x) => declares('HARNESSES').test(x)), 'HARNESSES is spelled, not derived').toContain('Object.keys(HARNESS_TABLE)');
+    expect(src.find((x) => declares('REFUSALS').test(x)), 'REFUSALS is spelled, not derived').toContain('Object.keys(REASONS)');
+  });
+
+  it('every "ev" the hook writes is a SPOOL_EVENTS member, and every member has an emitter or is named pending', async () => {
+    const members = [...((await lib())['SPOOL_EVENTS'] as readonly string[])];
+    const hook = codeLines(path.join(ccrcRoot, 'ccd', 'session-hook.sh')).join('\n');
+    const fromHook = [...hook.matchAll(EV_BASH)].map((m) => m[1]!);
+    const fromMjs = HISTORY_MJS.flatMap((f) => [...stallCode(f).matchAll(EV_MJS)].map((m) => m[1]!));
+    expect(fromHook.length, 'the hook scan matched nothing — the spool block is gone or its spelling moved').toBeGreaterThan(0);
+    for (const e of [...fromHook, ...fromMjs]) expect(members, `"${e}" is written but is not a SPOOL_EVENTS member`).toContain(e);
+    const emitted = new Set([...fromHook, ...fromMjs]);
+    for (const k of Object.keys(PENDING_EMITTERS)) expect(members, `PENDING_EMITTERS names ${k}, not a member`).toContain(k);
+    for (const m of members) {
+      if (m in PENDING_EMITTERS) expect(emitted.has(m), `${m} has an emitter now: remove it from PENDING_EMITTERS`).toBe(false);
+      else expect(emitted.has(m), `${m} is a SPOOL_EVENTS member with no emitter`).toBe(true);
+    }
+  });
+
+  it('every kind the sweep journals is a JOURNAL_KINDS member', async () => {
+    const members = [...((await lib())['JOURNAL_KINDS'] as readonly string[])];
+    const CALL = /\bjournalRecord\(\s*['"`]([a-z-]+)['"`]/g;
+    const kinds = HISTORY_MJS.flatMap((f) => [...stallCode(f).matchAll(CALL)].map((m) => [rel(f), m[1]!] as const));
+    expect(kinds.length, 'no journalRecord call names its kind as a literal — the scan saw nothing').toBeGreaterThan(0);
+    expect(kinds.filter(([, k]) => !members.includes(k)).map(([f, k]) => `${f}: ${k}`)).toEqual([]);
+  });
+
+  it('every word _check_history spells is a HEALTH_WORDS member, every class is pass|warn|fail, and every remedy is keyed by a word', async () => {
+    const l = await lib();
+    const words = Object.keys(l['HEALTH_WORDS'] as object);
+    for (const c of Object.values(l['HEALTH_WORDS'] as Record<string, string>)) expect(['pass', 'warn', 'fail']).toContain(c);
+    for (const k of Object.keys(l['HEALTH_REMEDIES'] as object)) expect(words, `HEALTH_REMEDIES keys ${k}`).toContain(k);
+    const lines = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'), 'utf8').split('\n');
+    const at = lines.findIndex((x) => /^_check_history\(\) \{$/.test(x));
+    expect(at, 'ccd/ccrc-doctor-checks has no _check_history').toBeGreaterThan(-1);
+    const end = lines.findIndex((x, i) => i > at && x === '}');
+    const body = lines.slice(at, end).filter((x) => !x.trim().startsWith('#')).join('\n');
+    const spelled = [...body.matchAll(/_dr_(?:pass|warn|fail)\s+history\s+"([a-z][a-z0-9-]*):/g)].map((m) => m[1]!);
+    expect(spelled.length, 'the scan matched no word in _check_history').toBeGreaterThan(0);
+    expect(spelled.filter((w) => !words.includes(w))).toEqual([]);
+  });
+
+  it('the literal .ccrc/history/db is spelled in ccd/history/*.mjs once, as STORE_DB_REL', async () => {
+    expect((await lib())['STORE_DB_REL']).toBe('.ccrc/history/db');
+    expect(HISTORY_MJS.filter((f) => stallCode(f).includes('.ccrc/history/db')).map(rel)).toEqual(['ccd/history/lib.mjs']);
+    const lines = stallCode(LIB).split('\n').filter((x) => x.includes('.ccrc/history/db'));
+    expect(lines, 'lib.mjs spells the store directory more than once').toHaveLength(1);
+    expect(lines[0]).toMatch(/\bSTORE_DB_REL\s*=\s*['"]\.ccrc\/history\/db['"]/);
+  });
+
+  it('COVERAGE is this-box, and the word is a literal in lib.mjs alone; CARD_PREFIX is declared (its hook half lands in B3)', async () => {
+    const l = await lib();
+    expect([...(l['COVERAGE'] as readonly string[])]).toEqual(['this-box']);
+    expect(HISTORY_MJS.filter((f) => /['"`]this-box['"`]/.test(stallCode(f))).map(rel)).toEqual(['ccd/history/lib.mjs']);
+    expect(l['CARD_PREFIX']).toBe('History: ');
+  });
+
+  it('NODE_KINDS is the schema-v1 CHECK list in store.mjs, member for member', async () => {
+    const kinds = [...((await lib())['NODE_KINDS'] as readonly string[])];
+    const { MIGRATIONS } = await import('../../ccd/history/store.mjs');
+    const m = /\bkind IN \(([^)]*)\)/.exec(MIGRATIONS[0] ?? '');
+    expect(m, 'schema v1 declares no nodes.kind CHECK').not.toBeNull();
+    expect(m![1]!.split(',').map((s) => s.trim().replace(/^'|'$/g, '')).sort()).toEqual(kinds.sort());
+  });
+});
+describe('ccrc history: process.env is read by name, from a four-name allow-list (spec 2026-10-05 §10.1 Seams)', () => {
+  // D-4247: no env var arms a seam in the shipped modules. A test's faults arrive through
+  // a NODE_OPTIONS preload it writes itself, and `process.env` is read only for these four names.
+  const ALLOWED = ['CCRC_SESSION_GENERATION', 'CLAUDECODE', 'HOME', 'TMUX_PANE'];
+  const READS = /process\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[\s*(['"])([A-Za-z_][A-Za-z0-9_]*)\2\s*\])?/g;
+  const envReads = (code: string): string[] => [...code.matchAll(READS)].map((m) => m[1] ?? m[3] ?? '<not by name>');
+
+  it('CONTROL: the reader names dotted and bracketed reads, and flags a whole-env use and a computed name', () => {
+    expect(envReads("const h = process.env.HOME; const g = process.env['CCRC_SESSION_GENERATION'];"))
+      .toEqual(['HOME', 'CCRC_SESSION_GENERATION']);
+    expect(envReads('spawnSync(bin, args, { env: process.env });')).toEqual(['<not by name>']);
+    expect(envReads('const v = process.env[name];')).toEqual(['<not by name>']);
+  });
+
+  it('every process.env read in ccd/history/*.mjs names an allowed variable', () => {
+    const seen = HISTORY_MJS.flatMap((f) => envReads(stallCode(f)).map((n) => [rel(f), n] as const));
+    expect(seen.length, 'no history module reads process.env at all — the scan saw nothing').toBeGreaterThan(0);
+    expect(seen.filter(([, n]) => !ALLOWED.includes(n)).map(([f, n]) => `${f}: ${n}`)).toEqual([]);
+  });
+});
