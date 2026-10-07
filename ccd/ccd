@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=93667a62fb73458f730f1aa149533ab31ae32c0443aaa40e4b0ce882312bb0e8
+# ccrc:generated 1 sha256=25b09a286c823742c7b90c7e4817f2144ec1b9eced275fee18f5217b8d9ac9c3
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29438,7 +29438,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     bstate=$(_ws_reclaim_branch_state "$main" "$branch")
     if [[ "$bstate" != absent && "$bstate" != "present "* ]]; then
       _ws_reclaim_fail "$id" "$lctx" branch-unmeasured \
-        "whether $branch exists in $main could not be read — a branch is never taken for gone over a read that did not run, so it was kept and nothing further was deleted"
+        "whether $branch exists in $main could not be read — a branch is never taken for gone over a read that did not run, so it was not deleted and nothing further was deleted"
       return 1
     fi
     if [[ "$bstate" == "present "* ]]; then
@@ -29690,7 +29690,7 @@ _ws_reclaim_audit_contained() {   # cmd_ws_audit's args -> `ws-audit --reclaim` 
 
 _ws_reclaim_locked() {   # token childof id defer surface actor reason — everything the shared lock serialises
   local token="$1" childof="$2" id="$3" defer="$4" surface="$5" actor="$6" reason="$7"
-  local phase="" resumed="" declared="" lctx project workdir main clips pinned=0 start=children
+  local phase="" resumed="" declared="" lctx project workdir main clips pinned=0 start=children lbstate=""
   [[ "$surface" == none ]] || declared="$surface"
   _ws_reclaim_fork "$id" "$defer" "$childof"
   phase="$RECLAIM_RESUME_PHASE"; resumed="$phase"
@@ -29729,6 +29729,7 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
     # its own pin — the tip, the branch's stashes, git's recorded HEAD — a
     # tombstone saying `worktree: absent`, and a tail that starts at the
     # branch, because there is no tree for the children and worktree steps.
+    lbstate="$RECLAIM_BRANCHSTATE"   # the in-lock recompute's read, the one the token was checked against
     if [[ "$RECLAIM_WORKTREE" == absent ]]; then
       _ws_reclaim_pin_absent "$id" "$main" "$REAP_BRANCH" "$RECLAIM_HEAD" "$workdir" && pinned=1
       start=branch
@@ -29737,6 +29738,23 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
     fi
     if (( ! pinned )); then
       _ws_reclaim_fail "$id" "$lctx" pin-failed "$RECLAIM_PIN_WHY"
+      return 1
+    fi
+    # THE CONSENT BINDS THE BRANCH IN BOTH DIRECTIONS (spec §5.5). The token
+    # was checked against the recompute above, and the pin read the branch
+    # again, itself (`_ws_reclaim_tip_read`). Another actor may delete or make
+    # the branch between the two reads: the pin would then act on what IT read,
+    # not on what the token consented to, and a tip that stood at the
+    # recompute but was gone at the pin is kept by nothing but HEAD's reflog.
+    # So the two reads must agree, or the act stops HERE, before the tombstone
+    # and the breadcrumb. The pin only kept: a WIP commit moves no ref, and an
+    # attic pin deletes nothing. The unit and the pane are untouched, and the
+    # next audit mints over what stands. A `failed` line, as `pin-failed` is
+    # at this same point: the intent is already journaled, and the verdict
+    # point's one refusal emit is behind it.
+    if [[ "$RECLAIM_BRANCHSTATE" != "$lbstate" ]]; then
+      _ws_reclaim_fail "$id" "$lctx" state-changed \
+        "$REAP_BRANCH read $lbstate when the token was checked inside the lock, but $RECLAIM_BRANCHSTATE when the pin read it again — it changed in between, so nothing was destroyed; the next audit measures it again"
       return 1
     fi
     # THE RECORD MUST BE THIS ROW'S. `_ws_tombstone` cannot say whether its

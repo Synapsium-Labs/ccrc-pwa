@@ -18,7 +18,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import { CHILD_BRANCH, CHILD_ID, childReclaimVerb, evalOf, makeChild, type Child } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
@@ -38,6 +40,13 @@ const { tombOf, atticShas, unsupervised, refusedWith, interrupted, resumeToken, 
 
 /** Root reads a mode-000 directory, so the unreadable cases cannot be built as root. */
 const ROOT = process.getuid?.() === 0;
+/** This runner's own git, MEASURED: every case that needs a real `git show-ref --exists` (git 2.43
+ *  and newer) runs only where git has it, so an older runner skips them rather than reds. The cases
+ *  that shim git to look older and need no real `--exists` run on every git. */
+const GIT_VERSION = /git version (\d+)\.(\d+)/.exec(
+  execFileSync('git', ['--version'], { encoding: 'utf8', env: inheritedEnv() }));
+const MODERN_GIT = GIT_VERSION !== null
+  && (Number(GIT_VERSION[1]) > 2 || (Number(GIT_VERSION[1]) === 2 && Number(GIT_VERSION[2]) >= 43));
 const ATTIC_REFLOGS = `refs/ccrc/attic/${CHILD_ID}/reflogs`;
 /** `_WS_BRANCH_WHY`, the ladder's and the pins' one detail for a read that did not run. */
 const READ_FAILED = new RegExp(`whether refs/heads/${CHILD_BRANCH} exists in .+ could not be read`);
@@ -122,12 +131,42 @@ function oldGit(): string {
   return 'PATH="$HOME/oldgit:$PATH";';
 }
 
+/** A `git` first on PATH that LIES exactly where `_ws_reclaim_branch_state`'s two shape guards stand:
+ *  `show-ref --exists` of an EMPTY branch name answers 2 (absent), and `rev-parse … ^{commit}` exits 0
+ *  printing what `$HOME/revparse-says` holds — a short sha, or nothing. Every other call reaches the
+ *  real binary. Built like `oldGit()`. */
+function lyingGit(): string {
+  const real = h.sh('command -v git');
+  const dir = path.join(h.home, 'lyinggit');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'git'), [
+    '#!/bin/sh',
+    'case " $* " in',
+    '  *" show-ref --exists refs/heads/ "*) exit 2 ;;',
+    '  *" rev-parse "*"^{commit} "*) cat "$HOME/revparse-says" 2>/dev/null; exit 0 ;;',
+    'esac',
+    `exec "${real}" "$@"`,
+    '',
+  ].join('\n'), { mode: 0o755 });
+  return 'PATH="$HOME/lyinggit:$PATH";';
+}
+
+/** Another actor moves the branch INSIDE THE WINDOW between the verb's in-lock recompute and its fresh
+ *  pin: the SECOND `_ws_reclaim_branch_state` of a process (the pin's; the recompute reads first) runs
+ *  `act` before it reads, and every read answers for real. The count lives in the fixture HOME, because
+ *  every read runs in `$( … )`. */
+const IN_THE_WINDOW = (act: string): string => [
+  `eval "$(declare -f _ws_reclaim_branch_state | sed '1s/^_ws_reclaim_branch_state /_ws_real_branch_state /')";`,
+  `_ws_reclaim_branch_state() { local n; n=$(cat "$HOME/bs-reads" 2>/dev/null || echo 0); echo $(( n + 1 )) > "$HOME/bs-reads";`,
+  ` if (( n == 1 )); then ${act}; fi; _ws_real_branch_state "$@"; };`,
+].join(' ');
+
 /** `_ws_reclaim_branch_state` as it would read with NO symbolic-branch guard: `present` whenever rev-parse
  *  peels the name. The guard answers first at every real read, so only this stub lets the tail's step-5 CAS
  *  meet a symbolic branch, and so pins Task 3's `--no-deref` (defence in depth) on its own. */
 const PRE_GUARD_READ = `_ws_reclaim_branch_state() { local s; s=$(git -C "$1" rev-parse --verify --quiet "refs/heads/$2^{commit}" 2>/dev/null) && printf 'present %s\\n' "$s" || printf 'unmeasured\\n'; };`;
 
-describe('_ws_reclaim_branch_state reads three ways (spec §5.5)', () => {
+describe.skipIf(!MODERN_GIT)('_ws_reclaim_branch_state reads three ways (spec §5.5)', () => {
   it('answers present <sha>, absent, and unmeasured outside a repository — rc 0 each time', () => {
     const c = makeChild(h);
     expect(stateOf(c.main)).toBe(`present ${c.tip}|0`);
@@ -170,6 +209,24 @@ describe('_ws_reclaim_branch_state reads three ways (spec §5.5)', () => {
     expect(stateOf(c.main, pre)).toBe(`present ${c.tip}|0`);
   }, 60_000);
 
+  it('an empty name is never absent, and a sha that is not 40-hex is never present — even when git says so', () => {
+    const c = makeChild(h);
+    const pre = lyingGit();
+    const says = path.join(h.home, 'revparse-says');
+    // The CONTROLS: the shim lies, at both guards. The three reads are SOFT, so a guard dropped reds
+    // every read it covers, not only the first.
+    expect(h.sh(`${pre} git -C "${c.main}" show-ref --exists refs/heads/ >/dev/null 2>&1; printf '%s' "$?"`),
+      'the CONTROL: the shim answers absent for an empty name').toBe('2');
+    fs.writeFileSync(says, 'abc\n');
+    expect(h.sh(`${pre} git -C "${c.main}" rev-parse --verify --quiet "refs/heads/${CHILD_BRANCH}^{commit}"`),
+      'the CONTROL: the shim peels the branch to a short sha').toBe('abc');
+    expect.soft(h.sh(`${pre} s=$(_ws_reclaim_branch_state "${c.main}" ""); printf '%s|%s' "$s" "$?"`),
+      'an empty branch name is never read as absent').toBe('unmeasured|0');
+    expect.soft(stateOf(c.main, pre), 'a short sha is never read as present').toBe('unmeasured|0');
+    fs.writeFileSync(says, '');
+    expect.soft(stateOf(c.main, pre), 'an empty sha is never read as present').toBe('unmeasured|0');
+  }, 60_000);
+
   it('a SYMBOLIC registry branch is unmeasured, never present: update-ref -d would delete the branch it names', () => {
     const c = makeChild(h);
     goneBranch(c);
@@ -196,7 +253,7 @@ describe('_ws_reclaim_branch_state reads three ways (spec §5.5)', () => {
   }, 90_000);
 });
 
-describe('the ladder, present arm', () => {
+describe.skipIf(!MODERN_GIT)('the ladder, present arm', () => {
   it('present arm: absence mints tip= and branchState=absent; a standing branch its sha and branchState=present', () => {
     const c = makeChild(h);
     h.git(c.wt, 'checkout', '-q', '--detach');
@@ -235,7 +292,7 @@ describe('the ladder, present arm', () => {
   }
 });
 
-describe('the ladder, vanished arm (spec §5.5)', () => {
+describe.skipIf(!MODERN_GIT)('the ladder, vanished arm (spec §5.5)', () => {
   it('vanished arm: absence mints branchState=absent, and the verb reclaims from what is left', () => {
     const c = makeChild(h);
     goneBranch(c);
@@ -282,7 +339,7 @@ describe('the ladder, vanished arm (spec §5.5)', () => {
   }
 });
 
-describe('the pin and the tail', () => {
+describe.skipIf(!MODERN_GIT)('the pin and the tail', () => {
   it('the live expoAI-assistant-calm-mesa shape reclaims, HEAD and every reflog commit kept', () => {
     const c = makeChild(h);
     // The work landed on main: the live HEAD and every reflog commit are on origin/main.
@@ -474,6 +531,55 @@ describe('the pin and the tail', () => {
     expect(unsupervised(), 'the unit was not touched').toEqual([]);
   }, 90_000);
 
+  it('a token minted over absence is refused once the branch reappears: state-changed', () => {
+    const c = makeChild(h);
+    goneBranch(c);
+    const token = evalOf(h).token;
+    h.git(c.main, 'branch', CHILD_BRANCH, c.tip);
+    expect(refusedWith(childReclaimVerb(h, token))).toBe('state-changed');
+    expect(fs.existsSync(c.wt), 'the tree stands').toBe(true);
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch stands').toBe(c.tip);
+  }, 90_000);
+
+  it('a branch deleted between the in-lock recompute and the pin stops the act: state-changed, nothing destroyed', () => {
+    const c = makeChild(h);
+    h.git(c.wt, 'checkout', '-q', '--detach');      // so the pin meets no HEAD symbolic to the branch
+    const token = evalOf(h).token;                     // minted over branchState=present, tip=c.tip
+    const r = childReclaimVerb(h, token, { pre: IN_THE_WINDOW(`git -C "$1" update-ref -d "refs/heads/$2" >/dev/null 2>&1`) });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('state-changed');
+    expect(fs.readFileSync(path.join(h.home, 'bs-reads'), 'utf8').trim(), 'the recompute read, then the pin, and nothing after').toBe('2');
+    expect(o.detail).toMatch(new RegExp(`${CHILD_BRANCH} read present when the token was checked inside the lock, but absent when the pin read it again`));
+    failedPairAgrees(r);
+    expect(eventsOf(h.home, 'reclaim').map((e) => e['outcome']), 'one act: its intent, then its failure').toEqual(['intent', 'failed']);
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the CONTROL: the other actor did delete the branch').toBe('');
+    expect(fs.existsSync(c.wt), 'the tree stands').toBe(true);
+    expect(h.reg(CHILD_ID, 'uuid'), 'the row stands').not.toBeNull();
+    expect(h.reg(CHILD_ID, 'reaping'), 'no breadcrumb').toBeNull();
+    expect(unsupervised(), 'the unit was not touched').toEqual([]);
+  }, 90_000);
+
+  it('a branch made between the in-lock recompute and the pin stops the act too: the consent binds both ways', () => {
+    const c = makeChild(h);
+    goneBranch(c);
+    const token = evalOf(h).token;                     // minted over branchState=absent
+    const r = childReclaimVerb(h, token, { pre: IN_THE_WINDOW(`git -C "$1" update-ref "refs/heads/$2" ${c.tip} >/dev/null 2>&1`) });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('state-changed');
+    expect(fs.readFileSync(path.join(h.home, 'bs-reads'), 'utf8').trim(), 'the recompute read, then the pin, and nothing after').toBe('2');
+    expect(o.detail).toMatch(new RegExp(`${CHILD_BRANCH} read absent when the token was checked inside the lock, but present when the pin read it again`));
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch made in the window stands').toBe(c.tip);
+    expect(fs.existsSync(c.wt), 'the tree stands').toBe(true);
+    expect(h.reg(CHILD_ID, 'uuid'), 'the row stands').not.toBeNull();
+    expect(h.reg(CHILD_ID, 'reaping'), 'no breadcrumb').toBeNull();
+    expect(unsupervised(), 'the unit was not touched').toEqual([]);
+  }, 90_000);
+});
+
+// Shimmed to look older than 2.43, and needing no real `--exists`: runs on every git.
+describe('a git older than 2.43, shimmed', () => {
   it('a git older than 2.43 reclaims a standing branch exactly as today (the positive fallback)', () => {
     const c = makeChild(h);
     const pre = oldGit();
@@ -485,15 +591,5 @@ describe('the pin and the tail', () => {
     expect(atticShas(c), 'the tip is pinned').toContain(c.tip);
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch was deleted at its tip').toBe('');
     expect(h.reg(CHILD_ID, 'uuid'), 'the row was purged').toBeNull();
-  }, 90_000);
-
-  it('a token minted over absence is refused once the branch reappears: state-changed', () => {
-    const c = makeChild(h);
-    goneBranch(c);
-    const token = evalOf(h).token;
-    h.git(c.main, 'branch', CHILD_BRANCH, c.tip);
-    expect(refusedWith(childReclaimVerb(h, token))).toBe('state-changed');
-    expect(fs.existsSync(c.wt), 'the tree stands').toBe(true);
-    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch stands').toBe(c.tip);
   }, 90_000);
 });
