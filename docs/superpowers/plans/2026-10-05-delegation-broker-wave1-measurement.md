@@ -3154,9 +3154,15 @@ task A's review).
 | 8 | F13 | a valid symlink to a file is followed, as git follows it | "follows a loose ref that is a VALID symlink, as git does …" (a symlink refused: 1 red, written at `0d38a6549`) |
 
 **Wave 2 close-out (review 304).** Every guard arm this wave added or touched, each measured red by deleting that arm
-alone in a scratch snapshot (`git archive` of the commit with `server/node_modules` linked), over the rows whose names
-carry `(review 304 F7)` or `(review 304 F12 …)` (`vitest run test/delegation-rig.test.ts -t 'F7|F12'`); each count is dated
-by the commit it was measured at, `e56a9e0ef`, and counts rows red, not assertions. Later close-out tasks append their lines here.
+alone in a scratch snapshot (`git archive` of the commit with `server/node_modules` linked); each count counts rows red,
+not assertions. Each line is dated by the commit it names and counted over the rows its own task chose, so no one sha or
+filter governs the table: task A's lines (`A`, the rig scripts) are dated `e56a9e0ef` and count the rows whose names carry
+`(review 304 F7)` or `(review 304 F12 …)` (`vitest run test/delegation-rig.test.ts -t 'F7|F12'`); task B's lines (`5`, the
+sanitiser) are dated `c51428ae8` and `b93dc9894` and count over `test/delegation-rig.test.ts`, whose rows include ones
+outside that filter, among them the `--scan` file-index row, the build-matrix corpus row and the N1, I3b and m1 rows; task
+C's lines (`8`, the census) are dated `b0b0c78db` and count over `test/delegation-census.test.ts`. The Task column reads `A`
+for task A's lines and, for tasks B and C, the wave-1 task whose code the arm lives in (5 the sanitiser, 8 the census).
+Later close-out tasks append their lines here.
 
 | Task | Finding | Guard | Row |
 |---|---|---|---|
@@ -3191,7 +3197,7 @@ by the commit it was measured at, `e56a9e0ef`, and counts rows red, not assertio
 | A | F12 | every path resolved from the script's own location (`HERE`, `TREE`, `FIX`, `SCEN`) | "resolves every path from its own location …" and every row over the scratch tree (`HERE` from the caller's directory: 24 red; `TREE` one level short: 8; `FIX` another directory: 9; `SCEN` another directory: 8), `e56a9e0ef` |
 | A | F12 | `--dry-run` needs no tmux, node or mock | "--dry-run needs no tmux, no node and no mock …" (a `tmux` call inserted before the steps: 1 red; an INSERTION, since there is no arm to delete), `e56a9e0ef` |
 | A | F12 | the steps run over the REAL sanitiser and matrix builder | "end to end over the REAL sanitiser and matrix builder …" (it reds, among the arms above, when any of the five steps is deleted, `--write` or `--scan` is dropped, `mktemp` loses `-d`, `<raw>` is not replaced, a path constant is wrong, the `--missing` filter is inverted or the `versions` verb is gone: 16 of the mutations measured, and it is the row that would red if the real tools' argument shapes changed), `e56a9e0ef` |
-| A | F7, F12 | arms with no row | `CUR=0` before the first step (the mutant `CUR=1`: 0 red, equivalent: nothing can fail between the trap and the first step); `pick_versions`'s `VERS=()` reset and `cmd_all`'s `${VERS[@]+"${VERS[@]}"}` (equivalent on bash 4.4 and later, and one call per process); `launch_cmd`'s own `-x` check, untouched (it guards `relaunch`, a step of a live pane, which no hermetic row can reach). Measured `e56a9e0ef` |
+| A | F7, F12 | arms with no row | `CUR=0` before the first step (the mutant `CUR=1`: 0 red, equivalent: nothing can fail between the trap and the first step); `pick_versions`'s `VERS=()` reset and `cmd_all`'s `${VERS[@]+"${VERS[@]}"}` (equivalent on bash 4.4 and later, and one call per process); `launch_cmd`'s own `-x` check, untouched (it guards `relaunch`, a step of a live pane, which no hermetic row can reach); `on_exit`'s `CUR > 0` (`recapture.sh:75`; dropped: 0 red, equivalent, the same reason as `CUR=1`: nothing can fail between the trap and the first step, so no failure meets a `CUR` of 0); and three path-quoting arms, which work and have no row because no row runs over a path with a space in it: the `%q` quoting of the rig path in step 2 (`:64`, `$(printf '%q' "$RIG")` replaced by `$RIG`: 0 red), the `%q` quoting of the sanitiser and fixtures paths in step 3 (`:66`, unquoted: 0 red; steps 4 and 5, `:68` and `:70`, quote the same way and were not mutated apart from it) and the `"$RAW"` quoting in the `<raw>` substitution (`:84`, `rawref='$RAW'`: 0 red). Measured `e56a9e0ef`, except `CUR > 0` and the three quoting arms, which task A's review measured at `ccf0167b9` (its rig scripts are `e56a9e0ef`'s). That review also ran the 25 real-run, refusal and end-to-end rows over a scratch tree and a `TMPDIR` whose names carry a space: all 25 passed, and only the five `--dry-run` rows failed, whose expected text is not escaped |
 | 5 | F1 | a `..` stays caught only at the string's start or right after a `/` (the known limit: `DOTDOT` is not widened) | "a `..` that is not at the start of the string or right after a `/` is not scanned (declared limit, not a guarantee) … (review 304 F1)" (`DOTDOT` widened to `/(^\|[^A-Za-z0-9._~-])\.\.(\/\|$)/`: 3 red: that row, "--scan names a file by its place in the code-unit-sorted list of its directory …" and the build-matrix row "the committed corpus covers every scenario on at least one version, and carries no residue"), `c51428ae8` |
 | 5 | F1 | the committed corpus holds the ` ../raw-wt` spelling the header names | the same F1 row, its last assertion (every ` ../raw-wt` in the corpus respelled ` /rig/raw-wt`: 1 red, that row), `c51428ae8` |
 | 5 | F1 | a `..` at the start of the string or after a `/` is residue (`if (DOTDOT.test(s)) return true`) | the retitled "fails closed on a `..` path segment at the string's start or right after a `/`, however the path before it reads (review 304 F1)" and the F1 limit row's two controls, `../srv/acme` and `cd ../../srv/acme` (the check deleted: 4 red: those two rows, "scans the decoded spelling of an escaped string …" and "decodes every `%XX`, in either case …"), `c51428ae8` |
@@ -3438,7 +3444,8 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
     escapes" above, and "every non-loopback URL is refused", did not hold of a percent-escaped spelling. Now EVERY
     `%XX` (two hex digits, either case) is decoded, after `\uXXXX` and before `\/`; a `%` not followed by two hex
     digits is left as it is, and nothing in the decode can throw. The corpus holds no percent escape (0 of 99 files
-    then, 0 of 127 now), so it was a guard gap, not a leak. Within the known limits below, "every non-loopback URL
+    then, 0 of 127 before `3cad0d2cd`, 0 of 141 at `3cad0d2cd`: counted over the `*.json` files, none holds a `%` followed
+    by two hex digits), so it was a guard gap, not a leak. Within the known limits below, "every non-loopback URL
     is refused" now holds of a percent-escaped spelling too.
   - **The sanitiser scans the committed corpus itself (F9).** `node sanitize.mjs --scan <fixtures-dir>` runs the same
     scan (the same `residue()` over every string value and every key, the same pointers) over every `*.json` in the
@@ -3514,7 +3521,9 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
     first segment is `rig`, `usr` or `bin`) holds of a path whose first segment starts inside the class. Both header sentences are corrected, and the limit has its own header bullet. "an absolute
     path whose first segment starts outside `[A-Za-z0-9._-]` is not scanned (declared limit, not a guarantee) …
     (review 304 F4)" passes the eight probes and refuses the control and those five. The corpus holds none of these
-    shapes (0 in 127 files).
+    shapes (0 in 127 files before `3cad0d2cd` added 2.1.292's 14; 0 in 141 files at `3cad0d2cd`, counted over all
+    29,254 strings and 34,120 keys of the `*.json` files: a `/` that `ABS`'s lookbehind lets start a match and that is
+    followed by a character outside its segment class).
   - **F5: `--scan ''` is a usage error.** It passed the argument check, reached `readdirSync('')`, printed
     `sanitize: internal error (no detail printed)` and exited 1, so a usage error and an I/O fault gave one answer. An
     empty directory argument now prints the usage text and exits 2, as `--scan` with no argument and main mode's empty
@@ -3781,7 +3790,9 @@ Fix round 2 (review 296; 4066–4067, the last two of fix round 1's block):
   after the answered dialog, went from 5 s to 15 s (`fc2dd5ee9`), so that the stop of the background task, the
   parent's exit and its SessionEnd hook complete before the run is collected.
 
-Wave 2 close-out (run 306; the block 4364–4373, issued 2026-10-07):
+Wave 2 close-out (run 306; the block 4364–4373, issued 2026-10-07). Text written before 2026-10-07 counts the observe
+stage as wave 2; since the 2026-10-07 renumbering (#313) it is wave 3, and "wave 2" in this group and in the "Wave 2
+close-out" sub-table means this close-out (run 306); the old text stays a dated snapshot:
 
 - **D-4364** — `compaction-is-unmeasured` (review 304 F2): departs from spec §8.1's Q5, "how a session's Claude session
   id changes across `/clear`, compaction, resume and account swaps"
