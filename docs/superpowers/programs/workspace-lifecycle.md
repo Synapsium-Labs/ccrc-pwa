@@ -21,7 +21,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
 | 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | #286 | merged 2026-10-06 (`77c11245`) after review 288; run 245 closed; deploy AGENT-FIRST via ccrc's updater; plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
-| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | run 290 open (planned; the run's wave 4 of 5), block 4114–4125; plan #308 (`67657ef2`); DISPATCHED 2026-10-06 22:27 to `ccrc-pwa-calm-basin`; FIRST commit: review 288's residue; the lane ships SHADOWED |
+| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | run 290 open (planned; the run's wave 4 of 5), block 4114–4125; plan #308 (`67657ef2`); DISPATCHED 2026-10-06 22:27 to `ccrc-pwa-calm-basin`; PR #312 at `3990aaad` (wave-done 3794); review run 313 → `ccrc-pwa-brisk-basin`; the lane ships SHADOWED |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan (the run's wave 5 of 5) |
 
 ## Decisions & deviations
@@ -614,6 +614,31 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   present; route Opus · high, Sonnet subagents, workflow off, compact 40; twelve items, one per plan task).
   - **The workspace branch** is at origin/main `67657ef2`, with nothing ahead, and it contains #308.
   - **The caps at dispatch:** 23 of 24 daily and 6 of 7 concurrent.
+- **2026-10-07 05:02 — wave 3b done: PR #312 at `3990aaad`** (wave-done 3794, `ccrc-pwa-calm-basin`; 17 own commits plus two
+  merges of main, afbb7767d (#299) and 359f76030 (#248, #310); each merge conflicted only on ccd/ccd's stamp line).
+  - **Re-measured:** the branch tip, the PR head and the handoff commit agree at `3990aaad`, and #312 is open and
+    MERGEABLE. Run 290 advanced dispatched → working → awaiting-review.
+  - **The worker reports `suite: red`, `failure: unclear`.** The only reds are the two known ones (tmp-sweep "FAILS
+    CLOSED", session-hook "skips a scratch slug" under a non-/tmp TMPDIR), each red again in isolation and neither
+    this wave's. Everything else passed: 528 server files, agent 465, pwa 1670 and 1647, pwa tsc.
+  - **Deviations:** 4114–4125, all defined, with a continuation line on 4124 (the idle re-read).
+  - **Five named departures:**
+    - T6's extra test;
+    - T9's idle re-read at the act;
+    - T11's "once the lane is armed" wording;
+    - the final review's eligibleSince reset (a pause only the executor saw forgets the sighting);
+    - single-definition's adjacency after absorbing #299.
+  - **Four items the worker parked, for review and then a ruling before arming:**
+    - learn starvation: an unreadable learn audit is retried every pass with no backoff, and learn slots go in
+      registry order. The final review grades it fix-before-arming;
+    - the archive-confirm copy, which is unconditional while the lane is shadowed;
+    - clause 3's missing "no child marker";
+    - the dropped `resumable`.
+  - **Review run 313 is dispatched** to `ccrc-pwa-brisk-basin` (the held-out panel; route Opus · high, Sonnet
+    subagents, workflow on). The brief's suite list is `.superpowers/sdd/coordinator-evidence/run290/review-suites.md`,
+    and the worker's two artifacts are copied beside it.
+  - **Child reclamation's coordinator (calm-mesa) was told in mail 3796** that #312 edits CCR-15's §5.8 and the
+    wave-3 qualification (ruling (F)). It landed after the push, not before it, but before any merge.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
