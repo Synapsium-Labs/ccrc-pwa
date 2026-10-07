@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { NodeWire, ReleaseWire, UpdatesView } from '../../shared/api';
 import { UPDATE_STATES } from '../../shared/api';
@@ -14,6 +15,7 @@ import { isHaltingUpdate } from '../../shared/update-move';
 import { ApiError, api, updateErrorText } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
 import { HALT_LEAD_TEXT, HaltBanner } from '../src/fleet/HaltBanner';
+import { useUpdatesView } from '../src/fleet/useUpdatesView';
 import { ACK_UNREADABLE_TEXT, canAck, sendAck } from '../src/fleet/updateAck';
 import * as settings from '../src/screens/SettingsScreen';
 import { declValue, ruleIn } from './cssRule';
@@ -56,9 +58,11 @@ const view = (nodes: NodeWire[], releases: ReleaseWire[] = []): UpdatesView => (
   catalogue: { lastOkAt: 1, lastError: null }, releases, nodes, intent: [],
 });
 const banner = (): Element | null => document.querySelector('.halt-banner');
-const mount = (v: UpdatesView | null) => {
-  const onAcked = vi.fn();
-  render(<><ToastHost /><HaltBanner updates={v} onAcked={onAcked} /></>);
+// `onAcked` answers the issue number of the read it issued (D-4273): the poll's `seq` was 1 when the screen mounted, so
+// the re-poll the Ack triggers is number 2.
+const mount = (v: UpdatesView | null, seq = 1) => {
+  const onAcked = vi.fn(() => 2);
+  render(<><ToastHost /><HaltBanner updates={v} seq={seq} onAcked={onAcked} /></>);
   return { onAcked };
 };
 
@@ -106,7 +110,7 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
     expect(await screen.findByText(ACK_UNREADABLE_TEXT)).toBeInTheDocument();
     await waitFor(() => expect(first.onAcked).toHaveBeenCalledTimes(1));
     const held = screen.getByRole('button', { name: 'Acked fleet' });
-    expect(held, 'an unreadable answer may have cleared the row: it stays down until a poll shows a new lease').toBeDisabled();
+    expect(held, 'an unreadable answer may have cleared the row: it stays down until a read issued after it lands').toBeDisabled();
     expect(held).toHaveTextContent('Acked');
     cleanup();
     const busy = new ApiError(409, { ok: false, error: 'busy' });
@@ -124,8 +128,8 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
 
   it('after a clean 200 the row stays down until a poll shows a different lease — a second tap sends nothing', async () => {
     const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
-    const onAcked = vi.fn(); // the re-poll failed: the hook keeps the last good view, so the same lease stands
-    const { rerender } = render(<><ToastHost /><HaltBanner updates={view([failed()])} onAcked={onAcked} /></>);
+    const onAcked = vi.fn(() => 2); // the re-poll failed: the hook keeps the last good view, so the same lease stands
+    const { rerender } = render(<><ToastHost /><HaltBanner updates={view([failed()])} seq={1} onAcked={onAcked} /></>);
     fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     const button = screen.getByRole('button', { name: 'Acked fleet' });
@@ -134,7 +138,7 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
     fireEvent.click(button);
     expect(ack).toHaveBeenCalledTimes(1);
     // A NEW failure on the same node is a new lease: the button re-arms.
-    rerender(<><ToastHost /><HaltBanner updates={view([failed({ update: { state: 'failed', target: 'v0.0.85', startedAt: 2, detail: 'gate: unit not up' } })])} onAcked={onAcked} /></>);
+    rerender(<><ToastHost /><HaltBanner updates={view([failed({ update: { state: 'failed', target: 'v0.0.85', startedAt: 2, detail: 'gate: unit not up' } })])} seq={2} onAcked={onAcked} /></>);
     expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
     expect(screen.getByRole('button', { name: 'Ack fleet' })).toHaveTextContent(/^Ack$/);
   });
@@ -195,14 +199,17 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
   });
 });
 
-// Review 307 F1 (D-4272): the Ack re-arms at once only on an answer the server gave. A request with no answer may
-// have committed, so the row holds until a FRESH successful read (a new view object; a failed read keeps the old one).
+// Review 307 F1 and review 311 F1/F2 (D-4272, D-4273): the Ack re-arms at once only on an answer the server gave. A
+// request with no answer may have committed, so the row holds until a successful read the screen ISSUED after the
+// outcome. The poll carries the issue number of the read that set its view (`seq`), and `onAcked()` answers the number
+// of the re-poll it issued inside the outcome callback: the hold ends when `seq >= that number`. A failed read keeps
+// the old seq, so it changes nothing.
 const leaseOf = (over: Partial<NonNullable<NodeWire['update']>> = {}): NodeWire =>
   failed({ update: { state: 'failed', target: 'v0.0.84', startedAt: 1, detail: 'gate: unit not up', ...over } });
-const renderWith = (v: UpdatesView, onAcked: () => void) => {
-  const ui = (x: UpdatesView) => <><ToastHost /><HaltBanner updates={x} onAcked={onAcked} /></>;
-  const r = render(ui(v));
-  return { rerender: (x: UpdatesView) => r.rerender(ui(x)) };
+const renderWith = (v: UpdatesView, onAcked: () => number, seq = 1) => {
+  const ui = (x: UpdatesView, s: number) => <><ToastHost /><HaltBanner updates={x} seq={s} onAcked={onAcked} /></>;
+  const r = render(ui(v, seq));
+  return { rerender: (x: UpdatesView, s: number) => r.rerender(ui(x, s)) };
 };
 const NO_ANSWER: ReadonlyArray<readonly [string, () => unknown]> = [
   ['a fetch TypeError', () => new TypeError('Failed to fetch')],
@@ -213,17 +220,17 @@ const NO_ANSWER: ReadonlyArray<readonly [string, () => unknown]> = [
   ['a timeout rejection', () => new DOMException('The operation timed out.', 'TimeoutError')],
 ];
 
-describe('HaltBanner — an Ack with no answer holds until a fresh read (D-4272)', () => {
-  it.each(NO_ANSWER)('%s holds through a kept view: Ack, disabled, one POST, today\'s toast', async (_n, make) => {
+describe('HaltBanner — an Ack with no answer holds until a read issued after the outcome (D-4272, D-4273)', () => {
+  it.each(NO_ANSWER)('%s holds through a kept view and seq: Ack, disabled, one POST, today\'s toast', async (_n, make) => {
     const err = make();
     const ack = vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(err);
-    const onAcked = vi.fn();
+    const onAcked = vi.fn(() => 2);
     const v1 = view([failed()]);
     const { rerender } = renderWith(v1, onAcked);
     fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
     expect(await screen.findByText(updateErrorText(err))).toBeInTheDocument();
-    rerender(v1); // the re-poll failed: the hook keeps the very same object
+    rerender(v1, 1); // the re-poll failed: the hook keeps the very same view and the very same seq
     const held = screen.getByRole('button', { name: 'Ack fleet' });
     expect(held).toBeDisabled();
     expect(held, 'no 2xx was seen: it does not say Acked').toHaveTextContent(/^Ack$/);
@@ -231,17 +238,17 @@ describe('HaltBanner — an Ack with no answer holds until a fresh read (D-4272)
     expect(ack).toHaveBeenCalledTimes(1);
   });
 
-  it('a fresh read with the same lease re-arms, and a tap sends a second POST', async () => {
+  it('a read issued after the outcome with the same lease re-arms, and a tap sends a second POST', async () => {
     const ack = vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new TypeError('Failed to fetch'));
     ack.mockResolvedValueOnce({ ok: true, node: node() });
-    const onAcked = vi.fn();
+    const onAcked = vi.fn(() => 2);
     const v1 = view([failed()]);
     const { rerender } = renderWith(v1, onAcked);
     fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
-    rerender(v1);
+    rerender(v1, 1);
     expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeDisabled();
-    rerender(view([failed()])); // a NEW object: a successful read landed, and the lease did not change
+    rerender(view([failed()]), 2); // read number 2 landed: it was issued after the outcome, and the lease did not change
     const again = screen.getByRole('button', { name: 'Ack fleet' });
     expect(again).not.toBeDisabled();
     expect(again).toHaveTextContent(/^Ack$/);
@@ -249,47 +256,185 @@ describe('HaltBanner — an Ack with no answer holds until a fresh read (D-4272)
     await waitFor(() => expect(ack).toHaveBeenCalledTimes(2));
   });
 
-  it('a fresh read with a new lease follows it: the button is armed for that lease', async () => {
+  it('a read issued after the outcome with a new lease follows it: the button is armed for that lease', async () => {
     vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(504, { ok: false, error: 'gateway timeout' }));
-    const onAcked = vi.fn();
+    const onAcked = vi.fn(() => 2);
     const v1 = view([failed()]);
     const { rerender } = renderWith(v1, onAcked);
     fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
-    rerender(view([leaseOf({ startedAt: 2 })]));
+    rerender(view([leaseOf({ startedAt: 2 })]), 2);
     expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
   });
 
-  it('an unreadable answer holds through a kept view, and releases on a fresh read with the same lease', async () => {
+  it('an unreadable answer holds through a kept view, and releases on a read issued after it with the same lease', async () => {
     vi.spyOn(api, 'ackUpdateNode').mockResolvedValueOnce('unreadable');
-    const onAcked = vi.fn();
+    const onAcked = vi.fn(() => 2);
     const v1 = view([failed()]);
     const { rerender } = renderWith(v1, onAcked);
     fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
-    rerender(v1);
+    rerender(v1, 1);
     expect(screen.getByRole('button', { name: 'Acked fleet' }), 'a 2xx was seen: it says Acked').toBeDisabled();
-    rerender(view([failed()]));
+    rerender(view([failed()]), 2);
     const again = screen.getByRole('button', { name: 'Ack fleet' });
     expect(again).not.toBeDisabled();
     expect(again).toHaveTextContent(/^Ack$/);
   });
 
-  it('a read that lands WHILE the POST is in flight does not release: the snapshot is taken at the outcome', async () => {
+  it('a read that lands WHILE the POST is in flight does not release: it was issued before the outcome (seq below after)', async () => {
     let reject!: (e: unknown) => void;
     const ack = vi.spyOn(api, 'ackUpdateNode').mockImplementationOnce(() => new Promise((_res, rej) => { reject = rej; }));
-    const onAcked = vi.fn();
+    const onAcked = vi.fn(() => 3); // the mid-flight read was number 2, so the re-poll the outcome issues is number 3
     const { rerender } = renderWith(view([failed()]), onAcked);
     fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
     const midFlight = view([failed()]); // a poll answered while the POST was out; it may predate the commit
-    rerender(midFlight);
+    rerender(midFlight, 2);
     await act(async () => { reject(new TypeError('Failed to fetch')); });
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
-    rerender(midFlight);
+    rerender(midFlight, 2);
     expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
     expect(ack).toHaveBeenCalledTimes(1);
-    rerender(view([failed()]));
+    rerender(view([failed()]), 3);
+    expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
+  });
+
+  it('a read landing with exactly the re-poll\'s number releases, and a lower one never does, at any lease', async () => {
+    vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(502, { ok: false, error: 'bad gateway' }));
+    const onAcked = vi.fn(() => 5);
+    const { rerender } = renderWith(view([failed()]), onAcked, 3);
+    fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
+    await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+    rerender(view([leaseOf({ startedAt: 9 })]), 4); // a lower number, even with a new lease: not the read it waits for
+    expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeDisabled();
+    rerender(view([failed()]), 5);
+    expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
+  });
+});
+
+// Ruling G (D-4273): a parent that issues no read (the injected mode: `reload()` answers 0) gives the hold nothing to
+// date a read by, so the hold falls back to the LEASE. No mode can re-arm on a read it cannot date.
+describe('HaltBanner — a parent that issues no read holds on the lease (D-4273, ruling G)', () => {
+  const ENDINGS: ReadonlyArray<readonly [string, () => void]> = [
+    ['unanswered', () => { vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(502, { ok: false, error: 'bad gateway' })); }],
+    ['unreadable', () => { vi.spyOn(api, 'ackUpdateNode').mockResolvedValueOnce('unreadable'); }],
+  ];
+  const ANSWERS: ReadonlyArray<readonly [string, () => number]> = [
+    ['0', () => 0],
+    ['undefined', () => undefined as unknown as number],
+  ];
+  const cells = ENDINGS.flatMap(([e, arm]) => ANSWERS.map(([a, fn]) => [e, a, arm, fn] as const));
+  it.each(cells)('%s ending, onAcked answers %s: held on the lease through any seq, a new lease re-arms', async (_e, _a, arm, fn) => {
+    arm();
+    const onAcked = vi.fn(fn);
+    const { rerender } = renderWith(view([failed()]), onAcked);
+    fireEvent.click(screen.getByRole('button', { name: /^Ack(ed)? fleet$/ }));
+    await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
+    for (const seq of [1, 2, 7]) {
+      rerender(view([failed()]), seq);
+      expect(screen.getByRole('button', { name: /^Ack(ed)? fleet$/ }), `same lease at seq ${seq}`).toBeDisabled();
+    }
+    expect(api.ackUpdateNode).toHaveBeenCalledTimes(1);
+    rerender(view([leaseOf({ startedAt: 2 })]), 8);
+    expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
+  });
+});
+
+// Review 311 F1/F2/F4 (D-4273): the REAL hook and React's real commit, with every read and the Ack held in a
+// hand-resolved deferred. A read issued before the outcome can land and render just after it, showing the same lease;
+// it is never fresh, so the row stays down until the re-poll the outcome issued lands.
+describe('HaltBanner — with the real poll, a read issued before the outcome never releases the hold (D-4273)', () => {
+  const setVisibility = (v: DocumentVisibilityState): void => {
+    Object.defineProperty(document, 'visibilityState', { value: v, configurable: true });
+  };
+  afterEach(() => { Reflect.deleteProperty(document, 'visibilityState'); });
+
+  function Harness(): ReactNode {
+    const p = useUpdatesView();
+    return <><ToastHost /><HaltBanner updates={p.view} seq={p.seq} onAcked={p.reload} /></>;
+  }
+
+  type Read = PromiseWithResolvers<UpdatesView>;
+  const setup = () => {
+    const reads: Read[] = [];
+    const updates = vi.spyOn(api, 'updates').mockImplementation(() => {
+      const d = Promise.withResolvers<UpdatesView>();
+      reads.push(d);
+      return d.promise;
+    });
+    const acks: Array<PromiseWithResolvers<unknown>> = [];
+    const ackSpy = vi.spyOn(api, 'ackUpdateNode').mockImplementation(() => {
+      const d = Promise.withResolvers<unknown>();
+      acks.push(d);
+      return d.promise as ReturnType<typeof api.ackUpdateNode>;
+    });
+    return { reads, updates, acks, ackSpy };
+  };
+  const visibleRead = (): void => {
+    setVisibility('visible');
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+  };
+  const ENDINGS = [
+    ['unanswered', 'Ack fleet', (d: PromiseWithResolvers<unknown>) => d.reject(new ApiError(502, { ok: false, error: 'bad gateway' }))],
+    ['unreadable', 'Acked fleet', (d: PromiseWithResolvers<unknown>) => d.resolve('unreadable')],
+  ] as const;
+  const cells = (['a', 'c'] as const).flatMap((cell) => ENDINGS.map(([e, name, settle]) => [cell, e, name, settle] as const));
+
+  /** The shared drive: the first read lands, the second is issued before the tap (cell a) or while the POST is in
+   *  flight (cell c), and then, in ONE act, the second lands (same lease) and the Ack settles. */
+  const drive = async (cell: 'a' | 'c', name: string, settle: (d: PromiseWithResolvers<unknown>) => void) => {
+    const h = setup();
+    render(<Harness />);
+    await act(async () => { h.reads[0]!.resolve(view([failed()])); });
+    const tapBtn = screen.getByRole('button', { name: 'Ack fleet' });
+    if (cell === 'a') visibleRead();
+    fireEvent.click(tapBtn);
+    if (cell === 'c') visibleRead();
+    expect(h.updates, 'two reads issued before the outcome').toHaveBeenCalledTimes(2);
+    expect(h.ackSpy).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      h.reads[1]!.resolve(view([failed()])); // same lease, landing and rendering after the outcome
+      settle(h.acks[0]!);
+      await Promise.resolve();
+    });
+    const held = screen.getByRole('button', { name });
+    expect(held, 'read 2 was issued before the outcome: it does not release').toBeDisabled();
+    fireEvent.click(held);
+    expect(h.ackSpy, 'a click sends nothing').toHaveBeenCalledTimes(1);
+    expect(h.updates, 'exactly one more read, issued inside the outcome callback').toHaveBeenCalledTimes(3);
+    return h;
+  };
+
+  it.each(cells)('cell %s, %s ending: held until the re-poll the outcome issued lands', async (cell, _e, name, settle) => {
+    await drive(cell, name, settle);
+  });
+
+  it.each(cells)('cell %s, %s ending: a failed post-outcome read keeps it down; a later read with the same lease re-arms', async (cell, _e, name, settle) => {
+    const h = await drive(cell, name, settle);
+    await act(async () => { h.reads[2]!.reject(new TypeError('Failed to fetch')); });
+    expect(screen.getByRole('button', { name }), 'a failed read changes nothing').toBeDisabled();
+    visibleRead();
+    expect(h.updates).toHaveBeenCalledTimes(4);
+    await act(async () => { h.reads[3]!.resolve(view([failed()])); });
+    const again = screen.getByRole('button', { name: 'Ack fleet' });
+    expect(again).not.toBeDisabled();
+    expect(again).toHaveTextContent(/^Ack$/);
+    fireEvent.click(again);
+    expect(h.ackSpy, 'armed again: the tap sends the second POST').toHaveBeenCalledTimes(2);
+  });
+
+  it.each(cells)('cell %s, %s ending: the post-outcome read lands with the same lease and re-arms', async (cell, _e, name, settle) => {
+    const h = await drive(cell, name, settle);
+    await act(async () => { h.reads[2]!.resolve(view([failed()])); });
+    const again = screen.getByRole('button', { name: 'Ack fleet' });
+    expect(again).not.toBeDisabled();
+    expect(again).toHaveTextContent(/^Ack$/);
+  });
+
+  it.each(cells)('cell %s, %s ending: the post-outcome read lands with a NEW lease and the button is armed for it', async (cell, _e, name, settle) => {
+    const h = await drive(cell, name, settle);
+    await act(async () => { h.reads[2]!.resolve(view([leaseOf({ startedAt: 2 })])); });
     expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
   });
 });
@@ -311,7 +456,7 @@ describe('HaltBanner — the accessible name follows the visible label (review 3
 describe('HaltBanner — each field of the lease key re-arms a held row (review 307 F2)', () => {
   const heldAfter200 = async () => {
     vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });
-    const onAcked = vi.fn();
+    const onAcked = vi.fn(() => 2);
     const { rerender } = renderWith(view([failed()]), onAcked);
     fireEvent.click(screen.getByRole('button', { name: 'Ack fleet' }));
     await waitFor(() => expect(onAcked).toHaveBeenCalledTimes(1));
@@ -321,13 +466,13 @@ describe('HaltBanner — each field of the lease key re-arms a held row (review 
 
   it('only startedAt changes (auto retried the same tag and failed alike): a new lease', async () => {
     const rerender = await heldAfter200();
-    rerender(view([leaseOf({ startedAt: 2 })]));
+    rerender(view([leaseOf({ startedAt: 2 })]), 2);
     expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
   });
 
   it('only target changes: a new lease', async () => {
     const rerender = await heldAfter200();
-    rerender(view([leaseOf({ target: 'v0.0.85' })]));
+    rerender(view([leaseOf({ target: 'v0.0.85' })]), 2);
     expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled();
   });
 });

@@ -221,17 +221,26 @@ These are departures from R15 as ruled, from the brief's "PWA wave", or from wha
   - **Found:** the plan's `autoArm` asked only the nodes that carry a `desiredTag`. A lagging box with none — rolled back past the newest release (the resolver's `rolledBack`), or hand-placed off the release lane (no version, no floor) — beside a leading box that has one answered `auto`. Auto then moves the LEADING box and the skew widens. A pin below the leader answered `auto` too, and the skew stays. Each made the sentence false, against Reading 6 as ruled ("only where the dispatcher's own auto path would move every lagging node").
   - **Now:** `endTag` (the tag the resolver gave the node, else the release tag it runs, else null) must be one release tag across every node, as well as the plan's conditions. Each of these cases now falls back to the terminal verbs. No operator-visible string changes. `fleet-host-banner`'s R15(c) `movable` fixture now gives a lagging node the leading build's tag (`v0.0.9`) and a node already on it NULL, as a real converged row has. Its two cases about a node auto or the console cannot move now put that node on the LAGGING side. `update-halt`'s converged-node case gives its converged node the tag it runs.
 
-- **D-4272** — *The halt banner's Ack re-arms at once only on a refusal the server gave (an `ApiError` 4xx). An answer that could not be read, or no answer at all (a fetch rejection, any 5xx, a timeout), holds the row until a successful read taken after the outcome; `sendAck` gains a fourth outcome word, `unanswered`. (Worker reserve; coordinator fix round 1, review 307 F1.)*
+- **D-4272** — *The halt banner's Ack re-arms at once only on a refusal the server gave (an `ApiError` 4xx). An answer that could not be read, or no answer at all (a fetch rejection, any 5xx, a timeout), holds the row until a successful read issued after the outcome (D-4273 says how that is told); `sendAck` gains a fourth outcome word, `unanswered`. (Worker reserve; coordinator fix round 1, review 307 F1.)*
   - **Ruled:** the coordinator, on review 307's F1, which meets bar class 2: "an Ack that can be sent twice against one lease". A refusal is an answer the server gave; a request with no answer is not a refusal.
   - **Shipped (`3f5f382c`):** `sendAck` mapped every rejection to `refused`, and the row re-armed on it. When the ack committed but its response was lost (a fetch TypeError, a proxy 502/504) and the re-poll failed too, the view kept the same lease, the button re-armed, and a second tap acked the now-idle row again, clearing its request and its refusals. That was measured twice by review 307.
   - **Now:**
     - `AckOutcome` is `acked | unreadable | refused | unanswered`. `refused` is a 4xx `ApiError`; `unanswered` is any other rejection. The toasts are unchanged.
     - The halt banner holds a clean 200 until a poll shows a different lease, as before.
-    - It holds `unreadable` and `unanswered` until a fresh successful read: the view object differs from the one present when the outcome arrived (a failed read keeps the object; the first fresh read is one taken after the tap that commits after the outcome — a read already landed but not yet rendered when the outcome arrives counts as fresh). If that read still shows the same lease, it re-arms; otherwise the row follows the read.
+    - It holds `unreadable` and `unanswered` until a fresh successful read, and a FRESH read is one the screen ISSUED after the outcome arrived (review 311's binding definition). A read issued earlier, before the tap or while the POST was in flight, is never fresh, however late it lands or renders; round 1's test (a new view object since the outcome) could not tell the two apart, and D-4273 replaces it. A failed read changes nothing. If the fresh read still shows the same lease, the row re-arms; otherwise it follows the read.
     - `Acked` shows only after a 2xx. An `unanswered` hold shows `Ack`, disabled. The button's accessible name follows its visible label (`Ack <label>` / `Acked <label>`, review 307 F3).
     - The Settings row still ignores the outcome.
+- **D-4273** — *The poll carries its issue number. `useUpdatesView` returns `seq`, the issue number of the read that set `view`, and `reload()` returns the number it issued (0 in the injected mode, where it issues nothing). `FleetScreen` passes `seq` to the halt banner, and the banner holds an `unreadable` or `unanswered` Ack while `seq` is below the number its re-poll was issued under. A departure from File structure: two files the plan did not name, `useUpdatesView.ts` and `use-updates-view.test.tsx`. (Worker reserve; coordinator fix round 2, review 311 F1/F2.)*
+  - **Ruled:** the coordinator, on review 311's F1 and F2 (bar classes 2, then 1): "a read the screen issued after the Ack's outcome arrived", and a read issued before the outcome is never fresh. It admitted both files to the round and left the shape to the worker.
+  - **Shipped (`c613f551`):** the hold ended on a different committed view object than the one present at the outcome. A read issued before the outcome (before the tap, or mid-flight) can land and render just after it, showing the same lease. It reads as a new object, the hold ended, and a second POST went out. Review 311 measured `posts=2` with the real hook, on every no-answer ending and on `unreadable`; at `3f5f382c` the `unreadable` hold had stood on the lease and sent one.
+  - **Now:**
+    - `UpdatesPoll` gains `seq`, set in the same `setState` as `view`, so the two always describe one read. It is 0 before a good read, and a failed, malformed or 501 read leaves it where it was (the view is kept, so is its number). `reload()` returns its issue number. The counter is a ref, so numbers stay monotonic across a `pollMs` change; the newest-issued guard and the kept view on failure are as before. The other callers (`UpdateBanner`, `SettingsScreen`) read neither, and a `() => number` is assignable where a `() => void` is expected.
+    - `HaltRow` calls `onAcked()` INSIDE the outcome callback, so every read issued before the outcome has a lower number, and keeps the return as `after`. An `unreadable` or `unanswered` hold lasts while `seq < after`. Then the hold ends: the same lease re-arms the row, and a new lease arms it for that lease.
+    - When `onAcked()` returns no positive integer (the injected mode returns 0: no read was issued, and a read it cannot date must not release), the hold falls back to the lease, as a clean 200's does (ruling G).
+    - A clean 200 and a 4xx refusal are as D-4272 has them. No operator-visible string changes.
+  - **Why (a), a number, not (b), a promise that settles when a read at or after it commits:** `seq` commits in the same `setState` as the view it describes, so the release is a pure function of one render. (b) needs a list of waiters, a hop from the settle to a `setState` (an async gap in which a render can pair a stale view with a settled hold), and a promise that never settles in the injected mode.
 
-The worker's reserve: numbers 4273 to 4274, written bare until defined (4270, 4271 and 4272 are spent above).
+The worker's reserve: number 4274, written bare until defined (4270 to 4273 are spent above).
 
 ## File structure
 
@@ -251,7 +260,9 @@ The worker's reserve: numbers 4273 to 4274, written bare until defined (4270, 42
 - `shared/agent-protocol.ts` (Task 1): three header comment lines, rewritten in place.
 - `pwa/src/screens/SettingsScreen.tsx` (Task 2): one import, the re-export, `canAck` removed, and the `ack` closure now calls `sendAck`.
 - `pwa/src/fleet/fleet.css` (Task 4): one block appended.
-- `pwa/src/screens/FleetScreen.tsx` (Tasks 4 and 6): one import, the halt banner's mount, and `intent` passed to the fleet-host banner.
+- `pwa/src/screens/FleetScreen.tsx` (Tasks 4 and 6): one import, the halt banner's mount, and `intent` passed to the fleet-host banner; fix round 2 (D-4273): passes `seq`.
+- `pwa/src/fleet/useUpdatesView.ts` (fix round 2, D-4273): `seq`, `reload()`'s return, the counter in a ref.
+- `pwa/test/use-updates-view.test.tsx` (fix round 2, D-4273): the signal's cases.
 - `pwa/test/fleet-screen.test.tsx` (Task 4): one describe appended.
 - `pwa/src/fleet/UpdateBanner.tsx` (Task 5): the header paragraph, `useId`, the reason line, `disabled` and `aria-describedby`.
 - `pwa/src/fleet/UpdateMoveSheet.tsx` (Task 5): the header sentence and `moveSkippedText`.
@@ -262,7 +273,7 @@ The worker's reserve: numbers 4273 to 4274, written bare until defined (4270, 42
 - `pwa/test/fleet-host-banner.test.tsx` (Task 6): one import name, and one describe appended.
 
 **Run, not edited:**
-- pwa: `settings-screen`, `move-plan`, `use-updates-view`, `build-line`, `contrast`, `fleet-css`.
+- pwa: `settings-screen`, `move-plan`, `build-line`, `contrast`, `fleet-css`.
 - server: `single-definition` (claim 1056 holds it; this wave adds nothing to it, and it must stay at `main`'s count), `update-apply-routes`, `update-auto-dispatch`, `update-converge`, `update-lease-holder`, `update-op-answer`, `update-routes`, `update-store-nodes`, `update-watchdog-revert`, `update-summary`, `box-token-census`, `typecheck-tests`.
 - the ledger and scope guards: `topology-clean`, `dtbd`, `deviation-refs`.
 

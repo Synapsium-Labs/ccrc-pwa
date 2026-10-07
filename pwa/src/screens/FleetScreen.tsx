@@ -648,7 +648,7 @@ export function FleetScreen({
       <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} />
       {/* The halt, with each halting node's Ack in place (programme wave 14, R15(a)): above Update all, which it
           disables while it stands. Re-polls on every Ack. */}
-      <HaltBanner updates={updates.view} onAcked={updates.reload} />
+      <HaltBanner updates={updates.view} seq={updates.seq} onAcked={updates.reload} />
       <UpdateBanner updates={updates.view} health={fleetHealth} onMoved={updates.reload} />
 
       {/* The substrate fault, said once (spec §4) — derived from the SAME
