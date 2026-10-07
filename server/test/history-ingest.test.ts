@@ -18,7 +18,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as zc } from 'node:zlib';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
-import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, plantSession, counters, journalRecords, spoolLine, SWEEP, PRELOADS, type HistoryBox } from './historyHelpers.js';
+import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, plantSession, counters, journalRecords, spoolLine, readTxlog, writes, SWEEP, PRELOADS, type HistoryBox } from './historyHelpers.js';
 import { boundaryRow } from './historyFixtures.js';
 import { createStore, openWriter, closeWriter } from '../../ccd/history/store.mjs';
 import { historyPaths, sha256Hex } from '../../ccd/history/lib.mjs';
@@ -1681,6 +1681,23 @@ describe('history ingest: secrets per tick (plan task 22)', () => {
       expect(again.newValues).toEqual([]);
       expect(journalRecords(box).filter((x) => (x as { k?: string }).k === 'redact')).toHaveLength(1);
     } finally { db.close(); }
+  });
+
+  it('O34 (FULL half): the pair transaction commits under synchronous=FULL with its outbox row and nothing else, and its journal append is the very next event', () => {
+    const box = IX.newBox('ccrc-hist-sec-o34f-');
+    put(box.home, '.cc-secrets/lane.env', `LANE_API_KEY=${hex(32)}\n`);
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqfull words', 1)]));
+    const txlog = path.join(box.home, 'txlog');
+    IX.sweepTwice(box, { preloads: [PRELOADS.faults], env: { HISTORY_TEST_TXLOG: txlog } });   // the first pass may only create the store
+    const evs = readTxlog(txlog);
+    const iP = evs.findIndex((e) => writes(e, /\bINTO redact_hashes\b/));
+    expect(iP).toBeGreaterThanOrEqual(0);
+    const p = evs[iP]!;
+    expect(p.kind === 'tx' ? p.sync : -1).toBe(2);
+    expect(p.kind === 'tx' && p.writes.every((x) => /\bINTO (redact_hashes|journal_outbox)\b/.test(x))).toBe(true);
+    expect(writes(p, /\bINTO journal_outbox\b/)).toBe(true);
+    expect(evs[iP + 1]).toEqual(expect.objectContaining({ kind: 'journal' }));
+    expect(evs.findIndex((e) => writes(e, /\bINTO entries\b/))).toBeGreaterThan(iP + 1);
   });
 
   it('every frozen-list source and a declared secretsFile give their pairs; no value reaches the DB, its WAL, the journal or the pass output', () => {

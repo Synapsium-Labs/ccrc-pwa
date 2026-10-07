@@ -263,3 +263,16 @@ export function runDriver(box: HistoryBox, deps: DriverDeps, args: string[] = []
   });
   return { code: r.status, signal: r.signal, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
+
+/** The transaction log the faults preload writes (HISTORY_TEST_TXLOG), read as events in order. */
+export type TxEv = { kind: 'tx'; sync: number; writes: string[] } | { kind: 'journal'; bytes: number };
+export function readTxlog(file: string): TxEv[] {
+  const evs: TxEv[] = [];
+  let cur: string[] | null = null;
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    if (line === 'BEGIN') cur = [];
+    else if (line.startsWith('COMMIT ')) { evs.push({ kind: 'tx', sync: Number(line.slice(7)), writes: cur ?? [] }); cur = null; } else if (line.startsWith('W ')) { if (cur !== null) cur.push(line.slice(2)); } else if (line.startsWith('J ')) evs.push({ kind: 'journal', bytes: Number(line.slice(2)) });
+  }
+  return evs;
+}
+export const writes = (e: TxEv, re: RegExp): boolean => e.kind === 'tx' && e.writes.some((w) => re.test(w));

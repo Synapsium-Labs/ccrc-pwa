@@ -19,7 +19,7 @@ import * as pty from 'node-pty';
 import { WRITING_FORMS, CARRIER_KILL_S, journalRecord, floorThreshold } from '../../ccd/history/lib.mjs';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, preloadOptions, plantSession, plantTranscript, spoolLine, openStoreRO,
-  counters, journalRecords, PRELOADS, type HistoryBox,
+  counters, journalRecords, PRELOADS, readTxlog, writes, type TxEv, type HistoryBox,
 } from './historyHelpers.js';
 
 beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
@@ -131,18 +131,6 @@ function shimPty(box: HistoryBox, args: string[], env: Record<string, string> = 
   });
 }
 
-/** The transaction log the faults preload writes (HISTORY_TEST_TXLOG), read as events in order. */
-type TxEv = { kind: 'tx'; sync: number; writes: string[] } | { kind: 'journal'; bytes: number };
-function readTxlog(file: string): TxEv[] {
-  const evs: TxEv[] = [];
-  let cur: string[] | null = null;
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-    if (line === 'BEGIN') cur = [];
-    else if (line.startsWith('COMMIT ')) { evs.push({ kind: 'tx', sync: Number(line.slice(7)), writes: cur ?? [] }); cur = null; } else if (line.startsWith('W ')) { if (cur !== null) cur.push(line.slice(2)); } else if (line.startsWith('J ')) evs.push({ kind: 'journal', bytes: Number(line.slice(2)) });
-  }
-  return evs;
-}
-const writes = (e: TxEv, re: RegExp): boolean => e.kind === 'tx' && e.writes.some((w) => re.test(w));
 /** §9.2 "Every verdict commits first" (CT10): the transaction that chains an epoch with its outbox row
  *  commits FULL (2) on its own — no entries in it — its verdict reaches the journal (a J event) before the
  *  first NORMAL (1) chunk that writes entries, and that chunk exists when `chunkExpected`. */
