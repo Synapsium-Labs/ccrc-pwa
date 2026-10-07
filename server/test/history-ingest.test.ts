@@ -816,7 +816,8 @@ describe('history ingest: chunk writes through the real sweep (plan task 19)', (
     const { lib } = await IX.api();
     const box = IX.newBox('ccrc-hist-d4346-collide-');
     try {
-      const long = `{"pad":"${'a'.repeat(lib.LINE_MAX + 16)}"}`;
+      // The raw line is a JSON array of tool_result blocks (the shape of a stored user body): decoded whole, toolResultCandidates would offer it for linkage.
+      const long = JSON.stringify([{ type: 'tool_result', tool_use_id: 'toolu_01RAW', content: 'saved to: /home/u/x/tool-results/zzraw.txt' }, 'a'.repeat(lib.LINE_MAX + 16)]);
       IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), long, IX.user(IX.uuidN(4), IX.uuidN(1), 'after', 4)]));
       IX.sweepTwice(box);
       let db = openStoreRO(box);
@@ -831,9 +832,21 @@ describe('history ingest: chunk writes through the real sweep (plan task 19)', (
       fs.utimesSync(second, new Date('2099-01-01T00:00:00Z'), new Date('2099-01-01T00:00:00Z'));
       fs.mkdirSync(path.join(box.root, 'spool'), { recursive: true });
       spoolLine(box, IX.ID, { v: 1, ev: 'Stop', id: IX.ID });   // a hint: the session's files are discovered again
-      IX.sweepTwice(box);
+      const sideDir = path.join(box.homes[0]!, 'projects', IX.SLUG, IX.U, 'tool-results');
+      fs.mkdirSync(sideDir, { recursive: true });
+      fs.writeFileSync(path.join(sideDir, 'zzraw.txt'), 'the raw row\'s sidecar body\n');
+      IX.sweepTwice(box);   // each pass exits 0 (sweepTwice asserts it), the sidecar pass included
       db = openStoreRO(box);
       try {
+        // F1: the collision leaves a type 'user' entry whose CURRENT blob is still the raw blob of unbounded raw_len.
+        const col = db.prepare(`SELECT e.entry_id AS entry_id, e.type AS type, e.transcript_pk AS pk, b.raw_len AS len FROM entries e
+          JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?`).get(k) as { entry_id: number; type: string; pk: number; len: number };
+        expect(col.type).toBe('user');
+        expect(col.len).toBeGreaterThan(lib.LINE_MAX);
+        // the guard in toolResultCandidates: that raw blob is never decoded whole, so it names no sidecar. Without it the row
+        // is a candidate for 'zzraw.txt' (its decoded text names the file).
+        const S = (await IX.api()).sweep;
+        expect(S.toolResultCandidates(db as unknown as DatabaseSync, col.pk, ['zzraw.txt']).filter((c) => c.entryId === col.entry_id)).toEqual([]);
         const ev = db.prepare(`SELECT v.blob_id AS blob_id, v.cause AS cause FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id
           WHERE e.uuid = ?`).all(k) as { blob_id: number; cause: string }[];
         expect(ev).toHaveLength(2);
@@ -2752,12 +2765,16 @@ describe('history ingest: the FTS index (plan task 23)', () => {
         expect(guard, `${fn} has no guard`).toBeGreaterThanOrEqual(0);
         expect(guard, `${fn} decodes before it checks`).toBeLessThan(decode);
       }
-      const trc = fnLines('toolResultCandidates').join('\n');
-      expect(trc).not.toMatch(/blobOverDecodeCap\(/);
+      // toolResultCandidates is no exception: a collided entry reads type 'user' over a raw line-too-long blob (ENTRY_UPSERT keeps the first blob_id).
+      const trc = fnLines('toolResultCandidates');
+      const tGuard = trc.findIndex((l) => /\bblobOverDecodeCap\(/.test(l));
+      const tDecode = trc.findIndex((l) => /\bunbrotli\(/.test(l));
+      expect(tGuard, 'toolResultCandidates has no guard').toBeGreaterThanOrEqual(0);
+      expect(tGuard, 'toolResultCandidates decodes before it checks').toBeLessThan(tDecode);
       const src = lines.join('\n');
       const tr = /toolResults: db\.prepare\(`([^`]*)`/.exec(src);
       expect(tr).not.toBeNull();
-      expect(tr![1]).not.toContain('raw_len');
+      expect(tr![1]).toContain('raw_len');
     });
   });
 });

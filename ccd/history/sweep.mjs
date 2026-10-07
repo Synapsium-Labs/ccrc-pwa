@@ -2758,7 +2758,7 @@ function sideStmts(db) {
       JOIN transcripts t ON t.transcript_pk = f.transcript_pk JOIN file_paths p ON p.file_id = f.file_id
       WHERE t.cc_session_uuid = ?
         AND f.source_key = '' AND f.status = 'live' AND (f.size IS NULL OR f.size > f.offset)`),
-    toolResults: db.prepare(`SELECT e.entry_id AS entry_id, b.z AS z FROM entries e JOIN blobs b ON b.blob_id = e.blob_id
+    toolResults: db.prepare(`SELECT e.entry_id AS entry_id, b.z AS z, b.raw_len AS raw_len FROM entries e JOIN blobs b ON b.blob_id = e.blob_id
       WHERE e.transcript_pk = ? AND e.type = 'user' AND b.z IS NOT NULL ORDER BY e.entry_id`),
   };
   SIDE_STMTS.set(db, q);
@@ -2822,6 +2822,9 @@ export function toolResultCandidates(db, transcriptPk, names) {
   }
   const out = [];
   for (const r of sideStmts(db).toolResults.iterate(transcriptPk)) {
+    // D-4346: ENTRY_UPSERT promotes a collided entry's type to 'user' but keeps its first blob_id, so this entry's current blob can be a
+    // raw-only line-too-long blob of unbounded raw_len; it is never decompressed whole, and names no sidecar.
+    if (blobOverDecodeCap(r.raw_len)) continue;
     let body;
     try { body = parseStoredJson(unbrotli(r.z)); } catch { continue; }
     const ids = toolResultIdsOf(body);
