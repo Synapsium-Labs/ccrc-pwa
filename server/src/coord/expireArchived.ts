@@ -170,9 +170,17 @@ export function readExpiryStore(coord: CoordStore, id: string): ExpiryStoreRead 
   }
 }
 
+/** The lane's LEARNING read (wave 3b): the audit alone, to learn when this archive expires — ccd's own instant, so
+ *  the server never types the threshold. Read-only on the box (`ws-audit` journals a terminal refusal and nothing
+ *  else); behind the capability, as the act is. */
+export async function learnExpiry(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fleetState'>, sessionId: string): Promise<ExpireAuditRead> {
+  if (!capSupported(deps.fleetState, EXPIRE_CAP)) return { kind: 'unreadable', detail: `the fleet host does not advertise ${EXPIRE_CAP}` };
+  return expireAudit(deps, sessionId);
+}
+
 /** The audit — its own function, as `childReclaimAudit` is: an old verb (`ws-audit`), asked the old question. ANY
  *  exit 1 is `unreadable` (`parseExpireAudit` reads the exit before a byte of the document). */
-async function expireAudit(deps: ExpireArchivedDeps, sessionId: string): Promise<ExpireAuditRead> {
+async function expireAudit(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fleetState'>, sessionId: string): Promise<ExpireAuditRead> {
   const argv = CCD_ARGV.wsExpireAudit(sessionId);
   if (!verbSupported(deps.fleetState, argv)) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
   const res = await deps.runCcd(argv);

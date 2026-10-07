@@ -11,7 +11,7 @@ import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
-import { CCD_ARGV, RECLAIM_CAP, RECLAIM_PAUSE_CAP, capSupported, verbSupported, sweepDec } from './ccdargv.js';
+import { CCD_ARGV, EXPIRE_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, capSupported, verbSupported, sweepDec } from './ccdargv.js';
 import {
   isFullLine, parsePrLines, phaseFor, queueFor, repoCellFor, type CcdPrFailure, type PrQueueRead,
 } from './prstate.js';
@@ -99,6 +99,12 @@ import {
   type ChildReclaimSweepOutcome, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
 } from './childReclaimSweep.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
+import {
+  EXPIRE_AUDITS_PER_PASS, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
+  archivedExpiryOutcomeKey, archivedExpirySighted, archivedExpiryVerdict, expiryAttention,
+  type ArchivedExpiryEntry, type ExpiryStoreRead,
+} from './archivedExpiry.js';
+import { expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
@@ -1079,6 +1085,19 @@ export class FleetWatcher {
    *  own memory — never child reclamation's list, so nothing that reads that one sees an expiry. `[]` until the lane's
    *  first pass. */
   private expiryAttentionList: readonly ExpiryAttention[] = [];
+  /** The expiry lane's clock and memory (wave 3b): its OWN — never the child lane's map, which wave 5's chip reads.
+   *  Per archived workspace, `ArchivedExpiryEntry` (L1): the instant ccd gave for THIS archive, the twice-observed
+   *  sighting, the last outcome (for change-only feed rows), the in-use and failure runs and the report. IN MEMORY
+   *  ONLY: a restart can only DELAY an expiry. */
+  private lastArchivedExpirySweep = 0;
+  private archivedExpiryState = new Map<string, ArchivedExpiryEntry>();
+  /** ONE PASS AT A TIME. `tick()` dispatches the lane with `void`, and a pass whose audits and act outlast the cadence
+   *  would otherwise run beside the next one: two acts in one window, and the older pass acting on a `due` list the
+   *  newer has already answered. A pass that finds another running returns at once — so at most one expiry act is
+   *  ever in flight, fleet-wide, and every act's answer is folded onto the entry it was asked for. */
+  private archivedExpirySweeping = false;
+  /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
+  private archivedExpiryBoxRefused: string | null = null;
   /** `emitPools`'s byte-equality guard and last measured value — `lastCoordJson`
    *  and `coord`'s idiom, for their reasons. `null` until a tick has measured,
    *  and `currentPools()` sends NOTHING while it is: a fabricated empty map
@@ -1598,6 +1617,11 @@ export class FleetWatcher {
     return this.childReclaimJudged;
   }
 
+  /** The expiry lane's memory, read-only (wave 3b) — for its tests. NEVER read by the child lane's chip. */
+  currentArchivedExpiry(): ReadonlyMap<string, ArchivedExpiryEntry> {
+    return this.archivedExpiryState;
+  }
+
   /** The last measured project-pool sweep, or null if none has been taken yet
    *  — same reasoning as `currentCoord()`'s null. */
   currentPools(): ProjectPoolsWire | null {
@@ -1795,6 +1819,10 @@ export class FleetWatcher {
       // ccd re-reads `$REG/reclaim-paused` inside `ws-reclaim`'s lock at the
       // instant of deletion, which is the read that makes the switch real.
       void this.sweepChildReclaim(records, registryRead.names)
+        .catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the child lane's reasons: the EXPIRY lane (workspace lifecycle wave 3b) — a SIBLING pass on
+      // the same tick's registry read, at the same cadence, under the same switch, sharing nothing else.
+      void this.sweepArchivedExpiry(records, registryRead.names)
         .catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
@@ -3777,6 +3805,136 @@ export class FleetWatcher {
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
       fleetState: this.deps.fleetState, presence: this.deps.presence, notifyLog: this.deps.notifyLog,
     }, req));
+  }
+
+  /**
+   * THE EXPIRY LANE (workspace lifecycle spec 2026-09-24 §5.3 "The lane", wave 3b): ARCHIVED workspaces, seven days
+   * after their archive. A SIBLING of `sweepChildReclaim` on the same tick — its registry read, its cadence
+   * (`CHILD_RECLAIM_SWEEP_MS`) and its switch (`reclaim-paused`, now the fleet's ONE cleanup switch) — and nothing else:
+   * its own memory, verdict (`archivedExpiryVerdict`, L1), executor (`expireArchived`), feed rows and attention list.
+   * A sibling pass, not a branch inside the child lane's, so neither lane's early return (the mirror unread, a
+   * capability missing) can silence the other (the departure `expiry-lane-is-a-sibling-pass`).
+   *
+   * IT SHIPS SHADOWED (the coordinator's safety ruling (E)). Until the operator touches `$REG/expire-lane-live` by
+   * hand, a due row is AUDITED and RECORDED — "would expire <id>", a feed row and an attention entry — and `ws-expire`
+   * is never composed; the executor re-reads the file at the act. `reclaim-paused` stops the lane ENTIRELY, shadow
+   * included: no audit, no record.
+   *
+   * THE THRESHOLD IS NEVER TYPED HERE. A row's instant is LEARNED from ccd (`learnExpiry`: the audit's `expiresAt`,
+   * read through ONE reader), once per archive, at most `EXPIRE_AUDITS_PER_PASS` rows a pass; a row is not audited
+   * again before its instant unless its archive changes. A box whose ccd predates the key answers no evidence, and
+   * nothing is composed for that row.
+   *
+   * WHAT IT ASKS FOR. A row twice-observed eligible (`archivedExpiryVerdict` on two passes) is DUE; AT MOST ONE act
+   * runs per pass, fleet-wide, and ONE PASS runs at a time, so never two acts at once. Every outcome is folded into
+   * memory by L1 (`archivedExpiryNextEntry`); a feed row is written when a row's outcome CHANGES. Presence defers with
+   * no ceiling; a standing `in-use` is reported, naming what holds it, and never killed.
+   */
+  async sweepArchivedExpiry(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord || this.archivedExpirySweeping) return;
+    const now = Date.now();
+    if (this.lastArchivedExpirySweep !== 0 && now - this.lastArchivedExpirySweep < CHILD_RECLAIM_SWEEP_MS) return;
+    this.lastArchivedExpirySweep = now;
+    this.archivedExpirySweeping = true;
+    try {
+      await this.archivedExpiryPass(coord, records, names, now);
+    } finally {
+      this.archivedExpirySweeping = false;
+    }
+  }
+
+  /** One pass of the expiry lane — `sweepArchivedExpiry`'s body, run only while no other pass runs. */
+  private async archivedExpiryPass(
+    coord: CoordStore, records: readonly SessionRecord[], names: readonly string[], now: number,
+  ): Promise<void> {
+    const forgetSightings = (): void => {
+      for (const [id, e] of this.archivedExpiryState) {
+        if (e.eligibleSince !== null) this.archivedExpiryState.set(id, { ...e, eligibleSince: null });
+      }
+    };
+    // ONE — the switch and the capability. Either way the twice-observed sightings are dropped: a row needs two
+    // FRESH passes once the switch is lowered or the box proves the verb. What was learned and reported stands.
+    if (names.includes(RECLAIM_PAUSE_MARKER) || !capSupported(this.deps.fleetState, EXPIRE_CAP)) {
+      forgetSightings();
+      return;
+    }
+    // TWO — the population, and the store's answers for it, read ONCE (`lastRunBySession`). A read that fails makes
+    // every row ineligible this pass. (The executor re-reads them for its one row at the act.)
+    const archived = records.filter((r) => r.workspace !== null && r.archivedAt !== null);
+    let store: { ok: true; workers: ReadonlySet<string>; claimants: ReadonlySet<string> } | { ok: false; detail: string };
+    try {
+      const last = coord.lastRunBySession(archived.map((r) => r.id));
+      store = last.ok ? { ok: true, workers: new Set(last.openWorkers), claimants: new Set(last.openClaimants) }
+        : { ok: false, detail: last.detail };
+    } catch (err) {
+      store = { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+    const seen = new Set<string>();
+    const learn: string[] = [];
+    const due: string[] = [];
+    for (const r of archived) {
+      seen.add(r.id);
+      let entry = archivedExpiryEntryFor(this.archivedExpiryState.get(r.id), r.archivedAt!);
+      const past = entry.expiresAt !== null && now >= entry.expiresAt * 1000;
+      const read: ExpiryStoreRead = !store.ok ? { ok: false, detail: store.detail } : this.archivedExpiryStoreRead(
+        coord, r.id, store.workers.has(r.id), store.claimants.has(r.id), past);
+      const v = archivedExpiryVerdict({
+        sessionId: r.id, workspace: r.workspace, archivedAt: r.archivedAt, child: r.child,
+        identityMeasured: r.unmeasured.length === 0, held: r.held, store: read, expiresAt: entry.expiresAt, nowMs: now,
+      });
+      entry = archivedExpirySighted(entry, v, r.held, now);
+      this.archivedExpiryState.set(r.id, entry);
+      if (!v.eligible && v.why === 'expiry-unknown' && now >= entry.nextAskAt && learn.length < EXPIRE_AUDITS_PER_PASS) {
+        learn.push(r.id);
+      }
+      if (archivedExpiryDue(entry, now)) due.push(r.id);
+    }
+    for (const id of [...this.archivedExpiryState.keys()]) if (!seen.has(id)) this.archivedExpiryState.delete(id);
+    // THREE — learn: one audit at a time, each on its session's queue.
+    for (const id of learn) {
+      try {
+        const read = await this.deps.queue.run(id, () => learnExpiry(this.deps, id));
+        const e = this.archivedExpiryState.get(id);
+        if (e !== undefined) this.archivedExpiryState.set(id, archivedExpiryLearned(e, read, Date.now(), CHILD_RECLAIM_SWEEP_MS));
+      } catch (err) {
+        console.warn(`ccrc-server: sweepArchivedExpiry: learning ${id}'s expiry threw (${err instanceof Error ? err.message : String(err)})`);
+      }
+    }
+    // FOUR — the act: at most ONE per pass, fleet-wide, never on a box that answered `flock-unavailable`. Never asked
+    // first: the row whose `nextAskAt` is earliest, then the oldest instant. No other pass runs meanwhile, so the
+    // answer is folded onto the very entry the act was asked for.
+    if (this.archivedExpiryBoxRefused === null && due.length > 0) {
+      const pick = due.map((id) => [id, this.archivedExpiryState.get(id)!] as const)
+        .sort(([ia, a], [ib, b]) => a.nextAskAt - b.nextAskAt || (a.expiresAt ?? 0) - (b.expiresAt ?? 0) || (ia < ib ? -1 : 1))[0]!;
+      const [id, entry] = pick;
+      try {
+        const result = await this.deps.queue.run(id, () => expireArchived({
+          coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
+          presence: this.deps.presence, notifyLog: this.deps.notifyLog,
+        }, { sessionId: id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt! }));
+        if (result.kind === 'box' && result.word === 'flock-unavailable') this.archivedExpiryBoxRefused = result.detail;
+        if (archivedExpiryOutcomeKey(result) !== entry.lastOutcome) recordExpireFeed({ coord, notifyLog: this.deps.notifyLog }, result);
+        const next = archivedExpiryNextEntry(entry, result, Date.now(), CHILD_RECLAIM_SWEEP_MS);
+        if (next === null) this.archivedExpiryState.delete(id); else this.archivedExpiryState.set(id, next);
+      } catch (err) {
+        console.warn(`ccrc-server: sweepArchivedExpiry: the expiry of ${id} threw (${err instanceof Error ? err.message : String(err)}) — left for the next pass`);
+      }
+    }
+    // FIVE — the attention list, from the lane's memory alone.
+    this.expiryAttentionList = expiryAttention(this.archivedExpiryState);
+  }
+
+  /** One archived row's store answers in the lane's pass (spec §5.3's run conjuncts). `reviewing` — a REVIEW run
+   *  naming this row whose reviewed run is not terminal (`expiryReviewing`, the executor's own read) — is read only
+   *  for a row PAST its instant (`past`), the only rows it can decide; a read that fails is the store's failure for
+   *  this row. */
+  private archivedExpiryStoreRead(
+    coord: CoordStore, id: string, openWorker: boolean, openClaimant: boolean, past: boolean,
+  ): ExpiryStoreRead {
+    if (!past || openWorker || openClaimant) return { ok: true, openWorker, openClaimant, reviewing: false };
+    const review = expiryReviewing(coord, id);
+    return review.ok ? { ok: true, openWorker, openClaimant, reviewing: review.reviewing } : review;
   }
 
   /** The hold-release job's own executor: `releaseRetiredChildHold` on the
