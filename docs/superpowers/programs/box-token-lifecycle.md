@@ -1,7 +1,7 @@
 # Program: box-token-lifecycle
 
 Spec: `docs/superpowers/specs/2026-10-07-box-token-lifecycle-design.html` (approved 2026-10-07 15:23 UTC, revision 5).
-Plan (wave 1, spec wave 1 parts A and B): `docs/superpowers/plans/2026-10-07-box-token-lifecycle-w1.md` (being drafted).
+Plan (wave 1, spec wave 1 parts A and B): `docs/superpowers/plans/2026-10-07-box-token-lifecycle-w1.md` (16 tasks: A1 to A9, B1 to B7).
 Coordinator: `ccrc-pwa-bright-river`. This session also coordinates `centralised-update-management`; its ledger carries
 the origin of this programme: the entries of 2026-10-07 from 09:45 to 11:06 UTC.
 
@@ -18,7 +18,8 @@ spec's after wave 1.
 |---|---|---|---|---|---|
 | 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | — | planned; deviation block 4388 to 4417 (30, shared with row 2); dispatch held on claims, see Carried constraints |
 | 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | — | — | to open before row 1 closes |
-| 3 | 2 | The weekly schedule; doctor FAIL and WARN arms switched on (before the schedule ships); the agent link token by the same code-then-HTTPS claim | — | — | later |
+| 2a | 1, follow-up | The arming PR: flips doctor's `box-token` FAIL and WARN arms on. Trigger: the GPT-lane lane-1 B4 soak gate recorded closed. Bound: merged before row 3's first PR | — | — | later |
+| 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim | — | — | later |
 | 4 | 3 | A token per box, stored as hashes | — | — | later |
 
 ## Decisions & deviations
@@ -40,6 +41,11 @@ spec's after wave 1.
   4395, 4396, 4397, 4398, 4399, 4400, 4401, 4402, 4403, 4404, 4405, 4406, 4407, 4408, 4409, 4410, 4411, 4412, 4413, 4414,
   4415, 4416, 4417. The block serves both runs of spec wave 1. Numbers are written bare until the plan or a worker
   defines them.
+- **2026-10-07 17:24 UTC: the wave-1 plan was written** by a workflow: a contract, six prototyping drafters, two attack
+  lenses, and an assembly pass. It defines D-4388 to D-4397. The coordinator assigned **D-4398**, the unreadable
+  generation read with no hold word: a technical narrowing that keeps the spec's §6 intent that an unreadable read is never
+  read as behind. One item waits on the operator before run 320 is dispatched: the agent.env fleet marker (the
+  plan's pending deviation). Numbers 4399 to 4417 stay reserved, written bare.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
@@ -52,6 +58,8 @@ spec's after wave 1.
   - 1076 (run 295): `README.md`, `CLAUDE.md`.
   - 1077 (run 302): `ccd/ccrc`, `ccd/ccrc-doctor-checks`, `deploy/deploy.sh`, `ccd/session-hook.sh`, `install.sh`.
   - 1078 (run 302): `server/test/single-definition.test.ts`, `server/test/ccrc-install.test.ts`.
+  - The plan also touches `README.md` (A2, A8, B6), `CLAUDE.md` (A8), both under 1076, and
+    `pwa/src/fleet/useUpdatesView.ts` (B6), which no claim covers.
   - Re-read `GET /api/claims?project=ccrc-pwa` before each dispatch. A lapsed claim whose PR is still open doesn't
     count as ended.
 - **The GPT-lane programme (`ccrc-pwa-clear-mesa`):** no action is needed from it, because a rotation is invisible to
