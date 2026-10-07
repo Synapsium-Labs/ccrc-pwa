@@ -965,3 +965,59 @@ describe('Task 26F item 2: a relative --file is resolved once, before admission,
     expect(q<{ path: string }>(box, 'SELECT path FROM file_paths ORDER BY path'), 'the scheduled tick adds no alias').toEqual([{ path: file }]);
   }, 60_000);
 });
+
+describe('Task 26F items 3 and 4: the two refusals an --op import used to answer rc 0 (D-4313)', () => {
+  it('--roster-unreadable: every import form answers roster-unreadable before any listing or admission; the dry run writes nothing, --apply counts it once; --op migrate is unaffected', async () => {
+    const box = boundBox('ccrc-hist-26f3-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    const file = plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000000f7', 'no roster', iso(0))]);
+    const before = snapshot(box);
+    const dry = runSweep(box, ['--op', 'import', '--roster-unreadable'], { homes: [] });
+    expect(lastResult(dry.stdout)).toEqual({ rc: 2, reason: 'roster-unreadable' });
+    expect(dry.code).toBe(2);
+    expect(dry.stdout, 'nothing is listed').not.toMatch(/\b(un)?mapped\b/);
+    expect(snapshot(box), 'the dry run writes nothing at all').toEqual(before);
+    const recsBefore = recs(box).length;
+    const nr = counter(box, 'non_regular');
+    const apply = runSweep(box, ['--op', 'import', '--apply', '--roster-unreadable'], { homes: [] });
+    expect(lastResult(apply.stdout)).toEqual({ rc: 2, reason: 'roster-unreadable' });
+    expect(apply.code).toBe(2);
+    expect(counter(box, 'roster_unreadable')).toBe(1);
+    expect([countOf(box, 'epochs'), countOf(box, 'entries'), recs(box).length]).toEqual([0, 0, recsBefore]);
+    expect(fs.existsSync(path.join(paths(box).root, 'op')), 'no op marker is left').toBe(false);
+    // the operator form: through the real shim with an unreadable accounts.sh, so the shim itself passes the flag and no home
+    fs.rmSync(path.join(box.home, '.ccrc', 'accounts.sh'));
+    const op = await shimPty(box, ['--op', 'import', '--session', ID, '--file', file, '--apply']);
+    expect(lastResult(op.out), op.out).toEqual({ rc: 2, reason: 'roster-unreadable' });
+    expect(counter(box, 'roster_unreadable'), 'counted once per pass').toBe(2);
+    expect(counter(box, 'non_regular'), 'never read as an inadmissible file').toBe(nr);
+    expect(countOf(box, 'epochs')).toBe(0);
+    // CONTROL: --op migrate needs no roster
+    const mig = runSweep(box, ['--op', 'migrate', '--roster-unreadable'], { homes: [] });
+    expect(lastResult(mig.stdout)).toEqual({ rc: 0 });
+  }, 60_000);
+
+  it('the operator\'s --session --file mapping of a uuid another family holds confirmed answers uuid-claimed, ingests nothing and journals no mapping; a re-run of an own mapping stays rc 0', async () => {
+    const box = boundBox('ccrc-hist-26f4-');
+    const OTHER = 'claude-b-demo';
+    plantSession(box, OTHER, { uuid: U1, generation: G1, project: 'demo' });
+    expect(runDriver(box, { offsetMs: 31 * MIN, managedSettings: [] }).code).toBe(0);   // the registry scan maps U1 to OTHER
+    expect(epochsOf(box, OTHER).map((e) => e.cc_session_uuid)).toEqual([U1]);
+    plantSession(box, ID, { generation: G1, project: 'demo' });
+    const file = plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000000f8', 'claimed elsewhere', iso(0))]);
+    const twoBefore = counter(box, 'uuid_two_sessions');
+    const r = await shimPty(box, ['--op', 'import', '--session', ID, '--file', file, '--apply']);
+    expect(lastResult(r.out), r.out).toEqual({ rc: 2, reason: 'uuid-claimed' });
+    expect(r.out, 'the operator is told which family holds it').toContain(OTHER);
+    expect(counter(box, 'uuid_two_sessions') - twoBefore).toBe(1);
+    expect(epochsOf(box, ID)).toEqual([]);
+    expect([countOf(box, 'entries'), countOf(box, 'ingest_files'), countOf(box, 'file_paths')]).toEqual([0, 0, 0]);
+    expect(verdicts(box, 'mapping').filter((v) => v['declared_by'] === 'operator')).toEqual([]);
+    expect(fs.existsSync(path.join(paths(box).root, 'op')), 'no op marker is left').toBe(false);
+    // CONTROL: the family that holds it re-maps it: already mapped is idempotent success
+    const own = await shimPty(box, ['--op', 'import', '--session', OTHER, '--file', file, '--apply']);
+    expect(lastResult(own.out), own.out).toEqual({ rc: 0 });
+    expect(verdicts(box, 'mapping').filter((v) => v['cc_session_uuid'] === U1)).toHaveLength(1);
+    expect(countOf(box, 'entries')).toBe(1);
+  }, 90_000);
+});

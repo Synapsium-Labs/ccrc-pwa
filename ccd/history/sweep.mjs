@@ -3269,8 +3269,9 @@ function outboxRow(db, rec) {
  *  after — before the file's first NORMAL chunk (§9.2 "Every verdict commits first", CT10; O34). A uuid
  *  another family already claims is chainEpoch's first-claim rule (uuid_two_sessions). A uuid this id holds as an
  *  unconfirmed epoch is the scan's to decide (D-4297), except for the operator's own mapping.
- *  Answers the core's outcome: 'skipped', 'refused' (another family holds the uuid confirmed), 'already' (this
- *  family holds it confirmed: no new verdict, a re-run queues nothing) or 'mapped'. */
+ *  Answers the core's outcome: 'skipped', 'refused' (another family holds the uuid confirmed; `holder` names it,
+ *  {ccrc_id, generation}), 'already' (this family holds it confirmed: no new verdict, a re-run queues nothing) or
+ *  'mapped'. D-4313 (history-import-refusal-words): a refusal is the CALLER's to answer, never to read as success. */
 export function commitMapping(db, ctx, ev) {
   const nowMs = ctx.now();
   const r = mapRegistryUuid(db, ctx, {
@@ -3279,7 +3280,10 @@ export function commitMapping(db, ctx, ev) {
     withTx(db, 'FULL', () => { for (const rec of fn()) outboxRow(db, rec); });
   });
   flushOutbox(db, ctx.home, ctx.ids, ctx.now());
-  return { outcome: r.outcome };
+  if (r.outcome !== 'refused') return { outcome: r.outcome };
+  const holder = db.prepare('SELECT s.ccrc_id, s.generation FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE e.cc_session_uuid = ? AND e.confirmed_ms IS NOT NULL AND e.session_pk <> ? LIMIT 1')
+    .get(ev.uuid, r.family.sessionPk);
+  return { outcome: 'refused', holder };
 }
 
 /** The generation a registry row reads now, for a LISTING only (the dry run's `mapped` lines): the same
@@ -3431,7 +3435,12 @@ async function importApply(db, ctx, P, args) {
       return { rc: EXIT.REFUSED, reason: 'bad-args' };
     }
     closeSync(probe.fd);
-    commitMapping(db, ctx, { uuid, id: args.session, declaredBy: 'operator', path: args.file });
+    const m = commitMapping(db, ctx, { uuid, id: args.session, declaredBy: 'operator', path: args.file });
+    if (m.outcome === 'refused') {
+      // D-4313 (history-import-refusal-words): first claim wins, so the operator is told which family holds the uuid.
+      process.stderr.write(`history-sweep: ${uuid} is already confirmed in ${m.holder.ccrc_id} (generation ${m.holder.generation || '-'}); nothing mapped or ingested\n`);
+      return { rc: EXIT.REFUSED, reason: 'uuid-claimed' };
+    }
     ends.push(await importFile(db, ctx, args.file, uuid));
   } else {
     const ev = importEvidence(db, P);
@@ -3510,6 +3519,13 @@ export async function runOpPass(parsed, deps, out) {
     out('history-sweep: store-create-refused-role');
     return result(EXIT.NO_STORE);
   }
+  if (form === null && parsed.rosterUnreadable) {
+    // D-4313 (history-import-refusal-words): an unreadable roster is no homes, so there is nothing to list or admit;
+    // reading it as an empty roster answered "nothing to import" and exit 0. A dry run writes nothing at all (§8.4),
+    // so it cannot count the condition; --apply does (below).
+    out('history-sweep: accounts.sh could not be read, so no home is known; nothing listed');
+    return result(EXIT.REFUSED, 'roster-unreadable');
+  }
   if (form === null) {
     // The dry run stats and opens db/history.db, so the bounded probe goes first (§9.3, RR15): a dead volume
     // answers store-unreachable instead of blocking the operator's shell in a stat it can never leave.
@@ -3534,6 +3550,14 @@ export async function runOpPass(parsed, deps, out) {
     if (ids === null) {
       out('history-sweep: store.writer cannot be read, so nothing this pass decides could be journaled');
       return result(EXIT.DB, 'store-unmeasured');
+    }
+    if (parsed.op === 'import' && parsed.rosterUnreadable) {
+      // D-4313 (history-import-refusal-words): counted and refused before any listing or admission, every import form
+      // (the operator's --session --file would otherwise fail admission as outside-roots and count non_regular).
+      // --op migrate does not need the roster.
+      bump(db, 'roster_unreadable');
+      out('history-sweep: accounts.sh could not be read, so no home is known; nothing imported');
+      return result(EXIT.REFUSED, 'roster-unreadable');
     }
     writeOpMarker(P, parsed.op, now());
     if (!flushFirst(db, home, ids, now)) {

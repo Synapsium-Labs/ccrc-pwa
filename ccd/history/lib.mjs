@@ -43,6 +43,10 @@ const REASON_ROWS = [
     'older-than-floor', 'reparse-too-many', 'workspace-unreadable', 'harness-unsupported',
     'harness-unreadable', 'generation-unreadable', 'writer-absent', 'adopt-refused', 'restore-refused',
     'rebuild-refused', 'migrate-refused',
+    // `roster-unreadable` and `uuid-claimed` (Task 26F, D-4313): `--op import`'s two refusals that used to answer
+    // exit 0 — the shim passed --roster-unreadable (no homes to list or admit), or an operator's --session --file
+    // mapping names a uuid another family already holds confirmed. Plan-chosen words.
+    'roster-unreadable', 'uuid-claimed',
   ]],
   [EXIT.WRITER_BUSY, ['writer-busy']],
   [EXIT.DB, [

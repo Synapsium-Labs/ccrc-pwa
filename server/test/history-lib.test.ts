@@ -71,6 +71,12 @@ describe('the exit codes and reason words (spec §8.3; D-4171)', () => {
     expect(REASONS['fts5-absent']).toBe(EXIT.FTS_UNAVAILABLE);
   });
 
+  it('--op import\'s two refusals are exit-2 words (Task 26F, D-4313)', () => {
+    expect(REASONS['roster-unreadable']).toBe(EXIT.REFUSED);
+    expect(REASONS['uuid-claimed']).toBe(EXIT.REFUSED);
+    expect(REFUSALS).toEqual(expect.arrayContaining(['roster-unreadable', 'uuid-claimed']));
+  });
+
   it('REFUSALS is DERIVED: exactly the exit-2 words of REASONS, in order', () => {
     expect([...REFUSALS]).toEqual(Object.keys(REASONS).filter((w) => REASONS[w] === EXIT.REFUSED));
     expect(REFUSALS).toContain('bad-id');
