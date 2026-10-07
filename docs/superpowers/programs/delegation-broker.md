@@ -27,7 +27,7 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
 | 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; CCR-15 wave 4's sweep (merged #215, live) | — | to plan |
 
-## Measurement matrix (filled by wave 1; wave 2's close-out added the real-lane cross-check)
+## Measurement matrix (filled by wave 1; wave 2's close-out added 2.1.292 and the real-lane cross-check)
 
 Wave 1's answers to spec §8.1, per Claude Code version, read from the committed corpus
 (`server/test/fixtures/delegation/matrix.json`, derived by `server/test/delegation-rig/build-matrix.mjs` from 140
