@@ -2372,14 +2372,22 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(select.value).toBe('');
   });
 
-  it('a stored quiet time the list does not hold selects no value — the built-in and an off-grid value alike', async () => {
-    for (const quietMs of [2 * SW_H, 75 * 60_000]) {
-      await mount(swView({ chosen: swChosen({ quietMs }), quiet: { ...swView().quiet, effectiveMs: quietMs, source: 'chosen' } }));
-      const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
-      expect(quietChoices(swView()).some((c) => c.value === quietMs), String(quietMs)).toBe(false);
-      expect(select.value, String(quietMs)).toBe('');
-      cleanup();
-    }
+  it('a stored quiet time equal to the built-in as a number selects the built-in option; one off the list that is not the built-in (the server cannot send it today) selects none', async () => {
+    const select = (): HTMLSelectElement =>
+      within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+    const builtIn = swView().quiet.builtInMs;
+    expect(builtIn, 'the fixture\'s built-in is the 2 h the stored number below equals').toBe(2 * SW_H);
+    expect(quietChoices(swView()).some((c) => c.value === builtIn), 'the list omits the built-in step').toBe(false);
+
+    await mount(swView({ chosen: swChosen({ quietMs: builtIn }), quiet: { ...swView().quiet, effectiveMs: builtIn, source: 'chosen' } }));
+    expect(select().value, 'the built-in stored as a number selects the built-in option').toBe('default');
+    cleanup();
+
+    const offGrid = 75 * 60_000;
+    await mount(swView({ chosen: swChosen({ quietMs: offGrid }), quiet: { ...swView().quiet, effectiveMs: offGrid, source: 'chosen' } }));
+    expect(quietChoices(swView()).some((c) => c.value === offGrid), 'the off-grid value is not on the list').toBe(false);
+    expect(select().value, 'a value off the list that is not the built-in selects none').toBe('');
+    cleanup();
   });
 
   it('P5: the run-less footnote is always shown — zero counts, and counts that could not be read', async () => {

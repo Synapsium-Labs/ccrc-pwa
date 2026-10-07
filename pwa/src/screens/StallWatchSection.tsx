@@ -264,7 +264,9 @@ const NOW_CLASS: Record<StallNowTone, string> = {
   warn: 'settings-catalogue settings-catalogue--amber',
 };
 /** The select's value for the built-in, and for a stored value the list does not hold (an unreadable one): an
- *  empty option, drawn blank, so the select never shows a value the server did not answer. */
+ *  empty option, drawn blank, so the select never shows a value the server did not answer. A stored number equal to
+ *  the view's built-in is the built-in, whichever way it was stored: the list omits that step, so it selects the
+ *  built-in option, not the blank one (departure `quiet-select-shows-no-unanswered-value`). */
 const QUIET_BUILT_IN = 'default';
 const QUIET_NONE = '';
 
@@ -325,7 +327,7 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
   const next = stallNextLines(view.effective);
   const choices = quietChoices(view);
   const stored = view.chosen.quietMs;
-  const quietValue = stored === 'default'
+  const quietValue = stored === 'default' || stored === view.quiet.builtInMs
     ? QUIET_BUILT_IN
     : choices.some((c) => c.value === stored) ? String(stored) : QUIET_NONE;
   const quietLine = fillStallText(
