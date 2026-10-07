@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | — | run 322 dispatched 2026-10-07 to `ccrc-pwa-calm-basin` (R20) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `505ffbff4`; review run 330 waits at the daily cap (R22) |
 
 ## Decisions & deviations
 
@@ -287,12 +287,34 @@ time.
     `9bdcb0d2a`, which now carries its Task 12, as clean in `merge-tree` against `main`, with no hunk near those lines.
   - Mail 3874 tells the worker that this confirmation licenses those lines, so item 5 runs without a stop. Any
     other line in either file is a stop-and-report.
+- **R22 (2026-10-07 19:29)**, wave 2's wave-done is verified, and its review dispatch waits at the daily cap.
+  - Mail 3916 is the wave-done: fingerprint `505ffbff4425` (tip and handoff commit), PR #322 `open`, suite `green`,
+    all five items done. Item 5 stayed inside R21's lines and kept `StallResolution.levelSource` pinned on both arms,
+    because spec §9 prescribes the field. The final whole-branch review found no Critical or Important finding. The
+    mail is copied to `w2-wave-done.md`, and the worker's SDD workspace to `w2-child-evidence/`, before any reclaim.
+  - Re-measured: the origin tip, the clean worker checkout and PR #322's head all read `505ffbff4`. `main` has not
+    moved from `7f7bf4afc`, the PR is mergeable, its required checks are green (macOS still pending), and `schema.ts`
+    is untouched. Run 322 advanced to `working`, then to `awaiting-review`, on the worker's fingerprint unchanged.
+  - Review run 330 opened with the programme's title. Its brief (`w2-review-brief.md`) names the held-out panel, a
+    whole-branch pass (no browser copy, no client-side ladder policy, the poll, D-4035, D-4036, `QuickConfirm`'s
+    single-string callers, wording, lane discipline, the six departure slugs), every suite and the carried
+    constraints. Its dispatch was refused `cap-daily`, `limit` 24 and `used` 24, spawning nothing. A snapshot sorted
+    by `dispatchedAt` puts the next age-out at 19:57:43 (run 299). One session-only wake at 19:58 resends the same
+    payload once.
+  - Correction to R19. The plan's README citation instrument is `session-hook.test.ts -t 'CITATION DEBT|README
+    HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'`, and it reads `7 passed | 328 skipped`, which
+    both workers reported. Review 319's brief gave the reviewer `-t 'census|citation'` instead, a broader filter that
+    reads `15 passed | 320 skipped`. The mistake was this coordinator's. R19's "does not reproduce" was wrong, and the
+    carried constraint below is restored with the exact command.
+  - Wave 2's six departure slugs, the worker's question on `coord-db`'s slot match, its parked residue and the
+    plan's operator question 2 wait for the review report.
 
 ## Carried constraints (reviewers get these)
 
 - Mutation-table discipline: every guard ships with a row measured red when it is removed, before and after.
-- The README citation instrument (`session-hook.test.ts -t 'census|citation'`) is unchanged by a wave: it read
-  `15 passed | 320 skipped (335)` at `58de9f969` (R19). README and `CLAUDE.md` edits are made in place.
+- The README citation instrument (`session-hook.test.ts -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE
+  BOUND|TWO CORPUS|whole corpus'`) stays at `7 passed | 328 skipped (335)` (R22). README and `CLAUDE.md` edits are
+  made in place.
 - `stall.ts` and `stallsettings.ts` stay L1: pure, and spelling no marker name. No marker gains a writer
   (`single-definition.test.ts`).
 - The migration slot is measured, never assumed: 17 at `77f8d63a5`. Slots are a cross-branch namespace; whichever
