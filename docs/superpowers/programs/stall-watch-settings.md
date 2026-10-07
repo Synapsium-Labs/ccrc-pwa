@@ -202,6 +202,22 @@ time.
     report goes to the reviewer's `~/.cc-clips/`, per reviewer clause 7.
   - The worker's three items for ruling wait for the review report: (a) the parked plan-mandated duplication, (b) the
     docs saying "Settings" before wave 2 builds the section, and (c) the migration slot re-measured before merge.
+- **R18 (2026-10-07 15:21)**, the operator authorizes PR #320's merge "when ready".
+  - The operator said "merge when ready". Ready means all of these, measured at merge time, not remembered:
+    - Review run 319's report is accepted by its close, and it leaves no confirmed or unexamined critical or important
+      finding unresolved. A finding that is fixed returns through a fix round, a fresh wave-done and a scoped review
+      of the new tip before it counts.
+    - The head being merged is the run's verified `handoffCommit`, and PR #320's required checks are green on it.
+      macOS legs gate nothing.
+    - Slot 17 is still free on current `origin/main`. If another merge took it, the migration moves up in a fix round
+      before merge, and no applied migration is edited.
+    - If run 291's wave 6 lands first, W1 merges current `main` without rebasing and re-runs the R7 guards first.
+  - Merge with `gh pr merge 320 --admin --squash --match-head-commit <handoffCommit>`, after measuring whether `main`
+    requires the merge queue. The squash subject must not carry the PR title's deviation-number range.
+  - Not authorized by this ruling: `ccrc rollout` or `ccrc update` by hand. The release lane carries the merge, and
+    deployment is verified read-only afterwards: the migration applied, the seed still `follow`, and
+    `GET /api/coord/stall-watch` answering.
+  - After the merge, wave 2's run opens before run 295 closes.
 
 ## Carried constraints (reviewers get these)
 
