@@ -575,6 +575,7 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
     const t = recaptureTree();
     const r = recapture(ctx(t, ENTRIES), ['--dry-run']);
     expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr, 'a clean run says nothing on stderr').toBe('');
     const out = r.stdout.split('\n');
     expect(out.slice(0, 4)).toEqual([
       'recapture: dry run: nothing is made and nothing is run',
@@ -677,6 +678,7 @@ describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', (
     const dry = recapture(c, ['--dry-run', '2.1.999', '2.1.9']);
     const r = recapture(c, ['2.1.999', '2.1.9']);
     expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr, 'a clean run says nothing on stderr').toBe('');
     const made = fs.readdirSync(c.tmp);
     expect(made, 'exactly one raw root, nothing else in TMPDIR').toHaveLength(1);
     const raw = path.join(c.tmp, made[0] as string);
