@@ -23,7 +23,7 @@ time.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | — | run 295 dispatched 2026-10-07 to `ccrc-pwa-swift-meadow`; claim overlap per R10 |
+| 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | run 295 (`ccrc-pwa-swift-meadow`): seven tasks implemented; wave-done pending CI (R16) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README | server (it serves the PWA) | — | planned; dispatched after wave 1 merges |
 
 ## Decisions & deviations
@@ -169,6 +169,20 @@ time.
     the plan edits no size claim, because #283 already made it.
   - Mail 3837 gives the worker those limits and run 302's untouchable regions, and lets Tasks 6 and 7 follow Task 5
     without a further stop. The second landing re-runs the README citation instrument.
+- **R16 (2026-10-07 14:53)**, all seven tasks are implemented, and wave-done waits inside a turn.
+  - The worker's mail 3856 is a status, not a wave-done. All seven tasks are task-reviewed on Opus, and the final
+    whole-branch review found 0 Critical and 0 Important. `ws/swift-meadow` is pushed at `ccd3eced1` as PR #320, and
+    full CI run 37639105813 started at 14:43.
+  - Claims: run 302 released claim 1072 (mail 3840), and the worker took `README.md` and `CLAUDE.md` as claim 1076.
+    Claim 1074 holds the other 24 paths. `shared/api.ts` and `watch.ts` stay licensed co-edits under R12 and R14.
+  - The worker's turn marker read `done` at 14:51:50 while CI ran. That is the shape that stranded a finished wave for
+    20 hours before: a CI result wakes no session. Mail 3857 tells it to wait inside a turn with a backgrounded
+    `gh run watch --exit-status`, then send wave-done in that turn, naming any failing leg rather than waiting on a
+    fix.
+  - `judgeStall`'s signature and its `StallInput` literal (about :4187-4216 on `origin/main`) are outside R14's
+    literal list but inside none of wave 6's four sites, and the plan requires them. Accepted. The omission was in
+    this coordinator's list in mail 3830, not in the worker's reading. Mail 3858 tells run 291's coordinator so, and
+    `git merge-tree` against `ws/amber-river` at `899e4f12a` is clean.
 
 ## Carried constraints (reviewers get these)
 
