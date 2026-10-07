@@ -2718,20 +2718,48 @@ export function discoverSidecars(homes, uuids) {
   return out;
 }
 
-/** The transcript's tool_result rows, each as {entryId, text, toolUseIds}, built once per tick
- *  per transcript (the `cache`). linkSidecar decides from them. */
-function toolResultCandidates(db, transcriptPk, cache) {
-  const hit = cache.get(transcriptPk);
-  if (hit !== undefined) return hit;
+/** What linkSidecar needs of a transcript's tool_result rows, for the sidecar names asked about, as
+ *  `{entryId, text, toolUseIds}` candidates in entry order. It never keeps a row's text: the rows are
+ *  iterated, each body is decompressed, tested against the names and dropped before the next, so peak
+ *  memory is one row's body however many large rows the transcript holds (O20's RSS bound; the first
+ *  version held every row's decoded text for the whole tick). A candidate's `text` is only the asked
+ *  names that row's text contains, NUL-joined (a file name cannot hold NUL, so no match can span two),
+ *  and its `toolUseIds` only the asked `toolu_` stems it answers. Each asked name is tested against the
+ *  row's full text on its own, so linkSidecar's two rules (a text that names the file, else the tool_use
+ *  the name is the id of) pick the same entry as over the full text. A row answering none of the asked
+ *  names is not a candidate. */
+export function toolResultCandidates(db, transcriptPk, names) {
+  const stems = new Set();
+  for (const n of names) {
+    const stem = n.replace(/\.[^.]*$/, '');
+    if (stem.startsWith('toolu_')) stems.add(stem);
+  }
   const out = [];
-  for (const r of sideStmts(db).toolResults.all(transcriptPk)) {
+  for (const r of sideStmts(db).toolResults.iterate(transcriptPk)) {
     let body;
     try { body = JSON.parse(unbrotli(r.z).toString('utf8')); } catch { continue; }
-    const toolUseIds = toolResultIdsOf(body);
-    if (toolUseIds.length > 0) out.push({ entryId: r.entry_id, text: ftsTextOf(body, 'entry'), toolUseIds });
+    const ids = toolResultIdsOf(body);
+    if (ids.length === 0) continue;
+    const text = ftsTextOf(body, 'entry');
+    const named = [];
+    for (const n of names) if (text.includes(n)) named.push(n);
+    const answered = ids.filter((id) => stems.has(id));
+    if (named.length > 0 || answered.length > 0) out.push({ entryId: r.entry_id, text: named.join('\0'), toolUseIds: answered });
   }
-  cache.set(transcriptPk, out);
   return out;
+}
+
+/** The candidates for one sidecar's transcript, cached per transcript for the tick: the small index
+ *  toolResultCandidates returns (never a row's text), asked for every sidecar name the tick found under
+ *  that uuid so the rows are read once. A name the cached index was not built for rebuilds it. */
+function candidatesFor(db, cache, transcriptPk, s) {
+  const hit = cache.byPk.get(transcriptPk);
+  if (hit !== undefined && hit.names.has(s.name)) return hit.candidates;
+  const names = new Set(cache.wanted.get(s.uuid) ?? []);
+  names.add(s.name);
+  const candidates = toolResultCandidates(db, transcriptPk, names);
+  cache.byPk.set(transcriptPk, { names, candidates });
+  return candidates;
 }
 
 function countSidecarTooLarge(db) {
@@ -2788,7 +2816,7 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
     }
     // Task 18's ensureTranscript expects its caller's transaction (bindFile's); here it gets its own.
     const transcriptPk = withTx(db, 'NORMAL', () => ensureTranscript(db, s.uuid));
-    const entryId = linkSidecar(s.name, toolResultCandidates(db, transcriptPk, cache));
+    const entryId = linkSidecar(s.name, candidatesFor(db, cache, transcriptPk, s));
     withTx(db, 'NORMAL', () => {
       if (z !== null) stmts(db).blobIns.run(sha, CODEC, z, size);
       const blobId = stmts(db).blobId.get(sha).blob_id;
@@ -2810,10 +2838,15 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
  *  free-space floor cut it short, and `paused` says it was the floor. */
 export async function ingestSidecars(db, ctx, budget, uuids) {
   const due = [...uuids].filter((u) => !notCaughtUp(db, ctx.homes, u));
-  const cache = new Map();
+  const found = discoverSidecars(ctx.homes, due);
+  const cache = { byPk: new Map(), wanted: new Map() };
+  for (const s of found) {
+    const names = cache.wanted.get(s.uuid);
+    if (names === undefined) cache.wanted.set(s.uuid, new Set([s.name])); else names.add(s.name);
+  }
   let bytes = 0;
   let unreadable = false;
-  for (const s of discoverSidecars(ctx.homes, due)) {
+  for (const s of found) {
     if (!budgetLeft(budget) || ctx.historyOff()) return { bytes, complete: false, paused: false, ...(unreadable ? { unreadable } : {}) };
     let r;
     try {

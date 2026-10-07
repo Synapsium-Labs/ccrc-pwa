@@ -437,6 +437,7 @@ interface IxSweep {
   ingestPath(db: DatabaseSync, ctx: IxCtx, f: { path: string; uuid: string; home: string }, b: IxBudget): Promise<IxFileResult | null>;
   ingestTick(db: DatabaseSync, ctx: IxCtx, b: IxBudget): Promise<IxTickResult>;
   ingestSidecars(db: DatabaseSync, ctx: IxCtx, b: IxBudget, uuids: Iterable<string>): Promise<{ bytes: number; complete: boolean; paused: boolean }>;
+  toolResultCandidates(db: DatabaseSync, transcriptPk: number, names: Iterable<string>): Array<{ entryId: number; text: string; toolUseIds: string[] }>;
 }
 type IxRow = Record<string, unknown>;
 
@@ -1470,6 +1471,52 @@ describe('history ingest: sidecars (plan task 21)', () => {
       const ok = await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, at(3), ids), S.newBudget());
       expect(ok.paused).toBe(false);
       expect(sidecarRows(db)).toEqual([{ name: 'b7k2q9z1x.txt', uuid: IX.uuidN(3) }]);
+    } finally { db.close(); }
+  });
+
+  it('linkage is unchanged by the bounded candidate index: a name that is a substring of one a row names, a toolu_ stem, and an orphan', async () => {
+    const { sweep: S } = await IX.api();
+    const box = IX.newBox('ccrc-hist-dm47i-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'go', 1),
+      IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'tool_use', id: 'toolu_01DDD', name: 'Bash', input: { command: 'make' } }], 2),
+      IX.user(IX.uuidN(3), IX.uuidN(2), [{ type: 'tool_result', tool_use_id: 'toolu_01DDD', content: 'saved to: /home/u/x/tool-results/data.txt' }], 3),
+      IX.assistant(IX.uuidN(4), IX.uuidN(3), [{ type: 'tool_use', id: 'toolu_01EEE', name: 'Read', input: { file_path: '/home/u/tree/b.png' } }], 4),
+      IX.user(IX.uuidN(5), IX.uuidN(4), [{ type: 'tool_result', tool_use_id: 'toolu_01EEE', content: 'short' }], 5),
+    ]));
+    for (const name of ['data.txt', 'a.txt', 'toolu_01EEE.json', 'zz-orphan.txt']) fs.writeFileSync(path.join(sideDir(box.homes[0]!), name), `body of ${name}\n`);
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids), S.newBudget());
+      expect(sidecarRows(db)).toEqual([
+        { name: 'a.txt', uuid: IX.uuidN(3) },                 // a substring of data.txt, which that row's text holds
+        { name: 'data.txt', uuid: IX.uuidN(3) },
+        { name: 'toolu_01EEE.json', uuid: IX.uuidN(5) },
+        { name: 'zz-orphan.txt', uuid: null },
+      ]);
+    } finally { db.close(); }
+  });
+
+  it('toolResultCandidates keeps no row text: a transcript of large tool_results yields candidates the size of the asked names (O20)', async () => {
+    const { sweep: S } = await IX.api();
+    const box = IX.newBox('ccrc-hist-dm47j-');
+    const big = (k: number): string => `${IX.words(30_000, k)} saved to: /home/u/x/tool-results/big${k}.txt`;   // ~200 KB of text per row
+    const rows = [IX.user(IX.uuidN(1), null, 'go', 1)];
+    for (let k = 1; k <= 6; k += 1) {
+      rows.push(IX.assistant(IX.uuidN(10 * k), IX.uuidN(k === 1 ? 1 : 10 * (k - 1) + 1), [{ type: 'tool_use', id: `toolu_0${k}`, name: 'Bash', input: { command: 'make' } }], 2 * k));
+      rows.push(IX.user(IX.uuidN(10 * k + 1), IX.uuidN(10 * k), [{ type: 'tool_result', tool_use_id: `toolu_0${k}`, content: big(k) }], 2 * k + 1));
+    }
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(rows));
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());
+      const pk = (db.prepare('SELECT transcript_pk AS pk FROM transcripts WHERE cc_session_uuid = ?').get(IX.U) as { pk: number }).pk;
+      const total = S.toolResultCandidates(db, pk, ['big2.txt', 'big5.txt', 'toolu_03.json']);
+      expect(total.map((c) => c.entryId).length, 'the three answered rows are candidates, the other three are not').toBe(3);
+      expect(total.map((c) => c.text)).toEqual(['big2.txt', '', 'big5.txt']);
+      expect(total.map((c) => c.toolUseIds)).toEqual([[], ['toolu_03'], []]);
+      expect(JSON.stringify(total).length, 'a candidate carried a row\'s text').toBeLessThan(1000);
     } finally { db.close(); }
   });
 
