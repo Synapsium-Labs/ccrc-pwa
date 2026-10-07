@@ -1018,8 +1018,8 @@ export type ChildReclaimJournalAttention = Extract<ChildReclaimAttention, { read
  *  DERIVED FROM THE MIRROR ALONE, "so a restart does not lose it": an
  *  audit-time terminal refusal is a mirror row like any other, because wave
  *  3's `cmd_ws_audit --reclaim` journals each terminal verdict it answers
- *  (`verb ws-audit`), and a failure is the `_lc_fail` line of an attempt that
- *  started, or the `_lc_refuse` line of a pre-lock die
+ *  (`verb ws-audit`), and a failure is an `_lc_fail` line (an attempt that
+ *  started, or a probe that could not run, spec §5.9) or a pre-lock die's `_lc_refuse` line
  *  (`childReclaimFailureLine`). No executor answer and no in-memory memo is an input. A report:
  *  nothing waits on it. A failure's sentence is its journal word first
  *  (`lcRefusalWord`, the journal-only map) and the server's lookup second —

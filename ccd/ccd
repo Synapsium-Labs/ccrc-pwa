@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=693d4e137994807ba97e309cb7fbdc0a0a602ddfd88644e02ed9aca0b32ecaf4
+# ccrc:generated 1 sha256=5606e9825227225eb2b507cd4f504ddae5ec648e793f829fb3376e696b565117
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13169,7 +13169,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
     elif [[ "$REAP_VERDICT" == unmeasured ]]; then
       printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
       echo "ccd: ws-audit --reclaim measured nothing: $REAP_DETAIL — retry" >&2
-      return 1
+      _lc_fail reclaim "$id" "" probe-unmeasured "$REAP_DETAIL" verb ws-audit; return 1
     else
       printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
       case "$REAP_VERDICT" in
@@ -29909,11 +29909,16 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
     _reap_refuse state-changed "expected $REAP_TOKEN, was given $token — $id changed since the audit that minted the token" || :
   fi
   # A PROBE THAT COULD NOT RUN IS NOT A REFUSAL (`_ws_reclaim_unmeasured`).
-  # Nothing was measured and nothing has started, so there is no refusal token
-  # to journal and no intent to fail: a `"failed"` document at exit 1, which
-  # the server reads as `failed` and retries, and which re-measures next time.
+  # Nothing was measured and nothing has started: there is no intent and no
+  # breadcrumb. It is JOURNALED as a failure (spec §5.9) through
+  # `_ws_reclaim_fail`, so the journal line and the `"failed"` document at exit 1
+  # come from one word and one detail. The server reads that document as
+  # `failed` but not resumable, and the next attempt measures from the start.
+  # `cmd_ws_audit`'s unmeasured answer journals the same word with `verb
+  # ws-audit`. The declared surface, actor and reason ride the line, as they
+  # ride the refusal emit below.
   if [[ "$REAP_VERDICT" == unmeasured ]]; then
-    _ws_reclaim_failed_json probe-unmeasured "$REAP_DETAIL"
+    _ws_reclaim_fail "$id" "" probe-unmeasured "$REAP_DETAIL" dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
     return 1
   fi
   # ONE EMIT FOR EVERY REFUSAL — this verdict point — plus the flock decline in
@@ -30043,7 +30048,12 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 # field holding that word, spelled through `_json_str` — never as the literal
 # `"verdict":"…"` shape the refusal harvest would count — the reason goes to
 # stderr, and the audit EXITS 1. The server maps ANY audit exit 1 to `failed`
-# and retries. It is journaled nowhere: no refusal, no token.
+# and retries. It is journaled as a FAILURE, never a refusal (spec §5.9:
+# the one audit-time line that is not a terminal refusal): one `_lc_fail` line with the
+# token `probe-unmeasured` and `verb ws-audit`. ws-reclaim's locked
+# recomputation journals the same word with `verb ws-reclaim`. The line is
+# written on the `return 1` line itself, because `cmd_ws_audit` sits above the
+# frozen citation boundary and may not grow. The sweep's backoff (spec §5.9) bounds the repeat.
 #
 # A TERMINAL REFUSAL FOUND BY THE AUDIT IS JOURNALED, AND ONLY A TERMINAL ONE
 # (spec §5.9). The server audits first and stops on a refusal, so a terminal

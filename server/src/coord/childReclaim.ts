@@ -18,7 +18,7 @@ import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import {
   CHILD_RUN_ID, LC_REASON_MAX_BYTES, TERMINAL_RUN_STATES, holdReason, type ChildMark, type LifecycleAct, type LifecycleOutcome,
-  type ChildReclaimStatus, type MarkerState, type MirroredLifecycleEvent, type RunState, type RunSummary, lcRefusalWord,
+  type ChildReclaimStatus, type MarkerState, type MirroredLifecycleEvent, type RunState, type RunSummary, lcRefusalWord, type LcRefusalToken,
 } from '../../../shared/api.js';
 
 /**
@@ -271,7 +271,7 @@ export function isChildReclaimResume(v: unknown): v is ChildReclaimResume {
  *  literal — decides `ChildReclaimResume` itself (`not-resumable`, never
  *  `resumable`: nothing was left to resume from). Named so
  *  `isChildReclaimKebab` admits it without a second hand-kept literal. */
-const CHILD_RECLAIM_PROBE_UNMEASURED = 'probe-unmeasured';
+const CHILD_RECLAIM_PROBE_UNMEASURED = 'probe-unmeasured' satisfies LcRefusalToken;
 
 export type ChildReclaimOutcome =
   | { readonly kind: 'reclaimed'; readonly sessionId: string; readonly runId: number;

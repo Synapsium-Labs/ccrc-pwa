@@ -7846,7 +7846,8 @@ export type LcRefusalToken =
   | 'purge-mechanism-absent'  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
   | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): ccrc could not keep the child's work — the pin phase, or one of the tail's per-deletion keeps — so the verb stopped before deleting anything further
   | 'unit-still-active'       // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before deleting anything further
-  | 'branch-unmeasured';      // ws-reclaim (spec §5.5): the tail's step 5 could not read whether the child's branch still exists, so it stopped before removing anything further — journaled `failed`, never `refused`
+  | 'branch-unmeasured'       // ws-reclaim (spec §5.5): the tail's step 5 could not read whether the child's branch still exists, so it stopped before removing anything further — journaled `failed`, never `refused`
+  | 'probe-unmeasured';       // ws-reclaim and `ws-audit --reclaim` (spec §5.9): a probe the ladder needs could not run or be read, before any act — journaled `failed`, its `verb` telling the two arms apart
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -7932,6 +7933,15 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // branch, and the retry resumes there.
   'branch-unmeasured':
     'ccrc could not read whether the branch still exists, so it stopped before removing anything further; it tries again.',
+  // Child reclamation, wave 6 (spec §5.9). A probe the reclaim ladder needs
+  // could not run, or its answer could not be read. That happens at audit time
+  // (`verb ws-audit`) or in ws-reclaim's locked recomputation
+  // (`verb ws-reclaim`). It only ever rides `_lc_fail`, with no intent before
+  // it. Two things are true of both arms: neither removed anything, and the
+  // server's retry starts over (`parseChildReclaimResult` reads the verb's
+  // document as not-resumable).
+  'probe-unmeasured':
+    'ccrc could not finish measuring this workspace — a check it relies on could not run, or its answer could not be read — so nothing was started and nothing was removed. The next attempt measures again from the start.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the
