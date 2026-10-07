@@ -109,6 +109,22 @@ time.
     `swift-meadow`, branch `ws/swift-meadow`): `adopted` false, `spawnState` null, `skillState` present, brief queued.
     The run reads `dispatched` with 0 of 7 items. The registry shows the route applied as `class=opus effort=high
     subagent=sonnet workflow=off` with compact 40, and the hold `program:stall-watch-settings wave:1/2 run:295`.
+- **R11 (2026-10-07 10:03)**, the claim 409: one regioned co-edit is asked for, and everything else waits.
+  - The worker's mail 3809: the full 28-path claim was refused, as R10 expected. It holds claim 1074 on the other 24
+    paths, keeps the four contested ones declared, and edits nothing contested. Task 1 begins with `shared/api.ts`, so
+    the chain cannot start while claim 1070 holds it.
+  - Measured: run 291 still needs both paths. Its remaining Tasks 8, 10, 11 and 12 modify `shared/api.ts`, where its
+    edits sit at `LifecycleMeas`, mid-file, and its Task 12 modifies `server/src/watch.ts`. Claim 1070 can run to
+    16:54 UTC. Run 302's claim 1072 says that wave is down to its confirmation suite and PR, and only W1's Task 7 needs
+    `README.md` and `CLAUDE.md`.
+  - Ruling: claims stay exclusive by default, and a lapse is not a release. The worker takes a contested path only on
+    this coordinator's confirmation. Mail 3813 asks run 291's coordinator to consent to one co-edit: W1 appends its new
+    block at the very end of `shared/api.ts`, changes no line above it, and lands under R7's merge rule. On consent,
+    Task 1 starts under that limit; on a refusal, it waits for claim 1070's release. `server/src/watch.ts` (Task 5)
+    and `README.md`/`CLAUDE.md` (Task 7) are not in the request; they are re-read when W1 reaches them. The worker
+    has this as mail 3814.
+  - Why: R7 already lets both waves proceed in their own regions, and a block appended at the end of the file cannot
+    textually meet 291's mid-file edits. Cost if wrong: one structural merge in `shared/api.ts` at the second landing.
 
 ## Carried constraints (reviewers get these)
 
