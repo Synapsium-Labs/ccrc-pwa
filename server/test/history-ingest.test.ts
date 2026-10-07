@@ -1031,6 +1031,11 @@ const IX_RSS_PRELOAD = path.join(__dirname, 'fixtures', 'history', 'preload-rss.
 const IX_RSS_BOUND_KIB = process.version === 'v22.16.0' ? 256 * 1024 : 512 * 1024;
 /** half the carrier's MemoryMax=1G, D-4244's bound family; the heaviest admitted line measured 389,508 and 356,032 KiB whole-pass on Node 24.14.1 (D-4345). */
 const IX_LINE_RSS_BOUND_KIB = 512 * 1024;
+/** The old-space cap the D-4345 RSS case gives its child, standing in for a 1 GiB carrier's cgroup: V8 paces its heap from the cgroup
+ *  it sees, and an unflagged child on a 31 GiB box floated this pass to 535-559 MiB. Measured on Node 24.14.1 under load ~25, the peak of two passes per run,
+ *  seven runs of 256 and of 192 MiB: 256 MiB gave 434,448 to 512,048 KiB, 192 MiB gave 413,976 to 442,004 KiB, 128 MiB gave 408,636 to 414,180 KiB,
+ *  and the same line in a real `MemoryMax=1G` scope peaked at 401,540 KiB. The case sets no scope, so it never reaches a service manager. */
+const IX_LINE_HEAP_MIB = 192;
 
 describe('history ingest: budget, backlog and the ticks row (plan task 20)', () => {
   beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
@@ -1180,7 +1185,7 @@ describe('history ingest: budget, backlog and the ticks row (plan task 20)', () 
     }
   }, 300_000);
 
-  it('D-4345: the heaviest admitted line, JSON_NODES_MAX units of 30-character strings, is a parsed row and the pass peaks under 512 MiB in a 1 GiB scope, half the carrier\'s MemoryMax=1G', async (ctx) => {
+  it('D-4345: the heaviest admitted line, JSON_NODES_MAX units of 30-character strings, is a parsed row and the pass peaks under 512 MiB with its heap capped as a 1 GiB carrier caps it, half the carrier\'s MemoryMax=1G', async () => {
     const { lib } = await IX.api();
     const base = JSON.stringify(IX.user(IX.uuidN(2), IX.uuidN(1), ['s'], 2));
     const frameUnits = [...base].filter((ch) => ch === '[' || ch === '{' || ch === ',').length;   // no value of the frame holds one
@@ -1191,24 +1196,21 @@ describe('history ingest: budget, backlog and the ticks row (plan task 20)', () 
     expect(lib.jsonWithinStructureBound(Buffer.from(line)), 'CONTROL: at the bound').toBe(true);
     expect(lib.jsonWithinStructureBound(Buffer.from(strs(n + 1))), 'CONTROL: one unit over').toBe(false);
     expect(Buffer.byteLength(line), 'CONTROL: under LINE_MAX').toBeLessThan(lib.LINE_MAX);
-    // The carrier's bound is a cgroup, and V8 sizes and paces its heap from the cgroup it sees: an unscoped child lets it defer
-    // collection, and this same pass floats to 535-559 MiB on a 31 GiB box (measured), a reading of the box and not of the unit.
-    // So the pass runs in a real `MemoryMax=1G` scope, and the case skips where a user systemd cannot make one.
-    const SR = '/usr/bin/systemd-run';
-    const scope = (argv: string[], env: NodeJS.ProcessEnv, cwd: string) => spawnSync(SR, ['--user', '--scope', '--quiet', '-p', 'MemoryMax=1G', '-p', 'MemorySwapMax=0', '--', ...argv], { env, cwd, encoding: 'utf8', timeout: 240_000 });
-    const probe = fs.existsSync(SR) ? scope(['/bin/true'], process.env, '/') : null;
-    if (probe === null || probe.status !== 0) { ctx.skip(); return; }
+    // The carrier's bound is a cgroup, and V8 sizes and paces its heap from the cgroup it sees: an unflagged child on a large box
+    // lets it defer collection, and this same pass floats to 535-559 MiB (measured), a reading of the box and not of the unit.
+    // So the child gets the heap cap its 1 GiB carrier gives it, as a flag, and this case never touches a service manager:
+    // a scope would reach the operator's real user bus (containedTools.ts), and it would skip wherever none exists.
     const box = IX.newBox('ccrc-hist-f7rss-');
     try {
       fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(box.home, '.cc-secrets', 'rss.env'), 'ZQ_RSS_VALUE=zqrss0123456789abcdef0123456789abcdef', { mode: 0o600 });   // the sweep loads it with no --secrets argument
       IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), line]));
-      const env = { ...box.env, XDG_RUNTIME_DIR: process.env['XDG_RUNTIME_DIR'] ?? '', DBUS_SESSION_BUS_ADDRESS: process.env['DBUS_SESSION_BUS_ADDRESS'] ?? '', HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: [PRELOADS.statfs, IX_RSS_PRELOAD].map((x) => `--import ${pathToFileURL(x).href}`).join(' ') };
+      const nodeOptions = [`--max-old-space-size=${IX_LINE_HEAP_MIB}`, ...[PRELOADS.statfs, IX_RSS_PRELOAD].map((x) => `--import ${pathToFileURL(x).href}`)].join(' ');
       let peak = 0;
       for (let pass = 0; pass < 2; pass += 1) {
-        const r = scope([process.execPath, '--no-warnings', SWEEP, '--secrets', '--', ...box.homes], env, box.home);
-        expect(r.status, `${r.signal} ${r.stderr}`).toBe(0);
-        const m = /history-test-maxrss-kib=(\d+)/.exec(String(r.stderr));
+        const r = runSweep(box, [], { env: { NODE_OPTIONS: nodeOptions } });
+        expect(r.code, `${r.signal} ${r.stderr}`).toBe(0);
+        const m = /history-test-maxrss-kib=(\d+)/.exec(r.stderr);
         expect(m, 'the RSS preload printed nothing').not.toBeNull();
         peak = Math.max(peak, Number(m![1]));
       }
