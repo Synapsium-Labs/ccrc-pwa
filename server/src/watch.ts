@@ -16,7 +16,7 @@ import {
   isFullLine, parsePrLines, phaseFor, queueFor, repoCellFor, type CcdPrFailure, type PrQueueRead,
 } from './prstate.js';
 import { readLiveState, readLiveStateMeasured } from './livestate.js';
-import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark } from './turnidle.js';
+import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import { readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
@@ -37,7 +37,7 @@ import type {
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -54,7 +54,7 @@ import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 import { measureClaimant } from './coord/reclaim.js';
 import {
-  BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
+  BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
   stallFailedVerdict, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
   stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
@@ -64,6 +64,10 @@ import {
   type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
   type StallVerdict, type StallWorker, type TurnMarkRead,
 } from './coord/stall.js';
+import {
+  parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock,
+  type StallBoxArming, type StallResolved, type StallSettingsParsed, type StallSettingsRead,
+} from './coord/stallsettings.js';
 // `floorFromScan` owns the seed arithmetic (max + LEDGER_SEED_GAP) and the
 // evidence string alike — the sweep below only feeds it files and applies
 // its answer, so LEDGER_SEED_GAP itself is not imported here.
@@ -200,11 +204,19 @@ export const LC_SWEEP_MS = 5_000;
 const CLAIM_SWEEP_MS = 60_000;
 
 /** The stall watch's lane (spec 2026-09-29 §4.2, §10). It runs at `CLAIM_SWEEP_MS`'s cadence, for that
- *  constant's reason: a 2 h threshold does not need the 2 s tick. EXPORTED for its suite, as `LC_SWEEP_MS`
- *  and `READINESS_SWEEP_MS` are. */
+ *  constant's reason: a threshold of the quiet time (2 h built-in, 30 min at the least, stall watch settings §7)
+ *  does not need the 2 s tick. EXPORTED for its suite, as `LC_SWEEP_MS` and `READINESS_SWEEP_MS` are. */
 export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;
 /** The gap rule's threshold (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)): between one missed sweep (~120 s, clocks survive) and two (~180 s, clocks drop). */
 const STALL_CLOCK_GAP_MS = STALL_SWEEP_MS * 5 / 2;
+
+/** What `FleetWatcher.stallResolveNow` answers each sweep (stall watch settings §9): the arming, which always carries
+ *  a `mailMode`; the quiet time that r1, the dialog cap and the backoff base read; and where the level came from. */
+interface StallResolution {
+  readonly arming: StallBoxArming;
+  readonly quietMs: number;
+  readonly levelSource: StallResolved['levelSource'];
+}
 
 /**
  * What `tick()` already measured, handed to the stall lane so it reads neither again (worker stall watch wave 2, M6;
@@ -892,6 +904,23 @@ export class FleetWatcher {
   /** Warn-once keys, `<sessionId>|<what>`: a run-less shadow rung, `failed-unknown`, and the defensive r2-with-no-r1
    *  line (`applyStall`; no real input reaches it today). */
   private stallWarned = new Set<string>();
+  /** The busy clock (stall watch settings §9, `busy-clock-starts-when-busy-delivery-starts` (D-4024)). Written by
+   *  `sweepMail` alone, on a mode it applies, and read by `sweepStalls` through `stallBusyClock`. `lastApplied` is the
+   *  mail gate mode last applied, `null` before the first. `busySince` is when the mail sweep moved into busy delivery
+   *  from a known non-busy mode, and `null` whenever no such move has been seen since the server started. The
+   *  unlistable return and the `MAIL_DISABLED_MARKER` return write neither: neither says anything about the mode, so
+   *  a passing listing failure never restarts the clock. IN MEMORY: after a restart the stall sweep judges exactly as
+   *  before this clock existed, until busy delivery begins again while the server runs. */
+  private lastApplied: MailTurnMode | null = null;
+  private busySince: number | null = null;
+  /** The last settings resolution that fell back on a throw (§9): when, and why. `null` once a resolution succeeds.
+   *  Read only through `stallFallback()`. */
+  private lastFallback: { readonly at: number; readonly reason: string } | null = null;
+  /** The settings row's warn latch (§8): the read states already warned (`absent`, `unreadable`, `level`, `quiet`),
+   *  cleared when a read applies again, so a row that stays unusable warns once, not every 10 s. */
+  private stallSettingsWarned = new Set<string>();
+  /** Set by the first settings read that is not unreadable: the boot trace runs once (§8). */
+  private stallSettingsTraced = false;
   /** The ledger lanes' clocks (build 9 wave 7, D13). */
   private lastLedgerFloor = 0;
   private lastLedgerReconcile = 0;
@@ -4123,7 +4152,10 @@ export class FleetWatcher {
     try {
       // `mail-disabled` reaches L1 as a fact, and `stallMailDisabledHold` decides what it holds (slug
       // `lane-honours-mail-disabled` (D-3636)). The module-local literal, never rundefs' export: see the import note.
-      const arming: StallArming = { ...stallArmingOf(names), mailDisabled: names.includes(MAIL_DISABLED_MARKER), mailMode: mailTurnModeOf(names) };
+      // The arming is the one settings resolution the mail sweep also calls (stall watch settings §9). The busy clock
+      // then decides the mode the verdicts judge, and when mail-stuck's busy idle start begins (D-4024).
+      const r = this.stallResolveNow(store, names, names.includes(MAIL_DISABLED_MARKER));
+      const arming: StallArming = { ...r.arming, ...stallBusyClock(r.arming.mailMode, this.lastApplied, this.busySince) };
       if (arming.disabled) return;
       const paused = names.includes(COORDINATOR_PAUSE_MARKER);
       let candidates: ReturnType<CoordStore['stallCandidates']>;
@@ -4151,7 +4183,7 @@ export class FleetWatcher {
       this.pruneStallMemory(workerIds, judged, new Set([...judged, ...tick.records.map((r) => r.id)]));
       for (const subject of workers) {
         try {
-          await this.judgeStall(store, subject, sessions, tick, arming, paused, now);
+          await this.judgeStall(store, subject, sessions, tick, arming, paused, now, r.quietMs);
         } catch (err) {
           console.warn(`ccrc-server: stall-watch run ${subject.primary.id} (${subject.primary.sessionId}) failed (${err instanceof Error ? err.message : String(err)}) — the next subject still runs`);
         }
@@ -4182,11 +4214,83 @@ export class FleetWatcher {
     }
   }
 
+  /**
+   * The stall-watch settings, resolved once for one sweep over that sweep's own listing (stall watch settings §9):
+   * the box arming (`stallBoxArmingOf`), the stored row (`store.stallSettings()`), its parse and the one resolver, then
+   * the warn latch and the boot trace (§8). Both sweeps call it and nothing else reads the row, so the two cannot
+   * read it differently.
+   *
+   * It NEVER THROWS. `sweepMail` runs under `void this.sweepMail().catch(() => {})`, so a throw here would stop all
+   * mail delivery fleet-wide with no line. On any throw (a store, parse or resolver bug, or a fault in the latch or
+   * the trace) it answers the expression both sweeps ran before settings existed, over the same listing, with the
+   * built-in quiet time and `files`, so the fallback adds nothing that can throw where that did not. The catch calls
+   * nothing that can throw: `reason` is composed in its own `try`, keeping a fixed word when even reading the error
+   * throws, and its one warn is a bare `console.warn` in its own `try`, printed only when no fallback stood, and never
+   * through the latch, which may be the fault. It records `lastFallback`; a resolution that succeeds clears it.
+   */
+  private stallResolveNow(store: CoordStore, names: readonly string[], mailDisabled: boolean): StallResolution {
+    try {
+      const box = stallBoxArmingOf(names, mailDisabled);
+      const read = store.stallSettings();
+      const parsed = parseStallSettings(read);
+      const r = resolveStallWatch(box, parsed);
+      this.stallSettingsNotes(read, parsed, r);
+      this.lastFallback = null;
+      return { arming: r.arming, quietMs: r.quietMs, levelSource: r.levelSource };
+    } catch (err) {
+      let reason = 'an unreadable fault';
+      try {
+        reason = (err instanceof Error ? err.message : String(err)).slice(0, 200);
+      } catch { /* even reading the error threw: the fixed word stands */ }
+      if (this.lastFallback === null) {
+        try {
+          console.warn(`ccrc-server: stall-watch settings not applied (${reason}) — following the box files and the built-in quiet time`);
+        } catch { /* a log line must not stop a sweep */ }
+      }
+      this.lastFallback = { at: Date.now(), reason };
+      return { arming: { ...stallArmingOf(names), mailDisabled, mailMode: mailTurnModeOf(names) }, quietMs: STALL_QUIET_MS, levelSource: 'files' };
+    }
+  }
+
+  /** The warn latch and the boot trace (§8), for one read that resolved. A read that does not apply warns once per
+   *  read state, in its own words, and a read that applies re-arms every latch. The first read that is not
+   *  unreadable traces a stored choice that applies, once, so a roll-forward or a restored `coord.db` leaves a line. */
+  private stallSettingsNotes(read: StallSettingsRead, parsed: StallSettingsParsed, r: StallResolved): void {
+    const states: (readonly [string, string])[] = read.kind === 'absent' ? [['absent', 'no stored choice']]
+      : read.kind === 'unreadable' ? [['unreadable', `stored choice unreadable: ${read.detail.slice(0, 200)}`]]
+      : [
+        ...(parsed.level.kind === 'unreadable' ? [['level', 'stored level unreadable'] as const] : []),
+        ...(parsed.quiet.kind === 'unreadable' ? [['quiet', 'stored quiet time unreadable'] as const] : []),
+      ];
+    if (states.length === 0) this.stallSettingsWarned.clear();
+    for (const [state, words] of states) this.stallSettingsWarn(state, words);
+    if (this.stallSettingsTraced || read.kind === 'unreadable') return;
+    this.stallSettingsTraced = true;
+    if (r.chosen === null && r.quietSource !== 'chosen') return;
+    const level = r.chosen === null ? STALL_FOLLOW_LABEL : STALL_LEVEL_TEXT[r.chosen].label;
+    const quiet = `${r.quietMs / 60_000} min${r.quietSource === 'chosen' ? '' : ' (built-in)'}`;
+    console.warn(`ccrc-server: stall-watch level ${level} / quiet time ${quiet} chosen in Settings overrides the box files`);
+  }
+
+  /** The latch itself: one line per read state until a read applies again. `stallResolveNow`'s catch never calls it. */
+  private stallSettingsWarn(state: string, words: string): void {
+    if (this.stallSettingsWarned.has(state)) return;
+    this.stallSettingsWarned.add(state);
+    console.warn(`ccrc-server: stall-watch settings not applied (${words}) — following the box files and the built-in quiet time`);
+  }
+
+  /** The settings view's seam (stall watch settings §9, §10): the last resolution that fell back on a throw, or
+   *  `null` once one succeeds. PUBLIC for `registerCoordRoutes`' optional watcher, as `releaseHeldAsk` is. */
+  stallFallback(): { readonly at: number; readonly reason: string } | null {
+    return this.lastFallback;
+  }
+
   /** One run worker: read, decide, apply — the run verdict first, then its session verdicts in the spec's order
-   *  (orphan E, failed, each mail stuck, orphan D). Its throws are the caller's to catch. */
+   *  (orphan E, failed, each mail stuck, orphan D). Its throws are the caller's to catch. `quietMs` is the resolved
+   *  quiet time (stall watch settings §7), set on the run verdict's input; the session verdicts use fixed constants. */
   private async judgeStall(
     store: CoordStore, subject: StallSubject, sessions: readonly FleetSession[], tick: StallTick,
-    arming: StallArming, paused: boolean, now: number,
+    arming: StallArming, paused: boolean, now: number, quietMs: number,
   ): Promise<void> {
     const primary = subject.primary;
     const id = primary.sessionId;
@@ -4213,7 +4317,7 @@ export class FleetWatcher {
     const notices = this.stallNoticesOf(events);
     const markUnreadableSince = this.stallMarkUnreadableSince.get(id) ?? null;
     let input: StallInput = {
-      subject, worker, mail: stallRunMail(read.mail, runIds), notices, arming, coordinationPaused: paused,
+      subject, worker, mail: stallRunMail(read.mail, runIds), notices, arming, quietMs, coordinationPaused: paused,
       coordinator: null, activation: stallReactivation(events),
       w2: {
         mark, hook: stallHookFactOf(raw), deliveries: read.deliveries,
@@ -4878,10 +4982,19 @@ export class FleetWatcher {
     const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
     if (listing === null || listing.includes(MAIL_DISABLED_MARKER)) return;
     // The gate's mode comes from this SAME listing (worker stall watch §4.1,
-    // `turnidle.ts`). An unlistable registry has already returned above, so a
+    // `turnidle.ts`), through the one settings resolution the stall sweep also
+    // calls (stall watch settings §9): a chosen level can set it, and strict
+    // still wins. An unlistable registry has already returned above, so a
     // mode is never read from a listing that failed: the strict marker fails
-    // shut at no extra cost.
-    const mode = mailTurnModeOf(listing);
+    // shut at no extra cost. `false` is measured, not assumed: the return
+    // above proved `MAIL_DISABLED_MARKER` absent from this listing.
+    const mode = this.stallResolveNow(store, listing, false).arming.mailMode;
+    // The busy clock (D-4024), on the mode just applied: a move into busy from
+    // a known non-busy mode starts it, busy over busy keeps it, and any other
+    // mode clears it. The first busy after a start leaves it null.
+    if (mode !== 'busy') this.busySince = null;
+    else if (this.lastApplied !== null && this.lastApplied !== 'busy') this.busySince = now;
+    this.lastApplied = mode;
 
     const unacked = store.deliveredUnacked();
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
