@@ -1046,4 +1046,110 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.ruling).toContain('pools-stale');
     expect(c!.root).toContain('pools/');
   });
+
+  // ── ccrc history (spec 2026-10-05 §9.4, pin O17) ────────────────────────
+  // Thirteen classes, landed across six PRs. `LifecycleClass` has no "lands in" field — the manifest says what
+  // IS, not what a plan will add — so which PR adds which row lives here, beside the assertion that reads it.
+  // Each later PR appends its key to HISTORY_LANDED in the commit that adds its rows.
+  const HISTORY_ROWS_BY_PR = {
+    B1: ['history-store', 'history-migration-snapshot', 'history-store-id', 'history-spool', 'history-journal', 'history-switches'],
+    B2: ['history-backups'],
+    B3: ['history-scope-markers', 'history-card-files'],
+    B4: ['history-export'],
+    W2: ['history-recall-off', 'history-replay-out'],
+    W3: ['history-steer-files'],
+  } as const;
+  type HistoryPr = keyof typeof HISTORY_ROWS_BY_PR;
+  const HISTORY_LANDED: readonly HistoryPr[] = ['B1'];
+
+  it('the history classes are §9.4\'s thirteen, each declared by the PR its Lands-in column names, and none before it (O17)', () => {
+    const all: string[] = Object.values(HISTORY_ROWS_BY_PR).flat();
+    expect(new Set(all).size, 'a history class is listed under two PRs').toBe(all.length);
+    expect(all).toHaveLength(13);
+    const declared = new Set(LIFECYCLE.map((c) => c.name));
+    for (const pr of Object.keys(HISTORY_ROWS_BY_PR) as HistoryPr[]) {
+      for (const n of HISTORY_ROWS_BY_PR[pr]) {
+        expect(declared.has(n), HISTORY_LANDED.includes(pr)
+          ? `${n} lands in ${pr}, which has landed, and shared/lifecycle.ts declares no such class`
+          : `${n} lands in ${pr} and is declared before it`).toBe(HISTORY_LANDED.includes(pr));
+      }
+    }
+    expect(LIFECYCLE.map((c) => c.name).filter((n) => n.startsWith('history-')).sort(), 'a history class outside the table')
+      .toEqual(HISTORY_LANDED.flatMap((pr) => [...HISTORY_ROWS_BY_PR[pr]]).sort());
+  });
+
+  it('every history class names its creators and its tier', () => {
+    for (const c of LIFECYCLE.filter((x) => x.name.startsWith('history-'))) {
+      expect(c.creators.length, `${c.name} names no creator`).toBeGreaterThan(0);
+      for (const w of c.creators) expect(w.trim(), `${c.name} has a blank creator`).not.toBe('');
+      expect(c.tier.trim(), `${c.name} has no tier`).not.toBe('');
+      expect(c.bound.trim(), `${c.name} has no bound`).not.toBe('');
+    }
+  });
+
+  it('declares history-store: an O class whose collector is the operator verb prune, created by the sweep through store.mjs', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-store');
+    expect(c, 'shared/lifecycle.ts declares no history-store class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (through store.mjs)']);
+    expect(c!.collector).toContain('ccrc history prune');
+    expect(c!.collector).toContain('stale temp');
+    expect(c!.root).toContain('~/.ccrc/history/db/history.db');
+    expect(c!.root).toContain('history.db.new.<pid>');
+    expect(c!.root).toContain('.history.db.restore.<pid>');
+    expect(c!.tier).toContain('default 50');
+  });
+
+  it('declares history-migration-snapshot: an R class the sweep collects, keeping the newest snapshot', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-migration-snapshot');
+    expect(c, 'shared/lifecycle.ts declares no history-migration-snapshot class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs']);
+    expect(c!.collector).toContain('ccd-history-sweep');
+    expect(c!.collector).toContain('keeps the newest');
+    expect(c!.root).toContain('backups/pre-v<N>.db');
+    expect(c!.root).toContain('.pre-v<N>.attempt');
+  });
+
+  it('declares history-store-id: collector-less, kept with the store and removed only with it', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-store-id');
+    expect(c, 'shared/lifecycle.ts declares no history-store-id class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('kept with the store; removed only with it');
+    for (const f of ['store.id', 'store.writer', 'store.id.pending', 'op']) expect(c!.root).toContain(f);
+  });
+
+  it('declares history-spool: an R class written by the hook, the CLI and the sweep, collected by the two-phase drain', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-spool');
+    expect(c, 'shared/lifecycle.ts declares no history-spool class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd/session-hook.sh', 'ccd/history/cli.mjs', 'ccd/history/sweep.mjs']);
+    expect(c!.collector).toContain('two-phase drain');
+    expect(c!.collector).toContain('journaled and fsynced before');
+    expect(c!.root).toContain('~/.ccrc/history/spool/');
+    expect(c!.root).toContain('.draining/');
+  });
+
+  it('declares history-journal: collector-less, removed only with the store by --purge --purge-history', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-journal');
+    expect(c, 'shared/lifecycle.ts declares no history-journal class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('kept with the store; removed only with it');
+    expect(c!.ruling).toContain('--purge --purge-history');
+    expect(c!.root).toBe('~/.ccrc/history/journal/<store_id>/<YYYY-MM>.<writer>.jsonl');
+    expect(c!.tier).toContain('journal-growth');
+  });
+
+  it('declares history-switches: operator files with no writer in the tree, touched by hand', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-switches');
+    expect(c, 'shared/lifecycle.ts declares no history-switches class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['operator shell']);
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('touched by hand; persists until removed');
+    // B1's two; W2 adds headless-on and W3 the steer markers, each to this root in its own PR
+    expect(c!.root).toBe('~/.ccrc/history-off, ~/.ccrc/history-max-gb');
+  });
 });
