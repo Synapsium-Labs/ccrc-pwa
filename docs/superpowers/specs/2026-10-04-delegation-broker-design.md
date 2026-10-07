@@ -192,12 +192,17 @@ the first event naming the upstream id. For an activity keyed by `agent_id`, the
 once a QUALIFYING join for that id is known: an Agent launch response, a SubagentStart, or a positive
 agent meta read naming it. A meta is a join read by point lookup (§5.4 rung 2), not a hook or spool
 event: it gains no journal event and no writer, and nothing of it is hashed. Whichever join is known
-first, the journal component is the journal id of the earliest retained journal event of the parent
-session, under the same incarnation, that names that `agent_id`: the join authorizes the retained
-evidence and does not choose which event is hashed. A launch response or a SubagentStart is such an event
-itself, so on every measured order it is the earliest. Opening waits for the join and, when the join is
-a meta, for at least one such event. Neither the order of the joins nor the time of the meta read
-enters the hash. A tool event whose only delegation evidence is `agent_id` does not qualify by itself:
+first, the journal component is the journal id of the earliest journal event of the parent session,
+under the same incarnation, that names that `agent_id` and is retained when the activity opens. A
+qualifying join gates opening: it contributes no hash component and does not choose among the journal
+events retained when opening occurs. A launch response or a SubagentStart is such an event itself, so
+on every measured order it is the earliest. Opening waits for the join and, when the join is a meta,
+for at least one such event. Once the retained evidence set at opening is fixed, neither the
+qualifying join's kind or order nor the time of a positive meta read contributes a hash component or
+selects among those retained events. Timing can affect which events remain retained before opening
+only through the pruning contract (below and §5.12): an occurrence pruned before any qualifying join
+for that id is durably applied is gone permanently as evidence (clarified 2026-10-07, review 332 F1).
+A tool event whose only delegation evidence is `agent_id` does not qualify by itself:
 it is kept as evidence and opens no activity, and it attaches to the activity once a qualifying join
 for the same `agent_id` is known, whether that join came before it or arrives later; once one is, it
 may itself be the earliest event the activity id hashes. No reader decides this by whether

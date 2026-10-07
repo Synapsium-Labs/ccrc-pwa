@@ -20,7 +20,7 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
-| 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **fix round (review 328)**: run 306 dispatched 2026-10-07 08:46 UTC to `ccrc-pwa-plain-hollow` (operator decision: the cross-check folds into a close-out wave); PR #321 carries fix rounds for reviews 318, 324 and 328 |
+| 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **fix round (review 332)**: run 306 dispatched 2026-10-07 08:46 UTC to `ccrc-pwa-plain-hollow` (operator decision: the cross-check folds into a close-out wave); PR #321 carries fix rounds for reviews 318, 324, 328 and 332 |
 | 3 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | 2 | — | to plan once wave 2's cross-check is in the measurement section |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 3 | — | to plan |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
@@ -520,17 +520,21 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
   as evidence and opens no activity; it attaches to one once a launch response, SubagentStart or agent meta naming
   the same `agent_id` is known, whether that join came before it or arrives later. A shared `prompt_id` names the
   turn, not the agent, and is not such a join (`launch-response-names-the-upstream-id`). So spec §5.2's "the first
-  event that named it" is, for an `agent_id`-keyed activity, the earliest retained journal event of the parent
-  (same incarnation) naming that id once a qualifying join is known, whichever join came first; on every measured
-  order that is the launch response or SubagentStart itself. A bare occurrence never opens an activity, but once a
-  join is known it may be that earliest event (a refinement of review 318 F1's wording, ruled with review 324). The
-  other source kinds keep the first event naming their upstream id. A meta is a join, not a journal event, and
-  nothing of it is hashed (review 324 F3, F4). The id is selected once, at open, and never changes: it is part of the
-  checkpointed applied state, reconstruction restores it verbatim and never re-selects it from the journal left after
-  pruning, pruning cannot pass an identity event before a durable checkpoint holds its id, and a bare occurrence
-  pruned before any qualifying join is durably applied never becomes one (review 328 F1; spec §5.2, §5.12). The observe
-  stage's parser (wave 3) must not use the presence of `agent_type` to decide whether an event qualifies — spec §5.2
-  activity id, §5.3, §5.4 rung 3 (a non-empty `agent_id` does not by itself place an event inside a subagent).
+  event that named it" is, for an `agent_id`-keyed activity, the earliest journal event of the parent (same
+  incarnation) naming that id that is retained when the activity opens, once a qualifying join is known, whichever
+  join came first; on every measured order that is the launch response or SubagentStart itself. The join gates
+  opening and contributes no hash component; once the retained set at opening is fixed, neither the join's kind or
+  order nor the time of a positive meta read selects among those events, and timing changes which events are still
+  retained at opening only through the pruning contract below (review 332 F1). A bare occurrence never opens an
+  activity, but once a join is known it may be that earliest event (a refinement of review 318 F1's wording, ruled
+  with review 324). The other source kinds keep the first event naming their upstream id. A meta is a join, not a
+  journal event, and nothing of it is hashed (review 324 F3, F4). The id is selected once, at open, and never
+  changes: it is part of the checkpointed applied state, reconstruction restores it verbatim and never re-selects it
+  from the journal left after pruning, pruning cannot pass an identity event before a durable checkpoint holds its
+  id, and a bare occurrence pruned before any qualifying join is durably applied never becomes one (review 328 F1;
+  spec §5.2, §5.12). The observe stage's parser (wave 3) must not use the presence of `agent_type` to decide whether
+  an event qualifies — spec §5.2 activity id, §5.3, §5.4 rung 3 (a non-empty `agent_id` does not by itself place an
+  event inside a subagent).
   A second reader, already shipped, places an event by a raw non-empty `agent_id`: the hook's turn-marker classifier
   (`paid` in `ccd/session-hook.sh`) skips the main-thread marker write for such an event, so each such PreToolUse
   above was dropped from its turn marker as a subagent's. No harm was measured, because earlier main-thread events
@@ -732,7 +736,7 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
   worktree-name listing alone is about 3.9 KB, which nearly fills spec §5.3's 4 KiB line. The observe stage's line
   design must measure that case: the listing is the optional field that gets dropped, and the worst case is about
   8.5 ms per call.
-- **What wave 2 (run 306, reviews 318, 324 and 328) hands to wave 3's plan.** Its evidence is in the
+- **What wave 2 (run 306, reviews 318, 324, 328 and 332) hands to wave 3's plan.** Its evidence is in the
   "Real-lane cross-check" section and the plan's D-numbers named below; a wave 3 plan reads these before it names a
   task:
   - Wave 3's first implementation commit is the red-first `tmux display-message -p -t "$TMUX_PANE" '#S'` ownership
@@ -763,6 +767,24 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     `workflow-phase-is-not-always-written`, `teardown-hook-event-names-another-session` and
     `tool-agent-id-alone-is-unjoined-evidence`.
 
+### Review-332 observations awaiting the owning implementation plan or an operator decision
+
+Five questions the activity-identity contract (spec §5.2, §5.12; review 328 F1) leaves open. They are unresolved
+implementation questions, not requirements, and they change nothing in the approved contract; the plan that owns each
+one decides it, or asks the operator (raised by the review-328 round's per-task review, recorded by review 332 F3).
+
+1. **A meta-opened activity before its first checkpoint.** A meta gains no journal event, so losing `coord.db` and the
+   positive meta before that checkpoint can lose the open. The first wave that writes an activity id into any durable
+   carrier decides whether the activity must be checkpointed before its id escapes.
+2. **Pruning during reconstruction.** The replay and pruning plan decides, and tests, whether pruning is held off
+   until reconstruction has replayed the retained suffix and re-established its holds.
+3. **Where the checkpoint lives.** The checkpoint plan names where it lives, how it survives the loss of `coord.db`,
+   and whether `ccrc backup` includes it; the spec implies it is outside `coord.db` but does not settle the backup.
+4. **Matching a checkpointed activity on replay.** Replay decides, and tests, how a checkpointed activity is matched
+   by its natural key rather than by recomputing a hash whose identity event may have been pruned.
+5. **"Durably applied".** The implementation plan defines it for a journalled join and for a positive meta. The likely
+   readings (the journal append and the checkpoint, respectively) are observations, not rulings.
+
 ## Next-wave brief
 
 **Wave 2 — the measurement close-out (run 306), dispatched 2026-10-07.** In order:
@@ -782,7 +804,8 @@ One PR from a fresh child. A review run on the held-out panel follows.
   implementation commit (the red-first `-t "$TMUX_PANE"` ownership correction); the turn-marker `paid` reader's
   phantom-main-thread case; the three re-capture tooling obligations, closed before any capture relies on
   `--missing` (D-3999); D-4008's three folds as no positive cleanup or adoption evidence; activity ids restored from
-  the checkpoint, never re-hashed after pruning; and the eight real-lane amendment slugs.
+  the checkpoint, never re-hashed after pruning; and the eight real-lane amendment slugs. It also reads the
+  review-332 observations above as open questions for whichever plan owns each, not as requirements.
 - Its plan is Markdown, `docs/superpowers/plans/<date>-<topic>.md`: plans stay Markdown under the operator's
   2026-10-07 ruling, and ccrc-pwa's deviation and ledger guards, which read `*.md` plans, are one reason (review 328
   F2).
