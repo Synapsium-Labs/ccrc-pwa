@@ -18,8 +18,8 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | — | **run 271 open** (`planned`) since 2026-10-05 15:20 UTC; dispatches once this ledger's PR merges |
-| 2 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | wave 1's matrix and its real-lane cross-check | — | to plan once wave 1's measurement section is complete |
+| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
+| 2 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | wave 1's matrix and its real-lane cross-check | — | **run 306 open** (`planned`) since 2026-10-06 20:20 UTC; its plan comes first (Next-wave brief) |
 | 3 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 2 | — | to plan |
 | 4 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 3 | — | to plan |
 | 5 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 4 | — | to plan |
@@ -397,10 +397,133 @@ Pending: the coordinator runs it after wave 1 merges, per the plan's "After the 
   written and reviewed before its run opens.
 - **2026-10-05 — operator decision: the programme runs through ccrc** — wave 1 is dispatched as run 271 to a fresh
   child worker executing subagent-driven, not run in the spec-writing session (§10). The operator approved merging
-  this ledger's docs PR once its checks are green.
+  this ledger's docs PR once its checks are green. #280 merged 2026-10-05 as `1eda8630a`, every check green.
+- **2026-10-05 — wave 1's brief and routing.** The spec'd-plan row: Opus · high main loop, Sonnet · high implementers,
+  an Opus · high reviewer per task, Haiku scouts, workflows off, compact 40. Nine items, one per task. The brief
+  routes Task 1 around a live peer claim on `ccd/session-hook.sh` (landing-order wave 3's fix round, hard cap 19:04 UTC):
+  Tasks 2–5 first, and the peer protocol for the three disjoint lines Task 1 changes.
+- **2026-10-05 — overlap rule with child-reclamation wave 5 (run 260), agreed by both coordinators (mail 3563).** Both
+  waves edit `server/test/session-hook.test.ts` (ours: one in-place line, the unknown-event row; theirs: the
+  citation-debt census's `shared/api.ts` entry) and `README.md` (ours: the registered-events, capture and census
+  sentences; theirs: four `shared/api.ts` anchors re-pointed by content). Each edits only its own region; whichever
+  PR lands second absorbs main by `git merge` alone and re-runs `session-hook.test.ts` in full plus
+  `typecheck-tests`; neither waits. The worker was told (mail 3564).
+- **2026-10-05 — wave 1's wave-done verified (mail 3577).** The branch tip, the remote tip and the head of #284 are
+  all `347b7b64`, and the server accepted the fingerprint. The worker sent `suite: red`, `failure: unclear`. Its
+  first full run was red on four rows: three load rows that pass in isolation, and `tmp-sweep`'s fail-closed row,
+  which it reports as also red on a clean `main`; the review brief asks for that to be reproduced. The block 3992
+  through 4011 is fully defined. Ruled: the full suite ran as one bounded background job rather than foreground
+  shards, which is accepted (the hard timeout and the log kept a hang visible; the gate suites ran in the foreground).
+  The raw synthetic capture root stays on the box until #284 merges. Review run 277 runs the held-out panel, plus
+  public-content, hook-inertness and measurement-provenance lenses.
+- **2026-10-05 — review 277's verdict (`ccrc-pwa-calm-summit`, at `347b7b64`):** 36 findings (0 critical, 11 important,
+  25 minor), merged from 59 confirmed. Per lens, confirmed out of raised:
+  - Panel: correctness 4/5, spec 5/5, reproduce 6/7.
+  - Wave lenses: public-content 0/4, hook-change 1/2, provenance-matrix 6/7, provenance-amendments 9/10,
+    deviations 5/7, whole-branch 2/5.
+  - Mutation agents: 13 of 126 cells survived.
+
+  No lens came back unverified. The committed corpus is clean; `matrix.json` re-derives byte-identically; `SessionEnd`
+  is measured inert outside `-hookcap` (no file written, a median of 32 ms); the `tmp-sweep` main-red claim
+  reproduced. The systematic weakness is guard arms added in review and fix rounds that have no row able to go red.
+- **2026-10-05 — fix round 1 rulings (mail 3587).** Every finding is fixed except F34, a dated spec anchor that stays
+  as it is. The rulings that needed one:
+  - F4: re-script interrupt-exit and re-run it on all seven versions (plan Task 6 Step 3), falling back to unmeasured
+    after one honest attempt.
+  - F6, F22, F23: new or widened amendments.
+  - F7: no merge of `main`. Coordinator clause 15 allows asking for an absorb only on a measured conflict, and the
+    merge is clean, so the plan's merge-before-handoff constraint is superseded as a planning error.
+  - F8, F10, F28: the departures are recorded.
+  - F13, F14, F15, F16 are in scope. F16 means Q8 is re-run on the largest repo.
+  - F17: SIGKILL and swap-resume are declared as proxies.
+
+  A second block was minted for the round: ten numbers, 4058 through 4067 (4058 F4, 4059 F7, 4060 and 4061 F8,
+  4062 F10, 4063 F28, the rest spare).
+- **2026-10-05 — routing:** the worker's effort rises from high to xhigh for fix round 1 (`runs route`, kind `shallow`:
+  tests missed). The review found guards without a red row; the routing matrix raises effort one rung for that.
+- **2026-10-06 — fix round 1's wave-done verified (mail 3681).** The branch, the remote and #284 are all at
+  `e47f3689f` (13 commits), and the server accepted the fingerprint. The worker sent `suite: red` (carried from round
+  0), `failure: shallow`.
+  - F4 is a measured fix (number 4058): the old `/exit` had stopped at Claude Code's unanswered "Background work is
+    running" dialog. Re-scripted, every version shows `SessionEnd` `prompt_input_exit`, no `Stop`, and one locked
+    tree left.
+  - Asked (mail 3642), the worker measured `clear-compact-resume` and `swap-resume`: they launch no background
+    work, so they were never blocked.
+  - Numbers 4058 through 4065 are defined; 4066 and 4067 are unused.
+  - CI reds `server 4/5` on a compaction-card row of `session-hook.test.ts`. The worker reads it as strace
+    interleaving, outside this branch's diff, and review 296 is asked to reproduce that.
+  - The fleet box's `/tmp` reaper took the raw roots before merge; the committed corpus re-scans clean. A
+    protect-list entry is the operator's call.
+  - Review run 296's dispatch was refused `cap-daily` (24 of 24, fleet-wide). It retries at each measured age-out,
+    the first at 12:41 UTC.
+- **2026-10-06 — review 296's verdict (`ccrc-pwa-soft-prairie`, at `e47f3689f`):** 18 findings (3 important).
+  - Previous findings: 29 of review 277's 36 landed as ruled, 6 with a remainder, and F34 was left by ruling.
+  - Mutation: 15 of review 277's 16 survived or row-less cells now red, and one is declared untestable as ruled.
+    All 34 original mutation-table rows red through their named rows.
+  - Public content: 0 hits. `matrix.json` re-derives byte-identically.
+  - The CI red is a strace harness flake the branch cannot reach: 3 of 18 runs at the tip, 3 of 18 on main.
+  - Per lens, confirmed out of raised: fix-range panel 6/8, whole-branch panel 6/11, wave lenses 14/34.
+- **2026-10-06 — fix round 2 rulings (mail 3704).**
+  - The sanitiser gets a stopping line. A spelling that contradicts a claim the header or the deviation entry
+    makes is fixed, or the claim is corrected (F1: every `%XX` is decoded for the scan). An exotic spelling the
+    corpus lacks and the synthetic rig cannot produce becomes a named known limit (F11 glue characters and `~/`,
+    F12 the munged-top denylist). An attack review of a parser never converges otherwise.
+  - F2: a missing dialog answer becomes a failure note, never a measured zero.
+  - F3: the two §8.1 proxies get number 4066. 4067 is reserved for F18's scenario-rule departure, or is recorded
+    as unused.
+  - No escalation: effort stays xhigh, because round 1 landed 29 of 36 cleanly.
+  - **New versions:** 12 of 15 lanes now run 2.1.290/2.1.291, which the corpus lacked, and spec §8.1 lets no
+    contract depend on a field until every version the fleet runs is measured. So this round captures both,
+    stopping at the versions installed when the capture starts. The 2.1.280/2.1.281 fixtures stay as history.
+- **2026-10-06 — fix round 2's wave-done verified (mail 3729).** The branch, the remote and #284 are all at
+  `3efb0ac37`, and the server accepted the fingerprint.
+  - All 18 rulings landed. 2.1.290 and 2.1.291 were captured with no rig adaptation: 9 versions, 126 of 126 cells
+    measured, every lane covered.
+  - The block 4058–4067 is fully defined.
+  - The worker's per-task review caught a consequence of my F2 ruling. The four workflow scenarios carried an
+    `answerDialog` for a dialog that never appears (Workflow is granted by `permissions.allow`), and the new
+    failure arm would have marked every workflow capture unmeasured. The worker replaced the step with an
+    equal sleep and pinned that with a data-derived row. Accepted, subject to review 304.
+- **2026-10-06 — review 304's verdict (`ccrc-pwa-clear-meadow`, at `3efb0ac37`):** 13 findings (2 important, 11
+  minor), all from 23 confirmed raw findings, with no lens unverified.
+  - All 18 of review 296's findings landed as ruled. The workflow sleep changes no measured cell.
+  - The 28 new fixtures re-sanitise byte-identically, and `matrix.json` re-derives byte-identically.
+  - Public content: 0 hits.
+  - Both important findings predate the round and are claim errors, not data errors: F1, the `..` claim against
+    `DOTDOT`; F2, Q5 compaction called measured.
+- **2026-10-06 — wave 1 accepted with residue; #284 merged as `22b4eabda`.**
+  - The review is clean of blockers, and every required CI leg is green; `full-suite` and `test-macos 2/2` are macOS
+    reds, which gate nothing by ruling.
+  - #284 landed second, after child-reclamation wave 5 (#290). On the overlap rule's step 2 I made one
+    substitution: clause 15 allows an absorb only on a measured conflict, and the merge-tree was clean. So I measured
+    that exact merged tree in a scratch snapshot with its own `npm ci` (`session-hook.test.ts` 335/335,
+    `typecheck-tests` 12/12) instead of having the worker merge `main`. Reported to calm-mesa (mail 3755).
+  - Wave 2's run (306) was opened before run 271 closed, so the programme never had zero open runs. This amends the
+    planning-shape entry above: a wave's run may open before its plan exists, but it is never dispatched until its
+    plan is written and approved.
+  - Review 304's residue, ruled for wave 2's plan:
+    - F1: narrow the claim. A `..` that is not at the string's start or after `/` is a known limit, pinned by a row.
+      Widening `DOTDOT` would red 18 historical strings in fixtures whose versions are no longer installed.
+    - F2: the compaction gap gets its own deviation number, and the plan header and "Versions covered" say Q5
+      compaction is unmeasured.
+    - F3: date each mutation count by the commit it was taken at, and drop "every count matches".
+    - F4: a known limit plus a pinning row.
+    - F5: an empty `--scan` argument is refused with the usage exit 2, plus a row.
+    - F6: word the `--scan` index promise as the code behaves.
+    - F7: `rig.sh run` refuses a missing binary with exit 2, plus a row.
+    - F8: an unreadable meta gets its own marker, and the header's self-contradiction goes.
+    - F9: `--home` is resolved like `--repo`, plus a row.
+    - F10: distinct markers for an unreadable worktree directory and `CLAUDE_BASE`.
+    - F11: an amendment slug for the `workflowPhase` contradiction.
+    - F12: one re-capture script, because every wave now begins with a re-capture.
+    - F13: the wording fix.
 - **2026-10-05 — the parent incarnation field is already in the tree** (spec §5.1, §8.1 item 10): `$REG/<id>.generation`
-  (D-2605) is minted once at row creation and never rewritten. The hook also sees it as `CCRC_SESSION_GENERATION`, but
-  ccd does not set that on every spawn path, so later waves read the file. Wave 1 records this from source.
+  (D-2605) is never rewritten once present. The hook also sees it as `CCRC_SESSION_GENERATION`, but ccd does not set
+  that on every spawn path, so later waves read the file. Wave 1 records this from source. **Corrected after review
+  277 (F27):** the file is not minted at row creation alone — ccd mints it on genuine absence at four sites, and a
+  live row can lack it (ccd's own comments quote 31 of 34 rows without it, measured 2026-09-17). The resume retry
+  spawn also drops the environment value silently when its re-read fails. So an absent or invalid file is an
+  UNMEASURED incarnation, never a changed one.
 
 Deviation numbers: each wave's block is minted at its run-open and recorded here in prose; no number is spelled as
 a `D-` token in this file until a plan defines it. **Wave 1 (run 271):** twenty numbers, 3992 through 4011, minted
@@ -421,12 +544,33 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
 - Nothing new lands above `ccd/session-hook.sh:2900` (README's anchor); edits above it stay line-neutral.
 - `CLAUDE.md`'s amendments (spec §13) land with the wave that ships each verb or route, not before.
 - The program runs through `runs open` / `runs dispatch`; open wave N+1's run before closing wave N's.
+- **The corpus must cover every Claude Code version the fleet runs before a wave depends on a hook field** (spec
+  §8.1). Lanes update often, so each such wave begins by re-reading the lane versions and capturing any the
+  corpus lacks with the rig's recapture steps.
+- **Wave 2's spool line (review 296):** on the largest repo the worktree-name listing alone is about 3.9 KB, which
+  nearly fills spec §5.3's 4 KiB line. Wave 2's line design must measure that case: the listing is the optional
+  field that gets dropped, and the worst case is about 8.5 ms per call.
 
 ## Next-wave brief
 
-**Wave 1 — measurement.** Plan: `docs/superpowers/plans/2026-10-05-delegation-broker-wave1-measurement.md`, read at
-the sha the brief names. A fresh child workspace from `main`. Deploy class: the hook and installer change reach the
-fleet through `ccrc update`; everything else is tests and fixtures. One PR. After the merge, the coordinator runs the
-plan's real-lane cross-check (two lanes, `-hookcap` sessions) and writes its reduced tables into the measurement
-matrix section above, with the corpus's. Dispatch preconditions: the plan is on `main`; one active-run slot; the
-daily dispatch cap has room.
+**Wave 2 — observe (report-only).** Run 306 is open and not dispatched. In order:
+
+1. **The real-lane cross-check** (wave 1's plan, "After the merge"). This is the coordinator's job, once the release
+   carrying #284 reaches the fleet box through `ccrc update`. Rolling the fleet out is the operator's act, never this
+   session's. Use two `-hookcap` lanes, the lowest and the highest Claude Code version then running. Write their
+   reduced tables into the measurement matrix section, vetting Workflow key names before they are committed (they
+   can be agent names).
+2. **Re-read the lane versions, and capture any version the corpus lacks** (carried constraint): 2.1.292 was on 4
+   of 15 lanes at 19:13 UTC on 2026-10-06. Fold that into wave 2's first task, using F12's one re-capture script.
+3. **Write wave 2's plan** from the measured fields only:
+   - The spool, ingestion and cursors, the one `delegation_*` migration, the census extension, correlation and
+     reconciliation (report-only), the coordinator-intent route, and coordinator clause 17.
+   - Its first tasks are review 304's residue, as ruled above.
+   - It carries the spool-line constraint: a listing of about 3.9 KB nearly fills the 4 KiB line.
+   - Check the plan's format before writing it. The operator's global instructions now prefer HTML plans, so
+     confirm whether `deviation-refs`, the ledger floor seed and the ledger sweep read a `.html` plan; if they read
+     Markdown only, ask the operator first.
+   - The plan goes to the operator for review before run 306 dispatches.
+
+Deploy class: fleet first, then server; skills. Dispatch preconditions: the plan is on `main`, a slot under the
+fleet's daily dispatch cap, and the cross-check's tables in the matrix section.
