@@ -386,7 +386,9 @@ describe('the coordinator skill: its contract', () => {
     // so the entry alone cannot tell "merged" from "nothing queued".
     expect(para, 'the read-back query no longer asks the PR\'s state, autoMergeRequest and mergeQueueEntry together')
       .toContain('pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } }');
-    // The four answers (queued, merged, armed, neither), each with its own act.
+    // The four answers (queued, merged, armed, neither), each with its own act,
+    // and the count that introduces them (review 249 F3).
+    expect(para, 'the read-back no longer says how many answers it gives').toContain('gives one of four answers.');
     expect(para, 'the queued answer (a non-null entry) is gone').toContain('answers a non-null `mergeQueueEntry`');
     expect(para, 'the MERGED answer is gone: a merged PR would read as nothing queued')
       .toContain('A `state` of `MERGED` means it already landed: wait for or prove `merged:#<pr>`, and never disarm');

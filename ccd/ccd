@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=be9bae62f49a142285c6500ff8c1947061e6d93822702b0fdc304600704166e7
+# ccrc:generated 1 sha256=31635e789dd5a75e314704b787eea897420ba4ca08d94e9051b5f3a0d7d654d5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -30125,8 +30125,11 @@ _authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the
 #               — GitHub does not re-enqueue after a failed group
 #   landed      the PR is MERGED and its last queue act is the add (the queue merged it)
 #   none        measured, and none of the above — including "this workspace has
-#               no bound PR", and a PR that never met the queue
+#               no bound PR", a PR that never met the queue, and a CLOSED PR
+#               that never merged: it is in neither window, but its own line
+#               already says `phase: closed`, and a closed PR is in no queue
 #   unmeasured  the call did not answer, or the bound PR is outside both windows
+#               and is not closed
 # plus `queueAt`, the ISO timestamp of that last act, only when it has one and
 # only when it is shaped like a timestamp. `--session` never makes this call and
 # never carries the key: its absence is the OLDER-build answer, which a reader
@@ -30237,6 +30240,8 @@ def word(line):
         return 'none', None
     f = FACTS.get(num)
     if f is None:
+        if line.get('phase') == 'closed':
+            return 'none', None
         return 'unmeasured', None
     state, entry, act, at = f
     if state == 'OPEN' and entry:
