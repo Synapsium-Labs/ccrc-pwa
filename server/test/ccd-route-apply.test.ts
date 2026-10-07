@@ -1430,6 +1430,40 @@ describe('the read-back\'s second witness — the transcript\'s own acknowledged
     expect(verdict()).toBe('unacked');
   });
 
+  it('a newer /model row the reader cannot date or parse is not skipped: the older ack is not believed past it (strict)', () => {
+    // Review finding 1: the keep skips such a row, which is safe for it; the read-back acts on a positive.
+    fs.rmSync(usageFile());
+    const older = [cmd(ACK, 'model', 'opus'), ack(ACK, SESSION('Opus 5.5'))];
+    writeTranscript([...older, cmd(ACK + 600, 'model', 'sonnet', { timestamp: 'not-a-time' }), ack(ACK + 600, SESSION('Sonnet 5'))]);
+    tick();
+    unchanged();
+    expect(verdict(), 'an undatable newer command').toBe('unacked');
+    const blocks = JSON.parse(cmd(ACK + 600, 'model', 'sonnet')) as { message: { content: unknown } };
+    blocks.message.content = [{ type: 'text', text: blocks.message.content as string }];
+    writeTranscript([...older, JSON.stringify(blocks), ack(ACK + 600, SESSION('Sonnet 5'))]);
+    expect(verdict(), 'a command row in block form is read as its text: Sonnet ran').toBe('other');
+    writeTranscript([...older, cmd(ACK + 600, 'model', 'opus', { timestamp: 'not-a-time' }), ack(ACK + 600, SESSION('Opus 5.5')),
+      cmd(ACK + 1200, 'model', 'opus'), ack(ACK + 1200, SESSION('Opus 5.5'))]);
+    expect(verdict(), 'a newer acknowledged /model past it answers again').toMatch(/^matched /);
+    // and the keep is unchanged: it still skips the undatable row and keeps the older ack
+    writeTranscript([...older, cmd(ACK + 600, 'model', 'sonnet', { timestamp: 'not-a-time' }), ack(ACK + 600, SESSION('Sonnet 5'))]);
+    expect(h.sh(`_operator_choice_read "${transcriptPath()}" "0 since"`)).toBe(`model opus ${ACK} 4\nran-model Opus ${ACK} Opus 5.5`);
+  });
+
+  it('a /fast after the newest acknowledged /model may have changed the model: unacked until a newer /model', () => {
+    // Review finding 3: 2.1.292's `/fast` can promote the model (`Fast mode ON · model set to …`) with no /model row.
+    fs.rmSync(usageFile());
+    const older = [cmd(ACK, 'model', 'opus'), ack(ACK, SESSION('Opus 5.5'))];
+    writeTranscript([...older, cmd(ACK + 600, 'fast'), ack(ACK + 600, 'Fast mode ON · model set to `Opus 5.6`')]);
+    tick();
+    unchanged();
+    expect(verdict()).toBe('unacked');
+    writeTranscript([cmd(ACK - 600, 'fast'), ack(ACK - 600, 'Fast mode ON'), ...older]);
+    expect(verdict(), 'a /fast BEFORE the newest ack changes nothing').toMatch(/^matched /);
+    writeTranscript([...older, cmd(ACK + 600, 'fast'), ack(ACK + 600, 'Fast mode ON')]);
+    expect(h.sh(`_operator_choice_read "${transcriptPath()}" "0 since"`), 'the keep never reads /fast').toBe(`model opus ${ACK} 4\nran-model Opus ${ACK} Opus 5.5`);
+  });
+
   it('a later STALE sidecar reading of this process naming another class supersedes an older acknowledgement', () => {
     // A model can change with no /model row (a remote-control switch, a stepped-down family): the render
     // it caused is newer than the ack and names what ran.

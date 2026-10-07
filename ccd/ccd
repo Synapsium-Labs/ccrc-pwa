@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e6b97ade21778d78b1b23d0e7c97e15d2df3a37bc4c3159bd5aded41a4804534
+# ccrc:generated 1 sha256=e738510bd296f43540206764b95960a99e565ada0e3a2472be4d05605bbaa0c7
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19648,15 +19648,30 @@ _operator_choice_read() {   # transcript journal [tail-bytes] -> the transcript 
   # depend on who typed it. `tail-bytes` reads only that many bytes from the
   # END of the file (the read-back's bound); without it the whole file is
   # grepped, as the keep always has.
-  local f="$1" journal="$2" tail="${3:-}"
+  #
+  # `strict` IS THE READ-BACK'S, and it exists because the two callers fail in
+  # opposite directions. The keep SKIPS a command row it cannot date or parse,
+  # which is safe for it — it writes nothing on what it did not read. The
+  # read-back ACTS ON A POSITIVE, so for it "the newest /model" must not quietly
+  # become "the newest the parser understood" (review finding 1): under
+  # `strict` a /model or /effort command row whose timestamp will not parse is
+  # `drift-<kind> x 0 0`, a command row whose content is an array of text blocks
+  # is read as its joined text, and a `/fast` row — which can change the running
+  # model with no /model row (2.1.292's `Fast mode ON · model set to …`, review
+  # finding 3) — is `drift-model`: nothing older is believed past it until a
+  # newer acknowledged /model. The keep's output is unchanged.
+  local f="$1" journal="$2" tail="${3:-}" strict="${4:-}"
+  local -a pats=(-e '<command-name>/model</command-name>' -e '<command-name>/effort</command-name>')
+  [[ "$strict" == strict ]] && pats+=(-e '<command-name>/fast</command-name>')
   if [[ -n "$tail" ]]; then
-    tail -c "$tail" -- "$f" 2>/dev/null | { grep -F -A1 -e '<command-name>/model</command-name>' -e '<command-name>/effort</command-name>' || (( $? == 1 )); }
+    tail -c "$tail" -- "$f" 2>/dev/null | { grep -F -A1 "${pats[@]}" || (( $? == 1 )); }
   else
-    { grep -F -A1 -e '<command-name>/model</command-name>' -e '<command-name>/effort</command-name>' -- "$f" 2>/dev/null || (( $? == 1 )); }
+    { grep -F -A1 "${pats[@]}" -- "$f" 2>/dev/null || (( $? == 1 )); }
   fi | python3 -c '
 import json, re, sys
 from datetime import datetime
 window = int(sys.argv[2])
+strict = sys.argv[3] == "strict"
 journal = sys.argv[1].splitlines()
 floor = int(journal[0].split()[0])
 rows = []
@@ -19681,22 +19696,32 @@ def user(line):
         return None, None
     msg = row.get("message")
     text = msg.get("content") if isinstance(msg, dict) else None
+    if strict and isinstance(text, list) and text and all(isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str) for b in text):
+        text = "".join(b["text"] for b in text)
     return (text, row) if isinstance(text, str) else (None, None)
 lines = sys.stdin.read().split("\n")
 newest = {}
 unack = {}
 ran = None
+KINDS = {"/model": "model", "/effort": "effort"}
+if strict:
+    KINDS["/fast"] = "fast"
 for i, line in enumerate(lines):
     text, row = user(line)
     if text is None or ENV.sub("", text).strip():
         continue
     tags = dict(ENV.findall(text))
-    kind = {"/model": "model", "/effort": "effort"}.get(tags.get("name", "").strip())
+    kind = KINDS.get(tags.get("name", "").strip())
     if kind is None:
         continue
     try:
         at = int(datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")).timestamp())
     except (KeyError, AttributeError, TypeError, ValueError):
+        if strict:
+            unack["model" if kind == "fast" else kind] = 0
+        continue
+    if kind == "fast":
+        unack["model"] = at
         continue
     nxt = user(lines[i + 1])[0] if i + 1 < len(lines) else None
     m = re.fullmatch(r"\s*<local-command-stdout>(.*)</local-command-stdout>\s*", nxt or "", re.S)
@@ -19729,7 +19754,7 @@ for kind, at in sorted(unack.items()):
         print("drift-" + kind, "x", at, 0)
 if ran is not None:
     print("ran-model", *ran)
-' "$journal" "$TYPED_MATCH_WINDOW" 2>/dev/null
+' "$journal" "$TYPED_MATCH_WINDOW" "$strict" 2>/dev/null
 }
 
 _operator_choice_keep() {   # id — before a stop that a spawn follows, and at every spawn (`_spawn_start`, unless a stop's keep already read): the operator's own /model and /effort, written to the route record (§5.7). Always 0.
@@ -20011,7 +20036,9 @@ _route_readback_transcript() {   # id class stamp later-ts later-model -> ONE li
   #      (`_transcript_path`: the registry uuid's jsonl, as §5.7 locates it),
   #      and it carries a recognised acknowledgement — a newer one with none
   #      (refused, or a wording this ccd does not know) may have changed the
-  #      model or not, so nothing older is believed past it (`unacked`);
+  #      model or not, so nothing older is believed past it (`unacked`) — and
+  #      so may a newer `/fast`, or a command row the reader cannot date or
+  #      parse (the reader's `strict`, review findings 1 and 3);
   #   2. it is later than THIS Claude Code process's start: `_pane_born`, the
   #      tmux `session_created` D-3522 dates a process by, since ccd makes a
   #      fresh tmux session per spawn. Not `.spawn`, which `_spawn_settle`
@@ -20068,7 +20095,7 @@ _route_readback_transcript() {   # id class stamp later-ts later-model -> ONE li
   fi
   born=$(_pane_born "$id")
   [[ "$born" =~ ^[0-9]+$ ]] || { echo unplaced; return 0; }   # asked BEFORE the read: an unplaceable process is not worth one
-  out=$(_operator_choice_read "$f" "0 since" "$ROUTE_READBACK_TAIL") || { echo unmeasured; return 0; }   # no python3 is a reader that failed: one word, one remedy
+  out=$(_operator_choice_read "$f" "0 since" "$ROUTE_READBACK_TAIL" strict) || { echo unmeasured; return 0; }   # no python3 is a reader that failed: one word, one remedy
   while read -r kind word at shown; do
     case "$kind" in
       ran-model)   [[ "$at" =~ ^[0-9]+$ ]] && { ack="$at"; said="$word"; named="$shown"; } ;;
