@@ -521,14 +521,16 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
   the same `agent_id` is known, whether that join came before it or arrives later. A shared `prompt_id` names the
   turn, not the agent, and is not such a join (`launch-response-names-the-upstream-id`). So spec §5.2's "the first
   event that named it" is, for an `agent_id`-keyed activity, the earliest journal event of the parent (same
-  incarnation) naming that id that is retained when the activity opens, once a qualifying join is known, whichever
-  join came first; on every measured order that is the launch response or SubagentStart itself. The join gates
-  opening and contributes no hash component; once the retained set at opening is fixed, neither the join's kind or
-  order nor the time of a positive meta read selects among those events, and timing changes which events are still
-  retained at opening only through the pruning contract below (review 332 F1). A bare occurrence never opens an
-  activity, but once a join is known it may be that earliest event (a refinement of review 318 F1's wording, ruled
-  with review 324). The other source kinds keep the first event naming their upstream id. A meta is a join, not a
-  journal event, and nothing of it is hashed (review 324 F3, F4). The id is selected once, at open, and never
+  incarnation) that names that id and is retained when the activity opens, once a qualifying join is known, whichever
+  join came first; on every measured order that is the launch response or SubagentStart itself. A qualifying join
+  gates opening; it contributes no hash component and does not choose among the journal events retained when opening
+  occurs. Once the retained evidence set at opening is fixed, neither the qualifying join's kind or order nor the
+  time of a positive meta read contributes a hash component or selects among those retained events. Timing can affect
+  which events remain retained before opening only through the pruning contract below: an occurrence pruned before
+  any qualifying join is durably applied is gone permanently as evidence (review 332 F1). A bare occurrence never
+  opens an activity, but once a join is known it may be that earliest event (a refinement of review 318 F1's wording,
+  ruled with review 324). The other source kinds keep the first event naming their upstream id. A meta is a join, not
+  a journal event, and nothing of it is hashed (review 324 F3, F4). The id is selected once, at open, and never
   changes: it is part of the checkpointed applied state, reconstruction restores it verbatim and never re-selects it
   from the journal left after pruning, pruning cannot pass an identity event before a durable checkpoint holds its
   id, and a bare occurrence pruned before any qualifying join is durably applied never becomes one (review 328 F1;
@@ -771,19 +773,21 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
 
 Five questions the activity-identity contract (spec §5.2, §5.12; review 328 F1) leaves open. They are unresolved
 implementation questions, not requirements, and they change nothing in the approved contract; the plan that owns each
-one decides it, or asks the operator (raised by the review-328 round's per-task review, recorded by review 332 F3).
+one must decide it, or ask the operator (raised by the review-328 round's per-task review, recorded by review 332
+F3).
 
-1. **A meta-opened activity before its first checkpoint.** A meta gains no journal event, so losing `coord.db` and the
-   positive meta before that checkpoint can lose the open. The first wave that writes an activity id into any durable
-   carrier decides whether the activity must be checkpointed before its id escapes.
-2. **Pruning during reconstruction.** The replay and pruning plan decides, and tests, whether pruning is held off
+1. **A meta-opened activity before its first checkpoint.** A meta gains no journal event, so losing `coord.db` and
+   the positive meta before that checkpoint can lose the open. The first wave that writes an activity id into any
+   durable carrier must decide whether the activity must be checkpointed before its id escapes.
+2. **Pruning during reconstruction.** The replay and pruning plan must decide, and test, whether pruning is held off
    until reconstruction has replayed the retained suffix and re-established its holds.
-3. **Where the checkpoint lives.** The checkpoint plan names where it lives, how it survives the loss of `coord.db`,
-   and whether `ccrc backup` includes it; the spec implies it is outside `coord.db` but does not settle the backup.
-4. **Matching a checkpointed activity on replay.** Replay decides, and tests, how a checkpointed activity is matched
-   by its natural key rather than by recomputing a hash whose identity event may have been pruned.
-5. **"Durably applied".** The implementation plan defines it for a journalled join and for a positive meta. The likely
-   readings (the journal append and the checkpoint, respectively) are observations, not rulings.
+3. **Where the checkpoint lives.** The checkpoint plan must name where it lives, how it survives the loss of
+   `coord.db`, and whether `ccrc backup` includes it; the current spec implies it is outside `coord.db` but does not
+   settle the backup mechanism.
+4. **Matching a checkpointed activity on replay.** Replay must decide, and test, how a checkpointed activity is
+   matched by its natural key rather than by recomputing a hash whose identity event may have been pruned.
+5. **"Durably applied".** The implementation plan must define it for a journalled join and for a positive meta. The
+   likely readings (the journal append and the checkpoint, respectively) are observations, not rulings.
 
 ## Next-wave brief
 

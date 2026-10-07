@@ -202,12 +202,12 @@ qualifying join's kind or order nor the time of a positive meta read contributes
 selects among those retained events. Timing can affect which events remain retained before opening
 only through the pruning contract (below and §5.12): an occurrence pruned before any qualifying join
 for that id is durably applied is gone permanently as evidence (clarified 2026-10-07, review 332 F1).
-A tool event whose only delegation evidence is `agent_id` does not qualify by itself:
-it is kept as evidence and opens no activity, and it attaches to the activity once a qualifying join
-for the same `agent_id` is known, whether that join came before it or arrives later; once one is, it
-may itself be the earliest event the activity id hashes. No reader decides this by whether
-`agent_type` is present (amended 2026-10-07 from the real-lane cross-check and reviews 318 and 324:
-ledger amendment `tool-agent-id-alone-is-unjoined-evidence`).
+A tool event whose only delegation evidence is `agent_id` does not qualify by itself: it is kept as
+evidence and opens no activity, and it attaches to the activity once a qualifying join for the same
+`agent_id` is known, whether that join came before it or arrives later; once one is, it may itself be
+the earliest event the activity id hashes. No reader decides this by whether `agent_type` is present
+(amended 2026-10-07 from the real-lane cross-check and reviews 318 and 324: ledger amendment
+`tool-agent-id-alone-is-unjoined-evidence`).
 The selected id is part of checkpointed applied state (§5.12). Reconstruction restores a checkpointed
 activity id verbatim and never re-selects an identity event (the event whose journal id the activity
 id hashes) for that activity from whatever journal suffix remains after pruning. It derives an id by
