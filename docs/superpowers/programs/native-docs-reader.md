@@ -18,7 +18,7 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | ccd reads docs: `shared/docs.ts`, `docs-index`/`docs-tree`/`docs-show`/`docs-fetch` and the embedded helper, the doctor's `docs` check | #301 | **merged** 2026-10-06 (`f03d83304`). Executed in the coordinator's session (subagent-driven, 19 tasks, per-task reviews, a six-lens final review, one fix round), not as a run |
-| 2 | grants and adapter: agent grants, `DOCS_CAP` and builders, runner budgets, `server/src/docs/{policy,ports,ccdsource}.ts`, the docs ring guard | — | plan approved by the operator 2026-10-07 and merged in #306 (`a17e14bc0`). **Run 315** opened 2026-10-07 (wave 2/7). Dispatch waits on the claim agreement with run 302 (Decisions, 2026-10-07) |
+| 2 | grants and adapter: agent grants, `DOCS_CAP` and builders, runner budgets, `server/src/docs/{policy,ports,ccdsource}.ts`, the docs ring guard | — | plan approved by the operator 2026-10-07 and merged in #306 (`a17e14bc0`). **Run 315** opened 2026-10-07 (wave 2/7). **Dispatched** 2026-10-07 10:39 UTC to a fresh child. Task 2 waits until claim 1073 ends or the claim agreement is confirmed (Decisions, 2026-10-07) |
 | 3 | routes: `server/src/docs/{routes,hooks,lane,cache}.ts`, registration, dark rollout, R1/R2 | — | after W2 |
 | 4 | PWA foundation: markdown extraction, `RenderBoundary`, chat hardening (U3), `docs-sw` | — | parallel-eligible now. Its `ccd/ccrc-doctor-checks` edit waits on whichever claim holds that file (claim 1072, run 302, on 2026-10-07) |
 | 5 | Docs screen, plus Share and Export (see Decisions, 2026-10-06) | — | after W3 and W4 |
@@ -59,7 +59,7 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
   - `single-definition.test.ts`'s tail grew (#312, #299). Task 8 appends after the real last line.
 
   The brief rules both as mechanical re-anchors.
-- **2026-10-07: claim overlap with run 302.** Claim 1073 (programme `ccrc-history`, wave 2 B1) holds `server/test/single-definition.test.ts` and `server/test/lifecycle.test.ts`. B1 only appends at the end of both; W2 appends at the end of both and edits one line in place in each (the archive door pin's `want` line, and the `../src/lifecycle.js` import). The coordinator proposed a scoped agreement to run 302's coordinator in mail 3812: each side edits only its own lines, and the second to merge takes `main` and keeps both blocks. Dispatch follows the reply.
+- **2026-10-07: claim overlap with run 302.** Claim 1073 (programme `ccrc-history`, wave 2 B1) holds `server/test/single-definition.test.ts` and `server/test/lifecycle.test.ts`. B1 only appends at the end of both; W2 appends at the end of both and edits one line in place in each (the archive door pin's `want` line, and the `../src/lifecycle.js` import). The coordinator proposed a scoped agreement to run 302's coordinator in mail 3812: each side edits only its own lines, and the second to merge takes `main` and keeps both blocks. Run 302's coordinator was busy, so W2 was dispatched before the reply. Task 1 edits neither file. Before Task 2 the worker claims the two files again, and edits them only once claim 1073 has ended or the coordinator has confirmed the agreement by mail.
 
 ## Carried constraints (reviewers get these)
 
@@ -80,7 +80,10 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
   - README's doctor table has no row for W1's `docs` check, and its server-role SKIP sentence (the D-3111 list ending "`timeout` and `model-default`") does not name `docs`, although `_check_docs` SKIPs on a `CCRC_ROLE=server` box (reported by another session in mail 3818, 2026-10-07; README is under another programme's claim, so W7 places it).
 - **U5:** the private vulnerability report is not filed yet. The spec's one-line mention is public since #301.
 
-## Next-wave brief (W2)
+## Next-wave brief (W2), as dispatched to run 315
+
+The bullets below were the plan. The brief as sent adds R1, the measured drift, the claim gate and the issued block (Decisions, 2026-10-07). W3's brief is written once W2 is accepted.
+
 
 - **Plan:** `docs/superpowers/plans/2026-10-06-native-docs-reader-w2-grants-and-adapter.md`, Tasks 1-9.
 - **Base:** `main` containing W1's `f03d83304`. The plan's numbers were measured at W1's tip, so counts that include pre-existing tests may differ. What binds is the new cases behaving as written.
