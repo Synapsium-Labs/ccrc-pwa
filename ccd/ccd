@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b15acb3807b7c419441f9737654425ddbcd6fd15722afd2669ab8e11cf83827b
+# ccrc:generated 1 sha256=f5319fff75e2d5c32140990deac4d671c6a18d519c8fe45b8f078fef8f8b6248
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28279,9 +28279,13 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   #   leaf is what `_child_tmpdir`'s rc 2 leaves in place; kept, a recycled
   #   slug would meet it on every spawn.
   # - A DIRECTORY LEAF goes only when it is this uid's own (`_ws_leaf_uid`,
-  #   `ls -dn`, never follows it), its physical path
-  #   is exactly `<root>/<id>`, and — when the caller names one — its dev:ino
-  #   is the one the caller recorded. It is normalised first
+  #   `ls -dn`, never follows it), its dev:ino is the one the caller recorded
+  #   (when the caller names one), and its physical path is exactly
+  #   `<root>/<id>`. Asking that path means entering the leaf, so the leaf's
+  #   OWN owner bits are set first (`find -P … -maxdepth 0 -user`: this uid's
+  #   own directory, never through a link, owner bits only): a mode-000 leaf
+  #   would otherwise be kept for ever, never reached by the pass below. It is
+  #   normalised next
   #   (`_ws_reclaim_normalise`: an entry that stays unreadable REFUSES the whole
   #   leaf rather than leave a partial tree; a pass that could not run is
   #   unmeasured), then removed NEVER ACROSS A FILE-SYSTEM BOUNDARY
@@ -28293,7 +28297,11 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   #   removal the leaf's absence is PROVEN, and a leaf that stands again (a
   #   writer re-created it) is unmeasured, never "removed". rc 2 is not
   #   "untouched": an `rm` that failed part-way removed what it reached, and
-  #   the caller keeps and records what stands.
+  #   the caller keeps and records what stands. A guard that could not ask
+  #   answers 2 with its own reason, never an empty value read as a refusal.
+  # - `_WS_LEAF_WHY` IS RAW: it can carry a name the session chose, and the
+  #   first line of `find`'s or `rm`'s stderr. A caller that journals it passes
+  #   it through `_ws_leaf_why_line` first.
   # - THE CHECKS ARE NOT ATOMIC WITH THE REMOVAL: a same-uid rename onto
   #   `<root>/<id>` between them and the `rm` is removed with it (the
   #   single-user trust model). Wave 7's collector closes this with a
@@ -28317,16 +28325,18 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
     owner=$(_ws_leaf_uid "$leaf") || { _WS_LEAF_WHY="who owns $leaf could not be read, so nothing under it was removed"; return 2; }
     [[ "$owner" == "$me" ]] \
       || { _WS_LEAF_WHY="$leaf belongs to uid $owner, not this uid $me — ccd never removes a directory it does not own"; return 1; }
-    lreal=$(cd -- "$leaf" >/dev/null 2>&1 && pwd -P) \
-      || { _WS_LEAF_WHY="$leaf cannot be entered, so where it resolves was never asked"; return 2; }
-    [[ "$lreal" == "$leaf" ]] \
-      || { _WS_LEAF_WHY="$leaf resolves to $lreal — ccd never removes a tree it would reach through another path"; return 1; }
     if [[ -n "$want" ]]; then
       have=$(_plat_devino "$leaf" 2>/dev/null) \
         || { _WS_LEAF_WHY="the identity of $leaf could not be read, so nothing under it was removed"; return 2; }
       [[ "$have" == "$want" ]] \
         || { _WS_LEAF_WHY="$leaf is $have, not the $want its record names — a leaf that is not the recorded one is never removed"; return 1; }
     fi
+    find -P "$leaf" -maxdepth 0 -type d -user "$me" ! -perm -u=rwx -exec chmod u+rwx {} \; 2>/dev/null \
+      || { _WS_LEAF_WHY="the owner bits of $leaf could not be set, so nothing under it was removed"; return 2; }
+    lreal=$(cd -- "$leaf" >/dev/null 2>&1 && pwd -P) \
+      || { _WS_LEAF_WHY="$leaf cannot be entered, so where it resolves was never asked"; return 2; }
+    [[ "$lreal" == "$leaf" ]] \
+      || { _WS_LEAF_WHY="$leaf resolves to $lreal — ccd never removes a tree it would reach through another path"; return 1; }
     _ws_reclaim_normalise "$leaf"; rc=$?
     (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_NORMALISE_WHY — nothing under $leaf was removed"; return 2; }
     (( rc != 1 )) || { _WS_LEAF_WHY="$_WS_NORMALISE_WHY — nothing under $leaf was removed"; return 1; }
@@ -28339,6 +28349,21 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   (( rc != 1 )) || { _WS_LEAF_WHY="$leaf stands again after its removal — something re-created it"; return 2; }
   (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_ABSENT_WHY — that $leaf is gone was never proven"; return 2; }
   return 0
+}
+_ws_leaf_why_line() {   # text -> ONE short line a journal row can carry: every C0 control byte and DEL
+  #                          reads "?", and it is cut at 300 bytes, the cut marked "…"
+  # `_WS_LEAF_WHY` can carry a name the session chose (the permission pass's
+  # `$left`) and a line of stderr. Raw, a newline splits the sentence a person
+  # reads, and a long, control-laden name grows six-fold at the encoder's
+  # `\u00XX` escapes: past the journal's line cap the encoder drops the WHOLE
+  # `meas` object (`childOf`, `branch`, `tip`, both kept keys) to fit. So the
+  # tail journals this line, never the raw reason. A `tr` or `head` that fails
+  # leaves the line short or empty — never longer, never less clean.
+  local t c
+  t=$(printf '%s' "$1" | LC_ALL=C tr '\001-\037\177' '?')
+  c=$(printf '%s' "$t" | LC_ALL=C head -c 300)
+  [[ "$c" == "$t" ]] || c+='…'
+  printf '%s' "$c"
 }
 
 _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|'') — the journalled
@@ -28777,19 +28802,20 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # removal helper (spec §5.6): the clips directory, then the per-session
   # temp root. A leaf the helper refuses, or could not measure, is KEPT: the
   # act still completes, and the done row says so (`meas.clipsKept`,
-  # `meas.tmpRootKept`, and why in `detail`) — never kept in silence, and never
-  # a refusal. The helper's own header says what it proves before it removes.
+  # `meas.tmpRootKept`, and why in `detail`, as ONE short clean line) — never
+  # kept in silence, and never a refusal. The helper's own header says what it
+  # proves before it removes.
   _ws_leaf_remove "$HOME/.cc-clips" "$id"; lfrc=$?
   case "$lfrc" in
     0) : ;;
-    1) clipskept=refused; clipswhy="$_WS_LEAF_WHY" ;;
-    *) clipskept=unmeasured; clipswhy="$_WS_LEAF_WHY" ;;
+    1) clipskept=refused; clipswhy=$(_ws_leaf_why_line "$_WS_LEAF_WHY") ;;
+    *) clipskept=unmeasured; clipswhy=$(_ws_leaf_why_line "$_WS_LEAF_WHY") ;;
   esac
   _ws_leaf_remove "$HOME/.cc-tmp" "$id"; lfrc=$?
   case "$lfrc" in
     0) : ;;
-    1) tmpkept=refused; tmpwhy="$_WS_LEAF_WHY" ;;
-    *) tmpkept=unmeasured; tmpwhy="$_WS_LEAF_WHY" ;;
+    1) tmpkept=refused; tmpwhy=$(_ws_leaf_why_line "$_WS_LEAF_WHY") ;;
+    *) tmpkept=unmeasured; tmpwhy=$(_ws_leaf_why_line "$_WS_LEAF_WHY") ;;
   esac
   cword=gone; tword=gone
   [[ -z "$clipskept" ]] || cword="kept ($clipskept)"
