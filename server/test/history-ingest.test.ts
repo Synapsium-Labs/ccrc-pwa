@@ -2271,11 +2271,11 @@ describe('history ingest: the FTS index (plan task 23)', () => {
 
     it('F3: a hash-only pair (sessions.json) re-indexes the blob holding its token, which no phrase search can find', () => {
       const box = IX.newBox('ccrc-hist-hashonly-');
-      const token = `zqs${hex(20)}`;                         // 43 characters, a session token's length
+      const token = `zqp${hex(20)}`;                         // 43 characters, a session token's length
       IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note ${token} end`, 1)]));
       IX.sweepTwice(box);
       let db = openStoreRO(box);
-      try { expect(matches(db, '"zqs"*')).toBe(1); } finally { db.close(); }   // CONTROL
+      try { expect(matches(db, '"zqp"*')).toBe(1); } finally { db.close(); }   // CONTROL: the token's own term; porter leaves zqp whole ("zqs" stems to "zq", review 316 M3)
       fs.mkdirSync(path.join(box.home, '.ccrc'), { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(box.home, '.ccrc', 'sessions.json'),
         JSON.stringify([{ idHash: sha256Hex(token), createdAt: 1, lastSeenAt: 1, generation: 1, label: 'fixture' }]), { mode: 0o600 });
@@ -2283,7 +2283,7 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       expect(r.code, r.stderr).toBe(0);
       db = openStoreRO(box);
       try {
-        expect(matches(db, '"zqs"*')).toBe(0);
+        expect(matches(db, '"zqp"*')).toBe(0);
         expect(ftsBytes(db).includes(token.slice(3, 23))).toBe(false);
         expect(metaV(db, 'fts_reindex_rid')).toBe(String(maxRid(db)));
       } finally { db.close(); }
