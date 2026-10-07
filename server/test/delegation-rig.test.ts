@@ -1623,8 +1623,8 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
   // Review 304 F1 (ruled: narrow the claim, pin the limit; DOTDOT is NOT widened). DOTDOT is `(^|/)\.\.(/|$)`: a `..` segment is caught
   // only at the string's START or right after a `/`. A `..` after a space, `=` or a quote is not, and the `/` behind it follows a `.`
   // (ABS's lookbehind skips it), so the path after it is not scanned either. The committed corpus holds such strings, raw-worktree's own
-  // ` ../raw-wt` (the rig's relative path to its own raw worktree), so widening DOTDOT to `[^A-Za-z0-9._~-]` before the `..` reds the
-  // corpus row and this one. The sibling row above pins what IS caught.
+  // ` ../raw-wt` (the rig's relative path to its own raw worktree), so widening DOTDOT to `[^A-Za-z0-9._~-]` before the `..` reds this
+  // row, the corpus row and the `--scan` file-index row. The `..` row near the top of this block pins what IS caught.
   it('a `..` that is not at the start of the string or right after a `/` is not scanned (declared limit, not a guarantee): `x ../srv/acme`, `x=../srv/acme`, `cmd ../raw-wt` (review 304 F1)', () => {
     for (const fine of ['x ../srv/acme', 'x=../srv/acme', 'cmd ../raw-wt', 'x ..', 'x "../srv/acme" y']) {
       const r = leakRun({ note: fine });
