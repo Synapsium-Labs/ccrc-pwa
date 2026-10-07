@@ -456,6 +456,13 @@ describe('rig.sh run and all take only a version that is installed (review 304 F
     }, 60_000);
   });
 
+  it('an unknown verb prints the header as the usage, exit 2, every verb named down to the last line and not the code after it', () => {
+    const r = rigsh(['bogus'], {}, undefined, 20_000);
+    expect.soft(r.status).toBe(2);
+    for (const line of ['rig.sh all <raw-root> [<version>...]', 'rig.sh versions [<version>...]', 'rig.sh reap', '(and a box with no /proc, where that cannot be measured, keeps them)']) expect.soft(r.stderr, line).toContain(line);
+    expect.soft(r.stderr).not.toContain('set -euo pipefail');
+  }, 60_000);
+
   describe('rig.sh versions (the one reader of "installed": all and recapture.sh both ask it)', () => {
     const ask = (home: string, ...named: string[]) => rigsh(['versions', ...named], { HOME: home }, undefined, 20_000);
     it('lists every installed, version-shaped, executable entry, one per line, numerically (a word, a non-executable file and a malformed name left out)', () => {
