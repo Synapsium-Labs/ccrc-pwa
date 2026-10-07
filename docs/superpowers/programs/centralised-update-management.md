@@ -2612,6 +2612,23 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     trigger, an overlap window, a reload without restart, and a fleet-side pull. Its first rotation retires the leaked
     value. Where it runs (this programme or its own) is decided with the spec.
 
+- **2026-10-07 11:01 UTC: correction to the 10:44 entry. The exposure is wider than it says, so the operator is asked to
+  re-decide.**
+  - **What the 10:44 entry got wrong:** it weighed only who can read the copies on this box. The question is what the
+    value opens once read.
+  - **Measured:**
+    - The fleet box reaches the server through its public HTTPS name. The proxy config on the server box has no
+      source-address matcher.
+    - A box-token route asked over that name with no credential answered 401 `unauthenticated`. So it is reachable, and
+      the token alone admits it.
+    - The machine lanes are exempt from the session gate by design (`server/src/auth/gate.ts`, reason 2).
+  - **So:** whoever holds the leaked value can use every box-token lane from the internet: mail into a session, run
+    open and dispatch (a brief to a worker session), asks, claims and ledger allocations.
+    - The known copies are still the 35 transcripts and the model context they were sent as. No outside holder is
+      known.
+  - **Design consequence:** a fleet pull authenticated by the current token would hand each replacement to whoever
+    holds the leaked value. The first rotation would then retire nothing. The handout needs another credential.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
