@@ -20,7 +20,7 @@ import {
   measuredSize, getMeta, setMeta, bump, closeWriter, schemaOf,
   mintStoreId, mintWriter, writeFileAtomic, peekStoreId, measureStoreFacts, removeStaleTemps, removeStaleMigrationTemps, createStore,
   finishPending, dropPending, syncWriterMirror,
-  readAttempts, clearDoneMarkers, assertAdditive, runMigration,
+  readAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry,
 } from '../../ccd/history/store.mjs';
 
 /** A delete-mode (rollback-journal) v1 store built by hand, the shape a
@@ -645,5 +645,44 @@ describe('store.mjs: the migration executor', () => {
     expect(clearDoneMarkers(h, 1)).toEqual([]);
     expect(clearDoneMarkers(h, 2)).toEqual(['.pre-v2.attempt']);
     expect(fs.readdirSync(P.backups)).toEqual(['.pre-v3.attempt']);
+  });
+});
+
+describe('store.mjs: removeEntry (review 316 F8; D-4347)', () => {
+  it('a regular file answers removed, an absent path absent, and a symlink to a directory removes only the link', () => {
+    const d = mkTmp('ccrc-history-rm-');
+    const f = path.join(d, 'f');
+    fs.writeFileSync(f, 'x');
+    expect(removeEntry(f)).toBe('removed');
+    expect(fs.existsSync(f)).toBe(false);
+    expect(removeEntry(path.join(d, 'nope'))).toBe('absent');
+    const target = path.join(d, 'target');
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, 'inside'), 'x');
+    const link = path.join(d, 'link');
+    fs.symlinkSync(target, link);
+    expect(removeEntry(link)).toBe('removed');
+    expect(fs.lstatSync(target).isDirectory()).toBe(true);
+    expect(fs.existsSync(path.join(target, 'inside'))).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'darwin')('a FIFO answers removed', () => {
+    const p = path.join(mkTmp('ccrc-history-rm-'), 'fifo');
+    expect(spawnSync('mkfifo', [p]).status).toBe(0);
+    expect(removeEntry(p)).toBe('removed');
+    expect(fs.existsSync(p)).toBe(false);
+  });
+
+  it('an empty directory answers removed; a directory holding a file answers kept-dir and keeps its file', () => {
+    const d = mkTmp('ccrc-history-rm-');
+    const empty = path.join(d, 'empty');
+    fs.mkdirSync(empty);
+    expect(removeEntry(empty)).toBe('removed');
+    expect(fs.existsSync(empty)).toBe(false);
+    const full = path.join(d, 'full');
+    fs.mkdirSync(full);
+    fs.writeFileSync(path.join(full, 'keep'), 'x');
+    expect(removeEntry(full)).toBe('kept-dir');
+    expect(fs.readFileSync(path.join(full, 'keep'), 'utf8')).toBe('x');
   });
 });

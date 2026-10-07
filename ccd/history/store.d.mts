@@ -27,6 +27,7 @@ export function schemaOf(db: DatabaseSync): Record<string, string[]>;
 export function mintStoreId(): string;
 export function mintWriter(): string;
 export function writeFileAtomic(path: string, text: string, mode?: number): void;
+export function removeEntry(path: string): 'removed' | 'absent' | 'kept-dir';
 export function peekStoreId(dbPath: string): Presence<string>;
 export function measureStoreFacts(home: string, role: string): StoreFacts;
 export function removeStaleTemps(home: string): string[];

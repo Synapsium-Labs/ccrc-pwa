@@ -41,6 +41,8 @@ interface Sweep {
   journalHalf(home: string, ids: Ids | null, nowMs: number): { held: string[]; journalFailed: boolean };
   readDrainingText(path: string): { text: string; bytes: number };
   setAsideOversize(db: DatabaseSync, home: string, name: string): boolean;
+  tidyDraining(home: string): { nonRegular: number; malformed: number };
+  ensureSpoolDirs(home: string): boolean;
 }
 let SW: Sweep;
 beforeAll(async () => { SW = (await import('../../ccd/history/sweep.mjs')) as unknown as Sweep; });
@@ -871,6 +873,111 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
     });
   });
 
+  // D-4347 (history-planted-entries-never-wedge): a planted or leftover entry at one of the sweep's own names in
+  // .draining/ or the journal never wedges, blocks or redirects a pass (review 316 F8, F9, F20).
+  describe('a planted entry in .draining/ never wedges the drain (review 316 F8, F9, F20; D-4347)', () => {
+    const PLANTED = (name: string, ...rest: string[]): string => path.join(DRAIN(box.home), 'planted', name, ...rest);
+    const regularFile = (): string => path.join(DRAIN(box.home), `${ID}.900.1.jsonl`);
+    const writeRegular = (): void => { fs.writeFileSync(regularFile(), `\n${JSON.stringify({ v: 1, ev: 'Stop', id: ID })}\n`); };
+
+    it('an empty directory at a draining name is set aside into .draining/planted/ and counted non_regular once; two passes exit 0 and a spooled line drains', () => {
+      fs.mkdirSync(path.join(DRAIN(box.home), `${ID}.900.1.jsonl`));
+      spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+      expect(runSweep(box).code).toBe(0);
+      expect(runSweep(box).code).toBe(0);
+      expect(fs.statSync(path.join(DRAIN(box.home), 'planted', `${ID}.900.1.jsonl`)).isDirectory()).toBe(true);
+      expect(fs.existsSync(path.join(DRAIN(box.home), 'rejected')), 'a planted entry never touches D-4346\'s directory').toBe(false);
+      expect(counters(box)['non_regular']).toBe(1);
+      expect(receipts(box)).toHaveLength(1);
+    });
+
+    it('the same with a NON-EMPTY directory: it is set aside whole, never recursed into or deleted', () => {
+      fs.mkdirSync(path.join(DRAIN(box.home), `${ID}.900.1.jsonl`));
+      fs.writeFileSync(path.join(DRAIN(box.home), `${ID}.900.1.jsonl`, 'keep'), '');
+      spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+      expect(runSweep(box).code).toBe(0);
+      expect(runSweep(box).code).toBe(0);
+      expect(fs.existsSync(PLANTED(`${ID}.900.1.jsonl`, 'keep'))).toBe(true);
+      expect(counters(box)['non_regular']).toBe(1);
+      expect(receipts(box)).toHaveLength(1);
+    });
+
+    it.each([['.obs'], ['.obs.tmp']])('a directory holding a file at the sidecar name %s is set aside and the file drains', (suffix) => {
+      writeRegular();
+      fs.mkdirSync(path.join(DRAIN(box.home), `${ID}.900.1${suffix}`));
+      fs.writeFileSync(path.join(DRAIN(box.home), `${ID}.900.1${suffix}`, 'keep'), '');
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(`${ID}.900.1.jsonl`, 1)]);
+      expect(counters(box)['journal_write_failed']).toBeUndefined();
+      expect(counters(box)['non_regular']).toBe(1);
+      expect(fs.existsSync(PLANTED(`${ID}.900.1${suffix}`, 'keep'))).toBe(true);
+    });
+
+    it('a FIFO at a sidecar temp name never blocks a hold pass', () => {
+      writeRegular();
+      expect(spawnSync('mkfifo', [path.join(DRAIN(box.home), `${ID}.900.1.obs.tmp`)]).status).toBe(0);
+      const aside = path.join(box.home, 'aside');
+      moveDb(box, hist(box.home, 'db'), aside);
+      const r = runSweep(box, [], { timeoutMs: 30_000 });
+      expect(r.code, `${r.signal} ${r.stderr}`).toBe(5);
+      expect(r.ms).toBeLessThan(25_000);
+      moveDb(box, aside, hist(box.home, 'db'));
+      expect(runSweep(box).code).toBe(0);
+      expect(drainingNames(box.home)).toEqual([]);
+    });
+
+    it('a directory at a journal month-file temp name never fails an append', () => {
+      const dir = hist(box.home, 'journal', ids.storeId);
+      fs.mkdirSync(dir, { recursive: true });
+      const m = SW.monthOf(Date.now());
+      fs.mkdirSync(path.join(dir, `.${m}.${ids.writer}.jsonl.4242.tmp`));
+      fs.mkdirSync(path.join(dir, `.${m}.${ids.writer}.jsonl.4243.tmp`));
+      fs.writeFileSync(path.join(dir, `.${m}.${ids.writer}.jsonl.4243.tmp`, 'keep'), '');
+      spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+      expect(runSweep(box).code).toBe(0);
+      expect(runSweep(box).code).toBe(0);
+      expect(counters(box)['journal_write_failed']).toBeUndefined();
+      expect(receipts(box)).toHaveLength(1);
+      expect(fs.existsSync(path.join(dir, `.${m}.${ids.writer}.jsonl.4242.tmp`))).toBe(false);
+      expect(fs.existsSync(path.join(dir, `.${m}.${ids.writer}.jsonl.4243.tmp`, 'keep'))).toBe(true);
+    });
+
+    it('a regular file at spool/.draining is removed and counted, and the drain goes on', () => {
+      fs.rmSync(DRAIN(box.home), { recursive: true });
+      fs.writeFileSync(DRAIN(box.home), 'stray');
+      spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+      const r1 = runSweep(box);
+      expect(r1.code, r1.stderr).toBe(0);
+      expect(fs.statSync(DRAIN(box.home)).isDirectory()).toBe(true);
+      expect(counters(box)['non_regular']).toBe(1);
+      const r2 = runSweep(box);
+      expect(r2.code, r2.stderr).toBe(0);
+      expect(receipts(box)).toHaveLength(1);
+    });
+
+    it('a FIFO or a link at this month\'s journal file fails the append loudly, never waits on it or writes through it', () => {
+      const f = SW.journalFilePath(box.home, ids.storeId, ids.writer, SW.monthOf(Date.now()));
+      const outside = path.join(box.home, 'outside');
+      const big = Array.from({ length: 2000 }, () => `\n${JSON.stringify({ v: 1, ev: 'Stop', id: ID })}\n`).join('');
+      for (const plant of ['fifo', 'link']) {
+        fs.rmSync(f, { force: true });
+        if (plant === 'fifo') expect(spawnSync('mkfifo', [f]).status).toBe(0);
+        else { fs.writeFileSync(outside, ''); fs.symlinkSync(outside, f); }
+        fs.writeFileSync(path.join(DRAIN(box.home), `${ID}.900.1.jsonl`), big);
+        const r = runSweep(box, [], { timeoutMs: 30_000 });
+        expect(r.code, `${plant}: ${r.signal} ${r.stderr}`).toBe(0);
+        expect(r.ms).toBeLessThan(25_000);
+        expect(receipts(box), plant).toEqual([]);
+        if (plant === 'link') expect(fs.readFileSync(outside, 'utf8'), 'written through the link').toBe('');
+      }
+      fs.rmSync(f, { force: true });
+      expect(runSweep(box).code).toBe(0);
+      expect(drainingNames(box.home)).toEqual([]);
+      expect(counters(box)['journal_write_failed']).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   it('while a file is held, a startup sid the observation did not name is recorded the first time .uuid names it', () => {
     setReg(box, ID, 'uuid', U0);
     spool(box.home, ID, { v: 1, ev: 'SessionStart', id: ID, sid: U1, src: 'startup' });
@@ -1328,12 +1435,13 @@ describe('a sidecar that cannot be written is the journal failure, held per file
       const name = SW.drainingName(id, T + i, 4242);
       fs.writeFileSync(path.join(DRAIN(box.home), name), `\n${JSON.stringify(start(id, U1, 'startup'))}\n`);
       fs.mkdirSync(path.join(DRAIN(box.home), `${SW.sidecarName(name)}.tmp`));   // no sidecar can be written, on any attempt
+      fs.writeFileSync(path.join(DRAIN(box.home), `${SW.sidecarName(name)}.tmp`, 'keep'), '');   // non-empty: removeEntry keeps it (D-4347)
       return name;
     });
     const r = SW.journalHalf(box.home, ids, T);
     expect(r.journalFailed).toBe(true);
     expect([...r.held].sort()).toEqual([...names].sort());
-    for (const n of names) fs.rmdirSync(path.join(DRAIN(box.home), `${SW.sidecarName(n)}.tmp`));
+    for (const n of names) fs.rmSync(path.join(DRAIN(box.home), `${SW.sidecarName(n)}.tmp`), { recursive: true });
     const again = SW.journalHalf(box.home, ids, T + 10);
     expect(again.journalFailed).toBe(false);
     expect(fileBlocks(journalOf(box.home, ids.storeId)).map((b) => b.name).sort()).toEqual([...names].sort());

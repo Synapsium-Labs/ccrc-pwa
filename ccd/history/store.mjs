@@ -19,7 +19,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import {
   chmodSync, closeSync, constants as FS, existsSync, fchmodSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
-  readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeSync,
+  readdirSync, readFileSync, readSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
@@ -426,6 +426,16 @@ export function mintWriter() {
 function fsyncDir(dir) {
   const fd = openSync(dir, FS.O_RDONLY);
   try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+/** A type-aware removal of a name the sweep owns (D-4347, history-planted-entries-never-wedge): a file, link or FIFO is
+ *  unlinked (a link's target is untouched), an EMPTY directory is rmdir'd, and a non-empty directory is left in place and
+ *  reported, never recursed into. Never recursive, because a directory a same-user process planted may hold content the
+ *  sweep did not write, and a recursive walk descends into a mount (a FUSE mount needs no root). `unlinkSync` is tried
+ *  first: the O33 order recorder watches it. */
+export function removeEntry(path) {
+  try { unlinkSync(path); return 'removed'; } catch (e) { if (e && e.code === 'ENOENT') return 'absent'; if (!(e && (e.code === 'EISDIR' || e.code === 'EPERM'))) throw e; }
+  try { rmdirSync(path); return 'removed'; } catch (e) { if (e && e.code === 'ENOENT') return 'absent'; if (e && (e.code === 'ENOTEMPTY' || e.code === 'EEXIST')) return 'kept-dir'; throw e; }
 }
 
 /** Temp in the same directory, written, fsynced, renamed over `path`, and the

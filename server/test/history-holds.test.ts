@@ -591,25 +591,20 @@ describe('FR2-a (D-4338): a failed sidecar write is the journal hold, never a fa
     expect(countOf(box, 'spool_receipts')).toBe(1);
   });
 
-  it('a hold pass whose sidecar write keeps failing (a directory in the temp\'s place): every file held, journal-unwritable, exit 0; cleared, it drains', () => {
+  it('a hold pass whose sidecar write keeps failing (a directory in the temp\'s place): every file held, journal-unwritable, exit 0; the next scheduled pass sets the directory aside and drains (D-4347)', () => {
     const box = boundBox('ccrc-hist-fr2a4-');
     spoolLine(box, ID, startup(U1, { reg: U1 }));
     expect(runSweep(box).code).toBe(0);                             // renamed and observed
     const side = names(paths(box).draining).find((n) => n.endsWith('.obs'))!;
     fs.rmSync(path.join(paths(box).draining, side));                // unobserved again
     fs.mkdirSync(path.join(paths(box).draining, `${side}.tmp`));    // no sidecar can be written, on any attempt
+    fs.writeFileSync(path.join(paths(box).draining, `${side}.tmp`, 'keep'), '');   // non-empty: removeEntry keeps it, the O_EXCL open fails EEXIST (D-4347)
     const r = runSweep(box, [], { env: { HISTORY_TEST_STATFS: 'hang' } });
     expect(r.code, r.stderr).toBe(0);
     expect(r.stderr).not.toMatch(/internal error/);
     expect(r.stdout).toMatch(/^history-sweep: journal-unwritable$/m);
     expect(draining(box)).toHaveLength(1);
-    const s = runSweep(box);                                        // scheduled: counted, tick goes on
-    expect(s.code, s.stderr).toBe(0);
-    expect(counter(box, 'journal_write_failed')).toBeGreaterThanOrEqual(1);
-    expect(draining(box)).toHaveLength(1);
-    fs.rmdirSync(path.join(paths(box).draining, `${side}.tmp`));
-    expect(runSweep(box).code).toBe(0);
-    expect(draining(box)).toEqual([]);
+    const s = runSweep(box); expect(s.code, s.stderr).toBe(0); expect(draining(box)).toEqual([]); expect(counter(box, 'non_regular')).toBe(1); expect(fs.existsSync(path.join(paths(box).draining, 'planted', `${side}.tmp`, 'keep'))).toBe(true);
   }, 30_000);
 
   it('a hold pass (store-unreachable): the sidecar failing prints journal-unwritable and exits 0, the file held', () => {

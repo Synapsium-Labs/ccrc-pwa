@@ -51,7 +51,7 @@ import {
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
   measureStoreFacts, measuredSize, openReader, openWriter, readAttempts, removeStaleMigrationTemps, removeStaleTemps, runMigration, setMeta,
-  syncWriterMirror, userVersion, withTx, writeFileAtomic,
+  syncWriterMirror, userVersion, withTx, writeFileAtomic, removeEntry,
   CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
@@ -166,7 +166,9 @@ export function fsyncDir(dir) {
  *  file. */
 function removeStaleMonthTemps(dir, ids, month) {
   for (const n of readdirSync(dir)) {
-    if (n.startsWith(`.${month}.${ids.writer}.jsonl.`) && n.endsWith('.tmp')) unlinkSync(`${dir}/${n}`);
+    // D-4347 (history-planted-entries-never-wedge): type-aware, so an empty directory planted at a temp name is removed and a non-empty one left, never an EISDIR
+    // out of every append. This pass's own temp carries this pid, so a leftover blocks nothing unless its name has it.
+    if (n.startsWith(`.${month}.${ids.writer}.jsonl.`) && n.endsWith('.tmp')) removeEntry(`${dir}/${n}`);
   }
 }
 
@@ -213,8 +215,13 @@ export function appendJournal(home, ids, lines, nowMs) {
     // appendJournal is the batch entry point (callers hand it a whole block).
     removeStaleMonthTemps(dir, ids, month);
     if (!existsSync(file)) createMonthFile(dir, file, ids, month, nowMs);
-    const fd = openSync(file, 'a+', 0o600);
+    // D-4347 (history-planted-entries-never-wedge): O_NOFOLLOW refuses a link at the month file (ELOOP, so append-failed through the outer catch, never a
+    // write-through), and the descriptor must be a regular file: a FIFO opened O_RDWR does not block in open(2) but
+    // blocks in write(2) past the pipe buffer. No O_NONBLOCK: this type check is the guard. A non-regular entry here
+    // is the ordinary journal hold, never a wait.
+    const fd = openSync(file, constants.O_RDWR | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW, 0o600);
     try {
+      if (!fstatSync(fd).isFile()) throw new JournalError('append-failed');
       let lead = '';
       const size = fstatSync(fd).size;
       if (size > 0) {
@@ -267,8 +274,8 @@ export function flushOutbox(db, home, ids, nowMs) {
 
 /** A counter bumped outside any other transaction. A database too busy to take it now is no reason to fail the pass
  *  that noticed: the condition it counts recurs, and so does the count. */
-export function countOutside(db, name) {
-  try { withTx(db, 'NORMAL', () => bump(db, name)); } catch { /* recounted on the next tick that meets it */ }
+export function countOutside(db, name, by = 1) {
+  try { withTx(db, 'NORMAL', () => bump(db, name, by)); } catch { /* recounted on the next tick that meets it */ }
 }
 
 // ── The spool drain, two-phase (spec §9.2 step 1, §9.14 "The order of writes") ──────────────────────────────
@@ -366,7 +373,12 @@ function writeSidecar(path, obs) {
   // tick before ingest. The files stay held, and the next tick writes the sidecar again.
   try {
     const tmp = `${path}.tmp`;
-    const fd = openSync(tmp, 'w', 0o600);
+    // D-4347 (history-planted-entries-never-wedge): whatever stands at the temp name is removed first (a file, link or FIFO unlinked, an empty directory rmdir'd),
+    // so a planted FIFO cannot block open(2) and a link is never written through; a non-empty directory is kept and fails
+    // the open EEXIST, as this try's JournalError. O_EXCL and O_NOFOLLOW are race belts behind removeEntry and have no
+    // deterministic case.
+    removeEntry(tmp);
+    const fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     try {
       const buf = Buffer.from(JSON.stringify(obs), 'utf8');
       if (writeSync(fd, buf) !== buf.length) throw new Error('sidecar: short write');
@@ -409,7 +421,7 @@ export function obsForLine(obs, rec) {
  *  readdir order is a hash order, and lexical order puts tick 1000 before tick 900. Neither is used. */
 export function listDraining(home) {
   let names;
-  try { names = readdirSync(historyPaths(home).draining); } catch (e) { if (e && e.code === 'ENOENT') return []; throw e; }
+  try { names = readdirSync(historyPaths(home).draining); } catch (e) { if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return []; throw e; }
   return names
     .map((n) => ({ n, p: parseDrainingName(n) }))
     .filter((x) => x.p !== null)
@@ -418,9 +430,17 @@ export function listDraining(home) {
 }
 
 /** spool/ and spool/.draining/, 0700. Only a bound, open store makes them, and the hook spools only into an
- *  existing spool/ (§5.1), so capture starts with the first tick of a bound store. */
+ *  existing spool/ (§5.1), so capture starts with the first tick of a bound store. True when a non-directory stood at
+ *  `.draining` and was removed (the caller counts it `non_regular`). */
 export function ensureSpoolDirs(home) {
-  mkdirSync(historyPaths(home).draining, { recursive: true, mode: 0o700 });
+  const P = historyPaths(home);
+  let stray = false;
+  let st = null;
+  try { st = lstatSync(P.draining); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
+  // D-4347 (history-planted-entries-never-wedge): a file, link or FIFO at `.draining` is unlinked (a link's target is untouched), or mkdir fails EEXIST every pass.
+  if (st !== null && !st.isDirectory()) { removeEntry(P.draining); stray = true; }
+  mkdirSync(P.draining, { recursive: true, mode: 0o700 });
+  return stray;
 }
 
 /** Rename each regular spool/<id>.jsonl into .draining/ under a fresh name, chmod 0600 (uncounted, §9.2; the 0700
@@ -438,7 +458,7 @@ export function renameSpoolFiles(home, tickMs, pid) {
     let st;
     try { st = lstatSync(`${P.spool}/${n}`); } catch { continue; }
     if (!st.isFile()) continue;
-    mkdirSync(P.draining, { recursive: true, mode: 0o700 });
+    ensureSpoolDirs(home);
     const to = drainingName(id, tickMs, pid);
     try {
       renameSync(`${P.spool}/${n}`, `${P.draining}/${to}`);
@@ -503,6 +523,8 @@ export function readDrainingText(path) {
 /** The two sibling directories of `.draining/` that `setAside` moves a file into (D-4337, D-4346); `listDraining` lists neither. */
 const OVERSIZE_DIR = 'oversize';
 const REJECTED_DIR = 'rejected';
+/** The sibling `.draining/planted/` that `tidyDraining` moves a planted directory into (D-4347); `listDraining` never lists it. */
+const PLANTED_DIR = 'planted';
 
 /** Decide a draining file's oversize from its lstat BEFORE any open (D-4337, history-spool-file-size-cap): true when it
  *  is a regular file over SPOOL_FILE_MAX, which `setAside` has then moved aside or left for the next tick to count; the
@@ -513,6 +535,23 @@ export function setAsideOversize(db, home, name) {
   try { st = lstatSync(`${P.draining}/${name}`); } catch (e) { if (e && e.code === 'ENOENT') return false; throw e; }
   if (!st.isFile() || st.size <= SPOOL_FILE_MAX) return false;
   return setAside(db, home, name, OVERSIZE_DIR, 'spool_oversize');
+}
+
+/** Move `<from>/<name>` into the directory `dir`, made on demand (0700). A name at `dir` that is not a directory (a stray
+ *  same-user writer's file, link or FIFO) is removed first and reported as `stray`, so a mkdir never fails EEXIST on every
+ *  tick. Never throws: `moved` is false when anything failed (D-4347, history-planted-entries-never-wedge). */
+function moveAside(dir, from, name) {
+  let stray = false;
+  try {
+    let ds = null;
+    try { ds = lstatSync(dir); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
+    if (ds !== null && !ds.isDirectory()) { removeEntry(dir); stray = true; }
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    renameSync(`${from}/${name}`, `${dir}/${name}`);
+    return { moved: true, stray };
+  } catch {
+    return { moved: false, stray };
+  }
 }
 
 /** Set a draining file aside (D-4337, history-spool-file-size-cap): moved into the sibling directory
@@ -532,22 +571,12 @@ export function setAside(db, home, name, sub, counter) {
   try {
     withTx(db, 'NORMAL', () => bump(db, counter));
   } catch { return true; }   // uncounted, so unmoved: the next tick meets it again and counts it then
-  const dir = `${P.draining}/${sub}`;
-  try {
-    // A name that is not a directory (a stray same-user writer's file, link or FIFO) is removed and counted, as a
-    // planted link in .draining/ is; mkdir would otherwise fail EEXIST on every tick.
-    let ds = null;
-    try { ds = lstatSync(dir); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
-    if (ds !== null && !ds.isDirectory()) { unlinkIfPresent(dir); countOutside(db, 'non_regular'); }
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    renameSync(`${P.draining}/${name}`, `${dir}/${name}`);
-  } catch {
-    // ENOENT: another actor took the file. Any other failure (ENOSPC, EACCES, EXDEV through a planted link): the file
-    // stays where it is and the tick goes on, never rethrown (a throw out of drainSpool failed every later tick); the
-    // next tick meets it again and counts it again, one recount per tick until the failure clears (FR4 round 1).
-    return true;
-  }
-  unlinkIfPresent(`${P.draining}/${sidecarName(name)}`);
+  // A failed move (ENOENT: another actor took the file; ENOSPC, EACCES, EXDEV through a planted link) leaves the file
+  // where it is and the tick goes on, never rethrown; the next tick meets it again and counts it again, one recount per
+  // tick until the failure clears (FR4 round 1).
+  const m = moveAside(`${P.draining}/${sub}`, P.draining, name);
+  if (m.stray) countOutside(db, 'non_regular');
+  if (m.moved) removeEntry(`${P.draining}/${sidecarName(name)}`);
   return true;
 }
 
@@ -629,10 +658,6 @@ export function applyEventLine(db, c, ev) {
   return [];
 }
 
-function unlinkIfPresent(path) {
-  try { unlinkSync(path); } catch (e) { if (!(e && e.code === 'ENOENT')) throw e; }
-}
-
 /** Steps 3 to 6 for one journaled file (slugs history-drain-synchronous-full, D-4229; history-journal-drained-record,
  *  D-4230).
  *  - The receipts: event_key comes from the draining name and the ordinal, never a receive time (§9.14).
@@ -669,7 +694,7 @@ export function drainFile(db, c, name, obs, text) {
   });
   const flushed = appendOutbox(db, c.home, c.ids, nowMs);
   unlinkSync(`${P.draining}/${name}`);
-  unlinkIfPresent(`${P.draining}/${sidecarName(name)}`);
+  removeEntry(`${P.draining}/${sidecarName(name)}`);
   deleteOutbox(db, flushed.upto);
   return { hints };
 }
@@ -731,6 +756,53 @@ export function journalHalf(home, ids, nowMs) {
   return { held, journalFailed };
 }
 
+/** Tidy `spool/.draining/` before a drain lists it (D-4347, history-planted-entries-never-wedge). Returns what it
+ *  counted: `nonRegular` entries and `malformed` sidecars (the caller bumps the counters; `journalHalf` never calls this,
+ *  because no DB holds a counter there, IV2).
+ *  - Loop 1, the draining names: a regular file is live and stays. A directory is moved whole into `.draining/planted/` (never
+ *    recursed into, never deleted: a same-user process may have left content, or a mount, there); any other non-regular
+ *    entry is removed. Both count `non_regular`.
+ *  - Loop 2, the observation sidecars and their temps: a directory is moved into `planted/` and counted. Anything else is
+ *    judged by the live files of loop 1.
+ *  A step that fails is left for the next drain. */
+export function tidyDraining(home) {
+  const P = historyPaths(home);
+  const out = { nonRegular: 0, malformed: 0 };
+  let names;
+  try { names = readdirSync(P.draining); } catch (e) { if (e && e.code === 'ENOENT') return out; throw e; }
+  const typeOf = (n) => {
+    let st;
+    try { st = lstatSync(`${P.draining}/${n}`); } catch (e) { if (e && e.code === 'ENOENT') return 'gone'; throw e; }
+    return st.isFile() ? 'file' : st.isDirectory() ? 'dir' : 'other';
+  };
+  const setAsidePlanted = (n) => { const m = moveAside(`${P.draining}/${PLANTED_DIR}`, P.draining, n); if (m.stray) out.nonRegular += 1; };
+  const live = new Set();
+  for (const n of names) {                                   // loop 1: draining names
+    if (parseDrainingName(n) === null) continue;
+    try {
+      const t = typeOf(n);
+      if (t === 'file') { live.add(n); continue; }
+      if (t === 'gone') continue;
+      out.nonRegular += 1;
+      if (t === 'dir') setAsidePlanted(n); else removeEntry(`${P.draining}/${n}`);
+    } catch { /* left for the next drain; the drain loop's non-regular branch backs this */ }
+  }
+  for (const n of names) {                                   // loop 2: sidecars and sidecar temps
+    const stem = n.endsWith('.obs.tmp') ? n.slice(0, -'.obs.tmp'.length) : n.endsWith('.obs') ? n.slice(0, -'.obs'.length) : null;
+    if (stem === null || !drainingNameOk(`${stem}.jsonl`)) continue;
+    const p = `${P.draining}/${n}`;
+    try {
+      const t = typeOf(n);
+      if (t === 'gone') continue;
+      if (t === 'dir') { out.nonRegular += 1; setAsidePlanted(n); continue; }
+      // [commit 2, F20] if (n.endsWith('.obs.tmp') || !live.has(`${stem}.jsonl`)) { removeEntry(p); continue; }
+      if (t === 'other') { out.nonRegular += 1; removeEntry(p); continue; }
+      // [commit 2, F9]  if (readSidecar(p) === null) { removeEntry(p); out.malformed += 1; }
+    } catch { /* left for the next drain */ }
+  }
+  return out;
+}
+
 /** Step 1 with an open store: every draining file in journaling order, each journaled then drained; then this tick's
  *  renames. Returns the sids of the fresh lines (discovery's hints).
  *  - A journal failure stops here, and so does a busy or locked commit (the rest wait, in order, so no id's later file
@@ -740,7 +812,10 @@ export function journalHalf(home, ids, nowMs) {
  *  - A link or FIFO planted in .draining/ is removed and counted. */
 export function drainSpool(db, c) {
   const tickMs = c.now();
-  ensureSpoolDirs(c.home);
+  if (ensureSpoolDirs(c.home)) countOutside(db, 'non_regular');
+  const t = tidyDraining(c.home);
+  if (t.nonRegular > 0) countOutside(db, 'non_regular', t.nonRegular);
+  if (t.malformed > 0) countOutside(db, 'sidecar_malformed', t.malformed);
   const hints = [];
   let failedCounted = false;
   for (const name of listDraining(c.home)) {
@@ -762,8 +837,11 @@ export function drainSpool(db, c) {
       if (e && (e.code === 'ELOOP' || e.code === 'NON_REGULAR')) {
         // journalFile observed before it read, so the planted name has a sidecar too. listDraining lists only
         // `*.jsonl`, so a sidecar left here would never be removed.
-        unlinkIfPresent(`${historyPaths(c.home).draining}/${name}`);
-        unlinkIfPresent(`${historyPaths(c.home).draining}/${sidecarName(name)}`);
+        // D-4347: type-aware and never thrown; a race that tidyDraining (which runs first) did not meet is met again next drain.
+        try {
+          removeEntry(`${historyPaths(c.home).draining}/${name}`);
+          removeEntry(`${historyPaths(c.home).draining}/${sidecarName(name)}`);
+        } catch { /* left for the next drain: tidyDraining meets it first */ }
         countOutside(db, 'non_regular');
         continue;
       }
