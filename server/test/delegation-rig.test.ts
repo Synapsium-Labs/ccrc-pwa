@@ -2367,7 +2367,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(r.stderr).not.toContain('not UTF-8');
   });
 
-  // Review 324 F7: every bad name above begins with an invalid LEAD byte (0xff to 0xfb), which a decoder throws on even in `{ stream: true }`
+  // Review 324 F7: every bad name above carries an invalid LEAD byte (0xff to 0xfb), which a decoder throws on even in `{ stream: true }`
   // mode, so no row told a decoder that keeps no state from one that does. In stream mode a name that ENDS in a truncated multibyte
   // sequence does not throw: the decoder holds the tail back and answers the name as valid, and the held bytes then join the next name's
   // leading continuation bytes. Here `zz.json\xe2\x82` (two bytes of a three-byte sequence) is listed straight before `\xac.json`; joined,
