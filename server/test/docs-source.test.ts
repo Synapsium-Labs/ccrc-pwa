@@ -284,6 +284,16 @@ describe('check 7 and the verbatim rebuild (row 46, refinement (j))', () => {
       .toStrictEqual({ ok: false, failure: 'linked-worktree', owner: '/w/a', branch: null });
   });
 
+  // The partial-clone word pair (W1 ledger): a commit missing from a partial clone answers `git-failed {step:'cat-file'}`
+  // on git 2.43 and `unknown-commit` on git 2.55. Both are carried verbatim and neither is mapped onto the other.
+  it.each([
+    ['git-failed {step: cat-file, rc: 128} (git 2.43)', 'git-failed', { step: 'cat-file', rc: 128 }],
+    ['unknown-commit (git 2.55)', 'unknown-commit', {}],
+  ] as const)('a show failure line %s is carried verbatim, its word never mapped', async (_label, failure, ctx) => {
+    expect(await showRaw(COMMITTED, failLine('docs-show', failure, ctx)))
+      .toStrictEqual({ ok: false, failure, ...ctx });
+  });
+
   it('an ok index keeps unwalked absent when ccd sent none, and 3 when it sent 3 (D-4157)', async () => {
     const index = { v: 1, verb: 'docs-index', ok: true, elapsedMs: 5, unlisted: 0, duplicates: [], projects: [] };
     const indexWith = async (stdout: string): Promise<Answer> =>
@@ -387,6 +397,13 @@ describe('check 8: show integrity, pins and onRef (row 46, spec section 2 (b))',
     ['a draft fp that is its sha256 but not the pin', DRAFT_F, showOk(DRAFT_F, { fp: DRAFT_FP }), 'pin'],
     ['a committed answer without onRef', COMMITTED, showOk(COMMITTED, { onRef: undefined }), 'schema'],
     ["a committed answer with onRef 'maybe'", COMMITTED, showOk(COMMITTED, { onRef: 'maybe' }), 'schema'],
+    // The own-key guard (`Object.hasOwn`): an inherited name is no word. `in` would accept all three.
+    ["onRef 'toString' (inherited from Object.prototype)", COMMITTED, showOk(COMMITTED, { onRef: 'toString' }), 'schema'],
+    ["onRef 'constructor' (inherited from Object.prototype)", COMMITTED, showOk(COMMITTED, { onRef: 'constructor' }), 'schema'],
+    // JSON.parse defines `__proto__` as an OWN key, as a real answer line's would arrive.
+    ["onRef '__proto__'", COMMITTED, JSON.parse(line(showOk(COMMITTED, { onRef: '__proto__' }))) as Record<string, unknown>, 'schema'],
+    // Integrity is decided before the pin echo: a tampered sha256 AND a wrong path echo is integrity.
+    ['a tampered sha256 and a wrong path echo at once', COMMITTED, showOk(COMMITTED, { sha256: 'b'.repeat(64), path: 'b.md' }), 'integrity'],
   ];
 
   it.each(ROWS)('%s: malformed-answer {why}', async (_label, pin, answer, why) => {
@@ -544,5 +561,31 @@ describe('the second redaction pass: every string leaf of a failure body but fai
   it('an ok answer is never rewritten: a tree entry path holding ?token=abc comes back as ccd sent it', async () => {
     const tree = { ...TREE_OK, entries: [{ path: 'a?token=abc.md' }] };
     expect(await treeWith(res({ stdout: line(tree) }))).toStrictEqual({ ok: true, answer: tree });
+  });
+});
+
+describe('the second redaction pass bounds its depth (final-review I1)', () => {
+  const nested = (depth: number, leaf = '"s"'): string => `${'['.repeat(depth)}${leaf}${']'.repeat(depth)}`;
+  /** A known-word failure line carrying `x` as the raw JSON text `rawX`, ccd's real body shape. */
+  const failWith = (rawX: string): string =>
+    `{"v":1,"verb":"docs-tree","ok":false,"elapsedMs":1,"failure":"git-failed","step":"cat-file","x":${rawX}}\n`;
+
+  it('a known-word failure line nested 10 000 deep answers malformed-answer {why: schema} and does not reject', async () => {
+    const out = await treeWith(res({ stdout: failWith(nested(10_000)) }));
+    expect(out).toStrictEqual({ ok: false, failure: 'malformed-answer', why: 'schema' });
+  });
+
+  it('the deepest legitimate context is carried: tried[i].ref, redacted, and a leaf at depth 8 (the bound)', async () => {
+    const tried = [{ ref: 'refs/heads/a?token=abc', result: 'absent' }];
+    expect(await treeWith(res({ stdout: line({ v: 1, verb: 'docs-tree', ok: false, elapsedMs: 1, failure: 'git-failed', tried }) })))
+      .toStrictEqual({ ok: false, failure: 'git-failed', tried: [{ ref: 'refs/heads/a?token=***', result: 'absent' }] });
+    // the string sits at depth 8: seven arrays under the key
+    expect(await treeWith(res({ stdout: failWith(nested(7, '"a?token=abc"')) })))
+      .toStrictEqual({ ok: false, failure: 'git-failed', step: 'cat-file', x: [[[[[[['a?token=***']]]]]]] });
+  });
+
+  it('one level past the bound is the schema word, not a carried body', async () => {
+    expect(await treeWith(res({ stdout: failWith(nested(8, '"a?token=abc"')) })))
+      .toStrictEqual({ ok: false, failure: 'malformed-answer', why: 'schema' });
   });
 });

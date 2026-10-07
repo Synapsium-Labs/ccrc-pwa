@@ -264,24 +264,37 @@ function checkShow(ans: DocsShowOk, pin: DocPin, ask: DocsShowAsk): { ok: true; 
   return { ok: true, bytes };
 }
 
-/** `v` with every string leaf passed through the redactor: arrays and plain objects are rebuilt (`Object.fromEntries`
- *  defines each key as an own property), numbers, booleans and `null` are kept as they are. */
-function redactLeaves(v: unknown): unknown {
-  if (typeof v === 'string') return redactDocsText(v);
-  if (Array.isArray(v)) return v.map(redactLeaves);
-  if (typeof v === 'object' && v !== null) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, redactLeaves(x)]));
-  return v;
-}
+/** The deepest level the second redaction pass walks, counting a failure body's own values as level 1 (a leaf counts
+ *  too). The deepest legitimate context is `tried[i].ref`, level 3; a body nested past this is not ccd's contract, and
+ *  an unbounded walk lets a line nested tens of thousands deep (well inside the listing bound) overflow the stack. */
+const REDACT_MAX_DEPTH = 8;
 
 /**
  * The second redaction pass (section 2 (b) "One redactor", refinement (k)): a new body whose every string leaf but
- * `failure` has been through `redactDocsText`, at any depth (`candidates`, `tried`), server-made bodies included. ccd
- * ran the same rules over what it derived from stderr; this pass covers whatever it missed or did not derive from
- * stderr, and changes nothing already redacted (the redactor is idempotent). Absent stays absent, `null` stays `null`.
+ * `failure` has been through `redactDocsText`, at any depth up to `REDACT_MAX_DEPTH` (`candidates`, `tried`),
+ * server-made bodies included. Arrays and plain objects are rebuilt (`Object.fromEntries` defines each key as an own
+ * property); numbers, booleans and `null` are kept as they are. ccd ran the same rules over what it derived from
+ * stderr; this pass covers whatever it missed or did not derive from stderr, and changes nothing already redacted
+ * (the redactor is idempotent). Absent stays absent, `null` stays `null`. A body with a value past the bound is not
+ * carried: the answer is `malformed-answer {why:'schema'}` (no nested content, so nothing left to redact), and the walk
+ * never descends past the bound, so it never throws.
  */
 function redactBody(body: DocsFailureBody): DocsFailureBody {
-  const out = Object.fromEntries(Object.entries(body).map(([key, v]) => [key, key === 'failure' ? v : redactLeaves(v)]));
-  return out as unknown as DocsFailureBody;
+  let tooDeep = false;
+  const walk = (v: unknown, depth: number): unknown => {
+    if (depth > REDACT_MAX_DEPTH) {
+      tooDeep = true;
+      return null;
+    }
+    if (typeof v === 'string') return redactDocsText(v);
+    if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1));
+    if (typeof v === 'object' && v !== null) {
+      return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, depth + 1)]));
+    }
+    return v;
+  };
+  const out = Object.fromEntries(Object.entries(body).map(([key, v]) => [key, key === 'failure' ? v : walk(v, 1)]));
+  return tooDeep ? fail('malformed-answer', { why: 'schema' }) : (out as unknown as DocsFailureBody);
 }
 
 /**
