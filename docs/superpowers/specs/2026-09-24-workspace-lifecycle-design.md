@@ -469,10 +469,13 @@ each item is a departure named there).
   also a `tmux: server`). The lane never kills.
 - **Review 313's residue, closed by wave 4** (each a departure named in the wave-4 plan,
   `docs/superpowers/plans/2026-10-07-workspace-lifecycle-wave4-dead-coordinator-lane.md`). A learn audit that cannot be
-  read, or reads no archive, backs off on the failure ladder and is listed, and learn slots go in `nextAskAt` order; a
-  failure ccd says will not resume is listed at once and never asked again for that archive; an ineligible sighting
-  clears every report the row holds; a refusal whose audit names another archive is a row that moved; and the held
-  sentence names its instant (`due <instant>`), never a period.
+  read, or reads no archive from a ccd that prints the instant, backs off on the failure ladder and is listed (an older
+  ccd's audit with no `expiresAt` key reads as no evidence first, never as a failure), and learn slots go in
+  `nextAskAt` order; a failure ccd says will not resume is listed at once and never asked again for that archive; an
+  ineligible sighting ends the row's would-expire, in-use and held reports and the row is re-audited as soon as it is
+  due again, while the verdicts the box itself gave (refused, failing, no evidence) stand and a hold never replaces a
+  report whose row the lane has stopped asking; a refusal whose audit names another archive is a row that moved; and the
+  held sentence names its instant (`due <instant>`), never a period.
 - **The attention list is the lane's own memory.** Child reclamation derives its list from the lifecycle mirror alone; the
   expiry's entries (a shadow `would-expire`, a `held` row past its instant, a standing `in-use`, a refusal, a failure, no
   evidence) are mostly never journaled, so the lane lists them from its own passes and a restart rebuilds the list over

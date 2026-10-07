@@ -74,7 +74,11 @@ describe('the specs', () => {
     // Review 313's residue, closed by wave 4: each of its departures reaches §5.3's list, so the spec says what shipped.
     expect(s).toContain("**Review 313's residue, closed by wave 4**");
     for (const said of ['backs off on the failure ladder and is listed', 'learn slots go in `nextAskAt` order',
-      'listed at once and never asked again for that archive', 'clears every report the row holds',
+      'listed at once and never asked again for that archive', 'ends the row\'s would-expire, in-use and held reports',
+      'the verdicts the box itself gave (refused, failing, no evidence) stand and a hold never replaces a report whose row the lane has stopped asking',
+      'reads no archive from a ccd that prints the instant',
       'is a row that moved', 'names its instant (`due <instant>`), never a period']) expect(s).toContain(said);
+    // An ineligible sighting does NOT clear every report: the box's own verdicts stand (review of wave 4's Task 4, I1).
+    expect(s).not.toContain('clears every report');
   });
 });
