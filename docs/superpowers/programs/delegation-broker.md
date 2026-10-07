@@ -20,7 +20,7 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
-| 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **fix round (review 324)**: run 306 dispatched 2026-10-07 08:46 UTC to `ccrc-pwa-plain-hollow` (operator decision: the cross-check folds into a close-out wave); PR #321 carries fix rounds for reviews 318 and 324 |
+| 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **fix round (review 328)**: run 306 dispatched 2026-10-07 08:46 UTC to `ccrc-pwa-plain-hollow` (operator decision: the cross-check folds into a close-out wave); PR #321 carries fix rounds for reviews 318, 324 and 328 |
 | 3 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | 2 | — | to plan once wave 2's cross-check is in the measurement section |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 3 | — | to plan |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
@@ -525,7 +525,10 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
   order that is the launch response or SubagentStart itself. A bare occurrence never opens an activity, but once a
   join is known it may be that earliest event (a refinement of review 318 F1's wording, ruled with review 324). The
   other source kinds keep the first event naming their upstream id. A meta is a join, not a journal event, and
-  nothing of it is hashed (review 324 F3, F4). The observe stage's parser (wave 3) must not use the presence of
+  nothing of it is hashed (review 324 F3, F4). The id is selected once, at open, and never changes: it is part of the
+  checkpointed applied state, reconstruction restores it verbatim and never re-selects it from the journal left after
+  pruning, pruning cannot pass an identity event before a checkpoint holds its id, and a bare occurrence pruned
+  before any qualifying join is durably applied never becomes one (review 328 F1; spec §5.2, §5.12). The observe stage's parser (wave 3) must not use the presence of
   `agent_type` to decide whether an event qualifies — spec §5.2 activity id, §5.3, §5.4 rung 3 (a non-empty
   `agent_id` does not by itself place an event inside a subagent).
   A second reader, already shipped, places an event by a raw non-empty `agent_id`: the hook's turn-marker classifier
@@ -729,7 +732,7 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
   worktree-name listing alone is about 3.9 KB, which nearly fills spec §5.3's 4 KiB line. The observe stage's line
   design must measure that case: the listing is the optional field that gets dropped, and the worst case is about
   8.5 ms per call.
-- **What wave 2 (run 306, reviews 318 and 324) hands to wave 3's plan.** Its evidence is in the
+- **What wave 2 (run 306, reviews 318, 324 and 328) hands to wave 3's plan.** Its evidence is in the
   "Real-lane cross-check" section and the plan's D-numbers named below; a wave 3 plan reads these before it names a
   task:
   - Wave 3's first implementation commit is the red-first `tmux display-message -p -t "$TMUX_PANE" '#S'` ownership
@@ -749,6 +752,11 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     Until these close, an unmeasured cell is not coverage.
   - D-4008's three folds, `locked` (false when its stat fails), `baseAgreesFirstLog` (null when `logs/HEAD` cannot be
     read) and an unreadable `gitdir` (read as absent), are no positive cleanup or adoption evidence.
+  - An activity id is selected once, at open, and is restored, never re-hashed. Whichever wave builds the journal's
+    checkpoint, pruning and reconstruction keeps each selected id in the checkpointed applied state, restores it
+    verbatim, derives one only for an activity the checkpoint does not hold, and prunes no event before a durable
+    checkpoint covers it and no identity event before a checkpoint holds its id (spec §5.2, §5.12 and §8.4's row;
+    amendment `tool-agent-id-alone-is-unjoined-evidence`, review 328 F1).
   - All eight real-lane amendment slugs carry into wave 3: `agent-input-keys-are-the-callers`,
     `post-turn-subagentstop-is-unpaired`, `real-payloads-carry-scratchpad-dir`,
     `toolsearch-may-precede-a-workflow-call`, `parent-stop-does-not-bound-workflow-start`,
@@ -770,11 +778,12 @@ One PR from a fresh child. A review run on the held-out panel follows.
 - Its contents: the spool, ingestion and cursors, the one `delegation_*` migration, the census extension, correlation
   and reconciliation (report-only), the coordinator-intent route, and coordinator clause 17.
 - It carries the spool-line constraint: a listing of about 3.9 KB nearly fills the 4 KiB line.
-- Its plan starts from the carried constraints above, which wave 2's two review rounds added: the first
+- Its plan starts from the carried constraints above, which wave 2's review rounds added: the first
   implementation commit (the red-first `-t "$TMUX_PANE"` ownership correction); the turn-marker `paid` reader's
   phantom-main-thread case; the three re-capture tooling obligations, closed before any capture relies on
-  `--missing` (D-3999); D-4008's three folds as no positive cleanup or adoption evidence; and the eight real-lane
-  amendment slugs.
-- Check the plan's format first. The operator's global instructions prefer HTML plans, so confirm that the
-  deviation and ledger guards read a `.html` plan, and ask the operator if they read Markdown only.
+  `--missing` (D-3999); D-4008's three folds as no positive cleanup or adoption evidence; activity ids restored from
+  the checkpoint, never re-hashed after pruning; and the eight real-lane amendment slugs.
+- Its plan is Markdown, `docs/superpowers/plans/<date>-<topic>.md`: plans stay Markdown under the operator's
+  2026-10-07 ruling, and ccrc-pwa's deviation and ledger guards, which read `*.md` plans, are one reason (review 328
+  F2).
 - The operator reviews the plan before its run dispatches.
