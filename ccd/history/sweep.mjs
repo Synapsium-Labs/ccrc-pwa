@@ -1144,7 +1144,7 @@ export function markScan(db, nowMs) {
 // ── Discovery and file identity (spec §9.2 steps 2-3, §5.2 "Read only", §6.5 "A cursor row's file") ───────────
 //
 // The cursor is keyed on (dev, ino), proved by the file's identity: its path's uuid, its birth time where the
-// filesystem reports one, and its first line's sha where it does not (slugs history-cursor-per-inode,
+// filesystem reports one, and its first line's sha where it does not (D-4235; slugs history-cursor-per-inode,
 // history-cursor-file-identity).
 // - Every path of an inode is an alias, a file_paths row.
 // - An inode freed and reused (every swap carry unlinks before it writes; Claude Code's own cleanup frees inodes) is
