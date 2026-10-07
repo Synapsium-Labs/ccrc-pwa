@@ -473,12 +473,18 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
   The hook resolves its session with `tmux display-message -p '#S'` and no `-t "$TMUX_PANE"`
   (`ccd/session-hook.sh:2760`). Measured on a private tmux server: once a pane's session is killed, that query answers
   another live session, and with `-t "$TMUX_PANE"` it answers nothing. So a hook event fired during teardown is
-  attributed to whichever session tmux picks. Only SessionEnd was seen at teardown here (two idle lanes), and
-  SessionEnd writes no hookstate, so here only a capture was misfiled. Whether an event that writes hookstate (Stop),
-  the turn marker (StopFailure) or the subagent set (SubagentStop) can fire after the pane's session is gone is
-  unmeasured, and it would be filed under another session the same way. Wave 3's spool must resolve the pane exactly
-  (and drop an event it cannot), or a stop-time SessionEnd lands on another session — spec §5.3 SessionEnd row, §5.1
-  parent key.
+  attributed to whichever session tmux picks.
+  Which events fire then was measured afterwards (the coordinator's question): two more fresh `-hookcap` lanes were
+  stopped mid-turn, each with a foreground Bash loop running and a background Agent still running, and two idle; a
+  third fresh `-hookcap` session, started last, caught what the stopped lane's hook misfiled. 2.1.290 stood in for the
+  low end there, because the fleet's only 2.1.286 lane and its 2.1.289 lane were at their weekly limits, and one
+  2.1.292 lane declined the mailed instruction (it would not act on a mailbox whose name did not match its working
+  directory) and was stopped idle. On every teardown measured — 2.1.286 idle, 2.1.292 idle, 2.1.290 busy, 2.1.292
+  busy — exactly one event fired: SessionEnd, reason `other`, filed under the most recently started `-hookcap`
+  session's id. No Stop, StopFailure, SubagentStop or PostToolUse fired at `ccd stop`, so nothing that writes
+  hookstate, the turn marker or the subagent set was misfiled, and SessionEnd writes none of them: today only a
+  capture is misfiled. Wave 3's spool must resolve the pane exactly (and drop an event it cannot), or every stop-time
+  SessionEnd lands on another session — spec §5.3 SessionEnd row, §5.1 parent key.
 
 ## Decisions & deviations
 
