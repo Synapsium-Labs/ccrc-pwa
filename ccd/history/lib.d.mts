@@ -47,6 +47,8 @@ export const SCAN_INTERVAL_MS: number;
 export const SIDECAR_FTS_BYTES: number;
 export const SIDECAR_REDACT_MARGIN: number;
 export function sidecarIndexText(bytes: Uint8Array, idx: PairIndex | null): string;
+export const INDEX_UNESCAPE_PASSES: number;
+export function redactForIndex(text: string, idx: PairIndex): string;
 export const SECRET_MIN_LEN: number;
 export const SECRET_SEGMENT_MIN: number;
 export const DEFAULT_COPY_BPS: number;

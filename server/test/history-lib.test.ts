@@ -2021,7 +2021,7 @@ describe('sidecarIndexText: JSON string escapes are undone before redaction (D-4
     expect(dec(`a${BS}nb${BS}tc${BS}rd${BS}"e${BS}${BS}f${BS}/g`)).toBe('a\nb\tc\rd"e\\f/g');
     expect(dec(`${BS}u0041${BS}u00e9 ${BS}ud83d${BS}ude00`)).toBe('Aé \u{1F600}');
     expect(dec(`x${BS}u12 y${BS}q z${BS}`)).toBe(`x${BS}u12 y${BS}q z${BS}`);
-    expect(dec(`${BS}${BS}n`)).toBe(`${BS}n`);                       // an escaped backslash, then a literal n: one pass, never re-read
+    expect(dec(`${BS}${BS}n`)).toBe(`${BS}n`);                       // level 1 decodes the escaped backslash; level 2 (backslash-n to a newline) redacts nothing, so level 1 is indexed (D-4343)
   });
   it('a plain-text sidecar with no escapes indexes exactly as before', () => {
     const t = ghp();
@@ -2068,6 +2068,51 @@ describe('sidecarIndexText: the window is redacted raw, then decoded, then redac
     const text = `plain line one\nvalue ${v} then "password": "hunter2hunter2" tail\n`;
     const single = libRows.redactField(text, idx);
     expect(libRows.sidecarIndexText(Buffer.from(text), idx)).toBe(single);
+  });
+});
+
+describe('redactForIndex: every JSON-escape reading before every index, kept only when it redacts (D-4343, review 316 F2)', () => {
+  const rndHex = (bytes: number): string => historyCrypto.randomBytes(bytes).toString('hex');
+  const idxOf = (values: string[]): libRows.PairIndex => libRows.makePairIndex(libRows.secretPairs(values).pairs);
+  const BS = String.fromCharCode(92);
+  const M = libRows.REDACTED_MARK;
+  const LINEAR_MS = 5_000;
+  const v = `fixtureNotARealTokenValue${rndHex(8)}`;
+  const idx = idxOf([v]);
+
+  it('the reviewer case: an escaped backslash before n and a value', () => {
+    expect(libRows.sidecarIndexText(Buffer.from(JSON.stringify({ text: BS + 'n' + v })), idx).includes(v.slice(0, 16))).toBe(false);
+  });
+  it('a JSON string holding JSON: the inner newline escape is read too', () => {
+    expect(libRows.sidecarIndexText(Buffer.from(JSON.stringify({ t: JSON.stringify({ t: '\n' + v }) })), idx).includes(v.slice(0, 16))).toBe(false);
+  });
+  it('a backslash-u-005c chain is read one level per decode', () => {
+    expect(libRows.sidecarIndexText(Buffer.from(`{"t":"${BS}u005cn${v}"}`), idx).includes(v.slice(0, 16))).toBe(false);
+  });
+  it('a 64-backslash run converges below the bound, and the reading that redacted is the one indexed', () => {
+    expect(libRows.redactForIndex(`${BS.repeat(64)}n${v} tail`, idx)).toBe(`\n${M} tail`);
+  });
+  it('at the bound, every span touching a backslash is the mark', () => {
+    expect(libRows.redactForIndex(`head ${BS.repeat(1024)}n${v} tail`, idx)).toBe(`head ${M} tail`);
+  });
+  it('at the bound, a JWT glued to an escape is marked whole, its payload and signature too', () => {
+    const jwt = `eyJ${rndHex(10)}.eyJ${rndHex(20)}.${rndHex(16)}`;
+    expect(libRows.redactForIndex(`x ${BS.repeat(1024)}n${jwt} y`, libRows.makePairIndex([]))).toBe(`x ${M} y`);
+  });
+  it('an entry\'s plain text holding a literal backslash-n before a value is read and redacted', () => {
+    expect(libRows.redactForIndex(`{"a":"x${BS}n${v}"}`, idx).includes(v.slice(0, 16))).toBe(false);
+  });
+  it('a text whose deeper readings redact nothing is indexed exactly as it came', () => {
+    const asIs = `${BS}begin{equation} C:${BS}new_folder${BS}tests printf("done${BS}n") ${BS}u0041`;
+    expect(libRows.redactForIndex(asIs, idx)).toBe(asIs);
+    expect(libRows.sidecarIndexText(Buffer.from(JSON.stringify({ t: `${BS}begin` })), idx)).toBe(`{"t":"${BS}begin"}`);
+  });
+  it('pathological escapes stay bounded', () => {
+    for (const s of [BS.repeat(1 << 20) + 'n' + v, (BS + 'u005c').repeat(1 << 17) + 'n' + v]) {
+      const t0 = Date.now();
+      libRows.redactForIndex(s, idx);
+      expect(Date.now() - t0).toBeLessThan(LINEAR_MS);
+    }
   });
 });
 

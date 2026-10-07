@@ -43,7 +43,7 @@ import {
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
-  SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, redactField,
+  SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, redactForIndex,
   REASONS, WRITING_FORMS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker,
   HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
 } from './lib.mjs';
@@ -3041,12 +3041,12 @@ export function secretsStep(db, ctx, secretFiles) {
 
 // ---------------------------------------------------------------------------------------------
 // The FTS index (§6.2 "FTS indexing", §9.1; plan task 23). The index is derived and blobs stay
-// verbatim. Its body is extracted plain text (never JSON), redacted by redactField before it is a
-// term, and only for blobs that a row of searchable provenance references. A pair learned after
-// its text was indexed is re-indexed by quoted phrase before any FTS insert of that tick, and the
-// obligation outlives the pass that learned it (meta fts_reindex_rid). The bytes a contentless
-// delete leaves in blobs_fts_data are purged by bounded merge steps; a whole-table 'optimize'
-// never runs in a scheduled pass.
+// verbatim. Its body is extracted plain text (never JSON), redacted by redactForIndex (D-4343)
+// before it is a term, and only for blobs that a row of searchable provenance references. A pair
+// learned after its text was indexed is re-indexed by quoted phrase before any FTS insert of that
+// tick, and the obligation outlives the pass that learned it (meta fts_reindex_rid). The bytes a
+// contentless delete leaves in blobs_fts_data are purged by bounded merge steps; a whole-table
+// 'optimize' never runs in a scheduled pass.
 // ---------------------------------------------------------------------------------------------
 
 const FTS_STEP = 'fts';
@@ -3158,10 +3158,12 @@ export function ftsPrepare(db, nowMs) {
 
 /** One blob into the index, inside the caller's transaction: its text REDACTED first
  *  (D-4243, history-fts-indexes-redacted-text; a secret known now is never a term, a prefix or an index
- *  byte), rowid = blob_id, and the blob marked indexed. */
+ *  byte), rowid = blob_id, and the blob marked indexed. The redaction is `redactForIndex`: every JSON-escape
+ *  reading, a deeper one kept only when it redacts (D-4343), so a literal backslash-n in an entry's plain text
+ *  never glues an `n` onto a value. */
 export function indexBlob(db, blobId, text, pairIdx) {
   const f = ftsStmts(db);
-  f.ins.run(blobId, redactField(text, pairIdx));
+  f.ins.run(blobId, redactForIndex(text, pairIdx));
   f.mark.run(blobId);
 }
 
@@ -3265,7 +3267,7 @@ export async function reindexForValues(db, ctx, values, complete) {
     withTx(db, 'NORMAL', () => {
       for (const g of group) {
         f.del.run(g.id);
-        if (g.text !== null) f.ins.run(g.id, redactField(g.text, ctx.pairIdx));
+        if (g.text !== null) f.ins.run(g.id, redactForIndex(g.text, ctx.pairIdx));
       }
       if (ids.size > 0) d.pending.run(MERGE_STEP, 1);
       if (final && complete === true) setMeta(db, REINDEX_META, String(top));

@@ -141,6 +141,10 @@ export const SCAN_INTERVAL_MS = 30 * 60 * 1000;
 export const SIDECAR_FTS_BYTES = 512 * 1024;
 /** How far past SIDECAR_FTS_BYTES a sidecar is decoded and redacted before it is cut (D-4312). */
 export const SIDECAR_REDACT_MARGIN = 65536;
+/** The most JSON-escape decodes redactForIndex reads past its first redaction (D-4343). A backslash run halves per
+ *  decode and a backslash-u-005c chain loses one level, so 8 undo nesting far deeper than real tools write; the count
+ *  bounds a pathological input's cost. */
+export const INDEX_UNESCAPE_PASSES = 8;
 export const SECRET_MIN_LEN = 20;
 export const SECRET_SEGMENT_MIN = 12;
 export const DEFAULT_COPY_BPS = 10_000_000;
@@ -1173,7 +1177,7 @@ function stringLeaves(value, out) {
 /** The FTS body: extracted plain text, never the JSON (RV3). Text blocks,
  *  the string leaves of `tool_use.input`, the text of `tool_result` content
  *  and `system` content, joined with `\n`; a sidecar's is `sidecarIndexText`'s
- *  cut, unredacted here. Redaction is the caller's next step (§6.2: the index
+ *  cut, unredacted here. Redaction is the caller's next step, `redactForIndex` (§6.2: the index
  *  sees redacted text only; a sidecar's caller uses `sidecarIndexText` with
  *  its pair index, which redacts BEFORE the cut).
  *  D-4195 */
@@ -1630,10 +1634,41 @@ const JSON_ESCAPE_CHAR = Object.freeze({ n: '\n', r: '\r', t: '\t', b: '\b', f: 
  *  inside a JSON string every line break is the two characters backslash and `n`, which glue an `n` onto the next
  *  run and defeat the pair layer and the `\b`-anchored shapes. One left-to-right pass, so an escaped backslash
  *  followed by `n` stays a backslash and an `n`, never re-read. A malformed or truncated escape is left as written.
- *  The decoded text is search-only (the blob is stored verbatim), so this is applied to every sidecar. */
+ *  The decoded text is search-only (the blob is stored verbatim), so this is applied to every sidecar.
+ *  One level per call; redactForIndex reads the deeper levels (D-4343). */
 function unescapeJsonText(text) {
   if (!text.includes('\\')) return text;
   return text.replace(JSON_ESCAPE_RE, (_m, c, u) => (c !== undefined ? JSON_ESCAPE_CHAR[c] : String.fromCharCode(parseInt(u, 16))));
+}
+
+/** Every maximal span of `[A-Za-z0-9_.-]` characters and backslashes that holds both, as the mark: redactForIndex's
+ *  exhaustion rule (D-4343). One class, greedy, so the scan is linear (D-4306). The class is the JWT run class
+ *  plus the backslash, so a JWT glued to an escape is marked whole, its payload and signature too. */
+function markEscapeGluedSpans(s) {
+  return s.replace(/[A-Za-z0-9_.\\-]+/g, (span) => (span.includes('\\') && /[A-Za-z0-9_-]/.test(span) ? REDACTED_MARK : span));
+}
+
+/** An index text: `text` redacted through every JSON-escape reading, so no term of it holds a secret that an escape
+ *  letter glued on (D-4343 (history-index-escape-readings-to-fixpoint), review 316 F2).
+ *
+ *  Every reading is redacted raw-first, D-4336's union: a mark holds no backslash, so a decode never alters one.
+ *  The text returned is the latest reading whose redaction removed something, else the text as it came. A deeper
+ *  reading that redacts nothing is not indexed, because decoding text that is not JSON damages search (backslash-begin
+ *  would index as `egin`, a Windows path as `ew_folder`). That is sound: a secret glued to an escape letter at one
+ *  level is separated, and so redacted, at a deeper level, which then counts as removing something. At the bound
+ *  (`INDEX_UNESCAPE_PASSES` decodes without a fixpoint) the last reading is indexed with every span that touches a
+ *  backslash marked (`markEscapeGluedSpans`), so no part of a secret a further decode would separate is indexed.
+ *  `idx` is required: `sidecarIndexText(…, null)` never calls this. */
+export function redactForIndex(text, idx) {
+  let t = redactField(text, idx);
+  let keep = t;
+  for (let pass = 0; pass < INDEX_UNESCAPE_PASSES; pass += 1) {
+    const u = unescapeJsonText(t);
+    if (u === t) return keep;
+    t = redactField(u, idx);
+    if (t !== u) keep = t;
+  }
+  return markEscapeGluedSpans(t);
 }
 
 /** A byte of the `[A-Za-z0-9_-]` run class (the unit a pair or a shape can match). */
@@ -1670,10 +1705,13 @@ export function sidecarIndexText(bytes, idx) {
   // parser differential of its own (it can JOIN a secret's registered segments into one run no pair matches, and
   // `\"` changes where the JSON-form context rule sees a value end), so the raw pass runs first; every mark it
   // writes is REDACTED_MARK, which holds no backslash, so the decode cannot alter one. The second pass catches what
-  // an escape letter glued onto a secret hid from the first. The union of both readings is redacted.
+  // an escape letter glued onto a secret hid from the first. The union of both readings is redacted. Deeper readings
+  // are redactForIndex's (D-4343): a nested JSON level or a backslash-u-005c chain glues an escape letter onto a
+  // secret one decode later, and the last redaction below reads every remaining level, keeping a deeper reading only
+  // when it redacted something.
   if (idx !== null) text = redactField(text, idx);
   text = unescapeJsonText(text);
-  if (idx !== null) text = redactField(text, idx);
+  if (idx !== null) text = redactForIndex(text, idx);
   const enc = new TextEncoder().encode(text);
   // The window is raw bytes but `text` is the unescaped, redacted text, which an escape-dense JSON sidecar shrinks
   // by a byte per escape. A full window is the only case that can end in a secret redaction saw a prefix of, so the

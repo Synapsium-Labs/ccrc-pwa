@@ -2043,6 +2043,22 @@ describe('history ingest: the FTS index (plan task 23)', () => {
     } finally { db.close(); }
   });
 
+  it('D-4343 (F2): an entry holding a literal backslash-n before a known value indexes no term holding it', () => {
+    const box = IX.newBox('ccrc-hist-esc-entry-');
+    const BS = String.fromCharCode(92);
+    const value = `zqe${hex(12)}7`;
+    secretFile(box, 'esc.env', `ZQ_ESC_VALUE=${value}\n`);
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note x${BS}n${value} end`, 1)]));
+    IX.sweepTwice(box);
+    const db = openStoreRO(box);
+    try {
+      expect(matches(db, '"nzqe"*')).toBe(0);
+      expect(matches(db, 'note')).toBe(1);
+      expect(ftsBytes(db).includes(value.slice(3, 15))).toBe(false);
+      expect(IX.blobsHold(db, value)).toBe(true);
+    } finally { db.close(); }
+  });
+
   describe('D-4312 (history-sidecar-redact-before-cut): a sidecar is redacted over a window larger than its cut, then cut', () => {
     const N = 512 * 1024;
     const sideFile = (box: HistoryBox, name: string): string => {
