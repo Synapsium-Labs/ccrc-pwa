@@ -1288,12 +1288,25 @@ describe('the read-back\'s second witness — the transcript\'s own acknowledged
   const stampAt = (t: number): void => { fs.utimesSync(regPath(`${ID}.routeapplied`), t, t); };
 
   let STAMP = 0; let BORN = 0; let ACK = 0;
-  /** `_pane_born` is D-3522's clock (tmux `session_created`); the recording tmux stub answers no
-   *  `display-message`, so a case states this process's start by stubbing the one reader. Every
+  /** `_pane_born` is D-3522's clock (tmux `session_created`), and it is NOT stubbed: the shared
+   *  recording stub answers no `display-message`, so this block's tmux answers `$HOME/born` to the
+   *  ONE query `_pane_born` makes of THIS session's exact target, and nothing to any other — a
+   *  read-back that asked tmux about the wrong address reads `unplaced` (review finding 16). Every
    *  python3 run is counted in `$HOME/reads`, so "nothing read" is an assertion. */
-  const STUB = (born: number | null = BORN): string => `${TMUX_STUB}
-    ${born === null ? '' : `_pane_born() { echo ${born}; };`}
+  const STUB = (born: number | null = BORN): string => {
+    const bornFile = path.join(h.home, 'born');
+    if (born === null) fs.rmSync(bornFile, { force: true }); else fs.writeFileSync(bornFile, `${born}\n`);
+    return `${TMUX_STUB.replace('tmux() {', '_tmux_recording() {')}
+    tmux() {
+      if [[ "$1" == display-message ]]; then
+        echo "tmux $*" >> "$HOME/tmux-calls"
+        [[ "$*" == "display-message -p -t $(_tmux_t ${ID}) #{session_created}" && -f "$HOME/born" ]] && cat "$HOME/born"
+        return 0
+      fi
+      _tmux_recording "$@"
+    };
     python3() { echo read >> "$HOME/reads"; command python3 "$@"; };`;
+  };
   const tick = (born: number | null = BORN): string => h.sh(`${STUB(born)} _route_apply_check ${ID}`);
   /** A FRESH LOOK at the decision: the kept verdict is dropped first, because the memo is the NEVER
    *  EVERY TICK case's subject and a rewritten fixture can share a second and a size with the last. */
@@ -1526,5 +1539,35 @@ ${ACK} model opus"`);
     expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
     h.sh(`_reg_purge ${ID}`);
     expect(h.reg(ID, 'readbackseen'), 'the memo purges with the row').toBeNull();
+  });
+
+  it('a kept verdict answers only for the transcript it was kept for: same class, mtime and size at ANOTHER path is read', () => {
+    // Review findings 5/12/15: a /clear or a swap rotates the registry uuid, so `_transcript_path` names a
+    // new file; a kept refusal whose key happens to coincide (same second, same size) must not answer for it.
+    fs.rmSync(usageFile());
+    const p = writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SESSION('Opus 5.5'))]);
+    const key = `opus ${fs.statSync(p).mtime.getTime() / 1000 | 0} ${fs.statSync(p).size}`;
+    h.sh(`_reg_set ${ID} readbackseen "${key} before-spawn ${path.join(path.dirname(p), 'an-older-uuid.jsonl')}"`);
+    expect(h.sh(`${STUB()} _route_readback_transcript ${ID} opus ${STAMP} - -`)).toBe(`matched ${ACK} ${BORN} Opus 5.5`);
+    expect(reads(), 'the kept verdict was another file\'s: this one is read').toBe(1);
+    h.sh(`_reg_set ${ID} readbackseen "${key} before-spawn ${p}"`);
+    expect(h.sh(`${STUB()} _route_readback_transcript ${ID} opus ${STAMP} - -`), 'control: its own path answers').toBe('before-spawn');
+    expect(reads()).toBe(1);
+  });
+
+  it('a stale reading of ANOTHER session (a second claude in a split of the pane) is never handed on to supersede this pane\'s ack', () => {
+    // Review finding 12: only a reading of THIS process's uuid is a fact about this pane at its own time.
+    sidecarAt(ACK + 600, 'claude-fable-5-1', 'feedface-0000-4000-8000-000000000000');
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5'))]);
+    tick();
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
+  });
+
+  it('this process\'s start is asked of tmux at THIS session\'s own target, never another address', () => {
+    // Review finding 16: the stub answers only `_tmux_t <id>`; a wrong argument would read `unplaced`.
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5'))]);
+    expect(verdict()).toBe(`matched ${ACK} ${BORN} Opus 5.5`);
+    const calls = fs.readFileSync(path.join(h.home, 'tmux-calls'), 'utf8');
+    expect(calls).toContain(`tmux display-message -p -t ${h.sh(`_tmux_t ${ID}`)} #{session_created}`);
   });
 });
