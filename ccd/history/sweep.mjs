@@ -1022,25 +1022,52 @@ export function registryBackfill(db, c) {
       });
       continue;
     }
-    // A clear epoch still awaiting confirmation is confirmCandidates' to decide, or to drop past 7 days (IV4, spec §6.1;
-    // D-4297, slug history-backfill-skips-unconfirmed-epoch); a registry mapping must not confirm it. Only a uuid with no
-    // epoch row of this id is a backfill. Scoped to this id, so another family's planted unconfirmed clear line still
-    // blocks nobody (chainEpoch's doc).
-    if (db.prepare('SELECT 1 AS x FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE e.cc_session_uuid = ? AND s.ccrc_id = ? AND e.confirmed_ms IS NULL LIMIT 1').get(uuid, id) !== undefined) continue;
-    verdictTx(db, c, () => {
-      const out = [];
-      const v = (kind, fields) => { out.push(verdictRecord(nowMs, 'none', kind, fields)); };
-      const fam = joinFamily(db, c, {
-        ccrcId: id, lineGen: null, observedGen: obs.generation, observedProject: obs.project, uuid, v, joinVerdict: false,
-      });
-      const r = chainEpoch(db, fam.sessionPk, uuid, 'import', 'registry', nowMs);
-      if (r !== null && (r.created || r.confirmedNow)) {
-        db.prepare(DELETE_CANDIDATE).run(uuid, id);
-        v('mapping', { ccrc_id: id, generation: fam.generation, cc_session_uuid: uuid, declared_by: 'registry' });
-      }
-      return out;
-    });
+    mapRegistryUuid(db, c, { id, uuid, declaredBy: 'registry', path: null, nowMs, obs }, (fn) => { verdictTx(db, c, fn); });
   }
+}
+
+/** The per-uuid registry mapping core: ONE definition, called by `registryBackfill` and by `--op import`'s
+ *  registry/journal-evidence path and operator form (`commitMapping`), so the two never apply different rules
+ *  (Task 26F item 1; D-4297, D-4193).
+ *  - `m` is {id, uuid, declaredBy, path, nowMs, obs}: `obs` is `readObservation`'s answer for the id, so the family's
+ *    generation and project are read through `joinFamily`/`joinGeneration` — an absent `.generation` is counted
+ *    family_gen_absent, an unreadable or malformed one family_gen_unreadable, never folded into one another or
+ *    into `''` uncounted (IV5, D-4193).
+ *  - A clear epoch this id still holds UNCONFIRMED is confirmCandidates' to decide, or to drop past 7 days (IV4, spec
+ *    §6.1; D-4297, slug history-backfill-skips-unconfirmed-epoch): a registry or journal mapping must not confirm it,
+ *    so it answers 'skipped' and writes nothing. Scoped to this id, so another family's planted unconfirmed clear
+ *    line still blocks nobody (chainEpoch's doc). The OPERATOR (`declaredBy` 'operator') is the one exception: an
+ *    operator naming the file is itself the confirmation (Q19), so that mapping is never skipped.
+ *  - Otherwise the family is joined and the epoch chained with cause `import`, inside `run`, the caller's own
+ *    transaction wrapper (`fn` returns the verdict records it queued). Answers
+ *      'refused'  another family holds the uuid confirmed (first claim wins, counted uuid_two_sessions): nothing chained;
+ *      'already'  this family holds it confirmed: chained nothing, queued no verdict;
+ *      'mapped'   the epoch was chained or confirmed now, and its `mapping` verdict queued.
+ *    plus the family it joined. */
+function mapRegistryUuid(db, c, m, run) {
+  const { id, uuid, declaredBy, path: filePath, nowMs, obs } = m;
+  if (declaredBy !== 'operator' && db.prepare('SELECT 1 AS x FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE e.cc_session_uuid = ? AND s.ccrc_id = ? AND e.confirmed_ms IS NULL LIMIT 1').get(uuid, id) !== undefined) {
+    return { outcome: 'skipped', family: null };
+  }
+  let outcome = 'already';
+  let family = null;
+  run(() => {
+    const out = [];
+    const v = (kind, fields) => { out.push(verdictRecord(nowMs, 'none', kind, fields)); };
+    family = joinFamily(db, c, {
+      ccrcId: id, lineGen: null, observedGen: obs.generation, observedProject: obs.project, uuid, v, joinVerdict: false,
+    });
+    const r = chainEpoch(db, family.sessionPk, uuid, 'import', declaredBy, nowMs);
+    if (r === null) {
+      outcome = 'refused';
+    } else if (r.created || r.confirmedNow) {
+      outcome = 'mapped';
+      db.prepare(DELETE_CANDIDATE).run(uuid, id);
+      v('mapping', { ccrc_id: id, generation: family.generation, cc_session_uuid: uuid, declared_by: declaredBy, ...(filePath ? { path: filePath } : {}) });
+    }
+    return out;
+  });
+  return { outcome, family };
 }
 
 /** The periodic scan runs every SCAN_INTERVAL_MS (§9.2 step 2, *chosen* 30 min), timed by meta 'scan_ms'. A missing
@@ -3235,44 +3262,31 @@ function outboxRow(db, rec) {
 }
 
 /** One mapping verdict (§9.14: a backfill mapping, `declared_by` registry or journal, or an operator's
- *  import --session --file): the family (created on first sight, with its `family` verdict) and the epoch
+ *  import --session --file), through `mapRegistryUuid`, the ONE per-uuid registry mapping core
+ *  `registryBackfill` also calls (Task 26F item 1): the family (created on first sight, with its `family` verdict,
+ *  its generation read through `readObservation`/`joinFamily` and counted when absent or unreadable) and the epoch
  *  with cause `import`, committed under FULL in a transaction of its own and flushed to the journal right
  *  after — before the file's first NORMAL chunk (§9.2 "Every verdict commits first", CT10; O34). A uuid
- *  another family already claims is chainEpoch's first-claim rule (uuid_two_sessions). A uuid this family already
- *  holds confirmed is no new verdict: a re-run queues nothing. True when it chained or confirmed the epoch. */
+ *  another family already claims is chainEpoch's first-claim rule (uuid_two_sessions). A uuid this id holds as an
+ *  unconfirmed epoch is the scan's to decide (D-4297), except for the operator's own mapping.
+ *  Answers the core's outcome: 'skipped', 'refused' (another family holds the uuid confirmed), 'already' (this
+ *  family holds it confirmed: no new verdict, a re-run queues nothing) or 'mapped'. */
 export function commitMapping(db, ctx, ev) {
   const nowMs = ctx.now();
-  let chained = false;
-  withTx(db, 'FULL', () => {
-    const fam = ensureFamily(db, ev.id, ev.generation, ev.project, nowMs);
-    if (fam.created) {
-      outboxRow(db, journalRecord('verdict', nowMs, {
-        event_key: 'none', kind: 'family', ccrc_id: ev.id, generation: ev.generation, project: ev.project, first_seen_ms: nowMs,
-      }));
-    }
-    const r = chainEpoch(db, fam.sessionPk, ev.uuid, 'import', ev.declaredBy, nowMs);
-    if (r === null || !(r.created || r.confirmedNow)) return;
-    outboxRow(db, journalRecord('verdict', nowMs, {
-      event_key: 'none', kind: 'mapping', ccrc_id: ev.id, generation: ev.generation, cc_session_uuid: ev.uuid,
-      declared_by: ev.declaredBy, ...(ev.path ? { path: ev.path } : {}),
-    }));
-    chained = true;
+  const r = mapRegistryUuid(db, ctx, {
+    id: ev.id, uuid: ev.uuid, declaredBy: ev.declaredBy, path: ev.path, nowMs, obs: readObservation(ctx.home, ev.id, nowMs),
+  }, (fn) => {
+    withTx(db, 'FULL', () => { for (const rec of fn()) outboxRow(db, rec); });
   });
   flushOutbox(db, ctx.home, ctx.ids, ctx.now());
-  return chained;
+  return { outcome: r.outcome };
 }
 
-/** A registry row's family facts, read now: `.generation` when it has the UUID grammar (else ''), and
- *  `.project` (else ''). */
-function regFamily(P, id, declaredBy, filePath) {
-  const g = readTrimmed(join(P.reg, `${id}.generation`));
-  return {
-    id,
-    generation: g !== null && UUID_RE.test(g) ? g : '',
-    project: readTrimmed(join(P.reg, `${id}.project`)) ?? '',
-    declaredBy,
-    path: filePath,
-  };
+/** The generation a registry row reads now, for a LISTING only (the dry run's `mapped` lines): the same
+ *  `joinGeneration` the mapping core applies, so what is listed is what a mapping would join, but nothing is
+ *  counted — a dry run writes nothing. */
+function registryGenerationOf(P, id) {
+  return joinGeneration({ lineGen: null, observedGen: readRegPresence(join(P.reg, `${id}.generation`)) }).generation;
 }
 
 /** Evidence-only import (§8.4): which transcript uuid belongs to which family, the first evidence for a
@@ -3283,9 +3297,9 @@ export function importEvidence(db, P) {
   const m = new Map();
   const put = (uuid, e) => { if (UUID_RE.test(uuid) && !m.has(uuid)) m.set(uuid, e); };
   if (db !== null) {
-    const st = db.prepare('SELECT s.ccrc_id, s.generation, s.project, e.cc_session_uuid FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE e.confirmed_ms IS NOT NULL ORDER BY s.session_pk, e.seq');
+    const st = db.prepare('SELECT s.ccrc_id, s.generation, e.cc_session_uuid FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE e.confirmed_ms IS NOT NULL ORDER BY s.session_pk, e.seq');
     for (const r of st.iterate()) {
-      put(r.cc_session_uuid, { id: r.ccrc_id, generation: r.generation, project: r.project, declaredBy: null, path: null });
+      put(r.cc_session_uuid, { id: r.ccrc_id, generation: r.generation, declaredBy: null, path: null });
     }
   }
   const regNames = listNames(P.reg).sort();
@@ -3293,7 +3307,7 @@ export function importEvidence(db, P) {
     const u = /^(.+)\.uuid$/.exec(name);
     if (u === null || !idOk(u[1])) continue;
     const uuid = readTrimmed(join(P.reg, name));
-    if (uuid !== null) put(uuid, regFamily(P, u[1], 'registry', null));
+    if (uuid !== null) put(uuid, { id: u[1], generation: registryGenerationOf(P, u[1]), declaredBy: 'registry', path: null });
   }
   for (const name of regNames) {
     const c = /^(.+)\.compactions$/.exec(name);
@@ -3305,7 +3319,7 @@ export function importEvidence(db, P) {
       try { rec = JSON.parse(line); } catch { continue; }
       const t = rec !== null && typeof rec === 'object' ? rec.transcript : null;
       if (typeof t !== 'string' || !t.endsWith('.jsonl')) continue;
-      put(basename(t, '.jsonl'), regFamily(P, c[1], 'journal', t));
+      put(basename(t, '.jsonl'), { id: c[1], generation: registryGenerationOf(P, c[1]), declaredBy: 'journal', path: t });
     }
   }
   return m;
@@ -3384,8 +3398,7 @@ export async function importFile(db, ctx, filePath, uuid) {
 /** `import` without --apply (§8.4): read-only, one line per file, nothing written. */
 function importDryRun(P, homes, args, out) {
   if (args.session !== null) {
-    const ev = regFamily(P, args.session, 'operator', args.file);
-    out(`mapped ${ev.id} ${ev.generation || '-'} ${args.file}`);
+    out(`mapped ${args.session} ${registryGenerationOf(P, args.session) || '-'} ${args.file}`);
     return;
   }
   let ro = null;
@@ -3418,7 +3431,7 @@ async function importApply(db, ctx, P, args) {
       return { rc: EXIT.REFUSED, reason: 'bad-args' };
     }
     closeSync(probe.fd);
-    commitMapping(db, ctx, { uuid, ...regFamily(P, args.session, 'operator', args.file) });
+    commitMapping(db, ctx, { uuid, id: args.session, declaredBy: 'operator', path: args.file });
     ends.push(await importFile(db, ctx, args.file, uuid));
   } else {
     const ev = importEvidence(db, P);
@@ -3428,7 +3441,7 @@ async function importApply(db, ctx, P, args) {
       const e = ev.get(t.uuid);
       if (e === undefined || e.declaredBy === null || mapped.has(t.uuid)) continue;
       mapped.add(t.uuid);
-      commitMapping(db, ctx, { uuid: t.uuid, ...e });
+      commitMapping(db, ctx, { uuid: t.uuid, id: e.id, declaredBy: e.declaredBy, path: e.path });
     }
     for (const t of all) {
       if (!ev.has(t.uuid)) continue;

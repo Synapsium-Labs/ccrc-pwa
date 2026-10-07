@@ -109,13 +109,13 @@ function snapshot(box: HistoryBox): string[] {
 /** The shim on a REAL terminal (node-pty): stdin IS a TTY here, so only the pane and the switches can refuse.
  *  Lazy, inside each test (ccrc-install.test.ts:5914 lesson); the guard timer is a safety net, never the
  *  assertion. A pty merges stdout and stderr. */
-function shimPty(box: HistoryBox, args: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> {
+function shimPty(box: HistoryBox, args: string[], env: Record<string, string> = {}, cwd: string = box.home): Promise<{ code: number; out: string }> {
   const full: Record<string, string> = {};
   const merged: NodeJS.ProcessEnv = { ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions([PRELOADS.statfs]), ...env };
   for (const [k, v] of Object.entries(merged)) if (v !== undefined) full[k] = v;
   return new Promise((resolve) => {
     const p = pty.spawn('bash', [path.join(box.home, '.local', 'bin', 'ccd-history-sweep'), ...args], {
-      name: 'xterm-color', cols: 200, rows: 40, cwd: box.home, env: full,
+      name: 'xterm-color', cols: 200, rows: 40, cwd, env: full,
     });
     let out = '';
     let done = false;
@@ -885,4 +885,68 @@ describe('W1-j / §9.2 step 2: an unreadable roster skips the census', () => {
     expect(metaOf(box, 'census_ms'), 'CONTROL: a readable roster runs it').toMatch(/^[0-9]+$/);
     expect(metaOf(box, 'retention_min')).toBe('30');
   });
+});
+
+// ── Task 26F: the controller's rulings on Task 25 and 26's review findings ─────────────────────────────
+describe('Task 26F item 1: --op import maps through registryBackfill\'s core (D-4297, IV5)', () => {
+  const confirmedOf = (box: HistoryBox, uuid: string): (number | null)[] =>
+    q<{ confirmed_ms: number | null }>(box, 'SELECT confirmed_ms FROM epochs WHERE cc_session_uuid = ?', uuid).map((r) => r.confirmed_ms);
+
+  it('a registry-evidence import never confirms a clear epoch this id holds unconfirmed past its 7 days, and journals no mapping for it', () => {
+    const box = boundBox('ccrc-hist-26f1a-');
+    plantSession(box, ID, { uuid: U2, generation: G1, project: 'demo' });
+    spoolLine(box, ID, clearLine(U1));
+    expect(runDriver(box, { offsetMs: MIN, managedSettings: [] }).code).toBe(0);       // renamed
+    expect(runDriver(box, { offsetMs: 2 * MIN, managedSettings: [] }).code).toBe(0);   // drained: U1 chained, unconfirmed
+    expect(confirmedOf(box, U1), 'CONTROL: the clear epoch is chained and awaiting confirmation').toEqual([null]);
+    plantSession(box, ID, { uuid: U1 });                       // .uuid names it only after the window: too late
+    expect(runDriver(box, { offsetMs: 8 * DAY, managedSettings: [] }).code).toBe(0);   // the window drops the candidate
+    expect(counter(box, 'epoch_unconfirmed')).toBe(1);
+    plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000000f1', 'past the window', iso(0))]);
+    const r = runSweep(box, ['--op', 'import', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(confirmedOf(box, U1), 'the import must not graft what the window dropped').toEqual([null]);
+    expect(verdicts(box, 'mapping').filter((v) => v['cc_session_uuid'] === U1)).toEqual([]);
+  }, 60_000);
+
+  it('an unreadable .generation counts family_gen_unreadable and an absent one family_gen_absent, each once, never folded into the other', () => {
+    const box = boundBox('ccrc-hist-26f1b-');
+    plantSession(box, ID, { uuid: U1, generation: 'unreadable', project: 'demo' });
+    plantSession(box, 'claude-b-demo', { uuid: U2, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000000f2', 'unreadable gen', iso(0))]);
+    plantTranscript(box, 'claude-b', SLUG, U2, [userRow('a0000000-0000-4000-8000-0000000000f3', 'absent gen', iso(0), U2)]);
+    const before = { unreadable: counter(box, 'family_gen_unreadable'), absent: counter(box, 'family_gen_absent') };
+    const r = runSweep(box, ['--op', 'import', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(counter(box, 'family_gen_unreadable') - before.unreadable).toBe(1);
+    expect(counter(box, 'family_gen_absent') - before.absent).toBe(1);
+    expect(q(box, 'SELECT ccrc_id, generation FROM sessions ORDER BY ccrc_id')).toEqual([
+      { ccrc_id: ID, generation: '' }, { ccrc_id: 'claude-b-demo', generation: '' },
+    ]);
+  }, 60_000);
+
+  it('the operator form reads the family through the same core: an unreadable .generation is counted, and the mapping is still the operator\'s own', async () => {
+    const box = boundBox('ccrc-hist-26f1c-');
+    plantSession(box, ID, { generation: 'unreadable', project: 'demo' });
+    const file = plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000000f4', 'operator unreadable', iso(0))]);
+    const before = counter(box, 'family_gen_unreadable');
+    const r = await shimPty(box, ['--op', 'import', '--session', ID, '--file', file, '--apply']);
+    expect(lastResult(r.out), r.out).toEqual({ rc: 0 });
+    expect(counter(box, 'family_gen_unreadable') - before).toBe(1);
+    expect(epochsOf(box)).toEqual([{ cc_session_uuid: U1, cause: 'import', declared_by: 'operator', seq: 1 }]);
+  }, 45_000);
+
+  it('the operator\'s own mapping IS the confirmation: it confirms a clear epoch the evidence path leaves alone (Q19)', async () => {
+    const box = boundBox('ccrc-hist-26f1d-');
+    plantSession(box, ID, { uuid: U2, generation: G1, project: 'demo' });
+    spoolLine(box, ID, clearLine(U1));
+    expect(runDriver(box, { offsetMs: MIN, managedSettings: [] }).code).toBe(0);
+    expect(runDriver(box, { offsetMs: 2 * MIN, managedSettings: [] }).code).toBe(0);
+    expect(confirmedOf(box, U1), 'CONTROL: unconfirmed').toEqual([null]);
+    const file = plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000000f5', 'operator confirms', iso(0))]);
+    const r = await shimPty(box, ['--op', 'import', '--session', ID, '--file', file, '--apply']);
+    expect(lastResult(r.out), r.out).toEqual({ rc: 0 });
+    expect(confirmedOf(box, U1)[0]).not.toBeNull();
+    expect(verdicts(box, 'mapping').filter((v) => v['cc_session_uuid'] === U1).map((v) => v['declared_by'])).toEqual(['operator']);
+  }, 60_000);
 });
