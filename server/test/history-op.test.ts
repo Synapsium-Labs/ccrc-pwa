@@ -21,7 +21,7 @@ import { WRITING_FORMS, CARRIER_KILL_S, journalRecord, floorThreshold, historyPa
 import { createStore, openWriter, closeWriter, getMeta } from '../../ccd/history/store.mjs';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, preloadOptions, plantSession, plantTranscript, spoolLine, openStoreRO,
-  counters, journalRecords, PRELOADS, readTxlog, writes, type TxEv, type HistoryBox,
+  counters, journalRecords, PRELOADS, PASS_DRIVER, readTxlog, writes, type TxEv, type HistoryBox, type DriverDeps,
 } from './historyHelpers.js';
 
 beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
@@ -127,6 +127,24 @@ function shimPty(box: HistoryBox, args: string[], env: Record<string, string> = 
       clearTimeout(timer);
       resolve({ code, out });
     };
+    const timer = setTimeout(() => { p.kill(); finish(-1); }, 19_000);
+    p.onData((d) => { out += d; });
+    p.onExit(({ exitCode }) => finish(exitCode));
+  });
+}
+
+/** The pass driver on a pty, for the operator form's gate (`--session --file --apply` refuses without a TTY, needs-tty). */
+function driverPty(box: HistoryBox, deps: DriverDeps, args: string[]): Promise<{ code: number; out: string }> {
+  const full: Record<string, string> = {};
+  const merged: NodeJS.ProcessEnv = { ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions([PRELOADS.statfs]), HISTORY_TEST_DEPS: JSON.stringify(deps) };
+  for (const [k, v] of Object.entries(merged)) if (v !== undefined) full[k] = v;
+  return new Promise((resolve) => {
+    const p = pty.spawn(process.execPath, ['--no-warnings', PASS_DRIVER, ...args, '--secrets', '--', ...box.homes], {
+      name: 'xterm-color', cols: 200, rows: 40, cwd: box.home, env: full,
+    });
+    let out = '';
+    let done = false;
+    const finish = (code: number): void => { if (done) return; done = true; clearTimeout(timer); resolve({ code, out }); };
     const timer = setTimeout(() => { p.kill(); finish(-1); }, 19_000);
     p.onData((d) => { out += d; });
     p.onExit(({ exitCode }) => finish(exitCode));
@@ -725,6 +743,80 @@ describe('RF5a F19: the half at release runs on every --op outcome (§9.2, D-423
     const held = draining(box);
     expect(held, 'held in .draining/').toHaveLength(1);
     expect(names(paths(box).draining)).toContain(held[0]!.replace(/\.jsonl$/, '.obs'));
+  });
+
+  // Review 316 round 1 F1: opPass answers through `released` at about a dozen return sites, each its own guard. One case per
+  // outcome a test can reach; reverting any site to a bare `result(` leaves the mid-pass line in spool/ and reds its case.
+  // Not reached here: store-unreachable (a dead volume), the openStore throw, and the `ids === null` guard after a successful open
+  // (idsFromFiles read the same files openStore's own facts just measured; an unreadable writer is the openStore word case below).
+  // The mutation of each reached site to a bare `result(` was measured red on its own case (task notes, fix round 1).
+  const OUTCOMES: Array<{
+    name: string; rc: number; reason?: string; journaled: boolean;
+    arrange: (box: HistoryBox) => { tty?: boolean; args: string[]; deps?: Partial<DriverDeps>; opts?: { preloads?: string[]; env?: Record<string, string> } };
+  }> = [
+    { name: 'roster-unreadable', rc: 2, reason: 'roster-unreadable', journaled: true,
+      arrange: () => ({ args: ['--op', 'import', '--apply', '--roster-unreadable'] }) },
+    { name: 'bad-args (the operator form, a file outside every root)', rc: 2, reason: 'bad-args', journaled: true,
+      arrange: (box) => {
+        plantSession(box, ID, { generation: G1, project: 'demo' });
+        const outside = path.join(box.home, 'elsewhere', `${U2}.jsonl`);
+        fs.mkdirSync(path.dirname(outside), { recursive: true });
+        fs.writeFileSync(outside, `${JSON.stringify(userRow('a0000000-0000-4000-8000-0000000000d2', 'outside words', iso(0), U2))}\n`);
+        return { tty: true, args: ['--op', 'import', '--session', ID, '--file', outside, '--apply'] };
+      } },
+    { name: 'uuid-claimed (the operator form)', rc: 2, reason: 'uuid-claimed', journaled: true,
+      arrange: (box) => {
+        const OTHER = 'claude-b-demo';
+        plantSession(box, OTHER, { uuid: U1, generation: G1, project: 'demo' });
+        expect(runDriver(box, { offsetMs: 31 * MIN, managedSettings: [] }).code).toBe(0);   // the registry scan maps U1 to OTHER
+        plantSession(box, ID, { generation: G1, project: 'demo' });
+        const file = plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000000f8', 'claimed elsewhere', iso(0))]);
+        return { tty: true, args: ['--op', 'import', '--session', ID, '--file', file, '--apply'] };
+      } },
+    { name: 'store-unmeasured (an unreadable store.writer)', rc: 5, reason: 'store-unmeasured', journaled: false,
+      arrange: (box) => {
+        fs.writeFileSync(path.join(paths(box).root, 'store.writer'), 'not a writer token\n');   // off WRITER_RE: measured unreadable, so no journal to write into
+        return { args: ['--op', 'import', '--apply'] };
+      } },
+    { name: 'migrate-refused (a store at a newer schema)', rc: 2, reason: 'migrate-refused', journaled: true,
+      arrange: (box) => {
+        const db = new DatabaseSync(paths(box).db);
+        try { db.exec('PRAGMA user_version = 2'); } finally { db.close(); }
+        return { args: ['--op', 'migrate'] };
+      } },
+    { name: 'flushFirst cannot append a waiting verdict (a one-shot ENOSPC at the journal)', rc: 1, journaled: true,
+      arrange: (box) => {
+        const db = new DatabaseSync(paths(box).db);
+        try {
+          db.prepare('INSERT INTO journal_outbox (rec) VALUES (?)').run(journalRecord('verdict', Date.now(), { event_key: 'none', kind: 'drained', file: 'x.1.1.jsonl' }));
+        } finally { db.close(); }
+        return { args: ['--op', 'import', '--apply'], opts: { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_ENOSPC: '/journal/' } } };
+      } },
+    { name: 'the verb\'s own journal append fails (the JournalError arm)', rc: 1, journaled: true,
+      arrange: (box) => {
+        plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+        plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000000f9', 'append fails', iso(0))]);
+        return { args: ['--op', 'import', '--apply'], opts: { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_ENOSPC: '/journal/' } } };
+      } },
+    { name: 'an internal throw out of the verb (an injected commit failure)', rc: 1, journaled: true,
+      arrange: (box) => {
+        plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+        plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000000f9', 'commit fails', iso(0))]);
+        return { args: ['--op', 'import', '--apply'], opts: { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_FAIL_COMMIT: '1' } } };
+      } },
+  ];
+  OUTCOMES.forEach((c, i) => {
+    it(`${c.name}: the release half still renames the mid-pass line out of spool/${c.journaled ? ' and journals it' : ''}`, async () => {
+      const box = boundBox(`ccrc-hist-rf5a-19t${i}-`);
+      const a = c.arrange(box);
+      const deps = { afterFirstStatfs: mid, ...a.deps };
+      const op = a.tty === true ? await driverPty(box, deps, a.args) : runDriver(box, deps, a.args, a.opts);
+      const stdout = 'out' in op ? op.out : op.stdout;
+      expect(lastResult(stdout), stdout).toEqual(c.reason === undefined ? { rc: c.rc } : { rc: c.rc, reason: c.reason });
+      expect(spooled(box), 'the release half renamed it').toEqual([]);
+      expect(draining(box), 'and holds it in .draining/').toHaveLength(1);
+      if (c.journaled) expect(recs(box).filter((r) => r.k === 'spool'), 'and journaled its spool record').toHaveLength(1);
+    });
   });
 
   it('CONTROL: --op migrate with nothing to migrate journals the same mid-pass line', () => {
