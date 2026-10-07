@@ -2372,6 +2372,16 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(select.value).toBe('');
   });
 
+  it('a stored quiet time the list does not hold selects no value — the built-in and an off-grid value alike', async () => {
+    for (const quietMs of [2 * SW_H, 75 * 60_000]) {
+      await mount(swView({ chosen: swChosen({ quietMs }), quiet: { ...swView().quiet, effectiveMs: quietMs, source: 'chosen' } }));
+      const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+      expect(quietChoices(swView()).some((c) => c.value === quietMs), String(quietMs)).toBe(false);
+      expect(select.value, String(quietMs)).toBe('');
+      cleanup();
+    }
+  });
+
   it('P5: the run-less footnote is always shown — zero counts, and counts that could not be read', async () => {
     const zero = swView({ notices: { ok: true, since: 0, windowMs: 48 * SW_H, counts: (['checks', 'wakes', 'reports', 'pushes'] as const)
       .map((row) => ({ row, sent: 0, shadow: 0 })) } });
