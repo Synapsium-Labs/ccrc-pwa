@@ -1231,6 +1231,38 @@ export const MIGRATIONS: readonly string[] = [
     WHERE sessionId IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM run_events e WHERE e.runId = runs.id AND e.detail LIKE 'spawn-adopted:%');
   `,
+  // ── 17: user_version 16 -> 17 ─────────────────────────────────────────────
+  // Stall watch settings (design 2026-10-05 §8): the operator's stall-watch level and quiet time, chosen in Settings.
+  // ONE ROW, `CHECK (id = 1)`, the `coordinator_state` idiom. Its writer is `CoordStore.setStallSettings`, called only
+  // by the settings POST; its reader is `CoordStore.stallSettings`, whose values `parseStallSettings` (`stallsettings.ts`)
+  // decides: `level` through `isStallLevelChoice` and `quietMs` through `isStallQuietMs`, never cast. `quietMs` NULL is
+  // the built-in quiet time, and has no other meaning.
+  //
+  // THE SEED IS TODAY'S BEHAVIOUR: `follow` (the fleet box's files decide) and NULL (the built-in quiet time), so this
+  // entry changes nothing on deploy. `STALL_SETTINGS_SEED` (`stallsettings.ts`) carries the same two values for the
+  // store's insert arm, which a lost row takes.
+  //
+  // `run_events_by_at` serves the notice-count read, `CoordStore.stallObservationsSince` (§11): `run_events` had only
+  // `run_events_by_run(runId, at)`, whose leading column is `runId`, so a window on `at` alone scanned the table. This
+  // server never runs ANALYZE, so the planner's choice for a one-sided range is fixed, and
+  // `stall-settings-store.test.ts` pins the plan (departure `run-events-at-index` (D-4028)). `IF NOT EXISTS`, so a
+  // database where an operator made it by hand still starts.
+  //
+  // MIGRATIONS[0..15] are frozen. THIS ENTRY IS SLOT 17 AS WRITTEN, measured against origin/main at the wave's first
+  // step; whichever branch holding the same slot merges second moves up. RE-MEASURE immediately before the PR and
+  // before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE stall_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    level     TEXT NOT NULL,
+    quietMs   INTEGER,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO stall_settings (id, level, quietMs, updatedAt) VALUES (1, 'follow', NULL, 0);
+  CREATE INDEX IF NOT EXISTS run_events_by_at ON run_events(at);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

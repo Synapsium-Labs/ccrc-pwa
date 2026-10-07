@@ -3903,9 +3903,11 @@ say, and the tail shape is tolerant until the wave-2 checkpoint C7 measures
 it. It is a best-effort tripwire, blind on a `--remote-control` pane and below
 `READER_MIN_COLS`.
 `touch $REG/mail-gate-strict` on the fleet host restores the idle-only gate;
-`rm` it to go back. The stall watch's turn marker (below) can sharpen the
-gate, but only behind two more markers, touched and removed by hand and
-written by nothing in the tree. Under the default (and under
+`rm` it to lift it: under a level chosen in Settings, whatever of that level it
+held back (busy delivery, the further checks) then applies. The stall watch's
+turn marker (below) can sharpen the gate, but only behind two more markers,
+touched and removed by hand and written by nothing in the tree, or a level
+chosen in Settings. Under the default (and under
 `mail-gate-strict`) the gate never reads the marker, so the marker changes no
 delivery: every answer above holds whatever the hook wrote. Under either busy
 marker, a `shell` pane whose current marker reads `working`, stamped no
@@ -3920,9 +3922,15 @@ still shows its spinner (`turn-running`). Under `mail-gate-busy`, a marker that
 could not be read or parsed holds a `busy` delivery with its own gate,
 `turn-mark-unreadable`, which the PWA's mail strip names. Precedence:
 `mail-gate-strict`, then `mail-gate-busy`, then `mail-gate-busy-shadow`, then
-the default. Runbook: touch `mail-gate-busy-shadow` and read 48 h of its
-lines, each checked against its session's transcript; then touch
-`mail-gate-busy` and `rm` the shadow marker. `rm mail-gate-busy` goes back.
+the default. A level chosen in Settings (`/api/coord/stall-watch`) overrides
+both busy markers (Log only, Check and Alert give busy-shadow, Deliver and
+Everything give busy, Off leaves the markers' mode), but never
+`stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`. Runbook: touch
+`mail-gate-busy-shadow` and read 48 h of its lines, each checked against its
+session's transcript; then touch `mail-gate-busy` and `rm` the shadow marker.
+`rm mail-gate-busy` goes back while Settings follows the fleet box's files;
+otherwise lower the level in Settings, or on the fleet box touch
+`mail-gate-strict` (busy delivery) or `stall-watch-disabled` (the whole lane).
 
 `/api/mail` (and its ack route), the gated run routes (`POST /api/runs`,
 `/:id/dispatch`, `/:id/close`, `/:id/advance`, `/:id/items`, `/:id/route`) — but **not** the
@@ -4166,8 +4174,8 @@ reads whose turn it is from the newest mail between the worker and anyone but
 itself: the coordinator's after the worker's `question`, its `wave-done` or
 `review-done` claim, or a `re stall-check: waiting` reply, and after a
 coordinator mail whose subject begins `wait:`; the worker's otherwise. When the
-ball is the worker's and its main loop has sat `idle` or `shell` for 2 h with
-no mail either way, it mails the worker a `stall-check:` from `operator` (r1:
+ball is the worker's and its main loop has sat `idle` or `shell` for the quiet
+time (2 h unless Settings sets another, 30 min to 12 h) with no mail either way, it mails the worker a `stall-check:` from `operator` (r1:
 recorded, not pushed), whose body carries its own reply protocol and says who
 is told next — no one, while escalation is unarmed; an hour on, with still no
 worker mail, a `stall:` mail to the coordinator (r2, pushed `⚠ stall`); an hour
@@ -4184,7 +4192,7 @@ notices can move. A paused coordinator, a dead
 one or none at all skips r2, and r3 says which. It holds — sends nothing — on
 anything it could not measure (a live file with no timestamp included), a dead or restarting
 worker, an open question, a harness dialog (one `⚠ stalled … (dialog)` push per dialog
-after 2 h), a usage limit (one `⚠ limit` push after 12.5 h) and a `busy`
+after the quiet time), a usage limit (one `⚠ limit` push after 12.5 h) and a `busy`
 worker. When the ball is the coordinator's it waits, and pushes `⚠ waiting`
 once after 30 h with no mail on the run and no send-back. Every rung is written as a
 `run_events` observation row before it is sent, so a restart never sends one
@@ -4195,9 +4203,13 @@ by nothing in the tree: `stall-watch-disabled` stops the lane; with no
 `stall-watch-live` every rung is SHADOW (a `stall-shadow:` row and a
 `ccrc-server: stall-watch shadow` log line, nothing sent); `stall-watch-live`
 sends the notices addressed to the worker; `stall-watch-escalate` sends the
-coordinator mails and the operator pushes too. The quiet clock restarts on ANY
+coordinator mails and the operator pushes too. A level chosen in Settings
+(`/api/coord/stall-watch`) overrides the arming markers (`stall-watch-live`,
+`stall-watch-escalate`, the wave-2 one below and the mail gate's busy pair), but
+never `stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`; the markers
+still have no writer, and the choice lives in `coord.db`. The quiet clock restarts on ANY
 mail to the worker on the run that is not the watch's own, so a session that
-mails the worker there at least every 2 h keeps r1 from ever falling due. Time
+mails the worker there at least once per quiet time keeps r1 from ever falling due. Time
 the run spends outside the active states is never charged to the worker: when
 the coordinator moves it back into one (a send-back from `awaiting-review` to
 `working`, say), the quiet clock, the episode and the coordinator's 30 h start
@@ -4207,11 +4219,11 @@ guarantee that no box-token holder can keep a mail off the phone covers the
 `re stall-check:` prefix only (a reply is kept off the phone only when it is
 bound to a check); nothing limits who may mail the worker and so hold off the
 ladder. Each `re stall-check: working` reply is worker mail, so it opens a new
-episode: a worker in a long legitimate wait draws a check about every 2 h, and
+episode: a worker in a long legitimate wait draws a check about once per quiet time, and
 each one costs a worker turn and a coordinator turn. With
 `stall-watch-w2-live` and a current turn marker (below), the threshold backs
 off instead: each consecutive check answered only by `working` replies doubles
-it, to 4 h and then 8 h at most, and any other mail from the worker resets it.
+it, then doubles it again, never past 16 h, and any other mail from the worker resets it.
 Shadow cannot show that cost, because in shadow no check is sent and no reply
 comes back; once `stall-watch-live` is touched, the armed r1 rate per worker
 per day is the number to watch. While `mail-disabled` stands, the lane holds
@@ -4350,7 +4362,9 @@ queued more than 24 h ago is outside mail-stuck's read: it was reported inside
 that window, and after a server restart it is not reported again. Runbook:
 hand-classify 48 h of wave-2 `stall-shadow:` rows and `stall-watch shadow`
 lines before touching `stall-watch-w2-live` (a run-less line ends `key <n>`, and a restart or a registry flap repeats it, so count one per session, arm, rung and key; `⚠ marker`'s key re-times); `rm` it to go back to wave 1's
-ladder.
+ladder while Settings follows the fleet box's files; otherwise lower the level
+in Settings, or on the fleet box touch `mail-gate-strict` (busy delivery) or
+`stall-watch-disabled` (the whole lane).
 `ccrc uninstall` leaves `stall-watch-w2-live`, `mail-gate-busy` and
 `mail-gate-busy-shadow` in place, as it leaves every other operator switch.
 

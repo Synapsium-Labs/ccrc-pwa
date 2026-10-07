@@ -540,6 +540,13 @@ describe('the coordinator skill: linkage', () => {
       // of every session's hands. The forbid-mention case below is what turns
       // this permission-to-omit into a prohibition.
       'POST /api/coord/reclaim-pause',
+      // STALL-WATCH SETTINGS wave 1 — the operator-dial shape a third time. A
+      // coordinator told about this door would be told how to lower the watch
+      // on its own workers, or stretch their quiet time, which is the watch's
+      // own defeat. Neither half is named, for the caps reason: the read is the
+      // first half of the invitation. The forbid-mention case below forbids it.
+      'GET /api/coord/stall-watch',
+      'POST /api/coord/stall-watch',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -1593,6 +1600,12 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // writes, contains the same token).
     expect(allSkillText).not.toContain('/api/coord/reclaim-pause');
     expect(allSkillText).not.toContain('reclaim-pause');
+  });
+
+  it('never names the stall-watch settings door — a door that would tell a coordinator how to lower the watch on its own workers or stretch their quiet time', () => {
+    // Stall-watch settings wave 1, the caps dial's accounting: EXEMPT above
+    // only PERMITS the omission; this is what FORBIDS the mention.
+    expect(allSkillText).not.toContain('/api/coord/stall-watch');
   });
 
   it('never names the break door — a door the claimant is not the one to walk through', () => {

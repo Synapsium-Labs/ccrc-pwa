@@ -207,18 +207,25 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
    *  releases no wedge either — it stops a deleting lane, which is an
    *  operator's act from the phone, not a machine lane's.
    *
+   *  `/api/coord/stall-watch` (stall-watch settings wave 1): the operator's
+   *  dial on the stall watch's level and quiet time, chosen on the Settings
+   *  page. Raising it releases no wedge either, and caps' argument holds: the
+   *  box token gates machine lanes, and the PWA holds no such key. Its GET half
+   *  rides this entry as the caps read does, because this scan reads `app.post`
+   *  handlers and the two verbs share the path.
+   *
    *  A BLIND SPOT, recorded beside the set rather than papered over by widening
    *  the scanner (coordinator ruling, wave 6 item 2). `POST /api/sessions/:id/
-   *  kickoff` is the natural next member — SESSION_ONLY already holds two
-   *  (`/api/coord/caps`, `/api/coord/reclaim-pause`), so kickoff would be its
-   *  third — a coordination WRITE that is session-gated only — and it is
+   *  kickoff` is the natural next member — SESSION_ONLY already holds three
+   *  (`/api/coord/caps`, `/api/coord/reclaim-pause`, `/api/coord/stall-watch`),
+   *  so kickoff would be its fourth — a coordination WRITE that is session-gated only — and it is
    *  ABSENT here because this file scans
    *  `coord/routes.ts` alone and that route is registered in `server.ts`. Its
    *  absence is therefore not a judgement that it belongs elsewhere; it is the
    *  scanner's reach, and the difference matters: dodging a pin by placement is
    *  not being ungated, it is being unmeasured. Whoever widens the scan to
    *  `server.ts` should add it here in the same change. */
-  const SESSION_ONLY = new Set(['/api/coord/caps', '/api/coord/reclaim-pause']);
+  const SESSION_ONLY = new Set(['/api/coord/caps', '/api/coord/reclaim-pause', '/api/coord/stall-watch']);
 
   /** The two mechanisms that count as "the token was checked" — the shared
    *  helper AND the two inline `checkMailToken` sites. Hoisted because BOTH
