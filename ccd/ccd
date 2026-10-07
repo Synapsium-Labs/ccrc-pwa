@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1e67c6c15635bf5cb881ba2f733bc7d6384f1ab7e062fa12491fb67ab717f73f
+# ccrc:generated 1 sha256=c80943567173f8210777653996e5f9027d9bc6a60a9355c97302eca6e422c105
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -18962,7 +18962,7 @@ _route_retry_ok() {   # id -> 0 iff the applier may type this tick (controller r
   # silently — the note for this condition was already written by the attempt
   # that set the counter), and at the cap (say `apply-gave-up` once per floor
   # and type nothing until something clears the counter).
-  local id="$1" rec n ts now
+  local id="$1" rec n ts now said=""
   rec=$(_reg_get "$id" routetries 2>/dev/null)
   [[ -n "$rec" ]] || return 0
   n="${rec%% *}"; ts="${rec##* }"
@@ -18972,7 +18972,8 @@ _route_retry_ok() {   # id -> 0 iff the applier may type this tick (controller r
   # writable by any session on this box — attribution, not authentication). And
   # because neither guarded line can then fire, the third drops the unreadable
   # counter rather than wedging the applier on bytes it cannot read.
-  [[ "$n" =~ ^[0-9]+$ && "$n" -ge "$ROUTE_RETRY_MAX" ]] && { _route_note "$id" apply-gave-up "$(_route_pending_word "$id") after $n attempts"; return 1; }
+  [[ "${ROUTE_READBACK_SAID%% *}" == "$id" ]] && said="; transcript: ${ROUTE_READBACK_SAID#* }"   # the read-back's refusal word, this tick's and this id's only (`_route_readback`)
+  [[ "$n" =~ ^[0-9]+$ && "$n" -ge "$ROUTE_RETRY_MAX" ]] && { _route_note "$id" apply-gave-up "$(_route_pending_word "$id") after $n attempts$said"; return 1; }
   [[ "$n" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ && $((now - ts)) -ge "$ROUTE_RETRY_BACKOFF" ]] && return 0
   [[ "$n" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ ]] || { _route_tries_clear "$id"; return 0; }
   return 1
@@ -19893,6 +19894,7 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
 # operator-choice reader (`_operator_choice_read`, §5.7) and only when the
 # transcript has changed since the last look.
 ROUTE_READBACK_FRESH=1800   # seconds a usage sidecar stays a reading of the live pane: `USAGE_FRESH_S` (server/src/usage.ts), past which the fleet row calls it stale — an agreement test reds on drift
+ROUTE_READBACK_SAID=""   # `<id> <word>`: this tick's transcript refusal, set by `_route_readback` and read by `_route_retry_ok`'s `apply-gave-up` note
 ROUTE_READBACK_TAIL=4194304   # bytes from the END of the transcript the read-back reads: the ack that matters is the one a pane went idle on, which sits at the end; a pane that worked on past it rendered, and the sidecar answered while that reading was fresh
 
 _route_effort_shown() {   # level -> the word the status line, and so the usage sidecar, shows for it
@@ -20000,11 +20002,23 @@ _route_readback() {   # id -> 0 iff it recorded the pending class as already run
   # `_route_tries_clear` gives (a further attempt means something again), and
   # the marker because `apply-gave-up` read as current is a lie.
   #
+  # A CLEARED COUNTER RE-OPENS A PENDING EFFORT (review finding 9). The tries
+  # counted the CLASS's refusals, which also starved the effort arm; with the
+  # class resolved, an effort still pending is typed under a fresh budget, and
+  # an idle pane takes it THIS tick (`_route_apply_check` goes on: the pinned
+  # "TYPES the effort" case). So the line says the class took no keystroke,
+  # and names the field still pending, rather than "nothing typed".
+  #
   # ONE LINE in swap.log says what was recorded and on what reading — the
   # sidecar's, or the transcript acknowledgement's with its time and this
   # process's. `--apply` never reaches this: the operator's verb types
-  # (`cmd_route`).
-  local id="$1" want cls rd ts=- model=- effort=- uuid=- now stamp mine why="" lts=- lmodel=- ev
+  # (`cmd_route`). A transcript REFUSAL is not a line of its own — the class
+  # is still pending, and the tick's own note says so — so its word is handed
+  # to that note (`ROUTE_READBACK_SAID`, `<id> <word>`, read by
+  # `_route_retry_ok`'s `apply-gave-up`, review finding 13): each word has its
+  # own remedy, and a give-up that never names it leaves the operator guessing.
+  local id="$1" want cls rd ts=- model=- effort=- uuid=- now stamp mine why="" lts=- lmodel=- ev rest=""
+  ROUTE_READBACK_SAID=""
   want=$(_route_wanted "$id"); cls="${want%% *}"
   [[ -n "$cls" && "$cls" != default && "$cls" != "$(_route_applied_get "$id" class)" ]] || return 1
   stamp=$(_plat_mtime "$REG/$id.routeapplied" 2>/dev/null) || return 1
@@ -20024,13 +20038,14 @@ _route_readback() {   # id -> 0 iff it recorded the pending class as already run
   fi
   if [[ -z "$why" ]]; then
     ev=$(_route_readback_transcript "$id" "$cls" "$stamp" "$lts" "$lmodel")
-    [[ "$ev" =~ ^matched\ ([0-9]+)\ ([0-9]+)\ (.+)$ ]] || return 1
+    [[ "$ev" =~ ^matched\ ([0-9]+)\ ([0-9]+)\ (.+)$ ]] || { [[ "$ev" =~ ^[a-z-]{1,16}$ ]] && ROUTE_READBACK_SAID="$id $ev"; return 1; }
     why="transcript ack \"Set model to ${BASH_REMATCH[3]}\" at $(printf '%(%F %T)T' "${BASH_REMATCH[1]}"), after spawn $(printf '%(%F %T)T' "${BASH_REMATCH[2]}")"
   fi
   _route_applied_set "$id" class "$cls"
   _route_tries_clear "$id"; _route_note_clear "$id"; rm -f -- "$REG/$id.routenote"
-  echo "$(date '+%F %T') route-readback $id: class=$cls already running ($why) — recorded applied, nothing typed" >> "$REG/swap.log"
-  _route_apply_pending "$id" && return 1
+  _route_apply_pending "$id" && rest="; $(_route_pending_word "$id") still pending, typed under its own budget"
+  echo "$(date '+%F %T') route-readback $id: class=$cls already running ($why) — recorded applied without a keystroke$rest" >> "$REG/swap.log"
+  [[ -n "$rest" ]] && return 1
   return 0
 }
 

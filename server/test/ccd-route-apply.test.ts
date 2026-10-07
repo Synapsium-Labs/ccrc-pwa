@@ -1101,7 +1101,7 @@ describe('the read-back — a class the pane already runs is recorded, never typ
     expect(keys()).toEqual([]);
     const lines = swapLog().split('\n').filter((l) => l.includes(ID));
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(new RegExp(`route-readback ${ID}: class=opus already running \\(sidecar model claude-opus-5-5, effort medium, \\d+s old\\) — recorded applied, nothing typed`));
+    expect(lines[0]).toMatch(new RegExp(`route-readback ${ID}: class=opus already running \\(sidecar model claude-opus-5-5, effort medium, \\d+s old\\) — recorded applied without a keystroke$`));
     // And the loop is over: the next tick finds nothing pending and says nothing.
     h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
     expect(swapLog()).not.toContain('apply-gave-up');
@@ -1227,6 +1227,9 @@ describe('the read-back — a class the pane already runs is recorded, never typ
     h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
     expect(h.reg(ID, 'routeapplied')).toContain('class=opus');
     expect(keys()[0]).toBe('-l /effort');
+    // Review finding 9: the line no longer says "nothing typed" beside the keystrokes; it names what is left.
+    expect(swapLog()).toMatch(new RegExp(`route-readback ${ID}: class=opus already running \\(.*\\) — recorded applied without a keystroke; effort=low still pending, typed under its own budget`));
+    expect(swapLog()).not.toContain('nothing typed');
   });
 
   it('`--apply` is unchanged: the operator\'s verb types the picker whatever the sidecar says', () => {
@@ -1346,7 +1349,7 @@ describe('the read-back\'s second witness — the transcript\'s own acknowledged
     expect(keys()).toEqual([]);
     const at = h.sh(`printf '%(%F %T)T' ${ACK}`); const born = h.sh(`printf '%(%F %T)T' ${BORN}`);
     expect(readbackLines()).toEqual([expect.stringContaining(
-      `route-readback ${ID}: class=opus already running (transcript ack "Set model to Opus 5.5" at ${at}, after spawn ${born}) — recorded applied, nothing typed`)]);
+      `route-readback ${ID}: class=opus already running (transcript ack "Set model to Opus 5.5" at ${at}, after spawn ${born}) — recorded applied without a keystroke`)]);
     expect(swapLog().split('\n').filter((l) => l.includes(ID)), 'and no other line').toHaveLength(1);
     tick();
     expect(h.reg(ID, 'routeskip'), 'the next tick finds nothing pending').toBeNull();
@@ -1420,6 +1423,26 @@ describe('the read-back\'s second witness — the transcript\'s own acknowledged
     fs.appendFileSync(p, `${cmd(ACK + 1200, 'model', 'opus')}\n${ack(ACK + 1200, SESSION('Opus 5.5'))}\n`);   // Claude Code appends
     tick();
     expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
+  });
+
+  it('a refusal\'s own word reaches the operator: apply-gave-up names what the transcript said, kept or freshly read', () => {
+    // Review finding 13: before-spawn, before-stamp, other, unacked… each has its own remedy.
+    STAMP = ACK - HOUR; stampAt(STAMP);
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5'))]);
+    h.sh(`rm -f "$REG/${ID}.routenote"`);
+    tick(ACK + 60);
+    unchanged();
+    expect(swapLog()).toContain(`route-skip ${ID}: apply-gave-up (class=opus after 3 attempts; transcript: before-spawn)`);
+    h.sh(`rm -f "$REG/${ID}.routenote"`);
+    tick(ACK + 60);
+    expect(reads(), 'the kept verdict').toBe(1);
+    expect(swapLog().split('\n').filter((l) => l.includes('transcript: before-spawn'))).toHaveLength(2);
+    fs.rmSync(transcriptPath());
+    h.sh(`rm -f "$REG/${ID}.routenote"`);
+    tick(ACK + 60);
+    expect(swapLog().split('\n').filter(Boolean).at(-1)).toContain('apply-gave-up (class=opus after 3 attempts; transcript: absent)');
+    expect(h.sh(`ROUTE_READBACK_SAID="another-id before-spawn"; rm -f "$REG/${ID}.routenote"; _route_retry_ok ${ID} || :; tail -n1 "$REG/swap.log"`),
+      'another id\'s word is never borrowed').toMatch(/after 3 attempts\)$/);
   });
 
   it('a newer /model with NO recognised acknowledgement leaves the older one unbelieved: it may have changed the model', () => {
