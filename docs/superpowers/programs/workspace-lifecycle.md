@@ -21,8 +21,8 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
 | 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | #286 | merged 2026-10-06 (`77c11245`) after review 288; run 245 closed; deploy AGENT-FIRST via ccrc's updater; plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
-| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | run 290 open (planned; the run's wave 4 of 5), block 4114–4125; plan #308 (`67657ef2`); DISPATCHED 2026-10-06 22:27 to `ccrc-pwa-calm-basin`; PR #312 at `3990aaad` (wave-done 3794); review run 313 → `ccrc-pwa-brisk-basin`; the lane ships SHADOWED |
-| 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan (the run's wave 5 of 5) |
+| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | #312 | merged 2026-10-07 (`9b074208`) after review 313, no fix round; run 290 closed; block 4114–4125; plan #308 (`67657ef2`); deploy AGENT-FIRST via ccrc's updater; the lane ships SHADOWED, and arming is the operator's, after wave 4's arming blockers |
+| 4 | 4 | FIRST: review 313's residue and the lane's arming blockers; then the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server (+ pwa for the residue) | waves 2–3; child-reclamation waves 3–4 | — | run 314 open (planned; the run's wave 5 of 5), block 4348–4363; to plan |
 
 ## Decisions & deviations
 
@@ -639,6 +639,58 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     and the worker's two artifacts are copied beside it.
   - **Child reclamation's coordinator (calm-mesa) was told in mail 3796** that #312 edits CCR-15's §5.8 and the
     wave-3 qualification (ruling (F)). It landed after the push, not before it, but before any merge.
+- **2026-10-07 06:01 — wave 3b ACCEPTED and MERGED: #312 → `9b074208` (06:00:41), with no fix round.**
+  - **Review 313** (`ccrc-pwa-brisk-basin`, workflow wf_53450d64-096, 36 agents, no lens unverified) read
+    `3990aaad`. Its report is copied to `.superpowers/sdd/coordinator-evidence/run290/review-313-3990aaad.md`.
+    - Deletion safety holds on every path. Each `ws-expire` passes `capSupported` twice, the cleanup switch twice, a
+      store re-read, presence, a same-archive audit with its own token and a known instant, the live file read
+      nearest the argv, and ccd's in-lock re-proof.
+    - 3893 is closed on start, enable, ensure and swap, and ws-restore's lock spans its unarchive.
+    - Seven confirmed findings, all minor, and three refuted. All 37 mutation rows were red, and every suite in the
+      brief was green.
+  - **Why no fix round:** while shadowed, the lane composes nothing. What is left is the shadow record's fidelity
+    and wording that must be settled before arming. This is review 288's precedent: wave 3 was accepted while its
+    verb was inert, and its residue became 3b's first commit.
+  - **The merge:**
+    - #312's PR CI ran on a merge ref that already held #309, the only main commit since the branch's last merge.
+      Every required leg was green; only the macOS legs were red, and they gate nothing.
+    - `git merge-tree` was clean. It landed with `--squash --admin --match-head-commit 3990aaad`, because the
+      queue is off since Task 7's rollback.
+    - Run 290 went merging → closed final with `prPhase: merged`; its child reclaim is queued.
+    - The worker was told in 3799.
+    - Child reclamation's coordinator found no conflict in substance with run 291 (3797). Its merge-tree against
+      `ws/amber-river` conflicts only on the ccd/ccd stamp and README's `shared/api.ts` anchors, both second-lander
+      work.
+  - **RULED — wave 4's FIRST commit is review 313's residue and the arming blockers:**
+    - **Parked item 1 (ARMING BLOCKER):** a learn audit that is unreadable, or answers `archivedAt: null` (a ws-reap
+      breadcrumb's `reap-in-progress`), backs off and is reported on the expiry attention list. Learn slots go in
+      `nextAskAt` order, not registry order.
+    - **Parked item 4 (ARMING BLOCKER):** `ExpireVerbRead.failed.resumable` is carried through the outcome type
+      rather than narrowed. A wrong-row `expired`, an unknown refusal word or `probe-unmeasured` reports and stops
+      at once, never after the one-hour ceiling.
+    - **F1 (ARMING BLOCKER, the shadow record is the operator's arming evidence):** an ineligible sighting clears a
+      `would-expire` or `in-use` report as well as a `held` one, so the attention list follows the row.
+    - **F2:** the executor checks `audit.archivedAt` against the queued archive before classifying a refusal.
+    - **F3:** the `held` sentence says "past its expiry (due <instant>)" and never types seven days.
+    - **F4:** `wsExpire`'s doc comment drops "Composed by nothing in this build".
+    - **F5, ruled:** the final review's eligibleSince reset gets a continuation line in the 3b plan's Deviations
+      found, under 4117, as 4124's fix-round change did. Naming it in a brief is not the plan's record.
+    - **F6, ruled:** amend spec §6 item 6 and §5.3's "hosts a second population" sentence to the sibling pass
+      (4118) now, in the residue commit. Do not carry it further.
+    - **F7, O1, O2:** correct the 3b plan's recorded rows: T7.2 now reds 1 of 23, because the executor-side reset
+      also forgets the sighting, and T3.5 reds 4. Make 4124's main line true on its own.
+    - **Parked item 3:** coordinator clause 3 gains "when it carries no child marker", with its verbatim pin.
+  - **For the operator, before arming** (touching `$REG/expire-lane-live` by hand is the operator's act alone):
+    - (a) wave 4's first commit merged and deployed: the three blockers above;
+    - (b) the archive-confirm copy (parked item 2): both confirms say "after that it is cleaned up", which is false
+      while shadowed, under `reclaim-paused`, and on a box without `expire-v1`. It errs safe, because it overstates
+      a deletion. The coordinator's recommendation: hedge it in wave 4's residue commit to a sentence true before
+      and after arming, as the docs already are. The text is the operator's (plan Open question 1);
+    - (c) the first armed pass faces the backlog (20–22 of 30 archived rows past seven days, at one expiry a pass),
+      or raise `WS_EXPIRE_AFTER_S` first;
+    - (d) whether to end brisk-mesa's leaked test tmux server first.
+  - **Run 314 is open** (planned; the run's wave 5 of 5), with block 4348–4363 (sixteen numbers: the residue's
+    behaviour changes plus the dead-coordinator lane).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -675,26 +727,21 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
 ## Next-wave brief
 
-Waves 1 and 2 are merged (#229 `a7b9831c`, #233 `fe7b9775`). Wave 1's measurement on the server box is recorded
-above: `released_top_level` 0 and `released_wire_only` 0, and the archive→return delay does not hold stage 3. After
-wave 2's deploy converges, check that `/health` reports the merge's tag and that doctor shows 0 FAIL lines.
+Waves 1, 2, 3 and 3b are merged: #229 `a7b9831c`, #233 `fe7b9775`, #286 `77c11245` and #312 `9b074208`. The
+expiry lane ships SHADOWED: it audits archived workspaces and records "would expire", and composes no `ws-expire`
+until the operator creates `$REG/expire-lane-live` by hand.
 
-Wave 3 (the `ws-expire` verb, AGENT-FIRST) is open as run 245 (planned), with deviation numbers 3886 to 3895,
-written bare. Wave 3b (the lane) is planned after it merges.
-- **Dispatched 2026-10-05 12:41** to `ccrc-pwa-bright-canyon` (plan #252; numbers 3886–3895 and 3958–3965).
-  Wave 3b (the lane) is planned after it merges.
-- **Its plan's FIRST commit is wave 2's residue** from review 244 (`~/.cc-clips/ccrc-pwa-still-canyon/review-244-53f31389.md`):
-  - F1: `stopVerdict` reads `status` only when it is a string, and its docstring and the 3881 entry name the
-    parsed-value limit (a non-compact file diverges from ccd's grep);
-  - F2: 3881 states the main-checkout consequence of reading the config dir first, with a pin;
-  - F3: the present-but-malformed live file is named as a stricter arm in the spec, in 3881 and in the docstring.
-- **It also takes up**, or rules out, the follow-ups listed under Carried constraints:
-  - the three instrument items;
-  - the 409 detail;
-  - `already archived`;
-  - the 404 fold;
-  - fold disjointness.
-- **The operator's questions** from wave 2's plan stay open:
-  1. whether the PR sheet's "Archive now" opens ArchiveSheet;
-  2. whether the remote-mode worktree check stays deferred to `ccd`;
-  3. whether L5's "Its workers will be cleaned up" stands until wave 3.
+**Wave 4 is run 314** (planned; the run's wave 5 of 5), with numbers 4348–4363, written bare. It is to be planned
+from spec §4 wave 4 and §5.4: the dead-coordinator lane (crash-only, one hour, no successor, a circuit breaker).
+- **Its FIRST commit is review 313's residue and the lane's three arming blockers**, as ruled in the 2026-10-07 06:01
+  entry: parked items 1 and 4, then F1 to F7, O1, O2 and parked item 3. Review 313's report is
+  `.superpowers/sdd/coordinator-evidence/run290/review-313-3990aaad.md` in the coordinator's worktree.
+- **Its plan reads main as it stands after #312.** Child reclamation wave 6 (run 291, `ws/amber-river`) also edits
+  ccd/ccd, the expire tail's shared functions and README. Whichever lands second merges, re-stamps and re-points by
+  content (R56).
+- **3b's deploy is AGENT-FIRST through ccrc's updater** (the operator applies it from the console). Afterwards, check
+  that both boxes report the merge's tag and that the server's feed shows the lane's shadow rows.
+- **The operator's questions before arming** are (b)–(d) in the 06:01 entry: the confirm copy, the first armed pass or
+  `WS_EXPIRE_AFTER_S`, and brisk-mesa's tmux server.
+- **Wave 2's three operator questions stay open:** the PR sheet's "Archive now", the remote-mode worktree check, and
+  L5's sentence.
