@@ -10150,3 +10150,301 @@ describe('the tmux session-name read is bounded', () => {
     expect(fs.existsSync(stateFile())).toBe(false);
   });
 });
+
+// ── ccrc history: the hook's spool line (history spec 2026-10-05 §5.1, §5.5; W1-B1 task 29) ──
+// APPENDED, with NO new import line: an import at the top shifts every line
+// this file's citation census cites. The history modules are reached by
+// dynamic import inside the cases, the way single-definition.test.ts's tail
+// reaches the stall lane. `run`/`runFull`/`home`/`readState`/`GENERATION` are
+// this file's module-level fixture (a fixture HOME, a stub tmux answering
+// cc-demo-quiet-basin, the row's 36-byte generation file).
+describe('history spool: the hook enqueues one fenced, text-free line (spec §5.1)', () => {
+  const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+  const ID = 'demo-quiet-basin';
+  /** spec §10.1: the operator's own session must not reach the hook through
+   *  `run`'s `...process.env`. TMUX_PANE is deliberately not blanked (`run` sets '%1', which the hook needs);
+   *  every inherited CCRC_RECALL_* is blanked, per spec §10.1. */
+  const SCRUB: Record<string, string> = {
+    TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
+    ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_')).map((k) => [k, ''])),
+  };
+  const spoolDir = (): string => path.join(home, '.ccrc', 'history', 'spool');
+  const spoolFile = (id = ID): string => path.join(spoolDir(), `${id}.jsonl`);
+  const plantSpool = (): void => { fs.mkdirSync(spoolDir(), { recursive: true, mode: 0o700 }); };
+  const offSwitch = (): string => path.join(home, '.ccrc', 'history-off');
+  /** Re-point the stub tmux at an id of exactly `n` characters. */
+  const longId = (n: number): string => {
+    const id = 'a'.repeat(n);
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${id}"\n`, { mode: 0o755 });
+    return id;
+  };
+  /** Every line of the spool file, through the drain's own grammar. */
+  const parsed = async (id = ID): Promise<Array<{ ordinal: number; raw: string; rec: Record<string, unknown> | null }>> => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    return lib.splitSpoolText(fs.readFileSync(spoolFile(id), 'utf8')).map((l) => {
+      const p = lib.parseSpoolLine(l.raw);
+      return { ordinal: l.ordinal, raw: l.raw, rec: p.ok ? (p.rec as unknown as Record<string, unknown>) : null };
+    });
+  };
+  /** A BASH_ENV that strips the dynamic EPOCHREALTIME builtin (a bash variable
+   *  loses its special value once unset, for good) and, given a value, sets a
+   *  plain variable of that name — the only way to hand the hook a chosen clock. */
+  const epochEnv = (value: string | null): string => {
+    const f = path.join(home, 'epochrealtime.bash');
+    fs.writeFileSync(f, value === null ? 'unset EPOCHREALTIME\n' : `unset EPOCHREALTIME\nEPOCHREALTIME='${value}'\n`);
+    return f;
+  };
+  const PARTIAL = '{"v":1,"ev":"Sto';
+
+  it('S1: the block is builtins only — no $(, backtick, jq, sha, cat or other external — and sits below the turn marker, above the StopFailure exit', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const open = '# >>> history-spool (spec 2026-10-05 §5.1)';
+    const start = src.indexOf(open);
+    const end = src.indexOf('# <<< history-spool');
+    expect(start, 'no history-spool block in the hook').toBeGreaterThan(-1);
+    expect(src.indexOf(open, start + 1), 'two history-spool blocks').toBe(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(start, 'the block must sit below the turn marker').toBeGreaterThan(src.indexOf('_hook_turn_mark "$tmkind" || true; fi'));
+    expect(end, 'the block must sit above the StopFailure exit').toBeLessThan(src.indexOf('[[ -n "$stopfail$sessend" ]] && exit 0'));
+    const code = src.slice(start, end).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code, 'the slice holds no write: the markers moved off the block').toContain(`printf '\\n%s\\n' "$_hs"`);
+    expect(code).not.toContain('$(');
+    expect(code).not.toContain('`');
+    expect(code).not.toContain('sha');
+    const external = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|readlink|realpath|dirname|basename|env|timeout|flock|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
+    expect(code.match(external)?.[0] ?? null, 'an external command in the spool block forks on the hot path').toBeNull();
+  });
+
+  it('S2: a subagent payload (agent_id) writes no line', () => {
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: SID, agent_id: 'agent-7' }, SCRUB);
+    expect(fs.existsSync(spoolFile())).toBe(false);
+  });
+
+  it('S3: history-off silences Stop and PostCompact (CONTROL: without it both write)', async () => {
+    plantSpool();
+    fs.writeFileSync(offSwitch(), '');
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'PostCompact', trigger: 'manual', compact_summary: 'a summary', session_id: SID }, SCRUB);
+    expect(fs.existsSync(spoolFile())).toBe(false);
+    fs.rmSync(offSwitch());
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'PostCompact', trigger: 'manual', compact_summary: 'a summary', session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => l.rec?.['ev'])).toEqual(['Stop', 'PostCompact']);
+  });
+
+  it('S4: with no spool directory the hook writes nothing and creates nothing', () => {
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, SCRUB);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'history'))).toBe(false);
+  });
+
+  it('S5: a PostCompact with a 50 KB summary writes one line under SPOOL_LINE_MAX whose keys are a declared set, and no text', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    run({ hook_event_name: 'PostCompact', trigger: 'auto', compact_summary: 'S'.repeat(50_000), session_id: SID }, SCRUB);
+    const lines = await parsed();
+    expect(lines).toHaveLength(1);
+    expect(Buffer.byteLength(lines[0]!.raw)).toBeLessThan(lib.SPOOL_LINE_MAX);
+    expect(lines[0]!.raw).not.toContain('SSSS');
+    const rec = lines[0]!.rec!;
+    const keys = lib.SPOOL_KEYS['PostCompact']!;
+    for (const k of keys.required) expect(rec, k).toHaveProperty(k);
+    for (const k of Object.keys(rec)) expect([...keys.required, ...keys.optional], k).toContain(k);
+    expect(rec).toMatchObject({ v: 1, ev: 'PostCompact', id: ID, sid: SID, trig: 'auto', gen: GENERATION });
+  });
+
+  it('S5: a SessionStart(startup) line carries reg when .uuid holds a uuid, and omits it otherwise', async () => {
+    plantSpool();
+    const uuidFile = path.join(home, '.cc-sessions', `${ID}.uuid`);
+    fs.writeFileSync(uuidFile, `${SID}\n`);
+    run({ hook_event_name: 'SessionStart', source: 'startup', session_id: SID }, SCRUB);
+    fs.rmSync(uuidFile);
+    run({ hook_event_name: 'SessionStart', source: 'resume', session_id: SID }, SCRUB);
+    const [a, b] = await parsed();
+    expect(a!.rec).toMatchObject({ ev: 'SessionStart', src: 'startup', reg: SID });
+    expect(b!.rec).toMatchObject({ ev: 'SessionStart', src: 'resume' });
+    expect(b!.rec).not.toHaveProperty('reg');
+  });
+
+  it('S5: an id of SPOOL_ID_MAX chars writes a line under SPOOL_LINE_MAX; one char more writes none', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    const fits = longId(lib.SPOOL_ID_MAX);
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    const lines = await parsed(fits);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.rec).toMatchObject({ ev: 'Stop', id: fits });
+    expect(Buffer.byteLength(lines[0]!.raw)).toBeLessThan(lib.SPOOL_LINE_MAX);
+    const over = longId(lib.SPOOL_ID_MAX + 1);
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(fs.existsSync(spoolFile(over))).toBe(false);
+    // The hook spells the bound as a literal (no fork may read lib.mjs on the hot path); the two runs above,
+    // sized from the constant the drain's idOk reads, already red on any disagreement. This names the literal.
+    expect(fs.readFileSync(HOOK, 'utf8')).toContain(`(( \${#id} <= ${lib.SPOOL_ID_MAX} ))`);
+  });
+
+  it('S8: under history-off a SessionStart(clear) epoch line is still appended', async () => {
+    plantSpool();
+    fs.writeFileSync(offSwitch(), '');
+    run({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => l.rec)).toEqual([expect.objectContaining({ ev: 'SessionStart', src: 'clear', sid: SID })]);
+  });
+
+  it('S11: a Stop under set -u with trig never set writes no trig, prints nothing and exits 0', async () => {
+    plantSpool();
+    const r = runFull({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe('');
+    const [l] = await parsed();
+    expect(l!.rec).toMatchObject({ ev: 'Stop' });
+    expect(l!.rec).not.toHaveProperty('trig');
+  });
+
+  it('S11: a SessionStart whose source is x"y, fork, or absent writes no line at all', () => {
+    plantSpool();
+    run({ hook_event_name: 'SessionStart', source: 'x"y', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'SessionStart', session_id: SID }, SCRUB);
+    expect(fs.existsSync(spoolFile())).toBe(false);
+  });
+
+  it('S11: a session_id that is not a lowercase UUID drops sid from a Stop line, never the line; a SessionStart, whose grammar requires sid, writes no line at all', async () => {
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: 'not-a-uuid' }, SCRUB);
+    run({ hook_event_name: 'SessionStart', source: 'startup', session_id: 'not-a-uuid' }, SCRUB);
+    const lines = await parsed();
+    // lib.mjs SPOOL_KEYS.SessionStart requires sid (Task 5): a writer with no lowercase-UUID sid emits no
+    // SessionStart line, rather than one the drain would reject whole. `null` here is a line the drain's
+    // grammar rejects: a Stop carrying the wrong sid, or a SessionStart written without one.
+    expect(lines.map((l) => l.rec?.['ev'] ?? null), 'one Stop line, and no SessionStart line').toEqual(['Stop']);
+    expect(lines[0]!.rec).not.toHaveProperty('sid');
+  });
+
+  it('S11: a malformed generation drops gen and a malformed .uuid drops reg; the line is still written', async () => {
+    plantSpool();
+    fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), 'NOT-A-UUID\n');
+    run({ hook_event_name: 'SessionStart', source: 'startup', session_id: SID }, { ...SCRUB, CCRC_SESSION_GENERATION: 'not-a-generation' });
+    const [l] = await parsed();
+    expect(l!.rec).toMatchObject({ ev: 'SessionStart', src: 'startup', sid: SID });
+    expect(l!.rec).not.toHaveProperty('gen');
+    expect(l!.rec).not.toHaveProperty('reg');
+  });
+
+  it('S12: an unwritable spool file costs the line, never the exit status, the silence or the hookstate write', () => {
+    plantSpool();
+    fs.mkdirSync(spoolFile());   // a DIRECTORY where the file would be: `>>` cannot open it
+    const r = runFull({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(r.stderr).toBe('');
+    expect(readState().state).toBe('done');
+  });
+
+  it('S14: SessionStart(compact) and (fork) write no line; startup, resume and clear write one each, each carrying src', async () => {
+    plantSpool();
+    run({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
+    expect(fs.existsSync(spoolFile())).toBe(false);
+    for (const source of ['startup', 'resume', 'clear']) run({ hook_event_name: 'SessionStart', source, session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => [l.ordinal, l.rec?.['src']])).toEqual([[1, 'startup'], [2, 'resume'], [3, 'clear']]);
+  });
+
+  it('S17: the line is fenced — after a torn partial the next line stands alone, at the ordinal an unfenced file gives it', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    fs.writeFileSync(spoolFile(), PARTIAL);
+    run({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, SCRUB);
+    const text = fs.readFileSync(spoolFile(), 'utf8');
+    expect(text.endsWith('\n')).toBe(true);
+    const lines = lib.splitSpoolText(text);
+    expect(lines.map((l) => l.ordinal)).toEqual([1, 2]);
+    expect(lines[0]!.raw, 'the torn partial and the new line fused').toBe(PARTIAL);
+    expect(lib.parseSpoolLine(lines[0]!.raw).ok).toBe(false);
+    expect(lib.parseSpoolLine(lines[1]!.raw)).toMatchObject({ ok: true });
+    expect(lib.splitSpoolText(`${PARTIAL}\n${lines[1]!.raw}\n`).map((l) => [l.ordinal, l.raw]))
+      .toEqual(lines.map((l) => [l.ordinal, l.raw]));
+  });
+
+  it.each([
+    ['a comma decimal point', '1700000000,123456', 1700000000123],
+    ['a dot decimal point', '1700000000.123456', 1700000000123],
+    ['an empty fraction', '1700000000,', 1700000000000],
+  ] as const)('ts from EPOCHREALTIME with %s is integer milliseconds', async (_what, value, ms) => {
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: epochEnv(value) });
+    expect((await parsed())[0]!.rec).toMatchObject({ ev: 'Stop', ts: ms });
+  });
+
+  it.each([
+    ['unset', null],
+    ['malformed', 'not-a-clock'],
+    ['with a leading zero (not a JSON number)', '0.5'],
+  ] as const)('EPOCHREALTIME %s writes the line without ts (the drain stamps the receive time)', async (_what, value) => {
+    plantSpool();
+    // runFull, not run: a malformed clock also reaches the hook's pre-existing turn marker, whose jq
+    // complains on stderr; `run` would let that through to the test output.
+    runFull({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: epochEnv(value) });
+    const [l] = await parsed();
+    expect(l!.rec).toMatchObject({ ev: 'Stop', id: ID });
+    expect(l!.rec).not.toHaveProperty('ts');
+  });
+
+  // ── the drain halves: a real sweep over a real store (Linux: the sweep's carrier is systemd-only) ──
+  itLinux('S14 (drain half): a SessionStart line with no src, planted in the spool, counts spool_line_rejected at drain', async () => {
+    const hh = await import('./historyHelpers.js');
+    const store = await import('../../ccd/history/store.mjs');
+    const box = hh.makeHistoryBox('ccrc-hook-spool-reject-', { role: 'fleet' });
+    store.createStore(box.home);
+    const spool = path.join(box.home, '.ccrc', 'history', 'spool');
+    fs.mkdirSync(spool, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(spool, `${ID}.jsonl`), `\n${JSON.stringify({ v: 1, ev: 'SessionStart', id: ID, sid: SID })}\n`);
+    for (let pass = 0; pass < 2; pass += 1) {   // renamed on the first tick, drained on the next
+      const r = hh.runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+    }
+    expect(hh.counters(box)['spool_line_rejected']).toBe(1);
+  });
+
+  itLinux('S17 (drain half): the hook\'s fenced clear line after a torn partial drains and chains, keyed at ordinal 2', async () => {
+    // The bytes the HOOK wrote, in this file's fixture HOME…
+    plantSpool();
+    fs.writeFileSync(spoolFile(), PARTIAL);
+    run({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, SCRUB);
+    const bytes = fs.readFileSync(spoolFile(), 'utf8');
+    // …drained by the real sweep in a history box whose registry names the
+    // row's project and generation. NO `.uuid` row: the periodic scan's
+    // registry backfill (task 17) would map that uuid as an `import` epoch on
+    // the first tick, before this line drains — the row this case measures is
+    // the one the CLEAR line chains (confirmation is DM19's, not this pin's).
+    const hh = await import('./historyHelpers.js');
+    const store = await import('../../ccd/history/store.mjs');
+    const lib = await import('../../ccd/history/lib.mjs');
+    const box = hh.makeHistoryBox('ccrc-hook-spool-chain-', { role: 'fleet' });
+    store.createStore(box.home);
+    const reg = path.join(box.home, '.cc-sessions');
+    fs.mkdirSync(reg, { recursive: true });
+    fs.writeFileSync(path.join(reg, `${ID}.project`), 'alpha');
+    fs.writeFileSync(path.join(reg, `${ID}.generation`), GENERATION);
+    const spool = path.join(box.home, '.ccrc', 'history', 'spool');
+    fs.mkdirSync(spool, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(spool, `${ID}.jsonl`), bytes);
+    for (let pass = 0; pass < 2; pass += 1) {
+      const r = hh.runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+    }
+    const db = hh.openStoreRO(box);
+    try {
+      const epochs = db.prepare(
+        'SELECT e.cc_session_uuid AS uuid, e.cause AS cause FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE s.ccrc_id = ?',
+      ).all(ID) as Array<{ uuid: string; cause: string }>;
+      expect(epochs).toEqual([{ uuid: SID, cause: 'clear' }]);
+      const keys = db.prepare('SELECT event_key AS k FROM spool_receipts').all() as Array<{ k: string }>;
+      expect(keys).toHaveLength(1);
+      const file = (hh.journalRecords(box) as Array<Record<string, unknown>>).find((rec) => rec['k'] === 'file');
+      expect(file, 'no file record in the journal').toBeDefined();
+      expect(keys[0]!.k).toBe(lib.eventKey(String(file!['name']), 2));
+    } finally {
+      db.close();
+    }
+    expect(hh.counters(box)['spool_line_rejected']).toBe(1);
+  });
+});

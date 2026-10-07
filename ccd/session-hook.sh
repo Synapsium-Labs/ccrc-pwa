@@ -3020,6 +3020,75 @@ if [[ -z "$paid" && -e "$REG/$id.generation" ]]; then
   esac
   if [[ -n "$tmkind" ]]; then hts="${hcat:-$(_hook_epoch_ms)}"; _hook_turn_mark "$tmkind" || true; fi
 fi
+# >>> history-spool (spec 2026-10-05 §5.1)
+# THE HISTORY SPOOL LINE (ccrc history spec 2026-10-05 §5.1, W1-B1): one fenced,
+# text-free JSON line appended to ~/.ccrc/history/spool/<id>.jsonl, which
+# ccd-history-sweep drains on its next tick. HERE, below the turn marker and
+# above the StopFailure exit and the hookstate write, so neither a failed
+# hookstate write nor compact-card-off can cost the line. Like the turn marker,
+# it is in the tail because nothing new may land above :2900.
+#
+# BUILTINS ONLY, ON THE HOT PATH: no command substitution, no jq, no fork of
+# any kind — `_ct_read` is a builtin `read -N` that sets CT_V, so it is called
+# bare. Every value is one this hook already sanitised (`$id`, `$psid`) or a
+# whitelisted literal, so nothing needs escaping; an optional field that fails
+# its whitelist is left out, never written wrong.
+#
+# GATES: the main thread only (`$paid`); the spool directory must already exist
+# — the hook never creates it, so a box with no store writes nothing; the id fits
+# SPOOL_ID_MAX = 224, so `.draining/<id>.<ms>.<pid>.jsonl` fits a 255-byte name.
+# The off-switch silences Stop and PostCompact and never the SessionStart epoch
+# lines D-4252. Only startup, resume and clear are
+# spooled D-4253: compact exited in its arm, and
+# fork and any other source write nothing D-4173. A
+# SessionStart line declares its epoch's sid, which lib.mjs SPOOL_KEYS requires,
+# so without a lowercase-UUID sid none is written at all. A
+# startup or resume line carries `reg`, this hook's own read of `.uuid`
+# D-4175. No summary hash rides the
+# line D-4177.
+#
+# THE FENCE: `\n<json>\n` in one write(2) on an O_APPEND descriptor, so a short
+# write under a full disk leaves a torn line the next append cannot fuse with
+# D-4176. The braces put the redirection's own failure
+# under 2>/dev/null (the note at the hookstate write below), and `|| true`
+# keeps exit 0 on every path.
+_hs="" _hs_g="" _hs_s="" _hs_f=""
+if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" ]] && (( ${#id} <= 224 )); then
+  case "$event" in
+    Stop) [[ -e "$HOME/.ccrc/history-off" ]] || _hs='{"v":1,"ev":"Stop"' ;;
+    PostCompact) [[ -e "$HOME/.ccrc/history-off" ]] || _hs='{"v":1,"ev":"PostCompact"' ;;
+    SessionStart) [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && case "$src" in startup|resume|clear) _hs='{"v":1,"ev":"SessionStart"' ;; esac ;;
+  esac
+  if [[ -n "$_hs" ]]; then
+    _hs+=",\"id\":\"$id\""
+    # `$psid` is only cleaned to [A-Za-z0-9_-] at :2767, and the drain's grammar wants a lowercase UUID.
+    # On Stop and PostCompact a non-UUID sid is left out and the line stands without it, never written
+    # wrong. A SessionStart line exists to declare its epoch's sid, so lib.mjs SPOOL_KEYS requires one:
+    # its arm above writes nothing at all without a lowercase-UUID sid, so this test is always true there.
+    [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && _hs+=",\"sid\":\"$psid\""
+    if [[ "$event" == SessionStart ]]; then
+      _hs+=",\"src\":\"$src\""
+      if [[ "$src" != clear ]] && _ct_read "$REG/$id.uuid" \
+        && [[ "$CT_V" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+        _hs+=",\"reg\":\"$CT_V\""
+      fi
+    fi
+    case "${trig:-}" in manual|auto) _hs+=",\"trig\":\"$trig\"" ;; esac
+    _hs_g="${CCRC_SESSION_GENERATION:-}"
+    [[ "$_hs_g" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && _hs+=",\"gen\":\"$_hs_g\""
+    # `_hook_epoch_ms`'s parameter-expansion form, inline (that function forks
+    # `date` when EPOCHREALTIME is unset). Either decimal point, since the
+    # locale formats it; a value that is not `<1-13 digits, no leading 0>[.,]<digits>`
+    # writes no `ts`, and the drain stamps the receive time instead.
+    if [[ "${EPOCHREALTIME:-}" =~ ^[1-9][0-9]{0,12}[.,][0-9]*$ ]]; then
+      _hs_s="${EPOCHREALTIME%%[.,]*}" _hs_f="${EPOCHREALTIME#*[.,]}000"
+      _hs+=",\"ts\":${_hs_s}${_hs_f:0:3}"
+    fi
+    _hs+='}'
+    { printf '\n%s\n' "$_hs" >> "$HOME/.ccrc/history/spool/$id.jsonl"; } 2>/dev/null || true
+  fi
+fi
+# <<< history-spool
 # StopFailure (§5.1) leaves hookstate.json alone and prints nothing: its arm raised
 # the flag and read `err` for the marker above (stopfailure-sets-a-flag (D-3611)), and nothing
 # below may run for it. SessionEnd is a termination hint, captured above in a -hookcap session and otherwise inert.
