@@ -214,7 +214,8 @@ The wire field is named for what it carries: `released` is already a member of `
 undone.
 
 1. **Measure, refuse nothing irreversible yet.**
-   - The id is safe and known.
+   - The id is safe and known. A registry that cannot be listed refuses `503 registry-unmeasurable`, never
+     `404 unknown-session`.
    - The row is read.
    - Busy is read from the same live state the fleet frame uses: `status`/`hookState`, re-read on the request, for
      both kinds of row. Without `interrupt:true`, a busy row refuses `409 session-busy`. Busy is one L0 predicate,
@@ -243,7 +244,7 @@ undone.
    - The `run-open` check on the session as a WORKER runs as today, with its `force` bypass.
    - The `claimedBy` check: if the session is the claimant of any non-terminal run, the door refuses
      `409 coordinator-has-open-runs` with those runs unless `programme:'end'`.
-   - An unreadable store refuses with `runs: []`, fail-shut.
+   - An unreadable store refuses with `runs: []`, fail-shut, and the refusal carries the store's own `detail`.
 2. **Then act, in this order.**
    - (a) With `programme:'end'`, each run is abandoned through `closeRun`'s abandon arm (`intent:'abandon'`,
      `causedBy:'operator'`), on the coordination serialiser, with CCR-15 wave 3's `childReclaim` port wired exactly
@@ -255,7 +256,8 @@ undone.
    - (b) With `interrupt:true`, or for a main checkout, it runs the stop argv `/stop` already builds:
      `CCD_ARGV.stopId(id, surface)` or `stopPair`, with `--surface` only where ccd's capability allows it.
    - (c) For a workspace, it runs `ws-archive`. A `session-busy` from ccd (a race after the live read) maps to
-     `409 session-busy`.
+     `409 session-busy`. `ws-archive` answering `already archived` over a pane tmux still proves up stops that pane
+     with `/stop`'s argv and answers `stopped: true`; a pane gone, or one tmux cannot be asked about, answers as before.
 3. **Partial outcome.** If (b) succeeded and (c) refused, the door answers `200 { archived: false, stopped: true,
    refusal }`. The row is then a stopped, unarchived workspace. It stays visible at the top level with its reason
    and offers Archive again, and "Stop only" is moot. Nothing is hidden, nothing is lost. Any refusal or failure
@@ -411,7 +413,8 @@ and the README and `wave-lifecycle.md` §6 text above are wave 3b's, planned aft
   an interrupted expiry and re-asserts the archive epoch is `ws-expire`'s own. `ws-expire` refuses a row
   with a child marker, so an `expire:` breadcrumb stands only on an unmarked row; `ws-reclaim`, which runs only on
   children, never meets one in practice, and answers it `reap-in-progress` wherever it does, as it answers every
-  breadcrumb not its own.
+  breadcrumb not its own. A `.reaping` that stands on an ARCHIVED row but cannot be read refuses `reaping-phase-unknown`
+  instead of falling through to the fresh arm, as the spawn gate and `ws-expire`'s fork already read such a file.
 - **A return during an expiry refuses, on every path.** Measured: before this wave no spawn path honoured a breadcrumb,
   and only `ws-restore` took the reap lock. `start`, `ensure` and `swap` now refuse an `expire:` breadcrumb — and, for
   an archived row, a held reap lock — before they journal their act (a refused return must not read as a return to
@@ -461,6 +464,10 @@ each item is a departure named there).
 - **A standing `in-use` is expected.** It is asked again every pass and, after a few, listed with the pid, its command
   and its path; the text never tells an operator to end a pid without naming what it is (the fleet's own tmux server is
   also a `tmux: server`). The lane never kills.
+- **The attention list is the lane's own memory.** Child reclamation derives its list from the lifecycle mirror alone; the
+  expiry's entries (a shadow `would-expire`, a `held` row past its instant, a standing `in-use`, a refusal, a failure, no
+  evidence) are mostly never journaled, so the lane lists them from its own passes and a restart rebuilds the list over
+  the next ones, which can delay an expiry and never cause one.
 
 ### 5.4 Stage 4 — the dead-coordinator lane (L4)
 
