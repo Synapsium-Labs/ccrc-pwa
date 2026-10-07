@@ -347,7 +347,9 @@ export type ExpiryReport =
   | { readonly kind: 'held'; readonly at: number; readonly reason: string }
   | { readonly kind: 'in-use'; readonly at: number; readonly inUse: readonly ExpireInUse[]; readonly passes: number }
   | { readonly kind: 'refused'; readonly at: number; readonly token: ExpireToken; readonly detail: string }
-  | { readonly kind: 'failing'; readonly at: number; readonly detail: string }
+  /** `final`: the row is not asked again for this archive — a composition error, or a failure the box said will not
+   *  resume — so its sentence never promises a retry. Absent on a failure that is still being retried. */
+  | { readonly kind: 'failing'; readonly at: number; readonly detail: string; readonly final?: true }
   | { readonly kind: 'no-evidence'; readonly at: number };
 
 export const archivedExpiryEntry = (archivedAt: number): ArchivedExpiryEntry => ({
@@ -424,7 +426,10 @@ export type ArchivedExpiryOutcome =
        *  an earlier instant (the threshold was raised: §9's lever) is learned afresh, never re-asked every pass. */
       readonly auditExpiresAt?: number | null }
   | { readonly kind: 'gone' }
-  | { readonly kind: 'failed'; readonly detail: string }
+  /** `resumable` is the box's own answer (`ExpireVerbRead.failed.resumable`), CARRIED, never narrowed (review 313,
+   *  parked item 4): `false` — a wrong-row `expired`, a refusal word this build does not know, `probe-unmeasured` — is
+   *  not something waiting cures, so the row is reported and not asked again for this archive. */
+  | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string }
   | { readonly kind: 'box'; readonly word: ExpireBoxWord; readonly detail: string }
   | { readonly kind: 'composition'; readonly detail: string }
   | { readonly kind: 'no-evidence' };
@@ -504,6 +509,12 @@ export function archivedExpiryNextEntry(
       return { ...base, ...steady, nextAskAt: nowMs + passMs, report: null };
     }
     case 'failed': case 'box': {
+      if (o.kind === 'failed' && !o.resumable) {
+        // The box said this will not resume: reported AT ONCE and never asked again for this archive — never an hour
+        // of retries before anyone hears of it (review 313, parked item 4).
+        return { ...base, ...steady, nextAskAt: Number.POSITIVE_INFINITY,
+          report: { kind: 'failing', at: nowMs, detail: o.detail, final: true } };
+      }
       // `flock-unavailable` is the BOX's, and the lane stops asking that box at all (`watch.ts`); for the row it is
       // a failure like `lock-unopenable`, backed off and reported past the ceiling.
       const failures = entry.failures + 1;
@@ -515,7 +526,7 @@ export function archivedExpiryNextEntry(
     }
     case 'composition':
       return { ...base, ...steady, nextAskAt: Number.POSITIVE_INFINITY,
-        report: { kind: 'failing', at: nowMs, detail: `the server composed a call ccd rejected: ${o.detail}` } };
+        report: { kind: 'failing', at: nowMs, detail: `the server composed a call ccd rejected: ${o.detail}`, final: true } };
   }
 }
 
@@ -546,7 +557,9 @@ export function expiryReportSentence(r: ExpiryReport, expiresAt: number | null):
       return `held (“${r.reason}”) past its seven days, so it is not cleaned up — release the hold or restore it.`;
     case 'in-use': return expiryInUseSentence(r.inUse, r.passes);
     case 'refused': return `not cleaned up: ccd refused (${r.token}) — ${r.detail === '' ? 'no detail' : r.detail}`;
-    case 'failing': return `cleanup keeps failing: ${r.detail}. It is retried, backing off in between.`;
+    case 'failing':
+      return r.final === true ? `cleanup stopped: ${r.detail}. It is not asked again for this archive.`
+        : `cleanup keeps failing: ${r.detail}. It is retried, backing off in between.`;
     case 'no-evidence':
       return 'not cleaned up: the fleet box’s ccd does not say when this archive expires (an older build), so the '
         + 'server composes nothing for it until the box is updated.';

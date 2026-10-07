@@ -130,6 +130,25 @@ describe('the one executor', () => {
     expect(s.verbs()).toEqual(['ws-audit']);
   });
 
+  it('a failure the box says will not resume is carried as such, never narrowed to a retryable one (review 313, parked item 4)', async () => {
+    const cases: [number, string, boolean][] = [
+      [0, JSON.stringify({ expired: 'demo-other', archivedAt: ARCH, wip: null }), false],
+      [0, JSON.stringify({ refused: 'a-word-a-newer-ccd-says', detail: '' }), false],
+      [1, JSON.stringify({ failed: 'probe-unmeasured', detail: 'ps is missing' }), false],
+      [1, JSON.stringify({ failed: 'pin-failed', detail: 'the attic pin failed' }), true],
+    ];
+    for (const [code, stdout, resumable] of cases) {
+      const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) }, verb: { code, stdout } } });
+      const out = await expireArchived(s.deps, s.req);
+      expect(out, stdout).toMatchObject({ kind: 'failed', resumable });
+      recordExpireFeed(s.deps, out);
+      expect(s.coord.feedEvents(10)[0]!.body, stdout).toContain(resumable ? 'It is retried' : 'It is not retried');
+    }
+    const unread = await rig({ script: { audit: { code: 1, stdout: auditDoc('unmeasured') } } });
+    expect(await expireArchived(unread.deps, unread.req), 'an audit that measured nothing is retried')
+      .toMatchObject({ kind: 'failed', resumable: true });
+  });
+
   it('a refusal at audit carries its word — in-use with the processes; a GONE word is gone', async () => {
     const inUse = [{ pid: 7, comm: 'tmux: server', cwd: '/w' }];
     const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('in-use', { detail: 'process 7 …', inUse }) } } });

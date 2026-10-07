@@ -13,7 +13,7 @@ import {
   EXPIRE_FAILURE_CEILING_MS, EXPIRE_IN_USE_ATTENTION_PASSES, EXPIRE_LANE_LIVE_MARKER, EXPIRE_NO_EVIDENCE_RETRY_MS,
   EXPIRE_SHADOW_REAUDIT_MS, EXPIRE_TOKEN_KIND, archivedExpiryDue, archivedExpiryEntry, archivedExpiryEntryFor,
   archivedExpiryLearned, archivedExpiryNextEntry, archivedExpirySighted, archivedExpiryVerdict, expireAuditExpiresAt,
-  expireTokenKind, expiryAttention, expiryInUseSentence, parseExpireAudit, parseExpireResult, reviewKeeps,
+  expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, parseExpireAudit, parseExpireResult, reviewKeeps,
   type ArchivedExpiryEntry, type ArchivedExpiryInput,
 } from '../src/archivedExpiry.js';
 
@@ -340,11 +340,24 @@ describe('the lane’s memory of one row', () => {
 
   it('a failure backs off, and is reported once the run of failures has lasted the ceiling', () => {
     let x = e();
-    x = archivedExpiryNextEntry(x, { kind: 'failed', detail: 'pin-failed' }, NOW, PASS)!;
+    x = archivedExpiryNextEntry(x, { kind: 'failed', resumable: true, detail: 'pin-failed' }, NOW, PASS)!;
     expect(x.nextAskAt).toBe(NOW + 2 * PASS);
     expect(x.report).toBeNull();
-    x = archivedExpiryNextEntry(x, { kind: 'failed', detail: 'pin-failed' }, NOW + EXPIRE_FAILURE_CEILING_MS, PASS)!;
+    x = archivedExpiryNextEntry(x, { kind: 'failed', resumable: true, detail: 'pin-failed' }, NOW + EXPIRE_FAILURE_CEILING_MS, PASS)!;
     expect(x.report).toMatchObject({ kind: 'failing', at: NOW });
+  });
+
+  it('a failure the box says will NOT resume stops at once: reported, never asked again for this archive (review 313, parked item 4)', () => {
+    // `ExpireVerbRead.failed.resumable` is carried through the outcome, never narrowed: a wrong-row `expired`, a word
+    // this build does not know, or `probe-unmeasured` is not something waiting cures — no hour of retries first.
+    const detail = 'ws-expire reported expiring demo-other, not demo-quiet-dune';
+    const x = archivedExpiryNextEntry(e(), { kind: 'failed', resumable: false, detail }, NOW, PASS)!;
+    expect(x.nextAskAt).toBe(Number.POSITIVE_INFINITY);
+    expect(x.report).toEqual({ kind: 'failing', at: NOW, detail, final: true });
+    expect(expiryReportSentence(x.report!, null)).toBe(`cleanup stopped: ${detail}. It is not asked again for this archive.`);
+    const c = archivedExpiryNextEntry(e(), { kind: 'composition', detail: 'bad token' }, NOW, PASS)!;
+    expect(expiryReportSentence(c.report!, null), 'a composition error is never retried either, and says so')
+      .toBe('cleanup stopped: the server composed a call ccd rejected: bad token. It is not asked again for this archive.');
   });
 
   it('a box word is reported at once — flock-unavailable will not pass by waiting', () => {

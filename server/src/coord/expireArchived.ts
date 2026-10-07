@@ -81,7 +81,7 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
   }
   // 5 — the audit, and the threshold through its one reader.
   const audit = await expireAudit(deps, sessionId);
-  if (audit.kind === 'unreadable') return answer({ kind: 'failed', detail: audit.detail });
+  if (audit.kind === 'unreadable') return answer({ kind: 'failed', resumable: true, detail: audit.detail });
   if (audit.expiresAt.kind === 'absent') return answer({ kind: 'no-evidence' });
   if (audit.verdict.kind === 'refused') {
     const { token, detail } = audit.verdict;
@@ -108,7 +108,7 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
     case 'refused':
       return EXPIRE_TOKEN_KIND[verb.token] === 'gone' ? answer({ kind: 'gone' })
         : answer({ kind: 'refused', token: verb.token, detail: verb.detail, inUse: [] });
-    case 'failed': return answer({ kind: 'failed', detail: verb.detail });
+    case 'failed': return answer({ kind: 'failed', resumable: verb.resumable, detail: verb.detail });
     case 'box': return answer({ kind: 'box', word: verb.word, detail: verb.detail });
     case 'composition': return answer({ kind: 'composition', detail: verb.detail });
   }
@@ -229,7 +229,8 @@ export function expireFeedBody(r: ExpireArchivedResult): string {
     case 'deferred': return `${who}: deferred (${r.why}) — ${r.detail}.`;
     case 'refused': return `${who}: ccd refused (${r.token}) — ${r.detail}`;
     case 'gone': return `${who} left the archive before it was cleaned up.`;
-    case 'failed': return `${who}: failed — ${r.detail}. It is retried, backing off in between.`;
+    case 'failed': return `${who}: failed — ${r.detail}. ${r.resumable ? 'It is retried, backing off in between.'
+      : 'It is not retried: the box said it will not resume, so the lane stops asking for this archive.'}`;
     case 'box': return `${who}: the fleet box refused before it started (${r.word}) — ${r.detail}.`;
     case 'composition': return `${who}: ccd rejected the call this server composed — ${r.detail}. It is not retried.`;
     case 'no-evidence': return `${who}: the fleet box's ccd does not say when this archive expires; nothing was composed.`;

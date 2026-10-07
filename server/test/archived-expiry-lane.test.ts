@@ -143,6 +143,20 @@ describe('learning: slots in nextAskAt order, an unlearnable row backed off and 
   });
 });
 
+describe('a failure that will not resume (review 313, parked item 4)', () => {
+  it('a wrong-row `expired` is reported at once and never asked again for this archive — not after an hour', async () => {
+    const f = await fixture({ expire: () => ({ code: 0, stdout: JSON.stringify({ expired: 'demo-other', archivedAt: OLD, wip: null }), stderr: '' }) });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.expiryAttention?.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'failing']]);
+    for (let k = 0; k < 70; k += 1) { f.next(); await f.pass(); }   // well past the one-hour ceiling
+    expect(f.verbsFor('ws-expire'), 'stopped, never retried').toEqual(['demo-a']);
+  });
+});
+
 describe('the lane SHIPS SHADOWED', () => {
   it('without `expire-lane-live`, a due row is audited and RECORDED — and ws-expire is never composed, however long', async () => {
     const f = await fixture();
