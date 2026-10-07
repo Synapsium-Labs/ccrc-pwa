@@ -257,7 +257,7 @@ undone.
      `CCD_ARGV.stopId(id, surface)` or `stopPair`, with `--surface` only where ccd's capability allows it.
    - (c) For a workspace, it runs `ws-archive`. A `session-busy` from ccd (a race after the live read) maps to
      `409 session-busy`. `ws-archive` answering `already archived` over a pane tmux still proves up stops that pane
-     with `/stop`'s argv and answers `stopped: true`; a pane gone, or one tmux cannot be asked about, answers as before.
+     with `/stop`'s argv, only when the turn, re-read at the act, is idle, and answers `stopped: true`; a pane gone, or one tmux cannot be asked about, answers as before.
 3. **Partial outcome.** If (b) succeeded and (c) refused, the door answers `200 { archived: false, stopped: true,
    refusal }`. The row is then a stopped, unarchived workspace. It stays visible at the top level with its reason
    and offers Archive again, and "Stop only" is moot. Nothing is hidden, nothing is lost. Any refusal or failure

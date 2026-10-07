@@ -461,7 +461,11 @@ export function archivedExpiryNextEntry(
     case 'no-evidence':
       return { ...base, ...steady, expiresAt: null, nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS, report: { kind: 'no-evidence', at: nowMs } };
     case 'deferred':
-      return { ...base, ...steady, nextAskAt: nowMs + passMs, report: null };
+      // A pause or a missing verb the EXECUTOR saw (its own registry listing, its own caps read) is one the tick's
+      // listing may never have shown — a switch raised and lowered inside one cadence window — so the sighting from
+      // before it is forgotten here too: a lowered switch needs two FRESH passes, whoever saw it.
+      return { ...base, ...steady, nextAskAt: nowMs + passMs, report: null,
+        ...(o.why === 'paused-at-server' || o.why === 'unsupported' ? { eligibleSince: null } : {}) };
     case 'refused': {
       const kind = EXPIRE_TOKEN_KIND[o.token];
       if (kind === 'gone') return null;

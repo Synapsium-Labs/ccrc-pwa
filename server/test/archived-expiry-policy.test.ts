@@ -282,6 +282,18 @@ describe('the lane’s memory of one row', () => {
     expect(unknown.expiresAt, 'no instant given: learned afresh').toBeNull();
   });
 
+  it('a pause or a missing verb only the EXECUTOR saw forgets the sighting; any other deferral keeps it', () => {
+    // The tick's listing forgets sightings when it shows `reclaim-paused`; a switch raised and lowered inside one
+    // cadence window is seen by the executor alone, and must forget them too — a lowered switch needs two FRESH passes.
+    for (const why of ['paused-at-server', 'unsupported'] as const) {
+      const x = archivedExpiryNextEntry(e(), { kind: 'deferred', why, detail: 'd' }, NOW, PASS)!;
+      expect(x.eligibleSince, why).toBeNull();
+      expect(x.nextAskAt, why).toBe(NOW + PASS);
+    }
+    expect(archivedExpiryNextEntry(e(), { kind: 'deferred', why: 'open-run', detail: 'd' }, NOW, PASS)!.eligibleSince,
+      'a deferral the box did not raise keeps its sighting').toBe(NOW - PASS);
+  });
+
   it('in-use is asked again every pass, and REPORTED once it has stood the bounded number of passes', () => {
     const inUse = [{ pid: 7, comm: 'tmux: server', cwd: '/w' }];
     let x = e();
