@@ -2228,6 +2228,23 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     }
     expect(named, 'the scan found no verb to check: the pin would pass on anything').toBeGreaterThan(5);
   });
+  // FR3 fix round 1 (F1/F2): a plain cp into history.db is peeked by the 2-minute sweep half-copied (decideStoreOpen reads a non-empty DB with a
+  // store.id as `open`), lands 0644, skips --restore's journal replay and then makes --restore/--rebuild refuse. B1 tells the operator to wait.
+  it('no store-loss remedy offers copying a backup over history.db: it says capture stays held, the journal keeps the data, and do not copy (FR3 round 1)', () => {
+    const texts: Array<[string, string]> = ['store-missing', 'store-zero-byte', 'store-schema-missing'].map((w) => [`static ${w}`, healthLib.HEALTH_REMEDIES[w]!]);
+    for (const reason of ['store-missing', 'store-zero-byte', 'store-schema-missing'] as const) {
+      for (const o of [{ exit: 5, reason }, { exit: 5, reason, backupsDb: ['20261001T000000Z.db'] }]) {
+        for (const i of healthLib.deriveHealth(base(o)).fail) texts.push([`derived ${reason}${o.backupsDb ? ' with a backup' : ''}`, i.remedy]);
+      }
+    }
+    expect(texts.length).toBeGreaterThan(5);
+    for (const [what, t] of texts) {
+      expect(t, `${what} offers the by-hand copy`).not.toMatch(/can be copied to history\.db/);
+      expect(t, `${what} must say capture stays held`).toContain('capture stays held');
+      expect(t, `${what} must say the journal keeps the drained data`).toContain('journal keeps everything drained');
+      expect(t, `${what} must say not to copy a backup over history.db`).toContain('do not copy a backup over history.db by hand');
+    }
+  });
   it('export-overdue tells the operator what a B1 build can do: keep the store and raise cleanupPeriodDays (FR3-d)', () => {
     const r = healthLib.HEALTH_REMEDIES['export-overdue']!;
     expect(r).toContain('cleanupPeriodDays');

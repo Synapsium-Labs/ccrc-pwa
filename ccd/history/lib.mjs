@@ -2143,14 +2143,14 @@ export const HEALTH_REMEDIES = Object.freeze({
   'store-unmeasured': 'make store.id, store.id.pending, store.writer and the DB under ~/.ccrc/history readable by this user; nothing is created, adopted or restored meanwhile',
   'recovery-stalled': `read the sweep: ${SWEEP_LOG}`,
   'store-root-dangling': `mount the volume behind ~/${STORE_DB_REL}, or remove the dangling link so the next tick stores on the home filesystem`,
-  'store-missing': `ccrc history doctor --restore and --rebuild arrive with W1-B2; until then capture stays held, and a backup under ~/${STORE_DB_REL}/backups can be copied to history.db by hand`,
+  'store-missing': `ccrc history doctor --restore and --rebuild arrive with W1-B2; until then capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`,
   'store-mismatch': 'this DB belongs to another store (its meta.store_id is not store.id): put the right DB back, or move this one aside',
   'store-unbound': `if the store is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place: ccrc history doctor --adopt, which binds it, arrives with W1-B2 and capture stays held until then`,
   'store-unreachable': `the store's filesystem did not answer: check the mount behind ~/${STORE_DB_REL}`,
   'store-recoverable': 'ccrc history doctor --restore and --rebuild, which recover from what was found, arrive with W1-B2: keep that evidence until then, or move it aside to start a new store',
   'store-wal-orphaned': 'move history.db-wal and history.db-shm (and any history.db) aside together; then let the next tick create a store, or restore one',
-  'store-zero-byte': `the DB was truncated: move it aside (keep it); ccrc history doctor --restore and --rebuild arrive with W1-B2, and until then a backup under ~/${STORE_DB_REL}/backups can be copied to history.db by hand`,
-  'store-schema-missing': `the DB has no meta.store_id, so it is not a history store this build can bind: move all three DB files aside together (keep them); ccrc history doctor --restore and --rebuild arrive with W1-B2, and until then a backup under ~/${STORE_DB_REL}/backups can be copied to history.db by hand`,
+  'store-zero-byte': `the DB was truncated: keep it where it is; ccrc history doctor --restore and --rebuild arrive with W1-B2, and until then capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`,
+  'store-schema-missing': `the DB has no meta.store_id, so it is not a history store this build can bind: keep all three DB files where they are; ccrc history doctor --restore and --rebuild arrive with W1-B2, and until then capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`,
   'migration-refused': 'free space on the store\'s filesystem: the pre-migration snapshot needs a store\'s size above the floor',
   'migration-needs-op': 'run the migration by hand, under no carrier timeout: ~/.local/bin/ccd-history-sweep --op migrate (ccrc history doctor --migrate arrives with W1-B2)',
   'journal-unwritable': 'free space on the home filesystem, or make ~/.ccrc/history/journal writable: drained spool files are held until the journal append succeeds',
@@ -2197,8 +2197,8 @@ function remedyFor(word, h) {
       return `mount the volume behind ${h.dbPath}, or remove the dangling link ~/${STORE_DB_REL} so the next tick stores on the home filesystem`;
     case 'store-missing':
       return h.backupsDb.length > 0
-        ? `ccrc history doctor --restore ${h.backupsDb[0]} and --rebuild arrive with W1-B2 (db/backups holds ${h.backupsDb.join(', ')}); until then capture stays held, and a backup there can be copied to history.db by hand`
-        : 'ccrc history doctor --rebuild, which rebuilds from the journal, arrives with W1-B2; until then capture stays held';
+        ? `ccrc history doctor --restore ${h.backupsDb[0]} and --rebuild arrive with W1-B2 (db/backups holds ${h.backupsDb.join(', ')}; keep them); until then capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`
+        : 'ccrc history doctor --rebuild, which rebuilds from the journal, arrives with W1-B2; until then capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)';
     case 'store-unbound':
       return `if store ${h.storeId ?? '(unknown)'} is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place: ccrc history doctor --adopt, which binds it, arrives with W1-B2 and capture stays held until then`;
     case 'store-recoverable':
