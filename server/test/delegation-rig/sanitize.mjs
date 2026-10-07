@@ -45,7 +45,8 @@
 //   - A `..` segment is caught only at the string's START or right after a `/` (DOTDOT is `/(^|\/)\.\.(\/|$)/`). A `..` anywhere else -- after a
 //     space, `=`, a quote... (`x ../srv/acme`, `x=../srv/acme`, `"../srv/acme"` inside a longer string, `x ..`) -- is not, and the `/`
 //     behind it follows a `.`, the glued-slash limit above, so the path after it is not scanned either. The committed corpus holds such strings:
-//     raw-worktree's own ` ../raw-wt` (18 of them in 9 files at the time of writing), the rig's relative path to its own raw worktree,
+//     raw-worktree's own ` ../raw-wt` (two in each version's `raw-worktree.json`: 18 in 9 files at `c51428ae8`, 20 in 10 once `3cad0d2cd`
+//     added 2.1.292), the rig's relative path to its own raw worktree,
 //     so closing this limit means respelling that command and re-capturing, which the versions no longer installed cannot do.
 //   - MUNGED_FOREIGN is a DENYLIST of tops, not a class: a munged foreign path is caught only when its top is one of `home mnt tmp
 //     srv opt var root Users private proc` (case-sensitive), so `-data-…`, `-media-…` and `-Home-…` pass. Inside an allowed `/rig`
