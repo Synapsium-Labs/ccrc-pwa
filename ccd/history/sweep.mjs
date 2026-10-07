@@ -124,9 +124,11 @@ function capText(capPath) {
 //   opened.
 // - Only this sweep writes here, under the shim's flock.
 
-/** A journal append, its fsync, or a month file's creation that did not complete. The caller keeps the draining
+/** A journal append, its fsync, or a month file's creation that did not complete, or a failed write of the
+ *  observation sidecar that precedes it (D-4338, history-sidecar-write-failure-holds: the sidecar lives on the same
+ *  home filesystem as the journal, so a full one fails it first and it is the same hold). The caller keeps the draining
  *  file in `.draining/` and runs no drain transaction for it (§9.2 "Journal first"). A verdict stays in the outbox.
- *  `code` is a closed word ('bad-name' | 'short-write' | 'append-failed'), never an OS message. */
+ *  `code` is a closed word ('bad-name' | 'short-write' | 'append-failed' | 'sidecar-failed'), never an OS message. */
 export class JournalError extends Error {
   constructor(code, cause) {
     super(`journal: ${code}`, cause === undefined ? undefined : { cause });
@@ -358,17 +360,24 @@ function readSidecar(path) {
 /** Temp, fsync, rename, fsync the directory. The temp is `<sidecar>.tmp` (254 bytes at the bound), so no longer
  *  suffix fits. One lock holder at a time, so one temp name is enough. */
 function writeSidecar(path, obs) {
-  const tmp = `${path}.tmp`;
-  const fd = openSync(tmp, 'w', 0o600);
+  // D-4338 (history-sidecar-write-failure-holds): any failure to write the sidecar (ENOSPC, a short write, a failed
+  // rename or fsync) is the journal-unwritable hold, a JournalError, never a plain Error that fails the pass every
+  // tick before ingest. The files stay held, and the next tick writes the sidecar again.
   try {
-    const buf = Buffer.from(JSON.stringify(obs), 'utf8');
-    if (writeSync(fd, buf) !== buf.length) throw new Error('sidecar: short write');
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+    const tmp = `${path}.tmp`;
+    const fd = openSync(tmp, 'w', 0o600);
+    try {
+      const buf = Buffer.from(JSON.stringify(obs), 'utf8');
+      if (writeSync(fd, buf) !== buf.length) throw new Error('sidecar: short write');
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, path);
+    fsyncDir(dirname(path));
+  } catch (e) {
+    throw new JournalError('sidecar-failed', e);
   }
-  renameSync(tmp, path);
-  fsyncDir(dirname(path));
 }
 
 /** The file's observation (slugs history-journal-observation-sidecar, D-4231; history-observe-at-rename, D-4232). The registry is
@@ -442,8 +451,20 @@ export function renameSpoolFiles(home, tickMs, pid) {
   return out;
 }
 
+/** Rename this tick's spool files and observe each. True when a sidecar write failed (D-4338,
+ *  history-sidecar-write-failure-holds): the renamed file stays in .draining/ without one, and the next journaling
+ *  observes it. Every file is still tried, so one failure does not leave a later file unobserved. */
 function renameAndObserve(home, tickMs, nowMs) {
-  for (const n of renameSpoolFiles(home, tickMs, process.pid)) observe(home, n, nowMs);
+  let failed = false;
+  for (const n of renameSpoolFiles(home, tickMs, process.pid)) {
+    try {
+      observe(home, n, nowMs);
+    } catch (e) {
+      if (!(e instanceof JournalError)) throw e;
+      failed = true;
+    }
+  }
+  return failed;
 }
 
 /** A draining file's whole text. It is opened O_NOFOLLOW|O_NONBLOCK and must be a regular file, so a link or a FIFO
@@ -641,7 +662,7 @@ export function journalHalf(home, ids, nowMs) {
   // Rename first, so this pass's spool files are observed and journaled in this same pass (§9.2: "renames,
   // observes and journals each spool file as step 1 does"). A line a hook lands on the old inode after this
   // grows the file, and the next pass re-journals it under the same `t` (journalFile compares byte counts).
-  renameAndObserve(home, nowMs, nowMs);
+  if (renameAndObserve(home, nowMs, nowMs)) journalFailed = true;   // D-4338 (history-sidecar-write-failure-holds)
   for (const name of listDraining(home)) {
     try {
       observe(home, name, nowMs);
@@ -656,6 +677,8 @@ export function journalHalf(home, ids, nowMs) {
       recordHeldMatches(home, name, nowMs);
       held.push(name);
     } catch (e) {
+      // D-4338 (history-sidecar-write-failure-holds): a sidecar that cannot be written is the journal failure; the file is held.
+      if (e instanceof JournalError) { journalFailed = true; held.push(name); continue; }
       // SPOOL_OVERSIZE (D-4337): left where it is, unread. No DB holds a counter here (IV2), so the drain, which has one, sets
       // it aside and counts it when the hold ends.
       if (e && (e.code === 'ENOENT' || e.code === 'ELOOP' || e.code === 'NON_REGULAR' || e.code === 'SPOOL_OVERSIZE')) continue;
@@ -674,6 +697,7 @@ export function drainSpool(db, c) {
   const tickMs = c.now();
   ensureSpoolDirs(c.home);
   const hints = [];
+  let failedCounted = false;
   for (const name of listDraining(c.home)) {
     // D-4337 (history-spool-file-size-cap): an oversize file is decided from its stat and never opened.
     if (setAsideOversize(c.home, name)) { countOutside(db, 'spool_oversize'); continue; }
@@ -681,7 +705,7 @@ export function drainSpool(db, c) {
     try {
       j = journalFile(c.home, c.ids, name, c.now());
     } catch (e) {
-      if (e instanceof JournalError) { countOutside(db, 'journal_write_failed'); break; }
+      if (e instanceof JournalError) { countOutside(db, 'journal_write_failed'); failedCounted = true; break; }
       if (e && e.code === 'SPOOL_OVERSIZE') {   // it grew between the stat and the read
         if (setAsideOversize(c.home, name)) countOutside(db, 'spool_oversize');
         continue;
@@ -700,12 +724,14 @@ export function drainSpool(db, c) {
     try {
       hints.push(...drainFile(db, c, name, j.obs, j.text).hints);
     } catch (e) {
-      if (e instanceof JournalError) { countOutside(db, 'journal_write_failed'); break; }
+      if (e instanceof JournalError) { countOutside(db, 'journal_write_failed'); failedCounted = true; break; }
       if (e && e.code === 'ERR_SQLITE_ERROR') { countOutside(db, 'drain_deferred'); break; }
       throw e;
     }
   }
-  renameAndObserve(c.home, tickMs, c.now());
+  // D-4338 (history-sidecar-write-failure-holds): a failed observation of this tick's renames is the same hold,
+  // counted once for the tick; the renamed files wait without a sidecar and are observed at their next journaling.
+  if (renameAndObserve(c.home, tickMs, c.now()) && !failedCounted) countOutside(db, 'journal_write_failed');
   return hints;
 }
 

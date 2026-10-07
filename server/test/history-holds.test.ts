@@ -543,3 +543,85 @@ describe('D-4242: a pending FTS backfill waits for the pause to lift; a late pai
     lateValueGone(box, value);
   });
 });
+
+describe('FR2-a (D-4338): a failed sidecar write is the journal hold, never a failed pass', () => {
+  // The observation sidecar lives on the home filesystem beside the journal, and the drain writes it BEFORE the
+  // journal append (§9.2), so a full home filesystem fails it first. HISTORY_TEST_ENOSPC='/.draining/' fails the
+  // FIRST write under .draining/ (a sidecar's temp), the smallest seam that reaches it.
+  const ENOSPC = { preloads: [PRELOADS.faults], env: { HISTORY_TEST_ENOSPC: '/.draining/' } };
+
+  it('a scheduled pass: the file renamed on the previous pass stays held, journal_write_failed counts, ingest continues, the next tick drains it', () => {
+    const box = boundBox('ccrc-hist-fr2a1-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    const transcript = plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-000000000003', 'row one', new Date().toISOString())]);
+    expect(runDriver(box, { offsetMs: 31 * MIN }).code).toBe(0);
+    expect(countOf(box, 'entries')).toBe(1);
+    spoolLine(box, ID, startup(U1, { reg: U1 }));
+    expect(runDriver(box, { offsetMs: 32 * MIN }).code).toBe(0);    // renamed and observed
+    expect(draining(box)).toHaveLength(1);
+    fs.appendFileSync(transcript, `${JSON.stringify(userRow('a0000000-0000-4000-8000-000000000004', 'row two', new Date().toISOString()))}\n`);
+    const r = runDriver(box, { offsetMs: 63 * MIN }, [], ENOSPC);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).not.toMatch(/internal error/);
+    expect(draining(box), 'held, never unlinked').toHaveLength(1);
+    expect(countOf(box, 'spool_receipts'), 'no drain transaction').toBe(0);
+    expect(counter(box, 'journal_write_failed')).toBeGreaterThanOrEqual(1);
+    expect(metaOf(box, 'journal_unwritable')).toMatch(/^[0-9]+$/);
+    expect(countOf(box, 'entries'), 'ingest is unaffected by the sidecar').toBe(2);
+    expect(runDriver(box, { offsetMs: 64 * MIN }).code).toBe(0);
+    expect(draining(box)).toEqual([]);
+    expect(countOf(box, 'spool_receipts')).toBe(1);
+    expect(metaOf(box, 'journal_unwritable')).toBe('');
+  });
+
+  it('a scheduled pass: the observation at the rename failing leaves the file held without a sidecar, counted; the next tick observes and drains it', () => {
+    const box = boundBox('ccrc-hist-fr2a2-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-000000000003', 'row one', new Date().toISOString())]);
+    spoolLine(box, ID, startup(U1, { reg: U1 }));
+    const r = runDriver(box, { offsetMs: 31 * MIN }, [], ENOSPC);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).not.toMatch(/internal error/);
+    expect(countOf(box, 'entries'), 'the tick went on to ingest').toBe(1);
+    expect(draining(box), 'renamed, so held').toHaveLength(1);
+    expect(counter(box, 'journal_write_failed')).toBeGreaterThanOrEqual(1);
+    expect(metaOf(box, 'journal_unwritable')).toMatch(/^[0-9]+$/);
+    expect(runSweep(box).code).toBe(0);
+    expect(draining(box)).toEqual([]);
+    expect(countOf(box, 'spool_receipts')).toBe(1);
+  });
+
+  it('a hold pass whose sidecar write keeps failing (a directory in the temp\'s place): every file held, journal-unwritable, exit 0; cleared, it drains', () => {
+    const box = boundBox('ccrc-hist-fr2a4-');
+    spoolLine(box, ID, startup(U1, { reg: U1 }));
+    expect(runSweep(box).code).toBe(0);                             // renamed and observed
+    const side = names(paths(box).draining).find((n) => n.endsWith('.obs'))!;
+    fs.rmSync(path.join(paths(box).draining, side));                // unobserved again
+    fs.mkdirSync(path.join(paths(box).draining, `${side}.tmp`));    // no sidecar can be written, on any attempt
+    const r = runSweep(box, [], { env: { HISTORY_TEST_STATFS: 'hang' } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).not.toMatch(/internal error/);
+    expect(r.stdout).toMatch(/^history-sweep: journal-unwritable$/m);
+    expect(draining(box)).toHaveLength(1);
+    const s = runSweep(box);                                        // scheduled: counted, tick goes on
+    expect(s.code, s.stderr).toBe(0);
+    expect(counter(box, 'journal_write_failed')).toBeGreaterThanOrEqual(1);
+    expect(draining(box)).toHaveLength(1);
+    fs.rmdirSync(path.join(paths(box).draining, `${side}.tmp`));
+    expect(runSweep(box).code).toBe(0);
+    expect(draining(box)).toEqual([]);
+  }, 30_000);
+
+  it('a hold pass (store-unreachable): the sidecar failing prints journal-unwritable and exits 0, the file held', () => {
+    const box = boundBox('ccrc-hist-fr2a3-');
+    spoolLine(box, ID, startup(U1, { reg: U1 }));
+    const r = runSweep(box, [], { ...ENOSPC, env: { ...ENOSPC.env, HISTORY_TEST_STATFS: 'hang' } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).not.toMatch(/internal error/);
+    expect(r.stdout).toMatch(/^history-sweep: store-unreachable$/m);
+    expect(r.stdout).toMatch(/^history-sweep: journal-unwritable$/m);
+    expect(draining(box)).toHaveLength(1);
+    expect(runSweep(box).code).toBe(0);
+    expect(draining(box)).toEqual([]);
+  }, 30_000);
+});

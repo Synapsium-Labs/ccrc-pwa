@@ -1058,3 +1058,25 @@ describe('the tick runs the epoch steps, as the box runs it (spec §9.2, §6.1 "
     expect(rowsOf(box, 'SELECT cc_session_uuid FROM epoch_candidates')).toEqual([]);
   });
 });
+
+describe('a sidecar that cannot be written is the journal failure, held per file (FR2-a, D-4338)', () => {
+  it('journalHalf holds EVERY file and reports journalFailed: no throw, the later file still tried; a repaired sidecar path journals both', () => {
+    const box = makeHistoryBox('ccrc-hist-fr2a-half-', { role: 'fleet' });
+    const ids = createStore(box.home);
+    const ID2 = 'claude-b-demo';
+    const names = [ID, ID2].map((id, i) => {
+      fs.mkdirSync(DRAIN(box.home), { recursive: true, mode: 0o700 });
+      const name = SW.drainingName(id, T + i, 4242);
+      fs.writeFileSync(path.join(DRAIN(box.home), name), `\n${JSON.stringify(start(id, U1, 'startup'))}\n`);
+      fs.mkdirSync(path.join(DRAIN(box.home), `${SW.sidecarName(name)}.tmp`));   // no sidecar can be written, on any attempt
+      return name;
+    });
+    const r = SW.journalHalf(box.home, ids, T);
+    expect(r.journalFailed).toBe(true);
+    expect([...r.held].sort()).toEqual([...names].sort());
+    for (const n of names) fs.rmdirSync(path.join(DRAIN(box.home), `${SW.sidecarName(n)}.tmp`));
+    const again = SW.journalHalf(box.home, ids, T + 10);
+    expect(again.journalFailed).toBe(false);
+    expect(fileBlocks(journalOf(box.home, ids.storeId)).map((b) => b.name).sort()).toEqual([...names].sort());
+  });
+});
