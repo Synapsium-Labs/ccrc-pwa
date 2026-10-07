@@ -3134,6 +3134,46 @@ limit closes (at `858caf47d` the `\u` half of the one-pass limit was not: 0 red,
 | 8 | F13 | a symlink is never a directory | the DANGLING, DIRECTORY-symlink, VALID-symlink and KNOWN LIMIT rows (4 red) |
 | 8 | F13 | a valid symlink to a file is followed, as git follows it | "follows a loose ref that is a VALID symlink, as git does …" (a symlink refused: 1 red) |
 
+**Wave 2 close-out (review 304).** Every guard arm this wave added or touched, each measured red by deleting that arm
+alone in a scratch snapshot (`git archive` of the commit with `server/node_modules` linked), over the rows whose names
+carry `(review 304 F7)` or `(review 304 F12 …)` (`vitest run test/delegation-rig.test.ts -t 'F7|F12'`); each count is dated
+by the commit it was measured at, `e56a9e0ef`, and counts rows red, not assertions. Later close-out tasks append their lines here.
+
+| Task | Finding | Guard | Row |
+|---|---|---|---|
+| A | F7 | `cmd_run` refuses a version that is not installed, before it makes anything (`need_version "$VER"`) | the six "run refuses … (F7)" rows and "run asks about the binary first and the scenario second …" (the call deleted: 7 red), `e56a9e0ef` |
+| A | F7 | that refusal comes before `check_scenario` | "run asks about the binary first and the scenario second …" (moved after `check_scenario`: 1 red), `e56a9e0ef` |
+| A | F7 | that refusal comes before the run root and the out-dir exist | the six "run refuses … (F7)" rows, "no run root, no tmux directory, no out-dir" (moved after `mktemp`: 7 red; after `guard_out`: 7 red), `e56a9e0ef` |
+| A | F7 | `version_ok`: the `x.y.z` shape, anchored at both ends | the four "run refuses a version spelled with two numbers / that climbs out / with a leading letter / with trailing text" rows, "all refuses a malformed version …", "which versions all runs" and the `rig.sh versions` rows (the arm deleted: 12 red; loosened to digits and dots: 3; unanchored: 8; the end unanchored: 7; the start unanchored: 1), `e56a9e0ef` |
+| A | F7 | `version_ok`: the entry is executable (`-x`) | "run refuses a version whose entry is not executable …", "all refuses a version whose entry is not executable …", the `which versions all runs` and `rig.sh versions` rows (the arm deleted: 20 red; `-x` loosened to `-e`: 10), `e56a9e0ef` |
+| A | F7 | `need_version` dies, naming the version, rather than returning | the "run refuses …" and "all refuses …" rows (the `die` replaced by a no-op: 22 red), `e56a9e0ef` |
+| A | F7 | `pick_versions` checks every named version before it returns | the four "all refuses …" rows and "rig.sh versions refuses the first bad version it is given …" (the loop deleted: 15 red), `e56a9e0ef` |
+| A | F7 | named versions are in numeric order | "with versions named, runs only those, in numeric order and once each …", "rig.sh versions … given versions …", and recapture.sh's "--dry-run with versions named …" (not sorted: 4 red; sorted lexically: 3), `e56a9e0ef` |
+| A | F7 | named versions are de-duplicated | the same three rows (`uniq` deleted: 3 red), `e56a9e0ef` |
+| A | F7 | the installed listing is in numeric order, and holds only installed, version-shaped, executable entries | "with no version named, runs every installed … entry, in numeric order …", "rig.sh versions lists every installed … entry …", recapture.sh's "--dry-run, no version named …" (sorted lexically: 3 red; not sorted: 3; the filter deleted: 5), `e56a9e0ef` |
+| A | F7 | a missing versions directory is "none installed", not an error printed | "rig.sh versions lists nothing, and succeeds, for an empty versions directory and for a HOME with none" (`ls`'s stderr not suppressed: 1 red), `e56a9e0ef` |
+| A | F7 | `cmd_all` takes its versions from `pick_versions` (and shifts the raw root off first) | "which versions all runs …" rows, the four "all refuses …" rows (the call deleted: 9 red; the `shift` deleted: 7; the loop over every installed version, ignoring the pick: 3), `e56a9e0ef` |
+| A | F7 | `cmd_all` checks the versions before it makes the raw root, reaps, or removes `.done` | "all refuses …" (four rows, "no raw root") and "all checks the versions it is given before it reaps or removes anything …" (after `guard_out`: 4 red; after `cmd_reap`: 6; after `rm -f .done`: 6), `e56a9e0ef` |
+| A | F7 (found in passing) | `cmd_all`'s failed-run line reads `$?` before the `$(basename)` resets it (it printed `rc=0` for every failure) | "a failed run is reported with its rc and does not stop the sweep, and .done is still written" (the old order: 1 red), `e56a9e0ef` |
+| A | F7 | `cmd_all`'s failed-run arm keeps the sweep going; `.done` is written last | the same row (the arm deleted: 1 red); the three sweep rows (`.done` not written: 3 red), `e56a9e0ef` |
+| A | F7 | the `versions` verb prints the selection, one per line | the four `rig.sh versions` rows, recapture.sh's selection rows and its real runs (the verb deleted: 28 red; printing nothing: 17), `e56a9e0ef` |
+| A | F7 | the usage text is the whole header, and not the code after it | "an unknown verb prints the header as the usage …" (the range one line short: 1 red; one line long: 1), `e56a9e0ef` |
+| A | F12 | `recapture.sh` is an executable bash script, and its corpus and scenarios paths are the real ones | "is an executable bash script, and names the committed corpus and the rig's scenarios directory as its own" (`chmod -x`: 1 red; a non-bash shebang: 1), `e56a9e0ef` |
+| A | F12 | the options: `--dry-run`, `--missing`, an unknown option refused, versions taken as arguments, `--missing` with versions refused | the `--dry-run` and `--missing` rows and the "(an option it does not know)", "(--missing together with a version)" and named-version refusal rows (`--dry-run` ignored: 4 red; `--missing` ignored: 4; the unknown-option arm deleted: 2; named versions dropped: 14; the conflict arm deleted: 2), `e56a9e0ef` |
+| A | F12 | the versions come from `rig.sh versions`, and its refusal stops the script (exit 2, nothing made) | the refusal rows, dry run and real (`$( )` made forgiving: 8 red); "with no Claude Code version installed it refuses …" (the arm deleted: 1; an empty selection read as one empty version: 1), `e56a9e0ef` |
+| A | F12 | `--missing`: the installed versions the corpus has no directory for; nothing missing says so, exits 0, makes nothing | "--dry-run --missing selects …" and "--missing with every installed version already in the corpus says so …" (the filter inverted: 3 red; deleted: 2; the nothing-missing block skipped: 1; it exits 1: 1; its line not printed: 1), `e56a9e0ef` |
+| A | F12 | the five steps, each in the printed list and in the real run | the `--dry-run` rows and "a real run makes the raw root, runs the five steps in the printed order on it …" (step 1 deleted: 13 red; step 2: 12; step 3: 10; step 4: 9; step 5: 8), `e56a9e0ef` |
+| A | F12 | step 1: `mktemp -d` of `ccrc-dlg-raw.*`, with the versions and the start time recorded | the same rows (the prefix changed: 6 red; `mktemp` without `-d`: 12; the versions not recorded: 6; the start time not recorded: 6), `e56a9e0ef` |
+| A | F12 | step 2: stderr folded into `all.log`, the output teed, `.done` required | the same rows (`2>&1` dropped: 6 red; the `tee` dropped: 6; the `.done` requirement dropped: 6), and "stops at rig.sh all finishing without its .done …", `e56a9e0ef` |
+| A | F12 | steps 4 and 5: `--write`, and the corpus scan's `--scan` | the same rows (`--write` dropped: 7 red; `--scan` dropped: 8), `e56a9e0ef` |
+| A | F12 | a failing step stops the script with its exit, names the step and its label, and keeps and names the raw root; a success says nothing on stderr | the five "stops at … " rows, "a failure before the raw root exists …", the clean-run `stderr` assertions (`set -e` removed: 15 red; `pipefail` removed: 2; the EXIT trap deleted: 6; the failed-step line deleted: 6; its label emptied: 6; the next step's label: 6; the kept-root line deleted: 5; printed with no root: 1; the failed-step line printed on success: 3), `e56a9e0ef` |
+| A | F12 | `<raw>` is the real raw root in a real run; `--dry-run` runs nothing; the root is told after step 1 and at the end | "a real run makes the raw root …", the `--dry-run` rows, "--dry-run makes nothing and runs nothing …" (`<raw>` not replaced: 7 red; `--dry-run` runs the steps: 4; the root not told after step 1: 1; the closing path line deleted: 2; the closing UNSANITISED line deleted: 2), `e56a9e0ef` |
+| A | F12 | the dry-run header: its notice, the versions line, the fixtures and scenarios directories; the step numbers | "--dry-run, no version named …" and its siblings (the notice deleted: 1 red; the versions line: 3; the fixtures line: 2; the scenarios line: 1; the numbering off by one: 12), `e56a9e0ef` |
+| A | F12 | every path resolved from the script's own location (`HERE`, `TREE`, `FIX`, `SCEN`) | "resolves every path from its own location …" and every row over the scratch tree (`HERE` from the caller's directory: 24 red; `TREE` one level short: 8; `FIX` another directory: 9; `SCEN` another directory: 8), `e56a9e0ef` |
+| A | F12 | `--dry-run` needs no tmux, node or mock | "--dry-run needs no tmux, no node and no mock …" (a `tmux` call inserted before the steps: 1 red; an INSERTION, since there is no arm to delete), `e56a9e0ef` |
+| A | F12 | the steps run over the REAL sanitiser and matrix builder | "end to end over the REAL sanitiser and matrix builder …" (it reds, among the arms above, when any of the five steps is deleted, `--write` or `--scan` is dropped, `mktemp` loses `-d`, `<raw>` is not replaced, a path constant is wrong, the `--missing` filter is inverted or the `versions` verb is gone: 16 of the mutations measured, and it is the row that would red if the real tools' argument shapes changed), `e56a9e0ef` |
+| A | F7, F12 | arms with no row | `CUR=0` before the first step (the mutant `CUR=1`: 0 red, equivalent: nothing can fail between the trap and the first step); `pick_versions`'s `VERS=()` reset and `cmd_all`'s `${VERS[@]+"${VERS[@]}"}` (equivalent on bash 4.4 and later, and one call per process); `launch_cmd`'s own `-x` check, untouched (it guards `relaunch`, a step of a live pane, which no hermetic row can reach). Measured `e56a9e0ef` |
+
 ## After the merge (coordinator): the real-lane cross-check
 
 The rig measures every installed binary against a mock; this checks two REAL lanes against the rig, so a difference
@@ -3201,6 +3241,16 @@ first commit (allocate and define in the same act), and cites only those. Each s
   fields inside; Task 9's table maps scenarios back to §8.1's five sources.
 - **D-3999** — `recapture-steps-in-rig-readme` — spec §8.2 puts the capture steps "beside the fixtures"; they live in
   `server/test/delegation-rig/README.md` beside the rig that runs them, and the fixtures directory holds only data.
+  Corrected in wave 2 (review 304 F12): spec §8.2's "one re-capture script" now exists, `server/test/delegation-rig/recapture.sh`,
+  beside the rig (not beside the fixtures, which still hold only data), and the README's four-command recipe became that
+  script's steps: `recapture.sh [--dry-run] [--missing | <version>...]` resolves the versions once, makes the raw root,
+  runs `rig.sh all`, the sanitiser, the matrix builder and the corpus scan in order, stops at the first failing step with its
+  exit and keeps the raw root. `--missing` is every installed version the corpus has no `<version>/` directory for, and
+  `rig.sh all` gained an optional version list (and `rig.sh versions`, the one reader of "installed") for it. The rows are the
+  `recapture.sh (review 304 F12 …)` describe in `server/test/delegation-rig.test.ts` (its `--dry-run` rows over a scratch tree
+  of stub steps, the five "stops at …" rows, "a real run makes the raw root, runs the five steps in the printed order on it …"
+  and "end to end over the REAL sanitiser and matrix builder …") and, in the `(review 304 F7)` describe, "which versions all
+  runs" and "rig.sh versions".
 - **D-4000** — `q8-spool-cost-is-a-micro-benchmark` — the spool append's cost against the hook budget is measured as a bash
   micro-benchmark of the same operations; the hook itself is wave 2's, and its own timing pin lands there.
 - **D-4001** — `q9-parent-class-is-a-proxy` — §8.1 Q9 (the share of trees whose parent is not a ccd session) cannot be read
@@ -3265,6 +3315,12 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   clear-compact-resume). It now compares with the versions directory resolved physically (`cd -P`), as `guard_root`
   and `run-base` resolve HOME, and keeps the spelling when that cannot be resolved, never wider. The Linux-only
   behaviour row "claude_pid finds the Claude Code process when HOME is spelled through a symlink … (F10)" pins it.
+  Wave 2 (review 304 F7): `cmd_run` refuses a version that is not `x.y.z`-shaped or not installed (an executable under the
+  versions directory), exit 2, before it makes anything, because `launch_cmd`'s own check ran only inside
+  `bash -c "$(launch_cmd)"`, where its `exit 2` ended the command substitution's subshell and nothing else: `rig.sh run
+  <missing-version>` carried on with an empty pane command, waited out `waitReady`'s 60 s and landed an `unmeasured` bundle.
+  The six "run refuses … (F7)" rows and "run asks about the binary first and the scenario second …" pin it; `launch_cmd`'s
+  check stays, for `relaunch`.
 - **D-4007** — `sanitize-leak-shapes-closed` (Task 5 and its review): the plan's T5-M3 row SURVIVED its own mutation
   (measured 0 red; the `(key)` finding is pushed by index whatever `seg` is) and now uses residue-bearing keys so it
   bites; and the plan's allowlist let residue through that a leak probe found — a `:`-joined path (the `ABS` lookbehind
