@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
 
@@ -1046,6 +1046,21 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  docstring requires. */
     setCoordCaps: (next: Partial<CoordCaps>) =>
       postJsonOr<CoordCapsView | 'unreadable'>('/api/coord/caps', 'unreadable', next),
+    /** `GET /api/coord/stall-watch` (stall watch settings, design 2026-10-05 §10, §13): the Settings page's Stall
+     *  watch section reads it through `useStallWatchView`, whose `asStallWatchView` is the wire guard, so the type here
+     *  is what the server promises, not what arrived. 501 `not-configured` on a box with no coordination database, and
+     *  404 `not-found` from an older server that lacks the route; the hook reads both as not available on this server
+     *  (departure `older-server-404-reads-not-configured` (D-4035)). */
+    stallWatch: () => getJson<StallWatchView>('/api/coord/stall-watch'),
+    /** `POST /api/coord/stall-watch`: a PARTIAL, carrying only the field the operator moved, and `confirm` only when
+     *  it sends back the key a 409 `confirm-required` answered with. The server decides whether a write needs a
+     *  confirm (departure `server-decides-the-confirm` (D-4033)), so a 409 rejects with `ApiError` like every non-2xx,
+     *  and the section reads its body through `stallWriteRefusal`. Session-gated when armed, open dark; no box token.
+     *
+     *  `postJsonOr`, not `postJson`, for `setCoordCaps`' reason (D-1150): after a write, "the answer could not be
+     *  read" may well have stored the value, and is not "the request never happened". */
+    setStallWatch: (body: StallWatchRequest) =>
+      postJsonOr<StallWatchView | 'unreadable'>('/api/coord/stall-watch', 'unreadable', body),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {
