@@ -5,6 +5,10 @@
  * built-in value, bounds and step, and the counts' window. A renamed level, a moved bound or a new window reds here
  * instead of leaving the README telling an old story. The labels come from L0 and the numbers from L1, so this file
  * copies no text but its anchor words.
+ *
+ * Two rows reach past the third section's sentences. The label row names the section's two controls and the confirm
+ * button by their shipped labels (Level, Quiet time, Set). The device row scans the WHOLE Settings paragraph, so the
+ * Notifications sentence's "push bell" cannot go back to naming a device.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';

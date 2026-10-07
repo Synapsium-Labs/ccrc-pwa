@@ -3611,14 +3611,18 @@ and the coordinator assigns its number.
     does the block's comment ("The PHONE-PUSH toggle" becomes "The PUSH toggle").
   - **Why:** the operator's 2026-10-05 directive: "same functionality identical across anywhere the PWA is installed".
     Alert's `does` text points at this row, so the row must not name a device either.
-  - **Pinned by:** "P6: no L0 STALL_* string names a device, and the Notifications row says push" and the moved
-    label pin in "reuses the literal NotificationBell where the browser can do Web Push", both red under X22 (the label
-    put back to Phone). Nothing else pins this number: Task 4's no-device row scans only the third section's
-    sentences, which never spell the Notifications label, so it stays green if the label reverts.
+  - **Pinned by:**
+    - the Notifications LABEL: "P6: no L0 STALL_* string names a device, and the Notifications row says push" and the
+      moved label pin in "reuses the literal NotificationBell where the browser can do Web Push", both red under X22
+      (the label put back to Phone). The README never spells the label, so `stall-settings-readme.test.ts` stays green
+      if the label reverts;
+    - README's own "push bell" wording: `stall-settings-readme.test.ts`'s device row, "the Settings paragraph names no
+      device", which scans the whole Settings paragraph (not the third section's sentences alone), so the paragraph
+      saying "phone" again reds it.
   - **Cost if wrong:**
     - One label, and one moved test line.
-    - README ≈951 still says "the phone-push bell for this browser". That is outside this number's text and outside
-      §18's README edit, and is put to the operator under "Open questions for the operator" below.
+    - README ≈951 said "the phone-push bell for this browser" when this number was written. The final-fix round
+      rewrote it to "push bell" and pinned the whole paragraph (above), so no README line names a device now.
 - **D-4042** — `malformed-optional-block-is-dropped` (Task 1)
   - **Departs from:** spec §13's wire guard (≈:1211–1213), which drops only malformed `counts` elements and reads a
     MISSING `next`, `filesExceed` or `fallback` as not stated. Anything else is a failed read.

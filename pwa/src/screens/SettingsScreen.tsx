@@ -643,6 +643,7 @@ function NotificationsSection({ view, reload }: { view: UpdatesView | null; relo
       {supported ? (
         <div className="settings-bell-row">
           <NotificationBell />
+          {/* the label says push, never a device: notifications-label-says-push (D-4036) */}
           <span>Push notifications for this browser</span>
         </div>
       ) : (
