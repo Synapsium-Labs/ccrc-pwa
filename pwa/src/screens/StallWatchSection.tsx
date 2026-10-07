@@ -14,8 +14,9 @@
 //     the same body again with the server's key, so a key the server no longer matches opens a fresh sheet. The
 //     sheet says, stage by stage, what the write turns on and what stops (confirm-on-stage-diff (D-4034)).
 //   * NO LADDER HERE. The section spells no level id and keeps no ladder column: the Now and Next blocks, the files'
-//     reading and every write's effect come from the wire, and every word is an L0 STALL_* constant, filled by
-//     `fillStallText`. There is no viewport, pointer or user-agent branch.
+//     reading and every write's effect come from the wire, and every word is an L0 STALL_* constant (apart from
+//     the shared `UNCONFIRMED_TEXT` (§13 step 3)), filled by `fillStallText`. There is no viewport,
+//     pointer or user-agent branch.
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
@@ -33,7 +34,7 @@ import {
   asStallWatchView, stallWriteRefusal, useStallWatchView, type StallWatchPoll,
 } from '../fleet/useStallWatchView';
 import { api } from '../lib/api';
-import { UNCONFIRMED_TEXT } from './SettingsScreen';
+import { UNCONFIRMED_TEXT } from './settingsText';
 
 /** Fill each `{name}` slot of an L0 text from `slots`. A slot it was not given stays as written; a value is
  *  inserted literally (a replacer function, so a `$` in a server's detail is never a replacement pattern). */

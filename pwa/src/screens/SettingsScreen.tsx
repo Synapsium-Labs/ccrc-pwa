@@ -22,6 +22,7 @@ import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { StallWatchSection } from './StallWatchSection';
+import { UNCONFIRMED_TEXT } from './settingsText';
 import { isManagedNode, planMove, rollbackBlockers, type MoveIntent, type PlannedMove, type RollbackBlocker } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
 import { ACK_UNREADABLE_TEXT, canAck, sendAck } from '../fleet/updateAck';
@@ -72,8 +73,6 @@ export const AUTO_LABELS: Record<AutoMode, string> = {
 
 /** The auto-install note's lead; the node labels follow, in `nodes()` order. */
 const AUTO_GATE_NOTE = 'Auto-install needs the rollback gate on every node — not yet on: ';
-/** A write that answered 2xx but unreadably (`postJsonOr`'s `unreadable`, D-1150): it may have landed. */
-export const UNCONFIRMED_TEXT = "Saved — the server's answer could not be read; the screen will re-check.";
 /** The first poll never landed and was not a 501 — a read that failed, said as one, not a skeleton forever. */
 const UNREAD_TEXT = 'The update plane could not be read — the screen tries again every minute.';
 /** A later poll failed: what is shown is the last answer that landed, and it says so. */
@@ -342,6 +341,10 @@ export const MACOS_UNMANAGED_TEXT = 'macOS: not centrally managed';
 // The Ack's gate and tap live in fleet/updateAck.ts since wave 14 (D-4267): the home screen's halt banner offers the
 // same Ack. Re-exported so this screen's callers and tests keep their import.
 export { ACK_UNREADABLE_TEXT, canAck };
+// UNCONFIRMED_TEXT is defined in ./settingsText so the Stall watch section can import it without a cycle back to this
+// screen; re-exported here so this screen's callers and tests keep their import, and so the spec's citation of this
+// file (§13 step 3, ≈:72) still points at a line that names it.
+export { UNCONFIRMED_TEXT };
 
 export function currentText(n: NodeWire): string {
   if (typeof n.measuredAt !== 'number') return 'not measured';
