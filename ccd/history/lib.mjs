@@ -1624,7 +1624,7 @@ function dropTrailingRun(s) {
 
 /** A sidecar's index text (§6.2, §8.3; D-4312, history-sidecar-redact-before-cut): the first
  *  `SIDECAR_FTS_BYTES` bytes of its REDACTED text. At most `SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN`
- *  bytes are decoded, their JSON string escapes undone (D-4336) and the result redacted whole, and only then cut
+ *  bytes are decoded, redacted raw, their JSON string escapes undone and redacted again (D-4336), and only then cut
  *  to `SIDECAR_FTS_BYTES` UTF-8 bytes, or, when the raw window was filled, to at most the redacted text's length
  *  minus `SIDECAR_REDACT_MARGIN` (an unescape shrinks the text, FR1 round 1) (a cut multi-byte character dropped). A secret that straddles the cut was
  *  matched whole in the window, so no prefix of it reaches the index; a PEM block that starts before the
@@ -1640,6 +1640,12 @@ export function sidecarIndexText(bytes, idx) {
   let text = new TextDecoder('utf-8').decode(part);
   // The window cut inside a multi-byte character decodes to one U+FFFD; drop it.
   if (windowCut) text = text.replace(/\uFFFD$/, '');
+  // D-4336 (history-sidecar-index-text-unescaped): redacted RAW, decoded, then redacted again. Decoding first is a
+  // parser differential of its own (it can JOIN a secret's registered segments into one run no pair matches, and
+  // `\"` changes where the JSON-form context rule sees a value end), so the raw pass runs first; every mark it
+  // writes is REDACTED_MARK, which holds no backslash, so the decode cannot alter one. The second pass catches what
+  // an escape letter glued onto a secret hid from the first. The union of both readings is redacted.
+  if (idx !== null) text = redactField(text, idx);
   text = unescapeJsonText(text);
   if (idx !== null) text = redactField(text, idx);
   const enc = new TextEncoder().encode(text);

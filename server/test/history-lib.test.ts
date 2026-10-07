@@ -1971,6 +1971,48 @@ describe('sidecarIndexText: JSON string escapes are undone before redaction (D-4
   });
 });
 
+// FR4 (D-4336, amended): decoding BEFORE any redaction is itself a parser differential, so the window is redacted RAW,
+// then decoded, then redacted again (the union of both readings). Two shapes the decode-first order leaked: a decode
+// that JOINS two registered segments of a secret into one run no pair matches, and a decoded escaped quote that
+// changes where the JSON-form context rule thinks a value ends.
+describe('sidecarIndexText: the window is redacted raw, then decoded, then redacted again (D-4336, FR4)', () => {
+  const rndHex = (bytes: number): string => historyCrypto.randomBytes(bytes).toString('hex');
+  const idxOf = (values: string[]): libRows.PairIndex => libRows.makePairIndex(libRows.secretPairs(values).pairs);
+  const BS = String.fromCharCode(92);
+
+  it('a secret holding a literal backslash-u sequence between two segments: decoding would join them, neither survives', () => {
+    const a = rndHex(8); const b = rndHex(8);
+    const v = `${a}${BS}u0041${b}`;
+    const out = libRows.sidecarIndexText(Buffer.from(`found ${v} end`), idxOf([v]));
+    expect(out.includes(a.slice(0, 12)), 'first segment').toBe(false);
+    expect(out.includes(b.slice(0, 12)), 'second segment').toBe(false);
+    expect(out.includes('found') && out.includes('end')).toBe(true);
+    const json = Buffer.from(`{"k":"${v.replaceAll(BS, BS + BS)}"}`);
+    const out2 = libRows.sidecarIndexText(json, idxOf([v]));
+    expect(out2.includes(a.slice(0, 12)) || out2.includes(b.slice(0, 12)), 'a JSON-escaped spelling of the same value').toBe(false);
+  });
+  it('a JSON password whose value holds an escaped quote is redacted whole: no abc, no def', () => {
+    const win = `{"password": "abc${BS}"def", "n": 1}`;
+    const out = libRows.sidecarIndexText(Buffer.from(win), libRows.makePairIndex([]));
+    expect(out.includes('abc'), out).toBe(false);
+    expect(out.includes('def'), out).toBe(false);
+  });
+  it('FR1 cases still redact: a secret after an escaped newline and after an escaped tab', () => {
+    const v = `fixtureNotARealTokenValue${rndHex(8)}`;
+    for (const e of ['n', 't']) {
+      const out = libRows.sidecarIndexText(Buffer.from(`{"t":"x${BS}${e}${v}"}`), idxOf([v]));
+      expect(out.includes(v.slice(0, 16)), e).toBe(false);
+    }
+  });
+  it('a plain window with no backslash is byte-identical to the single-pass result', () => {
+    const v = `fixtureNotARealTokenValue${rndHex(8)}`;
+    const idx = idxOf([v]);
+    const text = `plain line one\nvalue ${v} then "password": "hunter2hunter2" tail\n`;
+    const single = libRows.redactField(text, idx);
+    expect(libRows.sidecarIndexText(Buffer.from(text), idx)).toBe(single);
+  });
+});
+
 // FR1 round 1 F1 (D-4336, D-4312): the window is measured in RAW bytes but the cut runs on the unescaped text, which an
 // escape-dense JSON sidecar shrinks by a byte per escape. The cut must keep SIDECAR_REDACT_MARGIN bytes of redacted text
 // behind it whenever the raw window was filled, or a secret straddling the raw window end (redaction saw only a prefix of
