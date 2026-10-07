@@ -737,7 +737,7 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     (amendment `teardown-hook-event-names-another-session`).
   - The hook's turn-marker classifier (`paid` in `ccd/session-hook.sh`) is a second reader that treats a raw
     non-empty `agent_id` as subagent placement. No harm was measured: earlier main-thread events had already marked
-    both turns `working`. Wave 3 resolves that reader against the qualifying-join contract with a red-first
+    both turns `working`. Wave 3 must resolve that reader against the qualifying-join contract with a red-first
     phantom-main-thread case and without assuming `agent_type`, after the first-commit correction above unless its
     approved plan proves the two must be one atomic change (amendment `tool-agent-id-alone-is-unjoined-evidence`).
   - Three re-capture tooling obligations close before any later capture relies on `--missing` (D-3999 in wave 1's

@@ -192,14 +192,14 @@ agent meta read naming it. A meta is a join read by point lookup (§5.4 rung 2),
 event: it gains no journal event and no writer, and nothing of it is hashed. Whichever join is known
 first, the journal component is the journal id of the earliest retained journal event of the parent
 session, under the same incarnation, that names that `agent_id`: the join authorizes the retained
-evidence, it does not select an identity arm. A launch response or a SubagentStart is such an event
+evidence and does not choose which event is hashed. A launch response or a SubagentStart is such an event
 itself, so on every measured order it is the earliest. Opening waits for the join and, when the join is
 a meta, for at least one such event. Neither the order of the joins nor the time of the meta read
 enters the hash, so replay re-evaluates the same retained evidence and picks the same event. A tool
 event whose only delegation evidence is `agent_id` does not qualify by itself: it is kept as evidence
 and opens no activity, and it attaches to the activity once a qualifying join for the same `agent_id`
 is known, whether that join came before it or arrives later; once one is, it may itself be the earliest
-event the id hashes. No reader decides this by whether `agent_type` is present (amended 2026-10-07 from
+event the activity id hashes. No reader decides this by whether `agent_type` is present (amended 2026-10-07 from
 the real-lane cross-check and reviews 318 and 324: ledger amendment
 `tool-agent-id-alone-is-unjoined-evidence`).
 
