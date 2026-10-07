@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2e35e41c31527da859c4d4193a2696834763ca7b7a60275b4f0c8d9d193eb468
+# ccrc:generated 1 sha256=0f00d7e12538e8f24d6d199e8a0a48fbc1e36b440c8319ee5b67e0547f721f5b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29842,7 +29842,8 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
   #     journal's encoder (`_lc_json`) is python3.
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]]         || die "bad session id"
   [[ $token =~ ^[0-9a-f]{64}$ ]]         || _lc_refuse reclaim "$id" token-malformed "bad token"
-  _child_runid_valid "$childof"          || _lc_refuse reclaim "$id" run-id-malformed "bad run id"   # wave 1's grammar, ASCII under LC_ALL=C
+  # wave 1's grammar, ASCII under LC_ALL=C
+  _child_runid_valid "$childof"          || _lc_refuse reclaim "$id" run-id-malformed "bad run id"
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the reclaim record safely"
   # THE SHARED LOCK (spec §5.6): `$REG/.reap-<id>.lock`, the SAME file ws-reap
