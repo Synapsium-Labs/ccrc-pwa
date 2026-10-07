@@ -22,7 +22,7 @@ import {
   readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress } from 'node:zlib';
+import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
 import { BUSY_TIMEOUT_MS, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, UUID_RE, WRITER_RE, historyPaths, newSha256 } from './lib.mjs';
 
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
@@ -319,6 +319,39 @@ export function brotli(buf) {
 
 export function unbrotli(z) {
   return brotliDecompressSync(z);
+}
+
+/** Output of one decompressor read, and so the most `unbrotliPrefix` can decode past its bound. */
+const PREFIX_CHUNK = 16384;
+
+/** The first `max` bytes of a Brotli blob's body, decoded by a STREAMING decompressor that is
+ *  destroyed the moment it has produced them, so a multi-MiB sidecar is never decompressed whole
+ *  (D-4312, history-sidecar-redact-before-cut; O20's RSS bound). `decoded` is the byte count the
+ *  decompressor actually produced (at most `max` plus one output chunk), the measurable seam of
+ *  that bound; `whole` says the body ended before `max`, so `bytes` is all of it. A corrupt blob
+ *  rejects, as `unbrotli` throws. */
+export function unbrotliPrefix(z, max) {
+  return new Promise((resolve, reject) => {
+    const d = createBrotliDecompress({ chunkSize: PREFIX_CHUNK });
+    const parts = [];
+    let decoded = 0;
+    let settled = false;
+    const finish = (whole) => {
+      if (settled) return;
+      settled = true;
+      const all = Buffer.concat(parts);
+      resolve({ bytes: all.length > max ? all.subarray(0, max) : all, decoded, whole });
+    };
+    d.on('data', (c) => {
+      if (settled) return;
+      parts.push(c);
+      decoded += c.length;
+      if (decoded >= max) { finish(false); d.destroy(); }
+    });
+    d.on('end', () => { finish(true); });
+    d.on('error', (e) => { if (!settled) { settled = true; reject(e); } });
+    d.end(z);
+  });
 }
 
 /** The store's measured size (§9.3): `page_count × page_size` plus the `-wal`

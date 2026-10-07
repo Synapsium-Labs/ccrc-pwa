@@ -40,13 +40,13 @@ import {
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
-  SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, ftsPhrase, redactField,
+  SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, redactField,
 } from './lib.mjs';
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
   measureStoreFacts, measuredSize, openReader, openWriter, readAttempts, removeStaleTemps, runMigration, setMeta,
   syncWriterMirror, userVersion, withTx,
-  CODEC, brotli, unbrotli, compressFdRange, probeFts5, createFtsTables,
+  CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 
@@ -1368,7 +1368,7 @@ export async function tick(db, ctx) {
   // §9.1 the probe at every open, then §6.2: every pair whose re-index is still owed (a pair learned this tick, or
   // one a dead pass committed) re-indexes before any FTS insert. Its values are every value this tick loaded.
   ictx.fts = ftsPrepare(db, ictx.nowMs).tables;
-  reindexForValues(db, ictx, secrets.values, secrets.complete);
+  await reindexForValues(db, ictx, secrets.values, secrets.complete);
   // Step 1, the drain: journal first, then the FULL drain transaction, then its verdicts, then the unlink (§9.14).
   // runPass never ticks without both binding names: a missing store.writer is a hold there (§9.10 "Writer token").
   ctx.hints = drainSpool(db, ctx);
@@ -1404,7 +1404,7 @@ export async function tick(db, ctx) {
   if (ing !== null && ing.bytes > 0 && ictx.fts !== true) resetFtsPending(db);
   // §9.1 derivation ('fts', 1)'s backfill, within what is left of the ONE budget. It grows db/, so a cap or floor
   // pause, or the per-chunk floor that stopped this run's ingest, holds it (D-4242).
-  if (ctx.ingest && !(ing !== null && ing.paused)) deriveFts(db, ictx, ctx.budget);
+  if (ctx.ingest && !(ing !== null && ing.paused)) await deriveFts(db, ictx, ctx.budget);
   // §6.2's merge steps run under any pause (§9.2: only ingest pauses): they purge a late pair's deleted bytes and
   // free space rather than take it.
   mergeSteps(db, ictx, ctx.budget);
@@ -2663,7 +2663,7 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
       const c = await compressFdRange(a.fd, 0, size);
       if (c === null) return null;
       sha = c.sha;
-      head = readAt(a.fd, 0, SIDECAR_FTS_BYTES);
+      head = readAt(a.fd, 0, SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN);   // D-4312 (history-sidecar-redact-before-cut): the redaction window, not just the cut
       if (stmts(db).blobId.get(sha) === undefined) z = c.z;
     }
     // Task 18's ensureTranscript expects its caller's transaction (bindFile's); here it gets its own.
@@ -2675,7 +2675,7 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
       const ins = q.sidecarIns.run(transcriptPk, s.name, blobId, entryId, ctx.nowMs);
       if (ins.changes === 1 && entryId === null) bump(db, 'sidecar_unlinked');
       q.seenUpsert.run(s.path, st.size, st.mtimeNs, blobId);
-      if (ctx.fts === true && stmts(db).blobId.get(sha).fts_indexed === 0) indexBlob(db, blobId, ftsTextOf(head, 'sidecar'), ctx.pairIdx);
+      if (ctx.fts === true && stmts(db).blobId.get(sha).fts_indexed === 0) indexBlob(db, blobId, sidecarIndexText(head, ctx.pairIdx), ctx.pairIdx);
     });
     budget.bytes += size;
     return { bytes: size };
@@ -2891,6 +2891,7 @@ function derivStmts(db) {
     pending: db.prepare(`INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES (?, ?, NULL, NULL)
       ON CONFLICT(step, version) DO UPDATE SET completed_ms = NULL`),
     reopen: db.prepare('UPDATE derivation_state SET completed_ms = NULL WHERE step = ? AND version = ? AND completed_ms IS NOT NULL'),
+    blobZ: db.prepare('SELECT z FROM blobs WHERE blob_id = ?'),
     blobForFts: db.prepare(`SELECT z, EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = blobs.blob_id) AS is_sidecar
       FROM blobs WHERE blob_id = ?`),
     pairTop: db.prepare('SELECT max(rowid) AS rid FROM redact_hashes'),
@@ -2914,7 +2915,7 @@ function ftsStmts(db) {
     match: db.prepare('SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH ?'),
     merge: db.prepare("INSERT INTO blobs_fts (blobs_fts, rank) VALUES ('merge', ?)"),
     total: db.prepare('SELECT total_changes() AS n'),
-    backfill: db.prepare(`SELECT b.blob_id AS blob_id, b.z AS z,
+    backfill: db.prepare(`SELECT b.blob_id AS blob_id, length(b.z) AS zlen,
         EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = b.blob_id) AS is_sidecar
       FROM blobs b
       WHERE b.blob_id > ? AND b.fts_indexed = 0 AND b.z IS NOT NULL
@@ -2928,15 +2929,24 @@ function ftsStmts(db) {
   return f;
 }
 
-/** A stored blob's index text: a sidecar's first SIDECAR_FTS_BYTES, or a body's plain text
- *  (D-4195, history-fts-body-plain-text). A body
- *  that does not parse indexes nothing. It is never thrown: the index is derived, and the blob
- *  stays. */
-function ftsTextOfBlob(z, isSidecar) {
+/** A stored blob's index text, and how many bytes were decoded to make it (D-4312, history-sidecar-redact-before-cut).
+ *  A sidecar's is `sidecarIndexText` (lib: redacted over a window, then cut) of a BOUNDED prefix of
+ *  its body, at most SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN bytes of output, never the whole
+ *  decompressed blob (O20's RSS bound). A body's plain text is small and decompressed whole
+ *  (D-4195, history-fts-body-plain-text); one that does not parse indexes nothing. It is never
+ *  thrown: the index is derived, and the blob stays. */
+export async function ftsTextOfBlob(z, isSidecar, pairIdx) {
+  if (isSidecar) {
+    const p = await unbrotliPrefix(z, SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN);
+    return { text: sidecarIndexText(p.bytes, pairIdx), decoded: p.decoded };
+  }
   const bytes = unbrotli(z);
-  if (isSidecar) return ftsTextOf(bytes, 'sidecar');
-  try { return ftsTextOf(JSON.parse(bytes.toString('utf8')), 'entry'); } catch { return ''; }
+  try { return { text: ftsTextOf(JSON.parse(bytes.toString('utf8')), 'entry'), decoded: bytes.length }; } catch { return { text: '', decoded: bytes.length }; }
 }
+
+/** Index text is computed outside any transaction (a sidecar's decompression is async) and written
+ *  in groups of at most this many characters, so a backfill holds a few MiB of text, never a batch's. */
+const FTS_GROUP_CHARS = 4 * 1024 * 1024;
 
 /** At a tick's start: the read-only probe (history-fts-probe-read-only), and, the first time it
  *  answers present, derivation ('fts', 1)'s first act, the two tables
@@ -2975,11 +2985,15 @@ export function indexBlob(db, blobId, text, pairIdx) {
 }
 
 /** Derivation ('fts', 1)'s backfill (§9.1). Every blob still unindexed that a searchable row (or a
- *  sidecar) references is indexed in BACKFILL_BATCH transactions from a cursor, within the run's
- *  budget. When none is left the step completes and meta `fts` reads ready. Under a cap or floor pause the
+ *  sidecar) references is indexed, from a cursor, within the run's budget. A batch of up to
+ *  BACKFILL_BATCH blobs is selected by id and compressed size ONLY; each blob's `z` is fetched one at
+ *  a time, charged to the run budget as it is, and the batch stops when the budget fails (D-4312,
+ *  history-sidecar-redact-before-cut: 256 compressed blobs plus a decompressed sidecar in one batch
+ *  broke O20's RSS bound). Text is computed outside the transaction, which writes it in groups.
+ *  When none is left the step completes and meta `fts` reads ready. Under a cap or floor pause the
  *  tick does not call it (D-4242, history-fts-backfill-pauses-with-ingest). The EXISTS probes below search
  *  schema v1's referrer indexes (D-4217, history-referrer-indexes). */
-export function deriveFts(db, ctx, budget) {
+export async function deriveFts(db, ctx, budget) {
   if (ctx.fts !== true) return;
   const d = derivStmts(db);
   const row = d.sel.get(FTS_STEP, 1);
@@ -2989,19 +3003,35 @@ export function deriveFts(db, ctx, budget) {
   while (budgetLeft(budget)) {
     const batch = f.backfill.all(cursor, ...SEARCHABLE_PROVENANCE, ...SEARCHABLE_PROVENANCE, BACKFILL_BATCH);
     const last = batch.length < BACKFILL_BATCH;
-    withTx(db, 'NORMAL', () => {
-      for (const b of batch) {
-        indexBlob(db, b.blob_id, ftsTextOfBlob(b.z, b.is_sidecar === 1), ctx.pairIdx);
-        cursor = b.blob_id;
-        budget.bytes += b.z.length;
-      }
-      if (last) {
-        d.done.run(ctx.nowMs, String(cursor), FTS_STEP, 1);
-        setMeta(db, 'fts', 'ready');
-      } else {
-        d.cursor.run(String(cursor), FTS_STEP, 1);
-      }
-    });
+    let group = [];
+    let chars = 0;
+    let reached = cursor;   // the last blob of this batch taken, indexed or skipped
+    const commit = (done) => {
+      withTx(db, 'NORMAL', () => {
+        for (const g of group) indexBlob(db, g.id, g.text, ctx.pairIdx);
+        cursor = reached;
+        if (done) {
+          d.done.run(ctx.nowMs, String(cursor), FTS_STEP, 1);
+          setMeta(db, 'fts', 'ready');
+        } else {
+          d.cursor.run(String(cursor), FTS_STEP, 1);
+        }
+      });
+      group = [];
+      chars = 0;
+    };
+    for (const b of batch) {
+      if (!budgetLeft(budget)) { if (reached !== cursor) commit(false); return; }
+      const z = d.blobZ.get(b.blob_id)?.z;
+      if (z === undefined || z === null) { reached = b.blob_id; continue; }
+      const { text } = await ftsTextOfBlob(z, b.is_sidecar === 1, ctx.pairIdx);
+      budget.bytes += b.zlen;
+      reached = b.blob_id;
+      group.push({ id: b.blob_id, text });
+      chars += text.length;
+      if (chars >= FTS_GROUP_CHARS) commit(false);
+    }
+    commit(last);
     if (last) return;
   }
 }
@@ -3033,7 +3063,7 @@ export function resetFtsPending(db) {
  *  no loadable value (sessions.json's hash pairs, or a source removed since) is passed over by the
  *  mark. Values are never written anywhere. D-4311 (history-reindex-by-units-and-complete-loads).
  *  Returns how many blobs were re-indexed. */
-export function reindexForValues(db, ctx, values, complete) {
+export async function reindexForValues(db, ctx, values, complete) {
   if (ctx.fts !== true) return 0;
   const d = derivStmts(db);
   const mark = Number(getMeta(db, REINDEX_META) ?? 0);
@@ -3045,16 +3075,32 @@ export function reindexForValues(db, ctx, values, complete) {
   const ids = new Set();
   for (const v of owed) for (const unit of secretUnits(v)) for (const r of f.match.all(ftsPhrase(unit))) ids.add(Number(r.rowid));
   if (ids.size === 0 && complete !== true) return 0;
-  withTx(db, 'NORMAL', () => {
-    for (const id of ids) {
-      f.del.run(id);
-      const b = d.blobForFts.get(id);
-      if (b === undefined || b.z === null) continue;   // a tombstone keeps no index row
-      f.ins.run(id, redactField(ftsTextOfBlob(b.z, b.is_sidecar === 1), ctx.pairIdx));
-    }
-    if (ids.size > 0) d.pending.run(MERGE_STEP, 1);
-    if (complete === true) setMeta(db, REINDEX_META, String(top));
-  });
+  // Texts are computed outside the transaction and written in groups. Each group's transaction registers the
+  // merge steps, so a pass that dies between groups still purges what it deleted; the mark moves in the last one.
+  const rows = [...ids];
+  let group = [];
+  let chars = 0;
+  const commit = (final) => {
+    withTx(db, 'NORMAL', () => {
+      for (const g of group) {
+        f.del.run(g.id);
+        if (g.text !== null) f.ins.run(g.id, redactField(g.text, ctx.pairIdx));
+      }
+      if (ids.size > 0) d.pending.run(MERGE_STEP, 1);
+      if (final && complete === true) setMeta(db, REINDEX_META, String(top));
+    });
+    group = [];
+    chars = 0;
+  };
+  for (const id of rows) {
+    const b = d.blobForFts.get(id);
+    // A tombstone keeps no index row.
+    const text = b === undefined || b.z === null ? null : (await ftsTextOfBlob(b.z, b.is_sidecar === 1, ctx.pairIdx)).text;
+    group.push({ id, text });
+    chars += text === null ? 0 : text.length;
+    if (chars >= FTS_GROUP_CHARS) commit(false);
+  }
+  commit(true);
   return ids.size;
 }
 

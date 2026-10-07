@@ -131,6 +131,8 @@ export const FLOOR_PCT = 10;
 export const EPOCH_CONFIRM_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const SCAN_INTERVAL_MS = 30 * 60 * 1000;
 export const SIDECAR_FTS_BYTES = 512 * 1024;
+/** How far past SIDECAR_FTS_BYTES a sidecar is decoded and redacted before it is cut (D-4312). */
+export const SIDECAR_REDACT_MARGIN = 65536;
 export const SECRET_MIN_LEN = 20;
 export const SECRET_SEGMENT_MIN = 12;
 export const DEFAULT_COPY_BPS = 10_000_000;
@@ -1126,18 +1128,13 @@ function stringLeaves(value, out) {
 
 /** The FTS body: extracted plain text, never the JSON (RV3). Text blocks,
  *  the string leaves of `tool_use.input`, the text of `tool_result` content
- *  and `system` content, joined with `\n`; a sidecar's first
- *  `SIDECAR_FTS_BYTES` bytes decoded as UTF-8. Redaction is the caller's
- *  next step (§6.2: the index sees redacted text only).
+ *  and `system` content, joined with `\n`; a sidecar's is `sidecarIndexText`'s
+ *  cut, unredacted here. Redaction is the caller's next step (§6.2: the index
+ *  sees redacted text only; a sidecar's caller uses `sidecarIndexText` with
+ *  its pair index, which redacts BEFORE the cut).
  *  D-4195 */
 export function ftsTextOf(body, kind) {
-  if (kind === 'sidecar') {
-    const bytes = body instanceof Uint8Array ? body : new Uint8Array(0);
-    const cut = bytes.length > SIDECAR_FTS_BYTES;
-    const text = new TextDecoder('utf-8').decode(cut ? bytes.subarray(0, SIDECAR_FTS_BYTES) : bytes);
-    // A cut inside a multi-byte character decodes to one U+FFFD; drop it.
-    return cut ? text.replace(/�$/, '') : text;
-  }
+  if (kind === 'sidecar') return sidecarIndexText(body instanceof Uint8Array ? body : new Uint8Array(0), null);
   const parts = [];
   if (typeof body === 'string') parts.push(body);
   else if (Array.isArray(body)) {
@@ -1555,6 +1552,35 @@ export function redactField(text, idx) {
   plain += tail;
   const joined = redactRun(plain, idx);
   return joined === plain ? perFragment : joined;
+}
+
+/** A sidecar's index text (§6.2, §8.3; D-4312, history-sidecar-redact-before-cut): the first
+ *  `SIDECAR_FTS_BYTES` bytes of its REDACTED text. At most `SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN`
+ *  bytes are decoded and redacted whole, and only then is the result cut to `SIDECAR_FTS_BYTES`
+ *  UTF-8 bytes (a cut multi-byte character dropped). A secret that straddles the cut was matched
+ *  whole in the window, so no prefix of it reaches the index; a PEM block that starts before the
+ *  cut matches to the window's end. When a cut happened (the redacted text ran past the cut, or
+ *  `bytes` filled the window, so more of the file may follow) and it fell inside a
+ *  `[A-Za-z0-9_-]` run, that trailing partial run is dropped, because a run cut in half is a
+ *  prefix no pair or shape can match. `idx` null redacts nothing (`ftsTextOf` calls it so: one cut
+ *  rule). `bytes` is the file's first bytes, never more than the window is read. */
+export function sidecarIndexText(bytes, idx) {
+  const window = SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN;
+  const windowCut = bytes.length >= window;
+  const part = bytes.length > window ? bytes.subarray(0, window) : bytes;
+  let text = new TextDecoder('utf-8').decode(part);
+  // The window cut inside a multi-byte character decodes to one U+FFFD; drop it.
+  if (windowCut) text = text.replace(/\uFFFD$/, '');
+  if (idx !== null) text = redactField(text, idx);
+  const enc = new TextEncoder().encode(text);
+  const runByte = (b) => (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a) || b === 0x5f || b === 0x2d;
+  if (enc.length > SIDECAR_FTS_BYTES) {
+    let out = new TextDecoder('utf-8').decode(enc.subarray(0, SIDECAR_FTS_BYTES)).replace(/\uFFFD$/, '');
+    if (runByte(enc[SIDECAR_FTS_BYTES - 1]) && runByte(enc[SIDECAR_FTS_BYTES])) out = out.replace(/[A-Za-z0-9_-]+$/, '');
+    return out;
+  }
+  if (windowCut && enc.length > 0 && runByte(enc[enc.length - 1])) return text.replace(/[A-Za-z0-9_-]+$/, '');
+  return text;
 }
 
 /** The second belt (§8.3): the final rendered stdout, stderr or `--json`

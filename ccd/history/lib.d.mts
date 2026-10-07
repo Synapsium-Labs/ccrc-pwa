@@ -44,6 +44,8 @@ export const FLOOR_PCT: number;
 export const EPOCH_CONFIRM_WINDOW_MS: number;
 export const SCAN_INTERVAL_MS: number;
 export const SIDECAR_FTS_BYTES: number;
+export const SIDECAR_REDACT_MARGIN: number;
+export function sidecarIndexText(bytes: Uint8Array, idx: PairIndex | null): string;
 export const SECRET_MIN_LEN: number;
 export const SECRET_SEGMENT_MIN: number;
 export const DEFAULT_COPY_BPS: number;

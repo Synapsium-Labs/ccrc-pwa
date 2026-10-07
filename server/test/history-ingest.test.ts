@@ -1586,6 +1586,11 @@ describe('history ingest: sidecars (plan task 21)', () => {
 });
 
 interface IxSweep {
+  ftsPrepare(db: DatabaseSync, nowMs: number): { state: string; tables: boolean };
+  deriveFts(db: DatabaseSync, ctx: IxCtx, budget: IxBudget): Promise<void>;
+  ftsTextOfBlob(z: Uint8Array, isSidecar: boolean, pairIdx: unknown): Promise<{ text: string; decoded: number }>;
+}
+interface IxSweep {
   secretsStep(db: DatabaseSync, ctx: IxCtx, secretFiles: string[]): { pairIdx: unknown; newValues: string[]; values: string[] };
   loadSecrets(home: string, secretFiles: string[]): { values: string[]; pairs: unknown[]; unreadable: string[]; unsegmentable: number };
 }
@@ -1989,5 +1994,151 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       expect(metaV(db, 'fts_reindex_rid'))
         .toBe(String((db.prepare('SELECT max(rowid) AS r FROM redact_hashes').get() as { r: number }).r));
     } finally { db.close(); }
+  });
+
+  describe('D-4312 (history-sidecar-redact-before-cut): a sidecar is redacted over a window larger than its cut, then cut', () => {
+    const N = 512 * 1024;
+    const sideFile = (box: HistoryBox, name: string): string => {
+      const dir = path.join(box.homes[0]!, 'projects', IX.SLUG, IX.U, 'tool-results');
+      fs.mkdirSync(dir, { recursive: true });
+      return path.join(dir, name);
+    };
+    /** `zqhead`, blanks, then `secret` with `before` of its characters below byte N, then ` zqend`. */
+    const straddle = (secret: string, before: number): Buffer =>
+      Buffer.concat([Buffer.from('zqhead\n'), Buffer.alloc(N - 7 - before, 0x20), Buffer.from(secret), Buffer.from(' zqend\n')]);
+
+    it('S6: a known value straddling byte SIDECAR_FTS_BYTES leaves no 12+ char prefix in the index (whole-read arm)', () => {
+      const box = IX.newBox('ccrc-hist-s6-');
+      const tok = hex(24);
+      secretFile(box, 'side.env', `ZQ_SIDE_VALUE=${tok}\n`);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+      fs.writeFileSync(sideFile(box, 'big.txt'), straddle(tok, 20));
+      IX.sweepTwice(box);
+      const db = openStoreRO(box);
+      try {
+        expect(matches(db, 'zqhead')).toBe(1);                         // CONTROL: the sidecar is indexed
+        expect(matches(db, `"${tok.slice(0, 12)}"*`)).toBe(0);
+        expect(matches(db, `"${tok.slice(0, 16)}"*`)).toBe(0);
+        expect(ftsBytes(db).includes(tok.slice(0, 12))).toBe(false);
+        expect(IX.blobsHold(db, tok)).toBe(true);                      // the blob keeps it, verbatim
+      } finally { db.close(); }
+    });
+
+    it('S6: the streamed arm (a sidecar over SIDECAR_WHOLE_MAX) redacts the larger window before its cut as well', () => {
+      const box = IX.newBox('ccrc-hist-s6b-');
+      const tok = hex(24);
+      secretFile(box, 'side.env', `ZQ_SIDE_VALUE=${tok}\n`);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+      const file = sideFile(box, 'huge.txt');
+      const fd = fs.openSync(file, 'w');
+      try {
+        const head = straddle(tok, 20);
+        fs.writeSync(fd, head, 0, head.length, 0);
+        fs.ftruncateSync(fd, 67_108_864 + 4096);                       // a hole past the head: the streamed arm, at no disk cost
+      } finally { fs.closeSync(fd); }
+      try {
+        IX.sweepTwice(box);
+        const db = openStoreRO(box);
+        try {
+          expect(IX.count(db, 'sidecars')).toBe(1);
+          expect(matches(db, 'zqhead')).toBe(1);
+          expect(matches(db, `"${tok.slice(0, 12)}"*`)).toBe(0);
+          expect(ftsBytes(db).includes(tok.slice(0, 12))).toBe(false);
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    }, 300_000);
+
+    it('S6: a secret not yet known, straddling the cut, leaves no partial run at it: the cut run is dropped', () => {
+      const box = IX.newBox('ccrc-hist-s6c-');
+      const tok = hex(24);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+      fs.writeFileSync(sideFile(box, 'big.txt'), straddle(tok, 20));
+      IX.sweepTwice(box);                                              // no pair is known: only the dropped partial run keeps the prefix out
+      const db = openStoreRO(box);
+      try {
+        expect(matches(db, 'zqhead')).toBe(1);
+        expect(matches(db, `"${tok.slice(0, 12)}"*`)).toBe(0);
+        expect(matches(db, 'zqend')).toBe(0);                          // past the cut
+      } finally { db.close(); }
+    });
+
+    it('S6: a value learned late, printed in a sidecar\'s head, is re-indexed through the bounded read', () => {
+      const box = IX.newBox('ccrc-hist-s6d-');
+      const tok = hex(24);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+      fs.writeFileSync(sideFile(box, 'big.txt'), `zqhead ${tok} zqend\n${' '.repeat(2 * N)}zqfar\n`);
+      IX.sweepTwice(box);
+      let db = openStoreRO(box);
+      try { expect(matches(db, `"${tok.slice(0, 12)}"*`)).toBe(1); } finally { db.close(); }   // CONTROL: indexed in clear, the pair is not known yet
+      secretFile(box, 'side.env', `ZQ_SIDE_VALUE=${tok}\n`);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(matches(db, 'zqhead')).toBe(1);
+        expect(matches(db, 'zqend')).toBe(1);
+        expect(matches(db, `"${tok.slice(0, 12)}"*`)).toBe(0);
+        expect(matches(db, 'zqfar')).toBe(0);                          // still past the cut
+      } finally { db.close(); }
+    });
+  });
+
+  describe('T23-a (D-4312): the backfill and the re-index never decompress a whole sidecar, and charge blobs one at a time', () => {
+    const BOUND = 512 * 1024 + 65536;
+    const body = (): Buffer => Buffer.from(`zqhead ${'x '.repeat(1_500_000)} zqtail\n`);   // 3 MB of compressible text, far over the bound
+    const q5 = (b: Buffer): Buffer => brotliCompressSync(b, { params: { [zc.BROTLI_PARAM_QUALITY]: 5 } });
+
+    it('unbrotliPrefix stops decoding at the bound, and returns exactly the first bytes of the body', async () => {
+      const { store } = await IX.api();
+      const raw = body();
+      const p = await store.unbrotliPrefix(q5(raw), BOUND);
+      expect(p.bytes.length).toBe(BOUND);
+      expect(p.bytes.equals(raw.subarray(0, BOUND))).toBe(true);
+      expect(p.whole).toBe(false);
+      expect(p.decoded).toBeLessThan(BOUND + 128 * 1024);     // the decompressor never produced the whole 3 MB
+      const small = await store.unbrotliPrefix(q5(Buffer.from('short body')), BOUND);
+      expect(small).toMatchObject({ whole: true, decoded: 10 });
+      expect(small.bytes.toString()).toBe('short body');
+    });
+
+    it('a stored sidecar blob over the bound indexes exactly its head, decoding no more than the bound', async () => {
+      const { sweep: S, lib } = await IX.api();
+      const raw = body();
+      const idx = lib.makePairIndex([]);
+      const r = await S.ftsTextOfBlob(q5(raw), true, idx);
+      expect(r.decoded).toBeLessThan(BOUND + 128 * 1024);
+      expect(r.text).toBe(lib.sidecarIndexText(raw.subarray(0, BOUND), idx));
+      expect(r.text).toContain('zqhead');
+      expect(r.text).not.toContain('zqtail');
+      const e = await S.ftsTextOfBlob(q5(Buffer.from(JSON.stringify('an entry body'))), false, idx);
+      expect(e.text).toBe('an entry body');
+    });
+
+    it('the backfill charges the run budget per blob and stops its batch when the budget fails', async () => {
+      const { sweep: S, lib } = await IX.api();
+      const box = IX.newBox('ccrc-hist-t23a-');
+      try {
+        IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqentry words', 1)]));
+        const dir = path.join(box.homes[0]!, 'projects', IX.SLUG, IX.U, 'tool-results');
+        fs.mkdirSync(dir, { recursive: true });
+        for (const n of ['a', 'b', 'c']) fs.writeFileSync(path.join(dir, `${n}.txt`), `zqside${n} ${IX.words(200, n.charCodeAt(0))}\n`);
+        const { db, ids } = await IX.openFixtureStore(box);
+        try {
+          await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());   // no FTS this tick: nothing indexed
+          const total = IX.count(db, 'blobs');
+          expect(total).toBeGreaterThanOrEqual(4);
+          expect(IX.count(db, 'blobs', 'fts_indexed = 1')).toBe(0);
+          const ctx = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 120_000, ids);
+          ctx.fts = S.ftsPrepare(db, ctx.nowMs).tables;
+          ctx.pairIdx = lib.makePairIndex([]);
+          await S.deriveFts(db, ctx, S.newBudget(Date.now, { maxBytes: 1 }));
+          expect(IX.count(db, 'blobs', 'fts_indexed = 1')).toBe(1);   // one blob charged, the budget failed, the batch stopped
+          expect(metaV(db, 'fts')).not.toBe('ready');
+          for (let i = 0; i < total && metaV(db, 'fts') !== 'ready'; i += 1) await S.deriveFts(db, ctx, S.newBudget(Date.now, { maxBytes: 1 }));
+          expect(IX.count(db, 'blobs', 'fts_indexed = 1')).toBe(total);   // each later run resumes from the cursor
+          expect(metaV(db, 'fts')).toBe('ready');
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    });
   });
 });

@@ -17,6 +17,7 @@ export function probeFts5(db: DatabaseSync): 'present' | 'absent';
 export function withTx<T>(db: DatabaseSync, sync: 'NORMAL' | 'FULL', fn: () => T): T;
 export function brotli(buf: Uint8Array): Buffer;
 export function unbrotli(z: Uint8Array): Buffer;
+export function unbrotliPrefix(z: Uint8Array, max: number): Promise<{ bytes: Buffer; decoded: number; whole: boolean }>;
 export function measuredSize(db: DatabaseSync, dbPath: string): number;
 export function getMeta(db: DatabaseSync, k: string): string | null;
 export function setMeta(db: DatabaseSync, k: string, v: string | number): void;

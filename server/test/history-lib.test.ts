@@ -1783,3 +1783,65 @@ describe('lib: ftsPhrase (plan task 23)', () => {
     expect(lib.ftsPhrase('a"b')).toBe('"a""b"');
   });
 });
+
+// ===========================================================================
+// D-4312 (history-sidecar-redact-before-cut): a sidecar's index text is redacted over a window larger than its cut,
+// and only then cut (spec 8.3: redaction runs "before any slice, cap ... and before every index"). The secrets below
+// are minted at runtime, and the shape fixture is assembled from parts.
+// ===========================================================================
+describe('sidecarIndexText: redact the window, then cut (D-4312, spec 8.3)', () => {
+  const N = libRows.SIDECAR_FTS_BYTES;
+  const W = N + libRows.SIDECAR_REDACT_MARGIN;
+  const rndHex = (bytes: number): string => historyCrypto.randomBytes(bytes).toString('hex');
+  const idxOf = (values: string[]): libRows.PairIndex => libRows.makePairIndex(libRows.secretPairs(values).pairs);
+  /** `head` ends with `secret` straddling byte N: `before` of its characters lie below the cut. */
+  const straddling = (secret: string, before: number, tail = ' after the cut\n'): Buffer => {
+    const lead = Buffer.alloc(N - before, 0x20);
+    return Buffer.concat([lead, Buffer.from(secret), Buffer.from(tail)]);
+  };
+
+  it('the margin is 64 KiB', () => {
+    expect(libRows.SIDECAR_REDACT_MARGIN).toBe(65536);
+  });
+  it('a known value straddling the cut leaves no 12+ char prefix of itself in the text', () => {
+    const tok = rndHex(24);
+    const out = libRows.sidecarIndexText(straddling(tok, 20), idxOf([tok]));
+    expect(out.includes(tok.slice(0, 12))).toBe(false);
+    expect(out.includes(libRows.REDACTED_MARK)).toBe(true);
+  });
+  it('a shape-matched secret straddling the cut leaves no 12+ char prefix of itself in the text', () => {
+    const body = rndHex(20);
+    const secret = `${['s', 'k'].join('')}-${body}`;
+    const out = libRows.sidecarIndexText(straddling(secret, 16), libRows.makePairIndex([]));
+    expect(out.includes(body.slice(0, 12))).toBe(false);
+    expect(out.includes(libRows.REDACTED_MARK)).toBe(true);
+  });
+  it('a private-key block that starts before the cut and ends past it is redacted to the window\'s end', () => {
+    const pem = `-----BEGIN ${['PRIVATE', 'KEY'].join(' ')}-----\n${'QUJD'.repeat(2000)}\n-----END ${['PRIVATE', 'KEY'].join(' ')}-----`;
+    const out = libRows.sidecarIndexText(straddling(pem, 40), libRows.makePairIndex([]));
+    expect(out.includes('QUJDQUJD')).toBe(false);
+  });
+  it('a sidecar under the cut indexes exactly as before: whole, with only its secrets redacted', () => {
+    const tok = rndHex(24);
+    expect(libRows.sidecarIndexText(Buffer.from('short é words'), libRows.makePairIndex([]))).toBe('short é words');
+    expect(libRows.sidecarIndexText(Buffer.from(`a ${tok} b`), idxOf([tok]))).toBe(`a ${libRows.REDACTED_MARK} b`);
+  });
+  it('the text is cut at SIDECAR_FTS_BYTES; a cut multi-byte character is dropped and a cut run loses its partial tail', () => {
+    const mid = libRows.sidecarIndexText(Buffer.concat([Buffer.alloc(N - 1, 0x20), Buffer.from('é'), Buffer.from(' tail')]), libRows.makePairIndex([]));
+    expect(Buffer.byteLength(mid)).toBe(N - 1);
+    const inRun = libRows.sidecarIndexText(Buffer.concat([Buffer.alloc(N - 8, 0x20), Buffer.from('word splitrun-continues here')]), libRows.makePairIndex([]));
+    expect(inRun.endsWith(' word ')).toBe(true);   // 'spl' is the partial run at the cut and is dropped
+    const atBoundary = libRows.sidecarIndexText(Buffer.concat([Buffer.alloc(N - 4, 0x20), Buffer.from('word  more')]), libRows.makePairIndex([]));
+    expect(atBoundary.endsWith('word')).toBe(true);   // the cut fell between runs: nothing to drop
+  });
+  it('a buffer past the window gives no more than the cut, and a secret starting inside it is still redacted', () => {
+    const tok = rndHex(24);
+    const bytes = Buffer.concat([Buffer.alloc(W - 5, 0x20), Buffer.from(` ${tok}`)]);   // starts below the window's end, ends past it
+    const out = libRows.sidecarIndexText(Buffer.concat([bytes, Buffer.alloc(1000, 0x61)]), idxOf([tok]));
+    expect(Buffer.byteLength(out)).toBeLessThanOrEqual(N);
+  });
+  it('ftsTextOf(…, "sidecar") applies the same cut rule (one rule, no second copy)', () => {
+    const body = Buffer.concat([Buffer.alloc(N - 4, 0x20), Buffer.from('word splitrun-continues here')]);
+    expect(libRows.ftsTextOf(body, 'sidecar') === libRows.sidecarIndexText(body, null)).toBe(true);   // a boolean: a failed toBe would diff 512 KiB
+  });
+});
