@@ -256,6 +256,13 @@ const ROWS: readonly { readonly name: string; readonly input: ChildReclaimStatus
     input: base({ event: ev('refused', 'flock-unavailable'), fleetPaused: true }), want: switchPaused },
   { name: 'refused lock-unopenable under a fleet pause → paused',
     input: base({ event: ev('refused', 'lock-unopenable'), fleetPaused: true }), want: switchPaused },
+  // Wave 6 (spec §5.9): the two id-tied argv dies are pre-lock refusals too.
+  { name: 'refused token-malformed → deferred, its journal word, never refused',
+    input: base({ event: ev('refused', 'token-malformed') }),
+    want: { word: 'deferred', sentence: lcRefusalWord('token-malformed'), at: EV_AT } },
+  { name: 'refused run-id-malformed → deferred, its journal word, never refused',
+    input: base({ event: ev('refused', 'run-id-malformed') }),
+    want: { word: 'deferred', sentence: lcRefusalWord('run-id-malformed'), at: EV_AT } },
   { name: 'refused bad-session-id (journal-only, not a pre-lock token) → refused, its journal word',
     input: base({ event: ev('refused', 'bad-session-id') }),
     want: { word: 'refused', sentence: lcRefusalWord('bad-session-id'), at: EV_AT } },
@@ -286,7 +293,7 @@ describe('childReclaimStatus — every mapping row (wave 5, spec §5.7–§5.9)'
   });
 
   it('reads a failure token’s journal word ahead of the audit sentences, never the generic fallback', () => {
-    for (const token of ['pin-failed', 'unit-still-active', 'flock-unavailable', 'lock-unopenable', 'branch-unmeasured', 'probe-unmeasured']) {
+    for (const token of ['pin-failed', 'unit-still-active', 'flock-unavailable', 'lock-unopenable', 'branch-unmeasured', 'probe-unmeasured', 'token-malformed', 'run-id-malformed']) {
       const word = lcRefusalWord(token);
       expect(word, `${token} has no LC_REFUSAL_WORD entry: wave 3's journal words did not land`).not.toBeNull();
       expect(word).not.toBe(refusalSentence(token));

@@ -43,16 +43,16 @@ const VERBS: readonly (readonly [string, string, number])[] = [
 ];
 
 /**
- * THE FIFTEEN DIES A REFUSAL RECORD CANNOT DESCRIBE, each for one stated reason.
+ * THE FOURTEEN DIES A REFUSAL RECORD CANNOT DESCRIBE, each for one stated reason.
  * Four are `cmd_ws_reap`'s pre-lock rungs, which D15 leaves alone: three run
  * before `$id` has been validated at all and the fourth is the `_json_str`
  * probe — the emitter itself is what is missing there, so an emit would be the
  * thing being reported. Two are the `--reason` loop arms, which run before any
- * id is bound. The set is EXACT: a sixteenth sanctioned die reds the count.
+ * id is bound. The set is EXACT: a fifteenth sanctioned die reds the count.
  *
- * Seven are cmd_ws_reclaim's (child reclamation, wave 3), for reap's own reasons: its usage line and run-id shape check run before $id is bound, its four --actor/--reason checks are the loop arms that run before any id is bound, and its _json_str probe is the emitter being missing. Its "bad token" and "bad session id" are the SAME literals as reap's and need no second entry.
+ * Six are cmd_ws_reclaim's (child reclamation, wave 3), for reap's own reasons: its usage line runs before $id is bound, its four --actor/--reason checks are the loop arms that run before any id is bound, and its _json_str probe is the emitter being missing. Its "bad session id" is the SAME literal as reap's and needs no second entry; it stays a die because an id that failed its own shape check is no id to journal against (spec §5.9). Its token and run-id checks are NOT here: since wave 6 they run after the session id is validated and journal through `_lc_refuse` (spec §5.9) — "bad token" stays in this set for reap's and ws-expire's own literal.
  *
- * Two are cmd_ws_expire's (workspace lifecycle, wave 3), for the same reasons: its usage line runs before $id is bound, and its _json_str probe is the emitter being missing. Its four --actor/--reason checks, "bad token" and "bad session id" are the SAME literals as ws-reclaim's and reap's and need no second entry.
+ * Two are cmd_ws_expire's (workspace lifecycle, wave 3), for the same reasons: its usage line runs before $id is bound, and its _json_str probe is the emitter being missing. Its four --actor/--reason checks are the SAME literals as ws-reclaim's, and its "bad token" and "bad session id" the SAME as reap's, and need no second entry.
  */
 const SANCTIONED: readonly string[] = [
   'die "usage: ccd ws-rm [--reason <text>] <id>"',
@@ -62,7 +62,6 @@ const SANCTIONED: readonly string[] = [
   'die "bad session id"',
   'die "python3 unavailable — cannot quote the reap record safely"',
   'die "usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>]"',
-  'die "bad run id"',
   'die "python3 unavailable — cannot quote the reclaim record safely"',
   'die "--actor must be non-blank"',
   'die "--actor is longer than $_LC_DEC_MAX bytes"',
@@ -108,7 +107,7 @@ describe('every die in a destructive verb is reached through _lc_refuse or _lc_f
   it('every sanctioned die is STILL THERE — a stale exemption is a hole', () => {
     // Mutant: convert `die "bad token"` and leave it in SANCTIONED -> this fails
     // with `a sanctioned die that no longer exists: [ 'die "bad token"' ]`.
-    expect(SANCTIONED.length, 'the sanctioned set changed size').toBe(15);
+    expect(SANCTIONED.length, 'the sanctioned set changed size').toBe(14);
     const all = VERBS.map(([n, u]) => bodyOf(n, u)).join('\n');
     expect(SANCTIONED.filter((s) => !all.includes(s)), 'a sanctioned die that no longer exists')
       .toEqual([]);

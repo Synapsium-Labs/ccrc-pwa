@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5606e9825227225eb2b507cd4f504ddae5ec648e793f829fb3376e696b565117
+# ccrc:generated 1 sha256=f0dbf64235cdfc124b1b246f416e8b1ba61e30b2e3d1547e1206f2f5ffa27018
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29813,9 +29813,17 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
   [[ $# -eq 6 && $1 == --expect && $3 == --child-of && $5 == --session ]] \
     || die "usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>]"
   local token=$2 childof=$4 id=$6
-  [[ $token =~ ^[0-9a-f]{64}$ ]]         || die "bad token"
-  _child_runid_valid "$childof"          || die "bad run id"   # wave 1's grammar, ASCII under LC_ALL=C
+  # THE SESSION ID IS VALIDATED FIRST (spec §5.9). The two checks after it
+  # journal their refusal against `$id`, so `$id` must already be a shape ccrc
+  # mints. Seven dies stay unjournaled, each for its reason:
+  #   - the usage die and the four --actor/--reason checks above, because no
+  #     id is bound yet;
+  #   - a malformed session id, because it is no id to journal against;
+  #   - the python3 probe below, which cannot journal at all, because the
+  #     journal's encoder (`_lc_json`) is python3.
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]]         || die "bad session id"
+  [[ $token =~ ^[0-9a-f]{64}$ ]]         || _lc_refuse reclaim "$id" token-malformed "bad token"
+  _child_runid_valid "$childof"          || _lc_refuse reclaim "$id" run-id-malformed "bad run id"   # wave 1's grammar, ASCII under LC_ALL=C
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the reclaim record safely"
   # THE SHARED LOCK (spec §5.6): `$REG/.reap-<id>.lock`, the SAME file ws-reap

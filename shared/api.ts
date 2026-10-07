@@ -3799,8 +3799,8 @@ export interface ChildReclaimKeptMember { readonly sessionId: string; readonly r
  *  - `terminal`: a TERMINAL reclaim refusal left the child standing.
  *  - `failing`: the child's reclaim has kept FAILING past the defer ceiling,
  *    and is still retried, backing off in between. The run of failures is made
- *    of `failed` lines, plus `refused` lines whose token is one of the two
- *    pre-lock tokens (`flock-unavailable`, `lock-unopenable`): those are
+ *    of `failed` lines, plus `refused` lines whose token is a pre-lock token
+ *    (`CHILD_RECLAIM_PRE_LOCK_TOKEN`, `server/src/childReclaimSweep.ts`): those are
  *    pre-lock dies that the server retries.
  *  - `kept`: one marked child the sweep keeps on purpose, named by a
  *    `ChildReclaimKeptWord`.
@@ -7847,7 +7847,9 @@ export type LcRefusalToken =
   | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): ccrc could not keep the child's work — the pin phase, or one of the tail's per-deletion keeps — so the verb stopped before deleting anything further
   | 'unit-still-active'       // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before deleting anything further
   | 'branch-unmeasured'       // ws-reclaim (spec §5.5): the tail's step 5 could not read whether the child's branch still exists, so it stopped before removing anything further — journaled `failed`, never `refused`
-  | 'probe-unmeasured';       // ws-reclaim and `ws-audit --reclaim` (spec §5.9): a probe the ladder needs could not run or be read, before any act — journaled `failed`, its `verb` telling the two arms apart
+  | 'probe-unmeasured'        // ws-reclaim and `ws-audit --reclaim` (spec §5.9): a probe the ladder needs could not run or be read, before any act — journaled `failed`, its `verb` telling the two arms apart
+  | 'token-malformed'         // ws-reclaim (spec §5.9): `--expect` is not 64 lowercase hex — journaled `refused` before the lock, once the session id is valid
+  | 'run-id-malformed';       // ws-reclaim (spec §5.9): `--child-of` fails ccd's run-id grammar — journaled `refused` before the lock, once the session id is valid
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -7942,6 +7944,16 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // document as not-resumable).
   'probe-unmeasured':
     'ccrc could not finish measuring this workspace — a check it relies on could not run, or its answer could not be read — so nothing was started and nothing was removed. The next attempt measures again from the start.',
+  // Child reclamation, wave 6 (spec §5.9). These are the two argv dies of
+  // ws-reclaim that are tied to an id. Each is journaled through `_lc_refuse`
+  // before the lock, once the session id is valid. The server composes this
+  // argv itself, so either one is a ccrc defect. Wave 5's reader classes both
+  // as pre-lock FAILURES (`CHILD_RECLAIM_PRE_LOCK_TOKEN`), so the chip reads
+  // `deferred`, never `refused`.
+  'token-malformed':
+    'ccrc asked for this clean-up with a confirmation token that is not a shape ccd mints, so nothing was looked up and nothing was removed. This is a ccrc bug, not something about this workspace.',
+  'run-id-malformed':
+    'ccrc named the run this workspace belongs to with a run id that is not a shape ccrc mints, so nothing was looked up and nothing was removed. This is a ccrc bug, not something about this workspace.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the

@@ -904,11 +904,14 @@ const INTENT: LifecycleOutcome = 'intent';
 const REFUSED: LifecycleOutcome = 'refused';
 const FAILED: LifecycleOutcome = 'failed';
 
-/** The two `reclaim` refusals ccd journals for a PRE-LOCK die, keyed by the die. Spelled here, once:
- *  `coord/` code reads them by property, never as a quoted literal. */
+/** The `reclaim` refusals ccd journals for a PRE-LOCK die, keyed by the die. Spelled here, once:
+ *  `coord/` code reads them by property, never as a quoted literal. `flock` and `lock` date from
+ *  wave 3. `token` and `runId` date from wave 6 (spec §5.9): the two argv dies tied to an id,
+ *  journaled once the session id is valid. The usage, bad-session-id and python3 dies are never
+ *  journaled, so they are never here. */
 export const CHILD_RECLAIM_PRE_LOCK_TOKEN = {
-  flock: 'flock-unavailable', lock: 'lock-unopenable',
-} as const satisfies Readonly<Record<'flock' | 'lock', LcRefusalToken>>;
+  flock: 'flock-unavailable', lock: 'lock-unopenable', token: 'token-malformed', runId: 'run-id-malformed',
+} as const satisfies Readonly<Record<'flock' | 'lock' | 'token' | 'runId', LcRefusalToken>>;
 export type ChildReclaimPreLockToken = (typeof CHILD_RECLAIM_PRE_LOCK_TOKEN)[keyof typeof CHILD_RECLAIM_PRE_LOCK_TOKEN];
 const CHILD_RECLAIM_PRE_LOCK_TOKENS: readonly string[] = Object.values(CHILD_RECLAIM_PRE_LOCK_TOKEN);
 /** Use THIS, never `.includes(x as ChildReclaimPreLockToken)`: `isRunState`'s rule. */
@@ -916,12 +919,12 @@ export function isChildReclaimPreLockToken(v: unknown): v is ChildReclaimPreLock
   return typeof v === 'string' && CHILD_RECLAIM_PRE_LOCK_TOKENS.includes(v);
 }
 /** A `reclaim` line that is part of a run of FAILURES (spec §5.9): `failed`, or `refused` with one
- *  of the two pre-lock tokens. ccd journals its pre-lock lock dies through `_lc_refuse`; the
+ *  of the pre-lock tokens. ccd journals those pre-lock dies through `_lc_refuse`; the
  *  executor reads the same call as a `pre-lock-die` failure and the sweep retries it, so the
- *  report reads it as the failure it is, never as a settled refusal. ONLY these two, by name: a
+ *  report reads it as the failure it is, never as a settled refusal. ONLY these, by name: a
  *  token ccd starts journaling under `reclaim` later is classified when it is added, in this
  *  table or in `CHILD_RECLAIM_TOKEN_KIND`, and is never inherited. NOT read by
- *  `childReclaimTerminalRefusal`: neither token is terminal. */
+ *  `childReclaimTerminalRefusal`: no pre-lock token is terminal. */
 export const childReclaimFailureLine = (e: { readonly outcome: string; readonly refusal: string | null }): boolean =>
   e.outcome === FAILED || (e.outcome === REFUSED && isChildReclaimPreLockToken(e.refusal));
 

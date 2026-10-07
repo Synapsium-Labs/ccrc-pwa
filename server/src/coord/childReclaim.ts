@@ -614,8 +614,8 @@ export function parseChildReclaimAudit(sessionId: string, stdout: string): Child
  *  for a die ccd journals nothing for. */
 const CHILD_RECLAIM_PRE_LOCK_DIE_PATTERNS: readonly { readonly re: RegExp; readonly token: ChildReclaimPreLockToken | null }[] = [
   { re: /^usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> \[--defer-expired\] \[--surface <word>\] \[--actor <text>\] \[--reason <text>\]$/, token: null },
-  { re: /^bad token$/, token: null },
-  { re: /^bad run id$/, token: null },
+  { re: /^bad token$/, token: CHILD_RECLAIM_PRE_LOCK_TOKEN.token },
+  { re: /^bad run id$/, token: CHILD_RECLAIM_PRE_LOCK_TOKEN.runId },
   { re: /^bad session id$/, token: null },
   { re: /^python3 unavailable — cannot quote the reclaim record safely$/, token: null },
   { re: /^flock \(util-linux\) is unavailable — refusing to run the destructive verb unserialised$/,
@@ -1514,7 +1514,7 @@ export interface ChildReclaimStatusInput {
  *    (a person's hold, or a coordinator's chair, outlasts a failure).
  * 4. THE REMAINING EVENTS:
  *    - a FAILURE LINE (`childReclaimFailureLine`: `failed`, or a refusal with
- *      one of the two pre-lock tokens), where the gate holds → deferred, in
+ *      one of the pre-lock tokens), where the gate holds → deferred, in
  *      the attention list's own sentence once its run has lasted the ceiling;
  *    - refused with no token → refused;
  *    - the `paused` token, where the gate holds → paused;
@@ -1583,7 +1583,7 @@ export function childReclaimStatus(input: ChildReclaimStatusInput): ChildReclaim
     if (skip.class !== 'ordinary') return waiting({ word: 'deferred', sentence: skip.sentence, at: null });
   }
   if (event !== null) {
-    // A FAILURE LINE (spec §5.9): `failed`, or a refusal with one of the two pre-lock tokens, which
+    // A FAILURE LINE (spec §5.9): `failed`, or a refusal with one of the pre-lock tokens, which
     // the executor and the sweep retry. The SAME predicate the attention list's failing arm reads.
     // It promises the sweep acts again, and so do the `paused` and retry arms below. All three
     // answer only for a child that still stands as this run's (`marked`, the row rule's gate; spec
