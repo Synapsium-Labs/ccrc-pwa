@@ -1067,6 +1067,47 @@ describe('Task 26F item 5: a throw inside runOpPass still ends stdout with one {
   });
 });
 
+describe('FR2-c: the {"rc":…} line is printed last on EVERY path, including a throw before the pass\'s try', () => {
+  const rcLines = (stdout: string): string[] => stdout.split('\n').filter((l) => l.startsWith('{"rc"'));
+  const lastLine = (stdout: string): string => stdout.trimEnd().split('\n').pop()!;
+
+  // Root bypasses a directory's mode, so these cannot make a directory unlistable as uid 0.
+  it.skipIf(process.getuid?.() === 0)('a throw from the journal half at lock take (.draining/ unlistable) ends stdout with one {"rc":1}', () => {
+    const box = boundBox('ccrc-hist-fr2c1-');
+    const dir = paths(box).draining;
+    fs.chmodSync(dir, 0o000);
+    try {
+      const r = runSweep(box, ['--op', 'import', '--apply']);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/internal error/);
+      expect(rcLines(r.stdout), r.stdout).toEqual(['{"rc":1}']);
+      expect(lastLine(r.stdout)).toBe('{"rc":1}');
+    } finally { fs.chmodSync(dir, 0o700); }
+    expect(fs.existsSync(path.join(paths(box).root, 'op')), 'no op marker is left').toBe(false);
+  });
+
+  it('a throw from the dry run (an evidence query failing on a malformed store) ends stdout with one {"rc":1}', () => {
+    const box = boundBox('ccrc-hist-fr2c2-');
+    const db = new DatabaseSync(paths(box).db);
+    try { db.exec('DROP TABLE sessions'); } finally { db.close(); }   // the evidence query names a table this store lacks
+    const r = runShim(box, ['--op', 'import']);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/internal error/);
+    expect(rcLines(r.stdout), r.stdout).toEqual(['{"rc":1}']);
+    expect(lastLine(r.stdout)).toBe('{"rc":1}');
+  });
+
+  it('a journal failure at lock take keeps its word and its rc line (control: the existing path)', () => {
+    const box = boundBox('ccrc-hist-fr2c3-');
+    spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: U1, src: 'startup', gen: G1, reg: U1 });
+    expect(runSweep(box).code).toBe(0);                              // renamed and observed
+    const r = runSweep(box, ['--op', 'import', '--apply'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_ENOSPC: '/.draining/' } });
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stdout).toMatch(/^history-sweep: journal-unwritable$/m);
+    expect(lastLine(r.stdout)).toBe('{"rc":1}');
+  });
+});
+
 describe('Task 26F item 6: the journal audit says when it cannot read a month file', () => {
   it('an unreadable month file counts journal_audit_unreadable, the pass still exits 0, and journal_audit_ms stays at its last good value', () => {
     const box = boundBox('ccrc-hist-26f6-');

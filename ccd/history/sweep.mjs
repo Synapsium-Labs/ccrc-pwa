@@ -3557,8 +3557,32 @@ function migrateOp(db, ctx, opened, free) {
   return { rc: EXIT.OK };
 }
 
-/** One --op pass: see the block comment above. */
+/** What an --op pass answers for a throw (Task 26F item 5): the message to stderr first, as main() would have printed
+ *  it, then ONE result line. A StoreError whose word REASONS knows answers that word's exit with the word; any other
+ *  throw is exit 1 with no word. Both of the pass's catch sites answer through it, so the mapping is spelled once. */
+function opThrowResult(e, result) {
+  process.stderr.write(`history-sweep: internal error: ${e && e.message ? e.message : String(e)}\n`);
+  if (e instanceof StoreError && Object.hasOwn(REASONS, e.word)) return result(REASONS[e.word], e.word);
+  return result(EXIT.INTERNAL);
+}
+
+/** One --op pass: see the block comment above. The pass's contract is ONE {"rc":…} line, printed LAST, on EVERY
+ *  path (Task 26F item 5, completed by the final review's FR2-c). `opPass` answers it for a throw inside its try;
+ *  this wrapper answers it for the throws that leave `opPass` BEFORE that try opens (the journal half at lock take,
+ *  the dry run, openStore's removeStaleTemps and createStore), which used to reach main()'s catch with no result
+ *  line at all, so the CLI relayed nothing. */
 export async function runOpPass(parsed, deps, out) {
+  try {
+    return await opPass(parsed, deps, out);
+  } catch (e) {
+    return opThrowResult(e, (rc, reason) => {
+      out(JSON.stringify(reason === undefined ? { rc } : { rc, reason }));
+      return rc;
+    });
+  }
+}
+
+async function opPass(parsed, deps, out) {
   const home = deps.home;
   const P = historyPaths(home);
   const now = deps.now ?? Date.now;
@@ -3646,12 +3670,9 @@ export async function runOpPass(parsed, deps, out) {
       return result(EXIT.INTERNAL);
     }
     // The pass's contract is ONE {"rc":…} line, printed LAST, on every path (Task 26F item 5): the CLI relays it, so a
-    // throw that reached main()'s own catch ended stdout with no line at all. A StoreError whose word REASONS knows
-    // answers that word's exit with the word; any other throw is exit 1 with no word. Its message goes to stderr
-    // first, as main() would have printed it.
-    process.stderr.write(`history-sweep: internal error: ${e && e.message ? e.message : String(e)}\n`);
-    if (e instanceof StoreError && Object.hasOwn(REASONS, e.word)) return result(REASONS[e.word], e.word);
-    return result(EXIT.INTERNAL);
+    // throw that reached main()'s own catch ended stdout with no line at all (opThrowResult; runOpPass's wrapper
+    // answers the throws that precede this try).
+    return opThrowResult(e, result);
   } finally {
     rmSync(P.op, { force: true });
     closeWriter(db);
