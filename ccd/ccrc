@@ -2199,7 +2199,7 @@ already running).
             still PRESERVES ~/.ccrc/memory (every project's durable memory:
             since 'ccrc memory --apply' it is the SOLE live copy, and a
             session's prose is not configuration) unless [--purge-memory]
-            is also given; never worktrees, never tmux state
+            is also given; kept: ~/.ccrc/history (verbatim session text, including any secrets sessions printed; --purge --purge-history removes it); never worktrees, never tmux state
   backup    take update's backup step standalone: coord.db snapshot, dists,
             ccd and the units to ~/ccrc-backups/<ts>/, then prune to the
             newest \$CCRC_BACKUP_KEEP (default 10) timestamped backups — never
@@ -22711,13 +22711,21 @@ cmd_logs() {
 # session's prose. An operator who really does want the memory store gone
 # too says so with the second, explicit flag: `--purge-memory` (refused on
 # its own — it means nothing without `--purge`).
+#
+# `~/.ccrc/history` IS THE SECOND EXCEPTION (history spec 2026-10-05 §9.5,
+# D-4256): it holds session text nothing else keeps
+# once Claude Code's retention deletes the transcripts, so `--purge` keeps it
+# and the operator files beside it, and `--purge-history` (refused on its own,
+# exactly as `--purge-memory` is) asks for them. `_uninst_purge` builds the one
+# kept list both flags shape, and the summary below reads what it left.
 cmd_uninstall() {
-  local force=0 purge=0 purge_memory=0
+  local force=0 purge=0 purge_memory=0 purge_history=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --force) force=1 ;;
       --purge) purge=1 ;;
       --purge-memory) purge_memory=1 ;;
+      --purge-history) purge_history=1 ;;
       -h|--help) usage; exit 0 ;;
       *) _ccrc_usage_die "$1" ;;
     esac
@@ -22725,6 +22733,11 @@ cmd_uninstall() {
   done
   if [ "$purge_memory" -eq 1 ] && [ "$purge" -eq 0 ]; then
     echo "$PROG: --purge-memory needs --purge (it extends what --purge removes; on its own there is nothing to extend)" >&2
+    usage >&2
+    exit 2
+  fi
+  if [ "$purge_history" -eq 1 ] && [ "$purge" -eq 0 ]; then
+    echo "$PROG: --purge-history needs --purge (it extends what --purge removes; on its own there is nothing to extend)" >&2
     usage >&2
     exit 2
   fi
@@ -22790,15 +22803,29 @@ cmd_uninstall() {
   _uninst_graphify_skills
   _uninst_tree_bins
   _uninst_keep_asides
-  [ "$purge" -eq 1 ] && _uninst_purge "$purge_memory"
+  [ "$purge" -eq 1 ] && _uninst_purge "$purge_memory" "$purge_history"
   if [ "$purge" -eq 1 ]; then
-    if [ "$purge_memory" -eq 1 ]; then
-      echo "uninstall: done — this box is off ccrc. Worktrees and the session registry rows were preserved; ~/.ccrc (config AND every project's memory) and ~/ccrc-backups are gone (--purge --purge-memory)"
-    else
-      echo "uninstall: done — this box is off ccrc. Worktrees and the session registry rows were preserved; ~/.ccrc's config and ~/ccrc-backups are gone (--purge), but ~/.ccrc/memory (every project's durable memory) was PRESERVED — pass --purge-memory too to remove it as well"
-    fi
+    # READ FROM THE ONE LIST: `_uninst_purge` left UNINST_PURGE_KEPT naming each
+    # kept name still under ~/.ccrc, so this line can claim nothing it did not
+    # measure — the old one said memory was PRESERVED on a box that had none.
+    local done_say="uninstall: done — this box is off ccrc. Worktrees and the session registry rows were preserved; ~/.ccrc's config and ~/ccrc-backups are gone (--purge" n
+    [ "$purge_memory" -eq 1 ] && done_say+=" --purge-memory"
+    [ "$purge_history" -eq 1 ] && done_say+=" --purge-history"
+    done_say+=")"
+    for n in ${UNINST_PURGE_KEPT[@]+"${UNINST_PURGE_KEPT[@]}"}; do
+      case "$n" in
+        memory) done_say+=", but ~/.ccrc/memory (every project's durable memory) was PRESERVED — pass --purge-memory too to remove it as well" ;;
+        history) done_say+="; $(_uninst_history_kept_line)" ;;
+        *) done_say+="; kept: ~/.ccrc/$n" ;;
+      esac
+    done
+    echo "$done_say"
   else
     echo "uninstall: done — this box is off ccrc, and reinstall is safe: ~/.ccrc (config, roster, identity, and every project's memory), the session registry rows, worktrees and ~/ccrc-backups were all preserved"
+    # Q17 (history spec §15.3): a kept store is named for what it holds.
+    if [ -e "$HOME/.ccrc/history" ] || [ -L "$HOME/.ccrc/history" ]; then
+      echo "uninstall: $(_uninst_history_kept_line)"
+    fi
   fi
 }
 
@@ -23661,20 +23688,85 @@ _uninst_keep_asides() {
 # durable memory (every agent home's own copy is a symlink into it). A bare
 # `rm -rf -- "$HOME/.ccrc"` destroys it wholesale with no exception, no
 # prompt and no mention, and the documented-safe sequence `ccrc backup &&
-# ccrc uninstall --purge` cannot save it either (`_upd_backup`, what `ccrc
-# backup` runs, never copied `memory` before this fix). So `$1` (default 0,
-# `cmd_uninstall`'s `purge_memory`) gates whether memory is destroyed too:
-# 0 (bare `--purge`) removes everything ELSE under `~/.ccrc` and leaves
-# `~/.ccrc/memory` — and so `~/.ccrc` itself — standing; 1 (`--purge
-# --purge-memory`) removes the lot, same as the old unconditional behaviour.
-_uninst_purge() {
-  local purge_memory="${1:-0}"
-  if [ "$purge_memory" -eq 1 ]; then
-    rm -rf -- "$HOME/.ccrc" "$BOX_BACKUP_ROOT" \
-      || _ccrc_die "purging ~/.ccrc (including its memory store) and $BOX_BACKUP_ROOT failed"
-    echo "uninstall: purge: ~/.ccrc (config AND its memory store) and ~/ccrc-backups removed (worktrees and tmux state are never touched)"
-    return 0
+# ccrc uninstall --purge` cannot save it either.
+#
+# ONE KEPT-NAMES LIST (history spec 2026-10-05 §9.5) D-4256.
+# `~/.ccrc/history` is not config either, so it is kept beside `memory`, and
+# `--purge-history` asks for it. The list is built ONCE, below, from the two
+# flags, and it drives every site that once spelled `memory` by hand: the
+# loop's skip, the census of what is left, the `rmdir` guard and the close
+# chain — and the `--purge-memory` arm, which used to `rm -rf ~/.ccrc` whole
+# and so would have taken a store no flag asked for.
+#
+# SPELLED AS GLOBS, NEVER AS SWITCH NAMES D-4257:
+# `history` and `history-*` keep the store root and every operator file beside
+# it (the cap and the switches), so a reinstall neither drops the cap to its
+# default nor lifts an operator's off-switch, and no line here names a switch,
+# which only its readers may (O13). The sweep's lock matches `history-*` and is
+# refused by name in `_uninst_is_kept`: a lock is not data.
+#
+# `$1` purge_memory, `$2` purge_history (each 0|1, default 0). Leaves the global
+# UNINST_PURGE_KEPT naming each kept name still under ~/.ccrc, which
+# `cmd_uninstall`'s summary reads — the same list, never a second census.
+_uninst_is_kept() {   # <name> [<glob>…] -> rc 0 iff <name> is in the kept set
+  local n="$1" g
+  shift
+  [ "$n" = history-sweep.lock ] && return 1
+  for g in "$@"; do
+    # The right-hand side is UNQUOTED on purpose: each kept entry is a glob.
+    [[ "$n" == $g ]] && return 0
+  done
+  return 1
+}
+
+# The one spelling of what a kept history store holds (history spec §15.3 Q17,
+# its recommended wording; the ruling it words is unchanged). Printed by the
+# plain uninstall, by `--purge`'s close line and by its summary.
+_uninst_history_kept_line() {
+  printf '%s' 'kept: ~/.ccrc/history (verbatim session text, including any secrets sessions printed; --purge --purge-history removes it)'
+}
+
+# `--purge --purge-history` with a LINKED `db/` (history spec §9.5): remove,
+# inside the link's target, ONLY the names the store owns — lib.mjs's
+# STORE_FILES, spelled once below and pinned equal to it (O42) — then the
+# link. Never the target directory, never another name in it, and no further
+# link is followed: a target that is itself a link is left alone and named.
+# It runs BEFORE the loop removes ~/.ccrc/history, because `rm -rf` removes a
+# link without following it and would orphan the DB and its backups on the
+# volume.
+_uninst_purge_history_store() {
+  local link="$HOME/.ccrc/history/db" target pat f had_nullglob=0
+  [ -L "$link" ] || return 0
+  target="$(readlink -- "$link")" || _ccrc_die "cannot read the link $link — nothing under it was removed"
+  case "$target" in /*) ;; *) target="$HOME/.ccrc/history/$target" ;; esac
+  if [ -L "$target" ]; then
+    echo "uninstall: purge: ~/.ccrc/history/db points at $target, itself a link — nothing inside it was removed; remove the store's files there by hand"
+  elif [ -d "$target" ]; then
+    # STORE_FILES (ccd/history/lib.mjs)
+    local -a store_files=(history.db history.db-wal history.db-shm history.db-journal 'history.db.new.*' '.history.db.restore.*' backups)
+    # end STORE_FILES
+    shopt -q nullglob && had_nullglob=1
+    shopt -s nullglob
+    for pat in "${store_files[@]}"; do
+      # `$pat` UNQUOTED: the temps are globs, which match their sidecars too.
+      for f in "$target"/$pat; do
+        rm -rf -- "$f" || _ccrc_die "purging $f failed"
+      done
+    done
+    [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+    echo "uninstall: purge: the history store's files removed from $target (the directory and anything else in it are left)"
   fi
+  rm -f -- "$link" || _ccrc_die "removing the link $link failed"
+}
+
+_uninst_purge() {
+  local purge_memory="${1:-0}" purge_history="${2:-0}" had_memory=0
+  local -a kept=() left=() stray=()
+  [ "$purge_memory" -eq 1 ] || kept+=(memory)
+  [ "$purge_history" -eq 1 ] || kept+=(history 'history-*')
+  [ -e "$HOME/.ccrc/memory" ] && had_memory=1
+  UNINST_PURGE_KEPT=()
+  [ "$purge_history" -eq 1 ] && _uninst_purge_history_store
   if [ -d "$HOME/.ccrc" ]; then
     local e had_nullglob=0 had_dotglob=0
     shopt -q nullglob && had_nullglob=1
@@ -23682,34 +23774,49 @@ _uninst_purge() {
     # FIX (re-review): `nullglob` alone leaves a DOTFILE under `~/.ccrc`
     # unmatched by `*` — nothing in this tree writes one, but an operator or
     # the OS can (a `.DS_Store` on the macOS lane, an editor swap file, a
-    # `.bak`) — so it survived this loop, the `rmdir` below then failed on
-    # ENOTEMPTY, and the close line still unconditionally claimed "~/.ccrc
-    # … removed" regardless. `dotglob` closes that hole for the common case;
-    # the message below now checks what actually happened instead of
-    # asserting it, for whatever rare case still leaves something behind.
+    # `.bak`) — so it survived this loop, and the close line still claimed
+    # "~/.ccrc … removed". `dotglob` closes that hole for the common case;
+    # the close chain below checks what actually happened.
     shopt -s nullglob dotglob
     for e in "$HOME/.ccrc"/*; do
-      case "$(basename -- "$e")" in memory) continue ;; esac
+      _uninst_is_kept "${e##*/}" ${kept[@]+"${kept[@]}"} && continue
       rm -rf -- "$e" || _ccrc_die "purging $e failed"
+    done
+    # The census of what is left, through the same list: a kept name here is
+    # the close chain's to name; anything else is "inspect it by hand".
+    for e in "$HOME/.ccrc"/*; do
+      if _uninst_is_kept "${e##*/}" ${kept[@]+"${kept[@]}"}; then left+=("${e##*/}"); else stray+=("${e##*/}"); fi
     done
     [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
     [ "$had_dotglob" -eq 1 ] || shopt -u dotglob
-    # Nothing was ever migrated: `~/.ccrc/memory` never existed, so the loop
-    # above emptied `~/.ccrc` completely — remove the now-empty directory
-    # itself too, so a box that never ran `ccrc memory --apply` still sees
-    # bare `--purge` remove `~/.ccrc` WHOLE, exactly as it always did.
-    [ -d "$HOME/.ccrc/memory" ] || rmdir -- "$HOME/.ccrc" 2>/dev/null || true
+    # THE RMDIR GUARD READS THE LIST: with no kept name left, ~/.ccrc is empty
+    # and goes too, so a box that kept nothing sees `--purge` remove it WHOLE,
+    # exactly as it always did.
+    [ "${#left[@]}" -gt 0 ] || rmdir -- "$HOME/.ccrc" 2>/dev/null || true
   fi
+  UNINST_PURGE_KEPT=(${left[@]+"${left[@]}"})
   rm -rf -- "$BOX_BACKUP_ROOT" || _ccrc_die "purging $BOX_BACKUP_ROOT failed"
-  if [ -d "$HOME/.ccrc/memory" ]; then
-    echo "uninstall: purge: ~/.ccrc's config and ~/ccrc-backups removed; ~/.ccrc/memory (every project's durable memory — the sole live copy since 'ccrc memory --apply') was PRESERVED. Pass --purge-memory too to remove it as well"
-  elif [ -d "$HOME/.ccrc" ]; then
-    # The `rmdir` above did not empty it out — something this loop does not
-    # own (or does not know to remove) is still inside. Say so rather than
-    # claiming a removal that did not happen (the defect this fix closes).
-    echo "uninstall: purge: ~/.ccrc's config was purged and ~/ccrc-backups removed, but ~/.ccrc itself could not be removed — it is not empty; inspect it by hand"
+  # THE CLOSE CHAIN READS THE LIST: it names each kept name present, and says
+  # "inspect it by hand" only for a name outside the list.
+  if [ ! -d "$HOME/.ccrc" ]; then
+    if [ "$purge_memory" -eq 1 ]; then
+      echo "uninstall: purge: ~/.ccrc (config AND its memory store) and ~/ccrc-backups removed (worktrees and tmux state are never touched)"
+    else
+      echo "uninstall: purge: ~/.ccrc and ~/ccrc-backups removed (worktrees and tmux state are never touched)"
+    fi
+  elif [ "${#stray[@]}" -gt 0 ]; then
+    echo "uninstall: purge: ~/.ccrc's config was purged and ~/ccrc-backups removed, but ~/.ccrc itself could not be removed — it still holds ${stray[*]}, which no kept name covers; inspect it by hand"
   else
-    echo "uninstall: purge: ~/.ccrc and ~/ccrc-backups removed (worktrees and tmux state are never touched)"
+    local said="uninstall: purge: ~/.ccrc's config and ~/ccrc-backups removed" n
+    [ "$purge_memory" -eq 1 ] && [ "$had_memory" -eq 1 ] && said+=", and ~/.ccrc/memory with them (--purge-memory)"
+    for n in ${left[@]+"${left[@]}"}; do
+      case "$n" in
+        memory) said+="; ~/.ccrc/memory (every project's durable memory — the sole live copy since 'ccrc memory --apply') was PRESERVED. Pass --purge-memory too to remove it as well" ;;
+        history) said+="; $(_uninst_history_kept_line)" ;;
+        *) said+="; kept: ~/.ccrc/$n (beside the history store; --purge --purge-history removes it)" ;;
+      esac
+    done
+    echo "$said"
   fi
 }
 

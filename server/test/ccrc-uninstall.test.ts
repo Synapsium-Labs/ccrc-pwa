@@ -2392,3 +2392,203 @@ describeLinux('ccrc uninstall: the codex lanes on a real lane (Plan 2b-2 Task 11
     expect(await portAccepts(lane!.litellmPort)).toBe(true);
   }, 120_000);
 });
+
+// ── history spec 2026-10-05 §9.5 (W1-B1 task 31): --purge keeps the store ────
+// `~/.ccrc/history` holds session text nothing else keeps once Claude Code's
+// retention deletes the transcripts, so a bare `--purge` keeps it beside
+// `memory`, and only `--purge --purge-history` takes it. One kept-names list,
+// spelled as globs, drives every site that spells the kept set (O42), and the
+// store never rides the update backup (O45).
+describe('ccrc uninstall --purge and the history store (history spec §9.5, O42, O45)', () => {
+  const STORE_ID = '5f0c2d3e-8a1b-4c2d-9e3f-0a1b2c3d4e5f';
+  /** spec §10.1: the operator's own session must not reach the verb. */
+  const SCRUB: NodeJS.ProcessEnv = { CLAUDECODE: '', CLAUDE_CONFIG_DIR: '', TMUX: '', TMUX_PANE: '' };
+  const KEPT_LINE = 'kept: ~/.ccrc/history (verbatim session text, including any secrets sessions printed; --purge --purge-history removes it)';
+  /** The DB-side names a store owns, the writer's temps and their sidecars
+   *  included — what `STORE_FILES`' globs must match inside a linked target. */
+  const DB_NAMES = ['history.db', 'history.db-wal', 'history.db-shm', 'history.db-journal',
+    'history.db.new.4242', 'history.db.new.4242-wal', '.history.db.restore.4343', '.history.db.restore.4343-journal'];
+  /** A box with a history store: the root and its binding files, a journal
+   *  month, the spool, the DB files under `db/` (or under `linkedTo`, with
+   *  `db/` a link to it), a pre-migration snapshot, and the operator files
+   *  and the sweep lock beside the root. Synthetic bytes only. */
+  const plantHistory = (home: string, opts: { linkedTo?: string } = {}): string => {
+    const root = join(home, '.ccrc', 'history');
+    mkdirSync(join(root, 'spool'), { recursive: true, mode: 0o700 });
+    mkdirSync(join(root, 'journal', STORE_ID), { recursive: true, mode: 0o700 });
+    writeFileSync(join(root, 'journal', STORE_ID, '2026-10.0a1b2c3d.jsonl'), '{"v":1,"k":"head","t":1}\n', { mode: 0o600 });
+    writeFileSync(join(root, 'store.id'), `${STORE_ID}\n`, { mode: 0o600 });
+    writeFileSync(join(root, 'store.writer'), '0a1b2c3d\n', { mode: 0o600 });
+    const dbDir = opts.linkedTo ?? join(root, 'db');
+    mkdirSync(join(dbDir, 'backups'), { recursive: true, mode: 0o700 });
+    if (opts.linkedTo !== undefined) symlinkSync(opts.linkedTo, join(root, 'db'));
+    for (const f of DB_NAMES) writeFileSync(join(dbDir, f), 'fixture store bytes\n', { mode: 0o600 });
+    writeFileSync(join(dbDir, 'backups', 'pre-v2.db'), 'fixture snapshot\n', { mode: 0o600 });
+    writeFileSync(join(dbDir, 'backups', '.pre-v2.attempt'), '1\n', { mode: 0o600 });
+    writeFileSync(join(home, '.ccrc', 'history-max-gb'), '80\n');
+    writeFileSync(join(home, '.ccrc', 'history-off'), '');
+    writeFileSync(join(home, '.ccrc', 'history-sweep.lock'), '');
+    return dbDir;
+  };
+  const plantMemory = (home: string): string => {
+    mkdirSync(join(home, '.ccrc', 'memory', '-p-demo'), { recursive: true });
+    const f = join(home, '.ccrc', 'memory', '-p-demo', 'a-lesson.md');
+    writeFileSync(f, 'prose a session wrote once\n');
+    return f;
+  };
+  /** One ccrc function, run by SOURCING the checkout's ccd/ccrc (its dispatch
+   *  is guarded on BASH_SOURCE, so sourcing runs nothing but definitions). */
+  const sourced = (home: string, script: string): Result => {
+    const r = spawnSync(BASH, ['-c', `. "$1"; ${script}`, 'ccrc-under-test', join(REPO, 'ccd', 'ccrc')],
+      { env: { ...verbEnv(home), ...SCRUB }, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+
+  it('bare --purge keeps the store, its journal, its snapshot and the operator files beside it, and removes the sweep lock (O42)', () => {
+    const home = mkTmp('ccrc-uninst-hist-purge-');
+    plantInstalledBox(home);
+    plantHistory(home);
+    const lesson = plantMemory(home);
+    const r = runVerb(home, 'uninstall', ['--purge'], SCRUB);
+    expect(r.code, r.stderr).toBe(0);
+    const h = join(home, '.ccrc', 'history');
+    expect(readFileSync(join(h, 'store.id'), 'utf8')).toBe(`${STORE_ID}\n`);
+    expect(existsSync(join(h, 'journal', STORE_ID, '2026-10.0a1b2c3d.jsonl'))).toBe(true);
+    expect(existsSync(join(h, 'db', 'history.db'))).toBe(true);
+    expect(existsSync(join(h, 'db', 'backups', 'pre-v2.db'))).toBe(true);
+    expect(readFileSync(join(home, '.ccrc', 'history-max-gb'), 'utf8')).toBe('80\n');
+    expect(existsSync(join(home, '.ccrc', 'history-off'))).toBe(true);
+    expect(readFileSync(lesson, 'utf8')).toBe('prose a session wrote once\n');
+    expect(existsSync(join(home, '.ccrc', 'history-sweep.lock')), 'a lock is not data').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'accounts.json')), 'config survived --purge').toBe(false);
+    expect(r.stdout).toMatch(/^uninstall: purge: .*kept: ~\/\.ccrc\/history \(verbatim session text/m);
+    expect(r.stdout).toContain(KEPT_LINE);
+    expect(r.stdout).not.toMatch(/inspect it by hand/);
+  });
+
+  it('with a store and NO memory, --purge names history as kept and never says "inspect it by hand" (BK16, RC12)', () => {
+    const home = mkTmp('ccrc-uninst-hist-nomem-');
+    plantInstalledBox(home);
+    plantHistory(home);
+    const r = runVerb(home, 'uninstall', ['--purge'], SCRUB);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readdirSync(join(home, '.ccrc')).sort()).toEqual(['history', 'history-max-gb', 'history-off']);
+    expect(r.stdout).not.toMatch(/inspect it by hand/);
+    expect(r.stdout).toMatch(/^uninstall: purge: ~\/\.ccrc's config and ~\/ccrc-backups removed; kept: ~\/\.ccrc\/history /m);
+    expect(r.stdout).toMatch(/^uninstall: done — .*\(--purge\); kept: ~\/\.ccrc\/history /m);
+    expect(r.stdout, 'the summary claims a memory store this box never had').not.toMatch(/memory\) was PRESERVED/);
+  });
+
+  it('--purge --purge-memory removes memory and keeps history: that arm is the same loop, never rm -rf ~/.ccrc', () => {
+    const home = mkTmp('ccrc-uninst-hist-mem-');
+    plantInstalledBox(home);
+    plantHistory(home);
+    plantMemory(home);
+    const r = runVerb(home, 'uninstall', ['--purge', '--purge-memory'], SCRUB);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.ccrc', 'memory'))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'history', 'store.id'))).toBe(true);
+    expect(existsSync(join(home, '.ccrc', 'history', 'db', 'history.db'))).toBe(true);
+    expect(r.stdout).toContain(KEPT_LINE);
+    expect(r.stdout, 'the whole-~/.ccrc sentence printed over a kept store').not.toMatch(/config AND its memory store/);
+  });
+
+  it('--purge-history without --purge is a usage error, exit 2, nothing removed', () => {
+    const home = mkTmp('ccrc-uninst-hist-alone-');
+    plantInstalledBox(home);
+    plantHistory(home);
+    const r = runVerb(home, 'uninstall', ['--purge-history'], SCRUB);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--purge-history needs --purge/);
+    expect(existsSync(join(home, '.ccrc', 'history', 'store.id'))).toBe(true);
+    expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
+    expect(existsSync(join(home, 'ccrc'))).toBe(true);
+  });
+
+  it('--purge --purge-history removes the root, the history-* files and the lock, and still keeps memory', () => {
+    const home = mkTmp('ccrc-uninst-hist-both-');
+    plantInstalledBox(home);
+    plantHistory(home);
+    const lesson = plantMemory(home);
+    const r = runVerb(home, 'uninstall', ['--purge', '--purge-history'], SCRUB);
+    expect(r.code, r.stderr).toBe(0);
+    for (const n of ['history', 'history-max-gb', 'history-off', 'history-sweep.lock']) {
+      expect(existsSync(join(home, '.ccrc', n)), `${n} survived --purge-history`).toBe(false);
+    }
+    expect(readFileSync(lesson, 'utf8')).toBe('prose a session wrote once\n');
+    expect(r.stdout).not.toContain(KEPT_LINE);
+    expect(r.stdout).toMatch(/\(--purge --purge-history\)/);
+  });
+
+  it('with a LINKED db/, --purge --purge-history removes only the store\'s names inside the target, then the link — never the target or a foreign file', () => {
+    const home = mkTmp('ccrc-uninst-hist-linked-');
+    plantInstalledBox(home);
+    const target = join(home, 'volume', 'history-db');
+    plantHistory(home, { linkedTo: target });
+    writeFileSync(join(target, 'operator-notes.txt'), 'not the store\'s\n');
+    const r = runVerb(home, 'uninstall', ['--purge', '--purge-history'], SCRUB);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readdirSync(target)).toEqual(['operator-notes.txt']);
+    expect(existsSync(join(home, '.ccrc', 'history')), 'the root survived').toBe(false);
+    expect(r.stdout).toContain(`uninstall: purge: the history store's files removed from ${target}`);
+  });
+
+  it('a plain uninstall keeps the store and says what it holds (Q17); with no store it says nothing of one', () => {
+    const home = mkTmp('ccrc-uninst-hist-plain-');
+    plantInstalledBox(home);
+    plantHistory(home);
+    const r = runVerb(home, 'uninstall', [], SCRUB);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.ccrc', 'history', 'db', 'history.db'))).toBe(true);
+    expect(r.stdout).toContain(`uninstall: ${KEPT_LINE}`);
+    const bare = mkTmp('ccrc-uninst-hist-plain-none-');
+    plantInstalledBox(bare);
+    expect(runVerb(bare, 'uninstall', [], SCRUB).stdout).not.toContain(KEPT_LINE);
+  });
+
+  it('_uninst_purge spells the store\'s names once, equal to lib.mjs STORE_FILES (O42, IV10)', async () => {
+    const { STORE_FILES } = await import('../../ccd/history/lib.mjs');
+    const lines = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8').split('\n');
+    const open = lines.flatMap((l, i) => (l.trim() === '# STORE_FILES (ccd/history/lib.mjs)' ? [i] : []));
+    expect(open, 'exactly one STORE_FILES block in ccd/ccrc').toHaveLength(1);
+    expect(lines[open[0]! + 2]!.trim()).toBe('# end STORE_FILES');
+    const m = /^\s*local -a store_files=\((.*)\)\s*$/.exec(lines[open[0]! + 1]!);
+    expect(m, 'the line between the markers is not `local -a store_files=(…)`').not.toBeNull();
+    const names = m![1]!.trim().split(/\s+/).map((w) => w.replace(/^'(.*)'$/, '$1'));
+    expect(names).toEqual([...STORE_FILES]);
+    const holders = lines.filter((l) => !/^\s*#/.test(l) && l.includes('history.db-wal'));
+    expect(holders, 'ccd/ccrc spells history.db-wal outside its one STORE_FILES line').toHaveLength(1);
+  });
+
+  it('the kept set is one list of globs: the skip, the rmdir guard and the close chain read it, and no switch is spelled (O42, FE16)', () => {
+    const body = ccrcFunction('_uninst_purge');
+    const code = body.split('\n').filter((l) => !/^\s*#/.test(l));
+    const text = code.join('\n');
+    expect(text).toContain('kept+=(memory)');
+    expect(text).toContain("kept+=(history 'history-*')");
+    expect(code.filter((l) => /_uninst_is_kept "\$\{e##\*\/\}" \$\{kept\[@\]\+"\$\{kept\[@\]\}"\}/.test(l)),
+      'the skip and the census of what is left must both ask the list').toHaveLength(2);
+    const rmdir = code.filter((l) => /\brmdir\b/.test(l));
+    expect(rmdir, 'one rmdir guard').toHaveLength(1);
+    expect(rmdir[0]!, 'the rmdir guard must read the list, never a name').toMatch(/^\s*\[ "\$\{#left\[@\]\}" -gt 0 \] \|\| rmdir -- "\$HOME\/\.ccrc"/);
+    expect(text, 'a site still tests memory by hand').not.toMatch(/-d "\$HOME\/\.ccrc\/memory"/);
+    expect(text).not.toMatch(/\bmemory\) continue/);
+    const helpers = `${body}\n${ccrcFunction('_uninst_is_kept')}\n${ccrcFunction('_uninst_purge_history_store')}`;
+    for (const sw of ['history-off', 'history-max-gb', 'history-steer-off', 'history-steer-live', 'steer-on', 'headless-on']) {
+      expect(helpers, `the purge spells the switch ${sw}: only its readers may (O13)`).not.toContain(sw);
+    }
+  });
+
+  it('O45: no row _upd_backup_pairs lists is ~/.ccrc/history or an ancestor of it — the store never rides the update backup', () => {
+    const home = mkTmp('ccrc-uninst-hist-o45-');
+    plantInstalledBox(home);
+    const r = sourced(home, '_upd_backup_pairs');
+    expect(r.code, r.stderr).toBe(0);
+    const sources = r.stdout.split('\n').filter(Boolean).map((l) => l.split('\t')[1] ?? '');
+    expect(sources.length, 'the listing printed almost nothing — the check below would be vacuous').toBeGreaterThan(3);
+    expect(sources, 'the listing did not run against this HOME').toContain(join(home, '.ccrc', 'memory'));
+    const store = join(home, '.ccrc', 'history');
+    const covering = sources.filter((s) => s === store || store.startsWith(s.endsWith('/') ? s : `${s}/`));
+    expect(covering, 'a backup row copies the history store, or a directory holding it').toEqual([]);
+  });
+});

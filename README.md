@@ -1101,7 +1101,7 @@ worktrees and `~/ccrc-backups`, printing (never running) the keep-aside restore 
 removes `~/.ccrc`'s config (roster, identity, `ccrc.env`, `build.json`, …) and `~/ccrc-backups` — but **preserves
 `~/.ccrc/memory`** (every project's durable memory, the sole live copy since `ccrc memory --apply`;
 a session's prose is not configuration) unless `--purge-memory` is also given, which extends `--purge`
-to remove it too; never worktrees, never tmux state. It also removes graphify's skill from every rostered home,
+to remove it too; it likewise preserves `~/.ccrc/history` (the session-history store: verbatim session text, which Claude Code's retention may already have deleted elsewhere) and the `~/.ccrc/history-*` operator files, which only `--purge-history` (refused without `--purge`) removes, and `--purge-memory` never reaches them; never worktrees, never tmux state. It also removes graphify's skill from every rostered home,
 ccrc's `~/.local/bin/graphify` link and the Codex runtime under `~/.ccrc/runtime/codex`, and stops any Codex lane
 tier it can prove is that lane's own. It leaves, for you to remove by hand, the three ccrc skills — `skills/ccrc-coordinator`,
 `skills/ccrc-worker`, `skills/ccrc-reviewer` — in each account home, a hand-placed `~/.local/bin/ccrc-api`, and
