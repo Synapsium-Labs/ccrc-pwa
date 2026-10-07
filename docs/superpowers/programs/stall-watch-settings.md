@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `505ffbff4`; review run 330 waits at the daily cap (R22) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `505ffbff4`; review run 330 dispatched (R23) |
 
 ## Decisions & deviations
 
@@ -308,6 +308,15 @@ time.
     carried constraint below is restored with the exact command.
   - Wave 2's six departure slugs, the worker's question on `coord-db`'s slot match, its parked residue and the
     plan's operator question 2 wait for the review report.
+- **R23 (2026-10-07 19:58)**, review run 330 is dispatched.
+  - At 19:58 run 330 was still the planned review of run 322, run 322 was still `awaiting-review`, and
+    `origin/ws/calm-basin` was still at `505ffbff4`. The unchanged payload went out once and was accepted. The
+    reviewer is `ccrc-pwa-quiet-mesa` (`adopted` false, `skillState` present, brief queued), and its route
+    (`workflow=on`) lets it run the panel as a Workflow.
+  - The worker's mail 3921: CI run 37671873640 finished with every required check green. Both macOS legs are red in
+    docs-reader suites (`ccd-docs-index`, `ccd-docs-tree`) that this wave does not touch, and they gate nothing.
+  - The fleet box reported v0.0.119 (`7f7bf4afc`, wave 1) at 19:30, so the updater has moved it. The server box's
+    `/health` stays unverified here: it is reachable only by raw HTTP, which this session does not use.
 
 ## Carried constraints (reviewers get these)
 
