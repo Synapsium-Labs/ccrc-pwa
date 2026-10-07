@@ -334,22 +334,29 @@ export function unbrotliPrefix(z, max) {
   return new Promise((resolve, reject) => {
     const d = createBrotliDecompress({ chunkSize: PREFIX_CHUNK });
     const parts = [];
+    let held = 0;
     let decoded = 0;
-    let settled = false;
-    const finish = (whole) => {
-      if (settled) return;
-      settled = true;
-      const all = Buffer.concat(parts);
-      resolve({ bytes: all.length > max ? all.subarray(0, max) : all, decoded, whole });
-    };
+    let cut = false;
+    let ended = false;
+    let failed = false;
+    // The promise settles on 'close' — after destroy() has taken effect, or after 'end' — so
+    // `decoded` is final: every chunk the decompressor emitted is counted, kept or not. Counting
+    // stops only because the decompressor did (F1: a counter that stopped at the cut itself would
+    // read the same with or without destroy()).
     d.on('data', (c) => {
-      if (settled) return;
-      parts.push(c);
       decoded += c.length;
-      if (decoded >= max) { finish(false); d.destroy(); }
+      if (cut) return;
+      parts.push(c);
+      held += c.length;
+      if (held >= max) { cut = true; d.destroy(); }
     });
-    d.on('end', () => { finish(true); });
-    d.on('error', (e) => { if (!settled) { settled = true; reject(e); } });
+    d.on('end', () => { ended = true; });
+    d.on('error', (e) => { failed = true; reject(e); });
+    d.on('close', () => {
+      if (failed) return;
+      const all = Buffer.concat(parts);
+      resolve({ bytes: all.length > max ? all.subarray(0, max) : all, decoded, whole: ended && !cut });
+    });
     d.end(z);
   });
 }
