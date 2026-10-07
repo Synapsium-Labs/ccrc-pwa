@@ -25797,9 +25797,9 @@ from server/test, so a new history-*.test.ts without its line reds."
 
 ## Deviations found
 
-Every departure this plan takes from the spec is listed once below, in the order its first task meets it, with the task(s) that carry it and the spec §16 slug it implements. The text is the spec's §16 departure, except for D-4260 through D-4262, which are Part A's review corrections and not §16 rows, and for the NEW departures, which no §16 row covers yet: the nine this plan was written with, and every one defined while B1 was executing (each entry after D-4262); each of those is marked "NEW departure (no spec §16 row)".
+Every departure this plan takes from the spec is listed once below, with the task(s) that carry it. D-4165 through D-4262 come first, in the order their first task meets them, each beside the spec §16 slug it implements; the text is the spec's §16 departure, except for D-4260 through D-4262, which are Part A's review corrections and not §16 rows, and for the nine NEW departures this plan was written with, which no §16 row covers (their slugs are the plan's own). Every entry after D-4262 was defined while B1 was executing: its slug is plan-minted, no §16 row covers it, each is marked "NEW departure (no spec §16 row)", and the entries stand in the order they were defined, not in task order.
 
-**The numbers were issued in one block by the allocator (`POST /api/ledger/deviations`, 2026-10-06) and defined here in the same commit.** Each entry names the spec §16 slug it carries. A departure found while executing a wave takes a number from that wave's run block, named in its brief, and is appended below.
+**D-4165 through D-4262 were issued in one block by the allocator (`POST /api/ledger/deviations`, 2026-10-06) and defined here in the same commit.** The entries after D-4262 took their numbers from the blocks issued for the wave's run (D-4296 through D-4315 and D-4336 through D-4341), not from that one, and were defined across the commits that first cite them, not in one commit.
 
 - **D-4165** — `node-floor-two-reasons` (Task 1): The doctor floor message and the install comment name both reasons (§9.9).
 - **D-4166** — `history-cap-file` (Tasks 3, 6, 24): The cap is an operator file, not an env key (G1).
