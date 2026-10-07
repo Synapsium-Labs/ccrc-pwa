@@ -39,6 +39,7 @@ import {
   CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, linkSidecar, ftsTextOf,
+  SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, sessionHashPairs, makePairIndex, secretKindOf,
 } from './lib.mjs';
 import {
   StoreError, bump, closeWriter, createStore, dropPending, finishPending, getMeta, measureStoreFacts, openReader,
@@ -1383,6 +1384,12 @@ export async function tick(db, ctx) {
       countOutside(db, 'journal_write_failed');
     }
   }
+  // The tick's one ingest context (Task 19), made once and shared by the secrets, the ingest, the launch facts and
+  // the ticks row. It is built here, right after the outbox flush, so the secrets step can set its pairIdx (plan task 22).
+  const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir));
+  // §9.2 "Then the secrets": every pair committed and journaled before any drain or FTS insert.
+  const secrets = secretsStep(db, ictx, ctx.parsed.secrets);
+  ictx.pairIdx = secrets.pairIdx;
   // Step 1, the drain: journal first, then the FULL drain transaction, then its verdicts, then the unlink (§9.14).
   // runPass never ticks without both binding names: a missing store.writer is a hold there (§9.10 "Writer token").
   ctx.hints = drainSpool(db, ctx);
@@ -1401,7 +1408,6 @@ export async function tick(db, ctx) {
   // stream and write in chunks, under the run's ONE budget. Discovery and binding happen ONCE per tick, here;
   // an unreadable roster discovers nothing, as Task 18's line did (§9.2 step 2). The ingest probes the
   // free-space floor on db/ before every chunk (§9.3, BK17).
-  const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir));
   // §9.2 steps 2-5 and 7: one budget for the run; a busy store ends the tick (O22).
   const ing = ctx.ingest && !ctx.rosterUnreadable ? await ingestTick(db, ictx, ctx.budget) : null;
   if (ing !== null && ing.busy) return;   // the write lock is another's: nothing more this tick
@@ -2030,10 +2036,11 @@ export function floorProbeFor(dir, statfs) {
 
 /** What every ingest step reads: this pass's home and rostered homes, the tick's start, the
  *  binding's ids, and the injected parts a test may replace in-process: the boundary test from
- *  compact-card.mjs, the history-off probe, the parser, the free-space floor probe. */
+ *  compact-card.mjs, the history-off probe, the parser, the free-space floor probe. pairIdx is this tick's
+ *  redaction index; secretsStep's answer replaces the empty default. */
 export function makeIngestCtx(home, homes, nowMs, ids, floorProbe = FLOOR_ALWAYS_OK) {
   const off = historyPaths(home).off;
-  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe };
+  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe, pairIdx: makePairIndex([]) };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2454,6 +2461,155 @@ export async function ingestSidecars(db, ctx, budget, uuids) {
     if (r.floor !== undefined) return { bytes, complete: false, paused: true };
   }
   return { bytes, complete: true, paused: false };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Secrets, every tick (§8.3 layer 1; §9.2 "Then the secrets"; plan task 22). They run before any
+// drain, recovery replay or FTS insert. Each newly learned (len, sha256) pair commits under FULL
+// with its `redact` outbox row and is flushed to the journal right after, as any verdict is
+// (history-redaction-journaled, D-4241). Values live only in this process's memory for this tick: never
+// logged, stored, journaled or printed. Under a hold no DB is open, so the secrets wait.
+// ---------------------------------------------------------------------------------------------
+
+/** Error codes that mean "nothing is there", as opposed to "something is there and unreadable".
+ *  Not `ABSENT`: that name is Task 16's Presence object in this module. */
+const ABSENT_CODES = new Set(['ENOENT', 'ENOTDIR']);
+
+/** The largest secret file loadSecrets opens. sessions.json holds one idHash per session, so it needs
+ *  headroom; anything larger is not a secret list. A stat before the open, as the _reg_read lesson
+ *  (D-4300, history-secret-file-read-type-checked): a FIFO with no writer blocks in open(2) for good and
+ *  a link to /dev/zero balloons in read(2), and secrets run first every tick. */
+const SECRET_FILE_MAX = 4 * 1024 * 1024;
+
+const SECRET_STMTS = new WeakMap();
+function secretStmts(db) {
+  let q = SECRET_STMTS.get(db);
+  if (q !== undefined) return q;
+  q = {
+    redactHas: db.prepare('SELECT 1 AS hit FROM redact_hashes WHERE len = ? AND sha256 = ?'),
+    redactIns: db.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, ?) ON CONFLICT(len, sha256) DO NOTHING'),
+    outboxIns: db.prepare('INSERT INTO journal_outbox (rec) VALUES (?)'),
+    allPairs: db.prepare('SELECT len, sha256 FROM redact_hashes'),
+  };
+  SECRET_STMTS.set(db, q);
+  return q;
+}
+
+/** One segment of a SECRET_SOURCES glob as a matcher: `*` is any run of characters, nothing else
+ *  is special. */
+function globSegment(seg) {
+  const body = seg.split('*').map((p) => p.replace(/[.+?^$()|[\]\\{}]/g, '\\$&')).join('[^/]*');
+  return new RegExp(`^${body}$`);
+}
+
+/** The files one SECRET_SOURCES entry names under `home`. A `*` never matches a dot-name (the
+ *  shell's rule). A directory that exists but cannot be listed goes to `unreadable`; an absent one
+ *  names nothing. */
+function expandSecretSource(home, src, unreadable) {
+  if (src.path !== undefined) return [`${home}/${src.path}`];
+  let paths = [home];
+  for (const seg of src.glob.split('/')) {
+    const next = [];
+    for (const d of paths) {
+      if (!seg.includes('*')) { next.push(`${d}/${seg}`); continue; }
+      let names;
+      try { names = readdirSync(d); } catch (e) {
+        if (!ABSENT_CODES.has(e?.code)) unreadable.push(d);
+        continue;
+      }
+      const re = globSegment(seg);
+      for (const n of names.sort()) if (!n.startsWith('.') && re.test(n)) next.push(`${d}/${n}`);
+    }
+    paths = next;
+  }
+  return paths;
+}
+
+/** This tick's secret values and their (len, sha256) pairs (§8.3 layer 1): the frozen
+ *  SECRET_SOURCES list under `home`, plus each declared secretsFile the shim passed (D-4205
+ *  history-redaction-from-roster, D-4201 history-redaction-agent-env, D-4206 history-secret-value-grammar,
+ *  D-4203 history-redaction-by-value).
+ *  - An absent file names nothing, and a directory is skipped.
+ *  - One that exists and cannot be read is listed `unreadable` (doctor WARN
+ *    redact-source-unreadable); the pairs it gave before stay in redact_hashes.
+ *  - A listed path that is not a regular file, or is over SECRET_FILE_MAX, is listed unreadable and
+ *    never opened (D-4300).
+ *  - A value under SECRET_MIN_LEN is never kept.
+ *  - The list never names an account's exec.authDir (gpt-lane spec §4.1). */
+export function loadSecrets(home, secretFiles) {
+  const values = new Set();
+  const pairs = new Map();
+  const unreadable = [];
+  let unsegmentable = 0;
+  const take = (file, kind) => {
+    let st;
+    try { st = statSync(file); } catch (e) {
+      if (!ABSENT_CODES.has(e?.code)) unreadable.push(file);
+      return;
+    }
+    if (st.isDirectory()) return;
+    if (!st.isFile() || st.size > SECRET_FILE_MAX) { unreadable.push(file); return; }
+    let text;
+    try { text = readFileSync(file, 'utf8'); } catch (e) {
+      if (ABSENT_CODES.has(e?.code) || e?.code === 'EISDIR') return;
+      unreadable.push(file);
+      return;
+    }
+    if (kind === 'sessions') {
+      for (const p of sessionHashPairs(text)) pairs.set(`${p.len}:${p.sha256}`, p);
+      return;
+    }
+    const vs = extractSecretValues(text, kind);
+    const sp = secretPairs(vs);
+    for (const v of vs) if (v.length >= SECRET_MIN_LEN) values.add(v);
+    for (const p of sp.pairs) pairs.set(`${p.len}:${p.sha256}`, p);
+    unsegmentable += sp.unsegmentable;
+  };
+  for (const src of SECRET_SOURCES) for (const f of expandSecretSource(home, src, unreadable)) take(f, secretKindOf(src, f));
+  for (const f of secretFiles) take(f, secretKindOf(null, f));
+  return { values: [...values], pairs: [...pairs.values()], unreadable, unsegmentable };
+}
+
+/** The pairs not yet in redact_hashes, inserted with their `redact` outbox rows in ONE
+ *  synchronous-FULL transaction, then flushed to the journal right away, never in the derive step,
+ *  which a budget-bound tick may not reach (O34, DI8). A failed append is counted, and the rows
+ *  stay in the outbox for the next tick's first flush. Returns the pairs that were new. */
+export function recordPairs(db, home, ids, pairs, nowMs) {
+  const q = secretStmts(db);
+  const fresh = pairs.filter((p) => q.redactHas.get(p.len, Buffer.from(p.sha256, 'hex')) === undefined);
+  if (fresh.length === 0) return [];
+  withTx(db, 'FULL', () => {
+    for (const p of fresh) {
+      q.redactIns.run(p.len, Buffer.from(p.sha256, 'hex'), nowMs);
+      q.outboxIns.run(journalRecord('redact', nowMs, { len: p.len, sha256: p.sha256 }));
+    }
+  });
+  try {
+    flushOutbox(db, home, ids, nowMs);
+  } catch (e) {
+    if (!(e instanceof JournalError)) throw e;
+    withTx(db, 'NORMAL', () => { bump(db, 'journal_write_failed'); });
+  }
+  return fresh;
+}
+
+/** The secrets step of a tick (§9.2, D-4224 history-tick-order), third after the outbox flush and the
+ *  migration verdict. It returns this tick's redaction index (every pair ever recorded), the values
+ *  whose pairs are new this tick (`newValues`), and every value this tick loaded (`values`), which
+ *  task 23's re-index reads against its durable mark, so a pair committed by a pass that died
+ *  before its re-index is still re-indexed by the next. The caller drops the values when the tick
+ *  ends. */
+export function secretsStep(db, ctx, secretFiles) {
+  const loaded = loadSecrets(ctx.home, secretFiles);
+  const fresh = new Set(recordPairs(db, ctx.home, ctx.ids, loaded.pairs, ctx.nowMs).map((p) => `${p.len}:${p.sha256}`));
+  const newValues = loaded.values.filter((v) => secretPairs([v]).pairs.some((p) => fresh.has(`${p.len}:${p.sha256}`)));
+  withTx(db, 'NORMAL', () => {
+    if (loaded.unreadable.length > 0) bump(db, 'redact_source_unreadable', loaded.unreadable.length);
+    if (loaded.unsegmentable > 0) bump(db, 'redact_value_unsegmentable', loaded.unsegmentable);
+    setMeta(db, 'redact_unreadable', JSON.stringify(loaded.unreadable));
+  });
+  const all = secretStmts(db).allPairs.all().map((r) => ({ len: r.len, sha256: Buffer.from(r.sha256).toString('hex') }));
+  return { pairIdx: makePairIndex(all), newValues, values: loaded.values };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {

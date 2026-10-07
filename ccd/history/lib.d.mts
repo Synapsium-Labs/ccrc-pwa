@@ -292,3 +292,4 @@ export function launchFactsOf(row: unknown): { cwd: string | null; gitBranch: st
 export function lagOfTick(i: { tickStartMs: number; newEntries: number; minNewTsMs: number | null }): number | null;
 export const SIDECAR_WHOLE_MAX: 67108864;
 export function linkSidecar(name: string, candidates: ReadonlyArray<{ entryId: number; text: string; toolUseIds: readonly string[] }>): number | null;
+export function secretKindOf(source: object | null, path: string): 'sessions' | 'env-identifier' | 'env' | 'token' | 'json';

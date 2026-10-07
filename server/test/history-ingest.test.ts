@@ -14,7 +14,7 @@ import type { BigIntStats } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { syncBuiltinESMExports } from 'node:module';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as zc } from 'node:zlib';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
@@ -1534,4 +1534,128 @@ describe('history ingest: sidecars (plan task 21)', () => {
       fs.rmSync(box.home, { recursive: true, force: true });   // two 64 MiB sidecars plus their store: never left for afterAll alone
     }
   }, 300_000);
+});
+
+interface IxSweep {
+  secretsStep(db: DatabaseSync, ctx: IxCtx, secretFiles: string[]): { pairIdx: unknown; newValues: string[]; values: string[] };
+}
+
+describe('history ingest: secrets per tick (plan task 22)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  let S: IxSweep;
+  beforeAll(async () => { ({ sweep: S } = await IX.api()); });
+  const hex = (n: number): string => randomBytes(n).toString('hex');
+  const sha = (v: string): string => createHash('sha256').update(v).digest('hex');
+  const put = (home: string, rel: string, text: string): string => {
+    const p = path.join(home, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(p, text, { mode: 0o600 });
+    return p;
+  };
+  /** runSweep with explicit `--secrets` files (file-URL preloads, SPAWN_TIMEOUT_MS cap): sweepWith goes through
+   *  runSweep, never its own spawnSync, so the preload option and the wall-clock cap come from Task 14's helper. */
+  const sweepWith = (box: HistoryBox, secrets: string[]): string => {
+    const r = runSweep(box, [], { secrets });
+    expect(r.code, r.stderr).toBe(0);
+    return `${r.stdout}${r.stderr}`;
+  };
+  const pairsIn = (db: DatabaseSync): string[] =>
+    (db.prepare('SELECT len, lower(hex(sha256)) AS h FROM redact_hashes ORDER BY len, h').all() as { len: number; h: string }[])
+      .map((r) => `${r.len}:${r.h}`);
+
+  it('O34 (redact half): a pair learned this tick is in the journal before any drain or ingest runs; a second tick journals nothing again', async () => {
+    const box = IX.newBox('ccrc-hist-sec-o34-');
+    const token = hex(32);
+    put(box.home, '.cc-secrets/lane.env', `LANE_API_KEY=${token}\n`);
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const ctx = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids);
+      const r = S.secretsStep(db, ctx, []);
+      expect(r.newValues).toEqual([token]);
+      expect(journalRecords(box)).toContainEqual(expect.objectContaining({ k: 'redact', len: 64, sha256: sha(token) }));
+      expect(IX.count(db, 'journal_outbox')).toBe(0);
+      expect(pairsIn(db)).toEqual([`64:${sha(token)}`]);
+      const again = S.secretsStep(db, { ...ctx, nowMs: ctx.nowMs + 120_000 }, []);
+      expect(again.newValues).toEqual([]);
+      expect(journalRecords(box).filter((x) => (x as { k?: string }).k === 'redact')).toHaveLength(1);
+    } finally { db.close(); }
+  });
+
+  it('every frozen-list source and a declared secretsFile give their pairs; no value reaches the DB, its WAL, the journal or the pass output', () => {
+    const box = IX.newBox('ccrc-hist-sec-e2e-');
+    const v = {
+      ccSecrets: hex(32), token: hex(32), exposure: hex(24), codex: `sk-${hex(24)}`,
+      agent: hex(32), ccrcEnv: hex(32), declared: hex(30),
+    };
+    const session = randomBytes(32).toString('base64url');   // 43 chars, the server's token shape
+    put(box.home, '.cc-secrets/claude-a-oauth.env', `CLAUDE_CODE_OAUTH_TOKEN=${v.ccSecrets}\n`);
+    put(box.home, '.ccrc/mail.token', `${v.token}\n`);
+    put(box.home, '.ccrc/exposure.env', `CCRC_EXPOSURE_SECRET=${v.exposure}\n`);
+    put(box.home, '.ccrc/codex/lane1/runtime.env', `LITELLM_MASTER_KEY=${v.codex}\n`);
+    put(box.home, '.ccrc/agent.env', `CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=${v.agent}\n`);
+    fs.appendFileSync(path.join(box.home, '.ccrc', 'ccrc.env'), `CCRC_FIXTURE_TOKEN=${v.ccrcEnv}\n`);
+    put(box.home, '.ccrc/sessions.json', JSON.stringify([{ idHash: sha(session), createdAt: 1, lastSeenAt: 1, generation: 1, label: 'fixture' }]));
+    const declared = put(box.home, '.config/lane/key.env', `LANE_KEY=${v.declared}\n`);   // outside the frozen list
+    const out = sweepWith(box, [declared]) + sweepWith(box, [declared]);
+    const db = openStoreRO(box);
+    try {
+      const got = pairsIn(db);
+      for (const value of Object.values(v)) expect(got, `no pair for a ${value.length}-char value`).toContain(`${value.length}:${sha(value)}`);
+      expect(got).toContain(`43:${sha(session)}`);
+    } finally { db.close(); }
+    const keys = journalRecords(box).filter((x) => (x as { k?: string }).k === 'redact')
+      .map((x) => { const r = x as { len: number; sha256: string }; return `${r.len}:${r.sha256}`; });
+    expect(keys.length).toBeGreaterThanOrEqual(Object.keys(v).length + 1);
+    expect(keys.length, 'a pair was journaled twice').toBe(new Set(keys).size);   // learned once each, never re-journaled
+    const files = [path.join(box.root, 'db', 'history.db'), path.join(box.root, 'db', 'history.db-wal')];
+    const walk = (d: string): void => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else files.push(p); } };
+    walk(path.join(box.root, 'journal'));
+    const bytes = files.filter((f) => fs.existsSync(f)).map((f) => fs.readFileSync(f).toString('latin1')).join('\n') + out;
+    for (const value of [...Object.values(v), session]) expect(bytes.includes(value), 'a secret value was written somewhere').toBe(false);
+  });
+
+  it('an unreadable listed file is counted and named for doctor while its earlier pairs stay; an absent one is neither', () => {
+    const box = IX.newBox('ccrc-hist-sec-unread-');
+    const value = hex(32);
+    const p = put(box.home, '.ccrc/exposure.env', `CCRC_EXPOSURE_SECRET=${value}\n`);
+    IX.sweepTwice(box);
+    const meta = (): string => {
+      const db = openStoreRO(box);
+      try { return (db.prepare("SELECT v FROM meta WHERE k = 'redact_unreadable'").get() as { v: string }).v; } finally { db.close(); }
+    };
+    expect(meta()).toBe('[]');
+    expect(counters(box)['redact_source_unreadable']).toBeUndefined();
+    fs.chmodSync(p, 0o000);
+    try {
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+    } finally { fs.chmodSync(p, 0o600); }
+    expect(JSON.parse(meta())).toEqual([p]);
+    expect(counters(box)['redact_source_unreadable']).toBe(1);
+    const db = openStoreRO(box);
+    try { expect(pairsIn(db)).toContain(`64:${sha(value)}`); } finally { db.close(); }
+  });
+
+  it('a FIFO, a link to a device and an oversize file under ~/.cc-secrets are unreadable sources, never opened; a directory is neither (D-4300)', () => {
+    const box = IX.newBox('ccrc-hist-sec-nonreg-');
+    const value = hex(32);
+    put(box.home, '.ccrc/exposure.env', `CCRC_EXPOSURE_SECRET=${value}\n`);
+    const dir = path.join(box.home, '.cc-secrets');
+    fs.mkdirSync(path.join(dir, 'adir'), { recursive: true, mode: 0o700 });
+    const fifo = path.join(dir, 'pipe');
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+    const zero = path.join(dir, 'zero');
+    fs.symlinkSync('/dev/zero', zero);
+    const big = path.join(dir, 'big');
+    fs.writeFileSync(big, '');
+    fs.truncateSync(big, 4 * 1024 * 1024 + 1);   // sparse, past SECRET_FILE_MAX
+    IX.sweepTwice(box, { timeoutMs: 20_000 });
+    const db = openStoreRO(box);
+    try {
+      const m = (db.prepare("SELECT v FROM meta WHERE k = 'redact_unreadable'").get() as { v: string }).v;
+      expect((JSON.parse(m) as string[]).slice().sort()).toEqual([big, fifo, zero].sort());
+      expect(pairsIn(db)).toContain(`64:${sha(value)}`);
+    } finally { db.close(); }
+    expect(counters(box)['redact_source_unreadable']).toBe(6);   // three paths, two ticks
+  });
 });

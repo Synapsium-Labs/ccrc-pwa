@@ -1748,3 +1748,16 @@ describe('lib: linkSidecar (plan task 21)', () => {
     expect(lib.SIDECAR_WHOLE_MAX).toBe(67_108_864);
   });
 });
+
+describe('lib: secretKindOf (plan task 22)', () => {
+  it('reads sessions.json as hash pairs, the env files the frozen list marks by identifier keys only, and everything else by its own kind', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const sessions = lib.SECRET_SOURCES.find((s) => 'sessionHashes' in s && s.sessionHashes === true)!;
+    const agent = lib.SECRET_SOURCES.find((s) => 'path' in s && s.path === '.ccrc/agent.env')!;
+    expect(lib.secretKindOf(sessions, '/home/u/.ccrc/sessions.json')).toBe('sessions');
+    expect(lib.secretKindOf(agent, '/home/u/.ccrc/agent.env')).toBe('env-identifier');
+    expect(lib.secretKindOf(null, '/home/u/.ccrc/mail.token')).toBe('token');
+    expect(lib.secretKindOf(null, '/home/u/.config/lane/key.env')).toBe('env');
+    expect(lib.secretKindOf(null, '/home/u/.ccrc/extra.json')).toBe('json');
+  });
+});

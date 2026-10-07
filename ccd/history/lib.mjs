@@ -1868,3 +1868,15 @@ export function linkSidecar(name, candidates) {
   }
   return null;
 }
+
+/** How one secret-bearing file is read (§8.3 layer 1):
+ *  - `sessions`: sessions.json's idHash records, loaded as (43, sha256) pairs and never as values;
+ *  - `env-identifier`: a file the frozen list reads for its identifier-pattern keys only
+ *    (ccrc.env, agent.env);
+ *  - otherwise the file's own kind (kindOfPath).
+ *  `source` is the SECRET_SOURCES entry the file came from, or null for a declared secretsFile. */
+export function secretKindOf(source, path) {
+  if (source !== null && source.sessionHashes === true) return 'sessions';
+  if (source !== null && source.identifierKeysOnly === true) return 'env-identifier';
+  return kindOfPath(path);
+}
