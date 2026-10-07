@@ -527,8 +527,8 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
   other source kinds keep the first event naming their upstream id. A meta is a join, not a journal event, and
   nothing of it is hashed (review 324 F3, F4). The id is selected once, at open, and never changes: it is part of the
   checkpointed applied state, reconstruction restores it verbatim and never re-selects it from the journal left after
-  pruning, pruning cannot pass an identity event before a checkpoint holds its id, and a bare occurrence pruned
-  before any qualifying join is durably applied never becomes one (review 328 F1; spec §5.2, §5.12). The observe
+  pruning, pruning cannot pass an identity event before a durable checkpoint holds its id, and a bare occurrence
+  pruned before any qualifying join is durably applied never becomes one (review 328 F1; spec §5.2, §5.12). The observe
   stage's parser (wave 3) must not use the presence of `agent_type` to decide whether an event qualifies — spec §5.2
   activity id, §5.3, §5.4 rung 3 (a non-empty `agent_id` does not by itself place an event inside a subagent).
   A second reader, already shipped, places an event by a raw non-empty `agent_id`: the hook's turn-marker classifier
