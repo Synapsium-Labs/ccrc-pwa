@@ -1933,3 +1933,10 @@ export function secretKindOf(source, path) {
 export function ftsPhrase(value) {
   return `"${String(value).replace(/"/g, '""')}"`;
 }
+
+/** The op marker's one grammar (§9.6 op-running; Task 25): `~/.ccrc/history/op` holds `<verb> <pid> <start_ms>`.
+ *  Anything else is null, which a pass treats as stale (it names no live pid) and status reports as no op. */
+export function parseOpMarker(text) {
+  const m = /^([a-z-]{1,32}) ([1-9][0-9]{0,9}) ([0-9]{1,16})\s*$/.exec(text);
+  return m === null ? null : { verb: m[1], pid: Number(m[2]), startMs: Number(m[3]) };
+}

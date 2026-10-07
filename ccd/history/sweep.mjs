@@ -20,16 +20,19 @@
 // D-4224); each later step is added there, and nothing above it
 // changes for that.
 //
-// Reads exactly one environment variable, HOME, in `runPass` below
-// (`deps.home ?? process.env.HOME`, integration contract 4) — the frozen
+// Reads exactly three environment variables: HOME, in `runPass` below
+// (`deps.home ?? process.env.HOME`, integration contract 4), and CLAUDECODE and
+// TMUX_PANE, in the --op gate (`runOpPass`, `paneNameFor`; Task 25, D-4247) — the frozen
 // allow-list single-definition.test.ts pins; tests reach every fault through a
 // test-only preload, never a variable this file reads (§10.1 "Seams").
 import fs, {
   chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync,
-  readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
+  readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { isatty } from 'node:tty';
 import { pathToFileURL } from 'node:url';
 import {
   CARRIER_KILL_S, EXIT, SCHEMA_ADDED, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
@@ -41,11 +44,12 @@ import {
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
   SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, redactField,
+  REASONS, WRITING_FORMS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker,
 } from './lib.mjs';
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
   measureStoreFacts, measuredSize, openReader, openWriter, readAttempts, removeStaleTemps, runMigration, setMeta,
-  syncWriterMirror, userVersion, withTx,
+  syncWriterMirror, userVersion, withTx, writeFileAtomic,
   CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
@@ -1567,6 +1571,7 @@ export function openStore(home, P, role, deps) {
   }
   if (verdict.act === 'finish-pending') bump(db, 'store_creation_completed');
   syncWriterMirror(db, home);
+  removeStaleOpMarker(P);
   return { db, stored, code, ids: idsFromFiles(P) };
 }
 
@@ -1767,10 +1772,7 @@ export async function runPass(argv, deps = {}) {
       process.stderr.write(`history-sweep: ${USAGE}\n`);
       return EXIT.REFUSED;
     }
-    if (parsed.op !== null) {
-      out(JSON.stringify({ rc: EXIT.REFUSED, reason: 'bad-args' }));
-      return EXIT.REFUSED;
-    }
+    if (parsed.op !== null) return await runOpPass(parsed, deps, out);
     return await scheduledPass(parsed, deps, out);
   } finally {
     process.umask(prevUmask);
@@ -3120,6 +3122,422 @@ export function mergeSteps(db, ctx, budget) {
       withTx(db, 'NORMAL', () => { d.done.run(ctx.nowMs, null, MERGE_STEP, 1); });
       return;
     }
+  }
+}
+
+// ── THE --op PASS (Task 25) ───────────────────────────────────────────────────────────────────────
+// `ccd-history-sweep --op <verb> …`, from the CLI (W1-B2) or straight from an operator's shell (§5.1's
+// published door; D-4221 history-apply-via-shim: every writing verb runs through the shim).
+// Spec §8.4 "Operator verbs" and "Speed bumps", §9.2 "An --op pass runs the journal half
+// too", §6.11 "doctor --migrate". In order:
+//   1. the verb and its arguments: B1 knows `import` and `migrate`; anything else is bad-args;
+//   2. THE GATE, decided by lib.mjs's decideOpGate from this process's OWN CLAUDECODE, isatty(0) and, for an
+//      irreversible form only, the bounded `tmux display-message -p -t "$TMUX_PANE" '#S'` — the bumps the CLI
+//      applies, decided once and executed twice (D-4181, slug history-op-gate-in-sweep), so the direct door meets
+//      them too. A refusal writes NOTHING: it precedes the role, the lock-take journal half, the marker and
+//      the store. These are speed bumps, not walls: `env -u CLAUDECODE` defeats the first (§8.4);
+//   3. the recorded role: a server box never gets a store, whatever a stale shim is asked (§6.9, O27; D-4222
+//      history-role-not-server);
+//   4. a dry run (`import` without --apply), after the bounded free-space probe, opens READ-ONLY and writes
+//      nothing at all (§8.4 "dry run by default"): no journal half, no marker, no flush;
+//   5. otherwise the journal half at lock take (DI7, D-4232 history-observe-at-rename: a /clear during a long
+//      --op keeps its startup epoch),
+//      the store opened exactly as a scheduled pass opens it, the op marker, the verb, the outbox flushed
+//      (an operator told "done" is in the fsynced journal, §8.4), the journal half again before release,
+//      and the marker removed.
+// The result is ONE JSON line, `{"rc":<EXIT>}` or `{"rc":<EXIT>,"reason":"<REASONS key>"}`, printed LAST,
+// which the CLI relays (§8.4); the process exits with that rc. A held lock never reaches here: the shim
+// answers 75 for an --op pass (§5.1).
+
+/** The --op verbs B1 runs (§10.5 B1: "the shim with --op import" and --op migrate, §6.11). B2 adds its own. */
+const OP_VERBS = new Set(['import', 'migrate']);
+
+/** The arguments B1's verbs take; null is bad-args. import: [--apply] [--session <id> --file <path>], the
+ *  pair both or neither; migrate: none. */
+export function parseOpArgs(op, args) {
+  if (op === 'migrate') return args.length === 0 ? {} : null;
+  const o = { apply: false, session: null, file: null };
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '--apply' && !o.apply) { o.apply = true; continue; }
+    if ((a === '--session' || a === '--file') && i + 1 < args.length) {
+      const k = a.slice(2);
+      if (o[k] !== null) return null;
+      i += 1;
+      o[k] = args[i];
+      continue;
+    }
+    return null;
+  }
+  return (o.session === null) === (o.file === null) ? o : null;
+}
+
+/** The pane an irreversible form runs in, by the bounded tmux read the CLI uses (§8.2, §8.4): always with
+ *  -t, under TMUX_DEADLINE_MS, and only for a pane id of the right grammar. A reversible form, no pane,
+ *  or a tmux that fails or times out answers null — the TTY requirement still stands then. */
+export function paneNameFor(form) {
+  if (form === null || WRITING_FORMS[form]?.irreversible !== true) return null;
+  const pane = process.env.TMUX_PANE ?? '';
+  if (!/^%[0-9]+$/.test(pane)) return null;
+  const r = spawnSync('tmux', ['display-message', '-p', '-t', pane, '#S'],
+    { encoding: 'utf8', timeout: TMUX_DEADLINE_MS, stdio: ['ignore', 'pipe', 'ignore'] });
+  return r.status === 0 ? r.stdout.trim() : null;
+}
+
+/** Whether a pid names a live process (EPERM: alive, another user's). */
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e !== null && typeof e === 'object' && e.code === 'EPERM';
+  }
+}
+
+/** ~/.ccrc/history/op (§9.6 op-running), parsed by lib's one grammar; null when absent or malformed. */
+export function readOpMarker(P) {
+  const text = readTrimmed(P.op);
+  return text === null ? null : parseOpMarker(text);
+}
+
+/** A marker whose pid is dead, or which names none, is stale: the next pass removes it (§9.6). */
+export function removeStaleOpMarker(P) {
+  const text = readTrimmed(P.op);
+  if (text === null) return;
+  const m = parseOpMarker(text);
+  if (m === null || !pidAlive(m.pid)) rmSync(P.op, { force: true });
+}
+
+/** Written under the lock when an --op pass starts; removed when it ends (§9.6). */
+export function writeOpMarker(P, verb, nowMs) {
+  writeFileAtomic(P.op, `${verb} ${process.pid} ${nowMs}\n`, 0o600);
+}
+
+/** The rostered home whose projects/ tree holds a path — by the resolved path, and by the spelled one for a
+ *  file already gone — or null when none does (§5.2: only rostered roots are read). */
+export function homeOfPath(p, homes) {
+  let real = p;
+  try { real = realpathSync(p); } catch { /* gone: the spelled path decides */ }
+  for (const h of homes) {
+    const spelled = join(h, 'projects');
+    let root = spelled;
+    try { root = realpathSync(spelled); } catch { /* an unmade projects/ holds nothing */ }
+    if (real.startsWith(`${root}/`) || p.startsWith(`${spelled}/`)) return h;
+  }
+  return null;
+}
+
+/** A verdict line queued in the outbox, inside the caller's transaction (§9.14). */
+function outboxRow(db, rec) {
+  db.prepare('INSERT INTO journal_outbox (rec) VALUES (?)').run(rec);
+}
+
+/** One mapping verdict (§9.14: a backfill mapping, `declared_by` registry or journal, or an operator's
+ *  import --session --file): the family (created on first sight, with its `family` verdict) and the epoch
+ *  with cause `import`, committed under FULL in a transaction of its own and flushed to the journal right
+ *  after — before the file's first NORMAL chunk (§9.2 "Every verdict commits first", CT10; O34). A uuid
+ *  another family already claims is chainEpoch's first-claim rule (uuid_two_sessions). A uuid this family already
+ *  holds confirmed is no new verdict: a re-run queues nothing. True when it chained or confirmed the epoch. */
+export function commitMapping(db, ctx, ev) {
+  const nowMs = ctx.now();
+  let chained = false;
+  withTx(db, 'FULL', () => {
+    const fam = ensureFamily(db, ev.id, ev.generation, ev.project, nowMs);
+    if (fam.created) {
+      outboxRow(db, journalRecord('verdict', nowMs, {
+        event_key: 'none', kind: 'family', ccrc_id: ev.id, generation: ev.generation, project: ev.project, first_seen_ms: nowMs,
+      }));
+    }
+    const r = chainEpoch(db, fam.sessionPk, ev.uuid, 'import', ev.declaredBy, nowMs);
+    if (r === null || !(r.created || r.confirmedNow)) return;
+    outboxRow(db, journalRecord('verdict', nowMs, {
+      event_key: 'none', kind: 'mapping', ccrc_id: ev.id, generation: ev.generation, cc_session_uuid: ev.uuid,
+      declared_by: ev.declaredBy, ...(ev.path ? { path: ev.path } : {}),
+    }));
+    chained = true;
+  });
+  flushOutbox(db, ctx.home, ctx.ids, ctx.now());
+  return chained;
+}
+
+/** A registry row's family facts, read now: `.generation` when it has the UUID grammar (else ''), and
+ *  `.project` (else ''). */
+function regFamily(P, id, declaredBy, filePath) {
+  const g = readTrimmed(join(P.reg, `${id}.generation`));
+  return {
+    id,
+    generation: g !== null && UUID_RE.test(g) ? g : '',
+    project: readTrimmed(join(P.reg, `${id}.project`)) ?? '',
+    declaredBy,
+    path: filePath,
+  };
+}
+
+/** Evidence-only import (§8.4): which transcript uuid belongs to which family, the first evidence for a
+ *  uuid winning — spool history (a confirmed epoch already in the store; declaredBy null, nothing to map),
+ *  then the registry's `$REG/<id>.uuid`, then `$REG/<id>.compactions`' `transcript` paths. Nothing is
+ *  inferred from file timing (§6.1). `db` may be null (a dry run with no store yet). */
+export function importEvidence(db, P) {
+  const m = new Map();
+  const put = (uuid, e) => { if (UUID_RE.test(uuid) && !m.has(uuid)) m.set(uuid, e); };
+  if (db !== null) {
+    const st = db.prepare('SELECT s.ccrc_id, s.generation, s.project, e.cc_session_uuid FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE e.confirmed_ms IS NOT NULL ORDER BY s.session_pk, e.seq');
+    for (const r of st.iterate()) {
+      put(r.cc_session_uuid, { id: r.ccrc_id, generation: r.generation, project: r.project, declaredBy: null, path: null });
+    }
+  }
+  const regNames = listNames(P.reg).sort();
+  for (const name of regNames) {
+    const u = /^(.+)\.uuid$/.exec(name);
+    if (u === null || !idOk(u[1])) continue;
+    const uuid = readTrimmed(join(P.reg, name));
+    if (uuid !== null) put(uuid, regFamily(P, u[1], 'registry', null));
+  }
+  for (const name of regNames) {
+    const c = /^(.+)\.compactions$/.exec(name);
+    if (c === null || !idOk(c[1])) continue;
+    let text;
+    try { text = readFileSync(join(P.reg, name), 'utf8'); } catch { continue; }
+    for (const line of text.split('\n')) {
+      let rec;
+      try { rec = JSON.parse(line); } catch { continue; }
+      const t = rec !== null && typeof rec === 'object' ? rec.transcript : null;
+      if (typeof t !== 'string' || !t.endsWith('.jsonl')) continue;
+      put(basename(t, '.jsonl'), regFamily(P, c[1], 'journal', t));
+    }
+  }
+  return m;
+}
+
+/** Every `<home>/projects/<p>/<uuid>.jsonl` under the rostered homes, sorted per directory. */
+export function transcriptsUnder(homes) {
+  const out = [];
+  for (const h of homes) {
+    for (const proj of listNames(join(h, 'projects')).sort()) {
+      for (const f of listNames(join(h, 'projects', proj)).sort()) {
+        const u = /^(.+)\.jsonl$/.exec(f);
+        if (u !== null && UUID_RE.test(u[1])) out.push({ path: join(h, 'projects', proj, f), uuid: u[1] });
+      }
+    }
+  }
+  return out;
+}
+
+/** Whether an import may ingest its next budget window (§9.3). An import has no run budget (§9.2 "Backfill"), so
+ *  the pass-start probe cannot bound it: before every window this re-measures free space (under
+ *  STATFS_DEADLINE_MS, through Task 14's in-process seam when a test injects one), the cap file and the store's
+ *  measured size, and lets lib's planRun decide — the rule a scheduled pass applies, never a second one here
+ *  (L4). null when it may; else the word it stops on. */
+export async function importRoom(db, ctx) {
+  const free = await statfsWithDeadline(probePath(ctx.paths, ctx.home), STATFS_DEADLINE_MS, ctx.deps.statfs);
+  const sizeBytes = (ctx.deps.measureSize ?? measuredSize)(db, ctx.paths.dbFile);
+  const run = planRun({
+    historyOff: false, store: { act: 'open' }, free, sizeBytes, capGb: capOf(capText(ctx.paths.cap)).gb,
+    migration: 'none', recovering: false,
+  });
+  if (run.arm !== 'run') return 'store-unreachable';   // planRun's only hold for these inputs: a probe that never settled
+  if (run.pause === 'at-cap') return 'at-cap';
+  if (run.pause === 'low-disk') return 'capture-paused-low-disk';
+  return null;
+}
+
+/** One file, ingested by cursor with no run budget (§9.2 "Backfill"). This is Task 19's `ingestPath`
+ *  (admission, Task 18's `bindFile`, then `ingestFile` from the cursor), called again with a FRESH budget
+ *  until the file reaches end-of-file or stops advancing (an unterminated last line, a parser crash). Before
+ *  each call `importRoom` re-measures the cap and the floor: a pause is counted as a scheduled pass counts it,
+ *  said on stdout, and answers 'paused', its cursor held for the scheduled ticks (§9.3). Within a call the
+ *  floor is probed again before EVERY chunk (§9.3, BK17): the ingest context carries `floorProbeFor(P.dbDir)`,
+ *  so Task 19's `ingestFile` stops the file at the chunk that meets the floor, counts a `low-disk` stop there,
+ *  and reports the probe's word as `floor`; this function then only says so and answers 'paused', so the stop
+ *  is counted once. The journal half runs between calls (§9.2: "passes with real chunks … also run it between
+ *  chunks"). A file that is not a regular file under a rostered projects/ root, or that has gone, is counted by
+ *  `ingestPath`'s admission and answers 'refused'. The ingest context is Task 19's own `makeIngestCtx`, with
+ *  `fts` false, so these blobs are written unindexed; `importApply` then calls Task 23's `resetFtsPending`,
+ *  and the next scheduled tick's `deriveFts` indexes them through its full pair index. */
+export async function importFile(db, ctx, filePath, uuid) {
+  const home = homeOfPath(filePath, ctx.homes) ?? '';
+  const say = (word) => ctx.out(`history-sweep: ${word}: ingest stopped at ${filePath}; the scheduled ticks resume it by cursor`);
+  for (;;) {
+    const pause = await importRoom(db, ctx);
+    if (pause !== null) {
+      if (pause === 'at-cap') bump(db, 'capture_paused_at_cap');
+      if (pause === 'capture-paused-low-disk') bump(db, 'capture_paused_low_disk');
+      say(pause);
+      return 'paused';
+    }
+    // Task 19's per-chunk floor probe, on db/ (a link followed), through the same in-process seam importRoom uses.
+    const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir, ctx.deps.statfs));
+    const r = await ingestPath(db, ictx, { path: filePath, uuid, home }, newBudget(ctx.now));
+    if (r === null) return 'refused';
+    if (runJournalHalf(ctx.home, ctx.ids, ctx.now)) throw new JournalError('append-failed');
+    if (r.floor !== undefined) {
+      // ingestFile counted a low-disk stop where it stopped; an unsettled probe is counted nowhere (§9.3).
+      say(r.floor === 'low-disk' ? 'capture-paused-low-disk' : 'store-unreachable');
+      return 'paused';
+    }
+    if (r.atEof || r.bytes === 0) return 'done';
+  }
+}
+
+/** `import` without --apply (§8.4): read-only, one line per file, nothing written. */
+function importDryRun(P, homes, args, out) {
+  if (args.session !== null) {
+    const ev = regFamily(P, args.session, 'operator', args.file);
+    out(`mapped ${ev.id} ${ev.generation || '-'} ${args.file}`);
+    return;
+  }
+  let ro = null;
+  try { if (statSync(P.dbFile).size > 0) ro = openReader(P.dbFile); } catch { ro = null; }
+  try {
+    const ev = importEvidence(ro, P);
+    const all = transcriptsUnder(homes);
+    for (const t of all) {
+      const e = ev.get(t.uuid);
+      if (e !== undefined) out(`mapped ${e.id} ${e.generation || '-'} ${t.path}`);
+    }
+    for (const t of all) if (!ev.has(t.uuid)) out(`unmapped ${t.path}`);
+  } finally {
+    ro?.close();
+  }
+}
+
+/** `import --apply` and `import --session <id> --file <path> --apply` (§8.4): map from evidence, one verdict
+ *  at a time, then ingest the mapped files one at a time by cursor; list the unmapped, never ingest them. Only
+ *  evidence that names a transcript found under the rostered homes is mapped — the dry run's `mapped` lines,
+ *  exactly. A pause at the cap or the floor (importFile) ends the ingest, not the pass: the mappings stand. */
+async function importApply(db, ctx, P, args) {
+  const ends = [];
+  if (args.session !== null) {
+    const uuid = basename(args.file, '.jsonl');
+    const probe = admitFile(args.file, homeOfPath(args.file, ctx.homes) ?? '', ctx.homes, ctx.home);
+    if (!probe.ok) {
+      bump(db, 'non_regular');
+      ctx.out(`history-sweep: ${args.file} is not a regular file under a rostered projects/ root (${probe.why}); nothing mapped`);
+      return { rc: EXIT.REFUSED, reason: 'bad-args' };
+    }
+    closeSync(probe.fd);
+    commitMapping(db, ctx, { uuid, ...regFamily(P, args.session, 'operator', args.file) });
+    ends.push(await importFile(db, ctx, args.file, uuid));
+  } else {
+    const ev = importEvidence(db, P);
+    const all = transcriptsUnder(ctx.homes);
+    const mapped = new Set();
+    for (const t of all) {
+      const e = ev.get(t.uuid);
+      if (e === undefined || e.declaredBy === null || mapped.has(t.uuid)) continue;
+      mapped.add(t.uuid);
+      commitMapping(db, ctx, { uuid: t.uuid, ...e });
+    }
+    for (const t of all) {
+      if (!ev.has(t.uuid)) continue;
+      const end = await importFile(db, ctx, t.path, t.uuid);
+      ends.push(end);
+      if (end === 'paused') break;
+    }
+    for (const t of all) if (!ev.has(t.uuid)) ctx.out(`unmapped ${t.path}`);
+  }
+  // §9.1: these blobs were written with fts_indexed = 0, and a completed ('fts', 1) backfill never looks again
+  // (Task 23's deriveFts returns on completed_ms). Task 23's resetFtsPending re-opens it with its cursor kept —
+  // blob ids only grow — so the next scheduled tick's deriveFts indexes them. No ('fts', 1) row (FTS5 absent,
+  // or not yet probed): nothing to re-open.
+  if (ends.some((end) => end !== 'refused')) resetFtsPending(db);
+  return { rc: EXIT.OK };
+}
+
+/** `--op migrate` (§6.11 "doctor --migrate"; D-4180 history-migrate-verb): planMigration with NO bound — an operator's shell has no
+ *  carrier kill — so only room and the versions decide. refuse-* answer migrate-refused, none answers 0. */
+function migrateOp(db, ctx, opened, free) {
+  const sizeBytes = (ctx.deps.measureSize ?? measuredSize)(db, ctx.paths.dbFile);
+  const verdict = migrationVerdict(db, ctx.home, ctx.paths, {
+    stored: opened.stored, code: opened.code, free, sizeBytes, boundS: null, schemaAdded: ctx.deps.schemaAdded ?? SCHEMA_ADDED,
+  });
+  if (verdict === 'none') {
+    ctx.out('history-sweep: nothing to migrate');
+    return { rc: EXIT.OK };
+  }
+  if (verdict !== 'snapshot-then-migrate') {
+    ctx.out(`history-sweep: ${verdict}`);
+    return { rc: EXIT.REFUSED, reason: 'migrate-refused' };
+  }
+  const r = runMigration(db, ctx.home, {
+    verdict, from: opened.stored, to: opened.code, migrations: ctx.deps.migrations ?? MIGRATIONS,
+  });
+  setMeta(db, 'migration', 'none');
+  ctx.out(`history-sweep: migrated (snapshot ${basename(r.snapshot)}, ${r.copyBps} B/s)`);
+  return { rc: EXIT.OK };
+}
+
+/** One --op pass: see the block comment above. */
+export async function runOpPass(parsed, deps, out) {
+  const home = deps.home;
+  const P = historyPaths(home);
+  const now = deps.now ?? Date.now;
+  const result = (rc, reason) => {
+    out(JSON.stringify(rc === EXIT.OK || reason === undefined ? { rc } : { rc, reason }));
+    return rc;
+  };
+  const args = OP_VERBS.has(parsed.op) ? parseOpArgs(parsed.op, parsed.opArgs) : null;
+  if (args === null) return result(EXIT.REFUSED, 'bad-args');
+  if (args.session != null) {
+    if (!idOk(args.session)) return result(EXIT.REFUSED, 'bad-id');
+    if (!args.file.endsWith('.jsonl') || !UUID_RE.test(basename(args.file, '.jsonl'))) return result(EXIT.REFUSED, 'bad-args');
+  }
+  const form = formOf(parsed.op, parsed.opArgs);
+  const gate = decideOpGate(form, { claudecode: (process.env.CLAUDECODE ?? '') !== '', historyOff: existsSync(P.off) },
+    isatty(0), paneNameFor(form));
+  if (!gate.ok) return result(gate.rc, gate.reason);
+  const role = readRole(P);
+  if (role === 'server') {
+    out('history-sweep: store-create-refused-role');
+    return result(EXIT.NO_STORE);
+  }
+  if (form === null) {
+    // The dry run stats and opens db/history.db, so the bounded probe goes first (§9.3, RR15): a dead volume
+    // answers store-unreachable instead of blocking the operator's shell in a stat it can never leave.
+    const reach = await statfsWithDeadline(probePath(P, home), STATFS_DEADLINE_MS, deps.statfs);
+    if (reach.state === 'unsettled') return result(EXIT.DB, 'store-unreachable');
+    importDryRun(P, parsed.homes, args, out);
+    return result(EXIT.OK);
+  }
+  if (runJournalHalf(home, idsFromFiles(P), now)) {
+    out('history-sweep: journal-unwritable');
+    return result(EXIT.INTERNAL);
+  }
+  const free = await statfsWithDeadline(probePath(P, home), STATFS_DEADLINE_MS, deps.statfs);
+  if (free.state === 'unsettled') return result(EXIT.DB, 'store-unreachable');
+  const opened = openStore(home, P, role, deps);
+  if ('word' in opened) {
+    if (parsed.op === 'migrate' && opened.word === 'schema-newer') return result(EXIT.REFUSED, 'migrate-refused');
+    return REASONS[opened.word] === EXIT.DB ? result(EXIT.DB, opened.word) : result(EXIT.INTERNAL);
+  }
+  const { db, ids } = opened;
+  try {
+    if (ids === null) {
+      out('history-sweep: store.writer cannot be read, so nothing this pass decides could be journaled');
+      return result(EXIT.DB, 'store-unmeasured');
+    }
+    writeOpMarker(P, parsed.op, now());
+    if (!flushFirst(db, home, ids, now)) {
+      out('history-sweep: journal-unwritable');
+      return result(EXIT.INTERNAL);
+    }
+    clearDoneMarkers(home, opened.stored);
+    if (parsed.op === 'import' && opened.stored !== opened.code) return result(EXIT.DB, 'migration-pending');
+    const ctx = passCtx({ home, P, ids, parsed, now, out, deps, pause: null, ingest: true });
+    const r = parsed.op === 'migrate' ? migrateOp(db, ctx, opened, free) : await importApply(db, ctx, P, args);
+    if (r.rc === EXIT.OK) {
+      flushOutbox(db, home, ids, now());
+      if (runJournalHalf(home, ids, now)) throw new JournalError('append-failed');   // the half at release
+    }
+    return result(r.rc, r.reason);
+  } catch (e) {
+    if (!(e instanceof JournalError)) throw e;
+    bump(db, 'journal_write_failed');
+    out('history-sweep: journal-unwritable');
+    return result(EXIT.INTERNAL);
+  } finally {
+    rmSync(P.op, { force: true });
+    closeWriter(db);
   }
 }
 

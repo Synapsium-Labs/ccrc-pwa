@@ -298,3 +298,4 @@ export const SIDECAR_MAX_BYTES: 134217728;
 export function linkSidecar(name: string, candidates: ReadonlyArray<{ entryId: number; text: string; toolUseIds: readonly string[] }>): number | null;
 export function secretKindOf(source: object | null, path: string): 'sessions' | 'env-identifier' | 'env' | 'token' | 'json';
 export function ftsPhrase(value: string): string;
+export function parseOpMarker(text: string): { verb: string; pid: number; startMs: number } | null;

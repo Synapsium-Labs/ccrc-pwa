@@ -206,3 +206,54 @@ import { DatabaseSync as DatabaseSyncK24 } from 'node:sqlite';
     };
   }
 }
+// ── Task 25: the transaction log (O34) ───────────────────────────────────────────────────────────
+// HISTORY_TEST_TXLOG=<file>: append, in order, `BEGIN`; `W <sql>` for every INSERT/UPDATE/DELETE/REPLACE
+//   run inside or outside a transaction; `COMMIT <synchronous>`, read just before the COMMIT runs
+//   (2 = FULL, 1 = NORMAL); and `J <bytes>` for every writeSync to a file under history/journal/. O34
+//   reads it to prove that a verdict commits FULL in a transaction of its own and reaches the journal
+//   before the first NORMAL ingest chunk (§9.2 "Every verdict commits first", CT10).
+import fsT25 from 'node:fs';
+import { syncBuiltinESMExports as syncT25 } from 'node:module';
+import { DatabaseSync as DatabaseSyncT25 } from 'node:sqlite';
+{
+  const txlog = process.env.HISTORY_TEST_TXLOG ?? '';
+  if (txlog !== '') {
+    const log = (line) => fsT25.appendFileSync(txlog, `${line}\n`);
+    const flat = (sql) => String(sql).replace(/\s+/g, ' ').trim();
+    const isWrite = (sql) => /^(INSERT|UPDATE|DELETE|REPLACE|WITH)\b/i.test(flat(sql));
+    const proto = DatabaseSyncT25.prototype;
+    const realPrepare = proto.prepare;
+    const realExec = proto.exec;
+    proto.exec = function execT25(sql) {
+      const s = flat(sql);
+      if (/^BEGIN\b/i.test(s)) log('BEGIN');
+      if (/^COMMIT\b/i.test(s)) log(`COMMIT ${realPrepare.call(this, 'PRAGMA synchronous').get().synchronous}`);
+      if (isWrite(s)) log(`W ${s.slice(0, 160)}`);
+      return realExec.call(this, sql);
+    };
+    proto.prepare = function prepareT25(sql) {
+      const st = realPrepare.call(this, sql);
+      if (!isWrite(sql)) return st;
+      const s = flat(sql).slice(0, 160);
+      for (const m of ['run', 'get', 'all']) {
+        const real = st[m].bind(st);
+        st[m] = (...args) => { log(`W ${s}`); return real(...args); };
+      }
+      return st;
+    };
+    const fdPath = new Map();
+    const realOpen = fsT25.openSync;
+    fsT25.openSync = function openSyncT25(p, ...rest) {
+      const fd = realOpen.call(fsT25, p, ...rest);
+      fdPath.set(fd, String(p));
+      return fd;
+    };
+    const realWrite = fsT25.writeSync;
+    fsT25.writeSync = function writeSyncT25(fd, ...rest) {
+      const n = realWrite.call(fsT25, fd, ...rest);
+      if ((fdPath.get(fd) ?? '').includes('/history/journal/')) log(`J ${n}`);
+      return n;
+    };
+    syncT25();
+  }
+}
