@@ -21,8 +21,8 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
 | 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | #286 | merged 2026-10-06 (`77c11245`) after review 288; run 245 closed; deploy AGENT-FIRST via ccrc's updater; plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
-| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | #312 | merged 2026-10-07 (`9b074208`) after review 313, no fix round; run 290 closed; block 4114–4125; plan #308 (`67657ef2`); deploy AGENT-FIRST via ccrc's updater; the lane ships SHADOWED, and arming is the operator's, after wave 4's arming blockers |
-| 4 | 4 | FIRST: review 313's residue and the lane's arming blockers; then the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server (+ pwa for the residue) | waves 2–3; child-reclamation waves 3–4 | — | run 314 open (planned; the run's wave 5 of 5), blocks 4348–4363 and 4430–4433; plan `3f581396` reviewed and revised, re-basing onto #320 |
+| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | #312 | merged 2026-10-07 (`9b074208`) after review 313, no fix round; run 290 closed; block 4114–4125; plan #308 (`67657ef2`); deployed (both boxes on v0.0.119, 10-07); the lane ships SHADOWED, and arming is the operator's, after wave 4's arming blockers |
+| 4 | 4 | FIRST: review 313's residue and the lane's arming blockers; then the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server (+ pwa for the residue) | waves 2–3; child-reclamation waves 3–4 | — | run 314 open (planned; the run's wave 5 of 5), blocks 4348–4363 and 4430–4433; plan #323 (`8c446eab`); dispatch waits on the daily cap |
 
 ## Decisions & deviations
 
@@ -768,6 +768,21 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **Carried (a candidate, not this programme's wave):** run 245's 9.7 GiB TMPDIR leak came from mkTmp fixtures
     cleaned only in `afterAll`, so a killed vitest run leaks them all. Cleanup on exit or SIGTERM in the test helpers
     would stop a repeat.
+- **2026-10-07 21:21 — wave 4 plan MERGED: #323 → `8c446eab` (21:20:21), re-based on #320.** Workflow wf_25f19b4a-cf7:
+  - **The re-base:** Opus, on `7f7bf4afc`. The migration moved to slot 18, and the coord-db describe now finds its slot
+    by DDL, as #320's does. Task 6's union is mail-routes' fifteenth. Pre-flight finding 9 was rewritten: the stall
+    watch's push gate is now one resolution, `resolveStallWatch`, files under Follow, a Settings level otherwise.
+    coordinator-skill is 161.
+  - **The replay:** Sonnet. 134 of 134 anchors match once; every count and both reds agree; 21 rows red; the guards
+    green; 0 new D-tokens, 0 docserver URLs, 0 D-TBD sentences.
+  - **CI:** #323 green, including all four server shards and `test (server)`.
+  - **Run 314's dispatch REFUSED `cap-daily`** (24 of 24, fleet-wide). The brief names 4348–4363 then 4430–4433 against
+    the plan's slug order, with the live claims of run 322 and run 302 and the 409 rule. A retry re-measures the oldest
+    in-window dispatch before each try (first age-out 22:20:17, run 307) and stops on any other answer.
+  - **Wave 3b is deployed.** Both boxes report v0.0.119 (`7f7bf4afc`, which contains #312): the fleet box by
+    `ccrc version`, the server by `/health`. The lane runs shadowed. Its feed holds "archived workspace would be
+    cleaned up" rows for 18 distinct workspaces since 10-07 10:19, re-recorded after each server restart, as its
+    in-memory list is designed to be. No `ws-expire` was composed.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
