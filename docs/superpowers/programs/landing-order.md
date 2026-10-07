@@ -631,6 +631,40 @@ carries it (spec §5.1, amended 2026-09-24).
     - (d) is read before each run's final close, because the close reclaims the child workspace.
     - (e)'s feed body may not read "No open run names a coordinator to tell", because D's workspace belongs to an
       open run (at `awaiting-review`, not `merging`). It is recorded as found.
+- **2026-10-07 01:39 — Task 7 Steps 1, 2 and 4 done: the merge queue is ON for `main` (ruleset write 01:38:37 UTC).**
+  - **Deploy.** Wave 3 has been on both boxes since 2026-10-07 00:51 UTC. Both boxes run v0.0.112 (`543777fb`, which
+    contains `9a255a74`), applied from the console: the fleet box finished at 00:51:18 and the server box at 00:51:42.
+    Each box's `update.json` reads phase `done`, and `ccrc version` reads `install: complete` on both.
+  - **Step 1.**
+    - `merge_group` is on `main`'s `ci.yml` (`1`).
+    - The trusted full run is 37552120108 (`workflow_dispatch` on `9a255a74`, five server shards). `typecheck (server)`,
+      `server 1/5`–`5/5`, `test (server)`, `test (agent)`, `test (pwa)` and `build-pwa` all read `success`. The macOS
+      legs are not read; one failed.
+    - `MERGE_PARSE_CAP=2048` is in the installed hook (`1`). Doctor reads `PASS jq_regex`, with no FAIL line.
+    - THE CANARY printed `deny` on the fleet box's `/usr/bin/jq`, jq-1.7.
+    - The census read `census-done: 11 coordinator(s) checked`, with no MARKED or HELD line.
+    - **Substitution:** both boxes were measured with `ccrc version` and `update.json` instead of
+      `ccrc rollout --check --to v0.0.112`, because the operator's 2026-09-30 ruling forbids running `ccrc rollout`
+      by hand.
+  - **Step 2** matched the runbook's 2026-09-23 values:
+    - Two rulesets: main's is 22520257, and stable's is 23740920.
+    - Main's one rule was `pull_request` with 1 approval, and its bypass actors were roles 2 (maintain) and 5 (admin),
+      both in `pull_request` mode.
+    - Classic protection: `strict` false, the four required contexts, `enforce_admins` true, 0 approvals.
+    - Repository settings: `allow_squash_merge` true, `allow_auto_merge` false, `allow_update_branch` false and
+      `delete_branch_on_merge` true.
+    - The only new reading is three parameters GitHub now reports on the rule, a schema addition:
+      `allowed_merge_methods`, `dismissal_restriction` and `require_extra_approval_for_unattributed_changes` (true).
+  - **Step 3 and Step 4.** Step 4a's diff showed exactly the three changes:
+    - the maintain bypass (role 2) removed, as R9 ruled;
+    - approvals 1 → 0;
+    - the `merge_queue` rule added: SQUASH, build concurrency 1, group size 1–1, wait 0, ALLGREEN, timeout 60 minutes.
+
+    Step 4b's PUT answered `rules: ["pull_request","merge_queue"]` with the one bypass actor (role 5), and a re-read
+    shows the same. The ruleset's name still says "Admin and Maintain bypass", because the runbook's transform keeps the
+    name. `ruleset-before.json`, `ruleset-rollback.json`, `ruleset-after.json` and `ruleset-written.json` are kept in
+    the coordinator's evidence folder. The rollback is a PUT of `ruleset-rollback.json` to ruleset 22520257.
+  - **Next: (a0) on this ledger PR (slot C)** once its own CI is green, then the proof dispatches.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
