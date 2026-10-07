@@ -696,6 +696,11 @@ carries it (spec §5.1, amended 2026-09-24).
 
 ## Carried constraints
 
+- **A run the dead-coordinator lane closes is an operator abandon here** (workspace-lifecycle spec §6, the Landing-order
+  bullet; recorded 2026-10-07, where the spec said it already was). Workspace lifecycle's wave 4 (run 314) adds
+  `causedBy: 'sweep'` to `closeRun`'s abandon arm. Every landing reading keyed on an abandon treats a `sweep` close
+  exactly as an `operator` one. Wave 4's plan measures what landing code keys on `causedBy` today and pins the
+  equivalence with a test. A landing plan written after it inherits the rule.
 - **CI test selection landed first (#183, `814fc53d`).** Wave 2's re-plan derives its `ci.yml` edits against that shape
   rather than overwriting it: a `merge_group` run keeps a run-unique concurrency group (never the shared push-to-main
   refresh group, which may drop runs), the mode table gains a `merge_group` row, the macOS legs and `full-suite` skip a

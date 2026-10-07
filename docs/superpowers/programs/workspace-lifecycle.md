@@ -691,6 +691,41 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - (d) whether to end brisk-mesa's leaked test tmux server first.
   - **Run 314 is open** (planned; the run's wave 5 of 5), with block 4348–4363 (sixteen numbers: the residue's
     behaviour changes plus the dead-coordinator lane).
+- **2026-10-07 06:05 — wave 4 planning started** (workflow wf_07ea3938-e5a: an Opus drafter, four Opus lenses for spec, act
+  safety, replay and test honesty, an Opus reviser and a Sonnet replay verifier). The plan goes to
+  `docs/superpowers/plans/2026-10-07-workspace-lifecycle-wave4-dead-coordinator-lane.md` on branch
+  `docs/workspace-lifecycle-wave4-plan`. The coordinator's rulings for it:
+  - **(A) The first commits** are review 313's residue and the expiry lane's three arming blockers, as the 06:01 entry
+    rules them. The archive-confirm copy (parked item 2) is one separate task the brief can strike, because it is the
+    operator's text.
+  - **(B) The lane ships SHADOWED.**
+    - Until `$REG/dead-coordinator-lane-live` exists, the lane measures, keeps its anchor, trips its breaker, and
+      records "would end programme X". It never calls the abandon arm.
+    - The file has no writer in the tree, pinned beside `expire-lane-live`.
+    - `reclaim-paused` stops the lane entirely.
+    - The skill files state the arming condition in words.
+    - The reason: once armed, the lane ends other coordinators' programmes and gets their workers' workspaces
+      reclaimed, losing a turn mid-flight. This is the precedent of the scope sweep and the expiry lane.
+  - **(C)–(H) are spec §5.4 as written:**
+    - the verdict is widened in one place;
+    - a crash and only a crash, with one journal reader, where an unreadable journal is unmeasured;
+    - the durable hour, its anchor only ever raised, measured on two passes;
+    - the circuit breaker, evaluated in shadow too. Its clear is the smallest act the box-token census allows, and
+      a new door is an open question;
+    - no successor: the act runs on the coordination serialiser, compare-and-set on `claimedBy`, with a forced
+      revive test;
+    - `causedBy: 'sweep'`, additive.
+  - **(E) The migration:** the plan measures what a rolled-back older server does on meeting the new `user_version`,
+    and chooses a shape that keeps a rollback bootable.
+  - **(H) Landing:** a `sweep` close reads as an operator abandon, with a test. Landing-order's ledger now carries
+    that constraint; spec §6 said it already did, and it did not.
+  - **(I) Relations:** the stall watch's coordinator-deaf arm notifies, and this lane acts. Neither double-reports
+    one dead coordinator as two incidents. It is a sibling pass on the child lane's tick.
+  - **(J) Overlaps:** child reclamation wave 6 (run 291), ccrc-history (run 302; claims 1065, 1066 and 1068) and
+    centralised update W15 (run 300). There is a re-measure-at-dispatch note, and ccd/ccd is shared by region.
+  - **Departure: the plan is Markdown, not HTML.** That is the operator's standing preference since 2026-10-06, but
+    this repo's `deviation-refs` guard and the ledger floor seed (`server/src/coord/ledgerseed.ts`) read only `.md`
+    plans. An HTML plan's D-numbers would be invisible to both.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
