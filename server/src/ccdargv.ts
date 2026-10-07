@@ -1,5 +1,6 @@
 import type { FleetState } from './fleetstate.js';
 import { ROUTE_WRITABLE_FIELDS, type RouteFields, type StopSurface } from '../../shared/api.js';
+import type { DocSectionSlug } from '../../shared/docs.js';
 
 declare const CcdArgvBrand: unique symbol;
 
@@ -158,6 +159,22 @@ const routeFlags = (r: RouteFields | null): string[] =>
  */
 const childFlags = (child: number | null): string[] =>
   child === null ? [] : ['--child', String(child)];
+
+/**
+ * The `--ref <R>` pair for `docs-tree` (native Docs reader, spec 2026-10-01
+ * section 2 (a)), or nothing. `null` means exactly one thing: the request named
+ * no ref, so ccd serves the origin default branch. A named helper and not an
+ * inline ternary for `childFlags`' measured reason: `ccdargv-dec-parity.test.ts`
+ * walks each `argv([...])` literal in the table below to its first `])`.
+ */
+const docsRefFlags = (ref: string | null): string[] => (ref === null ? [] : ['--ref', ref]);
+
+/**
+ * The `--branch <B>` pair for `docs-fetch`, or nothing. `null` means exactly
+ * one thing: fetch the origin default branch (ccd resolves it and answers
+ * `defaultVia`). Named for `docsRefFlags`' reason.
+ */
+const docsBranchFlags = (branch: string | null): string[] => (branch === null ? [] : ['--branch', branch]);
 
 /**
  * The session's own device label as an `--actor` value.
@@ -594,6 +611,50 @@ export const CCD_ARGV = {
    *  it in the shape the agent grants. */
   winSize: (id: string, mode: 'smallest' | 'canonical') =>
              argv(['win-size', '--session', id, '--mode', mode]),
+
+  /** NATIVE DOCS READER (spec 2026-10-01 section 2 (a), docs W2): one builder per
+   *  argv shape of the four read verbs `docs-v1` names. The verb comes first and
+   *  the flag the agent grants second (`--all` here, `--project` for the other
+   *  four builders); `docs-show`'s two builders ride ONE grant,
+   *  `['docs-show','--project']`. Every value reaches ccd UNVALIDATED by these
+   *  builders: the server's L1 parsers refuse a bad value with a 400 before any
+   *  exec, and ccd re-checks every token against the same grammars, so this
+   *  table holds no third copy of them. The one type-level closure is
+   *  `section: DocSectionSlug`. No builder takes `--blob` or `--worktree`, and
+   *  none emits `--`.
+   *
+   *  `docsIndex` is project-less: `--all` is its whole argument surface. */
+  docsIndex: () => argv(['docs-index', '--all']),
+
+  /** One project's listing. `ref` is the request's ref in either grammar, bare
+   *  or qualified, or `null` for the origin default branch, which adds no
+   *  `--ref` at all (`docsRefFlags`). */
+  docsTree: (project: string, ref: string | null) =>
+              argv(['docs-tree', '--project', project, ...docsRefFlags(ref)]),
+
+  /** A committed file, 12 tokens after the verb. `commit` is the pin the tree
+   *  answer served; `servedRef` is that answer's `ref.served`, qualified, which
+   *  ccd uses only for the `onRef` provenance check and never to choose bytes.
+   *  `maxBytes` is `DOCS_CLASS_CAP[contentClass(path)]`, the class cap the
+   *  server chose, stringified; ccd enforces `min(N, DOCS_MAX_FILE_BYTES)`. */
+  docsShowCommitted: (project: string, commit: string, servedRef: string, section: DocSectionSlug, path: string,
+                      maxBytes: number) =>
+                       argv(['docs-show', '--project', project, '--commit', commit, '--ref', servedRef,
+                             '--section', section, '--path', path, '--max-bytes', String(maxBytes)]),
+
+  /** A draft file, 14 tokens after the verb: the worktree holding `branch`
+   *  (bare) at `head`, read only while its bytes still hash to `fp`. ccd
+   *  resolves the worktree itself; `maxBytes` as for `docsShowCommitted`. */
+  docsShowDraft: (project: string, branch: string, head: string, section: DocSectionSlug, path: string, fp: string,
+                  maxBytes: number) =>
+                   argv(['docs-show', '--project', project, '--draft-branch', branch, '--head', head,
+                         '--section', section, '--path', path, '--fingerprint', fp, '--max-bytes', String(maxBytes)]),
+
+  /** The one docs verb that writes: a fetch of `branch` (bare) from origin, or
+   *  of the origin default branch for `null`, which adds no `--branch` at all
+   *  (`docsBranchFlags`). */
+  docsFetch: (project: string, branch: string | null) =>
+               argv(['docs-fetch', '--project', project, ...docsBranchFlags(branch)]),
 } as const;
 
 /**
