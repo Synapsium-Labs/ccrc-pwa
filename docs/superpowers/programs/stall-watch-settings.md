@@ -125,6 +125,16 @@ time.
     has this as mail 3814.
   - Why: R7 already lets both waves proceed in their own regions, and a block appended at the end of the file cannot
     textually meet 291's mid-file edits. Cost if wrong: one structural merge in `shared/api.ts` at the second landing.
+- **R12 (2026-10-07 10:05)**, Task 1 starts under the consented co-edit.
+  - Run 291's coordinator answered yes in mail 3815, under exactly R11's limits. It measured run 291's own edits to
+    `shared/api.ts` at its tip `e5effb842` as interior only: `CoordStatus` near :3813, `LcRefusalToken` and
+    `LC_REFUSAL_WORD`, and `LifecycleMeas` near :7640. If W1's block cites `shared/api.ts` lines and wave 6 lands
+    first, re-pointing them is W1's.
+  - Checked against the merged W1 plan: only Task 1 edits `shared/api.ts`, as one hunk appended after the last line and
+    never inserted above it, so the consent covers W1's whole use of the path.
+  - Mail 3817 tells the worker that this confirmation, not a claim, licenses that one path. `server/src/watch.ts`
+    (Task 5) and `README.md`/`CLAUDE.md` (Task 7) still wait for their claims' release, and the wave-done names
+    mail 3815 and R12 in its claim state.
 
 ## Carried constraints (reviewers get these)
 
