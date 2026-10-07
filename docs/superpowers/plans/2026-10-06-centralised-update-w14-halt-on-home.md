@@ -227,7 +227,7 @@ These are departures from R15 as ruled, from the brief's "PWA wave", or from wha
   - **Now:**
     - `AckOutcome` is `acked | unreadable | refused | unanswered`. `refused` is a 4xx `ApiError`; `unanswered` is any other rejection. The toasts are unchanged.
     - The halt banner holds a clean 200 until a poll shows a different lease, as before.
-    - It holds `unreadable` and `unanswered` until a fresh successful read: the view object differs from the one present when the outcome arrived (a failed read keeps the object; the hook's newest-issued guard drops a read issued before the re-poll). If that read still shows the same lease, it re-arms; otherwise the row follows the read.
+    - It holds `unreadable` and `unanswered` until a fresh successful read: the view object differs from the one present when the outcome arrived (a failed read keeps the object; the first fresh read is one taken after the tap that commits after the outcome — a read already landed but not yet rendered when the outcome arrives counts as fresh). If that read still shows the same lease, it re-arms; otherwise the row follows the read.
     - `Acked` shows only after a 2xx. An `unanswered` hold shows `Ack`, disabled. The button's accessible name follows its visible label (`Ack <label>` / `Acked <label>`, review 307 F3).
     - The Settings row still ignores the outcome.
 

@@ -182,6 +182,8 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
     await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('unanswered'); });
     vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(502, { ok: false, error: 'bad gateway' }));
     await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('unanswered'); });
+    vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(500, { ok: false, error: 'internal' }));
+    await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('unanswered'); });
     vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'busy' }));
     await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('refused'); });
     vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(400, { ok: false, error: 'bad request' }));
@@ -205,6 +207,8 @@ const renderWith = (v: UpdatesView, onAcked: () => void) => {
 const NO_ANSWER: ReadonlyArray<readonly [string, () => unknown]> = [
   ['a fetch TypeError', () => new TypeError('Failed to fetch')],
   ['a proxy 502', () => new ApiError(502, { ok: false, error: 'bad gateway' })],
+  ['a server 500', () => new ApiError(500, { ok: false, error: 'internal' })],
+  ['a proxy 503', () => new ApiError(503, { ok: false, error: 'unavailable' })],
   ['a proxy 504', () => new ApiError(504, { ok: false, error: 'gateway timeout' })],
   ['a timeout rejection', () => new DOMException('The operation timed out.', 'TimeoutError')],
 ];

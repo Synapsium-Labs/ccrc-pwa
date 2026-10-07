@@ -37,8 +37,9 @@ const leaseKey = (n: NodeWire): string => JSON.stringify(n.update ?? null);
 
 /** What a tap left behind (D-4272). A clean 200 holds until a poll shows a different lease. An outcome the screen
  *  cannot vouch for (`unreadable`, or `unanswered`: a rejection, a 5xx, a timeout) holds until a FRESH successful
- *  read: `seen` is the view object present when the outcome arrived, and every good read hands the screen a new
- *  object while a failed read keeps the old one. A 4xx refusal leaves no hold. */
+ *  read: `seen` is the last COMMITTED view object when the outcome arrived, and every good read hands the screen a
+ *  new object while a failed read keeps the old one. A read that had already landed but not yet rendered at that
+ *  instant counts as fresh, because it was taken after the tap. A 4xx refusal leaves no hold. */
 type Hold =
   | { kind: 'acked'; lease: string }
   | { kind: 'pending'; lease: string; seen: UpdatesView; said: 'unreadable' | 'unanswered' };
@@ -48,8 +49,10 @@ function HaltRow({ node: n, releases, view, onAcked }: {
 }): ReactNode {
   const [acking, setAcking] = useState(false);
   const [hold, setHold] = useState<Hold | null>(null);
-  // The outcome callback reads the view as it stands WHEN THE OUTCOME ARRIVES, not as it stood at the tap: a poll that
-  // landed while the POST was in flight may have been served before the ack committed.
+  // The outcome callback reads the last COMMITTED view when the outcome arrives, not the view at the tap: a poll that
+  // landed and rendered while the POST was in flight may have been served before the ack committed. A read that has
+  // already landed but not yet rendered at that instant is not in the ref, so it counts as fresh (it was taken after
+  // the tap).
   const viewRef = useRef(view);
   viewRef.current = view;
   const held = hold !== null && (hold.kind === 'acked' ? hold.lease === leaseKey(n) : view === hold.seen);
