@@ -2156,6 +2156,35 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       } finally { db.close(); }
     });
 
+    it('F1 (review 316): the ingest-time index text is the re-derivation text, so a value glued to an escape in an Edit input behind an unterminated PEM header is never indexed once learned', () => {
+      const box = IX.newBox('ccrc-hist-order-');
+      const BS = String.fromCharCode(92);
+      const v = `zqt${hex(12)}8`;
+      // Source key order is old_string, new_string; canonicalJson (the stored blob) sorts them to new_string, old_string.
+      // The PEM shape runs to the end of the text, so which part comes first decides which part it masks.
+      const input = {
+        file_path: '/home/u/tree/a.py',
+        old_string: `msg = "a${BS}n${v}"`,
+        new_string: 'if l.startswith("-----BEGIN RSA PRIVATE KEY-----"):',
+      };
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+        IX.user(IX.uuidN(1), null, 'go', 1),
+        IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'tool_use', id: 'toolu_01FFF', name: 'Edit', input }], 2),
+      ]));
+      IX.sweepTwice(box);
+      secretFile(box, 'order.env', `ZQ_ORDER_VALUE=${v}\n`);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      const db = openStoreRO(box);
+      try {
+        expect(matches(db, '"nzqt"*')).toBe(0);
+        expect(ftsBytes(db).includes(v.slice(3, 15))).toBe(false);
+        expect(matches(db, 'msg')).toBe(0);                                  // the part the PEM masks, in the stored order
+        expect(IX.blobsHold(db, v)).toBe(true);
+        expect(metaV(db, 'fts_reindex_rid')).toBe(String(maxRid(db)));
+      } finally { db.close(); }
+    });
+
     it('rederiveFts resumes from its durable cursor, re-indexes only blobs whose re-derivation hit an owed pair, and moves the mark to its own target, never to a pair learned mid-generation', async () => {
       const box = IX.newBox('ccrc-hist-rederive-');
       const a = `zqm${hex(12)}6`;

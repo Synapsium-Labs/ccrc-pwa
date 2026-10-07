@@ -2138,7 +2138,12 @@ export function prepareLines(lines, ctx, st) {
     const provenance = provenanceOf(row, { pairedToolUse: paired });
     // The index text, only for a searchable row and only when this tick may index (§6.2). A recall echo is
     // classified by the paired tool_use in provenanceOf, never by its text (D-4197, history-recall-echo-by-structure).
-    const ftsText = ctx.fts === true && SEARCHABLE_PROVENANCE.includes(provenance) ? ftsTextOf(body, 'entry') : null;
+    // The index text is a function of the STORED blob, not of the parsed row: canonicalJson sorts keys, and
+    // ftsTextOf joins tool_use.input leaves in key order, so the row's own key order would give a text whose
+    // parts sit in another order than the one rederiveFts re-derives (a PEM run to end-of-text masks a different
+    // part). Reading the canonical form makes the two texts equal, which makeProbeIndex's soundness argument
+    // assumes (D-4344, review 316 F1; `json` is the string compressed below).
+    const ftsText = ctx.fts === true && SEARCHABLE_PROVENANCE.includes(provenance) ? ftsTextOf(JSON.parse(json), 'entry') : null;
     rows.push({ kind: 'row', at, entry, provenance, sha: sha256Bytes(json), json, boundary, kept, ftsText });
     if (st.firstPending) {
       st.firstPending = false;
