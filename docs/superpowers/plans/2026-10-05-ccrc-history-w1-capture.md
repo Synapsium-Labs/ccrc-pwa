@@ -25797,7 +25797,7 @@ from server/test, so a new history-*.test.ts without its line reds."
 
 ## Deviations found
 
-Every departure this plan takes from the spec is listed once below, in the order its first task meets it, with the task(s) that carry it and the spec §16 slug it implements. The text is the spec's §16 departure, except for the NEW departures, which no §16 row covers yet: the nine this plan was written with, and every one defined while B1 was executing (each entry after D-4262); each of those is marked "NEW departure (no spec §16 row)".
+Every departure this plan takes from the spec is listed once below, in the order its first task meets it, with the task(s) that carry it and the spec §16 slug it implements. The text is the spec's §16 departure, except for D-4260 through D-4262, which are Part A's review corrections and not §16 rows, and for the NEW departures, which no §16 row covers yet: the nine this plan was written with, and every one defined while B1 was executing (each entry after D-4262); each of those is marked "NEW departure (no spec §16 row)".
 
 **The numbers were issued in one block by the allocator (`POST /api/ledger/deviations`, 2026-10-06) and defined here in the same commit.** Each entry names the spec §16 slug it carries. A departure found while executing a wave takes a number from that wave's run block, named in its brief, and is appended below.
 
