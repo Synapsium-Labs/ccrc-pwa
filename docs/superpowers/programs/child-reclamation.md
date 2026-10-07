@@ -46,6 +46,16 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-07 05:02 — workspace-lifecycle's PR #312 (wave 3b, run 290) edits two passages of our spec (mail 3796,
+  answered in 3798).**
+  - **The two passages.** §5.8: `reclaim-paused` now also stops the expiry of archived workspaces, making it the
+    fleet's one cleanup switch. The wave-3 qualification near §6: `ws-restore` also refuses an unreadable `expire:`
+    breadcrumb. Both are true for our programme, and neither conflicts with wave 6's planned spec text. Task 13's
+    §7 sentence sits beside the :807 line, so it is a text merge.
+  - **Measured against run 291's local tip `4abb87010`** (not pushed). `git merge-tree` finds two textual conflicts:
+    `ccd/ccd`'s generated stamp line, and README's `shared/api.ts:` anchors in the purge-refusal sentence. Both are
+    the second lander's R56 work: a re-stamp, and re-pointing by content. `_ws_expire_cwd_users` auto-merges.
+  - **Arming.** 3b's expiry lane ships shadowed, until `$REG/expire-lane-live` exists.
 - **2026-10-06 20:21 — delegation-broker's overlap is closed (mail 3755).** Its wave 1 (#284) landed second, as
   `22b4eabda`, after #290. `git merge-tree` against `b27fabc15` was clean. Its coordinator ran
   `session-hook.test.ts` (335/335), `typecheck-tests` and the hook suites on that exact merged tree. Nothing is owed
