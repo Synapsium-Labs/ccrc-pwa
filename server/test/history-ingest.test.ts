@@ -525,6 +525,11 @@ const IX = (() => {
   return { U, U2, U3, G, ID, SLUG, uuidN, ts, tsMs, user, assistant, jsonl, words, plantCopy, newBox, sweepTwice, count, blobsHold, textColumnsHold, api, openFixtureStore, cursorOf };
 })();
 
+interface IxSweep { parseStoredJson(bytes: Uint8Array): unknown; }
+/** An IX.user row whose message.content is the raw JSON text `content` (D-4345's structure-bound cases). */
+const ixFrame = (u: string, parent: string | null, n: number, content: string): string =>
+  JSON.stringify(IX.user(u, parent, ['__C__'], n)).replace('["__C__"]', () => content);
+
 describe('history ingest: chunk writes through the real sweep (plan task 19)', () => {
   beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
 
@@ -784,6 +789,28 @@ describe('history ingest: chunk writes through the real sweep (plan task 19)', (
     const db = openStoreRO(box);
     try { expect(IX.count(db, 'entries')).toBe(1); } finally { db.close(); }
   });
+
+  it('review 316 F7: a 16,200,040-byte line of 8.1 million nested arrays, under a 512 MiB heap, is stored raw-only and every pass exits 0', async () => {
+    const { lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-f7-');
+    try {
+      const d = 8_100_000;
+      const line = ixFrame(IX.uuidN(2), IX.uuidN(1), 2, '['.repeat(d) + ']'.repeat(d));
+      expect(Buffer.byteLength(line), 'CONTROL: this case exercises the under-LINE_MAX path').toBeLessThan(lib.LINE_MAX);
+      const text = IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), line, IX.user(IX.uuidN(3), IX.uuidN(1), 'after', 3)]);
+      IX.plantCopy(box.homes[0]!, IX.U, text);
+      const opts = { env: { NODE_OPTIONS: `--import ${pathToFileURL(PRELOADS.statfs).href} --max-old-space-size=512` } };
+      IX.sweepTwice(box, opts);                                              // at HEAD a pass dies on SIGABRT
+      const r = runSweep(box, [], opts);
+      expect(r.code, `${r.signal} ${r.stderr}`).toBe(0);
+      const db = openStoreRO(box);
+      try {
+        expect(IX.count(db, 'entries', `uuid = '${IX.uuidN(3)}'`)).toBe(1);
+        expect(IX.count(db, 'entries', "parse_state = 'raw-only'")).toBe(1);
+        expect((db.prepare('SELECT last_error_code AS c FROM ingest_files').get() as { c: string }).c).toBe('line-too-complex');
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  }, 180_000);
 });
 
 describe('history ingest: chunk writes in-process (plan task 19)', () => {
@@ -900,6 +927,47 @@ describe('history ingest: chunk writes in-process (plan task 19)', () => {
     }
   }, 120_000);
 
+  it('D-4345 (history-json-structure-bound): a line over JSON_DEPTH_MAX deep or over JSON_NODES_MAX units is stored raw-only byte for byte, line-too-complex, before any parse, and the cursor goes past it; a 3,000-deep line is a parsed row', async () => {
+    const box = IX.newBox('ccrc-hist-d4345-');
+    const D = lib.JSON_DEPTH_MAX + 1;
+    const deep = ixFrame(IX.uuidN(2), IX.uuidN(1), 2, '['.repeat(D) + ']'.repeat(D));
+    const wide = ixFrame(IX.uuidN(3), IX.uuidN(1), 3, '[' + '0,'.repeat(lib.JSON_NODES_MAX) + '0]');
+    const deepBad = ixFrame(IX.uuidN(6), IX.uuidN(1), 6, '['.repeat(D) + ']'.repeat(D)).slice(0, -1);   // over the bound AND not JSON
+    const ok3000 = ixFrame(IX.uuidN(5), IX.uuidN(1), 5, '['.repeat(3000) + '"zqdeepok"' + ']'.repeat(3000));
+    const text = IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), deep, wide, deepBad, ok3000, IX.user(IX.uuidN(4), IX.uuidN(1), 'after', 4)]);
+    const p = IX.plantCopy(box.homes[0]!, IX.U, text);
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const r = await S.ingestPath(db, S.makeIngestCtx(box.home, box.homes, Date.now(), ids), { path: p, uuid: IX.U, home: box.homes[0]! }, S.newBudget());
+      expect(r!.atEof).toBe(true);
+      expect(r!.offset).toBe(Buffer.byteLength(text));
+      const raws = db.prepare(`SELECT e.uuid AS uuid, b.z AS z FROM entries e JOIN blobs b ON b.blob_id = e.blob_id
+        WHERE e.parse_state = 'raw-only' ORDER BY e.entry_id`).all() as { uuid: string; z: Uint8Array }[];
+      expect(raws.map((x) => brotliDecompressSync(x.z).toString('utf8'))).toEqual([deep, wide, deepBad]);
+      for (const x of raws) expect(x.uuid).toMatch(/^x[0-9a-f]{32}$/);
+      expect(IX.count(db, 'entries', `uuid IN ('${IX.uuidN(2)}','${IX.uuidN(3)}','${IX.uuidN(6)}')`)).toBe(0);
+      expect(IX.count(db, 'entries', `uuid = '${IX.uuidN(5)}' AND parse_state = 'ok'`)).toBe(1);
+      expect(IX.count(db, 'entries', `uuid = '${IX.uuidN(4)}'`)).toBe(1);
+      expect((db.prepare('SELECT last_error_code AS c FROM ingest_files').get() as { c: string }).c).toBe('line-too-complex');   // deepBad is the last raw line; at HEAD it would be json-parse
+      expect((db.prepare('SELECT n FROM counters WHERE name = ?').get('raw_only') as { n: number }).n).toBe(3);
+    } finally {
+      db.close();
+      fs.rmSync(box.home, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it('D-4345: every stored-blob parse goes through parseStoredJson, which refuses an over-bound blob that ftsTextOfBlob would otherwise index', async () => {
+    const src = fs.readFileSync(SWEEP, 'utf8');
+    expect(src.match(/JSON\.parse\(unbrotli\(/g)).toBeNull();
+    expect((src.match(/\bunbrotli\(/g) ?? []).length).toBe(4);
+    expect((src.match(/(?<!function )\bparseStoredJson\(/g) ?? []).length).toBe(4);
+    const over = Buffer.from(JSON.stringify([{ type: 'text', text: 'zqstructsentinel' }]).slice(0, -1) + ',0'.repeat(lib.JSON_NODES_MAX) + ']');
+    const idx = lib.makePairIndex([]);
+    expect((await S.ftsTextOfBlob(brotliCompressSync(over), false, idx)).text).toBe('');
+    expect((await S.ftsTextOfBlob(brotliCompressSync(Buffer.from(JSON.stringify([{ type: 'text', text: 'zqstructsentinel' }]))), false, idx)).text).toBe('zqstructsentinel');
+    expect(() => S.parseStoredJson(over)).toThrow(SyntaxError);
+  });
+
   it('O11: history-off created between two chunks stops the second chunk', async () => {
     const box = IX.newBox('ccrc-hist-o11b-');
     const rows: IxRow[] = [];
@@ -961,6 +1029,8 @@ const IX_RSS_PRELOAD = path.join(__dirname, 'fixtures', 'history', 'preload-rss.
  *  smaller chunks do not bring it under 256 MiB, so any other interpreter is held to 512 MiB, half the carrier's
  *  MemoryMax=1G (D-4244). DM47 (task 21) uses the same bound. */
 const IX_RSS_BOUND_KIB = process.version === 'v22.16.0' ? 256 * 1024 : 512 * 1024;
+/** half the carrier's MemoryMax=1G, D-4244's bound family; the heaviest admitted line measured 389,508 and 356,032 KiB whole-pass on Node 24.14.1 (D-4345). */
+const IX_LINE_RSS_BOUND_KIB = 512 * 1024;
 
 describe('history ingest: budget, backlog and the ticks row (plan task 20)', () => {
   beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
@@ -1107,6 +1177,47 @@ describe('history ingest: budget, backlog and the ticks row (plan task 20)', () 
       expect(peak).toBeLessThan(IX_RSS_BOUND_KIB);
     } finally {
       fs.rmSync(box.home, { recursive: true, force: true });   // 96 MiB plus its store: never left for the file's afterAll alone
+    }
+  }, 300_000);
+
+  it('D-4345: the heaviest admitted line, JSON_NODES_MAX units of 30-character strings, is a parsed row and the pass peaks under 512 MiB in a 1 GiB scope, half the carrier\'s MemoryMax=1G', async (ctx) => {
+    const { lib } = await IX.api();
+    const base = JSON.stringify(IX.user(IX.uuidN(2), IX.uuidN(1), ['s'], 2));
+    const frameUnits = [...base].filter((ch) => ch === '[' || ch === '{' || ch === ',').length;   // no value of the frame holds one
+    const n = lib.JSON_NODES_MAX - frameUnits + 1;   // the content array's own `[` is in frameUnits; n strings add n - 1 commas
+    const strs = (k: number): string => JSON.stringify(IX.user(IX.uuidN(2), IX.uuidN(1),
+      Array.from({ length: k }, (_, i) => String(i).padStart(30, 'q')), 2));
+    const line = strs(n);
+    expect(lib.jsonWithinStructureBound(Buffer.from(line)), 'CONTROL: at the bound').toBe(true);
+    expect(lib.jsonWithinStructureBound(Buffer.from(strs(n + 1))), 'CONTROL: one unit over').toBe(false);
+    expect(Buffer.byteLength(line), 'CONTROL: under LINE_MAX').toBeLessThan(lib.LINE_MAX);
+    // The carrier's bound is a cgroup, and V8 sizes and paces its heap from the cgroup it sees: an unscoped child lets it defer
+    // collection, and this same pass floats to 535-559 MiB on a 31 GiB box (measured), a reading of the box and not of the unit.
+    // So the pass runs in a real `MemoryMax=1G` scope, and the case skips where a user systemd cannot make one.
+    const SR = '/usr/bin/systemd-run';
+    const scope = (argv: string[], env: NodeJS.ProcessEnv, cwd: string) => spawnSync(SR, ['--user', '--scope', '--quiet', '-p', 'MemoryMax=1G', '-p', 'MemorySwapMax=0', '--', ...argv], { env, cwd, encoding: 'utf8', timeout: 240_000 });
+    const probe = fs.existsSync(SR) ? scope(['/bin/true'], process.env, '/') : null;
+    if (probe === null || probe.status !== 0) { ctx.skip(); return; }
+    const box = IX.newBox('ccrc-hist-f7rss-');
+    try {
+      fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(box.home, '.cc-secrets', 'rss.env'), 'ZQ_RSS_VALUE=zqrss0123456789abcdef0123456789abcdef', { mode: 0o600 });   // the sweep loads it with no --secrets argument
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), line]));
+      const env = { ...box.env, XDG_RUNTIME_DIR: process.env['XDG_RUNTIME_DIR'] ?? '', DBUS_SESSION_BUS_ADDRESS: process.env['DBUS_SESSION_BUS_ADDRESS'] ?? '', HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: [PRELOADS.statfs, IX_RSS_PRELOAD].map((x) => `--import ${pathToFileURL(x).href}`).join(' ') };
+      let peak = 0;
+      for (let pass = 0; pass < 2; pass += 1) {
+        const r = scope([process.execPath, '--no-warnings', SWEEP, '--secrets', '--', ...box.homes], env, box.home);
+        expect(r.status, `${r.signal} ${r.stderr}`).toBe(0);
+        const m = /history-test-maxrss-kib=(\d+)/.exec(String(r.stderr));
+        expect(m, 'the RSS preload printed nothing').not.toBeNull();
+        peak = Math.max(peak, Number(m![1]));
+      }
+      const db = openStoreRO(box);
+      try { expect(IX.count(db, 'entries', `uuid = '${IX.uuidN(2)}' AND parse_state = 'ok'`)).toBe(1); } finally { db.close(); }
+      console.log(`D-4345 heaviest admitted line peak RSS ${peak} KiB on ${process.version}`);
+      expect(peak).toBeLessThan(IX_LINE_RSS_BOUND_KIB);
+    } finally {
+      fs.rmSync(box.home, { recursive: true, force: true });
     }
   }, 300_000);
 

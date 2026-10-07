@@ -36,6 +36,8 @@ export const REPARSE_MAX_TARGETS: number;
 export const CARRIER_KILL_S: number;
 export const EXPORT_MARGIN_DAYS: number;
 export const LINE_MAX: number;
+export const JSON_DEPTH_MAX: number;
+export const JSON_NODES_MAX: number;
 export const CHUNK_BYTES: number;
 export const RUN_BUDGET_MS: number;
 export const RUN_BUDGET_BYTES: number;
@@ -115,6 +117,7 @@ export interface HistoryPaths {
 export function historyPaths(home: string): HistoryPaths;
 
 export function canonicalJson(value: unknown): string;
+export function jsonWithinStructureBound(bytes: Uint8Array): boolean;
 export function sha256Bytes(data: string | Uint8Array): Buffer;
 export function sha256Hex(data: string | Uint8Array): string;
 export function digestText(prefix: string, parts: readonly string[]): string;

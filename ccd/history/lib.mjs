@@ -134,6 +134,17 @@ export const REPARSE_MAX_TARGETS = 500;
 export const CARRIER_KILL_S = 600;                  // == the unit's TimeoutStartSec=10min (DM43)
 export const EXPORT_MARGIN_DAYS = 30;
 export const LINE_MAX = 16 * 1024 * 1024;           // a longer transcript line is stored raw-only
+/** D-4345 (history-json-structure-bound): the deepest a transcript line's JSON may nest, and the most structural
+ *  units it may hold (a unit is a `[`, `{` or `,` outside a string; every value or key follows a `[`, `{`, `,` or `:`,
+ *  and a `:` only follows a key, so a line holds at most 2 × units + 1 of them). A line over either is stored raw-only
+ *  and never parsed: JSON.parse and canonicalJson hold every value at once, and 8.1 million nested arrays in a valid
+ *  16,200,040-byte line, or 5.4 million empty objects side by side, aborted every pass in a 1 GiB scope (review 316 F7).
+ *  Measured for a whole pass on Node 24.14.1: the heaviest admitted shape, 500,000 units of 30-character strings in one
+ *  16,499,914-byte line, peaked at 389,508 KiB, under half the carrier's MemoryMax=1G (D-4244's bound family), where
+ *  999,013 units of 13-character strings peaked at 516,988 KiB, over it. A 4.3-million-line sample of this fleet's
+ *  transcripts held at most 24,944 units, 15 deep. */
+export const JSON_DEPTH_MAX = 100_000;
+export const JSON_NODES_MAX = 500_000;
 // 2 MiB, within §9.2's "≤16 MiB": the most headroom under O20's 256 MiB on Node 22.16.0 (whole sweep 172884 KiB; 4 MiB chunks: 210824 KiB, 247412 KiB once FTS indexes inline) (plan tasks 20, 23; D-4244).
 export const CHUNK_BYTES = 2 * 1024 * 1024;         // parsed lines per ingest transaction
 export const RUN_BUDGET_MS = 90_000;                // one budget per run, never reset per file
@@ -192,7 +203,7 @@ export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear']);
 export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import', 'fork']);
 export const DECLARED_BY = Object.freeze(['hook', 'registry', 'journal', 'operator']);
 /** `ingest_files.last_error_code`: a closed vocabulary, never `e.message`. */
-export const ERROR_CODES = Object.freeze(['json-parse', 'not-object', 'line-too-long', 'read-failed', 'stat-failed', 'open-refused', 'parser-crash']);
+export const ERROR_CODES = Object.freeze(['json-parse', 'not-object', 'line-too-long', 'line-too-complex', 'read-failed', 'stat-failed', 'open-refused', 'parser-crash']);
 export const CARD_PREFIX = 'History: ';
 // D-4167: W1 answers for this box's store only.
 export const COVERAGE = Object.freeze(['this-box']);
@@ -364,6 +375,36 @@ export function canonicalJson(value) {
     const parent = stack[stack.length - 1];
     parent.parts.push(`${f.prefix}${text}`);
   }
+}
+
+/** D-4345 (history-json-structure-bound): are a line's bytes within JSON_DEPTH_MAX and JSON_NODES_MAX? One pass
+ *  over the bytes BEFORE any parse, allocating nothing. A string is skipped (a backslash skips the byte after it), so a
+ *  bracket or comma inside one never counts; a multi-byte UTF-8 sequence holds no ASCII byte. The bytes need not be
+ *  valid JSON: JSON.parse builds every value before it meets a trailing bad byte, so an over-bound line is refused
+ *  whether or not it parses, and a line within the bound that does not parse is JSON.parse's to refuse. */
+export function jsonWithinStructureBound(bytes) {
+  let depth = 0;
+  let units = 0;
+  let inString = false;
+  for (let i = 0; i < bytes.length; i += 1) {
+    const b = bytes[i];
+    if (inString) {
+      if (b === 0x5c) i += 1;                 // `\`: the next byte is escaped, never a closing quote
+      else if (b === 0x22) inString = false;
+      continue;
+    }
+    if (b === 0x22) inString = true;
+    else if (b === 0x5b || b === 0x7b) {     // `[` `{`
+      depth += 1;
+      units += 1;
+      if (depth > JSON_DEPTH_MAX || units > JSON_NODES_MAX) return false;
+    } else if (b === 0x5d || b === 0x7d) depth -= 1;
+    else if (b === 0x2c) {                   // `,`
+      units += 1;
+      if (units > JSON_NODES_MAX) return false;
+    }
+  }
+  return true;
 }
 
 export function sha256Bytes(data) {
@@ -1151,12 +1192,15 @@ export function boundaryOf(row) {
 
 /** Is this Bash command a recall: its first word `ccrc` or a path ending in
  *  `/ccrc` (one pair of surrounding quotes stripped), and its second word
- *  `history`? Structure only (§6.2): never a sentinel in any body. */
+ *  `history`? Structure only (§6.2): never a sentinel in any body. The first
+ *  two words come from one anchored match, never a split of the whole command:
+ *  an 8-million-word command split held about 273 MiB to read two words
+ *  (review 316 F7). */
 export function isHistoryCommand(command) {
-  const words = command.trim().split(/\s+/);
-  if (words.length < 2) return false;
-  const first = words[0].replace(/^(["'])(.*)\1$/, '$2');
-  return (first === 'ccrc' || first.endsWith('/ccrc')) && words[1] === 'history';
+  const m = /^\s*(\S+)\s+(\S+)/.exec(command);
+  if (m === null) return false;
+  const first = m[1].replace(/^(["'])(.*)\1$/, '$2');
+  return (first === 'ccrc' || first.endsWith('/ccrc')) && m[2] === 'history';
 }
 
 /** The text a user row's content begins with: the string itself, or its

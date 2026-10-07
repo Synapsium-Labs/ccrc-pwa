@@ -40,7 +40,7 @@ import {
   UUID_RE, WRITER_RE, drainingNameOk, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
   passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
   CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
-  boundaryOf, provenanceOf, variantCauseOf, canonicalJson, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
+  boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
   SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, redactForIndex,
@@ -2065,11 +2065,21 @@ function stmts(db) {
   return s;
 }
 
-/** A stored body, parsed; null for a tombstone or a body that is not JSON. */
+/** A stored blob's bytes parsed as JSON, behind lib's structure gate (D-4345, history-json-structure-bound). A body
+ *  stored from a parsed row is within the bound by construction (blobBodyOf takes a subtree of a line that passed the
+ *  gate, and canonical JSON adds no structure), so only a raw-only blob is refused: one a row reaches by naming a raw
+ *  row's key as its uuid. The refusal is a SyntaxError, which each caller already folds exactly as it folds a blob that
+ *  does not parse. */
+export function parseStoredJson(bytes) {
+  if (!jsonWithinStructureBound(bytes)) throw new SyntaxError('stored blob is over the JSON structure bound');
+  return JSON.parse(bytes.toString('utf8'));
+}
+
+/** A stored body, parsed; null for a tombstone, a body that is not JSON, or one over the structure bound (D-4345). */
 function storedBody(s, blobId) {
   const r = s.blobZ.get(blobId);
   if (r === undefined || r.z === null) return null;
-  try { return JSON.parse(unbrotli(r.z).toString('utf8')); } catch { return null; }
+  try { return parseStoredJson(unbrotli(r.z)); } catch { return null; }
 }
 
 /** The tool_use a tool_result answers, when it was written in an earlier tick: walked up the
@@ -2083,7 +2093,7 @@ function pairedFromStore(db, toolUseId, parentUuid) {
     if (r === undefined) return null;
     if (r.z !== null) {
       try {
-        const u = toolUsesOf(JSON.parse(unbrotli(r.z).toString('utf8'))).find((x) => x.id === toolUseId);
+        const u = toolUsesOf(parseStoredJson(unbrotli(r.z))).find((x) => x.id === toolUseId);
         if (u !== undefined) return u;
       } catch { /* a raw-only body pairs nothing */ }
     }
@@ -2113,7 +2123,7 @@ function rawRowOf(st, at, bytes, code) {
 /** Lines → prepared rows, OUTSIDE any transaction (§9.2 step 4). `st` is the per-file state
  *  ingestFile keeps across this file's chunks: the connection, the transcript's uuid, the
  *  tool_use pairs seen so far, and whether the file's first stored row is still to come.
- *  JSON.parse failures and non-objects become raw-only rows here. ANY OTHER THROW is the
+ *  JSON.parse failures, non-objects and lines over the JSON structure bound (D-4345, decided before any parse) become raw-only rows here. ANY OTHER THROW is the
  *  parser's own bug and propagates: ingestFile counts it parser_crash and holds the cursor (O2).
  *  Only ERROR_CODES words are recorded, never an error's message (DM34). */
 export function prepareLines(lines, ctx, st) {
@@ -2124,6 +2134,11 @@ export function prepareLines(lines, ctx, st) {
   let first = null;
   for (const { at, bytes } of lines) {
     if (bytes.length === 0) continue;   // an empty line is no row and takes no position
+    // D-4345 (history-json-structure-bound): decided on the bytes, before JSON.parse would hold every value at once.
+    if (!jsonWithinStructureBound(bytes)) {
+      rows.push(rawRowOf(st, at, bytes, 'line-too-complex')); add('raw_only'); rawError = { code: 'line-too-complex', at };
+      continue;
+    }
     const text = bytes.toString('utf8');
     let row;
     try { row = JSON.parse(text); } catch {
@@ -2782,7 +2797,7 @@ export function toolResultCandidates(db, transcriptPk, names) {
   const out = [];
   for (const r of sideStmts(db).toolResults.iterate(transcriptPk)) {
     let body;
-    try { body = JSON.parse(unbrotli(r.z).toString('utf8')); } catch { continue; }
+    try { body = parseStoredJson(unbrotli(r.z)); } catch { continue; }
     const ids = toolResultIdsOf(body);
     if (ids.length === 0) continue;
     const text = ftsTextOf(body, 'entry');
@@ -3157,7 +3172,7 @@ export async function ftsTextOfBlob(z, isSidecar, pairIdx) {
     return { text: sidecarIndexText(p.bytes, pairIdx), decoded: p.decoded };
   }
   const bytes = unbrotli(z);
-  try { return { text: ftsTextOf(JSON.parse(bytes.toString('utf8')), 'entry'), decoded: bytes.length }; } catch { return { text: '', decoded: bytes.length }; }
+  try { return { text: ftsTextOf(parseStoredJson(bytes), 'entry'), decoded: bytes.length }; } catch { return { text: '', decoded: bytes.length }; }
 }
 
 /** Index text is computed outside any transaction (a sidecar's decompression is async) and written

@@ -20,7 +20,7 @@ import {
   UUID_RE, WRITER_RE, idOk, readBoxEnvValue, historyPaths,
 } from '../../ccd/history/lib.mjs';
 import {
-  canonicalJson, sha256Hex, sha256Bytes, digestText, leafId, parentId, eventKey, blobShaOfBody, blobShaOfBytes,
+  canonicalJson, JSON_DEPTH_MAX, JSON_NODES_MAX, jsonWithinStructureBound, sha256Hex, sha256Bytes, digestText, leafId, parentId, eventKey, blobShaOfBody, blobShaOfBytes,
 } from '../../ccd/history/lib.mjs';
 import {
   SPOOL_KEYS, SPOOL_LINE_MAX, DRAINING_NAME_MAX, JOURNAL_V, CONFIRM_BY, GENERATION_VIA, splitSpoolText, parseSpoolLine, drainingNameOk,
@@ -287,6 +287,34 @@ describe('canonical JSON and the digests (spec §6.1, §6.5, §9.14)', () => {
     expect(eventKey('demo-quiet-basin.1700000000000.4242.jsonl', 2)).not.toBe(k);
     expect(eventKey('demo-quiet-basin.1700000000001.4242.jsonl', 1)).not.toBe(k);
     expect(eventKey.length, 'eventKey takes exactly the name and the ordinal').toBe(2);
+  });
+});
+
+describe('jsonWithinStructureBound: the structure gate a transcript line passes before any parse (D-4345)', () => {
+  const B = (t: string): Buffer => Buffer.from(t);
+  it('the bounds are 100,000 levels and 500,000 units', () => {
+    expect(JSON_DEPTH_MAX).toBe(100_000);
+    expect(JSON_NODES_MAX).toBe(500_000);
+    expect(ERROR_CODES).toContain('line-too-complex');
+  });
+  it('depth: exactly JSON_DEPTH_MAX passes, one more is refused', () => {
+    expect(jsonWithinStructureBound(B('['.repeat(JSON_DEPTH_MAX) + ']'.repeat(JSON_DEPTH_MAX)))).toBe(true);
+    expect(jsonWithinStructureBound(B('['.repeat(JSON_DEPTH_MAX + 1) + ']'.repeat(JSON_DEPTH_MAX + 1)))).toBe(false);
+    expect(jsonWithinStructureBound(B('{"a":'.repeat(JSON_DEPTH_MAX + 1) + '0' + '}'.repeat(JSON_DEPTH_MAX + 1)))).toBe(false);
+  });
+  it('units: exactly JSON_NODES_MAX passes, one more is refused; commas and opens both count', () => {
+    expect(jsonWithinStructureBound(B('[' + '0,'.repeat(JSON_NODES_MAX - 1) + '0]'))).toBe(true);   // 1 open + MAX-1 commas
+    expect(jsonWithinStructureBound(B('[' + '0,'.repeat(JSON_NODES_MAX) + '0]'))).toBe(false);
+    expect(jsonWithinStructureBound(B('[' + '{},'.repeat(JSON_NODES_MAX / 2) + '{}]'))).toBe(false);
+  });
+  it('brackets and commas inside strings never count, an escaped quote included', () => {
+    expect(jsonWithinStructureBound(B(JSON.stringify({ a: '['.repeat(JSON_DEPTH_MAX + 1) + ','.repeat(JSON_NODES_MAX + 1) })))).toBe(true);
+    expect(jsonWithinStructureBound(B(JSON.stringify({ a: '"' + '['.repeat(JSON_DEPTH_MAX + 1) })))).toBe(true);
+    expect(jsonWithinStructureBound(B(JSON.stringify(['\\', '['.repeat(JSON_DEPTH_MAX + 1)])))).toBe(true);
+    expect(jsonWithinStructureBound(B(JSON.stringify(['é€😀'.repeat(1000)])))).toBe(true);
+  });
+  it('bytes that are not JSON are not this gate\'s: unbalanced closers and garbage pass, JSON.parse refuses them', () => {
+    for (const t of [']]]]', '}}{,', 'not json']) expect(jsonWithinStructureBound(B(t)), t).toBe(true);
   });
 });
 
@@ -1227,6 +1255,21 @@ describe('provenanceOf: by structure, never by text (spec 6.2, DM32 pure half)',
     expect(libRows.isHistoryCommand('env -u CLAUDECODE ccrc history prune')).toBe(false);
     expect(libRows.isHistoryCommand('ccrcx history grep')).toBe(false);
     expect(libRows.isHistoryCommand('ccrc')).toBe(false);
+  });
+  it('isHistoryCommand never splits the whole command (review 316 F7)', () => {
+    const spy = vi.spyOn(String.prototype, 'split');
+    let yes: boolean | undefined; let no: boolean | undefined; let calls = -1;
+    try {
+      yes = libRows.isHistoryCommand('ccrc history ' + 'x '.repeat(10000));
+      no = libRows.isHistoryCommand('a '.repeat(10000));
+      calls = spy.mock.calls.length;
+    } finally { spy.mockRestore(); }
+    expect(yes).toBe(true);
+    expect(no).toBe(false);
+    expect(calls).toBe(0);
+    for (const t of ['', '   ', 'ccrc']) expect(libRows.isHistoryCommand(t), JSON.stringify(t)).toBe(false);
+    expect(libRows.isHistoryCommand('\tccrc\thistory')).toBe(true);
+    expect(libRows.isHistoryCommand('\n/x/ccrc history')).toBe(true);
   });
 });
 
