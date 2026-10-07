@@ -336,12 +336,13 @@ describe('ccrc history status (Linux)', () => {
 describe('status health: the measured snapshot through deriveHealth (task 28)', () => {
   beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
   type Envelope = Record<string, any>;
-  const statusOf = (box: healthHh.HistoryBox, args: string[] = ['--json']): { code: number | null; stdout: string; env: Envelope | null } => {
+  const statusOf = (box: healthHh.HistoryBox, args: string[] = ['--json'], seam?: { preloads: string[]; env: Record<string, string>; timeoutMs?: number }): { code: number | null; stdout: string; env: Envelope | null } => {
     const r = healthCp.spawnSync(process.execPath, ['--no-warnings', healthHh.CLI, 'status', ...args], {
-      env: { ...box.env, NODE_OPTIONS: healthHh.preloadOptions([healthHh.PRELOADS.statfs]), HISTORY_TEST_STATFS: 'plenty' },
-      cwd: box.home, encoding: 'utf8',
+      env: { ...box.env, NODE_OPTIONS: healthHh.preloadOptions([healthHh.PRELOADS.statfs, ...(seam?.preloads ?? [])]), HISTORY_TEST_STATFS: 'plenty', ...(seam?.env ?? {}) },
+      cwd: box.home, encoding: 'utf8', ...(seam?.timeoutMs === undefined ? {} : { timeout: seam.timeoutMs, killSignal: 'SIGKILL' as const }),
     });
     const last = r.stdout.trim().split('\n').pop() ?? '';
+    if (args.includes('--json') && last === '') throw new Error(`status printed no envelope (exit ${r.status}, signal ${r.signal}): ${r.stderr}`);
     return { code: r.status, stdout: r.stdout, env: args.includes('--json') ? (JSON.parse(last) as Envelope) : null };
   };
   const wordsOf = (list: Array<{ word: string }>): string[] => list.map((i) => i.word);
@@ -432,6 +433,87 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     const fail = statusOf(box).env!['health']['fail'] as Array<{ word: string; detail: string }>;
     expect(wordsOf(fail)).toEqual(['status-unreadable']);
     expect(fail[0]!.detail).toContain('spool/.draining');
+  });
+
+  // Task 28F review round 1 (F1): the two guards that had no pin. A sidecar that cannot be read for any reason but
+  // ENOENT is unmeasured (EISDIR here; mode 000 is skipped under root), never "no held file".
+  it('a spool/.draining sidecar that cannot be read (a directory named *.obs) is FAIL status-unreadable naming spool/.draining', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-eisdir-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const draining = healthPath.join(box.home, '.ccrc', 'history', 'spool', '.draining');
+    healthFs.mkdirSync(healthPath.join(draining, 'x.obs'), { recursive: true, mode: 0o700 });
+    const fail = statusOf(box).env!['health']['fail'] as Array<{ word: string; detail: string }>;
+    expect(wordsOf(fail)).toEqual(['status-unreadable']);
+    expect(fail[0]!.detail).toContain('spool/.draining');
+  });
+
+  it('a spool/.draining sidecar with mode 000 is FAIL status-unreadable (skipped as root, which reads it anyway)', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-eacces-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const dir = healthPath.join(box.home, '.ccrc', 'history', 'spool', '.draining');
+    healthFs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    healthFs.writeFileSync(healthPath.join(dir, 'x.obs'), '{}', { mode: 0o000 });
+    const fail = statusOf(box).env!['health']['fail'] as Array<{ word: string; detail: string }>;
+    expect(wordsOf(fail)).toEqual(['status-unreadable']);
+    expect(fail[0]!.detail).toContain('spool/.draining');
+  });
+
+  it('an unparseable sidecar is skipped as the sweep skips it: no held file, still PASS ok', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-junk-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const dir = healthPath.join(box.home, '.ccrc', 'history', 'spool', '.draining');
+    healthFs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    healthFs.writeFileSync(healthPath.join(dir, 'x.obs'), 'not json', { mode: 0o600 });
+    expect(statusOf(box).env!['health']['pass']).toBe('ok');
+  });
+
+  // F2: the sweep's readSmall stats BEFORE it opens (the `_reg_read` lesson: a FIFO with no writer blocks in open(2)
+  // for ever). status must do the same: a FIFO named *.obs returns within a bound and is reported unmeasured.
+  it('a FIFO named *.obs in spool/.draining does not hang status: it returns, FAIL status-unreadable naming spool/.draining', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-fifo-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const dir = healthPath.join(box.home, '.ccrc', 'history', 'spool', '.draining');
+    healthFs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    healthCp.execFileSync('mkfifo', [healthPath.join(dir, 'x.obs')]);
+    const t0 = Date.now();
+    const r = statusOf(box, ['--json'], { preloads: [], env: {}, timeoutMs: 8_000 });
+    expect(r.code).toBe(0);
+    expect(Date.now() - t0).toBeLessThan(7_000);
+    const fail = r.env!['health']['fail'] as Array<{ word: string; detail: string }>;
+    expect(wordsOf(fail)).toEqual(['status-unreadable']);
+    expect(fail[0]!.detail).toContain('spool/.draining');
+  });
+
+  it('a regular-file sidecar reached through a symlink is read as the sweep reads it (statSync follows): a held one is journal-unwritable once old', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-link-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const dir = healthPath.join(box.home, '.ccrc', 'history', 'spool', '.draining');
+    healthFs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const real = healthPath.join(box.home, 'real.obs');
+    healthFs.writeFileSync(real, JSON.stringify({ v: 1, observedMs: Date.now() - 6 * 60 * 60_000, journaled: null }), { mode: 0o600 });
+    healthFs.symlinkSync(real, healthPath.join(dir, 'x.obs'));
+    const words = wordsOf(statusOf(box).env!['health']['fail']);
+    expect(words).not.toContain('status-unreadable');
+  });
+
+  // F1's second arm: the extras' own reader open fails after the envelope's read succeeded (seam: the third
+  // `PRAGMA query_only = ON`, preload-faults' Task 28F block).
+  it('a reader open that fails after the status read succeeded is FAIL status-unreadable naming the store, exit still 0', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-extras-open-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const r = statusOf(box, ['--json'], { preloads: [healthHh.PRELOADS.faults], env: { HISTORY_TEST_FAIL_QUERY_ONLY: '3' } });
+    expect(r.code).toBe(0);
+    const fail = r.env!['health']['fail'] as Array<{ word: string; detail: string }>;
+    expect(wordsOf(fail)).toEqual(['status-unreadable']);
+    expect(fail[0]!.detail).toContain('store');
+    expect(r.env!['health']['pass']).toBeNull();
   });
 
   it('db/ linked to a 0755 target FAILs mode-wrong naming the TARGET and its chmod; a 0700 target passes; the link\'s own mode is never read', () => {

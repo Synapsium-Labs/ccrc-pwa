@@ -444,13 +444,22 @@ function oldestUnjournaledMs(p) {
   let unreadable = false;
   for (const n of names) {
     if (!n.endsWith('.obs')) continue;
+    const file = healthPath.join(p.draining, n);
+    // Type checked BEFORE the open, as the sweep's readSmall does (sweep.mjs, the `_reg_read` lesson): a FIFO named
+    // *.obs would block this read in open(2) for ever, and status is a health read that must always return. A
+    // link is followed (statSync), as readSmall follows it. A non-regular entry is unmeasured here, not "no held
+    // file": the sweep itself answers UNREADABLE for it (and rewrites the sidecar), so no read of it can say
+    // whether a record was held.
     let text;
-    try { text = healthFs.readFileSync(healthPath.join(p.draining, n), 'utf8'); } catch (e) {
+    try {
+      if (!healthFs.statSync(file).isFile()) { unreadable = true; continue; }
+      text = healthFs.readFileSync(file, 'utf8');
+    } catch (e) {
       if (!absent(e)) unreadable = true;           // ENOENT: the sweep unlinked it between the listing and the read
       continue;
     }
     let o;
-    try { o = JSON.parse(text); } catch { continue; }   // content the sweep's own reader also skips (not a read failure)
+    try { o = JSON.parse(text); } catch { continue; }   // unparseable CONTENT the sweep's own reader also skips (readSidecar: null, then re-observed); a non-regular entry it does NOT skip, see above
     if (o !== null && typeof o === 'object' && o.journaled === null && typeof o.observedMs === 'number'
       && (oldest === null || o.observedMs < oldest)) oldest = o.observedMs;
   }

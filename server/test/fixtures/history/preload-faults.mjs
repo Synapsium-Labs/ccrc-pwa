@@ -257,3 +257,27 @@ import { DatabaseSync as DatabaseSyncT25 } from 'node:sqlite';
     syncT25();
   }
 }
+
+// ── Task 28F: a second read-only open that fails (status's extras read) ─────────────────────────
+// HISTORY_TEST_FAIL_QUERY_ONLY=<n>: the n-th `PRAGMA query_only = ON` exec throws. store.mjs's openReader issues
+//   that statement right after it opens the handle, so this fails the n-th reader open and no other statement.
+//   `ccrc history status` opens three readers, in order: measureStoreFacts' (n=1), the envelope's readStore
+//   (n=2) and the health extras' readStoreExtras (n=3). n=3 makes the status read succeed and only the extras'
+//   open fail (readStoreExtras' `store` arm).
+import { syncBuiltinESMExports as syncF28 } from 'node:module';
+import { DatabaseSync as DatabaseSyncF28 } from 'node:sqlite';
+{
+  const nthF28 = Number(process.env.HISTORY_TEST_FAIL_QUERY_ONLY ?? '0');
+  if (Number.isInteger(nthF28) && nthF28 > 0) {
+    const protoF28 = DatabaseSyncF28.prototype;
+    const realExecF28 = protoF28.exec;
+    let seenF28 = 0;
+    protoF28.exec = function execF28(sql) {
+      if (/^\s*PRAGMA\s+query_only\s*=\s*ON\b/i.test(String(sql)) && (seenF28 += 1) === nthF28) {
+        throw Object.assign(new Error('injected reader-open failure (test preload)'), { code: 'ERR_SQLITE_ERROR' });
+      }
+      return realExecF28.call(this, sql);
+    };
+    syncF28();
+  }
+}
