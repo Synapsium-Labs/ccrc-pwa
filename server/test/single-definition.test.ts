@@ -4763,6 +4763,12 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
   // `history-off` with a bash test. `_uninst_purge` spells its kept set as the globs `history` and `history-*`
   // and doctor names the cap file from `status --json`, so neither is a holder. B2 adds the skill's files to
   // this corpus with the skill. KNOWN WIDTH: a name assembled from pieces is not seen.
+  // `recall-off/<id>` is O13's seventh name and is NOT in HOLDERS: spec O13 gives it exactly one writer,
+  // `sweep.mjs` (`--op recall-off`, spec :1863 and the :2007 lifecycle row), which ships in W2. B1 holds the half
+  // it can: the last case below reds when any corpus file but `ccd/history/sweep.mjs` writes it. The other half,
+  // that `sweep.mjs` DOES write it and is the only file naming it, lands with W2's `--op recall-off`: W2 adds
+  // `recall-off` to this describe's holders as `['recall-off', ['ccd/history/sweep.mjs']]` and drops the
+  // exemption below.
   const HOLDERS: ReadonlyArray<readonly [string, readonly string[]]> = [
     ['history-off', ['ccd/ccd-history-sweep', 'ccd/history/lib.mjs', 'ccd/session-hook.sh']],
     ['history-steer-off', ['ccd/history/lib.mjs']],
@@ -4840,6 +4846,18 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
         expect(writes(l, lang, name), `${rel(f)}: \`${l.trim()}\` WRITES ${name}`).toBe(false);
       }
     }
+  });
+
+  it('recall-off/<id>: no corpus file but sweep.mjs writes it (B1 holds this half; W2 adds sweep.mjs as its one writer)', () => {
+    const W2_WRITER = 'ccd/history/sweep.mjs';
+    // CONTROL: the writer shapes this describe classifies are seen against this name too.
+    expect(writes('touch "$H/recall-off/$id"', 'bash', 'recall-off')).toBe(true);
+    expect(writes("writeFileSync(path.join(dir, 'recall-off', id), gen)", 'mjs', 'recall-off')).toBe(true);
+    expect(writes("if (existsSync(home + '/.ccrc/history/recall-off/' + id)) return;", 'mjs', 'recall-off')).toBe(false);
+    const writers = CORPUS.filter((f) => rel(f) !== W2_WRITER)
+      .filter((f) => code(f).some((l) => l.includes('recall-off') && writes(l, BASH.includes(f) ? 'bash' : 'mjs', 'recall-off')))
+      .map(rel).sort();
+    expect(writers, 'recall-off/<id> has exactly one writer, sweep.mjs (spec O13): a write here is a second one').toEqual([]);
   });
 });
 describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound to its uses (spec 2026-10-05 §9.11 O14)', () => {
