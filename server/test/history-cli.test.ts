@@ -14,6 +14,11 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { makeHistoryBox, runSweep, preloadOptions, PRELOADS, CLI, REPO, type HistoryBox } from './historyHelpers.js';
+import * as healthCp from 'node:child_process';
+import * as healthFs from 'node:fs';
+import * as healthPath from 'node:path';
+import * as healthHh from './historyHelpers.js';
+import * as healthStore from '../../ccd/history/store.mjs';
 
 const U9 = '99999999-9999-4999-8999-999999999999';
 const ID = 'claude-a-demo';
@@ -254,7 +259,8 @@ describe('ccrc history status (Linux)', () => {
     expect(typeof e.shim_mtime_ms).toBe('number');
     expect(e.recovering).toBeNull();
     expect(Object.keys(e.export)).toEqual(['claude-code']);
-    expect(e.health).toEqual({ pass: null, warn: [], fail: [] });
+    expect(e.health.pass).toBeNull();
+    expect((e.health.warn as Array<{ word: string }>).map((i) => i.word)).toEqual(expect.arrayContaining(['off', 'cap-malformed']));
   });
 
   it('another store\'s journal directory beside this one is listed, never read as this store\'s', () => {
@@ -320,5 +326,97 @@ describe('ccrc history status (Linux)', () => {
       expect(plan('SELECT count(*) FROM entries'), 'CONTROL: the matcher sees a scan when there is one').toMatch(/\bSCAN entries\b/);
       for (const s of statements) expect(plan(s), s).not.toMatch(/\bSCAN (entries|blobs|memberships)\b/);
     } finally { ro.close(); }
+  });
+});
+
+// ── task 28: the status health block — the measured snapshot through deriveHealth ──
+// Every spawn carries the statfs preload at 'plenty' (the box's real free
+// space never decides a test) and the scrubbed, contained env makeHistoryBox
+// built (no ambient CLAUDECODE, TMUX or CLAUDE_CONFIG_DIR; a tmux poison).
+describe('status health: the measured snapshot through deriveHealth (task 28)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  type Envelope = Record<string, any>;
+  const statusOf = (box: healthHh.HistoryBox, args: string[] = ['--json']): { code: number | null; stdout: string; env: Envelope | null } => {
+    const r = healthCp.spawnSync(process.execPath, ['--no-warnings', healthHh.CLI, 'status', ...args], {
+      env: { ...box.env, NODE_OPTIONS: healthHh.preloadOptions([healthHh.PRELOADS.statfs]), HISTORY_TEST_STATFS: 'plenty' },
+      cwd: box.home, encoding: 'utf8',
+    });
+    const last = r.stdout.trim().split('\n').pop() ?? '';
+    return { code: r.status, stdout: r.stdout, env: args.includes('--json') ? (JSON.parse(last) as Envelope) : null };
+  };
+  const wordsOf = (list: Array<{ word: string }>): string[] => list.map((i) => i.word);
+  const shimOf = (box: healthHh.HistoryBox): string => healthPath.join(box.home, '.local', 'bin', 'ccd-history-sweep');
+  const ageFile = (file: string, ms: number): void => { const t = (Date.now() - ms) / 1000; healthFs.utimesSync(file, t, t); };
+  const dbFile = (box: healthHh.HistoryBox): string => healthPath.join(box.home, '.ccrc', 'history', 'db', 'history.db');
+  /** A store task 12 created, with one ticks row at `tickMs` and lag measured
+   *  (last_zero_behind_ms, task 20's meta) as of that tick. */
+  const tickedStore = (box: healthHh.HistoryBox, tickMs: number): void => {
+    healthStore.createStore(box.home);
+    const db = healthStore.openWriter(dbFile(box));
+    try {
+      db.prepare('INSERT INTO ticks (ts_ms, lag_ms, bytes, files_behind, bytes_behind) VALUES (?, ?, ?, ?, ?)').run(tickMs, 0, 0, 0, 0);
+      healthStore.setMeta(db, 'last_zero_behind_ms', String(tickMs));
+      healthStore.setMeta(db, 'capture_pause', '');
+    } finally { healthStore.closeWriter(db); }
+  };
+
+  it('a fresh shim with no store yet (exit 6) is PASS first-tick-pending, and nothing else', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-grace-', { role: 'fleet', shim: true });
+    const { code, env } = statusOf(box);
+    expect(code).toBe(6);
+    expect(env!['health']).toEqual({ pass: 'first-tick-pending', warn: [], fail: [] });
+  });
+
+  it('the human status prints the health line too', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-human-', { role: 'fleet', shim: true });
+    expect(statusOf(box, []).stdout).toContain('health: PASS first-tick-pending');
+  });
+
+  it('past the grace with no tick yet is FAIL tick-stale, with its remedy', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-stale-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 10 * 60_000);
+    const { env } = statusOf(box);
+    expect(env!['health']['pass']).toBeNull();
+    expect(wordsOf(env!['health']['fail'])).toEqual(['tick-stale']);
+    expect(env!['health']['fail'][0]['remedy']).toContain('journalctl --user -u ccd-history-sweep');
+  });
+
+  it('a bound store that ticked just now, with lag measured, is PASS ok', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-ok-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const { code, env } = statusOf(box);
+    expect(code).toBe(0);
+    const h = env!['health'];
+    expect({ pass: h['pass'], warn: wordsOf(h['warn']), fail: wordsOf(h['fail']) }).toEqual({ pass: 'ok', warn: [], fail: [] });
+    expect(['root', 'own']).toContain(env!['store_device']);
+  });
+
+  it('history-off with no tick for an hour is WARN off, never the stale-tick FAIL', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-off-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 2 * 60 * 60_000);
+    tickedStore(box, Date.now() - 60 * 60_000);
+    healthFs.writeFileSync(healthPath.join(box.home, '.ccrc', 'history-off'), '');
+    const { env } = statusOf(box);
+    expect(wordsOf(env!['health']['warn'])).toContain('off');
+    expect(wordsOf(env!['health']['fail'])).not.toContain('tick-stale');
+  });
+
+  it('db/ linked to a 0755 target FAILs mode-wrong naming the TARGET and its chmod; a 0700 target passes; the link\'s own mode is never read', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-modes-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    const target = healthPath.join(box.home, 'volume', 'history-db');
+    healthFs.mkdirSync(target, { recursive: true, mode: 0o700 });
+    healthFs.mkdirSync(healthPath.join(box.home, '.ccrc', 'history'), { recursive: true, mode: 0o700 });
+    healthFs.symlinkSync(target, healthPath.join(box.home, '.ccrc', 'history', 'db'));
+    tickedStore(box, Date.now());
+    healthFs.chmodSync(target, 0o755);
+    const wrong = statusOf(box).env!['health'];
+    const item = (wrong['fail'] as Array<{ word: string; detail: string; remedy: string }>).find((i) => i.word === 'mode-wrong');
+    expect(item, JSON.stringify(wrong)).toBeDefined();
+    expect(item!.detail).toContain(`${target} is 0755, wants 0700`);
+    expect(item!.remedy).toContain(`chmod 0700 ${target}`);
+    healthFs.chmodSync(target, 0o700);
+    expect(wordsOf(statusOf(box).env!['health']['fail'])).not.toContain('mode-wrong');
   });
 });

@@ -33,6 +33,7 @@ import * as rowFx from './historyFixtures.js';
 import * as libRedact from '../../ccd/history/lib.mjs';
 import * as historyCrypto from 'node:crypto';
 import * as libExport from '../../ccd/history/lib.mjs';
+import * as healthLib from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -1893,5 +1894,266 @@ describe('lib: parseOpMarker (plan task 25)', () => {
       `${'a'.repeat(33)} 4242 1`, 'import abc 1']) {
       expect(lib.parseOpMarker(bad), JSON.stringify(bad)).toBeNull();
     }
+  });
+});
+
+// ── task 28: deriveHealth — every §9.6 rule as a word (history spec §9.6) ─────
+// Pure: every input is a parameter, the clock included. Each case names the
+// word it expects and its class; the coverage case binds the table to
+// HEALTH_WORDS both ways, so a word with no producing input, or an input
+// producing an undeclared word, is red here before doctor ever prints it.
+describe('deriveHealth: every §9.6 rule as a word with its class, detail and remedy (task 28)', () => {
+  const NOW = 1_800_000_000_000;
+  const MIN = 60_000;
+  const STORE = '5f0c2d3e-8a1b-4c2d-9e3f-0a1b2c3d4e5f';
+  /** A healthy bound store that ticked a minute ago: the baseline every case
+   *  breaks exactly one leg of. */
+  const base = (o: Partial<healthLib.HealthInputs> = {}): healthLib.HealthInputs => ({
+    nowMs: NOW, storeId: STORE, exit: 0, reason: null,
+    shimMtimeMs: NOW - 60 * MIN, lastTickMs: NOW - MIN, lagS: 5, sizeBytes: 1_000_000,
+    capGb: 50, capMalformed: false, capFile: '/home/u/.ccrc/cap-fixture', capturePause: '',
+    migration: 'none', userVersion: 1, codeVersion: 1, historyOff: false, recovering: null, op: null,
+    bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
+    redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0,
+    exportWriterLive: false, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
+    journalGrowth30d: 0, journalSkipped: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
+    journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
+    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [],
+    ...o,
+  });
+  const words = (r: healthLib.HealthResult, cls: 'warn' | 'fail'): string[] => r[cls].map((i) => i.word);
+  const RECOVER = { step: 'recover/1', cursor: '2026-10.0a1b2c3d.jsonl:4096' };   // task 27's envelope spelling
+  const WORD_CASES: Array<[string, 'pass' | 'warn' | 'fail', Partial<healthLib.HealthInputs>]> = [
+    ['ok', 'pass', {}],
+    ['first-tick-pending', 'pass', { exit: 6, lastTickMs: null, shimMtimeMs: NOW - MIN }],
+    ['off', 'warn', { historyOff: true }],
+    ['recovering', 'warn', { recovering: { ...RECOVER, cursorUnmovedTicks: 2 } }],
+    ['recovery-stalled', 'fail', { recovering: { ...RECOVER, cursorUnmovedTicks: 15 } }],
+    ['op-running', 'warn', { op: { verb: 'backup', pid: 4242, alive: true } }],
+    ['catching-up', 'warn', { bytesBehindLast3: [300, 200, 100] }],
+    ['lag-unmeasured', 'warn', { lagS: null }],
+    ['tick-stale', 'fail', { lastTickMs: NOW - 11 * MIN }],
+    ['lag-high', 'fail', { lagS: 31 * 60 }],
+    ['at-cap', 'fail', { capturePause: 'at-cap' }],
+    ['capture-paused-low-disk', 'fail', { capturePause: 'low-disk' }],
+    ['mode-wrong', 'fail', { modesWrong: [{ path: '/data/history-db', want: '0700', got: '0755' }] }],
+    ['schema-newer', 'fail', { userVersion: 2, migration: 'refuse-newer' }],
+    ['store-not-wal', 'fail', { exit: 5, reason: 'store-not-wal' }],
+    ['store-unmeasured', 'fail', { exit: 5, reason: 'store-unmeasured' }],
+    ['store-root-dangling', 'fail', { exit: 5, reason: 'store-root-dangling' }],
+    ['store-missing', 'fail', { exit: 5, reason: 'store-missing' }],
+    ['store-mismatch', 'fail', { exit: 5, reason: 'store-mismatch' }],
+    ['store-unbound', 'fail', { exit: 5, reason: 'store-unbound' }],
+    ['store-unreachable', 'fail', { exit: 5, reason: 'store-unreachable' }],
+    ['store-recoverable', 'fail', { exit: 5, reason: 'store-recoverable', storeId: null }],
+    ['store-wal-orphaned', 'fail', { exit: 5, reason: 'store-wal-orphaned', storeId: null }],
+    ['store-zero-byte', 'fail', { exit: 5, reason: 'store-zero-byte' }],
+    ['store-schema-missing', 'fail', { exit: 5, reason: 'store-schema-missing' }],   // Task 6's word
+    ['migration-refused', 'fail', { migration: 'refuse-low-disk' }],
+    ['migration-needs-op', 'fail', { migration: 'snapshot-needs-op' }],
+    ['journal-unwritable', 'fail', { journalUnwritable: true }],
+    ['export-segment-newer', 'fail', { exportSegmentNewer: ['7.0a1b2c3d.db'] }],
+    ['export-overdue', 'fail', { exportOverdue: 3 }],
+    ['status-unreadable', 'fail', { exit: 1 }],
+    ['fts-unavailable', 'warn', { fts: 'fts5-absent' }],
+    ['cap-malformed', 'warn', { capMalformed: true }],
+    ['redact-source-unreadable', 'warn', { redactUnreadable: ['/home/u/.cc-secrets/fixture.env'] }],
+    ['cap-near', 'warn', { sizeBytes: 41 * 2 ** 30 }],
+    ['breaker-open', 'warn', { breakerOpen: true }],
+    ['roster-unreadable', 'warn', { rosterUnreadable: true }],
+    ['root-is-symlink', 'warn', { rootIsSymlink: true }],
+    ['export-due', 'warn', { exportDue: 12 }],
+    ['export-paused-low-disk', 'warn', { exportPausedLowDisk: true }],
+    ['retention-unmeasured', 'warn', { retentionUnmeasured: ['/home/u/.claude-a'] }],
+    ['retention-lowered', 'warn', { retentionLowered: { home: '/home/u/.claude-b', days: 30, othersMin: 180 } }],
+    ['export-segment-missing', 'warn', { exportSegmentMissing: 2 }],
+    ['journal-record-skipped', 'warn', { journalSkipped: 4 }],
+    ['journal-growth', 'warn', { journalGrowth30d: 41_943_041 }],
+  ];
+
+  it('the healthy baseline is PASS ok, with nothing to warn or fail', () => {
+    expect(healthLib.deriveHealth(base())).toEqual({ pass: 'ok', warn: [], fail: [] });
+    // Exit 9 judges nothing: doctor's relay SKIPs on it (Task 32).
+    expect(healthLib.deriveHealth(base({ exit: 9 }))).toEqual({ pass: null, warn: [], fail: [] });
+  });
+
+  it('HEALTH_WORDS gains ok as a pass word, beside first-tick-pending', () => {
+    expect(healthLib.HEALTH_WORDS['ok']).toBe('pass');
+    expect(healthLib.HEALTH_WORDS['first-tick-pending']).toBe('pass');
+  });
+
+  it.each(WORD_CASES)('%s is produced, in its class (%s)', (word, cls, o) => {
+    const r = healthLib.deriveHealth(base(o));
+    if (cls === 'pass') expect(r.pass).toBe(word);
+    else expect(words(r, cls), JSON.stringify(r)).toContain(word);
+  });
+
+  it('every HEALTH_WORDS member has a producing case, in the class HEALTH_WORDS gives it — and no case names an undeclared word', () => {
+    expect(WORD_CASES.map((c) => c[0]).sort()).toEqual(Object.keys(healthLib.HEALTH_WORDS).sort());
+    for (const [word, cls] of WORD_CASES) expect(healthLib.HEALTH_WORDS[word], word).toBe(cls);
+  });
+
+  it('every item names the store it measured and carries a non-empty remedy; every word it emits is declared in its class', () => {
+    for (const [, , o] of WORD_CASES) {
+      const r = healthLib.deriveHealth(base(o));
+      const id = (o.storeId === undefined ? STORE : o.storeId) ?? '(none)';
+      for (const cls of ['warn', 'fail'] as const) {
+        for (const i of r[cls]) {
+          expect(i.detail.startsWith(`store ${id}: `), i.detail).toBe(true);
+          expect(i.remedy.trim().length, `${i.word} has no remedy`).toBeGreaterThan(0);
+          expect(healthLib.HEALTH_WORDS[i.word], i.word).toBe(cls);
+        }
+      }
+    }
+  });
+
+  it('HEALTH_REMEDIES names exactly the warn and fail words, each with text', () => {
+    const want = Object.entries(healthLib.HEALTH_WORDS).filter(([, c]) => c !== 'pass').map(([w]) => w).sort();
+    expect(Object.keys(healthLib.HEALTH_REMEDIES).sort()).toEqual(want);
+    for (const w of want) expect(healthLib.HEALTH_REMEDIES[w]!.length, w).toBeGreaterThan(0);
+  });
+
+  it('the off remedy names the switch through SWITCHES, the one spelling (O13)', () => {
+    const r = healthLib.deriveHealth(base({ historyOff: true }));
+    expect(r.warn.find((i) => i.word === 'off')!.remedy).toContain(healthLib.SWITCHES.off);
+  });
+
+  // ── the grace D-4168 ──
+  it('within the grace, with no tick yet (exit 6), the answer is PASS first-tick-pending and nothing else', () => {
+    expect(healthLib.deriveHealth(base({ exit: 6, lastTickMs: null, lagS: null, shimMtimeMs: NOW - MIN, capMalformed: true })))
+      .toEqual({ pass: 'first-tick-pending', warn: [], fail: [] });
+  });
+  it('within the grace, a bound store with no ticks row yet is first-tick-pending too', () => {
+    expect(healthLib.deriveHealth(base({ lastTickMs: null, lagS: null, shimMtimeMs: NOW - 3 * MIN })).pass).toBe('first-tick-pending');
+  });
+  it('past the grace with no tick yet is FAIL tick-stale', () => {
+    const r = healthLib.deriveHealth(base({ exit: 6, lastTickMs: null, lagS: null, shimMtimeMs: NOW - 5 * MIN }));
+    expect(r.pass).toBeNull();
+    expect(words(r, 'fail')).toEqual(['tick-stale']);
+  });
+  it('the grace never hides a binding refusal: exit 5 store-recoverable inside it is FAIL store-recoverable', () => {
+    const r = healthLib.deriveHealth(base({ exit: 5, reason: 'store-recoverable', storeId: null, lastTickMs: null, shimMtimeMs: NOW - MIN, journalStoreDirs: ['0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e'] }));
+    expect(words(r, 'fail')).toEqual(['store-recoverable']);
+    expect(r.fail[0]!.remedy).toContain('journal/0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e');
+  });
+  it('a box that has ticked is judged by its ticks even with a freshly re-placed shim (an update copies it without -p)', () => {
+    expect(words(healthLib.deriveHealth(base({ shimMtimeMs: NOW - MIN, lastTickMs: NOW - 20 * MIN })), 'fail')).toContain('tick-stale');
+  });
+
+  // ── the state words, both clauses each (§9.6 step 4) D-4251 ──
+  it('history-off with no tick for an hour is WARN off, never the stale-tick FAIL', () => {
+    const r = healthLib.deriveHealth(base({ historyOff: true, lastTickMs: NOW - 60 * MIN }));
+    expect(words(r, 'warn')).toContain('off');
+    expect(words(r, 'fail')).not.toContain('tick-stale');
+  });
+  it('a live op marker with no tick for 40 min is WARN op-running; a dead pid\'s marker is the stale-tick FAIL', () => {
+    const live = healthLib.deriveHealth(base({ op: { verb: 'backup', pid: 4242, alive: true }, lastTickMs: NOW - 40 * MIN }));
+    expect(words(live, 'warn')).toContain('op-running');
+    expect(words(live, 'fail')).not.toContain('tick-stale');
+    const dead = healthLib.deriveHealth(base({ op: { verb: 'backup', pid: 4242, alive: false }, lastTickMs: NOW - 40 * MIN }));
+    expect(words(dead, 'warn')).not.toContain('op-running');
+    expect(words(dead, 'fail')).toContain('tick-stale');
+  });
+  it('bytes behind falling across three ticks is WARN catching-up, naming what remains; flat with a 2 h lag is the lag FAIL', () => {
+    const falling = healthLib.deriveHealth(base({ bytesBehindLast3: [300, 200, 100], lagS: 7200 }));
+    expect(words(falling, 'warn')).toContain('catching-up');
+    expect(falling.warn.find((i) => i.word === 'catching-up')!.detail).toContain('100 bytes');
+    expect(words(falling, 'fail')).not.toContain('lag-high');
+    const flat = healthLib.deriveHealth(base({ bytesBehindLast3: [100, 100, 100], lagS: 7200 }));
+    expect(words(flat, 'warn')).not.toContain('catching-up');
+    expect(words(flat, 'fail')).toContain('lag-high');
+  });
+  it('lag unmeasured with a tick younger than 10 min is WARN lag-unmeasured; with a stale tick it is the stale-tick FAIL', () => {
+    expect(words(healthLib.deriveHealth(base({ lagS: null, lastTickMs: NOW - 2 * MIN })), 'warn')).toContain('lag-unmeasured');
+    const stale = healthLib.deriveHealth(base({ lagS: null, lastTickMs: NOW - 12 * MIN }));
+    expect(words(stale, 'warn')).not.toContain('lag-unmeasured');
+    expect(words(stale, 'fail')).toContain('tick-stale');
+  });
+  it('a recovery step is WARN recovering; unmoved for 15 ticks it is FAIL recovery-stalled; held by the floor or the off-switch it stays a WARN', () => {
+    const moving = healthLib.deriveHealth(base({ recovering: { ...RECOVER, cursorUnmovedTicks: 14 }, lastTickMs: NOW - 30 * MIN }));
+    expect(words(moving, 'warn')).toContain('recovering');
+    expect(words(moving, 'fail')).toEqual([]);
+    expect(words(healthLib.deriveHealth(base({ recovering: { ...RECOVER, cursorUnmovedTicks: 15 } })), 'fail')).toContain('recovery-stalled');
+    const floor = healthLib.deriveHealth(base({ recovering: { ...RECOVER, cursorUnmovedTicks: 40 }, capturePause: 'low-disk' }));
+    expect(words(floor, 'warn')).toContain('recovering');
+    expect(words(floor, 'fail')).not.toContain('recovery-stalled');
+    const off = healthLib.deriveHealth(base({ recovering: { ...RECOVER, cursorUnmovedTicks: 40 }, historyOff: true }));
+    expect(words(off, 'fail')).not.toContain('recovery-stalled');
+  });
+
+  // ── dynamic remedies the doctor rules name ──
+  it('store-unbound names meta.store_id and the --adopt remedy', () => {
+    const r = healthLib.deriveHealth(base({ exit: 5, reason: 'store-unbound' }));
+    expect(r.fail[0]!.detail).toContain(STORE);
+    expect(r.fail[0]!.remedy).toContain('ccrc history doctor --adopt');
+  });
+  it('store-missing names --restore with the backup db/backups holds, and --rebuild', () => {
+    const r = healthLib.deriveHealth(base({ exit: 5, reason: 'store-missing', backupsDb: ['20261001T000000Z.db'] }));
+    expect(r.fail[0]!.remedy).toContain('ccrc history doctor --restore 20261001T000000Z.db');
+    expect(r.fail[0]!.remedy).toContain('ccrc history doctor --rebuild');
+  });
+  it('mode-wrong names each path and its chmod', () => {
+    const r = healthLib.deriveHealth(base({ modesWrong: [{ path: '/data/history-db', want: '0700', got: '0755' }] }));
+    expect(r.fail[0]!.detail).toContain('/data/history-db is 0755, wants 0700');
+    expect(r.fail[0]!.remedy).toBe('chmod 0700 /data/history-db');
+  });
+  it('migration-needs-op names its estimate and ccrc history doctor --migrate; migration-refused names the filesystem and the room', () => {
+    const op = healthLib.deriveHealth(base({ migration: 'snapshot-needs-op', sizeBytes: 50_000_000_000, copyBps: 10_000_000 }));
+    expect(op.fail[0]!.detail).toContain('5000 s');
+    expect(op.fail[0]!.remedy).toContain('ccrc history doctor --migrate');
+    const room = healthLib.deriveHealth(base({ migration: 'refuse-low-disk', sizeBytes: 1_000, thresholdBytes: 9_000, freeBytes: 500 }));
+    expect(room.fail[0]!.detail).toContain('/home/u/.ccrc/history/db');
+    expect(room.fail[0]!.remedy).toContain('10000 bytes');
+  });
+  it('cap-malformed and cap-near name the cap file from the input, never a spelled switch', () => {
+    expect(healthLib.deriveHealth(base({ capMalformed: true })).warn[0]!.detail).toContain('/home/u/.ccrc/cap-fixture');
+    expect(healthLib.deriveHealth(base({ sizeBytes: 41 * 2 ** 30 })).warn[0]!.remedy).toContain('/home/u/.ccrc/cap-fixture');
+  });
+  it('at the cap, cap-near is not repeated beside the at-cap FAIL', () => {
+    const r = healthLib.deriveHealth(base({ capturePause: 'at-cap', sizeBytes: 50 * 2 ** 30 }));
+    expect(words(r, 'fail')).toContain('at-cap');
+    expect(words(r, 'warn')).not.toContain('cap-near');
+  });
+  it('fts-pending is derivation in progress, not unavailable: no WARN', () => {
+    expect(healthLib.deriveHealth(base({ fts: 'fts-pending' })).pass).toBe('ok');
+  });
+  it('a B1 build WARNs export-due from the first due blob; a live export writer (B4) is B4\'s rule', () => {
+    expect(words(healthLib.deriveHealth(base({ exportDue: 1 })), 'warn')).toEqual(['export-due']);
+    expect(healthLib.deriveHealth(base({ exportDue: 1, exportWriterLive: true })).pass).toBe('ok');
+  });
+
+  // ── modes ──
+  it('modeWantOf: every directory 0700; files under db, card, steer, journal and export 0600; spool and binding files unjudged', () => {
+    expect(healthLib.modeWantOf('.', 'dir')).toBe('0700');
+    expect(healthLib.modeWantOf('spool', 'dir')).toBe('0700');
+    expect(healthLib.modeWantOf('db', 'dir')).toBe('0700');
+    expect(healthLib.modeWantOf('db/history.db-wal', 'file')).toBe('0600');
+    expect(healthLib.modeWantOf('db/backups/pre-v2.db', 'file')).toBe('0600');
+    expect(healthLib.modeWantOf('journal/5f0c2d3e-8a1b-4c2d-9e3f-0a1b2c3d4e5f/2026-10.0a1b2c3d.jsonl', 'file')).toBe('0600');
+    expect(healthLib.modeWantOf('card/x/y.txt', 'file')).toBe('0600');
+    expect(healthLib.modeWantOf('spool/x.jsonl', 'file')).toBeNull();
+    expect(healthLib.modeWantOf('spool/.draining/x.1.2.jsonl', 'file')).toBeNull();
+    expect(healthLib.modeWantOf('store.id', 'file')).toBeNull();
+  });
+  it('modesWrongOf names the shown path, the wanted mode and the measured one, and passes what matches', () => {
+    expect(healthLib.modesWrongOf([
+      { rel: 'db', kind: 'dir', mode: 0o40755, shown: '/data/history-db' },
+      { rel: 'db/history.db', kind: 'file', mode: 0o100600, shown: '/home/u/.ccrc/history/db/history.db' },
+      { rel: 'journal/x/2026-10.0a1b2c3d.jsonl', kind: 'file', mode: 0o100644, shown: '/home/u/.ccrc/history/journal/x/2026-10.0a1b2c3d.jsonl' },
+      { rel: 'spool/demo.jsonl', kind: 'file', mode: 0o100644, shown: '/home/u/.ccrc/history/spool/demo.jsonl' },
+    ])).toEqual([
+      { path: '/data/history-db', want: '0700', got: '0755' },
+      { path: '/home/u/.ccrc/history/journal/x/2026-10.0a1b2c3d.jsonl', want: '0600', got: '0644' },
+    ]);
+  });
+  it('capBytes (Task 6) is GB × 2^30, the one conversion cap-near and at-cap share', () => {
+    expect(healthLib.capBytes(50)).toBe(50 * 2 ** 30);
+  });
+
+  // ── journal-unwritable by its consequence: cli.mjs measures, this decides ──
+  it('journalHeldTooLong: a sidecar unjournaled for longer than TICK_STALE_MS is a hold; none, or a younger one, is not', () => {
+    expect(healthLib.journalHeldTooLong(null, NOW)).toBe(false);
+    expect(healthLib.journalHeldTooLong(NOW - healthLib.TICK_STALE_MS, NOW)).toBe(false);
+    expect(healthLib.journalHeldTooLong(NOW - healthLib.TICK_STALE_MS - 1, NOW)).toBe(true);
   });
 });

@@ -204,7 +204,7 @@ export const PASS_WORDS = Object.freeze([
 const healthRows = (cls, words) => words.map((w) => [w, cls]);
 const healthEntries = [
   // D-4168: within the shim's grace with no tick yet, doctor answers PASS, not §9.6 step 3's WARN.
-  ...healthRows('pass', ['first-tick-pending']),
+  ...healthRows('pass', ['first-tick-pending', 'ok']),
   ...healthRows('warn', [
     'off', 'recovering', 'op-running', 'catching-up', 'lag-unmeasured', 'fts-unavailable', 'cap-malformed',
     'redact-source-unreadable', 'cap-near', 'breaker-open', 'roster-unreadable', 'root-is-symlink',
@@ -1966,4 +1966,303 @@ export function ftsPhrase(value) {
 export function parseOpMarker(text) {
   const m = /^([a-z-]{1,32}) ([1-9][0-9]{0,9}) ([0-9]{1,16})\s*$/.exec(text);
   return m === null ? null : { verb: m[1], pid: Number(m[2]), startMs: Number(m[3]) };
+}
+
+// ── the health block: every §9.6 rule as a word (history spec §9.6) ───────────
+// `status --json` MEASURES, this function DECIDES, and doctor's `_check_history`
+// only RELAYS what it returns: the one place a verdict about this box's store
+// is taken, so the CLI, doctor and the tests never disagree. Every word it
+// emits is a HEALTH_WORDS member in the class HEALTH_WORDS gives it (O14), and
+// every detail starts `store <store_id>: ` so per-node doctor output can be
+// told apart (§9.6). Pure: no fs, no clock — `nowMs` is an input.
+//
+// PRECEDENCE, in order:
+//   1. THE GRACE IS A PASS, NOT A WARN (D-4168 history-doctor-grace-pass). §9.6
+//      step 3 WARNs within two periods of the shim's mtime. A fresh install
+//      places the shim and ends with doctor before the timer's first
+//      2-minute tick, so every fresh fleet/both install would end with a
+//      WARN, and "a fresh install ends green" is an operator ruling
+//      (ccrc-install.test.ts pins it). So within SHIM_GRACE_MS of the shim's
+//      mtime, and ONLY while no tick has run yet (exit 6, or a bound store
+//      with no ticks row), the answer is PASS `first-tick-pending` and
+//      nothing else is judged. A box that has ticked is judged by its ticks
+//      however fresh its shim (an update re-places it without -p), and the
+//      grace never hides a binding refusal (exit 5 is step 2).
+//   2. Binding and store refusals (exit 5): one FAIL, the refusal's own word.
+//      Nothing else is measurable without the store.
+//   3. The states in which no fresh tick is expected
+//      (D-4251 history-doctor-state-words): off, recovering (FAIL recovery-stalled
+//      when its cursor sat still for RECOVERY_STALL_TICKS while neither the
+//      floor nor the off-switch held it), op-running, catching-up and
+//      lag-unmeasured. Any of them suppresses the two freshness FAILs.
+//   4. The remaining FAILs, then the WARNs, in §9.6's order.
+
+/** Meta keys `status` reads whose WRITERS ship after B1: B2's recovery step
+ *  keeps `recover_unmoved_ticks` (ticks since its cursor last moved) and B4's
+ *  post-bind check keeps the two export ones. Spelled once, here, for the
+ *  producer, the reader and the doctor fixtures that plant them. */
+export const HEALTH_META = Object.freeze({
+  recoverUnmovedTicks: 'recover_unmoved_ticks',
+  exportSegmentNewer: 'export_segment_newer',
+  exportSegmentMissing: 'export_segment_missing',
+});
+
+const MODE_CHECKED_FILE_ROOTS = Object.freeze(['db', 'card', 'steer', 'journal', 'export']);
+
+/** The mode §9.6 wants for one entry under ~/.ccrc/history, by its
+ *  root-relative path (`.` is the root itself): every directory 0700; a file
+ *  under db/ (the DB, its sidecars, the writer's temps, backups/), card/,
+ *  steer/, journal/ or export/ 0600; anything else unjudged (null) — spool
+ *  files, which the hook writes without a fork and the 0700 spool/ protects
+ *  (D-4233), and the small binding files. */
+export function modeWantOf(rel, kind) {
+  if (kind === 'dir') return '0700';
+  return MODE_CHECKED_FILE_ROOTS.includes(rel.split('/')[0]) ? '0600' : null;
+}
+
+/** Each measured entry whose mode is not the one `modeWantOf` wants. `shown`
+ *  is the path to name: for `db/` behind a link, the link's TARGET (§9.3 —
+ *  a symlink's own mode always reads 777 and is never judged). */
+export function modesWrongOf(entries) {
+  const out = [];
+  for (const e of entries) {
+    const want = modeWantOf(e.rel, e.kind);
+    if (want === null) continue;
+    const got = (e.mode & 0o777).toString(8).padStart(4, '0');
+    if (got !== want) out.push({ path: e.shown, want, got });
+  }
+  return out;
+}
+
+/** `journal-unwritable` measured by its consequence (§9.6: "drained spool
+ *  files are being held"): the oldest observation sidecar whose records never
+ *  reached the journal is older than TICK_STALE_MS. A file is journaled within
+ *  its own drain, so an ordinary one is minutes old at most. cli.mjs measures
+ *  the oldest such sidecar's observedMs (null when there is none); this
+ *  threshold is the decision, so it lives here (L1), not in the L4 reader. */
+export function journalHeldTooLong(oldestUnjournaledMs, nowMs) {
+  return oldestUnjournaledMs !== null && nowMs - oldestUnjournaledMs > TICK_STALE_MS;
+}
+
+const SWEEP_LOG = 'journalctl --user -u ccd-history-sweep -n 50';
+
+/** One remedy per warn and fail word (§9.6: "every non-PASS line carries a
+ *  remedy"). The words whose remedy needs the measured values (a path, a
+ *  store id, an estimate) are computed in `remedyFor` below; the text here is
+ *  their fallback. No switch name and no store directory is typed here:
+ *  SWITCHES and STORE_DB_REL are their one spellings (O13, O14), so a text
+ *  naming the store's directory interpolates `~/${STORE_DB_REL}`. */
+export const HEALTH_REMEDIES = Object.freeze({
+  off: `remove ~/${SWITCHES.off} when capture should resume`,
+  recovering: 'none needed: the recovery step runs within each tick\'s budget, and FAILs recovery-stalled if its cursor stops moving',
+  'op-running': 'none needed: an operator pass holds the sweep lock, and ticks resume when it exits',
+  'catching-up': 'none needed: the backlog is falling every tick',
+  'lag-unmeasured': 'none needed: lag is measured once every file has reached its end once',
+  'tick-stale': `read the sweep: ${SWEEP_LOG}, and systemctl --user status ccd-history-sweep.timer`,
+  'lag-high': `read the sweep: ${SWEEP_LOG}; a backlog drains within each run's budget, a stuck file shows the same lag every tick`,
+  'at-cap': 'raise the cap (an integer, in GB), or free space with ccrc history prune',
+  'capture-paused-low-disk': 'free space on the store\'s filesystem; capture resumes by itself above the floor',
+  'mode-wrong': 'chmod each named path to the mode it wants',
+  'schema-newer': 'update this box to the build that wrote the store (ccrc update); this build still reads what it knows',
+  'store-not-wal': 'the writer could not put the store in WAL mode: check the store\'s filesystem supports shared memory (a network mount does not), then systemctl --user start ccd-history-sweep',
+  'store-unmeasured': 'make store.id, store.id.pending, store.writer and the DB under ~/.ccrc/history readable by this user; nothing is created, adopted or restored meanwhile',
+  'recovery-stalled': `read the sweep: ${SWEEP_LOG}`,
+  'store-root-dangling': `mount the volume behind ~/${STORE_DB_REL}, or remove the dangling link so the next tick stores on the home filesystem`,
+  'store-missing': 'restore a backup (ccrc history doctor --restore <file>), or rebuild from the journal (ccrc history doctor --rebuild)',
+  'store-mismatch': 'this DB belongs to another store (its meta.store_id is not store.id): put the right DB back, or move this one aside',
+  'store-unbound': `if the store is this box's, bind it: ccrc history doctor --adopt; if it is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside`,
+  'store-unreachable': `the store's filesystem did not answer: check the mount behind ~/${STORE_DB_REL}`,
+  'store-recoverable': 'restore (ccrc history doctor --restore <file>) or rebuild (ccrc history doctor --rebuild) from what was found, or move that evidence aside to start a new store',
+  'store-wal-orphaned': 'move history.db-wal and history.db-shm (and any history.db) aside together; then let the next tick create a store, or restore one',
+  'store-zero-byte': 'the DB was truncated: move it aside, then restore (ccrc history doctor --restore <file>) or rebuild (ccrc history doctor --rebuild)',
+  'store-schema-missing': 'the DB has no meta.store_id, so it is not a history store this build can bind: move all three DB files aside together, then restore (ccrc history doctor --restore <file>) or rebuild (ccrc history doctor --rebuild)',
+  'migration-refused': 'free space on the store\'s filesystem: the pre-migration snapshot needs a store\'s size above the floor',
+  'migration-needs-op': 'run the migration by hand, under no carrier timeout: ccrc history doctor --migrate',
+  'journal-unwritable': 'free space on the home filesystem, or make ~/.ccrc/history/journal writable: drained spool files are held until the journal append succeeds',
+  'export-segment-newer': 'update this box to the build that wrote the segment (ccrc update)',
+  'export-overdue': 'take a backup now (ccrc history doctor --backup), and update to a build with the export writer (W1-B4): the store may be the only copy of this text',
+  'status-unreadable': `run ccrc history status --json by hand, and read the sweep: ${SWEEP_LOG}`,
+  'fts-unavailable': 'none needed for capture; run Node >= 22.16.0 for FTS5 search',
+  'cap-malformed': `write a positive integer (GB) into the cap file, or remove it for the default of ${CAP_DEFAULT_GB}`,
+  'redact-source-unreadable': 'make the named secret files readable by this user; a value never yet seen in them goes unredacted meanwhile',
+  'cap-near': 'raise the cap, or free space with ccrc history prune, before capture pauses at it',
+  'breaker-open': `none needed: the breaker closes by itself; read the sweep for why it opened: ${SWEEP_LOG}`,
+  'roster-unreadable': 'make ~/.ccrc/accounts.sh readable (ccrc install regenerates it)',
+  'root-is-symlink': 'make ~/.ccrc/history a real 0700 directory: only its db/ may be a link',
+  'export-due': 'update this box to a build with the export writer (W1-B4); until then the text stays on disk until its retention passes',
+  'export-paused-low-disk': 'free space on the home filesystem',
+  'retention-unmeasured': 'make cleanupPeriodDays readable in the named homes\' settings.json',
+  'retention-lowered': 'set cleanupPeriodDays in the named home\'s settings.json to at least the others\' value',
+  'export-segment-missing': 'carry the export directory from the box the store came from, or let the rows export again',
+  'journal-record-skipped': 'none needed if the journal came from a newer build; otherwise ccrc history doctor --repair',
+  'journal-growth': `read the sweep: ${SWEEP_LOG}; the journal grows faster than twice its estimate`,
+});
+
+const minutesOf = (ms) => Math.round(ms / 60_000);
+
+/** What the refusal evidence was, for store-recoverable's remedy. */
+function evidenceOf(h) {
+  const found = [...h.journalStoreDirs.map((d) => `journal/${d}`), ...h.backupsDb.map((b) => `db/backups/${b}`)];
+  return found.length > 0 ? found.join(', ') : 'the evidence the refusal found';
+}
+
+function remedyFor(word, h) {
+  switch (word) {
+    case 'at-cap':
+      return `raise the cap in ${h.capFile} (an integer, in GB), or free space with ccrc history prune; capture resumes below the cap`;
+    case 'cap-near':
+      return `raise the cap in ${h.capFile} (an integer, in GB), or free space with ccrc history prune, before capture pauses at it`;
+    case 'cap-malformed':
+      return `write a positive integer (GB) into ${h.capFile}, or remove the file for the default of ${CAP_DEFAULT_GB}`;
+    case 'capture-paused-low-disk':
+      return `free space on the filesystem holding ${h.dbPath}; capture resumes by itself once it is above the floor`;
+    case 'mode-wrong':
+      return h.modesWrong.map((m) => `chmod ${m.want} ${m.path}`).join('; ');
+    case 'store-root-dangling':
+      return `mount the volume behind ${h.dbPath}, or remove the dangling link ~/${STORE_DB_REL} so the next tick stores on the home filesystem`;
+    case 'store-missing':
+      return h.backupsDb.length > 0
+        ? `restore a backup: ccrc history doctor --restore ${h.backupsDb[0]} (db/backups holds ${h.backupsDb.join(', ')}), or rebuild from the journal: ccrc history doctor --rebuild`
+        : 'rebuild from the journal: ccrc history doctor --rebuild';
+    case 'store-unbound':
+      return `if store ${h.storeId ?? '(unknown)'} is this box's, bind it: ccrc history doctor --adopt; if it is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside`;
+    case 'store-recoverable':
+      return `restore (ccrc history doctor --restore <file>) or rebuild (ccrc history doctor --rebuild) from ${evidenceOf(h)}; or move that evidence aside to start a new store`;
+    case 'migration-refused':
+      return h.thresholdBytes !== null && h.sizeBytes !== null
+        ? `free space on the filesystem holding ${h.dbPath} until more than ${h.thresholdBytes + h.sizeBytes} bytes are free (the snapshot needs the store's size above the floor)`
+        : HEALTH_REMEDIES['migration-refused'];
+    case 'redact-source-unreadable':
+      return `make ${h.redactUnreadable.join(', ')} readable by this user; a value never yet seen in them goes unredacted meanwhile`;
+    case 'retention-unmeasured':
+      return `make cleanupPeriodDays readable in the settings.json of ${h.retentionUnmeasured.join(', ')}`;
+    case 'retention-lowered':
+      return h.retentionLowered !== null
+        ? `set cleanupPeriodDays in ${h.retentionLowered.home}/settings.json to at least ${h.retentionLowered.othersMin}`
+        : HEALTH_REMEDIES['retention-lowered'];
+    default:
+      return HEALTH_REMEDIES[word] ?? '';
+  }
+}
+
+/** The detail of a binding refusal (exit 5), by its word. */
+function bindingDetail(word, h) {
+  switch (word) {
+    case 'store-root-dangling': return `~/${STORE_DB_REL} is a dangling link (to ${h.dbPath})`;
+    case 'store-missing': return 'store.id names a store, and history.db is absent';
+    case 'store-mismatch': return 'history.db\'s meta.store_id is not the one store.id names';
+    case 'store-unbound': return `history.db is present with no store.id beside it (its meta.store_id is ${h.storeId ?? 'unreadable'})`;
+    case 'store-unreachable': return 'the store\'s filesystem did not answer a stat within its deadline';
+    case 'store-recoverable': return `store.id and history.db are absent, but ${evidenceOf(h)} says a store existed`;
+    case 'store-wal-orphaned': return 'history.db-wal or history.db-shm is present without history.db';
+    case 'store-zero-byte': return 'history.db is 0 bytes';
+    case 'store-schema-missing': return 'history.db is present and holds no meta.store_id';
+    case 'store-unmeasured': return 'a binding file, or the DB\'s presence, could not be read';
+    case 'store-not-wal': return 'the store is not in WAL mode, and the writer could not set it';
+    default: return `status refused: ${word}`;
+  }
+}
+
+export function deriveHealth(h) {
+  const tag = `store ${h.storeId ?? '(none)'}: `;
+  const warn = [];
+  const fail = [];
+  const item = (word, detail) => ({ word, detail: tag + detail, remedy: remedyFor(word, h) });
+  const result = () => ({ pass: warn.length === 0 && fail.length === 0 ? 'ok' : null, warn, fail });
+
+  // 1. the grace — only while no tick has run.
+  const noTickYet = h.exit === EXIT.NOT_INDEXED || (h.exit === EXIT.OK && h.lastTickMs === null);
+  if (noTickYet && h.shimMtimeMs !== null) {
+    const age = h.nowMs - h.shimMtimeMs;
+    if (age >= 0 && age < SHIM_GRACE_MS) return { pass: 'first-tick-pending', warn, fail };
+  }
+
+  // 2. a refusal answers alone.
+  if (h.exit === EXIT.DB) {
+    if (h.reason !== null && HEALTH_WORDS[h.reason] === 'fail') fail.push(item(h.reason, bindingDetail(h.reason, h)));
+    else fail.push(item('status-unreadable', `status answered exit 5 (${h.reason ?? 'no reason'})`));
+    return result();
+  }
+  // Exit 9: this box keeps no store (Darwin, a server role, or no shim, store.id or DB). Nothing is judged:
+  // no item and no pass word, so doctor's relay answers SKIP (Task 32), never a FAIL about a store that
+  // was never meant to exist.
+  if (h.exit === EXIT.NO_STORE) return { pass: null, warn, fail };
+  if (h.exit !== EXIT.OK && h.exit !== EXIT.NOT_INDEXED) {
+    fail.push(item('status-unreadable', `status answered exit ${h.exit}${h.reason !== null ? ` (${h.reason})` : ''}`));
+    return result();
+  }
+
+  // 3. the states in which no fresh tick is expected.
+  if (h.historyOff) warn.push(item('off', `capture is off: ~/${SWITCHES.off} exists, so no tick runs`));
+  if (h.recovering !== null) {
+    const held = h.historyOff || h.capturePause === 'low-disk';
+    if (!held && h.recovering.cursorUnmovedTicks >= RECOVERY_STALL_TICKS) {
+      fail.push(item('recovery-stalled', `the recovery step ${h.recovering.step} has not moved from ${h.recovering.cursor || 'its start'} in ${h.recovering.cursorUnmovedTicks} ticks`));
+    } else {
+      warn.push(item('recovering', `a recovery step (${h.recovering.step}) is running at ${h.recovering.cursor || 'its start'}; drain and ingest wait for it`));
+    }
+  }
+  const opLive = h.op !== null && h.op.alive === true;
+  if (opLive) warn.push(item('op-running', `an operator pass (${h.op.verb}, pid ${h.op.pid}) holds the sweep lock; no tick runs meanwhile`));
+  const b = h.bytesBehindLast3;
+  const catching = b.length === CATCHING_UP_TICKS && b.every((v, i) => i === 0 || b[i - 1] > v);
+  if (catching) warn.push(item('catching-up', `the backlog is falling: ${b[b.length - 1]} bytes behind, from ${b[0]} ${CATCHING_UP_TICKS} ticks ago`));
+  const tickAge = h.lastTickMs === null ? null : h.nowMs - h.lastTickMs;
+  const lagUnmeasured = h.lagS === null && tickAge !== null && tickAge < TICK_STALE_MS;
+  if (lagUnmeasured) warn.push(item('lag-unmeasured', 'lag is unmeasured: not every file has reached its end once yet'));
+  const stateHeld = h.historyOff || h.recovering !== null || opLive || catching || lagUnmeasured;
+
+  // 4. the FAILs.
+  if (!stateHeld) {
+    if (tickAge === null) {
+      fail.push(item('tick-stale', h.shimMtimeMs !== null
+        ? `no tick has run, and the shim was placed ${minutesOf(h.nowMs - h.shimMtimeMs)} min ago`
+        : 'no tick has run'));
+    } else if (tickAge > TICK_STALE_MS) {
+      fail.push(item('tick-stale', `the last tick ran ${minutesOf(tickAge)} min ago (stale past ${minutesOf(TICK_STALE_MS)} min)`));
+    }
+    if (h.lagS !== null && h.lagS * 1000 > LAG_FAIL_MS) {
+      fail.push(item('lag-high', `lag is ${h.lagS} s, over ${LAG_FAIL_MS / 1000} s`));
+    }
+  }
+  if (h.capturePause === 'at-cap') fail.push(item('at-cap', `capture is paused: the store is at its cap of ${h.capGb} GB`));
+  if (h.capturePause === 'low-disk') fail.push(item('capture-paused-low-disk', `capture is paused: free space on the filesystem holding ${h.dbPath} is below the floor`));
+  if (h.modesWrong.length > 0) fail.push(item('mode-wrong', h.modesWrong.map((m) => `${m.path} is ${m.got}, wants ${m.want}`).join('; ')));
+  if (h.migration === 'refuse-newer' || (h.userVersion !== null && h.userVersion > h.codeVersion)) {
+    fail.push(item('schema-newer', `the store is schema v${h.userVersion ?? '?'}, newer than this build's v${h.codeVersion}`));
+  }
+  if (h.migration === 'refuse-low-disk') {
+    fail.push(item('migration-refused', `a migration to v${h.codeVersion} was refused for room: ${h.freeBytes ?? 'unmeasured'} bytes free on the filesystem holding ${h.dbPath}`));
+  }
+  if (h.migration === 'snapshot-needs-op') {
+    const est = Math.ceil((h.sizeBytes ?? 0) / (h.copyBps ?? DEFAULT_COPY_BPS));
+    fail.push(item('migration-needs-op', `a migration to v${h.codeVersion} needs a copy of about ${est} s, too long for a scheduled pass`));
+  }
+  if (h.journalUnwritable) fail.push(item('journal-unwritable', 'the journal cannot be appended: drained spool files are held in spool/.draining'));
+  if (h.exportSegmentNewer.length > 0) fail.push(item('export-segment-newer', `export segment(s) ${h.exportSegmentNewer.join(', ')} are in a newer format than this build reads`));
+  // D-4207 (history-export-due-escalates): the overdue FAIL on measured source loss, and export-due below.
+  if (h.exportOverdue > 0) fail.push(item('export-overdue', `${h.exportOverdue} unexported blob(s) whose source text is gone or past its deletion date: the store may be their only copy`));
+
+  // 5. the WARNs.
+  if (h.fts === 'fts5-absent' || h.fts === 'probe-failed') warn.push(item('fts-unavailable', `search unavailable (${h.fts}); capture continues`));
+  if (h.capMalformed) warn.push(item('cap-malformed', `the cap file ${h.capFile} is not a positive integer, so the cap is ${CAP_DEFAULT_GB} GB`));
+  if (h.redactUnreadable.length > 0) warn.push(item('redact-source-unreadable', `secret source(s) could not be read: ${h.redactUnreadable.join(', ')}`));
+  if (h.sizeBytes !== null && h.capturePause !== 'at-cap' && h.sizeBytes * 100 >= capBytes(h.capGb) * CAP_WARN_PCT) {
+    warn.push(item('cap-near', `the store is ${h.sizeBytes} bytes, ${Math.floor((h.sizeBytes * 100) / capBytes(h.capGb))}% of its ${h.capGb} GB cap`));
+  }
+  if (h.breakerOpen) warn.push(item('breaker-open', 'a breaker is open'));
+  if (h.rosterUnreadable) warn.push(item('roster-unreadable', '~/.ccrc/accounts.sh cannot be read, so no account home is discovered'));
+  if (h.rootIsSymlink) warn.push(item('root-is-symlink', '~/.ccrc/history is itself a symlink'));
+  if (h.exportDue > 0 && !h.exportWriterLive) warn.push(item('export-due', `${h.exportDue} unexported blob(s) are due by the horizon, and this build has no export writer`));
+  if (h.exportPausedLowDisk) warn.push(item('export-paused-low-disk', 'the export is paused for room on the home filesystem'));
+  if (h.retentionUnmeasured.length > 0) warn.push(item('retention-unmeasured', `the retention of ${h.retentionUnmeasured.join(', ')} could not be read; each keeps its last measured value`));
+  if (h.retentionLowered !== null) {
+    warn.push(item('retention-lowered', `${h.retentionLowered.home} keeps ${h.retentionLowered.days} days, under the others' ${h.retentionLowered.othersMin}; the export horizon follows the shortest`));
+  }
+  if (h.exportSegmentMissing > 0) warn.push(item('export-segment-missing', `${h.exportSegmentMissing} export mark(s) named a segment not on this box and were cleared`));
+  if (h.journalSkipped > 0) warn.push(item('journal-record-skipped', `${h.journalSkipped} journal record(s) were skipped as malformed or of an unknown kind`));
+  if (h.journalGrowth30d > JOURNAL_GROWTH_BYTES) {
+    warn.push(item('journal-growth', `the journal grew ${h.journalGrowth30d} bytes in 30 days (over ${JOURNAL_GROWTH_BYTES})`));
+  }
+  return result();
 }

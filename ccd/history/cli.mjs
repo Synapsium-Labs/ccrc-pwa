@@ -37,6 +37,12 @@ import {
   historyPaths, readBoxEnvValue, decideCliStore, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
 } from './lib.mjs';
 import { measureStoreFacts, openReader, userVersion, measuredSize, probeFts5 } from './store.mjs';
+// The health block's own imports (task 28). Namespace imports, so this block
+// binds no name the status code above already imported.
+import * as healthLib from './lib.mjs';
+import * as healthStore from './store.mjs';
+import * as healthFs from 'node:fs';
+import * as healthPath from 'node:path';
 
 process.umask(0o077);
 
@@ -48,6 +54,8 @@ export const STATUS_SQL = Object.freeze({
   recover: "SELECT version, cursor FROM derivation_state WHERE step = 'recover' AND completed_ms IS NULL ORDER BY version DESC LIMIT 1",
   outbox: 'SELECT count(*) AS n FROM journal_outbox',
   ftsTable: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'blobs_fts'",
+  breaker: 'SELECT count(*) AS n FROM breaker WHERE open_until_ms > ?',
+  metaKey: 'SELECT v FROM meta WHERE k = ?',
 });
 
 /** What a human reads for each non-zero exit (§8.3's table; the word itself is in `reason`). */
@@ -348,9 +356,259 @@ export async function main(argv) {
     if (json) process.stdout.write(`${JSON.stringify({ ...emptyEnvelope(historyPaths(home)), exit: EXIT.REFUSED, reason: 'bad-args' })}\n`);
     return EXIT.REFUSED;
   }
-  const env = await statusEnvelope(home, Date.now());
-  process.stdout.write(json ? `${JSON.stringify(env)}\n` : render(env));
+  const env = await statusWithHealth(home, Date.now());
+  process.stdout.write(json ? `${JSON.stringify(env)}\n` : `${render(env)}${formatHealth(env.health).map((l) => `${l}\n`).join('')}`);
   return env.exit;
+}
+
+// ── the health block (history spec §9.6; W1-B1 task 28) ─────────────────────
+// `status` MEASURES and lib.mjs's `deriveHealth` DECIDES; doctor's
+// `_check_history` only relays the result. Everything below is a reading:
+// lstat/stat/readdir under ~/.ccrc/history, a bounded stat of the store's
+// device, and indexed reads on a read-only handle — never a scan of a large
+// table, so doctor's call under `_plat_timeout` stays cheap on any store.
+
+/** Entries a mode walk visits at most: the tree is small (one journal file per
+ *  month and writer, one card/steer file per session), so this bounds a
+ *  pathological tree, never an ordinary one. */
+const MODE_WALK_MAX = 20_000;
+
+/** Every entry under ~/.ccrc/history that §9.6 judges, with its measured mode.
+ *  `db/` is the ONE path that may be a link (§9.3): its mode is read at the
+ *  link's TARGET (stat follows) and the target is the path named — a symlink
+ *  always reads 777, so the link's own mode is never read. No other link is
+ *  followed or judged. `skipDb` keeps the walk off a store whose filesystem
+ *  did not answer (a stat there could block on a dead mount). */
+function measureModeEntries(p, skipDb) {
+  const entries = [];
+  let budget = MODE_WALK_MAX;
+  let rootSt;
+  try { rootSt = healthFs.statSync(p.root); } catch { return entries; }
+  if (!rootSt.isDirectory()) return entries;
+  entries.push({ rel: '.', kind: 'dir', mode: rootSt.mode, shown: p.root });
+  const walk = (dirAbs, relPrefix) => {
+    let names;
+    try { names = healthFs.readdirSync(dirAbs); } catch { return; }
+    for (const name of names) {
+      budget -= 1;
+      if (budget < 0) return;
+      const abs = healthPath.join(dirAbs, name);
+      const rel = relPrefix === '' ? name : `${relPrefix}/${name}`;
+      let st;
+      try { st = healthFs.lstatSync(abs); } catch { continue; }
+      if (rel === 'db' && skipDb) continue;
+      if (rel === 'db' && st.isSymbolicLink()) {
+        let target;
+        try {
+          target = healthPath.resolve(dirAbs, healthFs.readlinkSync(abs));
+          st = healthFs.statSync(abs);
+        } catch { continue; }
+        if (!st.isDirectory()) continue;
+        entries.push({ rel, kind: 'dir', mode: st.mode, shown: target });
+        walk(abs, rel);
+        continue;
+      }
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) {
+        entries.push({ rel, kind: 'dir', mode: st.mode, shown: abs });
+        walk(abs, rel);
+      } else if (st.isFile()) {
+        entries.push({ rel, kind: 'file', mode: st.mode, shown: abs });
+      }
+    }
+  };
+  walk(p.root, '');
+  return entries;
+}
+
+/** The roster the shim sources (§5.1 step 4): readable, and defining the one
+ *  function the shim requires. Measured here rather than read off the
+ *  cumulative `roster_unreadable` counter, which never falls back to 0. */
+function rosterReadable(file) {
+  try { return healthFs.readFileSync(file, 'utf8').includes('_ccrc_cfg_dir()'); } catch { return false; }
+}
+
+/** The observedMs of the oldest observation sidecar in spool/.draining whose
+ *  records never reached the journal (`journaled` still null); null when there
+ *  is none. A MEASUREMENT only: lib.mjs's journalHeldTooLong decides whether
+ *  it is a hold (§9.6 `journal-unwritable`). Read only while a bound store
+ *  exists: a hold with no binding never reaches here (exit 5 answers first). */
+function oldestUnjournaledMs(p) {
+  let names;
+  try { names = healthFs.readdirSync(p.draining); } catch { return null; }
+  let oldest = null;
+  for (const n of names) {
+    if (!n.endsWith('.obs')) continue;
+    let o;
+    try { o = JSON.parse(healthFs.readFileSync(healthPath.join(p.draining, n), 'utf8')); } catch { continue; }
+    if (o !== null && typeof o === 'object' && o.journaled === null && typeof o.observedMs === 'number'
+      && (oldest === null || o.observedMs < oldest)) oldest = o.observedMs;
+  }
+  return oldest;
+}
+
+/** Regular `*.db` files directly in db/backups/, for store-missing's remedy. */
+function backupsOf(dir) {
+  let names;
+  try { names = healthFs.readdirSync(dir); } catch { return []; }
+  return names.filter((n) => n.endsWith('.db') && !n.startsWith('.') && (() => {
+    try { return healthFs.lstatSync(healthPath.join(dir, n)).isFile(); } catch { return false; }
+  })()).sort();
+}
+
+/** Whether the store's filesystem is the root filesystem's device, for doctor's
+ *  PASS line (§9.3: "names the store's filesystem by device, as information").
+ *  Bounded by CLI_STAT_DEADLINE_MS: a dead mount answers null, never a hang. */
+async function storeDeviceOf(dbDir) {
+  const probe = Promise.all([healthFs.promises.stat(dbDir), healthFs.promises.stat('/')])
+    .then(([d, r]) => (d.dev === r.dev ? 'root' : 'own'), () => null);
+  let timer;
+  const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(null), healthLib.CLI_STAT_DEADLINE_MS); });
+  try { return await Promise.race([probe, deadline]); } finally { clearTimeout(timer); }
+}
+
+const intOf = (v) => (v !== null && /^[0-9]+$/.test(v) ? Number(v) : 0);
+const listOf = (v) => {
+  if (v === null) return [];
+  try { const a = JSON.parse(v); return Array.isArray(a) ? a.filter((s) => typeof s === 'string') : []; } catch { return []; }
+};
+
+/** The facts only the store holds that the envelope does NOT already carry,
+ *  on a read-only handle (task 11's reader): an open breaker, and the meta
+ *  keys whose writers ship later (HEALTH_META) or that task 13's executor
+ *  keeps. Both statements are STATUS_SQL's, so task 27's cost pin covers
+ *  them. The ticks, the recovery step, journal_skipped and redact_unreadable
+ *  are the envelope's own readings: healthInputsOf takes them from it, so
+ *  status never reads one fact twice or spells it two ways. */
+function readStoreExtras(p, nowMs) {
+  const x = { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null };
+  let db;
+  try { db = healthStore.openReader(p.dbFile); } catch { return x; }
+  try {
+    const meta = (k) => {
+      const r = db.prepare(STATUS_SQL.metaKey).get(k);
+      return r === undefined ? null : String(r.v);
+    };
+    x.breakerOpen = Number(db.prepare(STATUS_SQL.breaker).get(nowMs).n) > 0;
+    x.recoverUnmovedTicks = intOf(meta(healthLib.HEALTH_META.recoverUnmovedTicks));
+    x.exportSegmentNewer = listOf(meta(healthLib.HEALTH_META.exportSegmentNewer));
+    x.exportSegmentMissing = intOf(meta(healthLib.HEALTH_META.exportSegmentMissing));
+    const bps = intOf(meta('copy_bps'));                                // task 13's executor
+    x.copyBps = bps > 0 ? bps : null;
+  } catch {
+    // The status read above opened this store a moment ago: a read that
+    // fails now leaves these defaults, and deriveHealth judges what WAS
+    // measured — the envelope's own exit already speaks for the store.
+  } finally {
+    db.close();
+  }
+  return x;
+}
+
+/** Everything deriveHealth needs that the envelope does not carry. */
+async function readHealthExtras(home, env, nowMs) {
+  const p = healthLib.historyPaths(home);
+  const unreachable = env.reason === 'store-unreachable';
+  let rootIsSymlink = false;
+  try { rootIsSymlink = healthFs.lstatSync(p.root).isSymbolicLink(); } catch { rootIsSymlink = false; }
+  let dbPath = p.dbDir;
+  try {
+    if (healthFs.lstatSync(p.dbDir).isSymbolicLink()) dbPath = healthPath.resolve(healthPath.dirname(p.dbDir), healthFs.readlinkSync(p.dbDir));
+  } catch { dbPath = p.dbDir; }
+  const store = env.exit === healthLib.EXIT.OK
+    ? readStoreExtras(p, nowMs)
+    : { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null };
+  return {
+    ...store,
+    modesWrong: healthLib.modesWrongOf(measureModeEntries(p, unreachable || env.reason === 'store-root-dangling')),
+    rootIsSymlink,
+    dbPath,
+    rosterUnreadable: !rosterReadable(p.accountsSh),
+    journalUnwritable: env.exit === healthLib.EXIT.OK && healthLib.journalHeldTooLong(oldestUnjournaledMs(p), nowMs),
+    backupsDb: unreachable ? [] : backupsOf(p.backups),
+    storeDevice: unreachable || env.exit === healthLib.EXIT.NO_STORE ? null : await storeDeviceOf(p.dbDir),
+  };
+}
+
+/** The envelope and the extras, as deriveHealth's inputs. */
+function healthInputsOf(env, x, nowMs) {
+  const exp = (env.export && env.export['claude-code']) || {};
+  return {
+    nowMs,
+    storeId: env.store_id ?? null,
+    exit: env.exit,
+    reason: env.reason ?? null,
+    shimMtimeMs: env.shim_mtime_ms ?? null,
+    lastTickMs: env.last_tick_ms ?? null,
+    lagS: typeof env.lag === 'number' ? env.lag : null,
+    sizeBytes: env.size_bytes ?? null,
+    capGb: env.cap_gb,
+    capMalformed: env.cap_malformed === true,
+    capFile: env.cap_file,
+    capturePause: env.capture_pause ?? '',
+    migration: env.migration ?? 'none',
+    userVersion: env.user_version ?? null,
+    codeVersion: env.code_version,
+    historyOff: env.history_off === true,
+    // The step and cursor are the envelope's (task 27 spells the step `recover/<v>`); only the
+    // unmoved-tick count, a meta key B2's recovery step keeps, comes from readStoreExtras.
+    recovering: env.recovering
+      ? { step: String(env.recovering.step), cursor: String(env.recovering.cursor ?? ''), cursorUnmovedTicks: x.recoverUnmovedTicks }
+      : null,
+    op: env.op ? { verb: env.op.verb, pid: env.op.pid, alive: env.op.alive === true } : null,
+    // The envelope lists the newest tick first; deriveHealth's catching-up rule reads oldest first.
+    bytesBehindLast3: [...(env.bytes_behind_last3 ?? [])].map(Number).reverse(),
+    fts: env.fts ?? null,
+    modesWrong: x.modesWrong,
+    rootIsSymlink: x.rootIsSymlink,
+    redactUnreadable: env.redact_unreadable ?? [],
+    breakerOpen: x.breakerOpen,
+    rosterUnreadable: x.rosterUnreadable,
+    // D-4207 (history-export-due-escalates): both counts are the sweep's census, read from the envelope.
+    exportDue: exp.due_blobs ?? 0,
+    exportOverdue: exp.overdue_blobs ?? 0,
+    exportWriterLive: false,       // B4 sets it with the export writer
+    exportPausedLowDisk: false,    // B4 sets it with the export writer
+    retentionLowered: (env.retention && env.retention.lowered) ?? null,
+    retentionUnmeasured: (env.retention && env.retention.unmeasured) ?? [],
+    journalGrowth30d: (env.journal && env.journal.growth_30d_bytes) ?? 0,
+    journalSkipped: (env.journal && env.journal.skipped) ?? 0,
+    exportSegmentNewer: x.exportSegmentNewer,
+    exportSegmentMissing: x.exportSegmentMissing,
+    // Two measurements of one condition, either enough: the sweep's own record of a failed append on a
+    // DB-open pass (Task 24's meta `journal_unwritable`, carried as `journal.unwritable` by Task 27), and
+    // its consequence on disk, a held file never journaled (oldestUnjournaledMs, judged by lib.mjs's
+    // journalHeldTooLong), which a hold with no DB open could not record.
+    journalUnwritable: x.journalUnwritable || (env.journal && env.journal.unwritable) === true,
+    dbPath: x.dbPath,
+    freeBytes: env.free_bytes ?? null,
+    thresholdBytes: env.threshold_bytes ?? null,
+    copyBps: x.copyBps,
+    backupsDb: x.backupsDb,
+    journalStoreDirs: (env.journal && env.journal.other_store_dirs) ?? [],
+  };
+}
+
+/** `statusEnvelope` with its `health` filled and the store's device named. */
+export async function statusWithHealth(home, nowMs) {
+  const env = await statusEnvelope(home, nowMs);
+  const x = await readHealthExtras(home, env, nowMs);
+  env.store_device = x.storeDevice;
+  env.health = healthLib.deriveHealth(healthInputsOf(env, x, nowMs));
+  return env;
+}
+
+/** The human status's health lines, in doctor's own shape. */
+export function formatHealth(health) {
+  const out = [];
+  if (health.pass !== null) out.push(`health: PASS ${health.pass}`);
+  for (const [cls, list] of [['FAIL', health.fail], ['WARN', health.warn]]) {
+    for (const i of list) {
+      out.push(`health: ${cls} ${i.word}: ${i.detail}`);
+      out.push(`  remedy: ${i.remedy}`);
+    }
+  }
+  return out;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {

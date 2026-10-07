@@ -302,3 +302,63 @@ export function linkSidecar(name: string, candidates: ReadonlyArray<{ entryId: n
 export function secretKindOf(source: object | null, path: string): 'sessions' | 'env-identifier' | 'env' | 'token' | 'json';
 export function ftsPhrase(value: string): string;
 export function parseOpMarker(text: string): { verb: string; pid: number; startMs: number } | null;
+
+// ── task 28: the health block (HealthClass is task 3's declaration, reused) ──
+export interface HealthItem { readonly word: string; readonly detail: string; readonly remedy: string }
+export interface HealthResult { readonly pass: string | null; readonly warn: HealthItem[]; readonly fail: HealthItem[] }
+export interface ModeEntry { readonly rel: string; readonly kind: 'dir' | 'file'; readonly mode: number; readonly shown: string }
+export interface ModeWrong { readonly path: string; readonly want: '0600' | '0700'; readonly got: string }
+export interface HealthInputs {
+  readonly nowMs: number;
+  readonly storeId: string | null;
+  readonly exit: number;
+  readonly reason: string | null;
+  readonly shimMtimeMs: number | null;
+  readonly lastTickMs: number | null;
+  readonly lagS: number | null;
+  readonly sizeBytes: number | null;
+  readonly capGb: number;
+  readonly capMalformed: boolean;
+  readonly capFile: string;
+  readonly capturePause: '' | 'at-cap' | 'low-disk';
+  readonly migration: string;
+  readonly userVersion: number | null;
+  readonly codeVersion: number;
+  readonly historyOff: boolean;
+  readonly recovering: null | { readonly step: string; readonly cursor: string; readonly cursorUnmovedTicks: number };
+  readonly op: null | { readonly verb: string; readonly pid: number; readonly alive: boolean };
+  readonly bytesBehindLast3: readonly number[];
+  readonly fts: string | null;
+  readonly modesWrong: readonly ModeWrong[];
+  readonly rootIsSymlink: boolean;
+  readonly redactUnreadable: readonly string[];
+  readonly breakerOpen: boolean;
+  readonly rosterUnreadable: boolean;
+  readonly exportDue: number;
+  readonly exportOverdue: number;
+  readonly exportWriterLive: boolean;
+  readonly exportPausedLowDisk: boolean;
+  readonly retentionLowered: null | { readonly home: string; readonly days: number; readonly othersMin: number };
+  readonly retentionUnmeasured: readonly string[];
+  readonly journalGrowth30d: number;
+  readonly journalSkipped: number;
+  readonly exportSegmentNewer: readonly string[];
+  readonly exportSegmentMissing: number;
+  readonly journalUnwritable: boolean;
+  readonly dbPath: string;
+  readonly freeBytes: number | null;
+  readonly thresholdBytes: number | null;
+  readonly copyBps: number | null;
+  readonly backupsDb: readonly string[];
+  readonly journalStoreDirs: readonly string[];
+}
+export const HEALTH_META: Readonly<{
+  recoverUnmovedTicks: 'recover_unmoved_ticks';
+  exportSegmentNewer: 'export_segment_newer';
+  exportSegmentMissing: 'export_segment_missing';
+}>;
+export const HEALTH_REMEDIES: Readonly<Record<string, string>>;
+export function modeWantOf(rel: string, kind: 'dir' | 'file'): '0600' | '0700' | null;
+export function modesWrongOf(entries: readonly ModeEntry[]): ModeWrong[];
+export function journalHeldTooLong(oldestUnjournaledMs: number | null, nowMs: number): boolean;
+export function deriveHealth(h: HealthInputs): HealthResult;
