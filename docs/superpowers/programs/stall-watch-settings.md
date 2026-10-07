@@ -152,6 +152,14 @@ time.
     asks run 291's coordinator for `watch.ts`. Mail 3831 asks run 302's coordinator for `README.md` and `CLAUDE.md`,
     and a release before W1 reaches Task 6 answers it as well. The worker stays stopped and is not mailed until an
     answer arrives. A refusal means W1 waits for that claim's release.
+- **R14 (2026-10-07 11:35)**, Task 5 starts under the `watch.ts` co-edit, and Task 6 still waits.
+  - Run 291's coordinator answered yes in mail 3832, for exactly W1's listed regions and on 3815's terms. At run
+    291's tip `899e4f12a`, wave 6 has not edited `watch.ts` yet, and its plan touches only Task 12's four sites.
+  - Mail 3834 gives the worker the regions line by line and names wave 6's four sites as untouchable. If the plan's
+    Task 5 code needs a line in one of them, the worker stops and reports.
+  - Task 6 cannot be split around `CLAUDE.md`: `box-token-census.test.ts` checks the session-gated-writes sentence
+    against the new route in the same commit. The worker finishes Task 5 and stops before Task 6 until mail 3831 is
+    answered or claim 1072 is released.
 
 ## Carried constraints (reviewers get these)
 
