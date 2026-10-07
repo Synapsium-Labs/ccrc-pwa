@@ -20,7 +20,7 @@
 #      binding verbs, so the operator reads why (D-4181).
 #   4. the roster, only when ~/.ccrc/accounts.sh is a regular, readable file
 #      (`-f` first: sourcing a FIFO blocks in open(2) while the lock is held,
-#      D-4347 history-planted-entries-never-wedge; a swap between the test and
+#      D-4347 (history-planted-entries-never-wedge); a swap between the test and
 #      the source is a residual race bash cannot close without a subprocess)
 #      and defines _ccrc_cfg_dir: each account's home and its declared secrets file. An
 #      unreadable roster is passed on as --roster-unreadable with no homes —

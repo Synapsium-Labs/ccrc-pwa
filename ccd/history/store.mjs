@@ -441,7 +441,7 @@ export function mkdirDurable(dir, mode = 0o700) {
   return true;
 }
 
-/** A type-aware removal of a name the sweep owns (D-4347, history-planted-entries-never-wedge): a file, link or FIFO is
+/** A type-aware removal of a name the sweep owns (D-4347 (history-planted-entries-never-wedge)): a file, link or FIFO is
  *  unlinked (a link's target is untouched), an EMPTY directory is rmdir'd, and a non-empty directory is left in place and
  *  reported, never recursed into. Never recursive, because a directory a same-user process planted may hold content the
  *  sweep did not write, and a recursive walk descends into a mount (a FUSE mount needs no root). `unlinkSync` is tried
@@ -502,7 +502,7 @@ export function removeStaleAtomicTemps(home) {
   return removed;
 }
 
-/** The one reader of every small file the history modules read whole (D-4347, history-planted-entries-never-wedge):
+/** The one reader of every small file the history modules read whole (D-4347 (history-planted-entries-never-wedge)):
  *  ONE open with O_RDONLY|O_NONBLOCK|O_NOCTTY (plus O_NOFOLLOW unless `follow`), with the type and the size judged on the
  *  DESCRIPTOR, so a FIFO, socket, device or directory is never waited on and no stat can be raced into one between the
  *  check and the open (the `_reg_read` lesson). At most `max` bytes are read: a larger file answers `over-cap`, and one

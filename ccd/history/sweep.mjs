@@ -104,8 +104,8 @@ export async function statfsWithDeadline(p, ms, statfs = (q) => fs.promises.stat
 }
 
 /** The cap file's text, or null when absent. An unreadable file is the empty
- *  string — malformed, so the default applies and doctor WARNs (§9.3). One bounded nonblocking open (D-4347,
- *  history-planted-entries-never-wedge): a FIFO, a device or a file over CONTROL_FILE_MAX is unreadable, never waited on. */
+ *  string — malformed, so the default applies and doctor WARNs (§9.3). One bounded nonblocking open
+ *  (D-4347 (history-planted-entries-never-wedge)): a FIFO, a device or a file over CONTROL_FILE_MAX is unreadable, never waited on. */
 function capText(capPath) {
   const r = readBounded(capPath, CONTROL_FILE_MAX, true);
   return r.state === 'absent' ? null : r.state === 'value' ? r.value : '';
@@ -294,7 +294,7 @@ export function countOutside(db, name, by = 1) {
 /** Registry values ccd writes are a few dozen bytes; anything larger was not written by ccd. */
 const REG_VALUE_MAX = 4096;
 /** A compaction journal record is under 1 KiB of metadata, so 4 MiB holds thousands; an over-cap or unreadable log gives no
- *  evidence, and its transcripts are listed unmapped (importEvidence; D-4347, history-planted-entries-never-wedge). */
+ *  evidence, and its transcripts are listed unmapped (importEvidence; D-4347 (history-planted-entries-never-wedge)). */
 const REG_LOG_MAX = 4 * 1024 * 1024;
 /** The absent and unreadable Presences. `ABSENT` is this Presence object; Task 22's set of absent-file error codes
  *  is a different value under its own name, `ABSENT_CODES`, so the module never declares `ABSENT` twice. */
@@ -325,8 +325,8 @@ export function idOfDrainingName(name) {
 /** `.jsonl` replaced by `.obs`, not appended to it: `<file>.obs` would not fit 255 bytes at SPOOL_ID_MAX. */
 export function sidecarName(name) { return `${name.slice(0, -'.jsonl'.length)}.obs`; }
 
-/** Read a small regular file in ONE open, with its type and size judged on the descriptor (D-4347,
- *  history-planted-entries-never-wedge). This is the `_reg_read` lesson (ccd/ccd:3238-3246): a FIFO with no writer
+/** Read a small regular file in ONE open, with its type and size judged on the descriptor
+ *  (D-4347 (history-planted-entries-never-wedge)). This is the `_reg_read` lesson (ccd/ccd:3238-3246): a FIFO with no writer
  *  blocks in open(2) forever, and a link to /dev/zero blocks in read(2). A stat followed by an open could be raced into
  *  either, so store.mjs's `readBounded` opens nonblocking and judges the descriptor, and a FIFO or device is never
  *  waited on. Absent and unreadable are two answers, never folded together (rev 3.2 review, IV5). */
@@ -354,8 +354,8 @@ export function readObservation(home, id, nowMs) {
   };
 }
 
-/** The sidecar as `observe` wrote it, or null. A sidecar that fails lib's `observationOk` (D-4347,
- *  history-planted-entries-never-wedge) is observed again, as an unparseable one always was, so `observe`,
+/** The sidecar as `observe` wrote it, or null. A sidecar that fails lib's `observationOk`
+ *  (D-4347 (history-planted-entries-never-wedge)) is observed again, as an unparseable one always was, so `observe`,
  *  `recordHeldMatches` and `journalFile` only ever see a valid observation, on the drain and the hold alike. */
 function readSidecar(path) {
   const p = readSmall(path, OBS_FILE_MAX);
@@ -548,7 +548,7 @@ export function setAsideOversize(db, home, name) {
 
 /** Move `<from>/<name>` into the directory `dir`, made on demand (0700). A name at `dir` that is not a directory (a stray
  *  same-user writer's file, link or FIFO) is removed first and reported as `stray`, so a mkdir never fails EEXIST on every
- *  tick. Never throws: `moved` is false when anything failed (D-4347, history-planted-entries-never-wedge). */
+ *  tick. Never throws: `moved` is false when anything failed (D-4347 (history-planted-entries-never-wedge)). */
 function moveAside(dir, from, name) {
   let stray = false;
   try {
@@ -904,7 +904,7 @@ export function drainSpool(db, c) {
       if (e && (e.code === 'ELOOP' || e.code === 'NON_REGULAR')) {
         // journalFile observed before it read, so the planted name has a sidecar too. listDraining lists only
         // `*.jsonl`, so a sidecar left here would never be removed.
-        // D-4347: type-aware and never thrown; a race that tidyDraining (which runs first) did not meet is met again next drain.
+        // D-4347 (history-planted-entries-never-wedge): type-aware and never thrown; a race that tidyDraining (which runs first) did not meet is met again next drain.
         try {
           removeEntry(`${historyPaths(c.home).draining}/${name}`);
           removeEntry(`${historyPaths(c.home).draining}/${sidecarName(name)}`);
@@ -2700,7 +2700,7 @@ function ingestScanDue(db, nowMs) {
 
 /** `$REG/<id>.uuid` when it holds a uuid, else null. A discovery hint only: no epoch is decided
  *  from it here (§9.2 step 1 decides from the observation sidecar). The read is type-checked (readRegPresence's
- *  one nonblocking open, D-4347 history-planted-entries-never-wedge; the `_reg_read` lesson, as knownUuids): a FIFO or a link to /dev/zero at
+ *  one nonblocking open, D-4347 (history-planted-entries-never-wedge); the `_reg_read` lesson, as knownUuids): a FIFO or a link to /dev/zero at
  *  a hinted id's path would otherwise block this pass in open(2) or read(2), which no run budget can
  *  interrupt, so a FIFO hints nothing (D-4299, slug history-reg-uuid-read-type-checked). */
 function readRegUuid(home, id) {
@@ -3152,7 +3152,7 @@ const ABSENT_CODES = new Set(['ENOENT', 'ENOTDIR']);
  *  headroom; anything larger is not a secret list. A stat before the open, as the _reg_read lesson
  *  (D-4300, history-secret-file-read-type-checked): a FIFO with no writer blocks in open(2) for good and
  *  a link to /dev/zero balloons in read(2), and secrets run first every tick. The read itself is `readBounded`'s one
- *  nonblocking open (D-4347, history-planted-entries-never-wedge), so a file swapped for a FIFO after the stat is no wait. */
+ *  nonblocking open (D-4347 (history-planted-entries-never-wedge)), so a file swapped for a FIFO after the stat is no wait. */
 const SECRET_FILE_MAX = 4 * 1024 * 1024;
 
 const SECRET_STMTS = new WeakMap();
@@ -3736,7 +3736,7 @@ export function readOpMarker(P) {
 export function removeStaleOpMarker(P) {
   const r = readBounded(P.op, CONTROL_FILE_MAX, false);
   if (r.state === 'absent') return;
-  // An unreadable marker (a FIFO, a link, a directory, over the cap) names no live pid, so it is stale (D-4347).
+  // An unreadable marker (a FIFO, a link, a directory, over the cap) names no live pid, so it is stale (D-4347 (history-planted-entries-never-wedge)).
   const m = r.state === 'value' ? parseOpMarker(r.value.trim()) : null;
   if (m === null || !pidAlive(m.pid)) removeEntry(P.op);
 }
@@ -4183,7 +4183,7 @@ const EXPORT_CENSUS_CHUNK = 2000;
  *  through deps.managedSettings — an in-process dependency, never an env var (slug history-test-seams-not-env). */
 export const MANAGED_SETTINGS = Object.freeze(['/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-settings.d']);
 
-/** The read bound of a retention settings file; one holds a few KiB of JSON. An over-cap file is unreadable (D-4347). */
+/** The read bound of a retention settings file; one holds a few KiB of JSON. An over-cap file is unreadable (D-4347 (history-planted-entries-never-wedge)). */
 const SETTINGS_FILE_MAX = 4 * 1024 * 1024;
 
 /** A file as lib.mjs's Readable: absent, unreadable, or its text. Never folded (IV5). */

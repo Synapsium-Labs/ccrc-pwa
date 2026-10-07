@@ -79,7 +79,7 @@ function unmeasuredFacts(role) {
 }
 
 /** Bytes of a file, trimmed, or null when it cannot be read: one bounded nonblocking open that refuses a link
- *  (store.mjs `readBounded`, D-4347 history-planted-entries-never-wedge), so a FIFO is never waited on. */
+ *  (store.mjs `readBounded`, D-4347 (history-planted-entries-never-wedge)), so a FIFO is never waited on. */
 function readTrimmed(p) {
   const r = readBounded(p, CONTROL_FILE_MAX, false);
   return r.state === 'value' ? r.value.trim() : null;
@@ -465,7 +465,7 @@ function oldestUnjournaledMs(p) {
     if (!n.endsWith('.obs')) continue;
     const file = healthPath.join(p.draining, n);
     // ONE nonblocking open with the type judged on the descriptor, as the sweep's readSmall does (store.mjs
-    // `readBounded`, the `_reg_read` lesson; D-4347): a FIFO named *.obs would block a plain read in open(2) for
+    // `readBounded`, the `_reg_read` lesson; D-4347 (history-planted-entries-never-wedge)): a FIFO named *.obs would block a plain read in open(2) for
     // ever, and status is a health read that must always return. A link is followed, as readSmall follows it. A
     // non-regular entry is unmeasured here, not "no held file": the sweep itself answers UNREADABLE for it (and
     // rewrites the sidecar), so no read of it can say whether a record was held.
@@ -479,7 +479,7 @@ function oldestUnjournaledMs(p) {
     if (!present.has(`${n.slice(0, -'.obs'.length)}.jsonl`)) continue;
     let o;
     try { o = JSON.parse(text); } catch { continue; }   // unparseable CONTENT the sweep's own reader also skips (readSidecar: null, then re-observed); a non-regular entry it does NOT skip, see above
-    // The sweep's own predicate (lib's observationOk, D-4347): a sidecar the sweep would not use is not a held record;
+    // The sweep's own predicate (lib's observationOk, D-4347 (history-planted-entries-never-wedge)): a sidecar the sweep would not use is not a held record;
     // the sweep rewrites it at its next journaling.
     if (healthLib.observationOk(o) && o.journaled === null
       && (oldest === null || o.observedMs < oldest)) oldest = o.observedMs;
