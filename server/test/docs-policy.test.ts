@@ -283,3 +283,275 @@ describe('policy.ts is L1: pure, and imports shared/docs.ts alone (M7.10, this f
     for (const s of specifiers) expect(s).toBe('../../../shared/docs.js');
   });
 });
+
+// ===== Task 3: the API query, :project and refresh-body parsers, and request provenance =====
+// M3.4's L1 half (section 3.4 "Parameter rules", refinement (n)) and section 3.8's three provenance clauses
+// (refinement (o)). W3's `docs-routes.test.ts` carries M3.4's other half: the same refusals reach no exec. Every
+// expected body below is written out by hand from the spec; none is read back from `policy.ts`.
+//
+// This task's imports sit here, beside its describes, rather than in the block at the top: everything above keeps
+// its line number, and Task 2's W2-T2-M14 row cites `docs-policy.test.ts(242,7)`. ES module imports are hoisted, so
+// placement changes nothing at run time.
+import type { IncomingHttpHeaders } from 'node:http';
+import {
+  docsProvenance, parseDocsApiQuery, parseDocsProjectParam, parseDocsRefreshBody,
+  type DocsApiRoute, type DocsHeaderBag,
+} from '../src/docs/policy.js';
+import { DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, docsApi, type DocPin } from '../../shared/docs.js';
+
+/** A query decoded as Fastify's default parser decodes it (fast-querystring 1.1.2, measured in W1's ledger, Task 5):
+ *  form-style, so a bare `+` is a space and `%2B` a plus, and a repeated key folds to an array of its values. */
+function form(search: string): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {};
+  for (const [key, value] of new URLSearchParams(search)) {
+    const had = Object.hasOwn(out, key) ? out[key] : undefined;
+    out[key] = had === undefined ? value : Array.isArray(had) ? [...had, value] : [had, value];
+  }
+  return out;
+}
+
+const T3_COMMIT = 'a'.repeat(40);
+const T3_HEAD = 'b'.repeat(40);
+const T3_FP = 'c'.repeat(64);
+/** A complete committed pin and a complete draft pin, in docsApi's key order. */
+const COMMITTED_Q = `commit=${T3_COMMIT}&servedRef=refs/remotes/origin/main&section=specs&path=a.md`;
+const DRAFT_Q = `branch=ws/a&head=${T3_HEAD}&section=plans&path=dir/b.md&fp=${T3_FP}`;
+const COMMITTED_PIN: DocPin =
+  { kind: 'committed', commit: T3_COMMIT, servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' };
+const DRAFT_PIN: DocPin =
+  { kind: 'draft', branch: 'ws/a', head: T3_HEAD, section: 'plans', path: 'dir/b.md', fp: T3_FP };
+
+const badQuery = (why: 'unknown' | 'repeated' | 'pin-shape' | 'body', key?: string): DocsFailureBody =>
+  key === undefined ? { ok: false, failure: 'bad-query', why } : { ok: false, failure: 'bad-query', key, why };
+const refusal = (failure: DocsFailure): DocsFailureBody => ({ ok: false, failure });
+
+describe('parseDocsApiQuery (M3.4, L1 half): a docs API query, parsed or refused before any exec', () => {
+  type Row = readonly [what: string, route: DocsApiRoute, search: string, want: unknown];
+  const ROWS: readonly Row[] = [
+    // projects: no query keys at all.
+    ['projects, no keys', 'projects', '', { ok: true, req: { route: 'projects' } }],
+    ['projects, an unknown key', 'projects', 'x=1', badQuery('unknown', 'x')],
+    ['projects, ref (only the tree takes one)', 'projects', 'ref=main', badQuery('unknown', 'ref')],
+    // tree: ref, bare or qualified.
+    ['tree, no ref: the default view', 'tree', '', { ok: true, req: { route: 'tree', ref: null } }],
+    ['tree, a bare ref', 'tree', 'ref=main', { ok: true, req: { route: 'tree', ref: { kind: 'bare', name: 'main' } } }],
+    ['tree, a local qualified ref', 'tree', 'ref=refs/heads/main',
+      { ok: true, req: { route: 'tree', ref: { kind: 'qualified', ref: 'refs/heads/main' } } }],
+    ['tree, an origin qualified ref', 'tree', 'ref=refs/remotes/origin/ws/a',
+      { ok: true, req: { route: 'tree', ref: { kind: 'qualified', ref: 'refs/remotes/origin/ws/a' } } }],
+    ['tree, a repeated ref', 'tree', 'ref=a&ref=b', badQuery('repeated', 'ref')],
+    ['tree, an empty ref', 'tree', 'ref=', refusal('bad-ref')],
+    ['tree, a ref starting with a dash', 'tree', 'ref=-x', refusal('bad-ref')],
+    ['tree, a ref with ..', 'tree', 'ref=a..b', refusal('bad-ref')],
+    ['tree, a node key (section 3.12 reserves it)', 'tree', 'node=a', badQuery('unknown', 'node')],
+    ['tree, a node key beside a good ref', 'tree', 'ref=main&node=a', badQuery('unknown', 'node')],
+    // file: a whole pin of one kind.
+    ['file, a complete committed pin', 'file', COMMITTED_Q, { ok: true, req: { route: 'file', pin: COMMITTED_PIN } }],
+    ['file, a complete draft pin', 'file', DRAFT_Q, { ok: true, req: { route: 'file', pin: DRAFT_PIN } }],
+    ['file, a committed pin in another key order', 'file',
+      `path=a.md&section=specs&servedRef=refs/remotes/origin/main&commit=${T3_COMMIT}`,
+      { ok: true, req: { route: 'file', pin: COMMITTED_PIN } }],
+    ['file, a committed pin served from a local ref', 'file',
+      `commit=${T3_COMMIT}&servedRef=refs/heads/main&section=specs&path=a.md`,
+      { ok: true, req: { route: 'file', pin: { ...COMMITTED_PIN, servedRef: 'refs/heads/main' } } }],
+    ['file, a complete committed pin plus branch: mixed', 'file', `${COMMITTED_Q}&branch=main`, badQuery('pin-shape')],
+    ['file, a complete draft pin plus commit: mixed', 'file', `${DRAFT_Q}&commit=${T3_COMMIT}`, badQuery('pin-shape')],
+    ['file, commit and branch only: mixed and incomplete', 'file',
+      `commit=${T3_COMMIT}&branch=main&section=specs&path=a.md`, badQuery('pin-shape')],
+    ['file, a committed pin missing path', 'file',
+      `commit=${T3_COMMIT}&servedRef=refs/remotes/origin/main&section=specs`, badQuery('pin-shape')],
+    ['file, a committed pin missing section', 'file',
+      `commit=${T3_COMMIT}&servedRef=refs/remotes/origin/main&path=a.md`, badQuery('pin-shape')],
+    ['file, a committed pin missing servedRef', 'file', `commit=${T3_COMMIT}&section=specs&path=a.md`,
+      badQuery('pin-shape')],
+    ['file, a draft pin missing fp', 'file', `branch=ws/a&head=${T3_HEAD}&section=plans&path=dir/b.md`,
+      badQuery('pin-shape')],
+    ['file, no pin keys at all', 'file', 'section=specs&path=a.md', badQuery('pin-shape')],
+    ['file, no keys at all', 'file', '', badQuery('pin-shape')],
+    // Keys the server derives or reserves are unknown, never ignored.
+    ['file, a client size', 'file', `${COMMITTED_Q}&size=1`, badQuery('unknown', 'size')],
+    ['file, a client maxBytes', 'file', `${COMMITTED_Q}&maxBytes=1`, badQuery('unknown', 'maxBytes')],
+    ['file, a node key', 'file', `${COMMITTED_Q}&node=a`, badQuery('unknown', 'node')],
+    ['file, a ref key (the pin carries servedRef)', 'file', `${COMMITTED_Q}&ref=main`, badQuery('unknown', 'ref')],
+    // Value faults, one at a time.
+    ['file, a bare servedRef (qualified only: it is ref.served)', 'file',
+      `commit=${T3_COMMIT}&servedRef=main&section=specs&path=a.md`, refusal('bad-ref')],
+    ['file, a qualified draft branch (bare only)', 'file',
+      `branch=refs/heads/main&head=${T3_HEAD}&section=plans&path=dir/b.md&fp=${T3_FP}`, refusal('bad-ref')],
+    ['file, a short commit', 'file', 'commit=abc&servedRef=refs/remotes/origin/main&section=specs&path=a.md',
+      refusal('bad-commit')],
+    ['file, an upper-case commit', 'file',
+      `commit=${'A'.repeat(40)}&servedRef=refs/remotes/origin/main&section=specs&path=a.md`, refusal('bad-commit')],
+    ['file, a short head', 'file', `branch=ws/a&head=abc&section=plans&path=dir/b.md&fp=${T3_FP}`,
+      refusal('bad-commit')],
+    ['file, an unknown section', 'file',
+      `commit=${T3_COMMIT}&servedRef=refs/remotes/origin/main&section=notes&path=a.md`, refusal('bad-section')],
+    ['file, a short fp', 'file', `branch=ws/a&head=${T3_HEAD}&section=plans&path=dir/b.md&fp=abc`,
+      refusal('bad-fingerprint')],
+    ['file, a 40-hex fp (a fingerprint is 64)', 'file',
+      `branch=ws/a&head=${T3_HEAD}&section=plans&path=dir/b.md&fp=${'c'.repeat(40)}`, refusal('bad-fingerprint')],
+    // Precedence: unknown > repeated > pin-shape > values, values in ccd's argv order.
+    ['precedence: an unknown key beats a repeated one', 'tree', 'zz=1&ref=a&ref=b', badQuery('unknown', 'zz')],
+    ['precedence: the first unknown key in code-unit order, not arrival order', 'tree', 'zz=1&aa=1',
+      badQuery('unknown', 'aa')],
+    ['precedence: a repeated key beats pin-shape', 'file', 'commit=a&commit=b&branch=x', badQuery('repeated', 'commit')],
+    ["precedence: the first repeated key in the route's key order, not arrival order", 'file',
+      `path=a.md&path=b.md&commit=${T3_COMMIT}&commit=${T3_COMMIT}`, badQuery('repeated', 'commit')],
+    ['precedence: pin-shape beats a bad value', 'file',
+      `commit=abc&servedRef=refs/remotes/origin/main&section=specs&path=a.md&head=${T3_HEAD}`, badQuery('pin-shape')],
+    ['precedence: committed, commit before path', 'file',
+      'commit=abc&servedRef=refs/remotes/origin/main&section=specs&path=../a.md', refusal('bad-commit')],
+    ['precedence: committed, servedRef before section', 'file',
+      `commit=${T3_COMMIT}&servedRef=main&section=notes&path=a.md`, refusal('bad-ref')],
+    ['precedence: committed, section before path', 'file',
+      `commit=${T3_COMMIT}&servedRef=refs/remotes/origin/main&section=notes&path=../a.md`, refusal('bad-section')],
+    ['precedence: draft, branch before head', 'file',
+      `branch=refs/heads/main&head=abc&section=plans&path=dir/b.md&fp=${T3_FP}`, refusal('bad-ref')],
+    ['precedence: draft, head before fp', 'file', `branch=ws/a&head=abc&section=plans&path=dir/b.md&fp=abc`,
+      refusal('bad-commit')],
+    ['precedence: draft, path before fp', 'file', `branch=ws/a&head=${T3_HEAD}&section=plans&path=a//b.md&fp=abc`,
+      refusal('bad-path')],
+  ];
+
+  it.each(ROWS)('%s', (_what, route, search, want) => {
+    expect(parseDocsApiQuery(route, form(search))).toStrictEqual(want);
+  });
+
+  it.each([
+    ['a parent step', '../a.md'],
+    ['an empty component', 'a//b.md'],
+    ['a trailing slash', 'a/'],
+    ['an empty path', ''],
+    ['a format character (U+202E)', '‮.md'],
+  ])('file, %s in path is bad-path', (_what, bad) => {
+    const search = new URLSearchParams(
+      { commit: T3_COMMIT, servedRef: 'refs/remotes/origin/main', section: 'specs', path: bad }).toString();
+    expect(parseDocsApiQuery('file', form(search))).toStrictEqual(refusal('bad-path'));
+  });
+
+  const ROUND_TRIP_PATHS = ['a b.md', 'a+b.md', 'c%d.md', 'dir/e.md', 'café/ü.md'];
+
+  it.each(ROUND_TRIP_PATHS)('docsApi.file round-trips the path %j, committed and draft', (p) => {
+    for (const pin of [{ ...COMMITTED_PIN, path: p }, { ...DRAFT_PIN, path: p }] satisfies DocPin[]) {
+      const search = new URL(docsApi.file('demo', pin), 'http://example.invalid').search;
+      expect(parseDocsApiQuery('file', form(search))).toStrictEqual({ ok: true, req: { route: 'file', pin } });
+    }
+  });
+
+  it('docsApi.tree round-trips a bare and a qualified ref', () => {
+    for (const ref of [{ kind: 'bare', name: 'ws/a' }, { kind: 'qualified', ref: 'refs/remotes/origin/main' }] as const) {
+      const search = new URL(docsApi.tree('demo', ref), 'http://example.invalid').search;
+      expect(parseDocsApiQuery('tree', form(search))).toStrictEqual({ ok: true, req: { route: 'tree', ref } });
+    }
+  });
+
+  it('a hand-typed bare + arrives as a space (form decoding), so it names a different path: documented, not refused', () => {
+    expect(parseDocsApiQuery('file', form(`commit=${T3_COMMIT}&servedRef=refs/remotes/origin/main&section=specs&path=a+b.md`)))
+      .toStrictEqual({ ok: true, req: { route: 'file', pin: { ...COMMITTED_PIN, path: 'a b.md' } } });
+  });
+
+  it('reads own keys only: a null-prototype record parses, an inherited key is no key', () => {
+    const bare = Object.assign(Object.create(null) as Record<string, unknown>, { ref: 'main' });
+    expect(parseDocsApiQuery('tree', bare)).toStrictEqual(
+      { ok: true, req: { route: 'tree', ref: { kind: 'bare', name: 'main' } } });
+    const inherited = Object.create({ ref: 'main' }) as Record<string, unknown>;
+    expect(parseDocsApiQuery('tree', inherited)).toStrictEqual({ ok: true, req: { route: 'tree', ref: null } });
+  });
+});
+
+describe('parseDocsProjectParam: a :project failing the grammar is bad-project (section 3.4)', () => {
+  it.each(['demo', 'a.b_c-1', '_x', 'x'.repeat(100)])('%j is a project', (p) => {
+    expect(parseDocsProjectParam(p)).toStrictEqual({ ok: true, project: p });
+  });
+
+  it.each([
+    ['a leading dash', '-x'], ['dot-dot', '..'], ['dot', '.'], ['a leading dot', '.a'], ['empty', ''],
+    ['a slash', 'a/b'], ['101 characters', 'x'.repeat(101)], ['an array', ['demo']], ['undefined', undefined],
+    ['a number', 7],
+  ])('%s is bad-project', (_what, p) => {
+    expect(parseDocsProjectParam(p)).toStrictEqual(refusal('bad-project'));
+  });
+});
+
+describe('parseDocsRefreshBody: exactly {ref, reason} (section 3.4, refinement (n))', () => {
+  it.each([
+    [{ ref: null, reason: 'auto' }, { ref: null, reason: 'auto' }],
+    [{ ref: 'main', reason: 'manual' }, { ref: { kind: 'bare', name: 'main' }, reason: 'manual' }],
+    [{ reason: 'auto', ref: 'refs/heads/ws/a' }, { ref: { kind: 'qualified', ref: 'refs/heads/ws/a' }, reason: 'auto' }],
+  ])('%j parses', (body, req) => {
+    expect(parseDocsRefreshBody(body)).toStrictEqual({ ok: true, req });
+  });
+
+  it.each([
+    ['a string (Fastify parses text/plain too)', 'x'],
+    ['an empty array', []],
+    ['an array holding a good body', [{ ref: null, reason: 'auto' }]],
+    ['null', null],
+    ['a number', 7],
+    ['a boolean', true],
+    ['undefined (no body)', undefined],
+  ])('%s is bad-query body', (_what, body) => {
+    expect(parseDocsRefreshBody(body)).toStrictEqual(badQuery('body'));
+  });
+
+  it.each([
+    ['an empty object: ref is checked first', {}, badQuery('body', 'ref')],
+    ['ref missing', { reason: 'auto' }, badQuery('body', 'ref')],
+    ['reason missing', { ref: null }, badQuery('body', 'reason')],
+    ['an extra key', { ref: null, reason: 'auto', x: 1 }, badQuery('unknown', 'x')],
+    ['reason later', { ref: null, reason: 'later' }, badQuery('body', 'reason')],
+    ['reason in upper case', { ref: null, reason: 'AUTO' }, badQuery('body', 'reason')],
+    ['ref a number', { ref: 7, reason: 'auto' }, badQuery('body', 'ref')],
+    ['ref an array', { ref: ['main'], reason: 'auto' }, badQuery('body', 'ref')],
+    ['ref outside both grammars', { ref: 'a..b', reason: 'auto' }, refusal('bad-ref')],
+    ['ref empty', { ref: '', reason: 'auto' }, refusal('bad-ref')],
+    ['precedence: a bad reason beats a bad ref string', { ref: 'a..b', reason: 'later' }, badQuery('body', 'reason')],
+    ['precedence: an extra key beats a bad shape', { ref: 7, x: 1 }, badQuery('unknown', 'x')],
+    ['precedence: the first extra key in code-unit order', { zz: 1, aa: 1, ref: null, reason: 'auto' },
+      badQuery('unknown', 'aa')],
+  ])('%s', (_what, body, want) => {
+    expect(parseDocsRefreshBody(body)).toStrictEqual(want);
+  });
+});
+
+describe('docsProvenance: section 3.8\'s three clauses, in order (refinement (o))', () => {
+  const MARKER = { [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE };
+
+  it.each([
+    ['navigate with a same-origin site and the marker', { 'sec-fetch-mode': 'navigate', 'sec-fetch-site': 'same-origin', ...MARKER },
+      { ok: false, why: 'navigation' }],
+    ['navigate with no site and the marker', { 'sec-fetch-mode': 'navigate', ...MARKER }, { ok: false, why: 'navigation' }],
+    ['cors from a cross-site page, with the marker', { 'sec-fetch-mode': 'cors', 'sec-fetch-site': 'cross-site', ...MARKER },
+      { ok: false, why: 'site', site: 'cross-site' }],
+    ['a same-site sibling, with the marker', { 'sec-fetch-site': 'same-site', ...MARKER },
+      { ok: false, why: 'site', site: 'same-site' }],
+    ['a user-initiated load (none), with the marker', { 'sec-fetch-site': 'none', ...MARKER },
+      { ok: false, why: 'site', site: 'none' }],
+    ['an empty site is present and not same-origin', { 'sec-fetch-site': '', ...MARKER }, { ok: false, why: 'site', site: '' }],
+    ['a doubled same-origin site reads as its join, never as same-origin',
+      { 'sec-fetch-site': ['same-origin', 'same-origin'], ...MARKER },
+      { ok: false, why: 'site', site: 'same-origin, same-origin' }],
+    ['the PWA: cors, same-origin, the marker', { 'sec-fetch-mode': 'cors', 'sec-fetch-site': 'same-origin', ...MARKER },
+      { ok: true }],
+    ['a browser that sends no Sec-Fetch-*, with the marker', { ...MARKER }, { ok: true }],
+    ['no marker', { 'sec-fetch-site': 'same-origin' }, { ok: false, why: 'marker' }],
+    ['no headers at all', {}, { ok: false, why: 'marker' }],
+    ['the marker 0', { [DOCS_REQUEST_HEADER]: '0' }, { ok: false, why: 'marker' }],
+    ['an empty marker', { [DOCS_REQUEST_HEADER]: '' }, { ok: false, why: 'marker' }],
+    ['a doubled marker reads as its join', { [DOCS_REQUEST_HEADER]: ['1', '1'] }, { ok: false, why: 'marker' }],
+    ['navigation beats site and marker', { 'sec-fetch-mode': 'navigate', 'sec-fetch-site': 'cross-site' },
+      { ok: false, why: 'navigation' }],
+    ['site beats marker', { 'sec-fetch-site': 'cross-site' }, { ok: false, why: 'site', site: 'cross-site' }],
+    ['a long site is carried cut to 64 characters', { 'sec-fetch-site': 'x'.repeat(200), ...MARKER },
+      { ok: false, why: 'site', site: 'x'.repeat(64) }],
+  ] as const)('%s', (_what, headers, want) => {
+    // toStrictEqual: `site` must be ABSENT on navigation and marker refusals, not present and undefined.
+    expect(docsProvenance(headers)).toStrictEqual(want);
+  });
+
+  it("takes node's IncomingHttpHeaders as it is (checked by typecheck-tests)", () => {
+    const incoming: IncomingHttpHeaders = { 'sec-fetch-site': 'same-origin', [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE };
+    const bag: DocsHeaderBag = incoming;
+    expect(docsProvenance(bag)).toStrictEqual({ ok: true });
+  });
+});
