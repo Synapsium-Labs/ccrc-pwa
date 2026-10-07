@@ -7815,7 +7815,7 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 
 ## Wave 2 results
 
-Measured 2026-10-07 13:21 UTC on the tree at `88178b5bfec0` (base `a17e14bc00c4`, 13 W2 commits on the first-parent line). Every number below was printed by a Task 9 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
+Measured 2026-10-07 23:39 UTC on the tree at `64ebe8351560` (base `a17e14bc00c4`, 16 W2 commits on the first-parent line). Every number below was printed by a Task 9 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
 
 ### Suites
 
@@ -7828,7 +7828,7 @@ Measured 2026-10-07 13:21 UTC on the tree at `88178b5bfec0` (base `a17e14bc00c4`
 | 05 | `( cd agent && ./node_modules/.bin/vitest run )` | 25 passed (25) | 471 passed (471) | 0 |
 | 06 | `( cd server && ./node_modules/.bin/vitest run test/whitelist-subset.test.ts test/verb-gate.test.ts test/capsupported.test.ts test/ccdargv-brand.test.ts test/ccdargv-dec-parity.test.ts )` | 5 passed (5) | 167 passed (167) | 0 |
 | 07 | `( cd server && ./node_modules/.bin/vitest run test/remote-runner.test.ts test/pr-timeout-budget.test.ts test/swap-timeout-budget.test.ts )` | 3 passed (3) | 32 passed (32) | 0 |
-| 08 | `( cd server && ./node_modules/.bin/vitest run test/docs-source.test.ts test/docs-policy.test.ts test/docs-budget.test.ts )` | 3 passed (3) | 449 passed (449) | 0 |
+| 08 | `( cd server && ./node_modules/.bin/vitest run test/docs-source.test.ts test/docs-policy.test.ts test/docs-budget.test.ts )` | 3 passed (3) | 460 passed (460) | 0 |
 | 09 | `( cd server && ./node_modules/.bin/vitest run test/lifecycle.test.ts test/ccd-archive.test.ts test/caps-token-shape.test.ts )` | 3 passed (3) | 147 passed (147) | 0 |
 | 10 | `( cd server && ./node_modules/.bin/vitest run test/docs-shared.test.ts test/docs-parity.test.ts test/docs-url.test.ts )` | 3 passed (3) | 382 passed (382) | 0 |
 | 11 | `( cd server && ./node_modules/.bin/vitest run -t 'every line citation is anchored' test/session-hook.test.ts )` | 1 passed (1) | 13 passed \| 322 skipped (335) | 0 |
@@ -7838,7 +7838,7 @@ Measured 2026-10-07 13:21 UTC on the tree at `88178b5bfec0` (base `a17e14bc00c4`
 From `w2-invariants.py` (W2's own commits: `git log --first-parent --no-merges <base>..HEAD`):
 
 ```text
-base a17e14bc00c4, tip 88178b5bfec0, 13 W2 commits
+base a17e14bc00c4, tip 64ebe8351560, 16 W2 commits
 PASS scope          25 files touched by W2 commits; outside the scope: none; scope files untouched: none
 PASS untouched      ccd/, shared/ (agent-protocol.ts and FLEET_PROTO included), pwa/src, server.ts, index.ts, README.md edited by W2: none
 PASS docs-files     tracked ['server/src/docs/ccdsource.ts', 'server/src/docs/policy.ts', 'server/src/docs/ports.ts']; on disk ['server/src/docs/ccdsource.ts', 'server/src/docs/policy.ts', 'server/src/docs/ports.ts']
@@ -7852,7 +7852,7 @@ FAIL sd-shape       single-definition.test.ts: 1 in-place want-line edit, 1 EOF 
 
 ### Mutation table
 
-Every `W2-T<n>-M<k>` row of Tasks 1-8, extracted from this plan and run by `mutate.py` in a `git archive` copy of the tree at `88178b5bfec0`, one row at a time, each file restored byte for byte after its row. `load` is a guard that throws at module load (Task 1, rows M2 and M3).
+Every `W2-T<n>-M<k>` row of Tasks 1-8, extracted from this plan and run by `mutate.py` in a `git archive` copy of the tree at `64ebe8351560`, one row at a time, each file restored byte for byte after its row. `load` is a guard that throws at module load (Task 1, rows M2 and M3).
 
 | Row | Task | File | Result | First red case (measured) |
 |---|---|---|---|---|
@@ -7922,7 +7922,7 @@ Every `W2-T<n>-M<k>` row of Tasks 1-8, extracted from this plan and run by `muta
 | W2-T4-M22 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsSendPolicy (section 5.3's onSend hook as an L1 verdict, refinement (m)) > content type "text/html" is refused: 500 response-type- |
 | W2-T5-M1 | T5 | `server/src/remote/runner.ts` | red | test/docs-budget.test.ts > docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > the four CCD_VERB_TIMEOUT_MS rows are 20 000 / 20 000 / |
 | W2-T5-M2 | T5 | `server/src/remote/runner.ts` | red | test/docs-budget.test.ts > docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > the four CCD_VERB_TIMEOUT_MS rows are 20 000 / 20 000 / |
-| W2-T5-M3 | T5 | `server/src/remote/runner.ts` | red | test/docs-budget.test.ts > docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > the four CCD_VERB_TIMEOUT_MS rows are 20 000 / 20 000 / |
+| W2-T5-M3 | T5 | `server/src/remote/runner.ts` | red | test/remote-runner.test.ts > per-verb timeouts > sends ["docs-index","--all"] with a 20000 ms budget |
 | W2-T5-M4 | T5 | `ccd/ccd` | red | test/docs-budget.test.ts > docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > docs-show: helper deadline + KILL_GRACE_S + 5 s < the r |
 | W2-T5-M5 | T5 | `ccd/ccd` | red | test/docs-budget.test.ts > docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > docs-index: helper deadline + KILL_GRACE_S + 5 s < the  |
 | W2-T5-M6 | T5 | `ccd/ccrc-doctor-checks` | red | test/docs-budget.test.ts > the doctor waits exactly as long as a Docs page (M7.4, the runner-budget clause) > CCRC_DOCTOR_DOCS_TIMEOUT's default equals CCD_VERB |
@@ -8017,14 +8017,18 @@ Every `W2-T<n>-M<k>` row of Tasks 1-8, extracted from this plan and run by `muta
 | W2-FR-M4 | FR | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > a tampered sha256 and a wrong path echo at once: malformed-ans |
 | W2-FR-M5 | FR | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > CONTROL: L2 (ports.ts) — a value import  |
 | W2-FR-M6 | FR | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 7 and the verbatim rebuild (row 46, refinement (j)) > a show failure line unknown-commit (git 2.55) is carried verbatim, its wo |
+| W2-FR2-M1 | FR2 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > onRef as an array holding a word is schema, not ok (the key is |
+| W2-FR2-M3 | FR2 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > refinement (g): killed and signal have one reader, ccdEnding > the docs files and lifecycle.ts read them nowhere else (a floor inside |
 
-161 rows; 161 measured as expected.
+163 rows; 163 measured as expected.
 
 ### Notes
 
 - Extra mutation rows W2-T3-M20, W2-T6-M28..M33, W2-T8-M16 and W2-FR-M1..M6 (14 rows) are not in the plan's JSON fences: they come from reviews (pre-flight/T3/T6/T8 task reviews and the whole-branch review), each measured red once by its implementer; they were appended to w2-rows.json in mutate.py's row shape and run in the same table (table count is 147 plan rows + 14 = 161).
 - W2-T7-M22, M23, M24, M25: re-anchored to the shipped text; same mutation (the final-review fix wave rewrote redactLeaves into the depth-bounded walk(v, depth); each row's mutation is applied to the same arm: the array arm removed, the plain-object arm removed, the non-failure leaf walk replaced by the typeof-string redactDocsText, the walk applied to detail only).
 - Coordinator ruling (mail 3847, 2026-10-07) on finding 3846, invariant sd-shape FAIL: not a red; record it as it stands. The invariant exists so that single-definition.test.ts changes by one in-place `want` line plus an EOF append and no line at or above the base's last line (4789) moves. The net diff against a17e14bc0 is exactly that, and suite 11 (citation census) is green. The checker judges each commit against its parent, so two review fixes that inserted lines inside W2's own appended block count as `other`. No history rewrite, no checker edit, no deviation number. Net hunk headers of `git diff -U0 a17e14bc0 HEAD -- server/test/single-definition.test.ts`: @@ -4188 +4188 @@; @@ -4788,0 +4789,266 @@.
+- Fix-round rows W2-FR2-M1 and W2-FR2-M3 (2 rows) are not in the plan's JSON fences: they come from the coordinator's review 317 (fix round 1, mail 3945), exact strings in fr1/fix-report.md, each measured red once by its implementer; W2-FR2-M3 plants a line, so its old is the anchor `  const ending = ccdEnding(res);` and its new is the planted `  if (res.killed === true) return fail('ccd-timeout');` line plus the anchor. Table count is 147 plan rows + 14 + 2 = 163.
+- W2-T7-M6, W2-FR-M3: re-anchored to the shipped text; same mutation (fix round 1 commit 52a884b01 rewrote the onRef guard in checkShow to `!(typeof ans.onRef === 'string' && Object.hasOwn(ON_REF_WORDS, ans.onRef))`; T7-M6 removes that whole line, FR-M3 replaces `Object.hasOwn(ON_REF_WORDS, ans.onRef)` with `(ans.onRef in ON_REF_WORDS)`).
 
 ### Carried, not fixed
 
