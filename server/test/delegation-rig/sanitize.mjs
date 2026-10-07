@@ -35,14 +35,16 @@
 //     bracket, `@`...) is scanned, with two exceptions, this one and the next limit: the `/` of a COMPLETE closing tag `</name>` (`<`,
 //     `/`, a plain name, `>`): `x </srv> y` passes, because that is a tag and not a path (it hides one bare segment at most: `</srv/x>`
 //     and `</srv.corp>` are residue).
-//   - A `/` followed by a character outside ABS's segment class `[A-Za-z0-9._-]` is not scanned, so an absolute path whose FIRST
-//     segment starts with one passes, whatever precedes the `/`: `x /~someone-else/acme`, `"/~someone-else/acme"`, `x /@scope/srv/acme`,
-//     `x /$HOME/srv/acme`, `x /+x/srv/acme`, `x /=x/srv/acme`, `x /%7Esomeone-else/acme` (the `/` after that first segment follows a name
-//     character, so the limit above hides the rest of the path too). `x /srv/acme` is residue. So "a `/` after any other character is
-//     scanned", and the allowlist rule above, hold of a path whose first segment starts inside the class.
+//   - A `/` followed by a character outside ABS's segment class `[A-Za-z0-9._-]` is not scanned, so the FIRST segment of an absolute path
+//     that starts with one is not: `x /~someone-else/acme`, `"/~someone-else/acme"`, `cd /~someone-else/acme && ls`, `x /@scope/srv/acme`,
+//     `x /$HOME/srv/acme`, `x /+x/srv/acme`, `x /=x/srv/acme` and `x /%7Esomeone-else/acme` all pass. A LATER `/` of the path is scanned like
+//     any other, so the rest of the path escapes only where that `/` follows a name character (the glued-slash limit above), as it does in
+//     each of those: `x /@/srv/acme`, `x /~x:/srv/acme`, `x /~x@/srv/acme` and `x /~x=/srv/acme` are residue, and so is `x //~someone/acme` (a
+//     `//` before such a character is DOUBLE_ODD's). `x /srv/acme` is residue. So "a `/` after any other character is scanned", and the
+//     allowlist rule above, hold of a path whose first segment starts inside the class.
 //   - A `..` segment is caught only at the string's START or right after a `/` (DOTDOT is `/(^|\/)\.\.(\/|$)/`). A `..` anywhere else -- after a
 //     space, `=`, a quote... (`x ../srv/acme`, `x=../srv/acme`, `"../srv/acme"` inside a longer string, `x ..`) -- is not, and the `/`
-//     behind it follows a `.`, the limit above, so the path after it is not scanned either. The committed corpus holds such strings:
+//     behind it follows a `.`, the glued-slash limit above, so the path after it is not scanned either. The committed corpus holds such strings:
 //     raw-worktree's own ` ../raw-wt` (18 of them in 9 files at the time of writing), the rig's relative path to its own raw worktree,
 //     so closing this limit means respelling that command and re-capturing, which the versions no longer installed cannot do.
 //   - MUNGED_FOREIGN is a DENYLIST of tops, not a class: a munged foreign path is caught only when its top is one of `home mnt tmp
@@ -66,8 +68,8 @@
 // differ). An entry named `*.json` that is not a regular file is not counted, so a later file's index is not the one `ls` would give
 // it, and no FILE finding names it: a directory of that name inside a version directory, and a dangling link anywhere, produce no
 // finding at all, and one in the top directory is judged as a version directory, whose name fails VERSION (a finding `#<i>
-// (version directory name)`). A version directory's own finding `#<i>` counts among the directories, a sequence of its own, told
-// apart from a file finding only by that suffix.
+// (version directory name)`). That finding `#<i>`, for a directory whose name fails VERSION, counts among the directories, a sequence of
+// its own, told apart from a file finding only by its suffix; a directory whose name passes is named by its text.
 // Usage: node sanitize.mjs <raw-root> <fixtures-dir>
 //        node sanitize.mjs --scan <fixtures-dir>
 import fs from 'node:fs';
@@ -355,8 +357,8 @@ function main() {
 // `*.json` entries that are REGULAR FILES (`jsonIn`: a stat), sorted by code unit (the order `LC_ALL=C ls` gives over those entries;
 // a UTF-8 locale's `ls` may differ). An entry named `*.json` that is not a regular file is not counted and no file finding names it
 // (a directory of that name in a version directory, and a dangling link anywhere, give no finding at all; one in the top directory is
-// judged as a version directory). A version directory is named by `#<i>` among the directories, a sequence of its own, told apart from
-// a file finding only by its suffix `(version directory name)`, and only after VERSION's digits-and-dots shape has passed.
+// judged as a version directory). A directory whose name FAILS VERSION is named `#<i>` among the directories, a sequence of its own, told
+// apart from a file finding only by its suffix `(version directory name)`; one that passes is named by its digits-and-dots text, and only then.
 function scanCorpus(dir) {
   const findings = [];
   const tally = { files: 0, strings: 0, keys: 0 };

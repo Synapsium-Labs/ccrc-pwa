@@ -1629,6 +1629,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     for (const fine of ['x ../srv/acme', 'x=../srv/acme', 'cmd ../raw-wt', 'x ..', 'x "../srv/acme" y']) {
       const r = leakRun({ note: fine });
       expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+      expect(r.written, fine).toEqual(['2.1.999']);
     }
     // while the same path behind a `..` at the start, or behind a `/`, is refused: the pin is about WHERE the `..` stands
     for (const leak of ['../srv/acme', 'cd ../../srv/acme']) expectNamed(leakRun({ note: leak }), NOTE, 'srv/acme');
@@ -1639,17 +1640,21 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(holders.length, 'fixtures holding " ../raw-wt"').toBeGreaterThan(0);
   }, 60_000);
 
-  // Review 304 F4 (ruled: a known limit, pinned). ABS is a `/` followed by `[A-Za-z0-9._-]+`, so an absolute path whose FIRST segment
-  // starts with any other character is never scanned: what FOLLOWS the `/` is a second exception to "a `/` after any other character
-  // is scanned". The control, the same path with a plain first segment, is refused.
+  // Review 304 F4 (ruled: a known limit, pinned). ABS is a `/` followed by `[A-Za-z0-9._-]+`, so the FIRST segment of an absolute path
+  // that starts with any other character is never scanned: what FOLLOWS the `/` is a second exception to "a `/` after any other
+  // character is scanned". The control, the same path with a plain first segment, is refused.
   it('an absolute path whose first segment starts outside `[A-Za-z0-9._-]` is not scanned (declared limit, not a guarantee): `/~someone-else/acme`, `/@scope/srv/acme`, `/$HOME/srv/acme` (review 304 F4)', () => {
     for (const fine of ['x /~someone-else/acme', '"/~someone-else/acme"', 'cd /~someone-else/acme && ls', 'x /@scope/srv/acme', 'x /$HOME/srv/acme',
       'x /+x/srv/acme', 'x /=x/srv/acme', 'x /%7Esomeone-else/acme']) {
       const r = leakRun({ note: fine });
       expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+      expect(r.written, fine).toEqual(['2.1.999']);
     }
     // while a first segment inside the class is refused: the pin is about the FIRST CHARACTER of the segment
     expectNamed(leakRun({ note: 'x /srv/acme' }), NOTE, 'srv/acme');
+    // and only about the FIRST segment: a LATER `/` is scanned like any other, so the path escapes only where that `/` follows a name
+    // character (the glued-slash limit, F11), as it does in every probe above; after `@`, `:`, `=`, or behind a `//`, it is residue
+    for (const leak of ['x /@/srv/acme', 'x /~x:/srv/acme', 'x /~x@/srv/acme', 'x /~x=/srv/acme', 'x //~someone/acme']) expectNamed(leakRun({ note: leak }), NOTE, 'srv/acme');
   }, 60_000);
 
   it.skipIf(USER.length < 4)('scans the decoded spelling of an escaped string: \\uXXXX and %2F', () => {
@@ -2003,7 +2008,8 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(snap(base)).toBe(before);
   });
 
-  // The index is the file's place in its directory's `*.json` list in CODE-UNIT order (`LC_ALL=C ls`). Every one of a version's
+  // The index is the file's place among its directory's `*.json` REGULAR FILES in CODE-UNIT order (the order `LC_ALL=C ls` gives over
+  // them; an entry that is not a regular file is not counted: the F6 rows below). Every one of a version's
   // fixtures is copied in with residue planted under a key that names it, so each finding pairs an index with a file: an index
   // taken in another order (a locale's punctuation-blind order swaps `wf-iso-resume.json` and `wf-iso.json`: `-` < `.` by code
   // unit), or a fixed one, misnames a file. Deleting `jsonIn`'s `.sort()` is an EQUIVALENT mutant under Node: `readdirSync`
@@ -2040,6 +2046,32 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     const r = scanRun('--scan', dir);
     expect(r.status).toBe(1);
     expect(r.stderr, 'agent-plain.json is #0 and zz.json #1: the two skipped entries are not counted').toBe(`sanitize: residue in ${v}/#1 /p\n`);
+  });
+
+  // Review 304 F6, the header's "a stat, so a link to one counts": `jsonIn` stats each `*.json` entry, so a symbolic link to a regular file is
+  // a file of its directory, counted in the index and READ. With an lstat the link would be skipped, and residue behind it would pass unread.
+  it('--scan counts a link to a regular file and reads it: residue behind the link is named by the link\'s index among the regular files (review 304 F6)', () => {
+    const { base, dir, v } = plantedCorpus(() => {});
+    const target = path.join(base, 'target.json');
+    fs.writeFileSync(target, `${JSON.stringify({ p: 'fine' })}\n`);
+    fs.symlinkSync(target, path.join(dir, v, 'zz-link.json'));
+    const clean = scanRun('--scan', dir);
+    expect(clean.status, clean.stderr).toBe(0);
+    expect(clean.stdout, 'agent-plain.json and the link').toMatch(/^sanitize: scanned 2 file\(s\), /);
+    fs.writeFileSync(target, `${JSON.stringify({ p: 'x /opt/acme/x' })}\n`);
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr, 'agent-plain.json is #0 and the link #1').toBe(`sanitize: residue in ${v}/#1 /p\n`);
+  });
+
+  // Review 304 F6, the header's "one in the top directory is judged as a version directory": a directory named `*.json` in the TOP directory
+  // is not skipped as a non-file (`jsonIn` drops it) but read as a version directory, whose name fails VERSION: a finding, named by index.
+  it('--scan judges a directory named `*.json` in the top directory as a version directory: a finding named by index, never skipped (review 304 F6)', () => {
+    const { dir, v } = plantedCorpus(() => {});
+    fs.mkdirSync(path.join(dir, 'a.json'));
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr, `${v} is #0 among the directories and a.json #1: no name printed`).toBe('sanitize: residue in #1 (version directory name)\n');
   });
 
   it('--scan reads KEYS too: a residue-bearing key of a committed fixture is named by index, never by its text (F9)', () => {
