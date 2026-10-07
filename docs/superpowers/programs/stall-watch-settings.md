@@ -135,6 +135,23 @@ time.
   - Mail 3817 tells the worker that this confirmation, not a claim, licenses that one path. `server/src/watch.ts`
     (Task 5) and `README.md`/`CLAUDE.md` (Task 7) still wait for their claims' release, and the wave-done names
     mail 3815 and R12 in its claim state.
+- **R13 (2026-10-07 11:33)**, two more regioned co-edits are asked for, and Task 5 waits on them.
+  - The worker's mail 3828: Tasks 1-4 are committed on `ws/swift-meadow` at `6e5b469f2`, each task-reviewed and with
+    its mutation table red as planned; the migration took slot 17 (16 entries at `origin/main` `282e79e44`). At
+    Task 5, `server/src/watch.ts` is still under claim 1070 and `README.md`/`CLAUDE.md` under claim 1072. Task 6
+    builds on Task 5 and also edits `CLAUDE.md`, so the chain cannot be reordered around them.
+  - Measured on `282e79e44`, with W1's regions taken from `proto/sws-w1` (the plan's own code):
+    - `watch.ts`: run 291's Task 12 edits the `./coord/childReclaim.js` import (:84-88), `currentChildMarks` (:1594),
+      `tick()`'s `childMarks` assignment (:1762) and `emitCoord` (:2155). W1 edits three import lines (:19, :40,
+      :56-66) plus one new import after :66, the stall-sweep constants (:205-207), fields after `stallWarned`
+      (:894), `sweepStalls` (:4113 on) and `sweepMail` (:4869 on). The nearest pair is about 18 lines apart.
+    - Docs: run 302 inserts one bullet after `CLAUDE.md`:78 and edits `README.md` :494, :1104 and :5069, plus a block
+      appended at its end. W1 edits `CLAUDE.md` :257, :280 and :304 on, and the README's stall-watch section (about
+      :3900-4360). The nearest pairs are about 180 and 700 lines apart.
+  - Ruling: ask each holder's coordinator for a co-edit limited to W1's measured regions, on R11's terms. Mail 3830
+    asks run 291's coordinator for `watch.ts`. Mail 3831 asks run 302's coordinator for `README.md` and `CLAUDE.md`,
+    and a release before W1 reaches Task 6 answers it as well. The worker stays stopped and is not mailed until an
+    answer arrives. A refusal means W1 waits for that claim's release.
 
 ## Carried constraints (reviewers get these)
 
