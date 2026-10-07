@@ -2143,7 +2143,8 @@ it('a complete row listed before a projected row lends it no placement proof', (
 
 // THE HOLD IS D-3731'S COST, PINNED (review 212, F1; D-3734). A row whose directory is gone resolves only as a
 // projection, so it holds EVERY child's reclaim at `unmeasured` — a present child, a vanished one, and two vanished
-// children each other. R19's own arm is unchanged: each vanished child alone still reclaims. Recovery is not here.
+// children each other. R19's own arm is unchanged: each vanished child alone still reclaims. Spec §5.5's recovery
+// needs positive evidence, and these rows carry none (ccd-child-reclaim-recovery.test.ts).
 it('ambiguous row hold: a present child beside an unrelated gone-directory row is unmeasured', () => {
   const c = makeChild(h);
   const retired = path.join(h.home, 'projects', 'retired', 'x');
@@ -2195,6 +2196,12 @@ it('ambiguous row hold: two vanished children hold each other', () => {
   expect(first.verdict, `the CONTROL: R19 — one vanished child reclaims while the other stands — ${first.detail}`)
     .toBe('reclaimable');
   fs.rmSync(otherWt, { recursive: true, force: true });
+  // Spec §5.5: a hand-deleted workspace whose record git still keeps (`prunable`) is placed by that record and
+  // holds nobody (ccd-child-reclaim-recovery.test.ts). The hold pinned here is the shape with NO positive evidence:
+  // both records pruned by the fixture, and no breadcrumb.
+  h.git(c.main, 'worktree', 'prune');
+  expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the CONTROL: git records neither tree')
+    .not.toContain('still-harbor');
   const mine = evalOf(h);
   expect(mine.verdict, mine.detail).toBe('unmeasured');
   expect(mine.detail).toContain(`registry row(s) ${other} ${PROJECTED_WHY}`);

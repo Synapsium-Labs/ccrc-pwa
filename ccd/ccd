@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=25b09a286c823742c7b90c7e4817f2144ec1b9eced275fee18f5217b8d9ac9c3
+# ccrc:generated 1 sha256=5ef079ef36bb9d61d2b2e33e03803b22ee2cda9b37c88c671cdd37ecd8d23269
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -25977,7 +25977,9 @@ _ws_reclaim_stash_shas() {   # main branch -> the stash commits attributed to br
 }
 
 _ws_reclaim_record() {   # main path -> git's worktree record for path, read from $main ONCE: rc 0 with
-  #                           RECLAIM_REC_BRANCH ('' = detached) and RECLAIM_REC_HEAD set; rc 1 when $main
+  #                           RECLAIM_REC_BRANCH ('' = detached) and RECLAIM_REC_HEAD set, and
+  #                           RECLAIM_REC_PRUNABLE=1 when git marks that stanza `prunable` (spec §5.5's
+  #                           git-record arm reads it); rc 1 when $main
   #                           records no worktree at path; rc 2 when the list could not be READ
   # `_ws_wt_branch`'s matching (the path as given, or resolved through
   # `_ws_realpath`, so a symlinked ancestor cannot hide a record), with the one
@@ -25991,7 +25993,7 @@ _ws_reclaim_record() {   # main path -> git's worktree record for path, read fro
   # is the MAIN worktree's (RECLAIM_REC_MAIN=1): `worktree list` always prints
   # the main worktree's stanza first, and no child is ever that checkout.
   local main="$1" path="$2" real line listing m=0 hit=0 n=0
-  RECLAIM_REC_BRANCH=""; RECLAIM_REC_HEAD=""; RECLAIM_REC_MAIN=0
+  RECLAIM_REC_BRANCH=""; RECLAIM_REC_HEAD=""; RECLAIM_REC_MAIN=0; RECLAIM_REC_PRUNABLE=0
   listing=$(git -C "$main" worktree list --porcelain 2>/dev/null) || return 2
   real=$(_ws_realpath "$path")
   while IFS= read -r line; do
@@ -26002,13 +26004,14 @@ _ws_reclaim_record() {   # main path -> git's worktree record for path, read fro
                     fi ;;
       "HEAD "*)     (( m )) && RECLAIM_REC_HEAD="${line#HEAD }" ;;
       "branch "*)   (( m )) && RECLAIM_REC_BRANCH="${line#branch refs/heads/}" ;;
+      prunable|"prunable "*) (( m )) && RECLAIM_REC_PRUNABLE=1 ;;
     esac
   done <<< "$listing"
   (( hit )) || return 1
   return 0
 }
 
-_WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''
+_WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''; _WS_RECORDED_GDIRS=''
 _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the OTHER registry rows whose
   #                                 `.workdir` names workdir, _WS_NESTED_ROWS = those whose `.workdir`
   #                                 lies INSIDE it, and _WS_THROUGH_ROWS = those spelled THROUGH it (as
@@ -26181,15 +26184,28 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # AFTER this helper (review 214, F8), and a row literally at or below it
   # is refused by the literal arms whatever its basis. R19's arm is unchanged,
   # but an ambiguous OTHER row holds a vanished child too — and two vanished
-  # children hold each other — until that row is purged or a link on its path
-  # is restored to its original target, and a later attempt runs: the stated
-  # cost. A directory created where a link stood ends the hold unsafely: it
+  # children hold each other — until that row is purged, a link on its path
+  # is restored to its original target, or the `recorded` basis below places
+  # it, and a later attempt runs: the stated cost. A directory created where
+  # a link stood ends the hold unsafely: it
   # re-points the spelling by replacement. And `complete` places the
   # SPELLING as it reads now, not the session: an alias re-pointed after the
   # session entered through it, or a bind-mount spelling, also resolves
   # complete and outside (pre-existing; left to a follow-up).
+  #
+  # UNLESS GIT OR CCD RECORDED WHAT BECAME OF IT (spec §5.5): a second
+  # placement basis, `recorded`, beside `complete`, for a row whose workdir is
+  # GONE (`absent-suffix`). `_ws_reclaim_recorded` says what counts as
+  # evidence and what it never does; on it, the row is placed by the path it
+  # names and compared exactly as a `complete` row is, so a recovered row at,
+  # inside or through the child still refuses. Anything short of it is
+  # collected as a row that cannot be placed, as before. A record says where a
+  # tree WAS, not that it is gone rather than moved, so the admin directory
+  # the git-record arm named is kept in _WS_RECORDED_GDIRS (`id<TAB>dir`
+  # lines, reset on every call); the ladder after its nested scan, and
+  # `_ws_reclaim_owned`, ask `_ws_reclaim_moved_check` of it.
   local id="$1" wd="$2" mine='' minewhy='' names n o w wr rok basis rc lit unread='' unplaced='' unmine='' unproc='' unres=''
-  _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''
+  _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''; _WS_RECORDED_GDIRS=''
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
     || { _WS_SHARED_WHY="could not list $REG"; return 2; }
   if _ws_reclaim_resolve "$wd"; then
@@ -26219,7 +26235,14 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     lit=0; [[ "$w" == "$wd" || "$w" == "${wd%/}/"* ]] && lit=1
     (( lit )) || [[ "$wr" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
     (( lit )) || [[ -z "$minewhy" ]] || { unmine+="${unmine:+, }$o"; continue; }
-    (( lit )) || (( rok )) || { unres+="${unres:+, }$o"; continue; }
+    if (( ! lit && ! rok )); then
+      # A GONE ROW IS PLACED ONLY ON RECORDED EVIDENCE (spec §5.5): never a
+      # projection, and never a row that could not be resolved at all.
+      [[ "$basis" == absent-suffix ]] && _ws_reclaim_recorded "$o" "$w" \
+        || { unres+="${unres:+, }$o"; continue; }
+      wr="$_WS_RECORDED_AT"; rok=1
+      [[ -z "$_WS_RECORDED_G" ]] || _WS_RECORDED_GDIRS+="$o"$'\t'"$_WS_RECORDED_G"$'\n'
+    fi
     # The THROUGH arm's RESOLVED disjunct (the last `elif`'s second half) is
     # defence in depth that no realistic row reaches since D-3731 (review 213,
     # F1): every `wr` compared here is a `complete` `pwd -P` answer, plain
@@ -26250,6 +26273,165 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   [[ -z "$unres" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered or followed, or no longer exists, so its spelling no longer says where that session lives; a '..' in it follows a directory that no longer exists, or cannot otherwise be placed; or it holds a control character), so ccd cannot place them against this child — make it searchable if a directory on its path cannot be searched, restore a link on its path to its original target (never create a directory in a link's place), or purge the row once its session has ended"
   [[ -z "$_WS_SHARED_WHY" ]] || return 2
+  return 0
+}
+
+_WS_RECORDED_AT=''; _WS_RECORDED_G=''; _WS_MOVED_WHY=''
+_ws_reclaim_recorded() {   # id workdir -> rc 0 when the OTHER row id, whose workdir is gone, is placed on
+  #                             RECORDED evidence (spec §5.5): _WS_RECORDED_AT = the path it is placed by,
+  #                             _WS_RECORDED_G = the admin directory git records for it, resolved ('' on the
+  #                             breadcrumb arm); rc 1 when neither arm proves it, and the row holds as before
+  # A ROW WHOSE WORKDIR IS GONE STOPS HOLDING OTHER CHILDREN ONLY ON POSITIVE
+  # EVIDENCE (spec §5.5). `_ws_reclaim_workdir_shared` asks this only of a
+  # row its resolver placed by projection alone (`absent-suffix`). Two arms,
+  # each sufficient and each fail-closed: git's own record of the tree
+  # (`_ws_reclaim_recorded_git`), and ccd's own breadcrumb and tombstone
+  # (`_ws_reclaim_recorded_crumb`). The lifecycle journal's `create` row is
+  # not read: it proves ccd once made a tree at that spelling, never that the
+  # tree is gone rather than moved, so it can only corroborate and never
+  # decides alone. The leaf must be PROVEN absent (`_ws_reclaim_absent`): a
+  # link standing there, dangling or not, is not absence, and nothing here
+  # follows one. WHAT THIS NEVER DOES, each pinned by
+  # `ccd-child-reclaim-recovery.test.ts`: create a directory at the gone path
+  # (that re-points the spelling by replacement); run git's repository-wide
+  # worktree pruning; delete the admin directory or purge the other row (it
+  # only stops that row holding others); read process, pane, tmux or unit
+  # state; follow a leaf link; or read an unreadable `worktrees/` or `gitdir`
+  # as "no record". Device and inode ancestry are the path-identity
+  # follow-up's.
+  local o="$1" w="$2"
+  _WS_RECORDED_AT=''; _WS_RECORDED_G=''
+  [[ "$w" != *[[:cntrl:]]* ]] && _ws_reclaim_plain_path "$w" || return 1
+  _ws_reclaim_absent "$w" || return 1
+  if _ws_reclaim_recorded_git "$o" "$w" || _ws_reclaim_recorded_crumb "$o" "$w"; then
+    _WS_RECORDED_AT="$w"
+    return 0
+  fi
+  return 1
+}
+
+_ws_reclaim_recorded_git() {   # id workdir -> rc 0 with _WS_RECORDED_G when git's own record places the gone
+  #                                 row (spec §5.5's git-record arm); rc 1 otherwise
+  # GIT'S RECORD, FOUND THE WAY GIT ITSELF FINDS IT. git records a worktree by
+  # its REAL path and, once the tree is gone, keeps the stanza and marks it
+  # `prunable` (measured, git 2.43). Four conditions, all required:
+  #   - the parent resolves `complete` to its own literal spelling, so the
+  #     leaf is the only absent component and the row's spelling IS the
+  #     physical path git recorded — a parent through a link, or itself gone,
+  #     places nothing;
+  #   - the repository is the row's own project's (no project: not placed);
+  #   - exactly one `<common>/worktrees/*/gitdir` names `<w>/.git`, found by
+  #     `_ws_reclaim_log_of`'s own matcher, never a copy of it — which fails on
+  #     an unreadable `worktrees/` or `gitdir`, never reading either as "no
+  #     record" — and two entries naming one path are ambiguous, so neither
+  #     places it;
+  #   - git's porcelain list marks that stanza `prunable`. A LOCKED record never
+  #     is: a lock says the tree may live on a disk that is not mounted.
+  # The admin directory comes back resolved, for `_ws_reclaim_moved_check`.
+  # The record's globals are shadowed here, so asking this never changes what
+  # a caller read from `_ws_reclaim_record` before it.
+  local o="$1" w="$2" parent project main e g='' n=0 rc
+  local -a _WS_LOGS=()
+  local _WS_KEEP_WHY='' RECLAIM_REC_BRANCH='' RECLAIM_REC_HEAD='' RECLAIM_REC_MAIN=0 RECLAIM_REC_PRUNABLE=0
+  parent="${w%/*}"
+  [[ -n "$parent" ]] || return 1
+  _ws_reclaim_resolve "$parent" || return 1
+  [[ "$_WS_RESOLVE_BASIS" == complete && "$_WS_RESOLVED" == "$parent" ]] || return 1
+  project=$(_reg_read "$o" project) || return 1
+  [[ -n "$project" && "$project" != */* && "$project" != . && "$project" != .. && "$project" != *[[:cntrl:]]* ]] \
+    || return 1
+  main="$PROJECTS_ROOT/$project"
+  _ws_reclaim_log_of "$main" tree "$w" 1 || return 1
+  for e in ${_WS_LOGS[@]+"${_WS_LOGS[@]}"}; do
+    [[ "$e" == gitdir:* ]] || continue
+    g="${e#gitdir:}"; n=$(( n + 1 ))
+  done
+  (( n == 1 )) || return 1
+  _ws_reclaim_record "$main" "$w"; rc=$?
+  (( rc == 0 && RECLAIM_REC_PRUNABLE && ! RECLAIM_REC_MAIN )) || return 1
+  _ws_reclaim_resolve "$g" && [[ "$_WS_RESOLVE_BASIS" == complete ]] || return 1
+  _WS_RECORDED_G="$_WS_RESOLVED"
+  return 0
+}
+
+_ws_reclaim_recorded_crumb() {   # id workdir -> rc 0 when the row's own breadcrumb and tombstone prove ccd's
+  #                                   own act took the tree at workdir (spec §5.5's breadcrumb arm); rc 1
+  #                                   otherwise
+  # CCD'S OWN REMOVAL, READ OFF CCD'S OWN RECORDS. ccd takes a tree away with
+  # git's own worktree removal, which takes git's record with it, so the git
+  # arm can never place a tree ccd removed — and two interrupted children held
+  # each other for good. Here a breadcrumb written past ccd's removal step
+  # places it — ws-reap's `branch` and `clips`, a reclaim's `reclaim:branch`
+  # and `reclaim:artifacts` — and only while git keeps no record of the tree:
+  # both verbs write those phases over a workdir that was already absent, so
+  # a record that still stands (a moved tree's, a locked one) is the git
+  # arm's to judge. But a reclaim's vanished arm
+  # writes `reclaim:branch` at its START, with nothing taken by ccd, so a
+  # `reclaim:` phase counts only beside its tombstone's `worktree: present`.
+  # The tombstone must be THIS row's: its `uuid` the row's, its `workdir` the
+  # row's spelling (a recycled slug can leave an earlier act's). Every other
+  # phase proves nothing — an expiry's `expire:` ones included — and so does
+  # an unreadable breadcrumb, row or tombstone, a missing python3 (the
+  # tombstone's one reader), or a worktree list git could not give. The
+  # record's globals are shadowed here, as in the git arm.
+  local o="$1" w="$2" crumb tomb tuuid twd ruuid tworktree need=0 project rc RECLAIM_REC_BRANCH='' RECLAIM_REC_HEAD='' RECLAIM_REC_MAIN=0 RECLAIM_REC_PRUNABLE=0
+  crumb=$(_reg_read "$o" reaping) || return 1
+  case "$crumb" in
+    branch|clips) : ;;
+    reclaim:branch|reclaim:artifacts) need=1 ;;
+    *) return 1 ;;
+  esac
+  tomb="$REG/.reaped/$o.json"
+  [[ -f "$tomb" && ! -L "$tomb" ]] || return 1
+  tuuid=$(_ws_tomb_str "$tomb" uuid) || return 1
+  twd=$(_ws_tomb_str "$tomb" workdir) || return 1
+  ruuid=$(_reg_read "$o" uuid) || return 1
+  [[ -n "$tuuid" && "$tuuid" == "$ruuid" && "$twd" == "$w" ]] || return 1
+  if (( need )); then
+    tworktree=$(_ws_tomb_str "$tomb" worktree) || return 1
+    [[ "$tworktree" == present ]] || return 1
+  fi
+  # A BREADCRUMB SAYS CCD GOT PAST A STEP, NOT THAT CCD REMOVED THE TREE: both
+  # verbs write that phase over a workdir that was already absent (moved away),
+  # and only ccd's own worktree removal takes git's record with it. A tree git
+  # still records is the git arm's to place or to hold.
+  project=$(_reg_read "$o" project) || return 1
+  [[ -n "$project" && "$project" != */* && "$project" != . && "$project" != .. && "$project" != *[[:cntrl:]]* ]] || return 1
+  _ws_reclaim_record "$PROJECTS_ROOT/$project" "$w"; rc=$?
+  (( rc == 1 )) || return 1
+  return 0
+}
+
+_ws_reclaim_moved_check() {   # nested -> rc 0 when no checkout in nested (resolved roots, one per line, as
+  #                                `_ws_nested_checkouts` prints them) uses an admin directory a recovered row
+  #                                named (_WS_RECORDED_GDIRS); 1 (_WS_MOVED_WHY) when one does; 2
+  #                                (_WS_MOVED_WHY) when that could not be asked
+  # A RECORD SAYS WHERE A TREE WAS, NOT THAT IT IS GONE RATHER THAN MOVED
+  # (spec §5.5). A move leaves git's stanza exactly as a deletion does —
+  # `prunable`, its gitdir naming nothing — and the moved tree's `.git` still
+  # names the same admin directory (measured, git 2.43). Moved INTO this
+  # child, it is another session's tree that would go with the child's. Rung 9
+  # refuses such a checkout of THIS repository (`_ws_reclaim_gitdir_own`), but
+  # one of another repository passes when clean. So no nested checkout, of ANY
+  # repository, may resolve its git directory to an admin directory a
+  # recovered row named. A git directory that cannot be read, or resolved
+  # completely, is unmeasured, never "not that tree".
+  local p pg o g
+  _WS_MOVED_WHY=''
+  [[ -n "$_WS_RECORDED_GDIRS" ]] || return 0
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    pg=$(git -C "$p" rev-parse --absolute-git-dir 2>/dev/null) && [[ -n "$pg" ]] \
+      || { _WS_MOVED_WHY="could not read the git directory of the checkout at $p, so whether it is a gone row's moved tree was never asked"; return 2; }
+    _ws_reclaim_resolve "$pg" && [[ "$_WS_RESOLVE_BASIS" == complete ]] \
+      || { _WS_MOVED_WHY="could not resolve the git directory of the checkout at $p completely, so whether it is a gone row's moved tree was never asked"; return 2; }
+    pg="$_WS_RESOLVED"
+    while IFS=$'\t' read -r o g; do
+      [[ -n "$o" && "$pg" == "$g" ]] || continue
+      _WS_MOVED_WHY="the checkout at $p uses the git directory git records for registry row $o, whose workdir is gone — that row's tree was moved inside this child, so ccd cannot prove the tree is this child's own"
+      return 1
+    done <<< "$_WS_RECORDED_GDIRS"
+  done <<< "$1"
   return 0
 }
 
@@ -26951,6 +27133,11 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     (( rc == 0 )) || { _reap_refuse containment-unproven "$_WS_FOREIGN_WHY"; return 1; }
     RECLAIM_FOREIGN+="$p"$'\n'
   done <<< "$nested"$'\n'
+  # NOR IS ANY CHECKOUT INSIDE IT A GONE ROW'S MOVED TREE (spec §5.5):
+  # asked after the scan, over its answer — `_ws_reclaim_moved_check` says why.
+  _ws_reclaim_moved_check "$nested"; rc=$?
+  (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_MOVED_WHY"; return 1; }
+  (( rc == 0 )) || { _reap_refuse containment-unproven "$_WS_MOVED_WHY"; return 1; }
   # The facts the pin phase will act on, each a fingerprint input. The branch
   # is read THREE ways (`_ws_reclaim_tip_read`, spec §5.5): its tip, or
   # PROVEN absent (no tip to pin, no branch to delete), or a read that did not
@@ -28425,8 +28612,9 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
   # not one of $main's worktrees; not the MAIN checkout, asked twice (git's
   # first stanza, and the resolved path against $main's); and no OTHER registry
   # row naming it or rooted inside it, literally or resolved — an unlistable
-  # registry asked nothing.
-  local id="$1" wd="$2" main="$3" rc
+  # registry asked nothing; and, where a gone row was placed on git's record
+  # (spec §5.5), no checkout inside the tree that is that row's moved tree.
+  local id="$1" wd="$2" main="$3" rc nested
   _WS_OWNED_WHY=''
   _ws_reclaim_plain_path "$wd" \
     || { _WS_OWNED_WHY="the workdir is spelled '$wd' — not one plain absolute path"; return 1; }
@@ -28444,6 +28632,13 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
   [[ -z "$_WS_SHARED_ROWS" ]] || { _WS_OWNED_WHY="$wd is also named by registry row(s) $_WS_SHARED_ROWS"; return 1; }
   [[ -z "$_WS_NESTED_ROWS" ]] || { _WS_OWNED_WHY="$wd has registry row(s) $_WS_NESTED_ROWS rooted inside it, each another session's tree"; return 1; }
   [[ -z "$_WS_THROUGH_ROWS" ]] || { _WS_OWNED_WHY="registry row(s) $_WS_THROUGH_ROWS spell their workdir through $wd, not as one plain path, so ccd cannot prove it lies outside $wd"; return 1; }
+  # Scanned only when a row was placed on git's record: every other tail asks
+  # exactly what it asked before (`_ws_reclaim_moved_check` says why).
+  if [[ -n "$_WS_RECORDED_GDIRS" && -d "$wd" ]]; then
+    nested=$(_ws_nested_checkouts "$wd") \
+      || { _WS_OWNED_WHY="could not scan $wd for a gone row's moved tree"; return 1; }
+    _ws_reclaim_moved_check "$nested" || { _WS_OWNED_WHY="$_WS_MOVED_WHY"; return 1; }
+  fi
   return 0
 }
 
