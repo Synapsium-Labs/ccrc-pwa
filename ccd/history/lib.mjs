@@ -132,6 +132,10 @@ export const LINE_MAX = 16 * 1024 * 1024;           // a longer transcript line 
 export const CHUNK_BYTES = 2 * 1024 * 1024;         // parsed lines per ingest transaction
 export const RUN_BUDGET_MS = 90_000;                // one budget per run, never reset per file
 export const RUN_BUDGET_BYTES = 512 * 1024 * 1024;
+/** One tick's share of the run budget for the re-derivation (D-4344, history-reindex-mark-by-rederivation), so a
+ *  generation never starves capture; bytes are compressed, as the backfill charges them. */
+export const REDERIVE_SLICE_MS = 20_000;
+export const REDERIVE_SLICE_BYTES = 128 * 1024 * 1024;
 export const CAP_DEFAULT_GB = 50;
 export const CAP_WARN_PCT = 80;
 export const FLOOR_GIB = 15;
@@ -1454,6 +1458,50 @@ export function makePairIndex(pairs) {
     byLen.get(p.len).add(p.sha256);
   }
   return { byLen };
+}
+
+/** A pair index that answers exactly as makePairIndex(pairs) and counts, in probe.hits, every value-layer match on
+ *  an OWED pair: one whose redact_hashes rowid lies above `mark` (D-4344, history-reindex-mark-by-rederivation).
+ *
+ *  Why a count of owed hits proves a stored index row complete. An index text depends on the pair set only through
+ *  `byLen.get(len)?.has(sha)`: `redactForIndex`, its joined belt and its decode readings included, is a
+ *  deterministic function of those answers. A stored row was computed with its own pair set Q. By the mark's
+ *  invariant every pair at or below the mark is in Q, and Q is a subset of all pairs. Take a recomputation with all
+ *  pairs that recorded no owed hit. Every query it answered yes was a non-owed pair, so it is in Q. Every query it
+ *  answered no is also no in Q. So both computations asked the same queries and got the same answers, and the stored
+ *  row already equals the full redaction: it needs no rewrite. A recomputation that did record an owed hit is the
+ *  row to rewrite. The test is by hash, with the redaction's own code, so it holds for a value glued to a
+ *  neighbour that no quoted phrase finds, and for a pair that has no value (sessions.json's idHash). */
+export function makeProbeIndex(pairs, mark) {
+  const all = [...pairs];
+  const base = makePairIndex(all);
+  const owed = makePairIndex(all.filter((p) => p.rid > mark));
+  const probe = { hits: 0 };
+  const byLen = new Map();
+  for (const [len, shas] of base.byLen) {
+    const os = owed.byLen.get(len);
+    byLen.set(len, os === undefined ? shas : {
+      has: (sha) => { if (!shas.has(sha)) return false; if (os.has(sha)) probe.hits += 1; return true; },
+    });
+  }
+  return { byLen, probe };
+}
+
+/** meta fts_rederive's grammar, `<target> <cursor> <end>`; anything else (undefined included) is null
+ *  (D-4344, history-reindex-mark-by-rederivation). */
+export function parseRederiveState(text) {
+  const m = /^([0-9]{1,15}) ([0-9]{1,15}) ([0-9]{1,15})$/.exec(text ?? '');
+  return m === null ? null : { target: Number(m[1]), cursor: Number(m[2]), end: Number(m[3]) };
+}
+export function formatRederiveState(s) {
+  return `${s.target} ${s.cursor} ${s.end}`;
+}
+/** Continue a generation whose target lies above the mark; else start one when a pair lies above it; else nothing.
+ *  A malformed state restarts from 0, which is conservative (D-4344, history-reindex-mark-by-rederivation). */
+export function rederivePlan(mark, top, maxBlobId, state) {
+  if (state !== null && state.target > mark) return state;
+  if (top > mark) return { target: top, cursor: 0, end: maxBlobId };
+  return null;
 }
 
 /** The JWT shape arm, `\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}`

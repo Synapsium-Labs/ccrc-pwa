@@ -1785,12 +1785,18 @@ describe('history ingest: secrets per tick (plan task 22)', () => {
   });
 });
 
+interface IxSweep {
+  rederiveFts(db: DatabaseSync, ctx: IxCtx, budget: IxBudget): Promise<{ state: 'idle' | 'running' | 'completed'; reindexed: number }>;
+}
+
 describe('history ingest: the FTS index (plan task 23)', () => {
   // D-4246 (history-w1b-three-prs): these pins are the store halves; their `grep` halves are B2's.
   beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
   const hex = (n: number): string => randomBytes(n).toString('hex');
   const metaV = (db: DatabaseSync, k: string): string | undefined =>
     (db.prepare('SELECT v FROM meta WHERE k = ?').get(k) as { v: string } | undefined)?.v;
+  const maxRid = (db: DatabaseSync): number => (db.prepare('SELECT max(rowid) AS r FROM redact_hashes').get() as { r: number }).r;
+  const rowidOf = (db: DatabaseSync, q: string): number => (db.prepare('SELECT rowid AS id FROM blobs_fts WHERE blobs_fts MATCH ?').get(q) as { id: number }).id;
   const matches = (db: DatabaseSync, q: string): number =>
     (db.prepare('SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH ?').get(q) as { n: number }).n;
   /** The index's own bytes: every FTS5 data block, as latin1. */
@@ -2005,42 +2011,44 @@ describe('history ingest: the FTS index (plan task 23)', () => {
     } finally { db.close(); }
   });
 
-  it('D-4311 (S5): a tick whose secret source is unreadable does not advance the re-index mark; the next readable tick re-indexes and advances it', async () => {
+  it('D-4344 (F12, was D-4311 S5): with one secret source readable and one unreadable, both owed blobs are re-indexed and the mark advances', async () => {
     const box = IX.newBox('ccrc-hist-s5-');
-    const value = `zqx-${hex(10)}_${hex(10)}`;
-    const tail = value.slice(value.indexOf('_') + 1);
-    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note ${value} end`, 1)]));
-    IX.sweepTwice(box);                                      // indexed in clear: the pair is not known yet
-    secretFile(box, 'late.env', `ZQ_LATE_VALUE=${value}\n`);
+    const va = `zqx-${hex(10)}_${hex(10)}`;
+    const tail = va.slice(va.indexOf('_') + 1);
+    const vb = `zqj${hex(12)}5`;
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, `note ${va} end`, 1),
+      IX.user(IX.uuidN(2), IX.uuidN(1), `note \u00e9${vb} end`, 2),
+    ]));
+    IX.sweepTwice(box);                                      // indexed in clear: the pairs are not known yet
+    let db = openStoreRO(box);
+    try {
+      expect(matches(db, `"${tail.slice(0, 6)}"*`)).toBe(1);   // CONTROL
+      expect(matches(db, '"ezqj"*')).toBe(1);                  // CONTROL: the glued term
+    } finally { db.close(); }
+    secretFile(box, 'a.env', `ZQ_A=${va}\n`);
+    secretFile(box, 'b.env', `ZQ_B=${vb}\n`);
     const { sweep: S, store, lib } = await IX.api();
     const P = lib.historyPaths(box.home);
     const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
     const w = store.openWriter(P.dbFile);
     try {
-      expect(S.secretsStep(w, S.makeIngestCtx(box.home, box.homes, Date.now(), ids), []).newValues).toEqual([value]);   // the dead pass: pair committed, never re-indexed
+      expect([...S.secretsStep(w, S.makeIngestCtx(box.home, box.homes, Date.now(), ids), []).newValues].sort()).toEqual([va, vb].sort());   // the dead pass
     } finally { w.close(); }
-    const file = path.join(box.home, '.cc-secrets', 'late.env');
-    fs.chmodSync(file, 0o000);                               // the source the value lives in is now unreadable
+    const file = path.join(box.home, '.cc-secrets', 'b.env');
+    fs.chmodSync(file, 0o000);
     try {
-      const r1 = runSweep(box);
-      expect(r1.code, r1.stderr).toBe(0);
-      let db = openStoreRO(box);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
       try {
         expect(counters(box)['redact_source_unreadable']).toBeGreaterThan(0);
-        expect(matches(db, `"${tail.slice(0, 6)}"*`)).toBe(1);   // nothing could be re-indexed: the value is not loadable
-        expect(Number(metaV(db, 'fts_reindex_rid') ?? 0))
-          .toBeLessThan((db.prepare('SELECT max(rowid) AS r FROM redact_hashes').get() as { r: number }).r);   // the obligation stands
+        expect(matches(db, `"${tail.slice(0, 6)}"*`)).toBe(0);   // found by phrase: its value loaded
+        expect(matches(db, '"ezqj"*')).toBe(0);                 // found only by hash: its source is unreadable
+        expect(ftsBytes(db).includes(vb.slice(3, 15))).toBe(false);
+        expect(metaV(db, 'fts_reindex_rid')).toBe(String(maxRid(db)));
       } finally { db.close(); }
     } finally { fs.chmodSync(file, 0o600); }
-    const r2 = runSweep(box);
-    expect(r2.code, r2.stderr).toBe(0);
-    const db = openStoreRO(box);
-    try {
-      expect(matches(db, `"${tail.slice(0, 6)}"*`)).toBe(0);
-      expect(ftsBytes(db).includes(tail.slice(4, 16))).toBe(false);
-      expect(metaV(db, 'fts_reindex_rid'))
-        .toBe(String((db.prepare('SELECT max(rowid) AS r FROM redact_hashes').get() as { r: number }).r));
-    } finally { db.close(); }
   });
 
   it('D-4343 (F2): an entry holding a literal backslash-n before a known value indexes no term holding it', () => {
@@ -2057,6 +2065,123 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       expect(ftsBytes(db).includes(value.slice(3, 15))).toBe(false);
       expect(IX.blobsHold(db, value)).toBe(true);
     } finally { db.close(); }
+  });
+
+  describe('D-4344 (history-reindex-mark-by-rederivation): the mark moves only when every indexed blob is re-derived with every pair', () => {
+    it('F3: a value glued to a non-ASCII letter, a combining mark or a CSI remnant is found by hash and re-indexed', () => {
+      const box = IX.newBox('ccrc-hist-glued-');
+      const v1 = `zqg${hex(12)}1`; const v2 = `zqh${hex(12)}2`; const v3 = `zqk${hex(12)}3`;
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+        IX.user(IX.uuidN(1), null, `note \u00e9${v1} end`, 1),
+        IX.user(IX.uuidN(2), IX.uuidN(1), `note x\u0301${v2} end`, 2),
+        IX.user(IX.uuidN(3), IX.uuidN(2), `note \x1b[1m${v3} end`, 3),
+      ]));
+      IX.sweepTwice(box);
+      const Q = ['"ezqg"*', '"xzqh"*', '"1mzqk"*'];
+      let db = openStoreRO(box);
+      try { for (const q of Q) expect(matches(db, q), q).toBe(1); } finally { db.close(); }   // CONTROL: each glued term is indexed
+      secretFile(box, 'glued.env', `ZQ_A=${v1}\nZQ_B=${v2}\nZQ_C=${v3}\n`);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        for (const q of Q) expect(matches(db, q), q).toBe(0);
+        expect(matches(db, 'note')).toBe(3);
+        for (const v of [v1, v2, v3]) expect(ftsBytes(db).includes(v.slice(3, 15)), v.slice(0, 3)).toBe(false);
+        expect(metaV(db, 'fts_reindex_rid')).toBe(String(maxRid(db)));
+        expect(IX.blobsHold(db, v1)).toBe(true);
+      } finally { db.close(); }
+    });
+
+    it('F3: a hash-only pair (sessions.json) re-indexes the blob holding its token, which no phrase search can find', () => {
+      const box = IX.newBox('ccrc-hist-hashonly-');
+      const token = `zqs${hex(20)}`;                         // 43 characters, a session token's length
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note ${token} end`, 1)]));
+      IX.sweepTwice(box);
+      let db = openStoreRO(box);
+      try { expect(matches(db, '"zqs"*')).toBe(1); } finally { db.close(); }   // CONTROL
+      fs.mkdirSync(path.join(box.home, '.ccrc'), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(box.home, '.ccrc', 'sessions.json'),
+        JSON.stringify([{ idHash: sha256Hex(token), createdAt: 1, lastSeenAt: 1, generation: 1, label: 'fixture' }]), { mode: 0o600 });
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(matches(db, '"zqs"*')).toBe(0);
+        expect(ftsBytes(db).includes(token.slice(3, 23))).toBe(false);
+        expect(metaV(db, 'fts_reindex_rid')).toBe(String(maxRid(db)));
+      } finally { db.close(); }
+    });
+
+    it('F4: an owed pair whose declared secret file an unreadable roster did not pass is still served by hash, and the mark advances', async () => {
+      const box = IX.newBox('ccrc-hist-f4-');
+      const v = `zqr${hex(12)}4`;
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note ${v} end`, 1)]));
+      IX.sweepTwice(box);
+      const declared = path.join(box.home, '.config', 'lane', 'key.env');   // outside SECRET_SOURCES
+      fs.mkdirSync(path.dirname(declared), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(declared, `LANE_KEY=${v}\n`, { mode: 0o600 });
+      const { sweep: S, store, lib } = await IX.api();
+      const P = lib.historyPaths(box.home);
+      const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+      const w = store.openWriter(P.dbFile);
+      try {
+        expect(S.secretsStep(w, S.makeIngestCtx(box.home, box.homes, Date.now(), ids), [declared]).newValues).toEqual([v]);   // the dead pass
+      } finally { w.close(); }
+      const r = runSweep(box, ['--roster-unreadable'], { secrets: [], homes: [] });   // the shim's argv when accounts.sh does not source
+      expect(r.code, r.stderr).toBe(0);
+      const db = openStoreRO(box);
+      try {
+        expect(counters(box)['roster_unreadable']).toBeGreaterThanOrEqual(1);
+        expect(matches(db, `"${v.slice(0, 6)}"*`)).toBe(0);
+        expect(ftsBytes(db).includes(v.slice(3, 15))).toBe(false);
+        expect(metaV(db, 'fts_reindex_rid')).toBe(String(maxRid(db)));
+      } finally { db.close(); }
+    });
+
+    it('rederiveFts resumes from its durable cursor, re-indexes only blobs whose re-derivation hit an owed pair, and moves the mark to its own target, never to a pair learned mid-generation', async () => {
+      const box = IX.newBox('ccrc-hist-rederive-');
+      const a = `zqm${hex(12)}6`;
+      const b = `zqn${hex(12)}7`;
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+        IX.user(IX.uuidN(1), null, `note \u00e9${b} end`, 1),
+        IX.user(IX.uuidN(2), IX.uuidN(1), `note \u00e9${a} end`, 2),
+      ]));
+      IX.sweepTwice(box);
+      const { sweep: S, store, lib } = await IX.api();
+      const P = lib.historyPaths(box.home);
+      const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+      const w = store.openWriter(P.dbFile);
+      try {
+        const Y = rowidOf(w, '"ezqn"*');                    // holds b
+        const X = rowidOf(w, '"ezqm"*');                    // holds a
+        expect(Y).toBeLessThan(X);                           // CONTROL: blob order is row order
+        expect(IX.count(w, 'blobs', 'fts_indexed = 1')).toBe(2);
+        const E = (w.prepare('SELECT max(blob_id) AS id FROM blobs').get() as { id: number }).id;
+        const m0 = metaV(w, 'fts_reindex_rid');
+        const ctx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+        secretFile(box, 'a.env', `ZQ_A=${a}\n`);
+        S.secretsStep(w, ctx, []);
+        const ra = maxRid(w);
+        ctx.fts = S.ftsPrepare(w, ctx.nowMs).tables;
+        const one = () => S.newBudget(Date.now, { maxBytes: 1 });
+        expect(await S.rederiveFts(w, ctx, one())).toEqual({ state: 'running', reindexed: 0 });     // Y examined, no owed hit; X waits
+        expect(metaV(w, 'fts_reindex_rid')).toBe(m0);
+        expect(lib.parseRederiveState(metaV(w, 'fts_rederive'))).toEqual({ target: ra, cursor: Y, end: E });
+        secretFile(box, 'b.env', `ZQ_B=${b}\n`);
+        S.secretsStep(w, ctx, []);
+        const rb = maxRid(w);
+        expect(rb).toBeGreaterThan(ra);
+        expect(await S.rederiveFts(w, ctx, one())).toEqual({ state: 'completed', reindexed: 1 });   // X re-indexed for a
+        expect(metaV(w, 'fts_reindex_rid')).toBe(String(ra));   // its own target: Y was read before b was learned
+        expect(matches(w, '"ezqm"*')).toBe(0);
+        expect(matches(w, '"ezqn"*')).toBe(1);
+        expect(await S.rederiveFts(w, ctx, one())).toEqual({ state: 'running', reindexed: 1 });     // b's generation: Y re-indexed
+        expect(await S.rederiveFts(w, ctx, one())).toEqual({ state: 'completed', reindexed: 0 });   // X holds no owed value
+        expect(metaV(w, 'fts_reindex_rid')).toBe(String(rb));
+        expect(matches(w, '"ezqn"*')).toBe(0);
+      } finally { w.close(); }
+    });
   });
 
   describe('D-4312 (history-sidecar-redact-before-cut): a sidecar is redacted over a window larger than its cut, then cut', () => {

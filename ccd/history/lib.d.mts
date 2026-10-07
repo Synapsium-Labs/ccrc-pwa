@@ -38,6 +38,8 @@ export const LINE_MAX: number;
 export const CHUNK_BYTES: number;
 export const RUN_BUDGET_MS: number;
 export const RUN_BUDGET_BYTES: number;
+export const REDERIVE_SLICE_MS: number;
+export const REDERIVE_SLICE_BYTES: number;
 export const CAP_DEFAULT_GB: number;
 export const CAP_WARN_PCT: number;
 export const FLOOR_GIB: number;
@@ -262,8 +264,15 @@ export interface SecretPair { len: number; sha256: string }
 export function secretPairs(values: readonly string[]): { pairs: SecretPair[]; unsegmentable: number };
 export function secretUnits(value: string): string[];
 export function sessionHashPairs(jsonText: string): SecretPair[];
-export interface PairIndex { readonly byLen: ReadonlyMap<number, ReadonlySet<string>> }
+export interface PairIndex { readonly byLen: ReadonlyMap<number, { has(sha256: string): boolean }> }
 export function makePairIndex(pairs: Iterable<SecretPair>): PairIndex;
+export interface RankedPair extends SecretPair { readonly rid: number }
+export interface ProbeIndex extends PairIndex { readonly probe: { hits: number } }
+export function makeProbeIndex(pairs: Iterable<RankedPair>, mark: number): ProbeIndex;
+export interface RederiveState { target: number; cursor: number; end: number }
+export function parseRederiveState(text: string | undefined): RederiveState | null;
+export function formatRederiveState(s: RederiveState): string;
+export function rederivePlan(mark: number, top: number, maxBlobId: number, state: RederiveState | null): RederiveState | null;
 export function redactField(text: string, idx: PairIndex): string;
 export function redactFinal(text: string, idx: PairIndex): string;
 // --- Task 10: harness table and the export's horizon (spec §6.10 item 3, §9.15)
