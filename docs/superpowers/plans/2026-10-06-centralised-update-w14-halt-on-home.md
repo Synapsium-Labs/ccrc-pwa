@@ -16,7 +16,7 @@ The coordinator scoped wave 14 on 2026-10-06: the programme ledger's 07:07 UTC e
 
 One line per task:
 - **Task 1.** New L0 file `shared/update-move.ts`, holding `DETACH_CAP`, `isHaltingUpdate`, `carriesDetachCap`, `carriesUpdateGate`, `agentPredatesUpdateOp` and `autoPermits` (moved whole). `dispatch.ts`'s `isHalting`, `moveRefusal`'s three capability clauses and its `autoPermits` now call into it, and it re-exports `DETACH_CAP` and `autoPermits` (D-4266). New `server/test/update-move.test.ts` has 15 cases, the holder census among them. The dispatch ring test gains the specifier.
-- **Task 2.** The one Ack. `canAck` and the Ack's tap move from `SettingsScreen.tsx` to a new `pwa/src/fleet/updateAck.ts`, which the screen re-exports. `sendAck` now answers how the Ack ended: `acked`, `unreadable` or `refused` (D-4267).
+- **Task 2.** The one Ack. `canAck` and the Ack's tap move from `SettingsScreen.tsx` to a new `pwa/src/fleet/updateAck.ts`, which the screen re-exports. `sendAck` now answers how the Ack ended: `acked`, `unreadable`, `refused` or `unanswered` (D-4267, D-4272).
 - **Task 3.** New `pwa/src/fleet/updateHalt.ts`, pure. It holds `haltingNodes`, `leaseUnreadable`, `haltLine`, `updateAllHaltedText`, `skewHaltLead`, `consoleCanMove`, `autoWouldMove` and `skewRemedy` (whose `halt` arm carries `then`). New `pwa/test/update-halt.test.ts` has 36 cases.
 - **Task 4.** R15(a). New `pwa/src/fleet/HaltBanner.tsx`: one row per halting node, with that node's **Ack**. The Ack is gated by `canAck`, sent by `sendAck`, and held down after a clean 200 until a poll shows a different lease. Its rules are appended to `fleet.css`. `FleetScreen.tsx` mounts the banner between the fleet-host banner and the release banner. New `pwa/test/halt-banner.test.tsx` has 13 cases; `fleet-screen.test.tsx` gains one describe of 2 cases.
 - **Task 5.** R15(b). While a node halts, **Update all** is disabled. A second `.update-banner-msg` line, tied to it by `aria-describedby`, names the node and the Ack. The `halted` sentence now names where the Ack is (D-4268). The move sheet now says a `halted` skip even for a node its plan never named (D-4269). Tests: `update-banner` +3, `update-move-sheet` +2, and one literal in `api.test.ts`.
@@ -149,7 +149,7 @@ Reviewers: do not raise these.
    - The halt banner's button is `disabled={!canAck(n, releases) || acking || acked}`, and its tap is `sendAck`, the pair the Settings row calls.
    - `canAck` is driven behaviourally: a pass-through `vi.fn` lets one case make it refuse, and the rendered Ack is then disabled (T4-1).
    - A property case pins that every row the halt rule names passes `canAck`, over every state × a detail spread (T4-11). This stops a settled state added later from halting the fleet while its Ack stays disabled.
-   - After a clean 200 or an unreadable answer, the row stays down, labelled `Acked`, until a poll shows a different lease. A second tap against the same lease sends nothing (T4-8, T4-10). A refusal re-arms the row (T4-9).
+   - After a clean 200 the row stays down, labelled `Acked`, until a poll shows a different lease. After an unreadable answer or no answer, it stays down until a read the screen issued after the outcome lands (D-4272, D-4273). A second tap against the same lease sends nothing (T4-8, T4-10). A refusal, a 4xx the server gave, re-arms the row (T4-9).
 3. **Update all on a halted fleet.** It is disabled and described by a line that names the halting label(s) and the Ack (checked with `toHaveAccessibleDescription`), and it opens no sheet. The line promises nothing about what moves after the ack. A `failed` row with a `provenance:` detail does not disable it, and the first poll after the ack re-enables it. The 29 existing `update-banner` cases stay green, including `expect(all).not.toHaveAttribute('aria-describedby')` on a healthy fleet.
 4. **No silent 202.** The scout found one silent shape: a halting row the plan does not name (it already runs the tag), beside a node that IS requested. The sheet now says `Not requested — server: <halted sentence> Requested: fleet.` and stays open. Every other unnamed skip stays unsaid (T5-4, T5-5).
 5. **The skew advice says only what will happen.**
@@ -200,9 +200,9 @@ These are departures from R15 as ruled, from the brief's "PWA wave", or from wha
   - **Ruled:** "the same route and the same `canAck`".
   - **Shipped:** `canAck`, `ACK_UNREADABLE_TEXT` and the inline `ack` closure lived in the screen file, so a fleet component would have had to import a screen. The closure answered nothing.
   - **Now:**
-    - `updateAck.ts` holds `canAck` (body byte-identical), `ACK_UNREADABLE_TEXT`, and `sendAck(nodeId): Promise<AckOutcome>`, which answers `acked`, `unreadable` or `refused` and never rejects.
+    - `updateAck.ts` holds `canAck` (body byte-identical), `ACK_UNREADABLE_TEXT`, and `sendAck(nodeId): Promise<AckOutcome>`, which answers `acked`, `unreadable`, `refused` or `unanswered` (D-4272) and never rejects.
     - The Settings row calls `void sendAck(n.nodeId).finally(…)` and ignores the answer.
-    - The halt banner uses the answer to hold its row down until a poll shows a different lease. `ackNode` acks any settled row, idle included, and clears its request, so a second tap against a stale view is not harmless.
+    - The halt banner uses the answer to hold its row down: a clean 200 until a poll shows a different lease, and the other endings as D-4272 and D-4273 say. `ackNode` acks any settled row, idle included, and clears its request, so a second tap against a stale view is not harmless.
     - `settings-screen.test.tsx` keeps its import from the screen and is unchanged (132 green).
 - **D-4268** — *The `halted` sentence is reworded to name where the Ack is.*
   - **Shipped:** `'An update failed or was reverted — acknowledge that node before moving any other.'` (`lib/api.ts`, pinned at `api.test.ts:1289`). The operator read it at 12:18:59 and 12:19:15, while the only Ack was on another screen and was labelled **Ack**, not "acknowledge".
@@ -629,7 +629,7 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
 - Produces:
   - `canAck(n: NodeWire, releases: readonly ReleaseWire[]): boolean` (body unchanged);
   - `ACK_UNREADABLE_TEXT`;
-  - `type AckOutcome = 'acked' | 'unreadable' | 'refused'`;
+  - `type AckOutcome = 'acked' | 'unreadable' | 'refused' | 'unanswered'` (D-4272);
   - `sendAck(nodeId: string): Promise<AckOutcome>` (never rejects).
 - Consumed by: `SettingsScreen`'s `NodeItem` (this task) and `HaltBanner` (Task 4).
 
@@ -657,7 +657,7 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
   import type { NodeWire, ReleaseWire } from '../../../shared/api';
   import { SETTLED_UPDATE_STATES } from '../../../shared/api';
   import { toast } from '../components/Toast';
-  import { api, updateErrorText } from '../lib/api';
+  import { ApiError, api, updateErrorText } from '../lib/api';
 
   export const ACK_UNREADABLE_TEXT = "Acknowledged — the server's answer could not be read; the screen will re-check.";
 
@@ -671,21 +671,29 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
       typeof x === 'object' && x !== null && (x as { by?: unknown }).by === n.nodeId));
   }
 
-  /** How one Ack ended: `acked` (a clean 200), `unreadable` (a 2xx whose body would not parse — it may still have
-   *  cleared the row) or `refused` (an error, said as its sentence). */
-  export type AckOutcome = 'acked' | 'unreadable' | 'refused';
+  /** How one Ack ended (D-4272):
+   *  - `acked`: a clean 200;
+   *  - `unreadable`: a 2xx whose body would not parse, which may still have cleared the row;
+   *  - `refused`: an `ApiError` whose status is 4xx, the server's own answer, said as its sentence;
+   *  - `unanswered`: any other rejection (a fetch TypeError, an `ApiError` 5xx such as a proxy's 502/504, a timeout or
+   *    an abort). The server gave no answer, so the Ack may have landed. */
+  export type AckOutcome = 'acked' | 'unreadable' | 'refused' | 'unanswered';
 
   /** `POST /api/updates/ack` for one node, said as a toast: nothing on a clean 200, ACK_UNREADABLE_TEXT when the
-   *  answer could not be read, and the refusal's sentence on an error. It never rejects, so the caller's `.finally`
+   *  answer could not be read, and the error's sentence on a rejection. It never rejects, so the caller's `.finally`
    *  (clear its busy flag, re-poll) always runs; it answers the outcome, so a caller can hold its button down until
-   *  a poll shows the row changed (ackNode acks ANY settled row, idle included, and clears its request). */
+   *  a poll shows the row changed (ackNode acks ANY settled row, idle included, and clears its request). A rejection
+   *  ends `refused` only for a 4xx `ApiError`; every other rejection ends `unanswered`. */
   export function sendAck(nodeId: string): Promise<AckOutcome> {
     return api.ackUpdateNode(nodeId).then(
       (answer): AckOutcome => {
         if (answer === 'unreadable') { toast(ACK_UNREADABLE_TEXT); return 'unreadable'; }
         return 'acked';
       },
-      (err: unknown): AckOutcome => { toast(updateErrorText(err), 'error'); return 'refused'; },
+      (err: unknown): AckOutcome => {
+        toast(updateErrorText(err), 'error');
+        return err instanceof ApiError && err.status >= 400 && err.status < 500 ? 'refused' : 'unanswered';
+      },
     );
   }
   ```
@@ -1413,7 +1421,12 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
   // ONE Ack: the gate is `canAck` and the tap is `sendAck` (updateAck.ts), the very pair the Settings row calls, so
   // the two buttons cannot disagree about one row. A halting row is settled `failed`/`reverted`, so `canAck` is true
   // for it (halt-banner.test.tsx pins that over every state the halt rule names). It is still the one gate, never a
-  // halt-only copy. After a clean 200 the row stays down until a poll shows a different lease (`leaseKey`).
+  // halt-only copy. What the row does after a tap follows how the Ack ended (D-4272, D-4273): a clean 200 holds it
+  // until a poll shows a different lease (`leaseKey`); an unreadable answer, or no answer at all (a rejection, a 5xx,
+  // a timeout), holds it until a successful read the screen ISSUED after the outcome arrived, and then re-arms if that
+  // read still shows the same lease. A read issued earlier (before the tap, or while the POST was in flight) is never
+  // that read, however late it lands or renders; the poll's issue number tells the two apart. A 4xx refusal re-arms it
+  // at once.
   // The route stays the authority: a row
   // that went busy since the poll answers 409 `busy`, said as a toast, and the screen re-polls either way.
   //
@@ -1425,33 +1438,58 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
   import type { ReactNode } from 'react';
   import type { NodeWire, ReleaseWire, UpdatesView } from '../../../shared/api';
   import { canAck, sendAck } from './updateAck';
+  import type { AckOutcome } from './updateAck';
   import { haltLine, haltingNodes } from './updateHalt';
   import './fleet.css';
 
   /** The banner's lead sentence. */
   export const HALT_LEAD_TEXT = 'Updates are halted — nothing moves on any node until each one below is acknowledged.';
 
-  /** The lease an Ack was sent against. The row stays down while the view still shows THAT lease: between a clean 200
-   *  and the poll that drops the row (longer when a poll fails, since the hook keeps the last good view), a second
-   *  tap would reach ackNode again, which acks an idle row too and clears whatever request was written since. A new
-   *  failure is a new lease, so it re-arms the button. */
+  /** The lease an Ack was sent against, as one string over every field of the lease (state, target, startedAt, detail).
+   *  A clean 200 holds the row down while the view still shows THAT lease: between the 200 and the poll that drops the
+   *  row (longer when a poll fails, since the hook keeps the last good view), a second tap would reach ackNode again,
+   *  which acks an idle row too and clears whatever request was written since. A new failure is a new lease, so it
+   *  re-arms the button, and any one field changing makes a new one (auto retrying the same tag and failing alike moves
+   *  only `startedAt`). An unreadable answer or no answer holds on the poll's issue number instead (D-4272, D-4273, below). */
   const leaseKey = (n: NodeWire): string => JSON.stringify(n.update ?? null);
 
-  function HaltRow({ node: n, releases, onAcked }: {
-    node: NodeWire; releases: readonly ReleaseWire[]; onAcked: () => void;
+  /** What a tap left behind (D-4272, D-4273). A clean 200 holds until a poll shows a different lease. An outcome the
+   *  screen cannot vouch for (`unreadable`, or `unanswered`: a rejection, a 5xx, a timeout) holds until a successful
+   *  read the screen ISSUED after the outcome arrived. `after` is the issue number `onAcked()` returned when called
+   *  inside the outcome callback, so every read issued before the outcome has a lower number; the poll's `seq` is the
+   *  number of the read that set the view, and the hold ends when `seq >= after`. A read issued before the tap, or while
+   *  the POST was in flight, is never fresh, however late it lands or renders. `after` is null when no read was issued
+   *  (an injected parent polls through its own parent and its reload returns 0): the hold then falls back to the lease,
+   *  so no mode can re-arm on a read it cannot date. A 4xx refusal leaves no hold. */
+  type Hold =
+    | { kind: 'acked'; lease: string }
+    | { kind: 'pending'; lease: string; after: number | null; said: 'unreadable' | 'unanswered' };
+
+  function HaltRow({ node: n, releases, seq, onAcked }: {
+    node: NodeWire; releases: readonly ReleaseWire[]; seq: number; onAcked: () => number;
   }): ReactNode {
     const [acking, setAcking] = useState(false);
-    const [ackedLease, setAckedLease] = useState<string | null>(null);
-    const acked = ackedLease !== null && ackedLease === leaseKey(n);
+    const [hold, setHold] = useState<Hold | null>(null);
+    const held = hold !== null
+      && (hold.kind === 'acked' || hold.after === null ? hold.lease === leaseKey(n) : seq < hold.after);
+    const shownAcked = held && (hold.kind === 'acked' || hold.said === 'unreadable');
+    const label = shownAcked ? 'Acked' : 'Ack';
     const ack = (): void => {
       const sentAgainst = leaseKey(n);
       setAcking(true);
-      void sendAck(n.nodeId).then((outcome) => {
-        if (outcome !== 'refused') setAckedLease(sentAgainst);
-      }).finally(() => {
+      const settle = (outcome: AckOutcome): void => {
         setAcking(false);
-        onAcked();
-      });
+        const issued = onAcked();   // the re-poll, issued INSIDE the outcome callback: every read before it is older
+        if (outcome === 'acked') setHold({ kind: 'acked', lease: sentAgainst });
+        else if (outcome === 'refused') setHold(null);
+        else {
+          setHold({
+            kind: 'pending', lease: sentAgainst, said: outcome,
+            after: Number.isInteger(issued) && issued > 0 ? issued : null,
+          });
+        }
+      };
+      void sendAck(n.nodeId).then(settle, () => settle('unanswered'));   // sendAck never rejects; belt and braces
     };
     return (
       <li className="halt-banner-node" data-node-id={n.nodeId}>
@@ -1459,17 +1497,19 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
         <button
           type="button"
           className="btn-primary"
-          aria-label={`Ack ${n.label}`}
-          disabled={!canAck(n, releases) || acking || acked}
+          aria-label={`${label} ${n.label}`}
+          disabled={!canAck(n, releases) || acking || held}
           onClick={ack}
         >
-          {acked ? 'Acked' : 'Ack'}
+          {label}
         </button>
       </li>
     );
   }
 
-  export function HaltBanner({ updates: view, onAcked }: { updates: UpdatesView | null; onAcked: () => void }): ReactNode {
+  export function HaltBanner({ updates: view, seq, onAcked }: {
+    updates: UpdatesView | null; seq: number; onAcked: () => number;
+  }): ReactNode {
     if (view === null) return null;
     const halting = haltingNodes(view.nodes);
     if (halting.length === 0) return null;
@@ -1479,7 +1519,7 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
       <div className="halt-banner" role="status">
         <span className="halt-banner-msg">{HALT_LEAD_TEXT}</span>
         <ul className="halt-banner-list" aria-label="Halted nodes">
-          {halting.map((n) => <HaltRow key={n.nodeId} node={n} releases={releases} onAcked={onAcked} />)}
+          {halting.map((n) => <HaltRow key={n.nodeId} node={n} releases={releases} seq={seq} onAcked={onAcked} />)}
         </ul>
       </div>
     );
@@ -1489,7 +1529,7 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
   ```tsx
       {/* The halt, with each halting node's Ack in place (programme wave 14, R15(a)): above Update all, which it
           disables while it stands. Re-polls on every Ack. */}
-      <HaltBanner updates={updates.view} onAcked={updates.reload} />
+      <HaltBanner updates={updates.view} seq={updates.seq} onAcked={updates.reload} />
   ```
 - [ ] **Step 6: Run:**
   - `halt-banner` (**13**);
@@ -1509,14 +1549,36 @@ The worker's reserve: number 4274, written bare until defined (4270 to 4273 are 
   | T4-5 | `HaltBanner.tsx` | `const halting = view.nodes;` | `halt-banner` | 1 (`is silent with no view, and with no halting node …`) |
   | T4-6 | `FleetScreen.tsx` | delete the `<HaltBanner … />` line | `fleet-screen -t "programme wave 14"` | 1 (`names the halt, …`) |
   | T4-7 | `FleetScreen.tsx` | `onAcked={() => {}}` | `fleet-screen -t "programme wave 14"` | 1 (`names the halt, …`, at the re-poll) |
-  | T4-8 | `HaltBanner.tsx` | `disabled={!canAck(n, releases) \|\| acking}` (no acked hold) | `halt-banner` | 2 (`after a clean 200 the row stays down …`, the source pin) |
-  | T4-9 | `HaltBanner.tsx` | `setAckedLease(sentAgainst);` on every outcome | `halt-banner` | 1 (`an unreadable answer and a refusal …`, at `a refused ack re-arms the button`) |
+  | T4-8 | `HaltBanner.tsx` | `disabled={!canAck(n, releases) \|\| acking}` (no hold) | `halt-banner` | 2 (`after a clean 200 the row stays down …`, the source pin); at the shipped code it also reds every `Hold` case (D-4272, D-4273) |
+  | T4-9 | `HaltBanner.tsx` | `setAckedLease(sentAgainst);` on every outcome (at the shipped code: every outcome sets an `acked` hold) | `halt-banner` | 1 (`an unreadable answer and a refusal …`, at `a refused ack re-arms the button`; 8 at `6c167935`) |
   | T4-10 | `HaltBanner.tsx` | `const leaseKey = (_n: NodeWire): string => 'lease';` | `halt-banner` | 1 (`after a clean 200 …`, at the re-arm on a new lease) |
   | T4-11 | `updateAck.ts` | `if (state === 'failed') return true;` (canAck narrowed) | `halt-banner` | 1 (`every row the halt rule names is one canAck lets through, …`) |
   | C-1 | `fleet.css` | drop `.halt-banner`'s `background` | `halt-banner`; `contrast` | `halt-banner` 1 (`is self-grounded on the attention pair …`); `contrast` 1 (`contains no identities beyond the grandfathered blind spots`) |
   | C-2 | `fleet.css` | add `min-height: 32px;` to `.halt-banner-node .btn-primary` | `halt-banner` | 1 (`keeps the shared button at the tap floor …`) |
   | C-3 | `fleet.css` | add `position: sticky;` to `.halt-banner` | `halt-banner` | 1 (`… and not sticky`) |
   | C-4 | `fleet.css` | add `color: var(--ink-tertiary);` to `.halt-banner-node-text` | `halt-banner`; `contrast` | `halt-banner` 1 (`no rule but the banner's own sets a colour …`); `contrast` 1 (as C-1) |
+
+  The Hold's rows, for fix rounds 1 and 2 (D-4272, D-4273). The T4-8 and T4-9 mutation text above now targets the `Hold`; the counts below are measured at the code each round shipped, from the worker's evidence.
+
+  | Row | File | Mutation | Command | Measured red |
+  |---|---|---|---|---|
+  | M1 | `updateAck.ts` | the rejection always answers `'refused'` (the old line) | `halt-banner`; `fleet-screen -t "programme wave 14"` | `halt-banner` 7 at `6c167935`, 20 at the round-2 code; `fleet-screen` 1 |
+  | M2 | `HaltBanner.tsx` | `setHold(null)` after `onAcked()` (release on any end of the re-poll) | `halt-banner` | 12 at `6c167935` |
+  | M3 | `HaltBanner.tsx` | the pending hold reads the lease (`leaseKey(n) !== hold.lease`) instead of freshness | `halt-banner` | 9 at `6c167935`, 27 at the round-2 code |
+  | M4 | `HaltBanner.tsx` | the snapshot taken at the tap | `halt-banner` | 1 at `6c167935` (the in-flight case); round 2 supersedes it with R2-2 |
+  | M5 | `HaltBanner.tsx` | the pending hold never releases | `halt-banner` | 4 at `6c167935`; 17 at the round-2 code (as R2-7) |
+  | M6 | `updateAck.ts` | `err.status < 500` becomes `err.status <= 500` | `halt-banner` | 2 at `c613f551` |
+  | K1 | `HaltBanner.tsx` | `leaseKey` is `update.target` alone | `halt-banner` | 1 at `6c167935` (`only startedAt changes`); 5 at the round-2 code |
+  | K2 | `HaltBanner.tsx` | `leaseKey` is `update.startedAt` alone | `halt-banner` | 1 (`only target changes`) |
+  | K7 | `HaltBanner.tsx` | `leaseKey` is `[state, target, detail]` | `halt-banner` | 1 at `6c167935`; 5 at the round-2 code |
+  | R2-1 | `HaltBanner.tsx` | freshness by view identity at the outcome (round 1's `viewRef` and `seen`) | `halt-banner` | 21; every real-hook cell (a and c, both endings) |
+  | R2-2 | `HaltBanner.tsx` | `onAcked()` at the tap, its return kept as `after` | `halt-banner` | 16 (cells a and c) |
+  | R2-3 | `HaltBanner.tsx` | `after = seq + 1` from the committed seq; `onAcked()` called, its return ignored | `halt-banner` | 22 |
+  | R2-4 | `useUpdatesView.ts` | a rejected read sets `seq: mine` | `use-updates-view`; `halt-banner` | `use-updates-view` 2; `halt-banner` 4 (the failed post-outcome read cells) |
+  | R2-5 | `useUpdatesView.ts` | a malformed read sets `seq: mine` | `use-updates-view` | 1 |
+  | R2-6 | `HaltBanner.tsx` | `after: issued` with no positive-integer check (ruling G removed) | `halt-banner` | 4 (the `onAcked` answers 0 or undefined cases) |
+  | R2-7 | `HaltBanner.tsx` | `seq < hold.after` becomes `true` (never releases) | `halt-banner` | 17 |
+  | R2-8 | `FleetScreen.tsx` | drop `seq={updates.seq}` | `tsc --noEmit -p .` | fails: `Property 'seq' is missing` |
 - [ ] **Step 8: Commit:** `feat(update): the halt banner — each halting node and its Ack on the home screen, held down until the lease changes (wave 14, R15a)`.
 
 ### Task 5: R15(b) — Update all waits with its reason; the sheet says every halted skip; the halted sentence names the Ack (D-4268, D-4269)
