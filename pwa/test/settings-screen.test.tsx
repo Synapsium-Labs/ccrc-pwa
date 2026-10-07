@@ -2487,6 +2487,7 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     vi.spyOn(api, 'setStallWatch').mockResolvedValue('unreadable');
     fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
     expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    expect(screen.queryByText(STALL_CONFIRM_TEXT.unanswered), 'a 2xx that was answered is not "did not answer"').toBeNull();
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
     expect(radio(STALL_LEVEL_TEXT.log.label)).not.toBeChecked();
   });
@@ -2499,11 +2500,12 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   });
 
-  it('a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads', async () => {
+  it('a write whose answer never arrived says it was not confirmed, never "Saved" or "Nothing was changed", and re-reads', async () => {
     const { read } = await mount(swView());
     vi.spyOn(api, 'setStallWatch').mockRejectedValue(new TypeError('Failed to fetch'));
     fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
-    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    expect(await screen.findByText(STALL_CONFIRM_TEXT.unanswered)).toBeInTheDocument();
+    expect(screen.queryByText(UNCONFIRMED_TEXT), 'the 2xx-unreadable line says Saved; a POST that never answered must not').toBeNull();
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
     expect(screen.queryByText(/^Nothing was changed/)).toBeNull();
     expect(radio(STALL_LEVEL_TEXT.log.label)).not.toBeChecked();

@@ -284,9 +284,11 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
   const locked = busy || pending !== null;
 
   // Only the field moved, and `confirm` only as the key the server sent. Every answer is the server's: a reply
-  // that reads is settled, one that does not may have landed (UNCONFIRMED_TEXT, then a re-read), a 409 the guard
-  // reads opens the sheet, and any other refusal is toasted with the server's detail before a re-read. A rejection
-  // that never reached an answer (a network failure) may have landed too, so it says so, never "Nothing was changed".
+  // that reads is settled, a 2xx the guard cannot read was answered and may have landed (UNCONFIRMED_TEXT, the
+  // shared "Saved — the answer could not be read" line, then a re-read), a 409 the guard reads opens the sheet, and
+  // any other refusal is toasted with the server's detail before a re-read. A rejection that never reached an
+  // answer (a network failure) may not even have left, so it gets its own line, STALL_CONFIRM_TEXT.unanswered,
+  // which never says "Saved" and never "Nothing was changed", then the same re-read.
   const write = (request: StallWatchRequest, confirm?: string): void => {
     setBusy(true);
     void api.setStallWatch(confirm === undefined ? request : { ...request, confirm })
@@ -306,7 +308,7 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
             setPending({ request, confirm: refusal.confirm });
             return;
           }
-          if (refusal.kind === 'unconfirmed') toast(UNCONFIRMED_TEXT);
+          if (refusal.kind === 'unconfirmed') toast(STALL_CONFIRM_TEXT.unanswered);
           else toast(fillStallText(STALL_CONFIRM_TEXT.refused, { detail: refusal.detail }), 'error');
           reload();
         },

@@ -9453,6 +9453,7 @@ export const STALL_CONFIRM_TEXT = {
   quietDialogs: 'A dialog left open longer than {value} is pushed to you from the next sweep, and repeat pushes about one open dialog can come {value} apart.',
   unknown: "The fleet box's files could not be read, so what this choice turns on cannot be shown.",
   refused: 'Nothing was changed: {detail}',
+  unanswered: 'Not confirmed — the server did not answer; the screen will re-check.',
 } as const;
 export const STALL_RUNLESS_FOOTNOTE = 'Counts notices on runs only. Notices about a session on no run, or about a coordinator itself, sent or shadow, are not counted here; shadow ones appear only in the server log.';
 /** The section's headings and small words. `counts` takes the window from the reply's `windowMs`, so no text copies
