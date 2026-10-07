@@ -51,7 +51,7 @@ import {
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
   measureStoreFacts, measuredSize, openReader, openWriter, readAttempts, removeStaleMigrationTemps, removeStaleTemps, runMigration, setMeta,
-  syncWriterMirror, userVersion, withTx, writeFileAtomic, removeEntry, readBounded,
+  syncWriterMirror, userVersion, withTx, writeFileAtomic, removeEntry, readBounded, removeStaleAtomicTemps,
   CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
@@ -1780,6 +1780,7 @@ export function openStore(home, P, role, deps) {
   if (verdict.act === 'refuse') return { word: verdict.word };
   // removeStaleTemps propagates any readdir failure but an absent db/ (D-4305): the pass fails loudly, never folded.
   removeStaleTemps(home);
+  removeStaleAtomicTemps(home);
   if (verdict.act === 'drop-pending-create') {
     dropPending(home);
     verdict = { act: 'create' };

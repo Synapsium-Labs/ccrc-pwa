@@ -438,22 +438,55 @@ export function removeEntry(path) {
   try { rmdirSync(path); return 'removed'; } catch (e) { if (e && e.code === 'ENOENT') return 'absent'; if (e && (e.code === 'ENOTEMPTY' || e.code === 'EEXIST')) return 'kept-dir'; throw e; }
 }
 
-/** Temp in the same directory, written, fsynced, renamed over `path`, and the
- *  directory fsynced: the file exists whole or not at all. `fchmod` after the
- *  open, because a temp a killed run left behind keeps its old mode under a
- *  plain `open(…, 'w', mode)`. */
+/** Write all of `buf` to `fd`, or throw: a short `writeSync` is finished, and one that makes no progress is an error. */
+function writeAll(fd, buf) {
+  for (let off = 0; off < buf.length;) {
+    const n = writeSync(fd, buf, off, buf.length - off);
+    if (!(n > 0)) throw new Error('writeFileAtomic: short write');
+    off += n;
+  }
+}
+
+/** Temp in the same directory, written WHOLE, fsynced, renamed over `path`, and the
+ *  directory fsynced: the file exists whole or not at all. The temp (`<path>.tmp.<pid>`) is
+ *  removed first by type and created O_EXCL|O_NOFOLLOW, so a stale temp or a link planted at its
+ *  name is never written through; a short write is finished, and a failure before the rename
+ *  removes the temp. `fchmod` after the open, because a umask still applies to `mode`. */
 export function writeFileAtomic(path, text, mode = 0o600) {
   const tmp = `${path}.tmp.${process.pid}`;
-  const fd = openSync(tmp, 'w', mode);
+  removeEntry(tmp);
+  let renamed = false;
   try {
-    fchmodSync(fd, mode);
-    writeSync(fd, text);
-    fsyncSync(fd);
+    const fd = openSync(tmp, FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL | FS.O_NOFOLLOW, mode);
+    try { fchmodSync(fd, mode); writeAll(fd, Buffer.from(text, 'utf8')); fsyncSync(fd); } finally { closeSync(fd); }
+    renameSync(tmp, path);
+    renamed = true;
   } finally {
-    closeSync(fd);
+    if (!renamed) { try { removeEntry(tmp); } catch { /* the stale sweep removes it */ } }
   }
-  renameSync(tmp, path);
   fsyncDir(path.slice(0, path.lastIndexOf('/')));
+}
+
+/** `writeFileAtomic`'s `<path>.tmp.<pid>` for every path it is handed: the root's three binding files and `op`,
+ *  and db/backups/'s attempt markers. */
+const ATOMIC_TEMP_RE = /^(store\.writer|store\.id\.pending|store\.id|op|\.pre-v[0-9]+\.attempt)\.tmp\.[0-9]+$/;
+
+/** Remove the temps a killed `writeFileAtomic` left under another pid, from the root and db/backups/, and answer the
+ *  names removed (§9.10 "Stale temp": a writer's temp is removed by the next pass that takes the lock). An absent or
+ *  unlistable directory is skipped, and a temp that cannot be removed is left: a leftover blocks nothing (the D-4339
+ *  reasoning), and `writeFileAtomic` removes its own pid's name itself. */
+export function removeStaleAtomicTemps(home) {
+  const P = historyPaths(home);
+  const removed = [];
+  for (const dir of [P.root, P.backups]) {
+    let names;
+    try { names = readdirSync(dir); } catch { continue; }
+    for (const n of names.sort()) {
+      if (!ATOMIC_TEMP_RE.test(n)) continue;
+      try { if (removeEntry(`${dir}/${n}`) === 'removed') removed.push(n); } catch { /* not ours to remove */ }
+    }
+  }
+  return removed;
 }
 
 /** The one reader of every small file the history modules read whole (D-4347, history-planted-entries-never-wedge):

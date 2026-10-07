@@ -11,6 +11,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { syncBuiltinESMExports } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { brotliCompressSync, constants as Z } from 'node:zlib';
 import { mkTmp } from './tmpHelpers.js';
@@ -20,7 +21,7 @@ import {
   measuredSize, getMeta, setMeta, bump, closeWriter, schemaOf,
   mintStoreId, mintWriter, writeFileAtomic, peekStoreId, measureStoreFacts, removeStaleTemps, removeStaleMigrationTemps, createStore,
   finishPending, dropPending, syncWriterMirror,
-  readAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry, readBounded,
+  readAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry, readBounded, removeStaleAtomicTemps,
 } from '../../ccd/history/store.mjs';
 
 /** A delete-mode (rollback-journal) v1 store built by hand, the shape a
@@ -258,6 +259,71 @@ describe('store.mjs: the binding', () => {
     expect(fs.readFileSync(p, 'utf8')).toBe('abcdef01\n');
     expect(mode(p)).toBe(0o600);
     expect(fs.readdirSync(d)).toEqual(['store.writer']);
+  });
+
+  /** Run `fn` with `fs.writeSync` replaced by a seam that takes both call forms (the string form HEAD used and the
+   *  buffer form), counting its calls; the real function is restored in `finally`. `rule` answers each call. */
+  const withWriteSeam = (rule: (call: number, real: typeof fs.writeSync, fd: number, buf: Buffer, off: number, len: number) => number, fn: () => void): void => {
+    const real = fs.writeSync; let calls = 0;
+    fs.writeSync = ((fd: number, data: string | NodeJS.ArrayBufferView, a?: number, b?: number) => {
+      const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+      const off = typeof data === 'string' ? 0 : (a ?? 0); const len = typeof data === 'string' ? buf.length : (b ?? buf.length - off);
+      calls += 1; return rule(calls, real, fd, buf, off, len);
+    }) as typeof fs.writeSync;
+    syncBuiltinESMExports();
+    try { fn(); } finally { fs.writeSync = real; syncBuiltinESMExports(); }
+  };
+  const tmpNames = (d: string): string[] => fs.readdirSync(d).filter((n) => n.includes('.tmp.'));
+
+  it('writeFileAtomic finishes a short write and leaves the file whole (review 316 F21)', () => {
+    const d = home();
+    const p = path.join(d, 'store.writer');
+    withWriteSeam((call, real, fd, buf, off, len) => (call === 1 ? real(fd, buf, off, Math.floor(len / 2)) : real(fd, buf, off, len)), () => {
+      writeFileAtomic(p, 'abcdef01\n');
+    });
+    expect(fs.readFileSync(p, 'utf8')).toBe('abcdef01\n');
+    expect(tmpNames(d)).toEqual([]);
+  });
+
+  it('a write that makes no progress throws and leaves no temp (review 316 F21)', () => {
+    const d = home();
+    const p = path.join(d, 'store.writer');
+    withWriteSeam(() => 0, () => {
+      expect(() => writeFileAtomic(p, 'abcdef01\n')).toThrow(/short write/);
+    });
+    expect(fs.existsSync(p)).toBe(false);
+    expect(tmpNames(d)).toEqual([]);
+  });
+
+  it('a link planted at its own temp name is never written through (review 316 F21)', () => {
+    const d = home();
+    const p = path.join(d, 'store.writer');
+    const outside = path.join(d, 'outside');
+    fs.writeFileSync(outside, 'ORIG');
+    fs.symlinkSync(outside, `${p}.tmp.${process.pid}`);
+    writeFileAtomic(p, 'abcdef01\n');
+    expect(fs.readFileSync(outside, 'utf8')).toBe('ORIG');
+    expect(fs.lstatSync(p).isFile()).toBe(true);
+    expect(fs.readFileSync(p, 'utf8')).toBe('abcdef01\n');
+  });
+
+  it('a temp a killed write left is swept by removeStaleAtomicTemps, and nothing else (review 316 F21)', () => {
+    const h = home();
+    const P = historyPaths(h);
+    const k = createKilledAt(h, 'renameSync:store.writer.tmp:1:before');
+    expect(k.signal, String(k.stderr)).toBe('SIGKILL');
+    const killedTemp = fs.readdirSync(P.root).filter((n) => /^store\.writer\.tmp\.[0-9]+$/.test(n));
+    expect(killedTemp).toHaveLength(1);
+    fs.writeFileSync(path.join(P.root, 'notes.tmp.12'), 'x');
+    fs.writeFileSync(path.join(P.root, 'store.writer.tmpx'), 'x');
+    fs.mkdirSync(P.backups, { recursive: true });
+    fs.writeFileSync(path.join(P.backups, '.pre-v2.attempt.tmp.99'), 'x');
+    fs.writeFileSync(path.join(P.backups, 'pre-v2.db.tmp.5'), 'x');
+    expect(removeStaleAtomicTemps(h)).toEqual([...killedTemp, '.pre-v2.attempt.tmp.99']);
+    expect(fs.existsSync(path.join(P.root, 'notes.tmp.12'))).toBe(true);
+    expect(fs.existsSync(path.join(P.root, 'store.writer.tmpx'))).toBe(true);
+    expect(fs.existsSync(path.join(P.backups, 'pre-v2.db.tmp.5'))).toBe(true);
+    expect(fs.existsSync(path.join(P.backups, '.pre-v2.attempt.tmp.99'))).toBe(false);
   });
 
   it('createStore: §6.2 sequence end to end — binding files, modes, WAL, v1, and an `open` verdict after', () => {

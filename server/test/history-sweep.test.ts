@@ -213,6 +213,18 @@ describe('the sweep: skeleton, store open and refusals, and the shim', () => {
     expect(counters(box)['roster_unreadable']).toBe(1);
   });
 
+  it('a pass removes a stale binding temp left by a killed write (review 316 F21)', () => {
+    const box = makeHistoryBox('ccrc-history-sweep-');
+    const P = historyPaths(box.home);
+    expect(runSweep(box).code).toBe(0);
+    fs.writeFileSync(path.join(P.root, 'store.writer.tmp.4242'), 'abcd');
+    fs.writeFileSync(path.join(P.root, 'op.tmp.4242'), 'import');
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.existsSync(path.join(P.root, 'store.writer.tmp.4242'))).toBe(false);
+    expect(fs.existsSync(path.join(P.root, 'op.tmp.4242'))).toBe(false);
+  });
+
   it('S7: a dangling db/ link is refused, and nothing is created through or beside it', () => {
     const box = makeHistoryBox('ccrc-history-sweep-');
     const P = historyPaths(box.home);
