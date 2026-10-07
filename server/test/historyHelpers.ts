@@ -238,6 +238,8 @@ export interface DriverDeps {
   offsetMs?: number; stepMs?: number; sizeBytes?: number;
   /** The k-th measureSize call answers sizeBytesSeq[k]; the last value stands after that (RF5a F15). */
   sizeBytesSeq?: number[];
+  /** Appended to `$HOME/<rel>` once the pass's first statfs call has answered (RF5a F19: a line landing mid-pass). */
+  afterFirstStatfs?: Array<{ rel: string; text: string }>;
   extraMigrations?: string[]; heavy?: number[]; managedSettings?: string[];
 }
 export interface DriverResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }

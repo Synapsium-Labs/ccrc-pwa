@@ -443,9 +443,13 @@ export function ensureSpoolDirs(home) {
   return stray;
 }
 
+/** Whether `p` names an entry (a link counts, its target is never followed); any lstat error but ENOENT propagates. */
+function presentName(p) { try { lstatSync(p); return true; } catch (e) { if (e && e.code === 'ENOENT') return false; throw e; } }
+
 /** Rename each regular spool/<id>.jsonl into .draining/ under a fresh name, chmod 0600 (uncounted, §9.2; the 0700
  *  directory is the protection, slug history-spool-mode-by-directory, D-4233). A name no hook writes (an id outside the
- *  grammar), a dot-file, a link or a FIFO stays where it is and is never read. */
+ *  grammar), a dot-file, a link or a FIFO stays where it is and is never read. A name already present in .draining/ (or
+ *  its .obs) is never renamed onto: that spool file waits for the next half. */
 export function renameSpoolFiles(home, tickMs, pid) {
   const P = historyPaths(home);
   let names;
@@ -460,6 +464,10 @@ export function renameSpoolFiles(home, tickMs, pid) {
     if (!st.isFile()) continue;
     ensureSpoolDirs(home);
     const to = drainingName(id, tickMs, pid);
+    // §9.2 step 1: a draining name is never reused (D-4232's halves can run twice in one millisecond of one pass). An
+    // existing name, or its observation sidecar's, would be replaced by renameSync and its .obs inherited: the spool
+    // file waits in spool/ for the next half (review 316 F19).
+    if (presentName(`${P.draining}/${to}`) || presentName(`${P.draining}/${sidecarName(to)}`)) continue;
     try {
       renameSync(`${P.spool}/${n}`, `${P.draining}/${to}`);
     } catch (e) {
@@ -3577,8 +3585,8 @@ export function mergeSteps(db, ctx, budget) {
 //   5. otherwise the journal half at lock take (DI7, D-4232 history-observe-at-rename: a /clear during a long
 //      --op keeps its startup epoch),
 //      the store opened exactly as a scheduled pass opens it, the op marker, the verb, the outbox flushed
-//      (an operator told "done" is in the fsynced journal, §8.4), the journal half again before release,
-//      and the marker removed.
+//      (an operator told "done" is in the fsynced journal, §8.4), the journal half again before release, on every
+//      outcome, not only rc 0 (D-4232), and the marker removed.
 // The result is ONE JSON line, `{"rc":<EXIT>}` or `{"rc":<EXIT>,"reason":"<REASONS key>"}`, printed LAST,
 // which the CLI relays (§8.4); the process exits with that rc. A held lock never reaches here: the shim
 // answers 75 for an --op pass (§5.1).
@@ -3938,9 +3946,9 @@ function opThrowResult(e, result) {
 
 /** One --op pass: see the block comment above. The pass's contract is ONE {"rc":…} line, printed LAST, on EVERY
  *  path (Task 26F item 5, completed by the final review's FR2-c). `opPass` answers it for a throw inside its try;
- *  this wrapper answers it for the throws that leave `opPass` BEFORE that try opens (the journal half at lock take,
- *  the dry run, openStore's removeStaleTemps and createStore), which used to reach main()'s catch with no result
- *  line at all, so the CLI relayed nothing. */
+ *  this wrapper answers it for the throws that leave `opPass` BEFORE its store is opened (the journal half at lock
+ *  take, the dry run, the release half itself), which used to reach main()'s catch with no result line at all, so the
+ *  CLI relayed nothing; openStore's own throws are answered inside opPass, after its release half (review 316 F19). */
 export async function runOpPass(parsed, deps, out) {
   try {
     return await opPass(parsed, deps, out);
@@ -3999,17 +4007,36 @@ async function opPass(parsed, deps, out) {
     return result(EXIT.INTERNAL);
   }
   const free = await statfsWithDeadline(probePath(P, home), STATFS_DEADLINE_MS, deps.statfs);
-  if (free.state === 'unsettled') return result(EXIT.DB, 'store-unreachable');
-  const opened = openStore(home, P, role, deps);
+  // §9.2 "An --op pass runs the journal half too" (D-4232): the half at release runs before EVERY answer from here on,
+  // not only rc 0. A failed one is said (and counted on an open store, §9.10 "Journal append") and replaces only an rc 0:
+  // a refusal keeps its word, as holdPass keeps a hold's. `counted` is true when the outcome is itself a counted journal
+  // failure, so it is not counted or said twice.
+  const released = (rc, reason, db = null, ids = idsFromFiles(P), counted = false) => {
+    if (runJournalHalf(home, ids, now)) {
+      if (!counted) {
+        if (db !== null) bump(db, 'journal_write_failed');
+        out('history-sweep: journal-unwritable');
+      }
+      if (rc === EXIT.OK) return result(EXIT.INTERNAL);
+    }
+    return result(rc, reason);
+  };
+  if (free.state === 'unsettled') return released(EXIT.DB, 'store-unreachable');
+  let opened;
+  try {
+    opened = openStore(home, P, role, deps);
+  } catch (e) {
+    return opThrowResult(e, (rc, reason) => released(rc, reason));
+  }
   if ('word' in opened) {
-    if (parsed.op === 'migrate' && opened.word === 'schema-newer') return result(EXIT.REFUSED, 'migrate-refused');
-    return REASONS[opened.word] === EXIT.DB ? result(EXIT.DB, opened.word) : result(EXIT.INTERNAL);
+    if (parsed.op === 'migrate' && opened.word === 'schema-newer') return released(EXIT.REFUSED, 'migrate-refused');
+    return REASONS[opened.word] === EXIT.DB ? released(EXIT.DB, opened.word) : released(EXIT.INTERNAL);
   }
   const { db, ids } = opened;
   try {
     if (ids === null) {
       out('history-sweep: store.writer cannot be read, so nothing this pass decides could be journaled');
-      return result(EXIT.DB, 'store-unmeasured');
+      return released(EXIT.DB, 'store-unmeasured', db, ids);
     }
     if (parsed.op === 'import' && parsed.rosterUnreadable) {
       // D-4313 (history-import-refusal-words): counted and refused before any listing or admission, every import form
@@ -4017,32 +4044,29 @@ async function opPass(parsed, deps, out) {
       // --op migrate does not need the roster.
       bump(db, 'roster_unreadable');
       out('history-sweep: accounts.sh could not be read, so no home is known; nothing imported');
-      return result(EXIT.REFUSED, 'roster-unreadable');
+      return released(EXIT.REFUSED, 'roster-unreadable', db, ids);
     }
     writeOpMarker(P, parsed.op, now());
     if (!flushFirst(db, home, ids, now)) {
       out('history-sweep: journal-unwritable');
-      return result(EXIT.INTERNAL);
+      return released(EXIT.INTERNAL, undefined, db, ids, true);
     }
     clearDoneMarkers(home, opened.stored);
-    if (parsed.op === 'import' && opened.stored !== opened.code) return result(EXIT.DB, 'migration-pending');
+    if (parsed.op === 'import' && opened.stored !== opened.code) return released(EXIT.DB, 'migration-pending', db, ids);
     const ctx = passCtx({ home, P, ids, parsed, now, out, deps, pause: null, ingest: true });
     const r = parsed.op === 'migrate' ? migrateOp(db, ctx, opened, free) : await importApply(db, ctx, P, args);
-    if (r.rc === EXIT.OK) {
-      flushOutbox(db, home, ids, now());
-      if (runJournalHalf(home, ids, now)) throw new JournalError('append-failed');   // the half at release
-    }
-    return result(r.rc, r.reason);
+    if (r.rc === EXIT.OK) flushOutbox(db, home, ids, now());   // D-4225: only an rc 0 is told "done"
+    return released(r.rc, r.reason, db, ids);
   } catch (e) {
     if (e instanceof JournalError) {
       bump(db, 'journal_write_failed');
       out('history-sweep: journal-unwritable');
-      return result(EXIT.INTERNAL);
+      return released(EXIT.INTERNAL, undefined, db, ids, true);
     }
     // The pass's contract is ONE {"rc":…} line, printed LAST, on every path (Task 26F item 5): the CLI relays it, so a
     // throw that reached main()'s own catch ended stdout with no line at all (opThrowResult; runOpPass's wrapper
     // answers the throws that precede this try).
-    return opThrowResult(e, result);
+    return opThrowResult(e, (rc, reason) => released(rc, reason, db, ids));
   } finally {
     removeEntry(P.op);
     closeWriter(db);

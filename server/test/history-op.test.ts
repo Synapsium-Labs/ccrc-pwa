@@ -675,9 +675,9 @@ describe('O49: confirmation timing', () => {
     const box = boundBox('ccrc-hist-o49e-');
     plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
     spoolLine(box, ID, startup(U1));                                      // no reg: the observation must name it
-    // An --op pass that ends BEFORE its release half: the driver's v2 makes `import --apply` answer
-    // migration-pending right after the store opens, so only the lock-take journal half can have renamed and
-    // observed the file (U1). The store stays at v1, so the scheduled passes below run as before.
+    // An --op pass that never ticks: the driver's v2 makes `import --apply` answer migration-pending right after the
+    // store opens, so only the journal halves (at lock take and, since RF5a, at release) rename and observe the file
+    // (U1). The store stays at v1, so the scheduled passes below run as before.
     const op = runDriver(box, { extraMigrations: [V2] }, ['--op', 'import', '--apply']);
     expect(op.code, op.stderr).toBe(5);
     expect(lastResult(op.stdout)).toEqual({ rc: 5, reason: 'migration-pending' });
@@ -687,6 +687,54 @@ describe('O49: confirmation timing', () => {
     expect(runSweep(box).code).toBe(0);
     expect(runSweep(box).code).toBe(0);
     expect(epochsOf(box).map((e) => [e.cc_session_uuid, e.cause, e.seq])).toEqual([[U1, 'startup', 1], [U2, 'clear', 2]]);
+  });
+});
+
+describe('RF5a F19: the half at release runs on every --op outcome (§9.2, D-4232)', () => {
+  /** A hook's line landing in spool/ once the pass has taken its lock-take half and made its first probe. */
+  const mid = [{ rel: '.ccrc/history/spool/claude-a-demo.jsonl', text: '\n' + JSON.stringify(startup(U1, { reg: U1 })) + '\n' }];
+  const spooled = (box: HistoryBox): string[] => names(paths(box).spool).filter((n) => n.endsWith('.jsonl'));
+
+  it('a refusal (migration-pending) still renames, observes and journals a line spooled during the pass', () => {
+    const box = boundBox('ccrc-hist-rf5a-19a-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    const op = runDriver(box, { extraMigrations: [V2], afterFirstStatfs: mid }, ['--op', 'import', '--apply']);
+    expect(op.code, op.stderr).toBe(5);
+    expect(lastResult(op.stdout)).toEqual({ rc: 5, reason: 'migration-pending' });
+    expect(spooled(box), 'the release half renamed it').toEqual([]);
+    const held = draining(box);
+    expect(held).toHaveLength(1);
+    expect(names(paths(box).draining), 'observed: its .obs beside it').toContain(held[0]!.replace(/\.jsonl$/, '.obs'));
+    expect(recs(box).filter((r) => r.k === 'file' && r['name'] === held[0]), 'journaled: a file record').toHaveLength(1);
+    expect(recs(box).filter((r) => r.k === 'spool'), 'and its spool record').toHaveLength(1);
+  });
+
+  it('a release half that fails keeps the refusal\'s word, says journal-unwritable and counts it', () => {
+    const box = boundBox('ccrc-hist-rf5a-19b-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    const before = counter(box, 'journal_write_failed');
+    // The one-shot ENOSPC meets the first journal append of the pass: the lock-take half has nothing to journal and
+    // flushFirst writes nothing for an empty outbox, so it is the release half's.
+    const op = runDriver(box, { extraMigrations: [V2], afterFirstStatfs: mid }, ['--op', 'import', '--apply'],
+      { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_ENOSPC: '/journal/' } });
+    expect(op.code, op.stderr).toBe(5);
+    const last = op.stdout.replace(/\r/g, '').split('\n').filter((l) => l.trim() !== '').pop();
+    expect(last).toBe('{"rc":5,"reason":"migration-pending"}');
+    expect(op.stdout).toMatch(/^history-sweep: journal-unwritable$/m);
+    expect(counter(box, 'journal_write_failed') - before).toBe(1);
+    const held = draining(box);
+    expect(held, 'held in .draining/').toHaveLength(1);
+    expect(names(paths(box).draining)).toContain(held[0]!.replace(/\.jsonl$/, '.obs'));
+  });
+
+  it('CONTROL: --op migrate with nothing to migrate journals the same mid-pass line', () => {
+    const box = boundBox('ccrc-hist-rf5a-19c-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    const op = runDriver(box, { afterFirstStatfs: mid }, ['--op', 'migrate']);
+    expect(op.code, op.stderr).toBe(0);
+    expect(lastResult(op.stdout)).toEqual({ rc: 0 });
+    expect(spooled(box)).toEqual([]);
+    expect(recs(box).filter((r) => r.k === 'spool'), 'the line is journaled').toHaveLength(1);
   });
 });
 

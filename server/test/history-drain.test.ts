@@ -43,6 +43,7 @@ interface Sweep {
   setAsideOversize(db: DatabaseSync, home: string, name: string): boolean;
   tidyDraining(home: string): { nonRegular: number; malformed: number };
   ensureSpoolDirs(home: string): boolean;
+  renameSpoolFiles(home: string, tickMs: number, pid: number): string[];
 }
 let SW: Sweep;
 beforeAll(async () => { SW = (await import('../../ccd/history/sweep.mjs')) as unknown as Sweep; });
@@ -340,6 +341,31 @@ describe('draining names (spec §5.1 SPOOL_ID_MAX, §9.2 step 1)', () => {
       fs.writeFileSync(path.join(DRAIN(box.home), n), '');
     }
     expect(SW.listDraining(box.home)).toEqual(['x.900.99.jsonl', 'x.900.100.jsonl', 'x.1000.7.jsonl', 'x.1100.1.jsonl']);
+  });
+
+  it('two renames in one millisecond never replace a draining file: the second waits in spool/ (§9.2 "never reused")', () => {
+    const box = makeHistoryBox('ccrc-hist-reuse-', { role: 'fleet' });
+    fs.mkdirSync(SPOOL(box.home), { recursive: true, mode: 0o700 });
+    const spooled = path.join(SPOOL(box.home), 'claude-a-demo.jsonl');
+    fs.writeFileSync(spooled, '\n{"first":1}\n');
+    expect(SW.renameSpoolFiles(box.home, 1000, 7)).toEqual(['claude-a-demo.1000.7.jsonl']);
+    fs.writeFileSync(spooled, '\n{"second":2}\n');
+    expect(SW.renameSpoolFiles(box.home, 1000, 7), 'the name is taken: nothing is renamed onto it').toEqual([]);
+    expect(fs.readFileSync(path.join(DRAIN(box.home), 'claude-a-demo.1000.7.jsonl'), 'utf8')).toContain('first');
+    expect(fs.readFileSync(spooled, 'utf8'), 'the line waits for the next half').toContain('second');
+    expect(SW.renameSpoolFiles(box.home, 1001, 7)).toEqual(['claude-a-demo.1001.7.jsonl']);
+    expect(fs.readFileSync(path.join(DRAIN(box.home), 'claude-a-demo.1001.7.jsonl'), 'utf8')).toContain('second');
+  });
+
+  it('a draining name whose observation sidecar is present is taken too: the rename waits (§9.2 "never reused")', () => {
+    const box = makeHistoryBox('ccrc-hist-reuse-obs-', { role: 'fleet' });
+    fs.mkdirSync(SPOOL(box.home), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(DRAIN(box.home), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(DRAIN(box.home), 'claude-a-demo.2000.7.obs'), 'kept');
+    fs.writeFileSync(path.join(SPOOL(box.home), 'claude-a-demo.jsonl'), '\n{"x":1}\n');
+    expect(SW.renameSpoolFiles(box.home, 2000, 7)).toEqual([]);
+    expect(fs.existsSync(path.join(SPOOL(box.home), 'claude-a-demo.jsonl'))).toBe(true);
+    expect(fs.readFileSync(path.join(DRAIN(box.home), 'claude-a-demo.2000.7.obs'), 'utf8'), 'the .obs is never inherited or replaced').toBe('kept');
   });
 });
 
