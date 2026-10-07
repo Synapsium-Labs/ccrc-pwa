@@ -7,9 +7,9 @@
 // The RULE is `shared/`-wide, and it is stated as the rule rather than as a
 // fact about this file: `shared/` is the tree the PWA bundles from, so a
 // `node:*` import here is a defect the day a PWA module first imports this one.
-// Nothing under `pwa/src` imports this file TODAY (it reaches for `shared/api`
-// and `shared/roster`), and saying otherwise would be a false fact sitting next
-// to a true rule — this repo reads its comments as history.
+// Since centralised-update wave 14 `pwa/src` does import it, through
+// `shared/update-move.ts` (UPDATE_OP; D-4266), so the rule is now also a fact
+// about a bundled file — this repo reads its comments as history.
 import type { BuildInfo } from './buildinfo.js';
 import { isReleaseTag, isRequestKind, type InFlightReport, type RequestKind } from './api.js';
 
