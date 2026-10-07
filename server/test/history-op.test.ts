@@ -11,6 +11,7 @@
 // this box's disk never decides a case; tmux, gh, ssh, the managers and curl are poisoned by makeHistoryBox.
 import { describe, it, expect, beforeEach } from 'vitest';
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -583,5 +584,57 @@ describe('O49: confirmation timing', () => {
     expect(runSweep(box).code).toBe(0);
     expect(runSweep(box).code).toBe(0);
     expect(epochsOf(box).map((e) => [e.cc_session_uuid, e.cause, e.seq])).toEqual([[U1, 'startup', 1], [U2, 'clear', 2]]);
+  });
+});
+
+// §9.6 op-running (Task 25 review round 1, F1): the marker `<verb> <pid> <start_ms>` that an --op pass writes under
+// the lock and that every pass's store open sweeps when it is stale. The pass that died holds the only live
+// evidence of the written marker (a clean exit removes it), so the kill preload leaves one behind.
+describe('the op marker (§9.6)', () => {
+  const opFile = (box: HistoryBox): string => path.join(paths(box).root, 'op');
+  const dead = (pid: number): boolean => { try { process.kill(pid, 0); return false; } catch (e) { return (e as NodeJS.ErrnoException).code === 'ESRCH'; } };
+
+  it('an --op pass writes `<verb> <pid> <start_ms>` once it holds the lock; a scheduled pass then removes it, the pass being dead', () => {
+    const box = boundBox('ccrc-hist-opm-a-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000000c1', 'marker words', iso(0))]);
+    expect(fs.existsSync(opFile(box)), 'CONTROL: no marker before the pass').toBe(false);
+    const t0 = Date.now();
+    // SIGKILL right after the first FULL commit (the mapping verdict): the pass wrote its marker, never reached its exit.
+    const killed = runShim(box, ['--op', 'import', '--apply'],
+      { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_KILL_AFTER_COMMIT: '2:1' } });
+    expect(killed.code, 'killed mid-pass').toBeNull();
+    expect(fs.existsSync(opFile(box)), 'the marker stands while the pass runs').toBe(true);
+    const text = fs.readFileSync(opFile(box), 'utf8');
+    const m = /^import ([1-9][0-9]*) ([0-9]+)\n$/.exec(text);
+    expect(m, JSON.stringify(text)).not.toBeNull();
+    expect(Number(m![2]), 'the start time is the pass clock').toBeGreaterThanOrEqual(t0 - 1000);
+    expect(Number(m![2])).toBeLessThanOrEqual(Date.now() + 1000);
+    expect(dead(Number(m![1])), 'the pid names the killed pass').toBe(true);
+    expect(fs.statSync(opFile(box)).mode & 0o777, 'a 0600 file').toBe(0o600);
+    const next = runSweep(box);
+    expect(next.code, next.stderr).toBe(0);
+    expect(fs.existsSync(opFile(box)), 'a scheduled pass removes a dead pid\'s marker').toBe(false);
+  });
+
+  it('a scheduled pass removes a malformed marker and keeps one naming a live pid', () => {
+    const box = boundBox('ccrc-hist-opm-b-');
+    for (const junk of ['garbage', '', 'import 4242', 'import 0 1700000000000\n']) {
+      fs.writeFileSync(opFile(box), junk);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      expect(fs.existsSync(opFile(box)), `a marker of ${JSON.stringify(junk)} names no live pid`).toBe(false);
+    }
+    // A pid that exited: spawn a child, let it finish, plant its pid.
+    const gone = spawnSync(process.execPath, ['-e', '0']);
+    expect(dead(gone.pid!), 'CONTROL: the child is gone').toBe(true);
+    fs.writeFileSync(opFile(box), `import ${gone.pid} 1700000000000\n`);
+    expect(runSweep(box).code).toBe(0);
+    expect(fs.existsSync(opFile(box)), 'a dead pid\'s marker is stale').toBe(false);
+    const live = `migrate ${process.pid} 1700000000000\n`;               // this test process is alive
+    fs.writeFileSync(opFile(box), live);
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.readFileSync(opFile(box), 'utf8'), 'a live pid\'s marker is another pass\'s, and stands').toBe(live);
   });
 });

@@ -1845,3 +1845,25 @@ describe('sidecarIndexText: redact the window, then cut (D-4312, spec 8.3)', () 
     expect(libRows.ftsTextOf(body, 'sidecar') === libRows.sidecarIndexText(body, null)).toBe(true);   // a boolean: a failed toBe would diff 512 KiB
   });
 });
+
+// ===========================================================================
+// Task 25 review round 1 (F1): the op marker's one grammar, `<verb> <pid> <start_ms>` (§9.6 op-running). Task 28's
+// status reads it through this parser, and a pass's stale-marker sweep decides on its null.
+// ===========================================================================
+describe('lib: parseOpMarker (plan task 25)', () => {
+  it('accepts <verb> <pid> <start_ms>, with or without the trailing newline the writer adds', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.parseOpMarker('import 4242 1700000000000\n')).toEqual({ verb: 'import', pid: 4242, startMs: 1700000000000 });
+    expect(lib.parseOpMarker('migrate 1 0')).toEqual({ verb: 'migrate', pid: 1, startMs: 0 });
+  });
+
+  it('rejects every other shape as null: a stale marker names no live pid', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    for (const bad of ['', '\n', 'import', 'import 4242', 'import 0 1700000000000', 'import -4 1700000000000',
+      'import 4242 -1', 'import 4242 1.5', 'Import 4242 1700000000000', 'import  4242 1700000000000',
+      'import 4242 1700000000000 extra', 'import 4242 1700000000000\nimport 4243 1', 'import 12345678901 1',
+      `${'a'.repeat(33)} 4242 1`, 'import abc 1']) {
+      expect(lib.parseOpMarker(bad), JSON.stringify(bad)).toBeNull();
+    }
+  });
+});
