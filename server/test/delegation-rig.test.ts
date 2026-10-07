@@ -2008,13 +2008,15 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(snap(base)).toBe(before);
   });
 
-  // The index is the file's place among its directory's `*.json` REGULAR FILES in CODE-UNIT order (the order `LC_ALL=C ls` gives over
-  // them; an entry that is not a regular file is not counted: the F6 rows below). Every one of a version's
+  // The index is the file's place among its directory's `*.json` REGULAR FILES in UTF-16 CODE-UNIT order (the same as `LC_ALL=C ls` gives
+  // over them only for BMP-only names; an entry that is not a regular file is not counted: the F6 rows below). Every one of a version's
   // fixtures is copied in with residue planted under a key that names it, so each finding pairs an index with a file: an index
   // taken in another order (a locale's punctuation-blind order swaps `wf-iso-resume.json` and `wf-iso.json`: `-` < `.` by code
-  // unit), or a fixed one, misnames a file. Deleting `jsonIn`'s `.sort()` is an EQUIVALENT mutant under Node: `readdirSync`
-  // already returns names in `strcmp` order (libuv sorts scandir; measured: `ls -U` lists the same directory otherwise), so no
-  // row can red it; the `.sort()` states the order the index promises (per-task re-review n1/n2 and re-review 2 m2).
+  // unit), or a fixed one, misnames a file. Deleting `namesIn`'s `.sort()` (it was `jsonIn`'s until review 318 F2) is an EQUIVALENT
+  // mutant under Node: `readdirSync` already returns names in `strcmp` order (libuv sorts scandir; measured: `ls -U` lists the same
+  // directory otherwise), and the only names that order and UTF-16 code-unit order place differently are non-ASCII ones, every one of
+  // which is a `(fixture file name)` finding of one text, so no row can red it; the `.sort()` states the order the index promises
+  // (per-task re-review n1/n2 and re-review 2 m2).
   it('--scan names a file by its place in the code-unit-sorted list of its directory: every fixture of a version, each planted, pairs index and file exactly (F9)', () => {
     const { dir, v } = plantedCorpus(() => {});
     const names = fs.readdirSync(path.join(CORPUS, v)).filter((n) => n.endsWith('.json'));
@@ -2135,6 +2137,146 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     const both = scanRun('--scan', planted.dir);
     expect(both.status).toBe(1);
     expect(both.stderr).toBe(`sanitize: residue in ${v}/#0 (fixture file name)\n`);
+  });
+
+  // Review 318 F2: `--scan` read a directory's names as strings, so a name that is not valid UTF-8 came back as U+FFFD, `isFile`/`isDir`
+  // statted a path that does not exist and answered false, and the entry was skipped as though it were not a regular file: `\xff.json`
+  // holding residue gave "no residue", rc 0, where `Bad.json` gave rc 1. EVERY entry whose name is not valid UTF-8, at the top or
+  // immediately inside a version directory, whatever its type or suffix, is now a finding `#<j> (entry name not UTF-8)` (`<version>/#<j> ...`
+  // inside a version directory), `j` its place among THAT directory's such entries, never its bytes. These rows make the names with Buffer
+  // paths; a filesystem that refuses such a name (macOS APFS answers EILSEQ) skips a row, decided by the create throwing and by nothing else.
+  const badAt = (dir: string, bytes: number[]): Buffer => Buffer.concat([Buffer.from(`${dir}/`), Buffer.from(bytes)]);
+  const mustMake = (ctx: { skip: () => unknown }, make: () => void): void => { try { make(); } catch { ctx.skip(); } };
+  const scanRunBytes = (dir: string): { status: number | null; stdout: Buffer; stderr: Buffer } => {
+    const r = spawnSync(process.execPath, [SANITIZE, '--scan', dir]);
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  /** Neither stream carries a byte of the name: no 0xff, no U+FFFD (EF BF BD), and nothing outside ASCII at all (every line here is ASCII). */
+  const noNameBytes = (r: { stdout: Buffer; stderr: Buffer }): void => {
+    for (const out of [r.stdout, r.stderr]) {
+      expect(out.includes(0xff), 'no 0xff byte').toBe(false);
+      expect(out.includes(Buffer.from('\u{FFFD}')), 'no U+FFFD').toBe(false);
+      expect([...out].every((b) => b < 0x80), 'only ASCII').toBe(true);
+    }
+  };
+  const cleanBody = (): string => `${JSON.stringify({ p: 'fine' })}\n`;
+  const residueBody = (): string => `${JSON.stringify({ p: 'x /opt/acme/x' })}\n`;
+  const NOT_UTF8 = '(entry name not UTF-8)';
+  /** A fixtures directory with one version directory `2.1.999` holding `agent-plain.json` (clean). */
+  const oneVersion = (): { dir: string; vdir: string } => {
+    const dir = path.join(mkTmp('ccrc-dlg-scan-'), 'fix');
+    const vdir = path.join(dir, '2.1.999');
+    fs.mkdirSync(vdir, { recursive: true });
+    fs.writeFileSync(path.join(vdir, 'agent-plain.json'), cleanBody());
+    return { dir, vdir };
+  };
+
+  it('--scan fails closed on a file inside a version directory whose name is not valid UTF-8: a redacted finding by index, never skipped, no byte of the name printed (review 318 F2)', (ctx) => {
+    const { dir, vdir } = oneVersion();
+    mustMake(ctx, () => fs.writeFileSync(badAt(vdir, [0xff, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]), residueBody()));   // \xff.json, residue in its body
+    const r = scanRunBytes(dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr.toString()).toBe(`sanitize: residue in 2.1.999/#0 ${NOT_UTF8}\n`);
+    expect(r.stdout.toString()).toBe('');
+    noNameBytes(r);
+  });
+
+  it('--scan fails closed on a version directory whose name is not valid UTF-8, and does not descend into it: a redacted finding by index (review 318 F2)', (ctx) => {
+    const { dir } = oneVersion();
+    mustMake(ctx, () => {
+      fs.mkdirSync(badAt(dir, [0xfe, 0xff]));
+      fs.writeFileSync(Buffer.concat([badAt(dir, [0xfe, 0xff]), Buffer.from('/agent-plain.json')]), residueBody());
+    });
+    const r = scanRunBytes(dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr.toString(), 'one finding: the residue behind the bad name is not read, the valid version is clean').toBe(`sanitize: residue in #0 ${NOT_UTF8}\n`);
+    expect(r.stdout.toString()).toBe('');
+    noNameBytes(r);
+  });
+
+  it('--scan fails closed on a plain file at the top of the fixtures directory whose name is not valid UTF-8, beside a clean matrix.json (review 318 F2)', (ctx) => {
+    const dir = mkTmp('ccrc-dlg-scan-');
+    fs.writeFileSync(path.join(dir, 'matrix.json'), cleanBody());
+    mustMake(ctx, () => fs.writeFileSync(badAt(dir, [0xfe, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]), residueBody()));   // \xfe.json
+    const r = scanRunBytes(dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr.toString()).toBe(`sanitize: residue in #0 ${NOT_UTF8}\n`);
+    expect(r.stdout.toString()).toBe('');
+    noNameBytes(r);
+  });
+
+  it('--scan names a valid entry by the index it has with no non-UTF-8 sibling: a bad name that sorts first, at the top, among the version directories and among a version\'s files, shifts nothing (review 318 F2)', (ctx) => {
+    const dir = path.join(mkTmp('ccrc-dlg-scan-'), 'fix');
+    const vdir = path.join(dir, '2.1.999');
+    fs.mkdirSync(vdir, { recursive: true });
+    fs.mkdirSync(path.join(dir, 'latest'));                                         // a directory that is not a version: #1 among the directories
+    fs.writeFileSync(path.join(dir, 'matrix.json'), residueBody());                       // #0 at the top
+    fs.writeFileSync(path.join(vdir, 'agent-plain.json'), cleanBody());                 // #0 in the version
+    fs.writeFileSync(path.join(vdir, 'zz.json'), residueBody());                          // #1 in the version
+    const alone = scanRunBytes(dir);
+    const expected = ['sanitize: residue in #0 /p', 'sanitize: residue in 2.1.999/#1 /p', 'sanitize: residue in #1 (version directory name)'];
+    expect(alone.status).toBe(1);
+    expect(alone.stderr.toString().trimEnd().split('\n'), 'the baseline, with no bad sibling').toEqual(expected);
+    // `0` + 0xff sorts before every letter and before `2.1.999`: by byte or by code unit, ahead of each valid sibling
+    mustMake(ctx, () => {
+      fs.writeFileSync(badAt(dir, [0x30, 0xff, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]), residueBody());   // top file `0\xff.json`
+      fs.mkdirSync(badAt(dir, [0x30, 0xff]));                                          // top directory `0\xff`
+      fs.writeFileSync(badAt(vdir, [0x30, 0xff, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]), residueBody());  // version file `0\xff.json`
+    });
+    const r = scanRunBytes(dir);
+    expect(r.status).toBe(1);
+    const lines = r.stderr.toString().trimEnd().split('\n');
+    expect(lines.filter((l) => !l.endsWith(NOT_UTF8)), 'every valid entry keeps its index').toEqual(expected);
+    expect(lines.filter((l) => l.endsWith(NOT_UTF8))).toEqual([`sanitize: residue in #0 ${NOT_UTF8}`, `sanitize: residue in #1 ${NOT_UTF8}`, `sanitize: residue in 2.1.999/#0 ${NOT_UTF8}`]);
+    // and a directory's non-UTF-8 findings come first among that directory's own, before its file findings
+    expect(lines).toEqual([
+      `sanitize: residue in #0 ${NOT_UTF8}`, `sanitize: residue in #1 ${NOT_UTF8}`, 'sanitize: residue in #0 /p',
+      `sanitize: residue in 2.1.999/#0 ${NOT_UTF8}`, 'sanitize: residue in 2.1.999/#1 /p', 'sanitize: residue in #1 (version directory name)',
+    ]);
+    noNameBytes(r);
+  });
+
+  it('--scan counts a directory\'s non-UTF-8 entries among themselves, in byte order, and not among its valid ones: two bad files around a valid one are #0 and #1, and a valid file named U+FFFD is neither (review 318 F2)', (ctx) => {
+    const { dir, vdir } = oneVersion();
+    fs.writeFileSync(path.join(vdir, '\u{FFFD}.json'), cleanBody());   // valid UTF-8 (EF BF BD): what a lossy decode of `\xff.json` would spell
+    mustMake(ctx, () => {
+      fs.writeFileSync(badAt(vdir, [0xff, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]), residueBody());   // \xff.json, after agent-plain.json
+      fs.writeFileSync(badAt(vdir, [0x30, 0xff, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]), residueBody());   // 0\xff.json, before it
+    });
+    const r = scanRunBytes(dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr.toString(), 'agent-plain.json is clean and unnamed; the bad ones are #0 and #1, not #0 and #2; the U+FFFD file is #1 among the valid ones, once').toBe(`sanitize: residue in 2.1.999/#0 ${NOT_UTF8}\nsanitize: residue in 2.1.999/#1 ${NOT_UTF8}\nsanitize: residue in 2.1.999/#1 (fixture file name)\n`);
+    noNameBytes(r);
+  });
+
+  it('--scan makes a finding of every kind of entry whose name is not valid UTF-8, whatever its suffix: a directory, a dangling link, a link to a fixture, a file with no `.json` (review 318 F2)', (ctx) => {
+    const { base, dir, vdir } = (() => { const o = oneVersion(); return { ...o, base: path.dirname(o.dir) }; })();
+    fs.writeFileSync(path.join(base, 'target.json'), residueBody());
+    mustMake(ctx, () => {
+      fs.mkdirSync(badAt(vdir, [0xff]));                                                           // a directory
+      fs.symlinkSync(path.join(vdir, 'no-such-target'), badAt(vdir, [0xfe, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]));   // a dangling link named `*.json`
+      fs.symlinkSync(path.join(base, 'target.json'), badAt(vdir, [0xfd, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]));      // a link to a fixture holding residue
+      fs.writeFileSync(badAt(vdir, [0xfc]), 'not json\n');                                           // a file with no suffix
+      fs.writeFileSync(badAt(vdir, [0xfb, 0x2e, 0x74, 0x78, 0x74]), 'not json\n');                   // a `.txt` file
+    });
+    const r = scanRunBytes(dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr.toString(), 'five bad entries, #0 to #4; the link to a fixture is not read as one').toBe([0, 1, 2, 3, 4].map((j) => `sanitize: residue in 2.1.999/#${j} ${NOT_UTF8}\n`).join(''));
+    noNameBytes(r);
+  });
+
+  it('--scan does not call a valid UTF-8 name bad: a name with a non-ASCII letter, with U+FFFD itself, and with a leading BOM stay (fixture file name) findings, and a BOM-led directory is not read as its BOM-less twin (review 318 F2)', () => {
+    const { dir, vdir } = oneVersion();
+    fs.writeFileSync(path.join(vdir, '\u{E9}.json'), cleanBody());           // é
+    fs.writeFileSync(path.join(vdir, '\u{FFFD}.json'), cleanBody());         // the character U+FFFD, a valid name (EF BF BD)
+    fs.writeFileSync(path.join(vdir, '\u{FEFF}x.json'), cleanBody());        // a leading BOM is a name character, not a marker to strip
+    fs.mkdirSync(path.join(dir, '\u{FEFF}2.1.998'));
+    fs.writeFileSync(path.join(dir, '\u{FEFF}2.1.998', 'agent-plain.json'), residueBody());
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    // sorted by code unit: agent-plain, é (E9), BOM-x (FEFF), U+FFFD (FFFD); the directories: 2.1.999, then the BOM-led one
+    expect(r.stderr).toBe('sanitize: residue in 2.1.999/#1 (fixture file name)\nsanitize: residue in 2.1.999/#2 (fixture file name)\nsanitize: residue in 2.1.999/#3 (fixture file name)\nsanitize: residue in #1 (version directory name)\n');
+    expect(r.stderr).not.toContain('not UTF-8');
   });
 
   it('--scan of a directory with nothing to scan fails (a mistyped path must not pass): exit 1, one fixed line (F9)', () => {

@@ -65,12 +65,20 @@
 // its version directories: the fixtures and matrix.json), so a fixture committed with residue in it is found; see `scanCorpus`.
 // It names a file by `<version>/#<index>` (or `#<index>`), never by its name, and refuses a file name by the test `main` applies to a
 // scenario name: the NAME shape AND no residue in it. The index counts the directory's `*.json` entries that are REGULAR FILES (a
-// stat, so a link to one counts), in code-unit order: the order `LC_ALL=C ls` gives over those entries (a UTF-8 locale's `ls` may
-// differ). An entry named `*.json` that is not a regular file is not counted, so a later file's index is not the one `ls` would give
-// it, and no FILE finding names it: a directory of that name inside a version directory, and a dangling link anywhere, produce no
-// finding at all, and one in the top directory is judged as a version directory, whose name fails VERSION (a finding `#<i>
-// (version directory name)`). That finding `#<i>`, for a directory whose name fails VERSION, counts among the directories, a sequence of
-// its own, told apart from a file finding only by its suffix; a directory whose name passes is named by its text.
+// stat, so a link to one counts), in UTF-16 code-unit order, the same as `LC_ALL=C ls` gives over those entries only for names in the
+// Basic Multilingual Plane (BMP-only names; a UTF-8 locale's `ls` may differ). An entry named `*.json` that is not a regular file is not
+// counted, so a later file's index is not the one `ls` would give it, and no FILE finding names it: a directory of that name inside a
+// version directory, and a dangling link anywhere, produce no finding at all, and one in the top directory is judged as a version
+// directory, whose name fails VERSION (a finding `#<i> (version directory name)`). That finding `#<i>`, for a directory whose name fails
+// VERSION, counts among the directories, a sequence of its own, told apart from a file finding only by its suffix; a directory whose
+// name passes is named by its text.
+// An entry whose NAME is not valid UTF-8, at the top or immediately inside a version directory, is none of those (review 318 F2): a file,
+// a directory, a link, whatever its type or suffix, it is a finding `#<j> (entry name not UTF-8)` (`<version>/#<j> (entry name not UTF-8)`
+// inside a version directory), `j` its place among THAT directory's such entries in byte order, a sequence of its own, told apart only by
+// its suffix, listed ahead of that directory's other findings. Its bytes are never printed, it is counted among neither the `*.json` files
+// nor the directories, and a version directory so named is not descended into. `scanCorpus` reads each directory's names as bytes and
+// decodes them with a FATAL decoder for this: a string read turns such a name into U+FFFD, and a stat of that string answers "not a
+// file" and "not a directory", so the entry was skipped.
 // Usage: node sanitize.mjs <raw-root> <fixtures-dir>
 //        node sanitize.mjs --scan <fixtures-dir>
 import fs from 'node:fs';
@@ -355,15 +363,36 @@ function main() {
 // name is not a name (`main`'s own test for a scenario name: the NAME shape AND no residue in it) are findings, and so is a
 // directory with no JSON file in it at all: a mistyped path must not pass as a clean corpus. EVERY finding names a file by
 // `<version>/#<index>` (or `#<index>` for the top directory), never by its name: the index is its place among the directory's
-// `*.json` entries that are REGULAR FILES (`jsonIn`: a stat), sorted by code unit (the order `LC_ALL=C ls` gives over those entries;
-// a UTF-8 locale's `ls` may differ). An entry named `*.json` that is not a regular file is not counted and no file finding names it
-// (a directory of that name in a version directory, and a dangling link anywhere, give no finding at all; one in the top directory is
-// judged as a version directory). A directory whose name FAILS VERSION is named `#<i>` among the directories, a sequence of its own, told
-// apart from a file finding only by its suffix `(version directory name)`; one that passes is named by its digits-and-dots text, and only then.
+// `*.json` entries that are REGULAR FILES (`jsonIn`: a stat), sorted by UTF-16 code unit (the same as `LC_ALL=C ls` gives over those
+// entries only for BMP-only names; a UTF-8 locale's `ls` may differ). An entry named `*.json` that is not a regular file is not counted and
+// no file finding names it (a directory of that name in a version directory, and a dangling link anywhere, give no finding at all; one in
+// the top directory is judged as a version directory). A directory whose name FAILS VERSION is named `#<i>` among the directories, a
+// sequence of its own, told apart from a file finding only by its suffix `(version directory name)`; one that passes is named by its
+// digits-and-dots text, and only then. An entry whose NAME is not valid UTF-8 (review 318 F2), at the top or immediately inside a version
+// directory, is neither counted nor skipped: whatever its type or suffix it is a finding `#<j> (entry name not UTF-8)` (`<version>/#<j> ...`
+// inside a version directory), `j` its place among THAT directory's such entries in byte order, a sequence of its own told apart by its
+// suffix, listed ahead of that directory's other findings, and its bytes are never printed. The names are read as Buffers (`namesIn`) and decoded with a fatal decoder, never as strings,
+// which would turn the name into U+FFFD, a path that does not exist, for `isFile` and `isDir` to answer false about. A version directory
+// so named is not descended into. The decoder keeps a leading BOM (`ignoreBOM`): a name that begins with U+FEFF is a valid name and
+// must reach `isFile`/`isDir` as it is on disk, not with the BOM stripped.
 function scanCorpus(dir) {
   const findings = [];
   const tally = { files: 0, strings: 0, keys: 0 };
-  const jsonIn = (d) => fs.readdirSync(d).sort().filter((n) => n.endsWith('.json') && isFile(path.join(d, n)));
+  const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+  // The names of `d` that are valid UTF-8, in code-unit order; every other entry, of any type, is a finding `<prefix>#<j> (entry name not
+  // UTF-8)` (j counted among those entries, in byte order) and is in no sequence below. Its bytes are never printed. Both `.sort`s state
+  // an order the output promises and neither is observable: `readdirSync` already lists in byte order, a finding carries only its j, and
+  // the only names the byte and code-unit orders place differently are non-ASCII, each a finding of one text.
+  const namesIn = (d, prefix) => {
+    const names = [];
+    const bad = [];
+    for (const b of fs.readdirSync(d, { encoding: 'buffer' })) {
+      try { names.push(utf8.decode(b)); } catch { bad.push(b); }
+    }
+    bad.sort(Buffer.compare).forEach((_, j) => findings.push(`${prefix}#${j} (entry name not UTF-8)`));
+    return names.sort();
+  };
+  const jsonIn = (d, names) => names.filter((n) => n.endsWith('.json') && isFile(path.join(d, n)));
   const readAll = (d, names, prefix) => names.forEach((n, i) => {
     const base = n.slice(0, -'.json'.length);
     if (!NAME.test(base) || residue(base)) { findings.push(`${prefix}#${i} (fixture file name)`); return; }
@@ -372,10 +401,12 @@ function scanCorpus(dir) {
     tally.files += 1;
     scan(f, '', `${prefix}#${i}`, findings, tally);
   });
-  readAll(dir, jsonIn(dir), '');
-  fs.readdirSync(dir).sort().filter((n) => isDir(path.join(dir, n))).forEach((v, vi) => {
+  const top = namesIn(dir, '');
+  readAll(dir, jsonIn(dir, top), '');
+  top.filter((n) => isDir(path.join(dir, n))).forEach((v, vi) => {
     if (!VERSION.test(v)) { findings.push(`#${vi} (version directory name)`); return; }
-    readAll(path.join(dir, v), jsonIn(path.join(dir, v)), `${v}/`);
+    const vdir = path.join(dir, v);
+    readAll(vdir, jsonIn(vdir, namesIn(vdir, `${v}/`)), `${v}/`);
   });
   if (findings.length > 0) {
     for (const x of findings) process.stderr.write(`sanitize: residue in ${x}\n`);
