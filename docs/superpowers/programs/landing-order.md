@@ -602,6 +602,35 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Task 7, in order:** (1) both boxes carry `9a255a74` (the operator applies dev builds from the console; the time
     is recorded here); (2) a trusted full CI run on `main`; (3) Task 7 Steps 1–7 from the wave-2 plan's runbook, canary
     first, with the rollback JSON written before the first ruleset write. Wave 2b follows the proof run.
+- **2026-10-07 00:33 — Task 7's sequence, ruled.** The operator delegated Task 7 to this coordinator on 2026-10-04 ("Run
+  task 7 when you think it's most appropriate").
+  1. **Step 1.** It waits until both boxes run a build containing `9a255a74` (v0.0.111 or later). The trusted full run
+     is 37552120108, a `workflow_dispatch` on `9a255a74` started at 00:28. Then the canary, the census and Step 2's
+     reads.
+  2. **Step 4,** the ruleset write. The coordinator keeps `ruleset-rollback.json` in its evidence folder.
+  3. **(a0) runs FIRST,** on the coordinator's next ledger PR (slot C), before any proof dispatch. If gh refuses
+     because the repository has auto-merge off, that is stop rule 4. The proof halts and the operator decides. The
+     queue stays on meanwhile: the admin bypass keeps every other programme's landing exactly as it was.
+  4. **Only after a clean (a0),** the proof programme `landing-order-proof` is dispatched: three runs, each on a fresh
+     workspace, with ledger `docs/superpowers/programs/landing-order-proof.md`. Their route is the matrix's docs row:
+     Sonnet · medium, Haiku subagents, workflow off.
+  5. **The proof itself:**
+     - (a1) on slot D. The coordinator pushes an empty commit to start D's checks, then enqueues.
+     - The three landings, A, B and C, enqueued within a minute, then readings (a)–(d).
+     - (e) on slot D. The coordinator removes it from the queue with GraphQL's `dequeuePullRequest` (the same removal
+       as the UI's button), then closes D unmerged.
+     - (f) is in slot D's brief: its held worker runs `gh pr merge 248` once and reports the refusal.
+  6. **Step 7** records every reading here, on its own ledger PR.
+  - **Departures from the runbook, and why.**
+    - Three dispatches instead of five. The fleet's rolling daily cap is full (24 of 24 at 00:30), and every proof
+      workspace costs one dispatch. So the coordinator's own ledger PR is landing PR C, and (a1) runs on slot D before
+      (e) instead of on a fifth PR. PR C is a workspace PR, so `is_ours` has a workspace to bind, and it is how every
+      coordinator lands after this runbook.
+    - The proof runs advance to `merging` before they are enqueued. So the lane's `merged:#<pr>` mail is measured
+      too, which the runbook leaves to the first programme landing.
+    - (d) is read before each run's final close, because the close reclaims the child workspace.
+    - (e)'s feed body may not read "No open run names a coordinator to tell", because D's workspace belongs to an
+      open run (at `awaiting-review`, not `merging`). It is recorded as found.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
