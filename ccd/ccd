@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a669e7df1373f2d40364ffe477b3541c0e39c0428e32e07212714713759aadbe
+# ccrc:generated 1 sha256=5dd3d641374a3e7553a0030b28a0fa4fc3fab943ee48bafad623e99ea1a80a22
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28381,6 +28381,34 @@ _ws_leaf_why_line() {   # text -> ONE short line a journal row can carry: printa
   printf '%s' "$c"
 }
 
+# ── the tail's bounded wait for the pane's processes (child reclamation wave 6, spec §5.6) ──
+WS_RECLAIM_TMPROOT_WAIT_S=15   # the longest the reclaim/expiry tail waits, after its kill, for the pane's processes
+#                                to stop using the temp root. Never more than 15 (spec §5.6).
+_ws_reclaim_tmproot_wait_s() {   # -> the bound, whole seconds: WS_RECLAIM_TMPROOT_WAIT_S, or
+  #                                 CCD_RECLAIM_TMPROOT_WAIT_S when that is a whole number BELOW it
+  # THE OVERRIDE ONLY LOWERS — a test's knob, so a case need not sit out 15 s.
+  # A larger value, an empty one, or one that is not a whole number leaves the
+  # bound where it is. `10#` because `08` is not octal here.
+  local b="$WS_RECLAIM_TMPROOT_WAIT_S" o="${CCD_RECLAIM_TMPROOT_WAIT_S-}"
+  if [[ "$o" =~ ^[0-9]{1,6}$ ]] && (( 10#$o < b )); then b=$(( 10#$o )); fi
+  printf '%s' "$b"
+}
+_ws_reclaim_tmproot_quiet() {   # path -> `_ws_path_users`' LAST answer (0/1/2), asked until it says nobody
+  #                                or `_ws_reclaim_tmproot_wait_s` seconds have passed
+  # Asked every quarter second. ON DARWIN the probe answers unmeasured without
+  # looking, so it is asked ONCE: waiting cannot change that answer.
+  local p="$1" bound end rc
+  bound=$(_ws_reclaim_tmproot_wait_s)
+  end=$(( $(_plat_epoch_ms) + bound * 1000 ))
+  while :; do
+    _ws_path_users "$p"; rc=$?
+    (( rc != 0 )) || return 0
+    [[ "$CCD_OS" != darwin ]] || return "$rc"
+    (( $(_plat_epoch_ms) < end )) || return "$rc"
+    sleep 0.25
+  done
+}
+
 _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|'') — the journalled
   #                        destructive sequence for a CHILD. Its OWN arm (spec §5.6), never
   #                        `_ws_reap_tail`: that tail refuses `not-archived` (a child never is) and
@@ -28391,7 +28419,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   local regproject regworkdir reguuid regbranch childlines recorded merged cj first cline cpath crest cbr chead
   local holders wdreal kept=() k keptjson keptall treegone crc killrc dropped
   local noun=reclaim donekey=reclaimed bindkey=childOf
-  local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts
+  local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts tmpq
   [[ "$_WS_RCL_ACT" != expire ]] || { noun=expiry; donekey=expired; bindkey=archivedAt; }
   tomb="$REG/.reaped/$id.json"
   case "$phase" in
@@ -28502,6 +28530,17 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
          "the pane $(_tmux "$id") is still up after the kill (exit $killrc) — nothing further was deleted, and the next attempt kills it again"
        return 1 ;;
   esac
+  # THE PANE'S PROCESSES ARE WAITED FOR, BOUNDED (spec §5.6). The pane is
+  # gone, but its processes need not be: MEASURED 2026-10-04, a straggler with
+  # `TMPDIR=<leaf>` re-created a child's temp root 3.7 s after `reclaim done`.
+  # So the tail asks `_ws_path_users` of the temp root until it answers
+  # nobody, for at most `_ws_reclaim_tmproot_wait_s` seconds, BEFORE anything
+  # further is deleted: the worktree's removal below runs after this wait and
+  # is otherwise unchanged (a writer into a removed worktree path after the
+  # bound is a stated residual). Not a gate: step (6) asks again at the
+  # instant of removal, and in use or unmeasured there, the temp root is KEPT
+  # and said, and the act still completes.
+  _ws_reclaim_tmproot_quiet "$HOME/.cc-tmp/$id" || :   # its answer is re-asked at step (6)
   # THE TOMBSTONE IS THE ONE SOURCE for what this tail deletes, fresh and
   # resumed alike: the fresh arm wrote it a moment ago, the resumed arm finds
   # it. The PROJECT, the WORKDIR and the BRANCH come from it — never from the
@@ -28826,11 +28865,32 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     1) clipskept=refused; clipswhy=$(_ws_leaf_why_line "$_WS_LEAF_WHY") ;;
     *) clipskept=unmeasured; clipswhy=$(_ws_leaf_why_line "$_WS_LEAF_WHY") ;;
   esac
-  _ws_leaf_remove "$HOME/.cc-tmp" "$id"; lfrc=$?
-  case "$lfrc" in
-    0) : ;;
-    1) tmpkept=refused; tmpwhy=$(_ws_leaf_why_line "$_WS_LEAF_WHY") ;;
-    *) tmpkept=unmeasured; tmpwhy=$(_ws_leaf_why_line "$_WS_LEAF_WHY") ;;
+  # THE TEMP ROOT'S USERS ARE ASKED AGAIN, AT THIS INSTANT (spec §5.6): the
+  # wait after the kill delayed everything since, and this is the answer the
+  # removal acts on. Nobody: the helper removes it. In use, or unmeasured (on
+  # Darwin, always): the leaf is KEPT, and said — but only a leaf that STANDS
+  # is kept: over nothing, nothing is recorded. Every reason the row carries
+  # is the probe's or the helper's, through `_ws_leaf_why_line`.
+  # A LINK OR FILE LEAF is no one's temp root (`_child_tmpdir` composes TMPDIR
+  # only for a real directory), and unlinking it touches nothing it names: it
+  # is never kept for its users, on any platform (spec §5.6; wave 3's
+  # recycled-slug rule), so the probe is not asked of it.
+  if [[ -L "$HOME/.cc-tmp/$id" || ( -e "$HOME/.cc-tmp/$id" && ! -d "$HOME/.cc-tmp/$id" ) ]]; then
+    tmpq=0
+  else
+    _ws_path_users "$HOME/.cc-tmp/$id"; tmpq=$?
+  fi
+  case "$tmpq" in
+    0) _ws_leaf_remove "$HOME/.cc-tmp" "$id"; lfrc=$?
+       case "$lfrc" in
+         0) : ;;
+         1) tmpkept=refused; tmpwhy=$(_ws_leaf_why_line "$_WS_LEAF_WHY") ;;
+         *) tmpkept=unmeasured; tmpwhy=$(_ws_leaf_why_line "$_WS_LEAF_WHY") ;;
+       esac ;;
+    1) if _ws_reclaim_absent "$HOME/.cc-tmp/$id"; then :   # nothing stands there: nothing is kept
+       else tmpkept=in-use; tmpwhy=$(_ws_leaf_why_line "still in use after the bounded wait — $_WS_PATH_USERS_WHY"); fi ;;
+    *) if _ws_reclaim_absent "$HOME/.cc-tmp/$id"; then :   # nothing stands there: nothing is kept
+       else tmpkept=unmeasured; tmpwhy=$(_ws_leaf_why_line "$_WS_PATH_USERS_WHY"); fi ;;
   esac
   cword=gone; tword=gone
   [[ -z "$clipskept" ]] || cword="kept ($clipskept)"
@@ -29307,9 +29367,11 @@ _ws_expire_lsof() {   # -> lsof's cwd listing, BOUNDED as the tail bounds its su
 
 _ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working directory at workdir or under it; else
   #                          rc 1: `in-use` (naming the pids and the paths), or unmeasured
-  # AMENDMENT 3 (3962), ASKED OF AN EXPIRY ONLY — a reclaim never meets it (a
-  # finished child's tail kills its pane by design, and a process in its tree is
-  # its run's). `_ws_expire_presence` calls it for the fresh ladder's rung 5 and
+  # AMENDMENT 3 (3962), ASKED OF AN EXPIRY ONLY. A reclaim DOES meet a finished
+  # child's processes — the pane's process tree can outlive the tail's kill
+  # (measured 2026-10-04: a straggler re-created a removed temp root 3.7 s after
+  # `reclaim done`) — but the tail asks `_ws_path_users` of the temp root, after
+  # its kill, instead of this (spec §5.6). `_ws_expire_presence` calls it for the fresh ladder's rung 5 and
   # for the resume where nothing has been stopped yet, and
   # `_ws_expire_resume_eval` asks it ALONE at `worktree` (3964), where the tree
   # may still stand; each hands it the worktree explicitly.

@@ -62,7 +62,8 @@ describe('a fresh reclaim', () => {
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'branch').toBe('');
     for (const field of ['uuid', 'child', 'reaping', 'workdir']) expect(h.reg(CHILD_ID, field), field).toBeNull();
     expect(fs.existsSync(path.join(h.home, '.cc-clips', CHILD_ID)), 'clips').toBe(false);
-    expect(fs.existsSync(path.join(h.home, '.cc-tmp', CHILD_ID)), 'temp root').toBe(false);
+    // Darwin: the in-use probe answers unmeasured there, so the tail KEEPS the temp root (spec §5.6).
+    expect(fs.existsSync(path.join(h.home, '.cc-tmp', CHILD_ID)), 'temp root').toBe(process.platform === 'darwin');
     expect(fs.existsSync(path.join(residue, 'scratch.txt')), 'the residue is MEASURED, never deleted').toBe(true);
 
     // The work is in the attic, read back from git — not from the verb's word.
