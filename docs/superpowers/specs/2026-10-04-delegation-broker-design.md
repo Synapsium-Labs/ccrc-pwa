@@ -186,18 +186,22 @@ fleet state lives under the dotless `$REG/delegation/` — never `lifecycle`.
 journal id of the first event that named it) — deterministic on replay. Upstream ids: `agent_id`;
 workflow run id + worker index; `tool_use_id` where present. Display names are metadata only.
 For a workflow run id + worker index or a `tool_use_id`, that journal component stays the journal id of
-the first event naming the upstream id. For an activity keyed by `agent_id` it is the first QUALIFYING
-evidence, the one that establishes the activity: an Agent launch response or a SubagentStart naming that
-id is an event, and its journal id is used. An agent meta also establishes it, but a meta is a join read
-by point lookup (§5.4 rung 2), not a hook or spool event: it gains no journal event and no writer, and
-its journal id, which does not exist, is never hashed. When a positive meta read establishes the
-activity, the journal component is the earliest retained journal event naming that `agent_id` that the
-meta join makes eligible. Opening waits for that positive read, and replay re-evaluates the retained
-evidence and picks the same earliest event. A tool event whose only delegation evidence is `agent_id`
-does not qualify by itself: it is kept as evidence and opens no activity, and it attaches to the
-activity once a qualifying join for the same `agent_id` is known, whether that join came before it or
-arrives later. No reader decides this by whether `agent_type` is present (amended 2026-10-07 from the
-real-lane cross-check and reviews 318 and 324: ledger amendment `tool-agent-id-alone-is-unjoined-evidence`).
+the first event naming the upstream id. For an activity keyed by `agent_id`, the activity opens only
+once a QUALIFYING join for that id is known: an Agent launch response, a SubagentStart, or a positive
+agent meta read naming it. A meta is a join read by point lookup (§5.4 rung 2), not a hook or spool
+event: it gains no journal event and no writer, and nothing of it is hashed. Whichever join is known
+first, the journal component is the journal id of the earliest retained journal event of the parent
+session, under the same incarnation, that names that `agent_id`: the join authorizes the retained
+evidence, it does not select an identity arm. A launch response or a SubagentStart is such an event
+itself, so on every measured order it is the earliest. Opening waits for the join and, when the join is
+a meta, for at least one such event. Neither the order of the joins nor the time of the meta read
+enters the hash, so replay re-evaluates the same retained evidence and picks the same event. A tool
+event whose only delegation evidence is `agent_id` does not qualify by itself: it is kept as evidence
+and opens no activity, and it attaches to the activity once a qualifying join for the same `agent_id`
+is known, whether that join came before it or arrives later; once one is, it may itself be the earliest
+event the id hashes. No reader decides this by whether `agent_type` is present (amended 2026-10-07 from
+the real-lane cross-check and reviews 318 and 324: ledger amendment
+`tool-agent-id-alone-is-unjoined-evidence`).
 
 **Lease id** = a server-minted UUID plus a generation. Server-side identity: (project, admin record,
 creation base, canonical path). Box-side fingerprint (computed by the verbs, never by the server): git
