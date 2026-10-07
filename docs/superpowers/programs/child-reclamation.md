@@ -46,6 +46,14 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-07 11:33 — stall-watch-settings W1 may also co-edit `server/src/watch.ts` inside claim 1070, in exactly its
+  listed regions (mail 3830, granted on 3815's terms).**
+  - **W1's regions:** its own imports, the stall constants, the fields after `stallWarned`, and the bodies of
+    `sweepStalls` and `sweepMail`.
+  - **Measured:** wave 6 had not edited `watch.ts` at `899e4f12a`. Its Task 12 sites are the `childReclaim.js` import,
+    the accessor after `currentChildMarks()`, `tick()`'s `childMarks` lines and `emitCoord`. The nearest pair is two
+    import lines about 18 lines apart.
+  - amber-river was told to keep Task 12 to its planned sites.
 - **2026-10-07 10:03 — stall-watch-settings W1 (run 295) may co-edit `shared/api.ts` inside claim 1070 by appending at
   its end (mail 3813, granted).**
   - **The grant.** W1 appends one block at the very end and changes no line above it. Claim 1070 stands, and wave 6
