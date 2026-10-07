@@ -15,7 +15,8 @@
 // D-4212 (history-cli-reads-store-version: user_version first, v1 columns only).
 //
 // L4 delivery (§6.4): it MEASURES and hands what it measured to lib.mjs's decisions — decideCliStore, §8.3's
-// no-store table, here; deriveHealth from Task 28. It decides nothing itself.
+// no-store table, here; decideStatusRead, the store-not-wal refusal and the migration word (Task 28F); deriveHealth
+// from Task 28. It decides nothing itself.
 //
 // THE HANDLE IS READ-ONLY (§8.1): store.mjs's openReader (readOnly + query_only). Before any open, after the
 // Darwin and role rows (§8.3), it stats db/history.db asynchronously under CLI_STAT_DEADLINE_MS, so a dead
@@ -33,8 +34,8 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSyn
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  EXIT, COVERAGE, MIGRATION_VERDICTS, SCHEMA_VERSION, UUID_RE, HARNESSES, CLI_STAT_DEADLINE_MS,
-  historyPaths, readBoxEnvValue, decideCliStore, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
+  EXIT, COVERAGE, SCHEMA_VERSION, UUID_RE, HARNESSES, CLI_STAT_DEADLINE_MS,
+  historyPaths, readBoxEnvValue, decideCliStore, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
 } from './lib.mjs';
 import { measureStoreFacts, openReader, userVersion, measuredSize, probeFts5 } from './store.mjs';
 // The health block's own imports (task 28). Namespace imports, so this block
@@ -242,8 +243,8 @@ function readStore(env, P, nowMs) {
     };
     env.store_id = meta.get('store_id') ?? env.store_id;
     env.user_version = uv;
-    const recorded = meta.get('migration');
-    env.migration = uv > SCHEMA_VERSION ? 'refuse-newer' : (MIGRATION_VERDICTS.includes(recorded) ? recorded : 'none');
+    const read = decideStatusRead({ userVersion: uv, journalMode: mode, recordedMigration: meta.get('migration') });
+    env.migration = read.migration;
     env.size_bytes = measuredSize(db, P.dbFile);
     const pause = meta.get('capture_pause');
     env.capture_pause = pause === 'at-cap' || pause === 'low-disk' ? pause : '';
@@ -277,10 +278,7 @@ function readStore(env, P, nowMs) {
       .sort();
     const unreadable = parseJsonOr(meta.get('redact_unreadable'), []);
     env.redact_unreadable = Array.isArray(unreadable) ? unreadable.filter((x) => typeof x === 'string') : [];
-    if (mode !== 'wal') {
-      env.exit = EXIT.DB;
-      env.reason = 'store-not-wal';
-    }
+    decided(env, read);
   } finally {
     db.close();
   }

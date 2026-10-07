@@ -674,6 +674,33 @@ describe('decideCliStore: which no-store answer (spec 8.3 table, C36 pure rows)'
   });
 });
 
+describe('decideStatusRead: the measured store read answers one verdict, in lib (Task 28F item 1, spec 8.3)', () => {
+  const read = (o: Partial<libPlan.StatusReadFacts> = {}): libPlan.StatusReadVerdict => libPlan.decideStatusRead({
+    userVersion: libPlan.SCHEMA_VERSION, journalMode: 'wal', recordedMigration: undefined, ...o,
+  });
+  it('a WAL store at the code version answers exit 0 and migration none, with no reason', () => {
+    expect(read()).toEqual({ exit: libPlan.EXIT.OK, migration: 'none' });
+  });
+  it('a journal mode other than wal answers 5 store-not-wal, the REASONS word and code', () => {
+    for (const mode of ['delete', 'truncate', 'memory', '']) {
+      const v = read({ journalMode: mode });
+      expect([v.exit, v.reason], mode).toEqual([libPlan.REASONS['store-not-wal'], 'store-not-wal']);
+    }
+    expect(libPlan.REASONS['store-not-wal']).toBe(libPlan.EXIT.DB);
+  });
+  it('a stored version newer than the code answers refuse-newer, whatever the sweep recorded', () => {
+    expect(read({ userVersion: libPlan.SCHEMA_VERSION + 1, recordedMigration: 'none' }).migration).toBe('refuse-newer');
+  });
+  it('a recorded verdict that is a MIGRATION_VERDICTS member is carried; anything else is none', () => {
+    for (const w of libPlan.MIGRATION_VERDICTS) expect(read({ recordedMigration: w }).migration).toBe(w);
+    for (const junk of [undefined, '', 'bogus', 'refuse-NEWER']) expect(read({ recordedMigration: junk }).migration, String(junk)).toBe('none');
+  });
+  it('the two decisions are independent: a newer store that is not in WAL answers both', () => {
+    expect(read({ userVersion: libPlan.SCHEMA_VERSION + 1, journalMode: 'delete' }))
+      .toEqual({ exit: libPlan.EXIT.DB, reason: 'store-not-wal', migration: 'refuse-newer' });
+  });
+});
+
 describe('planCopy and planMigration: the migration verdict is L1 (DM41, DM43 pure table)', () => {
   const GiB = 1073741824;
   const threshold = 20 * GiB;

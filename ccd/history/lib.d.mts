@@ -168,6 +168,9 @@ export interface CliStoreFacts {
 }
 export interface CliStoreVerdict { exit: number; reason?: string; read: boolean }
 export function decideCliStore(f: CliStoreFacts): CliStoreVerdict;
+export interface StatusReadFacts { userVersion: number; journalMode: string; recordedMigration: string | undefined }
+export interface StatusReadVerdict { exit: number; reason?: string; migration: MigrationVerdict }
+export function decideStatusRead(f: StatusReadFacts): StatusReadVerdict;
 export function planCopy(i: { freeBytes: number; thresholdBytes: number; sizeBytes: number }): { admit: boolean; needBytes: number | null };
 export function floorThreshold(fsSizeBytes: number, runBudgetBytes?: number): number;
 export function capOf(text: string | null): { gb: number; malformed: boolean };

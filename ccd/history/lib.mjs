@@ -697,6 +697,22 @@ export function decideCliStore(f) {
   return inDb === marker ? { exit: EXIT.OK, read: true } : refuseCli('store-mismatch');
 }
 
+/** The verdict on a store the CLI measured through its read-only handle: §8.3's
+ *  `store-not-wal` refusal (exit 5, a store the writer could not put in WAL) and
+ *  the migration word the envelope carries. `cli.mjs` reads `PRAGMA journal_mode`,
+ *  `user_version` and meta's `migration` and delivers this answer; it decides
+ *  neither (Task 28F, ring rule: delivery measures, lib decides). A stored
+ *  version newer than this build's is `refuse-newer` whatever the sweep recorded;
+ *  otherwise the sweep's recorded word stands when it is a MIGRATION_VERDICTS
+ *  member, and anything else is `none`. The two answers are independent. */
+export function decideStatusRead({ userVersion, journalMode, recordedMigration }) {
+  const migration = userVersion > SCHEMA_VERSION
+    ? 'refuse-newer'
+    : (MIGRATION_VERDICTS.includes(recordedMigration) ? recordedMigration : 'none');
+  if (journalMode !== 'wal') return { exit: REASONS['store-not-wal'], reason: 'store-not-wal', migration };
+  return { exit: EXIT.OK, migration };
+}
+
 /** The one size-aware copy preflight (§6.11): free space must EXCEED the
  *  threshold plus the copy's size, so a copy can never push live transcript
  *  appends below the floor. `doctor --backup`, the pre-migration snapshot,
