@@ -2216,3 +2216,97 @@ describe('history ingest: the FTS index (plan task 23)', () => {
     });
   });
 });
+
+describe('FR2-d (D-4340): a read error on one admitted file is that file\'s, never the tick\'s', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  let S: IxSweep;
+  beforeAll(async () => { ({ sweep: S } = await IX.api()); });
+  const counterOf = (db: DatabaseSync, name: string): number | undefined =>
+    (db.prepare('SELECT n FROM counters WHERE name = ?').get(name) as { n: number } | undefined)?.n;
+  /** readSync cannot be faulted in a spawned pass (the faults preload has no read event), so it is faulted in this
+   *  process, as D-4298's case does: node:fs's readSync is replaced for the descriptors that name `bad`, and
+   *  syncBuiltinESMExports() carries it to sweep.mjs's named import. `code` is the OS error's. */
+  const failReads = (bad: string, code = 'EIO'): { faulted: () => number; restore: () => void } => {
+    const realRead = fs.readSync;
+    let faulted = 0;
+    const err = Object.assign(new Error(`${code}: i/o error, read`), { code, errno: -5, syscall: 'read' });
+    (fs as { readSync: unknown }).readSync = function readSync(fd: number, ...rest: unknown[]): number {
+      if (fs.readlinkSync(`/proc/self/fd/${fd}`) === bad) { faulted += 1; throw err; }
+      return (realRead as (...a: unknown[]) => number)(fd, ...rest);
+    };
+    syncBuiltinESMExports();
+    return { faulted: () => faulted, restore: () => { (fs as { readSync: unknown }).readSync = realRead; syncBuiltinESMExports(); } };
+  };
+  const sideDir = (home: string, uuid: string): string => {
+    const d = path.join(home, 'projects', IX.SLUG, uuid, 'tool-results');
+    fs.mkdirSync(d, { recursive: true });
+    return d;
+  };
+
+  it('EIO on the first-sorted transcript: the later one is ingested, file_unreadable counts it once, the tick row is written, the next tick retries the file', async () => {
+    const box = IX.newBox('ccrc-hist-fr2d1-');
+    plantSession(box, 'claude-demo2', { uuid: IX.U2, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+    const bad = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'unreadable', 1)]));
+    IX.plantCopy(box.homes[0]!, IX.U2, IX.jsonl([IX.user(IX.uuidN(21), null, 'readable', 21, { sessionId: IX.U2 })]));
+    expect([bad, path.join(path.dirname(bad), `${IX.U2}.jsonl`)].sort()[0], 'the faulted file sorts first').toBe(bad);
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const f = failReads(bad);
+      try {
+        const ctx = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids);
+        const tick = await S.ingestTick(db, ctx, S.newBudget());       // never throws
+        S.recordTick(db, ctx, tick);
+        expect(f.faulted(), 'the fault never fired').toBeGreaterThanOrEqual(1);
+        expect(tick.busy).toBe(false);
+        expect(IX.count(db, 'entries'), 'the file sorted after the bad one is captured').toBe(1);
+        expect(counterOf(db, 'file_unreadable')).toBe(1);
+        expect(IX.count(db, 'ticks'), 'the tick row exists').toBe(1);
+      } finally { f.restore(); }
+      const ctx2 = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids);
+      S.recordTick(db, ctx2, await S.ingestTick(db, ctx2, S.newBudget()));
+      expect(IX.count(db, 'entries'), 'the next tick retried it').toBe(2);
+      expect(counterOf(db, 'file_unreadable')).toBe(1);
+    } finally { db.close(); }
+  });
+
+  it('a programming error is not swallowed: a thrown TypeError out of the read still leaves the tick', async () => {
+    const box = IX.newBox('ccrc-hist-fr2d2-');
+    const bad = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1)]));
+    const { db, ids } = await IX.openFixtureStore(box);
+    const realRead = fs.readSync;
+    try {
+      (fs as { readSync: unknown }).readSync = function readSync(fd: number, ...rest: unknown[]): number {
+        if (fs.readlinkSync(`/proc/self/fd/${fd}`) === bad) throw new TypeError('a bug, not the disk');
+        return (realRead as (...a: unknown[]) => number)(fd, ...rest);
+      };
+      syncBuiltinESMExports();
+      await expect(S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget())).rejects.toThrow(TypeError);
+      expect(counterOf(db, 'file_unreadable')).toBeUndefined();
+    } finally { (fs as { readSync: unknown }).readSync = realRead; syncBuiltinESMExports(); db.close(); }
+  });
+
+  it('EIO on one sidecar: the next sidecar is taken, file_unreadable counts it, the tick completes, the next tick retries it', async () => {
+    const box = IX.newBox('ccrc-hist-fr2d3-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+    const dir = sideDir(box.homes[0]!, IX.U);
+    const bad = path.join(dir, 'a-bad.txt');
+    fs.writeFileSync(bad, 'unreadable body\n');
+    fs.writeFileSync(path.join(dir, 'b-good.txt'), 'readable body\n');
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const f = failReads(bad);
+      try {
+        const ctx = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids);
+        const tick = await S.ingestTick(db, ctx, S.newBudget());
+        S.recordTick(db, ctx, tick);
+        expect(f.faulted(), 'the fault never fired').toBeGreaterThanOrEqual(1);
+        expect(IX.count(db, 'sidecars'), 'the sidecar after the bad one is taken').toBe(1);
+        expect(counterOf(db, 'file_unreadable')).toBe(1);
+        expect(IX.count(db, 'ticks')).toBe(1);
+      } finally { f.restore(); }
+      const ctx2 = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids);
+      S.recordTick(db, ctx2, await S.ingestTick(db, ctx2, S.newBudget()));
+      expect(IX.count(db, 'sidecars'), 'the next tick retried it').toBe(2);
+    } finally { db.close(); }
+  });
+});

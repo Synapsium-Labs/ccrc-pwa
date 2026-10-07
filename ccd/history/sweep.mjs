@@ -2506,13 +2506,22 @@ function recordExamined(db, ctx, examined, scanDone) {
   });
 }
 
+/** An error the operating system raised (EIO, ESTALE, EACCES, ENOENT, EISDIR, ...): `code` and `syscall` are both
+ *  set by node from the failing call. SQLite's errors (code ERR_SQLITE_ERROR, no syscall), zlib's and a programming
+ *  error carry no syscall, so none of them is one (D-4340, history-ingest-read-error-skips-file). */
+function isFsError(e) {
+  return e !== null && typeof e === 'object' && typeof e.code === 'string' && typeof e.syscall === 'string';
+}
+
 /** One tick's ingest (§9.2 steps 2-5, 7; slug history-ingest-by-cursor, D-4236): the candidate
  *  transcripts in candidateFiles' order, then the caught-up uuids' sidecars (task 21), under the
  *  run's ONE budget, which is never reset per file (O5). A busy database ends the tick with no
  *  partial chunk (O22): every chunk is its own transaction, and the one that met the lock never
  *  began. The free-space floor (Task 19's per-chunk probe, and a sidecar's own) ends the run's
  *  ingest, transcripts or sidecars: `paused`. The scan is marked done only when both halves
- *  examined everything. */
+ *  examined everything. A read or open error the OS raised on ONE file (a transcript or a sidecar) is that file's:
+ *  counted `file_unreadable`, the file skipped with its cursor where its last committed chunk left it, the scan not
+ *  marked done so the next tick finds it again, and the tick goes on (D-4340, history-ingest-read-error-skips-file). */
 export async function ingestTick(db, ctx, budget) {
   const scan = ingestScanDue(db, ctx.nowMs);
   const { files, uuids } = candidateFiles(db, ctx, scan);
@@ -2522,10 +2531,23 @@ export async function ingestTick(db, ctx, budget) {
   let minNewTsMs = null;
   let complete = true;
   let paused = false;
+  // D-4340 (history-ingest-read-error-skips-file): a file whose read failed was not examined, so the scan is not
+  // marked done and the next tick finds it again; the tick itself, its sidecars and its row go on.
+  let unreadable = false;
   try {
     for (const f of files) {
       if (!budgetLeft(budget) || ctx.historyOff()) { complete = false; break; }
-      const r = await ingestPath(db, ctx, f, budget);
+      let r;
+      try {
+        r = await ingestPath(db, ctx, f, budget);
+      } catch (e) {
+        // One admitted file whose read or open failed (EIO, ESTALE, EACCES, ...) is counted and skipped, its cursor
+        // where its last committed chunk left it. Anything the OS did not raise (a programming error, SQLite) leaves.
+        if (!isFsError(e)) throw e;
+        countAdmission(db, 'unreadable');
+        unreadable = true;
+        continue;
+      }
       if (r === null) continue;
       examined.push({ fileId: r.fileId, size: examinedSize(r, ctx.nowMs), mtimeNs: r.mtimeNs, atEof: r.atEof });
       bytes += r.bytes;
@@ -2539,8 +2561,9 @@ export async function ingestTick(db, ctx, budget) {
       bytes += side.bytes;
       complete = side.complete;
       paused = side.paused;
+      if (side.unreadable === true) unreadable = true;
     }
-    if (scan && complete) recordExamined(db, ctx, [], true);
+    if (scan && complete && !unreadable) recordExamined(db, ctx, [], true);
   } catch (e) {
     if (!isBusy(e)) throw e;
     return { busy: true, bytes, newEntries, minNewTsMs, paused };
@@ -2789,14 +2812,25 @@ export async function ingestSidecars(db, ctx, budget, uuids) {
   const due = [...uuids].filter((u) => !notCaughtUp(db, ctx.homes, u));
   const cache = new Map();
   let bytes = 0;
+  let unreadable = false;
   for (const s of discoverSidecars(ctx.homes, due)) {
-    if (!budgetLeft(budget) || ctx.historyOff()) return { bytes, complete: false, paused: false };
-    const r = await ingestSidecar(db, ctx, s, budget, cache);
+    if (!budgetLeft(budget) || ctx.historyOff()) return { bytes, complete: false, paused: false, ...(unreadable ? { unreadable } : {}) };
+    let r;
+    try {
+      r = await ingestSidecar(db, ctx, s, budget, cache);
+    } catch (e) {
+      // D-4340 (history-ingest-read-error-skips-file): as for a transcript, one sidecar's failed read is counted and
+      // skipped (no sidecar_seen mark, so the next tick retries it), and the rest are tried.
+      if (!isFsError(e)) throw e;
+      countAdmission(db, 'unreadable');
+      unreadable = true;
+      continue;
+    }
     if (r === null) continue;
     bytes += r.bytes;
-    if (r.floor !== undefined) return { bytes, complete: false, paused: true };
+    if (r.floor !== undefined) return { bytes, complete: false, paused: true, ...(unreadable ? { unreadable } : {}) };
   }
-  return { bytes, complete: true, paused: false };
+  return { bytes, complete: true, paused: false, ...(unreadable ? { unreadable } : {}) };
 }
 
 // ---------------------------------------------------------------------------------------------
