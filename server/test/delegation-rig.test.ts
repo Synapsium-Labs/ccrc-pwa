@@ -1330,7 +1330,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(r.written).toEqual([]);
   };
 
-  it('fails closed on a `..` path segment, however the path before it reads', () => {
+  it('fails closed on a `..` path segment at the string\'s start or right after a `/`, however the path before it reads (review 304 F1)', () => {
     for (const leak of ['/rig/../srv/acme', '/usr/../mnt/x', '/dev/null/../../srv/x', '../../srv/acme', '..']) {
       expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'srv/acme');
     }
@@ -1619,6 +1619,38 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     }
     for (const leak of ['x </srv/x> y', '</srv.corp>', 'x </srv y', 'x /srv> y']) expectNamed(leakRun({ note: leak }), NOTE, 'srv');
   });
+
+  // Review 304 F1 (ruled: narrow the claim, pin the limit; DOTDOT is NOT widened). DOTDOT is `(^|/)\.\.(/|$)`: a `..` segment is caught
+  // only at the string's START or right after a `/`. A `..` after a space, `=` or a quote is not, and the `/` behind it follows a `.`
+  // (ABS's lookbehind skips it), so the path after it is not scanned either. The committed corpus holds such strings, raw-worktree's own
+  // ` ../raw-wt` (the rig's relative path to its own raw worktree), so widening DOTDOT to `[^A-Za-z0-9._~-]` before the `..` reds the
+  // corpus row and this one. The sibling row above pins what IS caught.
+  it('a `..` that is not at the start of the string or right after a `/` is not scanned (declared limit, not a guarantee): `x ../srv/acme`, `x=../srv/acme`, `cmd ../raw-wt` (review 304 F1)', () => {
+    for (const fine of ['x ../srv/acme', 'x=../srv/acme', 'cmd ../raw-wt', 'x ..', 'x "../srv/acme" y']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+    // while the same path behind a `..` at the start, or behind a `/`, is refused: the pin is about WHERE the `..` stands
+    for (const leak of ['../srv/acme', 'cd ../../srv/acme']) expectNamed(leakRun({ note: leak }), NOTE, 'srv/acme');
+    // and the header's sentence that the committed corpus holds this shape is true: raw-worktree's command, in the fixtures
+    const corpus = path.resolve(__dirname, 'fixtures/delegation');
+    const holders = fs.readdirSync(corpus, { recursive: true }).map(String)
+      .filter((n) => n.endsWith('.json') && fs.readFileSync(path.join(corpus, n), 'utf8').includes(' ../raw-wt'));
+    expect(holders.length, 'fixtures holding " ../raw-wt"').toBeGreaterThan(0);
+  }, 60_000);
+
+  // Review 304 F4 (ruled: a known limit, pinned). ABS is a `/` followed by `[A-Za-z0-9._-]+`, so an absolute path whose FIRST segment
+  // starts with any other character is never scanned: what FOLLOWS the `/` is a second exception to "a `/` after any other character
+  // is scanned". The control, the same path with a plain first segment, is refused.
+  it('an absolute path whose first segment starts outside `[A-Za-z0-9._-]` is not scanned (declared limit, not a guarantee): `/~someone-else/acme`, `/@scope/srv/acme`, `/$HOME/srv/acme` (review 304 F4)', () => {
+    for (const fine of ['x /~someone-else/acme', '"/~someone-else/acme"', 'cd /~someone-else/acme && ls', 'x /@scope/srv/acme', 'x /$HOME/srv/acme',
+      'x /+x/srv/acme', 'x /=x/srv/acme', 'x /%7Esomeone-else/acme']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+    }
+    // while a first segment inside the class is refused: the pin is about the FIRST CHARACTER of the segment
+    expectNamed(leakRun({ note: 'x /srv/acme' }), NOTE, 'srv/acme');
+  }, 60_000);
 
   it.skipIf(USER.length < 4)('scans the decoded spelling of an escaped string: \\uXXXX and %2F', () => {
     const esc = (w: string): string => [...w].map((c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`).join('');
@@ -1993,6 +2025,23 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(r.stderr).toBe(sorted.map((n, i) => `sanitize: residue in ${v}/#${i} /p_${n.slice(0, -'.json'.length)}\n`).join(''));
   });
 
+  // Review 304 F6 (wording, as the code behaves): the index counts the directory's `*.json` entries that are REGULAR FILES. An entry of that
+  // name that is not one (a directory, a dangling link) is neither counted nor named, so a later file keeps the index `ls` would not give it.
+  it('--scan skips a `*.json` entry that is not a regular file, uncounted and unnamed: a later file keeps its index among the regular files (review 304 F6)', () => {
+    const { dir, v } = plantedCorpus(() => {});
+    const vdir = path.join(dir, v);
+    fs.mkdirSync(path.join(vdir, 'a-dir.json'));                                  // sorts before agent-plain.json
+    fs.symlinkSync(path.join(vdir, 'no-such-target'), path.join(vdir, 'ab-link.json'));   // a dangling link, sorts before it too
+    const clean = scanRun('--scan', dir);
+    expect(clean.status, clean.stderr).toBe(0);
+    expect(clean.stdout).toMatch(/^sanitize: scanned 1 file\(s\), /);
+    expect(clean.stderr).toBe('');
+    fs.writeFileSync(path.join(vdir, 'zz.json'), `${JSON.stringify({ p: 'x /opt/acme/x' })}\n`);
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr, 'agent-plain.json is #0 and zz.json #1: the two skipped entries are not counted').toBe(`sanitize: residue in ${v}/#1 /p\n`);
+  });
+
   it('--scan reads KEYS too: a residue-bearing key of a committed fixture is named by index, never by its text (F9)', () => {
     const { dir, where } = plantedCorpus((f) => { f.extra = { '-mnt-data-x': 'v', '/opt/acme/x': 'w' }; });
     const r = scanRun('--scan', dir);
@@ -2078,6 +2127,17 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(scanRun('--scan').status).toBe(2);
     expect(scanRun('--scan', mkTmp('ccrc-dlg-scan-'), 'extra').status).toBe(2);
     expect(scanRun('--scan', mkTmp('ccrc-dlg-scan-'), mkTmp('ccrc-dlg-scan-')).status).toBe(2);
+  });
+
+  // Review 304 F5: `--scan ''` passed the argument check, reached `readdirSync('')` and printed the internal-error line, so a usage
+  // error and an I/O fault gave the same answer. An empty directory argument is a usage error, as `--scan` alone and main mode's empty one are.
+  it('--scan refuses an EMPTY directory argument with exit 2 and the usage text, not the internal-error line (review 304 F5)', () => {
+    const USAGE = 'usage: node sanitize.mjs <raw-root> <fixtures-dir>\n       node sanitize.mjs --scan <fixtures-dir>\n';
+    const empty = scanRun('--scan', '');
+    expect(empty.status).toBe(2);
+    expect(empty.stderr).toBe(USAGE);
+    expect(empty.stdout).toBe('');
+    expect(scanRun('--scan').stderr, 'the same text a missing argument gets').toBe(USAGE);
   });
 });
 

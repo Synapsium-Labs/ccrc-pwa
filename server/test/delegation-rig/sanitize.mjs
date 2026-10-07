@@ -3,12 +3,14 @@
 // (delegation broker wave 1, spec 2026-10-04 §8.2). The captures are SYNTHETIC (mock API, fixture
 // HOME, fixture repo); what could still leak is the box they ran on. So every spelling of the run
 // root becomes `/rig` (its munged form `-rig`) and the binaries' directory `/rig/versions`, and then the WHOLE corpus is scanned by ALLOWLIST:
-// an absolute path is residue unless its first segment is `rig`, `usr` or `bin` -- the WHOLE segment, which must be
+// an absolute path whose first segment starts with `[A-Za-z0-9._-]` (a first segment that starts with anything else is not scanned:
+// see KNOWN LIMITS) is residue unless that segment is `rig`, `usr` or `bin` -- the WHOLE segment, which must be
 // followed by `/`, `:` (a PATH separator), the end, or a character that ends a URL or a word (whitespace, a quote, a
 // closer `)` `]` `}`, `<`, `>`, `,` `;`): `/rig~/srv/x` and `/usr@h/x` are residue -- or it is exactly `/dev/null`
 // (the same rule minus `/`: `/dev/null/x`, `/dev/nullx` and `/dev/null~/x` are residue); so is `ccrc-dlg-rig`, `sk-ant-`,
 // and the running user's name or the host's first label as a whole word (4+ characters, case-insensitive, letters only
-// as word characters). Also residue: a `..` path segment, the running user's home directory in its munged spelling, a munged
+// as word characters). Also residue: a `..` path segment at the string's start or right after a `/` (`../srv/x`, `/rig/../srv/x`; a
+// `..` anywhere else is a KNOWN LIMIT), the running user's home directory in its munged spelling, a munged
 // foreign path whose top MUNGED_FOREIGN lists (`-mnt-…`, `-home-…`: a DENYLIST of ten tops, see KNOWN LIMITS), and a `//`-led
 // host or path:
 //   - `//` followed by a character that cannot start a name (`[`, `@`, `%`, `~`, `:`, `\`, `$`...) is residue
@@ -30,8 +32,19 @@
 //   - A `/` glued straight after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (ABS's lookbehind; a `/` after a `/` is a run
 //     of slashes, read where it ends). So `x/srv/acme`, `1/srv/acme`, `./srv/acme`, `a_/srv/acme`, `a-/srv/acme`, a home-anchored
 //     `~/srv/acme` and a scheme-less `127.0.0.1:4000/home/x` all pass. A `/` after ANY other character (a space, `=`, `:`, a quote, a
-//     bracket, `@`...) is scanned, except the `/` of a COMPLETE closing tag `</name>` (`<`, `/`, a plain name, `>`): `x </srv> y`
-//     passes, because that is a tag and not a path (it hides one bare segment at most: `</srv/x>` and `</srv.corp>` are residue).
+//     bracket, `@`...) is scanned, with two exceptions, this one and the next limit: the `/` of a COMPLETE closing tag `</name>` (`<`,
+//     `/`, a plain name, `>`): `x </srv> y` passes, because that is a tag and not a path (it hides one bare segment at most: `</srv/x>`
+//     and `</srv.corp>` are residue).
+//   - A `/` followed by a character outside ABS's segment class `[A-Za-z0-9._-]` is not scanned, so an absolute path whose FIRST
+//     segment starts with one passes, whatever precedes the `/`: `x /~someone-else/acme`, `"/~someone-else/acme"`, `x /@scope/srv/acme`,
+//     `x /$HOME/srv/acme`, `x /+x/srv/acme`, `x /=x/srv/acme`, `x /%7Esomeone-else/acme` (the `/` after that first segment follows a name
+//     character, so the limit above hides the rest of the path too). `x /srv/acme` is residue. So "a `/` after any other character is
+//     scanned", and the allowlist rule above, hold of a path whose first segment starts inside the class.
+//   - A `..` segment is caught only at the string's START or right after a `/` (DOTDOT is `/(^|\/)\.\.(\/|$)/`). A `..` anywhere else -- after a
+//     space, `=`, a quote... (`x ../srv/acme`, `x=../srv/acme`, `"../srv/acme"` inside a longer string, `x ..`) -- is not, and the `/`
+//     behind it follows a `.`, the limit above, so the path after it is not scanned either. The committed corpus holds such strings:
+//     raw-worktree's own ` ../raw-wt` (18 of them in 9 files at the time of writing), the rig's relative path to its own raw worktree,
+//     so closing this limit means respelling that command and re-capturing, which the versions no longer installed cannot do.
 //   - MUNGED_FOREIGN is a DENYLIST of tops, not a class: a munged foreign path is caught only when its top is one of `home mnt tmp
 //     srv opt var root Users private proc` (case-sensitive), so `-data-…`, `-media-…` and `-Home-…` pass. Inside an allowed `/rig`
 //     path it is the only check on a munged spelling.
@@ -47,9 +60,14 @@
 // An exception prints one fixed line (never its message, which names a raw path) and exits 1.
 // `--scan <fixtures-dir>` writes nothing and runs that same scan over the COMMITTED corpus (every `*.json` in the directory and in
 // its version directories: the fixtures and matrix.json), so a fixture committed with residue in it is found; see `scanCorpus`.
-// It names a file by `<version>/#<index>` (or `#<index>`), never by its name -- the index counts the directory's `*.json` files in
-// CODE-UNIT order, as `LC_ALL=C ls` lists them (a UTF-8 locale's `ls` may differ) -- and refuses a file name by the test `main`
-// applies to a scenario name: the NAME shape AND no residue in it.
+// It names a file by `<version>/#<index>` (or `#<index>`), never by its name, and refuses a file name by the test `main` applies to a
+// scenario name: the NAME shape AND no residue in it. The index counts the directory's `*.json` entries that are REGULAR FILES (a
+// stat, so a link to one counts), in code-unit order: the order `LC_ALL=C ls` gives over those entries (a UTF-8 locale's `ls` may
+// differ). An entry named `*.json` that is not a regular file is not counted, so a later file's index is not the one `ls` would give
+// it, and no FILE finding names it: a directory of that name inside a version directory, and a dangling link anywhere, produce no
+// finding at all, and one in the top directory is judged as a version directory, whose name fails VERSION (a finding `#<i>
+// (version directory name)`). A version directory's own finding `#<i>` counts among the directories, a sequence of its own, told
+// apart from a file finding only by that suffix.
 // Usage: node sanitize.mjs <raw-root> <fixtures-dir>
 //        node sanitize.mjs --scan <fixtures-dir>
 import fs from 'node:fs';
@@ -59,7 +77,9 @@ import path from 'node:path';
 const args = process.argv.slice(2);
 const SCAN = args[0] === '--scan';
 const [raw, outDir] = args;
-if (SCAN ? args.length !== 2 : (!raw || !outDir || args.length > 2)) {
+// An EMPTY directory argument is a usage error in both modes (review 304 F5): `--scan ''` once reached `readdirSync('')` and printed the
+// internal-error line, so a usage error and an I/O fault gave the same answer.
+if (SCAN ? (args.length !== 2 || !outDir) : (!raw || !outDir || args.length > 2)) {
   process.stderr.write('usage: node sanitize.mjs <raw-root> <fixtures-dir>\n       node sanitize.mjs --scan <fixtures-dir>\n');
   process.exit(2);
 }
@@ -331,9 +351,12 @@ function main() {
 // have refused it. It writes nothing. A fixture file that is not JSON, a directory that is not a version and a file whose
 // name is not a name (`main`'s own test for a scenario name: the NAME shape AND no residue in it) are findings, and so is a
 // directory with no JSON file in it at all: a mistyped path must not pass as a clean corpus. EVERY finding names a file by
-// `<version>/#<index>` (or `#<index>` for the top directory), never by its name: the index is its place in the `*.json` list of
-// its directory sorted by code unit (`LC_ALL=C ls`; a UTF-8 locale's `ls` may order it differently), and a version directory
-// is named only after VERSION's digits-and-dots shape has passed.
+// `<version>/#<index>` (or `#<index>` for the top directory), never by its name: the index is its place among the directory's
+// `*.json` entries that are REGULAR FILES (`jsonIn`: a stat), sorted by code unit (the order `LC_ALL=C ls` gives over those entries;
+// a UTF-8 locale's `ls` may differ). An entry named `*.json` that is not a regular file is not counted and no file finding names it
+// (a directory of that name in a version directory, and a dangling link anywhere, give no finding at all; one in the top directory is
+// judged as a version directory). A version directory is named by `#<i>` among the directories, a sequence of its own, told apart from
+// a file finding only by its suffix `(version directory name)`, and only after VERSION's digits-and-dots shape has passed.
 function scanCorpus(dir) {
   const findings = [];
   const tally = { files: 0, strings: 0, keys: 0 };
