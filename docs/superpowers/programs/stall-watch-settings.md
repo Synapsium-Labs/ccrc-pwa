@@ -23,7 +23,7 @@ time.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | — | run 295 planned for dispatch; run 260 overlap is handled by claims |
+| 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | — | run 295 dispatched 2026-10-07 to `ccrc-pwa-swift-meadow`; claim overlap per R10 |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README | server (it serves the PWA) | — | planned; dispatched after wave 1 merges |
 
 ## Decisions & deviations
@@ -96,6 +96,19 @@ time.
   - The unchanged seven-item brief and R4 route were dispatched once. The server refused `cap-daily` with `limit: 24`
     and `used: 24`, creating no worker, workspace, branch, hold or queued brief. Leave run 295 planned and make no
     replacement, split, routing change or further retry until there is a real indication that the rolling budget cleared.
+- **R10 (2026-10-07 09:58)**, wave 1 is dispatched.
+  - A complete `runs list --closed 1` snapshot at 09:56 measured 19 of 24 rolling dispatches and 3 active runs. Run 295
+    was this programme's only open run, still planned and untouched.
+  - `ccrc-api whoami` proved this pane is `ccrc-pwa-calm-harbor`. `origin/main` `58de9f969` still carries 16
+    migrations, so slot 17 stays free, and the W1 plan blob is unchanged.
+  - Claims: run 260's are gone. Of the W1 claim set, run 291 (child-reclamation W6, claim 1070) holds `shared/api.ts`
+    and `server/src/watch.ts`, as R7 foresaw, and run 302 (ccrc-history W2 B1, claim 1072) holds `README.md` and
+    `CLAUDE.md`, which only Task 7 edits. The brief's claim rule covers both holders: the worker reports the 409 with
+    its holder and paths, works only uncontested paths, and the coordinator sequences each release.
+  - The unchanged seven-item brief and R4 route went out once. The server spawned `ccrc-pwa-swift-meadow` (workspace
+    `swift-meadow`, branch `ws/swift-meadow`): `adopted` false, `spawnState` null, `skillState` present, brief queued.
+    The run reads `dispatched` with 0 of 7 items. The registry shows the route applied as `class=opus effort=high
+    subagent=sonnet workflow=off` with compact 40, and the hold `program:stall-watch-settings wave:1/2 run:295`.
 
 ## Carried constraints (reviewers get these)
 
