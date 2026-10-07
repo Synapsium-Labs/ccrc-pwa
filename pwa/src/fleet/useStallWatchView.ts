@@ -86,7 +86,9 @@ const isNoticeCount = (v: unknown): v is StallNoticeCount =>
   isObject(v) && isOneOf(NOTICE_ROWS, v.row) && isCount(v.sent) && isCount(v.shadow);
 
 /** `effective`, or null when it cannot be read. A malformed `next` or `filesExceed` is DROPPED, read as not stated
- *  exactly as a missing one is (§12), and counted for the one warning; everything else must be whole. */
+ *  exactly as a missing one is (§12), and counted for the one warning; everything else must be whole. The drop is
+ *  departure `malformed-optional-block-is-dropped` (D-4042): spec §13 names only a malformed `counts` element as
+ *  dropped. */
 function readEffective(v: unknown): { value: StallWatchEffective; dropped: number } | null {
   if (!isObject(v)) return null;
   if (v.measured === false) return { value: v as unknown as StallWatchEffective, dropped: 0 };

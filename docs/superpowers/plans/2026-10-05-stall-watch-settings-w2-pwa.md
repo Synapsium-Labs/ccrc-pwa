@@ -99,8 +99,8 @@ The prototype of every task was built and measured on branch `proto/sws-w2`:
 1. **The spec and this plan are on `origin/main`.**
    - `git show origin/main:docs/superpowers/specs/2026-10-05-stall-watch-settings-design.md | grep -c 'APPROVED by the
      operator 2026-10-05 17:46 UTC'` prints `1`.
-   - `git ls-tree origin/main` on this plan's own path prints one line. This plan alone defines D-4035 and D-4036, and
-     the tasks write both, with D-4033 and D-4034, into tracked comments.
+   - `git ls-tree origin/main` on this plan's own path prints one line. This plan alone defines D-4035 and D-4036 and, since fix round 1,
+     the number for `malformed-optional-block-is-dropped`; the tasks write them, with D-4033 and D-4034, into tracked comments.
 2. **W1 has merged on `main`.** Each of these prints the number shown:
    - `git show origin/main:server/src/coord/stallsettings.ts | grep -c '^export function stallWriteEffect'` → `1`;
    - `git show origin/main:server/src/coord/routes.ts | grep -cE "app\.(get|post)\('/api/coord/stall-watch'"` → `2`;
@@ -230,7 +230,7 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
     `typecheck-tests`. On the PWA side under load, the prototype measured `contrast`, `swap-sheet`, `session-pickers`
     and `fleet-screen`.
 - **Deviation numbers.**
-  - This plan defines exactly two: D-4035 and D-4036.
+  - This plan defines exactly three: D-4035, D-4036 and the one for `malformed-optional-block-is-dropped` (fix round 1).
   - It cites D-4033, D-4034, D-4037 and D-4038, which the W1 plan defines.
   - The coordinator holds this programme's reserve numbers. A departure found during this wave goes into the
     wave-done mail by slug, and the coordinator assigns its number then.
@@ -3576,7 +3576,8 @@ MSG
 ## Deviations found
 
 Issued by the coordinator from the programme's block (`POST /api/ledger/deviations`, 2026-10-05 17:47). This plan
-defines the two numbers that W2 alone owns. A departure found during execution is named by slug in the wave-done mail,
+defines the numbers that W2 alone owns: D-4035 and D-4036 issued with the plan, and one added by fix round 1
+(`malformed-optional-block-is-dropped`). A departure found during execution is named by slug in the wave-done mail,
 and the coordinator assigns its number.
 
 - **D-4035** — `older-server-404-reads-not-configured` (Tasks 1 and 3)
@@ -3618,6 +3619,22 @@ and the coordinator assigns its number.
     - One label, and one moved test line.
     - README ≈951 still says "the phone-push bell for this browser". That is outside this number's text and outside
       §18's README edit, and is put to the operator under "Open questions for the operator" below.
+- **D-4042** — `malformed-optional-block-is-dropped` (Task 1)
+  - **Departs from:** spec §13's wire guard (≈:1211–1213), which drops only malformed `counts` elements and reads a
+    MISSING `next`, `filesExceed` or `fallback` as not stated. Anything else is a failed read.
+  - **What W2 does:** `asStallWatchView` also drops a PRESENT but malformed `next` or `filesExceed`, with the same one
+    `console.warn` per answer, and renders the rest. A malformed `fallback` still fails the whole answer.
+  - **Why:** a skewed or buggy server's malformed optional block costs only that block, as a malformed `counts`
+    element already does. Reading the whole answer as failed would hide a good level and choice behind a Next-step or
+    files-exceed line that the screen can do without.
+  - **Pinned by:** the guard's own rows in `pwa/test/use-stall-watch-view.test.tsx`:
+    - G8, "drops a malformed next or filesExceed as not stated, keeps the rest, and warns exactly once";
+    - G7, "reads a missing next or filesExceed as not stated, passing the answer through unchanged";
+    - G4, "reads a MISSING fallback as none stated, with no warning; refuses a MALFORMED one", for the half that does
+      not change: the fallback still refuses.
+  - **Cost if wrong:** if the operator wants a malformed `next` or `filesExceed` to fail the read, the section shows
+    "could not be read" (or the last good view, stale) instead of a reading missing one block. That is a two-line change
+    in `readEffective` and the inversion of G8's expectation.
 
 **Numbers this wave cites but does not define.** The W1 plan defines all four. Defining any of them here too would red
 `deviation-refs`' two-plans row.
@@ -3632,15 +3649,16 @@ and the coordinator assigns its number.
   reader fault over a listed registry never answers `{ measured: false }`. W2 renders what arrives (Residue, below).
 
 **Departures found during this wave's execution** are numbered by the coordinator at wave-done, from the programme's
-reserve. None is defined here, and none is written as a number in code or commits before then: a departure goes into
+reserve. None beyond the fix-round entry above is defined here, and none is written as a number in code or commits before then: a departure goes into
 the wave-done mail by slug only.
 
 **Candidates the coordinator may number at wave-done.** The tasks made each of these choices where the spec was silent.
 Each is pinned, and the plan takes no number for any of them:
 - `quiet-range-bounds-the-select` (Task 1). A quiet range is readable only with `stepMs > 0`, `minMs <= maxMs` and at
   most 1000 steps (G10, G11).
-- `malformed-fallback-refuses-the-answer` (Task 1). A malformed `next` or `filesExceed` is dropped as not stated, with
-  one warning. A malformed `fallback` refuses the whole answer (G4, G7, G8).
+- `malformed-fallback-refuses-the-answer` (Task 1). A malformed `fallback` refuses the whole answer (G4). The
+  neighbouring drop of a malformed `next` or `filesExceed` is a numbered departure of its own
+  (`malformed-optional-block-is-dropped`, above).
 - `unanswered-write-reads-unconfirmed` (Tasks 1 and 3). A rejection that is not an `ApiError` (a network failure,
   after which the POST may have landed) reads as `unconfirmed`: the section toasts `UNCONFIRMED_TEXT` and re-reads,
   as §15's "A write's reply cannot be read" row does for an unreadable 2xx, and never says "Nothing was changed" (G18,
