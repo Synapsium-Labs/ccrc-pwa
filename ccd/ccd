@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ce4dec04f354fde4f9a8f929b53488c6c4e1827cf720de348bfea2c777f5ee9f
+# ccrc:generated 1 sha256=a38be9bc9dc1f97773378294c63d9d13c8fe6407cad2cf104362c2eea1011e72
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13948,7 +13948,7 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
 
 _ws_reap_locked() {   # token id — everything the reap lock serialises
   local token="$1" id="$2"
-  local resumed; resumed=$(_reg_get "$id" reaping)
+  local resumed; resumed=$(_reg_get "$id" reaping); ! _ws_reap_crumb_unread "$id" "$resumed" || return 0   # WS-REAP'S MIRROR
   if [[ -n "$resumed" ]]; then
     [[ "$resumed" != reclaim:* && "$resumed" != expire:* ]] || { _ws_reclaim_mirror "$id" "$resumed"; return 0; }   # see "WS-REAP'S MIRROR", below the RECLAIM region
     # Resume: the tombstone written at (b) is what distinguishes "the user
@@ -15686,11 +15686,11 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         _gc_declined "git refused to remove $p"
       fi ;;
     archived)
-      # Archived is the STAGING for a confirmed deletion, not a queue a sweep
-      # drains. No timer, no grace window, no "reclaim opens in 11 days".
-      _gc_declined "$p is archived — remove it with the workspace sheet, never on a timer" ;;
+      # Archived is never ws-gc's to drain: Restore brings it back, and the
+      # server's ws-expire cleans it up seven days after its archive (wave 3b).
+      _gc_declined "$p is archived — never ws-gc's: Restore brings it back, and the server cleans it up seven days after its archive" ;;
     reaping)
-      _gc_declined "$p is mid-cleanup (breadcrumb: $(_reg_get "$project-$slug" reaping)) — re-run ccd ws-reap to finish it" ;;
+      _gc_declined "$p is mid-cleanup (breadcrumb: $(_reg_get "$project-$slug" reaping)) — the verb that left it finishes it: ccd ws-reap its own, the server an expire: or reclaim: one" ;;
     dirty)
       _gc_declined "$p is dirty — never removed, at any flag" ;;
     tree-unreadable)
@@ -29898,6 +29898,21 @@ _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` or
   fi
   printf '{"refused":"reclaim-in-progress","detail":%s,"paths":[]}\n' \
     "$(_json_str "an interrupted reclamation of $1 stopped at its '${2#reclaim:}' step — ws-reap never finishes another verb's work")"
+}
+
+_ws_reap_crumb_unread() {   # id breadcrumb-as-read -> rc 0, having printed ws-reap's refusal, when an ARCHIVED row's
+  #                              `.reaping` stands but reads as nothing; rc 1 otherwise (ws-reap goes on as it did)
+  # WS-REAP NEVER TAKES ITS FRESH ARM OVER A BREADCRUMB IT CANNOT READ (workspace
+  # lifecycle wave 3b, the carried row). Its mirror is keyed on a READABLE
+  # `expire:`/`reclaim:` prefix, so an unreadable `.reaping` used to fall through
+  # to the fresh arm — on an archived row, where an interrupted expiry leaves
+  # `.archived` standing beside its breadcrumb. It refuses with ws-reap's own word
+  # for a breadcrumb it cannot place, as the spawn gate and ws-expire's fork read
+  # such a file (doubt). A row that is not archived is not asked: ws-reap's own
+  # `not-archived` answers it.
+  [[ -z "$2" && -f "$REG/$1.archived" ]] && [[ -e "$REG/$1.reaping" || -L "$REG/$1.reaping" ]] || return 1
+  printf '{"refused":"reaping-phase-unknown","detail":%s,"paths":[]}\n' \
+    "$(_json_str "a breadcrumb stands at $REG/$1.reaping but cannot be read — which verb left it, and where, is unknown, so ws-reap never takes its fresh arm over it")"
 }
 
 # WS-REAP'S MIRROR (spec 2026-09-22 §5.6; carried constraint 5). The one line
