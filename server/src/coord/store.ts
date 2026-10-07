@@ -40,6 +40,9 @@ import {
 } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import {
+  DEAD_COORDINATOR_JOURNAL_ACTS, type DeadAnchor, type DeadCoordinatorJournalRow,
+} from '../deadCoordinator.js';
+import {
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
   isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
   isLifecycleOutcome,
@@ -188,7 +191,10 @@ class OpenRunHoldRefused extends Error {
 export type AdvanceResult =
   | { ok: true; from: RunState; to: RunState }
   | { ok: false; error: 'bad-transition'; from: RunState; to: RunState }
-  | { ok: false; error: 'unknown-run' };
+  | { ok: false; error: 'unknown-run' }
+  /** `closeRun`'s compare-and-set (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): the run's `claimedBy`
+   *  is no longer the id the caller expected — a successor took the programme — so nothing was written. */
+  | { ok: false; error: 'claimant-changed'; claimedBy: string | null };
 
 /** `setAccountPools`'s answer (T6-R4, fix round 1; `error`'s vocabulary moved
  *  to `shared/api.ts`'s `SetAccountPoolsRefuseCode` in fix round 2 — see C1
@@ -2545,8 +2551,18 @@ export class CoordStore {
   closeRun(input: {
     runId: number; finalState: 'done' | 'failed'; causedBy: string;
     handoffCommit: string | null; program: string; viaClosing: boolean;
+    /** THE COMPARE-AND-SET (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): when given, the close commits
+     *  only while the run's `claimedBy` still equals it, read INSIDE this transaction; otherwise `claimant-changed`
+     *  and nothing is written. The dead-coordinator lane passes the crashed id; every other caller passes nothing. */
+    expectClaimedBy?: string;
   }): AdvanceResult {
     return tx(this.db, () => {
+      if (input.expectClaimedBy !== undefined) {
+        const row = this.db.prepare('SELECT claimedBy FROM runs WHERE id = ?').get(input.runId) as
+          { claimedBy: string | null } | undefined;
+        if (row === undefined) return { ok: false, error: 'unknown-run' };
+        if (row.claimedBy !== input.expectClaimedBy) return { ok: false, error: 'claimant-changed', claimedBy: row.claimedBy };
+      }
       // `viaClosing: false` is the ABANDON of a `planned` run (D-281 (was D-B4-8)).
       // `RUN_TRANSITIONS.planned` has a `failed` edge and deliberately no
       // `closing` one (`shared/api.ts`'s own docstring), and that table is NOT
@@ -3271,6 +3287,39 @@ export class CoordStore {
       'SELECT DISTINCT claimedBy FROM runs ' +
       `WHERE claimedBy IS NOT NULL AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
+  }
+
+  /** The dead-coordinator lane's durable anchors (`dead_claimants`, migration 18; workspace lifecycle spec §5.4) —
+   *  EVERY row, one statement. Both integers ride CAST to TEXT and are proven, ALL-OR-FAILURE (D-2545's rule): an
+   *  anchor misread is how an hour gets counted that nobody measured, so one bad row fails the read and the lane acts
+   *  on nothing that pass. */
+  deadAnchors(): { ok: true; anchors: Map<string, DeadAnchor> } | { ok: false; detail: string } {
+    const rows = this.db.prepare(
+      'SELECT claimantId, CAST(firstDeadAt AS TEXT) AS firstText, CAST(lastDeadAt AS TEXT) AS lastText FROM dead_claimants',
+    ).all() as unknown as { claimantId: string; firstText: string; lastText: string }[];
+    const anchors = new Map<string, DeadAnchor>();
+    for (const r of rows) {
+      const first = persistedInt(r.firstText, 'firstDeadAt');
+      if (!first.ok) return { ok: false, detail: first.detail };
+      const last = persistedInt(r.lastText, 'lastDeadAt');
+      if (!last.ok) return { ok: false, detail: last.detail };
+      anchors.set(r.claimantId, { firstDeadAt: first.value, lastDeadAt: last.value });
+    }
+    return { ok: true, anchors };
+  }
+
+  /** Write one claimant's anchor — the lane's crashed pass. One statement, an upsert keyed by the claimant. */
+  setDeadAnchor(claimantId: string, a: DeadAnchor): void {
+    this.db.prepare(
+      'INSERT INTO dead_claimants (claimantId, firstDeadAt, lastDeadAt) VALUES (?, ?, ?) ' +
+      'ON CONFLICT(claimantId) DO UPDATE SET firstDeadAt = excluded.firstDeadAt, lastDeadAt = excluded.lastDeadAt',
+    ).run(claimantId, a.firstDeadAt, a.lastDeadAt);
+  }
+
+  /** Delete one claimant's anchor — an alive, unmeasurable or non-crash answer, or a claimant that left the
+   *  population. Deleting a row that is not there is a no-op. */
+  deleteDeadAnchor(claimantId: string): void {
+    this.db.prepare('DELETE FROM dead_claimants WHERE claimantId = ?').run(claimantId);
   }
 
   /** Per session id, the LATEST instant it held a coordinator's chair. This is
@@ -5864,6 +5913,45 @@ export class CoordStore {
       if (r.sessionId !== null) out.get(r.sessionId)?.push(CoordStore.reviveLifecycleRow(r));
     }
     return out;
+  }
+
+  /** THE JOURNAL CLAUSE'S ONE READ (workspace lifecycle spec 2026-09-24 §5.4, the dead-coordinator lane): for each
+   *  asked claimant, its rows of the acts the clause reads (`DEAD_COORDINATOR_JOURNAL_ACTS`), oldest first by this
+   *  table's own id, and whether the mirror holds ANY row for it — "no history at all" is a fact the clause turns on
+   *  (an absent row with none is unmeasured), and it is not the same fact as "none of the clause's acts". TWO
+   *  statements whatever the claimant count, each `INDEXED BY lifecycle_by_session` (`recentProvenance`'s idiom: the
+   *  table is never pruned). EVERY asked id gets an entry. A failing read THROWS, and the lane reads that as
+   *  `unreadable` — never as no history. */
+  deadCoordinatorJournalRows(sessionIds: readonly string[]): Map<string, { rows: DeadCoordinatorJournalRow[]; hasHistory: boolean }> {
+    const ids = [...new Set(sessionIds)];
+    const out = new Map<string, { rows: DeadCoordinatorJournalRow[]; hasHistory: boolean }>(
+      ids.map((id) => [id, { rows: [], hasHistory: false }]));
+    if (ids.length === 0) return out;
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.LC_COLS} FROM lifecycle_events INDEXED BY lifecycle_by_session ` +
+      `WHERE sessionId IN (${placeholders(ids.length)}) AND act IN (${placeholders(DEAD_COORDINATOR_JOURNAL_ACTS.length)}) ` +
+      'ORDER BY sessionId, id',
+    ).all(...ids, ...DEAD_COORDINATOR_JOURNAL_ACTS) as unknown as Parameters<typeof CoordStore.reviveLifecycleRow>[0][];
+    for (const r of rows) {
+      const e = r.sessionId === null ? undefined : out.get(r.sessionId);
+      if (e === undefined) continue;
+      const ev = CoordStore.reviveLifecycleRow(r);
+      e.rows.push({ act: ev.act, outcome: ev.outcome, at: ev.at, gen: ev.gen, dec: ev.dec, meas: ev.meas, raw: ev.raw });
+    }
+    const any = this.db.prepare(
+      'SELECT DISTINCT sessionId FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
+      `WHERE sessionId IN (${placeholders(ids.length)})`,
+    ).all(...ids) as { sessionId: string }[];
+    for (const r of any) { const e = out.get(r.sessionId); if (e !== undefined) e.hasHistory = true; }
+    return out;
+  }
+
+  /** EVERY generation the mirror recorded lost bytes in, distinct, one statement — the dead-coordinator lane's journal
+   *  trust (workspace lifecycle spec §5.4, the departure `journal-loss-reads-as-unmeasured`): a gap in a generation
+   *  that is not older than a claimant's last successful spawn may have lost a deliberate act. Never limited: a gap
+   *  the read did not return is a gap the lane would trust past. A failing read THROWS, and the lane trusts nothing. */
+  lifecycleGapGens(): string[] {
+    return (this.db.prepare('SELECT DISTINCT gen FROM lifecycle_gaps').all() as { gen: string }[]).map((r) => r.gen);
   }
 
   /** The holes, newest-first — a timeline with a hole in it says so. */
