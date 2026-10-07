@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the history sweep every two minutes
+[Timer]
+# `OnActiveSec=`, NOT `OnBootSec=`, for ccd-tmp-sweep.timer's reason: this timer
+# is first armed by an install or a deploy on a box that has been up for days,
+# where a boot-relative elapse point is already in the past.
+OnActiveSec=2min
+# Two minutes: capture's lag is the tick, and a session's recall reads what the
+# last tick drained. A pass that finds the lock held exits 0 at once.
+OnUnitActiveSec=2min
+AccuracySec=30s
+[Install]
+WantedBy=timers.target

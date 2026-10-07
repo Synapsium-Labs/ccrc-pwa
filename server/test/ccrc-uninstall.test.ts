@@ -203,6 +203,9 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   writeFileSync(join(bin, 'ccd-tmp-sweep'), '#!/bin/sh\n# tmp sweep\n', { mode: 0o755 });
   // The pane-scope sweep, placed by `_inst_bins` on the same non-Darwin arm.
   writeFileSync(join(bin, 'ccd-scope-sweep'), '#!/bin/sh\n# scope sweep\n', { mode: 0o755 });
+  // history spec §9.5: the history sweep's shim, placed by `_inst_bins` off
+  // server boxes — planted so `_uninst_tree_bins`' removal is measured.
+  writeFileSync(join(bin, 'ccd-history-sweep'), '#!/bin/sh\n# history sweep\n', { mode: 0o755 });
   // account-pool-membership wave 1, Task 4 fix round 1 (F1/F4): the leased-
   // projection puller. `_inst_bins` places it on the non-Darwin arm for every
   // role, so an installed Linux box has it and `_uninst_tree_bins` must take
@@ -269,6 +272,8 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
     // The temp-dir reaper's pair, on the same role-gated terms.
     'ccd-tmp-sweep.service', 'ccd-tmp-sweep.timer',
     'ccd-scope-sweep.service', 'ccd-scope-sweep.timer',
+    // history spec §9.5: the history sweep's pair, on the same role-gated terms.
+    'ccd-history-sweep.service', 'ccd-history-sweep.timer',
     'ccd-account-health.service', 'ccd-account-health.timer',
     'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
     // C5: the models pair, mirroring the three role-gated siblings above.
@@ -552,6 +557,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccd-usage-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-tmp-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-scope-sweep.timer');
+    expect(calls).toContain('--user disable --now ccd-history-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-account-health.timer');
     expect(calls).toContain('--user disable --now ccd-telemetry-keepalive.timer');
     expect(calls).toContain('--user disable --now ccrc-models.timer');
@@ -758,7 +764,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // `_inst_bins` places them, so an uninstall that left them strands them on
     // PATH for ever.
     for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
-      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep', 'ccd-scope-sweep',
+      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-history-sweep',
       'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'ccd-update-sync',
       ...GPT_LANE_BINS, 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);

@@ -18,6 +18,8 @@ import {
 import { STATFS_DEADLINE_MS, historyPaths } from '../../ccd/history/lib.mjs';
 import { createStore, getMeta, userVersion } from '../../ccd/history/store.mjs';
 import { parseSweepArgv } from '../../ccd/history/sweep.mjs';
+import { readFileSync as readUnitText } from 'node:fs';
+import { join as joinUnitPath, resolve as resolveUnitPath } from 'node:path';
 
 skipOnDarwin();
 
@@ -361,6 +363,86 @@ describe('the sweep: skeleton, store open and refusals, and the shim', () => {
     }
     if (files.includes('history-lib.test.ts')) {
       expect(code('history-lib.test.ts')).not.toMatch(/skipOnDarwin\(\)/);
+    }
+  });
+});
+
+// ── task 30: ccd-history-sweep ships the way ccd-tmp-sweep does (history spec §9.5) ──
+// SOURCE SCANS of the units and of deploy.sh: the artifact is read by a box
+// this suite cannot touch. Comments are dropped first, so prose about a key is
+// never taken for the key.
+describe('ccd-history-sweep ships the way ccd-tmp-sweep does', () => {
+  const UNIT_REPO = resolveUnitPath(__dirname, '..', '..');
+  const SYSTEMD = joinUnitPath(UNIT_REPO, 'deploy', 'systemd');
+  const directives = (name: string): string[] => readUnitText(joinUnitPath(SYSTEMD, name), 'utf8')
+    .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+  const deploySh = readUnitText(joinUnitPath(UNIT_REPO, 'deploy', 'deploy.sh'), 'utf8');
+  const code = deploySh.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+  /** A systemd time span, in seconds — the spellings this tree's units use. */
+  const spanSeconds = (v: string): number => {
+    const m = /^(\d+)(ms|s|sec|min|m|h)?$/.exec(v);
+    if (m === null) throw new Error(`not a time span this reader knows: ${v}`);
+    const n = Number(m[1]);
+    if (m[2] === 'ms') return n / 1000;
+    if (m[2] === 'min' || m[2] === 'm') return n * 60;
+    if (m[2] === 'h') return n * 3600;
+    return n;
+  };
+
+  it('the service is an idle-priority oneshot running the installed shim, memory-capped, with no SuccessExitStatus', () => {
+    const d = directives('ccd-history-sweep.service');
+    expect(d).toContain('Type=oneshot');
+    expect(d).toContain('ExecStart=%h/.local/bin/ccd-history-sweep');
+    expect(d.some((l) => /^MemoryMax=\d+[KMG]$/.test(l)), 'no MemoryMax').toBe(true);
+    expect(d).toContain('Nice=19');
+    expect(d).toContain('IOSchedulingClass=idle');
+    // a scheduled pass that finds the lock held exits 0 (§5.1): nothing to whitelist
+    expect(d.filter((l) => l.startsWith('SuccessExitStatus='))).toEqual([]);
+  });
+
+  it('TimeoutStartSec is the carrier\'s wall-clock kill, equal to lib.mjs CARRIER_KILL_S (DM43)', async () => {
+    const { CARRIER_KILL_S } = await import('../../ccd/history/lib.mjs');
+    const t = directives('ccd-history-sweep.service').filter((l) => l.startsWith('TimeoutStartSec='));
+    expect(t).toHaveLength(1);
+    expect(spanSeconds(t[0]!.slice('TimeoutStartSec='.length))).toBe(CARRIER_KILL_S);
+  });
+
+  it('the unit inherits the user manager\'s PATH: no Environment=PATH= line D-4255', () => {
+    expect(directives('ccd-history-sweep.service').filter((l) => l.startsWith('Environment=PATH='))).toEqual([]);
+  });
+
+  it('the timer fires every two minutes, anchored to its own activation, never to boot', () => {
+    const d = directives('ccd-history-sweep.timer');
+    expect(d).toContain('OnActiveSec=2min');
+    expect(d).toContain('OnUnitActiveSec=2min');
+    expect(d).toContain('AccuracySec=30s');
+    expect(d).toContain('WantedBy=timers.target');
+    expect(d.filter((l) => l.startsWith('OnBootSec='))).toEqual([]);
+  });
+
+  it('deploy.sh installs the shim once, and the pair and the enable, inside the agent branch before the agent restart', () => {
+    expect(code.filter((l) => l === 'install_atomic ccd/ccd-history-sweep .local/bin/ccd-history-sweep 755')).toHaveLength(1);
+    const agentStart = deploySh.indexOf('if [ "$TARGET" = "agent" ]');
+    const branch = deploySh.slice(agentStart, deploySh.indexOf('\nelse', agentStart));
+    const restartAt = branch.indexOf('"${SSH[@]}" "$BOX" "$AGENT_CMD"');
+    for (const needle of [
+      'install_atomic ccd/ccd-history-sweep .local/bin/ccd-history-sweep 755',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-history-sweep.service ~/.config/systemd/user/ccd-history-sweep.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-history-sweep.timer ~/.config/systemd/user/ccd-history-sweep.timer',
+      'systemctl --user enable --now ccd-history-sweep.timer',
+    ]) {
+      const at = branch.indexOf(needle);
+      expect(at, `${needle} is not in the agent branch`).toBeGreaterThan(-1);
+      expect(at, `${needle} must land before the agent restart`).toBeLessThan(restartAt);
+    }
+  });
+
+  it('ccd-history-sweep is never a reserved account id: neither GPT_TOOLCHAIN_ACCOUNT_IDS mirror names it', () => {
+    for (const rel of ['shared/roster.ts', 'shared/roster-json.mjs']) {
+      const src = readUnitText(joinUnitPath(UNIT_REPO, rel), 'utf8');
+      const m = /\bconst GPT_TOOLCHAIN_ACCOUNT_IDS\b[^=\n]*= new Set\(\[([^\]]*)\]\);/.exec(src);
+      expect(m, `${rel} no longer declares GPT_TOOLCHAIN_ACCOUNT_IDS as a Set literal`).not.toBeNull();
+      expect(m![1]!, rel).not.toContain('ccd-history-sweep');
     }
   });
 });

@@ -2213,6 +2213,17 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
+  itLinux('ccd-history-sweep lands too (history spec §9.5) — the one sweep shim role-gated off server boxes', () => {
+    // `_inst_bins` places it behind a one-line `[ "$INST_ROLE" = server ] ||`
+    // test: doctor and the CLI read its presence as "this box can hold a
+    // store". This install is role `both`, so it lands; the `--role server`
+    // case pins its absence, the fleet describe its presence there.
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-history-sweep');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-history-sweep')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
   it('the launcher is BYTE FOR BYTE what deploy.sh generates', () => {
     // THE AGREEMENT PIN. The launcher now has two generators — `deploy.sh`'s
     // `install_ccrc_shim` for a box reached over ssh, and `_inst_shim` for a
@@ -4191,6 +4202,10 @@ const UNIT_FILES: Array<[string, string]> = [
   // Claude Code sessions, so it has no /tmp/claude-<uid> to reap.
   ['ccd-tmp-sweep.service', 'deploy/systemd/ccd-tmp-sweep.service'],
   ['ccd-tmp-sweep.timer', 'deploy/systemd/ccd-tmp-sweep.timer'],
+  // history spec 2026-10-05 §9.5: the history sweep's pair, ROLE-GATED `!= server`
+  // for its own reason — a server box hosts no sessions, so it keeps no store.
+  ['ccd-history-sweep.service', 'deploy/systemd/ccd-history-sweep.service'],
+  ['ccd-history-sweep.timer', 'deploy/systemd/ccd-history-sweep.timer'],
   // The pane-scope sweep: ROLE-GATED on the reaper's terms — a server box runs no pane scopes.
   ['ccd-scope-sweep.service', 'deploy/systemd/ccd-scope-sweep.service'],
   ['ccd-scope-sweep.timer', 'deploy/systemd/ccd-scope-sweep.timer'],
@@ -4505,6 +4520,9 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // C5: a FIFTH enable, role-gated on the same terms and degrading the
       // same way — a server box has no lanes for this timer to refresh.
       '--user enable --now ccrc-models.timer',
+      // history spec §9.5: the history sweep's timer, on its unit files' gate,
+      // degrading rather than dying like every timer in this list.
+      '--user enable --now ccd-history-sweep.timer',
       // W4a Task 9: the server-role watchdog's timer — `!= fleet`, so this
       // role enables it — degrading rather than dying like every timer in
       // this list, and taking no restart (a oneshot holds no code).
@@ -5009,7 +5027,8 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // `ccd-update-sync` joins on the same terms, and this set is the
         // mutation site for its line too (spec §18 "the puller is installed
         // where its timer looks").
-        : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
+        // history spec §9.5: `ccd-history-sweep` joins on the timer-bound names' terms, behind its role gate (this install is `both`).
+        : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-history-sweep',
            'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
            'ccd-usage-sweep.py', 'ccrc', 'graphify', ...GPT_LANE_BINS].sort());
   });
@@ -6060,6 +6079,8 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(argv).toContain('--user enable --now ccd-tmp-sweep.timer');
     // and the pane-scope sweep, on the reaper's gate.
     expect(argv).toContain('--user enable --now ccd-scope-sweep.timer');
+    // history spec §9.5: fleet is not server, so the history sweep's timer arms here.
+    expect(argv).toContain('--user enable --now ccd-history-sweep.timer');
     // Ruling T4-R1: and the pool-sync timer, which enables on THIS ROLE ONLY
     // — the role whose install wrote the `~/.ccrc/agent.env` the binary
     // refuses without. `--role both` and `--role server` below assert the
@@ -6078,6 +6099,15 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(argv.join('\n')).not.toContain('ccrc-update-watchdog');
     expect(r.stdout).toContain(
       'install: services: ccrc-agent.service and ccd-cap-scopes.timer enabled, and ccrc-agent.service restarted onto the tree this run placed');
+  });
+
+  itLinux('places the history sweep\'s shim, and the closing line names it — a fleet box hosts sessions (history spec §9.5)', async () => {
+    const { home, r } = await fleet();
+    const bin = join(home, '.local', 'bin', 'ccd-history-sweep');
+    expect(existsSync(bin), '--role fleet did not place ccd-history-sweep').toBe(true);
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-history-sweep')));
+    expect(statSync(bin).mode & 0o777).toBe(0o755);
+    expect(r.stdout).toMatch(/^install: bins: .*(?<![\w-])ccd-history-sweep(?![\w-])/m);
   });
 
   it('skips the server-only landing lines — no PWA address, no passphrase gate', async () => {
@@ -6161,6 +6191,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
       '--user enable --now ccrc-models.timer',
+      '--user enable --now ccd-history-sweep.timer',
       // W4a Task 9: the server-role watchdog's timer — `!= fleet`, so this
       // role enables it — degrading rather than dying like every timer in
       // this list, and taking no restart (a oneshot holds no code).
@@ -6188,7 +6219,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
         || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
-        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccrc-codex-usage@')) continue;
+        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccd-history-sweep.') || dest.startsWith('ccrc-codex-usage@')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -6209,6 +6240,12 @@ describe('ccrc install --role: the refusals and the default', () => {
     // The pane-scope sweep: a server box runs no pane scopes.
     expect(existsSync(unitDir(home, 'ccd-scope-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-scope-sweep.timer'))).toBe(false);
+    // history spec §9.5: no shim, no unit pair and no enable on a server box —
+    // it hosts no sessions and must never hold a store D-4183.
+    expect(existsSync(join(home, '.local', 'bin', 'ccd-history-sweep')), '--role server placed ccd-history-sweep').toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-history-sweep.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-history-sweep.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-history-sweep');
     // Ruling T4-R1: the pool-sync pair is gated OUT here too — but on a
     // NARROWER gate than the four pairs above it. Those are `!= server`;
     // this one is `= fleet`, because `both` gets no agent.env either. A
@@ -6244,6 +6281,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     const bins = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
     expect(bins, 'no `install: bins:` line in the transcript').toBeDefined();
     expect(bins!, 'the server-role closing line claims a GPT-lane executable').not.toMatch(/ccgpt|ccrc-codex/);
+    expect(bins!, 'the server-role closing line names a history shim it never placed').not.toContain('ccd-history-sweep');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });
