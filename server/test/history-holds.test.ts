@@ -443,3 +443,103 @@ describe('DM42: no migration without a snapshot', () => {
     expect(counter(box, 'migration_refused_low_disk')).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// D-4242 (history-fts-backfill-pauses-with-ingest): the FTS backfill grows db/, so it is held with ingest. The
+// tick's guard is `if (ctx.ingest && !(ing !== null && ing.paused)) deriveFts(...)`; each half has a pin here,
+// measured red with that half deleted. What still runs under the pause is pinned beside it: a late pair's
+// re-index and its merge step (§9.2: only ingest pauses).
+// ---------------------------------------------------------------------------------------------------------
+describe('D-4242: a pending FTS backfill waits for the pause to lift; a late pair still re-indexes and merges', () => {
+  const ROW_A = 'a0000000-0000-4000-8000-0000000000a1';
+  const ROW_B = 'a0000000-0000-4000-8000-0000000000b2';
+  const ROW_C = 'a0000000-0000-4000-8000-0000000000c3';
+  const tag = (n: number): string => `zq${String(n).repeat(3)}-${'0123456789abcdef'.repeat(2)}_${'fedcba9876543210'.repeat(2)}`;
+  const probeThrow = { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_FTS_PROBE: 'throw' } };
+  const hint = (box: HistoryBox): void => { spoolLine(box, ID, { v: 1, ev: 'Stop', id: ID }); };
+  const matchCount = (box: HistoryBox, phrase: string): number =>
+    q<{ n: number }>(box, 'SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH ?', phrase)[0]!.n;
+  const unindexed = (box: HistoryBox): number => q<{ n: number }>(box, 'SELECT count(*) AS n FROM blobs WHERE fts_indexed = 0')[0]!.n;
+  const stepDone = (box: HistoryBox, step: string): boolean =>
+    q<{ c: number | null }>(box, 'SELECT completed_ms AS c FROM derivation_state WHERE step = ? AND version = 1', step)[0]?.c != null;
+  const secret = (box: HistoryBox, value: string): void => {
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(box.home, '.cc-secrets', 'late.env'), `ZQ_LATE_VALUE=${value}\n`, { mode: 0o600 });
+  };
+  /** A store whose row A (holding `value`) is indexed in clear, and whose row B is captured but unindexed behind a
+   *  re-opened ('fts', 1) backfill; the pair for `value` is not known yet. Returns the transcript for later appends. */
+  function pendingBox(prefix: string, value: string): { box: HistoryBox; transcript: string } {
+    const box = boundBox(prefix);
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    const now = new Date().toISOString();
+    const transcript = plantTranscript(box, 'claude-a', SLUG, U1, [userRow(ROW_A, `note ${value} end`, now)]);
+    spoolLine(box, ID, startup(U1, { reg: U1 }));
+    for (const offsetMs of [31 * MIN, 62 * MIN]) expect(runDriver(box, { offsetMs }).code).toBe(0);
+    expect(countOf(box, 'entries')).toBe(1);
+    expect(stepDone(box, 'fts')).toBe(true);                           // CONTROL: A is indexed and the backfill completed
+    expect(matchCount(box, '"note"')).toBe(1);
+    fs.appendFileSync(transcript, `${JSON.stringify({ ...userRow(ROW_B, 'zqbeta words', now), parentUuid: ROW_A })}\n`);
+    hint(box);
+    const r = runSweep(box, [], probeThrow);                           // B is captured while the probe fails: not indexed
+    expect(r.code, r.stderr).toBe(0);
+    expect(countOf(box, 'entries')).toBe(2);
+    expect(unindexed(box)).toBe(1);
+    expect(stepDone(box, 'fts')).toBe(false);                          // the completed backfill re-opened
+    return { box, transcript };
+  }
+  const lateValueGone = (box: HistoryBox, value: string): void => {
+    const tail = value.slice(value.indexOf('_') + 1);
+    expect(matchCount(box, `"${tail.slice(0, 8)}"*`)).toBe(0);         // the late pair's re-index ran
+    expect(matchCount(box, '"note"')).toBe(1);                         // A is still indexed, redacted
+    expect(stepDone(box, 'fts-merge')).toBe(true);                     // and its merge step completed
+  };
+
+  it('below the free-space floor (the pass-level pause): the backfill leaves B unindexed; the re-index and merge steps still run; lifted, it indexes', () => {
+    const value = tag(1);
+    const { box } = pendingBox('ccrc-hist-d4242a-', value);
+    expect(matchCount(box, `"${value.slice(value.indexOf('_') + 1).slice(0, 8)}"*`)).toBe(1);   // CONTROL: the late value is in the index in clear
+    secret(box, value);
+    const low = { env: { HISTORY_TEST_STATFS: `${THRESHOLD - 4096}:${FS_BYTES}` } };
+    const r = runSweep(box, [], low);
+    expect(r.code, r.stderr).toBe(0);
+    expect(counter(box, 'capture_paused_low_disk')).toBeGreaterThanOrEqual(1);
+    expect(unindexed(box)).toBe(1);                                    // fts_indexed stays 0 for B
+    expect(stepDone(box, 'fts')).toBe(false);
+    lateValueGone(box, value);
+    const ok = runSweep(box);
+    expect(ok.code, ok.stderr).toBe(0);
+    expect(unindexed(box)).toBe(0);                                    // CONTROL: the pause was the only thing holding B back
+    expect(stepDone(box, 'fts')).toBe(true);
+  });
+
+  it('over the cap (the pass-level pause): the backfill leaves B unindexed; the re-index and merge steps still run', () => {
+    const value = tag(2);
+    const { box } = pendingBox('ccrc-hist-d4242b-', value);
+    secret(box, value);
+    fs.writeFileSync(paths(box).cap, '1\n');
+    const r = runDriver(box, { sizeBytes: 2 * GiB });
+    expect(r.code, r.stderr).toBe(0);
+    expect(counter(box, 'capture_paused_at_cap')).toBeGreaterThanOrEqual(1);
+    expect(unindexed(box)).toBe(1);
+    expect(stepDone(box, 'fts')).toBe(false);
+    lateValueGone(box, value);
+    fs.unlinkSync(paths(box).cap);
+    expect(runDriver(box, { sizeBytes: 0 }).code).toBe(0);
+    expect(unindexed(box)).toBe(0);
+  });
+
+  it('the per-chunk floor stopping this run\'s ingest (the pass started with room): the backfill is held with it', () => {
+    const value = tag(3);
+    const { box, transcript } = pendingBox('ccrc-hist-d4242c-', value);
+    secret(box, value);
+    fs.appendFileSync(transcript, `${JSON.stringify({ ...userRow(ROW_C, 'zqgamma words', new Date().toISOString()), parentUuid: ROW_B })}\n`);
+    hint(box);
+    // The pass-level probe answers plenty (ingest is on); every per-chunk probe after it answers below the floor.
+    const r = runSweep(box, [], { env: { HISTORY_TEST_STATFS_AFTER: `1:${THRESHOLD - 4096}:${FS_BYTES}` } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(countOf(box, 'entries'), 'the chunk was refused: C is not captured').toBe(2);
+    expect(unindexed(box)).toBe(1);
+    expect(stepDone(box, 'fts')).toBe(false);
+    lateValueGone(box, value);
+  });
+});
