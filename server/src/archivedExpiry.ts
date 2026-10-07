@@ -396,6 +396,12 @@ export function archivedExpiryLearned(entry: ArchivedExpiryEntry, read: ExpireAu
     report: learned.report?.kind === 'no-evidence' ? null : learned.report };
 }
 
+/** A report whose row the lane will NEVER ask again for this archive (`nextAskAt` is +∞ — `archivedExpiryNextEntry`'s
+ *  terminal-refusal, non-resumable-failure and composition arms): the report is the row's only trace on the attention
+ *  list, so a hold must not take its place — nothing would ever put it back. */
+export const expiryReportIsFinal = (r: ExpiryReport | null): boolean =>
+  r !== null && ((r.kind === 'failing' && r.final === true) || (r.kind === 'refused' && EXPIRE_TOKEN_KIND[r.token] === 'terminal'));
+
 /** One pass's verdict, folded into memory. THE TWICE-OBSERVED RULE (spec §5.3: "all of the above held on the
  *  previous pass too"): an eligible verdict seeds `eligibleSince` on its first pass and makes the row DUE only on a
  *  later one; any other verdict ends the run. And THE HELD REPORT (spec §5.3: "An archived workspace that is still
@@ -409,6 +415,8 @@ export function archivedExpirySighted(
 ): ArchivedExpiryEntry {
   const eligibleSince = v.eligible ? (entry.eligibleSince ?? nowMs) : null;
   if (!v.eligible && v.why === 'held' && held !== null) {
+    // A row the lane has stopped asking keeps its own report — listed with its reason while held and after the hold goes.
+    if (expiryReportIsFinal(entry.report)) return eligibleSince === entry.eligibleSince ? entry : { ...entry, eligibleSince };
     const at = entry.report?.kind === 'held' ? entry.report.at : nowMs;
     return { ...entry, eligibleSince, inUseRun: 0, inUse: [], report: { kind: 'held', at, reason: held } };
   }
