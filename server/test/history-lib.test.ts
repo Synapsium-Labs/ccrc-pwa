@@ -5,7 +5,7 @@
 // fixture HOME except O53's bash half, which runs ccrc's own `_box_env_value`
 // — lifted out of the shipped `ccd/ccrc`, never copied — over the same bytes
 // in a scratch directory. Runs on darwin too (spec §13: lib tests run there).
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -24,6 +24,7 @@ import {
 } from '../../ccd/history/lib.mjs';
 import {
   SPOOL_KEYS, SPOOL_LINE_MAX, DRAINING_NAME_MAX, JOURNAL_V, CONFIRM_BY, GENERATION_VIA, splitSpoolText, parseSpoolLine, drainingNameOk,
+  SPOOL_FILE_MAX, SPOOL_FILE_LINES_MAX, spoolLineCount, spoolLinesOverCap,
   parseJournalRecord, journalRecord,
 } from '../../ccd/history/lib.mjs';
 import * as libPlan from '../../ccd/history/lib.mjs';
@@ -375,6 +376,32 @@ describe('splitSpoolText: empty lines take no ordinal (S17)', () => {
     expect(splitSpoolText('{"v":1}\n{"v"')).toEqual([{ ordinal: 1, raw: '{"v":1}' }, { ordinal: 2, raw: '{"v"' }]);
     expect(splitSpoolText('')).toEqual([]);
     expect(splitSpoolText('\n\n')).toEqual([]);
+  });
+
+  it('spoolLineCount counts on the bytes exactly the ordinals splitSpoolText assigns (D-4337)', () => {
+    for (const t of ['', '\n\n', 'a', 'a\n', '\na\n\nb\n', '{"v":1}\n{"v"', 'é\n\n€x', '\r\n\r\n', '😀\n']) {
+      expect(spoolLineCount(Buffer.from(t)), JSON.stringify(t)).toBe(splitSpoolText(t).length);
+    }
+    const b = Buffer.from([0xe2, 0x0a, 0x41, 0x0a, 0xff, 0x0a, 0x0a]);   // invalid UTF-8
+    expect(spoolLineCount(b)).toBe(splitSpoolText(b.toString('utf8')).length);
+    expect(spoolLineCount(b)).toBe(3);
+  });
+
+  it('SPOOL_FILE_LINES_MAX is SPOOL_FILE_MAX / SPOOL_LINE_MAX, and spoolLinesOverCap is strictly over it; empty lines count none', () => {
+    expect(SPOOL_FILE_LINES_MAX).toBe(65536);
+    expect(SPOOL_FILE_LINES_MAX).toBe(SPOOL_FILE_MAX / SPOOL_LINE_MAX);
+    expect(spoolLinesOverCap(Buffer.from('a\n'.repeat(SPOOL_FILE_LINES_MAX)))).toBe(false);
+    expect(spoolLinesOverCap(Buffer.from('a\n'.repeat(SPOOL_FILE_LINES_MAX + 1)))).toBe(true);
+    expect(spoolLinesOverCap(Buffer.from('\n'.repeat(4 * SPOOL_FILE_LINES_MAX) + 'a'))).toBe(false);
+  });
+
+  it('splitSpoolText never builds a segment array: it does not call String.prototype.split (review 316 F6)', () => {
+    const spy = vi.spyOn(String.prototype, 'split');
+    let got: unknown; let calls = -1;
+    try { got = splitSpoolText('\n'.repeat(1000) + 'a\n\nb'); calls = spy.mock.calls.length; }
+    finally { spy.mockRestore(); }
+    expect(got).toEqual([{ ordinal: 1, raw: 'a' }, { ordinal: 2, raw: 'b' }]);
+    expect(calls).toBe(0);
   });
 });
 

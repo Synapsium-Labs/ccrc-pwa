@@ -14,7 +14,7 @@ import { pathToFileURL } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
 import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, PRELOADS, SWEEP, type HistoryBox } from './historyHelpers.js';
 import { createStore, openWriter, closeWriter } from '../../ccd/history/store.mjs';
-import { journalRecord, historyPaths, eventKey, DRAINING_NAME_MAX, SPOOL_FILE_MAX } from '../../ccd/history/lib.mjs';
+import { journalRecord, historyPaths, eventKey, DRAINING_NAME_MAX, SPOOL_FILE_MAX, SPOOL_FILE_LINES_MAX } from '../../ccd/history/lib.mjs';
 
 skipOnDarwin();
 
@@ -698,6 +698,93 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       expect(() => SW.readDrainingText(f)).toThrow(expect.objectContaining({ code: 'SPOOL_OVERSIZE' }));
       sparse(f, 10);
       expect(SW.readDrainingText(f).bytes).toBe(10);
+    });
+
+    describe('its line arm: a file within SPOOL_FILE_MAX holding more than SPOOL_FILE_LINES_MAX lines (review 316 F6)', () => {
+      // a V8 heap of half the carrier's MemoryMax=1G; runSweep's own NODE_OPTIONS is replaced, so the statfs preload is named again
+      const HEAP_HALF = { NODE_OPTIONS: `--import ${pathToFileURL(PRELOADS.statfs).href} --max-old-space-size=512` };
+
+      it('is set aside into .draining/oversize/, counted spool_overlines once and never spool_oversize, never journaled or drained; the other file drains', () => {
+        fs.writeFileSync(path.join(DRAIN(box.home), OVER), 'a\n'.repeat(SPOOL_FILE_LINES_MAX + 1), { mode: 0o600 });
+        spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+        const r1 = runSweep(box);
+        expect(r1.code, r1.stderr).toBe(0);
+        expect(fs.existsSync(path.join(DRAIN(box.home), OVER))).toBe(false);
+        expect(fs.statSync(ASIDE(OVER)).size).toBe(2 * (SPOOL_FILE_LINES_MAX + 1));
+        expect(counters(box)['spool_overlines']).toBe(1);
+        expect(counters(box)['spool_oversize']).toBeUndefined();
+        expect(counters(box)['spool_line_rejected']).toBeUndefined();
+        const [name] = drainingNames(box.home);
+        expect(name).not.toBe(OVER);                                       // the spool file this tick renamed, which drains at the next tick
+        const r2 = runSweep(box);
+        expect(r2.code, r2.stderr).toBe(0);
+        expect(counters(box)['spool_overlines']).toBe(1);
+        expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(name!, 1)]);
+        expect(fileBlocks(journalOf(box.home, ids.storeId)).map((b) => b.name)).toEqual([name]);
+        expect(drainingNames(box.home)).toEqual([]);
+      });
+
+      it('a file of exactly SPOOL_FILE_LINES_MAX lines drains: every line read, none set aside', () => {
+        fs.writeFileSync(path.join(DRAIN(box.home), OVER), 'a\n'.repeat(SPOOL_FILE_LINES_MAX), { mode: 0o600 });
+        const r = runSweep(box);
+        expect(r.code, r.stderr).toBe(0);
+        expect(counters(box)['spool_overlines']).toBeUndefined();
+        expect(counters(box)['spool_line_rejected']).toBe(SPOOL_FILE_LINES_MAX);
+        expect(fs.existsSync(path.join(DRAIN(box.home), OVER))).toBe(false);
+        expect(fs.existsSync(path.join(DRAIN(box.home), 'oversize'))).toBe(false);
+      });
+
+      it('empty lines take no ordinal, so a file of 4 × SPOOL_FILE_LINES_MAX newlines and one line drains it', () => {
+        fs.writeFileSync(path.join(DRAIN(box.home), OVER), '\n'.repeat(4 * SPOOL_FILE_LINES_MAX) + JSON.stringify({ v: 1, ev: 'Stop', id: ID }) + '\n', { mode: 0o600 });
+        const r = runSweep(box);
+        expect(r.code, r.stderr).toBe(0);
+        expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(OVER, 1)]);
+        expect(counters(box)['spool_overlines']).toBeUndefined();
+      });
+
+      it('under a hold the journal half leaves it unread (exit 5, nothing journaled); the drain sets it aside, spool_overlines, when the hold ends', () => {
+        fs.writeFileSync(path.join(DRAIN(box.home), OVER), 'a\n'.repeat(SPOOL_FILE_LINES_MAX + 1), { mode: 0o600 });
+        const aside = path.join(box.home, 'aside');
+        moveDb(box, hist(box.home, 'db'), aside);
+        const held = runSweep(box);
+        expect(held.code, held.stderr).toBe(5);
+        expect(drainingNames(box.home)).toEqual([OVER]);
+        expect(fileBlocks(journalOf(box.home, ids.storeId))).toEqual([]);
+        moveDb(box, aside, hist(box.home, 'db'));
+        expect(runSweep(box).code).toBe(0);
+        expect(counters(box)['spool_overlines']).toBe(1);
+        expect(fs.existsSync(ASIDE(OVER))).toBe(true);
+      });
+
+      it('readDrainingText throws SPOOL_OVERLINES past the line cap and reads a file at it', () => {
+        const f = path.join(box.home, 'lines.jsonl');
+        fs.writeFileSync(f, 'a\n'.repeat(SPOOL_FILE_LINES_MAX + 1));
+        expect(() => SW.readDrainingText(f)).toThrow(expect.objectContaining({ code: 'SPOOL_OVERLINES' }));
+        fs.writeFileSync(f, 'a\n'.repeat(SPOOL_FILE_LINES_MAX));
+        expect(SW.readDrainingText(f).bytes).toBe(2 * SPOOL_FILE_LINES_MAX);
+      });
+
+      it('review 316 F6: 24 MiB of 2-byte lines under a 512 MiB heap is set aside and the pass exits 0', () => {
+        fs.writeFileSync(path.join(DRAIN(box.home), OVER), Buffer.alloc(24 * 1024 * 1024, 'a\n'), { mode: 0o600 });
+        try {
+          const r = runSweep(box, [], { env: HEAP_HALF });
+          expect(r.code, `${r.signal} ${r.stderr}`).toBe(0);            // at HEAD the child died on SIGABRT: status null
+          expect(counters(box)['spool_overlines']).toBe(1);
+          expect(fs.existsSync(ASIDE(OVER))).toBe(true);
+          expect(receipts(box)).toEqual([]);
+        } finally { fs.rmSync(ASIDE(OVER), { force: true }); }
+      }, 120_000);
+
+      it('review 316 F6, its newline sibling: 64 MiB of newlines and one line, under both caps, drains under a 512 MiB heap', () => {
+        fs.writeFileSync(path.join(DRAIN(box.home), OVER),
+          Buffer.concat([Buffer.alloc(SPOOL_FILE_MAX - 4096, 0x0a), Buffer.from(JSON.stringify({ v: 1, ev: 'Stop', id: ID }) + '\n')]), { mode: 0o600 });
+        try {
+          const r = runSweep(box, [], { env: HEAP_HALF });
+          expect(r.code, `${r.signal} ${r.stderr}`).toBe(0);            // at HEAD: SIGABRT
+          expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(OVER, 1)]);
+          expect(counters(box)['spool_overlines']).toBeUndefined();
+        } finally { fs.rmSync(path.join(DRAIN(box.home), OVER), { force: true }); }
+      }, 120_000);
     });
   });
 

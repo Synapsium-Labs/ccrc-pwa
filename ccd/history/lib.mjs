@@ -120,6 +120,12 @@ export const SPOOL_LINE_MAX = 1024;                 // bytes, one spool line wit
  *  aside into `.draining/oversize/` and counted `spool_oversize`. A hook line is at most SPOOL_LINE_MAX bytes and a file is
  *  renamed every tick, so a legitimate one stays far under it. */
 export const SPOOL_FILE_MAX = 67108864;             // 64 MiB
+/** D-4337 (history-spool-file-size-cap, its line arm): a draining spool file holding more than this many lines
+ *  (splitSpoolText's ordinals: empty lines take none) is set aside like one over SPOOL_FILE_MAX, counted
+ *  `spool_overlines`. A legitimate file holds fewer: each hook line is fenced `\n<json>\n` (D-4176) and at most
+ *  SPOOL_LINE_MAX bytes, so SPOOL_FILE_MAX holds at most 65,408 of them. It refuses only the amplification the byte
+ *  cap let through: 24 MiB of 2-byte lines (12.6 million) aborted every pass in a 1 GiB scope (review 316 F6). */
+export const SPOOL_FILE_LINES_MAX = SPOOL_FILE_MAX / SPOOL_LINE_MAX;   // 65536
 export const SPOOL_ID_MAX = 224;                    // `.draining/<id>.<ms>.<pid>.jsonl` fits 255
 export const STATFS_DEADLINE_MS = 5000;             // the writer's free-space probe (§9.3)
 export const CLI_STAT_DEADLINE_MS = 2000;           // the CLI's reachability stat (§8.1)
@@ -457,16 +463,40 @@ const SPOOL_VALUE = Object.freeze({
 
 /** A spool file's lines with their ordinals: 1-based in file order, EMPTY
  *  lines skipped without taking one (S17). A last fragment with no `\n` is
- *  still a line — a partial one, which parseSpoolLine rejects. */
+ *  still a line — a partial one, which parseSpoolLine rejects. It walks the
+ *  text with `indexOf` and never calls `split`, so a file of empty lines costs
+ *  no array (D-4337: 64 MiB of newlines aborted a pass under a 512 MiB heap,
+ *  review 316 F6). */
 export function splitSpoolText(text) {
+  const s = String(text);
   const out = [];
   let ordinal = 0;
-  for (const raw of String(text).split('\n')) {
-    if (raw === '') continue;
+  for (let start = 0; start < s.length;) {
+    if (s.charCodeAt(start) === 10) { start += 1; continue; }   // an empty line takes no ordinal (S17)
+    let nl = s.indexOf('\n', start);
+    if (nl < 0) nl = s.length;
     ordinal += 1;
-    out.push({ ordinal, raw });
+    out.push({ ordinal, raw: s.slice(start, nl) });
+    start = nl + 1;
   }
   return out;
+}
+
+/** How many lines splitSpoolText returns for these bytes' UTF-8 text — the non-empty `\n`-separated pieces, a last
+ *  piece with no `\n` included — counted on the bytes before any string exists: 0x0a never occurs inside a
+ *  multi-byte UTF-8 sequence, and a decoder's replacement character is never `\n` (D-4337). */
+export function spoolLineCount(bytes) {
+  let n = 0;
+  let open = false;
+  for (let i = 0; i < bytes.length; i += 1) {
+    if (bytes[i] === 0x0a) { if (open) { n += 1; open = false; } } else open = true;
+  }
+  return open ? n + 1 : n;
+}
+
+/** D-4337 (history-spool-file-size-cap, its line arm): is a draining file's text over SPOOL_FILE_LINES_MAX lines? */
+export function spoolLinesOverCap(bytes) {
+  return spoolLineCount(bytes) > SPOOL_FILE_LINES_MAX;
 }
 
 /** One spool line, judged before anything reads it (S5): at most

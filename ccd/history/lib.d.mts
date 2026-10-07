@@ -27,6 +27,7 @@ export const SWITCHES: Readonly<{
 
 export const SPOOL_LINE_MAX: number;
 export const SPOOL_FILE_MAX: number;
+export const SPOOL_FILE_LINES_MAX: number;
 export const SPOOL_ID_MAX: number;
 export const STATFS_DEADLINE_MS: number;
 export const CLI_STAT_DEADLINE_MS: number;
@@ -135,6 +136,8 @@ export interface SpoolRecord {
 }
 export type SpoolReject = 'too-long' | 'json' | 'not-object' | 'keys' | 'value' | 'bad-id';
 export function splitSpoolText(text: string): Array<{ ordinal: number; raw: string }>;
+export function spoolLineCount(bytes: Uint8Array): number;
+export function spoolLinesOverCap(bytes: Uint8Array): boolean;
 export function parseSpoolLine(raw: string): { ok: true; rec: SpoolRecord } | { ok: false; why: SpoolReject };
 
 export const JOURNAL_V: 1;

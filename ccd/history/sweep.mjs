@@ -38,7 +38,7 @@ import {
   CARRIER_KILL_S, EXIT, SPOOL_FILE_MAX, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
   UUID_RE, WRITER_RE, drainingNameOk, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
-  passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText,
+  passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
   CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
@@ -472,7 +472,9 @@ function renameAndObserve(home, tickMs, nowMs) {
  *  planted in .draining/ is refused rather than followed or waited on. It is also BOUNDED (D-4337,
  *  history-spool-file-size-cap): a file whose size is over SPOOL_FILE_MAX, by its descriptor's stat or by the bytes
  *  actually read, throws `SPOOL_OVERSIZE` before it is buffered, so no spool file can make a pass allocate its way past
- *  the unit's memory limit. Every read of a draining file goes through here. */
+ *  the unit's memory limit. A file within the byte cap but over SPOOL_FILE_LINES_MAX lines throws `SPOOL_OVERLINES`, so no
+ *  spool file's line count can make a pass allocate past the unit's memory limit either. Every read of a draining file
+ *  goes through here. */
 export function readDrainingText(path) {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
@@ -490,29 +492,39 @@ export function readDrainingText(path) {
       if (pos > SPOOL_FILE_MAX) throw Object.assign(new Error('draining file grew past SPOOL_FILE_MAX'), { code: 'SPOOL_OVERSIZE' });   // it grew while it was read
     }
     const buf = Buffer.concat(chunks);
+    // D-4337 (history-spool-file-size-cap, its line arm): counted on the bytes, before the text exists.
+    if (spoolLinesOverCap(buf)) throw Object.assign(new Error('draining file is over SPOOL_FILE_LINES_MAX'), { code: 'SPOOL_OVERLINES' });
     return { text: buf.toString('utf8'), bytes: buf.length };
   } finally {
     closeSync(fd);
   }
 }
 
-/** Set a draining file over SPOOL_FILE_MAX aside (D-4337, history-spool-file-size-cap), decided from its lstat BEFORE
- *  any open: moved into the sibling directory `.draining/oversize/` (0700, made on demand, the same filesystem, the name
- *  unchanged at its at-most-253 bytes, which a `<name>.oversize` rename would push past the 255-byte NAME_MAX), which
- *  `listDraining` never lists, so it is never journaled, drained or unlinked by the sweep (the operator removes it). Its
- *  observation sidecar, which nothing lists once the `.jsonl` is gone, is removed. `spool_oversize` is bumped in a
- *  committed transaction FIRST and the file moved after, so a crash between the two may count a file twice and can never
- *  lose the count; a count that cannot commit, or a move that fails, leaves the file where it is for the next tick
- *  (recounted then: once per tick while the failure lasts, never a thrown tick). True when the file is
- *  oversize (set aside, or left for the next tick to count): the caller never journals it. False for a file that is
- *  not oversize, a link or a FIFO, which are not this function's. */
+/** Decide a draining file's oversize from its lstat BEFORE any open (D-4337, history-spool-file-size-cap): true when it
+ *  is a regular file over SPOOL_FILE_MAX, which `setAside` has then moved aside or left for the next tick to count; the
+ *  caller never journals it. False for a file that is not oversize, a link or a FIFO, which are not this function's. */
 export function setAsideOversize(db, home, name) {
   const P = historyPaths(home);
   let st;
   try { st = lstatSync(`${P.draining}/${name}`); } catch (e) { if (e && e.code === 'ENOENT') return false; throw e; }
   if (!st.isFile() || st.size <= SPOOL_FILE_MAX) return false;
+  return setAside(db, home, name, 'spool_oversize');
+}
+
+/** Set a draining file aside (D-4337, history-spool-file-size-cap): moved into the sibling directory
+ *  `.draining/oversize/` (0700, made on demand, the same filesystem, the name unchanged at its at-most-253 bytes, which a
+ *  `<name>.oversize` rename would push past the 255-byte NAME_MAX), which `listDraining` never lists, so it is never
+ *  journaled, drained or unlinked by the sweep (the operator removes it). Its observation sidecar, which nothing lists once
+ *  the `.jsonl` is gone, is removed. `counter` is `spool_oversize` (over SPOOL_FILE_MAX, decided from its lstat by
+ *  setAsideOversize) or `spool_overlines` (over SPOOL_FILE_LINES_MAX, decided by readDrainingText's count). The counter is
+ *  bumped in a committed transaction FIRST and the file moved after, so a crash between the two may count a file twice and
+ *  can never lose the count; a count that cannot commit, or a move that fails, leaves the file where it is for the next
+ *  tick (recounted then: once per tick while the failure lasts, never a thrown tick). A name that is not a directory at
+ *  `oversize` is removed and counted `non_regular`. True on every path: the caller never journals the file. */
+export function setAside(db, home, name, counter) {
+  const P = historyPaths(home);
   try {
-    withTx(db, 'NORMAL', () => bump(db, 'spool_oversize'));
+    withTx(db, 'NORMAL', () => bump(db, counter));
   } catch { return true; }   // uncounted, so unmoved: the next tick meets it again and counts it then
   const dir = `${P.draining}/oversize`;
   try {
@@ -532,6 +544,7 @@ export function setAsideOversize(db, home, name) {
   unlinkIfPresent(`${P.draining}/${sidecarName(name)}`);
   return true;
 }
+
 
 /** The lines that pass parseSpoolLine AND name the file's own id. Only those are journaled and drained (slug
  *  history-journal-spool-grammar, D-4174; the fence that gives empty lines no ordinal, history-spool-line-fenced, D-4176). A line claiming another id would be decided from the wrong id's observation; only
@@ -697,9 +710,9 @@ export function journalHalf(home, ids, nowMs) {
     } catch (e) {
       // D-4338 (history-sidecar-write-failure-holds): a sidecar that cannot be written is the journal failure; the file is held.
       if (e instanceof JournalError) { journalFailed = true; held.push(name); continue; }
-      // SPOOL_OVERSIZE (D-4337): left where it is, unread. No DB holds a counter here (IV2), so the drain, which has one, sets
+      // SPOOL_OVERSIZE or SPOOL_OVERLINES (D-4337): left where it is, unread. No DB holds a counter here (IV2), so the drain, which has one, sets
       // it aside and counts it when the hold ends.
-      if (e && (e.code === 'ENOENT' || e.code === 'ELOOP' || e.code === 'NON_REGULAR' || e.code === 'SPOOL_OVERSIZE')) continue;
+      if (e && (e.code === 'ENOENT' || e.code === 'ELOOP' || e.code === 'NON_REGULAR' || e.code === 'SPOOL_OVERSIZE' || e.code === 'SPOOL_OVERLINES')) continue;
       throw e;
     }
   }
@@ -726,6 +739,10 @@ export function drainSpool(db, c) {
       if (e instanceof JournalError) { countOutside(db, 'journal_write_failed'); failedCounted = true; break; }
       if (e && e.code === 'SPOOL_OVERSIZE') {   // it grew between the stat and the read
         setAsideOversize(db, c.home, name);
+        continue;
+      }
+      if (e && e.code === 'SPOOL_OVERLINES') {   // D-4337's line arm: decided by readDrainingText's count, never by a stat
+        setAside(db, c.home, name, 'spool_overlines');
         continue;
       }
       if (e && (e.code === 'ELOOP' || e.code === 'NON_REGULAR')) {
