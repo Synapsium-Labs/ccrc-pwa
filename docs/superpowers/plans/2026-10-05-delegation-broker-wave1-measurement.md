@@ -3243,8 +3243,10 @@ Later close-out tasks append their lines here.
 
 **Wave 2 fix round (review 318).** Every guard arm the fix round added or touched, each measured red by deleting or
 mutating that arm alone in a scratch snapshot (`git archive` of the commit named, with `server/node_modules` linked);
-each count counts rows red over `test/delegation-rig.test.ts`, not assertions. Task 5's lines name the seven rows the fix
-round added by a short name; each title is "--scan …" and ends "(review 318 F2)", and they sit together after "--scan
+each count counts rows red over `test/delegation-rig.test.ts`, not assertions; the review 324 lines are appended to this
+table too, and a count on an older line is the one measured at its own sha, so it does not count a row added after that
+sha. Task 5's lines name the seven rows the fix round
+added by a short name; each title is "--scan …" and ends "(review 318 F2)", and they sit together after "--scan
 refuses a fixture file whose name passes the shape test but carries residue …": the **version-file** row ("… fails closed
 on a file inside a version directory whose name is not valid UTF-8 …"), the **version-dir** row ("… fails closed on a
 version directory whose name is not valid UTF-8, and does not descend into it …"), the **top-file** row ("… fails closed
@@ -3265,7 +3267,7 @@ have, so none of them is red against them: the counts below are the proof, each 
 
 | Task | Finding | Guard | Row |
 |---|---|---|---|
-| 5 | F2 (review 318) | `--scan` lists each directory's names as Buffers and decodes each with a fatal UTF-8 decoder; an entry that fails is a finding (a string read turned its name into U+FFFD, a path `isFile`/`isDir` answer false about, and skipped it) | the version-file, version-dir, top-file, index, j and kinds rows (the Buffer read replaced by the old string read, the guard deleted: 6 red; the decoder made non-fatal, so nothing throws: 6), `5971214f5` |
+| 5 | F2 (review 318) | `--scan` lists each directory's names as Buffers and decodes each with a fatal UTF-8 decoder; an entry that fails is a finding (a string read turned its name into U+FFFD, a path `isFile`/`isDir` answer false about, and skipped it) | the version-file, version-dir, top-file, index, j and kinds rows (the Buffer read replaced by the old string read, the guard deleted: 6 red; the decoder made non-fatal, so nothing throws: 6, and 7 at `ee41f7853`: those six and the review 324 F7 row below), `5971214f5` |
 | 5 | F2 (review 318) | the top directory's listing is checked (the root-level arm) | the version-dir, top-file and index rows (the root-level check deleted alone, the top listing read as strings: 3 red), `5971214f5` |
 | 5 | F2 (review 318) | each version directory's listing is checked (the version-level arm) | the version-file, index, j and kinds rows (the version-level check deleted alone: 4 red), `5971214f5` |
 | 5 | F2 (review 318) | a finding inside a version directory is named `<version>/#<j>` | the version-file, index, j and kinds rows (the `<version>/` prefix dropped: 4 red), `5971214f5` |
@@ -3285,6 +3287,7 @@ have, so none of them is red against them: the counts below are the proof, each 
 | A | F3 (review 318) | steps 4 and 5 quote their paths the same way (`:68` the matrix builder, fixtures and scenarios; `:70` the scan) | the same three rows (each line bare, alone: 3 red, 3 red), `6778b20a5` |
 | A | F3 (review 318) | the `<raw>` substitution splices `"$RAW"` (`:84`, `rawref='"$RAW"'`), so a raw root whose path carries a space stays one word | the spaced real-run row and the spaced end-to-end row (`rawref='$RAW'`: 2 red; the spaced `--dry-run` row cannot see this arm, since a dry run prints `<raw>` and never substitutes it), `6778b20a5` |
 | A | F3c (review 318) | `rig.sh versions` prints nothing for an empty selection (`rig.sh:451`, `if (( ${#VERS[@]} )); then printf …; fi`); an unconditional `printf '%s\n' "${VERS[@]}"` would print one empty line. The guard and its row already existed; only this record was missing | "rig.sh versions … lists nothing, and succeeds, for an empty versions directory and for a HOME with none" (the guard replaced by an unconditional `printf`: 1 red), `6778b20a5` |
+| 5 | F7 (review 324) | the decoder keeps no state between names (each name decoded alone, never `{ stream: true }`) | the truncated-tail row ("--scan decodes each entry name on its own: a name ending in a truncated multibyte sequence, listed before a continuation-led one …", title ending "(review 324 F7)"): `zz.json\xe2\x82` (two bytes of a three-byte sequence, so a stream decoder holds them back and answers the name as valid) listed straight before `\xac.json` (the byte that completes them: `e2 82 ac` is U+20AC), both holding residue, beside the clean `agent-plain.json`; the row asserts that listing order, rc 1 and both findings `2.1.999/#0` and `2.1.999/#1`, and no 0xe2, 0x82, 0xac, 0xff, U+FFFD, `zz.json` or U+20AC in either stream. Every bad name in the seven review 318 rows begins with an invalid lead byte, which throws even in stream mode, so none could tell the two decoders apart (`utf8.decode(b, { stream: true })` at `sanitize.mjs:391`: 1 red, this row only, which gets rc 0 "no residue" over two names it reads as `zz.json` and `\u{20AC}.json`, neither a file on disk), `ee41f7853` |
 
 ## After the merge (coordinator): the real-lane cross-check
 
