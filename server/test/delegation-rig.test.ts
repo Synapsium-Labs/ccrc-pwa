@@ -2144,9 +2144,12 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
   // holding residue gave "no residue", rc 0, where `Bad.json` gave rc 1. EVERY entry whose name is not valid UTF-8, at the top or
   // immediately inside a version directory, whatever its type or suffix, is now a finding `#<j> (entry name not UTF-8)` (`<version>/#<j> ...`
   // inside a version directory), `j` its place among THAT directory's such entries, never its bytes. These rows make the names with Buffer
-  // paths; a filesystem that refuses such a name (macOS APFS answers EILSEQ) skips a row, decided by the create throwing and by nothing else.
+  // paths; a filesystem that refuses such a name (macOS APFS and ZFS `utf8only` answer EILSEQ; some answer EINVAL) skips a row, decided by the
+  // create throwing one of those two codes and by nothing else: any other error is the row's own setup failing, and fails it.
   const badAt = (dir: string, bytes: number[]): Buffer => Buffer.concat([Buffer.from(`${dir}/`), Buffer.from(bytes)]);
-  const mustMake = (ctx: { skip: () => unknown }, make: () => void): void => { try { make(); } catch { ctx.skip(); } };
+  const mustMake = (ctx: { skip: () => unknown }, make: () => void): void => {
+    try { make(); } catch (e) { if (['EILSEQ', 'EINVAL'].includes((e as NodeJS.ErrnoException).code ?? '')) ctx.skip(); else throw e; }
+  };
   const scanRunBytes = (dir: string): { status: number | null; stdout: Buffer; stderr: Buffer } => {
     const r = spawnSync(process.execPath, [SANITIZE, '--scan', dir]);
     return { status: r.status, stdout: r.stdout, stderr: r.stderr };
@@ -2236,7 +2239,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     noNameBytes(r);
   });
 
-  it('--scan counts a directory\'s non-UTF-8 entries among themselves, in byte order, and not among its valid ones: two bad files around a valid one are #0 and #1, and a valid file named U+FFFD is neither (review 318 F2)', (ctx) => {
+  it('--scan counts a directory\'s non-UTF-8 entries among themselves and not among its valid ones: two bad files around a valid one are #0 and #1, and a valid file named U+FFFD is neither (review 318 F2)', (ctx) => {
     const { dir, vdir } = oneVersion();
     fs.writeFileSync(path.join(vdir, '\u{FFFD}.json'), cleanBody());   // valid UTF-8 (EF BF BD): what a lossy decode of `\xff.json` would spell
     mustMake(ctx, () => {

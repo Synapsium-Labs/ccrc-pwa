@@ -371,18 +371,19 @@ function main() {
 // digits-and-dots text, and only then. An entry whose NAME is not valid UTF-8 (review 318 F2), at the top or immediately inside a version
 // directory, is neither counted nor skipped: whatever its type or suffix it is a finding `#<j> (entry name not UTF-8)` (`<version>/#<j> ...`
 // inside a version directory), `j` its place among THAT directory's such entries in byte order, a sequence of its own told apart by its
-// suffix, listed ahead of that directory's other findings, and its bytes are never printed. The names are read as Buffers (`namesIn`) and decoded with a fatal decoder, never as strings,
-// which would turn the name into U+FFFD, a path that does not exist, for `isFile` and `isDir` to answer false about. A version directory
-// so named is not descended into. The decoder keeps a leading BOM (`ignoreBOM`): a name that begins with U+FEFF is a valid name and
-// must reach `isFile`/`isDir` as it is on disk, not with the BOM stripped.
+// suffix, listed ahead of that directory's other findings, and its bytes are never printed. The names are read as Buffers (`namesIn`) and
+// decoded with a fatal decoder, never as strings, which would turn the name into U+FFFD, a path that does not exist, for `isFile` and
+// `isDir` to answer false about. A version directory so named is not descended into. The decoder keeps a leading BOM (`ignoreBOM`): a name
+// that begins with U+FEFF is a valid name and must reach `isFile`/`isDir` as it is on disk, not with the BOM stripped.
 function scanCorpus(dir) {
   const findings = [];
   const tally = { files: 0, strings: 0, keys: 0 };
   const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
   // The names of `d` that are valid UTF-8, in code-unit order; every other entry, of any type, is a finding `<prefix>#<j> (entry name not
-  // UTF-8)` (j counted among those entries, in byte order) and is in no sequence below. Its bytes are never printed. Both `.sort`s state
-  // an order the output promises and neither is observable: `readdirSync` already lists in byte order, a finding carries only its j, and
-  // the only names the byte and code-unit orders place differently are non-ASCII, each a finding of one text.
+  // UTF-8)` (j counted among those entries, in byte order) and is in no sequence below. Its bytes are never printed.
+  // `.sort(Buffer.compare)` fixes which entry `#j` means; no output shows it, since a finding carries only its j. The names' `.sort()`
+  // keeps the index independent of the listing order; `readdirSync` happens to list in byte order already (libuv sorts), so no row reds its
+  // removal.
   const namesIn = (d, prefix) => {
     const names = [];
     const bad = [];
