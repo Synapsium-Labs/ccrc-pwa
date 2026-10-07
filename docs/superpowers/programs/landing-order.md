@@ -20,8 +20,8 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
-| 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | — | dispatched 2026-10-04 22:21 as run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
-| 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | to plan after wave 3 merges |
+| 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
+| 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | run 310 open (planned; the run's wave 4), block 4326–4335; to plan |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
@@ -593,6 +593,15 @@ carries it (spec §5.1, amended 2026-09-24).
   - **CI is red on one test,** `pools-prose`'s README size ratchet. Main's README is exactly 5,800 lines, at the edge
     against CLAUDE.md's "~5700". #248 adds one line, making 5,801. The test asks the PR that crosses the edge to
     re-measure, so fix round 5 (mail 3774) makes ONE line of CLAUDE.md read `~5800`.
+- **2026-10-07 00:26 — wave 3 MERGED: #248** (`9a255a74`, squash at 00:24 UTC). Fix round 5 (wave-done 3782, tip `4c8f8048`)
+  is the one CLAUDE.md line, `~5800`, made with quiet-ridge's consent over claim 1055 (mail 3779). Verified before the
+  merge: the commit is that line alone, all four required checks green on `4c8f8048` (macOS legs advisory), the head
+  unchanged and merge-tree clean against main `1bb88d5e`.
+  - **Runs:** 250 advanced to `merging`, then closed final (`merged`). Its child reclaim is deferred, because the
+    programme still holds the workspace while run 310 (wave 3b) is open.
+  - **Task 7, in order:** (1) both boxes carry `9a255a74` (the operator applies dev builds from the console; the time
+    is recorded here); (2) a trusted full CI run on `main`; (3) Task 7 Steps 1–7 from the wave-2 plan's runbook, canary
+    first, with the rollback JSON written before the first ruleset write. Wave 2b follows the proof run.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

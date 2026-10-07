@@ -521,6 +521,10 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     reclamation. **Run 308 (wave 4b, the run's wave 5) was opened first,** planned, with numbers 4316–4325 written bare.
   - **Next:** wave 4b waits for baseline B's week, which starts at THIS wave's deploy. The deploy time is recorded
     here when both boxes carry `1bb88d5e`. The stop stays shadowed until the operator arms `scope-sweep-live`.
+- **2026-10-07 00:26 — wave 4 DEPLOYED: baseline B starts 2026-10-06 23:16 UTC.** Both boxes run v0.0.110 (`1bb88d5e`), applied
+  from the console. The fleet box finished at 23:16:17 and the server box at 23:16:50 (each box's `update.json`, phase
+  `done`; `ccrc version` reads `1bb88d5e` on both). Baseline B's week ends 2026-10-13 23:16 UTC. Wave 4b (run 308) is
+  planned after that reading, and the stop stays shadowed until the operator arms `scope-sweep-live`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
