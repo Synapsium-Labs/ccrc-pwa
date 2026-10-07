@@ -1384,6 +1384,8 @@ export function rosterRoots(homes, userHome) {
  *  - its home is rostered and lexically under `$HOME/.claude*`;
  *  - it opens O_NOFOLLOW, so a symlinked name is refused, even one pointing inside the roots;
  *  - it opens O_NONBLOCK, so a FIFO is refused at once and never waited on;
+ *  - it opens O_NOCTTY, so a terminal reached through a directory link under the roots never becomes the pass's
+ *    controlling terminal (fix round 1, M22);
  *  - it is a regular file;
  *  - its realpath lies under one of the rostered projects/ roots.
  *  `missing` and `unreadable` are kept apart from `non_regular` and `outside-roots`, never folded. On `ok` the caller
@@ -1392,7 +1394,7 @@ export function admitFile(p, home, homes, userHome) {
   if (!homes.includes(home) || !underClaudeGlob(home, userHome)) return { ok: false, why: 'outside-roots' };
   let fd;
   try {
-    fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK | constants.O_NOCTTY);
   } catch (e) {
     const code = e && e.code;
     if (code === 'ENOENT' || code === 'ENOTDIR') return { ok: false, why: 'missing' };

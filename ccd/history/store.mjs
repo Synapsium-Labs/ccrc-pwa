@@ -503,17 +503,19 @@ export function removeStaleAtomicTemps(home) {
 }
 
 /** The one reader of every small file the history modules read whole (D-4347, history-planted-entries-never-wedge):
- *  ONE open with O_RDONLY|O_NONBLOCK (plus O_NOFOLLOW unless `follow`), with the type and the size judged on the
+ *  ONE open with O_RDONLY|O_NONBLOCK|O_NOCTTY (plus O_NOFOLLOW unless `follow`), with the type and the size judged on the
  *  DESCRIPTOR, so a FIFO, socket, device or directory is never waited on and no stat can be raced into one between the
  *  check and the open (the `_reg_read` lesson). At most `max` bytes are read: a larger file answers `over-cap`, and one
  *  that grows while it is read answers `unreadable`. It never folds its answers: `absent` is ENOENT, `unreadable` is every
  *  other failure (a refused link, ELOOP; EACCES; a socket, ENXIO; a non-regular descriptor), and each caller folds
  *  `over-cap` where its own rule already folds `unreadable`. `follow` is false for the writer's own files under
- *  `~/.ccrc/history`, which only `db/` may link out of (§9.3), and true for operator and registry files. */
+ *  `~/.ccrc/history`, which only `db/` may link out of (§9.3), and true for operator and registry files. O_NOCTTY: a
+ *  scheduled pass is its unit's session leader with no controlling terminal, and a terminal reached through a followed
+ *  link must never become one, or a hangup on it would signal the pass (fix round 1, M22). */
 export function readBounded(path, max, follow) {
   let fd;
   try {
-    fd = openSync(path, FS.O_RDONLY | FS.O_NONBLOCK | (follow ? 0 : FS.O_NOFOLLOW));
+    fd = openSync(path, FS.O_RDONLY | FS.O_NONBLOCK | FS.O_NOCTTY | (follow ? 0 : FS.O_NOFOLLOW));
   } catch (e) {
     return e && e.code === 'ENOENT' ? { state: 'absent' } : { state: 'unreadable' };
   }

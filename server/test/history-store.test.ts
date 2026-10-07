@@ -15,7 +15,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { brotliCompressSync, constants as Z } from 'node:zlib';
 import { mkTmp } from './tmpHelpers.js';
-import { recordDirFsyncs } from './historyHelpers.js';
+import { recordDirFsyncs, recordOpenFlags } from './historyHelpers.js';
 import { MAX_INTERRUPTED_ATTEMPTS, SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths } from '../../ccd/history/lib.mjs';
 import {
   CODEC, MIGRATIONS, StoreError, openWriter, openReader, userVersion, probeFts5, withTx, brotli, unbrotli,
@@ -853,6 +853,21 @@ describe('store.mjs: readBounded (review 316 F10, F18; D-4347)', () => {
     expect(readBounded(path.join(d, 'sub'), 64, true)).toEqual({ state: 'unreadable' });
     fs.symlinkSync('/dev/zero', path.join(d, 'zero'));
     expect(readBounded(path.join(d, 'zero'), 64, true)).toEqual({ state: 'unreadable' });
+  });
+
+  // M22: a scheduled pass is its unit's session leader with no controlling terminal; opening a terminal without
+  // O_NOCTTY would make it one, so a later hangup on it could signal the pass. A followed link can reach one.
+  it.each([[false], [true]])('opens with O_NOCTTY and O_NONBLOCK (follow %s), so a linked terminal never becomes the pass\'s controlling terminal (M22)', (follow) => {
+    const d = dir();
+    const f = path.join(d, 'f');
+    fs.writeFileSync(f, 'abc');
+    const { out, opens } = recordOpenFlags(() => readBounded(f, 64, follow));
+    expect(out).toEqual({ state: 'value', value: 'abc' });
+    const mine = opens.filter((o) => o.path === f);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.flags & fs.constants.O_NOCTTY).toBe(fs.constants.O_NOCTTY);
+    expect(mine[0]!.flags & fs.constants.O_NONBLOCK).toBe(fs.constants.O_NONBLOCK);
+    expect(mine[0]!.flags & fs.constants.O_NOFOLLOW).toBe(follow ? 0 : fs.constants.O_NOFOLLOW);
   });
 
   // Root bypasses mode 000.

@@ -18,7 +18,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as zc } from 'node:zlib';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
-import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, plantSession, counters, journalRecords, spoolLine, readTxlog, writes, SWEEP, PRELOADS, type HistoryBox } from './historyHelpers.js';
+import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, plantSession, counters, journalRecords, spoolLine, readTxlog, writes, recordOpenFlags, SWEEP, PRELOADS, type HistoryBox } from './historyHelpers.js';
 import { boundaryRow } from './historyFixtures.js';
 import { createStore, openWriter, closeWriter } from '../../ccd/history/store.mjs';
 import { historyPaths, sha256Hex, HEALTH_COUNTERS } from '../../ccd/history/lib.mjs';
@@ -89,6 +89,18 @@ describe('admission (spec §5.2 "Read only", §9.2 step 2; DM35 transcript half)
       expect(a.st.size).toBe(BigInt(fs.statSync(p).size));
       fs.closeSync(a.fd);
     }
+  });
+
+  // M22: a rostered projects/ tree may hold a directory link the operator made, so admission's open carries O_NOCTTY.
+  it('opens the transcript with O_NOCTTY, O_NOFOLLOW and O_NONBLOCK (M22)', () => {
+    const p = transcriptAt(box.homes[0]!, 'demo', U1, row('r1'));
+    const { out, opens } = recordOpenFlags(() => SW.admitFile(p, box.homes[0]!, box.homes, box.home));
+    if (out.ok) fs.closeSync(out.fd);
+    expect(out.ok).toBe(true);
+    const mine = opens.filter((o) => o.path === p);
+    expect(mine).toHaveLength(1);
+    const want = fs.constants.O_NOCTTY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK;
+    expect(mine[0]!.flags & want).toBe(want);
   });
 
   it('refuses a symlinked name even when it points at a transcript inside the roots (O_NOFOLLOW)', () => {
