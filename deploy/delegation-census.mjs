@@ -5,13 +5,22 @@
 // booleans and counts — never a path, a record name, an id, a session uuid or a metadata VALUE
 // (a description can carry user text); metadata KEY names are printed only from an allow-list of the
 // known Claude Code meta key names — any other key (an id-shaped one included) prints as '(unprintable)'.
-// An unparsable or path-less meta, and an unreadable home or projects directory, each carry their own
-// marker (`meta.malformed`, `totals.metaMalformed`, `totals.homesUnreadable`) so they never read as
-// "no metadata" or "nothing there". A meta that parses but names no worktreePath is the ORDINARY shape
-// (an agent spawned without a worktree), not corruption: it is `meta.pathless` / `totals.metaPathless`.
+// A meta file that does not parse, or parses to anything but an object, is `meta.malformed` /
+// `totals.metaMalformed`; one that cannot be READ (any read failure: EACCES, EISDIR, ...) is `meta.unreadable` /
+// `totals.metaUnreadable`, and is neither malformed nor path-less; a directory the census lists under a home (its
+// `projects` directory, a project directory, `subagents`, `workflows` or a run directory) that cannot be listed
+// (anything but ENOENT or ENOTDIR) is counted in `totals.homesUnreadable`, which counts the HOMES it happened in.
+// Each of the three carries its own marker, so none reads as "no metadata" or as "nothing there". A meta that parses but names no
+// worktreePath is the ORDINARY shape (an agent spawned without a worktree), not corruption: it is `meta.pathless` /
+// `totals.metaPathless`. A worktree directory whose stat fails with anything but ENOENT or ENOTDIR is `worktreeDir:
+// 'unreadable'` (`totals.worktreeUnreadable`), and a CLAUDE_BASE whose read fails with anything but ENOENT or ENOTDIR is
+// `claudeBase: 'unreadable'`: for both fields 'absent' means ENOENT or ENOTDIR only. KNOWN LIMIT: `locked` (false when its
+// stat fails) and `baseAgreesFirstLog` (null when `logs/HEAD` cannot be read, as when it is absent) still fold a failure
+// into their "nothing there" value.
 // `movedFromBase` compares a record's HEAD tip with its CLAUDE_BASE: `null` means ONLY "no valid CLAUDE_BASE to
-// compare against" (not applicable); a boolean is the comparison; `'unmeasured'` is a HEAD the census could not
-// resolve to a commit (unreadable or malformed HEAD, or a `ref:` HEAD whose ref is absent, symbolic, not a sha or
+// compare against" (not applicable); a boolean is the comparison; `'unmeasured'` is a CLAUDE_BASE that cannot be
+// read (`claudeBase: 'unreadable'`: it may be valid, so `null` would say there is none), or a HEAD the census could
+// not resolve to a commit (unreadable or malformed HEAD, or a `ref:` HEAD whose ref is absent, symbolic, not a sha or
 // not shaped like a ref name, or whose loose ref is there but cannot be answered from — see `looseText`). A `ref:` HEAD is resolved READ-ONLY in the common dir (`<repo>/.git`): the loose ref
 // file, else the `packed-refs` line — never by running git.
 // Usage: node deploy/delegation-census.mjs --repo <main checkout> [--ccd-root <dir>] --home <dir> [--home <dir>]...
@@ -28,7 +37,7 @@ for (let i = 0; i < argv.length; i += 2) {
   if (typeof v !== 'string' || v === '') usage();
   if (argv[i] === '--repo' && repo === null) repo = path.resolve(v);
   else if (argv[i] === '--ccd-root' && ccdRoot === null) ccdRoot = path.resolve(v);
-  else if (argv[i] === '--home') homes.push(v);
+  else if (argv[i] === '--home') homes.push(path.resolve(v));   // resolved like --repo: `<h>` and `<h>/` are one home
   else usage();
 }
 if (repo === null || homes.length === 0) usage();
@@ -39,6 +48,9 @@ const SHA = /^[0-9a-f]{40}$/;
 const KNOWN_KEYS = new Set(['agentType', 'description', 'isFork', 'model', 'parentAgentId', 'requestNonInteractive',
   'requestShape', 'spawnDepth', 'spawnedWithWorktree', 'toolUseId', 'workflowPhase', 'worktreeBranch', 'worktreePath']);
 const MALFORMED = Symbol('malformed');
+// A read that failed. It is never null (nothing there) and, for a meta, never MALFORMED (read, and not a JSON object):
+// `json` answers it for a meta file, `textMeasured` for a CLAUDE_BASE, `looseText` for a loose ref.
+const UNREADABLE = Symbol('unreadable');
 const unreadableHomes = new Set();
 const munge = (p) => p.replace(/[^A-Za-z0-9]/g, '-');
 // ENOENT / ENOTDIR mean "nothing there"; any other failure marks the home unreadable (never folded).
@@ -48,11 +60,21 @@ const ls = (d, home = null) => {
     return [];
   }
 };
-const text = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return null; } };
+// A file's text with the failure kept apart: null = nothing there (ENOENT, or ENOTDIR: a parent component is a file),
+// UNREADABLE = any other read failure (EACCES, EISDIR, EIO, ...). `text` is the convenience read that folds both to null.
+const textMeasured = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return e.code === 'ENOENT' || e.code === 'ENOTDIR' ? null : UNREADABLE; } };
+const text = (f) => { const t = textMeasured(f); return t === UNREADABLE ? null : t; };
+// A meta's object, MALFORMED when it was read and is not a JSON object, UNREADABLE when it could not be read at all.
 const json = (f) => {
-  try { const v = JSON.parse(fs.readFileSync(f, 'utf8')); return v !== null && typeof v === 'object' && !Array.isArray(v) ? v : MALFORMED; } catch { return MALFORMED; }
+  let raw;
+  try { raw = fs.readFileSync(f, 'utf8'); } catch { return UNREADABLE; }
+  try { const v = JSON.parse(raw); return v !== null && typeof v === 'object' && !Array.isArray(v) ? v : MALFORMED; } catch { return MALFORMED; }
 };
 const exists = (f) => { try { fs.statSync(f); return true; } catch { return false; } };
+// A directory's state: 'present', 'absent' only for ENOENT or ENOTDIR (nothing there), else 'unreadable' (EACCES, EIO, ...).
+const place = (f) => {
+  try { fs.statSync(f); return 'present'; } catch (e) { return e.code === 'ENOENT' || e.code === 'ENOTDIR' ? 'absent' : 'unreadable'; }
+};
 // A loose ref's text, judged as git's files backend judges it — lstat the path FIRST, then read — with the failure kept
 // apart (never folded to null like `text`): null = nothing at the path (lstat ENOENT) or a REAL directory there, both of
 // which git falls through to packed-refs for; UNREADABLE = anything else that is there but cannot be answered from: an
@@ -65,7 +87,6 @@ const exists = (f) => { try { fs.statSync(f); return true; } catch { return fals
 // nowhere, so it is UNREADABLE (fail-closed: 'unmeasured'). Where that relative path DOES exist (a doubled
 // `refs/heads/refs/heads/<n>`, as git makes under `core.preferSymlinkRefs` with such a branch), the census reads the
 // wrong ref and its boolean can be wrong; nothing Claude Code does is known to produce either shape.
-const UNREADABLE = Symbol('unreadable');
 const looseText = (f) => {
   let st;
   try { st = fs.lstatSync(f); } catch (e) { return e.code === 'ENOENT' ? null : UNREADABLE; }
@@ -107,6 +128,7 @@ const wantRun = new Set(names.map((n) => /^(wf_[A-Za-z0-9-]+)-[0-9]+$/.exec(n)).
 const agentMetas = new Map();
 const wfMetas = new Map();
 const wfMalformedRuns = new Set();
+const wfUnreadableRuns = new Set();
 const wfPathlessRuns = new Set();
 const push = (m, k, v) => { if (!m.has(k)) m.set(k, []); m.get(k).push(v); };
 if (wantAgent.size + wantRun.size > 0) {
@@ -126,9 +148,11 @@ if (wantAgent.size + wantRun.size > 0) {
           for (const e of ls(path.join(sub, 'workflows', run), home)) {
             if (!e.endsWith('.meta.json')) continue;
             const meta = json(path.join(sub, 'workflows', run, e));
-            // An unparsable meta, or one with no worktreePath, names no record; each marks its whole run instead,
-            // under its own marker (corruption and the ordinary path-less shape are different conditions).
+            // An unparsable meta, one that cannot be read, or one with no worktreePath, names no record; each marks its
+            // whole run instead, under its own marker (corruption, a read failure and the ordinary path-less shape are
+            // different conditions).
             if (meta === MALFORMED) wfMalformedRuns.add(run);
+            else if (meta === UNREADABLE) wfUnreadableRuns.add(run);
             else if (typeof meta.worktreePath !== 'string') wfPathlessRuns.add(run);
             else push(wfMetas, meta.worktreePath, { home, proj, uuid, meta });
           }
@@ -143,14 +167,15 @@ const parentClass = (proj) => {
   if (ccdRoot !== null && proj.startsWith(`${munge(ccdRoot)}-`)) return 'ccd-workspace';
   return 'other';
 };
-function metaSummary(list, wt, runMalformed, runPathless) {
-  if (list === undefined || list.length === 0) return { found: false, malformed: runMalformed, pathless: runPathless, homes: 0, uuids: 0, worktreePathEquals: null, keys: [], parentCwdClass: null };
-  const valid = list.filter((x) => x.meta !== MALFORMED);
+function metaSummary(list, wt, runMalformed, runUnreadable, runPathless) {
+  if (list === undefined || list.length === 0) return { found: false, malformed: runMalformed, unreadable: runUnreadable, pathless: runPathless, homes: 0, uuids: 0, worktreePathEquals: null, keys: [], parentCwdClass: null };
+  const valid = list.filter((x) => x.meta !== MALFORMED && x.meta !== UNREADABLE);   // only a parsed object has keys and a path to compare
   const keys = new Set();
   for (const x of valid) for (const k of Object.keys(x.meta)) keys.add(KNOWN_KEYS.has(k) ? k : '(unprintable)');
   const classes = new Set(list.map((x) => parentClass(x.proj)));
   return {
-    found: true, malformed: runMalformed || valid.length < list.length,
+    found: true, malformed: runMalformed || list.some((x) => x.meta === MALFORMED),
+    unreadable: runUnreadable || list.some((x) => x.meta === UNREADABLE),
     pathless: runPathless || valid.some((x) => typeof x.meta.worktreePath !== 'string'),
     homes: new Set(list.map((x) => x.home)).size, uuids: new Set(list.map((x) => x.uuid)).size,
     worktreePathEquals: wt === null || valid.length === 0 ? null : valid.every((x) => x.meta.worktreePath === wt),
@@ -164,8 +189,10 @@ const ageBucket = (dir) => {
   return h < 1 ? '<1h' : h < 24 ? '<1d' : h < 168 ? '<7d' : '>=7d';
 };
 
-// null = no valid base (nothing to compare); 'unmeasured' = a HEAD with no resolvable tip; else moved or not.
-const movedFromBase = (base, head, headTxt) => {
+// null = no valid CLAUDE_BASE (nothing to compare); 'unmeasured' = a CLAUDE_BASE that cannot be read (it may be valid) or
+// a HEAD with no resolvable tip; else moved or not.
+const movedFromBase = (claudeBase, base, head, headTxt) => {
+  if (claudeBase === 'unreadable') return 'unmeasured';
   if (base === null) return null;
   const tip = head === 'detached' ? headTxt.trim() : head === 'ref' ? refTip(headTxt.split('\n')[0].slice('ref: '.length).trim()) : null;
   return tip === null ? 'unmeasured' : tip !== base;
@@ -180,20 +207,21 @@ for (const n of names) {
   const runId = /^(wf_[A-Za-z0-9-]+)-[0-9]+$/.exec(n)?.[1];
   const headTxt = text(path.join(a, 'HEAD'));
   const head = headTxt === null ? 'unreadable' : /^ref: /.test(headTxt) ? 'ref' : SHA.test(headTxt.trim()) ? 'detached' : 'malformed';
-  const baseTxt = text(path.join(a, 'CLAUDE_BASE'));
-  const base = baseTxt !== null && SHA.test(baseTxt.trim()) ? baseTxt.trim() : null;
+  const baseTxt = textMeasured(path.join(a, 'CLAUDE_BASE'));
+  const base = typeof baseTxt === 'string' && SHA.test(baseTxt.trim()) ? baseTxt.trim() : null;
+  const claudeBase = baseTxt === null ? 'absent' : baseTxt === UNREADABLE ? 'unreadable' : base === null ? 'malformed' : 'ok';
   const firstLine = (text(path.join(a, 'logs', 'HEAD')) ?? '').split('\n')[0];
   const firstLog = firstLine.split(' ')[1] ?? null;
   records.push({
     kind, head,
-    claudeBase: baseTxt === null ? 'absent' : base === null ? 'malformed' : 'ok',
+    claudeBase,
     baseAgreesFirstLog: base !== null && firstLog !== null && SHA.test(firstLog) ? base === firstLog : null,
-    movedFromBase: movedFromBase(base, head, headTxt),
+    movedFromBase: movedFromBase(claudeBase, base, head, headTxt),
     locked: exists(path.join(a, 'locked')),
-    worktreeDir: wt === null ? 'unmeasured' : exists(wt) ? 'present' : 'absent',
+    worktreeDir: wt === null ? 'unmeasured' : place(wt),
     ageBucket: ageBucket(a),
-    meta: kind === 'agent' ? metaSummary(agentMetas.get(n.slice('agent-'.length)), wt, false, false)
-      : kind === 'wf' ? metaSummary(wt === null ? undefined : wfMetas.get(wt), wt, wfMalformedRuns.has(runId), wfPathlessRuns.has(runId)) : null,
+    meta: kind === 'agent' ? metaSummary(agentMetas.get(n.slice('agent-'.length)), wt, false, false, false)
+      : kind === 'wf' ? metaSummary(wt === null ? undefined : wfMetas.get(wt), wt, wfMalformedRuns.has(runId), wfUnreadableRuns.has(runId), wfPathlessRuns.has(runId)) : null,
   });
 }
 const count = (pred) => records.filter(pred).length;
@@ -203,8 +231,10 @@ const out = {
   totals: {
     records: records.length, agent: count((r) => r.kind === 'agent'), wf: count((r) => r.kind === 'wf'), other: count((r) => r.kind === 'other'),
     metaFound: count((r) => r.meta?.found === true), metaMissing: count((r) => r.meta !== null && !r.meta.found),
-    metaMalformed: count((r) => r.meta?.malformed === true), metaPathless: count((r) => r.meta?.pathless === true), homesUnreadable: unreadableHomes.size,
+    metaMalformed: count((r) => r.meta?.malformed === true), metaUnreadable: count((r) => r.meta?.unreadable === true),
+    metaPathless: count((r) => r.meta?.pathless === true), homesUnreadable: unreadableHomes.size,
     multiHome: count((r) => (r.meta?.homes ?? 0) > 1), worktreeAbsent: count((r) => r.worktreeDir === 'absent'),
+    worktreeUnreadable: count((r) => r.worktreeDir === 'unreadable'),
     byAge: tally((r) => r.ageBucket), byParent: tally((r) => r.meta?.parentCwdClass ?? null),
   },
 };
