@@ -625,3 +625,54 @@ describe('FR2-a (D-4338): a failed sidecar write is the journal hold, never a fa
     expect(draining(box)).toEqual([]);
   }, 30_000);
 });
+
+describe('FR2-b (D-4339): a stale pre-migration temp is removed before the room check, and is not counted against it', () => {
+  const SIZE = 1000;                                              // the store's measured size, the seam's answer
+  const atTheLine = { env: { HISTORY_TEST_STATFS: `${THRESHOLD + SIZE}:${FS_BYTES}` } };   // free == threshold + size: refused (planCopy needs MORE)
+  const plant = (box: HistoryBox, name: string, bytes: number): string => {
+    const p = path.join(paths(box).backups, name);
+    fs.mkdirSync(paths(box).backups, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(p, Buffer.alloc(bytes, 0x61), { mode: 0o600 });
+    return p;
+  };
+
+  it('CONTROL: with no stale temp, room exactly at threshold + size refuses the copy', () => {
+    const box = boundBox('ccrc-hist-fr2b0-');
+    const r = runDriver(box, { extraMigrations: [V2], sizeBytes: SIZE }, [], atTheLine);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^history-sweep: migration-refused$/m);
+    expect(versionOf(paths(box).db)).toBe(1);
+  });
+
+  it('a partial .tmp that eats the margin no longer blocks admission: it is removed first, its bytes are room, and the pass migrates', () => {
+    const box = boundBox('ccrc-hist-fr2b1-');
+    const tmp = plant(box, '.pre-v2.db.tmp', 4096);
+    const jr = plant(box, '.pre-v2.db.tmp-journal', 512);
+    const r = runDriver(box, { extraMigrations: [V2], sizeBytes: SIZE }, [], atTheLine);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^history-sweep: migrated$/m);
+    expect(fs.existsSync(tmp) || fs.existsSync(jr)).toBe(false);
+    expect(versionOf(paths(box).db)).toBe(2);
+    expect(names(paths(box).backups)).toEqual(['pre-v2.db']);
+  });
+
+  it('a refused migration still removes the stale temps: a temp never outlives the pass that held the lock', () => {
+    const box = boundBox('ccrc-hist-fr2b2-');
+    const tmp = plant(box, '.pre-v2.db.tmp', 512);
+    const tight = { env: { HISTORY_TEST_STATFS: `${THRESHOLD}:${FS_BYTES}` } };   // short by more than the temp frees
+    const r = runDriver(box, { extraMigrations: [V2], sizeBytes: SIZE }, [], tight);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^history-sweep: migration-refused$/m);
+    expect(fs.existsSync(tmp)).toBe(false);
+  });
+
+  it('a temp for an OLDER target, on a store already at the code version, is removed too (nothing to migrate)', () => {
+    const box = boundBox('ccrc-hist-fr2b3-');
+    const a = plant(box, '.pre-v1.db.tmp', 128);
+    const b = plant(box, '.pre-v7.db.tmp-journal', 128);
+    const keep = [plant(box, 'pre-v1.db', 64), plant(box, '.pre-v2.attempt', 2), plant(box, '20261005T000000Z.db', 64)];
+    expect(runSweep(box).code).toBe(0);
+    expect(fs.existsSync(a) || fs.existsSync(b)).toBe(false);
+    expect(keep.every((f) => fs.existsSync(f)), 'a finished snapshot, an attempt marker and an operator backup are not temps').toBe(true);
+  });
+});

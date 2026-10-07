@@ -580,6 +580,40 @@ export function removeStaleTemps(home) {
   return removed;
 }
 
+/** A pre-migration snapshot's copy in flight, or its leftover: `backups/.pre-v<N>.db.tmp` and its `-journal`, for ANY
+ *  target N. A copy killed mid-`VACUUM INTO` leaves up to one store's size of it on db/'s filesystem. The finished
+ *  `pre-v<N>.db`, the `.pre-v<N>.attempt` marker and an operator's `<ts>.db` are not temps and never match. */
+const MIGRATION_TEMP_RE = /^\.pre-v[0-9]+\.db\.tmp(-journal)?$/;
+
+/** Remove every stale pre-migration temp under backups/, whatever its target version, and answer what it freed
+ *  (D-4339, history-migration-temp-precleaned). Run by the pass that holds the lock, BEFORE the room check that
+ *  decides whether a migration may start, so a partial copy never counts against the very check that would let
+ *  the next copy replace it: the bytes it held are returned as `bytes`, which the caller adds to the free space it
+ *  measured earlier in the pass. An absent backups/ answers nothing stale; any other readdir failure propagates, as
+ *  removeStaleTemps' does (D-4305), because "could not look" is not "nothing stale". */
+export function removeStaleMigrationTemps(home) {
+  const dir = historyPaths(home).backups;
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { removed: [], bytes: 0 };
+    throw e;
+  }
+  const removed = [];
+  let bytes = 0;
+  for (const n of names.sort()) {
+    if (!MIGRATION_TEMP_RE.test(n)) continue;
+    let st = null;
+    try { st = lstatSync(`${dir}/${n}`); } catch (e) { if (!(e && e.code === 'ENOENT')) throw e; }
+    if (st === null) continue;
+    rmSync(`${dir}/${n}`, { force: true });
+    if (st.isFile()) bytes += st.size;
+    removed.push(n);
+  }
+  return { removed, bytes };
+}
+
 /** First creation (§6.2), run only on `decideStoreOpen`'s `create` (or after
  *  `dropPending` on `drop-pending-create`), under the shim's lock:
  *
@@ -746,7 +780,9 @@ export function assertAdditive(prev, next) {
  *      goes.
  *
  *  A kill in 1-3 leaves only the `.tmp` and the marker, user_version unchanged;
- *  the next attempt removes the `.tmp` first, and the marker's count escalates a
+ *  the next pass removes the `.tmp` first (`removeStaleMigrationTemps`, from the
+ *  verdict, before the room check: D-4339; step 1 stays as the executor's own
+ *  guard), and the marker's count escalates a
  *  scheduled pass to `snapshot-needs-op` after two. A finished `pre-v<N>.db` from
  *  an interrupted attempt is never reused: step 2 always copies afresh. */
 export function runMigration(db, home, i) {

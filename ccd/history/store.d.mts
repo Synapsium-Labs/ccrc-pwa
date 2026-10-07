@@ -30,6 +30,7 @@ export function writeFileAtomic(path: string, text: string, mode?: number): void
 export function peekStoreId(dbPath: string): Presence<string>;
 export function measureStoreFacts(home: string, role: string): StoreFacts;
 export function removeStaleTemps(home: string): string[];
+export function removeStaleMigrationTemps(home: string): { removed: string[]; bytes: number };
 export function createStore(home: string): { storeId: string; writer: string };
 export function finishPending(home: string): void;
 export function dropPending(home: string): void;

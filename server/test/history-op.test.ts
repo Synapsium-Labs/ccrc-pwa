@@ -16,7 +16,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import * as pty from 'node-pty';
-import { WRITING_FORMS, CARRIER_KILL_S, journalRecord } from '../../ccd/history/lib.mjs';
+import { WRITING_FORMS, CARRIER_KILL_S, journalRecord, floorThreshold } from '../../ccd/history/lib.mjs';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, preloadOptions, plantSession, plantTranscript, spoolLine, openStoreRO,
   counters, journalRecords, PRELOADS, type HistoryBox,
@@ -414,6 +414,25 @@ describe('DM43: no copy a scheduled pass cannot finish', () => {
     expect(Number(metaOf(box, 'copy_bps'))).toBeGreaterThan(0);
     expect(metaOf(box, 'copy_bps'), 'the copy\'s measured rate replaces the seeded one').not.toBe('100');
     expect(metaOf(box, 'migration')).toBe('none');
+  });
+
+  it('--op migrate (FR2-b, D-4339): a stale partial .tmp is removed before the room check and its bytes count as room; the same room with no temp is refused', () => {
+    const box = boundBox('ccrc-hist-fr2b-op-');
+    const p = paths(box);
+    const SIZE = 1000;
+    const fsBytes = 10 * 1024 ** 3;
+    const atTheLine = { env: { HISTORY_TEST_STATFS: `${floorThreshold(fsBytes) + SIZE}:${fsBytes}` } };   // free == threshold + size: planCopy refuses
+    const refused = runDriver(box, { extraMigrations: [V2], sizeBytes: SIZE }, ['--op', 'migrate'], atTheLine);
+    expect(lastResult(refused.stdout)).toEqual({ rc: 2, reason: 'migrate-refused' });
+    expect(versionOf(p.db)).toBe(1);
+    fs.mkdirSync(p.backups, { recursive: true, mode: 0o700 });
+    const tmp = path.join(p.backups, '.pre-v2.db.tmp');
+    fs.writeFileSync(tmp, Buffer.alloc(4096, 0x61), { mode: 0o600 });
+    const op = runDriver(box, { extraMigrations: [V2], sizeBytes: SIZE }, ['--op', 'migrate'], atTheLine);
+    expect(op.code, op.stderr).toBe(0);
+    expect(lastResult(op.stdout)).toEqual({ rc: 0 });
+    expect(fs.existsSync(tmp)).toBe(false);
+    expect(versionOf(p.db)).toBe(2);
   });
 
   it('--op migrate with nothing due exits 0 and writes no snapshot; on a store newer than this build it answers migrate-refused', () => {

@@ -49,7 +49,7 @@ import {
 } from './lib.mjs';
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
-  measureStoreFacts, measuredSize, openReader, openWriter, readAttempts, removeStaleTemps, runMigration, setMeta,
+  measureStoreFacts, measuredSize, openReader, openWriter, readAttempts, removeStaleMigrationTemps, removeStaleTemps, runMigration, setMeta,
   syncWriterMirror, userVersion, withTx, writeFileAtomic,
   CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables,
 } from './store.mjs';
@@ -1682,6 +1682,12 @@ export function flushFirst(db, home, ids, now) {
  *  interrupted attempts, and whether any pending version is heavy. An unmeasured free space admits no
  *  copy: freeBytes 0 against an unreachable threshold answers refuse-low-disk. */
 export function migrationVerdict(db, home, P, o) {
+  // D-4339 (history-migration-temp-precleaned): every stale pre-migration temp is removed HERE, before the room
+  // check and on every pass that measures migration room (a verdict of 'none' included: a temp for an older target
+  // is stale whenever a pass holds the lock), and the bytes it held count as room. `o.free` was measured earlier in
+  // this pass, with the temp still on disk, so a partial copy would otherwise be charged against the very check
+  // that lets its replacement run.
+  const reclaimed = removeStaleMigrationTemps(home).bytes;
   if (o.stored === o.code) return 'none';
   let heavy = false;
   for (let v = o.stored + 1; v <= o.code; v += 1) if (o.schemaAdded[v]?.heavy === true) heavy = true;
@@ -1690,7 +1696,7 @@ export function migrationVerdict(db, home, P, o) {
   return planMigration({
     stored: o.stored,
     code: o.code,
-    freeBytes: measured ? o.free.bytes : 0,
+    freeBytes: measured ? o.free.bytes + reclaimed : 0,
     thresholdBytes: measured ? floorThreshold(o.free.fsSize) : Number.MAX_SAFE_INTEGER,
     sizeBytes: o.sizeBytes,
     boundS: o.boundS,

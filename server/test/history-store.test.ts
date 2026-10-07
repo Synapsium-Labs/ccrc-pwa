@@ -18,7 +18,7 @@ import { SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, hist
 import {
   CODEC, MIGRATIONS, StoreError, openWriter, openReader, userVersion, probeFts5, withTx, brotli, unbrotli,
   measuredSize, getMeta, setMeta, bump, closeWriter, schemaOf,
-  mintStoreId, mintWriter, writeFileAtomic, peekStoreId, measureStoreFacts, removeStaleTemps, createStore,
+  mintStoreId, mintWriter, writeFileAtomic, peekStoreId, measureStoreFacts, removeStaleTemps, removeStaleMigrationTemps, createStore,
   finishPending, dropPending, syncWriterMirror,
   readAttempts, clearDoneMarkers, assertAdditive, runMigration,
 } from '../../ccd/history/store.mjs';
@@ -431,6 +431,26 @@ describe('store.mjs: the binding', () => {
   it('removeStaleTemps answers [] for an absent db/ (ENOENT), and removes nothing there (D-4305)', () => {
     const h = home();
     expect(removeStaleTemps(h)).toEqual([]);
+  });
+
+  it('removeStaleMigrationTemps removes every backups/.pre-v<N>.db.tmp (and -journal) for ANY N, answers their bytes, and keeps snapshots, markers and operator backups (D-4339)', () => {
+    const h = home();
+    createStore(h);
+    const P = historyPaths(h);
+    fs.mkdirSync(P.backups, { recursive: true });
+    const temps: Array<[string, number]> = [['.pre-v2.db.tmp', 300], ['.pre-v2.db.tmp-journal', 20], ['.pre-v9.db.tmp', 7]];
+    for (const [n, size] of temps) fs.writeFileSync(path.join(P.backups, n), Buffer.alloc(size, 0x61));
+    const keep = ['pre-v2.db', '.pre-v2.attempt', '20261005T000000Z.db', '.pre-v2.db.tmpx', 'pre-v2.db.tmp'];
+    for (const n of keep) fs.writeFileSync(path.join(P.backups, n), 'x');
+    const r = removeStaleMigrationTemps(h);
+    expect(r.removed.sort()).toEqual(temps.map(([n]) => n).sort());
+    expect(r.bytes).toBe(327);
+    expect(fs.readdirSync(P.backups).sort()).toEqual([...keep].sort());
+    expect(removeStaleMigrationTemps(h)).toEqual({ removed: [], bytes: 0 });
+  });
+
+  it('removeStaleMigrationTemps answers nothing for an absent backups/ (ENOENT)', () => {
+    expect(removeStaleMigrationTemps(home())).toEqual({ removed: [], bytes: 0 });
   });
 
   // Root bypasses mode 0o100, so db/ cannot be made unlistable as uid 0.
