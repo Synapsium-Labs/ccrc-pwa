@@ -260,7 +260,7 @@ function checkShow(ans: DocsShowOk, pin: DocPin, ask: DocsShowAsk): { ok: true; 
   }
   if (ans.commit !== pin.commit) return showFault('pin');
   if (ask.listedBlob !== null && ans.blob !== ask.listedBlob) return showFault('pin');
-  if (!Object.hasOwn(ON_REF_WORDS, ans.onRef ?? '')) return showFault('schema');
+  if (!(typeof ans.onRef === 'string' && Object.hasOwn(ON_REF_WORDS, ans.onRef))) return showFault('schema');
   return { ok: true, bytes };
 }
 

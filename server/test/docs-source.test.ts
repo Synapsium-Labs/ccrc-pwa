@@ -16,7 +16,7 @@
  * wave's lever is `docs-budget.test.ts`'s invariant).
  */
 import { describe, it, expect, vi } from 'vitest';
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -427,6 +427,17 @@ describe('check 8: show integrity, pins and onRef (row 46, spec section 2 (b))',
     const answer = showOk(COMMITTED, { onRef });
     expect(await showRaw(COMMITTED, line(answer))).toEqual({ ok: true, answer, bytes: TEXT_BYTES });
   });
+
+  // Docs W2 fix round 1, F1: the onRef test is type-checked. Each answer is a real ccd LINE (JSON text), so the value
+  // arrives as a real answer's would; a coerced key (`['contains']` -> 'contains') or a throwing one is a defect.
+  it('onRef as an array holding a word is schema, not ok (the key is not coerced)', async () => {
+    expect(await showRaw(COMMITTED, line(showOk(COMMITTED, { onRef: ['contains'] })))).toEqual(malformed('schema'));
+  });
+
+  it('onRef as an object with a toString key is schema, and show() resolves (the promise rejects only on a defect)', async () => {
+    const out = showRaw(COMMITTED, line(showOk(COMMITTED, { onRef: { toString: 1 } })));
+    await expect(out).resolves.toEqual(malformed('schema'));
+  });
 });
 
 /** `console.warn` spied and silenced for one call: the call's answer and every warn call's arguments. */
@@ -587,5 +598,143 @@ describe('the second redaction pass bounds its depth (final-review I1)', () => {
   it('one level past the bound is the schema word, not a carried body', async () => {
     expect(await treeWith(res({ stdout: failWith(nested(8, '"a?token=abc"')) })))
       .toStrictEqual({ ok: false, failure: 'malformed-answer', why: 'schema' });
+  });
+});
+
+// ---- Docs W2 fix round 1, F2: refinement (g)'s one reader of `killed` and `signal`, as a mechanism ----
+
+/** Source with comments and the insides of '...' and "..." literals blanked, newlines kept so a line number survives. */
+function blankCommentsAndStrings(text: string): string {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i]!;
+    const two = text.slice(i, i + 2);
+    if (two === '//') {
+      while (i < text.length && text[i] !== '\n') { out += ' '; i++; }
+    } else if (two === '/*') {
+      const end = text.indexOf('*/', i + 2);
+      const stop = end === -1 ? text.length : end + 2;
+      for (; i < stop; i++) out += text[i] === '\n' ? '\n' : ' ';
+    } else if (c === "'" || c === '"') {
+      out += c; i++;
+      while (i < text.length && text[i] !== c && text[i] !== '\n') {
+        if (text[i] === '\\') { out += ' '; i++; }
+        out += ' '; i++;
+      }
+      if (i < text.length && text[i] === c) { out += c; i++; }
+    } else { out += c; i++; }
+  }
+  return out;
+}
+
+/** The lines (0-based, inclusive) of the function whose declaration matches `decl`, to the first later line that is
+ *  a closing brace at the declaration's own indentation; null when there is no such declaration. */
+function bodyOf(lines: readonly string[], decl: RegExp): [number, number] | null {
+  const start = lines.findIndex((l) => decl.test(l));
+  if (start === -1) return null;
+  const indent = /^\s*/.exec(lines[start]!)![0];
+  const end = lines.findIndex((l, n) => n > start && l.startsWith(`${indent}}`) && l.slice(indent.length + 1).trim() === '');
+  return end === -1 ? null : [start, end];
+}
+
+/**
+ * Every `.killed` / `.signal` PROPERTY READ across the docs adapter's files and `lifecycle.ts`, held to refinement (g):
+ * `CcdResult`'s two halves have ONE reader, `ccdEnding`, so they are never interpreted twice where the readings could
+ * drift apart. Allowed: any read inside `ccdEnding`'s body; inside `ccd()`'s body exactly `CCD_PIN`'s four, off `r`
+ * (the Runner's `ExecResult`, read to BUILD the `CcdResult`, not a `CcdResult`); and `ending.signal`, the reader's own
+ * `CcdEnding` output. Every other read is named as `file:line: receiver.prop`. A comment, a string, a type member and
+ * an object-literal key (`killed:`) are not property reads, and are blanked or never match, because the rule is about
+ * who interprets a measured result and a declaration interprets nothing. The floor (at least one of each read inside
+ * `ccdEnding`) and the `ccd()` pin (exactly the four) are also reported as problems, so the scan cannot pass on nothing.
+ */
+/** `ccd()`'s two lines, `killed: r.killed === undefined ? UNMEASURED : r.killed` and the same for `signal`: each reads
+ *  its half twice (the absence test, then the value), so four reads, sorted. A fifth, or a missing one, reds. */
+const CCD_PIN = ['r.killed', 'r.killed', 'r.signal', 'r.signal'] as const;
+
+function oneReaderProblems(files: readonly { name: string; text: string }[]): string[] {
+  const problems: string[] = [];
+  const inEnding = { killed: 0, signal: 0 };
+  const inCcd: string[] = [];
+  let sawEnding = false;
+  let sawCcd = false;
+  for (const { name, text } of files) {
+    const lines = blankCommentsAndStrings(text).split('\n');
+    const ending = name.endsWith('lifecycle.ts') ? bodyOf(lines, /^export (?:function|const) ccdEnding\b/) : null;
+    const ccdBody = name.endsWith('lifecycle.ts') ? bodyOf(lines, /^export (?:async )?function ccd\(/) : null;
+    sawEnding ||= ending !== null;
+    sawCcd ||= ccdBody !== null;
+    lines.forEach((l, n) => {
+      for (const m of l.matchAll(/([A-Za-z_$][\w$]*)\s*\??\.\s*(killed|signal)\b/g)) {
+        const [, receiver, prop] = m as unknown as [string, string, 'killed' | 'signal'];
+        if (ending && n >= ending[0] && n <= ending[1]) { inEnding[prop]++; continue; }
+        if (ccdBody && n >= ccdBody[0] && n <= ccdBody[1] && receiver === 'r') { inCcd.push(`${receiver}.${prop}`); continue; }
+        if (receiver === 'ending' && prop === 'signal') continue;
+        problems.push(`${name}:${n + 1}: ${receiver}.${prop}`);
+      }
+    });
+  }
+  if (!sawEnding) problems.push('lifecycle.ts: no ccdEnding body found');
+  if (!sawCcd) problems.push('lifecycle.ts: no ccd() body found');
+  if (inEnding.killed < 1 || inEnding.signal < 1) {
+    problems.push(`floor: ccdEnding holds ${inEnding.killed} .killed and ${inEnding.signal} .signal reads, wanted at least one of each`);
+  }
+  if (inCcd.slice().sort().join() !== CCD_PIN.join()) {
+    problems.push(`pin: ccd() reads [${inCcd.slice().sort().join(', ')}] off its ExecResult, wanted exactly [${CCD_PIN.join(', ')}]`);
+  }
+  return problems;
+}
+
+describe('refinement (g): killed and signal have one reader, ccdEnding', () => {
+  const SERVER_SRC = path.join(ROOT, 'server', 'src');
+  const real = (): { name: string; text: string }[] =>
+    [...readdirSync(path.join(SERVER_SRC, 'docs')).filter((f) => f.endsWith('.ts')).sort().map((f) => `docs/${f}`), 'lifecycle.ts']
+      .map((name) => ({ name: `src/${name}`, text: readFileSync(path.join(SERVER_SRC, name), 'utf8') }));
+  const withPlanted = (file: string, before: string, planted: string): { name: string; text: string }[] =>
+    real().map((f) => {
+      if (f.name !== file) return f;
+      expect(f.text, `${file}: the anchor line to plant before`).toContain(before);
+      return { ...f, text: f.text.replace(before, `${planted}\n${before}`) };
+    });
+  const PLANT_IN_CLASSIFY = "  if (res.killed === true) return fail('ccd-timeout');";
+  const CLASSIFY_ANCHOR = '  const ending = ccdEnding(res);';
+
+  it('the docs files and lifecycle.ts read them nowhere else (a floor inside ccdEnding, exactly the four CCD_PIN reads in ccd())', () => {
+    const files = real();
+    expect(files.map((f) => f.name)).toContain('src/docs/ccdsource.ts');
+    expect(oneReaderProblems(files)).toEqual([]);
+  });
+
+  it('CONTROL: a second reader planted in classify() is named exactly', () => {
+    const files = withPlanted('src/docs/ccdsource.ts', CLASSIFY_ANCHOR, PLANT_IN_CLASSIFY);
+    const planted = files.find((f) => f.name === 'src/docs/ccdsource.ts')!.text;
+    const line = planted.split('\n').findIndex((l) => l === PLANT_IN_CLASSIFY) + 1;
+    expect(oneReaderProblems(files)).toEqual([`src/docs/ccdsource.ts:${line}: res.killed`]);
+  });
+
+  it('CONTROL: a third read planted inside ccd() reds the ccd() pin', () => {
+    const files = withPlanted('src/lifecycle.ts', '  return {\n    ok: r.code === 0', '  const k = r.killed;');
+    expect(oneReaderProblems(files)).toEqual(['pin: ccd() reads [r.killed, r.killed, r.killed, r.signal, r.signal] off its ExecResult, wanted exactly [r.killed, r.killed, r.signal, r.signal]']);
+  });
+
+  it('CONTROL: a ccdEnding that reads neither half, or only one, fails the floor', () => {
+    const edit = (f: { name: string; text: string }, re: RegExp, to: string): { name: string; text: string } =>
+      f.name === 'src/lifecycle.ts' ? { ...f, text: f.text.replace(re, to) } : f;
+    const bodyRe = /(export function ccdEnding[^\n]*\n)[\s\S]*?\n\}\n/;
+    const none = real().map((f) => edit(f, bodyRe, "$1  return { kind: 'exited' };\n}\n"));
+    expect(oneReaderProblems(none)).toEqual(['floor: ccdEnding holds 0 .killed and 0 .signal reads, wanted at least one of each']);
+    const noKilled = real().map((f) => edit(f, /  if \(r\.killed === true\) return \{ kind: 'deadline' \};\n/, ''));
+    expect(oneReaderProblems(noKilled)).toEqual(['floor: ccdEnding holds 0 .killed and 3 .signal reads, wanted at least one of each']);
+  });
+
+  it('NEAR-MISS: a comment, a string, a type member, an object key and ending.signal are not readers', () => {
+    const planted = [
+      '  // if (res.killed === true) return fail("x");',
+      '  /* res.signal',
+      '     res.killed */',
+      "  const msg = 'res.killed and res.signal';",
+      '  const key = { killed: false, signal: null };',
+    ].join('\n');
+    expect(oneReaderProblems(withPlanted('src/docs/ccdsource.ts', CLASSIFY_ANCHOR, planted))).toEqual([]);
   });
 });
