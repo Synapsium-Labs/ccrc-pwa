@@ -3914,14 +3914,15 @@ export class FleetWatcher {
       });
       entry = archivedExpirySighted(entry, v, r.held, now);
       this.archivedExpiryState.set(r.id, entry);
-      if (!v.eligible && v.why === 'expiry-unknown' && now >= entry.nextAskAt && learn.length < EXPIRE_AUDITS_PER_PASS) {
-        learn.push(r.id);
-      }
+      if (!v.eligible && v.why === 'expiry-unknown' && now >= entry.nextAskAt) learn.push(r.id);
       if (archivedExpiryDue(entry, now)) due.push(r.id);
     }
     for (const id of [...this.archivedExpiryState.keys()]) if (!seen.has(id)) this.archivedExpiryState.delete(id);
-    // THREE — learn: one audit at a time, each on its session's queue.
-    for (const id of learn) {
+    // THREE — learn: one audit at a time, each on its session's queue. The slots go in `nextAskAt` order — a row never
+    // asked (0) first, then the rows asked longest ago — never registry order, so rows that keep failing cannot take
+    // every slot from a row behind them (review 313, parked item 1). The sort is stable: ties keep registry order.
+    learn.sort((a, b) => this.archivedExpiryState.get(a)!.nextAskAt - this.archivedExpiryState.get(b)!.nextAskAt);
+    for (const id of learn.slice(0, EXPIRE_AUDITS_PER_PASS)) {
       try {
         const read = await this.deps.queue.run(id, () => learnExpiry(this.deps, id));
         const e = this.archivedExpiryState.get(id);

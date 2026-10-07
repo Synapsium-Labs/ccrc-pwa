@@ -237,6 +237,36 @@ describe('the lane’s memory of one row', () => {
       'an audit of a DIFFERENT archive teaches nothing').toMatchObject({ expiresAt: null, nextAskAt: NOW + PASS });
   });
 
+  it('a learn audit that cannot be read, or that read NO archive, backs off and is REPORTED (review 313, parked item 1)', () => {
+    // Such a row was asked again every pass, with no backoff and no attention entry — invisible in the shadow record,
+    // which is the operator's arming evidence. It now climbs the failure ladder, and the list says why.
+    const e = archivedExpiryEntry(1_789_000_000);
+    const unread = archivedExpiryLearned(e, { kind: 'unreadable', detail: 'ws-audit --expire printed no JSON document' }, NOW, PASS);
+    expect(unread).toMatchObject({ expiresAt: null, failures: 1, failingSince: NOW, nextAskAt: NOW + 2 * PASS });
+    expect(unread.report).toEqual({ kind: 'failing', at: NOW,
+      detail: 'its expiry could not be learned — ws-audit --expire printed no JSON document' });
+    const again = archivedExpiryLearned(unread, { kind: 'unreadable', detail: 'x' }, NOW + 2 * PASS, PASS);
+    expect(again).toMatchObject({ failures: 2, failingSince: NOW, nextAskAt: NOW + 2 * PASS + 4 * PASS });
+    expect(again.report?.at, 'since when, kept').toBe(NOW);
+    // A refusal ccd answered before it read the stamp — an interrupted ws-reap's breadcrumb — names no archive.
+    const crumb = parseExpireAudit(ID, true, JSON.stringify({ session: ID, mode: 'expire', archivedAt: null, expiresAt: null,
+      sensitive: [], verdict: 'reap-in-progress', detail: 'an interrupted ws-reap stands' }));
+    const r = archivedExpiryLearned(e, crumb, NOW, PASS);
+    expect(r).toMatchObject({ failures: 1, nextAskAt: NOW + 2 * PASS });
+    expect(r.report).toEqual({ kind: 'failing', at: NOW,
+      detail: 'its expiry could not be learned — ws-audit --expire read no archive (reap-in-progress: an interrupted ws-reap stands)' });
+  });
+
+  it('a learn that succeeds after failing clears the run and its report; a row that left the archive is not reported', () => {
+    const failing = archivedExpiryLearned(archivedExpiryEntry(1_789_000_000), { kind: 'unreadable', detail: 'x' }, NOW, PASS);
+    expect(archivedExpiryLearned(failing, learnedDoc(1_789_604_800), NOW + 2 * PASS, PASS))
+      .toMatchObject({ expiresAt: 1_789_604_800, failures: 0, failingSince: null, report: null });
+    const returned = parseExpireAudit(ID, true, JSON.stringify({ session: ID, mode: 'expire', archivedAt: null, expiresAt: null,
+      sensitive: [], verdict: 'not-archived', detail: '' }));
+    expect(archivedExpiryLearned(archivedExpiryEntry(1_789_000_000), returned, NOW, PASS),
+      'a return: the next pass drops the row').toMatchObject({ failures: 0, report: null, nextAskAt: NOW + PASS });
+  });
+
   it('twice observed: an eligible pass seeds, a later one makes it due, and any other verdict ends the run', () => {
     const e0 = { ...archivedExpiryEntry(1_789_000_000), expiresAt: 1_789_604_800 };
     const e1 = archivedExpirySighted(e0, { eligible: true }, null, NOW);

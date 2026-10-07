@@ -361,16 +361,30 @@ export const archivedExpiryEntryFor = (prev: ArchivedExpiryEntry | undefined, ar
 
 /** What an audit run only to LEARN the instant taught the entry. `absent` (an older ccd) and `none` leave it unknown
  *  and wait `EXPIRE_NO_EVIDENCE_RETRY_MS`; an audit that read a DIFFERENT archive than the registry's is a row moving
- *  under the lane — learned nothing, asked again next pass. */
+ *  under the lane — learned nothing, asked again next pass. An audit that could not be READ, or that read NO archive
+ *  (a refusal ccd answered before it read the stamp: an interrupted ws-reap's breadcrumb, `reap-in-progress`), taught
+ *  nothing either, and it is not asked again every pass: it climbs the failure ladder and is REPORTED, so a row the
+ *  lane cannot learn is on the attention list — the shadow record is the operator's arming evidence — and never takes a
+ *  learn slot each pass (review 313, parked item 1). A `gone` word is a return, which the next pass drops unreported. */
 export function archivedExpiryLearned(entry: ArchivedExpiryEntry, read: ExpireAuditRead, nowMs: number, passMs: number): ArchivedExpiryEntry {
-  if (read.kind === 'unreadable') return { ...entry, nextAskAt: nowMs + passMs };
-  if (read.archivedAt !== entry.archivedAt) return { ...entry, nextAskAt: nowMs + passMs };
-  if (read.expiresAt.kind !== 'at') {
-    return { ...entry, nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS,
-      report: read.expiresAt.kind === 'absent' ? { kind: 'no-evidence', at: nowMs } : entry.report };
+  if (read.kind === 'document' && read.archivedAt === null && read.verdict.kind === 'refused'
+    && EXPIRE_TOKEN_KIND[read.verdict.token] === 'gone') return { ...entry, nextAskAt: nowMs + passMs };
+  if (read.kind === 'unreadable' || read.archivedAt === null) {
+    const why = read.kind === 'unreadable' ? read.detail : `ws-audit --expire read no archive (${read.verdict.kind === 'refused'
+      ? `${read.verdict.token}${read.verdict.detail === '' ? '' : `: ${read.verdict.detail}`}` : 'expirable'})`;
+    const failures = entry.failures + 1;
+    const failingSince = entry.failingSince ?? nowMs;
+    return { ...entry, failures, failingSince, nextAskAt: nowMs + archivedExpiryBackoffMs(failures, passMs),
+      report: { kind: 'failing', at: failingSince, detail: `its expiry could not be learned — ${why}` } };
   }
-  return { ...entry, expiresAt: read.expiresAt.at, nextAskAt: 0,
-    report: entry.report?.kind === 'no-evidence' ? null : entry.report };
+  if (read.archivedAt !== entry.archivedAt) return { ...entry, nextAskAt: nowMs + passMs };
+  const learned = { failures: 0, failingSince: null, report: entry.report?.kind === 'failing' ? null : entry.report };
+  if (read.expiresAt.kind !== 'at') {
+    return { ...entry, ...learned, nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS,
+      report: read.expiresAt.kind === 'absent' ? { kind: 'no-evidence', at: nowMs } : learned.report };
+  }
+  return { ...entry, ...learned, expiresAt: read.expiresAt.at, nextAskAt: 0,
+    report: learned.report?.kind === 'no-evidence' ? null : learned.report };
 }
 
 /** One pass's verdict, folded into memory. THE TWICE-OBSERVED RULE (spec §5.3: "all of the above held on the

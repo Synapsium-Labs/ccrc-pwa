@@ -118,6 +118,31 @@ const threePasses = async (f: Fixture): Promise<void> => {
   await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
 };
 
+describe('learning: slots in nextAskAt order, an unlearnable row backed off and reported (review 313, parked item 1)', () => {
+  it('a row never asked takes a learn slot ahead of rows that keep failing, whatever the registry order', async () => {
+    const stuck = new Set(['demo-a', 'demo-b', 'demo-c']);
+    const f = await fixture({ audit: (id) => (stuck.has(id) ? { session: 'demo-elsewhere' } : { verdict: 'expirable', token: tokOf(id) }) });
+    for (const id of stuck) f.plant(id);
+    await f.pass();
+    expect(f.verbsFor('ws-audit')).toEqual(['demo-a', 'demo-b', 'demo-c']);
+    f.plant('demo-z');
+    f.advance(2 * CHILD_RECLAIM_SWEEP_MS + 1);   // past the stuck rows' first backoff: all four may be asked
+    await f.pass();
+    expect(f.verbsFor('ws-audit').slice(3), 'the never-asked row first, then the two asked longest ago')
+      .toEqual(['demo-z', 'demo-a', 'demo-b']);
+  });
+
+  it('an unlearnable row is listed at once, and not asked again before its backoff', async () => {
+    const f = await fixture({ audit: (id) => (id === 'demo-a' ? { session: 'demo-elsewhere' } : { verdict: 'expirable', token: tokOf(id) }) });
+    f.plant('demo-a');
+    await f.pass();
+    f.next(); await f.pass();
+    expect(f.verbsFor('ws-audit'), 'one audit: the second pass is inside the backoff').toEqual(['demo-a']);
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.expiryAttention?.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'failing']]);
+  });
+});
+
 describe('the lane SHIPS SHADOWED', () => {
   it('without `expire-lane-live`, a due row is audited and RECORDED — and ws-expire is never composed, however long', async () => {
     const f = await fixture();
