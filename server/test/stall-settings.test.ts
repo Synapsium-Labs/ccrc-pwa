@@ -20,7 +20,7 @@ import {
   armedStages, decideStallSettings, isStallQuietMs, isStallSettingsKebab, parseStallSettings, resolveStallWatch,
   stallBoxArmingOf, stallEffectKey, stallFilesExceed, stallLevelOf, stallNeedsConfirm, stallNextStep, stallNoticeCounts,
   stallPatchIsNoOp, stallSettingsAfter, stallSettingsChange, stallStages, stallUnheldBoxOf, stallWriteEffect,
-  stallBusyClock,
+  stallBusyClock, stallBoxHeld,
 } from '../src/coord/stallsettings.js';
 import type { StallBoxArming, StallSettingsParsed, StallSettingsPatch, StallSettingsRead } from '../src/coord/stallsettings.js';
 import { STALL_ARMS, STALL_MARKERS, STALL_QUIET_MS, rungRecipient, stallArmHasRung, stallArmingOf, stallDetail } from '../src/coord/stall.js';
@@ -925,5 +925,21 @@ describe('stallBusyClock: the judged mail mode and when busy delivery began (§9
     expect({ ...a, ...stallBusyClock(a.mailMode, null, null) }).toStrictEqual(a);
     expect({ ...a, ...stallBusyClock(a.mailMode, 'shell', null) }).toStrictEqual({ ...a, mailMode: 'busy-shadow' });
     expect({ ...a, ...stallBusyClock(a.mailMode, 'busy', T) }).toStrictEqual({ ...a, busySince: T });
+  });
+});
+
+describe('stallBoxHeld: the held flags of the files-only reading are the resolver\'s under Follow (§10, §20)', () => {
+  it('over all 256 combinations, it equals what resolveStallWatch reports for Follow', () => {
+    for (const names of SUBSETS) {
+      const b = box(...names);
+      expect(stallBoxHeld(b), names.join(',')).toStrictEqual(resolveStallWatch(b, FOLLOW).held);
+    }
+  });
+
+  it('nothing is chosen, so strict never holds the wave-2 step, even over a box that arms it', () => {
+    expect(stallBoxHeld(box(LIVE, ESCALATE, W2LIVE, STRICT)))
+      .toStrictEqual({ watchOff: false, mailOff: false, gateStrict: true, wave2HeldByStrict: false });
+    expect(stallBoxHeld(box(KILL, MAIL_OFF)))
+      .toStrictEqual({ watchOff: true, mailOff: true, gateStrict: false, wave2HeldByStrict: false });
   });
 });

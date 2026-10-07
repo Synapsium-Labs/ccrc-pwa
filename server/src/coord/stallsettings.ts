@@ -144,6 +144,13 @@ export function stallUnheldBoxOf(names: readonly string[]): StallBoxArming {
   return { ...stallBoxArmingOf(names.filter((n) => mailTurnModeOf([n]) !== 'strict'), false), disabled: false };
 }
 
+/** The held flags the fleet box's files set, as the resolver reports them when nothing is chosen: the view's
+ *  files-only reading (§10, §20) reports these, and the resolver builds its own `held` from them. With no chosen level
+ *  there is no wave-2 step for strict to hold, so that flag is false here. */
+export function stallBoxHeld(box: StallBoxArming): StallHeld {
+  return { watchOff: box.disabled, mailOff: box.mailDisabled === true, gateStrict: box.mailMode === 'strict', wave2HeldByStrict: false };
+}
+
 // ── the readers ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The stages a resolved arming has on (§12). `busyDelivery` and `busyGate` read false while mail is switched off,
@@ -248,7 +255,7 @@ export function resolveStallWatch(box: StallBoxArming, settings: StallSettingsPa
     levelSource: chosen === null ? 'files' : heldBack ? 'held' : 'chosen',
     effective: stallLevelOf(arming),
     files: stallLevelOf(box),
-    held: { watchOff: box.disabled, mailOff: box.mailDisabled === true, gateStrict: strict, wave2HeldByStrict: run !== null && run.w2Live && strict },
+    held: { ...stallBoxHeld(box), wave2HeldByStrict: run !== null && run.w2Live && strict },
   };
 }
 
