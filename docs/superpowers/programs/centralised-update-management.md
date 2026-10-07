@@ -1115,6 +1115,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       it. v0.0.113 (wave 14) was published at 03:29:52 and is converging.
       - STATUS: fleet and server v0.0.112, newest v0.0.113, backups fleet 138M/server 568M, disk free fleet 217G/work
         volume 84G/server 33G, no anomalies.
+    - **2026-10-07 09:42 UTC — v0.0.113 (wave 14) to v0.0.116 auto-converged unattended.** No action was taken. Wave 14's
+      halt banner is live on the server box.
+      - STATUS: fleet and server v0.0.116, newest v0.0.116, backups fleet 142M/server 573M, disk free fleet 218G/work
+        volume 88G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
@@ -2545,6 +2549,22 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - Wave 15 dispatches once claims 1055, 1057 and 1058 have ended.
     - Waves 16 to 18 now wait on claim 1055 (ccrc-history wave 2), not on claim 1046.
     - The docs PR for R22 and R24(e) follows.
+
+- **2026-10-07 09:42 UTC: wave 15 still held; the stable blockers re-read off `main`'s daily run.**
+  - **Wave 15:** claims 1055, 1057 and 1058 ended, but their runs re-claimed the same paths. Claim 1070 (run 291,
+    child-reclamation wave 6) holds `ccd/ccd`. Claim 1071 holds `server/test/macos-platform.test.ts`. Claim 1072 (run
+    302, ccrc-history wave 2) holds `ccd/ccrc` and `README.md`. Under Reading 7's ruling, run 300 stays `planned`.
+  - **Waves 16 to 18** wait on claim 1072 for the same reason. The docs PR for R22 and R24(e) waits on it too, because
+    R24(e) is README's.
+  - **`main`'s daily full run, 37567376733 at `03afca8b`:** every Linux leg is green. Its reds:
+    - `probe-macos`: `platform-hazards.test.ts`, D-2661 candidate (b), the output FIFO never reaching EOF. This is the
+      known account-connections item, and it has failed every day since 2026-10-04.
+    - `test-macos` 1/4: `ccd-docs-tree.test.ts` (2 cases; the native Docs reader's, #301).
+    - `map-build`: news from the map build, informational.
+    - `session-hook-merge-deny` is gone from the daily run. Landing-order wave 3, which merged before `03afca8b`,
+      cleared it.
+  - **So stable now waits on:** D-2661 (account-connections), `ccd-docs-tree` (the native Docs reader), and then a
+    green `full-suite` on a `main` commit. The promotion is the operator's call.
 
 ## Carried constraints
 
