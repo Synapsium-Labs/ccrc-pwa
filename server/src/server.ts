@@ -3314,10 +3314,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // REVIEW 240's F1 (workspace lifecycle wave 3b): `ws-archive` answers `already archived <id>` at exit 0 having
     // stopped NOTHING — a row archived earlier whose pane came back without a spawn path clearing the stamp (a pre-#143
     // pane). Read as `archived:true` alone, the door said a session was put away that tmux still runs. A pane tmux
-    // PROVES up is stopped here, as the archive's own act would have — under the turn the door already measured (idle,
-    // or `interrupt`); a pane gone, or one tmux cannot be asked about, is left as before.
+    // PROVES up is stopped here, as the archive's own act would have — but only after the turn is re-read at the act,
+    // fail-closed (`stopVerdictFor`, the rule for a stop nobody agreed to: this branch is never `interrupt`'s, whose
+    // stop has already run), because `ws-archive`'s own fail-closed `_ws_status` is skipped on `already archived` and
+    // the turn the door measured came from the frame's row. Only an `idle` answer stops; a busy or unreadable turn, a
+    // pane gone, or one tmux cannot be asked about, is left as before — archived, not stopped.
     if (archived.ok && !stopped && /^already archived /m.test(archived.stdout)
-        && (await deps.tmux.sessionVerdict(id)).verdict === 'live') {
+        && (await deps.tmux.sessionVerdict(id)).verdict === 'live'
+        && (await stopVerdictFor(rec, identity.uuid)) === 'idle') {
       const res = await deps.runCcd(stopArgvFor(id, rec, identity));
       if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr, ...endedSpread });
       stopped = true;

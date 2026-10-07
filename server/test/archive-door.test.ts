@@ -676,7 +676,8 @@ describe('the archive door, wave 3b', () => {
     const res = await post(b.app, 'demo-amber');
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true, archived: true, stopped: true, ended: [] });
-    expect(b.ccd().map((c) => c[0])).toEqual(['ws-archive', 'stop']);
+    // The FULL argv: `/stop`'s own (`stopArgvFor`, a workspace id whole), not just the verb.
+    expect(b.ccd()).toEqual([['ws-archive', '--session', 'demo-amber'], ['stop', 'demo-amber']]);
   });
 
   it('`already archived` with the pane GONE: archived, nothing stopped — as before', async () => {
@@ -685,5 +686,31 @@ describe('the archive door, wave 3b', () => {
     const res = await post(b.app, 'demo-amber');
     expect(res.json()).toEqual({ ok: true, archived: true, stopped: false, ended: [] });
     expect(b.ccd().map((c) => c[0])).toEqual(['ws-archive']);
+  });
+
+  it('`already archived` with the pane UP but the turn BUSY at the act: not stopped — the re-read is the stop\'s guard (review, Task 9)', async () => {
+    let home = '';
+    const b = await box({
+      ccd: { 'ws-archive': { code: 0, stderr: '', stdout: 'already archived demo-amber\n' } },
+      // A turn that starts after the door measured idle, while `ws-archive` ran.
+      onCall: (args) => { if (args[0] === 'ws-archive') liveStatus(home, 'busy'); },
+    });
+    home = b.home;
+    seed(b.home, 'demo-amber');
+    liveStatus(b.home, 'idle');
+    const res = await post(b.app, 'demo-amber');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, archived: true, stopped: false, ended: [] });
+    expect(b.ccd()).toEqual([['ws-archive', '--session', 'demo-amber']]);
+  });
+
+  it('`already archived` with a pane tmux CANNOT be asked about (`unknown`): archived, nothing stopped — as before', async () => {
+    const b = await box({ tmuxUnknown: true, ccd: { 'ws-archive': { code: 0, stderr: '', stdout: 'already archived demo-amber\n' } } });
+    seed(b.home, 'demo-amber');
+    liveStatus(b.home, 'idle');
+    const res = await post(b.app, 'demo-amber');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, archived: true, stopped: false, ended: [] });
+    expect(b.ccd()).toEqual([['ws-archive', '--session', 'demo-amber']]);
   });
 });
