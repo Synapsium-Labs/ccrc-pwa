@@ -185,13 +185,12 @@ fleet state lives under the dotless `$REG/delegation/` — never `lifecycle`.
 **Activity id** = server-computed hash of (parent id, parent incarnation, source kind, upstream id, the
 journal id of the first event that named it) — deterministic on replay. Upstream ids: `agent_id`;
 workflow run id + worker index; `tool_use_id` where present. Display names are metadata only.
-"The first event that named it" is the first QUALIFYING event, the one that establishes the activity: a
-correlating launch response (an Agent's names the agent id, a Workflow's the run id), a SubagentStart, or
-an agent meta. An id occurring in a field is not
-one by itself: a tool event whose only delegation evidence is `agent_id` is kept as evidence and opens
-no activity, and attaches to one if a qualifying join arrives later. Nothing tells the two apart by
-whether `agent_type` is present (amended 2026-10-07 from the real-lane cross-check: ledger amendment
-`tool-agent-id-alone-is-unjoined-evidence`).
+"The first event that named it" is the first QUALIFYING event, the one that establishes the activity.
+For an activity keyed by `agent_id`, that is the Agent launch response, a SubagentStart or an agent meta
+naming that id. A tool event whose only delegation evidence is `agent_id` is not one: it is kept as
+evidence and opens no activity, and it attaches to one only when a qualifying event for the same id
+arrives later. No reader decides this by whether `agent_type` is present (amended 2026-10-07 from the
+real-lane cross-check: ledger amendment `tool-agent-id-alone-is-unjoined-evidence`).
 
 **Lease id** = a server-minted UUID plus a generation. Server-side identity: (project, admin record,
 creation base, canonical path). Box-side fingerprint (computed by the verbs, never by the server): git

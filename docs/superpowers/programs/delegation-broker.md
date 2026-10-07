@@ -34,7 +34,8 @@ Wave 1's answers to spec §8.1, per Claude Code version, read from the committed
 synthetic rig captures: mock API, fixture HOME, fixture repo). The on-box census names projects by label only, and
 the hook-side costs are below. Wave 2 (run 306) added the real-lane cross-check (two lanes, D-3995) under its own
 heading, and nothing in a later wave may depend on a hook field that the corpus and the cross-check have not measured
-(spec §8.1).
+(spec §8.1). The cross-check's evidence is not committed, so a field only it shows counts once the wave measures it
+again (see "Real-lane cross-check").
 
 **Versions covered:** 2.1.280, 2.1.281, 2.1.285, 2.1.286, 2.1.287, 2.1.288, 2.1.289, 2.1.290, 2.1.291 and 2.1.292, each
 with 14 scenarios, and all 140 cells are `measured`. The corpus counts in the prose below the table, in "What the
@@ -71,11 +72,9 @@ The corpus comes from four captures, and `matrix.json` re-derives byte-identical
 - the 2.1.292 capture's 14 cells, 2.1.292 × 14 scenarios, captured 2026-10-07 10:11:46–10:20:55 UTC with
   `recapture.sh --missing` at commit `ccf0167b9` (a git-archive snapshot), sanitised by the sanitiser at that commit
   and committed in `3cad0d2cd`. It ran the version the corpus lacked of those installed when it started (2.1.285,
-  2.1.286, 2.1.287, 2.1.289, 2.1.290, 2.1.291, 2.1.292). Its run printed no `failed` line and every cell is
-  `measured`; the only notes are the two the earlier versions carry. The sanitiser at `e8a096253`, run over the same raw
-  root afterwards, wrote the same 14 files byte for byte (its wording and `--scan` changed since `ccf0167b9`, its
-  output did not). That raw root was then removed, as the README's cleanup step says, so this check cannot be run
-  again and nothing rests on it: later waves read the committed fixtures and the matrix derived from them.
+  2.1.286, 2.1.287, 2.1.289, 2.1.290, 2.1.291, 2.1.292). Every cell is `measured`, and the only notes are the two the
+  earlier versions carry (both read from the committed fixtures). Its raw root, with the run's log, was then removed,
+  as the README's cleanup step says, so later waves read only the committed fixtures and the matrix derived from them.
 
 The fleet's installed lanes, re-read read-only at 2026-10-07 12:38 UTC (each lane's last update result, its
 `version_to`; no pin file under the versions directory), run 2.1.286 (one lane), 2.1.289 (one), 2.1.290 (five), 2.1.291
@@ -414,10 +413,12 @@ each capture (`--root scratch=<repo> --root worktrees=<repo>/.claude/worktrees`)
 each scratch repository with the lane's config dir as `--home`, and booleans computed on the box. The rig side is the
 same reducer run over the corpus's `agent-iso-changed` and `wf-iso` fixtures for the same version, their events written
 out as a capture directory. A lane is named by its version; the registry rows of both scratch ids stay for the operator.
-The tables and the teardown result below rest on the lanes' capture directories, which stay on the fleet box with
-those rows until the operator removes them and are never committed; after that they are a dated record that cannot be
-derived again. So a later wave may rely on a field only if the committed corpus shows it or the wave measures it
-again. The amendments below only forbid relying on a field or an order, so they stand either way.
+The tables, the teardown result and the agent-meta checks below rest on the lanes' capture directories, scratch
+repositories and config dirs. These stay on the fleet box, with every scratch session's registry row, until the
+operator removes them, and are never committed; after that they are a dated record that cannot be derived again. So a
+later wave may rely on a field only if the committed corpus shows it or the wave measures it again. Each amendment
+below only narrows what a later wave may assume, or has it drop or keep data it cannot attribute, so it stands either
+way.
 
 **Table 1: real lane against the rig's cells for the same version.**
 
@@ -457,8 +458,9 @@ What this confirms, on these two lanes: `delegation-posttooluse-is-a-launch` (al
 exercised here, so still rig-only: `agent-meta-loses-worktree-fields-on-removal` (both trees were changed and stayed),
 `orphaned-agent-tree-is-locked` and whether its lock outlives the process (no isolated tree was orphaned on purpose;
 the teardown probe below stopped two lanes, each with a non-isolated background agent still running, which left a
-SubagentStart and no SubagentStop and made no tree), `sessionend-on-clear-is-a-rotation`, and every Q5 and Q7
-situation.
+SubagentStart and no SubagentStop and made no tree), the tree half of `orphaned-background-agent-has-no-terminal-event`
+(those two agents show its no-SubagentStop half at `ccd stop`), `sessionend-on-clear-is-a-rotation`, and every Q5 and
+Q7 situation.
 
 Amendments the cross-check forces (each a difference from the rig; `slug — sentence — spec §`):
 - `agent-input-keys-are-the-callers` — the Agent `tool_input` key set is whatever the calling model sends: both real
@@ -473,10 +475,12 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
 - `toolsearch-may-precede-a-workflow-call` — the 2.1.292 lane loaded the Workflow tool with a main-thread ToolSearch
   before calling it; the 2.1.286 lane did not. Whether that follows the version or the lane's tool set is unmeasured.
   A ToolSearch is not a delegation event and opens nothing — spec §5.3 PreToolUse row.
-- `parent-stop-does-not-bound-workflow-start` (review 318 F7) — on both real lanes a Workflow's SubagentStart arrived
-  before the parent's Stop; in the rig's cells for the same versions it arrived after. Either order occurs, so a parent
-  Stop neither opens nor closes a Workflow activity, and a worker is correlated by the workflow and agent joins
-  (`launch-response-names-the-upstream-id`), never by where it falls against a Stop — spec §5.2 execution, §5.4 rung 2.
+- `parent-stop-does-not-bound-workflow-start` (review 318 F7) — on both real lanes an isolated Workflow worker's
+  SubagentStart arrived before the parent's Stop; in the rig's wf-iso cells for the same versions it arrived after.
+  The corpus itself shows both: wf-plain's first worker starts before the parent's Stop on all ten versions, and
+  wf-iso's workers after it. Either order occurs, so a parent Stop neither opens nor closes a Workflow activity, and a
+  worker is correlated by the workflow and agent joins (`launch-response-names-the-upstream-id`); the observe stage's
+  correlation (wave 3) must not use that order — spec §5.2 execution, §5.4 rung 2.
 - `workflow-phase-is-not-always-written` (review 304 F11) — spec §3.1 says an isolated Workflow worker's meta carries
   `workflowPhase`. Neither real lane's Workflow meta has it, nor any of the corpus's, while 8 of the on-box census's 15
   found `wf_*` metas list it. What decides whether it is written is unmeasured (a workflow that declares phases is
@@ -493,8 +497,8 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
   2.1.290 stood in for the low end, because the fleet's only 2.1.286 lane and its 2.1.289 lane were at their weekly
   limits. The idle 2.1.292 lane had declined the mailed instruction (it would not act on a mailbox whose name did not
   match its working directory) and was stopped as it was. The first two stops' SessionEnds were filed under the busy
-  2.1.292 lane's id, a session started before either stop (the first SessionEnd arrived before that lane's own
-  SessionStart); the third, the busy 2.1.292 lane's own, was filed under a catcher session started just before that
+  2.1.292 lane's id, whose tmux session was started before either stop (the first SessionEnd arrived before that lane's
+  own SessionStart); the third, the busy 2.1.292 lane's own, was filed under a catcher session started after the second
   stop, again before the catcher's own SessionStart. With round 1's idle 2.1.286 stop above, every teardown measured
   (2.1.286 idle, 2.1.290 busy, 2.1.292 idle, 2.1.292 busy) fired exactly one event: SessionEnd, reason `other`, filed
   under the most recently started `-hookcap` session's id. No Stop, StopFailure, SubagentStop or PostToolUse fired at
@@ -503,15 +507,18 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
   must resolve the pane exactly (and drop an event it cannot), or every stop-time SessionEnd lands on another
   session — spec §5.3 SessionEnd row, §5.1 parent key.
 - `tool-agent-id-alone-is-unjoined-evidence` (review 318 F1) — on each busy teardown lane above (2.1.290, 2.1.292),
-  one main-checkout `PreToolUse` (Bash) carried an `agent_id` and no `agent_type`. Its `cwd`, `session_id` and
+  one main-checkout `PreToolUse` (Bash) carried an `agent_id` and no `agent_type` key. Its `cwd`, `session_id` and
   `prompt_id` were the parent turn's, and no launch response, SubagentStart, SubagentStop or `agent-*.meta.json` ever
   named that id. Each fired about 32 s after the lane's background Agent launched, while the main thread was blocked
   in its foreground Bash loop. Its cause is unmeasured, and the corpus has no such event (0 of 1338 hook events carry
-  `agent_id` without `agent_type`). A tool event whose only delegation evidence is `agent_id`, with no correlating
-  Agent launch response, SubagentStart or agent meta, is kept as evidence and opens no activity; it attaches to one if
-  a qualifying join arrives later. So spec §5.2's "the first event that named it" is the first qualifying event, the
-  one that establishes the activity, never a field occurrence alone, and the observe stage's parser (wave 3) must not
-  depend on `agent_type` being present to tell the two apart — spec §5.2 activity id, §5.3.
+  `agent_id` with no `agent_type` key; the ten `/compact` SubagentStops carry an empty one). A tool event whose only
+  delegation evidence is `agent_id`, with no correlating Agent launch response, SubagentStart or agent meta, is kept
+  as evidence and opens no activity; it attaches to one if a launch response, SubagentStart or agent meta naming the
+  same `agent_id` arrives later. A shared `prompt_id` names the turn, not the agent, and is not such a join
+  (`launch-response-names-the-upstream-id`). So spec §5.2's "the first event that named it" is the first qualifying
+  event, the one that establishes the activity, never a field occurrence alone, and the observe stage's parser
+  (wave 3) must not use the presence of `agent_type` to decide whether an event qualifies — spec §5.2 activity id,
+  §5.3, §5.4 rung 3 (a non-empty `agent_id` does not by itself place an event inside a subagent).
 
 ## Decisions & deviations
 
