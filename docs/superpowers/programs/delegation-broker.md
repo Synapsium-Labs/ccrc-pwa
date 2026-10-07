@@ -517,12 +517,21 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
   in its foreground Bash loop. Its cause is unmeasured, and the corpus has no such event (0 of 1338 hook events carry
   `agent_id` with no `agent_type` key; the ten `/compact` SubagentStops carry an empty one). A tool event whose only
   delegation evidence is `agent_id`, with no correlating Agent launch response, SubagentStart or agent meta, is kept
-  as evidence and opens no activity; it attaches to one if a launch response, SubagentStart or agent meta naming the
-  same `agent_id` arrives later. A shared `prompt_id` names the turn, not the agent, and is not such a join
-  (`launch-response-names-the-upstream-id`). So spec §5.2's "the first event that named it" is the first qualifying
-  event, the one that establishes the activity, never a field occurrence alone, and the observe stage's parser
-  (wave 3) must not use the presence of `agent_type` to decide whether an event qualifies — spec §5.2 activity id,
-  §5.3, §5.4 rung 3 (a non-empty `agent_id` does not by itself place an event inside a subagent).
+  as evidence and opens no activity; it attaches to one once a launch response, SubagentStart or agent meta naming
+  the same `agent_id` is known, whether that join came before it or arrives later. A shared `prompt_id` names the
+  turn, not the agent, and is not such a join (`launch-response-names-the-upstream-id`). So spec §5.2's "the first
+  event that named it" is, for an `agent_id`-keyed activity, the first qualifying evidence, never a field occurrence
+  alone; the other source kinds keep the first event naming their upstream id. A meta is a join, not a journal
+  event: when it establishes the activity, the activity id hashes the earliest retained journal event naming that
+  `agent_id` that the meta join makes eligible (review 324 F3, F4). The observe stage's parser (wave 3) must not use
+  the presence of `agent_type` to decide whether an event qualifies — spec §5.2 activity id, §5.3, §5.4 rung 3 (a
+  non-empty `agent_id` does not by itself place an event inside a subagent).
+  A second shipped reader already places an event by a raw non-empty `agent_id`: the hook's turn-marker classifier
+  (`paid` in `ccd/session-hook.sh`) skips the main-thread marker write for such an event, so each phantom PreToolUse
+  above was dropped from its turn marker as a subagent's. No harm was measured, because earlier main-thread events
+  had already marked both turns `working` (review 324 F10). Wave 3 resolves that reader against this contract with a
+  red-first phantom-main-thread case and without assuming `agent_type`, after its first-commit `-t "$TMUX_PANE"`
+  correction unless its approved plan proves the two must be one atomic change.
 
 ## Decisions & deviations
 
