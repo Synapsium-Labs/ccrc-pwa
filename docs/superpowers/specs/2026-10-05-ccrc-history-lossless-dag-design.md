@@ -1,6 +1,6 @@
 # ccrc history: lossless, DAG-based session recall (design)
 
-**Status:** APPROVED design, rev 3.3, 2026-10-06 (rev 3.2 plus two corrections from the W1-B2 plan review, §17).
+**Status:** APPROVED design, rev 3.3, 2026-10-06 (rev 3.2 plus three corrections from the W1-B2 to B4 plan reviews, §17).
 - **Operator approvals.** The operator approved decisions 1–11 and sections 1–6 (§5–§10 below) in conversation, 2026-10-02 to 2026-10-05.
 - **Grounding.** Three read-only grounding passes ran against `origin/main` `be93d159e`: hooks/card/install, the Claude Code surface on the installed 2.1.289, and repo constraints. Where grounding showed that a fact the brief relied on is wrong, §4.1 states the change and the smallest adjustment.
 - **Review.** Rev 2 answers three adversarial reviews (code accuracy, safety/security, invariants/feasibility). Every finding was re-checked against `be93d159e` and, for runtime claims, against an official Node 22.16.0 binary. §4.2 lists what changed. No approved decision is changed.
@@ -3129,7 +3129,7 @@ The review of rev 3.1 (§4.7) raised four more. Q16 and Q19 would change a ruled
 |---|---|
 | `history-store-fixed-root` | the store root is the fixed `~/.ccrc/history`; only `db/` is symlinkable; no env key (G1, RV9; ruled Q1 = A) |
 | `history-cap-file` | the cap is an operator file, not an env key (G1) |
-| `history-skill-literal-path` | the skill and card use the literal `$HOME/.local/bin/ccrc`; no installer substitution, no `ccrc-history` binary (G2) |
+| `history-skill-literal-path` | the skill uses the literal `$HOME/.local/bin/ccrc` and the card line `~/.local/bin/ccrc`, as §8.6's grammar pins it (rev 3.3); no installer substitution, no `ccrc-history` binary (G2) |
 | `history-spool-no-summary-hash` | the summary is reached via `anchorUuid`, and spool lines carry no hash (G3) |
 | `history-steer-hook-never-consumes` | the indexer re-mints and the hook gates on scope `main` (G4) |
 | `history-cli-counts-via-spool` | CLI counters are spool lines folded by the sweep (G5) |
@@ -3288,9 +3288,10 @@ The review of rev 3.1 (§4.7) raised four more. Q16 and Q19 would change a ruled
     - Export segments are linked, never renamed over, numbered once per store, named by a writer token, and carry the rows that place their text; a due row carries its blob; `export-overdue` keys on measured source loss, and `export-due` stops firing on the pass's own cadence. The retention reader reads drop-ins and keeps a home's last value.
     - The purge's kept set is one list, the cap and switch files included; O45 is relational.
     - One new question, Q15 (§15.3), new pins S15, DM43, DM44 and O46–O48, and 9 new slugs (§16).
-- **Rev 3.3**, 2026-10-06, with the W1-B2 plan: two corrections from its review.
+- **Rev 3.3**, 2026-10-06 and 2026-10-07, with the W1-B2 to B4 plans: three corrections from their reviews.
   - §8.6's display-prefix example now has 6 hex digits, the width its own grammar gate requires.
   - §12 names the one place `server/test/` quotes adapted text: `history-skill.test.ts` pins the shipped skill sentences, with the notice beside the shipped copy.
+  - §16's `history-skill-literal-path` agrees with §8.6: the card line spells `~/.local/bin/ccrc`, the skill `$HOME/.local/bin/ccrc` (from the W1-B3 plan).
   - No ruling changed.
 - **Rev 3.2**, 2026-10-05: five adversarial reviews of rev 3.1 before the implementation plan (code truth, integrity, security, feasibility, invariants), re-checked against `d12b5aba0`, the 2.1.289 bundle and Node 22.15.1/22.16.0, with a refute pass (§4.7). No ruling changed.
   - Capture integrity: cursors proved by file identity, so a reused inode never carries another session's rows (DI1); startup lines carry `reg` and the registry is observed at the rename (CT6, DI7); clear epochs confirmed before scope reads them (SE5); forks ruled out of the spool within Q2 (CT7); fenced spool lines and a 1024-byte cap (DI10, DI11); sidecar ingest rules (FE6); the partial `from` summary anchor (CT5).

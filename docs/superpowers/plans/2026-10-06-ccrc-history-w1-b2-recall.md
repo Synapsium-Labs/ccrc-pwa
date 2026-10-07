@@ -25511,7 +25511,7 @@ git commit -m "feat(history): doctor --restore: staged copy judged twice, bound 
   - Task 6: `decideBind('rebuild', f: BindFacts)`. It answers `{ ok: true, storeId }`, where `storeId` comes from store.id, else the single journal directory whose heads agree, else `--store-id` among the directories. Otherwise it refuses with `rebuild-refused`, or with 5 `store-unmeasured` when a binding input is unreadable.
   - Task 24: `createStore(home, { storeId, bind: { kind: 'rebuild', nowMs } }): { storeId: string; writer: string }`. The creation transaction holds `bound:<ms>` = `rebuild`, the `('recover', <ms>)` row and the bind outbox row before the link. The pending marker is written and renamed to store.id.
   - Task 26: `bindFactsOf`, `finishBind`. Task 27: the `rr*` test helpers and constants.
-  - Task 26: `bindingPass`. Task 25: the recovery step, and its module-private `JOURNAL_NAME_RE` (`<YYYY-MM>.<writer>.jsonl`) and `journalEnds(path): { head; lastT } | null` (the head record read O_NOFOLLOW, null when the file is not a regular file or does not begin with a `head` record). Task 19: `OP_VERBS`, `OP_OF_VERB`.
+  - Task 26: `bindingPass`. Task 25: the recovery step, and its module-private `JOURNAL_NAME_RE` (`<YYYY-MM>.<writer>.jsonl`) and `journalEnds(path): { headT; headStore; lastT } | null` (the head record read O_NOFOLLOW, null when the file is not a regular file or does not begin with a `head` record). Task 19: `OP_VERBS`, `OP_OF_VERB`.
   - Task 10:
     - `runCli(box, args, opts?)`;
     - `withPane(box, id): Record<string, string>`;
@@ -25878,7 +25878,7 @@ export function journalStoreDirs(home) {
     const sub = `${dir}/${name}`;
     try { if (!lstatSync(sub).isDirectory()) continue; } catch { continue; }
     const months = listNames(sub).filter((m) => JOURNAL_NAME_RE.test(m));
-    const heads = months.map((m) => journalEnds(`${sub}/${m}`)?.head.store_id ?? null);
+    const heads = months.map((m) => journalEnds(`${sub}/${m}`)?.headStore ?? null);
     out.push({ storeId: name, headsAgree: months.length > 0 && heads.every((h) => h === name) });
   }
   return out;
