@@ -2,21 +2,23 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
-**Goal:** Ship W1-B2 "recall" of the ccrc history spec (rev 3.3) as ONE PR on top of `main` after B1 ("capture") merges. B2 adds:
+**Goal:** Ship W1-B2 "recall" of the ccrc history spec (rev 3.4) as ONE PR on top of `main` after B1 ("capture") merges. B2 adds:
 - the native-leaf parser and node derivation: spans, native leaves, the steer-receipt-gated block parser, parents by fan-in 8/4, the lineage CTE, `nodes_fts`;
 - the read verbs `grep` (FTS and `--regex`), `describe`, `expand` and `tree`. They carry identity from tmux, family/project/workspace scope decided by `decideScope`, envelopes, field-first redaction, the 20k cap with true counts, version-aware selects and the `ev:"recall"` counter line;
-- the operator door, which spawns the shim and relays `{rc, reason}`, plus the operator verbs `import`, `prune`, `reparse`, `doctor --repair|--backup|--migrate|--adopt|--restore|--rebuild`;
+- the operator door, which spawns the shim and relays `{rc, reason}`, plus the operator verbs `import`, `prune` (gated on reachability only, ruled by the operator), `reparse`, `doctor --repair|--backup|--migrate|--adopt|--restore|--rebuild`;
 - the recovery step, with journal replay ordered by `planReplay`;
+- the fork spooling (ruled Q16, Task 34): SessionStart(fork) writes a spool line, and a fork line confirms as a resume line does, reversing B1's `history-fork-not-spooled`;
+- the per-copy export due rule as the default (ruled Q15, Task 35): `EXPORT_REDUCERS.perCopy`, read by the census's due counts and dates and by doctor's `export-due`, `export-overdue` and `retention-lowered` arms;
 - the `ccrc-history` skill, its installer and every skill-name site;
 - README and CLAUDE.md edits;
 - every B2 pin in spec §10.5.
 
 Sessions gain recall that works without the card (the card is B3). B2 leaves B4 a clean seam for segment replay.
 
-**Architecture:** Everything is fleet-side: no wire, server, PWA, `ccd/ccd` or coord.db change.
+**Architecture:** Everything is fleet-side: no wire, server, PWA, `ccd/ccd` or coord.db change. The one hook edit is Task 34's: `fork` joins the spool block's source whitelist in `ccd/session-hook.sh`, in place, and no hook line moves.
 
 *Rings, by imports:*
-- `ccd/history/lib.mjs` (L1, `node:crypto` only) gains every new decision: `decideScope`, identity/harness/generation/recall-off decisions, id resolution and display prefixes, pasted-line ids, the FTS sanitiser, the regex guards, sort/snippet/cap/envelope/escaping, explorers, the block parser and native gist, the span rule, fan-in and rollups, the read-verb and op-verb argument grammars, `decideOpDoor`, `decideBind`, `decideRelay`, `planReplay`/`replayStep`, recovery phases and cursor, the FK diff, FTS shadow health.
+- `ccd/history/lib.mjs` (L1, `node:crypto` only) gains every new decision: `decideScope`, identity/harness/generation/recall-off decisions, id resolution and display prefixes, pasted-line ids, the FTS sanitiser, the regex guards, sort/snippet/cap/envelope/escaping, explorers, the block parser and native gist, the span rule, fan-in and rollups, the read-verb and op-verb argument grammars, `decideOpDoor`, `decideBind`, `decideRelay`, `planReplay`/`replayStep`, recovery phases and cursor, the FK diff, FTS shadow health. In place, B1's spool and epoch vocabularies gain `fork` (Task 34), and B1's export due rule gains `EXPORT_REDUCERS.perCopy` as its default and `dueTranscriptKeys` (Task 35).
 - `ccd/history/store.mjs` (L3, the sole `node:sqlite` importer) gains: the derivation step helpers (`getStep`/`setStep`), the lineage range CTE, the prune batches, the backup writer, the binding sequences (`adoptStore`, `stageRestore`/`commitRestore`/`abortRestore`, `createStore` with a bind option), integrity/FK/FTS measurement, and `blobPlainText`.
 - New L4 modules:
   - `derive.mjs`: node derivation inside the tick (leaves, parents per holding copy and epoch, node indexes, `nodes_fts`, recorded parser crashes, reparse, late-pair gist re-derivation). It imports `../compact-card.mjs` and injects `HEADING_RE`, `fencedRanges` and `mineTokens` into lib.
@@ -30,7 +32,9 @@ Sessions gain recall that works without the card (the card is B3). B2 leaves B4 
   - the new `--op` verbs;
   - `mergeFamily` re-pointing nodes;
   - recall-echo indexing;
-  - `recall_off_stale` counted at drain.
+  - `recall_off_stale` counted at drain;
+  - `recordHeldMatches` takes fork lines (Task 34);
+  - the export census's per-copy prefilter and W1-k dates (Task 35).
 - `cli.mjs` (L4) becomes a verb dispatcher:
   - read verbs, in this order: the argument whitelist (`parseReadArgs`), Darwin/role, tmux identity (bounded, always `-t`), harness, recall-off, the §8.3 table plus the 2 s stat, a read-only open, the version, scope, the pair index; then the verb's `READ_RUNNERS` entry (a `recall.mjs` runner), then field-redacted, escaped, capped output plus `redactFinal`, then the fenced counter line;
   - operator verbs: `decideOpDoor`, `parseOpVerbArgs`, `decideOpGate`, spawn `~/.local/bin/ccd-history-sweep --op <verb>` (stdin and stderr inherited, stdout streamed), relay through `decideRelay`.
@@ -51,7 +55,7 @@ B4 inserts its export phases into the phase table, between `apply` and `reindex`
 - vitest in `server/` and `agent/`, with `node-pty` (already a `server` dependency) for the TTY cases;
 - GitHub Actions (the `node-floor` leg's test list).
 
-**Spec:** `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md`, rev 3.3 (rev 3.2 plus two corrections from this plan's review: §8.6's display-prefix example, and §12's exception for `history-skill.test.ts`'s verbatim pins; spec §17).
+**Spec:** `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md`, rev 3.4. Rev 3.3 was rev 3.2 plus two corrections from this plan's review (§8.6's display-prefix example, and §12's exception for `history-skill.test.ts`'s verbatim pins). Rev 3.4 records the operator's 2026-10-07 rulings on Q15–Q19 and on prune at low disk (§15.1, §15.3), moves the fork spooling and the per-copy due default into B2 (§10.5), and adds pins DM48, DM49 and O58 with S11, S14 and O38 amended (spec §17).
 
 **Builds on:** `docs/superpowers/plans/2026-10-05-ccrc-history-w1-capture.md`. B1 is its Tasks 3–36. Every B1 name this plan consumes (`lib`, `store`, `sweep` and `cli` exports, the test helpers, the fixtures, the preloads) is the name that plan produces.
 
@@ -60,22 +64,26 @@ B4 inserts its export phases into the phase table, between `apply` and `reindex`
 - Anchors into pre-existing files were measured at `f7e51156f` and say so. Re-anchor each by its quoted content at the B2 base, because B1 inserts lines above several of them.
 - B1's merged code may differ from its plan text. Before editing a B1 function in place, read it at the base.
 
-**PR:** B2 is one PR, after B1. B3 (card line) and B4 (sole-copy export) follow; B4 merges after B2 (⟦D:history-b4-after-b2⟧). The PR edits `.github/workflows/ci.yml`, so its CI selects the full suite; the coordinator dispatches the full run. The live-box acceptance steps (W1-f, W1-h, W1-l) are coordinator or operator steps named in the PR body (Task 34), never the worker's.
+**PR:** B2 is one PR, after B1. B3 (card line) and B4 (sole-copy export) follow; B4 merges after B2 (⟦D:history-b4-after-b2⟧). The PR edits `.github/workflows/ci.yml`, so its CI selects the full suite; the coordinator dispatches the full run. The live-box acceptance steps (W1-f, W1-h, W1-l) are coordinator or operator steps named in the PR body (Task 36), never the worker's.
+
+**Task numbering.** The operator's 2026-10-07 rulings added two tasks after the plan was drafted. They are Tasks 34 (fork spooling) and 35 (the per-copy due default), placed after the recovery tasks they extend, and the wrap-up moved from Task 34 to Task 36. No other task was renumbered. A "B1 Task 34" reference names B1's own Task 34, never this plan's.
 
 **Pins (spec §10.5, B2):** each pin is implemented by exactly one task:
-- DM5, DM6 → T5; DM7 → T21; DM9 → T9; DM14, DM15, DM22, DM27 → T20; DM21 → T21; DM25, DM36, DM37 → T8; DM26 → T9; DM44 → T17.
+- DM5, DM6 → T5; DM7 → T21; DM9 → T9; DM14, DM15, DM22, DM27, DM49 → T20; DM21 → T21; DM25, DM36, DM37 → T8; DM26 → T9; DM44 → T17; DM48 → T34.
+- S11 and S14 in their fork-spooled form (B1 ships their fork-writes-no-line form) → T34; O38's due cases re-run under the per-copy default, and O58 → T35.
 - CLI halves: DM2b, DM29 → T16; DM17 → T17; DM18b → T10; DM28, DM30, DM32, DM46 → T12; DM31 → T18.
 - O12 → T20; O16 (skill half) → T32; O35, O36 (replay half) → T28; O44 (less its B4 segment case) → T25; O47 → T29; O48 (replay-order half) → T25; O54 (relay half) → T19; O56 (planReplay half) → T7.
 - PX1, PX7, PX25 → T8; PX2–PX6, PX8, PX9 → T4.
-- C1, C2, C3, C4 (no-pane half), C36 (read-verb rows), C41, C48, C54, C56, C65, C66 (B2 half) → T10; C5, C24, C39, C40, C44, C46, C47b, C53, C68 (CLI half) → T11; C6 → T2; C7, C9, C26, C27 → T12; C8a, C8b → T14; C10, C11, C13, C29 → T16; C12, C15 → T13; C14, C47 → T15; C16 → T31; C17 → T34; C23 → T32; C25, C34 → T20; C32, C33, C49, C59, C60 → T18; C35, C51, C52 → T22; C42 (CLI half), C63 → T19; C43, C45 → T17; C50 → T1; C55 → T26; C57 → T27; C58, C67 → T28; C61 → T23; C62 → T21; C64 (CLI door, and the direct door of B2's forms) → T30.
+- C1, C2, C3, C4 (no-pane half), C36 (read-verb rows), C41, C48, C54, C56, C65, C66 (B2 half) → T10; C5, C24, C39, C40, C44, C46, C47b, C53, C68 (CLI half) → T11; C6 → T2; C7, C9, C26, C27 → T12; C8a, C8b → T14; C10, C11, C13, C29 → T16; C12, C15 → T13; C14, C47 → T15; C16 → T31; C17 → T36; C23 → T32; C25, C34 → T20; C32, C33, C49, C59, C60 → T18; C35, C51, C52 → T22; C42 (CLI half), C63 → T19; C43, C45 → T17; C50 → T1; C55 → T26; C57 → T27; C58, C67 → T28; C61 → T23; C62 → T21; C64 (CLI door, and the direct door of B2's forms) → T30.
 - Not in B2, by the spec: C4's seam half, C30, C31, the recall-off VERB and the headless seam (W2; the CLI honours a hand-planted `recall-off/<id>` from B2); C18–C22, C37, C38 (B3); O39, O40, O43 and O44's segment case (B4). C59's 300-char steer-cap clause and C68's card half pass vacuously in B2; W3 and B3 own them.
 
-**Open operator questions (spec §15.3; none answered at plan time).** Each task follows the spec's stated default:
-- **Q15** (per-copy export due rule): a B4 matter. B2 changes no reducer.
-- **Q16** (spool `fork`): the ruled set stands. B2 writes no spool line for fork; B2's replay (Task 25) applies the records B1 journals and adds no fork case.
-- **Q17** (what `--purge` keeps): the ruled kept-line wording stands. B2 makes no uninstall wording change beyond the skill tree and installer (Task 32).
-- **Q18** (W2 power estimate): a W2 matter. No B2 task.
-- **Q19** (hand-mapping of pre-install transcripts): no hand-mapping mode. `import --session <id> --file <path> --apply` stays the one operator mapping (its CLI door is Task 19).
+**Operator rulings (2026-10-07; spec §15.1 and §15.3, rev 3.4; binding).** Every question this plan once followed a default for is ruled, and so is the prune departure it raised:
+- **Q15 YES: the per-copy due rule** → **Task 35**. A row is due when, for every file holding a copy of it, that file's mtime plus its own home's retention, minus 30 days, has passed (a file gone from disk has passed; a row with no holding file on record is due at once); a blob is due when its rows are. `EXPORT_REDUCERS.perCopy` becomes the default wherever the due rule is computed: `planExport` (B1's signature), the census's due counts and W1-k dates, and so doctor's `export-due`, `export-overdue` and `retention-lowered` arms; B4's pass reads the same default (its ruling RD1). B1's per-row file set stays (⟦D:history-export-holding-files-by-transcript⟧). The `retention-lowered` WARN stays, as a reminder rather than a gate. `deploy/measure-history.py` computes no due date, so it needs no edit (Task 35 measures that).
+- **Q16 YES: SessionStart(fork) is spooled** → **Task 34**. `fork` joins the hook's source whitelist in place (no hook line moves, so no S6-R11 census change), `SPOOL_SOURCES`, `parseSpoolLine`'s `reg` rule and `EPOCH_CAUSES`; a fork confirms exactly as resume does, a fork whose sid is already an epoch confirms that epoch (as DM18c), a fresh sid chains a `fork` epoch, and the parent's copied rows follow the per-copy span rule. No migration (`epochs.cause` is TEXT with no CHECK). The rollback edge is named: a build rolled back to B1 reads a `fork` journal record as malformed and skips it, and a `fork` candidate still waiting stalls its pass until the node moves forward or the candidate's 7 days pass, unless B1 lists `fork` in `EPOCH_CAUSES` (Task 34's choices). B1 ships without it (⟦D:history-fork-not-spooled⟧); Task 34 reverses that (⟦D:history-fork-spooled⟧). Task 25's replay applies fork records unchanged, which Task 34's rebuild case pins.
+- **Q17 as recommended**: B1's kept-line wording, the close line naming `--purge-history`, and the decommission runbook's confirmation. B2 makes no uninstall wording change beyond the skill tree and installer (Task 32).
+- **Q18 YES, a W2 matter**: before W2's window opens, the W2 open record carries the smallest passing point uptake computed from B1 and B3's data. No W1 task, and none here.
+- **Q19 NO, not in W1**: no hand-mapping mode. `import --session <id> --file <path> --apply` stays the one operator mapping (its CLI door is Task 19).
+- **Prune at low disk: confirmed** → **Task 20**. ⟦D:history-prune-not-floor-gated⟧ is RULED by the operator, no longer provisional: `prune --apply` is gated on reachability only and truncates the WAL after each batch, and spec §9.3's "runs the same preflight" is amended (DM49).
 
 ## Global Constraints
 
@@ -195,10 +203,10 @@ B4 inserts its export phases into the phase table, between `apply` and `reindex`
   - Agent: `cd agent && ./node_modules/.bin/vitest run test/deploy-verify.test.ts`.
   - Typecheck: `(cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit)`.
   - Run `ccrc-install.test.ts` filtered with `-t`, or in the background to a file.
-- **CI list.** Every new `server/test/history-*.test.ts` gets its heredoc line in `.github/workflows/ci.yml`'s `node-floor` leg in the SAME commit (Tasks 4, 8, 10, 19, 25, 31); B1's ci-pipeline pin derives the expected list from the directory, and Task 34 checks all six are on the leg (RB9). Task 34 also raises the node-floor job's `timeout-minutes` from 30 to 60, only when its measured floor-leg Duration exceeds 15 minutes. `install-history-skill.test.ts` does not match the pattern. An edit under `.github/` selects the full suite, which the coordinator dispatches.
+- **CI list.** Every new `server/test/history-*.test.ts` gets its heredoc line in `.github/workflows/ci.yml`'s `node-floor` leg in the SAME commit (Tasks 4, 8, 10, 19, 25, 31); B1's ci-pipeline pin derives the expected list from the directory, and Task 36 checks all six are on the leg (RB9). Task 36 also raises the node-floor job's `timeout-minutes` from 30 to 60, only when its measured floor-leg Duration exceeds 15 minutes. Tasks 34 and 35 create no test file: they edit B1's and earlier tasks' files, all already on the leg or in Task 36's suite list. `install-history-skill.test.ts` does not match the pattern. An edit under `.github/` selects the full suite, which the coordinator dispatches.
 - **Citation corpus.**
   - `ccd/ccrc`: new lines go only below the `listener-answers-other-lane)` cut (`f7e51156f:11743`). Sites above it (`f7e51156f:6948`, `:8423`) are edited in place and add no line.
-  - B2 makes no `ccd/session-hook.sh` edit.
+  - B2's one `ccd/session-hook.sh` edit is Task 34's: `fork` joins the spool block's source whitelist on the line that already spells `startup|resume|clear`, and four comment lines beside it are reworded, each replaced by exactly one line. No line is added or removed, so no line moves and the S6-R11 census is not re-run (spec §10.5); Task 34 measures that with `wc -l`, the diff's hunk headers and the census case.
   - `deploy/deploy.sh`: edits go below its `:648` anchor.
   - `session-hook.test.ts` and `single-definition.test.ts` take only end-appended describes, or in-place edits of B1's own end-appended lines, and never an import line.
   - New README prose carries no `file.ext:N` citation.
@@ -208,11 +216,12 @@ B4 inserts its export phases into the phase table, between `apply` and `reindex`
   - Every directory holding a marked file holds a byte-identical `LICENSE.lossless-claw` (1,090 bytes, sha256 `b88a085e19252796c5ba424a8bfe8eb0d4a0af3b89e4460a0dc334a634a995c0`).
   - Re-derived ideas and the re-derived sanitiser test cases carry no entry.
 - **Public repo.** Use synthetic fixtures only: `/home/u/…`-style paths, `DEFAULT_TEST_ROSTER` ids, `pool-a` and `pool-b`, `fixture-not-a-real-token`. No hostnames, usernames, account, wrapper or home names, real pool names, session ids, IPs or docserver URLs. A test string shaped like a ledger reference is built at runtime (for example `` `D-${12}` ``), never written as a literal.
-- **Live-box acceptance is never the worker's.** These are coordinator or operator steps, named in the PR body (Task 34):
+- **Live-box acceptance is never the worker's.** These are coordinator or operator steps, named in the PR body (Task 36):
   - W1-f: grep p95 from a `cc-` pane, against the box's backfilled store;
   - W1-h: recall on the gateway lane;
   - the W1-l rebuild drill.
-- **Open questions keep the spec defaults** (Q15–Q19, above).
+- **The operator's rulings bind** (Q15–Q19 and prune at low disk, 2026-10-07, above). Three change code: Task 20 (prune, ruled), Task 34 (Q16) and Task 35 (Q15).
+- **The spooled set and the due rule.** From Task 34, SessionStart lines spool for `startup`, `resume`, `clear` and `fork` (`SPOOL_SOURCES`), and a fork line confirms as a resume line does. From Task 35, the export due rule's default is `EXPORT_REDUCERS.perCopy`: a reducer answers a candidate's due TIME (ms since the epoch, `-Infinity` when nothing holds it back), and a candidate is due exactly when that time is before now. The node-shortest reducer stays exported as history and as a CONTROL.
 - **compact-card.mjs** gets only two in-place `export ` keywords, on `HEADING_RE` and `fencedRanges` (`f7e51156f` `:510` and `:522`; B1 does not edit this file), plus two `compact-card.d.mts` declarations. No line moves. Task 4 makes this edit; Task 8 does not repeat it.
 - **Split of responsibilities.** lib decides, store executes SQL and fs sequences, and L4 delivers.
 
@@ -240,12 +249,13 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 
 | Path | Action | Responsibility | Ring | Task(s) |
 |---|---|---|---|---|
-| `ccd/history/lib.mjs` | modify | B2's pure decisions and vocabularies, appended after B1's health block: scope, identity, harness, generation and recall-off decisions; id resolution and display prefixes; pasted-line ids; the FTS sanitiser, regex detector and guard, prefilter, sort, snippet, time bounds; envelope and escaping, cap, header and lag, the read `--json` envelope, cursor codec, relay; explorers, cost rows, the expand-body pick; `EXPAND_LABEL`, the block parser and statuses, native gist and topics, refs, directive flag, summary-row selection; the span rule, leaf-id fork rule, fan-in, rollups, readiness, `pickHoldingCopy`, `forkCounts`; the read-verb whitelist (`READ_OPTIONS`, `parseReadArgs`), grep and describe value grammars; op-verb grammar, operator door, `parseDuration`, backup and restore names, `decideBind` (adopt's newer-schema refusal included, RB17), `decideReparse`; recovery phases and cursor, journal-file order, `replayStep`/`planReplay`, unmoved-tick rule, FK diff, FTS shadow health; `selectColumns`, `VERB_TABLES`, `INDEXED_PROVENANCE`, `FTS_STEP`, `SCOPE_FAMILIES_JSON_MAX` (11), `paneReadWanted` (19), `FTS_REBUILD_STEP` (23). Edited in place: `REASON_ROWS` (`repair-refused`, `backup-refused`, `recovering`), `decideOpGate` (RB6's `recovering` row, with the module-private `recoveryExempt` for RB12-RB14), `PARSE_STATUS` (`parse-failed`), B1's `paneNameFor` caller moves to `paneReadWanted` (sweep), and Task 12's `decideGrepIndex` gains `rebuilding` (23) | L1 policy (`node:crypto` only) | 1–8, 10–12, 15–17, 19, 23 |
-| `ccd/history/lib.d.mts` | modify | hand-written declarations for every B2 lib export, each declared once; `OpGateReason`, `decideOpGate`'s env, `PARSE_STATUS` and `decideGrepIndex`'s input edited in place | types | 1–8, 10–12, 15–17, 19, 23 |
+| `ccd/history/lib.mjs` | modify | B2's pure decisions and vocabularies, appended after B1's health block: scope, identity, harness, generation and recall-off decisions; id resolution and display prefixes; pasted-line ids; the FTS sanitiser, regex detector and guard, prefilter, sort, snippet, time bounds; envelope and escaping, cap, header and lag, the read `--json` envelope, cursor codec, relay; explorers, cost rows, the expand-body pick; `EXPAND_LABEL`, the block parser and statuses, native gist and topics, refs, directive flag, summary-row selection; the span rule, leaf-id fork rule, fan-in, rollups, readiness, `pickHoldingCopy`, `forkCounts`; the read-verb whitelist (`READ_OPTIONS`, `parseReadArgs`), grep and describe value grammars; op-verb grammar, operator door, `parseDuration`, backup and restore names, `decideBind` (adopt's newer-schema refusal included, RB17), `decideReparse`; recovery phases and cursor, journal-file order, `replayStep`/`planReplay`, unmoved-tick rule, FK diff, FTS shadow health; `selectColumns`, `VERB_TABLES`, `INDEXED_PROVENANCE`, `FTS_STEP`, `SCOPE_FAMILIES_JSON_MAX` (11), `paneReadWanted` (19), `FTS_REBUILD_STEP` (23). Edited in place: `REASON_ROWS` (`repair-refused`, `backup-refused`, `recovering`), `decideOpGate` (RB6's `recovering` row, with the module-private `recoveryExempt` for RB12-RB14), `PARSE_STATUS` (`parse-failed`), B1's `paneNameFor` caller moves to `paneReadWanted` (sweep), and Task 12's `decideGrepIndex` gains `rebuilding` (23); B1's `SPOOL_SOURCES`, `EPOCH_CAUSES`, `parseSpoolLine`'s `reg` rule and `decideEpochLine` admit `fork` (34); B1's export block: `EXPORT_REDUCERS.perCopy` (the default), `shortestHome` answering a due time, `planExport`'s due test, `exportDates` over holders, `dueTranscriptKeys`, and `deriveHealth`'s `retention-lowered` detail (35) | L1 policy (`node:crypto` only) | 1–8, 10–12, 15–17, 19, 23, 34, 35 |
+| `ccd/history/lib.d.mts` | modify | hand-written declarations for every B2 lib export, each declared once; `OpGateReason`, `decideOpGate`'s env, `PARSE_STATUS` and `decideGrepIndex`'s input edited in place; `SpoolSource`, `EpochCause` and `decideEpochLine`'s `line.src` gain `fork` (34); `EXPORT_REDUCERS`, `ExportReducer`'s doc and `exportDates` in place, `dueTranscriptKeys` added (35) | types | 1–8, 10–12, 15–17, 19, 23, 34, 35 |
 | `ccd/history/store.mjs` | modify | `getStep`/`setStep`; the lineage range CTE (P7), `childrenOf`, `parentOf`; `blobPlainText`; prune candidates, batches and `incrementalVacuum`; `writeBackup`; `integrityCheck`, `foreignKeyRows`, `ftsMeasure`, `dropFtsTables`; `adoptStore`, `stageRestore`, `commitRestore`, `abortRestore`; `createStore(home, opts?)` with a bind option (additive); `recoverStepAt` (RB6's read-only probe of an open `recover` step); `storedVersionAt` (the stored `user_version`, read-only, for RB13 and RB17) | L3 adapter (`node:sqlite`, `node:fs`, `node:zlib`) | 8, 9, 12, 19, 20, 22–24 |
 | `ccd/history/store.d.mts` | modify | declarations for the new store exports, each declared once | types | 8, 9, 12, 19, 20, 22–24 |
 | `ccd/history/derive.mjs` | create | node derivation inside the tick: `nodeToolkit`; node indexes; `deriveLeaves` (holding copy, readiness, summary row, direction read back from the source line, receipt gate, native gist, topics and refs, leaf ids, counters, parser crashes recorded as `parse-failed` leaves or `leaf-crashed` markers); `deriveParents` (fan-in per holding copy and epoch); `indexNodesFts`; `refreshLeaf` (records a parser throw `parse-failed`), `rerollParents`, `reparseTargets`, `reparseLeaves`, `clearLeafCrashes`; `redactNodeFields`, `reparseFailClosed`, `rederiveGistsFor` | L4 delivery (imports lib, store, `../compact-card.mjs`, `node:fs`) | 8, 9, 21, 29 |
-| `ccd/history/sweep.mjs` | modify | tick wiring (`deriveNodes`, the recovery slot); `scheduledPass` measures `recovering` and runs the recover arm; `recoveryStep`, `recoverPass`, `RECOVER_EXECUTORS` and the replay applicators; the `runOpPass` restructure (`OP_DRY_RUNS`, `OP_HANDLERS`, `bindingPass`, per-verb version guard); the RB6 `recovering` refusal in `runOpPass`, with RB13's and RB14's facts; `--op` prune, reparse, repair, backup, adopt, restore and rebuild; `mergeFamily` re-points nodes; recall-echo index predicate; `recall_off_stale` counted at drain; `reindexForValues` calls the gist re-derivation | L4 delivery | 8, 9, 11, 12, 19–23, 25–29 |
+| `ccd/history/sweep.mjs` | modify | tick wiring (`deriveNodes`, the recovery slot); `scheduledPass` measures `recovering` and runs the recover arm; `recoveryStep`, `recoverPass`, `RECOVER_EXECUTORS` and the replay applicators; the `runOpPass` restructure (`OP_DRY_RUNS`, `OP_HANDLERS`, `bindingPass`, per-verb version guard); the RB6 `recovering` refusal in `runOpPass`, with RB13's and RB14's facts; `--op` prune, reparse, repair, backup, adopt, restore and rebuild; `mergeFamily` re-points nodes; recall-echo index predicate; `recall_off_stale` counted at drain; `reindexForValues` calls the gist re-derivation; `recordHeldMatches` takes fork lines, and three epoch doc comments name fork (34); the export census's header comment, `EXPORT_CANDIDATES_SQL`, `EXPORT_HOLDERS_SQL` and `exportCensus` (35) | L4 delivery | 8, 9, 11, 12, 19–23, 25–29, 34, 35 |
+| `ccd/session-hook.sh` | modify | in the `history-spool` block: `fork` in the SessionStart source whitelist, and four comment lines reworded, each in place; no line added or removed (citation corpus, S6-R11 census unchanged) | bash hook | 34 |
 | `ccd/history/cli.mjs` | modify | verb dispatcher: `parseReadArgs` and help; `measureReach` (extracted from B1's status helpers); bounded tmux identity, harness check, recall-off honour and preflight; `readContext`; `READ_RUNNERS`, `emitResult`, `redactFinal`; the fenced `ev:"recall"` counter line; the operator door (`OP_OF_VERB`, `runOpVerb`, relay); bare `doctor` | L4 delivery | 10–12, 15, 16, 18, 19 (26–28, 30 check only) |
 | `ccd/history/recall.mjs` | create | the read-verb executors over a `ReadContext`: `runTree`, `grepVerb`/`runGrep`, `runRegex`, `describeVerb`/`runDescribe`, `expandVerb`/`runExpand`; version-aware selects; `pendingFor`; `indexGate` reads the open `FTS_REBUILD_STEP` row (23, in place) | L4 delivery (imports lib, store, `node:child_process`) | 10–18, 23 |
 | `ccd/history/regex-worker.mjs` | create | the `--regex` child: a JSON job on stdin; a read-only handle; in-scope blobs paged with `iterate()`, every statement held; unbrotli, plain text, `redactField`, the regex; JSON lines out; its own entry guard | L4 delivery (imports lib, store) | 14 |
@@ -261,13 +271,15 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 | `shared/lifecycle.ts` | modify | the `history-backups` LifecycleClass row | L0 (imports nothing) | 22 |
 | `README.md` | modify | the history section after Memory guardrails (Linux); in-place prose repairs naming the fourth skill; the Third-party paragraph names `ccd/history-skill`; the timer-table and doctor-table rows | docs (citation corpus, repaired by content) | 31, 33 |
 | `CLAUDE.md` | modify | the `README.md (~N lines)` figure, re-measured | docs | 33 |
-| `.github/workflows/ci.yml` | modify | `node-floor` leg heredoc lines for history-parser, history-derive, history-recall, history-maint, history-recover and history-skill; the node-floor job's `timeout-minutes` (30 to 60) only when Task 34 Step 5's measured floor-leg Duration exceeds 15 minutes | CI | 4, 8, 10, 19, 25, 31, 34 |
-| `server/test/history-lib.test.ts` | modify | pure describes, one namespace import each (`libScope`, `libSearch`, `libOut`, `libOps`, `libReplay`, `libGrep`, `libDescribe`, `t19lib`, `libRebuild`, …) | test | 1–3, 6, 7, 12, 15–17, 19, 23 |
+| `.github/workflows/ci.yml` | modify | `node-floor` leg heredoc lines for history-parser, history-derive, history-recall, history-maint, history-recover and history-skill; the node-floor job's `timeout-minutes` (30 to 60) only when Task 36 Step 5's measured floor-leg Duration exceeds 15 minutes | CI | 4, 8, 10, 19, 25, 31, 36 |
+| `server/test/history-lib.test.ts` | modify | pure describes, one namespace import each (`libScope`, `libSearch`, `libOut`, `libOps`, `libReplay`, `libGrep`, `libDescribe`, `t19lib`, `libRebuild`, `libFork`, `libDue`, …); in place, B1's fork refusals flipped (34) and B1's due cases naming the node-shortest reducer, its `exportDates` and reducer-seam cases rewritten, one `deriveHealth` case added (35) | test | 1–3, 6, 7, 12, 15–17, 19, 23, 34, 35 |
+| `server/test/history-drain.test.ts` | modify | appended: the `fork` line and receipt-count helpers, DM48's drain cases (in-process) and its copied-rows case (the box as it runs) | test | 34 |
+| `server/test/history-op.test.ts` | modify | B1's O38 census describe replaced, its cases re-run under the per-copy default; an O58 census describe appended | test | 35 |
 | `server/test/history-parser.test.ts` | create | pure tests for the parser, spans and fan-in; runs on darwin | test | 4, 5, 8 |
-| `server/test/history-derive.test.ts` | create | node derivation through real sweep ticks | test | 8, 9 |
+| `server/test/history-derive.test.ts` | create | node derivation through real sweep ticks; DM48's span case, a fresh-sid fork's leaf (34) | test | 8, 9, 34 |
 | `server/test/history-recall.test.ts` | create | read verbs: CLI spawns plus in-process `recall.mjs`; one file-scope `removeTmpFixturesEachTest()` (Task 12) | test | 10–18 |
 | `server/test/history-maint.test.ts` | create | operator door and relay, import/migrate doors and RB6's rows there, prune, reparse, backup, repair, the C64 gate table with its `recovering` rows; one top-level `removeTmpFixturesEachTest()` (Task 20); Task 26 re-points Task 19's `--op adopt` bad-args line to an unknown verb and adds adopt → needs-tty | test | 19–23, 26, 30 |
-| `server/test/history-recover.test.ts` | create | recovery step and replay, RB6's full form table at both doors, adopt, restore, rebuild, O35, O36, O47; the terminal helpers (`onPty`, `cliOnPty`, `shimOnPty`, `ccrcSnapshot`, Task 25) and one `removeTmpFixturesEachTest()` | test | 25–29 |
+| `server/test/history-recover.test.ts` | create | recovery step and replay, RB6's full form table at both doors, adopt, restore, rebuild, O35, O36, O47, DM48's rebuild case; the terminal helpers (`onPty`, `cliOnPty`, `shimOnPty`, `ccrcSnapshot`, Task 25) and one `removeTmpFixturesEachTest()` | test | 25–29, 34 |
 | `server/test/history-skill.test.ts` | create | skill verbatim content, frontmatter, files, `EXPAND_LABEL`, C16 | test | 31 |
 | `server/test/install-history-skill.test.ts` | create | installer behaviour, deploy-arm order and the relation pin (a clone of `install-worker-skill.test.ts`) | test | 32 |
 | `server/test/history-store.test.ts` | modify | in-process: lineage CTE, prune batch, backup, repair measurements, binding sequences with kill seams, `createStore` with a bind option | test | 9, 20, 22–24 |
@@ -278,10 +290,10 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 | `server/test/historyFixtures.ts` | modify | builders: summary text, steered blocks, compaction sequences | test helper (no describe) | 4, 5 |
 | `server/test/fixtures/history/preload-faults.mjs` | modify | appended test-only knobs with unique binding names: throw-on-SQL substring, a throw on one blob's read (21), FK-violating insert and a committed FK plant (23), integrity text | test fixture | 21, 23, 25 |
 | `server/test/fixtures/history/run-pass.mjs` | modify | `DriverDeps` gains `budgetMs`, `budgetBytes` and `chunkBytes` | test fixture | 25 |
-| `server/test/single-definition.test.ts` | modify | in place, in B1's end-appended describes: `PENDING_EMITTERS` drops recall; the O13 corpus gains the skill; O14 `VOCABS` gains B2's vocabularies | test (cited by line; end region only) | 11, 31, 34 |
+| `server/test/single-definition.test.ts` | modify | in place, in B1's end-appended describes: `PENDING_EMITTERS` drops recall; the O13 corpus gains the skill; O14 `VOCABS` gains B2's vocabularies (36); appended: the hook's SessionStart whitelist bound to `SPOOL_SOURCES` (34) | test (cited by line; end region only) | 11, 31, 34, 36 |
 | `server/test/license.test.ts` | modify | the sidecar sha and PATHSPEC pins cover every `LICENSE.lossless-claw`; the README substring list gains the skill sidecar | test | 31 |
 | `server/test/lifecycle.test.ts` | modify | `HISTORY_LANDED` becomes `['B1','B2']`; one `declares history-backups` case | test | 22 |
-| `server/test/session-hook.test.ts` | modify | end-appended C17 describe; no import line | test (cited by line) | 34 |
+| `server/test/session-hook.test.ts` | modify | in place, B1's end-appended S11 and S14 cases rewritten to their fork-spooled form (34); end-appended C17 describe (36); no import line | test (cited by line) | 34, 36 |
 | `server/test/installTreeFixture.ts` | modify | `TREE_FILES` gains `'ccd/history-skill'` and `'ccd/install-history-skill.sh'` | test helper | 32 |
 | `server/test/ccrc-account.test.ts` | modify | the history installer and skill in the planted-installer lists, installer calls (6), the real-provision loop, the provisioned arrays and the seedFull lists | test | 32 |
 | `server/test/ccrc-install.test.ts` | modify | the history skill and installer in the artifact list, idempotence targets, the 'all skills' pairs, the staged-tree list, the inode-watch lists and the describe title | test | 32 |
@@ -3662,7 +3674,7 @@ describe('directiveFlag: flag only, nothing stripped (spec 7.4 item 9; P29)', ()
           test/history-parser.test.ts
 ```
 
-Then run `(cd server && ./node_modules/.bin/vitest run test/ci-pipeline.test.ts -t 'node-floor leg runs every history test file')`. Expected: green. The file joins the 22.16.0 leg in this commit, so its engine facts are re-measured on the floor by CI from now on (ruling RB9; Task 34 pins the full B2 list). An edit under `.github/` selects the full suite on the PR, which the coordinator dispatches; the worker never runs it.
+Then run `(cd server && ./node_modules/.bin/vitest run test/ci-pipeline.test.ts -t 'node-floor leg runs every history test file')`. Expected: green. The file joins the 22.16.0 leg in this commit, so its engine facts are re-measured on the floor by CI from now on (ruling RB9; Task 36 pins the full B2 list). An edit under `.github/` selects the full suite on the PR, which the coordinator dispatches; the worker never runs it.
 
 - [ ] **Step 6: Run the parser tests and see them fail.** In the foreground with a timeout of at least 600000 ms:
 
@@ -18838,11 +18850,11 @@ The commit touches `.github/`, so the PR's CI selects the full suite. The PR bod
   - sweep.mjs: `pruneDryRunOp(home, P, args, out, nowMs): { rc: number; reason?: string }`, `pruneApplyOp(db, ctx, args): { rc: number; reason?: string }`, and the file-local `dryRunReader(home, P, out)` (Task 21 reuses it); `OP_VERBS` gains `'prune'`.
   - history-maint.test.ts (module level, every name prefixed `maint`/`MAINT_` so nothing collides with Task 19's block): `MAINT_ID`, `MAINT_U1`, `MAINT_QUOKKA`, `MAINT_DAY`, `maintIso`, `maintResult`, `maintJson`, `maintSnapshot`, `maintQ`, `maintMatch`, `maintMeta`, `maintNames`, `maintTombstones`, `maintBound`, `maintRecovering`, `maintPty`. Tasks 21–23 use them.
 
-**Spec:** §6.6 (prune: dry run by default, the 30-day floor, bounded `BEGIN IMMEDIATE` batches, every-referrer age, NULL time never old, structure blobs never pruned, FTS rows deleted, `PRAGMA incremental_vacuum(N)`, never by a source file's absence, never the journal or the export, the dry run's export count), §8.4 (operator verbs through the shim, the speed bumps), §9.3 ("prune frees space"), §9.14 (a registered recovery step), §11 P15. Pins: DM14, DM15, DM22, DM27, O12, C25, C34; RB3 (reachability only, and the WAL bounded per batch); RB6's prune row. Departures: ⟦D:history-prune-referrers⟧, ⟦D:history-apply-via-shim⟧, ⟦D:history-free-space-floor⟧, ⟦D:history-prune-not-floor-gated⟧ (NEW: §9.3 says `prune --apply` "runs the same preflight", but a store below the floor is exactly the one prune exists to shrink, so the pass probes reachability only and never refuses for room; provisional pending the operator, RB3), ⟦D:history-prune-needs-a-referrer⟧ (NEW: "every referrer is older than the cutoff" is vacuously true for a blob nothing names; a blob with no `entries`, `entry_variants` or `sidecars` referrer is never pruned), ⟦D:history-ops-refused-while-recovering⟧ (NEW, RB6; defined by Task 6; Task 19 places the refusal).
+**Spec:** §6.6 (prune: dry run by default, the 30-day floor, bounded `BEGIN IMMEDIATE` batches, every-referrer age, NULL time never old, structure blobs never pruned, FTS rows deleted, `PRAGMA incremental_vacuum(N)`, never by a source file's absence, never the journal or the export, the dry run's export count), §8.4 (operator verbs through the shim, the speed bumps), §9.3 ("prune frees space"), §9.14 (a registered recovery step), §11 P15. Pins: DM14, DM15, DM22, DM27, O12, C25, C34; DM49 (spec rev 3.4: prune below the free-space floor; it is RB3's two halves, reachability only and the WAL truncated per batch, pinned by Step 1's `walSizes` and Step 6's `RB3: below the free-space floor …` case, with Step 5's mutant (f) and Step 10's RB3 mutant as its two CONTROLs); RB6's prune row. Departures: ⟦D:history-prune-referrers⟧, ⟦D:history-apply-via-shim⟧, ⟦D:history-free-space-floor⟧, ⟦D:history-prune-not-floor-gated⟧ (RULED by the operator on 2026-10-07, spec rev 3.4, no longer provisional; first raised by this plan as coordinator ruling RB3: §9.3 said `prune --apply` "runs the same preflight", but a store below the floor is exactly the one prune exists to shrink, so the pass probes reachability only, never refuses for room, and truncates the WAL after each batch; §9.3 is amended to say so, §6.6 and DM49 pin it), ⟦D:history-prune-needs-a-referrer⟧ (NEW: "every referrer is older than the cutoff" is vacuously true for a blob nothing names; a blob with no `entries`, `entry_variants` or `sidecars` referrer is never pruned), ⟦D:history-ops-refused-while-recovering⟧ (NEW, RB6; defined by Task 6; Task 19 places the refusal).
 
 Choices this task makes (each is in the PR body's open issues):
-- **Reachability, not room** (RB3). The `--op` pass's own statfs probe (Task 19's runOpPass, under `STATFS_DEADLINE_MS`) is prune's whole preflight: unsettled answers 5 `store-unreachable`; low disk never refuses. Step 6's below-the-floor case pins both halves.
-- **The WAL is truncated after every batch** (RB3). Each batch's tombstones, FTS deletes and incremental vacuum land in the WAL, and the store prune serves is the one with no room for a WAL that grows across a long pass. So `pruneApply` runs `PRAGMA wal_checkpoint(TRUNCATE)` after each batch's vacuum, outside any transaction, as upstream does after its VACUUM (src/prune.ts:382). A reader holding an older snapshot makes it wait up to the writer's busy timeout and answer `busy` = 1; that is not an error, and the next batch's checkpoint tries again.
+- **Reachability, not room** (RB3; ruled by the operator on 2026-10-07, DM49). The `--op` pass's own statfs probe (Task 19's runOpPass, under `STATFS_DEADLINE_MS`) is prune's whole preflight: unsettled answers 5 `store-unreachable`; low disk never refuses. Step 6's below-the-floor case pins both halves.
+- **The WAL is truncated after every batch** (RB3; part of the same operator ruling, DM49). Each batch's tombstones, FTS deletes and incremental vacuum land in the WAL, and the store prune serves is the one with no room for a WAL that grows across a long pass. So `pruneApply` runs `PRAGMA wal_checkpoint(TRUNCATE)` after each batch's vacuum, outside any transaction, as upstream does after its VACUUM (src/prune.ts:382). A reader holding an older snapshot makes it wait up to the writer's busy timeout and answer `busy` = 1; that is not an error, and the next batch's checkpoint tries again.
 - **A tombstone clears `fts_indexed`.** The blob holds no text, so it holds no index row; B1's backfill already skips `z IS NULL`.
 - **The deleted index bytes are merged by the ticks.** In the same transaction as a batch's FTS deletes, the pass registers `('fts-merge', 1)` through B1's `derivStmts(db).pending` (pruneBatch's `onDeleted`), so a pass that stops between batches (a failed journal append, a kill) never leaves deleted index bytes with no merge step to purge them; the scheduled ticks' bounded merge steps purge them from `blobs_fts_data` (§6.2's merge rule).
 - **Batch 500, vacuum at most 65 536 pages per batch** (*chosen*).
@@ -19655,7 +19667,8 @@ is never old, a sidecar ages by its entry, the blob's FTS row goes and the
 merge step is registered in the same batch; the WAL is truncated after every
 batch; rows, nodes, the journal and the export stay. Gated on reachability
 only, never on room; refused while a recovery step is registered.
-Pins DM14, DM15, DM22, DM27, O12, C25 and C34 through both doors, RB3 and RB6."
+Pins DM14, DM15, DM22, DM27, O12, C25 and C34 through both doors, DM49 (RB3,
+ruled by the operator) and RB6."
 ```
 
 - [ ] **Step 13: Re-measure the FTS5, vacuum and checkpoint facts on the floor interpreter.**
@@ -22370,6 +22383,7 @@ kill seam."
   - **O48**'s replay-order half. Its eventKey half is B1's;
   - RB6's "every writing --op form but restore and rebuild is refused 'recovering'", for every form `--op` runs by this task, through both doors, on a bound store at the code's version, so `migrate` is refused as RB13 rules (its exempt arm is Task 19's case; adopt's two RB14 arms are Task 26's; that restore and rebuild are never refused is Tasks 27 and 28's);
   - the streaming executor's agreement with Task 7's `planReplay`: a merge group, a foreign head, a head-less file and an undrained spool record.
+- Fork records (ruled Q16; Task 34): `replayVerdict` applies an `epoch-confirmed` record with the cause it carries, and `replayEpochLine` asks lib's `decideEpochLine` about a line with no verdict. Neither enumerates a source or a cause, so once Task 34 admits `fork` in lib, a fork line and its verdicts replay through this task's code unchanged. Write no fork case here: Task 34's DM48 rebuild case (in this test file) pins it.
 - Departures:
   - ⟦D:history-recovery-replay⟧
   - ⟦D:history-ops-refused-while-recovering⟧ (Task 6's NEW slug; this task pins it)
@@ -28849,7 +28863,1596 @@ git commit -m "docs(history): README's ccrc history section, the timer and docto
 
 If `CLAUDE.md` did not change in Step 5, `git add` stages nothing for it, and the commit carries README alone.
 
-### Task 34: Wrap-up: the search-gate pin C17, B2's vocabularies bound by O14, the whole-PR checks, and the PR body with the coordinator's and operator's steps
+### Task 34: SessionStart(fork) is spooled (ruled Q16): `fork` joins the hook's source whitelist in place, `SPOOL_SOURCES` and `EPOCH_CAUSES`; a fork line confirms as a resume line does, at the drain, at a later tick, through a held match and in replay; S11, S14 and DM48
+
+**Files:**
+- Modify: `ccd/session-hook.sh` (citation corpus; B1 added the block). Inside the `# >>> history-spool (spec 2026-10-05 §5.1)` block, ONE code line and FOUR comment lines, each replaced in place by exactly one line. No line is added or removed, so no line below moves and the S6-R11 census is not re-run (spec §10.5's citation-corpus row). Step 6 measures both.
+- Modify: `ccd/history/lib.mjs` (B1-created), in place by content: the `SPOOL_SOURCES` and `EPOCH_CAUSES` declarations and the doc line above them; the comment above `SPOOL_KEYS`; one doc phrase and one line of `parseSpoolLine`; one doc line and one line of `decideEpochLine`.
+- Modify: `ccd/history/lib.d.mts` (B1-created), in place: `SpoolSource`, `EpochCause` and `decideEpochLine`'s `line.src`.
+- Modify: `ccd/history/sweep.mjs` (B1-created), in place by content: `recordHeldMatches`' source filter and its doc line; one doc line each of `applyEpochLine`, `confirmCandidates` and `registryBackfill`. No function is added.
+- Modify: `server/test/history-lib.test.ts` (B1-created): four in-place edits of B1's cases (one of them adds two table rows), one import line, one appended describe.
+- Modify: `server/test/session-hook.test.ts` (citation corpus): B1's end-appended cases S11 (`x"y, fork, or absent`) and S14 (`compact) and (fork) write no line`), each rewritten in place inside B1's spool describe. No import line, and nothing above B1's history describe moves.
+- Modify: `server/test/single-definition.test.ts` (citation corpus): one describe appended at the very end.
+- Modify: `server/test/history-drain.test.ts` (B1-created): two helpers and two describes appended at the end.
+- Modify: `server/test/history-recover.test.ts` (Task 25 created it): one describe appended at the end, after Task 29's.
+- Modify: `server/test/history-derive.test.ts` (Task 8 created it; Task 9 appended to it): one describe appended at the end, after every describe earlier tasks put there.
+- Scratch, gitignored, never committed: `.superpowers/sdd/history-w1-b2/scratch/mutants-task34.json` and `.superpowers/sdd/history-w1-b2/scratch/hook-lines.before`.
+
+**Interfaces:**
+- Consumes:
+  - B1 `lib.mjs`: `SPOOL_SOURCES`, `EPOCH_CAUSES`, `SPOOL_KEYS`, `parseSpoolLine`, `decideEpochLine`, `parseJournalRecord`, `journalRecord`; the types `Presence`, `Observation`, `SpoolSource` and `EpochCause` (`lib.d.mts`).
+  - B1 `sweep.mjs`, unchanged in code but for one filter: `drainSpool`; `applyEpochLine` (a confirmed line is chained with `rec.src` as its cause, and a waiting one is stored in `epoch_candidates` with `rec.src`); `chainEpoch` (a uuid the family already holds is confirmed in place, never chained twice: DM18c's mechanism); `confirmCandidates` (every candidate that is not a clear takes the startup and resume path); `registryBackfill`; `recordHeldMatches`.
+  - B1 test helpers. In `history-drain.test.ts`, module level: `SW`, `EP`, `T`, `WEEK`, `ID`, `u`, `U1`, `U2`, `U3`, `U9`, `G1`, `setReg`, `spool`, `start`, `drainingNames`, `obsOf`, `rowsOf`, `familiesOf`, `epochsOf`, `candidatesOf`, `counterOf`, `verdictsOf`, `transcriptIn`, and the imports `makeHistoryBox`, `runSweep`, `createStore`, `openWriter`, `closeWriter`, `historyPaths`, `beforeAll`, `afterEach`, the types `Ids`, `TickCtx`, `HistoryBox`, `DatabaseSync`. In B1's spool describe of `session-hook.test.ts`: `SID`, `ID`, `SCRUB`, `plantSpool`, `spoolFile`, `parsed`, and the module's `run` and `home`. In `single-definition.test.ts`: `HISTORY_MJS`, `stallCode`, `codeLines`, `rel`, `ccrcRoot`, `path`.
+  - Task 27's helpers in `history-recover.test.ts`: `rrH`, `rrFs`, `rrTickUntil`, `rrEpochs`, `rrCount`, `rrLose`, `rrCliPty`, `rrRecovered`; Task 28's `rrState` (O35's columns).
+  - Task 8's module in `history-derive.test.ts`: `SLUG`, `GEN`, `T0`, `plant`, `settle`, `q`, `leavesOf`, `sourcesOf`, `firstUuid`, and its imports `makeHistoryBox`, `plantSession`, `plantTranscript`, `spoolLine`, `compactionSequence` and `leafId`.
+  - Task 8 (`derive.mjs`): a boundary's leaf takes its epoch from the boundary's own transcript (`b.cc_uuid`) and its span from the copy that holds it, through `copyRows`, which marks a row as a boundary by joining `boundaries` on its entry whatever transcript first claimed it. So a fork's copy of the parent's boundary starts the fork's next span, and that leaf's id hashes the fork's sid. Step 3's span case pins that path across two transcripts.
+  - Task 25 (`sweep.mjs`): `replayVerdict` applies an `epoch-confirmed` record with the cause it carries, and `replayEpochLine` asks `decideEpochLine` about a line with no verdict. Neither enumerates a source or a cause, so a fork record replays with no edit to Task 25's code; Step 3's rebuild case pins that.
+  - Task 10 (`recall.mjs`): `runTree` prints `epoch <seq> <cause> …` from the stored cause, so a fork epoch reads `epoch 2 fork …`. No read verb filters a cause, and no B2 code outside Task 25's two applicators reads a spool source (measured on this plan's code: no `cause ===`, `cause IN`, `SPOOL_SOURCES` or `src ===` test beyond them).
+- Produces: no new export. `SPOOL_SOURCES` becomes `['startup', 'resume', 'clear', 'fork']` and `EPOCH_CAUSES` `['startup', 'resume', 'clear', 'import', 'fork']`; `parseSpoolLine` accepts a fork line with or without `reg`; `decideEpochLine` answers a fork line as it answers a resume line.
+
+**Spec:** §5.1 ("Events"; `src`; `reg` "from W1-B2 on SessionStart(fork) lines too"), §6.1 ("`cause='fork'` lines confirm exactly as resume lines do", "A fork whose sid is already an epoch", "A fresh sid", "The parent's copied rows", "No migration", "The rollback edge", "Backfill"), §6.10's fork row, §9.2 and §9.14 (the drain, the held-file re-read and replay treat a fork line as a resume line), §10.5 (B2's fork bullet; the citation-corpus row), §14 risk 24, §15.1 and §15.3 Q16. Pins: **DM48**; **S11** and **S14** in their fork-spooled form, with S14's CONTROL (a hook whitelist or a `SPOOL_SOURCES` without `fork` goes red).
+- Departures:
+  - ⟦D:history-fork-spooled⟧ (spec §16 row since rev 3.4; this plan defines it first): SessionStart(fork) writes a spool line from W1-B2 and confirms as a resume line does.
+  - ⟦D:history-fork-not-spooled⟧ (B1-defined): reversed here, except that every SessionStart line still carries `src`.
+  - ⟦D:history-spool-start-not-compact⟧ and ⟦D:history-spool-line-carries-registry-uuid⟧ (B1-defined; rev 3.4 amends each to name fork).
+  - ⟦D:history-epoch-confirmation⟧ (B1-defined): fork epochs chain only once their own `reg`, the observation, a held match or a later tick names the sid.
+  - ⟦D:history-epoch-lines-survive-off⟧ and ⟦D:history-spool-no-summary-hash⟧ (B1-defined): named only because the comment lines this task rewords carry them.
+
+Choices this task makes (each is in the PR body's choices):
+- **The resume path, not a new arm.** `decideEpochLine` admits `fork` beside `startup` and `resume`. B1's `applyEpochLine`, `chainEpoch` and `confirmCandidates` read the cause from the line, so they need no code change. A fork whose sid the family already holds (Claude Code's same-id arm, or a sid a registry scan chained first as `import`) is confirmed by `chainEpoch`'s existing-uuid arm: no second epoch, and the first cause stands (§6.1, "the first claim stands").
+- **One filter in the sweep.** `recordHeldMatches` is the only B1 code that lists the confirmable sources itself; it gains `fork` in place.
+- **The rollback edge is named, not tested.** A B1 build is not in this tree. It has three parts on a B1 whose `EPOCH_CAUSES` lacks `fork`, as B1's plan ships it:
+  - **Journaled fork verdicts.** A build rolled back to B1 validates journal verdicts with its own `oneOf(EPOCH_CAUSES)`, so it reads a journaled fork verdict as `malformed`: skipped, counted `journal_line_malformed` (doctor WARN `journal-record-skipped`), never applied. Moving forward again replays the record.
+  - **Spooled fork lines.** Its drain rejects a spooled fork line still in `spool/` (`spool_line_rejected`), and that fork falls back to B1's registry backfill.
+  - **A waiting fork candidate stalls the pass.** A fork line that no evidence confirmed at the drain is stored as an `epoch_candidates` row with cause `fork` (B1's `applyEpochLine`, unchanged), and the row survives the rollback. Once `.uuid` names its sid within the 7-day window, B1's `confirmCandidates` takes the startup and resume path and builds an `epoch-confirmed` verdict carrying `cause: 'fork'`. B1's `journalRecord` reads every record it writes back through `oneOf(EPOCH_CAUSES)` and throws a `TypeError` on it. `verdictTx` catches only `JournalError`, so the transaction rolls back, the candidate stays, and the pass exits 1 at every tick before registry backfill and ingest; doctor FAILs `tick-stale`. It ends when the node moves forward again (B2's first tick confirms the candidate), when the candidate passes its 7 days (the drop verdict carries no cause), or when `.uuid` moves to another sid. Capture is delayed, not lost: the transcripts stay on disk and ingest catches up. The stall lasts at most 7 days from the line's journaling. The update watchdog rolls back with no operator, so no runbook step can prevent it. Measured by the review on B1's own `sweep.mjs` and `store.mjs` in a scratch HOME: three ticks, three throws, the candidate kept.
+  - **Ruled (coordinator, 2026-10-07): B1 widens `EPOCH_CAUSES` alone to hold `fork` before it merges**, leaving its `SPOOL_SOURCES` and the hook without it, so B1 still spools no fork (B1's departure slug `history-epoch-causes-widened-for-rollback`). On the merged base, therefore, only the spooled-line part of the edge remains, and any Step 1 or Step 3 expectation that reds only because `EPOCH_CAUSES` lacks `fork` is already green: record it as such in the task's report rather than forcing a red, and keep every other red. The rest of this bullet holds either way. A rolled-back build then reads fork verdicts as valid and confirms a fork candidate cleanly, and only the spooled-line part remains. Step 5(a) replaces B1's `EPOCH_CAUSES` line either way. The `EPOCH_CAUSES` doc comment, the PR body and spec §6.1 name all three parts. No migration exists to test: `epochs.cause` is TEXT with no CHECK in schema v1.
+- **The hook's comments are reworded in place.** Beside the new whitelist, a comment saying fork writes nothing would be false. Each reworded line stays one line, so nothing moves.
+
+- [ ] **Step 1: Write the failing pure tests.** In `server/test/history-lib.test.ts`:
+
+(a) Add this line directly below the file's last `import * as … from '../../ccd/history/lib.mjs';` line (`grep -c 'libFork' server/test/history-lib.test.ts` prints `0` before the edit):
+
+```ts
+import * as libFork from '../../ccd/history/lib.mjs';
+```
+
+(b) Edit four of B1's cases in place, each found by its quoted content:
+  - In `'SEARCHABLE_PROVENANCE is a subset of PROVENANCE; SPOOL_SOURCES of EPOCH_CAUSES'`, replace
+
+```ts
+    expect(SPOOL_SOURCES, 'fork is outside the ruled set (Q16)').not.toContain('fork');
+```
+
+with
+
+```ts
+    expect([...SPOOL_SOURCES], 'fork joins the spooled set from W1-B2 (ruled Q16)').toEqual(['startup', 'resume', 'clear', 'fork']);
+```
+
+  - In `parseSpoolLine`'s `refuses %s` table, replace the row
+
+```ts
+    ['SessionStart(fork) (S14, Q16)', line({ v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'fork' }), 'value'],
+```
+
+with
+
+```ts
+    ['SessionStart(branch), a source no build spools (S14)', line({ v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'branch' }), 'value'],
+```
+
+    and in its `accepts %s` table, directly below the row `['SessionStart(clear)', { v: 1, ev: 'SessionStart', id: 'x', sid: U2, src: 'clear', ts: 1 }],`, add
+
+```ts
+    ['SessionStart(fork) with reg (S11, ruled Q16)', { v: 1, ev: 'SessionStart', id: 'x', sid: U2, src: 'fork', reg: U1, gen: G1 }],
+    ['SessionStart(fork) without reg (S11, ruled Q16)', { v: 1, ev: 'SessionStart', id: 'x', sid: U2, src: 'fork' }],
+```
+
+  - In the journal's `refuses %s as malformed` table, in the row `'a spool rec that fails the grammar'`, replace `src: 'fork' } })],` with `src: 'branch' } })],`. A fork line passes the grammar now, so that row needs a source no build spools.
+  - In `'a source outside the spool set throws rather than chains'`, replace `{ src: 'fork' as 'startup', sid: U1 }` with `{ src: 'compact' as 'fork', sid: U1 }`.
+
+(c) Append at the end of the file:
+
+```ts
+// ── W1-B2 Task 34: fork lines and fork epochs, the pure halves (spec 2026-10-05 §5.1, §6.1, S11, S14, DM48;
+// ruled Q16, ⟦D:history-fork-spooled⟧) ────────────────────────────────────────────────────────────────────
+describe('fork lines and fork epochs, pure halves (W1-B2 Task 34; spec 5.1, 6.1; ruled Q16)', () => {
+  const U1 = '11111111-1111-4111-8111-111111111111';   // the parent's uuid
+  const U2 = '22222222-2222-4222-8222-222222222222';   // the fork's
+  const G1 = '0189abcd-1234-4678-9abc-0123456789ab';
+  const absent: libFork.Presence<string> = { state: 'absent' };
+  const obs = (o: Partial<libFork.Observation> = {}): libFork.Observation => ({
+    v: 1, observedMs: 1_000, uuid: absent, generation: absent, project: absent, workdir: absent,
+    journaled: null, heldMatches: {}, ...o,
+  });
+  const uuidIs = (value: string): libFork.Presence<string> => ({ state: 'value', value });
+
+  it('SPOOL_SOURCES and EPOCH_CAUSES both hold fork, and every spooled source is a cause', () => {
+    expect([...libFork.SPOOL_SOURCES]).toContain('fork');
+    expect([...libFork.EPOCH_CAUSES]).toContain('fork');
+    for (const s of libFork.SPOOL_SOURCES) expect(libFork.EPOCH_CAUSES, s).toContain(s);
+  });
+
+  it('parseSpoolLine accepts a fork line with reg and without; reg stays refused on a clear line', () => {
+    const fork = { v: 1, ev: 'SessionStart', id: 'x', sid: U2, src: 'fork', reg: U1 };
+    const bare = { v: 1, ev: 'SessionStart', id: 'x', sid: U2, src: 'fork' };
+    expect(libFork.parseSpoolLine(JSON.stringify(fork))).toEqual({ ok: true, rec: fork });
+    expect(libFork.parseSpoolLine(JSON.stringify(bare))).toEqual({ ok: true, rec: bare });
+    expect(libFork.parseSpoolLine(JSON.stringify({ ...fork, src: 'clear' }))).toEqual({ ok: false, why: 'keys' });
+  });
+
+  it('decideEpochLine takes a fork line through the resume path: its reg, the observation, a held match, else a candidate', () => {
+    expect(libFork.decideEpochLine({ src: 'fork', sid: U2, reg: U2 }, obs({ uuid: uuidIs(U1) }))).toEqual({ kind: 'confirm', by: 'reg' });
+    // An in-pane /branch: the hook fired before _sync_uuid moved .uuid, so reg is the parent's; the rename saw the fork.
+    expect(libFork.decideEpochLine({ src: 'fork', sid: U2, reg: U1 }, obs({ uuid: uuidIs(U2) }))).toEqual({ kind: 'confirm', by: 'observed' });
+    expect(libFork.decideEpochLine({ src: 'fork', sid: U2, reg: U1 }, obs({ uuid: uuidIs(U1), heldMatches: { [U2]: 5_000 } })))
+      .toEqual({ kind: 'confirm', by: 'held-match' });
+    expect(libFork.decideEpochLine({ src: 'fork', sid: U2, reg: U1 }, obs({ uuid: uuidIs(U1) }))).toEqual({ kind: 'candidate' });
+    expect(libFork.decideEpochLine({ src: 'fork', sid: U2 }, obs({ uuid: { state: 'unreadable' } }))).toEqual({ kind: 'candidate' });
+  });
+
+  it('the journal takes a fork spool record and a fork epoch-confirmed verdict as records; epoch-chained stays clear-only', () => {
+    const spoolRec = JSON.stringify({ v: 1, k: 'spool', t: 1, ord: 1, rec: { v: 1, ev: 'SessionStart', id: 'x', sid: U2, src: 'fork', reg: U1 } });
+    expect(libFork.parseJournalRecord(spoolRec).kind).toBe('record');
+    const confirmed = libFork.journalRecord('verdict', 5, {
+      event_key: 'none', kind: 'epoch-confirmed', ccrc_id: 'x', generation: G1, cc_session_uuid: U2, cause: 'fork', declared_by: 'hook', by: 'observed',
+    });
+    expect(libFork.parseJournalRecord(confirmed).kind).toBe('record');
+    const chained = JSON.stringify({ v: 1, k: 'verdict', t: 1, event_key: 'none', kind: 'epoch-chained', ccrc_id: 'x', generation: G1, cc_session_uuid: U2, cause: 'fork' });
+    expect(libFork.parseJournalRecord(chained).kind, 'only a clear chains unconfirmed').toBe('malformed');
+  });
+});
+```
+
+Run, in the foreground with a timeout of at least 600000 ms:
+
+```bash
+(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'fork|SPOOL_SOURCES|accepts|refuses|spool set')
+```
+
+Expected: red. The subset case fails `expected [ 'startup', 'resume', 'clear' ] to deeply equal [ …, 'fork' ]`. Of the two new `accepts` rows, the one with `reg` fails on `{ ok: false, why: 'keys' }` (B1 refuses `reg` off a startup or resume line before it checks a value), and the one without fails on `{ ok: false, why: 'value' }`. The appended describe fails every case (B1's `decideEpochLine` throws its `TypeError` on a fork line). The rewritten `refuses` rows and the `compact` throw case are green already. These reds were read off B1's code at plan time; record the reds the run actually prints in the task report.
+
+- [ ] **Step 2: Rewrite B1's S11 and S14 hook cases.** In `server/test/session-hook.test.ts`, inside B1's describe `'history spool: the hook enqueues one fenced, text-free line (spec §5.1)'`, replace the whole case that opens
+
+```ts
+  it('S11: a SessionStart whose source is x"y, fork, or absent writes no line at all', () => {
+```
+
+(its body plants the spool, runs `x"y`, `fork` and an absent source, and expects no spool file) with
+
+```ts
+  it('S11: a SessionStart whose source is x"y or absent writes no line at all; fork (ruled Q16, W1-B2) writes one carrying src, and reg when .uuid holds a uuid', async () => {
+    plantSpool();
+    run({ hook_event_name: 'SessionStart', source: 'x"y', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'SessionStart', session_id: SID }, SCRUB);
+    expect(fs.existsSync(spoolFile())).toBe(false);
+    const uuidFile = path.join(home, '.cc-sessions', `${ID}.uuid`);
+    fs.writeFileSync(uuidFile, `${SID}\n`);
+    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
+    fs.rmSync(uuidFile);
+    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
+    const [a, b] = await parsed();
+    expect(a!.rec).toMatchObject({ ev: 'SessionStart', src: 'fork', sid: SID, reg: SID });
+    expect(b!.rec).toMatchObject({ ev: 'SessionStart', src: 'fork', sid: SID });
+    expect(b!.rec).not.toHaveProperty('reg');
+  });
+```
+
+and replace the whole case that opens
+
+```ts
+  it('S14: SessionStart(compact) and (fork) write no line; startup, resume and clear write one each, each carrying src', async () => {
+```
+
+with
+
+```ts
+  it('S14: SessionStart(compact) writes no line; startup, resume, clear and fork (ruled Q16, W1-B2) write one each, each carrying src', async () => {
+    plantSpool();
+    run({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID }, SCRUB);
+    expect(fs.existsSync(spoolFile())).toBe(false);
+    for (const source of ['startup', 'resume', 'clear', 'fork']) run({ hook_event_name: 'SessionStart', source, session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => [l.ordinal, l.rec?.['src']])).toEqual([[1, 'startup'], [2, 'resume'], [3, 'clear'], [4, 'fork']]);
+  });
+```
+
+`parsed()` reads each line through lib's `parseSpoolLine`, so the S14 case reds on either half of S14's CONTROL: a hook that writes no fork line, or a `SPOOL_SOURCES` that refuses one (its `src` reads `undefined`).
+
+Run:
+
+```bash
+(cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'S11|S14')
+```
+
+Expected: red. The S11 fork case fails reading a spool file the hook never wrote (`ENOENT`), and S14 fails `expected [ [1, 'startup'], [2, 'resume'], [3, 'clear'] ] to deeply equal [ …, [4, 'fork'] ]`. B1's other S11 cases stay green.
+
+- [ ] **Step 3: Write the failing drain, box and rebuild cases.** Append at the end of `server/test/history-drain.test.ts`:
+
+```ts
+// ── W1-B2 Task 34: fork epochs (spec 2026-10-05 §6.1, DM48; ruled Q16, ⟦D:history-fork-spooled⟧) ─────────────────
+// B1's `start` helper types its source as the three B1 spools, so this helper spells the fourth.
+const fork = (id: string, sid: string, extra: Record<string, unknown> = {}): Record<string, unknown> =>
+  ({ v: 1, ev: 'SessionStart', id, sid, src: 'fork', ...extra });
+/** The drain's receipts: one per line that passed the grammar and committed with its file's transaction. A line
+ *  lib refused, or a file whose transaction rolled back (drain_deferred), leaves none. */
+const receiptCount = (db: DatabaseSync): number => (db.prepare('SELECT count(*) AS n FROM spool_receipts').get() as { n: number }).n;
+
+describe('DM48: fork epochs, decided at drain (W1-B2 Task 34; spec §6.1, ruled Q16)', () => {
+  let box: HistoryBox;
+  let ids: Ids;
+  let db: DatabaseSync;
+  let clock: { ms: number };
+  let c: TickCtx;
+  let HM: { recordHeldMatches(home: string, name: string, nowMs: number): void };
+  beforeAll(async () => { HM = (await import('../../ccd/history/sweep.mjs')) as unknown as typeof HM; });
+  beforeEach(() => {
+    box = makeHistoryBox('ccrc-hist-dm48-', { role: 'fleet' });
+    ids = createStore(box.home);
+    db = openWriter(historyPaths(box.home).dbFile);
+    clock = { ms: T };
+    c = { home: box.home, ids, now: () => clock.ms, homes: box.homes, rosterUnreadable: false, out: () => undefined };
+  });
+  afterEach(() => { closeWriter(db); });
+  /** Two drains: the first renames and observes the spool, the second journals and drains it (§9.2: read at N+1). */
+  const pass = (): void => { SW.drainSpool(db, c); clock.ms += 1000; SW.drainSpool(db, c); clock.ms += 1000; };
+
+  it('a fork line whose reg equals its sid is an epoch with cause fork at drain, and drains with no spool_line_rejected (S14)', () => {
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, fork(ID, U2, { reg: U2 }));
+    pass();
+    expect(epochsOf(db, ID, G1)).toEqual([{ seq: 1, cc_session_uuid: U2, cause: 'fork', declared_by: 'hook', confirmed_ms: expect.any(Number) }]);
+    expect(counterOf(db, 'spool_line_rejected')).toBe(0);
+    expect(verdictsOf(box.home, ids.storeId).find((v) => v['kind'] === 'epoch-confirmed'))
+      .toMatchObject({ cc_session_uuid: U2, cause: 'fork', declared_by: 'hook', by: 'reg' });
+  });
+
+  it('an in-pane /branch (a fresh sid, reg the parent\'s uuid, .uuid moved to the sid before the rename) is a new fork epoch in the parent\'s family, confirmed by the observation', () => {
+    setReg(box, ID, 'uuid', U1); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1 }));
+    pass();
+    spool(box.home, ID, fork(ID, U2, { reg: U1 }));
+    setReg(box, ID, 'uuid', U2);
+    pass();
+    expect(familiesOf(db)).toHaveLength(1);
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid, e.cause, e.declared_by])).toEqual([[1, U1, 'startup', 'hook'], [2, U2, 'fork', 'hook']]);
+    expect(verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'epoch-confirmed').at(-1))
+      .toMatchObject({ cc_session_uuid: U2, cause: 'fork', by: 'observed' });
+    expect(candidatesOf(db)).toEqual([]);
+  });
+
+  it('a fork line whose sid is already an epoch confirms it: no second epoch, nothing unconfirmed, its first cause kept (as DM18c)', () => {
+    setReg(box, ID, 'uuid', U1); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1 }));
+    spool(box.home, ID, fork(ID, U1, { reg: U1 }));
+    pass();
+    // The same end state follows if the fork line is dropped, so these three tell "accepted and confirmed in place"
+    // from "refused" (B1's grammar) and from "rolled back" (a second epoch's UNIQUE violation, drain_deferred).
+    expect(counterOf(db, 'spool_line_rejected'), 'the fork line passed the grammar').toBe(0);
+    expect(counterOf(db, 'drain_deferred'), 'its file committed').toBe(0);
+    expect(receiptCount(db), 'both lines drained with a receipt').toBe(2);
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid, e.cause])).toEqual([[1, U1, 'startup']]);
+    expect(candidatesOf(db)).toEqual([]);
+    expect(counterOf(db, 'epoch_unconfirmed')).toBe(0);
+  });
+
+  it('a fork whose uuid a registry scan chained first (cause import) is confirmed by its line, never chained twice (§6.1 Backfill)', () => {
+    setReg(box, ID, 'uuid', U2); setReg(box, ID, 'generation', G1);
+    EP.registryBackfill(db, c);
+    spool(box.home, ID, fork(ID, U2, { reg: U1 }));
+    pass();
+    expect(counterOf(db, 'spool_line_rejected'), 'the fork line passed the grammar').toBe(0);
+    expect(counterOf(db, 'drain_deferred'), 'its file committed').toBe(0);
+    expect(receiptCount(db), 'the fork line drained with a receipt').toBe(1);
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid, e.cause, e.declared_by])).toEqual([[1, U2, 'import', 'registry']]);
+    expect(candidatesOf(db)).toEqual([]);
+  });
+
+  it('a fork line whose sid neither its reg nor any observation names waits as a fork candidate, and is dropped and counted after 7 days', () => {
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, fork(ID, U2, { reg: U9 }));
+    pass();
+    expect(epochsOf(db, ID, G1)).toEqual([]);
+    expect(candidatesOf(db)).toEqual([{ cc_session_uuid: U2, ccrc_id: ID, cause: 'fork' }]);
+    clock.ms = T + WEEK + 10_000;
+    EP.confirmCandidates(db, c);
+    expect(candidatesOf(db)).toEqual([]);
+    expect(epochsOf(db, ID, G1)).toEqual([]);
+    expect(counterOf(db, 'epoch_unconfirmed')).toBe(1);
+  });
+
+  it('a fork candidate the registry names at a later tick within 7 days is confirmed then, cause fork', () => {
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, fork(ID, U2, { reg: U9 }));
+    pass();
+    setReg(box, ID, 'uuid', U2);
+    clock.ms += 60_000;
+    EP.confirmCandidates(db, c);
+    expect(epochsOf(db, ID, G1).map((e) => [e.cc_session_uuid, e.cause, e.declared_by])).toEqual([[U2, 'fork', 'hook']]);
+    expect(verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'epoch-confirmed').at(-1))
+      .toMatchObject({ cc_session_uuid: U2, cause: 'fork', by: 'later-tick' });
+  });
+
+  it('a fork /cleared before the next registry scan: the fork epoch and the clear epoch both chain, in line order, with no scan run', () => {
+    setReg(box, ID, 'uuid', U1); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1 }));
+    pass();
+    spool(box.home, ID, fork(ID, U2, { reg: U1 }));
+    setReg(box, ID, 'uuid', U2);
+    pass();
+    spool(box.home, ID, start(ID, U3, 'clear'));
+    setReg(box, ID, 'uuid', U3);
+    pass();
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid, e.cause, e.confirmed_ms !== null]))
+      .toEqual([[1, U1, 'startup', true], [2, U2, 'fork', true], [3, U3, 'clear', true]]);
+  });
+
+  it('a held fork line is matched as a resume line is: .uuid naming its sid while held confirms it by held-match at the drain (§9.14 Holds)', () => {
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, fork(ID, U2, { reg: U9 }));
+    SW.drainSpool(db, c);                                   // the rename, observed with .uuid = U9
+    const [name] = drainingNames(box.home);
+    setReg(box, ID, 'uuid', U2);                            // named while the file is held
+    HM.recordHeldMatches(box.home, name!, clock.ms);
+    expect(obsOf(box.home, name!)['heldMatches']).toEqual({ [U2]: clock.ms });
+    clock.ms += 1000;
+    SW.drainSpool(db, c);
+    expect(epochsOf(db, ID, G1).map((e) => [e.cc_session_uuid, e.cause])).toEqual([[U2, 'fork']]);
+    expect(verdictsOf(box.home, ids.storeId).find((v) => v['kind'] === 'epoch-confirmed')).toMatchObject({ cause: 'fork', by: 'held-match' });
+  });
+});
+
+describe('DM48: a fork as the box runs it, its copied rows one entry each with a membership in each file (W1-B2 Task 34)', () => {
+  it('a /branch transcript that copies the parent\'s two rows and adds one: three entries, the copied two in both files, the fork a fork epoch', () => {
+    const box = makeHistoryBox('ccrc-hist-dm48-copy-', { role: 'fleet' });
+    expect(runSweep(box).code).toBe(0);                     // binds the store; its scan finds an empty registry, so none runs below
+    const work = path.join(box.home, 'work');
+    const [R1, R2, R3] = [u(0x31), u(0x32), u(0x33)];
+    const row = (sid: string, uuid: string, parent: string | null, k: number): string => JSON.stringify({
+      type: 'user', uuid, parentUuid: parent, sessionId: sid, cwd: work, timestamp: new Date(T + k * 1000).toISOString(),
+      message: { role: 'user', content: `dm48 row ${k}` },
+    });
+    transcriptIn(box.homes[0]!, 'demo', U1, `${row(U1, R1, null, 1)}\n${row(U1, R2, R1, 2)}\n`);
+    // Claude Code's /branch writes the parent's rows into the fork's own transcript, then continues there.
+    transcriptIn(box.homes[0]!, 'demo', U2, `${row(U2, R1, null, 1)}\n${row(U2, R2, R1, 2)}\n${row(U2, R3, R2, 3)}\n`);
+    setReg(box, ID, 'generation', G1); setReg(box, ID, 'project', 'demo');
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1, gen: G1 }));
+    spool(box.home, ID, fork(ID, U2, { reg: U1, gen: G1 }));
+    setReg(box, ID, 'uuid', U2);                            // _sync_uuid moved .uuid to the fork before the rename
+    const memberships = (): number => rowsOf<{ n: number }>(box, 'SELECT count(*) AS n FROM memberships')[0]!.n;
+    for (let i = 0; i < 6 && memberships() < 5; i += 1) expect(runSweep(box).code).toBe(0);
+    expect(rowsOf(box, 'SELECT seq, cc_session_uuid, cause FROM epochs ORDER BY seq')).toEqual([
+      { seq: 1, cc_session_uuid: U1, cause: 'startup' }, { seq: 2, cc_session_uuid: U2, cause: 'fork' },
+    ]);
+    expect(rowsOf(box, 'SELECT e.uuid AS uuid, count(m.file_id) AS files FROM entries e JOIN memberships m ON m.entry_id = e.entry_id GROUP BY e.uuid ORDER BY e.uuid'))
+      .toEqual([{ uuid: R1, files: 2 }, { uuid: R2, files: 2 }, { uuid: R3, files: 1 }]);
+  });
+});
+```
+
+DM48's span clause crosses two transcripts, which Task 8's DM36 never does: DM36's two copies are one uuid, one `transcript_pk`. A fresh-sid fork's file holds the parent's boundary row, whose `boundaries` row keeps the parent's `transcript_pk` (the first claim), while the fork's own boundary is the fork transcript's. Append at the end of `server/test/history-derive.test.ts`, after every describe earlier tasks put there:
+
+```ts
+// ── W1-B2 Task 34: DM48's span clause, a fresh-sid fork's leaf (spec 2026-10-05 §6.1; ruled Q16, ⟦D:history-fork-spooled⟧) ──
+describe('DM48: a fresh-sid fork\'s leaf starts at the parent\'s boundary its copy holds and hashes the fork\'s sid (W1-B2 Task 34; spec 6.1)', () => {
+  it('the parent compacts, an in-pane /branch copies its rows, the fork compacts again: one fork leaf, its span from the copied boundary\'s head, its id the fork\'s; the parent\'s leaf unchanged', () => {
+    const box = makeHistoryBox('ccrc-hist-dm48-span-');
+    const ID = 'claude-forkspan';
+    const UP = '0189abcd-1234-4678-9abc-0000000048a1';   // the parent
+    const UF = '0189abcd-1234-4678-9abc-0000000048a2';   // the fork
+    const pre = compactionSequence({ n: 1, trigger: 'manual', seed: 0x48a, sessionId: UP, startMs: T0 });
+    const own = compactionSequence({ n: 1, trigger: 'manual', tailRows: 0, seed: 0x48b, sessionId: UF, startMs: T0 + 600_000 });
+    plant(box, ID, UP, pre.rows);
+    settle(box);
+    expect(leavesOf(box, UP).map((l) => l.node_id), 'CONTROL: the parent\'s one leaf').toEqual([leafId(ID, UP, firstUuid(pre))]);
+    // An in-pane /branch (spec 6.1): a fresh sid whose transcript copies the parent's rows verbatim, then compacts on
+    // its own. The hook's line carries the parent's uuid as reg (it fires before _sync_uuid moves .uuid), and .uuid
+    // names the fork before the sweep observes the line, so the fork epoch confirms by the observation.
+    plantSession(box, ID, { uuid: UF });
+    plantTranscript(box, 'claude', SLUG, UF, [...pre.rows, ...own.rows]);
+    spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: UF, src: 'fork', reg: UP, gen: GEN });
+    settle(box);
+    expect(q<{ cause: string }>(box, 'SELECT cause FROM epochs WHERE cc_session_uuid = ? AND confirmed_ms IS NOT NULL', UF).map((r) => r.cause),
+      'CONTROL: the fork line chained a confirmed fork epoch').toEqual(['fork']);
+    const leaves = leavesOf(box, UF);
+    expect(leaves.map((l) => l.boundary_uuid), 'the copied parent boundary mints no second leaf under the fork').toEqual([own.boundaryUuids[0]]);
+    expect(leaves[0]!.node_id, 'its span starts at the head of the parent\'s boundary its copy holds, and its id hashes the fork\'s sid')
+      .toBe(leafId(ID, UF, pre.headUuids[0]!));
+    expect(sourcesOf(box, leaves[0]!.node_id)).toEqual([
+      ...pre.keptUuids[0]!, ...pre.afterUuids[0]!, ...pre.liveUuids, ...own.workUuids[0]!, ...own.unkeptUuids[0]!,
+    ]);
+    expect(leavesOf(box, UP).map((l) => l.node_id), 'the parent\'s leaf is unchanged').toEqual([leafId(ID, UP, firstUuid(pre))]);
+  }, 240_000);
+});
+```
+
+The sources follow DM36's second-leaf formula, with the fork's own rows in the place of copy A's suffix. This case was written for this plan and not run on a prototype: if it reds at one of its CONTROL lines or at the sources, the fixture missed its shape (B3 Task 5's spooled-fork case builds the same transcript); fix the fixture, never the rule, and say so in the task report.
+
+Append at the end of `server/test/history-recover.test.ts`, after Task 29's describes:
+
+```ts
+// ── W1-B2 Task 34: DM48's rebuild clause, with Tasks 27 and 28's rr helpers (spec §6.1, §9.14; ruled Q16) ──────
+describe('DM48: a fork epoch comes back from the journal (W1-B2 Task 34)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+
+  it('a startup, an in-pane /branch fork confirmed by the observation, and a same-id fork are rebuilt equal by O35\'s columns, with the registry purged', async () => {
+    const box = rrH.makeHistoryBox('ccrc-hist-dm48r-', { role: 'fleet' });
+    expect(rrH.runShim(box).code).toBe(0);                  // binds the store; its scan finds an empty registry, so none runs below
+    const FID = 'claude-a-fork';
+    const P = 'a8a8a8a8-0000-4000-8000-000000000481';       // the parent
+    const F = 'a8a8a8a8-0000-4000-8000-000000000482';       // the fork
+    const G = '0189abcd-1234-4678-9abc-000000000480';
+    rrH.plantSession(box, FID, { uuid: P, generation: G, project: 'demo' });
+    rrH.spoolLine(box, FID, { v: 1, ev: 'SessionStart', id: FID, sid: P, src: 'startup', reg: P, gen: G });
+    rrTickUntil(box, () => rrEpochs(box, FID).length === 1);
+    rrH.spoolLine(box, FID, { v: 1, ev: 'SessionStart', id: FID, sid: F, src: 'fork', reg: P, gen: G });
+    rrH.plantSession(box, FID, { uuid: F });                // _sync_uuid moves .uuid before the rename
+    rrTickUntil(box, () => rrEpochs(box, FID).length === 2);
+    rrH.spoolLine(box, FID, { v: 1, ev: 'SessionStart', id: FID, sid: F, src: 'fork', reg: F, gen: G });
+    rrTickUntil(box, () => rrCount(box, 'spool_receipts') === 3);
+    expect(rrEpochs(box, FID).map((e) => [e.seq, e.cc_session_uuid, e.cause])).toEqual([[1, P, 'startup'], [2, F, 'fork']]);
+    const a = rrState(box);
+    rrFs.rmSync(box.reg, { recursive: true, force: true });
+    rrFs.mkdirSync(box.reg);
+    rrLose(box, { binding: false, journal: false });
+    const r = await rrCliPty(box, ['doctor', '--rebuild']);
+    expect(r.code, r.out).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box), 10);
+    const b = rrState(box);
+    expect(b.sessions).toEqual(a.sessions);
+    expect(b.epochs, 'the fork epoch, back by O35\'s columns').toEqual(a.epochs);
+    expect(b.receipts).toEqual(a.receipts);
+  }, 240_000);
+});
+```
+
+Run, in the foreground:
+
+```bash
+(cd server && ./node_modules/.bin/vitest run test/history-drain.test.ts -t 'DM48')
+(cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'DM48')
+(cd server && ./node_modules/.bin/vitest run test/history-derive.test.ts -t 'DM48')
+```
+
+Expected: red. Every DM48 drain case fails. lib refuses each fork line (`keys`: every one here carries `reg`, which B1 refuses off a startup or resume line), so the drain counts `spool_line_rejected`. Most cases then find no fork epoch or candidate (`expected [] to deeply equal [ { seq: 1, … cause: 'fork' … } ]`). The same-id and scan-first cases end in the same state whether the fork line was confirmed in place or dropped, so they go red only at their `spool_line_rejected` assertion (`expected 1 to be 0`). The held case fails at `heldMatches`, because no fork line passes the grammar, and the box case fails with one epoch. The rebuild case throws `rrTickUntil: not done after 8 passes`. The derive span case fails at its fork-epoch CONTROL (`expected [] to deeply equal [ 'fork' ]`). These reds were read off B1's code at plan time; record the reds the run actually prints in the task report.
+
+- [ ] **Step 4: Write the failing whitelist binding.** Append at the very end of `server/test/single-definition.test.ts`:
+
+```ts
+// ── ccrc history W1-B2 Task 34: the hook spools exactly SPOOL_SOURCES on SessionStart (spec 2026-10-05 §5.1, S14;
+// ruled Q16). APPENDED, with no import line, for the reason the blocks above state.
+describe('ccrc history: the hook spools exactly SPOOL_SOURCES on SessionStart (spec 2026-10-05 §5.1, S14; W1-B2, ruled Q16)', () => {
+  it('SPOOL_SOURCES is declared once, in lib.mjs, frozen and holding fork, and the spool block\'s one SessionStart arm spells exactly its members', async () => {
+    const lib = (await import('../../ccd/history/lib.mjs')) as unknown as Record<string, unknown>;
+    const members = [...(lib['SPOOL_SOURCES'] as readonly string[])];
+    expect(Object.isFrozen(lib['SPOOL_SOURCES'])).toBe(true);
+    expect(members).toContain('fork');
+    const declares = /(?:^|[\s;])(?:export\s+)?(?:const|let|var)\s+SPOOL_SOURCES\b/;
+    expect(HISTORY_MJS.filter((f) => stallCode(f).split('\n').some((l) => declares.test(l))).map(rel)).toEqual(['ccd/history/lib.mjs']);
+    const arms = codeLines(path.join(ccrcRoot, 'ccd', 'session-hook.sh'))
+      .filter((l) => /^\s*SessionStart\)/.test(l) && l.includes('case "$src" in'));
+    expect(arms, 'the spool block\'s SessionStart arm, and only it, cases on $src').toHaveLength(1);
+    const m = /case "\$src" in ([a-z|]+)\)/.exec(arms[0]!);
+    expect(m, 'the arm spells its sources as one alternation').not.toBeNull();
+    expect(m![1]!.split('|').sort()).toEqual([...members].sort());
+  });
+});
+```
+
+Run `(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'spools exactly SPOOL_SOURCES')`. Expected: red at `expect(members).toContain('fork')`.
+
+- [ ] **Step 5: Admit `fork` in lib.** In `ccd/history/lib.mjs`, by content. Below, ⟦D:…⟧ stands for the number B1 issued for that slug, which the file spells `D-` and digits; ⟦D:history-fork-spooled⟧ is this plan's own, as minted.
+
+(a) Replace
+
+```js
+/** The SessionStart sources that spool (ruled Q2; fork is outside, Q16). */
+export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear']);
+export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import']);
+```
+
+with
+
+```js
+/** The SessionStart sources that spool (ruled Q2), and `fork` from W1-B2 (ruled Q16, ⟦D:history-fork-spooled⟧,
+ *  reversing ⟦D:history-fork-not-spooled⟧). */
+export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear', 'fork']);
+/** An epoch's cause (§6.1): the SessionStart source that declared it, or `import` for a registry, journal or
+ *  operator mapping. `fork` (W1-B2) needs no migration: `epochs.cause` is TEXT with no CHECK in schema v1. THE
+ *  ROLLBACK EDGE, on a W1-B1 build whose own list lacks `fork`: it reads a fork epoch's journal record as malformed
+ *  (skipped, counted journal_line_malformed, never applied; moving forward again replays it); its drain rejects a
+ *  spooled fork line (spool_line_rejected); and a fork candidate still waiting in epoch_candidates, once `.uuid` names
+ *  it within 7 days, makes its confirmCandidates throw at journalRecord's read-back, so every pass exits 1 before
+ *  backfill and ingest (doctor FAIL tick-stale) until the node moves forward again or the candidate's 7 days pass.
+ *  Capture is delayed, never lost. A W1-B1 build whose list already holds `fork` has only the spool-line part. */
+export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import', 'fork']);
+```
+
+If the merged B1 already lists `fork` in `EPOCH_CAUSES` (the rollback-edge choice above), the third line of the anchor reads `export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import', 'fork']);`: replace the three lines all the same. The result is the block above either way.
+
+(b) In the comment block above `const keySet = (required, optional) =>`, replace the three lines
+
+```js
+// ⟦D:history-spool-line-carries-registry-uuid⟧: `reg` rides startup and resume
+// lines only. ⟦D:history-fork-not-spooled⟧: `src` is one of SPOOL_SOURCES, so a
+// `fork` source is a value rejection. ⟦D:history-spool-no-summary-hash⟧: no key carries summary text or a
+```
+
+with
+
+```js
+// ⟦D:history-spool-line-carries-registry-uuid⟧: `reg` rides startup, resume
+// and fork lines only (fork from W1-B2, ⟦D:history-fork-spooled⟧, which reverses ⟦D:history-fork-not-spooled⟧'s
+// value rejection); `src` is one of SPOOL_SOURCES. ⟦D:history-spool-no-summary-hash⟧: no key carries summary text or a
+```
+
+(c) In `parseSpoolLine`'s doc comment, replace the words `` `reg` off a startup/resume line `` with `` `reg` off a startup, resume or fork line ``. In its body, replace
+
+```js
+  if (Object.hasOwn(o, 'reg') && o.src !== 'startup' && o.src !== 'resume') return { ok: false, why: 'keys' };
+```
+
+with
+
+```js
+  if (Object.hasOwn(o, 'reg') && o.src !== 'startup' && o.src !== 'resume' && o.src !== 'fork') return { ok: false, why: 'keys' };
+```
+
+(d) In `decideEpochLine`'s doc comment, replace the line
+
+```js
+ *  - startup/resume: confirmed on its own evidence first — its `reg` equals
+```
+
+with
+
+```js
+ *  - startup/resume, and fork from W1-B2 (⟦D:history-fork-spooled⟧): confirmed on its own evidence first — its `reg` equals
+```
+
+and in its body replace
+
+```js
+  if (line.src !== 'startup' && line.src !== 'resume') {
+```
+
+with
+
+```js
+  if (line.src !== 'startup' && line.src !== 'resume' && line.src !== 'fork') {
+```
+
+(e) In `ccd/history/lib.d.mts`, replace `export type SpoolSource = 'startup' | 'resume' | 'clear';` with `export type SpoolSource = 'startup' | 'resume' | 'clear' | 'fork';`, replace `export type EpochCause = 'startup' | 'resume' | 'clear' | 'import';` with `export type EpochCause = 'startup' | 'resume' | 'clear' | 'import' | 'fork';`, and in `decideEpochLine`'s declaration replace `line: { src: 'startup' | 'resume' | 'clear'; sid: string; reg?: string }` with `line: { src: SpoolSource; sid: string; reg?: string }`.
+
+Check that each anchor matched once and nothing else names the three sources as a closed list:
+
+```bash
+grep -c "export const SPOOL_SOURCES = Object.freeze(\['startup', 'resume', 'clear', 'fork'\]);" ccd/history/lib.mjs   # 1
+grep -c "o.src !== 'resume' && o.src !== 'fork') return" ccd/history/lib.mjs   # 1
+grep -c "line.src !== 'resume' && line.src !== 'fork') {" ccd/history/lib.mjs   # 1
+grep -nE "'startup' \| 'resume' \| 'clear'([^ ]|$)" ccd/history/lib.d.mts   # nothing
+```
+
+- [ ] **Step 6: Whitelist `fork` in the hook, in place, and measure that no line moved.** First record the line count and confirm the census is green at the base. From the repository root:
+
+```bash
+SCRATCH="$(git rev-parse --show-toplevel)/.superpowers/sdd/history-w1-b2/scratch"; mkdir -p "$SCRATCH"
+wc -l < ccd/session-hook.sh > "$SCRATCH/hook-lines.before"; cat "$SCRATCH/hook-lines.before"
+(cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'THE CITATION DEBT')
+```
+
+Expected: a line count, then green (B1's census as merged).
+
+Then, in `ccd/session-hook.sh`, inside the `# >>> history-spool` block, make five one-line replacements with the Edit tool, each matching exactly once. ⟦D:…⟧ stands for B1's issued number, spelled in the file as `D-` and digits.
+
+(a) The code line. Replace
+
+```bash
+    SessionStart) [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && case "$src" in startup|resume|clear) _hs='{"v":1,"ev":"SessionStart"' ;; esac ;;
+```
+
+with
+
+```bash
+    SessionStart) [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && case "$src" in startup|resume|clear|fork) _hs='{"v":1,"ev":"SessionStart"' ;; esac ;;
+```
+
+A fork line takes `reg` with no further edit: the block's `if [[ "$src" != clear ]] && _ct_read "$REG/$id.uuid"` arm already writes it on every SessionStart line but a clear one.
+
+(b) Three consecutive comment lines in the block's header. Replace
+
+```bash
+# lines ⟦D:history-epoch-lines-survive-off⟧. Only startup, resume and clear are
+# spooled ⟦D:history-spool-start-not-compact⟧: compact exited in its arm, and
+# fork and any other source write nothing ⟦D:history-fork-not-spooled⟧. A
+```
+
+with
+
+```bash
+# lines ⟦D:history-epoch-lines-survive-off⟧. Only startup, resume, clear and fork are
+# spooled ⟦D:history-spool-start-not-compact⟧ ⟦D:history-fork-spooled⟧: compact exited in its arm,
+# and any other source writes nothing (fork did in W1-B1, ⟦D:history-fork-not-spooled⟧). A
+```
+
+(c) One comment line, three lines below the last of those three. Replace
+
+```bash
+# startup or resume line carries `reg`, this hook's own read of `.uuid`
+```
+
+with
+
+```bash
+# startup, resume or fork line carries `reg`, this hook's own read of `.uuid`
+```
+
+Then measure, from the repository root. The block declares `SCRATCH` again: each Bash call starts a new shell, so the first block's variable is gone.
+
+```bash
+SCRATCH="$(git rev-parse --show-toplevel)/.superpowers/sdd/history-w1-b2/scratch"
+test -s "$SCRATCH/hook-lines.before" || echo "NO BASELINE: re-run the first block of this step on the unedited hook"
+test "$(wc -l < ccd/session-hook.sh)" = "$(cat "$SCRATCH/hook-lines.before")" && echo SAME-LINE-COUNT
+git diff -U0 -- ccd/session-hook.sh | grep -E '^@@' | awk '{ split($2, a, ","); split($3, b, ","); if (substr(a[1], 2) != substr(b[1], 2) || (a[2] == "" ? 1 : a[2]) != (b[2] == "" ? 1 : b[2])) bad = 1 } END { print bad ? "A LINE MOVED" : "NO LINE MOVED" }'
+git diff --numstat -- ccd/session-hook.sh
+bash -n ccd/session-hook.sh && echo SYNTAX-OK
+(cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'THE CITATION DEBT|history spool')
+```
+
+Expected: `SAME-LINE-COUNT`; `NO LINE MOVED` (every hunk replaces N lines at line L with N lines at line L); `5	5	ccd/session-hook.sh`; `SYNTAX-OK`; green. The census is unchanged, and B1's S1 case (the block is builtins only) still passes, since the edit adds a word to a `case` pattern and no command.
+
+- [ ] **Step 7: Take fork lines in the held-file re-read, and name fork in the sweep's epoch comments.** In `ccd/history/sweep.mjs`, by content:
+  - In `recordHeldMatches`, replace `    .filter((v) => v.rec.ev === 'SessionStart' && (v.rec.src === 'startup' || v.rec.src === 'resume')` with `    .filter((v) => v.rec.ev === 'SessionStart' && (v.rec.src === 'startup' || v.rec.src === 'resume' || v.rec.src === 'fork')`, and in its doc line replace `for its startup and resume lines whose sid` with `for its startup, resume and fork lines whose sid`.
+  - In `applyEpochLine`'s doc comment, replace `` *  - startup/resume: confirmed by its own reg, by the observed `.uuid`, or by a first match while held. Otherwise it`` with `` *  - startup/resume, and fork from W1-B2 (⟦D:history-fork-spooled⟧): confirmed by its own reg, by the observed `.uuid`, or by a first match while held. Otherwise it``.
+  - In `confirmCandidates`' doc comment, replace `A startup or resume candidate confirms when` with `A startup, resume or fork candidate confirms when`.
+  - In `registryBackfill`'s doc comment, replace `A forked session enters this way (Q16).` with `On a W1-B1 build a forked session entered only this way; from W1-B2 its fork line chains it, and a fork line whose uuid a scan chained first confirms that epoch (ruled Q16).`
+
+`grep -c "v.rec.src === 'resume' || v.rec.src === 'fork')" ccd/history/sweep.mjs` prints `1`.
+
+- [ ] **Step 8: Run everything this task touched, and the typecheck.** In the foreground, each with a timeout of at least 600000 ms:
+
+```bash
+(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts test/history-drain.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'history spool|THE CITATION DEBT')
+(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'ccrc history')
+(cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'DM48')
+(cd server && ./node_modules/.bin/vitest run test/history-derive.test.ts -t 'DM48')
+(cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit)
+```
+
+Expected: every run green; `tsc` prints nothing. B1's DM18c, DM19, DM19b and DM46 cases in `history-drain` are unchanged and green; so is B1's O14 describe, whose `EPOCH_CAUSES` row checks one declaration, now of five members.
+
+- [ ] **Step 9: Mutations.** Measure each guard red, then green, with the mutation runner Task 1 Step 1 writes (if `.superpowers/sdd/history-w1-b2/scratch/mutate.mjs` is gone, write it again from Task 1 Step 1, byte for byte). From the repository root:
+
+```bash
+cat > .superpowers/sdd/history-w1-b2/scratch/mutants-task34.json <<'EOF'
+[
+  { "name": "S14 CONTROL: SPOOL_SOURCES without fork", "file": "ccd/history/lib.mjs",
+    "test": "test/session-hook.test.ts", "filter": "S14",
+    "edits": [{ "anchor": "export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear', 'fork']);",
+                "replacement": "export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear']);" }] },
+  { "name": "S14 CONTROL: the hook's whitelist without fork", "file": "ccd/session-hook.sh",
+    "test": "test/session-hook.test.ts", "filter": "S14",
+    "edits": [{ "anchor": "case \"$src\" in startup|resume|clear|fork)", "replacement": "case \"$src\" in startup|resume|clear)" }] },
+  { "name": "the whitelist is SPOOL_SOURCES: the hook without fork", "file": "ccd/session-hook.sh",
+    "test": "test/single-definition.test.ts", "filter": "spools exactly SPOOL_SOURCES",
+    "edits": [{ "anchor": "case \"$src\" in startup|resume|clear|fork)", "replacement": "case \"$src\" in startup|resume|clear)" }] },
+  { "name": "S11: reg refused on a fork line", "file": "ccd/history/lib.mjs",
+    "test": "test/session-hook.test.ts", "filter": "S11",
+    "edits": [{ "anchor": " && o.src !== 'resume' && o.src !== 'fork') return { ok: false, why: 'keys' };",
+                "replacement": " && o.src !== 'resume') return { ok: false, why: 'keys' };" }] },
+  { "name": "6.1: EPOCH_CAUSES without fork, so the journal refuses a fork verdict", "file": "ccd/history/lib.mjs",
+    "test": "test/history-lib.test.ts", "filter": "fork lines and fork epochs",
+    "edits": [{ "anchor": "export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import', 'fork']);",
+                "replacement": "export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import']);" }] },
+  { "name": "6.1: decideEpochLine refuses a fork line", "file": "ccd/history/lib.mjs",
+    "test": "test/history-drain.test.ts", "filter": "DM48",
+    "edits": [{ "anchor": "  if (line.src !== 'startup' && line.src !== 'resume' && line.src !== 'fork') {",
+                "replacement": "  if (line.src !== 'startup' && line.src !== 'resume') {" }] },
+  { "name": "DM48 CONTROL: a fork line chained without confirmation", "file": "ccd/history/lib.mjs",
+    "test": "test/history-drain.test.ts", "filter": "DM48: fork epochs",
+    "edits": [{ "anchor": "  if (typeof line.reg === 'string' && line.reg === line.sid) return { kind: 'confirm', by: 'reg' };",
+                "replacement": "  if (line.src === 'fork' || (typeof line.reg === 'string' && line.reg === line.sid)) return { kind: 'confirm', by: 'reg' };" }] },
+  { "name": "DM48 CONTROL: a second epoch for a sid the family already holds", "file": "ccd/history/sweep.mjs",
+    "test": "test/history-drain.test.ts", "filter": "DM48: fork epochs",
+    "edits": [{ "anchor": "  if (mine !== undefined) {\n    if (mine.confirmed_ms === null && confirmedMs !== null) {",
+                "replacement": "  if (mine !== undefined && cause !== 'fork') {\n    if (mine.confirmed_ms === null && confirmedMs !== null) {" }] },
+  { "name": "DM48 span CONTROL: a copied boundary another transcript claimed starts no span", "file": "ccd/history/derive.mjs",
+    "test": "test/history-derive.test.ts", "filter": "DM48",
+    "edits": [{ "anchor": "      LEFT JOIN boundaries b ON b.entry_id = e.entry_id\n      WHERE m.file_id = ? ORDER BY m.line",
+                "replacement": "      LEFT JOIN boundaries b ON b.entry_id = e.entry_id AND b.transcript_pk = (SELECT f.transcript_pk FROM ingest_files f WHERE f.file_id = m.file_id)\n      WHERE m.file_id = ? ORDER BY m.line" }] },
+  { "name": "9.14: the held-file re-read skips fork lines", "file": "ccd/history/sweep.mjs",
+    "test": "test/history-drain.test.ts", "filter": "DM48: fork epochs",
+    "edits": [{ "anchor": " || v.rec.src === 'resume' || v.rec.src === 'fork')", "replacement": " || v.rec.src === 'resume')" }] }
+]
+EOF
+(cd server && node ../.superpowers/sdd/history-w1-b2/scratch/mutate.mjs ../.superpowers/sdd/history-w1-b2/scratch/mutants-task34.json)
+```
+
+Run it in the foreground with a timeout of at least 600000 ms. Expected: every row prints `red (…)` and then `green`, the last line is `every guard measured red, then green`, and the exit code is 0. The reds:
+- the two S14 CONTROLs: S14's fourth line reads no `fork` (`[ 4, undefined ]`), or there is no fourth line;
+- the binding: `expected [ 'clear', 'resume', 'startup' ] to deeply equal [ 'clear', 'fork', 'resume', 'startup' ]`;
+- S11's `reg` row: the fork line with `reg` parses as `keys`, so `a!.rec` is null;
+- `EPOCH_CAUSES` without fork: the fork `epoch-confirmed` verdict parses as `malformed` (B1's rollback edge, measured on this build);
+- `decideEpochLine` refusing fork: the drain throws its `TypeError`, and every DM48 case reds;
+- the first DM48 CONTROL: the foreign-sid case finds an epoch where it expects a `fork` candidate;
+- the second DM48 CONTROL: the second epoch's INSERT meets `UNIQUE (session_pk, cc_session_uuid)`, the schema's own refusal of a second epoch, and the drain does not throw: B1's `drainSpool` counts the `ERR_SQLITE_ERROR` as `drain_deferred` and rolls the whole file back. The same-id and scan-first cases both red at `drain_deferred` (`expected 1 to be 0`); without that assertion the same-id case would still red, with no epoch at all (its startup line rolled back with the fork line), but the scan-first case would stay green, its `import` epoch unchanged;
+- the span CONTROL: the fork's copy of the parent's boundary is no longer a boundary row there, so the fork's leaf spans from the copy's first row and its id is `leafId(ID, UF, firstUuid(pre))`, not the one the case expects;
+- the held-file re-read: the held case reads `heldMatches` as `{}`.
+
+The quoted reds were read off the code at plan time; record the reds the run actually prints in the task report.
+
+- [ ] **Step 10: The neighbouring suites.** In the foreground, each with a timeout of at least 600000 ms:
+
+```bash
+(cd server && ./node_modules/.bin/vitest run test/history-holds.test.ts test/history-op.test.ts test/history-sweep.test.ts test/history-ingest.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/history-derive.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts)
+```
+
+Expected: all green. B1's O46 (a hold keeps epochs), O48's replay order and O35's drill are unchanged: none spools a fork line.
+
+- [ ] **Step 11: Commit.** Only after Step 10 is green, in a separate call:
+
+```bash
+git diff --stat
+git add ccd/session-hook.sh ccd/history/lib.mjs ccd/history/lib.d.mts ccd/history/sweep.mjs \
+  server/test/history-lib.test.ts server/test/session-hook.test.ts server/test/single-definition.test.ts \
+  server/test/history-drain.test.ts server/test/history-recover.test.ts server/test/history-derive.test.ts
+git commit -m "feat(history): SessionStart(fork) is spooled and confirms as a resume line does (W1-B2, ruled Q16)
+
+The hook's source whitelist gains fork in place (no hook line moves); SPOOL_SOURCES,
+parseSpoolLine's reg rule, EPOCH_CAUSES and decideEpochLine admit it, and the held-file
+re-read takes it. A fork whose sid is already an epoch confirms that epoch; a fresh
+sid chains a fork epoch; replay applies fork records unchanged.
+Pins DM48, and S11 and S14 in their fork-spooled form."
+```
+
+### Task 35: The per-copy due rule is the default (ruled Q15): `EXPORT_REDUCERS.perCopy`, the default of `planExport` and `exportDates`; the census's prefilter and W1-k dates by it; doctor's `retention-lowered` a reminder; O38's census cases re-run, and O58
+
+**Files:**
+- Modify: `ccd/history/lib.mjs` (B1-created), in place by content:
+  - the block from the doc comment that opens `/** The reducers \`planExport\` may take:` through the closing `}` of `exportDates` (B1 Task 10 and Task 26F item 7) is replaced whole, and `dueTranscriptKeys` follows it;
+  - one line of `deriveHealth`, its `retention-lowered` arm.
+- Modify: `ccd/history/lib.d.mts` (B1-created), in place: `ExportReducer` gains a doc line (its type is unchanged), `EXPORT_REDUCERS` declares `perCopy`, `exportDates` takes `holders`; `dueTranscriptKeys` is declared once, directly below `exportDates`.
+- Modify: `ccd/history/sweep.mjs` (B1-created), in place by content: two lines of the `// ── THE PERIODIC CENSUS (Task 26)` header comment; `EXPORT_CANDIDATES_SQL` with its doc comment; a new `EXPORT_HOLDERS_SQL` directly below `EXPORT_REFERRERS_SQL`; `exportCensus` whole; the `from './lib.mjs'` import gains `dueTranscriptKeys` and loses `exportHorizonDays` (the census's cutoff was its one reader there).
+- No edit, measured in Step 6: `deploy/measure-history.py` computes no due date. `ccd/history/cli.mjs`: `status --json` keeps `horizon_days` from `retention_min`, the shortest home's horizon, an additive-only field the reminder reads; the due counts beside it are now per-copy.
+- Modify: `server/test/history-lib.test.ts` (B1-created): in place in B1's describe `'planExport and retentionLowered: what is due, what is overdue (spec 9.15, O38 and O41 pure halves)'`, four cases name B1's reducer and three are rewritten; one case inserted in B1's `deriveHealth` describe; one import line; one appended describe.
+- Modify: `server/test/history-op.test.ts` (B1-created): B1's describe `'O38: the export\'s due rule (B1 half)'` replaced whole; one describe appended at the end.
+- Scratch, gitignored, never committed: `.superpowers/sdd/history-w1-b2/scratch/mutants-task35.json`.
+
+**Interfaces:**
+- Consumes:
+  - B1 `lib.mjs`, same module: `planExport`, `exportDates`, `EXPORT_REDUCERS`, `exportHorizonDays`, `shortestRetention`, `retentionLowered`, the private `fileDeletionMs` and `EXPORT_DAY_MS`, `CLAUDE_CODE_DEFAULT_RETENTION_DAYS`, `EXPORT_MARGIN_DAYS`, `deriveHealth`; the types `ExportFile`, `ExportCandidate`, `ExportReducer`.
+  - B1 `sweep.mjs`: `transcriptFiles`, `EXPORT_REFERRERS_SQL`, `EXPORT_CENSUS_CHUNK`, `DAY_MS` (kept: another census line and B4 read it), `stepCursorGet`/`stepCursorSet`/`stepCursorDone`, `setMeta`, `budgetLeft`, `retentionCensus` (unchanged).
+  - B1 `history-op.test.ts`, module level: `metaOf`, `countOf`, `counter`, `makeHistoryBox`, `runDriver`, `plantSession`, `plantTranscript`, `userRow`, `iso`, `ID`, `G1`, `U1`, `U2`, `U3`, `SLUG`, `DAY`, `MIN`, `fs`, `path`, `HistoryBox`. B1 `history-lib.test.ts`: `libExport`, `healthLib`, and the `deriveHealth` describe's `base` and `words`.
+- Produces:
+  - **The reducer contract.** `ExportReducer`'s TypeScript type is B1's, unchanged: `(candidate: ExportCandidate, homeRetentionDays) => number`. A reducer answers the time, in ms since the epoch, at which the candidate falls due, `-Infinity` when nothing holds it back; a candidate is due exactly when that time is before `nowMs`, and `planExport`'s due test is `reducer(r, homeRetentionDays) < nowMs`. B1's reducers answered a retention in days, which no per-copy rule can be.
+  - `EXPORT_REDUCERS.perCopy`, the default: over the candidate's `files`, the latest of each PRESENT file's `mtimeMs + exportHorizonDays(homeRetentionDays[file.home] ?? 30) × day`; a file gone from disk has passed and is skipped; `-Infinity` when no file is on disk or on record. It never reads `tsMs`.
+  - `EXPORT_REDUCERS.shortestHome`, B1's default and now history, under the same contract: the row clock (`tsMs`, else the newest holding file's mtime, else `-Infinity`) plus the shortest retention's horizon.
+  - `planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.perCopy }): { horizonDays, due, overdue }`: B1's signature and answer; `horizonDays` stays the shortest home's.
+  - `exportDates({ homeRetentionDays, holders, files, reducer = EXPORT_REDUCERS.perCopy }): { firstDueMs: number | null; firstDeletionMs: number | null }`. `holders`, one `ExportCandidate` per transcript that holds an unexported row, replaces B1's `oldestRowMs`. `firstDueMs` is the earliest holder's date, rounded: its due time by the reducer, or, for a holder the reducer answers `-Infinity`, the newest recorded mtime of its files, else its row time. Null with no holder that has a clock.
+  - `dueTranscriptKeys<K>({ nowMs, homeRetentionDays, transcripts: { key: K; files: ExportFile[] }[], reducer = EXPORT_REDUCERS.perCopy }): K[]`: the census's exact prefilter.
+- Later consumers: B4 Task 2 consumes the contract above verbatim (`planSegment` takes the same `reducer` parameter and default and reads due times through it, RD1's one clock) and stops if the merged contract differs. B4 Task 5 calls `dueTranscriptKeys` with no reducer for its due-transcript phase, so the export pass walks the transcripts the census counts due. B4 Task 9 inserts lines after `    state.overdue += plan.overdue.length;` and after `  setMeta(db, 'export_overdue', String(state.overdue));` in `exportCensus`; this task keeps both lines verbatim. B4 Task 9 also anchors on `export-due`'s detail, which this task does not change.
+
+**Spec:** §9.15 ("The horizon, per source harness"; "What is due": its inputs, the per-row file set, a file's due date, a row is due, a blob is due, the row clock as history; "The gap guard, and the dates"; "If B4 slips": the census records the first due date by the rule in force), §9.6 (`export-due`, `export-overdue`, `retention-lowered`), §10.5 (B2's per-copy bullet), §15.1 and §15.3 Q15. Pins: **O58**; **O38**'s census cases re-run under the per-copy default.
+- Departures:
+  - ⟦D:history-export-due-per-copy⟧ (spec §16 row since rev 3.4; this plan defines it first).
+  - ⟦D:history-export-row-age-early⟧ (B1-defined): the row clock, now `shortestHome`'s alone and no longer the default.
+  - ⟦D:history-export-holding-files-by-transcript⟧ (B1-defined): stays the per-row file set, as the ruling keeps it.
+  - ⟦D:history-export-due-escalates⟧ (B1-defined): `export-overdue` stays on the file clock, unchanged.
+
+Choices this task makes (each is in the PR body's choices):
+- **A reducer answers a due time.** The per-copy rule reads each holding file's own clock, so no single retention against one row clock can express it. The type and `planExport`'s signature stay B1's (§15.3 Q15: "no signature change"). B1's seam case, whose `ownCopies` reducer returned days, is rewritten.
+- **A file gone from disk is skipped, so it has passed** (§9.15 "A file gone from disk has passed it").
+- **W1-k dates a holder nothing on disk holds back by a real clock, never a sentinel.** Such a holder (every holding file gone, or none on record) is due at once, and the reducer answers `-Infinity`. For `first_due_ms` only, it is dated by the last write any of its RECORDED files saw (a gone file keeps its recorded mtime in `transcriptFiles`): it cannot have fallen due before that, so the date errs early, as the rule does. With no file on record it is dated by its oldest unexported row's time. A holder with neither, which ingest cannot make because every row arrives through a file, is left out of the date and stays due and counted. Reading `-Infinity` as 0 would let one all-files-gone transcript set `first_due_ms` to 1970-01-01: "due since an unknown time" in the same field as real dates, which `status --json` relays and spec §9.15's "If B4 slips" takes the earliest of.
+- **The census's prefilter is exact for the default**: `dueTranscriptKeys`. A row's holding files are its transcript's, and the per-copy rule never reads a row's time, so every row of one transcript falls due at one instant. The candidate scan keeps the blobs with a referrer in a due transcript. B1's `ts_ms < cutoff` test would hide a young row whose every file is gone, which the rule counts as passed; O38's overdue case pins that. The SQL keeps B1's four referrer clauses and binds one JSON array of transcript keys once per clause, through `json_each`, which SQLite builds in (measured: SQLite 3.51.2 on Node 24.14.1; the node-floor leg runs history-op on 22.16.0). An uncorrelated `IN (SELECT …)` is evaluated once per statement.
+- **W1-k's first due date is per holder**: one holder per transcript that holds an unexported row, read through each transcript's `entries_ts` index (`EXPORT_HOLDERS_SQL`). `oldest_row_ms` is unchanged.
+- **`retention-lowered` is a reminder.** It keeps its word, class and remedy. Its detail now says when that home's own rows fall due, instead of claiming a node-wide horizon. `export-due`'s detail is unchanged, because B4 Task 9 anchors on it.
+- **B1's pure due cases keep pinning B1's reducer, by name** (`reducer: SH`): the node-shortest rule stays exported as history, and here and in B4 it is a CONTROL. The census cases (O38's B1 half, in history-op) are re-run under the per-copy default with new expectations.
+- **O38's fixtures keep each file's mtime at or after its rows' times**, as Claude Code writes them. A case that needs an aged file plants a transcript of its own whose row is older than its file.
+- **A named residual: the swap prefix** (⟦D:history-export-holding-files-by-transcript⟧, which the ruling keeps). A row's holding files are its transcript's, so a file of the transcript that holds none of the row's copies still counts. The common case is a swap: ccd copies `<uuid>.jsonl` into the target home and the session continues there, so the source copy is a frozen prefix. Rows written after the swap are held only by the target copy, yet they wait for the frozen copy too. Figures, from Step 1's residual case: a swap 45 days ago froze a 180-day home's copy, last written 46 days ago; the 30-day target copy, last written 35 days ago, is gone; its rows are 38 days old. Their text is store-only, yet they are due only 104 days from now, so neither `export-due` nor `export-overdue` counts them meanwhile. B1's node-shortest reducer counted them due. The exposure is bounded by the retention difference between the homes, at most 150 days, and is a store-loss window only: nothing is lost unless the store is. Step 1's residual case pins today's answer so that a per-row file set has a red test to flip. This plan does not change the set: the operator's Q15 ruling keeps it, and B4's ruling RD1 keeps one clock with the census.
+
+- [ ] **Step 1: Write the failing pure tests.** In `server/test/history-lib.test.ts`:
+
+(a) Add this line directly below the file's last `import * as … from '../../ccd/history/lib.mjs';` line (`grep -c 'libDue' server/test/history-lib.test.ts` prints `0` before the edit):
+
+```ts
+import * as libDue from '../../ccd/history/lib.mjs';
+```
+
+(b) In B1's describe `'planExport and retentionLowered: what is due, what is overdue (spec 9.15, O38 and O41 pure halves)'`, by content:
+  - Directly below its line `  const ref = (tsAgeDays: number | null, files: libExport.ExportFile[]): libExport.ExportCandidate => ({ tsMs: tsAgeDays === null ? null : NOW - tsAgeDays * DAY, files });`, add
+
+```ts
+  /** B1's node-shortest reducer, by name: since W1-B2 the default is the per-copy rule (Task 35, O58), so a case
+   *  that pins B1's rule names it. */
+  const SH = libExport.EXPORT_REDUCERS.shortestHome;
+```
+
+  - Add `, reducer: SH` after `blobs: [old, mixed]` in `expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [old, mixed] }).due).toEqual(['b-old']);`, after `blobs: [nullTs, nullYoung]` in `expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [nullTs, nullYoung] }).due).toEqual(['b-null']);`, after `blobs: [young]` in `const r = libExport.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: [young] });`, and after `blobs: [gone, pastClock, fresh]` in `const r = libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [gone, pastClock, fresh] });`. Retitle the third case's `(the ruled rule)` to `(B1's node-shortest reducer, history since W1-B2)`.
+  - Replace the whole case `'exportDates (Task 26F item 7): the row clock\'s first due date and the file clock\'s first deletion date, one definition with planExport'` with
+
+```ts
+  it('exportDates (Task 26F item 7): the first due date over the holders, by the reducer, and the file clock\'s first deletion date, one definition with planExport', () => {
+    const lowered = { ...homes, '/home/u/.claude-c': 30 };
+    const files = [file('/home/u/.claude-a', 10), file('/home/u/.claude-c', 5), file('/home/u/.claude-b', 400, false)];
+    // the 400-day file is gone: it has no deletion date. The 5-day file in the 30-day home goes at +25 days, the 10-day one in a 180-day home at +170.
+    const holders = [ref(160, [files[0]!]), ref(20, [files[1]!])];
+    const d = libExport.exportDates({ homeRetentionDays: lowered, holders, files });
+    expect(d.firstDeletionMs).toBe(NOW + 25 * DAY);
+    expect(d.firstDueMs, 'per copy: the 30-day home\'s file is due from its last write, 5 days ago').toBe(NOW - 5 * DAY);
+    expect(libExport.exportDates({ homeRetentionDays: lowered, holders, files, reducer: SH }).firstDueMs,
+      'B1\'s row clock: the oldest holder\'s row plus the shortest retention\'s horizon, 0').toBe(NOW - 160 * DAY);
+    const long = libExport.exportDates({ homeRetentionDays: homes, holders: [holders[0]!], files: [files[0]!] });
+    expect(long).toEqual({ firstDueMs: NOW + 140 * DAY, firstDeletionMs: NOW + 170 * DAY });
+    // the same rule planExport reads: a file whose date has passed is overdue there, and its date is before now here
+    const gone = libExport.exportDates({ homeRetentionDays: homes, holders: [], files: [file('/home/u/.claude-a', 181)] });
+    expect(gone.firstDeletionMs).toBe(NOW - 1 * DAY);
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [{ key: 'b', referrers: [ref(170, [file('/home/u/.claude-a', 181)])] }] }).overdue).toEqual(['b']);
+  });
+```
+
+  - Replace the whole case `'exportDates: no present file or no unexported row is null, never zero; a fractional mtime rounds; a home never measured is 30 days'` with
+
+```ts
+  it('exportDates: no holder or no present file is null, never zero; a holder nothing on disk holds back is dated by its recorded clock, never the epoch; a fractional mtime rounds; a home never measured is 30 days', () => {
+    expect(libExport.exportDates({ homeRetentionDays: homes, holders: [], files: [] })).toEqual({ firstDueMs: null, firstDeletionMs: null });
+    const goneOnly = libExport.exportDates({ homeRetentionDays: homes, holders: [ref(5, [file('/home/u/.claude-a', 3, false)])], files: [file('/home/u/.claude-a', 3, false)] });
+    expect(goneOnly.firstDeletionMs).toBeNull();
+    expect(goneOnly.firstDueMs, 'every holding file gone: the last write its files recorded, the early side, never 0').toBe(NOW - 3 * DAY);
+    expect(libExport.exportDates({ homeRetentionDays: homes, holders: [ref(5, [])], files: [] }).firstDueMs,
+      'no file on record: its oldest unexported row\'s time').toBe(NOW - 5 * DAY);
+    expect(libExport.exportDates({ homeRetentionDays: homes, holders: [ref(5, [file('/home/u/.claude-a', 3, false)]), ref(1, [file('/home/u/.claude-a', 1)])], files: [] }).firstDueMs,
+      'the earliest over the holders: the gone-only holder\'s recorded clock, before the other\'s due time').toBe(NOW - 3 * DAY);
+    const fracFile = { home: '/home/u/.claude-a', mtimeMs: 1000.6, present: true };
+    const frac = libExport.exportDates({ homeRetentionDays: homes, holders: [{ tsMs: null, files: [fracFile] }], files: [fracFile] });
+    expect(frac.firstDeletionMs).toBe(1001 + 180 * DAY);
+    expect(frac.firstDueMs).toBe(1001 + 150 * DAY);
+    const unknown = libExport.exportDates({ homeRetentionDays: homes, holders: [], files: [{ home: '/home/u/.claude-z', mtimeMs: 0, present: true }] });
+    expect(unknown.firstDeletionMs, 'planExport\'s own fallback').toBe(30 * DAY);
+  });
+```
+
+  - Replace the whole case `'a reducer is the only seam Q15 needs: the same inputs under another reducer change the answer, not the signature'` with
+
+```ts
+  it('a reducer was the only seam Q15 needed: one blob, two reducers, two answers, one signature; each answers a due time (W1-B2 Task 35)', () => {
+    const blob = { key: 'b-1', referrers: [ref(100, [file('/home/u/.claude-a', 100)])] };
+    const lowered = { ...homes, '/home/u/.claude-c': 30 };
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: [blob] }).due, 'the per-copy default: its 180-day file holds it').toEqual([]);
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: [blob], reducer: SH }).due, 'B1\'s node-shortest reducer: horizon 0').toEqual(['b-1']);
+    expect(SH(blob.referrers[0]!, lowered), 'the row clock plus a horizon of 0').toBe(NOW - 100 * DAY);
+    expect(libExport.EXPORT_REDUCERS.perCopy(blob.referrers[0]!, lowered), 'its file\'s mtime plus its own home\'s 150 days').toBe(NOW + 50 * DAY);
+  });
+```
+
+(c) In B1's describe `'deriveHealth: every §9.6 rule as a word with its class, detail and remedy (task 28)'`, directly above its case `  it('the healthy baseline is PASS ok, with nothing to warn or fail', () => {`, insert
+
+```ts
+  it('retention-lowered is a reminder under the per-copy rule: it names the home and when its own rows fall due, and claims no node-wide horizon (W1-B2 Task 35, ruled Q15)', () => {
+    const r = healthLib.deriveHealth(base({ retentionLowered: { home: '/home/u/.claude-b', days: 30, othersMin: 180 } }));
+    expect(words(r, 'warn')).toEqual(['retention-lowered']);
+    expect(words(r, 'fail')).toEqual([]);
+    const item = r.warn.find((i) => i.word === 'retention-lowered')!;
+    expect(item.detail).toContain('/home/u/.claude-b keeps 30 days, under the others\' 180');
+    expect(item.detail).toContain('fall due 0 days after their file\'s last write');
+    expect(item.detail).not.toContain('horizon follows the shortest');
+  });
+
+```
+
+(d) Append at the end of the file:
+
+```ts
+// ── W1-B2 Task 35: the per-copy due rule is the default (spec 2026-10-05 §9.15, O58; ruled Q15,
+// ⟦D:history-export-due-per-copy⟧) ───────────────────────────────────────────────────────────────────────
+describe('O58: the per-copy due rule is the default (W1-B2 Task 35; spec 9.15, ruled Q15)', () => {
+  const DAY = 86_400_000;
+  const NOW = Date.UTC(2026, 11, 1);
+  const A = '/home/u/.claude-a';   // keeps 180 days
+  const B = '/home/u/.claude-b';   // on Claude Code's 30-day default once it joins
+  const homes = { [A]: 180 };
+  const withB = { [A]: 180, [B]: 30 };
+  const file = (home: string, ageDays: number, present = true): libDue.ExportFile => ({ home, mtimeMs: NOW - ageDays * DAY, present });
+  const row = (tsAgeDays: number | null, files: libDue.ExportFile[]): libDue.ExportCandidate => ({ tsMs: tsAgeDays === null ? null : NOW - tsAgeDays * DAY, files });
+  const due = (homeDays: Record<string, number>, ...referrers: libDue.ExportCandidate[]): boolean =>
+    libDue.planExport({ nowMs: NOW, homeRetentionDays: homeDays, blobs: [{ key: 'b', referrers }] }).due.length === 1;
+
+  it('rows held only in A\'s files are due once the newest of them is past 150 days: 151 due, 149 not', () => {
+    expect(due(homes, row(400, [file(A, 300), file(A, 151)]))).toBe(true);
+    expect(due(homes, row(400, [file(A, 300), file(A, 149)]))).toBe(false);
+  });
+  it('a row whose files are all B\'s is due from its file\'s last write', () => {
+    expect(due(withB, row(2, [file(B, 1)]))).toBe(true);
+    expect(due(withB, row(null, [file(B, 0.001)]))).toBe(true);
+  });
+  it('a row held by an A file and a B file is due only once the A file\'s mtime plus 150 days has passed', () => {
+    expect(due(withB, row(400, [file(A, 149), file(B, 300)]))).toBe(false);
+    expect(due(withB, row(400, [file(A, 151), file(B, 300)]))).toBe(true);
+  });
+  it('a long-lived A file appended yesterday holds its 200-day-old first rows back', () => {
+    expect(due(homes, row(200, [file(A, 1)]))).toBe(false);
+  });
+  it('a holding file gone from disk counts as passed, and the files still on disk decide', () => {
+    expect(due(homes, row(5, [file(A, 5, false)]))).toBe(true);
+    expect(due(homes, row(5, [file(A, 5, false), file(A, 5)]))).toBe(false);
+  });
+  it('a row with no holding file on record has no clock and is due at once', () => {
+    expect(due(homes, row(null, []))).toBe(true);
+  });
+  it('adding home B makes no row held only in A\'s files due, and retentionLowered still names B', () => {
+    const onlyA = row(200, [file(A, 100)]);
+    expect(due(homes, onlyA)).toBe(false);
+    expect(due(withB, onlyA)).toBe(false);
+    expect(libDue.retentionLowered(withB)).toEqual({ home: B, days: 30, othersMin: 180 });
+  });
+  // A NAMED RESIDUAL, not a guard (⟦D:history-export-holding-files-by-transcript⟧, kept by the Q15 ruling): this case
+  // pins today's answer so that a per-row file set, if one is ever ruled, has a red test to flip.
+  it('the swap prefix: rows written after a swap, held only by a 30-day target copy that is gone, wait for the frozen 180-day source copy, which holds none of them', () => {
+    // The swap 45 days ago froze A's copy, last written 46 days ago; B's copy, last written 35 days ago, is gone;
+    // the rows are 38 days old, so only B's copy ever held them.
+    const postSwap = row(38, [file(A, 46), file(B, 35, false)]);
+    const blobs = [{ key: 'b', referrers: [postSwap] }];
+    expect(libDue.planExport({ nowMs: NOW, homeRetentionDays: withB, blobs }), 'neither due nor overdue while A\'s copy is on disk')
+      .toMatchObject({ due: [], overdue: [] });
+    expect(libDue.EXPORT_REDUCERS.perCopy(postSwap, withB), 'due when A\'s frozen copy passes: 46 days back plus 150').toBe(NOW + 104 * DAY);
+    expect(libDue.planExport({ nowMs: NOW, homeRetentionDays: withB, blobs, reducer: libDue.EXPORT_REDUCERS.shortestHome }).due,
+      'B1\'s node-shortest reducer counted them due').toEqual(['b']);
+  });
+  it('planExport with no reducer, exportDates and dueTranscriptKeys answer by EXPORT_REDUCERS.perCopy, a due time; planExport\'s signature is B1\'s', () => {
+    const onlyA = row(200, [file(A, 100)]);
+    const blobs = [{ key: 'b', referrers: [onlyA] }];
+    expect(libDue.planExport({ nowMs: NOW, homeRetentionDays: withB, blobs }))
+      .toEqual(libDue.planExport({ nowMs: NOW, homeRetentionDays: withB, blobs, reducer: libDue.EXPORT_REDUCERS.perCopy }));
+    expect(libDue.planExport({ nowMs: NOW, homeRetentionDays: withB, blobs, reducer: libDue.EXPORT_REDUCERS.shortestHome }).due,
+      'CONTROL: B1\'s node-shortest reducer would export it now').toEqual(['b']);
+    expect(libDue.EXPORT_REDUCERS.perCopy(onlyA, withB), 'its file\'s mtime plus its own home\'s 150 days').toBe(NOW + 50 * DAY);
+    expect(libDue.EXPORT_REDUCERS.perCopy(row(null, []), withB)).toBe(Number.NEGATIVE_INFINITY);
+    expect(libDue.exportDates({ homeRetentionDays: withB, holders: [onlyA], files: onlyA.files }).firstDueMs).toBe(NOW + 50 * DAY);
+    expect(libDue.dueTranscriptKeys({ nowMs: NOW, homeRetentionDays: withB, transcripts: [
+      { key: 1, files: onlyA.files }, { key: 2, files: [file(B, 1)] }, { key: 3, files: [file(A, 10, false)] }, { key: 4, files: [] },
+    ] })).toEqual([2, 3, 4]);
+    expect(libDue.planExport.length, 'one destructured argument, as B1 declared it').toBe(1);
+  });
+});
+```
+
+Run, in the foreground with a timeout of at least 600000 ms:
+
+```bash
+(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'planExport|O58|retention-lowered is a reminder')
+```
+
+Expected: red. In the O58 describe, every case fails but two (`EXPORT_REDUCERS.perCopy` is undefined, and B1's default answers the node-shortest rule): the all-B case and the no-holding-file case pass on B1's code, because a horizon of 0 and a row with no clock make them due under either rule. The swap-prefix case fails at its first assertion, B1's default answering `due: [ 'b' ]`. The two `exportDates` cases fail on `NaN` (B1's `exportDates` reads an `oldestRowMs` they no longer pass); the seam case fails `expected [ 'b-1' ] to deeply equal []`; the reminder case fails on the old detail. The four cases that name `SH` stay green on B1's code, because there `SH` is the default they always ran under. These reds were read off B1's code at plan time; record the reds the run actually prints in the task report.
+
+- [ ] **Step 2: Re-run O38's census cases under the per-copy default, and write O58's.** In `server/test/history-op.test.ts`, replace B1's whole describe that opens `describe('O38: the export\'s due rule (B1 half)', () => {`, up to the blank line above `describe('W1-j and O34: the journal audit', () => {`, with the describe below. If B1's merged describe holds a case this one does not, keep that case, re-measure it under the per-copy default and report it in the PR body.
+
+```ts
+describe('O38: the export\'s due rule, re-run under the per-copy default (B1 half; W1-B2 Task 35, ruled Q15)', () => {
+  const OLD = 'a0000000-0000-4000-8000-0000000006a1';
+  /** A box whose every rostered home keeps 180 days. One transcript, written now, holds six rows dated 160, 100, 45
+   *  and 10 days back, two of them sharing one blob; a second transcript holds one row with no time, its file 170
+   *  days old. Under the per-copy rule a row ages by its holding files, never by its own time (§9.15), so the file
+   *  written now holds every one of its rows back. Every fixture keeps a file's mtime at or after its rows' times,
+   *  as Claude Code writes them. The managed-settings list is the fixture's own. */
+  function censusBox(prefix: string): { box: HistoryBox; MS: string[]; settings: (h: string, body: string) => void; nullFile: string; mainFile: string } {
+    const box = makeHistoryBox(prefix, { role: 'fleet', shim: true });
+    const settings = (h: string, body: string): void => { fs.writeFileSync(path.join(h, 'settings.json'), body); };
+    for (const h of box.homes) settings(h, JSON.stringify({ cleanupPeriodDays: 180 }));
+    const etc = path.join(box.home, 'etc-claude-code');
+    fs.mkdirSync(path.join(etc, 'managed-settings.d'), { recursive: true });
+    const MS = [path.join(etc, 'managed-settings.json'), path.join(etc, 'managed-settings.d')];
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    plantSession(box, 'claude-noclock', { uuid: U2, generation: G1, project: 'demo' });
+    const mainFile = plantTranscript(box, 'claude', SLUG, U1, [
+      userRow(OLD, 'old only', iso(160 * DAY)),
+      userRow('a0000000-0000-4000-8000-0000000006a2', 'mid only', iso(100 * DAY)),
+      userRow('a0000000-0000-4000-8000-0000000006a3', 'near only', iso(45 * DAY)),
+      userRow('a0000000-0000-4000-8000-0000000006a4', 'young only', iso(10 * DAY)),
+      userRow('a0000000-0000-4000-8000-0000000006a5', 'shared words', iso(160 * DAY)),
+      userRow('a0000000-0000-4000-8000-0000000006a6', 'shared words', iso(10 * DAY)),
+    ]);
+    // A row with no `timestamp` at all: its ts_ms is NULL, and under either rule its file's mtime decides.
+    const noClock = { type: 'user', uuid: 'a0000000-0000-4000-8000-0000000006a7', parentUuid: null, sessionId: U2, cwd: '/home/u/tree/demo', message: { role: 'user', content: 'no clock' } };
+    const nullFile = plantTranscript(box, 'claude', SLUG, U2, [noClock]);
+    const past = new Date(Date.now() - 170 * DAY);
+    fs.utimesSync(nullFile, past, past);
+    const r = runDriver(box, { managedSettings: MS });
+    expect(r.code, r.stderr).toBe(0);
+    expect(countOf(box, 'entries'), 'every row ingested by the first pass').toBe(7);
+    return { box, MS, settings, nullFile, mainFile };
+  }
+  /** One census, k periodic intervals on, so SCAN_INTERVAL_MS has passed since the last. */
+  function census(box: HistoryBox, MS: string[], k: number): void {
+    const r = runDriver(box, { offsetMs: k * 31 * MIN, managedSettings: MS });
+    expect(r.code, r.stderr).toBe(0);
+  }
+  const due = (box: HistoryBox): number => Number(metaOf(box, 'export_due'));
+  /** One more ccrc id with a one-row transcript under the `claude` account, its file dated `fileDays` back; a row
+   *  with `rowDays` null has no `timestamp`. The file is never dated before its row. The next census pass maps and
+   *  ingests it (its registry scan is due by then). */
+  function plantOne(box: HistoryBox, id: string, uuid: string, rowUuid: string, text: string, rowDays: number | null, fileDays: number): string {
+    plantSession(box, id, { uuid, generation: G1, project: 'demo' });
+    const row = rowDays === null
+      ? { type: 'user', uuid: rowUuid, parentUuid: null, sessionId: uuid, cwd: '/home/u/tree/demo', message: { role: 'user', content: text } }
+      : userRow(rowUuid, text, iso(rowDays * DAY), uuid);
+    const f = plantTranscript(box, 'claude', SLUG, uuid, [row]);
+    const at = new Date(Date.now() - fileDays * DAY);
+    fs.utimesSync(f, at, at);
+    return f;
+  }
+
+  it('180 everywhere: each file\'s horizon is 150 days, so only the 170-day file\'s NULL-ts row is due; the file written now holds its 160-day rows back', () => {
+    const { box } = censusBox('ccrc-hist-o38a-');
+    expect(metaOf(box, 'retention_min')).toBe('180');
+    expect(due(box)).toBe(1);
+    expect(metaOf(box, 'export_overdue')).toBe('0');
+  });
+
+  it('a home without the key: 30, and retention-lowered names it; it brings forward only the rows whose files it holds', () => {
+    const { box, MS, settings } = censusBox('ccrc-hist-o38b-');
+    const lowered = box.accountHome['claude-a']!;
+    const holder = box.accountHome['claude']!;
+    settings(lowered, '{}');
+    census(box, MS, 1);
+    expect(metaOf(box, 'retention_min')).toBe('30');
+    expect(due(box), 'a 30-day home that holds no file makes nothing due').toBe(1);
+    expect(JSON.parse(metaOf(box, 'retention_lowered')!)).toEqual({ home: lowered, days: 30, othersMin: 180 });
+    settings(holder, '{}');
+    census(box, MS, 2);
+    expect(due(box), 'the home holding both files on the 30-day default: every row, from its file\'s last write').toBe(6);
+    expect(JSON.parse(metaOf(box, 'retention_lowered')!)).toEqual({ home: holder, days: 30, othersMin: 180 });
+    for (const h of [lowered, holder]) settings(h, JSON.stringify({ cleanupPeriodDays: 180 }));
+    census(box, MS, 3);
+    expect(due(box)).toBe(1);
+    expect(metaOf(box, 'retention_lowered')).toBe('');
+  });
+
+  it('0, "x" or unparseable on a home last measured 180: retention_unmeasured counts, the home stays 180, no blob becomes due', () => {
+    const { box, MS, settings } = censusBox('ccrc-hist-o38c-');
+    const h = box.homes.find((x) => x.endsWith('.claude-a'))!;
+    const before = counter(box, 'retention_unmeasured');
+    let k = 1;
+    for (const body of [JSON.stringify({ cleanupPeriodDays: 0 }), JSON.stringify({ cleanupPeriodDays: 'x' }), '{']) {
+      settings(h, body);
+      census(box, MS, k);
+      k += 1;
+      expect(metaOf(box, `retention:${h}`), body).toBe('180');
+      expect(metaOf(box, `retention_state:${h}`), body).toBe('unmeasured');
+      expect(due(box), body).toBe(1);
+    }
+    expect(counter(box, 'retention_unmeasured') - before).toBe(3);
+  });
+
+  it('the same on a home never measured: it counts as 30', () => {
+    const box = makeHistoryBox('ccrc-hist-o38d-', { role: 'fleet', shim: true });
+    const etc = path.join(box.home, 'etc-claude-code');
+    const MS = [path.join(etc, 'managed-settings.json'), path.join(etc, 'managed-settings.d')];
+    for (const h of box.homes) fs.writeFileSync(path.join(h, 'settings.json'), h.endsWith('.claude-a') ? '{' : JSON.stringify({ cleanupPeriodDays: 180 }));
+    expect(runDriver(box, { managedSettings: MS }).code).toBe(0);
+    const h = box.homes.find((x) => x.endsWith('.claude-a'))!;
+    expect(metaOf(box, `retention:${h}`), 'a home never measured records no value').toBeNull();
+    expect(metaOf(box, `retention_state:${h}`)).toBe('unmeasured');
+    expect(metaOf(box, 'retention_min')).toBe('30');
+  });
+
+  it('a managed-settings file with 90 under homes of 180 gives 90, and a managed-settings.d/ drop-in with 60 gives 60', () => {
+    const { box, MS } = censusBox('ccrc-hist-o38e-');
+    plantOne(box, 'claude-mid', U3, 'a0000000-0000-4000-8000-0000000006a8', 'mid file only', 100, 75);
+    census(box, MS, 1);
+    expect(due(box), 'horizon 150: the 75-day file waits').toBe(1);
+    fs.writeFileSync(MS[0]!, JSON.stringify({ cleanupPeriodDays: 90 }));
+    census(box, MS, 2);
+    expect(metaOf(box, 'retention_min')).toBe('90');
+    expect(due(box), 'horizon 60: the 75-day file and the 170-day file').toBe(2);
+    fs.writeFileSync(path.join(MS[1]!, '50-short.json'), JSON.stringify({ cleanupPeriodDays: 60 }));
+    census(box, MS, 3);
+    expect(metaOf(box, 'retention_min')).toBe('60');
+    expect(due(box), 'horizon 30: the same two; the file written now still waits').toBe(2);
+  });
+
+  it('a NULL-ts row ages by its holding file; a blob with a due referrer and a younger one in another transcript is not due', () => {
+    const { box, MS, nullFile } = censusBox('ccrc-hist-o38f-');
+    expect(due(box)).toBe(1);
+    const now = new Date();
+    fs.utimesSync(nullFile, now, now);
+    census(box, MS, 1);
+    expect(due(box), 'with a fresh file the NULL-ts row is young').toBe(0);
+    const past = new Date(Date.now() - 170 * DAY);
+    fs.utimesSync(nullFile, past, past);
+    census(box, MS, 2);
+    expect(due(box)).toBe(1);
+    plantOne(box, 'claude-again', U3, 'a0000000-0000-4000-8000-0000000006a9', 'no clock', 1, 0);
+    census(box, MS, 3);
+    expect(due(box), 'the same text in a transcript written now holds the shared blob back').toBe(0);
+  });
+
+  it('overdue by the file clock: a due blob whose holding file is gone, or past its mtime plus its home\'s retention, FAILs; fresh files never', () => {
+    const { box, MS, nullFile, mainFile } = censusBox('ccrc-hist-o38g-');
+    expect(metaOf(box, 'export_overdue'), 'the NULL-ts blob is due, its file on disk and inside 180 days').toBe('0');
+    fs.rmSync(mainFile);
+    census(box, MS, 1);
+    expect(metaOf(box, 'export_overdue'), 'a gone file has passed its date: all five of its blobs, young rows included').toBe('5');
+    expect(due(box)).toBe(6);
+    const past = new Date(Date.now() - 200 * DAY);
+    fs.utimesSync(nullFile, past, past);
+    census(box, MS, 2);
+    expect(metaOf(box, 'export_overdue'), 'and the NULL-ts blob\'s file is past 200 > 180 days').toBe('6');
+  });
+
+  it('W1-k: the census records the oldest row, the first due date by the per-copy rule, and the file clock\'s first deletion date', () => {
+    const { box, MS, nullFile } = censusBox('ccrc-hist-o38h-');
+    const now = new Date();
+    fs.utimesSync(nullFile, now, now);
+    census(box, MS, 1);
+    const oldest = Number(metaOf(box, 'oldest_row_ms'));
+    expect(Math.abs(oldest - (Date.now() - 160 * DAY))).toBeLessThan(10 * MIN);
+    const firstDue = Number(metaOf(box, 'first_due_ms'));
+    expect(Math.abs(firstDue - (Date.now() + 150 * DAY)),
+      'both files written now, plus 150 days; B1\'s row clock would say the oldest row plus 150, 10 days ago').toBeLessThan(10 * MIN);
+    const firstDeletion = Number(metaOf(box, 'first_deletion_ms'));
+    expect(Math.abs(firstDeletion - (Date.now() + 180 * DAY)), 'a file written now, plus 180 days').toBeLessThan(10 * MIN);
+  });
+});
+```
+
+Then append at the end of the file:
+
+```ts
+// ── W1-B2 Task 35: O58 through the census (spec 2026-10-05 §9.15; ruled Q15, ⟦D:history-export-due-per-copy⟧) ──
+describe('O58: the per-copy due rule is the census\'s default (W1-B2 Task 35; spec §9.15, ruled Q15)', () => {
+  it('a 30-day home holding only a swap copy brings nothing forward; a row held only there is due from its file\'s last write; a long-lived file holds its old rows back', () => {
+    const box = makeHistoryBox('ccrc-hist-o58-', { role: 'fleet', shim: true });
+    const B = box.accountHome['claude-a']!;
+    for (const h of box.homes) fs.writeFileSync(path.join(h, 'settings.json'), JSON.stringify({ cleanupPeriodDays: 180 }));
+    const etc = path.join(box.home, 'etc-claude-code');
+    fs.mkdirSync(path.join(etc, 'managed-settings.d'), { recursive: true });
+    const MS = [path.join(etc, 'managed-settings.json'), path.join(etc, 'managed-settings.d')];
+    const at = (f: string, days: number): void => { const d = new Date(Date.now() - days * DAY); fs.utimesSync(f, d, d); };
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    plantSession(box, 'claude-a-onlyb', { uuid: U2, generation: G1, project: 'demo' });
+    plantSession(box, 'claude-a-onlya', { uuid: U3, generation: G1, project: 'demo' });
+    // U1: a transcript in a 180-day home and its swap copy in B, both last written 100 days ago.
+    const both = [userRow('a0000000-0000-4000-8000-0000000058a1', 'held in both homes', iso(200 * DAY))];
+    at(plantTranscript(box, 'claude', SLUG, U1, both), 100);
+    at(plantTranscript(box, 'claude-a', SLUG, U1, both), 100);
+    // U2: held only in B, last written 5 days ago.
+    at(plantTranscript(box, 'claude-a', SLUG, U2, [userRow('a0000000-0000-4000-8000-0000000058a2', 'only in b', iso(6 * DAY), U2)]), 5);
+    // U3: a long-lived file in a 180-day home, appended yesterday, whose first row is 200 days old.
+    at(plantTranscript(box, 'claude', SLUG, U3, [userRow('a0000000-0000-4000-8000-0000000058a3', 'only in a, an old row', iso(200 * DAY), U3)]), 1);
+    expect(runDriver(box, { managedSettings: MS }).code).toBe(0);
+    expect(Number(metaOf(box, 'export_due')), 'every home at 180: no file is past its 150 days').toBe(0);
+    fs.writeFileSync(path.join(B, 'settings.json'), '{}');                   // B on the 30-day default
+    expect(runDriver(box, { offsetMs: 31 * MIN, managedSettings: MS }).code).toBe(0);
+    expect(metaOf(box, 'retention_min')).toBe('30');
+    expect(JSON.parse(metaOf(box, 'retention_lowered')!)).toMatchObject({ home: B, days: 30, othersMin: 180 });
+    expect(Number(metaOf(box, 'export_due')), 'only the row held in B alone: U1 waits for its 180-day copy, U3 for its file').toBe(1);
+    expect(Number(metaOf(box, 'export_overdue'))).toBe(0);
+  });
+});
+```
+
+Run:
+
+```bash
+(cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'O38|O58')
+```
+
+Expected: red on B1's code. The 180-everywhere case fails `expected 2 to be 1` (B1's row clock dues the 160-day row); the overdue case fails `expected '1' to be '5'` (B1's `ts_ms` prefilter never offers the young rows of the gone file, and its row clock leaves the shared blob's 10-day referrer not due, so only the `old only` row's blob is overdue); W1-k fails on the row clock's date, 10 days back; the O58 case fails at its first assertion, `expected 2 to be 0` (with every home at 180, B1's row clock dues the two 200-day rows). The never-measured case is green: it reads no due count. These reds were read off B1's code at plan time; record the reds the run actually prints in the task report.
+
+- [ ] **Step 3: The per-copy reducer, the default, in lib.** In `ccd/history/lib.mjs`, replace the whole block from the doc comment that opens `/** The reducers \`planExport\` may take: per candidate referrer, the retention` through the closing `}` of `exportDates` (it holds, in order, `EXPORT_REDUCERS`, `exportHorizonDays`, the private `referrerAgeMs`, `planExport`, the private `fileDeletionMs` and `exportDates`) with the block below. `fileDeletionMs` and `exportHorizonDays` come back unchanged; `referrerAgeMs` becomes `rowClockMs`, read by `shortestHome` alone; the private `holderDueDateMs` is new, read by `exportDates` alone. ⟦D:…⟧ stands for the number as issued.
+
+```js
+/** The reducers `planExport` may take (§9.15). A reducer answers, for one candidate row, the time in ms since the
+ *  epoch at which it falls due: the row is due exactly when that time is before now, and `-Infinity` means nothing
+ *  holds it back. B1's reducers answered a retention in days against one row clock, which the per-copy rule cannot
+ *  be: it reads each holding file's own clock. The TypeScript type and `planExport`'s signature are B1's, unchanged
+ *  (ruled Q15, rev 3.4: one reducer, no signature change).
+ *  - `perCopy`, the default from W1-B2 (⟦D:history-export-due-per-copy⟧): the latest due date over the row's holding
+ *    files on disk, each file's mtime plus its OWN home's horizon. A file gone from disk has passed its date, and a
+ *    row with no holding file on record has no clock, so is due at once. It never reads the row's own time.
+ *  - `shortestHome`, B1's default and now history: the row clock plus the horizon of the shortest retention over
+ *    every rostered home, whatever homes hold the row. Kept as a CONTROL, here and in W1-B4. */
+export const EXPORT_REDUCERS = Object.freeze({
+  shortestHome: (c, homeRetentionDays) => rowClockMs(c) + exportHorizonDays(shortestRetention(homeRetentionDays)) * EXPORT_DAY_MS,
+  perCopy: perCopyDueMs,
+});
+
+/** The horizon: retention minus `EXPORT_MARGIN_DAYS`, floored at 0. */
+export function exportHorizonDays(retentionDays) {
+  return Math.max(0, retentionDays - EXPORT_MARGIN_DAYS);
+}
+
+/** The row clock (§9.15, history since W1-B2; ⟦D:history-export-row-age-early⟧): the row's `ts_ms`, or, when that
+ *  is NULL, the mtime of the newest file holding it — deliberately the opposite of prune, where NULL is "never old":
+ *  here "never" would never copy it. A row with no time and no holding file has no clock at all, `-Infinity`: the
+ *  export errs early, never late (plan-chosen). `shortestHome` alone reads it. */
+function rowClockMs(c) {
+  if (c.tsMs !== null) return c.tsMs;
+  if (c.files.length === 0) return Number.NEGATIVE_INFINITY;
+  return Math.max(...c.files.map((f) => f.mtimeMs));
+}
+
+/** One holding file's due date (§9.15): its mtime plus its own home's horizon; a home not measured reads as Claude
+ *  Code's 30-day default, the overdue test's own fallback. */
+function fileDueMs(f, homeRetentionDays) {
+  return f.mtimeMs + exportHorizonDays(homeRetentionDays[f.home] ?? CLAUDE_CODE_DEFAULT_RETENTION_DAYS) * EXPORT_DAY_MS;
+}
+
+/** `EXPORT_REDUCERS.perCopy` (§9.15 "A row is due"; ⟦D:history-export-due-per-copy⟧, ruled Q15): a row is due when
+ *  every one of its holding files has passed its due date. Its holding files are B1's per-row set, its
+ *  transcript's (⟦D:history-export-holding-files-by-transcript⟧), which the ruling keeps. */
+function perCopyDueMs(c, homeRetentionDays) {
+  let at = Number.NEGATIVE_INFINITY;   // no holding file on disk or on record: nothing holds the row back
+  for (const f of c.files) {
+    if (!f.present) continue;   // a file gone from disk has passed its date
+    at = Math.max(at, fileDueMs(f, homeRetentionDays));
+  }
+  return at;
+}
+
+/** The export's due and overdue sets (§9.15). A blob is DUE when every referrer is: the reducer's due time is
+ *  before now (default: the per-copy rule since W1-B2). It is OVERDUE — measured source loss, doctor's FAIL — when it
+ *  is due and every holding file of every referrer is gone from disk or past its own deletion date by the file clock
+ *  (its mtime plus its home's retention). A blob with no referrer is neither. `horizonDays` stays the shortest
+ *  home's horizon, which `status` prints and the default rule no longer reads.
+ *  ⟦D:history-export-due-escalates⟧ */
+export function planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.perCopy }) {
+  const due = [];
+  const overdue = [];
+  for (const blob of blobs) {
+    if (blob.referrers.length === 0) continue;
+    const isDue = blob.referrers.every((r) => reducer(r, homeRetentionDays) < nowMs);
+    if (!isDue) continue;
+    due.push(blob.key);
+    const gone = blob.referrers.every((r) => r.files.every((f) => !f.present || fileDeletionMs(f, homeRetentionDays) < nowMs));
+    if (gone) overdue.push(blob.key);
+  }
+  return { horizonDays: exportHorizonDays(shortestRetention(homeRetentionDays)), due, overdue };
+}
+
+/** The file clock (§9.15): when Claude Code's own cleanup deletes a holding file, its mtime plus ITS home's
+ *  retention (the default for a home never measured). The one definition of that rule: `planExport`'s overdue test
+ *  and `exportDates` both read it. */
+function fileDeletionMs(f, homeRetentionDays) {
+  return f.mtimeMs + (homeRetentionDays[f.home] ?? CLAUDE_CODE_DEFAULT_RETENTION_DAYS) * EXPORT_DAY_MS;
+}
+
+/** One W1-k holder's date (§9.15 "If B4 slips"): its due time by the reducer, or, when the reducer answers
+ *  `-Infinity` (nothing on disk holds it back: every holding file gone, or none on record), a real clock on the early
+ *  side rather than a sentinel. That is the last write any of its RECORDED files saw (a gone file keeps its recorded
+ *  mtime), since it cannot have fallen due before then; with no file on record, its oldest unexported row's time.
+ *  For the date only: the holder stays due. Null for a holder with neither, which ingest cannot make (every row
+ *  arrives through a file). */
+function holderDueDateMs(h, homeRetentionDays, reducer) {
+  const at = reducer(h, homeRetentionDays);
+  if (at !== Number.NEGATIVE_INFINITY) return at;
+  if (h.files.length > 0) return Math.max(...h.files.map((f) => f.mtimeMs));
+  return h.tsMs;
+}
+
+/** The census's W1-k dates (§9.15), decided here so the sweep only delivers them (Task 26F item 7):
+ *  - `firstDueMs`: the earliest holder date (holderDueDateMs), by the reducer (default: the per-copy rule since
+ *    W1-B2), over the HOLDERS: one candidate per transcript that holds an unexported row (its oldest such row's time,
+ *    and its holding files). Rounded to a whole millisecond; null when no holder has a clock (no unexported row).
+ *    Never 0 for "due since an unknown time": that value would sit beside real dates in one field.
+ *  - `firstDeletionMs`: the earliest deletion date by the FILE clock over the files still present, rounded to a
+ *    whole millisecond; null when none is present. A file that is gone has no deletion date: it is already lost.
+ *  `files` is every holding file the census measured, each already assigned its home. */
+export function exportDates({ homeRetentionDays, holders, files, reducer = EXPORT_REDUCERS.perCopy }) {
+  let first = null;
+  for (const f of files) {
+    if (!f.present) continue;
+    const at = fileDeletionMs(f, homeRetentionDays);
+    if (first === null || at < first) first = at;
+  }
+  let due = null;
+  for (const h of holders) {
+    const at = holderDueDateMs(h, homeRetentionDays, reducer);
+    if (at === null) continue;
+    if (due === null || at < due) due = at;
+  }
+  return {
+    firstDueMs: due === null ? null : Math.round(due),
+    firstDeletionMs: first === null ? null : Math.round(first),
+  };
+}
+
+/** The census's candidate prefilter (§9.15; ⟦D:history-export-due-per-copy⟧): the keys of the transcripts whose
+ *  rows can be due now. A row's holding files are its transcript's
+ *  (⟦D:history-export-holding-files-by-transcript⟧), and the per-copy rule never reads a row's own time, so every row
+ *  of one transcript falls due at one instant, its transcript's; a blob none of whose referrers sits in a due
+ *  transcript cannot be due. Exact for any reducer that reads no row time; planExport still decides each blob. */
+export function dueTranscriptKeys({ nowMs, homeRetentionDays, transcripts, reducer = EXPORT_REDUCERS.perCopy }) {
+  const out = [];
+  for (const t of transcripts) if (reducer({ tsMs: null, files: t.files }, homeRetentionDays) < nowMs) out.push(t.key);
+  return out;
+}
+```
+
+Then, in `deriveHealth`, replace
+
+```js
+    warn.push(item('retention-lowered', `${h.retentionLowered.home} keeps ${h.retentionLowered.days} days, under the others' ${h.retentionLowered.othersMin}; the export horizon follows the shortest`));
+```
+
+with
+
+```js
+    warn.push(item('retention-lowered', `${h.retentionLowered.home} keeps ${h.retentionLowered.days} days, under the others' ${h.retentionLowered.othersMin}; rows held only in its files fall due ${exportHorizonDays(h.retentionLowered.days)} days after their file's last write (a reminder: each row is measured against its own files' homes)`));
+```
+
+`perCopyDueMs` and `rowClockMs` are function declarations, so `EXPORT_REDUCERS` reads them hoisted; `EXPORT_DAY_MS` is B1's const above the block. Check:
+
+```bash
+grep -c 'referrerAgeMs' ccd/history/lib.mjs   # 0
+grep -c '^export function planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.perCopy }) {' ccd/history/lib.mjs   # 1
+grep -c 'reducer(r, homeRetentionDays) < nowMs' ccd/history/lib.mjs   # 1
+node --input-type=module -e 'const l = await import("./ccd/history/lib.mjs"); console.log(Object.keys(l.EXPORT_REDUCERS).join(","), Object.isFrozen(l.EXPORT_REDUCERS))'
+```
+
+Expected: `0`, `1`, `1`, then `shortestHome,perCopy true`.
+
+- [ ] **Step 4: Declare it.** In `ccd/history/lib.d.mts`, replace
+
+```ts
+export type ExportReducer = (candidate: ExportCandidate, homeRetentionDays: Readonly<Record<string, number>>) => number;
+export const EXPORT_REDUCERS: Readonly<{ shortestHome: ExportReducer }>;
+```
+
+with
+
+```ts
+/** A candidate's due TIME, in ms since the epoch: due exactly when it is before now; `-Infinity` when nothing holds
+ *  it back (W1-B2, ruled Q15; B1's reducers answered a retention in days). */
+export type ExportReducer = (candidate: ExportCandidate, homeRetentionDays: Readonly<Record<string, number>>) => number;
+export const EXPORT_REDUCERS: Readonly<{ shortestHome: ExportReducer; perCopy: ExportReducer }>;
+```
+
+and replace
+
+```ts
+export function exportDates(i: {
+  homeRetentionDays: Readonly<Record<string, number>>; oldestRowMs: number | null; files: readonly ExportFile[];
+}): { firstDueMs: number | null; firstDeletionMs: number | null };
+```
+
+with
+
+```ts
+export function exportDates(i: {
+  homeRetentionDays: Readonly<Record<string, number>>; holders: readonly ExportCandidate[]; files: readonly ExportFile[];
+  reducer?: ExportReducer;
+}): { firstDueMs: number | null; firstDeletionMs: number | null };
+export function dueTranscriptKeys<K>(i: {
+  nowMs: number; homeRetentionDays: Readonly<Record<string, number>>;
+  transcripts: readonly { key: K; files: readonly ExportFile[] }[]; reducer?: ExportReducer;
+}): K[];
+```
+
+`grep -c '^export function dueTranscriptKeys' ccd/history/lib.d.mts` prints `1`.
+
+- [ ] **Step 5: The census reads the default.** In `ccd/history/sweep.mjs`, by content:
+
+(a) In the header comment under `// ── THE PERIODIC CENSUS (Task 26)`, replace the two lines
+
+```js
+// ruled rule through lib.mjs's planExport and its default reducer, the shortest retention over the rostered
+// homes (Q15 is open; a yes swaps one reducer, never this input). Only the sweep parses the journal (§9.14).
+```
+
+with
+
+```js
+// rule through lib.mjs's planExport and its default reducer: the per-copy rule since W1-B2 (ruled Q15,
+// ⟦D:history-export-due-per-copy⟧), each row against its own holding files. Only the sweep parses the journal (§9.14).
+```
+
+(b) Replace the doc comment that opens `/** The candidate blobs of one chunk: unexported, unpruned, past the cursor, with at least one referrer old` and the `const EXPORT_CANDIDATES_SQL = …` statement below it (through its line `  + ') ORDER BY b.blob_id LIMIT ?';`) with
+
+```js
+/** The candidate blobs of one chunk: unexported, unpruned, past the cursor, with at least one referrer whose
+ *  transcript the default rule makes due now (the JSON array of lib's dueTranscriptKeys, bound once per clause).
+ *  A blob is due only when EVERY referrer is, which planExport decides; this is only the prefilter, and it is exact
+ *  for the per-copy rule (⟦D:history-export-due-per-copy⟧), under which every row of one transcript falls due at one
+ *  instant: its holding files are its transcript's (⟦D:history-export-holding-files-by-transcript⟧) and the rule
+ *  reads no row time. B1's row-clock cutoff would hide a young row whose every file is gone, which the rule counts
+ *  as passed. The partial index blobs_unexported serves the outer scan; each `IN (SELECT value FROM json_each(?))`
+ *  is uncorrelated, so SQLite evaluates it once per statement. */
+const EXPORT_CANDIDATES_SQL = 'SELECT b.blob_id FROM blobs b WHERE b.exported_ms IS NULL AND b.z IS NOT NULL AND b.blob_id > ? AND ('
+  + 'EXISTS (SELECT 1 FROM entries e WHERE e.blob_id = b.blob_id AND e.transcript_pk IN (SELECT value FROM json_each(?))) '
+  + 'OR EXISTS (SELECT 1 FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id WHERE v.blob_id = b.blob_id AND e.transcript_pk IN (SELECT value FROM json_each(?))) '
+  + 'OR EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = b.blob_id AND s.transcript_pk IN (SELECT value FROM json_each(?))) '
+  + 'OR EXISTS (SELECT 1 FROM boundaries d JOIN entries e ON e.entry_id = d.entry_id WHERE d.kept_blob_id = b.blob_id AND e.transcript_pk IN (SELECT value FROM json_each(?)))'
+  + ') ORDER BY b.blob_id LIMIT ?';
+```
+
+The four clauses read the transcript of each referrer exactly as `EXPORT_REFERRERS_SQL` does: an entry's, a variant's entry's, a sidecar's own, a kept list's boundary entry's.
+
+(c) Directly below the `const EXPORT_REFERRERS_SQL = …` statement (its last line ends `WHERE d.kept_blob_id BETWEEN ? AND ?';`), add
+
+```js
+/** W1-k's holders (§9.15 "If B4 slips"): each transcript that holds an unexported row, with that row's oldest time.
+ *  Both subqueries search one transcript through `entries_ts` (transcript_pk, ts_ms); no statement scans `entries`
+ *  whole for the date. */
+const EXPORT_HOLDERS_SQL = 'SELECT t.transcript_pk AS pk, '
+  + '(SELECT min(e.ts_ms) FROM entries e WHERE e.transcript_pk = t.transcript_pk AND e.exported_ms IS NULL) AS m '
+  + 'FROM transcripts t WHERE EXISTS (SELECT 1 FROM entries e WHERE e.transcript_pk = t.transcript_pk AND e.exported_ms IS NULL)';
+```
+
+(d) Replace `exportCensus` whole, from its doc comment `/** The export census (§9.15, W1-k): from the ('export-census', 1) cursor, in chunks, within the run budget,` through the function's closing `}` (the line above the doc comment `/** The verdict kinds that chain or map an epoch`), with
+
+```js
+/** The export census (§9.15, W1-k): from the ('export-census', 1) cursor, in chunks, within the run budget,
+ *  count the due blobs and, among them, the overdue ones; on completion record them with the W1-k dates. Due-ness is
+ *  planExport's default, the per-copy rule since W1-B2 (⟦D:history-export-due-per-copy⟧), and the candidate scan
+ *  keeps exactly the blobs with a referrer in a transcript that rule makes due (lib's dueTranscriptKeys).
+ *  Returns true when complete (or when no census is in progress). */
+export function exportCensus(db, nowMs, budget) {
+  const state = stepCursorGet(db, 'export-census');
+  if (state === null) return true;
+  const homes = Object.keys(state.homeDays);
+  const minDays = Math.min(...Object.values(state.homeDays));
+  const minHome = homes.find((h) => state.homeDays[h] === minDays);
+  const files = transcriptFiles(db, homes);
+  /** A transcript's holding files as lib's ExportFile; a file under no rostered home reads against the shortest. */
+  const filesOf = (pk) => (files.get(pk) ?? []).map((f) => ({ home: f.home ?? minHome, mtimeMs: f.mtimeMs, present: f.present }));
+  // Every transcript, a file-less one included (no clock: due at once), through the default rule.
+  const transcripts = db.prepare('SELECT transcript_pk FROM transcripts').all()
+    .map((r) => ({ key: r.transcript_pk, files: filesOf(r.transcript_pk) }));
+  const dueKeys = JSON.stringify(dueTranscriptKeys({ nowMs, homeRetentionDays: state.homeDays, transcripts }));
+  const candidates = db.prepare(EXPORT_CANDIDATES_SQL);
+  const referrers = db.prepare(EXPORT_REFERRERS_SQL);
+  for (;;) {
+    if (!budgetLeft(budget)) {
+      stepCursorSet(db, 'export-census', state);
+      return false;
+    }
+    const ids = candidates.all(state.last, dueKeys, dueKeys, dueKeys, dueKeys, EXPORT_CENSUS_CHUNK);
+    if (ids.length === 0) break;
+    const lo = ids[0].blob_id;
+    const hi = ids[ids.length - 1].blob_id;
+    const wanted = new Set(ids.map((r) => r.blob_id));
+    const byBlob = new Map();
+    for (const r of referrers.iterate(lo, hi, lo, hi, lo, hi, lo, hi)) {
+      if (!wanted.has(r.blob_id)) continue;
+      const list = byBlob.get(r.blob_id) ?? [];
+      list.push({ tsMs: r.ts_ms, files: filesOf(r.transcript_pk) });
+      byBlob.set(r.blob_id, list);
+    }
+    const blobs = ids.map(({ blob_id: id }) => ({ key: String(id), referrers: byBlob.get(id) ?? [] }));
+    const plan = planExport({ nowMs, homeRetentionDays: state.homeDays, blobs });
+    state.due += plan.due.length;
+    state.overdue += plan.overdue.length;
+    state.last = ids[ids.length - 1].blob_id;
+    stepCursorSet(db, 'export-census', state);
+  }
+  // W1-k: the oldest unexported row, and the two dates lib's exportDates decides: the first due date over the
+  // holders, by the default rule, and the file clock's first deletion date over every measured file.
+  const oldest = db.prepare('SELECT min(ts_ms) AS m FROM entries WHERE exported_ms IS NULL').get().m;
+  const holders = db.prepare(EXPORT_HOLDERS_SQL).all().map((r) => ({ tsMs: r.m, files: filesOf(r.pk) }));
+  const dates = exportDates({ homeRetentionDays: state.homeDays, holders, files: [...files.keys()].flatMap(filesOf) });
+  setMeta(db, 'export_due', String(state.due));
+  setMeta(db, 'export_overdue', String(state.overdue));
+  setMeta(db, 'export_census_ms', String(nowMs));
+  setMeta(db, 'oldest_row_ms', oldest === null ? '' : String(oldest));
+  setMeta(db, 'first_due_ms', dates.firstDueMs === null ? '' : String(dates.firstDueMs));
+  setMeta(db, 'first_deletion_ms', dates.firstDeletionMs === null ? '' : String(dates.firstDeletionMs));
+  stepCursorDone(db, 'export-census', null, nowMs);
+  return true;
+}
+```
+
+(e) In sweep.mjs's import from `'./lib.mjs'`, add `dueTranscriptKeys` beside `exportDates`. Then run `grep -c 'exportHorizonDays' ccd/history/sweep.mjs`: when it prints `1` (the import alone), remove `exportHorizonDays` from that import; when it prints more, another line reads it, so keep it. Keep `const DAY_MS`: another census line and B4 read it.
+
+Check:
+
+```bash
+grep -cE '^(const|function) (EXPORT_CANDIDATES_SQL|DAY_MS|transcriptFiles)\b' ccd/history/sweep.mjs   # 3 (B4 Task 5 checks this count)
+grep -c "^const EXPORT_HOLDERS_SQL = " ccd/history/sweep.mjs   # 1
+grep -c "    state.overdue += plan.overdue.length;" ccd/history/sweep.mjs   # 1 (B4 Task 9's anchor)
+grep -c "  setMeta(db, 'export_overdue', String(state.overdue));" ccd/history/sweep.mjs   # 1 (B4 Task 9's anchor)
+node --check ccd/history/sweep.mjs && echo SYNTAX-OK
+```
+
+Then re-run B1 Task 28's `node -e` placement check (R1): the entry guard is still sweep.mjs's last statement.
+
+- [ ] **Step 6: Confirm nothing else computes the due rule.** From the repository root:
+
+```bash
+grep -nE 'due|horizon|cleanupPeriodDays|export' deploy/measure-history.py
+grep -rnE 'planExport|exportDates|EXPORT_REDUCERS|dueTranscriptKeys' ccd/ deploy/ --include='*.mjs' --include='*.py' --include='*.sh' | grep -v '^ccd/history/lib.mjs:'
+```
+
+Expected: the first prints nothing (measure-history.py reads no due date, so it needs no edit); the second lists only `ccd/history/sweep.mjs` lines (its import and the census's calls).
+
+- [ ] **Step 7: Run them and see them pass, and the typecheck.** In the foreground, each with a timeout of at least 600000 ms:
+
+```bash
+(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'O38|O58|W1-j')
+(cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit)
+```
+
+Expected: every case green; `tsc` prints nothing.
+
+- [ ] **Step 8: Mutations.** With the runner Task 1 Step 1 writes (write it again from there, byte for byte, if it is gone). From the repository root:
+
+```bash
+cat > .superpowers/sdd/history-w1-b2/scratch/mutants-task35.json <<'EOF'
+[
+  { "name": "O58 CONTROL: the default stays the node-shortest reducer", "file": "ccd/history/lib.mjs",
+    "test": "test/history-lib.test.ts", "filter": "O58",
+    "edits": [{ "anchor": "export function planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.perCopy }) {",
+                "replacement": "export function planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.shortestHome }) {" }] },
+  { "name": "O58 CONTROL: the per-copy rule ages rows by the row clock", "file": "ccd/history/lib.mjs",
+    "test": "test/history-lib.test.ts", "filter": "O58",
+    "edits": [{ "anchor": "    at = Math.max(at, fileDueMs(f, homeRetentionDays));",
+                "replacement": "    at = Math.max(at, fileDueMs({ ...f, mtimeMs: c.tsMs ?? f.mtimeMs }, homeRetentionDays));" }] },
+  { "name": "9.15: a file gone from disk still holds its row back", "file": "ccd/history/lib.mjs",
+    "test": "test/history-lib.test.ts", "filter": "O58",
+    "edits": [{ "anchor": "    if (!f.present) continue;   // a file gone from disk has passed its date\n", "replacement": "" }] },
+  { "name": "9.15: each file read against the shortest home, not its own", "file": "ccd/history/lib.mjs",
+    "test": "test/history-lib.test.ts", "filter": "O58",
+    "edits": [{ "anchor": "  return f.mtimeMs + exportHorizonDays(homeRetentionDays[f.home] ?? CLAUDE_CODE_DEFAULT_RETENTION_DAYS) * EXPORT_DAY_MS;",
+                "replacement": "  return f.mtimeMs + exportHorizonDays(shortestRetention(homeRetentionDays)) * EXPORT_DAY_MS;" }] },
+  { "name": "O38: the census's prefilter loses the transcripts whose files are gone", "file": "ccd/history/sweep.mjs",
+    "test": "test/history-op.test.ts", "filter": "O38",
+    "edits": [{ "anchor": "  const dueKeys = JSON.stringify(dueTranscriptKeys({ nowMs, homeRetentionDays: state.homeDays, transcripts }));",
+                "replacement": "  const dueKeys = JSON.stringify(dueTranscriptKeys({ nowMs, homeRetentionDays: state.homeDays, transcripts: transcripts.filter((t) => t.files.some((f) => f.present)) }));" }] },
+  { "name": "W1-k: a holder nothing on disk holds back dated as the epoch", "file": "ccd/history/lib.mjs",
+    "test": "test/history-lib.test.ts", "filter": "nothing on disk holds back",
+    "edits": [{ "anchor": "  if (h.files.length > 0) return Math.max(...h.files.map((f) => f.mtimeMs));\n  return h.tsMs;\n",
+                "replacement": "  return 0;\n" }] },
+  { "name": "W1-k: the first due date by B1's row clock", "file": "ccd/history/lib.mjs",
+    "test": "test/history-op.test.ts", "filter": "W1-k",
+    "edits": [{ "anchor": "export function exportDates({ homeRetentionDays, holders, files, reducer = EXPORT_REDUCERS.perCopy }) {",
+                "replacement": "export function exportDates({ homeRetentionDays, holders, files, reducer = EXPORT_REDUCERS.shortestHome }) {" }] },
+  { "name": "9.6: retention-lowered claims a node-wide horizon again", "file": "ccd/history/lib.mjs",
+    "test": "test/history-lib.test.ts", "filter": "retention-lowered is a reminder",
+    "edits": [{ "anchor": "; rows held only in its files fall due ${exportHorizonDays(h.retentionLowered.days)} days after their file's last write (a reminder: each row is measured against its own files' homes)`",
+                "replacement": "; the export horizon follows the shortest`" }] }
+]
+EOF
+(cd server && node ../.superpowers/sdd/history-w1-b2/scratch/mutate.mjs ../.superpowers/sdd/history-w1-b2/scratch/mutants-task35.json)
+```
+
+Run it in the foreground with a timeout of at least 600000 ms. Expected: every row prints `red (…)` and then `green`, the last line is `every guard measured red, then green`, and the exit code is 0. The reds:
+- the node-shortest default: the add-B case and the A-and-B case answer due (a horizon of 0 for every home);
+- the row clock: the long-lived-file case and the add-B case answer due (the row is 200 days old);
+- a gone file holding its row back: `row(5, [gone])` answers not due;
+- the shortest home for every file: the A-and-B case answers due;
+- the census's prefilter: O38's overdue case reads `'0'` where it expects `'5'`;
+- the epoch for a gone-only holder: the `exportDates` case reads `0` where it expects the recorded mtime, 3 days back;
+- the row clock for W1-k: `first_due_ms` lands 10 days back instead of 150 days ahead;
+- the old `retention-lowered` detail: the reminder case reds on `horizon follows the shortest`.
+
+- [ ] **Step 9: The neighbouring suites.** In the foreground, each with a timeout of at least 600000 ms:
+
+```bash
+(cd server && ./node_modules/.bin/vitest run test/history-op.test.ts test/history-sweep.test.ts test/history-cli.test.ts test/measure-history.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts -t 'retention-lowered|export-due|export-overdue|O41')
+```
+
+Expected: all green. Doctor's `retention-lowered` row still names the home, `30` and `180`; `status --json`'s `export` block keeps its keys.
+
+- [ ] **Step 10: Commit.** Only after Step 9 is green, in a separate call:
+
+```bash
+git diff --stat
+git add ccd/history/lib.mjs ccd/history/lib.d.mts ccd/history/sweep.mjs server/test/history-lib.test.ts server/test/history-op.test.ts
+git commit -m "feat(history): the per-copy due rule is the default for the census and doctor (W1-B2, ruled Q15)
+
+EXPORT_REDUCERS.perCopy: a row is due when each of its holding files has passed its
+mtime plus its own home's retention, less 30 days; a gone file has passed. A reducer
+answers a due time; planExport's signature is B1's. The census prefilters by the
+transcripts that rule makes due and dates W1-k by it; retention-lowered is a reminder.
+Pins O58, and O38's census cases re-run under the per-copy default."
+```
+
+### Task 36: Wrap-up: the search-gate pin C17, B2's vocabularies bound by O14, the whole-PR checks, and the PR body with the coordinator's and operator's steps
 
 **Files:**
 - Modify: `server/test/session-hook.test.ts`. Append one describe at the very END of the file, after B1's end-appended spool cases. It is a citation-corpus file, so no import line is added. The module-scope helpers `run`, `pre`, `gatedTree`, `oneLine` and `readState` are already in scope.
@@ -28906,7 +30509,7 @@ sed -i "s/^GRAPH_SEARCH_RE='\^\[\[:space:\]\]\*/GRAPH_SEARCH_RE='(^|[[:space:]])
 grep -cF "GRAPH_SEARCH_RE='(^|[[:space:]])" ccd/session-hook.sh   # expect 1: the mutant is in place
 (cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'recall CLI is not search-gated')
 cp "$SCRATCH/session-hook.sh.orig" ccd/session-hook.sh
-git diff --stat -- ccd/session-hook.sh   # expect nothing: B2 never edits the hook
+git diff --stat -- ccd/session-hook.sh   # expect nothing: the restore leaves the hook as Task 34 committed it
 ```
 
 Expected:
@@ -29058,7 +30661,7 @@ Expected: green. The suite compares this branch's deviation entries with `origin
 ```markdown
 ## ccrc history W1-B2 "recall"
 
-Spec: `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` (rev 3.3), §10.5's B2 bullet.
+Spec: `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` (rev 3.4), §10.5's B2 bullet.
 Plan: the B2 plan this wave's brief names.
 
 The recall half of W1 Part B, on top of B1 ("capture"):
@@ -29069,9 +30672,16 @@ The recall half of W1 Part B, on top of B1 ("capture"):
   session's family by default (`--project`, `--workspace`), with the §8.3 envelope, field-first redaction, the
   20,000-character cap with true counts, version-aware selects and the fenced `ev:"recall"` counter line;
 - the operator door and verbs `import`, `prune`, `reparse` and `doctor --repair|--backup|--migrate|--adopt|
-  --restore|--rebuild`, each through the sweep's shim and its gate, decided once and executed twice;
+  --restore|--rebuild`, each through the sweep's shim and its gate, decided once and executed twice; `prune
+  --apply` is gated on reachability only and truncates the WAL after each batch (operator ruling, DM49);
 - the recovery step and its journal replay (`planReplay`), registered by restore and rebuild, with a phase table
   that B4's segment replay slots into;
+- the fork spooling (ruled Q16): SessionStart(fork) writes a spool line (`fork` joins the hook's source whitelist
+  in place; no hook line moves), and a fork line confirms as a resume line does, at the drain, at a later tick,
+  through a held match and in replay; this reverses B1's `history-fork-not-spooled`;
+- the per-copy export due rule as the default (ruled Q15): `EXPORT_REDUCERS.perCopy`, read by the census's due
+  counts and W1-k dates and so by doctor's `export-due`, `export-overdue` and `retention-lowered` arms, the last
+  now a reminder; a reducer answers a due time, and `planExport`'s signature is B1's;
 - the `ccrc-history` skill (`ccd/history-skill/`, with its lossless-claw MIT sidecar), its installer and every
   hand-kept skill-name site;
 - README's history section and CLAUDE.md's README-size figure.
@@ -29080,7 +30690,8 @@ It works without the card line (B3). B3 and B4 follow in either order.
 
 ### Pins
 
-DM5, DM6, DM7, DM9, DM14, DM15, DM21, DM22, DM25, DM26, DM27, DM36, DM37, DM44; the CLI halves of DM2b,
+DM5, DM6, DM7, DM9, DM14, DM15, DM21, DM22, DM25, DM26, DM27, DM36, DM37, DM44, DM48, DM49; S11's and S14's
+fork-spooled form; O38's due cases re-run under the per-copy default, and O58; the CLI halves of DM2b,
 DM17, DM18b, DM28-DM32 and DM46; O12, O16's skill half, O35, O36's replay half, O44 (its segment case is B4's),
 O47, O48's replay-order half, O54's relay half, O56's `planReplay` half; PX1-PX9, PX25; C1-C3, C4's no-pane
 half, C5-C17, C23-C27, C29, C32-C35, C36's read-verb rows, C39-C41, C42's CLI half, C43-C47, C47b, C48-C63,
@@ -29110,9 +30721,32 @@ C64's CLI door and the direct door of B2's forms, C65-C68.
    that release on. The rebuild drill into a scratch HOME from a copy of one node's `journal/`, from a TTY
    outside any `cc-` pane, as §10.7 describes. Families, epochs and receipts must equal the live store's by
    O35's columns, or each difference must be named.
-5. **Operator ruling, before merge.** `prune --apply` is gated on the store's reachability only and is never
-   refused for low disk, against §9.3's "runs the same preflight" (departure `history-prune-not-floor-gated`,
-   provisional): a store below the floor is the one prune exists to shrink. Confirm it or reverse it.
+5. **The rollback edge, before any rollback of a node to a B1 release.** From this PR on, a node journals
+   `fork` epochs, spools `fork` lines and may hold a `fork` candidate in `epoch_candidates`. On a B1 release
+   whose `EPOCH_CAUSES` lacks `fork` (spec §6.1, "The rollback edge"; no migration is involved):
+   - a journaled fork verdict reads as malformed (skipped, counted `journal_line_malformed`, doctor WARN
+     `journal-record-skipped`), and moving forward again replays it;
+   - a spooled fork line still in `spool/` is rejected (`spool_line_rejected`), and that fork falls back to B1's
+     registry backfill;
+   - **a fork candidate still waiting stalls the pass.** Once `.uuid` names its sid within 7 days of the line's
+     journaling, B1's `confirmCandidates` builds a fork verdict its own `journalRecord` refuses, and every pass
+     exits 1 before backfill and ingest (doctor FAIL `tick-stale`). It ends when the node moves forward again
+     (B2's first tick confirms the candidate) or when the candidate's 7 days pass; capture is delayed, never
+     lost. The update watchdog rolls back with no operator, so this cannot be prevented by a runbook step.
+   If B1 was merged with `fork` in `EPOCH_CAUSES` alone (the coordinator's option: B1's spool set and hook stay
+   without it), a rollback has only the spool-line part.
+
+### Operator rulings (2026-10-07; spec §15.1 and §15.3, rev 3.4)
+
+- **Q15 yes**: the per-copy due rule is the default for the census and doctor (Task 35); B4's pass reads the
+  same default.
+- **Q16 yes**: SessionStart(fork) is spooled (Task 34), reversing B1's `history-fork-not-spooled`.
+- **Q17 as recommended**: B1's kept-line wording and close line; this PR changes no uninstall wording beyond the
+  skill tree and installer.
+- **Q18 yes, a W2 matter**: the W2 open record carries the smallest passing point uptake; no W1 task.
+- **Q19 no, not in W1**: `import --session <id> --file <path> --apply` stays the one operator mapping.
+- **Prune at low disk, confirmed**: `history-prune-not-floor-gated` is ruled, no longer provisional (Task 20,
+  DM49); spec §9.3 is amended.
 
 ### Coordinator rulings (RB1-RB17)
 
@@ -29122,21 +30756,33 @@ RB1-RB11 are recorded in the programme ledger. RB12-RB17, ruled on this plan, la
 - **RB13.** `doctor --migrate` is refused `recovering` only while the stored `user_version` equals the code's, so a restored older backup never deadlocks on its own recovery step (Tasks 6, 19).
 - **RB14.** `doctor --adopt` is exempt from `recovering` on an unbound store (`store.id` absent) and still refused on a bound one (Tasks 6, 19, 26).
 - **RB15.** Spec §12 rev 3.3: `history-skill.test.ts` pins the skill sentences verbatim; its header names the skill's `LICENSE.lossless-claw` and V7 without the rationale phrase, and `server/test/` has no sidecar (Task 31).
-- **RB16.** `history-ops-refused-while-recovering` and `history-loader-values-in-tick-memory` are confirmed departures; `history-prune-not-floor-gated` stays provisional for the operator (step 5 above).
+- **RB16.** `history-ops-refused-while-recovering` and `history-loader-values-in-tick-memory` are confirmed departures; `history-prune-not-floor-gated` was left to the operator, who confirmed it on 2026-10-07 (above).
 - **RB17.** Adopt's newer-schema refusal is decided by lib's `decideBind` (L1) over the stored version; `adoptArm` (L4) only measures and relays it (Tasks 6, 26).
 
 A W3 note, not a ruling: `history-summary-size-counters-from-store` leaves §7.4 item 10's with/without-steering
 size counters to be read from stored columns when W3 compares the arms. W1 folds none, because every W1 leaf is the
 without arm.
 
+A B4 note, not a ruling: since this PR an `EXPORT_REDUCERS` member answers a candidate's due TIME (ms since the
+epoch, `-Infinity` when nothing holds it back), the default is `perCopy`, and `exportDates` takes `holders`. B4's
+`planSegment` reads due times through the same default reducer (its Task 2 checks this contract on the merged code).
+
+### Residuals, named
+
+- **The swap prefix** (Task 35; `history-export-holding-files-by-transcript`, which the Q15 ruling keeps as the
+  per-row file set). A row's holding files are its transcript's, so a swap's frozen source copy, which holds none
+  of the rows written after the swap, still holds them back. Example: a swap 45 days ago froze a 180-day home's
+  copy, last written 46 days ago; the 30-day target copy, last written 35 days ago, is gone; its rows are 38 days
+  old. Their text is store-only, yet they fall due only 104 days from now, so neither `export-due` nor
+  `export-overdue` counts them meanwhile; B1's node-shortest reducer counted them due. The exposure is bounded by
+  the homes' retention difference (at most 150 days) and is a store-loss window only. Task 35's swap-prefix case
+  pins today's answer. Closing it needs a per-row file set from `memberships`, one scan per census as B4 already
+  makes per segment; the ruling and RD1's one clock leave it as is.
+- **The rollback stall** (Task 34): step 5 above.
+
 ### Choices the tasks made where the spec and the rulings are silent
 
 (every task's "Choices this task makes" bullets, one line each, its task number first)
-
-### Open questions (spec §15.3): the spec's stated defaults were followed
-
-Q15: the ruled reducer. Q16: SessionStart(fork) is not spooled. Q17: the ruled kept-line wording. Q18: W2's.
-Q19: no hand-mapping mode; `import --session <id> --file <path> --apply` is the one operator mapping.
 
 ### Tests run (foreground, on the worker's box)
 
@@ -29183,7 +30829,7 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-variant-cause⟧ (Tasks 3, 16): `entry_variants.cause` records ccd's sanitiser as the cause of a variant (§6.1, §6.2; Q8). B1-defined.
 - ⟦D:history-apply-via-shim⟧ (Tasks 3, 19, 20, 26, 30): Every writing verb runs through the shim, the only lock taker, spawned and relayed since rev 3.2 (§8.4). B1-defined.
 - ⟦D:history-skill-literal-path⟧ (Tasks 3, 31, 33): The skill and card use the literal `$HOME/.local/bin/ccrc`; no installer substitution, no `ccrc-history` binary (G2).
-- ⟦D:history-spool-no-summary-hash⟧ (Task 4): The summary is reached via `anchorUuid`, and spool lines carry no hash (G3). B1-defined.
+- ⟦D:history-spool-no-summary-hash⟧ (Tasks 4, 34): The summary is reached via `anchorUuid`, and spool lines carry no hash (G3). B1-defined.
 - ⟦D:history-native-gist-last-summary-open⟧ (Tasks 4, 8): The native gist is sliced from the last occurrence of each heading after the last `<summary>` open (§7.4; Q8).
 - ⟦D:history-summary-anchor-is-boundary⟧ (Tasks 4, 8): When `anchorUuid` is the boundary's own uuid (partial `from`), the summary is the next `isCompactSummary` row; native-gist headings follow `summarizeMetadata.direction` (§7.4; rev 3.2 review, CT5).
 - ⟦D:history-steer-receipt⟧ (Tasks 4, 8): The hook appends `ev:"steer"` after a print; blocks are parsed only with one (§7.2, §7.4).
@@ -29207,7 +30853,7 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-recovery-replay⟧ (Tasks 7, 25, 27, 28, 29): Restore and rebuild share one resumable derivation step, under the free-space floor, that replays redaction pairs first, then the journal (drain-time verdicts at their lines' positions, never a `$REG` read; unknown records skipped and counted), then the export (every segment's blobs before any rows), while drain and ingest wait; replay writes no journal records (§9.14; rev 3.1, ruled Q6).
 - ⟦D:history-journal-drained-record⟧ (Tasks 7, 25, 28): Every drain journals a `drained` record; replay applies a file's `spool` records only when it exists, and a held file is decided live from its sidecar (§9.2, §9.14; rev 3.2 review, DI2). B1-defined.
 - ⟦D:history-redaction-journaled⟧ (Tasks 7, 25, 28, 29): Each learned (len, sha256) redaction pair is journaled as a `redact` record and replayed before any blob in a recovery; a restore that gains a pair re-runs the FTS derivation (§9.14; rev 3.1 review, BK6). B1-defined.
-- ⟦D:history-epoch-confirmation⟧ (Tasks 7, 25): Startup/resume epochs chain only once their own `reg` or the registry names the sid (§6.1). B1-defined.
+- ⟦D:history-epoch-confirmation⟧ (Tasks 7, 25, 34): Startup/resume epochs, and from W1-B2 fork epochs (ruled Q16), chain only once their own `reg` or the registry names the sid (§6.1). B1-defined.
 - ⟦D:history-doctor-state-words⟧ (Tasks 7, 25): Doctor answers `off`, `recovering`, `op-running`, `catching-up` and `lag-unmeasured` as WARNs before the freshness FAILs, and FAILs `recovery-stalled`; an `op` marker names a running `--op` pass (§9.6; rev 3.2 review, FE3). B1-defined.
 - ⟦D:history-b4-after-b2⟧ (Tasks 7, 25): W1-B4 merges after B2, and is live before the earliest measured due date, at the latest 2026-12-19 (§9.15, §10.5; rev 3.2 review, FE15).
 - ⟦D:history-replay-skips-post-bind-ticks⟧ (Tasks 7, 25): NEW departure (no spec §16 row). A recovery pass journals its own `tick` record after the bind, so replay inserts a journal tick record only when it is newer than the store's last tick before the bind and older than the step's version; the upper bound is lib `replayStep`'s `ReplayState.ticksBefore` (the step's bind ms), so the executor decides no tick bound.
@@ -29252,7 +30898,7 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-bare-doctor-is-status-health⟧ (Task 19): NEW departure (no spec §16 row). §8.4 lists a bare `doctor` form without saying what it does; it prints `status`'s health lines, read-only.
 - ⟦D:history-prune-referrers⟧ (Task 20): Prune ages every referrer and never prunes summaries or kept lists (§6.6).
 - ⟦D:history-free-space-floor⟧ (Tasks 20, 25): The writer pauses below a free-space floor (§9.3). B1-defined.
-- ⟦D:history-prune-not-floor-gated⟧ (Task 20): NEW departure (no spec §16 row). §9.3 says `prune --apply` runs the same preflight, but a store below the floor is exactly the one prune exists to shrink; the pass probes reachability only and never refuses for room. Provisional pending the operator (coordinator ruling RB3); prune bounds its own WAL with a `wal_checkpoint(TRUNCATE)` after every batch.
+- ⟦D:history-prune-not-floor-gated⟧ (Task 20): `prune --apply` is gated on reachability only: its `--op` pass's bounded `statfs` probe answers exit 5 `store-unreachable` when it does not settle, low disk never refuses it, and it truncates the WAL after each batch, against §9.3's former "runs the same preflight" (§6.6, §9.3; DM49). RULED by the operator on 2026-10-07 (spec rev 3.4), no longer provisional; this plan first raised it, under coordinator ruling RB3, as a departure of its own, and rev 3.4 gave it its spec §16 row.
 - ⟦D:history-prune-needs-a-referrer⟧ (Task 20): NEW departure (no spec §16 row). "Every referrer is older than the cutoff" is vacuously true for a blob nothing names; a blob with no `entries`, `entry_variants` or `sidecars` referrer is never pruned.
 - ⟦D:history-backup-link-not-rename⟧ (Task 22): NEW departure (no spec §16 row). The backup temp is published with `link()` and then unlinked, not `rename()`, so a second backup in the same second, or an operator file of that name, is refused `backup-refused` rather than clobbered; a partial copy still never carries a backup's name.
 - ⟦D:history-redaction-reindex-merge⟧ (Tasks 23, 29): Each newly learned pair commits with its `redact` outbox row before any FTS insert, re-indexes its blobs found by quoted phrase, and bounded FTS5 `merge` steps purge the index bytes (§6.2, §9.2; rev 3.2 review, DI8, SE4). B1-defined.
@@ -29274,6 +30920,15 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-license-sidecars-generalised⟧ (Task 31): NEW departure (no spec §16 row). B1's license pins hard-code `ccd/history`'s sidecar; they now cover every `LICENSE.lossless-claw` under `ccd/`, as §12 asks once the skill directory carries one; `server/test/` holds none, since §12's rev 3.3 exception (RB15) makes `history-skill.test.ts`'s verbatim pins no copy, and a case pins that.
 - ⟦D:history-skill-joins-skill-scans⟧ (Task 31): NEW departure (no spec §16 row). §8.5 names neither standing skill-corpus scan (no `ws-expire`, no raw HTTP); both list the skill directories by hand, so the fourth directory is added to both.
 - ⟦D:history-readme-tables-name-the-sweep⟧ (Task 33): NEW departure (no spec §16 row). §10.5 assigns README's edits by PR and names neither table; B1 ships the sweep timer and doctor's `history` check without rows, so B2 adds the timer-table row, the doctor-table row and the server-role SKIP word.
-- ⟦D:history-w1b-three-prs⟧ (Task 34): W1 part B ships as capture, recall and card-line PRs, in that order, and since rev 3.1 the sole-copy export as a fourth, B4, after B2 since rev 3.2, in either order with B3 (§10.5; ruled Q6). B1-defined.
+- ⟦D:history-fork-spooled⟧ (Task 34): SessionStart(fork) writes a spool line from W1-B2: `fork` joins the hook's source whitelist in place (no hook line moves, no S6-R11 census change), `SPOOL_SOURCES` and `EPOCH_CAUSES`; the line carries `src` and `reg` and confirms exactly as resume does; a fork whose sid is already an epoch confirms that epoch, a fresh sid chains a `fork` epoch, and copied rows follow the per-copy span rule; no migration, and a build rolled back to B1 skips a `fork` journal record as malformed and, while a fork candidate waits, stalls the pass (§5.1, §6.1, §9.14, §14 risk 24; DM48; ruled Q16, rev 3.4; reverses `history-fork-not-spooled`).
+- ⟦D:history-fork-not-spooled⟧ (Task 34): SessionStart(fork) writes no spool line, within Q2's ruled set; a fork's uuid enters by registry backfill; every SessionStart line carries `src` (§5.1; rev 3.2 review, CT7; Q16). B1-defined; reversed by Task 34 (ruled Q16), except that every SessionStart line still carries `src`.
+- ⟦D:history-spool-start-not-compact⟧ (Task 34): Spool on SessionStart(startup|resume|clear), not compact (G6; ruled Q2); from W1-B2 on SessionStart(fork) too (ruled Q16, `history-fork-spooled`). B1-defined.
+- ⟦D:history-spool-line-carries-registry-uuid⟧ (Task 34): SessionStart(startup|resume) lines, and from W1-B2 SessionStart(fork) lines (ruled Q16), carry `reg`, the hook's builtin read of `.uuid`, and confirm when it equals their sid (§5.1, §6.1; rev 3.2 review, CT6). B1-defined.
+- ⟦D:history-epoch-lines-survive-off⟧ (Task 34): `history-off` silences Stop/PostCompact lines, the card, the scope marker and the steer, but not epoch lines (G15). B1-defined; Task 34 names it only in the hook comment it rewords.
+- ⟦D:history-export-due-per-copy⟧ (Task 35): The default due rule reads each row's own copies: a row is due when every one of its holding files (B1's per-row set, its transcript's files, `history-export-holding-files-by-transcript`) has passed its mtime plus its own home's retention minus 30 days, and a blob when its rows are; one reducer, `EXPORT_REDUCERS.perCopy`, made the default in W1-B2 for the census, doctor's `export-due`, `export-overdue` and `retention-lowered` arms and B4's pass, with no signature change; the node-shortest reducer is history and `retention-lowered` a reminder (§9.6, §9.15; O58; ruled Q15, rev 3.4).
+- ⟦D:history-export-row-age-early⟧ (Task 35): The export ages a row by its `ts_ms`, or by its newest holding file's mtime when that is NULL, never "never old" as prune does (§9.15; rev 3.1). B1-defined; since Task 35 the row clock is the node-shortest reducer's alone and no longer the default (ruled Q15).
+- ⟦D:history-export-holding-files-by-transcript⟧ (Task 35): The export census takes a referrer's holding files to be its transcript's `ingest_files` rows and their `file_paths`, not the row's own copies through `memberships` (§9.15; Q15), because v1 has no index led by `memberships.entry_id`. B1-defined; the Q15 ruling keeps it as the per-row file set.
+- ⟦D:history-export-due-escalates⟧ (Task 35): Beyond the ruled `export-due` WARN, doctor FAILs `export-overdue` on measured source loss (every holding file gone, or past its mtime plus its home's retention) (§9.6, §9.15). B1-defined; unchanged by the per-copy default.
+- ⟦D:history-w1b-three-prs⟧ (Task 36): W1 part B ships as capture, recall and card-line PRs, in that order, and since rev 3.1 the sole-copy export as a fourth, B4, after B2 since rev 3.2, in either order with B3 (§10.5; ruled Q6). B1-defined.
 
-109 slugs in all: 35 NEW, 53 B1-defined, 21 spec §16 slugs this plan defines first.
+118 slugs in all: 34 NEW, 60 B1-defined, 24 spec §16 slugs this plan defines first (`history-prune-not-floor-gated` moved from NEW to the last group when rev 3.4 gave it a §16 row).

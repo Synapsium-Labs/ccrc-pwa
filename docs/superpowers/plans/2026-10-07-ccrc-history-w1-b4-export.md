@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
 **Goal:** Ship W1-B4 "sole-copy export" of the ccrc history spec (§9.15, ruled Q6 e) as ONE PR on `main` after B1 ("capture") and B2 ("recall") merge. Before Claude Code deletes a transcript, the sweep copies its text out of the store into immutable files beside it:
-- every row whose own age has passed the horizon (the shortest measured retention minus 30 days), plus the bytes of every blob it references that is not yet exported, goes into an immutable SQLite segment `export/<store_id>/<seq>.<writer>.db` on the home filesystem;
+- every row that is due by the per-copy rule (ruled Q15, rev 3.4: every file holding a copy of it has passed its mtime plus its own home's retention, minus 30 days; a file gone from disk has passed), plus the bytes of every blob it references that is not yet exported, goes into an immutable SQLite segment `export/<store_id>/<seq>.<writer>.db` on the home filesystem;
 - one segment per pass, at most hourly, behind a `planCopy` preflight on that filesystem;
 - each segment is published by `link()`, never by rename, and its rows are marked after the link;
 - B2's recovery step gains two segment-replay phases (blobs first, then rows), so a store rebuilt after its transcripts and `history.db` are both gone can `expand`, `describe` and scope the exported text again;
@@ -17,7 +17,7 @@ Pins: O39, O40, O43 and O44's segment case (§10.5). B1 ships O41 and leaves its
 - the export constants (`EXPORT_DIR`, `EXPORT_SEGMENT_MAX_BYTES`, `EXPORT_PASS_INTERVAL_MS`, `EXPORT_SEGMENT_FORMAT`) and the segment-name grammar (`segmentName`, `segmentTempName`, `parseSegmentName`, `orderSegmentNames`);
 - `nextSegmentSeq`, the hourly cadence (`decideExportPass`) and the room verdict (`planExportRoom`, which is B1's `planCopy` with `floorThreshold` on the export filesystem and `EXPORT_SEGMENT_MAX_BYTES` as the size);
 - the marks' two decisions (coordinator ruling RD2): the mark-failure backoff (`exportMarkFailsOf`, `decideMarkOutcome`: whether a pass backs off, and the next wait) and the check after a bind (`decideMarkCheck`: which bind facts a check covers and whether this step runs one; `missingSegmentNames`);
-- the row-level due rule and what a segment carries (`planSegment`), reusing B1's private referrer clock and `EXPORT_REDUCERS`, so Q15 stays a reducer swap; the oldest due-since added to `planExport`'s answer;
+- the row-level due rule and what a segment carries (`planSegment`), deciding each row through the same reducer, with the same default, as the census's `planExport`: B2's `EXPORT_REDUCERS.perCopy` (ruled Q15, rev 3.4; ⟦D:history-export-due-per-copy⟧), so the pass and the census keep one clock (RD1); the oldest due-since added to `planExport`'s answer;
 - the dead-file key (`exportedSourceKey`); the recovery phases and cursor arm (`RECOVER_PHASES` gains `export-blobs` and `export-rows` between `apply` and `reindex`); the segment replay verdict (`decideSegmentReplay`: replay, newer or foreign);
 - the `export-due` rule for a build with the writer (Task 9), with no new health word.
 
@@ -25,7 +25,7 @@ Pins: O39, O40, O43 and O44's segment case (§10.5). B1 ships O41 and leaves its
 
 *L4 `ccd/history/sweep.mjs`* delivers without deciding:
 - `exportStep` runs in the tick directly above B1's `// <<< history tick steps` marker, after `recordTick` and `markScan` and outside the ingest gate, so it never collides with B3's card writer after `deriveNodes`. It runs the bind mark check, then the cadence (backed off after a pass that published and could not mark), the stale-temp removal, the preflight and `exportPass`. Whether the check runs, what it covers, which segments are missing, whether a pass backs off and how long the next wait is are lib's answers: the sweep measures meta, the listing and the marked names, calls lib and acts (RD2).
-- `exportPass` selects candidates through the `entries_unexported` index and B1's `transcriptFiles` clock (the census's, transcript-level: ⟦D:history-export-holding-files-by-transcript⟧), writes through store.mjs, publishes, then marks in one NORMAL transaction after the link. A busy error between the link and the marks records the published seq and the attempt clock before it is rethrown (RD3).
+- `exportPass` selects candidates through the `entries_unexported` index and B1's `transcriptFiles` clock (the census's, transcript-level: ⟦D:history-export-holding-files-by-transcript⟧), plus, whatever their time, the rows of every transcript the per-copy rule makes due now (B2's `dueTranscriptKeys`, the census's own prefilter, so the pass offers every row the census counts due), writes through store.mjs, publishes, then marks in one NORMAL transaction after the link. A busy error between the link and the marks records the published seq and the attempt clock before it is rethrown (RD3).
 - B1's `writeChunk` variant branch clears a late-variant entry's marks, and B1's `ingestSidecar` clears the marks of an exported entry a new sidecar row links to; B1's `exportCensus` also records the oldest due-since.
 - `recoverExportBlobsChunk` and `recoverExportRowsChunk` sit in B2's `RECOVER_EXECUTORS` literal between `apply` and `reindex`, under B2's executor contract: one bounded chunk, the cursor committed in the same transaction, `pairsAdded` carried.
 
@@ -40,11 +40,11 @@ B4 adds no schema migration (v1 already has `exported_ms` and `exported_seg`), n
 - vitest in `server/`, with `node-pty` (already a `server` dependency) for the `doctor --adopt` and `doctor --rebuild` doors;
 - GitHub Actions: the `node-floor` leg's test list gains `history-export.test.ts`.
 
-**Spec:** `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md`, rev 3.3. §10.5 lists B4's contents and pins; §10.6 the sequencing; §10.7 the acceptance (W1-g, W1-k, W1-l); §9.15 the export; §9.14 the journal and recovery; §9.6 the health rules; §16 the slugs.
+**Spec:** `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md`, rev 3.4 (rev 3.3 plus the operator's rulings of 2026-10-07 on Q15–Q19 and on prune at low disk; §15.1 lists where each landed). §10.5 lists B4's contents and pins; §10.6 the sequencing; §10.7 the acceptance (W1-g, W1-k, W1-l); §9.15 the export; §9.14 the journal and recovery; §9.6 the health rules; §16 the slugs.
 
 **Builds on:**
 - `docs/superpowers/plans/2026-10-05-ccrc-history-w1-capture.md`: B1 is its Tasks 3–36. Every B1 name this plan consumes (`lib`, `store`, `sweep` and `cli` exports, test helpers, fixtures, preloads) is the name that plan produces.
-- `docs/superpowers/plans/2026-10-06-ccrc-history-w1-b2-recall.md`: B2's 34 tasks, its recovery step (Tasks 7, 25–29), its binding verbs, its test helpers, and its coordinator rulings RB1–RB17.
+- `docs/superpowers/plans/2026-10-06-ccrc-history-w1-b2-recall.md`: B2's tasks, its recovery step (Tasks 7, 25–29), its binding verbs, its test helpers, its coordinator rulings RB1–RB17, and its per-copy due-rule task (added after the operator's 2026-10-07 rulings; ⟦D:history-export-due-per-copy⟧), which adds `EXPORT_REDUCERS.perCopy` and makes it the default of B1's `planExport`, and so of the census and doctor's export arms, with no signature change. B4 consumes that task's reducer contract as Task 2's Interfaces state it, and Task 2 Step 2 checks the merged base holds it.
 
 **Base:** `main` after B1's and B2's PRs merge. B3 may or may not be on the base.
 - Anchors into files B1 or B2 created (`ccd/history/{lib,store,sweep,cli}.mjs` and their `.d.mts`, `server/test/history*.test.ts`, `historyHelpers.ts`, `server/test/fixtures/history/*`) are BY CONTENT: a function, const or marker name, a quoted line, or "above the entry guard". Never by line number.
@@ -59,14 +59,15 @@ B4 adds no schema migration (v1 already has `exported_ms` and `exported_seg`), n
 - **O40**: T1 `planExportRoom` is `planCopy` with the 256 MiB bound as the size (size-0 CONTROL); T6 the spawned home-filesystem statfs seam (no segment, `export_paused_low_disk` +1, ingest proceeds in the same tick, the 5 s deadline); T9 doctor's `export-paused-low-disk` WARN.
 - **O43**: T11, on T10's replay (expand, describe and `--workspace` after the rebuild; the reused inode).
 - **O44's segment case**: T3 the pure `newer` verdict; T10 the step completes and doctor FAILs `export-segment-newer` naming the segment.
-- Also carried, though not on §10.5's B4 list: O41's B4 cases (T9); O17's `history-export` row and `HISTORY_LANDED` `'B4'` (T6); the O14 and O13 re-checks (T3, T12); O8-shape modes for export files and directories (T4).
+- Also carried, though not on §10.5's B4 list: O58's B4 half ("and, in B4, `planSegment`, RD1's one clock"): T2 the pure half (`planSegment` with no reducer argument answers by `EXPORT_REDUCERS.perCopy`, equal to `planExport`'s due set, with O58's two CONTROLs, the node-shortest default and the row clock), T5 the pass (a 30-day home holding only a swap copy brings nothing forward; a transcript with no file left on disk goes whatever its rows' times); O41's B4 cases (T9); O17's `history-export` row and `HISTORY_LANDED` `'B4'` (T6); the O14 and O13 re-checks (T3, T12); O8-shape modes for export files and directories (T4).
 
-**Open operator questions (spec §15.3; Q15 settled for B4 by coordinator ruling RD1, the rest not answered at plan time).** Each task follows the spec's stated default:
-- **Q15** (per-copy export due rule): ruled (RD1): B4 keeps the RULED reducer, `EXPORT_REDUCERS.shortestHome`. `planSegment` takes the same `reducer` parameter as B1's `planExport` and reads the same private clock, so a later change still adds one reducer and changes no signature. Under it, a node with any 30-day home exports its whole store at one segment of about 256 MiB an hour; the PR body tells the operator to check that node's home-filesystem headroom first.
-- **Q16** (spool `fork`): no B4 effect. B4 writes no spool line and no journal record.
-- **Q17** (what `--purge` keeps): no B4 effect. The export lives under `~/.ccrc/history`, which the ruled kept line already names; B4 changes no uninstall wording.
-- **Q18** (W2 power estimate): a W2 matter. No B4 task.
-- **Q19** (hand-mapping of pre-install transcripts): no hand-mapping mode. B4 exports what the store holds and replays it; it maps nothing.
+**Operator rulings (spec §15.1 and §15.3, rev 3.4; ruled 2026-10-07, binding).** Every question this plan once followed a default for is ruled:
+- **Q15 YES: the per-copy due rule** (spec §15.3 Q15 "The alternative"; slug ⟦D:history-export-due-per-copy⟧, B2-defined). A row is due when, for every file holding a copy of it, that file's mtime plus its own home's retention, minus 30 days, has passed (a file gone from disk has passed; a row with no holding file on record is due at once); a blob is due when its rows are. It replaces the node-shortest reducer as the default everywhere the due rule is computed. B2 adds `EXPORT_REDUCERS.perCopy` and makes it `planExport`'s default, so the census's due counts and doctor's `export-due`, `export-overdue` and `retention-lowered` arms follow it before B4 exists; B4's `planSegment` takes the same `reducer` parameter with the same default (Task 2), and the pass passes none (Task 5), so the pass and the census keep one clock (RD1). The per-row file set stays B1's (⟦D:history-export-holding-files-by-transcript⟧: a row's holding files are its transcript's files). The cadence and the preflight are unchanged. Under the ruled rule a 30-day home that holds only swap copies of a 180-day home's transcripts brings nothing forward; only text whose every holding file sits in 30-day homes is due from its file's last write. Doctor's `retention-lowered` WARN stays, as a reminder rather than a gate.
+- **Q16 YES: SessionStart(fork) is spooled** (B2; slug `history-fork-spooled`, reversing B1's `history-fork-not-spooled`). No B4 task: B4 writes no spool line and no journal record. A `fork` epoch is an epoch to the export like any other: Task 5 writes every epoch row naming a transcript, its `cause` as stored, and Task 10's replay inserts or fills epochs without reading `cause` against `EPOCH_CAUSES` (`epochs.cause` is TEXT with no CHECK in schema v1). The rollback edge is B2's: a build rolled back to B1 reads a `fork` journal record as malformed and skips it; B1 has no segment replay, so no B4 path meets it.
+- **Q17 as recommended** (B1 and B2: the kept-line wording, the close line naming `--purge-history`, the decommission runbook's confirmation). No B4 effect: the export lives under `~/.ccrc/history`, which the kept line names; B4 changes no uninstall wording.
+- **Q18 YES, a W2 matter**: before W2's window opens, its open record carries the smallest passing point uptake computed from B1 and B3's data. No W1 task, and none here.
+- **Q19 NO, not in W1**: no hand-mapping mode. B4 exports what the store holds and replays it; it maps nothing.
+- **Prune at low disk: confirmed.** `history-prune-not-floor-gated` is ruled by the operator, no longer provisional; spec §9.3 is amended so `prune --apply` is gated on reachability only and truncates the WAL after each batch. B4 does not touch prune, and §6.6's "prune never touches the export" still holds.
 
 **Coordinator rulings (RD1–RD4)** (every choice this plan put to the coordinator, as ruled; each NEW slug has its line in "Deviations found"):
 - **RD1, accepted as the plan implements them** (each the default the tasks implement, now ruled):
@@ -78,11 +79,11 @@ B4 adds no schema migration (v1 already has `exported_ms` and `exported_seg`), n
   - replay gives a gone file's row the carried `eof_ms`, else the segment's cutoff (T10; ⟦D:history-export-dead-file-eof⟧); an unreadable segment stalls the step rather than being skipped (T10; ⟦D:history-export-segment-unreadable-stalls⟧); a replayed variant's first file is the dead-file row of the identity the segment names (T10; ⟦D:history-export-variant-first-file⟧);
   - epoch replay fills the NULL launch facts, `cwd`, `cwd_real` and `confirmed_ms` of the epoch the journal replayed, and skips a seq the journal gave another uuid, counted `export_epoch_conflict` (T10; within ⟦D:history-recovery-replay⟧);
   - `exportWriterLive` is a build fact (`true` in B4's `cli.mjs`), not a measurement (T9);
-  - the per-row holding-file set B1 left owed to B4 (⟦D:history-export-holding-files-by-transcript⟧, B1's NEW departure) is NOT delivered: a NULL-`ts_ms` row keeps aging by the newest file of its transcript, so the export and the census B1 merged keep one clock and doctor's arms stay consistent (T5, T9);
+  - the per-row holding-file set B1 left owed to B4 (⟦D:history-export-holding-files-by-transcript⟧, B1's NEW departure) is NOT delivered: a row's holding files stay its transcript's files, so the export and the census keep one clock and doctor's arms stay consistent (T5, T9). The operator's Q15 ruling (rev 3.4) keeps that set as the per-copy rule's per-row set;
   - the segment bound counts each taken row at its new blob bytes plus a flat estimate of its metadata, `EXPORT_ROW_META_BYTES` (1.5 KiB), which also bounds a segment's row count; the first due row of a pass still travels whatever its size (T2, T5; ⟦D:history-export-segment-bound-estimated⟧);
   - a pass that published its segment and then failed to mark it backs off, the wait doubling per such pass up to a day, so a store whose own volume refuses the marks does not publish a copy every hour (T1, T7; ⟦D:history-export-mark-failure-backs-off⟧);
   - a sidecar row first linked after its entry was exported clears that entry's marks, as a late variant does (T8; ⟦D:history-export-late-sidecar-clears-marks⟧);
-  - Q15 keeps the ruled reducer (above).
+  - ~~Q15 keeps the ruled reducer~~: **SUPERSEDED** by the operator's Q15 ruling (rev 3.4, 2026-10-07, above). The reducer is now B2's per-copy one, the default of both `planExport` and `planSegment`; what RD1 still holds is the one clock: the pass decides each row through the census's reducer and per-row file set, never a second rule (T2, T5, T9).
 - **RD2, rings.** The check after a bind's predicate (which bind facts a check covers, whether this step runs one, which marked segments are missing) and the mark-failure decision (whether a pass backs off, and the next wait) are decisions, so they are lib's (L1) pure functions with pure tests and mutation rows: `decideMarkCheck` and `missingSegmentNames`, `exportMarkFailsOf` and `decideMarkOutcome` (T1). `sweep.mjs` only measures meta, the directory listing and the marked names, calls them and acts (T7, T8).
 - **RD3, a busy error between the link and the marks.** The pass records the published segment's seq (`export_seq`) and the attempt clock in one small transaction before it rethrows, so the next tick does not publish the same rows again; a busy is the lock's, not the volume's, so lib leaves the backoff as it stands. If that record itself fails, the first error still ends the tick, the next pass publishes the rows again, and replay absorbs the copy (insert-or-ignore by sha256): a residual the PR body names. Pinned in-process through the test's own connection (T7: two cases and their CONTROLs).
 - **RD4, B2's rebuild defect.** B2's Task 28 `journalStoreDirs` (`journalEnds(…)?.head.store_id`) is fixed in B2's plan (it reads `?.headStore`). Task 11 Step 1 keeps its check of the merged base.
@@ -92,17 +93,17 @@ B4 adds no schema migration (v1 already has `exported_ms` and `exported_seg`), n
 - **Base and anchors.** B4 executes on `main` after B1 and B2 merge. `ccd/history/*` and the B1/B2 test files are anchored by content (function, const and marker names), never by line numbers. Files that existed before B1 are measured at `f7e51156f` and re-measured on B4's own base. Before editing a B2 function in place (`RECOVER_PHASES`, `parseRecoverCursor`, `RECOVER_EXECUTORS`, `recoveryStep`, B2's cursor tests), re-read B2's MERGED code: its plan text is not ground truth.
 - **R1 (entry guards; coordinator ruling).** `sweep.mjs` and `cli.mjs` end in the entry guard `if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {`. There is no top-level await, and every new block goes ABOVE that guard. `lib.mjs` and `store.mjs` have no guard; new code is appended at their end (except the four Task 1 constants, which must precede `MODE_CHECKED_FILE_ROOTS`). Each new export is declared exactly once in `lib.d.mts` or `store.d.mts`; `skipLibCheck` hides a duplicate, so count them.
 - **Rings by imports.** `lib.mjs` is L1, imports only `node:crypto`, and makes every decision: cadence, room, seq, segment plan, the mark-failure backoff, the check after a bind, replay verdict and health (RD2: L4 delivery is not allowed to decide). `store.mjs` is L3, the sole `node:sqlite` importer; it writes and reads segments. `sweep.mjs` and `cli.mjs` are L4 and deliver without deciding. No adapter narrows a distinction: the pass states `paused`, `nothing-due`, `no-horizon`, `held` and `failed` stay distinct, and so do the replay verdicts `newer`, `foreign` and an unreadable segment. `shared/lifecycle.ts` is L0 and imports nothing.
-- **Spec values, verbatim.** The horizon is the source harness's shortest measured retention minus `EXPORT_MARGIN_DAYS` = 30, floored at 0 (B1). The pass runs "in the tick's derive step, at most once an hour" (chosen). It writes "One segment per pass, holding every harness's due rows, at most 256 MiB (chosen), within the run budget" (90 s, 512 MiB); the bound counts each taken row's new blob bytes plus `EXPORT_ROW_META_BYTES` for its metadata (⟦D:history-export-segment-bound-estimated⟧). Preflight: "fs.promises.statfs on ~/.ccrc/history/export under the 5 s deadline, then planCopy with that filesystem's free space, its own threshold (§9.3's formula on that filesystem) and the segment bound as the size"; the threshold is min(15 GiB, 10% of the size) plus the run byte budget. "A refusal skips the pass: export_paused_low_disk, doctor WARN. Capture is unaffected."
+- **Spec values, verbatim.** "Each holding file is measured against its own home's retention" (ruled Q15, rev 3.4): a home's horizon is its retention minus `EXPORT_MARGIN_DAYS` = 30, floored at 0 (B1's `exportHorizonDays`), and "A file's due date is its mtime plus its own home's retention, minus 30 days … A file gone from disk has passed it." The shortest retention over the rostered homes is no longer an input to the due rule; B4 still reads it for one thing only, the cutoff of Task 5's `ts_ms` prefilter, which never decides a row. The pass runs "in the tick's derive step, at most once an hour" (chosen). It writes "One segment per pass, holding every harness's due rows, at most 256 MiB (chosen), within the run budget" (90 s, 512 MiB); the bound counts each taken row's new blob bytes plus `EXPORT_ROW_META_BYTES` for its metadata (⟦D:history-export-segment-bound-estimated⟧). Preflight: "fs.promises.statfs on ~/.ccrc/history/export under the 5 s deadline, then planCopy with that filesystem's free space, its own threshold (§9.3's formula on that filesystem) and the segment bound as the size"; the threshold is min(15 GiB, 10% of the size) plus the run byte budget. "A refusal skips the pass: export_paused_low_disk, doctor WARN. Capture is unaffected."
 - **Write.** "store.mjs writes export/<store_id>/.<seq>.<writer>.db.tmp, fsyncs it, and publishes it with link() to <seq>.<writer>.db, which fails if that name exists (the pass then takes the next number); then it unlinks the temp and fsyncs the directory. A segment is never published by rename … and never rewritten." The next seq is one past the highest seq on disk under `export/<store_id>/`, of any writer, and past the one meta last recorded. Segment meta holds `store_id`, writer, seq, harnesses, cutoff and format 1. Blobs are stored as (sha256, codec, raw_len, z). No internal id is written.
 - **Mark.** "After the link, one transaction sets exported_ms and exported_seg (the segment's name) on its blobs and entries. A crash before the mark repeats the rows in the next segment, which replay absorbs. A variant first seen after its entry was exported clears that entry's marks." So does a sidecar row first linked to an exported entry (⟦D:history-export-late-sidecar-clears-marks⟧). After any bind (meta `bound:<ms>`, written by B2's `insertBindFacts` for adopt, restore and rebuild), the first tick after a bind fact the last check has not covered (by key, never by clock) clears every mark whose segment is not on this box: counter `export_segment_missing`, doctor WARN. lib decides which keys are bind facts, whether the check runs, what it covers and which segments are missing (RD2). A busy error between the link and the marks records the published seq and the attempt clock before it is rethrown (RD3).
-- **Due.** "A row is due when its own age passes the horizon. A due row is exported with the bytes of every blob it references that is not yet exported, whatever those blobs' younger referrers." A row's age comes from `ts_ms`, or, when `ts_ms` is NULL, the newest mtime among the files of its TRANSCRIPT (B1's `transcriptFiles` clock, the census's, not the row's own copies through memberships: ⟦D:history-export-holding-files-by-transcript⟧, B1's), never "never old". A due row is exported whole: the entry's named columns, its variants, its boundary and sidecars, its memberships as (path, dev, ino, line), its transcripts row, every epoch row naming the transcript, and its family's natural key and project. "Pruned blobs are never exported or counted due. prune never touches the export." B2's prune stays reachability-gated only (ruling).
+- **Due** (ruled Q15, rev 3.4; ⟦D:history-export-due-per-copy⟧). "A row is due when every one of its holding files has passed its due date … A row with no holding file on record has no clock and is due at once: the export errs early, never late." "A due row is exported with the bytes of every blob it references that is not yet exported, whatever those blobs' younger referrers." A row's holding files are the files of its TRANSCRIPT (B1's `transcriptFiles`, the census's, not the row's own copies through memberships: ⟦D:history-export-holding-files-by-transcript⟧, B1's, which the ruling keeps), and its own `ts_ms` decides nothing. lib's `planSegment` asks the reducer, never a clock of its own: B2's `EXPORT_REDUCERS.perCopy` is its default, as it is `planExport`'s. A due row is exported whole: the entry's named columns, its variants, its boundary and sidecars, its memberships as (path, dev, ino, line), its transcripts row, every epoch row naming the transcript, and its family's natural key and project. "Pruned blobs are never exported or counted due. prune never touches the export." B2's prune stays gated on reachability only (operator ruling, rev 3.4: `history-prune-not-floor-gated`, ruled).
 - **Readers.** "Only the recovery step … through store.mjs's read-only open. The CLI never reads it and never prints from it." `status` may count segment names and sizes but never opens a segment.
 - **Replay (the B2 seam).** `export-blobs` and `export-rows` are added to `RECOVER_PHASES` (lib, the sole declaration, O14-bound) AND to the `RECOVER_EXECUTORS` object literal, between `apply` and `reindex`, in the same order; B2's history-recover test holds the two equal. Executor contract: `(db, run, cursor) => {cursor, moved, phaseDone}`, ONE bounded chunk, in its own NORMAL transaction, which also runs `UPDATE derivation_state SET cursor = ? WHERE step = 'recover' AND version = ?` with `run.version`. The executor adds the bytes it read to `run.budget.bytes`, respects `run.budget.chunkBytes`, sets `pairsAdded: run.pairsAdded` on every cursor it commits, and writes no journal record (O36) and no segment. Blobs: "insert-or-ignore by sha256". Rows: "in (seq, writer) order, through the same named-column inserts as ingest, entries by the newest-rank rule". "Families and epochs come from the journal first, and a segment's family and epoch rows fill only what the journal lacks." Memberships go onto a dead-file `ingest_files` row whose `source_key` is `'exported:' + hex(sha256(path ∖0 dev ∖0 ino))`, "never on a live file, even one that now reuses that inode". A newer format is "refused loudly (export-segment-newer, doctor FAIL) and skipped". "Replayed blobs and rows are marked with their segment."
 - **Health.** "On a build with it (B4) … it fires only when a due blob has waited more than two pass intervals or the last pass is older than 2 h." `export-overdue` stays on the file clock, unchanged. B4 adds no `HEALTH_WORDS` member: `export-due`, `export-paused-low-disk`, `export-segment-newer` and `export-segment-missing` already exist in B1. New meta keys are spelled once, in `HEALTH_META` (lib) or a single `sweep.mjs` const, and never reuse a B1 or B2 meta name (`export_due`, `export_overdue`, `export_census_ms`, `oldest_row_ms`, `first_due_ms`, `first_deletion_ms`, `bound:<ms>`, `recover_unmoved_ticks`).
 - **Modes.** Segment files are 0600; `export/` and `export/<store_id>/` are 0700, including under umask 0002. B1's doctor already mode-checks the `export` root, and `MODE_CHECKED_FILE_ROOTS` is re-pointed at `EXPORT_DIR` in place.
 - **Seams and switches.** Test seams are in-process (`ctx.deps.statfs` receives the path; `ctx.deps.exportPageRows` pages Task 5's selection; Task 7's in-process patches of `node:fs` and, for RD3's busy cases, of the `exec` of the test's own writer connection) or test-only preloads. Shipped code reads no new env var, flag or file to arm one, and the `process.env` allow-list stays `HOME`, `TMUX_PANE`, `CLAUDECODE` and `CCRC_SESSION_GENERATION`. `sweep.mjs` never spells `/history-off` (O13 exact holders): history-off is read through the existing `ctx.paths.off`.
 - **No `historyPaths` key.** B3 adds `scope` and `card` to `historyPaths`, and B3 and B4 merge in either order. B4 builds `${historyPaths(home).root}/${EXPORT_DIR}/${storeId}`, B2's `RECALL_OFF_DIR` precedent.
-- **B2 rulings that bind.** Add no `WRITING_FORMS` entry, so RB6's `GT_FORMS` and the recovering-forms CONTROLs stay green and no new op is refused `recovering`. Prune stays reachability-gated (provisional) and B4 does not touch it. Display prefixes are untouched. The export pass never runs on the recover arm: `recoverPass` never calls `tick`.
+- **B2 rulings that bind.** Add no `WRITING_FORMS` entry, so RB6's `GT_FORMS` and the recovering-forms CONTROLs stay green and no new op is refused `recovering`. Prune stays gated on reachability only (ruled by the operator, rev 3.4; no longer provisional) and B4 does not touch it. Display prefixes are untouched. The export pass never runs on the recover arm: `recoverPass` never calls `tick`.
 - **Tests.** Run from `server/` with `./node_modules/.bin/vitest run test/<f>.test.ts`, in the FOREGROUND, with a timeout of at least 600000 ms; never bare `npx`. Use fixture HOMEs only (`makeHistoryBox`, `mkTmp`), with `tmux`, `claude` and `gh` poisoned and `CLAUDECODE`, `CLAUDE_CONFIG_DIR`, `TMUX`, `TMUX_PANE` and `CCRC_RECALL_*` scrubbed (B1's helpers do this). Sweep and store tests skip on darwin; lib tests run there. Every guard is pinned red-first: watch the test fail on the unguarded code, then measure the mutant red after the guard lands, with scratch copies under `.superpowers/sdd/history-w1-b4/scratch` and never `git stash`. The new `history-export.test.ts` joins `ci.yml`'s node-floor heredoc in the same commit; `ci-pipeline` derives the list from `server/test`. CLAUDE.md's load flakes are re-run in isolation before a red is called a break.
 - **Citation corpus.** B4 edits none of `ccd/session-hook.sh`, `ccd/ccrc`, `ccd/ccd`, `deploy/deploy.sh` or `server/test/session-hook.test.ts`. `single-definition.test.ts` gets only in-place edits inside B1/B2's end-appended blocks, and no import line. README edits are in place and add no `file.ext:N` token. CLAUDE.md's `README.md (~N lines)` figure is re-measured only if README's line count moves (`pools-prose`: within 100). `ccrc-doctor.test.ts` is cited by line from other tests (`:66`, `:70`, `:195` and `:884` at f7e51156f), so its edits stay in place inside the history describes, which B1 appended below all four.
 - **Deviations.** Never write a deviation number. A departure carries `⟦D:<slug>⟧` with a spec §16 slug, or a NEW kebab slug marked NEW with a one-line why; "Deviations found" lists each. The coordinator mints the numbers. Read existing `D-N` refs in source comments as history and never delete them.
@@ -113,14 +114,14 @@ B4 adds no schema migration (v1 already has `exported_ms` and `exported_seg`), n
 
 These are the inputs most likely to break the plan's synthetic fixtures. Each one has a test in its owning task.
 
-1. **`db/` is a symlink onto a roomy volume while the home filesystem holding `~/.ccrc/history/export` is near its floor**, and a newly added home has no `cleanupPeriodDays`, so the horizon is 0 and the whole store is due.
+1. **`db/` is a symlink onto a roomy volume while the home filesystem holding `~/.ccrc/history/export` is near its floor**, and every home the store's text sits in has no `cleanupPeriodDays` (each newly added account's home, since ccrc never writes the key), so each file's horizon is 0 and, under the per-copy rule, every row is due from its file's last write: the whole store at once.
    - Expected: the preflight statfs-es the export directory on the home filesystem, never `db/`, its link target or any path through the link. It refuses and counts `export_paused_low_disk` without writing a segment, so the root disk is not filled at 256 MiB an hour, while ingest on the volume proceeds.
    - Owning task: **Task 6**, `O40 / RC9: the preflight statfs-es ~/.ccrc/history/export and never db/, even with db/ a link onto a roomier volume; …` (a `ctx.deps.statfs` stub that records the path it receives and answers differently for `/export` and `db/`), and the spawned `O40: below the home filesystem's own floor the pass is skipped … and the same pass still ingests`. Every fixture home carries no `cleanupPeriodDays`, so each runs at horizon 0.
 2. **A segment write fails halfway** between the preflight and the link: a statement throws (the stand-in for `SQLITE_FULL`), history-off appears between rows, or the run's wall clock runs out.
    - Expected: on a throw or history-off, nothing is published or marked, and the `.tmp` (with any SQLite sidecar) is removed now, or by the next step whose cadence runs, before its preflight, so a pause for room never keeps it; the scheduled pass still exits 0, its ticks row and census still run, a failure counts `export_write_failed` with one stderr line, and the next tick ingests. On the wall clock, the rows already written are published and marked (each row is whole, its dependencies before it in the shared `ord`) and the rest wait.
    - Owning tasks: **Task 7**, `a failed segment write removes its temp, marks nothing, is counted, and the pass exits 0; …`, `a stale temp goes before the preflight: …` and, for a failure after the link, `a pass that published its segment and could not mark it backs off: …` and, for a busy there (RD3), `a busy error between the link and the marks: …` with `RD3's residual: …`; **Task 5**, `history-off between rows: …` and `the wall clock: …`; **Task 4**, `O39: a kill at the link leaves only the temp, and removeStaleSegmentTemps removes it with its sidecars and nothing else`.
-3. **Steady state on a node with a 180-day home and the hourly pass live**, read at every phase offset between census, pass and the next census; separately, the first day after B4 lands on a node whose 30-day home made the whole store due, with a multi-GB backlog.
-   - Expected: steady state reads PASS at every offset (the census's due-since is at most about 1.5 h stale, under two pass intervals), so no false `export-due` WARN keeps W1-g from passing. That holds only if every due blob is selectable: a sidecar linked after its entry was exported clears the entry's marks (Task 8), so no due blob is left that no pass would take. The backlog day WARNs `export-due` truthfully until the segments drain at one an hour. Neither FAILs, so `ccrc update` does not exit 3 on it.
+3. **Steady state on a node with a 180-day home and the hourly pass live**, read at every phase offset between census, pass and the next census; separately, the first day after B4 lands on a node whose 30-day homes hold text no longer-retention home holds (under the per-copy rule, due from its file's last write), with a multi-GB backlog.
+   - Expected: steady state reads PASS at every offset (the census's due-since is at most about 1.5 h stale, under two pass intervals), so no false `export-due` WARN keeps W1-g from passing. That holds only if every due blob is selectable. The pass offers every row of each transcript the census's `dueTranscriptKeys` makes due, its young rows included, so its candidates cover the census's due set (Task 5), and a sidecar linked after its entry was exported clears the entry's marks (Task 8), so no due blob is left that no pass would take. A due blob the pass could not select would keep `export-due` WARNing for good, which is what the due-transcript phase rules out. The backlog day WARNs `export-due` truthfully until the segments drain at one an hour. Neither FAILs, so `ccrc update` does not exit 3 on it.
    - Owning task: **Task 9**, the pure `steady state at every phase between a census, a pass and the next census: PASS ok, nothing to warn` and `a due blob that has waited more than two pass intervals WARNs export-due, …`, and doctor's `O41 (B4): steady state … PASSes ok` with the two `O41 (B4)` `STATES` rows (`absent: ['FAIL history: ']`).
 4. **A family re-keyed** (a gen-less `''` family merged into (id, G)) **or a `/clear` epoch chained after its rows were exported**, then transcripts and `history.db` lost, and `doctor --rebuild` replaying the journal and then the segments.
    - Expected: the rows phase resolves a segment's family through `merged_into` and the journal's epochs. It fills only NULL columns (launch facts, `cwd` and `cwd_real`, `confirmed_ms`) on the epoch the journal replayed, never creates a second family or a duplicate epoch, and skips and counts an epoch whose seq the journal gave another uuid.
@@ -131,6 +132,9 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 6. **A store adopted on a new box, its old `export/<store_id>/` carried over AFTER the verb**, so its segments arrive once the marks were already cleared and re-exported; a restore later.
    - Expected: the bind check cleared the marks once, and the rows were re-exported under the new writer token. The carried segments never collide by name (seq counts past every name on disk; the writer tokens differ). Replay applies both copies in (seq, writer) order and absorbs the duplicates through insert-or-ignore and newest-rank. `export_segment_missing`'s WARN clears once the re-export leaves nothing due behind.
    - Owning tasks: **Task 8**, `O39: after an adopt with the segments left behind, …` and `the check runs on the first step after a bind and not again until the next one: …`; **Task 7**, `a counter behind the directory: …`; **Task 10**, `BK21: …` (two writers' segments replayed in (seq, writer) order).
+7. **A newly rostered home on the 30-day default that holds only swap copies of a 180-day home's transcripts**; separately, a transcript whose every file was deleted early (a cleaned worktree, a hand `rm`) while its rows are days old, on a node whose every home keeps 180 days.
+   - Expected (ruled Q15, rev 3.4; ⟦D:history-export-due-per-copy⟧): the swap copies bring nothing forward, because each row waits for its 180-day copy; once that copy is gone from disk the 30-day copy alone decides and the rows go. The early-deleted transcript's rows are taken at the next pass whatever their own time, though the `ts_ms` prefilter (the shortest home's horizon, 150 days back) would pass over them: their text may already be the store's only copy. So are a transcript's young rows held only by a file deleted early while an older file of it stays on disk, once that older file passes. `planSegment` and the census's `planExport` answer the same rows due (RD1's one clock), and the pass walks the same due transcripts as the census's prefilter.
+   - Owning tasks: **Task 2**, `O58 (B4 half): with no reducer argument …` and `RD1's one clock: …`; **Task 5**, `Q15, per copy: a 30-day home that holds only a swap copy brings nothing forward …`, `per copy: a transcript whose every holding file is gone has its rows taken whatever their own time …` and `per copy: once its transcript is due, a young row held only by a file gone from disk is taken …`, each with a CONTROL mutant (the node-shortest default, the due-transcript phase deleted, and that phase narrowed to transcripts with no file on disk).
 
 ## File Structure
 
@@ -970,41 +974,43 @@ git commit -m "feat(history): export segment names and numbers, the hourly caden
 
 **Files:**
 - Modify: `ccd/history/lib.mjs`:
-  - B1 Task 10's `planExport`, in place by content (three edits: a declaration, a block below `due.push(blob.key);`, and its return line);
+  - B1 Task 10's `planExport`, as B2's per-copy task leaves it, in place by content (three edits: a declaration, a block below `due.push(blob.key);`, and its return line);
   - append one block at the END of the file.
 - Modify: `ccd/history/lib.d.mts`: `planExport`'s return type in place, and one block appended at the end.
 - Test: `server/test/history-lib.test.ts`: append one block at the END (its import at the block's head).
 - Scratch, gitignored: `.superpowers/sdd/history-w1-b4/scratch/mutate.mjs` and `.superpowers/sdd/history-w1-b4/scratch/mutants-task2.json`.
 
 **Interfaces:**
-- Consumes (B1 `lib.mjs`, same module):
-  - `planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.shortestHome }): { horizonDays, due, overdue }`, edited in place;
-  - `EXPORT_REDUCERS.shortestHome`, `exportHorizonDays(retentionDays)`, `shortestRetention`, the types `ExportFile { home; mtimeMs; present }`, `ExportCandidate { tsMs: number | null; files }` and `ExportReducer`;
-  - the module-private `referrerAgeMs(r, nowMs)` (ts_ms, else the newest holding file's mtime, else +Infinity) and `EXPORT_DAY_MS`: reused, never copied — a second `referrerAgeMs` in the module is a SyntaxError at load, and a second clock is two answers to one question.
+- Consumes (B1 `lib.mjs` as B2's per-copy task leaves it, same module; ⟦D:history-export-due-per-copy⟧):
+  - `planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.perCopy }): { horizonDays, due, overdue }`, B1's signature with B2's default, edited in place;
+  - the reducer contract B2's task gives `ExportReducer` (its TypeScript type, `(candidate: ExportCandidate, homeRetentionDays) => number`, is B1's, unchanged): a reducer answers the time, in ms since the epoch, at which the candidate falls due, `-Infinity` when nothing holds it back, and a candidate is due exactly when that time is before `nowMs` (`planExport`'s due test is `reducer(r, homeRetentionDays) < nowMs`). B1's reducers answered a retention in days, which no per-copy rule can be: the per-copy rule reads each file's own mtime, not the row's;
+  - `EXPORT_REDUCERS.perCopy` (B2): over the candidate's `files`, the latest of each PRESENT file's `mtimeMs + exportHorizonDays(homeRetentionDays[file.home], or Claude Code's 30-day default for a home not in it) × day`, a file gone from disk counting as passed (`-Infinity`); `-Infinity` for a candidate with no holding file on record. It never reads `tsMs`;
+  - `EXPORT_REDUCERS.shortestHome` (B1's default, now history, kept by B2 under the same contract): the row clock (`ts_ms`, else the newest holding file's mtime, else `-Infinity`) plus the shortest retention's horizon. B4 names it only as a CONTROL (Task 2's mutants, Task 5's mutation table) and in one explicit-reducer assertion;
+  - `exportHorizonDays(retentionDays)`, `shortestRetention`, `EXPORT_DAY_MS`, and the types `ExportFile { home; mtimeMs; present }`, `ExportCandidate { tsMs: number | null; files }` and `ExportReducer`. B4 reads a candidate's due time only through the reducer: no clock of its own, so a second clock is never two answers to one question.
 - Consumes (Task 1): `EXPORT_SEGMENT_MAX_BYTES` (Task 5 passes it, or less, as `boundBytes`).
 - Produces (`lib.mjs`, declared once in `lib.d.mts`):
   - `interface SegmentBlob { key: string; zBytes: number; exported: boolean; pruned: boolean }`;
-  - `interface SegmentCandidate extends ExportCandidate { key: string; blobs: readonly SegmentBlob[] }` (a candidate ROW: its own clock, its holding files, the blobs it references — its entry's blob, its variants', its sidecars', its boundary's kept blob);
+  - `interface SegmentCandidate extends ExportCandidate { key: string; blobs: readonly SegmentBlob[] }` (a candidate ROW: its own time, which the per-copy default never reads, its holding files, which it does, and the blobs it references — its entry's blob, its variants', its sidecars', its boundary's kept blob);
   - `interface SegmentPlan { take: string[]; carry: string[]; stubs: string[]; bytes: number; leftDue: number; oldestLeftDueSinceMs: number | null }`, `bytes` the counted bytes of the taken rows: their new blob bytes plus `EXPORT_ROW_META_BYTES` each;
   - `export const EXPORT_ROW_META_BYTES = 1536`: what one taken row's metadata is counted for in the bound (chosen, an estimate);
-  - `planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reducer = EXPORT_REDUCERS.shortestHome, takenBefore = false }): SegmentPlan`; `takenBefore` says an earlier call of the same pass (an earlier page) already took a row, so this call's first due row must fit too;
-  - `planExport`'s answer gains `oldestDueSinceMs: number | null` (additive: B1's callers and tests read `.due`, `.overdue` and `.horizonDays` only);
-  - module-private `dueSinceMs(referrer, horizonDays, nowMs)`, read by both functions.
+  - `planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reducer = EXPORT_REDUCERS.perCopy, takenBefore = false }): SegmentPlan`, the same `reducer` parameter and default as `planExport` (RD1's one clock); `takenBefore` says an earlier call of the same pass (an earlier page) already took a row, so this call's first due row must fit too;
+  - `planExport`'s answer gains `oldestDueSinceMs: number | null` (additive: B1's and B2's callers and tests read `.due`, `.overdue` and `.horizonDays` only);
+  - module-private `dueSinceMs(dueAtMs)`, the reducer's due time with `-Infinity` read as 0 (the epoch), read by both functions.
 - Later consumers: Task 5 (`planSegment` over its candidate page, with `takenBefore` from the second page on; `stubs` written as stub blobs; `EXPORT_ROW_META_BYTES` in its file-size case), Task 9 (B1's `exportCensus` records `oldestDueSinceMs` as `HEALTH_META.exportDueOldestMs`).
 
-**Spec:** §9.15 "What is due" (its inputs; a referrer's age; a blob is due; a row is due; a due row is exported whole), "The pass" (Write: within the run budget, at most 256 MiB), "The gap guard" (a due blob that has waited more than two pass intervals), §6.6 (a pruned blob is never exported or counted due), §15.3 Q15 (a reducer swap, never a signature). Pins: **O39**'s pure halves (a hot blob's old row carries it while the census says not due, BK12; an exported blob never carried again; a pruned blob never carried or counted; the bound, with at least one row; input order), the row clock, and the B4 input of **O41** (`oldestDueSinceMs`, with its CONTROL). Departures:
+**Spec:** §9.15 "What is due" (its inputs; the per-row file set; a file's due date; a row is due; a blob is due; a due row is exported whole), "The pass" (Write: within the run budget, at most 256 MiB), "The gap guard" (a due blob that has waited more than two pass intervals), §6.6 (a pruned blob is never exported or counted due), §15.1 and §15.3 Q15 (ruled yes, rev 3.4: the per-copy rule is the default "wherever the due rule is computed", B4's pass included; one reducer, no signature change). Pins: **O39**'s pure halves (a hot blob's old row carries it while the census says not due, BK12; an exported blob never carried again; a pruned blob never carried or counted; the bound, with at least one row; input order), **O58**'s B4 half (`planSegment` with no reducer argument answers by `EXPORT_REDUCERS.perCopy`, "RD1's one clock", with both of O58's CONTROLs: the node-shortest default and the row clock), and the B4 input of **O41** (`oldestDueSinceMs`, with its CONTROL). Departures:
 - ⟦D:history-export-row-carries-blob⟧ (a due row carries every unexported blob it references, whatever that blob's younger referrers);
-- ⟦D:history-export-row-age-early⟧ (a NULL `ts_ms` row ages by its newest holding file; a row with no clock at all is old);
+- ⟦D:history-export-due-per-copy⟧ (B2-defined; ruled Q15): a row is due when every one of its holding files has passed its mtime plus its own home's retention, minus 30 days; a file gone from disk has passed; a row with no holding file on record is due at once. `planSegment` asks B2's reducer, its default, and never reads a row's `ts_ms`;
 - ⟦D:history-export-pruned-row-stub⟧ (NEW): a row that falls due after `prune` tombstoned its blob is taken, and its blob travels as a stub (sha256, codec, raw_len, no bytes), because `entries.blob_id` is NOT NULL and a rebuild would otherwise lose the row's structure. A stub is never exported text, and its size never counts toward the bound (its row's metadata does). Ruled as implemented (coordinator ruling RD1, the header's "Coordinator rulings"): such rows travel with the stub rather than being skipped;
 - ⟦D:history-export-wait-from-census⟧ (NEW, defined with Task 9): doctor's "waited more than two pass intervals" needs a due-since time, and the census computes it from the store's rows, here.
 - ⟦D:history-export-segment-bound-estimated⟧ (NEW): §9.15 says a segment holds "at most 256 MiB". A row's metadata in the file is not small beside a short row's blob: a prototype of Task 4's format-1 tables measured 0.8–1.1 KiB per entry with one membership (about 0.2 KiB per further membership) over 56 KiB of schema pages, and a review prototype counting blob bytes alone wrote files 1.14× the bound at 8 KiB blobs and 2.3× at 0.5–2 KiB. So each taken row counts `EXPORT_ROW_META_BYTES` (1.5 KiB, chosen) beside its new blob bytes: a segment lands near the bound, can pass it only by the estimate's error, and holds at most about 175,000 rows, which also bounds the pass's memory when rows bring no new bytes (stubs, shared or exported blobs). The first due row of a pass is still taken whatever its size, so every pass moves the export forward; the preflight's floor margin absorbs that one row, and no second `planCopy` runs.
 
 Choices this task makes (each copied into the PR body by Task 12 Step 9):
-- planSegment's due rule is per ROW (§9.15 "A row is due"); planExport's stays per BLOB (the census counts blobs). Both read `referrerAgeMs` through the same reducer, so a Q15 answer swaps one reducer and changes no signature.
+- planSegment's due rule is per ROW (§9.15 "A row is due"); planExport's stays per BLOB (the census counts blobs). Both read the same reducer's due time, with the same default (B2's `EXPORT_REDUCERS.perCopy`, ruled Q15), so the pass and the census keep one clock (RD1) and a later rule would still be one reducer and no signature.
 - The bound counts each taken row's new blob bytes plus `EXPORT_ROW_META_BYTES` for its metadata (⟦D:history-export-segment-bound-estimated⟧). A candidate page bounds one statement's work, never the segment's row count: the metadata term is what bounds that, so a run of rows that bring no new bytes fills a segment instead of growing it until the wall clock.
 - The first due row of the PASS is taken whatever its size, never the first of each call: the sweep pages its candidates, and passes `takenBefore` once an earlier page took a row, so a later page's first row must fit what is left (the paged answer equals the one-page answer).
 - A segment is a PREFIX of the backlog: once a due row does not fit, no later row is taken, even one that would. The sweep passes rows oldest first, so the oldest text always leaves first.
-- A blob falls due when its LAST referrer crosses the horizon; a clockless referrer reads as due since 0 (the epoch), the early side, as `referrerAgeMs` reads it as infinitely old.
+- A blob falls due when its LAST referrer falls due. A referrer the reducer answers due from the start (`-Infinity`: under the per-copy rule, no holding file on record, or every one gone from disk) reads as due since 0, the epoch: the early side, never a time in the future.
 - A CONTROL of the shape "a mutant that takes a row only when its blob is due" cannot be written here: a candidate row carries no other referrers of its blobs. BK12 is pinned instead by the hot-blob case asserting both answers side by side (planSegment takes the row, planExport says the blob is not due), and Task 5's candidate query owns the rest.
 
 - [ ] **Step 1: Write the mutation runner.** It is a gitignored scratch tool (`.superpowers/` is in `.gitignore`), never committed: B2's runner with its scratch path moved to this plan's directory. Tasks 1–4 write this same file, byte for byte, so each task stands alone and rewriting it changes nothing. A mutant is `{name, file, test, filter, edits: [{anchor, replacement}]}`, and each anchor must occur exactly once in the file as the earlier edits leave it. For each mutant the runner copies the pristine file to `.superpowers/sdd/history-w1-b4/scratch/keep/`, applies the edits and runs the named tests, which must fail; it then restores the file from the copy, removes the copy, and runs the same tests again, which must pass. Only a kill no handler sees leaves a copy in `scratch/keep/`; the next run then refuses, and the runner's header gives the one-line restore. From the repository root:
@@ -1077,27 +1083,46 @@ process.exit(bad === 0 ? 0 : 1);
 EOF_RUNNER
 ```
 
-- [ ] **Step 2: Write the failing tests.** Append to the END of `server/test/history-lib.test.ts`:
+- [ ] **Step 2: Check the reducer contract B2 merged, then write the failing tests.** Every line below assumes the contract this task's Interfaces state for B2's per-copy task (⟦D:history-export-due-per-copy⟧). From the repository root:
+
+```bash
+grep -n 'perCopy\|shortestHome' ccd/history/lib.mjs ccd/history/lib.d.mts
+grep -n -A8 '^export function planExport(' ccd/history/lib.mjs
+```
+
+Expected: `EXPORT_REDUCERS` holds both `perCopy` and `shortestHome` (and `lib.d.mts` declares both); `planExport`'s parameter list reads `reducer = EXPORT_REDUCERS.perCopy`; and its due test reads a reducer's answer as a due TIME, `reducer(r, homeRetentionDays) < nowMs`, with no `referrerAgeMs` call left in it. If the merged reducers answer anything else (B1's retention in days, a boolean, a function of `nowMs`), or `perCopy` is not the default, stop and report it to the coordinator: never adapt `planSegment` to a different contract here, because `planSegment` and the census must read one clock (RD1).
+
+Then append to the END of `server/test/history-lib.test.ts`:
 
 ```ts
 // ===========================================================================
 // W1-B4 Task 2: what one export segment carries, and the census's oldest
 // due-since (spec §9.15 "What is due", "Write", "The gap guard"; O39's pure
-// halves, O41's B4 input). Pure, on lib.mjs alone.
+// halves, O58's B4 half, O41's B4 input). Pure, on lib.mjs alone. The due
+// rule is B2's per-copy reducer (ruled Q15, rev 3.4): a row is due when every
+// file holding a copy of it has passed its mtime plus its own home's
+// retention, minus 30 days, whatever the row's own time.
 // ===========================================================================
 import * as libCarry from '../../ccd/history/lib.mjs';
 
 describe('W1-B4: planSegment, the row-level due rule and what a segment carries (spec 9.15; O39 pure halves)', () => {
   const DAY = 86_400_000;
   const NOW = Date.UTC(2026, 11, 1);
-  const homes = { '/home/u/.claude-a': 180 };          // horizon 150 days
+  const A = '/home/u/.claude-a';
+  const C = '/home/u/.claude-c';
+  const homes = { [A]: 180 };                          // home A's horizon: 150 days
   const M = libCarry.EXPORT_ROW_META_BYTES;            // each taken row's metadata, counted beside its new blob bytes
   const BOUND = 1_000 + 3 * M;                         // three rows' metadata and 1,000 blob bytes
-  const file = (ageDays: number): libCarry.ExportFile => ({ home: '/home/u/.claude-a', mtimeMs: NOW - ageDays * DAY, present: true });
+  /** A present holding file of home A, last written `ageDays` ago. */
+  const file = (ageDays: number): libCarry.ExportFile => ({ home: A, mtimeMs: NOW - ageDays * DAY, present: true });
+  /** The same in home C, which keeps Claude Code's 30-day default where a case rosters it: horizon 0. */
+  const inC = (ageDays: number): libCarry.ExportFile => ({ home: C, mtimeMs: NOW - ageDays * DAY, present: true });
   const blob = (key: string, zBytes: number, o: { exported?: boolean; pruned?: boolean } = {}): libCarry.SegmentBlob =>
     ({ key, zBytes, exported: o.exported ?? false, pruned: o.pruned ?? false });
-  const row = (key: string, tsAgeDays: number | null, blobs: libCarry.SegmentBlob[], files: libCarry.ExportFile[] = [file(1)]): libCarry.SegmentCandidate =>
-    ({ key, tsMs: tsAgeDays === null ? null : NOW - tsAgeDays * DAY, files, blobs });
+  /** A candidate row written `ageDays` ago and held, unless `files` says otherwise, by ONE file of home A last written
+   *  then: under the per-copy rule that file's clock decides, so a row's age here is its file's. */
+  const row = (key: string, ageDays: number | null, blobs: libCarry.SegmentBlob[], files: libCarry.ExportFile[] = [file(ageDays ?? 0)]): libCarry.SegmentCandidate =>
+    ({ key, tsMs: ageDays === null ? null : NOW - ageDays * DAY, files, blobs });
   const plan = (rows: libCarry.SegmentCandidate[], boundBytes = BOUND) =>
     libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, rows, boundBytes });
 
@@ -1108,7 +1133,7 @@ describe('W1-B4: planSegment, the row-level due rule and what a segment carries 
     const census = libCarry.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [{ key: 'b-hot', referrers: [row('e-old', 151, [hot]), row('e-young', 1, [hot])] }] });
     expect(census.due).toEqual([]);
   });
-  it('a row not yet past its horizon is neither taken nor counted', () => {
+  it('a row whose holding file has not passed its due date is neither taken nor counted', () => {
     expect(plan([row('e-young', 149, [blob('b-1', 10)])])).toEqual({ take: [], carry: [], stubs: [], bytes: 0, leftDue: 0, oldestLeftDueSinceMs: null });
   });
   it('a blob already exported is never carried again, and one shared by several taken rows is carried and counted once', () => {
@@ -1156,41 +1181,65 @@ describe('W1-B4: planSegment, the row-level due rule and what a segment carries 
   it('rows come back in input order, never re-sorted by age', () => {
     expect(plan([row('e-c', 155, []), row('e-a', 170, []), row('e-b', 160, [])]).take).toEqual(['e-c', 'e-a', 'e-b']);
   });
-  it('a NULL ts_ms row ages by its newest holding file (the export errs early), never as never-old; no clock at all is old', () => {
+  it('per copy: a row is due by its holding files, never by its own ts_ms; every file must pass; a file gone from disk has passed; a row with no holding file is due at once', () => {
     const r = plan([
-      row('e-null-old', null, [], [file(200), file(160)]),
-      row('e-null-young', null, [], [file(200), file(5)]),
-      row('e-clockless', null, [], []),
+      row('e-null-old', null, [], [file(200), file(160)]),            // both A copies past 150 days: due
+      row('e-null-young', null, [], [file(200), file(5)]),            // a copy written 5 days ago holds it back
+      row('e-long', 200, [], [file(1)]),                              // a 200-day-old row in an A file appended yesterday: not due
+      row('e-gone', 1, [], [{ ...file(1), present: false }, file(151)]), // its young copy is gone, its other passed: due
+      row('e-clockless', null, [], []),                               // no holding file on record: due at once
     ]);
-    expect(r.take).toEqual(['e-null-old', 'e-clockless']);
+    expect(r.take).toEqual(['e-null-old', 'e-gone', 'e-clockless']);
   });
-  it('one home on the 30-day default makes a day-old row due (the ruled reducer), and a reducer of its own changes no signature', () => {
-    const lowered = { ...homes, '/home/u/.claude-c': 30 };
-    const rows = [row('e-1', 1, [blob('b-1', 1)])];
-    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: lowered, rows, boundBytes: BOUND }).take).toEqual(['e-1']);
-    const ownHome: libCarry.ExportReducer = () => 180;
-    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: lowered, rows, boundBytes: BOUND, reducer: ownHome }).take).toEqual([]);
+  it('O58 (B4 half): with no reducer argument a row is due by its own copies (EXPORT_REDUCERS.perCopy): a 30-day home holding only swap copies brings no 180-day row forward, and its own rows are due from their file\'s last write; the reducer is one argument, never a signature', () => {
+    const lowered = { ...homes, [C]: 30 };                           // home C rostered on the 30-day default: horizon 0
+    const rows = [
+      row('e-swap', 1, [blob('b-1', 1)], [file(1), inC(1)]),          // a swap copy in C: A's copy waits 149 more days
+      row('e-a-only', 1, [blob('b-2', 1)]),                           // A alone: not due for 149 days
+      row('e-c-only', 1, [blob('b-3', 1)], [inC(1)]),                 // C alone: due from its file's last write
+    ];
+    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: lowered, rows, boundBytes: BOUND }).take).toEqual(['e-c-only']);
+    // The node-shortest reducer (B1's default, history since B2) would have taken all three: one home on the 30-day
+    // default set the whole node's horizon to 0. Passing it is one argument, and no signature changes.
+    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: lowered, rows, boundBytes: BOUND, reducer: libCarry.EXPORT_REDUCERS.shortestHome }).take)
+      .toEqual(['e-swap', 'e-a-only', 'e-c-only']);
+    const never: libCarry.ExportReducer = () => Number.POSITIVE_INFINITY;
+    expect(libCarry.planSegment({ nowMs: NOW, homeRetentionDays: lowered, rows, boundBytes: BOUND, reducer: never }).take).toEqual([]);
+  });
+  it('RD1\'s one clock: with no reducer argument, planSegment takes exactly the rows planExport (the census) answers due, each row a blob of its own', () => {
+    const lowered = { ...homes, [C]: 30 };
+    const rows = [
+      row('e-1', 151, []), row('e-2', 149, []), row('e-3', 1, [], [inC(1)]), row('e-4', 1, [], [file(1), inC(1)]),
+      row('e-5', 300, [], [file(2)]), row('e-6', null, [], []), row('e-7', 2, [], [{ ...file(2), present: false }]),
+    ];
+    const seg = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: lowered, rows, boundBytes: 100 * M });
+    const census = libCarry.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: rows.map((r) => ({ key: r.key, referrers: [r] })) });
+    expect(seg.take).toEqual(census.due);
+    expect(seg.take).toEqual(['e-1', 'e-3', 'e-6', 'e-7']);
   });
 });
 
 describe('W1-B4: planExport\'s oldest due-since, the census input of doctor\'s wait rule (spec 9.15 "The gap guard"; O41 B4 input)', () => {
   const DAY = 86_400_000;
   const NOW = Date.UTC(2026, 11, 1);
-  const homes = { '/home/u/.claude-a': 180 };
-  const ref = (tsAgeDays: number | null, files: libCarry.ExportFile[] = []): libCarry.ExportCandidate =>
-    ({ tsMs: tsAgeDays === null ? null : NOW - tsAgeDays * DAY, files });
+  const A = '/home/u/.claude-a';
+  const homes = { [A]: 180 };                          // home A's horizon: 150 days
+  /** A referrer written `ageDays` ago, held by ONE file of home A last written then (the per-copy clock reads that
+   *  file); null: no time and no holding file on record. */
+  const ref = (ageDays: number | null): libCarry.ExportCandidate =>
+    ({ tsMs: ageDays === null ? null : NOW - ageDays * DAY, files: ageDays === null ? [] : [{ home: A, mtimeMs: NOW - ageDays * DAY, present: true }] });
   const census = (blobs: { key: string; referrers: libCarry.ExportCandidate[] }[]) =>
     libCarry.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs });
-  it('the earliest time any due blob fell due; a blob falls due when its LAST referrer crosses the horizon', () => {
+  it('the earliest time any due blob fell due; a blob falls due when its LAST referrer does (its file\'s last write plus 150 days)', () => {
     const r = census([
-      { key: 'b-late', referrers: [ref(200), ref(170)] },        // due since its 170-day referrer crossed: 20 days ago
+      { key: 'b-late', referrers: [ref(200), ref(170)] },        // due since its 170-day referrer's file passed: 20 days ago
       { key: 'b-early', referrers: [ref(190)] },                 // due 40 days ago
       { key: 'b-young', referrers: [ref(190), ref(10)] },        // not due
     ]);
     expect(r.due).toEqual(['b-late', 'b-early']);
     expect(r.oldestDueSinceMs).toBe(NOW - 40 * DAY);
   });
-  it('null when nothing is due; a clockless referrer reads as due since the epoch, the early side', () => {
+  it('null when nothing is due; a referrer with no holding file on record reads as due since the epoch, the early side', () => {
     expect(census([{ key: 'b-young', referrers: [ref(1)] }]).oldestDueSinceMs).toBeNull();
     expect(census([{ key: 'b-clockless', referrers: [ref(null)] }]).oldestDueSinceMs).toBe(0);
   });
@@ -1203,7 +1252,7 @@ describe('W1-B4: planExport\'s oldest due-since, the census input of doctor\'s w
 (cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'W1-B4: plan')
 ```
 
-Expected: FAIL, `Tests 13 failed`: the eleven planSegment cases with `TypeError: planSegment is not a function` (the metadata case may fail first on `expected undefined to be 1536`), and the two due-since cases with `expected undefined to be …` (`r.oldestDueSinceMs` does not exist yet).
+Expected: FAIL, `Tests 14 failed`: the twelve planSegment cases with `TypeError: planSegment is not a function` (the metadata case may fail first on `expected undefined to be 1536`), and the two due-since cases with `expected undefined to be …` (`r.oldestDueSinceMs` does not exist yet; their `r.due` assertion already holds on B2's per-copy default).
 
 - [ ] **Step 4: Implement.** In `ccd/history/lib.mjs`:
 
@@ -1223,10 +1272,11 @@ insert:
 (b) In the same function, directly below its line `    due.push(blob.key);`, insert:
 
 ```js
-    // W1-B4: when this blob fell due — when its LAST referrer crossed its horizon — and the earliest over every due
-    // blob, which doctor's wait rule reads from the census (§9.15 "The gap guard"; ⟦D:history-export-wait-from-census⟧).
+    // W1-B4: when this blob fell due — when its LAST referrer fell due, by the reducer's own due time (B2's per-copy
+    // default, ⟦D:history-export-due-per-copy⟧) — and the earliest over every due blob, which doctor's wait rule reads
+    // from the census (§9.15 "The gap guard"; ⟦D:history-export-wait-from-census⟧).
     let since = Number.NEGATIVE_INFINITY;
-    for (const r of blob.referrers) since = Math.max(since, dueSinceMs(r, exportHorizonDays(reducer(r, homeRetentionDays)), nowMs));
+    for (const r of blob.referrers) since = Math.max(since, dueSinceMs(reducer(r, homeRetentionDays)));
     if (oldestDueSinceMs === null || since < oldestDueSinceMs) oldestDueSinceMs = since;
 ```
 
@@ -1244,15 +1294,18 @@ with
   return { horizonDays: exportHorizonDays(shortestRetention(homeRetentionDays)), due, overdue, oldestDueSinceMs };
 ```
 
+Under the per-copy rule `horizonDays` decides nothing; it is the reported horizon (spec §8.4: "the shortest any home's files have, no longer the node's due rule"). If B2's per-copy task reworded this return line, keep its wording and add `oldestDueSinceMs` as the last member of the object it returns.
+
 (d) Append to the END of the file:
 
 ```js
 // ===========================================================================
 // What one export segment carries (spec §9.15 "What is due", "Write"; W1-B4
 // Task 2). Pure: the sweep pages its candidate rows, oldest first, with each
-// row's clock, its holding files and its blobs' export and prune state, and
-// writes what this answers.
-// ⟦D:history-export-row-carries-blob⟧ ⟦D:history-export-row-age-early⟧
+// row's time, its holding files and its blobs' export and prune state, and
+// writes what this answers. Due-ness is the reducer's, B2's per-copy one by
+// default (ruled Q15, rev 3.4), the census's own: one clock (RD1).
+// ⟦D:history-export-row-carries-blob⟧ ⟦D:history-export-due-per-copy⟧
 // ⟦D:history-export-pruned-row-stub⟧ ⟦D:history-export-segment-bound-estimated⟧
 // ===========================================================================
 
@@ -1265,18 +1318,19 @@ with
  *  or the pass's memory, without limit (⟦D:history-export-segment-bound-estimated⟧). */
 export const EXPORT_ROW_META_BYTES = 1536;
 
-/** When a referrer crossed its horizon: its clock (ts_ms, else its newest holding file's mtime) plus the horizon.
- *  It is read off referrerAgeMs, the one clock, so due-ness and due-since never disagree: a referrer is due exactly
- *  when this is before nowMs. A referrer with no clock at all (no time, no holding file) is old from the start and
- *  answers 0, the epoch: the export errs early, never late, as referrerAgeMs does
- *  (⟦D:history-export-row-age-early⟧). */
-function dueSinceMs(r, horizonDays, nowMs) {
-  const since = nowMs - referrerAgeMs(r, nowMs) + horizonDays * EXPORT_DAY_MS;
-  return Number.isFinite(since) ? since : 0;
+/** When a candidate fell due: the reducer's due time, `reducer(candidate, homeRetentionDays)`, the one clock, so
+ *  due-ness and due-since never disagree: a candidate is due exactly when that time is before nowMs. Called only for
+ *  a due candidate. One due from the start (the reducer answers -Infinity: under the per-copy rule, no holding file on
+ *  record, or every one gone from disk) answers 0, the epoch: the export errs early, never late
+ *  (⟦D:history-export-due-per-copy⟧). */
+function dueSinceMs(dueAtMs) {
+  return Number.isFinite(dueAtMs) ? dueAtMs : 0;
 }
 
-/** One segment's contents (§9.15). A row is DUE when its own age passes its horizon (the reducer's retention less
- *  the margin), whatever its blobs' other referrers (rev 3.1 review, BK12; ⟦D:history-export-row-carries-blob⟧).
+/** One segment's contents (§9.15). A row is DUE when the reducer's due time for it is before nowMs: by default B2's
+ *  EXPORT_REDUCERS.perCopy, under which every file holding a copy of the row has passed its mtime plus its own home's
+ *  retention, minus 30 days (ruled Q15, rev 3.4; ⟦D:history-export-due-per-copy⟧), whatever its blobs' other referrers
+ *  (rev 3.1 review, BK12; ⟦D:history-export-row-carries-blob⟧).
  *  A due row is taken with:
  *  - the bytes of every blob it references that is neither exported nor pruned (`carry`). A blob already exported
  *    is never carried again, and one shared by several taken rows is carried once;
@@ -1288,9 +1342,9 @@ function dueSinceMs(r, horizonDays, nowMs) {
  *  a prefix of the backlog. The first due row of the PASS is taken whatever its size, so every pass moves the export
  *  forward: `takenBefore` says an earlier call of the same pass (an earlier page) already took one, and then this
  *  call's first row must fit too. The due rows left behind are counted, with the earliest time any of them fell
- *  due. planExport's per-BLOB rule stays the census's; both read referrerAgeMs through the same reducer, so a Q15
- *  answer swaps one reducer and no signature (rev 3.2 review, FE13). */
-export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reducer = EXPORT_REDUCERS.shortestHome, takenBefore = false }) {
+ *  due. planExport's per-BLOB rule stays the census's; both ask the same reducer with the same default, so the pass
+ *  and the census read one clock (RD1), and a rule is still one reducer and no signature (rev 3.2 review, FE13). */
+export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reducer = EXPORT_REDUCERS.perCopy, takenBefore = false }) {
   const take = [];
   const carry = [];
   const stubs = [];
@@ -1301,8 +1355,8 @@ export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reduce
   let oldestLeftDueSinceMs = null;
   let full = false;
   for (const row of rows) {
-    const horizonDays = exportHorizonDays(reducer(row, homeRetentionDays));
-    if (referrerAgeMs(row, nowMs) <= horizonDays * EXPORT_DAY_MS) continue;
+    const dueAt = reducer(row, homeRetentionDays);
+    if (!(dueAt < nowMs)) continue;
     const fresh = new Map();
     for (const b of row.blobs) if (!b.exported && !b.pruned && !carried.has(b.key)) fresh.set(b.key, b);
     let add = EXPORT_ROW_META_BYTES;
@@ -1310,7 +1364,7 @@ export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reduce
     if (full || ((take.length > 0 || takenBefore) && bytes + add > boundBytes)) {
       full = true;
       leftDue += 1;
-      const since = dueSinceMs(row, horizonDays, nowMs);
+      const since = dueSinceMs(dueAt);
       if (oldestLeftDueSinceMs === null || since < oldestLeftDueSinceMs) oldestLeftDueSinceMs = since;
       continue;
     }
@@ -1331,7 +1385,7 @@ export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reduce
 }
 ```
 
-`dueSinceMs` is a function declaration, so `planExport` (above it in the file) calls it after hoisting. `EXPORT_ROW_META_BYTES` is a `const` above `planSegment` in the same block, read only when `planSegment` is called.
+`dueSinceMs` is a function declaration, so `planExport` (above it in the file) calls it after hoisting. `EXPORT_ROW_META_BYTES` is a `const` above `planSegment` in the same block, read only when `planSegment` is called, and so is `EXPORT_REDUCERS.perCopy` in its default parameter (B2 declares it with `EXPORT_REDUCERS`, above). `!(dueAt < nowMs)` rather than `dueAt >= nowMs`, so a reducer answering `NaN` leaves the row waiting rather than exporting it on a non-number. Neither B4 function reads B1's `referrerAgeMs`: if B2 keeps it, it belongs to `shortestHome`'s row clock, and a second reader here would be a second clock.
 
 - [ ] **Step 5: Declare the types.** In `ccd/history/lib.d.mts`, in `planExport`'s declaration, replace its last line
 
@@ -1369,7 +1423,7 @@ Check: `grep -c '^export function planSegment(' ccd/history/lib.d.mts`, `grep -c
 (cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit)
 ```
 
-Expected: `Tests 13 passed`; then every case in the file (B1's `planExport and retentionLowered` describe included, unchanged); `tsc` prints nothing. B1's census (`exportCensus` in sweep.mjs) reads `.due` and `.overdue` only, so its pins stay green too: `(cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'O38')` (B1 Task 26's describe `O38: the export's due rule (B1 half)`).
+Expected: `Tests 14 passed`; then every case in the file (B1's `planExport and retentionLowered` describe and B2's per-copy cases included, unchanged); `tsc` prints nothing. B1's census (`exportCensus` in sweep.mjs) reads `.due` and `.overdue` only, so its pins stay green too: `(cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'O38|O58')` (B1 Task 26's describe `O38: the export's due rule (B1 half)`, as B2 re-ran its due cases under the per-copy default, and any O58 case B2's per-copy task put in that file).
 
 - [ ] **Step 7: Measure every guard red, then green.** From the repository root:
 
@@ -1447,18 +1501,32 @@ cat > .superpowers/sdd/history-w1-b4/scratch/mutants-task2.json <<'MUT_EOF'
   "edits": [{ "anchor": "    let add = EXPORT_ROW_META_BYTES;", "replacement": "    let add = 0;" }]
  },
  {
-  "name": "row-age-early: a NULL ts_ms row treated as never old",
+  "name": "9.15: a row not yet due taken",
   "file": "ccd/history/lib.mjs",
   "test": "test/history-lib.test.ts",
   "filter": "W1-B4: planSegment",
-  "edits": [{ "anchor": "    if (referrerAgeMs(row, nowMs) <= horizonDays * EXPORT_DAY_MS) continue;", "replacement": "    if (row.tsMs === null || nowMs - row.tsMs <= horizonDays * EXPORT_DAY_MS) continue;" }]
+  "edits": [{ "anchor": "    if (!(dueAt < nowMs)) continue;\n", "replacement": "" }]
  },
  {
-  "name": "FE13: planSegment bypasses the reducer",
+  "name": "O58 CONTROL: planSegment's default stays the node-shortest reducer",
   "file": "ccd/history/lib.mjs",
   "test": "test/history-lib.test.ts",
   "filter": "W1-B4: planSegment",
-  "edits": [{ "anchor": "    const horizonDays = exportHorizonDays(reducer(row, homeRetentionDays));", "replacement": "    const horizonDays = exportHorizonDays(shortestRetention(homeRetentionDays));" }]
+  "edits": [{ "anchor": "reducer = EXPORT_REDUCERS.perCopy, takenBefore = false })", "replacement": "reducer = EXPORT_REDUCERS.shortestHome, takenBefore = false })" }]
+ },
+ {
+  "name": "O58 CONTROL: a row aged by its own ts_ms (the row clock), not by its holding files",
+  "file": "ccd/history/lib.mjs",
+  "test": "test/history-lib.test.ts",
+  "filter": "W1-B4: planSegment",
+  "edits": [{ "anchor": "    const dueAt = reducer(row, homeRetentionDays);", "replacement": "    const dueAt = row.tsMs !== null ? row.tsMs + exportHorizonDays(shortestRetention(homeRetentionDays)) * EXPORT_DAY_MS : reducer(row, homeRetentionDays);" }]
+ },
+ {
+  "name": "FE13: planSegment bypasses the reducer it is given",
+  "file": "ccd/history/lib.mjs",
+  "test": "test/history-lib.test.ts",
+  "filter": "W1-B4: planSegment",
+  "edits": [{ "anchor": "    const dueAt = reducer(row, homeRetentionDays);", "replacement": "    const dueAt = EXPORT_REDUCERS.perCopy(row, homeRetentionDays);" }]
  },
  {
   "name": "9.15: the left-behind due-since answers the latest",
@@ -1482,18 +1550,18 @@ cat > .superpowers/sdd/history-w1-b4/scratch/mutants-task2.json <<'MUT_EOF'
   "edits": [{ "anchor": "    let since = Number.NEGATIVE_INFINITY;\n    for (const r of blob.referrers) since = Math.max(since,", "replacement": "    let since = Number.POSITIVE_INFINITY;\n    for (const r of blob.referrers) since = Math.min(since," }]
  },
  {
-  "name": "row-age-early: a clockless due-since left at minus infinity",
+  "name": "due-per-copy: a due-from-the-start due-since left at minus infinity",
   "file": "ccd/history/lib.mjs",
   "test": "test/history-lib.test.ts",
   "filter": "W1-B4: planExport's oldest due-since",
-  "edits": [{ "anchor": "  return Number.isFinite(since) ? since : 0;", "replacement": "  return since;" }]
+  "edits": [{ "anchor": "  return Number.isFinite(dueAtMs) ? dueAtMs : 0;", "replacement": "  return dueAtMs;" }]
  }
 ]
 MUT_EOF
 (cd server && node ../.superpowers/sdd/history-w1-b4/scratch/mutate.mjs ../.superpowers/sdd/history-w1-b4/scratch/mutants-task2.json)
 ```
 
-Foreground, timeout at least 600000 ms. Expected: every row `red (N failed)` then `green`, and `every guard measured red, then green`, exit 0. Measured while drafting, before the metadata term and `takenBefore`: every row red with 1 failed case, except `9.15: the segment bound ignored` (2). With them, `9.15: row metadata not counted toward the bound` reds every planSegment case that asserts `bytes` as well as the metadata case, and the bound rows may red the metadata case too; the worker records the counts, and only a `STAYED GREEN` is a failure.
+Foreground, timeout at least 600000 ms. Expected: every row `red (N failed)` then `green`, and `every guard measured red, then green`, exit 0. Measured while drafting, before the metadata term, `takenBefore` and the per-copy rewrite (rev 3.4): every row red with 1 failed case, except `9.15: the segment bound ignored` (2). With them, `9.15: row metadata not counted toward the bound` reds every planSegment case that asserts `bytes` as well as the metadata case, the bound rows may red the metadata case too, and the per-copy rows each red at least the case their name points at: `9.15: a row not yet due taken` the not-yet-passed case (and others), `O58 CONTROL: planSegment's default stays the node-shortest reducer` the per-copy, O58 and RD1 cases (O58's add-B CONTROL), `O58 CONTROL: a row aged by its own ts_ms` the per-copy case (`e-long`, `e-gone`) and the RD1 case (O58's long-lived-file CONTROL), `FE13: planSegment bypasses the reducer it is given` the O58 case's explicit-reducer assertions. These rows were not re-measured after that rewrite: the worker records the counts, and only a `STAYED GREEN` is a failure.
 
 - [ ] **Step 8: Confirm the restore, and commit.** In the foreground, timeout at least 600000 ms:
 
@@ -3018,7 +3086,7 @@ git commit -m "feat(history): export segments: one write order, a 0600 temp publ
 **Interfaces:**
 - Consumes:
   - Task 1 (`lib.mjs`): `EXPORT_DIR` (`'export'`), `EXPORT_SEGMENT_MAX_BYTES` (`256 * 1024 * 1024`), `EXPORT_SEGMENT_FORMAT` (`1`), `segmentName({ seq, writer }): string`, `nextSegmentSeq({ onDisk: readonly number[]; recorded: number | null }): number`, `HEALTH_META.exportPassMs` (`'export_pass_ms'`).
-  - Task 2 (`lib.mjs`): `planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reducer?, takenBefore? }): SegmentPlan`, where a row is a `SegmentCandidate { key; tsMs: number | null; files: { home: string | null; mtimeMs: number; present: boolean }[]; blobs: { key; zBytes: number; exported: boolean; pruned: boolean }[] }` and the answer is `{ take: string[]; carry: string[]; stubs: string[]; bytes: number; leftDue: number; oldestLeftDueSinceMs: number | null }`, `bytes` counting each taken row's new blob bytes plus `EXPORT_ROW_META_BYTES` (`1536`, also Task 2's).
+  - Task 2 (`lib.mjs`): `planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reducer?, takenBefore? }): SegmentPlan`, its default reducer B2's `EXPORT_REDUCERS.perCopy`, the census's (this task passes none: RD1's one clock), where a row is a `SegmentCandidate { key; tsMs: number | null; files: { home: string | null; mtimeMs: number; present: boolean }[]; blobs: { key; zBytes: number; exported: boolean; pruned: boolean }[] }` and the answer is `{ take: string[]; carry: string[]; stubs: string[]; bytes: number; leftDue: number; oldestLeftDueSinceMs: number | null }`, `bytes` counting each taken row's new blob bytes plus `EXPORT_ROW_META_BYTES` (`1536`, also Task 2's).
   - Task 4 (`store.mjs`):
     - `ensureSegmentDir(exportRoot, storeId): string` (export/ and export/<store_id>/, each chmod 0700; a store id off `UUID_RE` throws), the one directory maker, which `ensureExportDirs` wraps;
     - `createSegment(dir, name, meta: SegmentMeta): SegmentHandle`, with `SegmentMeta = { storeId, writer, seq, harnesses: string[], cutoffMs, format }` and `SegmentHandle = { db, temp, name }`;
@@ -3037,14 +3105,15 @@ git commit -m "feat(history): export segments: one write order, a 0600 temp publ
     - `publishSegment(seg, dir, name): 'linked' | 'exists'`;
     - `listSegments(dir): { name; seq; writer; bytes }[]` (Task 6's `exportStep`, not this task, calls `removeStaleSegmentTemps(dir)`);
     - test side: `openSegment(path): DatabaseSync`, `segmentMeta(db): SegmentMeta`.
-  - B1 `lib.mjs`: `HEALTH_META`, `CLAUDE_CODE_DEFAULT_RETENTION_DAYS`, `shortestRetention(homeRetentionDays)`, `exportHorizonDays(retentionDays)`, `historyPaths`.
+  - B1 `lib.mjs`: `HEALTH_META`, `CLAUDE_CODE_DEFAULT_RETENTION_DAYS`, `shortestRetention(homeRetentionDays)` and `exportHorizonDays(retentionDays)` (for the `ts_ms` prefilter's cutoff and the unrostered-file mapping only; neither decides a row), `historyPaths`.
+  - B2 `lib.mjs` (B2 Task 35): `dueTranscriptKeys<K>({ nowMs, homeRetentionDays, transcripts: { key: K; files: ExportFile[] }[], reducer? }): K[]`, the census's exact prefilter, its default reducer the per-copy rule; this task passes no reducer (RD1's one clock). sweep.mjs already imports it for the census.
   - B1 `store.mjs`: `withTx`, `bump`, `getMeta`, `setMeta`, `openWriter`, `closeWriter`.
   - B1 `sweep.mjs`, same file: the census's private `transcriptFiles(db, homes)` (the file clock: per transcript, its files' `{ home, mtimeMs, present }`) and its module const `DAY_MS` (B1 Task 26); `newBudget(now, limits)`, `budgetLeft(budget)`, `countOutside(db, name)`, `isBusy(e)`, `idsFromFiles(P)`.
   - B2: `store.mjs`'s `pruneDryRun(db, cutoffMs): { blobs; bytes; exported }` (Task 20) for the §6.6 supporting check; `passCtx`'s budget from `deps.budget`.
   - B1 test side: `makeHistoryBox`, `runSweep`, `skipOnDarwin`, `openStoreRO`, `counters`, `journalRecords`, `plantSession`, `plantTranscript`, `HistoryBox`; `historyFixtures`' `userRow`; `tmpHelpers`' `removeTmpFixturesEachTest`.
 - Produces (`ccd/history/sweep.mjs`; it ships no `.d.mts`):
   - `export async function exportPass(db, ctx): Promise<ExportPassResult>`, where `ExportPassResult = { state: 'written' | 'nothing-due' | 'no-horizon' | 'held' | 'failed'; segment: string | null; rows: number; blobs: number; bytes: number; complete: boolean }`. `complete` is true when every due row the pass found fit in its segment; Task 8 resets the missing-segment WARN on it. Task 6 adds the state `'paused'`, which only `exportStep` answers. `ctx` is a TickCtx (`passCtx`'s names): `paths`, `ids`, `now`, `homes`, `rosterUnreadable`, `budget`, `deps`.
-  - Module-private: `EXPORT_PAGE_ROWS`, `EXPORT_SEQ_META` (`'export_seq'`), `EXPORT_ATTEMPT_META` (`'export_attempt_ms'`), `EXPORT_DUE_ENTRIES_SQL`, `EXPORT_NULL_TS_ENTRIES_SQL`, `EXPORT_UNLINKED_SQL`, `EXPORT_STMTS`/`exportStmts(db)`, `segInt(v)`, `exportHomeDays(db, homes)`, `exportDirFor(P, storeId)`, `ensureExportDirs(P, storeId)`, `exportSelect(db, ctx, nowMs, homeDays, boundBytes)`, `writeSegmentRows(db, ctx, seg, sel)`, `discardSegment(seg)`, `noteExportPassDone(db, nowMs, complete)` and `markExported(db, m)`. The name `EXPORT_CANDIDATES_SQL` is NOT used: B1 Task 26's census already declares that const in this module, and a second declaration is a SyntaxError.
+  - Module-private: `EXPORT_PAGE_ROWS`, `EXPORT_SEQ_META` (`'export_seq'`), `EXPORT_ATTEMPT_META` (`'export_attempt_ms'`), `EXPORT_DUE_ENTRIES_SQL`, `EXPORT_NULL_TS_ENTRIES_SQL`, `EXPORT_TRANSCRIPT_ENTRIES_SQL`, `EXPORT_UNLINKED_SQL`, `EXPORT_STMTS`/`exportStmts(db)`, `segInt(v)`, `exportHomeDays(db, homes)`, `exportDirFor(P, storeId)`, `ensureExportDirs(P, storeId)`, `exportSelect(db, ctx, nowMs, homeDays, boundBytes)`, `writeSegmentRows(db, ctx, seg, sel)`, `discardSegment(seg)`, `noteExportPassDone(db, nowMs, complete)` and `markExported(db, m)`. The name `EXPORT_CANDIDATES_SQL` is NOT used: B1 Task 26's census already declares that const in this module, and a second declaration is a SyntaxError.
   - One in-process seam: `exportSelect` pages by `ctx.deps.exportPageRows` when it is a positive safe integer, else `EXPORT_PAGE_ROWS`. Only a test passes it (the page-boundary case pages one row at a time); no env var, flag or file arms it (⟦D:history-test-seams-not-env⟧, the `ctx.deps.statfs` precedent).
   - meta written: `export_seq` and `HEALTH_META.exportPassMs`, both in the mark transaction (`exportPassMs` alone on a `nothing-due` pass); `export_attempt_ms` on a failed pass.
   - Counter: `export_write_failed`.
@@ -3053,12 +3122,13 @@ git commit -m "feat(history): export segments: one write order, a 0600 temp publ
   - `history-export.test.ts`, module scope: `ID`, `G`, `U`, `SLUG`, `WORK`, `MIN`, `HOUR`, `DAY`, `GIB`, `TIB`, `rid`, `row`, `PassResult`, `SweepExport`, `SW`, `pass`, `ingestedBox`, `exportCtx`, `onStore`, `plain`, `q`, `metaOf`, `marks`, `pick`, `byUuid`. Tasks 6, 7 and 8 append to this file and use them.
 
 **Spec:**
-- §9.15 "What is due" (the row rule, a referrer's age, "a due row is exported whole", memberships by `(path, dev, ino, line)`, "No internal id is written"), "The pass" (Write: one segment, at most 256 MiB, within the run budget; Mark: one transaction after the link), "Pruned blobs are never exported or counted due", "Who reads it" (nothing here reads a segment).
+- §9.15 "What is due" (the row rule, ruled Q15 in rev 3.4: every holding file past its mtime plus its own home's retention, minus 30 days, a gone file passed, a row with no holding file due at once; "a due row is exported whole", memberships by `(path, dev, ino, line)`, "No internal id is written"), "The pass" (Write: one segment, at most 256 MiB, within the run budget; Mark: one transaction after the link), "Pruned blobs are never exported or counted due", "Who reads it" (nothing here reads a segment).
 - §9.2 step 6 and step 7 (one run budget, never reset); §9.3 (the run byte budget); §6.6 (`prune` never touches the export; its dry run counts `exported`); §9.8 (bytes verbatim, 0600, never printed).
-- Pins: **O39**'s core (one segment holding the blob's bytes, every referrer's named columns, their family, epoch and transcript rows, memberships with their file identity; marks after the link; a second pass writes nothing new; the hot blob with a young referrer). The kill, collision and variant halves of O39 are Tasks 7 and 8.
-- Departures: ⟦D:history-sole-copy-export⟧, ⟦D:history-export-row-carries-blob⟧, ⟦D:history-export-row-age-early⟧, ⟦D:history-export-pruned-row-stub⟧ (Task 2's NEW slug; this task writes the stub), ⟦D:history-export-segment-bound-estimated⟧ (Task 2's NEW slug; this task pages under it and pins the file's size), ⟦D:history-export-holding-files-by-transcript⟧ (B1's NEW departure, reused: a NULL-`ts_ms` row and an unlinked sidecar age by their transcript's files through B1's `transcriptFiles`, not the row's own copies; the per-row set B1 left owed to B4 is not delivered, so the export and B1's census keep one clock; ruled so by coordinator ruling RD1, in the header's "Coordinator rulings"), ⟦D:history-retention-read-from-settings⟧ (the pass reads each home's retention as the census kept it, 30 only for a home never measured), ⟦D:history-store-fixed-root⟧, ⟦D:history-test-seams-not-env⟧, and NEW ⟦D:history-export-unlinked-sidecar-with-blob⟧: schema v1 gives `sidecars` no mark column, so an unlinked sidecar row travels with its blob's bytes, and an unlinked sidecar whose blob nothing else carries is a candidate of its own (keyed by that blob), so its text is never left store-only.
+- Pins: **O39**'s core (one segment holding the blob's bytes, every referrer's named columns, their family, epoch and transcript rows, memberships with their file identity; marks after the link; a second pass writes nothing new; the hot blob with a young referrer). The kill, collision and variant halves of O39 are Tasks 7 and 8. **O58**'s sweep half (the pass answers by the per-copy default: a 30-day home holding only a swap copy brings nothing forward, with the node-shortest default as its CONTROL; a file gone from disk has passed).
+- Departures: ⟦D:history-sole-copy-export⟧, ⟦D:history-export-row-carries-blob⟧, ⟦D:history-export-due-per-copy⟧ (B2-defined, ruled Q15: the pass decides each row through `planSegment`'s default, the census's per-copy reducer, and selects, whatever their time, the rows of every transcript that rule makes due now, through the census's own `dueTranscriptKeys`), ⟦D:history-export-pruned-row-stub⟧ (Task 2's NEW slug; this task writes the stub), ⟦D:history-export-segment-bound-estimated⟧ (Task 2's NEW slug; this task pages under it and pins the file's size), ⟦D:history-export-holding-files-by-transcript⟧ (B1's NEW departure, reused: every candidate, an unlinked sidecar included, is due by its transcript's files through B1's `transcriptFiles`, not the row's own copies; the per-row set B1 left owed to B4 is not delivered, so the export and the census keep one clock; ruled so by coordinator ruling RD1, and kept by the operator's Q15 ruling as the per-copy rule's per-row set), ⟦D:history-retention-read-from-settings⟧ (the pass reads each home's retention as the census kept it, 30 only for a home never measured, and measures each holding file against its own home's), ⟦D:history-store-fixed-root⟧, ⟦D:history-test-seams-not-env⟧, and NEW ⟦D:history-export-unlinked-sidecar-with-blob⟧: schema v1 gives `sidecars` no mark column, so an unlinked sidecar row travels with its blob's bytes, and an unlinked sidecar whose blob nothing else carries is a candidate of its own (keyed by that blob), so its text is never left store-only.
 - Plan choices (no departure):
-  - **Selection order.** Rows with a NULL `ts_ms` come first (they age by their transcript's newest file, the census's clock: B1 Task 26's transcript-level set of holding files, ⟦D:history-export-holding-files-by-transcript⟧), then rows by `(ts_ms, entry_id)` through `entries_unexported`, then unlinked sidecars by blob id. A page is 256 rows; lib's `planSegment` decides every page under what is left of the bound, with `takenBefore` from the moment an earlier page took a row.
+  - **Selection order.** The selection only offers candidates; lib's `planSegment`, with its per-copy default and no reducer passed, decides every one (RD1's one clock). Rows with a NULL `ts_ms` come first (the `ts_ms` prefilter cannot see them; like every row, they are due by their transcript's files, B1 Task 26's transcript-level set, ⟦D:history-export-holding-files-by-transcript⟧). Then, for every transcript the default rule makes due now (B2's `dueTranscriptKeys`, the census's own prefilter), its rows at or past the prefilter's cutoff, by `(ts_ms, entry_id)` through `entries_ts`: under the per-copy rule every row of one transcript falls due at one instant whatever its own time, and the prefilter would pass over the young ones. Then rows by `(ts_ms, entry_id)` through `entries_unexported` with `ts_ms` below the cutoff, then unlinked sidecars by blob id. The entry candidates the pass offers are therefore every unexported row the census can count due. A page is 256 rows; lib's `planSegment` decides every page under what is left of the bound, with `takenBefore` from the moment an earlier page took a row.
+  - **The `ts_ms` prefilter's cutoff** stays `nowMs` minus the SHORTEST rostered home's horizon, B1's census cutoff. It is no longer the census's prefilter: B2 Task 35 replaced that with the exact `dueTranscriptKeys`. Alone it would hide due rows: those of a transcript with no file left on disk, a row held only by files gone from disk while an older file of its transcript stays on disk, and a row stamped later than its file's mtime. So it only bounds the old-rows phase, and the due-transcript phase above offers every younger row of a due transcript. Which transcripts that phase walks is lib's verdict (`dueTranscriptKeys` over `transcriptFiles`, the census's own call on the same file clock), and `planSegment` still decides each row, so the pass and the census answer one clock (RD1) and every due blob is selectable.
   - **The bound** is `min(EXPORT_SEGMENT_MAX_BYTES, budget.maxBytes - budget.bytes)`, counted as each taken row's new blob bytes (`length(z)`) plus `EXPORT_ROW_META_BYTES` (Task 2). The writer adds the blob bytes it reads to `ctx.budget.bytes`.
   - **One membership scan per segment.** Schema v1 has no index led by `memberships.entry_id` (B1's choice), so the taken entries' memberships come from ONE full scan per pass that writes, filtered by a set. That costs one scan an hour, not one per row.
   - **A caught failure counts toward the hourly cadence** (meta `export_attempt_ms`, read by Task 6's `exportStep`), so a pass that keeps failing with a caught error retries once an hour, never every tick, while doctor's last-pass clock (`HEALTH_META.exportPassMs`) stays on the last pass that ran to its end. A pass that is killed records nothing, so the next tick retries it, as B1's ingest retries a killed tick; Task 7 lengthens the wait after a pass that published and could not mark, and makes a busy error after the link record the published seq and the attempt clock before it is rethrown (RD3). Here a busy is rethrown with nothing recorded, B1's O22 rule.
@@ -3284,12 +3354,26 @@ describe('the export pass, in-process (W1-B4 Task 5; spec §9.15 "What is due", 
   }, 120_000);
 
   it('O39 / BK12: a hot blob with a young referrer — the due old rows are exported with the blob\'s bytes and the blob is marked; the young row waits', async () => {
+    // Under the per-copy rule (⟦D:history-export-due-per-copy⟧) every row of one transcript shares its files' clock, so
+    // the young referrer is a second session's row, in a transcript under claude-b, a home measured below at 180 days
+    // (due 150 days after its file's last write). Session U's transcript sits under claude-a, on the 30-day default:
+    // its rows are due from its file's last write, which is before this pass.
+    const U2 = '7d2e3f4a-5b6c-4d7e-8f90-a1b2c3d4e5f6';
     const { box, ids } = ingestedBox('ccrc-history-export-hot-', [
-      row(1, 'the same prompt', 40 * DAY), row(2, 'an old prompt of its own', 40 * DAY), row(3, 'the same prompt', DAY),
-    ]);
+      row(1, 'the same prompt', 40 * DAY), row(2, 'an old prompt of its own', 40 * DAY),
+    ], {
+      plant: (b) => {
+        plantSession(b, 'claude-b-demo', { uuid: U2, generation: '0189abcd-1234-4678-9abc-0123456789ac', project: 'demo', workdir: WORK });
+        plantTranscript(b, 'claude-b', SLUG, U2,
+          [userRow({ uuid: rid(3), ts: new Date(Date.now() - DAY).toISOString(), text: 'the same prompt', sessionId: U2, cwd: WORK })]);
+      },
+    });
+    const shaOf = (n: number): unknown =>
+      q(box, 'SELECT lower(hex(b.sha256)) AS sha FROM entries e JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?', rid(n))[0]?.['sha'];
+    expect(shaOf(3), 'the fixture must make one blob of the two sessions\' same prompt').toBe(shaOf(1));
     const name = `1.${ids.writer}.db`;
     const r = await onStore(box, (db) => {
-      for (const h of box.homes) setMeta(db, `retention:${h}`, '60');   // every home measured at 60 days: horizon 30
+      setMeta(db, `retention:${box.accountHome['claude-b']!}`, '180');   // claude-b measured at 180 days: its copy waits 150 days
       return SW.exportPass(db, exportCtx(box, ids));
     });
     expect(r).toMatchObject({ state: 'written', segment: name, rows: 2, blobs: 2 });
@@ -3299,6 +3383,66 @@ describe('the export pass, in-process (W1-B4 Task 5; spec §9.15 "What is due", 
     const seg = path.join(exportDirOf(box), name);
     expect(segmentRows(seg, 'blobs').map((b) => b['sha256'])).toContain(hot['sha']);
     expect(segmentRows(seg, 'entries').map((e) => e['uuid']).sort()).toEqual([rid(1), rid(2)]);
+  }, 120_000);
+
+  it('Q15, per copy: a 30-day home that holds only a swap copy brings nothing forward, because the 180-day home\'s copy holds every row back; once that copy is gone from disk the 30-day copy alone decides, and the rows go', async () => {
+    const rows = [row(1, 'one', 2 * DAY), row(2, 'two', DAY)];
+    const { box, transcript, ids } = ingestedBox('ccrc-history-export-swap-', rows, {
+      // the swap copy: the same transcript under claude-b, a home that keeps Claude Code's 30-day default
+      plant: (b) => { plantTranscript(b, 'claude-b', SLUG, U, rows); },
+    });
+    expect(q(box, 'SELECT count(*) AS n FROM ingest_files')[0]!['n'], 'the fixture must hold two copies').toBe(2);
+    expect(q(box, 'SELECT count(*) AS n FROM transcripts')[0]!['n'], 'of ONE transcript').toBe(1);
+    const r = await onStore(box, (db) => {
+      setMeta(db, `retention:${box.accountHome['claude-a']!}`, '180');   // claude-a measured at 180 days: its copy waits 150 days
+      return SW.exportPass(db, exportCtx(box, ids));
+    });
+    expect(r, 'the node-shortest rule would have exported both rows now').toEqual({ state: 'nothing-due', segment: null, rows: 0, blobs: 0, bytes: 0, complete: true });
+    expect(segmentsOf(box)).toEqual([]);
+    expect(marks(box)).toEqual({ [rid(1)]: null, [rid(2)]: null });
+    fs.rmSync(transcript);   // claude-a's copy gone from disk: it has passed its due date (§9.15 "A file's due date")
+    const next = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids)));
+    expect(next).toMatchObject({ state: 'written', segment: `1.${ids.writer}.db`, rows: 2, complete: true });
+    expect(marks(box)).toEqual({ [rid(1)]: `1.${ids.writer}.db`, [rid(2)]: `1.${ids.writer}.db` });
+  }, 120_000);
+
+  it('per copy: a transcript whose every holding file is gone has its rows taken whatever their own time, though the ts prefilter (the shortest home\'s horizon) would pass over them: that text may already be the store\'s only copy', async () => {
+    const { box, transcript, ids } = ingestedBox('ccrc-history-export-gone-', [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
+    const r0 = await onStore(box, (db) => {
+      for (const h of box.homes) setMeta(db, `retention:${h}`, '180');   // every home at 180 days: the cutoff is 150 days back
+      return SW.exportPass(db, exportCtx(box, ids));
+    });
+    expect(r0, 'CONTROL: while its file is on disk, nothing is due').toEqual({ state: 'nothing-due', segment: null, rows: 0, blobs: 0, bytes: 0, complete: true });
+    fs.rmSync(transcript);   // deleted early, days after its rows were written
+    const r = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids)));
+    expect(r).toMatchObject({ state: 'written', segment: `1.${ids.writer}.db`, rows: 2, complete: true });
+    expect(marks(box)).toEqual({ [rid(1)]: `1.${ids.writer}.db`, [rid(2)]: `1.${ids.writer}.db` });
+  }, 120_000);
+
+  it('per copy: once its transcript is due, a young row held only by a file gone from disk is taken though an older file of that transcript stays on disk: the pass offers every row the census counts due', async () => {
+    // Copy A (claude-a, the ingested transcript) holds both rows, written now. Copy B (claude-b) holds row 1 only,
+    // last written 160 days ago. Every home keeps 180 days, so the ts prefilter's cutoff is 150 days back, and row 2,
+    // 35 days old, is younger than it.
+    const rows = [row(1, 'one', 200 * DAY), row(2, 'two', 35 * DAY)];
+    const { box, transcript, ids } = ingestedBox('ccrc-history-export-older-', rows, {
+      plant: (b) => {
+        const copyB = plantTranscript(b, 'claude-b', SLUG, U, [rows[0]!]);
+        const at = new Date(Date.now() - 160 * DAY);
+        fs.utimesSync(copyB, at, at);
+      },
+    });
+    expect(q(box, 'SELECT count(*) AS n FROM ingest_files')[0]!['n'], 'the fixture must hold two copies').toBe(2);
+    expect(q(box, 'SELECT count(*) AS n FROM transcripts')[0]!['n'], 'of ONE transcript').toBe(1);
+    const r0 = await onStore(box, (db) => {
+      for (const h of box.homes) setMeta(db, `retention:${h}`, '180');
+      return SW.exportPass(db, exportCtx(box, ids));
+    });
+    expect(r0, 'CONTROL: copy A, written now, holds both rows back').toEqual({ state: 'nothing-due', segment: null, rows: 0, blobs: 0, bytes: 0, complete: true });
+    fs.rmSync(transcript);   // copy A deleted early: copy B decides, and its 150 days passed 10 days ago
+    const r = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids)));
+    expect(r, 'row 2 too, though only copy A ever held it and the ts prefilter passes over it')
+      .toMatchObject({ state: 'written', segment: `1.${ids.writer}.db`, rows: 2, complete: true });
+    expect(marks(box)).toEqual({ [rid(1)]: `1.${ids.writer}.db`, [rid(2)]: `1.${ids.writer}.db` });
   }, 120_000);
 
   it('a row whose blob prune tombstoned travels with a stub of that blob (sha256, codec, raw_len, no bytes); the stub is never marked exported, the row is', async () => {
@@ -3446,7 +3590,7 @@ describe('the export pass, in-process (W1-B4 Task 5; spec §9.15 "What is due", 
 ./node_modules/.bin/vitest run test/history-export.test.ts
 ```
 
-Expected: all 10 cases red, each at its first `SW.exportPass` call with `TypeError: SW.exportPass is not a function` (the ingest passes, the sidecar and page-boundary cases' preconditions and the `pruneDryRun` read before it all succeed). If instead the file fails to load with `does not provide an export named 'openSegment'`, Task 4 is not on this branch: stop and report.
+Expected: all 13 cases red, each at its first `SW.exportPass` call with `TypeError: SW.exportPass is not a function` (the ingest passes, the hot-blob, swap-copy, older-file, sidecar and page-boundary cases' preconditions and the `pruneDryRun` read before it all succeed). If the hot-blob case reds on `the fixture must make one blob of the two sessions' same prompt`, or the swap-copy or older-file case on `the fixture must hold two copies`, the merged B1 keys blobs or transcripts differently from this plan's reading: stop and report, never loosen the fixture's assertion. If instead the file fails to load with `does not provide an export named 'openSegment'`, Task 4 is not on this branch: stop and report.
 
 - [ ] **Step 5: Write the pass.** In `ccd/history/sweep.mjs`, insert directly ABOVE the entry guard `if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {`:
 
@@ -3454,13 +3598,14 @@ Expected: all 10 cases red, each at its first `SW.exportPass` call with `TypeErr
 // ── W1-B4 Task 5: the sole-copy export pass (spec §9.15 "What is due", "The pass"; ⟦D:history-sole-copy-export⟧) ──────
 // One pass writes ONE immutable segment, export/<store_id>/<seq>.<writer>.db, on the home filesystem and never under
 // db/, so a lost volume leaves it (⟦D:history-store-fixed-root⟧). Four phases, one function each:
-//   1. exportSelect: the due rows, oldest first, page by page through entries' partial index entries_unexported. Rows
-//      with no ts_ms come first: they age by their transcript's newest file, the census's clock, never "never old"
-//      (⟦D:history-export-row-age-early⟧; transcript-level, ⟦D:history-export-holding-files-by-transcript⟧). Then the
-//      unlinked sidecars whose blob nothing has exported (⟦D:history-export-unlinked-sidecar-with-blob⟧). lib's
-//      planSegment (L1) decides each page under what is left of the bound: EXPORT_SEGMENT_MAX_BYTES, or what the run's
-//      byte budget has left, each row counted at its new blob bytes and its metadata
-//      (⟦D:history-export-segment-bound-estimated⟧).
+//   1. exportSelect: the candidate rows, oldest first, page by page. Rows with no ts_ms come first, then the young rows
+//      of each transcript lib's dueTranscriptKeys makes due, then rows by time through entries' partial index
+//      entries_unexported, then the unlinked sidecars whose blob nothing has exported
+//      (⟦D:history-export-unlinked-sidecar-with-blob⟧). Every candidate carries its transcript's files, the census's
+//      per-row set (⟦D:history-export-holding-files-by-transcript⟧), and lib's planSegment (L1), with its default
+//      reducer, the census's per-copy one (⟦D:history-export-due-per-copy⟧; RD1's one clock), decides each page under
+//      what is left of the bound: EXPORT_SEGMENT_MAX_BYTES, or what the run's byte budget has left, each row counted at
+//      its new blob bytes and its metadata (⟦D:history-export-segment-bound-estimated⟧).
 //   2. writeSegmentRows: through store.mjs, each row after what places it (its families, transcript, epochs and the
 //      files it names), then the entry, its variants, its boundary, its linked sidecars and its memberships by (path,
 //      dev, ino, line). The bytes of every blob it references that is not yet exported travel with it
@@ -3481,13 +3626,22 @@ const EXPORT_SEQ_META = 'export_seq';
  *  failing that way retries hourly, never every tick; doctor's last-pass clock (HEALTH_META.exportPassMs) does not, so
  *  it still reads stale. A killed pass writes nothing here, and the next tick retries it. */
 const EXPORT_ATTEMPT_META = 'export_attempt_ms';
-/** Due rows with a time, oldest first, keyset-paged by (ts_ms, entry_id): the partial index entries_unexported orders
- *  them. `ts_ms < cutoff` is only the prefilter for the shortest home's horizon; planSegment decides each row. */
+/** Candidate rows with a time, oldest first, keyset-paged by (ts_ms, entry_id): the partial index entries_unexported
+ *  orders them. `ts_ms < cutoff` (the shortest home's horizon) is only a prefilter; planSegment decides each row by its
+ *  holding files. It hides no due row held by a file on disk: no file's horizon is shorter than the shortest home's
+ *  (an unrostered file is mapped to that home), and a row is written no later than its file's last write. */
 const EXPORT_DUE_ENTRIES_SQL = 'SELECT entry_id, ts_ms, transcript_pk FROM entries WHERE exported_ms IS NULL AND ts_ms IS NOT NULL '
   + 'AND ts_ms < ? AND (ts_ms > ? OR (ts_ms = ? AND entry_id > ?)) ORDER BY ts_ms, entry_id LIMIT ?';
-/** Rows with no time: they age by their transcript's newest file (§9.15 "A referrer's age"), so every one is a candidate. */
+/** Rows with no time: the prefilter cannot see them, so every one is a candidate; like every row, each is due by its
+ *  transcript's files (§9.15 "A row is due"). */
 const EXPORT_NULL_TS_ENTRIES_SQL = 'SELECT entry_id, ts_ms, transcript_pk FROM entries WHERE exported_ms IS NULL AND ts_ms IS NULL '
   + 'AND entry_id > ? ORDER BY entry_id LIMIT ?';
+/** One transcript's rows at or past the prefilter's cutoff, oldest first, keyset-paged by (ts_ms, entry_id) through
+ *  entries_ts (transcript_pk, ts_ms). Asked only for a transcript lib's dueTranscriptKeys makes due now: under the
+ *  per-copy rule every row of it is due at that instant, however young (⟦D:history-export-due-per-copy⟧). Its rows
+ *  below the cutoff come through EXPORT_DUE_ENTRIES_SQL, never twice. */
+const EXPORT_TRANSCRIPT_ENTRIES_SQL = 'SELECT entry_id, ts_ms, transcript_pk FROM entries WHERE transcript_pk = ? AND exported_ms IS NULL '
+  + 'AND ts_ms >= ? AND (ts_ms > ? OR (ts_ms = ? AND entry_id > ?)) ORDER BY ts_ms, entry_id LIMIT ?';
 /** Blobs only an unlinked sidecar names, unexported and unpruned: schema v1 has no mark on a sidecar row, so the blob's
  *  mark is the row's (⟦D:history-export-unlinked-sidecar-with-blob⟧). */
 const EXPORT_UNLINKED_SQL = 'SELECT DISTINCT s.blob_id AS blob_id FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id '
@@ -3504,6 +3658,8 @@ function exportStmts(db) {
   s = {
     dueEntries: db.prepare(EXPORT_DUE_ENTRIES_SQL),
     nullTsEntries: db.prepare(EXPORT_NULL_TS_ENTRIES_SQL),
+    transcriptEntries: db.prepare(EXPORT_TRANSCRIPT_ENTRIES_SQL),
+    transcriptPks: db.prepare('SELECT transcript_pk FROM transcripts ORDER BY transcript_pk'),
     unlinked: db.prepare(EXPORT_UNLINKED_SQL),
     rowBlobs: db.prepare('SELECT blob_id FROM entries WHERE entry_id = ? UNION SELECT blob_id FROM entry_variants WHERE entry_id = ? '
       + 'UNION SELECT kept_blob_id FROM boundaries WHERE entry_id = ? AND kept_blob_id IS NOT NULL'),
@@ -3568,6 +3724,9 @@ function ensureExportDirs(P, storeId) {
 function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
   const s = exportStmts(db);
   const homes = Object.keys(homeDays);
+  // The shortest rostered home decides two things here and no due verdict: the ts prefilter's cutoff, and the home a
+  // file outside every rostered home is measured against (the census's mapping, B1: the early side). planSegment's
+  // per-copy default measures every other file against its own home (⟦D:history-export-due-per-copy⟧).
   const minDays = shortestRetention(homeDays);
   const minHome = homes.find((h) => homeDays[h] === minDays) ?? null;
   const cutoffMs = nowMs - exportHorizonDays(minDays) * DAY_MS;
@@ -3622,7 +3781,8 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
   let left = boundBytes;
   /** One page through planSegment. False when the bound or the run's budget ends the selection. Once an earlier page
    *  took a row, this page's first row must fit what is left (takenBefore): only the pass's first row is taken
-   *  whatever its size. */
+   *  whatever its size. No reducer is passed: planSegment's default is the census's (B2's per-copy reducer), so the
+   *  pass and the census answer one clock (RD1). */
   const decide = (cands) => {
     if (cands.length > 0) {
       const plan = planSegment({ nowMs, homeRetentionDays: homeDays, rows: cands.map((c) => c.cand), boundBytes: left, takenBefore: sel.taken.length > 0 });
@@ -3645,6 +3805,21 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
     if (page.length === 0) break;
     after = Number(page[page.length - 1].entry_id);
     if (!decide(page.map(entryCand))) return sel;
+  }
+  // The rows, at or past the cutoff, of every transcript the default rule makes due now: lib's dueTranscriptKeys, the
+  // census's own prefilter over the same file clock (RD1). Under the per-copy rule every row of one transcript falls
+  // due at one instant whatever its own time, so the ts prefilter below would pass over the young ones: a transcript
+  // with no holding file left on disk, and one whose young rows outlived the files that held them while an older file
+  // of it stays on disk (⟦D:history-export-due-per-copy⟧). planSegment still decides each row.
+  const transcripts = s.transcriptPks.all().map((t) => ({ key: Number(t.transcript_pk), files: filesOf(Number(t.transcript_pk)) }));
+  for (const pk of dueTranscriptKeys({ nowMs, homeRetentionDays: homeDays, transcripts })) {
+    for (let ts = cutoffMs, after = 0; ;) {
+      const page = s.transcriptEntries.all(pk, cutoffMs, ts, ts, after, pageRows);
+      if (page.length === 0) break;
+      ts = Number(page[page.length - 1].ts_ms);
+      after = Number(page[page.length - 1].entry_id);
+      if (!decide(page.map(entryCand))) return sel;
+    }
   }
   for (let ts = Number.MIN_SAFE_INTEGER, after = 0; ;) {
     const page = s.dueEntries.all(cutoffMs, ts, ts, after, pageRows);
@@ -3885,7 +4060,8 @@ import re
 s = open('ccd/history/sweep.mjs').read()
 want = {
     './lib.mjs': ['EXPORT_DIR', 'EXPORT_SEGMENT_MAX_BYTES', 'EXPORT_SEGMENT_FORMAT', 'segmentName', 'nextSegmentSeq',
-                  'planSegment', 'HEALTH_META', 'CLAUDE_CODE_DEFAULT_RETENTION_DAYS', 'shortestRetention', 'exportHorizonDays'],
+                  'planSegment', 'HEALTH_META', 'CLAUDE_CODE_DEFAULT_RETENTION_DAYS', 'shortestRetention', 'exportHorizonDays',
+                  'dueTranscriptKeys'],
     './store.mjs': ['ensureSegmentDir', 'createSegment', 'segmentInserts', 'publishSegment', 'listSegments',
                     'withTx', 'bump', 'getMeta', 'setMeta'],
     'node:fs': ['existsSync', 'rmSync'],
@@ -3941,6 +4117,9 @@ Each mutation below is applied by hand to the file it names (`ccd/history/sweep.
 | In `exportSelect`'s `decide`, change `if (plan.leftDue > 0 \|\| left <= 0)` to `if (false)` | `the bound` | `complete: true` where `complete: false` was expected |
 | In `exportSelect`'s `decide`, delete `, takenBefore: sel.taken.length > 0` from the `planSegment` call | `a page boundary` | `rows: 2` where `rows: 1` was expected |
 | In `lib.mjs`'s `planSegment`, change `    let add = EXPORT_ROW_META_BYTES;` to `    let add = 0;` | `row metadata counts toward the bound` | `complete: true` where `complete: false` was expected (every small row fit) |
+| O58's CONTROL through the sweep: in `lib.mjs`'s `planSegment`, change `reducer = EXPORT_REDUCERS.perCopy, takenBefore = false })` to `reducer = EXPORT_REDUCERS.shortestHome, takenBefore = false })` | `a 30-day home that holds only a swap copy` | `the node-shortest rule would have exported both rows now: expected { state: 'written', … } to deeply equal { state: 'nothing-due', … }` |
+| In `exportSelect`, delete the due-transcript phase: the `const transcripts = s.transcriptPks.all()…` line, the `for (const pk of dueTranscriptKeys(` loop below it and the five comment lines above them | `every holding file is gone` | `expected { state: 'nothing-due', … } to match object { state: 'written', … }` |
+| In `exportSelect`, narrow the due-transcript phase to transcripts with no file on disk: change `dueTranscriptKeys({ nowMs, homeRetentionDays: homeDays, transcripts })` to `dueTranscriptKeys({ nowMs, homeRetentionDays: homeDays, transcripts: transcripts.filter((t) => !t.files.some((f) => f.present)) })` | `an older file of that transcript stays on disk` | `rows: 1` where `rows: 2` was expected (only row 1, below the cutoff, is offered) |
 
 The quoted reds are what the assertions print, not a contract; any red on the named case is the measurement. After the last restore, run the whole file once more and see it green, and `cmp "$SCRATCH/sweep.mjs.t5" ccd/history/sweep.mjs` and `cmp "$SCRATCH/lib.mjs.t5" ccd/history/lib.mjs` print nothing.
 
@@ -5182,7 +5361,7 @@ git commit -m "feat(history): export marks that move — a late variant or a lat
 **Interfaces:**
 - Consumes:
   - Task 1 (`lib.mjs`): `EXPORT_DIR = 'export'`, `EXPORT_PASS_INTERVAL_MS = 3_600_000`, `HEALTH_META.exportPassMs` (`'export_pass_ms'`), `HEALTH_META.exportDueOldestMs` (`'export_due_oldest_ms'`), `HEALTH_META.exportPaused` (`'export_paused'`), each declared in `lib.d.mts` by Task 1.
-  - Task 2 (`lib.mjs`): `planExport(…)`'s answer gains `oldestDueSinceMs: number | null` (the minimum over due blobs of each blob's latest referrer clock plus the horizon).
+  - Task 2 (`lib.mjs`): `planExport(…)`'s answer gains `oldestDueSinceMs: number | null` (the minimum over due blobs of each blob's latest referrer due time, by the reducer: B2's per-copy default, so a referrer falls due when its last holding file on disk passes its mtime plus its home's horizon).
   - Task 4 (`store.mjs`): `listSegments(dir: string): { name: string; seq: number; writer: string; bytes: number }[]`, which lists by name and size and never opens a segment; it answers `[]` for an absent directory and throws for any other failure.
   - Tasks 5–6 (`sweep.mjs`): meta `HEALTH_META.exportPassMs` is the time of the last COMPLETED pass, written by every pass that ran to its end (`written`, `nothing-due`; Task 5's `noteExportPassDone`), never by a `no-horizon`, `paused`, `held` or `failed` one (a `no-horizon` pass judged nothing, so it is not a pass); meta `HEALTH_META.exportPaused` holds `planExportRoom`'s word (`low-disk` or `unsettled`) while the pass is paused for room, and `''` as soon as a preflight admits, whatever the pass then answers. `readStore` reads any non-empty value as paused.
   - B1 `lib.mjs` (Task 28): `deriveHealth`, `HealthInputs`, `HealthResult`, `HealthItem`, `HEALTH_REMEDIES`, `HEALTH_WORDS`, and the module-private `minutesOf`, `SWEEP_LOG`, `remedyFor`.
@@ -5201,7 +5380,7 @@ git commit -m "feat(history): export marks that move — a late variant or a lat
 **Spec:**
 - §9.6 "WARN on": `export-due` (the B4 arm) and `export-paused-low-disk`; §9.15 "The gap guard"; §9.11 O41's B4 cases ("steady state with an hourly pass → PASS; a due blob older than two pass intervals, or a last pass older than 2 h → WARN"), O40's doctor clause.
 - Pins: O41 (B4 cases); O40's doctor WARN.
-- Departures: ⟦D:history-export-due-escalates⟧; ⟦D:history-doctor-state-words⟧ (its precedence unchanged); ⟦D:history-export-wait-from-census⟧ (NEW: the "waited more than two pass intervals" rule needs a due-since time, and the spec names no clock for it. The census computes it from the store's rows, never from a date. Census staleness (≤ 30 min) plus the pass interval (≤ 1 h) stays under 2 h, so a steady store reads PASS); ⟦D:history-export-holding-files-by-transcript⟧ (B1's NEW departure, reused: the due-since is read on B1's census clock, which ages a NULL-`ts_ms` referrer by its transcript's files, the same clock Task 5's pass selects by, so the wait arm and the pass never disagree about which rows are due).
+- Departures: ⟦D:history-export-due-escalates⟧; ⟦D:history-doctor-state-words⟧ (its precedence unchanged); ⟦D:history-export-wait-from-census⟧ (NEW: the "waited more than two pass intervals" rule needs a due-since time, and the spec names no clock for it. The census computes it from the store's rows, never from a date. Census staleness (≤ 30 min) plus the pass interval (≤ 1 h) stays under 2 h, so a steady store reads PASS); ⟦D:history-export-holding-files-by-transcript⟧ (B1's NEW departure, reused: the due-since is the census's, read through the same reducer (B2's per-copy default, ⟦D:history-export-due-per-copy⟧) and the same per-row file set, a referrer's transcript's files, as Task 5's pass decides by, so the wait arm and the pass never disagree about which rows are due).
 
 **Choices this task makes:**
 - An unmeasured clock (`null`) fires neither writer arm by itself: no pass since this build landed, or no census since, is not a gap until the other clock says so.
@@ -5522,9 +5701,12 @@ const X9_HOUR = 3_600_000;
 describe('W1-B4 Task 9: the census records when the oldest due blob became due (spec §9.15 "The gap guard")', () => {
   beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
 
-  /** A store holding two due blobs, each with one referrer row in one transcript whose file is present and fresh
-   *  (so neither is overdue), five and three hours old, and a census in progress over one 30-day home (horizon 0).
-   *  `cursor` is the census state as a pass left it. Runs exportCensus to its end; answers the two meta values. */
+  /** A store holding two due blobs, each with one referrer row in a transcript of its own whose one file is present
+   *  and was last written five and three hours ago (so neither is overdue), and a census in progress over one 30-day
+   *  home (horizon 0). Under the per-copy rule (⟦D:history-export-due-per-copy⟧) each row is due from its file's last
+   *  write, so the two rows need two files to fall due at two times. Each time is whole seconds, so a file's mtime
+   *  set by utimes reads back exactly. `cursor` is the census state as a pass left it. Runs exportCensus to its end;
+   *  answers the two meta values. */
   async function x9Census(prefix: string, cursor: (ids: { a: number; b: number }, home: string) => Record<string, unknown>):
     Promise<{ due: string | null; oldest: string | null; tA: number; tB: number }> {
     const sw = (await import('../../ccd/history/sweep.mjs')) as unknown as X9Sweep;
@@ -5532,27 +5714,34 @@ describe('W1-B4 Task 9: the census records when the oldest due blob became due (
     x9Store.createStore(box.home);
     const home = box.homes[0]!;
     const now = Date.now();
-    const tA = now - 5 * X9_HOUR;
-    const tB = now - 3 * X9_HOUR;
-    const file = x9Path.join(home, 'projects', '-home-u-tree-demo', 'x9-census.jsonl');
-    x9Fs.mkdirSync(x9Path.dirname(file), { recursive: true });
-    x9Fs.writeFileSync(file, '{}\n');
+    const tA = Math.floor((now - 5 * X9_HOUR) / 1000) * 1000;
+    const tB = Math.floor((now - 3 * X9_HOUR) / 1000) * 1000;
     const db = x9Store.openWriter(x9Lib.historyPaths(box.home).dbFile);
     try {
-      const t = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)').run('90909090-0000-4000-8000-000000000001').lastInsertRowid);
-      const f = Number(db.prepare("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, status, parser_version) VALUES (1, 2, '', ?, 'live', 1)")
-        .run(t).lastInsertRowid);
-      db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, ?, ?)').run(file, f, now);
+      /** One transcript with one present file of `home`, last written at `atMs`: its rows' per-copy clock. */
+      const transcript = (uuid: string, name: string, ino: number, atMs: number): { t: number; f: number } => {
+        const file = x9Path.join(home, 'projects', '-home-u-tree-demo', name);
+        x9Fs.mkdirSync(x9Path.dirname(file), { recursive: true });
+        x9Fs.writeFileSync(file, '{}\n');
+        x9Fs.utimesSync(file, atMs / 1000, atMs / 1000);
+        const t = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)').run(uuid).lastInsertRowid);
+        const f = Number(db.prepare("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, status, parser_version) VALUES (1, ?, '', ?, 'live', 1)")
+          .run(ino, t).lastInsertRowid);
+        db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, ?, ?)').run(file, f, now);
+        return { t, f };
+      };
+      const older = transcript('90909090-0000-4000-8000-000000000001', 'x9-census-a.jsonl', 2, tA);
+      const younger = transcript('90909090-0000-4000-8000-000000000002', 'x9-census-b.jsonl', 3, tB);
       const blob = (text: string): number => Number(db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?)')
         .run(x9Hash('sha256').update(text).digest(), x9Store.CODEC, x9Store.brotli(Buffer.from(text)), Buffer.byteLength(text)).lastInsertRowid);
       const a = blob('x9 the older due row');
       const b = blob('x9 the younger due row');
-      const entry = (uuid: string, blobId: number, tsMs: number): void => {
+      const entry = (uuid: string, at: { t: number; f: number }, blobId: number, tsMs: number): void => {
         db.prepare("INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'operator', 1, 1, ?, ?, ?)")
-          .run(uuid, t, f, blobId, tsMs);
+          .run(uuid, at.t, at.f, blobId, tsMs);
       };
-      entry('90909090-0000-4000-8000-0000000000a1', a, tA);
-      entry('90909090-0000-4000-8000-0000000000b1', b, tB);
+      entry('90909090-0000-4000-8000-0000000000a1', older, a, tA);
+      entry('90909090-0000-4000-8000-0000000000b1', younger, b, tB);
       db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('export-census', 1, ?, NULL)")
         .run(JSON.stringify(cursor({ a, b }, home)));
       expect(sw.exportCensus(db, now, sw.newBudget(() => now)), 'the census ran to its end').toBe(true);
@@ -5562,7 +5751,7 @@ describe('W1-B4 Task 9: the census records when the oldest due blob became due (
     }
   }
 
-  it('over two due blobs, a census B4 started records the EARLIER due-since: with a horizon of 0, the older row\'s own time', async () => {
+  it('over two due blobs, a census B4 started records the EARLIER due-since: with a horizon of 0, the older file\'s last write (the per-copy clock)', async () => {
     const r = await x9Census('ccrc-hist-x9-census-', (_ids, home) => ({ last: 0, due: 0, overdue: 0, homeDays: { [home]: 30 }, startMs: Date.now(), dueOldest: null }));
     expect(r.due).toBe('2');
     expect(r.oldest).toBe(String(r.tA));
@@ -6878,7 +7067,8 @@ Expected: `no .head.store_id read: the fix is on the base`. If a line prints, st
 // ── W1-B4 Task 11: O43, the export survives source loss (spec §9.11 O43, §9.14, §9.15) ─────────────────────────────
 // The whole path through the real sweep, the real CLI and the real rebuild. A family is captured in a real workdir
 // and compacted; its leaf derives; the export pass, run two hours on (past its hourly clock; the fixture homes carry
-// no cleanupPeriodDays, so the horizon is 0 and every row is due), writes one segment. Then the transcript and
+// no cleanupPeriodDays, so the transcript's home has horizon 0 and, under the per-copy rule, every row is due from the
+// file's last write, two hours before the pass's clock), writes one segment. Then the transcript and
 // history.db are lost, and `doctor --rebuild` replays the journal and the export. Only the export holds the text, the
 // gone file's memberships and the epoch's launch cwd, so each read verb that answers proves the segment came back.
 describe('O43: the export survives source loss (W1-B4 Task 11)', () => {
@@ -6919,7 +7109,8 @@ describe('O43: the export survives source loss (W1-B4 Task 11)', () => {
 
   interface O43Built { box: RrBox; transcript: string; workdir: string; leaf: string; segment: string; dev: bigint; ino: bigint }
   /** A bound box whose store captured one compacted family launched in a real workdir, derived its leaf, and then
-   *  exported every row in one pass run two hours on. */
+   *  exported every row in one pass run two hours on. Nothing writes the transcript after it is planted, so its mtime,
+   *  the per-copy clock, is before every pass's. */
   function o43Built(prefix: string): O43Built {
     const box = rrH.makeHistoryBox(prefix, { role: 'fleet' });
     const workdir = rrPath.join(box.home, 'work', 'w');
@@ -6966,7 +7157,8 @@ describe('O43: the export survives source loss (W1-B4 Task 11)', () => {
     const w = rrH.runCli(box, ['tree', '--workspace', '--json'], { env: pane });
     expect(w.code, `${w.stdout}\n${w.stderr}`).toBe(0);
     expect((w.json?.['scope'] as { families: Array<{ ccrc_id: string }> }).families.map((f) => f.ccrc_id)).toEqual([O43_ID]);
-    // The replay marked every row, so a pass past the rebuilt store's own hourly clock finds nothing due.
+    // The replay marked every row, so a pass past the rebuilt store's own hourly clock finds nothing due, though the
+    // per-copy rule makes every row of the gone transcript due at once: marked rows are never candidates.
     const again = rrH.runDriver(box, { offsetMs: 2 * O43_HOUR });
     expect(again.code, `${again.stdout}\n${again.stderr}`).toBe(0);
     expect(rrH.segmentsOf(box).map((s) => rrPath.basename(s))).toEqual([b.segment]);
@@ -7088,7 +7280,7 @@ git commit -m "test(history): O43, the export survives the loss of its transcrip
 ### Task 12: Wrap-up: single-definition and O13/O14 re-checks, README's history sentence in place, CLAUDE.md's figure, the whole-PR checks and the PR body with the coordinator's and operator's steps
 
 **Files:**
-- Modify, only if Step 1 measures a new lib vocabulary: `server/test/single-definition.test.ts`, in place, in B1's end-appended O14 describe `'ccrc history: every vocabulary is declared once, in lib.mjs, and bound to its uses (spec 2026-10-05 §9.11 O14)'`, its `VOCABS` array (B2 Task 34 widened it). It is a citation-corpus file: no import line, no insertion.
+- Modify, only if Step 1 measures a new lib vocabulary: `server/test/single-definition.test.ts`, in place, in B1's end-appended O14 describe `'ccrc history: every vocabulary is declared once, in lib.mjs, and bound to its uses (spec 2026-10-05 §9.11 O14)'`, its `VOCABS` array (B2 Task 36 widened it). It is a citation-corpus file: no import line, no insertion.
 - Modify: `README.md`. In place, in B2's `### Session history: lossless recall (\`ccrc history\`)` section, its last paragraph (`**Box verbs and operator verbs.**`), anchored by content: the four lines from `` `cc-*` pane. These are speed bumps, not walls: `` to `` refuses (`recovering`). `` are reflowed into seven. No `file.ext:N` token is added, so README's census entry stays empty.
 - Modify, only if Step 3's measurement calls for it: `CLAUDE.md`, the `README.md (~N lines)` figure on its line 10 (pre-existing; measured at main-ro f7e51156f as `(~5700 lines)`; B1, B2 and other programmes re-measure it, so read it on this base), in place.
 - Create (gitignored scratch, not committed): `.superpowers/sdd/history-w1-b4/pr-body.md`.
@@ -7099,7 +7291,7 @@ git commit -m "test(history): O43, the export survives the loss of its transcrip
 - Produces: the README sentence; CLAUDE.md's figure when it moved; the PR body file.
 
 **Spec:**
-- §10.5 (B4's contents and pins: O39, O40, O43, O44's segment case); §10.6 step 3; §10.7 W1-g and W1-k; §9.12 (rollout by the release lane only); §13 (single definition, switches with no writer); §15.3 Q15.
+- §10.5 (B4's contents and pins: O39, O40, O43, O44's segment case); §10.6 step 3; §10.7 W1-g and W1-k; §9.12 (rollout by the release lane only); §13 (single definition, switches with no writer); §15.1 and §15.3 (Q15–Q19 and prune at low disk, ruled 2026-10-07, rev 3.4).
 - Departures: ⟦D:history-b4-after-b2⟧, ⟦D:history-w1b-three-prs⟧ (B4 follows B2; B3's order does not matter), and NEW ⟦D:history-readme-export-sentence⟧: rev 3.2's §10.5 "Edited files" assigns each README edit to a PR (B1, B2, B3, W3) and gives B4 none, but B2's history section says the store is the text's only copy past Claude Code's retention, which is false once the export ships, so B4 repairs that one sentence in place (B2 marked its own unlisted README edits the same way, as a NEW slug of its plan).
 
 - [ ] **Step 1: Re-check the single-definition bindings this PR could break.** From the repository root:
@@ -7216,7 +7408,7 @@ Expected: green. A red means a deviation number defined in two plans: report it 
 ```markdown
 ## ccrc history W1-B4 "sole-copy export"
 
-Spec: `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` (rev 3.3), §10.5's B4 bullet and §9.15 (ruled Q6, e).
+Spec: `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` (rev 3.4), §10.5's B4 bullet and §9.15 (ruled Q6, e; its due rule the per-copy one, ruled Q15).
 Plan: the B4 plan this wave's brief names.
 
 Before Claude Code deletes a transcript, the sweep copies its text into immutable SQLite segments on the home
@@ -7226,7 +7418,8 @@ that text:
 - lib decisions: the export constants, segment names and numbering past every name on disk, the hourly cadence, the
   home-filesystem preflight (`planCopy` with that filesystem's own floor and the 256 MiB segment bound), the
   mark-failure backoff and the check after a bind (RD2: the sweep measures and acts), the row-level due rule that
-  carries a due row's unexported blobs, the oldest due-since, the two export recovery phases and their cursor arm, the
+  carries a due row's unexported blobs (B2's per-copy reducer as its default, the census's, so the two keep one
+  clock), the oldest due-since, the two export recovery phases and their cursor arm, the
   segment replay verdict, and doctor's `export-due` rule with the writer live;
 - store.mjs segments: a temp written `O_EXCL` 0600 with journal mode off, published by `link()` (never by rename, never
   overwritten), a read-only open, page readers, the listing and stale temps;
@@ -7246,7 +7439,8 @@ No hook, `ccd/ccrc`, deploy, server or PWA edit; no schema migration (schema v1 
 ### Pins
 
 O39, O40, O43, O44's segment case; O41's B4 cases (steady state PASS; a due blob waiting more than two pass intervals,
-or a last pass older than 2 h, WARNs). O41's B1 half and O38 stay B1's and stay green.
+or a last pass older than 2 h, WARNs); O58's B4 half (`planSegment` and the pass answer by the per-copy default, with
+its CONTROLs). O41's B1 half and O38 stay B1's (O38's due cases as B2 re-pinned them) and stay green.
 
 ### Departures
 
@@ -7262,13 +7456,16 @@ or a last pass older than 2 h, WARNs). O41's B1 half and O38 stay B1's and stay 
    `gh workflow run ci.yml --ref <this branch> -f mode=full`.
 3. **Rollout through the release lane only** (§9.12): merge, then promote and move the fleet with the update control
    plane or `ccrc rollout`. Nothing is rolled out by hand.
-4. **Expect the backlog.** On a node whose shortest home retention is Claude Code's 30-day default (a home without
-   `cleanupPeriodDays`; ccrc never writes the key), the horizon is 0 and the whole store is due at once: the export
-   drains it at one segment of about 256 MiB an hour (each row counted at its new blob bytes plus an estimate of its
-   metadata, so a segment can pass 256 MiB by that estimate's error, or by one row larger than the bound) and WARNs
-   `export-due` until it has. Check that node's home-filesystem headroom first (`df -h ~`): the export's preflight
-   pauses it before that filesystem's floor (`export-paused-low-disk`). Q15 keeps the ruled reducer (RD1), so
-   `retention-lowered` stays until the operator sets the key in the named home.
+4. **Expect the backlog.** Under the per-copy rule (ruled Q15, rev 3.4; B2's default before this PR), text whose
+   every holding file sits in a home on Claude Code's 30-day default (no `cleanupPeriodDays`; ccrc never writes the
+   key, so every newly added account) is due from its file's last write, and so is text whose every file is gone from
+   disk. On a node whose transcripts live mostly in such homes the first passes drain that backlog at one segment of
+   about 256 MiB an hour (each row counted at its new blob bytes plus an estimate of its metadata, so a segment can
+   pass 256 MiB by that estimate's error, or by one row larger than the bound) and WARN `export-due` until they have.
+   A 30-day home that holds only swap copies of a 180-day home's transcripts brings nothing forward. Check that
+   node's home-filesystem headroom first (`df -h ~`): the export's preflight pauses it before that filesystem's floor
+   (`export-paused-low-disk`). `retention-lowered` stays as a reminder, not a gate: setting the key in the named home
+   defers that home's rows.
 5. **After the rollout, per node:** doctor's `history` reads PASS, or only the expected WARNs (`retention-lowered`,
    and `export-due` while a backlog drains); `export_paused_low_disk` is 0 in `status --json`'s counters; no
    `export-overdue`.
@@ -7288,10 +7485,19 @@ or a last pass older than 2 h, WARNs). O41's B1 half and O38 stay B1's and stay 
   schema v1 gives sidecars no mark (⟦D:history-export-unlinked-sidecar-with-blob⟧).
 - The memberships of a copy first seen after its rows were exported are not exported until a variant or a newly
   linked sidecar clears the entry's marks; a rebuild meanwhile has the rows from the earlier copy only.
-- A NULL-`ts_ms` row ages by the newest file of its transcript, not its own copies (⟦D:history-export-holding-files-by-transcript⟧,
-  B1's): a fresher copy of the same transcript that does not hold the row makes it due later than the per-row rule
-  would. B1 left the per-row set owed to B4; B4 keeps the census's clock so the export and doctor agree, as the
-  coordinator ruled (RD1).
+- Every row is due by the files of its transcript, not its own copies (⟦D:history-export-holding-files-by-transcript⟧,
+  B1's, the per-row set the operator's Q15 ruling keeps): a fresher file of the same transcript that does not hold the
+  row makes it due later than its own copies would, and a forked or resumed file of another transcript that holds it
+  is not counted. B1 left the per-row set owed to B4; B4 keeps the census's clock so the export and doctor agree, as
+  the coordinator ruled (RD1).
+- The pass's `ts_ms` prefilter (the shortest home's horizon, B1's census cutoff) bounds only its old-rows phase. Its
+  due-transcript phase walks the transcripts B2's `dueTranscriptKeys` makes due, the census's own prefilter, and offers
+  every younger row of each, so no row the census counts due is left unselectable: neither a transcript with no file
+  left on disk, nor a row held only by files gone from disk while an older file of its transcript stays on disk, nor a
+  row stamped later than its file's mtime. The cost is one `dueTranscriptKeys` call over every transcript per pass,
+  over the `transcriptFiles` measurement the pass already makes. B2 Task 35's named swap-prefix residual (rows written
+  after a swap wait for the frozen source copy, which holds none of them) is the census's as much as the pass's: one
+  clock (RD1).
 - A segment's size is counted, not measured: each row at its new blob bytes plus a 1.5 KiB estimate of its metadata,
   so a segment lands near 256 MiB and can pass it by the estimate's error; a single row larger than the bound travels
   whole (⟦D:history-export-segment-bound-estimated⟧).
@@ -7322,7 +7528,9 @@ Ruled on this plan, and landed as follows:
   replay filling NULL launch facts, `cwd`, `cwd_real` and `confirmed_ms` and skipping a seq the journal gave another
   uuid, `export_epoch_conflict` (Task 10); `exportWriterLive` a build fact (Task 9); the per-row holding-file set NOT
   delivered, one clock with the census (Tasks 5, 9); the estimated segment bound (Tasks 2, 5); the mark-failure
-  backoff (Tasks 1, 7); a late-linked sidecar clearing its entry's marks (Task 8). Q15 keeps the ruled reducer.
+  backoff (Tasks 1, 7); a late-linked sidecar clearing its entry's marks (Task 8). Its last item, Q15 keeping the
+  node-shortest reducer, is superseded by the operator's Q15 ruling (rev 3.4, 2026-10-07): the per-copy reducer is
+  the default of the census's `planExport` (B2) and of `planSegment` (Task 2), and RD1's one clock still holds.
 - **RD2.** The check after a bind's predicate and the mark-failure decision are lib's pure functions
   (`decideMarkCheck`, `missingSegmentNames`, `exportMarkFailsOf`, `decideMarkOutcome`; Task 1, pure tests and
   mutants); `sweep.mjs` only measures, calls them and acts (Tasks 7, 8, each with a CONTROL that runs a lib mutant
@@ -7337,10 +7545,14 @@ Ruled on this plan, and landed as follows:
 
 (every task's "Choices this task makes" and "Plan choices" bullets, one line each, its task number first)
 
-### Open questions (spec §15.3): the spec's stated defaults were followed
+### Operator rulings (spec §15.1, rev 3.4, 2026-10-07)
 
-Q15: the ruled reducer (the node's shortest retention), which coordinator ruling RD1 keeps; `planExport` and
-`planSegment` take the reducer, so a later change swaps one function and no signature.
+- Q15, yes: the per-copy due rule. B2 made `EXPORT_REDUCERS.perCopy` the default of `planExport` (the census and
+  doctor's export arms); this PR's `planSegment` takes the same parameter with the same default, and the pass passes
+  none, so the export and the census read one clock. The cadence and the preflight are unchanged.
+- Q16, yes (B2): a `fork` epoch travels in a segment and replays like any other epoch; B4 writes no spool line.
+- Q17, as recommended (B1, B2): no B4 wording. Q18: a W2 matter. Q19, no: B4 maps nothing.
+- Prune at low disk, confirmed (`history-prune-not-floor-gated`, ruled): B4 does not touch prune.
 
 ### Tests run (foreground, on the worker's box)
 
@@ -7370,7 +7582,7 @@ Every departure this plan takes from the spec is listed once below, in the order
 
 **No number is written here.** Each entry carries its slug as the placeholder `⟦D:<slug>⟧`, exactly as the tasks and source comments do. The numbers are minted by the allocator (`POST /api/ledger/deviations`) when the coordinator commits the plan, and the placeholders are replaced in that commit. A slug B1 or B2 already defined keeps the number it was minted there.
 
-- ⟦D:history-sole-copy-export⟧ (Tasks 1, 4, 5, 7, 11): Per source harness, blobs whose every referrer is older than the shortest measured retention minus 30 days are exported with their referrer rows, and the rows that place them, to immutable SQLite segments `export/<store_id>/<seq>.<writer>.db` on the home filesystem, published by `link()` and never overwritten; doctor WARNs `export-due` from the first unexported one on a build without the writer (§9.15; ruled Q6, W1-B4, live before the first measured due date, at the latest 2026-12-19 since rev 3.2).
+- ⟦D:history-sole-copy-export⟧ (Tasks 1, 4, 5, 7, 11): Per source harness, blobs whose every referrer is due are exported with their referrer rows (due by the per-copy rule since rev 3.4, ruled Q15, ⟦D:history-export-due-per-copy⟧; rev 3.1 to 3.3 said older than the shortest measured retention minus 30 days), and the rows that place them, to immutable SQLite segments `export/<store_id>/<seq>.<writer>.db` on the home filesystem, published by `link()` and never overwritten; doctor WARNs `export-due` from the first unexported one on a build without the writer (§9.15; ruled Q6, W1-B4, live before the first measured due date, at the latest 2026-12-19 since rev 3.2).
 - ⟦D:history-journal-writer-token⟧ (Tasks 1, 4, 7, 8, 10): Every binding mints a writer token in `meta.writer`, carried in every journal and segment name, so files from two boxes that ran one store never collide; segments take one number space per store and each mark names its segment, cleared when the segment is missing after a bind (§9.14, §9.15; rev 3.1 review, BK8, BK21). B1-defined.
 - ⟦D:history-backup-preflight-and-rename⟧ (Tasks 1, 6): `doctor --backup` writes temp then renames, and its preflight counts the copy's size; since rev 3.1 that preflight is `planCopy`, shared with the pre-migration snapshot, `--restore` and the export (§8.4, §6.11). B2-defined; B4 uses it as the export's preflight, with the segment bound as the size.
 - ⟦D:history-free-space-floor⟧ (Tasks 1, 6, 10): The writer pauses below a free-space floor (§9.3). B1-defined. B4 applies the floor's formula to the home filesystem for the export, and replay keeps the store's floor with no exemption.
@@ -7378,17 +7590,17 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-export-cadence-clock-backwards⟧ (Task 1): NEW departure (no spec §16 row). A last pass (or first tick) stamped after now means the wall clock went back; the pass runs rather than wait for the clock to catch up, because a late segment widens the window in which the store is the text's only copy and an early one costs nothing.
 - ⟦D:history-export-mark-failure-backs-off⟧ (Tasks 1, 7): NEW departure (no spec §16 row). §9.15 says "at most once an hour" and that a crash before the mark repeats the rows in the next segment. The marks are one transaction on `db/`, which the export's preflight never measures, so while `db/`'s volume refuses them every hourly pass would publish another copy of the same rows until the home filesystem's floor. After a pass that published its segment and then failed to mark it, the wait doubles per such pass in a row (2 h, 4 h, …, at most a day, meta `export_mark_fails`), and a marked pass ends the backoff; the export is never skipped for a `db/` pause, which would remove its protection exactly while text ages. Ruled as implemented (RD1); the count and the wait are lib's decision (`decideMarkOutcome`, RD2), and a busy after the link does not back off (RD3).
 - ⟦D:history-export-row-carries-blob⟧ (Tasks 2, 5, 10): A due row is exported with the bytes of every unexported blob it references, whatever that blob's younger referrers, a superset of the ruled rule; segments also carry the family, epoch and transcript rows that place it, and gone files' memberships replay onto `exported:` rows (§9.15; rev 3.1 review, BK11, BK12).
-- ⟦D:history-export-row-age-early⟧ (Tasks 2, 5): The export ages a row by its `ts_ms`, or by its newest holding file's mtime when that is NULL, never "never old" as prune does (§9.15; rev 3.1). B1-defined.
+- ⟦D:history-export-due-per-copy⟧ (Tasks 2, 5, 9): The default due rule reads each row's own copies: a row is due when every one of its holding files (B1's per-row set, its transcript's files, ⟦D:history-export-holding-files-by-transcript⟧) has passed its mtime plus its own home's retention minus 30 days, and a blob when its rows are; one reducer, `EXPORT_REDUCERS.perCopy`, made the default in W1-B2 for the census, doctor's `export-due`, `export-overdue` and `retention-lowered` arms and B4's pass, with no signature change; the node-shortest reducer is history and `retention-lowered` a reminder (§9.6, §9.15; O58; ruled Q15, rev 3.4). B2-defined. B4's `planSegment` takes the same reducer with the same default and the pass passes none (RD1's one clock); the pass also selects, whatever their time, the rows of every transcript the rule makes due now, through the census's own `dueTranscriptKeys`. It replaces B1's row clock (slug `history-export-row-age-early`, now history), on which this plan no longer departs.
 - ⟦D:history-export-pruned-row-stub⟧ (Tasks 2, 5, 10): NEW departure (no spec §16 row). §9.15 says pruned blobs are never exported or counted due and is silent on their rows; a row that falls due after prune tombstoned its blob travels with a byte-less stub (sha256, codec, raw_len), because `entries.blob_id` is NOT NULL and a rebuild would otherwise lose the row and its structure. A stub is never marked exported, and its size never counts toward the bound (its row's metadata does).
 - ⟦D:history-export-wait-from-census⟧ (Tasks 2, 9): NEW departure (no spec §16 row). "A due blob has waited more than two pass intervals" needs a due-since time the spec gives no clock for; it is measured from the census's oldest due-since (`planExport`'s `oldestDueSinceMs`), from the store's rows and never from a date, so a steady store reads PASS.
 - ⟦D:history-export-segment-bound-estimated⟧ (Tasks 2, 5): NEW departure (no spec §16 row). §9.15 says a segment holds "at most 256 MiB". The bound counts each taken row's new blob bytes plus `EXPORT_ROW_META_BYTES` (1.5 KiB, chosen) for its metadata, which a prototype measured at 0.8–1.1 KiB per entry with one membership; counting blob bytes alone let a review prototype's files reach 1.14× the bound at 8 KiB blobs and 2.3× at 0.5–2 KiB, and let rows with no new bytes grow a segment and the pass's memory until the wall clock. A segment therefore lands near 256 MiB, can pass it only by the estimate's error, and holds at most about 175,000 rows; the first due row of a pass still travels whatever its size (so every pass moves the export forward), which the preflight's floor margin absorbs.
 - ⟦D:history-recovery-replay⟧ (Tasks 3, 10): Restore and rebuild share one resumable derivation step, under the free-space floor, that replays redaction pairs first, then the journal (drain-time verdicts at their lines' positions, never a `$REG` read; unknown records skipped and counted), then the export (every segment's blobs before any rows), while drain and ingest wait; replay writes no journal records (§9.14; rev 3.1, ruled Q6). B2-defined; B4 adds the export half as the phases `export-blobs` and `export-rows`, between `apply` and `reindex`.
 - ⟦D:history-b4-after-b2⟧ (Tasks 3, 10, 12): W1-B4 merges after B2, and is live before the earliest measured due date, at the latest 2026-12-19 (§9.15, §10.5; rev 3.2 review, FE15). B2-defined.
-- ⟦D:history-retention-read-from-settings⟧ (Task 5): The export's horizon reads `cleanupPeriodDays` from each rostered home's `settings.json`, the system managed-settings file and its `managed-settings.d/` drop-ins, the smallest winning; absent means 30; an unreadable home keeps its last measured value, and only a never-measured one counts as 30; a new read of Claude Code files, never a write (§5.2, §9.15; rev 3.1 and its review). B1-defined; the pass reads the census's kept values and never the files.
+- ⟦D:history-retention-read-from-settings⟧ (Task 5): The export's horizons read `cleanupPeriodDays` for each rostered home from its `settings.json`, the system managed-settings file and its `managed-settings.d/` drop-ins, the smallest winning per home; absent means 30; an unreadable home keeps its last measured value, and only a never-measured one counts as 30; a new read of Claude Code files, never a write (§5.2, §9.15; rev 3.1 and its review). B1-defined; the pass reads the census's kept values and never the files, and the per-copy reducer measures each holding file against its own home's value.
 - ⟦D:history-store-fixed-root⟧ (Tasks 5, 6): The store root is the fixed `~/.ccrc/history`; only `db/` is symlinkable; no env key (G1, RV9; ruled Q1 = A). B1-defined. The export lives under the root on the home filesystem, never under `db/`.
 - ⟦D:history-test-seams-not-env⟧ (Tasks 5, 6, 7): Test seams are in-process or a test-only preload; every `process.env` read in `ccd/history/*.mjs` is in one frozen allow-list; the TTY gate is driven by a real pty (§10.1; rev 3.2 review, FE5, SE13). B1-defined.
 - ⟦D:history-export-unlinked-sidecar-with-blob⟧ (Tasks 5, 12): NEW departure (no spec §16 row). Schema v1 gives `sidecars` no mark column, so an unlinked sidecar row travels with its carried blob, and one whose blob nothing else carries is a candidate of its own, so its text is never left store-only; a later unlinked row naming an already exported blob is a named residual, since B4 has no migration.
-- ⟦D:history-export-holding-files-by-transcript⟧ (Tasks 5, 9, 12): NEW departure (no spec §16 row), B1's, reused here. B1's census takes a referrer's holding files to be its transcript's files, not the row's own copies through `memberships` (§9.15, FE13), and left the per-row set owed to W1-B4. B4 does not deliver it: the pass selects a NULL-`ts_ms` row (and an unlinked sidecar) on the same transcript-level clock, so the export, the census and doctor's wait arm agree; the per-row set would cost a second `memberships` scan per pass and part the export's clock from the census's. The late side (a fresher sibling copy that does not hold the row) is a named residual; the coordinator ruled the per-row set not delivered (RD1).
+- ⟦D:history-export-holding-files-by-transcript⟧ (Tasks 5, 9, 12): NEW departure (no spec §16 row), B1's, reused here. B1's census takes a referrer's holding files to be its transcript's files, not the row's own copies through `memberships` (§9.15, FE13), and left the per-row set owed to W1-B4. B4 does not deliver it: the pass decides every row (an unlinked sidecar included) by the same transcript-level files, so the export, the census and doctor's wait arm agree; the per-row set would cost a second `memberships` scan per pass and part the export's clock from the census's. Its two sides (a fresher file of the transcript that does not hold the row; a forked or resumed file of another transcript that does) are a named residual; the coordinator ruled the per-row set not delivered (RD1), and the operator's Q15 ruling (rev 3.4) keeps this set as the per-copy rule's per-row set.
 - ⟦D:history-tick-order⟧ (Task 6): A tick runs the outbox, the migration verdict, the secrets, a recovery step (only at the code's version), then drain and ingest (§9.2, §6.11; rev 3.2 review, DI6). B1-defined. B4's export step runs last, after the ticks row and the tick record, and never on the recover arm.
 - ⟦D:history-export-outside-capture-pause⟧ (Task 6): NEW departure (no spec §16 row). §9.2 pauses only ingest under a cap or db-floor pause and names no rule for the export; the pass runs outside the ingest gate, because text keeps ageing toward its source's deletion while capture is paused, and the segment has its own floor on its own filesystem. The marks are written on `db/`, which the preflight never measures: one segment's mark costs about its carried bytes (1–2×) in `db/`'s WAL, as B1's `fts_indexed` sweep does, and a mark that fails there is backed off rather than repeated hourly (⟦D:history-export-mark-failure-backs-off⟧).
 - ⟦D:history-binding-facts-before-link⟧ (Task 8): Restore and rebuild write the binding, the writer token and the recovery step into the database before it becomes `history.db`; adopt commits before writing `store.id` (§6.2, §8.4; rev 3.2 review, DI3). B2-defined. B4's mark check reads that bind fact (`bound:<ms>`), by key.
@@ -7402,4 +7614,4 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-w1b-three-prs⟧ (Task 12): W1 part B ships as capture, recall and card-line PRs, in that order, and since rev 3.1 the sole-copy export as a fourth, B4, after B2 since rev 3.2, in either order with B3 (§10.5; ruled Q6). B1-defined.
 - ⟦D:history-readme-export-sentence⟧ (Task 12): NEW departure (no spec §16 row). §10.5's "Edited files" (rev 3.2, FE17, IV7) assigns README edits to B1, B2, B3 and W3 and none to B4, but B2's history section calls the store the text's only copy past Claude Code's retention, which is false once the export ships; B4 reflows that one sentence in place (three lines added, no `file.ext:N` token).
 
-31 slugs in all: 13 NEW to this plan, 2 NEW reused from earlier plans (one B1's, one B2's), and 16 spec §16 slugs (10 B1-defined, 4 B2-defined, and 2 this plan defines first: `history-sole-copy-export` and `history-export-row-carries-blob`).
+31 slugs in all: 13 NEW to this plan, 2 NEW reused from earlier plans (one B1's, one B2's), and 16 spec §16 slugs (9 B1-defined, 5 B2-defined, and 2 this plan defines first: `history-sole-copy-export` and `history-export-row-carries-blob`). Since rev 3.4, `history-export-due-per-copy` (B2-defined) stands where B1's `history-export-row-age-early` stood: the per-copy rule replaced the row clock as the default before B4 exists.

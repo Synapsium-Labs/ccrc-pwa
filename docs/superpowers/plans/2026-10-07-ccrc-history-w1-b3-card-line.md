@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
-**Goal:** Ship W1-B3 "card line" of the ccrc history spec (rev 3.3, §8.6) as ONE PR on `main`, after B1 ("capture") and B2 ("recall") merge. After a compaction of a session's main thread, its SessionStart(compact) context gains one grammar-gated line that names the leaf the compaction is about to become:
+**Goal:** Ship W1-B3 "card line" of the ccrc history spec (rev 3.4, §8.6) as ONE PR on `main`, after B1 ("capture") and B2 ("recall") merge. After a compaction of a session's main thread, its SessionStart(compact) context gains one grammar-gated line that names the leaf the compaction is about to become:
 
 `History: node L03a9c1… (this compaction) · parent N7c1e2f… · ~/.local/bin/ccrc history describe L03a9c1`
 
@@ -68,14 +68,15 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
 - vitest in `server/`; Python 3 for the read-only `deploy/measure-history.py` query and the scratch mutation and census tools;
 - GitHub Actions: the `node-floor` leg's heredoc gains `test/history-card.test.ts`.
 
-**Spec:** `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md`, rev 3.3:
+**Spec:** `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md`, rev 3.4 (rev 3.3 plus the operator's rulings on Q15–Q19 and on prune at low disk, §15.1):
 - §10.5: B3's contents and pins; §10.6: the sequencing; §10.7: the acceptance (W1-e, W1-h);
 - §8.6: the card line; §5.1 and §5.3: the scope marker; §8.9: the C pins; §5.5: the S pins;
-- §9.4: the lifecycle rows; §9.7: recall-off; §13: the cross-cutting invariants; §16: the slugs.
+- §9.4: the lifecycle rows; §9.7: recall-off; §13: the cross-cutting invariants; §16: the slugs;
+- §6.1 and §5.1 as rev 3.4 amends them: a SessionStart(fork) is spooled from W1-B2 and confirms as a resume line does (Task 5's spooled-fork case, Task 9's fork row).
 
 **Builds on:**
 - `docs/superpowers/plans/2026-10-05-ccrc-history-w1-capture.md`: B1 is its Tasks 3–36. Every B1 name this plan consumes is the name that plan produces: lib, store and sweep exports, `historyHelpers.ts`, `historyFixtures.ts`, the hook's spool block, `measure-history.py` and the O13, O14 and O17 describes.
-- `docs/superpowers/plans/2026-10-06-ccrc-history-w1-b2-recall.md`: B2's 34 tasks. This plan uses its derivation (Tasks 5, 8 and 9), its recall-off reading (Tasks 1 and 11), its recovery step (Tasks 7 and 25–29), its test helpers, and its coordinator rulings RB1–RB17.
+- `docs/superpowers/plans/2026-10-06-ccrc-history-w1-b2-recall.md`: B2's tasks. This plan uses its derivation (Tasks 5, 8 and 9), its recall-off reading (Tasks 1 and 11), its recovery step (Tasks 7 and 25–29), its test helpers, and its coordinator rulings RB1–RB17. Task 5's spooled-fork case also uses B2 Task 34, the fork spooling (ruled Q16, ⟦D:history-fork-spooled⟧): `fork` in the hook's source whitelist, `SPOOL_SOURCES` and `EPOCH_CAUSES`, and a fork line confirmed as a resume line is. B3 changes no code for it.
 
 **Base:** `main` after B1's and B2's PRs merge. B4 may or may not be on the base; where it matters, a task says what changes when B4 merged first.
 - **Files B1 or B2 created are anchored by content, never by line.** These are `ccd/history/{lib,store,sweep,cli,derive}.mjs`, `lib.d.mts`, `server/test/history*.test.ts`, `historyHelpers.ts`, `historyFixtures.ts`, `deploy/measure-history.py` and its test. An anchor is a function, const or marker name, a quoted line, or "above the entry guard".
@@ -89,25 +90,31 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
 - **S16**, and the marker halves of **S2**, **S3** and **S8**: Task 8.
 - **C18**, **C19** (with C68's card half, which B2 hands to B3), **C20**, **C21**, **C22** and **C37**, and the card halves of **S2**, **S3** and **S8**: Task 9. C37's end-to-end case consumes Task 8's marker.
 - **C38**: Task 10.
-- Every one of them is measured red with a mutant before it goes green (IV6): Task 8's twelve mutants, Task 9's thirty and Task 10's five. Two kinds of case are not a mutant's: a CONTROL, and C37's `empty` marker row, which two guards refuse independently (the scope-word test and the ms digit test), so no single-guard mutant can red it. Task 9 names it as defence in depth rather than claim it measured.
+- Every one of them is measured red with a mutant before it goes green (IV6): Task 8's twelve mutants, Task 9's thirty-one and Task 10's five. Two kinds of case are not a mutant's: a CONTROL, and C37's `empty` marker row, which two guards refuse independently (the scope-word test and the ms digit test), so no single-guard mutant can red it. Task 9 names it as defence in depth rather than claim it measured.
 - Halves B1 left for B3: O17's B3 rows (`history-scope-markers`, `history-card-files`) in Task 12, and O14's hook half of `CARD_PREFIX` in Task 11.
 - Plan pins with no spec number:
   - the pure decisions: Tasks 1–3;
   - the slot extraction: Task 4;
-  - prediction parity with derivation, the end-of-file gate, the file's modes, the registry gate, the withdrawal on every pass that runs no card step (ruling RC2) and each consumption's scope (ruling RC3): Task 5, over Task 3's pure tables;
+  - prediction parity with derivation (a spooled fork's epoch among the cases, ruled Q16), the end-of-file gate, the file's modes, the registry gate, the withdrawal on every pass that runs no card step (ruling RC2) and each consumption's scope (ruling RC3): Task 5, over Task 3's pure tables;
   - the delivery counters and their window: Task 6;
   - the purged-session collector: Task 7;
-  - the reader's no-fork, POSIX, locale and recall-off parity pins: Task 9;
+  - the reader's no-fork, POSIX, locale and recall-off parity pins, and a SessionStart(fork) that never serves: Task 9;
   - the reserve's env hygiene and its PreCompact gate: Task 10;
   - the W1-e query: Task 13.
 - Not B3's: C68's CLI half (B2); O39, O40, O43 and O44's segment case (B4); C59's steer clause and the PreCompact print (W3).
 
-**Open operator questions (spec §15.3; none answered at plan time).** Each task follows the spec's stated default:
-- **Q15** (the export's due rule): no B3 effect. The export is B4's.
-- **Q16** (spool SessionStart(fork)): no hook change. Until the 30-minute registry scan chains a fork's uuid as an epoch, its session has no confirmed epoch, so `planCardPrediction` answers `skip: no-epoch` and no line is served. A yes would bring the card to forks one scan sooner, with no B3 edit.
-- **Q17** (what `--purge` keeps): no B3 effect. `scope/` and `card/` sit under `~/.ccrc/history`, beside the store the ruled kept line names.
-- **Q18** (the W2 power estimate): a W2 matter, with no B3 task. B3's `card_consumed:<scope>` counters and the boundaries are among the data it would read.
-- **Q19** (hand-mapping of pre-install transcripts): no B3 effect. An unmapped transcript has no epoch, so it gets no prediction.
+**Operator rulings (spec §15.1, rev 3.4, 2026-10-07; binding).** The operator ruled Q15–Q19 and prune at low disk. B3 implements each as ruled:
+- **Q15 yes** (the export's due rule reads each row's own copies, `EXPORT_REDUCERS.perCopy`, the default from B2): no B3 effect. B3 computes no due rule; the census, doctor and B4's export pass read the default B2 sets.
+- **Q16 yes** (SessionStart(fork) is spooled, from B2; ⟦D:history-fork-spooled⟧, which reverses B1's `history-fork-not-spooled`): no B3 code change, one sweep case and one hook row.
+  - B2's fork line chains a fresh sid as a new epoch, cause `fork`, at the drain that confirms it, by its `reg` or by the observation at the rename, as a resume line confirms. A fork whose sid is already an epoch (Claude Code's same-id arm) confirms that epoch and adds none. So a fork's session gets its first prediction a few ticks after the fork (the drain that confirms it, then an end-of-file pass), and a fork `/clear`ed inside one 30-minute registry-scan interval is chained too. B1 left forks to that scan, with cause `import`.
+  - Until the fork epoch confirms, `planCardPrediction` answers `skip: no-epoch`, as for any unconfirmed sid.
+  - The card reads no epoch's `cause` or `declared_by` (`card.mjs`'s `epochOf` is derive.mjs's rule: any confirmed epoch of an unmerged family), so a `fork` epoch is predicted for exactly as a startup, clear or import epoch is.
+  - Task 5 pins it through real passes: a fresh-sid fork whose copy holds the parent's copied rows and boundary starts its next span at that boundary's head, as derivation does, and replaces the parent's prediction (one file per id). Task 2 says why the `fork-qualified` skip is unchanged, Task 6 why the delivery measure is, Task 8 why the scope marker is, and Task 9 adds `fork` to the sources that never serve.
+  - B2's one hook edit is in place on the spool block's source line, below README's anchor, so B3's anchors and its S6-R11 census forecast are unchanged.
+- **Q17 as recommended** (the kept line, the close line naming `--purge-history`, the decommission runbook): no B3 effect. `scope/` and `card/` sit under `~/.ccrc/history`, inside the store the kept line names.
+- **Q18 yes, a W2 matter**: before W2's window opens, the W2 open record carries the smallest passing point uptake computed from B1 and B3's data. No W1 task, and none in B3. B3's `card_consumed:<scope>` counters and the boundaries are among the data it reads.
+- **Q19 no, not in W1**: no B3 effect. An unmapped transcript has no epoch, so it gets no prediction.
+- **Prune at low disk: confirmed.** `prune --apply` is gated on reachability only and bounds its own WAL growth; B2's `history-prune-not-floor-gated` is ruled, no longer provisional, and spec §9.3 is amended. B3 does not touch prune.
 
 **Coordinator rulings (RC1–RC4).** Every choice that awaited a ruling is ruled, and the tasks implement each as ruled. Each NEW slug is in "Deviations found".
 - **RC1: accepted as the plan implements them.**
@@ -173,7 +180,8 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
   - RB4: fan-in runs per holding copy and per epoch. The card's parent prediction reads the same slot lists (exported from `derive.mjs`) and runs `planFanIn` itself.
   - RB5: a parser crash is recorded, not retried. A crashed boundary has no leaf, so its delivery is never measured (a known undercount).
   - RB6 and RB12–RB14: B3 adds no `WRITING_FORMS` entry and no `--op` verb, so the `GT_FORMS` and recovering-forms CONTROLs stay untouched. Nothing on the recover arm writes or consumes cards, because `recoverPass` never ticks; the pass that takes the arm withdraws every prediction before it (ruling RC2).
-  - Prune stays reachability-gated (provisional), and B3 does not touch it.
+  - Prune is reachability-gated, never floor-gated (`history-prune-not-floor-gated`, ruled by the operator 2026-10-07, spec rev 3.4), and B3 does not touch it.
+- **B2's fork spooling (ruled Q16) binds too.** A SessionStart(fork) writes a spool line and chains a `fork` epoch, or confirms the existing one for the same sid. B3 reads no epoch cause and edits no spool-block line; its fork pins are Task 5's spooled-fork case and Task 9's fork row.
 - **Single definition.**
   - Every new constant and vocabulary is declared once, in `lib.mjs`.
   - Paths are built from `historyPaths(home).root` (or `HISTORY_ROOT_REL`) plus those names, never re-spelled (B2's `RECALL_OFF_DIR` precedent). B1 pins `historyPaths`' exact key set, so B3 adds no key.
@@ -222,8 +230,8 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
    - Expected: for every row the hook serves the line if and only if lib's `decideRecallOff({ file, generation: resolveGeneration({ envGen, regGen }).value ?? '' })` is not `off`. The hook reads `recall-off/<id>` with one bounded builtin read of `CCRC_ID_MAX` (128) characters, `_ct_read`'s width, and a read that fills that window is OFF before it is trimmed or compared (ruling RC4: fail closed). `.generation` is read through `_ct_read` (rc 0 read, 1 absent, 2 unmeasurable).
    - Owning task: **Task 9**, `C19/C68 (card half), recall-off parity: %s` (17 rows, each expectation computed by B2's own `decideRecallOff` and `resolveGeneration`) with `CONTROL: the parity table reaches both answers, so it cannot pass by serving always or never`; mutants `T9-M5` to `T9-M8`, `T9-M26-recall-off-equality` and `T9-M30-recall-off-window`.
    - Ruled RC4: the CLI keeps 4,096 bytes where the hook reads 128 characters, so a file a hand edit pads past character 128 is OFF in the hook. With this generation after the padding the CLI answers exit 8 too (the new parity row). With no generation resolved the hook withholds a line the CLI's stale answer would not: the side the ruling accepts.
-5. **Prediction parity with derivation.** The cases: the first compaction of an epoch (span start = the holding copy's first stored row under B2's `copyRows` filter); later compactions (`head_uuid ?? uuid` of the copy's previous boundary); several live copies of one transcript after a swap carry; a leaf not yet final in the run; the 8th leaf of a run in one holding copy; a plain id already bound to another boundary (a fork).
-   - Expected: after the compaction lands and `derive.mjs` mints its leaf, the derived leaf id starts with the printed `L` prefix. For the 8th leaf, the derived depth-1 parent starts with the printed `N` prefix: the slot list comes from `derive.mjs`'s exported reader, and the span formula from `planSpans` itself. A fork writes no file (`card_skipped:fork-qualified`). A fork skip still carries the plain id the next leaf would have had, so a prediction consumed just before a fork skip is still counted `card_consumed:<scope>`.
+5. **Prediction parity with derivation.** The cases: the first compaction of an epoch (span start = the holding copy's first stored row under B2's `copyRows` filter); later compactions (`head_uuid ?? uuid` of the copy's previous boundary); several live copies of one transcript after a swap carry; a leaf not yet final in the run; the 8th leaf of a run in one holding copy; a plain id already bound to another boundary (two copies of one transcript compacted after one head, §6.1's fork); a spooled SessionStart(fork) under a fresh sid, whose copy holds the parent's copied rows and boundary (ruled Q16).
+   - Expected: after the compaction lands and `derive.mjs` mints its leaf, the derived leaf id starts with the printed `L` prefix. For the 8th leaf, the derived depth-1 parent starts with the printed `N` prefix: the slot list comes from `derive.mjs`'s exported reader, and the span formula from `planSpans` itself. A fork-qualified next leaf writes no file (`card_skipped:fork-qualified`). A fork skip still carries the plain id the next leaf would have had, so a prediction consumed just before a fork skip is still counted `card_consumed:<scope>`. A spooled fork's next span starts at the head of the last boundary its copy holds, the parent's copied one included, exactly where derivation starts it, and its prediction replaces the parent's.
    - Owning tasks:
      - **Task 2**: `the span start: … equal to planSpans' over the whole copy` and `the leaf is the plain id; its depth-1 parent is predicted when it is the 8th final, unparented slot of the run`;
      - **Task 4**: `the parents deriveParents mints are exactly parentId over planFanIn's groups of those lists: …`;
@@ -232,7 +240,8 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
        - `the 8th leaf of a run: …`;
        - `a leaf not final in the run stops the prediction: …`;
        - `a next leaf the fork rule would qualify: no card, counted card_skipped:fork-qualified; CONTROL: …`, whose two copies also pin the newest-copy rule;
-       - `a consumed prediction whose next leaf the fork rule would qualify: deleted and still counted card_consumed`.
+       - `a consumed prediction whose next leaf the fork rule would qualify: deleted and still counted card_consumed`;
+       - `a spooled fork (ruled Q16): …` (mutant `6.1: a fork's copied boundaries ignored by the span start`).
 6. **A main-thread compaction the hook scoped `ambiguous` (a fan-out writing at the time) consumes a prediction.** It can never carry a line, and W1-e's served share must not count it as a miss.
    - Expected: the consumption is counted `card_consumed:other`, out of `served_share`'s denominator and reported beside it; a `main` marker inside the consumed boundary's window counts `card_consumed:main`; a marker that is absent, emptied, unreadable, a link, another uuid's or outside the window counts `card_consumed:unknown`, which stays in the denominator (ruling RC3).
    - Owning tasks:
@@ -661,6 +670,9 @@ git commit -m "feat(history): the card line's vocabulary, grammar, paths and lin
 - §6.1: the span rule per holding copy, the plain and fork-qualified leaf ids, "ids are displayed as the shortest prefix unique within the scope, minimum 6"; §6.3: fan-in 8 per holding copy and epoch (RB4), only over final leaves.
 - Pins: this task's plan pins (the span start equals planSpans' over the whole copy; the predicted parent is parentId over the 8 slots planFanIn would group; a gap or a parented slot never regroups; the fallback chain; fork, no-rows and no-epoch skips; prefixes unique over the family; the file decision table).
 - Departures: ⟦D:history-span-per-boundary-copy⟧ and ⟦D:history-leaf-id-fork-qualified⟧ (both B2's, reused unchanged: the prediction calls planSpans and decideLeafId, so neither rule is spelled twice); ⟦D:history-card-measured-from-transcript⟧ is Task 6's. ⟦D:history-card-consumed-counter⟧ (NEW, Task 5's): `decideCardFile` reports each consumption, a fork skip's included, so the counters Task 5 folds by scope (`card_consumed:<main|other|unknown>`, ruling RC3) count every prediction a boundary consumed. Unreadable is never absent here: `decideCardFile` takes a `Presence` (§13, IV5).
+
+**Choices this task makes:**
+- **`fork-qualified` is §6.1's two-copies rule, and spooled forks (ruled Q16) leave it unchanged.** The skip fires when the next leaf's plain id, `leafId(ccrcId, ccUuid, start)`, is already bound to another boundary. That needs two live copies of ONE transcript (one cc uuid) each compacted after the same head: a swap carry's copies, or the copy Claude Code's same-id fork arm continues. B2's fork line confirms the existing epoch for the same-id arm and adds none, so that case reaches this function exactly as before. A fresh-sid fork chains its own `fork` epoch over its own transcript, and its leaves hash its own sid, so no plain id of the fork can equal one of the parent's. It is therefore never fork-qualified on the parent's account; Task 5's spooled-fork case predicts its plain id. `planCardPrediction` takes the ccrc id and the uuid, never an epoch's cause, so the new cause needs no branch and this task no new case.
 
 - [ ] **Step 1: Add the import line.** In `server/test/history-card.test.ts`, directly below the line `import * as libCard from '../../ccd/history/lib.mjs';`, add:
 
@@ -1796,15 +1808,24 @@ git commit -m "refactor(history): export derive.mjs's holding copy and per-copy 
 **Spec:**
 - §8.6 Timing: the file is written only when the transcript's cursor is at end-of-file, and deleted when the indexer ingests the boundary that consumed it; §9.2 step 6 (derive; measure delivery; then write `card/` files temp-then-rename; under the tick's budget, never on the recover arm, which never ticks); §5.1 S4 (the hook never makes a directory); §5.2; §9.6 (card files 0600, history directories 0700); §9.4 `history-card-files`; §5.1 (the scope marker the consumption's scope is read from); §9.3 and §9.14 (the pauses and holds a withdrawal follows).
 - Rulings: RC2 (fail closed: every pass that runs no card step withdraws every prediction; the budget bounds a write, never the consume/delete decision) and RC3 (each consumption counted by the scope marker its compaction left).
-- Pins: this task's plan pins (parity with derivation for the first compaction, the 8th leaf and the newest condensed fallback; a not-final slot names no parent; the fork skip, and a consumption just before one still counted; the end-of-file gate with a consumption off end-of-file; the file's text, mode, one-per-id and the symlink refusal; registry-named sessions only; a write failure counted, never fatal, and leaving no temp; a failed cleanup counted apart from the write; the two directories made 0700 by a bound store's first tick and by nothing else; a consumption counted `main`, `other` or `unknown` by its compaction's marker, never through a link; every prediction withdrawn, never through a link, under a floor pause, on the recover arm, under a spent budget after the consume and delete ran, on a writer-token hold and on a refused store with no DB open).
+- Pins: this task's plan pins (parity with derivation for the first compaction, the 8th leaf and the newest condensed fallback; a not-final slot names no parent; the fork skip, and a consumption just before one still counted; a spooled fork's epoch predicted from the parent's boundary its copy holds, its prediction replacing the parent's (ruled Q16); the end-of-file gate with a consumption off end-of-file; the file's text, mode, one-per-id and the symlink refusal; registry-named sessions only; a write failure counted, never fatal, and leaving no temp; a failed cleanup counted apart from the write; the two directories made 0700 by a bound store's first tick and by nothing else; a consumption counted `main`, `other` or `unknown` by its compaction's marker, never through a link; every prediction withdrawn, never through a link, under a floor pause, on the recover arm, under a spent budget after the consume and delete ran, on a writer-token hold and on a refused store with no DB open).
 - Departures:
   - ⟦D:history-tick-order⟧ (the card step's place: after the leaves and parents, under their gate).
   - ⟦D:history-card-dirs-made-by-sweep⟧ (NEW): the spec says the hook never makes `scope/`, which it writes, and never says who does; the sweep makes both directories at every bound store's tick, so the hook's marker and the render reserve arm within one tick of `ccrc update` and never on a box without history.
-  - ⟦D:history-card-one-file-per-id⟧ (NEW): §9.4 bounds the row "≤512 B per session"; writing a new uuid's prediction removes the id's other `<uuid>.txt` (a `/clear`'d session's), rather than leaving it until purge.
+  - ⟦D:history-card-one-file-per-id⟧ (NEW): §9.4 bounds the row "≤512 B per session"; writing a new uuid's prediction removes the id's other `<uuid>.txt` (a `/clear`'d or forked session's), rather than leaving it until purge.
   - ⟦D:history-card-registry-names-the-session⟧ (NEW): a prediction is written only for the uuid `$REG/<id>.uuid` names. The periodic scan reads every known transcript to its end each 30 minutes, so end-of-file alone would write a file for every session the store ever saw; the hook serves only the pane's own uuid, which the registry names. A file the registry no longer names is still consumed and deleted.
   - ⟦D:history-card-newest-live-copy⟧ (NEW): the prediction reads the transcript's live copy written last (newest `mtime_ns`, then the larger `file_id`, §6.1's newest-copy rule), the one Claude Code appends the next boundary to; the spec names "the transcript's cursor" in the singular.
   - ⟦D:history-card-consumed-counter⟧ (NEW, ruled RC3): each prediction a boundary of the main transcript consumed, a fork skip's included (Task 2), is counted `card_consumed:<scope>`. The scope is lib's `decideConsumedScope` over the scope marker the compaction's PreCompact left, read read-only and never through a link, and the consumed boundary's time (lib `consumedBoundaryTs`): `main`, `other` (the hook scoped it `subagent` or `ambiguous`, so it could never carry a line) or `unknown`. A subagent's own compaction lands in its own transcript and is never counted. W1-e's served share is over `main` and `unknown` (Task 13).
   - ⟦D:history-card-withdrawn-when-not-ticking⟧ (NEW, ruled RC2): a scheduled pass that runs but does not run the card step over a caught-up ingest withdraws every `card/<id>/<uuid>.txt`, counted `card_withdrawn:<reason>` (lib `decideCardWithdraw` decides; this task measures and unlinks). In `consumeAndWriteCards` the budget is checked only before a write.
+  - ⟦D:history-fork-spooled⟧ (B2-defined, ruled Q16): consumed by the spooled-fork case only. No B3 code reads an epoch's cause.
+
+**Choices this task makes:**
+- **Spooled forks (ruled Q16) need no code here, and one case pins them.**
+  - `cardStmts`' `epochOf` reads any confirmed epoch of an unmerged family, whatever its `cause` or `declared_by` (derive.mjs's own rule). So a `fork` epoch is predicted for exactly as a startup, clear or import epoch is, from the drain that confirms it (B2's fork line, observed at the rename as a resume line is) rather than from the 30-minute registry scan B1 left forks to.
+  - The registry gate (⟦D:history-card-registry-names-the-session⟧) follows `.uuid`, which `_sync_uuid` moves to the fork's sid. One file per id (⟦D:history-card-one-file-per-id⟧) then removes the parent's prediction, as after a `/clear`.
+  - What is new is the input shape. A fresh-sid fork's copy holds the parent's rows and boundary, each one entry with a membership in each file, while `boundaries.transcript_pk` stays the parent's (the first claim). `lastBoundary`, `firstRow` and `boundaries` read a copy by membership, as derive.mjs's `copyRows` does, so the fork's next span starts at the head of the last boundary the copy holds, the parent's copied one included. That is where derivation starts the fork's leaf. lib's `consumedBoundaryTs` (Task 3) walks the same membership-ordered list, so a fork's consumption finds its boundary the same way.
+  - The case `a spooled fork (ruled Q16): …` pins that parity through real passes. Its mutant, `6.1: a fork's copied boundaries ignored by the span start`, narrows `lastBoundary` to the copy's own transcript's boundaries, a plausible slip that every single-transcript case survives: it reds only this case.
+  - Claude Code's same-id fork arm confirms the existing epoch and continues the same transcript. In its one file that is an ordinary continuation; in a copy in a second home it is the two-copies shape the two `fork rule` cases already cover (Task 2's choice).
 
 - [ ] **Step 1: Confirm the anchors at the base.** From the repository root:
 
@@ -2032,6 +2053,40 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
     expect(counters(box)['card_skipped:fork-qualified'], 'CONTROL: the fixture reached the fork skip').toBeGreaterThanOrEqual(1);
     expect(cardOf(box, ID, U), 'the consumed prediction is deleted, and none is written in its place').toBeNull();
     expect(consumedC(box), 'the consumption is counted though the next prediction is a skip').toEqual({ 'card_consumed:unknown': 1 });
+  }, 240_000);
+
+  it("a spooled fork (ruled Q16): once B2's fork line confirms the fork's epoch, its card starts at the head of the parent's boundary its copy holds, derivation mints that leaf, and the fork's prediction replaces the parent's", () => {
+    const box = makeHistoryBox('ccrc-hist-card-forked-');
+    const [ID, U, UF] = ['card-forked', sidC(0xfb1), sidC(0xfb2)];
+    const pre = compactionSequence({ n: 1, trigger: 'manual', seed: 0xfb1, sessionId: U, startMs: T0C });
+    const own = compactionSequence({ n: 1, trigger: 'manual', tailRows: 0, seed: 0xfb2, sessionId: UF, startMs: T0C + 600_000 });
+    plantC(box, ID, U, pre.rows);
+    settleC(box);
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U), "CONTROL: the parent's prediction").toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, U, pre.headUuids[0]!)));
+    // An in-pane /branch (spec 6.1): a fresh sid whose transcript copies the parent's rows verbatim, so each is one
+    // entry with a membership in each file, and the parent's boundary stays the parent transcript's. The hook's line
+    // carries the parent's uuid as `reg` (it fires before _sync_uuid moves .uuid), and .uuid names the fork before the
+    // sweep observes the line, so the fork epoch confirms by the observation, as a resume line would.
+    plantSession(box, ID, { uuid: UF });
+    const f = plantTranscript(box, 'claude', CARD_SLUG, UF, [...pre.rows]);
+    spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: UF, src: 'fork', reg: U, gen: CARD_GEN });
+    settleC(box);
+    pokeC(box, ID);
+    expect(qC<{ cause: string; declared_by: string }>(box,
+      'SELECT cause, declared_by FROM epochs WHERE cc_session_uuid = ? AND confirmed_ms IS NOT NULL', UF)
+      .map((r) => `${r.cause}/${r.declared_by}`), "CONTROL: B2's fork line chained a confirmed fork epoch").toEqual(['fork/hook']);
+    const wantF = libCard.leafId(ID, UF, pre.headUuids[0]!);
+    expect(cardOf(box, ID, UF), "the fork's next leaf starts at the head of the parent's boundary its copy holds")
+      .toBe(expectedCard(familyC(box, ID), wantF));
+    expect(cardOf(box, ID, U), "one prediction per id: the parent's is removed").toBeNull();
+    expect(consumedC(box), 'a removal is no consumption').toEqual({});
+    appendRows(f, own.rows);
+    pokeC(box, ID);
+    expect(leavesC(box, UF), 'derivation minted the leaf the card printed').toEqual([wantF]);
+    expect(consumedC(box)).toEqual({ 'card_consumed:unknown': 1 });
+    expect(cardOf(box, ID, UF), "the fork's own boundary starts its next span")
+      .toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, UF, own.headUuids[0]!)));
   }, 240_000);
 
   it('the end-of-file gate: a torn last line holds the write; a boundary ingested on a pass that ends short of end-of-file consumes and deletes the prediction', () => {
@@ -2327,6 +2382,7 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
 Notes:
 - `claude` and `claude-a` are the default test roster's two account ids (`server/test/helpers.ts` `DEFAULT_TEST_ROSTER`): fixture names, not real ones.
 - The fork case relies on derivation's own behaviour (B2's DM37): copy A's second boundary takes the plain id of the span after `pre`'s head, so copy B's next boundary would be fork-qualified.
+- The spooled-fork case relies on B2 Task 34, the fork spooling (ruled Q16, DM48's in-pane shape; ⟦D:history-fork-spooled⟧): B2's `parseSpoolLine` accepts `src:"fork"` with `reg`, and `decideEpochLine` takes the line through the resume path, so a line whose `reg` is the parent's uuid confirms by the `.uuid` observed at the rename. Its transcript copies the parent's rows verbatim. B1's modules read no row's `sessionId` (none spells it, measured on B1's branch at plan time), so each copied row is one entry with a membership in each file, and the parent's boundary keeps the parent's `boundaries.transcript_pk`. The fork is in the parent's family (same id, same generation), so `familyC` holds the parent's leaf too and the display prefixes are over both.
 - The recovery case writes the `('recover', <ms>)` row exactly as B2's `registerRecovery` does (that helper is module-local to `history-recover.test.ts`). The loop runs at most five passes, each a recover-arm pass that never ticks (B2 Task 25: `recoverPass` never calls `tick`). The first of them withdraws the prediction (ruling RC2), so every later one finds none and counts nothing.
 - The floor case plants the low-disk pause through the statfs preload every spawned pass carries (`HISTORY_TEST_STATFS=<bavail>:<size>`, `bavail` 4 KiB under lib's own `floorThreshold`): B1's `holds` cases plant it the same way.
 - The budget case passes `budgetBytes: 1` through `runDriver` (B2 Task 25's `deps.budget`, never an environment variable). The ingest checks the budget before each chunk, so A's one chunk of new rows is read and the budget is spent after it; B is not hinted and has no new bytes, so its copy is not at end-of-file this tick.
@@ -2339,9 +2395,9 @@ Notes:
 (cd server && ./node_modules/.bin/vitest run test/history-card.test.ts -t 'writes and consumes')
 ```
 
-Expected: 16 failed (15 as root, where the write-failure case is skipped). The prediction cases fail at their first `cardOf(…)` with `expected null to be 'History: node L…'` (no tick writes a card yet), the fork-consumed case among them (`the first prediction, before any boundary`); the fork case at `card_skipped:fork-qualified` (`expected undefined to be greater than or equal to 1`); the end-of-file and registry cases at their first written card; the file case at `expect(cardOf(box, ID, U1)).not.toBeNull()`; the dirs case with `ENOENT … scope` from `fs.statSync`; the write-failure and temp cases at `card_write_failed` (`expected undefined to be greater than or equal to 1`: the case makes `card/` itself, so its own mkdir cannot fail first); the recovery, floor, budget, hold and scope cases at their first CONTROL that a prediction exists (`expected null not to be null`).
+Expected: 17 failed (16 as root, where the write-failure case is skipped). The prediction cases fail at their first `cardOf(…)` with `expected null to be 'History: node L…'` (no tick writes a card yet), the fork-consumed case among them (`the first prediction, before any boundary`) and the spooled-fork case (`CONTROL: the parent's prediction`); the fork case at `card_skipped:fork-qualified` (`expected undefined to be greater than or equal to 1`); the end-of-file and registry cases at their first written card; the file case at `expect(cardOf(box, ID, U1)).not.toBeNull()`; the dirs case with `ENOENT … scope` from `fs.statSync`; the write-failure and temp cases at `card_write_failed` (`expected undefined to be greater than or equal to 1`: the case makes `card/` itself, so its own mkdir cannot fail first); the recovery, floor, budget, hold and scope cases at their first CONTROL that a prediction exists (`expected null not to be null`).
 
-The fork-consumed and temp cases were written for this plan and not run on a prototype, unlike the others, and so were the floor, budget, hold and scope cases that rulings RC2 and RC3 added. If one of them reds after Step 6 at one of its CONTROL lines or at a fixture step, the fixture missed its shape (the copies' order, a directory where the fixture expects a file, a step before the ingest that spent the one byte of budget, a hold word the merged B1 spells otherwise): fix the fixture, never the rule, and say so in the task report.
+The fork-consumed and temp cases were written for this plan and not run on a prototype, unlike the others, and so were the floor, budget, hold and scope cases that rulings RC2 and RC3 added. If one of them reds after Step 6 at one of its CONTROL lines or at a fixture step, the fixture missed its shape (the copies' order, a directory where the fixture expects a file, a step before the ingest that spent the one byte of budget, a hold word the merged B1 spells otherwise): fix the fixture, never the rule, and say so in the task report. The spooled-fork case, which ruling Q16 added, was not run on a prototype either, and it also needs B2 Task 34, the fork spooling. A red at its epoch CONTROL means B2 merged that task otherwise (another cause word, or a fork confirmed by another route): read B2's merged `decideEpochLine` and its DM48 case, fit the fixture to them, and report it.
 
 - [ ] **Step 5: Write `ccd/history/card.mjs`.** Create it with exactly this content:
 
@@ -2797,6 +2853,9 @@ cat > .superpowers/sdd/history-w1-b3/scratch/mutants-task5.json <<'EOF'
     "edits": [{ "anchor": "  ensureHistoryDirs(db, ctx.home);\n", "replacement": "" }] },
   { "name": "6.1: the fork rule ignored by the sweep", "file": "ccd/history/card.mjs", "test": "test/history-card.test.ts", "filter": "fork rule",
     "edits": [{ "anchor": "  const plainBoundOther = start !== null && s.nodeBound.get(leafId(ccrcId, uuid, start)) !== undefined;", "replacement": "  const plainBoundOther = false;" }] },
+  { "name": "6.1: a fork's copied boundaries ignored by the span start", "file": "ccd/history/card.mjs", "test": "test/history-card.test.ts", "filter": "a spooled fork",
+    "edits": [{ "anchor": "      WHERE m.file_id = ? ORDER BY m.line DESC LIMIT 1`),",
+                "replacement": "      WHERE m.file_id = ? AND b.transcript_pk = (SELECT f.transcript_pk FROM ingest_files f WHERE f.file_id = m.file_id) ORDER BY m.line DESC LIMIT 1`)," }] },
   { "name": "a session the registry does not name gets a prediction", "file": "ccd/history/card.mjs", "test": "test/history-card.test.ts", "filter": "registry names",
     "edits": [{ "anchor": "  const atEof = registered && copy !== null", "replacement": "  const atEof = copy !== null" }] },
   { "name": "a prediction the registry no longer names is never consumed", "file": "ccd/history/card.mjs", "test": "test/history-card.test.ts", "filter": "registry names",
@@ -2841,6 +2900,7 @@ Expected: every row `red (…)` then `green`; the last line `every guard measure
   - The cleanup row runs the cleanup inside the write's `try`, ahead of the write; its throw is counted `card_write_failed` and the write never happens, so the case reds at `the write landed`.
   - The fork-rule row reds both fork cases: the consumed-then-skip case at its CONTROL (`the fixture reached the fork skip`).
   - The consumed-before-a-fork-skip rule itself is Task 2's lib mutant; this task's sweep case is its integration, and it reds under that mutant too.
+  - The copied-boundaries row reds only the spooled-fork case, at `the fork's next leaf starts at the head of the parent's boundary its copy holds`: with only its own transcript's boundaries, the fork's copy has none before its own first compaction, so the prediction starts at the copy's first row (the parent's first copied row) where derivation starts it at the parent boundary's head. Every other case's copies belong to one transcript, so the row leaves them green.
   - The tick-withdrawal row reds the floor case at `withdrawn under the floor pause` (`expected 'History: node L…' to be null`). The linked-card/<id> row walks the link: the withdrawal lstats `card/card-linked/<uuid>.txt` through it, finds a file and unlinks the target's, so the case reds at `one prediction; the linked directory is never walked` (`expected 2 to be 1`).
   - The arms row reds the recovery case at `recovery pass 1: withdrawn …`. The held and no-DB rows red the hold case at `withdrawn by the held pass` and `withdrawn by the refused pass` (the outcome line's `toContain` first). The linked-card/ row walks the link: its pass unlinks the target's file and prints `card_withdrawn:refused 1`, so the case reds at `nothing withdrawn through a linked card/`. The unrecorded row withdraws but prints nothing: `toContain('history-sweep: card_withdrawn:refused 1\n')` reds. The always-withdraw row removes every prediction its own tick wrote: the first compaction case reds at its first `cardOf` (`expected null to be 'History: node L…'`).
   - The budget-gate row breaks the loop before any candidate, so A's prediction is not consumed but withdrawn with B's: the case reds at `the consumption is counted, never swallowed by the withdrawal` (`expected {} to deeply equal { 'card_consumed:unknown': 1 }`). The write-past-the-budget row rewrites A's consumed prediction at end-of-file: `no write past the budget` reads one more `card_written`.
@@ -2887,6 +2947,9 @@ git commit -m "feat(history): write and consume card/<id>/<uuid>.txt at end-of-f
 - Pins: this task's plan pins (served, mismatch and nothing through real passes, mid-line after standing text included; the window held open and the cursor with it, then closed by 40 rows; a leaf behind an open window waits and is then counted once; subagent leaves never measured; leaves older than the first measuring pass never measured; the count and the cursor in one transaction; a copy no longer live and the wait bound each close a window; an attachment body over `CARD_ATTACHMENT_MAX_BYTES` is never decoded).
 - Departures: ⟦D:history-card-measured-from-transcript⟧; ⟦D:history-card-measure-window⟧ (Task 3's, implemented here); ⟦D:history-producer-backend⟧ (the counters' backend is the boundary's producer).
 - Known undercount, listed in the PR body's fixed `### Known W1-e distortions` (Task 14): a boundary whose parse crashed before its leaf was written (RB5's `leaf-crashed` marker) has no leaf, so its delivery is never measured.
+
+**Choices this task makes:**
+- **Spooled forks (ruled Q16) change nothing in the measure.** A leaf is measured in its own boundary's holding copy: `holdingCopyOf` picks among the files of that boundary's transcript (`boundaries.transcript_pk`, the first claim). So a parent's leaf is read in the parent's copy, never in a fork's file that copied its boundary and the SessionStart attachment after it, and no attachment is counted for two leaves. A fork's own leaves are measured in the fork's copy, as any epoch's are. The measure reads no epoch cause and keys nothing by one, and a fork adds no counter, so this task gains no case.
 
 - [ ] **Step 1: Add the attachment builder.** Append to the end of `server/test/historyFixtures.ts`:
 
@@ -3737,6 +3800,7 @@ git commit -m "feat(history): collect purged sessions' scope markers and card di
 - **A symlink at the marker's path is left alone.** The write would follow it.
 - **The unset arm parses the payload with one jq**, printing `.transcript_path` and `.trigger // "auto"` on two lines, as `_hook_compact_pre` reads them. A failed parse leaves the path empty, the scope rule answers rc 1, and the verdict is undecided.
 - **The invalidation runs first, directly below `esac`, and is builtin-only.** The tail can exit between `esac` and the marker block (the hookstate compose, the 64 KB cap, the hookstate write and `mv`), and a hook kill can land there too. Emptying the marker before any of them means each of those leaves an empty marker, never an older fresh `main` one. It runs under `history-off` too: emptying serves nothing and grows nothing, and the reader refuses under `history-off` anyway. It needs neither the id bound nor the psid test, because it only truncates a regular file that already exists.
+- **A spooled SessionStart(fork) (ruled Q16) changes nothing here.** The marker is written and emptied on PreCompact only, and a SessionStart(fork) neither writes nor reads it (the reader runs on a compact SessionStart only, Task 9). A fork's own compactions write and empty `scope/<id>` as any main thread's do, keyed on its own psid, so a marker the parent left before a `/branch` names the parent's sid and cannot serve a fresh-sid fork. B2's one hook edit is `fork` added in place to the spool block's source whitelist, outside this block and below README's anchor, so no line this task anchors on or measures moves.
 
 - [ ] **Step 1: Read the base.** From the repository root:
 
@@ -4379,6 +4443,7 @@ census does not move."
 - ⟦D:history-card-main-scope-only⟧: the reader serves only on a fresh `main` marker for this psid.
 - ⟦D:history-recall-off-generation⟧: the reader honours `recall-off/<id>` only when it names this family's generation.
 - ⟦D:history-epoch-lines-survive-off⟧, card half: `history-off` silences the line, never a clear epoch line.
+- ⟦D:history-fork-spooled⟧ (B2-defined, ruled Q16): B2 spools SessionStart(fork); the reader still serves only a compact SessionStart, and the compact-only case gains its `fork` row.
 - ⟦D:history-card-measured-from-transcript⟧: the hook writes no receipt.
 - ⟦D:history-id-grammar⟧, applied as bash can: the 224-char bound is a builtin test, and `.` and `..` are refused structurally, because under `scope/` and `card/` they name directories.
 - ⟦D:history-card-recall-off-unreadable-off⟧ NEW, ruled RC4. §8.6 reads "treating it as set only when its content equals this session's generation". B2's `decideRecallOff` answers an unreadable file `off`, and its `presenceOf` reads a symlink or a non-file as unreadable. The hook follows the CLI, so the eval's control arm never sees the card line while its CLI answers exit 8. Its read is `CCRC_ID_MAX` (128) characters where the CLI's is 4,096 bytes, so a read that fills that window is OFF too, the side that withholds the line (ruling RC4: fail closed).
@@ -4396,6 +4461,7 @@ census does not move."
   - Only a hand edit makes such a file: the W2 verb writes 37 bytes.
   - `.generation` is ccd's own 36-byte file and keeps `_ct_read`, because RC4 rules the recall-off read. A `.generation` that a hand edit pads past char 128 still reads as no generation here, where the CLI reads the generation. That is named for the coordinator in the PR body, with no B3 change.
 - **The C18 cases pin a locale.** `${#…}` and the emitter's `${2:0:N}` count in the hook's locale unit: bytes under C, chars under a UTF-8 locale. The line is 109 bytes and 103 chars. The fold's room test is in the emitter's own unit, so it is right in both. The cases plant an ASCII compact card, whose width is the same everywhere, run under `LC_ALL=C` (and `C.UTF-8` on Linux), and measure the line in that unit.
+- **A SessionStart(fork) never serves (ruled Q16).** B2 spools a fork line, but the reader's call stays inside the compact guard: a fork's context describes no compaction. The case `only a compact SessionStart serves` gains `fork` beside `startup`, `resume` and `clear`, with a fresh `main` marker and a prediction present for the same psid, the state Claude Code's same-id fork arm resumes into. Mutant `T9-M31-fork-source` widens the guard to `fork` and reds that row alone; `T9-M23` reds the case at `startup` first, so it cannot measure the new row. B2's whitelist edit is in place on the spool block's source line, below README's anchor, so Step 8's census and its expected numbers are unchanged.
 - **The tests never spell `served:` or `.served`.** The describe titled "the compaction card — no test reads served off a set (plan Task 9)" scans this whole file for both spellings and pins its `raw` count at 11. So `plantCompactCard`'s set carries no `served` member; the hook's serve arm reads only the set's nonce.
 
 - [ ] **Step 1: Read the base.** From the repository root:
@@ -4662,9 +4728,9 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     expect(served(start({ agent_id: 'agent-7' }))).toBeNull();
   });
 
-  it('only a compact SessionStart serves: startup, resume and clear never read the prediction', () => {
+  it('only a compact SessionStart serves: startup, resume, clear and fork (spooled from B2, ruled Q16) never read the prediction', () => {
     plantAll();
-    for (const source of ['startup', 'resume', 'clear']) expect(hasLine(served(start({ source }))), source).toBe(false);
+    for (const source of ['startup', 'resume', 'clear', 'fork']) expect(hasLine(served(start({ source }))), source).toBe(false);
   });
 
   it('S8 (card half): under history-off a SessionStart(clear) still spools its epoch line and prints no card line', () => {
@@ -5112,13 +5178,16 @@ MUTANTS = [
          '  [[ -z "$paid" ]] || return 0\n  [ -e "$COMPACT_CARD_OFF" ] && return 0\n  [[ -e "$HOME/.ccrc/history-off" ]] && return 0\n')]),
     ('T9-M30-recall-off-window', H, T, 'recall-off parity: 130 spaces', [
         ('    (( ${#o} < CCRC_ID_MAX )) || return 0\n', '')]),
+    ('T9-M31-fork-source', H, T, 'only a compact SessionStart serves', [
+        (r'''    [[ "$src" == compact ]] && { _hook_compact_card || true; _hook_history_card || true; }''',
+         r'''    [[ "$src" == compact || "$src" == fork ]] && { _hook_compact_card || true; _hook_history_card || true; }''')]),
 ]
 PYEOF
 python3 "$SCRATCH/mutate.py" "$SCRATCH/mutants-t9.py"; echo "rc=$?"
 git status --short
 ```
 
-Run it in the foreground, with a timeout of at least 4800000 ms: 30 mutants, two runs each. Expected: 30 `RED->GREEN` lines, `rc=0`, and only this task's three files modified. Each mutant's red, as measured on a prototype of this exact text for T9-M1 to T9-M24; T9-M25 to T9-M29 were added after the prototype, and their reds were measured on an extract of the reader against the same marker and parity rows. Ruling RC4 then replaced the recall-off read's three `_ct_read` lines with the bounded read, so T9-M6's and T9-M26's anchors are the new read's lines and T9-M30 is new: those three reds are argued from the code, not measured on the prototype (a `NOT MEASURED` there is reported with the case's output):
+Run it in the foreground, with a timeout of at least 4960000 ms: 31 mutants, two runs each. Expected: 31 `RED->GREEN` lines, `rc=0`, and only this task's three files modified. Each mutant's red, as measured on a prototype of this exact text for T9-M1 to T9-M24; T9-M25 to T9-M29 were added after the prototype, and their reds were measured on an extract of the reader against the same marker and parity rows. Ruling RC4 then replaced the recall-off read's three `_ct_read` lines with the bounded read, so T9-M6's and T9-M26's anchors are the new read's lines and T9-M30 is new: those three reds are argued from the code, not measured on the prototype. T9-M31 came with ruling Q16, and its red is argued the same way: the SessionStart arm treats `fork` as it treats `startup`, which T9-M23 measured (a `NOT MEASURED` among these four is reported with the case's output):
 
 | Mutant | Guard removed or inverted | The case that goes red |
 |---|---|---|
@@ -5152,6 +5221,7 @@ Run it in the foreground, with a timeout of at least 4800000 ms: 30 mutants, two
 | T9-M28-ms-digits | the ms digit test | C37's `non-numeric ms`: `exit 0 on every path: expected 1 to be +0` (`soon: unbound variable` inside `$(( ))`, a `set -u` abort) |
 | T9-M29-inherits-compact-card-off | none: it ADDS compact-card-off's test to the reader, the inheritance §8.6 forbids | C19, independent of compact-card-off: `expected null to be 'History: node …'` |
 | T9-M30-recall-off-window | `(( ${#o} < CCRC_ID_MAX ))`, the window test ruling RC4 adds | parity: 130 spaces followed by the resolved generation G (`the CLI reads off: expected 'History: node …' to be null`: the read keeps 128 spaces, which trim to empty, and an empty value is not this generation) |
+| T9-M31-fork-source | the compact guard widened to `fork`, the source B2 spools (ruled Q16) | only a compact SessionStart serves: `fork: expected true to be false` (the startup, resume and clear rows stay green under it) |
 
 A `NOT MEASURED` row means its case is wrong: fix the case, never the mutant. Never use `git stash`.
 
@@ -6431,7 +6501,7 @@ Expected: green. A red means a deviation number is defined in two plans. Report 
 ```markdown
 ## ccrc history W1-B3 "card line"
 
-Spec: `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` (rev 3.3), §10.5's B3 bullet.
+Spec: `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` (rev 3.4), §10.5's B3 bullet.
 Plan: the B3 plan this wave's brief names.
 
 The card-line PR of W1 Part B, on top of B1 ("capture") and B2 ("recall"):
@@ -6507,7 +6577,8 @@ Read W1-e (step 7 below) with these in hand. None is fixed in this PR.
 2. **Mint** the numbers for the departures marked NEW in the plan's list (fourteen, among them
    `history-card-withdrawn-when-not-ticking`), and replace their placeholders in the same commit. A slug B1 or B2
    already defined keeps its issued number.
-3. **Rulings applied (RC1–RC4), for the record.** Each is implemented as ruled; nothing here waits on a ruling.
+3. **Rulings applied (RC1–RC4, and the operator's Q15–Q19), for the record.** Each is implemented as ruled; nothing
+   here waits on a ruling.
    - RC1, accepted as implemented: `history-scope-marker-cleared-on-undecided` (every main-thread PreCompact
      empties the id's older marker directly below the hook's event `case`, before any tail exit, and only a
      decided verdict is written after the card's call); `history-hook-card-names-once`; `.` and `..` refused
@@ -6529,6 +6600,11 @@ Read W1-e (step 7 below) with these in hand. None is fixed in this PR.
    - RC4, parity fail closed (`history-card-recall-off-unreadable-off`): the hook's recall-off read treats a read
      that fills its 128-character window as OFF, so a hand-padded file never serves where the CLI answers exit 8
      (parity row: 130 spaces followed by the resolved generation).
+   - The operator's rev 3.4 rulings (2026-10-07), for the record. Q15, Q17, Q18 (a W2 matter), Q19 and prune at
+     low disk change nothing in B3. Q16 (SessionStart(fork) spooled from B2, `history-fork-spooled`) changes no B3
+     code: the card reads no epoch cause, so a fork's confirmed epoch is predicted for as any other is. B3 pins it
+     with one sweep case (a fresh-sid fork's card starts at the parent boundary its copy holds, as derivation does)
+     and one hook row (a SessionStart(fork) never serves).
    - Named for the coordinator, no B3 change: the attachment shape the card measure reads
      (`hook_additional_context`, string-array content) is B1's fixture shape and has not been measured on a live
      transcript in the tree; the first W1-e reading (step 7 below) is its check. And `$REG/<id>.generation`,
@@ -6575,7 +6651,7 @@ Read W1-e (step 7 below) with these in hand. None is fixed in this PR.
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
 
-  - The three parenthesised lines are the only text this step replaces. Every other line is final, the fixed `### Known W1-e distortions` list included: it is the W1-e caveats the tasks name (Review Focus 2, 3 and 6, Tasks 5, 6 and 13), written once here so the reading in step 7 has them, and the `### Steps for the coordinator` record of rulings RC1–RC4.
+  - The three parenthesised lines are the only text this step replaces. Every other line is final, the fixed `### Known W1-e distortions` list included: it is the W1-e caveats the tasks name (Review Focus 2, 3 and 6, Tasks 5, 6 and 13), written once here so the reading in step 7 has them, and the `### Steps for the coordinator` record of rulings RC1–RC4 and of the operator's rev 3.4 rulings.
   - The body names no host, account, home or session id. Check with `grep -nE '[0-9]{1,3}(\.[0-9]{1,3}){3}|\.ts\.net|/home/' .superpowers/sdd/history-w1-b3/pr-body.md`, which must print nothing.
   - The file stays under `.superpowers/` (gitignored) and is not committed. No further commit is needed: Step 5 committed this task's only tracked change, and Steps 6 to 11 leave the tree clean.
 
@@ -6596,9 +6672,10 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-card-withdrawn-when-not-ticking⟧ (Tasks 3, 5, 12): NEW departure (no spec §16 row), ruled RC2. §8.6 deletes a prediction only when the boundary that consumed it is ingested, and says nothing of a pass that cannot ingest it, which would leave a stale line for the next compaction. So every scheduled pass that runs but does not run the card step over a caught-up ingest (a cap or floor pause, a per-chunk floor stop, an ingest an unreadable roster skipped, a budget already spent before the card step, the recover or migrate arm, a held, refused, unbound or unreachable store) withdraws every `card/<id>/<uuid>.txt`: lstat-checked, unlink only, never through a link, counted `card_withdrawn:<reason>`, or, on a hold with no DB open, printed on the pass's outcome line. lib's `decideCardWithdraw` decides; `card.mjs` and `sweep.mjs` measure and act. The budget bounds a write, never the consume/delete decision. A dead timer is a named residual.
 - ⟦D:history-tick-order⟧ (Task 5): A tick runs the outbox, the migration verdict, the secrets, a recovery step (only at the code's version), then drain and ingest (§9.2, §6.11; rev 3.2 review, DI6). B1-defined. B3's card step runs directly after B2's derivation, under its ingest/not-paused gate, and never on the recover arm.
 - ⟦D:history-card-dirs-made-by-sweep⟧ (Task 5): NEW departure (no spec §16 row), ruled RC1 (accepted). The spec says the hook never makes `scope/`, which it writes, and names no creator for it or for `card/`. So the sweep makes both (0700) at every bound store's tick: the marker and the reserve arm within one tick of an update, and never on a box without history.
-- ⟦D:history-card-one-file-per-id⟧ (Tasks 5, 12): NEW departure (no spec §16 row), ruled RC1 (accepted). §8.6 deletes a prediction only on consumption. Writing a new uuid's prediction also removes the id's other `<uuid>.txt` (a `/clear`ed session's), so §9.4's "≤512 B per session" holds without waiting for the 7-day purge.
+- ⟦D:history-card-one-file-per-id⟧ (Tasks 5, 12): NEW departure (no spec §16 row), ruled RC1 (accepted). §8.6 deletes a prediction only on consumption. Writing a new uuid's prediction also removes the id's other `<uuid>.txt` (a `/clear`ed or forked session's), so §9.4's "≤512 B per session" holds without waiting for the 7-day purge.
 - ⟦D:history-card-registry-names-the-session⟧ (Tasks 5, 7): NEW departure (no spec §16 row), ruled RC1 (accepted). A prediction is written only for the uuid `$REG/<id>.uuid` names. The 30-minute scan reads every known transcript to its end, so end-of-file alone would write a file for every session the store ever saw. A file the registry no longer names is still consumed and deleted.
 - ⟦D:history-card-newest-live-copy⟧ (Task 5): NEW departure (no spec §16 row), ruled RC1 (accepted). §8.6 names "the transcript's cursor" in the singular. With several live copies (after a swap carry), the prediction reads the copy written last (newest `mtime_ns`, then the larger `file_id`), the one Claude Code appends the next boundary to. A wrong guess is counted as a mismatch, never served silently.
+- ⟦D:history-fork-spooled⟧ (Tasks 5, 9): SessionStart(fork) writes a spool line from W1-B2: `fork` joins the hook's source whitelist in place (no hook line moves, no S6-R11 census change), `SPOOL_SOURCES` and `EPOCH_CAUSES`; the line carries `src` and `reg` and confirms exactly as resume does; a fork whose sid is already an epoch confirms that epoch, a fresh sid chains a `fork` epoch, and copied rows follow the per-copy span rule (§5.1, §6.1, §9.14; DM48; ruled Q16, rev 3.4). B2-defined. B3 changes no code for it: the card reads no epoch cause. Task 5's spooled-fork case pins a fork epoch's prediction over the parent's boundary its copy holds, and Task 9's fork row pins that a SessionStart(fork) never serves.
 - ⟦D:history-producer-backend⟧ (Task 6): `BACKENDS` gains `unknown` for NULL and `<synthetic>` models; a boundary's producer is the first real assistant row after its summary, never the last row before it (§6.2; rev 3 review, Q8). B1-defined. The delivery counters are keyed by that producer: `card_served:<backend>` and `card_id_mismatch:<backend>`.
 - ⟦D:history-purged-files-aged-by-mtime⟧ (Task 7): NEW departure (no spec §16 row), ruled RC1 (accepted). §9.4 collects "the files of purged sessions after 7 days", but ccd's purge leaves no time the sweep can read. So the age is the entry's own newest write, once the registry no longer names the session, and a file last written long before the purge can go at the first scan after it.
 - ⟦D:history-scope-marker-after-card⟧ (Task 8): The PreCompact scope marker is written after `_hook_compact_pre`, outside the spool block, gated on `scope/`; it reuses a set `CS_SCOPE`, writes nothing on a set-but-empty one, and runs scope itself when the card did not (§5.1; rev 3.2 review, CT1, FE7). This plan defines it first. Its "writes nothing on a set-but-empty one" is refined by ⟦D:history-scope-marker-cleared-on-undecided⟧.
@@ -6614,4 +6691,4 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-w1b-three-prs⟧ (Task 14): W1 part B ships as capture, recall and card-line PRs, in that order, and since rev 3.1 the sole-copy export as a fourth, B4, after B2 since rev 3.2, in either order with B3 (§10.5; ruled Q6). B1-defined.
 - ⟦D:history-readme-card-paragraph⟧ (Task 14): NEW departure (no spec §16 row), ruled RC1 (accepted). §10.5 assigns B3 only README's `:2900` re-anchor. But B2's history section says nothing of the card line, and the reserve shortens every compaction card on a history box, so B3 adds one paragraph to that section. CLAUDE.md's README figure is re-measured in the commit that grows README.
 
-28 slugs in all: 14 NEW to this plan (`history-card-withdrawn-when-not-ticking` came with ruling RC2), and 14 spec §16 slugs. Of those 14, 5 are B1-defined, 4 are B2-defined, and this plan defines 5 first: `history-card-fold-and-reserve`, `history-card-measured-from-transcript`, `history-scope-marker-after-card`, `history-card-main-scope-only` and `history-card-reader-above-the-arm`.
+29 slugs in all: 14 NEW to this plan (`history-card-withdrawn-when-not-ticking` came with ruling RC2), and 15 spec §16 slugs. Of those 15, 5 are B1-defined, 5 are B2-defined (`history-fork-spooled` came with the operator's ruling Q16), and this plan defines 5 first: `history-card-fold-and-reserve`, `history-card-measured-from-transcript`, `history-scope-marker-after-card`, `history-card-main-scope-only` and `history-card-reader-above-the-arm`.
