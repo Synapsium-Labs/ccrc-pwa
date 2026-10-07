@@ -811,6 +811,38 @@ describe('history ingest: chunk writes through the real sweep (plan task 19)', (
       } finally { db.close(); }
     } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
   }, 180_000);
+
+  it('D-4346: a later row whose uuid is a line-too-long raw row\'s key leaves its raw blob undecompressed: two unknown variants, both blobs kept, the small body searchable', async () => {
+    const { lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-d4346-collide-');
+    try {
+      const long = `{"pad":"${'a'.repeat(lib.LINE_MAX + 16)}"}`;
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), long, IX.user(IX.uuidN(4), IX.uuidN(1), 'after', 4)]));
+      IX.sweepTwice(box);
+      let db = openStoreRO(box);
+      let k = '';
+      try {
+        const raw = db.prepare(`SELECT e.uuid AS uuid, b.raw_len AS len FROM entries e JOIN blobs b ON b.blob_id = e.blob_id
+          WHERE e.parse_state = 'raw-only'`).get() as { uuid: string; len: number };
+        k = raw.uuid;
+        expect(raw.len).toBeGreaterThan(lib.LINE_MAX);
+      } finally { db.close(); }
+      const second = IX.plantCopy(box.homes[1]!, IX.U, IX.jsonl([IX.user(k, null, 'zqcollide words', 5)]));
+      fs.utimesSync(second, new Date('2099-01-01T00:00:00Z'), new Date('2099-01-01T00:00:00Z'));
+      fs.mkdirSync(path.join(box.root, 'spool'), { recursive: true });
+      spoolLine(box, IX.ID, { v: 1, ev: 'Stop', id: IX.ID });   // a hint: the session's files are discovered again
+      IX.sweepTwice(box);
+      db = openStoreRO(box);
+      try {
+        const ev = db.prepare(`SELECT v.blob_id AS blob_id, v.cause AS cause FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id
+          WHERE e.uuid = ?`).all(k) as { blob_id: number; cause: string }[];
+        expect(ev).toHaveLength(2);
+        expect(ev.map((x) => x.cause)).toEqual(['unknown', 'unknown']);
+        for (const x of ev) expect(IX.count(db, 'blobs', `blob_id = ${x.blob_id}`)).toBe(1);
+        expect((db.prepare('SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH ?').get('zqcollide') as { n: number }).n).toBe(1);
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  }, 180_000);
 });
 
 describe('history ingest: chunk writes in-process (plan task 19)', () => {
@@ -963,8 +995,9 @@ describe('history ingest: chunk writes in-process (plan task 19)', () => {
     expect((src.match(/(?<!function )\bparseStoredJson\(/g) ?? []).length).toBe(4);
     const over = Buffer.from(JSON.stringify([{ type: 'text', text: 'zqstructsentinel' }]).slice(0, -1) + ',0'.repeat(lib.JSON_NODES_MAX) + ']');
     const idx = lib.makePairIndex([]);
-    expect((await S.ftsTextOfBlob(brotliCompressSync(over), false, idx)).text).toBe('');
-    expect((await S.ftsTextOfBlob(brotliCompressSync(Buffer.from(JSON.stringify([{ type: 'text', text: 'zqstructsentinel' }]))), false, idx)).text).toBe('zqstructsentinel');
+    const okBody = Buffer.from(JSON.stringify([{ type: 'text', text: 'zqstructsentinel' }]));
+    expect((await S.ftsTextOfBlob(brotliCompressSync(over), false, idx, over.length)).text).toBe('');
+    expect((await S.ftsTextOfBlob(brotliCompressSync(okBody), false, idx, okBody.length)).text).toBe('zqstructsentinel');
     expect(() => S.parseStoredJson(over)).toThrow(SyntaxError);
   });
 
@@ -1748,7 +1781,7 @@ describe('history ingest: sidecars (plan task 21)', () => {
 interface IxSweep {
   ftsPrepare(db: DatabaseSync, nowMs: number): { state: string; tables: boolean };
   deriveFts(db: DatabaseSync, ctx: IxCtx, budget: IxBudget): Promise<void>;
-  ftsTextOfBlob(z: Uint8Array, isSidecar: boolean, pairIdx: unknown): Promise<{ text: string; decoded: number; undecodable: false } | { text: null; decoded: number; undecodable: true }>;
+  ftsTextOfBlob(z: Uint8Array, isSidecar: boolean, pairIdx: unknown, rawLen: number): Promise<{ text: string; decoded: number; undecodable: false } | { text: null; decoded: number; undecodable: true }>;
 }
 interface IxSweep {
   secretsStep(db: DatabaseSync, ctx: IxCtx, secretFiles: string[]): { pairIdx: unknown; newValues: string[]; values: string[] };
@@ -2452,14 +2485,15 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       const { sweep: S, lib } = await IX.api();
       const raw = body();
       const idx = lib.makePairIndex([]);
-      const r = await S.ftsTextOfBlob(q5(raw), true, idx);
+      const r = await S.ftsTextOfBlob(q5(raw), true, idx, raw.length);
       if (r.text === null) throw new Error('the blob did not decode');
       expect(r.undecodable).toBe(false);
       expect(r.decoded).toBeLessThan(BOUND + 128 * 1024);
       expect(r.text).toBe(lib.sidecarIndexText(raw.subarray(0, BOUND), idx));
       expect(r.text).toContain('zqhead');
       expect(r.text).not.toContain('zqtail');
-      const e = await S.ftsTextOfBlob(q5(Buffer.from(JSON.stringify('an entry body'))), false, idx);
+      const entryBody = Buffer.from(JSON.stringify('an entry body'));
+      const e = await S.ftsTextOfBlob(q5(entryBody), false, idx, entryBody.length);
       expect(e.undecodable).toBe(false);
       expect(e.text).toBe('an entry body');
     });
@@ -2543,7 +2577,8 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       const { sweep: S, lib } = await IX.api();
       const tok = hex(24); const skTail = hex(20);
       const idx = lib.makePairIndex(lib.secretPairs([tok]).pairs);
-      const r = await S.ftsTextOfBlob(q5(jsonSidecar(tok, skShape(skTail))), true, idx);
+      const sc = jsonSidecar(tok, skShape(skTail));
+      const r = await S.ftsTextOfBlob(q5(sc), true, idx, sc.length);
       if (r.text === null) throw new Error('the blob did not decode');
       expect(r.text.includes(tok.slice(0, 12))).toBe(false);
       expect(r.text.includes(skTail.slice(0, 12))).toBe(false);
@@ -2582,10 +2617,10 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       const small = q5(Buffer.from(JSON.stringify('an entry body')));
       for (const isSidecar of [true, false]) {
         for (const z of [BAD, small.subarray(0, Math.floor(small.length / 2)), Buffer.alloc(0)]) {
-          await expect(S.ftsTextOfBlob(z, isSidecar, idx), `${isSidecar} ${z.length}`).resolves.toEqual({ text: null, decoded: 0, undecodable: true });
+          await expect(S.ftsTextOfBlob(z, isSidecar, idx, 1000), `${isSidecar} ${z.length}`).resolves.toEqual({ text: null, decoded: 0, undecodable: true });
         }
       }
-      await expect(S.ftsTextOfBlob(small, false, idx)).resolves.toEqual({ text: 'an entry body', decoded: 15, undecodable: false });   // CONTROL
+      await expect(S.ftsTextOfBlob(small, false, idx, 15)).resolves.toEqual({ text: 'an entry body', decoded: 15, undecodable: false });   // CONTROL
     });
 
     it('the backfill passes an undecodable body blob and an undecodable sidecar blob over, counts each once, and indexes the rest in the same run', async () => {
@@ -2657,7 +2692,7 @@ describe('history ingest: the FTS index (plan task 23)', () => {
     it('a late pair glued to a letter in an entry whose blob no longer decodes is reached only by the re-derivation, which deletes the row and never skips it (D-4344, D-4346)', () => {
       const box = IX.newBox('ccrc-hist-undec-glued-');
       const v = `zqc${hex(12)}3`;
-      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note é${v} end`, 1)]));
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note \u00e9${v} end`, 1)]));
       IX.sweepTwice(box);
       let db = openStoreRO(box);
       try { expect(matches(db, '"ezqc"*')).toBe(1); } finally { db.close(); }   // CONTROL: the glued term is indexed
@@ -2678,6 +2713,14 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       expect(counters(box)[HEALTH_COUNTERS.blobUndecodable]).toBe(1);
     });
 
+    it('a body whose stored raw_len is over BLOB_DECODE_MAX is never decompressed: it indexes empty and uncounted (D-4346)', async () => {
+      const { sweep: S, lib } = await IX.api();
+      const idx = lib.makePairIndex([]);
+      const small = brotliCompressSync(Buffer.from(JSON.stringify([{ type: 'text', text: 'zqoversentinel' }])), { params: { [zc.BROTLI_PARAM_QUALITY]: 5 } });
+      await expect(S.ftsTextOfBlob(small, false, idx, lib.BLOB_DECODE_MAX + 1)).resolves.toEqual({ text: '', decoded: 0, undecodable: false });
+      expect((await S.ftsTextOfBlob(small, false, idx, 1000)).text).toBe('zqoversentinel');   // CONTROL
+    });
+
     it('census: every decompression of a stored blob in sweep.mjs is guarded, and only ftsTextOfBlob decodes for the index', () => {
       const lines = fs.readFileSync(SWEEP, 'utf8').split('\n');
       const hits: Array<{ fn: string; line: string; prev: string }> = [];
@@ -2692,6 +2735,29 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       expect([...new Set(hits.map((h) => h.fn))].sort()).toEqual(['ftsTextOfBlob', 'pairedFromStore', 'storedBody', 'toolResultCandidates']);
       for (const h of hits) expect(/\btry\b/.test(h.line) || /\btry\b/.test(h.prev), h.line).toBe(true);
       expect(hits.filter((h) => h.fn === 'ftsTextOfBlob')).toHaveLength(2);   // CONTROL
+      // D-4346: every blob SELECT a whole-body reader decodes from carries raw_len, and each reader checks it before it decodes.
+      const sel = lines.filter((l) => /^\s*(?:blobZ|pairSel|blobForFts): db\.prepare\(/.test(l));
+      expect(sel).toHaveLength(4);
+      for (const l of sel) expect(l, l).toContain('raw_len');
+      const fnLines = (fn: string): string[] => {
+        const at = lines.findIndex((l) => new RegExp(`^(?:export )?(?:async )?function ${fn}\\b`).test(l));
+        expect(at, fn).toBeGreaterThanOrEqual(0);
+        const end = lines.findIndex((l, i) => i > at && /^}/.test(l));
+        return lines.slice(at, end + 1);
+      };
+      for (const fn of ['storedBody', 'pairedFromStore', 'ftsTextOfBlob']) {
+        const body = fnLines(fn);
+        const guard = body.findIndex((l) => /\bblobOverDecodeCap\(/.test(l));
+        const decode = body.findIndex((l) => /\bunbrotli\(/.test(l));
+        expect(guard, `${fn} has no guard`).toBeGreaterThanOrEqual(0);
+        expect(guard, `${fn} decodes before it checks`).toBeLessThan(decode);
+      }
+      const trc = fnLines('toolResultCandidates').join('\n');
+      expect(trc).not.toMatch(/blobOverDecodeCap\(/);
+      const src = lines.join('\n');
+      const tr = /toolResults: db\.prepare\(`([^`]*)`/.exec(src);
+      expect(tr).not.toBeNull();
+      expect(tr![1]).not.toContain('raw_len');
     });
   });
 });

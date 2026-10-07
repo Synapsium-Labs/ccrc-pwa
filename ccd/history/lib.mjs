@@ -134,6 +134,22 @@ export const REPARSE_MAX_TARGETS = 500;
 export const CARRIER_KILL_S = 600;                  // == the unit's TimeoutStartSec=10min (DM43)
 export const EXPORT_MARGIN_DAYS = 30;
 export const LINE_MAX = 16 * 1024 * 1024;           // a longer transcript line is stored raw-only
+/** The largest decompressed size (raw_len) a reader that must hold a whole stored body will decode. A body stored
+ *  from a row Claude Code wrote (JSON.stringify output) re-encodes at no more than its line's length, so it is within
+ *  LINE_MAX. A blob over it is a raw-only line-too-long line, whose raw_len is the full line and has no ceiling
+ *  (findLineEnd scans to the next newline), or a foreign row whose canonical JSON grew past its line (an exponent
+ *  number written out in digits, an invalid UTF-8 byte as U+FFFD's three bytes), which is passed over the same way.
+ *  A body-reader reaches a raw line-too-long blob when a later row's uuid collides with the raw row's rawRowKey;
+ *  decompressing it whole inside the chunk transaction could exhaust the carrier's memory on every ingest of that
+ *  uuid (review 316 F7 sibling). A reader that meets one passes it over: the variant compare gets no body (cause
+ *  `unknown`), the FTS index text is empty, and the paired-tool-use walk goes on to its parent.
+ *  D-4346 (history-permanent-failures-classified). */
+export const BLOB_DECODE_MAX = LINE_MAX;
+/** Is a stored blob's decompressed size over BLOB_DECODE_MAX, so that a whole-body reader must refuse it before it
+ *  decompresses? A non-numeric raw_len (never written: raw_len is NOT NULL INTEGER) refuses too. D-4346. */
+export function blobOverDecodeCap(rawLen) {
+  return !(typeof rawLen === 'number' && rawLen <= BLOB_DECODE_MAX);
+}
 /** D-4345 (history-json-structure-bound): the deepest a transcript line's JSON may nest, and the most structural
  *  units it may hold (a unit is a `[`, `{` or `,` outside a string; every value or key follows a `[`, `{`, `,` or `:`,
  *  and a `:` only follows a key, so a line holds at most 2 × units + 1 of them). A line over either is stored raw-only

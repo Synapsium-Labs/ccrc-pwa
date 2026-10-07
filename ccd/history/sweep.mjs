@@ -39,7 +39,7 @@ import {
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
   UUID_RE, WRITER_RE, drainingNameOk, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
   passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
-  SQLITE_CODES, decideDrainFailure, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
+  SQLITE_CODES, decideDrainFailure, BLOB_DECODE_MAX, blobOverDecodeCap, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
@@ -2056,7 +2056,7 @@ function stmts(db) {
   s = {
     blobId: db.prepare('SELECT blob_id, fts_indexed FROM blobs WHERE sha256 = ?'),
     blobIns: db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?) ON CONFLICT(sha256) DO NOTHING'),
-    blobZ: db.prepare('SELECT z FROM blobs WHERE blob_id = ?'),
+    blobZ: db.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?'),
     entrySel: db.prepare('SELECT entry_id, blob_id FROM entries WHERE uuid = ?'),
     entryUpsert: db.prepare(ENTRY_UPSERT),
     // D-4237: memberships.line is the line's BYTE OFFSET in the file, not a line number (a cursor resumes at an
@@ -2078,7 +2078,7 @@ function stmts(db) {
         last_error_code = coalesce(?, last_error_code), last_error_offset = coalesce(?, last_error_offset)
       WHERE file_id = ?`),
     crash: db.prepare('UPDATE ingest_files SET last_error_code = ?, last_error_offset = ? WHERE file_id = ?'),
-    pairSel: db.prepare(`SELECT e.parent_uuid AS parent_uuid, b.z AS z FROM entries e
+    pairSel: db.prepare(`SELECT e.parent_uuid AS parent_uuid, b.z AS z, b.raw_len AS raw_len FROM entries e
       JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?`),
     pathRow: db.prepare('SELECT file_id FROM file_paths WHERE path = ?'),
     rowPaths: db.prepare('SELECT path FROM file_paths WHERE file_id = ?'),
@@ -2098,10 +2098,12 @@ export function parseStoredJson(bytes) {
   return JSON.parse(bytes.toString('utf8'));
 }
 
-/** A stored body, parsed; null for a tombstone, a body that is not JSON, or one over the structure bound (D-4345). */
+/** A stored body, parsed; null for a tombstone, a body that is not JSON, or one over the structure bound (D-4345), or one
+ *  whose raw_len is over BLOB_DECODE_MAX, which is never decompressed (D-4346). */
 function storedBody(s, blobId) {
   const r = s.blobZ.get(blobId);
   if (r === undefined || r.z === null) return null;
+  if (blobOverDecodeCap(r.raw_len)) return null;   // D-4346 (history-permanent-failures-classified): an over-cap body is never decoded whole for the variant compare
   try { return parseStoredJson(unbrotli(r.z)); } catch { return null; }
 }
 
@@ -2115,6 +2117,7 @@ function pairedFromStore(db, toolUseId, parentUuid) {
     const r = s.pairSel.get(uuid);
     if (r === undefined) return null;
     if (r.z !== null) {
+      if (blobOverDecodeCap(r.raw_len)) { uuid = r.parent_uuid; continue; }   // D-4346: an over-cap body is never decoded whole; walk on to its parent
       try {
         const u = toolUsesOf(parseStoredJson(unbrotli(r.z))).find((x) => x.id === toolUseId);
         if (u !== undefined) return u;
@@ -3142,8 +3145,8 @@ function derivStmts(db) {
     pending: db.prepare(`INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES (?, ?, NULL, NULL)
       ON CONFLICT(step, version) DO UPDATE SET completed_ms = NULL`),
     reopen: db.prepare('UPDATE derivation_state SET completed_ms = NULL WHERE step = ? AND version = ? AND completed_ms IS NOT NULL'),
-    blobZ: db.prepare('SELECT z FROM blobs WHERE blob_id = ?'),
-    blobForFts: db.prepare(`SELECT z, EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = blobs.blob_id) AS is_sidecar
+    blobZ: db.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?'),
+    blobForFts: db.prepare(`SELECT z, raw_len, EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = blobs.blob_id) AS is_sidecar
       FROM blobs WHERE blob_id = ?`),
     pairTop: db.prepare('SELECT max(rowid) AS rid FROM redact_hashes'),
     pairRid: db.prepare('SELECT rowid AS rid FROM redact_hashes WHERE len = ? AND sha256 = ?'),
@@ -3191,14 +3194,18 @@ const UNDECODABLE = Object.freeze({ text: null, decoded: 0, undecodable: true })
  *  decompressed blob (O20's RSS bound). A body's plain text is small and decompressed whole
  *  (D-4195, history-fts-body-plain-text). A blob whose stored bytes do not decode (any throw of its decompress
  *  call, which depends on those bytes alone) answers `undecodable: true` with `text: null` and is never thrown; a
- *  body that decodes but does not parse indexes nothing (`text: ''`, `undecodable: false`). D-4346
- *  (history-permanent-failures-classified). */
-export async function ftsTextOfBlob(z, isSidecar, pairIdx) {
+ *  body that decodes but does not parse indexes nothing (`text: ''`, `undecodable: false`). A body whose stored
+ *  raw_len is over BLOB_DECODE_MAX is never decompressed (blobOverDecodeCap): it indexes nothing and is not counted, so
+ *  a raw line-too-long line reached by a uuid collision cannot exhaust a pass's memory (D-4346,
+ *  history-permanent-failures-classified). `rawLen` is the blob's stored raw_len; sidecars are exempt, their prefix
+ *  decoder being bounded already. */
+export async function ftsTextOfBlob(z, isSidecar, pairIdx, rawLen) {
   if (isSidecar) {
     let p;
     try { p = await unbrotliPrefix(z, SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN); } catch { return UNDECODABLE; }
     return { text: sidecarIndexText(p.bytes, pairIdx), decoded: p.decoded, undecodable: false };
   }
+  if (blobOverDecodeCap(rawLen)) return { text: '', decoded: 0, undecodable: false };   // D-4346: over BLOB_DECODE_MAX; never decompressed whole, indexed empty, uncounted
   let bytes;
   try { bytes = unbrotli(z); } catch { return UNDECODABLE; }
   try { return { text: ftsTextOf(parseStoredJson(bytes), 'entry'), decoded: bytes.length, undecodable: false }; } catch { return { text: '', decoded: bytes.length, undecodable: false }; }
@@ -3287,9 +3294,10 @@ export async function deriveFts(db, ctx, budget) {
     };
     for (const b of batch) {
       if (!budgetLeft(budget)) { if (reached !== cursor) commit(false); return; }
-      const z = d.blobZ.get(b.blob_id)?.z;
+      const zr = d.blobZ.get(b.blob_id);
+      const z = zr?.z;
       if (z === undefined || z === null) { reached = b.blob_id; continue; }
-      const t = await ftsTextOfBlob(z, b.is_sidecar === 1, ctx.pairIdx);
+      const t = await ftsTextOfBlob(z, b.is_sidecar === 1, ctx.pairIdx, zr.raw_len);
       budget.bytes += b.zlen;
       reached = b.blob_id;
       if (t.undecodable) { undecodable += 1; continue; }   // D-4346 (history-permanent-failures-classified): passed over, its fts_indexed left 0
@@ -3357,7 +3365,7 @@ export async function reindexForValues(db, ctx, values) {
   for (const id of rows) {
     const b = d.blobForFts.get(id);
     // A tombstone keeps no index row; nor does a blob whose bytes no longer decode (D-4346, history-permanent-failures-classified).
-    const t = b === undefined || b.z === null ? null : await ftsTextOfBlob(b.z, b.is_sidecar === 1, ctx.pairIdx);
+    const t = b === undefined || b.z === null ? null : await ftsTextOfBlob(b.z, b.is_sidecar === 1, ctx.pairIdx, b.raw_len);
     const undecodable = t !== null && t.undecodable;
     const text = t === null || undecodable ? null : t.text;
     group.push({ id, text, undecodable });
@@ -3428,7 +3436,7 @@ export async function rederiveFts(db, ctx, budget) {
         reindexed += 1;
       } else {
         idx.probe.hits = 0;
-        const t = await ftsTextOfBlob(row.z, row.is_sidecar === 1, idx);
+        const t = await ftsTextOfBlob(row.z, row.is_sidecar === 1, idx, row.raw_len);
         if (t.undecodable) {
           // D-4346 (history-permanent-failures-classified): never skipped; its row cannot be shown free of an owed pair, so it is deleted and none inserted.
           group.push({ id: b.blob_id, text: null, undecodable: true });

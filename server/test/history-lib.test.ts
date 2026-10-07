@@ -2686,3 +2686,13 @@ describe('decideDrainFailure (D-4346, history-permanent-failures-classified)', (
     expect([...healthLib.DRAIN_FAILURE_ARMS]).toEqual(['defer', 'reject', 'fail']);
   });
 });
+
+describe('blobOverDecodeCap (D-4346, history-permanent-failures-classified)', () => {
+  it('BLOB_DECODE_MAX is LINE_MAX; a size at it is decodable, one past it is not, and a non-number refuses', () => {
+    expect(healthLib.BLOB_DECODE_MAX).toBe(healthLib.LINE_MAX);
+    expect(healthLib.blobOverDecodeCap(healthLib.LINE_MAX)).toBe(false);
+    expect(healthLib.blobOverDecodeCap(healthLib.LINE_MAX + 1)).toBe(true);
+    expect(healthLib.blobOverDecodeCap(0)).toBe(false);
+    for (const v of [undefined, null, '5']) expect(healthLib.blobOverDecodeCap(v), String(v)).toBe(true);
+  });
+});

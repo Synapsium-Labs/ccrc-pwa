@@ -36,6 +36,8 @@ export const REPARSE_MAX_TARGETS: number;
 export const CARRIER_KILL_S: number;
 export const EXPORT_MARGIN_DAYS: number;
 export const LINE_MAX: number;
+export const BLOB_DECODE_MAX: number;
+export function blobOverDecodeCap(rawLen: unknown): boolean;
 export const JSON_DEPTH_MAX: number;
 export const JSON_NODES_MAX: number;
 export const CHUNK_BYTES: number;
