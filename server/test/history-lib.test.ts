@@ -1748,6 +1748,104 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
       expect(out === s).toBe(true);
     }
   });
+  it('FU1: a bare ESC before a value coloured in part is redacted, whatever the value\'s first character (the lead reading)', () => {
+    for (const first of ['S', 'P', 'O', 'N', 'a', '1']) {
+      const v = first + rndHex(16);
+      const idx = idxOf([v]);
+      expect(libRedact.redactField(`\x1b${v.slice(0, 8)}\x1b[31m${v.slice(8)}\x1b[0m`, idx), first).toBe(M);
+    }
+    const s = 'S' + rndHex(16);
+    expect(libRedact.redactField(`x \x1b${s.slice(0, 8)}\x1b[31m${s.slice(8)} y`, idxOf([s]))).toBe(`x ${M} y`);
+    const a = 'a' + rndHex(16);
+    expect(libRedact.redactField(`\x1b[${a.slice(0, 8)}\x1b[31m${a.slice(8)}`, idxOf([a]))).toBe(M);
+  });
+  it('FU1: a DCS header is a sequence: the value in its data string is redacted and the header kept', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    expect(libRedact.redactField(`\x1bP1$r${tok}\x1b\\`, idx)).toBe(`\x1bP1$r${M}\x1b\\`);
+    expect(libRedact.redactField(`\x901$r${tok}\x9c`, idx)).toBe(`\x901$r${M}\x9c`);
+  });
+  it('FU1: a single shift takes one character, and the value after that character is redacted', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    expect(libRedact.redactField(`\x1bOA${tok}`, idx)).toBe(`\x1bOA${M}`);
+    expect(libRedact.redactField(`\x1bNA${tok}`, idx)).toBe(`\x1bNA${M}`);
+    expect(libRedact.redactField(`\x8fA${tok}`, idx)).toBe(`\x8fA${M}`);
+    expect(libRedact.redactField(`\x8eA${tok}`, idx)).toBe(`\x8eA${M}`);
+  });
+  it('FU1: a value whose first characters a DCS header or a single shift takes is redacted (the lead reading)', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    expect(libRedact.redactField(`\x1bO${tok}`, idx)).toBe(M);
+    expect(libRedact.redactField(`\x1bN${tok}`, idx)).toBe(M);
+    expect(libRedact.redactField(`\x1bP${tok} end`, idx)).toBe(`${M} end`);
+    const a = 'a' + rndHex(16);
+    expect(libRedact.redactField(`\x1bO${a}`, idxOf([a]))).toBe(M);
+    expect(libRedact.redactField(`\x1bP${a}`, idxOf([a]))).toBe(M);
+    const d = '12a' + rndHex(16);
+    expect(libRedact.redactField(`\x1bP${d} end`, idxOf([d]))).toBe(`${M} end`);
+    expect(libRedact.redactField(`x\x1bP${d} end`, idxOf([d]))).toBe(`x${M} end`);
+  });
+  it('FU1: a C0 control inside a CSI does not end it, but a line break after a cut-off CSI does', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    expect(libRedact.redactField(`\x1b[3\x081m${tok}`, idx)).toBe(`\x1b[3\x081m${M}`);
+    expect(libRedact.redactField(`\x1b[3\x7f1m${tok}`, idx)).toBe(`\x1b[3\x7f1m${M}`);
+    const a = 'a' + rndHex(16);
+    expect(libRedact.redactField(`abc\x1b[01\n${a.slice(0, 8)}\x1b[31m${a.slice(8)}`, idxOf([a]))).toBe(`abc01\n${M}`);
+  });
+  it('FU1: a C0 control between ESC and the byte that opens a CSI, a DCS header or a single shift, or between a single shift and its character, does not end the sequence', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    expect(libRedact.redactField(`\x1b\x07[31m${tok}`, idx)).toBe(`\x1b\x07[31m${M}`);
+    expect(libRedact.redactField(`\x1b\x7fP1$r${tok}\x1b\\`, idx)).toBe(`\x1b\x7fP1$r${M}\x1b\\`);
+    expect(libRedact.redactField(`\x1b\x08OA${tok}`, idx)).toBe(`\x1b\x08OA${M}`);
+    expect(libRedact.redactField(`\x1bO\x07A${tok}`, idx)).toBe(`\x1bO\x07A${M}`);
+    expect(libRedact.redactField(`\x8f\x07A${tok}`, idx)).toBe(`\x8f\x07A${M}`);
+    expect(libRedact.redactField(`${tok.slice(0, 10)}\x1b\x07[31m${tok.slice(10)}`, idx)).toBe(M);
+    const d = '12a' + rndHex(16);
+    expect(libRedact.redactField(`\x1b\x07P${d.slice(0, 8)}\x1b[1m${d.slice(8)}`, idxOf([d]))).toBe(M);
+  });
+  it('FU1: a mark the raw pass wrote after an 8-bit DCS or single shift, or after a C0 inside a sequence, stays whole', () => {
+    const tok = rndHex(32);
+    const idx = idxOf([tok]);
+    const split = ['s', 'k-ant', '\x1b[m', '-api03-', 'x'.repeat(40)].join('');
+    expect(libRedact.redactField(`\x8f${tok} \x1b[31m${split}`, idx)).toBe(`\x8f${M} ${M}`);
+    expect(libRedact.redactField(`\x90${tok} \x1b[31m${split}`, idx)).toBe(`\x90${M} ${M}`);
+    expect(libRedact.redactField(`\x1b[1;\x08${tok} \x1b[31m${split}`, idx)).toBe(`1;\x08${M} ${M}`);
+    expect(libRedact.redactField(`\x1b\x07${tok} \x1b[31m${split}`, idx)).toBe(`\x1b\x07${M} ${M}`);
+    expect(libRedact.redactField(`\x1bO\x07${tok} \x1b[31m${split}`, idx)).toBe(`\x07${M} ${M}`);
+  });
+  it('FU1: more than LEAD_PREFIXES_MAX distinct lead prefixes before one span mark it unread (fail closed)', () => {
+    const none = libRedact.makePairIndex([]);
+    const stack = (n: number): string => Array.from({ length: n }, (_, i) => `\x1b[${i + 1}m`).join('');
+    // n sequences `ESC[<i>m` give the prefixes 1m..<n>m and m: n + 1 distinct.
+    expect(libRedact.redactField(`a ${stack(libRedact.LEAD_PREFIXES_MAX)}word b`, none)).toBe(`a ${M} b`);
+    expect(libRedact.redactField(`a ${stack(libRedact.LEAD_PREFIXES_MAX - 1)}word b`, none)).toBe(`a ${stack(libRedact.LEAD_PREFIXES_MAX - 1)}word b`);
+  });
+  it('FU1: DCS headers, single shifts, C0 fill and the lead reading stay linear', () => {
+    const none = libRedact.makePairIndex([]);
+    const stack = Array.from({ length: libRedact.LEAD_PREFIXES_MAX - 1 }, (_, i) => `\x1b[${i + 1}m`).join('');
+    for (const s of [
+      '\x1bA'.repeat(1 << 17),
+      '\x1bO'.repeat(1 << 17),
+      '\x8f'.repeat(1 << 18),
+      '\x1bP' + '0'.repeat(1 << 18),
+      '\x1b[' + '\x01'.repeat(1 << 18),
+      '\x1b[ ' + '\x01'.repeat(1 << 18),
+      '\x1b' + '\x01'.repeat(1 << 18),
+      ('\x1b' + '\x01'.repeat(64)).repeat(1 << 12),
+      ('\x1bO' + '\x01'.repeat(64)).repeat(1 << 12),
+      ('\x1b[' + '\x01'.repeat(64)).repeat(1 << 12),
+      Array.from({ length: 1 << 16 }, (_, i) => `\x1b[38;5;${i % 256}ma`).join(''),
+      stack + 'x'.repeat(1 << 20),
+    ]) {
+      const t0 = Date.now();
+      const out = libRedact.redactField(s, none);
+      expect(Date.now() - t0, JSON.stringify(s.slice(0, 8))).toBeLessThan(LINEAR_MS);
+      expect(out === s).toBe(true);
+    }
+  });
   it('the mark holds no JSON- or XML-special character, and the final belt applies the same layers', () => {
     expect(M).not.toMatch(/["\\<>&]/);
     const tok = rndHex(32);

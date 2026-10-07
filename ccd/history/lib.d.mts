@@ -287,6 +287,7 @@ export interface RederiveState { target: number; cursor: number; end: number }
 export function parseRederiveState(text: string | undefined): RederiveState | null;
 export function formatRederiveState(s: RederiveState): string;
 export function rederivePlan(mark: number, top: number, maxBlobId: number, state: RederiveState | null): RederiveState | null;
+export const LEAD_PREFIXES_MAX: number;
 export function redactField(text: string, idx: PairIndex): string;
 export function redactFinal(text: string, idx: PairIndex): string;
 // --- Task 10: harness table and the export's horizon (spec §6.10 item 3, §9.15)

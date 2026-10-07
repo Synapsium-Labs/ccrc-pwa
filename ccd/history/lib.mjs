@@ -1722,16 +1722,40 @@ function redactJwtShapes(s) {
 
 /** REDACTED_MARK as regex source (D-4307: no sequence ever takes a mark's first character). */
 const MARK_RE_SRC = REDACTED_MARK.replace(/[[\]\\^$.|?*+(){}]/g, '\\$&');
-/** An ANSI escape sequence (D-4307, amended by review 316 F1): an ECMA-48 CSI, `ESC [` or the 8-bit 0x9B, with any
- *  parameter bytes 0x30-0x3F and intermediate bytes 0x20-0x2F before one final byte 0x40-0x7E; or any other
- *  `ESC`-introduced sequence, intermediate bytes then one final byte 0x30-0x7E (`ESC(B`, `ESC7`, `ESC_`). The CSI's
- *  `[` and every final byte are never the first character of a redaction mark, so a mark the raw pass wrote after an
- *  escape is never split. Linear (D-4306): each arm is disjoint classes in sequence and each lookahead is a
- *  fixed-length literal, so a failed start costs its own bytes once. Written as escape text, never the raw byte
- *  (source-bytes.test.ts). */
-const ANSI_ESCAPE_RE = new RegExp(`(?:\\x1b(?!${MARK_RE_SRC})\\[|\\x9b)[0-?]*[ -/]*(?!${MARK_RE_SRC})[@-~]|\\x1b[ -/]*(?!${MARK_RE_SRC})[0-~]`, 'g');
-/** A field holding neither byte has no escape sequence and takes the plain path. */
-const ESCAPE_INTRODUCER_RE = /[\x1b\x9b]/;
+/** A control byte a terminal executes or ignores inside an escape sequence without ending it (D-4307, review 316
+ *  M1): every C0 byte except the five whitespace ones (0x09-0x0D), CAN, SUB and ESC, plus DEL. CAN and SUB abort a
+ *  sequence and ESC starts another; a whitespace byte is left out because a cut-off sequence (`cut -c`, `head -c`)
+ *  followed by a line break is far likelier than a sequence holding one, and taking it would glue the next line on. */
+const SEQ_FILL_SRC = '\\x00-\\x08\\x0e-\\x17\\x19\\x1c-\\x1f\\x7f';
+/** An ANSI escape sequence (D-4307, amended by review 316 F1 and M1). Three arms, tried in this order:
+ *  - a CSI (`ESC [` or the 8-bit 0x9B) or a DCS header (`ESC P` or the 8-bit 0x90): parameter bytes 0x30-0x3F,
+ *    then intermediate bytes 0x20-0x2F, then one final byte 0x40-0x7E, with C0 controls (SEQ_FILL_SRC) among the
+ *    parameter and intermediate bytes and between a 7-bit `ESC` and its `[` or `P` (a DCS's data string after its
+ *    header is text);
+ *  - a single shift (SS2/SS3: `ESC N`, `ESC O`, or the 8-bit 0x8E, 0x8F) and the one character 0x20-0x7E it shifts,
+ *    with C0 controls between a 7-bit `ESC` and its `N` or `O` and between the shift and its character;
+ *  - any other `ESC`-introduced sequence: intermediate bytes 0x20-0x2F, then one final byte 0x30-0x7E (`ESC(B`,
+ *    `ESC7`, `ESC_`).
+ *  The CSI's `[`, every final byte and a shifted character are never the first character of a redaction mark, so a
+ *  mark the raw pass wrote after an escape is never split. Linear (D-4306): in each arm every class is disjoint from
+ *  the class after it (the intermediates and their fill form one optional group that must open with an
+ *  intermediate; the fill after a 7-bit `ESC` is followed only by `[`, `P`, `N` or `O`, and the fill after a single
+ *  shift only by a printable character) and each lookahead is a fixed-length literal, so a failed start costs its
+ *  own bytes a bounded number of times. Written as escape text, never the raw byte (source-bytes.test.ts). */
+const ANSI_ESCAPE_RE = new RegExp(
+  `(?:\\x1b[${SEQ_FILL_SRC}]*(?:(?!${MARK_RE_SRC})\\[|P)|[\\x9b\\x90])[0-?${SEQ_FILL_SRC}]*(?:[ -/][ -/${SEQ_FILL_SRC}]*)?(?!${MARK_RE_SRC})[@-~]`
+  + `|(?:\\x1b[${SEQ_FILL_SRC}]*[NO]|[\\x8e\\x8f])[${SEQ_FILL_SRC}]*(?!${MARK_RE_SRC})[ -~]`
+  + `|\\x1b[ -/]*(?!${MARK_RE_SRC})[0-~]`,
+  'g',
+);
+/** One byte of SEQ_FILL_SRC (leadPrefixes skips the fill after a 7-bit `ESC`). */
+const SEQ_FILL_RE = new RegExp(`[${SEQ_FILL_SRC}]`);
+/** A field holding none of these bytes has no escape sequence and takes the plain path. */
+const ESCAPE_INTRODUCER_RE = /[\x1b\x8e\x8f\x90\x9b]/;
+/** The most distinct lead prefixes tried in front of one span (D-4307; security review of ee55098c2). Stacked
+ *  colour codes give a few (`ESC[0m` `ESC[01;34m` gives three); past this many the span is marked unread instead
+ *  (fail closed), which bounds the lead reading's cost to a fixed multiple of the field. */
+export const LEAD_PREFIXES_MAX = 8;
 
 /** One run through all three layers, failing closed. V8 runs these patterns
  *  by backtracking on a bounded stack, so over a run of several MiB `replace`
@@ -1780,36 +1804,138 @@ function redactLayers(segment, idx) {
   return redactJwtShapes(s);
 }
 
+/** A byte of the `[A-Za-z0-9_.-]` span class, the JWT run class (the unit the lead reading extends and marks). */
+const isSpanByte = (b) => isRunByte(b) || b === 0x2e;
+
+/** The span-class characters a sequence may have taken from the text after it (D-4307; security review of
+ *  ee55098c2): the longest `[A-Za-z0-9_.-]` suffix of the sequence after its 7-bit `ESC` or 8-bit introducer, that
+ *  suffix after the `[`, `P`, `N` or `O` that follows a 7-bit `ESC` and its C0 fill, and the final character alone,
+ *  each kept once and only when non-empty. */
+function leadPrefixes(seq) {
+  const tail = (from) => {
+    let k = seq.length;
+    while (k > from && isSpanByte(seq.charCodeAt(k - 1))) k -= 1;
+    return seq.slice(k);
+  };
+  let k = 1;
+  if (seq.charCodeAt(0) === 0x1b) while (k < seq.length && SEQ_FILL_RE.test(seq[k])) k += 1;
+  const two = k + 1 < seq.length && seq.charCodeAt(0) === 0x1b && '[PNO'.includes(seq[k]) ? k + 1 : 1;
+  return [tail(1), tail(two), tail(seq.length - 1)].filter((p, i, all) => p !== '' && all.indexOf(p) === i);
+}
+
+/** The end of the `[A-Za-z0-9_.-]` span of `s` that starts at `p`. */
+function spanEnd(s, p) {
+  let e = p;
+  while (e < s.length && isSpanByte(s.charCodeAt(e))) e += 1;
+  return e;
+}
+
+/** How many characters of lead candidates are tested in one pass (D-4307): the lead reading's memory bound. */
+const LEAD_BATCH_CHARS = 1 << 20;
+
+/** The lead reading (D-4307; security review of ee55098c2): the offsets of `plain` (the stripped text) whose span
+ *  a sequence's own trailing characters complete into something redaction removes. `leads` is flat, three numbers
+ *  per sequence: its offset in `plain`, then its start and end in `raw`. Every distinct prefix of the sequences at
+ *  one offset (leadPrefixes) is tried in front of the span up to the next sequence (the sequence read as a
+ *  separator, as the per-fragment reading reads it) and, when that span reaches the next sequence and the character
+ *  before the offset is outside the span class, in front of the whole joined span (the sequence stripped but for the
+ *  prefix, every later sequence in the span stripped). Only an offset at a span's start reads past the next
+ *  sequence, and spans are disjoint, so the candidates total at most LEAD_PREFIXES_MAX times twice `plain` plus the
+ *  sequences: linear. A candidate holds only span-class characters, so a newline between two is a boundary no layer
+ *  reads across, and candidates are tested LEAD_BATCH_CHARS at a time, each alone only when its batch redacts. An
+ *  offset with more than LEAD_PREFIXES_MAX distinct prefixes is returned untested (fail closed). Returned
+ *  ascending, each offset once. */
+function leadOffsets(plain, raw, leads, idx) {
+  const flagged = new Set();
+  let batch = [];
+  let size = 0;
+  const flush = () => {
+    const all = batch.filter((_, k) => k % 2 === 1).join('\n');
+    if (redactRun(all, idx) !== all) {
+      for (let k = 0; k < batch.length; k += 2) if (redactRun(batch[k + 1], idx) !== batch[k + 1]) flagged.add(batch[k]);
+    }
+    batch = [];
+    size = 0;
+  };
+  for (let i = 0; i < leads.length;) {
+    const p = leads[i];
+    const prefixes = new Set();
+    let j = i;
+    for (; j < leads.length && leads[j] === p; j += 3) for (const x of leadPrefixes(raw.slice(leads[j + 1], leads[j + 2]))) prefixes.add(x);
+    const next = j < leads.length ? leads[j] : plain.length;
+    i = j;
+    if (prefixes.size === 0) continue;
+    if (prefixes.size > LEAD_PREFIXES_MAX) { flagged.add(p); continue; }
+    let fragEnd = p;
+    while (fragEnd < next && isSpanByte(plain.charCodeAt(fragEnd))) fragEnd += 1;
+    const atStart = p === 0 || !isSpanByte(plain.charCodeAt(p - 1));
+    const ends = fragEnd === next && atStart ? [fragEnd, spanEnd(plain, fragEnd)] : [fragEnd];
+    if (ends.length === 2 && ends[1] === fragEnd) ends.pop();
+    for (const x of prefixes) {
+      for (const e of ends) {
+        const c = x + plain.slice(p, e);
+        batch.push(p, c);
+        size += c.length + 1;
+        if (size >= LEAD_BATCH_CHARS) flush();
+      }
+    }
+  }
+  if (batch.length > 0) flush();
+  return [...flagged].sort((a, b) => a - b);
+}
+
+/** `plain` with the span at each flagged offset replaced by the mark (an empty span gets the mark inserted). */
+function markSpansAt(plain, offsets) {
+  let out = '';
+  let last = 0;
+  for (const p of offsets) {
+    if (p < last) continue;
+    out += plain.slice(last, p) + REDACTED_MARK;
+    last = spanEnd(plain, p);
+  }
+  return out + plain.slice(last);
+}
+
 /** Redact one field's FULL raw text, before any cut, cap, escape or
  *  serialisation (§8.3: JSON escaping glues `\n` onto the next run, and a cut
  *  leaves a prefix no pair matches). Runs are split at ANSI escape sequences
- *  (`ANSI_ESCAPE_RE`: every ECMA-48 CSI, 7-bit or 8-bit, and every other
- *  `ESC`-introduced sequence) first, so a coloured token is still one run; the
- *  sequences themselves are kept. D-4202
+ *  (`ANSI_ESCAPE_RE`: every ECMA-48 CSI and DCS header, 7-bit or 8-bit, a single
+ *  shift with its shifted character, and every other two-character or
+ *  intermediate-led `ESC` sequence) first, so a coloured token is still one run;
+ *  the sequences themselves are kept. D-4202
  *
- *  A field holding an escape introducer is read three ways and the union of
+ *  A field holding an escape introducer is read four ways and the union of
  *  their redactions is returned. The RAW reading redacts the text whole, the
  *  sequence bytes being ordinary text: it catches a value whose first
  *  character a sequence would take for its final byte (`ESC[` then `abc...`
- *  reads as `ESC[a` + `bc...` to the other two). The PER-FRAGMENT reading
- *  splits the raw reading's output at the sequences and redacts each
- *  fragment, so a token coloured in WHOLE is one run. A token coloured in PART
- *  (`grep --color=always`, a word-diff, a highlighter) is split across
- *  fragments, and no layer sees it whole, so the JOINED reading takes the
- *  per-fragment result `A`, its sequences removed (`P`, accumulated from the
- *  fragments themselves, never by re-matching an escape in `A`), and runs the
- *  layers once more (`C`). `C === P` means the joined text holds nothing new,
- *  and `A` is returned with its colours; otherwise `C` is returned, the
- *  sequences dropped from that one field's output (presentation only, the
- *  stored blob stays verbatim). A field with no escape introducer takes the
- *  plain path alone, at no extra cost.
+ *  reads as `ESC[a` + `bc...` to the per-fragment and joined readings) when
+ *  nothing else splits it. The PER-FRAGMENT reading splits the raw reading's
+ *  output at the sequences and redacts each fragment, so a token coloured in
+ *  WHOLE is one run. A token coloured in PART (`grep --color=always`, a
+ *  word-diff, a highlighter) is split across fragments, and no layer sees it
+ *  whole, so the JOINED reading takes the per-fragment result `A`, its
+ *  sequences removed (`P`, accumulated from the fragments themselves, never by
+ *  re-matching an escape in `A`), and runs the layers once more (`C`). The
+ *  LEAD reading (leadOffsets) puts back what a sequence may have taken from
+ *  the text after it, its trailing run-class characters, in front of the
+ *  fragment after it and, at the start of a span, in front of the whole joined
+ *  span: a bare `ESC` before a secret coloured in part (`ESC` + `S` + `ECR` +
+ *  a CSI + `ET`) loses its `S` to the joined reading and keeps the CSI's
+ *  remnant glued on in the raw one, a DCS header or a single shift takes a
+ *  value's first characters. A span the lead reading finds is marked in `P`
+ *  before `C` is computed. `C === P` (nothing new, no lead found) returns `A`
+ *  with its colours; otherwise `C` is returned, the sequences dropped from
+ *  that one field's output (presentation only, the stored blob stays
+ *  verbatim). A field with no escape introducer takes the plain path alone,
+ *  at no extra cost.
  *
  *  The mark rule: the raw reading may leave a mark after `ESC`, after
- *  `ESC[1;`, after `ESC(` or after the 8-bit introducer, and a sequence match
- *  over that text would read the mark's `[` as a CSI opener or as a final
- *  byte and split the mark. `ANSI_ESCAPE_RE` therefore never takes a mark's
- *  first character as an opener or a final byte.
- *  D-4307 (history-redaction-csi-joined-belt, amended: review 316 F1) */
+ *  `ESC[1;`, after `ESC(`, after a C0 control inside a sequence or after an
+ *  8-bit introducer, and a sequence match over that text would read the mark's
+ *  `[` as a CSI opener, a final byte or a shifted character and split the
+ *  mark. `ANSI_ESCAPE_RE` therefore never takes a mark's first character as
+ *  any of them.
+ *  D-4307 (history-redaction-csi-joined-belt, amended: review 316 F1 and M1, security review of ee55098c2) */
 export function redactField(text, idx) {
   if (!ESCAPE_INTRODUCER_RE.test(text)) return redactRun(text, idx);
   const raw = redactRun(text, idx);
@@ -1817,11 +1943,13 @@ export function redactField(text, idx) {
   let plain = '';
   let last = 0;
   let sawCsi = false;
+  const leads = [];
   ANSI_ESCAPE_RE.lastIndex = 0;
   for (let m = ANSI_ESCAPE_RE.exec(raw); m !== null; m = ANSI_ESCAPE_RE.exec(raw)) {
     const frag = redactRun(raw.slice(last, m.index), idx);
     out += frag + m[0];
     plain += frag;
+    leads.push(plain.length, m.index, m.index + m[0].length);
     last = m.index + m[0].length;
     sawCsi = true;
   }
@@ -1831,7 +1959,8 @@ export function redactField(text, idx) {
   // `plain` is accumulated from the fragments, never rebuilt by re-matching an escape in `perFragment`: a redaction can
   // create an escape shape (a bare ESC before `[redacted]` reads as `ESC[r...`), and a re-strip would eat the mark.
   plain += tail;
-  const joined = redactRun(plain, idx);
+  const flagged = leadOffsets(plain, raw, leads, idx);
+  const joined = redactRun(flagged.length === 0 ? plain : markSpansAt(plain, flagged), idx);
   return joined === plain ? perFragment : joined;
 }
 
