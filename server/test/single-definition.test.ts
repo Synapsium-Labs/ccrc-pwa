@@ -4913,6 +4913,9 @@ describe('the docs ring — server/src/docs is classified by its imports (spec 2
     expect(ringViolations(planted('ccdsource.ts', "import { readFileSync } from 'node:fs';"))).toEqual([
       "ccdsource.ts (L3) imports node:fs, not on L3's list",
     ]);
+    expect(ringViolations(planted('ccdsource.ts', 'const m = await import("node:fs");'))).toEqual([
+      'ccdsource.ts (L3) loads a module at run time',
+    ]);
     expect(ringViolations(planted('ccdsource.ts', '// reply, setTimeout( and import fastify are named here in prose only'))).toEqual([]);
   });
 
