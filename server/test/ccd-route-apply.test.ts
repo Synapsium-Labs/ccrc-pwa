@@ -1590,6 +1590,19 @@ ${ACK} model opus"`);
     expect(verdict(), 'no address at all').toBe('unnamed');
   });
 
+  it('a non-Anthropic lane is `lane`: its acknowledgement names no class, so the transcript is never read and nothing is kept', () => {
+    // Review finding 6: the keep skips these lanes for the same reason (`gpt-5.6-*` is outside the vocabulary).
+    fs.rmSync(usageFile());
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SESSION('Opus 5.5'))]);
+    expect(verdict(), 'control: the Anthropic lane reads it').toMatch(/^matched /);
+    expect(reads()).toBe(1);
+    expect(h.sh('_is_anthropic_backend gpt && echo anthropic || echo not')).toBe('not');
+    h.sh(`_reg_set ${ID} wrapper gpt`);
+    expect(verdict()).toBe('lane');
+    expect(reads(), 'nothing read').toBe(1);
+    expect(h.reg(ID, 'readbackseen'), 'and nothing kept').toBeNull();
+  });
+
   it('a FIFO where the transcript should be is unreadable, never a read that blocks the tick', { timeout: 60_000 }, () => {
     fs.rmSync(usageFile());
     const p = transcriptPath();
