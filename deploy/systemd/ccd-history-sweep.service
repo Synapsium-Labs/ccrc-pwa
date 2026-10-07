@@ -9,7 +9,7 @@ ExecStart=%h/.local/bin/ccd-history-sweep
 # than extending it (ccrc-update-watchdog.service's own comment says so), and
 # ccrc-agent.service finds `node` through exactly that manager PATH, so a
 # spelled-out PATH could only lose the `node` the agent already runs on.
-# CORRECTNESS, NOT HYGIENE: this is the carrier's wall-clock kill (history spec
+# CORRECTNESS, NOT HYGIENE: this is the carrier's wall-clock kill (D-4223; history spec
 # §5.1). A syscall blocked on a dead mount cannot be interrupted in-process, and
 # a pass stuck holding the lock turns every later scheduled pass into an exit-0
 # no-op. It equals lib.mjs's CARRIER_KILL_S (600), which planMigration reads so

@@ -14267,7 +14267,7 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
     # UNLIKE every sweep above, ROLE-gated: doctor and the CLI read this file's
     # presence as "this box can hold a store", so a copy on a server box would
     # turn its doctor red over a store that must not exist, and an --op verb
-    # could mint one there D-4183. A ONE-LINE `||` test,
+    # could mint one there D-4183, D-4222. A ONE-LINE `||` test,
     # never an `if` block: install-census.test.ts's gptGateBlock() requires
     # exactly one `!= server` block in this function, and every id-shaped name
     # inside it must be a reserved account id, which this one must not be.
@@ -14872,7 +14872,7 @@ _inst_units() {
     _inst_atomic "$tree/deploy/systemd/ccd-tmp-sweep.service" "$dir/ccd-tmp-sweep.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-tmp-sweep.timer" "$dir/ccd-tmp-sweep.timer" 644
     # history spec 2026-10-05 §9.5: the history sweep's pair, role-gated for its
-    # own reason rather than by imitation — a server box hosts no sessions, so
+    # own reason (D-4222) rather than by imitation — a server box hosts no sessions, so
     # it keeps no store (`_inst_bins` places no shim there either).
     _inst_atomic "$tree/deploy/systemd/ccd-history-sweep.service" "$dir/ccd-history-sweep.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-history-sweep.timer" "$dir/ccd-history-sweep.timer" 644
