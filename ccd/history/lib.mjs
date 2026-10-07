@@ -173,7 +173,9 @@ export const SEARCHABLE_PROVENANCE = Object.freeze(['operator', 'model', 'tool']
 export const SPOOL_EVENTS = Object.freeze(['Stop', 'PostCompact', 'SessionStart', 'recall', 'steer']);
 /** The SessionStart sources that spool (ruled Q2; fork is outside, Q16). */
 export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear']);
-export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import']);
+/** D-4342 (history-epoch-causes-widened-for-rollback): 'fork' is vocabulary only. B1 still spools no fork (D-4173);
+ *  W1-B2 does (Q16), and a box rolled back from B2 can hold a fork candidate whose verdict this build must read back. */
+export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import', 'fork']);
 export const DECLARED_BY = Object.freeze(['hook', 'registry', 'journal', 'operator']);
 /** `ingest_files.last_error_code`: a closed vocabulary, never `e.message`. */
 export const ERROR_CODES = Object.freeze(['json-parse', 'not-object', 'line-too-long', 'read-failed', 'stat-failed', 'open-refused', 'parser-crash']);

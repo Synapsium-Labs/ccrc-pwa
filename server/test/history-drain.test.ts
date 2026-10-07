@@ -1128,6 +1128,24 @@ describe('the tick runs the epoch steps, as the box runs it (spec §9.2, §6.1 "
     expect(rowsOf(box, 'SELECT cc_session_uuid, cause FROM epochs')).toEqual([{ cc_session_uuid: U2, cause: 'startup' }]);
     expect(rowsOf(box, 'SELECT cc_session_uuid FROM epoch_candidates')).toEqual([]);
   });
+
+  // D-4342 (history-epoch-causes-widened-for-rollback): B1 spools no fork, but a B2 box rolled back to B1 can
+  // hold a fork candidate; its confirmation must journal a verdict the reader accepts, not throw on every tick.
+  it("a fork candidate left by a rolled-back B2 build is confirmed, not a crash-looping pass (D-4342)", () => {
+    const box = makeHistoryBox('ccrc-hist-forkcand-', { role: 'fleet' });
+    expect(runSweep(box).code).toBe(0);
+    const w = openWriter(historyPaths(box.home).dbFile);
+    try {
+      w.prepare("INSERT INTO epoch_candidates (cc_session_uuid, ccrc_id, generation, cause, ts_ms, first_seen_ms) VALUES (?, ?, ?, 'fork', NULL, ?)").run(U2, ID, G1, Date.now());
+    } finally {
+      closeWriter(w);
+    }
+    setReg(box, ID, 'uuid', U2); setReg(box, ID, 'generation', G1);
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    expect(rowsOf(box, 'SELECT cc_session_uuid, cause FROM epochs')).toEqual([{ cc_session_uuid: U2, cause: 'fork' }]);
+    expect(rowsOf(box, 'SELECT cc_session_uuid FROM epoch_candidates')).toEqual([]);
+  });
 });
 
 describe('a sidecar that cannot be written is the journal failure, held per file (FR2-a, D-4338)', () => {

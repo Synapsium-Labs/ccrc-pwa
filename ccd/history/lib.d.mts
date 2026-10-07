@@ -72,7 +72,7 @@ export type SpoolEvent = 'Stop' | 'PostCompact' | 'SessionStart' | 'recall' | 's
 export const SPOOL_EVENTS: readonly SpoolEvent[];
 export type SpoolSource = 'startup' | 'resume' | 'clear';
 export const SPOOL_SOURCES: readonly SpoolSource[];
-export type EpochCause = 'startup' | 'resume' | 'clear' | 'import';
+export type EpochCause = 'startup' | 'resume' | 'clear' | 'import' | 'fork';
 export const EPOCH_CAUSES: readonly EpochCause[];
 export type DeclaredBy = 'hook' | 'registry' | 'journal' | 'operator';
 export const DECLARED_BY: readonly DeclaredBy[];

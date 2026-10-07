@@ -530,6 +530,14 @@ describe('parseJournalRecord: record, malformed, unknown, newer (O56)', () => {
     expect(parseJournalRecord(journalRecord('verdict', 5, fields)).kind).toBe('record');
   });
 
+  // D-4342 (history-epoch-causes-widened-for-rollback): a box rolled back from B2 reads a fork verdict.
+  it("reads an epoch-confirmed verdict with cause 'fork' back as a record (D-4342)", () => {
+    const fields = { event_key: KEY, kind: 'epoch-confirmed', ccrc_id: 'x', generation: '', cc_session_uuid: U1, cause: 'fork', declared_by: 'registry', by: 'reg' };
+    const rec = JSON.parse(journalRecord('verdict', 5, fields)) as Record<string, unknown>;
+    expect(rec['cause']).toBe('fork');
+    expect(parseJournalRecord(JSON.stringify(rec))).toEqual({ kind: 'record', rec });
+  });
+
   it.each([
     ['an extra field', JSON.stringify({ v: 1, k: 'tick', t: 1, lag_ms: 1, text: 'x' })],
     ['a missing field', JSON.stringify({ v: 1, k: 'head', t: 1, store_id: U1, month: '2026-10' })],
