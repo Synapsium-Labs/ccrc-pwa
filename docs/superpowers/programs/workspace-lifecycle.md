@@ -22,7 +22,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
 | 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | #286 | merged 2026-10-06 (`77c11245`) after review 288; run 245 closed; deploy AGENT-FIRST via ccrc's updater; plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
 | 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | #312 | merged 2026-10-07 (`9b074208`) after review 313, no fix round; run 290 closed; block 4114–4125; plan #308 (`67657ef2`); deploy AGENT-FIRST via ccrc's updater; the lane ships SHADOWED, and arming is the operator's, after wave 4's arming blockers |
-| 4 | 4 | FIRST: review 313's residue and the lane's arming blockers; then the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server (+ pwa for the residue) | waves 2–3; child-reclamation waves 3–4 | — | run 314 open (planned; the run's wave 5 of 5), block 4348–4363; to plan |
+| 4 | 4 | FIRST: review 313's residue and the lane's arming blockers; then the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server (+ pwa for the residue) | waves 2–3; child-reclamation waves 3–4 | — | run 314 open (planned; the run's wave 5 of 5), blocks 4348–4363 and 4430–4433; plan `3f581396` reviewed and revised, re-basing onto #320 |
 
 ## Decisions & deviations
 
@@ -726,6 +726,48 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **Departure: the plan is Markdown, not HTML.** That is the operator's standing preference since 2026-10-06, but
     this repo's `deviation-refs` guard and the ledger floor seed (`server/src/coord/ledgerseed.ts`) read only `.md`
     plans. An HTML plan's D-numbers would be invisible to both.
+- **2026-10-07 19:26 — wave 4 plan drafted, reviewed and revised; re-basing onto #320.** Workflow wf_07ea3938-e5a returned
+  plan commit `3f581396` on `docs/workspace-lifecycle-wave4-plan` (6422 lines, 14 tasks, 134 replay blocks, 120 mutation
+  rows, 20 departure slugs). The four lenses:
+  - **Act safety** found one critical gap and four important ones, each measured on the drafted policy file:
+    - the journal clause trusted a mirror it cannot trust (unavailable, gapped, or a failed ccd append);
+    - the breaker forgot its cluster after one unmeasurable read;
+    - a revive seen by the executor reset nothing;
+    - the compare-and-set cannot see a same-id revive, and the forced-interleaving test raced a writer the serialiser
+      already excludes;
+    - in shadow only the longest-dead claimant was ever listed.
+  - **Spec** found the breaker's fleet-wide arm narrowed, §9's stage-4 measurement row missing, `resume.md` false once
+    the lane is armed (ruling B's "in words"), and ruling (I)'s coordinator-deaf relation unanalysed.
+  - **Test honesty** found the shadow-time pause, the unreadable journal at the lane and the executor, and the landing
+    pin vacuous.
+  - **Replay** reproduced every count.
+  The reviser applied all 22 findings. It rejected two only in their exact form, each replaced by a stronger measured
+  guard (the failed-append rule became durable, by the errors file's mtime against the last successful spawn).
+  - **The verifier:** clean on its base `282e79e44` (134 of 134 anchors, every count, 35 of 35 rows red, 0 new
+    D-tokens, 0 docserver URLs). NOT clean on main `7f7bf4afc`: #320 (stall-watch-settings wave 1) took
+    `user_version` 16 → 17, and 6 anchors miss. Workflow wf_25f19b4a-cf7 re-bases it: migration to slot 18, Task 6's
+    mail-routes block re-anchored, #320's effects re-checked, then a fresh replay.
+  - **A second block, 4430–4433,** is issued to run 314 for the four slugs past 4348–4363. The brief names all twenty;
+    the plan stays slugs-only.
+  - **Rulings on the reviser's open questions:**
+    - A one-tap breaker-clear door is not this wave. The breaker clears through the existing doors; a new
+      session-gated door is a later candidate.
+    - The recommended arming order: the expiry lane first, once wave 4's blockers are deployed and its shadow list
+      read; then the dead-coordinator lane, after its own shadow list and any breaker trip are worked through. Arming
+      stays the operator's.
+    - Task 5, the confirm copy, stays and is droppable; the operator may strike it before merge.
+    - The journal-gap trade is accepted: a coordinator whose last successful spawn is not newer than a recorded gap
+      stays listed as unmeasured, never ended, until it spawns again. Ageing a gap out is carried, for a decision on
+      shadow evidence.
+  - **The ops notice (mail 3889, acked).** On 10-07 the operator expired 15 archived workspaces by hand (8 ccrc-pwa,
+    7 expoAI-assistant; `CCD_EXPIRE_BY_HAND=1`, actor operator; 0 refused; residueBytes 0 and secretsDropped 0
+    throughout; one wip commit, expoAI-assistant-still-river). The server composed none; these are the first live
+    `ws-expire` runs, and the arming evidence for 3b. They also cut most of pre-arming item (c), the backlog.
+    `ccrc-pwa-brisk-mesa` was skipped: a stray 09-14 `tmux -S /tmp/tmuxtest_verify` server holds it. The operator ends
+    that server and re-runs, which is pre-arming item (d).
+  - **Carried (a candidate, not this programme's wave):** run 245's 9.7 GiB TMPDIR leak came from mkTmp fixtures
+    cleaned only in `afterAll`, so a killed vitest run leaks them all. Cleanup on exit or SIGTERM in the test helpers
+    would stop a repeat.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -766,7 +808,7 @@ Waves 1, 2, 3 and 3b are merged: #229 `a7b9831c`, #233 `fe7b9775`, #286 `77c1124
 expiry lane ships SHADOWED: it audits archived workspaces and records "would expire", and composes no `ws-expire`
 until the operator creates `$REG/expire-lane-live` by hand.
 
-**Wave 4 is run 314** (planned; the run's wave 5 of 5), with numbers 4348–4363, written bare. It is to be planned
+**Wave 4 is run 314** (planned; the run's wave 5 of 5), with numbers 4348–4363 and 4430–4433, written bare. It is to be planned
 from spec §4 wave 4 and §5.4: the dead-coordinator lane (crash-only, one hour, no successor, a circuit breaker).
 - **Its FIRST commit is review 313's residue and the lane's three arming blockers**, as ruled in the 2026-10-07 06:01
   entry: parked items 1 and 4, then F1 to F7, O1, O2 and parked item 3. Review 313's report is
@@ -776,7 +818,8 @@ from spec §4 wave 4 and §5.4: the dead-coordinator lane (crash-only, one hour,
   content (R56).
 - **3b's deploy is AGENT-FIRST through ccrc's updater** (the operator applies it from the console). Afterwards, check
   that both boxes report the merge's tag and that the server's feed shows the lane's shadow rows.
-- **The operator's questions before arming** are (b)–(d) in the 06:01 entry: the confirm copy, the first armed pass or
-  `WS_EXPIRE_AFTER_S`, and brisk-mesa's tmux server.
+- **The operator's questions before arming** are (b)–(d) in the 06:01 entry. (b), the confirm copy, is still open. On
+  10-07 the operator expired 15 archived workspaces by hand, which cuts most of (c), the backlog. (d) is in hand: the
+  operator ends brisk-mesa's stray tmux server (see the entry after 06:05).
 - **Wave 2's three operator questions stay open:** the PR sheet's "Archive now", the remote-mode worktree check, and
   L5's sentence.
