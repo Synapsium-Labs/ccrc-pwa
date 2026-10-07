@@ -169,6 +169,25 @@ describe('the record follows the row (review 313, F1)', () => {
     await f.watcher.tick();
     expect(f.watcher.currentCoord()?.expiryAttention, 'a bound row is never due again, so its record goes now').toEqual([]);
   });
+
+  it('a report an ineligible pass clears is re-audited as soon as the row is due again, not after its old wait', async () => {
+    const f = await fixture();
+    f.plant('demo-a');
+    await threePasses(f);
+    await f.watcher.tick();
+    const listed = () => f.watcher.currentCoord()?.expiryAttention?.map((a) => [a.sessionId, a.kind]);
+    expect(listed()).toEqual([['demo-a', 'would-expire']]);
+    const audits = f.verbsFor('ws-audit').length;
+    // ONE pass of doubt (an identity field unmeasured) clears the report; the row's 15-minute shadow wait must go with it.
+    f.next(); await f.pass((r) => ({ ...r, unmeasured: ['wrapper'] }));
+    await f.watcher.tick();
+    expect(listed(), 'the doubtful pass cleared it').toEqual([]);
+    f.next(); await f.pass();   // eligible again: sighted once
+    f.next(); await f.pass();   // sighted twice: due, and not held back by the wait the cleared report carried
+    await f.watcher.tick();
+    expect(f.verbsFor('ws-audit').length, 'audited again within the twice-observed passes').toBe(audits + 1);
+    expect(listed(), 'and listed again, minutes after the doubt, not fifteen').toEqual([['demo-a', 'would-expire']]);
+  });
 });
 
 describe('the lane SHIPS SHADOWED', () => {

@@ -409,7 +409,10 @@ export const expiryReportIsFinal = (r: ExpiryReport | null): boolean =>
  *  listing goes when the hold does. AND THE RECORD FOLLOWS THE ROW (review 313, F1): an ineligible sighting ends a
  *  `would-expire` or `in-use` report too, with the run of in-use answers. Such a row is never due, so it is never
  *  audited again, and a report it kept would stand on the attention list — the operator's arming evidence — for as long
- *  as the condition lasts. The box's own verdicts (`refused`, `failing`, `no-evidence`) stand: they are about the box. */
+ *  as the condition lasts. The box's own verdicts (`refused`, `failing`, `no-evidence`) stand: they are about the box.
+ *  A report so cleared also resets `nextAskAt` to 0: one transient ineligible pass (a store read that failed once, an
+ *  identity unmeasured) must not hide a row that is due again behind the shadow wait the report carried — it is
+ *  re-audited as soon as it is twice-observed eligible, and the twice-observed rule still gates that. */
 export function archivedExpirySighted(
   entry: ArchivedExpiryEntry, v: ArchivedExpiryVerdict, held: string | null, nowMs: number,
 ): ArchivedExpiryEntry {
@@ -422,7 +425,7 @@ export function archivedExpirySighted(
   }
   const ends = !v.eligible && (entry.report?.kind === 'would-expire' || entry.report?.kind === 'in-use');
   const report = entry.report?.kind === 'held' || ends ? null : entry.report;
-  const run = ends ? { inUseRun: 0, inUse: [] as readonly ExpireInUse[] } : {};
+  const run = ends ? { inUseRun: 0, inUse: [] as readonly ExpireInUse[], nextAskAt: 0 } : {};
   return eligibleSince === entry.eligibleSince && report === entry.report ? entry : { ...entry, ...run, eligibleSince, report };
 }
 
