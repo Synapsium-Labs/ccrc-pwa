@@ -665,6 +665,32 @@ carries it (spec §5.1, amended 2026-09-24).
     name. `ruleset-before.json`, `ruleset-rollback.json`, `ruleset-after.json` and `ruleset-written.json` are kept in
     the coordinator's evidence folder. The rollback is a PUT of `ruleset-rollback.json` to ruleset 22520257.
   - **Next: (a0) on this ledger PR (slot C)** once its own CI is green, then the proof dispatches.
+- **2026-10-07 01:53 — (a0) hit STOP RULE 4. The proof halts, the ruleset is ROLLED BACK, and the operator decides.**
+  - **(a0)** ran at 01:52:12 on this ledger PR (#311, slot C), with every required check green at `907cb649`.
+    `gh pr merge 311 --match-head-commit 0000…` answered `GraphQL: Auto merge is not allowed for this repository
+    (enablePullRequestAutoMerge)`, rc 1. The read-back showed `mergeQueueEntry: null` and `autoMergeRequest: null`:
+    nothing was queued and nothing was armed. gh 2.45 reaches a required queue through the auto-merge mutation
+    (Pre-flight finding 16), and the repository's `allow_auto_merge` is false (Step 2). The refusal names auto-merge,
+    not the head, so it is stop rule 4, not (a0)'s pass. Under the operator's 2026-09-29 ruling the proof halts here.
+    The coordinator does not change that setting (clause 15).
+  - **The rollback, at 01:52:56.** This revises the sequence entry's "the queue stays on meanwhile", for this reason.
+    On a native-queue project, clause 15 tells every coordinator to land with
+    `gh pr merge <n> --match-head-commit <sha>`, never with `--admin`. With auto-merge off, that spelling can land
+    nothing. So any ccrc-pwa coordinator following its clause literally could not land until the operator rules,
+    while the proof can make no progress either way. `ruleset-rollback.json` was PUT back. A re-read is identical to
+    it: the `pull_request` rule with 1 approval, and the maintain and admin bypasses. The queue was on from 01:38:37
+    to 01:52:56. Nothing merged to `main` in that window (the last merge was #310, at 00:47).
+  - **For the operator: three ways on.**
+    1. **Enable "Allow auto-merge"** (Settings → General → Pull Requests). The coordinator then re-applies Step 4 from
+       the saved `ruleset-after.json` and re-runs the proof from (a0). This is the path the runbook assumes: (a1)
+       expects an armed auto-merge request. Held and child sessions are already denied every `gh pr merge`, `--auto`
+       included, and wave 2b closes the `gh api graphql` mutations. **Recommended.**
+    2. **Keep auto-merge off,** and land through the queue with a direct GraphQL `enqueuePullRequest` call that
+       carries `expectedHeadOid`. That is not clause 15's spelling, so clause 15, the runbook and the hook's deny
+       need a wave first.
+    3. **Park Task 7,** and keep landing with `--admin` as now.
+  - **Slot C (#311)** stays open, unmerged, until the operator rules. The proof programme `landing-order-proof` is NOT
+    opened, and no dispatch was spent.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
