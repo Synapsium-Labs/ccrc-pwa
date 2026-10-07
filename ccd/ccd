@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=abad72c9356cc00f929e0253dc9ecebd897119f6f2579119716ac32bcf0b6af5
+# ccrc:generated 1 sha256=ea8da5c4f207b7b51e67d001fc557dd5734a13769b328601de88aa13feaf797b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -20106,11 +20106,15 @@ _route_readback_transcript() {   # id class stamp later-ts later-model -> ONE li
   # NEVER EVERY TICK. The read happens only when the sidecar cannot answer,
   # only over the last ROUTE_READBACK_TAIL bytes, and only when the transcript
   # has CHANGED: a conclusive refusal is kept in `$REG/<id>.readbackseen` as
-  # "<class> <mtime> <size> <verdict> <path>" (purged with the row), and an
-  # unchanged file under the same pending class answers that verdict without
-  # reading. Sound because every kept verdict is monotone in what is not in
-  # the key: the process start and the stamp only move later, which can only
-  # refuse more, and a later sidecar reading only adds refusal 5. The
+  # "<class> <mtime> <size> <later-ts> <later-model> <verdict> <path>" (purged
+  # with the row), and an unchanged file under the same pending class and the
+  # same handed-on reading answers that verdict without reading. Sound because
+  # every kept verdict is monotone in what is not in the key: the process start
+  # and the stamp only move later, which can only refuse more. The later
+  # sidecar reading IS in the key, because it moves refusal 5 BOTH ways — a
+  # later reading of another class adds it, and a still later reading of the
+  # class takes it away again (review findings 8 and 17); it changes at most
+  # once per render, so the key costs a re-read only then. The
   # transient refusals — unnamed, absent, unreadable, unplaced, unmeasured —
   # are never kept, and `matched` records the class, after which nothing is
   # pending to ask.
@@ -20120,11 +20124,11 @@ _route_readback_transcript() {   # id class stamp later-ts later-model -> ONE li
   [[ -f "$f" && -r "$f" ]] || { echo unreadable; return 0; }
   m=$(_plat_mtime "$f" 2>/dev/null); s=$(_plat_size "$f" 2>/dev/null)
   [[ "$m" =~ ^[0-9]+$ && "$s" =~ ^[0-9]+$ ]] || { echo unreadable; return 0; }
-  key="$cls $m $s"
+  key="$cls $m $s $lts $lmodel"
   rec=$(_reg_get "$id" readbackseen)
-  if [[ "$rec" =~ ^([a-z]+\ [0-9]+\ [0-9]+)\ (none|unacked|before-spawn|before-stamp|other|superseded)\ (/.+)$ \
-        && "${BASH_REMATCH[1]}" == "$key" && "${BASH_REMATCH[3]}" == "$f" ]]; then
-    echo "${BASH_REMATCH[2]}"; return 0   # unchanged since the last look: the same answer, nothing read
+  if [[ "$rec" =~ ^([a-z]+\ [0-9]+\ [0-9]+\ (-|[0-9]+)\ [^\ ]+)\ (none|unacked|before-spawn|before-stamp|other|superseded)\ (/.+)$ \
+        && "${BASH_REMATCH[1]}" == "$key" && "${BASH_REMATCH[4]}" == "$f" ]]; then
+    echo "${BASH_REMATCH[3]}"; return 0   # unchanged since the last look: the same answer, nothing read
   fi
   born=$(_pane_born "$id")
   [[ "$born" =~ ^[0-9]+$ ]] || { echo unplaced; return 0; }   # asked BEFORE the read: an unplaceable process is not worth one

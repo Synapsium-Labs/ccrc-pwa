@@ -1477,6 +1477,21 @@ describe('the read-back\'s second witness — the transcript\'s own acknowledged
     expect(verdictAfter(ACK + 600, 'claude-opus-5-5'), 'a later reading of the class agrees').toMatch(/^matched /);
   });
 
+  it('a kept `superseded` is not final: a still later stale reading of the class takes refusal 5 away, with the transcript unchanged', () => {
+    // Review findings 8 and 17: the pane went back to opus with no /model row and rendered it while no tick ran.
+    sidecarAt(ACK + 600, 'claude-fable-5-1');
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5'))]);
+    tick();
+    unchanged();
+    expect(h.reg(ID, 'readbackseen')).toMatch(new RegExp(`^opus \\d+ \\d+ ${ACK + 600} claude-fable-5-1 superseded /`));
+    tick();
+    expect(reads(), 'the same reading: kept').toBe(1);
+    sidecarAt(ACK + 1200, 'claude-opus-5-5');
+    tick();
+    expect(reads(), 'another reading: asked again').toBe(2);
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
+  });
+
   it('a FRESH sidecar still answers first: a pane rendering another class is not overruled by an older acknowledgement, and the transcript is never read', () => {
     sidecarAt(nowS() - 5, 'claude-sonnet-5');
     writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5'))]);
@@ -1589,10 +1604,11 @@ ${ACK} model opus"`);
     writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5'))]);
     tick(ACK + 60);   // before-spawn: a conclusive refusal, kept
     expect(reads()).toBe(1);
-    expect(h.reg(ID, 'readbackseen')).toBe(`opus ${fs.statSync(transcriptPath()).mtime.getTime() / 1000 | 0} ${fs.statSync(transcriptPath()).size} before-spawn ${transcriptPath()}`);
+    // the stale sidecar from beforeEach (ACK+3, opus, this uuid, after the stamp) is the handed-on reading, in the key
+    expect(h.reg(ID, 'readbackseen')).toBe(`opus ${fs.statSync(transcriptPath()).mtime.getTime() / 1000 | 0} ${fs.statSync(transcriptPath()).size} ${ACK + 3} claude-opus-5-5 before-spawn ${transcriptPath()}`);
     tick(ACK + 60); tick(ACK + 60);
     expect(reads(), 'two unchanged ticks read nothing').toBe(1);
-    const kept = (cls: string): string => h.sh(`${STUB(ACK + 60)} _route_readback_transcript ${ID} ${cls} ${STAMP} - -`);
+    const kept = (cls: string): string => h.sh(`${STUB(ACK + 60)} _route_readback_transcript ${ID} ${cls} ${STAMP} ${ACK + 3} claude-opus-5-5`);
     expect(kept('opus'), 'and answer the kept verdict').toBe('before-spawn');
     expect(reads()).toBe(1);
     expect(kept('sonnet'), 'another pending class is another question').toBe('before-spawn');
@@ -1610,7 +1626,7 @@ ${ACK} model opus"`);
     // new file; a kept refusal whose key happens to coincide (same second, same size) must not answer for it.
     fs.rmSync(usageFile());
     const p = writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SESSION('Opus 5.5'))]);
-    const key = `opus ${fs.statSync(p).mtime.getTime() / 1000 | 0} ${fs.statSync(p).size}`;
+    const key = `opus ${fs.statSync(p).mtime.getTime() / 1000 | 0} ${fs.statSync(p).size} - -`;
     h.sh(`_reg_set ${ID} readbackseen "${key} before-spawn ${path.join(path.dirname(p), 'an-older-uuid.jsonl')}"`);
     expect(h.sh(`${STUB()} _route_readback_transcript ${ID} opus ${STAMP} - -`)).toBe(`matched ${ACK} ${BORN} Opus 5.5`);
     expect(reads(), 'the kept verdict was another file\'s: this one is read').toBe(1);
