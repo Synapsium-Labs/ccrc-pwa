@@ -280,6 +280,24 @@ export function stallFilesExceed(box: StallArming, resolved: StallResolved): boo
   return STALL_SENDING_STAGES.some((s) => files[s] && !now[s]);
 }
 
+// ── the busy clock ───────────────────────────────────────────────────────────────────────────────────────────────
+
+/** The stall sweep's judged mail mode and mail-stuck's busy start (§9, `busy-clock-starts-when-busy-delivery-starts`
+ *  (D-4024)). `lastApplied` and `busySince` are the watcher's two fields, written only by the mail sweep: the mode it
+ *  last applied (`null` before its first), and when it moved into busy delivery from a known non-busy mode (`null`
+ *  when no such move has been seen since the server started). Three answers:
+ *  - `busy` resolved over a known non-busy applied mode: busy delivery has not happened yet, so busy is judged as the
+ *    busy gate is (`busy-shadow`), and nothing reads stuck during the first busy pass;
+ *  - `busy` resolved with a measured `busySince`: `busy`, bounded from that moment (`stallIdleStart`'s max);
+ *  - otherwise the resolved mode as it stands: today's expression, with no `busySince` key. At boot `lastApplied` is
+ *    `null`, so this is what the stall sweep judges until busy delivery begins again while the server runs. */
+export function stallBusyClock(resolvedMode: MailTurnMode, lastApplied: MailTurnMode | null, busySince: number | null): { readonly mailMode: MailTurnMode; readonly busySince?: number } {
+  if (resolvedMode !== 'busy') return { mailMode: resolvedMode };
+  if (lastApplied !== null && lastApplied !== 'busy') return { mailMode: 'busy-shadow' };
+  if (busySince !== null) return { mailMode: 'busy', busySince };
+  return { mailMode: resolvedMode };
+}
+
 // ── the write path ───────────────────────────────────────────────────────────────────────────────────────────────
 
 /** What a write asks the store to change. An omitted field keeps its stored value; `quiet` `default` is SQL `NULL`,

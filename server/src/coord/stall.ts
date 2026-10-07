@@ -122,8 +122,12 @@ export type StallWriteMiss = (typeof STALL_WRITE_MISSES)[number];
  *  `mailDisabled` reads as false (`w2-arming-optional` (D-3628)); an absent `mailMode` reads as `shell`, the mail gate's
  *  shipped default (`gate-held-mail-is-not-stuck` (D-3798)). `stallArmingOf` always sets `w2Live`. The lane sets
  *  `mailDisabled` from `watch.ts`'s own module-local marker constant, which the verdict filter (Task 11) reads, and
- *  `mailMode` from `turnidle.ts`'s `mailTurnModeOf` over the same listing, which mail-stuck's idle clock reads. */
-export interface StallArming { readonly disabled: boolean; readonly live: boolean; readonly escalate: boolean; readonly w2Live?: boolean; readonly mailDisabled?: boolean; readonly mailMode?: MailTurnMode }
+ *  `mailMode` from `turnidle.ts`'s `mailTurnModeOf` over the same listing, which mail-stuck's idle clock reads.
+ *  `busySince` is `mailMode`'s companion on that same clock (`busy-clock-starts-when-busy-delivery-starts` (D-4024)):
+ *  when the mail sweep began busy delivery after a non-busy mode, in this server's life. Absent means today's clock,
+ *  on the `w2-arming-optional` precedent; it has no `null`, because a gate that has not delivered on busy yet is judged
+ *  through its `mailMode` instead (`stallsettings.ts`' `stallBusyClock` decides both). */
+export interface StallArming { readonly disabled: boolean; readonly live: boolean; readonly escalate: boolean; readonly w2Live?: boolean; readonly mailDisabled?: boolean; readonly mailMode?: MailTurnMode; readonly busySince?: number }
 
 /** One registry listing (the one `tick()` already took) gives the arming. A marker is a whole file name. */
 export function stallArmingOf(names: readonly string[]): StallArming {
@@ -298,7 +302,9 @@ export function isStallKebab(token: string): boolean {
 // decides nothing.
 // ===========================================================================
 
-/** r1 falls due after this much quiet. Spec §10: the census replay; the 1–2 h band is almost all legit. */
+/** The built-in quiet time: r1 falls due after this much quiet unless Settings chose another (stall-watch settings
+ *  §7; `stallQuietMs` reads the choice). Spec §10: the census replay; the 1–2 h band is almost all legit. The one
+ *  built-in default: the constants pin keeps it at 2 h. */
 export const STALL_QUIET_MS = 2 * 3_600_000;
 /** r2 falls due this long after r1, or after the word last turned idle: coordinator reply p90 is 1.56 h. */
 export const STALL_ESCALATE_MS = 3_600_000;
@@ -343,6 +349,11 @@ export const CHECK_UNDELIVERED_MS = 2 * 3_600_000;
 /** The first enable must not wake long-abandoned sessions: orphan (D) and the per-session mail read look back this
  *  far. *Chosen*. */
 export const BACKLOG_HORIZON_MS = 24 * 3_600_000;
+/** The working-reply back-off's ceiling (`backoff-ceiling-from-the-horizon` (D-4025)): 16 h. The streak, the episode key
+ *  and the quiet clock all come from a mail read that looks back BACKLOG_HORIZON_MS, so the computed threshold must
+ *  leave the marker ladder's span after r1 (r2 by STALL_BOUND_MS, r3 STALL_OPERATOR_MS later), twice over, inside it.
+ *  Only the computed threshold is capped; a stored quiet time never is. `stall-backoff.test.ts` pins its relations. */
+export const STALL_BACKOFF_CEILING_MS = BACKLOG_HORIZON_MS - 2 * (STALL_BOUND_MS + STALL_OPERATOR_MS);
 /** orphan (D) rung 2: its notice unacked this long after delivery, or undelivered this long after queueing. *Chosen*. */
 export const ORPHAN_PUSH_MS = 30 * 60_000;
 /** marker-unreadable: the marker read `unmeasured` or `malformed` this long on a candidate. *Chosen*. */
@@ -496,7 +507,7 @@ const STALL_DISPATCH_STATE = 'dispatched' satisfies RunState;
  *  dispatch's own row would move a never-mailed episode's key off `dispatchedAt`. Keyed on the EDGE, never the
  *  position (`reactivation-first-entry-by-edge` (D-3796)).
  *  An observation row (`fromState === toState`) is never an entry. A `fromState` this build cannot name, into an
- *  active state, IS one: the clock restarts once, which defers r1 by at most `STALL_QUIET_MS`, where refusing it
+ *  active state, IS one: the clock restarts once, which defers r1 by at most the quiet time, where refusing it
  *  would hold the run until its next transition. A run rebuilt by `CoordStore.reconstruct()` has no events, and its
  *  first send-back restarts the clocks as any send-back does: it is an entry, and no dispatch row precedes it. */
 export function stallReactivation(events: readonly StallEventRow[]): StallActivation {
@@ -516,6 +527,13 @@ export interface StallInput {
   readonly coordinationPaused: boolean;         // $REG/coordinator-paused in the tick's listing
   readonly coordinator: CoordinatorState | null; // null = not measured this pass
   readonly w2?: StallW2Facts;                   // wave 2's facts; absent = the lane read none, and wave 1's verdict stands
+  readonly quietMs?: number;                    // the resolved quiet time (stall-watch settings §7); absent = STALL_QUIET_MS
+}
+/** The quiet time this input is judged on: the one reader of `StallInput.quietMs` (stall-watch settings §7), at its
+ *  three uses (wave 1's r1, the dialog cap, the working-reply back-off's base). Absent reads the built-in, so every
+ *  literal that leaves it out keeps its meaning (the `w2-arming-optional` precedent). */
+export function stallQuietMs(input: StallInput): number {
+  return input.quietMs ?? STALL_QUIET_MS;
 }
 /** Wave 2's facts about the subject's worker (`w2-facts-separate-object` (D-3629)): `StallFacts` is unchanged. `absentSince`,
  *  `deadSince` and `markUnreadableSince` are the lane's in-memory first-seen times. They restart with the server. */
@@ -676,15 +694,15 @@ export function stallFacts(input: StallInput): StallFacts {
 }
 
 /** I2, the working-reply back-off (planning departure `working-reply-backs-off` (D-3644)): the cap on the exponent, so r1's
- *  threshold is 2 h, then 4 h, then 8 h from the second answered check on. CHOSEN, not measured: the operator has
- *  not ruled on I2, and 8 h keeps a worker that only ever says "still working" inside one working day between
- *  checks. */
+ *  threshold is the quiet time, then twice it, then four times it from the second answered check on, under
+ *  STALL_BACKOFF_CEILING_MS (2 h, 4 h and 8 h at the built-in). CHOSEN, not measured: the operator has not ruled on I2,
+ *  and 8 h keeps a worker that only ever says "still working" inside one working day between checks. */
 export const STALL_WORKING_BACKOFF_CAP = 2;
 
 /**
  * I2: how long the marker branch (§10 step 10, under `stall-watch-w2-live` with a readable marker) lets the worker go
  * quiet before r1. The wait backs off per check the worker answered ONLY with `re stall-check: working`. Such a
- * worker is not silent, and a 2 h check on every episode would teach it to ignore them.
+ * worker is not silent, and a check one quiet time into every episode would teach it to ignore them.
  *
  * The streak walks the worker's own mail newest first (the watch's notices are not its mail), and stops at the first
  * subject that is not a working reply. So any other mail from the worker resets it, a `waiting` reply included, while
@@ -693,7 +711,10 @@ export const STALL_WORKING_BACKOFF_CAP = 2;
  * (`working-streak-counts-checks` (D-3672)): two replies to one check are one episode, and a reply with no check before it
  * answers nothing.
  *
- * Wave 1's ladder never calls this. Without the marker rules r1 stays at `STALL_QUIET_MS`, so dark means dark.
+ * Wave 1's ladder never calls this. Without the marker rules r1 stays at the quiet time, so dark means dark.
+ *
+ * The computed threshold never passes STALL_BACKOFF_CEILING_MS (`backoff-ceiling-from-the-horizon` (D-4025)): at a 12 h
+ * quiet time the doubled waits would outrun the mail read that keys the episode, and re-send r1.
  */
 export function stallBackoff(input: StallInput): { readonly streak: number; readonly quietMs: number } {
   const workerId = input.subject.primary.sessionId;
@@ -706,7 +727,7 @@ export function stallBackoff(input: StallInput): { readonly streak: number; read
     if (check !== null) checks.add(check.id);
   }
   const streak = checks.size;
-  return { streak, quietMs: STALL_QUIET_MS * 2 ** Math.min(streak, STALL_WORKING_BACKOFF_CAP) };
+  return { streak, quietMs: Math.min(stallQuietMs(input) * 2 ** Math.min(streak, STALL_WORKING_BACKOFF_CAP), STALL_BACKOFF_CEILING_MS) };
 }
 
 /** The dialog and limit caps' clock: the same mail terms, from the live stamp whatever the word. The caller
@@ -923,7 +944,7 @@ function stallWaveOneLadder(input: StallInput, f: StallFacts, word: string, live
   if (!isIdleWord(word) || f.quietSince === null) return holdVerdict('unmeasured');
   const since = f.quietSince;
   const r1At = rungDoneAt(input, 'quiet', 1, key);
-  if (r1At === null) return now - since >= STALL_QUIET_MS ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;
+  if (r1At === null) return now - since >= stallQuietMs(input) ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;
   if (rungDoneAt(input, 'quiet', 3, key) !== null) return VERDICT_NONE;
   const r2At = rungDoneAt(input, 'quiet', 2, key);
   if (r2At !== null) return now >= rungDueAt(r2At, liveSince, STALL_OPERATOR_MS) ? r3Verdict(key, 'still-silent') : VERDICT_NONE;
@@ -1043,7 +1064,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
   const hookAskCorrelated = w.hookAsk.kind === 'ask' && live.since !== null && w.hookAsk.at >= live.since - ASK_DIALOG_SLACK_MS;
   const askRowOpen = w.askRow.kind === 'row' && (w.askRow.state === 'held' || w.askRow.state === 'answering');
   if (live.word === 'waiting' && (hookAskCorrelated || askRowOpen)) return holdVerdict('ask');
-  if (dialogShaped) return capQuiet >= STALL_QUIET_MS && !stallDialogCapDone(input, live.since) ? capVerdict('dialog-cap', dialogKey) : holdVerdict('dialog');
+  if (dialogShaped) return capQuiet >= stallQuietMs(input) && !stallDialogCapDone(input, live.since) ? capVerdict('dialog-cap', dialogKey) : holdVerdict('dialog');
   // (5) the limit hold, capped once per episode (`stallLimited`, shared with the session verdicts)
   if (stallLimited(w, now)) {
     return capQuiet >= LIMIT_HOLD_CAP_MS && rungDoneAt(input, 'limit-cap', 1, capKey) === null ? capVerdict('limit-cap', capKey) : holdVerdict('limit');
@@ -1167,7 +1188,7 @@ function stallMailRef(m: StallMailRow | null): string {
   return m === null ? 'none' : `#${stallInt(m.id)} ${stallSafe(m.kind)} at ${stallClockSec(m.at)}`;
 }
 
-/** When the worker's live status last turned idle: wave 1's r1 clock (r1 is sent when that stamp is two hours old).
+/** When the worker's live status last turned idle: wave 1's r1 clock (r1 is sent when that stamp is one quiet time old).
  *  The episode key stands in when the facts carry no quiet start. r2 and r3 never read this: r1's own delivery
  *  restamps it (D-3582 r2-r3-span-from-the-episode). */
 function stallQuietFrom(facts: StallFacts): number {
@@ -1734,13 +1755,19 @@ export function stallFailedVerdict(input: StallSessionInput, now: number): Stall
  *  reads done or failed. A live `busy` over that finished turn is a main loop idling over background work. The gate
  *  delivers on it only in the `busy` mode (`turnidle.ts`'s `mailTurnIdle`, armed by its marker) and only while the strict mode is
  *  absent (strict wins over `busy`), and under every other mode it holds that mail by design. So under those modes the clock starts DELEGATE_CAP_MS after the stop: that is the cap on
- *  subagent-covered main silence, past which a delivery still queued cannot reach its recipient. Else null. */
+ *  subagent-covered main silence, past which a delivery still queued cannot reach its recipient. Under `busy` with a
+ *  measured `busySince` it starts at the later of the stop and that moment (`busy-clock-starts-when-busy-delivery-starts`
+ *  (D-4024)): held mail gets the full MAIL_STUCK_MS from when busy delivery began, never from a stop that came while
+ *  the busy gate held it. Else null. */
 function stallIdleStart(input: StallSessionInput): number | null {
   const live = stallSessionLive(input);
   if (live !== null && isIdleWord(live.word)) return live.since;
   const m = stallCurrentMark(input);
   if (m === null || (m.state !== 'done' && m.state !== 'failed') || m.stopAt === null) return null;
-  if (live !== null && live.word === 'busy' && (input.arming.mailMode ?? 'shell') !== 'busy') return m.stopAt + DELEGATE_CAP_MS;
+  if (live !== null && live.word === 'busy') {
+    if ((input.arming.mailMode ?? 'shell') !== 'busy') return m.stopAt + DELEGATE_CAP_MS;
+    if (input.arming.busySince !== undefined) return Math.max(m.stopAt, input.arming.busySince);
+  }
   return m.stopAt;
 }
 

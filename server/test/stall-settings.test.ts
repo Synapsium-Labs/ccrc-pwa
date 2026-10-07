@@ -20,11 +20,13 @@ import {
   armedStages, decideStallSettings, isStallQuietMs, isStallSettingsKebab, parseStallSettings, resolveStallWatch,
   stallBoxArmingOf, stallEffectKey, stallFilesExceed, stallLevelOf, stallNeedsConfirm, stallNextStep, stallNoticeCounts,
   stallPatchIsNoOp, stallSettingsAfter, stallSettingsChange, stallStages, stallUnheldBoxOf, stallWriteEffect,
+  stallBusyClock,
 } from '../src/coord/stallsettings.js';
 import type { StallBoxArming, StallSettingsParsed, StallSettingsPatch, StallSettingsRead } from '../src/coord/stallsettings.js';
 import { STALL_ARMS, STALL_MARKERS, STALL_QUIET_MS, rungRecipient, stallArmHasRung, stallArmingOf, stallDetail } from '../src/coord/stall.js';
 import type { StallArm } from '../src/coord/stall.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER, mailTurnModeOf } from '../src/turnidle.js';
+import type { MailTurnMode } from '../src/turnidle.js';
 import { MAIL_DISABLED_MARKER } from '../src/coord/rundefs.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -880,3 +882,48 @@ void _ladderKeys;
 type _Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 const _storedIsReadFailure: _Same<Exclude<StallStored, 'row'>, ReadFailure> = true;
 void _storedIsReadFailure;
+
+// ── the busy clock (§9, busy-clock-starts-when-busy-delivery-starts (D-4024), M8 and M4's stallBusyClock arm) ─────
+describe('stallBusyClock: the judged mail mode and when busy delivery began (§9, D-4024)', () => {
+  const NON_BUSY: readonly MailTurnMode[] = ['strict', 'shell', 'busy-shadow'];
+  const T = 1_790_000_000_000;
+
+  it('answer 1: busy resolved over a known non-busy applied mode is judged as the busy gate, whatever busySince says', () => {
+    for (const last of NON_BUSY) {
+      expect(stallBusyClock('busy', last, null), last).toStrictEqual({ mailMode: 'busy-shadow' });
+      expect(stallBusyClock('busy', last, T), last).toStrictEqual({ mailMode: 'busy-shadow' });
+    }
+  });
+
+  it('answer 2: busy resolved, busy applied and a measured start bounds the clock from it', () => {
+    expect(stallBusyClock('busy', 'busy', T)).toStrictEqual({ mailMode: 'busy', busySince: T });
+  });
+
+  it('answer 3: busy applied with no measured start (the first busy after a restart) is today\'s expression, no busySince key', () => {
+    expect(stallBusyClock('busy', 'busy', null)).toStrictEqual({ mailMode: 'busy' });
+  });
+
+  it('M4: at boot (nothing applied yet) it neither substitutes nor bounds', () => {
+    const r = stallBusyClock('busy', null, null);
+    expect(r).toStrictEqual({ mailMode: 'busy' });
+    expect(Object.keys(r)).toEqual(['mailMode']);
+  });
+
+  it('answer 3: every non-busy resolved mode passes through unchanged, whatever was applied and whenever', () => {
+    for (const mode of NON_BUSY) {
+      for (const last of [null, 'busy', ...NON_BUSY] as const) {
+        for (const since of [null, T]) {
+          expect(stallBusyClock(mode, last, since), `${mode} over ${String(last)} at ${String(since)}`).toStrictEqual({ mailMode: mode });
+        }
+      }
+    }
+  });
+
+  it('spread over a box arming, it replaces only mailMode and adds busySince only when it bounds', () => {
+    const a = box(LIVE, ESCALATE, BUSY);
+    expect(a.mailMode, 'CONTROL: the box delivers on busy').toBe('busy');
+    expect({ ...a, ...stallBusyClock(a.mailMode, null, null) }).toStrictEqual(a);
+    expect({ ...a, ...stallBusyClock(a.mailMode, 'shell', null) }).toStrictEqual({ ...a, mailMode: 'busy-shadow' });
+    expect({ ...a, ...stallBusyClock(a.mailMode, 'busy', T) }).toStrictEqual({ ...a, busySince: T });
+  });
+});
