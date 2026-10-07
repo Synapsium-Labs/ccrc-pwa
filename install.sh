@@ -152,8 +152,8 @@ fi
 
 command -v node >/dev/null 2>&1 || { echo "install.sh: node is not installed — install Node (nodesource or nvm), then re-run" >&2; exit 1; }
 # The floor is READ from the shipped package.json — never a second copy
-# (node-floor.test.ts pins all three identical). Below it the server either fails
-# to boot on node:sqlite or runs without ccrc history's search (no FTS5 there).
+# (node-floor.test.ts pins all three identical). Without node:sqlite the server
+# will not boot; without its FTS5 ccrc history captures unsearched (fts5-absent).
 floor="$(node -e 'process.stdout.write(require(process.argv[1]).engines.node)' "$ROOT/server/package.json" 2>/dev/null)" \
   || { echo "install.sh: cannot read engines.node from $ROOT/server/package.json — is this a complete checkout?" >&2; exit 1; }
 node -e '
