@@ -2585,6 +2585,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **Exposure:** `/proc` is mounted without `hidepid`, but the box has one login account, and its one container runs in
     its own pid namespace. So the argv was readable only to this account's own processes. The open question for
     rotation is copies of the value written down: transcripts, scrollback and logs.
+  - **Copies of the live value, measured** by reading it into a process and printing counts only: 35 transcript files,
+    across 17 of the 19 account homes' `projects` trees, hold it in plain text. A looser scan, for any header with a
+    value, found 81 files. The difference is fixture tokens. Each copy is a working credential on disk. Because a
+    transcript is model context, each is also a copy that was sent to an external service. Rotation is the only
+    remedy: deleting files would edit other sessions' transcripts, and it would not reach what was already sent.
   - **The rotation:** the server reads the token once, at boot (`server/src/index.ts`). A rotation is a new value in
     `deploy/ccrc-mail.token`, placed at the fleet box's `~/.cc-secrets/ccrc-mail.token` and the server box's
     `~/.ccrc/mail.token`, then a server restart. The release lane never touches it. Proposed to the operator, not done.
