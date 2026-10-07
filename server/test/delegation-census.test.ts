@@ -378,27 +378,66 @@ describe('delegation-census (read-only, path-free)', () => {
     });
   });
 
-  // KNOWN LIMIT (the header names it), pinned so that closing it is a visible edit and never an accident: two per-record
+  // KNOWN LIMIT (the header names it), pinned so that closing it is a visible edit and never an accident: three per-record
   // reads still fold a failure into their "nothing there" value. `locked` is false when its stat fails (the record directory
-  // refuses search), and `baseAgreesFirstLog` is null when `logs/HEAD` cannot be read, as it is when it is absent.
-  it('KNOWN LIMIT: locked reads false when its stat fails and baseAgreesFirstLog null when logs/HEAD cannot be read (review 304 F10)', () => {
+  // refuses search), `baseAgreesFirstLog` is null when `logs/HEAD` cannot be read, as it is when it is absent, and an
+  // unreadable `gitdir` reads as an absent one: `worktreeDir: 'unmeasured'` and, for a workflow record, `meta.found: false`
+  // (counted in `totals.metaMissing`) although its meta is on disk.
+  it('KNOWN LIMIT: locked reads false when its stat fails, baseAgreesFirstLog null when logs/HEAD cannot be read, and an unreadable gitdir reads as an absent one (review 304 F10)', () => {
     if (process.getuid?.() === 0) return;   // root reads through mode 000
     const LOG = `${'0'.repeat(40)} ${SHA_A} Rig <you@example.com> 1 +0000\tbranch: Created\n`;
     const w = mini([
       { name: 'agent-lg', files: { HEAD: `${SHA_A}\n`, CLAUDE_BASE: SHA_A, 'logs/HEAD': LOG }, wt: 'wt-lg' },
       { name: 'agent-lk', files: { HEAD: `${SHA_A}\n`, CLAUDE_BASE: SHA_A, 'logs/HEAD': LOG, locked: '' }, wt: 'wt-lk' },
       { name: 'agent-ok', files: { HEAD: `${SHA_A}\n`, CLAUDE_BASE: SHA_A, 'logs/HEAD': LOG, locked: '' }, wt: 'wt-ok' },
+      { name: 'wf_gd-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: 'wt-gd' },   // gitdir at mode 000
+      { name: 'wf_gdabs-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: null },   // no gitdir at all
+      { name: 'wf_gdok-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: 'wt-gdok' },   // the control: a readable gitdir
     ]);
     const admin = (n: string): string => path.join(w.repo, '.git', 'worktrees', n);
+    for (const [run, wt] of [['wf_gd', 'wt-gd'], ['wf_gdabs', 'wt-gdabs'], ['wf_gdok', 'wt-gdok']]) {
+      w.meta(w.h1, munge(w.repo), `u1/subagents/workflows/${run}/a.meta.json`, { workflowPhase: 'p', worktreePath: w.wt(wt) });   // each meta is on disk
+    }
+    const gitdir = path.join(admin('wf_gd-1'), 'gitdir');
     fs.chmodSync(path.join(admin('agent-lg'), 'logs', 'HEAD'), 0o000);
     fs.chmodSync(admin('agent-lk'), 0o400);   // listable, not searchable: `locked` (and every read inside) fails EACCES
+    fs.chmodSync(gitdir, 0o000);
     try {
       const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
-      const [lg, lk, ok] = out.records;   // sorted: agent-lg, agent-lk, agent-ok
+      const [lg, lk, ok, gd, gdabs, gdok] = out.records;   // sorted: agent-lg, agent-lk, agent-ok, wf_gd-1, wf_gdabs-1, wf_gdok-1
       expect(ok).toMatchObject({ locked: true, baseAgreesFirstLog: true });   // the controls: both are measurable
       expect(lg).toMatchObject({ locked: false, baseAgreesFirstLog: null });
       expect(lk).toMatchObject({ locked: false, worktreeDir: 'unmeasured', claudeBase: 'unreadable' });   // locked is on disk, and reads false
-    } finally { fs.chmodSync(admin('agent-lk'), 0o755); fs.chmodSync(path.join(admin('agent-lg'), 'logs', 'HEAD'), 0o600); }
+      expect(gdok).toMatchObject({ worktreeDir: 'present', meta: { found: true } });
+      expect(gd).toMatchObject({ worktreeDir: 'unmeasured', meta: { found: false } });
+      expect(gd.worktreeDir).toBe(gdabs.worktreeDir);   // an unreadable gitdir and an absent one read alike
+      expect(gd.meta).toEqual(gdabs.meta);
+      expect(out.totals.metaFound).toBe(1);   // only wf_gdok-1's meta is found; wf_gd-1's is on disk, and counted in metaMissing with the rest
+    } finally { fs.chmodSync(admin('agent-lk'), 0o755); fs.chmodSync(path.join(admin('agent-lg'), 'logs', 'HEAD'), 0o600); fs.chmodSync(gitdir, 0o600); }
+  });
+
+  // Root-proof (EISDIR fails for root too): `text` is the convenience read that folds an unreadable file to null, so a
+  // DIRECTORY where `gitdir`, `HEAD`, `logs/HEAD` or `packed-refs` belongs reads as an absent one and the census still answers.
+  // Without that fold the UNREADABLE symbol reaches a `.trim()`, a regex or a `.split`, and the census dies on a TypeError.
+  it('reads a gitdir, HEAD, logs/HEAD or packed-refs that is a DIRECTORY (EISDIR) as an unreadable one, and still answers (review 304 F10)', () => {
+    const w = mini([
+      { name: 'agent-hd', files: { CLAUDE_BASE: SHA_A }, wt: 'wt-hd' },   // HEAD is a directory
+      { name: 'agent-gd', files: { HEAD: `${SHA_A}\n`, CLAUDE_BASE: SHA_A }, wt: null },   // gitdir is a directory
+      { name: 'agent-lh', files: { HEAD: `${SHA_A}\n`, CLAUDE_BASE: SHA_A }, wt: 'wt-lh' },   // logs/HEAD is a directory
+      { name: 'agent-pr', files: { HEAD: 'ref: refs/heads/wt-pr\n', CLAUDE_BASE: SHA_A }, wt: 'wt-pr' },   // no loose ref, and packed-refs is a directory
+    ]);
+    const admin = (n: string): string => path.join(w.repo, '.git', 'worktrees', n);
+    fs.mkdirSync(path.join(admin('agent-hd'), 'HEAD'));
+    fs.mkdirSync(path.join(admin('agent-gd'), 'gitdir'));
+    fs.mkdirSync(path.join(admin('agent-lh'), 'logs', 'HEAD'));
+    fs.mkdirSync(path.join(w.repo, '.git', 'packed-refs'));
+    const r = census(['--repo', w.repo, '--home', w.h1]);
+    expect(r.status, r.stderr).toBe(0);
+    const [gd, hd, lh, pr] = JSON.parse(r.stdout).records;   // sorted: agent-gd, agent-hd, agent-lh, agent-pr
+    expect(gd).toMatchObject({ worktreeDir: 'unmeasured' });
+    expect(hd).toMatchObject({ head: 'unreadable', movedFromBase: 'unmeasured' });
+    expect(lh).toMatchObject({ head: 'detached', baseAgreesFirstLog: null, movedFromBase: false });
+    expect(pr).toMatchObject({ head: 'ref', movedFromBase: 'unmeasured' });
   });
 
   // F11(a): a real config home's project dir holds <uuid>.jsonl FILES beside the <uuid>/ dirs, so listing

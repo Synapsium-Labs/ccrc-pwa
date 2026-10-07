@@ -14,9 +14,10 @@
 // worktreePath is the ORDINARY shape (an agent spawned without a worktree), not corruption: it is `meta.pathless` /
 // `totals.metaPathless`. A worktree directory whose stat fails with anything but ENOENT or ENOTDIR is `worktreeDir:
 // 'unreadable'` (`totals.worktreeUnreadable`), and a CLAUDE_BASE whose read fails with anything but ENOENT or ENOTDIR is
-// `claudeBase: 'unreadable'`: for both fields 'absent' means ENOENT or ENOTDIR only. KNOWN LIMIT: `locked` (false when its
-// stat fails) and `baseAgreesFirstLog` (null when `logs/HEAD` cannot be read, as when it is absent) still fold a failure
-// into their "nothing there" value.
+// `claudeBase: 'unreadable'`: for both fields 'absent' means ENOENT or ENOTDIR only. KNOWN LIMIT: three reads still fold a
+// failure into their "nothing there" value: `locked` (false when its stat fails), `baseAgreesFirstLog` (null when
+// `logs/HEAD` cannot be read, as when it is absent) and `gitdir` (an unreadable one reads as an absent one:
+// `worktreeDir: 'unmeasured'` and, for a workflow record, `meta.found: false`, counted in `totals.metaMissing`).
 // `movedFromBase` compares a record's HEAD tip with its CLAUDE_BASE: `null` means ONLY "no valid CLAUDE_BASE to
 // compare against" (not applicable); a boolean is the comparison; `'unmeasured'` is a CLAUDE_BASE that cannot be
 // read (`claudeBase: 'unreadable'`: it may be valid, so `null` would say there is none), or a HEAD the census could
