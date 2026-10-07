@@ -31,7 +31,7 @@ import fs, {
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { isatty } from 'node:tty';
 import { pathToFileURL } from 'node:url';
 import {
@@ -3495,6 +3495,10 @@ export async function runOpPass(parsed, deps, out) {
   if (args === null) return result(EXIT.REFUSED, 'bad-args');
   if (args.session != null) {
     if (!idOk(args.session)) return result(EXIT.REFUSED, 'bad-id');
+    // Resolved ONCE, here, against the operator's cwd (Task 26F item 2): admission, the file's binding and the
+    // journal's mapping verdict then all see the one absolute path. Left as typed, a relative path was admitted by
+    // its cwd-relative spelling but stored verbatim, giving the file a second path row and a path replay cannot resolve.
+    args.file = resolve(args.file);
     if (!args.file.endsWith('.jsonl') || !UUID_RE.test(basename(args.file, '.jsonl'))) return result(EXIT.REFUSED, 'bad-args');
   }
   const form = formOf(parsed.op, parsed.opArgs);

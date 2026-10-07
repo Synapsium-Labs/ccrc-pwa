@@ -950,3 +950,18 @@ describe('Task 26F item 1: --op import maps through registryBackfill\'s core (D-
     expect(verdicts(box, 'mapping').filter((v) => v['cc_session_uuid'] === U1).map((v) => v['declared_by'])).toEqual(['operator']);
   }, 60_000);
 });
+
+describe('Task 26F item 2: a relative --file is resolved once, before admission, binding and journaling', () => {
+  it('stores and journals the absolute path, and a later scheduled tick adds no second path row', async () => {
+    const box = boundBox('ccrc-hist-26f2-');
+    plantSession(box, ID, { generation: G1, project: 'demo' });
+    const file = plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000000f6', 'relative path', iso(0))]);
+    const r = await shimPty(box, ['--op', 'import', '--session', ID, '--file', `${U1}.jsonl`, '--apply'], {}, path.dirname(file));
+    expect(lastResult(r.out), r.out).toEqual({ rc: 0 });
+    expect(q<{ path: string }>(box, 'SELECT path FROM file_paths ORDER BY path'), 'one path row, the absolute one').toEqual([{ path: file }]);
+    const mapping = verdicts(box, 'mapping').filter((v) => v['cc_session_uuid'] === U1);
+    expect(mapping.map((v) => v['path'])).toEqual([file]);
+    expect(runDriver(box, { offsetMs: 31 * MIN, managedSettings: [] }).code).toBe(0);
+    expect(q<{ path: string }>(box, 'SELECT path FROM file_paths ORDER BY path'), 'the scheduled tick adds no alias').toEqual([{ path: file }]);
+  }, 60_000);
+});
