@@ -122,6 +122,9 @@ export const SPOOL_LINE_MAX = 1024;                 // bytes, one spool line wit
 export const SPOOL_FILE_MAX = 67108864;             // 64 MiB
 /** The observation sidecar's read bound: one observation plus the first-match times of its held lines (sweep.mjs `readSidecar`). */
 export const OBS_FILE_MAX = 65536;
+/** The read bound of a control or binding file (`store.id`, `store.id.pending`, `store.writer`, `op`, an attempt marker,
+ *  `history-max-gb`, `ccrc.env`); each holds a few dozen bytes (store.mjs `readBounded`, D-4347). */
+export const CONTROL_FILE_MAX = 65536;
 /** D-4337 (history-spool-file-size-cap, its line arm): a draining spool file holding more than this many lines
  *  (splitSpoolText's ordinals: empty lines take none) is set aside like one over SPOOL_FILE_MAX, counted
  *  `spool_overlines`. A legitimate file holds fewer: each hook line is fenced `\n<json>\n` (D-4176) and at most

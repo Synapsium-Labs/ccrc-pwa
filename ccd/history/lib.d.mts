@@ -28,6 +28,7 @@ export const SWITCHES: Readonly<{
 export const SPOOL_LINE_MAX: number;
 export const SPOOL_FILE_MAX: number;
 export const OBS_FILE_MAX: number;
+export const CONTROL_FILE_MAX: number;
 export const SPOOL_FILE_LINES_MAX: number;
 export const SPOOL_ID_MAX: number;
 export const STATFS_DEADLINE_MS: number;

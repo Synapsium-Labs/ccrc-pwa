@@ -30,14 +30,14 @@
 //
 // It prints no recalled text — ids, paths, counts and words only — so no output redaction applies here
 // (§8.3's layers run on recalled fields, which the read verbs of W1-B2 print).
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync, promises as fsp } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync, promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   EXIT, COVERAGE, SCHEMA_VERSION, UUID_RE, HARNESSES, CLI_STAT_DEADLINE_MS,
-  historyPaths, readBoxEnvValue, decideCliStore, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
+  historyPaths, readBoxEnvValue, decideCliStore, CONTROL_FILE_MAX, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
 } from './lib.mjs';
-import { measureStoreFacts, openReader, userVersion, measuredSize, probeFts5 } from './store.mjs';
+import { measureStoreFacts, openReader, userVersion, measuredSize, probeFts5, readBounded } from './store.mjs';
 // The health block's own imports (task 28). Namespace imports, so this block
 // binds no name the status code above already imported.
 import * as healthLib from './lib.mjs';
@@ -77,8 +77,11 @@ function unmeasuredFacts(role) {
   };
 }
 
+/** Bytes of a file, trimmed, or null when it cannot be read: one bounded nonblocking open that refuses a link
+ *  (store.mjs `readBounded`, D-4347 history-planted-entries-never-wedge), so a FIFO is never waited on. */
 function readTrimmed(p) {
-  try { return readFileSync(p, 'utf8').trim(); } catch { return null; }
+  const r = readBounded(p, CONTROL_FILE_MAX, false);
+  return r.state === 'value' ? r.value.trim() : null;
 }
 
 function listNames(dir) {
@@ -88,12 +91,9 @@ function listNames(dir) {
 /** CCRC_ROLE exactly as doctor's _check_skills reads it (ccd/ccrc-doctor-checks:3016): a regular, readable
  *  file, one key, readBoxEnvValue's rules (O53); anything else is '' (not server). */
 function readRole(P) {
-  let text;
-  try {
-    if (!statSync(P.ccrcEnv).isFile()) return '';
-    text = readFileSync(P.ccrcEnv, 'utf8');
-  } catch { return ''; }
-  const r = readBoxEnvValue(text, 'CCRC_ROLE');
+  const f = readBounded(P.ccrcEnv, CONTROL_FILE_MAX, true);
+  if (f.state !== 'value') return '';
+  const r = readBoxEnvValue(f.value, 'CCRC_ROLE');
   return r.found ? r.value : '';
 }
 
@@ -169,10 +169,8 @@ function boxFacts(env, P) {
   env.history_off = existsSync(P.off);
   // The sweep's capText rule (Task 14), spelled again because cli.mjs imports nothing from sweep.mjs: absent is
   // null (the default, not malformed); an unreadable file is '' — malformed, so doctor WARNs (§9.3).
-  let capRead;
-  try { capRead = readFileSync(P.cap, 'utf8'); } catch (e) {
-    capRead = e !== null && typeof e === 'object' && e.code === 'ENOENT' ? null : '';
-  }
+  const cr = readBounded(P.cap, CONTROL_FILE_MAX, true);
+  const capRead = cr.state === 'absent' ? null : cr.state === 'value' ? cr.value : '';
   const cap = capOf(capRead);
   env.cap_gb = cap.gb;
   env.cap_malformed = cap.malformed;
@@ -422,8 +420,10 @@ function measureModeEntries(p, skipDb) {
 /** The roster the shim sources (§5.1 step 4): readable, and defining the one
  *  function the shim requires. Measured here rather than read off the
  *  cumulative `roster_unreadable` counter, which never falls back to 0. */
+const ROSTER_FILE_MAX = 1024 * 1024;
 function rosterReadable(file) {
-  try { return healthFs.readFileSync(file, 'utf8').includes('_ccrc_cfg_dir()'); } catch { return false; }
+  const r = healthStore.readBounded(file, ROSTER_FILE_MAX, true);
+  return r.state === 'value' && r.value.includes('_ccrc_cfg_dir()');
 }
 
 /** The observedMs of the oldest observation sidecar in spool/.draining whose
@@ -446,19 +446,16 @@ function oldestUnjournaledMs(p) {
   for (const n of names) {
     if (!n.endsWith('.obs')) continue;
     const file = healthPath.join(p.draining, n);
-    // Type checked BEFORE the open, as the sweep's readSmall does (sweep.mjs, the `_reg_read` lesson): a FIFO named
-    // *.obs would block this read in open(2) for ever, and status is a health read that must always return. A
-    // link is followed (statSync), as readSmall follows it. A non-regular entry is unmeasured here, not "no held
-    // file": the sweep itself answers UNREADABLE for it (and rewrites the sidecar), so no read of it can say
-    // whether a record was held.
-    let text;
-    try {
-      if (!healthFs.statSync(file).isFile()) { unreadable = true; continue; }
-      text = healthFs.readFileSync(file, 'utf8');
-    } catch (e) {
-      if (!absent(e)) unreadable = true;           // ENOENT: the sweep unlinked it between the listing and the read
-      continue;
-    }
+    // ONE nonblocking open with the type judged on the descriptor, as the sweep's readSmall does (store.mjs
+    // `readBounded`, the `_reg_read` lesson; D-4347): a FIFO named *.obs would block a plain read in open(2) for
+    // ever, and status is a health read that must always return. A link is followed, as readSmall follows it. A
+    // non-regular entry is unmeasured here, not "no held file": the sweep itself answers UNREADABLE for it (and
+    // rewrites the sidecar), so no read of it can say whether a record was held.
+    const r = healthStore.readBounded(file, healthLib.OBS_FILE_MAX, true);
+    if (r.state === 'absent') continue;             // the sweep unlinked it between the listing and the read
+    if (r.state === 'unreadable') { unreadable = true; continue; }
+    if (r.state === 'over-cap') continue;           // content the sweep re-observes, as it does unparseable content
+    const text = r.value;
     // D-4347 (history-planted-entries-never-wedge): an orphan the sweep's next drain removes is not a held file. This is
     // judged AFTER the read, so a FIFO, directory or mode-000 sidecar still reads unreadable, as above.
     if (!present.has(`${n.slice(0, -'.obs'.length)}.jsonl`)) continue;

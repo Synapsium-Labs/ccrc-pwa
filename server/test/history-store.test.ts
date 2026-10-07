@@ -14,13 +14,13 @@ import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { brotliCompressSync, constants as Z } from 'node:zlib';
 import { mkTmp } from './tmpHelpers.js';
-import { SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths } from '../../ccd/history/lib.mjs';
+import { MAX_INTERRUPTED_ATTEMPTS, SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths } from '../../ccd/history/lib.mjs';
 import {
   CODEC, MIGRATIONS, StoreError, openWriter, openReader, userVersion, probeFts5, withTx, brotli, unbrotli,
   measuredSize, getMeta, setMeta, bump, closeWriter, schemaOf,
   mintStoreId, mintWriter, writeFileAtomic, peekStoreId, measureStoreFacts, removeStaleTemps, removeStaleMigrationTemps, createStore,
   finishPending, dropPending, syncWriterMirror,
-  readAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry,
+  readAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry, readBounded,
 } from '../../ccd/history/store.mjs';
 
 /** A delete-mode (rollback-journal) v1 store built by hand, the shape a
@@ -504,6 +504,21 @@ describe('store.mjs: the binding', () => {
     expect(removeStaleTemps(h)).toEqual(['.history.db.restore.1700000000000']);
   });
 
+  it('an attempt marker that is a link reads as the escalating count: only db/ may hold a link (review 316 F10)', () => {
+    const h = home();
+    createStore(h);
+    const P = historyPaths(h);
+    fs.mkdirSync(P.backups, { recursive: true });
+    const marker = path.join(P.backups, '.pre-v2.attempt');
+    fs.writeFileSync(marker, '1\n');
+    expect(readAttempts(h, 2), 'CONTROL: a regular marker reads its count').toBe(1);
+    fs.rmSync(marker);
+    const real = path.join(h, 'real-attempt');
+    fs.writeFileSync(real, '1\n');
+    fs.symlinkSync(real, marker);
+    expect(readAttempts(h, 2)).toBe(MAX_INTERRUPTED_ATTEMPTS);
+  });
+
   it('syncWriterMirror: meta.writer follows store.writer, and an absent file changes nothing', () => {
     const h = home();
     createStore(h);
@@ -684,5 +699,60 @@ describe('store.mjs: removeEntry (review 316 F8; D-4347)', () => {
     fs.writeFileSync(path.join(full, 'keep'), 'x');
     expect(removeEntry(full)).toBe('kept-dir');
     expect(fs.readFileSync(path.join(full, 'keep'), 'utf8')).toBe('x');
+  });
+});
+
+describe('store.mjs: readBounded (review 316 F10, F18; D-4347)', () => {
+  const STORE = path.resolve(__dirname, '../../ccd/history/store.mjs');
+  const dir = (): string => mkTmp('ccrc-history-rb-');
+
+  it('an absent path answers absent; a short file answers its text; exactly max bytes still answers value', () => {
+    const d = dir();
+    expect(readBounded(path.join(d, 'nope'), 64, false)).toEqual({ state: 'absent' });
+    fs.writeFileSync(path.join(d, 'f'), 'abc');
+    expect(readBounded(path.join(d, 'f'), 64, false)).toEqual({ state: 'value', value: 'abc' });
+    fs.writeFileSync(path.join(d, 'edge'), 'a'.repeat(64));
+    expect(readBounded(path.join(d, 'edge'), 64, false)).toEqual({ state: 'value', value: 'a'.repeat(64) });
+  });
+
+  it('a file over max answers over-cap, never its text', () => {
+    const d = dir();
+    fs.writeFileSync(path.join(d, 'big'), 'a'.repeat(65));
+    expect(readBounded(path.join(d, 'big'), 64, false)).toEqual({ state: 'over-cap' });
+  });
+
+  it('a symlink to a regular file is unreadable when follow is false and its text when follow is true', () => {
+    const d = dir();
+    fs.writeFileSync(path.join(d, 'real'), 'abc');
+    fs.symlinkSync(path.join(d, 'real'), path.join(d, 'link'));
+    expect(readBounded(path.join(d, 'link'), 64, false)).toEqual({ state: 'unreadable' });
+    expect(readBounded(path.join(d, 'link'), 64, true)).toEqual({ state: 'value', value: 'abc' });
+  });
+
+  it('a directory and a followed link to /dev/zero are unreadable, not read', () => {
+    const d = dir();
+    fs.mkdirSync(path.join(d, 'sub'));
+    expect(readBounded(path.join(d, 'sub'), 64, true)).toEqual({ state: 'unreadable' });
+    fs.symlinkSync('/dev/zero', path.join(d, 'zero'));
+    expect(readBounded(path.join(d, 'zero'), 64, true)).toEqual({ state: 'unreadable' });
+  });
+
+  // Root bypasses mode 000.
+  it.skipIf(process.getuid?.() === 0)('a file with mode 000 is unreadable, not absent', () => {
+    const d = dir();
+    fs.writeFileSync(path.join(d, 'locked'), 'abc', { mode: 0o000 });
+    expect(readBounded(path.join(d, 'locked'), 64, false)).toEqual({ state: 'unreadable' });
+  });
+
+  // Run in a CHILD, so a regression that blocks in open(2) cannot wedge this worker: the child is killed by the timeout.
+  it.skipIf(process.platform === 'darwin')('a FIFO with no writer answers unreadable at once and is never waited on', () => {
+    const d = dir();
+    const fifo = path.join(d, 'fifo');
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+    const r = spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e',
+      `import { readBounded } from ${JSON.stringify(pathToFileURL(STORE).href)}; process.stdout.write(JSON.stringify(readBounded(process.argv[1], 64, false)));`, fifo],
+    { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: d }, timeout: 10_000, killSignal: 'SIGTERM' });
+    expect(r.status, String(r.stderr)).toBe(0);
+    expect(r.stdout).toBe('{"state":"unreadable"}');
   });
 });

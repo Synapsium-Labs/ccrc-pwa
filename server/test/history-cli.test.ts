@@ -471,8 +471,9 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     expect(statusOf(box).env!['health']['pass']).toBe('ok');
   });
 
-  // F2: the sweep's readSmall stats BEFORE it opens (the `_reg_read` lesson: a FIFO with no writer blocks in open(2)
-  // for ever). status must do the same: a FIFO named *.obs returns within a bound and is reported unmeasured.
+  // F2: the sweep's readSmall opens ONCE, nonblocking, and judges the type on the descriptor (the `_reg_read` lesson: a
+  // FIFO with no writer blocks in open(2) for ever; D-4347). status must do the same: a FIFO named *.obs returns within
+  // a bound and is reported unmeasured.
   it('a FIFO named *.obs in spool/.draining does not hang status: it returns, FAIL status-unreadable naming spool/.draining', () => {
     const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-fifo-', { role: 'fleet', shim: true });
     ageFile(shimOf(box), 60 * 60_000);
@@ -487,6 +488,37 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     const fail = r.env!['health']['fail'] as Array<{ word: string; detail: string }>;
     expect(wordsOf(fail)).toEqual(['status-unreadable']);
     expect(fail[0]!.detail).toContain('spool/.draining');
+  });
+
+  it('a FIFO at history-max-gb, op, accounts.sh or store.id never blocks status (review 316 F10)', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-ctl-fifo-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const cap = healthPath.join(box.home, '.ccrc', 'history-max-gb');
+    const op = healthPath.join(box.home, '.ccrc', 'history', 'op');
+    const acc = healthPath.join(box.home, '.ccrc', 'accounts.sh');
+    const sid = healthPath.join(box.home, '.ccrc', 'history', 'store.id');
+    for (const file of [cap, op, acc, sid]) {
+      const saved = healthFs.existsSync(file) ? healthFs.readFileSync(file, 'utf8') : null;
+      healthFs.rmSync(file, { force: true });
+      healthCp.execFileSync('mkfifo', [file]);
+      try {
+        const r = statusOf(box, ['--json'], { preloads: [], env: {}, timeoutMs: 8_000 });
+        if (file === sid) {
+          expect(r.code, file).toBe(5);
+          expect(r.env!['reason'], file).toBe('store-unmeasured');
+        } else {
+          expect(r.code, file).toBe(0);
+          if (file === cap) {
+            expect(r.env!['cap_malformed']).toBe(true);
+            expect(r.env!['cap_gb']).toBe(50);
+          }
+        }
+      } finally {
+        healthFs.rmSync(file, { force: true });
+        if (saved !== null) healthFs.writeFileSync(file, saved);
+      }
+    }
   });
 
   it('a regular-file sidecar reached through a symlink is read as the sweep reads it (statSync follows): a held one is journal-unwritable once old', () => {

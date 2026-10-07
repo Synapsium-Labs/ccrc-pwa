@@ -267,6 +267,30 @@ describe('C42: import maps from evidence only', () => {
     expect(epochsOf(box, 'claude-a-nofile'), 'evidence that names no file on this box maps nothing, as the dry run listed').toEqual([]);
   });
 
+  it('planted registry entries never block or balloon the evidence read (review 316 F18)', () => {
+    const box = boundBox('ccrc-hist-c42f-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    const mapped = plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000000a1', 'mapped words', iso(0))]);
+    const u3 = plantTranscript(box, 'claude-a', SLUG, U3, [userRow('a0000000-0000-4000-8000-0000000000a2', 'no evidence names me', iso(0), U3)]);
+    // FIFOs block without allocating, so a regression is killed at the timeout; no /dev/zero here, which would allocate
+    // gigabytes first (readBounded's unit test pins the device row).
+    expect(spawnSync('mkfifo', [path.join(box.reg, 'claude-a-fifo.uuid')]).status).toBe(0);
+    expect(spawnSync('mkfifo', [path.join(box.reg, 'claude-a-fifo2.compactions')]).status).toBe(0);
+    fs.writeFileSync(path.join(box.reg, 'claude-a-big.generation'), G1);
+    const big = path.join(box.reg, 'claude-a-big.compactions');
+    const first = `${JSON.stringify({ transcript: u3 })}\n`;
+    fs.writeFileSync(big, first);
+    fs.truncateSync(big, 4 * 1024 * 1024 + 1);
+    const r = runShim(box, ['--op', 'import'], { timeoutMs: 30_000 });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain(`mapped ${ID} ${G1} ${mapped}`);
+    expect(r.stdout, 'a log over the cap gives no evidence').toContain(`unmapped ${u3}`);
+    fs.truncateSync(big, Buffer.byteLength(first));
+    const again = runShim(box, ['--op', 'import'], { timeoutMs: 30_000 });
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.stdout, 'CONTROL: the same log at its true size maps').toContain(`mapped claude-a-big ${G1} ${u3}`);
+  });
+
   it('an imported blob is searchable after the next scheduled tick: the import re-opens a completed FTS backfill', (ctx) => {
     const box = boundBox('ccrc-hist-c42c-');
     if (metaOf(box, 'fts') === 'fts5-absent') ctx.skip();        // a Node built without FTS5 has no index to search
@@ -624,6 +648,14 @@ describe('the op marker (§9.6)', () => {
     expect(fs.existsSync(opFile(box)), 'a scheduled pass removes a dead pid\'s marker').toBe(false);
   });
 
+  it('a FIFO at the op marker is stale: a scheduled pass removes it and exits 0 promptly', () => {
+    const box = boundBox('ccrc-hist-opm-c-');
+    expect(spawnSync('mkfifo', [opFile(box)]).status).toBe(0);
+    const r = runSweep(box, [], { timeoutMs: 30_000 });
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.existsSync(opFile(box))).toBe(false);
+  });
+
   it('a scheduled pass removes a malformed marker and keeps one naming a live pid', () => {
     const box = boundBox('ccrc-hist-opm-b-');
     for (const junk of ['garbage', '', 'import 4242', 'import 0 1700000000000\n']) {
@@ -755,6 +787,18 @@ describe('O38: the export\'s due rule (B1 half)', () => {
     fs.utimesSync(nullFile, now, now);
     census(box, MS, 1);
     expect(due(box), 'with a fresh file the NULL-ts row is young').toBe(1);
+  });
+
+  it('a FIFO at a rostered home\'s settings.json never blocks the census: retention_unmeasured counts, the home keeps 180 (review 316 F10)', () => {
+    const { box, MS } = censusBox('ccrc-hist-o38f-');
+    const h = box.homes.find((x) => x.endsWith('.claude-a'))!;
+    const before = counter(box, 'retention_unmeasured');
+    fs.rmSync(path.join(h, 'settings.json'));
+    expect(spawnSync('mkfifo', [path.join(h, 'settings.json')]).status).toBe(0);
+    const r = runDriver(box, { offsetMs: 31 * MIN, managedSettings: MS }, [], { timeoutMs: 30_000 });
+    expect(r.code, r.stderr).toBe(0);
+    expect(counter(box, 'retention_unmeasured') - before).toBe(1);
+    expect(metaOf(box, `retention:${h}`)).toBe('180');
   });
 
   it('overdue by the file clock: a due blob whose holding file is gone, or past its mtime plus its home\'s retention, FAILs; fresh files never', () => {

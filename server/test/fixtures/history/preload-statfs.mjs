@@ -58,7 +58,8 @@ syncBuiltinESMExports();
 // The periodic census reads Claude Code's managed-settings file and its drop-in directory under
 // /etc/claude-code, and every store's first pass runs a census. So that the box running the suite never decides
 // a retention (or, unreadable, a retention_unmeasured WARN), any read of /etc/claude-code or a path under it
-// answers ENOENT, as on a box with no managed settings. O38's cases inject fixture paths through the run-pass
+// answers ENOENT, as on a box with no managed settings. The census's settings reads open through store.mjs's `readBounded`
+// (openSync, D-4347), the drop-in directory through readdirSync and an older read through readFileSync, so all three are hidden. O38's cases inject fixture paths through the run-pass
 // driver instead. HISTORY_TEST_MANAGED_REAL=1 lets the real files through; no case sets it, and historyHelpers'
 // scrubbedEnv drops every inherited HISTORY_TEST_* variable.
 import fsM26 from 'node:fs';
@@ -70,6 +71,7 @@ import { syncBuiltinESMExports as syncM26 } from 'node:module';
       { code: 'ENOENT', errno: -2, syscall, path: p });
     const realReadFileM26 = fsM26.readFileSync;
     const realReaddirM26 = fsM26.readdirSync;
+    const realOpenM26 = fsM26.openSync;
     fsM26.readFileSync = function readFileSyncM26(p, ...rest) {
       if (managedM26(p)) throw goneM26(p, 'open');
       return realReadFileM26.call(fsM26, p, ...rest);
@@ -77,6 +79,10 @@ import { syncBuiltinESMExports as syncM26 } from 'node:module';
     fsM26.readdirSync = function readdirSyncM26(p, ...rest) {
       if (managedM26(p)) throw goneM26(p, 'scandir');
       return realReaddirM26.call(fsM26, p, ...rest);
+    };
+    fsM26.openSync = function openSyncM26(p, ...rest) {
+      if (managedM26(p)) throw goneM26(p, 'open');
+      return realOpenM26.call(fsM26, p, ...rest);
     };
     syncM26();
   }

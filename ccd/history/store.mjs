@@ -18,12 +18,12 @@
 // never yields, and nothing here wraps it async.
 import { DatabaseSync } from 'node:sqlite';
 import {
-  chmodSync, closeSync, constants as FS, existsSync, fchmodSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
-  readdirSync, readFileSync, readSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeSync,
+  chmodSync, closeSync, constants as FS, existsSync, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
+  readdirSync, readSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
-import { BUSY_TIMEOUT_MS, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, UUID_RE, WRITER_RE, historyPaths, newSha256 } from './lib.mjs';
+import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, UUID_RE, WRITER_RE, historyPaths, newSha256 } from './lib.mjs';
 
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
 export const CODEC = 'br5';
@@ -456,16 +456,52 @@ export function writeFileAtomic(path, text, mode = 0o600) {
   fsyncDir(path.slice(0, path.lastIndexOf('/')));
 }
 
+/** The one reader of every small file the history modules read whole (D-4347, history-planted-entries-never-wedge):
+ *  ONE open with O_RDONLY|O_NONBLOCK (plus O_NOFOLLOW unless `follow`), with the type and the size judged on the
+ *  DESCRIPTOR, so a FIFO, socket, device or directory is never waited on and no stat can be raced into one between the
+ *  check and the open (the `_reg_read` lesson). At most `max` bytes are read: a larger file answers `over-cap`, and one
+ *  that grows while it is read answers `unreadable`. It never folds its answers: `absent` is ENOENT, `unreadable` is every
+ *  other failure (a refused link, ELOOP; EACCES; a socket, ENXIO; a non-regular descriptor), and each caller folds
+ *  `over-cap` where its own rule already folds `unreadable`. `follow` is false for the writer's own files under
+ *  `~/.ccrc/history`, which only `db/` may link out of (§9.3), and true for operator and registry files. */
+export function readBounded(path, max, follow) {
+  let fd;
+  try {
+    fd = openSync(path, FS.O_RDONLY | FS.O_NONBLOCK | (follow ? 0 : FS.O_NOFOLLOW));
+  } catch (e) {
+    return e && e.code === 'ENOENT' ? { state: 'absent' } : { state: 'unreadable' };
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return { state: 'unreadable' };
+    if (st.size > max) return { state: 'over-cap' };
+    const buf = Buffer.allocUnsafe(st.size + 1);
+    let n = 0;
+    for (;;) {
+      const r = readSync(fd, buf, n, buf.length - n, n);
+      if (r === 0) break;
+      n += r;
+      if (n === buf.length) return { state: 'unreadable' };   // it grew while it was read
+    }
+    return { state: 'value', value: buf.toString('utf8', 0, n) };
+  } catch {
+    return { state: 'unreadable' };
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** One binding file (`store.id`, `store.id.pending`, `store.writer`) as a
  *  Presence: absent, unreadable, or its trimmed value. A value that fails its
  *  grammar is UNREADABLE, never absent — absent means "no store was bound",
  *  which a garbled file does not say (IV5). */
 function readBindingFile(path, re) {
-  let text;
-  try { text = readFileSync(path, 'utf8'); } catch (e) {
-    return e && e.code === 'ENOENT' ? { state: 'absent' } : { state: 'unreadable' };
-  }
-  const v = text.trim();
+  // D-4347 (history-planted-entries-never-wedge): one bounded nonblocking open that refuses a link (only db/ may be one,
+  // §9.3), so a FIFO or a link at a binding file is store-unmeasured and never waited on.
+  const r = readBounded(path, CONTROL_FILE_MAX, false);
+  if (r.state === 'absent') return { state: 'absent' };
+  if (r.state !== 'value') return { state: 'unreadable' };
+  const v = r.value.trim();
   return re.test(v) ? { state: 'value', value: v } : { state: 'unreadable' };
 }
 
@@ -734,11 +770,10 @@ const attemptMarker = (home, n) => `${historyPaths(home).backups}/.pre-v${n}.att
  *  direction: a scheduled pass then answers `snapshot-needs-op` rather than
  *  copy again on a guess, and the operator's `--op migrate` is unbounded. */
 export function readAttempts(home, n) {
-  let text;
-  try { text = readFileSync(attemptMarker(home, n), 'utf8'); } catch (e) {
-    return e && e.code === 'ENOENT' ? 0 : MAX_INTERRUPTED_ATTEMPTS;
-  }
-  const v = text.trim();
+  const r = readBounded(attemptMarker(home, n), CONTROL_FILE_MAX, false);
+  if (r.state === 'absent') return 0;
+  if (r.state !== 'value') return MAX_INTERRUPTED_ATTEMPTS;
+  const v = r.value.trim();
   return /^[0-9]{1,6}$/.test(v) ? Number(v) : MAX_INTERRUPTED_ATTEMPTS;
 }
 

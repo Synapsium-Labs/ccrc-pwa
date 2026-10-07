@@ -35,7 +35,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { isatty } from 'node:tty';
 import { pathToFileURL } from 'node:url';
 import {
-  CARRIER_KILL_S, EXIT, SPOOL_FILE_MAX, OBS_FILE_MAX, observationOk, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
+  CARRIER_KILL_S, EXIT, SPOOL_FILE_MAX, OBS_FILE_MAX, CONTROL_FILE_MAX, observationOk, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
   UUID_RE, WRITER_RE, drainingNameOk, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
   passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
@@ -51,7 +51,7 @@ import {
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
   measureStoreFacts, measuredSize, openReader, openWriter, readAttempts, removeStaleMigrationTemps, removeStaleTemps, runMigration, setMeta,
-  syncWriterMirror, userVersion, withTx, writeFileAtomic, removeEntry,
+  syncWriterMirror, userVersion, withTx, writeFileAtomic, removeEntry, readBounded,
   CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
@@ -104,11 +104,11 @@ export async function statfsWithDeadline(p, ms, statfs = (q) => fs.promises.stat
 }
 
 /** The cap file's text, or null when absent. An unreadable file is the empty
- *  string — malformed, so the default applies and doctor WARNs (§9.3). */
+ *  string — malformed, so the default applies and doctor WARNs (§9.3). One bounded nonblocking open (D-4347,
+ *  history-planted-entries-never-wedge): a FIFO, a device or a file over CONTROL_FILE_MAX is unreadable, never waited on. */
 function capText(capPath) {
-  try { return readFileSync(capPath, 'utf8'); } catch (e) {
-    return e && e.code === 'ENOENT' ? null : '';
-  }
+  const r = readBounded(capPath, CONTROL_FILE_MAX, true);
+  return r.state === 'absent' ? null : r.state === 'value' ? r.value : '';
 }
 
 // ── The journal (spec §9.14) ──────────────────────────────────────────────────────────────────────────────
@@ -293,6 +293,9 @@ export function countOutside(db, name, by = 1) {
 
 /** Registry values ccd writes are a few dozen bytes; anything larger was not written by ccd. */
 const REG_VALUE_MAX = 4096;
+/** A compaction journal record is under 1 KiB of metadata, so 4 MiB holds thousands; an over-cap or unreadable log gives no
+ *  evidence, and its transcripts are listed unmapped (importEvidence; D-4347, history-planted-entries-never-wedge). */
+const REG_LOG_MAX = 4 * 1024 * 1024;
 /** The absent and unreadable Presences. `ABSENT` is this Presence object; Task 22's set of absent-file error codes
  *  is a different value under its own name, `ABSENT_CODES`, so the module never declares `ABSENT` twice. */
 const ABSENT = Object.freeze({ state: 'absent' });
@@ -322,18 +325,14 @@ export function idOfDrainingName(name) {
 /** `.jsonl` replaced by `.obs`, not appended to it: `<file>.obs` would not fit 255 bytes at SPOOL_ID_MAX. */
 export function sidecarName(name) { return `${name.slice(0, -'.jsonl'.length)}.obs`; }
 
-/** Read a small regular file, with its type checked BEFORE the open. This is the `_reg_read` lesson
- *  (ccd/ccd:3238-3246): a FIFO with no writer blocks in open(2) forever, and a link to /dev/zero blocks in read(2).
- *  Absent and unreadable are two answers, never folded together (rev 3.2 review, IV5). */
+/** Read a small regular file in ONE open, with its type and size judged on the descriptor (D-4347,
+ *  history-planted-entries-never-wedge). This is the `_reg_read` lesson (ccd/ccd:3238-3246): a FIFO with no writer
+ *  blocks in open(2) forever, and a link to /dev/zero blocks in read(2). A stat followed by an open could be raced into
+ *  either, so store.mjs's `readBounded` opens nonblocking and judges the descriptor, and a FIFO or device is never
+ *  waited on. Absent and unreadable are two answers, never folded together (rev 3.2 review, IV5). */
 function readSmall(path, max) {
-  let st;
-  try { st = statSync(path); } catch (e) { return e && e.code === 'ENOENT' ? ABSENT : UNREADABLE; }
-  if (!st.isFile() || st.size > max) return UNREADABLE;
-  try {
-    return { state: 'value', value: readFileSync(path, 'utf8') };
-  } catch (e) {
-    return e && e.code === 'ENOENT' ? ABSENT : UNREADABLE;
-  }
+  const r = readBounded(path, max, true);
+  return r.state === 'value' ? { state: 'value', value: r.value } : r.state === 'absent' ? ABSENT : UNREADABLE;
 }
 
 /** One registry field as a Presence. The value is trimmed: ccd writes `printf '%s'`, and the hook's `_ct_read`
@@ -1674,7 +1673,8 @@ export async function tick(db, ctx) {
 
 /** Bytes of a file, trimmed, or null when it cannot be read. */
 function readTrimmed(p) {
-  try { return readFileSync(p, 'utf8').trim(); } catch { return null; }
+  const r = readBounded(p, CONTROL_FILE_MAX, false);
+  return r.state === 'value' ? r.value.trim() : null;
 }
 
 /** A directory's entry names, or [] when it cannot be listed. */
@@ -1695,12 +1695,9 @@ export function idsFromFiles(P) {
  *  file, one key, readBoxEnvValue's rules (pinned to _box_env_value by O53). Anything else is '' (not
  *  server), as an absent key is. */
 export function readRole(P) {
-  let text;
-  try {
-    if (!statSync(P.ccrcEnv).isFile()) return '';
-    text = readFileSync(P.ccrcEnv, 'utf8');
-  } catch { return ''; }
-  const r = readBoxEnvValue(text, 'CCRC_ROLE');
+  const f = readBounded(P.ccrcEnv, CONTROL_FILE_MAX, true);
+  if (f.state !== 'value') return '';
+  const r = readBoxEnvValue(f.value, 'CCRC_ROLE');
   return r.found ? r.value : '';
 }
 
@@ -2603,8 +2600,8 @@ function ingestScanDue(db, nowMs) {
 }
 
 /** `$REG/<id>.uuid` when it holds a uuid, else null. A discovery hint only: no epoch is decided
- *  from it here (§9.2 step 1 decides from the observation sidecar). The read is type-checked before
- *  the open (readRegPresence, the `_reg_read` lesson, as knownUuids): a FIFO or a link to /dev/zero at
+ *  from it here (§9.2 step 1 decides from the observation sidecar). The read is type-checked (readRegPresence's
+ *  one nonblocking open, D-4347 history-planted-entries-never-wedge; the `_reg_read` lesson, as knownUuids): a FIFO or a link to /dev/zero at
  *  a hinted id's path would otherwise block this pass in open(2) or read(2), which no run budget can
  *  interrupt, so a FIFO hints nothing (D-4299, slug history-reg-uuid-read-type-checked). */
 function readRegUuid(home, id) {
@@ -3055,7 +3052,8 @@ const ABSENT_CODES = new Set(['ENOENT', 'ENOTDIR']);
 /** The largest secret file loadSecrets opens. sessions.json holds one idHash per session, so it needs
  *  headroom; anything larger is not a secret list. A stat before the open, as the _reg_read lesson
  *  (D-4300, history-secret-file-read-type-checked): a FIFO with no writer blocks in open(2) for good and
- *  a link to /dev/zero balloons in read(2), and secrets run first every tick. */
+ *  a link to /dev/zero balloons in read(2), and secrets run first every tick. The read itself is `readBounded`'s one
+ *  nonblocking open (D-4347, history-planted-entries-never-wedge), so a file swapped for a FIFO after the stat is no wait. */
 const SECRET_FILE_MAX = 4 * 1024 * 1024;
 
 const SECRET_STMTS = new WeakMap();
@@ -3126,12 +3124,10 @@ export function loadSecrets(home, secretFiles) {
     }
     if (st.isDirectory()) return;
     if (!st.isFile() || st.size > SECRET_FILE_MAX) { unreadable.push(file); return; }
-    let text;
-    try { text = readFileSync(file, 'utf8'); } catch (e) {
-      if (ABSENT_CODES.has(e?.code) || e?.code === 'EISDIR') return;
-      unreadable.push(file);
-      return;
-    }
+    const r = readBounded(file, SECRET_FILE_MAX, true);
+    if (r.state === 'absent') return;
+    if (r.state !== 'value') { unreadable.push(file); return; }
+    const text = r.value;
     if (kind === 'sessions') {
       for (const p of sessionHashPairs(text)) pairs.set(`${p.len}:${p.sha256}`, p);
       return;
@@ -3639,10 +3635,11 @@ export function readOpMarker(P) {
 
 /** A marker whose pid is dead, or which names none, is stale: the next pass removes it (§9.6). */
 export function removeStaleOpMarker(P) {
-  const text = readTrimmed(P.op);
-  if (text === null) return;
-  const m = parseOpMarker(text);
-  if (m === null || !pidAlive(m.pid)) rmSync(P.op, { force: true });
+  const r = readBounded(P.op, CONTROL_FILE_MAX, false);
+  if (r.state === 'absent') return;
+  // An unreadable marker (a FIFO, a link, a directory, over the cap) names no live pid, so it is stale (D-4347).
+  const m = r.state === 'value' ? parseOpMarker(r.value.trim()) : null;
+  if (m === null || !pidAlive(m.pid)) removeEntry(P.op);
 }
 
 /** Written under the lock when an --op pass starts; removed when it ends (§9.6). */
@@ -3718,14 +3715,15 @@ export function importEvidence(db, P) {
   for (const name of regNames) {
     const u = /^(.+)\.uuid$/.exec(name);
     if (u === null || !idOk(u[1])) continue;
-    const uuid = readTrimmed(join(P.reg, name));
-    if (uuid !== null) put(uuid, { id: u[1], generation: registryGenerationOf(P, u[1]), declaredBy: 'registry', path: null });
+    const p = readRegPresence(join(P.reg, name));
+    if (p.state === 'value') put(p.value, { id: u[1], generation: registryGenerationOf(P, u[1]), declaredBy: 'registry', path: null });
   }
   for (const name of regNames) {
     const c = /^(.+)\.compactions$/.exec(name);
     if (c === null || !idOk(c[1])) continue;
-    let text;
-    try { text = readFileSync(join(P.reg, name), 'utf8'); } catch { continue; }
+    const r = readBounded(join(P.reg, name), REG_LOG_MAX, true);
+    if (r.state !== 'value') continue;
+    const text = r.value;
     for (const line of text.split('\n')) {
       let rec;
       try { rec = JSON.parse(line); } catch { continue; }
@@ -4041,13 +4039,13 @@ const EXPORT_CENSUS_CHUNK = 2000;
  *  through deps.managedSettings — an in-process dependency, never an env var (slug history-test-seams-not-env). */
 export const MANAGED_SETTINGS = Object.freeze(['/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-settings.d']);
 
+/** The read bound of a retention settings file; one holds a few KiB of JSON. An over-cap file is unreadable (D-4347). */
+const SETTINGS_FILE_MAX = 4 * 1024 * 1024;
+
 /** A file as lib.mjs's Readable: absent, unreadable, or its text. Never folded (IV5). */
 function readable(p) {
-  try {
-    return { state: 'text', text: readFileSync(p, 'utf8') };
-  } catch (e) {
-    return e !== null && typeof e === 'object' && e.code === 'ENOENT' ? { state: 'absent' } : { state: 'unreadable' };
-  }
+  const r = readBounded(p, SETTINGS_FILE_MAX, true);
+  return r.state === 'value' ? { state: 'text', text: r.value } : r.state === 'absent' ? { state: 'absent' } : { state: 'unreadable' };
 }
 
 /** Every managed-settings source as a Readable, a drop-in directory expanded to its *.json files (sorted). */

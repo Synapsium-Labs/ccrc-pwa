@@ -18,8 +18,11 @@
 #   3. history-off ends a SCHEDULED pass here. An `--op` pass goes on: its gate
 #      in sweep.mjs answers `history-off` by name for every form but the
 #      binding verbs, so the operator reads why (D-4181).
-#   4. the roster, only when ~/.ccrc/accounts.sh is readable and defines
-#      _ccrc_cfg_dir: each account's home and its declared secrets file. An
+#   4. the roster, only when ~/.ccrc/accounts.sh is a regular, readable file
+#      (`-f` first: sourcing a FIFO blocks in open(2) while the lock is held,
+#      D-4347 history-planted-entries-never-wedge; a swap between the test and
+#      the source is a residual race bash cannot close without a subprocess)
+#      and defines _ccrc_cfg_dir: each account's home and its declared secrets file. An
 #      unreadable roster is passed on as --roster-unreadable with no homes —
 #      counted by the sweep, never read as an empty roster (FE4).
 #   5. exec node on the placed tree's sweep.mjs, the lock's fd 9 inherited.
@@ -49,7 +52,7 @@ homes=()
 secrets=()
 rflag=""
 # shellcheck source=/dev/null
-if [ -r "$ACCOUNTS_SH" ] && . "$ACCOUNTS_SH" 2>/dev/null && declare -F _ccrc_cfg_dir >/dev/null 2>&1; then
+if [ -f "$ACCOUNTS_SH" ] && [ -r "$ACCOUNTS_SH" ] && . "$ACCOUNTS_SH" 2>/dev/null && declare -F _ccrc_cfg_dir >/dev/null 2>&1; then
   for a in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do
     d="$(_ccrc_cfg_dir "$a")"
     [ -n "$d" ] && homes+=("$d")

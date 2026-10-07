@@ -169,6 +169,50 @@ describe('the sweep: skeleton, store open and refusals, and the shim', () => {
     expect(counters(box)['roster_unreadable']).toBe(1);
   });
 
+  it('a FIFO at history-max-gb never blocks a pass: the default cap applies (review 316 F10)', () => {
+    const box = makeHistoryBox('ccrc-history-sweep-');
+    const P = historyPaths(box.home);
+    expect(runSweep(box).code).toBe(0);
+    expect(spawnSync('mkfifo', [P.cap]).status).toBe(0);
+    const r = runSweep(box, [], { timeoutMs: 30_000 });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.ms).toBeLessThan(25_000);
+  });
+
+  it.each(['storeId', 'writer', 'pending'] as const)('a FIFO at the binding file %s is store-unmeasured, exit 5, promptly (review 316 F10)', (k) => {
+    const box = makeHistoryBox('ccrc-history-sweep-');
+    const P = historyPaths(box.home);
+    expect(runSweep(box).code).toBe(0);
+    fs.rmSync(P[k], { force: true });
+    expect(spawnSync('mkfifo', [P[k]]).status).toBe(0);
+    const r = runSweep(box, [], { timeoutMs: 30_000 });
+    expect(r.code, r.stderr).toBe(5);
+    expect(r.stdout).toMatch(/^history-sweep: store-unmeasured$/m);
+    expect(r.ms).toBeLessThan(25_000);
+  });
+
+  it('a store.id that is a symlink is store-unmeasured: only db/ may be a link (§9.3)', () => {
+    const box = makeHistoryBox('ccrc-history-sweep-');
+    const P = historyPaths(box.home);
+    expect(runSweep(box).code).toBe(0);
+    fs.renameSync(P.storeId, path.join(box.home, 'id-real'));
+    fs.symlinkSync(path.join(box.home, 'id-real'), P.storeId);
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(5);
+    expect(r.stdout).toMatch(/^history-sweep: store-unmeasured$/m);
+  });
+
+  it('a FIFO at accounts.sh never blocks the shim: --roster-unreadable, counted, exit 0 promptly (review 316 F10)', () => {
+    const box = makeHistoryBox('ccrc-history-sweep-');
+    expect(runShim(box).code).toBe(0);
+    fs.rmSync(historyPaths(box.home).accountsSh);
+    expect(spawnSync('mkfifo', [historyPaths(box.home).accountsSh]).status).toBe(0);
+    const r = runShim(box, [], { timeoutMs: 30_000 });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.ms).toBeLessThan(25_000);
+    expect(counters(box)['roster_unreadable']).toBe(1);
+  });
+
   it('S7: a dangling db/ link is refused, and nothing is created through or beside it', () => {
     const box = makeHistoryBox('ccrc-history-sweep-');
     const P = historyPaths(box.home);
