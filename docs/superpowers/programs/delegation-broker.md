@@ -34,8 +34,8 @@ Wave 1's answers to spec §8.1, per Claude Code version, read from the committed
 synthetic rig captures: mock API, fixture HOME, fixture repo). The on-box census names projects by label only, and
 the hook-side costs are below. Wave 2 (run 306) added the real-lane cross-check (two lanes, D-3995) under its own
 heading, and nothing in a later wave may depend on a hook field that the corpus and the cross-check have not measured
-(spec §8.1). The cross-check's evidence is not committed, so a field only it shows counts once the wave measures it
-again (see "Real-lane cross-check").
+(spec §8.1). The cross-check's evidence is not committed, so a field only it shows counts only once a later wave
+measures it again (see "Real-lane cross-check").
 
 **Versions covered:** 2.1.280, 2.1.281, 2.1.285, 2.1.286, 2.1.287, 2.1.288, 2.1.289, 2.1.290, 2.1.291 and 2.1.292, each
 with 14 scenarios, and all 140 cells are `measured`. The corpus counts in the prose below the table, in "What the
