@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c80943567173f8210777653996e5f9027d9bc6a60a9355c97302eca6e422c105
+# ccrc:generated 1 sha256=97a4de7bb4c6de8a711d4301c1b3a39386445bf463aed9cf0cdb6f38b54161e3
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -20109,6 +20109,22 @@ _route_readback_transcript() {   # id class stamp later-ts later-model -> ONE li
   # `with <level> effort`, and a default level follows a model change, so the
   # newest `/effort` acknowledgement is not proof of the level running.
   #
+  # TWO RESIDUAL RISKS, stated rather than closed (review findings 4 and 7):
+  #   - A `(default)` acknowledgement (`Opus 5.5 (default)`) names what the
+  #     picker's Default row resolved to AT THAT MOMENT. With the setting null,
+  #     Claude Code re-resolves the default per request (org, entitlement, tier,
+  #     served), and a change there writes no transcript row, so a class read
+  #     back from it is a claim about the ack's time. Only a later sidecar
+  #     reading (refusal 5) can catch the drift; refusing `(default)` outright,
+  #     as the `default` class is, is the stricter alternative, not taken.
+  #   - The ack is bounded in TIME, not tied to the process that wrote it:
+  #     rows carry no process identity, so any writer appending to the same
+  #     `<uuid>.jsonl` after `_pane_born` — the operator's own `claude --resume
+  #     <uuid>` elsewhere, an orphaned previous process — is believed.
+  #     Attribution, not authentication, as everywhere on this fleet; ccd's own
+  #     paths are sound, since it never respawns a pane inside a living tmux
+  #     session.
+  #
   # NO OVERLOADED NULL. Each refusal is its own word, and none counts:
   # `lane` (a non-Anthropic lane, whose acknowledgement can name no class),
   # `unnamed` (no transcript address: the row lacks a config dir, workdir or
@@ -20133,7 +20149,16 @@ _route_readback_transcript() {   # id class stamp later-ts later-model -> ONE li
   # once per render, so the key costs a re-read only then. The
   # transient refusals — lane, unnamed, absent, unreadable, unplaced, unmeasured —
   # are never kept, and `matched` records the class, after which nothing is
-  # pending to ask.
+  # pending to ask. WHAT AN UNCHANGED TICK STILL COSTS (review finding 10),
+  # measured with strace on a pending tick whose sidecar is stale and whose
+  # memo hits: 26 execs past the shell, against the base tick's 15 — the
+  # applied-class read, the stamp's stat and the uuid read (now ahead of the
+  # sidecar, since both witnesses need them), the lane gate's wrapper read,
+  # `_transcript_path`'s three registry reads and two `tr`, the mtime and size
+  # stats, and the memo read; no tmux and no python3. And a GROWING transcript
+  # misses the memo every tick (review finding 11): a busy pane whose sidecar
+  # cannot answer — a box whose status line finds neither `timeout` nor
+  # `gtimeout` writes none — pays `_pane_born` and one bounded read per tick.
   local id="$1" cls="$2" stamp="$3" lts="${4:--}" lmodel="${5:--}" f m s key rec out kind word at shown ack="" said="" named="" drift=0 born v
   _is_anthropic_backend "$(_reg_get "$id" wrapper)" || { echo lane; return 0; }   # a non-Anthropic lane's ack names no class (`gpt-5.6-*`): never `matched`, so never read — the keep skips it the same way (review finding 6)
   f=$(_transcript_path "$id") || { echo unnamed; return 0; }
