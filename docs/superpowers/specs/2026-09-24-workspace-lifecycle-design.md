@@ -347,8 +347,9 @@ worktree. It deletes:
 This is not the 2026-09-23 manual procedure, which tarred ignored files and refused dirty trees. The operator
 accepted the difference (§2).
 
-**The lane.** CCR-15 wave 4's `sweepChildReclaim` pass hosts a second population. It shares the pass's registry
-read, its cadence (`CHILD_RECLAIM_SWEEP_MS`) and the switch, and nothing else. It has:
+**The lane.** A sibling of CCR-15 wave 4's `sweepChildReclaim` pass, on the same tick, never a population inside it
+(wave 3b's sibling pass). It shares the pass's registry read, its cadence (`CHILD_RECLAIM_SWEEP_MS`) and the switch,
+and nothing else. It has:
 - its own L1 verdict, `archivedExpiryVerdict`, in its own file;
 - its own entry map and clocks. Wave 5's chip reads the child lane's defer map, and it must never see an expiry
   entry;
@@ -464,6 +465,12 @@ each item is a departure named there).
 - **A standing `in-use` is expected.** It is asked again every pass and, after a few, listed with the pid, its command
   and its path; the text never tells an operator to end a pid without naming what it is (the fleet's own tmux server is
   also a `tmux: server`). The lane never kills.
+- **Review 313's residue, closed by wave 4** (each a departure named in the wave-4 plan,
+  `docs/superpowers/plans/2026-10-07-workspace-lifecycle-wave4-dead-coordinator-lane.md`). A learn audit that cannot be
+  read, or reads no archive, backs off on the failure ladder and is listed, and learn slots go in `nextAskAt` order; a
+  failure ccd says will not resume is listed at once and never asked again for that archive; an ineligible sighting
+  clears every report the row holds; a refusal whose audit names another archive is a row that moved; and the held
+  sentence names its instant (`due <instant>`), never a period.
 - **The attention list is the lane's own memory.** Child reclamation derives its list from the lifecycle mirror alone; the
   expiry's entries (a shadow `would-expire`, a `held` row past its instant, a standing `in-use`, a refusal, a failure, no
   evidence) are mostly never journaled, so the lane lists them from its own passes and a restart rebuilds the list over
@@ -559,7 +566,9 @@ agent frame in remote mode.
      this design's wave 3 (3965): CCR-15's §6 now names `ws-reap`'s `expire-in-progress` refusal beside its `reclaim:`
      mirror, and `ws-restore`'s refusal of an expiry in progress.
   5. `closeRun`'s `causedBy` vocabulary gains `'sweep'` (§5.4).
-  6. Wave 4's lane gains a second population (§5.3).
+  6. Wave 4's lane gains a second population (§5.3). Amended by this design’s wave 3b, recorded by wave 4: the expiry
+     lane is a SIBLING pass on the same tick, never a population inside `sweepChildReclaim`, so CCR-15's sweep and its
+     text are unchanged.
   7. The contract's `shared/api.ts` line citations (R9), which waves 1 and 2 must place below or re-point (§4).
 - **CLAUDE.md** (§5.3), and its box-token census for the archive route (§5.2).
 - **Landing-order.** Its stage 5 keys landing entries and intents to runs, and stage 4's lane can fail such a run.

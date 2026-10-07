@@ -43,9 +43,10 @@ describe('the coordinator’s reference, §6', () => {
     expect(s).toContain('`has-coordinated` means the child has coordinated a run, so its workspace is cleaned up by a human. No');
     expect(s).toContain('it stays until a human cleans it up, or — when it carries no child marker — until the server cleans it up seven days after it is archived, once the operator has armed the server’s expiry lane (until then the lane only records what it would expire)');
   });
-  it('clause 3 says it too: the cleanup follows the archive once the operator has armed the lane', () => {
+  it('clause 3 says it too: the cleanup follows the archive once the operator has armed the lane — never for a child', () => {
+    // A nested coordinator's own workspace is a CHILD, CCR-15's, never expired (review 313, parked item 3).
     const clause = flat('ccd/coordinator-skill/SKILL.md');
-    expect(clause).toContain('this session’s own workspace is cleaned up by a human, or by the server seven days after it is archived once the operator has armed the server’s expiry lane (until then the lane only records what it would expire).');
+    expect(clause).toContain('this session’s own workspace is cleaned up by a human, or — when it carries no child marker — by the server seven days after it is archived once the operator has armed the server’s expiry lane (until then the lane only records what it would expire).');
   });
   it('no skill file names the lane’s live switch — a session told about the dial could arm a deletion', () => {
     const skills = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill'];
@@ -70,5 +71,10 @@ describe('the specs', () => {
     // The words carry the arming condition (the coordinator's ruling), and the two spec places that quote clause 3 say so.
     expect(s).toContain('**The words carry the arming condition**');
     expect(s).toContain('Coordinator clause 3\'s closing sentence (§5.3). Amended by this design’s wave 3b');
+    // Review 313's residue, closed by wave 4: each of its departures reaches §5.3's list, so the spec says what shipped.
+    expect(s).toContain("**Review 313's residue, closed by wave 4**");
+    for (const said of ['backs off on the failure ladder and is listed', 'learn slots go in `nextAskAt` order',
+      'listed at once and never asked again for that archive', 'clears every report the row holds',
+      'is a row that moved', 'names its instant (`due <instant>`), never a period']) expect(s).toContain(said);
   });
 });
