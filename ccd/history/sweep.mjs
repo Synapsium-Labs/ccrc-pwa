@@ -2804,8 +2804,13 @@ export function loadSecrets(home, secretFiles) {
     for (const p of sp.pairs) pairs.set(`${p.len}:${p.sha256}`, p);
     unsegmentable += sp.unsegmentable;
   };
-  for (const src of SECRET_SOURCES) for (const f of expandSecretSource(home, src, unreadable)) take(f, secretKindOf(src, f));
-  for (const f of secretFiles) take(f, secretKindOf(null, f));
+  // Each path is taken once: the roster's default secretsFile (`.cc-secrets/<id>-oauth.env`) is also what the
+  // `.cc-secrets/*` glob yields, and an unreadable one would be listed (and counted) twice. The frozen-list entry
+  // wins, because only it can carry `env-identifier` or `sessions` (Task 24F, Task 22's "once per unreadable path per tick").
+  const wanted = new Map();
+  for (const src of SECRET_SOURCES) for (const f of expandSecretSource(home, src, unreadable)) if (!wanted.has(f)) wanted.set(f, secretKindOf(src, f));
+  for (const f of secretFiles) if (!wanted.has(f)) wanted.set(f, secretKindOf(null, f));
+  for (const [f, kind] of wanted) take(f, kind);
   return { values: [...values], pairs: [...pairs.values()], unreadable, unsegmentable };
 }
 

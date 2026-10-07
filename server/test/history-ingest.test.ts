@@ -1587,6 +1587,7 @@ describe('history ingest: sidecars (plan task 21)', () => {
 
 interface IxSweep {
   secretsStep(db: DatabaseSync, ctx: IxCtx, secretFiles: string[]): { pairIdx: unknown; newValues: string[]; values: string[] };
+  loadSecrets(home: string, secretFiles: string[]): { values: string[]; pairs: unknown[]; unreadable: string[]; unsegmentable: number };
 }
 
 describe('history ingest: secrets per tick (plan task 22)', () => {
@@ -1706,6 +1707,29 @@ describe('history ingest: secrets per tick (plan task 22)', () => {
       expect(pairsIn(db)).toContain(`64:${sha(value)}`);
     } finally { db.close(); }
     expect(counters(box)['redact_source_unreadable']).toBe(6);   // three paths, two ticks
+  });
+
+  it('Task 24F: a declared secretsFile that the .cc-secrets glob also yields is taken once: an unreadable one counts +1 per tick and is named once, a readable one gives its pairs once', async () => {
+    const box = IX.newBox('ccrc-hist-sec-dedupe-');
+    const value = hex(32);
+    const dir = path.join(box.home, '.cc-secrets');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const fifo = path.join(dir, 'claude-a-oauth.env');   // the roster's default secretsFile location
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+    const good = put(box.home, '.cc-secrets/claude-b-oauth.env', `CLAUDE_CODE_OAUTH_TOKEN=${value}\n`);
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const ctx = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids);
+      const loaded = S.loadSecrets(box.home, [fifo, good]);
+      expect(loaded.unreadable).toEqual([fifo]);
+      expect(loaded.values).toEqual([value]);
+      expect(loaded.pairs).toHaveLength(1);
+      const r = S.secretsStep(db, ctx, [fifo, good]);
+      expect(r.values).toEqual([value]);
+      expect((db.prepare("SELECT n FROM counters WHERE name = 'redact_source_unreadable'").get() as { n: number }).n).toBe(1);
+      expect(JSON.parse((db.prepare("SELECT v FROM meta WHERE k = 'redact_unreadable'").get() as { v: string }).v)).toEqual([fifo]);
+      expect(pairsIn(db)).toEqual([`64:${sha(value)}`]);
+    } finally { db.close(); }
   });
 });
 
