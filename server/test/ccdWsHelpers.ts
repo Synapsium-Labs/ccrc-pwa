@@ -634,3 +634,14 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     cleanup: () => { fs.rmSync(home, { recursive: true, force: true }); },
   };
 }
+
+/** A shell prefix that runs `<secs> <argv…>` under a cross-platform alarm and, on
+ *  the alarm, kills the child's WHOLE process group, reaps it and exits 142 (the
+ *  old form's code); otherwise it exits as the child did. Perl is on both
+ *  supported userlands. The old `perl -e 'alarm shift; exec @ARGV'` BECAME the
+ *  child, so the alarm signalled bash alone and a `tail` bash had forked —
+ *  blocked opening a FIFO whenever a mutation removed a detector's guard —
+ *  outlived every timed-out run; the fleet box's dead pane scopes held such
+ *  processes for weeks (session-continuity spec §1.3, §5.6 item 3). perl now
+ *  forks the child into a process group of its own and kills that group. */
+export const BOUNDED = `perl -e '$t = shift; $p = fork; die "fork: $!" unless defined $p; if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 } $SIG{ALRM} = sub { kill "KILL", -$p; waitpid($p, 0); exit 142 }; alarm $t; waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)'`;

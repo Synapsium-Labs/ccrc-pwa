@@ -1,0 +1,143 @@
+{
+ "v": 1,
+ "version": "2.1.285",
+ "scenario": "raw-worktree",
+ "labels": [
+  "main-bash",
+  "main-done"
+ ],
+ "notes": [],
+ "events": [
+  {
+   "seq": 1,
+   "dtMs": 0,
+   "event": "SessionStart",
+   "envSid": "252128ee-dab6-4333-8d52-09becfa6b352",
+   "payload": {
+    "session_id": "252128ee-dab6-4333-8d52-09becfa6b352",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/252128ee-dab6-4333-8d52-09becfa6b352.jsonl",
+    "cwd": "/rig/repo",
+    "hook_event_name": "SessionStart",
+    "source": "startup",
+    "model": "claude-opus-5-5"
+   }
+  },
+  {
+   "seq": 2,
+   "dtMs": 105,
+   "event": "UserPromptSubmit",
+   "envSid": "252128ee-dab6-4333-8d52-09becfa6b352",
+   "payload": {
+    "session_id": "252128ee-dab6-4333-8d52-09becfa6b352",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/252128ee-dab6-4333-8d52-09becfa6b352.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "b54c781f-7543-4776-9d5a-ada9839a98e4",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "dlg raw-worktree"
+   }
+  },
+  {
+   "seq": 3,
+   "dtMs": 367,
+   "event": "PreToolUse",
+   "envSid": "252128ee-dab6-4333-8d52-09becfa6b352",
+   "payload": {
+    "session_id": "252128ee-dab6-4333-8d52-09becfa6b352",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/252128ee-dab6-4333-8d52-09becfa6b352.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "b54c781f-7543-4776-9d5a-ada9839a98e4",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "git worktree add -q -b dlg-raw ../raw-wt && echo DLG-RAW-OK",
+     "description": "add a worktree by hand"
+    },
+    "tool_use_id": "toolu_rig000001"
+   }
+  },
+  {
+   "seq": 4,
+   "dtMs": 603,
+   "event": "PostToolUse",
+   "envSid": "252128ee-dab6-4333-8d52-09becfa6b352",
+   "payload": {
+    "session_id": "252128ee-dab6-4333-8d52-09becfa6b352",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/252128ee-dab6-4333-8d52-09becfa6b352.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "b54c781f-7543-4776-9d5a-ada9839a98e4",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "git worktree add -q -b dlg-raw ../raw-wt && echo DLG-RAW-OK",
+     "description": "add a worktree by hand"
+    },
+    "tool_response": {
+     "stdout": "DLG-RAW-OK",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_rig000001",
+    "duration_ms": 162
+   }
+  },
+  {
+   "seq": 5,
+   "dtMs": 779,
+   "event": "Stop",
+   "envSid": "252128ee-dab6-4333-8d52-09becfa6b352",
+   "payload": {
+    "session_id": "252128ee-dab6-4333-8d52-09becfa6b352",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/252128ee-dab6-4333-8d52-09becfa6b352.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "b54c781f-7543-4776-9d5a-ada9839a98e4",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "DLG-DONE",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  }
+ ],
+ "disk": {
+  "admin": {
+   "raw-wt": {
+    "files": [
+     "commondir",
+     "gitdir",
+     "HEAD",
+     "index",
+     "logs",
+     "ORIG_HEAD"
+    ],
+    "gitdir": "/rig/raw-wt/.git",
+    "head": "ref: refs/heads/dlg-raw",
+    "claudeBase": null,
+    "locked": false,
+    "firstLogSha": "e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd"
+   }
+  },
+  "worktreesLeft": [],
+  "branches": [
+   "dlg-raw",
+   "main"
+  ],
+  "worktreeList": "worktree /rig/repo\nHEAD e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd\nbranch refs/heads/main\n\nworktree /rig/raw-wt\nHEAD e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd\nbranch refs/heads/dlg-raw",
+  "metas": {},
+  "snapshots": {}
+ }
+}

@@ -23,9 +23,12 @@ worktrees and their subagent metadata, path-free.
 no dependencies (`mockapi.mjs`, `sanitize.mjs`, `build-matrix.mjs`, `deploy/*.mjs`), vitest from `server/`.
 
 **Spec:** `docs/superpowers/specs/2026-10-04-delegation-broker-design.md` — covers §3.1 (re-measured), §5.3's
-`SessionEnd` registration, §7 stage 1, §8.1 (questions 1-8 and 10 measured; 9 by a proxy), §8.2 (the fixture corpus and its rig). Departs from the spec
-in the eight ways listed under "Deviations found" (stage placement of `SessionEnd`, the matrix's shape, the rig's
-committed payloads, and five smaller ones).
+`SessionEnd` registration, §7 stage 1, §8.1 (questions 1-8 and 10 measured, two of their situations only by a
+proxy — a parent OOM by a SIGKILL of the parent, an account swap by a config-dir swap (D-4066); 9 by a proxy
+(D-4001)), §8.2 (the fixture corpus and its rig). Lists
+ten pre-planned entries under "Deviations found": eight departures from the spec (stage placement of `SessionEnd`,
+the matrix's shape, the rig's committed payloads, and five smaller ones) and two method notes that depart from no
+spec sentence (D-3994, D-3995).
 
 **Measured at:** `origin/main` `698f679da`, 2026-10-05, read-only. Every `file:line` below is a HINT; each task's
 Step 0 re-anchors by content. **Planner's limit:** the plan was written without running the rig on any binary newer
@@ -277,8 +280,9 @@ cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATI
 | T1-M1 | drop `"SessionEnd"` from `EVENTS_JSON` | `install-session-hooks`: the twelve-events row and the derived-set row |
 | T1-M2 | delete the `SessionEnd)` arm | `install-session-hooks` derived-set row; `session-hook-turnmark` capture row |
 | T1-M3 | exit line back to `[[ -n "$stopfail" ]] && exit 0` | `session-hook-turnmark`: "writes no hookstate.json …", "byte-identical" and the capture row (it writes hookstate) |
-| T1-M4 | remove ` sessend=""` from the declaration line | `session-hook-turnmark`: every row whose event is not SessionEnd fails the exit-0 contract (`sessend: unbound variable`) |
+| T1-M4 | remove ` sessend=""` from the declaration line | `session-hook-turnmark`: every row whose event is not SessionEnd and that runs the hook to the exit line fails the exit-0 contract (`sessend: unbound variable`) — 52 of 59 (measured at `fc2dd5ee9`, and again at `e47f3689f`). The 7 survivors: the three rows that run SessionEnd alone reach the exit line with `sessend=1` already set by its arm, and four never reach it (an unknown event exits in the default arm; three rows run no hook) — corrected in fix round 2 (review 296 F7) |
 | T1-M5 | add `"WorktreeCreate"` to `EVENTS_JSON` | `install-session-hooks`: the twelve-events row (`toBeUndefined`) and the derived-set row |
+| T1-M6 | the turn-marker case's `Stop) tmkind=done` becomes `Stop\|SessionEnd) tmkind=done` | `session-hook-turnmark`: the three SessionEnd rows on their marker assertions — "writes no hookstate.json when none existed, and no turn marker", "leaves an existing hookstate.json and turn marker byte-identical", "is captured in a -hookcap session as one .cap file, and still writes no hookstate" (3 of 59, measured at `fc2dd5ee9`; added in fix round 1, review 277) |
 
 - [ ] **Step 7: Commit.**
 
@@ -1886,9 +1890,9 @@ both print nothing (`bash server/test/delegation-rig/rig.sh reap` removes what a
 
 | # | Mutation | Expected red |
 |---|---|---|
-| T4-M1 | `guard_root`'s `$REAL_HOME` clause deleted | "guard-root accepts only …" (`${home}/ccrc-dlg-rig.x` passes) |
+| T4-M1 | `guard_root`'s `$REAL_HOME` clause deleted | "guard-root refuses a root under HOME by either spelling … (F10b)" (with HOME spelled through a symlink, a root under the link spelling passes) — 1 red, measured at `e47f3689f`; "guard-root accepts only …" stays green, its `${home}/ccrc-dlg-rig.x` still refused by the physical-HOME arm (D-4002) — corrected in fix round 2 (review 296 F6) |
 | T4-M2 | `SOCK_RE` widened to `^.*$` | "guard-sock accepts only …" |
-| T4-M3 | `cmd_setup`'s `guard_root` line deleted | "setup refuses a root the guard refuses …" |
+| T4-M3 | `cmd_setup`'s `guard_root` line deleted | "setup refuses a root by its SPELLING alone … (F10a)" — 1 red, measured at `e47f3689f`; "setup refuses a root the guard refuses …" stays green, its root still refused by the physical-path guard that follows (D-4062) — corrected in fix round 2 (review 296 F6) |
 | T4-M4 | a bare `tmux ls` line added to `cleanup_run` | "no line of rig.sh calls tmux except …" |
 | T4-M5 | the installer call removed from `cmd_setup` | "builds the fixture HOME …" (no `/session-hook.sh` under `PreToolUse`) |
 | T4-M6 | `check_scenario`'s key-name rule deleted | "check-scenario refuses …" (the `;` chain passes) |
@@ -2918,7 +2922,7 @@ done
 | # | Mutation | Expected red |
 |---|---|---|
 | T8-M1 | a record's `name` added to its output object | "prints no path, record name, id …" |
-| T8-M2 | `keys` filled from metadata VALUES | "prints no …" (`SENTINEL-description`) |
+| T8-M2 | `keys` filled from metadata VALUES | with D-4008's key allow-list every value maps to `(unprintable)`, so the key-equality rows go red — "classifies each admin record …", "prints only allow-listed meta key names …", "marks an unparsable agent meta malformed …" (3, measured at `fc2dd5ee9`) — and the "prints no …" privacy row stays green |
 | T8-M3 | `uuids` counted per meta file (`list.length`) instead of per distinct uuid | "classifies each admin record …" (`uuids: 1` becomes 2: the same session's file under two homes) |
 | T8-M4 | the `--repo`-required refusal deleted | "refuses bad arguments …" |
 
@@ -3028,7 +3032,10 @@ git commit -m "docs(delegation-broker): the wave-1 measurement matrix and its am
 - [ ] The full server suite, sharded as the box allows; any red is reproduced in isolation and named in the wave-done.
 - [ ] Every mutation row below measured red and restored; the measured cells recorded in the wave-done mail.
 - [ ] `git status` clean; no raw bundle, capture file or scratch output in the tree. `bash server/test/delegation-rig/rig.sh reap`,
-  then `ls -d "${TMPDIR:-/tmp}"/ccrc-dlg-rig.*` and `ls "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/" | grep '^dlg'` print nothing.
+  then `ls -d "$(bash server/test/delegation-rig/rig.sh run-base)"/ccrc-dlg-rig.* "${TMPDIR:-/tmp}"/ccrc-dlg-rig.*` (both
+  places a run root can be made, D-4003) and `ls "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/" | grep '^dlg'` print nothing.
+  The capture's raw root (`ccrc-dlg-raw.*`, UNSANITISED) is never in the tree; the rig's README says where it may
+  live, that a box `/tmp` reaper may remove it, and how to remove it.
 - [ ] The wave-done fingerprint names the workspace branch tip; the PR body lists the versions covered and the
   departures by slug.
 
@@ -3038,13 +3045,94 @@ Each row was given in its task; this is the index the wave-done reports against.
 
 | Task | Rows | Guards |
 |---|---|---|
-| 1 | T1-M1 … T1-M5 | SessionEnd registered; its arm present; inert (no hookstate, no marker); declared under `set -u`; no Worktree* registration |
+| 1 | T1-M1 … T1-M6 | SessionEnd registered; its arm present; inert: no hookstate (T1-M3) and no marker (T1-M6); declared under `set -u`; no Worktree* registration |
 | 2 | T2-M1 … T2-M8 | fixed tool-name set; key names not values; isolation as a token; ordinals not ids; cwd as a label; `--root` refusal; reason enum; Bash keys never printed |
 | 3 | T3-M1 … T3-M4 | `nameAny`; consumed labels; `$NOW+<s>`; `MOCK_SCRIPT` required |
 | 4 | T4-M1 … T4-M8 | root guard (HOME clause, `//`); socket guard; setup guarded; no bare `tmux`; ccrc's installer registers the hook; scenario key names; reap spares a live owner |
 | 5 | T5-M1 … T5-M6 | munged root and binaries dir replaced; nothing written on a finding; a key named by index; user residue; the path allowlist |
 | 7 | T7-M1 … T7-M6 | failed → unmeasured; numeric version order; measured zero; matrix not hand-edited; a missed probe is an outcome; subagent Bash by marker |
-| 8 | T8-M1 … T8-M4 | no name; key names not values; distinct homes; `--repo` required |
+| 8 | T8-M1 … T8-M4 | no name; key names not values; distinct uuids (T8-M3; distinct homes is fix round 1's row below); `--repo` required |
+
+**Fix round 1 (review 277).** Rows added for guards that had none, each measured red by deleting its arm alone (a
+guard that cannot have a row says so); the wave-done reports the cells.
+
+| Task | Finding | Guard | Row |
+|---|---|---|---|
+| 1 | F32 | SessionEnd writes no turn marker | T1-M6 (above) |
+| 2 | F3 | `seg` on the delegation block's top-level key names | "prints a hostile or over-long top-level key of an Agent or Workflow input or response as (unprintable), never the key" |
+| 2 | F3 | the id-keyed or over-wide map collapse | "prints an id-keyed or over-wide Agent or Workflow input or response as the single (map) token, never a key" |
+| 2 | F3 (task B review) | a non-object input or response prints as its JSON type | "prints a non-object Agent, Task or Workflow input or response as its JSON type, never the value" |
+| 2 | F15 | `--root` normalised, and a root of `/` refused (D-4064) | "refuses a --root that normalises to the filesystem root …" |
+| 4 | F10a | `cmd_setup`'s spelling guard (T4-M3, now red as worded) | "setup refuses a root by its SPELLING alone (relative, a `..` segment, a trailing slash) when its physical path is acceptable, and creates nothing there (F10a)" |
+| 4 | F10b | `guard_root`'s spelling arm (T4-M1, now red as worded) and its physical-HOME arm | "guard-root refuses a root under HOME by either spelling: HOME spelled through a symlink refuses the link spelling and the physical path alike (F10b)" |
+| 4 | F10c | `cleanup_run` calls `wait_run_quiet`, and keeps a root it cannot measure without `/proc` (D-4010, D-4061) | the two rows of the "cleanup_run (F10c …)" describe, Linux-only |
+| 4 | F10d | `wait_run_quiet` waits within its bound before it kills (D-4010) | "wait_run_quiet WAITS, within its bound, for a process under the root that exits on its own: it is never signalled (F10d)" |
+| 4 | F10e | the fixture `settings.json`'s `disableAutoMode` (D-4004) | the setup row, "builds the fixture HOME and repo under its root, …" |
+| 4 | F10g | the ready footer: each alternative, never the version banner (D-4004) | the two rows of the "rig.sh wait_ready (F10g …)" describe |
+| 4 | F10g | `cleanup_run` removes its own socket file, and only that one (D-4004) | "cleanup_run's rm removes its own socket file, and only that one: a neighbour's and `default` stay (F10g)" |
+| 4 | F10h | reap's numeric-pid filter on `dlg<pid>` sockets (D-4004) | "reap keeps a socket named dlg plus anything but digits: only a numeric pid can name a dead owner (F10h)" |
+| 4 | F10f | reap's foreign-owner skip (`! -O`, D-4006) | none: untestable without a second uid (D-4062) |
+| 5 | F1 | a path after an allowed loopback host is scanned; only the URL's end, `:<digits>` or a `/`-path may follow (D-4007) | the F1a row, and the userinfo, non-numeric port, glued name, `?`/`#`/`\`, and end-character rows; "the loopback port is read AT the host, not anywhere after it …"; "a path after the loopback `/` whose first segment is outside the allowlist or glued to a character outside the class is residue …" |
+| 5 | F1 | an allowed top at a host position takes the loopback rule without a port; a `//` before a character that cannot start a name is residue (D-4007) | "an allowed top used as a HOST gets the loopback rule without a port …"; "a `//` at a host position followed by a character that cannot start a name is residue …"; "a `//`-led path whose first segment is an allowed top passes …" |
+| 5 | F1 | an allowed top is a whole segment: only `/`, `:`, the end or a URL/word ender may follow it (D-4007) | "an allowed top glued to a character outside the segment class is residue …"; "what may follow an allowed top …" |
+| 5 | F1, F2 | `/dev/null` exempt only as the whole path, with nothing path-like after it | the two `/dev/null` rows (F1b, F2a); "`/dev/null` glued to a character outside the segment class is residue …"; "`/dev/null` is a first segment exemption only …" |
+| 5 | F2 | the `\/` escape | "fails closed on a JSON-escaped slash …" (F2b); "scans the decoded spelling of a JSON-escaped slash …" (N1) |
+| 5 | F13 | every destination checked before anything moves: not a regular file, unreadable, an unwritable version directory, an unwritable fixtures directory | "writes NOTHING when a later version directory holds a directory or a link where a fixture file would go …"; "a destination it cannot look at is not an absent one …"; "a version directory that exists but cannot be written is refused …"; "a fixtures directory that cannot be written, when a version directory has to be created in it, is refused …" (the last three skipped as root); "refuses a symbolic link where a version directory would go, before any version moves …" (N2) |
+| 7 | F9 | rig.sh's notes are all read and decided: two outcomes and the failures (six in fix round 1, seven from fix round 2, D-4058) | "rig.sh writes nine notes, every one read here, each decided: two outcomes (a probe, a dialog) and seven failures" (fix round 1's "eight notes … six failures", retitled in fix round 2); the scanner's own row |
+| 7 | F9 | each `FAIL_NOTE` alternative, fed from rig.sh's own note text (D-4060) | "rig.sh writes %j: a run carrying it is unmeasured …" (one row per failure note) |
+| 7 | F9 | the start anchor: a failure quoted in an outcome is no failure (D-4060) | "FAIL_NOTE is anchored: %j quoted inside a dialog's text or a probe's label …" (one row per failure note) |
+| 7 | F9 | no end anchor: a failure note with text after it stays a failure (D-4060) | "rig.sh writes %j with text after it: the run is still unmeasured" (one row per failure note) |
+| 7 | F9 | an outcome note keeps the run measured | "rig.sh writes %j: an outcome, so the run stays measured …" (the probe and the dialog note) |
+| 7 | F35 | each `shaped()` clause: `notes`, `labels`, `disk`, `disk.admin`, `disk.worktreesLeft`, `disk.metas` (D-4009) | "a fixture whose %s is missing, null or mistyped is unreadable …" (one row per field), with the control row "each shaped() row's fixture, with the right shape in the field, is measured …" |
+| 7 | F35 | `shaped()`'s `typeof f === 'object'` | none: an equivalent mutant (`JSON.parse` yields no non-null non-object with an array `events`) |
+| 8 | F11 | ENOTDIR is "nothing there" | "treats a <uuid>.jsonl file beside a <uuid>/ dir as nothing there, not as an unreadable home" |
+| 8 | F11 | distinct homes | "counts distinct homes: two metas for one record under the same home are one home, not multiHome" |
+| 8 | F14 | a `ref:` HEAD resolved read-only, `'unmeasured'` when it cannot be (D-4065) | the `movedFromBase` describe |
+
+**Fix round 2 (review 296).** Every guard arm the round added or touched, each measured red by mutating that arm alone
+in a scratch copy. The counts are the implementers', over the filter each task ran (the sanitiser's: its block and the
+corpus row), unless a row names another run. Each task's reviewer re-measured them, task A's follow-up arms
+(`12f7c4aac`) included: its re-review ran 26 mutations of its own, and every count matches. Two counts carry no
+reviewer's re-run, and their rows say so: the residue-bearing-key arm's and the implementer's base64 decode (task A's
+review measured both with mutations of its own). Two rows are the controller's measurements: Task 8's ENOTDIR fold
+(re-run by the write-up's reviewer: 1 red of 27) and the `--scan` file index row (first `a4d1da74f`, hardened after the write-up's
+re-review 2 to plant every fixture of a version; its counts are in its row). From `12f7c4aac` every known limit the sanitiser's header declares is pinned by a row that reds when the
+limit closes (at `858caf47d` the `\u` half of the one-pass limit was not: 0 red, task A's review).
+
+| Task | Finding | Guard | Row |
+|---|---|---|---|
+| 4 | F2 | `answerDialog`'s else arm: a dialog that never shows is a failure note, and nothing is pressed (D-4058) | "answerDialog: a dialog that never appears sends no key and writes a failure note, so the run is unmeasured and not a measured zero (F2)" and the notes census "rig.sh writes nine notes …" (the else line deleted: 2 red) |
+| 7 | F2 | `FAIL_NOTE`'s `answerDialog: no dialog:` alternative (D-4058) | "answerDialog: a dialog that never appears …", and for the new note the "rig.sh writes %j: a run carrying it is unmeasured …" row and its "with text after it" twin (the alternative removed: 3 red) |
+| 4 | F2 (task B review C1) | an `answerDialog` step only where every committed fixture of its scenario recorded it answered, and interrupt-exit's answered in every version (D-4058, `wf-dialog-step-replaced-by-sleep`) | "a scenario carries an answerDialog step only if EVERY committed fixture of it holds that dialog's answered note, and interrupt-exit's step is answered in every version (C1)": 1 red each for the old workflow step put back (all nine `*/wf-plain` named), an unanswered step on another scenario, interrupt-exit losing its step, one interrupt-exit fixture unanswered, and a version without one |
+| 4 | F8 | `wait_run_quiet` waits before it kills (D-4062) | "wait_run_quiet WAITS, within its bound, … (F10d)": a wait that returns at once (`returned after 3 ms`) and round 1's `end=$SECONDS` each red it (1 red each in the F10d filter, re-measured after M1; over the whole file the first reds 3, F10d with the stuck-holder and F10c rows, task B's re-review) |
+| 4 | F8 (task B review M1) | F10d's timer starts before the go file | F10d: the old order with a 1 s stall injected reds a correct wait (1 red); the new order with the same stall stays green |
+| 4 | F10 | `claude_pid` compares against the physically resolved versions directory, keeps the spelling when it cannot resolve it, and still compares (D-4006) | "claude_pid finds the Claude Code process when HOME is spelled through a symlink … (F10)", Linux-only: 1 red each for the unresolved comparison, the fallback widened to empty, and the comparison deleted |
+| 5 | F1 | every `%XX` is decoded (D-4007) | the three "a percent-escaped spelling of %s is residue as a value …" rows, "the same percent-escaped string as a KEY …", "decodes every `%XX`, in either case …" and "the user's name with its first letter percent-escaped …" (the old `%2F`-only decode: 6 red) |
+| 5 | F1 | the decode never throws | "what the percent decode leaves alone passes …" (a `decodeURIComponent` decode: 1 red) |
+| 5 | F1 | one decode pass per kind: the percent kind twice is not chased (a known limit) | "a double-encoded spelling is NOT chased …" (the percent pass applied twice: 1 red) |
+| 5 | F1 (task A review m1) | the `\u` kind twice is not chased (a known limit) | "a double-encoded spelling is NOT chased …" (a second `\u` pass appended: 1 red, from `12f7c4aac`; 0 at `858caf47d`) |
+| 5 | F1 (task A review m1) | the pass order `\uXXXX`, `%XX`, `\/` (a later kind producing an earlier one is not chased; an earlier one producing a later one is) | "a double-encoded spelling is NOT chased …" and "an escape IS chased where an earlier pass produces a later kind …" (the `%` pass moved before the `\u` pass: 2 red); "an escape IS chased …" (the `\/` pass moved before the `%` pass: 1 red) |
+| 5 | F11 (task A review m2) | a complete closing tag `</name>` is a tag, not a path (a known limit; D-4010's exemption) | "a complete closing tag `</name>` is a tag, not a path (declared limit, not a guarantee) …", "reads a closing tag as a tag, not a path …", the unplanted `--scan` control, both planted-value `--scan` rows, the planted-KEY and not-JSON `--scan` rows and the corpus row (the lookahead deleted from `ABS`: 8 red, since the committed fixtures hold closing tags) |
+| 5 | F1 | either case | "decodes every `%XX`, in either case …" and the user's-name row (upper-case hex only: 2 red) |
+| 5 | F9 | `--scan` runs the bundle scan over the committed corpus (D-4007) | "--scan of an unplanted copy …", the two "--scan names the file and the pointer of %s planted …" rows, "--scan reads KEYS too …", "--scan reads the matrix.json …" and the build-matrix row "the committed corpus covers every scenario on at least one version, and carries no residue" (the scan call deleted: 6 red) |
+| 5 | F9 | `--scan` reads `matrix.json` | "--scan reads the matrix.json …" and the corpus row (2 red) |
+| 5 | F9 | a residue-bearing key is a finding (the shared `scan()`) | "names a leaking KEY by its index …", the F1 KEY row and "--scan reads KEYS too …" (the key finding deleted: 3 red, the implementer's count; task A's review, guarding that finding off in `--scan` mode only, reds 1, "--scan reads KEYS too …") |
+| 5 | F9 | a file that is not JSON, a badly named version directory or file, nothing to scan, the argument count | "--scan fails closed on a fixture file that is not JSON …"; "--scan fails closed on a directory that is not a version and on a fixture file whose name is not a name …" (each name arm); "--scan of a directory with nothing to scan fails …"; "--scan refuses a missing directory argument and a surplus one …" (each way): 1 red each |
+| 5 | F9 | the string and key tallies | "--scan of an unplanted copy …" and the corpus row (2 red each) |
+| 5 | F9 (task A re-review n1/n2; re-review 2 m2) | the `--scan` file index is a file's place in its directory's code-unit order (`LC_ALL=C ls`) | "--scan names a file by its place in the code-unit-sorted list of its directory: every fixture of a version, each planted, pairs index and file exactly (F9)" — all 14 fixtures of a version planted under keys that name them: the pointer finding's `#${i}` made `#0` reds 1; a punctuation-blind locale sort reds 2 (this row and the bad-names row); deleting `jsonIn`'s `.sort()` is an EQUIVALENT mutant (0 red): Node's `readdirSync` already returns names in `strcmp` order (libuv sorts scandir; `ls -U` lists the same directory otherwise, measured). The controller's measurements, at the row's final form |
+| 5 | F9 (task A review m3) | `--scan` refuses a fixture file name with residue, and reads no further into it | "--scan refuses a fixture file whose name passes the shape test but carries residue, named by index and never by its text (m3)" (` \|\| residue(base)` deleted: 1 red; the `return` after the name finding deleted: 1 red, its planted-body half) |
+| 5 | F9 (task A review m3) | `--scan` names every file by index, never by its name | "--scan fails closed on a fixture file that is not JSON …" (the unreadable-JSON finding named by text: 1 red); the two planted-value rows, the planted-KEY row and "--scan reads the matrix.json …" (pointer findings named by text: 4 red) |
+| 5 | F9 (task A review m4) | main mode's argument check: a surplus argument, a missing fixtures directory, a missing raw root | "refuses missing arguments with exit 2, and a surplus one, and an empty one (m4)": 1 red each for ` \|\| args.length > 2`, `!outDir` and `!raw` deleted (at `858caf47d` the first two reddened nothing, task A's review) |
+| 5 | F11 | the declared glue set is exactly `ABS`'s lookbehind (a known limit) | "a `/` glued after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (declared limit, not a guarantee) …" reds for each of the six characters dropped from the lookbehind, and for `@` added. Counted in that one row: 1 each. Over the sanitiser block and the corpus row (73 rows, task A's review): `~`, `_`, `-` and `@` 1 each, `.` 2 (also the corpus row, a committed fixture's shell command), a letter 37, a digit 38 |
+| 5 | F12 | `MUNGED_FOREIGN`'s ten tops (a known limit) | "a munged foreign path whose top MUNGED_FOREIGN does not list passes (declared limit, not a guarantee) …": 1 red each for `data`, `media` or `/i` added, and for `proc` dropped |
+| 5 | header (`base64-pin-row`) | base64 is not decoded (a known limit) | "base64 of residue is not decoded (declared limit, not a guarantee) …" (a base64 decode of runs of 12 or more characters added: 1 red, the implementer's count; task A's review, decoding more broadly, reds 14, this row among them) |
+| 8 | F13 | an lstat ENOENT is "nothing there" (D-4065) | "a ref: HEAD resolves through packed-refs when there is no loose ref …" and "still answers from packed-refs when nothing at all is at the loose path …" (every lstat failure unreadable: 2 red) |
+| 8 | F13 | an lstat failing other than ENOENT is unreadable | "reports 'unmeasured' when the loose path cannot be examined at all (its parent directory refuses search) …" (every lstat failure null: 1 red; skipped as root); "reports 'unmeasured' when a parent component of the loose path is a file (lstat ENOTDIR) …" (ENOTDIR folded into nothing-there: 1 red, the controller's measurement) |
+| 8 | F13 | a real directory falls through to `packed-refs` | "a ref: HEAD resolves through packed-refs when there is no loose ref …", its directory assertion (1 red) |
+| 8 | F13 | a failed read is unreadable | round 1's "reports 'unmeasured' for a loose ref that exists but cannot be read …", the DANGLING-symlink row, the symlink-to-a-DIRECTORY row and the KNOWN LIMIT text-link row (4 red) |
+| 8 | F13 | lstat, not stat | the DANGLING, DIRECTORY-symlink and KNOWN LIMIT rows (3 red) |
+| 8 | F13 | a symlink is never a directory | the DANGLING, DIRECTORY-symlink, VALID-symlink and KNOWN LIMIT rows (4 red) |
+| 8 | F13 | a valid symlink to a file is followed, as git follows it | "follows a loose ref that is a VALID symlink, as git does …" (a symlink refused: 1 red) |
 
 ## After the merge (coordinator): the real-lane cross-check
 
@@ -3090,32 +3178,386 @@ wave that ships each verb or route. `WorktreeCreate` / `WorktreeRemove` are neve
 Numbers are minted at run-open; the worker writes each issued number beside its slug, in this section, in its
 first commit (allocate and define in the same act), and cites only those. Each slug names what it departs from.
 
-- **`sessionend-registered-in-stage-1`** — spec §7's table ships hooks in stage 2. Measuring `SessionEnd` (§8.1 Q6)
+- **D-3992** — `sessionend-registered-in-stage-1` — spec §7's table ships hooks in stage 2. Measuring `SessionEnd` (§8.1 Q6)
   needs it registered, and its arm is inert outside a `-hookcap` session (Task 1's rows), so registering it now
   changes nothing a fleet session does.
-- **`rig-fixtures-are-sanitised-synthetic-payloads`** — the capture precedent commits only reduced output. That rule
+- **D-3993** — `rig-fixtures-are-sanitised-synthetic-payloads` — the capture precedent commits only reduced output. That rule
   protects REAL payloads; the rig's are synthetic (mock API, fixture HOME, fixture repo), and wave 2's parser tests
   need whole payloads. They are committed after a fail-closed, allowlist sanitiser, and `topology-clean` passes on
   them. Real-lane captures stay reduced-only.
-- **`mock-tool-name-alias`** — spec §8.1 Q2 asks whether the tool is `Agent` or `Task`; the mock answers with whichever
-  name the request offers, so one scenario measures both versions. The fixtures record the name actually used.
-- **`real-lane-crosscheck-two-lanes`** — spec §8.1 asks for every version. The rig runs every installed binary; the
+- **D-3994** — `mock-tool-name-alias` — a method note: it departs from no spec sentence. Spec §8.1 Q2 asks whether
+  the tool is `Agent` or `Task`; the mock answers with whichever name the request offers, so one scenario measures
+  both versions. The fixtures record the name actually used.
+- **D-3995** — `real-lane-crosscheck-two-lanes` — a method note: it departs from no spec sentence (it bounds a
+  check the spec never asks for). Spec §8.1 asks for every version. The rig runs every installed binary; the
   real-lane cross-check runs only the lowest and highest lane, to bound token cost and operator acts.
-- **`incarnation-is-the-row-generation`** — spec §5.1 and §8.1 Q10 leave the parent's incarnation field to
+- **D-3996** — `incarnation-is-the-row-generation` — spec §5.1 and §8.1 Q10 leave the parent's incarnation field to
   measurement; `$REG/<id>.generation` (D-2605) already is one, so Task 9 records it from source.
-- **`wf-limit-pause-is-an-attempt`** — whether a mock 429 provokes Claude Code's five-hour pause is unknown; the
+- **D-3997** — `wf-limit-pause-is-an-attempt` — whether a mock 429 provokes Claude Code's five-hour pause is unknown; the
   scenario's last wait is a PROBE, so an unprovoked pause is recorded as "not re-run within the probe window", never
   as "cannot pause".
-- **`matrix-keyed-by-scenario`** — spec §8.1 frames the matrix as event × source × version rows. The derived matrix is
+- **D-3998** — `matrix-keyed-by-scenario` — spec §8.1 frames the matrix as event × source × version rows. The derived matrix is
   keyed version × scenario, each scenario standing for one source (or one situation of a source), with per-event
   fields inside; Task 9's table maps scenarios back to §8.1's five sources.
-- **`recapture-steps-in-rig-readme`** — spec §8.2 puts the capture steps "beside the fixtures"; they live in
+- **D-3999** — `recapture-steps-in-rig-readme` — spec §8.2 puts the capture steps "beside the fixtures"; they live in
   `server/test/delegation-rig/README.md` beside the rig that runs them, and the fixtures directory holds only data.
-- **`q8-spool-cost-is-a-micro-benchmark`** — the spool append's cost against the hook budget is measured as a bash
+- **D-4000** — `q8-spool-cost-is-a-micro-benchmark` — the spool append's cost against the hook budget is measured as a bash
   micro-benchmark of the same operations; the hook itself is wave 2's, and its own timing pin lands there.
-- **`q9-parent-class-is-a-proxy`** — §8.1 Q9 (the share of trees whose parent is not a ccd session) cannot be read
+- **D-4001** — `q9-parent-class-is-a-proxy` — §8.1 Q9 (the share of trees whose parent is not a ccd session) cannot be read
   from disk: a ccd main session's working directory is the main checkout too. Wave 1 reports the census's parent
   working-directory class as a proxy; wave 2's spool answers it exactly.
+
+Found mid-wave (issued from the run's block; each defined in the commit after the work that makes it):
+
+- **D-4002** — `rig-plan-text-corrections` (Task 4): three places where the plan's own text could not hold as written —
+  the reap line `printf 'rig: reaped tmux server …'` reds the plan's own "no line of rig.sh calls tmux" row (reworded to
+  "private server"); T4-M1 as worded SURVIVES because `guard_root`'s physical-HOME arm still refuses both cases (measured
+  0 red; measured instead by deleting the whole HOME loop: 2 red when first measured, before `bf336c8b9` added the
+  symlinked-setup row, and 3 red at `a64a8ee03`, where this entry was written, and at `fc2dd5ee9`); and rows that
+  spawn `rig.sh` carry explicit timeouts (the fourteen-scenario check measured 5.7 s against vitest's 20 s default).
+  Corrected in fix round 1 (review 277 F10b, F20): the survival was a missing row, not a dead arm. Fix round 1's row
+  "guard-root refuses a root under HOME by either spelling … (F10b)" runs with HOME spelled through a symlink, so
+  T4-M1 now bites AS WORDED (1 red, that row); the same row also pins `guard_root`'s physical-HOME arm. With it in
+  place, deleting the whole HOME loop reds 4: "guard-root accepts only …", "setup refuses a root the guard refuses
+  …", the F10b row, and "setup refuses a root that resolves, through a symlink, …" (measured on fix round 1's tree,
+  task D's rows in place).
+  Extended in fix round 2 (review 296 F17) to rows that spawn the sanitiser at scale. "The characters that END a
+  loopback URL …" spawns it 64 times and once failed at 26.3 s, under load, against vitest's 20 s default, so every
+  row of the sanitiser block that spawns it 10 times or more (counted by instrumenting `spawnSync`) carries an
+  explicit timeout: 120 s at 40 spawns or more, 60 s at 10 to 39. At 120 s: that row (64), "an allowed top glued to
+  a character outside the segment class …" (51) and "a `//` at a host position followed by a character that cannot
+  start a name …" (48). At 60 s: "a path after the loopback `/` whose first segment is outside the allowlist …" (30),
+  "`/dev/null` glued to a character outside the segment class …" (29), "what may follow an allowed top …" (19), "an
+  allowed top used as a HOST …" (19), the F12 denylist pin (14), the F11 glue pin (13), "scans the path after an
+  allowed loopback host and port …" (12), "what the percent decode leaves alone …" (11), "`/dev/null` is exempt only
+  when nothing path-like follows it …" (11) and "scans the decoded spelling of a JSON-escaped slash …" (10).
+- **D-4003** — `rig-root-base-falls-back-to-tmp` (Task 4): a fleet session's `TMPDIR` is `~/.cc-tmp/<id>`, inside
+  `$HOME`, so every run root `mktemp` made there was refused by `guard_root` and no bundle was written while `all`
+  still wrote `.done`. `rig.sh run-base` now answers `${TMPDIR:-/tmp}` unless it is under `$HOME` by spelling or by
+  physical path, and then `/tmp`; `run` and `reap` use it, and `guard_root` is unchanged. Its blind spot, named in
+  fix round 1 (review 277 F30): the Handoff gate's leftover check, like Task 4 Step 5's, listed only
+  `${TMPDIR:-/tmp}`, while a fleet session's roots went to `/tmp`, so it passed however many roots were left. The
+  gate now lists `rig.sh run-base` as well, and the rig's README names both places and the raw capture root.
+- **D-4004** — `rig-measured-2-1-289-adaptations` (Task 4, smoke on 2.1.289): the ready footer no longer prints
+  "? for shortcuts", so `waitReady` also accepts the "<mode> on" line; the fixture `settings.json` sets
+  `permissions.defaultMode: "default"` and `disableAutoMode`, so an unanswered auto-mode modal cannot block a run (no
+  bypass: tools are still granted by `permissions.allow` alone, pinned by the setup row); `cleanup_run` retries the
+  root's removal and removes its socket file, and `reap` removes stale `dlg<pid>` sockets.
+  Fix round 2 captured 2.1.290 and 2.1.291 with the rig as it stood (`e47f3689f`): no adaptation was needed, and each
+  version's labels and notes equal 2.1.289's on all 14 scenarios. The capture ran only the versions installed when it
+  started (2.1.285 to 2.1.291, two of them new to the corpus); a version installed later is wave 2's first step.
+- **D-4005** — `scenario-agent-wait-covers-sub-done` (Task 4): on 2.1.289 the Agent call runs in the background even
+  with `run_in_background: false` and its result reaches the main loop only inside a reminder-only turn, so the plan's
+  `main-done` regex could not match; it gained `|^$`, and because that alone could end a step before the subagent's
+  last reply (a false "worktree left" for Q6), the four Agent scenarios wait on `["sub-done","main-done"]`.
+  Widened by Task 9 (the corpus): measured on every captured version (2.1.280, .281, .285, .286, .287, .288, .289,
+  and .290 and .291 from fix round 2's capture), in the rig every Agent call launches in the background
+  (`async_launched`), whether the mock set
+  `run_in_background` false (six scenarios) or true (agent-iso-bg), and the key never appears in PreToolUse input;
+  a foreground Agent call is unmeasured.
+- **D-4006** — `rig-guard-hardening-from-review` (Task 4 review): `reap` skips a `ccrc-dlg-rig.*` entry that is a symlink
+  or not owned by the user before it resolves anything (roots now live in the shared `/tmp`); `setup` guards the
+  PHYSICAL root as well as its spelling; `check-scenario` refuses an `answerDialog` or `type` that is not a one-line
+  string, so a scenario cannot forge a `notes` line Task 7 parses.
+  Fix round 2 (review 296 F10) hardens the same spelling-versus-physical seam in `claude_pid`, which compared
+  `/proc/<pid>/exe` (always physical) with `$VERSIONS` (spelled from `$REAL_HOME`), so on a box whose HOME is a
+  symlink every `kill9` noted `kill9: no pid` (failing closed, but costing parent-kill, wf-iso-resume and
+  clear-compact-resume). It now compares with the versions directory resolved physically (`cd -P`), as `guard_root`
+  and `run-base` resolve HOME, and keeps the spelling when that cannot be resolved, never wider. The Linux-only
+  behaviour row "claude_pid finds the Claude Code process when HOME is spelled through a symlink … (F10)" pins it.
+- **D-4007** — `sanitize-leak-shapes-closed` (Task 5 and its review): the plan's T5-M3 row SURVIVED its own mutation
+  (measured 0 red; the `(key)` finding is pushed by index whatever `seg` is) and now uses residue-bearing keys so it
+  bites; and the plan's allowlist let residue through that a leak probe found — a `:`-joined path (the `ABS` lookbehind
+  excluded `:`), `//`-led hosts and `file:///…`, `..` traversal, case and digit variants of the user and host words,
+  `SK-ANT-`, munged foreign paths, `\/` / `\u002f` / `%2f` escapes, an unchecked scenario directory name, silently
+  dropped bundles, a stack trace naming paths, and a half-written corpus on a mid-write failure (fixtures now build in
+  a temp sibling and move in after every bundle passes). Each closed shape has a row and a measured mutation. Base64
+  is a declared limit; every non-loopback URL is refused, so a Claude Code help link in a payload fails the corpus
+  closed rather than passing.
+  Corrected in fix round 1 (review 277 F1, F2, F12, F13): at `347b7b64` two of the shapes above had no row that went
+  red — the `/dev/null` exactness (deleting its next-character test left the sanitiser's rows green) and the `\/`
+  escape (no row had a `\/` input) — so "each closed shape has a row and a measured mutation" was not true of them.
+  It is true from `78f5a2bae`: fix round 1 added both rows, and every shape below has a row measured red by deleting
+  its arm alone (at `82fae4d7b` the run-of-slashes arm of the `//` rule below still survived its own mutation). Fix
+  round 1 also closed:
+  - **An allowed top is a WHOLE segment.** After `rig`, `usr` or `bin` the next character must be `/`, `:`, the end
+    of the string or a character that ends a URL or a word (whitespace, a quote, a closer, `<`, `>`, `,`, `;`); after
+    `/dev/null` the same, minus `/`. So `/rig~/srv/acme`, `/dev/null~/x`, `/dev/null/srv/acme` and `/dev/nullsrv` are
+    residue.
+  - **`//` hosts.** After an allowed `//` host — the loopback `127.0.0.1`, or an allowed top at a host position —
+    only the end of the URL, `:<digits>` (the loopback only) or a `/`-path scanned like any absolute path may follow.
+    So userinfo, a non-numeric port, a glued name, and `?`, `#` or `\` are residue. A loopback URL WITH a path
+    (`http://127.0.0.1:<port>/v1/…`) is residue too, `loopback-api-path-now-residue` (the rig hands Claude Code only
+    the bare `http://127.0.0.1:<port>`), and so are `//rig/home/x` and `x //bin/sh y`
+    (`double-slash-allowed-top-is-a-host`). Both sub-slugs are tightenings inside review 277's F1 ruling ("fix both
+    shapes"), accepted with it, and carry no number of their own. `file:///rig/x`, `//usr/bin/git` and `/rig//x`
+    still pass. A `//` at a host position followed by a character that cannot start a name (`[`, `@`, `%`, `~`, `:`,
+    `\`) is residue; a `//`
+    followed by whitespace, a quote, a closer, `<`, `>`, `,`, `;` or the end stays allowed (a code comment). A run of
+    slashes is judged where it ends (`http:///[fd00::abcd]:8080/…`, `///~/srv/acme` are residue).
+  - **A JSON-escaped `\/` is decoded** like `\uXXXX` and `%2F` before the second scan, so a host written
+    `http:\/\/[fd00::abcd]:8080` is residue; a single decoding pass, so a doubly-escaped spelling is covered by the
+    "other encodings" limit.
+  - **Nothing moves before every destination is checked (F13).** The move refuses, with nothing moved, when any
+    destination is not a regular file (a directory or a link), when a destination version directory cannot be
+    written, when a version directory in the fixtures directory is a symbolic link (a dangling one included), or
+    when the fixtures directory cannot be written and a version directory must be created in it.
+  - **The header is true to the code (F12).** A finding's pointer prints a key as text only when the key is
+    `SAFE_SEG`-shaped and carries no residue; any other key prints as `#<index>`. The header also names the known
+    limits: base64 and other encodings, and a scheme-less `<host>:<port>/<path>` (`127.0.0.1:4000/home/x`), which the
+    relative-path design does not scan.
+
+  Both raw captures are gone (a box-level `/tmp` reaper removed them after they were sanitised and committed), so the
+  re-sanitise-and-diff check is replaced by a scan of the committed corpus under the final sanitiser: 99 files,
+  44,378 strings and keys, 0 findings (that total measured with `82fae4d7b`'s `scan`, and again with `78f5a2bae`'s;
+  the split, 20,486 strings and 23,892 keys, is `858caf47d`'s `--scan` over the same 99 files); the corpus holds no
+  `127.0.0.1`.
+
+  Corrected in fix round 2 (review 296 F1, F9, F11, F12), true from `858caf47d`, or from the later commit a sentence
+  names (`12f7c4aac`, task A's review m1–m4; `dda34c43c`; `a4d1da74f`):
+  - **Every percent escape is decoded (F1).** Until then the decode turned only `%2F` into `/`, so a `%2F` glued
+    after another escape or a name character sat where both lookbehinds skip it: `cat%20%2Fhome%2F…`,
+    `http%3A%2F%2Fsrv.corp%2Fx` and the first of these as a key passed, as they did at `347b7b64`. So "`%2f`
+    escapes" above, and "every non-loopback URL is refused", did not hold of a percent-escaped spelling. Now EVERY
+    `%XX` (two hex digits, either case) is decoded, after `\uXXXX` and before `\/`; a `%` not followed by two hex
+    digits is left as it is, and nothing in the decode can throw. The corpus holds no percent escape (0 of 99 files
+    then, 0 of 127 now), so it was a guard gap, not a leak. Within the known limits below, "every non-loopback URL
+    is refused" now holds of a percent-escaped spelling too.
+  - **The sanitiser scans the committed corpus itself (F9).** `node sanitize.mjs --scan <fixtures-dir>` runs the same
+    scan (the same `residue()` over every string value and every key, the same pointers) over every `*.json` in the
+    directory and in its version directories, the fixtures and `matrix.json`. It writes nothing, and it fails closed on
+    a file that is not JSON, a version directory or fixture file whose name has the wrong shape, and an empty or
+    unreadable directory. From `12f7c4aac` it refuses a fixture file name by the test `main` applies to a scenario name
+    (the NAME shape AND no residue in it), reads no further into a refused file, and names every file by
+    `<version>/#<index>` (or `#<index>`), never by its name, the index counting the directory's `*.json` files in
+    code-unit order, as `LC_ALL=C ls` lists them (`a4d1da74f`; a UTF-8 locale's `ls` may differ). The build-matrix row
+    "the committed corpus covers every scenario on at least one version, and carries no residue" runs it, so a fixture
+    committed with residue reds the suite; before, that row checked only `/tmp/` outside `/rig` and six literals. At
+    `158bc2227` it reads 127 files, 26,328 strings and 30,705 keys, and finds no residue.
+  - **The known limits, as the header names them at `dda34c43c`** (`12f7c4aac`'s text with its three escape examples
+    respelled with a literal backslash; the code they describe is `12f7c4aac`'s), each pinned by a row that reds when
+    the limit closes. At `858caf47d` one half was not: with the `\u` pass applied twice every row stayed green (task A's
+    review), and the header's one-pass sentence named only the same kind twice.
+    - base64, or any other encoding the decode does not know, is not decoded. "base64 of residue is not decoded
+      (declared limit, not a guarantee) …" passes a base64 foreign path and a base64 `//` URL.
+    - The decode is ONE pass per kind, in the fixed order `\uXXXX`, `%XX`, `\/`. So an escape is chased only where an
+      earlier pass produces a later kind, and nothing else is: neither the same kind twice nor a later kind producing
+      an earlier one. "a double-encoded spelling is NOT chased …" passes `%252Fhome%252Fsomeone-else` and
+      `cat%20%252Fhome%252Fx` (the percent kind twice: `%252F` reads `%2F`), `cat \u005Cu002Fhome…` (the `\u` kind
+      twice: it reads `\u002F`) and `cat %5Cu002Fhome…` (a percent escape producing a `\u` escape: it reads
+      `\u002F`). "an escape IS chased where an earlier pass produces a later kind …" refuses `x \u00252Fhome…`
+      (`\u0025` is `%`, then `%2F` is `/`) and `http:%5C%2F%5C%2F[fd00::abcd]:8080` (`%5C%2F` is `\/`, then `/`).
+    - A `/` glued straight after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (`ABS`'s lookbehind; F11).
+      The F11 row, "a `/` glued after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (declared limit, not a
+      guarantee) …", passes `~/srv/acme`, `./srv/acme`, `a_/srv/acme`, `x/srv/acme`, `1/srv/acme`, `a-/srv/acme` and
+      a scheme-less `127.0.0.1:4000/home/x`, and refuses the same path after a space, `=`, `:`, a quote, `(` or `@`.
+    - A `/` after any other character is scanned, except the `/` of a COMPLETE closing tag `</name>` (`<`, `/`, a
+      plain name, `>`): a tag, not a path, which hides one bare segment at most (D-4010 made the exemption, for Claude
+      Code's `<task-notification>` XML). "a complete closing tag `</name>` is a tag, not a path (declared limit, not
+      a guarantee) …" passes `x </srv> y`, `</srv>` and `%3C%2Fsrv%3E` and refuses `x </srv/x> y`, `</srv.corp>`,
+      `x </srv y` and `x /srv> y`; the block's first row, "reads a closing tag as a tag, not a path …", still fails a
+      foreign output file inside the tags closed.
+    - `MUNGED_FOREIGN` is a DENYLIST of ten tops, not a class (F12): a munged foreign path is caught only when its top
+      is one of `home mnt tmp srv opt var root Users private proc`, case-sensitive, and inside an allowed `/rig` path
+      it is the only check on a munged spelling. "Munged foreign paths" above means the paths under those ten tops,
+      not the class. "a munged foreign path whose top MUNGED_FOREIGN does not list passes (declared limit, not a
+      guarantee) …" passes `-media-vol-client`, `-data-acme-client-proj`, `-Home-x` and `x -Mnt-vol-0000`, and
+      refuses each of the ten listed tops.
+- **D-4008** — `census-malformed-and-unreadable-distinct` (Task 8 review): the plan's census folded an unparsable meta
+  into `found:true, keys:[]` (identical to a valid meta with no `worktreePath` — an overloaded value at a seam), a
+  malformed or path-less wf meta into `metaMissing`, and an unreadable home into "nothing there". It now reports
+  `meta.malformed` and `meta.pathless` separately (a path-less meta is the ordinary shape, never malformed),
+  `totals.metaMalformed`, `totals.metaPathless`, `totals.homesUnreadable`, and `adminRead: 'not-main'` for a linked
+  worktree passed as `--repo`; meta key NAMES print only from an allow-list of Claude Code's own meta keys (an
+  id-shaped key name became `(unprintable)`); `--repo` / `--ccd-root` are resolved (a trailing slash had turned
+  `main-checkout` into `other`) and a relative `gitdir` resolves against its admin record. Additive to the plan's
+  `Census` shape; each with a row and a measured mutation.
+- **D-4009** — `matrix-unmeasured-arms-and-pins` (Task 7 review): the plan's builder counted an event with an
+  unparseable payload in `events` but derived every question field without it, so a lost `SubagentStart` read as a
+  MEASURED zero (Review Focus 4); it is now `unmeasured`, reason `unparseable payload`. Also: a corrupt fixture is
+  `fixture unreadable` (no longer `no fixture`), a fixture whose `version`/`scenario` disagree with its path is
+  `fixture misplaced`, a non-version directory is named on stderr by ordinal rather than dropped, and
+  `transcriptNamesAgent` judges every `SubagentStop` (a stop missing its fields was `null`, "none observed"). The
+  plan's untested guards — no events, the 200-event cap, the main-loop filter on `agentTool`, the `Task` spelling —
+  gained rows and measured mutations.
+- **D-4010** — `capture-run-fixes` (Task 6, from the 98-run capture itself): two of 98 runs left a run root behind —
+  a dying Claude Code flushed its transcript after `cleanup_run` removed the root, and `reap` keys on `.owner` — so
+  `cleanup_run` now waits (bounded) for the pane tree and every process whose cwd is under the root, re-reads each
+  straggler's cwd before it kills, and `reap` also clears an ownerless root quiet for ten minutes with no process in
+  it; the sanitiser failed the whole corpus closed on Claude Code's `<task-notification>` XML, whose closing tags
+  (`</result>`) read as absolute paths, so a COMPLETE closing tag of a plain name is exempt and nothing else (an
+  exemption of every `<` let a shell redirect such as `wc -l</etc/hosts` through, and a row now pins that);
+  and Task 7's residue row matched `/rig/tmp/`, the sanitised TMPDIR, so it skips `/tmp/` led by `/rig`.
+- **D-4011** — `writeup-evidence-beyond-matrix` (Task 9): the measurement write-up rests on four kinds of evidence
+  the plan's Step 1–3 text does not name. `q8-bench-on-this-repo-not-the-largest`: Q8 ran on `this-repo`'s main
+  checkout (74 admin records), because the largest repository's (`project-1`, 181) path was taken to be unread, and
+  the figure for the largest is a linear extrapolation, labelled as one. That reason did not hold — Task 8 Step 5
+  passed `project-1`'s path to the census — and fix round 1 (review 277 F16) re-ran Q8 on `project-1`'s main
+  checkout (185 records), so this sub-slug now records the earlier run as superseded; the ledger carries the
+  re-run. `matrix-table-plus-fixture-shapes`: beside the Step 1
+  table, facts are read from the fixtures' event order and key sets (async launch, launch-response ids, arrival
+  order, task notification, compaction's SubagentStop), and several amendments rest on them rather than on a matrix
+  field. `census-record-aggregates`: some census figures (`CLAUDE_BASE` coverage, the kinds of `worktreeAbsent`
+  records) aggregate the census `records` (kind and flags only, no names) rather than `.totals`.
+  `q10-amendment-grounded-in-source`: the incarnation amendment is grounded in source (D-3996), not in a matrix cell
+  or a census total. D-4011 is the last number of the run's original block (3992–4011); fix round 1 was issued
+  4058–4067, and all ten are defined — 4058–4065 in fix round 1, 4066–4067 in fix round 2 — none unused.
+
+Fix round 1 (review 277; the block 4058–4067 issued; 4058–4065 defined here, 4066–4067 in fix round 2 below — none
+unused):
+
+- **D-4058** — `interrupt-exit-rescripted-to-a-live-turn` (review 277 F4): departs from Task 4's interrupt-exit
+  scenario, which could not do its scripted thing. Its main turn had ENDED before the Escape — the mock answered the
+  parent's post-launch request with `DLG-WAIT` and Stop fired — so the Escape interrupted nothing, and the `/exit`
+  that followed opened Claude Code's "Background work is running" dialog, which the scenario never answered: the
+  parent never exited, and no SessionEnd was captured on any version. The idle prompt and the unanswered dialog were
+  OBSERVED on 2.1.289 only, from the pane while re-scripting; on the other six versions they are inferred, from the
+  Stop that ends every old fixture (with no SessionEnd and no note, 7 of 7) and from the dialog the re-capture met on
+  all seven. Task 6 Step 3 says a failure that is the rig's is fixed in the rig and re-run on every version. Fixed:
+  the mock HOLDS the parent's post-launch request (`main-hang`: kind `main`, carrying the launch's `tool_result`,
+  hang 600 s; its match by kind with no unique text, and the scenario's final sleep raised from 5 s to 15 s, are
+  D-4067); the run waits on `["sub-hang","main-hang"]` before the Escape, so the Escape lands in a live main-loop
+  turn; and after `/exit`, `answerDialog "Background work is running"` presses Enter on the dialog's default option
+  — "Exit and stop tasks" as read from the pane on 2.1.280 and 2.1.289 only (the fixture note names the dialog,
+  never the option). Re-captured on all seven versions, re-sanitised into the corpus and `matrix.json` re-derived:
+  only the seven interrupt-exit cells changed, and each now records one SessionEnd (`prompt_input_exit`), no Stop, no
+  SubagentStop, and one tree left, locked.
+  Widened in fix round 2 (review 296 F2), which departs further from Task 4's `run_steps` (its `answerDialog` arm has no
+  else) and from Task 7's `FAIL_NOTE` (as D-4060 already re-spelled it). The interrupt-exit SessionEnd cell rests on
+  `answerDialog`, and a dialog that never showed used to leave no note: a re-capture without it would have built a
+  MEASURED zero SessionEnd, the defect this entry fixed. Since `a7647d942` a dialog that does not appear within the
+  step's timeout notes `answerDialog: no dialog: <text>`, nothing is pressed, and `FAIL_NOTE`'s alternative for that
+  note builds the cell `unmeasured`, with the note as its reason. Rows: "answerDialog: a dialog that never appears sends
+  no key and writes a failure note, so the run is unmeasured and not a measured zero (F2)", beside its control
+  "answerDialog: a dialog that appears is answered with Enter and noted as an outcome, so the run stays measured"; the
+  notes census, now "rig.sh writes nine notes, every one read here, each decided: two outcomes (a probe, a dialog) and
+  seven failures"; and the rows fed from rig.sh's own note text ("rig.sh writes %j: a run carrying it is unmeasured …",
+  its "with text after it" twin, and "FAIL_NOTE is anchored: …"), which now run for the new note too.
+  The same else arm reached Task 4's four workflow scenarios, `wf-plain.json`, `wf-iso.json`, `wf-iso-resume.json` and
+  `wf-limit-pause.json`, each of which carries `{"answerDialog": "Run a dynamic workflow", "timeoutS": 10}` after its
+  prompt; this entry also departs from those four copies, which stay as Task 4 wrote them. That dialog never shows,
+  because the rig grants `Workflow` through `permissions.allow`: none of the 36 committed workflow fixtures carries a
+  `dialog answered:` note. So the step waited out its timeout and pressed nothing; `wait_text` counts whole seconds and
+  polls the pane every 0.25 s, so that took 10 to 11 s (10.5 s and 11.1 s measured, task B's re-review). That was
+  harmless while an unanswered dialog left no note; once F2 made one a failure, it would have turned every workflow
+  capture `unmeasured`, and Q1 and Q7 rest on those scenarios. The step is now `{"sleep": 10}` in the same position
+  (`39a2e2565`): `wf-dialog-step-replaced-by-sleep`, a consequence of the F2 ruling recorded here, with no number of its
+  own (as the F4 ruling did for D-4007's sub-slugs). It presses nothing either and is at most about 1.1 s shorter. The
+  polling `waitLabels` after it never waited in a committed run: its labels were in long before the old step ended
+  (measured from each fixture's `dtMs`, counted from the prompt's UserPromptSubmit: every wf-plain and wf-iso event
+  within 5.1 s, wf-iso-resume's and wf-limit-pause's SubagentStarts within 2.4 s, and wf-iso-resume's resumed
+  SessionStart at 19.1 to 20.4 s, which leaves that wait no time to have waited). So every later step, and the settle
+  window, now starts up to about 1.1 s earlier, and none of them depends on that: wf-plain's and wf-iso's last event
+  came at 1.1 to 3.5 s and 1.3 to 5.1 s, long before they settle (15 s and 20 s); wf-iso-resume's snapshot and kill act
+  on a run quiet since 0.9 to 2.7 s (r2 done, r1 hung); wf-limit-pause's 70 s sleep ended about 17 to 20 s after the run's
+  final Stop, the parent's (61.2 to 63.1 s), and its probe allows 180 s; and `build-matrix.mjs`, which derives the matrix, reads
+  neither `dtMs` nor `seq`. If a workflow dialog ever does show, nothing answers it, the workflow never runs, that
+  `waitLabels` times out and the cell builds `unmeasured`. The row "a scenario carries an answerDialog step only if
+  EVERY committed fixture of it holds that dialog's answered note, and interrupt-exit's step is answered in every
+  version (C1)" pins it: interrupt-exit is now the only scenario with such a step, answered in 9 of 9 versions.
+- **D-4059** — `no-merge-before-handoff` (review 277 F7): departs from Precondition 1 ("Merge `origin/main` into
+  this workspace's branch first") and from the Global Constraint "merge `origin/main` (never rebase) before the
+  handoff", which this run did not do. Both are superseded: worker clause 16 licenses an absorb only on a measured
+  conflict (or its two other triggers), coordinator clause 15 asks for one only on a measured conflict, and review
+  277 measured the merge clean (`git merge-tree` rc 0). The run-260 overlap rule stands: if #284 lands second, it
+  absorbs main then. The coordinator records the two plan sentences as its own planning error.
+- **D-4060** — `fail-note-anchored-to-rig-notes` (review 277 F8a, F9): departs from Task 7's `FAIL_NOTE`, the loose
+  alternation `/timeout|no ready prompt|no session id|no pid|unknown step|run aborted/`. Commit `9cd2f6fa7` (the
+  final review's fix) anchored it, `^…$`, to rig.sh's own note lines, which changes which runs Task 7 marks
+  unmeasured: a note that merely contains one of those words (a probe label holding `timeout`, a dialog's text) no
+  longer fails its run. Fix round 1 derives the rows from rig.sh's own text: the test reads every `note "…"` call out
+  of rig.sh (eight at `82fae4d7b`: two outcomes, a probe and a dialog, and six failures), each failure alternative has
+  its own row, a reworded note reds its row, and a new note reds the row that counts them until it is decided. Fix
+  round 1 also DROPPED the `$`, so `FAIL_NOTE` reads `/^(…)/`: an outcome note begins `probe ` or
+  `dialog answered: `, never with a failure template, so the end anchor could only turn a failure note with text
+  after it into "measured" — the unsafe direction, in which a failed run's zeros read as observed. A row pins that
+  such a note stays unmeasured, and the start anchor is pinned by the rows that quote each failure inside a probe's
+  label and a dialog's text.
+- **D-4061** — `rig-proc-linux-only` (review 277 F8b–d): departs from Task 4's `cleanup_run`, which always removed
+  a guarded run root, and from D-4010's ownerless reap as recorded. `9cd2f6fa7` made the rig's `/proc` dependence
+  explicit: `cleanup_run` keeps the root when there is no `/proc` (without it the bounded wait cannot see a process
+  by its cwd, so it never removes what it cannot measure); the ownerless reap fails closed without `/proc`;
+  `RIG_PROC_ROOT` is a test seam naming the proc root; and the `/proc`-dependent rows are `skipIf(!LINUX)` (five at
+  `347b7b64`: two reap rows and the three rows of the `wait_run_quiet` describe). Fix round 1 (task D) adds rows
+  under that same Linux-only describe that pin, by behaviour, `cleanup_run`'s call to `wait_run_quiet` and its
+  no-`/proc` refusal (review 277 F10c), each red when its arm alone is deleted.
+- **D-4062** — `rig-guard-rows-declared` (review 277 F10): departs from the Global Constraint "every guard below ships
+  with a row that goes red when it is deleted, measured" and from fix round 1's rule that every guard arm it adds or
+  touches ships with a row measured red by deleting that arm alone. Reap's foreign-owner skip (`! -O`, D-4006) has no
+  row, because a hermetic row would need a directory owned by a second uid, which an unprivileged test cannot make; it
+  is declared untestable here. And fix round 1's F10 rows are BEHAVIOUR rows, not the source-text pins the ruling
+  allowed: each runs `rig.sh`'s own function text, extracted by name (a renamed function fails the row loudly), in a
+  harness — `cleanup_run`'s call to `wait_run_quiet` and its no-`/proc` refusal, `wait_run_quiet`'s waiting half, the
+  ready footer, `cleanup_run`'s socket removal — or `rig.sh` itself (the `dlg<non-digit>` socket filter,
+  `disableAutoMode`). No substitution is recorded for T4-M3: a relative, a `..`-spelled and a trailing-slash root are
+  each refused only by `cmd_setup`'s spelling guard, so deleting that line alone reds the row "setup refuses a root by
+  its SPELLING alone … (F10a)" (1 red, measured), and T4-M3 bites as worded.
+  Fix round 2 (review 296 F8): the waiting half was not pinned by the F10d row on its own. Its holder finished by
+  itself about 1 s after the go file, inside the row's 5 s poll, so a `wait_run_quiet` that returned at once,
+  neither waiting nor killing, left it green; only the stuck-holder row and the F10c row caught that. The row now
+  times the call in its harness, the timer started before the go file, and asserts at least 1900 ms against a holder
+  that lives 2 s after that file, so a wait that returns at once reds it (measured: `returned after 3 ms`), as the
+  Mutation table's F10d line says.
+- **D-4063** — `plan-rows-strengthened` (review 277 F28): plan-prescribed Task 3 and Task 4 rows were split, renamed
+  or changed with no number, each a strengthening: the plan's "refuses to start without MOCK_SCRIPT, and writes no
+  file when MOCK_LOG and MOCK_REQDIR are unset" row became two; `SUB_SYSTEM` gained the main-loop marker;
+  `startMock` uses `mockEnv()` and rejects on an early exit; and the check-scenario row uses `cwd` and asserts that
+  no arithmetic ran.
+- **D-4064** — `reducer-root-normalised-and-slash-refused` (review 277 F15, and N2 of task B's review): departs from
+  Task 2's code, which stored a `--root` path as `m[2].replace(/\/+$/, '') || '/'`, so `--root <label>=/` classified
+  every cwd `other`. The path is now `path.posix.normalize`d and stripped of trailing slashes, and a root that
+  normalises to `/` is refused with exit 2 (`=/`, `=//`, `=///`, `=/.`, `=/..` and `=//.` each exit 2, and `=/srv/.`
+  is accepted, measured on the CLI). Rows pin the refusal, and the non-object arm of the delegation block's key names
+  (a non-object Agent, Task or Workflow input or response prints as its JSON type, never the value).
+- **D-4065** — `census-moved-from-base-resolves-ref-head` (review 277 F14): departs from Task 8's census, which
+  computed `movedFromBase` for a detached HEAD only, so it was `null` for every `ref:` HEAD — 102 of the 123
+  delegated records of the Task 8 census (the HEAD-shape line of the ledger's census section: 102 `ref:`, 21
+  detached), and every delegated admin record in the corpus (49 of 49 then; 63 of 63 with fix round 2's two
+  versions, every one a `ref:` HEAD). It now resolves
+  a `ref:` HEAD read-only (the loose ref, else `packed-refs`; never git), and answers `'unmeasured'` for a ref that
+  does not resolve, an unreadable loose ref, a ref name not shaped `refs/<safe chars>` or holding a `..` segment, and
+  an unreadable or malformed HEAD; `null` now means only "no valid `CLAUDE_BASE`". Each arm has a row measured red.
+  Fix round 2 (review 296 F13) reads the loose ref lstat-first, as git's files backend does. Only nothing at the
+  path, or a real directory there, falls through to `packed-refs`. A dangling symlink, a symlink to a directory, a
+  path whose parent refuses search (lstat EACCES) and a path under a file component (lstat ENOTDIR) are
+  `'unmeasured'`, where a stale packed line used to answer for the first two; git fails `rev-parse HEAD` "unknown
+  revision" on each (measured read-only in temp repos). A valid symlink to a file is followed, as git follows it.
+  KNOWN LIMIT: a symlink whose text is a ref name (git's symbolic-ref form) is read as a path under the link's own
+  directory, so it normally reads `'unmeasured'`, fail-closed; where that doubled relative path exists
+  (`refs/heads/refs/heads/<n>`, which git makes under `core.preferSymlinkRefs` with such a branch), the census reads
+  the wrong ref and its boolean can be wrong. No Claude Code producer of either shape is known. Each arm has a row
+  measured red.
+
+Fix round 2 (review 296; 4066–4067, the last two of fix round 1's block):
+
+- **D-4066** — `oom-and-account-swap-are-proxies` (review 296 F3): departs from spec §8.1's column "parent SIGKILL /
+  OOM behaviour" (`:549`) and from Q5's "account swaps" (`:558`), and so from §7's stage-1 gate, "every §8.1 row
+  filled for every version on the fleet" (`:536`): the rig reaches both situations only through a proxy. A parent
+  crash is a SIGKILL of the parent's Claude Code process (`kill9`, in parent-kill, wf-iso-resume and
+  clear-compact-resume). A cgroup OOM kill of the pane's scope can take the whole process tree, not the parent
+  alone; whether it does is the unit's OOM policy, an assumption about the box's systemd and cgroup settings, and
+  that case is unmeasured. An account swap is swap-resume's `swapConfig` step, which copies the fixture config dir to
+  a second one under the same fixture HOME (`rig.sh`'s `swapConfig` arm: `cp -a "$RUN_H/cfg/." "$RUN_H/cfg2/"`),
+  with the same mock auth, and resumes there: a config-dir swap, not a swap between accounts. Measured: `kill9`
+  (three scenarios) and `swapConfig` (one) are the only crash and swap steps the fourteen scenarios use. The ledger's
+  Measurement matrix has declared both proxies since review 277's F17 ruling ("one line each"); this entry gives
+  them a number, after D-4001's precedent that a declared proxy carries one, and the plan header now names both.
+- **D-4067** — `main-hang-matches-by-kind` (review 296 F18): two departures inside the interrupt-exit entry that
+  D-4058 describes (`scenarios/interrupt-exit.json`, from `fc2dd5ee9`), neither recorded there. First, from Task 4's
+  scenario rule ("Every entry matches `kind: "tools"` (main or sub) on a unique text, so a version whose main-loop
+  marker changed still matches"): `main-hang` matches `{"kind": "main", "hasToolResult": true}`, by kind and with no
+  `lastUser` text, because the request it must hold offers none. Measured by the controller on 2.1.291 (an
+  exploratory interrupt-exit run with the mock dumping request bodies, 2026-10-06 14:16 UTC, in a private directory,
+  not committed): the parent's post-launch request's last user message is ONE `tool_result`, whose text is Claude
+  Code's own background-launch notice ("Async agent launched successfully. …", a random agent id, the task's
+  output-file path, and instructions); it carries no scenario-controlled text, neither the Agent call's
+  `description` ("dlg interrupt") nor its `prompt` ("dlg-sub-int"). The cost fails closed: the mock tells `main`
+  only by `MAIN_MARKER` in the system prompt (`mockapi.mjs`'s `classify`), so on a version whose main-loop marker
+  changed the request classifies `sub`, `main-hang` is never reached, the step `waitLabels ["sub-hang","main-hang"]`
+  times out (its note is a `FAIL_NOTE` alternative), and the cell builds `unmeasured`, never a measured zero. Every
+  interrupt-exit fixture in the corpus lists `main-hang` among its labels. Second, the scenario's final `sleep`,
+  after the answered dialog, went from 5 s to 15 s (`fc2dd5ee9`), so that the stop of the background task, the
+  parent's exit and its SessionEnd hook complete before the run is collected.
 
 ## Self-review (record)
 

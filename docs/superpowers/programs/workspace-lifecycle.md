@@ -20,9 +20,9 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
-| 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | — | dispatched 2026-10-05 12:41 as run 245 (`ccrc-pwa-bright-canyon`); plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
-| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed | — | to plan after wave 3 merges |
-| 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
+| 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | #286 | merged 2026-10-06 (`77c11245`) after review 288; run 245 closed; deploy AGENT-FIRST via ccrc's updater; plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
+| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | run 290 open (planned; the run's wave 4 of 5), block 4114–4125; plan #308 (`67657ef2`); DISPATCHED 2026-10-06 22:27 to `ccrc-pwa-calm-basin`; FIRST commit: review 288's residue; the lane ships SHADOWED |
+| 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan (the run's wave 5 of 5) |
 
 ## Decisions & deviations
 
@@ -443,6 +443,177 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
       deviation-refs;
     - neither wave waits on the other;
     - child-reclamation's wave 6 (the ccd half) dispatches after #286 merges.
+- **2026-10-06 05:48 — review 284 closed** (review-done 3630, reviewed tip `3373287e`; report copied to the coordinator's
+  evidence directory on receipt).
+  - **The verdict: the wave's core is accepted.** The panel ran 33 agents, none unverified. It confirmed P1–P9, all
+    minor, and refuted X1. No path was found by which `ws-expire` acts on the wrong workspace or loses anything git
+    knows. All 26 mutation rows are red, and every named suite and guard is green. Departures 3962 and 3963 are
+    confirmed.
+  - **Fix round 1 was sent to run 245** (mail 3631; the run is back at `working`), with spares 3964 and 3965:
+    - **R2 → 3964:** ruling (b) reduces to one phase. The `in-use` probe is asked on resume at `expire:worktree`
+      with the tree standing, and it refuses and never kills. `artifacts`, and `branch` after a `present`
+      tombstone, are vacuous because the tree is gone there.
+    - **R1:** the six test-macos reds are this wave's own Linux-only cases, which do not force `CCD_OS=linux`.
+      They are fixed now: merged, they would hold main's daily macOS full-suite red, and the stable gate reads that.
+      probe-macos's platform-hazards red is main's.
+    - **P4 → 3965:** the CCR-15 texts this wave falsifies are amended now, per spec §6: ws-reap's resume fork, and
+      CCR-15's "Not changed, deliberately" sentence (it now names ws-reap's `expire-in-progress` and ws-restore's
+      refusal). Child reclamation's coordinator was told in mail 3632 and agreed (3633). Their #290 edits that
+      spec's §1 and §5.5 only, so this edit stays inside the :780 passage; a wider edit asks first (mail 3634).
+    - **P1–P3, P5–P8:** text and test corrections. P3 adds the young re-archive case. P6 writes Task 9A's as-built
+      section with review 284's rows M08, M09, M14 and M26. P7 names the 20 s lsof bound in 3962. P8 records
+      caps-token-shape's repair in 3961.
+    - **P9:** no change. The commit's stated red-first count is stale; the measured count is 3 failed, 22 passed
+      (25).
+    - **R3 agrees with ruling (a).** The 3893 race is not fixed now. The plan's Carried row becomes "a PRECONDITION
+      of 3b's go-live" and lists what the race can leave: orphan field files that keep the slug taken, a `swap`
+      journal row read as a RETURN, and a started unit that dies at `ensure` until StartLimitBurst.
+  - **Main:** #286 merged clean onto `21f536a5` (merge-tree); the round does not absorb main.
+  - **Carried to 3b's operator text (R4):** one archived row on the fleet box today, `ccrc-pwa-brisk-mesa`, holds a
+    leaked test tmux server in its tree. The lane will refuse it `in-use` on every pass. The refusal text must name
+    what a pid is before it suggests ending one, because the fleet's own tmux server is also a `tmux: server`.
+- **2026-10-06 07:02 — fix round 1 edits `ccd/ccd` without a claim** (mail 3647, answering bright-canyon's stuck 3635).
+  - **`ccd/ccd` is shared by region, not by claim.** Claim 1043 (run 250) does not block a disjoint-region edit,
+    and nobody takes, breaks or waits on a `ccd/ccd` claim for it. The regions: run 250 has the stamp and its
+    `pr-state` lines; run 245 has the RECLAIM/EXPIRE region and the spawn paths' refusal; run 274 has wave 3's
+    operator-choice section, then what its plan names. The second to land merges main, re-stamps and re-runs the
+    citation cases, cite-remeasure and the `_reg_get` census. A worker whose edit must leave its region asks first.
+- **2026-10-06 07:24 — fix round 1 done at `21d510f6`** (wave-done 3649; four commits on `3373287e`; no merge of main).
+  - **What landed:**
+    - R1: the Linux-only cases force Linux, and the live-unit row stubs launchd.
+    - R2 → 3964: the `worktree` resume asks the `in-use` probe and never kills. A pane that came back counts as a
+      cwd user.
+    - P4 → 3965: one hunk in CCR-15's passage. The contract carries no such sentence.
+    - The text fixes P1–P3 and P5–P8, and R3's precondition row.
+  - **Re-measured:**
+    - The tip matches the claim, and the four required checks are green (CI 37424981281).
+    - #286 still merges clean onto `9221416a`.
+    - All six of review 284's macOS reds are gone. test-macos 1/2's one red is main's `ccrc-update` D3 case
+      (wave 11). probe-macos's platform-hazards red is main's. Neither gates.
+  - **Run state:** the run went to `awaiting-review`, with its items already settled.
+  - **Acceptance review 288** was dispatched to `ccrc-pwa-soft-meadow`, with the held-out panel named. #286 merges
+    on its verdict.
+- **2026-10-06 08:29 — review 288 accepted wave 3; #286 merged** (`77c11245`, 08:28; review-done 3654, reviewed tip
+  `21d510f6`; report copied on receipt).
+  - **The verdict:** 33 agents, none unverified; 7 confirmed, all minor, and 3 refuted. Nothing touches what the verb
+    deletes or when. All 24 mutation rows red as named, and the forced-linux and launchctl controls are green on Linux
+    and red under Darwin semantics. Every suite is green.
+  - **Accepted at `21d510f6`, with no further round.** The verb is inert until 3b calls it, so the residue carries.
+    **Review 288's F1–F7 are 3b's FIRST commit:**
+    - F1: the CONTROL's unit half is hollow. Plant an active unit, or drop "and the unit" from its title.
+    - F2: D-3964 and the resume header say that a pane that came back is a cwd user.
+    - F3: 3964 gets its mutation row in the plan (W1, verb 2).
+    - F4: CCR-15's qualification adds "or a breadcrumb that stands but cannot be read" (D-3894), inside the :780
+      passage only. Child reclamation's coordinator is told before it is pushed (mail 3655).
+    - F5 and F6, ruled: the plan's as-built rows are CORRECTED TO THE MEASURED COUNTS (M08 ladder 17, M26 verb 3), with
+      a note that review 284 quoted 1 and 2. A measured count beats a quoted one.
+    - F7: `close_time`'s list adds U+0085, or says "among them".
+  - **Carried to 3b's operator text, beside R4:** a process that ignored the first attempt's SIGHUP (a `nohup` dev
+    server, say) holds a `worktree` resume at `in-use` on every pass until a human ends it.
+  - **Runs:** 245 advanced to `merging`, then closed final (`merged`). Its child workspace is queued for
+    reclamation. Run 290 opened FIRST, planned: 3b is the run's wave 4 of 5, and the dead-coordinator lane is wave 5.
+    Block 4114–4125 was issued, written bare.
+  - **Overlaps after the merge:** main's `ccd/ccd` moved, so #248 (landing wave 3, in acceptance review 289) and run
+    274's branch now conflict on it (merge-tree). #248 merges main after review 289's verdict, never during it. Run 274
+    merges main when it lands, by the shared-region ruling. Child reclamation's wave 6 is clear to dispatch (3655).
+  - **Deploy:** AGENT-FIRST, by ccrc's updater, never by hand. The time both boxes reach the build containing
+    `77c11245` is recorded here, and 3b's lane waits on it.
+- **2026-10-06 08:33 — wave 3b planning started** (workflow wf_45bc20c3-008: Opus drafter, four Opus lenses for spec,
+  deletion safety, replay and test honesty, an Opus reviser and a Sonnet replay verifier). The plan goes to branch
+  `docs/workspace-lifecycle-wave3b-plan`. The coordinator's rulings for it:
+  - **(A) The first commit** is review 288's F1–F7, as the 08:29 entry rules them.
+  - **(B) The precondition** is closing 3893's return-verb race. No interleaving may let an expiry act on a row that a
+    return verb (start, enable, ensure, swap or ws-restore) has passed its reap gate for. The worker either holds the
+    gate across the journal line or clears the archive inside it, whichever is smaller, measured. A test forces the
+    interleaving.
+  - **(C) The server never types the threshold.** `ws-audit --expire` gains `expiresAt`, on `expirable` and on
+    `not-expired`, and sets `archivedAt` on `not-expired` too. An absent key is no evidence, so the lane composes
+    nothing for that row. The deploy is therefore AGENT-FIRST (ccd), then server and pwa.
+  - **(D) The lane** is `archivedExpiryVerdict` in its own L1 file, plus a second population in the reclaim sweep
+    with its own map, clocks, feed and attention entries, invisible to wave 5's chip. It audits, then calls the verb
+    with the audit's token. It acts only on `capSupported(EXPIRE_CAP)`. It tells box words from composition errors.
+    Its word map is held equal to ccd's. It composes at most one `ws-expire` per tick, fleet-wide.
+  - **(E) The lane ships SHADOWED.** Until `$REG/expire-lane-live` exists, it audits and records "would expire" but
+    never composes the verb. That file has no writer in the tree, which is pinned beside `stall-watch-live` and
+    `scope-sweep-live`. `reclaim-paused` stops everything. The reason: 29 of today's 30 archived rows on the fleet
+    box are past seven days (review 284's R4 measurement), so the first armed pass faces that backlog. **Arming is
+    the operator's.**
+  - **(F) The switch and the words.** `reclaim-paused` is the one cleanup switch, and the banner label widens. CCR-15's
+    §6 item 1 text touches only its `reclaim-paused` passages; child reclamation's coordinator is told before the
+    push. The rest are coordinator clause 3's move with its verbatim pin, README, wave-lifecycle §6 and the confirm
+    copy. None of this text lands before the live arm.
+  - **(G) Operator text.** A standing `in-use` is expected. After bounded passes it becomes an attention entry that
+    names the pid, its comm and the path. It never says "end the pid" without naming the process. The lane never kills.
+  - **(H) Carried items taken:** the 409 detail; the 404 fold; FM7; the door's `already archived` reading; ws-reap's
+    fresh arm on an unreadable breadcrumb; ws-gc's advisory lines. **Not taken:** ws-reclaim's word for an `expire:`
+    breadcrumb (both readings are retries).
+  - **(I) Overlap.** #290 (child reclamation wave 5) edits the sweep and banner files, so the plan is re-verified on
+    main after #290 merges, before dispatch. `ccd/ccd` is shared by region.
+- **2026-10-06 09:18 — a security finding against the 3b draft, binding before dispatch.** An automated commit review
+  flagged a MEDIUM JSON injection in the plan drafter's prototype of ruling (G) (workflow worktree, `proto T3 green`),
+  not in main.
+  - **The flaw:** the cwd probe's python emits `pid<TAB>comm<TAB>path` lines, and bash splices `$pid` raw into an
+    `EXPIRE_IN_USE` JSON array. A newline in a cwd path, or in a process's `comm` (both set by whoever owns the
+    process), splits one record into two, and the second record's "pid" is attacker-chosen text inside the JSON.
+  - **Reach:** none to a deletion. ccd re-measures every rung, rung 5 included, under the reap lock, and the token is
+    ccd's own. The reach is the integrity of the audit document the lane will parse: a forged key, or a malformed
+    line read as unmeasured.
+  - **Main is not affected.** Its probe emits `pid<TAB>path` into prose only.
+  - **RULED, binding on the 3b plan:**
+    - python emits each record already JSON-encoded (`json.dumps`, pid as an integer, strings decoded with
+      surrogateescape), one per line, or the whole array at once;
+    - bash never splices a field;
+    - a pid that is not `^[0-9]+$` makes the probe unmeasured;
+    - a fixture whose cwd path and `comm` carry a newline, a tab and a quote yields one record, valid JSON, with the
+      exact bytes;
+    - each guard has a mutation row.
+  - **The returned plan is checked for this before dispatch,** and amended if it carries the spliced form.
+- **2026-10-06 20:21 — wave 3b's plan is ready:** branch `docs/workspace-lifecycle-wave3b-plan` at `335c0e7c` (5,694 lines,
+  12 tasks, 12 departure slugs). It was made by workflow wf_45bc20c3-008, whose 7 agents all returned. The
+  reviser applied 24 findings and rejected 4, each with a reason. A Sonnet verifier replayed all 117 blocks onto
+  `b27fabc15` (#290): 114 matched exactly once and 3 needed a re-anchor by content, as the plan predicted. All 14
+  mutation rows it ran went red. The plan has no stray D-tokens and no docserver URLs.
+  - **The security ruling of 09:18 is built in** (Task 3, rows T3.4 and T3.5): `json.dumps` at the source, pid as an
+    integer, and a non-digit pid is unmeasured.
+  - **3893 is closed by "a return clears the archive inside its gate"**, measured smaller and safe on all five
+    verbs. Holding the lock across the journal line breaks every supervised return.
+  - **CORRECTION to ruling (E)'s figure:** review 284's R4 "29" counts rows with no process in their tree, not rows
+    past seven days. The plan measured the backlog read-only: **20 of 30 archived rows past seven days at 09:34 UTC,
+    22 at 18:56.** The ruling stands: ship shadowed.
+  - **Rulings on its coordinator questions:**
+    - (4) child reclamation's 3657 and 3666 were answered in 3749. 3b edits none of the shared tail, containment,
+      ladder or platform. `_ws_expire_cwd_users`' header is wave 6's and its body is 3b's.
+    - (5) the sibling pass is ACCEPTED as ruling (D).
+    - (6) the plan is re-anchored onto main after #290. A Sonnet agent is doing it now, with the two stale counts.
+    - The five plan-only departures reach spec §5.2 and §5.3 in Task 12.
+    - Q1's docs half: README, clause 3 and wave-lifecycle §6 state the arming condition, so they are true before and
+      after arming.
+  - **For the operator:**
+    - the PWA confirm copy before arming;
+    - the first armed pass (about 20 expiries, at most one a pass), or raising `WS_EXPIRE_AFTER_S` first;
+    - whether to end brisk-mesa's leaked test tmux server before arming.
+  - **Wave 3's deploy:** the fleet box runs v0.0.105 (`b27fabc1`, which contains #286) since 19:03 UTC. v0.0.96 is
+    the first release containing it.
+  - **Child reclamation wave 6** (run 291, plan #293) changes shared code that `ws-expire` runs: F6's GIT_CONFIG
+    strip, `_ws_leaf_remove`, the bounded temp-root wait, the token's `branchState=`, and the gone-directory recovery
+    (expire breadcrumbs are not evidence). All of it is AGREED under the 3622 rule (3749).
+- **2026-10-06 22:08 — wave 3b's plan is PR #308** (`bd73ed31`, 5,840 lines, 12 tasks).
+  - **Re-anchored on main `8d85c7cf4`** (#290, #284, #302, #303, #304): all 123 blocks match exactly once, and the
+    stated counts were re-measured there.
+  - **The coordinator's rulings are written into the plan:**
+    - its Open questions 4–6 and pre-flight 16 are marked answered;
+    - Task 8's README, clause 3 and wave-lifecycle §6 state the arming condition;
+    - Task 12 Step 2 carries the five plan-only departures into spec §5.2 and §5.3.
+  - **Ruled:** the skill files state the arming condition in words and never name `expire-lane-live`, because a
+    session told the marker could arm a deletion (the existing pin). README and the spec name the file.
+  - **The brief and dispatch body are ready:** twelve items; route Opus · high, Sonnet subagents, workflow off,
+    compact 40; numbers 4114–4125 in the plan's slug order. Run 290 dispatches when #308 merges.
+  - **Wave 3's deploy dependency is met:** the fleet box's ccd (v0.0.105) carries `expire-v1`, and 3b composes
+    against it.
+- **2026-10-06 22:28 — #308 merged (`67657ef2`, 22:27); wave 3b dispatched** (run 290 → `ccrc-pwa-calm-basin`; worker skill
+  present; route Opus · high, Sonnet subagents, workflow off, compact 40; twelve items, one per plan task).
+  - **The workspace branch** is at origin/main `67657ef2`, with nothing ahead, and it contains #308.
+  - **The caps at dispatch:** 23 of 24 daily and 6 of 7 concurrent.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 

@@ -108,7 +108,7 @@ const serverSources = (): string => {
 const CONTRACT = [
   'Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.',
   'The box token is read from `~/.cc-secrets/ccrc-mail.token` and sent as the `x-ccrc-mail-token` header. It is never printed, never pasted into a prompt, never committed.',
-  'This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason. A child this session dispatched is reclaimed by the server once this session is finished with it — at its run’s close when nothing still needs it, otherwise later by the server’s sweep (a child held for its program’s next wave once that program has no open run, a review child once the run it reviewed has closed, a child whose reclaim was deferred or never started); this session’s own workspace is cleaned up by a human, never by a sweep.',
+  'This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason. A child this session dispatched is reclaimed by the server once this session is finished with it — at its run’s close when nothing still needs it, otherwise later by the server’s sweep (a child held for its program’s next wave once that program has no open run, a review child once the run it reviewed has closed, a child whose reclaim was deferred or never started); this session’s own workspace is cleaned up by a human, or by the server seven days after it is archived once the operator has armed the server’s expiry lane (until then the lane only records what it would expire).',
   'This session never unpauses itself. `$REG/coordinator-paused` is the operator’s file; a dispatch refused `paused` is a stop, and the next act is a report, not a retry.',
   'A wave brief is written prose, reviewed like code. The template is the shape; the content is this session’s judgement, and a brief that is missing something the next wave needs is a defect in the ledger.',
   'A `wave-done` is a claim, not a fact. Re-measure it, then submit the fingerprint to `POST /api/runs/:id/advance` and believe the server’s answer over your own.',
@@ -258,6 +258,13 @@ describe('the coordinator skill: its contract', () => {
     expect(s6).toContain('kept while the run it reviewed is open');
     expect(s6, 'a copy-before-close instruction is back').not.toContain('copy its report');
     expect(s6).toContain('it stays until a human cleans it up');
+    // Workspace lifecycle wave 3b: an ARCHIVED workspace with no child marker is the server's to clean up seven days
+    // after its archive — and a child that has coordinated keeps its marker, so it is still a human's (CCR-15).
+    expect(s6).toContain('or — when it carries no child marker — until the server cleans it up seven days after it is archived');
+    // …and says WHEN (the coordinator's ruling): only once the operator has armed the lane; until then it only records. The
+    // skill files never name the lane's marker file, so the condition is told in words.
+    expect(s6).toContain('once the operator has armed the server’s expiry lane (until then the lane only records what it would expire)');
+    expect(s6).toContain('coordinated a run, so its workspace is cleaned up by a human. No');
     // The two OLD statements are true only of a workspace that is not a child.
     // Appending the paragraph above without limiting them would leave the
     // coordinator reading two contradictory accounts of one final-merge close.
@@ -379,7 +386,9 @@ describe('the coordinator skill: its contract', () => {
     // so the entry alone cannot tell "merged" from "nothing queued".
     expect(para, 'the read-back query no longer asks the PR\'s state, autoMergeRequest and mergeQueueEntry together')
       .toContain('pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } }');
-    // The four answers (queued, merged, armed, neither), each with its own act.
+    // The four answers (queued, merged, armed, neither), each with its own act,
+    // and the count that introduces them (review 249 F3).
+    expect(para, 'the read-back no longer says how many answers it gives').toContain('gives one of four answers.');
     expect(para, 'the queued answer (a non-null entry) is gone').toContain('answers a non-null `mergeQueueEntry`');
     expect(para, 'the MERGED answer is gone: a merged PR would read as nothing queued')
       .toContain('A `state` of `MERGED` means it already landed: wait for or prove `merged:#<pr>`, and never disarm');
