@@ -400,17 +400,22 @@ export function archivedExpiryLearned(entry: ArchivedExpiryEntry, read: ExpireAu
  *  previous pass too"): an eligible verdict seeds `eligibleSince` on its first pass and makes the row DUE only on a
  *  later one; any other verdict ends the run. And THE HELD REPORT (spec §5.3: "An archived workspace that is still
  *  held after 7 days is not acted on. It goes on the attention list."): `held` is listed with its reason, and the
- *  listing goes when the hold does. */
+ *  listing goes when the hold does. AND THE RECORD FOLLOWS THE ROW (review 313, F1): an ineligible sighting ends a
+ *  `would-expire` or `in-use` report too, with the run of in-use answers. Such a row is never due, so it is never
+ *  audited again, and a report it kept would stand on the attention list — the operator's arming evidence — for as long
+ *  as the condition lasts. The box's own verdicts (`refused`, `failing`, `no-evidence`) stand: they are about the box. */
 export function archivedExpirySighted(
   entry: ArchivedExpiryEntry, v: ArchivedExpiryVerdict, held: string | null, nowMs: number,
 ): ArchivedExpiryEntry {
   const eligibleSince = v.eligible ? (entry.eligibleSince ?? nowMs) : null;
   if (!v.eligible && v.why === 'held' && held !== null) {
     const at = entry.report?.kind === 'held' ? entry.report.at : nowMs;
-    return { ...entry, eligibleSince, report: { kind: 'held', at, reason: held } };
+    return { ...entry, eligibleSince, inUseRun: 0, inUse: [], report: { kind: 'held', at, reason: held } };
   }
-  const report = entry.report?.kind === 'held' ? null : entry.report;
-  return eligibleSince === entry.eligibleSince && report === entry.report ? entry : { ...entry, eligibleSince, report };
+  const ends = !v.eligible && (entry.report?.kind === 'would-expire' || entry.report?.kind === 'in-use');
+  const report = entry.report?.kind === 'held' || ends ? null : entry.report;
+  const run = ends ? { inUseRun: 0, inUse: [] as readonly ExpireInUse[] } : {};
+  return eligibleSince === entry.eligibleSince && report === entry.report ? entry : { ...entry, ...run, eligibleSince, report };
 }
 
 /** DUE: eligible on a previous pass and still, and past `nextAskAt`. */
@@ -561,7 +566,10 @@ export function expiryReportSentence(r: ExpiryReport, expiresAt: number | null):
         + `(shadow), so nothing was deleted. ${r.sensitive === 0 ? 'No secret-shaped file would be dropped.'
           : `${r.sensitive} secret-shaped ${r.sensitive === 1 ? 'file' : 'files'} would be dropped and recorded by path.`}`;
     case 'held':
-      return `held (“${r.reason}”) past its seven days, so it is not cleaned up — release the hold or restore it.`;
+      // The INSTANT, never a period: the threshold is ccd's, and a sentence that typed it would go stale the day
+      // `WS_EXPIRE_AFTER_S` moves (review 313, F3).
+      return `held (“${r.reason}”) past its expiry${expiresAt === null ? '' : ` (due ${iso(expiresAt)})`}, so it is not `
+        + 'cleaned up — release the hold or restore it.';
     case 'in-use': return expiryInUseSentence(r.inUse, r.passes);
     case 'refused': return `not cleaned up: ccd refused (${r.token}) — ${r.detail === '' ? 'no detail' : r.detail}`;
     case 'failing':

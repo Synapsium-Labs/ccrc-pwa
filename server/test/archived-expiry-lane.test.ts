@@ -157,6 +157,20 @@ describe('a failure that will not resume (review 313, parked item 4)', () => {
   });
 });
 
+describe('the record follows the row (review 313, F1)', () => {
+  it('a would-expire entry goes when the row stops being eligible — a run binds it', async () => {
+    const f = await fixture();
+    f.plant('demo-a');
+    await threePasses(f);
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.expiryAttention?.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'would-expire']]);
+    f.bindWorker('demo-a');
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.expiryAttention, 'a bound row is never due again, so its record goes now').toEqual([]);
+  });
+});
+
 describe('the lane SHIPS SHADOWED', () => {
   it('without `expire-lane-live`, a due row is audited and RECORDED — and ws-expire is never composed, however long', async () => {
     const f = await fixture();

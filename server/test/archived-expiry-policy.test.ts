@@ -292,6 +292,29 @@ describe('the lane’s memory of one row', () => {
     expect(e3.eligibleSince).toBeNull();
   });
 
+  it('an ineligible sighting clears a would-expire or in-use report as well as a held one (review 313, F1)', () => {
+    // The shadow record is the operator's arming evidence: a row that stopped being eligible (a run bound it, a review
+    // opened, its identity went unmeasured) is never due again, so a report it kept would never be revisited.
+    const inUse = [{ pid: 7, comm: 'sleep', cwd: '/w' }];
+    const reports = [{ kind: 'would-expire', at: NOW, sensitive: 0 }, { kind: 'in-use', at: NOW, inUse, passes: 3 }] as const;
+    for (const report of reports) {
+      const x = { ...archivedExpiryEntry(1_789_000_000), expiresAt: 1_789_604_800, eligibleSince: NOW, inUseRun: 3, inUse, report };
+      const y = archivedExpirySighted(x, { eligible: false, why: 'open-run' }, null, NOW + PASS);
+      expect(y.report, report.kind).toBeNull();
+      expect(y.inUseRun, `${report.kind}: the run of in-use answers ends with it`).toBe(0);
+      expect(archivedExpirySighted(x, { eligible: true }, null, NOW + PASS).report, `${report.kind}, still eligible`).toEqual(report);
+    }
+    const refused = { ...archivedExpiryEntry(1), report: { kind: 'refused', at: NOW, token: 'containment-unproven', detail: '' } } as const;
+    expect(archivedExpirySighted(refused, { eligible: false, why: 'open-run' }, null, NOW).report, 'the box’s own verdict stands')
+      .toEqual(refused.report);
+  });
+
+  it('the held sentence names the instant, never a period — the threshold is ccd’s (review 313, F3)', () => {
+    const s = expiryReportSentence({ kind: 'held', at: NOW, reason: 'program:x wave:1/2' }, 1_789_604_800);
+    expect(s).toBe('held (“program:x wave:1/2”) past its expiry (due 2026-09-17 00:26 UTC), so it is not cleaned up — '
+      + 'release the hold or restore it.');
+  });
+
   it('held past its instant is REPORTED with its reason, and the report goes with the hold', () => {
     const e0 = archivedExpiryEntry(1_789_000_000);
     const held = archivedExpirySighted(e0, { eligible: false, why: 'held' }, 'program:x wave:1/2', NOW);

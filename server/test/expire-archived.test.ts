@@ -112,6 +112,13 @@ describe('the one executor', () => {
     expect(s.verbs()).toEqual(['ws-audit']);
   });
 
+  it('a REFUSAL from an audit of another archive is a row that moved too — never folded onto the queued one (review 313, F2)', async () => {
+    for (const verdict of ['not-expired', 'containment-unproven']) {
+      const s = await rig({ script: { audit: { code: 0, stdout: auditDoc(verdict, { archivedAt: ARCH + 5, expiresAt: ARCH + 5 + 604_800 }) } } });
+      expect(await expireArchived(s.deps, s.req), verdict).toMatchObject({ kind: 'deferred', why: 'state-changed' });
+    }
+  });
+
   it('an audit of ANOTHER archive than the one queued is a row that moved: deferred, never spent', async () => {
     const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK, archivedAt: ARCH + 5 }) } } });
     expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'deferred', why: 'state-changed' });
