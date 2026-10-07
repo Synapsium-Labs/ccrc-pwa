@@ -23,10 +23,10 @@ worktrees and their subagent metadata, path-free.
 no dependencies (`mockapi.mjs`, `sanitize.mjs`, `build-matrix.mjs`, `deploy/*.mjs`), vitest from `server/`.
 
 **Spec:** `docs/superpowers/specs/2026-10-04-delegation-broker-design.md` — covers §3.1 (re-measured), §5.3's
-`SessionEnd` registration, §7 stage 1, §8.1 (questions 1-8 and 10 measured, two of their situations only by a
-proxy — a parent OOM by a SIGKILL of the parent, an account swap by a config-dir swap (D-4066); 9 by a proxy
-(D-4001)), §8.2 (the fixture corpus and its rig). Lists
-ten pre-planned entries under "Deviations found": eight departures from the spec (stage placement of `SessionEnd`,
+`SessionEnd` registration, §7 stage 1, §8.1 (questions 1-8 and 10 measured, except that one situation of Q5,
+compaction, is unmeasured (D-4364), and two of their situations only by a proxy — a parent OOM by a SIGKILL of the
+parent, an account swap by a config-dir swap (D-4066); 9 by a proxy (D-4001)), §8.2 (the fixture corpus and its rig).
+Lists ten pre-planned entries under "Deviations found": eight departures from the spec (stage placement of `SessionEnd`,
 the matrix's shape, the rig's committed payloads, and five smaller ones) and two method notes that depart from no
 spec sentence (D-3994, D-3995).
 
@@ -3741,6 +3741,22 @@ Fix round 2 (review 296; 4066–4067, the last two of fix round 1's block):
   interrupt-exit fixture in the corpus lists `main-hang` among its labels. Second, the scenario's final `sleep`,
   after the answered dialog, went from 5 s to 15 s (`fc2dd5ee9`), so that the stop of the background task, the
   parent's exit and its SessionEnd hook complete before the run is collected.
+
+Wave 2 close-out (run 306; the block 4364–4373, issued 2026-10-07):
+
+- **D-4364** — `compaction-is-unmeasured` (review 304 F2): departs from spec §8.1's Q5, "how a session's Claude session
+  id changes across `/clear`, compaction, resume and account swaps"
+  (`docs/superpowers/specs/2026-10-04-delegation-broker-design.md:557-558`), and so from §7's stage-1 gate, "every §8.1 row filled for every version on the fleet" (`:536`): the rig never
+  measures how the id changes across compaction. The hook exits in its SessionStart arm for a `compact` source before
+  the capture arm (`ccd/session-hook.sh:2905`; the stall-watch exclusion its capture-arm comment documents, `:2920-2922`),
+  so a `compact` SessionStart is never captured. Compaction shows only as PreCompact and PostCompact, which carried the
+  pre-compaction session id, and the rig's resume by that id continued under it (clear-compact-resume, on all nine
+  versions: no fixture holds a `compact` SessionStart, each PreCompact and PostCompact carries the id of the session
+  that `/clear` began, and the `resume` SessionStart carries the same id). So "rotates on compaction" is unmeasured,
+  and the ledger's amendment `compact-sessionstart-is-not-captured` names what wave 2's spool must do about it: write
+  its line inside the arm, before the exit. As D-3997 numbers the five-hour pause and D-4066 the two proxies, a §8.1
+  situation the corpus cannot reach carries a number; the plan header and the ledger's "Versions covered" now say that
+  Q5's compaction is unmeasured.
 
 ## Self-review (record)
 

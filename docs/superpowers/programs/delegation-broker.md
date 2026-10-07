@@ -34,14 +34,19 @@ the hook-side costs are below. After wave 1 merges, the coordinator adds the rea
 under its own heading. Until that is here, nothing in waves 2–6 may depend on a hook field (spec §8.1).
 
 **Versions covered:** 2.1.280, 2.1.281, 2.1.285, 2.1.286, 2.1.287, 2.1.288, 2.1.289, 2.1.290 and 2.1.291, each with
-14 scenarios, and all 126 cells are `measured`. Measured means measured **within the rig**, and two of §8.1's
-situations are reached only through a proxy (`oom-and-account-swap-are-proxies`, D-4066):
+14 scenarios, and all 126 cells are `measured`. Measured means measured **within the rig**: two of §8.1's
+situations are reached only through a proxy (`oom-and-account-swap-are-proxies`, D-4066), and one is not reached at
+all (`compaction-is-unmeasured`, D-4364):
 - **Parent crash is a SIGKILL of the parent's Claude Code process** (`kill9` in parent-kill, wf-iso-resume and
   clear-compact-resume). It is the rig's proxy for §8.1's OOM column. A cgroup OOM kill of the pane's scope can take
   the whole process tree, not the parent alone; whether it does is the unit's OOM policy (an assumption about the
   box's systemd and cgroup settings, not measured here), and that case is unmeasured.
 - **The account swap is a config-dir swap.** swap-resume's `swapConfig` copies the fixture config dir to a second
   one under the same fixture HOME, with the same mock auth, and resumes there. It is not a swap between accounts.
+- **Q5's compaction is unmeasured.** The hook exits for a `compact` SessionStart before its capture arm, so no fixture
+  holds one. Compaction shows only as PreCompact and PostCompact, which carried the pre-compaction session id in all nine
+  versions' clear-compact-resume, and the rig's resume by that id continued under it. So "rotates on compaction" is not
+  answered by this corpus; the amendment `compact-sessionstart-is-not-captured` names what wave 2's spool must do.
 
 The corpus comes from three captures, and `matrix.json` re-derives byte-identically from it:
 - the first capture's 91 cells: its seven versions, 2.1.280 to 2.1.289 above, every scenario but interrupt-exit;
