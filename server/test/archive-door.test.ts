@@ -1,7 +1,7 @@
 // `POST /api/sessions/:id/archive` — the ONE "Archive" (workspace lifecycle spec §5.2), end to end through
 // `buildServer`, over a fixture HOME: the registry rows, the worktree, the live status file and the hook state are
 // files in it, the coordination store is a real `coord.db`, and every tmux and ccd call is a recorded double.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -33,7 +33,7 @@ interface BoxCfg {
   /** The watcher's newest pane dialogs (`currentPending`): sessions with a dialog waiting on the operator. */
   pending?: string[];
   /** A ccd verb's answer, by verb; every other verb exits 0. */
-  ccd?: Record<string, { code: number; stderr: string }>;
+  ccd?: Record<string, { code: number; stderr: string; stdout?: string }>;
   /** Remote mode's view of a worktree: the fleet agent's read roots (`checkPath`) exclude `~/worktrees`, so every
    *  stat under one answers `unreadable` (`remote/io.ts`), never `absent`. */
   worktreeUnreadable?: boolean;
@@ -61,7 +61,7 @@ const box = async (cfg: BoxCfg = {}, over: Partial<Deps> = {}) => {
       return cfg.noPanePid === true ? { code: 1, stdout: '', stderr: 'lost server' } : { code: 0, stdout: `${PANE}\n`, stderr: '' };
     }
     const scripted = cfg.ccd?.[verb];
-    return scripted ? { code: scripted.code, stdout: '', stderr: scripted.stderr } : { code: 0, stdout: '', stderr: '' };
+    return scripted ? { code: scripted.code, stdout: scripted.stdout ?? '', stderr: scripted.stderr } : { code: 0, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const base = testDeps(home, run);
@@ -557,10 +557,15 @@ describe('the one Archive — a coordinator (L5)', () => {
     b.coord.db.prepare(
       'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(4242, 'lifecycle', BigInt(Number.MAX_SAFE_INTEGER) + 1n, 3, 'demo', 'planned', COORDINATOR, Date.now());
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     for (const body of [undefined, { programme: 'end' }]) {
+      // Wave 3b (the carried follow-up, D-2545's base behaviour): the refusal carries the store's own detail, and the
+      // server logs it — it used to drop both.
       expect((await post(b.app, COORDINATOR, body)).json())
-        .toEqual({ ok: false, error: 'coordinator-has-open-runs', runs: [] });
+        .toEqual({ ok: false, error: 'coordinator-has-open-runs', runs: [], detail: expect.stringMatching(/\S/) });
     }
+    expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('could not be read'))).toHaveLength(2);
+    warn.mockRestore();
     expect(b.ccd()).toEqual([]);
   });
 
@@ -571,10 +576,10 @@ describe('the one Archive — a coordinator (L5)', () => {
     b.coord.db.close();
     const plain = await post(b.app, COORDINATOR);
     expect(plain.statusCode).toBe(409);
-    expect(plain.json()).toEqual({ ok: false, error: 'run-open', runs: [] });
+    expect(plain.json()).toEqual({ ok: false, error: 'run-open', runs: [], detail: 'database is not open' });
     const forced = await post(b.app, COORDINATOR, { force: true, programme: 'end' });
     expect(forced.statusCode).toBe(409);
-    expect(forced.json()).toEqual({ ok: false, error: 'coordinator-has-open-runs', runs: [] });
+    expect(forced.json()).toEqual({ ok: false, error: 'coordinator-has-open-runs', runs: [], detail: 'database is not open' });
     expect(b.ccd()).toEqual([]);
   });
 
@@ -640,5 +645,45 @@ describe('the one Archive — the worker check, as it was', () => {
     seed(b.home, 'claude-a-demo', { workspace: null });
     expect((await post(b.app, 'demo-amber')).json()).toMatchObject({ archived: true, stopped: false });
     expect((await post(b.app, 'claude-a-demo')).json()).toMatchObject({ archived: true, stopped: true });
+  });
+});
+
+// WORKSPACE LIFECYCLE WAVE 3b — wave 2's carried follow-ups (review 240), taken now that the archive's end of life is
+// real: the base's 404 fold for a registry that did not list, and `ws-archive`'s `already archived` read as success
+// without checking that the measured-live pane was stopped.
+describe('the archive door, wave 3b', () => {
+  it('a registry that cannot be LISTED is 503 registry-unmeasurable — never folded into 404 unknown-session', async () => {
+    const b = await box();
+    seed(b.home, 'demo-amber');
+    rmSync(path.join(b.home, '.cc-sessions'), { recursive: true, force: true });
+    const res = await post(b.app, 'demo-amber');
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ ok: false, error: 'registry-unmeasurable' });
+    expect(b.ccd()).toEqual([]);
+  });
+
+  it('the CONTROL: a registry that lists and does not name the id is still 404 unknown-session', async () => {
+    const b = await box();
+    const res = await post(b.app, 'demo-nobody');
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ ok: false, error: 'unknown-session' });
+  });
+
+  it('`already archived` with a pane tmux proves UP: the door stops it, as the archive would have, and says so', async () => {
+    const b = await box({ ccd: { 'ws-archive': { code: 0, stderr: '', stdout: 'already archived demo-amber\n' } } });
+    seed(b.home, 'demo-amber');
+    liveStatus(b.home, 'idle');
+    const res = await post(b.app, 'demo-amber');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, archived: true, stopped: true, ended: [] });
+    expect(b.ccd().map((c) => c[0])).toEqual(['ws-archive', 'stop']);
+  });
+
+  it('`already archived` with the pane GONE: archived, nothing stopped — as before', async () => {
+    const b = await box({ alive: false, ccd: { 'ws-archive': { code: 0, stderr: '', stdout: 'already archived demo-amber\n' } } });
+    seed(b.home, 'demo-amber');
+    const res = await post(b.app, 'demo-amber');
+    expect(res.json()).toEqual({ ok: true, archived: true, stopped: false, ended: [] });
+    expect(b.ccd().map((c) => c[0])).toEqual(['ws-archive']);
   });
 });

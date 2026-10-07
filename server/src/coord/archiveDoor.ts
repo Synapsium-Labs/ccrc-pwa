@@ -239,13 +239,14 @@ export async function decideArchive(
   if (port !== null) {
     if (!flags.force) {
       const worker = measured(() => port.openRunsForSession(id));
-      // D-2545: refused as CLAIMED with an EMPTY `runs` — the field's shape does not change with the condition.
-      if (!worker.ok) return refuse(409, ARCHIVE_REFUSALS.runOpen, { runs: [] });
+      // D-2545: refused as CLAIMED with an EMPTY `runs` — the field's shape does not change with the condition — and
+      // the store's own `detail`, which this answer used to drop (workspace lifecycle wave 3b, the carried follow-up).
+      if (!worker.ok) return refuse(409, ARCHIVE_REFUSALS.runOpen, { runs: [], detail: worker.detail });
       if (worker.siblings.length > 0) return refuse(409, ARCHIVE_REFUSALS.runOpen, { runs: worker.siblings });
     }
     const coordinates = measured(() => port.openRunsClaimedBy(id));
     // Fail-shut, with or without `programme:'end'`: a programme this box cannot enumerate cannot be ended.
-    if (!coordinates.ok) return refuse(409, ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: [] });
+    if (!coordinates.ok) return refuse(409, ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: [], detail: coordinates.detail });
     claimed = coordinates.siblings;
     if (claimed.length > 0 && !flags.programmeEnd) {
       return refuse(409, ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: claimed });
