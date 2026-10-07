@@ -7812,3 +7812,226 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 - **D-4376 (2026-10-07)** — `ccd-fault` carries `stderrHead` but no `code` (spec §2 (b) check 5 names `ccd-fault {code, stderrHead}`). `CcdResult` carries `ok`, not the exit code, and widening it would change `ccd()`'s output under existing `toEqual` pins; the adapter never invents a code (absent means unmeasured, never `1`). Refinement (f); Task 6.
 - **D-4377 (2026-10-07)** — `server/src/lifecycle.ts`, outside §7.7's W2 row, gains `CcdEnding` and `ccdEnding`, and `cutShort` is re-expressed through it with identical answers, so `killed` and `signal` keep one reader for the adapter's check 1 and `cutShort` alike. Check 1 is read through it as `ending unmeasured && !ok && stdout === ''` (the transport catch's shape), not §2 (b) check 1's "killed and signal both UNMEASURED": an ok answer whose halves are unmeasured proceeds to parsing, a failed answer that carries stdout passes check 1, and the half-measured `(killed:false, signal:UNMEASURED)` shape, which has no producer, reads as check 1. Check 3 likewise reads through it, so `(killed: UNMEASURED, signal: 'SIGKILL')`, a half-measured frame no known producer sends, answers `ccd-killed` as `cutShort` already reads it, where §2 (b) check 3 names `killed === false`. Refinement (g); Task 6.
 - **D-4378 (2026-10-07)** — the second redaction pass bounds its depth (`REDACT_MAX_DEPTH`, 8) and a failure body nested deeper answers `malformed-answer {why:'schema'}`; the spec is silent on nesting and refinement (k) says "recursively", but an unbounded walk lets a hostile or broken ccd line nested ~20 000 deep (inside the listing bound) throw `RangeError`, so the port's promise rejects instead of answering a word, against `ports.ts`'s "rejects only on a defect". Found by the whole-branch review; final-review fix wave.
+
+## Wave 2 results
+
+Measured 2026-10-07 13:21 UTC on the tree at `88178b5bfec0` (base `a17e14bc00c4`, 13 W2 commits on the first-parent line). Every number below was printed by a Task 9 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
+
+### Suites
+
+| # | Command | Test Files | Tests | rc |
+|---|---|---|---|---|
+| 01 | `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts )` | 1 passed (1) | 55 passed (55) | 0 |
+| 02 | `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )` | 1 passed (1) | 472 passed (472) | 0 |
+| 03 | `( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts )` | 1 passed (1) | 31 passed (31) | 0 |
+| 04 | `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )` | 1 passed (1) | 12 passed (12) | 0 |
+| 05 | `( cd agent && ./node_modules/.bin/vitest run )` | 25 passed (25) | 471 passed (471) | 0 |
+| 06 | `( cd server && ./node_modules/.bin/vitest run test/whitelist-subset.test.ts test/verb-gate.test.ts test/capsupported.test.ts test/ccdargv-brand.test.ts test/ccdargv-dec-parity.test.ts )` | 5 passed (5) | 167 passed (167) | 0 |
+| 07 | `( cd server && ./node_modules/.bin/vitest run test/remote-runner.test.ts test/pr-timeout-budget.test.ts test/swap-timeout-budget.test.ts )` | 3 passed (3) | 32 passed (32) | 0 |
+| 08 | `( cd server && ./node_modules/.bin/vitest run test/docs-source.test.ts test/docs-policy.test.ts test/docs-budget.test.ts )` | 3 passed (3) | 449 passed (449) | 0 |
+| 09 | `( cd server && ./node_modules/.bin/vitest run test/lifecycle.test.ts test/ccd-archive.test.ts test/caps-token-shape.test.ts )` | 3 passed (3) | 147 passed (147) | 0 |
+| 10 | `( cd server && ./node_modules/.bin/vitest run test/docs-shared.test.ts test/docs-parity.test.ts test/docs-url.test.ts )` | 3 passed (3) | 382 passed (382) | 0 |
+| 11 | `( cd server && ./node_modules/.bin/vitest run -t 'every line citation is anchored' test/session-hook.test.ts )` | 1 passed (1) | 13 passed \| 322 skipped (335) | 0 |
+
+### Invariants
+
+From `w2-invariants.py` (W2's own commits: `git log --first-parent --no-merges <base>..HEAD`):
+
+```text
+base a17e14bc00c4, tip 88178b5bfec0, 13 W2 commits
+PASS scope          25 files touched by W2 commits; outside the scope: none; scope files untouched: none
+PASS untouched      ccd/, shared/ (agent-protocol.ts and FLEET_PROTO included), pwa/src, server.ts, index.ts, README.md edited by W2: none
+PASS docs-files     tracked ['server/src/docs/ccdsource.ts', 'server/src/docs/policy.ts', 'server/src/docs/ports.ts']; on disk ['server/src/docs/ccdsource.ts', 'server/src/docs/policy.ts', 'server/src/docs/ports.ts']
+PASS exec-surface   EXEC_COMMANDS = ['tmux', 'ccd'] x1; UNGRANTABLE_VERBS = ['ws-rm', 'ws-gc'] x1
+PASS fleet-proto    FLEET_PROTO = 1 x1; FLEET_PROTO_MIN = 1 x1
+PASS cap-literal    'docs-v1' quoted under server/src: {'server/src/ccdargv.ts': 1}
+PASS builder-calls  CCD_ARGV.docs under server/src: ['server/src/docs/ccdsource.ts']
+FAIL sd-shape       single-definition.test.ts: 1 in-place want-line edit, 1 EOF append(s), other hunks: ['d6a1e264f @@ -4915,0 +4916,3 @@', '88178b5bf @@ -4846,0 +4847 @@', '88178b5bf @@ -4904,0 +4906,3 @@']
+8 invariants, 7 PASS
+```
+
+### Mutation table
+
+Every `W2-T<n>-M<k>` row of Tasks 1-8, extracted from this plan and run by `mutate.py` in a `git archive` copy of the tree at `88178b5bfec0`, one row at a time, each file restored byte for byte after its row. `load` is a guard that throws at module load (Task 1, rows M2 and M3).
+
+| Row | Task | File | Result | First red case (measured) |
+|---|---|---|---|---|
+| W2-T1-M1 | T1 | `agent/src/whitelist.ts` | red | test/whitelist-structural.test.ts > mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written > g17-docs-tree-without-project.ts |
+| W2-T1-M2 | T1 | `agent/src/whitelist.ts` | load | Test Files 2 failed, no tests |
+| W2-T1-M3 | T1 | `agent/src/whitelist.ts` | load | Test Files 2 failed, no tests |
+| W2-T1-M4 | T1 | `agent/src/whitelist.ts` | red | test/whitelist-subset.test.ts > layer 2 — every argv the server can build passes the agent whitelist > docsIndex |
+| W2-T1-M5 | T1 | `server/src/ccdargv.ts` | red | test/whitelist-subset.test.ts > layer 2c — exact argv, not just prefix compliance (mutation-sweep finding) > docsShowCommitted builds the exact argv, token for  |
+| W2-T1-M6 | T1 | `server/src/ccdargv.ts` | red | test/whitelist-subset.test.ts > layer 2c — exact argv, not just prefix compliance (mutation-sweep finding) > docsTree builds the exact argv, token for token |
+| W2-T1-M7 | T1 | `server/src/ccdargv.ts` | red | test/whitelist-subset.test.ts > layer 2c — exact argv, not just prefix compliance (mutation-sweep finding) > docsTree and docsFetch add their optional flag pair |
+| W2-T1-M8 | T1 | `agent/src/whitelist.ts` | red | test/whitelist-structural.test.ts > mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written > g16-docs-index-without-all.ts |
+| W2-T1-M9 | T1 | `agent/src/whitelist.ts` | red | test/whitelist.test.ts > whitelist.isExecAllowed > grants the four docs verbs ONLY with their flag, and admits every argv the spec table names |
+| W2-T2-M1 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > DOCS_FAILURE_HTTP (row 53, L1 half): every word has the status the spec gives it > 'ref-locked' answers 409 |
+| W2-T2-M2 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > refreshDue (M3.10, row 53 L1 half): section 2 (g) "Stale on open", exactly > a local ref with no stamp: due false |
+| W2-T2-M3 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > refreshDue (M3.10, row 53 L1 half): section 2 (g) "Stale on open", exactly > a last outcome of 'ok' attempted 600000 ms ago is due: t |
+| W2-T2-M4 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > refreshDue (M3.10, row 53 L1 half): section 2 (g) "Stale on open", exactly > a last outcome of 'ok' attempted 599999 ms ago is due: f |
+| W2-T2-M5 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > refreshDue (M3.10, row 53 L1 half): section 2 (g) "Stale on open", exactly > no origin remote, no stamp: due false |
+| W2-T2-M6 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > fetchBranchFor (M3.9): what a refresh fetches for the requested ref (section 3.4, section 2 (g) Flow) > a local ref is skipped, local |
+| W2-T2-M7 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsRetryAfterSeconds: the Retry-After header, or none (spec refinement (p)) > docs-busy with retryAfterMs 2000 answers 2 s, rounded  |
+| W2-T2-M8 | T2 | `server/src/docs/fourth-home.ts` | red | test/single-definition.test.ts > the archive door's refusal codes are spelled once, in L0 (workspace lifecycle wave 2) > 'worktree-gone' is a code-line literal  |
+| W2-T2-M9 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > policy.ts is L1: pure, and imports shared/docs.ts alone (M7.10, this file's half) > has no node builtin, no require, no dynamic impor |
+| W2-T2-M10 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > the qualified prefixes are derived from L0, and docsRefTarget reads a ref spec (refinement (q)) > refuses a qualified spec in neither |
+| W2-T2-M11 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsRetryAfterSeconds: the Retry-After header, or none (spec refinement (p)) > docs-busy with retryAfterMs 2001 answers 3 s, rounded  |
+| W2-T2-M12 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > policy.ts is L1: pure, and imports shared/docs.ts alone (M7.10, this file's half) > has no clock and no timer |
+| W2-T2-M13 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > policy.ts is L1: pure, and imports shared/docs.ts alone (M7.10, this file's half) > has no fastify, no reply and no console: an L1 ve |
+| W2-T2-M14 | T2 | `server/src/docs/policy.ts` | red | test/typecheck-tests.test.ts > every test file typechecks — the directory the gates could not see > server/test/ is clean under a tests-inclusive project |
+| W2-T3-M1 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsApiQuery (M3.4, L1 half): a docs API query, parsed or refused before any exec > tree, a repeated ref |
+| W2-T3-M2 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsApiQuery (M3.4, L1 half): a docs API query, parsed or refused before any exec > file, a complete committed pin plus branch:  |
+| W2-T3-M3 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsApiQuery (M3.4, L1 half): a docs API query, parsed or refused before any exec > file, a bare servedRef (qualified only: it i |
+| W2-T3-M4 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsApiQuery (M3.4, L1 half): a docs API query, parsed or refused before any exec > projects, an unknown key |
+| W2-T3-M5 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsProvenance: section 3.8's three clauses, in order (refinement (o)) > navigate with a same-origin site and the marker |
+| W2-T3-M6 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsRefreshBody: exactly {ref, reason} (section 3.4, refinement (n)) > an empty array is bad-query body |
+| W2-T3-M7 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsApiQuery (M3.4, L1 half): a docs API query, parsed or refused before any exec > precedence: pin-shape beats a bad value |
+| W2-T3-M8 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsProvenance: section 3.8's three clauses, in order (refinement (o)) > cors from a cross-site page, with the marker |
+| W2-T3-M9 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsProvenance: section 3.8's three clauses, in order (refinement (o)) > the marker 0 |
+| W2-T3-M10 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsProvenance: section 3.8's three clauses, in order (refinement (o)) > a long site is carried cut to 64 characters |
+| W2-T3-M11 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsProjectParam: a :project failing the grammar is bad-project (section 3.4) > a leading dash is bad-project |
+| W2-T3-M12 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsApiQuery (M3.4, L1 half): a docs API query, parsed or refused before any exec > precedence: the first unknown key in code-un |
+| W2-T3-M13 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsApiQuery (M3.4, L1 half): a docs API query, parsed or refused before any exec > precedence: the first repeated key in the ro |
+| W2-T3-M14 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsApiQuery (M3.4, L1 half): a docs API query, parsed or refused before any exec > file, a qualified draft branch (bare only) |
+| W2-T3-M15 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsRefreshBody: exactly {ref, reason} (section 3.4, refinement (n)) > ref outside both grammars |
+| W2-T3-M16 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsRefreshBody: exactly {ref, reason} (section 3.4, refinement (n)) > an extra key |
+| W2-T3-M17 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsApiQuery (M3.4, L1 half): a docs API query, parsed or refused before any exec > precedence: committed, section before path |
+| W2-T3-M18 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsApiQuery (M3.4, L1 half): a docs API query, parsed or refused before any exec > file, a committed pin missing path |
+| W2-T3-M19 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > parseDocsRefreshBody: exactly {ref, reason} (section 3.4, refinement (n)) > an empty object: ref is checked first |
+| W2-T4-M1 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > laneAdmit (M6.1): section 6.3's four clauses, in order > an idle lane admits one job over the byte budget and over the large threshol |
+| W2-T4-M2 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > laneAdmit (M6.1): section 6.3's four clauses, in order > execs at DOCS_LANE_EXECS refuse |
+| W2-T4-M3 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > laneAdmit (M6.1): section 6.3's four clauses, in order > bytes plus wire exactly at DOCS_LANE_BYTES admit |
+| W2-T4-M4 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > laneAdmit (M6.1): section 6.3's four clauses, in order > a large answer with no large one running admits |
+| W2-T4-M5 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > laneAdmit (M6.1): section 6.3's four clauses, in order > a second answer over 1 MiB refuses |
+| W2-T4-M6 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > laneAdmit (M6.1): section 6.3's four clauses, in order > an answer of exactly 1 MiB beside a large one admits (over, not at) |
+| W2-T4-M7 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > wire estimates read server facts only (M6.4, section 6.2) > showRawBound: a listed size lowers it |
+| W2-T4-M8 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > wire estimates read server facts only (M6.4, section 6.2) > showRawBound: a listed size of 0 is a fact, not an unknown |
+| W2-T4-M9 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > wire estimates read server facts only (M6.4, section 6.2) > showWire(1) = 65540: 4 * ceil(raw / 3) plus the 64 KiB envelope |
+| W2-T4-M10 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > wire estimates read server facts only (M6.4, section 6.2) > LISTING_JOB is the framed listing bound on both sides, and frozen: one sh |
+| W2-T4-M11 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > wire estimates read server facts only (M6.4, section 6.2) > reads the cap through DOCS_CLASS_CAP[cls]: the class caps are equal today |
+| W2-T4-M12 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > wire estimates read server facts only (M6.4, section 6.2) > docsShowPlan("a.png", 1000) |
+| W2-T4-M13 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > the read-lane constants (refinement (l), section 6.3) > each is its own integer literal, never an alias of a neighbour that holds the |
+| W2-T4-M14 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > cacheControlFor (section 6.6, section 5.2): immutable only for a committed pin's raster > a draft pin of class raster: no-store |
+| W2-T4-M15 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > cacheControlFor (section 6.6, section 5.2): immutable only for a committed pin's raster > a committed pin of class markdown: no-store |
+| W2-T4-M16 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsSendPolicy (section 5.3's onSend hook as an L1 verdict, refinement (m)) > a 404 failure is no-store even when immutable was set |
+| W2-T4-M17 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsSendPolicy (section 5.3's onSend hook as an L1 verdict, refinement (m)) > a 200 JSON answer with no cache-control gets no-store |
+| W2-T4-M18 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsSendPolicy (section 5.3's onSend hook as an L1 verdict, refinement (m)) > content type "text/html" is refused: 500 response-type- |
+| W2-T4-M19 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsSendPolicy (section 5.3's onSend hook as an L1 verdict, refinement (m)) > never writes into the L0 table, and answers a fresh hea |
+| W2-T4-M20 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsSendPolicy (section 5.3's onSend hook as an L1 verdict, refinement (m)) > a refused content type is carried cut to 80 characters, |
+| W2-T4-M21 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsSendPolicy (section 5.3's onSend hook as an L1 verdict, refinement (m)) > the JSON content type is the spec string, and an allowe |
+| W2-T4-M22 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsSendPolicy (section 5.3's onSend hook as an L1 verdict, refinement (m)) > content type "text/html" is refused: 500 response-type- |
+| W2-T5-M1 | T5 | `server/src/remote/runner.ts` | red | test/docs-budget.test.ts > docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > the four CCD_VERB_TIMEOUT_MS rows are 20 000 / 20 000 / |
+| W2-T5-M2 | T5 | `server/src/remote/runner.ts` | red | test/docs-budget.test.ts > docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > the four CCD_VERB_TIMEOUT_MS rows are 20 000 / 20 000 / |
+| W2-T5-M3 | T5 | `server/src/remote/runner.ts` | red | test/docs-budget.test.ts > docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > the four CCD_VERB_TIMEOUT_MS rows are 20 000 / 20 000 / |
+| W2-T5-M4 | T5 | `ccd/ccd` | red | test/docs-budget.test.ts > docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > docs-show: helper deadline + KILL_GRACE_S + 5 s < the r |
+| W2-T5-M5 | T5 | `ccd/ccd` | red | test/docs-budget.test.ts > docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > docs-index: helper deadline + KILL_GRACE_S + 5 s < the  |
+| W2-T5-M6 | T5 | `ccd/ccrc-doctor-checks` | red | test/docs-budget.test.ts > the doctor waits exactly as long as a Docs page (M7.4, the runner-budget clause) > CCRC_DOCTOR_DOCS_TIMEOUT's default equals CCD_VERB |
+| W2-T5-M7 | T5 | `agent/src/server.ts` | red | test/docs-budget.test.ts > no answer ccd will send can be cut by an exec buffer (row 47, the cap chains) > both 8 * 1024 * 1024 literals are found at their anch |
+| W2-T5-M8 | T5 | `server/src/exec.ts` | red | test/docs-budget.test.ts > no answer ccd will send can be cut by an exec buffer (row 47, the cap chains) > both 8 * 1024 * 1024 literals are found at their anch |
+| W2-T5-M9 | T5 | `ccd/ccd` | red | test/docs-budget.test.ts > no answer ccd will send can be cut by an exec buffer (row 47, the cap chains) > parity: ccd's DOCS_MAX_FILE_BYTES and DOCS_MAX_ANSWER |
+| W2-T5-M10 | T5 | `shared/docs.ts` | red | test/docs-budget.test.ts > no answer ccd will send can be cut by an exec buffer (row 47, the cap chains) > the ceiling chain: showWire(DOCS_MAX_FILE_BYTES) = 5  |
+| W2-T5-M11 | T5 | `shared/docs.ts` | red | test/docs-budget.test.ts > no answer ccd will send can be cut by an exec buffer (row 47, the cap chains) > the listing chain: DOCS_MAX_LISTING_WIRE_BYTES < each |
+| W2-T5-M12 | T5 | `server/src/docs/policy.ts` | red | test/docs-budget.test.ts > derived inequalities (M6.3, spec section 6.3) > the read queue holds one page's images plus the document and its tree: DOCS_LANE_QUEU |
+| W2-T5-M13 | T5 | `server/src/docs/policy.ts` | red | test/docs-budget.test.ts > derived inequalities (M6.3, spec section 6.3) > any single show at a class cap fits the read lane alone: showWire(2 097 152) = 2 861  |
+| W2-T5-M14 | T5 | `shared/docs.ts` | red | test/docs-budget.test.ts > derived inequalities (M6.3, spec section 6.3) > any single show at a class cap fits the read lane alone: showWire(2 097 152) = 2 861  |
+| W2-T6-M1 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > the cap gate, before any exec (row 45, M7.7, spec section 2 (a) and section 7.1) > index, no fleet state at all: caps-unknown with ze |
+| W2-T6-M2 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > the cap gate, before any exec (row 45, M7.7, spec section 2 (a) and section 7.1) > index, [] (the agent's failed boot read, seeded ?? |
+| W2-T6-M3 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > the cap gate, before any exec (row 45, M7.7, spec section 2 (a) and section 7.1) > fetch, no fleet state at all: caps-unknown with ze |
+| W2-T6-M4 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > the cap gate, before any exec (row 45, M7.7, spec section 2 (a) and section 7.1) > fetch, [] (the agent's failed boot read, seeded ?? |
+| W2-T6-M5 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > the cap gate, before any exec (row 45, M7.7, spec section 2 (a) and section 7.1) > index, the four verb names without docs-v1: unsupp |
+| W2-T6-M6 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 1: the transport catch, both halves unmeasured (row 46, R14) > the agent's own refusal word is not-granted, after exactly one e |
+| W2-T6-M7 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > checks 2-5: how ccd ended (row 46) > the runner deadline fired: ccd-timeout |
+| W2-T6-M8 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 1: the transport catch, both halves unmeasured (row 46, R14) > a NOT-ok answer with stdout and unmeasured halves is a cut answe |
+| W2-T6-M9 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 7 and the verbatim rebuild (row 46, refinement (j)) > a word outside the vocabulary is unknown-failure {word}, never mapped ont |
+| W2-T6-M10 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 7 and the verbatim rebuild (row 46, refinement (j)) > a ccd word keeps exactly its line, minus v, verb and elapsedMs |
+| W2-T6-M11 | T6 | `server/src/lifecycle.ts` | red | test/docs-source.test.ts > check 1: the transport catch, both halves unmeasured (row 46, R14) > the agent's own refusal word is not-granted, after exactly one e |
+| W2-T6-M12 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > the cap gate, before any exec (row 45, M7.7, spec section 2 (a) and section 7.1) > index, ['caps'] (a measured pre-Docs ccd): unsuppo |
+| W2-T6-M13 | T6 | `server/src/ccdargv.ts` | red | test/capsupported.test.ts > capSupported > spells the docs token exactly once in server/src, and reads it with the REFUSING default (docs W2) |
+| W2-T6-M14 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 1: the transport catch, both halves unmeasured (row 46, R14) > an OK answer whose halves are unmeasured (an older agent) is par |
+| W2-T6-M15 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 1: the transport catch, both halves unmeasured (row 46, R14) > a NOT-ok answer with stdout and unmeasured halves is a cut answe |
+| W2-T6-M16 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > checks 2-5: how ccd ended (row 46) > stderrHead is at most 512 bytes, cut back to a UTF-8 boundary |
+| W2-T6-M17 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > checks 2-5: how ccd ended (row 46) > stderr is redacted BEFORE it is cut, so a secret straddling the cut leaves no fragment |
+| W2-T6-M18 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 6: exactly one JSON line, with the envelope (row 46) > a blank second line: malformed-answer {why: parse} |
+| W2-T6-M19 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 6: exactly one JSON line, with the envelope (row 46) > JSON null: malformed-answer {why: schema} |
+| W2-T6-M20 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 6: exactly one JSON line, with the envelope (row 46) > v 2: malformed-answer {why: schema} |
+| W2-T6-M21 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 6: exactly one JSON line, with the envelope (row 46) > verb 'docs-show' answering a tree call: malformed-answer {why: schema} |
+| W2-T6-M22 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 6: exactly one JSON line, with the envelope (row 46) > ok 'yes' beside a ccd word: malformed-answer {why: schema} |
+| W2-T6-M23 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 6: exactly one JSON line, with the envelope (row 46) > ok:false without a failure word: malformed-answer {why: schema} |
+| W2-T6-M24 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > show: the answer and its decoded bytes (integrity, pins and size are Task 7's) > utf8 carrying b64 instead of text: malformed-answer  |
+| W2-T6-M25 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > show: the answer and its decoded bytes (integrity, pins and size are Task 7's) > base64 carrying text but no b64: malformed-answer {w |
+| W2-T6-M26 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 7 and the verbatim rebuild (row 46, refinement (j)) > a ccd word keeps exactly its line, minus v, verb and elapsedMs |
+| W2-T6-M27 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 7 and the verbatim rebuild (row 46, refinement (j)) > the word is redacted, then cut to 512 bytes: a 2 KiB word, and a secret s |
+| W2-T7-M1 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > a tampered sha256: malformed-answer {why} |
+| W2-T7-M2 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > a size one over the bytes: malformed-answer {why} |
+| W2-T7-M3 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > base64 without its padding: malformed-answer {why} |
+| W2-T7-M4 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > a committed blob is held to the listing's when the server hold |
+| W2-T7-M5 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > show: the answer and its decoded bytes (integrity, pins and size are Task 7's) > a committed utf8 answer carries the answer and the U |
+| W2-T7-M6 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > a committed answer without onRef: malformed-answer {why} |
+| W2-T7-M7 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > a draft branch that is not the pin: malformed-answer {why} |
+| W2-T7-M8 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > a draft head that is not the pin: malformed-answer {why} |
+| W2-T7-M9 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > a draft fp that is its sha256 but not the pin: malformed-answe |
+| W2-T7-M10 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > a draft whose fp echoes its pin but is not its sha256: pin |
+| W2-T7-M11 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > source 'draft' answering a committed pin: malformed-answer {wh |
+| W2-T7-M12 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > a section that is not the pin: malformed-answer {why} |
+| W2-T7-M13 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > a path that is not the pin: malformed-answer {why} |
+| W2-T7-M14 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > a commit that is not the pin: malformed-answer {why} |
+| W2-T7-M15 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 9: the job's declared wire bound (row 46, M6.5, spec section 6.2) > a show answer of exactly ask.job.wire bytes passes; one byt |
+| W2-T7-M16 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 9: the job's declared wire bound (row 46, M6.5, spec section 6.2) > a ccd failure line one byte over the bound is oversize too; |
+| W2-T7-M17 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 9: the job's declared wire bound (row 46, M6.5, spec section 6.2) > a show answer of exactly ask.job.wire bytes passes; one byt |
+| W2-T7-M18 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 9: the job's declared wire bound (row 46, M6.5, spec section 6.2) > check 8 wins over check 9: a tampered sha256 one byte over  |
+| W2-T7-M19 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 9: the job's declared wire bound (row 46, M6.5, spec section 6.2) > check 7 wins over check 9: an unknown word over the bound s |
+| W2-T7-M20 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 9: the job's declared wire bound (row 46, M6.5, spec section 6.2) > a show answer of exactly ask.job.wire bytes passes; one byt |
+| W2-T7-M21 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 9: the job's declared wire bound (row 46, M6.5, spec section 6.2) > a show answer of exactly ask.job.wire bytes passes; one byt |
+| W2-T7-M22 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 7 and the verbatim rebuild (row 46, refinement (j)) > a ccd word keeps exactly its line, minus v, verb and elapsedMs |
+| W2-T7-M23 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > the second redaction pass: every string leaf of a failure body but failure (row 62, L3 half) > a planted unredacted ccd line, unresol |
+| W2-T7-M24 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > the second redaction pass: every string leaf of a failure body but failure (row 62, L3 half) > a planted unredacted ccd line, ambiguo |
+| W2-T7-M25 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > the second redaction pass: every string leaf of a failure body but failure (row 62, L3 half) > a planted unredacted ccd line, git-fai |
+| W2-T7-M26 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > the second redaction pass: every string leaf of a failure body but failure (row 62, L3 half) > a planted unredacted ccd line, git-fai |
+| W2-T7-M27 | T7 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > show: the answer and its decoded bytes (integrity, pins and size are Task 7's) > a committed utf8 answer carries the answer and the U |
+| W2-T8-M1 | T8 | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > CONTROL: L1 (policy.ts) — fastify in eac |
+| W2-T8-M2 | T8 | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > covers the directory — every floor file  |
+| W2-T8-M3 | T8 | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > CONTROL: L2 (ports.ts) — a value import  |
+| W2-T8-M4 | T8 | `server/src/docs/policy.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > the live tree: no file under server/src/ |
+| W2-T8-M5 | T8 | `server/src/docs/ccdsource.ts` | red | test/single-definition.test.ts > docs W2 names are defined once (spec 2026-10-01 section 1, M7.10) > DOCS_LANE_QUEUE is declared exactly once, in server/src/doc |
+| W2-T8-M6 | T8 | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > CONTROL: L3 (ccdsource.ts) — reply, a ti |
+| W2-T8-M7 | T8 | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > CONTROL: L1 (policy.ts) — fastify in eac |
+| W2-T8-M8 | T8 | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > CONTROL: an L4 file may import fastify a |
+| W2-T8-M9 | T8 | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > CONTROL: L3 (ccdsource.ts) — reply, a ti |
+| W2-T8-M10 | T8 | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > CONTROL: L1 (policy.ts) — fastify in eac |
+| W2-T8-M11 | T8 | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > CONTROL: L1 (policy.ts) — fastify in eac |
+| W2-T8-M12 | T8 | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > CONTROL: L2 (ports.ts) — a value import  |
+| W2-T8-M13 | T8 | `server/src/docs/policy.ts` | red | test/single-definition.test.ts > docs W2 names are defined once (spec 2026-10-01 section 1, M7.10) > the qualified ref prefixes are quoted nowhere under server/ |
+| W2-T8-M14 | T8 | `server/src/ccdargv.ts` | red | test/single-definition.test.ts > docs W2 names are defined once (spec 2026-10-01 section 1, M7.10) > the docs builders have one caller across the four roots: th |
+| W2-T8-M15 | T8 | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > docs W2 names are defined once (spec 2026-10-01 section 1, M7.10) > CONTROL: exportedNames reads every exported declaration and |
+| W2-T3-M20 | T3 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > own keys only (the guard behind every parsed value) > a refresh body whose ref and reason are inherited has neither: ref is the first |
+| W2-T6-M28 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 1: the transport catch, both halves unmeasured (row 46, R14) > the cause is cut to 512 bytes (refinement (f): redacted and cut  |
+| W2-T6-M29 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > the cap gate, before any exec (row 45, M7.7, spec section 2 (a) and section 7.1) > fetch, ['caps'] (a measured pre-Docs ccd): unsuppo |
+| W2-T6-M30 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 1: the transport catch, both halves unmeasured (row 46, R14) > the client's own wait word is link-timeout |
+| W2-T6-M31 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > checks 2-5: how ccd ended (row 46) > not ok, empty stdout: ccd-fault {stderrHead}, and no code (CcdResult carries none) |
+| W2-T6-M32 | T6 | `server/src/lifecycle.ts` | red | test/docs-source.test.ts > checks 2-5: how ccd ended (row 46) > the runner deadline fired: ccd-timeout |
+| W2-T6-M33 | T6 | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 1: the transport catch, both halves unmeasured (row 46, R14) > an OK answer whose halves are unmeasured (an older agent) is par |
+| W2-T8-M16 | T8 | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > CONTROL: L3 (ccdsource.ts) — reply, a ti |
+| W2-FR-M1 | FR | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > the second redaction pass bounds its depth (final-review I1) > a known-word failure line nested 10 000 deep answers malformed-answer  |
+| W2-FR-M2 | FR | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 7 and the verbatim rebuild (row 46, refinement (j)) > a ccd word keeps exactly its line, minus v, verb and elapsedMs |
+| W2-FR-M3 | FR | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > onRef 'toString' (inherited from Object.prototype): malformed- |
+| W2-FR-M4 | FR | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 8: show integrity, pins and onRef (row 46, spec section 2 (b)) > a tampered sha256 and a wrong path echo at once: malformed-ans |
+| W2-FR-M5 | FR | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > CONTROL: L2 (ports.ts) — a value import  |
+| W2-FR-M6 | FR | `server/src/docs/ccdsource.ts` | red | test/docs-source.test.ts > check 7 and the verbatim rebuild (row 46, refinement (j)) > a show failure line unknown-commit (git 2.55) is carried verbatim, its wo |
+
+161 rows; 161 measured as expected.
+
+### Notes
+
+- Extra mutation rows W2-T3-M20, W2-T6-M28..M33, W2-T8-M16 and W2-FR-M1..M6 (14 rows) are not in the plan's JSON fences: they come from reviews (pre-flight/T3/T6/T8 task reviews and the whole-branch review), each measured red once by its implementer; they were appended to w2-rows.json in mutate.py's row shape and run in the same table (table count is 147 plan rows + 14 = 161).
+- W2-T7-M22, M23, M24, M25: re-anchored to the shipped text; same mutation (the final-review fix wave rewrote redactLeaves into the depth-bounded walk(v, depth); each row's mutation is applied to the same arm: the array arm removed, the plain-object arm removed, the non-failure leaf walk replaced by the typeof-string redactDocsText, the walk applied to detail only).
+- Coordinator ruling (mail 3847, 2026-10-07) on finding 3846, invariant sd-shape FAIL: not a red; record it as it stands. The invariant exists so that single-definition.test.ts changes by one in-place `want` line plus an EOF append and no line at or above the base's last line (4789) moves. The net diff against a17e14bc0 is exactly that, and suite 11 (citation census) is green. The checker judges each commit against its parent, so two review fixes that inserted lines inside W2's own appended block count as `other`. No history rewrite, no checker edit, no deviation number. Net hunk headers of `git diff -U0 a17e14bc0 HEAD -- server/test/single-definition.test.ts`: @@ -4188 +4188 @@; @@ -4788,0 +4789,266 @@.
+
+### Carried, not fixed
+
+- SEC-3: an externally killed helper orphans git's process group. W2's lever is Task 5's pinned budget invariant (helper deadline + 2 s grace + 5 s < the runner budget), so the agent never kills ccd in normal operation; the helper-side signal trap (a ccd change) and an agent-side group kill remain unscheduled.
+- MT-2: ccd cuts stderr before it redacts it, so L3's second redaction pass cannot recover a secret the cut split; noted in `docs-source.test.ts`'s header.
+- Contract F4: `branch: null` is detached OR unmeasured; the adapter carries it verbatim.
+- D-4157 (from W1's ledger): `unwalked` is absent when 0; carried, never defaulted.
+- D-4158 (from W1's ledger): `lockAgeMs` is a number, `null` or ABSENT; carried, never defaulted.
+- D-4164 (from W1's ledger): `too-many-entries` is read by `count`, never by `bytes`.
+- The partial-clone word pair (W1's CI-fix ruling, deferred to W2's adapter): a commit missing from a partial clone answers `git-failed {step:'cat-file'}` on git 2.43 and `unknown-commit` on git 2.55. L3 carries both words verbatim, because it never maps one known ccd word onto another (refinement (j)); one word for one condition is a ccd change, or W5's failure sentence.
