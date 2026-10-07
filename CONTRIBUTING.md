@@ -34,9 +34,9 @@ the one isolation boundary they rely on — pointed at your own, they delete you
 the harness idioms from a neighbouring test (`makeCcdHarness`, `ghContainedEnv`) rather
 than assembling one.
 
-Node floor is `>=22.13.0`, identical across all three engines, and pinned by a test. The
-server imports `node:sqlite` unconditionally — below that floor it does not degrade, it
-fails to boot. If that test goes red, raise the floor; never lower it to make it green.
+Node floor is `>=22.16.0`, identical across all three engines, and pinned by a test. Below
+22.13 the server fails to boot (it imports `node:sqlite` unconditionally); below 22.16 that
+`node:sqlite` has no FTS5, which ccrc history needs. If that test goes red, raise the floor; never lower it.
 
 ## How changes are expected to look
 

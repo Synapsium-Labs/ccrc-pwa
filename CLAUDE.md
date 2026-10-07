@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~5700 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~5800 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -49,7 +49,9 @@ real values: `deploy/reference-fleet.md` (gitignored).
   **`ws-reclaim` is forbidden to every session too**: it is the SERVER's act on a CHILD workspace only
   (one dispatch minted for a run, marked `$REG/<id>.child` and held by the server as that run's), composed
   after that run closes or binds a different session, with a token re-proved on the box — never a session's verb, and never run against
-  the live host from a shell or a test.
+  the live host from a shell or a test. **`ws-expire` is forbidden to every session too**: it is the SERVER's act on an
+  ARCHIVED workspace only, seven days after its archive (never a main checkout, never a child), with a token that binds
+  that archive and is re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
 - **NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly.** Each unit is a
   long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet. ONE scoped exception
   (operator ruling 2026-08-21, R1): `ccrc update`'s step-4 supervisor sweep (`_upd_sweep`) and deploy.sh's
@@ -101,7 +103,7 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
   `ci.yml`, whose trigger picks a mode). **A pull request** runs the server tests its change can affect, chosen
   from a traced dependency map (`.github/ci/select-tests.mjs`) and sharded across runners behind the required
-  summary `test (server)`; `test (agent)`, `test (pwa)`, `build-pwa` and `probe-macos` run in full, and
+  summary `test (server)`; `test (agent)`, `test (pwa)`, `build-pwa`, `node-floor` (on exactly the floor's version) and `probe-macos` run in full, and
   `test-macos` runs the same selection, advisory. A change under `.github/` or `server/scripts/`, to any
   `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`, `.gitattributes` or `.npmrc`, or a missing
   map, runs the full suite instead. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
@@ -113,10 +115,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   gate; never a pull request's). **A promotion to `stable`** needs such a green `full-suite` on the commit:
   `release-stable.yml`'s `gate` finds one or runs `ci.yml` in full mode first. So a green PR proves its
   selection, not the whole suite; the daily run and the stable gate are where a miss is caught.
-- **Node floor `>=22.13.0`, identical across the three engines**, pinned by `server/test/node-floor.test.ts`
-  (server-only). Reason: `server/src/coord/db.ts` imports `node:sqlite` unconditionally; below 22.13 the server
-  fails to boot, not degrades. If node-floor's absolute assertion (3) is red while (1–2) are green, **RAISE
-  engines — never lower them to make it green.**
+- **Node floor `>=22.16.0`, identical across the three engines**, pinned by `server/test/node-floor.test.ts`
+  (server-only; CI's `node-floor` job runs it on exactly 22.16.0). Two reasons: `server/src/coord/db.ts` imports
+  `node:sqlite` unconditionally (below 22.13 the server fails to boot), and below 22.16 that `node:sqlite` has no
+  FTS5 (no history search). If absolute assertion 3 or 4 is red while (1–2) are green, **RAISE engines — never lower them.**
 - **Deploy = release + rollout** (design `docs/superpowers/specs/2026-09-18-release-rollout-design.md`). Every merge to
   `main` becomes a GitHub **prerelease** within about a minute (`.github/workflows/release-main.yml` →
   `deploy/release-main.sh prepare` → `build-release.sh` → `actions/attest-build-provenance` → `release-main.sh publish`;

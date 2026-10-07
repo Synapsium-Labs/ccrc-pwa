@@ -1203,3 +1203,283 @@ citations are to `334fb722a`. They are hints, so locate code by content.
     - Whichever PR lands second absorbs `main` only when one of worker clause 16's triggers fires, and only with `git
       merge`: never a rebase, a force-push or `update-branch`. After absorbing, it re-runs the sweep suites and every
       suite the merge touched, and re-pays S6-R11 wherever the merge moved a cited file.
+
+## 12. Rulings, 2026-10-06 (wave 6's pre-flight) — binding; they AMEND sections 1–11
+
+Wave 6's pre-flight read `main` at `77c11245` (workspace-lifecycle wave 3, #286, merged), wave 5's open PR #290
+at `e79b1da7`, and the live fleet box read-only. Six Opus scouts measured the six areas R38 names, and one more
+area R38 did not foresee: why a reclaimed child's temp root came back. The coordinator ruled on their questions.
+Wave 6's plan carries the detail, and this section is the binding ruling text.
+
+Code citations are to `77c11245`. They are hints, so locate code by content.
+
+- **R48 — R38's wave 6 becomes three waves: 6, 7 and 8.**
+  - **Wave 6 (run 291)** repairs the existing destructive verb. It also lays the collector's groundwork, which is
+    not destructive. Its scope:
+    - R49, the tail's temp-root removal, and the ONE removal helper;
+    - R50, the positive witness;
+    - R51, F6;
+    - R52, journaling;
+    - R53, the gone-branch pin;
+    - R54, the gone-directory recovery;
+    - R55, the vanish re-read fix.
+    Its destructive subject is "what `ws-reclaim` deletes", and its SAFETY lens reads only that subject.
+  - **Wave 7** adds the collector verb, R57. It is inert and AGENT-FIRST: no server composes it until wave 8.
+  - **Wave 8** adds the collector's server lane, R58.
+  - **Each wave is one child and one PR.** Each opens its run before the previous wave's run closes, and each gets
+    its own block and its own pre-flight.
+  - **Run 291 keeps `waveOf` 6, and run 260 keeps 5.** Nothing edits a run's `waveOf` (R38).
+  - **Why:**
+    - Unsplit, the inferred size is 8k to 12k insertions over 50 to 70 files, close to waves 3 and 4.
+    - The new verb is a second destructive subject, and R38's own reason is one destructive subject per SAFETY panel.
+    - The lane shares `sweepChildReclaim` with workspace-lifecycle wave 3b's planned lane, so it cannot land
+      before 3b without colliding in `watch.ts`.
+    - An inert verb that ships first lets the fleet advertise its token before any server composes it. That is
+      the precedent of reclaim waves 3 and 4, and of workspace-lifecycle 3 and 3b.
+  - The path-identity follow-up programme now comes after wave 8.
+
+- **R49 — the tail removes a temp root only once nothing uses it, through ONE removal helper.**
+  - **Measured cause (R38's first measurement).** Wave 3's tail removed `~/.cc-tmp/ccrc-pwa-swift-hollow` while
+    the killed pane's processes were still running. Their environment carried `TMPDIR=<leaf>`, and one of them
+    recreated the leaf 3.7 s after `reclaim done`. The leaf's mtime is 22:12:10.735, 2 ms before systemd reported
+    the pane's scope ended.
+    - The tail asks only whether tmux still has the session (`_session_probe`), and never whether the pane's
+      processes have exited.
+    - The leaf's birth time of 2026-10-05 15:27 comes from the operator's rsync onto the new disk, which kept
+      mtimes. It is not the recreation.
+    - The header at `ccd/ccd:28878-28880` ("a reclaim never meets it") is false, and wave 6 corrects it.
+  - **ONE removal helper.** It is extracted from `_ws_reclaim_tail`'s artifacts step as `_WS_RCL_ACT` leaves it,
+    and it serves the clips leaf and the temp-root leaf, for both flavours, and later wave 7's collector. It:
+    - validates the id;
+    - resolves the root physically;
+    - removes a link or file leaf with `rm -f --` and never follows it;
+    - requires a directory leaf to be a real directory owned by this uid, with its physical path equal to
+      root/id;
+    - matches an expected `dev:ino` when the caller gives one;
+    - removes with `--one-file-system`, so it never crosses into another file system. A bind mount of the same
+      file system is a stated residual; only root can make one;
+    - checks every exit code, which today's step throws away;
+    - proves absence with `_ws_reclaim_absent`.
+    It answers three ways: removed or absent, refused (with a reason), or unmeasured.
+  - **The in-use probe.** A temp root is in use while any process of this uid:
+    - carries `TMPDIR` equal to the leaf or under it in `/proc/<pid>/environ`;
+    - has its cwd at or under the leaf;
+    - holds an fd at or under the leaf.
+    The probe keeps the expire probe's discipline: unmeasured is never "nobody", and an unreadable entry
+    is stated. On Darwin it answers unmeasured.
+    - **Its walk is a fixed point.** It re-lists the process table until a listing names no pid it has not read,
+      within a time limit, so a straggler that forks and exits cannot hide its successor. Running out of time is
+      unmeasured.
+    - A leader whose own entries read as vanished is asked through its threads. A thread already exiting counts as
+      vanishing.
+    - It is asked only of a real directory leaf. A link or file leaf is no one's temp root, and is unlinked as in
+      wave 3.
+  - **The tail.**
+    - After the kill, the tail waits, bounded, until the probe answers "nobody" for the temp root. The plan states
+      the bound; it is at most 15 s.
+    - Then it removes the leaf through the helper.
+    - If the probe still answers in use or unmeasured, the tail KEEPS the leaf and its witness and completes the
+      reclaim otherwise. The `done` row records the kept leaf in its measurements. That is not a refusal.
+    - A clips leaf the helper refuses, or cannot measure, is kept and recorded the same way. Nothing collects a
+      kept clips leaf, and that goes to wave 7's pre-flight.
+    - The worktree's removal is unchanged except for the wait. A straggler that writes into a removed worktree path
+      is a stated residual.
+  - **The tail's destructive git calls run contained.** `git worktree remove`, `update-ref -d` and the branch
+    delete run under `_ws_reclaim_contained`'s environment. Measured: uncontained, they run the repository's
+    fsmonitor and its post-index-change and reference-transaction hooks.
+
+- **R50 — the positive witness.**
+  - **Where:** `$REG/tmproots/<id>`, a registry subdirectory with no leading dot, following the `pools/`
+    precedent.
+    - No registry glob sees it.
+    - `_reg_purge` does not remove it, so it outlives the row, which is the case R25 exists for.
+    - `_ws_slug_free` does not count it.
+    - The server can already read it.
+    - A file inside the leaf is rejected, because the session it judges can write it, and so is a sidecar in
+      `~/.cc-tmp`, because sessions write straight into that root.
+  - **What:** one line, versioned key=value: `v=1`, `id`, `run`, `dev`, `ino`, `btime` (`-` where the filesystem
+    has none), `uid` and `at`. The values are taken by `stat` of the leaf right after `_child_tmpdir`'s mkdir and
+    chmod.
+  - **When:** on every rc-0 answer of `_child_tmpdir`, but written (temp file, then `mv`) only when the witness is
+    absent, or its `dev`, `ino`, `btime` or `run` no longer match. It is never written on rc 1 or rc 2. A slug's
+    new child overwrites it on its first rc 0. A leaf that exists before wave 6 deploys gets its witness on its next
+    spawn.
+  - **Death:** only after the removal helper has proven the leaf absent. The order is: remove the leaf, prove it
+    absent, then `rm -f` the witness. A witness with no leaf is nothing to do, and is cleaned.
+  - **Never:** hand-written, backfilled by a separate pass, or matched by name alone. A leaf whose `dev`, `ino` or
+    `btime` does not match is never collected. It is offered to the operator. A storage migration therefore moves
+    every pre-migration orphan to the operator, which fails closed, and the audit says so in its own word.
+
+- **R51 — F6 and the harness strip.**
+  - **The outermost block of `_ws_reclaim_contained`** unsets `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG` and
+    `GIT_CONFIG_COUNT` ABOVE its `GIT_CONFIG_COUNT` computation, so the count starts at 0 and the three pins are
+    the only entries.
+    - Measured on git 2.43: an inherited `GIT_CONFIG_PARAMETERS` overrides the `hooksPath` pin, `GIT_CONFIG`
+      redirects the containment's two `git config` reads, and once the count is unset, stale `KEY_n`/`VALUE_n`
+      entries do nothing.
+    - A test inherits all three variables and shows `hooksPath` is still `/dev/null`.
+    - The comment that calls keeping a caller's entries a feature is rewritten.
+    - `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` are the same uid's own files. They stay a stated residual.
+  - **The harness strip** is one exported helper in a new file, `server/test/gitEnvStrip.ts`. It returns
+    `process.env` minus git's `--local-env-vars` list, `GIT_NAMESPACE` and the `GIT_CONFIG_KEY_`/`VALUE_` entries.
+    - The reclaim and expire fixtures import it wherever they spread `process.env`.
+    - It is never put inside `ghContainedEnv`, whose callers pass git variables on purpose.
+    - `ccdWsHelpers.ts` is touched only under R56's overlap rule.
+    - A pin sets `GIT_DIR` and shows the harness drops it.
+  - F6 reaches `ws-expire` through the shared containment, and workspace-lifecycle's coordinator is told.
+
+- **R52 — journaling (amends R5′).**
+  - **`probe-unmeasured` is journaled as `failed`,** with one new `LcRefusalToken`, in both the reclaim arm and
+    the `ws-audit` arm. The journal row's `verb` tells the two apart.
+    - A `failed` line is already a failure line under wave 5's reader, so every server from wave 5 on reads it the
+      same way.
+    - R5′'s "audit-time journaling is terminal-only" gains this one exception. R20's backoff bounds the repeat.
+  - **The pre-lock dies tied to an id** (a bad token and a bad run id) are journaled as `refused` with new tokens,
+    after the session id is validated. Each is classified in `CHILD_RECLAIM_PRE_LOCK_TOKEN` (R43).
+  - **Three dies stay unjournaled, each with its stated reason:**
+    - the usage die and a bad session id, because neither has a trustworthy id;
+    - python3 unavailable, because the journal encoder is python3.
+  - `flock-unavailable` and `lock-unopenable` already journal.
+  - `ws-expire`'s twin of `probe-unmeasured` is workspace-lifecycle's region, and wave 6 leaves it alone.
+  - Every new token carries what R43 requires:
+    - a `LC_REFUSAL_WORD` sentence;
+    - an `ALL_TOKENS` entry;
+    - disjointness from `SENTENCES`;
+    - one literal call site;
+    - no comment that spells a token-harvesting shape.
+
+- **R53 — the gone-branch pin.**
+  - **Absence is proven by `git show-ref --exists`.** It answers rc 0 for present and rc 2 for absent; any other
+    answer is unmeasured.
+    - Measured on git 2.43: `rev-parse --verify --quiet` and `show-ref --verify --quiet` both answer rc 1 for an
+      absent ref, a corrupt ref and an unreadable `refs/heads`.
+    - **Old git.** A git older than 2.43 rejects the flag. A successful
+      `rev-parse --verify --quiet refs/heads/<b>^{commit}` then still reads present, and anything else reads
+      unmeasured.
+      - Only `--exists` rc 2 ever proves absent.
+      - So a box on an older git (Apple's 2.39, for one) reclaims present branches as today, and fails closed on a
+        gone one: unmeasured at the audit, never `pin-failed`.
+      - A case pins both.
+  - **Every arm takes the three-way read, in one act:**
+    - the ladder's tip reads, the present arm and R19's vanished arm alike;
+    - the pin;
+    - the vanished arm's pin read;
+    - the tail's step-5 branch test.
+    The token carries an explicit `branch=absent` input, so a token minted over an unreadable ref can never be spent
+    as absent. A read failure at step 5 stops the tail with a new `failed` token, `branch-unmeasured`, which
+    carries its own sentence.
+  - **A proven-absent branch** pins HEAD, the WIP commit and every per-worktree ref and reflog commit (most of
+    which the pin already walks), deletes no branch, and the reclaim proceeds.
+    - If the branch reappears after the tombstone, the tail stays `branch-moved`.
+    - A symbolic registry branch reads unmeasured. Every branch delete in the tail is
+      `update-ref -d --no-deref`, so no delete follows a symref to the branch it names.
+    - A worktree whose HEAD is still symbolic to the gone branch stays `pin-failed`, because the WIP commit needs a
+      HEAD.
+  - Spec §5.5 step 3 reads "the branch tip when the branch exists".
+  - The manifest and PR-phase reads (`ccd/ccd:10001`, `:10600`) keep their two-way read, which is a carried
+    residual, because they are outside the RECLAIM region.
+
+- **R54 — the gone-directory alternate-row recovery.**
+  - **It lives inside `_ws_reclaim_workdir_shared`,** as a second placement basis, `recorded`, beside `complete`.
+    One resolver keeps answering the audit, the locked recomputation and `_ws_reclaim_owned` (R31).
+  - **A row whose workdir is gone stops holding other children only on positive evidence.** That is either arm:
+    - **The git-record arm:**
+      - exactly one `<common>/worktrees/*/gitdir` names `<w>/.git`;
+      - git's porcelain list marks that stanza prunable;
+      - the leaf is the only absent component;
+      - the parent resolves `complete` to its literal spelling.
+      The row is then placed by that physical path.
+    - **The breadcrumb arm:**
+      - the row's `.reaping` phase is `branch`, `artifacts` or `clips` (for a reclaim, only with the tombstone's
+        `worktree: present`);
+      - the tombstone's uuid and workdir equal the row's.
+      It applies only while git keeps NO record of the tree. A breadcrumb says ccd got past a step, not that ccd
+      removed the tree, and a moved tree's record is the git arm's to judge. This is the arm that ends D-3734's
+      "two interrupted children hold each other", because after ccd's own `git worktree remove` the git record is
+      gone too.
+  - **The lifecycle `create` row only corroborates,** and never decides alone.
+  - **The moved-tree hole is closed.** No nested checkout of the child, of any repository, may resolve
+    `--absolute-git-dir` to the admin directory a recovered row named. It is asked after the nested scan and again
+    in `_ws_reclaim_owned`.
+  - **The recovery never:**
+    - creates a directory at a gone path (D-3735);
+    - runs `git worktree prune`;
+    - removes the admin directory or purges the other row;
+    - reads `/proc`, a pane's cwd, tmux or unit state;
+    - follows a leaf link;
+    - treats an unreadable `worktrees/` or `gitdir` as "no record".
+    Each arm fails closed, and device and inode ancestry stay the path-identity follow-up's.
+
+- **R55 — `vanish-reread-races-mirror` is fixed by a second trigger.** This supersedes the carried candidates.
+  - **The fix:**
+    - The journal mirror keeps the newest `at` of a reclaim-`done` row it has parsed, in memory, only ever rising.
+    - The `coord` frame carries it as one new optional field, read through one PWA reader under absence-permits.
+    - The board re-reads the archive when that value CHANGES (never "increases", because a restart reads null) and
+      some finished row's chip is still unsettled.
+    - When a child-marked id leaves the listing, the watcher resets the mirror's clock without awaiting it, so the
+      correction usually lands within one tick.
+  - It fires once per measured fact, so it is not a retry cadence. It adds no await to the tick, and changes neither
+    the tick's order nor ccd's journal.
+  - **Why not the other candidates:**
+    - Option A alone still races, because the forced sweep can land inside the gap between the purge and `done`.
+    - Reordering ccd alone changes nothing, because nobody awaits the mirror.
+    - Both together would change what `done` means in the tail `ws-expire` shares.
+  - **A disclosed residual:** ccd dying between `_reg_purge` and `_lc_done` leaves a null chip and no attention
+    entry. If that is ever fixed, it is by reading the tombstone, never by reordering ccd.
+
+- **R56 — landing order and overlaps.**
+  - **#290 lands first, and wave 6 is dispatched only after it has merged.** So the worker branches from a `main`
+    that already carries wave 5, and every R43 classification edit lands on wave 5's code as merged. Whenever the
+    worker absorbs `main`, it does so with `git merge`, never a rebase.
+  - **The overlap rule with workspace-lifecycle (quiet-river), which also coordinates run 274:**
+    - It covers `ccd/ccd`'s RECLAIM and EXPIRE regions, the spawn gate and `_child_tmpdir`, plus `ccdWsHelpers.ts`
+      and `README.md`.
+    - Edits are additive, in their own regions.
+    - The in-use probe is a new function. Wave 6 never edits `_ws_expire_cwd_users`'s body, and folding the two
+      probes into one waits until WL 3b's precondition has landed.
+    - The second lander merges `main`, re-stamps `ccd/ccd`, and re-runs `ownership.test.ts`,
+      `mark.mjs --check`, the citation cases and `deviation-refs`.
+  - **The citation tax.**
+    - README holds no `ccd/ccd` anchor any more. Its tax is `shared/api.ts` and `session-hook.sh` only, so the
+      S6-R11 re-pointer in the continuity plan is stale.
+    - Any edit above `ccd/ccd:19109` (the caps list, the entry boundary, `_ws_slug_free`, the LC region) stays
+      length-neutral, or re-measures the census with the instrument.
+  - New cases go in new test files, because of the 600 s foreground ceiling.
+
+- **R57 — wave 7's outline: the collector verb.** Wave 7's own pre-flight rules the detail.
+  - **Shape:** a new sibling verb, as `ws-expire` is. It has:
+    - an audit that mints a token on an existing granted shape;
+    - a destructive verb gated on `--expect`;
+    - its own lifecycle act, capability token and agent grant;
+    - the entry guard and `is_protected`;
+    - the shared reap lock;
+    - `reclaim-paused` honoured inside the lock;
+    - R49's helper and probe.
+    It is not a flavour of `ws-reclaim`, because rung 2's marker does not exist for this population. Nor is it a
+    mode of `ccd-tmp-sweep`, which the agent cannot run and whose root rule keeps the two collectors disjoint.
+  - **A leaf is a candidate only when all of these hold:**
+    - its witness matches its `dev`, `ino` and `btime`;
+    - `_ws_slug_free` answers free (dot-locks are not rows and are never unlinked);
+    - the in-use probe answers nobody;
+    - the newest of ctime and mtime over every entry under the leaf, the leaf included, is at least 24 h old (a
+      knob that can only be raised);
+    - it was observed twice, on the server's monotonic clock, with an unchanged token.
+  - It audits only witnessed ids, so it never takes a lock for a foreign name.
+  - Before wave 7 ships, its plan proves that no spawn under a recycled slug can have its leaf removed: a rename
+    into a same-filesystem quarantine under the lock, or an equivalent.
+  - It is Linux-first: on Darwin it is unmeasured, which refuses.
+
+- **R58 — wave 8's outline: the lane.**
+  - It is dispatched only after workspace-lifecycle wave 3b merges and the fleet box's `ccd caps` advertises wave
+    7's token.
+  - It lists witnessed candidates through the registry read the server already has.
+  - It honours `reclaim-pause`, R39's pacing class and the attached-session defer.
+  - Its SAFETY and SECURITY lenses are mandatory.
+
+- **R59 — live residue stays the operator's.** No session acts on any of it.
+  - **The leftovers in `~/.cc-tmp`:**
+    - `ccrc-pwa-swift-hollow`'s empty, unwitnessed leaf;
+    - the foreign entries in `~/.cc-tmp`, measured 2026-10-06 at 18 directories and 105 loose files, about 6.66 GiB.
+  - **`expoAI-assistant-calm-mesa`** (branch proven absent; HEAD and every reflog commit on `origin/main`; clean
+    tree) reclaims on its own once wave 6's gone-branch pin is live. Until then the operator may recreate the branch
+    at HEAD to reclaim it sooner.

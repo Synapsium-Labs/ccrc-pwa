@@ -96,6 +96,20 @@ import {
   stateCallsNaming, liveShapeRefreshes, foreignCcgptCalls, foreignProbeCalls, assertForeignFront, FOREIGN_MARK,
   withForeignProxyRunning, type ForeignEntry, type RefreshObservation, type StubRc, type LanePorts,
 } from './codexLaneFixture.js';
+import { docsProbeProgram } from './docsHelperPy.js';
+import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
+
+/** The two python3 invocations ccd's Docs front makes when the closing
+ *  doctor's `docs` check runs the installed ccd (Docs W1a): the floor probe,
+ *  read off the shipped ccd/ccd so it is never re-typed, and the ready line
+ *  the doctor suite's own stub prints. The `python3` stub below embeds both
+ *  in single quotes, so a quote or a newline in either is refused here,
+ *  before a stub that parses differently is ever written. */
+const DOCS_PROBE = docsProbeProgram();
+const DOCS_READY_LINE = JSON.stringify(DOCS_INDEX_READY);
+if (/['\n]/.test(DOCS_PROBE + DOCS_READY_LINE)) {
+  throw new Error('the docs probe or the ready line holds a quote or a newline; the python3 stub cannot embed it');
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -704,9 +718,15 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // leg dies at its preflight); any other `-c` falls through to the
     // refusal below, which is this stub's contract.
     ...python3ProgramArm(PYTHON3),
+    // ccd's Docs front, reached by the closing doctor's `docs` check through the
+    // INSTALLED ccd (Docs W1a): the 3.8 floor probe passes, and the helper
+    // prints the canned ready answer. Canned rather than forwarded to the real
+    // python3, so the install stays hermetic and reads no projects root.
+    `[ "$1" = -c ] && [ "$2" = '${DOCS_PROBE}' ] && exit 0`,
+    `[ "$1" = /dev/fd/3 ] && [ "$2" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
-  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   // `verify-service.sh`'s own knobs, at the values its header says a test uses:
   // the production defaults sleep 3 + 5 seconds per call, and `_inst_enable`
   // makes one call per install. Zeroed here rather than per test, for the
@@ -2181,6 +2201,15 @@ describe('ccrc install: the executables and files it installs', () => {
     const { home } = installed;
     const bin = join(home, '.local', 'bin', 'ccd-tmp-sweep');
     expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-tmp-sweep')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
+  itLinux('ccd-scope-sweep lands beside it too (the pane-scope sweep) — every role, but not Darwin', () => {
+    // Mirrors the reaper's case above: its only runner is a systemd timer and it
+    // reads /proc and cgroups. Its UNIT and ENABLE are role-gated (server skips both).
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-scope-sweep');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-scope-sweep')));
     expect(mode(bin)).toBe(0o755);
   });
 
@@ -4162,6 +4191,9 @@ const UNIT_FILES: Array<[string, string]> = [
   // Claude Code sessions, so it has no /tmp/claude-<uid> to reap.
   ['ccd-tmp-sweep.service', 'deploy/systemd/ccd-tmp-sweep.service'],
   ['ccd-tmp-sweep.timer', 'deploy/systemd/ccd-tmp-sweep.timer'],
+  // The pane-scope sweep: ROLE-GATED on the reaper's terms — a server box runs no pane scopes.
+  ['ccd-scope-sweep.service', 'deploy/systemd/ccd-scope-sweep.service'],
+  ['ccd-scope-sweep.timer', 'deploy/systemd/ccd-scope-sweep.timer'],
   // W4a Task 9 (design §11): the server-role watchdog's pair — ROLE-GATED the
   // OTHER way round from the pairs above: `_inst_units` places it on `server`
   // and `both` (this list's role) and never on `fleet`, whose node the
@@ -4465,6 +4497,7 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // The temp-dir reaper's timer, on the same gate and the same
       // degrade-rather-than-die idiom as the two sweeps above it.
       '--user enable --now ccd-tmp-sweep.timer',
+      '--user enable --now ccd-scope-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       // spec 2026-09-07 §C: a FOURTH enable, role-gated exactly as the sweep's
       // and degrading rather than dying for the same reason.
@@ -4977,7 +5010,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // mutation site for its line too (spec §18 "the puller is installed
         // where its timer looks").
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
-           'ccd-pool-sync', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
+           'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
            'ccd-usage-sweep.py', 'ccrc', 'graphify', ...GPT_LANE_BINS].sort());
   });
 
@@ -6025,6 +6058,8 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(argv).toContain('--user enable --now ccrc-models.timer');
     // Fleet is the role that runs sessions, so the temp-dir reaper arms here.
     expect(argv).toContain('--user enable --now ccd-tmp-sweep.timer');
+    // and the pane-scope sweep, on the reaper's gate.
+    expect(argv).toContain('--user enable --now ccd-scope-sweep.timer');
     // Ruling T4-R1: and the pool-sync timer, which enables on THIS ROLE ONLY
     // — the role whose install wrote the `~/.ccrc/agent.env` the binary
     // refuses without. `--role both` and `--role server` below assert the
@@ -6122,6 +6157,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccd-graph-sweep.timer',
       '--user enable --now ccd-usage-sweep.timer',
       '--user enable --now ccd-tmp-sweep.timer',
+      '--user enable --now ccd-scope-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
       '--user enable --now ccrc-models.timer',
@@ -6152,7 +6188,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
         || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
-        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccrc-codex-usage@')) continue;
+        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccrc-codex-usage@')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -6170,6 +6206,9 @@ describe('ccrc install --role: the refusals and the default', () => {
     // The temp-dir reaper: a server box runs no sessions, so no temp dir to reap.
     expect(existsSync(unitDir(home, 'ccd-tmp-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-tmp-sweep.timer'))).toBe(false);
+    // The pane-scope sweep: a server box runs no pane scopes.
+    expect(existsSync(unitDir(home, 'ccd-scope-sweep.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-scope-sweep.timer'))).toBe(false);
     // Ruling T4-R1: the pool-sync pair is gated OUT here too — but on a
     // NARROWER gate than the four pairs above it. Those are `!= server`;
     // this one is `= fleet`, because `both` gets no agent.env either. A
@@ -6191,6 +6230,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccgpt-usage');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-codex-usage');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-tmp-sweep');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-scope-sweep');
     // W4a Task 9: the watchdog is the SERVER's — its pair landed through the
     // UNIT_FILES loop above (not skipped there), and its timer is enabled.
     expect(systemctlCalls(home).map((c) => c.argv)).toContain('--user enable --now ccrc-update-watchdog.timer');
@@ -7569,14 +7609,17 @@ describe('ccrc install: the codex tier restart step, measured in isolation (_ins
  *  call made any other way still reaches the wall. It answers
  *  `enable --now` and `disable --now` as a manager does, by planting and
  *  removing the timer's `timers.target.wants` link, so the converge's own
- *  reads see its own acts. A unit listed in `refuse` is refused. `enabled`,
+ *  reads see its own acts. A unit listed in `refuse` is refused. A unit listed
+ *  in `keepLink` (Plan 3b Task A2) is a disable the manager ANSWERS 0 while its
+ *  link stays — the shape `ccrc-account.test.ts`'s C15 pins for account
+ *  removal. `enabled`,
  *  `foreign` and `flatForeign` plant links before the step runs. `shape:
  *  false` (fix round 1) sources no `ccrc-wrapper-shape` and points
  *  `CCRC_HERE` at an empty directory, so `_codex_shape` cannot load the
  *  contract: the box whose tree lost the file. */
 function runUsageStep(c: {
   lanes?: string[]; lanesRc?: number; role?: 'both' | 'fleet' | 'server'; os?: 'linux' | 'darwin';
-  enabled?: string[]; foreign?: string[]; flatForeign?: boolean; refuse?: string[]; shape?: boolean;
+  enabled?: string[]; foreign?: string[]; flatForeign?: boolean; refuse?: string[]; keepLink?: string[]; shape?: boolean;
 }): StepRun & { links: string[] } {
   const home = mkTmp('ccrc-codex-usage-step-');
   const units = join(home, '.config', 'systemd', 'user');
@@ -7587,6 +7630,7 @@ function runUsageStep(c: {
   for (const id of c.foreign ?? []) link(`ccgpt-usage@${id}.timer`, 'ccgpt-usage@.timer');
   if (c.flatForeign === true) link('ccgpt-usage.timer', 'ccgpt-usage.timer');
   writeFileSync(join(home, 'refuse'), (c.refuse ?? []).map((u) => `${u}\n`).join(''));
+  writeFileSync(join(home, 'keeplink'), (c.keepLink ?? []).map((u) => `${u}\n`).join(''));
   const noShape = join(home, 'no-shape-contract');
   mkdirSync(noShape);
   const r = runStepHarness(home, [
@@ -7604,7 +7648,7 @@ function runUsageStep(c: {
     '  if grep -qxF -- "$4" "$HOME/refuse"; then echo "Failed to $2 unit $4: fixture" >&2; return 1; fi',
     '  case "$2" in',
     '    enable) ln -sfn "$HOME/.config/systemd/user/${4%%@*}@.timer" "$HOME/.config/systemd/user/timers.target.wants/$4"; return 0 ;;',
-    '    disable) rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$4"; return 0 ;;',
+    '    disable) grep -qxF -- "$4" "$HOME/keeplink" || rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$4"; return 0 ;;',
     '  esac',
     '  echo "fixture systemctl: unexpected argv: $*" >&2; return 90',
     '}',
@@ -7782,6 +7826,28 @@ describe('ccrc install: the codex usage converge, measured in isolation (_inst_c
     const r = runUsageStep({ os: 'darwin', lanes: [] });
     expect(r.stdout).toBe('');
     expect(ctl(r)).toEqual([]);
+  });
+
+  it('a withdrawal the manager answers 0 while its link stays is NOT withdrawn: the could-not-disable line, NOT CONVERGED, and one degraded step — measured, never read off the exit code (Plan 3b Task A2)', () => {
+    const r = runUsageStep({ lanes: [], enabled: ['ext-a'], keepLink: [T('ext-a')] });
+    expect(ctl(r)).toEqual([DIS('ext-a')]);
+    expect(r.links, 'the stand-in removed the link it was told to keep').toEqual([T('ext-a')]);
+    expect(r.degraded).toEqual(['codex-usage']);
+    expect(r.stderr).toMatch(/^install: codex-usage: could not disable ccrc-codex-usage@ext-a\.timer — account ext-a is no longer a codex lane, so its timer must not poll; run: systemctl --user disable --now ccrc-codex-usage@ext-a\.timer$/m);
+    expect(r.stdout, 'a withdrawal the link contradicts was claimed').toBe(
+      'install: codex-usage: NOT CONVERGED — ccrc\'s own usage timer is still enabled for ext-a, which this run had to withdraw and systemd would not disable (the could-not-disable line above names each, with its command). This install continues. Run those commands, then re-run: ccrc install\n');
+  });
+
+  it('on the foreign arm too: a disable answered 0 with the link still there says both publishers are armed, never "this run disabled it" (Plan 3b Task A2)', () => {
+    const r = runUsageStep({ lanes: ['codex-a'], enabled: ['codex-a'], foreign: ['codex-a'], keepLink: [T('codex-a')] });
+    expect(ctl(r)).toEqual([DIS('codex-a')]);
+    expect(r.links).toEqual(['ccgpt-usage@codex-a.timer', T('codex-a')]);
+    expect(r.degraded).toEqual(['codex-usage']);
+    expect(r.stderr).toMatch(/^install: codex-usage: could not disable ccrc-codex-usage@codex-a\.timer — run: systemctl --user disable --now ccrc-codex-usage@codex-a\.timer$/m);
+    expect(r.stdout).toMatch(/^install: codex-usage: NOT ENABLED for codex-a — .* ccrc's own ccrc-codex-usage@codex-a\.timer is enabled too, and this run could not disable it, so both publishers are armed\. ccrc never disables another tool's unit: /m);
+    expect(r.stdout).not.toMatch(/this run disabled it/);
+    expect(r.stdout).toMatch(/^install: codex-usage: enabled for no lane; withheld from codex-a; withdrawn from no lane$/m);
+    expect(r.stdout).toMatch(/^install: codex-usage: NOT CONVERGED — ccrc's own usage timer is still enabled for codex-a, which this run had to withdraw and systemd would not disable/m);
   });
 });
 
@@ -8148,7 +8214,23 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  `origin/main` (`$SCRATCH/t10-base`). RE-MEASURED when doctor gained its
  *  `timeout` check, by Step 3's case on a disposable copy of that tree: the
  *  three maps each gained `"timeout": "PASS"` and nothing else moved — every
- *  other class, both codes and both refreshes equal. It is a golden: nothing re-measures
+ *  other class, both codes and both refreshes equal. RE-MEASURED again on the merge of
+ *  `origin/main` into native Docs W1, when doctor gained its `docs` check, by the same
+ *  case on a disposable copy of the merged tree: the three maps each gained
+ *  `"docs": "PASS"` and nothing else moved (`codex: SKIP`, which the measurement
+ *  also prints, stays out: the live cases spread it over this golden). RE-MEASURED
+ *  again when doctor gained its `model-default` check, the same way, on a disposable
+ *  `git archive` copy of `36438851d`'s tree (the commit that added the check,
+ *  on `b3b5a73ed`): the three maps each gained `"model-default": "PASS"` and
+ *  nothing else moved. RE-MEASURED once more on that branch's merge of
+ *  `origin/main` (`b27fabc15`), which carries both checks, by the same case on a
+ *  disposable `git archive` copy of the merged tree (`git write-tree` of the
+ *  resolved index): exactly `origin/main`'s three maps plus `"model-default":
+ *  "PASS"` in each — both codes 0, both refreshes equal, `codex` `SKIP` in all
+ *  three. RE-MEASURED once more when doctor gained `scope-sweep` (session-continuity
+ *  wave 4): the three maps each gained `"scope-sweep": "SKIP"` (the fixture's
+ *  runtime dir holds no verdict record) and nothing else moved.
+ *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
  *  base, never hand-edited (it held on the final fix wave's merge of
@@ -8174,6 +8256,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "config": "PASS",
         "credentials": "SKIP",
         "disk": "PASS",
+        "docs": "PASS",
         "exposure": "SKIP",
         "fleet": "SKIP",
         "flock": "PASS",
@@ -8184,8 +8267,10 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "graphify": "PASS",
         "graphify-path": "PASS",
         "jq": "PASS",
+        "jq_regex": "PASS",
         "linger": "PASS",
         "memory": "PASS",
+        "model-default": "PASS",
         "models": "PASS",
         "name": "SKIP",
         "node": "PASS",
@@ -8196,6 +8281,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "python3": "PASS",
         "rc": "PASS",
         "routing": "PASS",
+        "scope-sweep": "SKIP",
         "scopes": "SKIP",
         "services": "PASS",
         "skills": "PASS",
@@ -8219,6 +8305,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "config": "PASS",
         "credentials": "SKIP",
         "disk": "PASS",
+        "docs": "PASS",
         "exposure": "SKIP",
         "fleet": "SKIP",
         "flock": "PASS",
@@ -8229,8 +8316,10 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "graphify": "PASS",
         "graphify-path": "PASS",
         "jq": "PASS",
+        "jq_regex": "PASS",
         "linger": "PASS",
         "memory": "PASS",
+        "model-default": "PASS",
         "models": "PASS",
         "name": "SKIP",
         "node": "PASS",
@@ -8241,6 +8330,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "python3": "PASS",
         "rc": "PASS",
         "routing": "PASS",
+        "scope-sweep": "SKIP",
         "scopes": "SKIP",
         "services": "PASS",
         "skills": "PASS",
@@ -8334,6 +8424,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "config": "PASS",
       "credentials": "SKIP",
       "disk": "PASS",
+      "docs": "PASS",
       "exposure": "SKIP",
       "fleet": "SKIP",
       "flock": "PASS",
@@ -8344,8 +8435,10 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "graphify": "PASS",
       "graphify-path": "PASS",
       "jq": "PASS",
+      "jq_regex": "PASS",
       "linger": "PASS",
       "memory": "PASS",
+      "model-default": "PASS",
       "models": "PASS",
       "name": "SKIP",
       "node": "PASS",
@@ -8356,6 +8449,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "python3": "PASS",
       "rc": "PASS",
       "routing": "PASS",
+      "scope-sweep": "SKIP",
       "scopes": "SKIP",
       "services": "PASS",
       "skills": "PASS",

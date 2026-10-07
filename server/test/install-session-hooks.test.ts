@@ -10,7 +10,7 @@ const INSTALLER = path.resolve(__dirname, '../../ccd/install-session-hooks.sh');
 
 // The MEASURED real-world shape (2026-08-05): SessionStart with a compact
 // matcher + a matcher-less entry, SessionEnd; one home carries an extra
-// cloneme SessionEnd entry. The installer must preserve every byte of these.
+// cloneme SessionEnd entry. Every foreign entry survives byte-identically; managed ones are appended after them.
 const EXISTING = {
   hooks: {
     SessionStart: [
@@ -50,11 +50,11 @@ describe('install-session-hooks', () => {
   // after confirming the red. Main found the same gap independently (D-306 (was D-B8-10))
   // and made the pairing a mechanism: the derived-set test below fails on any
   // divergence between EVENTS_JSON and the hook's own case arms.
-  it('registers the eleven measured events and preserves existing entries byte-identically', () => {
+  it('registers the twelve measured events and preserves existing entries byte-identically', () => {
     run();
     const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
     for (const ev of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest',
-      'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'SessionStart']) {
+      'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'SessionStart', 'SessionEnd']) {
       const entries = s.hooks[ev] as any[];
       expect(entries.some((e) => e.hooks?.some((h: any) => String(h.command).includes('/session-hook.sh'))),
         ev).toBe(true);
@@ -70,7 +70,10 @@ describe('install-session-hooks', () => {
     expect(s.hooks.SessionStart.slice(0, EXISTING.hooks.SessionStart.length))
       .toEqual(EXISTING.hooks.SessionStart);
     expect(s.hooks.SessionStart).toHaveLength(EXISTING.hooks.SessionStart.length + 1);
-    expect(s.hooks.SessionEnd).toEqual(EXISTING.hooks.SessionEnd);
+    expect(s.hooks.SessionEnd.slice(0, EXISTING.hooks.SessionEnd.length)).toEqual(EXISTING.hooks.SessionEnd);
+    expect(s.hooks.SessionEnd).toHaveLength(EXISTING.hooks.SessionEnd.length + 1);   // one managed entry, appended (delegation broker §5.3)
+    expect(s.hooks.WorktreeCreate).toBeUndefined();   // registering either REPLACES Claude Code's own worktree handling (delegation broker §3.1)
+    expect(s.hooks.WorktreeRemove).toBeUndefined();
     expect(s.statusLine).toEqual(EXISTING.statusLine);
   });
   it('re-running converges (second run is a byte no-op)', () => {

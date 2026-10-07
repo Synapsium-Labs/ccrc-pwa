@@ -15,17 +15,23 @@
 // This file also covers the coordinating re-read that sits BETWEEN the
 // sibling re-read and the pause read (spec §1, rule 4, "Manual cleanup
 // should be reserved ONLY FOR COORDINATOR WORKSPACE CLEANUP") — a session
-// that has EVER coordinated a run, in any state, is never reclaimed
-// automatically, and it is checked before the pause so the more specific
-// answer (`siblings-open`) wins over `paused-at-server` when both are true.
-// "Ever" covers both a reclaim's HEIR and the coordinator that SAME reclaim
-// displaced (`CoordStore.childReclaimCoordinatorIds`'s own docstring states
-// the full scope and its one residual).
+// that has coordinated a run in its own generation, in any state
+// (`childReclaimHasCoordinated`; spec §5.6: slugs recycle), is never
+// reclaimed automatically, and it is checked before the pause so the more
+// specific answer (`siblings-open`) wins over `paused-at-server` when both
+// are true. A claim covers both a reclaim's HEIR and the coordinator that
+// SAME reclaim displaced (`CoordStore.childReclaimCoordinatorClaims`'s own
+// docstring states the full scope and its one residual).
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { childReclaimPauseRead, reclaimChild, type ChildReclaimDeps } from '../src/coord/childReclaim.js';
+import {
+  CHILD_RECLAIM_FEED_QUIET_NONE, childReclaimPauseRead, reclaimChild, type ChildReclaimDeps,
+} from '../src/coord/childReclaim.js';
 import { CoordStore } from '../src/coord/store.js';
+import { parseJournalLine } from '../src/coord/journalparse.js';
+import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
+import type { ChildReclaimCoordinatorClaim } from '../src/childReclaimSweep.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { ACTOR_FLAGS_CAP, CCD_ARGV, RECLAIM_CAP } from '../src/ccdargv.js';
@@ -91,7 +97,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     // `deferredSinceMs: null` — close never deferred before (spec §5.7: close
     // is a first attempt; the sweep carries the wait).
     const out = await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', sessionId: 'demo-a', runId: f.runId, why: 'paused-at-server' });
     expect(f.ccdCalls()).toEqual([]);
@@ -106,7 +112,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     // deferral it saw, a full ceiling ago.
     const out = await reclaimChild(f.deps, {
       sessionId: 'demo-a', runId: f.runId, trigger: 'sweep', deferExpired: true,
-      deferredSinceMs: Date.now() - 15 * 60_000,
+      deferredSinceMs: Date.now() - 15 * 60_000, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
     expect(f.ccdCalls()).toEqual([]);
@@ -117,7 +123,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     const f = await fixture({ visible: true });
     f.raise();
     const out = await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
   });
@@ -129,7 +135,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     if (!('id' in next)) throw new Error(`openRun refused: ${JSON.stringify(next)}`);
     f.coord.setSession(next.id, 'demo-a');
     const out = await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     // The detail pins WHICH branch answered: the sibling re-read's own
     // wording, never 2a's `"<id> has coordinated run(s)"` — the two branches
@@ -157,7 +163,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     if (!('id' in next)) throw new Error(`openRun refused: ${JSON.stringify(next)}`);
     f.coord.setSession(next.id, 'demo-a');
     const out = await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'siblings-open',
       detail: `open run(s) #${next.id} still name this workspace` });
@@ -167,7 +173,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     const f = await fixture();
     f.raise();
     await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(f.feed()).toEqual(['child reclaim deferred']);
     expect(f.bodies()[0]).toContain('paused-at-server');
@@ -179,7 +185,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     // the audit's own gate refuses).
     const f = await fixture();
     await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(f.ccdCalls()).toContainEqual([...CCD_ARGV.wsReclaimAudit('demo-a', false)]);
   });
@@ -197,14 +203,64 @@ describe('reclaimChild — the coordinating re-read, before the pause', () => {
     if (!('id' in coordinated)) throw new Error(`openRun refused: ${JSON.stringify(coordinated)}`);
     // `planned` only carries a `failed` edge with no dispatch (RUN_TRANSITIONS,
     // `shared/api.ts`) — `failed` is still TERMINAL, and that (not the word
-    // `done`) is the whole distinction `childReclaimCoordinatorIds` must not care
+    // `done`) is the whole distinction `childReclaimCoordinatorClaims` must not care
     // about: an ANY-state read, unlike `openCoordinatorIds`, keeps a session
     // that coordinated a now-terminal run.
     expect(f.coord.closeRun({ runId: coordinated.id, finalState: 'failed', causedBy: 'test',
       handoffCommit: null, program: 'w4-paused-coord', viaClosing: false }).ok).toBe(true);
     f.raise(); // the switch is ALSO up — the more specific answer must still win
     const out = await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
+    });
+    expect(out).toMatchObject({ kind: 'deferred', why: 'siblings-open', detail: 'demo-a has coordinated run(s)' });
+    expect(f.ccdCalls()).toEqual([]);
+  });
+
+  // K6 — step 2a decides through the coordination fence (spec §1 rule 4;
+  // spec §5.6: slugs recycle). `deps.now` drives the generation pick; the
+  // claim's own `closedAt` is read back from the store, and the CURRENT
+  // generation's `create` is mirrored against it. The switch is raised in
+  // both, so a child that passes 2a stops at the pause, before any argv.
+  let createN = 0;
+  const mirrorCreate = (coord: CoordStore, session: string, at: number): void => {
+    createN += 1;
+    const line = JSON.stringify({ uid: `k6.1.${createN}`, at, act: 'create', outcome: 'done', verb: 'ws-add', id: session });
+    coord.ingestJournal({ gen: '1790000000000000000', rows: [parseJournalLine(line)], cursor: createN * 200,
+      size: createN * 200, at });
+  };
+  /** A run demo-a coordinated, abandoned; its `closedAt` as the store wrote it. */
+  const coordinatedClosedAt = (coord: CoordStore, program: string): number => {
+    const r = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-a' });
+    if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
+    expect(coord.closeRun({ runId: r.id, finalState: 'failed', causedBy: 'test', handoffCommit: null, program,
+      viaClosing: false }).ok).toBe(true);
+    const read = coord.run(r.id);
+    if (!read.ok || read.run === null || read.run.closedAt === null) throw new Error('the claim has no closedAt');
+    return read.run.closedAt;
+  };
+
+  it('K6a: a recycled slug whose claim closed before this generation was born passes 2a — the raised switch answers', async () => {
+    const f = await fixture();
+    const closedAt = coordinatedClosedAt(f.coord, 'k6-earlier');
+    const born = closedAt + CHILD_BIRTH_SKEW_MS + 1;
+    mirrorCreate(f.coord, 'demo-a', born);
+    f.raise();
+    const out = await reclaimChild({ ...f.deps, now: () => born + 1_000 }, {
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
+    });
+    expect(out).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
+    expect(f.ccdCalls()).toEqual([]);
+  });
+
+  it('K6b: a claim that closed after this generation was born keeps the child at 2a — siblings-open, has coordinated', async () => {
+    const f = await fixture();
+    const born = Date.now();
+    mirrorCreate(f.coord, 'demo-a', born);
+    const closedAt = coordinatedClosedAt(f.coord, 'k6-this');
+    expect(closedAt).toBeGreaterThanOrEqual(born);
+    f.raise();
+    const out = await reclaimChild({ ...f.deps, now: () => closedAt + 1_000 }, {
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'siblings-open', detail: 'demo-a has coordinated run(s)' });
     expect(f.ccdCalls()).toEqual([]);
@@ -212,16 +268,16 @@ describe('reclaimChild — the coordinating re-read, before the pause', () => {
 
   it('a throw reading the coordination table defers siblings-unreadable, never paused-at-server', async () => {
     const f = await fixture();
-    const original = f.coord.childReclaimCoordinatorIds.bind(f.coord);
-    f.coord.childReclaimCoordinatorIds = () => { throw new Error('coord.db unreadable'); };
+    const original = f.coord.childReclaimCoordinatorClaims.bind(f.coord);
+    f.coord.childReclaimCoordinatorClaims = () => { throw new Error('coord.db unreadable'); };
     try {
       f.raise();
       const out = await reclaimChild(f.deps, {
-        sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+        sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
       });
       expect(out).toMatchObject({ kind: 'deferred', why: 'siblings-unreadable' });
     } finally {
-      f.coord.childReclaimCoordinatorIds = original;
+      f.coord.childReclaimCoordinatorClaims = original;
     }
   });
 });
@@ -229,14 +285,15 @@ describe('reclaimChild — the coordinating re-read, before the pause', () => {
 // `reclaimProgram` OVERWRITES `claimedBy` on every run of a programme,
 // terminal runs included, so a bare `SELECT DISTINCT claimedBy` alone loses
 // the coordinator it just displaced the instant an heir takes the chair.
-// `childReclaimCoordinatorIds` unions in the `from` side of every
-// `reclaim:<from> -> <to>` row `reclaimProgram` writes (spec §1, rule 4).
-describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
+// `childReclaimCoordinatorClaims` notes the `from` side of every
+// `reclaim:<from> -> <to>` row `reclaimProgram` writes (spec §1, rule 4), and
+// its `to` side, each at that row's own instant.
+describe('CoordStore.childReclaimCoordinatorClaims — the displaced side', () => {
   // The size case's bound: the bounded read measured about 7 ms on the fleet
   // box, the unbounded one about 7.8 s; 1000 ms sits far from both.
-  const CHILD_RECLAIM_COORDINATOR_IDS_BOUND_MS = 1000;
+  const CHILD_RECLAIM_COORDINATOR_CLAIMS_BOUND_MS = 1000;
   const bareStore = (): CoordStore => {
-    const home = mkTmp('ccrc-child-reclaim-coordinator-ids-');
+    const home = mkTmp('ccrc-child-reclaim-coordinator-claims-');
     return new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   };
 
@@ -247,12 +304,12 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
     if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
     expect(coord.closeRun({ runId: opened.id, finalState: 'failed', causedBy: 'test',
       handoffCommit: null, program: 'w4-displaced', viaClosing: false }).ok).toBe(true);
-    expect(coord.childReclaimCoordinatorIds().has('demo-a')).toBe(true);
+    expect(coord.childReclaimCoordinatorClaims().has('demo-a')).toBe(true);
     // `reclaimProgram` rewrites `claimedBy` on every run of the programme —
     // the just-closed row included — so a bare `SELECT DISTINCT claimedBy`
     // alone would drop `demo-a` the instant this runs.
     expect(coord.reclaimProgram(opened.id, 'heir-x', Date.now(), null)).toMatchObject({ ok: true });
-    const ids = coord.childReclaimCoordinatorIds();
+    const ids = coord.childReclaimCoordinatorClaims();
     expect(ids.has('demo-a')).toBe(true);   // the displaced coordinator — the fix
     expect(ids.has('heir-x')).toBe(true);   // the heir — unaffected by the fix
   });
@@ -274,7 +331,7 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
       wave: 1, waveOf: null, claimedBy: from });
     if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
     expect(coord.reclaimProgram(opened.id, 'heir-space', Date.now(), null)).toMatchObject({ ok: true });
-    expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
+    expect(coord.childReclaimCoordinatorClaims().has(from)).toBe(true);
   });
 
   it('round-trips a from with a trailing space', () => {
@@ -284,7 +341,7 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
       wave: 1, waveOf: null, claimedBy: from });
     if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
     expect(coord.reclaimProgram(opened.id, 'heir-trail', Date.now(), null)).toMatchObject({ ok: true });
-    expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
+    expect(coord.childReclaimCoordinatorClaims().has(from)).toBe(true);
   });
 
   // An arrow on the `from` side: the true `from` is the LAST prefix here, and
@@ -297,7 +354,7 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
       wave: 1, waveOf: null, claimedBy: from });
     if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
     expect(coord.reclaimProgram(opened.id, 'heir-arrow', Date.now(), null)).toMatchObject({ ok: true });
-    const ids = coord.childReclaimCoordinatorIds();
+    const ids = coord.childReclaimCoordinatorClaims();
     expect(ids.has(from)).toBe(true);
     expect(ids.has('demo')).toBe(true);   // the documented over-protection
   });
@@ -312,7 +369,7 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
       wave: 1, waveOf: null, claimedBy: from });
     if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
     expect(coord.reclaimProgram(opened.id, 'heir', Date.now(), null)).toMatchObject({ ok: true });
-    expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
+    expect(coord.childReclaimCoordinatorClaims().has(from)).toBe(true);
   });
 
   // A LINE TERMINATOR in `from`: `POST /api/runs`'s own check is
@@ -329,7 +386,7 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
       wave: 1, waveOf: null, claimedBy: from });
     if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
     expect(coord.reclaimProgram(opened.id, 'heir-lf', Date.now(), null)).toMatchObject({ ok: true });
-    expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
+    expect(coord.childReclaimCoordinatorClaims().has(from)).toBe(true);
   });
 
   it('round-trips a from holding an embedded carriage return', () => {
@@ -339,7 +396,7 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
       wave: 1, waveOf: null, claimedBy: from });
     if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
     expect(coord.reclaimProgram(opened.id, 'heir-cr', Date.now(), null)).toMatchObject({ ok: true });
-    expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
+    expect(coord.childReclaimCoordinatorClaims().has(from)).toBe(true);
   });
 
   it('round-trips a from with a LEADING line feed — the value is stored untrimmed', () => {
@@ -349,7 +406,7 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
       wave: 1, waveOf: null, claimedBy: from });
     if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
     expect(coord.reclaimProgram(opened.id, 'heir-leading-lf', Date.now(), null)).toMatchObject({ ok: true });
-    expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
+    expect(coord.childReclaimCoordinatorClaims().has(from)).toBe(true);
   });
 
   // An EMPTY `from`. `trim` does not strip NUL, so `POST /api/runs` accepts
@@ -363,8 +420,8 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
       wave: 1, waveOf: null, claimedBy: '\u0000' });
     if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
     expect(coord.reclaimProgram(opened.id, 'heir-nul', Date.now(), null)).toMatchObject({ ok: true });
-    let ids: ReadonlySet<string> | undefined;
-    expect(() => { ids = coord.childReclaimCoordinatorIds(); }).not.toThrow();
+    let ids: ReadonlyMap<string, ChildReclaimCoordinatorClaim> | undefined;
+    expect(() => { ids = coord.childReclaimCoordinatorClaims(); }).not.toThrow();
     expect(ids!.has('')).toBe(true);
     expect(ids!.has('heir-nul')).toBe(true);
   });
@@ -386,7 +443,7 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
         wave: 1, waveOf: null, claimedBy: 'demo-a' });
       if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
       expect(coord.reclaimProgram(opened.id, to, Date.now(), null)).toMatchObject({ ok: true });
-      const ids = coord.childReclaimCoordinatorIds();
+      const ids = coord.childReclaimCoordinatorClaims();
       expect(ids.has('demo-a')).toBe(true);
       expect(ids.has(to)).toBe(true);
     });
@@ -406,7 +463,7 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
       wave: 1, waveOf: null, claimedBy: from });
     if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
     expect(coord.reclaimProgram(opened.id, 'heir-255', Date.now(), null)).toMatchObject({ ok: true });
-    const ids = coord.childReclaimCoordinatorIds();
+    const ids = coord.childReclaimCoordinatorClaims();
     expect(ids.has(from)).toBe(true);
     expect(ids.has('a'.repeat(240))).toBe(true);
     expect(ids.has('heir-255')).toBe(true);
@@ -419,8 +476,8 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
       wave: 1, waveOf: null, claimedBy: from });
     if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
     expect(coord.reclaimProgram(opened.id, 'heir-256', Date.now(), null)).toMatchObject({ ok: true });
-    let ids: ReadonlySet<string> | undefined;
-    expect(() => { ids = coord.childReclaimCoordinatorIds(); }).not.toThrow();
+    let ids: ReadonlyMap<string, ChildReclaimCoordinatorClaim> | undefined;
+    expect(() => { ids = coord.childReclaimCoordinatorClaims(); }).not.toThrow();
     expect(ids!.has(from)).toBe(false);
     expect(ids!.has('heir-256')).toBe(true);
   });
@@ -445,10 +502,10 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
     }
     for (let call = 0; call < 2; call += 1) {
       const t0 = performance.now();
-      const ids = coord.childReclaimCoordinatorIds();
+      const ids = coord.childReclaimCoordinatorClaims();
       const ms = performance.now() - t0;
       expect(ids.has('heir-huge-3')).toBe(true);
-      expect(ms).toBeLessThan(CHILD_RECLAIM_COORDINATOR_IDS_BOUND_MS);
+      expect(ms).toBeLessThan(CHILD_RECLAIM_COORDINATOR_CLAIMS_BOUND_MS);
     }
   });
 
@@ -461,7 +518,7 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
     // `<from> -> <to>` shape — the one row this build cannot attribute to a
     // `from` id, and so must not silently exclude.
     coord.recordRunEvent(opened.id, 'operator', 'reclaim:mangled-with-no-arrow');
-    expect(() => coord.childReclaimCoordinatorIds()).toThrow(/unparseable reclaim-displacement row/);
+    expect(() => coord.childReclaimCoordinatorClaims()).toThrow(/unparseable reclaim-displacement row/);
   });
 
   it('the executor defers siblings-open for a coordinator the reclaim door displaced, never reaching ccd', async () => {
@@ -473,7 +530,7 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
       handoffCommit: null, program: 'w4-displaced-exec', viaClosing: false }).ok).toBe(true);
     expect(f.coord.reclaimProgram(coordinated.id, 'heir-y', Date.now(), null)).toMatchObject({ ok: true });
     const out = await reclaimChild(f.deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'siblings-open', detail: 'demo-a has coordinated run(s)' });
     expect(f.ccdCalls()).toEqual([]);
@@ -502,7 +559,7 @@ describe('reclaimChild — a rejecting readdir still defers, with a feed row', (
     };
     const deps: ChildReclaimDeps = { ...f.deps, io: rejectingIo };
     const out = await reclaimChild(deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
     expect(f.ccdCalls()).toEqual([]);
@@ -533,7 +590,7 @@ describe('reclaimChild — a registry that does not list at the pause read defer
     };
     const deps: ChildReclaimDeps = { ...f.deps, io: unlistedIo };
     const out = await reclaimChild(deps, {
-      sessionId: 'demo-a', runId: f.runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
+      sessionId: 'demo-a', runId: f.runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE,
     });
     expect(readdirCalls, 'step 1 listed, then step 2b asked once').toBe(2);
     expect(out).toMatchObject({ kind: 'deferred', sessionId: 'demo-a', runId: f.runId, why: 'paused-at-server' });

@@ -161,6 +161,9 @@ export const TREE_FILES = [
   // non-Darwin, every-ROLE arm; without it `_inst_atomic` dies naming a source
   // the fixture tree does not carry.
   'ccd/ccd-tmp-sweep',
+  // The pane-scope sweep (session-continuity wave 4), shipped by `_inst_bins` on
+  // the same non-Darwin, every-ROLE arm as the reaper above.
+  'ccd/ccd-scope-sweep',
   // account-pool-membership wave 1, Task 4 fix round 1 (F1): the leased-
   // projection puller, shipped by `_inst_bins` on the same non-Darwin, every-
   // ROLE arm as the four above. Without this row `_inst_atomic` dies naming a

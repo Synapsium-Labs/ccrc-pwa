@@ -5,10 +5,12 @@
 //
 // WHAT RUNS. This tree's `_upd_sweep` out of the sourced `ccd/ccrc`, on a fixture HOME whose `systemctl` and
 // `journalctl` are stubs, against this tree's `deploy/verify-service.sh` (S11) — or, for R1 to R3, against the FROZEN
-// wave-10 script (`fixtures/verify-service-pre-wave10.sh`, S0, v0.0.79's bytes): a rollback pairs THIS sweep with an
-// OLDER script, so the sweep must hold with a script that knows nothing of `stopped on purpose:`. The OLD sweep with
-// the NEW script — the move INTO wave 11 — is `ccrc-sweep-deliberate-stop.test.ts`'s. The builders are
-// `sweepFixture.ts`'s.
+// pre-wave-10 script (`fixtures/verify-service-pre-wave10.sh`, S0, v0.0.79's bytes), and for Q1 to Q10 against the
+// FROZEN wave-10 script (`fixtures/verify-service-pre-wave11.sh`, S10, v0.0.91's bytes): a rollback pairs THIS sweep
+// with an OLDER script, so the sweep must hold with a script that knows nothing of `stopped on purpose:` (S0), or
+// nothing of wave 11's purged-arm guards (S10). The OLD sweep with the NEW script — the move INTO wave 11 — is
+// `ccrc-sweep-deliberate-stop.test.ts`'s. The builders are `sweepFixture.ts`'s. (Wave 12, R19e: this header called
+// S0 "wave-10"; it is the script BEFORE wave 10.)
 //
 // SAFETY. A fixture HOME only, an env built from scratch, every tool that is not a stub a recording POISON, and
 // `runSweep` proves containment on the spawn's FINAL env before every spawn. No verify job outlives its case (T-1):
@@ -22,7 +24,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { itLinux } from './platformFixtures.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  BASH, CCRC_SRC, FROZEN_VERIFY_S0, SWEEP_OK, makeBox, runSweep, sweepSpawn, calls, poisonFiles, report, survivors, reapSurvivors,
+  BASH, CCRC_SRC, FROZEN_VERIFY_S0, FROZEN_VERIFY_S10, SWEEP_OK, makeBox, runSweep, sweepSpawn, calls, poisonFiles, report, survivors, reapSurvivors,
   type Box, type UnitPlant,
 } from './sweepFixture.js';
 
@@ -510,6 +512,34 @@ describe('_upd_sweep, Linux arm: one shared verify window, a re-check, crash-sha
     noPoison(box);
   }, 60_000);
 
+  // D-3984 verifies a crash-shaped unit only when it is one of `missing`, and `missing` is drawn from `before`: the
+  // units the PRE-restart listing shows ACTIVE. The crash listing's loop takes a unit only if it is one of `missing`
+  // (`if [ "$m" = "$cu" ]`). Every other case plants its units active before, so only this one can see that filter
+  // (review 281 F1; wave 12, R19b, D-4070). Demo-b is missing, so the listing is read; demo-x is in it but was not
+  // active before, so it is neither verified nor warned about. In (b) the pre-restart listing does not show demo-x at
+  // all, and try-restart leaves such a unit alone. In (a) demo-x read `activating` before the restart, and systemd's
+  // try-restart DOES restart an activating unit: (a) pins the shipped choice, to verify only units that were active,
+  // and is no proof that the choice is right (a question for wave 13).
+  const X = U('x');
+  const W17E: ReadonlyArray<readonly [string, string, UnitPlant]> = [
+    ['a', 'crash-looping before the restart too',
+      { unit: X, active: ['activating'], mainPid: [], listed: 'crash:activating', preRestart: 'activating' }],
+    ['b', 'absent from the pre-restart listing',
+      { unit: X, active: ['failed'], mainPid: [], listed: 'crash:failed', preRestart: null }],
+  ];
+  itLinux.each(W17E)('W17e (%s) a crash-listed unit that was not active before the restart (%s) is not verified (D-3984)', (_k, _label, x) => {
+    const box = makeBox({ units: [stable(A, 0), { unit: B, active: ['inactive'], mainPid: [], listed: 'gone' }, x] });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(count(box, LIST_CRASH), 'demo-b is missing, so the crash listing is read').toBe(1);
+    expect(r.stderr, ctx(r)).not.toContain(`${X} was active before try-restart`);
+    expect(count(box, act(X)), 'demo-x is never verified').toBe(0);
+    expect(r.stderr).toContain(`${B} was active before try-restart and is not active after it`);
+    expect(r.stderr).not.toContain(RECHECK);
+    expect(r.stdout).toContain(SWEEP_OK);
+    noPoison(box);
+  }, 60_000);
+
   // A copy of the launcher that starts only unit `$3`'s job, prints a fork error and exits 254 (W18, W20 (a)).
   const launcherCopy = (wait: boolean): string => [
     '_upd_sweep_launch() {',
@@ -668,7 +698,9 @@ describe('W21: a signal to the sweep\'s process group during a concurrent batch 
       }
       const { found, jobs, left } = after;
       expect(ended, 'the sweep ended on its own, within 15 s').not.toBeNull();
-      expect(ended!.signal === sig || ended!.code === status,
+      // Wave 12, Reading 8 (D-4072): a shell-alone INT must end the run BY the signal. The handler re-raises (D-3988, ruled in
+      // answer 3565), and `exit 130` would not read as an INT death to a caller.
+      expect(sig === 'SIGINT' && target === 'shell' ? ended!.signal === 'SIGINT' : ended!.signal === sig || ended!.code === status,
         `ended by ${sig}: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
       expect(elapsed, 'within about a second of the signal').toBeLessThan(5_000);
       expect(ended!.stdout).not.toContain(SWEEP_OK);
@@ -732,7 +764,10 @@ describe('W21: a signal to the sweep\'s process group during a concurrent batch 
       const started = killLog(box).filter((l) => l.startsWith('-TERM -- -')).length;
       expect(pids, 'the signal was sent mid-loop').toBeGreaterThanOrEqual(10);
       expect(ended, 'the sweep ended on its own, within 20 s').not.toBeNull();
-      expect(ended!.signal === sig || ended!.code === status, `ended by ${sig}: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
+      // Wave 12, Reading 8 (D-4072): a shell-alone INT must end the run BY the signal. The handler re-raises (D-3988, ruled in
+      // answer 3565), and `exit 130` would not read as an INT death to a caller.
+      expect(sig === 'SIGINT' && target === 'shell' ? ended!.signal === 'SIGINT' : ended!.signal === sig || ended!.code === status,
+        `ended by ${sig}: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
       expect(ended!.stdout).not.toContain(SWEEP_OK);
       if (mode.startsWith('full')) {
         // A survivor in a TERMed group writes its capture files while `rm -rf` runs: the dir is asserted only without one.
@@ -771,7 +806,8 @@ describe('W21: a signal to the sweep\'s process group during a concurrent batch 
     }
     expect(second, 'the signal was sent while the second batch was forking').toBeGreaterThanOrEqual(10);
     expect(ended, 'the sweep ended on its own, within 20 s').not.toBeNull();
-    expect(ended!.signal === 'SIGINT' || ended!.code === 130, `ended by SIGINT: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
+    // Wave 12, Reading 8 (D-4072): a shell-alone INT ends the run BY the signal (the handler re-raises, D-3988, answer 3565).
+    expect(ended!.signal === 'SIGINT', `ended by SIGINT: signal ${ended!.signal}, code ${ended!.code}`).toBe(true);
     expect(ended!.stdout).not.toContain(SWEEP_OK);
     if (after.termed.length === 0) expect(after.left.filter((n) => n.startsWith('ccrc-sweep.')), `left in tmp: ${after.left.join(' ')}`).toEqual([]);
     expect(after.leaks, `launcher leaks (survivors in a group never TERMed): ${after.leaks.join(' ')} of ${after.found.join(' ')}`).toEqual([]);
@@ -787,7 +823,7 @@ itLinux('W22: the caller\'s own INT trap is put back after the concurrent batch 
   noPoison(box);
 }, 60_000);
 
-describe('_upd_sweep, Linux arm, with the FROZEN wave-10 script S0 (a rollback pairs this sweep with an older script)', () => {
+describe('_upd_sweep, Linux arm, with the FROZEN pre-wave-10 script S0 (a rollback to v0.0.79 or older)', () => {
   const s0 = (): string => readFileSync(FROZEN_VERIFY_S0, 'utf8');
 
   itLinux('R0 the frozen S0 is v0.0.79\'s script', () => {
@@ -824,6 +860,179 @@ describe('_upd_sweep, Linux arm, with the FROZEN wave-10 script S0 (a rollback p
     const r = runSweep(box);
     expect(r.code, ctx(r)).toBe(0);
     expect(r.stderr).toContain(`re-check: ${B} passed its re-check`);
+    noPoison(box);
+  }, 60_000);
+});
+
+// S10 is the script v0.0.80 through v0.0.91 ship: wave 10's deliberate-stop classifier, none of wave 11's purged-arm
+// guards (no `ccd_id_ok`, no `LoadState` query). A rollback to one of those releases pairs THIS sweep with it. Review
+// 281 measured the pairing correct and nothing pinned it (F3; wave 12, R19d, D-4069): Q1 to Q10 do, one case per shape
+// that review measured. Every Q case asserts that the script the box was given is S10 by its digest (`ranS10`), so a
+// fixture that stopped honouring `verifySrc` would red every Q case. Q3 is the one shape where S10 and S11 also BEHAVE
+// apart — S11 asks `LoadState` on a purged row, S10 never does — so its `noLoadState` is behavioural; in the other
+// cases S11 would not ask either, and that assertion is a tripwire only.
+describe('_upd_sweep, Linux arm, with the FROZEN wave-10 script S10 (a rollback to v0.0.80–v0.0.91)', () => {
+  const S10_SHA = 'd066a31850f62661239fabf36c84e2d4f64eef35da6e839d31b112483d5f5cf8';
+  const s10 = (): string => readFileSync(FROZEN_VERIFY_S10, 'utf8');
+  const ranS10 = (box: Box): void => {
+    expect(sha256(readFileSync(join(box.home, 'ccrc', 'deploy', 'verify-service.sh'), 'utf8')),
+      'the box was given S10, not this tree\'s script').toBe(S10_SHA);
+  };
+  const noLoadState = (box: Box): void => {
+    expect(calls(box).filter((l) => l.includes('LoadState')), 'S10 never asks LoadState: S11 answered').toEqual([]);
+  };
+
+  itLinux('Q0 the frozen S10 is v0.0.91\'s script', () => {
+    const text = s10();
+    expect(sha256(text), 'the frozen S10 is no longer the released text — it is never edited; restore it from '
+      + '`git show v0.0.91:deploy/verify-service.sh`').toBe(S10_SHA);
+    expect(text.split('\n').length - 1).toBe(189);
+    expect(text).toContain('stopped_on_purpose() {');
+    expect(text).not.toContain('LoadState');
+    expect(text).not.toContain('ccd_id_ok');
+  }, 60_000);
+
+  itLinux('Q1 healthy units pass with S10', () => {
+    const box = makeBox({ units: [stable(A, 0), stable(B, 1)], verifySrc: FROZEN_VERIFY_S10 });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stdout).toContain(SWEEP_OK);
+    expect(r.stderr).not.toContain(RECHECK);
+    ranS10(box);
+    noLoadState(box);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('Q2 a stamped stop passes with S10, on its first verify', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: B, active: ['active', 'inactive', 'inactive'], mainPid: ['5151'] }],
+      registry: { 'demo-a.uuid': 'u1\n', 'demo-b.uuid': 'u2\n', 'demo-b.stopped': `${STAMP}\n` },
+      verifySrc: FROZEN_VERIFY_S10,
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stdout).toContain(stoppedLine(B, 'demo-b'));
+    expect(r.stderr).not.toContain(RECHECK);
+    ranS10(box);
+    noLoadState(box);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('Q3 a purged stop passes with S10, on its first verify', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: B, active: ['inactive', 'inactive'], mainPid: [] }],
+      registry: { 'demo-a.uuid': 'u1\n', 'demo-b.generation': '1\n' },
+      verifySrc: FROZEN_VERIFY_S10,
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stdout).toContain(purgedLine(B, 'demo-b'));
+    expect(r.stderr).not.toContain(RECHECK);
+    ranS10(box);
+    noLoadState(box);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('Q4 an unstamped stop fails with S10, after its re-check (ruling 3)', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: B, active: ['active', 'inactive'], mainPid: ['5151'] }],
+      registry: { 'demo-a.uuid': 'u1\n', 'demo-b.uuid': 'u2\n' },
+      verifySrc: FROZEN_VERIFY_S10,
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(1);
+    expect(count(box, act(B)), 'the first verify and its re-check both ran S10').toBe(5);
+    expect(dieOf(r.stderr), ctx(r)).toBe(dieLine(1, 2, 0, B));
+    ranS10(box);
+    noLoadState(box);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('Q5 a crash-looping unit the active listing shows (activating at every read) fails with S10', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: B, active: ['activating'], mainPid: [] }],
+      verifySrc: FROZEN_VERIFY_S10,
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(1);
+    expect(count(box, act(B)), 'the first verify and its re-check both ran S10').toBe(2);
+    expect(dieOf(r.stderr), ctx(r)).toBe(dieLine(1, 2, 0, B));
+    ranS10(box);
+    noLoadState(box);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('Q6 a MainPID that churns through the re-check fails with S10', () => {
+    const box = makeBox({ units: [stable(A, 0), churn(B)], verifySrc: FROZEN_VERIFY_S10 });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(1);
+    expect(count(box, pidCall(B))).toBe(4);
+    expect(dieOf(r.stderr), ctx(r)).toBe(dieLine(1, 2, 0, B));
+    ranS10(box);
+    noLoadState(box);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('Q7 a listed-active unit reading failed, whose registry row is purged, fails with S10 (the classifier reads only a stop shape; 2 is-active reads)', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: B, active: ['failed'], mainPid: [] }],
+      registry: { 'demo-a.uuid': 'u1\n', 'demo-b.generation': '1\n' },
+      verifySrc: FROZEN_VERIFY_S10,
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(1);
+    expect(count(box, act(B)), 'the first verify and its re-check both ran S10').toBe(2);
+    expect(r.stdout).not.toContain('stopped on purpose:');
+    expect(dieOf(r.stderr), ctx(r)).toBe(dieLine(1, 2, 0, B));
+    expect(count(box, LIST_CRASH), 'demo-b is in the active listing: no crash listing is read').toBe(0);
+    ranS10(box);
+    noLoadState(box);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('Q8 a crash-shaped unit missing from the active listing is verified, and fails, with S10 (D-3984; 2 is-active reads)', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: B, active: ['activating'], mainPid: [], listed: 'crash:activating' }],
+      verifySrc: FROZEN_VERIFY_S10,
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(1);
+    expect(count(box, act(B)), 'the first verify and its re-check both ran S10').toBe(2);
+    expect(r.stderr).toContain(`${B} was active before try-restart and reads 'activating' after it`);
+    expect(dieOf(r.stderr), ctx(r)).toBe(dieLine(1, 2, 0, B));
+    ranS10(box);
+    noLoadState(box);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('Q10 a crash-listed failed unit with a purged registry row is verified, and fails, with S10 (D-3984; 2 is-active reads)', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: B, active: ['failed'], mainPid: [], listed: 'crash:failed' }],
+      registry: { 'demo-a.uuid': 'u1\n', 'demo-b.generation': '1\n' },
+      verifySrc: FROZEN_VERIFY_S10,
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(1);
+    expect(count(box, act(B)), 'the first verify and its re-check both ran S10').toBe(2);
+    expect(r.stderr).toContain(`${B} was active before try-restart and reads 'failed' after it`);
+    expect(r.stdout).not.toContain('stopped on purpose:');
+    expect(dieOf(r.stderr), ctx(r)).toBe(dieLine(1, 2, 0, B));
+    ranS10(box);
+    noLoadState(box);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux.each([
+    ['activating at its second read', ACTIVATING],
+    ['a new MainPID at its second read', NEWPID],
+  ] as const)('Q9 a transient failure that recovers by its re-check passes with S10 (%s)', (_label, shape) => {
+    const box = makeBox({ units: [stable(A, 0), { unit: B, ...shape }], verifySrc: FROZEN_VERIFY_S10 });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stderr).toContain(`re-check: ${B} passed its re-check`);
+    expect(r.stdout).toContain(SWEEP_OK);
+    ranS10(box);
+    noLoadState(box);
     noPoison(box);
   }, 60_000);
 });

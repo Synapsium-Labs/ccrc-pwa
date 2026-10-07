@@ -35,9 +35,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type CoordCapsView, type FleetSession, graphReadCount, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runKindChip, runWarnings, runClosedAt, runItems, runState, runsByProgram, waveLabel } from '../fleet/runWords';
+import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runKindChip, runWarnings, runClosedAt, runItems, runState, runsByProgram, waveLabel } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
-import { AbandonSheet } from '../fleet/AbandonSheet';
+import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
 import { ChildReclaimBanner } from '../fleet/ChildReclaimBanner';
 import { CapsControl } from '../fleet/CapsControl';
@@ -178,6 +178,10 @@ function RunRow({
   // a server that has never heard of `health`. This component picks no words and
   // compares no thresholds; it lays out what it was handed.
   const warnings = runWarnings(run, nowMs);
+  // Child-reclamation wave 5 (spec §5.9): what became of this run's CHILD
+  // workspace. `childReclaimChip` is the one reader. The word and the sentence
+  // are the server's, and this component picks neither.
+  const reclaim = childReclaimChip(run);
   const body = (
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
@@ -257,6 +261,23 @@ function RunRow({
         <span className="run-resumed" data-cleared={String(resume.cleared)} title={resume.title}>
           {resume.word}
         </span>
+      )}
+      {/* Wave 5: the reclaim chip, `.run-kind`'s shape (glyph + word, the long
+          form in `title`). Informational, so it lives inside `body` and
+          therefore inside `.run-open`, like `.run-warn`: the sibling rule
+          binds controls, and this is prose. */}
+      {reclaim !== null && (
+        <span className="run-child-reclaim" data-child-reclaim={reclaim.word}
+          title={childReclaimTitle(reclaim, nowSec)}>
+          <span className="run-child-reclaim-glyph" aria-hidden="true">{reclaim.glyph}</span>
+          {reclaim.label}
+        </span>
+      )}
+      {/* A refusal's sentence on its own wrapped line (`flex-basis: 100%`,
+          `.run-warn`'s idiom). The chip decides when there is one; this lays
+          out what it was handed. */}
+      {reclaim !== null && reclaim.line !== null && (
+        <span className="run-child-reclaim-sentence">{reclaim.line}</span>
       )}
       {degradedFields.length > 0 && (
         <span
@@ -373,7 +394,12 @@ function RunRow({
   // or hides what the row now says while the spawn is under way. Making the
   // row tappable to let the affordance through would have traded a true
   // sentence for a dead tap onto a session id that does not exist yet.
-  return run.sessionId === null
+  //
+  // A reclaimed child's session no longer exists either (spec §5.9: the row
+  // "stops offering to open its session"). It gets the same inert row, for the
+  // same reason. `resumeButton` and `abandonButton` keep their place: neither
+  // is about the worker's session.
+  return run.sessionId === null || childReclaimGone(reclaim)
     ? <li className="run-row" data-inert="true">{body}{resumeButton}{abandonButton}</li>
     : (
       <li className="run-row">
@@ -506,7 +532,30 @@ export function RunsScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, runsFrameSeen]);
 
+  // Child-reclamation wave 5 (spec §5.9): a finished row's reclaim chip changes
+  // AFTER its run closed (pending → reclaimed), and `finished` has one source,
+  // the cold read. A reclaim purges the child's registry row, so its session
+  // leaves the next fleet frame. That vanish is the trigger: a diff against the
+  // PREVIOUS fleet frame, exactly like the run-id diff above. It is not a poll:
+  // it fires only on a real transition. The decision is `childReclaimRefreshDue`'s.
+  // The dependencies are the fleet frame's, deliberately: a cold read landing is
+  // not a transition of the fleet, and re-running on it would compare a frame
+  // with itself. A re-read changes `cold`, never `sessions`, so it cannot loop.
+  const prevSessionIdsRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!fleetFrameSeen) return;
+    const ids = new Set(sessions.map((s) => s.id));
+    const prev = prevSessionIdsRef.current;
+    prevSessionIdsRef.current = ids;
+    if (prev !== null && childReclaimRefreshDue(cold ?? [], prev, ids)) void loadCold();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions, fleetFrameSeen]);
+
   const sessionById = new Map(sessions.map((s) => [s.id, s] as const));
+  // CCR-15 wave 5 (spec §5.7): the abandon sheet's confirm line branches on the
+  // run's workspace's child mark, read off the fleet row this board already looks up.
+  const abandonSession = abandonTarget === null || abandonTarget.sessionId === null
+    ? undefined : sessionById.get(abandonTarget.sessionId);
   // ACTIVE reads `live` the instant the socket has said anything at all
   // (`runsFrameSeen`) — including an honest `[]`, which is what a run
   // closing broadcasts. Falling back to `live.length > 0 ? live : cold`
@@ -765,7 +814,8 @@ export function RunsScreen({
           own vanish-diff (above) also fires for the same close, and both
           landing is harmless because they feed separate slices (`active`
           from `live`, `finished` from `cold`, never merged). */}
-      <AbandonSheet run={abandonTarget} onClose={() => setAbandonTarget(null)} onDone={() => { void loadCold(); }} />
+      <AbandonSheet run={abandonTarget} workspaceChild={abandonChildOf(abandonSession)}
+        onClose={() => setAbandonTarget(null)} onDone={() => { void loadCold(); }} />
       {/* Spec §7.3: `onDone` re-runs `loadCold()` for the same reason the
           abandon sheet's does — a reclaim rewrites `claimedBy` on EVERY run of
           the program, terminal ones included (contract R1), and the finished

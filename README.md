@@ -6,7 +6,7 @@
 Run it on your own box. Drive twenty agents from your phone.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](#license)
-[![Node](https://img.shields.io/badge/node-%E2%89%A522.13-339933.svg?logo=node.js&logoColor=white)](#requirements)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522.16-339933.svg?logo=node.js&logoColor=white)](#requirements)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-one%20box-8b5cf6.svg)](#quickstart)
 [![No telemetry](https://img.shields.io/badge/telemetry-none-64748b.svg)](#privacy)
 [![PWA](https://img.shields.io/badge/PWA-installable-f59e0b.svg)](#quickstart)
@@ -167,9 +167,9 @@ Download it, or use `bash <(curl -fsSL …)`.
 
 ## Requirements
 
-- **Node ≥ 22.13.0** — not negotiable, and not a style choice: the coordination database
-  is `node:sqlite`, which is flagged below that. All three packages declare the same floor
-  and a test pins it.
+- **Node ≥ 22.16.0** — not negotiable, and not a style choice: the coordination database
+  is `node:sqlite` (flagged below 22.13), and ccrc history needs its FTS5 (absent below 22.16).
+  All three packages declare the same floor and a test pins it.
 - **git**, **tmux**, **bash**, **curl**, **rsync**, **diff** — `ccrc install` refuses by
   name without `rsync` (it places the tree) or `diff` (every skill installer compares
   with it). **`openssl`** only mints the box and agent tokens by hand (`openssl rand -hex 32`).
@@ -484,6 +484,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 | `ccd-telemetry-keepalive.timer` | fleet, both | 15 min | one minimal turn on an idle measured account (below) | `~/.ccrc/keepalive-paused` |
 | `ccrc-models.timer` | fleet, both | 1 h | `ccrc models refresh --all`: every lane's model catalogue | — |
 | `ccd-tmp-sweep.timer` | fleet, both | 1 h | reaps Claude Code's per-uid temp dir | `~/.ccrc/tmp-sweep-paused` |
+| `ccd-scope-sweep.timer` | fleet, both | 60 s | records every dead ccd pane scope; stops an inert one only when armed (below) | `~/.cc-sessions/scope-sweep-paused` |
 | `ccd-usage-sweep.timer` | fleet, both | 4 h | per-account usage totals from transcripts | `~/.ccrc/usage-sweep-paused` |
 | `ccrc-codex-usage@<id>.timer` | fleet, both | 15 min | one per `codex` lane: that lane's Codex usage into `~/.cc-limits` | — |
 
@@ -562,13 +563,15 @@ under "Attention, notifications and answering" below.
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
 `skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111),
-and `timeout`.
+`timeout`, `model-default`, and `jq_regex` (no session hook runs there).
 
 | checks | what they measure |
 |---|---|
 | `node`, `tmux`, `git`, `gh`, `jq`, `python3`, `flock` | on `PATH`; `node` also against the `engines.node` floor |
 | `timeout` | `timeout` or `gtimeout` on `PATH`: the session hook and the status line bound their one `tmux` call with it and skip the call without it — the hook then does nothing at all, and the status line writes no usage sidecar |
+| `model-default` | each Anthropic lane's `settings.json` default model (`env.ANTHROPIC_MODEL`, else `model`, else `env.ANTHROPIC_DEFAULT_MODEL`), read as Claude Code reads it — trimmed, any case, `[1m]` in any case: a WARN when it is Fable (`fable`, `fable[1m]`, `best` — Fable where the account is entitled to it — an id carrying `-fable-`, or an alias the lane's own `env.ANTHROPIC_DEFAULT_<ALIAS>_MODEL` points at such an id), because a session there with no routing record, or class `default`, starts on Fable; a file it cannot read or parse, a reader (node) that fails, or a lane with no config dir is a WARN, unmeasured (never a FAIL, no `--fix`: ccrc does not own the key). Not measured: the remap of the account's implicit default when no key names a model |
 | `tmux_skew` | the tmux client on disk against the running tmux server (a WARN: restart that server at a quiet moment) |
+| `jq_regex` | jq's regex engine can match a lookbehind, which the session hook's merge deny needs to read a command (a jq without Oniguruma leaves the deny failing open); a SKIP with no jq on `PATH`, which `jq`'s own row owns |
 | `gh_auth`, `git_email` | `gh` logged in with the `repo` scope; a commit identity |
 | `linger`, `path`, `disk` | linger enabled; `~/.local/bin` on `PATH`; free space on `$HOME`'s filesystem |
 | `services`, `scopes` | ccrc's installed services and timers active (the graph sweep is judged by its census instead, under `graphify`; the Codex usage timers under `codex`; the usage sweep by neither); no pane scope throttled at its memory cap |
@@ -793,8 +796,11 @@ the staged tree (role-aware, atomic, seed-once files untouched, every rostered h
 tree in a version directory of its own and flips `~/ccrc` to it — Versioned installs, below; it mints `~/.ccrc/node-id`
 once, rewrites `~/.ccrc/ccrc-caps` with what this install can do, and raises the floor last); the health gate (below);
 the supervisor sweep behind its mandatory `KillMode=process` preflight, each restarted supervisor then held to the
-stay-up check (`deploy/verify-service.sh` on Linux), all of them in one shared window — a unit the post-restart listing
-shows `activating` or `failed` is verified too — and a crash-like first failure gets ONE re-check, alone: it fails the
+stay-up check (`deploy/verify-service.sh` on Linux), all of them in one shared window (on Linux: for up to
+`CCRC_SWEEP_VERIFY_JOBS` units, default 128, given a scratch directory; more take one window per chunk, and with no
+scratch directory each unit is verified alone, in turn) — a unit that was active before the restart and that the
+post-restart listing shows `activating` or `failed` is verified too — and a crash-like first failure gets ONE
+re-check, alone: it fails the
 run (exit 1, reported `failed` unless a newer update owns the report) only if that fails too, and the re-checks stop at
 the first that fails; macOS runs the same window and re-check in-process, with no stop-on-purpose classifier. On Linux a
 session stopped on purpose while the sweep walks (its unit settled `inactive` with ccd's
@@ -2330,13 +2336,14 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   `cmd_route` call, so a pair the record refuses is refused whole (`/model haiku` beside `/effort high` keeps
   neither, and two lines say so). A stop that cannot read at all, or whose newest `/model` or `/effort` has no
   acknowledgement in the wording this ccd recognises (Claude Code's own wording drifted, Claude Code itself
-  refused the command, or the operator dismissed the `/effort` slider: `Kept effort level as …`), logs `operator-choice <id>: unmeasured (…)`, once per keep. A field written after the keystroke (the PWA picker, a coordinator's
-  route, this step's last write) is the later choice and wins. `python3 deploy/measure-continuity.py --stage 7`
+  refused the command — `/effort`'s `Invalid argument …`, 18 rows in the 6,794 fleet transcripts counted on
+  2026-10-05; a dismissed `/effort` slider wrote no row there, no `Kept effort level as …` at all), logs `operator-choice <id>: unmeasured (…)`, once per keep. A field written after the keystroke (the PWA picker, a coordinator's
+  route, this step's last write) is the later choice and wins, and is asked first, so an older command is not logged either. `python3 deploy/measure-continuity.py --stage 7`
   counts the writes, the stops that logged a `/model` ccd could not keep, and, in
   `stops_that_could_not_read_the_transcript`, the KEEPS that could not measure: one per `unmeasured (…)` line, so a keep at a
   spawn counts and so does the acknowledgement-drift line (a successful read of a command with no recognised acknowledgement).
-  A refused command repeats at every keep until a later operator command of its kind is acknowledged (a ccd keystroke
-  does not clear it). The row
+  A refused command, and the drift line, repeat at every keep until a later operator command of its kind is
+  acknowledged or its field is written after it (a `route --set`, the PWA picker; a ccd keystroke does not clear it). The row
   counts keep-time STOPS that a spawn may follow, not distinct choices or restarts: a `/model` the record cannot hold
   is logged again at every later keep until a newer command replaces it, since it reverts again at each, and a
   session stopped for good, or archived and then removed, is counted although no restart happened (an over-count by
@@ -2524,8 +2531,20 @@ itself: the supervise tick (about every five seconds on a live session) types a 
 session-only `/model` or `/effort` — once the pane is idle, not drafting and not sitting out a limit, while
 `workflow` and `subagent` take effect at the next spawn and `compact` at the compactor's next tick. With `--apply`
 ccd tries those keystrokes at once, under the same test; a pane that fails it has the refusal recorded, the verb
-answers `queued`, and the tick retries. `haiku` takes no effort level, and the pair is refused whichever order it
-arrives in. A session with no record spawns as it always did.
+answers `queued`, and the tick retries. The `/model` keystrokes find the picker anywhere on the pane by its title,
+taking only a picker that was not already on screen before `/model` was typed, so a picker quoted in the
+conversation is never driven. They answer the cache form of Claude Code's `Switch model?` confirmation (raised
+whenever the conversation has turns), and only when it names the row chosen; a PreModelSwitch hook's confirmation
+is never answered, and that apply ends `apply-unconfirmed`. A switch counts only on the pane's newest `Set model to
+… for this session only` line naming the row chosen, whole: the Default row's name is the model in its own
+`(currently …)` plus ` (default)`. A class the pane already runs needs no keystroke: when the session's usage
+sidecar (below) is under 30 minutes old, was written after `routeapplied` was last stamped (a spawn, an apply, a
+read-back), belongs to the session's own `uuid`, and names a model of the pending class, the tick records the class
+applied, clears its retry count and refusal note, and writes one `route-readback` line to swap.log. An effort level
+never reads back, since the status line shows a model's default level the same way as one that was set, and the
+tick types it. `default` never reads back either, since no model id names it. `haiku` takes no effort level, and
+the pair is refused whichever order it arrives in. A session
+with no record spawns as it always did.
 
 **From the phone**, the session header's model and effort chips (or **Change model** / **Change effort** in its
 menu) write one field each through `POST /api/sessions/:id/route`, which runs `ccd route … --apply` (`501` from a
@@ -2561,6 +2580,9 @@ refusal, not a pass of nothing. Beside it, the status-line hook writes a per-ses
 `<ccd-id>.agents/`), which the fleet row reads and calls stale after 30 minutes. Doctor's `routing` check FAILs an
 Anthropic lane whose `settings.json` sets `CLAUDE_CODE_EFFORT_LEVEL`, or pins `CLAUDE_CODE_SUBAGENT_MODEL` while
 every live session carries a record (a WARN while any does not) — either key would silently override the record.
+Its `model-default` check WARNs an Anthropic lane whose `settings.json` defaults the model to Fable: Claude Code's
+`/model <name>` saves that default (`s` in the `/model` picker, which ccd presses, is session-only), and a session
+there with no record, or class `default` — a dispatched worker whose run names no class included — starts on Fable.
 
 ## Using the console
 
@@ -3996,7 +4018,7 @@ held by the very kill-switch the operator just raised.
 **The reclaim sweep, and how to stop it.** Besides the close path, the server
 runs an automatic sweep (once a minute) that reclaims CHILD workspaces through
 `ccd ws-reclaim` — only a child whose minting run is terminal, or has bound a
-different session, with no other open run, no hold and no coordination history
+different session, with no other open run, no hold and no coordination since its workspace was created
 (a review child also waits until the run it reviewed is terminal), asked on two
 consecutive passes and at most one at a time, and only while the fleet `ccd`
 advertises both `reclaim-v1` and `reclaim-pause-v1` (**A child is not a reap**,
@@ -4012,8 +4034,8 @@ hold, a human's included, keeps the child. The sweep's switch is
 `ccd reclaim-pause --state on` on the fleet host; `--state off` lowers it. While
 it stands the sweep and the close path ask for nothing, and `ws-reclaim` itself
 refuses `paused` on the box. The same row lists the children that need a
-human's eye: each standing under a terminal refusal, and each whose reclaim
-has kept failing for 15 minutes.
+human's eye: each under a terminal refusal, each whose reclaim has kept failing
+for 15 minutes, and each the sweep keeps for a person while its reason stands.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
@@ -4704,8 +4726,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7684-7686`), each with an operator sentence of its own at `:7726`,
-`:7734` and `:7747`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7812-7814`), each with an operator sentence of its own at `:7854`,
+`:7862` and `:7875`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -4887,6 +4909,46 @@ the journal (`journalctl --user -u ccd-tmp-sweep.service`). `ccd-tmp-sweep --dry
 pass would remove and removes nothing; `touch ~/.ccrc/tmp-sweep-paused` short-circuits every pass
 until removed. `ccrc doctor`'s `services` check warns when the timer is installed and stopped.
 
+### Pane-scope sweep (ccd-scope-sweep)
+
+Every ccd pane runs in its own transient `tmux-spawn-<uuid>.scope` under the session slice, and its
+processes stay there after the pane is gone: on 2026-09-23 twelve such scopes held 32 processes and
+1.32 GB, a 27-day-old DynamoDB Local server among them. `ccd-scope-sweep`, driven by its own
+`ccd-scope-sweep.timer` (`OnUnitActiveSec=60s`, beside `ccd-cap-scopes.timer` and never inside it), reads
+only `tmux-spawn-*.scope` units in the session slice whose `Description` parses as `tmux child pane <pid>
+launched by process <pid>` — ccd's own `ccrc-tmux-server.scope` and every other scope are outside it — and
+takes every value from `systemctl --user show`, never from a built cgroup path. A scope is **dead** when none
+of its processes is a live pane of the server its `Description` names, and **ccd's** when that server is
+ccd's current one or no longer runs (checked by pid, `comm` and a start earlier than the scope's, so a
+recycled pid is reported, never trusted). A scope of another live tmux server is never touched.
+
+A dead ccd scope passes as **inert** only when it was first seen dead six hours ago or more, its CPU has not
+moved since, no process in it started in the last six hours, none holds a TCP or UDP socket or a listening
+Unix socket, and none is the parent of a process in another cgroup (and no live handoff record names one of
+its processes: none exists yet). A value it cannot measure — a process in another network namespace, a
+process on the box whose parent cannot be read, a tmux that does not answer for a scope whose server still
+runs — skips the scope for that tick, its previous line carried; a scope seen live starts its clock again.
+So is a scope whose cgroup holds any child cgroup or whose cgroup directory cannot be read and searched: a stop
+kills the whole cgroup subtree and the predicates read only the scope's own `cgroup.procs`, so such a scope is
+carried, never stopped (`scope-sweep-child-cgroups-are-unmeasurable`); a record's `first=` or `cpu0=` outside the
+bounds the sweep writes is not believed, and the clock starts again.
+The clock is boot-relative (`/proc/uptime`), so a wall-clock step moves no stop. **The stop ships
+shadowed:** an inert scope is recorded `would-stop`, and `systemctl --user stop --no-block` is issued only
+while `~/.cc-sessions/scope-sweep-live` exists — nothing writes that file; the operator touches it after
+reading the shadow verdicts. Armed, one tick stops at most three scopes and records the rest `held`.
+`~/.cc-sessions/scope-sweep-paused` stops everything, the shadow record included.
+
+Its verdicts live in `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`, rewritten every tick (a reboot empties it,
+which restarts every clock): one `dead` line per dead ccd scope and one `old` line per process older than a
+day in a live pane scope, other than the pane's own and its Claude Code's MCP servers. `ccrc doctor`'s
+`scope-sweep` check reads that record and never re-derives it: it lists every dead scope — how long dead,
+the scope's own age and its oldest process's, its pids, memory, sockets and verdict — and every such
+long-lived process, warns when the record is stale, and SKIPs while the sweep is paused.
+`deploy/measure-continuity.py --stage 6` counts the OOM stops of pane scopes whose session had been idle 30
+minutes or more with a live background shell — the pressure reap's own class — beside every pane-scope OOM
+stop (the week after the sweep's deploy is its baseline), and reads off the record how many inert scopes
+have been dead a day or more.
+
 ### Memory guardrails (Linux)
 
 Three cgroup layers, shipped as drop-ins under `deploy/systemd/` plus the `ccd-cap-scopes` enforcer (Linux
@@ -4921,7 +4983,7 @@ you need to reason about one.*
 
 ## Architecture
 
-- `server/` — Node ≥22.13.0 (`engines.node`; `node:sqlite` needs it unflagged,
+- `server/` — Node ≥22.16.0 (`engines.node`; `node:sqlite` needs 22.13 unflagged and 22.16 for FTS5,
   and `server/test/node-floor.test.ts` pins both the declaration and the
   import) + Fastify (TS ESM). One process, systemd user unit
   `ccrc.service` (a launchd agent on macOS), bound to one interface only
@@ -4946,7 +5008,7 @@ you need to reason about one.*
   WS client talking to `agent/` on the fleet host instead (see "Remote fleet
   mode" above). Either way the whole thing is unit-testable off-box against
   fixtures.
-- `agent/` — Node ≥22.13.0 (same `engines.node` floor as `server/`; the three
+- `agent/` — Node ≥22.16.0 (same `engines.node` floor as `server/`; the three
   packages must agree — `node-floor.test.ts` — though `node:sqlite` itself is
   server-only) WS service (TS ESM) that runs ON the fleet host and
   exposes a small, whitelisted exec/file/tail/pty surface over a bearer-token
@@ -4981,7 +5043,7 @@ you need to reason about one.*
   installer with its default noise list; `ccrc-api`, the closed client
   sessions reach the coordination API through; the timer-driven helpers
   (`ccd-cap-scopes`, `ccd-pool-sync`, `ccd-update-sync`, `ccd-graph-sweep`,
-  `ccd-tmp-sweep`, `ccd-usage-sweep`, `ccd-account-health`,
+  `ccd-tmp-sweep`, `ccd-scope-sweep`, `ccd-usage-sweep`, `ccd-account-health`,
   `ccd-telemetry-keepalive`) and `ccrc-models-probe`, which
   `ccrc models refresh` runs per lane; `ccd-account-auth` (drives one account's
   sign-in and publishes its progress); the Codex-lane runtime (`ccrc-codex`,
@@ -5101,8 +5163,8 @@ untouched; every write is `jq`-gated and backed up to `~/ccrc-backups/<ts>/`.
 The managed entry is one command, `bash "$HOME/.cc-sessions/session-hook.sh"`,
 registered under every event the hook's `case` block handles — `PreToolUse`
 (matcher `*`), `PostToolUse`, `PermissionRequest`, `UserPromptSubmit`, `Stop`,
-`StopFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact` and
-`SessionStart`; `Notification` is not among them. The installer's event list
+`StopFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`,
+`SessionStart` and `SessionEnd`; `Notification` is not among them. The installer's event list
 and the hook's `case` arms are one set written twice, and `server/test/install-session-hooks.test.ts` derives the
 expected one from the hook's `case` block, because they once drifted and a
 `SessionStart` arm sat dead on the fleet for months (D-306). The installer also
@@ -5418,7 +5480,7 @@ npm run build                            # server/agent: tsc → dist/; pwa: tsc
 ```
 
 The server suite executes the real `ccd`, `ccrc` and hook scripts against fixture `$HOME`s, so the
-machine needs what a fleet box needs: Node ≥ 22.13.0, `bash` 4.4 or newer, `tmux`, `git`, `jq`,
+machine needs what a fleet box needs: Node ≥ 22.16.0, `bash` 4.4 or newer, `tmux`, `git`, `jq`,
 `python3` and `flock`, plus `strace` on Linux (`ci-trace-run.test.ts` runs the real one and fails
 loudly without it; macOS skips that file). On macOS: `brew install bash tmux flock jq coreutils`
 (`coreutils` supplies `gtimeout`). Run one file with
@@ -5440,9 +5502,9 @@ serves the PWA through Vite with `/api` and `/ws` proxied to `127.0.0.1:7788`.
 `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`). A **pull request** runs the server
 tests its change can affect — `.github/ci/select-tests.mjs` chooses them from a traced dependency map,
 sharded behind the required `test (server)` summary, which also needs `typecheck (server)` — while
-`test (agent)` and `test (pwa)` (vitest, then `tsc --noEmit`) and `build-pwa` run in full; `test-macos`
+`test (agent)` and `test (pwa)` (vitest, then `tsc --noEmit`), `build-pwa` and `node-floor` (the floor test on exactly the `engines.node` version) run in full; `test-macos`
 runs the same selection and `probe-macos` a fixed probe; neither blocks a pull request, but
-`full-suite` needs `test-macos`, so a red macOS leg blocks a promotion to `stable`. A change under
+`full-suite` needs `test-macos` and `node-floor`, so a red macOS or floor leg blocks a promotion to `stable`. A change under
 `.github/` or `server/scripts/`, to a `package.json` or lockfile, a `vitest.*config.*`, a
 `tsconfig*.json`, `.gitattributes` or `.npmrc`, a symlink, a path the map's own baseline reads, or a
 missing map runs the whole server suite instead. A **merge-queue** run (`merge_group`) runs what a
@@ -5623,8 +5685,15 @@ file under `~/.ccrc/hook-capture/<id>/` (at most 200; the first line a meta
 line naming the pane's session id, then the payload as sent). Raw captures
 carry prompts, paths and tool arguments and never leave the box:
 `node deploy/hook-capture-reduce.mjs <dir>` reduces a directory to key paths,
-types and validated tokens, and only that is fit to commit. Every other
-session pays one string test for the arm.
+types and validated tokens, and only that is fit to commit. `SessionEnd` is
+registered for the delegation broker's measurement (spec 2026-10-04 §5.3): it is
+captured in a `-hookcap` session and otherwise writes nothing. The reducer's
+`delegation` block (`--root <label>=<path>` classifies `cwd`) reports tool names
+from a fixed set, Agent/Workflow key names, isolation as a token and ordinals in
+place of ids — still no value, id or path. Every other session pays one string
+test for the arm. `deploy/delegation-census.mjs` is a read-only, path-free
+census of one repository's leftover Agent/Workflow worktrees and their subagent
+metadata (delegation broker wave 1).
 
 Known real-format subtleties already encoded:
 

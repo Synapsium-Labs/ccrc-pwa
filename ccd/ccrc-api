@@ -54,7 +54,7 @@
 # SELF-CONTAINED. This file `source`s nothing. The moment it does it needs the
 # shim treatment `ccrc` has (deploy/deploy.sh argues that at length) and a lone
 # copy at ~/.local/bin would be dead on every box.
-set -uo pipefail
+set +x; set -uo pipefail   # `set +x` FIRST, a SECRETS control as in ccd-pool-sync: an inherited xtrace would print the box token (R16, D-4096)
 
 # `~/.local/bin` is NOT on the `claude-session@` unit PATH (measured 2026-08-26),
 # so the corpora invoke this by explicit path. That is a caller's problem, not
@@ -441,12 +441,18 @@ main() {
   # `-f` is never used, on purpose and for the same reason both corpora say so:
   # it prints nothing on a 4xx and exits 22, and the body is the whole protocol —
   # every refusal these routes send arrives as a 4xx JSON body.
-  local -a args=(-sS -m 30 -o "$out" -w '%{http_code}'
-                 -X "$method" -H "x-ccrc-mail-token: $TOKEN")
+  local -a args=(-sS -K - -m 30 -o "$out" -w '%{http_code}' -X "$method")
   [[ -n "$body" ]] && args+=(-H 'content-type: application/json' --data-binary "$body")
 
-  code=$(curl "${args[@]}" "$url" 2>/dev/null)
+  # THE TOKEN RIDES CURL'S STDIN, NEVER ITS ARGV (R16): a `-H` value is readable
+  # in every process listing on the box (`ps`, /proc/<pid>/cmdline) for the life
+  # of the call. `-K -` reads the header from a config line on stdin, the
+  # spelling ccd-pool-sync and ccd-update-sync ship. stdin is free here because
+  # `--json -` was read into $body above, before this line.
+  code=$(printf 'header = "x-ccrc-mail-token: %s"\n' "$TOKEN" \
+    | curl "${args[@]}" "$url" 2>/dev/null)
   local rc=$?
+  TOKEN=""
 
   if (( rc != 0 )) || [[ -z "$code" || "$code" == '000' ]]; then
     # NOT an answer. The one case that exits non-zero — and it still speaks the

@@ -181,7 +181,11 @@ export async function readLiveStateMeasured(io: FleetIO, configDir: string, pid:
         // REST to the case carrying the least evidence. `''` is not `'idle'`,
         // so the two now agree; `sessionBucket`'s hook arbitration (D-75) is
         // what corrects the answer when the hook has something fresher to say.
-        status: String(raw.status ?? ''),
+        // A STRING OR NOTHING (review 244, F1): `String(…)` spelled `["idle"]`
+        // as `'idle'` and `true` as `'true'`, and the archive door's fail-closed
+        // read (`stopVerdict`) stopped the first as an idle pane. ccd's
+        // `_ws_status` greps the bytes for `"status":"<word>"` and reads neither.
+        status: typeof raw.status === 'string' ? raw.status : '',
         statusUpdatedAt: typeof raw.statusUpdatedAt === 'number' ? raw.statusUpdatedAt : null,
         startedAt: typeof raw.startedAt === 'number' && Number.isFinite(raw.startedAt) ? raw.startedAt : null,
         version: typeof raw.version === 'string' ? raw.version : null,

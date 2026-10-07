@@ -28,7 +28,7 @@
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll } from 'vitest';
+import { afterAll, afterEach, beforeEach } from 'vitest';
 
 const made: string[] = [];
 
@@ -59,6 +59,39 @@ export function removeTmpFixtures(): void {
   // case, not an error — several files own their own cleanup and this is the
   // net underneath them.
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+}
+
+/** How many directories this file's `mkTmp` has made and not yet removed: the mark `removeTmpFixturesSince`
+ *  takes (centralised-update wave 13, R20a). */
+export function tmpMark(): number {
+  return made.length;
+}
+
+/** Remove every directory `mkTmp` made at or after `mark` (a `tmpMark()`), and forget it. A
+ *  removal that throws keeps its directory for the `afterAll` below, which removes it or fails loudly, so a
+ *  directory is never forgotten unremoved (centralised-update wave 13, R20a). */
+export function removeTmpFixturesSince(mark: number): void {
+  const kept: string[] = [];
+  for (const dir of made.splice(mark)) {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { kept.push(dir); }
+  }
+  made.push(...kept);
+}
+
+/** OPT-IN, for a file whose one end-of-file sweep is too big for one hook: called at a file's top level, it
+ *  registers a root `beforeEach` that marks `made.length` and a root `afterEach` that removes what the test
+ *  made from that mark on. R20a measured `ccrc-update.test.ts`: about 650 directories and 2.5 GB in its one
+ *  `afterAll`, which overran vitest's 20 s hook timeout on two CI shards while every test passed. A directory
+ *  made BEFORE the mark (at collection time, or in a `beforeAll`) is left for the `afterAll`. A root
+ *  `afterEach` runs after every describe-level one (vitest runs a test's after-hooks innermost first), so a
+ *  describe's own teardown still sees its home. */
+export function removeTmpFixturesEachTest(): void {
+  let mark = -1;
+  beforeEach(() => { mark = tmpMark(); });
+  afterEach(() => {
+    if (mark >= 0) removeTmpFixturesSince(mark);
+    mark = -1;
+  });
 }
 
 afterAll(removeTmpFixtures);

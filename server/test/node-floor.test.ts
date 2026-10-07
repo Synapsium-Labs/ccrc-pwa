@@ -1,24 +1,24 @@
-// The Node floor stops being prose here. `node:sqlite` is a built-in whose
-// availability is version-sensitive — it shipped behind `--experimental-sqlite`
-// and stopped needing the flag in a later 22.x — and `server/src/coord/db.ts`
-// imports it unconditionally, so a box or a CI leg below the floor does not
-// degrade, it fails to boot.
+// The Node floor stops being prose here, and it has TWO reasons now. The first:
+// `server/src/coord/db.ts` imports `node:sqlite` unconditionally, so below
+// 22.13 the server does not degrade, it fails to boot. The second: ccrc
+// history (spec 2026-10-05 §9.1) needs FTS5 from `node:sqlite`, which 22.13.0
+// and 22.15.1 lack, and an `.iterate()` that survives a statement collected
+// mid-loop, which 22.15.1 lacks too — both measured; 22.16.0 has both.
 //
-// THREE assertions, and they are not equally strong. The first two pin the
-// DECLARATION: all three packages agree, and the interpreter running THIS
-// suite clears whatever number they agree on. Assertion 2 is RELATIVE and
-// ONE-DIRECTIONAL — it compares the interpreter against `engines.node`, not
-// against reality, so it goes green if `engines.node` is lowered to meet a
-// lowered interpreter (see .github/workflows/ci.yml's setup-node comment for
-// the concrete scenario). The THIRD assertion pins the FACT instead of the
-// declaration: it imports `node:sqlite` and round-trips a `DatabaseSync`,
-// reading no package.json at all, so it fails on any interpreter below the
-// real 22.13.0 flag boundary NO MATTER what `engines.node` says — it is the
-// one assertion that editing `engines` can never turn green. If assertion 3
-// is red while 1-2 are green, the declared number is too low; raise it — see
-// the plan's deviation D-6. Do not "fix" a red third assertion by lowering
-// `engines`: it cannot work, because assertion 3 never reads `engines` at all.
+// FOUR assertions, not equally strong. 1-2 pin the DECLARATION: the three
+// packages agree, and THIS interpreter clears what they declare. Assertion 2
+// is RELATIVE and ONE-DIRECTIONAL — lowering `engines.node` to meet a lowered
+// interpreter keeps it green (ci.yml's setup-node comment has the scenario).
+// 3 and 4 pin the FACT and read no package.json: 3 round-trips a DatabaseSync
+// (the 22.13 flag boundary), 4 runs FTS5 and a gc-pressured `.iterate()` in a
+// child (the 22.16 boundary). With `engines` lowered to 22.13, a 22.15.1 box
+// keeps 1-3 green and only 4 reds: 4 alone proves THIS floor, and CI's
+// `node-floor` job runs this file on exactly the floor's version. If 3 or 4 is
+// red while 1-2 are green, the declared number is too low (plan deviation D-6
+// was the first time): RAISE `engines` in all three packages, never lower it —
+// 3 and 4 never read `engines`, so no edit to it can turn them green.
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,7 +32,7 @@ const enginesOf = (pkg: string): string | undefined => {
   return j.engines?.node;
 };
 
-/** `>=22.13.0` -> [22, 13, 0]. Deliberately understands ONE range form: the
+/** `>=22.16.0` -> [22, 16, 0]. Deliberately understands ONE range form: the
  *  moment someone writes `^22 || >=24` this parser must fail loudly rather than
  *  silently accept a floor it did not understand. */
 const floorOf = (range: string): [number, number, number] => {
@@ -63,5 +63,76 @@ describe('the node floor', () => {
     db.prepare('INSERT INTO probe VALUES (?)').run(1);
     expect((db.prepare('SELECT count(*) AS c FROM probe').get() as { c: number }).c).toBe(1);
     db.close();
+  });
+});
+
+// ── assertion 4: the 22.16 boundary ─────────────────────────────────────────
+// ABSOLUTE, like 3: no package.json is read. Each fact runs in a CHILD on this
+// same interpreter (`process.execPath`), for two reasons: the iterate leg needs
+// `--expose-gc`, which vitest's worker was not started with, and
+// `--no-warnings` keeps node:sqlite's ExperimentalWarning off the child's
+// stderr, so an empty combined output IS the green answer. Two cases, not one
+// probe, so each fact reds on its own: on 22.15.1 the FTS5 leg dies first
+// (`no such module: fts5`), and a single probe would hide whether the iterate
+// leg still bites. Measured 2026-10-05 on 22.15.1 (both red: `no such module:
+// fts5`, `statement has been finalized`), 22.16.0 and 24.14.1 (both green).
+// D-4262: a failed spawn, or the 30 s bound firing (spawnSync reports it as
+// r.error ETIMEDOUT), comes back as `spawnError` and is asserted FIRST, so it
+// is never read as "no usable FTS5 — RAISE engines".
+const childProbe = (src: string): { status: number | null; out: string; spawnError?: string } => {
+  const r = spawnSync(process.execPath,
+    ['--no-warnings', '--expose-gc', '--input-type=module', '-e', src], { encoding: 'utf8', timeout: 30000 });
+  return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}`, spawnError: r.error?.message };
+};
+
+/** The table shape the history store creates (spec §6.2): contentless, with
+ *  contentless_delete, so a MATCH answers rowids and a DELETE is honoured. */
+const FTS5_PROBE = [
+  "import { DatabaseSync } from 'node:sqlite';",
+  "const db = new DatabaseSync(':memory:');",
+  "db.exec(\"CREATE VIRTUAL TABLE t USING fts5(body, content='', contentless_delete=1, tokenize='porter unicode61')\");",
+  "const ins = db.prepare('INSERT INTO t(rowid, body) VALUES (?, ?)');",
+  "ins.run(1, 'alpha beta gamma');",
+  "ins.run(2, 'delta epsilon');",
+  "const hits = (q) => db.prepare('SELECT rowid AS r FROM t WHERE t MATCH ? ORDER BY rowid').all(q).map((x) => x.r);",
+  "if (JSON.stringify(hits('beta')) !== '[1]') throw new Error('MATCH beta answered ' + JSON.stringify(hits('beta')));",
+  "db.prepare('DELETE FROM t WHERE rowid = ?').run(1);",
+  "if (JSON.stringify(hits('beta')) !== '[]') throw new Error('a contentless delete left ' + JSON.stringify(hits('beta')));",
+  'db.close();',
+].join('\n');
+
+/** An UNHELD statement under a forced gc every 100 rows: nothing but the loop references
+ *  it, so a collection mid-iteration finalizes it on 22.15.1. Without the
+ *  `gc()` call the same loop completes there (measured) — the forced
+ *  collection is what makes this leg see the defect at all. */
+const ITERATE_PROBE = [
+  "import { DatabaseSync } from 'node:sqlite';",
+  "const db = new DatabaseSync(':memory:');",
+  "db.exec('CREATE TABLE n (i INTEGER)');",
+  "const ins = db.prepare('INSERT INTO n VALUES (?)');",
+  'for (let i = 0; i < 1200; i += 1) ins.run(i);',
+  'let seen = 0;',
+  "for (const row of db.prepare('SELECT i FROM n ORDER BY i').iterate()) {",
+  '  seen += 1;',
+  '  if (seen % 100 === 0) globalThis.gc();',
+  "  if (row.i !== seen - 1) throw new Error('row ' + seen + ' read ' + row.i);",
+  '}',
+  "if (seen !== 1200) throw new Error('iterated ' + seen);",
+  'db.close();',
+].join('\n');
+
+describe('the node floor, assertion 4: what ccrc history needs from node:sqlite', () => {
+  it('4a: FTS5 is compiled in — a contentless-delete table answers MATCH and forgets a deleted row', () => {
+    const r = childProbe(FTS5_PROBE);
+    expect(r.spawnError, 'the probe child did not run to completion (spawn failure or 30 s timeout) — this is not a floor answer').toBeUndefined();
+    expect(r.out, 'node:sqlite on this interpreter has no usable FTS5 — RAISE engines, never lower them').toBe('');
+    expect(r.status).toBe(0);
+  });
+
+  it('4b: .iterate() survives a forced gc every 100 rows on a statement nothing else holds', () => {
+    const r = childProbe(ITERATE_PROBE);
+    expect(r.spawnError, 'the probe child did not run to completion (spawn failure or 30 s timeout) — this is not a floor answer').toBeUndefined();
+    expect(r.out, 'node:sqlite finalized a statement mid-iteration — RAISE engines, never lower them').toBe('');
+    expect(r.status).toBe(0);
   });
 });

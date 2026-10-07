@@ -1,0 +1,20 @@
+{
+  "scenario": "wf-limit-pause", "covers": ["Q7"],
+  "steps": [
+    {"waitReady": 60}, {"type": "dlg wf-limit-pause"}, {"keys": ["Enter"]},
+    {"sleep": 10},
+    {"waitLabels": ["l1-limited"], "timeoutS": 120}, {"sleep": 70},
+    {"probeLabels": ["l1-done"], "timeoutS": 180}
+  ],
+  "settleS": 10,
+  "entries": [
+    {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg wf-limit-pause"},
+     "tool_use": {"name": "Workflow", "input": {"script": "export const meta = { name: 'dlgwfl', description: 'dlg wf limit' }\nconst r = await agent('dlg-wf-l1', { label: 'l1', isolation: 'worktree' })\nreturn r\n"}}},
+    {"label": "l1-limited", "match": {"kind": "tools", "lastUser": "dlg-wf-l1"}, "status": 429,
+     "headers": {"anthropic-ratelimit-unified-status": "rejected", "anthropic-ratelimit-unified-reset": "$NOW+60",
+                 "anthropic-ratelimit-unified-representative-claim": "five_hour", "retry-after": "60"},
+     "body": {"type": "error", "error": {"type": "rate_limit_error", "message": "mock five-hour limit"}}},
+    {"label": "l1-done", "match": {"kind": "tools", "lastUser": "dlg-wf-l1"}, "text": "DLG-WF-L1"}
+  ],
+  "default": {"text": "DLG-WAIT", "repeat": true}
+}
