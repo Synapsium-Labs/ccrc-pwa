@@ -147,8 +147,8 @@ const RIGSH = path.join(RIG, 'rig.sh');
 // process found by its working directory is skipped elsewhere. On macOS the reap's ownerless arm fails closed.
 const LINUX = process.platform === 'linux';
 const TREE = path.resolve(__dirname, '../..');
-const rigsh = (args: string[], env: NodeJS.ProcessEnv = {}, cwd?: string): { status: number | null; stdout: string; stderr: string } => {
-  const r = spawnSync('bash', [RIGSH, ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 120_000, ...(cwd ? { cwd } : {}) });
+const rigsh = (args: string[], env: NodeJS.ProcessEnv = {}, cwd?: string, timeoutMs = 120_000): { status: number | null; stdout: string; stderr: string } => {
+  const r = spawnSync('bash', [RIGSH, ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: timeoutMs, ...(cwd ? { cwd } : {}) });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 };
 /** The text of rig.sh's own top-level definitions named here, so a row can run them without the case dispatch at
@@ -311,6 +311,180 @@ describe('rig.sh guards (the rig never names the real HOME or the default tmux s
     expect(fs.existsSync(dead)).toBe(false);
     expect(fs.existsSync(live)).toBe(true);
   }, 60_000);
+});
+
+/** A fixture HOME whose Claude Code versions directory holds `entries`: [name, mode] pairs, each a one-line shell script (a
+ *  stand-in no row runs: a row that could reach a binary is one that refuses first). A name may climb out of the directory
+ *  (`../x`), which is where a version spelled that way would land. */
+function versionsHome(entries: Array<[string, number]>): string {
+  const home = mkTmp('ccrc-dlg-home-');
+  const dir = path.join(home, '.local/share/claude/versions');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [name, mode] of entries) {
+    const f = path.join(dir, name);
+    fs.writeFileSync(f, '#!/bin/sh\nexit 0\n');
+    fs.chmodSync(f, mode);
+  }
+  return home;
+}
+/** The same HOME's entries, as most rows below need them: three installed (out of numeric order), one not executable,
+ *  and three executables that are not versions (a word, two numbers, trailing text). */
+const MIXED: Array<[string, number]> = [['2.1.290', 0o755], ['2.1.9', 0o755], ['10.0.0', 0o755], ['2.1.997', 0o644], ['current', 0o755], ['2.1', 0o755], ['2.1.9x', 0o755]];
+
+describe('rig.sh run and all take only a version that is installed (review 304 F7)', () => {
+  const SCENARIO = path.join(RIG, 'scenarios', 'agent-plain.json');
+  /** Fresh private directories for what a run would make, so "made nothing" is a directory that stayed empty. */
+  const sandbox = () => ({ tmp: mkTmp('ccrc-dlg-tmp-'), tmux: mkTmp('ccrc-dlg-tmux-'), out: path.join(mkTmp('ccrc-dlg-out-'), 'out') });
+  const REFUSED: Array<[string, string]> = [   // [what, the version as spelled]; each executable-looking spelling HAS an executable entry
+    ['a version with no entry in the versions directory', '2.1.998'],
+    ['a version whose entry is not executable', '2.1.997'],
+    ['a version spelled with two numbers (an executable entry of that name exists)', '2.1'],
+    ['a version that climbs out of the versions directory (an executable file is there)', '../x'],
+    ['a version with a leading letter (an executable entry of that name exists)', 'v2.1.9'],
+    ['a version with trailing text (an executable entry of that name exists)', '2.1.9x'],
+  ];
+  for (const [what, ver] of REFUSED) {
+    it(`run refuses ${what}, exit 2, before it makes anything: no run root, no tmux directory, no out-dir (F7)`, () => {
+      const home = versionsHome([...MIXED, ['../x', 0o755], ['v2.1.9', 0o755]]);
+      const { tmp, tmux, out } = sandbox();
+      const r = rigsh(['run', ver, SCENARIO, out], { HOME: home, TMPDIR: tmp, TMUX_TMPDIR: tmux }, undefined, 20_000);
+      expect.soft(r.status, r.stderr).toBe(2);
+      expect.soft(r.stderr).toContain(`'${ver}' is not an installed Claude Code version`);
+      expect.soft(fs.readdirSync(tmp), 'no run root').toEqual([]);
+      expect.soft(fs.readdirSync(tmux), 'no tmux socket directory').toEqual([]);
+      expect.soft(fs.existsSync(out), 'no out-dir').toBe(false);
+    }, 60_000);
+  }
+
+  it('run asks about the binary first and the scenario second, and an installed version passes the first (F7)', () => {
+    const home = versionsHome(MIXED);
+    const bad = path.join(mkTmp('ccrc-dlg-sc-'), 'bad.json');
+    fs.writeFileSync(bad, '{}');
+    const { tmp, tmux, out } = sandbox();
+    const env = { HOME: home, TMPDIR: tmp, TMUX_TMPDIR: tmux };
+    const installed = rigsh(['run', '2.1.290', bad, out], env, undefined, 20_000);
+    expect.soft(installed.status, installed.stderr).toBe(2);
+    expect.soft(installed.stderr, 'an installed version reaches the scenario check').toContain('is malformed');
+    const missing = rigsh(['run', '2.1.998', bad, out], env, undefined, 20_000);
+    expect.soft(missing.status, missing.stderr).toBe(2);
+    expect.soft(missing.stderr).toContain("'2.1.998' is not an installed Claude Code version");
+    expect.soft(missing.stderr, 'the binary is asked about before the scenario').not.toContain('is malformed');
+  }, 60_000);
+
+  const BAD_ALL: Array<[string, string[], string]> = [   // [what, the versions named, the one the refusal must name]
+    ['an uninstalled version', ['2.1.998'], '2.1.998'],
+    ['a version whose entry is not executable', ['2.1.997'], '2.1.997'],
+    ['a malformed version (an executable entry of that name exists)', ['2.1.9x'], '2.1.9x'],
+    ['an installed version beside bad ones: the FIRST bad one is named', ['2.1.290', '2.1.998', '2.1.9x'], '2.1.998'],
+  ];
+  for (const [what, named, first] of BAD_ALL) {
+    it(`all refuses ${what}, exit 2, naming it, and makes nothing: no raw root, no run root`, () => {
+      const home = versionsHome(MIXED);
+      const { tmp, tmux } = sandbox();
+      const raw = path.join(mkTmp('ccrc-dlg-rawdir-'), 'raw');
+      const r = rigsh(['all', raw, ...named], { HOME: home, TMPDIR: tmp, TMUX_TMPDIR: tmux }, undefined, 20_000);
+      expect.soft(r.status, r.stderr).toBe(2);
+      expect.soft(r.stderr).toContain(`'${first}' is not an installed Claude Code version`);
+      expect.soft(fs.existsSync(raw), 'no raw root, and so no .done').toBe(false);
+      expect.soft(fs.readdirSync(tmp), 'no run root').toEqual([]);
+    }, 60_000);
+  }
+
+  it('all checks the versions it is given before it reaps or removes anything: a dead run root and a leftover .done stay (F7)', () => {
+    const home = versionsHome(MIXED);
+    const { tmp, tmux } = sandbox();
+    const dead = fs.mkdtempSync(path.join(tmp, 'ccrc-dlg-rig.'));
+    fs.writeFileSync(path.join(dead, '.owner'), `${spawnSync('true').pid}\n`);   // a finished child's pid: reap would remove it
+    const raw = mkTmp('ccrc-dlg-raw-');
+    fs.writeFileSync(path.join(raw, '.done'), 'earlier\n');
+    const r = rigsh(['all', raw, '2.1.998'], { HOME: home, TMPDIR: tmp, TMUX_TMPDIR: tmux }, undefined, 20_000);
+    expect.soft(r.status, r.stderr).toBe(2);
+    expect.soft(fs.existsSync(dead), 'reap did not run').toBe(true);
+    expect.soft(fs.readFileSync(path.join(raw, '.done'), 'utf8'), 'the earlier .done was not removed').toBe('earlier\n');
+  }, 60_000);
+
+  describe('which versions all runs (rig.sh\'s own cmd_all and what it calls, over a stub for `run` and for reap)', () => {
+    const sq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+    /** Runs cmd_all with `$0` a stub that logs `run <version> <scenario file> <out-dir under the raw root>` and fails for STUB_FAIL;
+     *  HERE a scratch tree with two scenarios. Returns the log, the raw root's entries and its .done. */
+    function runAll(home: string, args: string[], failFor = ''): { status: number | null; stderr: string; log: string[]; done: string | null } {
+      const dir = mkTmp('ccrc-dlg-all-');
+      fs.mkdirSync(path.join(dir, 'scenarios'));
+      for (const n of ['a', 'b']) fs.writeFileSync(path.join(dir, 'scenarios', `${n}.json`), '{}');
+      const stub = path.join(dir, 'stub.sh');
+      fs.writeFileSync(stub, '#!/usr/bin/env bash\nprintf \'%s %s %s %s\\n\' "$1" "$2" "$(basename "$3")" "${4#"$RAW"/}" >> "$LOG"\n[[ $2 != "${STUB_FAIL-}" ]]\n');
+      const raw = path.join(dir, 'raw');
+      const log = path.join(dir, 'log');
+      const script = ['set -euo pipefail', rigText('REAL_HOME', 'VERSIONS', 'VERSION_RE'), `HERE=${sq(dir)}`, `TREE=${sq(path.join(dir, 'tree'))}`,
+        'cmd_reap() { printf "reap\\n" >> "$LOG"; }', rigText('die', 'guard_out', 'version_ok', 'VERS', 'pick_versions', 'cmd_all'), 'cmd_all "$@"'].join('\n');
+      const r = spawnSync('bash', ['-c', script, stub, raw, ...args], { encoding: 'utf8', env: { ...process.env, HOME: home, LOG: log, RAW: raw, STUB_FAIL: failFor }, timeout: 60_000 });
+      const lines = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean) : [];
+      const doneFile = path.join(raw, '.done');
+      return { status: r.status, stderr: r.stderr, log: lines, done: fs.existsSync(doneFile) ? fs.readFileSync(doneFile, 'utf8') : null };
+    }
+    const sweep = (versions: string[]): string[] => ['reap', ...versions.flatMap((v) => ['a', 'b'].map((s) => `run ${v} ${s}.json ${v}/${s}`))];
+
+    it('with no version named, runs every installed, version-shaped, executable entry, in numeric order, each against every scenario, then writes .done', () => {
+      const r = runAll(versionsHome(MIXED), []);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.log).toEqual(sweep(['2.1.9', '2.1.290', '10.0.0']));
+      expect(r.done).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n$/);
+    }, 60_000);
+
+    it('with versions named, runs only those, in numeric order and once each, then writes .done', () => {
+      const r = runAll(versionsHome(MIXED), ['10.0.0', '2.1.9', '10.0.0']);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.log).toEqual(sweep(['2.1.9', '10.0.0']));
+      expect(r.done).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n$/);
+    }, 60_000);
+
+    it('a failed run is reported with its rc and does not stop the sweep, and .done is still written', () => {
+      const r = runAll(versionsHome(MIXED), ['2.1.9', '10.0.0'], '2.1.9');
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.log).toEqual(sweep(['2.1.9', '10.0.0']));
+      expect(r.stderr).toContain('rig: run 2.1.9 a.json failed rc=1');
+      expect(r.stderr).toContain('rig: run 2.1.9 b.json failed rc=1');
+      expect(r.stderr).not.toContain('rig: run 10.0.0');
+      expect(r.done).not.toBeNull();
+    }, 60_000);
+
+    it('refuses a bad version before it reaps or runs anything, and writes no .done', () => {
+      const r = runAll(versionsHome(MIXED), ['2.1.9', '2.1.998']);
+      expect(r.status, r.stderr).toBe(2);
+      expect(r.log).toEqual([]);
+      expect(r.done).toBeNull();
+    }, 60_000);
+  });
+
+  describe('rig.sh versions (the one reader of "installed": all and recapture.sh both ask it)', () => {
+    const ask = (home: string, ...named: string[]) => rigsh(['versions', ...named], { HOME: home }, undefined, 20_000);
+    it('lists every installed, version-shaped, executable entry, one per line, numerically (a word, a non-executable file and a malformed name left out)', () => {
+      const r = ask(versionsHome(MIXED));
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe('2.1.9\n2.1.290\n10.0.0\n');
+    }, 60_000);
+
+    it('given versions, lists exactly those: numerically, each once', () => {
+      const r = ask(versionsHome(MIXED), '10.0.0', '2.1.9', '10.0.0');
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe('2.1.9\n10.0.0\n');
+    }, 60_000);
+
+    it('refuses the first bad version it is given, exit 2, and lists nothing', () => {
+      const r = ask(versionsHome(MIXED), '2.1.9', '2.1.997', '2.1.9x');
+      expect.soft(r.status, r.stderr).toBe(2);
+      expect.soft(r.stderr).toContain("'2.1.997' is not an installed Claude Code version");
+      expect.soft(r.stdout).toBe('');
+    }, 60_000);
+
+    it('lists nothing, and succeeds, for an empty versions directory and for a HOME with none', () => {
+      expect.soft(ask(versionsHome([])).status).toBe(0);
+      expect.soft(ask(versionsHome([])).stdout).toBe('');
+      const bare = ask(mkTmp('ccrc-dlg-home-'));
+      expect.soft(bare.status, bare.stderr).toBe(0);
+      expect.soft(bare.stdout).toBe('');
+    }, 60_000);
+  });
 });
 
 /** Set every mtime under `root` (files, symlinks, then directories, children first) to `when`. */

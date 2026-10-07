@@ -12,8 +12,11 @@
 #   rig.sh check-scenario <file>     exit 0 iff every step is well formed (verbs, integers, key names)
 #   rig.sh setup <root> [<version>]  fixture HOME <root>/fixhome (config <root>/fixhome/cfg), repo <root>/repo
 #   rig.sh run <version> <scenario.json> <out-dir>   one run; a raw bundle lands in <out-dir>
-#   rig.sh all <raw-root>            reap, then every installed version x every scenario -> <raw-root>/<v>/<s>/,
-#                                    then <raw-root>/.done
+#   rig.sh all <raw-root> [<version>...]   reap, then every installed version (or only those named, each checked
+#                                    first) x every scenario -> <raw-root>/<v>/<s>/, then <raw-root>/.done
+#   rig.sh versions [<version>...]   the versions `all` would cover, one per line: every installed one, or the ones named
+#                                    (each must be installed). Installed = x.y.z-shaped and executable under the real HOME's
+#                                    ~/.local/share/claude/versions. recapture.sh asks this too, so both share one filter.
 #   rig.sh reap                      remove what killed runs left: dlg<pid> tmux servers and
 #                                    ccrc-dlg-rig.* roots whose owning rig.sh pid is gone, or that have
 #                                    no .owner, nothing modified for 10 minutes and no process under them
@@ -24,6 +27,7 @@ TREE=$(cd "$HERE/../../.." && pwd)
 REAL_HOME=$HOME
 VERSIONS=$REAL_HOME/.local/share/claude/versions
 SOCK_RE='^dlg[A-Za-z0-9_-]*$'
+VERSION_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 SESSION=cc-rig-hookcap
 VERBS='waitReady type keys waitLabels probeLabels answerDialog sleep kill9 swapConfig relaunch snapshot'
 RUN_CAP_S=1200
@@ -56,6 +60,24 @@ run_base() {
   printf '%s' "${b%/}"
 }
 guard_sock() { [[ ${1-} =~ $SOCK_RE ]]; }
+# An installed Claude Code version: x.y.z-shaped (it names a file under $VERSIONS, so no `..` and no `/`) and executable there.
+version_ok() { [[ ${1-} =~ $VERSION_RE && -x $VERSIONS/${1-} ]]; }
+# The versions one capture covers, into VERS: numeric order, each once. None named = every installed one. Named ones are ALL
+# checked first and the first bad one refused. Call it in the MAIN shell, never inside $( ) or < <( ): a `die` there ends only
+# that subshell (review 304 F7 was exactly that), so `rig.sh versions` and cmd_all call it directly.
+VERS=()
+pick_versions() {
+  local v
+  VERS=()
+  if (( $# )); then
+    for v in "$@"; do version_ok "$v" || die "'$v' is not an installed Claude Code version under $VERSIONS (x.y.z, executable)"; done
+    mapfile -t VERS < <(printf '%s\n' "$@" | sort -t. -k1,1n -k2,2n -k3,3n | uniq)
+  else
+    while IFS= read -r v; do
+      if version_ok "$v"; then VERS+=("$v"); fi
+    done < <(ls "$VERSIONS" 2>/dev/null | sort -t. -k1,1n -k2,2n -k3,3n)
+  fi
+}
 guard_out() {   # an output directory must not sit inside the source tree (raw bundles are never git-add-able)
   local o=${1-} p
   [[ -n $o ]] || return 1
@@ -195,6 +217,8 @@ claude_pid() {
 }
 launch_cmd() {   # [claude args...] -> one shell command line for the pane (run by `bash -c`)
   local bin=$VERSIONS/$VER gen args="" a to=""
+  # This die runs inside a command substitution (`bash -c "$(launch_cmd)"`), so its exit 2 ends only that subshell and the run
+  # carries on with an empty command: cmd_run refuses a missing binary up front, and this is what is left for `relaunch`.
   [[ -x $bin ]] || die "no Claude Code binary '$VER' under $VERSIONS"
   gen=$(cat "$RUN_H/.cc-sessions/rig-hookcap.generation")
   for a in "$@"; do args+=" $(printf '%q' "$a")"; done
@@ -341,6 +365,8 @@ cleanup_run() {
 cmd_run() {
   VER=${1-}; SCEN=${2-}; OUT_DIR=${3-}
   [[ -n $VER && -n $OUT_DIR ]] || die "usage: rig.sh run <version> <scenario.json> <out-dir>"
+  # Before anything is made: a missing binary otherwise runs on with an empty pane command and lands an `unmeasured` bundle.
+  version_ok "$VER" || die "'$VER' is not an installed Claude Code version under $VERSIONS (x.y.z, executable)"
   check_scenario "$SCEN" || die "scenario '$SCEN' is malformed (rig.sh check-scenario names the rule)"
   guard_out "$OUT_DIR" || die "refusing out-dir '$OUT_DIR': it must not be inside the source tree"
   local made phys
@@ -396,16 +422,18 @@ cmd_reap() {
   return 0
 }
 cmd_all() {
-  local RAW=${1-} v s
-  [[ -n $RAW ]] || die "usage: rig.sh all <raw-root>"
+  local RAW=${1-} v s rc
+  [[ -n $RAW ]] || die "usage: rig.sh all <raw-root> [<version>...]"
+  shift
+  pick_versions "$@"   # a bad version refuses the whole capture BEFORE anything is made, reaped or removed
   guard_out "$RAW" || die "refusing raw-root '$RAW': it must not be inside the source tree"
   cmd_reap
   rm -f "$RAW/.done"
-  for v in $(ls "$VERSIONS" | sort -t. -k1,1n -k2,2n -k3,3n); do
-    [[ -x $VERSIONS/$v && $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+  for v in ${VERS[@]+"${VERS[@]}"}; do
     for s in "$HERE"/scenarios/*.json; do
+      # rc is read FIRST: the $(basename) below would reset $? to 0 before the printf expanded it.
       bash "$0" run "$v" "$s" "$RAW/$v/$(basename "$s" .json)" \
-        || printf 'rig: run %s %s failed rc=%s\n' "$v" "$(basename "$s")" "$?" >&2
+        || { rc=$?; printf 'rig: run %s %s failed rc=%s\n' "$v" "$(basename "$s")" "$rc" >&2; }
     done
   done
   date -u +%Y-%m-%dT%H:%M:%SZ > "$RAW/.done"
@@ -419,6 +447,7 @@ case ${1-} in
   setup)          shift; cmd_setup "$@" ;;
   run)            shift; cmd_run "$@" ;;
   all)            shift; cmd_all "$@" ;;
+  versions)       shift; pick_versions "$@"; if (( ${#VERS[@]} )); then printf '%s\n' "${VERS[@]}"; fi ;;
   reap)           cmd_reap ;;
-  *)              sed -n '2,20p' "$0" >&2; exit 2 ;;
+  *)              sed -n '2,23p' "$0" >&2; exit 2 ;;
 esac
