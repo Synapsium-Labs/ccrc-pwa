@@ -87,6 +87,9 @@ function plantedStore(): Planted {
     family('demo-a', '', a);
     epoch(a, U1);
     const t1 = transcript(U1);
+    // The shorter copy (planted below) takes the LOWER file_id, as a real swap usually leaves it, so a copy query
+    // that broke the `after` tie by file_id alone would read it: the longest-copy rule, not id order, picks f1.
+    const f2 = file(t1);
     const f1 = file(t1);
     put(f1, t1, 1, 'user', 1000);
     put(f1, t1, 2, 'assistant', 1100);
@@ -103,7 +106,6 @@ function plantedStore(): Planted {
     put(f1, t1, 24, 'user', 7001, 1);
     put(f1, t1, 25, 'assistant', 7100);                                               // B2's 4th turn, and the copy's last row
     // A second home's copy of the same transcript, holding B1 with one row after it: the shorter copy is not read.
-    const f2 = file(t1);
     ins('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, 1), (?, ?, 2)', f2, eb1, f2, es1);
     // A subagent transcript of the same session: its boundary is not a MAIN boundary.
     const ta = transcript(U1, 'agent-1');
