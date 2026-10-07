@@ -46,6 +46,17 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-07 08:55 — wave 6 progress (mail 3801; confirmed in 3802).**
+  - **Done so far.** Tasks 0 to 6 are committed on `ws/amber-river`, each past its task review. Task 6 reproduced the
+    swift-hollow race red, then closed it.
+  - **Main absorbed once.** #312 (workspace-lifecycle 3b) landed first, so the worker merged main (`4e4d47bea`). The
+    stamp was restamped, `_ws_expire_cwd_users` keeps 3b's body under wave 6's header, the README anchors are
+    re-pointed, and the R56 checks are green.
+  - **Two calls confirmed:**
+    - guards the plan's mutation tables missed are pinned, by the brief's SAFETY rule;
+    - `leaf-mount-point-refused` (Task 5 refuses a leaf that is itself a mount point, because
+      `rm --one-file-system` measures from its argument) is accepted in principle and numbered at wave-done.
+  - **Claims.** 1057 and 1058 lapsed at the 8 h cap, and were re-taken as 1070 and 1071.
 - **2026-10-07 05:02 — workspace-lifecycle's PR #312 (wave 3b, run 290) edits two passages of our spec (mail 3796,
   answered in 3797).**
   - **The two passages.** §5.8: `reclaim-paused` now also stops the expiry of archived workspaces, making it the
