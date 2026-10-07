@@ -1588,6 +1588,18 @@ function unescapeJsonText(text) {
   return text.replace(JSON_ESCAPE_RE, (_m, c, u) => (c !== undefined ? JSON_ESCAPE_CHAR[c] : String.fromCharCode(parseInt(u, 16))));
 }
 
+/** A byte of the `[A-Za-z0-9_-]` run class (the unit a pair or a shape can match). */
+const isRunByte = (b) => (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a) || b === 0x5f || b === 0x2d;
+
+/** `s` without its trailing `[A-Za-z0-9_-]` run, by a backward scan (D-4312; FR1-b: the unanchored `/[A-Za-z0-9_-]+$/`
+ *  it replaces is quadratic in the length of an EARLIER run, one crafted sidecar costing minutes under the write
+ *  lock). Same result as that regex on every input; linear. */
+function dropTrailingRun(s) {
+  let k = s.length;
+  while (k > 0 && isRunByte(s.charCodeAt(k - 1))) k -= 1;
+  return k === s.length ? s : s.slice(0, k);
+}
+
 /** A sidecar's index text (§6.2, §8.3; D-4312, history-sidecar-redact-before-cut): the first
  *  `SIDECAR_FTS_BYTES` bytes of its REDACTED text. At most `SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN`
  *  bytes are decoded, their JSON string escapes undone (D-4336) and the result redacted whole, and only then cut
@@ -1608,13 +1620,12 @@ export function sidecarIndexText(bytes, idx) {
   text = unescapeJsonText(text);
   if (idx !== null) text = redactField(text, idx);
   const enc = new TextEncoder().encode(text);
-  const runByte = (b) => (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a) || b === 0x5f || b === 0x2d;
   if (enc.length > SIDECAR_FTS_BYTES) {
     let out = new TextDecoder('utf-8').decode(enc.subarray(0, SIDECAR_FTS_BYTES)).replace(/\uFFFD$/, '');
-    if (runByte(enc[SIDECAR_FTS_BYTES - 1]) && runByte(enc[SIDECAR_FTS_BYTES])) out = out.replace(/[A-Za-z0-9_-]+$/, '');
+    if (isRunByte(enc[SIDECAR_FTS_BYTES - 1]) && isRunByte(enc[SIDECAR_FTS_BYTES])) out = dropTrailingRun(out);
     return out;
   }
-  if (windowCut && enc.length > 0 && runByte(enc[enc.length - 1])) return text.replace(/[A-Za-z0-9_-]+$/, '');
+  if (windowCut && enc.length > 0 && isRunByte(enc[enc.length - 1])) return dropTrailingRun(text);
   return text;
 }
 

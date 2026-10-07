@@ -1957,6 +1957,62 @@ describe('sidecarIndexText: JSON string escapes are undone before redaction (D-4
 });
 
 // ===========================================================================
+// FR1-b (D-4312): the trailing-run drop is a backward scan. The unanchored `[A-Za-z0-9_-]+$` it replaced is quadratic in
+// the length of an EARLIER run (measured at the final review: 1.8 s at 40,000 characters, 6.9 s at 80,000, about
+// 290 s at the largest run a 512 KiB cut allows), run inside ingestSidecar's write transaction.
+// ===========================================================================
+describe('sidecarIndexText: the trailing-run drop is linear (D-4312, FR1-b)', () => {
+  const N = libRows.SIDECAR_FTS_BYTES;
+  const W = N + libRows.SIDECAR_REDACT_MARGIN;
+  const idx = (): libRows.PairIndex => libRows.makePairIndex([]);
+  // The window is filled with two-byte escapes that read as one character, so the text is shorter than the cut and the
+  // window-full arm (not the over-the-cut arm) decides the drop. The expected tails were computed with the regex.
+  const escapePad = (tail: string): Buffer => Buffer.from(`${String.raw`\n`.repeat((W - tail.length) / 2)}${tail}`);
+
+  it('a long early run, a separator and a long run across the cut finishes in well under a second (the regex took seconds; this takes about 10 ms)', () => {
+    const k = 80_000;                                    // the regex measured 6.9 s here
+    const bytes = Buffer.from(`${'A'.repeat(k)} ${'B'.repeat(W + 100_000 - k)}`);
+    const t0 = performance.now();
+    const out = libRows.sidecarIndexText(bytes, idx());
+    const ms = performance.now() - t0;
+    expect(out).toBe(`${'A'.repeat(k)} `);               // the cut fell inside the B run: that partial run is dropped
+    expect(ms, `took ${Math.round(ms)} ms`).toBeLessThan(1000);
+  });
+  it('the same shape under the window-full arm (escapes shrink the text under the cut) is just as fast', () => {
+    const k = 80_000; const m = 100_000;
+    const bytes = Buffer.from(`${String.raw`\n`.repeat(m)}${'A'.repeat(k)} ${'B'.repeat(W - 2 * m - k - 1)}`);
+    expect(bytes.length).toBe(W);
+    const t0 = performance.now();
+    const out = libRows.sidecarIndexText(bytes, idx());
+    const ms = performance.now() - t0;
+    expect(out).toBe(`${'\n'.repeat(m)}${'A'.repeat(k)} `);
+    expect(ms, `took ${Math.round(ms)} ms`).toBeLessThan(1000);
+  });
+  it('ordinary inputs give the regex\'s result (literal cases computed with the regex)', () => {
+    const inRun = libRows.sidecarIndexText(Buffer.concat([Buffer.alloc(N - 8, 0x20), Buffer.from('word splitrun-continues here')]), idx());
+    expect(inRun.length).toBe(524285);
+    expect(inRun.endsWith('   word ')).toBe(true);
+    const atBoundary = libRows.sidecarIndexText(Buffer.concat([Buffer.alloc(N - 4, 0x20), Buffer.from('word  more')]), idx());
+    expect(atBoundary.length).toBe(524288);
+    expect(atBoundary.endsWith('    word')).toBe(true);
+    const cutAllRun = libRows.sidecarIndexText(Buffer.concat([Buffer.from('x '), Buffer.alloc(N, 0x41), Buffer.from('BBBB')]), idx());
+    expect(cutAllRun).toBe('x ');
+    expect(libRows.sidecarIndexText(Buffer.alloc(W, 0x41), idx())).toBe('');   // a window that is one run, all of it dropped
+    const a = libRows.sidecarIndexText(escapePad('ab cd-ef'), idx());
+    expect(a.length).toBe(294911);
+    expect(a.endsWith('\n\n\nab ')).toBe(true);
+    const b = libRows.sidecarIndexText(escapePad('ab cd '), idx());
+    expect(b.length).toBe(294915);
+    expect(b.endsWith('ab cd ')).toBe(true);
+    const c = libRows.sidecarIndexText(escapePad('AAAA'), idx());
+    expect(c.length).toBe(294910);
+    expect(c.endsWith('\n\n\n\n\n\n')).toBe(true);
+    const d = libRows.sidecarIndexText(escapePad('_-_'.padEnd(4, ' ')), idx());
+    expect(d.endsWith('_-_ ')).toBe(true);
+  });
+});
+
+// ===========================================================================
 // Task 25 review round 1 (F1): the op marker's one grammar, `<verb> <pid> <start_ms>` (§9.6 op-running). Task 28's
 // status reads it through this parser, and a pass's stale-marker sweep decides on its null.
 // ===========================================================================
