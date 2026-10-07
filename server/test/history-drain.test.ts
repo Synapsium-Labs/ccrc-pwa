@@ -599,6 +599,41 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       expect(receipts(box)).toHaveLength(1);                             // the other file drained: the tick completed
     });
 
+    it('a regular file planted at .draining/oversize is removed and counted non_regular like a planted link; the file is set aside and the tick exits 0 (FR4 round 1)', () => {
+      sparse(path.join(DRAIN(box.home), OVER), SPOOL_FILE_MAX + 1);
+      fs.writeFileSync(path.join(DRAIN(box.home), 'oversize'), 'stray', { mode: 0o600 });
+      spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+      const r1 = runSweep(box);
+      expect(r1.code, r1.stderr).toBe(0);
+      expect(counters(box)['non_regular']).toBe(1);
+      expect(counters(box)['spool_oversize']).toBe(1);
+      expect(fs.statSync(ASIDE(OVER)).size).toBe(SPOOL_FILE_MAX + 1);
+      expect(receipts(box)).toHaveLength(0);
+      const r2 = runSweep(box);
+      expect(r2.code, r2.stderr).toBe(0);
+      expect(receipts(box)).toHaveLength(1);                             // the other file drained: later ticks are not wedged
+    });
+
+    it.skipIf(process.getuid?.() === 0)('any other failed move leaves the file in place and the tick exits 0; it is recounted at each tick (FR4 round 1)', () => {
+      const dir = path.join(DRAIN(box.home), 'oversize');
+      fs.mkdirSync(dir, { mode: 0o500 });                                // a rename into it fails EACCES
+      try {
+        sparse(path.join(DRAIN(box.home), OVER), SPOOL_FILE_MAX + 1);
+        spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+        const r1 = runSweep(box);
+        expect(r1.code, r1.stderr).toBe(0);
+        expect(fs.existsSync(path.join(DRAIN(box.home), OVER)), 'left in place').toBe(true);
+        expect(counters(box)['spool_oversize']).toBe(1);
+        const r2 = runSweep(box);
+        expect(r2.code, r2.stderr).toBe(0);
+        expect(counters(box)['spool_oversize'], 'one recount per tick, no crash').toBe(2);
+        expect(receipts(box)).toHaveLength(1);                           // other files still drain
+        fs.chmodSync(dir, 0o700);
+        expect(runSweep(box).code).toBe(0);
+        expect(fs.existsSync(ASIDE(OVER)), 'set aside once the failure clears').toBe(true);
+      } finally { fs.chmodSync(dir, 0o700); }
+    });
+
     it('the count is committed before the move: a count that cannot commit leaves the file in place for the next tick, counted nowhere', () => {
       const f = path.join(DRAIN(box.home), OVER);
       sparse(f, SPOOL_FILE_MAX + 1);

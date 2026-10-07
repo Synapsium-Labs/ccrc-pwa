@@ -501,7 +501,8 @@ export function readDrainingText(path) {
  *  `listDraining` never lists, so it is never journaled, drained or unlinked by the sweep (the operator removes it). Its
  *  observation sidecar, which nothing lists once the `.jsonl` is gone, is removed. `spool_oversize` is bumped in a
  *  committed transaction FIRST and the file moved after, so a crash between the two may count a file twice and can never
- *  lose the count; a count that cannot commit leaves the file where it is for the next tick. True when the file is
+ *  lose the count; a count that cannot commit, or a move that fails, leaves the file where it is for the next tick
+ *  (recounted then: once per tick while the failure lasts, never a thrown tick). True when the file is
  *  oversize (set aside, or left for the next tick to count): the caller never journals it. False for a file that is
  *  not oversize, a link or a FIFO, which are not this function's. */
 export function setAsideOversize(db, home, name) {
@@ -512,12 +513,20 @@ export function setAsideOversize(db, home, name) {
   try {
     withTx(db, 'NORMAL', () => bump(db, 'spool_oversize'));
   } catch { return true; }   // uncounted, so unmoved: the next tick meets it again and counts it then
+  const dir = `${P.draining}/oversize`;
   try {
-    mkdirSync(`${P.draining}/oversize`, { recursive: true, mode: 0o700 });
-    renameSync(`${P.draining}/${name}`, `${P.draining}/oversize/${name}`);
-  } catch (e) {
-    if (e && e.code === 'ENOENT') return true;
-    throw e;
+    // A name that is not a directory (a stray same-user writer's file, link or FIFO) is removed and counted, as a
+    // planted link in .draining/ is; mkdir would otherwise fail EEXIST on every tick.
+    let ds = null;
+    try { ds = lstatSync(dir); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
+    if (ds !== null && !ds.isDirectory()) { unlinkIfPresent(dir); countOutside(db, 'non_regular'); }
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    renameSync(`${P.draining}/${name}`, `${dir}/${name}`);
+  } catch {
+    // ENOENT: another actor took the file. Any other failure (ENOSPC, EACCES, EXDEV through a planted link): the file
+    // stays where it is and the tick goes on, never rethrown (a throw out of drainSpool failed every later tick); the
+    // next tick meets it again and counts it again, one recount per tick until the failure clears (FR4 round 1).
+    return true;
   }
   unlinkIfPresent(`${P.draining}/${sidecarName(name)}`);
   return true;
