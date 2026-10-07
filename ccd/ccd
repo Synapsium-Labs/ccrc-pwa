@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a90b2863429c66525f7008b0163b2df6fecdac3b740fabe4a26fdaa5ff4149f6
+# ccrc:generated 1 sha256=26c107d3df8c931de8fe43ccc97f6db7e4c9a58cfd5404ed75db74ba2d4a2ef4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -259,9 +259,9 @@ _plat_ctime() { if [ "$CCD_OS" = darwin ]; then stat -f %c "$@"; else stat -c %Z
 _plat_mtime() {   # <file> -> mtime, epoch seconds
   if [ "$CCD_OS" = darwin ]; then stat -f %m "$@"; else stat -c %Y "$@"; fi
 }
-_plat_size() {    # <file> -> size in bytes
-  if [ "$CCD_OS" = darwin ]; then stat -f %z "$@"; else stat -c %s "$@"; fi
-}
+_plat_size() { if [ "$CCD_OS" = darwin ]; then stat -f %z "$@"; else stat -c %s "$@"; fi; }   # <file> -> size in bytes
+# Birth time, for the temp root's witness: `%W` and `%B` print 0 (BSD may print -1) where the filesystem keeps none.
+_plat_btime() { if [ "$CCD_OS" = darwin ]; then stat -f %B "$@"; else stat -c %W "$@"; fi; }   # <file> -> birth time, epoch seconds
 _plat_devino() {  # <file> -> "<device>:<inode>", the identity of a lock
   if [ "$CCD_OS" = darwin ]; then stat -f '%d:%i' "$@"; else stat -c '%d:%i' "$@"; fi
 }
@@ -20728,16 +20728,145 @@ _resume_env() {   # -> one line of KEY=value assignments for `env`, switching on
 # with `rm -f --`, never following it. OWNERSHIP is the `chmod`: it fails EPERM
 # on a leaf another user owns. `$HOME/.cc-tmp` itself MAY be a symlink (a data
 # volume, `$HOME/projects`'s shape) — the root is followed, only the leaf refused.
+# ITS rc-0 ARM ALSO WRITES THE LEAF'S POSITIVE WITNESS, `$REG/tmproots/<id>`
+# (spec §5.2): see the block below. rc 1 and rc 2 never do.
 _child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, leaf unusable (warned)
-  local id="$1" root="$HOME/.cc-tmp" dir
-  _child_runid_valid "$(_reg_get "$id" child)" || return 1
+  local id="$1" root="$HOME/.cc-tmp" dir run
+  run=$(_reg_get "$id" child)
+  _child_runid_valid "$run" || return 1
   dir="$root/$id"
   if [[ -L "$dir" ]] || ! mkdir -p -m 0700 -- "$root" "$dir" 2>/dev/null \
      || [[ ! -d "$dir" ]] || ! chmod -- 0700 "$dir" 2>/dev/null; then
     echo "ccd: warn: $id is a child but $dir could not be made a private directory — spawning with the box's own TMPDIR, so this session's scratch is not contained" >&2
     return 2
   fi
+  # rc 0 only, and never a refusal: the witness block below says why.
+  _ws_tmproot_witness_write "$id" "$dir" "$run" \
+    || echo "ccd: warn: $id's temp root $dir has no current witness — $(_ws_tmproot_witness_file "$id") could not be written; the spawn proceeds, and no collector will take this leaf until a later spawn writes it" >&2
   printf '%s' "$dir"
+}
+
+# ── THE TEMP ROOT'S POSITIVE WITNESS (child-workspace reclamation, spec §5.2) ─
+# `$REG/tmproots/<id>` says "ccd handed THIS directory, by dev, ino and btime,
+# to run <run> as its temp root": one line, `v=1 id=<id> run=<run> dev=<n>
+# ino=<n> btime=<n|-> uid=<n> at=<ms>`, taken by stat of the leaf right after
+# `_child_tmpdir`'s mkdir and chmod. That mkdir is `-p`, so a leaf that
+# already stood (one older than this code) is witnessed as it is found: the
+# witness says ccd HANDED the directory over, not that ccd created it. A
+# collector takes a leaf only while its dev, ino and btime still match; a
+# leaf that does not match is offered to the operator, never taken.
+#
+# TRUST. Any process of this uid can write this file, the session it judges
+# included: it guards against ccd's own mistakes and a recycled id, never
+# against a hostile session. The dev/ino/btime binding limits a forgery to a
+# leaf ccd made, at the id-derived path `$HOME/.cc-tmp/<id>`, and that limit
+# is convention, not an OS wall: a same-uid process can plant a directory
+# there and a witness for it alike. So a collector takes a path only from the
+# id, never from the witness body.
+#
+# WHERE. A DOTLESS registry subdirectory, the `pools/` precedent (POOLS_DIR):
+# every registry glob ccd ships is suffix-shaped and every registry `find` is
+# depth-1 and name-filtered, so a dotless directory is invisible to all of
+# them, and the files inside it are one level further down. So `_reg_purge`
+# does not take it — the witness OUTLIVES the row, the case an orphaned temp
+# root's collector exists for — and `_ws_slug_free` does not count it.
+# `ccd-child-tmproot-witness.test.ts` measures that census and refuses a
+# walker that could see it. A file inside the leaf was rejected, and so was
+# a sidecar in `~/.cc-tmp`: both sit where a session's own scratch goes, so
+# its ordinary writes and cleanups could take or clobber them by accident.
+# `tmproots/` is no harder to write on purpose (TRUST, above); it is only out
+# of the session's way. The writer's temp file is dot-leading INSIDE
+# `tmproots/`, never `$REG/.<x>`, so no `tmproots/*` glob sees it and
+# `_reg_purge`'s dot-prefixed inventory is unchanged. A writer that dies
+# between its `printf` and its `mv` leaves that temp file behind, and nothing
+# in this wave reaps it: a stated residue. No id names it
+# (`_ws_tmproot_id_ok` refuses every dot-leading name, at the reader, the
+# writer and `_ws_tmproot_remove`), so a collector walking `tmproots/` skips
+# or reaps dot-leading names and never takes one for an id.
+#
+# WHEN. Every rc-0 answer of `_child_tmpdir` asks; the file is WRITTEN (temp
+# file, then `mv`) only when it is absent, unparseable, or its dev, ino or
+# btime no longer match the leaf, or its run no longer matches the marker.
+# A respawn rewrites nothing; a leaf rebuilt with a new inode (a storage
+# migration, a recycled slug) is re-witnessed on its next spawn, and so is a
+# leaf older than this code. So is a recycled slug's KEPT leaf of the SAME
+# inode: its new child's run differs, so that child's first rc 0 rewrites
+# the witness (spec §5.2). Never on rc 1 or rc 2, never by a separate pass,
+# never by hand. A failed write never fails the spawn: `_child_tmpdir`
+# warns, and the leaf is simply not collectable until a later spawn writes it.
+#
+# BTIME is `_plat_btime` (whole epoch seconds). Where the filesystem keeps no
+# birth time it prints 0 (BSD may print -1) and the witness says `-`, binding
+# dev and ino alone; a stat that FAILS writes nothing — unmeasured is never
+# `-`. UID is the `-O` test: the leaf's owner IS this process's effective
+# uid, so `$EUID` is that owner, not a guess.
+#
+# DEATH belongs to `_ws_tmproot_remove` alone (RECLAIM region), and only
+# after `_ws_leaf_remove` has PROVEN the leaf absent.
+_ws_tmproot_witness_file() { printf '%s' "$REG/tmproots/${1-}"; }   # id -> the witness's path (a path, not a decision)
+
+# THE ID A WITNESS MAY BE NAMED FOR: the tail's own id shape, never
+# dot-leading — `.`, `..` and the writer's `.<id>.*.tmp` names live there.
+_ws_tmproot_id_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ && "${1-}" != .* ]]; }
+
+_ws_tmproot_witness_read() {   # id -> 0 parsed (sets _WS_WIT_DEV _WS_WIT_INO _WS_WIT_BTIME _WS_WIT_RUN _WS_WIT_UID _WS_WIT_AT) | 1 absent | 2 unreadable or malformed
+  # THREE ANSWERS: a directory or a link planted at the name is not absent.
+  # Every field is cleared first, so a failed read never leaves a previous
+  # read's values standing. The run is judged by `_child_runid_valid`, the
+  # one run-id grammar, never a re-spelt pattern — and BASH_REMATCH is copied
+  # before that call, whose own `=~` resets it.
+  local LC_ALL=C id="${1-}" w body="" line fd
+  local -a m
+  local re='^v=1 id=([A-Za-z0-9._-]+) run=([^ ]+) dev=([0-9]+) ino=([0-9]+) btime=([1-9][0-9]*|-) uid=([0-9]+) at=([0-9]{13})$'
+  _WS_WIT_DEV=''; _WS_WIT_INO=''; _WS_WIT_BTIME=''; _WS_WIT_RUN=''; _WS_WIT_UID=''; _WS_WIT_AT=''
+  _ws_tmproot_id_ok "$id" || return 2
+  w=$(_ws_tmproot_witness_file "$id")
+  [[ -e "$w" || -L "$w" ]] || return 1
+  [[ -f "$w" && ! -L "$w" ]] || return 2
+  { exec {fd}<"$w"; } 2>/dev/null || return 2
+  IFS= read -r -N 513 body <&"$fd" || :
+  { exec {fd}<&-; } 2>/dev/null || :
+  (( ${#body} <= 512 )) && [[ "$body" == *$'\n' ]] || return 2
+  line="${body%$'\n'}"
+  [[ "$line" != *$'\n'* && "$line" =~ $re ]] || return 2
+  m=("${BASH_REMATCH[@]}")
+  [[ "${m[1]}" == "$id" ]] || return 2
+  _child_runid_valid "${m[2]}" || return 2
+  _WS_WIT_RUN="${m[2]}"; _WS_WIT_DEV="${m[3]}"; _WS_WIT_INO="${m[4]}"
+  _WS_WIT_BTIME="${m[5]}"; _WS_WIT_UID="${m[6]}"; _WS_WIT_AT="${m[7]}"
+  return 0
+}
+
+_ws_tmproot_witness_write() {   # id leaf run -> 0 written or already current | 1 not written (the caller warns)
+  local LC_ALL=C id="${1-}" leaf="${2-}" run="${3-}" dir="$REG/tmproots" w di dev ino bt at tmp
+  _ws_tmproot_id_ok "$id" || return 1
+  _child_runid_valid "$run" || return 1
+  # The leaf `_child_tmpdir` just made: a real directory, not a link, ours.
+  [[ -d "$leaf" && ! -L "$leaf" && -O "$leaf" ]] || return 1
+  di=$(_plat_devino "$leaf" 2>/dev/null) || return 1
+  [[ "$di" =~ ^([0-9]+):([0-9]+)$ ]] || return 1
+  dev="${BASH_REMATCH[1]}"; ino="${BASH_REMATCH[2]}"
+  bt=$(_plat_btime "$leaf" 2>/dev/null) || return 1
+  [[ "$bt" =~ ^-?[0-9]+$ ]] || return 1
+  [[ "$bt" =~ ^[1-9][0-9]*$ ]] || bt=-
+  # CURRENT: nothing to write. Absent, unparseable or stale: rewrite.
+  if _ws_tmproot_witness_read "$id" \
+     && [[ "$_WS_WIT_DEV" == "$dev" && "$_WS_WIT_INO" == "$ino" && "$_WS_WIT_BTIME" == "$bt" && "$_WS_WIT_RUN" == "$run" ]]; then
+    return 0
+  fi
+  at=$(_plat_epoch_ms) && [[ "$at" =~ ^[0-9]{13}$ ]] || return 1
+  [[ ! -L "$dir" ]] || return 1
+  mkdir -p -- "$dir" 2>/dev/null || return 1
+  [[ -d "$dir" && ! -L "$dir" ]] || return 1
+  w=$(_ws_tmproot_witness_file "$id")
+  # A link or a directory at the name is REFUSED, never replaced: `mv -f`
+  # onto a directory moves the temp file INSIDE it and answers 0.
+  if [[ -L "$w" ]] || { [[ -e "$w" ]] && [[ ! -f "$w" ]]; }; then return 1; fi
+  tmp="$dir/.$id.$BASHPID.$RANDOM.tmp"
+  { printf 'v=1 id=%s run=%s dev=%s ino=%s btime=%s uid=%s at=%s\n' \
+      "$id" "$run" "$dev" "$ino" "$bt" "$EUID" "$at" > "$tmp"; } 2>/dev/null \
+    || { rm -f -- "$tmp" 2>/dev/null; return 1; }
+  mv -f -- "$tmp" "$w" 2>/dev/null || { rm -f -- "$tmp" 2>/dev/null; return 1; }
 }
 
 # ── `ws-add --child <runId>` (child-workspace reclamation, spec §5.1) ────────
@@ -28706,6 +28835,38 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_ABSENT_WHY — that $leaf is gone was never proven"; return 2; }
   return 0
 }
+# THE TEMP ROOT'S REMOVAL (spec §5.6 and §5.2): the ONE removal helper on
+# the temp root, then — on its rc 0 only, the leaf removed or PROVEN
+# absent — the leaf's witness. Remove, prove, THEN unlink the witness: a
+# crash between the last two leaves a witness with no leaf, which is nothing
+# to do and is cleaned by the next call; the reverse order could leave a
+# leaf with no witness, which no collector may ever take. A refusal or an
+# unmeasured answer leaves the witness beside the leaf it still describes.
+# The tail passes NO dev:ino (the row and the marker prove identity there,
+# and the check-to-rm window is `_ws_leaf_remove`'s own stated residual);
+# a collector passes the witness's own. A witness that cannot be unlinked
+# after a proven-absent leaf is warned about and changes nothing: the act
+# this helper reports is the leaf's.
+# An id no witness is named for (`_ws_tmproot_id_ok`: anything dot-leading,
+# `.`, `..` and the writer's own `.<id>.*.tmp` names among them) is refused
+# FIRST, rc 1 with `_WS_LEAF_WHY`, and nothing is asked or touched: a
+# collector walking `tmproots/` must never turn a writer's temp file into a
+# leaf to remove. The writer refuses the same ids, so such a leaf was never
+# witnessed either; the tail keeps and records it, a leak and never a loss.
+_ws_tmproot_remove() {   # id [expect-devino] -> _ws_leaf_remove's rc (0 removed-or-absent | 1 refused | 2 unmeasured; _WS_LEAF_WHY)
+  local id="${1-}" rc=0 w
+  _ws_tmproot_id_ok "$id" || { _WS_LEAF_WHY="'$id' is not an id a witness is named for, so nothing was touched"; return 1; }
+  if [[ -n "${2-}" ]]; then
+    _ws_leaf_remove "$HOME/.cc-tmp" "$id" "$2"; rc=$?
+  else
+    _ws_leaf_remove "$HOME/.cc-tmp" "$id"; rc=$?
+  fi
+  (( rc == 0 )) || return "$rc"
+  w=$(_ws_tmproot_witness_file "$id")
+  rm -f -- "$w" 2>/dev/null \
+    || echo "ccd: warn: $id's temp root is gone but its witness $w could not be removed — a witness with no leaf is nothing to do, and a later removal of $id cleans it" >&2
+  return 0
+}
 _ws_leaf_why_line() {   # text -> ONE short line a journal row can carry: printable ASCII only (every
   #                          other byte reads "?", ccd's own "—" reads "-"), cut at 300 bytes, the cut marked "…"
   # `_WS_LEAF_WHY` can carry a name the session chose (the permission pass's
@@ -29237,7 +29398,8 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     _ws_path_users "$HOME/.cc-tmp/$id"; tmpq=$?
   fi
   case "$tmpq" in
-    0) _ws_leaf_remove "$HOME/.cc-tmp" "$id"; lfrc=$?
+    # Through `_ws_tmproot_remove`, so the witness goes only once the leaf is PROVEN absent (spec §5.2); the kept arm calls neither and keeps both.
+    0) _ws_tmproot_remove "$id"; lfrc=$?
        case "$lfrc" in
          0) : ;;
          1) tmpkept=refused; tmpwhy=$(_ws_leaf_why_line "$_WS_LEAF_WHY") ;;
