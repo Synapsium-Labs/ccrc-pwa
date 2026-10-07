@@ -76,6 +76,13 @@ real values: `deploy/reference-fleet.md` (gitignored).
 - **Identity on the fleet is attribution, not authentication:** single UNIX user, ccd has no caller auth. The
   exec whitelist guards ONLY the PWA→server→agent path; the HTTP chokepoint (caps + pause files) is a **contract
   the coordinator skill honors, not an OS wall**. Don't assume server-side checks stop a session acting directly.
+- **`ccrc history`'s writing verbs are the OPERATOR's, never a session's** (spec 2026-10-05 §8.4): `ccrc history …
+  --apply`, `import --session --file --apply`, `doctor --repair`, `doctor --adopt`, `doctor --restore` and
+  `doctor --rebuild`, and their direct form `~/.local/bin/ccd-history-sweep --op …`. Each refuses inside a session
+  (`CLAUDECODE` set), and the irreversible ones also refuse without a TTY or inside a `cc-*` pane: **speed bumps, not
+  walls** (`env -u CLAUDECODE` defeats the first). Never run one from a session to turn a test or a doctor line
+  green: `~/.ccrc/history` holds verbatim session text, secrets sessions printed included, and once Claude Code's
+  retention passes it is that text's only copy.
 
 ## Build / test / deploy
 **No root `package.json`, no root runner.** Four packages, each `"type":"module"`, run cd'd in:
