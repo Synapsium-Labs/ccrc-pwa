@@ -1244,3 +1244,287 @@ describe('the read-back — a class the pane already runs is recorded, never typ
     expect(Number(m![1])).toBe(USAGE_FRESH_S);
   });
 });
+
+describe('the read-back\'s second witness — the transcript\'s own acknowledged /model (2026-10-07: an idle pane renders no sidecar)', () => {
+  // THE FLEET'S SHAPE (claude-synapsium-platform, measured 2026-10-07): record class=opus, `routeapplied`
+  // empty since its spawn, three refused applies so `apply-gave-up` every 30 min; the operator's own
+  // `/model opus`, acknowledged `Set model to Opus 5.5 and saved as your default`, ~22 h ago; the pane idle
+  // since, so its sidecar — right model, right uuid, written by the render the switch itself caused — is
+  // 22 h old and the sidecar read-back correctly refuses it. The transcript's acknowledgement is the
+  // second witness. Rows are `ccd-operator-choice.test.ts`'s (#250's), field for field.
+  const nowS = (): number => Math.floor(Date.now() / 1000);
+  const iso = (epoch: number): string => new Date(epoch * 1000).toISOString();
+  const HOUR = 3600;
+  const cmd = (at: number, name: string, args = '', over: Record<string, unknown> = {}): string => JSON.stringify({
+    parentUuid: 'p', isSidechain: false, type: 'user', uuid: `c${at}${name}`, timestamp: iso(at),
+    message: { role: 'user', content: `<command-name>/${name}</command-name>\n            <command-message>${name}</command-message>\n            <command-args>${args}</command-args>` },
+    ...over,
+  });
+  const ack = (at: number, text: string, over: Record<string, unknown> = {}): string => JSON.stringify({
+    parentUuid: 'p', isSidechain: false, type: 'user', uuid: `k${at}`, timestamp: iso(at),
+    message: { role: 'user', content: `<local-command-stdout>${text}</local-command-stdout>` },
+    ...over,
+  });
+  const turn = (at: number): string => JSON.stringify({
+    type: 'assistant', uuid: `a${at}`, timestamp: iso(at),
+    message: { model: 'claude-opus-5-5', role: 'assistant', content: [{ type: 'text', text: 'Working on it.' }] },
+  });
+  const SAVED = (name: string): string => `Set model to \`${name}\` and saved as your default for new sessions`;
+  const SESSION = (name: string): string => `Set model to \`${name}\` for this session only`;
+
+  const regPath = (f: string): string => path.join(h.home, '.cc-sessions', f);
+  const usageFile = (): string => regPath(path.join('usage', `${ID}.json`));
+  const sidecarAt = (ts: number, model: string, uuid = UUID): void => {
+    fs.mkdirSync(path.dirname(usageFile()), { recursive: true });
+    fs.writeFileSync(usageFile(), `${JSON.stringify({ ts, uuid, account: 'acct-a', model, effort: 'xhigh', ctxPct: 12, cost: 0.5, agent: null })}\n`);
+  };
+  const transcriptPath = (): string => h.sh(`_transcript_path ${ID}`);
+  const writeTranscript = (lines: string[]): string => {
+    const p = transcriptPath();
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, `${lines.join('\n')}\n`);
+    return p;
+  };
+  const stampAt = (t: number): void => { fs.utimesSync(regPath(`${ID}.routeapplied`), t, t); };
+
+  let STAMP = 0; let BORN = 0; let ACK = 0;
+  /** `_pane_born` is D-3522's clock (tmux `session_created`); the recording tmux stub answers no
+   *  `display-message`, so a case states this process's start by stubbing the one reader. Every
+   *  python3 run is counted in `$HOME/reads`, so "nothing read" is an assertion. */
+  const STUB = (born: number | null = BORN): string => `${TMUX_STUB}
+    ${born === null ? '' : `_pane_born() { echo ${born}; };`}
+    python3() { echo read >> "$HOME/reads"; command python3 "$@"; };`;
+  const tick = (born: number | null = BORN): string => h.sh(`${STUB(born)} _route_apply_check ${ID}`);
+  /** A FRESH LOOK at the decision: the kept verdict is dropped first, because the memo is the NEVER
+   *  EVERY TICK case's subject and a rewritten fixture can share a second and a size with the last. */
+  const verdict = (cls = 'opus', born: number | null = BORN, extra = ''): string =>
+    h.sh(`rm -f "$REG/${ID}.readbackseen"; ${STUB(born)} ${extra} _route_readback_transcript ${ID} ${cls} "$(_plat_mtime "$REG/${ID}.routeapplied")" - -`);
+  /** The same fresh look with a stale sidecar reading of this process handed on (`<ts> <model>`). */
+  const verdictAfter = (lts: number, lmodel: string): string =>
+    h.sh(`rm -f "$REG/${ID}.readbackseen"; ${STUB()} _route_readback_transcript ${ID} opus ${STAMP} ${lts} ${lmodel}`);
+  const reads = (): number => {
+    const f = path.join(h.home, 'reads');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).length : 0;
+  };
+  const readbackLines = (): string[] => swapLog().split('\n').filter((l) => l.includes(`route-readback ${ID}:`));
+  const unchanged = (): void => {
+    expect(h.reg(ID, 'routeapplied'), 'nothing recorded').toBe('');
+    expect(h.reg(ID, 'routetries'), 'the give-up stands').toMatch(/^3 /);
+    expect(readbackLines()).toEqual([]);
+    expect(keys(), 'nothing typed').toEqual([]);
+  };
+
+  beforeEach(() => {
+    seed(ID); plantIdle(); pane(IDLE_PANE);
+    STAMP = nowS() - 38 * HOUR; BORN = STAMP + 2; ACK = nowS() - 22 * HOUR;
+    h.sh(`_reg_set ${ID} class opus; _reg_set ${ID} routeapplied ""
+          _reg_set ${ID} routetries "3 $(date +%s)"; _reg_set ${ID} routeskip "$(date +%s) apply-gave-up"; _reg_set ${ID} routenote "$(date +%s)"`);
+    stampAt(STAMP);
+    sidecarAt(ACK + 3, 'claude-opus-5-5');   // the render the switch caused: model and uuid right, 22 h old
+  });
+
+  it('the synapsium shape: recorded applied, the counters cleared, ONE line naming the ack and the spawn, nothing typed — and apply-gave-up stops', () => {
+    writeTranscript([turn(ACK - 600), cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5')), turn(ACK + 30)]);
+    tick();
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
+    expect(h.reg(ID, 'routetries')).toBeNull();
+    expect(h.reg(ID, 'routeskip')).toBeNull();
+    expect(h.reg(ID, 'routenote')).toBeNull();
+    expect(keys()).toEqual([]);
+    const at = h.sh(`printf '%(%F %T)T' ${ACK}`); const born = h.sh(`printf '%(%F %T)T' ${BORN}`);
+    expect(readbackLines()).toEqual([expect.stringContaining(
+      `route-readback ${ID}: class=opus already running (transcript ack "Set model to Opus 5.5" at ${at}, after spawn ${born}) — recorded applied, nothing typed`)]);
+    expect(swapLog().split('\n').filter((l) => l.includes(ID)), 'and no other line').toHaveLength(1);
+    tick();
+    expect(h.reg(ID, 'routeskip'), 'the next tick finds nothing pending').toBeNull();
+    expect(h.reg(ID, 'routetries')).toBeNull();
+    expect(readbackLines()).toHaveLength(1);
+    expect(swapLog()).not.toContain('apply-gave-up');
+  });
+
+  it('control: the same session WITHOUT the acknowledgement keeps its give-up — the sidecar is stale, as #303 measured', () => {
+    writeTranscript([turn(ACK - 600), turn(ACK + 30)]);
+    tick();
+    unchanged();
+    expect(verdict()).toBe('none');
+  });
+
+  it('an acknowledgement from BEFORE this process started proves nothing: a --resume restores what it restores', () => {
+    // The stamp is older than the ack, so ONLY the process start refuses it; the stale sidecar names opus too.
+    STAMP = ACK - HOUR; stampAt(STAMP);
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5'))]);
+    tick(ACK + 60);
+    unchanged();
+    expect(verdict('opus', ACK + 60)).toBe('before-spawn');
+    expect(verdict('opus', ACK), 'the process start\'s own second is not after it').toBe('before-spawn');
+  });
+
+  it('an acknowledgement older than the routeapplied stamp does not count', () => {
+    STAMP = ACK + 60; stampAt(STAMP);   // the last compose/apply/read-back came after it
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5'))]);
+    tick(ACK - 600);
+    unchanged();
+    expect(verdict('opus', ACK - 600)).toBe('before-stamp');
+    stampAt(ACK);
+    expect(verdict('opus', ACK - 600), 'a stamp in the ack\'s own second is not before it').toBe('before-stamp');
+  });
+
+  it('an acknowledgement naming ANOTHER class does not, and it is the ACK\'s model that is classified, never the typed argument', () => {
+    fs.rmSync(usageFile());   // no sidecar at all: only the class refuses
+    writeTranscript([cmd(ACK, 'model', 'sonnet'), ack(ACK, SESSION('Sonnet 5'))]);
+    tick();
+    unchanged();
+    expect(verdict()).toBe('other');
+    // `/model opus` that Claude Code acknowledged as Sonnet (a restricted family stepped down): Sonnet ran.
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SESSION('Sonnet 5'))]);
+    expect(verdict()).toBe('other');
+    // and the converse: `/model best` names no class, its acknowledgement does.
+    writeTranscript([cmd(ACK, 'model', 'best'), ack(ACK, SESSION('Opus 5.5'))]);
+    expect(verdict()).toMatch(/^matched /);
+  });
+
+  it('the acknowledgement\'s own shapes: (1M context) and (default) name their family; opusplan\'s sentence names none', () => {
+    fs.rmSync(usageFile());
+    writeTranscript([cmd(ACK, 'model'), ack(ACK, SESSION('Opus 5.5 (1M context)'))]);
+    expect(verdict()).toBe(`matched ${ACK} ${BORN} Opus 5.5 (1M context)`);
+    // The picker's Default row RUNS its model: `Sonnet 5 (default)` is sonnet running (the keep, asking
+    // what the operator CHOSE, reads the same line as the `default` class — its own question).
+    writeTranscript([cmd(ACK, 'model'), ack(ACK, SESSION('Sonnet 5 (default)'))]);
+    expect(verdict('sonnet')).toMatch(/^matched /);
+    expect(verdict('opus')).toBe('other');
+    writeTranscript([cmd(ACK, 'model'), ack(ACK, SESSION('Opus in plan mode, else Sonnet'))]);
+    expect(verdict('opus'), 'never its first word').toBe('other');
+    writeTranscript([cmd(ACK, 'model', 'claude-opus-5-5[1m]'), ack(ACK, SESSION('claude-opus-5-5[1m]'))]);
+    expect(verdict('opus'), 'a full model id through the family port').toMatch(/^matched /);
+  });
+
+  it('the NEWEST acknowledgement wins: a later one for a different class refuses, a later one for the class records', () => {
+    fs.rmSync(usageFile());
+    const p = writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SESSION('Opus 5.5')), cmd(ACK + 600, 'model', 'sonnet'), ack(ACK + 600, SESSION('Sonnet 5'))]);
+    tick();
+    unchanged();
+    expect(verdict()).toBe('other');
+    fs.appendFileSync(p, `${cmd(ACK + 1200, 'model', 'opus')}\n${ack(ACK + 1200, SESSION('Opus 5.5'))}\n`);   // Claude Code appends
+    tick();
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
+  });
+
+  it('a newer /model with NO recognised acknowledgement leaves the older one unbelieved: it may have changed the model', () => {
+    fs.rmSync(usageFile());
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SESSION('Opus 5.5')), cmd(ACK + 600, 'model', 'fable'), ack(ACK + 600, 'Model switched to Fable 5.1')]);
+    tick();
+    unchanged();
+    expect(verdict()).toBe('unacked');
+  });
+
+  it('a later STALE sidecar reading of this process naming another class supersedes an older acknowledgement', () => {
+    // A model can change with no /model row (a remote-control switch, a stepped-down family): the render
+    // it caused is newer than the ack and names what ran.
+    sidecarAt(ACK + 600, 'claude-fable-5-1');
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5'))]);
+    tick();
+    unchanged();
+    expect(verdictAfter(ACK + 600, 'claude-fable-5-1')).toBe('superseded');
+    expect(verdictAfter(ACK, 'claude-fable-5-1'), 'a reading in the ack\'s own second is not placed before it').toBe('superseded');
+    expect(verdictAfter(ACK - 1, 'claude-fable-5-1'), 'an older reading is not').toMatch(/^matched /);
+    expect(verdictAfter(ACK + 600, 'claude-opus-5-5'), 'a later reading of the class agrees').toMatch(/^matched /);
+  });
+
+  it('a FRESH sidecar still answers first: a pane rendering another class is not overruled by an older acknowledgement, and the transcript is never read', () => {
+    sidecarAt(nowS() - 5, 'claude-sonnet-5');
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5'))]);
+    tick();
+    unchanged();
+    expect(reads()).toBe(0);
+  });
+
+  it('`default` never reads back, not even on an acknowledgement whose own word is the Default row\'s', () => {
+    h.sh(`_reg_set ${ID} class default`); stampAt(STAMP);
+    fs.rmSync(usageFile());
+    writeTranscript([cmd(ACK, 'model', 'default'), ack(ACK, SESSION('Default'))]);
+    tick();
+    expect(h.reg(ID, 'routeapplied')).toBe('');
+    expect(readbackLines()).toEqual([]);
+    expect(reads(), 'asked before either witness').toBe(0);
+  });
+
+  it('ccd\'s own journalled /model, acknowledged, is the same evidence of what the pane runs', () => {
+    // An apply whose pane-side acknowledgement ccd missed (`apply-unconfirmed`) while Claude Code wrote it.
+    fs.rmSync(usageFile());
+    h.sh(`_reg_set ${ID} typed "${STAMP} since
+${ACK} model opus"`);
+    writeTranscript([cmd(ACK, 'model'), ack(ACK, SESSION('Opus 5.5'))]);
+    tick();
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
+  });
+
+  it('effort NEVER reads back from the transcript either: an acknowledged /effort is typed again', () => {
+    h.sh(`_reg_set ${ID} effort high; _reg_set ${ID} routeapplied "class=opus"; rm -f "$REG/${ID}.routetries"`);
+    stampAt(STAMP);
+    writeTranscript([cmd(ACK, 'effort', 'high'), ack(ACK, 'Set effort level to high (this session only)')]);
+    tick();
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
+    expect(readbackLines()).toEqual([]);
+    expect(keys()[0]).toBe('-l /effort');
+    expect(reads()).toBe(0);
+  });
+
+  it('only the tail is read: an acknowledgement further than ROUTE_READBACK_TAIL from the end is not seen', () => {
+    fs.rmSync(usageFile());
+    const pad = Array.from({ length: 40 }, (_, i) => turn(ACK + 60 + i));   // ~6 KB of assistant rows after it
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SESSION('Opus 5.5')), ...pad]);
+    expect(verdict('opus', BORN, 'ROUTE_READBACK_TAIL=2048;')).toBe('none');
+    expect(verdict('opus', BORN, 'ROUTE_READBACK_TAIL=65536;')).toMatch(/^matched /);
+    expect(Number(h.sh('echo "$ROUTE_READBACK_TAIL"'))).toBe(4194304);
+  });
+
+  it('absent, unreadable, unnamed, unplaced and unmeasured are five answers, none counts, and none is kept', () => {
+    fs.rmSync(usageFile());
+    expect(verdict(), 'no file at the address').toBe('absent');
+    tick();
+    unchanged();
+    const p = transcriptPath();
+    fs.mkdirSync(p, { recursive: true });   // there, and not a file ccd can read
+    expect(verdict()).toBe('unreadable');
+    tick();
+    unchanged();
+    fs.rmSync(p, { recursive: true });
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5'))]);
+    expect(verdict('opus', null), 'tmux cannot say when this process started').toBe('unplaced');
+    expect(h.sh(`${STUB()} python3() { return 1; }; _route_readback_transcript ${ID} opus ${STAMP} - -`), 'the reader failed').toBe('unmeasured');
+    expect(h.sh(`${STUB()} python3() { return 127; }; _route_readback_transcript ${ID} opus ${STAMP} - -`), 'no python3: the same failed reader').toBe('unmeasured');
+    expect(h.reg(ID, 'readbackseen'), 'a transient refusal is never kept').toBeNull();
+    h.sh(`_reg_set ${ID} workdir ""`);
+    expect(verdict(), 'no address at all').toBe('unnamed');
+  });
+
+  it('a FIFO where the transcript should be is unreadable, never a read that blocks the tick', { timeout: 60_000 }, () => {
+    fs.rmSync(usageFile());
+    const p = transcriptPath();
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    execFileSync('mkfifo', [p]);
+    const out = h.sh(`timeout 10 bash -c 'source "$1"; _pane_born() { echo 1; }; _route_readback_transcript "$2" opus 1 - -' ccd-fifo-probe '${CCD}' ${ID} || echo "rc=$?"`);
+    expect(out.trim()).toBe('unreadable');
+  });
+
+  it('NEVER EVERY TICK: an unchanged transcript is not read again, a changed one or another pending class is', () => {
+    STAMP = ACK - HOUR; stampAt(STAMP);
+    writeTranscript([cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5'))]);
+    tick(ACK + 60);   // before-spawn: a conclusive refusal, kept
+    expect(reads()).toBe(1);
+    expect(h.reg(ID, 'readbackseen')).toBe(`opus ${fs.statSync(transcriptPath()).mtime.getTime() / 1000 | 0} ${fs.statSync(transcriptPath()).size} before-spawn ${transcriptPath()}`);
+    tick(ACK + 60); tick(ACK + 60);
+    expect(reads(), 'two unchanged ticks read nothing').toBe(1);
+    const kept = (cls: string): string => h.sh(`${STUB(ACK + 60)} _route_readback_transcript ${ID} ${cls} ${STAMP} - -`);
+    expect(kept('opus'), 'and answer the kept verdict').toBe('before-spawn');
+    expect(reads()).toBe(1);
+    expect(kept('sonnet'), 'another pending class is another question').toBe('before-spawn');
+    expect(reads()).toBe(2);
+    fs.appendFileSync(transcriptPath(), `${cmd(nowS() - 60, 'model', 'opus')}\n${ack(nowS() - 60, SESSION('Opus 5.5'))}\n`);
+    tick(ACK + 60);
+    expect(reads(), 'the file changed: read again').toBe(3);
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
+    h.sh(`_reg_purge ${ID}`);
+    expect(h.reg(ID, 'readbackseen'), 'the memo purges with the row').toBeNull();
+  });
+});
