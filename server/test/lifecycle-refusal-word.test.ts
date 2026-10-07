@@ -24,7 +24,7 @@ const ALL_TOKENS: Record<LcRefusalToken, true> = {
   'flock-unavailable': true, 'lock-unopenable': true, 'is-a-workspace': true,
   'session-live': true, 'session-verdict-unknown': true, 'spawn-failed': true,
   'purge-refused': true, 'purge-incomplete': true, 'purge-mechanism-absent': true,
-  'pin-failed': true, 'unit-still-active': true,
+  'pin-failed': true, 'unit-still-active': true, 'branch-unmeasured': true,
 };
 const TOKENS = Object.keys(ALL_TOKENS) as LcRefusalToken[];
 
@@ -32,7 +32,7 @@ describe('the journal-only refusal vocabulary', () => {
   it.each(TOKENS)('isLcRefusalToken(%s)', (t) => { expect(isLcRefusalToken(t)).toBe(true); });
 
   it('covers the whole union and derives its list from the map', () => {
-    expect(TOKENS.length).toBe(14);
+    expect(TOKENS.length).toBe(15);
     expect([...LC_REFUSAL_TOKENS].sort()).toEqual([...TOKENS].sort());
   });
 
@@ -94,7 +94,7 @@ describe('ws-reclaim’s failure words claim only what is true at EVERY site tha
   // (no worktree at all) and every resumed arm (an earlier attempt may have
   // removed the worktree or the branch), so neither may promise either is
   // intact — only that nothing FURTHER was deleted.
-  it.each(['pin-failed', 'unit-still-active'] as const)('%s says nothing further went, and never that anything is intact', (t) => {
+  it.each(['pin-failed', 'unit-still-active', 'branch-unmeasured'] as const)('%s says nothing further went, and never that anything is intact', (t) => {
     expect(LC_REFUSAL_WORD[t]).not.toMatch(/intact/);
     expect(LC_REFUSAL_WORD[t]).toMatch(/anything further/);
   });
@@ -108,6 +108,15 @@ describe('ws-reclaim’s failure words claim only what is true at EVERY site tha
     expect(LC_REFUSAL_WORD['unit-still-active']).toMatch(/pane/);
     expect(LC_REFUSAL_WORD['unit-still-active']).toMatch(/could not prove/);
     expect(LC_REFUSAL_WORD['unit-still-active']).toMatch(/tries again/);
+  });
+
+  // Wave 6 (spec §5.5): the tail's step 5 could not READ whether the branch
+  // still stands. The word says the read failed, never that the branch is gone
+  // or that it was kept, and that a retry follows.
+  it('branch-unmeasured says whether the branch exists could not be read, and that ccrc tries again', () => {
+    expect(LC_REFUSAL_WORD['branch-unmeasured']).toMatch(/could not read whether the branch still exists/);
+    expect(LC_REFUSAL_WORD['branch-unmeasured']).toMatch(/tries again/);
+    expect(LC_REFUSAL_WORD['branch-unmeasured']).not.toMatch(/\bgone\b|was kept|was deleted/);
   });
 
   // Three reap words that ws-reclaim's tail also emits, each widened to be

@@ -558,7 +558,7 @@ describe('the WIP commit lands on no branch — a drifted HEAD’s branch is KEP
   }, 60_000);
 });
 
-describe('the branch tip is a REQUIRED pin', () => {
+describe('the branch tip is a REQUIRED pin when the branch exists', () => {
   it('FAILS on a detached child whose branch tip cannot be pinned — the tip is not HEAD, so nothing else pins it', () => {
     const c = makeChild(h);
     h.git(c.wt, 'checkout', '--detach');
@@ -571,12 +571,13 @@ describe('the branch tip is a REQUIRED pin', () => {
     expect(p.why).toContain(`could not be pinned under refs/ccrc/attic/${CHILD_ID}/`);
   }, 60_000);
 
-  it('FAILS when the branch no longer resolves — there is no tip the tail could delete it at', () => {
+  it('a branch PROVEN absent is no failure — no tip, and HEAD is pinned in its place (spec §5.5)', () => {
     const c = makeChild(h);
     h.git(c.wt, 'checkout', '--detach');
     const p = pinOf(c, { between: `git -C "${c.main}" update-ref -d refs/heads/${CHILD_BRANCH}` });
-    expect(p.rc, p.why).toBe('1');
-    expect(p.why).toContain(`refs/heads/${CHILD_BRANCH} does not resolve`);
+    expect(p.rc, p.why).toBe('0');
+    expect(p.tip, 'no tip: there is no branch').toBe('');
+    expect(atticShas(c), 'HEAD is pinned in the tip’s place').toContain(c.tip);
   }, 60_000);
 });
 

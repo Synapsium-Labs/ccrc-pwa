@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b94b81c9c7c4b60b352fd7be62b2d58a6849c7d5ad7d092ceca4f20440ac38d2
+# ccrc:generated 1 sha256=93667a62fb73458f730f1aa149533ab31ae32c0443aaa40e4b0ce882312bb0e8
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -25758,6 +25758,8 @@ _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the re
   RECLAIM_WORKTREE=""       # `present`, or `absent` for a vanished worktree (`_ws_reclaim_eval_absent`)
   RECLAIM_HEAD=""           # the child's HEAD commit (differs from REAP_TIP on a detached HEAD); on the
   #                           vanished arm, the HEAD git's record still names ('' when it holds none)
+  RECLAIM_BRANCHSTATE=""    # `present` or `absent`, as `_ws_reclaim_tip_read` PROVED it; '' = never read.
+  #                           A fingerprint input (`branchState=`): a read that did not run mints no token
   RECLAIM_REC_BRANCH=""; RECLAIM_REC_HEAD=""   # `_ws_reclaim_record`'s answer for the last path asked
   RECLAIM_REC_MAIN=0        # 1 = that record is the project's MAIN worktree (git lists it first)
   RECLAIM_STATUSDIGEST=""   # sha256 of the child's `status --porcelain=v1 -z --untracked-files=all`
@@ -26451,6 +26453,63 @@ _ws_reclaim_main_line_refuse() {   # main branch -> 0 when branch is PROVEN not 
   return 0
 }
 
+_ws_reclaim_branch_state() {   # gitdir-or-repo branch -> prints exactly one of `present <40-hex>`, `absent`,
+  #                                 `unmeasured`; always rc 0
+  # WHETHER THE BRANCH EXISTS, READ THREE WAYS (spec §5.5, step 3).
+  # `rev-parse --verify --quiet` and `show-ref --verify --quiet` answer 1
+  # for an absent ref, a corrupt loose ref and a ref under an unreadable
+  # directory alike (measured, git 2.43.0), so neither proves absence.
+  # `show-ref --exists` does: 0 present, 2 absent, and anything else — 1 for a
+  # ref that would not read, 128 for no repository, 129 from a git older than
+  # 2.43 that does not know the flag — is a read that did not run. ONLY rc 2
+  # IS EVER TAKEN AS ABSENT. It is necessary, though not sufficient alone: a
+  # loose ref that is a dangling symlink over a packed entry answers 2 too,
+  # while git still lists the packed branch (measured, git 2.43). That
+  # branch is then never deleted, only left with no row: a leak, never a
+  # loss, and a stated residual. THE POSITIVE FALLBACK (spec §5.5, old
+  # git): on rc 0, or on any answer but 0 or 2, a ref that
+  # `rev-parse --verify --quiet` peels to a commit reads `present`, so a box
+  # on a git older than 2.43 reclaims a standing branch as before and never
+  # a gone one. A SYMBOLIC branch never reads `present` (the guard below).
+  # Anything else is `unmeasured`, and every caller stops on it. A branch is
+  # never taken for gone over a read that did not run. Contained, so an
+  # inherited GIT_DIR or GIT_NAMESPACE cannot answer for another
+  # repository's refs. `present` carries the sha, read once more; a ref that
+  # will not peel to a commit is unmeasured too.
+  local repo="$1" b="$2" rc src sha
+  if [[ -n "$b" ]]; then
+    _ws_reclaim_contained git -C "$repo" show-ref --exists "refs/heads/$b" >/dev/null 2>&1; rc=$?
+    if (( rc == 2 )); then
+      printf 'absent\n'; return 0
+    fi
+    # A SYMBOLIC branch is never present: `update-ref -d` follows it and deletes
+    # the branch it names (measured, git 2.43), past every check asked of <b>.
+    _ws_reclaim_contained git -C "$repo" symbolic-ref -q "refs/heads/$b" >/dev/null 2>&1; src=$?
+    if (( src == 1 )); then
+      sha=$(_ws_reclaim_contained git -C "$repo" rev-parse --verify --quiet "refs/heads/$b^{commit}" 2>/dev/null) \
+        && [[ "$sha" =~ ^[0-9a-f]{40}$ ]] && { printf 'present %s\n' "$sha"; return 0; }
+    fi
+  fi
+  printf 'unmeasured\n'
+  return 0
+}
+
+_WS_BRANCH_WHY=''
+_ws_reclaim_tip_read() {   # main branch -> 0 with REAP_TIP (the tip; '' when the branch is PROVEN absent)
+  #                             and RECLAIM_BRANCHSTATE (`present`|`absent`); 1 with _WS_BRANCH_WHY when
+  #                             whether it exists could not be read. THE ONE TIP READ of the ladder's two
+  #                             arms, the pin and the vanished arm's pin (spec §5.5: in one act).
+  local s
+  REAP_TIP=""; RECLAIM_BRANCHSTATE=""; _WS_BRANCH_WHY=""
+  s=$(_ws_reclaim_branch_state "$1" "$2")
+  case "$s" in
+    "present "*) REAP_TIP="${s#present }"; RECLAIM_BRANCHSTATE=present; return 0 ;;
+    absent) RECLAIM_BRANCHSTATE=absent; return 0 ;;
+  esac
+  _WS_BRANCH_WHY="whether refs/heads/$2 exists in $1 could not be read (git show-ref --exists answered neither present nor absent, or the ref is symbolic: a ref that will not read, no repository, a git older than 2.43, or a branch that names another) — a branch is never taken for gone over a read that did not run"
+  return 1
+}
+
 _WS_GITDIR_WHY=''; _WS_GITDIR_DIR=''
 _ws_reclaim_gitdir_own() {   # tree common -> 0 when tree's git directory is git's OWN record of tree: an
   #                               admin directory `$common/worktrees/<n>` whose `gitdir` file names
@@ -26892,8 +26951,11 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     (( rc == 0 )) || { _reap_refuse containment-unproven "$_WS_FOREIGN_WHY"; return 1; }
     RECLAIM_FOREIGN+="$p"$'\n'
   done <<< "$nested"$'\n'
-  # The facts the pin phase will act on, each a fingerprint input.
-  REAP_TIP=$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch^{commit}" 2>/dev/null) || REAP_TIP=""
+  # The facts the pin phase will act on, each a fingerprint input. The branch
+  # is read THREE ways (`_ws_reclaim_tip_read`, spec §5.5): its tip, or
+  # PROVEN absent (no tip to pin, no branch to delete), or a read that did not
+  # run — unmeasured, and no token is minted over it.
+  _ws_reclaim_tip_read "$main" "$branch" || { _ws_reclaim_unmeasured "$_WS_BRANCH_WHY"; return 1; }
   RECLAIM_HEAD=$(git -C "$workdir" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) || RECLAIM_HEAD=""
   RECLAIM_STASHES=$(_ws_reclaim_stash_shas "$main" "$branch") \
     || { _ws_reclaim_unmeasured "could not read the stash list of $main"; return 1; }
@@ -26910,9 +26972,13 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   REAP_CHILDDIGEST=$(printf '%s%s' "$RECLAIM_NESTED" "$RECLAIM_FOREIGN" | _plat_sha256 | cut -d' ' -f1)
   # 10 is the VERB's: it recomputes this inside the reap lock and compares.
   RECLAIM_WORKTREE=present
+  # `branchState` is an INPUT of its own (spec §5.5): `tip=` is empty for a
+  # branch PROVEN absent, and a read that could not run mints no token at all,
+  # so no token is ever spent as "absent" over a ref that would not read.
   REAP_TOKEN=$(_ws_reclaim_fingerprint "${_WS_LADDER_BIND[@]}" \
     "worktree=present" "branch=$branch" "registryBranch=$regbranch" \
-    "worktreeHead=$wthead" "tip=$REAP_TIP" "head=$RECLAIM_HEAD" "statusDigest=$RECLAIM_STATUSDIGEST" \
+    "worktreeHead=$wthead" "tip=$REAP_TIP" "branchState=$RECLAIM_BRANCHSTATE" "head=$RECLAIM_HEAD" \
+    "statusDigest=$RECLAIM_STATUSDIGEST" \
     "ignoredDigest=$REAP_IGNDIGEST" "secretsDigest=$REAP_SENSDIGEST" "hiddenDigest=$RECLAIM_HIDDENDIGEST" \
     "stashes=${RECLAIM_STASHES//$'\n'/,}" "opHeads=${RECLAIM_OPHEADS//$'\n'/,}" \
     "nestedDigest=$REAP_CHILDDIGEST" "clipsDigest=$REAP_CLIPDIGEST")
@@ -26936,9 +27002,10 @@ _ws_reclaim_eval_absent() {   # id workdir main regbranch -> the ladder's answer
   # child's own path, whose record git may still hold (`prunable`) and the tail
   # clears first. Rung 8's pass still runs over the CLIPS directory: the tail
   # deletes it, and its manifest is a fingerprint input. The facts pinned are
-  # the branch tip, the stashes attributed to the branch, and the HEAD git's
-  # record still names — a detached child's last commit is reachable from that
-  # record alone, and the tail clears it.
+  # the branch tip when the branch exists (`_ws_reclaim_tip_read`), the
+  # stashes attributed to the branch, and the HEAD git's record still names —
+  # a detached child's last commit is reachable from that record alone, and
+  # the tail clears it.
   local id="$1" workdir="$2" main="$3" regbranch="$4" mainreal rec branch wthead elsewhere elsrc rc clipsjson
   mainreal=$(_ws_common_dir "$main") \
     || { _ws_reclaim_unmeasured "could not resolve the repository of $main"; return 1; }
@@ -26966,7 +27033,7 @@ _ws_reclaim_eval_absent() {   # id workdir main regbranch -> the ladder's answer
   _ws_reclaim_normalise "$HOME/.cc-clips/$id"; rc=$?
   (( rc == 2 )) && { _ws_reclaim_unmeasured "the permission pass over $HOME/.cc-clips/$id could not run: $_WS_NORMALISE_WHY"; return 1; }
   (( rc == 0 )) || { _reap_refuse tree-unreadable "$HOME/.cc-clips/$id cannot be read: $_WS_NORMALISE_WHY"; return 1; }
-  REAP_TIP=$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch^{commit}" 2>/dev/null) || REAP_TIP=""
+  _ws_reclaim_tip_read "$main" "$branch" || { _ws_reclaim_unmeasured "$_WS_BRANCH_WHY"; return 1; }
   RECLAIM_STASHES=$(_ws_reclaim_stash_shas "$main" "$branch") \
     || { _ws_reclaim_unmeasured "could not read the stash list of $main"; return 1; }
   REAP_STASHES=$(printf '%s' "$RECLAIM_STASHES" | grep -c . || true)
@@ -26979,7 +27046,8 @@ _ws_reclaim_eval_absent() {   # id workdir main regbranch -> the ladder's answer
   RECLAIM_WORKTREE=absent
   REAP_TOKEN=$(_ws_reclaim_fingerprint "${_WS_LADDER_BIND[@]}" \
     "worktree=absent" "record=$rec" "branch=$branch" \
-    "registryBranch=$regbranch" "worktreeHead=$wthead" "tip=$REAP_TIP" "head=$RECLAIM_HEAD" \
+    "registryBranch=$regbranch" "worktreeHead=$wthead" "tip=$REAP_TIP" "branchState=$RECLAIM_BRANCHSTATE" \
+    "head=$RECLAIM_HEAD" \
     "stashes=${RECLAIM_STASHES//$'\n'/,}" "clipsDigest=$REAP_CLIPDIGEST")
   REAP_VERDICT=reclaimable
   return 0
@@ -28054,6 +28122,18 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
   elif (( rc != 1 )); then
     RECLAIM_PIN_WHY="could not read which branch $workdir has checked out"; return 1
   fi
+  # THE BRANCH, READ THREE WAYS, BEFORE ANYTHING IS COMMITTED (spec §5.5,
+  # step 3). A read that did not run stops the pin here. A branch
+  # PROVEN absent is no failure: there is no tip to pin and none for the tail
+  # to delete it at, and HEAD, the WIP commit and every reflog below are pinned
+  # as ever — unless HEAD is still SYMBOLIC to that branch (an `update-ref -d`
+  # under a checkout): HEAD then names no commit, the WIP commit has no parent
+  # to stand on, and the pin fails with nothing written.
+  _ws_reclaim_tip_read "$main" "$branch" || { RECLAIM_PIN_WHY="$_WS_BRANCH_WHY"; return 1; }
+  if [[ "$RECLAIM_BRANCHSTATE" == absent && "$headref" == "refs/heads/$branch" ]]; then
+    RECLAIM_PIN_WHY="$workdir still has $branch checked out, but $branch is gone from $main — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
+    return 1
+  fi
   # (0) The in-progress operation heads, pinned by sha: `commit-tree` concludes
   # nothing, and a head a later git command clears is kept all the same.
   oph=$(_ws_reclaim_opheads "$workdir")
@@ -28115,12 +28195,11 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
   headsha=$(git -C "$workdir" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) \
     || { RECLAIM_PIN_WHY="the HEAD of $workdir does not resolve"; return 1; }
   extras+=("$headsha")
-  # THE BRANCH TIP IS A REQUIRED PIN (spec §5.5, step 3): it is the commit the
-  # tail deletes the branch at, and on a DETACHED or drifted child it is not
-  # HEAD, so nothing else pins it. The WIP commit is pinned beside it by sha.
-  # A branch that does not resolve leaves the tail no tip to delete it at.
-  REAP_TIP=$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch^{commit}" 2>/dev/null) \
-    || { REAP_TIP=""; RECLAIM_PIN_WHY="refs/heads/$branch does not resolve in $main — there is no branch tip to pin"; return 1; }
+  # THE BRANCH TIP IS A REQUIRED PIN WHEN THE BRANCH EXISTS (spec §5.5, step
+  # 3): it is the commit the tail deletes the branch at, and on a DETACHED or
+  # drifted child it is not HEAD, so nothing else pins it. The WIP commit is
+  # pinned beside it by sha. Read above (`_ws_reclaim_tip_read`); a branch
+  # PROVEN absent leaves REAP_TIP empty, which `_ws_reclaim_attic_extra` skips.
   extras+=("$REAP_TIP")
   # (3) Every stash attributed to the branch.
   stashes=$(_ws_reclaim_stash_shas "$main" "$branch") \
@@ -28236,7 +28315,10 @@ _ws_reclaim_pin_absent() {   # id main branch recordhead workdir -> 0 once the b
 _ws_reclaim_pin_absent_contained() {   # `_ws_reclaim_pin_absent`'s body, run under `_ws_reclaim_contained` — call that
   local id="$1" main="$2" branch="$3" rhead="$4" workdir="$5" stashes sha extras=()
   RECLAIM_PIN_WHY=""; RECLAIM_WIP=""; RECLAIM_SECRETS=(); REAP_CHILDLINES=""; _WS_LOGS=()
-  REAP_TIP=$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch^{commit}" 2>/dev/null) || REAP_TIP=""
+  # Read three ways (`_ws_reclaim_tip_read`, spec §5.5): a branch PROVEN
+  # absent has no tip, and the record's HEAD is what is left; a read that did
+  # not run is a pin that cannot be taken.
+  _ws_reclaim_tip_read "$main" "$branch" || { RECLAIM_PIN_WHY="$_WS_BRANCH_WHY"; return 1; }
   stashes=$(_ws_reclaim_stash_shas "$main" "$branch") \
     || { RECLAIM_PIN_WHY="could not read the stash list of $main"; return 1; }
   extras=("$REAP_TIP" "$rhead")
@@ -28939,7 +29021,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   local id="$1" phase="$2" lctx="$3" childof="$4" surface="$5" declared="$6" resumed="$7"
   local project workdir main tomb branch tip wip tid tuuid tregbranch attic residue wtout stamp unitstate rec lrc
   local regproject regworkdir reguuid regbranch childlines recorded merged cj first cline cpath crest cbr chead
-  local holders wdreal kept=() k keptjson keptall treegone crc killrc dropped
+  local holders wdreal kept=() k keptjson keptall treegone crc killrc dropped bstate
   local noun=reclaim donekey=reclaimed bindkey=childOf
   local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts tmpq
   [[ "$_WS_RCL_ACT" != expire ]] || { noun=expiry; donekey=expired; bindkey=archivedAt; }
@@ -29104,6 +29186,11 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     if ! _ws_reclaim_pin "$id" "$workdir" "$main" "$branch" "$childof"; then
       _ws_reclaim_fail "$id" "$lctx" pin-failed "$RECLAIM_PIN_WHY"; return 1
     fi
+    # A BRANCH THE RECORD SAYS WAS ABSENT IS NEVER ADOPTED (spec §5.5): the
+    # pin proved no branch and recorded no tip, so one that stands now was made
+    # after the record, by someone else. The settle keeps the record's empty
+    # tip, and step (5) keeps that branch (`branch-moved`).
+    [[ -n "$tip" ]] || REAP_TIP=""
     recorded=$(_ws_tomb_children "$tomb") || {
       _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not read the nested checkouts from $tomb"; return 1
     }
@@ -29343,7 +29430,18 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
       fi
     fi
-    if git -C "$main" show-ref --verify --quiet "refs/heads/$branch"; then
+    # WHETHER THE BRANCH STANDS, READ THREE WAYS (spec §5.5): `absent` is
+    # proven, and there is nothing to delete; a read that did not run stops the
+    # tail here as `branch-unmeasured`, journaled `failed`, the row and the
+    # breadcrumb kept — never skipping the delete and purging the row over a
+    # branch that may still stand. The retry resumes at this step.
+    bstate=$(_ws_reclaim_branch_state "$main" "$branch")
+    if [[ "$bstate" != absent && "$bstate" != "present "* ]]; then
+      _ws_reclaim_fail "$id" "$lctx" branch-unmeasured \
+        "whether $branch exists in $main could not be read — a branch is never taken for gone over a read that did not run, so it was kept and nothing further was deleted"
+      return 1
+    fi
+    if [[ "$bstate" == "present "* ]]; then
       if ! [[ "$tip" =~ ^[0-9a-f]{40}$ ]]; then
         _ws_reclaim_fail "$id" "$lctx" branch-moved \
           "the tombstone records no tip for $branch — a branch is never deleted at an unknown commit, so it was kept and nothing further was deleted"

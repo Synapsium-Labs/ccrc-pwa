@@ -7845,7 +7845,8 @@ export type LcRefusalToken =
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
   | 'purge-mechanism-absent'  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
   | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): ccrc could not keep the child's work — the pin phase, or one of the tail's per-deletion keeps — so the verb stopped before deleting anything further
-  | 'unit-still-active';      // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before deleting anything further
+  | 'unit-still-active'       // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before deleting anything further
+  | 'branch-unmeasured';      // ws-reclaim (spec §5.5): the tail's step 5 could not read whether the child's branch still exists, so it stopped before removing anything further — journaled `failed`, never `refused`
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -7922,6 +7923,15 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // and a retry stops both again. True of every arm and cause: nothing FURTHER went.
   'unit-still-active':
     'ccrc could not prove this session’s service and its terminal pane had both stopped, so it stopped before deleting anything further. Reclamation tries again.',
+  // Child reclamation, wave 6 (spec §5.5). The tail's step 5 could not read
+  // whether the child's branch still exists: `git show-ref --exists` answered
+  // neither present nor absent. Only ever rides `_lc_fail`, after the act
+  // started. By step 5 the unit is stopped, the pane is gone and the tree was
+  // removed (or never stood, on the vanished arm), so the sentence promises
+  // nothing intact, only that nothing FURTHER went. The breadcrumb stays at the
+  // branch, and the retry resumes there.
+  'branch-unmeasured':
+    'ccrc could not read whether the branch still exists, so it stopped before removing anything further; it tries again.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the
