@@ -46,6 +46,11 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-07 22:20 — review run 335 is dispatched to `ccrc-pwa-brisk-basin`.** The daily cap refused at 24 of 24,
+  and the background retry dispatched at the 22:20 age-out. The brief is
+  `ccr15-evidence-archive/review-291-brief.md`: the held-out panel, plus the plan's four lenses (SAFETY and SECURITY
+  mandatory), and the a/b/c classes. Each finding is classed (a) shipped behaviour, (b) shipped prose or
+  (c) record only. X2 item 8 went to quiet-river (3939).
 - **2026-10-07 21:57 — wave 6's wave-done (3938) is verified; run 291 is at `awaiting-review`; the departures are
   numbered.**
   - **The claim, re-measured.** `ws/amber-river` at `8c0f2cd94` is PR #326's head, and the PR is open. The branch
