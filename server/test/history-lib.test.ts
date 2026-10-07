@@ -816,6 +816,9 @@ describe('planRun: a hold stops the drain, a pause stops only ingest (O56, spec 
   it('history-off wins over every other input', () => {
     expect(run({ historyOff: true, store: { act: 'refuse', word: 'store-unbound' }, free: { state: 'unsettled' } }).arm).toBe('off');
   });
+  it('a statfs that did not settle answers ahead of a store refusal (the probe runs before the DB is opened)', () => {
+    expect(run({ store: { act: 'refuse', word: 'store-unbound' }, free: { state: 'unsettled' } })).toEqual({ arm: 'hold', holdWord: 'store-unreachable', drain: false, ingest: false, pause: null });
+  });
   it('a healthy open, create, finish or drop runs with drain and ingest', () => {
     for (const store of [{ act: 'open' }, { act: 'create' }, { act: 'finish-pending' }, { act: 'drop-pending-create' }] as libPlan.StoreOpenVerdict[]) {
       expect(run({ store })).toEqual({ arm: 'run', holdWord: null, drain: true, ingest: true, pause: null });

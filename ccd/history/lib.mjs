@@ -793,12 +793,21 @@ function haltRun(arm, holdWord) {
  *  below the floor pauses exactly as ingest does (§9.3): it stays on the
  *  recover arm, still holding the drain, and says the floor holds it, so B2's
  *  step counts `capture_paused_low_disk` and never `recovery-stalled`.
+ *  The hold order is off, then a statfs that never settled, then a store
+ *  refusal: the probe pauses capture BEFORE the DB is opened (§5.3, §9.3), and
+ *  a store verdict's facts (lstat and reads under db/) cannot be measured on a
+ *  mount whose statfs never settled. Today L4 decides the off, store-refusal
+ *  and refuse-newer-by-store arms itself, in this same order (the sweep's
+ *  scheduledPass holds off, role, the probe, then openStore) and passes
+ *  `historyOff:false, store:{act:'open'}, recovering:false` here, so this
+ *  function carries the migration verdict arms and the importRoom probe hold
+ *  live and the others as the order B2's recovery arm must keep.
  *  D-4187 D-4179
  *  D-4182 */
 export function planRun(i) {
   if (i.historyOff) return haltRun('off', null);
-  if (i.store.act === 'refuse') return haltRun('hold', i.store.word);
   if (i.free.state === 'unsettled') return haltRun('hold', 'store-unreachable');
+  if (i.store.act === 'refuse') return haltRun('hold', i.store.word);
   if (!MIGRATION_VERDICTS.includes(i.migration)) throw new TypeError(`planRun: migration verdict outside MIGRATION_VERDICTS: ${String(i.migration)}`);
   if (i.migration === 'refuse-newer') return haltRun('hold', 'schema-newer');
   if (i.migration === 'refuse-low-disk') return haltRun('hold', 'migration-refused');
