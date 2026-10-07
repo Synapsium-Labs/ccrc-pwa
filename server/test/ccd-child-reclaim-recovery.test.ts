@@ -280,7 +280,7 @@ describe('the breadcrumb arm', () => {
     placed(evalOf(h), 'the CONTROL: restored, the breadcrumb places it again');
   }, 120_000);
 
-  it('a breadcrumb never places a row git still records — a tree moved away, its record locked', () => {
+  it('a breadcrumb never places a row git still records — a tree moved away, its record locked', (ctx) => {
     const c = makeChild(h);
     const s = sibling();
     pinned(SIB, s.wt, c.main);
@@ -293,6 +293,59 @@ describe('the breadcrumb arm', () => {
     fs.rmSync(path.join(s.admin, 'locked'));
     expect(stanza(c.main, s.wt), 'the CONTROL: unlocked, git marks the record prunable').toContain('\nprunable');
     placed(evalOf(h), 'the CONTROL: unlocked, the git arm places it');
+    // The arm asks git's list AND the admin entries, and each sees a record the other cannot. git lists a record
+    // whose `gitdir` is spelled other than `<w>/.git` (measured, git 2.43: no suffix to strip, listed as is,
+    // prunable), which the admin-entry reader, matching `<w>/.git`, never names.
+    const gitdir = path.join(s.admin, 'gitdir');
+    fs.writeFileSync(gitdir, `${s.wt}\n`);
+    expect(stanza(c.main, s.wt), 'the CONTROL: git still lists the record, prunable').toContain('\nprunable');
+    held(evalOf(h), SIB, 'a breadcrumb over a record only git’s list names');
+    fs.writeFileSync(gitdir, `${s.wt}/.git\n`);
+    placed(evalOf(h), 'the CONTROL: respelled, the git arm places it');
+    // NEVER READ AS "NO RECORD" (spec §5.5): git's list exits 0 and silently OMITS a record whose `gitdir` it cannot
+    // read, and every linked record when `worktrees/` cannot be listed — the breadcrumb's "git keeps no record" there
+    // would be a record nobody read. Both shapes hold.
+    if (process.getuid?.() === 0) { ctx.skip(); return; }
+    fs.chmodSync(gitdir, 0o000);
+    try {
+      expect(stanza(c.main, s.wt), 'the CONTROL: git’s list omits the record it cannot read').toBe('');
+      held(evalOf(h), SIB, 'a breadcrumb over a gitdir git could not read');
+    } finally { fs.chmodSync(gitdir, 0o644); }
+    placed(evalOf(h), 'the CONTROL: readable again, the git arm places it');
+    const wts = path.dirname(s.admin);
+    fs.chmodSync(wts, 0o311);
+    try {
+      expect(stanza(c.main, s.wt), 'the CONTROL: git’s list omits every linked record').toBe('');
+      held(evalOf(h), SIB, 'a breadcrumb over a worktrees/ git could not list');
+    } finally { fs.chmodSync(wts, 0o755); }
+    placed(evalOf(h), 'the CONTROL: listable again, the git arm places it');
+  }, 120_000);
+
+  // The phases the arm accepts beside `reclaim:branch`, each against the phase written BEFORE ccd's removal step,
+  // which proves nothing: ws-reap's `branch` and `clips` over ws-reap's own tombstone (`uuid` and `workdir`, no
+  // `worktree`), and the tail's `reclaim:artifacts` beside its tombstone's `worktree: present`.
+  it.each([
+    ['ws-reap’s branch', 'worktree', 'branch'],
+    ['ws-reap’s clips', 'worktree', 'clips'],
+    ['the tail’s reclaim:artifacts', 'reclaim:worktree', 'reclaim:artifacts'],
+  ] as const)('%s places the gone row', (label, before, phase) => {
+    const c = makeChild(h);
+    const s = sibling();
+    if (phase.startsWith('reclaim:')) {
+      pinned(SIB, s.wt, c.main);
+    } else {
+      h.sh(`_ws_reap_reset; _ws_tombstone ${SIB} '[]' >/dev/null`);
+      const tomb = JSON.parse(fs.readFileSync(path.join(h.home, '.cc-sessions', '.reaped', `${SIB}.json`), 'utf8')) as
+        Record<string, unknown>;
+      expect([tomb['uuid'], tomb['workdir'], 'worktree' in tomb], 'the CONTROL: ws-reap’s own tombstone')
+        .toEqual([h.reg(SIB, 'uuid'), s.wt, false]);
+    }
+    removedByTail(s.wt, c.main);
+    expect(stanza(c.main, s.wt), 'the CONTROL: git keeps no record — only the breadcrumb can place it').toBe('');
+    crumb(SIB, before);
+    held(evalOf(h), SIB, `the CONTROL: ${before}, written before the removal, proves nothing`);
+    crumb(SIB, phase);
+    placed(evalOf(h), label);
   }, 120_000);
 });
 
@@ -332,6 +385,48 @@ describe('the moved-tree hole', () => {
     expect(owned.rc, owned.why).toBe('1');
     expect(owned.why).toContain(`registry row ${SIB}, whose workdir is gone`);
     expect(fs.existsSync(path.join(moved, '.git')), 'the moved tree stands').toBe(true);
+  }, 120_000);
+
+  // `_ws_reclaim_owned` asks the moved-tree question with nothing in front of it: in the ladder the nested loop's own
+  // repository read fails first, so these are its only reach. A git directory it cannot read, or cannot resolve
+  // completely, is unmeasured — never "not that tree" (spec §5.5).
+  it('_ws_reclaim_owned: a checkout inside the child whose git directory cannot be read, or resolved completely, is unmeasured', () => {
+    const c = makeChild(h);
+    const o = foreign();
+    const bogus = path.join(c.wt, 'bogus');
+    fs.mkdirSync(bogus);
+    fs.writeFileSync(path.join(bogus, '.git'), 'gitdir: /nowhere\n');
+    const tabbed = path.join(h.home, 'sep\tgit');
+    const inner = path.join(c.wt, 'inner');
+    const ok = ownedOf(CHILD_ID, c.wt, c.main);
+    expect(ok.rc, `the CONTROL: while the other tree stands nothing is scanned — ${ok.why}`).toBe('0');
+    fs.rmSync(o.wt, { recursive: true, force: true });
+    const r = ownedOf(CHILD_ID, c.wt, c.main);
+    expect(r.rc, r.why).toBe('1');
+    expect(r.why).toContain(`could not read the git directory of the checkout at ${bogus}`);
+    fs.rmSync(bogus, { recursive: true, force: true });
+    h.git(h.home, 'init', '-q', `--separate-git-dir=${tabbed}`, inner);
+    expect(h.git(inner, 'rev-parse', '--absolute-git-dir'), 'the CONTROL: git reads it, a tab in its name').toBe(tabbed);
+    const t = ownedOf(CHILD_ID, c.wt, c.main);
+    expect(t.rc, t.why).toBe('1');
+    expect(t.why).toContain(`could not resolve the git directory of the checkout at ${inner} completely`);
+  }, 120_000);
+
+  it('_ws_reclaim_owned: a child it cannot scan for a gone row’s moved tree is unmeasured', (ctx) => {
+    if (process.getuid?.() === 0) { ctx.skip(); return; }
+    const c = makeChild(h);
+    const o = foreign();
+    const shut = path.join(c.wt, 'shut');
+    fs.mkdirSync(shut);
+    fs.chmodSync(shut, 0o000);
+    try {
+      const ok = ownedOf(CHILD_ID, c.wt, c.main);
+      expect(ok.rc, `the CONTROL: while the other tree stands nothing is scanned — ${ok.why}`).toBe('0');
+      fs.rmSync(o.wt, { recursive: true, force: true });
+      const r = ownedOf(CHILD_ID, c.wt, c.main);
+      expect(r.rc, r.why).toBe('1');
+      expect(r.why).toBe(`could not scan ${c.wt} for a gone row's moved tree`);
+    } finally { fs.chmodSync(shut, 0o755); }
   }, 120_000);
 });
 

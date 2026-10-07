@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5ef079ef36bb9d61d2b2e33e03803b22ee2cda9b37c88c671cdd37ecd8d23269
+# ccrc:generated 1 sha256=693d4e137994807ba97e309cb7fbdc0a0a602ddfd88644e02ed9aca0b32ecaf4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -26372,9 +26372,12 @@ _ws_reclaim_recorded_crumb() {   # id workdir -> rc 0 when the row's own breadcr
   # row's spelling (a recycled slug can leave an earlier act's). Every other
   # phase proves nothing — an expiry's `expire:` ones included — and so does
   # an unreadable breadcrumb, row or tombstone, a missing python3 (the
-  # tombstone's one reader), or a worktree list git could not give. The
-  # record's globals are shadowed here, as in the git arm.
-  local o="$1" w="$2" crumb tomb tuuid twd ruuid tworktree need=0 project rc RECLAIM_REC_BRANCH='' RECLAIM_REC_HEAD='' RECLAIM_REC_MAIN=0 RECLAIM_REC_PRUNABLE=0
+  # tombstone's one reader), a worktree list git could not give, or an admin
+  # entry `_ws_reclaim_log_of` could not read. The record's globals, and the
+  # reader's, are shadowed here, as in the git arm.
+  local o="$1" w="$2" crumb tomb tuuid twd ruuid tworktree need=0 project rc e RECLAIM_REC_BRANCH='' RECLAIM_REC_HEAD='' RECLAIM_REC_MAIN=0 RECLAIM_REC_PRUNABLE=0
+  local -a _WS_LOGS=()
+  local _WS_KEEP_WHY=''
   crumb=$(_reg_read "$o" reaping) || return 1
   case "$crumb" in
     branch|clips) : ;;
@@ -26399,6 +26402,17 @@ _ws_reclaim_recorded_crumb() {   # id workdir -> rc 0 when the row's own breadcr
   [[ -n "$project" && "$project" != */* && "$project" != . && "$project" != .. && "$project" != *[[:cntrl:]]* ]] || return 1
   _ws_reclaim_record "$PROJECTS_ROOT/$project" "$w"; rc=$?
   (( rc == 1 )) || return 1
+  # AND NO ADMIN ENTRY NAMES IT, asked of the git arm's own reader: git's list
+  # exits 0 and silently OMITS a record whose `gitdir` it cannot read — every
+  # linked record, when `worktrees/` cannot be listed (measured, git 2.43) —
+  # so its "no record" alone would read an unreadable record as none.
+  # `_ws_reclaim_log_of` fails on an unreadable `worktrees/` or `gitdir`, and
+  # answers no entry only when none names `<w>/.git`, or `worktrees/` is
+  # proven absent (after ccd's own removal of a repository's last one).
+  _ws_reclaim_log_of "$PROJECTS_ROOT/$project" tree "$w" 0 || return 1
+  for e in ${_WS_LOGS[@]+"${_WS_LOGS[@]}"}; do
+    [[ "$e" != gitdir:* ]] || return 1
+  done
   return 0
 }
 

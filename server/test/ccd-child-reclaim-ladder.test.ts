@@ -2202,6 +2202,8 @@ it('ambiguous row hold: two vanished children hold each other', () => {
   h.git(c.main, 'worktree', 'prune');
   expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the CONTROL: git records neither tree')
     .not.toContain('still-harbor');
+  expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the CONTROL: git records neither tree')
+    .not.toContain('quiet-basin');
   const mine = evalOf(h);
   expect(mine.verdict, mine.detail).toBe('unmeasured');
   expect(mine.detail).toContain(`registry row(s) ${other} ${PROJECTED_WHY}`);
