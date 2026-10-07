@@ -2331,6 +2331,27 @@ describe('redactForIndex: every JSON-escape reading before every index, kept onl
       expect(Date.now() - t0).toBeLessThan(LINEAR_MS);
     }
   });
+  it('a deep backslash-u-005c chain in front of a large body costs no more redactions than the bound allows (review 316 M2)', () => {
+    // A chain of 64 levels never reaches a fixpoint within INDEX_UNESCAPE_PASSES, and the body does not shrink, so
+    // every decode re-redacts the whole body: the bound, not the input, is what is timed. The two timings are
+    // interleaved and each kept at its minimum, so a load spike cannot land on one side only.
+    const body = 'word '.repeat(1 << 18);
+    const s = `${BS}${'u005c'.repeat(64)}n ${body}`;
+    let tOne = Infinity;
+    let tIndex = Infinity;
+    for (let round = 0; round < 3; round += 1) {
+      let t0 = performance.now();
+      libRows.redactField(s, idx);
+      tOne = Math.min(tOne, performance.now() - t0);
+      t0 = performance.now();
+      const out = libRows.redactForIndex(s, idx);
+      tIndex = Math.min(tIndex, performance.now() - t0);
+      expect(out === `${M} ${body}`).toBe(true);
+    }
+    // 8 decodes and the first redaction are 9 full redactions (measured 5-12x one); 20x leaves room for a loaded
+    // box, and 32 passes measure 29-43x.
+    expect(tIndex).toBeLessThan(20 * tOne);
+  }, 60_000);
 });
 
 // FR1 round 1 F1 (D-4336, D-4312): the window is measured in RAW bytes but the cut runs on the unescaped text, which an
