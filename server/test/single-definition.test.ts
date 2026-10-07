@@ -4844,6 +4844,7 @@ describe('the docs ring — server/src/docs is classified by its imports (spec 2
           if (/^\s*import\b/.test(l) && !/^\s*import\s+type\b/.test(l)) out.push(`${at} has a value import: ${l.trim()}`);
         }
         if (L2_RUNTIME_EXPORT.test(code)) out.push(`${at} exports a runtime value`);
+        if (RUNTIME_LOAD.test(code)) out.push(`${at} loads a module at run time`);
       }
       if (role === 'L3') {
         if (REPLY.test(code)) out.push(`${at} names reply`);
@@ -4902,6 +4903,9 @@ describe('the docs ring — server/src/docs is classified by its imports (spec 2
       'ports.ts (L2) exports a runtime value',
     ]);
     expect(ringViolations(planted('ports.ts', "export type { DocsJob } from './policy.js';"))).toEqual([]);
+    expect(ringViolations(planted('ports.ts', 'const m = await import("node:fs");'))).toEqual([
+      'ports.ts (L2) loads a module at run time',
+    ]);
   });
 
   it('CONTROL: L3 (ccdsource.ts) — reply, a timer, a fastify type and an unlisted import are caught; prose is not', () => {
