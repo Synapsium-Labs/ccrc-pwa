@@ -44,8 +44,13 @@ spec's after wave 1.
 - **2026-10-07 17:24 UTC: the wave-1 plan was written** by a workflow: a contract, six prototyping drafters, two attack
   lenses, and an assembly pass. It defines D-4388 to D-4397. The coordinator assigned **D-4398**, the unreadable
   generation read with no hold word: a technical narrowing that keeps the spec's §6 intent that an unreadable read is never
-  read as behind. One item waits on the operator before run 320 is dispatched: the agent.env fleet marker (the
-  plan's pending deviation). Numbers 4399 to 4417 stay reserved, written bare.
+  read as behind.
+- **2026-10-07 about 21:13 UTC, operator rulings on the plan:**
+  - The agent.env fleet marker: "Has a CCRC_AGENT_TOKEN line". `agent.env` marks a fleet box only when it has a
+    `CCRC_AGENT_TOKEN` key line or cannot be read. Defined as **D-4399**.
+  - Execution: "Dispatch to a worker". Run 320 goes to a worker, which runs subagent-driven-development, then the
+    held-out review panel. Part B follows as the next run.
+  - Numbers 4400 to 4417 stay reserved, written bare.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
