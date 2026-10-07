@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=26c107d3df8c931de8fe43ccc97f6db7e4c9a58cfd5404ed75db74ba2d4a2ef4
+# ccrc:generated 1 sha256=b94b81c9c7c4b60b352fd7be62b2d58a6849c7d5ad7d092ceca4f20440ac38d2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -20775,7 +20775,9 @@ _child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, lea
 # a sidecar in `~/.cc-tmp`: both sit where a session's own scratch goes, so
 # its ordinary writes and cleanups could take or clobber them by accident.
 # `tmproots/` is no harder to write on purpose (TRUST, above); it is only out
-# of the session's way. The writer's temp file is dot-leading INSIDE
+# of the session's way. A `tmproots/` that is itself a link is never
+# followed: the writer refuses it, the reader answers 2, and
+# `_ws_tmproot_remove` warns and leaves what it reaches. The writer's temp file is dot-leading INSIDE
 # `tmproots/`, never `$REG/.<x>`, so no `tmproots/*` glob sees it and
 # `_reg_purge`'s dot-prefixed inventory is unchanged. A writer that dies
 # between its `printf` and its `mv` leaves that temp file behind, and nothing
@@ -20810,7 +20812,8 @@ _ws_tmproot_witness_file() { printf '%s' "$REG/tmproots/${1-}"; }   # id -> the 
 _ws_tmproot_id_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ && "${1-}" != .* ]]; }
 
 _ws_tmproot_witness_read() {   # id -> 0 parsed (sets _WS_WIT_DEV _WS_WIT_INO _WS_WIT_BTIME _WS_WIT_RUN _WS_WIT_UID _WS_WIT_AT) | 1 absent | 2 unreadable or malformed
-  # THREE ANSWERS: a directory or a link planted at the name is not absent.
+  # THREE ANSWERS: a directory or a link planted at the name is not absent,
+  # and a `tmproots/` that is ITSELF a link is never followed: both answer 2.
   # Every field is cleared first, so a failed read never leaves a previous
   # read's values standing. The run is judged by `_child_runid_valid`, the
   # one run-id grammar, never a re-spelt pattern — and BASH_REMATCH is copied
@@ -20821,6 +20824,7 @@ _ws_tmproot_witness_read() {   # id -> 0 parsed (sets _WS_WIT_DEV _WS_WIT_INO _W
   _WS_WIT_DEV=''; _WS_WIT_INO=''; _WS_WIT_BTIME=''; _WS_WIT_RUN=''; _WS_WIT_UID=''; _WS_WIT_AT=''
   _ws_tmproot_id_ok "$id" || return 2
   w=$(_ws_tmproot_witness_file "$id")
+  [[ ! -L "${w%/*}" ]] || return 2
   [[ -e "$w" || -L "$w" ]] || return 1
   [[ -f "$w" && ! -L "$w" ]] || return 2
   { exec {fd}<"$w"; } 2>/dev/null || return 2
@@ -28846,7 +28850,9 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
 # and the check-to-rm window is `_ws_leaf_remove`'s own stated residual);
 # a collector passes the witness's own. A witness that cannot be unlinked
 # after a proven-absent leaf is warned about and changes nothing: the act
-# this helper reports is the leaf's.
+# this helper reports is the leaf's. So is a `tmproots/` that is itself a
+# link: it is never followed (the file it reaches is not one ccd wrote), and
+# the leaf's rc stands.
 # An id no witness is named for (`_ws_tmproot_id_ok`: anything dot-leading,
 # `.`, `..` and the writer's own `.<id>.*.tmp` names among them) is refused
 # FIRST, rc 1 with `_WS_LEAF_WHY`, and nothing is asked or touched: a
@@ -28863,6 +28869,10 @@ _ws_tmproot_remove() {   # id [expect-devino] -> _ws_leaf_remove's rc (0 removed
   fi
   (( rc == 0 )) || return "$rc"
   w=$(_ws_tmproot_witness_file "$id")
+  if [[ -L "${w%/*}" ]]; then
+    echo "ccd: warn: $id's temp root is gone but ${w%/*} is a link, not ccd's own directory — it is never followed, so the file it reaches was left as it stands" >&2
+    return 0
+  fi
   rm -f -- "$w" 2>/dev/null \
     || echo "ccd: warn: $id's temp root is gone but its witness $w could not be removed — a witness with no leaf is nothing to do, and a later removal of $id cleans it" >&2
   return 0

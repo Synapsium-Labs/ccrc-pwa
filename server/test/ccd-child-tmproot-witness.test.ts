@@ -217,6 +217,28 @@ describe('a witness that cannot be written never fails the spawn — it warns', 
     expect(r.out).toContain(`ccd: warn: ${ID}'s temp root`);
     expect(fs.existsSync(witness())).toBe(false);
   });
+
+  it('a stat that answers 0 with no NUMBER writes nothing and warns — what it printed is never read as "-" either', () => {
+    seed(ID, '7');
+    const r = run(`_plat_btime() { printf x; }; _child_tmpdir ${ID}; echo "[rc=$?]"`);
+    expect(r.out).toContain(`${leaf()}[rc=0]`);
+    expect(r.out).toContain(`ccd: warn: ${ID}'s temp root`);
+    expect(fs.existsSync(witness())).toBe(false);
+  });
+
+  // A FILE at tmproots/ is refused by `mkdir -p` itself; a LINK to a
+  // directory is not, so only the writer's own link checks stand between it
+  // and a witness written wherever the link points.
+  it('a LINKED tmproots/ is refused, never written through: rc 0, the path, a warning, and the link’s target stays empty', () => {
+    seed(ID, '7');
+    const elsewhere = path.join(h.home, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    fs.symlinkSync(elsewhere, wdir());
+    const r = run(`_child_tmpdir ${ID}; echo "[rc=$?]"`);
+    expect(r.out).toContain(`${leaf()}[rc=0]`);
+    expect(r.out).toContain(`ccd: warn: ${ID}'s temp root`);
+    expect(fs.readdirSync(elsewhere)).toEqual([]);
+  });
 });
 
 describe('_ws_tmproot_witness_write refuses what is not a child’s own leaf', () => {
@@ -295,6 +317,32 @@ describe('_ws_tmproot_witness_read: parsed, absent, or unreadable — three answ
     expect(read('../x')).toBe('[rc=2] |||||');
     expect(read('.tmp')).toBe('[rc=2] |||||');
   });
+
+  /** A witness in the VALID shape, padded through `dev`'s digits (leading
+   *  zeros, which the grammar admits) to exactly `n` bytes, its newline
+   *  included — so only the size cap can refuse it. */
+  const sized = (n: number): string =>
+    GOOD.replace('dev=2064', `dev=${'0'.repeat(n - Buffer.byteLength(GOOD))}2064`);
+
+  it('rc 2 for a VALID-shape body one byte over the cap (513 bytes, its newline the last)', () => {
+    expect(Buffer.byteLength(sized(513)), 'the CONTROL: the plant is 513 bytes').toBe(513);
+    plant(sized(513));
+    expect(read()).toBe('[rc=2] |||||');
+  });
+
+  it('CONTROL: a VALID-shape body of exactly 512 bytes is read', () => {
+    expect(Buffer.byteLength(sized(512)), 'the CONTROL: the plant is 512 bytes').toBe(512);
+    plant(sized(512));
+    expect(read()).toMatch(/^\[rc=0\] 7\|0+2064\|35\|-\|1000\|1791277099334$/);
+  });
+
+  it('rc 2 when tmproots/ ITSELF is a link — even to a directory holding a GOOD witness', () => {
+    const elsewhere = path.join(h.home, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    fs.writeFileSync(path.join(elsewhere, ID), GOOD);
+    fs.symlinkSync(elsewhere, wdir());
+    expect(read()).toBe('[rc=2] |||||');
+  });
 });
 
 describe('_ws_tmproot_remove: the witness dies only after the leaf is PROVEN absent', () => {
@@ -322,6 +370,32 @@ describe('_ws_tmproot_remove: the witness dies only after the leaf is PROVEN abs
     fs.rmSync(leaf(), { recursive: true, force: true });
     expect(run(`_ws_tmproot_remove ${ID}; echo "[rc=$?]"`).out).toBe('[rc=0]');
     expect(fs.existsSync(witness())).toBe(false);
+  });
+
+  it('a witness that cannot be unlinked after the leaf is gone is WARNED about — and rc 0 stays the leaf’s', () => {
+    seed(ID, '7');
+    h.sh(`_child_tmpdir ${ID} >/dev/null`);
+    fs.rmSync(witness());
+    fs.mkdirSync(path.join(witness(), 'inside'), { recursive: true });
+    const r = run(`_ws_tmproot_remove ${ID}; echo "[rc=$?]"`);
+    expect(r.out).toContain(`ccd: warn: ${ID}'s temp root is gone but its witness ${witness()} could not be removed`);
+    expect(r.out).toMatch(/\[rc=0\]$/);
+    expect(fs.existsSync(leaf())).toBe(false);
+    expect(fs.statSync(witness()).isDirectory()).toBe(true);
+  });
+
+  it('a LINKED tmproots/ is never followed: the leaf goes, the file the link reaches stands, and it warns', () => {
+    seed(ID, '7');
+    h.sh(`_child_tmpdir ${ID} >/dev/null`);
+    const elsewhere = path.join(h.home, 'elsewhere');
+    fs.renameSync(wdir(), elsewhere);              // the witness ccd wrote now sits at elsewhere/<id>
+    fs.symlinkSync(elsewhere, wdir());
+    const bytes = fs.readFileSync(path.join(elsewhere, ID), 'utf8');
+    const r = run(`_ws_tmproot_remove ${ID}; echo "[rc=$?]"`);
+    expect(r.out).toContain(`ccd: warn: ${ID}'s temp root is gone but ${wdir()} is a link`);
+    expect(r.out).toMatch(/\[rc=0\]$/);
+    expect(fs.existsSync(leaf()), 'the leaf is still removed: the act this helper reports').toBe(false);
+    expect(fs.readFileSync(path.join(elsewhere, ID), 'utf8')).toBe(bytes);
   });
 
   it('the leaf goes FIRST: the witness still stood when the removal helper ran', () => {
@@ -425,8 +499,11 @@ describe('$REG/tmproots is invisible to every registry walker (spec §5.2, the p
   });
 
   it('_ws_slug_free reads a slug whose only trace is its witness as FREE, and _ws_slug_residue names nothing', () => {
-    witnessedRow();
-    h.sh(`_reg_purge ${ID}`);
+    // Written DIRECTLY, with no row ever made: the slug walkers meet the file
+    // ccd wrote, wherever it put it — never one `_reg_purge` already took.
+    fs.mkdirSync(leaf(), { recursive: true, mode: 0o700 });
+    h.sh(`_ws_tmproot_witness_write ${ID} '${leaf()}' 7`);
+    expect(fs.existsSync(wpath()), 'the CONTROL: the witness was written').toBe(true);
     expect(h.sh('_ws_slug_free demo quiet-mesa && echo free || echo taken')).toBe('free');
     expect(h.sh('_ws_slug_residue demo quiet-mesa')).toBe('');
   });
