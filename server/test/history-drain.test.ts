@@ -976,6 +976,67 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       expect(drainingNames(box.home)).toEqual([]);
       expect(counters(box)['journal_write_failed']).toBeGreaterThanOrEqual(2);
     });
+
+    // review 316 F9: readSidecar admits only the whole grammar observe() writes, on the drain and the hold alike.
+    const validObs = { v: 1, observedMs: T, uuid: { state: 'absent' }, generation: { state: 'absent' }, project: { state: 'absent' }, workdir: { state: 'absent' },
+      late: null, journalT: null, journaled: null, heldMatches: {} };
+    const startupFile = (): void => {
+      fs.writeFileSync(regularFile(), `\n${JSON.stringify(start(ID, U1, 'startup', { reg: U1 }))}\n`);
+    };
+    const MALFORMED: Array<[string, Record<string, unknown>]> = [
+      ['only v and observedMs', { v: 1, observedMs: T }],
+      ['heldMatches null', { ...validObs, heldMatches: null }],
+      ['journalT fractional', { ...validObs, journalT: 1.5 }],
+    ];
+
+    it.each(MALFORMED)('a malformed sidecar (%s) is removed, counted sidecar_malformed once and observed again; the file drains', (_why, bad) => {
+      startupFile();
+      fs.writeFileSync(path.join(DRAIN(box.home), `${ID}.900.1.obs`), JSON.stringify(bad));
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      expect(counters(box)['sidecar_malformed']).toBe(1);
+      expect(receipts(box)).toHaveLength(1);
+      expect(drainingNames(box.home)).toEqual([]);
+    });
+
+    it('a malformed sidecar under a hold is observed again, never thrown', () => {
+      startupFile();
+      fs.writeFileSync(path.join(DRAIN(box.home), `${ID}.900.1.obs`), JSON.stringify({ v: 1, observedMs: T }));
+      const aside = path.join(box.home, 'aside');
+      moveDb(box, hist(box.home, 'db'), aside);
+      const held = runSweep(box);
+      expect(held.code, held.stderr).toBe(5);
+      expect(held.stderr).not.toMatch(/TypeError/);
+      moveDb(box, aside, hist(box.home, 'db'));
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      expect(receipts(box)).toHaveLength(1);
+    });
+
+    // review 316 F20: a sidecar whose draining file is gone is the sweep's own debris.
+    it('a kill between a drained file\'s unlink and its sidecar\'s leaves an orphan the next drain removes', () => {
+      spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+      expect(runSweep(box).code).toBe(0);                                // renamed
+      const [name] = drainingNames(box.home);
+      const killed = runSweep(box, [], faults({ HISTORY_TEST_KILL: `unlinkSync:${name!}:1:after` }));
+      expect(killed.code).toBeNull();
+      expect(fs.existsSync(path.join(DRAIN(box.home), name!.replace(/\.jsonl$/, '.obs')))).toBe(true);
+      expect(fs.existsSync(path.join(DRAIN(box.home), name!))).toBe(false);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      expect(fs.readdirSync(DRAIN(box.home)).filter((n) => n.endsWith('.obs') || n.endsWith('.obs.tmp'))).toEqual([]);
+      expect(receipts(box)).toHaveLength(1);
+    });
+
+    it('an oversize file\'s orphaned sidecar and a stale sidecar temp are removed, uncounted', () => {
+      fs.writeFileSync(path.join(DRAIN(box.home), `${ID}.900.1.obs`), JSON.stringify(validObs));
+      fs.writeFileSync(path.join(DRAIN(box.home), `${ID}.901.1.obs.tmp`), '{}');
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      expect(fs.readdirSync(DRAIN(box.home))).toEqual([]);
+      expect(counters(box)['non_regular']).toBeUndefined();
+      expect(counters(box)['sidecar_malformed']).toBeUndefined();
+    });
   });
 
   it('while a file is held, a startup sid the observation did not name is recorded the first time .uuid names it', () => {

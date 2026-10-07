@@ -35,7 +35,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { isatty } from 'node:tty';
 import { pathToFileURL } from 'node:url';
 import {
-  CARRIER_KILL_S, EXIT, SPOOL_FILE_MAX, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
+  CARRIER_KILL_S, EXIT, SPOOL_FILE_MAX, OBS_FILE_MAX, observationOk, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
   UUID_RE, WRITER_RE, drainingNameOk, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
   passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
@@ -293,8 +293,6 @@ export function countOutside(db, name, by = 1) {
 
 /** Registry values ccd writes are a few dozen bytes; anything larger was not written by ccd. */
 const REG_VALUE_MAX = 4096;
-/** A sidecar is one observation plus the first-match times of its held lines. */
-const SIDECAR_MAX = 64 * 1024;
 /** The absent and unreadable Presences. `ABSENT` is this Presence object; Task 22's set of absent-file error codes
  *  is a different value under its own name, `ABSENT_CODES`, so the module never declares `ABSENT` twice. */
 const ABSENT = Object.freeze({ state: 'absent' });
@@ -357,12 +355,15 @@ export function readObservation(home, id, nowMs) {
   };
 }
 
+/** The sidecar as `observe` wrote it, or null. A sidecar that fails lib's `observationOk` (D-4347,
+ *  history-planted-entries-never-wedge) is observed again, as an unparseable one always was, so `observe`,
+ *  `recordHeldMatches` and `journalFile` only ever see a valid observation, on the drain and the hold alike. */
 function readSidecar(path) {
-  const p = readSmall(path, SIDECAR_MAX);
+  const p = readSmall(path, OBS_FILE_MAX);
   if (p.state !== 'value') return null;
   let o;
   try { o = JSON.parse(p.value); } catch { return null; }
-  return o !== null && typeof o === 'object' && o.v === 1 && typeof o.observedMs === 'number' ? o : null;
+  return observationOk(o) ? o : null;
 }
 
 /** Temp, fsync, rename, fsync the directory. The temp is `<sidecar>.tmp` (254 bytes at the bound), so no longer
@@ -762,8 +763,10 @@ export function journalHalf(home, ids, nowMs) {
  *  - Loop 1, the draining names: a regular file is live and stays. A directory is moved whole into `.draining/planted/` (never
  *    recursed into, never deleted: a same-user process may have left content, or a mount, there); any other non-regular
  *    entry is removed. Both count `non_regular`.
- *  - Loop 2, the observation sidecars and their temps: a directory is moved into `planted/` and counted. Anything else is
- *    judged by the live files of loop 1.
+ *  - Loop 2, the observation sidecars and their temps: a directory is moved into `planted/` and counted. A sidecar temp, or a
+ *    sidecar whose draining file is not a live regular file, is the sweep's own debris and is removed uncounted (F20). Any
+ *    other non-regular entry is removed and counted `non_regular`; a sidecar of a live file that fails `observationOk` is
+ *    removed and counted `sidecar_malformed`, and the next `observe` re-observes it (F9).
  *  A step that fails is left for the next drain. */
 export function tidyDraining(home) {
   const P = historyPaths(home);
@@ -795,9 +798,13 @@ export function tidyDraining(home) {
       const t = typeOf(n);
       if (t === 'gone') continue;
       if (t === 'dir') { out.nonRegular += 1; setAsidePlanted(n); continue; }
-      // [commit 2, F20] if (n.endsWith('.obs.tmp') || !live.has(`${stem}.jsonl`)) { removeEntry(p); continue; }
+      // D-4347: a sidecar temp is always stale at a drain's start (writeSidecar renames it within one call, under the lock),
+      // and a sidecar whose draining file is not a live regular file is an orphan (a kill between the file's removal or
+      // move and its sidecar's); `listDraining` lists only `*.jsonl`, so nothing else would ever remove either. Both are the
+      // sweep's own debris: removed uncounted.
+      if (n.endsWith('.obs.tmp') || !live.has(`${stem}.jsonl`)) { removeEntry(p); continue; }
       if (t === 'other') { out.nonRegular += 1; removeEntry(p); continue; }
-      // [commit 2, F9]  if (readSidecar(p) === null) { removeEntry(p); out.malformed += 1; }
+      if (readSidecar(p) === null) { removeEntry(p); out.malformed += 1; }
     } catch { /* left for the next drain */ }
   }
   return out;

@@ -1025,7 +1025,7 @@ describe('decideEpochLine: the drain and replay take one verdict per line (O56, 
   const absent: libEpoch.Presence<string> = { state: 'absent' };
   const obs = (o: Partial<libEpoch.Observation> = {}): libEpoch.Observation => ({
     v: 1, observedMs: 1_000, uuid: absent, generation: absent, project: absent, workdir: absent,
-    journaled: null, heldMatches: {}, ...o,
+    late: null, journalT: null, journaled: null, heldMatches: {}, ...o,
   });
   const uuidIs = (value: string): libEpoch.Presence<string> => ({ state: 'value', value });
   it('a ccd start whose reg equals its sid confirms by reg, even with .uuid moved on before the rename (CT6)', () => {
@@ -1049,6 +1049,42 @@ describe('decideEpochLine: the drain and replay take one verdict per line (O56, 
   it('a source outside the spool set throws rather than chains', () => {
     expect(() => libEpoch.decideEpochLine({ src: 'fork' as 'startup', sid: U1 }, obs())).toThrow(TypeError);
   });
+});
+
+describe('observationOk accepts exactly the observation observe() writes (review 316 F9; D-4347)', () => {
+  const SID = '11111111-1111-4111-8111-111111111111';
+  const STORE = '22222222-2222-4222-8222-222222222222';
+  const V = { v: 1, observedMs: 1000, uuid: { state: 'absent' }, generation: { state: 'absent' },
+    project: { state: 'value', value: 'demo' }, workdir: { state: 'unreadable' }, late: null, journalT: null, journaled: null, heldMatches: {} };
+  const reread = { observedMs: 3000, uuid: { state: 'absent' }, generation: { state: 'value', value: 'g' }, project: { state: 'absent' }, workdir: { state: 'unreadable' } };
+  const without = (k: string): Record<string, unknown> => { const o: Record<string, unknown> = { ...V }; delete o[k]; return o; };
+  it('is true for a full observation, a journaled one, a re-read late one and one with a held match', () => {
+    expect(libEpoch.observationOk(V)).toBe(true);
+    expect(libEpoch.observationOk({ ...V, journalT: 2000, journaled: { t: 2000, storeId: STORE, writer: 'abcdef01', bytes: 10 } })).toBe(true);
+    expect(libEpoch.observationOk({ ...V, late: reread })).toBe(true);
+    expect(libEpoch.observationOk({ ...V, heldMatches: { [SID]: 4000 } })).toBe(true);
+    expect(libEpoch.observationOk({ ...V, a_later_builds_key: 1 }), 'unknown extra keys stay readable').toBe(true);
+  });
+  it.each<[string, unknown]>([
+    ['only v and observedMs', { v: 1, observedMs: 1 }],
+    ['no uuid', without('uuid')],
+    ['uuid value without value', { ...V, uuid: { state: 'value' } }],
+    ['uuid value not a string', { ...V, uuid: { state: 'value', value: 5 } }],
+    ['uuid in an unknown state', { ...V, uuid: { state: 'other' } }],
+    ['no late', without('late')],
+    ['late empty', { ...V, late: {} }],
+    ['journalT fractional', { ...V, journalT: 1.5 }],
+    ['journalT a string', { ...V, journalT: '1' }],
+    ['journaled with a bad storeId', { ...V, journaled: { t: 1, storeId: 'x', writer: 'abcdef01', bytes: 1 } }],
+    ['journaled without bytes', { ...V, journaled: { t: 1, storeId: STORE, writer: 'abcdef01' } }],
+    ['heldMatches null', { ...V, heldMatches: null }],
+    ['heldMatches with a string', { ...V, heldMatches: { a: 'x' } }],
+    ['observedMs negative', { ...V, observedMs: -1 }],
+    ['observedMs fractional', { ...V, observedMs: 1.5 }],
+    ['v 2', { ...V, v: 2 }],
+    ['an array', []],
+    ['null', null],
+  ])('is false for %s', (_why, o) => { expect(libEpoch.observationOk(o)).toBe(false); });
 });
 
 describe('decideCandidate: later-tick confirmation inside the 7-day window (spec 6.1)', () => {

@@ -120,6 +120,8 @@ export const SPOOL_LINE_MAX = 1024;                 // bytes, one spool line wit
  *  aside into `.draining/oversize/` and counted `spool_oversize`. A hook line is at most SPOOL_LINE_MAX bytes and a file is
  *  renamed every tick, so a legitimate one stays far under it. */
 export const SPOOL_FILE_MAX = 67108864;             // 64 MiB
+/** The observation sidecar's read bound: one observation plus the first-match times of its held lines (sweep.mjs `readSidecar`). */
+export const OBS_FILE_MAX = 65536;
 /** D-4337 (history-spool-file-size-cap, its line arm): a draining spool file holding more than this many lines
  *  (splitSpoolText's ordinals: empty lines take none) is set aside like one over SPOOL_FILE_MAX, counted
  *  `spool_overlines`. A legitimate file holds fewer: each hook line is fenced `\n<json>\n` (D-4176) and at most
@@ -1038,6 +1040,29 @@ export function joinGeneration({ lineGen, observedGen }) {
   if (observedGen.state === 'absent') return { generation: '', via: 'absent' };
   if (observedGen.state === 'value' && UUID_RE.test(observedGen.value)) return { generation: observedGen.value, via: 'registry' };
   return { generation: '', via: 'unreadable' };
+}
+
+/** Whether `o` is an observation sidecar as `observe` writes it (D-4347 (history-planted-entries-never-wedge)): the WHOLE grammar, so every reader
+ *  (`readSidecar`, status) judges a sidecar by one predicate and no caller dereferences a missing field.
+ *  - `v` is 1 and `observedMs` a non-negative safe integer;
+ *  - `uuid`, `generation`, `project` and `workdir` are Presences, `value` carrying a string;
+ *  - `late` is null or a re-read (`observedMs` and the four presences), `journalT` null or a non-negative safe integer;
+ *  - `journaled` is null or `{t, bytes, storeId, writer}` on their grammars, `heldMatches` an object of non-negative safe integers.
+ *  Unknown extra keys are allowed, so a later build's sidecar stays readable. Pure. */
+export function observationOk(o) {
+  const obj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+  const nat = (x) => Number.isSafeInteger(x) && x >= 0;
+  const presence = (x) => obj(x) && (x.state === 'absent' || x.state === 'unreadable' || (x.state === 'value' && typeof x.value === 'string'));
+  const four = (x) => presence(x.uuid) && presence(x.generation) && presence(x.project) && presence(x.workdir);
+  if (!obj(o) || o.v !== 1 || !nat(o.observedMs) || !four(o)) return false;
+  if (o.late !== null && !(obj(o.late) && nat(o.late.observedMs) && four(o.late))) return false;
+  if (o.journalT !== null && !nat(o.journalT)) return false;
+  if (o.journaled !== null) {
+    const j = o.journaled;
+    if (!(obj(j) && nat(j.t) && nat(j.bytes) && typeof j.storeId === 'string' && UUID_RE.test(j.storeId)
+      && typeof j.writer === 'string' && WRITER_RE.test(j.writer))) return false;
+  }
+  return obj(o.heldMatches) && Object.values(o.heldMatches).every(nat);
 }
 
 /** What the drain does with one epoch line (§6.1, §9.2 step 1).

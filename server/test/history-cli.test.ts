@@ -502,6 +502,37 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     expect(words).not.toContain('status-unreadable');
   });
 
+  // review 316 F9 and F20 (D-4347): status judges a sidecar by the sweep's own predicate, and an orphan is not held.
+  const fullObs = (observedMs: number): Record<string, unknown> => ({
+    v: 1, observedMs, uuid: { state: 'absent' }, generation: { state: 'absent' }, project: { state: 'absent' }, workdir: { state: 'absent' },
+    late: null, journalT: null, journaled: null, heldMatches: {},
+  });
+  it('a sidecar that fails the observation grammar is not a held file (review 316 F9)', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-grammar-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const dir = healthPath.join(box.home, '.ccrc', 'history', 'spool', '.draining');
+    healthFs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    healthFs.writeFileSync(healthPath.join(dir, 'x.900.1.jsonl'), '');
+    const old = Date.now() - 6 * 60 * 60_000;
+    healthFs.writeFileSync(healthPath.join(dir, 'x.900.1.obs'), JSON.stringify({ v: 1, observedMs: old, journaled: null }), { mode: 0o600 });
+    expect(wordsOf(statusOf(box).env!['health']['fail'])).not.toContain('journal-unwritable');
+    healthFs.writeFileSync(healthPath.join(dir, 'x.900.1.obs'), JSON.stringify(fullObs(old)), { mode: 0o600 });   // CONTROL
+    expect(wordsOf(statusOf(box).env!['health']['fail'])).toContain('journal-unwritable');
+  });
+
+  it('an observation sidecar whose draining file is gone is not a held file, however old (review 316 F20)', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-orphan-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const dir = healthPath.join(box.home, '.ccrc', 'history', 'spool', '.draining');
+    healthFs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    healthFs.writeFileSync(healthPath.join(dir, 'x.900.1.obs'), JSON.stringify(fullObs(Date.now() - 6 * 60 * 60_000)), { mode: 0o600 });
+    expect(wordsOf(statusOf(box).env!['health']['fail'])).not.toContain('journal-unwritable');
+    healthFs.writeFileSync(healthPath.join(dir, 'x.900.1.jsonl'), '');                                              // CONTROL: its file is live
+    expect(wordsOf(statusOf(box).env!['health']['fail'])).toContain('journal-unwritable');
+  });
+
   // F1's second arm: the extras' own reader open fails after the envelope's read succeeded (seam: the third
   // `PRAGMA query_only = ON`, preload-faults' Task 28F block).
   it('a reader open that fails after the status read succeeded is FAIL status-unreadable naming the store, exit still 0', () => {

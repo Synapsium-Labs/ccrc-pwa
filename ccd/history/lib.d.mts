@@ -27,6 +27,7 @@ export const SWITCHES: Readonly<{
 
 export const SPOOL_LINE_MAX: number;
 export const SPOOL_FILE_MAX: number;
+export const OBS_FILE_MAX: number;
 export const SPOOL_FILE_LINES_MAX: number;
 export const SPOOL_ID_MAX: number;
 export const STATFS_DEADLINE_MS: number;
@@ -220,9 +221,12 @@ export function decideOpGate(form: string | null, env: { claudecode: boolean; hi
 export interface Observation {
   v: 1; observedMs: number;
   uuid: Presence<string>; generation: Presence<string>; project: Presence<string>; workdir: Presence<string>;
-  journaled: null | { t: number; storeId: string; writer: string };
+  late: null | ({ observedMs: number } & Pick<Observation, 'uuid' | 'generation' | 'project' | 'workdir'>);
+  journalT: number | null;
+  journaled: null | { t: number; storeId: string; writer: string; bytes: number };
   heldMatches: Record<string, number>;
 }
+export function observationOk(o: unknown): o is Observation;
 export function joinGeneration(i: { lineGen: string | null; observedGen: Presence<string> }):
   { generation: string; via: 'line' | 'registry' | 'absent' | 'unreadable' };
 export type EpochLineVerdict =

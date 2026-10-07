@@ -442,6 +442,7 @@ function oldestUnjournaledMs(p) {
   try { names = healthFs.readdirSync(p.draining); } catch (e) { return { oldest: null, unreadable: !absent(e) }; }
   let oldest = null;
   let unreadable = false;
+  const present = new Set(names);
   for (const n of names) {
     if (!n.endsWith('.obs')) continue;
     const file = healthPath.join(p.draining, n);
@@ -458,9 +459,14 @@ function oldestUnjournaledMs(p) {
       if (!absent(e)) unreadable = true;           // ENOENT: the sweep unlinked it between the listing and the read
       continue;
     }
+    // D-4347 (history-planted-entries-never-wedge): an orphan the sweep's next drain removes is not a held file. This is
+    // judged AFTER the read, so a FIFO, directory or mode-000 sidecar still reads unreadable, as above.
+    if (!present.has(`${n.slice(0, -'.obs'.length)}.jsonl`)) continue;
     let o;
     try { o = JSON.parse(text); } catch { continue; }   // unparseable CONTENT the sweep's own reader also skips (readSidecar: null, then re-observed); a non-regular entry it does NOT skip, see above
-    if (o !== null && typeof o === 'object' && o.journaled === null && typeof o.observedMs === 'number'
+    // The sweep's own predicate (lib's observationOk, D-4347): a sidecar the sweep would not use is not a held record;
+    // the sweep rewrites it at its next journaling.
+    if (healthLib.observationOk(o) && o.journaled === null
       && (oldest === null || o.observedMs < oldest)) oldest = o.observedMs;
   }
   return { oldest, unreadable };
