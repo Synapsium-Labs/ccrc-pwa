@@ -3119,7 +3119,7 @@ limit closes (at `858caf47d` the `\u` half of the one-pass limit was not: 0 red,
 | 5 | F9 | a residue-bearing key is a finding (the shared `scan()`) | "names a leaking KEY by its index …", the F1 KEY row and "--scan reads KEYS too …" (the key finding deleted: 3 red, the implementer's count; task A's review, guarding that finding off in `--scan` mode only, reds 1, "--scan reads KEYS too …") |
 | 5 | F9 | a file that is not JSON, a badly named version directory or file, nothing to scan, the argument count | "--scan fails closed on a fixture file that is not JSON …"; "--scan fails closed on a directory that is not a version and on a fixture file whose name is not a name …" (each name arm); "--scan of a directory with nothing to scan fails …"; "--scan refuses a missing directory argument and a surplus one …" (each way): 1 red each |
 | 5 | F9 | the string and key tallies | "--scan of an unplanted copy …" and the corpus row (2 red each) |
-| 5 | F9 (task A re-review n1/n2; re-review 2 m2) | the `--scan` file index is a file's place in its directory's code-unit order (`LC_ALL=C ls`) | "--scan names a file by its place in the code-unit-sorted list of its directory: every fixture of a version, each planted, pairs index and file exactly (F9)" — all 14 fixtures of a version planted under keys that name them: the pointer finding's `#${i}` made `#0` reds 1; a punctuation-blind locale sort reds 2 (this row and the bad-names row); deleting `jsonIn`'s `.sort()` is an EQUIVALENT mutant (0 red): Node's `readdirSync` already returns names in `strcmp` order (libuv sorts scandir; `ls -U` lists the same directory otherwise, measured). The controller's measurements, at the row's final form |
+| 5 | F9 (task A re-review n1/n2; re-review 2 m2) | the `--scan` file index is a file's place among its directory's `*.json` regular files, in code-unit order (the order `LC_ALL=C ls` gives over them) | "--scan names a file by its place in the code-unit-sorted list of its directory: every fixture of a version, each planted, pairs index and file exactly (F9)" — all 14 fixtures of a version planted under keys that name them: the pointer finding's `#${i}` made `#0` reds 1; a punctuation-blind locale sort reds 2 (this row and the bad-names row); deleting `jsonIn`'s `.sort()` is an EQUIVALENT mutant (0 red): Node's `readdirSync` already returns names in `strcmp` order (libuv sorts scandir; `ls -U` lists the same directory otherwise, measured). The controller's measurements, at the row's final form |
 | 5 | F9 (task A review m3) | `--scan` refuses a fixture file name with residue, and reads no further into it | "--scan refuses a fixture file whose name passes the shape test but carries residue, named by index and never by its text (m3)" (` \|\| residue(base)` deleted: 1 red; the `return` after the name finding deleted: 1 red, its planted-body half) |
 | 5 | F9 (task A review m3) | `--scan` names every file by index, never by its name | "--scan fails closed on a fixture file that is not JSON …" (the unreadable-JSON finding named by text: 1 red); the two planted-value rows, the planted-KEY row and "--scan reads the matrix.json …" (pointer findings named by text: 4 red) |
 | 5 | F9 (task A review m4) | main mode's argument check: a surplus argument, a missing fixtures directory, a missing raw root | "refuses missing arguments with exit 2, and a surplus one, and an empty one (m4)": 1 red each for ` \|\| args.length > 2`, `!outDir` and `!raw` deleted (at `858caf47d` the first two reddened nothing, task A's review) |
@@ -3179,6 +3179,9 @@ by the commit it was measured at, `e56a9e0ef`, and counts rows red, not assertio
 | 5 | F4 | an absolute path whose first segment starts outside `ABS`'s class stays unscanned (the known limit: `ABS` is not closed) | "an absolute path whose first segment starts outside `[A-Za-z0-9._-]` is not scanned (declared limit, not a guarantee) … (review 304 F4)" (a `/` followed by a character outside the class, and not an end character, made residue: 2 red: that row and "scans the decoded spelling of a JSON-escaped slash … (N1)", whose benign `\/\/` controls (`a \/\/ b`) the broad form refuses; the same with `\` left out of the character set: 1 red, that row; the corpus row stays green, 0 such strings), `c51428ae8` |
 | 5 | F5 | an empty `--scan` directory argument is a usage error: exit 2 and the usage text, not the internal-error line | "--scan refuses an EMPTY directory argument with exit 2 and the usage text, not the internal-error line (review 304 F5)" (`\|\| !outDir` deleted from the scan arm of the argument check: 1 red), `c51428ae8` |
 | 5 | F6 | `jsonIn` counts only regular files: a `*.json` directory or dangling link is skipped, uncounted and unnamed (the header's wording) | "--scan skips a `*.json` entry that is not a regular file, uncounted and unnamed: a later file keeps its index among the regular files (review 304 F6)" (the `isFile` filter deleted, which reddened nothing before this row: 1 red; the filter moved into `readAll`, so the skipped entries are counted: 1 red), `c51428ae8` |
+| 5 | F4 | only the FIRST segment goes unscanned: a later `/` is scanned like any other (the header's wording, task B fix round 1) | the F4 row's refused side, `x /@/srv/acme`, `x /~x:/srv/acme`, `x /~x@/srv/acme`, `x /~x=/srv/acme`, `x //~someone/acme` (`ABS`'s lookbehind widened by `@`: 2 red, that row and "a `/` glued after a letter, a digit, `.`, `_`, `~` or `-` is not scanned … (F11)"; the `DOUBLE_ODD` check deleted: 4 red, that row, "a `//` at a host position followed by a character that cannot start a name is residue … (I3b)", "scans the decoded spelling of a JSON-escaped slash … (N1)" and "an escape IS chased where an earlier pass produces a later kind … (m1)"; the three mutations of the F1 and F4 pin lines above, re-measured at this sha, give the same 3, 2 and 1 red), `b93dc9894` |
+| 5 | F6 | `jsonIn` stats, it does not lstat: a link to a regular file is a file of its directory, counted and read (the header's "a stat, so a link to one counts") | "--scan counts a link to a regular file and reads it: residue behind the link is named by the link's index among the regular files (review 304 F6)" (`jsonIn` on an lstat: 1 red; it reddened nothing before this row), `b93dc9894` |
+| 5 | F6 | a directory named `*.json` in the top directory is judged as a version directory: a finding named by index, never skipped (the header's "one in the top directory is judged as a version directory") | "--scan judges a directory named `*.json` in the top directory as a version directory: a finding named by index, never skipped (review 304 F6)" (the version-directory pass skipping a `*.json` name: 1 red; it reddened nothing before this row), `b93dc9894` |
 
 ## After the merge (coordinator): the real-lane cross-check
 
@@ -3427,18 +3430,20 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
       guarantee) …" passes `-media-vol-client`, `-data-acme-client-proj`, `-Home-x` and `x -Mnt-vol-0000`, and
       refuses each of the ten listed tops.
 
-  Corrected in wave 2 (review 304 F1, F4, F5, F6), true from `c51428ae8`; the coordinator ruled F1, F4, F5 and F6, and no
-  number is issued for them. The sanitiser's behaviour is unchanged except F5; the rest is claims narrowed to the code,
-  each limit pinned by a row that reds when it closes:
+  Corrected in wave 2 (review 304 F1, F4, F5, F6): true from `c51428ae8`, and from `b93dc9894` where task B's fix round 1
+  narrowed F4's and F6's wording again (below); the coordinator ruled F1, F4, F5 and F6, and no number is issued for
+  them. The sanitiser's behaviour is unchanged except F5; the rest is claims narrowed to the code, each limit pinned by
+  a row that reds when it closes:
   - **F1: a `..` is residue only at the string's start or right after a `/`.** The "`..` traversal" earlier in this
     entry, and the header's "a `..` path segment", meant exactly that, what `DOTDOT = /(^|\/)\.\.(\/|$)/` catches
     (`../srv/x`, `/rig/../srv/x`, `cd ../../srv/x`). A `..` after a space, `=` or a quote (`x ../srv/acme`,
     `x=../srv/acme`, `"../srv/acme"` inside a longer string, `x ..`) is a KNOWN LIMIT, and since the `/` behind it
     follows a `.` (F11's glued slash) the path after it is not scanned either. The committed corpus holds such
     strings: raw-worktree's own ` ../raw-wt`, the rig's relative path to its own raw worktree, 18 of them in 9 files
-    (`grep -rhoF ' ../raw-wt'` over the corpus, measured at `c51428ae8`). `DOTDOT` is not widened: that would red those 18
-    strings in fixtures of versions that are no longer installed (2.1.280 and 2.1.281), where a re-capture cannot respell
-    them. "a `..` that is not at the start of the string or right after a `/` is not scanned (declared
+    (`grep -rhoF ' ../raw-wt'` over the corpus, measured at `c51428ae8`). `DOTDOT` is not widened: that would red every one of
+    the 18, two to a file in each version's `raw-worktree.json` (9 files, one per version, 2.1.280 to 2.1.291), installed
+    versions included. A re-capture could respell the installed ones, but not the four in 2.1.280 and 2.1.281, which are
+    no longer installed. "a `..` that is not at the start of the string or right after a `/` is not scanned (declared
     limit, not a guarantee) … (review 304 F1)" passes `x ../srv/acme`, `x=../srv/acme`, `cmd ../raw-wt`, `x ..` and
     `x "../srv/acme" y`, refuses `../srv/acme` and `cd ../../srv/acme`, and asserts that the corpus does hold the
     ` ../raw-wt` spelling; the block's "fails closed on a `..` path segment …" row is retitled "… at the string's
@@ -3446,13 +3451,16 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   - **F4: a first segment that starts outside `[A-Za-z0-9._-]` is not scanned.** `ABS` is a `/` followed by that class,
     so `x /~someone-else/acme`, `"/~someone-else/acme"`, `cd /~someone-else/acme && ls`, `x /@scope/srv/acme`,
     `x /$HOME/srv/acme`, `x /+x/srv/acme`, `x /=x/srv/acme` and `x /%7Esomeone-else/acme` pass, and `x /srv/acme` does
-    not. It is a second exception to fix round 2's "A `/` after any other character is scanned, except the `/` of a
-    COMPLETE closing tag" above, which presented its one exception as the only one, and the header's allowlist rule
-    (an absolute path is residue unless its first segment is `rig`, `usr` or `bin`) holds of a path whose first segment
-    starts inside the class. Both header sentences are corrected, and the limit has its own header bullet. "an absolute
+    not. Only the FIRST segment goes unscanned: a later `/` is scanned like any other, so the rest of the path escapes
+    only where that `/` follows a name character (F11's glued slash; in each of the eight probes it does), and
+    `x /@/srv/acme`, `x /~x:/srv/acme`, `x /~x@/srv/acme`, `x /~x=/srv/acme` and `x //~someone/acme` are refused (task B's
+    fix round 1 narrowed the header's first wording, which said the whole path passes). It is a second exception to
+    fix round 2's "A `/` after any other character is scanned, except the `/` of a COMPLETE closing tag" above, which
+    presented its one exception as the only one, and the header's allowlist rule (an absolute path is residue unless its
+    first segment is `rig`, `usr` or `bin`) holds of a path whose first segment starts inside the class. Both header sentences are corrected, and the limit has its own header bullet. "an absolute
     path whose first segment starts outside `[A-Za-z0-9._-]` is not scanned (declared limit, not a guarantee) …
-    (review 304 F4)" passes the eight probes and refuses the control. The corpus holds none of these shapes (0 in 127
-    files).
+    (review 304 F4)" passes the eight probes and refuses the control and those five. The corpus holds none of these
+    shapes (0 in 127 files).
   - **F5: `--scan ''` is a usage error.** It passed the argument check, reached `readdirSync('')`, printed
     `sanitize: internal error (no detail printed)` and exited 1, so a usage error and an I/O fault gave one answer. An
     empty directory argument now prints the usage text and exits 2, as `--scan` with no argument and main mode's empty
@@ -3465,11 +3473,18 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
     there are none (the sentence above, "as `LC_ALL=C ls` lists them", was corrected in place for that). An entry
     named `*.json` that is not a regular file is not counted, and no file finding names it: a directory of that name
     inside a version directory, and a dangling link anywhere, give no finding at all, and one in the top directory is
-    judged as a version directory (its name fails `VERSION`: a finding `#<i> (version directory name)`). A version
-    directory's own finding `#<i>` counts among the directories, a sequence of its own, told apart from a file finding
-    only by its suffix `(version directory name)`. The header's `--scan` lines and the comment above `scanCorpus` say
+    judged as a version directory (its name fails `VERSION`: a finding `#<i> (version directory name)`). That
+    finding, `#<i>` for a directory whose name fails `VERSION`, counts among the directories, a sequence of its own, told
+    apart from a file finding only by its suffix `(version directory name)`; a directory whose name passes is named by
+    its text. The header's `--scan` lines and the comment above `scanCorpus` say
     so. No code changed; the wording is pinned by "--scan skips a `*.json` entry that is not a regular file, uncounted
-    and unnamed … (review 304 F6)", added because the `isFile` filter had no row (deleting it reddened nothing).
+    and unnamed … (review 304 F6)", added because the `isFile` filter had no row (deleting it reddened nothing), and,
+    from `b93dc9894`, by one row for each of the two clauses that still had none: "--scan counts a link to a regular
+    file and reads it … (review 304 F6)" (an lstat in `jsonIn` reddened nothing before it) and "--scan judges a directory
+    named `*.json` in the top directory as a version directory … (review 304 F6)" (skipping such a directory in the
+    version-directory pass reddened nothing before it). The comment above `scanCorpus` had said a version directory is
+    named `#<i>` once it passes `VERSION`; it is the reverse, and is now worded as the code does: a name that FAILS
+    `VERSION` is `#<i>`, one that passes is named by its text.
 - **D-4008** — `census-malformed-and-unreadable-distinct` (Task 8 review): the plan's census folded an unparsable meta
   into `found:true, keys:[]` (identical to a valid meta with no `worktreePath` — an overloaded value at a seam), a
   malformed or path-less wf meta into `metaMissing`, and an unreadable home into "nothing there". It now reports
