@@ -70,6 +70,20 @@ describe('the one executor', () => {
     expect(s.calls[1]!.slice(0, 5)).toEqual(['ws-expire', '--expect', TOK, '--session', ID]);
   });
 
+  it('an expiry that KEPT a leaf carries the words, and its feed row says what was kept and why; an older ccd’s silence is said too (wave 5)', async () => {
+    const doc = (over: Record<string, unknown>): string => JSON.stringify({ expired: ID, archivedAt: ARCH, wip: null, attic: 3, residueBytes: 0, secretsDropped: 0, ...over });
+    const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) },
+      verb: { code: 0, stdout: doc({ clipsKept: null, tmpRootKept: 'in-use' }) } } });
+    const out = await expireArchived(s.deps, s.req);
+    expect(out).toMatchObject({ kind: 'expired', kept: { clips: null, tmpRoot: 'in-use' } });
+    recordExpireFeed({ coord: s.coord, notifyLog: s.deps.notifyLog }, out);
+    expect(s.coord.feedEvents(5)[0]!.body).toContain('; ccd kept its temp root (in-use: a process still used it after the bounded wait) — it stays on disk.');
+    const old = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) }, verb: { code: 0, stdout: doc({}) } } });
+    const o2 = await expireArchived(old.deps, old.req);
+    recordExpireFeed({ coord: old.coord, notifyLog: old.deps.notifyLog }, o2);
+    expect(old.coord.feedEvents(5)[0]!.body).toContain('whether its clips directory and temp root were removed is not reported by this box’s ccd (an older build), so it is unmeasured');
+  });
+
   it('SHADOW (no `expire-lane-live`): audits and answers "would expire" — ws-expire is never composed', async () => {
     const s = await rig({ live: false, script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK, sensitive: ['.env', 'id_rsa'] }) } } });
     expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'would-expire', sensitive: 2 });

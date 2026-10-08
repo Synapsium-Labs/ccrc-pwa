@@ -8,7 +8,7 @@ import { CCD_ARGV, EXPIRE_CAP, capSupported, sweepDec, verbSupported } from '../
 import type { CoordStore } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import {
-  EXPIRE_LANE_LIVE_MARKER, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, parseExpireAudit, parseExpireResult, reviewKeeps,
+  EXPIRE_LANE_LIVE_MARKER, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, expireKeptParts, parseExpireAudit, parseExpireResult, reviewKeeps,
   type ArchivedExpiryOutcome, type ExpireAuditRead, type ExpiryStoreRead,
 } from '../archivedExpiry.js';
 
@@ -111,7 +111,7 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
     return answer({ kind: 'deferred', why: 'unsupported', detail: `the fleet host does not advertise ${EXPIRE_CAP}` });
   }
   switch (verb.kind) {
-    case 'expired': return answer({ kind: 'expired' }, { wip: verb.wip, secretsDropped: verb.secretsDropped });
+    case 'expired': return answer({ kind: 'expired', kept: verb.kept }, { wip: verb.wip, secretsDropped: verb.secretsDropped });
     case 'refused':
       return EXPIRE_TOKEN_KIND[verb.token] === 'gone' ? answer({ kind: 'gone' })
         : answer({ kind: 'refused', token: verb.token, detail: verb.detail, inUse: [] });
@@ -230,7 +230,14 @@ export function expireFeedBody(r: ExpireArchivedResult): string {
         ? 'uncommitted work was pinned, its commit id unreadable' : `uncommitted work was pinned as ${r.wip}`;
       const secrets = typeof r.secretsDropped === 'number' && r.secretsDropped > 0
         ? `; ${r.secretsDropped} secret-shaped ${r.secretsDropped === 1 ? 'path was' : 'paths were'} dropped and recorded` : '';
-      return `${who} was cleaned up: its commits are kept in the attic (ccd ws-attic --session ${r.sessionId}), ${wip}${secrets}.`;
+      // What the tail kept of its two leaves (wave 5): each kept word, or — an older ccd that does not report them — that
+      // whether they went is not known. Recorded here; only a kept word is an attention entry.
+      const kept = expireKeptParts(r.kept);
+      const leaves = kept.length > 0 ? `; ccd kept ${kept.join(' and ')} — it stays on disk`
+        : r.kept.clips === 'unreported' || r.kept.tmpRoot === 'unreported'
+          ? '; whether its clips directory and temp root were removed is not reported by this box’s ccd (an older build), so it is unmeasured'
+          : '';
+      return `${who} was cleaned up: its commits are kept in the attic (ccd ws-attic --session ${r.sessionId}), ${wip}${secrets}${leaves}.`;
     }
     case 'would-expire':
       return `${who} would be cleaned up now — the cleanup is not armed (shadow), so nothing was deleted`

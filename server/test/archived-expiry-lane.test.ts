@@ -270,6 +270,33 @@ describe('the lane SHIPS SHADOWED', () => {
     expect(f.entry('demo-a'), 'finished with').toBeUndefined();
   });
 
+  it('an expiry that KEPT a leaf is listed after its row is gone — the only trace of what stays on disk (wave 5)', async () => {
+    const f: Fixture = await fixture({ expire: (id) => {
+      for (const n of readdirSync(f.reg).filter((x) => x.startsWith(`${id}.`))) rmSync(path.join(f.reg, n));   // ccd purges the row
+      return { code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0,
+        clipsKept: 'refused', tmpRootKept: null }), stderr: '' };
+    } });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    for (let k = 0; k < 3; k += 1) { f.next(); await f.pass(); }
+    await f.watcher.tick();
+    const list = f.watcher.currentCoord()?.expiryAttention ?? [];
+    expect(list.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'kept']]);
+    expect(list[0]!.sentence).toContain('ccd kept its clips directory (refused');
+    expect(f.verbsFor('ws-expire'), 'composed once — its row is gone, so there is nothing to ask again (the policy case pins the +∞)').toEqual(['demo-a']);
+  });
+
+  it('an OLDER ccd that reports no kept leaves raises no entry — the feed row says it is unmeasured (wave 5)', async () => {
+    const f = await fixture();
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.entry('demo-a'), 'finished with').toBeUndefined();
+    expect(f.coord.feedEvents(5).find((e) => e.title === 'archived workspace cleaned up')?.body).toContain('so it is unmeasured');
+  });
+
   it('at most ONE ws-expire is composed per pass, fleet-wide', async () => {
     const f = await fixture();
     f.touch(EXPIRE_LANE_LIVE_MARKER);

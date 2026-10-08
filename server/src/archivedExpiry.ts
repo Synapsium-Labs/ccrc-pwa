@@ -196,6 +196,43 @@ function lockUnopenable(err: string): string | null {
   return lines.slice(0, -1).every((l) => bashLine.test(l)) ? last.slice('ccd: '.length) : null;
 }
 
+/** One leaf the shared tail removes last (the clips directory, the per-session temp root), as the `expired` document
+ *  reports it (`clipsKept`, `tmpRootKept`; CCR-15's 4462): ccd's word for a leaf it KEPT — `refused` (its removal
+ *  helper refused it), `unmeasured` (whether it could be removed could not be measured) or `in-use` (a process still
+ *  used it after the bounded wait) — or `null` when nothing was kept. A key that is ABSENT is an older ccd's document,
+ *  which says nothing either way: `unreported`, never folded into `null` (that would read "removed"). A value this
+ *  build does not know is a kept leaf, `unmeasured` — ccd prints only its three words, and any other value means a
+ *  leaf stood. Named keys only, so a newer ccd's other keys change nothing here (agent-first stays safe). */
+export type ExpireLeafKept = KeptLeafWord | null | 'unreported';
+const KEPT_LEAF_WORDS = ['refused', 'unmeasured', 'in-use'] as const;
+/** ccd's three words for a leaf it kept. */
+export type KeptLeafWord = typeof KEPT_LEAF_WORDS[number];
+
+/** THE WORD HALF: the ONE word reader of `clipsKept`/`tmpRootKept`. ccd's three words map to themselves; any other
+ *  value is `unmeasured` — a leaf stood. `null` and an absent key are the carrier's to tell, never this reader's: the
+ *  caller asks them first (`expireLeafKept`, the done document's carrier). CCR-15 wave 8's mirror carrier (a word,
+ *  `unreported` or `truncated`) imports this, or moves it to a neutral L1 home — a move, never a second copy. */
+export function keptLeafWord(v: unknown): KeptLeafWord {
+  return typeof v === 'string' && (KEPT_LEAF_WORDS as readonly string[]).includes(v) ? v as KeptLeafWord : 'unmeasured';
+}
+
+/** THE ONE READER of a kept-leaf key on the `expired` document — the done document's CARRIER composed with
+ *  `keptLeafWord`, the one word reader of `clipsKept`/`tmpRootKept`: `null` → `null` (removed), ABSENT → `unreported`
+ *  (an older ccd), and any other value → its word. */
+export function expireLeafKept(doc: Record<string, unknown>, key: 'clipsKept' | 'tmpRootKept'): ExpireLeafKept {
+  if (!Object.prototype.hasOwnProperty.call(doc, key)) return 'unreported';
+  const v = doc[key];
+  return v === null ? null : keptLeafWord(v);
+}
+
+/** What an expiry kept of its two leaves. */
+export interface ExpireKept { readonly clips: ExpireLeafKept; readonly tmpRoot: ExpireLeafKept }
+
+/** Did it keep anything — a word on either leaf? `unreported` is not a kept leaf: an older ccd said nothing, and a
+ *  rollout skew must not raise an alarm on every expiry (it is recorded in the feed row only). */
+export const expireKeptAny = (k: ExpireKept): boolean =>
+  (k.clips !== null && k.clips !== 'unreported') || (k.tmpRoot !== null && k.tmpRoot !== 'unreported');
+
 /** The ws-expire `{"failed":…}` words that ccd prints before THIS attempt's tombstone and breadcrumb — so this attempt
  *  started nothing, and neither is retried from where it stopped (the reclaim side's twin is CCR-15's 4457). Each is
  *  READ its own way (`parseExpireResult`):
@@ -228,7 +265,7 @@ export const isExpirePreCrumbFailed = (word: string): boolean => (EXPIRE_PRE_CRU
  *  a call cut short: `failed`, resumable. */
 export type ExpireVerbRead =
   | { readonly kind: 'expired'; readonly archivedAt: number | null; readonly wip: string | null | 'unreadable';
-      readonly secretsDropped: number | 'unreadable' }
+      readonly secretsDropped: number | 'unreadable'; readonly kept: ExpireKept }
   | { readonly kind: 'refused'; readonly token: ExpireToken; readonly detail: string }
   | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string }
   /** A `failed` document the lane must START OVER from (wave 5, the coordinator's ruling on question (h)): ccd printed
@@ -249,7 +286,8 @@ export function parseExpireResult(sessionId: string, stdout: string, stderr: str
       const wip = v.wip === null ? null : typeof v.wip === 'string' && WIP_SHAPE.test(v.wip) ? v.wip : 'unreadable';
       const secretsDropped = typeof v.secretsDropped === 'number' && Number.isSafeInteger(v.secretsDropped)
         && v.secretsDropped >= 0 ? v.secretsDropped : 'unreadable';
-      return { kind: 'expired', archivedAt: epochOrNull(v.archivedAt), wip, secretsDropped };
+      return { kind: 'expired', archivedAt: epochOrNull(v.archivedAt), wip, secretsDropped,
+        kept: { clips: expireLeafKept(v, 'clipsKept'), tmpRoot: expireLeafKept(v, 'tmpRootKept') } };
     }
     if (typeof v.refused === 'string') {
       const detail = typeof v.detail === 'string' ? v.detail : '';
@@ -383,7 +421,10 @@ export type ExpiryReport =
   /** `final`: the row is not asked again for this archive — a composition error, or a failure the box said will not
    *  resume — so its sentence never promises a retry. Absent on a failure that is still being retried. */
   | { readonly kind: 'failing'; readonly at: number; readonly detail: string; readonly final?: true }
-  | { readonly kind: 'no-evidence'; readonly at: number };
+  | { readonly kind: 'no-evidence'; readonly at: number }
+  /** The expiry COMPLETED and kept a leaf (wave 5, the kept-leaf reader): the row is gone, so this report outlives it in
+   *  the lane's memory — until a restart, which forgets it; the feed row is the durable record. */
+  | { readonly kind: 'kept'; readonly at: number; readonly clips: ExpireLeafKept; readonly tmpRoot: ExpireLeafKept };
 
 export const archivedExpiryEntry = (archivedAt: number): ArchivedExpiryEntry => ({
   archivedAt, expiresAt: null, nextAskAt: 0, eligibleSince: null, lastOutcome: null, inUseRun: 0, inUse: [],
@@ -433,7 +474,8 @@ export function archivedExpiryLearned(entry: ArchivedExpiryEntry, read: ExpireAu
  *  terminal-refusal, non-resumable-failure and composition arms): the report is the row's only trace on the attention
  *  list, so a hold must not take its place — nothing would ever put it back. */
 export const expiryReportIsFinal = (r: ExpiryReport | null): boolean =>
-  r !== null && ((r.kind === 'failing' && r.final === true) || (r.kind === 'refused' && EXPIRE_TOKEN_KIND[r.token] === 'terminal'));
+  r !== null && ((r.kind === 'failing' && r.final === true) || (r.kind === 'refused' && EXPIRE_TOKEN_KIND[r.token] === 'terminal')
+    || r.kind === 'kept');
 
 /** One pass's verdict, folded into memory. THE TWICE-OBSERVED RULE (spec §5.3: "all of the above held on the
  *  previous pass too"): an eligible verdict seeds `eligibleSince` on its first pass and makes the row DUE only on a
@@ -482,7 +524,8 @@ export type ArchivedExpiryDeferWhy = 'unsupported' | 'paused-at-server' | Archiv
 
 /** The one executor's answer, as the lane folds it into memory. */
 export type ArchivedExpiryOutcome =
-  | { readonly kind: 'expired' }
+  /** `kept`: what the tail kept of its two leaves, CARRIED from the document (wave 5). */
+  | { readonly kind: 'expired'; readonly kept: ExpireKept }
   | { readonly kind: 'would-expire'; readonly sensitive: number }
   | { readonly kind: 'deferred'; readonly why: ArchivedExpiryDeferWhy; readonly detail: string }
   | { readonly kind: 'refused'; readonly token: ExpireToken; readonly detail: string; readonly inUse: readonly ExpireInUse[];
@@ -540,7 +583,12 @@ export function archivedExpiryNextEntry(
   const base = { ...entry, lastOutcome: archivedExpiryOutcomeKey(o) };
   const steady = { inUseRun: 0, inUse: [] as readonly ExpireInUse[], failures: 0, failingSince: null };
   switch (o.kind) {
-    case 'expired': case 'gone': return null;
+    case 'expired':
+      // A completed expiry that KEPT a leaf is reported (wave 5): the row is gone, but what stays on disk is listed,
+      // and never asked about again. An older ccd's silence (`unreported`) is the feed row's to say, not a report.
+      return expireKeptAny(o.kept) ? { ...base, ...steady, eligibleSince: null, nextAskAt: Number.POSITIVE_INFINITY,
+        report: { kind: 'kept', at: nowMs, clips: o.kept.clips, tmpRoot: o.kept.tmpRoot } } : null;
+    case 'gone': return null;
     case 'would-expire':
       return { ...base, ...steady, nextAskAt: nowMs + EXPIRE_SHADOW_REAUDIT_MS,
         report: { kind: 'would-expire', at: entry.report?.kind === 'would-expire' ? entry.report.at : nowMs, sensitive: o.sensitive } };
@@ -619,6 +667,22 @@ export function expiryInUseSentence(inUse: readonly ExpireInUse[], passes: numbe
     + 'and ending that ends every session. Nothing is deleted while it stands.';
 }
 
+/** Why ccd kept a leaf, in words — the done document's word, never more (the reason itself is in the journal row). */
+const LEAF_KEPT_WHY: Readonly<Record<KeptLeafWord, string>> = {
+  refused: 'ccd’s removal helper refused it',
+  unmeasured: 'whether it could be removed could not be measured',
+  'in-use': 'a process still used it after the bounded wait',
+};
+
+/** The leaves an expiry kept, in words — `[]` when it kept none. `unreported` is not one (see `expireKeptAny`). */
+export function expireKeptParts(k: Pick<ExpireKept, 'clips' | 'tmpRoot'>): string[] {
+  const parts: string[] = [];
+  for (const [what, w] of [['its clips directory', k.clips], ['its temp root', k.tmpRoot]] as const) {
+    if (w !== null && w !== 'unreported') parts.push(`${what} (${w}: ${LEAF_KEPT_WHY[w]})`);
+  }
+  return parts;
+}
+
 /** The words for one report. */
 export function expiryReportSentence(r: ExpiryReport, expiresAt: number | null): string {
   switch (r.kind) {
@@ -639,6 +703,10 @@ export function expiryReportSentence(r: ExpiryReport, expiresAt: number | null):
     case 'no-evidence':
       return 'not cleaned up: the fleet box’s ccd does not say when this archive expires (an older build), so the '
         + 'server composes nothing for it until the box is updated.';
+    case 'kept':
+      return `cleaned up, but ccd kept ${expireKeptParts(r).join(' and ')}. The worktree, the branch and the registry row are `
+        + 'gone and its commits are in the attic; what was kept stays on disk, and the lane deletes nothing more of it. '
+        + 'Find out what holds it before removing it by hand.';
   }
 }
 

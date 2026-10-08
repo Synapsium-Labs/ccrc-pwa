@@ -13,7 +13,7 @@ import {
   EXPIRE_FAILURE_CEILING_MS, EXPIRE_IN_USE_ATTENTION_PASSES, EXPIRE_LANE_LIVE_MARKER, EXPIRE_NO_EVIDENCE_RETRY_MS,
   EXPIRE_SHADOW_REAUDIT_MS, EXPIRE_TOKEN_KIND, archivedExpiryDue, archivedExpiryEntry, archivedExpiryEntryFor,
   archivedExpiryLearned, archivedExpiryNextEntry, archivedExpirySighted, archivedExpiryVerdict, expireAuditExpiresAt,
-  EXPIRE_PRE_CRUMB_FAILED, expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, parseExpireAudit, parseExpireResult, reviewKeeps,
+  EXPIRE_PRE_CRUMB_FAILED, expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, keptLeafWord, parseExpireAudit, parseExpireResult, reviewKeeps,
   type ArchivedExpiryEntry, type ArchivedExpiryInput,
 } from '../src/archivedExpiry.js';
 
@@ -169,7 +169,8 @@ describe('the verb’s answer — box words told apart from composition errors (
 
   it('the three documents, and an empty answer that is no die is a call cut short — resumable', () => {
     expect(parseExpireResult(ID, JSON.stringify({ expired: ID, archivedAt: 1_789_000_000, wip: null, attic: 3,
-      residueBytes: 0, secretsDropped: 0 }), '')).toEqual({ kind: 'expired', archivedAt: 1_789_000_000, wip: null, secretsDropped: 0 });
+      residueBytes: 0, secretsDropped: 0 }), '')).toEqual({ kind: 'expired', archivedAt: 1_789_000_000, wip: null, secretsDropped: 0,
+      kept: { clips: 'unreported', tmpRoot: 'unreported' } });
     expect(parseExpireResult(ID, JSON.stringify({ refused: 'in-use', detail: 'p', paths: [] }), ''))
       .toEqual({ kind: 'refused', token: 'in-use', detail: 'p' });
     expect(parseExpireResult(ID, JSON.stringify({ failed: 'pin-failed', detail: 'x' }), ''))
@@ -453,8 +454,35 @@ describe('the lane’s memory of one row', () => {
   const e = (over: Partial<ArchivedExpiryEntry> = {}): ArchivedExpiryEntry =>
     ({ ...archivedExpiryEntry(1_789_000_000), expiresAt: 1_789_604_800, eligibleSince: NOW - PASS, ...over });
 
+  it('keptLeafWord is the ONE word reader of a kept leaf: ccd’s three words are themselves, any other value is a leaf that stood (wave 5)', () => {
+    for (const w of ['refused', 'unmeasured', 'in-use'] as const) expect(keptLeafWord(w)).toBe(w);
+    for (const v of ['gone-sideways', '', 'IN-USE', ' in-use', 7, true, null, {}, []]) expect(keptLeafWord(v), JSON.stringify(v)).toBe('unmeasured');
+  });
+
+  it('THE KEPT-LEAF READER: clipsKept and tmpRootKept are read by name — a word, null, or ABSENT (an older ccd: unreported, never null) (wave 5)', () => {
+    const doc = (over: Record<string, unknown>): string => JSON.stringify({ expired: ID, archivedAt: 1_789_000_000, wip: null, secretsDropped: 0, ...over });
+    const kept = (over: Record<string, unknown>) => (parseExpireResult(ID, doc(over), '') as { kept?: unknown }).kept;
+    expect(kept({ clipsKept: null, tmpRootKept: null })).toEqual({ clips: null, tmpRoot: null });
+    expect(kept({ clipsKept: 'in-use', tmpRootKept: 'refused' })).toEqual({ clips: 'in-use', tmpRoot: 'refused' });
+    expect(kept({ clipsKept: 'unmeasured', tmpRootKept: null })).toEqual({ clips: 'unmeasured', tmpRoot: null });
+    expect(kept({}), 'an older ccd says nothing — never "removed"').toEqual({ clips: 'unreported', tmpRoot: 'unreported' });
+    expect(kept({ clipsKept: 'gone-sideways', tmpRootKept: 7 }), 'a value this build does not know is a KEPT leaf').toEqual({ clips: 'unmeasured', tmpRoot: 'unmeasured' });
+    // A kept word is reported, and never asked again; an older ccd's silence finishes the row like a clean expiry.
+    const k = archivedExpiryNextEntry(e(), { kind: 'expired', kept: { clips: 'in-use', tmpRoot: null } }, NOW, PASS)!;
+    expect(k).toMatchObject({ nextAskAt: Number.POSITIVE_INFINITY, report: { kind: 'kept', at: NOW, clips: 'in-use', tmpRoot: null } });
+    expect(expiryReportSentence(k.report!, null)).toBe('cleaned up, but ccd kept its clips directory (in-use: a process still used it after '
+      + 'the bounded wait). The worktree, the branch and the registry row are gone and its commits are in the attic; what was kept '
+      + 'stays on disk, and the lane deletes nothing more of it. Find out what holds it before removing it by hand.');
+    expect(archivedExpiryNextEntry(e(), { kind: 'expired', kept: { clips: null, tmpRoot: 'in-use' } }, NOW, PASS),
+      'a temp root kept on its own is listed too').toMatchObject({ nextAskAt: Number.POSITIVE_INFINITY,
+      report: { kind: 'kept', clips: null, tmpRoot: 'in-use' } });
+    expect(archivedExpiryNextEntry(e(), { kind: 'expired', kept: { clips: 'unreported', tmpRoot: 'unreported' } }, NOW, PASS),
+      'the rollout skew raises no alarm').toBeNull();
+    expect(archivedExpirySighted(k, { eligible: false, why: 'held' }, 'x', NOW + PASS).report, 'a hold never takes its place').toEqual(k.report);
+  });
+
   it('expired and gone finish the row; a terminal refusal and a composition error are never asked again, and reported', () => {
-    expect(archivedExpiryNextEntry(e(), { kind: 'expired' }, NOW, PASS)).toBeNull();
+    expect(archivedExpiryNextEntry(e(), { kind: 'expired', kept: { clips: null, tmpRoot: null } }, NOW, PASS)).toBeNull();
     expect(archivedExpiryNextEntry(e(), { kind: 'gone' }, NOW, PASS)).toBeNull();
     expect(archivedExpiryNextEntry(e(), { kind: 'refused', token: 'not-archived', detail: '', inUse: [] }, NOW, PASS)).toBeNull();
     const t = archivedExpiryNextEntry(e(), { kind: 'refused', token: 'containment-unproven', detail: 'd', inUse: [] }, NOW, PASS)!;

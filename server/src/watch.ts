@@ -3992,7 +3992,9 @@ export class FleetWatcher {
       if (!v.eligible && v.why === 'expiry-unknown' && now >= entry.nextAskAt) learn.push(r.id);
       if (archivedExpiryDue(entry, now)) due.push(r.id);
     }
-    for (const id of [...this.archivedExpiryState.keys()]) if (!seen.has(id)) this.archivedExpiryState.delete(id);
+    // A row that left the population is forgotten — save one whose expiry COMPLETED and kept a leaf (wave 5): it is gone
+    // from the registry by definition, and its report is the only trace of what stays on disk until a restart.
+    for (const [id, e] of [...this.archivedExpiryState]) if (!seen.has(id) && e.report?.kind !== 'kept') this.archivedExpiryState.delete(id);
     // THREE — learn: one audit at a time, each on its session's queue. The slots go in `nextAskAt` order — a row never
     // asked (0) first, then the rows asked longest ago — never registry order, so rows that keep failing cannot take
     // every slot from a row behind them (review 313, parked item 1). The sort is stable: ties keep registry order.
