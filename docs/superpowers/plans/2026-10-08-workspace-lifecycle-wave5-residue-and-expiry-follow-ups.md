@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. The execution method is chosen (a dispatched fleet worker, subagent-driven); there is no hand-off question.
 
-**Goal:** Close review 339's residue on the dead-coordinator lane — its five ARMING BLOCKERS first (F1, F2, F3, F13 and the worker's open item 2), then F4, F5's spec sentence and the wave-4 plan's corrections — and then the expiry lane's four follow-ups: a pre-breadcrumb `state-changed` read as final (an arming blocker), the kept-leaf reader, the lane's answer to a repeating resumable failure, and `ws-expire`'s in-lock window close. Both lanes stay SHADOWED.
+**Goal:** Close review 339's residue on the dead-coordinator lane — its five ARMING BLOCKERS first (F1, F2, F3, F13 and the worker's open item 2), then F4, F5's spec sentence and the wave-4 plan's corrections — and then the expiry lane's four follow-ups: a pre-breadcrumb `state-changed` audited afresh (an arming blocker), the kept-leaf reader, the lane's answer to a repeating resumable failure (a persistent tier that never strands a row), and `ws-expire`'s in-lock window close. Both lanes stay SHADOWED.
 
 **Architecture:** Server-side, every change lives in the files wave 4 and wave 3b shipped: the L1 verdicts (`server/src/deadCoordinator.ts`, `server/src/archivedExpiry.ts`), their one executors (`server/src/coord/endDeadCoordinator.ts`, `server/src/coord/expireArchived.ts`), `closeRun`'s sweep arm (`server/src/coord/close.ts`), the lifecycle mirror (`server/src/coord/mirror.ts`) and the two sibling passes in `server/src/watch.ts`. One ccd change: `_ws_expire_locked` refuses `failed` `state-changed` when its two branch reads disagree, reusing CCR-15 wave 6's three-way read, before the tombstone and the breadcrumb. One wire word is added (`ExpiryAttention.kind` gains `kept`, additive; an older PWA renders it `reported`). No route, no migration, no `FLEET_PROTO` bump, and no arming path: `expire-lane-live` and `dead-coordinator-lane-live` keep NO writer in the tree.
 
@@ -12,7 +12,7 @@
 
 > **Departure numbers.** This plan names its departures by SLUG under `## Deviations found` and defines no number. The run's brief issues the numbers: the worker writes them bare, in the order `## Deviations found` lists the slugs, each in the entry that defines it, in the commit of the first task that makes the change — never a guessed number. Fourteen slugs; the block issued is sixteen, so two are reported unused. A departure found while executing is reported for a number, never typed.
 
-> **The `state-changed` reading (ruling B1), decided by measurement.** On `origin/main` `b0647d850` NO `ws-expire` path prints a `{"failed":"state-changed"}` document at all: every `state-changed` the expiry prints is a REFUSAL document (`{"refused":…}`, exit 0 — the token mismatch at `_ws_expire_locked`'s verdict point and the resume's re-archived epoch in `_ws_expire_resume_eval`), already read `retry` by `EXPIRE_TOKEN_KIND`. The only `failed` `state-changed` in ccd is `_ws_reclaim_locked`'s (ws-reclaim's own verb, which an expiry never reaches). Task 11 (B4) adds the expiry's first producer, after the pin and BEFORE the tombstone and the breadcrumb. So the expiry's only `failed` `state-changed` prints on its FRESH arm, before the breadcrumb, and Task 8 makes the parser read it as NOT resumable, red-first. A census test over ccd/ccd holds that: it places EVERY non-comment occurrence of either pre-breadcrumb word, however it is spelled, by function and shape (a stopping line, not one spelling), and holds the expiry's `failed` `state-changed` on its fresh arm, before the breadcrumb. `pin-failed` and `tombstone-unwritable` stay resumable: the shared tail prints each after the breadcrumb (eight and five producers, measured), so the word alone cannot say nothing started — that waits for CCR-15 wave 7's `crumb` field. **A known gap, unchanged from `main` and put to the operator (question (k)):** `probe-unmeasured`, which `main` already reads as final, is printed at `_ws_expire_locked`'s verdict point on EVERY arm. On a RESUMED expiry an earlier attempt's breadcrumb stands and the tree may be part-deleted (`_ws_expire_resume_eval`'s unmeasured exits: a tombstone it cannot read, or a tmux probe that did not answer), so one transient probe failure there stops the lane for that archive until a restart. This plan does not widen it (the new producer is fresh-arm only) and does not change it.
+> **The `state-changed` reading (ruling B1, and the coordinator's ruling of 2026-10-08 on question (h)), decided by measurement.** On `origin/main` `b0647d850` NO `ws-expire` path prints a `{"failed":"state-changed"}` document at all: every `state-changed` the expiry prints is a REFUSAL document (`{"refused":…}`, exit 0 — the token mismatch at `_ws_expire_locked`'s verdict point and the resume's re-archived epoch in `_ws_expire_resume_eval`), already read `retry` by `EXPIRE_TOKEN_KIND`. The only `failed` `state-changed` in ccd is `_ws_reclaim_locked`'s (ws-reclaim's own verb, which an expiry never reaches). Task 11 (B4) adds the expiry's first producer, after the pin and BEFORE the tombstone and the breadcrumb. So the expiry's only `failed` `state-changed` prints on its FRESH arm, before the breadcrumb — nothing was deleted — and Task 8 reads it, red-first, as the reclaim side's "not resumable" means it: START OVER, never final (question (h), ruled). The lane forgets the instant and the sightings it learned and audits the row afresh, so a fresh audit mints a token over what stands; Task 11 measures that nothing the refusal leaves is misread by that audit. A census test over ccd/ccd holds that: it places EVERY non-comment occurrence of either pre-breadcrumb word, however it is spelled, by function and shape (a stopping line, not one spelling), and holds the expiry's `failed` `state-changed` on its fresh arm, before the breadcrumb. `pin-failed` and `tombstone-unwritable` stay resumable: the shared tail prints each after the breadcrumb (eight and five producers, measured), so the word alone cannot say nothing started — that waits for CCR-15 wave 7's `crumb` field. **A known gap, unchanged from `main`, ROUTED to this programme's wave 6 (question (k)) — an ARMING BLOCKER for the expiry lane until then:** `probe-unmeasured`, which `main` already reads as final, is printed at `_ws_expire_locked`'s verdict point on EVERY arm. On a RESUMED expiry an earlier attempt's breadcrumb stands and the tree may be part-deleted (`_ws_expire_resume_eval`'s unmeasured exits: a tombstone it cannot read, or a tmux probe that did not answer), so one transient probe failure there stops the lane for that archive until a restart. This plan does not widen it (the new producer is fresh-arm only) and does not change it: the resumed arm's `probe-unmeasured` keeps `main`'s final reading in this wave. The fix is wave 6's, after CCR-15 wave 7 is on `main`: `_ws_expire_locked` sets wave 7's `crumb` (the global `_WS_RCL_CRUMB`) on its resumed arm, and the parser reads a failed document with `crumb: true` as resumable — so it backs off and, after a day, reaches Task 10's persistent tier.
 
 ## Global Constraints
 
@@ -31,7 +31,7 @@
 - **Deviation numbers.** Fourteen departures, by slug; the brief issues the numbers. No `D-<n>` token is written for a new number in any code comment, test title or doc this plan touches: comments name review 339's finding (`review 339, F3`) or the ruling (`wave 5`). This plan's blocks edit two ledger entries of the wave-4 plan (F6, F7): `deviation-refs.test.ts` reads every plan's column-0 entry lines — this plan's blocks included — so those two are FRAGMENT blocks that never quote an entry line whole.
 - **No hostnames, IPs, tailnet names or docserver URLs** anywhere in the diff (`topology-clean.test.ts`).
 - **Overlap (the coordinator's ruling C).** No live claims on `ccrc-pwa` at planning time. Likely concurrent: CCR-15 child-reclamation wave 7 (`ccd/ccd`'s shared tail and its additive `crumb` field; `server/src/coord/childReclaim.ts`), session-continuity wave 4b (run 308; ccd's spawn environment), ccrc-history (run 302; ccd's history files and `single-definition.test.ts`'s end of file — this plan does not edit that file) and the operator's own #317 (ccd's `_swap_carry_*`). This plan's `ccd/ccd` region is `_ws_expire_locked` alone. **Whichever lands second runs `git merge origin/main` (never a rebase), keeps both sides, re-stamps `ccd/ccd`, re-runs the five citation cases, `cite-remeasure` and the `_reg_get` census, and re-points by content.** `## Re-measure at dispatch` lists every block in a shared file.
-- **CCR-15 wave 7's shared terminal word** (raised at its pre-flight beside "persistent per-child failures that retry for ever") is OUT OF SCOPE: when it arrives, the expiry parser maps it to not-resumable in that wave. Task 10's day-long stop does not wait for it.
+- **CCR-15 wave 7's shared terminal word** (`containment-refuted`, raised at its pre-flight beside "persistent per-child failures that retry for ever") is not read specially here. Until CCR-15 wave 7 is on `main`, today's parser reads `containment-refuted` (an unknown `failed` word) as resumable, which wave 7's `containment-refuted-word` test pins, so on the expiry lane it reaches Task 10's persistent tier after a day and is never stranded; attention AT ONCE for it (CCR-15's `stuck` class) is this programme's wave 6.
 
 ## Review Focus
 
@@ -41,9 +41,9 @@ What a reviewer looking for a programme ended, or a workspace deleted, that shou
 2. **The act re-measures at its own instant** — and now the lane's wiring of that clock has a red (Task 1, row T1.1: the survivor of review 339).
 3. **A thrown act always leaves a durable record**, and a stop after a fleet act says WHICH act ran: a released worker (unheld) is never worded as a re-held one (still claimed), and the reverse (Tasks 3, 4). Only `sweep-stopped` carries the act: `closeRun`'s two other refusals after the fleet act, `claimant-changed` and `advanceFailed`, need a run writer outside the coordination serialiser, which this build has none of (close.ts's own comment at that arm), so they do not carry it — a writer added outside the serialiser would need them to (Task 3, Interfaces).
 4. **A mirror that cannot read a generation is not healthy for long.** One failed tick is absorbed, a persistent one reads `stale`, and a `stale`/`unknown` mirror at the act is a `hold` that keeps the anchor and the run of passes — it never deletes evidence because a mirror was late (Tasks 5, 6).
-5. **`ws-expire`'s consent binds the branch.** A branch deleted (or made) inside the lock between the recompute and the pin stops the act BEFORE the tombstone and the breadcrumb; nothing is destroyed; the server reads that `failed` `state-changed` as final, and a census over ccd/ccd places every occurrence of the word, however spelled, and holds the expiry's producer on its fresh arm, before the breadcrumb (Tasks 8, 11). The resumed-arm `probe-unmeasured` (the header's known gap) is `main`'s reading, unchanged.
+5. **`ws-expire`'s consent binds the branch.** A branch deleted (or made) inside the lock between the recompute and the pin stops the act BEFORE the tombstone and the breadcrumb; nothing is destroyed; the server reads that `failed` `state-changed` as one to START OVER from — the lane forgets what it learned, audits afresh, lists nothing and writes a feed row — a census over ccd/ccd places every occurrence of the word, however spelled, and holds the expiry's producer on its fresh arm, before the breadcrumb, and a fresh audit after the refusal misreads nothing it left (measured) (Tasks 8, 11). The resumed-arm `probe-unmeasured` (the header's known gap) is `main`'s reading, unchanged — routed to wave 6, an arming blocker until then.
 6. **A kept leaf is listed; an older ccd's silence is not an alarm.** `clipsKept`/`tmpRootKept` are read by name; a kept word lists the archive (its row is gone); an absent key is recorded in the feed row only (Task 9).
-7. **A day of resumable failures stops the asking** — final, never a destructive suggestion, and a new archive (or a restart) starts afresh (Task 10).
+7. **A day of resumable failures slows the asking, and never stops it** — a standing entry, asked every four hours for as long as the failures last, never a destructive suggestion; a hold or a deferral never drops it; a completed attempt, a new archive (or a restart) starts afresh (Task 10). Nothing is stranded behind a breadcrumb.
 
 ## File Structure
 
@@ -55,8 +55,8 @@ What a reviewer looking for a programme ended, or a workspace deleted, that shou
 | `server/src/coord/endDeadCoordinator.ts` | 3, 4, 6 | pushes `released`/`reheld` by the act that ran; names the in-flight run on a throw; `recordDeadCoordinatorThrew`; `journalTrust` carries `hold` and a `hold` stops the act |
 | `server/src/coord/mirror.ts` | 5 | `drain` answers whether it read; `lastOkAt` moves only when every planned read answered |
 | `server/src/watch.ts` | 3, 4, 6, 9 | the throw's progress literal; a feed row for every thrown act; the act's `journalTrust` whole; the expiry lane keeps a `kept` entry past its row |
-| `server/src/archivedExpiry.ts` (L1) | 8, 9, 10 | `EXPIRE_PRE_CRUMB_FAILED`; the kept-leaf reader and its report; `EXPIRE_FAILURE_GIVE_UP_MS` and the final report |
-| `server/src/coord/expireArchived.ts` | 9 | the `expired` outcome carries `kept`; the feed row says what was kept |
+| `server/src/archivedExpiry.ts` (L1) | 8, 9, 10 | `EXPIRE_PRE_CRUMB_FAILED` and the `restart` reading, outcome and memory arm; the kept-leaf reader (`keptLeafWord`, the one word reader, and `expireLeafKept`, its carrier) and its report; `EXPIRE_FAILURE_GIVE_UP_MS`, `EXPIRE_PERSISTENT_RETRY_MS`, the standing report and `expiryReportStands` |
+| `server/src/coord/expireArchived.ts` | 8, 9 | the `restart` outcome and its feed row; the `expired` outcome carries `kept`; the feed row says what was kept |
 | `shared/api.ts` | 9 | `ExpiryAttention.kind` gains `'kept'` (one line, in place) |
 | `pwa/src/fleet/expiryWords.ts` | 9 | `kept: 'cleaned up, kept'` (the `Record` makes it a compile error to omit) |
 | `ccd/ccd` | 11 | `_ws_expire_locked`: the branch-state agreement check after the pin |
@@ -68,7 +68,7 @@ What a reviewer looking for a programme ended, or a workspace deleted, that shou
 
 ## Measured while planning
 
-Everything below was measured on a prototype of this plan at `origin/main` `b0647d850` (wave 4 at `669b83055` and CCR-15 wave 6 at `b0647d850`) in an isolated worktree, one test file per process, `TMPDIR` on the volume outside the checkout, `CCD_DISK_FLOOR_GB=1`, load average 10–13. The prototype was then reverted: only this file is committed.
+Everything below was measured on a prototype of this plan at `origin/main` `b0647d850` (wave 4 at `669b83055` and CCR-15 wave 6 at `b0647d850`), and the revision after the coordinator's rulings of 2026-10-08 (R1–R5) re-measured on a prototype at `origin/main` `226bb881c` (two docs-only commits past `b0647d850`: CCR-15's wave-7 plan, contract and ledger), in an isolated worktree, one test file per process, `TMPDIR` on the volume outside the checkout, `CCD_DISK_FLOOR_GB=1`, load average 10–13. The prototype was then reverted: only this file is committed.
 
 1. **B1's census — every `ws-expire` producer of `{"failed":"state-changed"}`, with its position against the breadcrumb.** Read off ccd/ccd at `b0647d850`:
 
@@ -81,9 +81,9 @@ Everything below was measured on a prototype of this plan at `origin/main` `b064
 
    So at `b0647d850` an expiry can print NO `failed` `state-changed`: the parser's `resumable: true` for that word was unreachable. Task 11 adds the one producer, on the fresh arm, after the pin and before the tombstone and the breadcrumb. Task 8's census places every non-comment occurrence of either word in ccd/ccd — ten at `b0647d850`: ws-audit's `journal` row (`_lc_fail reclaim … probe-unmeasured`), six `refused` sites (`_ws_reap_locked` twice, `_ws_reap_tail`, `_ws_reclaim_locked`, `_ws_expire_resume_eval`, `_ws_expire_locked`) and three `failed` ones (`_ws_reclaim_locked`'s two, `_ws_expire_locked`'s `probe-unmeasured`) — and Task 11 adds the eleventh. Any other spelling reads `unplaced` and reds (rows T8.2–T8.4; the review's safety lens measured the drafted, spelling-based census green on four of them).
 
-   **The resumed arm (the known gap).** `_ws_expire_locked` prints `probe-unmeasured` at its verdict point, before `if [[ -z "$phase" ]]`, so on every arm. On a resumed expiry `_ws_expire_fork` runs `_ws_expire_resume_eval`, whose `_ws_reclaim_unmeasured` exits (the tombstone's archive epoch, worktree or workdir unreadable; `whether $(_tmux "$id") is up could not be asked`) reach that point after the earlier attempt's breadcrumb. `parseExpireResult` reads it final, as `main` does. Read, not changed here. `pin-failed` (the fresh pin's, plus eight in the tail) and `tombstone-unwritable` (the fresh arm's, plus five in the tail) print after the breadcrumb too, so they stay resumable (the ruling's default, measured here).
+   **The resumed arm (the known gap).** `_ws_expire_locked` prints `probe-unmeasured` at its verdict point, before `if [[ -z "$phase" ]]`, so on every arm. On a resumed expiry `_ws_expire_fork` runs `_ws_expire_resume_eval`, whose `_ws_reclaim_unmeasured` exits (the tombstone's archive epoch, worktree or workdir unreadable; `whether $(_tmux "$id") is up could not be asked`) reach that point after the earlier attempt's breadcrumb. `parseExpireResult` reads it final, as `main` does. Read, not changed here: routed to this programme's wave 6 (the header), an arming blocker for the expiry lane until then. `pin-failed` (the fresh pin's, plus eight in the tail) and `tombstone-unwritable` (the fresh arm's, plus five in the tail) print after the breadcrumb too, so they stay resumable (the ruling's default, measured here).
 
-2. **The in-lock window, measured at `b0647d850` (Task 11's mutation row T11.1 is this base behaviour).** With the agreement check absent, a branch DELETED between the recompute and the pin's read expires (exit 0, `{"expired":…}`), and a branch MADE in that window expires too — and the tail deletes that new branch at the tip the pin read (its tip is pinned in the attic). CCR-15's §5.5 rule binds the consent in both directions on the reclaim side (`_ws_reclaim_locked`'s `!=`), so Task 11 closes both directions (the departure `expire-consent-binds-the-branch-both-ways`; the ruling named the deleted direction). A deletion between the FRESH pin and the tail's SETTLE is left as CCR-15 wave 6 left it: the settle re-pins and the tail's step 5 reads the branch three ways, and a refusal there would print AFTER the breadcrumb — exactly the word Task 8 reads as final — so no clean cover exists in this wave; the tip the fresh pin read is already in the attic.
+2. **The in-lock window, measured at `b0647d850` (Task 11's mutation row T11.1 is this base behaviour).** With the agreement check absent, a branch DELETED between the recompute and the pin's read expires (exit 0, `{"expired":…}`), and a branch MADE in that window expires too — and the tail deletes that new branch at the tip the pin read (its tip is pinned in the attic). CCR-15's §5.5 rule binds the consent in both directions on the reclaim side (`_ws_reclaim_locked`'s `!=`), so Task 11 closes both directions (the departure `expire-consent-binds-the-branch-both-ways`; the ruling named the deleted direction). A deletion between the FRESH pin and the tail's SETTLE is left as CCR-15 wave 6 left it: the settle re-pins and the tail's step 5 reads the branch three ways, and a refusal there would print AFTER the breadcrumb, where the word Task 8 reads as "nothing started, start over" would be untrue (the census forbids it) — so no clean cover exists in this wave; the tip the fresh pin read is already in the attic.
 
 3. **F5, in a fixture store (never live).** A probe (below) opened a run of programme `alpha` claimed by a crashed id, abandoned it through `closeRun`'s sweep arm (`causedBy: 'sweep'`), then reopened the programme as a revived coordinator would:
    - after the sweep's abandon the programme row reads `abandoned`, and `resolveCoordinator(null)` answers `null` (no active programme);
@@ -117,11 +117,11 @@ Everything below was measured on a prototype of this plan at `origin/main` `b064
 
 6. **The citation census, after the whole prototype** (`cite-remeasure.py`, extracted from `docs/superpowers/plans/2026-09-22-child-reclamation-wave1-marker-and-containment.md` as earlier plans do, read-only against `origin/main`): `byFile['ccd/ccd'] stated 147 base 147 tree 147`; `total stated 197 base 197 tree 197`; `other byFile keys moved: none`; `row array 54/54/54`, `site array 35/35/35`, nothing ENTERED or LEFT. `ccd-reg-get-census` `3 passed (3)`. The five citation cases `5 passed | 330 skipped (335)`.
 
-7. **The replay.** The 119 blocks below, applied to `origin/main` `b0647d850` in the order given (each task's test blocks, then its source blocks, then its docs blocks), each matching exactly once at its turn, reproduce the prototype byte for byte in all 25 files it touches (`ccd/ccd` except its stamp line, which `ccrc restamp` writes). The revision after the four review lenses (spec, safety, replay, tests) replayed the revised blocks again, in one pass and stage by stage, measured every changed red, green and mutation row at its stage, and matched its revised prototype byte for byte (the stamp again `sha256=9c06b9e1…3f30`).
+7. **The replay.** The 132 blocks below, applied to `origin/main` `226bb881c` in the order given (each task's test blocks, then its source blocks, then its docs blocks), each matching exactly once at its turn, reproduce the revised prototype byte for byte in all 25 files it touches (`ccd/ccd` re-stamped: `sha256=940c0208…fc3b`) — in one pass, and again task by task, each task's test blocks measured red and then its source and docs blocks measured green, every mutation row of Tasks 8–11 measured at its own stage. (The drafted plan's 119 blocks had been replayed the same way on `b0647d850`, and again after the four review lenses.)
 
 ## How to read the blocks
 
-Each edit is a block headed by an HTML comment. A **replace** (`<!-- replay: replace <path> -->`) names its file (an `In <path>, find:` line), shows the text to find — whole lines, occurring EXACTLY ONCE in the file at that point of the plan (earlier blocks already applied) — and the text that replaces it; a block that only adds lines quotes its anchor line(s) in both halves. A **create** (`<!-- replay: create <path> -->`) shows a whole new file. A **fragment** (`<!-- replay: fragment <path> -->`) shows a PART of one line, occurring exactly once in the file, and the text that replaces that part: used for the wave-4 plan's two ledger entries (a whole column-0 entry line quoted here would be read by `deviation-refs.test.ts` as a second definition of its number) and for that plan's long table rows and callout lines, where only a phrase changes. A block's text is the lines between its fences and ends with a newline (a fragment's, without one). Apply the blocks in the order given: Step 1 of each task holds its test edits (the red stage), Step 3 its source edits (the green stage), and a docs step where it has one. The replay check applied exactly these 119 blocks to `origin/main` `b0647d850` in one pass, and again stage by stage (each task's test blocks, measured red; then its source and docs blocks, measured green), and reproduced the prototype byte for byte in every file the plan touches (25 files; `ccd/ccd` re-stamped).
+Each edit is a block headed by an HTML comment. A **replace** (`<!-- replay: replace <path> -->`) names its file (an `In <path>, find:` line), shows the text to find — whole lines, occurring EXACTLY ONCE in the file at that point of the plan (earlier blocks already applied) — and the text that replaces it; a block that only adds lines quotes its anchor line(s) in both halves. A **create** (`<!-- replay: create <path> -->`) shows a whole new file. A **fragment** (`<!-- replay: fragment <path> -->`) shows a PART of one line, occurring exactly once in the file, and the text that replaces that part: used for the wave-4 plan's two ledger entries (a whole column-0 entry line quoted here would be read by `deviation-refs.test.ts` as a second definition of its number) and for that plan's long table rows and callout lines, where only a phrase changes. A block's text is the lines between its fences and ends with a newline (a fragment's, without one). Apply the blocks in the order given: Step 1 of each task holds its test edits (the red stage), Step 3 its source edits (the green stage), and a docs step where it has one. The replay check applied exactly these 132 blocks to `origin/main` `226bb881c` in one pass, and again stage by stage (each task's test blocks, measured red; then its source and docs blocks, measured green), and reproduced the prototype byte for byte in every file the plan touches (25 files; `ccd/ccd` re-stamped).
 
 **Model routing** follows the fleet's policy: `sonnet` for implementation from these blocks, `opus` for each task's review under the act-safety lens and for the whole-branch review; never `fable` unless the operator names it.
 
@@ -1852,15 +1852,15 @@ Replace with:
 
 ---
 
-### Task 8: A `failed` `state-changed` is read as printed before the breadcrumb — final (ruling B1 — an ARMING BLOCKER for the expiry lane)
+### Task 8: A `failed` `state-changed` is printed before the breadcrumb — and audited afresh (ruling B1; its reading ruled on question (h) — an ARMING BLOCKER for the expiry lane)
 
 **Model routing:** `sonnet`, effort `high` — a census over ccd/ccd is the guard, and it must red on a producer it has not placed.
 
-**Files:** `server/src/archivedExpiry.ts` (`EXPIRE_PRE_CRUMB_FAILED`, `isExpirePreCrumbFailed`, `parseExpireResult`); test `server/test/archived-expiry-policy.test.ts`.
+**Files:** `server/src/archivedExpiry.ts` (`EXPIRE_PRE_CRUMB_FAILED`, `isExpirePreCrumbFailed`, `parseExpireResult`, the `restart` reading and outcome, `archivedExpiryNextEntry`'s `restart` arm), `server/src/coord/expireArchived.ts` (the `restart` outcome and its feed row); tests `server/test/archived-expiry-policy.test.ts`, `server/test/archived-expiry-lane.test.ts`.
 
-**Interfaces:** `export const EXPIRE_PRE_CRUMB_FAILED = ['probe-unmeasured', 'state-changed'] as const;` and `isExpirePreCrumbFailed(word)`. `parseExpireResult`'s `failed` arm reads `resumable: !isExpirePreCrumbFailed(v.failed)` (was `v.failed !== 'probe-unmeasured'`). `archivedExpiryNextEntry` already turns a non-resumable failure into a FINAL report, listed at once and never asked again for this archive (review 313's parked item 4): nothing changes there. The census test is a STOPPING LINE, not a spelling: it walks every non-comment line of ccd/ccd, takes EVERY occurrence of either word as a bare token, and places each by the function that holds it and by its shape — `failed` (`_ws_reclaim_fail "<id>" "<lctx>" <word>` or `_ws_reclaim_failed_json <word>`), `refused` (`_reap_refuse <word>`, or a `{"refused":"<word>"` printf), `journal` (ws-audit's `_lc_fail reclaim … <word>`) or `unplaced` — and holds the whole list exactly. So a producer spelled any other way (a quoted word, the word on a continuation line, a raw printf, a variable that carries it) reds as `unplaced`, and a placed shape anywhere new (the shared tail, a pin, a helper) reds by the list. The one shape no text scan sees, a word assembled at run time from parts, does not occur in ccd. It also requires `_ws_expire_locked`'s `failed` `state-changed` to lie on the FRESH arm — after `if [[ -z "$phase" ]]` and before the `_reg_set "$id" reaping "expire:$start"` breadcrumb write — so moving the check to the verdict point (every arm) or below the breadcrumb reds (rows T11.3, T11.4). The docstring of `EXPIRE_PRE_CRUMB_FAILED` says what is true of `probe-unmeasured`: printed before THIS attempt's tombstone and breadcrumb, on every arm, so after an earlier attempt's breadcrumb on a resumed one (the header's known gap).
+**Interfaces:** `export const EXPIRE_PRE_CRUMB_FAILED = ['probe-unmeasured', 'state-changed'] as const;` and `isExpirePreCrumbFailed(word)` — the words ccd prints before THIS attempt's tombstone and breadcrumb. Each is READ its own way, and **the coordinator ruled question (h) on 2026-10-08: a `failed` `state-changed` is AUDITED AFRESH, not final** — the reclaim side's "not resumable" means "start over". So `parseExpireResult`'s `failed` arm reads any other word `resumable: true` (unchanged), `probe-unmeasured` `resumable: false` (unchanged: final, `main`'s reading), and `state-changed` as a new reading, `{ kind: 'restart', detail }` — a third arm of `ExpireVerbRead`, never an overloaded `resumable` (a boolean cannot carry three readings). `ArchivedExpiryOutcome` gains the same arm (`EXPIRY_OUTCOME_KINDS` with it), `expireArchived` passes it through, and `archivedExpiryNextEntry`'s `restart` arm FORGETS what the lane learned of the row: `expiresAt: null`, `eligibleSince: null`, the failure run reset, `report: null`, `nextAskAt` one pass on. The lane holds no token — every act audits first and spends THAT audit's token (`expireArchived`, step 5) — so what it forgets is the instant and the sightings: the row returns to LEARNING, on the learning audit's own cadence and backoff, and is asked again only once seen eligible twice past its instant, with a token a fresh audit minted over what stands. No attention entry (nothing was deleted); the feed row (`archived workspace changed under its cleanup`) says the workspace changed under the expiry's consent — its branch was deleted or made inside the lock — so nothing was deleted, and the lane audits it afresh (the departure `a-failed-state-changed-audits-afresh`). The census test is a STOPPING LINE, not a spelling: it walks every non-comment line of ccd/ccd, takes EVERY occurrence of either word as a bare token, and places each by the function that holds it and by its shape — `failed` (`_ws_reclaim_fail "<id>" "<lctx>" <word>` or `_ws_reclaim_failed_json <word>`), `refused` (`_reap_refuse <word>`, or a `{"refused":"<word>"` printf), `journal` (ws-audit's `_lc_fail reclaim … <word>`) or `unplaced` — and holds the whole list exactly. So a producer spelled any other way (a quoted word, the word on a continuation line, a raw printf, a variable that carries it) reds as `unplaced`, and a placed shape anywhere new (the shared tail, a pin, a helper) reds by the list. The one shape no text scan sees, a word assembled at run time from parts, does not occur in ccd. It also requires `_ws_expire_locked`'s `failed` `state-changed` to lie on the FRESH arm — after `if [[ -z "$phase" ]]` and before the `_reg_set "$id" reaping "expire:$start"` breadcrumb write — so moving the check to the verdict point (every arm) or below the breadcrumb reds (rows T11.3, T11.4). The census is what proves that a `state-changed` the expiry prints deleted nothing, and so that starting over is safe. The docstring of `EXPIRE_PRE_CRUMB_FAILED` says what is true of `probe-unmeasured`: printed before THIS attempt's tombstone and breadcrumb, on every arm, so after an earlier attempt's breadcrumb on a resumed one — read final in this wave, routed to this programme's wave 6 (the header's known gap, an arming blocker until then).
 
-- [ ] **Step 1: The tests (red).**
+- [ ] **Step 1: The tests (red).** The parser's three readings; the census; a memory case for the `restart` arm; and a lane case — an armed expiry answered `failed` `state-changed` once is learned again, seen eligible twice, composed again with a fresh audit's token, and finished, with no attention entry and a feed row that says why.
 
 <!-- replay: replace server/test/archived-expiry-policy.test.ts -->
 In `server/test/archived-expiry-policy.test.ts`, find (block 78):
@@ -1892,9 +1892,11 @@ Replace with:
     expect(parseExpireResult(ID, JSON.stringify({ expired: 'other' }), '').kind, 'another row’s expiry').toBe('failed');
   });
 
-  it('a `failed` state-changed is printed before the breadcrumb: NOT resumable, as probe-unmeasured — pin-failed and tombstone-unwritable stay resumable (wave 5)', () => {
+  it('a `failed` state-changed is printed before the breadcrumb: read `restart` (audit afresh), never final — probe-unmeasured stays final, pin-failed and tombstone-unwritable resumable (wave 5)', () => {
     expect(parseExpireResult(ID, JSON.stringify({ failed: 'state-changed', detail: 'x' }), ''))
-      .toEqual({ kind: 'failed', resumable: false, detail: 'state-changed: x' });
+      .toEqual({ kind: 'restart', detail: 'state-changed: x' });
+    expect(parseExpireResult(ID, JSON.stringify({ failed: 'probe-unmeasured', detail: 'x' }), ''))
+      .toEqual({ kind: 'failed', resumable: false, detail: 'probe-unmeasured: x' });
     expect(parseExpireResult(ID, JSON.stringify({ failed: 'tombstone-unwritable', detail: 'x' }), ''))
       .toEqual({ kind: 'failed', resumable: true, detail: 'tombstone-unwritable: x' });
     expect([...EXPIRE_PRE_CRUMB_FAILED].sort()).toEqual(['probe-unmeasured', 'state-changed']);
@@ -1913,7 +1915,8 @@ Replace with:
     // before the `expire:` breadcrumb write — so nothing this verb started stands when it prints. Its
     // `probe-unmeasured` prints at the verdict point, on EVERY arm: on a fresh expiry before anything, and on a
     // RESUMED one after an earlier attempt's breadcrumb (`_ws_expire_resume_eval`'s unmeasured exits). That is main's
-    // reading, a known gap put to the operator, and this census records it rather than hides it.
+    // reading, a known gap routed to this programme's wave 6 (an arming blocker until then), and this census records it
+    // rather than hides it.
     const fnStarts = [...ccd.matchAll(/\n([A-Za-z_][A-Za-z0-9_]*)\(\) \{/g)].map((m) => ({ name: m[1]!, at: m.index! }));
     const holder = (at: number): string => fnStarts.filter((f) => f.at < at).at(-1)?.name ?? '';
     const lockedAt = ccd.indexOf('\n_ws_expire_locked() {');
@@ -1961,12 +1964,83 @@ Replace with:
 });
 ````
 
-- [ ] **Step 2: Run — red.** `( cd server && ./node_modules/.bin/vitest run test/archived-expiry-policy.test.ts --maxWorkers=1 )`. Measured: `2 failed | 52 passed (54)` — × a `failed` state-changed is printed before the breadcrumb: NOT resumable …; × THE CENSUS: every site of either word in ccd/ccd is placed, and the expiry's failed state-changed is on its FRESH arm, before the breadcrumb (wave 5) (the import is not there yet).
+<!-- replay: replace server/test/archived-expiry-policy.test.ts -->
+In `server/test/archived-expiry-policy.test.ts`, find (block 80):
+
+````ts
+  it('a `not-expired` at the act learns the AUDIT’s instant and starts the twice-observed rule again', () => {
+````
+
+Replace with:
+
+````ts
+  it('a failed state-changed (`restart`) starts over: the instant and the sightings are forgotten and learned afresh — no report, never final (wave 5)', () => {
+    // The coordinator's ruling on the wave-5 plan's question (h): the reclaim side's "not resumable" means start over.
+    // Nothing was deleted, so nothing is listed; a run of failures before it is about a state that no longer stands.
+    const failing = archivedExpiryNextEntry(e(), { kind: 'failed', resumable: true, detail: 'pin-failed' }, NOW - EXPIRE_FAILURE_CEILING_MS, PASS)!;
+    const x = archivedExpiryNextEntry({ ...failing, report: { kind: 'failing', at: NOW - EXPIRE_FAILURE_CEILING_MS, detail: 'pin-failed' } },
+      { kind: 'restart', detail: 'state-changed: moved' }, NOW, PASS)!;
+    expect(x).toMatchObject({ expiresAt: null, eligibleSince: null, nextAskAt: NOW + PASS, report: null, failures: 0,
+      failingSince: null, lastOutcome: 'restart' });
+    expect(archivedExpiryDue(x, NOW + PASS), 'not due: it is learned again first').toBe(false);
+  });
+
+  it('a `not-expired` at the act learns the AUDIT’s instant and starts the twice-observed rule again', () => {
+````
+
+<!-- replay: replace server/test/archived-expiry-lane.test.ts -->
+In `server/test/archived-expiry-lane.test.ts`, find (block 81):
+
+````ts
+describe('a failure that will not resume (review 313, parked item 4)', () => {
+````
+
+Replace with:
+
+````ts
+describe('a failed state-changed is audited afresh (wave 5)', () => {
+  it('the lane forgets what it learned, audits again, and composes again only once seen eligible twice — no attention entry; the feed row says why', async () => {
+    let n = 0;
+    const f = await fixture({ expire: (id) => (n += 1) === 1
+      ? { code: 1, stdout: JSON.stringify({ failed: 'state-changed', detail: `ws/${id} read present when the token was checked inside the lock, but absent when the pin read it again` }), stderr: '' }
+      : { code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0, clipsKept: null, tmpRootKept: null }), stderr: '' } });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    expect(f.entry('demo-a'), 'back to learning').toMatchObject({ expiresAt: null, eligibleSince: null, report: null });
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.expiryAttention ?? [], 'nothing was deleted: nothing is listed').toEqual([]);
+    expect(f.coord.feedEvents(5).find((e) => e.title === 'archived workspace changed under its cleanup')?.body)
+      .toContain('its branch was deleted or made inside the lock (state-changed: ws/demo-a read present');
+    const audits = f.verbsFor('ws-audit').length;
+    f.next(); await f.pass();
+    expect(f.verbsFor('ws-audit'), 'the next pass learns the instant afresh').toHaveLength(audits + 1);
+    f.next(); await f.pass();
+    expect(f.verbsFor('ws-expire'), 'seen eligible once: not yet').toEqual(['demo-a']);
+    f.next(); await f.pass();
+    expect(f.verbsFor('ws-expire'), 'seen twice: composed again, with its own fresh audit’s token').toEqual(['demo-a', 'demo-a']);
+    expect(f.verbsFor('ws-audit'), 'the act audited first').toHaveLength(audits + 2);
+    expect(f.entry('demo-a'), 'and finished').toBeUndefined();
+  });
+});
+
+describe('a failure that will not resume (review 313, parked item 4)', () => {
+````
+
+- [ ] **Step 2: Run — red.**
+
+```bash
+( cd server && ./node_modules/.bin/vitest run test/archived-expiry-policy.test.ts --maxWorkers=1 )
+( cd server && ./node_modules/.bin/vitest run test/archived-expiry-lane.test.ts --maxWorkers=1 )
+```
+
+Measured: `archived-expiry-policy.test.ts`: `3 failed | 52 passed (55)` — × a `failed` state-changed is printed before the breadcrumb: read `restart` …; × THE CENSUS … (the import is not there yet); × a failed state-changed (`restart`) starts over …; `archived-expiry-lane.test.ts`: `1 failed | 29 passed (30)` — × the lane forgets what it learned … (`back to learning`: the row kept its instant).
 
 - [ ] **Step 3: The source.**
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 80):
+In `server/src/archivedExpiry.ts`, find (block 82):
 
 ````ts
 /** `ccd ws-expire …`'s answer (wave 3's plan, "Wave 3b inherits", the verb). Three documents — `expired` and
@@ -1976,17 +2050,21 @@ Replace with:
 
 ````ts
 /** The ws-expire `{"failed":…}` words that ccd prints before THIS attempt's tombstone and breadcrumb — so this attempt
- *  started nothing, and the row is reported at once and not asked again for this archive (review 313's parked item 4;
- *  the reclaim side's twin is CCR-15's 4457):
+ *  started nothing, and neither is retried from where it stopped (the reclaim side's twin is CCR-15's 4457). Each is
+ *  READ its own way (`parseExpireResult`):
  *   - `probe-unmeasured`: `_ws_expire_locked`'s unmeasured verdict, printed at its verdict point, before any intent —
- *     on EVERY arm. On a fresh expiry nothing stands. On a RESUMED one an earlier attempt's breadcrumb stands and its
- *     tree may be part-deleted (`_ws_expire_resume_eval`'s unmeasured exits: a tombstone it cannot read, or a tmux
- *     probe that did not answer), and the word reads final there too. That is main's reading, kept here and put to
- *     the operator as a known gap (the wave-5 plan's questions) until CCR-15 wave 7's additive `crumb` field can tell
- *     the two arms apart;
+ *     on EVERY arm. Read FINAL: reported at once and not asked again for this archive (review 313's parked item 4).
+ *     On a fresh expiry nothing stands. On a RESUMED one an earlier attempt's breadcrumb stands and its tree may be
+ *     part-deleted (`_ws_expire_resume_eval`'s unmeasured exits: a tombstone it cannot read, or a tmux probe that did
+ *     not answer), and the word reads final there too. That is main's reading, kept in this wave: the fix is this
+ *     programme's wave 6, once CCR-15 wave 7 is on main — `_ws_expire_locked` sets wave 7's `crumb` on its resumed
+ *     arm, and a failed document with `crumb: true` reads resumable — and until then it is an ARMING BLOCKER for the
+ *     expiry lane;
  *   - `state-changed`: the consent binding — the in-lock recompute and the pin read the branch differently — printed
  *     on the FRESH arm only, after the pin (which only keeps) and before the tombstone and the breadcrumb (workspace
- *     lifecycle wave 5). Also a REFUSAL word (`EXPIRE_TOKEN_KIND`, retried), which is a different document:
+ *     lifecycle wave 5). Read `restart`: the reclaim side's "not resumable", which means START OVER, never final —
+ *     the lane forgets what it learned of the row and audits it afresh (the coordinator's ruling on the wave-5 plan's
+ *     question (h)). Also a REFUSAL word (`EXPIRE_TOKEN_KIND`, retried), which is a different document:
  *     `{"refused":…}` at exit 0.
  *  MEASURED, not assumed: `archived-expiry-policy.test.ts` places every occurrence of either word in ccd/ccd, by its
  *  function and its shape, and holds the expiry's `failed` `state-changed` on its fresh arm, before the breadcrumb.
@@ -2001,7 +2079,32 @@ export const isExpirePreCrumbFailed = (word: string): boolean => (EXPIRE_PRE_CRU
 ````
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 81):
+In `server/src/archivedExpiry.ts`, find (block 83):
+
+````ts
+  | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string }
+  | { readonly kind: 'box'; readonly word: ExpireBoxWord; readonly detail: string }
+  | { readonly kind: 'composition'; readonly detail: string };
+
+export function parseExpireResult(sessionId: string, stdout: string, stderr: string): ExpireVerbRead {
+````
+
+Replace with:
+
+````ts
+  | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string }
+  /** A `failed` document the lane must START OVER from (wave 5, the coordinator's ruling on question (h)): ccd printed
+   *  it before anything started, and what it consented to has changed, so neither a retry of this attempt nor a final
+   *  report is the truth — a fresh audit of what stands is (`state-changed`, `EXPIRE_PRE_CRUMB_FAILED`). */
+  | { readonly kind: 'restart'; readonly detail: string }
+  | { readonly kind: 'box'; readonly word: ExpireBoxWord; readonly detail: string }
+  | { readonly kind: 'composition'; readonly detail: string };
+
+export function parseExpireResult(sessionId: string, stdout: string, stderr: string): ExpireVerbRead {
+````
+
+<!-- replay: replace server/src/archivedExpiry.ts -->
+In `server/src/archivedExpiry.ts`, find (block 84):
 
 ````ts
       return { kind: 'failed', resumable: v.failed !== 'probe-unmeasured', detail: detail === '' ? v.failed : `${v.failed}: ${detail}` };
@@ -2010,21 +2113,125 @@ In `server/src/archivedExpiry.ts`, find (block 81):
 Replace with:
 
 ````ts
-      return { kind: 'failed', resumable: !isExpirePreCrumbFailed(v.failed), detail: detail === '' ? v.failed : `${v.failed}: ${detail}` };
+      const said = detail === '' ? v.failed : `${v.failed}: ${detail}`;
+      if (!isExpirePreCrumbFailed(v.failed)) return { kind: 'failed', resumable: true, detail: said };
+      // Printed before this attempt's tombstone and breadcrumb: `state-changed` starts over, `probe-unmeasured` is final.
+      return v.failed === 'state-changed' ? { kind: 'restart', detail: said } : { kind: 'failed', resumable: false, detail: said };
 ````
 
-- [ ] **Step 4: Run — green.** Measured: `archived-expiry-policy` `54 passed (54)`; `expire-archived` `19 passed (19)`; `archived-expiry-lane` `29 passed (29)`.
+<!-- replay: replace server/src/archivedExpiry.ts -->
+In `server/src/archivedExpiry.ts`, find (block 85):
+
+````ts
+  | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string }
+  | { readonly kind: 'box'; readonly word: ExpireBoxWord; readonly detail: string }
+  | { readonly kind: 'composition'; readonly detail: string }
+  | { readonly kind: 'no-evidence' };
+````
+
+Replace with:
+
+````ts
+  | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string }
+  /** ccd stopped before anything started because what the expiry consented to changed (`ExpireVerbRead.restart`):
+   *  the lane forgets what it learned of the row and audits it afresh (wave 5). */
+  | { readonly kind: 'restart'; readonly detail: string }
+  | { readonly kind: 'box'; readonly word: ExpireBoxWord; readonly detail: string }
+  | { readonly kind: 'composition'; readonly detail: string }
+  | { readonly kind: 'no-evidence' };
+````
+
+<!-- replay: replace server/src/archivedExpiry.ts -->
+In `server/src/archivedExpiry.ts`, find (block 86):
+
+````ts
+  expired: true, 'would-expire': true, deferred: true, refused: true, gone: true, failed: true, box: true,
+````
+
+Replace with:
+
+````ts
+  expired: true, 'would-expire': true, deferred: true, refused: true, gone: true, failed: true, restart: true, box: true,
+````
+
+<!-- replay: replace server/src/archivedExpiry.ts -->
+In `server/src/archivedExpiry.ts`, find (block 87):
+
+````ts
+    case 'composition':
+      return { ...base, ...steady, nextAskAt: Number.POSITIVE_INFINITY,
+````
+
+Replace with:
+
+````ts
+    case 'restart':
+      // START OVER (wave 5, question (h) ruled): ccd stopped before anything started because what the expiry consented
+      // to changed. The instant learned and the sightings are forgotten — the row goes back to learning, on the
+      // learning audit's own cadence and backoff, and is asked again only once seen eligible twice past its instant,
+      // with a token a fresh audit minted over what stands. No report: nothing was deleted (the feed row says so).
+      return { ...base, ...steady, expiresAt: null, eligibleSince: null, nextAskAt: nowMs + passMs, report: null };
+    case 'composition':
+      return { ...base, ...steady, nextAskAt: Number.POSITIVE_INFINITY,
+````
+
+<!-- replay: replace server/src/coord/expireArchived.ts -->
+In `server/src/coord/expireArchived.ts`, find (block 88):
+
+````ts
+    case 'failed': return answer({ kind: 'failed', resumable: verb.resumable, detail: verb.detail });
+````
+
+Replace with:
+
+````ts
+    case 'failed': return answer({ kind: 'failed', resumable: verb.resumable, detail: verb.detail });
+    case 'restart': return answer({ kind: 'restart', detail: verb.detail });
+````
+
+<!-- replay: replace server/src/coord/expireArchived.ts -->
+In `server/src/coord/expireArchived.ts`, find (block 89):
+
+````ts
+  failed: 'archived workspace cleanup failed',
+````
+
+Replace with:
+
+````ts
+  failed: 'archived workspace cleanup failed',
+  restart: 'archived workspace changed under its cleanup',
+````
+
+<!-- replay: replace server/src/coord/expireArchived.ts -->
+In `server/src/coord/expireArchived.ts`, find (block 90):
+
+````ts
+      : 'It is not retried: the box said it will not resume, so the lane stops asking for this archive.'}`;
+````
+
+Replace with:
+
+````ts
+      : 'It is not retried: the box said it will not resume, so the lane stops asking for this archive.'}`;
+    case 'restart': return `${who}: the workspace changed under the expiry's consent — its branch was deleted or made `
+      + `inside the lock (${r.detail}) — so nothing was deleted, and the lane audits it afresh.`;
+````
+
+- [ ] **Step 4: Run — green.** Measured: `archived-expiry-policy` `55 passed (55)`; `archived-expiry-lane` `30 passed (30)`; `expire-archived` `19 passed (19)`; `mail-routes` `59 passed (59)` (its kebab scan of `server/src/coord` meets the new `restart` literal, which has no hyphen); `( cd server && ./node_modules/.bin/tsc --noEmit -p . )` rc 0.
 
 - [ ] **Step 5: The mutation rows.**
 
 | Row | Mutation | Red |
 |---|---|---|
-| T8.1 | `server/src/archivedExpiry.ts`: `resumable: !isExpirePreCrumbFailed(v.failed),` → `resumable: v.failed !== 'probe-unmeasured',` | `archived-expiry-policy.test.ts`: `1 failed \| 53 passed (54)` — a `failed` state-changed is printed before the breadcrumb: NOT resumable … |
-| T8.2 | `ccd/ccd` (the shared tail, a post-breadcrumb site): `_ws_reclaim_fail "$id" "$lctx" branch-moved "$branch moved after it was pinned` → `_ws_reclaim_fail "$id" "$lctx" state-changed "$branch moved after it was pinned` | `archived-expiry-policy.test.ts`: `1 failed \| 53 passed (54)` — THE CENSUS … (`_ws_reclaim_tail failed state-changed`, a site the list does not hold: `expected [ …(11) ] to deeply equal [ …(10) ]`) |
-| T8.3 | the same line → `_ws_reclaim_fail "$id" "$lctx" "state-changed" "$branch moved after it was pinned` (the word QUOTED — the safety lens's spelling the drafted regex missed) | `archived-expiry-policy.test.ts`: `1 failed \| 53 passed (54)` — THE CENSUS … (`_ws_reclaim_tail unplaced state-changed`) |
-| T8.4 | the same line → `_ws_reclaim_fail "$id" "$lctx" \ ⏎           state-changed "$branch moved after it was pinned` (the word on a continuation line) | `archived-expiry-policy.test.ts`: `1 failed \| 53 passed (54)` — THE CENSUS … (`unplaced`) |
+| T8.1 | `server/src/archivedExpiry.ts`: `      return v.failed === 'state-changed' ? { kind: 'restart', detail: said } : { kind: 'failed', resumable: false, detail: said };` → `      return { kind: 'failed', resumable: false, detail: said };` (the drafted plan's FINAL reading) | `archived-expiry-policy.test.ts`: `1 failed \| 54 passed (55)` — a `failed` state-changed is printed before the breadcrumb: read `restart` …<br>`archived-expiry-lane.test.ts`: `1 failed \| 29 passed (30)` — the lane forgets what it learned … (`back to learning`) |
+| T8.2 | `ccd/ccd` (the shared tail, a post-breadcrumb site): `_ws_reclaim_fail "$id" "$lctx" branch-moved "$branch moved after it was pinned` → `_ws_reclaim_fail "$id" "$lctx" state-changed "$branch moved after it was pinned` | `archived-expiry-policy.test.ts`: `1 failed \| 54 passed (55)` — THE CENSUS … (`_ws_reclaim_tail failed state-changed`, a site the list does not hold: `expected [ …(11) ] to deeply equal [ …(10) ]`) |
+| T8.3 | the same line → `_ws_reclaim_fail "$id" "$lctx" "state-changed" "$branch moved after it was pinned` (the word QUOTED — the safety lens's spelling the drafted regex missed) | `archived-expiry-policy.test.ts`: `1 failed \| 54 passed (55)` — THE CENSUS … (`_ws_reclaim_tail unplaced state-changed`: `expected [ …(11) ] to deeply equal [ …(10) ]`) |
+| T8.4 | the same line → `_ws_reclaim_fail "$id" "$lctx" \ ⏎           state-changed "$branch moved after it was pinned` (the word on a continuation line) | `archived-expiry-policy.test.ts`: `1 failed \| 54 passed (55)` — THE CENSUS … (`unplaced`) |
+| T8.5 | `server/src/archivedExpiry.ts`: `      if (!isExpirePreCrumbFailed(v.failed)) return { kind: 'failed', resumable: true, detail: said };` → `      if (v.failed !== 'probe-unmeasured') return { kind: 'failed', resumable: true, detail: said };` (`main`'s RESUMABLE reading of `state-changed`) | `archived-expiry-policy.test.ts`: `1 failed \| 54 passed (55)` — a `failed` state-changed is printed before the breadcrumb: read `restart` …<br>`archived-expiry-lane.test.ts`: `1 failed \| 29 passed (30)` — the lane forgets what it learned … (`back to learning`) |
+| T8.6 | `server/src/archivedExpiry.ts`: `      return { ...base, ...steady, expiresAt: null, eligibleSince: null, nextAskAt: nowMs + passMs, report: null };` → `      return { ...base, ...steady, nextAskAt: nowMs + passMs, report: null };` (the instant and the sightings KEPT: asked again at once over the old learning) | `archived-expiry-policy.test.ts`: `1 failed \| 54 passed (55)` — a failed state-changed (`restart`) starts over …<br>`archived-expiry-lane.test.ts`: `1 failed \| 29 passed (30)` — the lane forgets what it learned … (`back to learning`) |
 
-- [ ] **Step 6: Commit.** `fix(lifecycle): the expiry reads a failed state-changed as final — every producer prints before the breadcrumb (ruling B1)`.
+- [ ] **Step 6: Commit.** `fix(lifecycle): the expiry audits afresh after a failed state-changed — every producer prints before the breadcrumb (ruling B1; question (h) ruled)`.
 
 ---
 
@@ -2035,17 +2242,30 @@ Replace with:
 **Files:** `server/src/archivedExpiry.ts`, `server/src/coord/expireArchived.ts`, `server/src/watch.ts` (the expiry lane's forgetting), `shared/api.ts` (`ExpiryAttention.kind`), `pwa/src/fleet/expiryWords.ts`; tests `server/test/archived-expiry-policy.test.ts`, `server/test/expire-archived.test.ts`, `server/test/archived-expiry-lane.test.ts`.
 
 **Interfaces:**
-- `export type ExpireLeafKept = 'refused' | 'unmeasured' | 'in-use' | null | 'unreported';` and `expireLeafKept(doc, 'clipsKept' | 'tmpRootKept')`, THE ONE READER of each key: ABSENT → `'unreported'` (an older ccd — never folded into `null`, which reads "removed"); `null` → `null`; one of ccd's three words → itself; any other value → `'unmeasured'` (ccd prints only its three, so another value means a leaf stood). Named keys only: a newer ccd's other keys change nothing here (agent-first stays safe). `ExpireKept = { clips; tmpRoot }`; `expireKeptAny(k)` is true only for a WORD on either leaf.
+- **One kept-word reader, two carriers** (the coordinator's R3 of 2026-10-08, agreed with CCR-15). `export function keptLeafWord(v: unknown): KeptLeafWord` — `KeptLeafWord` is `'refused' | 'unmeasured' | 'in-use'`, derived from one `as const` list — is THE WORD HALF and the ONE word reader of `clipsKept`/`tmpRootKept`: ccd's three words map to themselves; any other value is `'unmeasured'` (ccd prints only its three, so another value means a leaf stood). `export type ExpireLeafKept = KeptLeafWord | null | 'unreported';` and `expireLeafKept(doc, 'clipsKept' | 'tmpRootKept')` keep their type and behaviour: the done document's CARRIER composed with `keptLeafWord` — ABSENT → `'unreported'` (an older ccd — never folded into `null`, which reads "removed"); `null` → `null`; any other value → its word. The docstring says `keptLeafWord` is the ONE word reader of `clipsKept`/`tmpRootKept`, and that CCR-15 wave 8's mirror carrier (a word, `'unreported'` or `'truncated'`) imports it, or moves it to a neutral L1 home — a move, never a second copy. Named keys only: a newer ccd's other keys change nothing here (agent-first stays safe). `ExpireKept = { clips; tmpRoot }`; `expireKeptAny(k)` is true only for a WORD on either leaf.
 - `ExpireVerbRead`'s and `ArchivedExpiryOutcome`'s `expired` arms carry `kept: ExpireKept`. `expireArchived` passes it through.
 - **The decision on absence (the coordinator's lean, adopted).** A kept word raises an attention entry; an absent key is recorded in the feed row only ("whether its clips directory and temp root were removed is not reported by this box's ccd (an older build), so it is unmeasured"). Justification: absence is not evidence that anything was kept — the tail always removes or keeps and an older ccd only cannot say which — and during the agent-first rollout skew every expiry would otherwise raise an alarm the operator can do nothing about; the feed row is the durable record, so nothing is hidden (the departure `an-older-ccds-silence-is-the-feed-rows-only`).
 - `archivedExpiryNextEntry`'s `expired` arm: a kept word returns an entry whose report is `{ kind: 'kept', at, clips, tmpRoot }`, with `nextAskAt` +∞ and `eligibleSince` null; anything else finishes the row (`null`) as before. `expiryReportIsFinal` counts `kept`, so a hold never replaces it. The lane's pass keeps a `kept` entry although its row has left the registry (ccd purged it): it is the only trace of what stays on disk, and it is listed until a restart forgets it (the departure `a-kept-leaf-is-listed-until-restart`). If the same id is archived again later, its new archive starts a fresh entry, as today.
 - The sentence: "cleaned up, but ccd kept its clips directory (in-use: a process still used it after the bounded wait). The worktree, the branch and the registry row are gone and its commits are in the attic; what was kept stays on disk, and the lane deletes nothing more of it. Find out what holds it before removing it by hand." The feed row of an `expired` outcome appends what was kept and why (`; ccd kept … — it stays on disk`). No new `ExpireToken` word.
 - `ExpiryAttention.kind` gains `'kept'` (additive; one line in place); the PWA's `EXPIRY_KIND_WORD` gains `kept: 'cleaned up, kept'` (a `Record` over the union, so omitting it fails `tsc` — row T9.6). An older PWA reads an unknown kind as `reported` (`expiryKindWord`'s fallback).
 
-- [ ] **Step 1: The tests (red).** The parser's `expired` case carries `kept` (both keys absent there: `unreported`); the `expired` next-entry case passes `kept: { clips: null, tmpRoot: null }`; a policy case reads the keys four ways, words the entry, and lists a temp root kept on its own (clips `null`) as well as a kept clips directory; an executor case reads a kept temp root into the outcome and the feed row, and an older ccd's silence into the feed row; two lane cases — a kept clips directory listed after ccd purged the row, and an older ccd's expiry raising nothing.
+- [ ] **Step 1: The tests (red).** The parser's `expired` case carries `kept` (both keys absent there: `unreported`); the `expired` next-entry case passes `kept: { clips: null, tmpRoot: null }`; a policy case pins `keptLeafWord` on its own; a policy case reads the keys four ways, words the entry, and lists a temp root kept on its own (clips `null`) as well as a kept clips directory; an executor case reads a kept temp root into the outcome and the feed row, and an older ccd's silence into the feed row; two lane cases — a kept clips directory listed after ccd purged the row, and an older ccd's expiry raising nothing.
 
 <!-- replay: replace server/test/archived-expiry-policy.test.ts -->
-In `server/test/archived-expiry-policy.test.ts`, find (block 82):
+In `server/test/archived-expiry-policy.test.ts`, find (block 91):
+
+````ts
+  EXPIRE_PRE_CRUMB_FAILED, expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, parseExpireAudit, parseExpireResult, reviewKeeps,
+````
+
+Replace with:
+
+````ts
+  EXPIRE_PRE_CRUMB_FAILED, expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, keptLeafWord, parseExpireAudit, parseExpireResult, reviewKeeps,
+````
+
+<!-- replay: replace server/test/archived-expiry-policy.test.ts -->
+In `server/test/archived-expiry-policy.test.ts`, find (block 92):
 
 ````ts
       residueBytes: 0, secretsDropped: 0 }), '')).toEqual({ kind: 'expired', archivedAt: 1_789_000_000, wip: null, secretsDropped: 0 });
@@ -2059,7 +2279,7 @@ Replace with:
 ````
 
 <!-- replay: replace server/test/archived-expiry-policy.test.ts -->
-In `server/test/archived-expiry-policy.test.ts`, find (block 83):
+In `server/test/archived-expiry-policy.test.ts`, find (block 93):
 
 ````ts
     expect(archivedExpiryNextEntry(e(), { kind: 'expired' }, NOW, PASS)).toBeNull();
@@ -2072,7 +2292,7 @@ Replace with:
 ````
 
 <!-- replay: replace server/test/archived-expiry-policy.test.ts -->
-In `server/test/archived-expiry-policy.test.ts`, find (block 84):
+In `server/test/archived-expiry-policy.test.ts`, find (block 94):
 
 ````ts
   it('expired and gone finish the row; a terminal refusal and a composition error are never asked again, and reported', () => {
@@ -2081,6 +2301,11 @@ In `server/test/archived-expiry-policy.test.ts`, find (block 84):
 Replace with:
 
 ````ts
+  it('keptLeafWord is the ONE word reader of a kept leaf: ccd’s three words are themselves, any other value is a leaf that stood (wave 5)', () => {
+    for (const w of ['refused', 'unmeasured', 'in-use'] as const) expect(keptLeafWord(w)).toBe(w);
+    for (const v of ['gone-sideways', '', 'IN-USE', ' in-use', 7, true, {}, []]) expect(keptLeafWord(v), JSON.stringify(v)).toBe('unmeasured');
+  });
+
   it('THE KEPT-LEAF READER: clipsKept and tmpRootKept are read by name — a word, null, or ABSENT (an older ccd: unreported, never null) (wave 5)', () => {
     const doc = (over: Record<string, unknown>): string => JSON.stringify({ expired: ID, archivedAt: 1_789_000_000, wip: null, secretsDropped: 0, ...over });
     const kept = (over: Record<string, unknown>) => (parseExpireResult(ID, doc(over), '') as { kept?: unknown }).kept;
@@ -2107,7 +2332,7 @@ Replace with:
 ````
 
 <!-- replay: replace server/test/expire-archived.test.ts -->
-In `server/test/expire-archived.test.ts`, find (block 85):
+In `server/test/expire-archived.test.ts`, find (block 95):
 
 ````ts
   it('SHADOW (no `expire-lane-live`): audits and answers "would expire" — ws-expire is never composed', async () => {
@@ -2134,7 +2359,7 @@ Replace with:
 ````
 
 <!-- replay: replace server/test/archived-expiry-lane.test.ts -->
-In `server/test/archived-expiry-lane.test.ts`, find (block 86):
+In `server/test/archived-expiry-lane.test.ts`, find (block 96):
 
 ````ts
   it('at most ONE ws-expire is composed per pass, fleet-wide', async () => {
@@ -2181,12 +2406,12 @@ Replace with:
 ( cd server && ./node_modules/.bin/vitest run test/archived-expiry-lane.test.ts --maxWorkers=1 )
 ```
 
-Measured: `archived-expiry-policy.test.ts`: `2 failed | 53 passed (55)` — × the three documents, and an empty answer that is no die is a call cut short — resumable; × THE KEPT-LEAF READER …; `expire-archived.test.ts`: `1 failed | 19 passed (20)` — × an expiry that KEPT a leaf carries the words …; `archived-expiry-lane.test.ts`: `2 failed | 29 passed (31)` — × an expiry that KEPT a leaf is listed after its row is gone …; × an OLDER ccd that reports no kept leaves raises no entry ….
+Measured: `archived-expiry-policy.test.ts`: `3 failed | 54 passed (57)` — × the three documents, and an empty answer that is no die is a call cut short — resumable; × keptLeafWord is the ONE word reader of a kept leaf …; × THE KEPT-LEAF READER …; `expire-archived.test.ts`: `1 failed | 19 passed (20)` — × an expiry that KEPT a leaf carries the words …; `archived-expiry-lane.test.ts`: `2 failed | 30 passed (32)` — × an expiry that KEPT a leaf is listed after its row is gone …; × an OLDER ccd that reports no kept leaves raises no entry ….
 
 - [ ] **Step 3: The source** (server, then the wire word, then the PWA's word).
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 87):
+In `server/src/archivedExpiry.ts`, find (block 97):
 
 ````ts
 /** The ws-expire `{"failed":…}` words that ccd prints before THIS attempt's tombstone and breadcrumb — so this attempt
@@ -2202,15 +2427,26 @@ Replace with:
  *  which says nothing either way: `unreported`, never folded into `null` (that would read "removed"). A value this
  *  build does not know is a kept leaf, `unmeasured` — ccd prints only its three words, and any other value means a
  *  leaf stood. Named keys only, so a newer ccd's other keys change nothing here (agent-first stays safe). */
-export type ExpireLeafKept = 'refused' | 'unmeasured' | 'in-use' | null | 'unreported';
-const EXPIRE_LEAF_WORDS: readonly string[] = ['refused', 'unmeasured', 'in-use'];
+export type ExpireLeafKept = KeptLeafWord | null | 'unreported';
+const KEPT_LEAF_WORDS = ['refused', 'unmeasured', 'in-use'] as const;
+/** ccd's three words for a leaf it kept. */
+export type KeptLeafWord = typeof KEPT_LEAF_WORDS[number];
 
-/** THE ONE READER of a kept-leaf key on the `expired` document. */
+/** THE WORD HALF: the ONE word reader of `clipsKept`/`tmpRootKept`. ccd's three words map to themselves; any other
+ *  value is `unmeasured` — a leaf stood. `null` and an absent key are the carrier's to tell, never this reader's: the
+ *  caller asks them first (`expireLeafKept`, the done document's carrier). CCR-15 wave 8's mirror carrier (a word,
+ *  `unreported` or `truncated`) imports this, or moves it to a neutral L1 home — a move, never a second copy. */
+export function keptLeafWord(v: unknown): KeptLeafWord {
+  return typeof v === 'string' && (KEPT_LEAF_WORDS as readonly string[]).includes(v) ? v as KeptLeafWord : 'unmeasured';
+}
+
+/** THE ONE READER of a kept-leaf key on the `expired` document — the done document's CARRIER composed with
+ *  `keptLeafWord`, the one word reader of `clipsKept`/`tmpRootKept`: `null` → `null` (removed), ABSENT → `unreported`
+ *  (an older ccd), and any other value → its word. */
 export function expireLeafKept(doc: Record<string, unknown>, key: 'clipsKept' | 'tmpRootKept'): ExpireLeafKept {
   if (!Object.prototype.hasOwnProperty.call(doc, key)) return 'unreported';
   const v = doc[key];
-  if (v === null) return null;
-  return typeof v === 'string' && EXPIRE_LEAF_WORDS.includes(v) ? v as ExpireLeafKept : 'unmeasured';
+  return v === null ? null : keptLeafWord(v);
 }
 
 /** What an expiry kept of its two leaves. */
@@ -2225,7 +2461,7 @@ export const expireKeptAny = (k: ExpireKept): boolean =>
 ````
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 88):
+In `server/src/archivedExpiry.ts`, find (block 98):
 
 ````ts
       readonly secretsDropped: number | 'unreadable' }
@@ -2238,7 +2474,7 @@ Replace with:
 ````
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 89):
+In `server/src/archivedExpiry.ts`, find (block 99):
 
 ````ts
       return { kind: 'expired', archivedAt: epochOrNull(v.archivedAt), wip, secretsDropped };
@@ -2252,7 +2488,7 @@ Replace with:
 ````
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 90):
+In `server/src/archivedExpiry.ts`, find (block 100):
 
 ````ts
   | { readonly kind: 'no-evidence'; readonly at: number };
@@ -2268,7 +2504,7 @@ Replace with:
 ````
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 91):
+In `server/src/archivedExpiry.ts`, find (block 101):
 
 ````ts
   r !== null && ((r.kind === 'failing' && r.final === true) || (r.kind === 'refused' && EXPIRE_TOKEN_KIND[r.token] === 'terminal'));
@@ -2282,7 +2518,7 @@ Replace with:
 ````
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 92):
+In `server/src/archivedExpiry.ts`, find (block 102):
 
 ````ts
 export type ArchivedExpiryOutcome =
@@ -2298,7 +2534,7 @@ export type ArchivedExpiryOutcome =
 ````
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 93):
+In `server/src/archivedExpiry.ts`, find (block 103):
 
 ````ts
     case 'expired': case 'gone': return null;
@@ -2316,7 +2552,7 @@ Replace with:
 ````
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 94):
+In `server/src/archivedExpiry.ts`, find (block 104):
 
 ````ts
 /** The words for one report. */
@@ -2326,7 +2562,7 @@ Replace with:
 
 ````ts
 /** Why ccd kept a leaf, in words — the done document's word, never more (the reason itself is in the journal row). */
-const LEAF_KEPT_WHY: Readonly<Record<'refused' | 'unmeasured' | 'in-use', string>> = {
+const LEAF_KEPT_WHY: Readonly<Record<KeptLeafWord, string>> = {
   refused: 'ccd’s removal helper refused it',
   unmeasured: 'whether it could be removed could not be measured',
   'in-use': 'a process still used it after the bounded wait',
@@ -2345,7 +2581,7 @@ export function expireKeptParts(k: Pick<ExpireKept, 'clips' | 'tmpRoot'>): strin
 ````
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 95):
+In `server/src/archivedExpiry.ts`, find (block 105):
 
 ````ts
       return 'not cleaned up: the fleet box’s ccd does not say when this archive expires (an older build), so the '
@@ -2366,7 +2602,7 @@ Replace with:
 ````
 
 <!-- replay: replace server/src/coord/expireArchived.ts -->
-In `server/src/coord/expireArchived.ts`, find (block 96):
+In `server/src/coord/expireArchived.ts`, find (block 106):
 
 ````ts
   EXPIRE_LANE_LIVE_MARKER, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, parseExpireAudit, parseExpireResult, reviewKeeps,
@@ -2379,7 +2615,7 @@ Replace with:
 ````
 
 <!-- replay: replace server/src/coord/expireArchived.ts -->
-In `server/src/coord/expireArchived.ts`, find (block 97):
+In `server/src/coord/expireArchived.ts`, find (block 107):
 
 ````ts
     case 'expired': return answer({ kind: 'expired' }, { wip: verb.wip, secretsDropped: verb.secretsDropped });
@@ -2392,7 +2628,7 @@ Replace with:
 ````
 
 <!-- replay: replace server/src/coord/expireArchived.ts -->
-In `server/src/coord/expireArchived.ts`, find (block 98):
+In `server/src/coord/expireArchived.ts`, find (block 108):
 
 ````ts
       return `${who} was cleaned up: its commits are kept in the attic (ccd ws-attic --session ${r.sessionId}), ${wip}${secrets}.`;
@@ -2412,7 +2648,7 @@ Replace with:
 ````
 
 <!-- replay: replace server/src/watch.ts -->
-In `server/src/watch.ts`, find (block 99):
+In `server/src/watch.ts`, find (block 109):
 
 ````ts
     for (const id of [...this.archivedExpiryState.keys()]) if (!seen.has(id)) this.archivedExpiryState.delete(id);
@@ -2427,7 +2663,7 @@ Replace with:
 ````
 
 <!-- replay: replace shared/api.ts -->
-In `shared/api.ts`, find (block 100):
+In `shared/api.ts`, find (block 110):
 
 ````ts
   readonly kind: 'would-expire' | 'held' | 'in-use' | 'refused' | 'failing' | 'no-evidence';
@@ -2440,7 +2676,7 @@ Replace with:
 ````
 
 <!-- replay: replace pwa/src/fleet/expiryWords.ts -->
-In `pwa/src/fleet/expiryWords.ts`, find (block 101):
+In `pwa/src/fleet/expiryWords.ts`, find (block 111):
 
 ````ts
   'no-evidence': 'no evidence',
@@ -2455,36 +2691,37 @@ Replace with:
 };
 ````
 
-- [ ] **Step 4: Run — green**, both typechecks and the PWA's row suite. Measured: `55 passed (55)`; `20 passed (20)`; `31 passed (31)`; `( cd server && ./node_modules/.bin/tsc --noEmit -p . )` rc 0; `( cd pwa && ./node_modules/.bin/tsc --noEmit -p . )` rc 0; `( cd pwa && ./node_modules/.bin/vitest run test/child-reclaim-banner.test.tsx --maxWorkers=1 )` `41 passed (41)`.
+- [ ] **Step 4: Run — green**, both typechecks and the PWA's row suite. Measured: `57 passed (57)`; `20 passed (20)`; `32 passed (32)`; `( cd server && ./node_modules/.bin/tsc --noEmit -p . )` rc 0; `( cd pwa && ./node_modules/.bin/tsc --noEmit -p . )` rc 0; `( cd pwa && ./node_modules/.bin/vitest run test/child-reclaim-banner.test.tsx --maxWorkers=1 )` `41 passed (41)`.
 
 - [ ] **Step 5: The mutation rows.**
 
 | Row | Mutation | Red |
 |---|---|---|
-| T9.1 | `server/src/archivedExpiry.ts`: `  if (!Object.prototype.hasOwnProperty.call(doc, key)) return 'unreported';` → `  if (!Object.prototype.hasOwnProperty.call(doc, key)) return null;` | `archived-expiry-policy.test.ts`: `2 failed \| 53 passed (55)`<br>`expire-archived.test.ts`: `1 failed \| 19 passed (20)`<br>`archived-expiry-lane.test.ts`: `1 failed \| 30 passed (31)` — an OLDER ccd … the feed row says it is unmeasured |
-| T9.2 | `server/src/archivedExpiry.ts`: `      return expireKeptAny(o.kept) ? {` → `      return false ? {` | `archived-expiry-policy.test.ts`: `1 failed \| 54 passed (55)` — THE KEPT-LEAF READER …<br>`archived-expiry-lane.test.ts`: `1 failed \| 30 passed (31)` — an expiry that KEPT a leaf is listed after its row is gone … |
-| T9.3 | `server/src/archivedExpiry.ts`: `  (k.clips !== null && k.clips !== 'unreported') \|\|` → `  (k.clips !== null) \|\|` | `archived-expiry-policy.test.ts`: `1 failed \| 54 passed (55)` — `the rollout skew raises no alarm`<br>`archived-expiry-lane.test.ts`: `2 failed \| 29 passed (31)` — the armed expiry and the OLDER-ccd case (`finished with`) |
-| T9.4 | `server/src/watch.ts`: `if (!seen.has(id) && e.report?.kind !== 'kept') this.archivedExpiryState.delete(id);` → `if (!seen.has(id) && e !== undefined) this.archivedExpiryState.delete(id);` | `archived-expiry-lane.test.ts`: `1 failed \| 30 passed (31)` — an expiry that KEPT a leaf is listed after its row is gone … |
-| T9.5 | `server/src/archivedExpiry.ts`: `    \|\| r.kind === 'kept');` → `);` (the line joined to the one above) | `archived-expiry-policy.test.ts`: `1 failed \| 54 passed (55)` — `a hold never takes its place` |
-| T9.7 | `server/src/archivedExpiry.ts`: `  (k.clips !== null && k.clips !== 'unreported') \|\| (k.tmpRoot !== null && k.tmpRoot !== 'unreported');` → `  (k.clips !== null && k.clips !== 'unreported');` (the tmpRoot half dropped — the tests lens's survivor) | `archived-expiry-policy.test.ts`: `1 failed \| 54 passed (55)` — THE KEPT-LEAF READER … (`a temp root kept on its own is listed too: expected null`) |
+| T9.1 | `server/src/archivedExpiry.ts`: `  if (!Object.prototype.hasOwnProperty.call(doc, key)) return 'unreported';` → `  if (!Object.prototype.hasOwnProperty.call(doc, key)) return null;` | `archived-expiry-policy.test.ts`: `2 failed \| 55 passed (57)`<br>`expire-archived.test.ts`: `1 failed \| 19 passed (20)`<br>`archived-expiry-lane.test.ts`: `1 failed \| 31 passed (32)` — an OLDER ccd … the feed row says it is unmeasured |
+| T9.2 | `server/src/archivedExpiry.ts`: `      return expireKeptAny(o.kept) ? {` → `      return false ? {` | `archived-expiry-policy.test.ts`: `1 failed \| 56 passed (57)` — THE KEPT-LEAF READER …<br>`archived-expiry-lane.test.ts`: `1 failed \| 31 passed (32)` — an expiry that KEPT a leaf is listed after its row is gone … |
+| T9.3 | `server/src/archivedExpiry.ts`: `  (k.clips !== null && k.clips !== 'unreported') \|\|` → `  (k.clips !== null) \|\|` | `archived-expiry-policy.test.ts`: `1 failed \| 56 passed (57)` — `the rollout skew raises no alarm`<br>`archived-expiry-lane.test.ts`: `2 failed \| 30 passed (32)` — the armed expiry and the OLDER-ccd case (`finished with`) |
+| T9.4 | `server/src/watch.ts`: `if (!seen.has(id) && e.report?.kind !== 'kept') this.archivedExpiryState.delete(id);` → `if (!seen.has(id) && e !== undefined) this.archivedExpiryState.delete(id);` | `archived-expiry-lane.test.ts`: `1 failed \| 31 passed (32)` — an expiry that KEPT a leaf is listed after its row is gone … |
+| T9.5 | `server/src/archivedExpiry.ts`: `    \|\| r.kind === 'kept');` → `);` (the line joined to the one above) | `archived-expiry-policy.test.ts`: `1 failed \| 56 passed (57)` — `a hold never takes its place` |
+| T9.7 | `server/src/archivedExpiry.ts`: `  (k.clips !== null && k.clips !== 'unreported') \|\| (k.tmpRoot !== null && k.tmpRoot !== 'unreported');` → `  (k.clips !== null && k.clips !== 'unreported');` (the tmpRoot half dropped — the tests lens's survivor) | `archived-expiry-policy.test.ts`: `1 failed \| 56 passed (57)` — THE KEPT-LEAF READER … (`a temp root kept on its own is listed too: expected null`) |
 | T9.6 | `pwa/src/fleet/expiryWords.ts`: `  kept: 'cleaned up, kept', ⏎ ` → (removed) | `( cd pwa && ./node_modules/.bin/tsc --noEmit -p . )`: `error TS2741: Property 'kept' is missing in type …` (rc 2) |
+| T9.8 | `server/src/archivedExpiry.ts`: `  return typeof v === 'string' && (KEPT_LEAF_WORDS as readonly string[]).includes(v) ? v as KeptLeafWord : 'unmeasured';` → `  return typeof v === 'string' ? v as KeptLeafWord : 'unmeasured';` (the word half reads any string as a word) | `archived-expiry-policy.test.ts`: `2 failed \| 55 passed (57)` — keptLeafWord is the ONE word reader … (`"gone-sideways": expected 'gone-sideways' to be 'unmeasured'`); THE KEPT-LEAF READER … (`a value this build does not know is a KEPT leaf`) |
 
 - [ ] **Step 6: Commit.** `feat(lifecycle): an expiry that kept a leaf is listed; an older ccd's silence is the feed row's (ruling B2)`.
 
 ---
 
-### Task 10: A day of resumable failures stops the asking (ruling B3)
+### Task 10: A day of resumable failures slows the asking — the persistent tier (ruling B3, revised)
 
 **Model routing:** `sonnet`, effort `medium`.
 
-**Files:** `server/src/archivedExpiry.ts` (`EXPIRE_FAILURE_GIVE_UP_MS`, the `failing` report, `archivedExpiryNextEntry`'s failure arm, the sentence); tests `server/test/archived-expiry-policy.test.ts`, `server/test/archived-expiry-lane.test.ts`.
+**Files:** `server/src/archivedExpiry.ts` (`EXPIRE_FAILURE_GIVE_UP_MS`, `EXPIRE_PERSISTENT_RETRY_MS`, the `failing` report's `attempts`, `expiryReportStands` and the hold guard, `archivedExpiryNextEntry`'s failure and deferral arms, the sentence); tests `server/test/archived-expiry-policy.test.ts`, `server/test/archived-expiry-lane.test.ts`.
 
-**Interfaces:** `export const EXPIRE_FAILURE_GIVE_UP_MS = 24 * 60 * 60_000;`, defined once beside `EXPIRE_FAILURE_CEILING_MS` (a test holds it at 24 ceilings). In the `failed` (resumable) / `box` arm, a run of failures whose first (`failingSince`) is a day old returns `nextAskAt` +∞ and the report `{ kind: 'failing', at: failingSince, detail: <the last>, final: true, attempts: <failures> }`. The sentence names the first failure's instant, the attempts and the last detail; says the expiry may have stopped part-way — the stop covers failures after the breadcrumb (`worktree-remove-failed`, the tail's `pin-failed` and `tombstone-unwritable`), which leave a part-cleaned workspace, and the server cannot tell until CCR-15 wave 7's `crumb` field — so what is left on disk is not known; says the lane does not ask again for this archive and that a server restart, or a new archive of it, asks afresh (a row stopped part-way through its cleanup is in practice cleared by a restart); and never names a destructive verb. A new `archivedAt` starts a fresh entry (`archivedExpiryEntryFor`, unchanged); the lane's memory is in-memory, so a restart re-learns (stated). **Scope:** the ACT's failures. The learning audit's own ladder (`archivedExpiryLearned`) composes nothing destructive and keeps its backoff (the departure `the-day-long-stop-covers-the-act-not-the-learn`). CCR-15 wave 7's shared terminal word maps to not-resumable when it arrives — out of scope here.
+**Interfaces:** the coordinator REVISED B3 on 2026-10-08 (agreed with CCR-15's coordinator, answering its R69): the day-long STOP is a PERSISTENT TIER. Parked at +∞, a row stopped by a day of resumable failures — which may have failed after its breadcrumb, leaving a part-cleaned workspace — was asked again only after a server restart, however soon the operator fixed the cause. So: `export const EXPIRE_FAILURE_GIVE_UP_MS = 24 * 60 * 60_000;` (unchanged, a test holds it at 24 ceilings) and `export const EXPIRE_PERSISTENT_RETRY_MS = 4 * 60 * 60_000;`, defined ONCE beside `EXPIRE_FAILURE_CEILING_MS` and `EXPIRE_FAILURE_GIVE_UP_MS` (a test holds it at four ceilings). In the `failed` (resumable) / `box` arm, a run of failures whose first (`failingSince`) is a day old returns `nextAskAt` = now + `EXPIRE_PERSISTENT_RETRY_MS` — NEVER +∞ — and the report `{ kind: 'failing', at: failingSince, detail: <the last>, attempts: <failures> }`: the STANDING attention entry, with `attempts` and never `final` (the row is still asked). Each later failure updates it (attempts, the last detail) and keeps the four-hour cadence; a completed expiry finishes the row as today; a new `archivedAt` starts a fresh entry (`archivedExpiryEntryFor`, unchanged); the lane's memory is in-memory, so a restart re-learns. The sentence names the first failure's instant, the attempts and the last detail; says the expiry may have stopped part-way — failures after the breadcrumb (`worktree-remove-failed`, the tail's `pin-failed` and `tombstone-unwritable`) leave a part-cleaned workspace, and the server cannot tell until CCR-15 wave 7's `crumb` field — so what is left on disk is not known; says the lane asks again every four hours and keeps this entry until an attempt completes or the workspace is archived again; and never names a destructive verb. **Every reader of "final" was checked** (the ruling's ask): `expiryReportIsFinal` keeps its meaning — never asked again — and its one caller, `archivedExpirySighted`'s hold guard, now asks `expiryReportStands` (final OR the persistent tier's `attempts`), so a hold still never takes the standing entry's place or resets its cadence; `archivedExpiryDue` (the lane's due filter) and the act's pick read `nextAskAt` alone, so a finite four-hour wait is asked like any other; `expiryAttention` lists any report; `archivedExpiryLearned` clears a `failing` report only on a learn, which a row with a learned instant never runs; and the `deferred` arm — which, unlike a final row, a persistent row CAN reach, because it is still acted on — would have dropped the entry and reset the run, so a deferral (it asks nothing of the box) now keeps a standing report and its run (`expiryReportStands`). Terminal refusals and composition errors keep `main`'s "never asked again"; this covers only the resumable-failure horizon. **Scope:** the ACT's failures. The learning audit's own ladder (`archivedExpiryLearned`) composes nothing destructive and keeps its backoff (the departure `the-day-long-stop-covers-the-act-not-the-learn`). Until CCR-15 wave 7 is on `main`, today's parser reads `containment-refuted` (an unknown `failed` word) as resumable, which wave 7's `containment-refuted-word` test pins, so on the expiry lane it reaches the persistent tier after a day and is never stranded; attention AT ONCE for it (CCR-15's `stuck` class) is this programme's wave 6.
 
-- [ ] **Step 1: The tests (red).** A policy case walks a day of failures through the backoff to the stop; a lane case lets an armed expiry fail every hour and counts the asks: twenty-five (the first, then one an hour; the 25th lands a day after the first and is the last), and none after.
+- [ ] **Step 1: The tests (red).** A policy case walks a day of failures through the backoff to the persistent tier, then a later failure, a deferral, a hold, a completed attempt and a new archive; a lane case lets an armed expiry fail every hour and counts the asks over two days: twenty-five on the first (the first, then one an hour; the 25th lands a day after the first), then one every four hours — never zero after the day.
 
 <!-- replay: replace server/test/archived-expiry-policy.test.ts -->
-In `server/test/archived-expiry-policy.test.ts`, find (block 102):
+In `server/test/archived-expiry-policy.test.ts`, find (block 112):
 
 ````ts
   EXPIRE_FAILURE_CEILING_MS, EXPIRE_IN_USE_ATTENTION_PASSES, EXPIRE_LANE_LIVE_MARKER, EXPIRE_NO_EVIDENCE_RETRY_MS,
@@ -2494,10 +2731,11 @@ Replace with:
 
 ````ts
   EXPIRE_FAILURE_CEILING_MS, EXPIRE_FAILURE_GIVE_UP_MS, EXPIRE_IN_USE_ATTENTION_PASSES, EXPIRE_LANE_LIVE_MARKER, EXPIRE_NO_EVIDENCE_RETRY_MS,
+  EXPIRE_PERSISTENT_RETRY_MS,
 ````
 
 <!-- replay: replace server/test/archived-expiry-policy.test.ts -->
-In `server/test/archived-expiry-policy.test.ts`, find (block 103):
+In `server/test/archived-expiry-policy.test.ts`, find (block 113):
 
 ````ts
   it('a failure the box says will NOT resume stops at once: reported, never asked again for this archive (review 313, parked item 4)', () => {
@@ -2506,35 +2744,49 @@ In `server/test/archived-expiry-policy.test.ts`, find (block 103):
 Replace with:
 
 ````ts
-  it('a DAY of failures the box called resumable: the report becomes FINAL and the lane stops asking for this archive (wave 5)', () => {
+  it('a DAY of failures the box called resumable: the PERSISTENT TIER — a standing entry, asked every four hours, never stopping (wave 5)', () => {
     let x = e();
     let t = NOW;
     for (let k = 0; k < 30 && t - NOW < EXPIRE_FAILURE_GIVE_UP_MS; k += 1) {
       x = archivedExpiryNextEntry(x, { kind: 'failed', resumable: true, detail: `worktree-remove-failed: try ${k + 1}` }, t, PASS)!;
-      expect(x.nextAskAt, `still retried after ${k + 1}`).toBeLessThan(Number.POSITIVE_INFINITY);
+      expect(x.nextAskAt, `still backing off after ${k + 1}`).toBeLessThan(Number.POSITIVE_INFINITY);
+      expect((x.report as { attempts?: number } | null)?.attempts, `not yet standing after ${k + 1}`).toBeUndefined();
       t = x.nextAskAt;
     }
-    x = archivedExpiryNextEntry(x, { kind: 'box', word: 'lock-unopenable', detail: 'cannot open the reap lock at /r' }, NOW + EXPIRE_FAILURE_GIVE_UP_MS, PASS)!;
-    expect(x.nextAskAt, 'it stops asking').toBe(Number.POSITIVE_INFINITY);
-    expect(x.report).toMatchObject({ kind: 'failing', at: NOW, final: true, detail: 'cannot open the reap lock at /r' });
-    const attempts = (x.report as { attempts?: number }).attempts!;
-    expect(attempts).toBe(x.failures);
-    expect(expiryReportSentence(x.report!, null)).toBe('cleanup stopped after a day of failures the box said it could resume: the '
+    const DAY = NOW + EXPIRE_FAILURE_GIVE_UP_MS;
+    x = archivedExpiryNextEntry(x, { kind: 'box', word: 'lock-unopenable', detail: 'cannot open the reap lock at /r' }, DAY, PASS)!;
+    expect(x.nextAskAt, 'it asks again in four hours — never +∞').toBe(DAY + EXPIRE_PERSISTENT_RETRY_MS);
+    const attempts = x.failures;
+    expect(x.report).toEqual({ kind: 'failing', at: NOW, detail: 'cannot open the reap lock at /r', attempts });
+    expect(expiryReportSentence(x.report!, null)).toBe('cleanup has failed for a day in ways the box said it could resume: the '
       + `first at 2026-09-21 14:13 UTC, ${attempts} attempts, the last: cannot open the reap lock at /r. It may have stopped part-way — `
-      + 'the box does not yet say whether an attempt began its cleanup — so what is left on disk is not known. The lane does not ask '
-      + 'again for this archive; a server restart, or a new archive of it, asks afresh.');
+      + 'the box does not yet say whether an attempt began its cleanup — so what is left on disk is not known. The lane asks again '
+      + 'every 4 hours and keeps this entry until an attempt completes or the workspace is archived again.');
     expect(expiryReportSentence(x.report!, null), 'it never suggests a destructive verb').not.toMatch(/ws-reap|ws-rm|ws-expire|delete|remove/);
-    expect(archivedExpirySighted(x, { eligible: false, why: 'held' }, 'h', NOW + EXPIRE_FAILURE_GIVE_UP_MS + PASS).report, 'a hold never hides it')
-      .toEqual(x.report);
-    expect(archivedExpiryEntryFor(x, x.archivedAt + 1), 'a new archive starts afresh').toMatchObject({ failures: 0, report: null, nextAskAt: 0 });
+    // Each later failure updates the entry and keeps the cadence; the first failure's instant stands.
+    const later = archivedExpiryNextEntry(x, { kind: 'failed', resumable: true, detail: 'worktree-remove-failed: still busy' }, x.nextAskAt, PASS)!;
+    expect(later.nextAskAt, 'and again four hours on').toBe(x.nextAskAt + EXPIRE_PERSISTENT_RETRY_MS);
+    expect(later.report).toEqual({ kind: 'failing', at: NOW, detail: 'worktree-remove-failed: still busy', attempts: attempts + 1 });
+    // A deferral asks nothing of the box: the entry and its run stand, and it is asked again next pass.
+    const deferred = archivedExpiryNextEntry(later, { kind: 'deferred', why: 'presence', detail: 'someone is viewing this session' }, later.nextAskAt, PASS)!;
+    expect(deferred, 'a deferral ends nothing').toMatchObject({ report: later.report, failures: attempts + 1, failingSince: NOW,
+      nextAskAt: later.nextAskAt + PASS });
+    // A hold never takes its place nor resets its cadence; an attempt that completes finishes the row; a new archive starts afresh.
+    const held = archivedExpirySighted(later, { eligible: false, why: 'held' }, 'h', later.nextAskAt - PASS);
+    expect(held.report, 'a hold never hides it').toEqual(later.report);
+    expect(held.nextAskAt, 'nor resets its cadence').toBe(later.nextAskAt);
+    expect(archivedExpiryNextEntry(later, { kind: 'expired', kept: { clips: null, tmpRoot: null } }, later.nextAskAt, PASS),
+      'a completed attempt finishes it').toBeNull();
+    expect(archivedExpiryEntryFor(later, later.archivedAt + 1), 'a new archive starts afresh').toMatchObject({ failures: 0, report: null, nextAskAt: 0 });
     expect(EXPIRE_FAILURE_GIVE_UP_MS).toBe(24 * EXPIRE_FAILURE_CEILING_MS);
+    expect(EXPIRE_PERSISTENT_RETRY_MS, 'the persistent cadence: four ceilings, inside the day').toBe(4 * EXPIRE_FAILURE_CEILING_MS);
   });
 
   it('a failure the box says will NOT resume stops at once: reported, never asked again for this archive (review 313, parked item 4)', () => {
 ````
 
 <!-- replay: replace server/test/archived-expiry-lane.test.ts -->
-In `server/test/archived-expiry-lane.test.ts`, find (block 104):
+In `server/test/archived-expiry-lane.test.ts`, find (block 114):
 
 ````ts
   EXPIRE_AUDITS_PER_PASS, EXPIRE_IN_USE_ATTENTION_PASSES, EXPIRE_LANE_LIVE_MARKER, EXPIRE_NO_EVIDENCE_RETRY_MS,
@@ -2547,7 +2799,7 @@ Replace with:
 ````
 
 <!-- replay: replace server/test/archived-expiry-lane.test.ts -->
-In `server/test/archived-expiry-lane.test.ts`, find (block 105):
+In `server/test/archived-expiry-lane.test.ts`, find (block 115):
 
 ````ts
 describe('the record follows the row (review 313, F1)', () => {
@@ -2557,33 +2809,40 @@ Replace with:
 
 ````ts
 describe('a failure that keeps resuming (wave 5)', () => {
-  it('a day of resumable failures on one archive: the lane stops asking, and lists the first failure, the attempts and the last', async () => {
+  it('a day of resumable failures on one archive: then the persistent tier — asked every four hours, never stopping, and listed with the first failure, the attempts and the last', async () => {
     const f = await fixture({ expire: () => ({ code: 1, stdout: JSON.stringify({ failed: 'worktree-remove-failed', detail: 'the tree is busy' }), stderr: '' }) });
     f.touch(EXPIRE_LANE_LIVE_MARKER);
     f.plant('demo-a');
     await threePasses(f);
-    for (let k = 0; k < 30; k += 1) { f.advance(EXPIRE_FAILURE_CEILING_MS); f.next(); await f.pass(); }
+    const hourly = async (): Promise<number> => {
+      const before = f.verbsFor('ws-expire').length;
+      f.advance(EXPIRE_FAILURE_CEILING_MS); f.next(); await f.pass();
+      return f.verbsFor('ws-expire').length - before;
+    };
+    for (let k = 0; k < 24; k += 1) await hourly();
+    // The first failure, then one an hour (the backoff's ceiling): the 25th lands a day after the first.
+    expect(f.verbsFor('ws-expire'), 'retried for a day').toHaveLength(25);
+    const dayTwo: number[] = [];
+    for (let k = 0; k < 24; k += 1) dayTwo.push(await hourly());
+    expect(dayTwo.join(''), 'then one every four hours, never stopping').toBe('000100010001000100010001');
     const asked = f.verbsFor('ws-expire').length;
-    // The first failure, then one an hour (the backoff's ceiling): the 25th lands a day after the first, and is the last.
-    expect(asked, 'retried for a day, then stopped').toBe(25);
-    for (let k = 0; k < 5; k += 1) { f.advance(EXPIRE_FAILURE_CEILING_MS); f.next(); await f.pass(); }
-    expect(f.verbsFor('ws-expire'), 'never asked again for this archive').toHaveLength(asked);
     await f.watcher.tick();
     const list = f.watcher.currentCoord()?.expiryAttention ?? [];
     expect(list.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'failing']]);
     expect(list[0]!.sentence).toContain(`${asked} attempts, the last: worktree-remove-failed: the tree is busy`);
+    expect(list[0]!.sentence).toContain('The lane asks again every 4 hours');
   });
 });
 
 describe('the record follows the row (review 313, F1)', () => {
 ````
 
-- [ ] **Step 2: Run — red.** Measured: `archived-expiry-policy.test.ts`: `1 failed | 55 passed (56)` — × a DAY of failures the box called resumable: the report becomes FINAL …; `archived-expiry-lane.test.ts`: `1 failed | 31 passed (32)` — × a day of resumable failures on one archive: the lane stops asking ….
+- [ ] **Step 2: Run — red.** Measured: `archived-expiry-policy.test.ts`: `1 failed | 57 passed (58)` — × a DAY of failures the box called resumable: the PERSISTENT TIER … (the constants are not exported yet); `archived-expiry-lane.test.ts`: `1 failed | 32 passed (33)` — × a day of resumable failures on one archive: then the persistent tier … (`expected '111111111111111111111111' to be '000100010001000100010001'`: hourly for ever, as on `main`).
 
 - [ ] **Step 3: The source.**
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 106):
+In `server/src/archivedExpiry.ts`, find (block 116):
 
 ````ts
 export const EXPIRE_FAILURE_CEILING_MS = 60 * 60_000;
@@ -2594,16 +2853,22 @@ Replace with:
 ````ts
 export const EXPIRE_FAILURE_CEILING_MS = 60 * 60_000;
 
-/** THE LANE'S ANSWER TO A REPEATING RESUMABLE FAILURE (the coordinator's ruling, wave 5): a run of `failed` (resumable)
- *  or `lock-unopenable` answers to the ACT that has lasted this long is reported as FINAL and the lane stops asking
- *  for that archive — `nextAskAt` +∞ — until the archive changes (a new `archivedAt` starts a fresh entry). In memory,
- *  as all of the lane's memory: a restart asks again, and re-learns. The learning audit's own ladder is not this one:
- *  it composes nothing destructive, and keeps its backoff. */
+/** THE LANE'S ANSWER TO A REPEATING RESUMABLE FAILURE (the coordinator's ruling, wave 5, revised): a run of `failed`
+ *  (resumable) or `lock-unopenable` answers to the ACT that has lasted this long moves the row to the PERSISTENT TIER
+ *  (`EXPIRE_PERSISTENT_RETRY_MS`): its report becomes a STANDING attention entry, and the lane asks again every four
+ *  hours, never stopping — never +∞, because an expiry that failed after its breadcrumb leaves a part-cleaned
+ *  workspace that only a completed attempt finishes once the operator fixes the cause. A completed attempt finishes
+ *  the row, and a new `archivedAt` starts a fresh entry. In memory, as all of the lane's memory: a restart re-learns.
+ *  The learning audit's own ladder is not this one: it composes nothing destructive, and keeps its backoff. */
 export const EXPIRE_FAILURE_GIVE_UP_MS = 24 * 60 * 60_000;
+
+/** THE PERSISTENT TIER's cadence: a row past `EXPIRE_FAILURE_GIVE_UP_MS` of resumable failures is asked again this
+ *  long after each attempt, for as long as its failures last (wave 5, the coordinator's revised ruling). */
+export const EXPIRE_PERSISTENT_RETRY_MS = 4 * 60 * 60_000;
 ````
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 107):
+In `server/src/archivedExpiry.ts`, find (block 117):
 
 ````ts
   | { readonly kind: 'failing'; readonly at: number; readonly detail: string; readonly final?: true }
@@ -2613,13 +2878,79 @@ Replace with:
 
 ````ts
   | { readonly kind: 'failing'; readonly at: number; readonly detail: string; readonly final?: true;
-      /** Set only when the lane STOPPED ASKING after `EXPIRE_FAILURE_GIVE_UP_MS` of resumable failures: how many
-       *  attempts failed (`at` is the first failure, `detail` the last). */
+      /** Set only on the PERSISTENT TIER — a row past `EXPIRE_FAILURE_GIVE_UP_MS` of resumable failures, asked every
+       *  `EXPIRE_PERSISTENT_RETRY_MS` — whose report is a STANDING entry: how many attempts failed (`at` is the first
+       *  failure, `detail` the last). Never with `final`: the row is still asked. */
       readonly attempts?: number }
 ````
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 108):
+In `server/src/archivedExpiry.ts`, find (block 118):
+
+````ts
+  r !== null && ((r.kind === 'failing' && r.final === true) || (r.kind === 'refused' && EXPIRE_TOKEN_KIND[r.token] === 'terminal')
+    || r.kind === 'kept');
+````
+
+Replace with:
+
+````ts
+  r !== null && ((r.kind === 'failing' && r.final === true) || (r.kind === 'refused' && EXPIRE_TOKEN_KIND[r.token] === 'terminal')
+    || r.kind === 'kept');
+
+/** A STANDING report — one a hold must not take the place of: a FINAL one (`expiryReportIsFinal`), or the PERSISTENT
+ *  tier's (a `failing` report with `attempts`: the row is still asked, every `EXPIRE_PERSISTENT_RETRY_MS`, and the
+ *  report is its record of a day of failures that may have left the workspace part-cleaned). A hold that replaced it
+ *  would be cleared by the release, and the record with it (wave 5). */
+export const expiryReportStands = (r: ExpiryReport | null): boolean =>
+  expiryReportIsFinal(r) || (r !== null && r.kind === 'failing' && r.attempts !== undefined);
+````
+
+<!-- replay: replace server/src/archivedExpiry.ts -->
+In `server/src/archivedExpiry.ts`, find (block 119):
+
+````ts
+    // A row the lane has stopped asking keeps its own report — listed with its reason while held and after the hold goes.
+    if (expiryReportIsFinal(entry.report)) return eligibleSince === entry.eligibleSince ? entry : { ...entry, eligibleSince };
+````
+
+Replace with:
+
+````ts
+    // A STANDING report — a row the lane has stopped asking, or one on the persistent tier — keeps its own report and its
+    // wait, listed while held and after the hold goes.
+    if (expiryReportStands(entry.report)) return eligibleSince === entry.eligibleSince ? entry : { ...entry, eligibleSince };
+````
+
+<!-- replay: replace server/src/archivedExpiry.ts -->
+In `server/src/archivedExpiry.ts`, find (block 120):
+
+````ts
+    case 'deferred':
+      // A pause or a missing verb the EXECUTOR saw (its own registry listing, its own caps read) is one the tick's
+      // listing may never have shown — a switch raised and lowered inside one cadence window — so the sighting from
+      // before it is forgotten here too: a lowered switch needs two FRESH passes, whoever saw it.
+      return { ...base, ...steady, nextAskAt: nowMs + passMs, report: null,
+        ...(o.why === 'paused-at-server' || o.why === 'unsupported' ? { eligibleSince: null } : {}) };
+````
+
+Replace with:
+
+````ts
+    case 'deferred': {
+      // A pause or a missing verb the EXECUTOR saw (its own registry listing, its own caps read) is one the tick's
+      // listing may never have shown — a switch raised and lowered inside one cadence window — so the sighting from
+      // before it is forgotten here too: a lowered switch needs two FRESH passes, whoever saw it. A deferral asks
+      // nothing of the box, so a STANDING report — the persistent tier's (wave 5) — and its run of failures stand
+      // through it: only an attempt ends them.
+      const stands = expiryReportStands(entry.report);
+      return { ...base, ...(stands ? {} : steady), nextAskAt: nowMs + passMs, report: stands ? entry.report : null,
+        ...(o.why === 'paused-at-server' || o.why === 'unsupported' ? { eligibleSince: null } : {}) };
+    }
+````
+
+<!-- replay: replace server/src/archivedExpiry.ts -->
+In `server/src/archivedExpiry.ts`, find (block 121):
 
 ````ts
       const failures = entry.failures + 1;
@@ -2633,17 +2964,17 @@ Replace with:
       const failures = entry.failures + 1;
       const failingSince = entry.failingSince ?? nowMs;
       if (nowMs - failingSince >= EXPIRE_FAILURE_GIVE_UP_MS) {
-        // A DAY of failures the box called resumable (the coordinator's ruling, wave 5): the report becomes final and the
-        // lane stops asking for this archive. It names the first failure, the attempts and the last detail, and it
-        // never suggests a destructive verb.
-        return { ...base, inUseRun: 0, inUse: [], failures, failingSince, nextAskAt: Number.POSITIVE_INFINITY,
-          report: { kind: 'failing', at: failingSince, detail: o.detail, final: true, attempts: failures } };
+        // A DAY of failures the box called resumable (the coordinator's revised ruling, wave 5): the PERSISTENT TIER. The
+        // report is a standing entry — the first failure, the attempts, the last detail, never a destructive verb — and
+        // the lane asks again every `EXPIRE_PERSISTENT_RETRY_MS`, never stopping: each later failure updates the entry.
+        return { ...base, inUseRun: 0, inUse: [], failures, failingSince, nextAskAt: nowMs + EXPIRE_PERSISTENT_RETRY_MS,
+          report: { kind: 'failing', at: failingSince, detail: o.detail, attempts: failures } };
       }
       return { ...base, inUseRun: 0, inUse: [], failures, failingSince,
 ````
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 109):
+In `server/src/archivedExpiry.ts`, find (block 122):
 
 ````ts
 const iso = (epochS: number): string => new Date(epochS * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
@@ -2657,7 +2988,7 @@ const isoMs = (ms: number): string => iso(Math.floor(ms / 1000));
 ````
 
 <!-- replay: replace server/src/archivedExpiry.ts -->
-In `server/src/archivedExpiry.ts`, find (block 110):
+In `server/src/archivedExpiry.ts`, find (block 123):
 
 ````ts
     case 'failing':
@@ -2669,25 +3000,30 @@ Replace with:
 ````ts
     case 'failing':
       if (r.attempts !== undefined) {
-        return `cleanup stopped after a day of failures the box said it could resume: the first at ${isoMs(r.at)}, `
+        return `cleanup has failed for a day in ways the box said it could resume: the first at ${isoMs(r.at)}, `
           + `${r.attempts} ${r.attempts === 1 ? 'attempt' : 'attempts'}, the last: ${r.detail}. It may have stopped part-way — the box `
-          + 'does not yet say whether an attempt began its cleanup — so what is left on disk is not known. The lane does not ask '
-          + 'again for this archive; a server restart, or a new archive of it, asks afresh.';
+          + 'does not yet say whether an attempt began its cleanup — so what is left on disk is not known. The lane asks again '
+          + `every ${EXPIRE_PERSISTENT_RETRY_MS / 3_600_000} hours and keeps this entry until an attempt completes or the `
+          + 'workspace is archived again.';
       }
       return r.final === true ? `cleanup stopped: ${r.detail}. It is not asked again for this archive.`
 ````
 
-- [ ] **Step 4: Run — green.** Measured: `56 passed (56)`; `32 passed (32)`.
+- [ ] **Step 4: Run — green.** Measured: `58 passed (58)`; `33 passed (33)`; `( cd server && ./node_modules/.bin/tsc --noEmit -p . )` rc 0.
 
 - [ ] **Step 5: The mutation rows.**
 
 | Row | Mutation | Red |
 |---|---|---|
-| T10.1 | `server/src/archivedExpiry.ts`: `      if (nowMs - failingSince >= EXPIRE_FAILURE_GIVE_UP_MS) {` → `      if (nowMs - failingSince >= Number.POSITIVE_INFINITY) {` | `archived-expiry-policy.test.ts`: `1 failed \| 55 passed (56)` — `it stops asking`<br>`archived-expiry-lane.test.ts`: `1 failed \| 31 passed (32)` — `retried for a day, then stopped: expected 31 to be 25` |
-| T10.2 | `server/src/archivedExpiry.ts`: `export const EXPIRE_FAILURE_GIVE_UP_MS = 24 * 60 * 60_000;` → `export const EXPIRE_FAILURE_GIVE_UP_MS = 48 * 60 * 60_000;` | `archived-expiry-policy.test.ts`: `1 failed \| 55 passed (56)`<br>`archived-expiry-lane.test.ts`: `1 failed \| 31 passed (32)` |
-| T10.3 | `server/src/archivedExpiry.ts`: `      if (r.attempts !== undefined) {` → `      if (r.attempts === -1) {` | `archived-expiry-policy.test.ts`: `1 failed \| 55 passed (56)`<br>`archived-expiry-lane.test.ts`: `1 failed \| 31 passed (32)` — the sentence names the attempts |
+| T10.1 | `server/src/archivedExpiry.ts`: `      if (nowMs - failingSince >= EXPIRE_FAILURE_GIVE_UP_MS) {` → `      if (nowMs - failingSince >= Number.POSITIVE_INFINITY) {` (no tier: hourly for ever) | `archived-expiry-policy.test.ts`: `1 failed \| 57 passed (58)` — `it asks again in four hours — never +∞`<br>`archived-expiry-lane.test.ts`: `1 failed \| 32 passed (33)` — `then one every four hours, never stopping: expected '111111111111111111111111'` |
+| T10.2 | `server/src/archivedExpiry.ts`: `export const EXPIRE_FAILURE_GIVE_UP_MS = 24 * 60 * 60_000;` → `export const EXPIRE_FAILURE_GIVE_UP_MS = 48 * 60 * 60_000;` | `archived-expiry-policy.test.ts`: `1 failed \| 57 passed (58)` (`expected 172800000 to be 86400000`)<br>`archived-expiry-lane.test.ts`: `1 failed \| 32 passed (33)` — `expected '111111111111111111111111'` |
+| T10.3 | `server/src/archivedExpiry.ts`: `      if (r.attempts !== undefined) {` → `      if (r.attempts === -1) {` | `archived-expiry-policy.test.ts`: `1 failed \| 57 passed (58)`<br>`archived-expiry-lane.test.ts`: `1 failed \| 32 passed (33)` — the sentence names the attempts |
+| T10.4 | `server/src/archivedExpiry.ts`: `        return { ...base, inUseRun: 0, inUse: [], failures, failingSince, nextAskAt: nowMs + EXPIRE_PERSISTENT_RETRY_MS,` → `        return { ...base, inUseRun: 0, inUse: [], failures, failingSince, nextAskAt: Number.POSITIVE_INFINITY,` (+∞ put back: the drafted plan's stop) | `archived-expiry-policy.test.ts`: `1 failed \| 57 passed (58)` — `it asks again in four hours — never +∞: expected Infinity`<br>`archived-expiry-lane.test.ts`: `1 failed \| 32 passed (33)` — `expected '000000000000000000000000' to be '000100010001000100010001'` (never asked after the day) |
+| T10.5 | `server/src/archivedExpiry.ts`: `export const EXPIRE_PERSISTENT_RETRY_MS = 4 * 60 * 60_000;` → `export const EXPIRE_PERSISTENT_RETRY_MS = 2 * 60 * 60_000;` | `archived-expiry-policy.test.ts`: `1 failed \| 57 passed (58)` — the sentence (`every 2 hours`)<br>`archived-expiry-lane.test.ts`: `1 failed \| 32 passed (33)` — `expected '010101010101010101010101'` |
+| T10.6 | `server/src/archivedExpiry.ts`: `    if (expiryReportStands(entry.report)) return eligibleSince === entry.eligibleSince ? entry : { ...entry, eligibleSince };` → `    if (expiryReportIsFinal(entry.report)) return eligibleSince === entry.eligibleSince ? entry : { ...entry, eligibleSince };` (the hold guard reads "final" alone) | `archived-expiry-policy.test.ts`: `1 failed \| 57 passed (58)` — `a hold never hides it: expected { kind: 'held', … }` |
+| T10.7 | `server/src/archivedExpiry.ts`: `      const stands = expiryReportStands(entry.report);` → `      const stands = false;` (a deferral drops the standing entry) | `archived-expiry-policy.test.ts`: `1 failed \| 57 passed (58)` — `a deferral ends nothing` |
 
-- [ ] **Step 6: Commit.** `feat(lifecycle): after a day of resumable failures the expiry lane stops asking for that archive (ruling B3)`.
+- [ ] **Step 6: Commit.** `feat(lifecycle): after a day of resumable failures the expiry lane asks every four hours, never stopping — the persistent tier (ruling B3, revised)`.
 
 ---
 
@@ -2697,12 +3033,12 @@ Replace with:
 
 **Files:** `ccd/ccd` (`_ws_expire_locked`); tests `server/test/ccd-ws-expire-consent-branch.test.ts` (new), `server/test/archived-expiry-policy.test.ts` (the census map).
 
-**Interfaces:** `_ws_expire_locked` captures `lbstate="$RECLAIM_BRANCHSTATE"` — the in-lock recompute's three-way read, the one the token was checked against — before the pin; the pin (`_ws_reclaim_pin` or `_ws_reclaim_pin_absent`) reads the branch again through `_ws_reclaim_tip_read`; if the two differ, `_ws_reclaim_fail "$id" "$lctx" state-changed "…"`: the journal's `failed` line and the `{"failed":"state-changed",…}` document at exit 1, AFTER the pin (which only keeps) and BEFORE the tombstone and the breadcrumb — nothing destroyed, no breadcrumb, the unit untouched. Both directions refuse, as on the reclaim side (the departure `expire-consent-binds-the-branch-both-ways`; measured at `b0647d850`: with no check, a branch made in the window was deleted at the tip the pin read). A branch already absent when the token was minted reads absent twice and expires, its work in the attic (unchanged — a control case pins it). A deletion between the FRESH pin and the tail's SETTLE stays as CCR-15 wave 6 left it (Measured while planning, item 2). Task 8's reading and this refusal agree: the census list gains `_ws_expire_locked failed state-changed`, on the fresh arm, before the breadcrumb.
+**Interfaces:** `_ws_expire_locked` captures `lbstate="$RECLAIM_BRANCHSTATE"` — the in-lock recompute's three-way read, the one the token was checked against — before the pin; the pin (`_ws_reclaim_pin` or `_ws_reclaim_pin_absent`) reads the branch again through `_ws_reclaim_tip_read`; if the two differ, `_ws_reclaim_fail "$id" "$lctx" state-changed "…"`: the journal's `failed` line and the `{"failed":"state-changed",…}` document at exit 1, AFTER the pin (which only keeps) and BEFORE the tombstone and the breadcrumb — nothing destroyed, no breadcrumb, the unit untouched. Both directions refuse, as on the reclaim side (the departure `expire-consent-binds-the-branch-both-ways`; measured at `b0647d850`: with no check, a branch made in the window was deleted at the tip the pin read). A branch already absent when the token was minted reads absent twice and expires, its work in the attic (unchanged — a control case pins it). A deletion between the FRESH pin and the tail's SETTLE stays as CCR-15 wave 6 left it (Measured while planning, item 2). Task 8's reading and this refusal agree: the census list gains `_ws_expire_locked failed state-changed`, on the fresh arm, before the breadcrumb, and the server reads the refusal as `restart` — it audits afresh (question (h), ruled). **MEASURED here, in both window cases (the coordinator's ask with that ruling): a refusal after the pin leaves nothing a fresh audit misreads.** After it, the attic pin, the journal's `intent` and `failed` lines and the registry row stand, with no breadcrumb and no tombstone; the stale token is refused (`{"refused":"state-changed"}`, exit 0) before anything, the tree and row untouched; a fresh `ws-audit --expire` reads `expirable` with `reaping: null` and no `resume`, and mints a token other than the stale one; and that token expires the archive, the tip the refused pin read in the attic — in the MADE direction, deleting the branch made in the window at that tip, which is what a fresh consent over what stands covers.
 
-- [ ] **Step 1: The tests (red).** A new file (the 600 s foreground ceiling keeps it out of the verb suite): `IN_THE_WINDOW` shims `_ws_reclaim_branch_state` to act on the SECOND read (the pin's) inside the verb's own lock — the reclaim side's measured idiom; a branch deleted there, and one made there, each refuse `failed` `state-changed` with nothing started, and the server's parser reads the first as final; two controls. And the census map's `state-changed` entry names `_ws_expire_locked` — red until the ccd edit lands.
+- [ ] **Step 1: The tests (red).** A new file (the 600 s foreground ceiling keeps it out of the verb suite): `IN_THE_WINDOW` shims `_ws_reclaim_branch_state` to act on the SECOND read (the pin's) inside the verb's own lock — the reclaim side's measured idiom; a branch deleted there, and one made there, each refuse `failed` `state-changed` with nothing started, and each then measures what the refusal leaves for a fresh audit; the server's parser reads the first as `restart`; two controls. And the census map's `state-changed` entry names `_ws_expire_locked` — red until the ccd edit lands.
 
 <!-- replay: create server/test/ccd-ws-expire-consent-branch.test.ts -->
-Create `server/test/ccd-ws-expire-consent-branch.test.ts` (block 111):
+Create `server/test/ccd-ws-expire-consent-branch.test.ts` (block 124):
 
 ````ts
 // Workspace lifecycle wave 5 (spec 2026-09-24 §5.3; CCR-15 spec §5.5's consent rule): `ws-expire`'s consent BINDS THE
@@ -2710,6 +3046,9 @@ Create `server/test/ccd-ws-expire-consent-branch.test.ts` (block 111):
 // itself; a branch deleted (or made) between the two reads stops the act there — `failed` `state-changed`, exit 1 —
 // AFTER the pin, which only keeps, and BEFORE the tombstone and the breadcrumb, so nothing has started. A branch
 // already absent when the token was minted reads absent twice and the expiry goes on, its work kept in the attic.
+// The server reads that refusal as one to START OVER from (the coordinator's ruling on the wave-5 plan's question (h)),
+// so each window case also measures what the refusal leaves: the stale token is refused before anything, and a fresh
+// audit reads what stands and its token expires the archive.
 //
 // FIXTURE HOME ONLY (`makePrHarness`): the unit and pane calls are RECORDED (`EXP_STUBS`), never made, and the only
 // ref this file deletes or makes is the fixture repository's. A new file, not an addition to the verb suite (the
@@ -2721,7 +3060,7 @@ import { execFileSync } from 'node:child_process';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { eventsOf } from './lifecycleHelpers.js';
-import { EXP_BRANCH, EXP_ID, expireEvalOf, expireVerb, makeArchived, type Archived } from './wsExpireFixture.js';
+import { EXP_BRANCH, EXP_ID, expireAudit, expireEvalOf, expireVerb, makeArchived, type Archived } from './wsExpireFixture.js';
 import { parseExpireResult } from '../src/archivedExpiry.js';
 
 let h: PrHarness;
@@ -2755,6 +3094,27 @@ const nothingStarted = (a: Archived): void => {
   expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.reaped', `${EXP_ID}.json`)), 'no tombstone').toBe(false);
   expect(unsupervised(), 'the unit was not touched').toEqual([]);
 };
+/** AFTER the refusal, what it left is never misread (wave 5: a failed state-changed audits afresh). The attic pin, the
+ *  journal's intent and failure, and the row stand, with no breadcrumb and no tombstone. The stale token is
+ *  refused before anything. A fresh audit reads the row as it now stands, expirable with nothing to resume, and its
+ *  token expires the archive, the tip the refused pin read still in the attic. */
+const auditsAfresh = (a: Archived, stale: string): void => {
+  const again = expireVerb(h, stale);
+  expect(again.code, again.stdout + again.stderr).toBe(0);
+  expect((JSON.parse(again.stdout) as { refused?: string }).refused, 'the stale token is refused before anything').toBe('state-changed');
+  nothingStarted(a);
+  const audit = expireAudit(h);
+  expect(audit.code, audit.stdout + audit.stderr).toBe(0);
+  const doc = JSON.parse(audit.stdout) as Record<string, unknown>;
+  expect(doc, 'a fresh audit reads what stands').toMatchObject({ verdict: 'expirable', reaping: null });
+  expect(doc, 'nothing to resume').not.toHaveProperty('resume');
+  expect(doc['token'], 'a token over what stands, not the stale one').not.toBe(stale);
+  const r = expireVerb(h, String(doc['token']));
+  expect(r.code, r.stdout + r.stderr).toBe(0);
+  expect((JSON.parse(r.stdout) as { expired: string }).expired).toBe(EXP_ID);
+  expect(fs.existsSync(a.wt), 'the tree is gone').toBe(false);
+  expect(atticReach(a), 'the tip the refused pin read is in the attic').toContain(a.tip);
+};
 
 describe.skipIf(!MODERN_GIT)('ws-expire: the consent binds the branch (wave 5)', () => {
   it('a branch DELETED between the in-lock recompute and the pin stops the act: failed state-changed, before the breadcrumb', () => {
@@ -2771,9 +3131,11 @@ describe.skipIf(!MODERN_GIT)('ws-expire: the consent binds the branch (wave 5)',
     expect(h.git(a.main, 'branch', '--list', EXP_BRANCH), 'the CONTROL: the other actor did delete the branch').toBe('');
     expect(atticReach(a), 'the pin only kept: the tip it read is in the attic').toContain(a.tip);
     nothingStarted(a);
-    // And the server reads this document as one that will not resume — nothing started, so nothing is resumed.
-    expect(parseExpireResult(EXP_ID, r.stdout, r.stderr)).toMatchObject({ kind: 'failed', resumable: false });
-  }, 120_000);
+    // And the server reads this document as one to START OVER from — nothing started, so nothing is resumed, and what
+    // stands is audited afresh.
+    expect(parseExpireResult(EXP_ID, r.stdout, r.stderr)).toEqual({ kind: 'restart', detail: `state-changed: ${o.detail}` });
+    auditsAfresh(a, token);
+  }, 180_000);
 
   it('a branch MADE between the in-lock recompute and the pin stops it too: the consent binds both ways', () => {
     const a = makeArchived(h);
@@ -2787,7 +3149,9 @@ describe.skipIf(!MODERN_GIT)('ws-expire: the consent binds the branch (wave 5)',
     expect(o.detail).toMatch(new RegExp(`${EXP_BRANCH} read absent when the token was checked inside the lock, but present when the pin read it again`));
     expect(h.git(a.main, 'rev-parse', `refs/heads/${EXP_BRANCH}`), 'the branch made in the window stands').toBe(a.tip);
     nothingStarted(a);
-  }, 120_000);
+    auditsAfresh(a, token);
+    expect(h.git(a.main, 'branch', '--list', EXP_BRANCH), 'the fresh consent covered the branch made in the window').toBe('');
+  }, 180_000);
 
   it('the CONTROL: a branch ALREADY ABSENT when the token was minted still expires, its work kept in the attic', () => {
     const a = makeArchived(h);
@@ -2812,7 +3176,7 @@ describe.skipIf(!MODERN_GIT)('ws-expire: the consent binds the branch (wave 5)',
 ````
 
 <!-- replay: replace server/test/archived-expiry-policy.test.ts -->
-In `server/test/archived-expiry-policy.test.ts`, find (block 112):
+In `server/test/archived-expiry-policy.test.ts`, find (block 125):
 
 ````ts
       '_ws_expire_locked failed probe-unmeasured',
@@ -2834,12 +3198,12 @@ Replace with:
 ( cd server && ./node_modules/.bin/vitest run test/archived-expiry-policy.test.ts --maxWorkers=1 )
 ```
 
-Measured: `ccd-ws-expire-consent-branch.test.ts`: `2 failed | 2 passed (4)` — × a branch DELETED between the in-lock recompute and the pin stops the act … (the verb expired it: exit 0, `{"expired":…}`); × a branch MADE between the in-lock recompute and the pin stops it too …; `archived-expiry-policy.test.ts`: `1 failed | 55 passed (56)` — × THE CENSUS … (`expected [ …(10) ] to deeply equal [ …(11) ]`).
+Measured: `ccd-ws-expire-consent-branch.test.ts`: `2 failed | 2 passed (4)` — × a branch DELETED between the in-lock recompute and the pin stops the act … (the verb expired it: exit 0, `{"expired":…}`); × a branch MADE between the in-lock recompute and the pin stops it too …; `archived-expiry-policy.test.ts`: `1 failed | 57 passed (58)` — × THE CENSUS … (`expected [ …(10) ] to deeply equal [ …(11) ]`).
 
 - [ ] **Step 3: The ccd edit, then the re-stamp.**
 
 <!-- replay: replace ccd/ccd -->
-In `ccd/ccd`, find (block 113):
+In `ccd/ccd`, find (block 126):
 
 ````bash
   local phase="" resumed="" declared="" lctx project workdir main clips pinned=0 start=children
@@ -2856,7 +3220,7 @@ Replace with:
 ````
 
 <!-- replay: replace ccd/ccd -->
-In `ccd/ccd`, find (block 114):
+In `ccd/ccd`, find (block 127):
 
 ````bash
     # outlives the row. A vanished worktree takes the RECLAIM region's own arm.
@@ -2872,7 +3236,7 @@ Replace with:
 ````
 
 <!-- replay: replace ccd/ccd -->
-In `ccd/ccd`, find (block 115):
+In `ccd/ccd`, find (block 128):
 
 ````bash
       _ws_reclaim_pin "$id" "$workdir" "$main" "$REAP_BRANCH" "$EXPIRE_ARCHIVED_AT" && pinned=1
@@ -2900,9 +3264,9 @@ Replace with:
     # act stops HERE — after the pin, which only kept, and BEFORE the tombstone
     # and the breadcrumb, so nothing has started and there is nothing to resume.
     # Every `failed` `state-changed` this verb prints is printed here, before
-    # the breadcrumb, and the server reads the word so (`archivedExpiry.ts`). A
-    # branch already absent when the token was minted reads absent twice and
-    # goes on, its work kept in the attic.
+    # the breadcrumb, and the server reads the word so: it starts over from a
+    # fresh audit (`archivedExpiry.ts`). A branch already absent when the token
+    # was minted reads absent twice and goes on, its work kept in the attic.
     if [[ "$RECLAIM_BRANCHSTATE" != "$lbstate" ]]; then
       _ws_reclaim_fail "$id" "$lctx" state-changed \
         "$REAP_BRANCH read $lbstate when the token was checked inside the lock, but $RECLAIM_BRANCHSTATE when the pin read it again — it changed in between, so nothing was destroyed"
@@ -2911,11 +3275,11 @@ Replace with:
 ````
 
 ```bash
-~/.local/bin/ccrc restamp ccd/ccd     # line 2's `ccrc:generated` marker; the prototype's stamp read sha256=9c06b9e1…3f30
+~/.local/bin/ccrc restamp ccd/ccd     # line 2's `ccrc:generated` marker; the prototype's stamp read sha256=940c0208…fc3b
 bash -n ccd/ccd
 ```
 
-- [ ] **Step 4: Run — green**, and every suite the verb's region feeds. Measured: `ccd-ws-expire-consent-branch` `4 passed (4)`; `archived-expiry-policy` `56 passed (56)`; `ccd-ws-expire-verb` `32 passed (32)`; `ccd-ws-expire-audit` `20 passed (20)`; `ccd-ws-expire-ladder` `55 passed (55)`; `ccd-ws-expire-reach` `3 passed (3)`; `ccd-ws-expire-return-race` `8 passed (8)`; `ccd-ws-expire-spawn` `17 passed (17)`; `ccd-child-reclaim-leaf-moved-expire` `3 passed (3)`; `ccd-lifecycle-emit` `59 passed (59)`; `ccd-refusal-scan` `11 passed (11)` (the refusal-emit count is unchanged: the new line is a `failed` journal line); `verb-gate` `12 passed (12)`.
+- [ ] **Step 4: Run — green**, and every suite the verb's region feeds. Measured: `ccd-ws-expire-consent-branch` `4 passed (4)`; `archived-expiry-policy` `58 passed (58)`; `ccd-ws-expire-verb` `32 passed (32)`; `ccd-ws-expire-audit` `20 passed (20)`; `ccd-ws-expire-ladder` `55 passed (55)`; `ccd-ws-expire-reach` `3 passed (3)`; `ccd-ws-expire-return-race` `8 passed (8)`; `ccd-ws-expire-spawn` `17 passed (17)`; `ccd-child-reclaim-leaf-moved-expire` `3 passed (3)`; `ccd-lifecycle-emit` `59 passed (59)`; `ccd-refusal-scan` `11 passed (11)` (the refusal-emit count is unchanged: the new line is a `failed` journal line); `verb-gate` `12 passed (12)`.
 
 - [ ] **Step 5: The citation tax — none, measured.** `ccd-reg-get-census` `3 passed (3)`; the five citation cases `5 passed | 330 skipped (335)`; `cite-remeasure.py` (extracted as Measured while planning item 6 says; read-only, never `--write`): `byFile['ccd/ccd'] stated 147 base 147 tree 147`, `total stated 197 base 197 tree 197`, nothing ENTERED or LEFT, row array `54/54/54`, site array `35/35/35`.
 
@@ -2925,8 +3289,8 @@ bash -n ccd/ccd
 |---|---|---|
 | T11.1 | `ccd/ccd` (`_ws_expire_locked`): `    if [[ "$RECLAIM_BRANCHSTATE" != "$lbstate" ]]; then ⏎       _ws_reclaim_fail "$id" "$lctx" state-changed \ ⏎         "$REAP_BRANCH read $lbstate … so nothing was destroyed"` → the same with `    if false && [[ "$RECLAIM_BRANCHSTATE" != "$lbstate" ]]; then` (the three lines quoted together: the first alone also matches `_ws_reclaim_locked`'s) | `ccd-ws-expire-consent-branch.test.ts`: `2 failed \| 2 passed (4)` — both window cases expire (`expected +0 to be 1`) |
 | T11.2 | the same three lines, the condition → `    if [[ "$lbstate" == present && "$RECLAIM_BRANCHSTATE" == absent ]]; then` (the ruling's one direction) | `ccd-ws-expire-consent-branch.test.ts`: `1 failed \| 3 passed (4)` — a branch MADE … the consent binds both ways |
-| T11.3 | `ccd/ccd` (`_ws_expire_locked`): the new producer's word `state-changed` → `x-moved` (its line and the next quoted together, as T11.1 does), and below the breadcrumb, after `    phase="$start"`, a line `    [[ "$RECLAIM_BRANCHSTATE" != "$lbstate" ]] && { _ws_reclaim_fail "$id" "$lctx" state-changed "moved after"; return 1; }` — the census list unchanged, the producer AFTER the breadcrumb (the replay lens's row) | `archived-expiry-policy.test.ts`: `1 failed \| 55 passed (56)` — THE CENSUS … (`state-changed in _ws_expire_locked prints after the breadcrumb`) |
-| T11.4 | the same rename, and at the verdict point, after `    _ws_reclaim_failed_json probe-unmeasured "$REAP_DETAIL" ⏎     return 1 ⏎   fi`, a line `  [[ -n "$phase" && "$RECLAIM_BRANCHSTATE" == absent ]] && { _ws_reclaim_fail "$id" "" state-changed "moved"; return 1; }` — a producer on EVERY arm, so after a standing breadcrumb on a resumed one (the safety lens's row) | `archived-expiry-policy.test.ts`: `1 failed \| 55 passed (56)` — THE CENSUS … (`state-changed in _ws_expire_locked is not on its fresh arm`) |
+| T11.3 | `ccd/ccd` (`_ws_expire_locked`): the new producer's word `state-changed` → `x-moved` (its line and the next quoted together, as T11.1 does), and below the breadcrumb, after `    phase="$start"`, a line `    [[ "$RECLAIM_BRANCHSTATE" != "$lbstate" ]] && { _ws_reclaim_fail "$id" "$lctx" state-changed "moved after"; return 1; }` — the census list unchanged, the producer AFTER the breadcrumb (the replay lens's row) | `archived-expiry-policy.test.ts`: `1 failed \| 57 passed (58)` — THE CENSUS … (`state-changed in _ws_expire_locked prints after the breadcrumb`) |
+| T11.4 | the same rename, and at the verdict point, after `    _ws_reclaim_failed_json probe-unmeasured "$REAP_DETAIL" ⏎     return 1 ⏎   fi`, a line `  [[ -n "$phase" && "$RECLAIM_BRANCHSTATE" == absent ]] && { _ws_reclaim_fail "$id" "" state-changed "moved"; return 1; }` — a producer on EVERY arm, so after a standing breadcrumb on a resumed one (the safety lens's row) | `archived-expiry-policy.test.ts`: `1 failed \| 57 passed (58)` — THE CENSUS … (`state-changed in _ws_expire_locked is not on its fresh arm`) |
 
 Restore and re-stamp after each.
 
@@ -2943,7 +3307,7 @@ Restore and re-stamp after each.
 - [ ] **Step 1: The prose pins (red).**
 
 <!-- replay: replace server/test/expiry-lane-prose.test.ts -->
-In `server/test/expiry-lane-prose.test.ts`, find (block 116):
+In `server/test/expiry-lane-prose.test.ts`, find (block 129):
 
 ````ts
   it('the coordinator’s own workspace: by a human — or, with no child marker, by the server seven days after its archive', () => {
@@ -2952,18 +3316,20 @@ In `server/test/expiry-lane-prose.test.ts`, find (block 116):
 Replace with:
 
 ````ts
-  it('says a kept leaf is listed, an older ccd’s silence is the feed row’s, and a day of resumable failures stops the asking (wave 5)', () => {
+  it('says a kept leaf is listed, an older ccd’s silence is the feed row’s, and a day of resumable failures slows the asking (wave 5)', () => {
     const at = readme.indexOf('**Archived workspaces are cleaned up after seven days**');
     const para = readme.slice(at, at + 4200);
     expect(para).toContain('is listed, saying what was kept and why, until the server restarts');
     expect(para).toContain('a fleet box whose ccd predates that report says so in the feed row only');
-    expect(para).toContain('is retried, backing off, for a day; then the lane stops asking for that archive');
+    expect(para).toContain('is retried, backing off, for a day;');
+    expect(para).toContain('and asked again every four hours, never stopping, until an attempt completes or the workspace is archived again');
+    expect(para).not.toContain('stops asking for that archive');
   });
   it('the coordinator’s own workspace: by a human — or, with no child marker, by the server seven days after its archive', () => {
 ````
 
 <!-- replay: replace server/test/expiry-lane-prose.test.ts -->
-In `server/test/expiry-lane-prose.test.ts`, find (block 117):
+In `server/test/expiry-lane-prose.test.ts`, find (block 130):
 
 ````ts
     // An ineligible sighting does NOT clear every report: the box's own verdicts stand (review of wave 4's Task 4, I1).
@@ -2978,22 +3344,24 @@ Replace with:
     // An ineligible sighting does NOT clear every report: the box's own verdicts stand (review of wave 4's Task 4, I1).
     expect(s).not.toContain('clears every report');
   });
-  it('§5.3 records wave 5’s follow-ups: the consent binds the branch, a failed state-changed is final, a kept leaf, a day of failures', () => {
+  it('§5.3 records wave 5’s follow-ups: the consent binds the branch, a failed state-changed is audited afresh, a kept leaf, a day of failures', () => {
     const s = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
     expect(s).toContain("**As wave 5 closes the lane's follow-ups**");
-    for (const item of ['**The consent binds the branch.**', '**A `failed` `state-changed` is final.**', '**A kept leaf is listed.**',
-      '**A day of resumable failures stops the asking.**', 'A branch already absent when the token was minted reads absent twice and expires with its work in the attic',
-      'An absent key (an older ccd) is recorded in the feed row as unmeasured and lists nothing']) expect(s).toContain(item);
+    for (const item of ['**The consent binds the branch.**', '**A `failed` `state-changed` is audited afresh.**', '**A kept leaf is listed.**',
+      '**A day of resumable failures slows the asking.**', 'A branch already absent when the token was minted reads absent twice and expires with its work in the attic',
+      'An absent key (an older ccd) is recorded in the feed row as unmeasured and lists nothing',
+      'mints a fresh token over what stands', 'The lane asks again every four hours, never stopping']) expect(s).toContain(item);
+    for (const gone of ['is final.**', 'stops the asking.**', 'The lane does not ask again until the archive changes']) expect(s).not.toContain(gone);
   });
 });
 ````
 
-- [ ] **Step 2: Run — red.** Measured: `expiry-lane-prose.test.ts`: `2 failed | 8 passed (10)` — × says a kept leaf is listed, an older ccd's silence is the feed row's, and a day of resumable failures stops the asking (wave 5); × §5.3 records wave 5's follow-ups ….
+- [ ] **Step 2: Run — red.** Measured: `expiry-lane-prose.test.ts`: `2 failed | 8 passed (10)` — × says a kept leaf is listed, an older ccd's silence is the feed row's, and a day of resumable failures slows the asking (wave 5); × §5.3 records wave 5's follow-ups ….
 
 - [ ] **Step 3: The words.** README's sentences sit below its `shared/api.ts` citations: nothing re-points.
 
 <!-- replay: replace docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md -->
-In `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md`, find (block 118):
+In `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md`, find (block 131):
 
 ````markdown
   evidence) are mostly never journaled, so the lane lists them from its own passes and a restart rebuilds the list over
@@ -3012,25 +3380,30 @@ Replace with:
     `state-changed`, after the pin, which only keeps, and before the tombstone and the breadcrumb. A branch already
     absent when the token was minted reads absent twice and expires with its work in the attic. A branch deleted
     between the fresh pin and the tail's settle is as wave 6 of CCR-15 left it: its tip was pinned at the fresh pin.
-  - **A `failed` `state-changed` is final.** ccd prints that document only on a fresh expiry, before the tombstone
-    and the breadcrumb, so nothing started: the row is listed at once and not asked again for that archive.
-    `probe-unmeasured` is read the same way, as before, but ccd prints it on a resumed expiry too, after an earlier
-    attempt's breadcrumb (a tombstone it cannot read, or a tmux probe that did not answer), so there it can stop the
-    lane on a part-expired archive until a restart. That is a known gap, left to CCR-15 wave 7's `crumb` field or an
-    operator ruling. `pin-failed` and `tombstone-unwritable` stay resumable, because the shared tail prints each
-    after the breadcrumb too; the `crumb` field is what can tell those apart.
+  - **A `failed` `state-changed` is audited afresh.** ccd prints that document only on a fresh expiry, before the
+    tombstone and the breadcrumb, so nothing started. As on the reclaim side, "not resumable" means start over, not
+    final: the lane forgets the instant it learned and its sightings and returns to learning, so a later pass's audit
+    mints a fresh token over what stands, and the row is asked again only once seen eligible twice past its instant. A
+    feed row records it, and nothing is listed. `probe-unmeasured` is still read as final, but ccd prints it on a
+    resumed expiry too, after an earlier attempt's breadcrumb (a tombstone it cannot read, or a tmux probe that did not
+    answer), so there it can stop the lane on a part-expired archive until a restart. That is a known gap, routed to
+    this programme's wave 6 once CCR-15 wave 7's `crumb` field is on `main`, and an arming blocker for the lane until
+    then. `pin-failed` and `tombstone-unwritable` stay resumable, because the shared tail prints each after the
+    breadcrumb too; the `crumb` field is what can tell those apart.
   - **A kept leaf is listed.** The `expired` document's `clipsKept` and `tmpRootKept` are read by name. A kept word
     (`refused`, `unmeasured`, `in-use`) lists the archive, though its row is gone, saying what was kept and why, until
     the server restarts. An absent key (an older ccd) is recorded in the feed row as unmeasured and lists nothing, so a
     rollout skew raises no alarm on every expiry.
-  - **A day of resumable failures stops the asking.** After 24 hours of `failed` (resumable) or `lock-unopenable`
-    answers to the act on one archive, the report becomes final. It names the first failure, the attempts and the last
-    detail, says the expiry may have stopped part-way (the server cannot yet tell), and suggests no destructive verb.
-    The lane does not ask again until the archive changes, and a restart asks afresh.
+  - **A day of resumable failures slows the asking.** After 24 hours of `failed` (resumable) or `lock-unopenable`
+    answers to the act on one archive, the row moves to a persistent tier. Its report stands on the list, naming the
+    first failure, the attempts and the last detail, saying the expiry may have stopped part-way (the server cannot
+    yet tell), and suggesting no destructive verb. The lane asks again every four hours, never stopping, and keeps the
+    entry until an attempt completes or the workspace is archived again; a restart re-learns. A terminal refusal and
+    a composition error are still never asked again.
 ````
 
 <!-- replay: replace README.md -->
-In `README.md`, find (block 119):
+In `README.md`, find (block 132):
 
 ````markdown
 also a `tmux: server`. A workspace held past its seven days is listed, never touched.
@@ -3043,7 +3416,8 @@ also a `tmux: server`. A workspace held past its seven days is listed, never tou
 the workspace's clips or temp root (ccd's removal refused it, could not measure it, or a process still used it) is
 listed, saying what was kept and why, until the server restarts; a fleet box whose ccd predates that report says so in
 the feed row only. A cleanup the box keeps failing in a way it says it can resume is retried, backing off, for a day;
-then the lane stops asking for that archive and lists it, with the first failure, the attempts and the last error.
+then it is listed, with the first failure, the attempts and the last error, and asked again every four hours, never
+stopping, until an attempt completes or the workspace is archived again.
 ````
 
 - [ ] **Step 4: Run — green.** Measured: `expiry-lane-prose` `10 passed (10)`; `ws-expire-prose` `7 passed (7)`; `dead-coordinator-prose` `12 passed (12)`; the five citation cases `5 passed | 330 skipped (335)`.
@@ -3064,7 +3438,7 @@ then the lane stops asking for that archive and lists it, with the first failure
 ( cd server && ./node_modules/.bin/vitest run --shard=<k>/24 --maxWorkers=1 )   # k = 1 … 24
 ```
 
-Measured on the final prototype: 563 test files across the 24 shards; `26296 passed | 2 failed | 93 skipped` tests, 4 files red, every one a known or load red, none this wave's: shard 1 — `boot.test.ts` (`1 failed`: "a valid, instant ccd also boots fast", the known timing case); shard 4 — `session-hook.test.ts` (`1 failed`: "skips a scratch slug", the known `TMPDIR`-outside-`/tmp` red); shards 14 and 16 — `ccrc-install.test.ts` and `ccrc-doctor.test.ts`, each with every test passing and only `tmpHelpers.ts`'s `afterAll(removeTmpFixtures)` timing out at 20 s (`Hook timed out`) while another shard ran beside it; re-run alone, `ccrc-install` `296 passed | 20 skipped (316)` and `ccrc-doctor` `759 passed | 15 skipped (774)`. Every other shard green (e.g. shard 18 `4979 passed (4979)`, shard 24 `817 passed (817)`). That run was the drafted plan's prototype; the revision after review adds one test (`lifecycle-mirror`, Task 5) and changes test bodies only in files each re-measured alone on the revised prototype, so expect `26297 passed`.
+Measured on the final prototype: 563 test files across the 24 shards; `26296 passed | 2 failed | 93 skipped` tests, 4 files red, every one a known or load red, none this wave's: shard 1 — `boot.test.ts` (`1 failed`: "a valid, instant ccd also boots fast", the known timing case); shard 4 — `session-hook.test.ts` (`1 failed`: "skips a scratch slug", the known `TMPDIR`-outside-`/tmp` red); shards 14 and 16 — `ccrc-install.test.ts` and `ccrc-doctor.test.ts`, each with every test passing and only `tmpHelpers.ts`'s `afterAll(removeTmpFixtures)` timing out at 20 s (`Hook timed out`) while another shard ran beside it; re-run alone, `ccrc-install` `296 passed | 20 skipped (316)` and `ccrc-doctor` `759 passed | 15 skipped (774)`. Every other shard green (e.g. shard 18 `4979 passed (4979)`, shard 24 `817 passed (817)`). That run was the drafted plan's prototype; the revision after review adds one test (`lifecycle-mirror`, Task 5), and the revision after the coordinator's rulings of 2026-10-08 adds three (`archived-expiry-policy`: the `restart` memory case and `keptLeafWord`; `archived-expiry-lane`: the `restart` lane case) and changes test bodies only in files each re-measured alone on the revised prototype, so expect `26300 passed`. The full sharded run was NOT repeated for either revision (the box's load); every file the revisions touch was re-run alone.
 
 - [ ] **Step 3: The PWA and agent suites, and both typechecks.**
 
@@ -3076,7 +3450,7 @@ Measured on the final prototype: 563 test files across the 24 shards; `26296 pas
 
 Measured: PWA shard 1/2 `55 passed (55)` files, `1762 passed (1762)` tests; shard 2/2 `54 passed (54)` files, `1693 passed (1693)` tests; agent `25 passed (25)` files, `465 passed (465)` tests; server and PWA `tsc` rc 0.
 
-- [ ] **Step 4: The repo-wide guards, one file per process** (after `git fetch origin main` for `deviation-refs`). Measured on the final prototype: `single-definition` `409 passed (409)` (this plan adds no case to it; both no-writer pins green); `modelenv-single-writer` `7 passed (7)`; `box-token-census` `23 passed (23)`; `coord-pause-route` `20 passed (20)`; `routing-references` `11 passed (11)`; `typecheck-tests` `12 passed (12)` (needs `agent/node_modules`); `topology-clean` `55 passed (55)`; `ownership` `14 passed (14)`; `coordinator-skill` `161 passed (161)`; `deviation-refs` `31 passed (31)`; `mail-routes` `59 passed (59)`; `ccd-reg-get-census` `3 passed (3)`; `ccd-refusal-scan` `11 passed (11)`; the five citation cases `5 passed | 330 skipped (335)`.
+- [ ] **Step 4: The repo-wide guards, one file per process** (after `git fetch origin main` for `deviation-refs`). Measured on the final prototype (the revision after the coordinator's rulings re-ran `single-definition`, `typecheck-tests`, `topology-clean`, `deviation-refs`, `mail-routes`, `ccd-reg-get-census`, `ccd-refusal-scan`, the five citation cases and both `tsc`s; the others' files are untouched by it): `single-definition` `409 passed (409)` (this plan adds no case to it; both no-writer pins green); `modelenv-single-writer` `7 passed (7)`; `box-token-census` `23 passed (23)`; `coord-pause-route` `20 passed (20)`; `routing-references` `11 passed (11)`; `typecheck-tests` `12 passed (12)` (needs `agent/node_modules`); `topology-clean` `55 passed (55)`; `ownership` `14 passed (14)`; `coordinator-skill` `161 passed (161)`; `deviation-refs` `31 passed (31)`; `mail-routes` `59 passed (59)`; `ccd-reg-get-census` `3 passed (3)`; `ccd-refusal-scan` `11 passed (11)`; the five citation cases `5 passed | 330 skipped (335)`.
 
 - [ ] **Step 5: The no-writer check by hand.** `git grep -n "expire-lane-live\|dead-coordinator-lane-live" -- server/src ccd agent pwa/src deploy` names only the two definers and their readers; the diff adds no write of either.
 
@@ -3084,24 +3458,24 @@ Measured: PWA shard 1/2 `55 passed (55)` files, `1762 passed (1762)` tests; shar
 
 ## Re-measure at dispatch
 
-Draft on `origin/main` `b0647d850`. Before Task 1, `git fetch origin` and, if `main` moved, replay each block below against the new tip: each must still match exactly once at its turn. A block that does not is a moved anchor — re-point it BY CONTENT (the block's own text says where), never by a line delta, and say so in the PR. Every block in a file another in-flight wave edits:
+Drafted on `origin/main` `b0647d850`; revised on `226bb881c`. Before Task 1, `git fetch origin` and, if `main` moved, replay each block below against the new tip: each must still match exactly once at its turn. A block that does not is a moved anchor — re-point it BY CONTENT (the block's own text says where), never by a line delta, and say so in the PR. Every block in a file another in-flight wave edits:
 
 | Block | Task | File | Its anchor begins |
 |---|---|---|---|
-| 113 | 11 | `ccd/ccd` | `local phase="" resumed="" declared="" lctx project workdir main clips pinned=0 start=children` |
-| 114 | 11 | `ccd/ccd` | `# outlives the row. A vanished worktree takes the RECLAIM region's own arm.` |
-| 115 | 11 | `ccd/ccd` | `_ws_reclaim_pin "$id" "$workdir" "$main" "$REAP_BRANCH" "$EXPIRE_ARCHIVED_AT" && pinned=1` |
+| 126 | 11 | `ccd/ccd` | `local phase="" resumed="" declared="" lctx project workdir main clips pinned=0 start=children` |
+| 127 | 11 | `ccd/ccd` | `# outlives the row. A vanished worktree takes the RECLAIM region's own arm.` |
+| 128 | 11 | `ccd/ccd` | `_ws_reclaim_pin "$id" "$workdir" "$main" "$REAP_BRANCH" "$EXPIRE_ARCHIVED_AT" && pinned=1` |
 | 67 | 7 | `README.md` | `seen dead, and one when the breaker trips) are records of the same incident.` |
-| 119 | 12 | `README.md` | `` also a `tmux: server`. A workspace held past its seven days is listed, never touched. `` |
+| 132 | 12 | `README.md` | `` also a `tmux: server`. A workspace held past its seven days is listed, never touched. `` |
 | 31 | 3 | `server/src/watch.ts` | `done !== null && done.programmes.length > 0 ? { closed: done.programmes, released: [], stop: null } : undef…` |
 | 45 | 4 | `server/src/watch.ts` | `recordDeadCoordinatorFeed,` |
 | 46 | 4 | `server/src/watch.ts` | `if (done !== null && done.programmes.length > 0) {` |
 | 63 | 6 | `server/src/watch.ts` | `journalTrust: async () => (await readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.…` |
-| 99 | 9 | `server/src/watch.ts` | `for (const id of [...this.archivedExpiryState.keys()]) if (!seen.has(id)) this.archivedExpiryState.delete(id);` |
-| 100 | 9 | `shared/api.ts` | `readonly kind: 'would-expire' \| 'held' \| 'in-use' \| 'refused' \| 'failing' \| 'no-evidence';` |
+| 109 | 9 | `server/src/watch.ts` | `for (const id of [...this.archivedExpiryState.keys()]) if (!seen.has(id)) this.archivedExpiryState.delete(id);` |
+| 110 | 9 | `shared/api.ts` | `readonly kind: 'would-expire' \| 'held' \| 'in-use' \| 'refused' \| 'failing' \| 'no-evidence';` |
 | 65 | 7 | `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md` | `` - The programme retires as `abandoned`, permanently. `` |
 | 66 | 7 | `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md` | `` - **Not changed:** the reclaim door and the stall watch ignore the verdict's new `cause`; landing reads a r… `` |
-| 118 | 12 | `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md` | `evidence) are mostly never journaled, so the lane lists them from its own passes and a restart rebuilds the…` |
+| 131 | 12 | `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md` | `evidence) are mostly never journaled, so the lane lists them from its own passes and a restart rebuilds the…` |
 
 `server/test/single-definition.test.ts`: no block (run 302 appends at its end; nothing here moves). `server/src/coord/childReclaim.ts`: no block (CCR-15 wave 7's).
 
@@ -3117,27 +3491,27 @@ Named by slug, in the order the brief's numbers are written against them (the ca
 - `a-stale-mirror-at-the-act-is-a-hold` (Task 6) — a mirror gone `unknown`/`stale` between the pass and the act stops it as a `hold`: the anchor and the run of crashed passes are kept, and it waits one pass (review 339, F4, ruled; the ruling's "like the switch does" is read for the anchor and the wait, its "the run of passes is KEPT" for the passes — the switch itself resets them). `stillCrashed` now reads the journal's trust BEFORE measuring the claimant (main reads it after), so the claimant's measure is the last awaited step before the commit and review 339's sized item 3 window ("the only awaited step left is journalTrust()") is stale — narrower, never wider.
 - `an-abandoned-programme-row-is-rewritten-only-by-a-last-close` (Task 7) — §5.4's "retires as `abandoned`, permanently" becomes three measured facts: it reads `abandoned`, a new run under the fenced slug leaves it so, and the next close of the programme's last open run rewrites it (`done` or `abandoned`) (review 339, F5). The ruling's own "nothing resets it" is measured false by the third fact; the ledger's 12:02 entry and question (f)'s framing need the same correction.
 - `a-pre-start-reclaim-failure-reads-deliberate` (Task 7) — the journal clause reads a child's pre-start `reclaim` `failed` `probe-unmeasured` row as deliberate and abstains; accepted, stated in §5.4 with where it is reachable (CCR-15's cross-side record, ruled: no code change).
-- `a-failed-state-changed-is-final` (Task 8) — `parseExpireResult` reads a `failed` `state-changed` as not resumable (the expiry's one producer prints on its fresh arm, before the breadcrumb; a census of every occurrence of the word in ccd/ccd holds that), so the row is reported at once and not asked again for that archive (ruling B1). `probe-unmeasured` keeps `main`'s final reading, though it also prints on a resumed arm after a standing breadcrumb — a known gap, question (k).
-- `a-kept-leaf-is-listed-until-restart` (Task 9) — an `expired` document with a kept word on `clipsKept`/`tmpRootKept` raises a `kept` attention entry that outlives the purged row in the lane's memory until a restart (ruling B2).
+- `a-failed-state-changed-audits-afresh` (Task 8) — `parseExpireResult` reads a `failed` `state-changed` as `restart` — neither resumable nor final (the expiry's one producer prints on its fresh arm, before the breadcrumb; a census of every occurrence of the word in ccd/ccd holds that): the lane forgets the instant and the sightings it learned and audits the row afresh, lists nothing, and writes a feed row — the reclaim side's "not resumable", which means start over (ruling B1; question (h) ruled by the coordinator 2026-10-08). `probe-unmeasured` keeps `main`'s final reading, though it also prints on a resumed arm after a standing breadcrumb — a known gap, routed to wave 6, question (k).
+- `a-kept-leaf-is-listed-until-restart` (Task 9) — an `expired` document with a kept word on `clipsKept`/`tmpRootKept` raises a `kept` attention entry that outlives the purged row in the lane's memory until a restart (ruling B2). ccd's three words are read by ONE word reader, `keptLeafWord`, which `expireLeafKept` composes with the done document's carrier and CCR-15 wave 8's mirror carrier imports (the coordinator's R3, agreed with CCR-15).
 - `an-older-ccds-silence-is-the-feed-rows-only` (Task 9) — an absent key reads `unreported`, never `null`, and is said in the feed row only — no attention entry — so the rollout skew raises no alarm (ruling B2, the coordinator's lean). The ruling's word for absence, `unmeasured`, becomes the internal token `unreported` because ccd's own `unmeasured` kept word must raise an entry and absence must not — one value at the seam would carry both; the feed row and §5.3 still word absence as unmeasured.
-- `a-day-of-resumable-failures-stops-the-asking` (Task 10) — after `EXPIRE_FAILURE_GIVE_UP_MS` (24 hours) of resumable failures of the act on one archive, the report is final, names the first failure, the attempts and the last detail, says the expiry may have stopped part-way, and the lane stops asking until the archive changes (ruling B3).
-- `the-day-long-stop-covers-the-act-not-the-learn` (Task 10) — the learning audit's own failure ladder keeps its backoff and is not stopped: it composes nothing destructive.
+- `a-day-of-resumable-failures-slows-the-asking` (Task 10) — after `EXPIRE_FAILURE_GIVE_UP_MS` (24 hours) of resumable failures of the act on one archive, the row moves to a PERSISTENT TIER: its report is a standing entry naming the first failure, the attempts and the last detail and saying the expiry may have stopped part-way, and the lane asks again every `EXPIRE_PERSISTENT_RETRY_MS` (four hours), never stopping, until an attempt completes or the archive changes; a hold or a deferral never drops it (ruling B3, revised by the coordinator 2026-10-08 and agreed with CCR-15's coordinator, answering its R69: nothing is stranded behind an expire breadcrumb).
+- `the-day-long-stop-covers-the-act-not-the-learn` (Task 10) — the day-long horizon and its persistent tier cover the ACT only: the learning audit's own failure ladder keeps its backoff and never reaches the tier, because it composes nothing destructive.
 - `expire-consent-binds-the-branch-both-ways` (Task 11) — `ws-expire` refuses `failed` `state-changed` when the in-lock recompute and the pin read the branch differently, in BOTH directions as CCR-15 §5.5 binds a reclaim's (the ruling named the deleted direction; measured: with no check, a branch made in the window is deleted at the pin's tip), before the tombstone and the breadcrumb (ruling B4).
 
 ## Deploy note
 
 - **Class: AGENT-FIRST, then server (the PWA ships with the server).** Task 11 edits `ccd/ccd`. Move the fleet with `ccrc rollout --to vX.Y.Z` (fleet box first by default) once the release exists; a hand placement is never the path.
-- **Either order is safe, measured by reading.** A NEW ccd under an OLD server: the old parser reads the new `failed` `state-changed` as resumable and retries — the next attempt audits afresh and mints a token over what stands; an old server ignores `clipsKept`/`tmpRootKept` (it reads named keys only). A NEW server over an OLD ccd: no expiry `failed` `state-changed` is printed at all (item 1 of Measured while planning), and an absent kept-leaf key reads `unreported` — recorded in the feed row, no alarm.
+- **Either order is safe, measured by reading and in the prototype.** A NEW ccd under an OLD server: the old parser reads the new `failed` `state-changed` as resumable and asks again after its backoff. The lane holds no token — every act audits first and spends THAT audit's token (`expireArchived`, step 5) — so the old server's retry is itself a fresh audit over what stands, the same end the new server's `restart` reaches by re-learning; and a stale token, were one ever presented, is refused (`{"refused":"state-changed"}`, exit 0) before anything (measured, Task 11). Harmless. Were it to keep failing, an OLD server retries it hourly for ever (it has no day horizon) and a new one reaches Task 10's persistent tier after a day — neither strands it. An old server ignores `clipsKept`/`tmpRootKept` (it reads named keys only). A NEW server over an OLD ccd: no expiry `failed` `state-changed` is printed at all (item 1 of Measured while planning), and an absent kept-leaf key reads `unreported` — recorded in the feed row, no alarm.
 - **No migration, no route, no `FLEET_PROTO` bump.** `ExpiryAttention.kind` gains `'kept'` (additive; an older PWA renders it `reported`). The `sweep-stopped` 409 body's field rename is on an arm no route reaches.
-- **Both lanes stay SHADOWED.** Nothing here writes `$REG/expire-lane-live` or `$REG/dead-coordinator-lane-live`. After merge, the ledger's arming blockers read: the dead-coordinator lane's five (F1, F2, F3, F13, the mirror) closed by Tasks 1–5; the expiry lane's `state-changed` reading closed by Task 8 (the resumed-arm `probe-unmeasured` reading stays `main`'s and is question (k), for a ruling before arming); `_ws_expire_cwd_users`' newline fail-open closed by #326 (`_ws_dir_physical "$parent"`, ccd/ccd:30649 at `b0647d850`). Check the merged lines before arming; arming stays the operator's, by hand.
+- **Both lanes stay SHADOWED.** Nothing here writes `$REG/expire-lane-live` or `$REG/dead-coordinator-lane-live`. After merge, the ledger's arming blockers read: the dead-coordinator lane's five (F1, F2, F3, F13, the mirror) closed by Tasks 1–5; the expiry lane's `state-changed` reading closed by Task 8 (audit afresh, question (h) ruled); the resumed-arm `probe-unmeasured` reading stays `main`'s — question (k), ROUTED to this programme's wave 6, after CCR-15 wave 7 is on `main` (`_ws_expire_locked` sets wave 7's `crumb`, the global `_WS_RCL_CRUMB`, on its resumed arm, and the parser reads a failed document with `crumb: true` as resumable, so it backs off and reaches Task 10's persistent tier) — and it is an ARMING BLOCKER for the expiry lane until then; `_ws_expire_cwd_users`' newline fail-open closed by #326 (`_ws_dir_physical "$parent"`, ccd/ccd:30649 at `b0647d850`). Check the merged lines before arming; arming stays the operator's, by hand.
 
 ## Questions for the operator
 
 Lettered to continue the programme ledger's own open questions — (a)–(d) in its 2026-10-07 06:01 entry and (f) from review 339 — so a relayed letter is never ambiguous.
 
 - **(g) F4's two halves.** The ruling says a stale mirror at the act "stops the act like the switch does: the anchor and the run of passes are KEPT". The switch resets the run of passes. This plan keeps them (and the switch's one-pass wait). Resetting would only delay. Confirm, or say "reset".
-- **(h) B1's "final".** A `failed` `state-changed` now reports at once and is NEVER asked again for that archive. For the consent-binding refusal (a branch deleted or made inside the lock), a fresh audit would mint a token over what stands and could expire it on the next pass; "final" leaves the archive on the attention list until it is archived again or the server restarts. The reclaim side's "not resumable" means "retried from the start", not "final". Keep final (as ruled), or should the expiry lane re-audit from the start for this word?
+- **(h) B1's "final" — RULED by the coordinator 2026-10-08: audit afresh (the reclaim side's meaning).** A `failed` `state-changed` starts over: the lane forgets the instant and the sightings it learned, a later pass's audit mints a fresh token over what stands, and the row is asked again once seen eligible twice past its instant; a feed row records it and nothing is listed (Task 8). Measured in Task 11: nothing the refusal leaves is misread by that audit. No longer an open ask.
 - **(f) F5 — should a new run reset an `abandoned` programme row?** Measured in a fixture store: the row stays `abandoned` while the revived coordinator's new run is open; the board lists the run normally (it carries no programme state); `toId:'coordinator'` mail WITHOUT a `runId` resolves through "exactly one ACTIVE programme", so it is refused `unknown-recipient` while nothing else is active — and is delivered to ANOTHER programme's coordinator when exactly one other programme is active; WITH a `runId` it reaches the revived coordinator. The row is rewritten by the next close of the programme's last open run. By reading `resolveCoordinator` (not measured): resetting the row to `active` on `openRun` would make that role mail resolve to the revived coordinator while it is the only active programme, and refuse it as ambiguous while another is active, instead of misdirecting it.
 - **(i) B2's kept entries** stay on the attention list until a server restart (the row is gone, so nothing else clears them); the feed row is the durable record. Is that the life you want, or should a kept entry expire after a set time?
 - **(j) B4's direction.** This plan refuses a branch MADE inside the lock as well as one deleted (the reclaim side's rule), where the ruling named the deleted direction. Say if the made direction should go on as before.
-- **(k) The resumed arm's `probe-unmeasured` (found by the review's safety lens; unchanged from `main`).** `_ws_expire_locked` prints `probe-unmeasured` at its verdict point on every arm, so on a resumed expiry it follows an earlier attempt's standing breadcrumb with the tree possibly part-deleted (a tombstone it cannot read, or one tmux probe that did not answer). The parser reads it final, so one transient failure stops the lane for that archive until a server restart. Before arming: wait for CCR-15 wave 7's `crumb` field, or read a resumed-arm `probe-unmeasured` as resumable now that Task 10 caps resumable retries at a day? (The parser cannot tell the arms apart from the word alone today.)
+- **(k) The resumed arm's `probe-unmeasured` — routed to wave 6; an ARMING BLOCKER for the expiry lane until then** (found by the review's safety lens; unchanged from `main`). `_ws_expire_locked` prints `probe-unmeasured` at its verdict point on every arm, so on a resumed expiry it follows an earlier attempt's standing breadcrumb with the tree possibly part-deleted (a tombstone it cannot read, or one tmux probe that did not answer). The parser reads it final, so one transient failure stops the lane for that archive until a server restart. It keeps that reading in this wave. The coordinator routed the fix to this programme's WAVE 6, after CCR-15 wave 7 is on `main`: `_ws_expire_locked` sets wave 7's `crumb` (the global `_WS_RCL_CRUMB`) on its resumed arm, and the parser reads a failed document with `crumb: true` as resumable (→ backoff → Task 10's persistent tier). No longer an open ask; the expiry lane is not armed before wave 6.
