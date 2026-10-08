@@ -3606,12 +3606,13 @@ MSG
 
 ## Deviations found
 
-This plan defines five numbers that W2 alone owns. D-4035 and D-4036 were issued by the allocator at plan time
-(`POST /api/ledger/deviations`, 2026-10-05 17:47). D-4042 (`malformed-optional-block-is-dropped`) was issued by the
-coordinator in ruling R24, fix round 1, D-4043 (`unanswered-write-has-its-own-l0-line`) by the coordinator in
-ruling R27, fix round 2, and D-4044 (`pinned-built-in-value-is-its-own-option`) in ruling R29, fix round 3;
-none of those three came from that 17:47 call. A departure found during execution is named by slug in the wave-done mail,
-and the coordinator assigns its number.
+This plan defines five numbers that W2 alone owns, all issued by the allocator in this programme's 17:47 block
+(`POST /api/ledger/deviations`, 2026-10-05 17:47, "stall-watch-settings: W1 server, W2 PWA"). D-4035 and D-4036 were
+assigned to W2 at plan time. D-4042 (`malformed-optional-block-is-dropped`), D-4043
+(`unanswered-write-has-its-own-l0-line`) and D-4044 (`pinned-built-in-value-is-its-own-option`) came from the same
+block as reserve and were assigned by the coordinator, D-4042 in ruling R24 (fix round 1), D-4043 in ruling R27 (fix
+round 2) and D-4044 in ruling R29 (fix round 3). A departure found during execution is named by slug in the wave-done
+mail, and the coordinator assigns its number.
 
 - **D-4035** — `older-server-404-reads-not-configured` (Tasks 1 and 3)
   - **Departs from:** the approved shape follows the Updates section's discipline. Spec §2 item 7 says "W2 is the PWA
