@@ -194,8 +194,20 @@ describe('a leaf that cannot be measured is UNMEASURED — never "no row inside 
     expect(r.detail).toContain(tmpOf(EXP_ID));
   }, 120_000);
 
-  it('the CONTROL: a link or a file standing as the leaf is no tree the helper removes — the child is reclaimable', () => {
+  it.skipIf(ROOT_USER)('the CONTROL: a DIRECTORY leaf is placed by its root, never entered — a mode-000 temp root beside another session’s row is no hold', () => {
     makeChild(h);
+    h.makeGhRepo('demo2', 'o/r2');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=still-harbor cmd_ws_add demo2`);
+    h.sh(`_child_tmpdir ${CHILD_ID} >/dev/null`);
+    restore.push([tmpOf(CHILD_ID), 0o700]);
+    fs.chmodSync(tmpOf(CHILD_ID), 0o000);
+    placed(evalOf(h), 'a mode-000 temp root, another row standing');
+  }, 120_000);
+
+  it('the CONTROL: a link or a file standing as the leaf is no tree the helper removes — the child is reclaimable, another row standing', () => {
+    makeChild(h);
+    h.makeGhRepo('demo2', 'o/r2');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=still-harbor cmd_ws_add demo2`);
     fs.mkdirSync(path.join(h.home, '.cc-tmp'), { recursive: true });
     fs.writeFileSync(tmpOf(CHILD_ID), 'a file where the leaf should be');
     fs.mkdirSync(path.join(h.home, '.cc-clips'), { recursive: true });
