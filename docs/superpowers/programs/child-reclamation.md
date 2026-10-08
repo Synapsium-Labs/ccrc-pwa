@@ -22,7 +22,7 @@ removed on 2026-09-10 was not.
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **deployed** v0.0.33 (`1ffdf947`, merged 2026-09-28 16:14 UTC, rolled out 16:16–16:21, fleet box first, rc 0; run 148 on `plain-summit`; reviews 170, 171, 172). Live: run 148's close reclaimed `plain-summit` in 10 s |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 | **done** — accepted by convergence review run 258 on `f8f0af9a`; merged as `b40f4145` 2026-10-04 22:10; release v0.0.79 |
 | 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | #290 | **deployed** v0.0.105 (`b27fabc15`, merged 2026-10-06 18:50; both boxes current by 19:04, through the updater); run 260 closed 19:05; reviews 285 and 303 (scoped, after fix round 1: no defect) |
-| 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **in review** — run 291 (`ccrc-pwa-amber-river`) wave-done verified 2026-10-07 21:57 at `8c0f2cd94`; departures numbered in the 21:57 decision; review run follows |
+| 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **review 335 done; fix round to rule** — run 291 (`ccrc-pwa-amber-river`) at `8c0f2cd94`; F1 is a SAFETY regression (decision 2026-10-08 01:12) |
 | 7 | the temp-root collector verb, inert (R57): audit + token, destructive verb, cap token, agent grant, entry guard; witness-matched, slug-free, unused, idle 24 h, twice observed | **AGENT-FIRST** | — | **to plan**: its own run, block and pre-flight |
 | 8 | the collector's server lane (R58), after workspace-lifecycle wave 3b merges and the fleet advertises wave 7's token; SAFETY and SECURITY lenses | server | — | **to plan** |
 
@@ -46,6 +46,36 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 01:12 — review 335 is closed (`done`, released); wave 6 is NOT accepted as it stands.**
+  - **The report.** Mail 3954, archived as `reviews/review-335-8c0f2cd9.md`. The panel and the plan's lenses ran 183
+    agents with no errors: 56 findings, 17 confirmed, 39 refuted, none unexamined. After merging duplicates, that
+    leaves 14 findings.
+  - **F1 is a SAFETY regression.** The lens rated it critical; two refuters who reproduced it rate it important.
+    - Task 9's recovery makes another workspace's tree deletable once that tree has been `mv`'d into the child's
+      temp root or clips leaf. Its uncommitted file is lost.
+    - Base held the same shape `unmeasured`. The reviewer reproduced both at the tip and at base, and ws-expire's
+      clips path is reached too.
+  - **Thirteen minor findings:**
+    - F2: the walker's ESRCH;
+    - F3: pre-breadcrumb `state-changed` read as resumable;
+    - F4: a newline-ended root;
+    - F5: the old-git resume, wider than R53 says;
+    - F6: the witness left beside an absent leaf;
+    - F7, F8, F9 and F10: unpinned guards;
+    - F11: the `loadCold` race;
+    - F12: the witness's exec count;
+    - F13 and F14: two departures on neither list.
+  - **What the lenses found clean.**
+    - The races: 70 seeds under reclaim and 50 under expire, with 0 removals while a user lived.
+    - The 9 × 6 ref-state table, and 104 gone-row rows with 0 prunes.
+    - All 13 of the plan's mutation rows red.
+    - SECURITY and derivation found nothing.
+  - **X2 item 8.** Wave 6 widened ws-expire's window in the deleted direction only, and nothing was deleted wrongly.
+  - **Suites.** Green, apart from `tmp-sweep` (red on main) and the `boot` load flake.
+  - **Before ruling.** The workflow `wf_a685fa5e-319` checks the F1 fix design: the moved-tree question asked of all
+    three trees, plus rows inside the leaves treated as nested. It runs one Opus feasibility agent, one Opus adversary
+    and one Sonnet agent for the minor fixes. 6 of 45 live temp roots hold a scratch checkout, so "keep any leaf that
+    holds a checkout" would leak about 13% of them.
 - **2026-10-07 22:20 — review run 335 is dispatched to `ccrc-pwa-brisk-basin`.** The daily cap refused at 24 of 24,
   and the background retry dispatched at the 22:20 age-out. The brief is
   `ccr15-evidence-archive/review-291-brief.md`: the held-out panel, plus the plan's four lenses (SAFETY and SECURITY
