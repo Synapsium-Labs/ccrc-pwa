@@ -253,6 +253,28 @@ describe('the circuit breaker (spec §5.4)', () => {
   });
 });
 
+describe('the breaker’s words', () => {
+  it('a cluster is not blamed on a box fault alone: a lane gap of over ten minutes re-anchors every crashed coordinator together, and it clears when they are revived, reclaimed or abandoned', () => {
+    const b = deadCoordinatorBreaker([{ id: 'c-a', firstDeadAt: NOW }, { id: 'c-b', firstDeadAt: NOW }], [], [], 2, null, NOW);
+    if (!b.tripped) throw new Error('not tripped');
+    const attention = deadCoordinatorAttention(new Map(), b)[0]!;
+    const feed = deadCoordinatorBreakerFeedRow(b).body;
+    for (const sentence of [attention.sentence, feed]) {
+      expect(sentence).toContain('c-a, c-b');
+      expect(sentence).toContain('a box fault is likelier than 2 crashes');
+      // The other cause: the lane's own gap, which restarts every episode on one pass.
+      expect(sentence).toContain('more than 10 minutes');
+      expect(sentence).toContain('a restart, a pause, a stale mirror');
+      expect(sentence).toContain('re-anchors every crashed coordinator together');
+      expect(sentence).toMatch(/clears when .* revived, reclaimed or abandoned/);
+    }
+    // The fleet-doubt arm is not a cluster and keeps its own sentence.
+    const u = deadCoordinatorBreaker([], [], ['c-a', 'c-b'], 2, null, NOW);
+    if (!u.tripped) throw new Error('not tripped');
+    expect(deadCoordinatorAttention(new Map(), u)[0]!.sentence).not.toContain('re-anchors');
+  });
+});
+
 describe('the lane’s memory of one claimant', () => {
   it('a crashed pass extends the run; any other reading ends it, and its would-end report with it', () => {
     let e = deadCoordinatorSighted(deadCoordinatorEntry(), { kind: 'crashed', cause: 'orphan' }, NOW);

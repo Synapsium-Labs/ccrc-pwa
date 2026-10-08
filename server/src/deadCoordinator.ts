@@ -583,7 +583,10 @@ export function deadCoordinatorBreakerSentence(b: Extract<DeadCoordinatorBreaker
       + 'that would not list, is a fleet fault, not a death.'
     : `${b.claimants.length} coordinators read crashed within ${DEAD_COORDINATOR_BREAKER_WINDOW_MS / 60_000} minutes of `
       + `each other (${ids}) — a box fault is likelier than ${b.claimants.length} crashes, so the lane ends nothing. `
-      + 'Revive them, reclaim their programmes or abandon their runs; the lane resumes once fewer than two remain.';
+      // The other way to trip it, which is no fault of anyone's: a lane that went more than the gap bound without measuring
+      // (a restart, a pause, a stale mirror) restarts every crashed episode on one pass.
+      + `A lane gap of more than ${DEAD_COORDINATOR_GAP_MS / 60_000} minutes (a restart, a pause, a stale mirror) trips it too: it re-anchors every crashed coordinator together. `
+      + 'It clears when the named coordinators are revived, reclaimed or abandoned, all but one of them.';
 }
 
 /** The breaker's feed row, written once when it trips (or names a different set) — so a trip, and the coordinators it
