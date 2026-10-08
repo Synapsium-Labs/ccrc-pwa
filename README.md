@@ -491,7 +491,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 The role's service and `ccd-cap-scopes.timer` must enable or the install fails; any other timer that
 will not enable prints the `systemctl --user enable --now` line to run, is named by its unit among the
 closing line's degraded steps (`install: done — converged with N degraded steps (…)`), and the install
-carries on. A `stable` build can predate some of these units; `ccrc version` says what a box runs. Also running on `fleet` and `both` boxes, outside the table: `ccd-history-sweep.timer` (every 2 min), which copies session text verbatim, secrets a session printed included, into `~/.ccrc/history`; its pause file is `~/.ccrc/history-off`.
+carries on. A `stable` build can predate some of these units; `ccrc version` says what a box runs. Also running on `fleet` and `both` boxes, outside the table: `ccd-history-sweep.timer` (every 2 min), which copies session text verbatim, secrets a session printed included, into `~/.ccrc/history`; its pause file is `~/.ccrc/history-off`. A rollback to a build with no `ccd/history/` leaves this timer enabled and failing every 2 minutes (the store is untouched): run `systemctl --user disable --now ccd-history-sweep.timer` on that box, as the timer unit's header says; the next install of a build with history re-enables it.
 `ccrc expose duckdns` adds `ccrc-ddns.timer` (every five minutes; on macOS the launchd job
 `app.ccrc.ccrc-ddns`). `deploy.sh agent` arms the fleet set minus `ccd-update-sync` and the
 `ccrc-codex-usage@<id>.timer` instances — it places that template and enables none; `ccrc install` does,

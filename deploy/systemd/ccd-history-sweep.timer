@@ -1,3 +1,14 @@
+# ROLLBACK BELOW W1-B1. A `ccrc rollback` (by download or by flip) or a
+# `ccrc update --to` to a build whose tree has no ccd/history/ leaves this
+# timer enabled and the shim in ~/.local/bin: each runs that older tree's own
+# install spine, which knows neither name and removes no unit it does not ship.
+# The shim then execs ~/ccrc/ccd/history/sweep.mjs, which that tree lacks, so
+# every pass fails (exit 1) every 2 minutes; the store under ~/.ccrc/history
+# is untouched. The supported remedy, on that box:
+#   systemctl --user disable --now ccd-history-sweep.timer
+# The next install of a build with history re-enables it
+# (`_inst_enable_timer history ccd-history-sweep.timer` in ccd/ccrc).
+# Never remove ~/.ccrc/history to quiet it.
 [Unit]
 Description=Run the history sweep every two minutes
 [Timer]

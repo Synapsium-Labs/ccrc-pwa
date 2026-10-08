@@ -517,4 +517,12 @@ describe('ccd-history-sweep ships the way ccd-tmp-sweep does', () => {
       expect(m![1]!, rel).not.toContain('ccd-history-sweep');
     }
   });
+
+  it('the timer\'s header names the rollback remedy, and the re-enable it cites is real (review 316 F36)', () => {
+    const text = readUnitText(joinUnitPath(SYSTEMD, 'ccd-history-sweep.timer'), 'utf8');
+    const header = text.slice(0, text.indexOf('[Unit]'));
+    expect(header).toMatch(/^#\s+systemctl --user disable --now ccd-history-sweep\.timer$/m);
+    expect(header).toContain('_inst_enable_timer history ccd-history-sweep.timer');
+    expect(readUnitText(joinUnitPath(UNIT_REPO, 'ccd', 'ccrc'), 'utf8')).toContain('_inst_enable_timer history ccd-history-sweep.timer');
+  });
 });
