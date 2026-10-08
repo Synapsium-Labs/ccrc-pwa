@@ -319,8 +319,8 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
 | `README.md` | the Settings paragraph gains "Settings has a third section, **Stall watch** …" (one line becomes seventeen; ≈953 at `77f8d63a5`, ≈960 at `d12b5aba0`) | 4 |
 | `server/test/stall-settings-readme.test.ts` | **new** (81 lines, 5 rows): the sentence pinned to L0 and L1, the route, one lead sentence after Notifications, no device word (the PWA's own device-word list) | 4 |
 | `pwa/src/screens/settingsText.ts` | **new** (fix round 1, F4): `UNCONFIRMED_TEXT` and its docstring, imports nothing; `SettingsScreen.tsx` re-exports it and `StallWatchSection.tsx` imports it, so the two screens no longer import each other | fix round 1 |
-| `shared/api.ts` | one key, `STALL_CONFIRM_TEXT.unanswered`, inside W1's stall-watch block (`unanswered-write-has-its-own-l0-line`); the review's item 5 edit to the block's header comment is the coordinator's (ledger R20, R21) | fix round 1 |
-| `server/test/coord-db.test.ts` | the stall_settings slot found by its DDL, not hard-coded (fix round 1, Q); the review's item 5 edit is the coordinator's (ledger R20, R21) | fix round 1 |
+| `shared/api.ts` | one key, `STALL_CONFIRM_TEXT.unanswered`, inside W1's stall-watch block (`unanswered-write-has-its-own-l0-line`), and, in fix round 2, the two-line D-4043 comment above that key (no string changed); the review's item 5 edit to the block's header comment is the coordinator's (ledger R20, R21) | fix round 1 |
+| `server/test/coord-db.test.ts` | the stall_settings slot found by its DDL, not hard-coded (fix round 1, Q), and, in fix round 2, the needle stops at the name: `/CREATE TABLE stall_settings(?![A-Za-z0-9_])/` (R27 item 4), so a later `stall_settings_new` table is not counted; the review's item 5 edit is the coordinator's (ledger R20, R21) | fix round 1 |
 | `server/test/stall-sweep.test.ts` | the review's item 5 test edit, the coordinator's scope (ledger R20, R21) | coordinator |
 | `server/src/watch.ts` | the review's item 5 comment lines only (no behaviour), the coordinator's scope (ledger R20, R21) | coordinator |
 
@@ -1737,9 +1737,10 @@ table.
   StallWatchRequest) => Promise<StallWatchView | 'unreadable'>`.
 - Consumes, from Task 2 (`pwa/src/components/QuickConfirm.tsx`): `QuickConfirm(props: QuickConfirmProps)` with
   `consequence: string | string[]`; Confirm runs `onConfirm(); onClose();` in that order.
-- Consumes, from `SettingsScreen.tsx`: `UNCONFIRMED_TEXT` (≈:72). `StallWatchSection.tsx` imports it, and
-  `SettingsScreen.tsx` imports `StallWatchSection`: a cycle that is safe because the constant is read only inside a
-  write's handler, never while either module evaluates (measured: the build and every suite are green).
+- Consumes `UNCONFIRMED_TEXT`. Since fix round 1 (R24 F4) the text lives in `pwa/src/screens/settingsText.ts`;
+  `SettingsScreen.tsx` re-exports it and `StallWatchSection.tsx` imports it from `settingsText.ts`, so the two screens
+  do not import each other and there is no import cycle. (The first cut imported it from `SettingsScreen.tsx`, a cycle
+  that was safe only because the constant is read inside a write's handler, never while either module evaluates.)
 - Produces (`pwa/src/screens/StallWatchSection.tsx`):
 
 ```ts
@@ -2547,7 +2548,7 @@ with `Test Files  1 failed (1)` and `Tests  no tests`. The baseline before Step 
 
 - [ ] **Step 4: Implement**
 
-(a) Create `pwa/src/screens/StallWatchSection.tsx`, in full:
+(a) Create `pwa/src/screens/StallWatchSection.tsx`, in full. The listing is the first cut: fix rounds 1 and 2 changed the network arm, the quiet select and the imports, and the shipped file governs.
 
 ````tsx
 // The Settings screen's third section, Stall watch (stall watch settings, design 2026-10-05 §13; programme
@@ -3251,7 +3252,9 @@ the one before (never a raise), and every write while the registry cannot be lis
 phone-push bell" (≈951) is left as it is: §13 measured that nothing in README spells the Notifications row's label, so
 `notifications-label-says-push` (D-4036) reaches no README line, and row 5 scans the third section's sentences only.
 That phrase was put to the operator under "Open questions for the operator"; it is settled there (README now reads
-"push bell").
+"push bell"). **Superseded in place (shipped):** the phone-push phrase was not left as it was. README :967 reads
+"push bell" (`a5771e471`, the operator's 2026-10-05 directive), and row 5 scans the whole Settings paragraph, not
+only the new section's sentences (`505ffbff4`).
 
 **README is in the citation corpus.** The edit adds 16 lines inside one paragraph. The citation instrument stays
 `7 passed | 328 skipped (335)`, measured before and after:
@@ -3596,9 +3599,10 @@ MSG
 
 ## Deviations found
 
-Issued by the coordinator from the programme's block (`POST /api/ledger/deviations`, 2026-10-05 17:47). This plan
-defines the numbers that W2 alone owns: D-4035 and D-4036 issued with the plan, and one added by fix round 1
-(`malformed-optional-block-is-dropped`). A departure found during execution is named by slug in the wave-done mail,
+This plan defines four numbers that W2 alone owns. D-4035 and D-4036 were issued by the allocator at plan time
+(`POST /api/ledger/deviations`, 2026-10-05 17:47). D-4042 (`malformed-optional-block-is-dropped`) was issued by the
+coordinator in ruling R24, fix round 1, and D-4043 (`unanswered-write-has-its-own-l0-line`) by the coordinator in
+ruling R27, fix round 2; neither came from that 17:47 call. A departure found during execution is named by slug in the wave-done mail,
 and the coordinator assigns its number.
 
 - **D-4035** — `older-server-404-reads-not-configured` (Tasks 1 and 3)
@@ -3671,8 +3675,10 @@ and the coordinator assigns its number.
     false for it, and `UNCONFIRMED_TEXT` ("Saved — the server's answer could not be read") is false the other way: the
     server did not answer at all. Neither existing line is true of it, and the section's strings are all L0 constants.
   - **Pinned by:** `pwa/test/settings-screen.test.tsx`'s "a write whose answer never arrived says it was not
-    confirmed, never "Saved" or "Nothing was changed", and re-reads" (mutations F1a, X48, X60) and the two 2xx rows
-    that assert the new line is absent (F1b).
+    confirmed, never "Saved" or "Nothing was changed", and re-reads" (mutations X48, X60), and the 2xx row "an
+    unreadable 2xx says the write may have landed and re-reads; it installs nothing", which asserts the new line is
+    absent. The sibling "a 2xx body that fails the wire guard is the same unconfirmed outcome" keeps the 2xx-unreadable
+    arm on `UNCONFIRMED_TEXT`.
   - **Cost if wrong:** if the operator wants the network arm to read `UNCONFIRMED_TEXT` after all, it is the key's
     removal and one line in `StallWatchSection`'s `write`, with the same rows retargeted. If the key is wanted but the
     wording is not, it is one L0 string.
