@@ -2791,8 +2791,10 @@ describe('redactField: a mark that ends a fragment before a sequence is carried 
   it('fail closed: span characters right after a token coloured in whole are marked with it', () => {
     expect(libRedact.redactField(`x \x1b[1m${GHP}\x1b[0m.txt y`, none())).toBe(`x ${M}${M} y`);
   });
-  // Two rows, one seed and trial count each (FU10, B5M6): the design table names two classes that leaked, a ghp_ value with its
-  // pair registered (4,053 of 10,000 trials) and an sk-ant-api03 key with no pair at all (6,978), which reaches the shape arm only.
+  // Two rows, one seed and trial count each (FU10, B5M6): two classes leaked at 7d23b8d6f (the carry fix's parent), a ghp_ value
+  // with its pair registered (4,053 of 10,000 trials) and an sk-ant-api03 key with no pair at all, which reaches the shape arm only
+  // (5,680 of 10,000). Both figures are this generator's, its seed reset per row as here (FR2a, review 344 F8); at this case's
+  // 2,000 trials they are 807 and 1,152.
   it('a fixed-seed sweep of ghp_ pair values, and of sk-ant-api03 keys with no pair, split by one to three realistic sequences, at JSON escape levels 0-2, leaks no 8-character piece', () => {
     const SEQS = ['\x1b[1m', '\x1b[0m', '\x1b[m', '\x1b[01;31m', '\x1b[K', '\x1b[01;31m\x1b[K', '\x1b[m\x1b[K', '\x1b[32m', '\x1b[1;32m',
       '\x1b[39m', '\x1b[22m', '\x1b(B', '\x1b[0;1;31m', '\x1b[38;5;196m', '\x1b[4m', '\x1b[7m'];
