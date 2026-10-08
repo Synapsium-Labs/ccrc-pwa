@@ -16,7 +16,7 @@ spec's after wave 1.
 
 | # | spec wave | scope | run | PRs | state |
 |---|---|---|---|---|---|
-| 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | — | DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
+| 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent. Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
 | 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | — | — | to open before row 1 closes |
 | 2a | 1, follow-up | The arming PR: flips doctor's `box-token` FAIL and WARN arms on. Trigger: the GPT-lane lane-1 B4 soak gate recorded closed. Bound: merged before row 3's first PR | — | — | later |
 | 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim | — | — | later |
@@ -59,6 +59,68 @@ spec's after wave 1.
     the worker merge `main` just before its edits to those two files and again before it pushes. A conflict there is
     textual: keep both sides.
   - Worker reserve: 4400 to 4409. Numbers 4410 to 4417 are the coordinator's.
+- **2026-10-08 17:18 UTC: run 320's wave-done (mail 4023), re-measured; the bar committed before its review.**
+  - **Evidence:** the wave-done, the worker's four final reports and its SDD directory are copied under
+    `.superpowers/btl-w1-evidence/` (gitignored).
+  - **The claim, re-measured:**
+    - PR #330 is open against `main`, not draft, and mergeable. Its head equals the fingerprint and the pushed tip,
+      `f3d151e42`.
+    - It has 15 commits, each with the noreply author and committer; two merge `main`. `main` (`a3a8f62bc`) is an
+      ancestor of the tip.
+    - It changes 44 files: exactly Part A's 43 File Structure paths, plus 10 lines in the plan's Deviations found.
+    - The only live claims on project `ccrc-pwa` are the run's own, 1110 and 1111.
+    - CI: PR run 37806512332 and full run 37806504081 are green on every Linux leg. `full-suite` is red only because
+      it needs the macOS legs, which gate nothing (operator ruling 2026-09-28). The worker names their owners:
+      child-workspace reclamation and the native docs reader. None is a file this branch touches.
+    - The advance to `awaiting-review` first answered `pr-unmeasurable`, because ccd's `pr-state` timed out on the
+      loaded box. A re-read answered `open`, and the retry was accepted.
+  - **What the worker reports:**
+    - Each task had a Sonnet implementer and an Opus review. Then came a three-lens final review (security, state
+      machine, conventions), one fix wave and a scoped re-review. About 60 mutation rows were measured red, then green.
+    - The live-safety pin is `token-rotation-e2e.test.ts`, "LIVE SAFETY: part A alone rotates nothing on a fleet
+      whose ccrc has no token verb (D-4395)".
+    - Counts, as `main` / plan / after: gate routes 88 / 86 / 90; `ROUTES` 91 / 89 / 93; exempt 32 / 32 / 33;
+      reasons 6 / 6 / 7; lanes 27 / 27 / 27. The plan was drafted at `282e79e44`, and every delta is the plan's.
+    - D-4400 to D-4409 are defined; the worker reserve is spent.
+    - **Three spec-level gaps, raised for a ruling and written nowhere in the tree:**
+      - I3: a retired value written back to the fleet file alone is never resynced.
+      - I4: the pending cap has no exit but a confirming generation read, and Rotate now answers `joined` while
+        nothing runs.
+      - sec-M2: a failed retired-digest append loses the record for good.
+    - None of the three is reachable on the live fleet in part A, because the `verb-missing` hold stops every
+      hand-out. They are ruled before part B is dispatched, with numbers from 4410 to 4417.
+  - **Bar for the merge.** The held-out review (clause 14) must find NO confirmed finding of these classes:
+    1. **Live:** with part A alone on the live fleet (its `ccrc` has no `token` verb, and boot adopts the hand-made
+       token), a reachable state in which part A promotes, retires or drops a value, makes a fleet lane answer 401,
+       or re-sends without bound: a failure count, a backoff ladder, or a re-probe faster than the plan's.
+    2. **Never 401 the fleet:** a value the fleet holds or may hold leaves the accept set before the fleet confirmed a
+       later one; or a promotion happens on anything but the fleet's confirmation over the link (an op result, or a
+       generation read measured after the hand-out), an HTTP sighting included.
+    3. **The leak's retirement:** a retired value adopted at boot, accepted, or handed out again; or the previous
+       value retired before the new one was presented, or kept past its hard bound.
+    4. **Secrets:** a token value, a claim code or the sha256 of either in a log, argv, the environment, an op
+       result, a non-token file, any response but the claim's one 200, or test output; or a token file not 0600
+       from birth.
+    5. **The claim door:** a budget checked before the live-code compare; a miss that burns a code; a same-tick pair
+       answering other than one 200 and one 410; or a response without `Cache-Control: no-store`, Fastify's own 400
+       and 413 included.
+    6. **The accept set:** an early exit or a short-circuit fold in the compare; the injected comparator called other
+       than once per slot; or a literal-string `mailToken` that no longer works.
+    7. **Boot:** a hand-made unusable or placeholder `mail.token` that no longer refuses boot; the fleet file written
+       on a box not recorded `both`, or whose `agent.env` has a `CCRC_AGENT_TOKEN` line; or a recovery proof that
+       prints anything.
+    8. **Census and gate:** a door not pinned in both directions; a route count, the seventh reason or a census set
+       moving without the others; a box-token lane lost; or the rotate route reachable without a session.
+    9. A ring broken by imports, an overloaded null at a seam the plan names, a non-additive wire change, or a second
+       definition of an L0 word.
+    10. A new pin that cannot red when its guard is mutated.
+    11. An edit outside Part A's File Structure and the plan's Deviations found, or on another live claim's path.
+    12. A wrong deviation number: anything defined beyond D-4388 to D-4409, or 4410 to 4417 written with the prefix.
+
+    Also, every Linux leg of the full run on the reviewed tip must be green.
+  - **The rounds:** one bar-class finding gets one fix round, then a scoped review. Coverage and prose findings are
+    fixed in that round if one runs; otherwise they become residue. A fix round's numbers are named in its mail, from
+    4410 to 4417.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
