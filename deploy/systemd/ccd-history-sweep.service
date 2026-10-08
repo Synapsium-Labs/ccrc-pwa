@@ -16,8 +16,12 @@ ExecStart=%h/.local/bin/ccd-history-sweep
 # a scheduled pass never starts a copy it cannot finish — pinned equal by
 # history-sweep.test.ts (DM43). Never shorten one without the other.
 TimeoutStartSec=10min
-# Hygiene: the run's real bounds are in-process (90 s and 512 MiB per pass), and
-# chunked streaming keeps RSS far below this cap.
+# MEMORY BOUND, not hygiene: MemoryMax=1G is the carrier's memory bound, the figure the
+# bounds that fix round 1 added (D-4337, D-4345, D-4346 and D-4419) are measured against
+# (O20 asserts a whole pass's peak RSS at half of it, D-4244), and
+# history-sweep.test.ts pins it exactly. The run's 90 s and 512 MiB are its time budget and
+# its READ budget (RUN_BUDGET_MS, RUN_BUDGET_BYTES), not memory bounds: never loosen this
+# cap on their account.
 MemoryMax=1G
 # Idle CPU and idle IO: capture reads transcripts on the disk every live session
 # is working on, and nothing about it is urgent at the scale of a minute.

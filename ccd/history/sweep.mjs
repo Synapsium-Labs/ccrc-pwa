@@ -3954,8 +3954,8 @@ export function mergeSteps(db, ctx, budget) {
 //      it opens READ-ONLY and writes nothing at all (§8.4 "dry run by default"): no journal half, no marker, no
 //      flush;
 //   5. otherwise the journal half at lock take (DI7, D-4232 history-observe-at-rename: a /clear during a long
-//      --op keeps its startup epoch; a failed one answers `journal-unwritable`, exit INTERNAL, before the probe,
-//      and no release half runs), then the free-space probe, then the store opened exactly as a scheduled
+//      --op keeps its startup epoch; a failed one says `history-sweep: journal-unwritable` and answers exit INTERNAL
+//      with no reason, before the probe; no release half runs), then the free-space probe, then the store opened exactly as a scheduled
 //      pass opens it (`openStore`; a throw there is answered after the release half, review 316 F19); from here
 //      on EVERY answer, not only rc 0, runs the journal half again before release (D-4232), and a failed one
 //      replaces only an rc 0. Inside the body: an unreadable store.writer answers store-unmeasured; an `import`

@@ -155,7 +155,8 @@ export const LINE_MAX = 16 * 1024 * 1024;           // a longer transcript line 
  *  A body-reader reaches a raw line-too-long blob when a later row's uuid collides with the raw row's rawRowKey;
  *  decompressing it whole inside the chunk transaction could exhaust the carrier's memory on every ingest of that
  *  uuid (review 316 F7 sibling). A reader that meets one passes it over: the variant compare gets no body (cause
- *  `unknown`), the FTS index text is empty, and the paired-tool-use walk goes on to its parent. The check reads the
+ *  `unknown`), the blob keeps no FTS row (marked indexed, none inserted, and any row an older store holds is deleted
+ *  by the re-derivation; FU5, final pass FP9), and the paired-tool-use walk goes on to its parent. The check reads the
  *  stored raw_len, so the decode itself is bounded by that same raw_len too (store's unbrotli): a blob whose bytes
  *  decode past it does not decode, never an allocation past the cap (final review 316 FPM10).
  *  D-4346 (history-permanent-failures-classified). */
@@ -171,8 +172,8 @@ export function blobOverDecodeCap(rawLen) {
  *  and never parsed: JSON.parse and canonicalJson hold every value at once, and 8.1 million nested arrays in a valid
  *  16,200,040-byte line, or 5.4 million empty objects side by side, aborted every pass in a 1 GiB scope (review 316 F7).
  *  Measured for a whole pass on Node 24.14.1: the heaviest structured shape, 500,000 units of 30-character strings in one
- *  16,499,914-byte line, peaked at 389,508 KiB, under half the carrier's MemoryMax=1G (D-4244's bound family), where
- *  999,013 units of 13-character strings peaked at 516,988 KiB, over it. A plain-text line's cost is redaction and
+ *  16,499,914-byte line, peaked at 389,508 KiB, under half the carrier's MemoryMax=1G (524,288 KiB, D-4244's bound family), where
+ *  999,013 units of 13-character strings peaked at 516,988 KiB, 7,300 KiB (1.4%) under that half and too near it to keep. A plain-text line's cost is redaction and
  *  indexing, which this bound does not reach and D-4419's window does: with the window, a 16 MB user text of 8,000,000
  *  one-letter words with a secret file loaded peaks at 184,960 KiB for a whole pass in a 1 GiB scope (783,640 KiB before
  *  it, FU2), and the heaviest plain-text line measured with it, an ESC 7-dense one, at 372,204 KiB. A 4.3-million-line sample of this fleet's transcripts held at most 24,944 units, 15 deep. */
@@ -1882,7 +1883,13 @@ function spanEnd(s, p) {
   return e;
 }
 
-/** How many characters of lead candidates are tested in one pass (D-4307): the lead reading's memory bound. */
+/** How many characters of lead candidates are tested in one pass (D-4307): the bound on the candidates' TEXT held at
+ *  once, not on everything a batch holds. Each candidate also carries a closure and two array slots, a fixed cost
+ *  `size` does not count, so a batch of tiny candidates holds more than this many characters' worth. FU1S's critic
+ *  measured the whole cost on one 16 MiB field with no secrets (load average about 16): `ESC 7 a ` repeated took
+ *  15.6 s and 1,685 MB maxRSS at the base and 24.5 s and 2,097 MB with the lead reading, `a ESC 7 b ESC 8 c `
+ *  repeated 15.5 s and 1,572 MB against 53.7 s and 1,719 MB (3.5x; each span is under the cap and yields 15
+ *  candidates); a 1 GB-plus RSS is already the base's (final review 316 B4M11). */
 const LEAD_BATCH_CHARS = 1 << 20;
 
 /** The end of the `[A-Za-z0-9_-]` run of `s` that starts at `p` (the value layer's unit). */
