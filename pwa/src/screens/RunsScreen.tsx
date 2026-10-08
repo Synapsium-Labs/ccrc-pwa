@@ -35,7 +35,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type CoordCapsView, type FleetSession, graphReadCount, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runKindChip, runWarnings, runClosedAt, runItems, runState, runsByProgram, waveLabel } from '../fleet/runWords';
+import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, childReclaimChip, childReclaimDoneRefreshDue, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, childRunsSeen, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runKindChip, runWarnings, runClosedAt, runItems, runState, runsByProgram, waveLabel } from '../fleet/runWords';
+import { childReclaimDoneAtOf } from '../fleet/childReclaimWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
@@ -433,6 +434,8 @@ export function RunsScreen({
   const sessions = store((s) => s.sessions);
   const fleetFrameSeen = store((s) => s.fleetFrameSeen);
   const conn = store((s) => s.conn);
+  const coordFrame = store((s) => s.coord);
+  const coordFrameSeen = store((s) => s.coordFrameSeen);
   const [cold, setCold] = useState<RunSummary[] | null>(null);
   // Review finding 19: `cold`'s own `null` used to mean BOTH "still loading"
   // and "every attempt has failed" — the same collapse `MailScreen`'s `feed`
@@ -491,10 +494,33 @@ export function RunsScreen({
     return () => { aliveRef.current = false; };
   }, []);
 
-  const loadCold = (): Promise<void> =>
-    loadRunsRef.current()
-      .then((r) => { if (aliveRef.current) { setCold(r.runs); setColdState('ok'); } })
-      .catch(() => { if (aliveRef.current) setColdState('error'); });
+  // THE RACE, AND ITS GUARD (spec §5.9). A reclaim now puts two archive reads in
+  // flight a tick or two apart: the vanish read (the child's session leaving the
+  // fleet frame) and the board's second trigger (the coord frame's newest reclaim
+  // end). Responses can arrive in any order, and `loadCold` used to apply
+  // whichever landed last, so a slow older read overwrote a newer one and the
+  // row showed the stale "workspace pending" chip again. Each call takes a
+  // sequence number from `issued`; a read may set `cold` only when it is NEWER
+  // than the last one applied (`applied`, the high-water mark). The `catch` is
+  // held to the same mark, so a rejection from a read older than an applied one
+  // cannot set `error` over the newer answer. A rejection does NOT advance the
+  // mark: it carries no reading to be newer than, so a newer success still wins
+  // over an older error in either arrival order, and an older success still
+  // lands after a newer failure (the freshest answer there is).
+  const issued = useRef(0);
+  const applied = useRef(0);
+  const loadCold = (): Promise<void> => {
+    const seq = ++issued.current;
+    return loadRunsRef.current()
+      .then((r) => {
+        // The body is read BEFORE the mark moves: a success whose body cannot be
+        // read (a `null` answer) throws here, reaches the `catch` below as an
+        // error for this same `seq`, and so cannot advance the mark first.
+        const rows = r.runs;
+        if (aliveRef.current && seq > applied.current) { applied.current = seq; setCold(rows); setColdState('ok'); }
+      })
+      .catch(() => { if (aliveRef.current && seq > applied.current) setColdState('error'); });
+  };
 
   useEffect(() => {
     // UNCONDITIONAL — the earlier gate (`if (store.getState().runs.length >
@@ -550,6 +576,38 @@ export function RunsScreen({
     if (prev !== null && childReclaimRefreshDue(cold ?? [], prev, ids)) void loadCold();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions, fleetFrameSeen]);
+
+  // Child-reclamation wave 6 (spec §5.9): the SECOND trigger. ccd purges a
+  // reclaimed child's registry row before it journals the reclaim's end, and
+  // the server's journal mirror is never awaited, so the vanish read above
+  // usually lands first and the row comes back with no chip. The coord frame
+  // carries the newest reclaim end the mirror has committed. When THAT changes,
+  // and a finished row is still unsettled, the board reads its archive once.
+  // It is not a poll: it fires once per change of a value the server measured.
+  // A null (a restarted server, or one older than the field) is never a reason
+  // to read, and the first value this board sees is its baseline, not a change.
+  //
+  // Which runs had a child is remembered across frames (`childRunsSeen`). This
+  // effect is declared first, so it runs first in a commit that changes both.
+  const childRunsRef = useRef<ReadonlySet<number>>(new Set<number>());
+  useEffect(() => {
+    childRunsRef.current = childRunsSeen(childRunsRef.current, sessions, cold ?? []);
+  }, [sessions, cold]);
+  // `undefined` = no coord frame seen yet by this board; null = seen, no value.
+  const prevDoneAtRef = useRef<number | null | undefined>(undefined);
+  useEffect(() => {
+    if (!coordFrameSeen) return;
+    const after = childReclaimDoneAtOf(coordFrame);
+    const before = prevDoneAtRef.current;
+    prevDoneAtRef.current = after;
+    if (before !== undefined && childReclaimDoneRefreshDue(cold ?? [], childRunsRef.current, before, after)) {
+      void loadCold();
+    }
+    // The coord frame's dependencies only, as wave 5's effect takes the fleet
+    // frame's: a cold read landing is not a change of the value, and a re-read
+    // changes `cold`, never `coordFrame`, so it cannot loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coordFrame, coordFrameSeen]);
 
   const sessionById = new Map(sessions.map((s) => [s.id, s] as const));
   // CCR-15 wave 5 (spec §5.7): the abandon sheet's confirm line branches on the
