@@ -1783,7 +1783,15 @@ describe('ccrc uninstall: the codex step, in order and contained (Plan 2b-2 Task
       expect(fixture).not.toContain('killIfOurs');
       expect(fixture).not.toMatch(/const pids = new Set|filter\(\(pid\).*kill/);
       const config = readFileSync(join(REPO, 'server', 'vitest.config.ts'), 'utf8');
-      expect(config).not.toMatch(/globalSetup|laneReaper\.ts/);
+      // #316 (D-4499's amendment): the config now wires ONE `globalSetup`, the suite's per-run temp parent, which
+      // signals no process and decides liveness by a socket, not a PID. What D-3533 rules out is a LANE reaper
+      // there, or a setup carrying signal authority — so that is what is pinned, for every entry the config names.
+      expect(config).not.toMatch(/laneReaper/);
+      const wired = /globalSetup:\s*\[([^\]]*)\]/.exec(config)?.[1] ?? '';
+      for (const entry of [...wired.matchAll(/'([^']+)'/g)].map((m) => m[1]!)) {
+        expect(readFileSync(join(REPO, 'server', entry), 'utf8'), `${entry} carries signal authority`)
+          .not.toMatch(/process\.kill|ps[^\n]*eww|['"]eww['"]/);
+      }
     });
   });
 

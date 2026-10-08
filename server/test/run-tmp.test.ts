@@ -15,6 +15,9 @@
 //     absent) and that has been quiet for the window, through any spelling of the base, never throwing.
 //   - `armSignals`: the main process's own collector on SIGTERM, SIGINT, SIGHUP and `exit` — persistent, so a
 //     second SIGTERM mid-removal cannot kill it, always exiting 128+n, and gone again once disarmed.
+//   - The wiring (T1): THIS run is inside its own run directory, whose owner answers.
+//   - End to end (T5): a real nested vitest under the `globalSetup` DERIVED from `vitest.config.ts`, killed every
+//     way a run is killed, and refused under a TMPDIR too long for a socket.
 //
 // Every owner is a child this file spawned, and only those pids are ever signalled. Socket bases live under a
 // short `/tmp/ccrc-rt-XXXXXX` — a `mkTmp` path is too long for `sun_path` on macOS (104 bytes), the same reason
@@ -23,13 +26,16 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync,
-  unlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmdirSync,
+  rmSync, symlinkSync, unlinkSync, writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  DEAD_SUFFIX, RUN_OWNER, RUN_PREFIX, RUN_QUIET_S, RUN_SOCKET, RUN_TMP, condemn, openRun, probeRun, reapRuns,
+  DEAD_SUFFIX, RUN_DIR_ENV, RUN_OWNER, RUN_PREFIX, RUN_QUIET_ENV, RUN_QUIET_S, RUN_REFUSED_ENV, RUN_SOCKET, RUN_TMP,
+  condemn, openRun, probeRun, reapRuns,
 } from './run-tmp.globalsetup.mjs';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -39,9 +45,19 @@ const isRoot = process.getuid?.() === 0;
 
 /** Every pid this file started. `afterEach` SIGKILLs them; nothing else is ever signalled. */
 const spawned: number[] = [];
+/** Every process GROUP this file started — only ever a child spawned `detached: true`, so its pid is its group. */
+const groups: number[] = [];
 const bases: string[] = [];
 
+/** Signal a group this file made, and its leader. Refuses anything that could be pid 0, 1 or a typo. */
+function killGroup(pid: number, signal: NodeJS.Signals): void {
+  if (!Number.isInteger(pid) || pid <= 1) throw new Error(`killGroup refuses pid ${pid}`);
+  try { process.kill(-pid, signal); } catch { /* already gone */ }
+  try { process.kill(pid, signal); } catch { /* already gone */ }
+}
+
 afterEach(() => {
+  for (const pid of groups.splice(0)) killGroup(pid, 'SIGKILL');
   for (const pid of spawned.splice(0)) {
     try { process.kill(pid, 'SIGCONT'); } catch { /* already gone */ }
     try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
@@ -511,4 +527,194 @@ describe('armSignals — a persistent arm that collects the run and always exits
     expect(await a.exit).toEqual({ code: null, signal: 'SIGTERM' });
     expect(existsSync(a.run)).toBe(true);
   });
+});
+
+describe('this run is wired (T1)', () => {
+  it('runs inside its own run directory, and that directory\'s owner answers', async () => {
+    const refused = process.env[RUN_REFUSED_ENV];
+    expect(refused, `the per-run temp dir was refused (${refused}); EINVAL means this TMPDIR is too long for a unix `
+      + 'socket (sun_path) — see the header of test/run-tmp.globalsetup.mjs').toBeUndefined();
+    const run = process.env[RUN_DIR_ENV];
+    expect(run, 'no run directory: test/run-tmp.globalsetup.mjs is not wired as globalSetup in vitest.config.ts')
+      .toBeTruthy();
+    expect(realpathSync(tmpdir())).toBe(path.join(run!, RUN_TMP));
+    expect(mkTmp('ccrc-runtmp-wire-').startsWith(path.join(run!, RUN_TMP) + path.sep)).toBe(true);
+    expect(await probeRun(run!)).toBe('live');
+  });
+});
+
+describe('end to end: a nested real vitest under the real globalSetup (T5)', () => {
+  // `agent/test/contain-path.test.ts`'s idiom: the child runs whatever `vitest.config.ts` ACTUALLY names, read
+  // from its text, so unwiring the entry reds every case here instead of quietly narrowing what they cover.
+  const serverRoot = path.resolve(here, '..');
+  const VITEST = path.resolve(path.dirname(createRequire(import.meta.url).resolve('vitest/package.json')), 'vitest.mjs');
+
+  const globalSetupEntries = (): string[] => {
+    const cfg = readFileSync(path.join(serverRoot, 'vitest.config.ts'), 'utf8')
+      .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+    const m = /globalSetup:\s*\[([^\]]*)\]/.exec(cfg);
+    expect(m, 'globalSetup is not wired in vitest.config.ts').toBeTruthy();
+    const files = [...m![1]!.matchAll(/'([^']+)'/g)].map((x) => path.resolve(serverRoot, x[1]!));
+    expect(files.length, 'globalSetup names no files').toBeGreaterThan(0);
+    return files;
+  };
+
+  /** The fixture test: makes a fixture the raw way (`mkdtemp` under `tmpdir()`), records what the run handed
+   *  its worker, then does what `FX_MODE` says. */
+  const FX_TEST = [
+    "import { appendFileSync, lstatSync, mkdtempSync, readdirSync } from 'node:fs';",
+    "import { tmpdir } from 'node:os';",
+    "import path from 'node:path';",
+    'const env = process.env;',
+    "it('records its run, then does what FX_MODE says', async () => {",
+    "  mkdtempSync(path.join(tmpdir(), 'ccrc-fx-'));",
+    '  appendFileSync(env.FX_RECORD, JSON.stringify({ pid: process.pid, tmpdir: tmpdir(),',
+    `    runDir: env[${JSON.stringify(RUN_DIR_ENV)}], refused: env[${JSON.stringify(RUN_REFUSED_ENV)}],`,
+    '    baseListing: readdirSync(env.FX_BASE) }) + "\\n");',
+    '  const sleep = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));',
+    "  if (env.FX_MODE === 'sleep') await sleep(30000);",
+    `  if (env.FX_MODE === 'untilquiet') await sleep(lstatSync(path.join(env.FX_DEAD, ${JSON.stringify(RUN_TMP)})).ctimeMs`,
+    '    + Number(env.FX_Q) * 1000 + 500 - Date.now());',
+    "  if (env.FX_MODE === 'die') process.kill(process.pid, 'SIGKILL');",
+    '});',
+    '',
+  ].join('\n');
+
+  interface Record { pid: number; tmpdir: string; runDir?: string; refused?: string; baseListing: string[] }
+  interface Nested { pid: number; fx: string; exit: Promise<Exit>; output: () => string }
+
+  /** A PLAIN-OBJECT config (it lives outside the package, so it may import nothing) naming the real
+   *  `globalSetup` by absolute path, one fixture test, and a record file. */
+  function fixture(): string {
+    const fx = mkTmp('ccrc-runtmp-e2e-');
+    const config = { test: { globals: true, include: ['*.fx.test.mjs'], testTimeout: 60_000, globalSetup: globalSetupEntries() } };
+    writeFileSync(path.join(fx, 'vitest.config.mjs'), `export default ${JSON.stringify(config)};\n`);
+    writeFileSync(path.join(fx, 'run.fx.test.mjs'), FX_TEST);
+    return fx;
+  }
+
+  /** A nested `vitest run` under `base` as its TMPDIR, in a process group of its own. THIS process runs under the
+   *  outer run, so the run's env names are deleted unless a case sets them — inherited, they would point the
+   *  child's reading at the outer run. */
+  function nested(base: string, mode: string, extra: { [k: string]: string } = {}): Nested {
+    const fx = fixture();
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const k of [RUN_DIR_ENV, RUN_REFUSED_ENV, RUN_QUIET_ENV]) delete env[k];
+    Object.assign(env, { TMPDIR: base, CI: '1', FX_BASE: base, FX_RECORD: path.join(fx, 'record.jsonl'), FX_MODE: mode }, extra);
+    const c = spawn(process.execPath, [VITEST, 'run', '--root', fx], { cwd: fx, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    groups.push(c.pid!);
+    let out = '';
+    c.stdout!.setEncoding('utf8').on('data', (d: string) => { out += d; });
+    c.stderr!.setEncoding('utf8').on('data', (d: string) => { out += d; });
+    const watchdog = setTimeout(() => killGroup(c.pid!, 'SIGKILL'), 90_000);
+    const exit = new Promise<Exit>((r) => c.once('exit', (code, signal) => { clearTimeout(watchdog); r({ code, signal }); }));
+    return { pid: c.pid!, fx, exit, output: () => out };
+  }
+
+  const records = (n: Nested): Record[] => {
+    const f = path.join(n.fx, 'record.jsonl');
+    return existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record) : [];
+  };
+
+  /** The fixture's first record — the moment its worker is inside the run — or a failure naming the output. */
+  async function firstRecord(n: Nested): Promise<Record> {
+    let done = false;
+    void n.exit.then(() => { done = true; });
+    const t0 = Date.now();
+    while (Date.now() - t0 < 60_000) {
+      const r = records(n);
+      if (r.length > 0) return r[0]!;
+      if (done) break;
+      await new Promise((res) => setTimeout(res, 50));
+    }
+    throw new Error(`the nested run wrote no record\n--- nested output ---\n${n.output()}`);
+  }
+
+  const runsIn = (base: string): string[] => readdirSync(base).filter((f) => f.startsWith(RUN_PREFIX));
+
+  /** A run killed the one way no arm can answer: SIGKILL to main, then its orphan workers. */
+  async function killedRun(base: string): Promise<string> {
+    const n = nested(base, 'sleep');
+    const rec = await firstRecord(n);
+    process.kill(n.pid, 'SIGKILL');
+    await n.exit;
+    killGroup(n.pid, 'SIGKILL');
+    expect(rec.runDir, 'the killed run recorded no run directory').toBeTruthy();
+    return rec.runDir!;
+  }
+
+  it('T5a: GNU timeout\'s double SIGTERM — main, then its group — exits 143 and leaves nothing', async () => {
+    const base = socketBase();
+    const n = nested(base, 'sleep');
+    const rec = await firstRecord(n);
+    process.kill(n.pid, 'SIGTERM');      // GNU timeout signals its child first...
+    process.kill(-n.pid, 'SIGTERM');     // ...then its process group: main's second SIGTERM, after vitest's `once`
+    expect(await n.exit, n.output()).toEqual({ code: 143, signal: null });
+    expect(rec.tmpdir).toMatch(new RegExp(`^${base}/${RUN_PREFIX}[A-Za-z0-9]{6}/${RUN_TMP}$`));
+    expect(runsIn(base)).toEqual([]);
+  }, 120_000);
+
+  it('T5b: a worker that dies outright — teardown still collects the fixture it left', async () => {
+    const base = socketBase();
+    const n = nested(base, 'die');
+    const e = await n.exit;
+    expect(e.code, n.output()).not.toBe(0);
+    expect(e.code).not.toBeNull();
+    expect(records(n)[0]?.runDir, 'the fixture never ran inside a run directory').toBeTruthy();
+    expect(runsIn(base)).toEqual([]);
+  }, 120_000);
+
+  it('T5c: a run SIGKILLed outright is dead, left by the next run while fresh, and removed once quiet', async () => {
+    const base = socketBase();
+    const run = await killedRun(base);
+    expect(existsSync(run)).toBe(true);
+    expect(await probeRun(run)).toBe('dead');
+    // The quiet gate's positive control: a run under the default window leaves it.
+    const fresh = nested(base, 'pass');
+    expect((await fresh.exit).code, fresh.output()).toBe(0);
+    expect(records(fresh)[0]?.baseListing).toContain(path.basename(run));
+    expect(existsSync(run), 'a dead run younger than the quiet window was reaped').toBe(true);
+    // And a run whose window is zero collects it — at SETUP: its worker never sees it.
+    const reaping = nested(base, 'pass', { [RUN_QUIET_ENV]: '0' });
+    expect((await reaping.exit).code, reaping.output()).toBe(0);
+    expect(records(reaping)[0]?.baseListing, 'setup did not reap the quiet dead run').not.toContain(path.basename(run));
+    expect(runsIn(base)).toEqual([]);
+  }, 120_000);
+
+  it('T5d: SIGHUP to the group — a closed terminal or tmux pane — exits 129 and leaves nothing', async () => {
+    const base = socketBase();
+    const n = nested(base, 'sleep');
+    await firstRecord(n);
+    process.kill(-n.pid, 'SIGHUP');
+    expect(await n.exit, n.output()).toEqual({ code: 129, signal: null });
+    expect(runsIn(base)).toEqual([]);
+  }, 120_000);
+
+  it('T5e: a dead run that is not quiet at setup is reaped at TEARDOWN once it is', async () => {
+    // Margin-based, not timing-based: the only requirement is a nested startup under the 8 s window.
+    const base = socketBase();
+    const dead = await killedRun(base);
+    mkdirSync(path.join(dead, RUN_TMP, 'poke'));
+    rmdirSync(path.join(dead, RUN_TMP, 'poke'));
+    const n = nested(base, 'untilquiet', { [RUN_QUIET_ENV]: '8', FX_Q: '8', FX_DEAD: dead });
+    const rec = await firstRecord(n);
+    expect(rec.baseListing, 'setup reaped a run that was not yet quiet').toContain(path.basename(dead));
+    expect((await n.exit).code, n.output()).toBe(0);
+    expect(existsSync(dead), 'teardown did not reap the run once it was quiet').toBe(false);
+    expect(runsIn(base)).toEqual([]);
+  }, 120_000);
+
+  it('T5f: a TMPDIR too long for a socket refuses loudly and keeps today\'s behaviour', async () => {
+    const longBase = path.join(socketBase(), 'x'.repeat(90));
+    mkdirSync(longBase);
+    const n = nested(longBase, 'pass', { [RUN_DIR_ENV]: '/inherited/never' });
+    expect((await n.exit).code, n.output()).toBe(0);
+    const rec = records(n)[0];
+    expect(rec, n.output()).toBeTruthy();
+    expect(rec!.tmpdir).toBe(longBase);
+    expect(rec!.runDir, 'an inherited run directory survived the refusal').toBeUndefined();
+    expect(rec!.refused).toBe('EINVAL');
+    expect(n.output()).toContain('ccrc-test: per-run temp dir refused (EINVAL)');
+    expect(runsIn(longBase)).toEqual([]);
+  }, 120_000);
 });

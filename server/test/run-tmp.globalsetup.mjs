@@ -43,10 +43,22 @@
 // under `timeout` were clean, and so were double SIGTERM, SIGTERM to main only, and SIGINT and SIGHUP to the
 // group, exiting 143, 130 and 129.
 //
+// A RUN THAT CANNOT HAVE ITS OWN PARENT SAYS SO AND CARRIES ON AS BEFORE (D-4497). When `realpath`, `mkdtemp`,
+// `listen` or the `owner.json` write fails — a TMPDIR too long for `sun_path` (a base over about 74 characters
+// on macOS, 78 on Linux; the macOS default is 56, CI's is 4) or a sandbox — what was made is removed, TMPDIR is
+// left alone, an inherited CCRC_TEST_RUN_DIR is deleted, CCRC_TEST_RUN_REFUSED names the code, and one
+// `ccrc-test: per-run temp dir refused (<code>)` line is printed. That is the status quo, made loud; the
+// reclamation spec's "a temp root that cannot be made private is not used" is the precedent, and
+// `run-tmp.test.ts`'s T1 is red in such a run.
+//
+// WHAT THIS DOES NOT DO. It never signals another process: its arm exits this one. It does not collect
+// vitest's own `TestProject.tmpDir` (a follow-up), loose `ccrc-*` directories from before it existed (proposal
+// 3 of #316, a follow-up), or a TMPDIR no later run visits.
+//
 // WHY A `.mjs` THAT IMPORTS ONLY `node:` BUILTINS. Bare-`node` children import it (`run-tmp.test.ts` spawns
 // real owners), and the node floor (22.16) cannot strip types; `shared/base-url.mjs` is the precedent.
 import {
-  closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, renameSync, rmSync, writeSync,
+  closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, realpathSync, renameSync, rmSync, writeSync,
 } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -62,6 +74,12 @@ export const RUN_TMP = 'tmp';
 /** The run's own name, and nothing else: `mkdtemp`'s six characters, optionally mid-removal. Built from the two
  *  names above so it cannot drift from them. */
 export const RUN_NAME_RE = new RegExp(`^${RUN_PREFIX}[A-Za-z0-9]{6}(${DEAD_SUFFIX.replace('.', '\\.')})?$`);
+/** The run directory, as the workers see it. Read by `run-tmp.test.ts`'s T1; nothing else should need it. */
+export const RUN_DIR_ENV = 'CCRC_TEST_RUN_DIR';
+/** Set, to the refusal's code, only when this run could not have its own parent (D-4497). */
+export const RUN_REFUSED_ENV = 'CCRC_TEST_RUN_REFUSED';
+/** For tests only: the quiet window in whole seconds, in place of `RUN_QUIET_S`. */
+export const RUN_QUIET_ENV = 'CCRC_TEST_RUN_QUIET_S';
 /** The signals the arm collects on, by number, so an armed exit is 128+n as a default action's would be. */
 export const RUN_SIGNALS = Object.freeze({ SIGHUP: 1, SIGINT: 2, SIGTERM: 15 });
 /** How long a dead or unowned run must have been quiet before a later run condemns it (D-4496). */
@@ -233,4 +251,63 @@ export async function reapRuns(base, { now = Date.now(), uid = process.getuid?.(
     }
   }
   return { removed, left };
+}
+
+/** One line on stderr. `ccrc-test:` so a reader of a run's output can find every line this file prints. */
+function warn(msg) {
+  process.stderr.write(`ccrc-test: ${msg}\n`);
+}
+
+/** `CCRC_TEST_RUN_QUIET_S` as a whole number of seconds, or the default — with a warning when it was set to
+ *  anything else, rather than a silent default the setter would never notice. */
+function parseQuiet(raw) {
+  if (raw === undefined) return RUN_QUIET_S;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  warn(`${RUN_QUIET_ENV}=${JSON.stringify(raw)} is not a whole number of seconds; using ${RUN_QUIET_S}`);
+  return RUN_QUIET_S;
+}
+
+/** Reap `base`, saying so only when something was removed or could not be: a quiet walk prints nothing. */
+async function reapAndReport(base, quietS) {
+  const t0 = Date.now();
+  const r = await reapRuns(base, { quietS });
+  if (r.removed.length > 0) warn(`reaped ${r.removed.length} dead test-run dir(s) under ${base} in ${Date.now() - t0} ms`);
+  for (const [name, why] of r.left) {
+    if (/^(left|error|unreadable):/.test(why)) warn(`could not reap ${path.join(base, name)} (${why}); the next run retries`);
+  }
+}
+
+/** The refusal (D-4497): today's behaviour, said out loud. */
+function refuse(code, where) {
+  delete process.env[RUN_DIR_ENV];
+  process.env[RUN_REFUSED_ENV] = code;
+  warn(`per-run temp dir refused (${code}) under ${where}; fixtures go loose in TMPDIR as before`);
+  return () => { delete process.env[RUN_REFUSED_ENV]; };
+}
+
+/** vitest's `globalSetup`, run in its MAIN process before any worker is forked — so the workers inherit the
+ *  TMPDIR set here, and everything they and their children make lands in this run's `tmp/`. Reaps the base,
+ *  opens the run, arms; the returned teardown disarms, restores TMPDIR, removes the run, and reaps again, so a
+ *  dead run that was too fresh at setup is collected by this run on its way out. */
+export default async function setup() {
+  let base;
+  try { base = realpathSync(os.tmpdir()); } catch (e) { return refuse(`tmpdir-${e.code ?? 'realpath'}`, os.tmpdir()); }
+  const quietS = parseQuiet(process.env[RUN_QUIET_ENV]);
+  await reapAndReport(base, quietS);
+  const opened = await openRun(base);
+  if ('refused' in opened) return refuse(opened.refused, base);
+  const previous = process.env.TMPDIR;
+  delete process.env[RUN_REFUSED_ENV];
+  process.env[RUN_DIR_ENV] = opened.run;
+  process.env.TMPDIR = path.join(opened.run, RUN_TMP);
+  const disarm = armSignals(opened.run);
+  return async () => {
+    disarm();
+    if (previous === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previous;
+    delete process.env[RUN_DIR_ENV];
+    const r = condemn(opened.run);
+    if (r.startsWith('left:')) warn(`could not remove ${opened.run} (${r}); the next run under ${base} retries`);
+    opened.server.close();
+    await reapAndReport(base, quietS);
+  };
 }
