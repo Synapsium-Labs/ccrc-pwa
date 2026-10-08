@@ -7878,7 +7878,8 @@ export type LcRefusalToken =
   | 'branch-unmeasured'       // ws-reclaim or ws-expire (spec §5.5): the tail's step 5 could not read whether the child's branch still exists, so it stopped before removing anything further — journaled `failed`, never `refused`
   | 'probe-unmeasured'        // ws-reclaim and `ws-audit --reclaim` (spec §5.9): a probe the ladder needs could not run or be read, before any act — journaled `failed`, its `verb` telling the two arms apart
   | 'token-malformed'         // ws-reclaim (spec §5.9): `--expect` is not 64 lowercase hex — journaled `refused` before the lock, once the session id is valid
-  | 'run-id-malformed';       // ws-reclaim (spec §5.9): `--child-of` fails ccd's run-id grammar — journaled `refused` before the lock, once the session id is valid
+  | 'run-id-malformed'        // ws-reclaim (spec §5.9): `--child-of` fails ccd's run-id grammar — journaled `refused` before the lock, once the session id is valid
+  | 'containment-refuted';    // ws-reclaim or ws-expire (spec §5.6): the tail's removal-time re-ask PROVED the tree at the workdir is not only the child's own, so it stopped before deleting anything further — journaled `failed`, never `refused`
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -7983,6 +7984,17 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
     'ccrc asked for this clean-up with a confirmation token that is not a shape ccd mints, so nothing was looked up and nothing was removed. This is a ccrc bug, not something about this workspace.',
   'run-id-malformed':
     'ccrc named the run this workspace belongs to with a run id that is not a shape ccrc mints, so nothing was looked up and nothing was removed. This is a ccrc bug, not something about this workspace.',
+  // Child reclamation, wave 7 (spec §5.6). The tail's removal-time re-ask
+  // (`_ws_reclaim_owned`) PROVED that what it would remove is not only the
+  // child's own: another session's registry row at, inside or through the
+  // worktree or a leaf, a gone row's tree moved inside it, a workdir that is the
+  // main checkout or the project directory, a link or a non-directory at the
+  // workdir, or a recorded workdir that is not one plain path. It only ever rides
+  // `_lc_fail`, after the unit was stopped and the pane killed, from ws-reclaim
+  // and ws-expire alike, because the tail is shared. The sentence says only what
+  // is true under any server. It never says whether, or when, ccrc retries.
+  'containment-refuted':
+    'ccrc found that what it would remove is not only this workspace’s own tree — another session’s tree or registry row lies at, inside or through it, or the recorded path is not this workspace’s worktree — so it stopped. The session was stopped and nothing further was deleted. A retry finds the same thing until that other tree or row is moved or removed.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the

@@ -420,13 +420,13 @@ describe('the moved-tree hole', () => {
     expect(ok.rc, `the CONTROL: while the other tree stands nothing is scanned — ${ok.why}`).toBe('0');
     fs.rmSync(o.wt, { recursive: true, force: true });
     const r = ownedOf(CHILD_ID, c.wt, c.main);
-    expect(r.rc, r.why).toBe('1');
+    expect(r.rc, r.why).toBe('2');
     expect(r.why).toContain(`could not read the git directory of the checkout at ${bogus}`);
     fs.rmSync(bogus, { recursive: true, force: true });
     h.git(h.home, 'init', '-q', `--separate-git-dir=${tabbed}`, inner);
     expect(h.git(inner, 'rev-parse', '--absolute-git-dir'), 'the CONTROL: git reads it, a tab in its name').toBe(tabbed);
     const t = ownedOf(CHILD_ID, c.wt, c.main);
-    expect(t.rc, t.why).toBe('1');
+    expect(t.rc, t.why).toBe('2');
     expect(t.why).toContain(`could not resolve the git directory of the checkout at ${inner} completely`);
   }, 120_000);
 
@@ -442,7 +442,7 @@ describe('the moved-tree hole', () => {
       expect(ok.rc, `the CONTROL: while the other tree stands nothing is scanned — ${ok.why}`).toBe('0');
       fs.rmSync(o.wt, { recursive: true, force: true });
       const r = ownedOf(CHILD_ID, c.wt, c.main);
-      expect(r.rc, r.why).toBe('1');
+      expect(r.rc, r.why).toBe('2');
       expect(r.why).toBe(`could not scan ${c.wt} for a gone row's moved tree`);
     } finally { fs.chmodSync(shut, 0o755); }
   }, 120_000);

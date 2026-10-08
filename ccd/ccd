@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ab04ef1b665ad2152558bcdb7fc68069a64bb0d88acaddf7aac3f7eb27e3667f
+# ccrc:generated 1 sha256=8178e47bc23d94aec3c91164415d856c38c067929c283615df50216bf50b2f66
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28669,7 +28669,8 @@ _ws_reclaim_fail() {   # id lctx token detail [k v]... -> journals a post-start 
 
 _WS_OWNED_WHY=''
 _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still provably the child's own;
-  #                          1 (_WS_OWNED_WHY) when it is not, or when that could not be asked
+  #                          1 (_WS_OWNED_WHY) when it is PROVEN not to be; 2 (_WS_OWNED_WHY) when
+  #                          that could not be asked
   # THE LADDER'S IDENTITY RUNGS, RE-ASKED AT REMOVAL TIME (spec §5.5, rung 9
   # asked of the path), on the fresh arm AND every resumed one: the resumed arm
   # has no ladder in front of it, and on every arm the tree stands until the
@@ -28677,28 +28678,44 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
   # follow the link it asks about); a LEAF that is not a link (a symlinked
   # ancestor stays legal); git's record of it, read from $main — a list that
   # could not be read asked nothing, and a tree that stands with no record is
-  # not one of $main's worktrees; not the MAIN checkout, asked twice (git's
+  # not PROVEN one of $main's worktrees; not the MAIN checkout, asked twice (git's
   # first stanza, and the resolved path against $main's); and no OTHER registry
   # row naming it or rooted inside it, literally or resolved, nor at, inside or
   # through its clips directory or temp root (spec §5.5, §5.6) — an unlistable
   # registry, or a leaf that cannot be measured, asked nothing; and, where a
   # gone row was placed on git's record (spec §5.5), no checkout inside the
   # tree that is that row's moved tree.
+  #
+  # THREE ANSWERS, NOT TWO (spec §5.6). The tail stops on 1 and on 2 alike, in
+  # the same place — after the unit and the pane, before the settle and before
+  # anything further is deleted — but it names them apart. 1 is a PROOF that
+  # the tree is not only the child's own: a workdir that is not one plain path
+  # (the record is immutable), a link or a non-directory at it, the main
+  # checkout or the project directory, another registry row SHARED with it,
+  # NESTED in it or in a leaf, or spelled THROUGH it, or a gone row's tree moved
+  # inside it. A retry meets the same proof until that tree or row is moved or
+  # removed. 2 is a question that could not be asked, which a retry may answer.
+  # So nothing that was not asked is ever folded into 1: an unprovable absence,
+  # an unreadable worktree list, a registry that could not be asked, a scan that
+  # failed, and `_ws_reclaim_moved_check`'s own 2 — or any answer it never
+  # gives — are all 2. So is a tree that stands with no worktree record: git's
+  # list silently omits a record whose `gitdir` it cannot read (spec §5.5, rung
+  # 8), so "no record" there is no proof.
   local id="$1" wd="$2" main="$3" rc nested
   _WS_OWNED_WHY=''
   _ws_reclaim_plain_path "$wd" \
     || { _WS_OWNED_WHY="the workdir is spelled '$wd' — not one plain absolute path"; return 1; }
   [[ ! -L "$wd" ]] || { _WS_OWNED_WHY="$wd is a symbolic link — ccd never follows a link to a tree it would pin or remove"; return 1; }
   _ws_reclaim_absent "$wd"; rc=$?
-  (( rc != 2 )) || { _WS_OWNED_WHY="$_WS_ABSENT_WHY — whether the tree at $wd stands or is gone was never asked"; return 1; }
+  (( rc != 2 )) || { _WS_OWNED_WHY="$_WS_ABSENT_WHY — whether the tree at $wd stands or is gone was never asked"; return 2; }
   [[ ! -e "$wd" || -d "$wd" ]] || { _WS_OWNED_WHY="something that is not a directory stands at $wd"; return 1; }
   _ws_reclaim_record "$main" "$wd"; rc=$?
-  (( rc != 2 )) || { _WS_OWNED_WHY="could not read $main's worktree list, so whether git records $wd was never asked"; return 1; }
-  [[ ! -d "$wd" ]] || (( rc == 0 )) || { _WS_OWNED_WHY="$main has no worktree record for the tree at $wd"; return 1; }
+  (( rc != 2 )) || { _WS_OWNED_WHY="could not read $main's worktree list, so whether git records $wd was never asked"; return 2; }
+  [[ ! -d "$wd" ]] || (( rc == 0 )) || { _WS_OWNED_WHY="$main has no worktree record for the tree at $wd"; return 2; }
   (( ! RECLAIM_REC_MAIN )) || { _WS_OWNED_WHY="$wd is $main's main checkout"; return 1; }
   [[ "$(_ws_realpath "$wd")" != "$(_ws_realpath "$main")" ]] || { _WS_OWNED_WHY="$wd is the project directory $main itself"; return 1; }
   _ws_reclaim_workdir_shared "$id" "$wd" \
-    || { _WS_OWNED_WHY="could not ask whether another registry row names $wd or a path inside it: $_WS_SHARED_WHY"; return 1; }
+    || { _WS_OWNED_WHY="could not ask whether another registry row names $wd or a path inside it: $_WS_SHARED_WHY"; return 2; }
   [[ -z "$_WS_SHARED_ROWS" ]] || { _WS_OWNED_WHY="$wd is also named by registry row(s) $_WS_SHARED_ROWS"; return 1; }
   [[ -z "$_WS_NESTED_ROWS" ]] || { _WS_OWNED_WHY="$wd has registry row(s) $_WS_NESTED_ROWS rooted inside it, or in its clips directory or temp root, each another session's tree"; return 1; }
   [[ -z "$_WS_THROUGH_ROWS" ]] || { _WS_OWNED_WHY="registry row(s) $_WS_THROUGH_ROWS spell their workdir through $wd, not as one plain path, so ccd cannot prove it lies outside $wd"; return 1; }
@@ -28706,8 +28723,13 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
   # exactly what it asked before (`_ws_reclaim_moved_check` says why).
   if [[ -n "$_WS_RECORDED_GDIRS" && -d "$wd" ]]; then
     nested=$(_ws_nested_checkouts "$wd") \
-      || { _WS_OWNED_WHY="could not scan $wd for a gone row's moved tree"; return 1; }
-    _ws_reclaim_moved_check "$nested" || { _WS_OWNED_WHY="$_WS_MOVED_WHY"; return 1; }
+      || { _WS_OWNED_WHY="could not scan $wd for a gone row's moved tree"; return 2; }
+    _ws_reclaim_moved_check "$nested"; rc=$?
+    case "$rc" in
+      0) : ;;
+      1) _WS_OWNED_WHY="$_WS_MOVED_WHY"; return 1 ;;
+      *) _WS_OWNED_WHY="${_WS_MOVED_WHY:-the moved-tree check answered $rc, an answer it never gives, so whether the tree of a gone row was moved inside $wd was never asked}"; return 2 ;;
+    esac
   fi
   return 0
 }
@@ -29549,7 +29571,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   local regproject regworkdir reguuid regbranch childlines recorded merged cj first cline cpath crest cbr chead
   local holders wdreal kept=() k keptjson keptall treegone crc killrc dropped bstate
   local noun=reclaim donekey=reclaimed bindkey=childOf
-  local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts tmpq tarc
+  local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts tmpq tarc orc
   [[ "$_WS_RCL_ACT" != expire ]] || { noun=expiry; donekey=expired; bindkey=archivedAt; }
   tomb="$REG/.reaped/$id.json"
   case "$phase" in
@@ -29702,11 +29724,24 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       "the registry row of $id (project '$regproject', workdir '$regworkdir', branch '$regbranch') and the record its pin wrote (project '$project', workdir '$workdir', branch '$tregbranch') disagree — ccd cannot prove the tree at that path is $id's own, so nothing further was deleted"
     return 1
   fi
-  if ! _ws_reclaim_owned "$id" "$workdir" "$main"; then
-    _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
-      "$_WS_OWNED_WHY — ccd cannot prove the tree at that path is $id's own, so nothing further was deleted"
-    return 1
-  fi
+  # THE TREE IS RE-PROVEN THE CHILD'S OWN (spec §5.5, §5.6) — on a resumed arm
+  # the only identity check there is — and a refusal says how it was reached. A
+  # PROOF that it is not (rc 1) is `containment-refuted`, from this literal call
+  # site: a retry meets the same thing until the other tree or row is moved or
+  # removed. A question that could not be asked (rc 2) stays
+  # `worktree-remove-failed`. Both stop HERE, where the tail always stopped: the
+  # unit stopped and the pane killed, the tombstone and the breadcrumb standing,
+  # nothing further deleted, and no step after this one run.
+  _ws_reclaim_owned "$id" "$workdir" "$main"; orc=$?
+  case "$orc" in
+    0) : ;;
+    1) _ws_reclaim_fail "$id" "$lctx" containment-refuted \
+         "$_WS_OWNED_WHY — so the tree at that path is not only $id's own; the session was stopped, nothing further was deleted, and a retry finds the same until that tree or row is moved or removed"
+       return 1 ;;
+    *) _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
+         "$_WS_OWNED_WHY — ccd cannot prove the tree at that path is $id's own, so nothing further was deleted"
+       return 1 ;;
+  esac
   # (2) THE SETTLE: the session is dead now, so anything it wrote between the
   # pin phase and the kill is pinned before any tree is touched. A link at the
   # workdir fails here, in the pin's own leaf test, before any commit.
