@@ -2396,6 +2396,9 @@ function rawRowOf(st, at, bytes, code) {
   return { kind: 'raw', at, key: rawRowKey(st.ccUuid, sha.toString('hex')), sha, bytes, z: null, rawLen: bytes.length, code };
 }
 
+/** The stored `raw_len` of a row blob: its UTF-8 byte length. The measure the over-cap gate reads (B3M2, FU5). */
+function rowRawLen(json) { return Buffer.byteLength(json, 'utf8'); }
+
 /** Lines → prepared rows, OUTSIDE any transaction (§9.2 step 4). `st` is the per-file state
  *  ingestFile keeps across this file's chunks: the connection, the transcript's uuid, the
  *  tool_use pairs seen so far, and whether the file's first stored row is still to come.
@@ -2452,10 +2455,13 @@ export function prepareLines(lines, ctx, st) {
     // part). Reading the canonical form makes the two texts equal, which makeProbeIndex's soundness argument
     // assumes (D-4344, review 316 F1; `json` is the string compressed below).
     // D-4346 (history-permanent-failures-classified): an over-cap canonical body indexes nothing here too, so ingest, the backfill and the re-derivation give one text (review 316 F7 sibling; FU2).
-    // The length is the one compressMissing stores as the blob's raw_len, and the gate precedes the parse.
-    const ftsText = ctx.fts !== true || !SEARCHABLE_PROVENANCE.includes(provenance) ? null
-      : blobOverDecodeCap(Buffer.byteLength(json, 'utf8')) ? '' : ftsTextOf(JSON.parse(json), 'entry');
-    rows.push({ kind: 'row', at, entry, provenance, sha: sha256Bytes(json), json, boundary, kept, ftsText });
+    // The length is the one compressMissing stores as the blob's raw_len (rowRawLen), and the gate precedes the parse.
+    // `ftsOverCap` is the row-level word the gate sets: writeChunk marks such a blob indexed and inserts NO row, the state
+    // the re-derivation leaves it in (B3M3, FU5); the text stays '' so the mark is still taken, and is never read as the flag.
+    const indexable = ctx.fts === true && SEARCHABLE_PROVENANCE.includes(provenance);
+    const ftsOverCap = indexable && blobOverDecodeCap(rowRawLen(json));
+    const ftsText = !indexable ? null : ftsOverCap ? '' : ftsTextOf(JSON.parse(json), 'entry');
+    rows.push({ kind: 'row', at, entry, provenance, sha: sha256Bytes(json), json, boundary, kept, ftsText, ftsOverCap });
     if (st.firstPending) {
       st.firstPending = false;
       const f = launchFactsOf(row);
@@ -2478,7 +2484,7 @@ function compressMissing(db, rows) {
     if (s.blobId.get(sha) !== undefined) { blobs.set(hex, { sha, z: null, rawLen: 0 }); return; }
     blobs.set(hex, { sha, ...make() });
   };
-  const fromJson = (json) => () => { const b = Buffer.from(json, 'utf8'); return { z: brotli(b), rawLen: b.length }; };
+  const fromJson = (body) => () => ({ z: brotli(Buffer.from(body, 'utf8')), rawLen: rowRawLen(body) });
   for (const r of rows) {
     if (r.kind === 'raw') {
       need(r.sha, () => (r.z !== null ? { z: r.z, rawLen: r.rawLen } : { z: brotli(r.bytes), rawLen: r.bytes.length }));
@@ -2535,7 +2541,7 @@ export function writeChunk(db, chunk) {
       s.membership.run(chunk.fileId, entryId, r.at);   // r.at is a byte offset (D-4237)
       if (chunk.pairIdx !== null && r.kind === 'row' && r.ftsText !== null) {
         const b = s.blobId.get(r.sha);
-        if (b.fts_indexed === 0) indexBlob(db, b.blob_id, r.ftsText, chunk.pairIdx);
+        if (b.fts_indexed === 0) indexBlob(db, b.blob_id, r.ftsText, chunk.pairIdx, r.ftsOverCap === true);
       }
       if (r.kind === 'row' && r.boundary !== null) {
         const b = r.boundary;
@@ -3457,16 +3463,16 @@ const UNDECODABLE = Object.freeze({ text: null, decoded: 0, undecodable: true })
  *  raw_len is over BLOB_DECODE_MAX is never decompressed (blobOverDecodeCap): it indexes nothing and is not counted, so
  *  a raw line-too-long line reached by a uuid collision cannot exhaust a pass's memory (D-4346,
  *  history-permanent-failures-classified). It answers `overCap: true` (a distinct word: `text: ''` also means "did not
- *  parse"), and ingest indexes such a row empty too, so a re-derivation deletes any index row it finds for one
- *  (rederiveFts, FU2). `rawLen` is the blob's stored raw_len; sidecars are exempt, their prefix
- *  decoder being bounded already. */
+ *  parse"), and every writer marks such a blob indexed and inserts NO row for it (`indexBlob`'s `overCap`, B3M3 FU5), so
+ *  the re-derivation, which deletes any row it finds for one (rederiveFts, FU2), leaves the state every path leaves.
+ *  `rawLen` is the blob's stored raw_len; sidecars are exempt, their prefix decoder being bounded already. */
 export async function ftsTextOfBlob(z, isSidecar, pairIdx, rawLen) {
   if (isSidecar) {
     let p;
     try { p = await unbrotliPrefix(z, SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN); } catch { return UNDECODABLE; }
     return { text: sidecarIndexText(p.bytes, pairIdx), decoded: p.decoded, undecodable: false };
   }
-  if (blobOverDecodeCap(rawLen)) return { text: '', decoded: 0, undecodable: false, overCap: true };   // D-4346: over BLOB_DECODE_MAX; never decompressed whole, indexed empty, uncounted
+  if (blobOverDecodeCap(rawLen)) return { text: '', decoded: 0, undecodable: false, overCap: true };   // D-4346: over BLOB_DECODE_MAX; never decompressed whole, marked indexed with no row, uncounted
   let bytes;
   try { bytes = unbrotli(z); } catch { return UNDECODABLE; }
   try { return { text: ftsTextOf(parseStoredJson(bytes), 'entry'), decoded: bytes.length, undecodable: false }; } catch { return { text: '', decoded: bytes.length, undecodable: false }; }
@@ -3508,9 +3514,9 @@ export function ftsPrepare(db, nowMs) {
  *  byte), rowid = blob_id, and the blob marked indexed. The redaction is `redactForIndex`: every JSON-escape
  *  reading, a deeper one kept only when it redacts (D-4343), so a literal backslash-n in an entry's plain text
  *  never glues an `n` onto a value. */
-export function indexBlob(db, blobId, text, pairIdx) {
+export function indexBlob(db, blobId, text, pairIdx, overCap = false) {
   const f = ftsStmts(db);
-  f.ins.run(blobId, redactForIndex(text, pairIdx));
+  if (!overCap) f.ins.run(blobId, redactForIndex(text, pairIdx));   // an over-cap body gets no row, only the mark (B3M3, FU5: the state rederiveFts leaves it in)
   f.mark.run(blobId);
 }
 
@@ -3539,7 +3545,7 @@ export async function deriveFts(db, ctx, budget) {
     let reached = cursor;   // the last blob of this batch taken, indexed or skipped
     const commit = (done) => {
       withTx(db, 'NORMAL', () => {
-        for (const g of group) indexBlob(db, g.id, g.text, ctx.pairIdx);
+        for (const g of group) indexBlob(db, g.id, g.text, ctx.pairIdx, g.overCap === true);
         if (undecodable > 0) bump(db, HEALTH_COUNTERS.blobUndecodable, undecodable);
         cursor = reached;
         if (done) {
@@ -3562,7 +3568,7 @@ export async function deriveFts(db, ctx, budget) {
       budget.bytes += b.zlen;
       reached = b.blob_id;
       if (t.undecodable) { undecodable += 1; continue; }   // D-4346 (history-permanent-failures-classified): passed over, its fts_indexed left 0
-      group.push({ id: b.blob_id, text: t.text });
+      group.push({ id: b.blob_id, text: t.text, overCap: t.overCap === true });
       chars += t.text.length;
       if (chars >= FTS_GROUP_CHARS) commit(false);
     }
@@ -3628,7 +3634,7 @@ export async function reindexForValues(db, ctx, values) {
     // A tombstone keeps no index row; nor does a blob whose bytes no longer decode (D-4346, history-permanent-failures-classified).
     const t = b === undefined || b.z === null ? null : await ftsTextOfBlob(b.z, b.is_sidecar === 1, ctx.pairIdx, b.raw_len);
     const undecodable = t !== null && t.undecodable;
-    const text = t === null || undecodable ? null : t.text;
+    const text = t === null || undecodable || t.overCap === true ? null : t.text;   // an over-cap body keeps no row on this path either (B3M3, FU5)
     group.push({ id, text, undecodable });
     chars += text === null ? 0 : text.length;
     if (chars >= FTS_GROUP_CHARS) commit();

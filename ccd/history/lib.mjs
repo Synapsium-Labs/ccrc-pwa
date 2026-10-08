@@ -172,7 +172,7 @@ export function blobOverDecodeCap(rawLen) {
  *  16,499,914-byte line, peaked at 389,508 KiB, under half the carrier's MemoryMax=1G (D-4244's bound family), where
  *  999,013 units of 13-character strings peaked at 516,988 KiB, over it. The heaviest admitted line measured is not a
  *  structured one: a 16 MB user text of 8,000,000 one-letter words with a secret file loaded peaked at 783,640 KiB for a
- *  whole pass in a 1 GiB scope (about 76% of MemoryMax=1G, completing), its cost being redaction and indexing, which this
+ *  whole pass in a 1 GiB scope (about 75% of MemoryMax=1G, completing), its cost being redaction and indexing, which this
  *  bound does not reach (FU2). A 4.3-million-line sample of this fleet's transcripts held at most 24,944 units, 15 deep. */
 export const JSON_DEPTH_MAX = 100_000;
 export const JSON_NODES_MAX = 500_000;

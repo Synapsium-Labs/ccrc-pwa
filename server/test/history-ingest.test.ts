@@ -1990,6 +1990,9 @@ describe('history ingest: the FTS index (plan task 23)', () => {
   const rowidOf = (db: DatabaseSync, q: string): number => (db.prepare('SELECT rowid AS id FROM blobs_fts WHERE blobs_fts MATCH ?').get(q) as { id: number }).id;
   const matches = (db: DatabaseSync, q: string): number =>
     (db.prepare('SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH ?').get(q) as { n: number }).n;
+  /** Whether the index holds a row for a blob (its rowid is the blob_id), whatever that row says. */
+  const hasFtsRow = (db: DatabaseSync, blobId: number): boolean =>
+    db.prepare('SELECT 1 AS one FROM blobs_fts WHERE rowid = ?').get(blobId) !== undefined;
   /** The index's own bytes: every FTS5 data block, as latin1. */
   const ftsBytes = (db: DatabaseSync): string =>
     (db.prepare('SELECT block FROM blobs_fts_data').all() as { block: Uint8Array }[]).map((r) => Buffer.from(r.block).toString('latin1')).join('');
@@ -2683,6 +2686,28 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
     });
 
+    it('the backfill marks an over-cap body indexed and inserts no row for it, as ingest leaves it (B3M3, FU5)', async () => {
+      const { sweep: S, lib } = await IX.api();
+      const box = IX.newBox('ccrc-hist-overcap-bf-');
+      try {
+        IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqovbf words', 1), IX.user(IX.uuidN(2), IX.uuidN(1), 'zqovctl words', 2)]));
+        const { db, ids } = await IX.openFixtureStore(box);
+        try {
+          await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());   // no FTS this tick: nothing indexed
+          const blobOf = (n: number): number => (db.prepare('SELECT blob_id AS id FROM entries WHERE uuid = ?').get(IX.uuidN(n)) as { id: number }).id;
+          db.prepare('UPDATE blobs SET raw_len = ? WHERE blob_id = ?').run(lib.BLOB_DECODE_MAX + 1, blobOf(1));
+          const ctx = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 120_000, ids);
+          ctx.fts = S.ftsPrepare(db, ctx.nowMs).tables;
+          ctx.pairIdx = lib.makePairIndex([]);
+          await S.deriveFts(db, ctx, S.newBudget());
+          expect(metaV(db, 'fts')).toBe('ready');
+          expect(IX.count(db, 'blobs', `fts_indexed = 1 AND blob_id = ${blobOf(1)}`)).toBe(1);   // marked: the cursor moved past it
+          expect(hasFtsRow(db, blobOf(2)), 'CONTROL: the other blob is indexed').toBe(true);
+          expect(hasFtsRow(db, blobOf(1))).toBe(false);
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    });
+
     it('a late pair whose only indexed blob no longer decodes: the pass exits 0, the row is deleted, the value is not MATCHable, the mark advances, counted once', () => {
       const box = IX.newBox('ccrc-hist-undec-late-');
       const tok = hex(24); const tok2 = hex(24);
@@ -2742,14 +2767,13 @@ describe('history ingest: the FTS index (plan task 23)', () => {
     });
 
     it('M10: a second generation over a blob that no longer decodes deletes nothing, so it reports reindexed 0 and registers no merge step (D-4346)', async () => {
-      const { sweep: S } = await IX.api();
+      const { sweep: S, store, lib } = await IX.api();
       const box = IX.newBox('ccrc-hist-undec-gen2-');
       try {
         const a = `zqe${hex(12)}5`;
         const b = `zqf${hex(12)}6`;
         IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note é${a}${b} end`, 1)]));
         IX.sweepTwice(box);
-        const { store, lib } = await IX.api();
         const P = lib.historyPaths(box.home);
         const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
         const db = store.openWriter(P.dbFile);
@@ -2774,8 +2798,7 @@ describe('history ingest: the FTS index (plan task 23)', () => {
     });
 
     it('M13: storedBody and pairedFromStore refuse a stored body whose raw_len is over BLOB_DECODE_MAX, though its bytes would decode (D-4346)', async () => {
-      const { store, lib } = await IX.api();
-      const { sweep: S } = await IX.api();
+      const { sweep: S, store, lib } = await IX.api();
       const box = IX.newBox('ccrc-hist-m13-');
       try {
         const tu = { type: 'tool_use', id: 'toolu_01M13', name: 'Read', input: { file_path: '/home/u/tree/a.txt' } };
@@ -2828,10 +2851,16 @@ describe('history ingest: the FTS index (plan task 23)', () => {
         IX.sweepTwice(box);
         const db = openStoreRO(box);
         try {
-          const row = db.prepare('SELECT b.raw_len AS len FROM entries e JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?').get(IX.uuidN(2)) as { len: number } | undefined;
+          const row = db.prepare('SELECT b.blob_id AS id, b.raw_len AS len, b.fts_indexed AS ix FROM entries e JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?').get(IX.uuidN(2)) as { id: number; len: number; ix: number } | undefined;
           expect(row, 'CONTROL: the row was stored').toBeDefined();
           expect(row!.len).toBeGreaterThan(lib.BLOB_DECODE_MAX);
           expect(matches(db, 'zqsmallctl')).toBe(1);   // CONTROL: the index is on and indexes a small row
+          const small1 = db.prepare('SELECT blob_id AS id FROM entries WHERE uuid = ?').get(IX.uuidN(1)) as { id: number };
+          expect(hasFtsRow(db, small1.id), 'CONTROL: the row-presence probe sees a row that exists').toBe(true);
+          // B3M3 (FU5): the over-cap blob is marked indexed (the backfill cursor moves past it) and has NO index row,
+          // the state the re-derivation leaves it in, rather than an empty row.
+          expect(row!.ix).toBe(1);
+          expect(hasFtsRow(db, row!.id)).toBe(false);
           expect(matches(db, `"${marker}"`)).toBe(0);
           expect(ftsBytes(db).includes(marker)).toBe(false);
         } finally { db.close(); }
