@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `6cef2ae46` after fix round 2; review run 338 waits at the cap (R28) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `6cef2ae46` after fix round 2; review run 338 dispatched (R28) |
 
 ## Decisions & deviations
 
@@ -458,6 +458,11 @@ time.
     instrument. The cap reads 24 of 24, and the next age-out is 05:02:17 (run 313).
   - Three sends lost a freed slot within seconds (R26), so a session-only wake at 05:02 starts a timed background
     attempt 2 s after the age-out. The attempt re-checks the preconditions first and sends once.
+  - Dispatched (05:02). The preconditions held at 05:02:04 (338 `planned`, 322 `awaiting-review`, tip
+    `6cef2ae46`). The send went out at the age-out and was accepted, its answer arriving at 05:02:36. The reviewer is
+    `ccrc-pwa-warm-mesa` (`adopted` false, `skillState` present, brief queued), and its registry route reads opus,
+    high effort, sonnet subagents, workflow on and compact 40. Next: `review-done`, then this session advances run
+    338 to `working`, closes it, and rules. After that it asks the operator about merging PR #322.
 
 ## Carried constraints (reviewers get these)
 
