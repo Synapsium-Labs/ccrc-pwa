@@ -829,6 +829,20 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     (24/24), and a retry waits for the 05:02:17 age-out. The brief names the held-out panel (`review-panel.md`), the
     act-safety questions, the Task 5 revert measurement and sixteen-plus mutation rows.
   - Claim 1097 was released for CCR-15's spec edits (calm-mesa's 3973; answered by 3976, copied to amber-river by 3977).
+- **2026-10-08 08:06 — ws-expire's parser misreads a pre-breadcrumb `state-changed` as resumable (CCR-15 mail 3984).**
+  calm-mesa reports the twin of review 335's F3, which run 291's fix round fixed on the reclaim side as 4457.
+  `parseExpireResult` (`server/src/archivedExpiry.ts:231`) reads every `failed` word except `probe-unmeasured` as
+  resumable. ccd prints `state-changed` (the consent binding changed) before the tombstone and the breadcrumb, so
+  nothing has started, yet the lane backs off and retries it, and reports it only past the one-hour ceiling.
+  Measured: the line is unchanged at run 314's tip `701839b52`, so wave 4 neither introduced it nor is held by it.
+  The lane is shadowed, so nothing acts on it today.
+  - **Ruled: an arming blocker, carried to wave 5.** It is parked item 4's class: a failure that will not resume
+    reports and stops at once. Wave 5's plan measures whether any ws-expire producer prints `state-changed` after
+    the breadcrumb. If none does, the parser reads it as not resumable, as 4457 does, red-first. If one does, the
+    reader waits for CCR-15 wave 7's additive `crumb` field. `pin-failed` and `tombstone-unwritable` stay resumable,
+    because each has producers after the breadcrumb.
+  - The 05:02:17 age-out went to another programme's dispatch (refused `cap-daily` again at 05:02:36). The retry
+    sleeps to the next age-out, 08:47:34. Calm-harbor's run 340 and calm-mesa's run 341 also wait on the cap.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -888,6 +902,11 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     resolution changes, landing on its existing `_ws_reclaim_unmeasured` arm, red-first, one case per site. CCR-15
     defines it as 4458, naming the three sites and this programme's consent. **The blocker clears when #326 merges
     with it**; check the merged lines before arming.
+- **ARMING BLOCKER for the expiry lane: a pre-breadcrumb `state-changed` reads resumable** (CCR-15 mail 3984, ruled
+  2026-10-08 08:06). `parseExpireResult` at `archivedExpiry.ts:231` treats every `failed` word but `probe-unmeasured`
+  as resumable, so an act that never started is retried and reported only after the hour. Wave 5 measures the
+  `state-changed` producers. If all print before the breadcrumb, the parser reads the word as not resumable, as
+  CCR-15's 4457 does on the reclaim side; otherwise it waits for CCR-15 wave 7's `crumb` field.
 - **Carried (a follow-up, not a blocker): a kept leaf is silent.** When ccd's shared tail keeps clips or the temp
   root, `ws-expire` still prints `expired`. The server records "cleaned up" and raises no attention entry. The keep
   lives only in the journal row's `detail`, which no PWA surface renders. CCR-15 is asked for additive
@@ -926,7 +945,8 @@ from spec §4 wave 4 and §5.4: the dead-coordinator lane (crash-only, one hour,
   10-07 the operator expired 15 archived workspaces by hand, which cuts most of (c), the backlog. (d) is in hand: the
   operator ends brisk-mesa's stray tmux server (see the entry after 06:05).
 - **Arming the expiry lane also waits on** `_ws_expire_cwd_users`' newline fix (Carried constraints; wave 6 carries it
-  as 4458, so it clears when #326 merges) and on wave 4's own arming blockers. Once #326 lands, the operator
+  as 4458, so it clears when #326 merges), on wave 4's own arming blockers, and on wave 5's `state-changed` reading
+  (Carried constraints, 08:06). Once #326 lands, the operator
   should also know two facts. An archived workspace whose branch is already gone now expires, with its work kept in
   the attic, where `main` stops at `pin-failed`. In that case, ignored and secret-shaped files go with the tree.
 - **Wave 2's three operator questions stay open:** the PR sheet's "Archive now", the remote-mode worktree check, and
