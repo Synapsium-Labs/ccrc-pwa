@@ -3191,7 +3191,7 @@ the rejection arm's `'error');`).
 | X45 | P3 `choose` sends nothing while locked | SWS: `if (!locked) write(request);` → `write(request);` | `1 failed`: "P3: the controls are locked while a write is in flight: a second choice sends nothing, and the answer unlocks them" |
 | X46 | P2 the quiet select from the server, never the tap | SWS: add `const [tappedQuiet, setTappedQuiet] = useState<string \| null>(null);` after `const locked = …`; `value={quietValue}` → `value={tappedQuiet ?? quietValue}`; the select's `onChange` also runs `setTappedQuiet(e.target.value)` before `choose(…)` | `1 failed`: "P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap" |
 | X47 | P1b a 501 first read is not available | SWS: `{failure === 'not-configured' ? (` → `{failure === 'not-configured' && view !== null ? (` | `1 failed`: "P1b: a 501 not-configured first read is the not-available text, not the unread line" |
-| X48 | a network failure is never "Nothing was changed" | SWS: `          if (refusal.kind === 'unconfirmed') toast(UNCONFIRMED_TEXT);` and the `else ` before the next `toast(` deleted, so every non-confirm rejection takes the `refused` toast | `1 failed`: "a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads" |
+| X48 | a network failure is never "Nothing was changed" | SWS: `          if (refusal.kind === 'unconfirmed') toast(STALL_CONFIRM_TEXT.unanswered);` and the `else ` before the next `toast(` deleted, so every non-confirm rejection takes the `refused` toast | `1 failed` of 187 (re-measured at fix round 3 against the shipped line): "a write whose answer never arrived says it was not confirmed, never "Saved" or "Nothing was changed", and re-reads" |
 | X49 | P3c the fresh sheet shows the fresh effect, never the first | SWS: `setPending({ request, confirm: refusal.confirm });` → `setPending({ request, confirm: confirm === undefined \|\| pending === null ? refusal.confirm : { ...refusal.confirm, effect: pending.confirm.effect } });` | `1 failed`: "P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key" |
 | X50 | P6 no device word (section) | SWS: append the line `// the same on a phone` to the file | `1 failed`: "P6: the section and its hook have no device branch and no device word" |
 | X51 | P6 no device branch (hook) | H: `export const STALL_WATCH_POLL_MS = 60_000;` → `export const STALL_WATCH_POLL_MS = window.innerWidth < 600 ? 120_000 : 60_000;` | `1 failed`: "P6: the section and its hook have no device branch and no device word" |
@@ -3202,7 +3202,7 @@ the rejection arm's `'error');`).
 | X56 | P3d the due group under mail off | SWS: delete the line `    else lines.push(after.alerts ? STALL_CONFIRM_TEXT.dueMailOff : STALL_CONFIRM_TEXT.dueMailOffHeld);` | `1 failed`: "P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not" |
 | X58 | P3d the repeat line at Check takes `quietRepeatMailOff` under mail off | SWS: `mailOff ? STALL_CONFIRM_TEXT.quietRepeatMailOff : STALL_CONFIRM_TEXT.quietRepeat` → `STALL_CONFIRM_TEXT.quietRepeat` (in `const repeat = …`) | `1 failed`: "P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not" |
 | X59 | Task 1's 500 `message` arm, seen in the section | H: `nonBlank(body.detail) ?? nonBlank(body.message) ?? apiErrorText(err)` → `nonBlank(body.detail) ?? apiErrorText(err)` | `1 failed`: "P2: a 500 toasts the cause the server named in its message, and re-reads" |
-| X60 | Task 1's unconfirmed arm, seen in the section | H: `  if (!(err instanceof ApiError)) return { kind: 'unconfirmed' };` → `  if (!(err instanceof ApiError)) return { kind: 'refused', detail: apiErrorText(err) };` | `1 failed`: "a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads" |
+| X60 | Task 1's unconfirmed arm, seen in the section | H: `  if (!(err instanceof ApiError)) return { kind: 'unconfirmed' };` → `  if (!(err instanceof ApiError)) return { kind: 'refused', detail: apiErrorText(err) };` | `1 failed` of 187 (re-measured at fix round 3): "a write whose answer never arrived says it was not confirmed, never "Saved" or "Nothing was changed", and re-reads" |
 
 Every row reds, so no guard here is unpinned. Rows X44 to X60 were added by the plan review's fix round. X57, added
 with them for the repeat line on a raise, was removed with that line by the final fix round (D-4037), so the table has
@@ -3677,7 +3677,8 @@ and the coordinator assigns its number.
     false for it, and `UNCONFIRMED_TEXT` ("Saved — the server's answer could not be read") is false the other way: the
     server did not answer at all. Neither existing line is true of it, and the section's strings are all L0 constants.
   - **Pinned by:** `pwa/test/settings-screen.test.tsx`'s "a write whose answer never arrived says it was not
-    confirmed, never "Saved" or "Nothing was changed", and re-reads" (mutations X48, X60), and the 2xx row "an
+    confirmed, never "Saved" or "Nothing was changed", and re-reads" (mutations X48 and X60, each `1 failed` of 187 on
+    exactly that title, re-measured against the shipped `toast(STALL_CONFIRM_TEXT.unanswered)`), and the 2xx row "an
     unreadable 2xx says the write may have landed and re-reads; it installs nothing", which asserts the new line is
     absent. The sibling "a 2xx body that fails the wire guard is the same unconfirmed outcome" keeps the 2xx-unreadable
     arm on `UNCONFIRMED_TEXT`.
@@ -3735,7 +3736,7 @@ Each is pinned, and the plan takes no number for any of them:
   (`malformed-optional-block-is-dropped`, above).
 - `unanswered-write-reads-unconfirmed` (Tasks 1 and 3). A rejection that is not an `ApiError` (a network failure,
   after which the POST may have landed) reads as `unconfirmed`, never as a refusal: the section re-reads and never says
-  "Nothing was changed" (G18, X48, X60). The line it toasts is a numbered departure of its own
+  "Nothing was changed" (G18; X48 and X60, re-measured against the shipped line). The line it toasts is a numbered departure of its own
   (`unanswered-write-has-its-own-l0-line`, above). The 2xx-unreadable arm, which §15's "A write's reply cannot be
   read" row words, keeps `UNCONFIRMED_TEXT` and re-reads too.
 - `quiet-select-shows-no-unanswered-value` (Task 3). A stored quiet time the list does not hold selects one empty,
