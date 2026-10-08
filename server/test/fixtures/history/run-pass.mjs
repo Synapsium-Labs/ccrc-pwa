@@ -12,12 +12,22 @@
 //   afterFirstStatfs   [{rel, text}]: after the pass's FIRST statfs call answers, each `text` is appended to `$HOME/<rel>` (its
 //                      directory made 0700), as a hook landing a line mid-pass would (RF5a F19). For an --op pass the first call
 //                      is the probe right after the lock-take journal half
+//   hangAfterAppend    true: the first statfs call, after appending afterFirstStatfs's lines, never settles (a dead volume the
+//                      line landed before, FU4 M27); the pass's own bounded probe then answers store-unreachable
+//   throwOnceAfterFirstStatfs
+//                      {fn, needle, code, times?}: once the first statfs call has answered, the first <times> (default 1) calls
+//                      of node:fs's sync function <fn> on a path containing <needle> throw an error carrying <code> (FU4 M26:
+//                      a non-JournalError out of the half at release; a second run of the half meets the fault again); every
+//                      later call runs for real
+//   openStoreWord      the word an --op pass's store open answers instead of opening (FU4 M28: a word whose REASONS code is
+//                      not exit 5), handed to sweep.mjs as deps.openStore
 //   extraMigrations    SQL appended to MIGRATIONS as v2, v3, ... (the migration seam, DM42/DM43)
 //   heavy              the versions among those that SCHEMA_ADDED marks heavy
 //   managedSettings    the managed-settings list the census reads instead of /etc (Task 26)
 // argv after the script is runPass's argv, exactly as the shim would pass it.
 import fs from 'node:fs';
 import path from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
 import { runPass } from '../../../../ccd/history/sweep.mjs';
 import { MIGRATIONS } from '../../../../ccd/history/store.mjs';
 import { SCHEMA_ADDED } from '../../../../ccd/history/lib.mjs';
@@ -43,17 +53,32 @@ if (Array.isArray(spec.extraMigrations) && spec.extraMigrations.length > 0) {
 if (typeof spec.sizeBytes === 'number') deps.measureSize = () => spec.sizeBytes;
 if (Array.isArray(spec.sizeBytesSeq)) { let k = 0; deps.measureSize = () => spec.sizeBytesSeq[Math.min(k++, spec.sizeBytesSeq.length - 1)]; }
 if (Array.isArray(spec.managedSettings)) deps.managedSettings = spec.managedSettings;
-if (Array.isArray(spec.afterFirstStatfs)) {
+if (typeof spec.openStoreWord === 'string') deps.openStore = () => ({ word: spec.openStoreWord });
+if (Array.isArray(spec.afterFirstStatfs) || spec.throwOnceAfterFirstStatfs !== undefined) {
   let fired = false;
+  const armed = spec.throwOnceAfterFirstStatfs;
   deps.statfs = async (p) => {
     const r = await fs.promises.statfs(p);
     if (!fired) {
       fired = true;
-      for (const w of spec.afterFirstStatfs) {
+      for (const w of spec.afterFirstStatfs ?? []) {
         const f = path.join(process.env.HOME, w.rel);
         fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
         fs.appendFileSync(f, w.text);
       }
+      if (armed !== undefined) {
+        const real = fs[armed.fn];
+        let thrown = 0;
+        fs[armed.fn] = function throwOnce(...args) {
+          if (thrown < (armed.times ?? 1) && String(args[0]).includes(armed.needle)) {
+            thrown += 1;
+            throw Object.assign(new Error(`${armed.code}: injected, ${armed.fn} '${args[0]}'`), { code: armed.code });
+          }
+          return real.apply(this, args);
+        };
+        syncBuiltinESMExports();
+      }
+      if (spec.hangAfterAppend === true) return new Promise(() => {});
     }
     return r;
   };

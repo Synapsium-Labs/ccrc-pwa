@@ -240,6 +240,12 @@ export interface DriverDeps {
   sizeBytesSeq?: number[];
   /** Appended to `$HOME/<rel>` once the pass's first statfs call has answered (RF5a F19: a line landing mid-pass). */
   afterFirstStatfs?: Array<{ rel: string; text: string }>;
+  /** The first statfs call never settles after it has appended afterFirstStatfs's lines (FU4 M27: a dead volume). */
+  hangAfterAppend?: boolean;
+  /** Once the first statfs call has answered, the first <times> (default 1) calls of fs.<fn> on a path holding <needle> throw <code> (FU4 M26). */
+  throwOnceAfterFirstStatfs?: { fn: string; needle: string; code: string; times?: number };
+  /** The word an --op pass's store open answers instead of opening (FU4 M28), handed to sweep.mjs as deps.openStore. */
+  openStoreWord?: string;
   extraMigrations?: string[]; heavy?: number[]; managedSettings?: string[];
 }
 export interface DriverResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }

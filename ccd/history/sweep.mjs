@@ -4124,7 +4124,9 @@ async function opPass(parsed, deps, out) {
   if (free.state === 'unsettled') return released(EXIT.DB, 'store-unreachable');
   let opened;
   try {
-    opened = openStore(home, P, role, deps);
+    // `deps.openStore` is an in-process dependency like `deps.statfs`, never an env var (slug history-test-seams-not-env): the
+    // run-pass driver answers a word no real store reaches here, so the arm below that is not exit 5 is pinned (FU4 M28).
+    opened = (deps.openStore ?? openStore)(home, P, role, deps);
   } catch (e) {
     return opThrowResult(e, (rc, reason) => released(rc, reason));
   }
@@ -4133,10 +4135,37 @@ async function opPass(parsed, deps, out) {
     return REASONS[opened.word] === EXIT.DB ? released(EXIT.DB, opened.word) : released(EXIT.INTERNAL);
   }
   const { db, ids } = opened;
+  // The outcome of the body, said by value: the release half runs ONCE, below, on whatever this answers (review 316
+  // round 1 F19, M26). A `released(...)` returned from inside the try put the half's own non-JournalError throw in the
+  // catch, which ran the half a second time and printed two `internal error` lines; a throw from the half now leaves
+  // opPass once, to runOpPass's wrapper.
+  const outcome = (rc, reason, counted = false) => ({ rc, reason, counted });
   try {
+    let v;
+    try {
+      v = await opBody(db, ids);
+    } catch (e) {
+      if (e instanceof JournalError) {
+        bump(db, 'journal_write_failed');
+        out('history-sweep: journal-unwritable');
+        v = outcome(EXIT.INTERNAL, undefined, true);
+      } else {
+        // The pass's contract is ONE {"rc":…} line, printed LAST, on every path (Task 26F item 5): the CLI relays it, so a
+        // throw that reached main()'s own catch ended stdout with no line at all (opThrowResult; runOpPass's wrapper
+        // answers the throws that precede this try).
+        v = opThrowResult(e, (rc, reason) => outcome(rc, reason));
+      }
+    }
+    return released(v.rc, v.reason, db, ids, v.counted);
+  } finally {
+    removeEntry(P.op);
+    closeWriter(db);
+  }
+
+  async function opBody(db, ids) {
     if (ids === null) {
       out('history-sweep: store.writer cannot be read, so nothing this pass decides could be journaled');
-      return released(EXIT.DB, 'store-unmeasured', db, ids);
+      return outcome(EXIT.DB, 'store-unmeasured');
     }
     if (parsed.op === 'import' && parsed.rosterUnreadable) {
       // D-4313 (history-import-refusal-words): counted and refused before any listing or admission, every import form
@@ -4144,32 +4173,19 @@ async function opPass(parsed, deps, out) {
       // --op migrate does not need the roster.
       bump(db, 'roster_unreadable');
       out('history-sweep: accounts.sh could not be read, so no home is known; nothing imported');
-      return released(EXIT.REFUSED, 'roster-unreadable', db, ids);
+      return outcome(EXIT.REFUSED, 'roster-unreadable');
     }
     writeOpMarker(P, parsed.op, now());
     if (!flushFirst(db, home, ids, now)) {
       out('history-sweep: journal-unwritable');
-      return released(EXIT.INTERNAL, undefined, db, ids, true);
+      return outcome(EXIT.INTERNAL, undefined, true);
     }
     clearDoneMarkers(home, opened.stored);
-    if (parsed.op === 'import' && opened.stored !== opened.code) return released(EXIT.DB, 'migration-pending', db, ids);
+    if (parsed.op === 'import' && opened.stored !== opened.code) return outcome(EXIT.DB, 'migration-pending');
     const ctx = passCtx({ home, P, ids, parsed, now, out, deps, pause: null, ingest: true });
     const r = parsed.op === 'migrate' ? migrateOp(db, ctx, opened, free) : await importApply(db, ctx, P, args);
     if (r.rc === EXIT.OK) flushOutbox(db, home, ids, now());   // D-4225: only an rc 0 is told "done"
-    return released(r.rc, r.reason, db, ids);
-  } catch (e) {
-    if (e instanceof JournalError) {
-      bump(db, 'journal_write_failed');
-      out('history-sweep: journal-unwritable');
-      return released(EXIT.INTERNAL, undefined, db, ids, true);
-    }
-    // The pass's contract is ONE {"rc":…} line, printed LAST, on every path (Task 26F item 5): the CLI relays it, so a
-    // throw that reached main()'s own catch ended stdout with no line at all (opThrowResult; runOpPass's wrapper
-    // answers the throws that precede this try).
-    return opThrowResult(e, (rc, reason) => released(rc, reason, db, ids));
-  } finally {
-    removeEntry(P.op);
-    closeWriter(db);
+    return outcome(r.rc, r.reason);
   }
 }
 

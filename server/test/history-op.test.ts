@@ -745,11 +745,29 @@ describe('RF5a F19: the half at release runs on every --op outcome (§9.2, D-423
     expect(names(paths(box).draining)).toContain(held[0]!.replace(/\.jsonl$/, '.obs'));
   });
 
+  // FU4 M26: the half at release runs EXACTLY once per pass, whatever throws. A non-JournalError out of it (a non-ENOENT
+  // readdir error here) used to land in opPass's catch, which ran the half a second time and said `internal error` twice.
+  it('a non-JournalError thrown by the release half itself says internal error once and answers rc 1 (M26)', () => {
+    const box = boundBox('ccrc-hist-fu4-26-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    // The first TWO readdirs of spool/ after the probe fail. The first is the half at release (a refusal does nothing between);
+    // a second run of the half, from the catch the throw used to land in, meets the second fault and escapes to the wrapper:
+    // two `internal error` lines. Run once, the half's throw escapes to the wrapper alone: one line, and the line count is
+    // also what proves the first fault was the half's (a body throw would reach the half, and the second fault, too).
+    const op = runDriver(box, { extraMigrations: [V2], afterFirstStatfs: mid, throwOnceAfterFirstStatfs: { fn: 'readdirSync', needle: '/history/spool', code: 'EIO', times: 2 } },
+      ['--op', 'import', '--apply']);
+    expect(op.code, op.stderr).toBe(1);
+    expect(op.stderr.match(/history-sweep: internal error/g) ?? [], op.stderr).toHaveLength(1);
+    expect(lastResult(op.stdout)).toEqual({ rc: 1 });
+  });
+
   // Review 316 round 1 F1: opPass answers through `released` at about a dozen return sites, each its own guard. One case per
   // outcome a test can reach; reverting any site to a bare `result(` leaves the mid-pass line in spool/ and reds its case.
-  // Not reached here: store-unreachable (a dead volume), the openStore throw, and the `ids === null` guard after a successful open
-  // (idsFromFiles read the same files openStore's own facts just measured; an unreadable writer is the openStore word case below).
-  // The mutation of each reached site to a bare `result(` was measured red on its own case (task notes, fix round 1).
+  // Not reached here: the openStore throw, and the `ids === null` guard after a successful open (idsFromFiles read the same files
+  // openStore's own facts just measured; an unreadable writer is the openStore word case below). store-unreachable is reached by
+  // the driver's hangAfterAppend (the line lands, then the probe never settles: FU4 M27), and the openStore word that is not an
+  // exit-5 word by its openStoreWord (no real store reaches one past the role gate: FU4 M28).
+  // The mutation of each reached site to a bare `result(` was measured red on its own case (task notes, fix round 1; FU4).
   const OUTCOMES: Array<{
     name: string; rc: number; reason?: string; journaled: boolean;
     arrange: (box: HistoryBox) => { tty?: boolean; args: string[]; deps?: Partial<DriverDeps>; opts?: { preloads?: string[]; env?: Record<string, string> } };
@@ -778,6 +796,10 @@ describe('RF5a F19: the half at release runs on every --op outcome (§9.2, D-423
         fs.writeFileSync(path.join(paths(box).root, 'store.writer'), 'not a writer token\n');   // off WRITER_RE: measured unreadable, so no journal to write into
         return { args: ['--op', 'import', '--apply'] };
       } },
+    { name: 'store-unreachable (the line lands, then the probe never settles: a dead volume)', rc: 5, reason: 'store-unreachable', journaled: true,
+      arrange: () => ({ args: ['--op', 'import', '--apply'], deps: { hangAfterAppend: true } }) },
+    { name: 'an openStore word that is not an exit-5 word (the INTERNAL arm)', rc: 1, journaled: true,
+      arrange: () => ({ args: ['--op', 'import', '--apply'], deps: { openStoreWord: 'store-create-refused-role' } }) },
     { name: 'migrate-refused (a store at a newer schema)', rc: 2, reason: 'migrate-refused', journaled: true,
       arrange: (box) => {
         const db = new DatabaseSync(paths(box).db);
@@ -816,7 +838,7 @@ describe('RF5a F19: the half at release runs on every --op outcome (§9.2, D-423
       expect(spooled(box), 'the release half renamed it').toEqual([]);
       expect(draining(box), 'and holds it in .draining/').toHaveLength(1);
       if (c.journaled) expect(recs(box).filter((r) => r.k === 'spool'), 'and journaled its spool record').toHaveLength(1);
-    });
+    }, 60_000);   // the uuid-claimed row runs a full driver pass, then driverPty's own 19 s kill: under vitest's 20 s default a slow pty showed as a bare timeout (FU4 M29)
   });
 
   it('CONTROL: --op migrate with nothing to migrate journals the same mid-pass line', () => {
