@@ -16,7 +16,7 @@ spec's after wave 1.
 
 | # | spec wave | scope | run | PRs | state |
 |---|---|---|---|---|---|
-| 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
+| 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **FIX ROUND 1 SENT** 2026-10-08 17:46 UTC (mail 4029, `rulings-run320-fix1.md`) on review 349 at `f3d151e42`: F1 meets class 3, so the bar gives the one round; numbers 4410 to 4413 ruled, reserve 4414 to 4417 (bare until defined on the worker branch). A scoped review follows. Was: **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
 | 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | — | **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
 | 2a | 1, follow-up | The arming PR: flips doctor's `box-token` FAIL and WARN arms on. Trigger: the GPT-lane lane-1 B4 soak gate recorded closed. Bound: merged before row 3's first PR | — | — | later |
 | 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim | — | — | later |
@@ -130,6 +130,36 @@ spec's after wave 1.
   block issued: 4551, 4552, 4553, 4554, 4555, 4556, 4557, 4558, 4559, 4560, 4561, 4562, 4563, 4564, 4565, 4566, 4567,
   4568, 4569, 4570. Numbers are written bare until defined. The dispatch waits for #330 to merge and for the rulings on
   I3, I4 and sec-M2.
+- **2026-10-08 17:46 UTC: review 349 closed (run 320 at `f3d151e42`); the one fix round sent, by the committed bar.**
+  - **The panel:** 5 of 5 lenses returned. They raised 20 findings; 15 survived the refute pass (14 by 3–0, one by 2–1),
+    5 were refuted, and none is unexamined. Merged, that is 12 findings plus the raised sec-M2. By lens: correctness
+    F1, F2, F3, F4, F10 and sec-M2; spec F3, F5, F9, F10, F11; does-it-reproduce F6, F8, F12; security F1; state
+    machine F7.
+  - **Nothing live.** No lens found a state reachable on the live fleet with part A alone: the `verb-missing` hold
+    comes before any stage, is persisted, and is re-probed hourly or on a fresh ready. The worker's C1 and I2 fixes
+    were mutated in a copy, and each went red. Every suite the brief named is green.
+  - **Classes met:** F1 class 3 (an unusable retired file lets boot re-adopt a written-back retired value); F2 class
+    3 by its letter; F5, F6 and F7 class 10; F11 class 9, as ruled. So the bar gives the one fix round.
+  - **The raised items are real and none is reachable live in part A:** I3, I4 and sec-M2. sec-M2 was reproduced by
+    a probe, and F1 is its upstream half. They are fixed in this round, because they live in part A's code and part
+    B makes them reachable.
+  - **Rulings (numbers bare until the worker branch defines them):**
+    - Number 4410 (F1, sec-M2): a retired digest is durable before its value leaves the accept set. It is kept in
+      `box-token.json` until the append lands, and a failed append is retried, never dropped. With the retired file
+      `unusable`, boot never adopts a value it did not write: it mints, owes a forward rotation, warns, and moves the
+      file aside. A read failure on that file reads `unreadable` and refuses boot.
+    - Number 4411 (F2): a later generation the fleet confirmed is a third exit from Previous, beside spec Figure 5's
+      two. The early retirement logs the retirement line and records its digest.
+    - Number 4412 (I3): a retired presentation on any box-token lane owes a forward rotation (`retired-presented`).
+      None is owed while a rotation is owed or in flight, and presentations owe at most one per `HOLD_REPROBE_MS`.
+      The server cannot tell the fleet from the leaked holder, so the bound is the protection.
+    - Number 4413 (I4): while both pending values at the cap are past `confirmBy`, a forward rotation may stage into
+      a third slot. Its confirmation drops both. Rotate now answers `joined` only while something is in flight, and
+      answers the `pending-cap` hold otherwise.
+    - Without a number: F3's three backoff routes closed; F4 bounds `pending`; F5, F6 and F7's pins made able to
+      red; F8 pinned against the tree's real `ccd/ccrc`; F9 counts Fastify-rejected claim bodies as misses; F10 door
+      lines carry the node id; F11 derives from L0, with the scan widened; F12's sentence corrected.
+  - The worker reserve for the round is 4414 to 4417. A scoped review of the fix range follows the wave-done.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
